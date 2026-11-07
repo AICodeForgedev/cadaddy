@@ -9,16 +9,65 @@ use cadaddy_walk3d::FixtureType;
 
 use super::gridtable::GridTable;
 
+/// Whether a text is a luminaire schedule's title (`schedules.luminaire_titles`; on an
+/// electrical sheet a plain `FIXTURE SCHEDULE` too), not another trade's or table's
+/// (`PLUMBING FIXTURE SCHEDULE`, `LIGHTING CONTROL SCHEDULE`).
+pub(crate) fn is_luminaire_title(text: &str, electrical: bool) -> bool {
+    use cadaddy_mepfix::wordrules;
+    let u = text.trim().to_ascii_uppercase();
+    if u.len() > 80 || wordrules::words("schedules.not_luminaire_title_words").iter().any(|w| u.contains(w)) {
+        return false;
+    }
+    let titled = |titles: &[&str]| {
+        titles.iter().any(|w| {
+            // A title, not a note that names one (`SEE SHEET X FOR FIXTURE SCHEDULE`): a few
+            // words beside it at most (`LIGHT FIXTURE SCHEDULE - LEVEL 1`).
+            u.find(w).is_some_and(|at| {
+                let rest = format!("{} {}", u.get(..at).unwrap_or(""), u.get(at + w.len()..).unwrap_or(""));
+                rest.split(|c: char| !c.is_ascii_alphanumeric()).filter(|x| !x.is_empty()).count() <= MAX_TITLE_EXTRA_WORDS
+            })
+        })
+    };
+    titled(wordrules::words("schedules.luminaire_titles")) || (electrical && titled(wordrules::words("schedules.electrical_luminaire_titles")))
+}
+
+/// Words a luminaire schedule's title may carry beside its name (`TYPICAL`, `LEVEL 1`).
+const MAX_TITLE_EXTRA_WORDS: usize = 3;
+
+/// Whether a cell reads as a type mark: short, one word, a letter in it (`A`, `F1`, `XA`).
+fn mark_shaped(v: &str) -> bool {
+    let v = v.trim();
+    !v.is_empty() && v.len() <= MAX_MARK && !v.contains(' ') && v.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+/// A type mark's most letters.
+const MAX_MARK: usize = 6;
+
+/// The schedule's column of type marks: the first column a type heading names
+/// (`schedules.luminaire_type_headings`, in order) whose cells read as marks; else the first
+/// column whose cells do; else the first a heading names.
+fn mark_column(t: &GridTable) -> Option<usize> {
+    let marks = |c: usize| {
+        let cells: Vec<&str> = t.rows.iter().map(|r| t.cell(r, Some(c))).filter(|v| !v.is_empty()).collect();
+        !cells.is_empty() && 2 * cells.iter().filter(|v| mark_shaped(v)).count() > cells.len()
+    };
+    let named: Vec<usize> = cadaddy_mepfix::wordrules::words("schedules.luminaire_type_headings").iter().filter_map(|w| t.column(&[w])).collect();
+    named.iter().copied().find(|c| marks(*c)).or_else(|| (0..t.headers.len()).find(|c| marks(*c))).or_else(|| named.first().copied())
+}
+
 /// The schedule's rows (by its columns' names), and whether its notes forbid substitutions.
+/// Marks its notes list as a scheduled type with a suffix (`FIXTURES AE, BE AND CE ARE ON
+/// EMERGENCY BATTERY BACKUP` under types A, B, C) are types too: their base type's row, the
+/// note beside it.
 pub(crate) fn fixture_types(t: &GridTable) -> (Vec<FixtureType>, bool) {
-    let tag = t.column(&["TAG"]).or_else(|| t.column(&["TYPE"])).or_else(|| t.column(&["MARK"]));
+    let tag = mark_column(t);
     let maker = t.column(&["MANUFACTURER"]).or_else(|| t.column(&["BASIS"]));
-    let model = t.column(&["MODEL"]).or_else(|| t.column(&["CATALOG"]));
+    let model = t.column(&["MODEL"]).or_else(|| t.column(&["CATALOG"])).or_else(|| t.column(&["SERIES"]));
     let lamp = t.column(&["LAMP"]).or_else(|| t.column(&["SOURCE"]));
     let volts = t.column(&["VOLT"]);
     let install = t.column(&["INSTALL"]).or_else(|| t.column(&["MOUNTING"]));
-    let desc = t.column(&["DESCRIPTION"]);
-    let notes = t.column(&["NOTES"]);
+    let desc = t.column(&["DESCRIPTION"]).filter(|c| Some(*c) != tag);
+    let notes = t.column(&["NOTES"]).or_else(|| t.column(&["REMARKS"]));
     let qty = t.column(&["QTY"]).or_else(|| t.column(&["QUANTITY"]));
     let mut out = Vec::new();
     let mut no_subs = false;
@@ -29,7 +78,7 @@ pub(crate) fn fixture_types(t: &GridTable) -> (Vec<FixtureType>, bool) {
         }
         let tg = t.cell(r, tag);
         // A type is short (`A`, `F1`, `XA`); a note row's text isn't.
-        if tg.is_empty() || tg.len() > 6 || tg.contains(' ') {
+        if tg.is_empty() || tg.len() > MAX_MARK || tg.contains(' ') {
             continue;
         }
         let lamp_text = t.cell(r, lamp).to_string();
@@ -54,7 +103,83 @@ pub(crate) fn fixture_types(t: &GridTable) -> (Vec<FixtureType>, bool) {
             quantity: qty.and_then(|_| t.cell(r, qty).trim().parse::<u32>().ok()).filter(|q| *q > 0 && *q < 100_000),
         });
     }
+    for note in &t.notes {
+        if note.to_ascii_uppercase().contains("NO SUBSTITU") {
+            no_subs = true;
+        }
+        let tags: Vec<String> = out.iter().map(|f| f.tag.clone()).collect();
+        for (variant, base) in note_variants(note, &tags) {
+            if out.iter().any(|f| f.tag == variant) || out.len() >= MAX_TYPES {
+                continue;
+            }
+            if let Some(b) = out.iter().find(|f| f.tag == base).cloned() {
+                let notes = if b.notes.is_empty() { note.trim().to_string() } else { format!("{}; {}", b.notes, note.trim()) };
+                out.push(FixtureType { tag: variant, notes, quantity: None, ..b });
+            }
+        }
+    }
     (out, no_subs)
+}
+
+/// Types read from one schedule, at most.
+const MAX_TYPES: usize = 400;
+
+/// The marks a schedule note lists that are a scheduled type with a suffix, with that type:
+/// a list of two or more such marks with one suffix (`AE, BE, AND CE`), or one led by a fixture
+/// word (`FIXTURE AE IS ...`, `schedules.variant_lead_words`). A word that only happens to
+/// start with a type's letter (`ALL`, `TO BE`) is no mark: it is in no such list.
+fn note_variants(note: &str, tags: &[String]) -> Vec<(String, String)> {
+    let lead = cadaddy_mepfix::wordrules::words("schedules.variant_lead_words");
+    let words: Vec<String> = note
+        .to_ascii_uppercase()
+        .split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == '/')
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect();
+    // A scheduled type and the suffix that makes `w` from it (the longest type first: `AE`
+    // over `A` when both are scheduled).
+    let split = |w: &str| -> Option<(String, String)> {
+        let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        if !mark_shaped(w) || tags.iter().any(|t| t == w) {
+            return None;
+        }
+        tags.iter()
+            .filter(|t| w.len() > t.len() && w.len() - t.len() <= 2 && w.starts_with(t.as_str()))
+            .max_by_key(|t| t.len())
+            .and_then(|t| w.get(t.len()..).filter(|s| s.chars().all(|c| c.is_ascii_alphabetic())).map(|s| (t.clone(), s.to_string())))
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        // A run of marks joined by commas, slashes, AND, OR, `&`.
+        let mut run: Vec<(String, String, String)> = Vec::new();
+        let mut j = i;
+        while j < words.len() {
+            let w = words.get(j).map_or("", String::as_str);
+            if matches!(w, "AND" | "OR" | "&") {
+                if run.is_empty() {
+                    break;
+                }
+                j += 1;
+                continue;
+            }
+            // One list has one suffix: a word after it with another (`ARE` after `AE, BE, AND
+            // CE`) ends it.
+            match split(w) {
+                Some((base, suffix)) if run.first().is_none_or(|(_, _, s)| *s == suffix) => {
+                    run.push((w.trim_matches(|c: char| !c.is_ascii_alphanumeric()).to_string(), base, suffix));
+                }
+                _ => break,
+            }
+            j += 1;
+        }
+        let led = i.checked_sub(1).and_then(|k| words.get(k)).is_some_and(|w| lead.contains(&w.as_str()));
+        if !run.is_empty() && (run.len() >= 2 || led) {
+            out.extend(run.into_iter().map(|(w, base, _)| (w, base)));
+        }
+        i = j.max(i + 1);
+    }
+    out
 }
 
 fn alnum(v: &str) -> String {
@@ -152,6 +277,7 @@ mod tests {
                 row(&["", "", "NOTES: 5. NO SUBSTITUIONS OF VENDORS OR PRODUCTS ON LIGHTFIXTURES UNLESS APPROVED", "", "", "", "", "", ""]),
             ],
             sheet: "E-2".into(),
+            ..GridTable::default()
         }
     }
 
@@ -162,6 +288,66 @@ mod tests {
         assert_eq!(types.len(), 2);
         assert_eq!((types[0].tag.as_str(), types[0].manufacturer.as_str(), types[0].va), ("A", "COOPER", Some(13.0)));
         assert_eq!(types[1].manufacturer, "ILLUMINATION LIGHTING");
+    }
+
+    /// fix-lum-fixture-schedule-not-read: a schedule whose column of marks is headed FIXTURE (no
+    /// TAG, TYPE or MARK) gives its types; SERIES is the model, REMARKS the notes; a note listing
+    /// a scheduled type with a suffix (`AE, BE, AND CE`) adds those types, a word that only starts
+    /// with a type's letter (`ALL`, `TO BE`, `ARE`) doesn't.
+    #[test]
+    fn marks_under_a_fixture_heading_and_the_variants_a_note_lists_are_types() {
+        let row = |c: &[&str]| c.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let t = GridTable {
+            headers: row(&["FIXTURE", "DESCRIPTION", "MANUFACTURER", "SERIES", "REMARKS"]),
+            rows: vec![
+                row(&["A", "LINEAR FIXTURE", "MAKER ONE", "SER-1 8", "MOUNTED TO STRUCTURE"]),
+                row(&["B", "RECESSED CAN", "MAKER TWO", "CAN-5", "WET LOCATION"]),
+                row(&["C", "WALL PACK", "MAKER THREE", "WP-40", ""]),
+            ],
+            sheet: "A-2".into(),
+            title: "LIGHT FIXTURE SCHEDULE".into(),
+            notes: vec!["NOTE:".into(), "1. FIXTURES AE, BE, AND CE ARE ON EMERGENCY BATTERY BACKUP".into(), "2. ALL LIGHTS TO BE LED, TYP.".into()],
+            ..GridTable::default()
+        };
+        let (types, no_subs) = fixture_types(&t);
+        assert!(!no_subs);
+        let tags: Vec<&str> = types.iter().map(|f| f.tag.as_str()).collect();
+        assert_eq!(tags, ["A", "B", "C", "AE", "BE", "CE"]);
+        let a = &types[0];
+        assert_eq!(
+            (a.description.as_str(), a.manufacturer.as_str(), a.model.as_str(), a.notes.as_str()),
+            ("LINEAR FIXTURE", "MAKER ONE", "SER-1 8", "MOUNTED TO STRUCTURE")
+        );
+        let be = &types[4];
+        assert_eq!((be.description.as_str(), be.model.as_str()), ("RECESSED CAN", "CAN-5"));
+        assert_eq!(be.notes, "WET LOCATION; 1. FIXTURES AE, BE, AND CE ARE ON EMERGENCY BATTERY BACKUP");
+        // One mark led by a fixture word counts; the same mark in passing words doesn't.
+        let tags = ["A".to_string(), "B".to_string()];
+        assert_eq!(note_variants("TYPE AX IS DIMMED", &tags), vec![("AX".to_string(), "A".to_string())]);
+        assert!(note_variants("ALL LIGHTS TO BE LED", &tags).is_empty());
+        assert!(note_variants("SEE NOTES AND AREA PLANS", &tags).is_empty());
+        // A column headed TYPE that holds lamp types is passed over for the one holding marks.
+        let t = GridTable {
+            headers: row(&["MARK", "LAMP TYPE", "DESCRIPTION"]),
+            rows: vec![row(&["F1", "LED 3500K", "DOWNLIGHT"]), row(&["F2", "LED 4000K", "TROFFER"])],
+            ..GridTable::default()
+        };
+        assert_eq!(fixture_types(&t).0.iter().map(|f| f.tag.as_str()).collect::<Vec<_>>(), ["F1", "F2"]);
+    }
+
+    /// A luminaire schedule's title on any sheet; a plain FIXTURE SCHEDULE on an electrical sheet
+    /// only; never another trade's or table's, nor a note that names one.
+    #[test]
+    fn a_luminaire_schedules_title_is_told_from_notes_and_other_tables() {
+        assert!(is_luminaire_title("LIGHT FIXTURE SCHEDULE", false));
+        assert!(is_luminaire_title("LUMINAIRE SCHEDULE - LEVEL 2", false));
+        assert!(is_luminaire_title("Lighting Fixture Schedule", false));
+        assert!(!is_luminaire_title("FIXTURE SCHEDULE", false));
+        assert!(is_luminaire_title("FIXTURE SCHEDULE", true));
+        assert!(!is_luminaire_title("PLUMBING FIXTURE SCHEDULE", true));
+        assert!(!is_luminaire_title("LIGHTING CONTROL SCHEDULE", true));
+        assert!(!is_luminaire_title("SWITCH. SEE ARCH SHEET X-2 FOR FIXTURE SCHEDULE.", true));
+        assert!(!is_luminaire_title("REFER TO THE LIGHT FIXTURE SCHEDULE ON SHEET X-2 FOR TYPES", false));
     }
 
     #[test]
