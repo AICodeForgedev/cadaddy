@@ -711,3 +711,79 @@ fn marks_that_disagree_are_reported() {
     assert_eq!(index.level_warnings.len(), 1, "{:?}", index.level_warnings);
     assert!(index.level_warnings[0].starts_with("level 2: 111'-0\" not used"), "{:?}", index.level_warnings);
 }
+
+/// What the index says of each entry, in order.
+fn entries_of(project: &PrintSetProject) -> Vec<(String, u32, String, String, String, String, String, Option<String>)> {
+    project
+        .sheets
+        .iter()
+        .map(|e| {
+            let classify = e.stage_results.get("classify");
+            (
+                e.file.clone(),
+                e.page,
+                e.number.clone(),
+                e.title.clone(),
+                e.level.clone(),
+                e.superseded_by.clone(),
+                classify.map(|r| format!("{:?}", r.status)).unwrap_or_default(),
+                classify.and_then(|r| r.error.clone()),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn classify_reads_several_pages_at_once_and_keeps_the_sets_order() {
+    // A combined set and a discipline set repeating part of it with a later date, a page that
+    // can't be read, and plan sheets naming their levels: classify reads the pages on several
+    // threads at once (a dense page takes seconds), and the index is the one a page-by-page read
+    // gives.
+    let mut prints: BTreeMap<(String, u32), Drawing> = BTreeMap::new();
+    let mut entries: Vec<SheetEntry> = Vec::new();
+    let floors = ["FIRST", "SECOND", "THIRD", "FOURTH"];
+    for page in 1..=24u32 {
+        let floor = floors[(page as usize) % floors.len()];
+        let d = sheet(&format!("M{}{:02}", 5 + page / 10, page), &[floor, "FLOOR HVAC PLAN"], "03/02/2026");
+        prints.insert(("Combined Set.pdf".into(), page), d);
+        entries.push(SheetEntry { file: "Combined Set.pdf".into(), page, dirty: true, ..SheetEntry::default() });
+    }
+    for page in 1..=6u32 {
+        let d = sheet(&format!("M5{page:02}"), &[floors[(page as usize) % floors.len()], "FLOOR HVAC PLAN"], "04/15/2026");
+        prints.insert(("Mechanical Set.pdf".into(), page), d);
+        entries.push(SheetEntry { file: "Mechanical Set.pdf".into(), page, dirty: true, ..SheetEntry::default() });
+    }
+    entries.insert(10, SheetEntry { file: "Combined Set.pdf".into(), page: 99, dirty: true, ..SheetEntry::default() });
+    let run = |load: &(dyn Fn(&SheetEntry) -> Result<Drawing, String> + Sync)| {
+        let mut project = PrintSetProject { sheets: entries.clone(), ..PrintSetProject::default() };
+        let mut seen = Vec::new();
+        printset::run_classify_prints(&mut project, load, &AtomicBool::new(false), &mut |p| seen.push(p.sheet_index));
+        (project, seen)
+    };
+    let print = |e: &SheetEntry| prints.get(&(e.file.clone(), e.page)).cloned().ok_or_else(|| "no such page".to_string());
+
+    // one page at a time
+    let one = std::sync::Mutex::new(());
+    let (serial, _) = run(&|e| {
+        let _only = one.lock();
+        print(e)
+    });
+    // as classify reads them: how many loads run at once
+    let running = std::sync::atomic::AtomicUsize::new(0);
+    let most = std::sync::atomic::AtomicUsize::new(0);
+    let (parallel, seen) = run(&|e| {
+        let now = running.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        most.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        print(e)
+    });
+    if std::thread::available_parallelism().map_or(1, |n| n.get()) > 1 {
+        assert!(most.load(std::sync::atomic::Ordering::SeqCst) > 1, "the pages were read one at a time");
+    }
+    assert_eq!(entries_of(&parallel), entries_of(&serial));
+    assert_eq!(seen, (0..entries.len()).collect::<Vec<_>>(), "progress in the set's order");
+    assert_eq!(parallel.sheets.iter().filter(|e| e.superseded_by.is_empty() && !e.number.is_empty()).count(), 24, "{:?}", entries_of(&parallel));
+    assert_eq!(parallel.sheets.iter().filter(|e| !e.superseded_by.is_empty()).count(), 6, "the later set's copies are current");
+    assert_eq!(entries_of(&parallel).iter().filter(|e| e.6 == "Failed").map(|e| e.7.clone()).collect::<Vec<_>>(), [Some("no such page".to_string())]);
+}

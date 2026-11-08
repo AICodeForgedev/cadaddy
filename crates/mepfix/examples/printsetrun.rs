@@ -15,18 +15,20 @@ use std::time::Instant;
 
 use cadaddy_mepfix::printset::{self, SheetEntry, StageStatus};
 
-/// The file read last (a merged set's pages are loaded one after another).
-type Cache = std::cell::RefCell<Option<(String, std::rc::Rc<Vec<u8>>)>>;
+/// The file read last (a merged set's pages are loaded one after another, by several threads).
+type Cache = std::sync::Mutex<Option<(String, std::sync::Arc<Vec<u8>>)>>;
 
 fn load(paths: &BTreeMap<String, PathBuf>, cache: &Cache, e: &SheetEntry) -> Result<cadaddy_doc::Drawing, String> {
     let path = paths.get(&e.file).ok_or("not in the project")?;
-    let cached = cache.borrow().as_ref().filter(|(f, _)| *f == e.file).map(|(_, b)| b.clone());
-    let bytes = match cached {
-        Some(b) => b,
-        None => {
-            let b = std::rc::Rc::new(std::fs::read(path).map_err(|err| err.to_string())?);
-            *cache.borrow_mut() = Some((e.file.clone(), b.clone()));
-            b
+    let bytes = {
+        let mut cache = cache.lock().map_err(|_| "the file cache failed")?;
+        match cache.as_ref().filter(|(f, _)| *f == e.file) {
+            Some((_, b)) => b.clone(),
+            None => {
+                let b = std::sync::Arc::new(std::fs::read(path).map_err(|err| err.to_string())?);
+                *cache = Some((e.file.clone(), b.clone()));
+                b
+            }
         }
     };
     let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -65,7 +67,7 @@ fn main() {
 
     let t = Instant::now();
     let cancel = AtomicBool::new(false);
-    let cache: Cache = std::cell::RefCell::new(None);
+    let cache: Cache = std::sync::Mutex::new(None);
     let rec = printset::run_classify_prints(&mut project, &|e| load(&paths, &cache, e), &cancel, &mut |_| {});
     println!("classify: {:?}, {}/{} pages in {:.1} s", rec.status, rec.sheets_processed, rec.sheets_total, t.elapsed().as_secs_f64());
 

@@ -3404,6 +3404,7 @@ pub struct OcrWord {
 }
 
 /// A matched glyph.
+#[derive(Clone)]
 struct MatchedGlyph {
     ch: char,
     /// A look-alike the shapes fit as well (see [`LOOK_ALIKES`]).
@@ -3727,18 +3728,23 @@ fn recover_shx_ocr_upright(
         near.sort_by(f64::total_cmp);
         near.get(near.len() / 2).copied()
     };
-    let mut matched: Vec<MatchedGlyph> = Vec::new();
-    for (gi, ((members, bb, pen), pts)) in glyphs.iter().zip(&glyph_pts).enumerate() {
+    // each glyph's row slant and its reading against the templates, on all cores (the reading
+    // is most of the OCR's time on a dense sheet)
+    let reads = crate::par_map(&glyph_pts.iter().enumerate().collect::<Vec<_>>(), |&(gi, pts)| {
         let slant = row_slant(gi);
         // a filled glyph's holes: the sum over the outlines its strokes came from
         let mut outlines: HashMap<usize, usize> = HashMap::new();
-        for m in members {
+        for m in glyphs.get(gi).map(|g| g.0.as_slice()).unwrap_or_default() {
             if let Some(&(shape, h)) = shapes.get(m) {
                 outlines.insert(shape, h);
             }
         }
         let holes = (!outlines.is_empty()).then(|| outlines.values().sum());
-        if let Some(GlyphRead { mut ch, dist, mut alt }) = read_glyph(pts, slant, &templates, holes) {
+        (slant, read_glyph(pts, slant, &templates, holes))
+    });
+    let mut matched: Vec<MatchedGlyph> = Vec::new();
+    for (gi, (((members, bb, pen), pts), (slant, read))) in glyphs.iter().zip(&glyph_pts).zip(reads).enumerate() {
+        if let Some(GlyphRead { mut ch, dist, mut alt }) = read {
             let straight = pts.len() == 1 && pts.first().is_some_and(|p| p.len() <= 2);
             let ring = (members.len() == 1 && members.first().and_then(|&i| strokes.get(i)).is_some_and(|s| s.closed))
                 || members.iter().any(|&i| strokes.get(i).is_some_and(|s| s.curved_loop));
@@ -3797,112 +3803,7 @@ fn recover_shx_ocr_upright(
     }
 
     // ---- phase 4: lines by baseline and height, then texts by spacing ----
-    // Letters and digits (full-height glyphs) build the lines, left to right; dashes, dots and
-    // quotes join the line whose letter band holds them.
-    matched.sort_by(|a, b| a.bb[0].total_cmp(&b.bb[0]));
-    struct TextLine {
-        pen: Pen,
-        bottom: f64,
-        height: f64,
-        x1: f64,
-        slant: f64,
-        members: Vec<usize>,
-    }
-    let mut lines: Vec<TextLine> = Vec::new();
-    let mut small: Vec<usize> = Vec::new();
-    for (gi, g) in matched.iter().enumerate() {
-        if small_glyph(g.ch) {
-            small.push(gi);
-            continue;
-        }
-        let h = g.bb[3] - g.bb[1];
-        let best = lines
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| {
-                let gap = g.bb[0] - l.x1;
-                l.pen == g.pen
-                    && (g.bb[1] - l.bottom).abs() <= l.height * 0.3
-                    && (0.7..=1.45).contains(&(h / l.height.max(1e-6)))
-                    // room for a dash or a dot between (they join the line afterwards)
-                    && gap <= l.height * 2.0
-                    && gap >= -l.height * 0.3
-            })
-            .min_by(|a, b| (g.bb[0] - a.1.x1).total_cmp(&(g.bb[0] - b.1.x1)))
-            .map(|(li, _)| li);
-        match best.and_then(|li| lines.get_mut(li)) {
-            Some(l) => {
-                l.x1 = l.x1.max(g.bb[2]);
-                l.members.push(gi);
-            }
-            None => lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: h, x1: g.bb[2], slant: g.slant, members: vec![gi] }),
-        }
-    }
-    for gi in small {
-        let Some(g) = matched.get(gi) else { continue };
-        // a dash or a quote stands above the baseline: on an oblique row it shifts with the slant
-        let on_oblique_line = |l: &TextLine| {
-            let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
-            let rise = g.bb[1] - l.bottom;
-            l.pen == g.pen
-                && l.slant.abs() >= 0.05
-                && (0.0..=l.height * 1.25).contains(&rise)
-                && g.bb[0] - l.slant * rise >= x0 - l.height * 1.2
-                && g.bb[2] - l.slant * rise <= l.x1 + l.height * 1.2
-        };
-        let shift = lines.iter().find(|l| on_oblique_line(l)).map(|l| l.slant * (g.bb[1] - l.bottom));
-        if let Some(shift) = shift
-            && let Some(g) = matched.get_mut(gi)
-        {
-            g.bb[0] -= shift;
-            g.bb[2] -= shift;
-        }
-        let Some(g) = matched.get(gi) else { continue };
-        let cy = (g.bb[1] + g.bb[3]) / 2.0;
-        let line = lines.iter_mut().find(|l| {
-            let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
-            l.pen == g.pen
-                && cy >= l.bottom - l.height * 0.25
-                && cy <= l.bottom + l.height * 1.25
-                && (g.bb[3] - g.bb[1]) <= l.height * if tall_glyph(g.ch) { 1.7 } else { 1.1 }
-                && g.bb[0] >= x0 - l.height * 1.2
-                && g.bb[2] <= l.x1 + l.height * 1.2
-        });
-        match line {
-            Some(l) => {
-                l.x1 = l.x1.max(g.bb[2]);
-                l.members.push(gi);
-            }
-            None => {
-                lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: (g.bb[3] - g.bb[1]).max(0.5), x1: g.bb[2], slant: 0.0, members: vec![gi] })
-            }
-        }
-    }
-
-    // lines the punctuation now bridges join: in "(A) #12" the parenthesis and the number sign
-    // left a gap between the A and the 12 that only they fill
-    let line_x0 = |l: &TextLine| l.members.iter().filter_map(|&m| matched.get(m)).map(|g| g.bb[0]).fold(f64::MAX, f64::min);
-    lines.sort_by(|a, b| line_x0(a).total_cmp(&line_x0(b)));
-    let mut joined: Vec<TextLine> = Vec::with_capacity(lines.len());
-    for l in lines {
-        let x0 = line_x0(&l);
-        let into = joined.iter_mut().rev().find(|m| {
-            let gap = x0 - m.x1;
-            m.pen == l.pen
-                && (l.bottom - m.bottom).abs() <= m.height * 0.3
-                && (0.7..=1.45).contains(&(l.height / m.height.max(1e-6)))
-                && gap <= m.height * 2.0
-                && gap >= -m.height * 0.3
-        });
-        match into {
-            Some(m) => {
-                m.x1 = m.x1.max(l.x1);
-                m.members.extend(l.members);
-            }
-            None => joined.push(l),
-        }
-    }
-    let lines = joined;
+    let lines = ocr_lines(&mut matched);
 
     let mut result: Vec<RecoveredText> = Vec::new();
     let mut marks: Vec<RecoveredText> = Vec::new();
@@ -4005,6 +3906,187 @@ fn recover_shx_ocr_upright(
     report.noise_dropped += kept.1;
     result.extend(kept.0);
     (result, report)
+}
+
+/// A line of OCR glyphs: its pen, baseline, letter height, right end and slant, and its glyphs
+/// (indices into the matched glyphs).
+struct TextLine {
+    pen: Pen,
+    bottom: f64,
+    height: f64,
+    x1: f64,
+    slant: f64,
+    members: Vec<usize>,
+}
+
+/// The lines built so far by baseline, in bands of letter height (a power of two each): a glyph
+/// asks only for the lines whose baseline lies near enough to take it, not for every line on
+/// the page.  A dense sheet reads tens of thousands of glyphs into as many lines, and asking
+/// every line for every glyph took most of the page's read.
+#[derive(Default)]
+struct LineIndex {
+    /// Per band: its tallest line, and its lines by baseline (in [`order_key`] order).
+    bands: BTreeMap<i32, (f64, BTreeMap<i64, Vec<usize>>)>,
+}
+
+impl LineIndex {
+    fn insert(&mut self, line: usize, bottom: f64, height: f64) {
+        // (a height that isn't a number goes in band 0: no test of height accepts its line)
+        let band = self.bands.entry(height.max(1e-12).log2().floor() as i32).or_insert((0.0, BTreeMap::new()));
+        band.0 = band.0.max(height);
+        band.1.entry(order_key(bottom)).or_default().push(line);
+    }
+
+    /// The lines, in the order they were added, whose baseline lies in `reach(height)` for the
+    /// tallest line of their band: every line whose baseline lies in `reach` of its own height
+    /// (`reach` widens with the height), and a few more for the caller's own test to drop.
+    fn near(&self, reach: impl Fn(f64) -> (f64, f64)) -> Vec<usize> {
+        let mut out = Vec::new();
+        for (tallest, by_bottom) in self.bands.values() {
+            let (lo, hi) = reach(*tallest);
+            // widened a hair, so rounding can't lose a line at the very edge
+            let slack = 1e-9 * (lo.abs() + hi.abs()) + 1e-9;
+            let (lo, hi) = (lo - slack, hi + slack);
+            if lo <= hi {
+                out.extend(by_bottom.range(order_key(lo)..=order_key(hi)).flat_map(|(_, lines)| lines));
+            } else {
+                // a bound that isn't a number: every line of the band
+                out.extend(by_bottom.values().flatten());
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+}
+
+/// `x`'s place in [`f64::total_cmp`] order, as an integer.
+fn order_key(x: f64) -> i64 {
+    let bits = x.to_bits() as i64;
+    bits ^ (((bits >> 63) as u64) >> 1) as i64
+}
+
+/// The glyphs' lines (the glyphs sorted left to right first).  Letters and digits (full-height
+/// glyphs) build the lines, left to right; dashes, dots and quotes join the line whose letter
+/// band holds them; then lines the punctuation bridges join.
+fn ocr_lines(matched: &mut [MatchedGlyph]) -> Vec<TextLine> {
+    matched.sort_by(|a, b| a.bb[0].total_cmp(&b.bb[0]));
+    let mut lines: Vec<TextLine> = Vec::new();
+    let mut index = LineIndex::default();
+    let mut small: Vec<usize> = Vec::new();
+    for (gi, g) in matched.iter().enumerate() {
+        if small_glyph(g.ch) {
+            small.push(gi);
+            continue;
+        }
+        let h = g.bb[3] - g.bb[1];
+        let best = index
+            .near(|lh| (g.bb[1] - lh * 0.3, g.bb[1] + lh * 0.3))
+            .into_iter()
+            .filter_map(|li| lines.get(li).map(|l| (li, l)))
+            .filter(|(_, l)| {
+                let gap = g.bb[0] - l.x1;
+                l.pen == g.pen
+                    && (g.bb[1] - l.bottom).abs() <= l.height * 0.3
+                    && (0.7..=1.45).contains(&(h / l.height.max(1e-6)))
+                    // room for a dash or a dot between (they join the line afterwards)
+                    && gap <= l.height * 2.0
+                    && gap >= -l.height * 0.3
+            })
+            .min_by(|a, b| (g.bb[0] - a.1.x1).total_cmp(&(g.bb[0] - b.1.x1)))
+            .map(|(li, _)| li);
+        match best.and_then(|li| lines.get_mut(li)) {
+            Some(l) => {
+                l.x1 = l.x1.max(g.bb[2]);
+                l.members.push(gi);
+            }
+            None => {
+                index.insert(lines.len(), g.bb[1], h);
+                lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: h, x1: g.bb[2], slant: g.slant, members: vec![gi] });
+            }
+        }
+    }
+    for gi in small {
+        let Some(g) = matched.get(gi) else { continue };
+        // a dash or a quote stands above the baseline: on an oblique row it shifts with the slant
+        let on_oblique_line = |l: &TextLine| {
+            let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+            let rise = g.bb[1] - l.bottom;
+            l.pen == g.pen
+                && l.slant.abs() >= 0.05
+                && (0.0..=l.height * 1.25).contains(&rise)
+                && g.bb[0] - l.slant * rise >= x0 - l.height * 1.2
+                && g.bb[2] - l.slant * rise <= l.x1 + l.height * 1.2
+        };
+        let shift = index
+            .near(|lh| (g.bb[1] - lh * 1.25, g.bb[1]))
+            .into_iter()
+            .filter_map(|li| lines.get(li))
+            .find(|l| on_oblique_line(l))
+            .map(|l| l.slant * (g.bb[1] - l.bottom));
+        if let Some(shift) = shift
+            && let Some(g) = matched.get_mut(gi)
+        {
+            g.bb[0] -= shift;
+            g.bb[2] -= shift;
+        }
+        let Some(g) = matched.get(gi) else { continue };
+        let cy = (g.bb[1] + g.bb[3]) / 2.0;
+        let line = index.near(|lh| (cy - lh * 1.25, cy + lh * 0.25)).into_iter().find(|&li| {
+            lines.get(li).is_some_and(|l| {
+                let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+                l.pen == g.pen
+                    && cy >= l.bottom - l.height * 0.25
+                    && cy <= l.bottom + l.height * 1.25
+                    && (g.bb[3] - g.bb[1]) <= l.height * if tall_glyph(g.ch) { 1.7 } else { 1.1 }
+                    && g.bb[0] >= x0 - l.height * 1.2
+                    && g.bb[2] <= l.x1 + l.height * 1.2
+            })
+        });
+        match line.and_then(|li| lines.get_mut(li)) {
+            Some(l) => {
+                l.x1 = l.x1.max(g.bb[2]);
+                l.members.push(gi);
+            }
+            None => {
+                let height = (g.bb[3] - g.bb[1]).max(0.5);
+                index.insert(lines.len(), g.bb[1], height);
+                lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height, x1: g.bb[2], slant: 0.0, members: vec![gi] });
+            }
+        }
+    }
+
+    // lines the punctuation now bridges join: in "(A) #12" the parenthesis and the number sign
+    // left a gap between the A and the 12 that only they fill
+    let matched: &[MatchedGlyph] = matched;
+    let line_x0 = |l: &TextLine| l.members.iter().filter_map(|&m| matched.get(m)).map(|g| g.bb[0]).fold(f64::MAX, f64::min);
+    lines.sort_by(|a, b| line_x0(a).total_cmp(&line_x0(b)));
+    let mut joined: Vec<TextLine> = Vec::with_capacity(lines.len());
+    let mut joined_index = LineIndex::default();
+    for l in lines {
+        let x0 = line_x0(&l);
+        // the latest line it continues
+        let into = joined_index.near(|mh| (l.bottom - mh * 0.3, l.bottom + mh * 0.3)).into_iter().rev().find(|&mi| {
+            joined.get(mi).is_some_and(|m| {
+                let gap = x0 - m.x1;
+                m.pen == l.pen
+                    && (l.bottom - m.bottom).abs() <= m.height * 0.3
+                    && (0.7..=1.45).contains(&(l.height / m.height.max(1e-6)))
+                    && gap <= m.height * 2.0
+                    && gap >= -m.height * 0.3
+            })
+        });
+        match into.and_then(|mi| joined.get_mut(mi)) {
+            Some(m) => {
+                m.x1 = m.x1.max(l.x1);
+                m.members.extend(l.members);
+            }
+            None => {
+                joined_index.insert(joined.len(), l.bottom, l.height);
+                joined.push(l);
+            }
+        }
+    }
+    joined
 }
 
 /// A lone glyph that may be a mark rather than linework: a letter or digit of a letter's shape
@@ -6747,5 +6829,193 @@ mod tests {
         assert!(stands_alone(0, 8.0, &boxes));
         assert!(!stands_alone(2, 8.0, &boxes));
         assert!(!stands_alone(9, 8.0, &boxes));
+    }
+    /// The lines the OCR built before [`LineIndex`]: every glyph asked every line so far.
+    fn lines_asking_every_line(matched: &mut [super::MatchedGlyph]) -> Vec<super::TextLine> {
+        use super::*;
+        matched.sort_by(|a, b| a.bb[0].total_cmp(&b.bb[0]));
+        let mut lines: Vec<TextLine> = Vec::new();
+        let mut small: Vec<usize> = Vec::new();
+        for (gi, g) in matched.iter().enumerate() {
+            if small_glyph(g.ch) {
+                small.push(gi);
+                continue;
+            }
+            let h = g.bb[3] - g.bb[1];
+            let best = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| {
+                    let gap = g.bb[0] - l.x1;
+                    l.pen == g.pen
+                        && (g.bb[1] - l.bottom).abs() <= l.height * 0.3
+                        && (0.7..=1.45).contains(&(h / l.height.max(1e-6)))
+                        && gap <= l.height * 2.0
+                        && gap >= -l.height * 0.3
+                })
+                .min_by(|a, b| (g.bb[0] - a.1.x1).total_cmp(&(g.bb[0] - b.1.x1)))
+                .map(|(li, _)| li);
+            match best.and_then(|li| lines.get_mut(li)) {
+                Some(l) => {
+                    l.x1 = l.x1.max(g.bb[2]);
+                    l.members.push(gi);
+                }
+                None => lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: h, x1: g.bb[2], slant: g.slant, members: vec![gi] }),
+            }
+        }
+        for gi in small {
+            let Some(g) = matched.get(gi) else { continue };
+            let on_oblique_line = |l: &TextLine| {
+                let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+                let rise = g.bb[1] - l.bottom;
+                l.pen == g.pen
+                    && l.slant.abs() >= 0.05
+                    && (0.0..=l.height * 1.25).contains(&rise)
+                    && g.bb[0] - l.slant * rise >= x0 - l.height * 1.2
+                    && g.bb[2] - l.slant * rise <= l.x1 + l.height * 1.2
+            };
+            let shift = lines.iter().find(|l| on_oblique_line(l)).map(|l| l.slant * (g.bb[1] - l.bottom));
+            if let Some(shift) = shift
+                && let Some(g) = matched.get_mut(gi)
+            {
+                g.bb[0] -= shift;
+                g.bb[2] -= shift;
+            }
+            let Some(g) = matched.get(gi) else { continue };
+            let cy = (g.bb[1] + g.bb[3]) / 2.0;
+            let line = lines.iter_mut().find(|l| {
+                let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+                l.pen == g.pen
+                    && cy >= l.bottom - l.height * 0.25
+                    && cy <= l.bottom + l.height * 1.25
+                    && (g.bb[3] - g.bb[1]) <= l.height * if tall_glyph(g.ch) { 1.7 } else { 1.1 }
+                    && g.bb[0] >= x0 - l.height * 1.2
+                    && g.bb[2] <= l.x1 + l.height * 1.2
+            });
+            match line {
+                Some(l) => {
+                    l.x1 = l.x1.max(g.bb[2]);
+                    l.members.push(gi);
+                }
+                None => lines.push(TextLine {
+                    pen: g.pen,
+                    bottom: g.bb[1],
+                    height: (g.bb[3] - g.bb[1]).max(0.5),
+                    x1: g.bb[2],
+                    slant: 0.0,
+                    members: vec![gi],
+                }),
+            }
+        }
+        let line_x0 = |l: &TextLine| l.members.iter().filter_map(|&m| matched.get(m)).map(|g| g.bb[0]).fold(f64::MAX, f64::min);
+        lines.sort_by(|a, b| line_x0(a).total_cmp(&line_x0(b)));
+        let mut joined: Vec<TextLine> = Vec::with_capacity(lines.len());
+        for l in lines {
+            let x0 = line_x0(&l);
+            let into = joined.iter_mut().rev().find(|m| {
+                let gap = x0 - m.x1;
+                m.pen == l.pen
+                    && (l.bottom - m.bottom).abs() <= m.height * 0.3
+                    && (0.7..=1.45).contains(&(l.height / m.height.max(1e-6)))
+                    && gap <= m.height * 2.0
+                    && gap >= -m.height * 0.3
+            });
+            match into {
+                Some(m) => {
+                    m.x1 = m.x1.max(l.x1);
+                    m.members.extend(l.members);
+                }
+                None => joined.push(l),
+            }
+        }
+        joined
+    }
+
+    #[test]
+    fn ocr_lines_by_baseline_are_the_lines_of_asking_every_line() {
+        use super::*;
+        // Dense lettering in every size a sheet uses, upright and oblique rows packed close,
+        // punctuation, two pens, degenerate boxes and stray glyphs: the line index finds exactly
+        // the lines (members, ends, punctuation shifts) that asking every line found.
+        let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let pens = [Pen { rgb: [0, 0, 0], lw: 18, transp: 0 }, Pen { rgb: [0, 0, 255], lw: 35, transp: 0 }];
+        let chars = ['A', 'E', 'M', '1', '4', '0', '-', '.', ',', '\'', '"', '(', ')', '/', '#'];
+        for trial in 0..6 {
+            let mut glyphs: Vec<MatchedGlyph> = Vec::new();
+            let rows = 60 + trial * 40;
+            for _ in 0..rows {
+                let h = [2.5, 4.0, 4.5, 6.0, 9.0, 18.0, 36.0][(rnd() * 7.0) as usize % 7];
+                let base = (rnd() * 300.0 * h).round() / 4.0;
+                let slant = if rnd() < 0.25 { 0.21 } else { 0.0 };
+                let pen = pens[usize::from(rnd() < 0.2)];
+                let mut x = rnd() * 2000.0;
+                for _ in 0..(3 + (rnd() * 30.0) as usize) {
+                    let ch = chars[(rnd() * chars.len() as f64) as usize % chars.len()];
+                    let (w, gh, dy) = match ch {
+                        '-' => (h * 0.5, h * 0.05, h * 0.5),
+                        '.' | ',' => (h * 0.1, h * 0.1, 0.0),
+                        '\'' | '"' => (h * 0.15, h * 0.25, h * 0.75),
+                        '(' | ')' | '/' | '#' => (h * 0.4, h * 1.3, -h * 0.15),
+                        _ => (h * 0.67, h * (0.95 + rnd() * 0.1), (rnd() - 0.5) * h * 0.1),
+                    };
+                    let y = base + dy + slant * 0.0;
+                    let bb = [x + slant * dy, y, x + w + slant * dy, y + gh];
+                    glyphs.push(MatchedGlyph {
+                        ch,
+                        alt: None,
+                        bb,
+                        indices: vec![glyphs.len()],
+                        pen,
+                        confidence: 1.0,
+                        straight: false,
+                        ring: false,
+                        slant,
+                    });
+                    x += w + h * if rnd() < 0.15 { 1.5 + rnd() * 2.0 } else { 0.2 };
+                }
+            }
+            // strays: zero-height, huge, far off, and not a number at all
+            for k in 0..40 {
+                let (x, y) = (rnd() * 2400.0, rnd() * 1600.0);
+                let bb = match k % 4 {
+                    0 => [x, y, x + 3.0, y],
+                    1 => [x, y, x + 50.0, y + 80.0],
+                    2 => [x * 1e6, y * 1e6, x * 1e6 + 4.0, y * 1e6 + 4.0],
+                    _ => [x, f64::NAN, x + 3.0, y],
+                };
+                let ch = chars[k % chars.len()];
+                glyphs.push(MatchedGlyph {
+                    ch,
+                    alt: None,
+                    bb,
+                    indices: vec![],
+                    pen: pens[0],
+                    confidence: 0.5,
+                    straight: true,
+                    ring: false,
+                    slant: 0.0,
+                });
+            }
+            let mut a = glyphs.clone();
+            let mut b = glyphs;
+            let (fast, slow) = (ocr_lines(&mut a), lines_asking_every_line(&mut b));
+            let key = |lines: &[TextLine], g: &[MatchedGlyph]| -> Vec<String> {
+                lines
+                    .iter()
+                    .map(|l| {
+                        let bbs: Vec<[u64; 2]> = l.members.iter().filter_map(|&m| g.get(m)).map(|g| [g.bb[0].to_bits(), g.bb[2].to_bits()]).collect();
+                        format!("{:?} {} {} {} {} {:?} {bbs:?}", l.pen, l.bottom, l.height, l.x1, l.slant, l.members)
+                    })
+                    .collect()
+            };
+            assert!(slow.len() > rows, "the rows make lines, trial {trial}");
+            assert_eq!(key(&fast, &a), key(&slow, &b), "trial {trial}");
+        }
     }
 }
