@@ -5691,7 +5691,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 plan_diffs = differs;
                 progress_line(&format!("  typical rooms stamped in {:.1} s", stamp_clock.elapsed().as_secs_f64()));
                 // One room's two copies of a tag at one spot are one device (its plan read it twice).
-                let twice = one_per_spot(&mut stamped, upf_dev / 4.0);
+                let twice = one_per_spot(&mut stamped, upf_dev / 4.0, upf_dev * SAME_FIXTURE_FT);
                 if twice > 0 {
                     progress_line(&format!("  typical-room devices read twice at one spot, one kept: {twice}"));
                 }
@@ -8883,6 +8883,7 @@ fn stamp_typical_rooms(
         let sub = super::printmep::sheet_drawing(d, sh);
         let sheet_hinges = plan_hinges(&sub);
         let mut turns: BTreeMap<([u64; 4], usize), RoomFit> = BTreeMap::new();
+        let mut told_fit: BTreeSet<[u64; 4]> = BTreeSet::new();
         // The sheet's devices (where each view draws its own), and each view's linework.
         let drawn: Vec<[f64; 2]> = devices.iter().map(|dv| dv.at).collect();
         let reach = ROOM_WALL_FT * 12.0 * k_in;
@@ -8981,6 +8982,12 @@ fn stamp_typical_rooms(
                     && let turn = turn_of(view, *i, outline)
                     && let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn)
                 {
+                    if told_fit.insert(view.map(f64::to_bits)) {
+                        progress_line(&format!(
+                            "  one-room plan {sheet} {title}: room {number} {level}, its box {:?}, the view {view:?} laid by {turn:?}",
+                            bbox(outline)
+                        ));
+                    }
                     if furnished(level, outline) && !authority.iter().any(|(l, o)| l == level && o == outline) {
                         authority.push((level.clone(), outline.clone()));
                     }
@@ -12573,26 +12580,65 @@ fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &m
     before - stamped.len() - placed.len()
 }
 
-/// Leaves one device per room, tag and spot (within `eps`) of a room's stamped devices, unless
-/// their circuits differ (two counter receptacles side by side on G-5 and G-6 are two); how many
-/// went.
-fn one_per_spot(devices: &mut Vec<super::readers::ReadDevice>, eps: f64) -> usize {
-    let mut kept: BTreeMap<(String, String, String), Vec<([f64; 2], String)>> = BTreeMap::new();
-    let before = devices.len();
-    devices.retain(|dv| {
+/// Leaves one device per room, tag and spot (within `eps`; a luminaire within `fixture_eps`:
+/// two fixtures never stand closer than their own size, so two copies of one fixture's tag that
+/// near are the one fixture read twice) of a room's stamped devices, unless their circuits differ
+/// (two counter receptacles side by side on two circuits are two); the one kept takes a switch
+/// leg only the other carried. A circuit is compared without its leg letter. How many went.
+fn one_per_spot(devices: &mut Vec<super::readers::ReadDevice>, eps: f64, fixture_eps: f64) -> usize {
+    let mut kept: BTreeMap<(String, String, String), Vec<([f64; 2], (String, String), usize)>> = BTreeMap::new();
+    let mut gone: Vec<(usize, usize)> = Vec::new();
+    for (i, dv) in devices.iter().enumerate() {
         if dv.room.trim().is_empty() {
-            return true;
+            continue;
         }
-        let circuit = dv.circuit.trim().to_ascii_uppercase();
+        let circuit = circuit_and_leg(&dv.circuit);
+        let near = if is_fixture(dv) { eps.max(fixture_eps) } else { eps };
         let spots = kept.entry((dv.level.clone(), dv.room.clone(), dv.tag.trim().to_ascii_uppercase())).or_default();
-        if spots.iter().any(|(p, c)| (p[0] - dv.at[0]).hypot(p[1] - dv.at[1]) <= eps && (c.is_empty() || circuit.is_empty() || *c == circuit)) {
-            return false;
+        let same = |c: &(String, String)| {
+            (c.0.is_empty() || circuit.0.is_empty() || c.0 == circuit.0) && (c.1.is_empty() || circuit.1.is_empty() || c.1 == circuit.1)
+        };
+        match spots.iter().find(|(p, c, _)| (p[0] - dv.at[0]).hypot(p[1] - dv.at[1]) <= near && same(c)) {
+            Some((_, _, k)) => gone.push((i, *k)),
+            None => spots.push((dv.at, circuit, i)),
         }
-        spots.push((dv.at, circuit));
-        true
+    }
+    for (i, k) in &gone {
+        let leg = devices.get(*i).map(|d| d.leg.trim().to_string()).unwrap_or_default();
+        if let Some(d) = devices.get_mut(*k).filter(|d| d.leg.trim().is_empty() && !leg.is_empty()) {
+            d.leg = leg;
+        }
+    }
+    let drop: BTreeSet<usize> = gone.iter().map(|(i, _)| *i).collect();
+    let mut i = 0usize;
+    devices.retain(|_| {
+        i += 1;
+        !drop.contains(&(i - 1))
     });
-    before - devices.len()
+    drop.len()
 }
+
+/// A circuit label's circuits and its switch leg apart (`LP1-3,a`: `LP1-3` and `A`; a trailing
+/// single letter is the leg, never a circuit number), upper case. `LP1-3` and `LP1-3,a` are one circuit, the
+/// leg read on one copy only; legs `a` and `b` are two.
+pub(crate) fn circuit_and_leg(label: &str) -> (String, String) {
+    let mut parts: Vec<&str> = label.split(',').map(str::trim).collect();
+    let mut legs: Vec<&str> = Vec::new();
+    while parts.len() > 1 && parts.last().is_some_and(|p| p.len() == 1 && p.chars().all(|c| c.is_ascii_alphabetic())) {
+        legs.extend(parts.pop());
+    }
+    legs.reverse();
+    (parts.join(",").to_ascii_uppercase(), legs.join(",").to_ascii_uppercase())
+}
+
+/// A luminaire: by its kind or its IFC class as read.
+pub(crate) fn is_fixture(dv: &super::readers::ReadDevice) -> bool {
+    dv.kind.to_ascii_lowercase().contains("luminaire") || dv.ifc_class.eq_ignore_ascii_case("IfcLightFixture")
+}
+
+/// Two copies of one luminaire's tag on one circuit in one room this near (feet) are one fixture
+/// read twice: two fixtures never stand closer than their own size.
+pub(crate) const SAME_FIXTURE_FT: f64 = 1.0;
 
 /// A floor plan's device this near where a typical plan's copy of the same tag lands is that
 /// device (feet).
@@ -14684,6 +14730,15 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let placed: Vec<String> =
         planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
     sp.mep.equipment.extend(planned.equipment);
+    // A panel only lettered or proposed, with no working space where that puts it, takes a face
+    // in its room that has it.
+    let refaced = panels_onto_clear_faces(s.doc()?, &mut sp, &rooms);
+    if !refaced.is_empty() {
+        let tags: Vec<String> = refaced.iter().take(12).cloned().collect();
+        s.echo(format!("  panels moved to a wall face with their working space: {} ({})", refaced.len(), tags.join(", ")));
+    }
+    slid.extend(refaced.iter().cloned());
+    new_tags.extend(refaced);
     // The one-line's feeders replace those read the same way before (a rerun).
     sp.mep.feeders.retain(|f| !f.source.contains("one-line tag"));
     let feeders = planned.feeders.len();
@@ -14780,8 +14835,9 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         let usable = message.split("sq in usable").next().and_then(|t| t.rsplit(',').next()).and_then(|t| t.trim().parse::<f64>().ok());
         let g = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(gear_tag));
         if let (Some(g), Some(need), Some(usable)) = (g, need, usable)
-            && let Some(w) = super::gearbuild::wireway_for(g, need, usable, upf, &space_rule)
+            && let Some(mut w) = super::gearbuild::wireway_for(g, need, usable, upf, &space_rule)
         {
+            super::gearbuild::wireway_clear_of_walls(&mut w, g, &sp.walls, &sp.wall_types, upf);
             job.add_finding(
                 StageName::BimBuild,
                 &format!("Gear {gear_tag}: {} built above it (proposed)", w.properties.get("CORRECTED_VALUE").cloned().unwrap_or_default()),
@@ -19698,6 +19754,69 @@ fn build_new_mep(
 /// What an equipment question begins with (its tag follows).
 const EQUIP_QUESTION: &str = "Equipment electrical data: ";
 
+/// The panels only lettered or proposed whose place fails its working space, each moved to the
+/// nearest face in its room that has it ([`super::validate_gear::clear_face`]). Their tags.
+fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::BuildingSpec, rooms: &[super::gearbuild::RoomBox]) -> Vec<String> {
+    use super::validate_gear::{FaceNeed, Obstacle, built_doors, clear_face, gear_need};
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let code = super::coderules::rules().into_iter().find(|r| r.id == "E-WORKSPACE").unwrap_or_default();
+    let movable = |e: &cadaddy_walk3d::MepEquipment| {
+        matches!(e.kind.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center")
+            && !e.round
+            && (e.sources.get("position").map(String::as_str) == Some(super::printcond::ROOM_PANEL_POSITION)
+                || e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed")))
+    };
+    if !sp.mep.equipment.iter().any(movable) {
+        return Vec::new();
+    }
+    let pieces = super::propfill::wall_footprints_on_plans(d);
+    let doors = built_doors(d, upf);
+    let levels: Vec<(String, f64)> = sp.levels.iter().map(|l| (l.name.clone(), l.elevation_ft)).collect();
+    // Every box, its sides, for what stands in front of a panel: a panel as the build will set it.
+    let boxes: Vec<(String, String, [f64; 2], [f64; 2], [f64; 2])> = sp
+        .mep
+        .equipment
+        .iter()
+        .map(|e| {
+            let floor = levels.iter().find(|(n, _)| n.eq_ignore_ascii_case(&e.level)).map_or(0.0, |(_, f)| *f) * upf;
+            let (lo, hi) = super::validate_gear::as_the_build_sets_it(e, &pieces, floor, upf);
+            (e.tag.clone(), e.level.to_ascii_lowercase(), lo, hi, [e.bottom_ft * 12.0, (e.bottom_ft + e.height_ft) * 12.0])
+        })
+        .collect();
+    let mut moved = Vec::new();
+    let need_of: Vec<Option<[f64; 2]>> = sp.mep.equipment.iter().map(|e| gear_need(sp, e, &code)).collect();
+    for (e, need_in) in sp.mep.equipment.iter_mut().zip(need_of) {
+        if !movable(e) {
+            continue;
+        }
+        let Some((_, elevation)) = levels.iter().find(|(n, _)| n.eq_ignore_ascii_case(&e.level)) else { continue };
+        let lv = e.level.to_ascii_lowercase();
+        let others: Vec<Obstacle> = boxes
+            .iter()
+            .filter(|(t, l, ..)| *l == lv && !t.eq_ignore_ascii_case(&e.tag))
+            .flat_map(|(t, _, lo, hi, z)| {
+                let c = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]].map(|p| [p[0] / upf, p[1] / upf]);
+                (0..4usize).map(move |k| Obstacle { what: format!("equipment {t}"), a: c[k], b: c[(k + 1) % 4], half_ft: 0.0, z_in: Some(*z) })
+            })
+            .collect();
+        let read_at = cadaddy_geom::Vec2::new((e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0);
+        let room = super::gearbuild::room_outline_on_plan(rooms, &e.level, e.properties.get("ROOM").map(String::as_str), read_at);
+        let need = FaceNeed {
+            need_in,
+            width_in: code.width_in.unwrap_or(30.0),
+            height_in: code.height_in.unwrap_or(78.0).max((e.bottom_ft + e.height_ft) * 12.0),
+            recessed: e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess")),
+        };
+        let found = clear_face(e, &pieces, &others, doors.get(&lv).map_or(&[][..], Vec::as_slice), room.as_deref(), elevation * upf, &need, upf);
+        if let Some(f) = found
+            && super::gearbuild::onto_clear_face(e, &f, upf)
+        {
+            moved.push(e.tag.to_ascii_uppercase());
+        }
+    }
+    moved
+}
+
 /// The loads the one-line feeds (not panels) against their submittals ([`super::equipsub`]):
 /// each one's data from its latest submittal's text, else an agent's reading (a job answer), else
 /// a question; the checks' failures RFIs and findings; the data kept in `mep.equipment_electrical`.
@@ -19835,6 +19954,32 @@ fn equipment_step(
             equipsub::correct(&mut e, conductors, &rule);
         }
         rows.push(e);
+    }
+    // Its load goes on its schedule row too, for the panel's and the feeder's totals after.
+    let sent_back = |e: &cadaddy_walk3d::EquipmentElectrical| {
+        let st = e.status.to_ascii_lowercase();
+        st.contains("resubmit") || st.contains("rejected")
+    };
+    for e in rows.iter().filter(|e| !sent_back(e)) {
+        let Some(va) = equipsub::submitted_va(e) else { continue };
+        let word = equipsub::stem(&e.tag).unwrap_or_else(|| e.tag.to_ascii_uppercase());
+        let row = sp.mep.panel_schedules.iter_mut().find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel)).and_then(|p| {
+            p.circuits.iter_mut().find(|c| {
+                let d = c.description.to_ascii_uppercase();
+                d.contains(&e.tag.to_ascii_uppercase()) || d.contains(&word)
+            })
+        });
+        if let Some(was) = row.and_then(|c| equipsub::take_submitted_load(c, va)) {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("Equipment {} load from its submittal: {va:.0} VA, the schedule prints {was:.0} VA", e.tag),
+                &format!("{} ({})", e.tag, e.source),
+                2,
+                vec!["The printed load stays beside it on the schedule row".into()],
+                None,
+                false,
+            );
+        }
     }
     // What is corrected goes on its schedule row (the print beside it), priced.
     for e in rows.iter_mut().filter(|e| !e.correction_reason.is_empty()) {
@@ -27438,7 +27583,7 @@ mod tests {
             ..Default::default()
         };
         let mut d = vec![dv("S", "219", 10.0), dv("S", "219", 10.5), dv("S", "219", 22.0), dv("S", "221", 10.0), dv("SD", "219", 10.0)];
-        assert_eq!(one_per_spot(&mut d, 3.0), 1);
+        assert_eq!(one_per_spot(&mut d, 3.0, 12.0), 1);
         assert_eq!(d.len(), 4);
         // Two receptacles side by side on two circuits are two.
         let on = |mut d: super::super::readers::ReadDevice, c: &str| {
@@ -27446,8 +27591,36 @@ mod tests {
             d
         };
         let mut r = vec![on(dv("REC", "219", 10.0), "G-5"), on(dv("REC", "219", 10.2), "G-6"), on(dv("REC", "219", 10.1), "G-5")];
-        assert_eq!(one_per_spot(&mut r, 3.0), 1);
+        assert_eq!(one_per_spot(&mut r, 3.0, 12.0), 1);
         assert_eq!(r.iter().map(|d| d.circuit.as_str()).collect::<Vec<_>>(), vec!["G-5", "G-6"]);
+        // Test finding (fix-box-collisions): one fixture read twice 3.6 in apart (its symbol on
+        // `LP1-3` and its mark over its circuit label `LP1-3,a`) got two luminaires with overlapping
+        // boxes. Within a foot it is one (the leg letter is no other circuit), and it keeps the
+        // switch leg the other copy read; two receptacles that near stay two, and two of one
+        // fixture type 3 ft apart are two.
+        let lum = |x: f64, leg: &str| {
+            let mut d = on(dv("F7", "A1", x), if leg.is_empty() { "LP1-3" } else { "LP1-3,a" });
+            d.kind = "luminaire".into();
+            d.leg = leg.into();
+            d
+        };
+        let mut l = vec![lum(30.0, ""), lum(33.6, "a"), lum(66.0, ""), on(dv("REC", "A1", 40.0), "LP1-5"), on(dv("REC", "A1", 43.6), "LP1-5")];
+        assert_eq!(one_per_spot(&mut l, 3.0, 12.0), 1);
+        assert_eq!(
+            l.iter().map(|d| (d.tag.as_str(), d.at[0], d.leg.as_str())).collect::<Vec<_>>(),
+            vec![("F7", 30.0, "a"), ("F7", 66.0, ""), ("REC", 40.0, ""), ("REC", 43.6, "")]
+        );
+        let cl = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(circuit_and_leg("LP1-3,a"), cl("LP1-3", "A"));
+        assert_eq!(
+            (circuit_and_leg("lp2-9,11,13"), circuit_and_leg("LP1-7, d"), circuit_and_leg("")),
+            (cl("LP2-9,11,13", ""), cl("LP1-7", "D"), cl("", ""))
+        );
+        // Two switches side by side on legs a and b of one circuit are two.
+        let sw = |x: f64, c: &str| on(dv("S", "A1", x), c);
+        let mut w = vec![sw(50.0, "LP1-3,a"), sw(51.0, "LP1-3,b"), sw(52.0, "LP1-3")];
+        assert_eq!(one_per_spot(&mut w, 3.0, 12.0), 1);
+        assert_eq!(w.iter().map(|d| d.circuit.as_str()).collect::<Vec<_>>(), vec!["LP1-3,a", "LP1-3,b"]);
     }
 
     /// A fan two plans tag (the electrical plan's EF and the mechanical plan's) is one connection

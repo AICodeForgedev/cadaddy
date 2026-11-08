@@ -2521,7 +2521,8 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
     let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
     // A panel hangs in or on a wall: the built walls, for putting it on its wall's face.
     let panel = |k: &str| matches!(k.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
-    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints(d) } else { Vec::new() };
+    // (Where the plans draw them, as the spec's positions are: a rebuild comes after the stacking.)
+    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
     for e in sp.mep.equipment.iter().take(MAX_RUNS).filter(|e| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
         let Some(level) = sp.level(&e.level) else { continue };
         let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());

@@ -318,6 +318,31 @@ pub(crate) fn correct(e: &mut EquipmentElectrical, feeder: Option<(&str, &str)>,
     }
 }
 
+/// The load its submittal says it draws, VA: its nameplate amps (else full-load, else minimum
+/// circuit amps) at its volts and phase. None: no volts or no amps.
+pub(crate) fn submitted_va(e: &EquipmentElectrical) -> Option<f64> {
+    let volts = e.volts.filter(|v| v.is_finite() && *v > 0.0)?;
+    let amps = e.nameplate_a.or(e.fla).or(e.mca).filter(|a| a.is_finite() && *a > 0.0)?;
+    Some(volts * amps * if e.phase == Some(3) { 3f64.sqrt() } else { 1.0 })
+}
+
+/// A schedule row takes its load from a submittal, the printed load kept beside it, unless within
+/// 1% of it (rounding, not a correction). What it had, when it changed a printed load.
+pub(crate) fn take_submitted_load(c: &mut cadaddy_walk3d::PanelCircuit, va: f64) -> Option<f64> {
+    match c.load_va {
+        Some(was) if (was - va).abs() <= 0.01 * was.abs() => None,
+        Some(was) => {
+            c.design_load_va = Some(was);
+            c.load_va = Some(va);
+            Some(was)
+        }
+        None => {
+            c.load_va = Some(va);
+            None
+        }
+    }
+}
+
 /// The load's word to find its submittal and schedule row by: its label's letters (`ELEV-1` →
 /// `ELEV`), at least three.
 pub(crate) fn stem(tag: &str) -> Option<String> {
@@ -731,6 +756,31 @@ mod tests {
                     SUPPLY MOTOR Model DTP0024 • 2.000 HP, 3 Phs, 208 V, 60 Hz, 6.1 FLA";
         let e = text_electrical(text);
         assert_eq!((e.mca, e.max_ocpd_a, e.sccr_a, e.volts, e.phase, e.fla), (Some(74.6), Some(80.0), Some(10_000.0), Some(208.0), Some(3), None));
+    }
+
+    #[test]
+    fn a_submittal_sets_its_schedule_rows_load_and_the_print_stays_beside_it() {
+        let elec = |volts, phase, nameplate_a, mca| EquipmentElectrical { volts, phase, nameplate_a, mca, ..Default::default() };
+        // 42 A at 208 V, three phase.
+        let va = submitted_va(&elec(Some(208.0), Some(3), Some(42.0), None)).unwrap();
+        assert!((va - 15131.0).abs() < 1.0, "{va}");
+        // Minimum circuit amps at 208 V, single phase, with no nameplate.
+        assert!((submitted_va(&elec(Some(208.0), Some(1), None, Some(19.9))).unwrap() - 4139.2).abs() < 0.1);
+        assert_eq!(submitted_va(&elec(None, Some(3), Some(42.0), None)), None, "no volts");
+        assert_eq!(submitted_va(&elec(Some(208.0), Some(3), None, None)), None, "no amps");
+
+        let row = |load_va| cadaddy_walk3d::PanelCircuit { number: "1".into(), load_va, ..Default::default() };
+        let mut c = row(Some(16212.0));
+        assert_eq!(take_submitted_load(&mut c, va), Some(16212.0));
+        assert_eq!((c.load_va, c.design_load_va), (Some(va), Some(16212.0)));
+        // Within 1%: the print stands.
+        let mut c = row(Some(4140.0));
+        assert_eq!(take_submitted_load(&mut c, 4139.2), None);
+        assert_eq!((c.load_va, c.design_load_va), (Some(4140.0), None));
+        // The schedule silent: the submittal's, nothing to keep.
+        let mut c = row(None);
+        assert_eq!(take_submitted_load(&mut c, va), None);
+        assert_eq!((c.load_va, c.design_load_va), (Some(va), None));
     }
 
     #[test]

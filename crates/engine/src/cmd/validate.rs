@@ -406,7 +406,8 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
                 .iter()
                 .fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
             if lo[0] <= hi[0] && lo[1] <= hi[1] {
-                m.openings.push(ModelOpening { id: e.handle.hex(), level, kind: part.clone(), min: lo, max: hi, swing: None });
+                let leaf = super::wallgen::door_swing(e).map(|ps| ps.map(|p| frame.to_ft_on(&level, p)));
+                m.openings.push(ModelOpening { id: e.handle.hex(), level, kind: part.clone(), min: lo, max: hi, swing: None, leaf });
             }
         }
     }
