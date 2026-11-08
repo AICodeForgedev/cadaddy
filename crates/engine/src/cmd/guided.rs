@@ -4935,6 +4935,128 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 /// Must draft/store the building spec itself (bspec.draft store) before building.
 /// One `job N/M bim_build: <step> done in X s` line per sub-step of the build, so a slow step
 /// shows where it is (Q6033: on Windows the stage ran for an hour without a line).
+/// Several buildings from one set of plans (Q6292): the buildings the plans' titles name, each
+/// placed (the first where the plans draw it, the others by the site plan's labels or side by
+/// side), and the model built once per building ([`super::buildings`]). Nothing when the titles
+/// name fewer than two.
+fn buildings_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> Result<()> {
+    use super::buildings as bl;
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let title_of = |n: &str| {
+        let base = |x: &str| x.split('/').next().unwrap_or(x).trim().to_string();
+        classified
+            .iter()
+            .find(|c| base(c.get("number").and_then(Value::as_str).unwrap_or("")).eq_ignore_ascii_case(n))
+            .and_then(|c| c.get("title").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_string()
+    };
+    // One entry per sheet (a several-view sheet's regions share it).
+    let mut regions: Vec<&SheetRegion> = Vec::new();
+    for r in job.sheet_regions.iter().take(MAX_SHEET_LINKS) {
+        if !regions.iter().any(|x| x.number.eq_ignore_ascii_case(&r.number)) && r.rect.iter().all(|v| v.is_finite()) {
+            regions.push(r);
+        }
+    }
+    let site = |r: &SheetRegion| r.not_built.to_ascii_lowercase().contains("site") || r.kind.to_ascii_lowercase().contains("site");
+    let plan = |r: &SheetRegion| {
+        let k = r.kind.to_ascii_lowercase();
+        k.ends_with("plan") || k == "rcp"
+    };
+    let rects: Vec<[f64; 4]> = regions.iter().map(|r| r.area.unwrap_or(r.rect)).collect();
+    let lines = bl::text_lines(s.doc()?, &rects);
+    let empty = Vec::new();
+    let sheets: Vec<bl::SheetTitles> = regions
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut titles = vec![title_of(&r.number)];
+            titles.extend(lines.get(i).unwrap_or(&empty).iter().map(|l| l.0.clone()).filter(|t| bl::title_like(t)));
+            bl::SheetTitles { number: r.number.clone(), plan: plan(r), site: site(r), titles }
+        })
+        .collect();
+    let set = bl::read_set(&sheets);
+    if !set.several() {
+        return Ok(());
+    }
+    // A floor plan per building (different footprints) is not one plan standing for several:
+    // the levels take one architectural plan each, so those are left as they are, and said.
+    let arch_named: BTreeMap<&str, &Vec<String>> = regions
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("A") && plan(r) && r.not_built.is_empty())
+        .filter_map(|r| set.sheets.get(&r.number).map(|v| (r.number.as_str(), v)))
+        .filter(|(_, v)| v.len() == 1)
+        .collect();
+    let own_plans: BTreeSet<&String> = arch_named.values().filter_map(|v| v.first()).collect();
+    if own_plans.len() > 1 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!(
+                "The set has a floor plan for each of {} buildings ({}): they are built on one level, not as separate buildings",
+                own_plans.len(),
+                own_plans.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+            &format!(
+                "architectural plans naming one building each: {}",
+                arch_named.iter().map(|(k, v)| format!("{k} = {}", v.join(", "))).collect::<Vec<_>>().join("; ")
+            ),
+            3,
+            vec!["Build each building's plans as a job of its own until separate footprints are supported".into()],
+            None,
+            false,
+        );
+        return Ok(());
+    }
+    let (mut sp, true) = super::bspec::current(s, "bim_build")? else { return Ok(()) };
+    let site_lines: Vec<(String, Vec<(String, cadaddy_geom::Vec2)>)> =
+        regions.iter().enumerate().filter(|(_, r)| site(r)).map(|(i, r)| (r.number.clone(), lines.get(i).cloned().unwrap_or_default())).collect();
+    let labels = bl::site_labels(&site_lines, &set.names);
+    let list = bl::place(&set, bl::footprint_ft(s.doc()?, &sp), &labels);
+    sp.buildings = bl::to_spec(&set, list);
+    let done = bl::apply(s.doc_mut()?, &mut sp);
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    let report = done.to_json(&sp);
+    progress_line(&format!(
+        "  buildings: {} from one set of plans ({}): {} elements copied, {} moved to their own building, {} stand for every building; sheets naming buildings {}",
+        sp.buildings.list.len(),
+        sp.buildings
+            .list
+            .iter()
+            .map(|b| format!("{} {} {:?} ft", b.name, b.place, b.offset_ft.map(super::printmep::r1)))
+            .collect::<Vec<_>>()
+            .join("; "),
+        done.copied,
+        done.moved,
+        done.shared,
+        json!(sp.buildings.sheets)
+    ));
+    let unnamed: Vec<String> = regions
+        .iter()
+        .filter(|r| plan(r) && !site(r) && r.not_built.is_empty() && !set.sheets.contains_key(&r.number))
+        .map(|r| r.number.clone())
+        .collect();
+    job.add_finding(
+        StageName::BimBuild,
+        &format!(
+            "One set of plans for {} buildings ({}): the model is built once per building",
+            sp.buildings.list.len(),
+            bl::names_of(&sp.buildings.list).join(", ")
+        ),
+        &format!(
+            "titles naming buildings: {}; plans naming none stand for every building: {}; places: {}",
+            sp.buildings.sheets.iter().map(|(k, v)| format!("{k} = {}", v.join(" & "))).collect::<Vec<_>>().join("; "),
+            if unnamed.is_empty() { "none".to_string() } else { unnamed.join(", ") },
+            sp.buildings.list.iter().map(|b| format!("{}: {} ({})", b.name, b.place, b.basis)).collect::<Vec<_>>().join("; ")
+        ),
+        2,
+        vec!["Check each building's place against the site plan; model.buildings places them again after an edit to the spec's `buildings`".into()],
+        None,
+        false,
+    );
+    result["buildings"] = report;
+    Ok(())
+}
+
 fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Instant) {
     let secs = started.elapsed().as_secs_f64();
     let line = format!("{}: {step} done in {secs:.1} s", progress_tag(job, StageName::BimBuild));
@@ -7287,6 +7409,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     forms_step(s, &mut result);
     bim_step(s, job, "object forms", t);
     job.audit("stage_run", "pipeline", None, Some(StageName::BimBuild), Some(json!({"built_count": built_count})));
+    // One set of plans for several buildings (Q6292): each building gets the model, after every
+    // step that adds to it, so the copies hold all of it.
+    let t = web_time::Instant::now();
+    if let Err(e) = buildings_step(s, job, &mut result) {
+        result["buildings_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "buildings", t);
     // The counts are the model's as the stage ends (B4-022: tag identity merges a wall or door
     // read off several sheets into one after the build; the summary kept the build's 2,977
     // walls of 2,848).
@@ -32368,6 +32497,73 @@ mod tests {
         let again = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(again["devices"]["inserted"], json!(n));
         assert_eq!(s.doc().map(crate::cmd::readers::model_device_counts).unwrap_or_default()["count"], json!(n));
+    }
+
+    /// Q6292: one set of plans for two buildings. The titles name them: a plan naming one goes to
+    /// that building only, a plan naming both is built in each, and the BOM counts both.
+    /// (Through the job's JSON only: on a build that makes one building, it fails.)
+    #[test]
+    fn a_plan_for_two_buildings_is_built_once_per_building() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        // (sheet, its title, luminaires on it)
+        let plans =
+            [("Q-11", "LIGHTING PLAN - BUILDING A", 3), ("Q-12", "LIGHTING PLAN - BUILDING B", 2), ("Q-13", "LIGHTING PLAN - BUILDINGS A & B", 4)];
+        job.sheets = Some(
+            json!({"sheets": plans.iter().map(|(n, t, _)| json!({"number": n, "sheet_type": "plan", "level": "1", "discipline": "E", "title": t})).collect::<Vec<_>>()}),
+        );
+        job.sheets_loaded = true;
+        for (i, (name, _, n)) in plans.iter().enumerate() {
+            let x0 = 3000.0 * i as f64;
+            let texts: Vec<(&str, f64, f64, f64)> = vec![
+                ("LIGHTING FIXTURE SCHEDULE", x0 + 1000.0, 800.0, 8.0),
+                ("TYPE", x0 + 1000.0, 785.0, 5.0),
+                ("DESCRIPTION", x0 + 1030.0, 785.0, 5.0),
+                ("A", x0 + 1000.0, 772.0, 5.0),
+                ("2X4 LED TROFFER", x0 + 1030.0, 772.0, 5.0),
+            ];
+            let syms: Vec<(&str, f64, f64)> = (0..*n).map(|k| ("A", x0 + 100.0 + 40.0 * f64::from(k), 300.0)).collect();
+            let lo = s.doc().map_or(0, |d| d.handseed);
+            add_sheet(&mut s, &texts, &syms);
+            let hi = s.doc().map_or(0, |d| d.handseed);
+            job.sheet_spans.push(SheetSpan { sheet: (*name).into(), lo, hi });
+            job.sheet_regions.push(SheetRegion {
+                number: (*name).into(),
+                level: "1".into(),
+                discipline: "E".into(),
+                kind: "plan".into(),
+                rect: [x0, 0.0, x0 + 2000.0, 1000.0],
+                area: None,
+                title_block: None,
+                not_built: String::new(),
+                levels: Vec::new(),
+                view: None,
+            });
+        }
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r["devices"]["count"], json!(9), "{r:#}");
+        let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        // Two buildings: A where the plans draw it, B beside it (no site plan: inferred).
+        let b = &built["buildings"]["buildings"];
+        assert_eq!((b[0]["name"].clone(), b[1]["name"].clone()), (json!("A"), json!("B")), "{:#}", built["buildings"]);
+        assert_eq!((b[0]["place"].clone(), b[1]["place"].clone()), (json!("drawn"), json!("inferred")));
+        assert!(b[1]["offset_ft"][0].as_f64().is_some_and(|x| x > 0.0), "{b:#}");
+        // A: its own 3 and the shared 4; B: its own 2 and a copy of the shared 4.
+        let in_building = |s: &mut crate::Session, name: &str| {
+            s.execute("bim.props.find", &json!({"kind": "light_fixture", "where": {"building": name}, "limit": 1000}))
+                .map_or(0, |v| v["count"].as_u64().unwrap_or(0))
+                + s.execute("bim.props.find", &json!({"kind": "device", "where": {"building": name}, "limit": 1000}))
+                    .map_or(0, |v| v["count"].as_u64().unwrap_or(0))
+        };
+        assert_eq!((in_building(&mut s, "A"), in_building(&mut s, "B")), (7, 6));
+        assert!(job.findings.iter().any(|f| f.description.contains("2 buildings")), "a finding says what was assumed");
+        // The BOM counts each building's: 3 + 2 + 4 twice.
+        let bom = s.execute("bim.bom", &json!({"group_by": "level"})).unwrap_or_else(|e| panic!("{e}"));
+        let units: f64 = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").filter_map(|l| l["net"].as_f64()).sum();
+        assert_eq!(units, 13.0, "{:#}", bom["lines"]);
+        // Placed again: the same.
+        s.execute("model.buildings", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((in_building(&mut s, "A"), in_building(&mut s, "B")), (7, 6));
     }
 
     /// `mep.read_devices` on an open drawing: a preview by default, says why it can't insert
