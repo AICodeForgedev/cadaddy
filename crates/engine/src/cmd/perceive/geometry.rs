@@ -571,29 +571,31 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     open_end,
                 });
             }
-            // A swing flattened to a polyline (how PDF prints arrive): a quarter-ish circle run.
+            // A swing flattened to a polyline (how PDF prints arrive): a quarter-ish circle run,
+            // alone or joined to its leaf and the wall's lines.
             EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
                 let pts = Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
-                let Some((c, r, deg, ends)) = flat_swing(&pts) else { continue };
-                if !(rmin..=rmax).contains(&r) {
-                    continue;
+                for (c, r, deg, ends) in flat_swings(&pts) {
+                    if !(rmin..=rmax).contains(&r) {
+                        continue;
+                    }
+                    let tol = r * 0.05;
+                    let (leaf, open_end) = leaf_end(segs, c, ends, tol);
+                    let on_door_layer = e.common.layer.to_ascii_uppercase().contains("DOOR");
+                    let confidence = (0.45 + 0.3 * f64::from(u8::from(leaf)) + 0.2 * f64::from(u8::from(on_door_layer))).min(1.0);
+                    items.push(Opening {
+                        kind: "door",
+                        at: c,
+                        width: r,
+                        layer: e.common.layer.to_string(),
+                        handle: e.handle,
+                        swing: Some((deg, ends)),
+                        block: None,
+                        confidence,
+                        leaf,
+                        open_end,
+                    });
                 }
-                let tol = r * 0.05;
-                let (leaf, open_end) = leaf_end(segs, c, ends, tol);
-                let on_door_layer = e.common.layer.to_ascii_uppercase().contains("DOOR");
-                let confidence = (0.45 + 0.3 * f64::from(u8::from(leaf)) + 0.2 * f64::from(u8::from(on_door_layer))).min(1.0);
-                items.push(Opening {
-                    kind: "door",
-                    at: c,
-                    width: r,
-                    layer: e.common.layer.to_string(),
-                    handle: e.handle,
-                    swing: Some((deg, ends)),
-                    block: None,
-                    confidence,
-                    leaf,
-                    open_end,
-                });
             }
             EntityKind::Insert(i) => {
                 let name = i.block.to_ascii_uppercase();
@@ -673,7 +675,7 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
         if out.len() >= MAX_LEAVES {
             break;
         }
-        let swing = match &e.kind {
+        let swings: Vec<(Vec2, f64, [Vec2; 2])> = match &e.kind {
             EntityKind::Arc(a) => {
                 let mut sweep = (a.end - a.start).rem_euclid(std::f64::consts::TAU);
                 if sweep < 1e-9 {
@@ -683,42 +685,131 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
                 let deg = sweep.to_degrees();
                 ((60.0..=WIDE_SWING_MAX_DEG).contains(&deg) && (rmin..=rmax).contains(&a.radius))
                     .then(|| (c, deg, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
+                    .into_iter()
+                    .collect()
             }
+            // Alone, or joined to its leaf and the wall's lines (as PDF prints arrive).
             EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
                 let pts = Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
-                flat_arc(&pts)
+                arc_runs(&pts)
+                    .into_iter()
                     .filter(|(_, r, deg, _)| (rmin..=rmax).contains(r) && (60.0..=WIDE_SWING_MAX_DEG).contains(deg))
                     .map(|(c, _, deg, ends)| (c, deg, ends))
+                    .collect()
             }
-            _ => None,
+            _ => Vec::new(),
         };
-        let Some((hinge, deg, arc_ends)) = swing else { continue };
-        let tol = 0.05 * hinge.dist(arc_ends[0]);
-        let wide = deg > SWING_MAX_DEG;
-        if wide && !jamb(hinge, 2.0 * tol) {
-            continue;
-        }
-        let at_jamb = arc_ends.map(|p| jamb(p, tol));
-        let leaves: Vec<Vec2> = match at_jamb {
-            _ if wide => arc_ends.to_vec(),
-            [true, false] => vec![arc_ends[0]],
-            [false, true] => vec![arc_ends[1]],
-            _ => arc_ends.to_vec(),
-        };
-        for end in leaves {
-            if hinge.is_finite() && end.is_finite() {
-                let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(hinge.x, hinge.y, 0.0), b: cadaddy_geom::Vec3::new(end.x, end.y, 0.0) };
-                out.push((e.common.clone(), line));
+        for (hinge, deg, arc_ends) in swings {
+            let tol = 0.05 * hinge.dist(arc_ends[0]);
+            let wide = deg > SWING_MAX_DEG;
+            if wide && !jamb(hinge, 2.0 * tol) {
+                continue;
+            }
+            let at_jamb = arc_ends.map(|p| jamb(p, tol));
+            let leaves: Vec<Vec2> = match at_jamb {
+                _ if wide => arc_ends.to_vec(),
+                [true, false] => vec![arc_ends[0]],
+                [false, true] => vec![arc_ends[1]],
+                _ => arc_ends.to_vec(),
+            };
+            for end in leaves {
+                if hinge.is_finite() && end.is_finite() {
+                    let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(hinge.x, hinge.y, 0.0), b: cadaddy_geom::Vec3::new(end.x, end.y, 0.0) };
+                    out.push((e.common.clone(), line));
+                }
             }
         }
     }
     out
 }
 
-/// A run of points that is a door swing: on one circle (within 5% of its radius) through 60–100°.
-/// Its centre (the hinge), radius, sweep in degrees and two ends.
-pub(crate) fn flat_swing(pts: &[Vec2]) -> Option<(Vec2, f64, f64, [Vec2; 2])> {
-    flat_arc(pts).filter(|(_, _, deg, _)| (60.0..=SWING_MAX_DEG).contains(deg))
+/// The door swings of a run of points (on one circle within 5% of its radius, through 60–100°):
+/// the whole run when it is one, else each swing drawn joined to its leaf or the wall's lines
+/// ([`arc_runs`]). Each one's centre (the hinge), radius, sweep in degrees and two ends.
+pub(crate) fn flat_swings(pts: &[Vec2]) -> Vec<(Vec2, f64, f64, [Vec2; 2])> {
+    arc_runs(pts).into_iter().filter(|(_, _, deg, _)| (60.0..=SWING_MAX_DEG).contains(deg)).collect()
+}
+
+/// A turn sharper than this (degrees) between two pieces of a polyline is a corner: a flattened
+/// arc turns a few degrees a piece (a quarter circle drawn in 8 chords, 11¼°), a swing meets its
+/// leaf and the wall's jamb square.
+const ARC_CORNER_DEG: f64 = 25.0;
+/// A first or last piece this many times longer than the stretch's typical chord is a straight
+/// line running on from the arc (a leaf or a wall line meeting it at a tangent), not part of it.
+const TANGENT_LINE_RATIO: f64 = 2.5;
+/// Arcs read from one polyline, at most (hostile drawings).
+const MAX_ARC_RUNS: usize = 64;
+
+/// The arcs of a run of points: the whole run when it lies on one circle ([`flat_arc`]), else
+/// each stretch between its corners that does. A PDF print joins touching strokes of one pen
+/// into one polyline, so a door's swing often arrives as one piece of a polyline that runs on
+/// along its leaf and the wall's jamb: the arc is still there, between two square corners.
+/// A stretch needs four points (three chords) to be taken for an arc.
+pub(crate) fn arc_runs(pts: &[Vec2]) -> Vec<(Vec2, f64, f64, [Vec2; 2])> {
+    if let Some(a) = flat_arc(pts) {
+        return vec![a];
+    }
+    // The corners: where the direction turns sharply between two (non-empty) pieces.
+    let cos_corner = ARC_CORNER_DEG.to_radians().cos();
+    let mut stretches: Vec<&[Vec2]> = Vec::new();
+    let mut from = 0usize;
+    let mut prev: Option<Vec2> = None;
+    for i in 1..pts.len() {
+        let (Some(a), Some(b)) = (pts.get(i - 1), pts.get(i)) else { continue };
+        let d = *b - *a;
+        let len = d.len();
+        if !(len.is_finite() && len > 1e-12) {
+            continue;
+        }
+        let u = d * (1.0 / len);
+        if let Some(p) = prev
+            && p.dot(u) < cos_corner
+        {
+            if let Some(s) = pts.get(from..i) {
+                stretches.push(s);
+            }
+            from = i - 1;
+        }
+        prev = Some(u);
+    }
+    if let Some(s) = pts.get(from..) {
+        stretches.push(s);
+    }
+    let mut out = Vec::new();
+    for s in stretches {
+        if out.len() >= MAX_ARC_RUNS {
+            break;
+        }
+        if s.len() < 4 {
+            continue;
+        }
+        if let Some(a) = flat_arc(s).or_else(|| flat_arc(trim_tangent_lines(s))) {
+            out.push(a);
+        }
+    }
+    out
+}
+
+/// A stretch without a first and a last piece much longer than its middle pieces (a straight line
+/// running on from an arc at a tangent).
+fn trim_tangent_lines(s: &[Vec2]) -> &[Vec2] {
+    let len = |i: usize| match (s.get(i), s.get(i + 1)) {
+        (Some(a), Some(b)) => a.dist(*b),
+        _ => 0.0,
+    };
+    let n = s.len();
+    if n < 6 {
+        return s;
+    }
+    let mut mid: Vec<f64> = (1..n - 2).map(len).collect();
+    mid.sort_by(f64::total_cmp);
+    let typical = mid.get(mid.len() / 2).copied().unwrap_or(0.0);
+    if !(typical.is_finite() && typical > 0.0) {
+        return s;
+    }
+    let lo = usize::from(len(0) > TANGENT_LINE_RATIO * typical);
+    let hi = n - usize::from(len(n - 2) > TANGENT_LINE_RATIO * typical);
+    s.get(lo..hi).filter(|t| t.len() >= 4).unwrap_or(s)
 }
 
 /// A run of points on one circle (within 5% of its radius): its centre, radius, sweep in degrees
@@ -1476,6 +1567,54 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    /// A quarter circle about `c` of radius `r` from `a0` degrees, flattened to 8 chords.
+    fn quarter(c: (f64, f64), r: f64, a0: f64) -> Vec<Vec2> {
+        (0..=8).map(|i| (a0 + f64::from(i) * 90.0 / 8.0).to_radians()).map(|a| Vec2::new(c.0 + r * a.cos(), c.1 + r * a.sin())).collect()
+    }
+
+    #[test]
+    fn a_swing_joined_to_its_leaf_and_jamb_is_still_read() {
+        // Alone: the whole run.
+        let alone = quarter((0.0, 0.0), 36.0, 0.0);
+        let runs = flat_swings(&alone);
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        // As a print joins it: the leaf from the hinge, the arc, then on down the jamb's face.
+        let mut joined = vec![Vec2::new(0.0, 0.0)];
+        joined.extend(quarter((0.0, 0.0), 36.0, 0.0));
+        joined.push(Vec2::new(0.0, 60.0));
+        assert!(flat_arc(&joined).is_none(), "the whole run is no arc");
+        let runs = flat_swings(&joined);
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        let (c, r, deg, _) = runs[0];
+        assert!(c.dist(Vec2::new(0.0, 0.0)) < 0.5 && (r - 36.0).abs() < 0.5 && (deg - 90.0).abs() < 1.0, "{runs:?}");
+        // A double door's two swings meeting in the middle, leaf to leaf, in one polyline.
+        let mut pair = vec![Vec2::new(0.0, 0.0)];
+        pair.extend(quarter((0.0, 0.0), 36.0, 0.0));
+        pair.extend(quarter((0.0, 72.0), 36.0, 270.0).into_iter().skip(1));
+        pair.push(Vec2::new(0.0, 72.0));
+        let runs = flat_swings(&pair);
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        // A straight line running on from the arc at a tangent is trimmed off.
+        let mut tangent = quarter((0.0, 0.0), 36.0, 0.0);
+        tangent.push(Vec2::new(-30.0, 36.0));
+        tangent.insert(0, Vec2::new(36.0, -40.0));
+        let runs = flat_swings(&tangent);
+        assert_eq!(runs.len(), 1, "{runs:?}");
+    }
+
+    #[test]
+    fn corners_and_hostile_points_read_no_swing() {
+        // A room outline, a zigzag (furniture hatching), points with no length, NaNs.
+        let outline = [(0.0, 0.0), (100.0, 0.0), (100.0, 80.0), (0.0, 80.0), (0.0, 10.0)];
+        let zig: Vec<(f64, f64)> = (0..40).map(|i| (f64::from(i) * 3.0, if i % 2 == 0 { 0.0 } else { 3.0 })).collect();
+        let same = [(5.0, 5.0); 12];
+        let nan = [(f64::NAN, 0.0), (1.0, f64::INFINITY), (2.0, 2.0), (3.0, 1.0), (4.0, 0.0)];
+        for pts in [outline.to_vec(), zig, same.to_vec(), nan.to_vec(), Vec::new(), vec![(1.0, 1.0)]] {
+            let pts: Vec<Vec2> = pts.into_iter().map(|(x, y)| Vec2::new(x, y)).collect();
+            assert!(flat_swings(&pts).is_empty(), "{pts:?}");
+        }
+    }
+
     #[test]
     fn a_rooms_printed_area_is_never_its_name() {
         for t in ["105 SF", "1,960 S.F.", "12 SQ FT", "11 m2", "58 sf"] {

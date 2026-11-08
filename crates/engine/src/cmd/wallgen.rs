@@ -2215,13 +2215,14 @@ struct Swing {
     handle: Handle,
 }
 
-/// The door swings among `ents`: arcs and open polylines (a swing flattened, as prints arrive)
-/// on one circle through 60–100°, a door's radius (16"–54" at `k` units per inch).
+/// The door swings among `ents`: arcs and open polylines (a swing flattened, as prints arrive,
+/// alone or joined to its leaf and the wall's lines) on one circle through 60–100°, a door's
+/// radius (16"–54" at `k` units per inch).
 fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
     let (rmin, rmax) = (16.0 * k, 54.0 * k);
     let mut out = Vec::new();
     for e in ents.iter().take(MAX_OBJECTS) {
-        let swing = match &e.kind {
+        let swings: Vec<(Vec2, f64, [Vec2; 2])> = match &e.kind {
             EntityKind::Arc(a) => {
                 let mut sweep = (a.end - a.start).rem_euclid(std::f64::consts::TAU);
                 if sweep < 1e-9 {
@@ -2231,14 +2232,19 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
                 (60.0..=100.0)
                     .contains(&sweep.to_degrees())
                     .then(|| (c, a.radius, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
+                    .into_iter()
+                    .collect()
             }
             EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
                 let pts = cadaddy_geom::Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
-                super::perceive::geometry::flat_swing(&pts).map(|(c, r, _, ends)| (c, r, ends))
+                super::perceive::geometry::flat_swings(&pts).into_iter().map(|(c, r, _, ends)| (c, r, ends)).collect()
             }
-            _ => None,
+            _ => Vec::new(),
         };
-        if let Some((c, r, ends)) = swing.filter(|(c, r, _)| c.is_finite() && (rmin..=rmax).contains(r)) {
+        for (c, r, ends) in swings.into_iter().filter(|(c, r, _)| c.is_finite() && (rmin..=rmax).contains(r)) {
+            if out.len() >= MAX_OBJECTS {
+                break;
+            }
             out.push(Swing { c, r, ends, handle: e.handle });
         }
     }

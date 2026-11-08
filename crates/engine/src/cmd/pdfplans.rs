@@ -349,7 +349,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut swings: Vec<(Handle, Vec2, f64, Vec2, Vec2, Option<Vec2>)> = Vec::new();
     for (e, (_, segs)) in ents.iter().zip(&segs_by) {
         let EntityKind::LwPolyline(pl) = &e.kind else { continue };
-        if pl.closed || pl.vertices.len() < 3 || doors.contains(&e.handle) {
+        // (A polyline the openings above already found a swing in is rebuilt all the same: it
+        // is the chords, maybe with the leaf joined.)
+        if pl.closed || pl.vertices.len() < 3 {
             continue;
         }
         let all: Vec<Vec2> = pl.vertices.iter().map(|v| v.p).collect();
