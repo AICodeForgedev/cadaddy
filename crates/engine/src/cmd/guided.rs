@@ -13496,15 +13496,15 @@ fn infer_missing_water(
     Value::Object(out)
 }
 
-/// The pipe and duct through the dedicated space of the gear `tags` names, laid out or moved
-/// after the build: offset past it ([`super::gearspace::clear_built_of`]), the drawn route kept,
-/// their old pieces taken out and the runs built again; the job's finding says so.
-fn gear_space_after_layout(s: &mut Session, job: &mut GuidedJob, tags: &BTreeSet<String>) -> Result<()> {
+/// The pipe and duct of `sp` (the step's spec, which it stores) through the dedicated space of
+/// the gear `tags` names, laid out or moved after the build: offset past it
+/// ([`super::gearspace::clear_built_of`]), the drawn route kept, their old pieces taken out and
+/// the runs built again; the job's finding says so.
+fn gear_space_after_layout(s: &mut Session, job: &mut GuidedJob, sp: &mut cadaddy_walk3d::BuildingSpec, tags: &BTreeSet<String>) -> Result<()> {
     if tags.is_empty() {
         return Ok(());
     }
-    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
-    let c = super::gearspace::clear_built_of(s.doc()?, &mut sp, Some(tags));
+    let c = super::gearspace::clear_built_of(s.doc()?, sp, Some(tags));
     if !c.changed.is_empty() {
         let olds: Vec<String> = c.changed.iter().map(|(_, b)| format!("{b}/")).collect();
         let d = s.doc_mut()?;
@@ -13519,7 +13519,7 @@ fn gear_space_after_layout(s: &mut Session, job: &mut GuidedJob, tags: &BTreeSet
         }
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         let runs: Vec<cadaddy_walk3d::MepRun> = c.changed.iter().filter_map(|(i, _)| sp.mep.runs.get(*i).cloned()).collect();
-        build_runs(s, &sp, runs, &BTreeSet::new())?;
+        build_runs(s, sp, runs, &BTreeSet::new())?;
     }
     gear_space_finding(job, &c.json(), " (gear laid out or moved after the build)");
     Ok(())
@@ -14759,7 +14759,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     s.touch();
     // Pipe and duct through the dedicated space of the gear laid out or moved here: offset past
     // it as the build does for the rest, those runs built again.
-    gear_space_after_layout(s, job, &new_tags)?;
+    gear_space_after_layout(s, job, &mut sp, &new_tags)?;
     // The gear checked against what lands on it; each failure an RFI.
     let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
     let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
@@ -33408,7 +33408,9 @@ mod tests {
         });
         s.doc_mut().unwrap_or_else(|e| panic!("{e}")).building_spec = Some(sp.to_json()).into();
         let tags: BTreeSet<String> = ["PL".to_string()].into_iter().collect();
-        gear_space_after_layout(&mut s, &mut job, &tags).unwrap_or_else(|e| panic!("{e}"));
+        gear_space_after_layout(&mut s, &mut job, &mut sp, &tags).unwrap_or_else(|e| panic!("{e}"));
+        // The step's own spec holds the correction (it stores it again after).
+        assert!(sp.mep.runs[0].corrections.iter().any(|c| c.key == "route"));
         let after = segments(&s);
         assert_eq!(after.len(), 1, "the old piece is gone, the run built once on its new route");
         assert!(after[0].get("design:route").is_some() && after[0].get("correction:route").is_some(), "{:?}", after[0]);
