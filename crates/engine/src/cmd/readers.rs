@@ -104,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── Electrical equipment ─────────────────────────────────────────
         CommandSpec::new("gear.read", "Read Electrical Equipment", run_gear_read)
-            .params("{level?: name, apply?: bool} → {placed: [{tag, kind, level, sources, confidence, flags}], unplaced: [{tag, why}], tables_found}")
+            .params("{apply?: bool} → {tables_found: panel schedules read, panels: [{panel, sheet, circuits, breakers, header}], sheets_read, sheets, source, warnings, placed, unplaced}: the panel schedules printed on the set's sheets (electrical, combined MEP, or titled for panels): the job's model's, else read off the job's or the open print set's sheets")
             .noundo(),
         // ── Scan reader ──────────────────────────────────────────────────
         CommandSpec::new("prints.read_scan", "Read Scanned Print", run_scan_read)
@@ -290,32 +290,80 @@ fn run_conduit_read(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── gear.read ───────────────────────────────────────────────────────────────
 
-fn run_gear_read(_s: &mut Session, p: &Value) -> Result<Value> {
-    let _level = str_param(p, "level");
+fn run_gear_read(s: &mut Session, p: &Value) -> Result<Value> {
     let apply = bool_or(p, "apply", false);
-
-    let project = match project(_s) {
-        Ok(p) => p,
-        Err(_) => {
+    // A job's model: the schedules its build read. A job before its build: its sheets that may
+    // print schedules, read now. An open print set: those sheets imported and read.
+    let stored = super::bspec::current(s, "gear.read").ok().filter(|(sp, stored)| *stored && !sp.mep.panel_schedules.is_empty());
+    let (schedules, sheets, source) = if let Some((sp, _)) = stored {
+        let mut sheets: Vec<String> = sp.mep.panel_schedules.iter().map(|x| x.source.clone()).collect();
+        sheets.dedup();
+        (sp.mep.panel_schedules, sheets, "the job's model (its bim_build stage read them)")
+    } else if let Some(job) = super::guided::load_job(s).ok().flatten().filter(|j| j.sheets.is_some()) {
+        let (schedules, sheets) = super::guided::job_panel_schedules(s.doc()?, &job);
+        (schedules, sheets, "the job's sheets")
+    } else {
+        let Ok(pr) = project(s) else {
             return Ok(no_project("electrical equipment", json!({"placed": [], "unplaced": [], "tables_found": 0})));
+        };
+        let mut ranked: Vec<(u8, &str)> = pr
+            .sheets
+            .iter()
+            .filter(|sh| sh.superseded_by.is_empty())
+            .filter_map(|sh| super::panelsched::schedule_sheet_rank(&sh.discipline, &sh.sheet_type, &sh.title).map(|k| (k, sh.number.as_str())))
+            .collect();
+        ranked.sort();
+        let wanted: std::collections::BTreeSet<&str> = ranked.iter().take(MAX_GEAR_SHEETS).map(|(_, n)| *n).collect();
+        let (t, refs) = super::printmep::load_project_plans(&pr, &|r| wanted.contains(r.number.as_str()))?;
+        let mut schedules: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
+        for r in &refs {
+            let sub = super::printmep::sheet_drawing(t.doc()?, r);
+            for x in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(&sub), &r.number) {
+                if !schedules.iter().any(|o| o.panel.eq_ignore_ascii_case(&x.panel)) {
+                    schedules.push(x);
+                }
+            }
         }
+        (schedules, refs.iter().map(|r| r.number.clone()).collect(), "the print set's sheets")
     };
-
-    let e_sheets: Vec<&mep_printset::SheetEntry> = project.sheets.iter().filter(|s| s.discipline == "E").collect();
-
+    let panels: Vec<Value> = schedules
+        .iter()
+        .map(|x| {
+            json!({"panel": x.panel, "sheet": x.source, "circuits": x.circuits.len(),
+                   "breakers": x.circuits.iter().filter(|c| !c.breaker.is_empty()).count(), "header": x.header})
+        })
+        .collect();
+    let mut warnings: Vec<String> = Vec::new();
+    if schedules.is_empty() {
+        warnings.push(if sheets.is_empty() {
+            "no sheet that may print panel schedules (electrical, combined MEP, or titled for panels) was read: none read".to_string()
+        } else {
+            format!(
+                "no panel schedule read on the {} sheets searched ({}): their tables are in no layout the reader knows, or printed as images (the job's bim_build stage says which)",
+                sheets.len(),
+                sheets.join(", ")
+            )
+        });
+    }
+    if apply {
+        warnings.push("the job's bim_build stage puts the schedules and their gear in the model (job.start); gear.read only reads".into());
+    }
     Ok(json!({
         "placed": [],
         "unplaced": [],
-        "tables_found": 0,
-        "sheets_read": e_sheets.len(),
+        "tables_found": schedules.len(),
+        "panels": panels,
+        "sheets_read": sheets.len(),
+        "sheets": sheets,
+        "source": source,
         "apply": apply,
-        "message": if e_sheets.is_empty() {
-            "no E-sheets found in the project"
-        } else {
-            "gear reader wired; DXF sheet loading integration pending"
-        },
+        "warnings": warnings,
+        "message": format!("{} panel schedules read from {} ({} sheets)", schedules.len(), source, sheets.len()),
     }))
 }
+
+/// Most sheets of an open print set imported to look for panel schedules.
+const MAX_GEAR_SHEETS: usize = 24;
 
 // ─── prints.read_scan ────────────────────────────────────────────────────────
 

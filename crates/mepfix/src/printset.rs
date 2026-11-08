@@ -116,12 +116,18 @@ pub struct SheetEntry {
     /// Level marks a building section or elevation prints (`SECOND FLOOR` over `110'-8"`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub level_marks: Vec<LevelMark>,
+    /// The number as printed when another page of the set prints it too on a different sheet (its
+    /// title and contents differ, so it is no copy): this page keeps its own entry, numbered
+    /// `<number>~2`, `~3` in page order, and the clash is reported. Empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub printed_as: String,
 }
 
 /// A level's elevation as a section or elevation sheet marks it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LevelMark {
-    /// The level code (`1`, `2`, `R`), as plan titles give levels.
+    /// The level code (`1`, `2`, `R`), as plan titles give levels; [`MARK_FINISH_FLOOR`] or
+    /// [`MARK_PLATE`] for a finished floor or a top of plate marked with no level number.
     pub level: String,
     pub elevation_ft: f64,
 }
@@ -906,12 +912,17 @@ pub fn run_classify_prints(
 ) -> StageRecord {
     let start = web_time::Instant::now();
     let total = project.sheets.len();
-    let mut out: Vec<SheetEntry> = Vec::with_capacity(total);
     let mut classified = 0usize;
+    // First every page is read on its own (its title block, its views, every text that reads as a
+    // sheet number); then the set decides each page's number by where the set prints it; then the
+    // entries are made.
     let old = std::mem::take(&mut project.sheets);
+    let mut pages: Vec<ClassifyPage> = Vec::with_capacity(total);
+    let mut entries = 0usize;
     for (i, entry) in old.into_iter().enumerate() {
-        if cancel.load(Ordering::Relaxed) || out.len() >= MAX_SHEETS {
-            out.push(entry);
+        if cancel.load(Ordering::Relaxed) || entries >= MAX_SHEETS {
+            entries += 1;
+            pages.push(ClassifyPage::Kept(Box::new(entry)));
             continue;
         }
         progress(&Progress {
@@ -922,7 +933,8 @@ pub fn run_classify_prints(
             items_so_far: classified,
         });
         if !entry.dirty && !entry.number.is_empty() {
-            out.push(entry);
+            entries += 1;
+            pages.push(ClassifyPage::Kept(Box::new(entry)));
             classified += 1;
             continue;
         }
@@ -934,12 +946,42 @@ pub fn run_classify_prints(
                     "classify".into(),
                     SheetStageResult { stage: "classify".into(), status: StageStatus::Failed, error: Some(err), ..SheetStageResult::default() },
                 );
-                out.push(e);
+                entries += 1;
+                pages.push(ClassifyPage::Kept(Box::new(e)));
                 continue;
             }
         };
-        let facts = PageFacts::read(&drawing);
-        for (mut rec, _) in sheet_reader::split_views(&drawing) {
+        let texts = sheet_facts::texts(&drawing);
+        let facts = PageFacts::read_texts(&drawing, &texts);
+        let recs = sheet_reader::recognise_views(&drawing);
+        let candidates = sheet_facts::number_candidates(&drawing, &texts);
+        let read = ReadPage { entry, facts, recs, candidates, contents: content_signature(&texts), note: String::new() };
+        entries += read.recs.len().max(1);
+        pages.push(ClassifyPage::Read(Box::new(read)));
+        classified += 1;
+    }
+    set_numbers(&mut pages);
+    let mut out: Vec<SheetEntry> = Vec::with_capacity(entries.min(MAX_SHEETS));
+    // Each entry's page among the ones read now (its contents and title, to tell copies apart).
+    let mut page_of: Vec<Option<usize>> = Vec::with_capacity(entries.min(MAX_SHEETS));
+    let mut read_pages: Vec<PageSummary> = Vec::new();
+    for page in pages {
+        let read = match page {
+            ClassifyPage::Kept(e) => {
+                out.push(*e);
+                page_of.push(None);
+                continue;
+            }
+            ClassifyPage::Read(r) => *r,
+        };
+        let ReadPage { entry, facts, recs, contents, note, .. } = read;
+        let k = read_pages.len();
+        read_pages.push(PageSummary {
+            title: facts.ident.as_ref().filter(|id| ident_strength(&id.source) == 2).map(|id| id.title.clone()).unwrap_or_default(),
+            contents,
+            strength: page_strength(&facts),
+        });
+        for mut rec in recs {
             let mut e = entry.clone();
             let view = !rec.printed_number.is_empty();
             // The title block names the sheet (sheet facts); the sheet reader's own number is the
@@ -967,6 +1009,18 @@ pub fn run_classify_prints(
             // A consultant's title block may carry no title: the view titles say what is drawn.
             let type_text = if e.title.is_empty() { facts.view_titles.join(" / ") } else { e.title.clone() };
             e.sheet_type = classify_sheet_type(printed, &type_text);
+            if !view && e.sheet_type == "unknown" {
+                // A title block that names no kind of sheet (`BUILDING A - OVERALL`): a view under
+                // it titled as a plan of a level (`THIRD FLOOR PLAN`) makes it that plan.
+                if let Some(t) = facts.view_titles.iter().find(|t| {
+                    !is_key_plan(t)
+                        && !sheet_reader::names_no_plan(t)
+                        && !sheet_reader::detect_levels(t).is_empty()
+                        && is_plan_type(&classify_sheet_type("", t))
+                }) {
+                    e.sheet_type = classify_sheet_type("", t);
+                }
+            }
             if view && e.sheet_type == "unknown" {
                 // One view of a several-view sheet is a plan of its level.
                 e.sheet_type = "plan".into();
@@ -983,7 +1037,7 @@ pub fn run_classify_prints(
                 if levels.is_empty() && is_plan_type(&e.sheet_type) {
                     // A key plan (the small floor plan marking where an enlarged plan or detail
                     // is) names its floor, not the sheet's.
-                    for t in facts.view_titles.iter().filter(|t| !is_key_plan(t)) {
+                    for t in facts.view_titles.iter().filter(|t| !is_key_plan(t) && !sheet_reader::names_no_plan(t)) {
                         let vl = sheet_reader::detect_levels(t);
                         if !vl.is_empty() {
                             // Use the first view title's level only; multi-level comes from
@@ -1033,19 +1087,30 @@ pub fn run_classify_prints(
                     status: StageStatus::Completed,
                     items_found: 1,
                     confidence: if known && e.sheet_type != "unknown" { 1.0 } else { 0.5 },
-                    findings: if known {
-                        Vec::new()
-                    } else {
-                        vec![Finding { kind: "unreadable".into(), description: "no sheet number found".into(), severity: 2, ..Finding::default() }]
+                    findings: match (known, note.is_empty()) {
+                        (true, true) => Vec::new(),
+                        (true, false) => vec![Finding { kind: "guessed".into(), description: note.clone(), severity: 1, ..Finding::default() }],
+                        (false, true) => {
+                            vec![Finding {
+                                kind: "unreadable".into(),
+                                description: "no sheet number found".into(),
+                                severity: 2,
+                                ..Finding::default()
+                            }]
+                        }
+                        (false, false) => vec![Finding { kind: "unreadable".into(), description: note.clone(), severity: 2, ..Finding::default() }],
                     },
                     ..SheetStageResult::default()
                 },
             );
             e.recognised = Some(rec);
             out.push(e);
+            page_of.push(Some(k));
         }
-        classified += 1;
     }
+    // Pages that print one number on different sheets are no copies of each other: each keeps
+    // its own entry and the clash is reported.
+    split_number_clashes(&mut out, &page_of, &read_pages);
     // Later files replace earlier sheets of the same number. "Later" is folder order with
     // numbers by value (`Revision 10/` after `Revision 2/`), not the order entries were added
     // (a re-import appends), so the same folder always gives the same current sheets.
@@ -1154,6 +1219,10 @@ impl PrintLoader {
 
 /// Short texts looked at as level marks per page (a guard against hostile files).
 const MAX_MARK_TEXTS: usize = 400;
+/// Most readings of one level reported as not used for disagreeing with the others.
+const MAX_LEVEL_WARNINGS: usize = 8;
+/// Highest a top of plate can stand above the top floor and still be its roof's (feet).
+const MAX_STOREY_FT: f64 = 30.0;
 
 /// What a page says about itself, read once for all of its entries.
 struct PageFacts {
@@ -1167,12 +1236,313 @@ struct PageFacts {
 }
 
 impl PageFacts {
-    fn read(d: &cadaddy_doc::Drawing) -> PageFacts {
-        let texts = crate::sheet_facts::texts(d);
-        let ident = crate::sheet_facts::identify_sheet(&texts);
-        let view_titles = crate::sheet_facts::view_titles(d, &texts).into_iter().map(|v| v.title).collect();
+    fn read_texts(d: &cadaddy_doc::Drawing, texts: &[crate::sheet_facts::TextItem]) -> PageFacts {
+        let ident = crate::sheet_facts::identify_sheet(texts);
+        let view_titles = crate::sheet_facts::view_titles(d, texts).into_iter().map(|v| v.title).collect();
         let issued = texts.iter().filter_map(|t| latest_date(&t.value)).max().unwrap_or_default();
-        PageFacts { ident, view_titles, issued, level_marks: level_marks(&texts) }
+        PageFacts { ident, view_titles, issued, level_marks: level_marks(texts) }
+    }
+}
+
+/// A page of the set during classify: read now, or kept as it was (read before, unreadable, or
+/// past the cap).
+enum ClassifyPage {
+    Kept(Box<SheetEntry>),
+    Read(Box<ReadPage>),
+}
+
+/// What classify read on a page before the set decides its number.
+struct ReadPage {
+    entry: SheetEntry,
+    facts: PageFacts,
+    /// The sheet reader's reading, one per view.
+    recs: Vec<RecognisedSheet>,
+    /// Every text that reads as a sheet number, with where it sits.
+    candidates: Vec<crate::sheet_facts::NumberCandidate>,
+    contents: Vec<u64>,
+    /// How the set changed the page's number (a finding on its entries), empty when it didn't.
+    note: String,
+}
+
+/// A read page as the copy test needs it.
+struct PageSummary {
+    /// The title its labelled title block gives (a title guessed from the largest lettering can be
+    /// the project's name: empty then, and the contents decide).
+    title: String,
+    contents: Vec<u64>,
+    strength: u8,
+}
+
+/// How a page's number was read: 3 by its place in the set's title block, 2 from a labelled
+/// title block, 1 the largest sheet number at the sheet's edge, 0 the sheet reader's fallback (the
+/// largest sheet-number lettering along the right or bottom of the sheet).
+fn ident_strength(source: &str) -> u8 {
+    match source {
+        "set_position" => 3,
+        "title_block" | "number_label" => 2,
+        "largest_number" => 1,
+        _ => 0,
+    }
+}
+
+fn page_strength(facts: &PageFacts) -> u8 {
+    facts.ident.as_ref().map_or(0, |id| ident_strength(&id.source))
+}
+
+/// The number the page's own reading gave: its title block's, else the sheet reader's.
+fn page_number(r: &ReadPage) -> Option<(String, u8)> {
+    if let Some(id) = &r.facts.ident {
+        return Some((id.number.clone(), ident_strength(&id.source)));
+    }
+    let rec = r.recs.first()?;
+    let n = if rec.printed_number.is_empty() { &rec.number } else { &rec.printed_number };
+    (!n.is_empty()).then(|| (n.clone(), 0))
+}
+
+/// Distinct texts on a page (a fingerprint of its contents, hashed): two prints of one sheet
+/// share nearly all of them, two sheets of one set little more than the title block.
+fn content_signature(texts: &[crate::sheet_facts::TextItem]) -> Vec<u64> {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut out: Vec<u64> = texts
+        .iter()
+        .take(MAX_SIGNATURE_TEXTS)
+        .map(|t| {
+            let mut h = std::hash::DefaultHasher::new();
+            t.value.trim().to_ascii_uppercase().hash(&mut h);
+            h.finish()
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Texts read into a page's content fingerprint.
+const MAX_SIGNATURE_TEXTS: usize = 20_000;
+
+/// Shared over the shorter of two sorted, distinct lists (0 to 1): a print that splits its lines
+/// into more texts (a PDF beside its drawing file) still holds the other's.
+fn overlap(a: &[u64], b: &[u64]) -> f64 {
+    let (mut i, mut j, mut both) = (0usize, 0usize, 0usize);
+    while let (Some(x), Some(y)) = (a.get(i), b.get(j)) {
+        match x.cmp(y) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                both += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    let fewer = a.len().min(b.len());
+    if fewer == 0 { 1.0 } else { both as f64 / fewer as f64 }
+}
+
+/// Words shared over all words of two titles (0 to 1).
+fn title_overlap(a: &str, b: &str) -> f64 {
+    let words = |t: &str| -> std::collections::BTreeSet<String> {
+        t.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    };
+    let (a, b) = (words(a), words(b));
+    let all = a.union(&b).count();
+    if all == 0 { 1.0 } else { a.intersection(&b).count() as f64 / all as f64 }
+}
+
+/// Fewest distinct texts on both pages for their contents to tell them apart.
+const MIN_COMPARED_TEXTS: usize = 8;
+
+/// Whether two pages that print one number are copies of one sheet: their titles match (a
+/// revision may change a word) and their contents don't say otherwise, or their contents are
+/// nearly the same print (a title read differently). With neither to compare, the number decides,
+/// as before.
+fn same_sheet(a: &PageSummary, b: &PageSummary) -> bool {
+    let contents = (a.contents.len() >= MIN_COMPARED_TEXTS && b.contents.len() >= MIN_COMPARED_TEXTS).then(|| overlap(&a.contents, &b.contents));
+    let titles = (!a.title.trim().is_empty() && !b.title.trim().is_empty()).then(|| title_overlap(&a.title, &b.title));
+    match (titles, contents) {
+        (Some(t), Some(c)) if t >= SAME_TITLE => c >= 0.3,
+        (Some(t), None) => t >= SAME_TITLE,
+        (_, Some(c)) => c >= if titles.is_some() { 0.9 } else { 0.85 },
+        (None, None) => true,
+    }
+}
+
+/// Title word overlap of two prints of one sheet.
+const SAME_TITLE: f64 = 0.8;
+
+/// Share of a spot's numbers that are different numbers (copies of a sheet in a set repeat a few).
+const DISTINCT_AT_SPOT: f64 = 0.6;
+
+/// How close (a share of the page's width and height) a page's number is to the set's spot for it.
+const SPOT_RADIUS: f64 = 0.03;
+
+/// The set's sheet-number spots: where its pages' numbers sit (a set prints every sheet's number at
+/// one place of its title block, a set of several firms' title blocks at a few). Each spot is its
+/// centre and its numbers' lettering size; a spot holds at least 3 pages' numbers and 3 % of them,
+/// and they are different numbers (a tag the pages repeat at one place is no sheet number).
+fn number_spots(picks: &[(String, [f64; 2], f64)]) -> Vec<([f64; 2], f64)> {
+    let mut clusters: Vec<([f64; 2], Vec<f64>, Vec<&str>)> = Vec::new();
+    for (value, at, size) in picks {
+        match clusters.iter_mut().find(|(c, _, _)| (c[0] - at[0]).abs() <= SPOT_RADIUS && (c[1] - at[1]).abs() <= SPOT_RADIUS) {
+            Some((c, sizes, values)) => {
+                let n = sizes.len() as f64;
+                *c = [(c[0] * n + at[0]) / (n + 1.0), (c[1] * n + at[1]) / (n + 1.0)];
+                sizes.push(*size);
+                values.push(value);
+            }
+            None => clusters.push((*at, vec![*size], vec![value])),
+        }
+    }
+    let least = 3usize.max((picks.len() as f64 * 0.03).ceil() as usize);
+    clusters
+        .into_iter()
+        .filter(|(_, sizes, values)| {
+            let distinct = values.iter().collect::<std::collections::BTreeSet<_>>().len();
+            sizes.len() >= least && distinct as f64 >= DISTINCT_AT_SPOT * values.len() as f64
+        })
+        .map(|(c, mut sizes, _)| {
+            sizes.sort_by(f64::total_cmp);
+            (c, sizes.get(sizes.len() / 2).copied().unwrap_or(1.0))
+        })
+        .collect()
+}
+
+/// Each page's number as the set prints it. A page's own reading can take a tag in the drawing
+/// area (an equipment or schedule mark that reads like a sheet number) when its title block's
+/// number has no label or doesn't stand out. The set shows where its numbers are: where most pages'
+/// numbers sit. A page whose reading isn't there takes the number at that spot when it has one; a
+/// page with no number reading takes it too; a fallback reading whose letters name no discipline,
+/// with nothing at the spot, is dropped (the page is left unnumbered, never named by a tag).
+fn set_numbers(pages: &mut [ClassifyPage]) {
+    let at_of =
+        |r: &ReadPage, n: &str| r.candidates.iter().filter(|c| c.value == n.trim()).max_by(|a, b| a.size.total_cmp(&b.size)).map(|c| (c.at, c.size));
+    let picks: Vec<(String, [f64; 2], f64)> = pages
+        .iter()
+        .filter_map(|p| match p {
+            ClassifyPage::Read(r) => {
+                page_number(r).filter(|(n, _)| sheet_facts::designator_prefix(n)).and_then(|(n, _)| at_of(r, &n).map(|(at, size)| (n, at, size)))
+            }
+            ClassifyPage::Kept(_) => None,
+        })
+        .collect();
+    let spots = number_spots(&picks);
+    let near = |at: [f64; 2], c: [f64; 2]| (at[0] - c[0]).abs() <= SPOT_RADIUS && (at[1] - c[1]).abs() <= SPOT_RADIUS;
+    for p in pages.iter_mut() {
+        let ClassifyPage::Read(r) = p else { continue };
+        let pick = page_number(r);
+        let pick_at = pick.as_ref().and_then(|(n, _)| at_of(r, n));
+        if pick_at.is_some_and(|(at, _)| spots.iter().any(|(c, _)| near(at, *c))) {
+            continue;
+        }
+        // The largest number at one of the set's spots, lettered like the set's numbers there.
+        let at_spot = r
+            .candidates
+            .iter()
+            .filter_map(|c| {
+                spots.iter().find(|(s, size)| near(c.at, *s) && c.size >= 0.5 * size).map(|(s, _)| (c, (c.at[0] - s[0]).hypot(c.at[1] - s[1])))
+            })
+            .max_by(|a, b| a.0.size.total_cmp(&b.0.size).then(b.1.total_cmp(&a.1)))
+            .map(|(c, _)| c.value.clone());
+        let pick_ok = pick.as_ref().is_some_and(|(n, strength)| *strength >= 2 && sheet_facts::designator_prefix(n));
+        match (at_spot, pick) {
+            (Some(n), pick) if !pick_ok => {
+                let title = r.facts.ident.as_ref().map(|id| id.title.clone()).unwrap_or_default();
+                r.note = match &pick {
+                    Some((was, _)) if *was != n => {
+                        format!("sheet number {n} read at the set's sheet-number spot, not {was} (lettering elsewhere on the sheet)")
+                    }
+                    Some(_) => String::new(),
+                    None => format!("sheet number {n} read at the set's sheet-number spot"),
+                };
+                r.facts.ident =
+                    Some(sheet_facts::SheetIdent { discipline: sheet_facts::discipline_of(&n), number: n, title, source: "set_position".into() });
+            }
+            (None, Some((was, strength))) if strength < 2 && !sheet_facts::designator_prefix(&was) => {
+                r.note = format!("no sheet number found: {was} names no discipline and is not where the set prints its numbers (a tag on the sheet)");
+                r.facts.ident = None;
+                for rec in &mut r.recs {
+                    rec.number.clear();
+                    rec.printed_number.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Entries of different pages that share a number but are different sheets (their titles and
+/// contents differ): the page read best keeps the number, the others become `<number>~2`, `~3`
+/// in page order, each with `printed_as` and a finding. Copies of one sheet keep one number.
+fn split_number_clashes(out: &mut [SheetEntry], page_of: &[Option<usize>], pages: &[PageSummary]) {
+    let base = |e: &SheetEntry| -> Option<String> {
+        let r = e.recognised.as_ref()?;
+        let n = if r.printed_number.is_empty() { &r.number } else { &r.printed_number };
+        (!n.is_empty()).then(|| n.clone())
+    };
+    let mut by_number: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, e) in out.iter().enumerate() {
+        if let (Some(n), Some(Some(_))) = (base(e), page_of.get(i)) {
+            by_number.entry(n).or_default().push(i);
+        }
+    }
+    for (number, members) in by_number {
+        // The distinct pages, in set order, then the pages as copies of one sheet.
+        let mut distinct: Vec<usize> = members.iter().filter_map(|&i| page_of.get(i).copied().flatten()).collect();
+        distinct.dedup();
+        if distinct.len() < 2 {
+            continue;
+        }
+        let mut sheets: Vec<Vec<usize>> = Vec::new();
+        for k in distinct {
+            let Some(page) = pages.get(k) else { continue };
+            match sheets.iter_mut().find(|s| s.first().and_then(|&f| pages.get(f)).is_some_and(|f| same_sheet(f, page))) {
+                Some(s) => s.push(k),
+                None => sheets.push(vec![k]),
+            }
+        }
+        if sheets.len() < 2 {
+            continue;
+        }
+        let strength = |s: &Vec<usize>| s.iter().filter_map(|&k| pages.get(k)).map(|p| p.strength).max().unwrap_or(0);
+        let keeper = sheets.iter().enumerate().max_by(|a, b| strength(a.1).cmp(&strength(b.1)).then(b.0.cmp(&a.0))).map_or(0, |(i, _)| i);
+        let sources: Vec<String> = sheets
+            .iter()
+            .filter_map(|s| s.first())
+            .filter_map(|&k| members.iter().find(|&&i| page_of.get(i).copied().flatten() == Some(k)).and_then(|&i| out.get(i)))
+            .map(source_of)
+            .collect();
+        let mut suffix = 1usize;
+        for (si, s) in sheets.iter().enumerate() {
+            if si == keeper {
+                continue;
+            }
+            suffix += 1;
+            let renamed = format!("{number}~{suffix}");
+            for &i in &members {
+                if !page_of.get(i).copied().flatten().is_some_and(|k| s.contains(&k)) {
+                    continue;
+                }
+                let Some(e) = out.get_mut(i) else { continue };
+                if let Some(r) = e.recognised.as_mut() {
+                    if r.printed_number.is_empty() {
+                        r.number = renamed.clone();
+                    } else {
+                        r.number = r.number.replacen(&r.printed_number, &renamed, 1);
+                        r.printed_number = renamed.clone();
+                    }
+                    e.number = r.number.clone();
+                }
+                e.printed_as = number.clone();
+                let why = format!(
+                    "sheet number {number} is printed on {} different sheets ({}): this one is kept as {renamed}, no copy of the other",
+                    sheets.len(),
+                    sources.join(", ")
+                );
+                if let Some(res) = e.stage_results.get_mut("classify") {
+                    res.findings.push(Finding { kind: "conflict".into(), description: why, severity: 3, ..Finding::default() });
+                }
+            }
+        }
     }
 }
 
@@ -1252,34 +1622,102 @@ fn code_of_level(name: &str) -> Option<String> {
     }
 }
 
+/// The [`LevelMark::level`] of a section's finished floor marked with no level number
+/// (`FIN. FLR. EL. 100'-0"`): a building of one storey's floor.
+pub const MARK_FINISH_FLOOR: &str = "FF";
+/// The [`LevelMark::level`] of a top-of-plate marker (`T.O. PLATE 112'-0"`): where the roof bears.
+pub const MARK_PLATE: &str = "PLATE";
+
+/// A text's words for comparing with a datum label list: upper case, punctuation dropped, the
+/// elevation keywords (`EL`, `ELEV`) left out.
+fn label_words(s: &str) -> String {
+    s.to_ascii_uppercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty() && !matches!(*w, "EL" | "ELEV" | "ELEVATION"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What an unnumbered level marker names (rule data `levels.finish_floor_mark_words`,
+/// `levels.plate_mark_words`): [`MARK_FINISH_FLOOR`], [`MARK_PLATE`] or none.
+fn datum_label(name: &str) -> Option<&'static str> {
+    let n = label_words(name);
+    if n.is_empty() {
+        return None;
+    }
+    let is = |list: &[&str]| list.iter().any(|w| label_words(w) == n);
+    if is(crate::wordrules::words("levels.finish_floor_mark_words")) {
+        Some(MARK_FINISH_FLOOR)
+    } else if is(crate::wordrules::words("levels.plate_mark_words")) {
+        Some(MARK_PLATE)
+    } else {
+        None
+    }
+}
+
+/// Whether a marker's name is a bare code (`3`, `26`, `R`, `B1`, `L1`): a detail callout, a grid
+/// bubble, or a fixture, lintel or keynote tag beside a dimension, never a level marker, which
+/// names its level in words (`SECOND FLOOR`, `LEVEL 2`, `ROOF`).
+fn bare_code(name: &str) -> bool {
+    let words: Vec<&str> = name.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let digits = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit());
+    let code = |w: &str| w.len() == 1 || digits(w) || ['B', 'b', 'L', 'l'].iter().any(|p| w.strip_prefix(*p).is_some_and(digits));
+    match words.as_slice() {
+        [w] => code(w),
+        // `L 1`, `B 2`: a tag's letter and number apart.
+        [a, n] => matches!(a.to_ascii_uppercase().as_str(), "L" | "B") && digits(n),
+        _ => false,
+    }
+}
+
 /// Level marks on a section or elevation: a level note in one text (`SECOND FLOOR EL. 110'-8"`)
-/// or a level name with its elevation right beside it (the two lines of a level marker).
+/// or a level name with its elevation right beside it (the two lines of a level marker). A
+/// marker names its level: a bare number or letter beside a dimension is a callout. A finished
+/// floor or a top of plate marked with no level number is kept as [`MARK_FINISH_FLOOR`] or
+/// [`MARK_PLATE`], for the index to place.
 fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
     use cadaddy_walk3d::levels::{canonical_level, parse_elevation, parse_level_note};
     let mut out = Vec::new();
     let short: Vec<&crate::sheet_facts::TextItem> =
         texts.iter().filter(|t| t.value.len() <= 40 && !t.value.contains('=')).take(MAX_MARK_TEXTS * 50).collect();
+    // The elevation printed right beside a marker's name (the marker's second line).
+    let beside = |t: &crate::sheet_facts::TextItem| {
+        short
+            .iter()
+            .filter(|u| {
+                u.at != t.at
+                    && u.at.dist(t.at) <= 4.0 * t.height.max(u.height)
+                    && canonical_level(&u.value).is_none()
+                    && datum_label(&u.value).is_none()
+                    && parse_elevation(&u.value).is_some()
+            })
+            .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
+            .copied()
+    };
     let mut looked = 0usize;
     for t in &short {
-        if canonical_level(&t.value).is_none() {
+        // The marker's name: the text but its elevation.
+        let own = parse_elevation(&t.value);
+        let name = match own {
+            Some((_, a, z)) => format!("{} {}", t.value.get(..a).unwrap_or_default(), t.value.get(z..).unwrap_or_default()),
+            None => t.value.clone(),
+        };
+        let datum = datum_label(&name);
+        if datum.is_none() && (canonical_level(&t.value).is_none() || bare_code(&name)) {
             continue;
         }
         looked += 1;
         if looked > MAX_MARK_TEXTS {
             break;
         }
-        let note = parse_level_note(&t.value).or_else(|| {
-            short
-                .iter()
-                .filter(|u| {
-                    u.at != t.at
-                        && u.at.dist(t.at) <= 4.0 * t.height.max(u.height)
-                        && canonical_level(&u.value).is_none()
-                        && parse_elevation(&u.value).is_some()
-                })
-                .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
-                .and_then(|u| parse_level_note(&format!("{} {}", t.value, u.value)))
-        });
+        if let Some(kind) = datum {
+            let el = own.map(|(v, _, _)| v).or_else(|| beside(t).and_then(|u| parse_elevation(&u.value)).map(|(v, _, _)| v));
+            if let Some(v) = el.filter(|v| v.is_finite() && (-1000.0..=5000.0).contains(v)) {
+                out.push(LevelMark { level: kind.into(), elevation_ft: v });
+            }
+            continue;
+        }
+        let note = parse_level_note(&t.value).or_else(|| beside(t).and_then(|u| parse_level_note(&format!("{} {}", t.value, u.value))));
         if let Some(n) = note
             && let Some(level) = code_of_level(&n.name)
         {
@@ -1290,7 +1728,10 @@ fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
 }
 
 /// Plan sheets of a numbered series whose titles name no level take it from their number: in a
-/// series of two or more (`A111`…`A114`) the last digit is the level.
+/// series of two or more (`A111`…`A114`) the last digit is the level. A series is one kind of
+/// plan, floor after floor: the same title but for its level words. Sheets numbered in a row that
+/// are different plans of one floor (`A101` floor plan, `A102` equipment plan, `A105` ceiling
+/// plan) are no levels.
 fn level_by_number(sheets: &mut [SheetEntry]) {
     let series = |e: &SheetEntry| -> Option<(String, u32)> {
         if !e.level.is_empty() || !e.superseded_by.is_empty() || !is_plan_type(&e.sheet_type) || e.number.contains('/') {
@@ -1300,7 +1741,7 @@ fn level_by_number(sheets: &mut [SheetEntry]) {
         let digits = e.number.get(letters.len()..)?.trim_start_matches('-');
         let level = digits.chars().nth(2).and_then(|c| c.to_digit(10))?;
         (!letters.is_empty() && digits.len() == 3 && digits.starts_with('1') && digits.chars().all(|c| c.is_ascii_digit()) && level >= 1)
-            .then(|| (format!("{letters}{}", digits.get(..2).unwrap_or_default()), level))
+            .then(|| (format!("{letters}{}|{}", digits.get(..2).unwrap_or_default(), sheet_reader::title_kind(&e.title)), level))
     };
     let mut groups: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     for e in sheets.iter() {
@@ -1422,6 +1863,11 @@ pub struct IndexLevel {
     /// Floor to floor: the next level's elevation less this one's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height_ft: Option<f64>,
+    /// What gave the elevation: `marks` (the level's own markers), `finish floor` (a section's
+    /// unnumbered finished floor, in a building of one storey) or `top of plate` (where the roof
+    /// bears, when no roof is marked). Empty with no elevation.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub elevation_source: String,
 }
 
 /// The set as sheets: one entry per real sheet, the levels its plans show.
@@ -1439,6 +1885,21 @@ pub struct SheetIndex {
     /// Level marks not used: they break the levels' order (elevations rise with the level).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub level_warnings: Vec<String>,
+    /// Sheet numbers printed on different sheets (their titles and contents differ, so they are no
+    /// copies): each sheet has its own entry (`<number>~2`, …) and the clash is to be resolved.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub number_conflicts: Vec<NumberConflict>,
+}
+
+/// One sheet number printed on different sheets.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct NumberConflict {
+    /// The number as printed.
+    pub number: String,
+    /// The index entries it became (the number itself for the sheet that kept it).
+    pub sheets: Vec<String>,
+    /// Each entry's page (`file#page`), in the same order.
+    pub sources: Vec<String>,
 }
 
 fn source_of(e: &SheetEntry) -> String {
@@ -1538,6 +1999,21 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             }
         }
     }
+    // A floor that has plans is a level, even when all its plans are enlarged or partial ones
+    // (`ENLARGED FIRST FLOOR PLAN - NORTH`): they are then the plans that fill it.
+    let mut enlarged_only: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+    for s in out.sheets.iter().filter(|s| s.sheet_type == "enlarged_plan" && s.level != "SITE") {
+        for l in s.levels.iter().chain(std::iter::once(&s.level)).filter(|l| !l.is_empty() && !cadaddy_walk3d::levels::is_datum_name(l)) {
+            if by_level.contains_key(l) {
+                continue;
+            }
+            let v = enlarged_only.entry(l.clone()).or_default();
+            if !v.iter().any(|x| x.get("sheet").and_then(serde_json::Value::as_str) == Some(&s.number)) {
+                v.push(serde_json::json!({"sheet": s.number, "typical": false}));
+            }
+        }
+    }
+    by_level.extend(enlarged_only);
     let mut codes: Vec<String> = by_level.keys().cloned().collect();
     codes.sort_by_key(|c| level_key(c));
     // The storeys are the levels but the roof (a roof plan shows the top of the building, no
@@ -1560,26 +2036,49 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             codes.sort_by_key(|c| level_key(c));
         }
     }
-    // Elevations: the value most marks give per level; above the first floor at 100'-0". A
-    // civil or site sheet's marks are spot elevations on the site datum, never the levels'.
+    // Elevations: the value most marks give per level, above the first floor (whatever datum the
+    // sections use: `100'-0"` or the true elevation). A civil or site sheet's marks are spot
+    // elevations on the site datum, never the levels'.
     let mut marks: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut finish: Vec<f64> = Vec::new();
+    let mut plate: Vec<f64> = Vec::new();
     let site = |e: &SheetEntry| e.level.eq_ignore_ascii_case("SITE") || cadaddy_walk3d::levels::site_sheet(&e.discipline, &e.title);
     for e in project.sheets.iter().filter(|e| e.superseded_by.is_empty() && !site(e)) {
-        for m in &e.level_marks {
-            marks.entry(m.level.clone()).or_default().push(m.elevation_ft);
+        for m in e.level_marks.iter().filter(|m| m.elevation_ft.is_finite()) {
+            match m.level.as_str() {
+                MARK_FINISH_FLOOR => finish.push(m.elevation_ft),
+                MARK_PLATE => plate.push(m.elevation_ft),
+                _ => marks.entry(m.level.clone()).or_default().push(m.elevation_ft),
+            }
         }
     }
-    let mut elevation: BTreeMap<String, f64> = BTreeMap::new();
-    for (l, vals) in &marks {
+    let same = |a: f64, b: f64| (a - b).abs() < 1.0 / 96.0;
+    // The value most marks give, and how many give it.
+    let most = |vals: &[f64]| -> Option<(f64, usize)> {
         let mut best: Option<(f64, usize)> = None;
         for v in vals {
-            let n = vals.iter().filter(|w| (*w - v).abs() < 1.0 / 96.0).count();
+            let n = vals.iter().filter(|w| same(**w, *v)).count();
             if best.is_none_or(|(_, bn)| n > bn) {
                 best = Some((*v, n));
             }
         }
-        if let Some((v, _)) = best {
-            elevation.insert(l.clone(), v);
+        best
+    };
+    let mut elevation: BTreeMap<String, f64> = BTreeMap::new();
+    let mut source: BTreeMap<String, &str> = BTreeMap::new();
+    for (l, vals) in &marks {
+        let Some((v, n)) = most(vals) else { continue };
+        elevation.insert(l.clone(), v);
+        source.insert(l.clone(), "marks");
+        // Marks giving the level another elevation: reported, not used.
+        let mut other: Vec<f64> = Vec::new();
+        for w in vals.iter().filter(|w| !same(**w, v)) {
+            if !other.iter().any(|o| same(*o, *w)) {
+                other.push(*w);
+            }
+        }
+        for w in other.iter().take(MAX_LEVEL_WARNINGS) {
+            out.level_warnings.push(format!("level {l}: {} not used: {n} other mark(s) give {}", cadaddy_walk3d::feet(*w), cadaddy_walk3d::feet(v)));
         }
     }
     // Elevations rise with the level: the most marks that agree win; the others are dropped.
@@ -1591,11 +2090,32 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
     for ((l, e), keep) in marked.iter().zip(cadaddy_walk3d::levels::in_order(&items)) {
         if !keep {
             elevation.remove(l);
+            source.remove(l);
             out.level_warnings
                 .push(format!("level {l}: {} not used: it breaks the levels' order (elevations rise with the level)", cadaddy_walk3d::feet(*e)));
         }
     }
-    let datum = if elevation.get("1").is_some_and(|e| (e - 100.0).abs() < 1e-6) { 100.0 } else { 0.0 };
+    // A finished floor marked with no level number is the floor of a building of one storey.
+    if one_level
+        && !elevation.contains_key(&lowest)
+        && let Some((v, _)) = most(&finish)
+    {
+        elevation.insert(lowest.clone(), v);
+        source.insert(lowest.clone(), "finish floor");
+    }
+    // The roof bears on the top of plate: with no roof marked, the plate above the top floor
+    // (within a storey of it) is the roof's elevation.
+    if codes.iter().any(|c| c == "R") && !elevation.contains_key("R") {
+        let top = codes.iter().filter(|c| c.as_str() != "R").filter_map(|c| elevation.get(c)).copied().fold(f64::NEG_INFINITY, f64::max);
+        let roof =
+            plate.iter().copied().filter(|p| top.is_finite() && *p > top + 1e-6 && *p <= top + MAX_STOREY_FT).fold(f64::NEG_INFINITY, f64::max);
+        if roof.is_finite() {
+            elevation.insert("R".into(), roof);
+            source.insert("R".into(), "top of plate");
+        }
+    }
+    // Above the first floor: its own mark is the datum (`100'-0"`, or the true elevation).
+    let datum = elevation.get("1").copied().filter(|e| e.is_finite()).unwrap_or(0.0);
     for (i, c) in codes.iter().enumerate() {
         let el = elevation.get(c).map(|e| e - datum);
         let next = codes.get(i + 1).and_then(|n| elevation.get(n)).map(|e| e - datum);
@@ -1604,6 +2124,7 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             sheets: by_level.get(c).cloned().unwrap_or_default(),
             elevation_ft: el,
             height_ft: el.zip(next).map(|(a, b)| b - a).filter(|h| *h > 0.0),
+            elevation_source: if el.is_some() { source.get(c).map(|s| (*s).to_string()).unwrap_or_default() } else { String::new() },
         });
     }
     // A plan whose title names no level: in a building of one level it can only be that one
@@ -1619,6 +2140,29 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
         }
         out.plans_without_level.push(s.number.clone());
     }
+    // Numbers printed on different sheets: the sheet that kept the number and the ones renamed.
+    let base = |e: &SheetEntry| e.recognised.as_ref().map(|r| if r.printed_number.is_empty() { r.number.clone() } else { r.printed_number.clone() });
+    let mut clashes: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+    for e in project.sheets.iter().take(MAX_SHEETS).filter(|e| !e.printed_as.is_empty()) {
+        clashes.entry(e.printed_as.as_str()).or_default();
+    }
+    for e in project.sheets.iter().take(MAX_SHEETS) {
+        let Some(b) = base(e) else { continue };
+        let key = if e.printed_as.is_empty() { b.as_str() } else { e.printed_as.as_str() };
+        if let Some(v) = clashes.get_mut(key)
+            && !v.iter().any(|(n, _)| *n == b)
+        {
+            v.push((b.clone(), source_of(e)));
+        }
+    }
+    out.number_conflicts = clashes
+        .into_iter()
+        .map(|(number, v)| NumberConflict {
+            number: number.to_string(),
+            sheets: v.iter().map(|(n, _)| n.clone()).collect(),
+            sources: v.into_iter().map(|(_, s)| s).collect(),
+        })
+        .collect();
     out
 }
 
@@ -2281,7 +2825,23 @@ impl PrintSetProject {
 
 #[cfg(test)]
 mod classify_tests {
-    use super::classify_sheet_type;
+    use super::{SheetEntry, classify_sheet_type, level_by_number};
+
+    fn plan(number: &str, title: &str) -> SheetEntry {
+        SheetEntry { number: number.into(), title: title.into(), sheet_type: "plan".into(), ..SheetEntry::default() }
+    }
+
+    #[test]
+    fn a_numbered_series_is_levels_only_when_it_is_one_kind_of_plan() {
+        // Different plans of one floor numbered in a row: no levels from their numbers.
+        let mut one = vec![plan("A-101", "FLOOR PLAN"), plan("A-102", "EQUIPMENT PLAN"), plan("A-105", "FINISH PLAN")];
+        level_by_number(&mut one);
+        assert!(one.iter().all(|e| e.level.is_empty()), "{:?}", one.iter().map(|e| &e.level).collect::<Vec<_>>());
+        // One kind of plan floor after floor: the last digit is the level.
+        let mut floors = vec![plan("A-111", "OVERALL PLAN"), plan("A-112", "OVERALL PLAN"), plan("A-113", "OVERALL PLAN")];
+        level_by_number(&mut floors);
+        assert_eq!(floors.iter().map(|e| e.level.as_str()).collect::<Vec<_>>(), ["1", "2", "3"]);
+    }
 
     #[test]
     fn a_sheet_also_printing_the_floor_plan_is_a_plan_not_a_ceiling_plan() {

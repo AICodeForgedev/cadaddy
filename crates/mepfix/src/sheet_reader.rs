@@ -89,7 +89,7 @@ fn discipline_of(number: &str) -> Option<&'static str> {
 
 /// Whether a text reads as a sheet number: one or two letters, an optional `-` or `.`, then a
 /// number with an optional decimal part and letter (`A-101`, `A101`, `C2.0`, `E-4`, `M-101A`).
-fn looks_like_sheet_number(v: &str) -> bool {
+pub(crate) fn looks_like_sheet_number(v: &str) -> bool {
     let v = v.trim();
     let b = v.as_bytes();
     let letters = b.iter().take_while(|c| c.is_ascii_uppercase()).count();
@@ -223,11 +223,13 @@ fn in_title_block(at: [f64; 2]) -> bool {
 }
 
 /// The sheet number without a `TITLE` layer: the largest text in the title block that reads as
-/// one, the one nearest the bottom right corner when two are as large.
+/// one, the one nearest the bottom right corner when two are as large. Lettering whose letters
+/// name no discipline (`RTU-1`, `EF-2`: an equipment tag in a schedule at the sheet's edge) is no
+/// sheet number.
 fn sheet_number_in_title_block(d: &Drawing) -> Option<String> {
     texts_across(d)
         .into_iter()
-        .filter(|(v, _, at, _)| in_title_block(*at) && looks_like_sheet_number(v))
+        .filter(|(v, _, at, _)| in_title_block(*at) && looks_like_sheet_number(v) && crate::sheet_facts::designator_prefix(v))
         .max_by(|a, b| a.1.total_cmp(&b.1).then((a.2[0] - a.2[1]).total_cmp(&(b.2[0] - b.2[1]))))
         .map(|(v, _, _, _)| v)
 }
@@ -293,6 +295,16 @@ fn detect_discipline(number: &str, texts: &[(String, [f64; 2])]) -> String {
 }
 
 /// `FIRST`, `1ST`, `2ND` … as a level number.
+/// A title with its level words taken out (`SECOND FLOOR PLAN` -> `FLOOR PLAN`, `LEVEL 3 POWER
+/// PLAN` -> `POWER PLAN`): what kind of plan it is, whichever floor.
+pub fn title_kind(title: &str) -> String {
+    let up = title.to_ascii_uppercase();
+    up.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty() && ordinal(w).is_none() && !w.chars().all(|c| c.is_ascii_digit()) && !matches!(*w, "LEVEL" | "LVL"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn ordinal(word: &str) -> Option<u32> {
     const WORDS: [&str; 10] = ["FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH", "SEVENTH", "EIGHTH", "NINTH", "TENTH"];
     if let Some(i) = WORDS.iter().position(|w| *w == word) {
@@ -1265,6 +1277,8 @@ pub fn plan_views(d: &Drawing) -> Vec<PlanView> {
     let mut views: Vec<PlanView> = texts
         .iter()
         .filter(|(v, h, at, _)| at[0] <= 0.8 && *h >= median * 1.4 && v.len() <= 60 && !v.to_uppercase().contains("NOTE"))
+        // A detail, section, elevation, schedule or key plan that names a level is no plan of it.
+        .filter(|(v, ..)| !names_no_plan(v))
         .filter_map(|(v, h, _, p)| {
             let levels = detect_levels(v);
             (!levels.is_empty()).then(|| PlanView { title: v.clone(), levels, at: *p, height: *h })
@@ -1290,6 +1304,14 @@ pub fn plan_views(d: &Drawing) -> Vec<PlanView> {
     }
     kept.sort_by(|a, b| a.at[1].total_cmp(&b.at[1]).then(a.at[0].total_cmp(&b.at[0])));
     kept
+}
+
+/// Whether a view title names something that is never a plan (rule data
+/// `sheets.not_plan_view_words`: a detail, section, elevation, schedule, diagram or key plan),
+/// though it may name a level (`LEVEL 3 SHEAR WALL DETAIL`).
+pub fn names_no_plan(title: &str) -> bool {
+    let up = title.to_uppercase();
+    crate::wordrules::words("sheets.not_plan_view_words").iter().any(|w| up.contains(w))
 }
 
 /// The drawing with only the entities whose middle `keep` accepts.
