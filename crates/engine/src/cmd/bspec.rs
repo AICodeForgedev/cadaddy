@@ -1461,7 +1461,13 @@ fn wall_ends(d: &Drawing, level: &str) -> Vec<(Vec2, Vec2)> {
 /// Room separation lines on a level: from each free wall end, along its wall's line, to the first
 /// footprint it meets within `reach` (another wall, a door, a column). An end touching another
 /// footprint (a corner, a tee) gets none.
-fn separation_lines(ends: &[(Vec2, Vec2)], polys: &[Vec<Vec2>], grid: &std::collections::HashMap<(i64, i64), Vec<usize>>, cell: f64, reach: f64) -> Vec<(Vec2, Vec2)> {
+fn separation_lines(
+    ends: &[(Vec2, Vec2)],
+    polys: &[Vec<Vec2>],
+    grid: &std::collections::HashMap<(i64, i64), Vec<usize>>,
+    cell: f64,
+    reach: f64,
+) -> Vec<(Vec2, Vec2)> {
     let mut out = Vec::new();
     if !(cell > 0.0 && reach > 0.0) {
         return out;
@@ -1486,7 +1492,8 @@ fn separation_lines(ends: &[(Vec2, Vec2)], polys: &[Vec<Vec2>], grid: &std::coll
         // Just past the end (clear of its own end face, which is `eps` off at most there).
         let start = *p + *u * (2.0 * eps);
         let touching = near(start, eps).iter().filter_map(|i| polys.get(*i)).any(|q| {
-            (q.len() >= 3 && cadaddy_geom::point_in_polygon(q, start)) || q.iter().zip(q.iter().cycle().skip(1)).any(|(a, b)| seg_dist(start, *a, *b) <= eps)
+            (q.len() >= 3 && cadaddy_geom::point_in_polygon(q, start))
+                || q.iter().zip(q.iter().cycle().skip(1)).any(|(a, b)| seg_dist(start, *a, *b) <= eps)
         });
         if touching {
             continue;
@@ -1682,7 +1689,11 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
         let joined = outline.as_ref().is_some_and(|o| {
             let mine = tag_id(&t);
             mine.is_some()
-                && tags.get(&key).into_iter().flatten().any(|(at, id)| id.is_some() && *id != mine && at.dist(t.at) > tol && cadaddy_geom::point_in_polygon(o, *at))
+                && tags
+                    .get(&key)
+                    .into_iter()
+                    .flatten()
+                    .any(|(at, id)| id.is_some() && *id != mine && at.dist(t.at) > tol && cadaddy_geom::point_in_polygon(o, *at))
         });
         let outline = match outline {
             Some(o) if !joined => Some(o),
@@ -1703,15 +1714,16 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
                     (separated_session(polys, &seps, sp), None, n, all, all_grid)
                 });
                 let (plan, sep_cache, _, all, all_grid) = entry;
-                plan.as_ref().and_then(|plan| {
-                    let loops = super::hatch::loops_at_lazy(plan, t.at, sep_cache).ok()?;
-                    let outer = loops.iter().find(|l| l.outer).or(loops.first())?;
-                    let o = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
-                    let a = cadaddy_geom::shoelace(&o).abs();
-                    (o.len() >= 3 && (min_area..=max_area).contains(&a) && walled_share(&o, all_grid, all, cell, tol) >= ROOM_WALLED).then_some(o)
-                })
-                .inspect(|_| *separated_rooms.entry(t.level.clone()).or_default() += 1)
-                .or(first)
+                plan.as_ref()
+                    .and_then(|plan| {
+                        let loops = super::hatch::loops_at_lazy(plan, t.at, sep_cache).ok()?;
+                        let outer = loops.iter().find(|l| l.outer).or(loops.first())?;
+                        let o = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
+                        let a = cadaddy_geom::shoelace(&o).abs();
+                        (o.len() >= 3 && (min_area..=max_area).contains(&a) && walled_share(&o, all_grid, all, cell, tol) >= ROOM_WALLED).then_some(o)
+                    })
+                    .inspect(|_| *separated_rooms.entry(t.level.clone()).or_default() += 1)
+                    .or(first)
             }
             first => first,
         };

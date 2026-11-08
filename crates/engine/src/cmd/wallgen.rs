@@ -2502,7 +2502,7 @@ fn narrow_slots(walls: &[PlanWall], grid: &WallGrid, min_gap: f64, k: f64) -> Ve
     let hair = 0.01 * k;
     for (i, a) in walls.iter().enumerate() {
         let la = a.a.dist(a.b);
-        if !(la > 1e-9) {
+        if la.is_nan() || la <= 1e-9 {
             continue;
         }
         // From each end, looking on along the line.
@@ -2512,7 +2512,8 @@ fn narrow_slots(walls: &[PlanWall], grid: &WallGrid, min_gap: f64, k: f64) -> Ve
             for &j in grid.at(end) {
                 let Some(b) = walls.get(j).filter(|_| j != i) else { continue };
                 let lb = b.a.dist(b.b);
-                if !(lb > 1e-9)
+                if lb.is_nan()
+                    || lb <= 1e-9
                     || u.cross((b.b - b.a) * (1.0 / lb)).abs() > 0.01
                     || u.perp().dot(b.a - end).abs() > a.thickness.max(b.thickness) / 2.0
                 {
