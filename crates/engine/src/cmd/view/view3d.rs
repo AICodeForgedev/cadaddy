@@ -376,13 +376,15 @@ pub fn shade_options_as(s: &Session, style: Option<VisualStyle>) -> Option<Value
 }
 
 /// A PNG of model space as displayed in a 3D view or a visual style, fitted into `w` × `h` on
-/// white; `None` when the plain plan vectors apply ([`shade_options`]) or nothing is drawn.
+/// white, with its baked light (LIGHTBAKE) as the view shows it; `None` when the plain plan
+/// vectors apply ([`shade_options`]) or nothing is drawn.
 pub fn shaded_png(s: &Session, w: u32, h: u32) -> Option<Vec<u8>> {
     let opts = shade_options(s)?;
     let st = s.state().ok()?;
     let style = opts.get("style").and_then(Value::as_str).and_then(VisualStyle::parse)?;
     let proj = st.projection();
-    cadaddy_render::shade::render_fitted(&st.doc, proj, style, w, h, cadaddy_color::Rgb(255, 255, 255))?.encode_png()
+    let baked = |scene: &cadaddy_render::shade::Scene| crate::cmd::lightbake::baked_loaded(s, scene);
+    cadaddy_render::shade::render_fitted_baked(&st.doc, proj, style, w, h, cadaddy_color::Rgb(255, 255, 255), baked)?.encode_png()
 }
 
 pub(crate) fn walk_mode(s: &mut Session, fly: bool) -> Result<Value> {
