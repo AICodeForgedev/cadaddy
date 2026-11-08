@@ -83,6 +83,21 @@ fn object(e: &cadaddy_engine::doc::Entity) -> Value {
     if kind["type"] == "viewport" {
         kind.as_object_mut().unwrap().remove("id");
     }
+    // Justified text's first point (group 10) is worked out from its alignment point (group 11),
+    // as the DXF Reference has it, and a writer works it out again: not a difference.
+    fn derived_first_point(t: &mut Value) {
+        let (h, v) = (t["halign"].as_str().unwrap_or("left"), t["valign"].as_str().unwrap_or("baseline"));
+        let by_first = (h == "left" && v == "baseline") || h == "aligned" || h == "fit";
+        if !by_first && !t["alignPt"].is_null() {
+            t.as_object_mut().unwrap().remove("insert");
+        }
+    }
+    match kind["type"].as_str() {
+        Some("text") => derived_first_point(&mut kind),
+        Some("attDef") => derived_first_point(&mut kind["text"]),
+        Some("insert") => kind["attribs"].as_array_mut().into_iter().flatten().for_each(|a| derived_first_point(&mut a["text"])),
+        _ => {}
+    }
     let mut common = serde_json::to_value(&e.common).unwrap();
     for k in ["handle", "owner"] {
         common.as_object_mut().unwrap().remove(k);

@@ -14,5 +14,6 @@ mod blockhatchassoc;
 mod classic2d;
 mod dwgconvert;
 mod exchangeloss;
+mod justifiedtext;
 mod keptnotices2;
 mod mleader_table_dwg;
