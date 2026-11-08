@@ -1115,6 +1115,29 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     // G-HOST: the wall face.
     if let Some(r) = on("G-HOST") {
         let t = tol(r, "plan_in", 6.0);
+        // Site gear (the utility's pad-mounted transformer, Q6307) stands outside on its pad: no
+        // wall hosts it.
+        let site: BTreeSet<String> =
+            sc.sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.trim().to_ascii_uppercase()).collect();
+        let site_handles: BTreeSet<String> = if site.is_empty() {
+            BTreeSet::new()
+        } else {
+            sc.d.model
+                .iter()
+                .filter(|e| super::bimlook::made_tag(e, "kind") == Some("equipment"))
+                .filter(|e| super::bimlook::made_tag(e, "tag").is_some_and(|t| site.contains(&t.trim().to_ascii_uppercase())))
+                .map(|e| e.handle.hex().to_ascii_uppercase())
+                .collect()
+        };
+        let on_site = |it: &Item| !site_handles.is_empty() && site_handles.contains(&it.handle.to_ascii_uppercase());
+        let outdoors = mine.iter().filter(|(it, _)| on_site(it) && applies(r, it)).count() as u64;
+        if outdoors > 0 {
+            *unmeasured
+                .entry(r.rule.id.clone())
+                .or_default()
+                .entry("site equipment on its pad outside the building: no wall hosts it".into())
+                .or_default() += outdoors;
+        }
         // A kind whose mounting nothing says (a fire alarm device: a wall horn or a ceiling
         // detector) is not measured against a wall; the judge checks its host.
         let unknown = mine.iter().filter(|(it, _)| it.mounting == Mounting::Other && applies(r, it)).count() as u64;
@@ -1125,7 +1148,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 .entry("mounting not known (wall or ceiling): the judge checks its host".into())
                 .or_default() += unknown;
         }
-        for (it, a) in mine.iter().filter(|(it, _)| !matches!(it.mounting, Mounting::Ceiling | Mounting::Other) && applies(r, it)) {
+        for (it, a) in mine.iter().filter(|(it, _)| !matches!(it.mounting, Mounting::Ceiling | Mounting::Other) && !on_site(it) && applies(r, it)) {
             let lv = it.level.to_ascii_lowercase();
             let h = host_of(
                 it.at,
