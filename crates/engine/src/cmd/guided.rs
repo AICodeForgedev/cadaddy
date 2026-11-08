@@ -21279,46 +21279,69 @@ fn arch_placer(
     // check a placement by the frame and to fit a sheet nothing else places (Q6284).
     let k_in0 = super::perceive::units_per_inch(d);
     let lines = std::sync::Arc::new(super::sheetreg::SheetLines::new(d, &sheets.iter().map(|b| b.rect).collect::<Vec<_>>(), k_in0));
-    let targets: std::sync::Arc<Vec<(String, Vec<cadaddy_geom::Vec2>)>> = std::sync::Arc::new(
+    let targets: std::sync::Arc<Vec<(String, usize, Vec<cadaddy_geom::Vec2>)>> = std::sync::Arc::new(
         plans
             .iter()
             .filter_map(|(k, r)| {
                 let i = sheets.iter().position(|b| inside(&b.rect, mid(r)))?;
-                Some((k.clone(), lines.points(i, Some(r))))
+                Some((k.clone(), i, lines.points(i, Some(r))))
             })
             .collect(),
     );
     lap("sheet linework sampled");
     let target = {
         let targets = targets.clone();
-        move |key: &str| targets.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).unwrap_or_default()
+        move |key: &str| targets.iter().find(|(k, _, _)| k == key).map(|(_, _, v)| v.clone()).unwrap_or_default()
+    };
+    // Each level's plan sheet.
+    let plan_sheet = {
+        let targets = targets.clone();
+        move |key: &str| targets.iter().find(|(k, _, _)| k == key).map(|(_, i, _)| *i)
     };
     // Whether a sheet's frame placement onto its level's plan holds (once per sheet and level).
     let frame_checks: std::sync::Mutex<std::collections::HashMap<(usize, String), bool>> = Default::default();
-    let (lines_f, target_f, log_f) = (lines.clone(), target.clone(), log.clone());
-    let frame_holds = move |i: usize, number: &str, onto: &str, level: &str, key: &str, m: &cadaddy_mepfix::tagid::Sim| -> bool {
+    let (lines_f, target_f, log_f, planless_f) = (lines.clone(), target.clone(), log.clone(), planless.clone());
+    // The parts of the site each sheet's lettering names (BUILDING 2 - UNIT 6).
+    let part_texts = cadaddy_mepfix::sheet_facts::texts(d);
+    let parts: Vec<BTreeSet<(String, String)>> = sheets.iter().map(|b| super::sheetreg::site_parts(&part_texts, &b.rect)).collect();
+    drop(part_texts);
+    let parts = std::sync::Arc::new(parts);
+    let parts_f = parts.clone();
+    let frame_holds = move |i: usize, onto_i: usize, number: &str, onto: &str, level: &str, key: &str, m: &cadaddy_mepfix::tagid::Sim| -> bool {
         let id = (i, key.to_string());
         if let Some(h) = frame_checks.lock().ok().and_then(|c| c.get(&id).copied()) {
             return h;
         }
-        let share = lines_f.frame_share(i, m, &target_f(key));
+        // A level with no plan: no frame puts anything on it.
+        let planless = planless_f.contains(key);
+        // A sheet of another part of the site (its views say so): never on this plan.
+        let other = match (parts_f.get(i), parts_f.get(onto_i)) {
+            (Some(a), Some(b)) => super::sheetreg::other_parts(a, b),
+            _ => None,
+        };
+        let share = if planless || other.is_some() { None } else { lines_f.frame_share(i, m, &target_f(key)) };
         // Too little linework to tell: the frame, as drawn alike.
-        let holds = share.is_none_or(|v| v >= super::sheetreg::FRAME_SHARE);
+        let holds = !planless && other.is_none() && share.is_none_or(|(a, b)| a.min(b) >= super::sheetreg::FRAME_SHARE);
+        let why_not = if planless {
+            Some("its level has no plan to put it onto".to_string())
+        } else if let Some(o) = &other {
+            Some(format!("its views name another part of the site: {o}"))
+        } else {
+            (!holds).then(|| "its linework doesn't lie on the plan's (another part of the site on the same size of sheet)".to_string())
+        };
         progress_line(&format!(
-            "  placer: {number} on {level} by the frame of {onto}: {}",
-            share.map_or_else(
-                || "no linework to check it by, used".to_string(),
-                |v| format!(
-                    "{:.0}% of the linework on the plan's, {}",
-                    v * 100.0,
-                    if holds { "used" } else { "not used (another part of the site on the same size of sheet)" }
-                )
-            )
+            "  placer: {number} on {level} by the frame of {onto}: {}{}",
+            match share {
+                None if planless || other.is_some() => String::new(),
+                None => "no linework to check it by, ".to_string(),
+                Some((a, b)) => format!("{:.0}% of its linework on the plan's, {:.0}% of the plan's on its, ", a * 100.0, b * 100.0),
+            },
+            why_not.as_ref().map_or_else(|| "used".to_string(), |w| format!("not used ({w})"))
         ));
         log_sheet(
             &log_f,
             json!({"sheet": number, "level": level, "onto": onto, "method": "frame", "transform": {"a": m.a, "b": m.b, "tx": m.tx, "ty": m.ty},
-                "linework_share": share, "used": holds, "why_not": (!holds).then_some("its linework doesn't lie on the plan's")}),
+                "linework_on_plan": share.map(|s| s.0), "plan_on_linework": share.map(|s| s.1), "used": holds, "why_not": why_not}),
         );
         if let Ok(mut c) = frame_checks.lock() {
             c.insert(id, holds);
@@ -21371,7 +21394,8 @@ fn arch_placer(
         })?;
         let m = cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [arch.rect[0] - sheet.rect[0], arch.rect[1] - sheet.rect[1]]);
         // The plan itself, or a sheet whose linework lies on it there.
-        (std::ptr::eq(arch, sheet) || frame_holds(si, &sheet.number, &arch.number, level, &level_key(level), &m)).then_some(m)
+        let ai = sheets.iter().position(|b| std::ptr::eq(b, arch)).unwrap_or(si);
+        (std::ptr::eq(arch, sheet) || frame_holds(si, ai, &sheet.number, &arch.number, level, &level_key(level), &m)).then_some(m)
     };
     // A view with neither grids nor tags: its screened background laid over the floor plan.
     let backgrounds = super::grids::Backgrounds::new(d, &others);
@@ -21530,12 +21554,17 @@ fn arch_placer(
                 }
                 let tgt = target(&key);
                 let started = web_time::Instant::now();
-                let fit = lines.fit(i, &tgt);
+                // A sheet of another part of the site than the plan's: never fitted onto it.
+                let other = plan_sheet(&key).and_then(|j| match (parts.get(i), parts.get(j)) {
+                    (Some(a), Some(b)) if i != j => super::sheetreg::other_parts(a, b),
+                    _ => None,
+                });
+                let fit = if other.is_some() { None } else { lines.fit(i, &tgt) };
                 let number = sheet_names.get(i).cloned().unwrap_or_default();
                 progress_line(&format!(
                     "  placer: {number} on {level} by its linework: {} ({:.1} s)",
                     fit.as_ref().map_or_else(
-                        || "no fit".to_string(),
+                        || other.as_ref().map_or_else(|| "no fit".to_string(), |o| format!("not fitted (its views name another part of the site: {o})")),
                         |f| format!("scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best", f.sim.scale(), f.sim.tx, f.sim.ty, f.score * 100.0, f.margin * 100.0)
                     ),
                     started.elapsed().as_secs_f64()
@@ -21546,7 +21575,13 @@ fn arch_placer(
                         Some(f) => json!({"sheet": number, "level": level, "method": "linework", "transform": {"a": f.sim.a, "b": f.sim.b, "tx": f.sim.tx, "ty": f.sim.ty},
                             "scale": f.sim.scale(), "score": f.score, "margin": f.margin, "used": true}),
                         None => json!({"sheet": number, "level": level, "method": "none", "used": false,
-                            "why_not": if tgt.is_empty() { "its level has no plan to put it onto" } else { "no tags, grid lines, frame or linework put it onto its level's plan: its elements are left out" }}),
+                            "why_not": if tgt.is_empty() {
+                                "its level has no plan to put it onto".to_string()
+                            } else if let Some(o) = &other {
+                                format!("its views name another part of the site than its level's plan ({o}): its elements are left out")
+                            } else {
+                                "no tags, grid lines, frame or linework put it onto its level's plan: its elements are left out".to_string()
+                            }}),
                     },
                 );
                 let got = fit.map(|f| f.sim);
@@ -27229,12 +27264,15 @@ mod tests {
         let ducts: Vec<([f64; 2], [f64; 2])> =
             (0..6).map(|i| ([300.0, 200.0 + 110.0 * f64::from(i)], [1150.0, 230.0 + 110.0 * f64::from(i)])).collect();
         // (sheet's left edge, its plan's walls and how far its page moves them, its own lines)
-        let sheets: [(f64, &[([f64; 2], [f64; 2])], [f64; 2], &[([f64; 2], [f64; 2])]); 5] = [
+        // E-103 draws building one's walls exactly, but its view is another building's unit of the
+        // same type (a complex repeats a few unit plans): its title says so.
+        let sheets: [(f64, &[([f64; 2], [f64; 2])], [f64; 2], &[([f64; 2], [f64; 2])]); 6] = [
             (0.0, &one, [0.0, 0.0], &[]),
             (2000.0, &one, [0.0, 0.0], &ducts),
             (4000.0, &two, [0.0, 0.0], &[]),
             (6000.0, &one, [60.0, 36.0], &[]),
             (8000.0, &[], [0.0, 0.0], &[]),
+            (10000.0, &one, [0.0, 0.0], &[]),
         ];
         for (x0, plan, shift, own) in sheets {
             // The title block: a border, the title strip and its boxes.
@@ -27253,6 +27291,9 @@ mod tests {
                 line([x0 + a[0] + shift[0], a[1] + shift[1]], [x0 + b[0] + shift[0], b[1] + shift[1]]);
             }
         }
+        for (x0, title) in [(0.0, "BUILDING 1 - UNIT 1 -"), (2000.0, "BUILDING 1 - UNIT 1 -"), (10000.0, "BUILDING 2 - UNIT 4 -")] {
+            d.add(&Space::Model, Common { layer: "PDF".into(), ..Common::default() }, EntityKind::Text(text(title, x0 + 120.0, 60.0, 8.0))).ok();
+        }
         let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
             "units_per_foot": 12.0,
             "levels": [{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0, "region": [60, 100, 1450, 1060]}],
@@ -27261,11 +27302,17 @@ mod tests {
                 {"number": "M-101", "discipline": "M", "level": "Level 1", "rect": [2000, 0, 3728, 1152]},
                 {"number": "E-101", "discipline": "E", "level": "Level 1", "rect": [4000, 0, 5728, 1152]},
                 {"number": "E-102", "discipline": "E", "level": "Level 1", "rect": [6000, 0, 7728, 1152]},
-                {"number": "P-101", "discipline": "P", "level": "Level 1", "rect": [8000, 0, 9728, 1152]}
+                {"number": "P-101", "discipline": "P", "level": "Level 1", "rect": [8000, 0, 9728, 1152]},
+                {"number": "E-103", "discipline": "E", "level": "Level 1", "rect": [10000, 0, 11728, 1152]}
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
         (s, sp)
+    }
+
+    /// Why the placer's log says `sheet`'s frame placement wasn't used.
+    fn entry_why(l: &[Value], sheet: &str) -> String {
+        l.iter().find(|v| v["sheet"] == sheet && v["method"] == "frame").and_then(|v| v["why_not"].as_str()).unwrap_or_default().to_string()
     }
 
     #[test]
@@ -27284,8 +27331,15 @@ mod tests {
         // linework's resolution: its lines are compared a foot or two apart).
         let e = at([6560.0, 436.0]).unwrap_or_else(|| panic!("E-102 not placed: {:#?}", log.lock().map(|l| l.clone())));
         assert!((e[0] - 500.0).abs() < 15.0 && (e[1] - 400.0).abs() < 15.0, "{e:?}");
+        // Another building's unit of the same type: its walls lie on the plan's, its title names
+        // another building: left out.
+        assert_eq!(at([10500.0, 400.0]), None, "{:#?}", log.lock().map(|l| l.clone()));
         // Each judgement is in the log with its transform and its score.
         let l = log.lock().map(|l| l.clone()).unwrap_or_default();
+        assert!(
+            entry_why(&l, "E-103").contains("BUILDING 1 against BUILDING 2") || entry_why(&l, "E-103").contains("BUILDING 2 against BUILDING 1"),
+            "{l:#?}"
+        );
         let entry = |sheet: &str, method: &str| l.iter().find(|v| v["sheet"] == sheet && v["method"] == method).cloned().unwrap_or(Value::Null);
         assert_eq!(entry("M-101", "frame")["used"], json!(true), "{l:#?}");
         assert_eq!(entry("E-101", "frame")["used"], json!(false), "{l:#?}");

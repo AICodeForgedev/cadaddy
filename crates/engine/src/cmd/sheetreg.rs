@@ -11,7 +11,11 @@
 //!   ([`SheetLines::frame_share`]): a sheet of another building in the same frame doesn't;
 //! - a sheet nothing else places is fitted onto its level's plan by its linework, one to one
 //!   (sheets come in at their printed scales), with the fit's score and its margin over the next
-//!   best placement recorded ([`SheetLines::fit`]).
+//!   best placement recorded ([`SheetLines::fit`]);
+//! - a sheet whose views name another part of the site than the plan's (`BUILDING 3 - UNIT 8`
+//!   against `BUILDING 2 - UNIT 6`: [`site_parts`]) is never laid on it, however alike its
+//!   linework (the units of a complex repeat a few typical layouts, so another building's unit
+//!   plans in the same frame lie three quarters on the plan's lines).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -28,7 +32,10 @@ const TEMPLATE_SHARE: f64 = 0.7;
 const MAX_SHEET_POINTS: usize = 200_000;
 /// Fewest points (after the template is left out) on each side for a judgement or a fit.
 pub(crate) const MIN_POINTS: usize = 200;
-/// A frame placement holds when this share of one side's linework lies on the other's.
+/// A frame placement holds when this share of each side's linework lies on the other's: the
+/// sheet's lines on the plan's, and the plan's lines (under the sheet) on the sheet's. One way
+/// alone is no test: a dense electrical plan covers half of any plan by chance (a plan of another
+/// building in the same title block lay half on it), and a sparse plan lies on a dense one.
 pub(crate) const FRAME_SHARE: f64 = 0.4;
 /// A linework fit holds with this F1 of the two drawings' lines on each other (a whole sheet's
 /// walls are the plan's walls: another building's plan of rooms on the same grid of partitions
@@ -151,11 +158,11 @@ impl SheetLines {
         (0..self.rects.len()).filter(|i| inside(&self.rects[*i], c)).min_by(|a, b| area(&self.rects[*a]).total_cmp(&area(&self.rects[*b])))
     }
 
-    /// How well sheet `i` placed by `m` lies on `tgt` (its level's plan linework): the larger of
-    /// the share of its lines on the plan's and the share of the plan's lines (under it) on its.
+    /// How well sheet `i` placed by `m` lies on `tgt` (its level's plan linework): the share of
+    /// its lines on the plan's, and the share of the plan's lines (under it) on its.
     /// `None` when either side has too few lines to say, or the sheet's template is unknown (its
     /// border and title block would agree with any sheet in the same frame).
-    pub(crate) fn frame_share(&self, i: usize, m: &Sim, tgt: &[Vec2]) -> Option<f64> {
+    pub(crate) fn frame_share(&self, i: usize, m: &Sim, tgt: &[Vec2]) -> Option<(f64, f64)> {
         let src = self.pts.get(i)?;
         if !self.stripped(i) || src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
             return None;
@@ -165,12 +172,12 @@ impl SheetLines {
         let b = cadaddy_geom::Bounds2::from_points(placed.iter().copied());
         let under: Vec<Vec2> = tgt.iter().copied().filter(|p| b.contains(*p)).collect();
         let on_sheet = if under.len() < MIN_POINTS { 0.0 } else { super::grids::overlay_share(&under, &placed, self.k_in) };
-        Some(on_plan.max(on_sheet))
+        Some((on_plan, on_sheet))
     }
 
     /// Sheet `i` fitted onto `tgt` (its level's plan linework) by its linework, one to one within
-    /// 3% (a fit off that is its sampling's error, so one to one about its middle), the whole
-    /// floor or a part of it (an enlarged plan). `None` without a fit that holds ([`FIT_F1`],
+    /// 2.5% (a fit off that is its sampling's error, so one to one about its middle; one at the
+    /// end of the scales tried is no fit), the whole floor or a part of it (an enlarged plan). `None` without a fit that holds ([`FIT_F1`],
     /// [`FIT_MARGIN`]).
     pub(crate) fn fit(&self, i: usize, tgt: &[Vec2]) -> Option<LineworkFit> {
         let src = self.pts.get(i)?;
@@ -179,12 +186,59 @@ impl SheetLines {
         }
         // Each scale proposes its best few placements, so the margin is over a real runner-up.
         let fit = super::grids::linework_fit_part(src, tgt, self.k_in, 0.97, 1.03);
-        let (s, t, score, margin) = fit.filter(|f| f.2 >= FIT_F1 && f.3 >= FIT_MARGIN)?;
+        let (s, t, score, margin) = fit.filter(|f| f.2 >= FIT_F1 && f.3 >= FIT_MARGIN && (f.0 - 1.0).abs() <= 0.025)?;
         let mid = src.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / src.len().max(1) as f64);
-        let (s, t) = if (s - 1.0).abs() < 0.03 { (1.0, t + mid * (s - 1.0)) } else { (s, t) };
-        let sim = Sim::scale_offset(s, [t.x, t.y]);
+        let sim = Sim::scale_offset(1.0, [t.x + mid.x * (s - 1.0), t.y + mid.y * (s - 1.0)]);
         sim.is_finite().then_some(LineworkFit { sim, score, margin })
     }
+}
+
+/// Most texts looked at for the parts of the site a sheet names.
+const MAX_PART_TEXTS: usize = 200_000;
+
+/// The parts of the site the lettering inside `rect` names: each text that starts with one of
+/// the rules data's site-part words (`sheets.site_part_words`: BUILDING, BLDG, UNIT…) and an
+/// identifier (a number, or one letter) gives its (kind, identifier), and so does every such pair
+/// after it in that text (`BUILDING 2 - UNIT 7 -`). A note that only mentions a word
+/// (`UNIT HEATERS`, `AREA OF WORK`) names nothing.
+pub(crate) fn site_parts(texts: &[cadaddy_mepfix::sheet_facts::TextItem], rect: &[f64; 4]) -> std::collections::BTreeSet<(String, String)> {
+    let words = cadaddy_mepfix::wordrules::pairs("sheets.site_part_words");
+    let kind_of = |w: &str| words.iter().find(|(k, _)| w == *k).map(|(_, v)| (*v).to_string());
+    let ident = |w: &str| {
+        let ok = w.chars().all(|c| c.is_ascii_alphanumeric())
+            && (w.chars().any(|c| c.is_ascii_digit()) || (w.len() == 1 && w.chars().all(|c| c.is_ascii_alphabetic())));
+        (ok && !w.is_empty() && w.len() <= 8).then(|| w.to_string())
+    };
+    let mut out = std::collections::BTreeSet::new();
+    for t in texts.iter().take(MAX_PART_TEXTS).filter(|t| inside(rect, t.at)) {
+        let up = t.value.to_ascii_uppercase();
+        let tokens: Vec<&str> = up
+            .split(|c: char| c.is_whitespace() || c == '-' || c == ',' || c == ':')
+            .map(|w| w.trim_matches('.'))
+            .filter(|w| !w.is_empty())
+            .collect();
+        if tokens.first().and_then(|w| kind_of(w)).is_none() {
+            continue;
+        }
+        for pair in tokens.windows(2) {
+            if let (Some(k), Some(id)) = (pair.first().and_then(|w| kind_of(w)), pair.get(1).and_then(|w| ident(w))) {
+                out.insert((k, id));
+            }
+        }
+    }
+    out
+}
+
+/// Whether two sheets' parts of the site ([`site_parts`]) are other parts: of a kind both name,
+/// they name none in common. Either naming none of a kind says nothing of it.
+pub(crate) fn other_parts(a: &std::collections::BTreeSet<(String, String)>, b: &std::collections::BTreeSet<(String, String)>) -> Option<String> {
+    let kinds: std::collections::BTreeSet<&str> = a.iter().map(|(k, _)| k.as_str()).filter(|k| b.iter().any(|(j, _)| j == k)).collect();
+    let ids =
+        |s: &std::collections::BTreeSet<(String, String)>, k: &str| s.iter().filter(|(j, _)| j == k).map(|(_, v)| v.clone()).collect::<Vec<_>>();
+    kinds
+        .into_iter()
+        .find(|k| ids(a, k).iter().all(|v| !ids(b, k).contains(v)))
+        .map(|k| format!("{k} {} against {k} {}", ids(a, k).join("/"), ids(b, k).join("/")))
 }
 
 fn inside(r: &[f64; 4], p: Vec2) -> bool {
@@ -193,4 +247,46 @@ fn inside(r: &[f64; 4], p: Vec2) -> bool {
 
 fn area(r: &[f64; 4]) -> f64 {
     (r[2] - r[0]).abs() * (r[3] - r[1]).abs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadaddy_mepfix::sheet_facts::TextItem;
+    use std::collections::BTreeSet;
+
+    fn t(v: &str, x: f64, y: f64) -> TextItem {
+        TextItem { value: v.into(), at: Vec2::new(x, y), height: 6.0, rotation: 0.0 }
+    }
+
+    fn set(pairs: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn views_name_the_part_of_the_site_they_draw() {
+        let texts = vec![
+            t("BUILDING 2 - UNIT 7 -", 10.0, 10.0),
+            t("2ND FLOOR PLAN - MECHANICAL", 10.0, 0.0),
+            t("UNIT HEATERS SHALL BE CEILING HUNG", 20.0, 20.0),
+            t("AREA OF WORK", 30.0, 30.0),
+            t("REFER TO BUILDING 9 FOR RISERS", 40.0, 40.0),
+            t("BLDG. 3 - UNIT 8", 1010.0, 10.0),
+            t("WING B", 2010.0, 10.0),
+        ];
+        let a = site_parts(&texts, &[0.0, 0.0, 500.0, 500.0]);
+        // A title names its building and unit; a note mentioning a word, or naming a part in its
+        // middle, names nothing.
+        assert_eq!(a, set(&[("BUILDING", "2"), ("UNIT", "7")]));
+        let b = site_parts(&texts, &[1000.0, 0.0, 1500.0, 500.0]);
+        assert_eq!(b, set(&[("BUILDING", "3"), ("UNIT", "8")]));
+        assert_eq!(site_parts(&texts, &[2000.0, 0.0, 2500.0, 500.0]), set(&[("WING", "B")]));
+        // Another building: other parts. The same building's unit: not. Naming none: says nothing.
+        assert!(other_parts(&a, &b).is_some_and(|w| w.contains("BUILDING 2") && w.contains("BUILDING 3")));
+        let plan = set(&[("BUILDING", "2"), ("UNIT", "6"), ("UNIT", "7")]);
+        assert_eq!(other_parts(&set(&[("BUILDING", "2"), ("UNIT", "7")]), &plan), None);
+        assert!(other_parts(&set(&[("BUILDING", "2"), ("UNIT", "5")]), &plan).is_some());
+        assert_eq!(other_parts(&a, &BTreeSet::new()), None);
+        assert_eq!(other_parts(&set(&[("WING", "B")]), &plan), None);
+    }
 }
