@@ -1344,6 +1344,105 @@ fn same_wall(a: &PlanWall, b: &PlanWall) -> bool {
     hi - lo > 0.5 * la.min(lb)
 }
 
+/// Joins the walls that are pieces of one: on one centreline, of one thickness, type and height,
+/// overlapping, touching or a joint apart (at most [`JOINT_MAX_IN`]). A wall drawn unit by unit
+/// whose faces were found piece by piece is one wall between its corners and openings, so its
+/// length, the walls counted and the finishes on it are the real wall's. Each keeps its first
+/// piece's source and the direction it runs. A door's jamb ends a wall: two pieces meeting where a
+/// drawn swing hangs or shuts (`jambs`: its hinges and leaf ends) stay apart, as the one between
+/// is a header drawn across the opening. `k` is drawing units per inch. Returns how many pieces
+/// were joined away.
+///
+/// [`JOINT_MAX_IN`]: super::perceive::geometry::JOINT_MAX_IN
+fn join_wall_pieces(walls: &mut Vec<PlanWall>, jambs: &[Vec2], k: f64) -> usize {
+    use std::f64::consts::PI;
+    if !(k.is_finite() && k > 0.0) {
+        return 0;
+    }
+    let (joint, line_tol, thick_tol) = (super::perceive::geometry::JOINT_MAX_IN * k, 0.5 * k, 0.25 * k);
+    // The jambs by 2' cell.
+    let cell = 24.0 * k;
+    let at = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut jamb_cells: HashMap<(i64, i64), Vec<Vec2>> = HashMap::new();
+    for &p in jambs.iter().filter(|p| p.is_finite()).take(MAX_OBJECTS) {
+        jamb_cells.entry(at(p)).or_default().push(p);
+    }
+    // A jamb within `r` (under a cell) of `q`.
+    let jamb_at = |q: Vec2, r: f64| {
+        let (cx, cy) = at(q);
+        (cx - 1..=cx + 1).any(|x| (cy - 1..=cy + 1).any(|y| jamb_cells.get(&(x, y)).is_some_and(|ps| ps.iter().any(|p| p.dist(q) <= r))))
+    };
+    // The walls by line: direction (half degrees), centreline and thickness; each wall's extent
+    // along the line.
+    let mut lines: HashMap<(i64, i64, i64), Vec<(f64, f64, usize)>> = HashMap::new();
+    for (i, w) in walls.iter().enumerate() {
+        let d = w.b - w.a;
+        if !(d.len() > 1e-9 && w.thickness.is_finite() && w.thickness > 0.0) {
+            continue;
+        }
+        let half_degrees = ((d.y.atan2(d.x).rem_euclid(PI).to_degrees() * 2.0).round() as i64).rem_euclid(360);
+        let ang = (half_degrees as f64 / 2.0).to_radians();
+        let u = Vec2::new(ang.cos(), ang.sin());
+        let off = (u.perp().dot(w.a.mid(w.b)) / line_tol).round() as i64;
+        let thick = (w.thickness / thick_tol).round() as i64;
+        let (s0, s1) = (u.dot(w.a).min(u.dot(w.b)), u.dot(w.a).max(u.dot(w.b)));
+        lines.entry((half_degrees, off, thick)).or_default().push((s0, s1, i));
+    }
+    let mut gone = vec![false; walls.len()];
+    let mut joined = 0usize;
+    // In a fixed order: which piece keeps the wall doesn't depend on the map's.
+    let mut keys: Vec<(i64, i64, i64)> = lines.keys().copied().collect();
+    keys.sort_unstable();
+    for key in keys {
+        let Some(line) = lines.get_mut(&key) else { continue };
+        if line.len() < 2 {
+            continue;
+        }
+        line.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.cmp(&b.2)));
+        let ang = (key.0 as f64 / 2.0).to_radians();
+        let u = Vec2::new(ang.cos(), ang.sin());
+        // Each group: its pieces, and how far along the line it reaches.
+        let mut groups: Vec<(Vec<usize>, f64, f64)> = Vec::new();
+        for &(s0, s1, i) in line.iter() {
+            let Some(w) = walls.get(i) else { continue };
+            let fits = groups.last().is_some_and(|(g, _, end)| {
+                s0 <= end + joint
+                    && g.first().and_then(|&f| walls.get(f)).is_some_and(|f| {
+                        // Where they meet, on the first piece's centreline.
+                        let meet = f.a - u * u.dot(f.a) + u * (0.5 * (s0 + end.min(s1)));
+                        f.wall_type == w.wall_type
+                            && (f.top - w.top).abs() <= 1e-6 * f.top.abs().max(1.0)
+                            && !jamb_at(meet, (w.thickness / 2.0 + 2.0 * k).min(cell))
+                    })
+            });
+            match groups.last_mut() {
+                Some((g, _, end)) if fits => {
+                    g.push(i);
+                    *end = end.max(s1);
+                }
+                _ => groups.push((vec![i], s0, s1)),
+            }
+        }
+        for (g, start, end) in groups.into_iter().filter(|(g, _, _)| g.len() > 1) {
+            let Some(&keep) = g.iter().min() else { continue };
+            let Some(w) = walls.get_mut(keep) else { continue };
+            // On the kept piece's centreline, running the way it ran.
+            let c = w.a - u * u.dot(w.a);
+            let (a, b) = (c + u * start, c + u * end);
+            (w.a, w.b) = if u.dot(w.b - w.a) >= 0.0 { (a, b) } else { (b, a) };
+            for i in g.into_iter().filter(|&i| i != keep) {
+                if let Some(x) = gone.get_mut(i) {
+                    *x = true;
+                    joined += 1;
+                }
+            }
+        }
+    }
+    let mut it = gone.iter();
+    walls.retain(|_| !it.next().copied().unwrap_or(false));
+    joined
+}
+
 /// Distance from `p` to the segment `a`–`b`.
 fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     let d = b - a;
@@ -1715,6 +1814,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             break;
         }
     }
+    // Pieces of one wall in line (a wall drawn unit by unit, found piece by piece): one wall.
+    let jambs: Vec<Vec2> = drawn_swings(&ents, k).iter().flat_map(|sw| [sw.c, sw.ends[0], sw.ends[1]]).collect();
+    let pieces = join_wall_pieces(&mut pl.walls, &jambs, k);
+    if pieces > 0 {
+        notes.push(format!("{}: {pieces} wall pieces in line joined into the walls they're part of.", level.name));
+    }
     // A level drawn on a sheet among others (its region): what pairs up outside the building is
     // no wall (grid lines out to their bubbles, dimension strings, match lines, the border).
     if let Some(region) = level.region {
@@ -2039,7 +2144,11 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 // Where its centreline crosses the gap's line, else the end that meets it.
                 let n = u.perp();
                 let (da, db) = (n.dot(c.a - g0), n.dot(c.b - g0));
-                let hit = if da * db < 0.0 && crossing_parts {
+                // A wall running on through the gap and out past both faces (a wall drawn unit by
+                // unit, joined into one) parts it anywhere: a mullion or a frame spans the wall's
+                // thickness only.
+                let through = da.abs().min(db.abs()) > t;
+                let hit = if da * db < 0.0 && (crossing_parts || through) {
                     Some(c.a + (c.b - c.a) * (da / (da - db)))
                 } else {
                     [c.a, c.b].into_iter().find(|e| seg_dist(*e, g0, g1) <= c.thickness / 2.0 + t)
@@ -2826,6 +2935,107 @@ mod tests {
             cuts: Vec::new(),
             extra: Vec::new(),
             wall_type: None,
+        }
+    }
+
+    #[test]
+    fn wall_pieces_in_line_of_one_thickness_are_one_wall() {
+        let piece = |a: (f64, f64), b: (f64, f64), t: f64| PlanWall { thickness: t, ..plan_wall(a, b) };
+        let mut walls = vec![
+            // A wall in four pieces: touching, a ⅜" joint apart, overlapping, one drawn backwards.
+            piece((0.0, 0.0), (16.0, 0.0), 7.6),
+            piece((16.0, 0.0), (32.0, 0.0), 7.6),
+            piece((32.375, 0.1), (48.0, 0.1), 7.6),
+            piece((70.0, 0.0), (40.0, 0.0), 7.6),
+            // In line past a door's 36" gap: a wall of its own.
+            piece((106.0, 0.0), (200.0, 0.0), 7.6),
+            // A thinner wall touching its end, and a 2" furring a wall's width off its line.
+            piece((200.0, 0.0), (260.0, 0.0), 3.6),
+            piece((0.0, 8.0), (70.0, 8.0), 2.0),
+            // A wall across them.
+            piece((100.0, -50.0), (100.0, 50.0), 7.6),
+        ];
+        assert_eq!(join_wall_pieces(&mut walls, &[], 1.0), 3);
+        assert_eq!(walls.len(), 5);
+        let w = &walls[0];
+        assert!(w.a.dist(Vec2::new(0.0, 0.0)) < 0.2 && w.b.dist(Vec2::new(70.0, 0.0)) < 0.2, "{:?} {:?}", w.a, w.b);
+        // Another wall type in line: two walls.
+        let mut walls = vec![piece((0.0, 0.0), (16.0, 0.0), 7.6), PlanWall { wall_type: Some("B".into()), ..piece((16.0, 0.0), (32.0, 0.0), 7.6) }];
+        assert_eq!(join_wall_pieces(&mut walls, &[], 1.0), 0);
+        // In ½" units (k = 2) a ⅜" joint is 0.75 and still a joint; 6" is a gap.
+        let mut walls = vec![piece((0.0, 0.0), (32.0, 0.0), 15.2), piece((32.75, 0.0), (64.0, 0.0), 15.2), piece((76.0, 0.0), (90.0, 0.0), 15.2)];
+        assert_eq!(join_wall_pieces(&mut walls, &[], 2.0), 1);
+        assert_eq!(walls.len(), 2);
+        assert_eq!(join_wall_pieces(&mut walls, &[], f64::NAN), 0);
+        // A header drawn across a door's opening, touching the wall each side: the swing hung at
+        // one jamb and shutting at the other keeps three walls.
+        let pieces = || vec![piece((0.0, 0.0), (100.0, 0.0), 4.0), piece((100.0, 0.0), (136.0, 0.0), 4.0), piece((136.0, 0.0), (300.0, 0.0), 4.0)];
+        let mut walls = pieces();
+        assert_eq!(join_wall_pieces(&mut walls, &[Vec2::new(100.0, 0.0), Vec2::new(100.0, 36.0), Vec2::new(136.0, 0.0)], 1.0), 0);
+        // A swing elsewhere doesn't.
+        let mut walls = pieces();
+        assert_eq!(join_wall_pieces(&mut walls, &[Vec2::new(100.0, 120.0)], 1.0), 2);
+    }
+
+    /// The walls planned on a plan with one 8" block wall (7⅝" units, 15⅝" long, ⅜" joints), 21
+    /// whole units and a cut one at each end, each block drawn as its own closed outline with its
+    /// cores, and specks of the block's fill (a stippled plan's dots) on its faces.
+    fn planned_block_wall(specks_layer: &str) -> Vec<PlanWall> {
+        let mut d = Drawing::new_imperial();
+        let mut add = |kind: EntityKind, layer: &str| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let mut e = Entity::new(h, kind);
+            e.common.layer = layer.into();
+            d.model.push(e);
+        };
+        let outline = |pts: &[(f64, f64)]| {
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: pts
+                    .iter()
+                    .map(|&(x, y)| cadaddy_geom::PolyVertex { p: Vec2::new(x, y + 100.0), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                    .collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        let speck = |x: f64, y: f64| EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(x, y + 100.0, 0.0), b: Vec3::new(x + 0.08, y + 100.0, 0.0) });
+        let mut x = 0.0;
+        for len in std::iter::once(7.625).chain(std::iter::repeat_n(15.625, 21)).chain(std::iter::once(11.625)) {
+            add(outline(&[(x, 0.0), (x + len, 0.0), (x + len, 7.625), (x, 7.625)]), "A-WALL");
+            if len > 15.0 {
+                for c in [x + 1.5, x + 8.5] {
+                    add(outline(&[(c, 1.5), (c + 5.6, 1.5), (c + 5.6, 6.1), (c, 6.1)]), "A-WALL");
+                }
+                for (sx, sy) in [(x + 3.0, 0.0), (x + 11.0, 7.625), (x + 7.0, 3.0)] {
+                    add(speck(sx, sy), specks_layer);
+                }
+            }
+            x += len + 0.375;
+        }
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}, {"layer": "FILL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        plan_level(&d, &g, &level, 12.0, &mut Vec::new()).walls
+    }
+
+    #[test]
+    fn a_block_wall_drawn_block_by_block_on_a_stippled_plan_is_one_wall_end_to_end() {
+        // The specks on the blocks' own layer, or on another wall layer (a print's geometry layer).
+        for layer in ["A-WALL", "FILL"] {
+            let walls = planned_block_wall(layer);
+            let [w] = walls.as_slice() else { panic!("{layer}: {} walls: {:?}", walls.len(), walls.iter().map(|w| (w.a, w.b)).collect::<Vec<_>>()) };
+            // From the first cut block's end to the last's: 7⅝ + 21 × 16 + 11⅝ = 355¼".
+            let len = w.a.dist(w.b);
+            assert!((len - 355.25).abs() < 0.5, "{layer}: {len}");
+            assert!((w.thickness - 7.625).abs() < 0.1, "{layer}: {}", w.thickness);
         }
     }
 
