@@ -313,10 +313,10 @@ fn show_form(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens, ol
         ui.horizontal(|ui| {
             let r = ui.add(egui::TextEdit::singleline(&mut st.form.checkpoint).hint_text(crate::tl!("optional: a new .cdy")).desired_width(220.0));
             crate::control::record_widget(ui, &r, crate::tl!("Keep the job's drawing"), "textbox", None);
-            if button(ui, crate::tl!("Save As...")) {
-                if let Some(Some(path)) = app.services.pick_save.as_ref().map(|f| f("Job.cdy")) {
-                    st.form.checkpoint = path;
-                }
+            if button(ui, crate::tl!("Save As..."))
+                && let Some(Some(path)) = app.services.pick_save.as_ref().map(|f| f("Job.cdy"))
+            {
+                st.form.checkpoint = path;
             }
         });
         ui.end_row();
