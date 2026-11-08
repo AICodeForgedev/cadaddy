@@ -983,6 +983,8 @@ fn run_qty(s: &mut Session, p: &Value) -> Result<Value> {
         super::exchange::guard_output(s, "mep.qty", p, path)?;
     }
     let (sp, _) = current(s, "mep.qty")?;
+    // Several buildings from one set of plans (Q6292): a shared plan's runs once per building.
+    let sp = super::buildings::per_building(&sp).unwrap_or(sp);
     let st = settings("mep.qty", p)?;
     if let Some(l) = &st.level
         && sp.level(l).is_none()
@@ -1051,6 +1053,7 @@ fn run_qty(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_refresh(s: &mut Session, _: &Value) -> Result<Value> {
     let (sp, _) = current(s, "mep.qty.refresh")?;
+    let sp = super::buildings::per_building(&sp).unwrap_or(sp);
     let n = refresh(s.doc_mut()?, &sp);
     Ok(json!({ "tables": n }))
 }

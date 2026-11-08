@@ -19,8 +19,12 @@ cadaddy-cli mcp --connect 127.0.0.1:7979
 The desktop app listens on the agent port **47820** (this computer only) unless "Let AI agents control
 CADaddy" is turned off in Options ▸ User Preferences; a `--control PORT` given on its command line is
 served as well, not instead. Without `--connect`, `cadaddy-cli mcp` decides the first time it is asked
-(listing its tools or its first call): the window if one answers on 47820, else its own session — so
-open CADaddy before asking the agent if you want to watch it work.
+(listing its tools or its first call): the window if one listens on 47820, else its own session — so
+open CADaddy before asking the agent if you want to watch it work. Only "nothing listens" gives the
+session of its own. A window that is there but doesn't answer within 10 s (a long command running, or
+the window not responding) is still the one driven: each call fails with "CADaddy at … is busy … Nothing
+was sent", and the next call tries the window again; nothing lands in a hidden session. The
+instructions and every tool result (`_meta["cadaddy/backend"]`) say which one is driven.
 
 Only one window can hold port 47820: the first CADaddy window started gets it, and a later window
 says "Agent control is held by another CADaddy window" in its status line and does not serve agents

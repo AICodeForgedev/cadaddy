@@ -36,6 +36,8 @@ pub struct Remote {
     launch: bool,
     /// Which window answered the last hello (title and process id), when the app says.
     window: Option<String>,
+    /// How long the hello may take before the window counts as busy ([`HANDSHAKE_WAIT`]).
+    hello_wait: Duration,
 }
 
 /// How long a launched app has to open its control port.
@@ -43,10 +45,18 @@ const LAUNCH_WAIT: Duration = Duration::from_secs(30);
 /// Longest a headless call runs a LISP routine typed on the command line before answering (it
 /// keeps running at the next call; `cancel` stops it).
 const HEADLESS_LISP_LIMIT: Duration = Duration::from_secs(30);
+/// How long a window has to answer the hello on a new connection before it counts as busy (its
+/// own reply timeout is a minute; one that answers `ping` at all does so at once).
+const HANDSHAKE_WAIT: Duration = Duration::from_secs(10);
+/// How long a call waits for the window's reply once the hello was answered.
+const REPLY_WAIT: Duration = Duration::from_secs(90);
+/// How long [`Auto`] answers with the busy error it just got before asking the window again (the
+/// server's own follow-up calls after a tool call would each wait the hello out again).
+const RETRY_AFTER: Duration = Duration::from_secs(2);
 
 impl Remote {
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, launch: false, window: None };
+        let mut r = Self::lazy(addr, false);
         r.reconnect()?;
         Ok(r)
     }
@@ -54,7 +64,12 @@ impl Remote {
     /// the server before the app is open. With `launch`, a call that finds nothing at `addr`
     /// opens the app with that control port first (macOS) and waits for it.
     pub fn lazy(addr: &str, launch: bool) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1, launch, window: None }
+        Self { addr: addr.to_string(), conn: None, next_id: 1, launch, window: None, hello_wait: HANDSHAKE_WAIT }
+    }
+    /// The same, with another wait for the hello (tests use a short one).
+    pub(crate) fn with_hello_wait(mut self, wait: Duration) -> Self {
+        self.hello_wait = wait;
+        self
     }
     /// Connect, opening the app first when asked to and nothing answers.
     fn reach(&mut self) -> std::io::Result<()> {
@@ -62,7 +77,8 @@ impl Remote {
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
-        if first.kind() == std::io::ErrorKind::PermissionDenied {
+        // A window that refused us or is busy is open: opening another is no answer.
+        if matches!(first.kind(), std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ResourceBusy) {
             return Err(first);
         }
         if !self.launch || !matches!(first.kind(), std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::TimedOut) {
@@ -85,26 +101,33 @@ impl Remote {
         ))
     }
     fn reconnect(&mut self) -> std::io::Result<()> {
+        self.open().map_err(|(e, _)| e)
+    }
+    /// Connect and say hello. On failure the flag says whether something listens at the address
+    /// (it accepted the connection), so a busy or refusing window is never taken for no window.
+    fn open(&mut self) -> Result<(), (std::io::Error, bool)> {
         self.conn = None;
         let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, format!("cannot resolve {}", self.addr));
-        for sa in self.addr.to_socket_addrs()? {
+        for sa in self.addr.to_socket_addrs().map_err(|e| (e, false))? {
             match TcpStream::connect_timeout(&sa, Duration::from_millis(800)) {
-                Ok(s) => {
-                    s.set_nodelay(true).ok();
-                    s.set_read_timeout(Some(Duration::from_secs(90))).ok();
-                    let read = s.try_clone()?;
-                    let mut reader = BufReader::new(read);
-                    let mut s = s;
-                    self.window = authenticate(&mut reader, &mut s, sa.port())
-                        .and_then(|()| version_handshake(&mut reader, &mut s, sa.port()))
-                        .map_err(|e| refused(&self.addr, e))?;
-                    self.conn = Some((reader, s));
-                    return Ok(());
-                }
+                Ok(s) => return self.hello(s, sa.port()).map_err(|e| (answered_badly(&self.addr, e), true)),
                 Err(e) => last = e,
             }
         }
-        Err(last)
+        Err((last, false))
+    }
+    /// Authenticate and ask the version on a new connection, waiting at most [`Remote::hello_wait`]
+    /// for the window to answer.
+    fn hello(&mut self, s: TcpStream, port: u16) -> std::io::Result<()> {
+        s.set_nodelay(true).ok();
+        s.set_read_timeout(Some(self.hello_wait)).ok();
+        let mut reader = BufReader::new(s.try_clone()?);
+        let mut s = s;
+        authenticate(&mut reader, &mut s, port).map_err(|e| no_answer(e, self.hello_wait))?;
+        self.window = version_handshake(&mut reader, &mut s, port).map_err(|e| no_answer(e, self.hello_wait))?;
+        s.set_read_timeout(Some(REPLY_WAIT)).ok();
+        self.conn = Some((reader, s));
+        Ok(())
     }
     /// On failure the flag says whether the request may already have reached the server.
     fn roundtrip(&mut self, line: &str) -> Result<String, (std::io::Error, bool)> {
@@ -163,7 +186,9 @@ pub(crate) fn authenticate_with(reader: &mut BufReader<TcpStream>, writer: &mut 
 
 /// After authenticating, ask the app for its version and tool list; warn on stderr when the
 /// bridge (this cadaddy-cli) and the app are different versions so the user knows why a tool
-/// might be missing. Non-fatal: a version mismatch doesn't prevent use.
+/// might be missing. Non-fatal: a version mismatch doesn't prevent use. A window that doesn't
+/// answer (the read times out, or its own reply timeout answers) is busy: an error of kind
+/// `ResourceBusy`, never a version warning.
 fn version_handshake(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, port: u16) -> std::io::Result<Option<String>> {
     let bridge_version = env!("CARGO_PKG_VERSION");
     let bridge_exe = std::env::current_exe().unwrap_or_default();
@@ -172,17 +197,28 @@ fn version_handshake(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, 
         return Ok(None);
     }
     let mut reply = String::new();
-    if reader.read_line(&mut reply).is_err() {
-        return Ok(None);
+    match reader.read_line(&mut reply) {
+        // No answer in time: the read timeout, passed on as a busy window.
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => return Err(e),
+        Err(_) => return Ok(None),
+        Ok(_) => {}
     }
     let v: Value = match serde_json::from_str(reply.trim()) {
         Ok(v) => v,
         Err(_) => return Ok(None),
     };
-    // An app that wants a token and was given none answers the first request with "unauthorized"
-    // and closes the connection; say so now instead of letting the next call look like a lost reply.
-    if v.get("error").and_then(Value::as_str).is_some_and(|e| e.starts_with("unauthorized")) {
-        return Err(no_token(port));
+    if v.get("ok").and_then(Value::as_bool) == Some(false) {
+        let e = v.get("error").and_then(Value::as_str).unwrap_or("error");
+        // An app that wants a token and was given none answers the first request with "unauthorized"
+        // and closes the connection; say so now instead of letting the next call look like a lost reply.
+        if e.starts_with("unauthorized") {
+            return Err(no_token(port));
+        }
+        // The window's own reply timeout, a full queue or the rate limit: it is there but not answering.
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::ResourceBusy,
+            format!("its window did not answer (it replied \"{}\")", cadaddy_engine::clip_input(e)),
+        ));
     }
     // The app's ping reply may include "version" when the app supports it (older apps just
     // reply "pong"). Extract the version string if present.
@@ -245,13 +281,31 @@ fn no_token(port: u16) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("no control token (looked in {looked}; set CADADDY_CONTROL_TOKEN)"))
 }
 
-/// The error for an app that answered but would not talk to us: a refused or missing token, worded with its address.
-/// [`Remote::call`] tells it apart from a lost connection by its kind (`PermissionDenied`).
-fn refused(addr: &str, e: std::io::Error) -> std::io::Error {
-    if e.kind() == std::io::ErrorKind::PermissionDenied {
-        std::io::Error::new(e.kind(), format!("CADaddy at {addr} refused the connection: {e}"))
+/// A hello read that timed out (`WouldBlock` on Unix, `TimedOut` on Windows) as a busy window.
+fn no_answer(e: std::io::Error, waited: Duration) -> std::io::Error {
+    if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) {
+        std::io::Error::new(
+            std::io::ErrorKind::ResourceBusy,
+            format!("its window did not answer within {:.0} s (a long command is running, or the window is not responding)", waited.as_secs_f64()),
+        )
     } else {
         e
+    }
+}
+
+/// The error for an app that accepted the connection but would not talk to us, worded with its
+/// address: a refused or missing token (`PermissionDenied`), or a busy window (`ResourceBusy`).
+/// [`Remote::call`] tells them apart from a lost connection by their kind.
+fn answered_badly(addr: &str, e: std::io::Error) -> std::io::Error {
+    match e.kind() {
+        std::io::ErrorKind::PermissionDenied => std::io::Error::new(e.kind(), format!("CADaddy at {addr} refused the connection: {e}")),
+        std::io::ErrorKind::ResourceBusy => std::io::Error::new(
+            e.kind(),
+            format!(
+                "CADaddy at {addr} is busy: {e}. Nothing was sent; try again, or cancel what it runs (the cancel tool, or Esc in the window). This server drives that window and never switches to a hidden session of its own"
+            ),
+        ),
+        _ => e,
     }
 }
 
@@ -333,8 +387,12 @@ impl Backend for Remote {
             // Resend only when the request cannot have been applied. After a sent mutation with no reply the outcome is unknown, and
             // resending could apply it twice (for example two circles from one call), so report that instead.
             // An app that refused us (no or wrong control token) said why; that is the answer, not a lost reply.
-            Err((e, _)) if e.kind() == std::io::ErrorKind::PermissionDenied => return Err(e.to_string()),
-            Err((_, sent)) if !sent || is_read_only(method) => self.roundtrip(&line).map_err(|(e, _)| format!("CADaddy at {}: {e}", self.addr))?,
+            // A busy window was sent nothing: the next call tries again.
+            Err((e, _)) if matches!(e.kind(), std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ResourceBusy) => return Err(e.to_string()),
+            Err((_, sent)) if !sent || is_read_only(method) => self.roundtrip(&line).map_err(|(e, _)| match e.kind() {
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ResourceBusy => e.to_string(),
+                _ => format!("CADaddy at {}: {e}", self.addr),
+            })?,
             Err((e, _)) => {
                 return Err(format!(
                     "CADaddy at {}: {e}; the reply was lost, so `{method}` may or may not have been applied. Inspect the drawing first",
@@ -612,6 +670,125 @@ impl Backend for Headless {
     }
 }
 
+/// The open CADaddy window when one listens on [`cadaddy_engine::AGENT_PORT`], else an
+/// in-process session: decided the first time the server needs to know (listing its tools or
+/// its first call), so an app opened before the agent's first request is the one it drives.
+/// Only "nothing listens" (the connection is refused or never accepted) picks the session of its
+/// own. A window that accepts the connection but doesn't answer (busy, or not responding) is
+/// still the window: calls fail with a busy error and the choice is tried again at the next one,
+/// so nothing an agent does lands in a session the user can't see.
+pub struct Auto {
+    addr: String,
+    hello_wait: Duration,
+    retry_after: Duration,
+    chosen: std::cell::RefCell<Option<Box<dyn Backend>>>,
+    /// Why the last try could not reach the window that listens (the busy error) and when, until a
+    /// choice is made.
+    unanswered: std::cell::RefCell<Option<(String, std::time::Instant)>>,
+}
+
+impl Default for Auto {
+    fn default() -> Self {
+        Self::at(&format!("127.0.0.1:{}", cadaddy_engine::AGENT_PORT))
+    }
+}
+
+impl Auto {
+    /// The window listening at `addr` (instead of the agent port), else a session of its own.
+    pub fn at(addr: &str) -> Self {
+        Self {
+            addr: addr.to_string(),
+            hello_wait: HANDSHAKE_WAIT,
+            retry_after: RETRY_AFTER,
+            chosen: Default::default(),
+            unanswered: Default::default(),
+        }
+    }
+    /// The same, with other waits for the window's hello and before asking again (tests use short ones).
+    #[cfg(test)]
+    pub(crate) fn with_waits(mut self, hello: Duration, retry_after: Duration) -> Self {
+        self.hello_wait = hello;
+        self.retry_after = retry_after;
+        self
+    }
+    /// The busy error got from the window that listens, while it is recent enough to answer with.
+    fn recent_unanswered(&self) -> Option<String> {
+        self.unanswered.borrow().as_ref().filter(|(_, at)| at.elapsed() < self.retry_after).map(|(e, _)| e.clone())
+    }
+    /// The window when it answers, a session of its own when nothing listens, else why the window
+    /// that listens can't be driven now.
+    fn choose(&self) -> Result<Box<dyn Backend>, String> {
+        let mut r = Remote::lazy(&self.addr, false).with_hello_wait(self.hello_wait);
+        let chosen: Result<Box<dyn Backend>, String> = match r.open() {
+            Ok(()) => Ok(Box::new(r)),
+            Err((_, false)) => Ok(Box::new(Headless::default())),
+            Err((e, true)) => Err(e.to_string()),
+        };
+        *self.unanswered.borrow_mut() = chosen.as_ref().err().map(|e| (e.clone(), std::time::Instant::now()));
+        chosen
+    }
+    /// The backend, choosing it when not chosen yet; `None` while the window that listens doesn't answer.
+    fn chosen(&self) -> Option<std::cell::RefMut<'_, Box<dyn Backend>>> {
+        let mut slot = self.chosen.borrow_mut();
+        if slot.is_none() {
+            *slot = self.choose().ok();
+        }
+        std::cell::RefMut::filter_map(slot, Option::as_mut).ok()
+    }
+}
+
+impl Backend for Auto {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        if self.chosen.get_mut().is_none() {
+            if let Some(e) = self.recent_unanswered() {
+                return Err(e);
+            }
+            let b = self.choose()?;
+            *self.chosen.get_mut() = Some(b);
+        }
+        match self.chosen.get_mut() {
+            Some(b) => b.call(method, params),
+            None => Err("no CADaddy backend".into()),
+        }
+    }
+    fn idle(&mut self) -> Option<Duration> {
+        self.chosen.get_mut().as_mut().and_then(|b| b.idle())
+    }
+    /// A window that listens but doesn't answer yet offers the window's tools: it is the one driven.
+    fn has_ui(&self) -> bool {
+        if self.chosen.borrow().is_none() && self.unanswered.borrow().is_some() {
+            return true;
+        }
+        self.chosen().is_none_or(|b| b.has_ui())
+    }
+    fn describe(&self) -> String {
+        if self.chosen.borrow().is_none()
+            && let Some((e, _)) = self.unanswered.borrow().as_ref()
+        {
+            return format!("the CADaddy window at {} (not answering yet: {e})", self.addr);
+        }
+        match self.chosen() {
+            Some(b) if !b.has_ui() => format!("{} (nothing listens at {}; open CADaddy to drive its window)", b.describe(), self.addr),
+            Some(b) => b.describe(),
+            None => format!(
+                "the CADaddy window at {} (not answering yet: {})",
+                self.addr,
+                self.unanswered.borrow().as_ref().map_or("busy", |(e, _)| e.as_str())
+            ),
+        }
+    }
+    fn canceller(&self) -> Option<Box<dyn Fn() + Send>> {
+        match self.chosen.borrow().as_ref() {
+            Some(b) => b.canceller(),
+            // Not decided yet: a window at the address, if one turns out to be driven, is told too.
+            None => {
+                let addr = self.addr.clone();
+                Some(Box::new(move || cancel_remote(&addr)))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,47 +844,105 @@ mod tests {
             server.join().unwrap();
         }
     }
-}
 
-/// The open CADaddy window when one listens on [`cadaddy_engine::AGENT_PORT`], else an
-/// in-process session: decided the first time the server needs to know (listing its tools or
-/// its first call), so an app opened before the agent's first request is the one it drives.
-#[derive(Default)]
-pub struct Auto {
-    chosen: std::cell::RefCell<Option<Box<dyn Backend>>>,
-}
+    /// A stand-in window at a free port. `auth` is answered at once (the app's connection thread
+    /// does that); everything else waits while `frozen` is set (a window whose UI thread is stuck),
+    /// then is answered like a window: with `app_timeout`, after it, the app's own reply timeout,
+    /// else nothing until it thaws.
+    fn window(app_timeout: Option<Duration>) -> (String, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let frozen = std::sync::Arc::new(AtomicBool::new(true));
+        let f = frozen.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(conn) = conn else { return };
+                let f = f.clone();
+                std::thread::spawn(move || {
+                    let mut out = conn.try_clone().unwrap();
+                    for line in BufReader::new(conn).lines() {
+                        let Ok(req) = serde_json::from_str::<Value>(&line.unwrap_or_default()) else { return };
+                        let reply = match req["method"].as_str().unwrap_or("") {
+                            "auth" => json!({"ok": true, "result": {"authenticated": true}}),
+                            _ if f.load(Ordering::SeqCst) && app_timeout.is_some() => {
+                                std::thread::sleep(app_timeout.unwrap());
+                                json!({"ok": false, "error": "timeout", "state": "not-run"})
+                            }
+                            method => {
+                                while f.load(Ordering::SeqCst) {
+                                    std::thread::sleep(Duration::from_millis(10));
+                                }
+                                match method {
+                                    "ping" => {
+                                        json!({"ok": true, "result": {"version": env!("CARGO_PKG_VERSION"), "pid": 7, "title": "Stand-in window"}})
+                                    }
+                                    _ => json!({"ok": true, "result": {"window": true}}),
+                                }
+                            }
+                        };
+                        if writeln!(
+                            out,
+                            "{}",
+                            json!({"id": req["id"], "ok": reply["ok"], "result": reply["result"], "error": reply["error"], "state": reply["state"]})
+                        )
+                        .is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (addr, frozen)
+    }
 
-impl Auto {
-    fn choose() -> Box<dyn Backend> {
-        let addr = format!("127.0.0.1:{}", cadaddy_engine::AGENT_PORT);
-        match Remote::connect(&addr) {
-            Ok(mut r) => match r.call("ping", Value::Null) {
-                Ok(_) => Box::new(r),
-                Err(_) => Box::new(Headless::default()),
-            },
-            Err(_) => Box::new(Headless::default()),
-        }
+    /// The reported case: the window on the port runs something long and answers each request
+    /// with its own timeout. The server keeps driving that window: a busy error now, the window
+    /// once it answers, never a hidden session of its own.
+    #[test]
+    fn auto_drives_a_busy_window_instead_of_a_hidden_session() {
+        let (addr, frozen) = window(Some(Duration::from_millis(50)));
+        let mut auto = Auto::at(&addr).with_waits(Duration::from_secs(5), Duration::from_millis(300));
+        assert!(auto.has_ui(), "a window listens: its tools are offered");
+        let d = auto.describe();
+        assert!(d.contains("not answering yet") && d.contains(&addr) && !d.contains("headless"), "{d}");
+        let err = auto.call("drawing.inspect", json!({})).unwrap_err();
+        assert!(err.contains("is busy") && err.contains("Nothing was sent") && err.contains("timeout"), "{err}");
+        frozen.store(false, std::sync::atomic::Ordering::SeqCst);
+        // Asked again at once (the server's own follow-up calls): the same answer, without a wait.
+        assert_eq!(auto.call("drawing.inspect", json!({})), Err(err));
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(auto.call("drawing.inspect", json!({})), Ok(json!({"window": true})), "the choice is tried again at the next call");
+        assert!(auto.describe().contains("Stand-in window"), "{}", auto.describe());
     }
-}
 
-impl Backend for Auto {
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        self.chosen.get_mut().get_or_insert_with(Self::choose).call(method, params)
+    /// A window that doesn't answer at all is busy after the hello wait, not after minutes, and is
+    /// still the one driven.
+    #[test]
+    fn a_silent_window_is_busy_within_the_hello_wait() {
+        let (addr, frozen) = window(None);
+        let mut auto = Auto::at(&addr).with_waits(Duration::from_millis(300), Duration::ZERO);
+        let t = std::time::Instant::now();
+        let err = auto.call("engine.execute", json!({"command": "circle", "params": {}})).unwrap_err();
+        assert!(err.contains("did not answer within") && err.contains("never switches"), "{err}");
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+        assert!(auto.has_ui());
+        // A window given with --connect says the same.
+        let mut remote = Remote::lazy(&addr, false).with_hello_wait(Duration::from_millis(300));
+        assert!(remote.call("ping", Value::Null).unwrap_err().contains("is busy"));
+        frozen.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(auto.call("drawing.inspect", json!({})), Ok(json!({"window": true})));
     }
-    fn idle(&mut self) -> Option<Duration> {
-        self.chosen.get_mut().as_mut().and_then(|b| b.idle())
-    }
-    fn has_ui(&self) -> bool {
-        self.chosen.borrow_mut().get_or_insert_with(Self::choose).has_ui()
-    }
-    fn describe(&self) -> String {
-        self.chosen.borrow_mut().get_or_insert_with(Self::choose).describe()
-    }
-    fn canceller(&self) -> Option<Box<dyn Fn() + Send>> {
-        match self.chosen.borrow().as_ref() {
-            Some(b) => b.canceller(),
-            // Not decided yet: a window on the agent port, if one turns out to be driven, is told too.
-            None => Some(Box::new(|| cancel_remote(&format!("127.0.0.1:{}", cadaddy_engine::AGENT_PORT)))),
-        }
+
+    /// Only nothing listening gives the session of its own, and it says so.
+    #[test]
+    fn auto_runs_its_own_session_only_when_nothing_listens() {
+        let addr = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+        let mut auto = Auto::at(&addr);
+        assert!(!auto.has_ui());
+        let d = auto.describe();
+        assert!(d.starts_with("headless CADaddy session") && d.contains("nothing listens"), "{d}");
+        assert!(auto.call("drawing.inspect", json!({})).is_ok());
     }
 }
