@@ -5767,6 +5767,52 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                     sp.mep.runs.extend(mech.runs);
                 }
+                // The equipment the mechanical schedules list and a plan of a level tags (a roof's
+                // heat pumps and outdoor air unit, on their curbs and stands), not built yet (the
+                // typical rooms' units are by now): built where its plan tags it, put onto its
+                // level's plan by its sheet's registration as the rest of the sheet was (Q6313).
+                let mut found = scheduled_equipment(s, job, &sp)?;
+                let read_n = found.equipment.len();
+                let mut not_placeable: Vec<String> = Vec::new();
+                found.equipment.retain_mut(|e| match sim(e.min, &e.level) {
+                    Some(m) => {
+                        let (a, b) = (m.apply(e.min), m.apply(e.max));
+                        e.min = [a[0].min(b[0]), a[1].min(b[1])];
+                        e.max = [a[0].max(b[0]), a[1].max(b[1])];
+                        true
+                    }
+                    None => {
+                        not_placeable.push(format!("{} ({})", e.tag, e.sources.get("sheet").map_or("?", String::as_str)));
+                        false
+                    }
+                });
+                if read_n > 0 || !found.unplaced.is_empty() {
+                    progress_line(&format!(
+                        "  scheduled equipment the plans tag: {}; not placeable onto a plan (its sheet doesn't line up with one): {not_placeable:?}",
+                        found.report()
+                    ));
+                    if !found.unplaced.is_empty() {
+                        let tags: Vec<&str> = found.unplaced.iter().take(20).map(|(t, _)| t.as_str()).collect();
+                        job.add_finding(
+                            StageName::BimBuild,
+                            &format!("{} scheduled piece(s) of equipment no plan places", found.unplaced.len()),
+                            &format!(
+                                "the mechanical schedules list them but no mechanical plan of a level tags them, so they are not in the model: {}",
+                                tags.join(", ")
+                            ),
+                            2,
+                            vec!["Check the plans (a roof plan, an enlarged plan) for these tags".into()],
+                            None,
+                            false,
+                        );
+                    }
+                }
+                sp.mep.equipment.extend(found.equipment);
+                // Each roof unit's line set to the indoor unit its schedule row pairs it with.
+                let sets = super::schedequip::line_sets(&mut sp);
+                if sets > 0 {
+                    progress_line(&format!("  refrigerant line sets from the roof units to the units they serve: {sets}"));
+                }
                 // Nothing more than 5' outside its storey's shell: past it, it isn't in the
                 // building (site work, or a reading put in the wrong place). Out, and said.
                 let before_out = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
@@ -6136,6 +6182,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     progress_line(&format!("  devices booked to their unit by its plan's footprint (bath, entry): {booked}"));
                 }
                 connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
+                // A mark naming a unit a schedule row built (a roof heat pump's `HP` over `3`) is
+                // its connection: at that unit, on its level, never in the room under it (Q6313).
+                let followed = super::schedequip::follow_units(&sp.mep.equipment, &mut out);
+                if followed > 0 {
+                    progress_line(&format!("  equipment connections moved to the scheduled unit their mark names: {followed}"));
+                }
                 // One connection per piece of equipment: the electrical plan's and the mechanical
                 // plan's tags of one fan, both put at it, are one.
                 let doubled = one_connection_each(&mut stamped, &mut out, upf_dev);
@@ -12582,6 +12634,33 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
         }
     }
     out
+}
+
+/// The equipment the set's mechanical schedules list and its mechanical plans of the levels tag,
+/// not built yet ([`super::schedequip::read`]), on its sheets' places in the drawing.
+fn scheduled_equipment(s: &Session, job: &GuidedJob, sp: &cadaddy_walk3d::BuildingSpec) -> Result<super::schedequip::Read> {
+    let refs: Vec<super::printmep::SheetRef> =
+        job_sheet_refs(job).into_iter().filter(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds()).take(MAX_STAMP_SHEETS).collect();
+    if refs.is_empty() {
+        return Ok(super::schedequip::Read::default());
+    }
+    let schedules = non_plan_pages(job, "M");
+    if schedules.is_empty() {
+        return Ok(super::schedequip::Read::default());
+    }
+    let d = s.doc()?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let subs: Vec<(cadaddy_doc::Drawing, f64)> = refs
+        .iter()
+        .map(|r| {
+            let sub = super::printmep::sheet_drawing(d, r);
+            let su = super::printmep::paper_units_per_foot(&sub, r).unwrap_or(upf);
+            (sub, su)
+        })
+        .collect();
+    let plans: Vec<super::schedequip::PlanIn> =
+        refs.iter().zip(&subs).map(|(sheet, (drawing, su))| super::schedequip::PlanIn { sheet, drawing, sheet_upf: *su, upf }).collect();
+    Ok(super::schedequip::read(&schedules, &plans, &sp.mep.equipment, &sp.levels))
 }
 
 /// The devices read off a mechanical plan whose mark names its equipment (a fan's `EF`): that

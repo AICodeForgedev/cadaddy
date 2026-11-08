@@ -140,6 +140,56 @@
       "trade": "electrical",
       "fills": "branch conductors too small for their length (voltage drop over 3 percent)",
       "basis": "code and practice: branch circuit conductors are sized for at most 3 percent voltage drop (NEC 210.19(A) Informational Note 4), the drawings' length table first; the field pulls the next conductor size"
+    },
+    {
+      "id": "M-ROOF-CURB",
+      "trade": "mechanical",
+      "fills": "the roof curb a ducted rooftop unit (an outdoor air unit, a packaged rooftop unit, an air handler, an energy recovery unit, a roof exhaust fan) stands on where the schedule and plans give none (numbers: default_size_in, the curb's height above the roof; sizes: by the unit's kind or schedule words)",
+      "basis": "trade practice: a ducted rooftop unit is set on its manufacturer's roof curb (its supply and return or its plenum through the curb), flashed to the roof with the curb's top at least 8 in over the finished roof; the stock curb is 14 in high",
+      "default_size_in": 14.0,
+      "sizes": [
+        {
+          "words": [
+            "EXHAUST FAN",
+            "EXHAUST_FAN"
+          ],
+          "size_in": 12.0
+        }
+      ]
+    },
+    {
+      "id": "M-ROOF-STAND",
+      "trade": "mechanical",
+      "fills": "the stand or rails a rooftop unit with no duct through the roof (a heat pump's or condensing unit's outdoor section, a split system's) sits on where the schedule and plans give none (sizes: the kinds set on a stand and its height; a kind no row names goes on a curb, M-ROOF-CURB)",
+      "basis": "trade practice: an outdoor heat pump or condensing unit on a roof is set on an equipment stand or rails off the roof membrane, high enough for the roof to be worked under it and clear of snow and ponding; 18 in is the usual stand",
+      "default_size_in": 18.0,
+      "sizes": [
+        {
+          "words": [
+            "HEAT PUMP",
+            "HEAT_PUMP",
+            "CONDENSING",
+            "CONDENSER",
+            "SPLIT",
+            "CONDENSING_UNIT",
+            "SPLIT_SYSTEM"
+          ],
+          "size_in": 18.0
+        }
+      ]
+    },
+    {
+      "id": "M-REFRIG-LINESET",
+      "trade": "mechanical",
+      "fills": "the refrigerant line set between a split system's outdoor unit and the indoor unit its schedule row pairs it with, where no plan draws its route (numbers: default_size_in, the suction line's size)",
+      "basis": "trade practice: the outdoor unit's suction and liquid lines run to the indoor unit its schedule pairs it with, laid over the roof to above that unit, then down to it; where the plans' notes give a route (a chase, a sleeve) that route governs and this one is for review",
+      "default_size_in": 0.875
+    },
+    {
+      "id": "E-CONN-AT-UNIT",
+      "trade": "electrical",
+      "fills": "where an equipment connection goes when its plan's mark names a piece of equipment built on another level or elsewhere (a roof unit's circuit tagged on a plan under it)",
+      "basis": "trade practice: an equipment connection is made at its equipment (its disconnect or junction box on the unit, at the unit's side half way up); a mark naming the unit follows the unit, never the room under it"
     }
   ]
 }

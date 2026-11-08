@@ -589,12 +589,20 @@ fn is_tag_column(n: &str) -> bool {
 pub fn kind_from_title(title: &str) -> Option<&'static str> {
     let t = title.to_ascii_uppercase();
     let has = |w: &str| t.contains(w);
-    if has("AIR DEVICE") || has("DIFFUSER") || has("GRILLE") || has("FIXTURE") || has("SHEET INDEX") || has("LIGHT") || has("DOOR") || has("WINDOW") {
+    // A whole word (or its plural): `DOOR SCHEDULE`, never the `DOOR` of `OUTDOOR AIR UNIT`.
+    let words: Vec<&str> = t.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let word = |w: &str| words.iter().any(|x| *x == w || x.strip_suffix('S') == Some(w));
+    if has("AIR DEVICE") || has("DIFFUSER") || has("GRILLE") || has("FIXTURE") || has("SHEET INDEX") || has("LIGHT") || word("DOOR") || word("WINDOW") {
         return Some("");
     }
     // Electrical gear, its lugs and feeders: the gear reader's (`crate::gear_reader`).
     if has("ELECTRICAL") || has("LUG") || has("FEEDER") || has("PANEL") || has("SWITCHBOARD") {
         return Some("");
+    }
+    // The schedule titles the rules data names (`HEAT PUMP` before `PUMP`, `FAN COIL` before
+    // `FAN`, `PACKAGED TERMINAL` before `PACKAGED`): the first pair whose words the title has.
+    if let Some((_, kind)) = crate::wordrules::pairs("equipment.kind_by_title_words").iter().find(|(w, _)| has(w)) {
+        return Some(*kind);
     }
     Some(if has("ROOFTOP") || has("RTU") || has("PACKAGED") {
         "rtu"
@@ -735,10 +743,15 @@ pub fn scheduled(tables: &[Table]) -> Vec<Scheduled> {
 // ---- Rules -----------------------------------------------------------------------------------------
 
 /// A kind's usual footprint (feet) and height when the schedule prints no size.
-fn rule_size(kind: &str) -> [f64; 3] {
+pub fn rule_size(kind: &str) -> [f64; 3] {
     match kind {
         "ahu" => [8.0, 5.0, 5.0],
         "rtu" => [10.0, 6.0, 4.5],
+        "outdoor_air_unit" | "energy_recovery_unit" => [8.0, 6.0, 4.5],
+        "heat_pump" | "split_system" => [3.0, 3.0, 3.0],
+        "fan_coil_unit" => [4.0, 2.0, 1.5],
+        "unit_heater" => [2.0, 1.5, 1.5],
+        "ptac" => [3.5, 1.25, 1.33],
         "vav" => [2.5, 1.5, 1.25],
         "exhaust_fan" | "fan" => [2.0, 2.0, 2.5],
         "pump" => [1.0, 0.5, 0.5],
@@ -750,7 +763,7 @@ fn rule_size(kind: &str) -> [f64; 3] {
 }
 
 /// Whether a kind hangs in its run (centred on it) rather than standing on the floor.
-fn hangs(s: &Scheduled) -> bool {
+pub fn hangs(s: &Scheduled) -> bool {
     let ty = s.properties.iter().find(|(k, _)| k.trim().eq_ignore_ascii_case("TYPE")).map(|(_, t)| t.to_ascii_uppercase()).unwrap_or_default();
     match s.kind.as_str() {
         "vav" => true,

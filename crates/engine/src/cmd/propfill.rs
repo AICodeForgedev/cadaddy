@@ -1548,7 +1548,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let highest = if documented_height && storey_in.is_finite() { storey_in.max(WALL_BOX_FT * 12.0 + 12.0) } else { WALL_BOX_FT * 12.0 + 12.0 };
         // (A box its keynote puts low in the wall under a unit is still in the wall.)
         let low_in_wall = documented_height && field(t, "placement").is_some();
-        let on_wall = wall_kind && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
+        // A connection set at its unit (a roof unit's: `connection to HP-7 at the unit`) is on
+        // the unit, in no wall.
+        let at_unit = field(t, "mount_height_note").is_some_and(|n| n.starts_with("connection to") && n.contains("at the unit"));
+        let on_wall = wall_kind && !at_unit && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);

@@ -90,6 +90,7 @@ pub mod propfill;
 pub mod propuse;
 mod rasterout;
 pub mod rfi;
+pub mod schedequip;
 pub mod schedules;
 pub mod scope;
 mod setbylayer;
