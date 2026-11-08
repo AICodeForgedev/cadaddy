@@ -714,7 +714,7 @@ const FRAME_RULE_SHARE: f64 = 0.25;
 
 /// Each sheet's frame ([`cadaddy_mepfix::sheet_facts::sheet_frame`]): its long straight lines
 /// (one pass over the drawing), then its border and title block.
-fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mepfix::sheet_facts::SheetFrame> {
+pub(crate) fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mepfix::sheet_facts::SheetFrame> {
     use cadaddy_doc::EntityKind;
     use cadaddy_geom::Vec2;
     let shortest =
@@ -4414,7 +4414,10 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     };
 
     // ── Secondary: schedules.read for device marks in schedule tables ──
-    match s.execute("schedules.read", &json!({})) {
+    // Each sheet's frame goes with it: its title block and border are never schedule rows.
+    let frames: Vec<Value> = job.sheet_regions.iter().map(|r| json!({"rect": r.rect, "area": r.area, "title_block": r.title_block})).collect();
+    let params = if frames.is_empty() { json!({}) } else { json!({"sheets": frames}) };
+    match s.execute("schedules.read", &params) {
         Ok(v) => {
             if let Some(items) = v.get("items").and_then(Value::as_array) {
                 total_items += items.len();
