@@ -775,12 +775,12 @@ const TITLE_STRIP_TEXTS: usize = 3;
 /// The most texts of one wording compared place by place.
 const MAX_REPEATED_TEXTS: usize = 4_000;
 
-/// The title block of a sheet that rules none (no border, no strip drawn from edge to edge): the
+/// The title block of a sheet that rules none (no strip drawn from edge to edge): the
 /// strip along its right (else bottom) edge where the texts every sheet of the set prints at the
 /// same place stand (the project's name and address, the firm, the stamp). Nothing there is
 /// building: without it, a stamp's name was read as a room and its boxes as walls.
 fn title_blocks_by_repeated_text(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]], frames: &mut [cadaddy_mepfix::sheet_facts::SheetFrame]) {
-    if rects.len() < REPEATED_TEXT_SHEETS || frames.iter().all(|f| f.title_block.is_some() || f.border) {
+    if rects.len() < REPEATED_TEXT_SHEETS || frames.iter().all(|f| f.title_block.is_some()) {
         return;
     }
     let norm = |r: &[f64; 4]| (r[0].min(r[2]), r[1].min(r[3]), (r[2] - r[0]).abs(), (r[3] - r[1]).abs());
@@ -825,9 +825,8 @@ fn title_blocks_by_repeated_text(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]], f
         }
     }
     for (i, f) in frames.iter_mut().enumerate() {
-        // (A ruled sheet's frame is read from its rules; a typical floor's plan, the same on every
-        // floor's sheets, repeats its labels at one place too.)
-        let (Some(r), None, false) = (rects.get(i), f.title_block, f.border) else { continue };
+        // (A sheet whose title block was found by its rules keeps it.)
+        let (Some(r), None) = (rects.get(i), f.title_block) else { continue };
         let (x0, y0, w, h) = norm(r);
         let pad = 0.005 * w.min(h);
         let (xs, tops) = (right.get(i).map_or(&[][..], Vec::as_slice), bottom.get(i).map_or(&[][..], Vec::as_slice));
@@ -21435,6 +21434,9 @@ fn legend_designations(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<St
 const MAX_LEGEND_TEXTS: usize = 5_000;
 /// Most electrical sheets read again for a legend the job's drawing doesn't hold.
 const MAX_LEGEND_SHEETS: usize = 6;
+/// Most of a discipline's sheets (not its plans) read again from their files for their
+/// schedules, diagrams and legends.
+const MAX_PAGES_READ_AGAIN: usize = 12;
 
 /// The mounting heights the notes of the set's sheets that aren't plans list (`9. WIRING
 /// DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-4" CENTERLINE`, an accessibility sheet's `WATER
@@ -21474,8 +21476,8 @@ fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc
 }
 
 /// The pages of the set's numbered sheets that `want` picks by their number, discipline, type
-/// (lower case) and title, each read again from its file, in sheet order, at most
-/// [`MAX_LEGEND_SHEETS`].
+/// (lower case) and title, each read again from its file, schedules first then in sheet order,
+/// at most [`MAX_PAGES_READ_AGAIN`].
 fn pages_where(job: &GuidedJob, want: &dyn Fn(&str, &str, &str, &str) -> bool) -> Vec<(String, cadaddy_doc::Drawing)> {
     let mut out = Vec::new();
     let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
@@ -21495,9 +21497,21 @@ fn pages_where(job: &GuidedJob, want: &dyn Fn(&str, &str, &str, &str) -> bool) -
             (want(&number, &text("discipline"), &kind, title) && cadaddy_mepfix::sheet_facts::is_sheet_number(&number)).then_some((number, c))
         })
         .collect();
-    sheets.sort_by(|a, b| a.0.cmp(&b.0));
+    // The schedules first, the details, sections and elevations last (a set's E sheets numbered
+    // details before schedules: its panel schedules were past the cap), then in sheet order.
+    let rank = |c: &Value| {
+        let kind = c.get("type").or_else(|| c.get("sheet_type")).and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+        if kind.contains("schedule") {
+            0
+        } else if ["detail", "section", "elevation"].iter().any(|k| kind.contains(k)) {
+            2
+        } else {
+            1
+        }
+    };
+    sheets.sort_by(|a, b| rank(a.1).cmp(&rank(b.1)).then_with(|| a.0.cmp(&b.0)));
     let mut missed: Vec<String> = Vec::new();
-    for (number, c) in sheets.into_iter().take(MAX_LEGEND_SHEETS) {
+    for (number, c) in sheets.into_iter().take(MAX_PAGES_READ_AGAIN) {
         // Its current copy's file and page (`printset.sheets`).
         if c.get("file").and_then(Value::as_str).is_none() || c.get("page").and_then(Value::as_u64).is_none() {
             continue;
@@ -32322,14 +32336,17 @@ mod tests {
 
     #[test]
     fn an_unruled_sheets_title_block_is_where_every_sheet_prints_the_same_words() {
-        // Four sheets 1000 x 600 side by side, no border, no rules: each prints the project's
-        // name, address and stamp down its right edge, and its own plan with its own rooms; the
-        // last also a note at the same place on only one other sheet.
+        // Four sheets 1000 x 600 side by side, no title-block rule (two with a border, two
+        // without): each prints the project's name, address and stamp down its right edge, and
+        // its own plan with its own rooms; the last two also a note at the same place.
         let mut s = crate::Session::new();
         let rects: Vec<[f64; 4]> = (0..4).map(|i| [f64::from(i) * 1200.0, 0.0, f64::from(i) * 1200.0 + 1000.0, 600.0]).collect();
         for (i, r) in rects.iter().enumerate() {
             let x0 = r[0];
             rect(&mut s, x0 + 100.0, 100.0, x0 + 700.0, 500.0);
+            if i % 2 == 0 {
+                rect(&mut s, x0 + 10.0, 10.0, x0 + 990.0, 590.0);
+            }
             let mut texts = vec![
                 ("SAMPLE INN".to_string(), 900.0, 500.0),
                 ("12 MAIN ST".to_string(), 900.0, 450.0),
@@ -32346,6 +32363,7 @@ mod tests {
             }
         }
         let frames = sheet_frames(s.doc().unwrap(), &rects);
+        assert_eq!(frames.iter().map(|f| f.border).collect::<Vec<_>>(), [true, false, true, false]);
         for (f, r) in frames.iter().zip(&rects) {
             let tb = f.title_block.expect("title block found");
             // The strip starts just left of the repeated texts; the plan stays whole.
