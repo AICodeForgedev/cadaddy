@@ -75,4 +75,12 @@ fn a_sheet_of_two_floor_plans_takes_off_by_level() {
         assert!(on.iter().filter(|l| elements(l) > 0).count() >= 2, "{level}: {on:?}");
     }
     assert!(lines(&t).iter().filter(|l| elements(l) > 0).count() >= 4, "{t}");
+    // The walls' board is each level's own (Q6271: not the whole job's on the first level): the
+    // two like floors take off the same, with their own walls.
+    let board = |level: &str| -> (f64, u64) {
+        let b: Vec<&Value> = lines(&t).iter().filter(|l| l["level"] == level && l["category"] == "drywall" && l["unit"] == "sq ft").collect();
+        (b.iter().filter_map(|l| l["qty"].as_f64()).sum(), b.iter().map(|l| elements(l)).sum())
+    };
+    let (three, four) = (board("Level 3"), board("Level 4"));
+    assert!(three.0 > 0.0 && (three.0 - four.0).abs() < 0.01 && three.1 > 0 && four.1 > 0, "{three:?} {four:?}: {t}");
 }
