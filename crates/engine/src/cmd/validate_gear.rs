@@ -630,7 +630,8 @@ pub(crate) struct ClearFace {
     pub wall: cadaddy_doc::Handle,
     /// How far from where it was read, inches.
     pub moved_in: f64,
-    pub was_clear_in: f64,
+    /// Its clear depth where it was read; `None` when it stood on no wall there.
+    pub was_clear_in: Option<f64>,
     pub now_clear_in: f64,
 }
 
@@ -668,9 +669,11 @@ fn piece_obstacle(handle: cadaddy_doc::Handle, poly: &[Vec2], z: [f64; 2], floor
     })
 }
 
-/// A panel whose place (lettering, a proposal: not a located symbol) leaves it no working space:
-/// the wall face near where it was read, in its own room, that has it. Nearest first, sound over
-/// unsure; `None` when its own place doesn't fail or no other face does better. Plan coordinates
+/// A panel whose place (lettering, a proposal: not a located symbol) leaves it no working space,
+/// or stands it on no wall (a panelboard hangs on one; no wall within the build's reach of where
+/// it was read): the wall face near where it was read, in its own room, that has its working
+/// space. Nearest first, sound over unsure; `None` when its own place is on a wall and doesn't
+/// fail, or no face does better. Plan coordinates
 /// (drawing units): the walls' pieces where the plans draw them, `others` and `doors` in feet.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn clear_face(
@@ -721,12 +724,19 @@ pub(crate) fn clear_face(
     };
     // Its place now: as the build would put it.
     let own: Vec<super::propfill::WallPiece> = here.iter().map(|p| (*p).clone()).collect();
-    let now = super::propfill::wall_face(&own, &e.level, read_at, reach, Some(z_mid))?;
-    let (_, here_box) = box_on(now.at, now.along, now.out);
-    let was = space(&here_box);
-    if was.verdict != "fail" {
-        return None;
-    }
+    // On no wall: any face of its room within the working space's reach (the room keeps it home).
+    let (was, face_reach) = match super::propfill::wall_face(&own, &e.level, read_at, reach, Some(z_mid)) {
+        Some(now) => {
+            let (_, here_box) = box_on(now.at, now.along, now.out);
+            let was = space(&here_box);
+            if was.verdict != "fail" {
+                return None;
+            }
+            (Some(was.clear_in), reach)
+        }
+        None if room.is_some() => (None, REACH_FT * upf),
+        None => return None,
+    };
     let mut best: Option<(u8, f64, ClearFace)> = None;
     for (_, h, poly, z) in &here {
         if !(z[0] <= z_mid && z_mid <= z[1]) && z[0].is_finite() {
@@ -760,7 +770,7 @@ pub(crate) fn clear_face(
             let out = if ccw { Vec2::new(u.y, -u.x) } else { Vec2::new(-u.y, u.x) };
             let t0 = (read_at - *a).x * u.x + (read_at - *a).y * u.y;
             let foot = *a + u * t0.clamp(0.0, len);
-            if foot.dist(read_at) > reach {
+            if foot.dist(read_at) > face_reach {
                 continue;
             }
             for k in -FACE_STEPS..=FACE_STEPS {
@@ -807,7 +817,7 @@ pub(crate) fn clear_face(
                             max: [g.x, g.y],
                             wall: *h,
                             moved_in: moved / inch,
-                            was_clear_in: was.clear_in,
+                            was_clear_in: was,
                             now_clear_in: ws.clear_in,
                         },
                     ));
@@ -2205,7 +2215,27 @@ mod tests {
         let f = clear_face(&e, &walls, &[], &[], None, 0.0, &need(true), 12.0).expect("the east face is clear");
         assert_eq!(f.wall, cadaddy_doc::Handle(1), "{f:?}");
         assert!((f.max[0] - 104.2).abs() < 1e-6 && (f.min[0] - 100.2).abs() < 1e-6, "flush with the east face: {f:?}");
-        assert!(f.was_clear_in < 36.0 && f.now_clear_in >= 36.0, "{f:?}");
+        assert!(f.was_clear_in.is_some_and(|c| c < 36.0) && f.now_clear_in >= 36.0, "{f:?}");
+    }
+
+    #[test]
+    fn a_panel_read_on_no_wall_hangs_on_its_rooms_nearest_wall() {
+        // A 20' x 25' room; the panel's lettering 40 in off its east wall, past the build's reach
+        // of a wall: on the east wall's face, in its room. With no room known it stays.
+        let walls = [
+            piece(1, [-6.0, 0.0], [0.0, 300.0]),
+            piece(2, [240.0, 0.0], [246.0, 300.0]),
+            piece(3, [0.0, -6.0], [240.0, 0.0]),
+            piece(4, [0.0, 300.0], [240.0, 306.0]),
+        ];
+        let e = lettered([190.0, 147.0], [210.0, 153.0]);
+        let room = [Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), Vec2::new(240.0, 300.0), Vec2::new(0.0, 300.0)];
+        let f = clear_face(&e, &walls, &[], &[], Some(&room), 0.0, &need(false), 12.0).expect("onto a wall");
+        assert_eq!(f.wall, cadaddy_doc::Handle(2), "{f:?}");
+        assert!((f.max[0] - 240.0).abs() < 1e-6 && (f.min[0] - 234.0).abs() < 1e-6, "on the east wall's face: {f:?}");
+        assert!(f.min[1] < 150.0 && f.max[1] > 150.0, "level with where it was read: {f:?}");
+        assert!(f.was_clear_in.is_none() && f.now_clear_in >= 36.0, "{f:?}");
+        assert_eq!(clear_face(&e, &walls, &[], &[], None, 0.0, &need(false), 12.0), None);
     }
 
     #[test]

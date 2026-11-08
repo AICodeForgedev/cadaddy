@@ -686,15 +686,16 @@ pub(crate) fn onto_clear_face(e: &mut cadaddy_walk3d::MepEquipment, f: &super::v
     let was = e.properties.get("DESIGN_VALUE").cloned().unwrap_or_else(|| "at its lettering on the plan".to_string());
     e.min = f.min;
     e.max = f.max;
-    e.properties.insert("DESIGN_VALUE".into(), format!("{was}: {:.0} in clear in front", f.was_clear_in));
+    let (design, reason) = match f.was_clear_in {
+        Some(c) => (format!("{was}: {c:.0} in clear in front"), "no working space where it was read (NEC 110.26(A))"),
+        None => (format!("{was}: on no wall"), "it stood on no wall where it was read (a panelboard hangs on one)"),
+    };
+    e.properties.insert("DESIGN_VALUE".into(), design);
     e.properties.insert(
         "CORRECTED_VALUE".into(),
         format!("{:.0} in from there on wall {}: {:.0} in clear in front", f.moved_in, f.wall.hex(), f.now_clear_in),
     );
-    e.properties.insert(
-        "CORRECTION_REASON".into(),
-        "no working space where it was read (NEC 110.26(A)); that place is lettering or a proposal, not a located symbol".into(),
-    );
+    e.properties.insert("CORRECTION_REASON".into(), format!("{reason}; that place is lettering or a proposal, not a located symbol"));
     e.sources.insert("footprint".into(), "rule: the nearest wall face in its room with its working space".into());
     true
 }
