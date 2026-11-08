@@ -1407,6 +1407,35 @@ fn number_spots(picks: &[(String, [f64; 2], f64)]) -> Vec<([f64; 2], f64)> {
         .collect()
 }
 
+/// Different numbers that start with one series of letters, at least, for the letters to be the
+/// set's own designator (a set numbering one discipline's sheets `AJ101`, `AJ102` ...).
+const SERIES_MIN_PAGES: usize = 5;
+
+/// The set's own series: letters ([`sheet_facts::discipline_of`]) that start
+/// [`SERIES_MIN_PAGES`] different numbers or more among the pages' number-like lettering, one or
+/// two letters whose first is a discipline (rule data `sheets.discipline_prefix`). A mark that
+/// repeats page to page is one number, not a series; and where a series sits still has to agree
+/// page to page before it gives the set a number spot ([`number_spots`]).
+fn set_series(numbers: impl Iterator<Item = String>) -> std::collections::BTreeSet<String> {
+    let mut by_letters: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    for n in numbers.take(MAX_SHEETS * 64) {
+        let n = n.trim().to_ascii_uppercase();
+        let letters = sheet_facts::discipline_of(&n);
+        if (1..=2).contains(&letters.len()) {
+            by_letters.entry(letters).or_default().insert(n);
+        }
+    }
+    let known = crate::wordrules::pairs("sheets.discipline_prefix");
+    by_letters
+        .into_iter()
+        .filter(|(letters, numbers)| {
+            let first: String = letters.chars().take(1).collect();
+            numbers.len() >= SERIES_MIN_PAGES && known.iter().any(|(p, _)| *p == first)
+        })
+        .map(|(letters, _)| letters)
+        .collect()
+}
+
 /// Each page's number as the set prints it. A page's own reading can take a tag in the drawing
 /// area (an equipment or schedule mark that reads like a sheet number) when its title block's
 /// number has no label or doesn't stand out. The set shows where its numbers are: where most pages'
@@ -1416,17 +1445,64 @@ fn number_spots(picks: &[(String, [f64; 2], f64)]) -> Vec<([f64; 2], f64)> {
 fn set_numbers(pages: &mut [ClassifyPage]) {
     let at_of =
         |r: &ReadPage, n: &str| r.candidates.iter().filter(|c| c.value == n.trim()).max_by(|a, b| a.size.total_cmp(&b.size)).map(|c| (c.at, c.size));
+    let near = |at: [f64; 2], c: [f64; 2]| (at[0] - c[0]).abs() <= SPOT_RADIUS && (at[1] - c[1]).abs() <= SPOT_RADIUS;
+    // The set's own series (letters its numbers start with that the designator list doesn't
+    // name: `AJ101`, `AJ102` ... one discipline's sheets) count as a designator in it, and
+    // where the series prints its numbers is a spot of the set's.
+    let series = set_series(
+        pages
+            .iter()
+            .filter_map(|p| match p {
+                ClassifyPage::Read(r) => Some(r.candidates.iter().map(|c| c.value.clone())),
+                ClassifyPage::Kept(_) => None,
+            })
+            .flatten(),
+    );
+    let in_series = |n: &str| series.contains(&sheet_facts::discipline_of(n));
+    let designated = |n: &str| sheet_facts::designator_prefix(n) || in_series(n);
+    let largest_in_series = |r: &ReadPage| r.candidates.iter().filter(|c| in_series(&c.value)).max_by(|a, b| a.size.total_cmp(&b.size)).cloned();
+    let series_picks: Vec<(String, [f64; 2], f64)> = pages
+        .iter()
+        .filter_map(|p| match p {
+            ClassifyPage::Read(r) => largest_in_series(r).map(|c| (c.value, c.at, c.size)),
+            ClassifyPage::Kept(_) => None,
+        })
+        .collect();
+    let series_spots = number_spots(&series_picks);
+    // A page whose own reading is weak (no labelled title block: the largest number-like
+    // lettering) takes the series' number at the series' spot when it is as large.
+    for p in pages.iter_mut() {
+        let ClassifyPage::Read(r) = p else { continue };
+        let own = page_number(r);
+        if own.as_ref().is_some_and(|(n, strength)| *strength >= 2 || in_series(n)) {
+            continue;
+        }
+        let own_size = own.as_ref().and_then(|(n, _)| at_of(r, n)).map_or(0.0, |(_, size)| size);
+        let Some(c) = r
+            .candidates
+            .iter()
+            .filter(|c| in_series(&c.value) && c.size >= 0.9 * own_size && series_spots.iter().any(|(s, _)| near(c.at, *s)))
+            .max_by(|a, b| a.size.total_cmp(&b.size))
+            .cloned()
+        else {
+            continue;
+        };
+        r.note = match &own {
+            Some((was, _)) => format!("sheet number {} read at the set's sheet-number spot, not {was} (lettering elsewhere on the sheet)", c.value),
+            None => format!("sheet number {} read at the set's sheet-number spot", c.value),
+        };
+        let title = r.facts.ident.as_ref().map(|id| id.title.clone()).unwrap_or_default();
+        r.facts.ident =
+            Some(sheet_facts::SheetIdent { discipline: sheet_facts::discipline_of(&c.value), number: c.value, title, source: "set_position".into() });
+    }
     let picks: Vec<(String, [f64; 2], f64)> = pages
         .iter()
         .filter_map(|p| match p {
-            ClassifyPage::Read(r) => {
-                page_number(r).filter(|(n, _)| sheet_facts::designator_prefix(n)).and_then(|(n, _)| at_of(r, &n).map(|(at, size)| (n, at, size)))
-            }
+            ClassifyPage::Read(r) => page_number(r).filter(|(n, _)| designated(n)).and_then(|(n, _)| at_of(r, &n).map(|(at, size)| (n, at, size))),
             ClassifyPage::Kept(_) => None,
         })
         .collect();
     let spots = number_spots(&picks);
-    let near = |at: [f64; 2], c: [f64; 2]| (at[0] - c[0]).abs() <= SPOT_RADIUS && (at[1] - c[1]).abs() <= SPOT_RADIUS;
     for p in pages.iter_mut() {
         let ClassifyPage::Read(r) = p else { continue };
         let pick = page_number(r);
@@ -1443,7 +1519,7 @@ fn set_numbers(pages: &mut [ClassifyPage]) {
             })
             .max_by(|a, b| a.0.size.total_cmp(&b.0.size).then(b.1.total_cmp(&a.1)))
             .map(|(c, _)| c.value.clone());
-        let pick_ok = pick.as_ref().is_some_and(|(n, strength)| *strength >= 2 && sheet_facts::designator_prefix(n));
+        let pick_ok = pick.as_ref().is_some_and(|(n, strength)| *strength >= 2 && designated(n));
         match (at_spot, pick) {
             (Some(n), pick) if !pick_ok => {
                 let title = r.facts.ident.as_ref().map(|id| id.title.clone()).unwrap_or_default();
@@ -1457,7 +1533,7 @@ fn set_numbers(pages: &mut [ClassifyPage]) {
                 r.facts.ident =
                     Some(sheet_facts::SheetIdent { discipline: sheet_facts::discipline_of(&n), number: n, title, source: "set_position".into() });
             }
-            (None, Some((was, strength))) if strength < 2 && !sheet_facts::designator_prefix(&was) => {
+            (None, Some((was, strength))) if strength < 2 && !designated(&was) => {
                 r.note = format!("no sheet number found: {was} names no discipline and is not where the set prints its numbers (a tag on the sheet)");
                 r.facts.ident = None;
                 for rec in &mut r.recs {
@@ -2838,7 +2914,20 @@ impl PrintSetProject {
 
 #[cfg(test)]
 mod classify_tests {
-    use super::{SheetEntry, canonical_discipline, classify_sheet_type, level_by_number};
+    use super::{SheetEntry, canonical_discipline, classify_sheet_type, level_by_number, set_series};
+
+    #[test]
+    fn a_series_is_five_numbers_of_a_disciplines_letters() {
+        let s = |v: &[&str]| set_series(v.iter().map(|x| x.to_string())).into_iter().collect::<Vec<_>>();
+        assert_eq!(s(&["AJ101", "AJ102", "AJ103", "AJ104.1", "aj104.2", "M-101"]), ["AJ"]);
+        // a mark repeated page to page is one number; four numbers are no series
+        assert!(s(&["L9", "L9", "L9", "L9", "L9", "L9"]).is_empty());
+        assert!(s(&["AJ101", "AJ102", "AJ103", "AJ104"]).is_empty());
+        // letters naming no discipline, or three of them, make no series
+        assert!(s(&["XQ1", "XQ2", "XQ3", "XQ4", "XQ5"]).is_empty());
+        assert!(s(&["RTU1", "RTU2", "RTU3", "RTU4", "RTU5"]).is_empty());
+        assert!(s(&[]).is_empty());
+    }
 
     #[test]
     fn a_designator_with_a_modifier_is_its_discipline() {

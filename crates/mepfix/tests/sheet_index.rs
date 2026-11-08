@@ -530,6 +530,47 @@ fn a_combined_sets_numbers_come_from_its_title_block_never_a_tag_in_the_drawing(
     }
 }
 
+/// A set numbering one discipline's sheets in a series of its own (two letters the designator
+/// list doesn't name, the first a discipline's), printed at another spot of another title block
+/// than the trades' numbers. Each of those pages keeps its own number, never a number-like text
+/// that happens to stand where the trades print theirs, and the series is its discipline.
+#[test]
+fn a_sets_own_series_keeps_its_numbers_at_its_own_spot() {
+    let (w, h) = (3000.0, 2000.0);
+    let mut pages: Vec<(&str, u32, Drawing)> = Vec::new();
+    let trades = [
+        ("M-101", "FIRST FLOOR HVAC PLAN"),
+        ("M-102", "SECOND FLOOR HVAC PLAN"),
+        ("E-101", "FIRST FLOOR POWER PLAN"),
+        ("E-102", "SECOND FLOOR POWER PLAN"),
+        ("P-101", "FIRST FLOOR PLUMBING PLAN"),
+    ];
+    for (i, (n, t)) in trades.iter().enumerate() {
+        let page = u32::try_from(i + 1).expect("page");
+        pages.push(("Combined Set.pdf", page, combined_page(Strip::Right, w, h, Some(n), t, page, &[])));
+    }
+    let series = ["AJ101", "AJ102", "AJ103", "AJ104", "AJ104.1", "AJ104.2"];
+    for (i, n) in series.iter().enumerate() {
+        let page = u32::try_from(trades.len() + i + 1).expect("page");
+        let title = format!("UNIT {} FLOOR PLAN", i + 1);
+        let mut d = combined_page(Strip::Bottom, w, h, None, &title, page, &[]);
+        // its own number, in its own title block's corner
+        text(&mut d, n, 0.75 * w, 0.03 * h, 0.012 * h);
+        // and a number-like mark where the trades' title blocks print theirs
+        text(&mut d, "L9", 0.93 * w, 0.04 * h, 0.012 * h);
+        pages.push(("Combined Set.pdf", page, d));
+    }
+    let project = classify(pages);
+    let index = printset::sheet_index(&project);
+    let numbers: Vec<&str> = index.sheets.iter().map(|s| s.number.as_str()).collect();
+    for n in trades.iter().map(|(n, _)| *n).chain(series) {
+        assert!(numbers.contains(&n), "{n} missing: {numbers:?}");
+    }
+    assert!(!numbers.iter().any(|n| n.starts_with("L9")), "a stray mark named a sheet: {numbers:?}");
+    let disc = |n: &str| index.sheets.iter().find(|s| s.number == n).map(|s| s.discipline.clone()).expect(n);
+    assert_eq!(disc("AJ104.1"), "A");
+}
+
 /// A labelled title block (`DRAWING TITLE`, the number below) on a page with more notes.
 fn labelled(number: &str, title: &[&str], notes: &[&str]) -> Drawing {
     let mut d = sheet(number, title, "10/01/2026");
