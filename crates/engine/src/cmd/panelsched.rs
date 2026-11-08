@@ -79,6 +79,8 @@ fn letters(v: &str) -> bool {
 #[derive(Clone, Debug)]
 struct Side {
     num: f64,
+    /// Where the number column's header ends (the right side's codes are past it).
+    num_end: f64,
     amps: Option<f64>,
     poles: Option<f64>,
     /// Its wire size and load (VA) columns.
@@ -208,8 +210,9 @@ fn totals_of(flat: &[&TextItem], y0: f64, y1: f64, x0: f64, x1: f64, row_h: f64,
     out
 }
 
-/// A character's width in its text's height (a header's capitals), to place a header's words.
-const HEADER_CHAR_WIDTH: f64 = 0.65;
+/// A character's advance in its text's height (the height a print's text is read with is its
+/// capitals'), to place a header's words.
+const HEADER_CHAR_WIDTH: f64 = 0.9;
 /// The most texts split into their words (hostile files).
 const MAX_HEADER_SPLITS: usize = 5_000;
 
@@ -346,6 +349,10 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
         let poles = [named("P"), named("POLE"), named("POLES")].concat();
         let lnum = near_num(l.at.x);
         let rnum = near_num(r.at.x);
+        // The right side's number column ends where its header does (its numbers are printed
+        // under the header, not at its left edge): a `#` one character, else the CKT text.
+        let rnum_end =
+            rnum + if (rnum - r.at.x).abs() > f64::EPSILON { 1 } else { r.value.trim().chars().count().max(1) } as f64 * HEADER_CHAR_WIDTH * row_h;
         let first_after = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v > x && *v < limit).min_by(f64::total_cmp);
         let last_before = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v < x && *v > limit).max_by(f64::total_cmp);
         let mid = if two { (lnum + rnum) / 2.0 } else { f64::INFINITY };
@@ -358,6 +365,7 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
         let lload = first_after(&loads, lwire.unwrap_or(lnum), mid);
         let mut sides = vec![Side {
             num: lnum,
+            num_end: lnum,
             amps: lamps,
             poles: lpoles,
             wire: lwire,
@@ -371,6 +379,7 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
             let rwire = last_before(&sizes, rnum, mid);
             sides.push(Side {
                 num: rnum,
+                num_end: rnum_end,
                 amps: last_before(&amps, rnum, mid),
                 poles: last_before(&poles, rnum, mid),
                 wire: rwire,
@@ -426,7 +435,7 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
                 // The side it is on: left of the middle the left side.
                 let si = usize::from(two && x > mid);
                 let (Some(side), Some(c)) = (sides.get(si), cells.get_mut(si)) else { continue };
-                let outside = if side.left { x < side.num - 0.8 * row_h } else { x > side.num + 0.8 * row_h };
+                let outside = if side.left { x < side.num - 0.8 * row_h } else { x > side.num_end + 0.8 * row_h };
                 if outside {
                     if let Some(cs) = codes(v) {
                         c.codes.extend(cs);
@@ -796,8 +805,8 @@ mod tests {
     fn a_schedule_with_its_column_names_on_one_line_and_its_description_last_is_read() {
         // `PANEL:"Q9"`; its header's column names each read as one text (`AMP POLE BKR LTG PWR`),
         // the breaker type in its own BKR column and the description past the load columns,
-        // mirrored on the right.
-        let h = 9.8;
+        // mirrored on the right. (Points of a 9.8 pt font: its capitals 7.2 high.)
+        let h = 7.2;
         let mut v = vec![
             t(557.0, 880.0, "PANEL:\"Q9\"", 26.0),
             t(291.0, 812.0, "OCP", h),
