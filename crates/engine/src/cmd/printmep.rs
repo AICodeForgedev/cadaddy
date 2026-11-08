@@ -324,8 +324,8 @@ pub(crate) fn sheet_drawing(d: &Drawing, sh: &SheetRef) -> Drawing {
         .collect();
     store.push_many(mine);
     out.model = store;
-    out.building_spec = None;
-    out.agent = None;
+    out.building_spec = None.into();
+    out.agent = None.into();
     out
 }
 
@@ -787,7 +787,9 @@ pub(crate) struct SheetViewRead {
 
 /// For each sheet of `d` (`Some((rect, drawing area, levels))`; None: not looked at), its plan
 /// views when it prints plans of different levels (`3RD FLOOR PLAN` beside `4TH FLOOR PLAN`),
-/// lowest level first; empty for a sheet of one view. Read on the imported sheet
+/// lowest level first; empty for a sheet of one view. A sheet of one storey printing its floor plan beside
+/// other plans gives that one view, with no level of its own
+/// ([`cadaddy_mepfix::sheet_reader::floor_plan_view`]). Read on the imported sheet
 /// ([`cadaddy_mepfix::sheet_reader::level_views`]), the drawing gone over once. `levels`: the
 /// levels the set says a sheet shows that is no typical plan (else empty); when its views carry
 /// no title the readers find, its blocks of linework in the drawing area split it, one per level
@@ -830,6 +832,21 @@ pub(crate) fn sheet_views(d: &Drawing, sheets: &[Option<([f64; 4], [f64; 4], Vec
         let mut sub = shell.clone();
         sub.model.push_many(ents);
         let mut found = cadaddy_mepfix::sheet_reader::level_views(&sub);
+        if found.is_empty()
+            && let Some((v, cell)) = cadaddy_mepfix::sheet_reader::floor_plan_view(&sub)
+        {
+            // One storey's floor plan beside its other plans: the sheet keeps its level, and is
+            // read in that view (no level of the view's own: the caller keeps the sheet's).
+            let rect = [cell[0].max(a[0]), cell[1].max(a[1]), cell[2].min(a[2]), cell[3].min(a[3])];
+            if rect.iter().all(|x| x.is_finite())
+                && rect[2] > rect[0]
+                && rect[3] > rect[1]
+                && let Some(slot) = out.get_mut(*i)
+            {
+                *slot = vec![SheetViewRead { title: v.title, level: String::new(), levels: Vec::new(), rect }];
+            }
+            continue;
+        }
         if found.is_empty() && levels.len() > 1 {
             // Untitled views: the blocks of linework in the drawing area (not the title block's).
             let mut area_only = shell.clone();

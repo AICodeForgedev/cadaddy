@@ -324,7 +324,7 @@ fn a_unit_type_name_on_two_floors_takes_no_number_from_the_other_floor() {
     draft(&mut s);
     let mut sp: Value = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     sp["rooms"] = json!([{"name": "", "number": "118"}, {"name": "SINGLE Q ADA", "number": "220"}]);
-    s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     s.execute("model.build", &json!({})).unwrap();
     let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
     let on = |level: &str| -> Vec<String> {

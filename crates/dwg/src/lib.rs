@@ -13,8 +13,11 @@
 //! crate guards it from the outside:
 //!
 //! - Both directions reject oversized input *before* the decoder runs ([`Limits::max_dwg_bytes`]
-//!   for DWG→DXF, [`Limits::max_dxf_bytes`] for DXF→DWG), and the DWG→DXF output is capped while
-//!   it is written (`CappedWriter`).
+//!   for DWG→DXF, [`Limits::max_dxf_bytes`] for DXF→DWG from outside), and the DWG→DXF output is
+//!   capped while it is written (`CappedWriter`). The DXF CADaddy itself writes from a drawing it
+//!   holds, to save that drawing as DWG ([`own_dxf_to_dwg`], [`encode_named`]), is not untrusted
+//!   input: no input cap applies to it, so any drawing CADaddy holds can be saved (Q6280: a
+//!   1.35 M-object model's 1.6 GB bridge DXF failed every DWG save on the 1 GB cap).
 //! - The reader and writer run inside `catch_unwind`, so a decode failure is reported instead of
 //!   crashing.
 //!
@@ -46,13 +49,24 @@ pub fn version(bytes: &[u8]) -> Option<String> {
 pub struct Limits {
     /// Largest DWG file read at all (checked before reading starts).
     pub max_dwg_bytes: usize,
-    /// Largest DXF rendition of a DWG (checked while it is written).
+    /// Largest DXF rendition of a DWG (checked while it is written), and the largest DXF from
+    /// outside converted to DWG ([`dxf_to_dwg`]). Never applied to CADaddy's own bridge DXF
+    /// ([`own_dxf_to_dwg`]).
     pub max_dxf_bytes: usize,
 }
 
 impl Limits {
     /// 512 MB of DWG, 1 GB of DXF (more than the DXF reader's group-code limit fills).
     pub const DEFAULT: Limits = Limits { max_dwg_bytes: 512 << 20, max_dxf_bytes: 1 << 30 };
+}
+
+/// What every error for a DWG whose DXF rendition runs past [`Limits::max_dxf_bytes`] says.
+const OVER_LIMIT: &str = "of drawing data (the limit)";
+
+/// Whether `error`, from reading a DWG ([`decode`], [`dwg_to_dxf_noted`]), is its DXF rendition
+/// running past [`Limits::max_dxf_bytes`] (rather than the file being unreadable).
+pub fn is_over_limit(error: &str) -> bool {
+    error.contains(OVER_LIMIT)
 }
 
 /// A byte count in megabytes for messages ("9.9 MB", "1024 MB").
@@ -170,10 +184,11 @@ mod native {
             .map_err(|_| "the DWG→DXF conversion failed on this file".to_string())?;
         if out.exceeded {
             return Err(format!(
-                "DWG: converting this {} file produced more than {} of drawing data (the limit); \
+                "DWG: converting this {} file produced more than {} {}; \
                  the file is probably damaged, or uses objects the DWG reader misreads",
                 mb(bytes.len() as u64),
-                mb(limits.max_dxf_bytes as u64)
+                mb(limits.max_dxf_bytes as u64),
+                super::OVER_LIMIT
             ));
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
@@ -784,13 +799,12 @@ mod native {
     /// Convert DXF bytes into a DWG file of the DXF's version, and at least AutoCAD 2004
     /// (AC1018).
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
-        convert(dxf, None, None)
+        convert(dxf, None, None, Source::OUTSIDE)
     }
 
-    /// Convert DXF bytes into a DWG file of `version`, a code from [`super::VERSIONS`] ("AC1032"),
-    /// whatever version the DXF declares.
-    pub fn dxf_to_dwg_as(dxf: &[u8], version: &str) -> Result<Vec<u8>, String> {
-        let v = match version.trim().to_ascii_uppercase().as_str() {
+    /// The writer's version for a code from [`super::VERSIONS`] ("AC1032").
+    fn dwg_version(version: &str) -> Result<acadrust::DxfVersion, String> {
+        Ok(match version.trim().to_ascii_uppercase().as_str() {
             "AC1015" => acadrust::DxfVersion::AC1015,
             "AC1018" => acadrust::DxfVersion::AC1018,
             "AC1021" => acadrust::DxfVersion::AC1021,
@@ -798,45 +812,72 @@ mod native {
             "AC1027" => acadrust::DxfVersion::AC1027,
             "AC1032" => acadrust::DxfVersion::AC1032,
             _ => return Err(super::unsupported(version)),
-        };
-        convert(dxf, Some(v), None)
+        })
+    }
+
+    /// Convert DXF bytes into a DWG file of `version`, a code from [`super::VERSIONS`] ("AC1032"),
+    /// whatever version the DXF declares.
+    pub fn dxf_to_dwg_as(dxf: &[u8], version: &str) -> Result<Vec<u8>, String> {
+        convert(dxf, Some(dwg_version(version)?), None, Source::OUTSIDE)
     }
 
     /// [`dxf_to_dwg_as`] for DXF of any form (ASCII or binary) whose linetype names the caller
     /// gives (`linetypes`: the LTYPE table's names, as written), so they need not be read back
     /// from the DXF.
     pub fn dxf_to_dwg_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
-        let v = match version.trim().to_ascii_uppercase().as_str() {
-            "AC1015" => acadrust::DxfVersion::AC1015,
-            "AC1018" => acadrust::DxfVersion::AC1018,
-            "AC1021" => acadrust::DxfVersion::AC1021,
-            "AC1024" => acadrust::DxfVersion::AC1024,
-            "AC1027" => acadrust::DxfVersion::AC1027,
-            "AC1032" => acadrust::DxfVersion::AC1032,
-            _ => return Err(super::unsupported(version)),
-        };
-        convert(dxf, Some(v), Some(linetypes))
+        convert(dxf, Some(dwg_version(version)?), Some(linetypes), Source::OUTSIDE)
+    }
+
+    /// [`dxf_to_dwg_named`] for the DXF CADaddy itself just wrote from a drawing it holds, to save
+    /// that drawing as DWG (the bridge). It is not untrusted input, so the size limit that guards
+    /// the converter against DXF from outside ([`Limits::max_dxf_bytes`]) doesn't apply: any
+    /// drawing CADaddy holds can be saved, however large its DXF form (whether CADaddy can reopen
+    /// the result is the caller's check, on the drawing and the DWG). Errors speak of the DWG
+    /// being written, never of the DXF in between, which the user didn't ask for.
+    pub fn own_dxf_to_dwg(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
+        convert(dxf, Some(dwg_version(version)?), Some(linetypes), Source::Own)
+    }
+
+    /// Where the DXF being converted to DWG comes from.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Source {
+        /// A DXF from outside (any caller's bytes), refused over `max_bytes`.
+        Outside { max_bytes: usize },
+        /// The DXF CADaddy wrote from a drawing it holds ([`own_dxf_to_dwg`]): no input limit.
+        Own,
+    }
+
+    impl Source {
+        /// A DXF from outside, held to [`Limits::DEFAULT`].
+        const OUTSIDE: Source = Source::Outside { max_bytes: Limits::DEFAULT.max_dxf_bytes };
     }
 
     /// `linetypes`: the DXF's linetype names when the caller knows them; otherwise they are read
     /// from the (ASCII) DXF.
-    fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>, linetypes: Option<&[String]>) -> Result<Vec<u8>, String> {
-        // Reject a pathologically large DXF before handing it to the third-party decoder, which
-        // allocates tables and section buffers from the input's declared sizes and cannot be
-        // interrupted once it starts (CWE-789). This bounds the large-input variant; the decoder
-        // runs inside `catch_unwind` so a decode failure is reported rather than crashing.
-        if dxf.len() > Limits::DEFAULT.max_dxf_bytes {
-            return Err(format!(
-                "DXF: the input is {}, larger than the {} CADaddy converts to DWG",
-                mb(dxf.len() as u64),
-                mb(Limits::DEFAULT.max_dxf_bytes as u64)
-            ));
+    pub(crate) fn convert(
+        dxf: &[u8],
+        version: Option<acadrust::DxfVersion>,
+        linetypes: Option<&[String]>,
+        source: Source,
+    ) -> Result<Vec<u8>, String> {
+        // Reject a pathologically large DXF from outside before handing it to the third-party
+        // decoder, which allocates tables and section buffers from the input's declared sizes and
+        // cannot be interrupted once it starts (CWE-789). This bounds the large-input variant; the
+        // decoder runs inside `catch_unwind` so a decode failure is reported rather than crashing.
+        // CADaddy's own DXF declares only what it holds, so it isn't held to this.
+        if let Source::Outside { max_bytes } = source
+            && dxf.len() > max_bytes
+        {
+            return Err(format!("DXF: the input is {}, larger than the {} CADaddy converts to DWG", mb(dxf.len() as u64), mb(max_bytes as u64)));
         }
         let read = |dxf: &[u8]| {
             let data = dxf.to_vec();
             std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
                 .map_err(|_| "the DXF→DWG conversion failed".to_string())?
-                .map_err(|e| format!("DXF: {e}"))
+                .map_err(|e| match source {
+                    Source::Outside { .. } => format!("DXF: {e}"),
+                    Source::Own => format!("the DWG writer could not take this drawing ({e})"),
+                })
         };
         let mut doc = read(dxf)?;
         match version {
@@ -958,7 +999,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named};
+pub use native::{custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named, own_dxf_to_dwg};
 
 /// The bridge in a child process, so a decoder that dies ends one open or save, not the app.
 #[cfg(not(target_arch = "wasm32"))]
@@ -981,7 +1022,7 @@ pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), St
 }
 #[cfg(target_arch = "wasm32")]
 pub fn encode_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
-    dxf_to_dwg_named(dxf, version, linetypes)
+    own_dxf_to_dwg(dxf, version, linetypes)
 }
 
 /// The error for a DWG version CADaddy can't write.
@@ -1018,6 +1059,10 @@ pub fn dxf_to_dwg_as(_dxf: &[u8], _version: &str) -> Result<Vec<u8>, String> {
 }
 #[cfg(target_arch = "wasm32")]
 pub fn dxf_to_dwg_named(_dxf: &[u8], _version: &str, _linetypes: &[String]) -> Result<Vec<u8>, String> {
+    Err("DWG files can't be written in the web build yet; save as DXF".into())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn own_dxf_to_dwg(_dxf: &[u8], _version: &str, _linetypes: &[String]) -> Result<Vec<u8>, String> {
     Err("DWG files can't be written in the web build yet; save as DXF".into())
 }
 
@@ -1271,6 +1316,26 @@ mod tests {
             "the DWG file is damaged: a required part (classes) is missing"
         );
         assert_eq!(plain_error("something else, returning partial document"), "something else");
+    }
+
+    /// Q6280: the input limit that guards the converter against DXF from outside never applies to
+    /// the DXF CADaddy wrote from a drawing it holds (a 1.35 M-object model's 1.6 GB bridge DXF failed
+    /// every DWG save on the 1 GB limit). The same bytes over a limit: refused from outside,
+    /// converted as CADaddy's own, and the public calls for each keep to that.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_input_limit_is_for_dxf_from_outside_not_cadaddys_own() {
+        use native::{Source, convert};
+        let dxf = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n5\n21\n5\n0\nENDSEC\n0\nEOF\n";
+        let limit = dxf.len() - 1;
+        let e = convert(dxf.as_bytes(), None, None, Source::Outside { max_bytes: limit }).unwrap_err();
+        assert!(e.starts_with("DXF: the input is") && e.contains("larger than"), "{e}");
+        assert!(convert(dxf.as_bytes(), None, None, Source::Outside { max_bytes: dxf.len() }).is_ok());
+        let own = convert(dxf.as_bytes(), None, None, Source::Own).unwrap();
+        assert!(is_dwg(&own));
+        // The public calls: from outside held to the default limit, CADaddy's own to none.
+        assert_eq!(dxf_to_dwg_as(dxf.as_bytes(), "AC1018").unwrap().len(), own_dxf_to_dwg(dxf.as_bytes(), "AC1018", &[]).unwrap().len());
+        assert!(own_dxf_to_dwg(dxf.as_bytes(), "AC9999", &[]).is_err());
     }
 
     #[test]

@@ -2629,6 +2629,72 @@
     ]
    ]
   },
+  "sheets.number_prefixes": {
+   "source": "drafting convention (the national CAD standard's sheet identification): the letters a sheet number may start with, a discipline designator alone or with the modifier sets use; any other letters (an equipment or schedule tag read in the drawing area) make a sheet number suspect",
+   "words": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "L",
+    "M",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "V",
+    "W",
+    "X",
+    "Z",
+    "AD",
+    "AE",
+    "AF",
+    "AG",
+    "AI",
+    "AS",
+    "CD",
+    "CG",
+    "CP",
+    "CS",
+    "CU",
+    "EL",
+    "EP",
+    "ES",
+    "ET",
+    "EY",
+    "FA",
+    "FP",
+    "FS",
+    "FX",
+    "ID",
+    "IN",
+    "LD",
+    "LI",
+    "LP",
+    "LS",
+    "LV",
+    "MH",
+    "MP",
+    "MS",
+    "PL",
+    "PP",
+    "PS",
+    "SD",
+    "SF",
+    "SL",
+    "SV",
+    "TA",
+    "TC",
+    "TN"
+   ]
+  },
   "sheets.discipline_words": {
    "source": "drafting convention: a word that names a discipline, and its letter (moved from printlinks.rs `discipline_word`)",
    "pairs": [
@@ -2688,6 +2754,12 @@
      "FIRE",
      "FP"
     ]
+   ]
+  },
+  "sheets.floor_plan_title_words": {
+   "source": "A view or sheet title that names a floor plan. (drafting convention: general, no job's title)",
+   "words": [
+    "FLOOR PLAN"
    ]
   },
   "sheets.import_discipline_prefix": {
@@ -2808,6 +2880,19 @@
     "ONE-LINE",
     "ONE LINE",
     "KEY PLAN"
+   ]
+  },
+  "sheets.other_plan_title_words": {
+   "source": "A view title that names a plan which is not the floor plan, though it can share the floor plan's sheet and draw the same outline: the ceiling, the roof, the structure or the demolition. (drafting convention: general, no job's title)",
+   "words": [
+    "REFLECTED CEILING",
+    "CEILING PLAN",
+    "RCP",
+    "ROOF PLAN",
+    "FRAMING PLAN",
+    "FOUNDATION PLAN",
+    "DEMOLITION PLAN",
+    "DEMO PLAN"
    ]
   },
   "sheets.reference_words": {

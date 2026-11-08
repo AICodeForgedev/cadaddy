@@ -914,6 +914,58 @@ fn rerouting_again_starts_from_the_circuits_as_read_not_from_the_last_routing() 
     assert_eq!(key(&mut s), once);
 }
 
+#[test]
+fn a_rooms_own_circuit_goes_to_its_rooms_panel_however_near_a_neighbours_stands() {
+    // Room 1A's circuit G-1 has devices nearer unit 1B's panel than its own. Its tag names the room,
+    // so all of them go home to G-1A; with no room named it would split between the two.
+    let route = |room: Option<&str>| {
+        let (mut s, _) = building(|_| {});
+        let mut spec = s.execute("bspec.get", &json!({})).expect("spec");
+        let mut spec = spec.get_mut("spec").cloned().unwrap_or(spec);
+        let tags = spec["tags"].as_array_mut().expect("tags");
+        for (n, x) in [(11, 5.0), (12, 12.0), (13, 45.0), (14, 52.0)] {
+            tags.push(receptacle(n, x, 60.0, "G-1"));
+        }
+        let mut g = circuit("G-1");
+        g["id"] = json!("circuit:L1:room-1A:G-1");
+        g["fields"]["panel"] = json!({"value": "G", "source": "plan"});
+        if let Some(r) = room {
+            g["fields"]["room"] = json!({"value": r, "source": "computed"});
+        }
+        tags.push(g);
+        spec["mep"]["systems"]
+            .as_array_mut()
+            .expect("systems")
+            .push(json!({"name": "E-CIRCUIT-EST", "layer": "E-CIRCUIT-EST", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 9.25}));
+        spec["mep"]["runs"].as_array_mut().expect("runs").push(json!({"id": "circuit:L1:room-1A:G-1#0", "system": "E-CIRCUIT-EST", "level": "L1",
+            "points": [[60, 720], [144, 720], [540, 720], [624, 720]], "size_in": [0.75, 0], "bottoms_ft": [9.25, 9.25, 9.25], "size_source": "tag", "height_source": "estimated route"}));
+        spec["mep"]["equipment"].as_array_mut().expect("equipment").extend([
+            json!({"tag": "G-1A", "kind": "panel", "level": "L1", "min": [0, 800], "max": [14, 804], "height_ft": 2, "bottom_ft": 4.5}),
+            json!({"tag": "G-1B", "kind": "panel", "level": "L1", "min": [480, 800], "max": [494, 804], "height_ft": 2, "bottom_ft": 4.5}),
+        ]);
+        s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+        s.execute("model.build", &json!({})).expect("build");
+        s.execute("conduit.reroute", &json!({})).expect("reroute");
+        let sp = s.execute("bspec.get", &json!({})).expect("spec");
+        let ids: Vec<String> = sp["spec"]["tags"]
+            .as_array()
+            .or_else(|| sp["tags"].as_array())
+            .into_iter()
+            .flatten()
+            .filter(|t| t["kind"] == json!("circuit"))
+            .filter_map(|t| t["id"].as_str().map(str::to_string))
+            .filter(|i| i.contains("G-1") || i.contains(":home:G"))
+            .collect();
+        ids
+    };
+    let named = route(Some("1A"));
+    assert!(named.iter().all(|i| !i.contains('@')), "not split: {named:?}");
+    assert!(named.iter().any(|i| i.contains(":home:") && i.contains("G-1A")), "home to its own panel: {named:?}");
+    assert!(named.iter().all(|i| !i.contains("G-1B")), "nothing to the neighbour's: {named:?}");
+    let unnamed = route(None);
+    assert!(unnamed.iter().any(|i| i.contains("@G-1A")) && unnamed.iter().any(|i| i.contains("@G-1B")), "split by the nearest copy: {unnamed:?}");
+}
+
 /// A 40' x 24' storey's exterior walls (a pair of rectangles 7.25" apart) at `ox` feet.
 fn storey_walls(d: &mut Drawing, ox: f64) {
     let t = 7.25 / 12.0;

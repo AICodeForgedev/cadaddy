@@ -1647,7 +1647,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         sp.mep.runs.extend(runs);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         // Re-apply resolved review decisions so that cited answers survive the re-read.
         super::agentready::reapply_decisions(s);
     }
@@ -1712,7 +1712,7 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     if assigned_ids {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
 
     let only_level = str_param(p, "level").map(str::to_string);
@@ -1861,7 +1861,7 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let item = item_json(run, sy, &sp);
 
     let do_rebuild = bool_or(p, "rebuild", false);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
 
     if do_rebuild {
         match s.execute("model.build", &json!({})) {
@@ -2521,7 +2521,8 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
     let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
     // A panel hangs in or on a wall: the built walls, for putting it on its wall's face.
     let panel = |k: &str| matches!(k.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
-    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints(d) } else { Vec::new() };
+    // (Where the plans draw them, as the spec's positions are: a rebuild comes after the stacking.)
+    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
     for e in sp.mep.equipment.iter().take(MAX_RUNS).filter(|e| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
         let Some(level) = sp.level(&e.level) else { continue };
         let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());

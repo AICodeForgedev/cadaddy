@@ -11,6 +11,9 @@
 //! resident size is the allocator's free lists as much as the program's bytes, so this counts the
 //! allocator's live bytes instead).
 //!
+//! A large drawing too (Q6278): one edit in a drawing of a million objects held ~47 MB, a copy
+//! of the drawing's project texts and part of its handle index the undo budget didn't count.
+//!
 //! The counting allocator is the whole test binary's, so this is one test that runs its parts in
 //! turn.
 #![cfg(not(target_arch = "wasm32"))]
@@ -145,4 +148,93 @@ fn undo_holds_what_it_counts_and_close_gives_it_all_back() {
     let said: usize = st.undo.iter().map(|x| x.bytes).sum();
     assert!(held / steps <= BYTES_PER_STEP, "{} bytes a step on a drawing with {BLOCKS} blocks", held / steps);
     assert!(said >= held / 2, "undo says its {steps} steps hold {said} bytes, they hold {held}: the budget can't see the memory");
+
+    large_drawing_edits_hold_what_they_change();
+}
+
+/// Objects in the large drawing, and the size of each of its two project texts (a whole job
+/// keeps a building spec and an agent log of many megabytes beside a million objects).
+const LARGE_OBJECTS: usize = 200_000;
+const LARGE_TEXT: usize = 2 * 1024 * 1024;
+/// The most one small edit (a line) may hold on the large drawing: its own object, the chunk
+/// and index shard it touched and the drawing's header and tables, not a share of the whole.
+const LARGE_BYTES_PER_EDIT: usize = 160 * 1024;
+
+/// A drawing of [`LARGE_OBJECTS`] points with a building spec and agent state of
+/// [`LARGE_TEXT`] each.
+fn large() -> Session {
+    use cadaddy_engine::doc::{Point, geom::Vec2};
+    let mut s = Session::new();
+    let d = s.doc_mut().unwrap();
+    let items = (0..LARGE_OBJECTS as u64)
+        .map(|i| {
+            Entity::new(Handle(0x10_0000 + i), EntityKind::Point(Point { p: Vec2::new((i % 1000) as f64, (i / 1000) as f64).to3(0.0), angle: 0.0 }))
+        })
+        .collect();
+    d.model.push_many(items);
+    d.handseed = 0x10_0000 + LARGE_OBJECTS as u64;
+    let text = |key: &str| json!({ key: "x".repeat(LARGE_TEXT) }).to_string();
+    d.building_spec = Some(text("note")).into();
+    d.agent = Some(text("notes")).into();
+    s
+}
+
+/// The bytes held once the undo thread has freed what it was handed (it frees dropped steps off
+/// the command path), waiting up to a few seconds for them to come down to `want`.
+fn settled(want: usize) -> usize {
+    let mut live = ALLOC.live();
+    for _ in 0..200 {
+        if live <= want {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        live = ALLOC.live();
+    }
+    live
+}
+
+/// Q6278: in a drawing with a million objects every edit held another ~47 MB, whatever it was
+/// (a line, a move, the current layer), and the undo budget never saw it: every step kept its
+/// own copy of the drawing's project texts (the building spec, the agent's log) and a
+/// 64th of the handle index, and counted neither.
+fn large_drawing_edits_hold_what_they_change() {
+    // What an edit holds follows what it changed, not the drawing's size.
+    let mut s = large();
+    s.execute("line", &json!({"points": [[0, -10], [120, -10]]})).unwrap();
+    let before = ALLOC.live();
+    let edits = 40;
+    for i in 0..edits {
+        let y = -20.0 - i as f64;
+        s.execute("line", &json!({"points": [[0, y], [120, y]]})).unwrap();
+    }
+    let held = ALLOC.live().saturating_sub(before);
+    let st = s.state().unwrap();
+    let said: usize = st.undo.iter().skip(1).map(|x| x.bytes).sum();
+    assert!(held / edits <= LARGE_BYTES_PER_EDIT, "{} bytes an edit on a drawing of {LARGE_OBJECTS} objects", held / edits);
+    assert!(said >= held / 2, "undo says its {edits} steps hold {said} bytes, they hold {held}: the budget can't see the memory");
+    for (cmd, p) in [("layer.current", json!({"name": "0"})), ("move", json!({"handles": ["100000"], "from": [0, 0], "to": [1, 1]}))] {
+        let before = ALLOC.live();
+        s.execute(cmd, &p).unwrap();
+        let held = ALLOC.live().saturating_sub(before);
+        assert!(held <= LARGE_BYTES_PER_EDIT, "{cmd} held {held} bytes on a drawing of {LARGE_OBJECTS} objects");
+    }
+    drop(s);
+
+    // Many edits stay within the undo budget plus the edits' own objects.
+    let mut s = large();
+    let budget = 1024 * 1024;
+    s.state_mut().unwrap().undo_ctl.budget = budget;
+    s.execute("line", &json!({"points": [[0, -10], [120, -10]]})).unwrap();
+    let before = ALLOC.live();
+    let edits = 100;
+    for i in 0..edits {
+        let y = -20.0 - i as f64;
+        s.execute("line", &json!({"points": [[0, y], [120, y]]})).unwrap();
+    }
+    s.log.clear();
+    s.journal.clear();
+    // Each line leaves its object in the drawing and a line in the activity log: a few KB.
+    let bound = before + budget + edits * 8 * 1024;
+    let live = settled(bound);
+    assert!(live <= bound, "{edits} edits under a {budget}-byte undo budget hold {} bytes", live.saturating_sub(before));
 }

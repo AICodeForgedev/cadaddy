@@ -45,7 +45,7 @@ fn a_printed_mechanical_plan_reads_its_air_devices_and_standard_elbows() {
     let st =
         s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false})).expect("job.start");
     assert_eq!(st["done"], json!(true), "{st}");
-    let job: Value = serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state");
+    let job: Value = serde_json::from_str(s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).as_deref().unwrap_or("{}")).expect("job state");
     let read = job["guided_job"]["stages"].as_array().and_then(|a| a.iter().find(|s| s["name"] == "mep_read")).expect("mep_read")["result"].clone();
     let m101 = read["sheets"].as_array().and_then(|a| a.iter().find(|r| r["sheet"] == "M-101")).cloned().expect("M-101 read");
     let terminals = m101["terminals"].as_u64().unwrap_or(0) as usize;

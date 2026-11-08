@@ -221,7 +221,7 @@ fn job() -> Job {
         {"number": "101", "level": "L1", "type": "GUEST", "hand": "normal", "fit": fit(false)},
         {"number": "102", "level": "L1", "type": "GUEST", "hand": "mirrored", "fit": fit(true)}
     ]);
-    s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     // What the job read: the enlarged view's symbols, and the power plan's in the office (plus
     // one in room 101, which its enlarged plan governs).
     let mut devices: Vec<Value> =
@@ -241,7 +241,7 @@ fn set_job(s: &mut Session, devices: Value) {
         "id": "made-up-job", "goal": "bim", "created": "2026-01-01T00:00:00Z", "pdfs_path": "/made-up/prints",
         "stages": [], "rules": [], "audit": [], "question_seq": 0, "devices": devices
     }});
-    s.doc_mut().unwrap().agent = Some(state.to_string());
+    s.doc_mut().unwrap().agent = Some(state.to_string()).into();
 }
 
 fn present(s: &mut Session, p: Value) -> (Value, Vec<Value>) {
@@ -323,14 +323,14 @@ fn a_mirrored_room_of_the_type_matches_its_mirrored_layout() {
     let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     sp["unit_instances"][1]["fit"] = json!(null);
     sp["unit_instances"][1]["hand"] = json!("normal");
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let (r, fs) = present(&mut j.s, json!({"room": "102"}));
     let r102 = in_area(&fs, "102");
     assert_eq!(verdicts(&r102), (4, 0, 0), "{r}");
     // And a fit that says the room is drawn as the view (not mirrored) is believed: the
     // mirrored room then misses what lies off its centre line.
     sp["unit_instances"][1]["fit"] = json!({"rotation_deg": 0.0, "mirrored": false, "view": "E-601 ENLARGED GUEST ROOM POWER PLAN"});
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let (r, fs) = present(&mut j.s, json!({"room": "102"}));
     let (_, missing, _) = verdicts(&in_area(&fs, "102"));
     assert!(missing >= 2, "a wrong fit shows: {r}");
@@ -374,7 +374,7 @@ fn the_validate_run_and_its_status_count_g_present_per_room_type_and_level() {
 fn the_prescreen_without_a_job_keeps_the_project_rule_sets_and_hostile_job_data_never_panics() {
     let mut j = job();
     // No job read: nothing off the prints; a room type's project-rule set still counts.
-    j.s.doc_mut().unwrap().agent = None;
+    j.s.doc_mut().unwrap().agent = None.into();
     j.s.execute(
         "project.rules.set",
         &json!({"domain": "custom", "key": "prescreen.expect.office", "value": "switch=1", "reason": "made-up test rule"}),
@@ -397,7 +397,7 @@ fn the_prescreen_without_a_job_keeps_the_project_rule_sets_and_hostile_job_data_
         let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
         sp["unit_types"][0]["views"] = json!([{"sheet": "E-601", "title": "ENLARGED", "rect": [1e308, -1e308, "x", 0]}, {"sheet": 5}, null]);
         sp["unit_instances"][0]["fit"] = json!({"rotation_deg": "ninety", "mirrored": 3, "view": 12});
-        j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+        j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
         let r = j.s.execute("validate.prescreen", &json!({"rules": ["G-PRESENT"], "all": true})).unwrap();
         assert!(r["checked"]["G-PRESENT"].is_object(), "{r}");
     }
@@ -426,7 +426,7 @@ fn a_kind_tagged_on_one_rooms_plan_is_shown_there_only_and_a_proposed_element_is
         "tag": "RECEPTACLE-9", "kind": "receptacle", "level": "L1", "min": lo, "max": hi, "bottom_ft": 1.3, "height_ft": 0.3,
         "properties": {"STATUS": "proposed", "NOT_DRAWN": "no document draws or names it: rules data (made-up test)"}, "confidence": 0.5
     }]);
-    s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     s.execute("model.build", &json!({})).unwrap();
     let (r, fs) = present(&mut s, json!({"room": "103"}));
     let office = in_area(&fs, "103");
@@ -450,7 +450,7 @@ fn a_kind_tagged_on_one_rooms_plan_is_shown_there_only_and_a_proposed_element_is
 fn office(j: &mut Job, sheets: Value, devices: Value) -> (Value, Vec<Value>) {
     let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     sp["sheets"] = sheets;
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     set_job(&mut j.s, devices);
     let (r, fs) = present(&mut j.s, json!({"room": "103"}));
     let r103: Vec<Value> = in_area(&fs, "103").into_iter().cloned().collect();

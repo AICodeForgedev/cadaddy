@@ -453,6 +453,19 @@ pub(crate) struct Placed {
     pub space_max: [f64; 2],
 }
 
+/// A panel's room's outline on the plans (a stacked level's less the move that stacked it): the
+/// room it names, else the one holding `at`, a place on the plans.
+pub(crate) fn room_outline_on_plan(rooms: &[RoomBox], level: &str, named: Option<&str>, at: Vec2) -> Option<Vec<Vec2>> {
+    let on_plan = |r: &RoomBox| -> Vec<Vec2> { r.outline.iter().map(|p| *p - r.offset).collect() };
+    let on_level = || rooms.iter().filter(|r| r.level.eq_ignore_ascii_case(level) && r.outline.len() >= 3);
+    named.and_then(|n| on_level().find(|r| r.number.eq_ignore_ascii_case(n))).map(on_plan).or_else(|| on_level().map(on_plan).find(|o| inside(o, at)))
+}
+
+/// Whether a point is inside a room's outline.
+pub(crate) fn inside_outline(poly: &[Vec2], p: Vec2) -> bool {
+    inside(poly, p)
+}
+
 fn inside(poly: &[Vec2], p: Vec2) -> bool {
     let mut c = false;
     let n = poly.len();
@@ -595,22 +608,21 @@ pub(crate) fn take_submitted_size(e: &mut cadaddy_walk3d::MepEquipment, g: &Subm
     true
 }
 
-/// A panel placed by its plan lettering, with an end standing in a wall that crosses its own: it
-/// slides along its wall until that wall's face (no box stands in a wall), the lettering's place
-/// kept beside it. Not more than its own width; not off the wall it is on. Whether it moved.
-pub(crate) fn clear_of_crossing_walls(
+/// Slides a box along its width out of a wall crossing it, to that wall's face: not more than
+/// `most`, not off the wall it stands on, not into another. How far it moved.
+fn slide_out_of_crossing_wall(
     e: &mut cadaddy_walk3d::MepEquipment,
     walls: &[cadaddy_walk3d::WallMark],
     types: &[cadaddy_walk3d::WallType],
     upf: f64,
-) -> bool {
-    if e.sources.get("position").map(String::as_str) != Some(super::printcond::ROOM_PANEL_POSITION) || !upf.is_finite() || upf <= 0.0 {
-        return false;
+    most: f64,
+) -> Option<f64> {
+    if !upf.is_finite() || upf <= 0.0 {
+        return None;
     }
     let inch = upf / 12.0;
     let axis = usize::from(e.max[1] - e.min[1] > e.max[0] - e.min[0]);
     let other = 1 - axis;
-    let width = e.max[axis] - e.min[axis];
     let here: Vec<&cadaddy_walk3d::WallMark> = walls.iter().filter(|w| w.level.eq_ignore_ascii_case(&e.level)).collect();
     let half = |w: &cadaddy_walk3d::WallMark| types.iter().find(|t| t.name == w.wall_type).map_or(6.0, |t| t.thickness_in) / 2.0 * inch;
     let lo_hi = |w: &cadaddy_walk3d::WallMark, i: usize| (w.a[i].min(w.b[i]), w.a[i].max(w.b[i]));
@@ -632,18 +644,74 @@ pub(crate) fn clear_of_crossing_walls(
     let (start, end) = (e.min[axis], e.max[axis]);
     let mid = (start + end) / 2.0;
     let touching = |lo: f64, hi: f64, c: &(f64, f64)| c.0 < hi - 1e-6 && c.1 > lo + 1e-6;
-    let Some(&(wall_lo, wall_hi)) = crossing.iter().find(|c| touching(start, end, c)) else { return false };
+    let &(wall_lo, wall_hi) = crossing.iter().find(|c| touching(start, end, c))?;
     let by = if (wall_lo + wall_hi) / 2.0 <= mid { wall_hi - start } else { wall_lo - end };
     let (lo, hi) = (start + by, end + by);
-    if by.abs() > width || crossing.iter().any(|c| touching(lo, hi, c)) || (on_host(start, end) && !on_host(lo, hi)) {
-        return false;
+    if by.abs() > most || crossing.iter().any(|c| touching(lo, hi, c)) || (on_host(start, end) && !on_host(lo, hi)) {
+        return None;
     }
     e.min[axis] = lo;
     e.max[axis] = hi;
+    Some(by.abs())
+}
+
+/// A panel placed by its plan lettering, with an end standing in a wall that crosses its own: it
+/// slides along its wall until that wall's face (no box stands in a wall), the lettering's place
+/// kept beside it. Not more than its own width. Whether it moved.
+pub(crate) fn clear_of_crossing_walls(
+    e: &mut cadaddy_walk3d::MepEquipment,
+    walls: &[cadaddy_walk3d::WallMark],
+    types: &[cadaddy_walk3d::WallType],
+    upf: f64,
+) -> bool {
+    if e.sources.get("position").map(String::as_str) != Some(super::printcond::ROOM_PANEL_POSITION) {
+        return false;
+    }
+    let most = (e.max[0] - e.min[0]).max(e.max[1] - e.min[1]);
+    let Some(by) = slide_out_of_crossing_wall(e, walls, types, upf, most) else { return false };
     e.properties.insert("DESIGN_VALUE".into(), "at its lettering on the plan, an end in a crossing wall".into());
-    e.properties.insert("CORRECTED_VALUE".into(), format!("{:.1} in along its wall, clear of that wall", by.abs() / inch));
+    e.properties.insert("CORRECTED_VALUE".into(), format!("{:.1} in along its wall, clear of that wall", by / (upf / 12.0)));
     e.properties.insert("CORRECTION_REASON".into(), "a box can't stand in a wall; its place is lettering, not a located symbol".into());
     e.sources.insert("footprint".into(), "rule: on the wall nearest the lettering, slid clear of a crossing wall".into());
+    true
+}
+
+/// A panel placed by lettering or a proposal, whose place leaves it no working space: on the wall
+/// face near it that has it, in its own room, the place it was read kept beside it. What it moved
+/// from and to go on the object. Whether it moved.
+pub(crate) fn onto_clear_face(e: &mut cadaddy_walk3d::MepEquipment, f: &super::validate_gear::ClearFace, upf: f64) -> bool {
+    if !upf.is_finite() || upf <= 0.0 || (f.min == e.min && f.max == e.max) {
+        return false;
+    }
+    let was = e.properties.get("DESIGN_VALUE").cloned().unwrap_or_else(|| "at its lettering on the plan".to_string());
+    e.min = f.min;
+    e.max = f.max;
+    e.properties.insert("DESIGN_VALUE".into(), format!("{was}: {:.0} in clear in front", f.was_clear_in));
+    e.properties.insert(
+        "CORRECTED_VALUE".into(),
+        format!("{:.0} in from there on wall {}: {:.0} in clear in front", f.moved_in, f.wall.hex(), f.now_clear_in),
+    );
+    e.properties.insert(
+        "CORRECTION_REASON".into(),
+        "no working space where it was read (NEC 110.26(A)); that place is lettering or a proposal, not a located symbol".into(),
+    );
+    e.sources.insert("footprint".into(), "rule: the nearest wall face in its room with its working space".into());
+    true
+}
+
+/// A wireway built over `gear`, out of a wall its length would cross: still over the whole can.
+/// Whether it moved.
+pub(crate) fn wireway_clear_of_walls(
+    w: &mut cadaddy_walk3d::MepEquipment,
+    gear: &cadaddy_walk3d::MepEquipment,
+    walls: &[cadaddy_walk3d::WallMark],
+    types: &[cadaddy_walk3d::WallType],
+    upf: f64,
+) -> bool {
+    let long = (w.max[0] - w.min[0]).max(w.max[1] - w.min[1]);
+    let wide = (gear.max[0] - gear.min[0]).max(gear.max[1] - gear.min[1]);
+    let Some(by) = slide_out_of_crossing_wall(w, walls, types, upf, ((long - wide) / 2.0).max(0.0)) else { return false };
+    w.sources.insert("position".into(), format!("proposed above {}, {:.1} in along it to clear a wall", gear.tag, by / (upf / 12.0)));
     true
 }
 
@@ -990,6 +1058,27 @@ pub(crate) fn plan(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_panels_room_above_the_first_floor_is_read_on_the_plans() {
+        // Level 2 built 64,000 along from its plan: the panel's place is on the plan.
+        let off = Vec2::new(64_000.0, 35.0);
+        let plan = [Vec2::new(0.0, 0.0), Vec2::new(144.0, 0.0), Vec2::new(144.0, 96.0), Vec2::new(0.0, 96.0)];
+        let room = RoomBox {
+            level: "Level 2".into(),
+            number: "201".into(),
+            outline: plan.iter().map(|p| *p + off).collect(),
+            offset: off,
+            ..RoomBox::default()
+        };
+        let rooms = [room];
+        let at = Vec2::new(10.0, 10.0);
+        // By the number it names, by where it is, and not on another level or outside it.
+        assert_eq!(room_outline_on_plan(&rooms, "level 2", Some("201"), Vec2::new(-500.0, 0.0)).as_deref(), Some(&plan[..]));
+        assert_eq!(room_outline_on_plan(&rooms, "Level 2", None, at).as_deref(), Some(&plan[..]));
+        assert_eq!(room_outline_on_plan(&rooms, "Level 3", Some("201"), at), None);
+        assert_eq!(room_outline_on_plan(&rooms, "Level 2", None, at + off), None);
+    }
+
     use super::*;
 
     fn t(x: f64, y: f64, v: &str) -> TextItem {
@@ -1249,6 +1338,29 @@ mod tests {
         let tight = [walls[0].clone(), walls[1].clone(), wall([100.0, 216.0], [190.0, 216.0])];
         let mut stuck = panel(199.5, lettered);
         assert!(!clear_of_crossing_walls(&mut stuck, &tight, &types, 12.0));
+    }
+
+    #[test]
+    fn a_wireway_slides_out_of_a_wall_and_stays_over_its_can() {
+        use cadaddy_walk3d::{MepEquipment, WallMark, WallType};
+        let wall = |a: [f64; 2], b: [f64; 2]| -> WallMark {
+            serde_json::from_value(serde_json::json!({"a": a, "b": b, "level": "L2", "wall_type": "W"})).unwrap()
+        };
+        let types: [WallType; 1] = [serde_json::from_value(serde_json::json!({"name": "W", "thickness_in": 6.0})).unwrap()];
+        let can = MepEquipment { tag: "DP9".into(), level: "L2".into(), min: [100.0, 220.0], max: [106.0, 240.0], ..Default::default() };
+        let way = || MepEquipment { tag: "DP9-WIREWAY".into(), level: "L2".into(), min: [100.0, 206.0], max: [106.0, 254.0], ..Default::default() };
+        // A wall at y 210, 6 in thick, across the wireway's end: 7 in along to its face.
+        let walls = [wall([90.0, 210.0], [120.0, 210.0])];
+        let mut w = way();
+        assert!(wireway_clear_of_walls(&mut w, &can, &walls, &types, 12.0));
+        assert!((w.min[1] - 213.0).abs() < 1e-9 && (w.max[1] - 261.0).abs() < 1e-9, "{w:?}");
+        assert!(w.min[1] <= can.min[1] && w.max[1] >= can.max[1], "still over the whole can");
+        assert!(w.sources["position"].contains("7.0 in"));
+        // Clearing it would leave the can's end uncovered: it stays, for review.
+        let far = [wall([90.0, 220.0], [120.0, 220.0])];
+        let mut w = way();
+        assert!(!wireway_clear_of_walls(&mut w, &can, &far, &types, 12.0));
+        assert!((w.min[1] - 206.0).abs() < 1e-9);
     }
 
     #[test]

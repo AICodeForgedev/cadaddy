@@ -86,7 +86,7 @@ fn serial() -> MutexGuard<'static, ()> {
 }
 
 fn job_state(s: &Session) -> Value {
-    serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state")
+    serde_json::from_str(s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).as_deref().unwrap_or("{}")).expect("job state")
 }
 
 fn audit<'a>(job: &'a Value, event: &str) -> Option<&'a Value> {

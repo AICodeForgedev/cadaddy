@@ -2476,8 +2476,9 @@ pub(crate) fn dwg_tags(d: &Drawing, version: Version) -> Vec<Tag> {
 
 /// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
 /// version's (MULTILEADER from 2007). Binary DXF (the converter reads it in about two thirds of
-/// the time of ASCII, and it is smaller and quicker to write), with the LTYPE table's names.
-pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>) {
+/// the time of ASCII, and it is smaller and quicker to write), with the LTYPE table's names and
+/// its group-code count (binary DXF has no lines to count them by).
+pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>, usize) {
     let mut tags = tags_for(d, Version::R2000, dwg, true, true);
     bridge_markers(&mut tags);
     let mut names = Vec::new();
@@ -2517,10 +2518,10 @@ pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>) {
     if has_custom(d) {
         let take = cadaddy_dwg::custom_records(&dxf);
         if let Some((kept, _)) = crate::dwg_keep::stash_tags(&tags, &take) {
-            return (write(&kept), names);
+            return (write(&kept), names, kept.len());
         }
     }
-    (dxf, names)
+    (dxf, names, tags.len())
 }
 
 /// The object types the DWG writer reads from a DXF itself (acadrust 0.6's DXF reader).

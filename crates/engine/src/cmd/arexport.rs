@@ -238,7 +238,7 @@ fn run_rules(s: &mut Session, p: &Value) -> Result<Value> {
                 o.insert(KEY.into(), own);
             }
         }
-        s.doc_mut()?.building_spec = Some(spec.to_string());
+        s.doc_mut()?.building_spec = Some(spec.to_string()).into();
     }
     let d = s.doc()?;
     let (_, own) = Rules::of(d);

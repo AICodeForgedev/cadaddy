@@ -577,6 +577,9 @@ struct Item {
     name: Option<String>,
     level: String,
     at: [f64; 2],
+    /// Where the documents put it when the build moved it for the field (its `design:location`
+    /// correction, Q6252): G-PRESENT finds it at either spot.
+    design_at: Option<[f64; 2]>,
     /// Its mounting height (a wall item's centre), inches above the floor.
     z_in: Option<f64>,
     /// A built part's bottom and top, inches above the floor (a height measured to its top or
@@ -615,6 +618,13 @@ fn documented_height(e: &cadaddy_doc::Entity) -> Option<(f64, String)> {
 }
 
 impl Item {
+    /// How far it is from `p` (feet): from where it stands, or from where the documents put it
+    /// when the build moved it for the field.
+    fn dist_to(&self, p: [f64; 2]) -> f64 {
+        let d = |q: [f64; 2]| (q[0] - p[0]).hypot(q[1] - p[1]);
+        self.design_at.map_or(d(self.at), |q| d(self.at).min(d(q)))
+    }
+
     /// Does item name `n` (lower case) stand for this element?
     fn is(&self, n: &str) -> bool {
         if let Some(prefix) = n.strip_suffix('*') {
@@ -624,6 +634,23 @@ impl Item {
             || self.mark.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(n))
             || self.name.as_deref().is_some_and(|x| has_words(x, n))
     }
+}
+
+/// Where an element stands by the documents when the build moved it for the field: its
+/// `design:location` correction (model feet, beside its `location`), the move taken back from
+/// `at` (the item's point). None when it carries no such correction.
+fn design_spot(e: &cadaddy_doc::Entity, at: [f64; 2]) -> Option<[f64; 2]> {
+    let ps = cadaddy_doc::props::read(&e.common.xdata);
+    let xy = |k: &str| -> Option<[f64; 2]> {
+        let v: Vec<f64> = ps.get(k)?.text().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        match v[..] {
+            [x, y, ..] if x.is_finite() && y.is_finite() => Some([x, y]),
+            _ => None,
+        }
+    };
+    let (design, now) = (xy("design:location")?, xy("location")?);
+    let moved = [now[0] - design[0], now[1] - design[1]];
+    (moved[0].hypot(moved[1]) > 1e-9).then(|| [at[0] - moved[0], at[1] - moved[1]])
 }
 
 /// The plan elements of the model and the parts the build made that no plan element stands for,
@@ -646,6 +673,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 name: e.fields.get("description").or_else(|| e.fields.get("name")).cloned(),
                 level: e.level.clone(),
                 at: e.at,
+                design_at: ent.and_then(|x| design_spot(x, e.at)),
                 z_in: e.z_in,
                 z_span_in: None,
                 built: false,
@@ -738,6 +766,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 .filter(|t| !t.trim().is_empty())
                 .or_else(|| c.map(|c| c.ty)),
             level,
+            design_at: design_spot(e, at),
             at,
             z_in,
             z_span_in,
@@ -1576,7 +1605,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 for (i, ex) in set.items.iter().enumerate() {
                     let Some(sym) = symbols.syms.get(ex.sym) else { continue };
                     for (j, it) in held.iter().enumerate() {
-                        let dd = (it.at[0] - ex.at[0]).hypot(it.at[1] - ex.at[1]);
+                        let dd = it.dist_to(ex.at);
                         if (dd <= tol_ft || ex.reference_only.is_some())
                             && vp::same_kind(&sym.kind, sym.mark.as_deref(), &it.kind, it.mark.as_deref())
                         {
@@ -2731,6 +2760,7 @@ mod tests {
             name: Some("Duplex Receptacle".into()),
             level: "L1".into(),
             at: [0.0, 0.0],
+            design_at: None,
             z_in: None,
             z_span_in: None,
             mounting: Mounting::Wall,
@@ -2745,5 +2775,25 @@ mod tests {
         };
         assert!(it.is("receptacle") && it.is("ef-2") && it.is("ef-*") && it.is("duplex"));
         assert!(!it.is("ptac") && !it.is("e*x") && !it.is("panel"));
+        // Moved for the field (Q6252): found where it stands and where the documents put it.
+        let moved = Item { at: [2.0, 0.0], design_at: Some([0.0, 0.0]), ..it };
+        assert!(moved.dist_to([0.1, 0.0]) < 0.2 && moved.dist_to([2.0, 0.1]) < 0.2);
+    }
+
+    #[test]
+    fn a_device_moved_for_the_field_keeps_its_design_spot() {
+        use cadaddy_doc::props::{Prop, Props, Source};
+        let mut ps = Props::default();
+        ps.set("location", Prop::new("12.00, 5.00, 1.50", Source::computed()));
+        let mut e = cadaddy_doc::Entity::new(
+            cadaddy_doc::Handle(0x2A),
+            cadaddy_doc::EntityKind::Point(cadaddy_doc::Point { p: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), angle: 0.0 }),
+        );
+        e.common.xdata = cadaddy_doc::props::write(&e.common.xdata, &ps).into();
+        assert_eq!(design_spot(&e, [100.0, 50.0]), None, "no correction: no design spot");
+        ps.set("design:location", Prop::new("10.00, 5.00, 1.50", Source::computed()));
+        e.common.xdata = cadaddy_doc::props::write(&e.common.xdata, &ps).into();
+        // Moved 2 ft along x: its design spot is 2 ft back from its point, in the item's frame.
+        assert_eq!(design_spot(&e, [100.0, 50.0]), Some([98.0, 50.0]));
     }
 }

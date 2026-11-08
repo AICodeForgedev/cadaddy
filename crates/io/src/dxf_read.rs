@@ -2714,26 +2714,26 @@ impl Objects {
         }
         // Saved layer states.
         if let Some(spec) = self.xrecord_text(crate::dxf_ext::BUILDING_SPEC_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
-            d.building_spec = Some(spec);
+            d.building_spec = Some(spec).into();
         }
         if let Some(tours) = self.xrecord_text(crate::dxf_ext::TOURS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
-            d.tours = Some(tours);
+            d.tours = Some(tours).into();
         }
         // The agent state: any JSON object (the engine checks it when it reads it).
         if let Some(a) = self.xrecord_text(crate::dxf_ext::AGENT_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
-            d.agent = Some(a);
+            d.agent = Some(a).into();
         }
         if let Some(b) = self.xrecord_text(crate::dxf_ext::BCF_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
-            d.bcf = Some(b);
+            d.bcf = Some(b).into();
         }
         if let Some(s) = self.xrecord_text(crate::dxf_ext::SCHEDULE4D_KEY).and_then(|t| crate::dxf_ext::parse_schedule4d(&t)) {
-            d.schedule4d = Some(s);
+            d.schedule4d = Some(s).into();
         }
         if let Some(p) = self.xrecord_text(crate::dxf_ext::PARTS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
-            d.parts = Some(p);
+            d.parts = Some(p).into();
         }
         if let Some(o) = self.xrecord_text(crate::dxf_ext::OVERRIDES_KEY).and_then(|t| crate::dxf_ext::parse_overrides(&t)) {
-            d.overrides = Some(o);
+            d.overrides = Some(o).into();
         }
         if let Some(bt) = self.xrecord_text(crate::dxf_ext::BIM_TYPES_KEY).and_then(|t| crate::dxf_ext::parse_bim_types(&t)) {
             d.bim_types = bt;

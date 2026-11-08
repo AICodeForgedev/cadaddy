@@ -663,7 +663,7 @@ fn hostile_params_never_panic() {
     }
     // A hand-written spec value of the wrong shape reads as the defaults.
     let d = s.doc_mut().unwrap();
-    d.building_spec = Some(r#"{"bim_view": {"colors": {"duct": "red"}, "hidden": 4}}"#.into());
+    d.building_spec = Some(r#"{"bim_view": {"colors": {"duct": "red"}, "hidden": 4}}"#.into()).into();
     assert_eq!(Look::of(s.doc().unwrap()), Look::default());
     let _ = bimlook::display(s.doc().unwrap());
 }

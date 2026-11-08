@@ -323,7 +323,7 @@ fn status(sp: &BuildingSpec, l: &Label) -> &'static str {
 const SETS: [&str; 5] = ["directories", "devices", "equipment", "nameplates", "arc_flash"];
 
 fn spec(cmd: &str, s: &Session) -> Result<BuildingSpec> {
-    let text = s.doc()?.building_spec.clone().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
+    let text = s.doc()?.building_spec.as_ref().cloned().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
     BuildingSpec::from_json(&text).map_err(|e| bad(cmd, e))
 }
 
@@ -578,7 +578,7 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         for l in &picked {
             sp.mep.labels_printed.insert(l.id.clone(), l.text());
         }
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(out)
 }
@@ -718,7 +718,7 @@ fn run_arcflash(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     if imported + replaced > 0 {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({"imported": imported, "replaced": replaced, "unknown_equipment": unknown, "incomplete": incomplete}))
 }
@@ -763,7 +763,7 @@ fn run_check(s: &mut Session, p: &Value) -> Result<Value> {
             rfis.push(id);
         }
         if !rfis.is_empty() {
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
     }
     Ok(json!({"ok": errors == 0, "errors": errors, "problems": problems_json(&problems), "rfis": rfis}))

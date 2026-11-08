@@ -146,7 +146,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         None if n < cadaddy_walk3d::rfi::MAX_RFIS => sp.rfis.push(r.clone()),
         None => return Err(bad("rfi.set", "the spec holds as many items as it can")),
     }
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(json!({ "item": item_json(&r) }))
 }
 

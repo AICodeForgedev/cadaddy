@@ -82,7 +82,7 @@ fn write_spec(s: &mut Session, cmd: &str, keys: Map<String, Value>) -> Result<()
     if let Some(b) = base.as_object_mut() {
         b.extend(keys);
     }
-    s.doc_mut()?.building_spec = Some(base.to_string());
+    s.doc_mut()?.building_spec = Some(base.to_string()).into();
     Ok(())
 }
 

@@ -1001,7 +1001,7 @@ fn job_with_documents() -> Session {
             ]},
             "sheet_regions": [region("E-001", "cover", E001), region("M-601", "schedule", M601), region("P-601", "schedule", P601)]
         });
-        d.agent = Some(agent.to_string());
+        d.agent = Some(agent.to_string()).into();
     })
 }
 

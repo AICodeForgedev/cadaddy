@@ -95,7 +95,7 @@ fn sched(s: &Session, cmd: &str) -> Result<Schedule4d> {
 }
 
 fn store(s: &mut Session, sc: &Schedule4d) -> Result<()> {
-    s.doc_mut()?.schedule4d = sc.to_json();
+    s.doc_mut()?.schedule4d = sc.to_json().into();
     Ok(())
 }
 
@@ -271,7 +271,7 @@ fn run_state(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_clear(s: &mut Session, _p: &Value) -> Result<Value> {
     let n = sched(s, "fourd.clear").map(|sc| sc.tasks.len()).unwrap_or(0);
-    s.doc_mut()?.schedule4d = None;
+    s.doc_mut()?.schedule4d = None.into();
     Ok(json!({"cleared": n}))
 }
 

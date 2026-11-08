@@ -977,7 +977,13 @@ fn dimension_overrides_roundtrip_as_dstyle_xdata() {
 
 /// A drawing with `n` lines, circles and polylines on a grid (issue #57's tests).
 fn many_entities(n: usize) -> Drawing {
+    many_entities_on(n, &Common::default())
+}
+
+/// [`many_entities`], each with `common` (its layer, say).
+fn many_entities_on(n: usize, common: &Common) -> Drawing {
     let mut d = Drawing::new_imperial();
+    d.ensure_layer(&common.layer);
     for i in 0..n {
         let (x, y) = ((i % 300) as f64 * 10.0, (i / 300) as f64 * 10.0);
         let kind = match i % 3 {
@@ -991,7 +997,7 @@ fn many_entities(n: usize) -> Drawing {
                 plinegen: false,
             }),
         };
-        d.add(&Space::Model, Common::default(), kind).unwrap();
+        d.add(&Space::Model, common.clone(), kind).unwrap();
     }
     d
 }
@@ -1384,18 +1390,18 @@ fn building_spec_roundtrips_in_dxf_and_dwg() {
         r#"{{"version":1,"levels":[{{"name":"Erdgeschoß","elevation_ft":0,"height_ft":10}}],"layers":[{{"layer":"A-WALL","role":"wall"}}],"note":"a \\ b {}"}}"#,
         "x".repeat(600)
     );
-    d.building_spec = Some(spec.clone());
+    d.building_spec = Some(spec.clone()).into();
     let same = |text: Option<String>| text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
     let text = write_dxf(&d);
     assert!(text.contains("CADADDY_BSPEC"));
     let back = read_dxf(text.as_bytes()).unwrap();
-    assert_eq!(same(back.building_spec.clone()), same(Some(spec.clone())));
-    assert_eq!(same(roundtrip(&back).building_spec), same(Some(spec.clone())));
+    assert_eq!(same(back.building_spec.as_ref().cloned()), same(Some(spec.clone())));
+    assert_eq!(same(roundtrip(&back).building_spec.into_inner()), same(Some(spec.clone())));
     #[cfg(not(target_arch = "wasm32"))]
-    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().building_spec), same(Some(spec)));
+    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().building_spec.into_inner()), same(Some(spec)));
     // No spec, no record; a record that isn't a JSON object is dropped.
     assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_BSPEC"));
-    d.building_spec = Some("[1, 2".into());
+    d.building_spec = Some("[1, 2".into()).into();
     assert_eq!(read_dxf(write_dxf(&d).as_bytes()).unwrap().building_spec, None);
 }
 
@@ -1457,17 +1463,17 @@ fn bim_spec_xdata_survives_dxf_roundtrip() {
 fn tours_roundtrip_in_dxf_dwg_and_cdy() {
     let mut d = Drawing::new_imperial();
     let tours = r#"{"version":1,"views":[{"name":"Lobby","room":"Lobby","level":0,"eye":[10.5,20,5.5],"yaw":90,"pitch":-5}],"tours":[{"name":"In","stops":["Lobby"],"speed":4.5,"look":"path","pause":1}]}"#;
-    d.tours = Some(tours.into());
-    d.building_spec = Some(r#"{"version":1,"levels":[]}"#.into());
+    d.tours = Some(tours.into()).into();
+    d.building_spec = Some(r#"{"version":1,"levels":[]}"#.into()).into();
     let same = |text: Option<String>| text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
     let text = write_dxf(&d);
     assert!(text.contains("CADADDY_TOURS"));
-    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().tours), same(Some(tours.into())));
+    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().tours.into_inner()), same(Some(tours.into())));
     #[cfg(not(target_arch = "wasm32"))]
-    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().tours), same(Some(tours.into())));
+    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().tours.into_inner()), same(Some(tours.into())));
     let cdy = read(&write(&d, "x.cdy").unwrap(), "x.cdy").unwrap();
-    assert_eq!(same(cdy.tours), same(Some(tours.into())));
-    assert_eq!(same(cdy.building_spec), same(d.building_spec.clone()), "the building spec is kept in .cdy too");
+    assert_eq!(same(cdy.tours.into_inner()), same(Some(tours.into())));
+    assert_eq!(same(cdy.building_spec.into_inner()), same(d.building_spec.as_ref().cloned()), "the building spec is kept in .cdy too");
     assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_TOURS"));
 }
 
@@ -1475,18 +1481,18 @@ fn tours_roundtrip_in_dxf_dwg_and_cdy() {
 fn schedule4d_roundtrips_in_dxf_dwg_and_cdy() {
     let mut d = Drawing::new_imperial();
     let sched = r#"{"version":1,"tasks":[{"id":"A10","name":"Level 1 supply duct","start":"2026-03-02","finish":"2026-03-06","filter":{"level":"Level 1","class":"Duct*"},"add":["2F"]}]}"#;
-    d.schedule4d = Some(sched.into());
+    d.schedule4d = Some(sched.into()).into();
     let same = |text: Option<String>| text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
     let text = write_dxf(&d);
     assert!(text.contains("CADADDY_4D"));
-    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().schedule4d), same(Some(sched.into())));
+    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().schedule4d.into_inner()), same(Some(sched.into())));
     #[cfg(not(target_arch = "wasm32"))]
-    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().schedule4d), same(Some(sched.into())));
+    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().schedule4d.into_inner()), same(Some(sched.into())));
     let cdy = read(&write(&d, "x.cdy").unwrap(), "x.cdy").unwrap();
-    assert_eq!(same(cdy.schedule4d), same(Some(sched.into())));
+    assert_eq!(same(cdy.schedule4d.into_inner()), same(Some(sched.into())));
     assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_4D"));
     // A schedule from a newer CADaddy, or a broken one, is left out rather than failing the file.
-    d.schedule4d = Some(r#"{"version":99,"tasks":[]}"#.into());
+    d.schedule4d = Some(r#"{"version":99,"tasks":[]}"#.into()).into();
     assert_eq!(read_dxf(write_dxf(&d).as_bytes()).unwrap().schedule4d, None);
 }
 
@@ -2797,7 +2803,7 @@ fn stroke_font_text_plots_with_a_hidden_searchable_copy() {
 fn walkthrough_packages_open_as_their_drawing() {
     let mut d = Drawing::new_imperial();
     d.model.push(Entity::new(Handle(0x200), EntityKind::Line(Line { a: Vec3::default(), b: Vec3 { x: 10.0, y: 0.0, z: 0.0 } })));
-    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into());
+    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into()).into();
     let bytes = write(&d, "tour.cdywalk").unwrap();
     assert!(cadaddy_walk3d::package::is_package(&bytes));
     let p = cadaddy_walk3d::package::Package::decode(&bytes).unwrap();
@@ -2894,7 +2900,7 @@ fn bim_spec_ifc_psets() {
     use cadaddy_doc::bimspec::{self, BimType, Confidence, SpecField};
     let mut d = Drawing::new_imperial();
     // Set building spec so IFC export can write.
-    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"Level 1","elevation":0}]}"#.into());
+    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"Level 1","elevation":0}]}"#.into()).into();
     // Create a type with manufacturer + catalog + sourced field.
     let mut h = BimType::new("H");
     h.category = "luminaire".into();
@@ -3404,6 +3410,113 @@ fn dwg_objects_whose_size_is_beyond_the_limit_are_dropped_with_the_note() {
 thread_local! {
     /// The group-code limits [`tag_caps`](super::tag_caps) gives in this test, when lowered.
     pub(super) static TAG_CAPS: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+    /// The DWG size limits [`dwg_byte_caps`](super::dwg_byte_caps) gives in this test, when lowered.
+    pub(super) static DWG_BYTE_CAPS: std::cell::Cell<Option<(usize, (usize, usize))>> = const { std::cell::Cell::new(None) };
+    /// DXFs this test's thread handed the DWG bridge to convert (the costly step of a DWG save).
+    pub(super) static BRIDGE_CONVERSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// DWGs this test's thread saved whose group codes on reopening were counted.
+    pub(super) static REOPEN_COUNTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Q6280: a DWG save is held to what opening the DWG reads, the group codes of the DXF it
+/// converts back to, which are more than the bridge DXF's (the reader writes a polyline vertex's
+/// widths and bulge): a DWG passed on the bridge's count could fail to reopen. Within the limit
+/// the file reopens under the same limits; over it the save is refused, naming the count opening
+/// would read; small saves aren't converted back at all.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_dwg_save_is_held_to_the_group_codes_reopening_reads() {
+    let d = many_entities(500);
+    let save = || write_dwg(&d, Version::R2004, DwgEngine::Bridge);
+    let (_, _, bridge) = dxf_write::dwg_bridge(&d, Version::R2004);
+    let reopened = cadaddy_dxf::count_tags(&dwg_rendition(&save().unwrap()).unwrap().0).unwrap();
+    assert!(reopened > bridge, "{reopened} reopening, {bridge} in the bridge DXF");
+    // Small saves: not converted back.
+    let before = REOPEN_COUNTS.get();
+    assert!(save().is_ok());
+    assert_eq!(REOPEN_COUNTS.get(), before);
+    // The bridge's count is within the limit, but what reopening reads isn't: refused.
+    let e = with_tag_caps(bridge, bridge, save).unwrap_err().to_string();
+    assert_eq!(REOPEN_COUNTS.get(), before + 1);
+    assert!(e.contains(&format!("would hold {reopened} group codes")) && e.contains(".cdy") && e.contains("force:true"), "{e}");
+    assert!(cadaddy_dxf::with_oversize_allowed(true, || with_tag_caps(bridge, bridge, save)).is_ok());
+    // At exactly what reopening reads it saves, and reopens under the same limits.
+    let dwg = with_tag_caps(reopened, reopened, save).unwrap();
+    assert_eq!(with_tag_caps(reopened, reopened, || read(&dwg, "a.dwg")).unwrap().entity_count(), 500);
+    assert!(with_tag_caps(reopened - 1, reopened - 1, || read(&dwg, "a.dwg")).is_err());
+}
+
+/// Run `f` with DWG files read up to `dwg` bytes and their DXF rendition's limit between `floor`
+/// and `ceil`.
+fn with_dwg_byte_caps<T>(dwg: usize, floor: usize, ceil: usize, f: impl FnOnce() -> T) -> T {
+    let before = DWG_BYTE_CAPS.replace(Some((dwg, (floor, ceil))));
+    let r = f();
+    DWG_BYTE_CAPS.set(before);
+    r
+}
+
+/// Q6280: a DWG save too big to reopen is refused on the bridge DXF's real group-code count
+/// (binary DXF: counting its line breaks counted bytes that happen to be 10), before the DXF is
+/// handed to the converter, with the message about the DWG, naming .cdy and force.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_dwg_save_too_big_to_reopen_is_refused_on_its_real_count_before_converting() {
+    let d = many_entities(500);
+    let (dxf, _, tags) = dxf_write::dwg_bridge(&d, Version::R2004);
+    let save = || write_dwg(&d, Version::R2004, DwgEngine::Bridge);
+    assert!(dxf.starts_with(b"AutoCAD Binary DXF"), "the bridge DXF is binary");
+    assert_eq!(tags, cadaddy_dxf::parse_with_limit(&dxf, usize::MAX).unwrap().len());
+    // One under the bridge's own count, it is refused without being converted (what reopening
+    // reads, more still, is the next test's).
+    let before = BRIDGE_CONVERSIONS.get();
+    let e = with_tag_caps(tags - 1, tags - 1, save).unwrap_err().to_string();
+    assert_eq!(BRIDGE_CONVERSIONS.get(), before, "refused before converting");
+    assert!(e.contains("too large to save as DWG") && e.contains(".cdy") && e.contains("force:true") && !e.contains("DXF"), "{e}");
+    // force writes it.
+    assert!(cadaddy_dxf::with_oversize_allowed(true, || with_tag_caps(tags - 1, tags - 1, save)).is_ok());
+}
+
+/// Q6280: a DWG CADaddy writes whose DXF rendition is over the bridge's default (1 GB) reopens:
+/// the rendition's limit scales with the DWG, between that default and a ceiling, so a small file
+/// still can't expand past the default. Here the default is lowered under the file's rendition.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_dwg_whose_dxf_form_is_over_the_default_reopens() {
+    let dwg = ac1024_dwg(3000);
+    let rendition = cadaddy_dwg::dwg_to_dxf(&dwg).unwrap().len();
+    let max_dwg = cadaddy_dwg::Limits::DEFAULT.max_dwg_bytes;
+    // A fixed limit under the rendition refuses the file (the unfixed DWG open)...
+    let fixed = cadaddy_dwg::Limits { max_dwg_bytes: max_dwg, max_dxf_bytes: rendition / 2 };
+    assert!(cadaddy_dwg::dwg_to_dxf_with(&dwg, fixed).is_err());
+    // ...scaled to the file it opens, every entity.
+    let d = with_dwg_byte_caps(max_dwg, rendition / 2, usize::MAX, || read(&dwg, "big.dwg")).unwrap();
+    assert_eq!(d.entity_count(), 3000);
+    // A ceiling under the rendition still refuses it cleanly.
+    let e = with_dwg_byte_caps(max_dwg, rendition / 4, rendition / 2, || read(&dwg, "big.dwg")).unwrap_err().to_string();
+    assert!(e.contains("more than") && e.contains("the limit"), "{e}");
+    // The limit: 64 bytes per DWG byte, between the floor and the ceiling.
+    let caps = |len| with_dwg_byte_caps(max_dwg, 1000, 1_000_000, || dwg_limits(len).max_dxf_bytes);
+    assert_eq!((caps(10), caps(100), caps(1 << 20)), (1000, 6400, 1_000_000));
+    // The real ones: a small file at 1 GB as before; the ceiling leaves the group-code limit to decide.
+    assert_eq!(dwg_limits(1 << 20).max_dxf_bytes, 1 << 30);
+    assert_eq!(dwg_limits(1 << 30).max_dxf_bytes, MAX_DWG_DXF_BYTES);
+}
+
+/// Q6280: a DWG larger than CADaddy opens is refused, as with the group codes (both engines),
+/// unless force; within the limit nothing changes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_dwg_larger_than_cadaddy_opens_is_refused_without_force() {
+    let d = many_entities(500);
+    let (_, (floor, ceil)) = dwg_byte_caps();
+    for engine in [DwgEngine::Bridge, DwgEngine::Native] {
+        let len = write_dwg(&d, Version::R2004, engine).unwrap().len();
+        let e = with_dwg_byte_caps(len - 1, floor, ceil, || write_dwg(&d, Version::R2004, engine)).unwrap_err().to_string();
+        assert!(e.contains("too large to save as DWG") && e.contains("MB") && e.contains(".cdy") && e.contains("force:true"), "{engine:?}: {e}");
+        let forced = cadaddy_dxf::with_oversize_allowed(true, || with_dwg_byte_caps(len - 1, floor, ceil, || write_dwg(&d, Version::R2004, engine)));
+        assert_eq!(forced.unwrap().len(), len, "{engine:?}");
+        assert!(with_dwg_byte_caps(len, floor, ceil, || write_dwg(&d, Version::R2004, engine)).is_ok());
+    }
 }
 
 /// Run `f` with the DXF group-code limit at `dxf` and the DWG's ceiling at `dwg`.
@@ -3457,4 +3570,39 @@ fn saving_a_file_too_big_to_reopen_is_refused_without_force() {
     assert!(with_tag_caps(100, 100, || write_with(&d, "big.dxf", &opts)).is_err());
     // .cdy has no such limit.
     assert!(with_tag_caps(100, 100, || write(&d, "big.cdy")).is_ok());
+}
+
+/// A drawing whose DWG bridge DXF is over the 1 GB the DWG converter accepts from outside
+/// (Q6280: a 1.35 M-object model's 1643 MB bridge DXF made every DWG save fail), but within what
+/// CADaddy reopens (under 120 M group codes: a long layer name makes each about 13 bytes, as in
+/// that model), saves as DWG, and the DWG reopens with every entity. Real size: several GB of
+/// memory and minutes, so run by hand:
+/// `cargo test -p cadaddy-io --lib -- --ignored bridge_dxf_is_over_1_gb`.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore = "real size: a bridge DXF over 1 GB (several GB of memory, minutes); run by hand"]
+fn a_drawing_whose_bridge_dxf_is_over_1_gb_saves_as_dwg_and_reopens() {
+    let t = std::time::Instant::now();
+    // About 25 groups per entity reopening, so 120 M allows 4.8 M entities: over 1 GB of bridge
+    // DXF needs more than 220 bytes each, which a long layer name gives.
+    let layer = format!("Synthetic layer {}", "with a long descriptive name for size tests ".repeat(3));
+    let common = Common { layer: layer.trim_end().into(), ..Common::default() };
+    // Entities per bridge byte from a sample, then enough for just over 1 GB.
+    let sample = 30_000;
+    let per = dxf_write::dwg_bridge(&many_entities_on(sample, &common), Version::R2004).0.len() as f64 / sample as f64;
+    let n = ((1100u64 << 20) as f64 / per) as usize;
+    let d = many_entities_on(n, &common);
+    let (bridge, _, tags) = dxf_write::dwg_bridge(&d, Version::R2004);
+    let bridge = bridge.len();
+    assert!(bridge > 1 << 30, "the bridge DXF is {bridge} bytes, not over 1 GB");
+    assert!(tags < MAX_DWG_TAGS, "{tags} group codes: more than a DWG reopens with");
+    eprintln!("{n} entities, bridge DXF {} MB, {tags} group codes, built in {:.1} s", bridge >> 20, t.elapsed().as_secs_f64());
+    let t = std::time::Instant::now();
+    let dwg = write(&d, "big.dwg").unwrap();
+    eprintln!("saved as DWG: {} MB in {:.1} s", dwg.len() >> 20, t.elapsed().as_secs_f64());
+    drop(d);
+    let t = std::time::Instant::now();
+    let back = read(&dwg, "big.dwg").unwrap();
+    eprintln!("reopened in {:.1} s", t.elapsed().as_secs_f64());
+    assert_eq!(back.entity_count(), n);
 }

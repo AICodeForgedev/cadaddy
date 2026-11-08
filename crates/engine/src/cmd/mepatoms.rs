@@ -31,6 +31,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Result, Session};
 
+pub(crate) mod boxclear;
 pub(crate) mod build;
 
 /// The rules data.
@@ -271,6 +272,8 @@ pub(crate) struct AtomRules {
     pub box_raceway_source: String,
     pub no_circuit_source: String,
     pub gang: GangRule,
+    /// Boxes never share space, nor stand back to back in a rated wall (Q6252).
+    pub box_clear: boxclear::ClearRule,
     pub ring: RingRule,
     pub default_raceway: String,
     pub default_raceway_source: String,

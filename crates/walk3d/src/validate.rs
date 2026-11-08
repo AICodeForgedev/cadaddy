@@ -478,6 +478,8 @@ pub struct ModelOpening {
     pub max: [f64; 2],
     /// A door's swing: hinge point and leaf width, feet.
     pub swing: Option<([f64; 2], f64)>,
+    /// A built door's leaf as the plans draw its swing, feet: hinge, open end, shut end.
+    pub leaf: Option<[[f64; 2]; 3]>,
 }
 
 /// A conduit, duct or pipe run.

@@ -448,3 +448,57 @@ fn a_wall_light_its_schedule_mounts_at_eight_feet_is_set_in_its_wall() {
     let q = props(&mut s, "Q6");
     assert!(q["host_wall"]["value"].is_null(), "{q:#}");
 }
+
+#[test]
+fn a_device_drawn_clear_of_the_walls_hangs_from_the_ceiling() {
+    let _g = serial();
+    let mut s = Session::empty();
+    s.open_drawing(two_rooms(), "Clear of walls", None);
+    // Made-up devices: a sensor no document mounts, drawn in the middle of the west room (4' and
+    // more from every wall); an exit sign its submittal calls a wall light, drawn in the middle of
+    // the east room, its schedule's installation "CEILING/VARIES"; a wall light drawn there too
+    // whose schedule says only WALL; and a sensor drawn against the south wall.
+    let tags = vec![
+        device(10.0, 5.0, "OS1", "occupancy_sensor", "1A1", json!({})),
+        device(30.0, 5.0, "XQ", "luminaire", "1A2", json!({"mount": "wall"})),
+        device(25.0, 5.0, "WQ", "luminaire", "1A3", json!({"mount": "wall"})),
+        device(5.0, 0.8, "OS2", "occupancy_sensor", "1A4", json!({})),
+        device(15.0, 5.0, "OS3", "occupancy_sensor", "1A5", json!({"mount_height_in": "44", "mount_height_note": "OS3 44\" AFF"})),
+        device(35.0, 5.0, "SQ", "switch", "1A6", json!({})),
+        device(5.0, 5.0, "PQ", "fire_alarm_device", "1A7", json!({"device_type": "manual pull station PQ"})),
+        // An exit sign read as a wall light (its submittal), only its schedule saying what it is.
+        device(37.0, 5.0, "XW", "wall_luminaire", "1A8", json!({"mount": "wall", "device_type": "luminaire XW"})),
+    ];
+    let extra = json!({"mep": {"fixture_schedule": [
+        {"tag": "XQ", "installation": "CEILING/VARIES", "description": "EXIT SIGN", "source": "E-9 LIGHT FIXTURE SCHEDULE"},
+        {"tag": "WQ", "installation": "WALL", "description": "WALL LIGHT", "source": "E-9 LIGHT FIXTURE SCHEDULE"},
+        {"tag": "XW", "installation": "CEILING/VARIES", "description": "EXIT SIGN", "source": "E-9 LIGHT FIXTURE SCHEDULE"}
+    ]}});
+    build(&mut s, spec(tags, extra));
+    for mark in ["OS1", "XQ", "XW"] {
+        let p = props(&mut s, mark);
+        assert_eq!(p["mounting"]["value"], "ceiling", "{mark}: {p:#}");
+        assert_eq!(p["mounting"]["source"]["kind"], "rule", "{mark}: {p:#}");
+        assert!(p["mounting"]["source"]["doc"].as_str().is_some_and(|d| d.contains("clear of every wall")), "the basis: {p:#}");
+        assert_eq!(p["mount_height_from"]["value"], "ceiling", "{mark}: {p:#}");
+        assert!(p["host_wall"]["value"].is_null(), "on no wall: {p:#}");
+        // Where it was drawn, its top at the level's 9' ceiling.
+        let (b, _, z1) = extent(&mut s, mark);
+        assert!((z1 - 108.0).abs() < 1e-6, "{mark} at the ceiling: {z1}");
+        assert!(b[1] > 4.0 * 12.0 && b[3] < 6.0 * 12.0, "{mark} stays where it was drawn: {b:?}");
+    }
+    // The documents put the wall light on a wall and nothing allows a ceiling; a sensor drawn
+    // at a wall is on it.
+    assert_eq!(props(&mut s, "WQ")["mounting"]["value"], "wall");
+    let os2 = props(&mut s, "OS2");
+    assert_eq!(os2["mounting"]["value"], "wall", "{os2:#}");
+    assert_eq!(os2["mount_height_from"]["value"], "default", "{os2:#}");
+    // A document's wall height (its typical room's note) keeps one drawn clear of the walls off
+    // the ceiling: the documents come first.
+    let os3 = props(&mut s, "OS3");
+    assert_eq!((os3["mounting"]["value"].clone(), os3["mount_height"]["value"].clone()), (json!("wall"), json!(44.0)), "{os3:#}");
+    // A switch and a pull station are wall devices wherever they are drawn.
+    for mark in ["SQ", "PQ"] {
+        assert_eq!(props(&mut s, mark)["mounting"]["value"], "wall", "{mark}");
+    }
+}

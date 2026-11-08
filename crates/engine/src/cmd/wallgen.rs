@@ -170,12 +170,34 @@ impl WallGrid {
 }
 
 /// A wall's tag with its wall type (`type:<name>`, after the source), for IFC's materials.
+const SWING_TAG: &str = "swing:";
+
 fn wall_tag(level: &str, source: Handle, wall_type: Option<&str>) -> Vec<RawTag> {
     let mut x = tag(Part::Wall, level, source);
     if let Some(n) = wall_type {
         x.push(RawTag { code: 1000, value: format!("type:{}", n.chars().take(250).collect::<String>()) });
     }
     x
+}
+
+/// A built door's tags, with its swing when the plan draws one (`hinge, open end, shut end`, x and
+/// y of each, on its level's plan).
+fn door_tag(level: &str, source: Handle, swing: Option<&str>) -> Vec<RawTag> {
+    let mut x = tag(Part::Door, level, source);
+    if let Some(sw) = swing {
+        x.push(RawTag { code: 1000, value: format!("{SWING_TAG}{sw}") });
+    }
+    x
+}
+
+/// A built door's swing: hinge, open end, shut end, on its level's plan.
+pub(crate) fn door_swing(e: &Entity) -> Option<[Vec2; 3]> {
+    let v = e.common.xdata.iter().find_map(|t| t.value.strip_prefix(SWING_TAG))?;
+    let n: Vec<f64> = v.split(',').filter_map(|p| p.parse().ok()).collect();
+    match n.as_slice() {
+        [a, b, c, d, e, f] if n.iter().all(|x| x.is_finite()) => Some([Vec2::new(*a, *b), Vec2::new(*c, *d), Vec2::new(*e, *f)]),
+        _ => None,
+    }
 }
 
 /// The rules: given, from a file, beside the drawing, from the last WALLGEN, else Walk mode's
@@ -477,7 +499,11 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     for (si, pl) in &planned {
         let Some(level) = scene.levels.get(*si) else { continue };
         for (part, m, source, wall_type) in pl.meshes() {
-            let xdata = if part == Part::Wall { wall_tag(&level.name, source, wall_type.as_deref()) } else { tag(part, &level.name, source) };
+            let xdata = match part {
+                Part::Wall => wall_tag(&level.name, source, wall_type.as_deref()),
+                Part::Door => door_tag(&level.name, source, wall_type.as_deref()),
+                _ => tag(part, &level.name, source),
+            };
             let common = Common { layer: layer_of(part).into(), xdata: xdata.into(), ..Common::default() };
             if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
                 *counts.entry(part_name(part)).or_insert(0) += 1;
@@ -1268,7 +1294,12 @@ impl PlanLevel {
             if let Some((a, b)) = l.frame {
                 self.add_frame(&mut m, a, b, l.thickness, lo, hi, l.window);
             }
-            out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, None));
+            // A single door's swing as drawn, for what must keep clear of it.
+            let swing = l.along.filter(|_| !l.window && l.pair.is_none()).map(|along| {
+                let shut = l.a + along * l.a.dist(l.b);
+                format!("{},{},{},{},{},{}", l.a.x, l.a.y, l.b.x, l.b.y, shut.x, shut.y)
+            });
+            out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, swing));
         }
         out
     }
@@ -1624,11 +1655,28 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if dashes > 0 {
         notes.push(format!("{}: {dashes} dashes of dashed lines (overhead, hidden) not taken for wall faces.", level.name));
     }
+    // A wall drawn unit by unit (masonry): one face, not a row of block-long walls.
+    let joined = super::perceive::geometry::join_unit_runs(&mut segs, k);
+    if joined > 0 {
+        notes.push(format!("{}: {joined} block-long pieces of wall faces joined.", level.name));
+    }
     let mut found = pairs(d, &segs, &lim);
     // A thin outline's side paired with another wall's face is the air beside that wall.
     let slivers = super::perceive::geometry::drop_sliver_pairs(&segs, &mut found, &lim);
     if slivers > 0 {
         notes.push(format!("{}: {slivers} line pairs between a thin outline (trim, a shelf) and another wall's face left out.", level.name));
+    }
+    // Two dimension strings side by side pair up like a wall's faces, and their extension lines too.
+    let figures: Vec<Vec2> = ents
+        .iter()
+        .filter(|e| is_dimension_figure(e))
+        .map(|e| cadaddy_doc::entity_bounds(d, e, 0))
+        .filter(|b| !b.is_empty())
+        .map(|b| b.center())
+        .collect();
+    let strings = drop_dimension_strings(&mut found, &figures, k);
+    if strings > 0 {
+        notes.push(format!("{}: {strings} line pairs of dimension strings and their extension lines not taken for walls.", level.name));
     }
     // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
     // window's glazing drawn lighter): it is wall too.
@@ -2257,6 +2305,56 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
     i
 }
 
+/// Two dimension strings side by side stand at least this far apart, inches.
+const DIMENSION_STRINGS_APART_IN: f64 = 10.0;
+
+/// A text that is a figure in feet (`12'-6"`, `38'-8 3/8"`, `3'`): a dimension's.
+fn is_dimension_figure(e: &Entity) -> bool {
+    let value = match &e.kind {
+        EntityKind::Text(t) => t.value.as_str(),
+        EntityKind::MText(t) => t.contents.as_str(),
+        _ => return false,
+    };
+    let c: Vec<char> = value.trim().chars().collect();
+    c.len() <= 16 && c.windows(2).any(|w| matches!(w, [d, '\''] if d.is_ascii_digit())) && !c.iter().any(char::is_ascii_lowercase)
+}
+
+/// Line pairs that are no wall: a pair with a dimension's figure lettered between its lines is two
+/// dimension strings side by side, and a pair across one of those is its extension lines (a wall
+/// stops at the building's face; a dimension string runs outside it). How many were dropped.
+fn drop_dimension_strings(found: &mut Vec<super::perceive::geometry::Pair>, figures: &[Vec2], k: f64) -> usize {
+    if figures.is_empty() {
+        return 0;
+    }
+    let between = |p: &super::perceive::geometry::Pair, at: Vec2| {
+        let len = p.c0.dist(p.c1);
+        if len.is_nan() || len <= 0.0 {
+            return false;
+        }
+        let u = (p.c1 - p.c0) * (1.0 / len);
+        let along = (at - p.c0).dot(u);
+        along >= 0.0 && along <= len && (at - p.c0).cross(u).abs() <= p.thickness / 2.0
+    };
+    // Two strings stand at least this far apart: closer, a figure between the lines is one
+    // lettered across a wall.
+    let is_string = |p: &super::perceive::geometry::Pair| p.thickness >= DIMENSION_STRINGS_APART_IN * k && figures.iter().any(|f| between(p, *f));
+    let strings: Vec<(Vec2, Vec2, f64)> = found.iter().filter(|p| is_string(p)).map(|p| (p.c0, p.c1, p.thickness)).collect();
+    if strings.is_empty() {
+        return 0;
+    }
+    let before = found.len();
+    let side = |p: Vec2, q: Vec2, r: Vec2| (q - p).cross(r - p);
+    found.retain(|p| {
+        !is_string(p)
+            && !strings.iter().any(|&(a, b, t)| {
+                // Reaching the string: an end within its width, or crossing it.
+                let crosses = side(a, b, p.c0) * side(a, b, p.c1) < 0.0 && side(p.c0, p.c1, a) * side(p.c0, p.c1, b) < 0.0;
+                crosses || seg_dist(p.c0, a, b) <= t / 2.0 || seg_dist(p.c1, a, b) <= t / 2.0
+            })
+    });
+    before - found.len()
+}
+
 /// Keep the building on a plan drawn in `region` (sheet units, `upf` per foot). The building is
 /// the walls that touch one another (within 4'), in clusters of at least a tenth of the largest's
 /// length, found among the walls shorter than 40% of the region (a grid line or the border runs
@@ -2549,6 +2647,39 @@ fn one_door_per_opening(leaves: &mut Vec<Leaf>, tol: f64) -> usize {
 
 #[cfg(test)]
 mod tests {
+    fn line_pair(a: [f64; 2], b: [f64; 2], thickness: f64) -> crate::cmd::perceive::geometry::Pair {
+        let (c0, c1) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
+        crate::cmd::perceive::geometry::Pair { layer: "0".into(), c0, c1, thickness, length: c0.dist(c1), confidence: 1.0, faces: [0, 1] }
+    }
+
+    #[test]
+    fn dimension_strings_and_their_extension_lines_are_no_walls() {
+        let mut found = vec![
+            // Two strings 15 apart above a building, a figure between them.
+            line_pair([0.0, 500.0], [400.0, 500.0], 15.0),
+            // An extension line pair from the building's corner across them.
+            line_pair([40.0, 400.0], [40.0, 520.0], 8.0),
+            // The building's walls: the top one is 100 below the string.
+            line_pair([0.0, 400.0], [400.0, 400.0], 8.0),
+            line_pair([0.0, 0.0], [0.0, 400.0], 8.0),
+        ];
+        let dropped = drop_dimension_strings(&mut found, &[Vec2::new(200.0, 503.0)], 1.0);
+        assert_eq!(dropped, 2);
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|p| p.thickness == 8.0 && p.c1.y <= 400.0), "the two walls stay");
+    }
+
+    #[test]
+    fn a_figure_outside_a_walls_faces_leaves_the_wall() {
+        // A room's dimension lettered beside a wall, not between its faces.
+        let mut found = vec![line_pair([0.0, 0.0], [400.0, 0.0], 8.0)];
+        assert_eq!(drop_dimension_strings(&mut found, &[Vec2::new(200.0, 12.0)], 1.0), 0);
+        assert_eq!(found.len(), 1);
+        // A figure lettered across a wall, between its faces, leaves it too: strings stand farther apart.
+        assert_eq!(drop_dimension_strings(&mut found, &[Vec2::new(200.0, 1.0)], 1.0), 0);
+        assert_eq!(found.len(), 1);
+    }
+
     use super::*;
     use cadaddy_walk3d::CirculationKind::{Corridor, Hoistway, Stair};
 

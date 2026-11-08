@@ -145,6 +145,71 @@ pub fn discipline_of(number: &str) -> String {
     number.trim().chars().take_while(char::is_ascii_uppercase).collect()
 }
 
+/// Whether a sheet number's letters are a discipline designator a set numbers its sheets by (rule
+/// data `sheets.number_prefixes`: the national CAD standard's designators and the two-letter ones
+/// sets use). Other letters (`RTU-1`, `EF-12`, `WH-1`) are an equipment or schedule tag in the
+/// drawing area: such a number is suspect, and a number at the title block's sheet-number spot
+/// wins over it.
+pub fn designator_prefix(number: &str) -> bool {
+    let letters = discipline_of(number);
+    crate::wordrules::words("sheets.number_prefixes").contains(&letters.as_str())
+}
+
+/// A text on the page that reads as a sheet number, with where it sits.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumberCandidate {
+    pub value: String,
+    /// Where it is across the page's extents (its linework and text): 0 = the left or bottom
+    /// edge, 1 = the right or top edge.
+    pub at: [f64; 2],
+    /// Its lettering height over the page's median text height.
+    pub size: f64,
+}
+
+/// Sheet-number candidates kept per page (a guard against hostile files).
+const MAX_CANDIDATES: usize = 2_000;
+
+/// Every text on the page that reads as a sheet number, where it sits across the page and how
+/// large it is beside the page's other lettering: what a set-wide reading compares page to page
+/// (a set prints each sheet's number at one spot of its title block).
+pub fn number_candidates(d: &Drawing, texts: &[TextItem]) -> Vec<NumberCandidate> {
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    let mut grow = |p: Vec2| {
+        if p.is_finite() {
+            lo = [lo[0].min(p.x), lo[1].min(p.y)];
+            hi = [hi[0].max(p.x), hi[1].max(p.y)];
+        }
+    };
+    for e in d.model.iter().take(MAX_OBJECTS) {
+        match &e.kind {
+            EntityKind::Line(l) => {
+                grow(l.a.xy());
+                grow(l.b.xy());
+            }
+            EntityKind::LwPolyline(pl) => pl.vertices.iter().take(MAX_OBJECTS).for_each(|v| grow(v.p)),
+            _ => {}
+        }
+    }
+    texts.iter().for_each(|t| grow(t.at));
+    let size = [hi[0] - lo[0], hi[1] - lo[1]];
+    if !(size[0] > 0.0 && size[1] > 0.0) {
+        return Vec::new();
+    }
+    let mut heights: Vec<f64> = texts.iter().map(|t| t.height).collect();
+    heights.sort_by(f64::total_cmp);
+    let median = heights.get(heights.len() / 2).copied().filter(|h| *h > 0.0).unwrap_or(1.0);
+    texts
+        .iter()
+        .filter(|t| is_sheet_number(&t.value) || crate::sheet_reader::looks_like_sheet_number(&t.value))
+        .take(MAX_CANDIDATES)
+        .map(|t| NumberCandidate {
+            value: t.value.trim().to_string(),
+            at: [(t.at.x - lo[0]) / size[0], (t.at.y - lo[1]) / size[1]],
+            size: t.height / median,
+        })
+        .collect()
+}
+
 /// The sheet's number, title and discipline from its title block.
 pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
     let label = texts.iter().filter(|t| horizontal(t)).find(|t| {
@@ -157,7 +222,7 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
         let number = texts
             .iter()
             .filter(|t| is_sheet_number(&t.value) && t.at.y < l.at.y && t.at.x >= l.at.x - 5.0 * h && t.at.dist(l.at) <= 60.0 * h)
-            .max_by(|a, b| a.height.total_cmp(&b.height));
+            .max_by(|a, b| designator_prefix(&a.value).cmp(&designator_prefix(&b.value)).then(a.height.total_cmp(&b.height)));
         // The title: the lines right under the label, top down, until a gap or the number.
         let mut lines: Vec<&TextItem> = texts
             .iter()
@@ -196,7 +261,7 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
         if let Some(n) = texts
             .iter()
             .filter(|t| is_sheet_number(&t.value) && t.height >= h && t.at.dist(l.at) <= 25.0 * h)
-            .min_by(|a, b| a.at.dist(l.at).total_cmp(&b.at.dist(l.at)))
+            .min_by(|a, b| designator_prefix(&b.value).cmp(&designator_prefix(&a.value)).then(a.at.dist(l.at).total_cmp(&b.at.dist(l.at))))
         {
             return Some(SheetIdent {
                 number: n.value.trim().to_string(),
@@ -207,7 +272,8 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
         }
     }
     // No labelled title block: the largest sheet-number lettering, if it stands out and sits
-    // where title blocks go (the right or bottom edge). Mid-sheet lettering is a note or a tag.
+    // where title blocks go (the right or bottom edge). Mid-sheet lettering is a note or a tag,
+    // and so is lettering whose letters name no discipline (an equipment tag in a schedule).
     let mut heights: Vec<f64> = texts.iter().map(|t| t.height).collect();
     heights.sort_by(f64::total_cmp);
     let median = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
@@ -216,7 +282,9 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
     let near_edge = |t: &TextItem| t.at.x >= x1 - 0.2 * (x1 - x0) || t.at.y <= y0 + 0.2 * (y1 - y0);
     texts
         .iter()
-        .filter(|t| is_sheet_number(&t.value) && discipline_of(&t.value).len() <= 2 && t.height >= 2.0 * median && near_edge(t))
+        .filter(|t| {
+            is_sheet_number(&t.value) && discipline_of(&t.value).len() <= 2 && designator_prefix(&t.value) && t.height >= 2.0 * median && near_edge(t)
+        })
         .max_by(|a, b| a.height.total_cmp(&b.height))
         .map(|n| SheetIdent {
             number: n.value.trim().to_string(),
@@ -785,6 +853,26 @@ mod tests {
         assert!(identify_sheet(&texts(&d)).is_none());
         text(&mut d, "ABC12", 1700.0, 20.0, 20.0); // at the edge, but three letters and no label
         assert!(identify_sheet(&texts(&d)).is_none());
+    }
+
+    /// Q6281: lettering whose letters name no discipline (an equipment tag in a schedule at the
+    /// sheet's edge) is no sheet number, however large; a designator's number there is.
+    #[test]
+    fn an_equipment_tag_at_the_edge_is_no_sheet_number() {
+        let mut d = Drawing::default();
+        for i in 0..30 {
+            text(&mut d, "NOTE", f64::from(i) * 60.0, f64::from(i) * 40.0, 4.0);
+        }
+        for tag in ["EF-12", "WH-1", "UH-3", "RTU-2"] {
+            text(&mut d, tag, 1700.0, 20.0, 20.0);
+            assert!(identify_sheet(&texts(&d)).is_none(), "{tag}");
+            assert!(!designator_prefix(tag), "{tag}");
+        }
+        text(&mut d, "E-12", 1750.0, 10.0, 16.0);
+        assert_eq!(identify_sheet(&texts(&d)).map(|s| s.number), Some("E-12".to_string()));
+        for n in ["E-12", "FP-1.1", "M2.01", "LV-3", "Q-7"] {
+            assert!(designator_prefix(n), "{n}");
+        }
     }
 
     #[test]

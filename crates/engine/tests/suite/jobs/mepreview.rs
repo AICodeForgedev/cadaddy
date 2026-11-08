@@ -31,7 +31,7 @@ fn mep_session() -> Session {
             ]
         }
     });
-    s.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap());
+    s.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap()).into();
     s
 }
 
@@ -101,7 +101,7 @@ fn legacy_reviewed_sentinel_is_migrated() {
             "runs": [{"system": "SA", "level": "L1", "points": [[0.0,0.0],[60.0,0.0]], "size_in": [24.0, 12.0], "bottoms_ft": [10.0], "objects": ["AA", "reviewed"]}]
         }
     });
-    s.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap());
+    s.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap()).into();
     let list = s.execute("mep.list", &json!({})).unwrap();
     let item = &list["items"][0];
     assert_eq!(item["reviewed"].as_bool(), Some(true), "migrated to bool");
@@ -189,7 +189,7 @@ fn edit_survives_mep_read_apply() {
     // Simulate mep.read apply on Level 1 by manually replacing runs.
     // We reconstruct the spec with the same objects but default values,
     // then rely on the override preservation logic.
-    let spec_json = s.doc().unwrap().building_spec.clone().unwrap();
+    let spec_json = s.doc().unwrap().building_spec.as_ref().cloned().unwrap();
     let mut spec: Value = serde_json::from_str(&spec_json).unwrap();
     // Reset the first run to default size but keep same objects (simulating re-read).
     let runs = spec["mep"]["runs"].as_array_mut().unwrap();
@@ -197,7 +197,7 @@ fn edit_survives_mep_read_apply() {
     runs[0]["size_source"] = json!("default");
     runs[0]["height_source"] = json!("default");
     runs[0]["reviewed"] = json!(false);
-    s.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap());
+    s.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap()).into();
 
     // Now mep.read apply would match by objects and restore overrides.
     // Since we can't call mep.read (no drawing), test the override path
@@ -303,7 +303,7 @@ fn paging_large_spec() {
             "runs": runs
         }
     });
-    s.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap());
+    s.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap()).into();
     let list = s.execute("mep.list", &json!({})).unwrap();
     assert_eq!(list["total"].as_u64(), Some(500));
     assert_eq!(list["items"].as_array().unwrap().len(), 50, "default page size is 50");
