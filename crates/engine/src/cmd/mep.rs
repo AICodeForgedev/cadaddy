@@ -639,6 +639,7 @@ pub(crate) fn read_with(s: &Session, sp: &BuildingSpec, only: Option<&str>, unta
                 slope_in_per_ft: 0.0,
                 made: Default::default(),
                 basis: String::new(),
+                corrections: Vec::new(),
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -1430,6 +1431,7 @@ fn read_pipes_from_tags(
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         });
         if let Some(slot) = run_of.get_mut(ci) {
             *slot = Some(runs.len() - 1);
@@ -1486,6 +1488,7 @@ fn read_pipes_from_tags(
             slope_in_per_ft: seed.slope_in_per_ft,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         });
     }
 
@@ -2535,25 +2538,12 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
         let z0 = (level.elevation_ft + on_pad(e)) * upf;
         let z1 = z0 + e.height_ft * upf;
         let mut m = super::wallgen::empty_mesh();
-        // A panel on the face of the wall nearest it: recessed (its front flush, its back in the
-        // wall) when its mounting says so, else on the face; turned with the wall.
-        let face = if panel(&e.kind) && !e.round {
-            super::propfill::wall_face(&walls, &level.name, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf, Some((z0 + z1) * 0.5))
-        } else {
-            None
-        };
-        let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
-        if let Some(f) = &face {
-            let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
-            let along = f.along * (w / 2.0);
-            // The box's middle line, half its depth from the face (into the wall when recessed).
-            let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
-            super::wallgen::add_box(&mut m, mid - along, mid + along, dp, z0, z1);
-        } else if e.round {
+        let at = equipment_plan(e, &level.name, &walls, upf, z0, z1);
+        let face = at.face;
+        if face.is_none() && e.round {
             add_upright_cylinder(&mut m, (lo + hi) * 0.5, (hi.x - lo.x).min(hi.y - lo.y) / 2.0, z0, z1);
         } else {
-            let cy = (lo.y + hi.y) / 2.0;
-            super::wallgen::add_box(&mut m, Vec2::new(lo.x, cy), Vec2::new(hi.x, cy), hi.y - lo.y, z0, z1);
+            super::wallgen::add_box(&mut m, at.a, at.b, at.depth, z0, z1);
         }
         if m.faces.is_empty() {
             continue;
@@ -2593,6 +2583,50 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
         }
     }
     built
+}
+
+/// Where a piece of equipment stands in plan as [`build_equipment`] builds it: its box's middle
+/// line (`a` to `b`), its depth across that line, and the wall face it is set on.
+pub(crate) struct EquipmentPlan {
+    pub a: Vec2,
+    pub b: Vec2,
+    pub depth: f64,
+    pub face: Option<super::propfill::WallFace>,
+}
+
+/// [`EquipmentPlan`] of `e` on `level` (heights `z0`..`z1`, drawing units): a panel on the face
+/// of the wall nearest it (`walls`: [`super::propfill::wall_footprints`]), recessed (its front
+/// flush, its back in the wall) when its mounting says so, else on the face, turned with the
+/// wall; anything else (and a panel no wall is near) its spec box.
+pub(crate) fn equipment_plan(
+    e: &cadaddy_walk3d::MepEquipment,
+    level: &str,
+    walls: &[super::propfill::WallPiece],
+    upf: f64,
+    z0: f64,
+    z1: f64,
+) -> EquipmentPlan {
+    let panel = matches!(e.kind.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
+    let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
+    let face = if panel && !e.round {
+        super::propfill::wall_face(walls, level, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf, Some((z0 + z1) * 0.5))
+    } else {
+        None
+    };
+    match face {
+        Some(f) => {
+            let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
+            let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
+            let along = f.along * (w / 2.0);
+            // The box's middle line, half its depth from the face (into the wall when recessed).
+            let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
+            EquipmentPlan { a: mid - along, b: mid + along, depth: dp, face: Some(f) }
+        }
+        None => {
+            let cy = (lo.y + hi.y) / 2.0;
+            EquipmentPlan { a: Vec2::new(lo.x, cy), b: Vec2::new(hi.x, cy), depth: hi.y - lo.y, face: None }
+        }
+    }
 }
 
 /// Sanitise a name for use in a layer name (alphanumeric, dash, underscore only).
@@ -2891,7 +2925,11 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             piece_mesh(&mut seg_mesh, p, upf);
         }
         if !seg_mesh.faces.is_empty() {
-            let x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment")));
+            // What the build corrected in the run (its route past gear), the design value beside it.
+            let x = super::provenance::with_run_corrections(
+                mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"))),
+                r,
+            );
             if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok()
             {
                 total_runs += 1;

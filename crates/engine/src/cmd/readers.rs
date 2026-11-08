@@ -606,6 +606,7 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         });
     }
     mep.systems = sys_map.into_values().collect();

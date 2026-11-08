@@ -6484,6 +6484,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     result["scope"] = scope_summary;
+    // Foreign pipe and duct out of electrical gear's dedicated space (NEC 110.26(E)(1)): what the
+    // plans run through it the build offset past the gear's side as the field installs it, the
+    // drawn route kept on the run beside the corrected one.
+    gear_space_finding(job, &result["gearSpace"]);
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
     if !drain_slope.is_null() {
@@ -13490,6 +13494,37 @@ fn infer_missing_water(
         sp.mep.runs.extend(inf.runs);
     }
     Value::Object(out)
+}
+
+/// The job's finding of what the build ran through electrical gear's dedicated space (its
+/// `gearSpace` report, [`super::gearspace::Cleared::json`]): how many runs, how many offset.
+fn gear_space_finding(job: &mut GuidedJob, g: &Value) {
+    let n = |k: &str| g[k].as_u64().map_or(0, |v| usize::try_from(v).unwrap_or(usize::MAX));
+    let (found, corrected) = (n("found"), n("corrected"));
+    if found == 0 {
+        return;
+    }
+    let list = |k: &str| g[k].as_array().map(|a| a.iter().filter_map(Value::as_str).take(20).collect::<Vec<_>>().join("; ")).unwrap_or_default();
+    let (moved, left) = (list("moved"), list("left"));
+    progress_line(&format!(
+        "  pipe and duct through gear's dedicated space: {corrected} of {found} runs offset past the gear ({} ft longer, {} joined runs moved with them); left: {left}",
+        g["extra_ft"], g["joined_moved"]
+    ));
+    let ru = super::gearspace::rules();
+    job.add_conflict(
+        StageName::BimBuild,
+        &format!("{found} pipe or duct runs drawn through electrical gear's dedicated space ({}): {corrected} offset past the gear, the drawn route kept beside", ru.rule),
+        &format!(
+            "{}. Offset: {}.{}",
+            ru.basis,
+            if moved.is_empty() { "none" } else { moved.as_str() },
+            if left.is_empty() { String::new() } else { format!(" Still open: {left}") }
+        ),
+        2,
+        vec!["Check each offset against the plans; a crossing left open needs the run moved off the gear".into()],
+        found,
+        corrected,
+    );
 }
 
 /// The fill-in pass's waste, vent and duct (Q6216, [`super::fillin`]): on each floor with
@@ -28174,6 +28209,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let mut runs = vec![
             run("SA", [[0.0, 0.0], [100.0, 0.0]], [12.0, 10.0], "tag"),
@@ -30386,6 +30422,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         // The sanitary line along the plan's long side; a vent line outside every view.
         let lost = vec![
@@ -30468,6 +30505,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             run("SAN", "Level 1"),
@@ -30568,6 +30606,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             // Room 301 as the enlarged plan draws it: waste, vent, and a water line on out to the main.
@@ -30733,6 +30772,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             // Floor 3 draws room 371's waste and vent; floor 4 only room 471's vent.

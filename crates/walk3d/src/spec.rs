@@ -2226,6 +2226,22 @@ pub struct MepRun {
     /// was inferred by. Empty for a drawn run.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub basis: String,
+    /// What the build corrected for the field where the documents draw the run wrong (a pipe
+    /// through electrical gear's dedicated space): each value as installed beside the design
+    /// value, with the reason and the rule. Empty: built as the documents give it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
+}
+
+/// One value of a run the build corrected for the field: the property (`route`), the design
+/// value as the documents give it, the value installed, why, and the rule.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunCorrection {
+    pub key: String,
+    pub design: String,
+    pub corrected: String,
+    pub reason: String,
+    pub rule: String,
 }
 
 fn is_zero_f64(v: &f64) -> bool {

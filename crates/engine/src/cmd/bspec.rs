@@ -2132,6 +2132,18 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // lights and diffusers.
     let rcp = super::ceilings::build(d, &sp);
     mark("reflected ceilings");
+    // Foreign pipe and duct out of electrical gear's dedicated space (NEC 110.26(E)(1)), the gear
+    // where it is built (a panel on its wall's face): offset past its side, the drawn route kept
+    // on the run; the drawing's spec takes the same correction.
+    let mut sp = sp;
+    let gear_space = super::gearspace::clear_built(d, &mut sp);
+    if gear_space.found > 0
+        && let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
+        && super::gearspace::clear_built(d, &mut stored).corrected > 0
+    {
+        d.building_spec = Some(stored.to_json()).into();
+    }
+    mark("gear's dedicated space");
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build_with(d, &sp, true);
     mark("MEP runs");
@@ -2252,6 +2264,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         "penetrations": routed.report["penetrations"].as_array().map_or(0, Vec::len),
     });
     r["deviceElements"] = json!(devices.built);
+    r["gearSpace"] = gear_space.json();
     r["deviceBuild"] = devices.to_json();
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
