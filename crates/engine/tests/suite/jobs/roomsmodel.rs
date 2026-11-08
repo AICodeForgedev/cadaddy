@@ -407,3 +407,49 @@ fn a_room_bounded_by_storefront_glazing_closes_like_a_walled_room() {
         assert!(area > 0.85 * 232.0 * 348.0 / 144.0 && area < 1.1 * 238.0 * 354.0 / 144.0, "room {number}: {area} sf: {list}");
     }
 }
+
+/// A 40' × 30' floor (inches), walls all round, a partition from the north wall that stops 4'
+/// short of the south wall (an open passage, no door, no wall across), a room each side, each
+/// tag in a tag box (traced on the built walls).
+fn open_passage_floor(s: &mut Session) {
+    s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+    for (a, b) in [([0.0, 0.0], [480.0, 0.0]), ([6.0, 6.0], [474.0, 6.0]), ([0.0, 360.0], [480.0, 360.0]), ([6.0, 354.0], [474.0, 354.0])] {
+        line(s, a, b);
+    }
+    for (a, b) in [([0.0, 0.0], [0.0, 360.0]), ([6.0, 6.0], [6.0, 354.0]), ([480.0, 0.0], [480.0, 360.0]), ([474.0, 6.0], [474.0, 354.0])] {
+        line(s, a, b);
+    }
+    for x in [237.0, 243.0] {
+        line(s, [x, 54.0], [x, 354.0]);
+    }
+    line(s, [237.0, 54.0], [243.0, 54.0]);
+    for (x, name, number) in [(80.0, "READING", "130"), (320.0, "GAMES", "140")] {
+        rect(s, x - 10.0, 150.0, x + 60.0, 240.0);
+        s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
+        text(s, [x, 220.0], name);
+        text(s, [x, 190.0], number);
+        s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+    }
+}
+
+/// Q6297: two rooms joined by an open passage (a partition stopping short, no door) are each
+/// built, each closed where its walls' lines end (a room separation line across the passage),
+/// not one room over both nor none.
+#[test]
+fn rooms_joined_by_an_open_passage_end_where_their_walls_end() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    open_passage_floor(&mut s);
+    let levels = json!([{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0, "region": L1}]);
+    s.execute("bspec.draft", &json!({"store": true, "levels": levels})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = list["rooms"].as_array().unwrap();
+    for number in ["130", "140"] {
+        let room = rooms.iter().find(|x| x["number"] == json!(number)).unwrap_or_else(|| panic!("room {number}: {list} {r}"));
+        let area = room["areaSqFt"].as_f64().unwrap();
+        // Each about 19'-5" × 29': its own half, not the whole floor.
+        assert!(area > 0.85 * 231.0 * 348.0 / 144.0 && area < 1.1 * 237.0 * 348.0 / 144.0, "room {number}: {area} sf: {list}");
+    }
+}

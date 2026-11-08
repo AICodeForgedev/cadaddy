@@ -3646,4 +3646,53 @@ mod tests {
         assert!(tagged_window_gaps(&[WindowTag { at: Vec2::new(36.0, -200.0), mark: "W5".into(), width: None }], &gaps, k).is_empty());
         assert!(tagged_window_gaps(&tags, &[], k).is_empty());
     }
+    /// Q6297: a slot between two pieces of one wall line narrower than the smallest opening is
+    /// built solid (a mullion, a post); one an opening's width, a hair, a tee or a parallel wall
+    /// beside it is not.
+    #[test]
+    fn narrow_slots_close_mullion_gaps_only() {
+        let k = 1.0;
+        let walls = vec![
+            plan_wall((0.0, 0.0), (30.0, 0.0)),
+            // A 2" mullion slot, the next piece drawn backwards.
+            plan_wall((62.0, 0.0), (32.0, 0.0)),
+            // A 36" door's gap: an opening, left open.
+            plan_wall((98.0, 0.0), (130.0, 0.0)),
+            // A hair apart: one wall already.
+            plan_wall((130.005, 0.0), (160.0, 0.0)),
+            // A parallel wall 24" off the line, and a tee across its end: no slot.
+            plan_wall((0.0, 24.0), (30.0, 24.0)),
+            plan_wall((161.0, -20.0), (161.0, 20.0)),
+        ];
+        let grid = WallGrid::build(&walls, 48.0);
+        let slots = narrow_slots(&walls, &grid, 18.0, k);
+        assert_eq!(slots.len(), 1, "{slots:?}");
+        let (_, a, b) = slots[0];
+        let (lo, hi) = (a.x.min(b.x), a.x.max(b.x));
+        assert!((lo - 30.0).abs() < 1e-6 && (hi - 32.0).abs() < 1e-6 && a.y.abs() < 1e-6, "{slots:?}");
+    }
+
+    /// Q6297: two walls at a corner that both stop short of it (a corner post between them) run
+    /// on to it; walls in line, a wall whose crossing is past the reach and a tee are left alone.
+    #[test]
+    fn close_corners_runs_walls_on_to_a_post_corner_only() {
+        let mut walls = vec![
+            // An L: the side wall stops 6" short, the frame 8" short of their crossing at (0, 0).
+            plan_wall((0.0, 120.0), (0.0, 6.0)),
+            plan_wall((8.0, 0.0), (120.0, 0.0)),
+            // Far apart: their crossing 40" past both ends, beyond the reach.
+            plan_wall((300.0, 200.0), (300.0, 40.0)),
+            plan_wall((340.0, 0.0), (500.0, 0.0)),
+            // In line: no corner.
+            plan_wall((600.0, 0.0), (700.0, 0.0)),
+            plan_wall((706.0, 0.0), (800.0, 0.0)),
+        ];
+        assert_eq!(close_corners(&mut walls, 12.0), 1, "{:?}", walls.iter().map(|w| (w.a, w.b)).collect::<Vec<_>>());
+        // The side wall now reaches the frame's centre line plus half its thickness, the frame the
+        // side wall's.
+        assert!(walls[0].b.dist(Vec2::new(0.0, -3.0)) < 1e-6, "{:?}", walls[0].b);
+        assert!(walls[1].a.dist(Vec2::new(-3.0, 0.0)) < 1e-6, "{:?}", walls[1].a);
+        assert!(walls[2].b.dist(Vec2::new(300.0, 40.0)) < 1e-9 && walls[3].a.dist(Vec2::new(340.0, 0.0)) < 1e-9);
+        assert!(walls[4].b.dist(Vec2::new(700.0, 0.0)) < 1e-9 && walls[5].a.dist(Vec2::new(706.0, 0.0)) < 1e-9);
+    }
 }
