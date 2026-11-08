@@ -1643,7 +1643,7 @@ mod tests {
 
     fn table(headers: &[&str], rows: &[&[&str]]) -> GridTable {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        GridTable { headers: s(headers), rows: rows.iter().map(|r| s(r)).collect(), sheet: "X-601".into() }
+        GridTable { headers: s(headers), rows: rows.iter().map(|r| s(r)).collect(), sheet: "X-601".into(), ..GridTable::default() }
     }
 
     #[test]
