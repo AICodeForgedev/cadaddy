@@ -2609,6 +2609,124 @@ fn outline_glyphs(f: &Fill) -> Vec<(Vec<usize>, [f64; 4])> {
     groups.into_values().collect()
 }
 
+/// One filled glyph: its pieces (a fill and the loops of it that belong to the glyph) and its box.
+struct OutlineGlyph {
+    pieces: Vec<(usize, Vec<usize>)>,
+    bbox: [f64; 4],
+}
+
+/// How far a piece's box must overlap another's, as a share of the smaller one's width and of
+/// its height, for the two to be one glyph: the stem and flag of a 1, the strokes of an A or
+/// an E overlap most of the smaller piece; two letters a font kerns together a sliver.
+const PIECE_OVERLAP: f64 = 0.3;
+/// The biggest a filled speck read as a period may be, as a share of the page's glyph size
+/// ([`ocr_max_seg`]): a period of the largest title-block lettering, not a column mark.
+const SPECK_SIZE: f64 = 0.25;
+
+/// Pairs of pieces side by side across the page [`outline_glyph_pieces`] compares at most (a
+/// column of lettering puts every piece beside every other; past this the rest stay apart).
+const MAX_PIECE_PAIRS: usize = 20_000_000;
+
+/// How much bigger than its biggest piece a glyph joined from pieces may be (its longer side):
+/// pieces of one glyph stay inside its box; a neighbouring letter would widen it.
+const PIECE_GROWTH: f64 = 1.3;
+
+/// The filled glyphs of a page: each fill's glyphs ([`outline_glyphs`]), and a glyph some pages
+/// fill in several pieces (one fill per stroke: an A's two legs, a 1's stem and flag, a C's arc
+/// and its ends) joined into one, so its holes and centre lines are the whole glyph's. Pieces
+/// join when they have the same pen, their boxes overlap most of the smaller one, and the
+/// joined box stays the size of its biggest piece. More than [`MAX_OUTLINE_GLYPHS`] pieces (or
+/// [`MAX_PIECE_PAIRS`] pairs) sets `capped` and the rest are left out (left apart).
+fn outline_glyph_pieces(fills: &[Fill], taken_fills: &HashSet<usize>, max_seg: f64, capped: &mut bool) -> Vec<OutlineGlyph> {
+    let mut pieces: Vec<(usize, Vec<usize>, [f64; 4])> = Vec::new();
+    'fills: for (fi, f) in fills.iter().enumerate() {
+        if taken_fills.contains(&fi) || f.loops.len() > MAX_OUTLINE_LOOPS {
+            continue;
+        }
+        for (loops, b) in outline_glyphs(f) {
+            // a piece bigger than a glyph is no part of one
+            if b[2] - b[0] > max_seg * 2.0 || b[3] - b[1] > max_seg * 2.0 {
+                continue;
+            }
+            if pieces.len() >= MAX_OUTLINE_GLYPHS {
+                *capped = true;
+                break 'fills;
+            }
+            pieces.push((fi, loops, b));
+        }
+    }
+    let n = pieces.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut boxes: Vec<[f64; 4]> = pieces.iter().map(|p| p.2).collect();
+    let mut longest: Vec<f64> = pieces.iter().map(|p| (p.2[2] - p.2[0]).max(p.2[3] - p.2[1])).collect();
+    fn root(parent: &[usize], mut i: usize) -> usize {
+        for _ in 0..MAX_OUTLINE_GLYPHS {
+            match parent.get(i) {
+                Some(&p) if p != i => i = p,
+                _ => break,
+            }
+        }
+        i
+    }
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| {
+        let (x, y) = (pieces.get(a).map_or(0.0, |p| p.2[0]), pieces.get(b).map_or(0.0, |p| p.2[0]));
+        x.total_cmp(&y)
+    });
+    let mut pairs = 0usize;
+    'pairs: for (k, &a) in order.iter().enumerate() {
+        let Some((fa, _, ba)) = pieces.get(a) else { continue };
+        let Some(pa) = fills.get(*fa).map(|f| f.pen) else { continue };
+        for &b in order.iter().skip(k + 1) {
+            let Some((fb, _, bb)) = pieces.get(b) else { continue };
+            if bb[0] > ba[2] {
+                break;
+            }
+            pairs += 1;
+            if pairs > MAX_PIECE_PAIRS {
+                *capped = true;
+                break 'pairs;
+            }
+            if fa == fb || fills.get(*fb).map(|f| f.pen) != Some(pa) {
+                continue;
+            }
+            let ox = ba[2].min(bb[2]) - ba[0].max(bb[0]);
+            let oy = ba[3].min(bb[3]) - ba[1].max(bb[1]);
+            let (mw, mh) = ((ba[2] - ba[0]).min(bb[2] - bb[0]), (ba[3] - ba[1]).min(bb[3] - bb[1]));
+            if ox < mw * PIECE_OVERLAP || oy < mh * PIECE_OVERLAP || ox <= 0.0 || oy <= 0.0 {
+                continue;
+            }
+            let (ra, rb) = (root(&parent, a), root(&parent, b));
+            if ra == rb {
+                continue;
+            }
+            let (Some(&ja), Some(&jb)) = (boxes.get(ra), boxes.get(rb)) else { continue };
+            let joined = [ja[0].min(jb[0]), ja[1].min(jb[1]), ja[2].max(jb[2]), ja[3].max(jb[3])];
+            let big = longest.get(ra).copied().unwrap_or(0.0).max(longest.get(rb).copied().unwrap_or(0.0));
+            if (joined[2] - joined[0]).max(joined[3] - joined[1]) > big * PIECE_GROWTH {
+                continue;
+            }
+            let (keep, gone) = (ra.min(rb), ra.max(rb));
+            if let Some(slot) = parent.get_mut(gone) {
+                *slot = keep;
+            }
+            if let Some(slot) = boxes.get_mut(keep) {
+                *slot = joined;
+            }
+            if let Some(slot) = longest.get_mut(keep) {
+                *slot = big;
+            }
+        }
+    }
+    let mut glyphs: BTreeMap<usize, OutlineGlyph> = BTreeMap::new();
+    for (i, (fi, loops, _)) in pieces.into_iter().enumerate() {
+        let r = root(&parent, i);
+        let bbox = boxes.get(r).copied().unwrap_or([0.0; 4]);
+        glyphs.entry(r).or_insert_with(|| OutlineGlyph { pieces: Vec::new(), bbox }).pieces.push((fi, loops));
+    }
+    glyphs.into_values().collect()
+}
+
 /// Read lettering the page draws as shapes: filled glyph outlines (text converted to outlines,
 /// a Type3 glyph that fills its shape) and the strokes Type3 glyph procedures drew
 /// (`glyph_orders`). Each filled glyph is thinned to its centre lines
@@ -2633,41 +2751,65 @@ fn recover_outlined_lettering(
     let mut read = OutlineRead::default();
     let max_seg = ocr_max_seg(sheet);
     let cover = TextCover::new(texts);
-    // the shapes to read, and where each came from
+    // the shapes to read, and where each came from (a filled glyph: the fills it is made of)
     enum From {
-        Fill(usize),
+        Glyph(usize),
         Stroke(usize),
     }
     let mut shapes: Vec<Stroke> = Vec::new();
     let mut from: Vec<From> = Vec::new();
+    let mut glyph_fills: Vec<Vec<usize>> = Vec::new();
     // each centre line's glyph (numbered as read) and its holes; whether each glyph is bars only
     let mut outline_of: HashMap<usize, (usize, usize)> = HashMap::new();
     let mut bars: Vec<bool> = Vec::new();
-    let mut glyphs = 0usize;
-    'fills: for (fi, f) in fills.iter().enumerate() {
-        if taken_fills.contains(&fi) || f.loops.len() > MAX_OUTLINE_LOOPS {
+    for glyph in outline_glyph_pieces(fills, taken_fills, max_seg, &mut read.capped) {
+        let b = glyph.bbox;
+        let (w, h) = (b[2] - b[0], b[3] - b[1]);
+        if w.max(h) < 1.5 || w > max_seg * 2.0 || h > max_seg * 2.0 {
             continue;
         }
-        let drawn_as_glyph = glyph_orders.contains(&f.order);
-        for (loops, b) in outline_glyphs(f) {
-            let (w, h) = (b[2] - b[0], b[3] - b[1]);
-            if w.max(h) < 1.5 || w > max_seg * 2.0 || h > max_seg * 2.0 {
-                continue;
-            }
-            if !drawn_as_glyph && cover.covers((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0) {
-                continue;
-            }
-            glyphs += 1;
-            if glyphs > MAX_OUTLINE_GLYPHS {
-                read.capped = true;
-                break 'fills;
-            }
-            let rings: Vec<&[(f64, f64)]> = loops.iter().filter_map(|&li| f.loops.get(li).map(Vec::as_slice)).collect();
-            let Some(sk) = crate::pdf_glyphs::skeleton(&rings, f.even_odd) else { continue };
+        let drawn_as_glyph = glyph.pieces.iter().any(|&(fi, _)| fills.get(fi).is_some_and(|f| glyph_orders.contains(&f.order)));
+        if !drawn_as_glyph && cover.covers((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0) {
+            continue;
+        }
+        let Some(f) = glyph.pieces.first().and_then(|&(fi, _)| fills.get(fi)) else { continue };
+        {
+            // each piece's rings, filled by its own fill's rule
+            let rings: Vec<(Vec<&[(f64, f64)]>, bool)> = glyph
+                .pieces
+                .iter()
+                .filter_map(|(fi, loops)| {
+                    let pf = fills.get(*fi)?;
+                    Some((loops.iter().filter_map(|&li| pf.loops.get(li).map(Vec::as_slice)).collect(), pf.even_odd))
+                })
+                .collect();
+            let parts: Vec<(&[&[(f64, f64)]], bool)> = rings.iter().map(|(r, eo)| (r.as_slice(), *eo)).collect();
+            let Some(sk) = crate::pdf_glyphs::skeleton_parts(&parts) else { continue };
             // lettering is drawn in strokes thin beside the glyph; a square, a dot, an
             // arrowhead is about as thick as it is big
             let aspect = w / h.max(1e-9);
-            if sk.ink < 0.04 || sk.width > 0.3 || (sk.ink > 0.8 && (0.4..=2.5).contains(&aspect)) {
+            let solid = sk.width > 0.3 || (sk.ink > 0.8 && (0.4..=2.5).contains(&aspect));
+            if sk.ink < 0.04 || solid {
+                // A solid speck the size of a period is a dot when it stands on a line of
+                // letters (the OCR reads it by the letters round it; alone it is dropped): it
+                // goes in as a small diamond, its holes saying nothing.
+                if solid && sk.ink >= 0.04 && w.max(h) <= max_seg * SPECK_SIZE && (0.4..=2.5).contains(&aspect) {
+                    let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+                    let gi = glyph_fills.len();
+                    glyph_fills.push(glyph.pieces.iter().map(|&(fi, _)| fi).collect());
+                    bars.push(false);
+                    shapes.push(Stroke {
+                        pts: vec![(cx, b[1]), (b[2], cy), (cx, b[3]), (b[0], cy)],
+                        closed: true,
+                        pen: f.pen,
+                        layer: f.layer.clone(),
+                        curve_loop: false,
+                        curved_loop: false,
+                        order: f.order,
+                    });
+                    from.push(From::Glyph(gi));
+                    read.shapes += 1;
+                }
                 continue;
             }
             // The centre lines stand half a stroke inside the outline on every side; stretched
@@ -2677,6 +2819,8 @@ fn recover_outlined_lettering(
             bars.push(bar_shape(&sk.lines));
             let stretch =
                 |v: f64, s0: f64, s1: f64, o0: f64, o1: f64| if s1 - s0 > 1e-9 { o0 + (v - s0) / (s1 - s0) * (o1 - o0) } else { (o0 + o1) / 2.0 };
+            let gi = glyph_fills.len();
+            glyph_fills.push(glyph.pieces.iter().map(|&(fi, _)| fi).collect());
             for (mut pts, closed) in sk.lines {
                 if closed && pts.len() > 1 {
                     pts.pop();
@@ -2686,7 +2830,7 @@ fn recover_outlined_lettering(
                 }
                 outline_of.insert(shapes.len(), (read.shapes, sk.holes));
                 shapes.push(Stroke { pts, closed, pen: f.pen, layer: f.layer.clone(), curve_loop: false, curved_loop: false, order: f.order });
-                from.push(From::Fill(fi));
+                from.push(From::Glyph(gi));
             }
             read.shapes += 1;
         }
@@ -2725,8 +2869,8 @@ fn recover_outlined_lettering(
         let (mut own_fills, mut own_strokes) = (HashSet::new(), HashSet::new());
         for i in &rt.stroke_indices {
             match from.get(*i) {
-                Some(From::Fill(fi)) => {
-                    own_fills.insert(*fi);
+                Some(From::Glyph(gi)) => {
+                    own_fills.extend(glyph_fills.get(*gi).into_iter().flatten().copied());
                 }
                 Some(From::Stroke(si)) => {
                     own_strokes.insert(*si);
@@ -3404,6 +3548,7 @@ pub struct OcrWord {
 }
 
 /// A matched glyph.
+#[derive(Clone)]
 struct MatchedGlyph {
     ch: char,
     /// A look-alike the shapes fit as well (see [`LOOK_ALIKES`]).
@@ -3432,6 +3577,26 @@ fn small_glyph(ch: char) -> bool {
 /// Characters plot fonts often draw taller than a capital (see [`small_glyph`]).
 fn tall_glyph(ch: char) -> bool {
     matches!(ch, '(' | ')' | '/' | '#')
+}
+
+/// Drop the dots and ticks that end a run when two of them stand one above the other: the
+/// letters of a line of lettering running up the sheet beside it, read upright as specks
+/// ("XA12.1'..". beside a turned issue note). Punctuation that ends a line runs along
+/// it (a period then a quote, an ellipsis); stacked specks are no part of it.
+fn drop_stacked_specks(run: &mut Vec<&MatchedGlyph>) {
+    let speck = |g: &MatchedGlyph| matches!(g.ch, '.' | ',' | '\'' | '"');
+    let start = run.iter().rposition(|g| !speck(g)).map_or(0, |i| i + 1);
+    let Some(tail) = run.get(start..) else { return };
+    let stacked = tail.iter().enumerate().any(|(i, a)| {
+        tail.iter().skip(i + 1).any(|b| {
+            let over = a.bb[2].min(b.bb[2]) - a.bb[0].max(b.bb[0]);
+            let narrow = (a.bb[2] - a.bb[0]).min(b.bb[2] - b.bb[0]);
+            over > narrow * 0.5 && (a.bb[1] - b.bb[1]).abs() > (a.bb[3] - a.bb[1]).max(b.bb[3] - b.bb[1])
+        })
+    });
+    if start > 0 && tail.len() >= 2 && stacked {
+        run.truncate(start);
+    }
 }
 
 /// Settle the look-alikes of a word (O/0, B/8, I/1, ...): each takes the kind (letter or
@@ -3472,14 +3637,36 @@ fn settle_look_alikes(word: &mut [(&MatchedGlyph, char)]) {
             let before = kinds.get(..pi).and_then(|k| k.iter().rev().flatten().next().copied());
             before.or_else(|| kinds.get(pi + 1..).and_then(|k| k.iter().flatten().next().copied()))
         };
-        let Some(want_digit) = kinds.get(pi).copied().flatten().or_else(near).or(whole) else { continue };
-        for (g, ch) in word.get_mut(a..b).into_iter().flatten() {
-            if let Some(alt) = g.alt
-                && alt.is_ascii_digit() == want_digit
-            {
-                *ch = alt;
+        if let Some(want_digit) = kinds.get(pi).copied().flatten().or_else(near).or(whole) {
+            for (g, ch) in word.get_mut(a..b).into_iter().flatten() {
+                if let Some(alt) = g.alt
+                    && alt.is_ascii_digit() == want_digit
+                {
+                    *ch = alt;
+                }
             }
         }
+        if let Some(part) = word.get_mut(a..b) {
+            digit_tail(part);
+        }
+    }
+}
+
+/// A part's look-alikes after its last sure letter are digits when there are two or more and
+/// one of them reads as a digit other than 0 first: the number of a sheet or a tag ("XA101",
+/// "E2O1"), whose letters would otherwise turn its 0 into an O. A word's own O, I, S stay
+/// letters (a ring reads as 0 or O alike, so a 0 alone says nothing; "TOO" stays a word).
+fn digit_tail(part: &mut [(&MatchedGlyph, char)]) {
+    let Some(last) = part.iter().rposition(|(g, _)| g.alt.is_none() && g.ch.is_ascii_alphabetic()) else { return };
+    let Some(tail) = part.get_mut(last + 1..) else { return };
+    let numeral = tail.len() >= 2
+        && tail.iter().all(|(g, _)| g.alt.is_some() || g.ch.is_ascii_digit())
+        && tail.iter().any(|(g, _)| g.ch.is_ascii_digit() && g.ch != '0');
+    if !numeral {
+        return;
+    }
+    for (g, ch) in tail.iter_mut() {
+        *ch = if g.ch.is_ascii_digit() { g.ch } else { g.alt.filter(char::is_ascii_digit).unwrap_or(*ch) };
     }
 }
 
@@ -3739,6 +3926,7 @@ fn recover_shx_ocr_upright(
         }
         let holes = (!outlines.is_empty()).then(|| outlines.values().sum());
         if let Some(GlyphRead { mut ch, dist, mut alt }) = read_glyph(pts, slant, &templates, holes) {
+            let mut by_size = false;
             let straight = pts.len() == 1 && pts.first().is_some_and(|p| p.len() <= 2);
             let ring = (members.len() == 1 && members.first().and_then(|&i| strokes.get(i)).is_some_and(|s| s.closed))
                 || members.iter().any(|&i| strokes.get(i).is_some_and(|s| s.curved_loop));
@@ -3765,6 +3953,9 @@ fn recover_shx_ocr_upright(
                 } else if w.max(h) <= row_h * 0.3 && ch != '-' {
                     // a speck with a tail (taller than wide, not one straight tick) is a comma
                     (ch, alt) = (if !straight && h > w * 1.8 { ',' } else { '.' }, None);
+                    // read by its size, not its shape: how well its shape fits a letter says
+                    // nothing of the line
+                    by_size = true;
                 }
             }
             // spacing is measured upright: x with the row's slant taken out about the glyph's
@@ -3784,7 +3975,7 @@ fn recover_shx_ocr_upright(
                 bb,
                 indices: members.clone(),
                 pen: *pen,
-                confidence: match_confidence(dist),
+                confidence: if by_size { 1.0 } else { match_confidence(dist) },
                 straight,
                 ring,
                 slant,
@@ -3935,7 +4126,8 @@ fn recover_shx_ocr_upright(
             }
             prev_end = prev_end.max(x1);
         }
-        for run in runs {
+        for mut run in runs {
+            drop_stacked_specks(&mut run);
             // words (split at spaces), each glyph with the character it reads as
             let mut words: Vec<Vec<(&MatchedGlyph, char)>> = Vec::new();
             let mut prev_end = f64::MIN;
@@ -3954,6 +4146,16 @@ fn recover_shx_ocr_upright(
                 }
                 prev_end = prev_end.max(x1);
             }
+            // a word of dots and ticks alone at either end of a run is no part of the text: the
+            // specks of linework, or of lettering turned beside the line, read upright
+            let specks = |w: &Vec<(&MatchedGlyph, char)>| w.iter().all(|(_, c)| matches!(c, '.' | ',' | '\'' | '"'));
+            while words.len() > 1 && words.first().is_some_and(specks) {
+                words.remove(0);
+            }
+            while words.len() > 1 && words.last().is_some_and(specks) {
+                words.pop();
+            }
+            let run: Vec<&MatchedGlyph> = words.iter().flatten().map(|(g, _)| *g).collect();
             let mut value = String::new();
             for word in &mut words {
                 settle_look_alikes(word);
@@ -6395,6 +6597,71 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_numbers_look_alikes_after_its_letters_are_digits() {
+        let g = |ch: char, alt: Option<char>| MatchedGlyph {
+            ch,
+            alt,
+            bb: [0.0; 4],
+            indices: Vec::new(),
+            pen: Pen { rgb: [0, 0, 0], lw: 0, transp: 0 },
+            confidence: 0.8,
+            straight: false,
+            ring: false,
+            slant: 0.0,
+        };
+        let settle = |glyphs: &[MatchedGlyph]| -> String {
+            let mut word: Vec<(&MatchedGlyph, char)> = glyphs.iter().map(|m| (m, m.ch)).collect();
+            settle_look_alikes(&mut word);
+            word.iter().map(|(_, c)| *c).collect()
+        };
+        let one = || g('1', Some('I'));
+        let ring = || g('O', Some('0'));
+        // a sheet number: its letters sure, its number's 1s read as digits first
+        assert_eq!(settle(&[g('X', None), g('A', None), one(), ring(), one()]), "XA101");
+        assert_eq!(settle(&[g('E', None), g('2', Some('Z')), ring(), one()]), "E201");
+        // words keep their letters: a ring alone says nothing, and a letter after it ends no number
+        assert_eq!(settle(&[g('T', None), ring(), ring()]), "TOO");
+        assert_eq!(settle(&[g('R', None), ring(), ring(), g('F', None)]), "ROOF");
+        assert_eq!(settle(&[g('T', None), ring()]), "TO");
+        assert_eq!(settle(&[]), "");
+    }
+
+    #[test]
+    fn specks_stacked_after_a_line_are_dropped_and_its_punctuation_kept() {
+        let g = |ch: char, bb: [f64; 4]| MatchedGlyph {
+            ch,
+            alt: None,
+            bb,
+            indices: Vec::new(),
+            pen: Pen { rgb: [0, 0, 0], lw: 0, transp: 0 },
+            confidence: 0.8,
+            straight: false,
+            ring: false,
+            slant: 0.0,
+        };
+        let read = |glyphs: &[MatchedGlyph]| -> String {
+            let mut run: Vec<&MatchedGlyph> = glyphs.iter().collect();
+            drop_stacked_specks(&mut run);
+            run.iter().map(|g| g.ch).collect()
+        };
+        let letters = [g('A', [0.0, 0.0, 30.0, 46.0]), g('1', [36.0, 0.0, 66.0, 46.0])];
+        // the letters of a turned line beside it, one above the other
+        let mut turned = letters.to_vec();
+        turned.extend([g('\'', [80.0, 10.0, 90.0, 18.0]), g('.', [80.0, 25.0, 90.0, 32.0]), g('.', [81.0, 40.0, 89.0, 47.0])]);
+        assert_eq!(read(&turned), "A1");
+        // a period and a quote, and an ellipsis, run along the line
+        let mut ending = letters.to_vec();
+        ending.extend([g('.', [68.0, 0.0, 72.0, 4.0]), g('\'', [74.0, 36.0, 77.0, 46.0])]);
+        assert_eq!(read(&ending), "A1.'");
+        let mut dots = letters.to_vec();
+        dots.extend([g('.', [68.0, 0.0, 72.0, 4.0]), g('.', [74.0, 0.0, 78.0, 4.0]), g('.', [80.0, 0.0, 84.0, 4.0])]);
+        assert_eq!(read(&dots), "A1...");
+        // specks alone are left to the noise rules
+        assert_eq!(read(&turned[2..]), "'..");
+        assert_eq!(read(&[]), "");
+    }
+
     #[test]
     fn a_rotated_pages_drawing_is_held_against_the_sheet_as_displayed() {
         // A 36 x 24 sheet stored upright at 24 x 36 and turned 270: raw (x, y) shows at (2592 - y, x).
