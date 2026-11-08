@@ -187,6 +187,30 @@ pub(crate) fn set_run(r: &mut MepRun, made: Made, basis: impl Into<String>) {
     r.basis = if made.is_drawn() { String::new() } else { basis.into() };
 }
 
+/// A run's corrections ([`MepRun::corrections`]) into the properties of the piece built from it
+/// (its build tags `x`): each value as installed, the design value beside it ([`correct`]).
+pub(crate) fn with_run_corrections(x: Vec<RawTag>, r: &MepRun) -> Vec<RawTag> {
+    if r.corrections.is_empty() {
+        return x;
+    }
+    let mut ps = props::read(&x);
+    let mut changed = false;
+    for c in r.corrections.iter().take(MAX_RUN_CORRECTIONS) {
+        let c = Correction {
+            key: c.key.clone(),
+            design: c.design.clone(),
+            corrected: c.corrected.clone(),
+            reason: c.reason.clone(),
+            rule: c.rule.clone(),
+        };
+        changed |= correct(&mut ps, &c, Source::of(SourceKind::Print));
+    }
+    if changed { props::write(&x, &ps) } else { x }
+}
+
+/// The most corrections of one run put on its piece.
+const MAX_RUN_CORRECTIONS: usize = 16;
+
 /// What a built element is by the documents, and its basis (`None`: not a built element): its
 /// own mark, else the marks earlier builds wrote.
 pub(crate) fn of_element(e: &Entity) -> Option<(Made, String)> {

@@ -132,6 +132,7 @@ pub mod framing;
 pub mod furnish;
 pub mod gear;
 pub mod gearbuild;
+pub(crate) mod gearspace;
 pub mod geo;
 pub mod gridtable;
 pub mod grounding;

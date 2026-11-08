@@ -190,6 +190,10 @@ pub fn install_io() {
     cadaddy_engine::cmd::file::set_write_as(|d, name, o| {
         cadaddy_io::write_with(d, name, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
+    // DXF saves and exports are written into the file as they are made, never held whole.
+    cadaddy_engine::cmd::file::set_write_streamed(|d, name, o, open| {
+        cadaddy_io::write_streamed(d, name, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }, open).map_err(|e| e.to_string())
+    });
     // AutoLISP's entget, entmake and entmod see entities as DXF groups.
     cadaddy_engine::cmd::file::set_entity_codec(cadaddy_engine::cmd::file::EntityCodec {
         groups: cadaddy_io::entity_groups,

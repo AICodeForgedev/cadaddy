@@ -2107,7 +2107,8 @@
     }
    ]
   },
-  "notes.reference_only": {"source": "drafting convention: a sheet's note that says its layout or its device spots are for reference only or diagrammatic (`LOW VOLTAGE LAYOUT IS FOR REFERENCE ONLY`, `DEVICE LOCATIONS ARE DIAGRAMMATIC`): its spots are not measured against (Q6262, validate_present.rs); a row matches when the note contains one of `any`, all of `all` and none of `none` (a background drawn for reference, raceways drawn diagrammatically are no such note)", "rules": [{"value": "locations", "any": ["REFERENCE ONLY", "FOR REFERENCE PURPOSES"], "all": [], "none": ["BACKGROUND", "XREF", "UNDERLAY"]}, {"value": "locations", "any": ["DIAGRAMMATIC", "SCHEMATIC"], "all": ["LOCATION"], "none": ["CONDUIT", "RACEWAY", "WIRING", "PIPING", "DUCT"]}]}, "pipes.drain_systems": {
+  "notes.reference_only": {"source": "drafting convention: a sheet's note that says its layout or its device spots are for reference only or diagrammatic (`LOW VOLTAGE LAYOUT IS FOR REFERENCE ONLY`, `DEVICE LOCATIONS ARE DIAGRAMMATIC`): its spots are not measured against (Q6262, validate_present.rs); a row matches when the note contains one of `any`, all of `all` and none of `none` (a background drawn for reference, raceways drawn diagrammatically are no such note)", "rules": [{"value": "locations", "any": ["REFERENCE ONLY", "FOR REFERENCE PURPOSES"], "all": [], "none": ["BACKGROUND", "XREF", "UNDERLAY"]}, {"value": "locations", "any": ["DIAGRAMMATIC", "SCHEMATIC"], "all": ["LOCATION"], "none": ["CONDUIT", "RACEWAY", "WIRING", "PIPING", "DUCT"]}]},
+  "openings.window_mark_prefixes": {"source": "drafting convention: a window's tag on a floor plan is its type letter and a number (`W5`, `W-2`, `W3A`); a mark so by a gap in an outside wall is a window there when the set has no window schedule to read the marks from (Q6293, wallgen.rs `is_window_mark`)", "words": ["W", "WIN", "WDW"]}, "pipes.drain_systems": {
    "source": "The drainage services (sanitary, waste, storm) a stack base or a slab drain belongs to. (trade practice; moved from ugplan.rs `DRAINS`)",
    "words": [
     "SAN",
@@ -2744,6 +2745,16 @@
     "TYPES",
     "LUMINAIRE",
     "LUMINAIRES"
+   ]
+  },
+  "schedules.plumbing_fixture_titles": {
+   "source": "drafting convention: the titles of a plumbing fixture schedule; read on any trade's sheet, not only the plumbing sheets (fix-plumbing-fixtures-zero)",
+   "words": [
+    "PLUMBING FIXTURE SCHEDULE",
+    "PLUMBING FIXTURES SCHEDULE",
+    "PLUMBING FIXTURE AND EQUIPMENT SCHEDULE",
+    "PLUMBING FIXTURE & EQUIPMENT SCHEDULE",
+    "PLUMBING SCHEDULE"
    ]
   },
   "schedules.mark_headings": {

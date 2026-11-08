@@ -5729,11 +5729,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The devices stage's devices, on their levels (bspec.draft started a new spec), before the
     // build: it makes each one an element carrying what was read about it (Q6002).
     // The plumbing fixtures the plumbing plans tag (named by the set's fixture schedule) go in
-    // with the devices: placed by their sheets the same way.
-    let schedule = if job.sheet_spans.iter().any(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sp.sheet).eq_ignore_ascii_case("P")) {
-        plumbing_schedule(s.doc()?, job)
-    } else {
-        None
+    // with the devices: placed by their sheets the same way. The schedule may be on any trade's
+    // sheet. What was found, for the finding when piped floors get no fixtures.
+    let (schedule, schedule_pages) = plumbing_schedule(s.doc()?, job);
+    let mut fixtures_read = match &schedule {
+        Some(sch) => format!("the plumbing fixture schedule lists {} tags", sch.rows.len()),
+        None => format!("no plumbing fixture schedule was found ({schedule_pages} pages looked at)"),
     };
     // The typical rooms' plans' marks the device reading left (symbols drawn loose, circuit labels
     // and switch designations no read device took): devices of the job's like the rest, so they
@@ -5767,12 +5768,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(sch) = &schedule {
         let fixtures = plumbing_fixtures(s.doc()?, job, sch);
         progress_line(&format!("  plumbing fixture schedule: {} tags; fixtures the plumbing plans tag: {}", sch.rows.len(), fixtures.len()));
+        fixtures_read = format!("{fixtures_read}; the plumbing plans ({} sheets) tag {} of them", plumbing_sheets(job).len(), fixtures.len());
         for f in &fixtures {
             fate(job, &f.handle, MarkFate::object("plumbing fixture", &format!("a tag the plumbing fixture schedule lists ({})", f.tag)));
         }
         all_devices.extend(fixtures);
     }
-    if schedule.is_some() || job.sheet_spans.iter().any(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sp.sheet).eq_ignore_ascii_case("P")) {
+    if schedule.is_none() {
+        progress_line(&format!("  plumbing fixture schedule: none found on {schedule_pages} pages looked at"));
+    }
+    if schedule.is_some() || !plumbing_sheets(job).is_empty() {
         let stacks = plumbing_stacks(s.doc()?, job);
         if !stacks.is_empty() {
             progress_line(&format!("  waste and vent stacks the plumbing plans letter: {}", stacks.len()));
@@ -6774,6 +6779,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     result["scope"] = scope_summary;
+    // Foreign pipe and duct out of electrical gear's dedicated space (NEC 110.26(E)(1)): what the
+    // plans run through it the build offset past the gear's side as the field installs it, the
+    // drawn route kept on the run beside the corrected one.
+    gear_space_finding(job, &result["gearSpace"], "");
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
     // Each sheet's registration onto its level's plan: how, the transform and its error or
@@ -7033,6 +7042,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             if let Ok((sp, _)) = super::bspec::current(s, "bim_build") {
                 let c = super::plumbing::connect(s.doc_mut()?, &sp);
                 progress_line(&format!("  plumbing fixtures connected to their lines: {c}"));
+                fixtureless_finding(job, &c, &fixtures_read);
                 result["plumbing"] = c;
             }
         }
@@ -13916,6 +13926,69 @@ fn infer_missing_water(
     Value::Object(out)
 }
 
+/// The pipe and duct of `sp` (the step's spec, which it stores) through the dedicated space of
+/// the gear `tags` names, laid out or moved after the build: offset past it
+/// ([`super::gearspace::clear_built_of`]), the drawn route kept, their old pieces taken out and
+/// the runs built again; the job's finding says so.
+fn gear_space_after_layout(s: &mut Session, job: &mut GuidedJob, sp: &mut cadaddy_walk3d::BuildingSpec, tags: &BTreeSet<String>) -> Result<()> {
+    if tags.is_empty() {
+        return Ok(());
+    }
+    let c = super::gearspace::clear_built_of(s.doc()?, sp, Some(tags));
+    if !c.changed.is_empty() {
+        let olds: Vec<String> = c.changed.iter().map(|(_, b)| format!("{b}/")).collect();
+        let d = s.doc_mut()?;
+        let stale: Vec<cadaddy_doc::Handle> = d
+            .model
+            .iter()
+            .filter(|e| super::bimlook::made_tag(e, "mepid").is_some_and(|id| olds.iter().any(|b| id.starts_with(b.as_str()))))
+            .map(|e| e.handle)
+            .collect();
+        for h in &stale {
+            d.model.remove(*h);
+        }
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+        let runs: Vec<cadaddy_walk3d::MepRun> = c.changed.iter().filter_map(|(i, _)| sp.mep.runs.get(*i).cloned()).collect();
+        build_runs(s, sp, runs, &BTreeSet::new())?;
+    }
+    gear_space_finding(job, &c.json(), " (gear laid out or moved after the build)");
+    Ok(())
+}
+
+/// The job's finding of what the build ran through electrical gear's dedicated space (its
+/// `gearSpace` report, [`super::gearspace::Cleared::json`]): how many runs, how many offset.
+fn gear_space_finding(job: &mut GuidedJob, g: &Value, when: &str) {
+    let n = |k: &str| g[k].as_u64().map_or(0, |v| usize::try_from(v).unwrap_or(usize::MAX));
+    let (found, corrected) = (n("found"), n("corrected"));
+    if found == 0 {
+        return;
+    }
+    let list = |k: &str| g[k].as_array().map(|a| a.iter().filter_map(Value::as_str).take(20).collect::<Vec<_>>().join("; ")).unwrap_or_default();
+    let (moved, left) = (list("moved"), list("left"));
+    progress_line(&format!(
+        "  pipe and duct through gear's dedicated space{when}: {corrected} of {found} runs offset past the gear ({} ft longer, {} joined runs moved with them); left: {left}",
+        g["extra_ft"], g["joined_moved"]
+    ));
+    let ru = super::gearspace::rules();
+    job.add_conflict(
+        StageName::BimBuild,
+        &format!(
+            "{found} pipe or duct runs drawn through electrical gear's dedicated space{when} ({}): {corrected} offset past the gear, the drawn route kept beside",
+            ru.rule
+        ),
+        &format!(
+            "{}. Offset: {}.{}",
+            ru.basis,
+            if moved.is_empty() { "none" } else { moved.as_str() },
+            if left.is_empty() { String::new() } else { format!(" Still open: {left}") }
+        ),
+        2,
+        vec!["Check each offset against the plans; a crossing left open needs the run moved off the gear".into()],
+        found,
+        corrected,
+    );
+}
+
 /// The fill-in pass's waste, vent and duct (Q6216, [`super::fillin`]): on each floor with
 /// plumbing fixtures, each fixture's waste and vent line no drain or vent of its floor reaches
 /// (a vent: nor its waste stack), and each air terminal no duct of its system reaches, laid in
@@ -15114,6 +15187,9 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         }
     }
     s.touch();
+    // Pipe and duct through the dedicated space of the gear laid out or moved here: offset past
+    // it as the build does for the rest, those runs built again.
+    gear_space_after_layout(s, job, &mut sp, &new_tags)?;
     // The gear checked against what lands on it; each failure an RFI.
     let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
     let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
@@ -20191,7 +20267,6 @@ fn build_new_mep(
     runs: Vec<cadaddy_walk3d::MepRun>,
     new_equipment: &BTreeSet<String>,
 ) -> crate::Result<Vec<cadaddy_doc::Handle>> {
-    use cadaddy_geom::Vec2;
     for name in runs.iter().map(|r| r.system.clone()).collect::<BTreeSet<_>>() {
         if !sp.mep.systems.iter().any(|y| y.name == name) {
             sp.mep.systems.push(cadaddy_walk3d::MepSystem {
@@ -20208,6 +20283,18 @@ fn build_new_mep(
     }
     sp.mep.runs.extend(runs.iter().cloned());
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    build_runs(s, &sp, runs, new_equipment)
+}
+
+/// `runs` (and the equipment `new_equipment` names) of `sp` built into the model after its
+/// build, moved as the build moved their levels to stack them. The handles made.
+fn build_runs(
+    s: &mut Session,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    runs: Vec<cadaddy_walk3d::MepRun>,
+    new_equipment: &BTreeSet<String>,
+) -> crate::Result<Vec<cadaddy_doc::Handle>> {
+    use cadaddy_geom::Vec2;
     let offsets: BTreeMap<String, Vec2> = {
         let d = s.doc()?;
         let mut m = BTreeMap::new();
@@ -20221,7 +20308,7 @@ fn build_new_mep(
     let d = s.doc_mut()?;
     let before: BTreeSet<cadaddy_doc::Handle> = d.model.handles().into_iter().collect();
     if !new_equipment.is_empty() {
-        let _ = super::mep::build_equipment(d, &sp, Some(new_equipment));
+        let _ = super::mep::build_equipment(d, sp, Some(new_equipment));
     }
     let mut part = sp.clone();
     part.mep.runs = runs;
@@ -22022,16 +22109,160 @@ fn arch_plan_spans(job: &GuidedJob) -> Vec<(u64, u64, String)> {
         .collect()
 }
 
-/// The set's plumbing fixture schedule: on a plumbing sheet that isn't a plan, else on a plan.
-fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule> {
-    if let Some(s) = non_plan_pages(job, "P").iter().find_map(|(_, page)| cadaddy_mepfix::fixture_schedule::read(page)) {
-        return Some(s);
-    }
-    job_sheet_refs(job)
+/// Levels listed by name in the finding on piped floors with no fixtures, at most.
+const MAX_FIXTURELESS_LISTED: usize = 12;
+
+/// The finding on the storeys whose plans draw water or sanitary pipe and that got no plumbing
+/// fixture (`fixtureless_levels` of [`super::plumbing::connect`]'s report): pipe that serves
+/// fixtures and none built is a gap the job says, never a quiet zero. `read` says what the job
+/// found to build fixtures from (the schedule, the plans' tags).
+fn fixtureless_finding(job: &mut GuidedJob, report: &Value, read: &str) {
+    let Some(levels) = report.get("fixtureless_levels").and_then(Value::as_object).filter(|m| !m.is_empty()) else { return };
+    let fixtures = report.get("fixture_elements").and_then(Value::as_u64).unwrap_or(0);
+    let per: Vec<String> = levels
         .iter()
-        .filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("P"))
+        .take(MAX_FIXTURELESS_LISTED)
+        .map(|(level, by)| {
+            let systems: Vec<String> =
+                by.as_object().into_iter().flatten().map(|(sys, ft)| format!("{sys} {:.0} ft", ft.as_f64().unwrap_or(0.0))).collect();
+            format!("{} ({})", if level.is_empty() { "no level" } else { level }, systems.join(", "))
+        })
+        .collect();
+    let more = levels.len().saturating_sub(MAX_FIXTURELESS_LISTED);
+    let title = if fixtures == 0 {
+        format!("No plumbing fixtures built beside drawn water and sanitary pipe on {} levels", levels.len())
+    } else {
+        format!("{} levels with drawn water or sanitary pipe have no plumbing fixture", levels.len())
+    };
+    progress_line(&format!("  levels with drawn water or sanitary pipe and no plumbing fixture: {}", per.join("; ")));
+    job.add_finding(
+        StageName::BimBuild,
+        &title,
+        &format!(
+            "Drawn pipe that serves fixtures, with no fixture on its level: {}{}. Plumbing fixtures in the model: {fixtures}; {read}",
+            per.join("; "),
+            if more > 0 { format!(" and {more} more") } else { String::new() }
+        ),
+        if fixtures == 0 { 3 } else { 2 },
+        vec![
+            "Check that the plumbing fixture schedule was read (its sheet and title) and that the plumbing plans' fixture tags match its marks"
+                .into(),
+            "Where the plumbing plans tag no fixtures, place them from the architectural plans' fixture symbols".into(),
+        ],
+        None,
+        false,
+    );
+}
+
+/// The job's plumbing sheets (their numbers, upper case, as [`sheet_key`] gives them): the
+/// sheets numbered as plumbing ones, the ones classify gave the plumbing discipline, and the ones
+/// whose title names the plumbing trade (`sheets.title_discipline`): a plumbing plan whose
+/// number was read as another trade's, or that carries no trade letter, is still a plumbing plan.
+fn plumbing_sheets(job: &GuidedJob) -> BTreeSet<String> {
+    let p = |d: &str| d.eq_ignore_ascii_case("P");
+    let mut out: BTreeSet<String> =
+        job.sheet_spans.iter().map(|sp| sheet_key(&sp.sheet)).filter(|k| p(&cadaddy_mepfix::sheet_facts::discipline_of(k))).collect();
+    for c in job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).into_iter().flatten() {
+        let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("");
+        let number = sheet_key(text("number"));
+        if !number.is_empty() && (p(text("discipline")) || infer_discipline_from_title(text("title")).is_some_and(p)) {
+            out.insert(number);
+        }
+    }
+    out.extend(job.sheet_regions.iter().filter(|r| p(&r.discipline)).map(|r| sheet_key(&r.number)));
+    out
+}
+
+/// The set's plumbing fixture schedule: on a plumbing sheet that isn't a plan, else on a
+/// plumbing plan, else under a plumbing fixture schedule's title on any other trade's sheet
+/// (`schedules.plumbing_fixture_titles`: an architectural sheet's schedules, a combined schedules
+/// sheet, a plumbing sheet classify gave another trade's number), loaded or read again from its
+/// file. With the page it is on, its sheet and how many pages were looked at.
+fn find_plumbing_schedule(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+) -> (Option<(cadaddy_mepfix::fixture_schedule::FixtureSchedule, cadaddy_doc::Drawing, String)>, usize) {
+    use cadaddy_mepfix::fixture_schedule as fsch;
+    let plumbing = plumbing_sheets(job);
+    let mut looked = 0usize;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    // The plumbing sheets that aren't plans: the plumbing trade's, then the ones titled as
+    // plumbing sheets under another trade's letter.
+    let mut pages = non_plan_pages(job, "P");
+    pages.extend(pages_where(job, &|number: &str, d: &str, kind: &str, _title: &str| {
+        !kind.contains("plan") && !d.eq_ignore_ascii_case("P") && plumbing.contains(&sheet_key(number))
+    }));
+    for (name, page) in pages {
+        looked += 1;
+        seen.insert(sheet_key(&name));
+        if let Some(s) = fsch::read(&page) {
+            return (Some((s, page, name)), looked);
+        }
+    }
+    // The loaded plumbing sheets, then every other loaded sheet that prints the title.
+    let refs = job_sheet_refs(job);
+    let mut loaded = |r: &&super::printmep::SheetRef| r.view.is_none() && seen.insert(sheet_key(&r.number));
+    for r in refs
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("P") || plumbing.contains(&sheet_key(&r.number)))
+        .filter(|r| loaded(r))
         .take(MAX_LEGEND_SHEETS)
-        .find_map(|r| cadaddy_mepfix::fixture_schedule::read(&super::printmep::sheet_drawing(d, r)))
+    {
+        looked += 1;
+        let sd = super::printmep::sheet_drawing(d, r);
+        if let Some(s) = fsch::read(&sd) {
+            return (Some((s, sd, r.number.clone())), looked);
+        }
+    }
+    let titles: Vec<(u64, cadaddy_geom::Vec2)> = d
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) if t.rotation.abs() < 0.05 && fsch::is_plumbing_title(&t.value) => Some((e.handle.0, t.insert.xy())),
+            _ => None,
+        })
+        .take(MAX_LEGEND_SHEETS * 4)
+        .collect();
+    if !titles.is_empty() {
+        for r in refs.iter().filter(|r| loaded(r)) {
+            let [x0, y0, x1, y1] = r.rect;
+            let here = titles.iter().any(|(h, at)| match r.span {
+                Some((lo, hi)) => *h >= lo && *h < hi,
+                None => at.x >= x0 && at.x <= x1 && at.y >= y0 && at.y <= y1,
+            });
+            if !here {
+                continue;
+            }
+            looked += 1;
+            let sd = super::printmep::sheet_drawing(d, r);
+            if let Some(s) = fsch::read_under_title(&sd) {
+                return (Some((s, sd, r.number.clone())), looked);
+            }
+        }
+    }
+    // The other trades' schedule sheets the drawing doesn't hold, read again from their files.
+    let held: BTreeSet<String> = refs.iter().map(|r| sheet_key(&r.number)).collect();
+    let others = pages_where(job, &|number: &str, _d: &str, kind: &str, title: &str| {
+        let key = sheet_key(number);
+        !held.contains(&key)
+            && !seen.contains(&key)
+            && !kind.contains("plan")
+            && (kind == "schedule" || title.to_ascii_uppercase().contains("SCHEDULE") || fsch::is_plumbing_title(title))
+    });
+    for (name, page) in others {
+        looked += 1;
+        if let Some(s) = fsch::read_under_title(&page) {
+            return (Some((s, page, name)), looked);
+        }
+    }
+    (None, looked)
+}
+
+/// The set's plumbing fixture schedule ([`find_plumbing_schedule`]), and how many pages were
+/// looked at for it.
+fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule>, usize) {
+    let (found, looked) = find_plumbing_schedule(d, job);
+    (found.map(|(s, _, _)| s), looked)
 }
 
 /// The set's plumbing fixture schedule (as [`plumbing_schedule`] finds it), its sheet and the
@@ -22041,16 +22272,10 @@ pub(crate) fn plumbing_schedule_docs(
     job: &GuidedJob,
 ) -> Option<(cadaddy_mepfix::fixture_schedule::FixtureSchedule, Vec<cadaddy_mepfix::fixture_schedule::ConnectionRow>, String)> {
     use cadaddy_mepfix::fixture_schedule as fsch;
-    let pages = non_plan_pages(job, "P");
-    let found = pages.iter().find_map(|(name, page)| fsch::read(page).map(|s| (s, fsch::read_connections_on(page), name.clone()))).or_else(|| {
-        job_sheet_refs(job).iter().filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("P")).take(MAX_LEGEND_SHEETS).find_map(|r| {
-            let sd = super::printmep::sheet_drawing(d, r);
-            fsch::read(&sd).map(|s| (s, fsch::read_connections_on(&sd), r.number.clone()))
-        })
-    });
-    let (schedule, mut connections, sheet) = found?;
+    let (schedule, page, sheet) = find_plumbing_schedule(d, job).0?;
+    let mut connections = fsch::read_connections_on(&page);
     if connections.is_empty() {
-        connections = pages.iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default();
+        connections = non_plan_pages(job, "P").iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default();
     }
     Some((schedule, connections, sheet))
 }
@@ -22070,12 +22295,9 @@ fn plumbing_fixtures(
     schedule: &cadaddy_mepfix::fixture_schedule::FixtureSchedule,
 ) -> Vec<super::readers::ReadDevice> {
     let tags: BTreeSet<&str> = schedule.rows.iter().map(|r| r.tag.as_str()).collect();
-    let spans: Vec<(&str, u64, u64)> = job
-        .sheet_spans
-        .iter()
-        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("P"))
-        .map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi))
-        .collect();
+    let plumbing = plumbing_sheets(job);
+    let spans: Vec<(&str, u64, u64)> =
+        job.sheet_spans.iter().filter(|sp| plumbing.contains(&sheet_key(&sp.sheet))).map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi)).collect();
     // A detail callout's bubble (`7` over `P-7`) names a sheet of the set under its view number: not
     // a fixture, though the schedule has a P-7 and the bubble is the tags' own hexagon.
     let sheet_numbers: BTreeSet<String> = job
@@ -22157,12 +22379,9 @@ fn plumbing_fixtures(
 /// STACK`): each where its leader ends, as an item of kind `plumbing stack` (tag: its size and
 /// words, leg: its system, `SAN` or `V`), placed and laid into the rooms like the fixtures.
 fn plumbing_stacks(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<super::readers::ReadDevice> {
-    let spans: Vec<(&str, u64, u64)> = job
-        .sheet_spans
-        .iter()
-        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("P"))
-        .map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi))
-        .collect();
+    let plumbing = plumbing_sheets(job);
+    let spans: Vec<(&str, u64, u64)> =
+        job.sheet_spans.iter().filter(|sp| plumbing.contains(&sheet_key(&sp.sheet))).map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi)).collect();
     let sheet_of = |h: u64| spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&h)).map(|(s, _, _)| *s);
     let mut texts: Vec<(String, cadaddy_geom::Vec2, f64, &str)> = Vec::new();
     let mut segs: Vec<(cadaddy_geom::Vec2, cadaddy_geom::Vec2, &str)> = Vec::new();
@@ -29665,6 +29884,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let mut runs = vec![
             run("SA", [[0.0, 0.0], [100.0, 0.0]], [12.0, 10.0], "tag"),
@@ -31115,6 +31335,101 @@ mod tests {
     }
 
     #[test]
+    fn a_plumbing_fixture_schedule_on_another_trades_sheet_names_the_plumbing_plans_tags() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let t = |s: &mut crate::Session, at: [f64; 2], v: &str, h: f64| {
+            s.execute("text", &json!({"at": at, "text": v, "height": h})).unwrap();
+        };
+        // A-601, the architectural schedules sheet: a luminaire schedule (its MARK and FIXTURE
+        // columns read like a fixture schedule's) and, beside it, the plumbing fixture schedule.
+        let a_lo = s.doc().unwrap().handseed;
+        t(&mut s, [100.0, 1000.0], "LIGHT FIXTURE SCHEDULE", 4.0);
+        for (x, v) in [(100.0, "MARK"), (120.0, "FIXTURE"), (170.0, "MANUFACTURER")] {
+            t(&mut s, [x, 990.0], v, 2.0);
+        }
+        for (y, mark, what) in [(985.0, "A", "DOWNLIGHT"), (980.0, "B", "WALL SCONCE")] {
+            t(&mut s, [100.0, y], mark, 2.0);
+            t(&mut s, [118.0, y], what, 2.0);
+            t(&mut s, [168.0, y], "MAKER ONE", 2.0);
+        }
+        t(&mut s, [600.0, 1000.0], "PLUMBING FIXTURE SCHEDULE", 4.0);
+        for (x, v) in [(600.0, "TAG"), (620.0, "FIXTURE"), (670.0, "MANUFACTURER")] {
+            t(&mut s, [x, 990.0], v, 2.0);
+        }
+        for (y, tag, what) in [(985.0, "WC-1", "WATER CLOSET"), (980.0, "LV-1", "LAVATORY")] {
+            t(&mut s, [600.0, y], tag, 2.0);
+            t(&mut s, [618.0, y], what, 2.0);
+            t(&mut s, [668.0, y], "MAKER TWO", 2.0);
+        }
+        let a_hi = s.doc().unwrap().handseed;
+        // P-201, the plumbing plan: its fixtures' tags.
+        for (x, tag) in [(5100.0, "WC-1"), (5300.0, "LV-1"), (5500.0, "WC-1")] {
+            t(&mut s, [x, 100.0], tag, 2.0);
+        }
+        let p_hi = s.doc().unwrap().handseed;
+        let region = |n: &str, discipline: &str, kind: &str, x: f64| SheetRegion {
+            number: n.into(),
+            level: "2".into(),
+            discipline: discipline.into(),
+            kind: kind.into(),
+            rect: [x, 0.0, x + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        job.sheet_regions = vec![region("A-601", "A", "schedule", 0.0), region("P-201", "P", "plan", 5000.0)];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-601".into(), lo: a_lo, hi: a_hi }, SheetSpan { sheet: "P-201".into(), lo: a_hi, hi: p_hi }];
+        let (schedule, _, sheet) = plumbing_schedule_docs(s.doc().unwrap(), &job).expect("the plumbing fixture schedule on A-601");
+        let tags: Vec<(&str, &str)> = schedule.rows.iter().map(|r| (r.tag.as_str(), r.fixture.as_str())).collect();
+        assert_eq!(tags, [("WC-1", "WATER CLOSET"), ("LV-1", "LAVATORY")], "not the luminaire schedule beside it");
+        assert_eq!(sheet, "A-601");
+        let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
+        assert_eq!(found.iter().filter(|f| f.sheet == "P-201").count(), 3, "{found:?}");
+    }
+
+    #[test]
+    fn a_plumbing_plan_under_another_trades_number_is_read_for_its_fixtures_by_its_title() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lo = s.doc().unwrap().handseed;
+        for x in [100.0, 300.0] {
+            s.execute("text", &json!({"at": [x, 100.0], "text": "WC-1", "height": 2.0})).unwrap();
+        }
+        let mid = s.doc().unwrap().handseed;
+        s.execute("text", &json!({"at": [5100.0, 100.0], "text": "WC-1", "height": 2.0})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        // Classify read the plumbing plan's number as a mechanical one; its title says what it is.
+        // The mechanical plan beside it letters the same mark (an equipment tag) and is not read.
+        job.sheets = Some(json!({"sheets": [
+            {"number": "M-201", "title": "SECOND FLOOR PLUMBING PLAN", "discipline": "M", "type": "plan"},
+            {"number": "M-202", "title": "SECOND FLOOR MECHANICAL PLAN", "discipline": "M", "type": "plan"}
+        ]}));
+        job.sheet_spans = vec![SheetSpan { sheet: "M-201".into(), lo, hi: mid }, SheetSpan { sheet: "M-202".into(), lo: mid, hi }];
+        let row =
+            |tag: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture { tag: tag.into(), fixture: "WATER CLOSET".into(), ..Default::default() };
+        let schedule = cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("WC-1")], extent: [0.0; 4], ..Default::default() };
+        let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
+        let sheets: Vec<&str> = found.iter().map(|f| f.sheet.as_str()).collect();
+        assert_eq!(sheets, ["M-201", "M-201"], "{found:?}");
+    }
+
+    #[test]
+    fn piped_levels_with_no_fixture_are_a_job_finding() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        fixtureless_finding(&mut job, &json!({"fixture_elements": 0, "fixtureless_levels": {}}), "x");
+        assert!(job.findings.is_empty(), "no piped level without fixtures: no finding");
+        let report = json!({"fixture_elements": 0, "fixtureless_levels": {"Level 2": {"CW": 120.4, "SAN": 80.0}, "Level 3": {"HW": 40.0}}});
+        fixtureless_finding(&mut job, &report, "no plumbing fixture schedule was found (4 pages looked at)");
+        let f = job.findings.first().expect("a finding");
+        assert!(f.description.contains("No plumbing fixtures") && f.description.contains("2 levels"), "{}", f.description);
+        assert!(f.why.contains("Level 2 (CW 120 ft, SAN 80 ft)") && f.why.contains("no plumbing fixture schedule was found"), "{}", f.why);
+        assert_eq!(f.severity, 3);
+    }
+
+    #[test]
     fn a_lavatory_tagged_with_its_sheets_number_is_a_fixture_and_the_sheets_number_is_not() {
         let mut s = crate::Session::new();
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
@@ -31932,6 +32247,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         // The sanitary line along the plan's long side; a vent line outside every view.
         let lost = vec![
@@ -32014,6 +32330,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             run("SAN", "Level 1"),
@@ -32114,6 +32431,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             // Room 301 as the enlarged plan draws it: waste, vent, and a water line on out to the main.
@@ -32279,6 +32597,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             // Floor 3 draws room 371's waste and vent; floor 4 only room 471's vent.
@@ -34895,5 +35214,55 @@ mod tests {
         lighting_step(&mut s, &mut job, &[], &mut result).unwrap();
         let again = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
         assert_eq!(again["total"], rfis["total"]);
+    }
+
+    /// A panel the gear step lays out after the build, under a vent already built: the vent is
+    /// offset past it, its drawn route kept, its old piece replaced by the one on its new route.
+    #[test]
+    fn gear_laid_out_after_the_build_has_the_pipe_through_its_space_offset_and_built_again() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let spec = json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+            "mep": {
+                "systems": [{"name": "V", "layer": "P-VENT", "kind": "pipe", "size_in": [2, 0], "bottom_ft": 8.5}],
+                "runs": [{"system": "V", "level": "L1", "points": [[0.0, 48.0], [200.0, 48.0]], "size_in": [2, 0], "bottoms_ft": [8.5], "id": "V1"}]
+            }
+        });
+        s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap_or_else(|e| panic!("{e}"));
+        s.execute("model.build", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        let segments = |s: &crate::Session| -> Vec<cadaddy_doc::props::Props> {
+            let Ok(d) = s.doc() else { panic!("no drawing") };
+            d.model
+                .iter()
+                .filter(|e| super::super::bimlook::made_tag(e, "mepid").is_some_and(|m| m.ends_with("/segment")))
+                .map(|e| cadaddy_doc::props::read(&e.common.xdata))
+                .collect()
+        };
+        assert_eq!(segments(&s).len(), 1);
+        let Ok((mut sp, true)) = super::super::bspec::current(&s, "test") else { panic!("stored spec") };
+        sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+            tag: "PL".into(),
+            kind: "panel".into(),
+            level: "L1".into(),
+            min: [90.0, 44.0],
+            max: [110.0, 48.0],
+            bottom_ft: 4.5,
+            height_ft: 2.0,
+            ..Default::default()
+        });
+        s.doc_mut().unwrap_or_else(|e| panic!("{e}")).building_spec = Some(sp.to_json()).into();
+        let tags: BTreeSet<String> = ["PL".to_string()].into_iter().collect();
+        gear_space_after_layout(&mut s, &mut job, &mut sp, &tags).unwrap_or_else(|e| panic!("{e}"));
+        // The step's own spec holds the correction (it stores it again after).
+        assert!(sp.mep.runs[0].corrections.iter().any(|c| c.key == "route"));
+        let after = segments(&s);
+        assert_eq!(after.len(), 1, "the old piece is gone, the run built once on its new route");
+        assert!(after[0].get("design:route").is_some() && after[0].get("correction:route").is_some(), "{:?}", after[0]);
+        let Ok((sp, true)) = super::super::bspec::current(&s, "test") else { panic!("stored spec") };
+        let r = &sp.mep.runs[0];
+        assert!(r.points.len() > 2 && r.corrections.iter().any(|c| c.key == "route"), "{r:?}");
+        assert!(job.findings.iter().any(|f| f.description.contains("gear laid out or moved after the build")), "{:?}", job.findings);
     }
 }
