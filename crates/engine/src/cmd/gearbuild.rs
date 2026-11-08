@@ -684,7 +684,14 @@ pub(crate) fn onto_clear_face(e: &mut cadaddy_walk3d::MepEquipment, f: &super::v
     if !upf.is_finite() || upf <= 0.0 || (f.min == e.min && f.max == e.max) {
         return false;
     }
-    let was = e.properties.get("DESIGN_VALUE").cloned().unwrap_or_else(|| "at its lettering on the plan".to_string());
+    // Where it was read, as it was got: CADaddy's own proposal says so, not lettering.
+    let was = e.properties.get("DESIGN_VALUE").cloned().unwrap_or_else(|| {
+        match (e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed")), e.sources.get("position")) {
+            (true, Some(p)) if !p.trim().is_empty() => format!("where CADaddy proposed it ({})", p.trim()),
+            (true, _) => "where CADaddy proposed it".to_string(),
+            _ => "at its lettering on the plan".to_string(),
+        }
+    });
     e.min = f.min;
     e.max = f.max;
     let (design, reason) = match f.was_clear_in {
@@ -1304,6 +1311,35 @@ mod tests {
         assert!(w.properties["CORRECTION_RULE"].contains("376"));
         assert_eq!(w.sources["status"], "proposed");
         assert!(wireway_for(&g, 1e6, 68.0, 12.0, &rule).is_none());
+    }
+
+    #[test]
+    fn a_moved_panel_keeps_where_it_was_got_as_its_design_value() {
+        use cadaddy_walk3d::MepEquipment;
+        let f = crate::cmd::validate_gear::ClearFace {
+            min: [0.0, 10.0],
+            max: [6.0, 30.0],
+            wall: cadaddy_doc::Handle(7),
+            moved_in: 12.0,
+            was_clear_in: Some(60.0),
+            was_ducted: true,
+            now_clear_in: 168.0,
+        };
+        let panel = |sources: &[(&str, &str)]| MepEquipment {
+            tag: "E".into(),
+            min: [0.0, 0.0],
+            max: [6.0, 20.0],
+            sources: sources.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ..Default::default()
+        };
+        let mut proposed = panel(&[("status", "proposed"), ("position", "proposed in room 9 (STORAGE)")]);
+        assert!(onto_clear_face(&mut proposed, &f, 12.0));
+        let design = &proposed.properties["DESIGN_VALUE"];
+        assert!(design.starts_with("where CADaddy proposed it (proposed in room 9") && !design.contains("lettering"), "{design}");
+        assert!(design.contains("a duct or pipe over it") && proposed.properties["CORRECTION_REASON"].contains("110.26(E)"));
+        let mut lettered = panel(&[("position", crate::cmd::printcond::ROOM_PANEL_POSITION)]);
+        assert!(onto_clear_face(&mut lettered, &f, 12.0));
+        assert!(lettered.properties["DESIGN_VALUE"].starts_with("at its lettering on the plan"));
     }
 
     #[test]

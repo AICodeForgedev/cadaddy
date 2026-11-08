@@ -1,0 +1,10 @@
+{
+  "dedicated_space": {
+    "above_ft": 6.0,
+    "clear_ft": 0.5,
+    "rule": "NEC 110.26(E)(1)(a)",
+    "basis": "the space over electrical gear (its width and depth, from the floor to 6 ft above it or the structural ceiling, whichever is lower) is dedicated to it, and piping, ducts and equipment foreign to it may not run there; a suspended ceiling is no structural ceiling (110.26(E)(1)(d)); a pipe or duct the documents run through it is offset past the gear's side by the clearance, as the field installs it",
+    "exempt_systems": ["SPRINKLER", "SPK", "FSP", "FP"],
+    "exempt_basis": "NEC 110.26(E)(1)(c): sprinkler protection of the dedicated space is permitted"
+  }
+}

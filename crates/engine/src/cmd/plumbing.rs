@@ -28,6 +28,8 @@ struct Rules {
     connect_reach_ft: f64,
     needs: Vec<Need>,
     system_names: BTreeMap<String, String>,
+    /// The systems whose drawn pipe on a storey means fixtures there (`fixture_systems_basis`).
+    fixture_systems: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -269,7 +271,10 @@ fn bounds_dist(b: &Bounds2, p: Vec2) -> f64 {
 /// storey within the rules data's reach, its vent else the waste stack it drains to (a stack
 /// vent). The fixture records each (`waste`, `vent`, `cold_water`, `hot_water`) and all of them in
 /// `connects`, and each pipe the fixtures on it, so the plumbing is walked like the wiring
-/// (`bim.chain`); a line it has none of within reach is listed in `unconnected`. The counts.
+/// (`bim.chain`); a line it has none of within reach is listed in `unconnected`. The counts, and
+/// the storeys whose drawn pipe of the rules data's `fixture_systems` (water, sanitary) got no
+/// fixture at all (`fixtureless_levels`: level → system → about how many feet, risers through the
+/// storey not counted).
 pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let r = rules();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -453,6 +458,7 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         })
         .collect();
     let n_whole = |p: &str| whole_by.get(p).copied().unwrap_or(0);
+    let fixtureless = fixtureless_levels(&r, &pipes, &fixtures, upf);
     let n_pipes = |p: &str| pipes.iter().filter(|x| x.provenance == p).count();
     json!({
         "fixtures": writes.len(), "fully_connected": whole,
@@ -462,7 +468,31 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "unconnected_by_level": unconnected_by_level,
         "by_system": by, "fixture_elements": fixtures.len(), "pipe_elements": pipes.len(),
         "derived_pipe_elements": n_pipes(super::waterfill::DERIVED), "inferred_pipe_elements": n_pipes(super::waterfill::INFERRED),
+        "fixtureless_levels": fixtureless,
     })
+}
+
+/// The storeys with drawn pipe of the systems that serve fixtures (rules data `fixture_systems`)
+/// and no plumbing fixture: level → system → about how many feet of it (each piece's longer
+/// side; risers through the storey left out: a stack passes floors with nothing on it).
+fn fixtureless_levels(r: &Rules, pipes: &[PipeEl], fixtures: &[(Handle, String, Vec2, String)], upf: f64) -> BTreeMap<String, BTreeMap<String, f64>> {
+    let furnished: std::collections::BTreeSet<&str> = fixtures.iter().map(|(_, level, _, _)| level.as_str()).collect();
+    let mut out: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+    for p in pipes.iter().filter(|p| {
+        !p.riser && p.provenance == super::waterfill::DRAWN && r.fixture_systems.contains(&p.system) && !furnished.contains(p.level.as_str())
+    }) {
+        let w = p.b.max - p.b.min;
+        let ft = w.x.max(w.y) / upf;
+        if ft.is_finite() {
+            *out.entry(p.level.clone()).or_default().entry(p.system.clone()).or_default() += ft;
+        }
+    }
+    for by in out.values_mut() {
+        for ft in by.values_mut() {
+            *ft = (*ft * 10.0).round() / 10.0;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -585,6 +615,35 @@ mod tests {
         assert_eq!(joined["risers_joined"], 1, "{joined}");
         assert_eq!(count(&sp), before, "drawn runs per system");
         assert_eq!(sp.mep.runs.iter().filter(|r| r.top_ft.is_some()).count(), 1, "the stack, one riser");
+    }
+
+    #[test]
+    fn a_storey_with_drawn_water_and_waste_and_no_fixture_is_listed() {
+        let r = rules();
+        let b = |x0: f64, x1: f64| Bounds2 { min: Vec2::new(x0, 0.0), max: Vec2::new(x1, 1.0) };
+        let pipe = |system: &str, level: &str, len_in: f64, riser: bool, provenance: &'static str| PipeEl {
+            handle: Handle(1),
+            system: system.into(),
+            level: level.into(),
+            b: b(0.0, len_in),
+            riser,
+            provenance,
+        };
+        let pipes = vec![
+            pipe("CW", "Level 1", 240.0, false, super::super::waterfill::DRAWN),
+            pipe("CW", "Level 2", 240.0, false, super::super::waterfill::DRAWN),
+            pipe("SAN", "Level 2", 120.0, false, super::super::waterfill::DRAWN),
+            pipe("SAN", "Level 2", 60.0, false, super::super::waterfill::DRAWN),
+            // Not counted: vent, a stack through the storey, a pipe filled in by a rule.
+            pipe("V", "Level 3", 240.0, false, super::super::waterfill::DRAWN),
+            pipe("SAN", "Level 3", 120.0, true, super::super::waterfill::DRAWN),
+            pipe("CW", "Level 3", 120.0, false, super::super::waterfill::INFERRED),
+        ];
+        let fixtures = vec![(Handle(2), "Level 1".to_string(), Vec2::new(0.0, 0.0), "WATER CLOSET".to_string())];
+        let got = fixtureless_levels(&r, &pipes, &fixtures, 12.0);
+        assert_eq!(got.keys().collect::<Vec<_>>(), ["Level 2"], "{got:?}");
+        assert_eq!(got.get("Level 2").and_then(|m| m.get("CW")).copied(), Some(20.0));
+        assert_eq!(got.get("Level 2").and_then(|m| m.get("SAN")).copied(), Some(15.0));
     }
 
     #[test]

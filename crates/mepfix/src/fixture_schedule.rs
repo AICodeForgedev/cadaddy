@@ -243,6 +243,53 @@ pub fn read(d: &Drawing) -> Option<FixtureSchedule> {
     read_lettering(&crate::sheet_facts::texts(d), &verticals(d))
 }
 
+/// Schedule titles on one sheet looked under, at most.
+const MAX_TITLES: usize = 8;
+/// A schedule's marks reach this many title heights left of its title (a title centred over a
+/// wide table).
+const TITLE_LEFT_H: f64 = 200.0;
+/// Longest text that can be a schedule's title.
+const MAX_TITLE_LEN: usize = 80;
+
+/// Whether a text is a plumbing fixture schedule's title (`schedules.plumbing_fixture_titles`),
+/// not a note sending the reader to one (`SEE PLUMBING FIXTURE SCHEDULE.`).
+pub fn is_plumbing_title(text: &str) -> bool {
+    let u = text.trim().to_ascii_uppercase();
+    u.len() <= MAX_TITLE_LEN
+        && !u.ends_with('.')
+        && !u.split_whitespace().next().is_some_and(|w| crate::wordrules::words("schedules.title_reference_words").contains(&w))
+        && crate::wordrules::words("schedules.plumbing_fixture_titles").iter().any(|w| u.contains(w))
+}
+
+/// The plumbing fixture schedule under a plumbing fixture schedule's title on a sheet
+/// ([`is_plumbing_title`]): a schedule printed on another trade's sheet beside that trade's
+/// tables. Only the lettering under the title is read, and only a table the title is over is
+/// taken, so another table on the sheet (a luminaire schedule with a FIXTURE column) is never
+/// read as the plumbing one.
+pub fn read_under_title(d: &Drawing) -> Option<FixtureSchedule> {
+    let texts = crate::sheet_facts::texts(d);
+    let titles: Vec<&TextItem> =
+        texts.iter().filter(|t| t.height.is_finite() && t.height > 0.0 && t.at.is_finite() && is_plumbing_title(&t.value)).take(MAX_TITLES).collect();
+    if titles.is_empty() {
+        return None;
+    }
+    let verticals = verticals(d);
+    titles.iter().find_map(|title| {
+        let h = title.height;
+        let under: Vec<TextItem> = texts
+            .iter()
+            .filter(|t| {
+                t.at.y <= title.at.y + 0.5 * h
+                    && t.at.y >= title.at.y - MAX_DEPTH_H * h
+                    && t.at.x >= title.at.x - TITLE_LEFT_H * h
+                    && t.at.x <= title.at.x + MAX_WIDTH_H * h
+            })
+            .cloned()
+            .collect();
+        read_lettering_where(&under, &verticals, &|s| s.extent[0] - 2.0 * h <= title.at.x && title.at.x <= s.extent[2])
+    })
+}
+
 /// The rough-in table on a sheet ([`read_connections`]).
 pub fn read_connections_on(d: &Drawing) -> Vec<ConnectionRow> {
     read_connections(&crate::sheet_facts::texts(d))
@@ -257,8 +304,41 @@ fn middle_of(t: &TextItem) -> f64 {
 /// are the sheet's vertical line pieces: the ones crossing the header row are the columns'
 /// rules (without them a column reaches halfway to the next header).
 pub fn read_lettering(texts: &[TextItem], verticals: &[(f64, f64, f64)]) -> Option<FixtureSchedule> {
+    read_lettering_where(texts, verticals, &|_| true)
+}
+
+/// The first plumbing fixture schedule among a sheet's texts ([`read_lettering`]) that `accept`
+/// takes: a table it turns down is passed over for the next one.
+fn read_lettering_where(texts: &[TextItem], verticals: &[(f64, f64, f64)], accept: &dyn Fn(&FixtureSchedule) -> bool) -> Option<FixtureSchedule> {
     let middle = middle_of;
-    for tag_head in texts.iter().filter(|t| col_of(&t.value) == Col::Tag && t.height.is_finite() && t.height > 0.0) {
+    // A fixture schedule's title over a header at `head` (height `h`): a few heights above it.
+    let titled_over = |head: &TextItem| {
+        let h = head.height;
+        texts.iter().any(|t| {
+            let u = t.value.to_ascii_uppercase();
+            u.contains("FIXTURE") && u.contains("SCHEDULE") && t.at.y > head.at.y && t.at.y - head.at.y <= 8.0 * h.max(t.height)
+        })
+    };
+    // The marks' column is headed TAG, MARK or SYMBOL; under a fixture schedule's title a column
+    // headed TYPE holds them as well (`TYPE | DESCRIPTION | MANUFACTURER`), when no TAG header
+    // is on its row.
+    let tag_head_of = |t: &TextItem| {
+        if !(t.height.is_finite() && t.height > 0.0) {
+            return false;
+        }
+        match col_of(&t.value) {
+            Col::Tag => true,
+            Col::Fixture { strong: false } if header_words(&t.value) == "TYPE" => {
+                let h = t.height;
+                titled_over(t)
+                    && !texts
+                        .iter()
+                        .any(|o| (o.at.y - t.at.y).abs() <= 0.5 * h && (o.at.x - t.at.x).abs() <= MAX_WIDTH_H * h && col_of(&o.value) == Col::Tag)
+            }
+            _ => false,
+        }
+    };
+    for tag_head in texts.iter().filter(|t| tag_head_of(t)) {
         let h = tag_head.height;
         let row_of = |t: &TextItem| (t.at.y - tag_head.at.y).abs() <= 0.5 * h && (t.at.x - tag_head.at.x).abs() <= MAX_WIDTH_H * h;
         let mut on_row: Vec<&TextItem> = texts.iter().filter(|t| row_of(t)).collect();
@@ -266,25 +346,22 @@ pub fn read_lettering(texts: &[TextItem], verticals: &[(f64, f64, f64)]) -> Opti
         // Schedules side by side (a two-sided sheet): each starts at its tag header (the columns
         // left of the first one are the first's), so this one's row runs from its own tag header
         // (from the row's start when it is the first) to the next.
-        let tag_xs: Vec<f64> = on_row.iter().filter(|t| col_of(&t.value) == Col::Tag).map(|t| t.at.x).collect();
+        let tag_xs: Vec<f64> = on_row.iter().filter(|t| std::ptr::eq(**t, tag_head) || col_of(&t.value) == Col::Tag).map(|t| t.at.x).collect();
         let lo = tag_xs.iter().copied().filter(|x| *x < tag_head.at.x - h).fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.max(x))));
         let lo = if lo.is_some() { tag_head.at.x - h } else { f64::NEG_INFINITY };
         let hi = tag_xs.iter().copied().filter(|x| *x > tag_head.at.x + h).fold(f64::INFINITY, f64::min) - h;
         // A header is a few words: a note lettered on the header's line is no column.
         on_row.retain(|t| t.at.x >= lo && t.at.x < hi && t.value.split_whitespace().count() <= MAX_HEADER_WORDS);
         let mut heads: Vec<(String, f64)> = on_row.iter().map(|t| (t.value.trim().to_string(), middle(t))).collect();
-        let cols: Vec<Col> = heads.iter().map(|(v, _)| col_of(v)).collect();
+        // The columns besides the marks' own (a TYPE header holding the marks names no fixture).
+        let cols: Vec<Col> = on_row.iter().filter(|t| !std::ptr::eq(**t, tag_head)).map(|t| col_of(&t.value)).collect();
         let strong = cols.contains(&Col::Fixture { strong: true });
         let weak = cols.contains(&Col::Fixture { strong: false });
         let maker_or_model = cols.iter().any(|c| matches!(c, Col::Maker | Col::Model));
-        // A weak fixture column (`TYPE`) only under a fixture schedule's title.
-        let titled = || {
-            texts.iter().any(|t| {
-                let u = t.value.to_ascii_uppercase();
-                u.contains("FIXTURE") && u.contains("SCHEDULE") && t.at.y > tag_head.at.y && t.at.y - tag_head.at.y <= 8.0 * h.max(t.height)
-            })
-        };
-        if !(strong || (weak && maker_or_model && titled())) {
+        let described = cols.contains(&Col::Description);
+        // A weak fixture column (`TYPE`), or only a DESCRIPTION naming each fixture, only under a
+        // fixture schedule's title.
+        if !(strong || (((weak && maker_or_model) || described) && titled_over(tag_head))) {
             continue;
         }
         // The rules crossing the header row.
@@ -323,7 +400,8 @@ pub fn read_lettering(texts: &[TextItem], verticals: &[(f64, f64, f64)]) -> Opti
             let x = if ruled { t.at.x } else { middle(t) };
             x >= lo && x < hi
         };
-        let Some(tag_col) = bounds.iter().find(|b| col_of(&b.0) == Col::Tag).map(|(_, lo, hi, r)| (*lo, *hi, *r)) else { continue };
+        // The marks' column: the one its header is in.
+        let Some(tag_col) = bounds.iter().find(|b| inside(tag_head, (b.1, b.2, b.3))).map(|(_, lo, hi, r)| (*lo, *hi, *r)) else { continue };
         // The tag column top down, to the first text in it that is no tag (the notes under it).
         let mut below: Vec<&TextItem> =
             texts.iter().filter(|t| inside(t, tag_col) && t.at.y < tag_head.at.y - 0.5 * h && t.at.y > tag_head.at.y - MAX_DEPTH_H * h).collect();
@@ -353,10 +431,14 @@ pub fn read_lettering(texts: &[TextItem], verticals: &[(f64, f64, f64)]) -> Opti
             on.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
             on.iter().map(|t| t.value.trim()).collect::<Vec<_>>().join(" ")
         };
-        let fixture_col = column(&|c| c == Col::Fixture { strong: true }).or_else(|| column(&|c| matches!(c, Col::Fixture { .. })));
+        let not_tag = |b: &(f64, f64, bool)| *b != tag_col;
         let maker_col = column(&|c| c == Col::Maker);
         let model_col = column(&|c| c == Col::Model);
         let desc_col = column(&|c| c == Col::Description);
+        // The fixture's name: its FIXTURE column, else its TYPE or ITEM one, else (a schedule that
+        // names its fixtures only by description) the description.
+        let fixture_col =
+            column(&|c| c == Col::Fixture { strong: true }).or_else(|| column(&|c| matches!(c, Col::Fixture { .. })).filter(not_tag)).or(desc_col);
         let remarks_col = column(&|c| c == Col::Remarks);
         let keyed: Vec<(Col, (f64, f64, bool))> = bounds
             .iter()
@@ -428,7 +510,10 @@ pub fn read_lettering(texts: &[TextItem], verticals: &[(f64, f64, f64)]) -> Opti
         }
         let low = tags.last().map_or(tag_head.at.y, |t| t.at.y);
         let right = heads.last().map_or(tag_head.at.x, |(_, x)| *x);
-        return Some(FixtureSchedule { rows, extent: [tag_head.at.x - h, low - h, right + DESCRIPTION_H * h, tag_head.at.y + 2.0 * h], headers });
+        let found = FixtureSchedule { rows, extent: [tag_head.at.x - h, low - h, right + DESCRIPTION_H * h, tag_head.at.y + 2.0 * h], headers };
+        if accept(&found) {
+            return Some(found);
+        }
     }
     None
 }
@@ -746,6 +831,32 @@ mod tests {
         };
         assert_eq!(typed("PLUMBING FIXTURE SCHEDULE").map(|s| s.rows.len()), Some(2));
         assert!(typed("DOOR SCHEDULE").is_none(), "a door schedule's MARK and TYPE are no fixture schedule");
+    }
+
+    #[test]
+    fn under_a_fixture_title_a_type_column_holds_the_marks_and_a_description_names_the_fixture() {
+        // `TYPE | DESCRIPTION | MANUFACTURER | MODEL`: no TAG or MARK header, no FIXTURE column.
+        let table = |title: &str, head: &str| {
+            let mut v =
+                vec![t(title, 0.0, 10.4), t(head, 0.0, 10.0), t("DESCRIPTION", 1.5, 10.0), t("MANUFACTURER", 5.0, 10.0), t("MODEL", 7.0, 10.0)];
+            v.extend([
+                t("P-1", 0.0, 9.5),
+                t("WATER CLOSET, FLOOR MOUNTED", 1.4, 9.5),
+                t("MAKER ONE", 4.9, 9.5),
+                t("AB-1", 7.0, 9.5),
+                t("P-2", 0.0, 9.0),
+                t("LAVATORY, WALL HUNG", 1.4, 9.0),
+                t("MAKER ONE", 4.9, 9.0),
+                t("AB-2", 7.0, 9.0),
+            ]);
+            read_lettering(&v, &[])
+        };
+        let s = table("PLUMBING FIXTURE SCHEDULE", "TYPE").expect("schedule");
+        let rows: Vec<(&str, &str, &str)> = s.rows.iter().map(|r| (r.tag.as_str(), r.fixture.as_str(), r.model.as_str())).collect();
+        assert_eq!(rows, [("P-1", "WATER CLOSET, FLOOR MOUNTED", "AB-1"), ("P-2", "LAVATORY, WALL HUNG", "AB-2")]);
+        assert_eq!(table("PLUMBING FIXTURE SCHEDULE", "MARK").map(|s| s.rows.len()), Some(2), "a MARK column and a description");
+        assert!(table("DOOR SCHEDULE", "MARK").is_none(), "a door schedule's marks and descriptions are no fixtures");
+        assert!(table("ROOM FINISH SCHEDULE", "TYPE").is_none());
     }
 
     #[test]

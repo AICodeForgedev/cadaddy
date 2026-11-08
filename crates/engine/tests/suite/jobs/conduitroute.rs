@@ -149,12 +149,12 @@ fn circuits_are_routed_square_around_the_ducts_and_into_every_box() {
     // Over the shallow supply duct: no clash there. The deep return duct can't be passed by
     // LP1-3's homerun tap: one clash, with both objects, the clearance and a fix.
     let all = r["clashes"].as_array().cloned().unwrap_or_default();
-    // The pipe over the panel is in its dedicated space: a clash item of its own.
+    // The pipe drawn over the panel, in its dedicated space, the build offset past the panel's
+    // side (NEC 110.26(E)(1), its drawn route kept): no clash left there.
+    assert_eq!((built["gearSpace"]["found"].clone(), built["gearSpace"]["corrected"].clone()), (json!(1), json!(1)), "{}", built["gearSpace"]);
     let space: Vec<&Value> = all.iter().filter(|c| c["a"]["what"] == json!("gear dedicated space")).collect();
-    assert_eq!(space.len(), 1, "{all:?}");
-    assert_eq!((space[0]["b"]["system"].clone(), space[0]["a"]["gear"].clone()), (json!("CW"), json!("LP1")));
-    assert!(space[0]["fix"].as_str().is_some_and(|f| f.contains("110.26(E)")), "{:?}", space[0]);
-    assert_eq!(r["gear_space_clashes"], json!(1));
+    assert!(space.is_empty(), "{all:?}");
+    assert_eq!(r["gear_space_clashes"], json!(0));
     let clashes: Vec<Value> = all.iter().filter(|c| c["a"]["what"] != json!("gear dedicated space")).cloned().collect();
     assert!(!clashes.is_empty(), "{r}");
     assert!(clashes.iter().all(|c| c["b"]["system"] == json!("RA")), "{clashes:?}");
@@ -165,7 +165,8 @@ fn circuits_are_routed_square_around_the_ducts_and_into_every_box() {
     assert!(c["fix"].as_str().is_some_and(|f| f.contains("offset under it")), "{c}");
     assert_eq!(c["pair"], json!("electrical × mechanical"));
     assert!(r["clashes_by_pair_level"]["electrical × mechanical"]["L1"].as_u64().is_some_and(|n| n >= 1), "{r}");
-    assert_eq!(r["clashes_by_pair_level"]["electrical × plumbing"]["L1"], json!(1), "{r}");
+    // The pipe offset out of the panel's space clashes with nothing electrical.
+    assert!(r["clashes_by_pair_level"]["electrical × plumbing"]["L1"].is_null(), "{r}");
 }
 
 #[test]

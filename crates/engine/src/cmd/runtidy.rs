@@ -530,6 +530,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         }
     }
 

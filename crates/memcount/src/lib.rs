@@ -13,19 +13,36 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The system allocator, counting the bytes it has handed out and not got back.
+/// The system allocator, counting the bytes it has handed out and not got back, and the most
+/// it held at once.
 pub struct Counting {
     live: AtomicUsize,
+    peak: AtomicUsize,
 }
 
 impl Counting {
     pub const fn new() -> Self {
-        Counting { live: AtomicUsize::new(0) }
+        Counting { live: AtomicUsize::new(0), peak: AtomicUsize::new(0) }
     }
 
     /// Bytes allocated and not yet freed, by every thread of the program.
     pub fn live(&self) -> usize {
         self.live.load(Ordering::Relaxed)
+    }
+
+    /// The most bytes held at once since the program started or [`Self::reset_peak`].
+    pub fn peak(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
+    }
+
+    /// Start measuring the peak again from what is held now.
+    pub fn reset_peak(&self) {
+        self.peak.store(self.live(), Ordering::Relaxed);
+    }
+
+    fn grew(&self, by: usize) {
+        let now = self.live.fetch_add(by, Ordering::Relaxed).saturating_add(by);
+        self.peak.fetch_max(now, Ordering::Relaxed);
     }
 }
 
@@ -42,7 +59,7 @@ unsafe impl GlobalAlloc for Counting {
         // SAFETY: the caller's contract for `alloc` is `System`'s.
         let p = unsafe { System.alloc(layout) };
         if !p.is_null() {
-            self.live.fetch_add(layout.size(), Ordering::Relaxed);
+            self.grew(layout.size());
         }
         p
     }
@@ -51,7 +68,7 @@ unsafe impl GlobalAlloc for Counting {
         // SAFETY: the caller's contract for `alloc_zeroed` is `System`'s.
         let p = unsafe { System.alloc_zeroed(layout) };
         if !p.is_null() {
-            self.live.fetch_add(layout.size(), Ordering::Relaxed);
+            self.grew(layout.size());
         }
         p
     }
@@ -67,7 +84,7 @@ unsafe impl GlobalAlloc for Counting {
         let p = unsafe { System.realloc(ptr, layout, new_size) };
         if !p.is_null() {
             if new_size >= layout.size() {
-                self.live.fetch_add(new_size - layout.size(), Ordering::Relaxed);
+                self.grew(new_size - layout.size());
             } else {
                 self.live.fetch_sub(layout.size() - new_size, Ordering::Relaxed);
             }
