@@ -2302,6 +2302,92 @@ pub(crate) fn gang_plates(d: &Drawing) -> HashMap<String, usize> {
     out
 }
 
+/// A built window's properties (Q6311): its type mark (the tag's, or the typical window's it
+/// stands for), the schedule row's type, frame and rating, its width, its sill and height (the
+/// row's, else the level's defaults, marked so), a storefront's assembly, its level and the room
+/// it lights (the one room beside it: an outside wall's window has the outside on its other side).
+#[allow(clippy::too_many_arguments)]
+fn window_props(
+    store: &mut Props,
+    e: &Entity,
+    b: &Bounds2,
+    sp: &BuildingSpec,
+    lvl: Option<&str>,
+    shift: Vec2,
+    upf: f64,
+    rooms: &[RoomShape],
+    tally: &mut BTreeMap<String, usize>,
+) {
+    let found = made(e, "found");
+    let sheet = sheet_at(sp, b.center() - shift, lvl);
+    let mark = made(e, "mark");
+    let row = mark.as_deref().and_then(|m| sp.schedule.row(m)).filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Window);
+    if let Some(m) = &mark {
+        let (src, note) = match found.as_deref() {
+            Some("typical") => (
+                Source::from_doc(SourceKind::Rule, "a typical window: the type of the level's tagged window of this opening's width"),
+                "inferred: the opening has no tag of its own",
+            ),
+            Some("tag_on_wall") => (Source::print(&sheet, None), "the tag printed by an outside wall drawn through: the window's place is inferred"),
+            _ => (Source::print(&sheet, None), "the window tag printed at the opening"),
+        };
+        put(store, "type_mark", Prop::new(m.clone(), src).with_note(note), tally);
+        if let Some(r) = row {
+            let rs = Source::from_doc(SourceKind::Schedule, &format!("window schedule, mark {}", r.mark));
+            for (key, v) in [("type", &r.kind_type), ("frame", &r.frame), ("fire_rating", &r.fire_rating)] {
+                if let Some(v) = v.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                    put(store, key, Prop::new(v.to_string(), rs.clone()), tally);
+                }
+            }
+        }
+        if super::wallgen::storefront_mark(m, row) {
+            let src = match row {
+                Some(r) => Source::from_doc(SourceKind::Schedule, &format!("window schedule, mark {}", r.mark)),
+                None => Source::from_doc(SourceKind::Rule, "rule data openings.storefront_mark_prefixes"),
+            };
+            put(store, "assembly", Prop::new("storefront", src), tally);
+        }
+    }
+    // Its width along the wall (the opening it fills).
+    let width = b.width().max(b.height()) / upf * 12.0;
+    if width.is_finite() && width > 0.0 {
+        let src = match row.and_then(|r| r.width_in) {
+            Some(w) if (w - width).abs() <= 1.0 => Source::from_doc(SourceKind::Schedule, &format!("window schedule, mark {}", mark.as_deref().unwrap_or(""))),
+            _ => Source::computed(),
+        };
+        put(store, "width", Prop::new(round2(width), src).with_unit("in"), tally);
+    }
+    // Sill and head above its floor, as built: the schedule row's, else the level's defaults.
+    let num = |k: &str| made(e, k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
+    if let (Some(sill), Some(head)) = (num("sill"), num("head"))
+        && head > sill
+    {
+        let from_row = row.is_some_and(|r| r.sill_ft.is_some() || r.head_ft.is_some() || r.height_in.is_some());
+        let src = if from_row {
+            Source::from_doc(SourceKind::Schedule, &format!("window schedule, mark {}", mark.as_deref().unwrap_or("")))
+        } else if mark.as_deref().is_some_and(|m| super::wallgen::storefront_mark(m, row)) && sill.abs() < 1e-6 {
+            Source::from_doc(SourceKind::Rule, "a storefront stands on the floor (no sill given)")
+        } else {
+            Source::of(SourceKind::Default)
+        };
+        let note = (!from_row).then_some("no schedule row gives it: the building's window sill and head (openings.window_sill_ft / window_head_ft)");
+        let with = |p: Prop| match note {
+            Some(n) => p.with_note(n),
+            None => p,
+        };
+        put(store, "sill_height", with(Prop::new(round2(sill / upf * 12.0), src.clone()).with_unit("in")), tally);
+        put(store, "height", with(Prop::new(round2((head - sill) / upf * 12.0), src).with_unit("in")), tally);
+    }
+    if let Some(l) = lvl {
+        put(store, "level", Prop::new(l.to_string(), Source::computed()), tally);
+    }
+    // The room it lights: a room on one side of it (an outside wall: only one).
+    let room = sides(b, SIDE_FT * upf).into_iter().chain([b.center()]).find_map(|p| room_at(rooms, lvl, p));
+    if let Some(r) = room {
+        put(store, "room", Prop::new(r.label.clone(), Source::computed()), tally);
+    }
+}
+
 fn made(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tag(e, key).map(str::to_string).filter(|v| !v.trim().is_empty())
 }
@@ -2703,6 +2789,10 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                 if let Some(r) = near.get(1) {
                     put(&mut store, "to_room", Prop::new(r.label.clone(), Source::computed()), tally);
                 }
+            }
+            "window" => {
+                let Some((b, _, _)) = ext else { continue };
+                window_props(&mut store, e, &b, &sp, lvl, shift, upf, &rooms, tally);
             }
             "wall" => {
                 let Some((b, z0, z1)) = ext else { continue };

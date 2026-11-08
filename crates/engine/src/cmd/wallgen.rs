@@ -169,26 +169,17 @@ impl WallGrid {
     }
 }
 
-/// A wall's tag with its wall type (`type:<name>`, after the source), for IFC's materials.
+/// A built door's swing tag (after the source; a wall's carries its wall type, `type:<name>`, for
+/// IFC's materials).
 const SWING_TAG: &str = "swing:";
 
-fn wall_tag(level: &str, source: Handle, wall_type: Option<&str>) -> Vec<RawTag> {
-    let mut x = tag(Part::Wall, level, source);
-    if let Some(n) = wall_type {
-        x.push(RawTag { code: 1000, value: format!("type:{}", n.chars().take(250).collect::<String>()) });
-    }
-    x
-}
-
-/// A built door's tags, with its swing when the plan draws one (`hinge, open end, shut end`, x and
-/// y of each, on its level's plan).
-fn door_tag(level: &str, source: Handle, swing: Option<&str>) -> Vec<RawTag> {
-    let mut x = tag(Part::Door, level, source);
-    if let Some(sw) = swing {
-        x.push(RawTag { code: 1000, value: format!("{SWING_TAG}{sw}") });
-    }
-    x
-}
+/// A built window's type mark, how it was found ([`WindowBasis`]; its provenance is the
+/// `status:`/`basis:` pair, [`super::provenance::tags`]), and its sill and head above its floor
+/// (sheet units).
+const MARK_TAG: &str = "mark:";
+const FOUND_TAG: &str = "found:";
+const SILL_TAG: &str = "sill:";
+const HEAD_TAG: &str = "head:";
 
 /// A built door's swing: hinge, open end, shut end, on its level's plan.
 pub(crate) fn door_swing(e: &Entity) -> Option<[Vec2; 3]> {
@@ -498,12 +489,9 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     }
     for (si, pl) in &planned {
         let Some(level) = scene.levels.get(*si) else { continue };
-        for (part, m, source, wall_type) in pl.meshes() {
-            let xdata = match part {
-                Part::Wall => wall_tag(&level.name, source, wall_type.as_deref()),
-                Part::Door => door_tag(&level.name, source, wall_type.as_deref()),
-                _ => tag(part, &level.name, source),
-            };
+        for (part, m, source, extra) in pl.meshes() {
+            let mut xdata = tag(part, &level.name, source);
+            xdata.extend(extra.into_iter().map(|value| RawTag { code: 1000, value }));
             let common = Common { layer: layer_of(part).into(), xdata: xdata.into(), ..Common::default() };
             if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
                 *counts.entry(part_name(part)).or_insert(0) += 1;
@@ -565,9 +553,11 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         }
     }
     let c = |k: &str| counts.get(k).copied().unwrap_or(0);
+    // Each planned level's window tags against its windows (Q6311).
+    let window_tags: Vec<Value> = planned.iter().filter_map(|(si, pl)| scene.levels.get(*si).map(|l| pl.window_tally.to_json(&l.name))).collect();
     let mut r = json!({
         "walls": c("wall"), "doors": c("door"), "windows": c("window"), "floors": c("floor"), "ceilings": c("ceiling"),
-        "levels": scene.levels.len(), "removed": removed, "notes": notes,
+        "levels": scene.levels.len(), "removed": removed, "notes": notes, "window_tags": window_tags,
     });
     if budget_exceeded {
         r["budget_exceeded"] = json!(true);
@@ -1181,6 +1171,53 @@ struct Leaf {
     /// The opening it fills, its ends on the wall's centreline: framed (jambs, head, a window's
     /// sill). None when another leaf frames it.
     frame: Option<(Vec2, Vec2)>,
+    /// A window's type mark (its tag's, or the typical window's it stands for), and why it is a
+    /// window there ([`WindowBasis`]).
+    mark: Option<String>,
+    basis: Option<WindowBasis>,
+}
+
+/// How a window was found where it is (`found:` tag on the built element).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowBasis {
+    /// A window tag marks the plan's opening (drawn).
+    Tag,
+    /// Glazing lines drawn across the opening (drawn).
+    Glazing,
+    /// A window block or a scheduled opening's symbol (drawn).
+    Symbol,
+    /// The width of a window drawn or tagged elsewhere on the level, in an untagged opening
+    /// (inferred: a typical window).
+    Typical,
+    /// A window tag by an outside wall drawn through, with no opening of its own: the tag's
+    /// window cut there at its type's width (inferred position).
+    TagOnWall,
+}
+
+impl WindowBasis {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Tag => "tag",
+            Self::Glazing => "glazing",
+            Self::Symbol => "symbol",
+            Self::Typical => "typical",
+            Self::TagOnWall => "tag_on_wall",
+        }
+    }
+
+    /// Drawn on the plan (else inferred from the plan's other windows or its tag alone).
+    pub(crate) fn drawn(self) -> bool {
+        matches!(self, Self::Tag | Self::Glazing | Self::Symbol)
+    }
+
+    /// The basis of an inferred window (its provenance).
+    fn why(self) -> &'static str {
+        match self {
+            Self::Typical => "a typical window: the level's plan tags or glazes a window of this opening's width, this opening has no tag or glazing of its own",
+            Self::TagOnWall => "a window tag printed by an outside wall the plan draws through: the tag's window cut there at its type's width, centred at the tag",
+            Self::Tag | Self::Glazing | Self::Symbol => "",
+        }
+    }
 }
 
 /// One level built from its plan.
@@ -1195,6 +1232,8 @@ struct PlanLevel {
     head: f64,
     /// Drawing units per inch.
     k: f64,
+    /// The level's window tags against the windows built (Q6311).
+    window_tally: WindowTally,
 }
 
 /// A box on the centreline `a`–`b`, `t` thick, from `z0` up to `z1`, added to `m`.
@@ -1240,7 +1279,7 @@ impl PlanLevel {
 
     /// The level's meshes: one per wall (its pieces, headers and sills, with its wall type), one
     /// per door leaf and window pane.
-    fn meshes(&self) -> Vec<(Part, Mesh, Handle, Option<String>)> {
+    fn meshes(&self) -> Vec<(Part, Mesh, Handle, Vec<String>)> {
         let mut out = Vec::new();
         for w in &self.walls {
             let len = w.a.dist(w.b);
@@ -1274,7 +1313,8 @@ impl PlanLevel {
                 add_box(&mut m, *a, *b, w.thickness, *lo, *hi);
             }
             if !m.faces.is_empty() {
-                out.push((Part::Wall, m, w.source, w.wall_type.clone()));
+                let extra = w.wall_type.iter().map(|n| format!("type:{}", n.chars().take(250).collect::<String>())).collect();
+                out.push((Part::Wall, m, w.source, extra));
             }
         }
         for l in &self.leaves {
@@ -1297,9 +1337,22 @@ impl PlanLevel {
             // A single door's swing as drawn, for what must keep clear of it.
             let swing = l.along.filter(|_| !l.window && l.pair.is_none()).map(|along| {
                 let shut = l.a + along * l.a.dist(l.b);
-                format!("{},{},{},{},{},{}", l.a.x, l.a.y, l.b.x, l.b.y, shut.x, shut.y)
+                format!("{SWING_TAG}{},{},{},{},{},{}", l.a.x, l.a.y, l.b.x, l.b.y, shut.x, shut.y)
             });
-            out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, swing));
+            let mut extra: Vec<String> = swing.into_iter().collect();
+            if l.window {
+                // A window's type mark and why it is there (its provenance), its sill and head
+                // above the floor (sheet units).
+                extra.extend(l.mark.iter().map(|m| format!("{MARK_TAG}{}", m.chars().take(40).collect::<String>())));
+                if let Some(b) = l.basis {
+                    extra.push(format!("{FOUND_TAG}{}", b.as_str()));
+                    let made = if b.drawn() { cadaddy_walk3d::Made::Drawn } else { cadaddy_walk3d::Made::Inferred };
+                    extra.extend(super::provenance::tags(made, b.why()).into_iter().map(|t| t.value));
+                }
+                extra.push(format!("{SILL_TAG}{}", lo - self.z0));
+                extra.push(format!("{HEAD_TAG}{}", hi - self.z0));
+            }
+            out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, extra));
         }
         out
     }
@@ -1682,6 +1735,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         sill: oz.window_sill_ft * upf,
         head: oz.window_head_ft * upf,
         k,
+        window_tally: WindowTally::default(),
     };
     // The level's objects: those inside its region (all of model space without one).
     let ents: Vec<&Arc<Entity>> = d
@@ -1908,8 +1962,9 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     }
     // Tagged openings take their schedule row's size and heights — AFTER the swing pass so a
     // scheduled width is not overwritten by the drawn swing radius.
+    let mut op_marks: HashMap<Handle, String> = HashMap::new();
     if let Some(sp) = &g.spec {
-        super::schedules::size_openings(sp, &mut ops, &mut fitted, upf);
+        super::schedules::size_openings(sp, &mut ops, &mut fitted, &mut op_marks, upf);
     }
     let (mut doors, mut windows) = (0, 0);
     let mut not_doors = 0usize;
@@ -2015,6 +2070,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     along,
                     pair: None,
                     frame,
+                    mark: None,
+                    basis: None,
                 });
                 doors += 1;
             }
@@ -2031,6 +2088,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     doors += 1;
                     (on - u * half, on + u * half)
                 };
+                let mark = op_marks.get(&o.handle).cloned();
                 pl.leaves.push(Leaf {
                     a: leaf.0,
                     b: leaf.1,
@@ -2042,6 +2100,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     along: None,
                     pair: None,
                     frame: Some(leaf),
+                    basis: window.then_some(if mark.is_some() { WindowBasis::Tag } else { WindowBasis::Symbol }),
+                    mark: mark.filter(|_| window),
                 });
             }
         }
@@ -2069,43 +2129,58 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         if la <= 1e-9 {
             continue;
         }
-        let u = (a.b - a.a) * (1.0 / la);
-        for &j in gap_grid.at(a.b) {
-            if j >= n || i == j {
-                continue;
-            }
-            let b = &pl.walls[j];
-            let lb = b.a.dist(b.b);
-            if lb <= 1e-9 || u.cross((b.b - b.a) * (1.0 / lb)).abs() > 0.01 || u.perp().dot(b.a - a.a).abs() > a.thickness.max(b.thickness) / 2.0 {
-                continue;
-            }
-            // `b` starts past `a`'s end, with nothing of the line between.
-            let (b0, b1) = (u.dot(b.a - a.a).min(u.dot(b.b - a.a)), u.dot(b.a - a.a).max(u.dot(b.b - a.a)));
-            let gap = b0 - la;
-            if gap < min_gap || gap > max_gap || b1 <= la {
-                continue;
-            }
-            let gap_mid = a.b + u * (gap * 0.5);
-            let between = gap_grid.at(gap_mid).iter().any(|&kk| {
-                kk < n && kk != i && kk != j && {
-                    let c = &pl.walls[kk];
-                    u.cross(c.b - c.a).abs() <= 0.01 * c.a.dist(c.b) && u.perp().dot(c.a - a.a).abs() <= a.thickness / 2.0 && {
-                        let (c0, c1) = (u.dot(c.a - a.a).min(u.dot(c.b - a.a)), u.dot(c.a - a.a).max(u.dot(c.b - a.a)));
-                        c1 > la + 1e-6 && c0 < b0 - 1e-6
-                    }
+        // From either end of the piece: which end a face pair starts at is the pair's, not the
+        // line's, so the two pieces either side of an opening may both start at it, or both end
+        // there (Q6311: half a level's window openings were never looked at).
+        for (start, end) in [(a.a, a.b), (a.b, a.a)] {
+            let u = (end - start) * (1.0 / la);
+            for &j in gap_grid.at(end) {
+                if j >= n || i == j {
+                    continue;
                 }
-            });
-            if between {
-                continue;
+                let b = &pl.walls[j];
+                let lb = b.a.dist(b.b);
+                if lb <= 1e-9 || u.cross((b.b - b.a) * (1.0 / lb)).abs() > 0.01 || u.perp().dot(b.a - start).abs() > a.thickness.max(b.thickness) / 2.0 {
+                    continue;
+                }
+                // `b` starts past `a`'s end, with nothing of the line between.
+                let (b0, b1) = (u.dot(b.a - start).min(u.dot(b.b - start)), u.dot(b.a - start).max(u.dot(b.b - start)));
+                let gap = b0 - la;
+                if gap < min_gap || gap > max_gap || b1 <= la {
+                    continue;
+                }
+                let (g0, g1) = (end, end + u * gap);
+                // Each gap once (found from both its pieces when both point at it).
+                let tol = a.thickness.max(b.thickness).max(k);
+                if gaps.iter().any(|(_, x0, x1, ..): &(usize, Vec2, Vec2, f64, bool, bool)| {
+                    (x0.dist(g0) <= tol && x1.dist(g1) <= tol) || (x0.dist(g1) <= tol && x1.dist(g0) <= tol)
+                }) {
+                    continue;
+                }
+                let gap_mid = end + u * (gap * 0.5);
+                let between = gap_grid.at(gap_mid).iter().any(|&kk| {
+                    kk < n && kk != i && kk != j && {
+                        let c = &pl.walls[kk];
+                        u.cross(c.b - c.a).abs() <= 0.01 * c.a.dist(c.b) && u.perp().dot(c.a - start).abs() <= a.thickness / 2.0 && {
+                            let (c0, c1) = (u.dot(c.a - start).min(u.dot(c.b - start)), u.dot(c.a - start).max(u.dot(c.b - start)));
+                            c1 > la + 1e-6 && c0 < b0 - 1e-6
+                        }
+                    }
+                });
+                if between {
+                    continue;
+                }
+                // Another wall running across the gap (a corridor's walls between two rooms'
+                // walls that happen to line up, a demising wall between two units' bath walls),
+                // or the gap in a corridor's air (two units' entry or bath walls lined up across
+                // it): no header spans it. A door swing hung there or the outside beyond it still
+                // make it a door or a window (Q6160).
+                let in_air = in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness);
+                let no_header = in_air || gap_crossed(&pl.walls[..n], i, j, g0, g1);
+                if gaps.len() < MAX_OBJECTS {
+                    gaps.push((i, g0, g1, a.thickness, no_header, in_air));
+                }
             }
-            // Another wall running across the gap (a corridor's walls between two rooms' walls
-            // that happen to line up, a demising wall between two units' bath walls), or the gap
-            // in a corridor's air (two units' entry or bath walls lined up across it): no header
-            // spans it. A door swing hung there or the outside beyond it still make it a door or
-            // a window (Q6160).
-            let in_air = in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness);
-            let no_header = in_air || gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap);
-            gaps.push((i, a.b, a.b + u * gap, a.thickness, no_header, in_air));
         }
     }
     // Outside: no other wall across one side of it.
@@ -2159,17 +2234,38 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         .map(|(_, g0, g1, t, ..)| (*g0, *g1, *t))
         .take(MAX_OBJECTS)
         .collect();
-    let tagged_gaps = tagged_window_gaps(&window_tags, &outside_gaps, k);
-    let gap_tagged = |g0: Vec2, g1: Vec2| tagged_gaps.iter().any(|&i| outside_gaps.get(i).is_some_and(|(a, b, _)| same_gap((*a, *b), (g0, g1), k)));
-    // The widths of the outside openings the plan draws or tags a window in: a window drawn or
-    // tagged once stands for the openings of its width in the level's outside walls (a typical
-    // window).
-    let tagged_widths: Vec<f64> = outside_gaps
+    // What each tag marks: the outside gap it is by (filling it, or its type's width centred in a
+    // wider one), else nothing yet (the tags left over are placed after the gaps).
+    let fits = window_tag_fits(&window_tags, &outside_gaps, k);
+    // The window a gap holds by its tag: the tag's mark and the window's width.
+    let gap_fit = |g0: Vec2, g1: Vec2| -> Option<(String, f64)> {
+        window_tags.iter().zip(&fits.per_tag).find_map(|(tag, f)| {
+            let f = f.as_ref()?;
+            let (a, b, _) = outside_gaps.get(f.gap)?;
+            same_gap((*a, *b), (g0, g1), k).then(|| (tag.mark.clone(), f.width))
+        })
+    };
+    let gap_tagged = |g0: Vec2, g1: Vec2| gap_fit(g0, g1).is_some();
+    // The outside openings the plan draws or tags a window in: a window drawn or tagged once
+    // stands for the openings of its width in the level's outside walls (a typical window), of
+    // its type and width (the opening's width, glazing; gap width, mark, window width).
+    let typicals: Vec<(f64, Option<String>, f64)> = outside_gaps
         .iter()
-        .filter(|(g0, g1, t)| gap_tagged(*g0, *g1) || glazed(&all_segs, *g0, *g1, *t, k))
-        .map(|(g0, g1, _)| g0.dist(*g1))
+        .filter_map(|(g0, g1, t)| {
+            let gw = g0.dist(*g1);
+            match gap_fit(*g0, *g1) {
+                Some((mark, w)) => Some((gw, Some(mark), w)),
+                None => glazed(&all_segs, *g0, *g1, *t, k).then_some((gw, None, gw)),
+            }
+        })
         .take(64)
         .collect();
+    let tagged_widths: Vec<f64> = typicals.iter().map(|t| t.0).collect();
+    // The typical window an opening `w` wide is: the first drawn one of its width.
+    let typical_of = |w: f64| typicals.iter().find(|t| (t.0 - w).abs() <= TYPICAL_WIDTH_IN * k);
+    // A mark's head and sill above the floor (drawing units), from its schedule row (and the
+    // family its type names); a storefront's sill at the floor when the row gives none.
+    let mark_heights = |mark: &str| -> (Option<f64>, Option<f64>) { window_heights(g.spec.as_ref(), mark, upf) };
     // (Each gap is found from both its pieces: counted once.)
     let mut bare_outside_gaps: Vec<(Vec2, Vec2)> = Vec::new();
     let (mut drawn_windows, mut typical_windows): (Vec<(Vec2, Vec2)>, Vec<(Vec2, Vec2)>) = (Vec::new(), Vec::new());
@@ -2286,12 +2382,15 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     along: Some(along),
                     pair: None,
                     frame: Some(frame),
+                    mark: None,
+                    basis: None,
                 });
                 doors += 1;
             }
         } else if window_spans.iter().any(Option::is_some) {
             // (A gap in a corridor's air is inside the building, whatever a ray finds.)
             extra.extend(piers.iter().map(|(p0, p1)| (g0 + u * *p0, g0 + u * *p1, z0, top)));
+            let single = spans.len() == 1;
             for ((s0, s1), by) in spans.into_iter().zip(window_spans) {
                 let (a, b) = (g0 + u * s0, g0 + u * s1);
                 if s1 - s0 < MIN_WINDOW_IN * k {
@@ -2307,19 +2406,45 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     WindowBy::Drawn => count_once(&mut drawn_windows, (a, b)),
                     WindowBy::Typical => count_once(&mut typical_windows, (a, b)),
                 }
-                extra.push((a, b, z0, z0 + pl.sill));
-                extra.push((a, b, z0 + pl.head, top));
+                // Its type: the tag's mark and width, else the typical window's of the opening's
+                // width; glazing alone gives no type.
+                let (mark, width, basis) = match by {
+                    WindowBy::Drawn => match gap_fit(g0, g1) {
+                        Some((m, w)) => (Some(m), w, WindowBasis::Tag),
+                        None => (None, s1 - s0, WindowBasis::Glazing),
+                    },
+                    WindowBy::Typical => {
+                        let ty = typical_of(s1 - s0);
+                        (ty.and_then(|t| t.1.clone()), ty.map_or(s1 - s0, |t| t.2), WindowBasis::Typical)
+                    }
+                };
+                // A window narrower than the opening it is in (its type's width, the plan's
+                // opening wider: Q6311) stands in its middle, wall either side.
+                let (a, b) = if single && width >= MIN_WINDOW_IN * k && width < (s1 - s0) - TYPICAL_WIDTH_IN * k {
+                    let mid = (s0 + s1) / 2.0;
+                    let (a2, b2) = (g0 + u * (mid - width / 2.0), g0 + u * (mid + width / 2.0));
+                    extra.push((a, a2, z0, top));
+                    extra.push((b2, b, z0, top));
+                    (a2, b2)
+                } else {
+                    (a, b)
+                };
+                let (head, sill) = mark.as_deref().map_or((None, None), mark_heights);
+                extra.push((a, b, z0, z0 + sill.unwrap_or(pl.sill)));
+                extra.push((a, b, z0 + head.unwrap_or(pl.head), top));
                 pl.leaves.push(Leaf {
                     a,
                     b,
                     window: true,
                     thickness: t,
                     source,
-                    head: None,
-                    sill: None,
+                    head,
+                    sill,
                     along: None,
                     pair: None,
                     frame: Some((a, b)),
+                    mark,
+                    basis: Some(basis),
                 });
                 windows += 1;
             }
@@ -2356,7 +2481,75 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             level.name
         ));
     }
+    // The tags no opening took (Q6311): a window built within the tag's reach with no tag of its
+    // own (glazing, a typical one) is the tag's type; a window of the same mark there already is
+    // the same window tagged twice; else, by an outside wall the plan draws through, the tag's
+    // window is cut there at its type's width (an inferred position); else the tag has no wall to
+    // host it (a finding).
+    let reach = TAG_REACH_IN * k;
+    let mut no_host: Vec<(String, Vec2, &'static str)> = Vec::new();
+    for (tag, f) in window_tags.iter().zip(&fits.per_tag) {
+        if f.is_some() {
+            continue;
+        }
+        let near = |l: &Leaf| l.window && seg_dist(tag.at, l.a, l.b) <= reach;
+        if pl.leaves.iter().any(|l| near(l) && l.mark.as_deref() == Some(tag.mark.as_str())) {
+            continue;
+        }
+        let untyped = pl
+            .leaves
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| near(l) && l.basis.is_none_or(|b| !matches!(b, WindowBasis::Tag | WindowBasis::TagOnWall)))
+            .min_by(|x, y| seg_dist(tag.at, x.1.a, x.1.b).total_cmp(&seg_dist(tag.at, y.1.a, y.1.b)))
+            .map(|(i, _)| i);
+        if let Some(l) = untyped.and_then(|i| pl.leaves.get_mut(i)) {
+            l.mark = Some(tag.mark.clone());
+            l.basis = Some(WindowBasis::Tag);
+            continue;
+        }
+        let Some(width) = fits.width_of(&tag.mark) else {
+            no_host.push((tag.mark.clone(), tag.at, "no width: no schedule row and no opening of its own"));
+            continue;
+        };
+        let Some((wi, s_at)) = host_wall(&pl.walls, tag.at, width, reach, &|p, nrm| outside(p, nrm, &pl.walls)) else {
+            no_host.push((tag.mark.clone(), tag.at, "no outside wall within its reach to hold it"));
+            continue;
+        };
+        let (head, sill) = mark_heights(&tag.mark);
+        let Some(w) = pl.walls.get_mut(wi) else { continue };
+        let len = w.a.dist(w.b);
+        let u = (w.b - w.a) * (1.0 / len.max(1e-12));
+        let half = width / 2.0;
+        w.cuts.push(Cut { s0: s_at - half, s1: s_at + half, window: true, head, sill });
+        let on = w.a + u * s_at;
+        let (a, b) = (on - u * half, on + u * half);
+        let (thickness, source) = (w.thickness, w.source);
+        pl.leaves.push(Leaf {
+            a,
+            b,
+            window: true,
+            thickness,
+            source,
+            head,
+            sill,
+            along: None,
+            pair: None,
+            frame: Some((a, b)),
+            mark: Some(tag.mark.clone()),
+            basis: Some(WindowBasis::TagOnWall),
+        });
+        windows += 1;
+    }
     let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k).unwrap_or((doors, windows));
+    pl.window_tally = WindowTally::of(&window_tags, &pl.leaves, no_host, g.spec.as_ref());
+    if !pl.window_tally.no_host.is_empty() {
+        notes.push(format!(
+            "{}: {} window tags with no window built (no opening, no outside wall to hold them).",
+            level.name,
+            pl.window_tally.no_host.len()
+        ));
+    }
     let doors = doors.saturating_sub(one_door_per_opening(&mut pl.leaves, 6.0 * k));
     notes.push(format!("{}: {} walls from {} face pairs, {} doors, {} windows.", level.name, pl.walls.len(), found.len(), doors, windows));
     if not_doors > 0 {
@@ -2436,8 +2629,196 @@ fn is_window_mark(text: &str, schedule_marks: &[String]) -> bool {
     if schedule_marks.iter().any(|m| m.eq_ignore_ascii_case(t)) {
         return true;
     }
-    let u = t.to_ascii_uppercase();
-    cadaddy_mepfix::wordrules::words("openings.window_mark_prefixes").iter().any(|p| {
+    mark_with_prefix(t, "openings.window_mark_prefixes") || mark_with_prefix(t, "openings.storefront_mark_prefixes")
+}
+
+/// Where the level's texts mark a window, and the mark (see [`is_window_mark`]): its texts, and
+/// the visible attributes of its tag blocks (a print's tag symbols come in as blocks whose
+/// attribute holds the mark, Q6311).
+fn window_marks_drawn(spec: Option<&cadaddy_walk3d::BuildingSpec>, ents: &[&Arc<Entity>]) -> Vec<(Vec2, String)> {
+    let schedule_marks: Vec<String> =
+        spec.iter().flat_map(|sp| sp.schedule.rows.iter().filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Window).map(|r| r.mark.clone())).collect();
+    let attributes = ents.iter().filter_map(|e| match &e.kind {
+        EntityKind::Insert(i) => Some(i.attribs.iter().filter(|a| !a.invisible).map(|a| (a.text.justify_point(), a.text.value.trim().to_string()))),
+        _ => None,
+    });
+    super::perceive::texts(ents)
+        .into_iter()
+        .map(|(_, text, at, _)| (at, text.trim().to_string()))
+        .chain(attributes.flatten())
+        .filter(|(_, text)| is_window_mark(text, &schedule_marks))
+        .take(MAX_WINDOW_TAGS)
+        .collect()
+}
+
+/// A window tag's window in an outside wall's gap: the gap (index) and the window's width
+/// (drawing units; the gap's, or its type's when the gap is wider).
+#[derive(Clone, Debug, PartialEq)]
+struct TagFit {
+    gap: usize,
+    width: f64,
+}
+
+/// What the level's window tags mark ([`window_tag_fits`]): each tag's fit, and each mark's window
+/// width (its schedule row's, else the width its tags' openings mostly are).
+struct TagFits {
+    per_tag: Vec<Option<TagFit>>,
+    widths: Vec<(String, f64)>,
+}
+
+impl TagFits {
+    fn width_of(&self, mark: &str) -> Option<f64> {
+        self.widths.iter().find(|(m, _)| m == mark).map(|(_, w)| *w)
+    }
+}
+
+/// The windows the tags mark (`k` units per inch). A tag marks the outside gap nearest it, within
+/// its reach. A gap its mark's width (the schedule row's, else the width most of the mark's tags
+/// sit by) is that window. A gap wider than the mark's width that no tag fits is the tag's window
+/// at its type's width, centred in it (the plan's opening is wider than the window: piers and
+/// framing drawn as one gap). A gap narrower than the mark is no window of that mark (a `W5` by
+/// the neighbouring, narrower opening is that one's tag).
+fn window_tag_fits(tags: &[WindowTag], gaps: &[(Vec2, Vec2, f64)], k: f64) -> TagFits {
+    // Each tag's gap: the nearest within reach.
+    let nearest: Vec<Option<usize>> = tags
+        .iter()
+        .map(|tag| {
+            gaps.iter()
+                .enumerate()
+                .map(|(i, (g0, g1, _))| (i, seg_dist(tag.at, *g0, *g1)))
+                .filter(|(_, d)| d.is_finite())
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .and_then(|(i, _)| {
+                    let (g0, g1, _) = gaps.get(i)?;
+                    (tag.at.dist((*g0 + *g1) * 0.5) <= g0.dist(*g1) / 2.0 + TAG_REACH_IN * k).then_some(i)
+                })
+        })
+        .collect();
+    let width_of = |i: usize| gaps.get(i).map_or(0.0, |(g0, g1, _)| g0.dist(*g1));
+    let tol = MARK_WIDTH_TOL_IN * k;
+    // Each mark's width: the row's, else the width most of its tags' gaps have (the narrower on
+    // a tie).
+    let mut widths: Vec<(String, f64)> = Vec::new();
+    for tag in tags {
+        if widths.iter().any(|(m, _)| *m == tag.mark) || widths.len() >= MAX_WINDOW_TAGS {
+            continue;
+        }
+        let w = tag.width.or_else(|| {
+            let ws: Vec<f64> = tags.iter().zip(&nearest).filter(|(o, _)| o.mark == tag.mark).filter_map(|(_, g)| g.map(width_of)).collect();
+            let count = |x: f64| ws.iter().filter(|y| (*y - x).abs() <= tol).count();
+            ws.iter().copied().max_by(|a, b| count(*a).cmp(&count(*b)).then(b.total_cmp(a)))
+        });
+        if let Some(w) = w.filter(|w| w.is_finite() && *w > 0.0) {
+            widths.push((tag.mark.clone(), w));
+        }
+    }
+    let mark_width = |m: &str| widths.iter().find(|(x, _)| x == m).map(|(_, w)| *w);
+    let mut per_tag: Vec<Option<TagFit>> = vec![None; tags.len()];
+    // Its mark's width: the gap is the window.
+    for (n, (tag, gap)) in tags.iter().zip(&nearest).enumerate() {
+        let (Some(i), Some(mw)) = (*gap, mark_width(&tag.mark)) else { continue };
+        let w = width_of(i);
+        if (mw - w).abs() <= tol
+            && let Some(slot) = per_tag.get_mut(n)
+        {
+            *slot = Some(TagFit { gap: i, width: w });
+        }
+    }
+    // A gap two marks' tags fit is the nearer tag's: the other mark's tag is another window's.
+    let dist_to = |n: usize, i: usize| tags.get(n).zip(gaps.get(i)).map_or(f64::INFINITY, |(t, (g0, g1, _))| seg_dist(t.at, *g0, *g1));
+    let fitted: Vec<(usize, usize)> = per_tag.iter().enumerate().filter_map(|(n, f)| f.as_ref().map(|f| (n, f.gap))).collect();
+    for &(n, i) in &fitted {
+        let nearer_other = fitted.iter().any(|&(m, j)| {
+            j == i && m != n && tags.get(m).map(|t| &t.mark) != tags.get(n).map(|t| &t.mark) && (dist_to(m, i), m) < (dist_to(n, i), n)
+        });
+        if nearer_other && let Some(slot) = per_tag.get_mut(n) {
+            *slot = None;
+        }
+    }
+    // Wider than its mark, and no tag's own: the window at its type's width in the middle.
+    let taken: Vec<usize> = per_tag.iter().flatten().map(|f| f.gap).collect();
+    for (n, (tag, gap)) in tags.iter().zip(&nearest).enumerate() {
+        let (Some(i), Some(mw)) = (*gap, mark_width(&tag.mark)) else { continue };
+        if per_tag.get(n).is_some_and(Option::is_some) || taken.contains(&i) || mw < MIN_WINDOW_IN * k || width_of(i) <= mw + tol {
+            continue;
+        }
+        if let Some(slot) = per_tag.get_mut(n) {
+            *slot = Some(TagFit { gap: i, width: mw });
+        }
+    }
+    TagFits { per_tag, widths }
+}
+
+/// The outside wall holding a window tag's window `width` wide (drawing units): the nearest wall
+/// within `reach` past its face whose length holds the window centred at the tag's foot, outside
+/// there (`outside(point, normal)`), with no opening cut there yet. (The wall, where along it.)
+fn host_wall(walls: &[PlanWall], at: Vec2, width: f64, reach: f64, outside: &dyn Fn(Vec2, Vec2) -> bool) -> Option<(usize, f64)> {
+    if !(width.is_finite() && width > 0.0 && at.is_finite()) {
+        return None;
+    }
+    let half = width / 2.0;
+    walls
+        .iter()
+        .enumerate()
+        .take(MAX_OBJECTS)
+        .filter_map(|(i, w)| {
+            let len = w.a.dist(w.b);
+            if !(len.is_finite() && len >= width) {
+                return None;
+            }
+            let u = (w.b - w.a) * (1.0 / len);
+            let s = u.dot(at - w.a);
+            let off = u.perp().dot(at - w.a).abs();
+            let free = !w.cuts.iter().any(|c| c.s0 < s + half && c.s1 > s - half);
+            (off <= w.thickness / 2.0 + reach && s >= half && s <= len - half && free).then_some((i, s, off, u))
+        })
+        .filter(|(i, s, _, u)| walls.get(*i).is_some_and(|w| outside(w.a + *u * *s, u.perp())))
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(i, s, _, _)| (i, s))
+}
+
+/// A window mark's head and sill above its floor (drawing units, `upf` per foot): its schedule
+/// row's (and the family its type names), a storefront's sill at the floor when none is given.
+fn window_heights(spec: Option<&cadaddy_walk3d::BuildingSpec>, mark: &str, upf: f64) -> (Option<f64>, Option<f64>) {
+    let Some(sp) = spec else { return (None, storefront_mark(mark, None).then_some(0.0)) };
+    let row = sp.schedule.row(mark).filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Window);
+    let (mut head, mut sill) = match row {
+        Some(r) => {
+            let (h, s) = r.heights(sp.openings.window_sill_ft);
+            (h, if r.sill_ft.is_some() { s } else { None })
+        }
+        None => (None, None),
+    };
+    if let Some(f) = row.and_then(|r| r.kind_type.as_deref()).and_then(|ty| sp.family_by_type(cadaddy_walk3d::FamilyKind::Window, ty)) {
+        head = f.head_ft.or(head);
+        sill = f.sill_ft.or(sill);
+    }
+    if sill.is_none() && storefront_mark(mark, row) {
+        sill = Some(0.0);
+    }
+    let ok = |v: f64| (v.is_finite() && (0.0..=MAX_OPENING_FT).contains(&v)).then_some(v * upf);
+    (head.and_then(ok), sill.and_then(ok))
+}
+
+/// Highest head or sill a schedule may give an opening above its floor, feet.
+const MAX_OPENING_FT: f64 = 40.0;
+
+/// Whether a window mark is a storefront's: its schedule row's type or frame says so (rule data
+/// `openings.storefront_words`), or the mark has a storefront prefix (`openings.storefront_mark_prefixes`).
+pub(crate) fn storefront_mark(mark: &str, row: Option<&cadaddy_walk3d::ScheduleRow>) -> bool {
+    let words = cadaddy_mepfix::wordrules::words("openings.storefront_words");
+    let says = |t: &Option<String>| t.as_deref().is_some_and(|t| words.iter().any(|w| t.to_ascii_uppercase().contains(&w.to_ascii_uppercase())));
+    if row.is_some_and(|r| says(&r.kind_type) || says(&r.frame)) {
+        return true;
+    }
+    mark_with_prefix(mark, "openings.storefront_mark_prefixes")
+}
+
+/// Whether `mark` is one of the rule data's prefixes (`key`) and a number of 1–3 digits, with an
+/// optional letter after it (`W5`, `W-2`, `W3A`).
+fn mark_with_prefix(mark: &str, key: &str) -> bool {
+    let u = mark.trim().to_ascii_uppercase();
+    cadaddy_mepfix::wordrules::words(key).iter().any(|p| {
         let Some(rest) = u.strip_prefix(&p.to_ascii_uppercase()) else { return false };
         let rest = rest.strip_prefix(['-', '.']).unwrap_or(rest);
         let digits = rest.chars().take_while(char::is_ascii_digit).count();
@@ -2446,16 +2827,69 @@ fn is_window_mark(text: &str, schedule_marks: &[String]) -> bool {
     })
 }
 
-/// Where the level's texts mark a window, and the mark (see [`is_window_mark`]).
-fn window_marks_drawn(spec: Option<&cadaddy_walk3d::BuildingSpec>, ents: &[&Arc<Entity>]) -> Vec<(Vec2, String)> {
-    let schedule_marks: Vec<String> =
-        spec.iter().flat_map(|sp| sp.schedule.rows.iter().filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Window).map(|r| r.mark.clone())).collect();
-    super::perceive::texts(ents)
-        .into_iter()
-        .filter(|(_, text, _, _)| is_window_mark(text, &schedule_marks))
-        .map(|(_, text, at, _)| (at, text.trim().to_string()))
-        .collect()
+/// A level's window tags against its windows (Q6311): per mark, the tags read and the windows
+/// built; the windows with no type; the windows by why they are there; the tags with no window
+/// and why; the marks with no schedule row.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WindowTally {
+    pub tagged: std::collections::BTreeMap<String, usize>,
+    pub built: std::collections::BTreeMap<String, usize>,
+    pub untyped: usize,
+    pub by_basis: std::collections::BTreeMap<&'static str, usize>,
+    pub no_host: Vec<(String, Vec2, &'static str)>,
+    pub storefront: usize,
+    pub unscheduled: Vec<String>,
 }
+
+impl WindowTally {
+    fn of(tags: &[WindowTag], leaves: &[Leaf], no_host: Vec<(String, Vec2, &'static str)>, spec: Option<&cadaddy_walk3d::BuildingSpec>) -> Self {
+        let mut t = Self { no_host, ..Self::default() };
+        for tag in tags {
+            *t.tagged.entry(tag.mark.clone()).or_default() += 1;
+        }
+        for l in leaves.iter().filter(|l| l.window) {
+            match &l.mark {
+                Some(m) => *t.built.entry(m.clone()).or_default() += 1,
+                None => t.untyped += 1,
+            }
+            if let Some(b) = l.basis {
+                *t.by_basis.entry(b.as_str()).or_default() += 1;
+            }
+            let row = l.mark.as_deref().and_then(|m| spec.and_then(|sp| sp.schedule.row(m)));
+            if l.mark.as_deref().is_some_and(|m| storefront_mark(m, row)) {
+                t.storefront += 1;
+            }
+        }
+        t.unscheduled = t
+            .tagged
+            .keys()
+            .chain(t.built.keys())
+            .filter(|m| !spec.is_some_and(|sp| sp.schedule.row(m).is_some_and(|r| r.kind == cadaddy_walk3d::FamilyKind::Window)))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        t
+    }
+
+    /// The report row for `level` (positions in sheet units).
+    pub(crate) fn to_json(&self, level: &str) -> Value {
+        json!({
+            "level": level,
+            "tagged": self.tagged,
+            "built": self.built,
+            "untyped": self.untyped,
+            "by_basis": self.by_basis,
+            "storefront": self.storefront,
+            "no_host": self.no_host.iter().take(MAX_LISTED_TAGS).map(|(m, at, why)| json!({"mark": m, "at": [at.x, at.y], "why": why})).collect::<Vec<_>>(),
+            "no_host_count": self.no_host.len(),
+            "marks_without_schedule_row": self.unscheduled,
+        })
+    }
+}
+
+/// Most tags with no window listed in a level's report row.
+const MAX_LISTED_TAGS: usize = 200;
 
 /// Most window tags read on a level (each is weighed against the others with its mark).
 const MAX_WINDOW_TAGS: usize = 2_000;
@@ -2478,49 +2912,6 @@ struct WindowTag {
 fn same_gap(a: (Vec2, Vec2), b: (Vec2, Vec2), k: f64) -> bool {
     let tol = 0.01 * k;
     (a.0.dist(b.0) <= tol && a.1.dist(b.1) <= tol) || (a.0.dist(b.1) <= tol && a.1.dist(b.0) <= tol)
-}
-
-/// The gaps (indexes into `gaps`: ends and wall thickness) the window tags mark (`k` units per
-/// inch). A tag marks the gap nearest it, within its reach, and only when the gap is its mark's
-/// width: the schedule row's, else the width most of the mark's tags sit by (a `W5` beside a
-/// wider opening than every other `W5` is the neighbouring window's tag).
-fn tagged_window_gaps(tags: &[WindowTag], gaps: &[(Vec2, Vec2, f64)], k: f64) -> Vec<usize> {
-    // Each tag's gap: the nearest within reach.
-    let nearest: Vec<Option<usize>> = tags
-        .iter()
-        .map(|tag| {
-            gaps.iter()
-                .enumerate()
-                .map(|(i, (g0, g1, _))| (i, seg_dist(tag.at, *g0, *g1)))
-                .filter(|(_, d)| d.is_finite())
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .and_then(|(i, _)| {
-                    let (g0, g1, _) = gaps.get(i)?;
-                    (tag.at.dist((*g0 + *g1) * 0.5) <= g0.dist(*g1) / 2.0 + TAG_REACH_IN * k).then_some(i)
-                })
-        })
-        .collect();
-    let width_of = |i: usize| gaps.get(i).map_or(0.0, |(g0, g1, _)| g0.dist(*g1));
-    let tol = MARK_WIDTH_TOL_IN * k;
-    let mut out = Vec::new();
-    for (tag, gap) in tags.iter().zip(&nearest) {
-        let Some(i) = *gap else { continue };
-        let w = width_of(i);
-        let fits = match tag.width {
-            Some(row) => (row - w).abs() <= tol,
-            None => {
-                // The widths this mark's tags sit by: this gap's must be among the most common.
-                let widths: Vec<f64> = tags.iter().zip(&nearest).filter(|(o, _)| o.mark == tag.mark).filter_map(|(_, g)| g.map(width_of)).collect();
-                let count = |x: f64| widths.iter().filter(|y| (*y - x).abs() <= tol).count();
-                let most = widths.iter().map(|x| count(*x)).max().unwrap_or(0);
-                count(w) >= most
-            }
-        };
-        if fits && !out.contains(&i) {
-            out.push(i);
-        }
-    }
-    out
 }
 
 /// Whether the plan draws glazing in the opening `a`–`b` of a wall `t` thick (`k` units per inch):
@@ -3448,7 +3839,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mark_beside_a_wider_gap_than_its_others_is_the_neighbours_tag() {
+    fn a_tag_marks_its_gap_and_a_wider_gap_holds_its_types_width() {
         let k = 1.0;
         // Three gaps in a line (inches): two 72" and a 108" one.
         let gaps = vec![
@@ -3457,17 +3848,26 @@ mod tests {
             (Vec2::new(400.0, 0.0), Vec2::new(508.0, 0.0), 6.0),
         ];
         let tag = |x: f64, mark: &str, width: Option<f64>| WindowTag { at: Vec2::new(x, -30.0), mark: mark.into(), width };
-        // W5 by each 72" gap, and one by the 108" gap: W5 is the 72" window.
+        let fit = |gap: usize, width: f64| Some(TagFit { gap, width });
+        // W5 by each 72" gap, and one by the 108" gap: W5 is the 72" window, and the wider gap
+        // holds a 72" W5 in its middle (Q6311: the plan's opening wider than its window).
         let tags = vec![tag(36.0, "W5", None), tag(236.0, "W5", None), tag(420.0, "W5", None)];
-        assert_eq!(tagged_window_gaps(&tags, &gaps, k), vec![0, 1]);
-        // A mark by one gap only is that gap's.
-        assert_eq!(tagged_window_gaps(&[tag(420.0, "W2", None)], &gaps, k), vec![2]);
-        // The schedule's width decides when there is one.
-        assert_eq!(tagged_window_gaps(&[tag(420.0, "W3", Some(108.0)), tag(36.0, "W3", Some(108.0))], &gaps, k), vec![2]);
+        let f = window_tag_fits(&tags, &gaps, k);
+        assert_eq!(f.per_tag, vec![fit(0, 72.0), fit(1, 72.0), fit(2, 72.0)]);
+        assert_eq!(f.width_of("W5"), Some(72.0));
+        // A mark by one gap only is that gap's, at its width.
+        assert_eq!(window_tag_fits(&[tag(420.0, "W2", None)], &gaps, k).per_tag, vec![fit(2, 108.0)]);
+        // The schedule's width decides when there is one: a narrower gap is no window of it.
+        let f = window_tag_fits(&[tag(420.0, "W3", Some(108.0)), tag(36.0, "W3", Some(108.0))], &gaps, k);
+        assert_eq!(f.per_tag, vec![fit(2, 108.0), None]);
         // A tag between two gaps marks the nearer only.
-        assert_eq!(tagged_window_gaps(&[tag(100.0, "W4", None)], &gaps, k), vec![0]);
-        // Out of reach of every gap: none.
-        assert!(tagged_window_gaps(&[WindowTag { at: Vec2::new(36.0, -200.0), mark: "W5".into(), width: None }], &gaps, k).is_empty());
-        assert!(tagged_window_gaps(&tags, &[], k).is_empty());
+        assert_eq!(window_tag_fits(&[tag(100.0, "W4", None)], &gaps, k).per_tag, vec![fit(0, 72.0)]);
+        // A wider gap another tag fits is that tag's.
+        let f = window_tag_fits(&[tag(420.0, "W7", Some(108.0)), tag(430.0, "W5", Some(72.0))], &gaps, k);
+        assert_eq!(f.per_tag, vec![fit(2, 108.0), None]);
+        // Out of reach of every gap: none, and no width read for its mark.
+        let far = window_tag_fits(&[WindowTag { at: Vec2::new(36.0, -200.0), mark: "W5".into(), width: None }], &gaps, k);
+        assert_eq!((far.per_tag, far.width_of("W5")), (vec![None], None));
+        assert!(window_tag_fits(&tags, &[], k).per_tag.iter().all(Option::is_none));
     }
 }
