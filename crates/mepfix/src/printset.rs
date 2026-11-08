@@ -116,6 +116,11 @@ pub struct SheetEntry {
     /// Level marks a building section or elevation prints (`SECOND FLOOR` over `110'-8"`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub level_marks: Vec<LevelMark>,
+    /// The number as printed when another page of the set prints it too on a different sheet (its
+    /// title and contents differ, so it is no copy): this page keeps its own entry, numbered
+    /// `<number>~2`, `~3` in page order, and the clash is reported. Empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub printed_as: String,
 }
 
 /// A level's elevation as a section or elevation sheet marks it.
@@ -906,12 +911,17 @@ pub fn run_classify_prints(
 ) -> StageRecord {
     let start = web_time::Instant::now();
     let total = project.sheets.len();
-    let mut out: Vec<SheetEntry> = Vec::with_capacity(total);
     let mut classified = 0usize;
+    // First every page is read on its own (its title block, its views, every text that reads as a
+    // sheet number); then the set decides each page's number by where the set prints it; then the
+    // entries are made.
     let old = std::mem::take(&mut project.sheets);
+    let mut pages: Vec<ClassifyPage> = Vec::with_capacity(total);
+    let mut entries = 0usize;
     for (i, entry) in old.into_iter().enumerate() {
-        if cancel.load(Ordering::Relaxed) || out.len() >= MAX_SHEETS {
-            out.push(entry);
+        if cancel.load(Ordering::Relaxed) || entries >= MAX_SHEETS {
+            entries += 1;
+            pages.push(ClassifyPage::Kept(Box::new(entry)));
             continue;
         }
         progress(&Progress {
@@ -922,7 +932,8 @@ pub fn run_classify_prints(
             items_so_far: classified,
         });
         if !entry.dirty && !entry.number.is_empty() {
-            out.push(entry);
+            entries += 1;
+            pages.push(ClassifyPage::Kept(Box::new(entry)));
             classified += 1;
             continue;
         }
@@ -934,12 +945,42 @@ pub fn run_classify_prints(
                     "classify".into(),
                     SheetStageResult { stage: "classify".into(), status: StageStatus::Failed, error: Some(err), ..SheetStageResult::default() },
                 );
-                out.push(e);
+                entries += 1;
+                pages.push(ClassifyPage::Kept(Box::new(e)));
                 continue;
             }
         };
-        let facts = PageFacts::read(&drawing);
-        for (mut rec, _) in sheet_reader::split_views(&drawing) {
+        let texts = sheet_facts::texts(&drawing);
+        let facts = PageFacts::read_texts(&drawing, &texts);
+        let recs = sheet_reader::recognise_views(&drawing);
+        let candidates = sheet_facts::number_candidates(&drawing, &texts);
+        let read = ReadPage { entry, facts, recs, candidates, contents: content_signature(&texts), note: String::new() };
+        entries += read.recs.len().max(1);
+        pages.push(ClassifyPage::Read(Box::new(read)));
+        classified += 1;
+    }
+    set_numbers(&mut pages);
+    let mut out: Vec<SheetEntry> = Vec::with_capacity(entries.min(MAX_SHEETS));
+    // Each entry's page among the ones read now (its contents and title, to tell copies apart).
+    let mut page_of: Vec<Option<usize>> = Vec::with_capacity(entries.min(MAX_SHEETS));
+    let mut read_pages: Vec<PageSummary> = Vec::new();
+    for page in pages {
+        let read = match page {
+            ClassifyPage::Kept(e) => {
+                out.push(*e);
+                page_of.push(None);
+                continue;
+            }
+            ClassifyPage::Read(r) => *r,
+        };
+        let ReadPage { entry, facts, recs, contents, note, .. } = read;
+        let k = read_pages.len();
+        read_pages.push(PageSummary {
+            title: facts.ident.as_ref().filter(|id| ident_strength(&id.source) == 2).map(|id| id.title.clone()).unwrap_or_default(),
+            contents,
+            strength: page_strength(&facts),
+        });
+        for mut rec in recs {
             let mut e = entry.clone();
             let view = !rec.printed_number.is_empty();
             // The title block names the sheet (sheet facts); the sheet reader's own number is the
@@ -1033,19 +1074,30 @@ pub fn run_classify_prints(
                     status: StageStatus::Completed,
                     items_found: 1,
                     confidence: if known && e.sheet_type != "unknown" { 1.0 } else { 0.5 },
-                    findings: if known {
-                        Vec::new()
-                    } else {
-                        vec![Finding { kind: "unreadable".into(), description: "no sheet number found".into(), severity: 2, ..Finding::default() }]
+                    findings: match (known, note.is_empty()) {
+                        (true, true) => Vec::new(),
+                        (true, false) => vec![Finding { kind: "guessed".into(), description: note.clone(), severity: 1, ..Finding::default() }],
+                        (false, true) => {
+                            vec![Finding {
+                                kind: "unreadable".into(),
+                                description: "no sheet number found".into(),
+                                severity: 2,
+                                ..Finding::default()
+                            }]
+                        }
+                        (false, false) => vec![Finding { kind: "unreadable".into(), description: note.clone(), severity: 2, ..Finding::default() }],
                     },
                     ..SheetStageResult::default()
                 },
             );
             e.recognised = Some(rec);
             out.push(e);
+            page_of.push(Some(k));
         }
-        classified += 1;
     }
+    // Pages that print one number on different sheets are no copies of each other: each keeps
+    // its own entry and the clash is reported.
+    split_number_clashes(&mut out, &page_of, &read_pages);
     // Later files replace earlier sheets of the same number. "Later" is folder order with
     // numbers by value (`Revision 10/` after `Revision 2/`), not the order entries were added
     // (a re-import appends), so the same folder always gives the same current sheets.
@@ -1167,12 +1219,313 @@ struct PageFacts {
 }
 
 impl PageFacts {
-    fn read(d: &cadaddy_doc::Drawing) -> PageFacts {
-        let texts = crate::sheet_facts::texts(d);
-        let ident = crate::sheet_facts::identify_sheet(&texts);
-        let view_titles = crate::sheet_facts::view_titles(d, &texts).into_iter().map(|v| v.title).collect();
+    fn read_texts(d: &cadaddy_doc::Drawing, texts: &[crate::sheet_facts::TextItem]) -> PageFacts {
+        let ident = crate::sheet_facts::identify_sheet(texts);
+        let view_titles = crate::sheet_facts::view_titles(d, texts).into_iter().map(|v| v.title).collect();
         let issued = texts.iter().filter_map(|t| latest_date(&t.value)).max().unwrap_or_default();
-        PageFacts { ident, view_titles, issued, level_marks: level_marks(&texts) }
+        PageFacts { ident, view_titles, issued, level_marks: level_marks(texts) }
+    }
+}
+
+/// A page of the set during classify: read now, or kept as it was (read before, unreadable, or
+/// past the cap).
+enum ClassifyPage {
+    Kept(Box<SheetEntry>),
+    Read(Box<ReadPage>),
+}
+
+/// What classify read on a page before the set decides its number.
+struct ReadPage {
+    entry: SheetEntry,
+    facts: PageFacts,
+    /// The sheet reader's reading, one per view.
+    recs: Vec<RecognisedSheet>,
+    /// Every text that reads as a sheet number, with where it sits.
+    candidates: Vec<crate::sheet_facts::NumberCandidate>,
+    contents: Vec<u64>,
+    /// How the set changed the page's number (a finding on its entries), empty when it didn't.
+    note: String,
+}
+
+/// A read page as the copy test needs it.
+struct PageSummary {
+    /// The title its labelled title block gives (a title guessed from the largest lettering can be
+    /// the project's name: empty then, and the contents decide).
+    title: String,
+    contents: Vec<u64>,
+    strength: u8,
+}
+
+/// How a page's number was read: 3 by its place in the set's title block, 2 from a labelled
+/// title block, 1 the largest sheet number at the sheet's edge, 0 the sheet reader's fallback (the
+/// largest sheet-number lettering along the right or bottom of the sheet).
+fn ident_strength(source: &str) -> u8 {
+    match source {
+        "set_position" => 3,
+        "title_block" | "number_label" => 2,
+        "largest_number" => 1,
+        _ => 0,
+    }
+}
+
+fn page_strength(facts: &PageFacts) -> u8 {
+    facts.ident.as_ref().map_or(0, |id| ident_strength(&id.source))
+}
+
+/// The number the page's own reading gave: its title block's, else the sheet reader's.
+fn page_number(r: &ReadPage) -> Option<(String, u8)> {
+    if let Some(id) = &r.facts.ident {
+        return Some((id.number.clone(), ident_strength(&id.source)));
+    }
+    let rec = r.recs.first()?;
+    let n = if rec.printed_number.is_empty() { &rec.number } else { &rec.printed_number };
+    (!n.is_empty()).then(|| (n.clone(), 0))
+}
+
+/// Distinct texts on a page (a fingerprint of its contents, hashed): two prints of one sheet
+/// share nearly all of them, two sheets of one set little more than the title block.
+fn content_signature(texts: &[crate::sheet_facts::TextItem]) -> Vec<u64> {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut out: Vec<u64> = texts
+        .iter()
+        .take(MAX_SIGNATURE_TEXTS)
+        .map(|t| {
+            let mut h = std::hash::DefaultHasher::new();
+            t.value.trim().to_ascii_uppercase().hash(&mut h);
+            h.finish()
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Texts read into a page's content fingerprint.
+const MAX_SIGNATURE_TEXTS: usize = 20_000;
+
+/// Shared over the shorter of two sorted, distinct lists (0 to 1): a print that splits its lines
+/// into more texts (a PDF beside its drawing file) still holds the other's.
+fn overlap(a: &[u64], b: &[u64]) -> f64 {
+    let (mut i, mut j, mut both) = (0usize, 0usize, 0usize);
+    while let (Some(x), Some(y)) = (a.get(i), b.get(j)) {
+        match x.cmp(y) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                both += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    let fewer = a.len().min(b.len());
+    if fewer == 0 { 1.0 } else { both as f64 / fewer as f64 }
+}
+
+/// Words shared over all words of two titles (0 to 1).
+fn title_overlap(a: &str, b: &str) -> f64 {
+    let words = |t: &str| -> std::collections::BTreeSet<String> {
+        t.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    };
+    let (a, b) = (words(a), words(b));
+    let all = a.union(&b).count();
+    if all == 0 { 1.0 } else { a.intersection(&b).count() as f64 / all as f64 }
+}
+
+/// Fewest distinct texts on both pages for their contents to tell them apart.
+const MIN_COMPARED_TEXTS: usize = 8;
+
+/// Whether two pages that print one number are copies of one sheet: their titles match (a
+/// revision may change a word) and their contents don't say otherwise, or their contents are
+/// nearly the same print (a title read differently). With neither to compare, the number decides,
+/// as before.
+fn same_sheet(a: &PageSummary, b: &PageSummary) -> bool {
+    let contents = (a.contents.len() >= MIN_COMPARED_TEXTS && b.contents.len() >= MIN_COMPARED_TEXTS).then(|| overlap(&a.contents, &b.contents));
+    let titles = (!a.title.trim().is_empty() && !b.title.trim().is_empty()).then(|| title_overlap(&a.title, &b.title));
+    match (titles, contents) {
+        (Some(t), Some(c)) if t >= SAME_TITLE => c >= 0.3,
+        (Some(t), None) => t >= SAME_TITLE,
+        (_, Some(c)) => c >= if titles.is_some() { 0.9 } else { 0.85 },
+        (None, None) => true,
+    }
+}
+
+/// Title word overlap of two prints of one sheet.
+const SAME_TITLE: f64 = 0.8;
+
+/// Share of a spot's numbers that are different numbers (copies of a sheet in a set repeat a few).
+const DISTINCT_AT_SPOT: f64 = 0.6;
+
+/// How close (a share of the page's width and height) a page's number is to the set's spot for it.
+const SPOT_RADIUS: f64 = 0.03;
+
+/// The set's sheet-number spots: where its pages' numbers sit (a set prints every sheet's number at
+/// one place of its title block, a set of several firms' title blocks at a few). Each spot is its
+/// centre and its numbers' lettering size; a spot holds at least 3 pages' numbers and 3 % of them,
+/// and they are different numbers (a tag the pages repeat at one place is no sheet number).
+fn number_spots(picks: &[(String, [f64; 2], f64)]) -> Vec<([f64; 2], f64)> {
+    let mut clusters: Vec<([f64; 2], Vec<f64>, Vec<&str>)> = Vec::new();
+    for (value, at, size) in picks {
+        match clusters.iter_mut().find(|(c, _, _)| (c[0] - at[0]).abs() <= SPOT_RADIUS && (c[1] - at[1]).abs() <= SPOT_RADIUS) {
+            Some((c, sizes, values)) => {
+                let n = sizes.len() as f64;
+                *c = [(c[0] * n + at[0]) / (n + 1.0), (c[1] * n + at[1]) / (n + 1.0)];
+                sizes.push(*size);
+                values.push(value);
+            }
+            None => clusters.push((*at, vec![*size], vec![value])),
+        }
+    }
+    let least = 3usize.max((picks.len() as f64 * 0.03).ceil() as usize);
+    clusters
+        .into_iter()
+        .filter(|(_, sizes, values)| {
+            let distinct = values.iter().collect::<std::collections::BTreeSet<_>>().len();
+            sizes.len() >= least && distinct as f64 >= DISTINCT_AT_SPOT * values.len() as f64
+        })
+        .map(|(c, mut sizes, _)| {
+            sizes.sort_by(f64::total_cmp);
+            (c, sizes.get(sizes.len() / 2).copied().unwrap_or(1.0))
+        })
+        .collect()
+}
+
+/// Each page's number as the set prints it. A page's own reading can take a tag in the drawing
+/// area (an equipment or schedule mark that reads like a sheet number) when its title block's
+/// number has no label or doesn't stand out. The set shows where its numbers are: where most pages'
+/// numbers sit. A page whose reading isn't there takes the number at that spot when it has one; a
+/// page with no number reading takes it too; a fallback reading whose letters name no discipline,
+/// with nothing at the spot, is dropped (the page is left unnumbered, never named by a tag).
+fn set_numbers(pages: &mut [ClassifyPage]) {
+    let at_of =
+        |r: &ReadPage, n: &str| r.candidates.iter().filter(|c| c.value == n.trim()).max_by(|a, b| a.size.total_cmp(&b.size)).map(|c| (c.at, c.size));
+    let picks: Vec<(String, [f64; 2], f64)> = pages
+        .iter()
+        .filter_map(|p| match p {
+            ClassifyPage::Read(r) => {
+                page_number(r).filter(|(n, _)| sheet_facts::designator_prefix(n)).and_then(|(n, _)| at_of(r, &n).map(|(at, size)| (n, at, size)))
+            }
+            ClassifyPage::Kept(_) => None,
+        })
+        .collect();
+    let spots = number_spots(&picks);
+    let near = |at: [f64; 2], c: [f64; 2]| (at[0] - c[0]).abs() <= SPOT_RADIUS && (at[1] - c[1]).abs() <= SPOT_RADIUS;
+    for p in pages.iter_mut() {
+        let ClassifyPage::Read(r) = p else { continue };
+        let pick = page_number(r);
+        let pick_at = pick.as_ref().and_then(|(n, _)| at_of(r, n));
+        if pick_at.is_some_and(|(at, _)| spots.iter().any(|(c, _)| near(at, *c))) {
+            continue;
+        }
+        // The largest number at one of the set's spots, lettered like the set's numbers there.
+        let at_spot = r
+            .candidates
+            .iter()
+            .filter_map(|c| {
+                spots.iter().find(|(s, size)| near(c.at, *s) && c.size >= 0.5 * size).map(|(s, _)| (c, (c.at[0] - s[0]).hypot(c.at[1] - s[1])))
+            })
+            .max_by(|a, b| a.0.size.total_cmp(&b.0.size).then(b.1.total_cmp(&a.1)))
+            .map(|(c, _)| c.value.clone());
+        let pick_ok = pick.as_ref().is_some_and(|(n, strength)| *strength >= 2 && sheet_facts::designator_prefix(n));
+        match (at_spot, pick) {
+            (Some(n), pick) if !pick_ok => {
+                let title = r.facts.ident.as_ref().map(|id| id.title.clone()).unwrap_or_default();
+                r.note = match &pick {
+                    Some((was, _)) if *was != n => {
+                        format!("sheet number {n} read at the set's sheet-number spot, not {was} (lettering elsewhere on the sheet)")
+                    }
+                    Some(_) => String::new(),
+                    None => format!("sheet number {n} read at the set's sheet-number spot"),
+                };
+                r.facts.ident =
+                    Some(sheet_facts::SheetIdent { discipline: sheet_facts::discipline_of(&n), number: n, title, source: "set_position".into() });
+            }
+            (None, Some((was, strength))) if strength < 2 && !sheet_facts::designator_prefix(&was) => {
+                r.note = format!("no sheet number found: {was} names no discipline and is not where the set prints its numbers (a tag on the sheet)");
+                r.facts.ident = None;
+                for rec in &mut r.recs {
+                    rec.number.clear();
+                    rec.printed_number.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Entries of different pages that share a number but are different sheets (their titles and
+/// contents differ): the page read best keeps the number, the others become `<number>~2`, `~3`
+/// in page order, each with `printed_as` and a finding. Copies of one sheet keep one number.
+fn split_number_clashes(out: &mut [SheetEntry], page_of: &[Option<usize>], pages: &[PageSummary]) {
+    let base = |e: &SheetEntry| -> Option<String> {
+        let r = e.recognised.as_ref()?;
+        let n = if r.printed_number.is_empty() { &r.number } else { &r.printed_number };
+        (!n.is_empty()).then(|| n.clone())
+    };
+    let mut by_number: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, e) in out.iter().enumerate() {
+        if let (Some(n), Some(Some(_))) = (base(e), page_of.get(i)) {
+            by_number.entry(n).or_default().push(i);
+        }
+    }
+    for (number, members) in by_number {
+        // The distinct pages, in set order, then the pages as copies of one sheet.
+        let mut distinct: Vec<usize> = members.iter().filter_map(|&i| page_of.get(i).copied().flatten()).collect();
+        distinct.dedup();
+        if distinct.len() < 2 {
+            continue;
+        }
+        let mut sheets: Vec<Vec<usize>> = Vec::new();
+        for k in distinct {
+            let Some(page) = pages.get(k) else { continue };
+            match sheets.iter_mut().find(|s| s.first().and_then(|&f| pages.get(f)).is_some_and(|f| same_sheet(f, page))) {
+                Some(s) => s.push(k),
+                None => sheets.push(vec![k]),
+            }
+        }
+        if sheets.len() < 2 {
+            continue;
+        }
+        let strength = |s: &Vec<usize>| s.iter().filter_map(|&k| pages.get(k)).map(|p| p.strength).max().unwrap_or(0);
+        let keeper = sheets.iter().enumerate().max_by(|a, b| strength(a.1).cmp(&strength(b.1)).then(b.0.cmp(&a.0))).map_or(0, |(i, _)| i);
+        let sources: Vec<String> = sheets
+            .iter()
+            .filter_map(|s| s.first())
+            .filter_map(|&k| members.iter().find(|&&i| page_of.get(i).copied().flatten() == Some(k)).and_then(|&i| out.get(i)))
+            .map(source_of)
+            .collect();
+        let mut suffix = 1usize;
+        for (si, s) in sheets.iter().enumerate() {
+            if si == keeper {
+                continue;
+            }
+            suffix += 1;
+            let renamed = format!("{number}~{suffix}");
+            for &i in &members {
+                if !page_of.get(i).copied().flatten().is_some_and(|k| s.contains(&k)) {
+                    continue;
+                }
+                let Some(e) = out.get_mut(i) else { continue };
+                if let Some(r) = e.recognised.as_mut() {
+                    if r.printed_number.is_empty() {
+                        r.number = renamed.clone();
+                    } else {
+                        r.number = r.number.replacen(&r.printed_number, &renamed, 1);
+                        r.printed_number = renamed.clone();
+                    }
+                    e.number = r.number.clone();
+                }
+                e.printed_as = number.clone();
+                let why = format!(
+                    "sheet number {number} is printed on {} different sheets ({}): this one is kept as {renamed}, no copy of the other",
+                    sheets.len(),
+                    sources.join(", ")
+                );
+                if let Some(res) = e.stage_results.get_mut("classify") {
+                    res.findings.push(Finding { kind: "conflict".into(), description: why, severity: 3, ..Finding::default() });
+                }
+            }
+        }
     }
 }
 
@@ -1439,6 +1792,21 @@ pub struct SheetIndex {
     /// Level marks not used: they break the levels' order (elevations rise with the level).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub level_warnings: Vec<String>,
+    /// Sheet numbers printed on different sheets (their titles and contents differ, so they are no
+    /// copies): each sheet has its own entry (`<number>~2`, …) and the clash is to be resolved.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub number_conflicts: Vec<NumberConflict>,
+}
+
+/// One sheet number printed on different sheets.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct NumberConflict {
+    /// The number as printed.
+    pub number: String,
+    /// The index entries it became (the number itself for the sheet that kept it).
+    pub sheets: Vec<String>,
+    /// Each entry's page (`file#page`), in the same order.
+    pub sources: Vec<String>,
 }
 
 fn source_of(e: &SheetEntry) -> String {
@@ -1619,6 +1987,29 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
         }
         out.plans_without_level.push(s.number.clone());
     }
+    // Numbers printed on different sheets: the sheet that kept the number and the ones renamed.
+    let base = |e: &SheetEntry| e.recognised.as_ref().map(|r| if r.printed_number.is_empty() { r.number.clone() } else { r.printed_number.clone() });
+    let mut clashes: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+    for e in project.sheets.iter().take(MAX_SHEETS).filter(|e| !e.printed_as.is_empty()) {
+        clashes.entry(e.printed_as.as_str()).or_default();
+    }
+    for e in project.sheets.iter().take(MAX_SHEETS) {
+        let Some(b) = base(e) else { continue };
+        let key = if e.printed_as.is_empty() { b.as_str() } else { e.printed_as.as_str() };
+        if let Some(v) = clashes.get_mut(key)
+            && !v.iter().any(|(n, _)| *n == b)
+        {
+            v.push((b.clone(), source_of(e)));
+        }
+    }
+    out.number_conflicts = clashes
+        .into_iter()
+        .map(|(number, v)| NumberConflict {
+            number: number.to_string(),
+            sheets: v.iter().map(|(n, _)| n.clone()).collect(),
+            sources: v.into_iter().map(|(_, s)| s).collect(),
+        })
+        .collect();
     out
 }
 

@@ -1065,8 +1065,12 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     // Cache the sheet list for later stages (MUST 4).
     job.sheets = Some(sheets_result);
-    job.index =
-        Some(json!({"sheets": classified.get("sheets"), "levels": classified.get("levels"), "level_warnings": classified.get("level_warnings")}));
+    job.index = Some(json!({
+        "sheets": classified.get("sheets"),
+        "levels": classified.get("levels"),
+        "level_warnings": classified.get("level_warnings"),
+        "number_conflicts": classified.get("number_conflicts"),
+    }));
 
     // MUST 1: Check for empty results.
     // The index: one entry per real sheet (questions are asked once per sheet, not per copy).
@@ -1114,6 +1118,36 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             vec!["Check that the PDF folder is correct".into(), "Re-import with a different path".into()],
             None,
             true,
+        );
+    }
+
+    // One number printed on different sheets: each sheet was kept (`<number>~2`); the set's
+    // numbering is to be checked (a misprint, or a page whose number was read elsewhere).
+    let clashes = classified.get("number_conflicts").and_then(Value::as_array).cloned().unwrap_or_default();
+    if !clashes.is_empty() {
+        let named: Vec<String> = clashes
+            .iter()
+            .take(20)
+            .map(|c| {
+                let number = c.get("number").and_then(Value::as_str).unwrap_or("?");
+                let sources: Vec<&str> =
+                    c.get("sources").and_then(Value::as_array).map(|v| v.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                format!("{number} on {}", sources.join(", "))
+            })
+            .collect();
+        let more = clashes.len().saturating_sub(named.len());
+        job.add_finding(
+            StageName::Classify,
+            &format!("{} sheet number(s) are printed on different sheets", clashes.len()),
+            &format!(
+                "Their titles and contents differ, so they are no copies: each sheet was kept as its own entry (<number>~2). {}{}",
+                named.join("; "),
+                if more > 0 { format!("; and {more} more") } else { String::new() }
+            ),
+            3,
+            vec!["Check the sheet numbers in those pages' title blocks".into()],
+            None,
+            false,
         );
     }
 
