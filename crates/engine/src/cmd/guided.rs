@@ -18802,8 +18802,8 @@ fn block_texts(d: &cadaddy_doc::Drawing) -> Vec<cadaddy_mepfix::sheet_facts::Tex
 /// A floor built with at least this many walls is a real floor plan's worth of them ...
 const FEW_OPENINGS_MIN_WALLS: u64 = 50;
 /// ... and one with fewer than a door or window per this many walls has its openings drawn on a
-/// plan the build didn't read: a building's rooms have doors (a hotel floor about one per five
-/// walls), its outside walls windows.
+/// plan the build didn't read: a building's rooms have doors (a floor of rooms has about one per
+/// five walls), its outside walls windows.
 const WALLS_PER_OPENING: u64 = 25;
 
 /// A job finding for each level `model.build` (its `openings_by_level`) built with many walls and
