@@ -17,6 +17,11 @@ fn line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
     d.model.push(e);
 }
 
+/// Feet → a glass line in inches on A-GLAZ (a window's glazing drawn in its gap).
+fn glass(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
+    line_in(d, "A-GLAZ", (a.0 * 12.0, a.1 * 12.0), (b.0 * 12.0, b.1 * 12.0));
+}
+
 fn rules() -> Value {
     json!({
         "units_per_foot": 12,
@@ -105,8 +110,8 @@ fn a_room_becomes_walls_a_floor_slab_and_a_ceiling() {
 
 #[test]
 fn doors_and_windows_take_their_opening_sizes() {
-    // Two rooms: a 4' window gap in the south wall (x 8–12) and a 3' doorway in the middle wall
-    // (y 3–6) with its swing.
+    // Two rooms: a 4' window gap in the south wall (x 8–12), its glazing drawn in it, and a 3'
+    // doorway in the middle wall (y 3–6) with its swing.
     let mut d = Drawing::new_imperial();
     for (a, b) in [((0., 0.), (8., 0.)), ((12., 0.), (40., 0.)), ((40., 0.), (40., 10.)), ((40., 10.), (0., 10.)), ((0., 10.), (0., 0.))] {
         line(&mut d, a, b);
@@ -120,6 +125,7 @@ fn doors_and_windows_take_their_opening_sizes() {
         line(&mut d, (x, 0.5), (x, 3.0));
         line(&mut d, (x, 6.0), (x, 9.5));
     }
+    glass(&mut d, (8.0, 0.25), (12.0, 0.25));
     let swing: Vec<_> = (0..=9)
         .map(|i| f64::from(i) * std::f64::consts::FRAC_PI_2 / 9.0)
         .map(|a| json!({"p": {"x": (20.0 - 3.0 * a.sin()) * 12.0, "y": (3.0 + 3.0 * a.cos()) * 12.0}, "bulge": 0.0, "start_width": 0.0, "end_width": 0.0}))
@@ -149,7 +155,8 @@ fn doors_and_windows_take_their_opening_sizes() {
 #[test]
 fn a_window_gap_a_demising_wall_meets_is_two_windows() {
     // Two rooms (x 0-20 and 20.5-40) whose south wall has one 12' gap (x 14-26) that the 6" wall
-    // between them meets end-on: a pier there, a window each side, none across it.
+    // between them meets end-on: a pier there, a window each side (each room's glazing drawn),
+    // none across it.
     let mut d = Drawing::new_imperial();
     for (a, b) in [((0., 0.), (14., 0.)), ((26., 0.), (40., 0.)), ((40., 0.), (40., 10.)), ((40., 10.), (0., 10.)), ((0., 10.), (0., 0.))] {
         line(&mut d, a, b);
@@ -162,6 +169,8 @@ fn a_window_gap_a_demising_wall_meets_is_two_windows() {
     for x in [20.0, 20.5] {
         line(&mut d, (x, 0.5), (x, 9.5));
     }
+    glass(&mut d, (14.0, 0.25), (20.0, 0.25));
+    glass(&mut d, (20.5, 0.25), (26.0, 0.25));
     let mut s = Session::empty();
     s.open_drawing(d, "Plan", None);
     let r = s.execute("wallgen", &json!({"rules": rules()})).unwrap();
@@ -338,7 +347,7 @@ fn line_in(d: &mut Drawing, layer: &str, a: (f64, f64), b: (f64, f64)) {
 /// partition at x 24'–24'6", the lines broken at four 3'-0" gaps closed by jamb lines. Three
 /// gaps hold a 3' door block (DOOR36: a leaf and a 90° swing, its base point at the hinge and
 /// drawn away from the origin) inserted at the hinge on the inside face; the fourth, in the north
-/// wall, is a plain gap.
+/// wall, has a window's glazing drawn across it.
 fn shop() -> Session {
     let mut d = Drawing::new_imperial();
     let w = |d: &mut Drawing, a: (f64, f64), b: (f64, f64)| line_in(d, "A-WALL", a, b);
@@ -354,6 +363,8 @@ fn shop() -> Session {
     for (a, b) in [((480., 360.), (396., 360.)), ((360., 360.), (0., 360.)), ((474., 354.), (396., 354.)), ((360., 354.), (6., 354.))] {
         w(&mut d, a, b);
     }
+    // The north gap's glazing.
+    line_in(&mut d, "A-GLAZ", (360., 357.), (396., 357.));
     // West wall, unbroken.
     w(&mut d, (0., 360.), (0., 0.));
     w(&mut d, (6., 354.), (6., 6.));
@@ -444,7 +455,7 @@ fn wall_at(walls: &[Mesh], x: f64, y: f64, z: f64) -> bool {
 
 /// The tester's door openings: the walls stop at each gap (a header above the 7' head), each door
 /// block's leaf hangs from its hinge in its own opening, a gap with a door is never a window, the
-/// plain gap in the outside wall is the one window, and the floor and ceiling end at the walls'
+/// glazed gap in the outside wall is the one window, and the floor and ceiling end at the walls'
 /// outside faces.
 #[test]
 fn door_blocks_sit_in_their_openings() {
@@ -463,7 +474,7 @@ fn door_blocks_sit_in_their_openings() {
     for (x, y) in [(90.0, 3.0), (138.0, 3.0), (477.0, 114.0), (477.0, 162.0), (291.0, 234.0), (291.0, 282.0)] {
         assert!(wall_at(&walls, x, y, 40.0), "the wall at ({x}, {y})");
     }
-    // The plain gap: the window's sill and head, open between.
+    // The glazed gap: the window's sill and head, open between.
     assert!(wall_at(&walls, 378.0, 357.0, 12.0) && wall_at(&walls, 378.0, 357.0, 100.0) && !wall_at(&walls, 378.0, 357.0, 50.0));
     let glass = made(&s, "window");
     assert_eq!(glass.len(), 1);
