@@ -405,3 +405,166 @@ fn a_floor_and_its_roof_are_one_storey() {
     let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(names, ["1", "R"]);
 }
+
+/// Where a set's title block puts the sheet number.
+#[derive(Clone, Copy)]
+enum Strip {
+    /// A strip down the right edge, no labels, the number in its bottom corner.
+    Right,
+    /// A band along the bottom, the number at its right end.
+    Bottom,
+}
+
+/// A page of a combined set whose title block has no labels and whose number doesn't stand out
+/// (not twice the notes' lettering), `w` × `h` (sheet sizes vary in one set). `number` is `None`
+/// when the number isn't text (plotted as strokes). `tags` are equipment and schedule marks in
+/// the drawing area near the strip, lettered larger than the number: `(tag, x, y)` as shares of
+/// the sheet.
+fn combined_page(strip: Strip, w: f64, h: f64, number: Option<&str>, title: &str, page: u32, tags: &[(&str, f64, f64)]) -> Drawing {
+    let mut d = Drawing::default();
+    line(&mut d, (0.0, 0.0), (w, 0.0));
+    line(&mut d, (w, 0.0), (w, h));
+    line(&mut d, (w, h), (0.0, h));
+    line(&mut d, (0.0, h), (0.0, 0.0));
+    let note = 0.006 * h;
+    // The drawing: rooms of linework, notes and lettering of this sheet's own.
+    for i in 0..8 {
+        let x = 0.05 * w + 0.09 * w * f64::from(i);
+        line(&mut d, (x, 0.25 * h), (x + 0.07 * w, 0.25 * h));
+        line(&mut d, (x, 0.25 * h), (x, 0.85 * h));
+    }
+    for i in 0..24 {
+        let at = (0.06 * w + 0.03 * w * f64::from(i % 12), 0.3 * h + 0.25 * h * f64::from(i / 12));
+        text(&mut d, &format!("ROOM {page}{i:02}"), at.0, at.1, note);
+    }
+    for i in 0..10 {
+        text(&mut d, &format!("GENERAL NOTE {i}"), 0.1 * w, 0.9 * h - 0.012 * h * f64::from(i), note);
+    }
+    for (t, x, y) in tags {
+        text(&mut d, t, x * w, y * h, 1.6 * 0.012 * h);
+    }
+    // The title block: firm and project lines, the title, the number in the corner.
+    match strip {
+        Strip::Right => {
+            line(&mut d, (0.9 * w, 0.0), (0.9 * w, h));
+            for (i, t) in ["ARCHITECTS INC", "123 SAMPLE STREET", "PROJECT A", "HOTEL BUILDING"].iter().enumerate() {
+                text(&mut d, t, 0.91 * w, 0.9 * h - 0.02 * h * i as f64, note);
+            }
+            text(&mut d, title, 0.91 * w, 0.12 * h, note);
+            if let Some(n) = number {
+                text(&mut d, n, 0.93 * w, 0.04 * h, 0.012 * h);
+            }
+        }
+        Strip::Bottom => {
+            line(&mut d, (0.0, 0.1 * h), (w, 0.1 * h));
+            for (i, t) in ["ARCHITECTS INC", "123 SAMPLE STREET", "PROJECT A"].iter().enumerate() {
+                text(&mut d, t, 0.05 * w + 0.15 * w * i as f64, 0.05 * h, note);
+            }
+            text(&mut d, title, 0.6 * w, 0.05 * h, note);
+            if let Some(n) = number {
+                text(&mut d, n, 0.93 * w, 0.03 * h, 0.012 * h);
+            }
+        }
+    }
+    d
+}
+
+/// Q6281: a combined set whose title block numbers don't stand out, with equipment and schedule
+/// tags in the drawing area along the title block. Each page's number comes from the title block's
+/// number spot, never a tag; pages are never merged under a tag; electrical pages are electrical.
+#[test]
+fn a_combined_sets_numbers_come_from_its_title_block_never_a_tag_in_the_drawing() {
+    for strip in [Strip::Right, Strip::Bottom] {
+        // Equipment tags at the right of the drawing area (inside the band a reader looks in for
+        // a title block), larger than the number: the same few repeat page to page.
+        let (tx, ty) = match strip {
+            Strip::Right => (0.84, 0.3),
+            Strip::Bottom => (0.84, 0.12),
+        };
+        let equipment = [("EF-3", tx, ty), ("WH-1", tx, ty + 0.05), ("UH-2", tx + 0.02, ty + 0.1)];
+        // A plumbing fixture mark: its letter is a discipline's, so only the place tells it apart.
+        let fixture = [("P-4", tx, ty + 0.15)];
+        let sheets: Vec<(&str, &str, Vec<(&str, f64, f64)>)> = vec![
+            ("G-001", "COVER SHEET", vec![]),
+            ("A-101", "FIRST FLOOR PLAN", vec![]),
+            ("A-102", "SECOND FLOOR PLAN", vec![]),
+            ("M-101", "FIRST FLOOR HVAC PLAN", equipment.to_vec()),
+            ("M-102", "SECOND FLOOR HVAC PLAN", equipment.to_vec()),
+            ("M-601", "MECHANICAL SCHEDULES", equipment.to_vec()),
+            ("P-101", "FIRST FLOOR PLUMBING PLAN", [equipment.as_slice(), fixture.as_slice()].concat()),
+            ("P-102", "SECOND FLOOR PLUMBING PLAN", [equipment.as_slice(), fixture.as_slice()].concat()),
+            ("E-101", "FIRST FLOOR POWER PLAN", equipment.to_vec()),
+            ("E-102", "SECOND FLOOR POWER PLAN", [equipment.as_slice(), fixture.as_slice()].concat()),
+            ("E-201", "FIRST FLOOR LIGHTING PLAN", equipment.to_vec()),
+            ("E-601", "PANEL SCHEDULES", equipment.to_vec()),
+        ];
+        let mut pages: Vec<(&str, u32, Drawing)> = Vec::new();
+        for (i, (n, t, tags)) in sheets.iter().enumerate() {
+            let page = u32::try_from(i + 1).expect("page");
+            // Two sheet sizes in one set.
+            let (w, h) = if i % 3 == 0 { (3600.0, 2400.0) } else { (3000.0, 2000.0) };
+            pages.push(("Combined Set.pdf", page, combined_page(strip, w, h, Some(n), t, page, tags)));
+        }
+        // A page whose number is plotted as strokes (no text): unnumbered, never named by a tag.
+        pages.push(("Combined Set.pdf", 13, combined_page(strip, 3000.0, 2000.0, None, "ROOF HVAC PLAN", 13, &equipment)));
+        let project = classify(pages);
+        let index = printset::sheet_index(&project);
+        let numbers: Vec<&str> = index.sheets.iter().map(|s| s.number.as_str()).collect();
+        for (n, _, _) in &sheets {
+            assert!(numbers.contains(n), "{n} missing: {numbers:?}");
+        }
+        assert_eq!(index.pages, 13);
+        assert_eq!(index.sheets.len(), 13, "every page its own sheet: {numbers:?}");
+        assert!(index.sheets.iter().all(|s| s.sources.len() == 1), "no page merged into another: {:?}", index.sheets);
+        for tag in ["EF-3", "WH-1", "UH-2", "P-4"] {
+            assert!(!numbers.contains(&tag), "a tag named a sheet: {numbers:?}");
+        }
+        assert_eq!(index.unidentified, 1, "the page with no number text");
+        let disc = |n: &str| index.sheets.iter().find(|s| s.number == n).map(|s| s.discipline.clone()).expect(n);
+        for n in ["E-101", "E-102", "E-201", "E-601"] {
+            assert_eq!(disc(n), "E", "{n}");
+        }
+        assert_eq!(disc("P-101"), "P");
+        let codes: std::collections::BTreeSet<String> = index.sheets.iter().map(|s| s.discipline.clone()).collect();
+        assert!(codes.iter().all(|c| ["G", "A", "M", "P", "E", "unknown", ""].contains(&c.as_str())), "{codes:?}");
+    }
+}
+
+/// A labelled title block (`DRAWING TITLE`, the number below) on a page with more notes.
+fn labelled(number: &str, title: &[&str], notes: &[&str]) -> Drawing {
+    let mut d = sheet(number, title, "10/01/2026");
+    for (i, n) in notes.iter().enumerate() {
+        text(&mut d, n, 200.0, 500.0 - 12.0 * i as f64, 5.0);
+    }
+    d
+}
+
+/// Q6281: pages are copies of one sheet only when their numbers AND titles (or contents) match.
+/// Two different sheets that print one number are a conflict to report, both kept; a copy of a
+/// sheet in another file is still one sheet.
+#[test]
+fn pages_that_share_a_number_are_copies_only_when_they_are_the_same_sheet() {
+    let power: Vec<String> = (0..12).map(|i| format!("RECEPTACLE NOTE {i}")).collect();
+    let light: Vec<String> = (0..12).map(|i| format!("LUMINAIRE NOTE {i}")).collect();
+    let power: Vec<&str> = power.iter().map(String::as_str).collect();
+    let light: Vec<&str> = light.iter().map(String::as_str).collect();
+    let project = classify(vec![
+        ("Combined Set.pdf", 1, labelled("E-201", &["SECOND FLOOR", "POWER PLAN"], &power)),
+        ("Combined Set.pdf", 2, labelled("E-201", &["THIRD FLOOR", "LIGHTING PLAN"], &light)),
+        ("Electrical Set.pdf", 1, labelled("E-201", &["SECOND FLOOR", "POWER PLAN"], &power)),
+    ]);
+    let index = printset::sheet_index(&project);
+    assert_eq!(index.sheets.len(), 2, "{:?}", index.sheets);
+    let kept = index.sheets.iter().find(|s| s.number == "E-201").expect("E-201");
+    assert_eq!(kept.title, "SECOND FLOOR POWER PLAN");
+    assert_eq!(kept.sources.len(), 2, "the electrical set's copy is a copy: {:?}", kept.sources);
+    let other = index.sheets.iter().find(|s| s.number == "E-201~2").expect("the other sheet keeps its own entry");
+    assert_eq!((other.title.as_str(), other.sources.as_slice()), ("THIRD FLOOR LIGHTING PLAN", ["Combined Set.pdf#2".to_string()].as_slice()));
+    assert_eq!(index.number_conflicts.len(), 1, "{:?}", index.number_conflicts);
+    let c = &index.number_conflicts[0];
+    assert_eq!((c.number.as_str(), c.sheets.len()), ("E-201", 2), "{c:?}");
+    let page2 = project.sheets.iter().find(|e| e.file == "Combined Set.pdf" && e.page == 2).expect("page 2");
+    assert_eq!(page2.printed_as, "E-201");
+    let found = page2.stage_results.get("classify").map(|r| r.findings.iter().any(|f| f.kind == "conflict")).unwrap_or(false);
+    assert!(found, "the clash is reported on the page");
+}
