@@ -705,7 +705,7 @@ fn losses_and_parts(d: &Drawing, back: &Drawing) -> (Vec<Loss>, Vec<&'static str
             l.count = count;
         }
     }
-    compare_foreign(&d.foreign, &back.foreign, out.in_part("other programs' data"));
+    compare_foreign(d, back, out.in_part("other programs' data"));
     let mut list: Vec<Loss> = out.by_feature.into_values().collect();
     list.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.feature.cmp(&b.feature)));
     (list, PARTS.into_iter().filter(|p| out.parts.contains(p)).collect())
@@ -717,39 +717,127 @@ fn handle_group(code: i32) -> bool {
     matches!(code, 5 | 105 | 320..=369 | 390..=399 | 480 | 481 | 1005) || code == 102
 }
 
-/// Other programs' data CADaddy keeps without modelling it (`Drawing::foreign`): their objects
-/// (matched by type and content, since a writer renumbers their handles: every group of the
-/// original but its handles must still be there), their CLASS records, the named object
-/// dictionary's entries, and the reactors and extension dictionaries of objects.
-fn compare_foreign(a: &cadaddy_doc::foreign::Foreign, b: &cadaddy_doc::foreign::Foreign, out: &mut Losses) {
-    type Content = Vec<(i32, String)>;
-    let content = |o: &cadaddy_doc::foreign::ForeignObject| -> Content {
-        o.tags.iter().filter(|t| !handle_group(t.code)).map(|t| (t.code, t.value.trim().to_string())).collect()
-    };
-    // Every group of `x`, as many times, is in `y`.
-    let holds = |x: &Content, y: &Content| {
-        let mut rest = y.clone();
-        x.iter().all(|g| match rest.iter().position(|h| h == g) {
-            Some(i) => {
-                rest.swap_remove(i);
-                true
+/// Whether group `code` refers to another object by its handle (DXF Reference, group code
+/// ranges): compared by what it points at, not by its number.
+fn reference_group(code: i32) -> bool {
+    matches!(code, 320..=369 | 390..=399 | 480 | 481 | 1005)
+}
+
+/// What the handles of one drawing name, for comparing kept data's references: its kept objects
+/// (by type) and its entities. Table records, blocks and dictionaries CADaddy writes itself get
+/// new handles of their own and are not named here.
+struct Referents<'a> {
+    objects: std::collections::HashMap<cadaddy_doc::Handle, &'a str>,
+    drawing: &'a Drawing,
+    /// Entities of blocks (model space and layouts are looked up in their own stores).
+    in_blocks: std::collections::HashSet<cadaddy_doc::Handle>,
+}
+
+impl<'a> Referents<'a> {
+    fn of(d: &'a Drawing) -> Self {
+        Referents {
+            objects: d.foreign.objects.iter().map(|o| (o.handle, o.kind.as_str())).collect(),
+            drawing: d,
+            in_blocks: d.blocks.values().flat_map(|b| b.entities.iter().map(|e| e.handle)).collect(),
+        }
+    }
+
+    /// A reference as compared: `→null`, `→entity`, or `→` and the type of the kept object it
+    /// points at. `None` when it names none of these (a record CADaddy writes under a new handle
+    /// of its own, or something already gone, which a writer nulls): such a group is left out.
+    fn token(&self, value: &str) -> Option<String> {
+        let v = value.trim();
+        let h = if v.is_empty() { cadaddy_doc::Handle(0) } else { cadaddy_doc::Handle::parse_hex(v)? };
+        if h.0 == 0 {
+            return Some("\u{2192}null".into());
+        }
+        if let Some(kind) = self.objects.get(&h) {
+            return Some(format!("\u{2192}{}", kind.trim().to_ascii_uppercase()));
+        }
+        let d = self.drawing;
+        (d.model.contains(h) || d.layouts.iter().any(|l| l.entities.contains(h)) || self.in_blocks.contains(&h)).then(|| "\u{2192}entity".into())
+    }
+}
+
+/// A kept object's groups as compared, sorted (the same groups in another order are the same
+/// object): without its own handle and its bracket groups, each reference as what it points at
+/// ([`Referents::token`]), since a writer renumbers handles.
+fn foreign_content(o: &cadaddy_doc::foreign::ForeignObject, refs: &Referents) -> Vec<(i32, String)> {
+    let mut c: Vec<(i32, String)> = o
+        .tags
+        .iter()
+        .filter_map(|t| {
+            if reference_group(t.code) {
+                refs.token(&t.value).map(|v| (t.code, v))
+            } else if handle_group(t.code) {
+                None
+            } else {
+                Some((t.code, t.value.trim().to_string()))
             }
-            None => false,
         })
-    };
-    let mut unused: Vec<(String, Content)> = b.objects.iter().map(|o| (o.kind.to_ascii_uppercase(), content(o))).collect();
+        .collect();
+    c.sort_unstable();
+    c
+}
+
+/// Whether sorted `y` holds every group of sorted `x`, as many times.
+fn holds_sorted(x: &[(i32, String)], y: &[(i32, String)]) -> bool {
+    let mut rest = y.iter();
+    x.iter().all(|g| rest.by_ref().any(|h| h == g))
+}
+
+/// Other programs' data CADaddy keeps without modelling it (`Drawing::foreign`): their objects
+/// (matched by type and content, a reference by what it points at, since a writer renumbers
+/// handles), their CLASS records, the named object dictionary's entries, and the reactors and
+/// extension dictionaries of objects.
+///
+/// An object is matched to an identical copy first; failing that, to the smallest copy that holds
+/// all its groups (a reader may fill in a default). Matched in file order to the first copy that
+/// held its groups, an empty dictionary took a full one's copy, and the full one was reported
+/// changed on every save.
+fn compare_foreign(da: &Drawing, db: &Drawing, out: &mut Losses) {
+    type Content = Vec<(i32, String)>;
+    let (a, b) = (&*da.foreign, &*db.foreign);
+    let (ra, rb) = (Referents::of(da), Referents::of(db));
+    let theirs: Vec<(String, Content)> = b.objects.iter().map(|o| (o.kind.trim().to_ascii_uppercase(), foreign_content(o, &rb))).collect();
+    let mut used = vec![false; theirs.len()];
+    // Identical copies by type and content, the first in file order last (taken first).
+    let mut identical: std::collections::HashMap<(String, Content), Vec<usize>> = std::collections::HashMap::new();
+    for (i, t) in theirs.iter().enumerate().rev() {
+        identical.entry(t.clone()).or_default().push(i);
+    }
     let step = a.objects.len().div_ceil(DETAIL_SAMPLE).max(1);
+    let mut unmatched: Vec<(&cadaddy_doc::foreign::ForeignObject, String, Content)> = Vec::new();
     for o in a.objects.iter().step_by(step) {
-        let (kind, c) = (o.kind.to_ascii_uppercase(), content(o));
+        let key = (o.kind.trim().to_ascii_uppercase(), foreign_content(o, &ra));
+        match identical.get_mut(&key).and_then(Vec::pop).and_then(|i| used.get_mut(i)) {
+            Some(u) => *u = true,
+            None => unmatched.push((o, key.0, key.1)),
+        }
+    }
+    let mut lost = Vec::new();
+    for (o, kind, c) in unmatched {
+        let best = (0..theirs.len())
+            .filter(|i| used.get(*i) == Some(&false))
+            .filter_map(|i| theirs.get(i).map(|t| (i, t)))
+            .filter(|(_, (k, d))| *k == kind && holds_sorted(&c, d))
+            .min_by_key(|(_, (_, d))| d.len())
+            .map(|(i, _)| i);
+        match best.and_then(|i| used.get_mut(i)) {
+            Some(u) => *u = true,
+            None => lost.push((o, kind)),
+        }
+    }
+    for (o, kind) in lost {
         let feature = format!("{} objects of other programs", o.kind.to_ascii_lowercase());
-        if let Some(i) = unused.iter().position(|(k, d)| *k == kind && holds(&c, d)) {
-            unused.swap_remove(i);
-        } else if let Some(i) = unused.iter().position(|(k, _)| *k == kind) {
-            // There, but not as it was.
-            unused.swap_remove(i);
-            out.add(feature, "changed", Some(o.handle.hex()), None);
-        } else {
-            out.add(feature, "dropped", Some(o.handle.hex()), None);
+        // There, but not as it was; or gone.
+        let other = (0..theirs.len()).find(|i| used.get(*i) == Some(&false) && theirs.get(*i).is_some_and(|(k, _)| *k == kind));
+        match other.and_then(|i| used.get_mut(i)) {
+            Some(u) => {
+                *u = true;
+                out.add(feature, "changed", Some(o.handle.hex()), None);
+            }
+            None => out.add(feature, "dropped", Some(o.handle.hex()), None),
         }
     }
     let class_name = |c: &Vec<cadaddy_doc::RawTag>| c.iter().find(|t| t.code == 1).map(|t| t.value.trim().to_ascii_uppercase());
@@ -1040,6 +1128,112 @@ mod tests {
         let a = json!({"type": "unknown", "tags": [{"code": 8, "value": "0"}, {"code": 5, "value": "3A0"}, {"code": 10, "value": "1.0"}]});
         let b = json!({"type": "unknown", "tags": [{"code": 5, "value": "3A1"}, {"code": 330, "value": "1F"}, {"code": 8, "value": "0"}, {"code": 10, "value": "1.0"}]});
         assert!(kept(&content(a), &content(b), 0));
+    }
+
+    /// Another program's object as kept: its type and groups (`code`, `value`).
+    fn foreign(h: u64, kind: &str, groups: &[(i32, &str)]) -> cadaddy_doc::foreign::ForeignObject {
+        let mut tags = vec![cadaddy_doc::RawTag { code: 5, value: format!("{h:X}") }];
+        tags.extend(groups.iter().map(|(c, v)| cadaddy_doc::RawTag { code: *c, value: (*v).to_string() }));
+        cadaddy_doc::foreign::ForeignObject { handle: cadaddy_doc::Handle(h), kind: kind.into(), tags }
+    }
+
+    fn with_foreign(objects: Vec<cadaddy_doc::foreign::ForeignObject>) -> Drawing {
+        let mut d = Drawing::new_imperial();
+        std::sync::Arc::make_mut(&mut d.foreign).objects = objects;
+        d
+    }
+
+    fn foreign_losses(d: &Drawing, back: &Drawing) -> Vec<Loss> {
+        losses_between(d, back).into_iter().filter(|l| l.feature.contains("other programs")).collect()
+    }
+
+    /// A dictionary of named entries and an empty one, each owning records; written back under
+    /// new handles in another order. The empty dictionary's groups are all in the full one: matched
+    /// in file order to the first copy holding its groups, it took the full one's copy, and the full
+    /// one was reported changed on every save of the file (Q6273).
+    #[test]
+    fn other_programs_objects_renumbered_and_reordered_are_kept() {
+        let dict = |h: u64, entries: &[(&'static str, &'static str)]| {
+            let mut g: Vec<(i32, &str)> = vec![(330, "C"), (100, "AcDbDictionary"), (280, "0"), (281, "1")];
+            for (name, target) in entries {
+                g.extend([(3, *name), (350, *target)]);
+            }
+            foreign(h, "DICTIONARY", &g)
+        };
+        let xrec = |h: u64, owner: &'static str, extra: &[(i32, &'static str)]| {
+            let mut g: Vec<(i32, &str)> = vec![(102, "{ACAD_REACTORS"), (330, owner), (102, "}"), (330, owner), (100, "AcDbXrecord"), (280, "1")];
+            g.extend_from_slice(extra);
+            foreign(h, "XRECORD", &g)
+        };
+        let d = with_foreign(vec![
+            dict(0x10, &[]),
+            dict(0x11, &[("Alpha", "20"), ("Beta", "21")]),
+            xrec(0x20, "11", &[(90, "0")]),
+            xrec(0x21, "11", &[(90, "0"), (91, "-2104163840")]),
+        ]);
+        assert!(foreign_losses(&d, &d.clone()).is_empty());
+        // The writer's copy: new handles, the full dictionary and the larger record first.
+        let back = with_foreign(vec![
+            dict(0x51, &[("Alpha", "61"), ("Beta", "60")]),
+            dict(0x50, &[]),
+            xrec(0x60, "51", &[(90, "0"), (91, "-2104163840")]),
+            xrec(0x61, "51", &[(90, "0")]),
+        ]);
+        assert_eq!(foreign_losses(&d, &back), Vec::new());
+        // A real change still shows: an entry gone, a value changed.
+        let lost = with_foreign(vec![
+            dict(0x51, &[("Alpha", "61")]),
+            dict(0x50, &[]),
+            xrec(0x60, "51", &[(90, "0"), (91, "7")]),
+            xrec(0x61, "51", &[(90, "0")]),
+        ]);
+        let l = foreign_losses(&d, &lost);
+        assert!(l.iter().any(|l| l.feature == "dictionary objects of other programs" && l.what == "changed" && l.handles == ["11"]), "{l:?}");
+        assert!(l.iter().any(|l| l.feature == "xrecord objects of other programs" && l.what == "changed" && l.handles == ["21"]), "{l:?}");
+        // One gone altogether is dropped.
+        let gone = with_foreign(vec![
+            dict(0x51, &[("Alpha", "61"), ("Beta", "60")]),
+            xrec(0x60, "51", &[(90, "0"), (91, "-2104163840")]),
+            xrec(0x61, "51", &[(90, "0")]),
+        ]);
+        let l = foreign_losses(&d, &gone);
+        assert!(l.iter().any(|l| l.feature == "dictionary objects of other programs" && l.what == "dropped" && l.handles == ["10"]), "{l:?}");
+    }
+
+    /// A reference is compared by what it points at, not by its number: to the same kind of
+    /// object under a new handle it is kept; to another kind, or nulled, it changed.
+    #[test]
+    fn other_programs_references_are_compared_by_what_they_point_at() {
+        let mut d = with_foreign(vec![
+            foreign(0x10, "ACME_LINK", &[(100, "AcmeLink"), (340, "20"), (1, "x")]),
+            foreign(0x20, "XRECORD", &[(100, "AcDbXrecord")]),
+        ]);
+        d.model.push(cadaddy_doc::Entity::new(
+            cadaddy_doc::Handle(0x30),
+            cadaddy_doc::EntityKind::Point(cadaddy_doc::Point { p: cadaddy_geom::Vec3::ZERO, angle: 0.0 }),
+        ));
+        let back = |target: &str| {
+            let mut b = with_foreign(vec![
+                foreign(0x40, "ACME_LINK", &[(100, "AcmeLink"), (340, target), (1, "x")]),
+                foreign(0x41, "XRECORD", &[(100, "AcDbXrecord")]),
+            ]);
+            b.model.push(cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(0x30),
+                cadaddy_doc::EntityKind::Point(cadaddy_doc::Point { p: cadaddy_geom::Vec3::ZERO, angle: 0.0 }),
+            ));
+            b
+        };
+        assert_eq!(foreign_losses(&d, &back("41")), Vec::new());
+        for target in ["30", "0"] {
+            let l = foreign_losses(&d, &back(target));
+            assert!(l.iter().any(|l| l.feature == "acme_link objects of other programs" && l.what == "changed"), "{target}: {l:?}");
+        }
+        // A reference the drawing itself can't resolve (already gone) is no loss of the file's.
+        let mut dangling = d.clone();
+        std::sync::Arc::make_mut(&mut dangling.foreign).objects = vec![foreign(0x10, "ACME_LINK", &[(100, "AcmeLink"), (340, "99"), (1, "x")])];
+        let mut nulled = back("0");
+        std::sync::Arc::make_mut(&mut nulled.foreign).objects.truncate(1);
+        assert_eq!(foreign_losses(&dangling, &nulled), Vec::new());
     }
 
     #[test]
