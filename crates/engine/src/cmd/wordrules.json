@@ -2132,6 +2132,19 @@
     "HVAC"
    ]
   },
+  "rooms.area_units": {
+   "source": "A room's printed area is a figure and one of these units, spaces and dots left out (105 SF, 1,960 S.F., 12 SQ FT): never the room's name. (drafting convention)",
+   "words": [
+    "SF",
+    "SQFT",
+    "SQFEET",
+    "SQUAREFEET",
+    "M2",
+    "M\u00b2",
+    "SM",
+    "SQM"
+   ]
+  },
   "rooms.corridor_words": {
    "source": "trade practice: a route named with one of these runs along any corridor of the level (moved from guided.rs)",
    "words": [

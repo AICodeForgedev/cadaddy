@@ -868,7 +868,7 @@ pub(crate) fn area_figure(t: &str) -> bool {
         return false;
     }
     let unit: String = up.get(digits.len()..).unwrap_or_default().chars().filter(|c| !c.is_whitespace() && *c != '.').collect();
-    matches!(unit.as_str(), "SF" | "SQFT" | "SQFEET" | "SQUAREFEET" | "M2" | "M²" | "SM" | "SQM")
+    cadaddy_mepfix::wordrules::words("rooms.area_units").contains(&unit.as_str())
 }
 
 pub(crate) fn room_name_score(t: &str) -> u8 {
