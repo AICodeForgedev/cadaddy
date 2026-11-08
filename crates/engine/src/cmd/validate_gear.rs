@@ -632,6 +632,9 @@ pub(crate) struct ClearFace {
     pub moved_in: f64,
     /// Its clear depth where it was read; `None` when it stood on no wall there.
     pub was_clear_in: Option<f64>,
+    /// Where it was read a duct or pipe passed through its dedicated space (its working space
+    /// there was fine).
+    pub was_ducted: bool,
     pub now_clear_in: f64,
 }
 
@@ -670,10 +673,11 @@ fn piece_obstacle(handle: cadaddy_doc::Handle, poly: &[Vec2], z: [f64; 2], floor
 }
 
 /// A panel whose place (lettering, a proposal: not a located symbol) leaves it no working space,
-/// or stands it on no wall (a panelboard hangs on one; no wall within the build's reach of where
-/// it was read): the wall face near where it was read, in its own room, that has its working
-/// space. Nearest first, sound over unsure; `None` when its own place is on a wall and doesn't
-/// fail, or no face does better. Plan coordinates
+/// stands it on no wall (a panelboard hangs on one; no wall within the build's reach of where
+/// it was read), or puts a duct or pipe through its dedicated space (NEC 110.26(E)): the wall
+/// face near where it was read, in its own room, that has its working space. Nearest first, sound
+/// over unsure; for a duct, only a face with none over it and space as good. `None` when its own
+/// place is on a wall and fails neither, or no face does better. Plan coordinates
 /// (drawing units): the walls' pieces where the plans draw them, `others` and `doors` in feet.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn clear_face(
@@ -725,16 +729,24 @@ pub(crate) fn clear_face(
     // Its place now: as the build would put it.
     let own: Vec<super::propfill::WallPiece> = here.iter().map(|p| (*p).clone()).collect();
     // On no wall: any face of its room within the working space's reach (the room keeps it home).
-    let (was, face_reach) = match super::propfill::wall_face(&own, &e.level, read_at, reach, Some(z_mid)) {
+    let rank_of = |verdict: &str| match verdict {
+        "pass" => Some(2u8),
+        "unsure" => Some(1),
+        _ => None,
+    };
+    // Under a duct with its space: only a face as sound and with none over it, anywhere in its
+    // room (the room keeps it home).
+    let (was, face_reach, ducted_floor) = match super::propfill::wall_face(&own, &e.level, read_at, reach, Some(z_mid)) {
         Some(now) => {
             let (_, here_box) = box_on(now.at, now.along, now.out);
             let was = space(&here_box);
-            if was.verdict != "fail" {
-                return None;
+            match rank_of(was.verdict) {
+                None => (Some(was.clear_in), reach, None),
+                Some(r) if ducted(&here_box) && room.is_some() => (Some(was.clear_in), REACH_FT * upf, Some(r)),
+                Some(_) => return None,
             }
-            (Some(was.clear_in), reach)
         }
-        None if room.is_some() => (None, REACH_FT * upf),
+        None if room.is_some() => (None, REACH_FT * upf, None),
         None => return None,
     };
     let mut best: Option<(u8, f64, ClearFace)> = None;
@@ -799,12 +811,12 @@ pub(crate) fn clear_face(
                     continue;
                 }
                 let ws = space(&obb);
-                let rank = match ws.verdict {
-                    "pass" => 2u8,
-                    "unsure" => 1,
-                    _ => continue,
-                } * 2
-                    + u8::from(!ducted(&obb));
+                let Some(sound) = rank_of(ws.verdict) else { continue };
+                let under = ducted(&obb);
+                if ducted_floor.is_some_and(|f| under || sound < f) {
+                    continue;
+                }
+                let rank = sound * 2 + u8::from(!under);
                 let moved = mid.dist(read_at);
                 if best.as_ref().is_none_or(|(r, m, _)| rank > *r || (rank == *r && moved < *m - 1e-6)) {
                     let half = if u.x.abs() > u.y.abs() { Vec2::new(w / 2.0, dp / 2.0) } else { Vec2::new(dp / 2.0, w / 2.0) };
@@ -818,6 +830,7 @@ pub(crate) fn clear_face(
                             wall: *h,
                             moved_in: moved / inch,
                             was_clear_in: was,
+                            was_ducted: ducted_floor.is_some(),
                             now_clear_in: ws.clear_in,
                         },
                     ));
@@ -2249,6 +2262,29 @@ mod tests {
         assert!((f.min[0] - 100.2).abs() < 1e-6, "still the east face: {f:?}");
         assert!(f.min[1] > 100.0 || f.max[1] < 100.0, "clear of the duct: {f:?}");
         assert!(f.now_clear_in >= 36.0, "{f:?}");
+    }
+
+    #[test]
+    fn a_panel_with_its_space_under_a_duct_moves_along_its_room_clear_of_it() {
+        // A 20' x 25' room, the panel on its east wall with its space, a duct over it running
+        // east-west: along the same room's walls to a face with none over it. With no room known,
+        // or no duct, it stays.
+        let walls = [
+            piece(1, [-6.0, 0.0], [0.0, 300.0]),
+            piece(2, [240.0, 0.0], [246.0, 300.0]),
+            piece(3, [0.0, -6.0], [240.0, 0.0]),
+            piece(4, [0.0, 300.0], [240.0, 306.0]),
+        ];
+        let e = lettered([234.0, 140.0], [240.0, 160.0]);
+        let room = [Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), Vec2::new(240.0, 300.0), Vec2::new(0.0, 300.0)];
+        let mut n = need(false);
+        assert_eq!(clear_face(&e, &walls, &[], &[], Some(&room), 0.0, &n, 12.0), None, "no duct: it stays");
+        n.overhead = vec![vec![[0.0, 150.0 / 12.0], [240.0 / 12.0, 150.0 / 12.0]]];
+        assert_eq!(clear_face(&e, &walls, &[], &[], None, 0.0, &n, 12.0), None, "no room known: it stays");
+        let f = clear_face(&e, &walls, &[], &[], Some(&room), 0.0, &n, 12.0).expect("clear of the duct");
+        assert!(f.min[1] > 150.0 || f.max[1] < 150.0, "clear of the duct: {f:?}");
+        assert!(f.was_ducted && f.was_clear_in.is_some() && f.now_clear_in >= 36.0, "{f:?}");
+        assert!(f.min[0] >= 0.0 && f.max[0] <= 240.0 && f.min[1] >= 0.0 && f.max[1] <= 300.0, "in its room: {f:?}");
     }
 
     #[test]
