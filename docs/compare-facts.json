@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1258,
-    "count": 1258,
+    "callableAsJson": 1259,
+    "count": 1259,
     "ids": [
       "-attedit",
       "-block",
@@ -705,6 +705,7 @@
       "mlstyle",
       "mocoro",
       "model.build",
+      "model.buildings",
       "model.clashes",
       "model.clashes.report",
       "model.counts",
