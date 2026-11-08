@@ -6779,6 +6779,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     result["scope"] = scope_summary;
+    // Foreign pipe and duct out of electrical gear's dedicated space (NEC 110.26(E)(1)): what the
+    // plans run through it the build offset past the gear's side as the field installs it, the
+    // drawn route kept on the run beside the corrected one.
+    gear_space_finding(job, &result["gearSpace"], "");
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
     // Each sheet's registration onto its level's plan: how, the transform and its error or
@@ -13922,6 +13926,69 @@ fn infer_missing_water(
     Value::Object(out)
 }
 
+/// The pipe and duct of `sp` (the step's spec, which it stores) through the dedicated space of
+/// the gear `tags` names, laid out or moved after the build: offset past it
+/// ([`super::gearspace::clear_built_of`]), the drawn route kept, their old pieces taken out and
+/// the runs built again; the job's finding says so.
+fn gear_space_after_layout(s: &mut Session, job: &mut GuidedJob, sp: &mut cadaddy_walk3d::BuildingSpec, tags: &BTreeSet<String>) -> Result<()> {
+    if tags.is_empty() {
+        return Ok(());
+    }
+    let c = super::gearspace::clear_built_of(s.doc()?, sp, Some(tags));
+    if !c.changed.is_empty() {
+        let olds: Vec<String> = c.changed.iter().map(|(_, b)| format!("{b}/")).collect();
+        let d = s.doc_mut()?;
+        let stale: Vec<cadaddy_doc::Handle> = d
+            .model
+            .iter()
+            .filter(|e| super::bimlook::made_tag(e, "mepid").is_some_and(|id| olds.iter().any(|b| id.starts_with(b.as_str()))))
+            .map(|e| e.handle)
+            .collect();
+        for h in &stale {
+            d.model.remove(*h);
+        }
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+        let runs: Vec<cadaddy_walk3d::MepRun> = c.changed.iter().filter_map(|(i, _)| sp.mep.runs.get(*i).cloned()).collect();
+        build_runs(s, sp, runs, &BTreeSet::new())?;
+    }
+    gear_space_finding(job, &c.json(), " (gear laid out or moved after the build)");
+    Ok(())
+}
+
+/// The job's finding of what the build ran through electrical gear's dedicated space (its
+/// `gearSpace` report, [`super::gearspace::Cleared::json`]): how many runs, how many offset.
+fn gear_space_finding(job: &mut GuidedJob, g: &Value, when: &str) {
+    let n = |k: &str| g[k].as_u64().map_or(0, |v| usize::try_from(v).unwrap_or(usize::MAX));
+    let (found, corrected) = (n("found"), n("corrected"));
+    if found == 0 {
+        return;
+    }
+    let list = |k: &str| g[k].as_array().map(|a| a.iter().filter_map(Value::as_str).take(20).collect::<Vec<_>>().join("; ")).unwrap_or_default();
+    let (moved, left) = (list("moved"), list("left"));
+    progress_line(&format!(
+        "  pipe and duct through gear's dedicated space{when}: {corrected} of {found} runs offset past the gear ({} ft longer, {} joined runs moved with them); left: {left}",
+        g["extra_ft"], g["joined_moved"]
+    ));
+    let ru = super::gearspace::rules();
+    job.add_conflict(
+        StageName::BimBuild,
+        &format!(
+            "{found} pipe or duct runs drawn through electrical gear's dedicated space{when} ({}): {corrected} offset past the gear, the drawn route kept beside",
+            ru.rule
+        ),
+        &format!(
+            "{}. Offset: {}.{}",
+            ru.basis,
+            if moved.is_empty() { "none" } else { moved.as_str() },
+            if left.is_empty() { String::new() } else { format!(" Still open: {left}") }
+        ),
+        2,
+        vec!["Check each offset against the plans; a crossing left open needs the run moved off the gear".into()],
+        found,
+        corrected,
+    );
+}
+
 /// The fill-in pass's waste, vent and duct (Q6216, [`super::fillin`]): on each floor with
 /// plumbing fixtures, each fixture's waste and vent line no drain or vent of its floor reaches
 /// (a vent: nor its waste stack), and each air terminal no duct of its system reaches, laid in
@@ -15120,6 +15187,9 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         }
     }
     s.touch();
+    // Pipe and duct through the dedicated space of the gear laid out or moved here: offset past
+    // it as the build does for the rest, those runs built again.
+    gear_space_after_layout(s, job, &mut sp, &new_tags)?;
     // The gear checked against what lands on it; each failure an RFI.
     let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
     let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
@@ -20197,7 +20267,6 @@ fn build_new_mep(
     runs: Vec<cadaddy_walk3d::MepRun>,
     new_equipment: &BTreeSet<String>,
 ) -> crate::Result<Vec<cadaddy_doc::Handle>> {
-    use cadaddy_geom::Vec2;
     for name in runs.iter().map(|r| r.system.clone()).collect::<BTreeSet<_>>() {
         if !sp.mep.systems.iter().any(|y| y.name == name) {
             sp.mep.systems.push(cadaddy_walk3d::MepSystem {
@@ -20214,6 +20283,18 @@ fn build_new_mep(
     }
     sp.mep.runs.extend(runs.iter().cloned());
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    build_runs(s, &sp, runs, new_equipment)
+}
+
+/// `runs` (and the equipment `new_equipment` names) of `sp` built into the model after its
+/// build, moved as the build moved their levels to stack them. The handles made.
+fn build_runs(
+    s: &mut Session,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    runs: Vec<cadaddy_walk3d::MepRun>,
+    new_equipment: &BTreeSet<String>,
+) -> crate::Result<Vec<cadaddy_doc::Handle>> {
+    use cadaddy_geom::Vec2;
     let offsets: BTreeMap<String, Vec2> = {
         let d = s.doc()?;
         let mut m = BTreeMap::new();
@@ -20227,7 +20308,7 @@ fn build_new_mep(
     let d = s.doc_mut()?;
     let before: BTreeSet<cadaddy_doc::Handle> = d.model.handles().into_iter().collect();
     if !new_equipment.is_empty() {
-        let _ = super::mep::build_equipment(d, &sp, Some(new_equipment));
+        let _ = super::mep::build_equipment(d, sp, Some(new_equipment));
     }
     let mut part = sp.clone();
     part.mep.runs = runs;
@@ -29803,6 +29884,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let mut runs = vec![
             run("SA", [[0.0, 0.0], [100.0, 0.0]], [12.0, 10.0], "tag"),
@@ -32165,6 +32247,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         // The sanitary line along the plan's long side; a vent line outside every view.
         let lost = vec![
@@ -32247,6 +32330,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             run("SAN", "Level 1"),
@@ -32347,6 +32431,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             // Room 301 as the enlarged plan draws it: waste, vent, and a water line on out to the main.
@@ -32512,6 +32597,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             // Floor 3 draws room 371's waste and vent; floor 4 only room 471's vent.
@@ -35128,5 +35214,55 @@ mod tests {
         lighting_step(&mut s, &mut job, &[], &mut result).unwrap();
         let again = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
         assert_eq!(again["total"], rfis["total"]);
+    }
+
+    /// A panel the gear step lays out after the build, under a vent already built: the vent is
+    /// offset past it, its drawn route kept, its old piece replaced by the one on its new route.
+    #[test]
+    fn gear_laid_out_after_the_build_has_the_pipe_through_its_space_offset_and_built_again() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let spec = json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+            "mep": {
+                "systems": [{"name": "V", "layer": "P-VENT", "kind": "pipe", "size_in": [2, 0], "bottom_ft": 8.5}],
+                "runs": [{"system": "V", "level": "L1", "points": [[0.0, 48.0], [200.0, 48.0]], "size_in": [2, 0], "bottoms_ft": [8.5], "id": "V1"}]
+            }
+        });
+        s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap_or_else(|e| panic!("{e}"));
+        s.execute("model.build", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        let segments = |s: &crate::Session| -> Vec<cadaddy_doc::props::Props> {
+            let Ok(d) = s.doc() else { panic!("no drawing") };
+            d.model
+                .iter()
+                .filter(|e| super::super::bimlook::made_tag(e, "mepid").is_some_and(|m| m.ends_with("/segment")))
+                .map(|e| cadaddy_doc::props::read(&e.common.xdata))
+                .collect()
+        };
+        assert_eq!(segments(&s).len(), 1);
+        let Ok((mut sp, true)) = super::super::bspec::current(&s, "test") else { panic!("stored spec") };
+        sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+            tag: "PL".into(),
+            kind: "panel".into(),
+            level: "L1".into(),
+            min: [90.0, 44.0],
+            max: [110.0, 48.0],
+            bottom_ft: 4.5,
+            height_ft: 2.0,
+            ..Default::default()
+        });
+        s.doc_mut().unwrap_or_else(|e| panic!("{e}")).building_spec = Some(sp.to_json()).into();
+        let tags: BTreeSet<String> = ["PL".to_string()].into_iter().collect();
+        gear_space_after_layout(&mut s, &mut job, &mut sp, &tags).unwrap_or_else(|e| panic!("{e}"));
+        // The step's own spec holds the correction (it stores it again after).
+        assert!(sp.mep.runs[0].corrections.iter().any(|c| c.key == "route"));
+        let after = segments(&s);
+        assert_eq!(after.len(), 1, "the old piece is gone, the run built once on its new route");
+        assert!(after[0].get("design:route").is_some() && after[0].get("correction:route").is_some(), "{:?}", after[0]);
+        let Ok((sp, true)) = super::super::bspec::current(&s, "test") else { panic!("stored spec") };
+        let r = &sp.mep.runs[0];
+        assert!(r.points.len() > 2 && r.corrections.iter().any(|c| c.key == "route"), "{r:?}");
+        assert!(job.findings.iter().any(|f| f.description.contains("gear laid out or moved after the build")), "{:?}", job.findings);
     }
 }

@@ -1518,6 +1518,25 @@ fn mesh_box(e: &Entity) -> Option<(Vec3, Vec3)> {
     (lo.x <= hi.x && lo.y <= hi.y && lo.z <= hi.z).then_some((lo, hi))
 }
 
+/// Whether a face of element `h`'s mesh (its storey's stacking taken off) comes into the box
+/// `lo`..`hi`: what the element's whole box says only roughly (a run offset round a gear has a
+/// box over the gear, its pieces none). Not a mesh: true (its box stands).
+fn faces_over(d: &Drawing, h: Handle, lo: Vec3, hi: Vec3) -> bool {
+    let Some(e) = d.model.get(h) else { return true };
+    let EntityKind::Mesh(m) = &e.kind else { return true };
+    let off = super::bspec::stacked_by(e);
+    m.faces.iter().take(200_000).any(|f| {
+        let (mut a, mut b) =
+            (Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
+        for v in f.v.iter().take(64).filter_map(|i| m.vertices.get(usize::try_from(*i).ok()?)).filter(|v| v.is_finite()) {
+            let v = Vec3::new(v.x - off.x, v.y - off.y, v.z);
+            a = Vec3::new(a.x.min(v.x), a.y.min(v.y), a.z.min(v.z));
+            b = Vec3::new(b.x.max(v.x), b.y.max(v.y), b.z.max(v.z));
+        }
+        a.x < hi.x && b.x > lo.x && a.y < hi.y && b.y > lo.y && b.z > lo.z && a.z < hi.z
+    })
+}
+
 fn face_of(ps: &props::Props) -> Option<Vec2> {
     ["face_normal", "host_face"].iter().find_map(|k| {
         let t = ps.get(k).map(Prop::text)?;
@@ -2112,6 +2131,16 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     let mut obstacles: BTreeMap<String, Vec<Obs>> = BTreeMap::new();
     let mut n_obs = 0usize;
+    // A run the build offset round something (its route corrected) turns back on itself: its
+    // segments are obstacles each, not its whole box (which covers what it goes round).
+    let turned: HashMap<String, &MepRun> = sp
+        .mep
+        .runs
+        .iter()
+        .filter(|r| !r.corrections.is_empty() && r.top_ft.is_none() && r.points.len() > 2)
+        .take(MAX_OBSTACLES)
+        .map(|r| (format!("{}/segment", super::mep::run_base(r)), r))
+        .collect();
     for el in super::bimwork::elements(d) {
         if n_obs >= MAX_OBSTACLES {
             break;
@@ -2122,6 +2151,27 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         n_obs += 1;
         let off = d.model.get(el.handle).map_or(Vec2::new(0.0, 0.0), |e| super::bspec::stacked_by(e));
         let off3 = Vec3::new(off.x, off.y, 0.0);
+        let run = d.model.get(el.handle).and_then(|e| super::bimlook::made_tag(e, "mepid")).and_then(|id| turned.get(id));
+        if let Some(r) = run
+            && let Some(l) = sp.level(&r.level)
+        {
+            let half = r.size_in[0].max(0.0) / 24.0 * upf;
+            let depth = if r.size_in[1] > 0.0 { r.size_in[1] } else { r.size_in[0] }.max(0.0) / 12.0 * upf;
+            let list = obstacles.entry(el.level.to_ascii_lowercase()).or_default();
+            for (k, w) in r.points.windows(2).enumerate().take(MAX_OBSTACLES) {
+                let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+                let z0 = (l.elevation_ft + r.bottoms_ft.get(k).or(r.bottoms_ft.last()).copied().unwrap_or(0.0)) * upf;
+                list.push(Obs {
+                    handle: el.handle,
+                    lo: Vec3::new(a[0].min(b[0]) - half, a[1].min(b[1]) - half, z0),
+                    hi: Vec3::new(a[0].max(b[0]) + half, a[1].max(b[1]) + half, z0 + depth),
+                    category: el.category.clone(),
+                    system: el.system.clone(),
+                    trade: el.trade,
+                });
+            }
+            continue;
+        }
         obstacles.entry(el.level.to_ascii_lowercase()).or_default().push(Obs {
             handle: el.handle,
             lo: el.lo - off3,
@@ -4092,6 +4142,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         for o in &field.obs {
             let foreign = matches!(o.trade, "mechanical" | "plumbing" | "fire");
             let over = o.lo.x < g.hi.x && o.hi.x > g.lo.x && o.lo.y < g.hi.y && o.hi.y > g.lo.y && o.hi.z > g.hi.z && o.lo.z < top;
+            // Its pieces, not only its whole box (a run offset round the gear has a box over it).
+            let over = over && faces_over(d, o.handle, Vec3::new(g.lo.x, g.lo.y, g.hi.z), Vec3::new(g.hi.x, g.hi.y, top));
             if foreign && over && seen.insert(o.handle) && clashes.len() < MAX_ITEMS {
                 gear_space += 1;
                 let floor = sp.level(&g.level).map_or(0.0, |l| l.elevation_ft * upf);
