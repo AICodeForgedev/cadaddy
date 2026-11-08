@@ -725,8 +725,8 @@ mod tests {
         let set = read_set(&[
             sheet("A-1", true, false, &["FLOOR PLAN"]),
             sheet("P-1", true, false, &["PLUMBING PLAN", "PLUMBING PLAN - EAST & WEST BLDGS"]),
-            sheet("E-1", true, false, &["POWER PLAN W. BLDG"]),
-            sheet("E-2", true, false, &["POWER PLAN E. BLDG"]),
+            sheet("E-11", true, false, &["POWER PLAN W. BLDG"]),
+            sheet("E-12", true, false, &["POWER PLAN E. BLDG"]),
             // A site plan's or a detail sheet's buildings are not the set's.
             sheet("C-1", true, true, &["SITE PLAN - BUILDING C"]),
             sheet("A-5", false, false, &["BUILDING D WALL SECTIONS"]),
@@ -734,15 +734,15 @@ mod tests {
         assert_eq!(set.names, ["EAST", "WEST"]);
         assert!(set.several());
         assert_eq!(set.sheets.get("P-1"), Some(&vec!["EAST".to_string(), "WEST".to_string()]));
-        assert_eq!(set.sheets.get("E-1"), Some(&vec!["WEST".to_string()]));
+        assert_eq!(set.sheets.get("E-11"), Some(&vec!["WEST".to_string()]));
         assert!(!set.sheets.contains_key("A-1") && !set.sheets.contains_key("C-1") && !set.sheets.contains_key("A-5"));
         // One building named: one building.
-        assert!(!read_set(&[sheet("E-1", true, false, &["POWER PLAN - BUILDING A"])]).several());
+        assert!(!read_set(&[sheet("E-11", true, false, &["POWER PLAN - BUILDING A"])]).several());
         assert!(!read_set(&[]).several());
     }
 
     fn two() -> SetBuildings {
-        SetBuildings { names: vec!["A".into(), "B".into()], sheets: BTreeMap::from([("E-2".to_string(), vec!["B".to_string()])]) }
+        SetBuildings { names: vec!["A".into(), "B".into()], sheets: BTreeMap::from([("E-12".to_string(), vec!["B".to_string()])]) }
     }
 
     #[test]
@@ -836,14 +836,14 @@ mod tests {
         // The floor plan (no building named) at 0..1000, the trade plans beside it.
         let wall_src = print_object(&mut d, [100.0, 100.0]);
         let wall = element(&mut d, Part::Wall, wall_src, [100.0, 100.0], &[]);
-        let dev_b = element(&mut d, Part::Device, Handle(0), [200.0, 200.0], &[("sheet", "E-2")]);
-        let dev_shared = element(&mut d, Part::Device, Handle(0), [300.0, 300.0], &[("sheet", "E-3")]);
+        let dev_b = element(&mut d, Part::Device, Handle(0), [200.0, 200.0], &[("sheet", "E-12")]);
+        let dev_shared = element(&mut d, Part::Device, Handle(0), [300.0, 300.0], &[("sheet", "E-13")]);
         // A device's box: made from the device, it goes where the device goes.
         let box_b = element(&mut d, Part::Device, dev_b, [205.0, 200.0], &[("box_of", &dev_b.hex())]);
         let box_shared = element(&mut d, Part::Device, Handle(0), [305.0, 300.0], &[("box_of", &dev_shared.hex())]);
         let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
         sp.sheets =
-            vec![link("A-1", [0.0, 0.0, 1000.0, 1000.0]), link("E-2", [2000.0, 0.0, 3000.0, 1000.0]), link("E-3", [4000.0, 0.0, 5000.0, 1000.0])];
+            vec![link("A-1", [0.0, 0.0, 1000.0, 1000.0]), link("E-12", [2000.0, 0.0, 3000.0, 1000.0]), link("E-13", [4000.0, 0.0, 5000.0, 1000.0])];
         sp.shells.insert("Level 1".into(), vec![[0.0, 0.0, 480.0, 300.0]]);
         let set = two();
         sp.buildings = to_spec(&set, place(&set, footprint_ft(&d, &sp), &BTreeMap::new()));
@@ -894,13 +894,13 @@ mod tests {
             serde_json::from_value(json!({"system": "V", "level": "Level 1", "points": [[0.0, 0.0], [120.0, 0.0]], "size_in": [2.0, 0.0], "bottoms_ft": [9.0, 9.0], "objects": [], "id": "R1", "source_sheet": sheet}))
                 .unwrap_or_else(|e| panic!("{e}"))
         };
-        sp.mep.runs = vec![run("P-1"), run("E-2")];
+        sp.mep.runs = vec![run("P-1"), run("E-12")];
         let mut tag = cadaddy_walk3d::tags::ElementTag { id: "device:1".into(), kind: "receptacle".into(), ..Default::default() };
-        tag.fields.insert("sheet".into(), cadaddy_walk3d::tags::Field { value: "E-2".into(), source: "plan".into() });
+        tag.fields.insert("sheet".into(), cadaddy_walk3d::tags::Field { value: "E-12".into(), source: "plan".into() });
         sp.tags = vec![tag];
         sp.buildings = to_spec(&two(), place(&two(), [40.0, 25.0], &BTreeMap::new()));
         let pb = per_building(&sp).unwrap_or_else(|| panic!("two buildings"));
-        // P-1 names none: once per building, the copy at B's place; E-2 names B: once.
+        // P-1 names none: once per building, the copy at B's place; E-12 names B: once.
         assert_eq!(pb.mep.runs.len(), 3);
         let copy = pb.mep.runs.iter().find(|r| r.id == "R1@B").unwrap_or_else(|| panic!("{:?}", pb.mep.runs));
         assert_eq!((copy.source_sheet.as_str(), copy.points[0]), ("P-1", [720.0, 0.0]));
