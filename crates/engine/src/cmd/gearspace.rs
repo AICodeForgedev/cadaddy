@@ -445,8 +445,14 @@ pub(crate) fn clear_with(sp: &mut BuildingSpec, ru: &Rules, place: &dyn Fn(usize
         if let Some(r) = sp.mep.runs.get_mut(i) {
             r.points = pts;
             r.bottoms_ft = bottoms;
-            if !r.corrections.iter().any(|c| c.key == "route") {
-                r.corrections.push(correction);
+            // Offset again (gear moved after the build): the drawn route stays the design value,
+            // the installed one says each offset.
+            match r.corrections.iter_mut().find(|c| c.key == "route") {
+                Some(c) => {
+                    c.corrected = format!("{}; then {}", c.corrected, correction.corrected);
+                    c.reason = format!("{}; then {}", c.reason, correction.reason);
+                }
+                None => r.corrections.push(correction),
             }
         }
         out.corrected += 1;
@@ -564,6 +570,16 @@ mod tests {
         let again = clear(&mut sp);
         assert_eq!((again.found, again.corrected), (0, 0));
         assert_eq!(sp.mep.runs[0].corrections.len(), 1);
+        // The gear moves onto the offset (as a step after the build may move it): offset again,
+        // the drawn route still the design value, both offsets said.
+        let y = sp.mep.runs[0].points.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+        sp.mep.equipment[0].min = [125.0, y - 2.0];
+        sp.mep.equipment[0].max = [145.0, y + 2.0];
+        let moved = clear(&mut sp);
+        assert_eq!(moved.corrected, 1, "{moved:?}");
+        let k = &sp.mep.runs[0].corrections;
+        assert_eq!(k.len(), 1);
+        assert!(k[0].design.contains("60.00,102.00 → 240.00,102.00") && k[0].corrected.contains("; then offset"), "{k:?}");
     }
 
     #[test]
