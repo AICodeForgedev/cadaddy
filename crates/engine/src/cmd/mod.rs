@@ -92,6 +92,7 @@ pub mod rfi;
 pub mod schedules;
 pub mod scope;
 mod setbylayer;
+pub(crate) mod sheetreg;
 pub mod spec_import;
 pub mod submittals;
 pub mod tags;

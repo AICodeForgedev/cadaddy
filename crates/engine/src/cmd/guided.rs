@@ -4866,6 +4866,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Where a sheet point goes on its level's plan: made once (its view fits are the slow part)
     // for the MEP and the devices both.
     let mut placer: Option<Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>> = None;
+    // How the placer put each sheet onto its level's plan (or why it couldn't), for the result.
+    let mut placer_log: Option<PlacerLog> = None;
     // The building's shell first: each storey's outline from its exterior walls, before anything
     // is placed in it (rooms, MEP and devices go inside it).
     let mut shells: Option<Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)>> = None;
@@ -5057,8 +5059,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // its sheet's registration (shared door and room numbers), so it is in the building.
             // With no architectural plan in the set there is nothing to place onto: the items stay
             // where their sheets draw them.
-            let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
-            if has_arch && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+            // (Or, with no architectural floor plans, onto the plans the floors were taken from.)
+            let reference = placement_discipline(job);
+            if let Some(reference) = reference.as_deref()
+                && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+            {
                 let shell = shells
                     .get_or_insert_with(|| {
                         let (shells, found) = building_shells(s, &sp, job);
@@ -5066,7 +5071,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         shells
                     })
                     .clone();
-                let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job))));
+                let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), reference);
+                placer_log = Some(log);
+                let sim = placer.insert(Box::new(place));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
                 // Which sheets' runs can't be placed (both ends, or one end off the plan), and how
@@ -5566,7 +5573,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     if !all_devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
-        let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
+        // (Or onto the plans the floors were taken from, with no architectural floor plans.)
+        let reference = placement_discipline(job);
         // (Not placed onto the architecture, stamped from typical-room plans.)
         let mut counts = (0usize, 0usize);
         // The typical rooms' devices two trades' plans showed at one place: the copies that went.
@@ -5576,7 +5584,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
         let mut sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
-            Ok((sp, true)) if has_arch => {
+            Ok((sp, true)) if reference.is_some() => {
                 if placer.is_none() {
                     let shell = shells
                         .get_or_insert_with(|| {
@@ -5585,7 +5593,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             shells
                         })
                         .clone();
-                    placer = Some(Box::new(arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job))));
+                    let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), reference.as_deref().unwrap_or("A"));
+                    placer_log = Some(log);
+                    placer = Some(Box::new(place));
                 }
                 let Some(sim_sheet) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
                 // A typical room's view is no part of a floor: its devices go into the rooms of its
@@ -5720,7 +5730,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // Equipment in a unit room no plan connects (its feed only a keynote): its
                 // connection on the circuit the room's panel schedule names it on.
                 // (The panel schedules are read into the spec later in the build: read here too.)
-                let schedules = if sp.mep.panel_schedules.is_empty() { panel_schedules(&e_pages) } else { sp.mep.panel_schedules.clone() };
+                let schedules =
+                    if sp.mep.panel_schedules.is_empty() { panel_schedules(&panel_pages(s.doc()?, job)) } else { sp.mep.panel_schedules.clone() };
                 drop(e_pages);
                 let scheduled = scheduled_connections(&schedules, &sp.mep.equipment, &stamped);
                 if !scheduled.is_empty() {
@@ -6557,6 +6568,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     result["scope"] = scope_summary;
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
+    // Each sheet's registration onto its level's plan: how, the transform and its error or
+    // score, or why none holds (its elements are left out above, never built off the building).
+    if let Some(log) = &placer_log
+        && let Ok(l) = log.lock()
+    {
+        result["sheet_registration"] = json!(*l);
+    }
     if !drain_slope.is_null() {
         result["drain_slope"] = drain_slope;
     }
@@ -6662,7 +6680,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The panel schedules (each circuit's breaker and its type), for the devices' props.
     let t = web_time::Instant::now();
     let pages = s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default();
-    let schedules = panel_schedules(&pages);
+    let sched_pages = s.doc().map(|d| panel_pages(d, job)).unwrap_or_default();
+    let schedules = panel_schedules(&sched_pages);
+    result["panel_schedule_sheets"] = json!(sched_pages.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
+    if schedules.is_empty() {
+        no_panel_schedules(job, &sched_pages, &mut result);
+    }
     if !schedules.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
@@ -6678,7 +6701,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The load summaries and demand calculations beside them (the load calculation's check).
         let lc = super::loadcalc::rules();
         let mut summaries: Vec<cadaddy_walk3d::LoadSummary> = Vec::new();
-        for (number, sub) in &pages {
+        for (number, sub) in &sched_pages {
             summaries.extend(super::loadcalc::read_summaries(&cadaddy_mepfix::sheet_facts::texts(sub), number, &lc));
         }
         if !summaries.is_empty() {
@@ -20376,6 +20399,141 @@ fn discipline_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob, discipline: &str)
     pages
 }
 
+/// Most sheets looked at for the set's panel schedules: in the job's drawing, and read again.
+const MAX_PANEL_SHEETS: usize = 24;
+
+/// The sheets that may print the set's panel schedules (`panelsched::schedule_sheet_rank`), each
+/// once, the likeliest first: those in the job's drawing, then the others read again from the
+/// PDFs. A set's schedules can be on any of its electrical sheets (past the few its legends are
+/// looked for on), on a combined `MEP` sheet, or on a sheet whose number was read under another
+/// code.
+fn panel_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let base = |n: &str| n.split('/').next().unwrap_or("").trim().to_string();
+    let title_of = |n: &str| {
+        classified
+            .iter()
+            .find(|c| c.get("number").and_then(Value::as_str).is_some_and(|x| base(x).eq_ignore_ascii_case(n)))
+            .and_then(|c| c.get("title").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_string()
+    };
+    let mut refs: Vec<(u8, super::printmep::SheetRef)> = job_sheet_refs(job)
+        .into_iter()
+        .filter_map(|r| super::panelsched::schedule_sheet_rank(&r.discipline, &r.kind, &title_of(&base(&r.number))).map(|k| (k, r)))
+        .collect();
+    refs.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.number.cmp(&b.1.number)));
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut pages: Vec<(String, cadaddy_doc::Drawing)> = refs
+        .iter()
+        .filter(|(_, r)| seen.insert(base(&r.number)))
+        .take(MAX_PANEL_SHEETS)
+        .map(|(_, sh)| (base(&sh.number), super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() })))
+        .collect();
+    let rank = |_number: &str, disc: &str, kind: &str, title: &str| super::panelsched::schedule_sheet_rank(disc, kind, title);
+    pages.extend(sheet_pages_ranked(job, &rank, true, MAX_PANEL_SHEETS, &seen));
+    pages
+}
+
+/// Most sheets read again with their raster images, looking for a schedule printed as one.
+const MAX_RASTER_SHEETS: usize = 8;
+/// A raster image this share of its sheet or more can be a table pasted as a picture.
+const RASTER_TABLE_SHARE: f64 = 0.02;
+
+/// No panel schedule read off the set: a job finding, never a silent zero. It names the sheets
+/// looked at, the devices whose circuit then has no panel, and the sheets where a raster image
+/// (a schedule pasted as a picture, no text to read) sits.
+fn no_panel_schedules(job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) {
+    let on_circuits = job.devices.iter().filter(|d| !d.circuit.trim().is_empty()).count();
+    if pages.is_empty() && on_circuits == 0 {
+        return;
+    }
+    let numbers: Vec<&str> = pages.iter().map(|(n, _)| n.as_str()).collect();
+    let rasters = raster_sheets(job, &numbers);
+    result["panel_schedules_missing"] = json!({"sheets_searched": numbers, "devices_on_circuits": on_circuits,
+        "raster_sheets": rasters.iter().map(|(n, k)| json!({"sheet": n, "share": (k * 1000.0).round() / 1000.0})).collect::<Vec<_>>()});
+    let searched = if numbers.is_empty() {
+        "no sheet of the set is electrical or titled for panel schedules".to_string()
+    } else {
+        format!(
+            "{} sheets searched ({}{})",
+            numbers.len(),
+            numbers.iter().take(12).copied().collect::<Vec<_>>().join(", "),
+            if numbers.len() > 12 { ", …" } else { "" }
+        )
+    };
+    let raster = if rasters.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; raster images that may be schedules printed as pictures (no text to read): {}",
+            rasters.iter().map(|(n, k)| format!("{n} ({:.0}% of the sheet)", k * 100.0)).collect::<Vec<_>>().join(", ")
+        )
+    };
+    progress_line(&format!("  panel schedules: none read: {searched}{raster}"));
+    let mut actions = vec![
+        "Find the panel schedules in the set and check their sheet's number and discipline in the sheet index (printset.classify)".to_string(),
+        "Panels, breakers, circuits and home runs stay unbuilt until a schedule is read".to_string(),
+    ];
+    if !rasters.is_empty() {
+        actions.push("A schedule printed as an image needs OCR of that image, or its rows typed into a table on the sheet".into());
+    }
+    job.add_finding(
+        StageName::BimBuild,
+        &format!("No panel schedule read: {searched}; {on_circuits} devices name a circuit with no panel to put it on{raster}"),
+        "Panel schedules give each panel its breakers, each circuit its load and each device its breaker; without them no circuit or home run is routed and the load calculation is empty",
+        2,
+        actions,
+        None,
+        false,
+    );
+}
+
+/// The sheets (of `numbers`, the likeliest first) a raster image covers a good part of, read
+/// again with their images: each with the largest image's share of the sheet.
+fn raster_sheets(job: &GuidedJob, numbers: &[&str]) -> Vec<(String, f64)> {
+    let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else { return Vec::new() };
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut out = Vec::new();
+    for n in numbers.iter().take(MAX_RASTER_SHEETS) {
+        let Some(c) = classified.iter().find(|c| c.get("number").and_then(Value::as_str).is_some_and(|x| x.trim().eq_ignore_ascii_case(n))) else {
+            continue;
+        };
+        let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else { continue };
+        if !files.contains_key(file) {
+            let Ok(bytes) = crate::readfile::read(set_file_path(&job.pdfs_path, file)) else { continue };
+            files.insert(file.to_string(), bytes);
+        }
+        let Some(bytes) = files.get(file) else { continue };
+        let Ok((d, _)) = read_pdf(bytes, &json!({"page": page, "text": false, "images": true})) else { continue };
+        let sheet = d.extents(&cadaddy_doc::Space::Model);
+        let area = (sheet.max.x - sheet.min.x) * (sheet.max.y - sheet.min.y);
+        if !(area.is_finite() && area > 0.0) {
+            continue;
+        }
+        let largest = d
+            .model
+            .iter()
+            .filter_map(|e| match &e.kind {
+                cadaddy_doc::EntityKind::Image(i) => Some(i.u.len() * i.size.x * i.v.len() * i.size.y),
+                _ => None,
+            })
+            .filter(|a| a.is_finite())
+            .fold(0.0, f64::max);
+        if largest / area >= RASTER_TABLE_SHARE {
+            out.push(((*n).to_string(), (largest / area).min(1.0)));
+        }
+    }
+    out
+}
+
+/// The job's panel schedules read off its sheets ([`panel_pages`]), and the sheets looked at.
+pub(crate) fn job_panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<cadaddy_walk3d::PanelSchedule>, Vec<String>) {
+    let pages = panel_pages(d, job);
+    (panel_schedules(&pages), pages.into_iter().map(|(n, _)| n).collect())
+}
+
 /// The panel schedules on the electrical sheets, each panel once (a panel named twice: the
 /// schedule with more breakers read).
 fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
@@ -21380,13 +21538,28 @@ fn unimported_designations(job: &GuidedJob) -> BTreeMap<String, String> {
 /// The pages of a discipline's sheets that aren't plans (legends, schedules, diagrams: the job's
 /// drawing keeps the plans), each read again from its file, numbered sheets in sheet order.
 fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc::Drawing)> {
-    pages_where(job, &|_number: &str, d: &str, kind: &str, _title: &str| d.eq_ignore_ascii_case(discipline) && !kind.contains("plan"))
+    let rank = |_: &str, d: &str, _: &str, _: &str| d.eq_ignore_ascii_case(discipline).then_some(0);
+    sheet_pages_ranked(job, &rank, false, MAX_LEGEND_SHEETS, &BTreeSet::new())
 }
 
 /// The pages of the set's numbered sheets that `want` picks by their number, discipline, type
 /// (lower case) and title, each read again from its file, in sheet order, at most
 /// [`MAX_LEGEND_SHEETS`].
 fn pages_where(job: &GuidedJob, want: &dyn Fn(&str, &str, &str, &str) -> bool) -> Vec<(String, cadaddy_doc::Drawing)> {
+    let rank = |number: &str, d: &str, kind: &str, title: &str| want(number, d, kind, title).then_some(0);
+    sheet_pages_ranked(job, &rank, true, MAX_LEGEND_SHEETS, &BTreeSet::new())
+}
+
+/// The set's sheets `rank` keeps (by number, discipline, type and title; lower ranks first, then
+/// by number), read again from the PDFs: those that aren't plans (`plans`: plans too), at most
+/// `cap`, none of `skip`.
+fn sheet_pages_ranked(
+    job: &GuidedJob,
+    rank: &dyn Fn(&str, &str, &str, &str) -> Option<u8>,
+    plans: bool,
+    cap: usize,
+    skip: &BTreeSet<String>,
+) -> Vec<(String, cadaddy_doc::Drawing)> {
     let mut out = Vec::new();
     let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
         progress_line("  the sheets' legends and schedules: no PDF reader in this build");
@@ -21395,19 +21568,22 @@ fn pages_where(job: &GuidedJob, want: &dyn Fn(&str, &str, &str, &str) -> bool) -
     let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     // The numbered ones (a page known only by its file isn't a sheet of the set), in sheet order.
-    let mut sheets: Vec<(String, &Value)> = classified
+    let mut sheets: Vec<(u8, String, &Value)> = classified
         .iter()
         .filter_map(|c| {
             let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
             let kind = if text("type").is_empty() { text("sheet_type") } else { text("type") };
             let number = c.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if (kind.contains("plan") && !plans) || !cadaddy_mepfix::sheet_facts::is_sheet_number(&number) || skip.contains(&number) {
+                return None;
+            }
             let title = c.get("title").and_then(Value::as_str).unwrap_or("");
-            (want(&number, &text("discipline"), &kind, title) && cadaddy_mepfix::sheet_facts::is_sheet_number(&number)).then_some((number, c))
+            rank(&number, &text("discipline"), &kind, title).map(|k| (k, number, c))
         })
         .collect();
-    sheets.sort_by(|a, b| a.0.cmp(&b.0));
+    sheets.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     let mut missed: Vec<String> = Vec::new();
-    for (number, c) in sheets.into_iter().take(MAX_LEGEND_SHEETS) {
+    for (_, number, c) in sheets.into_iter().take(cap) {
         // Its current copy's file and page (`printset.sheets`).
         if c.get("file").and_then(Value::as_str).is_none() || c.get("page").and_then(Value::as_u64).is_none() {
             continue;
@@ -21971,38 +22147,46 @@ pub(crate) fn edge_distance(outline: &[cadaddy_geom::Vec2], p: cadaddy_geom::Vec
         .fold(f64::INFINITY, f64::min)
 }
 
+/// How the placer put each sheet onto its level's plan (or why not): one entry per sheet and level.
+type PlacerLog = std::sync::Arc<std::sync::Mutex<Vec<Value>>>;
+
+/// Sheets the placer's log lists at most.
+const MAX_PLACER_LOG: usize = 1_000;
+
+fn log_sheet(log: &PlacerLog, entry: Value) {
+    if let Ok(mut l) = log.lock()
+        && l.len() < MAX_PLACER_LOG
+    {
+        l.push(entry);
+    }
+}
+
 /// Where a sheet point goes on its level's architectural plan (architecture is the rule), by the
 /// first that holds: its view's grid intersections; the sheet's registration by shared door and
-/// room numbers; the frame of a same-size architectural sheet; its view's
-/// screened background laid over the floor plan (a fire alarm or low-voltage plan). `None` when
-/// none holds, or the point would land off the level's plan.
+/// room numbers; the frame of a same-size architectural sheet, when the sheet's linework lies on
+/// the plan's (a sheet of another building in the same title block doesn't); its view's
+/// screened background laid over the floor plan (a fire alarm or low-voltage plan); the sheet's
+/// own linework fitted onto the plan's ([`super::sheetreg`]). `None` when none holds, or the
+/// point would land off the level's plan, or the level has no plan to land on.
+/// `reference`: the discipline whose plans are the levels' (architecture, else the trade whose
+/// plans the floors were taken from, Q6284). The log says how each sheet was placed.
 fn arch_placer(
     d: &cadaddy_doc::Drawing,
     sp: &cadaddy_walk3d::BuildingSpec,
     shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)],
     enlarged: Vec<EnlargedFit>,
-) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
+    reference: &str,
+) -> (impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<>, PlacerLog) {
+    let log: PlacerLog = Default::default();
+    let arch_ref = reference.eq_ignore_ascii_case("A");
+    let reference_d = reference.to_string();
+    let is_ref = move |b: &super::identity::SheetBox| b.discipline.eq_ignore_ascii_case(&reference_d);
     let sheets = super::identity::sheets_of(Some(sp));
     let sheet_rects: Vec<(String, [f64; 4])> = sheets.iter().map(|b| (cadaddy_mepfix::printlinks::norm_sheet(&b.number), b.rect)).collect();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let clock = web_time::Instant::now();
     let lap = |what: &str| progress_line(&format!("  placer: {what} at {:.1} s", clock.elapsed().as_secs_f64()));
-    let reg = super::identity::register(d, &sheets, upf);
-    lap("sheets registered by tags");
-    // Each sheet's fit by its tags, and whether it places the sheet (the report says which fits
-    // the build left to the sheet's grids, background or frame).
-    for t in reg.transforms.iter().filter(|t| t.registered && t.method != "reference").take(MAX_SHEETS_REPORTED) {
-        let (scale, turn) = (t.transform.scale(), t.transform.rotation_deg());
-        progress_line(&format!(
-            "  placer: {} on {} by {} tags: scale {scale:.3}, turned {turn:.2} deg: {}",
-            t.sheet,
-            t.level,
-            t.matched,
-            tag_fit_why_not(t.matched, scale, turn).map_or_else(|| "used".to_string(), |w| format!("not used ({w})"))
-        ));
-    }
-    // Each level's architectural plan (the sheet the registration takes as its reference) and
-    // the other sheets: their grid intersections, for views no tag fit reaches.
+    // Each level's plan (the region its floor was taken from).
     let level_key0 = |l: &str| {
         format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), {
             let u = l.trim().to_ascii_uppercase();
@@ -22014,8 +22198,42 @@ fn arch_placer(
         .iter()
         .filter_map(|l| Some((level_key0(&l.name), l.region.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8))?)))
         .collect();
-    let others: Vec<[f64; 4]> = sheets.iter().filter(|b| !b.discipline.eq_ignore_ascii_case("A")).map(|b| b.rect).collect();
+    // The levels the building has with no plan to land on (named by a device or a note only).
+    let planless: BTreeSet<String> = sp.levels.iter().map(|l| level_key0(&l.name)).filter(|k| !plans.iter().any(|(p, _)| p == k)).collect();
     let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
+    let mid = |r: &[f64; 4]| [0.5 * (r[0] + r[2]), 0.5 * (r[1] + r[3])];
+    // A sheet holding its level's plan region is that level's plan.
+    let level_plan = |level: &str, rect: &[f64; 4]| plans.iter().any(|(k, r)| *k == level_key0(level) && inside(rect, mid(r)));
+    // Architecture's reference is the architectural sheet with the most tags; another trade's (no
+    // architectural plans) is the sheet the level's floor was taken from.
+    let reg = if arch_ref {
+        super::identity::register(d, &sheets, upf)
+    } else {
+        super::identity::register_onto(d, &sheets, upf, reference, &|t| level_plan(&t.level, &t.rect))
+    };
+    lap("sheets registered by tags");
+    // Each sheet's fit by its tags, and whether it places the sheet (the report says which fits
+    // the build left to the sheet's grids, background or frame).
+    for t in reg.transforms.iter().filter(|t| t.registered && t.method != "reference").take(MAX_SHEETS_REPORTED) {
+        let (scale, turn) = (t.transform.scale(), t.transform.rotation_deg());
+        let why_not = tag_fit_why_not(t.matched, scale, turn);
+        progress_line(&format!(
+            "  placer: {} on {} by {} tags: scale {scale:.3}, turned {turn:.2} deg: {}",
+            t.sheet,
+            t.level,
+            t.matched,
+            why_not.map_or_else(|| "used".to_string(), |w| format!("not used ({w})"))
+        ));
+        log_sheet(
+            &log,
+            json!({"sheet": t.sheet, "level": t.level, "onto": t.reference, "method": t.method, "matched": t.matched,
+                "transform": {"a": t.transform.a, "b": t.transform.b, "tx": t.transform.tx, "ty": t.transform.ty},
+                "scale": scale, "turn_deg": turn, "residual_units": t.residual, "used": why_not.is_none(), "why_not": why_not}),
+        );
+    }
+    // The other sheets: their grid intersections, for views no tag fit reaches. With another
+    // trade's plans for the floors, that trade's other sheets (its enlarged plans) are others too.
+    let others: Vec<[f64; 4]> = sheets.iter().filter(|b| !is_ref(b) || (!arch_ref && !level_plan(&b.level, &b.rect))).map(|b| b.rect).collect();
     let level_key = |l: &str| {
         format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), {
             let u = l.trim().to_ascii_uppercase();
@@ -22055,11 +22273,84 @@ fn arch_placer(
     let grid = super::grids::GridPlacer::new(d, upf, &plans, &others, &grid_views);
     lap("grid intersections read");
     progress_line(&format!("  grid intersections: {}", grid.summary()));
+    // Each sheet's linework, its border and title block left out, and each level's plan's: to
+    // check a placement by the frame and to fit a sheet nothing else places (Q6284).
+    let k_in0 = super::perceive::units_per_inch(d);
+    let lines = std::sync::Arc::new(super::sheetreg::SheetLines::new(d, &sheets.iter().map(|b| b.rect).collect::<Vec<_>>(), k_in0));
+    let targets: std::sync::Arc<Vec<(String, usize, Vec<cadaddy_geom::Vec2>)>> = std::sync::Arc::new(
+        plans
+            .iter()
+            .filter_map(|(k, r)| {
+                let i = sheets.iter().position(|b| inside(&b.rect, mid(r)))?;
+                Some((k.clone(), i, lines.points(i, Some(r))))
+            })
+            .collect(),
+    );
+    lap("sheets' linework sampled");
+    let target = {
+        let targets = targets.clone();
+        move |key: &str| targets.iter().find(|(k, _, _)| k == key).map(|(_, _, v)| v.clone()).unwrap_or_default()
+    };
+    // Each level's plan sheet.
+    let plan_sheet = {
+        let targets = targets.clone();
+        move |key: &str| targets.iter().find(|(k, _, _)| k == key).map(|(_, i, _)| *i)
+    };
+    // Whether a sheet's frame placement onto its level's plan holds (once per sheet and level).
+    let frame_checks: std::sync::Mutex<std::collections::HashMap<(usize, String), bool>> = Default::default();
+    let (lines_f, target_f, log_f, planless_f) = (lines.clone(), target.clone(), log.clone(), planless.clone());
+    // The parts of the site each sheet's lettering names (BUILDING 2 - UNIT 6).
+    let part_texts = cadaddy_mepfix::sheet_facts::texts(d);
+    let parts: Vec<BTreeSet<(String, String)>> = sheets.iter().map(|b| super::sheetreg::site_parts(&part_texts, &b.rect)).collect();
+    drop(part_texts);
+    let parts = std::sync::Arc::new(parts);
+    let parts_f = parts.clone();
+    let frame_holds = move |i: usize, onto_i: usize, number: &str, onto: &str, level: &str, key: &str, m: &cadaddy_mepfix::tagid::Sim| -> bool {
+        let id = (i, key.to_string());
+        if let Some(h) = frame_checks.lock().ok().and_then(|c| c.get(&id).copied()) {
+            return h;
+        }
+        // A level with no plan: no frame puts anything on it.
+        let planless = planless_f.contains(key);
+        // A sheet of another part of the site (its views say so): never on this plan.
+        let other = match (parts_f.get(i), parts_f.get(onto_i)) {
+            (Some(a), Some(b)) => super::sheetreg::other_parts(a, b),
+            _ => None,
+        };
+        let share = if planless || other.is_some() { None } else { lines_f.frame_share(i, m, &target_f(key)) };
+        // Too little linework to tell: the frame, as drawn alike.
+        let holds = !planless && other.is_none() && share.is_none_or(|(a, b)| a.min(b) >= super::sheetreg::FRAME_SHARE);
+        let why_not = if planless {
+            Some("its level has no plan to put it onto".to_string())
+        } else if let Some(o) = &other {
+            Some(format!("its views name another part of the site: {o}"))
+        } else {
+            (!holds).then(|| "its linework doesn't lie on the plan's (another part of the site on the same size of sheet)".to_string())
+        };
+        progress_line(&format!(
+            "  placer: {number} on {level} by the frame of {onto}: {}{}",
+            match share {
+                None if planless || other.is_some() => String::new(),
+                None => "no linework to check it by, ".to_string(),
+                Some((a, b)) => format!("{:.0}% of its linework on the plan's, {:.0}% of the plan's on its, ", a * 100.0, b * 100.0),
+            },
+            why_not.as_ref().map_or_else(|| "used".to_string(), |w| format!("not used ({w})"))
+        ));
+        log_sheet(
+            &log_f,
+            json!({"sheet": number, "level": level, "onto": onto, "method": "frame", "transform": {"a": m.a, "b": m.b, "tx": m.tx, "ty": m.ty},
+                "linework_on_plan": share.map(|s| s.0), "plan_on_linework": share.map(|s| s.1), "used": holds, "why_not": why_not}),
+        );
+        if let Ok(mut c) = frame_checks.lock() {
+            c.insert(id, holds);
+        }
+        holds
+    };
     let place = move |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
         if not_plan.iter().any(|r| inside(r, p)) && !plan_views.iter().any(|r| inside(r, p)) {
             return None;
         }
-        let sheet = sheets.iter().find(|b| inside(&b.rect, p))?;
+        let (si, sheet) = sheets.iter().enumerate().find(|(_, b)| inside(&b.rect, p))?;
         let on = |t: &&cadaddy_mepfix::tagid::SheetTransform| t.registered && t.sheet.eq_ignore_ascii_case(&sheet.number);
         let ts: Vec<_> = reg.transforms.iter().filter(on).collect();
         // Another level's fit, but never for a point in this level's own view of a sheet of
@@ -22077,7 +22368,7 @@ fn arch_placer(
             // may be another level's: from there onto this level's own plan, by their frames.
             let mut m = t.transform;
             let own = |b: &&super::identity::SheetBox| {
-                b.discipline.eq_ignore_ascii_case("A")
+                is_ref(b)
                     && level_key(&b.level) == level_key(level)
                     && reg.transforms.iter().any(|x| x.sheet.eq_ignore_ascii_case(&b.number) && x.method == "reference")
             };
@@ -22094,12 +22385,15 @@ fn arch_placer(
         let size = |b: &super::identity::SheetBox| [b.rect[2] - b.rect[0], b.rect[3] - b.rect[1]];
         let alike = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() <= 0.01 * b[0] && (a[1] - b[1]).abs() <= 0.01 * b[1];
         let arch = sheets.iter().find(|b| {
-            b.discipline.eq_ignore_ascii_case("A")
+            is_ref(b)
                 && level_key(&b.level) == level_key(level)
                 && alike(size(b), size(sheet))
                 && reg.transforms.iter().any(|t| t.sheet.eq_ignore_ascii_case(&b.number) && t.method == "reference")
         })?;
-        Some(cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [arch.rect[0] - sheet.rect[0], arch.rect[1] - sheet.rect[1]]))
+        let m = cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [arch.rect[0] - sheet.rect[0], arch.rect[1] - sheet.rect[1]]);
+        // The plan itself, or a sheet whose linework lies on it there.
+        let ai = sheets.iter().position(|b| std::ptr::eq(b, arch)).unwrap_or(si);
+        (std::ptr::eq(arch, sheet) || frame_holds(si, ai, &sheet.number, &arch.number, level, &level_key(level), &m)).then_some(m)
     };
     // A view with neither grids nor tags: its screened background laid over the floor plan.
     let backgrounds = super::grids::Backgrounds::new(d, &others);
@@ -22149,6 +22443,9 @@ fn arch_placer(
         sp.levels.iter().filter_map(|l| Some((level_key(&l.name), l.base.filter(|b| b.iter().all(|v| v.is_finite()))?))).collect();
     let plan_lines_v = plan_lines.clone();
     let fits: std::sync::Mutex<std::collections::HashMap<(i64, i64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
+    let sheet_fits: std::sync::Mutex<std::collections::HashMap<(usize, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
+    let sheet_names: Vec<String> = super::identity::sheets_of(Some(sp)).into_iter().map(|b| b.number).collect();
+    let log_p = log.clone();
     let place = move |p: [f64; 2], level: &str, lands: &dyn Fn(&cadaddy_mepfix::tagid::Sim) -> bool| {
         place(p, level)
             .filter(|m| lands(m))
@@ -22244,6 +22541,51 @@ fn arch_placer(
                 view_fits.lock().ok()?.insert(i, got);
                 got.filter(|m| lands(m))
             })
+            .or_else(|| {
+                // The sheet's own linework laid on its level's plan (Q6284: a trade plan whose tags
+                // are few or disagree draws the floor plan's walls all the same).
+                let i = lines.sheet_at(p)?;
+                let key = level_key(level);
+                let id = (i, key.clone());
+                if let Some(f) = sheet_fits.lock().ok()?.get(&id) {
+                    return f.filter(|m| lands(m));
+                }
+                let tgt = target(&key);
+                let started = web_time::Instant::now();
+                // A sheet of another part of the site than the plan's: never fitted onto it.
+                let other = plan_sheet(&key).and_then(|j| match (parts.get(i), parts.get(j)) {
+                    (Some(a), Some(b)) if i != j => super::sheetreg::other_parts(a, b),
+                    _ => None,
+                });
+                let fit = if other.is_some() { None } else { lines.fit(i, &tgt) };
+                let number = sheet_names.get(i).cloned().unwrap_or_default();
+                progress_line(&format!(
+                    "  placer: {number} on {level} by its linework: {} ({:.1} s)",
+                    fit.as_ref().map_or_else(
+                        || other.as_ref().map_or_else(|| "no fit".to_string(), |o| format!("not fitted (its views name another part of the site: {o})")),
+                        |f| format!("scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best", f.sim.scale(), f.sim.tx, f.sim.ty, f.score * 100.0, f.margin * 100.0)
+                    ),
+                    started.elapsed().as_secs_f64()
+                ));
+                log_sheet(
+                    &log_p,
+                    match &fit {
+                        Some(f) => json!({"sheet": number, "level": level, "method": "linework", "transform": {"a": f.sim.a, "b": f.sim.b, "tx": f.sim.tx, "ty": f.sim.ty},
+                            "scale": f.sim.scale(), "score": f.score, "margin": f.margin, "used": true}),
+                        None => json!({"sheet": number, "level": level, "method": "none", "used": false,
+                            "why_not": if tgt.is_empty() {
+                                "its level has no plan to put it onto".to_string()
+                            } else if let Some(o) = &other {
+                                format!("its views name another part of the site than its level's plan ({o}): its elements are left out")
+                            } else {
+                                "no tags, grid lines, frame or linework put it onto its level's plan: its elements are left out".to_string()
+                            }}),
+                    },
+                );
+                let got = fit.map(|f| f.sim);
+                sheet_fits.lock().ok()?.insert(id, got);
+                got.filter(|m| lands(m))
+            })
     };
     // Architecture is the rule, the building's shell first: a placed point lands inside its
     // level's shell (within reach of its walls: a wall pack, a condenser by the wall), else
@@ -22259,7 +22601,9 @@ fn arch_placer(
             if let Some((_, rects)) = shells.iter().find(|(k, _)| *k == key) {
                 return rects.iter().any(|[a, b]| q[0] >= a.x - reach && q[0] <= b.x + reach && q[1] >= a.y - reach && q[1] <= b.y + reach);
             }
-            regions.iter().filter(|(k, _)| *k == key).any(|(_, r)| inside(r, q)) || regions.iter().all(|(k, _)| *k != key)
+            // A level the building has but no plan of (named by its devices only): nothing to land on.
+            regions.iter().filter(|(k, _)| *k == key).any(|(_, r)| inside(r, q))
+                || (regions.iter().all(|(k, _)| *k != key) && !planless.contains(&key))
         };
         place(p, level, &lands).or_else(|| {
             // An enlarged view the sheet map registered on its overall plan (by the box drawn
@@ -22275,7 +22619,7 @@ fn arch_placer(
     };
     // A point is placed once: the build asks again (to place it, to say why not, to stamp).
     let memo: std::sync::Mutex<std::collections::HashMap<(u64, u64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
-    move |p: [f64; 2], level: &str| {
+    let place = move |p: [f64; 2], level: &str| {
         let id = (p[0].to_bits(), p[1].to_bits(), level.to_string());
         if let Some(m) = memo.lock().ok().and_then(|c| c.get(&id).copied()) {
             return m;
@@ -22287,7 +22631,8 @@ fn arch_placer(
             c.insert(id, m);
         }
         m
-    }
+    };
+    (place, log)
 }
 
 /// The regions of the plan views (not elevations, sections, details, risers, diagrams,
@@ -22984,27 +23329,47 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
     }
 }
 
+/// A sheet region that is a floor plan of the building (not site, civil or landscape, and naming
+/// its level: MUST 3).
+fn is_floor_plan(r: &SheetRegion) -> bool {
+    r.kind == "plan" && super::printmep::building_level(&r.level) && r.not_built.is_empty()
+}
+
+/// The discipline whose plans give the building its floors: architecture's; else (no
+/// architectural floor plans) the one discipline's plans that cover the most levels (their
+/// background shows the walls), never a discipline that draws no building walls (Q6037: life
+/// safety, fire protection, fire alarm, general/civil, structural, telecom). `None`: no floor
+/// plans at all.
+fn level_plan_discipline(job: &GuidedJob) -> Option<String> {
+    if job.sheet_regions.iter().any(|r| is_floor_plan(r) && r.discipline == "A") {
+        return Some("A".to_string());
+    }
+    let non_building = cadaddy_mepfix::wordrules::words("sheets.non_building_disciplines");
+    let mut by: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+    for r in job.sheet_regions.iter().filter(|r| is_floor_plan(r) && !non_building.contains(&r.discipline.as_str())) {
+        by.entry(r.discipline.as_str()).or_default().insert(r.level.as_str());
+    }
+    by.iter().filter(|(_, l)| l.len() > 1).max_by_key(|(d, l)| (l.len(), std::cmp::Reverse(*d))).map(|(d, _)| (*d).to_string())
+}
+
+/// The discipline whose plans the other sheets are put onto (Q6284): architecture's when the set
+/// has an architectural plan, else the plans the floors were taken from
+/// ([`level_plan_discipline`]); `None` when there is nothing to put them onto (they stay where
+/// their sheets draw them, and no level has an outline to be outside of).
+fn placement_discipline(job: &GuidedJob) -> Option<String> {
+    if job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A")) {
+        return Some("A".to_string());
+    }
+    level_plan_discipline(job)
+}
+
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
     // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
-    let floor_plan = |r: &&SheetRegion| r.kind == "plan" && super::printmep::building_level(&r.level) && r.not_built.is_empty();
-    let mut plans: Vec<&SheetRegion> = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == "A").collect();
-    if plans.is_empty() {
-        // No architectural floor plans: one discipline's plans give the floors (their
-        // background shows the walls), the one with the most levels.
-        // Q6037: exclude disciplines that don't carry building walls/doors (life safety,
-        // fire protection, fire alarm, general/civil, structural, telecom).
-        let building_plan =
-            |r: &&SheetRegion| floor_plan(r) && !cadaddy_mepfix::wordrules::words("sheets.non_building_disciplines").contains(&r.discipline.as_str());
-        let mut by: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
-        for r in job.sheet_regions.iter().filter(|r| building_plan(r)) {
-            by.entry(r.discipline.as_str()).or_default().insert(r.level.as_str());
-        }
-        let best = by.iter().filter(|(_, l)| l.len() > 1).max_by_key(|(d, l)| (l.len(), std::cmp::Reverse(*d))).map(|(d, _)| (*d).to_string());
-        if let Some(d) = best {
-            plans = job.sheet_regions.iter().filter(|r| building_plan(r)).filter(|r| r.discipline == d).collect();
-        }
-    }
+    let mut plans: Vec<&SheetRegion> = match level_plan_discipline(job) {
+        Some(d) => job.sheet_regions.iter().filter(|r| is_floor_plan(r) && r.discipline == d).collect(),
+        None => Vec::new(),
+    };
     plans.sort_by_key(|r| rank(&r.level));
     // Dedup by canonical level name so aliases (R/RF/ROOF/T.O.) merge into one level.
     plans.dedup_by(|a, b| level_name(&a.level).eq_ignore_ascii_case(&level_name(&b.level)));
@@ -25882,6 +26247,34 @@ mod ckpt_tests {
 mod tests {
 
     #[test]
+    fn no_panel_schedule_read_is_a_finding_and_gear_read_says_where_it_looked() {
+        use super::*;
+        let mut s = Session::new();
+        s.open_drawing(cadaddy_doc::Drawing::default(), "Sample Building", None);
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [
+            {"number": "E-501", "discipline": "E", "type": "schedule", "title": "PANEL SCHEDULES", "file": "sample.pdf", "page": 9},
+            {"number": "A-101", "discipline": "A", "type": "plan", "title": "FLOOR PLAN", "file": "sample.pdf", "page": 1}
+        ]}));
+        save_job(&mut s, &job).unwrap();
+        // gear.read reads the job's sheets: what it found and where it looked, never an unwired
+        // path reported as "0 tables".
+        let g = s.execute("gear.read", &json!({})).unwrap();
+        assert_eq!((g["tables_found"].as_u64(), g["source"].as_str()), (Some(0), Some("the job's sheets")), "{g}");
+        assert!(!g.to_string().contains("integration pending"), "{g}");
+        assert!(g["warnings"][0].as_str().is_some_and(|w| w.contains("none read")), "{g}");
+        // No schedule read while devices name circuits: a job finding.
+        let mut result = json!({});
+        no_panel_schedules(&mut job, &[], &mut result);
+        assert!(job.findings.is_empty(), "nothing electrical: no finding");
+        job.devices.push(super::super::readers::ReadDevice { tag: "a".into(), circuit: "L1-3".into(), ..Default::default() });
+        no_panel_schedules(&mut job, &[], &mut result);
+        let f = job.findings.iter().find(|f| f.description.starts_with("No panel schedule read")).unwrap_or_else(|| panic!("{:#?}", job.findings));
+        assert!(f.description.contains("1 devices name a circuit"), "{}", f.description);
+        assert_eq!(result["panel_schedules_missing"]["devices_on_circuits"], 1, "{result}");
+    }
+
+    #[test]
     fn the_documents_key_count_is_read_and_gates_the_guest_rooms() {
         assert_eq!(stated_keys("NEW 120 KEY HOTEL"), Some(120));
         assert_eq!(stated_keys("A 4-STORY, 96-KEY MOTEL"), Some(96));
@@ -28046,7 +28439,7 @@ mod tests {
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let place = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new());
+        let (place, _) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), "A");
         let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p)).map(|q| [q[0].round(), q[1].round()]);
         // A duct's point where M-101 draws it lands where A-101 has that spot, by M-101's tags.
         assert_eq!(at([2560.0, 430.0]), Some([500.0, 400.0]));
@@ -28055,6 +28448,204 @@ mod tests {
         assert_eq!(at([560.0, 430.0]), Some([560.0, 430.0]));
         // M-102's five stretched, turned tags are no fit: its frame places it, not them.
         assert_eq!(at([4500.0, 400.0]), Some([500.0, 400.0]));
+    }
+
+    /// Q6284: sheets of one size in one title block (a border and a title strip every sheet
+    /// draws), side by side, 2000 units apart: the floor plan of building one, its mechanical plan
+    /// over the same walls, an electrical plan of another building, and an electrical plan of
+    /// building one drawn 60 units right and 36 up on its page. No tags anywhere.
+    fn frame_sheets() -> (crate::Session, cadaddy_walk3d::BuildingSpec) {
+        let mut s = crate::Session::new();
+        let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+        let mut line = |a: [f64; 2], b: [f64; 2]| {
+            d.add(
+                &Space::Model,
+                Common { layer: "PDF".into(), ..Common::default() },
+                EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a[0], a[1], 0.0), b: Vec3::new(b[0], b[1], 0.0) }),
+            )
+            .ok();
+        };
+        // A building's walls: its outline, partitions at uneven spacing, and short stubs (closets,
+        // jambs) placed by a fixed sequence, so the plan fits itself in one place only.
+        let walls = |outline: [f64; 4], xs: &[f64], ys: &[f64], seed: u64| {
+            let mut segs = vec![
+                ([outline[0], outline[1]], [outline[2], outline[1]]),
+                ([outline[2], outline[1]], [outline[2], outline[3]]),
+                ([outline[2], outline[3]], [outline[0], outline[3]]),
+                ([outline[0], outline[3]], [outline[0], outline[1]]),
+            ];
+            segs.extend(xs.iter().map(|x| ([*x, outline[1]], [*x, outline[3]])));
+            segs.extend(ys.iter().map(|y| ([outline[0], *y], [outline[2], *y])));
+            let mut r = seed;
+            let mut next = |n: f64| {
+                r = r.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((r >> 33) as f64 / f64::from(1u32 << 31)) * n
+            };
+            for _ in 0..40 {
+                let (x, y, l) = (outline[0] + next(outline[2] - outline[0]), outline[1] + next(outline[3] - outline[1]), 40.0 + next(80.0));
+                if next(1.0) < 0.5 { segs.push(([x, y], [x + l, y])) } else { segs.push(([x, y], [x, y + l])) }
+            }
+            segs
+        };
+        let one = walls([100.0, 150.0, 1300.0, 900.0], &[270.0, 410.0, 620.0, 740.0, 950.0, 1100.0, 1210.0], &[300.0, 420.0, 610.0, 760.0], 7);
+        let two = walls([180.0, 260.0, 1380.0, 1020.0], &[330.0, 455.0, 560.0, 800.0, 1015.0, 1270.0], &[380.0, 530.0, 700.0, 880.0], 99);
+        let ducts: Vec<([f64; 2], [f64; 2])> =
+            (0..6).map(|i| ([300.0, 200.0 + 110.0 * f64::from(i)], [1150.0, 230.0 + 110.0 * f64::from(i)])).collect();
+        // (sheet's left edge, its plan's walls and how far its page moves them, its own lines)
+        // E-103 draws building one's walls exactly, but its view is another building's unit of the
+        // same type (a complex repeats a few unit plans): its title says so.
+        let sheets: [(f64, &[([f64; 2], [f64; 2])], [f64; 2], &[([f64; 2], [f64; 2])]); 6] = [
+            (0.0, &one, [0.0, 0.0], &[]),
+            (2000.0, &one, [0.0, 0.0], &ducts),
+            (4000.0, &two, [0.0, 0.0], &[]),
+            (6000.0, &one, [60.0, 36.0], &[]),
+            (8000.0, &[], [0.0, 0.0], &[]),
+            (10000.0, &one, [0.0, 0.0], &[]),
+        ];
+        for (x0, plan, shift, own) in sheets {
+            // The title block: a border, the title strip and its boxes.
+            for (a, b) in [
+                ([20.0, 20.0], [1708.0, 20.0]),
+                ([1708.0, 20.0], [1708.0, 1132.0]),
+                ([1708.0, 1132.0], [20.0, 1132.0]),
+                ([20.0, 1132.0], [20.0, 20.0]),
+                ([1500.0, 20.0], [1500.0, 1132.0]),
+                ([1500.0, 300.0], [1708.0, 300.0]),
+                ([1500.0, 700.0], [1708.0, 700.0]),
+            ] {
+                line([x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+            }
+            for (a, b) in plan.iter().chain(own.iter()) {
+                line([x0 + a[0] + shift[0], a[1] + shift[1]], [x0 + b[0] + shift[0], b[1] + shift[1]]);
+            }
+        }
+        for (x0, title) in [(0.0, "BUILDING 1 - UNIT 1 -"), (2000.0, "BUILDING 1 - UNIT 1 -"), (10000.0, "BUILDING 2 - UNIT 4 -")] {
+            d.add(&Space::Model, Common { layer: "PDF".into(), ..Common::default() }, EntityKind::Text(text(title, x0 + 120.0, 60.0, 8.0))).ok();
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0, "region": [60, 100, 1450, 1060]}],
+            "sheets": [
+                {"number": "A-101", "discipline": "A", "level": "Level 1", "rect": [0, 0, 1728, 1152]},
+                {"number": "M-101", "discipline": "M", "level": "Level 1", "rect": [2000, 0, 3728, 1152]},
+                {"number": "E-101", "discipline": "E", "level": "Level 1", "rect": [4000, 0, 5728, 1152]},
+                {"number": "E-102", "discipline": "E", "level": "Level 1", "rect": [6000, 0, 7728, 1152]},
+                {"number": "P-101", "discipline": "P", "level": "Level 1", "rect": [8000, 0, 9728, 1152]},
+                {"number": "E-103", "discipline": "E", "level": "Level 1", "rect": [10000, 0, 11728, 1152]}
+            ]
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        (s, sp)
+    }
+
+    /// Why the placer's log says `sheet`'s frame placement wasn't used.
+    fn entry_why(l: &[Value], sheet: &str) -> String {
+        l.iter().find(|v| v["sheet"] == sheet && v["method"] == "frame").and_then(|v| v["why_not"].as_str()).unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn a_sheet_of_another_building_in_the_same_title_block_is_not_stacked_on_the_plan() {
+        let (s, sp) = frame_sheets();
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), "A");
+        let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p));
+        // The mechanical plan draws the floor plan's walls where the floor plan's sheet has them:
+        // its frame holds.
+        let m = at([2500.0, 400.0]).unwrap_or_else(|| panic!("M-101 not placed: {:#?}", log.lock().map(|l| l.clone())));
+        assert!((m[0] - 500.0).abs() < 1.0 && (m[1] - 400.0).abs() < 1.0, "{m:?}");
+        // Another building's plan in the same title block: its frame would stack it on building
+        // one, and its linework lies on nothing there: left out, never built off the building.
+        assert_eq!(at([4500.0, 400.0]), None, "{:#?}", log.lock().map(|l| l.clone()));
+        // Building one drawn elsewhere on its page: its linework puts it where it belongs (to the
+        // linework's resolution: its lines are compared a foot or two apart).
+        let e = at([6560.0, 436.0]).unwrap_or_else(|| panic!("E-102 not placed: {:#?}", log.lock().map(|l| l.clone())));
+        assert!((e[0] - 500.0).abs() < 15.0 && (e[1] - 400.0).abs() < 15.0, "{e:?}");
+        // Another building's unit of the same type: its walls lie on the plan's, its title names
+        // another building: left out.
+        assert_eq!(at([10500.0, 400.0]), None, "{:#?}", log.lock().map(|l| l.clone()));
+        // Each judgement is in the log with its transform and its score.
+        let l = log.lock().map(|l| l.clone()).unwrap_or_default();
+        assert!(
+            entry_why(&l, "E-103").contains("BUILDING 1 against BUILDING 2") || entry_why(&l, "E-103").contains("BUILDING 2 against BUILDING 1"),
+            "{l:#?}"
+        );
+        let entry = |sheet: &str, method: &str| l.iter().find(|v| v["sheet"] == sheet && v["method"] == method).cloned().unwrap_or(Value::Null);
+        assert_eq!(entry("M-101", "frame")["used"], json!(true), "{l:#?}");
+        assert_eq!(entry("E-101", "frame")["used"], json!(false), "{l:#?}");
+        assert_eq!(entry("E-101", "none")["used"], json!(false), "{l:#?}");
+        assert_eq!(entry("E-102", "linework")["used"], json!(true), "{l:#?}");
+        assert!(entry("E-102", "linework")["score"].as_f64().is_some_and(|v| v >= super::super::sheetreg::FIT_F1), "{l:#?}");
+        assert!(entry("E-102", "linework")["transform"]["tx"].as_f64().is_some_and(|v| (v + 6060.0).abs() < 15.0), "{l:#?}");
+    }
+
+    #[test]
+    fn trade_sheets_go_onto_the_plans_the_floors_were_taken_from_when_there_is_no_architecture() {
+        // No architectural floor plans: the mechanical plans give the floors (two levels), and the
+        // electrical plans are put onto them, as onto architecture's.
+        let region = |n: &str, level: &str, disc: &str, kind: &str| SheetRegion {
+            number: n.into(),
+            level: level.into(),
+            discipline: disc.into(),
+            kind: kind.into(),
+            rect: [0.0, 0.0, 1728.0, 1152.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![
+            region("M-201", "2", "M", "plan"),
+            region("M-301", "3", "M", "plan"),
+            region("E-201", "2", "E", "enlarged_plan"),
+            region("E-301", "3", "E", "enlarged_plan"),
+        ];
+        // Before Q6284 only an architectural plan let anything be placed.
+        assert!(!job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A")));
+        assert_eq!(placement_discipline(&job).as_deref(), Some("M"));
+        assert_eq!(building_levels(&job).len(), 2);
+        job.sheet_regions.push(region("A-201", "2", "A", "plan"));
+        assert_eq!(placement_discipline(&job).as_deref(), Some("A"));
+        job.sheet_regions.clear();
+        assert_eq!(placement_discipline(&job), None);
+
+        // The electrical plan E-201 prints the mechanical plan's ten room numbers 300 right and 50
+        // up of where M-201 has them: onto M-201 by them.
+        let mut s = crate::Session::new();
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let common = || Common { layer: "PDF".into(), ..Common::default() };
+            for i in 0..10_u32 {
+                let (n, p) = ((201 + i).to_string(), [100.0 + 160.0 * f64::from(i % 5), 200.0 + 300.0 * f64::from(i / 5)]);
+                d.add(&Space::Model, common(), EntityKind::Text(text(&n, p[0], p[1], 6.0))).ok();
+                d.add(&Space::Model, common(), EntityKind::Text(text(&n, p[0] + 2300.0, p[1] + 50.0, 6.0))).ok();
+            }
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [
+                {"name": "Level 2", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 8.0, "region": [40, 40, 1400, 1100]},
+                {"name": "Level 3", "elevation_ft": 10.0, "height_ft": 10.0, "ceiling_ft": 8.0, "region": [-1.0e9, -1.0e9, -999999999.0, -999999999.0]}
+            ],
+            "sheets": [
+                {"number": "M-201", "discipline": "M", "level": "Level 2", "rect": [0, 0, 1728, 1152]},
+                {"number": "E-201", "discipline": "E", "level": "Level 2", "rect": [2000, 0, 3728, 1152]},
+                {"number": "E-301", "discipline": "E", "level": "Level 3", "rect": [4000, 0, 5728, 1152]},
+                {"number": "M-301", "discipline": "M", "level": "Level 3", "rect": [6000, 0, 7728, 1152]}
+            ]
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), "M");
+        let q = place([2800.0, 450.0], "Level 2").map(|m| m.apply([2800.0, 450.0]));
+        assert!(q.is_some_and(|q| (q[0] - 500.0).abs() < 1.0 && (q[1] - 400.0).abs() < 1.0), "{q:?} {:#?}", log.lock().map(|l| l.clone()));
+        let l = log.lock().map(|l| l.clone()).unwrap_or_default();
+        assert!(
+            l.iter().any(|v| v["sheet"] == "E-201" && v["method"] == "tags" && v["onto"] == "M-201" && v["residual_units"].is_number()),
+            "{l:#?}"
+        );
+        // Level 3 has no plan (its outline was never read): nothing lands on it, though its two
+        // sheets are drawn alike.
+        assert_eq!(place([4500.0, 450.0], "Level 3"), None);
     }
 
     #[test]

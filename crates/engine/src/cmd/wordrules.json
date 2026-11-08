@@ -2947,6 +2947,35 @@
     "M"
    ]
   },
+  "sheets.site_part_words": {
+   "source": "(drafting convention: a view title that starts with one of these words and an identifier — a number, or one letter — names the part of the site the view draws, as BUILDING 2 - UNIT 6; each word with the kind of part it names)",
+   "pairs": [
+    [
+     "BUILDING",
+     "BUILDING"
+    ],
+    [
+     "BLDG",
+     "BUILDING"
+    ],
+    [
+     "WING",
+     "WING"
+    ],
+    [
+     "TOWER",
+     "TOWER"
+    ],
+    [
+     "UNIT",
+     "UNIT"
+    ],
+    [
+     "AREA",
+     "AREA"
+    ]
+   ]
+  },
   "sheets.non_building_disciplines": {
    "source": "(drafting convention: the disciplines that don't carry building walls and doors (life safety, fire protection, fire alarm, general/civil, structural, telecom); moved from guided.rs `NON_BUILDING`)",
    "words": [
