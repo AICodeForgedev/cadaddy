@@ -3717,10 +3717,14 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Added after the checks below: they are where their own sheet draws them, not on the
     // architectural plan the building's outline is read from.
     let mut extra_rooms: Vec<Value> = Vec::new();
+    // (The trades' plans: not the general, code, life safety or structural sheets, which carry
+    // no building of their own - a project information sheet's tables traced for minutes.)
+    let non_building = cadaddy_mepfix::wordrules::words("sheets.non_building_disciplines");
     let others: Vec<[f64; 4]> = job
         .sheet_regions
         .iter()
         .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !r.discipline.eq_ignore_ascii_case("A"))
+        .filter(|r| !non_building.contains(&r.discipline.to_ascii_uppercase().as_str()))
         .map(SheetRegion::plan_rect)
         .collect();
     if !others.is_empty()
@@ -5082,12 +5086,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
             // Each level's region is its architectural floor plan's view: the draft guessed the
             // upper floors' regions from stray objects (slivers), so their walls weren't built.
-            let arch_plans: Vec<(String, [f64; 4])> = job
-                .sheet_regions
-                .iter()
-                .filter(|r| r.kind == "plan" && r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case("A"))
-                .map(|r| (r.level.clone(), r.plan_rect()))
-                .collect();
+            // (Its floor plan where one is titled so, not its finish or furniture plan.)
+            let arch: Vec<&SheetRegion> =
+                job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case("A")).collect();
+            let arch_plans: Vec<(String, [f64; 4])> = floor_plans_first(job, arch).into_iter().map(|r| (r.level.clone(), r.plan_rect())).collect();
             if !arch_plans.is_empty()
                 && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
             {
@@ -6734,12 +6736,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     bim_step(s, job, "circuits and model rooms", t);
     let t = web_time::Instant::now();
     // The architectural floor plans only: tracing the whole print set took over 10 min.
-    let arch: Vec<[f64; 4]> = job
-        .sheet_regions
-        .iter()
-        .filter(|r| r.kind == "plan" && r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case("A"))
-        .map(SheetRegion::plan_rect)
-        .collect();
+    let arch: Vec<&SheetRegion> =
+        job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case("A")).collect();
+    let arch: Vec<[f64; 4]> = floor_plans_first(job, arch).into_iter().map(SheetRegion::plan_rect).collect();
     let volumes = if arch.is_empty() { json!({}) } else { json!({"regions": arch}) };
     // A print set's room volumes: after the build the stacked model sits on the lowest level's
     // plan and the trace ran for 18+ min on Windows. The rooms are already model elements.
@@ -8411,12 +8410,12 @@ fn name_rooms_from_other_trades(
 /// (number, where, level), each once.
 fn stray_plan_numbers(d: &cadaddy_doc::Drawing, job: &GuidedJob, rooms: &[super::bspec::RoomElement]) -> Vec<(String, [f64; 2], String)> {
     let sheets: BTreeSet<String> = job.sheet_regions.iter().map(|r| sheet_key(&r.number)).collect();
-    let plans: Vec<([f64; 4], String)> = job
+    let plans: Vec<&SheetRegion> = job
         .sheet_regions
         .iter()
         .filter(|r| r.discipline.eq_ignore_ascii_case("A") && r.kind == "plan" && r.not_built.is_empty() && !r.level.is_empty())
-        .map(|r| (r.plan_rect(), r.level.clone()))
         .collect();
+    let plans: Vec<([f64; 4], String)> = floor_plans_first(job, plans).into_iter().map(|r| (r.plan_rect(), r.level.clone())).collect();
     let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
     let mut out = Vec::new();
     if plans.is_empty() {

@@ -2895,6 +2895,34 @@
     "M"
    ]
   },
+  "schedules.panel_header_words": {
+   "source": "(panel schedule column headings as printed: breaker amps, poles, breaker type, load categories, circuit number, phases; a header line of only these words is several columns' names read as one text)",
+   "words": [
+    "A",
+    "AMP",
+    "AMPS",
+    "B",
+    "BKR",
+    "C",
+    "CKT",
+    "CO",
+    "KVA",
+    "LTG",
+    "MISC",
+    "NO",
+    "P",
+    "POLE",
+    "POLES",
+    "PWR",
+    "RCPT",
+    "REC",
+    "SIZE",
+    "TRIP",
+    "TYPE",
+    "VA",
+    "WIRE"
+   ]
+  },
   "sheets.subdiscipline_codes": {
    "source": "(US National CAD Standard sheet designators: a discipline letter and a modifier letter name a sub-discipline of that trade, e.g. EP electrical power, EL electrical lighting, AS architectural site/shell, MH mechanical HVAC, PL plumbing; such a sheet is its trade's)",
    "words": [
