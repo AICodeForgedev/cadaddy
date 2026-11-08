@@ -734,6 +734,11 @@ pub(crate) fn flat_swings(pts: &[Vec2]) -> Vec<(Vec2, f64, f64, [Vec2; 2])> {
     arc_runs(pts).into_iter().filter(|(_, _, deg, _)| (60.0..=SWING_MAX_DEG).contains(deg)).collect()
 }
 
+/// How far round a room's name its trace looks (feet, each way): wider than any room. A name in
+/// an area that doesn't close (a gap in its walls, an open plan) stops there instead of searching
+/// the whole drawing, every sheet of a set side by side.
+const ROOM_REACH_FT: f64 = 600.0;
+
 /// A turn sharper than this (degrees) between two pieces of a polyline is a corner: a flattened
 /// arc turns a few degrees a piece (a quarter circle drawn in 8 chords, 11¼°), a swing meets its
 /// leaf and the wall's jamb square.
@@ -1374,7 +1379,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         // round it then either.
         let mut note = false;
         for (i, seed) in seeds.into_iter().enumerate() {
-            let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, seed, &mut outline_cache) else { continue };
+            let Ok(loops) = crate::cmd::hatch::loops_at_lazy_within(plan, seed, &mut outline_cache, Some(ROOM_REACH_FT * 12.0 * k)) else { continue };
             let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
             let poly = polygon(outer);
             if poly.len() < 3 {

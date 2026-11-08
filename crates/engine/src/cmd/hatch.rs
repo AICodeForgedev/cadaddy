@@ -404,16 +404,24 @@ impl BoxGrid {
 
 /// Boundary loops (outer + islands) around an internal point.
 pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
-    loops_at_with(s, p, None)
+    loops_at_with(s, p, None, None)
 }
 
 /// [`loops_at`] for a loop over many points: the drawing's outlines are made at the first point
 /// (never, when there are none) and kept in `cache` for the next ones.
 pub(crate) fn loops_at_lazy(s: &Session, p: Vec2, cache: &mut Option<Outlines>) -> Result<Vec<HatchLoop>> {
+    loops_at_lazy_within(s, p, cache, None)
+}
+
+/// [`loops_at_lazy`] for an area no wider than `reach` (drawing units, each way from the point):
+/// the search stops widening there and finds no boundary. A room search asks this: a point in a
+/// room that doesn't close (a gap in its walls, an open plan) would otherwise search ever larger
+/// windows up to the whole drawing, every sheet of a set side by side.
+pub(crate) fn loops_at_lazy_within(s: &Session, p: Vec2, cache: &mut Option<Outlines>, reach: Option<f64>) -> Result<Vec<HatchLoop>> {
     if cache.as_ref().is_none_or(|c| c.space != s.space()) {
         *cache = Some(Outlines::new(s)?);
     }
-    let Some(c) = cache.as_mut() else { return loops_at(s, p) };
+    let Some(c) = cache.as_mut() else { return loops_at_with(s, p, None, reach) };
     // Clear of every outline by a margin: a point on (or a hair from) an edge is searched.
     let margin = ((c.ext.width() + c.ext.height()) * 1e-6).max(1e-9);
     let clear = |poly: &[Vec2]| {
@@ -434,7 +442,7 @@ pub(crate) fn loops_at_lazy(s: &Session, p: Vec2, cache: &mut Option<Outlines>) 
     {
         return Ok(loops.clone());
     }
-    let loops = loops_at_with(s, p, Some(c))?;
+    let loops = loops_at_with(s, p, Some(c), reach)?;
     let ring = |l: &HatchLoop| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(margin);
     if let Some(outer) = loops.iter().find(|l| l.outer).map(ring).filter(|o| o.len() >= 3 && point_in_polygon(o, p)) {
         let islands = loops.iter().filter(|l| !l.outer).map(ring).collect();
@@ -445,7 +453,7 @@ pub(crate) fn loops_at_lazy(s: &Session, p: Vec2, cache: &mut Option<Outlines>) 
     Ok(loops)
 }
 
-fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>) -> Result<Vec<HatchLoop>> {
+fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f64>) -> Result<Vec<HatchLoop>> {
     let d = s.doc()?;
     let space = s.space();
     // A cache made for another space can't answer for this one.
@@ -464,6 +472,9 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>) -> Result<Vec<H
     let span = ext.width().max(ext.height());
     let mut r = (span / 4096.0).max(gap * 4.0).max(tol * 1e6);
     let (owners, found) = loop {
+        if reach.is_some_and(|m| r > m) {
+            return Err(EngineError::Other("Valid hatch boundary not found within reach.".into()));
+        }
         let full = !span.is_finite() || r >= span * 2.0;
         let window = if full { None } else { Some(Bounds2::new(p - Vec2::new(r, r), p + Vec2::new(r, r))) };
         let (polys, owners) = match cache {
@@ -1350,6 +1361,28 @@ mod tests {
         assert!(checked >= 24, "{checked}");
         // Outside everything: both find nothing.
         assert!(loops_at_lazy(&s, Vec2::new(-500.0, -500.0), &mut cache).is_err());
+    }
+
+    /// A search with a reach finds what lies within it and nothing farther: a point in a room
+    /// whose walls leave a gap, inside a far bigger outline (a sheet's border), finds the border
+    /// without a reach and nothing with one; a closed room within reach is found either way.
+    #[test]
+    fn a_search_within_reach_stops_there() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [-20000, -20000], "p2": [20000, 20000] })).unwrap();
+        // a room open on one side, and a closed one
+        s.execute("pline", &json!({ "points": [[0, 0], [0, 144], [120, 144], [120, 0], [70, 0]] })).unwrap();
+        s.execute("rectang", &json!({ "p1": [500, 0], "p2": [620, 144] })).unwrap();
+        let mut cache = None;
+        let open = Vec2::new(60.0, 72.0);
+        let far = loops_at_lazy(&s, open, &mut cache).expect("the border");
+        let b = Bounds2::from_points(far.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
+        assert!(b.width() > 30000.0, "{b:?}");
+        let mut cache = None;
+        assert!(loops_at_lazy_within(&s, open, &mut cache, Some(2000.0)).is_err());
+        let room = loops_at_lazy_within(&s, Vec2::new(560.0, 72.0), &mut cache, Some(2000.0)).expect("the closed room");
+        let b = Bounds2::from_points(room.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
+        assert!((b.width() - 120.0).abs() < 1e-6, "{b:?}");
     }
 
     /// Sheets of rooms side by side (a print set's job), with text and closed islands in the
