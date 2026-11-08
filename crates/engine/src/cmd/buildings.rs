@@ -255,7 +255,7 @@ pub fn site_labels(lines: &[(String, Vec<(String, Vec2)>)], names: &[String]) ->
             let e = sum.entry(one.clone()).or_insert((Vec2::new(0.0, 0.0), 0, sheet.clone()));
             // One sheet places them all: labels on another sheet are its own picture.
             if e.2 == *sheet {
-                e.0 = e.0 + *at;
+                e.0 += *at;
                 e.1 += 1;
             }
         }
