@@ -8441,6 +8441,21 @@ impl FloorLines {
     }
 }
 
+/// Points binned by `tol` cells, for [`fit_hit`].
+fn fit_grid(pts: &[cadaddy_geom::Vec2], tol: f64) -> std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>> {
+    let mut g: std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>> = std::collections::HashMap::new();
+    for p in pts {
+        g.entry(((p.x / tol).floor() as i64, (p.y / tol).floor() as i64)).or_default().push(*p);
+    }
+    g
+}
+
+/// Whether a point of [`fit_grid`]'s lies within `tol` of `p`.
+fn fit_hit(g: &std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>>, p: cadaddy_geom::Vec2, tol: f64) -> bool {
+    let (cx, cy) = ((p.x / tol).floor() as i64, (p.y / tol).floor() as i64);
+    (-1..=1).any(|dx| (-1..=1).any(|dy| g.get(&(cx + dx, cy + dy)).is_some_and(|v| v.iter().any(|q| q.dist(p) <= tol))))
+}
+
 /// The view's linework (`view_pts`, samples of its block `view`) laid on the floor's around a room
 /// (`room`, its outline's box) at the printed scale: each of the eight turns, the offset most
 /// samples agree on (to `tol`), the view's middle kept over the room. `None` when too few agree
@@ -8467,19 +8482,7 @@ fn rigid_room_fit(
     // offset whose lines match both ways: the view's samples on the floor's lines and the room's
     // own lines explained by the view, each counted once. Pair counts alone can't tell a turn from
     // its mirror when the walls are alike and only the bath and the door differ.
-    let cell = |p: cadaddy_geom::Vec2| ((p.x / tol).floor() as i64, (p.y / tol).floor() as i64);
-    let grid_of = |pts: &[cadaddy_geom::Vec2]| {
-        let mut g: std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>> = std::collections::HashMap::new();
-        for p in pts {
-            g.entry(cell(*p)).or_default().push(*p);
-        }
-        g
-    };
-    let hit = |g: &std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>>, p: cadaddy_geom::Vec2| {
-        let (cx, cy) = cell(p);
-        (-1..=1).any(|dx| (-1..=1).any(|dy| g.get(&(cx + dx, cy + dy)).is_some_and(|v| v.iter().any(|q| q.dist(p) <= tol))))
-    };
-    let floor_grid = grid_of(&near);
+    let floor_grid = fit_grid(&near, tol);
     let inside: Vec<cadaddy_geom::Vec2> =
         near.iter().filter(|f| f.x >= room[0] && f.x <= room[2] && f.y >= room[1] && f.y <= room[3]).copied().take(4 * MAX_FIT_SAMPLES).collect();
     let mut best: Option<(RoomFit, usize, usize)> = None;
@@ -8501,9 +8504,9 @@ fn rigid_room_fit(
         for (o, votes) in ranked.into_iter().take(FIT_OFFSETS_TRIED) {
             let to = cadaddy_geom::Vec2::new(o.0 as f64 * tol, o.1 as f64 * tol);
             let placed: Vec<cadaddy_geom::Vec2> = turned.iter().map(|t| to + *t).collect();
-            let on_lines = placed.iter().filter(|p| hit(&floor_grid, **p)).count();
-            let placed_grid = grid_of(&placed);
-            let explained = inside.iter().filter(|f| hit(&placed_grid, **f)).count();
+            let on_lines = placed.iter().filter(|p| fit_hit(&floor_grid, **p, tol)).count();
+            let placed_grid = fit_grid(&placed, tol);
+            let explained = inside.iter().filter(|f| fit_hit(&placed_grid, **f, tol)).count();
             let score = on_lines + explained * few.len() / inside.len().max(1);
             // Only an offset enough samples agree on counts (the vote the fit was always accepted
             // by): the two-way score ranks those, it never turns a fit away.
@@ -8519,8 +8522,8 @@ fn rigid_room_fit(
 /// A one-room plan's room where the rooms stage's trace of it leaked: the plan draws the whole
 /// room, so a traced outline larger than the view's drawn unit (`unit`, either way round) is no
 /// outline of that room (a trace that ran out under a tag's box into the rooms beside it). The
-/// view is laid instead round the room's own tag (`tag`: the room lies within the view's reach of
-/// it), and the room is the view's unit laid there. `None` when the trace fits the view, or no
+/// view is laid instead round the room's own tag (`tag`: only a laying whose unit holds it), and
+/// the room is the view's unit laid there. `None` when the trace fits the view, or no
 /// fit round the tag holds the tag.
 #[allow(clippy::too_many_arguments)]
 fn one_room_round_its_tag(
@@ -8539,15 +8542,50 @@ fn one_room_round_its_tag(
     if !(uw > 0.0 && uh > 0.0 && tag.is_finite()) || fits(uw, uh) || fits(uh, uw) {
         return None;
     }
-    // The view's middle lands within half its diagonal of any point of the room it draws.
-    let reach = 0.5 * (view[2] - view[0]).hypot(view[3] - view[1]);
-    let search = [tag.x - reach, tag.y - reach, tag.x + reach, tag.y + reach];
-    let floor = FloorLines::new(d, &[search], margin, 2.0 * tol);
-    let (fit, _) = rigid_room_fit(lines, view, search, &floor, margin, tol)?;
-    let outline: Vec<cadaddy_geom::Vec2> = [[unit[0], unit[1]], [unit[2], unit[1]], [unit[2], unit[3]], [unit[0], unit[3]]]
-        .iter()
-        .map(|c| fit.to + turn_vec(cadaddy_geom::Vec2::new(c[0], c[1]) - fit.from, fit.k))
-        .collect();
+    // Only a laying whose unit holds the tag: each turn's offsets doing so are a box (the tag less
+    // the unit's corners turned), small enough to try every offset in it: by the view's samples
+    // on the floor's lines, then each turn's likeliest few both ways (the floor's lines inside
+    // the laid unit explained by the view, to tell a turn from its mirror). The votes of the
+    // wider fit can't be used: the neighbours' long walls outvote the room's own.
+    let from = cadaddy_geom::Vec2::new((view[0] + view[2]) / 2.0, (view[1] + view[3]) / 2.0);
+    let corners = [[unit[0], unit[1]], [unit[2], unit[1]], [unit[2], unit[3]], [unit[0], unit[3]]].map(|c| cadaddy_geom::Vec2::new(c[0], c[1]));
+    let reach = uw.hypot(uh);
+    let search = [tag.x - reach - margin, tag.y - reach - margin, tag.x + reach + margin, tag.y + reach + margin];
+    let floor = FloorLines::new(d, &[search], 0.0, 2.0 * tol);
+    let near = floor.in_box(search);
+    if lines.len() < MIN_FIT_SAMPLES || near.len() < MIN_FIT_SAMPLES || tol.is_nan() || tol <= 0.0 {
+        return None;
+    }
+    let few: Vec<cadaddy_geom::Vec2> = lines.iter().step_by((lines.len() / MAX_FIT_SAMPLES).max(1)).copied().collect();
+    let floor_grid = fit_grid(&near, tol);
+    let mut best: Option<(usize, RoomFit, Vec<cadaddy_geom::Vec2>)> = None;
+    // The plan of one room draws that room, never its mirror image (a typical room's plan is laid
+    // into its mirrored units too; a numbered room's has no mirrored twin).
+    for k in 0..4u8 {
+        let laid = |to: cadaddy_geom::Vec2| corners.map(|c| to + turn_vec(c - from, k));
+        let holds =
+            laid(cadaddy_geom::Vec2::new(0.0, 0.0)).iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+                [b[0].min(tag.x - q.x), b[1].min(tag.y - q.y), b[2].max(tag.x - q.x), b[3].max(tag.y - q.y)]
+            });
+        let turned: Vec<cadaddy_geom::Vec2> = few.iter().map(|p| turn_vec(*p - from, k)).collect();
+        let (nx, ny) = (((holds[2] - holds[0]) / tol).floor() as i64, ((holds[3] - holds[1]) / tol).floor() as i64);
+        let mut ranked: Vec<(usize, cadaddy_geom::Vec2)> = (0..=nx)
+            .flat_map(|i| (0..=ny).map(move |j| cadaddy_geom::Vec2::new(holds[0] + i as f64 * tol, holds[1] + j as f64 * tol)))
+            .map(|to| (turned.iter().filter(|t| fit_hit(&floor_grid, to + **t, tol)).count(), to))
+            .collect();
+        ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.x.total_cmp(&b.1.x)).then_with(|| a.1.y.total_cmp(&b.1.y)));
+        for (on_lines, to) in ranked.into_iter().take(FIT_OFFSETS_TRIED) {
+            let outline = laid(to).to_vec();
+            let inside: Vec<cadaddy_geom::Vec2> = near.iter().filter(|f| cadaddy_geom::point_in_polygon(&outline, **f)).copied().collect();
+            let placed = fit_grid(&turned.iter().map(|t| to + *t).collect::<Vec<_>>(), tol);
+            let explained = inside.iter().filter(|f| fit_hit(&placed, **f, tol)).count();
+            let score = on_lines + explained * few.len() / inside.len().max(1);
+            if on_lines * 100 >= few.len() * MIN_FIT_SHARE_PCT && best.as_ref().is_none_or(|b| score > b.0) {
+                best = Some((score, RoomFit { k, from, to, rigid: true }, outline));
+            }
+        }
+    }
+    let (_, fit, outline) = best?;
     cadaddy_geom::point_in_polygon(&outline, tag).then_some((fit, outline))
 }
 
