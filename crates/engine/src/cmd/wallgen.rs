@@ -2144,11 +2144,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 // Where its centreline crosses the gap's line, else the end that meets it.
                 let n = u.perp();
                 let (da, db) = (n.dot(c.a - g0), n.dot(c.b - g0));
-                // A wall running on through the gap and out past both faces (a wall drawn unit by
-                // unit, joined into one) parts it anywhere: a mullion or a frame spans the wall's
-                // thickness only.
-                let through = da.abs().min(db.abs()) > t;
-                let hit = if da * db < 0.0 && (crossing_parts || through) {
+                let hit = if da * db < 0.0 && crossing_parts {
                     Some(c.a + (c.b - c.a) * (da / (da - db)))
                 } else {
                     [c.a, c.b].into_iter().find(|e| seg_dist(*e, g0, g1) <= c.thickness / 2.0 + t)
