@@ -473,6 +473,41 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
     ),
     (
+        "crates/engine/src/cmd/panelsched.rs",
+        "[NAME DESIGNATION]",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
+    ),
+    (
+        "crates/engine/src/cmd/panelsched.rs",
+        "[PANEL PANELBOARD]",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
+    ),
+    (
+        "crates/engine/src/cmd/panelsched.rs",
+        "const AMP_HEADS",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
+    ),
+    (
+        "crates/engine/src/cmd/panelsched.rs",
+        "const POLE_HEADS",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
+    ),
+    (
+        "crates/engine/src/cmd/panelsched.rs",
+        "const CENTRE_HEADS",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
+    ),
+    (
+        "crates/engine/src/cmd/panelsched.rs",
+        "const NOT_LOAD",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
+    ),
+    (
+        "crates/engine/src/cmd/panelsched.rs",
+        "[ELECTRICAL ONE LINE]",
+        "drafting convention: the sheet-title words of a set's electrical sheets (ELECTRICAL, ONE-LINE, POWER RISER), how any set is organised",
+    ),
+    (
         "crates/engine/src/cmd/wallgen.rs",
         "const PLAIN",
         "our own output and command vocabulary (generated sheet names, file types, command ids, CAD entity types, layer names we write)",

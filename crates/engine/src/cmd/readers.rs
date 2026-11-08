@@ -156,7 +156,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
         CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
-            .params("{apply?: bool} → {tables_found: panel schedules read, panels: [{panel, sheet, circuits, breakers, header}], sheets_read, sheets, source, warnings, placed, unplaced}: the panel schedules printed on the set's sheets (electrical, combined MEP, or titled for panels): the job's model's, else read off the job's or the open print set's sheets")
+            .params("{level?: name, apply?: bool} → {placed: [{tag, kind, level, sources, confidence, flags}], unplaced: [{tag, why}], tables_found}")
             .noundo(),
         // ── Electrical devices ───────────────────────────────────────────
         CommandSpec::new("mep.read_devices", "Read Electrical Devices", run_elec_devices).long()
