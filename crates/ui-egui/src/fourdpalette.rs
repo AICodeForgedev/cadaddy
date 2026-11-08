@@ -322,7 +322,7 @@ mod tests {
     fn walk_shows_the_model_on_the_date() {
         use cadaddy_walk3d::{Owner, Part, Scene, Vertex};
         let mut d = cadaddy_doc::Drawing::new_imperial();
-        d.schedule4d = Some(r#"{"version":1,"tasks":[{"id":"1","start":"2026-03-02","finish":"2026-03-06","add":["2A"]}]}"#.into());
+        d.schedule4d = Some(r#"{"version":1,"tasks":[{"id":"1","start":"2026-03-02","finish":"2026-03-06","add":["2A"]}]}"#.into()).into();
         let v = Vertex { p: [0.0, 0.0, 0.0], n: [0.0, 0.0, 1.0], c: [9, 9, 9, 255] };
         let mut sc = Scene::default();
         for h in [0x2a_u64, 0x2b] {

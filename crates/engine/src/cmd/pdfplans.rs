@@ -531,7 +531,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         out["applied"] = json!(true);
         if bool_or(p, "draft", false) {
             let r = super::autospec::draft_with(s, false)?;
-            s.doc_mut()?.building_spec = Some(r.to_json());
+            s.doc_mut()?.building_spec = Some(r.to_json()).into();
             out["spec"] = serde_json::to_value(&r).unwrap_or(Value::Null);
         }
     } else {

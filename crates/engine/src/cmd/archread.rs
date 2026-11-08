@@ -325,7 +325,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             if s.doc()?.building_spec.as_deref() == Some(text.as_str()) {
                 out["unchanged"] = json!(true);
             } else {
-                s.doc_mut()?.building_spec = Some(text);
+                s.doc_mut()?.building_spec = Some(text).into();
             }
             out["applied"] = json!(true);
             s.echo(format!(

@@ -171,7 +171,7 @@ fn set_job(s: &mut Session, subs: &Path) {
             {"key": "equip:FAN-2", "value": answer("FAN Submittal.pdf p.3"), "from_question": "Q-bim_build-2", "stage": "bim_build"}
         ]
     }});
-    s.doc_mut().unwrap().agent = Some(state.to_string());
+    s.doc_mut().unwrap().agent = Some(state.to_string()).into();
 }
 
 fn model(spec: Value) -> Session {

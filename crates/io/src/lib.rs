@@ -196,18 +196,35 @@ pub fn read_dwg(bytes: &[u8], engine: DwgEngine) -> Result<Drawing> {
 
 /// A drawing written as DWG of `version` with `engine` (CADaddy's writer hands a version it
 /// doesn't write to the bridge).
+///
+/// The bridge's DXF is CADaddy's own, so no limit for untrusted input applies to it (Q6280). What
+/// is checked is the rule for every DXF/DWG save: the file must be one CADaddy reopens, unless
+/// `force` allows otherwise ([`check_reopens`]). A drawing over the most any DWG reopens with is
+/// refused before the conversion (the costly step); the DWG's size, and the group codes opening
+/// it reads against the limit that scales with it, are checked once it is written. Opening reads
+/// the DXF the DWG converts back to, which holds more groups than the bridge's (up to
+/// [`REOPEN_GROWTH`] times), so when that could matter they are counted from it.
 pub fn write_dwg(d: &Drawing, version: Version, engine: DwgEngine) -> Result<Vec<u8>> {
     if engine == DwgEngine::Native
         && let Ok((bytes, _)) = dwg_write::write(d, version.code())
     {
+        check_dwg_size(bytes.len(), dwg_byte_caps().0)?;
         return Ok(bytes);
     }
-    let (dxf, linetypes) = dxf_write::dwg_bridge(d, version);
-    let tags = dxf.iter().filter(|&&b| b == b'\n').count() / 2;
+    let (dxf, linetypes, tags) = dxf_write::dwg_bridge(d, version);
+    let (floor, ceil) = tag_caps();
+    check_reopens("DWG", tags, ceil.max(floor))?;
+    #[cfg(test)]
+    tests::BRIDGE_CONVERSIONS.set(tests::BRIDGE_CONVERSIONS.get() + 1);
     let bytes = cadaddy_dwg::encode_named(&dxf, version.code(), &linetypes).map_err(IoError::Format)?;
     drop(dxf);
-    let (floor, ceil) = tag_caps();
-    check_reopens("DWG", tags, dwg_tag_limit(bytes.len(), floor, ceil))?;
+    check_dwg_size(bytes.len(), dwg_byte_caps().0)?;
+    let limit = dwg_tag_limit(bytes.len(), floor, ceil);
+    if tags.saturating_mul(REOPEN_GROWTH) > limit && !cadaddy_dxf::oversize_allowed() {
+        check_reopens("DWG", reopened_tags(&bytes, tags)?, limit)?;
+    } else {
+        check_reopens("DWG", tags, limit)?;
+    }
     if version <= Version::R2004 && has_images(d) {
         return Ok(dwg_fixup::image_def_reactors(&bytes).unwrap_or(bytes));
     }
@@ -218,6 +235,84 @@ pub fn write_dwg(d: &Drawing, version: Version, engine: DwgEngine) -> Result<Vec
 fn has_images(d: &Drawing) -> bool {
     let any = |s: &cadaddy_doc::EntityStore| s.iter().any(|e| matches!(e.kind, cadaddy_doc::EntityKind::Image(_)));
     any(&d.model) || d.layouts.iter().any(|l| any(&l.entities)) || d.blocks.values().any(|b| any(&b.entities))
+}
+
+/// Most group codes the DXF a DWG converts back to holds per group of the bridge DXF it was written
+/// from: the reader writes groups the bridge leaves out (a polyline vertex's widths and bulge, five
+/// groups for two; a drawing of lines, circles and polylines measured 1.5).
+const REOPEN_GROWTH: usize = 3;
+
+/// The group codes opening the DWG `bytes` reads: those of the DXF it converts to, as reading it
+/// counts them. A conversion past the size limit is refused as too large; one that fails for
+/// another reason (which saving can't mend) leaves the count at the bridge's `bridge_tags`.
+fn reopened_tags(bytes: &[u8], bridge_tags: usize) -> Result<usize> {
+    #[cfg(test)]
+    tests::REOPEN_COUNTS.set(tests::REOPEN_COUNTS.get() + 1);
+    match dwg_rendition(bytes) {
+        Ok((dxf, _)) => Ok(cadaddy_dxf::count_tags(&dxf).unwrap_or(bridge_tags)),
+        Err(IoError::Format(e)) if cadaddy_dwg::is_over_limit(&e) => Err(IoError::Format(format!(
+            "this drawing is too large to save as DWG: opening the file would convert it to more drawing data than CADaddy reads, so it could not be reopened. {}",
+            way_out("DWG")
+        ))),
+        Err(_) => Ok(bridge_tags),
+    }
+}
+
+/// The DXF the DWG `bytes` converts to for reading, with the records CADaddy's DWG writers kept
+/// (`dwg_keep`) back where they were, and the bridge's notes.
+fn dwg_rendition(bytes: &[u8]) -> Result<(Vec<u8>, Vec<String>)> {
+    let renamed = dwg_fixup::underlay_classes_renamed(bytes);
+    let bytes = renamed.as_deref().unwrap_or(bytes);
+    let (dxf, notes) = cadaddy_dwg::decode(bytes, dwg_limits(bytes.len())).map_err(IoError::Format)?;
+    Ok((dwg_keep::unstash(&dxf).unwrap_or(dxf), notes))
+}
+
+/// The end of every refusal of a save too big to reopen: the alternative and the force option.
+fn way_out(what: &str) -> String {
+    format!("Save it as .cdy (no limit), or pass force:true to SAVE, SAVEAS or EXPORT to write the {what} anyway")
+}
+
+/// Refuse a DWG of `len` bytes that CADaddy would not reopen (it opens DWG files of up to
+/// `max_dwg` bytes), unless oversize saves are allowed (`force`).
+fn check_dwg_size(len: usize, max_dwg: usize) -> Result<()> {
+    if len <= max_dwg || cadaddy_dxf::oversize_allowed() {
+        return Ok(());
+    }
+    Err(IoError::Format(format!(
+        "this drawing is too large to save as DWG: the file would be {} MB and CADaddy opens DWG files of at most {} MB, so it could not be reopened. {}",
+        len >> 20,
+        max_dwg >> 20,
+        way_out("DWG")
+    )))
+}
+
+/// The size limits for reading a DWG of `dwg_len` bytes through the bridge: the file limit, and
+/// a limit on its DXF rendition scaled to the file ([`DXF_BYTES_PER_DWG_BYTE`] per byte) between
+/// the bridge's default (1 GB, all a small file may expand to) and [`MAX_DWG_DXF_BYTES`]. A fixed
+/// 1 GB refused the DWG of any drawing whose DXF form is over it, though CADaddy had written it.
+fn dwg_limits(dwg_len: usize) -> cadaddy_dwg::Limits {
+    let (max_dwg_bytes, (floor, ceil)) = dwg_byte_caps();
+    cadaddy_dwg::Limits { max_dwg_bytes, max_dxf_bytes: dwg_len.saturating_mul(DXF_BYTES_PER_DWG_BYTE).clamp(floor, ceil.max(floor)) }
+}
+
+/// Bytes of DXF text allowed per group code when sizing the limits on a DWG's DXF rendition:
+/// CADaddy's DWGs average under 20, so the group-code limit is the one that decides.
+const DXF_BYTES_PER_TAG: usize = 32;
+/// DXF bytes allowed per byte of DWG: the group codes allowed per DWG byte at
+/// [`DXF_BYTES_PER_TAG`] each (typical DWGs convert to about 6 bytes per byte; long layer names
+/// many more, as the DWG stores them once; a runaway expansion to thousands).
+const DXF_BYTES_PER_DWG_BYTE: usize = DWG_TAGS_PER_BYTE * DXF_BYTES_PER_TAG;
+/// Most bytes of the DXF a DWG converts to that are read: room for [`MAX_DWG_TAGS`] group codes.
+const MAX_DWG_DXF_BYTES: usize = MAX_DWG_TAGS * DXF_BYTES_PER_TAG;
+
+/// The DWG file limit, and the floor and ceiling of the limit on its DXF rendition. Tests lower
+/// them ([`tests::with_dwg_byte_caps`]) to try big files small.
+fn dwg_byte_caps() -> (usize, (usize, usize)) {
+    #[cfg(test)]
+    if let Some(c) = tests::DWG_BYTE_CAPS.get() {
+        return c;
+    }
+    (cadaddy_dwg::Limits::DEFAULT.max_dwg_bytes, (cadaddy_dwg::Limits::DEFAULT.max_dxf_bytes, MAX_DWG_DXF_BYTES))
 }
 
 /// A DWG read through the bridge (acadrust).
@@ -257,19 +352,16 @@ fn check_reopens(what: &str, tags: usize, limit: usize) -> Result<()> {
         return Ok(());
     }
     Err(IoError::Format(format!(
-        "this drawing is too large to save as {what}: the file would hold {tags} group codes and CADaddy opens at most {limit}, so it could not be reopened. \
-         Save it as .cdy (no limit), or pass force:true to SAVE, SAVEAS or EXPORT to write the {what} anyway"
+        "this drawing is too large to save as {what}: the file would hold {tags} group codes and CADaddy opens at most {limit}, so it could not be reopened. {}",
+        way_out(what)
     )))
 }
 
 /// [`read_dwg_bridge`] with the group-code limit for the converted DXF between `floor` and `ceil`.
 fn read_dwg_bridge_capped(bytes: &[u8], floor: usize, ceil: usize) -> Result<Drawing> {
     let limit = dwg_tag_limit(bytes.len(), floor, ceil);
-    let renamed = dwg_fixup::underlay_classes_renamed(bytes);
-    let bytes = renamed.as_deref().unwrap_or(bytes);
-    let (dxf, notes) = cadaddy_dwg::decode(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
-    // Custom records CADaddy kept through the DWG (`dwg_keep`), back where they were.
-    let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
+    // Custom records CADaddy kept through the DWG (`dwg_keep`) come back where they were.
+    let (dxf, notes) = dwg_rendition(bytes)?;
     let bad = |e: String| IoError::Format(format!("{e} (in the DXF converted from this DWG)"));
     // The text is let go once parsed: the drawing is built from the groups alone.
     let mut tags = cadaddy_dxf::parse_with_limit(&dxf, limit).map_err(|e| bad(e.to_string()))?;

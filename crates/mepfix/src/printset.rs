@@ -1008,9 +1008,7 @@ pub fn run_classify_prints(
                 e.levels = levels;
                 // A sheet printing the floor plan beside the roof plan is the floor's plan: its
                 // title naming the roof doesn't put it on the roof.
-                if e.level == "R"
-                    && std::iter::once(&e.title).chain(&facts.view_titles).any(|t| sheet_reader::title_names(t, floor_plan_words()))
-                {
+                if e.level == "R" && std::iter::once(&e.title).chain(&facts.view_titles).any(|t| sheet_reader::title_names(t, floor_plan_words())) {
                     e.level.clear();
                     e.levels.clear();
                 }

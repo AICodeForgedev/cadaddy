@@ -324,8 +324,8 @@ pub(crate) fn sheet_drawing(d: &Drawing, sh: &SheetRef) -> Drawing {
         .collect();
     store.push_many(mine);
     out.model = store;
-    out.building_spec = None;
-    out.agent = None;
+    out.building_spec = None.into();
+    out.agent = None.into();
     out
 }
 

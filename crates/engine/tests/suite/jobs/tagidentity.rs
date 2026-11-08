@@ -88,7 +88,7 @@ fn three_sheets() -> Session {
         "units_per_foot": 12.0,
         "sheets": [sheet("A-101", 0.0), sheet("E-101", 2000.0), sheet("M-101", 4000.0)],
     });
-    d.building_spec = Some(spec.to_string());
+    d.building_spec = Some(spec.to_string()).into();
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Set", None);
     s
@@ -212,7 +212,7 @@ fn hostile_identity_calls_never_panic() {
     assert_eq!(g["connected"], 0);
     // A spec that isn't one, and sheets with no rectangle, are no sheets.
     let mut d = Drawing::new_imperial();
-    d.building_spec = Some("{not json".into());
+    d.building_spec = Some("{not json".into()).into();
     s.open_drawing(d, "Broken", None);
     assert!(s.execute("bim.identity", &json!({})).is_ok());
 }

@@ -489,7 +489,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
         sp.rcp.ceilings.extend(ceilings.into_iter().map(|(c, _)| c));
         sp.rcp.soffits.extend(soffits);
         sp.rcp.items.extend(items);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(result)
 }

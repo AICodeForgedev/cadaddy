@@ -85,7 +85,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "apply", false) {
         let mut sp = sp;
         sp.tags = merged;
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({ "total": total, "byIssue": by_issue, "added": added, "removed": removed, "changed": changed }))
 }
@@ -131,7 +131,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     if !picked.is_empty() {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({ "changed": picked.len(), "resolved": resolved }))
 }
@@ -145,7 +145,7 @@ fn run_accept(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     if !picked.is_empty() {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({ "accepted": picked.len() }))
 }

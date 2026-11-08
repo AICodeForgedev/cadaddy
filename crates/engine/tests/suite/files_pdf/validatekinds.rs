@@ -105,7 +105,7 @@ fn generic_tags(s: &mut Session) -> BTreeMap<String, u64> {
         let f = t["fields"].as_object_mut().unwrap();
         f.retain(|k, _| matches!(k.as_str(), "type" | "sheet" | "symbol"));
     }
-    d.building_spec = Some(sp.to_string());
+    d.building_spec = Some(sp.to_string()).into();
     marks
 }
 

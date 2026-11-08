@@ -327,7 +327,7 @@ fn save(s: &mut Session, st: &Store) -> Result<()> {
     let doc = s.doc_mut()?;
     let mut r = root(doc);
     r.insert(KEY.into(), serde_json::to_value(st).unwrap_or(Value::Null));
-    doc.agent = serde_json::to_string(&Value::Object(r)).ok();
+    doc.agent = serde_json::to_string(&Value::Object(r)).ok().into();
     Ok(())
 }
 
@@ -2468,7 +2468,7 @@ fn run_plant(s: &mut Session, p: &Value) -> Result<Value> {
     let mut r = root(&copy);
     r.remove(KEY);
     r.insert(PLANT_KEY.into(), serde_json::to_value(Plant { seed, asked: count, errors }).unwrap_or(Value::Null));
-    copy.agent = serde_json::to_string(&Value::Object(r)).ok();
+    copy.agent = serde_json::to_string(&Value::Object(r)).ok().into();
     let copy_title = format!("{title} (planted {seed})");
     s.open_drawing(copy, &copy_title, None);
     Ok(json!({

@@ -439,7 +439,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(patch) = p.get("spec").filter(|v| !v.is_null()) else { return Err(bad("bspec.set", "`spec` is required")) };
     let sp = merged(s, "bspec.set", Some(patch), bool_or(p, "replace", false))?;
     let issues = validate(s.doc()?, &sp);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let mut r = report(&issues);
     r["spec"] = serde_json::to_value(&sp).unwrap_or(Value::Null);
     if let Some(o) = r.as_object_mut() {
@@ -863,6 +863,20 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                 // the plan's room tags.
                 if allowed {
                     o.number = Some(text.trim().to_string());
+                    // The spec's room of that number is this room (a typical room the spec knows
+                    // by its number alone: its unit-type label traced it and named no spec room),
+                    // so its ceiling and finishes are the room's.
+                    if o.room.is_none() {
+                        let level = o.level.clone();
+                        o.room = sp
+                            .rooms
+                            .iter()
+                            .position(|r| {
+                                r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))
+                                    && r.level.as_ref().is_none_or(|l| l.eq_ignore_ascii_case(&level))
+                            })
+                            .filter(|i| claimed.insert(*i));
+                    }
                 }
                 continue;
             }

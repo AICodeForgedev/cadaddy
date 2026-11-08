@@ -56,7 +56,8 @@ fn rooms_get_their_areas_ceilings_volumes_and_finishes() {
     assert!(storage["outline"].as_array().unwrap().len() >= 4);
     // The building spec's ceiling for a room wins.
     s.doc_mut().unwrap().building_spec =
-        Some(json!({"version": 1, "units_per_foot": 12, "rooms": [{"name": "Office", "ceiling_ft": 12, "materials": {"floor": "Oak"}}]}).to_string());
+        Some(json!({"version": 1, "units_per_foot": 12, "rooms": [{"name": "Office", "ceiling_ft": 12, "materials": {"floor": "Oak"}}]}).to_string())
+            .into();
     let office = s.execute("rooms.get", &json!({"number": "101"})).unwrap();
     assert!((office["ceilingFt"].as_f64().unwrap() - 12.0).abs() < 1e-9, "{office}");
     assert_eq!(office["materials"]["floor"], "Oak");
@@ -253,7 +254,7 @@ fn ceiling_source_default_and_note() {
 fn ceiling_source_spec() {
     let mut s = plan();
     s.doc_mut().unwrap().building_spec =
-        Some(json!({"version": 1, "units_per_foot": 12, "rooms": [{"name": "Office", "ceiling_ft": 12}]}).to_string());
+        Some(json!({"version": 1, "units_per_foot": 12, "rooms": [{"name": "Office", "ceiling_ft": 12}]}).to_string()).into();
     let office = s.execute("rooms.get", &json!({"number": "101"})).unwrap();
     assert_eq!(office["ceilingSource"], "spec", "spec ceiling: {office}");
 }

@@ -4,7 +4,10 @@
 //! value is copied on every step: the block table, the constraint list and the file's own handles
 //! cost 0.3 MB a step on a drawing with 1,100 blocks, 2,000 steps deep. Held through a
 //! [`Shared`], the old and new drawing point at one copy until an edit really changes it
-//! (reading derefs to the value; a `&mut` borrow copies it if it is still shared).
+//! (reading derefs to the value; a `&mut` borrow copies it if it is still shared). The project's
+//! JSON texts (building spec, agent state…) are held the same way: on a whole job they run to
+//! tens of megabytes, and every edit copied them (Q6278: ~47 MB a command). Replace one with
+//! `field = Some(text).into()`, which makes a new copy without copying the old.
 
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -21,6 +24,13 @@ impl<T> Shared<T> {
     /// from the other).
     pub fn same(&self, other: &Shared<T>) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+    /// The value, taken out (copied only if another drawing still shares it).
+    pub fn into_inner(self) -> T
+    where
+        T: Clone,
+    {
+        Arc::unwrap_or_clone(self.0)
     }
 }
 

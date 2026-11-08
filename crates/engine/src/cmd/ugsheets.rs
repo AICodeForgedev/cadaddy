@@ -1329,7 +1329,7 @@ fn ug_json(ug: &Ug) -> Value {
 }
 
 fn spec_of(cmd: &str, s: &Session) -> Result<BuildingSpec> {
-    let text = s.doc()?.building_spec.clone().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
+    let text = s.doc()?.building_spec.as_ref().cloned().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
     BuildingSpec::from_json(&text).map_err(|e| bad(cmd, e))
 }
 
@@ -1411,7 +1411,7 @@ fn run_review(s: &mut Session, _p: &Value) -> Result<Value> {
         added.push(id);
     }
     if !added.is_empty() {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(
         json!({ "errors": ug.findings.iter().filter(|f| f.severity == "error").count(), "rfis": added, "findings": ug.findings.iter().map(Finding::json).collect::<Vec<_>>() }),
@@ -2340,7 +2340,7 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
     if !links.is_empty() {
         sp.sheets.retain(|l| !(l.source.starts_with("generated:") && links.iter().any(|n| n.number.eq_ignore_ascii_case(&l.number))));
         sp.sheets.extend(links);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     let mut files = Vec::new();
     if let Some(path) = str_param(p, "pdf").map(str::trim).filter(|x| !x.is_empty()) {
