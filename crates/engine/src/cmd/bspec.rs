@@ -1101,8 +1101,20 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
 /// that is smaller than a room (`min_area`: the box a tag is drawn in), the smallest room-sized
 /// loop round that box (traced from just outside each of its sides). None when nothing closes.
 pub(crate) fn outline_round_label(plan: &Session, at: Vec2, cache: &mut Option<super::hatch::Outlines>, min_area: f64) -> Option<Vec<Vec2>> {
+    outline_round_label_within(plan, at, cache, min_area, None)
+}
+
+/// [`outline_round_label`] looking no farther than `reach` each way from each point it traces
+/// from ([`super::hatch::loops_at_lazy_within`]).
+pub(crate) fn outline_round_label_within(
+    plan: &Session,
+    at: Vec2,
+    cache: &mut Option<super::hatch::Outlines>,
+    min_area: f64,
+    reach: Option<f64>,
+) -> Option<Vec<Vec2>> {
     let trace = |p: Vec2, cache: &mut Option<super::hatch::Outlines>| {
-        let loops = super::hatch::loops_at_lazy(plan, p, cache).ok()?;
+        let loops = super::hatch::loops_at_lazy_within(plan, p, cache, reach).ok()?;
         let outer = loops.iter().find(|l| l.outer).or(loops.first())?;
         let poly = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         (poly.len() >= 3).then_some(poly)

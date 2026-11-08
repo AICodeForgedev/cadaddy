@@ -734,10 +734,14 @@ pub(crate) fn flat_swings(pts: &[Vec2]) -> Vec<(Vec2, f64, f64, [Vec2; 2])> {
     arc_runs(pts).into_iter().filter(|(_, _, deg, _)| (60.0..=SWING_MAX_DEG).contains(deg)).collect()
 }
 
-/// How far round a room's name its trace looks (feet, each way): wider than any room. A name in
-/// an area that doesn't close (a gap in its walls, an open plan) stops there instead of searching
-/// the whole drawing, every sheet of a set side by side.
-const ROOM_REACH_FT: f64 = 600.0;
+/// Names traced between two progress lines of the room trace.
+const TRACE_PROGRESS_EVERY: usize = 100;
+
+/// How far round a room's name its trace looks (feet, each way): a room up to twice as wide
+/// round its name. A name in an area that doesn't close (a gap in its walls, an open plan)
+/// stops there instead of searching ever larger windows: a whole sheet's border (a 36" sheet
+/// at 1/8" = 1'-0" is 288 ft wide) and every sheet of a set side by side.
+const ROOM_REACH_FT: f64 = 150.0;
 
 /// A turn sharper than this (degrees) between two pieces of a polyline is a corner: a flattened
 /// arc turns a few degrees a piece (a quarter circle drawn in 8 chords, 11¼°), a swing meets its
@@ -1349,7 +1353,18 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     let mut out_probed: Vec<bool> = Vec::new();
     let mut outline_cache = None;
     let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
-    for (h, name, at, height, _) in names {
+    // A storey of a full set has thousands of names: say how far the trace is.
+    let (total, trace_started) = (names.len(), std::time::Instant::now());
+    let mut searching = std::time::Duration::ZERO;
+    for (traced, (h, name, at, height, _)) in names.into_iter().enumerate() {
+        if traced > 0 && traced % TRACE_PROGRESS_EVERY == 0 {
+            crate::cmd::guided::progress_line(&format!(
+                "  room trace: {traced} of {total} names, {} rooms, {:.0} s ({:.0} s finding boundaries)",
+                out.len(),
+                trace_started.elapsed().as_secs_f64(),
+                searching.as_secs_f64()
+            ));
+        }
         // The room around the label: the first outline, traced from the label's point, its middle,
         // just above or below it or just outside its box, that holds the whole label (a piece of furniture drawn under
         // the label - a mirrored unit's desk - traces a loop the label overhangs); else, as
@@ -1379,7 +1394,10 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         // round it then either.
         let mut note = false;
         for (i, seed) in seeds.into_iter().enumerate() {
-            let Ok(loops) = crate::cmd::hatch::loops_at_lazy_within(plan, seed, &mut outline_cache, Some(ROOM_REACH_FT * 12.0 * k)) else { continue };
+            let search = std::time::Instant::now();
+            let found = crate::cmd::hatch::loops_at_lazy_within(plan, seed, &mut outline_cache, Some(ROOM_REACH_FT * 12.0 * k));
+            searching += search.elapsed();
+            let Ok(loops) = found else { continue };
             let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
             let poly = polygon(outer);
             if poly.len() < 3 {
@@ -1427,7 +1445,10 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
             Some((poly, area)) if area >= least => (poly, area, false),
             _ if note => continue,
             _ => {
-                let Some(p) = crate::cmd::bspec::outline_round_label(plan, at, &mut outline_cache, least) else { continue };
+                let search = std::time::Instant::now();
+                let found = crate::cmd::bspec::outline_round_label_within(plan, at, &mut outline_cache, least, Some(ROOM_REACH_FT * 12.0 * k));
+                searching += search.elapsed();
+                let Some(p) = found else { continue };
                 if p.len() < 3 {
                     continue;
                 }
