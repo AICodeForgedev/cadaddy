@@ -4227,11 +4227,30 @@ fn is_artifact_fill(f: &Fill, sheet: (f64, f64), texts: &[TextOut], strokes: &[S
 // Mask reduction: merge overlapping/adjacent wipeouts, drop those that mask nothing visible
 // ---------------------------------------------------------------------------------------------
 
+/// Most grid cells one mask is entered in when masks are grouped. A mask covering more of the
+/// page (a white fill far bigger than a tag) is compared with every other mask instead, so no
+/// mask adds more grid entries than this however big the file says it is.
+const MAX_MASK_CELLS: i64 = 64;
+
+/// Most mask pairs compared when grouping masks (a dense plan page compares about 5 million).
+/// Past it the masks not yet grouped stay as drawn: an unmerged mask hides exactly what the page
+/// hides, only as more wipeouts.
+const MAX_MASK_PAIRS: usize = 50_000_000;
+
 /// Reduce the mask count by merging spatially overlapping masks into combined bounding-box
-/// masks, and by dropping masks that do not overlap any visible non-white content.
-fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[TextOut], sheet: (f64, f64)) -> Vec<Fill> {
+/// masks, and by dropping masks that do not overlap any visible non-white content. Compares at
+/// most `max_pairs` mask pairs (normally [`MAX_MASK_PAIRS`]) and says whether it stopped there.
+fn reduce_masks(
+    masks: Vec<Fill>,
+    strokes: &[Stroke],
+    fills: &[Fill],
+    texts: &[TextOut],
+    sheet: (f64, f64),
+    page_box: [f64; 4],
+    max_pairs: usize,
+) -> (Vec<Fill>, bool) {
     if masks.is_empty() {
-        return masks;
+        return (masks, false);
     }
     let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
 
@@ -4247,18 +4266,31 @@ fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[T
         }
     }
     if infos.is_empty() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
 
     // grid-based spatial grouping: merge masks whose bounding boxes overlap or are close
     let cell_size = sw.min(sh) * 0.05; // 5% of sheet for grouping
     let cell_size = cell_size.max(20.0);
-    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let cell = |v: f64| (v / cell_size).floor() as i64;
+    // Every mask reaches into the page (the caller drops the rest), so a mask's cells are clamped
+    // to the page's: two masks that shared a cell still share one, and a fill millions of points
+    // across covers the page's few hundred cells, not millions.
+    let (px, py) = ((cell(page_box[0]), cell(page_box[2])), (cell(page_box[1]), cell(page_box[3])));
+    let clamp = |v: i64, (lo, hi): (i64, i64)| v.max(lo).min(hi);
+    let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    // masks covering more than MAX_MASK_CELLS cells of the page, compared with every mask
+    let mut oversized: Vec<usize> = Vec::new();
+    let mut spans: Vec<[i64; 4]> = Vec::with_capacity(infos.len());
     for (i, info) in infos.iter().enumerate() {
-        let gx0 = (info.bb[0] / cell_size).floor() as i64;
-        let gx1 = (info.bb[2] / cell_size).floor() as i64;
-        let gy0 = (info.bb[1] / cell_size).floor() as i64;
-        let gy1 = (info.bb[3] / cell_size).floor() as i64;
+        let (gx0, gx1) = (clamp(cell(info.bb[0]), px), clamp(cell(info.bb[2]), px));
+        let (gy0, gy1) = (clamp(cell(info.bb[1]), py), clamp(cell(info.bb[3]), py));
+        spans.push([gx0, gy0, gx1, gy1]);
+        let cells = gx1.saturating_sub(gx0).saturating_add(1).saturating_mul(gy1.saturating_sub(gy0).saturating_add(1));
+        if cells > MAX_MASK_CELLS {
+            oversized.push(i);
+            continue;
+        }
         for gx in gx0..=gx1 {
             for gy in gy0..=gy1 {
                 grid.entry((gx, gy)).or_default().push(i);
@@ -4276,18 +4308,36 @@ fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[T
         x
     };
     let pad = cell_size * 0.5; // generous tolerance for adjacency (masks behind nearby tags)
-    for members in grid.values() {
-        for (mi, &a) in members.iter().enumerate() {
-            for &b in &members[mi + 1..] {
-                let (ba, bb_) = (&infos[a].bb, &infos[b].bb);
-                // overlapping or adjacent (with padding)
-                if ba[0] <= bb_[2] + pad && ba[2] >= bb_[0] - pad && ba[1] <= bb_[3] + pad && ba[3] >= bb_[1] - pad {
-                    let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-                    if ra != rb {
-                        parent[rb] = ra;
-                    }
-                }
-            }
+    // overlapping or adjacent (with padding)
+    let near = |a: usize, b: usize| match (infos.get(a), infos.get(b)) {
+        (Some(ia), Some(ib)) => {
+            let (ba, bb_) = (&ia.bb, &ib.bb);
+            ba[0] <= bb_[2] + pad && ba[2] >= bb_[0] - pad && ba[1] <= bb_[3] + pad && ba[3] >= bb_[1] - pad
+        }
+        _ => false,
+    };
+    // in a common grid cell, as the masks the grid pairs are
+    let share_cell = |a: usize, b: usize| match (spans.get(a), spans.get(b)) {
+        (Some(sa), Some(sb)) => sa[0] <= sb[2] && sb[0] <= sa[2] && sa[1] <= sb[3] && sb[1] <= sa[3],
+        _ => false,
+    };
+    let mut pairs_left = max_pairs;
+    let mut capped = false;
+    let pairs = grid
+        .values()
+        .flat_map(|members| {
+            members.iter().enumerate().flat_map(move |(mi, &a)| members.get(mi + 1..).unwrap_or_default().iter().map(move |&b| (a, b)))
+        })
+        .chain(oversized.iter().flat_map(|&a| (0..infos.len()).map(move |b| (a, b))));
+    for (a, b) in pairs {
+        if pairs_left == 0 {
+            capped = true;
+            break;
+        }
+        pairs_left -= 1;
+        let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+        if ra != rb && share_cell(a, b) && near(a, b) {
+            parent[rb] = ra;
         }
     }
 
@@ -4351,7 +4401,7 @@ fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[T
             even_odd: false,
         });
     }
-    result
+    (result, capped)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -4912,10 +4962,17 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Skip when recover_text is off — keep raw masks for pre-merge compatibility.
     if opts.recover_text {
         let masks_before = masks.len();
-        masks = reduce_masks(masks, &strokes, &fills, &texts, sheet);
+        let (reduced, capped) = reduce_masks(masks, &strokes, &fills, &texts, sheet, page_box, MAX_MASK_PAIRS);
+        masks = reduced;
         let masks_merged = masks_before.saturating_sub(masks.len());
         if masks_merged > 0 {
             stats.insert("masks merged/dropped".into(), masks_merged);
+        }
+        if capped {
+            notes.push(format!(
+                "PDF: page {} has too many overlapping white fills to merge them all; the rest stay as drawn (more wipeouts, same look)",
+                opts.page.max(1)
+            ));
         }
     }
 
@@ -6808,6 +6865,83 @@ mod tests {
         let masks = r.drawing.model.iter().filter(|e| matches!(&e.kind, EntityKind::Wipeout(w) if w.boundary.len() == 4)).count();
         assert_eq!((images, masks), (1, 1));
         assert!(blank_paper(&[254, 254, 254, 255]) && !blank_paper(&[254, 254, 254, 0]) && !blank_paper(&[]));
+    }
+
+    /// A white mask over the box `[x0, y0, x1, y1]`, painted `order`th.
+    fn white_box(b: [f64; 4], order: usize) -> Fill {
+        let loops = vec![vec![(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])]];
+        Fill { loops, pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 }, layer: None, order, even_odd: false }
+    }
+
+    fn mask_boxes(masks: &[Fill]) -> Vec<[f64; 4]> {
+        let mut b: Vec<[f64; 4]> = masks.iter().filter_map(|m| bbox(&m.loops)).collect();
+        b.sort_by(|p, q| p.iter().zip(q).map(|(x, y)| x.total_cmp(y)).find(|o| o.is_ne()).unwrap_or(std::cmp::Ordering::Equal));
+        b
+    }
+
+    #[test]
+    fn a_white_fill_far_bigger_than_the_page_reads_in_bounded_memory() {
+        // One white fill ten million points across (each side 300,000 grid cells) once took a grid
+        // entry for every cell it covered: gigabytes, then an allocation abort no guard can catch.
+        let content = b"1 1 1 rg -5000000 -5000000 10000000 10000000 re f \
+            0 0 0 RG 1 w 100 100 m 101 104 l S 200 100 m 201 104 l S 300 300 m 340 300 l S \
+            1 1 1 rg -3000000 200 6000000 20 re f 400 -2000000 10 4000000 re f";
+        let started = std::time::Instant::now();
+        let r = match read(&pdf_with(content), &PdfOptions::default()) {
+            Ok(r) => r,
+            Err(e) => panic!("{e}"),
+        };
+        assert!(started.elapsed().as_secs() < 20, "took {:?}", started.elapsed());
+        // the strokes stay, and the whole-page fill (with the two masks it overlaps) is one mask
+        assert!(r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))).count() >= 3);
+        let wipeouts = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Wipeout(_))).count();
+        assert_eq!(wipeouts, 1, "{:?}", r.stats);
+    }
+
+    #[test]
+    fn oversized_masks_group_with_the_masks_they_share_a_cell_with() {
+        // 11x8.5 page: grid cells 30.6 points, adjacency pad half a cell
+        let (sheet, page) = ((11.0, 8.5), [0.0, 0.0, 792.0, 612.0]);
+        // a huge fill takes in a small mask inside it
+        let masks = vec![white_box([-5.0e6, -5.0e6, 5.0e6, 5.0e6], 1), white_box([100.0, 100.0, 110.0, 110.0], 2)];
+        let (out, capped) = reduce_masks(masks, &[], &[], &[], sheet, page, MAX_MASK_PAIRS);
+        assert_eq!((mask_boxes(&out), capped), (vec![[-5.0e6, -5.0e6, 5.0e6, 5.0e6]], false));
+        // a fill over 140 cells of the page (compared with every mask, not gridded) keeps the grid's
+        // rule: a mask 5 points off but in the next cell column stays apart, as one far away does,
+        // and one overlapping it joins it
+        let big = [0.0, 0.0, 425.0, 300.0];
+        let masks = vec![
+            white_box(big, 1),
+            white_box([430.0, 100.0, 440.0, 110.0], 2),
+            white_box([700.0, 500.0, 710.0, 510.0], 3),
+            white_box([420.0, 290.0, 424.0, 310.0], 4),
+        ];
+        let (out, capped) = reduce_masks(masks, &[], &[], &[], sheet, page, MAX_MASK_PAIRS);
+        assert!(!capped);
+        assert_eq!(mask_boxes(&out), vec![[0.0, 0.0, 425.0, 310.0], [430.0, 100.0, 440.0, 110.0], [700.0, 500.0, 710.0, 510.0]]);
+        // a mask whose box misses the page entirely still lands in a bounded set of cells
+        let masks = vec![white_box([1.0e9, 1.0e9, 2.0e9, 2.0e9], 1), white_box([1.5e9, 1.5e9, 1.6e9, 1.6e9], 2)];
+        let (out, _) = reduce_masks(masks, &[], &[], &[], sheet, page, MAX_MASK_PAIRS);
+        assert_eq!(mask_boxes(&out), vec![[1.0e9, 1.0e9, 2.0e9, 2.0e9]]);
+    }
+
+    #[test]
+    fn mask_grouping_stops_at_its_pair_cap_and_keeps_the_rest_as_drawn() {
+        let (sheet, page) = ((11.0, 8.5), [0.0, 0.0, 792.0, 612.0]);
+        // 30 overlapping masks in one grid cell, beside a line so the group is worth keeping
+        let masks = || (0..30).map(|i| white_box([100.0 + i as f64 * 0.5, 100.0, 104.0 + i as f64 * 0.5, 104.0], i)).collect::<Vec<_>>();
+        let pen = Pen { rgb: [0, 0, 0], lw: 25, transp: 0 };
+        let line =
+            [Stroke { pts: vec![(100.0, 98.0), (120.0, 98.0)], closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 99 }];
+        let (all, capped) = reduce_masks(masks(), &line, &[], &[], sheet, page, MAX_MASK_PAIRS);
+        assert_eq!((mask_boxes(&all), capped), (vec![[100.0, 100.0, 118.5, 104.0]], false));
+        let (some, capped) = reduce_masks(masks(), &line, &[], &[], sheet, page, 10);
+        assert!(capped);
+        assert!(some.len() > 1 && some.len() < 30, "{}", some.len());
+        // nothing the page hides is lost: every mask lies inside one that is kept
+        for m in mask_boxes(&masks()) {
+            assert!(mask_boxes(&some).iter().any(|k| k[0] <= m[0] && k[1] <= m[1] && k[2] >= m[2] && k[3] >= m[3]), "{m:?}");
+        }
     }
 
     #[test]
