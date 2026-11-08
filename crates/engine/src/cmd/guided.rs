@@ -2996,9 +2996,74 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                             resolve_mark(&mut dv, own.or(other), plumbing, sheet_texts, *tag_at);
                         }
                         let k = if dv.kind.is_empty() { super::readers::device_kind(&t).to_string() } else { dv.kind.clone() };
+                        // A low-voltage outlet carries no branch circuit: a circuit label read by
+                        // it is a power device's drawn with it (the import may make one symbol of
+                        // a TV outlet, the receptacle beside it and the furniture round them). The
+                        // label's receptacle is its own element on that circuit, beside its label,
+                        // unless another symbol is that label's; the outlet keeps no circuit and
+                        // stands by its own mark.
+                        let mut fused = None;
+                        if super::keynotes::lv_kind(&k) && !dv.circuit.trim().is_empty() {
+                            let circuit = std::mem::take(&mut dv.circuit);
+                            let label = sheet_texts
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, l)| {
+                                    l.value.trim() == circuit.trim()
+                                        && l.height.is_finite()
+                                        && l.height > 0.0
+                                        && l.at.dist(*at) <= FUSED_LABEL_REACH_H * l.height
+                                })
+                                .min_by(|a, b| a.1.at.dist(*at).total_cmp(&b.1.at.dist(*at)));
+                            let claimed = |l: &TextItem| {
+                                syms.iter().any(|(ot, _, oh, ota)| {
+                                    oh != h && ot.trim() == circuit.trim() && ota.is_some_and(|(p, lh)| p.dist(l.at) <= 0.5 * lh.max(l.height))
+                                })
+                            };
+                            if let Some((i, l)) = label.filter(|(_, l)| !claimed(l)) {
+                                let spot = beside_label(l, *at);
+                                // Its source is its label (the symbol is the outlet's).
+                                let text_handle = text_handles.get(g).and_then(|v| v.get(i)).copied().unwrap_or(0);
+                                if text_handle != 0 {
+                                    c.fates.push((
+                                        text_handle,
+                                        MarkFate::object(
+                                            "receptacle",
+                                            "a circuit label by a low-voltage outlet's symbol: the receptacle drawn with it",
+                                        ),
+                                    ));
+                                }
+                                let near: Vec<&str> = sheet_texts
+                                    .iter()
+                                    .filter(|o| o.at.dist(l.at) <= RECEPTACLE_NOTE_H * l.height)
+                                    .map(|o| o.value.as_str())
+                                    .collect();
+                                let marks = receptacle_designations(&near);
+                                let mark = if marks.is_empty() { "REC".to_string() } else { marks.join("/") };
+                                if let Some((p, th)) = tag_at.filter(|(_, th)| th.is_finite() && *th > 0.0) {
+                                    let own = TextItem { value: t.clone(), at: p, height: th, rotation: 0.0 };
+                                    let mine = beside_label(&own, *at);
+                                    dv.at = [mine.x, mine.y];
+                                }
+                                fused = Some(super::readers::ReadDevice {
+                                    tag: mark,
+                                    at: [spot.x, spot.y],
+                                    sheet: sheet.clone(),
+                                    level: job.level_at([spot.x, spot.y]).map_or_else(String::new, |r| r.level.clone()),
+                                    circuit,
+                                    handle: if text_handle == 0 { String::new() } else { cadaddy_doc::Handle(text_handle).hex() },
+                                    kind: "receptacle".into(),
+                                    ..super::readers::ReadDevice::default()
+                                });
+                            }
+                        }
                         c.fates.push((h.0, MarkFate::object(&k, &format!("its mark {t} is a device type")).with_source(&dv.kind_source)));
                         c.placed.push(dv);
                         *c.by_type.entry(t).or_default() += 1;
+                        if let Some(r) = fused {
+                            *c.by_type.entry(r.tag.clone()).or_default() += 1;
+                            c.placed.push(r);
+                        }
                     }
                     TagVerdict::NotDevice(why) => {
                         *c.not_device.entry(why).or_default() += 1;
@@ -4142,6 +4207,27 @@ const LONE_SYMBOL_H: f64 = 2.0;
 const TAKEN_LABEL_EPS: f64 = 0.05;
 /// Most luminaires one sheet's lone marks add.
 const MAX_LONE_MARKS: usize = 2_000;
+/// A circuit label read by a low-voltage outlet is printed within this many of its heights of the
+/// outlet's symbol.
+const FUSED_LABEL_REACH_H: f64 = 10.0;
+/// A label's letters are about this share of its height wide.
+const LABEL_CHAR_W_H: f64 = 0.8;
+
+/// Where the device a label names is drawn, from the label and a point of the symbol the import
+/// made of it with its neighbours (one symbol of a TV outlet, the receptacle beside it and the
+/// furniture round them): a label is printed beside its device, so the device is a label height
+/// past the label's end that faces the symbol's point, or a label height and a half over or under
+/// it when the point is.
+fn beside_label(label: &cadaddy_mepfix::sheet_facts::TextItem, toward: cadaddy_geom::Vec2) -> cadaddy_geom::Vec2 {
+    let h = label.height;
+    let r = if label.rotation.is_finite() { label.rotation } else { 0.0 };
+    let (u, v) = (cadaddy_geom::Vec2::new(r.cos(), r.sin()), cadaddy_geom::Vec2::new(-r.sin(), r.cos()));
+    let w = label.value.trim().chars().count().min(64) as f64 * LABEL_CHAR_W_H * h;
+    let mid = label.at + u * (0.5 * w) + v * (0.5 * h);
+    let rel = toward - mid;
+    let (along, across) = (rel.dot(u), rel.dot(v));
+    if along.abs() > 0.5 * w { mid + u * (along.signum() * (0.5 * w + h)) } else { mid + v * (if across < 0.0 { -1.5 * h } else { 1.5 * h }) }
+}
 
 /// A receptacle's designations among the texts printed by it, in a fixed order: `GFCI` (or
 /// `GFI`), `WP` weatherproof, `WR` weather-resistant, `TR` tamper-resistant, `USB`.
@@ -26360,6 +26446,89 @@ mod tests {
         assert_eq!((r["circuit_tagged_retyped"].clone(), r["luminaires_by_mark_alone"].clone()), (json!(1), json!(1)), "{r:#}");
         assert!(on("P-1").iter().all(|(t, _)| t != "C"), "a plumbing tag isn't retyped: {:?}", on("P-1"));
         assert!(on("L-1").is_empty(), "another trade's sheet: {:?}", on("L-1"));
+    }
+
+    /// A low-voltage outlet and the receptacle beside it are two elements (Q6258): the import made
+    /// one symbol of a TV outlet, its receptacle and the furniture round them, tagged with the
+    /// outlet's mark; the receptacle's circuit label beside it is the receptacle's, built on that
+    /// circuit by its label, and the outlet carries no circuit. A data outlet whose label's
+    /// receptacle is a symbol of its own adds nothing; a power device keeps its circuit.
+    #[test]
+    fn a_tv_outlet_and_the_receptacle_fused_with_it_are_two_elements() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-4", "sheet_type": "plan"}]}));
+        job.sheets_loaded = true;
+        // Lettering 4 high. The fused symbol's point at (500, 500): `R-7` printed left of it (the
+        // receptacle a label height past its end), its `TV` mark printed under it to the right.
+        // The data outlet at (800, 500) with `R-3` over it, and that label's receptacle a symbol
+        // of its own (tagged `R-3`, printed there) at (812, 512). A junction box at (1100, 500)
+        // with `R-5` beside it.
+        let texts: Vec<(&str, f64, f64, f64)> = vec![("R-7", 486.0, 498.0, 4.0), ("R-5", 1104.0, 498.0, 4.0)];
+        // Each symbol: its tag, its point, where its tag is printed.
+        let syms: Vec<(&str, f64, f64, f64, f64)> = vec![
+            ("TV", 500.0, 500.0, 502.0, 488.0),
+            ("DA", 800.0, 500.0, 796.0, 506.0),
+            ("R-3", 812.0, 512.0, 796.0, 512.0),
+            ("J", 1100.0, 500.0, 1100.0, 500.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &[]);
+        if let Ok(d) = s.doc_mut() {
+            for (tag, x, y, tx, ty) in syms {
+                let attrib = Attrib {
+                    tag: "TAG".into(),
+                    text: text(tag, tx, ty, 4.0),
+                    invisible: false,
+                    constant: false,
+                    prompt: String::new(),
+                    props: AttribProps::default(),
+                    multiline: None,
+                    modes: AttribModes::default(),
+                };
+                let ins = Insert {
+                    block: "PDF-SYM-1".into(),
+                    insert: Vec3::new(x, y, 0.0),
+                    scale: Vec3::new(1.0, 1.0, 1.0),
+                    rotation: 0.0,
+                    attribs: vec![attrib],
+                    cols: 1,
+                    rows: 1,
+                    col_spacing: 0.0,
+                    row_spacing: 0.0,
+                    clip: None,
+                };
+                d.add(&Space::Model, Common { layer: "PDF".into(), ..Common::default() }, EntityKind::Insert(ins)).ok();
+            }
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-4".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-4".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut got: Vec<(String, String)> = job.devices.iter().map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        got.sort();
+        let want: Vec<(String, String)> =
+            [("DA", ""), ("J", "R-5"), ("REC", "R-3"), ("REC", "R-7"), ("TV", "")].iter().map(|(t, c)| (t.to_string(), c.to_string())).collect();
+        assert_eq!(got, want, "{r:#}");
+        let at = |tag: &str, circuit: &str| job.devices.iter().find(|d| d.tag == tag && d.circuit == circuit).map(|d| d.at);
+        let (Some(rec), Some(tv)) = (at("REC", "R-7"), at("TV", "")) else { panic!("{:?}", job.devices) };
+        // The receptacle stands past its label's end; the outlet by its own mark, under it.
+        assert!(rec[0] > 495.6 && (rec[1] - 500.0).abs() < 2.0, "receptacle at {rec:?}");
+        assert!(tv[1] < 497.0 && (tv[0] - rec[0]).hypot(tv[1] - rec[1]) > 4.0, "outlet at {tv:?}, receptacle at {rec:?}");
+        // Each is its own source: the outlet its symbol, the receptacle its label.
+        let handle = |tag: &str| job.devices.iter().find(|d| d.tag == tag && d.at[0] < 600.0).map(|d| d.handle.clone()).unwrap_or_default();
+        assert!(!handle("REC").is_empty() && handle("REC") != handle("TV"), "{:?}", job.devices);
     }
 
     /// A luminaire read from its mark alone carries its whole circuit label (Q6256): the switch
