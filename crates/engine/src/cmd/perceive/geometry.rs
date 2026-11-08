@@ -365,8 +365,12 @@ pub(crate) fn unit_run_lines(segs: &[Seg], k: f64) -> Vec<(Vec2, Vec2)> {
     if join_unit_runs(&mut joined, k) == 0 {
         return Vec::new();
     }
-    // A run is longer than any piece of one.
-    joined.iter().filter(|g| g.a.dist(g.b) > DASH_MAX_IN * k && !segs.iter().any(|o| o.a == g.a && o.b == g.b)).map(|g| (g.a, g.b)).collect()
+    // A run is longer than any piece of one. (The pieces as they were, looked up by their ends:
+    // a plan of a whole storey has hundreds of thousands, each run checked against them all
+    // would take hours.)
+    let bits = |p: Vec2| ((p.x + 0.0).to_bits(), (p.y + 0.0).to_bits());
+    let drawn: std::collections::HashSet<_> = segs.iter().map(|o| (bits(o.a), bits(o.b))).collect();
+    joined.iter().filter(|g| g.a.dist(g.b) > DASH_MAX_IN * k && !drawn.contains(&(bits(g.a), bits(g.b)))).map(|g| (g.a, g.b)).collect()
 }
 
 /// Drops the pairs a thin outline's side makes with another wall's face. A side of a closed
@@ -1676,6 +1680,26 @@ mod tests {
         let mut segs: Vec<Seg> = [0.0, 16.0, 32.0, 84.0, 100.0, 116.0].iter().map(|x| seg((*x, 0.0), (*x + 15.6, 0.0), f64::INFINITY)).collect();
         assert_eq!(join_unit_runs(&mut segs, 1.0), 4);
         assert_eq!(segs.len(), 2, "the opening stays open");
+    }
+
+    #[test]
+    fn a_storey_of_pieces_lists_only_its_runs_lines() {
+        // A run of units, long lines drawn whole (one starting at -0.0, one at 0.0), and a
+        // storey's worth of other pieces (each line is looked up among the pieces as drawn, not
+        // checked against every one of them).
+        let mut segs: Vec<Seg> = (0..6).map(|i| f64::from(i) * 16.0).map(|x| seg((x, 0.0), (x + 15.6, 0.0), f64::INFINITY)).collect();
+        segs.push(seg((-0.0, 500.0), (400.0, 500.0), f64::INFINITY));
+        for i in 0..200_000 {
+            let (x, y) = (f64::from(i % 500) * 7.0 + 1000.0, f64::from(i / 500) * 7.0 + 1000.0);
+            segs.push(seg((x, y), (x + 40.0, y + 3.0 + f64::from(i % 7)), f64::INFINITY));
+        }
+        let mut probe = segs.clone();
+        probe.push(seg((0.0, 500.0), (400.0, 500.0), f64::INFINITY));
+        let lines = unit_run_lines(&probe, 1.0);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let (a, b) = lines[0];
+        assert!(a.x.abs() < 1e-9 && (b.x - 95.6).abs() < 1e-9, "{a:?} {b:?}");
+        assert!(unit_run_lines(&segs[6..], 1.0).is_empty());
     }
 
     #[test]
