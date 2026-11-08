@@ -2114,6 +2114,25 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
             );
             continue;
         }
+        // The utility's own gear (its pad-mounted transformer, Q6307): furnished and set by the
+        // utility, by others; its pad and service conduits and conductors stay ours.
+        let furnished = prop("FURNISHED BY");
+        let utility = super::utilityxfmr::rules().furnished_by.trim().to_ascii_lowercase();
+        if !utility.is_empty() && furnished.trim().to_ascii_lowercase().starts_with(&utility) {
+            if others.len() < MAX_LINES {
+                others.push(json!({
+                    "trade": "electrical", "element": st(&e, "tag"), "kind": st(&e, "kind"), "level": st(&e, "level"),
+                    "owner": utility, "furnish": utility, "install": utility,
+                    "scope": format!("by others ({utility})"),
+                    "reason": furnished,
+                    "source": st(&e, "title"),
+                    "ours": ["pad", "service conduits and conductors"],
+                    "decided": "documents",
+                    "cost_to_us": 0.0,
+                }));
+            }
+            continue;
+        }
         let electrical = matches!(
             st(&e, "kind").to_ascii_lowercase().as_str(),
             "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
