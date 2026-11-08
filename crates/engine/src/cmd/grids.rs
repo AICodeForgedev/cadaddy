@@ -1019,6 +1019,15 @@ impl Occupancy {
     }
 }
 
+/// The share of the points `pts` that lie on linework `on` (within a foot or two: 1' cells, grown
+/// by one), `k` drawing units per inch.
+pub(crate) fn overlay_share(pts: &[Vec2], on: &[Vec2], k: f64) -> f64 {
+    if !(k.is_finite() && k > 0.0) || on.is_empty() {
+        return 0.0;
+    }
+    Occupancy::new(on, 12.0 * k, 1).score(pts, 1.0, Vec2::new(0.0, 0.0))
+}
+
 /// The scale and offset that lay linework `src` (a view's background) over `tgt` (a floor plan),
 /// with its score (F1 of the view's lines on the plan and the plan's lines under the view that the
 /// view has) and its margin over the best fit 10' or more away; `None` without one.

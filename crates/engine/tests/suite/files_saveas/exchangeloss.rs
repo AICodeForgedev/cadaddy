@@ -178,3 +178,46 @@ fn other_programs_data_goes_through_dwg_and_its_loss_is_listed() {
     assert_eq!(loss(&r, "reactors").map(|l| &l["handles"]), Some(&json!(["100"])), "{r}");
     assert_eq!(loss(&r, "acme_gadget objects").map(|l| &l["what"]), Some(&json!("dropped")), "{r}");
 }
+
+/// A made-up drawing whose named object dictionary holds another program's dictionaries: an empty
+/// one, and one of named records (like a style list) pointing at its records, which react to it.
+const STYLES: &str = "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1021\n9\n$HANDSEED\n5\n400\n0\nENDSEC\n\
+0\nSECTION\n2\nENTITIES\n0\nLINE\n5\n100\n100\nAcDbEntity\n8\n0\n100\nAcDbLine\n10\n0\n20\n0\n30\n0\n11\n10\n21\n5\n31\n0\n0\nENDSEC\n\
+0\nSECTION\n2\nOBJECTS\n0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n3\nACME_EMPTY\n350\n210\n3\nACME_STYLES\n350\n211\n0\n\
+DICTIONARY\n5\n210\n330\nC\n100\nAcDbDictionary\n280\n0\n281\n1\n0\n\
+DICTIONARY\n5\n211\n330\nC\n100\nAcDbDictionary\n280\n0\n281\n1\n3\nAlpha\n350\n220\n3\nBeta\n350\n221\n0\n\
+XRECORD\n5\n220\n102\n{ACAD_REACTORS\n330\n211\n102\n}\n330\n211\n100\nAcDbXrecord\n280\n1\n90\n0\n0\n\
+XRECORD\n5\n221\n102\n{ACAD_REACTORS\n330\n211\n102\n}\n330\n211\n100\nAcDbXrecord\n280\n1\n90\n0\n91\n-2104163840\n340\n100\n0\n\
+ENDSEC\n0\nEOF\n";
+
+/// Another program's objects come back from a DWG or DXF under new handles, their references
+/// pointing at the renumbered copies: nothing of them is lost, on the first save or any later one
+/// (a file CADaddy wrote, saved again, reported the same dictionary changed every time: Q6273).
+#[test]
+fn other_programs_objects_written_back_are_kept_on_every_save() {
+    hooks();
+    let mut d = cadaddy_io::read(STYLES.as_bytes(), "styles.dxf").unwrap();
+    let kinds = |d: &cadaddy_doc::Drawing| d.foreign.objects.iter().map(|o| o.kind.to_ascii_uppercase()).collect::<Vec<_>>();
+    assert_eq!(kinds(&d), ["DICTIONARY", "DICTIONARY", "XRECORD", "XRECORD"]);
+    for round in 0..3 {
+        let mut s = Session::new();
+        s.open_drawing(d.clone(), "styles", None);
+        for f in ["dwg", "dxf"] {
+            let r = s.execute("checkexchange", &json!({"format": f})).unwrap();
+            let listed: Vec<&str> = r["losses"].as_array().unwrap().iter().filter_map(|l| l["feature"].as_str()).collect();
+            assert!(
+                !listed.iter().any(|f| f.contains("other programs") || f.contains("dictionar") || f.contains("reactors")),
+                "round {round}, {f}: {r}"
+            );
+        }
+        d = cadaddy_io::read(&cadaddy_io::write(&d, "styles.dxf").unwrap(), "styles.dxf").unwrap();
+        assert_eq!(kinds(&d), ["DICTIONARY", "DICTIONARY", "XRECORD", "XRECORD"], "round {round}");
+    }
+    // A record whose reference no longer points at the line (it was erased): its copy's reference
+    // is nulled, which is no loss of the file's.
+    let mut s = Session::new();
+    s.open_drawing(d, "styles", None);
+    s.execute("erase", &json!({"handles": ["100"]})).unwrap();
+    let r = s.execute("checkexchange", &json!({"format": "dxf"})).unwrap();
+    assert!(loss(&r, "xrecord objects of other programs").is_none(), "{r}");
+}

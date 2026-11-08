@@ -242,7 +242,11 @@ impl Server {
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
                 let args = params.get("arguments").unwrap_or(&Value::Null);
-                let r = call_tool(self.backend.as_mut(), name, args).map_err(|m| (INVALID_PARAMS, m));
+                let mut r = call_tool(self.backend.as_mut(), name, args).map_err(|m| (INVALID_PARAMS, m));
+                // Every reply says what it reached: the window, or a session of the server's own.
+                if let Ok(Value::Object(o)) = &mut r {
+                    o.insert("_meta".into(), json!({ "cadaddy/backend": self.backend.describe() }));
+                }
                 if name == "watch_events" && r.is_ok() {
                     self.watching = args.get("on").and_then(Value::as_bool).unwrap_or(true);
                     self.event_seq = r.as_ref().ok().and_then(|v| v.get("seq")).and_then(Value::as_u64).unwrap_or(0);
