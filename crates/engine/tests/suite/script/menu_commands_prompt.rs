@@ -38,6 +38,8 @@ const DIALOG_OR_STATE: &[&str] = &[
     "style",
     "dimstyle",
     "dimstyle.dimension",
+    // The app's Job panel asks for the prints folder, the goal and the mode (Q6266).
+    "job.start",
 ];
 
 #[test]
