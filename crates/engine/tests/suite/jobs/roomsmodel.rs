@@ -376,7 +376,7 @@ fn storefront_floor(s: &mut Session) {
         }
     }
     s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
-    for (x, name, number) in [(80.0, "DINING", "100"), (320.0, "BEVERAGE", "102")] {
+    for (x, name, number) in [(80.0, "LOUNGE", "110"), (320.0, "SHOP", "120")] {
         s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
         rect(s, x - 10.0, 150.0, x + 60.0, 240.0);
         s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
@@ -400,7 +400,7 @@ fn a_room_bounded_by_storefront_glazing_closes_like_a_walled_room() {
     assert!(!r["notes"].to_string().contains("not inside built walls"), "{r}");
     let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
     let rooms = list["rooms"].as_array().unwrap();
-    for number in ["100", "102"] {
+    for number in ["110", "120"] {
         let room = rooms.iter().find(|x| x["number"] == json!(number)).unwrap_or_else(|| panic!("room {number}: {list}"));
         let area = room["areaSqFt"].as_f64().unwrap();
         // Each room about 19'-9" × 28'-11": the room, not its tag box.
