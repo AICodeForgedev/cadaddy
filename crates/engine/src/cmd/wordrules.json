@@ -2747,6 +2747,16 @@
     "LUMINAIRES"
    ]
   },
+  "schedules.plumbing_fixture_titles": {
+   "source": "drafting convention: the titles of a plumbing fixture schedule; read on any trade's sheet, not only the plumbing sheets (fix-plumbing-fixtures-zero)",
+   "words": [
+    "PLUMBING FIXTURE SCHEDULE",
+    "PLUMBING FIXTURES SCHEDULE",
+    "PLUMBING FIXTURE AND EQUIPMENT SCHEDULE",
+    "PLUMBING FIXTURE & EQUIPMENT SCHEDULE",
+    "PLUMBING SCHEDULE"
+   ]
+  },
   "schedules.mark_headings": {
    "source": "format vocabulary of construction schedules: the headings of a schedule's column of marks; the marks under one are that schedule's items (fix-symbol-misread)",
    "words": [
