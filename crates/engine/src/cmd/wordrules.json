@@ -2552,6 +2552,23 @@
     "CONTROL"
    ]
   },
+  "schedules.title_reference_words": {
+   "source": "grammar of drawing notes: words that make a line naming a schedule a note sending the reader to it (`... ON LIGHT FIXTURE SCHEDULE.`, `SEE ... FIXTURE SCHEDULE`), not the schedule's title (fix-lum-fixture-schedule-not-read)",
+   "words": [
+    "ON",
+    "SEE",
+    "REFER",
+    "PER",
+    "IN",
+    "TO",
+    "FOR",
+    "BY",
+    "THE",
+    "AS",
+    "WITH",
+    "OF"
+   ]
+  },
   "schedules.luminaire_type_headings": {
    "source": "format vocabulary of luminaire schedules: the headings of the column of type marks, tried in this order; a column headed FIXTURE alone holds the marks too (fix-lum-fixture-schedule-not-read)",
    "words": [

@@ -15,16 +15,19 @@ use super::gridtable::GridTable;
 pub(crate) fn is_luminaire_title(text: &str, electrical: bool) -> bool {
     use cadaddy_mepfix::wordrules;
     let u = text.trim().to_ascii_uppercase();
-    if u.len() > 80 || wordrules::words("schedules.not_luminaire_title_words").iter().any(|w| u.contains(w)) {
+    // A sentence's end is a note's, never a title's (`... ON LIGHT FIXTURE SCHEDULE.`).
+    if u.len() > 80 || u.ends_with('.') || wordrules::words("schedules.not_luminaire_title_words").iter().any(|w| u.contains(w)) {
         return false;
     }
+    let reference = wordrules::words("schedules.title_reference_words");
     let titled = |titles: &[&str]| {
         titles.iter().any(|w| {
             // A title, not a note that names one (`SEE SHEET X FOR FIXTURE SCHEDULE`): a few
-            // words beside it at most (`LIGHT FIXTURE SCHEDULE - LEVEL 1`).
+            // words beside it at most (`LIGHT FIXTURE SCHEDULE - LEVEL 1`), none a note's.
             u.find(w).is_some_and(|at| {
                 let rest = format!("{} {}", u.get(..at).unwrap_or(""), u.get(at + w.len()..).unwrap_or(""));
-                rest.split(|c: char| !c.is_ascii_alphanumeric()).filter(|x| !x.is_empty()).count() <= MAX_TITLE_EXTRA_WORDS
+                let extra: Vec<&str> = rest.split(|c: char| !c.is_ascii_alphanumeric()).filter(|x| !x.is_empty()).collect();
+                extra.len() <= MAX_TITLE_EXTRA_WORDS && !extra.iter().any(|x| reference.contains(x))
             })
         })
     };
@@ -68,6 +71,11 @@ pub(crate) fn fixture_types(t: &GridTable) -> (Vec<FixtureType>, bool) {
     let install = t.column(&["INSTALL"]).or_else(|| t.column(&["MOUNTING"]));
     let desc = t.column(&["DESCRIPTION"]).filter(|c| Some(*c) != tag);
     let notes = t.column(&["NOTES"]).or_else(|| t.column(&["REMARKS"]));
+    // A luminaire schedule describes its types: a table with no describing column (a grid of
+    // linework round a note, an elevation's dimensions) is none.
+    if [maker, model, lamp, volts, install, desc].iter().all(Option::is_none) {
+        return (Vec::new(), false);
+    }
     let qty = t.column(&["QTY"]).or_else(|| t.column(&["QUANTITY"]));
     let mut out = Vec::new();
     let mut no_subs = false;
@@ -333,6 +341,9 @@ mod tests {
             ..GridTable::default()
         };
         assert_eq!(fixture_types(&t).0.iter().map(|f| f.tag.as_str()).collect::<Vec<_>>(), ["F1", "F2"]);
+        // A grid with mark-shaped cells but no describing column is no luminaire schedule.
+        let t = GridTable { headers: row(&["", "", ""]), rows: vec![row(&["EQ", "EQ", "8' - 0\""]), row(&["EQ", "", ""])], ..GridTable::default() };
+        assert!(fixture_types(&t).0.is_empty());
     }
 
     /// A luminaire schedule's title on any sheet; a plain FIXTURE SCHEDULE on an electrical sheet
@@ -348,6 +359,9 @@ mod tests {
         assert!(!is_luminaire_title("LIGHTING CONTROL SCHEDULE", true));
         assert!(!is_luminaire_title("SWITCH. SEE ARCH SHEET X-2 FOR FIXTURE SCHEDULE.", true));
         assert!(!is_luminaire_title("REFER TO THE LIGHT FIXTURE SCHEDULE ON SHEET X-2 FOR TYPES", false));
+        assert!(!is_luminaire_title("ON LIGHT FIXTURE SCHEDULE.", false));
+        assert!(!is_luminaire_title("SEE LIGHT FIXTURE SCHEDULE", false));
+        assert!(!is_luminaire_title("PER LUMINAIRE SCHEDULE", false));
     }
 
     #[test]
