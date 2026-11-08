@@ -25883,11 +25883,16 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
         w.push(json!({"warning": "auto-guard rejections", "count": rejected.len(), "detail": format!("{} rejected: {}", rejected.len(), rejected.join("; "))}));
     }
 
-    // Elements from the saved model.
-    if let Some(ms) = stats
-        && (ms.elements_by_kind.is_empty() || ms.elements_by_kind.values().sum::<usize>() == 0)
-    {
-        w.push(json!({"warning": "0 elements in model", "detail": "The building model has 0 elements"}));
+    // Elements from the saved model: zero only from a count that saw all of it (Q6270).
+    if let Some(ms) = stats {
+        if !ms.complete {
+            w.push(json!({
+                "warning": "element count incomplete",
+                "detail": format!("counted the first {} drawing objects; incomplete: {} elements found so far", ms.scanned, ms.total()),
+            }));
+        } else if ms.total() == 0 {
+            w.push(json!({"warning": "0 elements in model", "detail": "The building model has 0 elements"}));
+        }
     }
     w
 }
@@ -26018,9 +26023,8 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         None => index_count(job, "levels").map_or(Value::Null, |n| json!(n)),
     };
     let elements: Value = match stats {
-        Some(ms) if !ms.elements_by_kind.is_empty() => {
-            let total: usize = ms.elements_by_kind.values().sum();
-            json!({"total": total, "by_kind": ms.elements_by_kind})
+        Some(ms) if !ms.elements_by_kind.is_empty() || !ms.complete => {
+            json!({"total": ms.total(), "by_kind": ms.elements_by_kind, "count": ms.coverage()})
         }
         _ => Value::Null,
     };
@@ -26096,10 +26100,35 @@ fn index_count(job: &GuidedJob, key: &str) -> Option<usize> {
     job.index.as_ref().and_then(|i| i.get(key)).and_then(Value::as_array).map(Vec::len)
 }
 
+/// Most drawing objects one element count looks at (Q6270). The model is already in memory, so
+/// this only guards the time; it is far above any print set (a full building's prints import
+/// over a million objects, and the built elements come after them).
+const MAX_STATS_SCAN: usize = super::validate::MAX_ENTITIES;
+
 /// Model statistics from the saved drawing (Q5278 MUST 1).
 struct ModelStats {
     levels: usize,
     elements_by_kind: BTreeMap<String, usize>,
+    /// Drawing objects the count looked at.
+    scanned: usize,
+    /// Whether the count looked at every object of the model; when not, the counts are a floor
+    /// and a zero means nothing (Q6270).
+    complete: bool,
+}
+
+impl ModelStats {
+    fn total(&self) -> usize {
+        self.elements_by_kind.values().sum()
+    }
+
+    /// How the count was taken, for the report: complete, or how far it got.
+    fn coverage(&self) -> Value {
+        if self.complete {
+            json!({"complete": true, "scanned": self.scanned})
+        } else {
+            json!({"complete": false, "scanned": self.scanned, "note": format!("counted the first {} drawing objects; incomplete", self.scanned)})
+        }
+    }
 }
 
 /// Extract model statistics from the session's saved model.
@@ -26109,13 +26138,22 @@ fn model_stats_from_session(s: &Session) -> Option<ModelStats> {
         return None;
     }
     let d = s.doc().ok()?;
+    Some(model_stats(d, sp.levels.len(), MAX_STATS_SCAN))
+}
+
+/// The built elements of `d` by kind, looking at up to `cap` drawing objects. Imported print
+/// linework comes before the built model, so the cap is on the whole scan and a count it cuts
+/// short says so (Q6270: a 500,000-object cap saw only print linework and reported 0 elements).
+fn model_stats(d: &cadaddy_doc::Drawing, levels: usize, cap: usize) -> ModelStats {
     let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
-    for e in d.model.iter().take(500_000) {
+    let mut scanned = 0usize;
+    for e in d.model.iter().take(cap) {
+        scanned += 1;
         if let Some(part) = super::wallgen::made_as(e) {
             *by_kind.entry(part).or_default() += 1;
         }
     }
-    Some(ModelStats { levels: sp.levels.len(), elements_by_kind: by_kind })
+    ModelStats { levels, elements_by_kind: by_kind, scanned, complete: scanned >= d.model.len() }
 }
 
 fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
@@ -26147,6 +26185,8 @@ fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Valu
         "sheets": index_count(job, "sheets"),
         "levels": levels,
         "elements": elements,
+        // Whether the element count saw the whole model (Q6270).
+        "elements_count": stats.map_or(Value::Null, ModelStats::coverage),
         "answers": answers_value(job),
         // From the saved model, not the stage's own count.
         "devices": s.doc().map_or(Value::Null, super::readers::model_device_counts),
@@ -26467,6 +26507,78 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod model_stats_tests {
+    use super::*;
+
+    /// `n` lines of print linework, then one built element per kind in `parts`.
+    fn drawing(n: usize, parts: &[&str]) -> cadaddy_doc::Drawing {
+        let mut d = cadaddy_doc::Drawing::new_imperial();
+        let line = |d: &mut cadaddy_doc::Drawing, i: usize| {
+            let a = cadaddy_geom::Vec3 { x: (i % 1000) as f64, y: (i / 1000) as f64, z: 0.0 };
+            cadaddy_doc::Entity::new(
+                d.new_handle(),
+                cadaddy_doc::EntityKind::Line(cadaddy_doc::Line { a, b: cadaddy_geom::Vec3 { x: a.x + 0.5, ..a } }),
+            )
+        };
+        let linework: Vec<_> = (0..n).map(|i| line(&mut d, i)).collect();
+        d.model.push_many(linework);
+        for (i, part) in parts.iter().enumerate() {
+            let mut e = line(&mut d, i);
+            e.common.xdata = vec![
+                cadaddy_doc::RawTag { code: 1001, value: crate::cmd::wallgen::APP.into() },
+                cadaddy_doc::RawTag { code: 1000, value: (*part).into() },
+                cadaddy_doc::RawTag { code: 1000, value: "L1".into() },
+            ]
+            .into();
+            d.model.push(e);
+        }
+        d.building_spec = Some(cadaddy_walk3d::BuildingSpec::default().to_json()).into();
+        d
+    }
+
+    fn warnings(r: &Value) -> Vec<String> {
+        r["warnings"].as_array().into_iter().flatten().filter_map(|w| w["warning"].as_str().map(str::to_string)).collect()
+    }
+
+    /// Q6270: a model whose built elements come after more than 500,000 objects of print
+    /// linework is counted in full; job.report and job.status give its elements, never "0".
+    #[test]
+    fn elements_after_a_large_print_import_are_counted() {
+        let mut s = Session::new();
+        s.open_drawing(drawing(600_000, &["wall", "wall", "door"]), "Sample Building", None);
+        save_job(&mut s, &GuidedJob::new("/nonexistent/prints", JobGoal::Bim)).unwrap();
+        let r = s.execute("job.report", &json!({})).unwrap();
+        assert!(!warnings(&r).iter().any(|w| w == "0 elements in model"), "{:?}", warnings(&r));
+        assert!(!warnings(&r).iter().any(|w| w == "element count incomplete"), "{:?}", warnings(&r));
+        let st = s.execute("job.status", &json!({})).unwrap();
+        assert_eq!(st["elements"]["total"], 3, "{}", st["elements"]);
+        assert_eq!(st["elements"]["by_kind"], json!({"door": 1, "wall": 2}));
+        assert_eq!(st["elements"]["count"], json!({"complete": true, "scanned": 600_003}));
+    }
+
+    /// A count the cap cuts short says so and raises no "0 elements" warning; a complete count
+    /// of a model with nothing built still does.
+    #[test]
+    fn a_capped_count_says_incomplete_and_a_real_zero_still_warns() {
+        let job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        let cut = model_stats(&drawing(10, &["wall"]), 1, 4);
+        assert!(!cut.complete && cut.scanned == 4 && cut.total() == 0);
+        let w: Vec<Value> = job_warnings(&job, Some(&cut));
+        assert!(!w.iter().any(|w| w["warning"] == "0 elements in model"), "{w:?}");
+        let note = w.iter().find(|w| w["warning"] == "element count incomplete").map(|w| w["detail"].to_string()).unwrap_or_default();
+        assert!(note.contains("counted the first 4 drawing objects; incomplete"), "{w:?}");
+        assert_eq!(cut.coverage()["complete"], false);
+
+        let empty = model_stats(&drawing(10, &[]), 1, MAX_STATS_SCAN);
+        assert!(empty.complete && empty.scanned == 10);
+        assert!(job_warnings(&job, Some(&empty)).iter().any(|w| w["warning"] == "0 elements in model"));
+        let built = model_stats(&drawing(10, &["wall"]), 1, MAX_STATS_SCAN);
+        assert_eq!((built.complete, built.total()), (true, 1));
+        assert!(job_warnings(&job, Some(&built)).iter().all(|w| w["warning"] != "0 elements in model" && w["warning"] != "element count incomplete"));
+    }
+}
 
 #[cfg(test)]
 mod ckpt_tests {
