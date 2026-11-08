@@ -192,6 +192,107 @@
     "DFCI"
    ]
   },
+  "buildings.compass_names": {
+   "source": "drafting convention: a building named by its side of the site, written out or abbreviated (`E. BLDG`, `EAST & WEST BLDGS`), and the one name both spellings read as (Q6292)",
+   "pairs": [
+    [
+     "N",
+     "NORTH"
+    ],
+    [
+     "S",
+     "SOUTH"
+    ],
+    [
+     "E",
+     "EAST"
+    ],
+    [
+     "W",
+     "WEST"
+    ],
+    [
+     "NE",
+     "NORTHEAST"
+    ],
+    [
+     "NW",
+     "NORTHWEST"
+    ],
+    [
+     "SE",
+     "SOUTHEAST"
+    ],
+    [
+     "SW",
+     "SOUTHWEST"
+    ],
+    [
+     "NORTH",
+     "NORTH"
+    ],
+    [
+     "SOUTH",
+     "SOUTH"
+    ],
+    [
+     "EAST",
+     "EAST"
+    ],
+    [
+     "WEST",
+     "WEST"
+    ],
+    [
+     "NORTHEAST",
+     "NORTHEAST"
+    ],
+    [
+     "NORTHWEST",
+     "NORTHWEST"
+    ],
+    [
+     "SOUTHEAST",
+     "SOUTHEAST"
+    ],
+    [
+     "SOUTHWEST",
+     "SOUTHWEST"
+    ]
+   ]
+  },
+  "buildings.joiners": {
+   "source": "drafting convention: the words and marks that join several buildings' names in one title (`EAST & WEST BLDGS`, `BUILDINGS A, B AND C`) (Q6292)",
+   "words": [
+    "&",
+    "AND",
+    ",",
+    "+",
+    "/"
+   ]
+  },
+  "buildings.number_words": {
+   "source": "drafting convention: the words between a building word and its name that only say a number follows (`BUILDING NO. 2`, `BLDG #3`) (Q6292)",
+   "words": [
+    "NO",
+    "NUMBER",
+    "#"
+   ]
+  },
+  "buildings.plural_words": {
+   "source": "drafting convention: the words a title names several buildings with (`EAST & WEST BLDGS`) (Q6292)",
+   "words": [
+    "BUILDINGS",
+    "BLDGS"
+   ]
+  },
+  "buildings.words": {
+   "source": "drafting convention: the words a title names one building with (`E. BLDG`, `BUILDING A`) (Q6292)",
+   "words": [
+    "BUILDING",
+    "BLDG"
+   ]
+  },
   "conduit.below_slab_words": {
    "source": "trade practice: a wiring method applies below the slab when its application has one of these (moved from ugplan.rs)",
    "words": [
@@ -1883,6 +1984,26 @@
     "RAMP"
    ]
   },
+  "levels.finish_floor_mark_words": {
+   "source": "drafting convention: a level marker on a section or elevation that names the finished floor without a level number (`FIN. FLR. EL. 100'-0\"`); in a building of one storey it is that storey's floor. Compared word for word, punctuation and EL/ELEV ignored (Q6286)",
+   "words": [
+    "FINISH FLOOR",
+    "FINISHED FLOOR",
+    "FIN FLOOR",
+    "FIN FLR",
+    "FINISH FLR",
+    "FIN FL",
+    "FF",
+    "F F",
+    "FFE",
+    "F F E",
+    "TOP OF FINISH FLOOR",
+    "T O FINISH FLOOR",
+    "T O F F",
+    "TOP OF SLAB",
+    "T O SLAB"
+   ]
+  },
   "levels.first_floor_words": {
    "source": "trade practice: a level named with one of these is the first floor (moved from sheet_reader.rs `is_first_floor_word`)",
    "words": [
@@ -1890,6 +2011,28 @@
     "GRADE",
     "MAIN",
     "STREET"
+   ]
+  },
+  "levels.plate_mark_words": {
+   "source": "drafting convention: a level marker on a section or elevation at the top of the wall plate or the masonry bearing wall, where the roof framing bears (`T.O. PLATE 112'-0\"`, `TOP OF CMU 10'-0\"`); when no roof level is marked it gives the roof's elevation. Compared word for word, punctuation and EL/ELEV ignored (Q6286)",
+   "words": [
+    "TOP OF PLATE",
+    "T O PLATE",
+    "TO PLATE",
+    "TOP PLATE",
+    "TOP OF TOP PLATE",
+    "T O TOP PLATE",
+    "PLATE",
+    "PLATE HEIGHT",
+    "PLATE HT",
+    "TOP OF WALL PLATE",
+    "T O P",
+    "BEARING",
+    "ROOF BEARING HEIGHT",
+    "TOP OF CMU",
+    "T O CMU",
+    "TOP OF MASONRY",
+    "T O MASONRY"
    ]
   },
   "notes.appliance_words": {

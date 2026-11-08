@@ -14,15 +14,29 @@
 //! command-line message (`Session::echo`).
 //!
 //! Records logged before the settings directory is known are kept (up to [`MAX_PENDING`]) and
-//! written once the file is attached. Writing never panics: a file that can't be created or
-//! written leaves standard error as the only sink. A record takes the sink lock only for one
-//! `write_all` of an already formatted line (standard error is written outside the lock).
+//! written once the file is attached. Writing never panics. A record takes the sink lock only for
+//! one `write_all` of an already formatted line (standard error is written outside the lock).
+//!
+//! No single message can take the log over ([`Repeats`]): a message that keeps coming (the same
+//! target, level and text once numbers are set aside) is written the first
+//! [`REPEAT_FIRST_OWN`] times from CADaddy's crates, [`REPEAT_FIRST_OTHER`] times from other
+//! crates, then counted: a `[repeated]` line at 100, 1,000, 10,000 … copies, and a final count when
+//! the message goes quiet for [`REPEAT_QUIET`] or the log is flushed (at exit). A message that
+//! comes back after going quiet (the next file) starts its count again. `CADADDY_LOG_REPEATS=all`
+//! writes every copy.
+//!
+//! When the file reaches [`MAX_FILE_BYTES`] it is moved to [`EARLIER_FILE`] and a fresh
+//! `cadaddy.log` continues, so the newest records are always kept and the disk use stays bounded
+//! (the earlier half of a run that overflowed is dropped at the next start). When the settings
+//! directory can't hold a log, [`fallback_dir`] (in the temporary folder) is tried: a desktop
+//! build launched from a menu has no console, so standard error alone would lose everything.
 
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use log::LevelFilter;
 
@@ -32,8 +46,22 @@ pub const LOG_FILE: &str = "cadaddy.log";
 pub const LOG_DIR: &str = "logs";
 /// How many previous logs are kept (`cadaddy.1.log` … `cadaddy.<KEEP>.log`).
 pub const KEEP: usize = 2;
-/// The log file stops growing past this size (a runaway warning can't fill the disk).
+/// Past this size the log file is set aside as [`EARLIER_FILE`] and a fresh one continues (a
+/// runaway warning can't fill the disk, and the newest records are kept).
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+/// The earlier part of a run whose log reached [`MAX_FILE_BYTES`].
+pub const EARLIER_FILE: &str = "cadaddy.earlier.log";
+/// Copies of one message from CADaddy's own crates written before the rest are only counted.
+pub const REPEAT_FIRST_OWN: u64 = 50;
+/// Copies of one message from any other crate (libraries repeat a warning per object) written
+/// before the rest are only counted.
+pub const REPEAT_FIRST_OTHER: u64 = 5;
+/// A repeating message silent this long gets its final count, and starts over when it returns.
+pub const REPEAT_QUIET: Duration = Duration::from_secs(30);
+/// Distinct messages followed at once; past this every count is written out and the list restarts.
+pub const MAX_REPEAT_KEYS: usize = 4096;
+/// Characters of a message used to tell messages apart (and quoted in a `[repeated]` line).
+const REPEAT_KEY_CHARS: usize = 200;
 /// Records kept in memory until the log file is attached.
 pub const MAX_PENDING: usize = 512;
 /// The built-in filter when `RUST_LOG` is unset or empty.
@@ -123,9 +151,15 @@ fn numbered(dir: &Path, n: usize) -> PathBuf {
 }
 
 /// Shift the previous logs up one (`.log` → `.1.log` → … → `.<KEEP>.log`, the oldest dropped)
-/// and create a fresh, empty log file in `dir` (created if missing).
+/// and create a fresh, empty log file in `dir` (created if missing). The earlier part of the
+/// previous run ([`EARLIER_FILE`], left when its log overflowed) is removed: its newest part is
+/// the one kept.
 pub fn rotate(dir: &Path) -> std::io::Result<(PathBuf, File)> {
     std::fs::create_dir_all(dir)?;
+    match std::fs::remove_file(dir.join(EARLIER_FILE)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
     for n in (1..=KEEP).rev() {
         match std::fs::rename(numbered(dir, n - 1), numbered(dir, n)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
@@ -144,25 +178,27 @@ pub fn format_line(ts: &str, level: log::Level, thread: &str, target: &str, mess
 }
 
 /// Where formatted lines go besides standard error: kept in memory until a file is attached,
-/// then appended to it until it reaches its size cap.
+/// then appended to it. At its size cap the file is set aside ([`EARLIER_FILE`], when the
+/// directory is known; otherwise emptied) and writing continues in a fresh one.
 pub struct Sink {
     file: Option<File>,
+    dir: Option<PathBuf>,
     pending: Vec<String>,
     dropped: usize,
     written: u64,
     max_bytes: u64,
-    capped: bool,
+    closed: bool,
 }
 
 impl Sink {
     pub fn new(max_bytes: u64) -> Sink {
-        Sink { file: None, pending: Vec::new(), dropped: 0, written: 0, max_bytes, capped: false }
+        Sink { file: None, dir: None, pending: Vec::new(), dropped: 0, written: 0, max_bytes, closed: false }
     }
 
     /// Append `line` to the file, or keep it until [`Sink::attach`].
     pub fn write(&mut self, line: &str) {
         if self.file.is_none() {
-            if self.capped {
+            if self.closed {
                 return;
             }
             if self.pending.len() < MAX_PENDING {
@@ -178,6 +214,8 @@ impl Sink {
     /// Start writing to `file`, first the lines kept so far.
     pub fn attach(&mut self, file: File) {
         self.file = Some(file);
+        self.written = 0;
+        self.closed = false;
         for line in std::mem::take(&mut self.pending) {
             self.append(&line);
         }
@@ -188,65 +226,312 @@ impl Sink {
         }
     }
 
+    /// Start writing to `file`, which is `dir`'s `cadaddy.log`: at the size cap it is moved to
+    /// [`EARLIER_FILE`] there.
+    pub fn attach_in(&mut self, dir: &Path, file: File) {
+        self.dir = Some(dir.to_path_buf());
+        self.attach(file);
+    }
+
     /// No file will come: drop the kept lines and keep none from now on.
     pub fn close(&mut self) {
         self.file = None;
         self.pending = Vec::new();
-        self.capped = true;
+        self.closed = true;
     }
 
     fn append(&mut self, line: &str) {
-        if self.capped {
-            return;
+        let len = u64::try_from(line.len()).unwrap_or(u64::MAX);
+        if self.written.saturating_add(len) > self.max_bytes && self.written > 0 {
+            self.start_over();
         }
         let Some(file) = self.file.as_mut() else { return };
-        let len = u64::try_from(line.len()).unwrap_or(u64::MAX);
-        let text = if self.written.saturating_add(len) > self.max_bytes {
-            self.capped = true;
-            format!("log file reached {} bytes; later records go to standard error only\n", self.max_bytes)
-        } else {
+        if file.write_all(line.as_bytes()).is_ok() {
             self.written = self.written.saturating_add(len);
-            line.to_owned()
+            return;
+        }
+        // A full disk or a vanished file must not take the app down: try a fresh file once, else
+        // drop the file sink (and stop buffering, since no file will come).
+        if self.reopen() && self.file.as_mut().is_some_and(|f| f.write_all(line.as_bytes()).is_ok()) {
+            self.written = self.written.saturating_add(len);
+        } else {
+            self.close();
+        }
+    }
+
+    /// The file is full: set it aside (or empty it when there is nowhere to move it) and go on in
+    /// a fresh one that says where the earlier records went.
+    fn start_over(&mut self) {
+        let note = match &self.dir {
+            Some(dir) => {
+                let current = dir.join(LOG_FILE);
+                // Unix moves an open file; Windows needs it closed first.
+                self.file = None;
+                match std::fs::rename(&current, dir.join(EARLIER_FILE)).and_then(|()| File::create(&current)) {
+                    Ok(file) => {
+                        self.file = Some(file);
+                        format!("log file reached {} bytes; the earlier records of this run are in {EARLIER_FILE}\n", self.max_bytes)
+                    }
+                    Err(e) => match File::create(&current) {
+                        // Couldn't set it aside: start it over, so the newest records still land.
+                        Ok(file) => {
+                            self.file = Some(file);
+                            format!(
+                                "log file reached {} bytes and couldn't be set aside ({e}); the earlier records of this run are gone\n",
+                                self.max_bytes
+                            )
+                        }
+                        Err(_) => {
+                            self.close();
+                            return;
+                        }
+                    },
+                }
+            }
+            None => {
+                let Some(file) = self.file.as_mut() else { return };
+                if file.set_len(0).and_then(|()| file.rewind()).is_err() {
+                    self.close();
+                    return;
+                }
+                format!("log file reached {} bytes; the earlier records of this run were dropped\n", self.max_bytes)
+            }
         };
-        // A full disk or a vanished file must not take the app down: drop the file sink (and
-        // stop buffering, since no file will come).
-        if file.write_all(text.as_bytes()).is_err() {
-            self.file = None;
-            self.capped = true;
+        self.written = 0;
+        if let Some(file) = self.file.as_mut()
+            && file.write_all(note.as_bytes()).is_ok()
+        {
+            self.written = u64::try_from(note.len()).unwrap_or(u64::MAX);
+        }
+    }
+
+    /// After a failed write: a fresh `cadaddy.log` in the same directory.
+    fn reopen(&mut self) -> bool {
+        self.file = None;
+        let Some(dir) = &self.dir else { return false };
+        match File::create(dir.join(LOG_FILE)) {
+            Ok(file) => {
+                self.file = Some(file);
+                self.written = 0;
+                true
+            }
+            Err(_) => false,
         }
     }
 }
 
-/// The installed logger: a [`Filter`], standard error and a [`Sink`].
+/// A message that came before: how often, and how many copies were not written yet.
+struct Seen {
+    level: log::Level,
+    target: String,
+    sample: String,
+    count: u64,
+    unwritten: u64,
+    last: Instant,
+}
+
+impl Seen {
+    fn note(&self) -> Note {
+        let text = format!("[repeated] {} more copies not written ({} in all): {}", self.unwritten, self.count, self.sample);
+        Note { level: self.level, target: self.target.clone(), text }
+    }
+}
+
+/// A line the logger writes about repeated messages.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    pub level: log::Level,
+    pub target: String,
+    pub text: String,
+}
+
+/// Collapses a message that keeps coming: the first copies are written, the rest counted (see
+/// the module docs).
+pub struct Repeats {
+    seen: HashMap<(log::Level, String, String), Seen>,
+    first_own: u64,
+    first_other: u64,
+    quiet: Duration,
+    last_sweep: Option<Instant>,
+    enabled: bool,
+}
+
+impl Repeats {
+    pub fn new(first_own: u64, first_other: u64, quiet: Duration) -> Repeats {
+        Repeats { seen: HashMap::new(), first_own, first_other, quiet, last_sweep: None, enabled: true }
+    }
+
+    /// Every copy is written (`CADADDY_LOG_REPEATS=all`).
+    pub fn off() -> Repeats {
+        Repeats { enabled: false, ..Repeats::new(REPEAT_FIRST_OWN, REPEAT_FIRST_OTHER, REPEAT_QUIET) }
+    }
+
+    /// Whether this copy of the message is written; `notes` gets the `[repeated]` lines due now.
+    pub fn admit(&mut self, level: log::Level, target: &str, message: &str, now: Instant, notes: &mut Vec<Note>) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        if self.last_sweep.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(1)) {
+            self.last_sweep = Some(now);
+            self.sweep(now, notes);
+        }
+        let key = (level, target.to_owned(), shape(message));
+        if !self.seen.contains_key(&key) && self.seen.len() >= MAX_REPEAT_KEYS {
+            self.drain(notes);
+            self.seen.clear();
+        }
+        let first = if is_own(target) { self.first_own } else { self.first_other };
+        let seen = self.seen.entry(key).or_insert_with(|| Seen {
+            level,
+            target: target.to_owned(),
+            sample: message.chars().take(REPEAT_KEY_CHARS).collect(),
+            count: 0,
+            unwritten: 0,
+            last: now,
+        });
+        seen.count = seen.count.saturating_add(1);
+        seen.last = now;
+        if seen.count <= first {
+            return true;
+        }
+        seen.unwritten = seen.unwritten.saturating_add(1);
+        if seen.count == first.saturating_add(1) {
+            let text = format!("[repeated] this message keeps coming; further copies are counted, not written: {}", seen.sample);
+            notes.push(Note { level, target: target.to_owned(), text });
+        } else if is_milestone(seen.count) {
+            notes.push(seen.note());
+            seen.unwritten = 0;
+        }
+        false
+    }
+
+    /// The final count of every message not heard from for the quiet time; they start over.
+    fn sweep(&mut self, now: Instant, notes: &mut Vec<Note>) {
+        let quiet = self.quiet;
+        self.seen.retain(|_, seen| {
+            if now.saturating_duration_since(seen.last) < quiet {
+                return true;
+            }
+            if seen.unwritten > 0 {
+                notes.push(seen.note());
+            }
+            false
+        });
+    }
+
+    /// The count of every message with copies not written yet (at flush and exit).
+    pub fn drain(&mut self, notes: &mut Vec<Note>) {
+        for seen in self.seen.values_mut().filter(|s| s.unwritten > 0) {
+            notes.push(seen.note());
+            seen.unwritten = 0;
+        }
+    }
+}
+
+/// CADaddy's own crates (the `cadaddy*` targets of [`DEFAULT_FILTER`]).
+fn is_own(target: &str) -> bool {
+    target.starts_with("cadaddy")
+}
+
+/// 100, 1,000, 10,000 …
+fn is_milestone(n: u64) -> bool {
+    n >= 100 && n.checked_ilog10().is_some_and(|e| 10u64.checked_pow(e) == Some(n))
+}
+
+/// A message's shape: runs of digits stand for one number (offsets and counts differ between
+/// copies of the same message), at most [`REPEAT_KEY_CHARS`] characters.
+fn shape(message: &str) -> String {
+    let mut out = String::new();
+    let mut digits = false;
+    for c in message.chars().take(REPEAT_KEY_CHARS) {
+        if c.is_ascii_digit() {
+            if !digits {
+                out.push('#');
+            }
+            digits = true;
+        } else {
+            digits = false;
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Where the log goes when the settings directory can't hold it: a folder in the temporary folder.
+pub fn fallback_dir() -> PathBuf {
+    std::env::temp_dir().join("CADaddy").join(LOG_DIR)
+}
+
+/// The installed logger: a [`Filter`], [`Repeats`], standard error and a [`Sink`].
 pub struct AppLogger {
     filter: Filter,
     stderr: bool,
+    repeats: Mutex<Repeats>,
     sink: Mutex<Sink>,
+    dir: Mutex<Option<PathBuf>>,
 }
 
 impl AppLogger {
     pub fn new(filter: Filter, stderr: bool) -> AppLogger {
-        AppLogger { filter, stderr, sink: Mutex::new(Sink::new(MAX_FILE_BYTES)) }
+        AppLogger::with(filter, stderr, Repeats::new(REPEAT_FIRST_OWN, REPEAT_FIRST_OTHER, REPEAT_QUIET), MAX_FILE_BYTES)
+    }
+
+    /// A logger with its own repeat rule and size cap.
+    pub fn with(filter: Filter, stderr: bool, repeats: Repeats, max_bytes: u64) -> AppLogger {
+        AppLogger { filter, stderr, repeats: Mutex::new(repeats), sink: Mutex::new(Sink::new(max_bytes)), dir: Mutex::new(None) }
     }
 
     /// Rotate the logs in `dir` and send records to the fresh file; returns its path.
-    /// An unusable directory leaves standard error as the only sink ([`AppLogger::stderr_only`]).
+    /// An unusable directory is an error and changes nothing (see [`AppLogger::attach_first`]).
     pub fn attach_dir(&self, dir: &Path) -> Result<PathBuf, String> {
         match rotate(dir) {
             Ok((path, file)) => {
-                self.sink.lock().unwrap_or_else(PoisonError::into_inner).attach(file);
+                self.sink.lock().unwrap_or_else(PoisonError::into_inner).attach_in(dir, file);
+                *self.dir.lock().unwrap_or_else(PoisonError::into_inner) = Some(dir.to_path_buf());
                 Ok(path)
             }
-            Err(e) => {
-                self.stderr_only();
-                Err(format!("{}: {e}", dir.display()))
+            Err(e) => Err(format!("{}: {e}", dir.display())),
+        }
+    }
+
+    /// The first of `dirs` that can hold the log (the settings directory, then [`fallback_dir`]).
+    /// The errors of the ones that couldn't come back beside the path; when none can,
+    /// standard error is the only sink ([`AppLogger::stderr_only`]).
+    pub fn attach_first(&self, dirs: &[PathBuf]) -> (Option<PathBuf>, Vec<String>) {
+        let mut errors = Vec::new();
+        for dir in dirs {
+            match self.attach_dir(dir) {
+                Ok(path) => return (Some(path), errors),
+                Err(e) => errors.push(e),
             }
         }
+        self.stderr_only();
+        (None, errors)
+    }
+
+    /// The directory the log file is in, once attached.
+    pub fn dir(&self) -> Option<PathBuf> {
+        self.dir.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// No log file this run (no settings directory, or it can't be used): stop keeping records for one.
     pub fn stderr_only(&self) {
         self.sink.lock().unwrap_or_else(PoisonError::into_inner).close();
+    }
+
+    fn emit(&self, level: log::Level, target: &str, message: &str) {
+        let thread = std::thread::current();
+        let line = format_line(&timestamp(SystemTime::now()), level, thread.name().unwrap_or("?"), target, message);
+        if self.stderr {
+            let _ = std::io::stderr().write_all(line.as_bytes());
+        }
+        self.sink.lock().unwrap_or_else(PoisonError::into_inner).write(&line);
+    }
+
+    fn emit_notes(&self, notes: Vec<Note>) {
+        for note in notes {
+            self.emit(note.level, &note.target, &note.text);
+        }
     }
 }
 
@@ -259,17 +544,23 @@ impl log::Log for AppLogger {
         if !self.enabled(record.metadata()) {
             return;
         }
-        // Format before taking the lock, so the lock covers one write only.
-        let thread = std::thread::current();
-        let line =
-            format_line(&timestamp(SystemTime::now()), record.level(), thread.name().unwrap_or("?"), record.target(), &record.args().to_string());
-        if self.stderr {
-            let _ = std::io::stderr().write_all(line.as_bytes());
+        // Format before taking the sink lock, so that lock covers one write only.
+        let message = record.args().to_string();
+        let mut notes = Vec::new();
+        let write =
+            self.repeats.lock().unwrap_or_else(PoisonError::into_inner).admit(record.level(), record.target(), &message, Instant::now(), &mut notes);
+        self.emit_notes(notes);
+        if write {
+            self.emit(record.level(), record.target(), &message);
         }
-        self.sink.lock().unwrap_or_else(PoisonError::into_inner).write(&line);
     }
 
-    fn flush(&self) {}
+    /// Writes the counts of repeated messages not written yet (called at exit).
+    fn flush(&self) {
+        let mut notes = Vec::new();
+        self.repeats.lock().unwrap_or_else(PoisonError::into_inner).drain(&mut notes);
+        self.emit_notes(notes);
+    }
 }
 
 /// Install the logger (filter from `RUST_LOG`, else [`DEFAULT_FILTER`]; `override_filter`, when
@@ -282,7 +573,9 @@ pub fn install(override_filter: Option<&str>) -> Option<&'static AppLogger> {
     let effective = spec.as_deref().or(override_filter).unwrap_or(DEFAULT_FILTER);
     let filter = Filter::parse(effective);
     let max = filter.max();
-    let logger = LOGGER.get_or_init(|| AppLogger::new(filter, true));
+    let every_copy = std::env::var("CADADDY_LOG_REPEATS").is_ok_and(|v| v.trim().eq_ignore_ascii_case("all"));
+    let logger =
+        LOGGER.get_or_init(|| if every_copy { AppLogger::with(filter, true, Repeats::off(), MAX_FILE_BYTES) } else { AppLogger::new(filter, true) });
     log::set_logger(logger).ok()?;
     log::set_max_level(max);
     Some(logger)
@@ -473,8 +766,34 @@ mod tests {
     }
 
     #[test]
-    fn the_file_stops_at_its_size_cap_with_one_note() {
+    fn a_full_file_is_set_aside_and_the_newest_records_go_on_in_a_fresh_one() {
         let dir = temp_dir("cap");
+        let (path, file) = rotate(&dir).expect("rotate");
+        let mut sink = Sink::new(100);
+        sink.attach_in(&dir, file);
+        for i in 0..50 {
+            sink.write(&format!("line {i:02} with some padding\n"));
+        }
+        let text = read(&path);
+        assert!(text.ends_with("line 49 with some padding\n"), "the newest record is kept: {text}");
+        assert!(text.len() <= 100 + 120, "the fresh file stays near its cap: {}", text.len());
+        let earlier = read(&dir.join(EARLIER_FILE));
+        // The part before the newest one (itself a continued file after the first overflow).
+        assert!(earlier.contains("line ") && earlier.len() <= 100 + 120, "{earlier}");
+        assert!(text.lines().next().is_some_and(|l| l.contains(EARLIER_FILE)), "the fresh file says where the earlier records are: {text}");
+        // Bounded on disk: the current file and one earlier part, however long the run.
+        let files: Vec<_> = std::fs::read_dir(&dir).expect("dir").flatten().map(|e| e.file_name()).collect();
+        assert_eq!(files.len(), 2, "{files:?}");
+        // The next start keeps the newest part of this run as `.1` and drops its earlier part.
+        let (_, _file) = rotate(&dir).expect("rotate again");
+        assert_eq!(read(&dir.join("cadaddy.1.log")), text);
+        assert!(!dir.join(EARLIER_FILE).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_full_file_with_no_known_directory_starts_over_keeping_the_newest_records() {
+        let dir = temp_dir("cap-nodir");
         let (path, file) = rotate(&dir).expect("rotate");
         let mut sink = Sink::new(100);
         sink.attach(file);
@@ -482,9 +801,115 @@ mod tests {
             sink.write(&format!("line {i:02} with some padding\n"));
         }
         let text = read(&path);
-        assert_eq!(text.lines().filter(|l| l.starts_with("line ")).count(), 3, "{text}");
-        assert_eq!(text.matches("log file reached 100 bytes").count(), 1, "{text}");
+        assert!(text.ends_with("line 49 with some padding\n"), "{text}");
+        assert!(text.contains("earlier records of this run were dropped"), "{text}");
+        assert!(text.len() <= 100 + 120, "{}", text.len());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The test finding: one library warning repeated per inline image filled the 16 MB log in two
+    /// minutes and nothing after it was recorded.
+    #[test]
+    fn one_repeated_library_warning_cannot_crowd_out_the_rest_of_the_log() {
+        let dir = temp_dir("flood");
+        let logger = AppLogger::new(Filter::parse(DEFAULT_FILTER), false);
+        let path = logger.attach_dir(&dir).expect("attach");
+        record(&logger, log::Level::Info, "cadaddy", "job started");
+        for i in 0..200_000u32 {
+            let args = format_args!("Skipping an unreadable part at byte {i}: a long explanation of what went wrong");
+            logger.log(&log::Record::builder().level(log::Level::Warn).target("some_pdf_library::parser").args(args).build());
+            if i == 100_000 {
+                record(&logger, log::Level::Warn, "cadaddy_engine::jobs", "a real warning in the middle");
+            }
+        }
+        record(&logger, log::Level::Info, "cadaddy", "job finished");
+        logger.flush();
+        let text = read(&path);
+        let library = text.lines().filter(|l| l.contains("some_pdf_library::parser: Skipping")).count();
+        assert!(library <= 10, "{library} copies of one warning were written");
+        assert!(text.contains("a real warning in the middle") && text.contains("job finished"), "later records are kept");
+        assert!(text.len() < 64 * 1024, "the log stays small: {} bytes", text.len());
+        assert!(text.contains("[repeated]") && text.contains("200000 in all"), "the count is reported: {text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repeats_write_the_first_copies_then_count_and_start_over_after_a_quiet_time() {
+        let t0 = Instant::now();
+        let mut r = Repeats::new(3, 2, Duration::from_secs(30));
+        let mut notes = Vec::new();
+        let other: Vec<bool> = (0..4).map(|i| r.admit(log::Level::Warn, "lib", &format!("bad object {i}"), t0, &mut notes)).collect();
+        assert_eq!(other, [true, true, false, false], "two copies from another crate, numbers aside");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes.first().is_some_and(|n| n.text.contains("keeps coming") && n.target == "lib" && n.level == log::Level::Warn), "{notes:?}");
+        let own: Vec<bool> = (0..4).map(|_| r.admit(log::Level::Warn, "cadaddy_io", "same", t0, &mut notes)).collect();
+        assert_eq!(own, [true, true, true, false], "three from CADaddy's own crates");
+        // A different level or target is a different message.
+        assert!(r.admit(log::Level::Error, "lib", "bad object 9", t0, &mut notes));
+        assert!(r.admit(log::Level::Warn, "lib2", "bad object 9", t0, &mut notes));
+        // A count line at 100 copies.
+        notes.clear();
+        for i in 4..100 {
+            assert!(!r.admit(log::Level::Warn, "lib", &format!("bad object {i}"), t0, &mut notes));
+        }
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes.first().is_some_and(|n| n.text.contains("98 more copies not written (100 in all)")), "{notes:?}");
+        // Quiet for longer than the quiet time: the final count, then the message starts over.
+        notes.clear();
+        assert!(!r.admit(log::Level::Warn, "lib", "bad object 100", t0 + Duration::from_secs(1), &mut notes));
+        let later = t0 + Duration::from_secs(60);
+        assert!(r.admit(log::Level::Warn, "lib", "bad object 101", later, &mut notes), "the next file's first copies are written");
+        assert!(notes.iter().any(|n| n.text.contains("1 more copies not written (101 in all)")), "{notes:?}");
+        // The rest at flush.
+        notes.clear();
+        let third: Vec<bool> = (0..3).map(|_| r.admit(log::Level::Warn, "lib3", "same", later, &mut notes)).collect();
+        assert_eq!(third, [true, true, false]);
+        r.drain(&mut notes);
+        assert!(notes.iter().any(|n| n.target == "lib3" && n.text.contains("1 more copies not written (3 in all)")), "{notes:?}");
+        notes.clear();
+        r.drain(&mut notes);
+        assert!(notes.is_empty(), "a count is written once: {notes:?}");
+    }
+
+    #[test]
+    fn repeats_follow_a_bounded_number_of_messages() {
+        let t0 = Instant::now();
+        let mut r = Repeats::new(1, 1, Duration::from_secs(30));
+        let mut notes = Vec::new();
+        for i in 0..MAX_REPEAT_KEYS * 2 {
+            // Letters, not digits, so every message is a different one.
+            let msg: String = format!("{i:x}")
+                .chars()
+                .map(|c| char::from(b'a'.saturating_add(c.to_digit(16).and_then(|d| u8::try_from(d).ok()).unwrap_or(0))))
+                .collect();
+            r.admit(log::Level::Warn, "lib", &msg, t0, &mut notes);
+            r.admit(log::Level::Warn, "lib", &msg, t0, &mut notes);
+            assert!(r.seen.len() <= MAX_REPEAT_KEYS);
+        }
+        // Hostile messages: huge, multi-byte, empty.
+        let long = "é".repeat(100_000);
+        for msg in [long.as_str(), "", "🦀🦀", "0123456789"] {
+            r.admit(log::Level::Warn, "lib", msg, t0, &mut notes);
+        }
+        assert!(notes.iter().all(|n| n.text.chars().count() < REPEAT_KEY_CHARS + 120));
+    }
+
+    #[test]
+    fn every_copy_is_written_when_repeats_are_off() {
+        let mut r = Repeats::off();
+        let mut notes = Vec::new();
+        assert!((0..1000).all(|_| r.admit(log::Level::Warn, "lib", "same", Instant::now(), &mut notes)));
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn a_message_shape_sets_numbers_aside() {
+        assert_eq!(shape("byte 12 of 3456"), "byte # of #");
+        assert_eq!(shape("x1y22z"), "x#y#z");
+        assert_eq!(shape(""), "");
+        assert_eq!(shape(&"a".repeat(1000)).len(), REPEAT_KEY_CHARS);
+        assert!([100, 1000, 10_000, 1_000_000].iter().all(|&n| is_milestone(n)));
+        assert!([0, 1, 10, 99, 101, 200, 999, 1001].iter().all(|&n| !is_milestone(n)));
     }
 
     #[test]
@@ -514,7 +939,8 @@ mod tests {
     #[test]
     fn records_from_many_threads_are_whole_lines() {
         let dir = temp_dir("threads");
-        let logger = AppLogger::new(Filter::parse("info"), false);
+        // Every copy written: the same line 400 times is the point here.
+        let logger = AppLogger::with(Filter::parse("info"), false, Repeats::off(), MAX_FILE_BYTES);
         let path = logger.attach_dir(&dir).expect("attach");
         std::thread::scope(|s| {
             for _ in 0..4 {
@@ -538,11 +964,32 @@ mod tests {
         let logger = AppLogger::new(Filter::parse("info"), false);
         let e = logger.attach_dir(&dir).expect_err("a file is not a log directory");
         assert!(e.contains(&dir.display().to_string()), "{e}");
+        let (path, errors) = logger.attach_first(std::slice::from_ref(&dir));
+        assert!(path.is_none() && errors.len() == 1, "{errors:?}");
         record(&logger, log::Level::Error, "x", "still fine");
         let sink = logger.sink.lock().expect("sink");
         assert!(sink.file.is_none() && sink.pending.is_empty(), "nothing is kept for a file that will not come");
         drop(sink);
         let _ = std::fs::remove_file(&dir);
+    }
+
+    #[test]
+    fn an_unusable_settings_directory_falls_back_to_the_next_one_with_the_early_records() {
+        let bad = temp_dir("bad-settings");
+        std::fs::write(&bad, "not a directory").expect("block");
+        let good = temp_dir("fallback");
+        let logger = AppLogger::new(Filter::parse("info"), false);
+        record(&logger, log::Level::Info, "cadaddy", "before the file");
+        let (path, errors) = logger.attach_first(&[bad.clone(), good.clone()]);
+        assert_eq!(path, Some(good.join(LOG_FILE)));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(logger.dir(), Some(good.clone()));
+        record(&logger, log::Level::Info, "cadaddy", "after");
+        let text = read(&good.join(LOG_FILE));
+        assert!(text.contains("before the file") && text.contains("after"), "{text}");
+        assert!(fallback_dir().starts_with(std::env::temp_dir()));
+        let _ = std::fs::remove_file(&bad);
+        let _ = std::fs::remove_dir_all(&good);
     }
 
     #[test]
@@ -553,6 +1000,51 @@ mod tests {
         record(&logger, log::Level::Info, "cadaddy", "after");
         let sink = logger.sink.lock().expect("sink");
         assert!(sink.file.is_none() && sink.pending.is_empty(), "no memory is held for a file that will not come");
+    }
+
+    /// Measure the log a real PDF import writes (not part of the normal run: it needs a PDF and
+    /// installs the process-wide logger). `CADADDY_LOG_PROBE_PDF=<file> [CADADDY_LOG_PROBE_PAGES=n]
+    /// cargo test -p cadaddy log_probe -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement: needs CADADDY_LOG_PROBE_PDF"]
+    fn log_probe_real_pdf() {
+        let Some(pdf) = std::env::var_os("CADADDY_LOG_PROBE_PDF") else { return };
+        let pages: u32 = std::env::var("CADADDY_LOG_PROBE_PAGES").ok().and_then(|s| s.parse().ok()).unwrap_or(u32::MAX);
+        let dir = temp_dir("probe");
+        let logger: &'static AppLogger = Box::leak(Box::new(AppLogger::new(Filter::parse(DEFAULT_FILTER), false)));
+        log::set_logger(logger).expect("first logger");
+        log::set_max_level(Filter::parse(DEFAULT_FILTER).max());
+        let path = logger.attach_dir(&dir).expect("attach");
+        let bytes = std::fs::read(&pdf).expect("read pdf");
+        let total = cadaddy_io::pdf_read::page_count(&bytes).expect("pages").min(pages);
+        let start = std::time::Instant::now();
+        for page in 1..=total {
+            let opts = cadaddy_io::pdf_read::PdfOptions { page, ..Default::default() };
+            let _ = cadaddy_io::pdf_read::read(&bytes, &opts);
+            log::info!(target: "cadaddy", "probe: page {page} read");
+        }
+        log::info!(target: "cadaddy", "probe: finished {total} pages");
+        log::logger().flush();
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("dir").flatten() {
+            let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            let other = text.lines().filter(|l| !l.contains("] cadaddy")).count();
+            let pages_logged = text.lines().filter(|l| l.contains("probe: page ")).count();
+            files.push(format!(
+                "{}: {} bytes, {} lines, {} from other crates, {} page lines, finished={}",
+                entry.file_name().to_string_lossy(),
+                text.len(),
+                text.lines().count(),
+                other,
+                pages_logged,
+                text.contains("probe: finished")
+            ));
+        }
+        files.sort();
+        println!("PROBE {total} pages in {:.1}s; current log {}", start.elapsed().as_secs_f64(), path.display());
+        for f in files {
+            println!("PROBE {f}");
+        }
     }
 
     #[test]

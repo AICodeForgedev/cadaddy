@@ -484,16 +484,24 @@ fn main() -> eframe::Result {
     let sample = launch.sample;
     // The log file lives under the settings directory; opened after the arguments, so `--version`
     // leaves no file behind. Records logged until now are written to it first.
+    // A desktop launch has no console: when the settings directory can't hold the log, the
+    // temporary folder does, rather than standard error alone.
     if let Some(logger) = logger {
-        match config_dir().map(|d| logger.attach_dir(&d.join(logging::LOG_DIR))) {
-            Some(Ok(path)) => log::info!("{} ({} {}), log file {}", version_string(), std::env::consts::OS, std::env::consts::ARCH, path.display()),
-            Some(Err(e)) => log::warn!("no log file: {e}"),
-            None => {
-                logger.stderr_only();
-                log::warn!("no log file: no settings directory (set CADADDY_CONFIG_DIR)");
-            }
+        let settings = config_dir().map(|d| d.join(logging::LOG_DIR));
+        let dirs: Vec<std::path::PathBuf> = settings.iter().cloned().chain([logging::fallback_dir()]).collect();
+        let (path, errors) = logger.attach_first(&dirs);
+        match path {
+            Some(path) => log::info!("{} ({} {}), log file {}", version_string(), std::env::consts::OS, std::env::consts::ARCH, path.display()),
+            None => log::warn!("no log file"),
+        }
+        if settings.is_none() {
+            log::warn!("no settings directory (set CADADDY_CONFIG_DIR); the log is in the temporary folder");
+        }
+        for e in errors {
+            log::warn!("log file not possible in {e}");
         }
     }
+    let log_dir = logger.and_then(logging::AppLogger::dir);
     // Files opened from the desktop while a window runs go to that window (open_files.rs).
     let inbox = open_files::Inbox::default();
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -584,6 +592,7 @@ fn main() -> eframe::Result {
         let options = make_options(attempt);
         let files = files.clone();
         let inbox = inbox.clone();
+        let log_dir = log_dir.clone();
         let fallback = graphics::note(attempt);
         result = eframe::run_native(
             "CADaddy",
@@ -653,7 +662,7 @@ fn main() -> eframe::Result {
                 cadaddy_ui_egui::diag::set_host(cadaddy_ui_egui::diag::HostInfo {
                     version: version_string(),
                     gpu: gpu.unwrap_or_default(),
-                    log_dir: config_dir().map(|d| d.join(logging::LOG_DIR)),
+                    log_dir: log_dir.or_else(|| config_dir().map(|d| d.join(logging::LOG_DIR))),
                 });
                 cadaddy_ui_egui::diag::start_watchdog();
                 // An explicit --control port, and the agent port unless the user turned that off in
@@ -708,6 +717,8 @@ fn main() -> eframe::Result {
             _ => break,
         }
     }
+    // The counts of repeated messages not written yet (logging.rs).
+    log::logger().flush();
     result
 }
 

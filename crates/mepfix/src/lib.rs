@@ -22,6 +22,7 @@ pub mod arch;
 pub mod arch_reader;
 pub mod asbuilt;
 pub mod bore;
+pub mod buildings;
 pub mod callout_reader;
 pub mod casework_reader;
 pub mod ceilasm_reader;

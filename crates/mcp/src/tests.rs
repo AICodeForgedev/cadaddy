@@ -349,6 +349,16 @@ fn auto_works_without_an_open_app() {
 }
 
 #[test]
+fn every_tool_reply_names_its_backend() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let r = call(&mut s, 5, "tools/call", json!({"name": "inspect_drawing", "arguments": {}}));
+    assert_eq!(r["result"]["_meta"]["cadaddy/backend"], json!("headless CADaddy session"), "{r}");
+    let r = call(&mut s, 6, "tools/call", json!({"name": "execute", "arguments": {"command": "nosuchcommand"}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert_eq!(r["result"]["_meta"]["cadaddy/backend"], json!("headless CADaddy session"), "{r}");
+}
+
+#[test]
 fn agent_reads_the_prompt_and_waits_for_idle() {
     let mut s = Server::new(Box::new(Headless::default()));
     tool(&mut s, "command_line", json!({"text": "pline 0,0"}));
