@@ -171,6 +171,8 @@ impl WallGrid {
 
 /// A wall's tag with its wall type (`type:<name>`, after the source), for IFC's materials.
 const SWING_TAG: &str = "swing:";
+/// A built door's opening tag: its frame's two jambs on the plan (`x0,y0,x1,y1`).
+const OPENING_TAG: &str = "opening:";
 
 fn wall_tag(level: &str, source: Handle, wall_type: Option<&str>) -> Vec<RawTag> {
     let mut x = tag(Part::Wall, level, source);
@@ -182,12 +184,26 @@ fn wall_tag(level: &str, source: Handle, wall_type: Option<&str>) -> Vec<RawTag>
 
 /// A built door's tags, with its swing when the plan draws one (`hinge, open end, shut end`, x and
 /// y of each, on its level's plan).
-fn door_tag(level: &str, source: Handle, swing: Option<&str>) -> Vec<RawTag> {
+fn door_tag(level: &str, source: Handle, swing: Option<&str>, opening: Option<(Vec2, Vec2)>) -> Vec<RawTag> {
     let mut x = tag(Part::Door, level, source);
     if let Some(sw) = swing {
         x.push(RawTag { code: 1000, value: format!("{SWING_TAG}{sw}") });
     }
+    if let Some((a, b)) = opening.filter(|(a, b)| a.is_finite() && b.is_finite()) {
+        x.push(RawTag { code: 1000, value: format!("{OPENING_TAG}{},{},{},{}", a.x, a.y, b.x, b.y) });
+    }
     x
+}
+
+/// A built door's opening: its frame's two jambs on its level's plan. A door shut closes it, so
+/// a room traced on the built walls runs across it.
+pub(crate) fn door_opening(e: &Entity) -> Option<[Vec2; 2]> {
+    let v = e.common.xdata.iter().find_map(|t| t.value.strip_prefix(OPENING_TAG))?;
+    let n: Vec<f64> = v.split(',').filter_map(|p| p.parse().ok()).collect();
+    match n.as_slice() {
+        [a, b, c, d] if n.iter().all(|x| x.is_finite()) => Some([Vec2::new(*a, *b), Vec2::new(*c, *d)]),
+        _ => None,
+    }
 }
 
 /// A built door's swing: hinge, open end, shut end, on its level's plan.
@@ -498,10 +514,10 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     }
     for (si, pl) in &planned {
         let Some(level) = scene.levels.get(*si) else { continue };
-        for (part, m, source, wall_type) in pl.meshes() {
+        for (part, m, source, wall_type, opening) in pl.meshes() {
             let xdata = match part {
                 Part::Wall => wall_tag(&level.name, source, wall_type.as_deref()),
-                Part::Door => door_tag(&level.name, source, wall_type.as_deref()),
+                Part::Door => door_tag(&level.name, source, wall_type.as_deref(), opening),
                 _ => tag(part, &level.name, source),
             };
             let common = Common { layer: layer_of(part).into(), xdata: xdata.into(), ..Common::default() };
@@ -1239,8 +1255,9 @@ impl PlanLevel {
     }
 
     /// The level's meshes: one per wall (its pieces, headers and sills, with its wall type), one
-    /// per door leaf and window pane.
-    fn meshes(&self) -> Vec<(Part, Mesh, Handle, Option<String>)> {
+    /// per door leaf (with its swing and its frame's opening) and window pane.
+    #[allow(clippy::type_complexity)]
+    fn meshes(&self) -> Vec<(Part, Mesh, Handle, Option<String>, Option<(Vec2, Vec2)>)> {
         let mut out = Vec::new();
         for w in &self.walls {
             let len = w.a.dist(w.b);
@@ -1274,7 +1291,7 @@ impl PlanLevel {
                 add_box(&mut m, *a, *b, w.thickness, *lo, *hi);
             }
             if !m.faces.is_empty() {
-                out.push((Part::Wall, m, w.source, w.wall_type.clone()));
+                out.push((Part::Wall, m, w.source, w.wall_type.clone(), None));
             }
         }
         for l in &self.leaves {
@@ -1299,7 +1316,7 @@ impl PlanLevel {
                 let shut = l.a + along * l.a.dist(l.b);
                 format!("{},{},{},{},{},{}", l.a.x, l.a.y, l.b.x, l.b.y, shut.x, shut.y)
             });
-            out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, swing));
+            out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, swing, l.frame.filter(|_| !l.window)));
         }
         out
     }
@@ -1888,6 +1905,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         w.a -= u * ta.min(len);
         w.b += u * tb.min(len);
     }
+    // Two walls whose ends stop short of the corner they make (a storefront's corner post, a
+    // column drawn between them) run on to it (Q6297).
+    let corners = close_corners(&mut pl.walls, CORNER_POST_IN * k);
+    if corners > 0 {
+        notes.push(format!("{}: {corners} corners where two walls stopped short (a corner post between them) closed.", level.name));
+    }
     // Openings: each cuts the wall it lies in.
     let all_segs = segments(&ents);
     let mut ops = openings(d, &ents, &all_segs, k);
@@ -2063,6 +2086,17 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let mut gaps = Vec::new();
     let gap_cell = max_gap.max(max_thick);
     let gap_grid = WallGrid::build(&pl.walls[..n], gap_cell);
+    // Slots between two pieces of one wall line narrower than any opening (a storefront's
+    // mullion, a post, a joint wider than a mortar joint): nobody passes, so the run is solid
+    // there, full height (Q6297). Not in a corridor's air.
+    let slots: Vec<(usize, Vec2, Vec2)> = narrow_slots(&pl.walls[..n], &gap_grid, min_gap, k)
+        .into_iter()
+        .filter(|(i, g0, g1)| {
+            let t = pl.walls.get(*i).map_or(0.0, |w| w.thickness);
+            let u = (*g1 - *g0) * (1.0 / g0.dist(*g1).max(1e-12));
+            !in_corridor_air(&corridors, (*g0 + *g1) * 0.5, u.perp(), t)
+        })
+        .collect();
     for i in 0..n {
         let a = &pl.walls[i];
         let la = a.a.dist(a.b);
@@ -2107,6 +2141,25 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             let no_header = in_air || gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap);
             gaps.push((i, a.b, a.b + u * gap, a.thickness, no_header, in_air));
         }
+    }
+    // Each slot filled full height (found from either piece: filled once).
+    let mut filled: Vec<(Vec2, Vec2)> = Vec::new();
+    for (i, g0, g1) in slots {
+        if filled.len() >= MAX_OBJECTS || filled.iter().any(|f| same_gap(*f, (g0, g1), k)) {
+            continue;
+        }
+        if let Some(w) = pl.walls.get_mut(i) {
+            let top = w.top;
+            w.extra.push((g0, g1, pl.z0, top));
+            filled.push((g0, g1));
+        }
+    }
+    if !filled.is_empty() {
+        notes.push(format!(
+            "{}: {} slots between pieces of a wall line narrower than an opening (a mullion, a post, a joint) built solid.",
+            level.name,
+            filled.len()
+        ));
     }
     // Outside: no other wall across one side of it.
     let outside = |p: Vec2, nrm: Vec2, walls: &[PlanWall]| {
@@ -2363,6 +2416,129 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         notes.push(format!("{}: {not_doors} arcs not taken for doors (no open wall where they shut: fixtures, equipment, furniture).", level.name));
     }
     pl
+}
+
+/// Two walls' ends this far (inches) or less short of the corner they make are one corner: a
+/// corner post or a column drawn between them, not an opening (an opening is wider).
+const CORNER_POST_IN: f64 = 12.0;
+
+/// Runs on the ends of two walls that make a corner but stop short of it: walls at least 30°
+/// apart, an end of each up to `reach` (drawing units) short of where their centrelines cross,
+/// neither running past it. Each end runs on to the crossing and on by half the other's
+/// thickness, as the run-on step closes a corner. An end takes its nearest such corner. Returns
+/// how many corners were closed.
+fn close_corners(walls: &mut [PlanWall], reach: f64) -> usize {
+    if !(reach.is_finite() && reach > 0.0) {
+        return 0;
+    }
+    let max_thick = walls.iter().map(|w| w.thickness).filter(|t| t.is_finite()).fold(0.0f64, f64::max);
+    let grid = WallGrid::build(walls, reach + max_thick);
+    // Each end (wall, which end): how far short of a corner, the point it runs on to.
+    let mut ends: HashMap<(usize, bool), (f64, Vec2)> = HashMap::new();
+    let mut corners: Vec<((usize, bool), (usize, bool), f64, Vec2, Vec2)> = Vec::new();
+    for (i, w) in walls.iter().enumerate() {
+        let lw = w.a.dist(w.b);
+        if !(lw > 1e-9 && w.thickness.is_finite()) {
+            continue;
+        }
+        for (at_b, p, u) in [(true, w.b, (w.b - w.a) * (1.0 / lw)), (false, w.a, (w.a - w.b) * (1.0 / lw))] {
+            for &j in grid.at(p) {
+                let Some(o) = walls.get(j).filter(|_| j > i) else { continue };
+                let lo = o.a.dist(o.b);
+                if !(lo > 1e-9 && o.thickness.is_finite()) {
+                    continue;
+                }
+                let v_ab = (o.b - o.a) * (1.0 / lo);
+                let den = u.cross(v_ab);
+                if den.abs() < 0.5 {
+                    continue;
+                }
+                for (o_at_b, q, v) in [(true, o.b, v_ab), (false, o.a, -v_ab)] {
+                    // The crossing: p + u·t1 = q + v·t2.
+                    let den = u.cross(v);
+                    let t1 = (q - p).cross(v) / den;
+                    let t2 = (q - p).cross(u) / den;
+                    if !(t1 > 1e-9 && t1 <= reach && t2 > 1e-9 && t2 <= reach) {
+                        continue;
+                    }
+                    let x = p + u * t1;
+                    corners.push(((i, at_b), (j, o_at_b), t1.max(t2), x + u * (o.thickness / 2.0), x + v * (w.thickness / 2.0)));
+                }
+            }
+        }
+    }
+    // Nearest first: an end takes the nearest corner both its walls agree on.
+    corners.sort_by(|a, b| a.2.total_cmp(&b.2));
+    let mut closed = 0usize;
+    for (e1, e2, d, p1, p2) in corners.into_iter().take(MAX_OBJECTS) {
+        if ends.contains_key(&e1) || ends.contains_key(&e2) {
+            continue;
+        }
+        ends.insert(e1, (d, p1));
+        ends.insert(e2, (d, p2));
+        closed += 1;
+    }
+    for ((i, at_b), (_, to)) in ends {
+        if let Some(w) = walls.get_mut(i) {
+            if at_b {
+                w.b = to;
+            } else {
+                w.a = to;
+            }
+        }
+    }
+    closed
+}
+
+/// The slots between pieces of one wall line narrower than an opening (`min_gap`, drawing units),
+/// wider than a hair (`k` units per inch): for each, a piece beside it and the slot's ends. A
+/// piece of the line runs on past the slot (in line within the walls' half thickness, nothing of
+/// the line between), whichever way either piece was drawn; each slot is listed once.
+fn narrow_slots(walls: &[PlanWall], grid: &WallGrid, min_gap: f64, k: f64) -> Vec<(usize, Vec2, Vec2)> {
+    let mut out: Vec<(usize, Vec2, Vec2)> = Vec::new();
+    if !(min_gap.is_finite() && min_gap > 0.0 && k.is_finite() && k > 0.0) {
+        return out;
+    }
+    let hair = 0.01 * k;
+    for (i, a) in walls.iter().enumerate() {
+        let la = a.a.dist(a.b);
+        if !(la > 1e-9) {
+            continue;
+        }
+        // From each end, looking on along the line.
+        for (end, u) in [(a.b, (a.b - a.a) * (1.0 / la)), (a.a, (a.a - a.b) * (1.0 / la))] {
+            // The nearest piece of the line past this end, and how far past.
+            let mut next: Option<(f64, f64)> = None;
+            for &j in grid.at(end) {
+                let Some(b) = walls.get(j).filter(|_| j != i) else { continue };
+                let lb = b.a.dist(b.b);
+                if !(lb > 1e-9)
+                    || u.cross((b.b - b.a) * (1.0 / lb)).abs() > 0.01
+                    || u.perp().dot(b.a - end).abs() > a.thickness.max(b.thickness) / 2.0
+                {
+                    continue;
+                }
+                let (s0, s1) = (u.dot(b.a - end).min(u.dot(b.b - end)), u.dot(b.a - end).max(u.dot(b.b - end)));
+                if s1 <= hair {
+                    continue;
+                }
+                // A piece overlapping the end closes it already.
+                let gap = s0.max(0.0);
+                if next.is_none_or(|(g, _)| gap < g) {
+                    next = Some((gap, s1));
+                }
+            }
+            let Some((gap, _)) = next else { continue };
+            if gap <= hair || gap >= min_gap {
+                continue;
+            }
+            let slot = (end, end + u * gap);
+            if out.len() < MAX_OBJECTS && !out.iter().any(|(_, g0, g1)| same_gap((*g0, *g1), slot, k)) {
+                out.push((i, slot.0, slot.1));
+            }
+        }
+    }
+    out
 }
 
 /// Whether a wall other than `i` and `j` (the two pieces either side of the gap `g0`–`g1`) runs

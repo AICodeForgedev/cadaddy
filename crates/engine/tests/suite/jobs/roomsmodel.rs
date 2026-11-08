@@ -339,3 +339,71 @@ fn a_unit_type_name_on_two_floors_takes_no_number_from_the_other_floor() {
     assert_eq!(on("Level 1"), vec!["118".to_string()], "{list}");
     assert_eq!(on("Level 2"), vec!["220".to_string()], "{list}");
 }
+
+/// A 40' × 30' floor (inches) whose south side is storefront: a 3" frame drawn as two thin lines,
+/// broken into lites by a 2" mullion slot each (the mullion a small box in the slot), and a
+/// corner post at each end that the 6" side walls and the frame stop short of. A 4" partition
+/// with a door parts it into two rooms; each room's tag sits in a tag box, so the room is traced
+/// on the built walls (Q6297).
+fn storefront_floor(s: &mut Session) {
+    s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+    // North wall, and the side walls down to 12" above the storefront's line.
+    for y in [354.0, 360.0] {
+        line(s, [0.0, y], [480.0, y]);
+    }
+    for x in [0.0, 6.0, 474.0, 480.0] {
+        line(s, [x, 12.0], [x, if x == 0.0 || x == 480.0 { 360.0 } else { 354.0 }]);
+    }
+    // The partition, with a 3' door between the rooms (its leaf drawn standing open).
+    for x in [238.0, 242.0] {
+        line(s, [x, 4.0], [x, 150.0]);
+        line(s, [x, 186.0], [x, 354.0]);
+    }
+    s.execute("arc", &json!({"center": [240.0, 150.0], "radius": 36.0, "start": 0.0, "end": 90.0})).unwrap();
+    // Corner posts, apart from the walls and the frame.
+    rect(s, 0.5, 0.5, 5.5, 5.5);
+    rect(s, 474.5, 0.5, 479.5, 5.5);
+    // The frame from 8" to 472": twelve lites, eleven 2" mullion slots.
+    let (start, end, slot, lites) = (8.0, 472.0, 2.0, 12usize);
+    let lite = (end - start - slot * (lites - 1) as f64) / lites as f64;
+    for i in 0..lites {
+        let x0 = start + i as f64 * (lite + slot);
+        for y in [1.0, 4.0] {
+            line(s, [x0, y], [x0 + lite, y]);
+        }
+        if i + 1 < lites {
+            rect(s, x0 + lite + 0.25, 1.5, x0 + lite + slot - 0.25, 3.5);
+        }
+    }
+    s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    for (x, name, number) in [(80.0, "DINING", "100"), (320.0, "BEVERAGE", "102")] {
+        s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+        rect(s, x - 10.0, 150.0, x + 60.0, 240.0);
+        s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
+        text(s, [x, 220.0], name);
+        text(s, [x, 190.0], number);
+    }
+}
+
+/// Q6297: a room bounded by storefront glazing (thin parallel lines between wall ends, mullion
+/// slots, corner posts) closes like one bounded by walls, and a door closes its opening: both
+/// rooms are built, each at its own full size.
+#[test]
+fn a_room_bounded_by_storefront_glazing_closes_like_a_walled_room() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    storefront_floor(&mut s);
+    let levels = json!([{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0, "region": L1}]);
+    s.execute("bspec.draft", &json!({"store": true, "levels": levels})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert!(!r["notes"].to_string().contains("not inside built walls"), "{r}");
+    let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = list["rooms"].as_array().unwrap();
+    for number in ["100", "102"] {
+        let room = rooms.iter().find(|x| x["number"] == json!(number)).unwrap_or_else(|| panic!("room {number}: {list}"));
+        let area = room["areaSqFt"].as_f64().unwrap();
+        // Each room about 19'-9" × 28'-11": the room, not its tag box.
+        assert!(area > 0.85 * 232.0 * 348.0 / 144.0 && area < 1.1 * 238.0 * 354.0 / 144.0, "room {number}: {area} sf: {list}");
+    }
+}

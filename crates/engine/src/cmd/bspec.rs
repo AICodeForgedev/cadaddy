@@ -1318,6 +1318,12 @@ fn room_bounds(d: &Drawing) -> std::collections::BTreeMap<String, Vec<Vec<Vec2>>
                 n += 1;
             }
         }
+        // A door shut closes its opening: the line across it, jamb to jamb (its leaf is built
+        // standing open, so its footprint leaves the doorway open) (Q6297).
+        if let Some([a, b]) = wallgen::door_opening(e).filter(|[a, b]| a.dist(*b) > 1e-9) {
+            polys.push(vec![a, b]);
+            n += 1;
+        }
         if n >= MAX_BOUNDS {
             break;
         }
