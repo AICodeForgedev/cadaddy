@@ -714,7 +714,7 @@ const FRAME_RULE_SHARE: f64 = 0.25;
 
 /// Each sheet's frame ([`cadaddy_mepfix::sheet_facts::sheet_frame`]): its long straight lines
 /// (one pass over the drawing), then its border and title block.
-fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mepfix::sheet_facts::SheetFrame> {
+pub(crate) fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mepfix::sheet_facts::SheetFrame> {
     use cadaddy_doc::EntityKind;
     use cadaddy_geom::Vec2;
     let shortest =
@@ -4414,7 +4414,10 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     };
 
     // ── Secondary: schedules.read for device marks in schedule tables ──
-    match s.execute("schedules.read", &json!({})) {
+    // Each sheet's frame goes with it: its title block and border are never schedule rows.
+    let frames: Vec<Value> = job.sheet_regions.iter().map(|r| json!({"rect": r.rect, "area": r.area, "title_block": r.title_block})).collect();
+    let params = if frames.is_empty() { json!({}) } else { json!({"sheets": frames}) };
+    match s.execute("schedules.read", &params) {
         Ok(v) => {
             if let Some(items) = v.get("items").and_then(Value::as_array) {
                 total_items += items.len();
@@ -18619,11 +18622,29 @@ fn doc_objects_step(
         }
     }
     // A class nothing marks (or only a note names): the note's count, proposed, at its sheet's
-    // level (else the lowest), where its circuit's panel stands, else in the level's middle.
+    // level (else the lowest a plan gives), where its circuit's panel stands, else in the level's
+    // middle; with no real place on the level, listed for review and not built (Q6290).
     let marked: BTreeSet<String> = found.iter().map(|f| f.kind.clone()).collect();
-    let lowest =
-        sp.levels.iter().min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)).map(|l| l.name.clone()).unwrap_or_else(|| "Level 1".into());
+    let lowest = sp
+        .levels
+        .iter()
+        .min_by(|a, b| {
+            (plan_region_of(a.region).is_none(), a.elevation_ft)
+                .partial_cmp(&(plan_region_of(b.region).is_none(), b.elevation_ft))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|l| l.name.clone())
+        .unwrap_or_else(|| "Level 1".into());
+    let building_extent = sp.levels.iter().filter_map(|l| plan_region_of(l.region)).reduce(|a, b| {
+        [
+            a[0].min(a[2]).min(b[0].min(b[2])),
+            a[1].min(a[3]).min(b[1].min(b[3])),
+            a[0].max(a[2]).max(b[0].max(b[2])),
+            a[1].max(a[3]).max(b[1].max(b[3])),
+        ]
+    });
     let mut proposed: Vec<String> = Vec::new();
+    let mut proposed_not_placed: Vec<Value> = Vec::new();
     for (kind, (n, via, number, level, cite)) in &named {
         let Some(class) = dob::class_by_kind(kind) else { continue };
         if marked.contains(kind) || already.contains_key(kind) || existing.iter().any(|(k, ty, _, _, _)| dob::is_class(class, k, ty)) {
@@ -18636,18 +18657,20 @@ fn doc_objects_step(
         }
         let level = if level.is_empty() { lowest.clone() } else { level.clone() };
         let pc = circuit_of(cite, &panels);
-        let at = pc
+        let beside_panel = pc
             .as_ref()
             .and_then(|(p, _)| sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(p) && same_level_name(&e.level, &level)))
-            .map(|e| Vec2::new(e.max[0] + upf, (e.min[1] + e.max[1]) / 2.0))
-            .or_else(|| {
-                sp.levels
-                    .iter()
-                    .find(|l| same_level_name(&l.name, &level))
-                    .and_then(|l| l.region)
-                    .map(|g| Vec2::new((g[0] + g[2]) / 2.0, (g[1] + g[3]) / 2.0))
-            })
-            .unwrap_or(Vec2::ZERO);
+            .map(|e| Vec2::new(e.max[0] + upf, (e.min[1] + e.max[1]) / 2.0));
+        let level_region = sp.levels.iter().find(|l| same_level_name(&l.name, &level)).and_then(|l| l.region);
+        let Some(at) = note_object_at(beside_panel, level_region, building_extent) else {
+            if proposed_not_placed.len() < 200 {
+                proposed_not_placed.push(json!({
+                    "kind": kind, "name": class.name, "count": n, "level": level, "sheet": number, "note": cite,
+                    "why": "no place on its level: the level has no plan region and no panel the note names stands inside the building",
+                }));
+            }
+            continue;
+        };
         for i in 0..*n {
             found.push(Found {
                 kind: kind.clone(),
@@ -19036,6 +19059,20 @@ fn doc_objects_step(
             false,
         );
     }
+    if !proposed_not_placed.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} object(s) only a note names have no place on their level: listed for review, not built", proposed_not_placed.len()),
+            &format!(
+                "the level has no plan region (no plan draws it) and no panel the note names stands inside the building, so there is no position to build them at (a placeholder extent is never one): {}",
+                proposed_not_placed.iter().take(12).map(|v| format!("{} {} ({})", v["count"], v["name"].as_str().unwrap_or(""), v["note"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("; ")
+            ),
+            2,
+            vec!["Place each from the plans of its level, or name the panel it is beside".into()],
+            None,
+            false,
+        );
+    }
     if !rule_only.is_empty() {
         job.add_finding(
             StageName::BimBuild,
@@ -19082,11 +19119,37 @@ fn doc_objects_step(
     ));
     result["doc_objects"] = json!({
         "built": total, "by_kind": by_kind, "connection_boxes": boxes, "marks_read": marks_read, "already_in_model": already,
-        "proposed": proposed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
+        "proposed": proposed, "proposed_not_placed": proposed_not_placed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
         "sheets": read_by_sheet, "legend_rows": legend_used, "unregistered": unregistered, "tags_of_other_schedules": of_other_schedules,
         "notes_naming": named.iter().map(|(k, (n, via, sh, _, cite))| json!({"kind": k, "count": n, "via": via, "sheet": sh, "note": cite})).collect::<Vec<_>>(),
     });
     Ok(())
+}
+
+/// A level's plan region when it is a place in the building: finite, with area, and not a
+/// placeholder far off every sheet (the no-plan region a level only the MEP plans give takes, an
+/// empty extent) (Q6290).
+fn plan_region_of(g: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    g.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8) && r[0] != r[2] && r[1] != r[3])
+}
+
+/// Where an object only a note names goes: beside its circuit's panel when that is a place on
+/// the level (inside the level's plan region; on a level with none, inside the building's
+/// extent), else the middle of the level's plan region. `None` when the level gives no place:
+/// a placeholder or empty extent is never a position, and the origin is no fallback (Q6290).
+fn note_object_at(
+    beside_panel: Option<cadaddy_geom::Vec2>,
+    level_region: Option<[f64; 4]>,
+    building: Option<[f64; 4]>,
+) -> Option<cadaddy_geom::Vec2> {
+    let holds = |g: [f64; 4], p: cadaddy_geom::Vec2| {
+        p.x.is_finite() && p.y.is_finite() && p.x >= g[0].min(g[2]) && p.x <= g[0].max(g[2]) && p.y >= g[1].min(g[3]) && p.y <= g[1].max(g[3])
+    };
+    let level = plan_region_of(level_region);
+    let footprint = level.or_else(|| plan_region_of(building));
+    beside_panel
+        .filter(|p| footprint.is_some_and(|g| holds(g, *p)))
+        .or_else(|| level.map(|g| cadaddy_geom::Vec2::new((g[0] + g[2]) / 2.0, (g[1] + g[3]) / 2.0)))
 }
 
 /// The panel and circuit a note names (`… CIRCUIT LA-12`, `PANEL LA CKT 9`), by the panel
@@ -29189,6 +29252,42 @@ mod tests {
         // Level 3 has no plan (its outline was never read): nothing lands on it, though its two
         // sheets are drawn alike.
         assert_eq!(place([4500.0, 450.0], "Level 3"), None);
+    }
+
+    #[test]
+    fn an_object_only_a_note_names_is_never_built_at_a_placeholder_region() {
+        use cadaddy_geom::Vec2;
+        // A level only the MEP plans give takes a unit square far off every sheet; an empty
+        // extent is inverted or infinite. None of them is a place.
+        let no_plan = [-1.0e9, -1.0e9, -1.0e9 + 1.0, -1.0e9 + 1.0];
+        let empty = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        let level = [100.0, 200.0, 1300.0, 1000.0];
+        let building = Some([0.0, 0.0, 3000.0, 2000.0]);
+        let sane = |p: Option<Vec2>| p.is_none_or(|p| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= 1.0e8 && p.y.abs() <= 1.0e8);
+        // No panel, a placeholder level: listed for review, not built (before Q6290: -1e9).
+        for g in [no_plan, empty, [5.0, 5.0, 5.0, 9.0], [f64::NAN, 0.0, 10.0, 10.0]] {
+            let at = note_object_at(None, Some(g), building);
+            assert!(sane(at), "{g:?} -> {at:?}");
+            assert_eq!(at, None, "{g:?}");
+        }
+        assert_eq!(note_object_at(None, None, building), None);
+        assert_eq!(note_object_at(None, None, None), None);
+        // A real level: its middle; beside the panel when that is on the level.
+        assert_eq!(note_object_at(None, Some(level), building), Some(Vec2::new(700.0, 600.0)));
+        assert_eq!(note_object_at(Some(Vec2::new(400.0, 500.0)), Some(level), building), Some(Vec2::new(400.0, 500.0)));
+        // A panel off the level's plan (or at a sentinel) is no place: the level's middle.
+        for p in [Vec2::new(-1.0e9 + 12.0, -1.0e9), Vec2::new(2500.0, 500.0), Vec2::new(f64::NAN, 1.0)] {
+            assert_eq!(note_object_at(Some(p), Some(level), building), Some(Vec2::new(700.0, 600.0)), "{p:?}");
+        }
+        // A level with no plan: beside its panel only where that is inside the building.
+        assert_eq!(note_object_at(Some(Vec2::new(2500.0, 500.0)), Some(no_plan), building), Some(Vec2::new(2500.0, 500.0)));
+        assert_eq!(note_object_at(Some(Vec2::new(-1.0e9 + 12.0, -1.0e9)), Some(no_plan), building), None);
+        assert_eq!(note_object_at(Some(Vec2::new(2500.0, 500.0)), Some(no_plan), None), None);
+        // The region check itself.
+        assert_eq!(plan_region_of(Some(no_plan)), None);
+        assert_eq!(plan_region_of(Some(empty)), None);
+        assert_eq!(plan_region_of(None), None);
+        assert_eq!(plan_region_of(Some(level)), Some(level));
     }
 
     #[test]
