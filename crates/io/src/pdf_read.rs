@@ -2272,13 +2272,11 @@ const OCR_MIN_CONFIDENCE: f64 = 0.2;
 /// there) a reading under [`OCR_MIN_CONFIDENCE`] is too weak: neither is inserted (their
 /// strokes stay linework). A page lettered in strokes alone keeps its weak readings (in the
 /// unconfirmed OCR style): its room numbers are read there, and the sheet's registration needs
-/// them. The readings kept, and how many took a hidden text, were circles, were too weak.
-fn settle_ocr(
-    ocr: Vec<RecoveredText>,
-    texts: &[TextOut],
-    strokes: &[Stroke],
-    recovered: &mut [RecoveredText],
-) -> (Vec<RecoveredText>, usize, usize, usize) {
+/// them. On a page lettered in real text, a reading no hidden string confirms that stands far
+/// taller than the page's lettering and reads like no word is kept for review (it is linework
+/// misread), and one taller than [`OCR_OUTSIZED`] times the page's tallest real text is no
+/// lettering at all: not inserted (its strokes stay linework).
+fn settle_ocr(ocr: Vec<RecoveredText>, texts: &[TextOut], strokes: &[Stroke], recovered: &mut [RecoveredText]) -> Settled {
     // Each hidden string's box, a third of a letter round.
     let hidden: Vec<(&TextOut, [f64; 4])> = texts
         .iter()
@@ -2298,7 +2296,9 @@ fn settle_ocr(
     heights.sort_by(f64::total_cmp);
     let lettering_height = if heights.len() < OCR_REAL_TEXT_LIMIT { 0.0 } else { heights.get(heights.len() / 2).copied().unwrap_or(0.0) };
     let tall = |h: f64, times: f64| lettering_height > 0.0 && h > times * lettering_height;
-    let (mut from_hidden, mut circles, mut weak) = (0usize, 0usize, 0usize);
+    // The tallest real text of a page lettered in real text (a title, the sheet number).
+    let tallest = if lettering_height > 0.0 { heights.last().copied().unwrap_or(0.0) } else { 0.0 };
+    let (mut from_hidden, mut circles, mut weak, mut outsized) = (0usize, 0usize, 0usize, 0usize);
     for rt in ocr {
         let on = hidden.iter().position(|(_, b)| rt.at.0 >= b[0] && rt.at.0 <= b[2] && rt.at.1 >= b[1] && rt.at.1 <= b[3]);
         match on.and_then(|i| Some((i, hidden.get(i)?.0))) {
@@ -2343,11 +2343,19 @@ fn settle_ocr(
                 circles += 1
             }
             None if !hidden.is_empty() && rt.confidence.is_some_and(|c| c < OCR_MIN_CONFIDENCE) => weak += 1,
+            // Far taller than any real text on the page: walls, hatch or a door swing read as
+            // letters. Not lettering: its strokes stay linework.
+            None if tallest > 0.0 && rt.height > OCR_OUTSIZED * tallest => outsized += 1,
             // On a page whose lettering has hidden copies, a reading where none is that reads like
             // no word is kept for review, not as the sheet's text.
             None if !hidden.is_empty() && !reads_as_word(&rt.value) => {
                 let strokes_stay = tall(rt.height, OCR_TALL_MARKS);
                 kept.push(RecoveredText { review: true, strokes_stay, ..rt });
+            }
+            // The same on a page lettered in real text with no hidden copies, for one that stands
+            // far taller than the page's lettering (its strokes stay linework there anyway).
+            None if hidden.is_empty() && tall(rt.height, OCR_TALL_READING) && !reads_as_word(&rt.value) => {
+                kept.push(RecoveredText { review: true, ..rt });
             }
             None => {
                 let strokes_stay = !hidden.is_empty() && tall(rt.height, OCR_TALL_READING);
@@ -2356,8 +2364,27 @@ fn settle_ocr(
         }
     }
     kept.extend(taken.into_iter().flatten());
-    (kept, from_hidden, circles, weak)
+    Settled { kept, from_hidden, circles, weak, outsized }
 }
+
+/// What [`settle_ocr`] made of the OCR's readings.
+struct Settled {
+    /// The readings kept (some for review).
+    kept: Vec<RecoveredText>,
+    /// Readings that took the hidden string they lie on.
+    from_hidden: usize,
+    /// Lone round loops read as `O`: circles.
+    circles: usize,
+    /// Readings under the confidence floor on a page with hidden text.
+    weak: usize,
+    /// Readings far taller than any real text on the page ([`OCR_OUTSIZED`]).
+    outsized: usize,
+}
+
+/// How many times the page's tallest real text an OCR reading may stand and still be lettering,
+/// on a page lettered in real text: past it, the strokes read are a plan's linework (a reading
+/// 10 ft high on a 1/4" plan is a wall run or a door swing, not a tag).
+const OCR_OUTSIZED: f64 = 4.0;
 
 /// How many times the page's usual lettering height an OCR reading no hidden string confirms may
 /// stand and still be taken for lettering.
@@ -2884,19 +2911,26 @@ fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f
     result
 }
 
-/// Fallback SHX text recovery: when no hidden text is available, detect clusters of short
-/// strokes that form glyph-like patterns and match them to nearby visible text.  This is less
-/// accurate than hidden-text matching but recovers more text than leaving it as linework.
+/// Fallback SHX text recovery: when no hidden text is available, find visible texts whose own
+/// lettering is also plotted as short strokes over them.  This is less accurate than hidden-text
+/// matching but recovers more text than leaving it as linework.
+///
+/// The strokes a visible text adopts are those of one pen inside its box (half a letter round):
+/// at least one per character, standing a letter high ([`FALLBACK_GLYPH_HEIGHT`] of the text's
+/// height), running along the text from its start (half its length at least), and clear of other
+/// short strokes of that pen for a letter round. Lettering stands apart; a tag inside hatch,
+/// beside dimension ticks or in a door swing's pieces doesn't, and those strokes are no lettering
+/// of it: they stay linework. The recovered text stands as high as the strokes it replaces (their
+/// cap height), never the height of the linework round it.
 fn recover_shx_fallback(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)) -> Vec<RecoveredText> {
     let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
     let max_seg = (sw.min(sh) * 0.02).clamp(2.0, 25.0);
-    let cell = max_seg * 3.0;
+    let cell = max_seg;
 
-    // find short strokes (SHX candidates)
+    // short strokes (SHX candidates), on a grid by their middle
     struct SI {
         idx: usize,
-        cx: f64,
-        cy: f64,
+        bb: [f64; 4],
         pen: Pen,
     }
     let mut short: Vec<SI> = Vec::new();
@@ -2909,106 +2943,111 @@ fn recover_shx_fallback(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)
             continue;
         }
         if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
-            short.push(SI { idx: i, cx: (b[0] + b[2]) / 2.0, cy: (b[1] + b[3]) / 2.0, pen: s.pen });
+            short.push(SI { idx: i, bb: b, pen: s.pen });
         }
     }
     if short.is_empty() {
         return Vec::new();
     }
-
-    // cluster short strokes by proximity and same pen
-    let mut grid: HashMap<(i64, i64, Pen), Vec<usize>> = HashMap::new();
+    let at_cell = |v: f64| (v / cell).floor() as i64;
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for (si, s) in short.iter().enumerate() {
-        let gx = (s.cx / cell).floor() as i64;
-        let gy = (s.cy / cell).floor() as i64;
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                grid.entry((gx + dx, gy + dy, s.pen)).or_default().push(si);
-            }
-        }
+        grid.entry((at_cell((s.bb[0] + s.bb[2]) / 2.0), at_cell((s.bb[1] + s.bb[3]) / 2.0))).or_default().push(si);
     }
-    let mut visited = vec![false; short.len()];
-    let mut clusters: Vec<([f64; 4], Vec<usize>, f64, Pen)> = Vec::new(); // bounds, indices, height, pen
-    for si in 0..short.len() {
-        if visited[si] {
+    let inside = |b: &[f64; 4], r: &[f64; 4]| b[0] >= r[0] && b[2] <= r[2] && b[1] >= r[1] && b[3] <= r[3];
+    let touches = |b: &[f64; 4], r: &[f64; 4]| b[0] <= r[2] && b[2] >= r[0] && b[1] <= r[3] && b[3] >= r[1];
+
+    let mut used: HashSet<usize> = HashSet::new();
+    let mut result: Vec<RecoveredText> = Vec::new();
+    for t in texts {
+        let th = t.height;
+        let chars = t.value.chars().filter(|c| !c.is_whitespace()).count();
+        // an upright text a letter high (a turned one's box isn't known here)
+        if t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER)
+            || chars == 0
+            || !th.is_finite()
+            || th <= 0.0
+            || th > max_seg * 12.0
+            || t.rotation.abs() > 0.5
+        {
             continue;
         }
-        visited[si] = true;
-        let s = &short[si];
-        let mut members = vec![si];
-        let mut queue = vec![si];
-        let mut bounds = [s.cx, s.cy, s.cx, s.cy];
-        while let Some(cur) = queue.pop() {
-            let c = &short[cur];
-            let gx = (c.cx / cell).floor() as i64;
-            let gy = (c.cy / cell).floor() as i64;
-            if let Some(neighbors) = grid.get(&(gx, gy, c.pen)) {
-                for &ni in neighbors {
-                    if visited[ni] {
-                        continue;
-                    }
-                    let n = &short[ni];
-                    if (n.cx - c.cx).abs() < cell && (n.cy - c.cy).abs() < cell {
-                        visited[ni] = true;
-                        members.push(ni);
-                        queue.push(ni);
-                        bounds = [bounds[0].min(n.cx), bounds[1].min(n.cy), bounds[2].max(n.cx), bounds[3].max(n.cy)];
-                    }
+        let tb = text_box(t);
+        let (m, round) = (th * 0.5, th * 1.5);
+        let inner = [tb[0] - m, tb[1] - m, tb[2] + m, tb[3] + m];
+        let outer = [tb[0] - round, tb[1] - round, tb[2] + round, tb[3] + round];
+        // a stroke's middle lies within half a stroke of the box it touches
+        let (gx0, gx1) = (at_cell(outer[0] - max_seg), at_cell(outer[2] + max_seg));
+        let (gy0, gy1) = (at_cell(outer[1] - max_seg), at_cell(outer[3] + max_seg));
+        // (hostile coordinates: the span saturates, never overflows)
+        let span = |a: i64, b: i64| b.saturating_sub(a).saturating_add(1);
+        if span(gx0, gx1).saturating_mul(span(gy0, gy1)) > MAX_FALLBACK_CELLS {
+            continue;
+        }
+        let mut near: Vec<usize> = Vec::new();
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                if let Some(members) = grid.get(&(gx, gy)) {
+                    near.extend(
+                        members.iter().copied().filter(|&si| short.get(si).is_some_and(|s| !used.contains(&s.idx) && touches(&s.bb, &outer))),
+                    );
                 }
             }
         }
-        let h = bounds[3] - bounds[1];
-        let w = bounds[2] - bounds[0];
-        if members.len() >= 2 && h > 0.5 && h < max_seg * 12.0 && w > 0.5 && w < max_seg * 100.0 {
-            clusters.push((bounds, members.iter().map(|&mi| short[mi].idx).collect(), h, s.pen));
-        }
-    }
-
-    // for each cluster, try to find a visible text entity that overlaps it
-    let mut result: Vec<RecoveredText> = Vec::new();
-    let mut used_texts: HashSet<usize> = HashSet::new();
-    for (bounds, indices, height, pen) in &clusters {
-        let pad = height * 0.5;
-        let cb = [bounds[0] - pad, bounds[1] - pad, bounds[2] + pad, bounds[3] + pad];
-        // find visible text that overlaps this cluster
-        let mut best: Option<(usize, f64)> = None;
-        for (ti, t) in texts.iter().enumerate() {
-            if used_texts.contains(&ti) {
-                continue;
-            }
-            if t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER) {
-                continue;
-            }
-            let th = t.height.max(1.0);
-            let tw = th * 0.6 * t.value.len().max(1) as f64;
-            let tb = [t.at.0 - 1.0, t.at.1 - 1.0, t.at.0 + tw + 1.0, t.at.1 + th + 1.0];
-            if tb[0] < cb[2] && tb[2] > cb[0] && tb[1] < cb[3] && tb[3] > cb[1] {
-                let dist = ((t.at.0 - bounds[0]).hypot(t.at.1 - bounds[1])).abs();
-                if !best.is_some_and(|(_, d)| dist >= d) {
-                    best = Some((ti, dist));
-                }
+        // the lettering's pen: the one most strokes inside the box have
+        let mut pens: Vec<(Pen, usize)> = Vec::new();
+        for s in near.iter().filter_map(|&si| short.get(si)).filter(|s| inside(&s.bb, &inner)) {
+            match pens.iter_mut().find(|(p, _)| *p == s.pen) {
+                Some((_, n)) => *n += 1,
+                None => pens.push((s.pen, 1)),
             }
         }
-        if let Some((ti, _)) = best {
-            used_texts.insert(ti);
-            let t = &texts[ti];
-            result.push(RecoveredText {
-                at: (bounds[0], bounds[1]),
-                height: *height,
-                value: t.value.clone(),
-                stroke_indices: indices.iter().copied().collect(),
-                pen: *pen,
-                layer: t.layer.clone(),
-                unconfirmed: false,
-                confidence: None,
-                review: false,
-                strokes_stay: false,
-                rotation: 0.0,
-            });
+        let Some(&(pen, _)) = pens.iter().max_by_key(|(_, n)| *n) else { continue };
+        let of_pen: Vec<&SI> = near.iter().filter_map(|&si| short.get(si)).filter(|s| s.pen == pen).collect();
+        // crowded: more short strokes of that pen round the box (hatch, ticks)
+        if of_pen.iter().any(|s| !inside(&s.bb, &inner)) {
+            continue;
         }
+        if of_pen.len() < chars {
+            continue;
+        }
+        let Some(glyphs) = of_pen.iter().map(|s| s.bb).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]) else {
+            continue;
+        };
+        let height = glyphs[3] - glyphs[1];
+        if !FALLBACK_GLYPH_HEIGHT.contains(&(height / th)) {
+            continue;
+        }
+        // lettering runs along its text, from where it starts: a mark inside a tag (a cross, a
+        // dot) doesn't
+        if (glyphs[0] - tb[0]).abs() > th || glyphs[2] - glyphs[0] < 0.5 * (tb[2] - tb[0]) {
+            continue;
+        }
+        used.extend(of_pen.iter().map(|s| s.idx));
+        result.push(RecoveredText {
+            at: (glyphs[0], glyphs[1]),
+            height,
+            value: t.value.clone(),
+            stroke_indices: of_pen.iter().map(|s| s.idx).collect(),
+            pen,
+            layer: t.layer.clone(),
+            unconfirmed: false,
+            confidence: None,
+            review: false,
+            strokes_stay: false,
+            rotation: 0.0,
+        });
     }
     result
 }
+
+/// How high a text's plotted lettering may stand, as a share of the text's height (its
+/// capital's): about one capital high; plotted a whole font size high (1.4 capitals), a little
+/// more with a descender or a parenthesis.
+const FALLBACK_GLYPH_HEIGHT: std::ops::RangeInclusive<f64> = 0.5..=1.6;
+
+/// Most grid cells one text's surroundings are searched in for its plotted lettering.
+const MAX_FALLBACK_CELLS: i64 = 4096;
 
 // ---------------------------------------------------------------------------------------------
 // SHX OCR: recognise stroked (SHX-style) lettering by matching individual glyph clusters
@@ -4908,7 +4947,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             // What the PDF's hidden text says is written where the OCR read takes that string;
             // a circle and a reading under the confidence floor aren't inserted (their strokes
             // stay linework).
-            let (mut ocr_texts, from_hidden, circles, weak) = settle_ocr(ocr_texts, &texts, &strokes, &mut recovered_texts);
+            let Settled { kept: mut ocr_texts, from_hidden, circles, weak, outsized } = settle_ocr(ocr_texts, &texts, &strokes, &mut recovered_texts);
+            if outsized > 0 {
+                stats.insert("SHX OCR readings far taller than the page's text left as linework".into(), outsized);
+            }
             if from_hidden > 0 {
                 stats.insert("SHX OCR readings replaced by the hidden text there".into(), from_hidden);
             }
@@ -6406,13 +6448,13 @@ mod tests {
             rotation: 0.0,
         };
         let ocr = vec![read("U", (300.0, 300.0)), read("M L#.'", (320.0, 300.0)), read("151", (400.0, 300.0)), read("A-1", (420.0, 300.0))];
-        let (kept, _, _, _) = settle_ocr(ocr, &[hidden], &[], &mut []);
+        let kept = settle_ocr(ocr, &[hidden], &[], &mut []).kept;
         let review: Vec<(&str, bool)> = kept.iter().map(|r| (r.value.as_str(), r.review)).collect();
         assert_eq!(review, [("U", true), ("M L#.'", true), ("151", false), ("A-1", false)]);
         // At the page's lettering height these are lettering: their strokes leave the plan.
         assert!(kept.iter().all(|r| !r.strokes_stay));
         // A page with no hidden text keeps its readings as lettering (its sheets register by them).
-        let (kept, _, _, _) = settle_ocr(vec![read("U", (300.0, 300.0))], &[], &[], &mut []);
+        let kept = settle_ocr(vec![read("U", (300.0, 300.0))], &[], &[], &mut []).kept;
         assert!(kept.iter().all(|r| !r.review));
         // A reading of a hidden string's own words is lettering: its strokes are the text's.
         let on_it = read("Hello", (102.0, 100.5));
@@ -6446,9 +6488,77 @@ mod tests {
         };
         let mut lettered: Vec<TextOut> = (0..OCR_REAL_TEXT_LIMIT).map(|i| note((1000.0 + i as f64 * 50.0, 900.0), None, "NOTE")).collect();
         lettered.push(hidden2);
-        let (kept, _, _, _) = settle_ocr(readings, &lettered, &[], &mut []);
+        let kept = settle_ocr(readings, &lettered, &[], &mut []).kept;
         let stay: Vec<(&str, bool)> = kept.iter().map(|r| (r.value.as_str(), r.strokes_stay)).collect();
         assert_eq!(stay, [("Hello", false), ("T1", false), ("T1", true), ("--O'", true), ("--O'", false)]);
+    }
+
+    #[test]
+    fn a_text_stretched_across_the_number_range_does_not_overflow_the_lettering_search() {
+        // Hostile coordinates: a text box from -1e300 to 1e300 beside a short stroke. The grid
+        // span round it saturates and is skipped; nothing overflows.
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let stroke =
+            Stroke { pts: vec![(100.0, 100.0), (104.0, 104.0)], closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 };
+        let far = TextOut {
+            at: (-1e300, 100.0),
+            end: (1e300, 100.0),
+            height: 6.0,
+            rotation: 0.0,
+            width_factor: 1.0,
+            value: "FAR".into(),
+            pen,
+            layer: None,
+            style: None,
+            order: 0,
+        };
+        assert!(recover_shx_fallback(&[stroke], &[far], (11.0, 8.5)).is_empty());
+    }
+
+    #[test]
+    fn readings_far_taller_than_a_real_text_pages_lettering_are_flagged_or_dropped() {
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let note = |i: usize, height: f64| TextOut {
+            at: (1000.0 + i as f64 * 50.0, 900.0),
+            end: (1030.0 + i as f64 * 50.0, 900.0),
+            height,
+            rotation: 0.0,
+            width_factor: 1.0,
+            value: "NOTE".into(),
+            pen,
+            layer: None,
+            style: None,
+            order: 0,
+        };
+        // A page lettered in real 5 pt text with one 12 pt title, and no hidden text.
+        let mut texts: Vec<TextOut> = (0..OCR_REAL_TEXT_LIMIT).map(|i| note(i, 5.0)).collect();
+        texts.push(note(OCR_REAL_TEXT_LIMIT, 12.0));
+        let read = |v: &str, h: f64| RecoveredText {
+            at: (100.0, 100.0),
+            height: h,
+            value: v.into(),
+            stroke_indices: HashSet::new(),
+            pen,
+            layer: None,
+            unconfirmed: true,
+            confidence: Some(0.9),
+            review: false,
+            strokes_stay: false,
+            rotation: 0.0,
+        };
+        let readings = vec![read("268", 5.0), read("--.'", 5.0), read("Q7K", 30.0), read("--.'", 30.0), read("905Z", 49.0), read("-L-", 60.0)];
+        let s = settle_ocr(readings, &texts, &[], &mut []);
+        let kept: Vec<(&str, bool)> = s.kept.iter().map(|r| (r.value.as_str(), r.review)).collect();
+        // At the page's lettering height every reading stays lettering (its sheets register by
+        // them); far taller, one that reads like no word is flagged for review; more than four
+        // times the page's tallest text (12 pt), none is drawn.
+        assert_eq!(kept, [("268", false), ("--.'", false), ("Q7K", false), ("--.'", true)]);
+        assert_eq!(s.outsized, 2);
+        // A page with little real text has no lettering to measure by: it keeps them all.
+        let few: Vec<TextOut> = (0..3).map(|i| note(i, 5.0)).collect();
+        let s = settle_ocr(vec![read("--.'", 30.0), read("-L-", 60.0)], &few, &[], &mut []);
+        assert_eq!(s.kept.len(), 2);
+        assert_eq!(s.outsized, 0);
     }
 
     #[test]

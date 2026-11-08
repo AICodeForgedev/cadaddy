@@ -40,4 +40,5 @@ mod e2e_walktours;
 mod e2e_workspaces;
 mod e2e_xlsx;
 mod firstrun_round2;
+mod job_panel;
 mod memory_budget_ui;

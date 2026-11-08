@@ -307,3 +307,124 @@ fn unmatched_schedule_type_is_flagged() {
     // Row 102 has type B (no family B defined). 101 and 104 have type A (matched).
     assert_eq!(flagged, vec!["B"], "type B should be flagged: {}", r["flags"]["types_without_family"]);
 }
+
+/// Upright texts at `y`, each at its `x`.
+fn line_of(s: &mut Session, y: f64, cells: &[(f64, &str)]) {
+    for (x, t) in cells {
+        text(s, [*x, y], t, 10.0);
+    }
+}
+
+/// A title strip's fields: a `PROJECT NO.` beside a `SHEET SIZE` (a mark-like and a size-like
+/// heading on one line), then the firm's fields and the sheet's title below them.
+fn title_fields(s: &mut Session, x: f64) {
+    line_of(s, 600.0, &[(x, "PROJECT NO."), (x + 180.0, "SHEET SIZE")]);
+    line_of(s, 580.0, &[(x, "0000-01"), (x + 180.0, "ARCH D")]);
+    line_of(s, 560.0, &[(x, "DRAWN BY"), (x + 180.0, "AB")]);
+    line_of(s, 540.0, &[(x, "DATE"), (x + 180.0, "01-01")]);
+    line_of(s, 520.0, &[(x, "ISSUED FOR"), (x + 180.0, "PERMIT")]);
+    line_of(s, 500.0, &[(x, "FIRST FLOOR PLAN")]);
+}
+
+/// A door schedule drawn as text with a note and a stray letter under its rows, and the three
+/// doors' tags on the plan.
+fn door_schedule(s: &mut Session) {
+    text(s, [2000.0, 1500.0], "DOOR SCHEDULE", 12.0);
+    line_of(s, 1470.0, &[(2000.0, "MARK"), (2100.0, "WIDTH"), (2200.0, "HEIGHT"), (2300.0, "TYPE")]);
+    for (y, m, t) in [(1450.0, "D1", "A"), (1430.0, "D2", "B"), (1410.0, "D3", "A")] {
+        line_of(s, y, &[(2000.0, m), (2100.0, "3'-0\""), (2200.0, "7'-0\""), (2300.0, t)]);
+    }
+    line_of(s, 1390.0, &[(2000.0, "SEE NOTE 4"), (2100.0, "TYP.")]);
+    line_of(s, 1370.0, &[(2000.0, "L"), (2100.0, "3'-0\"")]);
+    for (x, m) in [(400.0, "D1"), (700.0, "D2"), (1000.0, "D3")] {
+        tag(s, [x, 1000.0], m);
+    }
+}
+
+fn marks(r: &Value) -> Vec<String> {
+    r["schedules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|x| x["rows"].as_array().unwrap().iter().map(|w| w["mark"].as_str().unwrap().to_string()))
+        .collect()
+}
+
+/// fix-title-block-read-as-schedule-rows: a sheet with a border and a title strip down its right
+/// side. The strip's fields are never door schedule rows; the schedule in the drawing area keeps
+/// its three doors, and the note and the stray letter under it are no rows.
+#[test]
+fn a_title_strip_is_never_read_as_schedule_rows() {
+    let mut s = Session::new();
+    layer(&mut s, "BORDER");
+    for (a, b) in
+        [([50.0, 50.0], [3550.0, 50.0]), ([3550.0, 50.0], [3550.0, 2350.0]), ([3550.0, 2350.0], [50.0, 2350.0]), ([50.0, 2350.0], [50.0, 50.0])]
+    {
+        s.execute("line", &json!({"points": [a, b]})).unwrap();
+    }
+    s.execute("line", &json!({"points": [[3200.0, 50.0], [3200.0, 2350.0]]})).unwrap();
+    layer(&mut s, "TEXT");
+    title_fields(&mut s, 3220.0);
+    door_schedule(&mut s);
+    let r = s.execute("schedules.read", &json!({})).unwrap();
+    assert_eq!(marks(&r), vec!["D1", "D2", "D3"], "{r}");
+    assert_eq!(r["schedules"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(r["flags"]["rows_without_tag"], json!([]), "{r}");
+    assert_eq!(r["flags"]["tags_without_row"], json!([]), "{r}");
+    // The same sheet given as the job gives it (its title block found when it was loaded).
+    let r = s
+        .execute(
+            "schedules.read",
+            &json!({"sheets": [{"rect": [0, 0, 3600, 2400], "area": [60, 60, 3190, 2340], "title_block": [3200, 60, 3540, 2340]}]}),
+        )
+        .unwrap();
+    assert_eq!(marks(&r), vec!["D1", "D2", "D3"], "{r}");
+}
+
+/// The same title-block fields with no frame to find them by (no border, no rule): `PROJECT NO.`
+/// heads no column of marks, so they make no schedule at all.
+#[test]
+fn title_block_fields_head_no_column_of_marks() {
+    let mut s = Session::new();
+    title_fields(&mut s, 3220.0);
+    door_schedule(&mut s);
+    let r = s.execute("schedules.read", &json!({})).unwrap();
+    assert_eq!(marks(&r), vec!["D1", "D2", "D3"], "{r}");
+    assert_eq!(r["flags"]["rows_without_tag"], json!([]), "{r}");
+}
+
+/// A schedule titled as another one (a column schedule with MARK and SIZE) lists no doors.
+#[test]
+fn a_schedule_titled_as_another_lists_no_openings() {
+    let mut s = Session::new();
+    text(&mut s, [100.0, 530.0], "WOOD COLUMN SCHEDULE", 12.0);
+    line_of(&mut s, 500.0, &[(100.0, "MARK"), (200.0, "SIZE"), (300.0, "BASE")]);
+    line_of(&mut s, 480.0, &[(100.0, "C1"), (200.0, "6x6"), (300.0, "CB66")]);
+    line_of(&mut s, 460.0, &[(100.0, "C2"), (200.0, "6x8"), (300.0, "CB68")]);
+    let r = s.execute("schedules.read", &json!({})).unwrap();
+    assert_eq!(r["schedules"], json!([]), "{r}");
+    assert_eq!(r["flags"]["rows_without_tag"], json!([]), "{r}");
+}
+
+/// A door schedule printed turned a quarter turn (read up the sheet) is read along its own
+/// baseline: its two rows.
+#[test]
+fn a_turned_schedule_is_read_along_its_baseline() {
+    let mut s = Session::new();
+    let turned = |s: &mut Session, at: [f64; 2], t: &str| {
+        s.execute("text", &json!({"at": at, "text": t, "height": 10.0, "rotation": 90.0})).unwrap();
+    };
+    turned(&mut s, [470.0, 100.0], "DOOR SCHEDULE");
+    for (y, h) in [(100.0, "MARK"), (200.0, "WIDTH"), (300.0, "HEIGHT")] {
+        turned(&mut s, [500.0, y], h);
+    }
+    for (x, m) in [(520.0, "D4"), (540.0, "D5")] {
+        for (y, v) in [(100.0, m), (200.0, "3'-0\""), (300.0, "7'-0\"")] {
+            turned(&mut s, [x, y], v);
+        }
+    }
+    let r = s.execute("schedules.read", &json!({})).unwrap();
+    assert_eq!(marks(&r), vec!["D4", "D5"], "{r}");
+    assert_eq!(r["schedules"][0]["title"], json!("DOOR SCHEDULE"), "{r}");
+    assert_eq!(r["schedules"][0]["rows"][0]["width_in"], json!(36.0), "{r}");
+}
