@@ -142,6 +142,17 @@ pub fn is_sheet_number(t: &str) -> bool {
 
 /// The discipline letters of a sheet number (`E-6` → `E`, `FP101` → `FP`).
 pub fn discipline_of(number: &str) -> String {
+    let letters = designator_letters(number);
+    // A trade's two-letter sub-discipline (`EP` power, `EL` lighting, `AS` architectural shell,
+    // `MH` HVAC, `PL` plumbing) is that trade's sheet: the readers ask for `E`, `A`, `M`, `P`.
+    if crate::wordrules::words("sheets.subdiscipline_codes").contains(&letters.as_str()) {
+        return letters.chars().take(1).collect();
+    }
+    letters
+}
+
+/// A sheet number's leading capitals as printed (`EP` of `EP101`).
+pub fn designator_letters(number: &str) -> String {
     number.trim().chars().take_while(char::is_ascii_uppercase).collect()
 }
 
@@ -151,7 +162,7 @@ pub fn discipline_of(number: &str) -> String {
 /// drawing area: such a number is suspect, and a number at the title block's sheet-number spot
 /// wins over it.
 pub fn designator_prefix(number: &str) -> bool {
-    let letters = discipline_of(number);
+    let letters = designator_letters(number);
     crate::wordrules::words("sheets.number_prefixes").contains(&letters.as_str())
 }
 
@@ -283,7 +294,11 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
     texts
         .iter()
         .filter(|t| {
-            is_sheet_number(&t.value) && discipline_of(&t.value).len() <= 2 && designator_prefix(&t.value) && t.height >= 2.0 * median && near_edge(t)
+            is_sheet_number(&t.value)
+                && designator_letters(&t.value).len() <= 2
+                && designator_prefix(&t.value)
+                && t.height >= 2.0 * median
+                && near_edge(t)
         })
         .max_by(|a, b| a.height.total_cmp(&b.height))
         .map(|n| SheetIdent {
@@ -675,6 +690,17 @@ mod tests {
     use super::*;
     use cadaddy_doc::{Common, HAlign, Line, Space, Text, VAlign};
     use cadaddy_geom::Vec3;
+
+    #[test]
+    fn a_trades_sub_discipline_sheet_is_that_trades() {
+        // Power, lighting and HVAC sheets are E and M sheets; fire alarm and life safety keep
+        // their own designators; the letters as printed still check as a set's prefix.
+        let got: Vec<String> =
+            ["EP101", "EL101", "MH102", "PL103", "AS112", "E-101", "FA101", "LS-1", "SL111"].iter().map(|n| discipline_of(n)).collect();
+        assert_eq!(got, ["E", "E", "M", "P", "A", "E", "FA", "LS", "SL"]);
+        assert_eq!(designator_letters("EP101"), "EP");
+        assert!(designator_prefix("EP101") && !designator_prefix("RTU-1"));
+    }
 
     fn add(d: &mut Drawing, kind: EntityKind) {
         let _ = d.add(&Space::Model, Common { layer: "0".into(), ..Common::default() }, kind);

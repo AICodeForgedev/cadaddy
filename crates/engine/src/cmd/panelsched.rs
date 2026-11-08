@@ -45,10 +45,7 @@ pub(crate) fn title_panel(title: &str) -> Option<(String, Option<u32>)> {
         && tag.len() <= 12
         && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
         && tag.chars().any(|c| c.is_ascii_alphanumeric());
-    if !ok
-        || ["SCHEDULE", "SCHEDULES", "SHALL", "AND", "WITH", "TO", "IN", "FOR", "NAME", "DESIGNATION", "TAG", "ID", "TYPE", "NOTES"]
-            .contains(&tag.as_str())
-    {
+    if !ok || cadaddy_mepfix::wordrules::words("schedules.panel_title_not_tags").contains(&tag.as_str()) {
         return None;
     }
     // A panel's other tables (its demand calculation, load summary) aren't its schedule.
@@ -87,6 +84,8 @@ fn letters(v: &str) -> bool {
 #[derive(Clone, Debug)]
 struct Side {
     num: f64,
+    /// Where the number column's header ends (the right side's codes are past it).
+    num_end: f64,
     amps: Option<f64>,
     poles: Option<f64>,
     /// Its wire size and load (VA) columns.
@@ -96,6 +95,10 @@ struct Side {
     others: Vec<f64>,
     /// The left side (codes left of its numbers, the description right of them).
     left: bool,
+    /// Its breaker type column (`BKR`: `GF`, `AF` in it), and its description's header, when the
+    /// header has them (a description printed past the breaker's columns).
+    kind: Option<f64>,
+    description: Option<f64>,
 }
 
 #[derive(Default)]
@@ -212,10 +215,43 @@ fn totals_of(flat: &[&TextItem], y0: f64, y1: f64, x0: f64, x1: f64, row_h: f64,
     out
 }
 
+/// A character's advance in its text's height (the height a print's text is read with is its
+/// capitals'), to place a header's words.
+const HEADER_CHAR_WIDTH: f64 = 0.9;
+/// The most texts split into their words (hostile files).
+const MAX_HEADER_SPLITS: usize = 5_000;
+
+/// The sheet's texts with each header text of several column names (`AMP POLE BKR`, `LTG PWR CO`:
+/// a print's columns' names read as one line) split into its words, each where it is printed
+/// along the line: the reader finds a column by its one name.
+fn header_words(texts: &[TextItem]) -> Vec<TextItem> {
+    let names = cadaddy_mepfix::wordrules::words("schedules.panel_header_words");
+    let mut out = Vec::with_capacity(texts.len());
+    let mut split = 0usize;
+    for t in texts {
+        let up = t.value.trim().to_ascii_uppercase();
+        let parts: Vec<&str> = up.split_whitespace().collect();
+        if split >= MAX_HEADER_SPLITS || parts.len() < 2 || !parts.iter().all(|w| names.contains(w)) {
+            out.push(t.clone());
+            continue;
+        }
+        split += 1;
+        let (c, s) = (t.rotation.cos(), t.rotation.sin());
+        let mut chars = 0usize;
+        for w in parts {
+            let along = chars as f64 * HEADER_CHAR_WIDTH * t.height;
+            out.push(TextItem { value: w.to_string(), at: t.at + cadaddy_geom::Vec2::new(along * c, along * s), ..t.clone() });
+            chars += w.chars().count() + 1;
+        }
+    }
+    out
+}
+
 /// The schedules on one sheet's texts (its PDF page re-read, or the drawing's).
 pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
+    let words = header_words(texts);
     let flat: Vec<&TextItem> =
-        texts.iter().filter(|t| t.rotation.abs() < 0.05 && t.height > 0.0 && t.at.x.is_finite() && t.at.y.is_finite()).collect();
+        words.iter().filter(|t| t.rotation.abs() < 0.05 && t.height > 0.0 && t.at.x.is_finite() && t.at.y.is_finite()).collect();
     // The legend: the `CODE - MEANING` lines under a `LEGEND:` label (a circuit's own description,
     // `LTG - THIRD FLOOR`, isn't one); with no label on the sheet, every such line.
     let labels: Vec<&&TextItem> = flat.iter().filter(|t| t.value.trim().trim_end_matches(':').trim().eq_ignore_ascii_case("LEGEND")).collect();
@@ -342,10 +378,17 @@ fn read_ckt(
     let hash = named("#");
     let near_num =
         |x: f64| hash.iter().copied().filter(|h| (h - x).abs() < 3.0 * row_h).min_by(|a, b| (a - x).abs().total_cmp(&(b - x).abs())).unwrap_or(x);
-    let amps = [named("AMPS"), named("TRIP"), named("A")].concat();
+    let amps = [named("AMPS"), named("AMP"), named("TRIP"), named("A")].concat();
     let poles = [named("P"), named("POLE"), named("POLES")].concat();
+    // The breaker's type column (`BKR` over `GF`), and the description's.
+    let kinds = named("BKR");
+    let desc_heads: Vec<f64> = head.iter().filter(|t| t.value.to_ascii_uppercase().contains("DESCRIPTION")).map(|t| t.at.x).collect();
     let lnum = near_num(l.at.x);
     let rnum = near_num(r.at.x);
+    // The right side's number column ends where its header does (its numbers are printed
+    // under the header, not at its left edge): a `#` one character, else the CKT text.
+    let rnum_end =
+        rnum + if (rnum - r.at.x).abs() > f64::EPSILON { 1 } else { r.value.trim().chars().count().max(1) } as f64 * HEADER_CHAR_WIDTH * row_h;
     let first_after = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v > x && *v < limit).min_by(f64::total_cmp);
     let last_before = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v < x && *v > limit).max_by(f64::total_cmp);
     let mid = if two { (lnum + rnum) / 2.0 } else { f64::INFINITY };
@@ -356,17 +399,31 @@ fn read_ckt(
     let (lamps, lpoles) = (first_after(&amps, lnum, mid), first_after(&poles, lnum, mid));
     let lwire = first_after(&sizes, lpoles.or(lamps).unwrap_or(lnum), mid);
     let lload = first_after(&loads, lwire.unwrap_or(lnum), mid);
-    let mut sides = vec![Side { num: lnum, amps: lamps, poles: lpoles, wire: lwire, load: lload, others: half(true), left: true }];
+    let mut sides = vec![Side {
+        num: lnum,
+        num_end: lnum,
+        amps: lamps,
+        poles: lpoles,
+        wire: lwire,
+        load: lload,
+        others: half(true),
+        left: true,
+        kind: first_after(&kinds, lnum, mid),
+        description: first_after(&desc_heads, lnum, mid),
+    }];
     if two {
         let rwire = last_before(&sizes, rnum, mid);
         sides.push(Side {
             num: rnum,
+            num_end: rnum_end,
             amps: last_before(&amps, rnum, mid),
             poles: last_before(&poles, rnum, mid),
             wire: rwire,
             load: last_before(&loads, rwire.unwrap_or(rnum), mid),
             others: half(false),
             left: false,
+            kind: last_before(&kinds, rnum, mid),
+            description: last_before(&desc_heads, rnum, mid),
         });
     }
     let head_bottom = head.iter().map(|t| t.at.y).fold(top, f64::min);
@@ -381,7 +438,7 @@ fn read_ckt(
             // The side it is on: left of the middle the left side.
             let si = usize::from(two && x > mid);
             let (Some(side), Some(c)) = (sides.get(si), cells.get_mut(si)) else { continue };
-            let outside = if side.left { x < side.num - 0.8 * row_h } else { x > side.num + 0.8 * row_h };
+            let outside = if side.left { x < side.num - 0.8 * row_h } else { x > side.num_end + 0.8 * row_h };
             if outside {
                 if let Some(cs) = codes(v) {
                     c.codes.extend(cs);
@@ -419,13 +476,19 @@ fn read_ckt(
                 } else if near(side.wire) && c.wire.is_empty() {
                     c.wire = v.to_ascii_uppercase();
                 }
+            } else if let Some(cs) = codes(v).filter(|_| side.kind.is_some_and(|k| (x - k).abs() <= 2.0 * row_h)) {
+                // A type code in the breaker's own column.
+                c.codes.extend(cs);
             } else if letters(v) {
-                let between = match (side.left, side.amps) {
-                    (true, Some(a)) => x > side.num && x < a - 1.0 * row_h,
-                    (false, Some(a)) => x < side.num && x > a + 1.0 * row_h,
-                    (true, None) => x > side.num,
-                    (false, None) => x < side.num,
-                };
+                // Under the description's header (nearer it than the circuit's number).
+                let under_desc = side.description.is_some_and(|d| (x - d).abs() <= COLUMN_REACH * row_h && (x - d).abs() < (x - side.num).abs());
+                let between = under_desc
+                    || match (side.left, side.amps) {
+                        (true, Some(a)) => x > side.num && x < a - 1.0 * row_h,
+                        (false, Some(a)) => x < side.num && x > a + 1.0 * row_h,
+                        (true, None) => x > side.num,
+                        (false, None) => x < side.num,
+                    };
                 if between {
                     c.description.push(v.to_string());
                 }
@@ -591,7 +654,7 @@ fn read_centred(
             })
             .map(|t| t.at.x)
             .collect();
-        Side { num: centre, amps, poles, wire: None, load: None, others: loads, left }
+        Side { num: centre, num_end: centre, amps, poles, wire: None, load: None, others: loads, left, kind: None, description: None }
     };
     let sides = [side(true), side(false)];
     let mut side_rows: Vec<Vec<Cells>> = vec![Vec::new(), Vec::new()];
@@ -1177,6 +1240,75 @@ mod tests {
     }
 
     #[test]
+    fn a_schedule_with_its_column_names_on_one_line_and_its_description_last_is_read() {
+        // `PANEL:"Q9"`; its header's column names each read as one text (`AMP POLE BKR LTG PWR`),
+        // the breaker type in its own BKR column and the description past the load columns,
+        // mirrored on the right. (Points of a 9.8 pt font: its capitals 7.2 high.)
+        let h = 7.2;
+        let mut v = vec![
+            t(557.0, 880.0, "PANEL:\"Q9\"", 26.0),
+            t(291.0, 812.0, "OCP", h),
+            t(356.0, 812.0, "LOAD (kVA)", h),
+            t(621.0, 812.0, "PHASE LOAD", h),
+            t(234.0, 810.0, "CKT", h),
+            t(1067.0, 810.0, "CKT", h),
+            t(236.0, 796.0, "NO", h),
+            t(262.0, 796.0, "AMP POLE BKR LTG PWR", h),
+            t(402.0, 796.0, "CO", h),
+            t(470.0, 796.0, "DESCRIPTION", h),
+            t(602.0, 796.0, "A", h),
+            t(649.0, 796.0, "B", h),
+            t(695.0, 796.0, "C", h),
+            t(777.0, 796.0, "DESCRIPTION", h),
+            t(904.0, 796.0, "CO", h),
+            t(927.0, 796.0, "PWR LTG BKR POLE AMP", h),
+            t(1069.0, 796.0, "NO", h),
+            t(300.0, 700.0, "AMPS PER PHASE = 90", h),
+        ];
+        let rows: [(f64, &[(f64, &str)]); 3] = [
+            (
+                782.0,
+                &[
+                    (241.0, "1"),
+                    (267.0, "20"),
+                    (298.0, "1"),
+                    (322.0, "GF"),
+                    (349.0, "0.4"),
+                    (488.0, "WATER HEATER"),
+                    (796.0, "BREAD WARMER"),
+                    (929.0, "0.8"),
+                    (990.0, "GF"),
+                    (1016.0, "1"),
+                    (1042.0, "20"),
+                    (1074.0, "2"),
+                ],
+            ),
+            (768.0, &[(241.0, "3"), (267.0, "30"), (298.0, "2"), (488.0, "FRYER"), (796.0, "SPARE"), (1016.0, "1"), (1042.0, "20"), (1074.0, "4")]),
+            (754.0, &[(241.0, "5"), (270.0, "--"), (298.0, "--"), (796.0, "LIGHTS"), (1016.0, "1"), (1042.0, "20"), (1074.0, "6")]),
+        ];
+        for (y, cells) in rows {
+            v.extend(cells.iter().map(|(x, c)| t(*x, y, c, h)));
+        }
+        let read = read(&v, "E-9");
+        assert_eq!(read.len(), 1, "{read:?}");
+        let p = &read[0];
+        assert_eq!(p.panel, "Q9");
+        let got: Vec<(String, String, u32, String, Vec<String>)> =
+            p.circuits.iter().map(|c| (c.number.clone(), c.breaker.clone(), c.poles, c.description.clone(), c.protection.clone())).collect();
+        let gf = || vec!["GF".to_string()];
+        assert_eq!(
+            got,
+            [
+                ("1".into(), "20".into(), 1, "WATER HEATER".into(), gf()),
+                ("2".into(), "20".into(), 1, "BREAD WARMER".into(), gf()),
+                ("3".into(), "30".into(), 2, "FRYER".into(), vec![]),
+                ("4".into(), "20".into(), 1, "SPARE".into(), vec![]),
+                ("6".into(), "20".into(), 1, "LIGHTS".into(), vec![]),
+            ]
+        );
+    }
+
+    #[test]
     fn a_main_panel_beside_another_reads_its_own_columns_its_poles_loads_and_its_legend() {
         let s = read(&main_beside_another(), "E-2");
         let m = s.iter().find(|p| p.panel == "MDP").expect("MDP");
@@ -1352,6 +1484,12 @@ mod tests {
         assert_eq!(title_panel("PANEL NAME"), None);
         assert_eq!(title_panel("PANELS SHALL BE"), None);
         assert_eq!(title_panel("PANELBOARD SHALL BE"), None);
+        assert_eq!(title_panel("PANEL:\"P1\""), Some(("P1".into(), None)));
+        // A heading over the panels' notes names no panel.
+        assert_eq!(title_panel("PANELBOARD NOTES"), None);
+        // A schedule's header fields (`PANEL SIZE & TYPE:`, `PANEL LOCATION:`) name none either.
+        assert_eq!(title_panel("PANEL SIZE & TYPE:"), None);
+        assert_eq!(title_panel("PANEL LOCATION: UTILITY"), None);
         assert_eq!(title_panel("PANELBOARD DP1 DEMAND CALCULATION"), None);
         assert_eq!(title_panel("TOTAL CONNECTED PANELBOARD (VA)"), None);
     }

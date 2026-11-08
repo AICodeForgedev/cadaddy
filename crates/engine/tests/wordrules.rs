@@ -454,11 +454,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/engine/src/cmd/panelsched.rs",
-        "[SCHEDULE SCHEDULES]",
-        "drafting convention: view, reference and table types (ELEVATION, SECTION, DETAIL, SEE SHEET, SCHEDULE), how any set is organised",
-    ),
-    (
-        "crates/engine/src/cmd/panelsched.rs",
         "[DEMAND CALCULATION]",
         "drafting convention: view, reference and table types (ELEVATION, SECTION, DETAIL, SEE SHEET, SCHEDULE), how any set is organised",
     ),
