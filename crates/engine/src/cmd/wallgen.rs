@@ -565,9 +565,19 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         }
     }
     let c = |k: &str| counts.get(k).copied().unwrap_or(0);
+    // Each level built from its plan: its walls and the doors and windows cut in them (a floor of
+    // walls with almost no openings is read from a plan that draws none: see the guided job).
+    let by_level: Vec<Value> = planned
+        .iter()
+        .filter_map(|(si, pl)| {
+            let level = scene.levels.get(*si)?;
+            let windows = pl.leaves.iter().filter(|l| l.window).count();
+            Some(json!({"level": level.name, "walls": pl.walls.len(), "doors": pl.leaves.len() - windows, "windows": windows}))
+        })
+        .collect();
     let mut r = json!({
         "walls": c("wall"), "doors": c("door"), "windows": c("window"), "floors": c("floor"), "ceilings": c("ceiling"),
-        "levels": scene.levels.len(), "removed": removed, "notes": notes,
+        "levels": scene.levels.len(), "removed": removed, "notes": notes, "openings_by_level": by_level,
     });
     if budget_exceeded {
         r["budget_exceeded"] = json!(true);

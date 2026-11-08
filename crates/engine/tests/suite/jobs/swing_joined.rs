@@ -105,6 +105,10 @@ fn every_joined_swing_of_a_floor_is_a_door() {
     }
     let r = build(&mut s);
     assert_eq!(count(&r, "doors"), 3, "{r}");
+    // Each level's walls and openings, for the job's few-openings check.
+    let l = &r["openings_by_level"][0];
+    assert_eq!((l["level"].as_str(), l["doors"].as_u64(), l["windows"].as_u64()), (Some("Level 1"), Some(3), Some(0)), "{r}");
+    assert!(l["walls"].as_u64().is_some_and(|w| w > 0), "{r}");
 }
 
 #[test]
