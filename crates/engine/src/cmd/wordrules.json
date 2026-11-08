@@ -192,6 +192,107 @@
     "DFCI"
    ]
   },
+  "buildings.compass_names": {
+   "source": "drafting convention: a building named by its side of the site, written out or abbreviated (`E. BLDG`, `EAST & WEST BLDGS`), and the one name both spellings read as (Q6292)",
+   "pairs": [
+    [
+     "N",
+     "NORTH"
+    ],
+    [
+     "S",
+     "SOUTH"
+    ],
+    [
+     "E",
+     "EAST"
+    ],
+    [
+     "W",
+     "WEST"
+    ],
+    [
+     "NE",
+     "NORTHEAST"
+    ],
+    [
+     "NW",
+     "NORTHWEST"
+    ],
+    [
+     "SE",
+     "SOUTHEAST"
+    ],
+    [
+     "SW",
+     "SOUTHWEST"
+    ],
+    [
+     "NORTH",
+     "NORTH"
+    ],
+    [
+     "SOUTH",
+     "SOUTH"
+    ],
+    [
+     "EAST",
+     "EAST"
+    ],
+    [
+     "WEST",
+     "WEST"
+    ],
+    [
+     "NORTHEAST",
+     "NORTHEAST"
+    ],
+    [
+     "NORTHWEST",
+     "NORTHWEST"
+    ],
+    [
+     "SOUTHEAST",
+     "SOUTHEAST"
+    ],
+    [
+     "SOUTHWEST",
+     "SOUTHWEST"
+    ]
+   ]
+  },
+  "buildings.joiners": {
+   "source": "drafting convention: the words and marks that join several buildings' names in one title (`EAST & WEST BLDGS`, `BUILDINGS A, B AND C`) (Q6292)",
+   "words": [
+    "&",
+    "AND",
+    ",",
+    "+",
+    "/"
+   ]
+  },
+  "buildings.number_words": {
+   "source": "drafting convention: the words between a building word and its name that only say a number follows (`BUILDING NO. 2`, `BLDG #3`) (Q6292)",
+   "words": [
+    "NO",
+    "NUMBER",
+    "#"
+   ]
+  },
+  "buildings.plural_words": {
+   "source": "drafting convention: the words a title names several buildings with (`EAST & WEST BLDGS`) (Q6292)",
+   "words": [
+    "BUILDINGS",
+    "BLDGS"
+   ]
+  },
+  "buildings.words": {
+   "source": "drafting convention: the words a title names one building with (`E. BLDG`, `BUILDING A`) (Q6292)",
+   "words": [
+    "BUILDING",
+    "BLDG"
+   ]
+  },
   "conduit.below_slab_words": {
    "source": "trade practice: a wiring method applies below the slab when its application has one of these (moved from ugplan.rs)",
    "words": [

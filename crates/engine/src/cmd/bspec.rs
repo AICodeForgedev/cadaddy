@@ -492,6 +492,14 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     // The counts are of what the model holds when the build is done (steps after the walls
     // took some away again: the summary said 2,977 walls of 2,794 built).
     recount_built(s.doc()?, &mut r);
+    // Several buildings from one set of plans (Q6292): each gets its copy again.
+    if let Some(placed) = super::buildings::apply_stored(s)?
+        && let Ok((sp_now, true)) = current(s, "model.build")
+        && sp_now.buildings.several()
+    {
+        r["buildings"] = placed.to_json(&sp_now);
+        recount_built(s.doc()?, &mut r);
+    }
     let recording = web_time::Instant::now();
     super::revise3d::record(s, &g);
     super::guided::progress_line(&format!("  model.build: plan recorded in {:.1} s", recording.elapsed().as_secs_f64()));

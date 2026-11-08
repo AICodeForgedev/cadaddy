@@ -18,6 +18,7 @@ pub mod blockdetect;
 pub(crate) mod blocks;
 pub mod bom;
 pub mod bspec;
+pub mod buildings;
 pub mod calibrate;
 mod cam;
 pub mod ceilings;
@@ -842,6 +843,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(revise3d::specs());
         v.extend(overrides::specs());
         v.extend(bspec::specs());
+        v.extend(buildings::specs());
         v.extend(planview::specs());
         v.extend(p2meval::specs());
         v.extend(schedules::specs());
