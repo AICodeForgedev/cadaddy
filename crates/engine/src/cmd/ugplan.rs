@@ -606,7 +606,8 @@ fn has_word(name: &str, word: &str) -> bool {
 /// The service gear on the slab level: a switchboard or switchgear, else the gear feeders leave
 /// and none arrives at.
 pub(crate) fn service_gear<'a>(sp: &'a BuildingSpec, slab: &str) -> Option<&'a MepEquipment> {
-    let on = |e: &&MepEquipment| e.level.eq_ignore_ascii_case(slab);
+    // Site gear (the utility's transformer) feeds the service gear; it isn't it.
+    let on = |e: &&MepEquipment| e.level.eq_ignore_ascii_case(slab) && !super::utilityxfmr::is_site(e);
     sp.mep
         .equipment
         .iter()
@@ -616,9 +617,10 @@ pub(crate) fn service_gear<'a>(sp: &'a BuildingSpec, slab: &str) -> Option<&'a M
             k.contains("switchboard") || k.contains("switchgear") || k.contains("service")
         })
         .or_else(|| {
+            let from_site = |f: &&cadaddy_walk3d::Feeder| sp.mep.equipment.iter().any(|x| super::utilityxfmr::is_site(x) && x.tag.eq_ignore_ascii_case(&f.from));
             sp.mep.equipment.iter().filter(on).find(|e| {
                 sp.mep.feeders.iter().any(|f| f.from.eq_ignore_ascii_case(&e.tag))
-                    && !sp.mep.feeders.iter().any(|f| f.to.eq_ignore_ascii_case(&e.tag))
+                    && !sp.mep.feeders.iter().filter(|f| !from_site(f)).any(|f| f.to.eq_ignore_ascii_case(&e.tag))
             })
         })
 }
@@ -678,6 +680,13 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
     let Some(slab) = slab_level(sp) else { return (runs, fates) };
     let slab_b = slab_box(sp, &slab);
     let gear = service_gear(sp, &slab);
+    // The utility's transformer the gear step placed (Q6307), and its service feeder to the gear.
+    let site_xfmr = gear.and_then(|g| {
+        sp.mep.equipment.iter().find(|e| {
+            super::utilityxfmr::is_site(e) && e.kind.eq_ignore_ascii_case("transformer") && e.properties.get("FEEDS").is_some_and(|t| t.eq_ignore_ascii_case(&g.tag))
+        })
+    });
+    let service_feeder = site_xfmr.zip(gear).and_then(|(x, g)| sp.mep.feeders.iter().find(|f| f.from.eq_ignore_ascii_case(&x.tag) && f.to.eq_ignore_ascii_case(&g.tag)));
     let stub = r.site.stub_ft.max(1.0) * u;
     let site_point = |p: [f64; 2]| {
         slab_b.map(|b| {
@@ -786,7 +795,23 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                     ));
                     continue;
                 };
-                let Some((edge, pad)) = site_point(centre(g)) else {
+                if c.what == "service_secondary"
+                    && let (Some(f), Some(x)) = (service_feeder, site_xfmr)
+                {
+                    fates.push(fate(
+                        "placed_elsewhere",
+                        0,
+                        format!(
+                            "built as the service feeder {} {}→{} ({} x {}\" conduits, its conductors; {}) by the feeder routes",
+                            f.tag, x.tag, g.tag, f.conduits, f.conduit_in, f.source
+                        ),
+                    ));
+                    continue;
+                }
+                let Some((edge, pad)) = site_xfmr
+                    .and_then(|x| slab_b.map(|b| (nearest_edge(b, centre(x)).0, centre(x))))
+                    .or_else(|| site_point(centre(g)))
+                else {
                     fates.push(fate("not_placed", 0, "the slab level has no outline".into()));
                     continue;
                 };
@@ -795,14 +820,14 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                     // From the utility's side out past the pad to the pad, coming up in it.
                     let out = [pad[0] + (pad[0] - edge[0]), pad[1] + (pad[1] - edge[1])];
                     add(vec![out, pad], bottom, &[(pad, r.stubup.conduit_top_ft)]);
-                    fates.push(fate(
-                        "placed",
-                        runs.len() - n_before,
-                        format!(
+                    let how = match site_xfmr {
+                        Some(x) => format!("utility to the pad transformer {} (proposed outside the slab edge nearest {}; locate from the site plan)", x.tag, g.tag),
+                        None => format!(
                             "utility to the pad transformer; pad by rule {} ft outside the slab edge nearest {} (locate from the site plan)",
                             r.site.stub_ft, g.tag
                         ),
-                    ));
+                    };
+                    fates.push(fate("placed", runs.len() - n_before, how));
                 } else {
                     let gc = centre(g);
                     let pts = vec![pad, edge, [gc[0], edge[1]], gc];
@@ -1742,6 +1767,10 @@ pub(crate) fn weigh(sp: &BuildingSpec, framing: Option<&FramingAbove>, below_met
         }
         seen.push(key);
         let Some(a) = gear(&f.from) else { continue };
+        // A service from site gear is in the ground already (its route is the feeder's).
+        if super::utilityxfmr::is_site(a) {
+            continue;
+        }
         let copies =
             sp.mep.feeders.iter().filter(|g| g.tag == f.tag && g.from.eq_ignore_ascii_case(&f.from) && g.to.eq_ignore_ascii_case(&f.to)).count();
         let fam = family(&f.to);
@@ -1992,6 +2021,65 @@ mod tests {
             .to_string(),
         )
         .expect("spec")
+    }
+
+    /// The utility's transformer the gear step placed east of the slab, its service feeder to SB1.
+    fn with_site_transformer() -> BuildingSpec {
+        let mut sp = spec();
+        let mut x = MepEquipment {
+            tag: "UTILITY-XFMR".into(),
+            kind: "transformer".into(),
+            level: "Level 1".into(),
+            min: [1320.0, 290.0],
+            max: [1390.0, 350.0],
+            height_ft: 5.0,
+            ..MepEquipment::default()
+        };
+        x.properties.insert("FEEDS".into(), "SB1".into());
+        x.sources.insert(super::super::utilityxfmr::SITE_SOURCE.into(), "outside the building".into());
+        sp.mep.equipment.push(x);
+        sp.mep.feeders.push(cadaddy_walk3d::Feeder {
+            tag: "SV1".into(),
+            from: "UTILITY-XFMR".into(),
+            to: "SB1".into(),
+            conduits: 4,
+            sets: 4,
+            conduit_in: 4.0,
+            size: "500 kcmil".into(),
+            entry: "bottom".into(),
+            from_entry: "bottom".into(),
+            source: "FEEDER SCHEDULE E-001".into(),
+            ..cadaddy_walk3d::Feeder::default()
+        });
+        sp
+    }
+
+    #[test]
+    fn the_service_from_the_utilitys_transformer_is_its_feeder_and_the_primary_lands_on_it() {
+        let sp = with_site_transformer();
+        assert_eq!(service_gear(&sp, "Level 1").map(|g| g.tag.as_str()), Some("SB1"));
+        let mk = |what: &str, count: u32, size: Option<f64>| Callout {
+            trade: "E".into(),
+            sheet: "E-100".into(),
+            from: "note",
+            what: what.into(),
+            text: format!("{what} conduits"),
+            count,
+            size_in: size,
+            ..Callout::default()
+        };
+        let (runs, fates) = place(&sp, &[], &[mk("service_primary", 2, Some(5.0)), mk("service_secondary", 1, None)], &|_| false);
+        // The secondary is the service feeder (built by the feeder routes), not one smallest conduit.
+        let sec = fates.get(1).expect("fate");
+        assert_eq!(sec.status, "placed_elsewhere", "{}", sec.how);
+        assert!(sec.how.contains("SV1") && sec.how.contains("4 x 4"), "{}", sec.how);
+        assert!(!runs.iter().any(|r| r.height_source.contains("service_secondary")));
+        // The primary comes up in the transformer, from the utility's side beyond it.
+        let prim: Vec<&MepRun> = runs.iter().filter(|r| r.height_source.contains("service_primary")).collect();
+        assert_eq!(prim.len(), 4, "two conduits and their stub-ups");
+        assert!(prim.iter().filter(|r| r.top_ft.is_some()).all(|r| r.points.first() == Some(&[1355.0, 320.0])), "{prim:?}");
+        // The proposals leave the service alone (it is in the ground already).
+        assert!(!weigh(&sp, None, None).iter().any(|p| p.subject.contains("SV1")));
     }
 
     #[test]

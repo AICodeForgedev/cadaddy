@@ -15151,6 +15151,44 @@ fn legend_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadad
 /// The most doors weighed for a gear layout (a bound on hostile input).
 const MAX_DOORS_FOR_GEAR: usize = 20_000;
 
+/// The utility's transformer a one-line among `pages` names ([`super::utilityxfmr`]): placed, on
+/// its pad, with its service feeder, into `sp`. `Err(None)`: no one-line names it; `Err(Some)`:
+/// named, and why it couldn't be placed (a finding).
+fn utility_service(
+    sp: &mut cadaddy_walk3d::BuildingSpec,
+    pages: &[(String, cadaddy_doc::Drawing)],
+    types: &[super::gearbuild::FeederType],
+) -> std::result::Result<super::utilityxfmr::Proposed, Option<String>> {
+    let type_tags: Vec<String> = types.iter().map(|t| t.tag.clone()).collect();
+    let gear_tag = super::ugplan::slab_level(sp).and_then(|l| super::ugplan::service_gear(sp, &l).map(|g| g.tag.clone())).unwrap_or_default();
+    let mut called = None;
+    let mut cover = None;
+    let mut pad_notes = Vec::new();
+    for (number, d) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts_with_tags(d);
+        if called.is_none() {
+            called = super::utilityxfmr::read(&texts, number, &gear_tag, &type_tags);
+        }
+        if cover.is_none() {
+            cover = super::ugplan::callouts(number, &texts)
+                .into_iter()
+                .find(|c| c.what == "service_secondary")
+                .and_then(|c| c.cover_in.map(|v| (v, format!("{}: {}", c.cite(), c.text.chars().take(120).collect::<String>()))));
+        }
+        if pad_notes.len() < 3 {
+            pad_notes.extend(super::utilityxfmr::pad_notes(number, &texts));
+        }
+    }
+    let called = called.ok_or(None)?;
+    let p = super::utilityxfmr::propose(sp, &called, types, cover, &pad_notes).map_err(Some)?;
+    sp.mep.equipment.push(p.equipment.clone());
+    sp.concrete.pads.push(p.pad.clone());
+    if let Some(f) = &p.feeder {
+        sp.mep.feeders.push(f.clone());
+    }
+    Ok(p)
+}
+
 fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
     if sp.mep.panel_schedules.is_empty() {
@@ -15158,8 +15196,9 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     }
     let tags: Vec<String> = sp.mep.panel_schedules.iter().map(|p| p.panel.clone()).collect();
     let mut types: Vec<super::gearbuild::FeederType> = Vec::new();
+    // A symbol's tag (a feeder tag the PDF import kept as its attribute) is read as printed.
     for (number, d) in pages {
-        for f in super::gearbuild::feeder_types(&cadaddy_mepfix::sheet_facts::texts(d), number) {
+        for f in super::gearbuild::feeder_types(&cadaddy_mepfix::sheet_facts::texts_with_tags(d), number) {
             if !types.iter().any(|t| t.tag.eq_ignore_ascii_case(&f.tag)) {
                 types.push(f);
             }
@@ -15168,7 +15207,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let type_tags: Vec<String> = types.iter().map(|t| t.tag.clone()).collect();
     let mut incoming: BTreeMap<String, String> = BTreeMap::new();
     for (_, d) in pages {
-        for (k, v) in super::gearbuild::oneline_incoming(&cadaddy_mepfix::sheet_facts::texts(d), &tags, &type_tags) {
+        for (k, v) in super::gearbuild::oneline_incoming(&cadaddy_mepfix::sheet_facts::texts_with_tags(d), &tags, &type_tags) {
             incoming.entry(k).or_insert(v);
         }
     }
@@ -15348,6 +15387,16 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     sp.mep.feeders.retain(|f| !f.source.contains("one-line tag"));
     let feeders = planned.feeders.len();
     sp.mep.feeders.extend(planned.feeders);
+    // The utility's transformer the one-line names, on its pad outside the building, and its
+    // service feeder to the service gear (Q6307); a rerun replaces the earlier one.
+    let old_site: BTreeSet<String> =
+        sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
+    sp.mep.equipment.retain(|e| !super::utilityxfmr::is_site(e));
+    sp.concrete.pads.retain(|p| !old_site.contains(&p.equipment.trim().to_ascii_uppercase()));
+    let service = utility_service(&mut sp, pages, &types);
+    let site_tags: BTreeSet<String> = sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
+    new_tags.extend(site_tags.iter().cloned());
+    let feeders = feeders + usize::from(service.as_ref().is_ok_and(|p| p.feeder.is_some()));
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     // The new gear built, then moved as the build moved its level to stack it. What took its
     // submittal's box is built again.
@@ -15359,7 +15408,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         .filter(|e| {
             super::bimlook::made_tag(e, "tag").is_some_and(|t| {
                 let t = t.trim().to_ascii_uppercase();
-                resized.contains(&t) || slid.contains(&t)
+                resized.contains(&t) || slid.contains(&t) || old_site.contains(&t) || site_tags.contains(&t)
             })
         })
         .map(|e| e.handle)
@@ -15368,7 +15417,31 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         d.model.remove(*h);
     }
     super::tradeatoms::drop_hosted(d, &stale);
-    let built = super::mep::build_equipment(d, &sp, Some(&new_tags));
+    // The site gear's pads: the earlier ones go, the new ones are built (the build made the
+    // others with the model).
+    let pad_ids: BTreeSet<String> = old_site.iter().chain(&site_tags).map(|t| format!("PAD-{t}")).collect();
+    let old_pads: Vec<cadaddy_doc::Handle> = d
+        .model
+        .iter()
+        .filter(|e| super::bimlook::made_tag(e, "tag").is_some_and(|t| pad_ids.contains(&t.trim().to_ascii_uppercase())))
+        .map(|e| e.handle)
+        .collect();
+    for h in old_pads {
+        d.model.remove(h);
+    }
+    let mut pads_only = cadaddy_walk3d::BuildingSpec {
+        units_per_foot: sp.units_per_foot,
+        levels: sp.levels.clone(),
+        ..cadaddy_walk3d::BuildingSpec::default()
+    };
+    pads_only.mep.equipment = sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).cloned().collect();
+    pads_only.mep.feeders = sp.mep.feeders.iter().filter(|f| site_tags.contains(&f.from.trim().to_ascii_uppercase())).cloned().collect();
+    pads_only.concrete.pads = sp.concrete.pads.iter().filter(|p| site_tags.contains(&p.equipment.trim().to_ascii_uppercase())).cloned().collect();
+    let top = d.model.iter().map(|e| e.handle.0).max().unwrap_or(0);
+    let site_pads = if pads_only.concrete.pads.is_empty() { Value::Null } else { super::concrete::build(d, &pads_only) };
+    let pad_parts: Vec<cadaddy_doc::Handle> = d.model.iter().filter(|e| e.handle.0 > top).map(|e| e.handle).collect();
+    let mut built = super::mep::build_equipment(d, &sp, Some(&new_tags));
+    built.extend(pad_parts);
     for h in built {
         let level = d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e));
         let off = level.and_then(|l| rooms.iter().find(|r| r.level.eq_ignore_ascii_case(&l)).map(|r| r.offset)).unwrap_or(cadaddy_geom::Vec2::ZERO);
@@ -15400,6 +15473,52 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     );
     report_progress(s, json!({"step": "electrical gear"}), &line);
     s.echo(line);
+    match &service {
+        Ok(p) => {
+            let e = &p.equipment;
+            let feeder = p.feeder.as_ref().map_or_else(
+                || format!("no service feeder: {}", p.no_feeder.clone().unwrap_or_default()),
+                |f| format!("service feeder {} {}→{}: ({}) {}\" with {} x {} {} each", f.tag, f.from, f.to, f.conduits, f.conduit_in, f.phases + f.neutrals, f.size, f.material),
+            );
+            s.echo(format!(
+                "  utility transformer: {} on {} (proposed outside the building, {}), {}; pad {}; {feeder}",
+                e.tag,
+                e.level,
+                e.properties.get("SERVICE LENGTH").cloned().unwrap_or_default(),
+                e.properties.get("KVA").map(|k| k.split(" (").next().unwrap_or_default().to_string()).unwrap_or_default(),
+                if site_pads.is_null() { "not built".to_string() } else { format!("built ({} element)", site_pads.get("concrete").cloned().unwrap_or(Value::Null)) }
+            ));
+            result["utility_transformer"] = json!({
+                "tag": e.tag, "level": e.level, "kva": e.properties.get("KVA"), "service_ft": p.service_ft,
+                "feeder": p.feeder.as_ref().map(|f| json!({"tag": f.tag, "conduits": f.conduits, "conduit_in": f.conduit_in, "size": f.size, "material": f.material})),
+                "no_feeder": p.no_feeder,
+            });
+            if let Some(why) = &p.no_feeder {
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("Service from {} to {}: conduits and conductors not read", e.tag, e.properties.get("FEEDS").cloned().unwrap_or_default()),
+                    why,
+                    2,
+                    vec!["Give the service entrance conductors and conduits (the feeder schedule's row for the one-line's tag)".into()],
+                    None,
+                    false,
+                );
+            }
+        }
+        Err(Some(why)) => {
+            s.echo(format!("  utility transformer: called by the one-line but not placed: {why}"));
+            job.add_finding(
+                StageName::BimBuild,
+                "The utility transformer the one-line calls is not in the model",
+                why,
+                2,
+                vec!["Place the service gear on the slab level (or locate the transformer) and run the job again".into()],
+                None,
+                false,
+            );
+        }
+        Err(None) => {}
+    }
     if !resized.is_empty() {
         s.echo(format!("  gear the plans locate, its box from its submittal: {}", resized.iter().cloned().collect::<Vec<_>>().join(", ")));
     }
@@ -35629,5 +35748,100 @@ mod tests {
         let r = &sp.mep.runs[0];
         assert!(r.points.len() > 2 && r.corrections.iter().any(|c| c.key == "route"), "{r:?}");
         assert!(job.findings.iter().any(|f| f.description.contains("gear laid out or moved after the build")), "{:?}", job.findings);
+    }
+
+    /// A made-up one-line (Q6307): the utility's transformer over the service switchboard `MSB-1`,
+    /// the service feeder's tag `SV1` kept as its symbols' attribute (as a PDF import keeps a
+    /// symbol's tag), in the feeder schedule too, and a site note's cover. The gear step's service:
+    /// the transformer outside the building on its pad, its service feeder from the schedule's row.
+    #[test]
+    fn the_one_lines_utility_transformer_and_its_service_feeder_go_into_the_model() {
+        use super::*;
+        let common = || Common { layer: "PDF".into(), ..Common::default() };
+        let tag_at = |d: &mut cadaddy_doc::Drawing, v: &str, x: f64, y: f64| {
+            let a = Attrib {
+                tag: "TAG".into(),
+                text: text(v, x, y, 0.1),
+                invisible: false,
+                constant: false,
+                prompt: String::new(),
+                props: AttribProps::default(),
+                multiline: None,
+                modes: AttribModes::default(),
+            };
+            let ins = Insert {
+                block: "PDF-SYM-9".into(),
+                insert: Vec3::new(x, y, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs: vec![a],
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+                clip: None,
+            };
+            d.add(&Space::Model, common(), EntityKind::Insert(ins)).ok();
+        };
+        let mut e1 = cadaddy_doc::Drawing::default();
+        for (v, x, y) in [
+            ("UTILITY TRANSFORMER", 10.0, 20.0),
+            ("480Y/277V, 3PH SECONDARY", 10.0, 19.85),
+            ("MSB-1", 10.0, 18.0),
+            ("FEEDER SCHEDULE", 2.0, 8.0),
+            ("FEEDER", 1.7, 7.4),
+            ("TAG", 1.7, 7.3),
+            ("CONDUIT SIZE", 2.3, 7.3),
+            ("CONDUCTOR SIZE", 3.4, 7.3),
+            ("GROUND", 4.6, 7.3),
+            ("F2", 1.7, 7.0),
+            ("(1) 2\"C", 2.3, 7.0),
+            ("(4) #2", 3.4, 7.0),
+            ("#6G", 4.6, 7.0),
+            ("(4) 4\"C", 2.3, 6.75),
+            ("(4) #500kcmil", 3.4, 6.75),
+            ("SEE NOTE", 4.6, 6.75),
+        ] {
+            e1.add(&Space::Model, common(), EntityKind::Text(text(v, x, y, 0.1))).ok();
+        }
+        tag_at(&mut e1, "SV1", 1.65, 6.75);
+        tag_at(&mut e1, "SV1", 9.4, 18.2);
+        let mut e2 = cadaddy_doc::Drawing::default();
+        e2.add(&Space::Model, common(), EntityKind::Text(text("SECONDARY CONDUITS MIN. 30\" BELOW GRADE", 0.0, 0.0, 0.1))).ok();
+        let pages = vec![("E-001".to_string(), e1), ("E-002".to_string(), e2)];
+        let mut types = Vec::new();
+        for (number, d) in &pages {
+            types.extend(crate::cmd::gearbuild::feeder_types(&cadaddy_mepfix::sheet_facts::texts_with_tags(d), number));
+        }
+        assert!(types.iter().any(|t| t.tag == "SV1" && t.conduits == 4), "the schedule row whose tag is an attribute: {types:?}");
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            &json!({
+                "units_per_foot": 12.0,
+                "levels": [{"name": "First", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 10, "region": [0, 0, 1200, 600]}],
+                "mep": {"equipment": [{"tag": "MSB-1", "kind": "switchboard", "level": "First", "min": [40, 280], "max": [70, 320], "bottom_ft": 0, "height_ft": 7.5,
+                    "properties": {"BUS AMPS": "800A", "VOLTS/PHASE": "480Y/277V, 3PH, 4W"}}]}
+            })
+            .to_string(),
+        )
+        .expect("spec");
+        let p = utility_service(&mut sp, &pages, &types).expect("placed");
+        let x = sp.mep.equipment.iter().find(|e| e.kind == "transformer").expect("transformer in the model");
+        assert!(crate::cmd::utilityxfmr::is_site(x) && x.level == "First");
+        // West of the slab (the switchboard is by the west edge), outside it.
+        assert!(x.max[0] < 0.0, "{:?}", x.max);
+        // 800 A at 480 V three-phase = 665 kVA: 750 kVA.
+        assert!(x.properties.get("KVA").is_some_and(|v| v.starts_with("750 kVA")), "{:?}", x.properties.get("KVA"));
+        assert!(x.properties.get(crate::cmd::utilityxfmr::COVER_PROPERTY).is_some_and(|v| v.starts_with("30 in") && v.contains("E-002")));
+        assert!(sp.concrete.pads.iter().any(|d| d.equipment == x.tag && d.required == Some(true)));
+        let f = sp.mep.feeders.iter().find(|f| f.to == "MSB-1").expect("service feeder");
+        assert_eq!((f.tag.as_str(), f.from.as_str(), f.conduits, f.conduit_in, f.size.as_str()), ("SV1", x.tag.as_str(), 4, 4.0, "500 kcmil"));
+        assert!(p.no_feeder.is_none());
+        // The service gear is still the switchboard (the transformer feeds it).
+        assert_eq!(crate::cmd::ugplan::service_gear(&sp, "First").map(|g| g.tag.as_str()), Some("MSB-1"));
+        // A set with no one-line naming one: nothing is made.
+        let mut bare = sp.clone();
+        bare.mep.equipment.retain(|e| !crate::cmd::utilityxfmr::is_site(e));
+        let none: Vec<(String, cadaddy_doc::Drawing)> = vec![("E-009".into(), cadaddy_doc::Drawing::default())];
+        assert!(matches!(utility_service(&mut bare, &none, &types), Err(None)));
     }
 }
