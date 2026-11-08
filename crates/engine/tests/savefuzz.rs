@@ -706,6 +706,29 @@ fn covers_name(l: &Loss, name: &str) -> bool {
 /// solid fill's pattern angle and scale) are not content, so the notes don't report them and the
 /// comparison skips them too.
 fn drop_placeholders(kind: &EntityKind, forms: &mut [&mut Value]) {
+    // Justified text's first point (DXF group 10) is worked out from its alignment point, and a
+    // writer works it out again (`kept::content`): its own, or an attribute's.
+    fn derived(t: &cadaddy_engine::doc::Text) -> bool {
+        use cadaddy_engine::doc::{HAlign, VAlign};
+        t.align_pt.is_some() && !matches!((t.halign, t.valign), (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _))
+    }
+    fn drop_first_point(t: Option<&mut Value>) {
+        if let Some(o) = t.and_then(Value::as_object_mut) {
+            o.remove("insert");
+        }
+    }
+    for f in forms.iter_mut() {
+        match kind {
+            EntityKind::Text(t) if derived(t) => drop_first_point(Some(&mut **f)),
+            EntityKind::AttDef(a) if derived(&a.text) => drop_first_point(f.get_mut("text")),
+            EntityKind::Insert(i) => {
+                for (n, _) in i.attribs.iter().enumerate().filter(|(_, a)| derived(&a.text)) {
+                    drop_first_point(f.get_mut("attribs").and_then(|v| v.get_mut(n)).and_then(|v| v.get_mut("text")));
+                }
+            }
+            _ => {}
+        }
+    }
     let unused: Vec<&str> = match kind {
         EntityKind::Dimension(d) => d.unused_points().to_vec(),
         EntityKind::Hatch(h) if h.solid => vec!["angle", "scale"],
