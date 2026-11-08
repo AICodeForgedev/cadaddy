@@ -5338,7 +5338,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // A typical room's plan's pipes and ducts (ENLARGED GUESTROOM - SANITARY): into each
                 // room of its type, as its devices are.
                 let lost: Vec<cadaddy_walk3d::MepRun> = lost_runs.iter().map(|(_, _, r)| r.clone()).collect();
-                let typical = if lost.is_empty() { StampedRuns::default() } else { stamp_typical_runs(s.doc()?, job, &sp.mep.runs, &lost) };
+                let typical = if lost.is_empty() { StampedRuns::default() } else { stamp_typical_runs(s.doc()?, job, &sp, &lost) };
                 for ((key, ft, _), taken) in lost_runs.iter().zip(typical.taken.iter().copied().chain(std::iter::repeat(false))) {
                     if !taken {
                         let e = unplaced.entry(key.clone()).or_default();
@@ -21497,9 +21497,17 @@ fn typical_basis(sheet: &str, title: &str, room: &str) -> String {
 /// names a room type, into every room of that type at the same place in the room, as their devices
 /// are ([`stamp_typical_rooms`]). A room the floor's own plans already run that system through
 /// (`placed`, in the model's coordinates) is left alone: no second count.
-fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadaddy_walk3d::MepRun], lost: &[cadaddy_walk3d::MepRun]) -> StampedRuns {
+fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, sp: &cadaddy_walk3d::BuildingSpec, lost: &[cadaddy_walk3d::MepRun]) -> StampedRuns {
     let mut out = StampedRuns { taken: vec![false; lost.len()], ..StampedRuns::default() };
-    let rooms = job_rooms(job);
+    let placed = &sp.mep.runs;
+    // Each room on its level as the spec names it (Q6271): the rooms stage may say `2` for
+    // `Level 2`; a copy keeps the spec's name, and the floor's runs are found by it.
+    let mut rooms = job_rooms(job);
+    for (_, level, _, _) in &mut rooms {
+        if let Some(l) = sp.level(level) {
+            level.clone_from(&l.name);
+        }
+    }
     let (types, vocabulary) = room_types(&rooms);
     if types.is_empty() {
         return out;
@@ -21520,7 +21528,7 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
     // The systems the floor's plans run through each room already.
     let run_through = |level: &str, outline: &[cadaddy_geom::Vec2], system: &str| {
         placed.iter().any(|q| {
-            q.level == level
+            sp.level(&q.level).map_or(q.level.as_str(), |l| l.name.as_str()).eq_ignore_ascii_case(level)
                 && q.system == system
                 && q.points.iter().any(|p| cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(p[0], p[1])))
         })
@@ -31770,6 +31778,19 @@ mod tests {
     /// none (no second count); a run outside every typical view stays unplaced.
     #[test]
     fn a_typical_rooms_pipe_goes_into_each_room_of_its_type() {
+        typical_rooms_pipe_into_each_room("Level 2");
+    }
+
+    /// A rooms stage that names a room's level another way than the spec (`2` for `Level 2`):
+    /// the stamped copy is on the spec's level (a takeoff would show a phantom level `2`
+    /// otherwise, Q6271), and the floor's own run through a room is still found.
+    #[test]
+    fn a_typical_rooms_pipe_is_on_the_specs_level_when_the_rooms_stage_names_it_otherwise() {
+        typical_rooms_pipe_into_each_room("2");
+    }
+
+    /// Two rooms of the type on `room_level` (the rooms stage's name for the spec's `Level 2`).
+    fn typical_rooms_pipe_into_each_room(room_level: &str) {
         let mut s = crate::Session::new();
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
         // One view per sheet: a 144 x 288 plan, its title over a SCALE line under it.
@@ -31811,7 +31832,7 @@ mod tests {
         job.sheet_regions = vec![SheetRegion { kind: "rcp".into(), ..region("A621", 0.0) }, region("E-6", 4234.0)];
         job.sheet_spans = vec![SheetSpan { sheet: "A621".into(), lo: rcp.0, hi: rcp.1 }, SheetSpan { sheet: "E-6".into(), lo: plan.0, hi: plan.1 }];
         // Two DOUBLE QUEEN rooms on Level 2, the floor plan's own receptacle in the first.
-        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": room_level, "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
         if let Some(st) = job.stage_mut(StageName::Rooms) {
             st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_200.0)]}));
         }
@@ -31840,8 +31861,13 @@ mod tests {
             run("V", "T", "E-6", vec![[4234.0 + 1500.0, 900.0], [4234.0 + 1600.0, 900.0]]),
         ];
         // The floor's plan already runs SAN through room 202.
-        let placed = vec![run("SAN", "Level 2", "P-2", vec![[10_250.0, 50.0], [10_250.0, 150.0]])];
-        let st = stamp_typical_runs(s.doc().unwrap(), &job, &placed, &lost);
+        let mut sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}, {"name": "Level 2", "elevation_ft": 10, "height_ft": 10}],
+        }))
+        .unwrap();
+        sp.mep.runs = vec![run("SAN", "Level 2", "P-2", vec![[10_250.0, 50.0], [10_250.0, 150.0]])];
+        let st = stamp_typical_runs(s.doc().unwrap(), &job, &sp, &lost);
         assert_eq!(st.taken, vec![true, false]);
         assert_eq!(st.runs.len(), 1, "room 201 only: {:?}", st.report);
         let r = &st.runs[0];
