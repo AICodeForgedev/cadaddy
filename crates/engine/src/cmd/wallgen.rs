@@ -2322,7 +2322,7 @@ enum WindowBy {
 const MAX_MARK_LEN: usize = 8;
 
 /// Whether `text` is a window's mark: a window row's mark in the spec's schedule, or a window
-/// prefix (rule data, `openings.window_mark_prefixes`) and a number (`W1`, `W-2`, `W3A`).
+/// prefix (rule data, `openings.window_mark_prefixes`) and a number (`W5`, `W-2`, `W3A`).
 fn is_window_mark(text: &str, schedule_marks: &[String]) -> bool {
     let t = text.trim();
     if t.is_empty() || t.len() > MAX_MARK_LEN {
@@ -2377,8 +2377,8 @@ fn same_gap(a: (Vec2, Vec2), b: (Vec2, Vec2), k: f64) -> bool {
 
 /// The gaps (indexes into `gaps`: ends and wall thickness) the window tags mark (`k` units per
 /// inch). A tag marks the gap nearest it, within its reach, and only when the gap is its mark's
-/// width: the schedule row's, else the width most of the mark's tags sit by (a `W1` beside a
-/// wider opening than every other `W1` is the neighbouring window's tag).
+/// width: the schedule row's, else the width most of the mark's tags sit by (a `W5` beside a
+/// wider opening than every other `W5` is the neighbouring window's tag).
 fn tagged_window_gaps(tags: &[WindowTag], gaps: &[(Vec2, Vec2, f64)], k: f64) -> Vec<usize> {
     // Each tag's gap: the nearest within reach.
     let nearest: Vec<Option<usize>> = tags
@@ -3211,29 +3211,29 @@ mod tests {
 
     #[test]
     fn a_window_tag_marks_its_gap_and_its_width_stands_for_the_typical_ones() {
-        // Two 4' gaps in the south wall, one tagged W1 outside it; a 6' gap in the north wall.
-        let (windows, notes) = room_with_gaps(&[(3.0, 7.0), (11.0, 15.0)], &[(8.0, 14.0)], vec![("A-ANNO", text_ft((5.0, -1.5), "W1"))]);
+        // Two 4' gaps in the south wall, one tagged W5 outside it; a 6' gap in the north wall.
+        let (windows, notes) = room_with_gaps(&[(3.0, 7.0), (11.0, 15.0)], &[(8.0, 14.0)], vec![("A-ANNO", text_ft((5.0, -1.5), "W5"))]);
         // The tagged gap is a window, the untagged 4' one the same window (typical, inferred);
         // the 6' gap has no window of its width drawn: an opening.
         assert_eq!(windows, 2, "{notes:?}");
         assert!(notes.iter().any(|n| n.contains("1 drawn") && n.contains("1 inferred")), "{notes:?}");
         assert!(notes.iter().any(|n| n.contains("1 gaps in outside walls with no window drawn")), "{notes:?}");
         // A text that is no window mark (a room number, a door's) marks nothing.
-        for text in ["101", "D1", "WALL", "W"] {
+        for text in ["R12", "D1", "WALL", "W"] {
             let (windows, notes) = room_with_gaps(&[(3.0, 7.0)], &[], vec![("A-ANNO", text_ft((5.0, -1.5), text))]);
             assert_eq!(windows, 0, "{text}: {notes:?}");
         }
         // A tag farther than its reach from every gap marks none.
-        let (windows, notes) = room_with_gaps(&[(3.0, 7.0)], &[], vec![("A-ANNO", text_ft((5.0, -9.0), "W1"))]);
+        let (windows, notes) = room_with_gaps(&[(3.0, 7.0)], &[], vec![("A-ANNO", text_ft((5.0, -9.0), "W5"))]);
         assert_eq!(windows, 0, "{notes:?}");
     }
 
     #[test]
     fn window_marks_are_a_window_prefix_and_a_number_or_a_schedule_rows_mark() {
-        for m in ["W1", "w2", "W-3", "W.4", "W12A", "WIN5", "WDW 6".replace(' ', "").as_str(), " W7 "] {
+        for m in ["W5", "w2", "W-3", "W.4", "W12A", "WIN5", "WDW 6".replace(' ', "").as_str(), " W7 "] {
             assert!(is_window_mark(m, &[]), "{m}");
         }
-        for m in ["W", "W1234", "W1AB", "WD1", "D1", "101", "WALL", "W-", "WINDOW", "", "W1 W2"] {
+        for m in ["W", "W1234", "W1AB", "WD1", "D1", "R12", "WALL", "W-", "WINDOW", "", "W5 W6"] {
             assert!(!is_window_mark(m, &[]), "{m}");
         }
         // A schedule's own window marks, whatever their form.
@@ -3251,8 +3251,8 @@ mod tests {
             (Vec2::new(400.0, 0.0), Vec2::new(508.0, 0.0), 6.0),
         ];
         let tag = |x: f64, mark: &str, width: Option<f64>| WindowTag { at: Vec2::new(x, -30.0), mark: mark.into(), width };
-        // W1 by each 72" gap, and one by the 108" gap: W1 is the 72" window.
-        let tags = vec![tag(36.0, "W1", None), tag(236.0, "W1", None), tag(420.0, "W1", None)];
+        // W5 by each 72" gap, and one by the 108" gap: W5 is the 72" window.
+        let tags = vec![tag(36.0, "W5", None), tag(236.0, "W5", None), tag(420.0, "W5", None)];
         assert_eq!(tagged_window_gaps(&tags, &gaps, k), vec![0, 1]);
         // A mark by one gap only is that gap's.
         assert_eq!(tagged_window_gaps(&[tag(420.0, "W2", None)], &gaps, k), vec![2]);
@@ -3261,7 +3261,7 @@ mod tests {
         // A tag between two gaps marks the nearer only.
         assert_eq!(tagged_window_gaps(&[tag(100.0, "W4", None)], &gaps, k), vec![0]);
         // Out of reach of every gap: none.
-        assert!(tagged_window_gaps(&[WindowTag { at: Vec2::new(36.0, -200.0), mark: "W1".into(), width: None }], &gaps, k).is_empty());
+        assert!(tagged_window_gaps(&[WindowTag { at: Vec2::new(36.0, -200.0), mark: "W5".into(), width: None }], &gaps, k).is_empty());
         assert!(tagged_window_gaps(&tags, &[], k).is_empty());
     }
 }
