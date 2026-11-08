@@ -3032,6 +3032,13 @@
     ]
    ]
   },
+  "sheets.specification_title_words": {
+   "source": "A sheet title that says the sheet is a specification printed on the drawings (`ELECTRICAL SPECIFICATIONS`), not a plan. (drafting convention: general, no job's title)",
+   "words": [
+    "SPECIFICATIONS",
+    "SPECIFICATION"
+   ]
+  },
   "sheets.floor_plan_title_words": {
    "source": "A view or sheet title that names a floor plan. (drafting convention: general, no job's title)",
    "words": [
@@ -3759,6 +3766,31 @@
     "above accessible ceiling",
     "in concrete",
     "direct burial"
+   ]
+  },
+  "specs.sheet_pointer_words": {
+   "source": "The words a project manual points a division to a drawing sheet by (`Refer Sheet E4.1 for Electrical Specifications`, `See Sheets ME-4.1 and ME-4.2`, `specifications are on Drawing P4.1`), with a word of specs.sheet_words before the sheet numbers. (CSI project manual practice: a small job's MEP specifications printed on the drawings)",
+   "words": [
+    "REFER",
+    "REFERENCE",
+    "SEE",
+    "ON",
+    "SHOWN",
+    "LOCATED",
+    "INCLUDED",
+    "CONTAINED",
+    "PRINTED"
+   ]
+  },
+  "specs.sheet_words": {
+   "source": "The words before a drawing sheet's number in a project manual's pointer to it (specs.sheet_pointer_words). (drafting convention)",
+   "words": [
+    "SHEET",
+    "SHEETS",
+    "DRAWING",
+    "DRAWINGS",
+    "DWG",
+    "DWGS"
    ]
   },
   "specs.product_divisions": {

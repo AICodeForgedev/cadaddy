@@ -452,6 +452,10 @@ pub struct GuidedJob {
     /// The specification sections the build read (`bim.products`' `sections_read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spec_sections_read: Vec<String>,
+    /// The drawing sheets the project manual makes a division's specification (`DIVISION 26 --
+    /// ELECTRICAL: Refer Sheet E4.1`): read as specification text, never as plans.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spec_sheets: Vec<super::products::DivisionSheet>,
     /// The job goes on without a specification, as answered ("none"): it doesn't look again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub specs_declined: bool,
@@ -812,6 +816,7 @@ impl GuidedJob {
             specs_found: None,
             specs_how: Vec::new(),
             spec_sections_read: Vec::new(),
+            spec_sheets: Vec::new(),
             specs_declined: false,
             cost_db: None,
             submittal_types: Vec::new(),
@@ -1058,7 +1063,7 @@ fn run_import(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 /// sheet (number, title, discipline — never the file name); the same sheet in several files is one
 /// entry; plans carry the level their titles name. Asks when a discipline or level is unsure.
 fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
-    let classified = s.execute("printset.classify", &json!({}))?;
+    let mut classified = s.execute("printset.classify", &json!({}))?;
 
     // The current copy of every sheet, with its file and page, for the stages that import them.
     let sheets_result = s.execute("printset.sheets", &json!({"current": true}))?;
@@ -1071,6 +1076,11 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         "level_warnings": classified.get("level_warnings"),
         "number_conflicts": classified.get("number_conflicts"),
     }));
+
+    // The project manual (Q6168): found, or asked for. The sheets it makes a division's
+    // specification are no plans (Q6295).
+    look_for_specs(s, job, true);
+    mark_spec_sheets(s, job, &mut classified);
 
     // MUST 1: Check for empty results.
     // The index: one entry per real sheet (questions are asked once per sheet, not per copy).
@@ -1257,7 +1267,7 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(|l| l.get("name").and_then(Value::as_str)).map(str::to_string).collect())
             .unwrap_or_default();
-        let uncertain = |sh: &&Value| matches!(sh.get("level_source").and_then(Value::as_str), Some("default" | "ask"));
+        let uncertain = |sh: &&Value| matches!(sh.get("level_source").and_then(Value::as_str), Some("default" | "ask")) && !is_spec_sheet(sh);
         for sheet in sheets.iter().filter(uncertain).take(MAX_QUESTIONS_PER_STAGE) {
             let q = plan_level_question(job, sheet, &level_codes);
             job.add_question_to_worklist(&q);
@@ -1272,9 +1282,6 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(ref sheets) = sheets_vec {
         check_missing_trade_plans(sheets, job);
     }
-
-    // The project manual (Q6168): found, or asked for.
-    look_for_specs(s, job, true);
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
     Ok(classified)
@@ -1890,6 +1897,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let mut plan_sheets: Vec<&Value> = sheet_arr
         .iter()
         .filter(current)
+        .filter(|sh| !is_spec_sheet(sh))
         .filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan" | "rcp") || rcp_title(sh) || legend_title(sh))
         .collect();
     // The index's level (a plan whose title names none was given one) over the page's own.
@@ -1921,7 +1929,8 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     };
     let level_rank = |l: &str| (l.is_empty(), l == "R", l.parse::<u32>().unwrap_or(u32::MAX), l.to_string());
     plan_sheets.sort_by_key(|sh| level_rank(&level_of(sh)));
-    let mut all: Vec<&Value> = if plan_sheets.is_empty() { sheet_arr.iter().filter(current).collect() } else { plan_sheets };
+    let mut all: Vec<&Value> =
+        if plan_sheets.is_empty() { sheet_arr.iter().filter(current).filter(|sh| !is_spec_sheet(sh)).collect() } else { plan_sheets };
     // A several-view sheet (3RD and 4TH FLOOR PLANS) is one entry per view but one page:
     // import each page once, with its lowest level.
     let page_of = |sh: &Value| sh.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1);
@@ -7808,6 +7817,94 @@ fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Do
 
 /// The specifications the job reads: those given, else those it found ([`look_for_specs`]; a
 /// job from before the search looks now, by name only).
+/// Whether a sheet of the index is a specification printed on the drawings (by its title, or
+/// made one by the project manual: [`mark_spec_sheets`]).
+fn is_spec_sheet(sh: &Value) -> bool {
+    sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str) == Some(SPEC_SHEET)
+}
+
+/// The sheet type of a specification printed on the drawings.
+const SPEC_SHEET: &str = "specification";
+
+/// A sheet number's key for matching (`EL-4.1` is `EL41`).
+fn sheet_match_key(n: &str) -> String {
+    let base = n.split('/').next().unwrap_or(n);
+    base.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase()
+}
+
+/// The sheets of `index` (`{sheets: [...]}`) the manual makes a division's specification:
+/// typed [`SPEC_SHEET`] with the division they speak for. The numbers marked.
+pub(crate) fn apply_spec_sheets(pointers: &[super::products::DivisionSheet], index: &mut Value) -> Vec<String> {
+    let mut marked = Vec::new();
+    let Some(sheets) = index.get_mut("sheets").and_then(Value::as_array_mut) else { return marked };
+    for sh in sheets.iter_mut() {
+        let number = sh.get("number").and_then(Value::as_str).unwrap_or("").to_string();
+        let Some(d) = pointers.iter().find(|d| sheet_match_key(&d.sheet) == sheet_match_key(&number)) else { continue };
+        if let Some(o) = sh.as_object_mut() {
+            o.insert("type".into(), json!(SPEC_SHEET));
+            o.insert("spec_division".into(), json!(format!("{} {}", d.division, d.title).trim()));
+            o.insert("level".into(), json!(""));
+            o.remove("levels");
+            o.remove("level_source");
+        }
+        if !marked.contains(&number) {
+            marked.push(number);
+        }
+    }
+    marked
+}
+
+/// The project manual's divisions that point to drawing sheets for their specification (`Refer
+/// Sheet E4.1`): those sheets are typed specification in the job's sheet lists, so they are read
+/// as their division's specification after the build and never as plans (Q6295).
+fn mark_spec_sheets(s: &mut Session, job: &mut GuidedJob, classified: &mut Value) {
+    let specs = job_specs(job);
+    job.spec_sheets = if specs.is_empty() { Vec::new() } else { super::products::manual_division_sheets(&specs) };
+    if job.spec_sheets.is_empty() {
+        return;
+    }
+    let mut marked = apply_spec_sheets(&job.spec_sheets, classified);
+    for v in [job.sheets.as_mut(), job.index.as_mut()].into_iter().flatten() {
+        for n in apply_spec_sheets(&job.spec_sheets, v) {
+            if !marked.contains(&n) {
+                marked.push(n);
+            }
+        }
+    }
+    let said: Vec<String> = job.spec_sheets.iter().map(|d| format!("Division {} {} → sheet {}", d.division, d.title, d.sheet)).collect();
+    let missing: Vec<&str> = job
+        .spec_sheets
+        .iter()
+        .filter(|d| !marked.iter().any(|m| sheet_match_key(m) == sheet_match_key(&d.sheet)))
+        .map(|d| d.sheet.as_str())
+        .collect();
+    let line = format!(
+        "job: the specification points {} to the drawings: {} read as specifications, not plans{}",
+        said.join("; "),
+        if marked.is_empty() { "none of those sheets is in the set, so none is".to_string() } else { marked.join(", ") },
+        if missing.is_empty() { String::new() } else { format!(" (not in the set: {})", missing.join(", ")) }
+    );
+    report_progress(s, json!({"step": "spec_sheets", "sheets": marked}), &line);
+    s.echo(line);
+    job.audit("spec_sheets", "pipeline", None, Some(StageName::Classify), Some(json!({"pointers": job.spec_sheets, "marked": marked})));
+}
+
+/// The specification sheets' pages for `bim.products` (`[{number, file, page}]`): each sheet the
+/// manual points a division to, where the set has it.
+fn spec_sheet_pages(job: &GuidedJob) -> Vec<Value> {
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    job.spec_sheets
+        .iter()
+        .filter_map(|d| {
+            let c =
+                classified.iter().find(|c| sheet_match_key(c.get("number").and_then(Value::as_str).unwrap_or("")) == sheet_match_key(&d.sheet))?;
+            let file = c.get("file").and_then(Value::as_str)?;
+            let page = c.get("page").and_then(Value::as_u64).unwrap_or(1);
+            Some(json!({"number": d.sheet, "file": set_file_path(&job.pdfs_path, file).to_string_lossy(), "page": page}))
+        })
+        .collect()
+}
+
 fn job_specs(job: &GuidedJob) -> Vec<String> {
     if !job.specs.is_empty() {
         return job.specs.clone();
@@ -7923,7 +8020,7 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     if specs.is_empty() && job.submittals.is_empty() {
         return;
     }
-    let v = match s.execute("bim.products", &json!({"specs": specs})) {
+    let v = match s.execute("bim.products", &json!({"specs": specs, "sheets": spec_sheet_pages(job)})) {
         Ok(v) => v,
         Err(e) => {
             job.add_finding(
@@ -7940,7 +8037,8 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     };
     job.spec_sections_read =
         v.get("sections_read").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).take(2_000).collect();
-    if !specs.is_empty() && job.spec_sections_read.is_empty() {
+    let product_sections = v.get("product_sections").and_then(Value::as_u64).unwrap_or(0);
+    if !specs.is_empty() && product_sections == 0 {
         let unread: Vec<String> = v
             .get("unread")
             .and_then(Value::as_array)
@@ -7964,8 +8062,12 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         );
     }
     let line = format!(
-        "  product data: {} spec sections read, {} with products ({} requirements, kinds {}); records on {} elements; by kind {}",
+        "  product data: {} spec sections read ({} of the product divisions; {} from drawing sheets), {} with products ({} requirements, kinds {}); records on {} elements; by kind {}",
         job.spec_sections_read.len(),
+        product_sections,
+        v.get("division_sheets")
+            .and_then(Value::as_array)
+            .map_or(0, |a| a.iter().filter(|d| d.get("read").and_then(Value::as_bool) == Some(true)).count()),
         v.get("sections").and_then(Value::as_array).map_or(0, Vec::len),
         v.get("requirements").and_then(Value::as_u64).unwrap_or(0),
         v.get("kinds_specified").map(Value::to_string).unwrap_or_default(),
@@ -26277,7 +26379,16 @@ fn specs_report(job: &GuidedJob) -> Value {
     } else {
         "the build reads the specification".to_string()
     };
-    json!({"how": job.specs_how, "paths": paths, "sections_read": job.spec_sections_read, "note": note})
+    // The divisions the manual points to drawing sheets for, and the sheets read as theirs.
+    let sheets: Vec<Value> = job
+        .spec_sheets
+        .iter()
+        .map(|d| {
+            let read = job.spec_sections_read.iter().any(|r| r.ends_with(&format!("(sheet {})", d.sheet)));
+            json!({"division": d.division, "title": d.title, "sheet": d.sheet, "read": read})
+        })
+        .collect();
+    json!({"how": job.specs_how, "paths": paths, "sections_read": job.spec_sections_read, "division_sheets": sheets, "note": note})
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -26987,6 +27098,31 @@ mod ckpt_tests {
 
 #[cfg(test)]
 mod tests {
+    /// The sheets the project manual points a division to are typed specification in the
+    /// job's sheet lists (Q6295): their level goes, and they are no plans to load.
+    #[test]
+    fn the_sheets_a_manual_points_to_are_specifications_not_plans() {
+        use super::*;
+        use crate::cmd::products::DivisionSheet;
+        let pointers = vec![
+            DivisionSheet { division: "26".into(), title: "ELECTRICAL".into(), sheet: "QE-41".into() },
+            DivisionSheet { division: "22".into(), title: "PLUMBING".into(), sheet: "QP41".into() },
+        ];
+        let mut index = json!({"sheets": [
+            {"number": "QE41", "type": "unknown", "level": "1", "level_source": "default"},
+            {"number": "QP41", "type": "cover"},
+            {"number": "QE201", "type": "plan", "level": "1"}
+        ]});
+        let marked = apply_spec_sheets(&pointers, &mut index);
+        assert_eq!(marked, ["QE41", "QP41"]);
+        let sheets = index["sheets"].as_array().unwrap();
+        assert!(is_spec_sheet(&sheets[0]) && is_spec_sheet(&sheets[1]) && !is_spec_sheet(&sheets[2]));
+        assert_eq!(sheets[0]["spec_division"], "26 ELECTRICAL");
+        assert_eq!(sheets[0]["level"], "", "a specification is on no level");
+        assert!(sheets[0].get("level_source").is_none(), "so no level question is asked of it");
+        assert_eq!(sheets[2]["type"], "plan");
+        assert!(apply_spec_sheets(&pointers, &mut json!({})).is_empty());
+    }
 
     #[test]
     fn no_panel_schedule_read_is_a_finding_and_gear_read_says_where_it_looked() {

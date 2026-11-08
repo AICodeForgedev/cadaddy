@@ -25,6 +25,10 @@ const MAX_ELEMENTS: usize = 500_000;
 const MAX_REQUIREMENTS: usize = 400;
 /// Pages read of a file holding many sections (a project manual), at most.
 const MAX_BOOK_PAGES: u32 = 3_000;
+/// Divisions pointing to drawing sheets kept from the specifications, at most.
+const MAX_POINTERS: usize = 200;
+/// A section title printed under its header is no longer than this.
+const MAX_TITLE_CHARS: usize = 120;
 /// Pages read of a file to tell whether it is a specification.
 const SNIFF_PAGES: u32 = 12;
 /// Files opened to tell whether they are specifications, at most (a job's search).
@@ -39,7 +43,7 @@ const MAX_BESIDE: usize = 60;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Apply Product Data", run)
-        .params("{specs: [path] (specification section PDFs or text, a project manual, or folders of them, searched below), sections?: [\"26 27 26\"…] (only these), submittals?: [path] (the plumbing submittals, files or folders; default the job's), plumbing?: bool (default true: the plumbing fixtures' records first)} → {sections: [{section, file, requirements}] (those with products), sections_read: [\"26 27 26 WIRING DEVICES\"…] (every section read; a project manual's product-division sections each), files: n, requirements: n, elements: n, by_kind: {kind: {elements, with_spec, with_submittal}}, no_product_data: {kind: why}, unread: [{file, error}], plumbing: {schedule: {sheet, rows, headers, rough_in_rows}, submittals: [{file, revision, reviewed, items, approved, sent_back, catalogs}], fixtures, elements, with_product, no_product_data, no_product_data_by_tag: {tag: {elements, why}}, maker_from, catalog_from, rough_in_from, water_derived, powered, connection_boxes, connections_by, conflicts, conflicts_by_topic, types}}: first each plumbing fixture and piece of plumbing equipment gets its product from the documents, each field with its source: the plumbing fixture schedule's row (fixture, maker, model, description, remarks, parts; connection sizes from its columns, else the rough-in table by the fixture's name), the latest plumbing submittal not sent back (its product list's maker and description, the review letter's response, the cut sheet's catalog number and electrical data), then the Division 22 makers; where they disagree the submittal is kept, the schedule's value beside it (design_manufacturer, design_catalog) and a conflict review item raised; one with no document data says why (product_gap); a powered one (pump; sensor, line-voltage or power-burner by its documents; rules data) gets its electrical_connection and an equipment connection box in the spec for the electrical takeoff; water on a level whose water lines are proposed is marked derived. Then each device, fixture and equipment element gets a `product` record (JSON text) {required (spec: makers, substitution, rating, configuration, colour, features; section + page), approved (submittal maker/catalog + which, or \"no submittal for this kind\"), resolved}, and its approved_makers, color, configuration, rating and required_features as properties with their sources; a person's values stay")
+        .params("{specs: [path] (specification section PDFs or text, a project manual, or folders of them, searched below), sections?: [\"26 27 26\"…] (only these), submittals?: [path] (the plumbing submittals, files or folders; default the job's), plumbing?: bool (default true: the plumbing fixtures' records first), sheets?: [{number, file, page}] (where the print set's sheets are: a division the manual points to a drawing sheet for, `DIVISION 26 -- ELECTRICAL` over `Refer Sheet E4.1`, is read from that sheet's page as its specification)} → {sections: [{section, file, requirements}] (those with products), sections_read: [\"26 27 26 WIRING DEVICES\"…] (every section read: a project manual's sections of every division, by their SECTION headings, and each pointed sheet as `26 ELECTRICAL (sheet E4.1)`), product_sections: n (those of the product divisions, or the ones asked for, read for products), division_sheets: [{division, title, sheet, read, requirements?, why?}] (the manual's divisions that point to drawing sheets), files: n, requirements: n, elements: n, by_kind: {kind: {elements, with_spec, with_submittal}}, no_product_data: {kind: why}, unread: [{file, error}], plumbing: {schedule: {sheet, rows, headers, rough_in_rows}, submittals: [{file, revision, reviewed, items, approved, sent_back, catalogs}], fixtures, elements, with_product, no_product_data, no_product_data_by_tag: {tag: {elements, why}}, maker_from, catalog_from, rough_in_from, water_derived, powered, connection_boxes, connections_by, conflicts, conflicts_by_topic, types}}: first each plumbing fixture and piece of plumbing equipment gets its product from the documents, each field with its source: the plumbing fixture schedule's row (fixture, maker, model, description, remarks, parts; connection sizes from its columns, else the rough-in table by the fixture's name), the latest plumbing submittal not sent back (its product list's maker and description, the review letter's response, the cut sheet's catalog number and electrical data), then the Division 22 makers; where they disagree the submittal is kept, the schedule's value beside it (design_manufacturer, design_catalog) and a conflict review item raised; one with no document data says why (product_gap); a powered one (pump; sensor, line-voltage or power-burner by its documents; rules data) gets its electrical_connection and an equipment connection box in the spec for the electrical takeoff; water on a level whose water lines are proposed is marked derived. Then each device, fixture and equipment element gets a `product` record (JSON text) {required (spec: makers, substitution, rating, configuration, colour, features; section + page), approved (submittal maker/catalog + which, or \"no submittal for this kind\"), resolved}, and its approved_makers, color, configuration, rating and required_features as properties with their sources; a person's values stay")
         .menu(&["Tools", "Building", "Apply Product Data"])]
 }
 
@@ -195,7 +199,12 @@ pub(crate) fn kind_of_product(name: &str) -> Option<&'static str> {
 
 /// The section's number and title from its header (`SECTION 262726 - WIRING DEVICES`).
 fn section_header(line: &str) -> Option<String> {
-    let rest = line.trim().strip_prefix("SECTION ")?;
+    // `SECTION26 2726`: a PDF's lettering may lose the space after the word.
+    let rest = line.trim().strip_prefix("SECTION")?;
+    if !rest.starts_with(|c: char| c.is_whitespace() || c.is_ascii_digit()) {
+        return None;
+    }
+    let rest = rest.trim_start();
     let (num, title) = rest.split_once(" - ").unwrap_or((rest, ""));
     let digits: String = num.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
     let main: String = digits.chars().take_while(char::is_ascii_digit).collect();
@@ -214,6 +223,10 @@ pub(crate) fn split_sections(text: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     // A page break seen before a header: it goes with the section the header starts.
     let mut pending = String::new();
+    // The last section's header gave no title (`SECTION 09 9123` over `INTERIOR
+    // PAINTING`): its next line is the title.
+    let mut untitled = false;
+    let num = |s: &str| s.split(' ').take(3).collect::<Vec<_>>().join(" ");
     for line in text.lines() {
         if line.trim_start().starts_with("--- page ") {
             pending.push_str(line);
@@ -221,9 +234,17 @@ pub(crate) fn split_sections(text: &str) -> Vec<(String, String)> {
             continue;
         }
         if let Some(sec) = section_header(line.trim()) {
-            let num = |s: &str| s.split(' ').take(3).collect::<Vec<_>>().join(" ");
             if out.last().is_none_or(|(cur, _)| num(cur) != num(&sec)) {
+                untitled = sec.split(' ').count() <= 3;
                 out.push((sec, std::mem::take(&mut pending)));
+            }
+        } else if untitled && !line.trim().is_empty() {
+            untitled = false;
+            if let Some((cur, _)) = out.last_mut()
+                && let Some(title) = section_title_line(line)
+            {
+                cur.push(' ');
+                cur.push_str(&title);
             }
         }
         if let Some((_, body)) = out.last_mut() {
@@ -236,6 +257,161 @@ pub(crate) fn split_sections(text: &str) -> Vec<(String, String)> {
         }
     }
     out
+}
+
+/// A section's title printed on the line under its header: capital letters (a title), not the
+/// section's first article (`PART 1 GENERAL`) nor a sentence.
+fn section_title_line(line: &str) -> Option<String> {
+    let t = line.trim();
+    let up = t.to_ascii_uppercase();
+    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+    (letters >= 3 && t == up && t.chars().count() <= MAX_TITLE_CHARS && !up.starts_with("PART ") && !up.starts_with("SECTION "))
+        .then(|| t.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// A division of a project manual that points to a drawing sheet for its specification
+/// (`DIVISION 26 -- ELECTRICAL` over `A. Refer Sheet E4.1 for Electrical Specifications`): the
+/// sheet is that division's specification, read as such and not as a plan.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DivisionSheet {
+    /// `26`.
+    pub division: String,
+    /// `ELECTRICAL`, as the manual titles the division.
+    pub title: String,
+    /// The sheet number as printed (`E4.1`, `EL-4.1`).
+    pub sheet: String,
+}
+
+/// A division heading (`DIVISION 26 -- ELECTRICAL`, `2.19 DIVISION 26 - ELECTRICAL`,
+/// `DIVISION 23: HVAC`): its two-digit number and title. Only a heading in capitals (a sentence
+/// that names a division is no heading), after at most an outline number.
+fn division_heading(line: &str) -> Option<(String, String)> {
+    let t = line.trim();
+    let at = t.find("DIVISION ")?;
+    let before = t.get(..at)?.trim();
+    // At most an outline number before it (`2.19`, `A.`).
+    let outline = before.chars().count() <= 6 && !before.contains(' ') && (before.ends_with('.') || before.chars().any(|c| c.is_ascii_digit()));
+    if !before.is_empty() && !outline {
+        return None;
+    }
+    let rest = t.get(at + "DIVISION ".len()..)?.trim_start();
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() || digits.len() > 2 {
+        return None;
+    }
+    let title = rest.get(digits.len()..)?.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '–' | '—' | ':' | '.'));
+    if title.chars().any(|c| c.is_lowercase()) {
+        return None;
+    }
+    Some((format!("{digits:0>2}"), title.trim().to_string()))
+}
+
+/// The sheets a line points to (`Refer Sheet E4.1 for Electrical Specifications`, `See Sheets
+/// ME-4.1 and ME-4.2`): a pointing word and a sheet word (rules data `specs.sheet_pointer_words`,
+/// `specs.sheet_words`), then the sheet numbers after it.
+fn pointed_sheets(line: &str) -> Vec<String> {
+    let up = line.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| c.is_whitespace() || c == ',' || c == ';').filter(|w| !w.is_empty()).collect();
+    let is_word = |w: &str, list: &[&str]| list.iter().any(|x| w.trim_matches(|c: char| !c.is_ascii_alphanumeric()) == *x);
+    if !words.iter().any(|w| is_word(w, cadaddy_mepfix::wordrules::words("specs.sheet_pointer_words"))) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let sheet_words = cadaddy_mepfix::wordrules::words("specs.sheet_words");
+    let mut i = 0usize;
+    while i < words.len() {
+        let w = words.get(i).copied().unwrap_or_default();
+        i += 1;
+        if !is_word(w, sheet_words) {
+            continue;
+        }
+        // The numbers after it: `E4.1`, `EL-4.1, EL-4.2 and EL-4.3`.
+        while let Some(next) = words.get(i).copied() {
+            let n = next.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '.').trim_end_matches('.');
+            if cadaddy_mepfix::sheet_facts::is_sheet_number(n) {
+                if !out.iter().any(|o| o == n) {
+                    out.push(n.to_string());
+                }
+            } else if !matches!(n, "AND" | "&" | "THROUGH" | "THRU" | "TO") {
+                break;
+            }
+            i += 1;
+        }
+    }
+    out.truncate(20);
+    out
+}
+
+/// The divisions of a project manual's text that point to drawing sheets for their
+/// specification: each division heading with the sheets the lines under it name (up to its next
+/// heading, a few lines at most).
+pub(crate) fn division_sheets(text: &str) -> Vec<DivisionSheet> {
+    let mut out: Vec<DivisionSheet> = Vec::new();
+    let mut open: Option<(String, String, usize)> = None;
+    for line in text.lines() {
+        if line.trim_start().starts_with("--- page ") {
+            continue;
+        }
+        if let Some((division, title)) = division_heading(line) {
+            open = Some((division, title, 0));
+            continue;
+        }
+        let Some((division, title, seen)) = open.as_mut() else { continue };
+        *seen += 1;
+        if *seen > 6 {
+            open = None;
+            continue;
+        }
+        for sheet in pointed_sheets(line) {
+            if out.len() < MAX_POINTERS && !out.iter().any(|d| d.division == *division && d.sheet == sheet) {
+                out.push(DivisionSheet { division: division.clone(), title: title.clone(), sheet });
+            }
+        }
+    }
+    out
+}
+
+/// A specification file's text: a PDF's pages (all of a book's: a project manual), else the file
+/// as text.
+fn spec_text(f: &str, pages: u32) -> std::result::Result<String, String> {
+    if f.to_ascii_lowercase().ends_with(".pdf") {
+        crate::readfile::read(f).map_err(|e| e.to_string()).and_then(|b| super::spec_import::pdf_text_pages(&b, f, pages).map_err(|e| e.to_string()))
+    } else {
+        crate::readfile::read(f).map_err(|e| e.to_string()).and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+    }
+}
+
+/// The divisions of the specifications under `paths` (a project manual's) that point to drawing
+/// sheets for their specification ([`division_sheets`]).
+pub(crate) fn manual_division_sheets(paths: &[String]) -> Vec<DivisionSheet> {
+    let mut out: Vec<DivisionSheet> = Vec::new();
+    for f in spec_files(paths, &[]) {
+        let name = std::path::Path::new(&f).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        // A file named for one section is no manual.
+        if section_of_name(&name).is_some() {
+            continue;
+        }
+        if let Ok(text) = spec_text(&f, MAX_BOOK_PAGES) {
+            for d in division_sheets(&text) {
+                if !out.contains(&d) && out.len() < MAX_POINTERS {
+                    out.push(d);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A drawing sheet's page read as specification text: the page's lettering in reading order
+/// (a PDF's page `page`; a text file whole).
+fn sheet_spec_text(file: &str, page: u32) -> std::result::Result<String, String> {
+    if file.to_ascii_lowercase().ends_with(".pdf") {
+        crate::readfile::read(file)
+            .map_err(|e| e.to_string())
+            .and_then(|b| super::spec_import::pdf_page_text(&b, file, page).map_err(|e| e.to_string()))
+    } else {
+        spec_text(file, 1)
+    }
 }
 
 /// Whether a file or folder name says it is a specification or a project manual: a word that
@@ -752,59 +928,112 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut unread = Vec::new();
     // Every section read (those with no product list too), in order.
     let mut read: Vec<String> = Vec::new();
+    // The divisions a manual points to drawing sheets for (`Refer Sheet E4.1`).
+    let mut pointers: Vec<DivisionSheet> = Vec::new();
+    // Sections of the product divisions (or those asked for) read, a manual's or a sheet's.
+    let mut product_sections = 0usize;
+    let wanted = |num: &str| {
+        if only.is_empty() {
+            cadaddy_mepfix::wordrules::words("specs.product_divisions").iter().any(|d| num.starts_with(d))
+        } else {
+            only.iter().any(|o| num == o.trim() || o.trim() == num.get(..2).unwrap_or(num))
+        }
+    };
     for f in &files {
         let name = std::path::Path::new(f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
         // A file not named for one section may hold many (a project manual): all its pages.
         let book = section_of_name(&name).is_none();
         let pages = if book { MAX_BOOK_PAGES } else { 200 };
-        let text = if f.to_ascii_lowercase().ends_with(".pdf") {
-            match crate::readfile::read(f)
-                .map_err(|e| e.to_string())
-                .and_then(|b| super::spec_import::pdf_text_pages(&b, f, pages).map_err(|e| e.to_string()))
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    unread.push(json!({"file": name, "error": e}));
-                    continue;
-                }
-            }
-        } else {
-            match crate::readfile::read(f).map_err(|e| e.to_string()).and_then(|b| String::from_utf8(b).map_err(|e| e.to_string())) {
-                Ok(t) => t,
-                Err(e) => {
-                    unread.push(json!({"file": name, "error": e}));
-                    continue;
-                }
+        let text = match spec_text(f, pages) {
+            Ok(t) => t,
+            Err(e) => {
+                unread.push(json!({"file": name, "error": e}));
+                continue;
             }
         };
         let parts = split_sections(&text);
         if parts.len() <= 1 {
             let got = read_spec_section(&text, &name);
             read.push(parts.first().map_or_else(|| name.clone(), |(sec, _)| sec.clone()));
+            let num = parts.first().map(|(sec, _)| sec.split(' ').take(3).collect::<Vec<_>>().join(" ")).or_else(|| section_of_name(&name));
+            product_sections += usize::from(num.as_deref().is_none_or(wanted));
             if !got.is_empty() {
                 sections.push(json!({"section": got.first().map(|r| r.section.clone()), "file": name, "requirements": got.len()}));
             }
             reqs.extend(got);
+            if book {
+                for d in division_sheets(&text) {
+                    if !pointers.contains(&d) && pointers.len() < MAX_POINTERS {
+                        pointers.push(d);
+                    }
+                }
+            }
             continue;
         }
-        // A manual: its sections of the product divisions (or those asked for), each on its own.
+        // A manual: every section is read (in any division); the product divisions' (or those
+        // asked for) each for its products.
+        for d in division_sheets(&text) {
+            if !pointers.contains(&d) && pointers.len() < MAX_POINTERS {
+                pointers.push(d);
+            }
+        }
         for (sec, body) in parts {
+            if read.len() >= MAX_SPEC_FILES * 4 {
+                break;
+            }
             let num = sec.split(' ').take(3).collect::<Vec<_>>().join(" ");
-            let wanted = if only.is_empty() {
-                cadaddy_mepfix::wordrules::words("specs.product_divisions").iter().any(|d| num.starts_with(d))
-            } else {
-                only.iter().any(|o| num == o.trim())
-            };
-            if !wanted || read.len() >= MAX_SPEC_FILES * 4 {
+            read.push(sec.clone());
+            if !wanted(&num) {
                 continue;
             }
+            product_sections += 1;
             let got = read_spec_section(&body, &name);
-            read.push(sec.clone());
             if !got.is_empty() {
                 sections.push(json!({"section": sec, "file": name, "requirements": got.len()}));
             }
             reqs.extend(got);
         }
+    }
+    // The sheets the manual points to: each is its division's specification, read as its text
+    // (`sheets`: where each sheet's page is, the job's print set gives it).
+    let given_sheets: Vec<(String, String, u32)> = p
+        .get("sheets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(MAX_SPEC_FILES)
+        .filter_map(|v| {
+            let number = v.get("number").and_then(Value::as_str)?;
+            let file = v.get("file").and_then(Value::as_str)?;
+            let page = v.get("page").and_then(Value::as_u64).map_or(1, |n| u32::try_from(n).unwrap_or(1));
+            Some((number.to_string(), file.to_string(), page))
+        })
+        .collect();
+    let key = |n: &str| n.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
+    let mut pointed = Vec::new();
+    for d in &pointers {
+        let label = format!("{} {} (sheet {})", d.division, d.title, d.sheet).split_whitespace().collect::<Vec<_>>().join(" ");
+        let at = given_sheets.iter().find(|(n, _, _)| key(n) == key(&d.sheet));
+        let mut entry = json!({"division": d.division, "title": d.title, "sheet": d.sheet, "read": false});
+        match at {
+            _ if !wanted(&d.division) => entry["why"] = json!("not a division the products are read from"),
+            None => entry["why"] = json!("the sheet is not in the print set given"),
+            Some((_, file, page)) => match sheet_spec_text(file, *page) {
+                Err(e) => entry["why"] = json!(e),
+                Ok(text) => {
+                    let got = read_spec_section(&text, &label);
+                    entry["read"] = json!(true);
+                    entry["requirements"] = json!(got.len());
+                    read.push(label.clone());
+                    product_sections += 1;
+                    if !got.is_empty() {
+                        sections.push(json!({"section": label, "file": d.sheet, "requirements": got.len()}));
+                    }
+                    reqs.extend(got);
+                }
+            },
+        }
+        pointed.push(entry);
     }
     // The plumbing fixtures' products first (the schedule, the plumbing submittals, these
     // sections' makers), so their records below are built from them.
@@ -922,6 +1151,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "sections": sections,
         "sections_read": read,
+        "product_sections": product_sections,
+        "division_sheets": pointed,
         "files": files.len(),
         "requirements": reqs.len(),
         "kinds_specified": kinds,
@@ -1139,6 +1370,35 @@ PART 1 - GENERAL
         // One section's file is one part.
         assert_eq!(split_sections(WIRING_DEVICES).len(), 1);
         assert!(split_sections("no headers here\nat all").is_empty());
+    }
+
+    #[test]
+    fn a_manuals_divisions_point_to_the_sheets_that_hold_their_specification() {
+        let toc = "1.15 DIVISION 21 -- FIRE SUPPRESSION\n1.16 DIVISION 22 -- PLUMBING\n     A. Refer Sheet Q41 for Plumbing Specifications\n\
+                   1.17 DIVISION 23 - HEATING, VENTILATING, AND AIR-CONDITIONING (HVAC)\nA. See Sheets QM-4.1 and QM-4.2, QM43.\n\
+                   DIVISION 26: ELECTRICAL\nSpecifications are on Drawing QE-1.1\nDIVISION 27 -- COMMUNICATIONS\n\
+                   A. Refer to Section 27 0500 for pathways.\n";
+        let got: Vec<(String, String)> = division_sheets(toc).into_iter().map(|d| (d.division, d.sheet)).collect();
+        let want = [("22", "Q41"), ("23", "QM-4.1"), ("23", "QM-4.2"), ("23", "QM43"), ("26", "QE-1.1")];
+        assert_eq!(got, want.map(|(a, b)| (a.to_string(), b.to_string())));
+        assert_eq!(division_sheets(toc).first().map(|d| d.title.as_str()), Some("PLUMBING"));
+        // A sentence that names a division is no heading; a sheet named far below one is no pointer.
+        assert!(division_sheets("Work of Division 26 is shown.\nRefer Sheet Q41 for it.\n").is_empty());
+        assert!(division_sheets("SUBDIVISION 4 OF THE PLAT\nRefer Sheet Q41.\n").is_empty());
+        let far = format!("DIVISION 26 -- ELECTRICAL\n{}Refer Sheet Q41.\n", "x\n".repeat(8));
+        assert!(division_sheets(&far).is_empty());
+        // No pointing word: a sheet only named.
+        assert!(pointed_sheets("Sheet Q41 Electrical").is_empty());
+        assert_eq!(pointed_sheets("Refer Sheet Q-41."), ["Q-41"]);
+    }
+
+    #[test]
+    fn a_section_header_without_its_title_takes_the_next_line() {
+        let text = "--- page 1 of 2 ---\nSECTION 09 9123\nINTERIOR PAINTING\nPART 1 GENERAL\n--- page 2 of 2 ---\nSECTION 26 0519\nPART 1 GENERAL\n";
+        let names: Vec<String> = split_sections(text).into_iter().map(|(s, _)| s).collect();
+        assert_eq!(names, ["09 91 23 INTERIOR PAINTING", "26 05 19"], "a first article is no title");
+        assert_eq!(section_header("SECTION26 2726").as_deref(), Some("26 27 26"), "the space lost in the PDF's lettering");
+        assert_eq!(section_header("SECTIONS 10 AND 11"), None);
     }
 
     #[test]
