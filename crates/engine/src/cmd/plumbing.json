@@ -16,6 +16,8 @@
     {"words": ["HOSE", "EYEWASH", "MIXING VALVE", "WATER VALVE", "BOOSTER", "EXPANSION TANK"], "systems": ["CW"]}
   ],
   "system_names": {"SAN": "waste", "V": "vent", "CW": "cold_water", "HW": "hot_water"},
+  "fixture_systems": ["CW", "HW", "SAN"],
+  "fixture_systems_basis": "trade practice: domestic cold and hot water and sanitary branches on a floor are run to its fixtures; a floor whose plan draws them and has no fixture is a gap in what was read (vent, gas, storm and the risers through a floor serve no fixture of that floor)",
   "fill_in": {
     "water": ["CW", "HW", "HWR"],
     "fixture_lines": ["CW", "HW"],
