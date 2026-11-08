@@ -126,7 +126,8 @@ pub struct SheetEntry {
 /// A level's elevation as a section or elevation sheet marks it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LevelMark {
-    /// The level code (`1`, `2`, `R`), as plan titles give levels.
+    /// The level code (`1`, `2`, `R`), as plan titles give levels; [`MARK_FINISH_FLOOR`] or
+    /// [`MARK_PLATE`] for a finished floor or a top of plate marked with no level number.
     pub level: String,
     pub elevation_ft: f64,
 }
@@ -1008,6 +1009,18 @@ pub fn run_classify_prints(
             // A consultant's title block may carry no title: the view titles say what is drawn.
             let type_text = if e.title.is_empty() { facts.view_titles.join(" / ") } else { e.title.clone() };
             e.sheet_type = classify_sheet_type(printed, &type_text);
+            if !view && e.sheet_type == "unknown" {
+                // A title block that names no kind of sheet (`BUILDING A - OVERALL`): a view under
+                // it titled as a plan of a level (`THIRD FLOOR PLAN`) makes it that plan.
+                if let Some(t) = facts.view_titles.iter().find(|t| {
+                    !is_key_plan(t)
+                        && !sheet_reader::names_no_plan(t)
+                        && !sheet_reader::detect_levels(t).is_empty()
+                        && is_plan_type(&classify_sheet_type("", t))
+                }) {
+                    e.sheet_type = classify_sheet_type("", t);
+                }
+            }
             if view && e.sheet_type == "unknown" {
                 // One view of a several-view sheet is a plan of its level.
                 e.sheet_type = "plan".into();
@@ -1024,7 +1037,7 @@ pub fn run_classify_prints(
                 if levels.is_empty() && is_plan_type(&e.sheet_type) {
                     // A key plan (the small floor plan marking where an enlarged plan or detail
                     // is) names its floor, not the sheet's.
-                    for t in facts.view_titles.iter().filter(|t| !is_key_plan(t)) {
+                    for t in facts.view_titles.iter().filter(|t| !is_key_plan(t) && !sheet_reader::names_no_plan(t)) {
                         let vl = sheet_reader::detect_levels(t);
                         if !vl.is_empty() {
                             // Use the first view title's level only; multi-level comes from
@@ -1206,6 +1219,10 @@ impl PrintLoader {
 
 /// Short texts looked at as level marks per page (a guard against hostile files).
 const MAX_MARK_TEXTS: usize = 400;
+/// Most readings of one level reported as not used for disagreeing with the others.
+const MAX_LEVEL_WARNINGS: usize = 8;
+/// Highest a top of plate can stand above the top floor and still be its roof's (feet).
+const MAX_STOREY_FT: f64 = 30.0;
 
 /// What a page says about itself, read once for all of its entries.
 struct PageFacts {
@@ -1605,34 +1622,102 @@ fn code_of_level(name: &str) -> Option<String> {
     }
 }
 
+/// The [`LevelMark::level`] of a section's finished floor marked with no level number
+/// (`FIN. FLR. EL. 100'-0"`): a building of one storey's floor.
+pub const MARK_FINISH_FLOOR: &str = "FF";
+/// The [`LevelMark::level`] of a top-of-plate marker (`T.O. PLATE 112'-0"`): where the roof bears.
+pub const MARK_PLATE: &str = "PLATE";
+
+/// A text's words for comparing with a datum label list: upper case, punctuation dropped, the
+/// elevation keywords (`EL`, `ELEV`) left out.
+fn label_words(s: &str) -> String {
+    s.to_ascii_uppercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty() && !matches!(*w, "EL" | "ELEV" | "ELEVATION"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What an unnumbered level marker names (rule data `levels.finish_floor_mark_words`,
+/// `levels.plate_mark_words`): [`MARK_FINISH_FLOOR`], [`MARK_PLATE`] or none.
+fn datum_label(name: &str) -> Option<&'static str> {
+    let n = label_words(name);
+    if n.is_empty() {
+        return None;
+    }
+    let is = |list: &[&str]| list.iter().any(|w| label_words(w) == n);
+    if is(crate::wordrules::words("levels.finish_floor_mark_words")) {
+        Some(MARK_FINISH_FLOOR)
+    } else if is(crate::wordrules::words("levels.plate_mark_words")) {
+        Some(MARK_PLATE)
+    } else {
+        None
+    }
+}
+
+/// Whether a marker's name is a bare code (`3`, `26`, `R`, `B1`, `L1`): a detail callout, a grid
+/// bubble, or a fixture, lintel or keynote tag beside a dimension, never a level marker, which
+/// names its level in words (`SECOND FLOOR`, `LEVEL 2`, `ROOF`).
+fn bare_code(name: &str) -> bool {
+    let words: Vec<&str> = name.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let digits = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit());
+    let code = |w: &str| w.len() == 1 || digits(w) || ['B', 'b', 'L', 'l'].iter().any(|p| w.strip_prefix(*p).is_some_and(digits));
+    match words.as_slice() {
+        [w] => code(w),
+        // `L 1`, `B 2`: a tag's letter and number apart.
+        [a, n] => matches!(a.to_ascii_uppercase().as_str(), "L" | "B") && digits(n),
+        _ => false,
+    }
+}
+
 /// Level marks on a section or elevation: a level note in one text (`SECOND FLOOR EL. 110'-8"`)
-/// or a level name with its elevation right beside it (the two lines of a level marker).
+/// or a level name with its elevation right beside it (the two lines of a level marker). A
+/// marker names its level: a bare number or letter beside a dimension is a callout. A finished
+/// floor or a top of plate marked with no level number is kept as [`MARK_FINISH_FLOOR`] or
+/// [`MARK_PLATE`], for the index to place.
 fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
     use cadaddy_walk3d::levels::{canonical_level, parse_elevation, parse_level_note};
     let mut out = Vec::new();
     let short: Vec<&crate::sheet_facts::TextItem> =
         texts.iter().filter(|t| t.value.len() <= 40 && !t.value.contains('=')).take(MAX_MARK_TEXTS * 50).collect();
+    // The elevation printed right beside a marker's name (the marker's second line).
+    let beside = |t: &crate::sheet_facts::TextItem| {
+        short
+            .iter()
+            .filter(|u| {
+                u.at != t.at
+                    && u.at.dist(t.at) <= 4.0 * t.height.max(u.height)
+                    && canonical_level(&u.value).is_none()
+                    && datum_label(&u.value).is_none()
+                    && parse_elevation(&u.value).is_some()
+            })
+            .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
+            .copied()
+    };
     let mut looked = 0usize;
     for t in &short {
-        if canonical_level(&t.value).is_none() {
+        // The marker's name: the text but its elevation.
+        let own = parse_elevation(&t.value);
+        let name = match own {
+            Some((_, a, z)) => format!("{} {}", t.value.get(..a).unwrap_or_default(), t.value.get(z..).unwrap_or_default()),
+            None => t.value.clone(),
+        };
+        let datum = datum_label(&name);
+        if datum.is_none() && (canonical_level(&t.value).is_none() || bare_code(&name)) {
             continue;
         }
         looked += 1;
         if looked > MAX_MARK_TEXTS {
             break;
         }
-        let note = parse_level_note(&t.value).or_else(|| {
-            short
-                .iter()
-                .filter(|u| {
-                    u.at != t.at
-                        && u.at.dist(t.at) <= 4.0 * t.height.max(u.height)
-                        && canonical_level(&u.value).is_none()
-                        && parse_elevation(&u.value).is_some()
-                })
-                .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
-                .and_then(|u| parse_level_note(&format!("{} {}", t.value, u.value)))
-        });
+        if let Some(kind) = datum {
+            let el = own.map(|(v, _, _)| v).or_else(|| beside(t).and_then(|u| parse_elevation(&u.value)).map(|(v, _, _)| v));
+            if let Some(v) = el.filter(|v| v.is_finite() && (-1000.0..=5000.0).contains(v)) {
+                out.push(LevelMark { level: kind.into(), elevation_ft: v });
+            }
+            continue;
+        }
+        let note = parse_level_note(&t.value).or_else(|| beside(t).and_then(|u| parse_level_note(&format!("{} {}", t.value, u.value))));
         if let Some(n) = note
             && let Some(level) = code_of_level(&n.name)
         {
@@ -1778,6 +1863,11 @@ pub struct IndexLevel {
     /// Floor to floor: the next level's elevation less this one's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height_ft: Option<f64>,
+    /// What gave the elevation: `marks` (the level's own markers), `finish floor` (a section's
+    /// unnumbered finished floor, in a building of one storey) or `top of plate` (where the roof
+    /// bears, when no roof is marked). Empty with no elevation.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub elevation_source: String,
 }
 
 /// The set as sheets: one entry per real sheet, the levels its plans show.
@@ -1909,6 +1999,21 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             }
         }
     }
+    // A floor that has plans is a level, even when all its plans are enlarged or partial ones
+    // (`ENLARGED FIRST FLOOR PLAN - NORTH`): they are then the plans that fill it.
+    let mut enlarged_only: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+    for s in out.sheets.iter().filter(|s| s.sheet_type == "enlarged_plan" && s.level != "SITE") {
+        for l in s.levels.iter().chain(std::iter::once(&s.level)).filter(|l| !l.is_empty() && !cadaddy_walk3d::levels::is_datum_name(l)) {
+            if by_level.contains_key(l) {
+                continue;
+            }
+            let v = enlarged_only.entry(l.clone()).or_default();
+            if !v.iter().any(|x| x.get("sheet").and_then(serde_json::Value::as_str) == Some(&s.number)) {
+                v.push(serde_json::json!({"sheet": s.number, "typical": false}));
+            }
+        }
+    }
+    by_level.extend(enlarged_only);
     let mut codes: Vec<String> = by_level.keys().cloned().collect();
     codes.sort_by_key(|c| level_key(c));
     // The storeys are the levels but the roof (a roof plan shows the top of the building, no
@@ -1931,26 +2036,49 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             codes.sort_by_key(|c| level_key(c));
         }
     }
-    // Elevations: the value most marks give per level; above the first floor at 100'-0". A
-    // civil or site sheet's marks are spot elevations on the site datum, never the levels'.
+    // Elevations: the value most marks give per level, above the first floor (whatever datum the
+    // sections use: `100'-0"` or the true elevation). A civil or site sheet's marks are spot
+    // elevations on the site datum, never the levels'.
     let mut marks: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut finish: Vec<f64> = Vec::new();
+    let mut plate: Vec<f64> = Vec::new();
     let site = |e: &SheetEntry| e.level.eq_ignore_ascii_case("SITE") || cadaddy_walk3d::levels::site_sheet(&e.discipline, &e.title);
     for e in project.sheets.iter().filter(|e| e.superseded_by.is_empty() && !site(e)) {
-        for m in &e.level_marks {
-            marks.entry(m.level.clone()).or_default().push(m.elevation_ft);
+        for m in e.level_marks.iter().filter(|m| m.elevation_ft.is_finite()) {
+            match m.level.as_str() {
+                MARK_FINISH_FLOOR => finish.push(m.elevation_ft),
+                MARK_PLATE => plate.push(m.elevation_ft),
+                _ => marks.entry(m.level.clone()).or_default().push(m.elevation_ft),
+            }
         }
     }
-    let mut elevation: BTreeMap<String, f64> = BTreeMap::new();
-    for (l, vals) in &marks {
+    let same = |a: f64, b: f64| (a - b).abs() < 1.0 / 96.0;
+    // The value most marks give, and how many give it.
+    let most = |vals: &[f64]| -> Option<(f64, usize)> {
         let mut best: Option<(f64, usize)> = None;
         for v in vals {
-            let n = vals.iter().filter(|w| (*w - v).abs() < 1.0 / 96.0).count();
+            let n = vals.iter().filter(|w| same(**w, *v)).count();
             if best.is_none_or(|(_, bn)| n > bn) {
                 best = Some((*v, n));
             }
         }
-        if let Some((v, _)) = best {
-            elevation.insert(l.clone(), v);
+        best
+    };
+    let mut elevation: BTreeMap<String, f64> = BTreeMap::new();
+    let mut source: BTreeMap<String, &str> = BTreeMap::new();
+    for (l, vals) in &marks {
+        let Some((v, n)) = most(vals) else { continue };
+        elevation.insert(l.clone(), v);
+        source.insert(l.clone(), "marks");
+        // Marks giving the level another elevation: reported, not used.
+        let mut other: Vec<f64> = Vec::new();
+        for w in vals.iter().filter(|w| !same(**w, v)) {
+            if !other.iter().any(|o| same(*o, *w)) {
+                other.push(*w);
+            }
+        }
+        for w in other.iter().take(MAX_LEVEL_WARNINGS) {
+            out.level_warnings.push(format!("level {l}: {} not used: {n} other mark(s) give {}", cadaddy_walk3d::feet(*w), cadaddy_walk3d::feet(v)));
         }
     }
     // Elevations rise with the level: the most marks that agree win; the others are dropped.
@@ -1962,11 +2090,32 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
     for ((l, e), keep) in marked.iter().zip(cadaddy_walk3d::levels::in_order(&items)) {
         if !keep {
             elevation.remove(l);
+            source.remove(l);
             out.level_warnings
                 .push(format!("level {l}: {} not used: it breaks the levels' order (elevations rise with the level)", cadaddy_walk3d::feet(*e)));
         }
     }
-    let datum = if elevation.get("1").is_some_and(|e| (e - 100.0).abs() < 1e-6) { 100.0 } else { 0.0 };
+    // A finished floor marked with no level number is the floor of a building of one storey.
+    if one_level
+        && !elevation.contains_key(&lowest)
+        && let Some((v, _)) = most(&finish)
+    {
+        elevation.insert(lowest.clone(), v);
+        source.insert(lowest.clone(), "finish floor");
+    }
+    // The roof bears on the top of plate: with no roof marked, the plate above the top floor
+    // (within a storey of it) is the roof's elevation.
+    if codes.iter().any(|c| c == "R") && !elevation.contains_key("R") {
+        let top = codes.iter().filter(|c| c.as_str() != "R").filter_map(|c| elevation.get(c)).copied().fold(f64::NEG_INFINITY, f64::max);
+        let roof =
+            plate.iter().copied().filter(|p| top.is_finite() && *p > top + 1e-6 && *p <= top + MAX_STOREY_FT).fold(f64::NEG_INFINITY, f64::max);
+        if roof.is_finite() {
+            elevation.insert("R".into(), roof);
+            source.insert("R".into(), "top of plate");
+        }
+    }
+    // Above the first floor: its own mark is the datum (`100'-0"`, or the true elevation).
+    let datum = elevation.get("1").copied().filter(|e| e.is_finite()).unwrap_or(0.0);
     for (i, c) in codes.iter().enumerate() {
         let el = elevation.get(c).map(|e| e - datum);
         let next = codes.get(i + 1).and_then(|n| elevation.get(n)).map(|e| e - datum);
@@ -1975,6 +2124,7 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             sheets: by_level.get(c).cloned().unwrap_or_default(),
             elevation_ft: el,
             height_ft: el.zip(next).map(|(a, b)| b - a).filter(|h| *h > 0.0),
+            elevation_source: if el.is_some() { source.get(c).map(|s| (*s).to_string()).unwrap_or_default() } else { String::new() },
         });
     }
     // A plan whose title names no level: in a building of one level it can only be that one

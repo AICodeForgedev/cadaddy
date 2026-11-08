@@ -54,7 +54,6 @@ use cadaddy_doc::projrules::{RuleDomain, RuleValue};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::bspec::current;
 use super::*;
 use crate::{Result, Session};
 use cadaddy_doc::EntityKind;
@@ -72,6 +71,14 @@ const STRAP_SPACING_FT: f64 = 10.0;
 const MAKEUP_FT: f64 = 1.0;
 
 /// Default waste, percent, by category.
+/// The spec as the bill of materials counts it: with several buildings from one set of plans
+/// (Q6292), each item of a plan standing for several once per building (the model's elements
+/// already are).
+fn current(s: &Session, cmd: &str) -> Result<(cadaddy_walk3d::BuildingSpec, bool)> {
+    let (sp, stored) = super::bspec::current(s, cmd)?;
+    Ok((super::buildings::per_building(&sp).unwrap_or(sp), stored))
+}
+
 fn default_waste(category: &str) -> f64 {
     match category {
         "conduit" | "wire" | "duct" | "pipe" => 10.0,

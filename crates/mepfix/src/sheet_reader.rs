@@ -1277,6 +1277,8 @@ pub fn plan_views(d: &Drawing) -> Vec<PlanView> {
     let mut views: Vec<PlanView> = texts
         .iter()
         .filter(|(v, h, at, _)| at[0] <= 0.8 && *h >= median * 1.4 && v.len() <= 60 && !v.to_uppercase().contains("NOTE"))
+        // A detail, section, elevation, schedule or key plan that names a level is no plan of it.
+        .filter(|(v, ..)| !names_no_plan(v))
         .filter_map(|(v, h, _, p)| {
             let levels = detect_levels(v);
             (!levels.is_empty()).then(|| PlanView { title: v.clone(), levels, at: *p, height: *h })
@@ -1302,6 +1304,14 @@ pub fn plan_views(d: &Drawing) -> Vec<PlanView> {
     }
     kept.sort_by(|a, b| a.at[1].total_cmp(&b.at[1]).then(a.at[0].total_cmp(&b.at[0])));
     kept
+}
+
+/// Whether a view title names something that is never a plan (rule data
+/// `sheets.not_plan_view_words`: a detail, section, elevation, schedule, diagram or key plan),
+/// though it may name a level (`LEVEL 3 SHEAR WALL DETAIL`).
+pub fn names_no_plan(title: &str) -> bool {
+    let up = title.to_uppercase();
+    crate::wordrules::words("sheets.not_plan_view_words").iter().any(|w| up.contains(w))
 }
 
 /// The drawing with only the entities whose middle `keep` accepts.

@@ -568,3 +568,146 @@ fn pages_that_share_a_number_are_copies_only_when_they_are_the_same_sheet() {
     let found = page2.stage_results.get("classify").map(|r| r.findings.iter().any(|f| f.kind == "conflict")).unwrap_or(false);
     assert!(found, "the clash is reported on the page");
 }
+
+/// The levels and elevations of an index, rounded to the hundredth of a foot.
+fn levels_of(index: &printset::SheetIndex) -> Vec<(String, Option<f64>, Option<f64>)> {
+    let r = |v: f64| (v * 100.0).round() / 100.0;
+    index.levels.iter().map(|l| (l.name.clone(), l.elevation_ft.map(r), l.height_ft.map(r))).collect()
+}
+
+fn lv(name: &str, el: Option<f64>, h: Option<f64>) -> (String, Option<f64>, Option<f64>) {
+    (name.to_string(), el, h)
+}
+
+/// A section's level markers name their level (`SECOND FLOOR`, `ROOF`); a detail callout's bare
+/// number (`3`, `26`), a lone letter or a fixture tag (`L1`) beside a dimension is no level marker.
+#[test]
+fn a_level_marker_names_its_level_and_a_bare_number_beside_a_dimension_is_none() {
+    let mut section = marked("A301", &["BUILDING SECTIONS"], &[("FIRST FLOOR", "100'-0\""), ("SECOND FLOOR", "110'-6\""), ("ROOF", "121'-0\"")]);
+    for (i, (bubble, dim)) in
+        [("3", "1'-0\""), ("26", "0'-0\""), ("R", "1'-0\""), ("7", "4'-0\""), ("L1", "9'-7\""), ("L 2", "3'-2\"")].iter().enumerate()
+    {
+        let x = 300.0 + 120.0 * i as f64;
+        text(&mut section, bubble, x, 300.0, 6.0);
+        text(&mut section, dim, x, 292.0, 6.0);
+    }
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["SECOND FLOOR PLAN"], "")),
+        ("Set.pdf", 3, sheet("A103", &["ROOF PLAN"], "")),
+        ("Set.pdf", 4, section),
+    ]);
+    let s = project.sheets.iter().find(|e| e.number == "A301").expect("section");
+    let mut codes: Vec<&str> = s.level_marks.iter().map(|m| m.level.as_str()).collect();
+    codes.sort_unstable();
+    assert_eq!(codes, ["1", "2", "R"], "{:?}", s.level_marks);
+    let index = printset::sheet_index(&project);
+    assert!(index.level_warnings.is_empty(), "{:?}", index.level_warnings);
+    assert_eq!(levels_of(&index), [lv("1", Some(0.0), Some(10.5)), lv("2", Some(10.5), Some(10.5)), lv("R", Some(21.0), None)]);
+}
+
+/// `sheet` with large view titles (each over its scale line) side by side in the drawing area.
+fn sheet_with_views(number: &str, title: &[&str], views: &[&str]) -> Drawing {
+    let mut d = sheet(number, title, "");
+    for (i, v) in views.iter().enumerate() {
+        let x = 150.0 + 500.0 * i as f64;
+        text(&mut d, v, x, 80.0, 16.0);
+        text(&mut d, "SCALE: 1/4\" = 1'-0\"", x, 62.0, 5.0);
+    }
+    d
+}
+
+/// Details, sections and elevations that name a level (`LEVEL 3 SHEAR WALL DETAIL`) are no plan
+/// views: they never split their sheet into level plans nor make a level the floor plans don't.
+#[test]
+fn detail_and_section_view_titles_make_no_level() {
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["SECOND FLOOR PLAN"], "")),
+        ("Set.pdf", 3, sheet_with_views("S501", &["SHEAR WALL", "DETAILS"], &["LEVEL 2 SHEAR WALL DETAIL", "LEVEL 3 SHEAR WALL DETAIL"])),
+        ("Set.pdf", 4, sheet_with_views("S502", &["FRAMING"], &["LEVEL 3 WALL SECTION", "LEVEL 4 WALL SECTION"])),
+    ]);
+    let index = printset::sheet_index(&project);
+    let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["1", "2"], "{:?}", index.sheets);
+    for n in ["S501", "S502"] {
+        let s = index.sheets.iter().find(|s| s.number == n).unwrap_or_else(|| panic!("{n}: {:?}", index.sheets));
+        assert!(s.level.is_empty() && s.levels.is_empty(), "{n}: {s:?}");
+    }
+}
+
+/// A floor that has plans is a level, even when its plans are enlarged or partial ones, or name
+/// the floor only in the view title under the plan.
+#[test]
+fn a_floor_with_plans_is_a_level_whatever_its_plans_are_titled() {
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A1.21", &["ENLARGED FIRST FLOOR", "PLAN - NORTH"], "")),
+        ("Set.pdf", 2, sheet("A1.22", &["ENLARGED FIRST FLOOR", "PLAN - SOUTH"], "")),
+        ("Set.pdf", 3, sheet("A1.31", &["SECOND FLOOR PLAN"], "")),
+        ("Set.pdf", 4, sheet_with_view("A1.41", &["BUILDING A", "OVERALL"], "THIRD FLOOR PLAN")),
+        ("Set.pdf", 5, sheet("A1.51", &["ROOF PLAN"], "")),
+    ]);
+    let index = printset::sheet_index(&project);
+    let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["1", "2", "3", "R"], "{:?}", index.sheets);
+    let first = index.levels.first().map(|l| l.sheets.clone()).unwrap_or_default();
+    assert_eq!(
+        first,
+        [serde_json::json!({"sheet": "A1.21", "typical": false}), serde_json::json!({"sheet": "A1.22", "typical": false})],
+        "the floor's only plans are its enlarged ones"
+    );
+    let a141 = index.sheets.iter().find(|s| s.number == "A1.41").expect("A1.41");
+    assert_eq!((a141.sheet_type.as_str(), a141.level.as_str()), ("plan", "3"), "{a141:?}");
+}
+
+/// Elevations are above the first floor whatever datum the sections use (`100'-0"` or the true
+/// elevation); a section's unnumbered finish floor is a one-storey building's floor, and the top
+/// of plate is where the roof bears when no roof is marked.
+#[test]
+fn elevations_on_any_datum_from_finish_floor_and_top_of_plate() {
+    // Three storeys on the true elevation, the roof marked only by its plate.
+    let section = marked(
+        "A301",
+        &["WALL SECTIONS"],
+        &[("FIRST FLOOR", "112'-7\""), ("SECOND FLOOR", "123'-1\""), ("THIRD FLOOR", "133'-7\""), ("T.O. PLATE", "142'-8\"")],
+    );
+    let index = printset::sheet_index(&classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["SECOND FLOOR PLAN"], "")),
+        ("Set.pdf", 3, sheet("A103", &["THIRD FLOOR PLAN"], "")),
+        ("Set.pdf", 4, sheet("A104", &["ROOF PLAN"], "")),
+        ("Set.pdf", 5, section),
+    ]));
+    assert!(index.level_warnings.is_empty(), "{:?}", index.level_warnings);
+    assert_eq!(
+        levels_of(&index),
+        [lv("1", Some(0.0), Some(10.5)), lv("2", Some(10.5), Some(10.5)), lv("3", Some(21.0), Some(9.08)), lv("R", Some(30.08), None)]
+    );
+    assert_eq!(index.levels.last().map(|l| l.elevation_source.as_str()), Some("top of plate"));
+    // One storey: its elevations mark the finished floor and the top of plate, no level number.
+    let elevations = marked("A201", &["EXTERIOR ELEVATIONS"], &[("FINISH FLOOR", "100'-0\""), ("TOP OF PLATE", "112'-0\"")]);
+    let index = printset::sheet_index(&classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["ROOF PLAN"], "")),
+        ("Set.pdf", 3, elevations),
+    ]));
+    assert_eq!(levels_of(&index), [lv("1", Some(0.0), Some(12.0)), lv("R", Some(12.0), None)]);
+    assert_eq!(index.levels.first().map(|l| l.elevation_source.as_str()), Some("finish floor"));
+}
+
+/// Marks that give one level different elevations: the most marks win and the others are
+/// reported, never used silently.
+#[test]
+fn marks_that_disagree_are_reported() {
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["SECOND FLOOR PLAN"], "")),
+        ("Set.pdf", 3, marked("A301", &["BUILDING SECTIONS"], &[("FIRST FLOOR", "100'-0\""), ("SECOND FLOOR", "110'-6\"")])),
+        ("Set.pdf", 4, marked("A302", &["BUILDING SECTIONS"], &[("FIRST FLOOR", "100'-0\""), ("SECOND FLOOR", "110'-6\"")])),
+        ("Set.pdf", 5, marked("A303", &["WALL SECTIONS"], &[("FIRST FLOOR", "100'-0\""), ("SECOND FLOOR", "111'-0\"")])),
+    ]);
+    let index = printset::sheet_index(&project);
+    assert_eq!(levels_of(&index), [lv("1", Some(0.0), Some(10.5)), lv("2", Some(10.5), None)]);
+    assert_eq!(index.level_warnings.len(), 1, "{:?}", index.level_warnings);
+    assert!(index.level_warnings[0].starts_with("level 2: 111'-0\" not used"), "{:?}", index.level_warnings);
+}

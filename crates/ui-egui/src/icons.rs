@@ -155,6 +155,8 @@ pub enum Icon {
     Validate,
     /// The Automation tab's Takeoff: a list of quantities with a tally.
     Takeoff,
+    /// The Automation tab's Job: a stack of prints with a run arrow (a guided job from them).
+    Job,
 }
 
 struct Pen<'a> {
@@ -978,6 +980,13 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
                 pen.la(16.0, y, 19.0, y);
             }
             pen.la(15.0, 18.5, 20.0, 18.5);
+        }
+        Job => {
+            // Two sheets of prints, one behind the other, and a run arrow over the front one.
+            pen.poly(&[(7.0, 3.0), (20.0, 3.0), (20.0, 17.0)], false, b);
+            pen.rect(3.0, 6.0, 14.0, 15.0, b);
+            pen.l(5.5, 9.5, 12.0, 9.5);
+            pen.tri([(8.0, 12.0), (8.0, 19.0), (14.0, 15.5)], a);
         }
     }
 }

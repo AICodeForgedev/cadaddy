@@ -113,6 +113,11 @@ pub struct BuildingSpec {
     /// storey, and doesn't stretch its slab or the roof.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub shells: BTreeMap<String, Vec<[f64; 4]>>,
+    /// The buildings one set of plans stands for (Q6292): a plan drawn once for several
+    /// buildings is built once per building, and a plan naming one of them goes to that one's
+    /// copy. Empty: one building.
+    #[serde(default, skip_serializing_if = "Buildings::is_empty")]
+    pub buildings: Buildings,
     /// Facades, roofs and what stands on them, from the elevations and the roof plan.
     #[serde(default, skip_serializing_if = "Exterior::is_empty")]
     pub exterior: Exterior,
@@ -192,6 +197,50 @@ pub struct BuildingSpec {
     /// shipped with CADaddy plus any user additions.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub codebook: serde_json::Value,
+}
+
+/// Several buildings built from one set of plans (Q6292).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Buildings {
+    /// The buildings in the set's order; the first stands where the plans draw it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub list: Vec<SiteBuilding>,
+    /// The sheets that name some of the buildings, and which: everything built from one goes to
+    /// those buildings only. A sheet not listed stands for every building.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheets: BTreeMap<String, Vec<String>>,
+    /// The shell boxes (sheet units) put in each level's `shells` for the buildings after the
+    /// first, so they are taken off again before the buildings are placed anew.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub added_shells: BTreeMap<String, Vec<[f64; 4]>>,
+}
+
+impl Buildings {
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty() && self.sheets.is_empty() && self.added_shells.is_empty()
+    }
+    /// Whether there is more than one building to build.
+    pub fn several(&self) -> bool {
+        self.list.len() > 1
+    }
+}
+
+/// One of several buildings: its name and where it stands.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SiteBuilding {
+    /// As the titles name it (`NORTH`, `A`, `2`).
+    pub name: String,
+    /// How far it stands from where the plans draw them, in plan, feet (the first: `[0, 0]`).
+    #[serde(default)]
+    pub offset_ft: [f64; 2],
+    /// How its place was found: `drawn` (where the plans draw it), `site plan` (its direction
+    /// from the site plan's labels), `inferred` (laid beside the others).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub place: String,
+    /// Why it is a building of the set and why it stands there: the titles that name it and
+    /// the rule that placed it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub basis: String,
 }
 
 /// One part of a spec in plain language: its section, key (for approval and editing) and text.
@@ -2912,6 +2961,7 @@ impl BuildingSpec {
             elevators: Vec::new(),
             circulation: Vec::new(),
             shells: BTreeMap::new(),
+            buildings: Buildings::default(),
             exterior: Exterior::default(),
             rcp: Rcp::default(),
             mep: Mep::default(),
@@ -3088,6 +3138,7 @@ impl BuildingSpec {
             ("rfis", self.rfis.len()),
             ("datums", self.datums.len()),
             ("sheets", self.sheets.len()),
+            ("buildings", self.buildings.list.len().max(self.buildings.sheets.len())),
             ("rooms", self.rooms.len()),
             ("families", self.families.len()),
         ] {

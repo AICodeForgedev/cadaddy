@@ -24,23 +24,30 @@ const LEGEND_WIDTH: f64 = 120.0;
 const COLUMN_REACH: f64 = 5.0;
 
 /// The panel a schedule's title names: `PANELBOARD G (TYPICAL OF 124 REQUIRED)`,
-/// `PANEL 'DP1'`, `PANEL SCHEDULE - P1`, `PANELBOARD P1 SCHEDULE`; and the number it is typical of.
+/// `PANEL 'DP1'`, `PANEL SCHEDULE - P1`, `PANELBOARD P1 SCHEDULE`, `PANEL [L4] SCHEDULE`,
+/// `PANEL: L1`, `PANEL NAME: L1`; and the number it is typical of.
 pub(crate) fn title_panel(title: &str) -> Option<(String, Option<u32>)> {
     let u = title.trim().to_ascii_uppercase();
-    // (`PANEL:"P1"`: the colon in place of the space.)
-    let rest = u
-        .strip_prefix("PANELBOARD ")
-        .or_else(|| u.strip_prefix("PANEL BOARD "))
-        .or_else(|| u.strip_prefix("PANEL "))
-        .or_else(|| u.strip_prefix("PANELBOARD:"))
-        .or_else(|| u.strip_prefix("PANEL:"))?;
+    let rest = ["PANELBOARD", "PANEL BOARD", "PANEL"].iter().find_map(|p| u.strip_prefix(p).filter(|r| r.starts_with([' ', ':'])))?;
+    let rest = rest.trim_start_matches([' ', ':']);
+    // A labelled cell: `PANEL NAME: L1`, `PANEL DESIGNATION: L1`.
+    let rest = ["NAME", "DESIGNATION", "TAG", "ID"]
+        .iter()
+        .find_map(|w| rest.strip_prefix(w).map(str::trim_start).filter(|r| r.starts_with(':')).map(|r| r.trim_start_matches([':', ' '])))
+        .unwrap_or(rest);
     let rest = rest.trim().strip_prefix("SCHEDULE").map_or(rest.trim(), |r| r.trim_start_matches([' ', '-', ':', '\u{2013}']));
-    let tag: String = rest.split_whitespace().next()?.trim_matches(['\'', '"', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', ':']).to_string();
+    let tag: String = rest
+        .split_whitespace()
+        .next()?
+        .trim_matches(['\'', '"', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', ':', '[', ']', '(', ')', '<', '>'])
+        .to_string();
     let ok = !tag.is_empty()
         && tag.len() <= 12
         && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
         && tag.chars().any(|c| c.is_ascii_alphanumeric());
-    if !ok || ["SCHEDULE", "SCHEDULES", "SHALL", "AND", "WITH", "TO", "IN", "FOR", "NOTES", "NOTE", "NAME", "TOTALS", "TYPE"].contains(&tag.as_str())
+    if !ok
+        || ["SCHEDULE", "SCHEDULES", "SHALL", "AND", "WITH", "TO", "IN", "FOR", "NAME", "DESIGNATION", "TAG", "ID", "TYPE", "NOTES", "NOTE", "TOTALS"]
+            .contains(&tag.as_str())
     {
         return None;
     }
@@ -266,304 +273,588 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
             legend.entry(k).or_insert(m);
         }
     }
+    // A title split in two: a `PANEL:` / `PANEL NAME:` label and the tag right of it.
+    let joined: Vec<TextItem> = flat
+        .iter()
+        .filter(|l| is_title_label(&l.value))
+        .filter_map(|l| {
+            flat.iter()
+                .filter(|t| (t.at.y - l.at.y).abs() <= 0.6 * l.height && t.at.x > l.at.x + 0.5 * l.height && t.at.x < l.at.x + 30.0 * l.height)
+                .min_by(|a, b| a.at.x.total_cmp(&b.at.x))
+                .map(|t| TextItem { value: format!("{} {}", l.value.trim(), t.value.trim()), ..(*l).clone() })
+        })
+        .take(MAX_SCHEDULES)
+        .collect();
     let mut out = Vec::new();
-    for title in &flat {
+    for title in flat.iter().copied().chain(joined.iter()) {
         if out.len() >= MAX_SCHEDULES {
             break;
         }
         let Some((panel, typical_of)) = title_panel(&title.value) else { continue };
-        let h = title.height;
-        // The header: the nearest line under the title with a CKT column (two: the right side's).
-        let ckts: Vec<&&TextItem> = flat
+        // Its circuits numbered in a CKT column on each side, or down the middle (`1 A 2`): the
+        // reading with more circuits that have a description or a breaker.
+        let real = |p: &Option<PanelSchedule>| {
+            p.as_ref().map_or(0, |p| p.circuits.iter().filter(|c| !c.description.is_empty() || !c.breaker.is_empty()).count())
+        };
+        let by_ckt = read_ckt(&flat, title, &panel, typical_of, &legend, sheet);
+        let centred = read_centred(&flat, title, &panel, typical_of, &legend, sheet);
+        out.extend(if real(&centred) > real(&by_ckt) { centred } else { by_ckt });
+    }
+    out
+}
+
+/// A schedule whose circuits are numbered in a CKT column on each side (or one), under `title`.
+fn read_ckt(
+    flat: &[&TextItem],
+    title: &TextItem,
+    panel: &str,
+    typical_of: Option<u32>,
+    legend: &BTreeMap<String, String>,
+    sheet: &str,
+) -> Option<PanelSchedule> {
+    let h = title.height;
+    // The header: the nearest line under the title with a CKT column (two: the right side's).
+    let ckts: Vec<&&TextItem> = flat
+        .iter()
+        .filter(|t| {
+            let u = t.value.trim().to_ascii_uppercase();
+            (u == "CKT" || u == "CKT." || u == "CIR" || u == "CKT #" || u == "CKT NO.")
+                && t.at.y < title.at.y
+                && t.at.y > title.at.y - HEADER_REACH * h
+                && (t.at.x - title.at.x).abs() < 80.0 * h
+        })
+        .collect();
+    let top = ckts.iter().map(|t| t.at.y).max_by(f64::total_cmp)?;
+    let row_h = ckts.iter().map(|t| t.height).fold(h, f64::min);
+    // A title stands above its table in larger text (a cell naming a panel is a feeder row),
+    // unless it is labelled as one (`PANEL: L1`, `PANEL L1 SCHEDULE`).
+    if h < TITLE_OVER_CELLS * ckts.iter().map(|t| t.height).fold(f64::INFINITY, f64::min) && !labelled(&title.value) {
+        return None;
+    }
+    let mut line: Vec<&&TextItem> = ckts.iter().copied().filter(|t| (t.at.y - top).abs() <= 0.6 * row_h).collect();
+    line.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+    // Which way each CKT column faces: its description's header beside it (right of a left
+    // side's numbers, left of a right side's). Tables side by side share the header line; this
+    // title's table starts at its last left-facing CKT before the title, and ends at the next
+    // right-facing one before another table starts.
+    let descs: Vec<f64> = flat
+        .iter()
+        .filter(|t| t.value.to_ascii_uppercase().contains("DESCRIPTION") && t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h)
+        .map(|t| t.at.x)
+        .collect();
+    // Right-facing: the next header right of it is a description, not another CKT (the right
+    // side's own, or the next table's).
+    let ckt_xs: Vec<f64> = line.iter().map(|t| t.at.x).collect();
+    let faces_right = |x: f64| -> Option<bool> {
+        let next_desc = descs.iter().copied().filter(|d| *d > x + 0.1 * row_h).min_by(f64::total_cmp);
+        let next_ckt = ckt_xs.iter().copied().filter(|c| *c > x + 0.1 * row_h).min_by(f64::total_cmp);
+        match (next_desc, next_ckt) {
+            (Some(d), Some(c)) => Some(d < c),
+            (Some(_), None) => Some(true),
+            (None, _) => Some(false),
+        }
+    };
+    let (l, r) = if descs.is_empty() {
+        let (Some(l), Some(r)) = (line.first().copied(), line.last().copied()) else { return None };
+        (l, r)
+    } else {
+        let lefts: Vec<usize> = (0..line.len()).filter(|i| line.get(*i).is_some_and(|t| faces_right(t.at.x) == Some(true))).collect();
+        let start = lefts.iter().copied().rfind(|i| line.get(*i).is_some_and(|t| t.at.x <= title.at.x + 2.0 * h)).or_else(|| lefts.first().copied());
+        let start = start?;
+        let l = line.get(start).copied()?;
+        let r = line
+            .iter()
+            .skip(start + 1)
+            .take_while(|t| faces_right(t.at.x) != Some(true))
+            .find(|t| faces_right(t.at.x) == Some(false))
+            .copied()
+            .unwrap_or(l);
+        (l, r)
+    };
+    let two = r.at.x - l.at.x > 20.0 * row_h;
+    // The header's second line (`# | DESCRIPTION | AMPS | P`), else its first.
+    // One-sided, the header runs across the table; two-sided, between its CKT columns.
+    let head_x1 = if two { r.at.x + 3.0 * row_h } else { l.at.x + 120.0 * row_h };
+    let head: Vec<&&TextItem> =
+        flat.iter().filter(|t| t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h && t.at.x > l.at.x - row_h && t.at.x < head_x1).collect();
+    let named = |name: &str| -> Vec<f64> { head.iter().filter(|t| t.value.trim().eq_ignore_ascii_case(name)).map(|t| t.at.x).collect() };
+    let hash = named("#");
+    let near_num =
+        |x: f64| hash.iter().copied().filter(|h| (h - x).abs() < 3.0 * row_h).min_by(|a, b| (a - x).abs().total_cmp(&(b - x).abs())).unwrap_or(x);
+    let amps = [named("AMPS"), named("AMP"), named("TRIP"), named("A")].concat();
+    let poles = [named("P"), named("POLE"), named("POLES")].concat();
+    // The breaker's type column (`BKR` over `GF`), and the description's.
+    let kinds = named("BKR");
+    let desc_heads: Vec<f64> = head.iter().filter(|t| t.value.to_ascii_uppercase().contains("DESCRIPTION")).map(|t| t.at.x).collect();
+    let lnum = near_num(l.at.x);
+    let rnum = near_num(r.at.x);
+    // The right side's number column ends where its header does (its numbers are printed
+    // under the header, not at its left edge): a `#` one character, else the CKT text.
+    let rnum_end =
+        rnum + if (rnum - r.at.x).abs() > f64::EPSILON { 1 } else { r.value.trim().chars().count().max(1) } as f64 * HEADER_CHAR_WIDTH * row_h;
+    let first_after = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v > x && *v < limit).min_by(f64::total_cmp);
+    let last_before = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v < x && *v > limit).max_by(f64::total_cmp);
+    let mid = if two { (lnum + rnum) / 2.0 } else { f64::INFINITY };
+    let others = [named("SIZE"), named("(VA)"), named("LOAD"), named("*")].concat();
+    let half = |left: bool| -> Vec<f64> { others.iter().copied().filter(|x| if left { *x < mid } else { *x > mid }).collect() };
+    let sizes = named("SIZE");
+    let loads = [named("(VA)"), named("LOAD")].concat();
+    let (lamps, lpoles) = (first_after(&amps, lnum, mid), first_after(&poles, lnum, mid));
+    let lwire = first_after(&sizes, lpoles.or(lamps).unwrap_or(lnum), mid);
+    let lload = first_after(&loads, lwire.unwrap_or(lnum), mid);
+    let mut sides = vec![Side {
+        num: lnum,
+        num_end: lnum,
+        amps: lamps,
+        poles: lpoles,
+        wire: lwire,
+        load: lload,
+        others: half(true),
+        left: true,
+        kind: first_after(&kinds, lnum, mid),
+        description: first_after(&desc_heads, lnum, mid),
+    }];
+    if two {
+        let rwire = last_before(&sizes, rnum, mid);
+        sides.push(Side {
+            num: rnum,
+            num_end: rnum_end,
+            amps: last_before(&amps, rnum, mid),
+            poles: last_before(&poles, rnum, mid),
+            wire: rwire,
+            load: last_before(&loads, rwire.unwrap_or(rnum), mid),
+            others: half(false),
+            left: false,
+            kind: last_before(&kinds, rnum, mid),
+            description: last_before(&desc_heads, rnum, mid),
+        });
+    }
+    let head_bottom = head.iter().map(|t| t.at.y).fold(top, f64::min);
+    let (x0, x1) = (lnum - 8.0 * row_h, if two { rnum + 8.0 * row_h } else { lnum + 120.0 * row_h });
+    let (lines, last_y, step) = rows_below(flat, head_bottom, x0, x1, row_h);
+    let mut side_rows: Vec<Vec<Cells>> = sides.iter().map(|_| Vec::new()).collect();
+    for ln in &lines {
+        let mut cells: Vec<Cells> = sides.iter().map(|_| Cells::default()).collect();
+        for t in ln {
+            let x = t.at.x;
+            let v = t.value.trim();
+            // The side it is on: left of the middle the left side.
+            let si = usize::from(two && x > mid);
+            let (Some(side), Some(c)) = (sides.get(si), cells.get_mut(si)) else { continue };
+            let outside = if side.left { x < side.num - 0.8 * row_h } else { x > side.num_end + 0.8 * row_h };
+            if outside {
+                if let Some(cs) = codes(v) {
+                    c.codes.extend(cs);
+                }
+                continue;
+            }
+            // A number belongs to the nearest of the circuit number, amps and poles columns
+            // (a text's height is its capitals': a few of them reach the next column).
+            let numeric = number(v.trim_end_matches('A')).is_some() || numberish(v);
+            if numeric {
+                // Another column is one none of these is (a column's header words, `LOAD` over
+                // `(VA)`, stand a little apart).
+                let known = [Some(side.num), side.amps, side.poles, side.wire, side.load];
+                let other = side.others.iter().copied().filter(|o| !known.iter().flatten().any(|k| (k - o).abs() < 1.5 * row_h));
+                let best = [(0u8, Some(side.num)), (1, side.amps), (2, side.poles), (3, side.wire), (4, side.load)]
+                    .into_iter()
+                    .chain(other.map(|o| (9u8, Some(o))))
+                    .filter_map(|(k, cx)| cx.map(|cx| ((x - cx).abs(), k)))
+                    .filter(|(d, _)| *d <= COLUMN_REACH * row_h)
+                    .min_by(|a, b| a.0.total_cmp(&b.0));
+                match best {
+                    Some((_, 0)) if c.number.is_empty() && number(v).is_some() => c.number = v.to_string(),
+                    Some((_, 1)) if c.amps.is_empty() && number(v.trim_end_matches('A')).is_some() => c.amps = v.trim_end_matches('A').to_string(),
+                    Some((_, 2)) if c.poles.is_empty() && number(v).is_some() => c.poles = v.to_string(),
+                    Some((_, 3)) if c.wire.is_empty() => c.wire = v.trim_start_matches('#').to_string(),
+                    Some((_, 4)) if c.load.is_empty() => c.load = v.replace(',', ""),
+                    _ => {}
+                }
+            } else if v.eq_ignore_ascii_case("OL") || v.eq_ignore_ascii_case("RD") {
+                // `OL` / `RD`: see the one-line (riser) diagram — in the breaker's or wire's column.
+                let near = |cx: Option<f64>| cx.is_some_and(|cx| (x - cx).abs() <= COLUMN_REACH * row_h);
+                let (da, dw) = (side.amps.map(|a| (x - a).abs()), side.wire.map(|w| (x - w).abs()));
+                if near(side.amps) && dw.is_none_or(|dw| da.is_some_and(|da| da <= dw)) && c.amps.is_empty() {
+                    c.amps = v.to_ascii_uppercase();
+                } else if near(side.wire) && c.wire.is_empty() {
+                    c.wire = v.to_ascii_uppercase();
+                }
+            } else if let Some(cs) = codes(v).filter(|_| side.kind.is_some_and(|k| (x - k).abs() <= 2.0 * row_h)) {
+                // A type code in the breaker's own column.
+                c.codes.extend(cs);
+            } else if letters(v) {
+                // Under the description's header (nearer it than the circuit's number).
+                let under_desc = side.description.is_some_and(|d| (x - d).abs() <= COLUMN_REACH * row_h && (x - d).abs() < (x - side.num).abs());
+                let between = under_desc
+                    || match (side.left, side.amps) {
+                        (true, Some(a)) => x > side.num && x < a - 1.0 * row_h,
+                        (false, Some(a)) => x < side.num && x > a + 1.0 * row_h,
+                        (true, None) => x > side.num,
+                        (false, None) => x < side.num,
+                    };
+                if between {
+                    c.description.push(v.to_string());
+                }
+            }
+        }
+        for (rows, c) in side_rows.iter_mut().zip(cells) {
+            rows.push(c);
+        }
+    }
+    let mut circuits = circuits_of(&side_rows, sheet);
+    if circuits.is_empty() {
+        return None;
+    }
+    circuits.sort_by_key(|c| c.number.parse::<u32>().unwrap_or(u32::MAX));
+    let header = header_facts(flat, top + 0.6 * row_h, title.at.y, l.at.x - 2.0 * row_h, head_x1 + 8.0 * row_h, row_h);
+    // The phase columns between the sides' loads (`A B C`, or `*` where phases vary).
+    let (lo, hi) = (
+        sides.first().and_then(|s| s.load.or(s.poles)).unwrap_or(lnum),
+        if two { sides.get(1).and_then(|s| s.load.or(s.poles)).unwrap_or(rnum) } else { x1 },
+    );
+    let phases: Vec<f64> = head
+        .iter()
+        .filter(|t| PHASE_HEADS.contains(&t.value.trim().to_ascii_uppercase().as_str()) && t.at.x > lo + row_h && t.at.x < hi - row_h)
+        .filter(|t| sides.iter().all(|s| s.amps.is_none_or(|a| (a - t.at.x).abs() > 0.5 * row_h)))
+        .map(|t| t.at.x)
+        .collect();
+    let end = step.map_or(last_y - 4.0 * row_h, |s| last_y - TOTALS_ROWS * s);
+    let totals = totals_of(flat, last_y + 0.6 * row_h, end, x0, x1, row_h, &phases);
+    Some(PanelSchedule { panel: panel.to_string(), typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals })
+}
+
+/// A text that only labels a schedule's panel, its tag in the next cell: `PANEL:`, `PANEL NAME:`.
+fn is_title_label(v: &str) -> bool {
+    let u = v.trim().to_ascii_uppercase();
+    let u = u.trim_end_matches(':').trim();
+    ["PANEL", "PANELBOARD", "PANEL BOARD", "PANEL NAME", "PANEL DESIGNATION", "PANEL TAG", "PANEL ID"].contains(&u) && v.trim().ends_with(':')
+}
+
+/// A title that says it is a schedule's (`PANEL: L1`, `PANEL L1 SCHEDULE`), not a cell naming a
+/// panel it feeds.
+fn labelled(title: &str) -> bool {
+    let u = title.to_ascii_uppercase();
+    u.contains(':') || u.contains("SCHEDULE")
+}
+
+/// A breaker's trip column, its poles column, and the columns that hold no load (sizes, notes,
+/// the circuit numbers): the headers a schedule numbered down the middle prints.
+const AMP_HEADS: [&str; 7] = ["AMPS", "AMP", "TRIP", "BKR", "BREAKER", "BRKR", "TRIP (A)"];
+const POLE_HEADS: [&str; 5] = ["P", "POLE", "POLES", "#P", "PLS"];
+/// The header over the circuit numbers of a schedule numbered down the middle.
+const CENTRE_HEADS: [&str; 8] = ["CKT", "CKT.", "CIR", "CCT", "NO.", "#", "PHASE", "PH"];
+const NOT_LOAD: [&str; 18] = [
+    "WIRE", "SIZE", "CONDUIT", "COND", "GND", "GROUND", "AWG", "NOTE", "NOTES", "REMARKS", "ROOM", "LOCATION", "TYPE", "PHASE", "PH", "CKT", "CIR",
+    "NO.",
+];
+
+/// A circuit pair as a schedule numbered down the middle prints it: `1 A 2`, `13 ØB 14`, `5 6`:
+/// an odd number and the even one after it, the phase between.
+fn centre_pair(v: &str) -> Option<(u32, u32)> {
+    let toks: Vec<&str> = v.split(|c: char| c.is_whitespace() || c == '-' || c == '|').filter(|t| !t.is_empty()).collect();
+    let phase = |t: &str| {
+        let p: String = t.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
+        let p = p.strip_prefix("PH").unwrap_or(&p).to_string();
+        ["A", "B", "C"].contains(&p.as_str())
+    };
+    let n = |t: &str| number(t).and_then(|n| n.parse::<u32>().ok());
+    let (a, b) = match toks.as_slice() {
+        [a, b] => (n(a)?, n(b)?),
+        [a, p, b] if phase(p) => (n(a)?, n(b)?),
+        _ => return None,
+    };
+    (a % 2 == 1 && b == a + 1).then_some((a, b))
+}
+
+/// A schedule whose circuits are numbered down its middle, the odd circuit's cells left of the
+/// number and the even one's right of it (`DESCRIPTION | P | AMP | loads… | 1 A 2 | loads… | P |
+/// AMP | DESCRIPTION`), each side's load in one column or one per kind of load (`LIGHT`, `RECEP`,
+/// `MOTOR`…, summed); its facts (`VOLTAGE:`, `MCB/MLO:`) above its header or under its rows.
+fn read_centred(
+    flat: &[&TextItem],
+    title: &TextItem,
+    panel: &str,
+    typical_of: Option<u32>,
+    legend: &BTreeMap<String, String>,
+    sheet: &str,
+) -> Option<PanelSchedule> {
+    let h = title.height;
+    // A title over one side or the middle: the far side's header can be the table's width away.
+    let near_title = |t: &TextItem| t.at.y < title.at.y && t.at.y > title.at.y - HEADER_REACH * h && (t.at.x - title.at.x).abs() < 120.0 * h;
+    // The header: the nearest line under the title with a description column on each side.
+    let descs: Vec<&TextItem> = flat.iter().copied().filter(|t| near_title(t) && t.value.to_ascii_uppercase().contains("DESCRIPTION")).collect();
+    let top = descs.iter().map(|t| t.at.y).max_by(f64::total_cmp)?;
+    let row_h = descs.iter().filter(|t| (t.at.y - top).abs() <= 0.6 * t.height).map(|t| t.height).fold(h, f64::min);
+    if h < TITLE_OVER_CELLS * row_h && !labelled(&title.value) {
+        return None;
+    }
+    let xs: Vec<f64> = descs.iter().filter(|t| (t.at.y - top).abs() <= 0.6 * row_h).map(|t| t.at.x).collect();
+    let (lx, rx) = (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    // A description column on each side, well apart.
+    if rx - lx <= 20.0 * row_h {
+        return None;
+    }
+    let (x0, x1) = (lx - 12.0 * row_h, rx + 12.0 * row_h);
+    let head: Vec<&TextItem> = flat
+        .iter()
+        .copied()
+        .filter(|t| (t.at.y - top).abs() <= 1.2 * row_h && t.at.x >= x0 && t.at.x <= x1 && !numberish(&t.value) && !t.value.trim().ends_with(':'))
+        .collect();
+    let head_bottom = head.iter().map(|t| t.at.y).fold(top, f64::min);
+    let (lines, last_y, step) = rows_below(flat, head_bottom, x0, x1, row_h);
+    // Each row's pair: one text near the middle, else two or three side by side read together.
+    // The middle: its own header (`CKT`, `PHASE`) when it has one.
+    let reach = 0.25 * (rx - lx);
+    let mid0 = (lx + rx) / 2.0;
+    let mid = head
+        .iter()
+        .filter(|t| CENTRE_HEADS.contains(&t.value.trim().to_ascii_uppercase().as_str()) && (t.at.x - mid0).abs() < reach)
+        .map(|t| t.at.x)
+        .min_by(|a, b| (a - mid0).abs().total_cmp(&(b - mid0).abs()))
+        .unwrap_or(mid0);
+    let pair_of = |ln: &[&TextItem]| -> Option<(u32, u32, f64, f64)> {
+        if let Some((t, (a, b))) = ln.iter().filter(|t| (t.at.x - mid).abs() < reach).find_map(|t| centre_pair(&t.value).map(|p| (t, p))) {
+            return Some((a, b, t.at.x, t.at.x));
+        }
+        let mut close: Vec<&&TextItem> = ln.iter().filter(|t| (t.at.x - mid).abs() <= 4.0 * row_h).collect();
+        close.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+        [3usize, 2]
+            .iter()
+            .flat_map(|n| close.windows(*n))
+            .filter_map(|w| {
+                let joined = w.iter().map(|t| t.value.trim()).collect::<Vec<_>>().join(" ");
+                let (a, b) = centre_pair(&joined)?;
+                Some((a, b, w.first()?.at.x, w.last()?.at.x))
+            })
+            .min_by(|a, b| ((a.2 + a.3) / 2.0 - mid).abs().total_cmp(&((b.2 + b.3) / 2.0 - mid).abs()))
+    };
+    let pairs: Vec<Option<(u32, u32, f64, f64)>> = lines.iter().map(|ln| pair_of(ln)).collect();
+    let mut los: Vec<f64> = pairs.iter().flatten().map(|p| p.2).collect();
+    if los.len() < 2 {
+        return None;
+    }
+    los.sort_by(f64::total_cmp);
+    let centre = los.get(los.len() / 2).copied().unwrap_or(mid);
+    // Each side's columns from its headers.
+    let side = |left: bool| -> Side {
+        let on: Vec<&&TextItem> = head.iter().filter(|t| if left { t.at.x < centre - 0.5 * row_h } else { t.at.x > centre + 0.5 * row_h }).collect();
+        let named = |names: &[&str]| -> Option<f64> {
+            on.iter()
+                .filter(|t| names.contains(&t.value.trim().to_ascii_uppercase().as_str()))
+                .map(|t| t.at.x)
+                .min_by(|a, b| (a - centre).abs().total_cmp(&(b - centre).abs()))
+        };
+        let (amps, poles) = (named(&AMP_HEADS), named(&POLE_HEADS));
+        let loads: Vec<f64> = on
             .iter()
             .filter(|t| {
                 let u = t.value.trim().to_ascii_uppercase();
-                (u == "CKT" || u == "CKT." || u == "CIR" || u == "CKT #" || u == "CKT NO.")
-                    && t.at.y < title.at.y
-                    && t.at.y > title.at.y - HEADER_REACH * h
-                    && (t.at.x - title.at.x).abs() < 80.0 * h
+                letters(&u)
+                    && !u.contains("DESCRIPTION")
+                    && !AMP_HEADS.contains(&u.as_str())
+                    && !POLE_HEADS.contains(&u.as_str())
+                    && !NOT_LOAD.iter().any(|w| u.split_whitespace().any(|x| x == *w))
             })
-            .collect();
-        let Some(top) = ckts.iter().map(|t| t.at.y).max_by(f64::total_cmp) else { continue };
-        let row_h = ckts.iter().map(|t| t.height).fold(h, f64::min);
-        // A title stands above its table in larger text (a cell naming a panel is a feeder row).
-        if h < TITLE_OVER_CELLS * ckts.iter().map(|t| t.height).fold(f64::INFINITY, f64::min) {
-            continue;
-        }
-        let mut line: Vec<&&TextItem> = ckts.iter().copied().filter(|t| (t.at.y - top).abs() <= 0.6 * row_h).collect();
-        line.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
-        // Which way each CKT column faces: its description's header beside it (right of a left
-        // side's numbers, left of a right side's). Tables side by side share the header line; this
-        // title's table starts at its last left-facing CKT before the title, and ends at the next
-        // right-facing one before another table starts.
-        let descs: Vec<f64> = flat
-            .iter()
-            .filter(|t| t.value.to_ascii_uppercase().contains("DESCRIPTION") && t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h)
             .map(|t| t.at.x)
             .collect();
-        // Right-facing: the next header right of it is a description, not another CKT (the right
-        // side's own, or the next table's).
-        let ckt_xs: Vec<f64> = line.iter().map(|t| t.at.x).collect();
-        let faces_right = |x: f64| -> Option<bool> {
-            let next_desc = descs.iter().copied().filter(|d| *d > x + 0.1 * row_h).min_by(f64::total_cmp);
-            let next_ckt = ckt_xs.iter().copied().filter(|c| *c > x + 0.1 * row_h).min_by(f64::total_cmp);
-            match (next_desc, next_ckt) {
-                (Some(d), Some(c)) => Some(d < c),
-                (Some(_), None) => Some(true),
-                (None, _) => Some(false),
+        Side { num: centre, num_end: centre, amps, poles, wire: None, load: None, others: loads, left, kind: None, description: None }
+    };
+    let sides = [side(true), side(false)];
+    let mut side_rows: Vec<Vec<Cells>> = vec![Vec::new(), Vec::new()];
+    for (ln, pair) in lines.iter().zip(&pairs) {
+        let mut cells = [Cells::default(), Cells::default()];
+        let mut loads: [Vec<(usize, f64)>; 2] = [Vec::new(), Vec::new()];
+        if let Some((a, b, _, _)) = pair {
+            for (c, n) in cells.iter_mut().zip([a, b]) {
+                c.number = n.to_string();
             }
-        };
-        let (l, r) = if descs.is_empty() {
-            let (Some(l), Some(r)) = (line.first().copied(), line.last().copied()) else { continue };
-            (l, r)
-        } else {
-            let lefts: Vec<usize> = (0..line.len()).filter(|i| line.get(*i).is_some_and(|t| faces_right(t.at.x) == Some(true))).collect();
-            let start =
-                lefts.iter().copied().rfind(|i| line.get(*i).is_some_and(|t| t.at.x <= title.at.x + 2.0 * h)).or_else(|| lefts.first().copied());
-            let Some(start) = start else { continue };
-            let Some(l) = line.get(start).copied() else { continue };
-            let r = line
-                .iter()
-                .skip(start + 1)
-                .take_while(|t| faces_right(t.at.x) != Some(true))
-                .find(|t| faces_right(t.at.x) == Some(false))
-                .copied()
-                .unwrap_or(l);
-            (l, r)
-        };
-        let two = r.at.x - l.at.x > 20.0 * row_h;
-        // The header's second line (`# | DESCRIPTION | AMPS | P`), else its first.
-        // One-sided, the header runs across the table; two-sided, between its CKT columns.
-        let head_x1 = if two { r.at.x + 3.0 * row_h } else { l.at.x + 120.0 * row_h };
-        let head: Vec<&&TextItem> = flat
-            .iter()
-            .filter(|t| t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h && t.at.x > l.at.x - row_h && t.at.x < head_x1)
-            .collect();
-        let named = |name: &str| -> Vec<f64> { head.iter().filter(|t| t.value.trim().eq_ignore_ascii_case(name)).map(|t| t.at.x).collect() };
-        let hash = named("#");
-        let near_num =
-            |x: f64| hash.iter().copied().filter(|h| (h - x).abs() < 3.0 * row_h).min_by(|a, b| (a - x).abs().total_cmp(&(b - x).abs())).unwrap_or(x);
-        let amps = [named("AMPS"), named("AMP"), named("TRIP"), named("A")].concat();
-        // The breaker's type column (`BKR` over `GF`), and the description's.
-        let kinds = named("BKR");
-        let desc_heads: Vec<f64> = head.iter().filter(|t| t.value.to_ascii_uppercase().contains("DESCRIPTION")).map(|t| t.at.x).collect();
-        let poles = [named("P"), named("POLE"), named("POLES")].concat();
-        let lnum = near_num(l.at.x);
-        let rnum = near_num(r.at.x);
-        // The right side's number column ends where its header does (its numbers are printed
-        // under the header, not at its left edge): a `#` one character, else the CKT text.
-        let rnum_end =
-            rnum + if (rnum - r.at.x).abs() > f64::EPSILON { 1 } else { r.value.trim().chars().count().max(1) } as f64 * HEADER_CHAR_WIDTH * row_h;
-        let first_after = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v > x && *v < limit).min_by(f64::total_cmp);
-        let last_before = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v < x && *v > limit).max_by(f64::total_cmp);
-        let mid = if two { (lnum + rnum) / 2.0 } else { f64::INFINITY };
-        let others = [named("SIZE"), named("(VA)"), named("LOAD"), named("*")].concat();
-        let half = |left: bool| -> Vec<f64> { others.iter().copied().filter(|x| if left { *x < mid } else { *x > mid }).collect() };
-        let sizes = named("SIZE");
-        let loads = [named("(VA)"), named("LOAD")].concat();
-        let (lamps, lpoles) = (first_after(&amps, lnum, mid), first_after(&poles, lnum, mid));
-        let lwire = first_after(&sizes, lpoles.or(lamps).unwrap_or(lnum), mid);
-        let lload = first_after(&loads, lwire.unwrap_or(lnum), mid);
-        let mut sides = vec![Side {
-            num: lnum,
-            num_end: lnum,
-            amps: lamps,
-            poles: lpoles,
-            wire: lwire,
-            load: lload,
-            others: half(true),
-            left: true,
-            kind: first_after(&kinds, lnum, mid),
-            description: first_after(&desc_heads, lnum, mid),
-        }];
-        if two {
-            let rwire = last_before(&sizes, rnum, mid);
-            sides.push(Side {
-                num: rnum,
-                num_end: rnum_end,
-                amps: last_before(&amps, rnum, mid),
-                poles: last_before(&poles, rnum, mid),
-                wire: rwire,
-                load: last_before(&loads, rwire.unwrap_or(rnum), mid),
-                others: half(false),
-                left: false,
-                kind: last_before(&kinds, rnum, mid),
-                description: last_before(&desc_heads, rnum, mid),
+        }
+        let (lo, hi) = pair.map_or((centre, centre), |p| (p.2, p.3));
+        for t in ln.iter().filter(|t| t.at.x < lo - 0.1 * row_h || t.at.x > hi + 0.1 * row_h) {
+            let si = usize::from(t.at.x > hi);
+            let (Some(sd), Some(c), Some(ld)) = (sides.get(si), cells.get_mut(si), loads.get_mut(si)) else { continue };
+            let v = t.value.trim();
+            let x = t.at.x;
+            let breaker_cols: Vec<f64> = [sd.amps, sd.poles].into_iter().flatten().collect();
+            if number(v.trim_end_matches('A')).is_some() || amount(v).is_some() {
+                let best = [(0usize, sd.amps), (1, sd.poles)]
+                    .into_iter()
+                    .filter_map(|(k, cx)| cx.map(|cx| ((x - cx).abs(), k)))
+                    .chain(sd.others.iter().enumerate().map(|(i, cx)| ((x - cx).abs(), 2 + i)))
+                    .filter(|(d, _)| *d <= COLUMN_REACH * row_h)
+                    .min_by(|a, b| a.0.total_cmp(&b.0));
+                match best {
+                    Some((_, 0)) if c.amps.is_empty() => c.amps = v.trim_end_matches('A').to_string(),
+                    Some((_, 1)) if c.poles.is_empty() && number(v).is_some() => c.poles = v.to_string(),
+                    Some((_, k)) if k >= 2 && !ld.iter().any(|(j, _)| *j == k) => {
+                        if let Some(a) = amount(v) {
+                            ld.push((k, a));
+                        }
+                    }
+                    _ => {}
+                }
+            } else if letters(v) {
+                // The description: outside the breaker's columns (left of them on the left side).
+                let outside =
+                    if si == 0 { breaker_cols.iter().all(|b| x < b - 0.5 * row_h) } else { breaker_cols.iter().all(|b| x > b + 0.5 * row_h) };
+                if outside {
+                    c.description.push(v.to_string());
+                }
+            }
+        }
+        for (c, ld) in cells.iter_mut().zip(&loads) {
+            if !ld.is_empty() {
+                c.load = ld.iter().map(|(_, a)| a).sum::<f64>().to_string();
+            }
+        }
+        for (rows, c) in side_rows.iter_mut().zip(cells) {
+            rows.push(c);
+        }
+    }
+    let mut circuits = circuits_of(&side_rows, sheet);
+    if circuits.is_empty() {
+        return None;
+    }
+    circuits.sort_by_key(|c| c.number.parse::<u32>().unwrap_or(u32::MAX));
+    // Its facts: above the header, else under the rows (above the next schedule's title).
+    let mut header = header_facts(flat, top + 0.6 * row_h, title.at.y, x0, x1, row_h);
+    let below = step.map_or(last_y - 12.0 * row_h, |s| last_y - 12.0 * s);
+    let next_title = flat
+        .iter()
+        .filter(|t| t.at.y < last_y && t.at.y > below && t.at.x >= x0 && t.at.x <= x1 && title_panel(&t.value).is_some())
+        .map(|t| t.at.y + 0.6 * t.height)
+        .fold(below, f64::max);
+    for (k, v) in header_facts(flat, next_title, last_y - 0.6 * row_h, x0, x1 + 6.0 * row_h, row_h) {
+        header.entry(k).or_insert(v);
+    }
+    let end = step.map_or(last_y - 4.0 * row_h, |s| last_y - TOTALS_ROWS * s);
+    let totals = totals_of(flat, last_y + 0.6 * row_h, end, x0, x1, row_h, &[]);
+    Some(PanelSchedule { panel: panel.to_string(), typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals })
+}
+
+/// The rows of a table under its header (`head_bottom`, between `x0` and `x1`), line by line,
+/// until the subtotals, a gap of a few rows, or the next title; with the last row's height and
+/// the step between rows. A subtotal's line ends the rows whichever of its texts comes first (its
+/// number can sit a hair above its label).
+fn rows_below<'a>(flat: &[&'a TextItem], head_bottom: f64, x0: f64, x1: f64, row_h: f64) -> (Vec<Vec<&'a TextItem>>, f64, Option<f64>) {
+    let mut below: Vec<&'a TextItem> = flat.iter().copied().filter(|t| t.at.y < head_bottom - 0.5 * row_h && t.at.x >= x0 && t.at.x <= x1).collect();
+    below.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
+    let ends = |v: &str| {
+        let u = v.trim().to_ascii_uppercase();
+        u.starts_with("PER PHASE") || u.starts_with("TOTAL") || u.contains("SUB-TOTAL") || u.contains("SUBTOTAL")
+    };
+    let end_ys: Vec<f64> = below.iter().filter(|t| ends(&t.value)).map(|t| t.at.y).collect();
+    let mut lines: Vec<Vec<&'a TextItem>> = Vec::new();
+    let mut last_y = head_bottom;
+    let mut step: Option<f64> = None;
+    for t in below {
+        match lines.last_mut() {
+            Some(ln) if ln.first().is_some_and(|f| (f.at.y - t.at.y).abs() <= 0.6 * row_h) => ln.push(t),
+            _ => {
+                let u = t.value.trim().to_ascii_uppercase();
+                let gap = last_y - t.at.y;
+                if end_ys.iter().any(|y| (y - t.at.y).abs() <= 0.6 * row_h)
+                    || (title_panel(&u).is_some() && t.height >= TITLE_OVER_CELLS * row_h)
+                    || step.is_some_and(|s| gap > 2.6 * s)
+                    || (step.is_none() && gap > 4.0 * row_h)
+                    || lines.len() >= MAX_ROWS
+                {
+                    break;
+                }
+                step.get_or_insert(gap);
+                last_y = t.at.y;
+                lines.push(vec![t]);
+            }
+        }
+    }
+    (lines, last_y, step)
+}
+
+/// Each side's rows made circuits. A breaker of several poles spans as many rows, its number on
+/// the first or the middle one; its load is each pole's row's (a row of its own with no
+/// description is one of its poles).
+fn circuits_of(side_rows: &[Vec<Cells>], sheet: &str) -> Vec<PanelCircuit> {
+    let mut circuits: Vec<PanelCircuit> = Vec::new();
+    let load = |c: &Cells| c.load.parse::<f64>().ok().filter(|v| v.is_finite());
+    for rows in side_rows {
+        let starts = |c: &Cells| number(&c.number).is_some() && !(c.description.is_empty() && c.amps.is_empty());
+        let mut taken = vec![false; rows.len()];
+        for (i, c) in rows.iter().enumerate() {
+            let Some(n) = number(&c.number).filter(|_| starts(c)) else { continue };
+            let poles = c.poles.parse::<u32>().ok().filter(|p| (1..=3).contains(p)).unwrap_or(1);
+            // Its other poles: the pole rows just before it (not another circuit's), then after.
+            let mut mine = vec![i];
+            let mut j = i;
+            while mine.len() < poles as usize && j > 0 {
+                j -= 1;
+                if rows.get(j).is_none_or(starts) || taken.get(j).copied().unwrap_or(true) {
+                    break;
+                }
+                mine.push(j);
+            }
+            let mut j = i + 1;
+            while mine.len() < poles as usize && rows.get(j).is_some_and(|r| !starts(r)) {
+                mine.push(j);
+                j += 1;
+            }
+            for k in &mine {
+                if let Some(t) = taken.get_mut(*k) {
+                    *t = true;
+                }
+            }
+            let loads: Vec<f64> = mine.iter().filter_map(|k| rows.get(*k)).filter_map(load).collect();
+            circuits.push(PanelCircuit {
+                design_breaker: String::new(),
+                number: n.to_string(),
+                description: c.description.join(" "),
+                room: String::new(),
+                breaker: c.amps.clone(),
+                poles,
+                protection: c.codes.clone(),
+                wire: c.wire.clone(),
+                load_va: (!loads.is_empty()).then(|| loads.iter().sum()),
+                design_load_va: None,
+                source: sheet.to_string(),
             });
         }
-        let head_bottom = head.iter().map(|t| t.at.y).fold(top, f64::min);
-        let (x0, x1) = (lnum - 8.0 * row_h, if two { rnum + 8.0 * row_h } else { lnum + 120.0 * row_h });
-        let mut below: Vec<&&TextItem> = flat.iter().filter(|t| t.at.y < head_bottom - 0.5 * row_h && t.at.x >= x0 && t.at.x <= x1).collect();
-        below.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
-        // Rows, line by line, until the subtotals, a gap of a few rows, or the next title. A
-        // subtotal's line ends the rows whichever of its texts comes first (its number can sit a
-        // hair above its label).
-        let ends = |v: &str| {
-            let u = v.trim().to_ascii_uppercase();
-            u.starts_with("PER PHASE") || u.starts_with("TOTAL") || u.contains("SUB-TOTAL") || u.contains("SUBTOTAL")
-        };
-        let end_ys: Vec<f64> = below.iter().filter(|t| ends(&t.value)).map(|t| t.at.y).collect();
-        let mut lines: Vec<Vec<&TextItem>> = Vec::new();
-        let mut last_y = head_bottom;
-        let mut step: Option<f64> = None;
-        for t in below {
-            match lines.last_mut() {
-                Some(ln) if ln.first().is_some_and(|f| (f.at.y - t.at.y).abs() <= 0.6 * row_h) => ln.push(t),
-                _ => {
-                    let u = t.value.trim().to_ascii_uppercase();
-                    let gap = last_y - t.at.y;
-                    if end_ys.iter().any(|y| (y - t.at.y).abs() <= 0.6 * row_h)
-                        || (title_panel(&u).is_some() && t.height >= TITLE_OVER_CELLS * row_h)
-                        || step.is_some_and(|s| gap > 2.6 * s)
-                        || (step.is_none() && gap > 4.0 * row_h)
-                        || lines.len() >= MAX_ROWS
-                    {
-                        break;
-                    }
-                    step.get_or_insert(gap);
-                    last_y = t.at.y;
-                    lines.push(vec![t]);
-                }
-            }
-        }
-        let mut circuits: Vec<PanelCircuit> = Vec::new();
-        let mut side_rows: Vec<Vec<Cells>> = sides.iter().map(|_| Vec::new()).collect();
-        for ln in &lines {
-            let mut cells: Vec<Cells> = sides.iter().map(|_| Cells::default()).collect();
-            for t in ln {
-                let x = t.at.x;
-                let v = t.value.trim();
-                // The side it is on: left of the middle the left side.
-                let si = usize::from(two && x > mid);
-                let (Some(side), Some(c)) = (sides.get(si), cells.get_mut(si)) else { continue };
-                let outside = if side.left { x < side.num - 0.8 * row_h } else { x > side.num_end + 0.8 * row_h };
-                if outside {
-                    if let Some(cs) = codes(v) {
-                        c.codes.extend(cs);
-                    }
-                    continue;
-                }
-                // A number belongs to the nearest of the circuit number, amps and poles columns
-                // (a text's height is its capitals': a few of them reach the next column).
-                let numeric = number(v.trim_end_matches('A')).is_some() || numberish(v);
-                if numeric {
-                    // Another column is one none of these is (a column's header words, `LOAD` over
-                    // `(VA)`, stand a little apart).
-                    let known = [Some(side.num), side.amps, side.poles, side.wire, side.load];
-                    let other = side.others.iter().copied().filter(|o| !known.iter().flatten().any(|k| (k - o).abs() < 1.5 * row_h));
-                    let best = [(0u8, Some(side.num)), (1, side.amps), (2, side.poles), (3, side.wire), (4, side.load)]
-                        .into_iter()
-                        .chain(other.map(|o| (9u8, Some(o))))
-                        .filter_map(|(k, cx)| cx.map(|cx| ((x - cx).abs(), k)))
-                        .filter(|(d, _)| *d <= COLUMN_REACH * row_h)
-                        .min_by(|a, b| a.0.total_cmp(&b.0));
-                    match best {
-                        Some((_, 0)) if c.number.is_empty() && number(v).is_some() => c.number = v.to_string(),
-                        Some((_, 1)) if c.amps.is_empty() && number(v.trim_end_matches('A')).is_some() => {
-                            c.amps = v.trim_end_matches('A').to_string()
-                        }
-                        Some((_, 2)) if c.poles.is_empty() && number(v).is_some() => c.poles = v.to_string(),
-                        Some((_, 3)) if c.wire.is_empty() => c.wire = v.trim_start_matches('#').to_string(),
-                        Some((_, 4)) if c.load.is_empty() => c.load = v.replace(',', ""),
-                        _ => {}
-                    }
-                } else if v.eq_ignore_ascii_case("OL") || v.eq_ignore_ascii_case("RD") {
-                    // `OL` / `RD`: see the one-line (riser) diagram — in the breaker's or wire's column.
-                    let near = |cx: Option<f64>| cx.is_some_and(|cx| (x - cx).abs() <= COLUMN_REACH * row_h);
-                    let (da, dw) = (side.amps.map(|a| (x - a).abs()), side.wire.map(|w| (x - w).abs()));
-                    if near(side.amps) && dw.is_none_or(|dw| da.is_some_and(|da| da <= dw)) && c.amps.is_empty() {
-                        c.amps = v.to_ascii_uppercase();
-                    } else if near(side.wire) && c.wire.is_empty() {
-                        c.wire = v.to_ascii_uppercase();
-                    }
-                } else if let Some(cs) = codes(v).filter(|_| side.kind.is_some_and(|k| (x - k).abs() <= 2.0 * row_h)) {
-                    // A type code in the breaker's own column.
-                    c.codes.extend(cs);
-                } else if letters(v) {
-                    // Under the description's header (nearer it than the circuit's number).
-                    let under_desc = side.description.is_some_and(|d| (x - d).abs() <= COLUMN_REACH * row_h && (x - d).abs() < (x - side.num).abs());
-                    let between = under_desc
-                        || match (side.left, side.amps) {
-                            (true, Some(a)) => x > side.num && x < a - 1.0 * row_h,
-                            (false, Some(a)) => x < side.num && x > a + 1.0 * row_h,
-                            (true, None) => x > side.num,
-                            (false, None) => x < side.num,
-                        };
-                    if between {
-                        c.description.push(v.to_string());
-                    }
-                }
-            }
-            for (rows, c) in side_rows.iter_mut().zip(cells) {
-                rows.push(c);
-            }
-        }
-        // A breaker of several poles spans as many rows, its number on the first or the middle one;
-        // its load is each pole's row's (a row of its own with no description is one of its poles).
-        let load = |c: &Cells| c.load.parse::<f64>().ok().filter(|v| v.is_finite());
-        for rows in &side_rows {
-            let starts = |c: &Cells| number(&c.number).is_some() && !(c.description.is_empty() && c.amps.is_empty());
-            let mut taken = vec![false; rows.len()];
-            for (i, c) in rows.iter().enumerate() {
-                let Some(n) = number(&c.number).filter(|_| starts(c)) else { continue };
-                let poles = c.poles.parse::<u32>().ok().filter(|p| (1..=3).contains(p)).unwrap_or(1);
-                // Its other poles: the pole rows just before it (not another circuit's), then after.
-                let mut mine = vec![i];
-                let mut j = i;
-                while mine.len() < poles as usize && j > 0 {
-                    j -= 1;
-                    if rows.get(j).is_none_or(starts) || taken.get(j).copied().unwrap_or(true) {
-                        break;
-                    }
-                    mine.push(j);
-                }
-                let mut j = i + 1;
-                while mine.len() < poles as usize && rows.get(j).is_some_and(|r| !starts(r)) {
-                    mine.push(j);
-                    j += 1;
-                }
-                for k in &mine {
-                    if let Some(t) = taken.get_mut(*k) {
-                        *t = true;
-                    }
-                }
-                let loads: Vec<f64> = mine.iter().filter_map(|k| rows.get(*k)).filter_map(load).collect();
-                circuits.push(PanelCircuit {
-                    design_breaker: String::new(),
-                    number: n.to_string(),
-                    description: c.description.join(" "),
-                    room: String::new(),
-                    breaker: c.amps.clone(),
-                    poles,
-                    protection: c.codes.clone(),
-                    wire: c.wire.clone(),
-                    load_va: (!loads.is_empty()).then(|| loads.iter().sum()),
-                    design_load_va: None,
-                    source: sheet.to_string(),
-                });
-            }
-        }
-        if circuits.is_empty() {
-            continue;
-        }
-        circuits.sort_by_key(|c| c.number.parse::<u32>().unwrap_or(u32::MAX));
-        let header = header_facts(&flat, top + 0.6 * row_h, title.at.y, l.at.x - 2.0 * row_h, head_x1 + 8.0 * row_h, row_h);
-        // The phase columns between the sides' loads (`A B C`, or `*` where phases vary).
-        let (lo, hi) = (
-            sides.first().and_then(|s| s.load.or(s.poles)).unwrap_or(lnum),
-            if two { sides.get(1).and_then(|s| s.load.or(s.poles)).unwrap_or(rnum) } else { x1 },
-        );
-        let phases: Vec<f64> = head
-            .iter()
-            .filter(|t| PHASE_HEADS.contains(&t.value.trim().to_ascii_uppercase().as_str()) && t.at.x > lo + row_h && t.at.x < hi - row_h)
-            .filter(|t| sides.iter().all(|s| s.amps.is_none_or(|a| (a - t.at.x).abs() > 0.5 * row_h)))
-            .map(|t| t.at.x)
-            .collect();
-        let end = step.map_or(last_y - 4.0 * row_h, |s| last_y - TOTALS_ROWS * s);
-        let totals = totals_of(&flat, last_y + 0.6 * row_h, end, x0, x1, row_h, &phases);
-        out.push(PanelSchedule { panel, typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals });
     }
-    out
+    circuits
+}
+
+/// Whether a sheet's trade code is `want` (`E`) or a combined one holding it (`MEP`, `ME`, `EP`:
+/// two or more of mechanical, electrical and plumbing, and only trade letters).
+pub(crate) fn trade_has(discipline: &str, want: &str) -> bool {
+    let d = discipline.trim().to_ascii_uppercase();
+    let w = want.trim().to_ascii_uppercase();
+    d == w
+        || (w.len() == 1
+            && (2..=4).contains(&d.len())
+            && d.chars().all(|c| "MEPFT".contains(c))
+            && d.chars().filter(|c| "MEP".contains(*c)).count() >= 2
+            && d.contains(w.as_str()))
+}
+
+/// Whether a sheet may print panel schedules, and how likely (lower first): a sheet titled for
+/// them; an electrical sheet (alone or in a combined trade code), its schedule sheets before its
+/// others and its plans last; then any sheet whose title names the electrical work (a schedule
+/// sheet whose number was read under another trade's or an equipment tag's code).
+pub(crate) fn schedule_sheet_rank(discipline: &str, kind: &str, title: &str) -> Option<u8> {
+    let t = title.to_ascii_uppercase();
+    let elec = trade_has(discipline, "E");
+    let plan = kind.to_ascii_lowercase().contains("plan");
+    if ["PANELBOARD", "PANEL SCHEDULE", "PANEL BOARD"].iter().any(|w| t.contains(w)) || (elec && t.contains("PANEL")) {
+        Some(0)
+    } else if elec && !plan && (t.contains("SCHEDULE") || kind.eq_ignore_ascii_case("schedule")) {
+        Some(1)
+    } else if elec && !plan {
+        Some(2)
+    } else if elec {
+        Some(3)
+    } else if ["ELECTRICAL", "ONE LINE", "ONE-LINE", "POWER RISER"].iter().any(|w| t.contains(w)) {
+        Some(4)
+    } else {
+        None
+    }
 }
 
 /// A circuit whose breaker or wire the schedule leaves to the one-line or riser (`OL`, `RD`, or
@@ -802,75 +1093,6 @@ mod tests {
         TextItem { value: v.to_string(), at: Vec2::new(x, y), height: h, rotation: 0.0 }
     }
 
-    #[test]
-    fn a_schedule_with_its_column_names_on_one_line_and_its_description_last_is_read() {
-        // `PANEL:"Q9"`; its header's column names each read as one text (`AMP POLE BKR LTG PWR`),
-        // the breaker type in its own BKR column and the description past the load columns,
-        // mirrored on the right. (Points of a 9.8 pt font: its capitals 7.2 high.)
-        let h = 7.2;
-        let mut v = vec![
-            t(557.0, 880.0, "PANEL:\"Q9\"", 26.0),
-            t(291.0, 812.0, "OCP", h),
-            t(356.0, 812.0, "LOAD (kVA)", h),
-            t(621.0, 812.0, "PHASE LOAD", h),
-            t(234.0, 810.0, "CKT", h),
-            t(1067.0, 810.0, "CKT", h),
-            t(236.0, 796.0, "NO", h),
-            t(262.0, 796.0, "AMP POLE BKR LTG PWR", h),
-            t(402.0, 796.0, "CO", h),
-            t(470.0, 796.0, "DESCRIPTION", h),
-            t(602.0, 796.0, "A", h),
-            t(649.0, 796.0, "B", h),
-            t(695.0, 796.0, "C", h),
-            t(777.0, 796.0, "DESCRIPTION", h),
-            t(904.0, 796.0, "CO", h),
-            t(927.0, 796.0, "PWR LTG BKR POLE AMP", h),
-            t(1069.0, 796.0, "NO", h),
-            t(300.0, 700.0, "AMPS PER PHASE = 90", h),
-        ];
-        let rows: [(f64, &[(f64, &str)]); 3] = [
-            (
-                782.0,
-                &[
-                    (241.0, "1"),
-                    (267.0, "20"),
-                    (298.0, "1"),
-                    (322.0, "GF"),
-                    (349.0, "0.4"),
-                    (488.0, "WATER HEATER"),
-                    (796.0, "BREAD WARMER"),
-                    (929.0, "0.8"),
-                    (990.0, "GF"),
-                    (1016.0, "1"),
-                    (1042.0, "20"),
-                    (1074.0, "2"),
-                ],
-            ),
-            (768.0, &[(241.0, "3"), (267.0, "30"), (298.0, "2"), (488.0, "FRYER"), (796.0, "SPARE"), (1016.0, "1"), (1042.0, "20"), (1074.0, "4")]),
-            (754.0, &[(241.0, "5"), (270.0, "--"), (298.0, "--"), (796.0, "LIGHTS"), (1016.0, "1"), (1042.0, "20"), (1074.0, "6")]),
-        ];
-        for (y, cells) in rows {
-            v.extend(cells.iter().map(|(x, c)| t(*x, y, c, h)));
-        }
-        let read = read(&v, "E-9");
-        assert_eq!(read.len(), 1, "{read:?}");
-        let p = &read[0];
-        assert_eq!(p.panel, "Q9");
-        let got: Vec<(String, String, u32, String, Vec<String>)> =
-            p.circuits.iter().map(|c| (c.number.clone(), c.breaker.clone(), c.poles, c.description.clone(), c.protection.clone())).collect();
-        let gf = || vec!["GF".to_string()];
-        assert_eq!(
-            got,
-            [
-                ("1".into(), "20".into(), 1, "WATER HEATER".into(), gf()),
-                ("2".into(), "20".into(), 1, "BREAD WARMER".into(), gf()),
-                ("3".into(), "30".into(), 2, "FRYER".into(), vec![]),
-                ("4".into(), "20".into(), 1, "SPARE".into(), vec![]),
-                ("6".into(), "20".into(), 1, "LIGHTS".into(), vec![]),
-            ]
-        );
-    }
-
     /// E-2's typical guest-room panel as the PDF holds it (span by span, its points).
     fn panel_g() -> Vec<TextItem> {
         let mut v = vec![
@@ -1018,6 +1240,75 @@ mod tests {
         v.push(t(x(200.0), 122.0, "GF - GROUND FAULT INTERRUPTER", 6.0));
         v.push(t(x(260.0), 122.0, "OL - RE: ONE-LINE DIAGRAM", 6.0));
         v
+    }
+
+    #[test]
+    fn a_schedule_with_its_column_names_on_one_line_and_its_description_last_is_read() {
+        // `PANEL:"Q9"`; its header's column names each read as one text (`AMP POLE BKR LTG PWR`),
+        // the breaker type in its own BKR column and the description past the load columns,
+        // mirrored on the right. (Points of a 9.8 pt font: its capitals 7.2 high.)
+        let h = 7.2;
+        let mut v = vec![
+            t(557.0, 880.0, "PANEL:\"Q9\"", 26.0),
+            t(291.0, 812.0, "OCP", h),
+            t(356.0, 812.0, "LOAD (kVA)", h),
+            t(621.0, 812.0, "PHASE LOAD", h),
+            t(234.0, 810.0, "CKT", h),
+            t(1067.0, 810.0, "CKT", h),
+            t(236.0, 796.0, "NO", h),
+            t(262.0, 796.0, "AMP POLE BKR LTG PWR", h),
+            t(402.0, 796.0, "CO", h),
+            t(470.0, 796.0, "DESCRIPTION", h),
+            t(602.0, 796.0, "A", h),
+            t(649.0, 796.0, "B", h),
+            t(695.0, 796.0, "C", h),
+            t(777.0, 796.0, "DESCRIPTION", h),
+            t(904.0, 796.0, "CO", h),
+            t(927.0, 796.0, "PWR LTG BKR POLE AMP", h),
+            t(1069.0, 796.0, "NO", h),
+            t(300.0, 700.0, "AMPS PER PHASE = 90", h),
+        ];
+        let rows: [(f64, &[(f64, &str)]); 3] = [
+            (
+                782.0,
+                &[
+                    (241.0, "1"),
+                    (267.0, "20"),
+                    (298.0, "1"),
+                    (322.0, "GF"),
+                    (349.0, "0.4"),
+                    (488.0, "WATER HEATER"),
+                    (796.0, "BREAD WARMER"),
+                    (929.0, "0.8"),
+                    (990.0, "GF"),
+                    (1016.0, "1"),
+                    (1042.0, "20"),
+                    (1074.0, "2"),
+                ],
+            ),
+            (768.0, &[(241.0, "3"), (267.0, "30"), (298.0, "2"), (488.0, "FRYER"), (796.0, "SPARE"), (1016.0, "1"), (1042.0, "20"), (1074.0, "4")]),
+            (754.0, &[(241.0, "5"), (270.0, "--"), (298.0, "--"), (796.0, "LIGHTS"), (1016.0, "1"), (1042.0, "20"), (1074.0, "6")]),
+        ];
+        for (y, cells) in rows {
+            v.extend(cells.iter().map(|(x, c)| t(*x, y, c, h)));
+        }
+        let read = read(&v, "E-9");
+        assert_eq!(read.len(), 1, "{read:?}");
+        let p = &read[0];
+        assert_eq!(p.panel, "Q9");
+        let got: Vec<(String, String, u32, String, Vec<String>)> =
+            p.circuits.iter().map(|c| (c.number.clone(), c.breaker.clone(), c.poles, c.description.clone(), c.protection.clone())).collect();
+        let gf = || vec!["GF".to_string()];
+        assert_eq!(
+            got,
+            [
+                ("1".into(), "20".into(), 1, "WATER HEATER".into(), gf()),
+                ("2".into(), "20".into(), 1, "BREAD WARMER".into(), gf()),
+                ("3".into(), "30".into(), 2, "FRYER".into(), vec![]),
+                ("4".into(), "20".into(), 1, "SPARE".into(), vec![]),
+                ("6".into(), "20".into(), 1, "LIGHTS".into(), vec![]),
+            ]
+        );
     }
 
     #[test]
@@ -1188,11 +1479,17 @@ mod tests {
         assert_eq!(title_panel("PANELBOARD DP1"), Some(("DP1".into(), None)));
         assert_eq!(title_panel("PANEL 'A'"), Some(("A".into(), None)));
         assert_eq!(title_panel("PANEL SCHEDULE - P1"), Some(("P1".into(), None)));
+        assert_eq!(title_panel("PANEL [L4] SCHEDULE"), Some(("L4".into(), None)));
+        assert_eq!(title_panel("PANEL: L2"), Some(("L2".into(), None)));
+        assert_eq!(title_panel("PANEL NAME: RP-1"), Some(("RP-1".into(), None)));
+        assert_eq!(title_panel("PANELBOARD: (H2A)"), Some(("H2A".into(), None)));
+        assert_eq!(title_panel("PANEL NAME:"), None);
+        assert_eq!(title_panel("PANEL NAME"), None);
+        assert_eq!(title_panel("PANELS SHALL BE"), None);
         assert_eq!(title_panel("PANELBOARD SHALL BE"), None);
         assert_eq!(title_panel("PANEL:\"P1\""), Some(("P1".into(), None)));
-        // A heading over the panels' notes, or a schedule's blank name field, names no panel.
+        // A heading over the panels' notes names no panel.
         assert_eq!(title_panel("PANELBOARD NOTES"), None);
-        assert_eq!(title_panel("PANEL NAME:"), None);
         assert_eq!(title_panel("PANELBOARD DP1 DEMAND CALCULATION"), None);
         assert_eq!(title_panel("TOTAL CONNECTED PANELBOARD (VA)"), None);
     }
@@ -1300,5 +1597,150 @@ mod tests {
         // The older fixture: its subtotal line has no numbers.
         let g = read(&panel_g(), "E-601");
         assert!(g.iter().all(|p| p.totals.values().all(|v| v.is_finite())));
+    }
+
+    /// A schedule numbered down the middle (`1 A 2`), a column per kind of load on each side, its
+    /// facts under the rows, a feeder table beside it on the same lines.
+    fn centred_schedule() -> Vec<TextItem> {
+        let h = 0.08;
+        let mut v = vec![t(6.30, 23.15, "PANEL [L4] SCHEDULE", 0.16), t(16.90, 23.10, "FEEDER SCHEDULE", 0.19)];
+        for (x, w) in [
+            (6.70, "DESCRIPTION"),
+            (8.01, "P"),
+            (8.22, "AMP"),
+            (8.67, "LIGHT"),
+            (9.27, "RECEP"),
+            (9.88, "MOTOR"),
+            (10.50, "OTHER"),
+            (11.10, "PHASE"),
+            (11.75, "OTHER"),
+            (12.40, "MOTOR"),
+            (13.00, "RECEP"),
+            (13.60, "LIGHT"),
+            (14.10, "P"),
+            (14.30, "AMP"),
+            (15.10, "DESCRIPTION"),
+        ] {
+            v.push(t(x, 22.89, w, h));
+        }
+        // (left description, poles, amps, its load's column and VA; pair; right side the same)
+        type Side<'a> = (&'a str, &'a str, &'a str, f64, &'a str);
+        let rows: [(Side, &str, Side); 4] = [
+            (("OFFICE LIGHTS", "1", "20", 8.70, "900"), "1 A 2", ("WATER HEATER", "2", "30", 12.42, "2250")),
+            (("OFFICE RECEPTACLES", "1", "20", 9.30, "1080"), "3 B 4", ("", "", "", 12.42, "2250")),
+            (("SPARE", "1", "20", 0.0, ""), "5 C 6", ("SPACE", "", "", 0.0, "")),
+            (("COPIER", "1", "20", 10.52, "1500"), "7 A 8", ("", "", "", 0.0, "")),
+        ];
+        for (i, (l, pair, r)) in rows.iter().enumerate() {
+            let y = 22.67 - 0.22 * i as f64;
+            for (side, (desc, poles, amps, lx, load)) in [(0, l), (1, r)] {
+                let (dx, px, ax) = if side == 0 { (6.25, 8.02, 8.28) } else { (14.65, 14.10, 14.35) };
+                for (x, w) in [(dx, *desc), (px, *poles), (ax, *amps), (*lx, *load)] {
+                    if !w.is_empty() {
+                        v.push(t(x, y, w, h));
+                    }
+                }
+                // The other load columns print zeros.
+                for x in if side == 0 { [8.81, 9.43, 10.06] } else { [11.93, 13.06, 13.68] } {
+                    if (x - lx).abs() > 0.3 {
+                        v.push(t(x, y, "0", h));
+                    }
+                }
+            }
+            v.push(t(11.12, y, pair, h));
+            // The feeder table's row on the same line.
+            v.push(t(17.50, y - 0.01, "(3) #12 & (1) #12 G.", h));
+            v.push(t(19.00, y - 0.01, "20", h));
+        }
+        v.extend([
+            t(6.26, 21.79, "TOTALS", h),
+            t(8.71, 21.79, "900", h),
+            t(14.00, 21.40, "VOLTAGE:", h),
+            t(15.60, 21.40, "208Y/120", h),
+            t(14.00, 21.18, "MCB/MLO:", h),
+            t(15.60, 21.18, "MCB", h),
+            t(14.20, 20.96, "AMPS:", h),
+            t(15.60, 20.96, "225", h),
+        ]);
+        v
+    }
+
+    #[test]
+    fn a_schedule_numbered_down_the_middle_reads_each_sides_circuits_loads_and_facts() {
+        let got = read(&centred_schedule(), "X-5");
+        assert_eq!(got.iter().map(|p| p.panel.as_str()).collect::<Vec<_>>(), ["L4"], "{got:#?}");
+        let Some(p) = got.first() else { return };
+        let c = |n: &str| p.circuits.iter().find(|c| c.number == n).unwrap_or_else(|| panic!("no circuit {n}: {:#?}", p.circuits));
+        assert_eq!(p.circuits.iter().map(|c| c.number.as_str()).collect::<Vec<_>>(), ["1", "2", "3", "5", "6", "7"], "{:#?}", p.circuits);
+        assert_eq!((c("1").description.as_str(), c("1").breaker.as_str(), c("1").poles, c("1").load_va), ("OFFICE LIGHTS", "20", 1, Some(900.0)));
+        // A two-pole breaker on the right: its number on its first row, each pole row's load summed.
+        assert_eq!((c("2").description.as_str(), c("2").breaker.as_str(), c("2").poles, c("2").load_va), ("WATER HEATER", "30", 2, Some(4500.0)));
+        assert_eq!(c("3").load_va, Some(1080.0));
+        assert_eq!(c("7").load_va, Some(1500.0), "the OTHER column is a load");
+        assert_eq!((c("6").description.as_str(), c("6").breaker.as_str()), ("SPACE", ""));
+        assert!(p.circuits.iter().all(|c| !c.description.contains('#')), "the feeder table beside it is no part of it");
+        let fact = |k: &str| p.header.get(k).map(String::as_str);
+        assert_eq!((fact("voltage"), fact("mcb/mlo"), fact("amps")), (Some("208Y/120"), Some("MCB"), Some("225")), "{:?}", p.header);
+    }
+
+    #[test]
+    fn a_split_title_and_a_pair_in_three_cells_read_the_same() {
+        // `PANEL:` and its tag in two cells as tall as the rest; `CKT` over the pair, printed as
+        // three texts; facts above the header.
+        let h = 5.0;
+        let mut v = vec![t(100.0, 300.0, "PANEL:", h), t(125.0, 300.0, "L2", h), t(100.0, 295.0, "VOLTS:", h), t(130.0, 295.0, "480Y/277V", h)];
+        for (x, w) in [
+            (100.0, "CIRCUIT DESCRIPTION"),
+            (150.0, "TRIP"),
+            (162.0, "POLE"),
+            (178.0, "LOAD (VA)"),
+            (205.0, "CKT"),
+            (225.0, "LOAD (VA)"),
+            (240.0, "POLE"),
+            (252.0, "TRIP"),
+            (265.0, "CIRCUIT DESCRIPTION"),
+        ] {
+            v.push(t(x, 288.0, w, h));
+        }
+        for (i, (ld, ll, a, ph, b, rl, rd)) in
+            [("CORRIDOR LIGHTS", "600", "1", "A", "2", "1500", "EXHAUST FAN"), ("RECEPTACLES", "720", "3", "B", "4", "", "SPARE")].iter().enumerate()
+        {
+            let y = 276.0 - 10.0 * i as f64;
+            v.extend([t(100.0, y, ld, h), t(152.0, y, "20", h), t(163.0, y, "1", h), t(178.0, y, ll, h)]);
+            v.extend([t(205.0, y, a, h), t(210.0, y, ph, h), t(215.0, y, b, h)]);
+            v.extend([t(240.0, y, "1", h), t(252.0, y, "20", h), t(265.0, y, rd, h)]);
+            if !rl.is_empty() {
+                v.push(t(225.0, y, rl, h));
+            }
+        }
+        let got = read(&v, "X-6");
+        let p = got.iter().find(|p| p.panel == "L2").unwrap_or_else(|| panic!("{got:#?}"));
+        let summary: Vec<(&str, &str, &str, Option<f64>)> =
+            p.circuits.iter().map(|c| (c.number.as_str(), c.description.as_str(), c.breaker.as_str(), c.load_va)).collect();
+        assert_eq!(
+            summary,
+            [
+                ("1", "CORRIDOR LIGHTS", "20", Some(600.0)),
+                ("2", "EXHAUST FAN", "20", Some(1500.0)),
+                ("3", "RECEPTACLES", "20", Some(720.0)),
+                ("4", "SPARE", "20", None)
+            ]
+        );
+        assert_eq!(p.header.get("volts").map(String::as_str), Some("480Y/277V"), "{:?}", p.header);
+    }
+
+    #[test]
+    fn panel_schedules_are_looked_for_on_electrical_combined_and_titled_sheets() {
+        assert!(trade_has("E", "E") && trade_has("MEP", "E") && trade_has("ep", "E") && trade_has("MEP", "P"));
+        assert!(!trade_has("FP", "P") && !trade_has("ELEV", "E") && !trade_has("A", "E") && !trade_has("PE1", "E"));
+        let rank = schedule_sheet_rank;
+        assert_eq!(rank("E", "schedule", "PANEL SCHEDULES"), Some(0));
+        assert_eq!(rank("UH", "unknown", "PANELBOARD SCHEDULES"), Some(0), "a schedule sheet whose number was read as an equipment tag");
+        assert_eq!(rank("MEP", "schedule", "SCHEDULES AND DETAILS"), Some(1));
+        assert_eq!(rank("E", "detail", "DETAILS"), Some(2));
+        assert_eq!(rank("E", "plan", "FLOOR PLAN - POWER"), Some(3));
+        assert_eq!(rank("G", "unknown", "ELECTRICAL ONE-LINE DIAGRAM"), Some(4));
+        assert_eq!(rank("A", "elevation", "METAL PANEL ELEVATIONS"), None);
+        assert_eq!(rank("A", "plan", "FLOOR PLAN"), None);
     }
 }
