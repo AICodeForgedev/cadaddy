@@ -293,6 +293,16 @@ fn detect_discipline(number: &str, texts: &[(String, [f64; 2])]) -> String {
 }
 
 /// `FIRST`, `1ST`, `2ND` … as a level number.
+/// A title with its level words taken out (`SECOND FLOOR PLAN` -> `FLOOR PLAN`, `LEVEL 3 POWER
+/// PLAN` -> `POWER PLAN`): what kind of plan it is, whichever floor.
+pub fn title_kind(title: &str) -> String {
+    let up = title.to_ascii_uppercase();
+    up.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty() && ordinal(w).is_none() && !w.chars().all(|c| c.is_ascii_digit()) && !matches!(*w, "LEVEL" | "LVL"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn ordinal(word: &str) -> Option<u32> {
     const WORDS: [&str; 10] = ["FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH", "SEVENTH", "EIGHTH", "NINTH", "TENTH"];
     if let Some(i) = WORDS.iter().position(|w| *w == word) {

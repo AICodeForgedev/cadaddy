@@ -1292,7 +1292,10 @@ fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
 }
 
 /// Plan sheets of a numbered series whose titles name no level take it from their number: in a
-/// series of two or more (`A111`…`A114`) the last digit is the level.
+/// series of two or more (`A111`…`A114`) the last digit is the level. A series is one kind of
+/// plan, floor after floor: the same title but for its level words. Sheets numbered in a row that
+/// are different plans of one floor (`A101` floor plan, `A102` equipment plan, `A105` ceiling
+/// plan) are no levels.
 fn level_by_number(sheets: &mut [SheetEntry]) {
     let series = |e: &SheetEntry| -> Option<(String, u32)> {
         if !e.level.is_empty() || !e.superseded_by.is_empty() || !is_plan_type(&e.sheet_type) || e.number.contains('/') {
@@ -1302,7 +1305,7 @@ fn level_by_number(sheets: &mut [SheetEntry]) {
         let digits = e.number.get(letters.len()..)?.trim_start_matches('-');
         let level = digits.chars().nth(2).and_then(|c| c.to_digit(10))?;
         (!letters.is_empty() && digits.len() == 3 && digits.starts_with('1') && digits.chars().all(|c| c.is_ascii_digit()) && level >= 1)
-            .then(|| (format!("{letters}{}", digits.get(..2).unwrap_or_default()), level))
+            .then(|| (format!("{letters}{}|{}", digits.get(..2).unwrap_or_default(), sheet_reader::title_kind(&e.title)), level))
     };
     let mut groups: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     for e in sheets.iter() {
@@ -2283,7 +2286,23 @@ impl PrintSetProject {
 
 #[cfg(test)]
 mod classify_tests {
-    use super::classify_sheet_type;
+    use super::{SheetEntry, classify_sheet_type, level_by_number};
+
+    fn plan(number: &str, title: &str) -> SheetEntry {
+        SheetEntry { number: number.into(), title: title.into(), sheet_type: "plan".into(), ..SheetEntry::default() }
+    }
+
+    #[test]
+    fn a_numbered_series_is_levels_only_when_it_is_one_kind_of_plan() {
+        // Different plans of one floor numbered in a row: no levels from their numbers.
+        let mut one = vec![plan("A-101", "FLOOR PLAN"), plan("A-102", "EQUIPMENT PLAN"), plan("A-105", "FINISH PLAN")];
+        level_by_number(&mut one);
+        assert!(one.iter().all(|e| e.level.is_empty()), "{:?}", one.iter().map(|e| &e.level).collect::<Vec<_>>());
+        // One kind of plan floor after floor: the last digit is the level.
+        let mut floors = vec![plan("A-111", "OVERALL PLAN"), plan("A-112", "OVERALL PLAN"), plan("A-113", "OVERALL PLAN")];
+        level_by_number(&mut floors);
+        assert_eq!(floors.iter().map(|e| e.level.as_str()).collect::<Vec<_>>(), ["1", "2", "3"]);
+    }
 
     #[test]
     fn a_sheet_also_printing_the_floor_plan_is_a_plan_not_a_ceiling_plan() {
