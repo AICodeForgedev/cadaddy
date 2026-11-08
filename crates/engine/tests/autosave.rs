@@ -367,14 +367,20 @@ fn a_failed_autosave_is_tried_again_without_another_change() {
     }
     assert!(std::fs::read(&path).unwrap().ends_with(b"EOF\n"));
 
-    // A write that succeeded is not repeated.
-    for _ in 0..50 {
+    // A write that succeeded is not repeated, and clears the failure once its writer reports
+    // (on its own thread: under load that comes after the file is there).
+    let mut cleared = false;
+    for i in 0..500 {
         a.reap();
         assert!(writes(&a.plan(&s, 1e4, 1, &dir)).is_empty());
+        cleared = a.failures().next().is_none();
+        if cleared && i >= 50 {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(a.next_due(1e4, 1), None);
-    assert_eq!(a.failures().next(), None, "a write that worked clears the failure");
+    assert!(cleared, "a write that worked clears the failure");
     a.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
