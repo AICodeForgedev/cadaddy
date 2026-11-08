@@ -40,7 +40,8 @@ pub(crate) fn title_panel(title: &str) -> Option<(String, Option<u32>)> {
         && tag.len() <= 12
         && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
         && tag.chars().any(|c| c.is_ascii_alphanumeric());
-    if !ok || ["SCHEDULE", "SCHEDULES", "SHALL", "AND", "WITH", "TO", "IN", "FOR"].contains(&tag.as_str()) {
+    if !ok || ["SCHEDULE", "SCHEDULES", "SHALL", "AND", "WITH", "TO", "IN", "FOR", "NOTES", "NOTE", "NAME", "TOTALS", "TYPE"].contains(&tag.as_str())
+    {
         return None;
     }
     // A panel's other tables (its demand calculation, load summary) aren't its schedule.
@@ -1188,6 +1189,10 @@ mod tests {
         assert_eq!(title_panel("PANEL 'A'"), Some(("A".into(), None)));
         assert_eq!(title_panel("PANEL SCHEDULE - P1"), Some(("P1".into(), None)));
         assert_eq!(title_panel("PANELBOARD SHALL BE"), None);
+        assert_eq!(title_panel("PANEL:\"P1\""), Some(("P1".into(), None)));
+        // A heading over the panels' notes, or a schedule's blank name field, names no panel.
+        assert_eq!(title_panel("PANELBOARD NOTES"), None);
+        assert_eq!(title_panel("PANEL NAME:"), None);
         assert_eq!(title_panel("PANELBOARD DP1 DEMAND CALCULATION"), None);
         assert_eq!(title_panel("TOTAL CONNECTED PANELBOARD (VA)"), None);
     }
