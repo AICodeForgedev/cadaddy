@@ -82,9 +82,10 @@ pub(crate) fn is_site(e: &MepEquipment) -> bool {
 /// bottom: its least cover (the site gear's [`COVER_PROPERTY`]) and the conduit. None: neither end
 /// is site gear.
 pub(crate) fn service_cover_ft(a: &MepEquipment, b: &MepEquipment, size_in: f64) -> Option<f64> {
-    let cover = [a, b].into_iter().filter(|e| is_site(e)).find_map(|e| {
-        e.properties.get(COVER_PROPERTY).and_then(|v| v.split_whitespace().next()).and_then(|n| n.parse::<f64>().ok())
-    })?;
+    let cover = [a, b]
+        .into_iter()
+        .filter(|e| is_site(e))
+        .find_map(|e| e.properties.get(COVER_PROPERTY).and_then(|v| v.split_whitespace().next()).and_then(|n| n.parse::<f64>().ok()))?;
     let size = if size_in.is_finite() && size_in > 0.0 { size_in } else { 1.0 };
     Some((cover.clamp(0.0, 240.0) + size) / 12.0)
 }
@@ -213,18 +214,19 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, gear_tag: &str, types: &[Str
             })
             .min_by(|a, b| a.1.total_cmp(&b.1));
         near_gear.or_else(|| {
-            tag_texts.iter().map(|t| (t.value.trim().to_string(), (t.at - l.at).len())).filter(|(_, d)| *d <= reach).min_by(|a, b| a.1.total_cmp(&b.1))
+            tag_texts
+                .iter()
+                .map(|t| (t.value.trim().to_string(), (t.at - l.at).len()))
+                .filter(|(_, d)| *d <= reach)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
         })
     };
     // The label with a feeder tag by it (the one-line's, not a legend's or a riser's).
-    let (label, feeder) = labels
-        .iter()
-        .map(|l| (*l, feeder_for(l)))
-        .min_by(|a, b| {
-            let da = a.1.as_ref().map_or(f64::INFINITY, |f| f.1);
-            let db = b.1.as_ref().map_or(f64::INFINITY, |f| f.1);
-            da.total_cmp(&db)
-        })?;
+    let (label, feeder) = labels.iter().map(|l| (*l, feeder_for(l))).min_by(|a, b| {
+        let da = a.1.as_ref().map_or(f64::INFINITY, |f| f.1);
+        let db = b.1.as_ref().map_or(f64::INFINITY, |f| f.1);
+        da.total_cmp(&db)
+    })?;
     let h = label.height.max(1e-9);
     // The lines under the label: its kVA and secondary.
     let mut lines: Vec<&TextItem> = texts
@@ -289,7 +291,9 @@ fn kva_of(called: &Called, gear: &MepEquipment, r: &Rules) -> (f64, String) {
     if let Some(k) = called.kva {
         return (k, format!("one-line {}: \"{}\"", called.sheet, called.label));
     }
-    let a = prop(gear, &["MAIN SIZE / TYPE", "MAIN", "MAINS", "MAIN BREAKER"]).and_then(amps).or_else(|| prop(gear, &["BUS AMPS", "BUS", "AMPS"]).and_then(amps));
+    let a = prop(gear, &["MAIN SIZE / TYPE", "MAIN", "MAINS", "MAIN BREAKER"])
+        .and_then(amps)
+        .or_else(|| prop(gear, &["BUS AMPS", "BUS", "AMPS"]).and_then(amps));
     let vp = prop(gear, &["VOLTS/PHASE", "VOLTAGE", "VOLTS"]).and_then(volts_phases);
     match (a, vp) {
         (Some(a), Some((v, ph))) => {
@@ -325,7 +329,13 @@ pub(crate) struct Proposed {
 /// the service gear (proposed, the site plan isn't registered to the building), on its pad, with
 /// its service feeder to the gear. `cover_in`: the least cover a note gives the service, else the
 /// rules'. `pad_notes`: the documents' notes on the transformer's pad (its basis).
-pub(crate) fn propose(sp: &BuildingSpec, called: &Called, types: &[FeederType], cover_in: Option<(f64, String)>, pad_notes: &[String]) -> Result<Proposed, String> {
+pub(crate) fn propose(
+    sp: &BuildingSpec,
+    called: &Called,
+    types: &[FeederType],
+    cover_in: Option<(f64, String)>,
+    pad_notes: &[String],
+) -> Result<Proposed, String> {
     let r = rules();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let slab = super::ugplan::slab_level(sp).ok_or("the model has no slab level")?;
@@ -381,7 +391,8 @@ pub(crate) fn propose(sp: &BuildingSpec, called: &Called, types: &[FeederType], 
     properties.insert("SERVICE LENGTH".into(), length);
     let mut sources = std::collections::BTreeMap::new();
     sources.insert("called".into(), format!("one-line {}: \"{}\"", called.sheet, called.label));
-    sources.insert("position".into(), format!("proposed outside the slab edge nearest {} (the site plan isn't registered to the building)", gear.tag));
+    sources
+        .insert("position".into(), format!("proposed outside the slab edge nearest {} (the site plan isn't registered to the building)", gear.tag));
     sources.insert("size".into(), r.outline_source.clone());
     sources.insert("status".into(), "proposed".into());
     sources.insert(SITE_SOURCE.into(), "outside the building".into());
@@ -514,17 +525,17 @@ mod tests {
     #[test]
     fn a_pointer_or_a_note_is_not_the_label_and_no_label_is_no_call() {
         let only = vec![t("TO UTILITY TRANSFORMER", 1.0, 1.0), t("3.VERIFY UTILITY TRANSFORMER LOCATION", 1.0, 2.0)];
-        assert_eq!(read(&only, "E-1", "SWBD-A", &[]), None);
+        assert_eq!(read(&only, "E-101", "SWBD-A", &[]), None);
         let kva = vec![t("1000 KVA UTILITY TRANSFORMER", 1.0, 1.0)];
-        assert_eq!(read(&kva, "E-1", "", &[]).and_then(|c| c.kva), Some(1000.0));
+        assert_eq!(read(&kva, "E-101", "", &[]).and_then(|c| c.kva), Some(1000.0));
         let under = vec![t("UTILITY XFMR", 1.0, 1.0), t("112.5KVA", 1.0, 0.85)];
-        assert_eq!(read(&under, "E-1", "", &[]).and_then(|c| c.kva), Some(112.5));
+        assert_eq!(read(&under, "E-101", "", &[]).and_then(|c| c.kva), Some(112.5));
     }
 
     #[test]
     fn a_horizontal_one_line_finds_the_tag_between_side_by_side_labels() {
         let v = vec![t("UTILITY TRANSFORMER", 1.0, 5.0), t("S-9", 3.0, 5.15), t("MSB", 5.0, 5.0), t("F2", 5.0, 7.5)];
-        let c = read(&v, "E-2", "MSB", &["S-9".into(), "F2".into()]).expect("called");
+        let c = read(&v, "E-102", "MSB", &["S-9".into(), "F2".into()]).expect("called");
         assert_eq!(c.feeder_type.as_deref(), Some("S-9"));
     }
 

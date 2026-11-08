@@ -15389,12 +15389,12 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     sp.mep.feeders.extend(planned.feeders);
     // The utility's transformer the one-line names, on its pad outside the building, and its
     // service feeder to the service gear (Q6307); a rerun replaces the earlier one.
-    let old_site: BTreeSet<String> =
-        sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
+    let old_site: BTreeSet<String> = sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
     sp.mep.equipment.retain(|e| !super::utilityxfmr::is_site(e));
     sp.concrete.pads.retain(|p| !old_site.contains(&p.equipment.trim().to_ascii_uppercase()));
     let service = utility_service(&mut sp, pages, &types);
-    let site_tags: BTreeSet<String> = sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
+    let site_tags: BTreeSet<String> =
+        sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
     new_tags.extend(site_tags.iter().cloned());
     let feeders = feeders + usize::from(service.as_ref().is_ok_and(|p| p.feeder.is_some()));
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
@@ -15429,11 +15429,8 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     for h in old_pads {
         d.model.remove(h);
     }
-    let mut pads_only = cadaddy_walk3d::BuildingSpec {
-        units_per_foot: sp.units_per_foot,
-        levels: sp.levels.clone(),
-        ..cadaddy_walk3d::BuildingSpec::default()
-    };
+    let mut pads_only =
+        cadaddy_walk3d::BuildingSpec { units_per_foot: sp.units_per_foot, levels: sp.levels.clone(), ..cadaddy_walk3d::BuildingSpec::default() };
     pads_only.mep.equipment = sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).cloned().collect();
     pads_only.mep.feeders = sp.mep.feeders.iter().filter(|f| site_tags.contains(&f.from.trim().to_ascii_uppercase())).cloned().collect();
     pads_only.concrete.pads = sp.concrete.pads.iter().filter(|p| site_tags.contains(&p.equipment.trim().to_ascii_uppercase())).cloned().collect();
@@ -15478,7 +15475,19 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             let e = &p.equipment;
             let feeder = p.feeder.as_ref().map_or_else(
                 || format!("no service feeder: {}", p.no_feeder.clone().unwrap_or_default()),
-                |f| format!("service feeder {} {}→{}: ({}) {}\" with {} x {} {} each", f.tag, f.from, f.to, f.conduits, f.conduit_in, f.phases + f.neutrals, f.size, f.material),
+                |f| {
+                    format!(
+                        "service feeder {} {}→{}: ({}) {}\" with {} x {} {} each",
+                        f.tag,
+                        f.from,
+                        f.to,
+                        f.conduits,
+                        f.conduit_in,
+                        f.phases + f.neutrals,
+                        f.size,
+                        f.material
+                    )
+                },
             );
             s.echo(format!(
                 "  utility transformer: {} on {} (proposed outside the building, {}), {}; pad {}; {feeder}",
@@ -15486,7 +15495,11 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
                 e.level,
                 e.properties.get("SERVICE LENGTH").cloned().unwrap_or_default(),
                 e.properties.get("KVA").map(|k| k.split(" (").next().unwrap_or_default().to_string()).unwrap_or_default(),
-                if site_pads.is_null() { "not built".to_string() } else { format!("built ({} element)", site_pads.get("concrete").cloned().unwrap_or(Value::Null)) }
+                if site_pads.is_null() {
+                    "not built".to_string()
+                } else {
+                    format!("built ({} element)", site_pads.get("concrete").cloned().unwrap_or(Value::Null))
+                }
             ));
             result["utility_transformer"] = json!({
                 "tag": e.tag, "level": e.level, "kva": e.properties.get("KVA"), "service_ft": p.service_ft,
@@ -15496,7 +15509,11 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             if let Some(why) = &p.no_feeder {
                 job.add_finding(
                     StageName::BimBuild,
-                    &format!("Service from {} to {}: conduits and conductors not read", e.tag, e.properties.get("FEEDS").cloned().unwrap_or_default()),
+                    &format!(
+                        "Service from {} to {}: conduits and conductors not read",
+                        e.tag,
+                        e.properties.get("FEEDS").cloned().unwrap_or_default()
+                    ),
                     why,
                     2,
                     vec!["Give the service entrance conductors and conduits (the feeder schedule's row for the one-line's tag)".into()],

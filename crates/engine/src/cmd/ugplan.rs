@@ -617,7 +617,8 @@ pub(crate) fn service_gear<'a>(sp: &'a BuildingSpec, slab: &str) -> Option<&'a M
             k.contains("switchboard") || k.contains("switchgear") || k.contains("service")
         })
         .or_else(|| {
-            let from_site = |f: &&cadaddy_walk3d::Feeder| sp.mep.equipment.iter().any(|x| super::utilityxfmr::is_site(x) && x.tag.eq_ignore_ascii_case(&f.from));
+            let from_site =
+                |f: &&cadaddy_walk3d::Feeder| sp.mep.equipment.iter().any(|x| super::utilityxfmr::is_site(x) && x.tag.eq_ignore_ascii_case(&f.from));
             sp.mep.equipment.iter().filter(on).find(|e| {
                 sp.mep.feeders.iter().any(|f| f.from.eq_ignore_ascii_case(&e.tag))
                     && !sp.mep.feeders.iter().filter(|f| !from_site(f)).any(|f| f.to.eq_ignore_ascii_case(&e.tag))
@@ -683,10 +684,14 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
     // The utility's transformer the gear step placed (Q6307), and its service feeder to the gear.
     let site_xfmr = gear.and_then(|g| {
         sp.mep.equipment.iter().find(|e| {
-            super::utilityxfmr::is_site(e) && e.kind.eq_ignore_ascii_case("transformer") && e.properties.get("FEEDS").is_some_and(|t| t.eq_ignore_ascii_case(&g.tag))
+            super::utilityxfmr::is_site(e)
+                && e.kind.eq_ignore_ascii_case("transformer")
+                && e.properties.get("FEEDS").is_some_and(|t| t.eq_ignore_ascii_case(&g.tag))
         })
     });
-    let service_feeder = site_xfmr.zip(gear).and_then(|(x, g)| sp.mep.feeders.iter().find(|f| f.from.eq_ignore_ascii_case(&x.tag) && f.to.eq_ignore_ascii_case(&g.tag)));
+    let service_feeder = site_xfmr
+        .zip(gear)
+        .and_then(|(x, g)| sp.mep.feeders.iter().find(|f| f.from.eq_ignore_ascii_case(&x.tag) && f.to.eq_ignore_ascii_case(&g.tag)));
     let stub = r.site.stub_ft.max(1.0) * u;
     let site_point = |p: [f64; 2]| {
         slab_b.map(|b| {
@@ -808,9 +813,8 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                     ));
                     continue;
                 }
-                let Some((edge, pad)) = site_xfmr
-                    .and_then(|x| slab_b.map(|b| (nearest_edge(b, centre(x)).0, centre(x))))
-                    .or_else(|| site_point(centre(g)))
+                let Some((edge, pad)) =
+                    site_xfmr.and_then(|x| slab_b.map(|b| (nearest_edge(b, centre(x)).0, centre(x)))).or_else(|| site_point(centre(g)))
                 else {
                     fates.push(fate("not_placed", 0, "the slab level has no outline".into()));
                     continue;
@@ -821,7 +825,10 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                     let out = [pad[0] + (pad[0] - edge[0]), pad[1] + (pad[1] - edge[1])];
                     add(vec![out, pad], bottom, &[(pad, r.stubup.conduit_top_ft)]);
                     let how = match site_xfmr {
-                        Some(x) => format!("utility to the pad transformer {} (proposed outside the slab edge nearest {}; locate from the site plan)", x.tag, g.tag),
+                        Some(x) => format!(
+                            "utility to the pad transformer {} (proposed outside the slab edge nearest {}; locate from the site plan)",
+                            x.tag, g.tag
+                        ),
                         None => format!(
                             "utility to the pad transformer; pad by rule {} ft outside the slab edge nearest {} (locate from the site plan)",
                             r.site.stub_ft, g.tag
