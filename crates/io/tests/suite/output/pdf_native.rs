@@ -1648,3 +1648,113 @@ fn a_simple_fonts_two_byte_cmap_code_space_keeps_one_byte_codes() {
     assert!(texts.iter().any(|t| t == "Model"), "{texts:?}");
     assert!(texts.iter().any(|t| t == "PDE07K3SGR3"), "{texts:?}");
 }
+
+// -----------------------------------------------------------------------------------------
+// Q6267: text recovered from stroked lettering stands as high as its strokes
+// -----------------------------------------------------------------------------------------
+
+/// Every TEXT's (value, height in sheet points) on a page read at sheet size (1 unit = 1 in).
+/// A real text stands its capital's height: [`CAP`] of its font size.
+fn text_heights(r: &pdf_read::PdfImport) -> Vec<(String, f64)> {
+    r.drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some((t.value.clone(), t.height * 72.0)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A capital's height in a font size.
+const CAP: f64 = 0.716;
+
+/// Short diagonal ticks every 5 pt over `w` x `h` points from (`x`, `y`): dense linework (hatch,
+/// dimension ticks, a door swing's pieces) with no lettering in it.
+fn ticks(x: f64, y: f64, w: f64, h: f64, out: &mut Vec<u8>) {
+    let (mut ty, top, right) = (y, y + h, x + w);
+    while ty <= top {
+        let mut tx = x;
+        while tx <= right {
+            out.extend_from_slice(format!("{tx:.2} {ty:.2} m {:.2} {:.2} l S ", tx + 3.0, ty + 3.0).as_bytes());
+            tx += 5.0;
+        }
+        ty += 5.0;
+    }
+}
+
+#[test]
+fn a_tag_beside_dense_linework_is_not_recovered_at_the_linework_size() {
+    // A real 8 pt tag inside a 130 pt patch of short ticks: the ticks group into one cluster of
+    // short strokes over the tag, but they are no lettering of it.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    ticks(270.0, 240.0, 130.0, 130.0, &mut content);
+    content.extend_from_slice(b"BT /F1 8 Tf 300 300 Td (12A) Tj ET Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let heights = text_heights(&r);
+    // The tag is there at its own height, once; nothing on the page stands taller than it.
+    let tags: Vec<f64> = heights.iter().filter(|(v, _)| v == "12A").map(|(_, h)| *h).collect();
+    assert_eq!(tags.len(), 1, "{heights:?}");
+    assert!(heights.iter().all(|(_, h)| *h <= 8.0 * CAP + 1e-6), "a text taller than the page's lettering: {heights:?}");
+    assert_eq!(r.stats.get("SHX text (fallback) recovered"), None, "{:?}", r.stats);
+}
+
+#[test]
+fn stroked_lettering_on_a_tag_is_recovered_at_its_cap_height() {
+    // The tag's own lettering drawn in strokes over it (a capital 5 pt high on the 8 pt text),
+    // beside the same dense ticks as above: the lettering is recovered, a letter high; the ticks
+    // stay linework.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    ticks(270.0, 240.0, 130.0, 130.0, &mut content);
+    shx_text("12A", 500.0, 450.0, 5.0, 1.0, 0.0, &mut content);
+    content.extend_from_slice(b"BT /F1 8 Tf 500 450 Td (12A) Tj ET Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let heights = text_heights(&r);
+    assert_eq!(r.stats.get("SHX text (fallback) recovered").copied(), Some(1), "{:?} {heights:?}", r.stats);
+    let mut tags: Vec<f64> = heights.iter().filter(|(v, _)| v == "12A").map(|(_, h)| *h).collect();
+    tags.sort_by(f64::total_cmp);
+    assert_eq!(tags.len(), 2, "{heights:?}");
+    assert!((tags[0] - 5.0).abs() < 0.3, "recovered at the strokes' cap height: {tags:?}");
+    assert!((tags[1] - 8.0 * CAP).abs() < 1e-6, "{tags:?}");
+    assert!(heights.iter().all(|(_, h)| *h <= 8.0 * CAP + 1e-6), "a text taller than the page's lettering: {heights:?}");
+}
+
+#[test]
+fn ocr_reading_far_taller_than_the_pages_text_is_not_drawn() {
+    // A page lettered in real 6 pt text (a hundred notes), with a stroked tag on one of them
+    // (stroked lettering here: the OCR runs) and a 28 pt stroked word, more than four times the
+    // page's tallest text: a plan's linework read as letters, never drawn as text.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    shx_text("12A", 500.0, 450.0, 4.2, 1.0, 0.0, &mut content);
+    shx_text("ROOM", 100.0, 100.0, 28.0, 1.0, 0.0, &mut content);
+    content.extend_from_slice(b"BT /F1 6 Tf 500 450 Td (12A) Tj ET ");
+    for i in 0..110 {
+        let (x, y) = (40 + (i % 10) * 70, 560 - (i / 10) * 12);
+        content.extend_from_slice(format!("BT /F1 6 Tf {x} {y} Td (NOTE {i}) Tj ET ").as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let heights = text_heights(&r);
+    assert!(heights.iter().all(|(_, h)| *h <= 4.0 * 6.0 * CAP), "a text more than 4x the page's tallest: {heights:?}");
+    assert!(heights.iter().all(|(v, _)| v != "ROOM"), "{heights:?}");
+    assert_eq!(r.stats.get("SHX OCR readings far taller than the page's text left as linework").copied(), Some(1), "{:?}", r.stats);
+    // its strokes stay linework
+    let lines = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))).count();
+    assert!(lines >= 4, "{lines}");
+}
+
+#[test]
+fn a_mark_inside_a_tag_is_not_its_lettering() {
+    // A cross of short strokes (a centre mark, a device's crosshair) inside an 8 pt room number,
+    // a letter high and nothing round it: it isn't the number's lettering (it doesn't run along
+    // it), so it stays linework and no second text is made.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    content.extend_from_slice(b"409 300 m 415 300 l S 412 297 m 412 303 l S 410 300 m 414 300 l S 412 298 m 412 302 l S ");
+    content.extend_from_slice(b"BT /F1 8 Tf 400 297 Td (947) Tj ET Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let heights = text_heights(&r);
+    assert_eq!(heights.iter().filter(|(v, _)| v == "947").count(), 1, "{heights:?}");
+    assert_eq!(r.stats.get("SHX text (fallback) recovered"), None, "{:?}", r.stats);
+    let lines = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))).count();
+    assert!(lines >= 2, "the cross stays drawn: {lines}");
+}
