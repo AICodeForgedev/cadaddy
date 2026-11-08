@@ -209,6 +209,62 @@ fn a_switch_takes_its_wiring_device_sections_product_record() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A project manual whose sections are headed `SECTION 03 3000` with the title on the next
+/// line, none of them in the product divisions, and whose Division 26 points to a drawing sheet
+/// for its specification (Q6295): every section is read, and the sheet is read as Division 26's
+/// specification (the switch takes its product record from it).
+#[test]
+fn a_manual_reads_every_division_and_the_sheet_it_points_a_division_to() {
+    let mut s = plan();
+    fill(&mut s);
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-manual-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manual = dir.join("Project Manual.txt");
+    std::fs::write(
+        &manual,
+        "PROJECT A\nTABLE OF CONTENTS\n2.01 DIVISION 03 -- CONCRETE\nA. 03 3000 - Cast-in-Place Concrete\n\
+         2.02 DIVISION 22 -- PLUMBING\nA. Refer Sheet Q8 for Plumbing Specifications\n\
+         2.03 DIVISION 26 -- ELECTRICAL\nA. Refer Sheet Q-9 for Electrical Specifications\n2.04 DIVISION 27 -- COMMUNICATIONS\n\
+         --- page 2 of 4 ---\nSECTION 03 3000\nCAST-IN-PLACE CONCRETE\nPART 1 GENERAL\n1.01 SUMMARY\nA. Footings.\n\
+         --- page 3 of 4 ---\nSECTION 04 2000\nUNIT MASONRY\nPART 1 GENERAL\nA. See Section 03 3000 - Cast-in-Place Concrete.\n\
+         --- page 4 of 4 ---\nSECTION 09 9000\nPAINTING AND COATING\nPART 1 GENERAL\n",
+    )
+    .unwrap();
+    // The sheet: a specification printed on the drawings, read as text.
+    let sheet = dir.join("sheet-q9.txt");
+    std::fs::write(
+        &sheet,
+        "ELECTRICAL SPECIFICATIONS\nPART 2 - PRODUCTS\n2.4 TOGGLE SWITCHES\nB. Switches, 120/277 V, 20 A:\n1. Single Pole:\n\
+         a. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\n1) Hubbell.\n2) Leviton.\nPART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    let r = s
+        .execute(
+            "bim.products",
+            &json!({"specs": [manual.to_string_lossy()], "sheets": [{"number": "Q9", "file": sheet.to_string_lossy(), "page": 1}]}),
+        )
+        .unwrap();
+    let read: Vec<&str> = r["sections_read"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(read.contains(&"03 30 00 CAST-IN-PLACE CONCRETE"), "every division's section, titled from the next line: {r:#}");
+    assert!(read.contains(&"04 20 00 UNIT MASONRY") && read.contains(&"09 90 00 PAINTING AND COATING"), "{r:#}");
+    assert!(!read.iter().any(|x| x.starts_with("03 30 00 -")), "a reference in a sentence is no header: {read:?}");
+    assert!(read.contains(&"26 ELECTRICAL (sheet Q-9)"), "the sheet is Division 26's specification: {r:#}");
+    assert_eq!(r["product_sections"], 1, "{r:#}");
+    let sheets = r["division_sheets"].as_array().unwrap();
+    assert_eq!(sheets.len(), 2, "{r:#}");
+    let e = sheets.iter().find(|d| d["division"] == "26").unwrap();
+    assert_eq!((e["sheet"].as_str(), e["read"].as_bool(), e["requirements"].as_u64()), (Some("Q-9"), Some(true), Some(1)), "{r:#}");
+    let p = sheets.iter().find(|d| d["division"] == "22").unwrap();
+    assert_eq!(p["read"], false, "a sheet the set doesn't give isn't read: {r:#}");
+    assert!(p["why"].as_str().is_some_and(|w| w.contains("not in the print set")), "{r:#}");
+    let sw = device_of(&mut s, "S");
+    let product: Value = serde_json::from_str(sw["product"]["value"].as_str().unwrap_or("null")).unwrap();
+    assert_eq!(product["required"]["section"], "26 ELECTRICAL (sheet Q-9)", "{product:#}");
+    assert!(sw["approved_makers"]["value"].as_str().is_some_and(|m| m.contains("Hubbell")), "{sw:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A device in no room stands in a corridor the plans trace: that is its room (the takeoff
 /// counts the corridor's receptacles by it).
 #[test]

@@ -423,6 +423,12 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
     if up.contains("SCHEDULE") || up.contains("NOTES") || up.contains("LEGEND") || up.contains("ABBREVIATION") || up.contains("SYMBOLS") {
         return "schedule".into();
     }
+    // A specification printed on the drawings (`ELECTRICAL SPECIFICATIONS`): read as a
+    // specification, never a plan.
+    let spec_words = crate::wordrules::words("sheets.specification_title_words");
+    if up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| spec_words.contains(&w)) {
+        return "specification".into();
+    }
     if up.contains("DETAIL") {
         return "detail".into();
     }
@@ -2849,5 +2855,9 @@ mod classify_tests {
         assert_eq!(classify_sheet_type("A221", "FIRST FLOOR REFLECTED CEILING PLAN"), "rcp", "a floor's ceiling plan isn't a floor plan");
         assert_eq!(classify_sheet_type("A222", "RCP"), "rcp");
         assert_eq!(classify_sheet_type("A223", "REFLECTED CEILING PLAN"), "rcp");
+        assert_eq!(classify_sheet_type("Q41", "ELECTRICAL SPECIFICATIONS"), "specification");
+        assert_eq!(classify_sheet_type("Q702", "PLUMBING SPECIFICATION"), "specification");
+        assert_eq!(classify_sheet_type("Q703", "GENERAL NOTES AND SPECIFICATIONS"), "schedule", "notes stay notes");
+        assert_eq!(classify_sheet_type("Q201", "FLOOR PLAN"), "plan");
     }
 }
