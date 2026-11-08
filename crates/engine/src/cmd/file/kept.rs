@@ -32,7 +32,40 @@ fn content(mut v: serde_json::Value) -> serde_json::Value {
     {
         tags.retain(|t| !t.get("code").and_then(serde_json::Value::as_i64).is_some_and(|c| BOOKKEEPING.contains(&c)));
     }
+    // Justified text's first point, its own or an attribute's (a definition's, a reference's).
+    match v.get("type").and_then(serde_json::Value::as_str) {
+        Some("text") => drop_derived_first_point(&mut v),
+        Some("attDef") => {
+            if let Some(t) = v.get_mut("text") {
+                drop_derived_first_point(t);
+            }
+        }
+        Some("insert") => {
+            if let Some(serde_json::Value::Array(attribs)) = v.get_mut("attribs") {
+                attribs.iter_mut().filter_map(|a| a.get_mut("text")).for_each(drop_derived_first_point);
+            }
+        }
+        _ => {}
+    }
     v
+}
+
+/// Removes the first alignment point (DXF group 10, `insert`) from the compared form of a text
+/// placed by its alignment point (group 11): any justification but left-baseline, aligned and
+/// fit ([`cadaddy_doc::Text::justify_point`]). The DXF Reference has group 10 of such text
+/// worked out from group 11, and the writers work it out again from CADaddy's font metrics, so a
+/// file's stored value that another program worked out differently is not content (test-asus-dwgrt:
+/// middle-aligned texts and centred attributes of sample drawings reported changed on first save).
+fn drop_derived_first_point(t: &mut serde_json::Value) {
+    let field = |k: &str| t.get(k).and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+    let (h, va) = (field("halign"), field("valign"));
+    let by_first_point = (matches!(h.as_str(), "" | "left") && matches!(va.as_str(), "" | "baseline")) || matches!(h.as_str(), "aligned" | "fit");
+    if !by_first_point
+        && t.get("alignPt").is_some_and(|p| !p.is_null())
+        && let Some(o) = t.as_object_mut()
+    {
+        o.remove("insert");
+    }
 }
 
 /// Removes from the compared forms of `kind` the fields that mean nothing for it: a linear
@@ -888,6 +921,31 @@ mod tests {
             deep = json!([deep]);
         }
         assert!(kept(&deep, &deep.clone(), 0));
+    }
+
+    #[test]
+    fn only_justified_texts_first_point_is_derived() {
+        let text = |h: &str, va: &str, first: f64| json!({"type": "text", "insert": [first, 0.0, 0.0], "alignPt": [5.0, 0.0, 0.0], "halign": h, "valign": va, "widthFactor": 1.0});
+        // Placed by the alignment point: the first point is the writer's own.
+        for (h, va) in [("center", "baseline"), ("middle", "baseline"), ("right", "baseline"), ("left", "top"), ("center", "bottom")] {
+            assert!(kept(&content(text(h, va, 1.0)), &content(text(h, va, 2.0)), 0), "{h} {va}");
+        }
+        // Placed by the first point (left-baseline), or by both (aligned, fit): a change in it is one.
+        for (h, va) in [("left", "baseline"), ("aligned", "baseline"), ("fit", "middle")] {
+            assert!(!kept(&content(text(h, va, 1.0)), &content(text(h, va, 2.0)), 0), "{h} {va}");
+        }
+        // Justified text with no alignment point is placed by its first point.
+        let lone = |first: f64| json!({"type": "text", "insert": [first, 0.0, 0.0], "alignPt": null, "halign": "center", "valign": "baseline"});
+        assert!(!kept(&content(lone(1.0)), &content(lone(2.0)), 0));
+        // An attribute definition's and a reference's attributes, the same way.
+        let attdef = |first: f64| json!({"type": "attDef", "tag": "A", "text": text("center", "baseline", first)});
+        assert!(kept(&content(attdef(1.0)), &content(attdef(2.0)), 0));
+        let insert = |first: f64| json!({"type": "insert", "block": "B", "attribs": [{"tag": "A", "text": text("middle", "baseline", first)}]});
+        assert!(kept(&content(insert(1.0)), &content(insert(2.0)), 0));
+        // A width factor of 0.9999999999999999 read back as 1 is rounding, not a change.
+        let mut noisy = text("left", "baseline", 1.0);
+        noisy["widthFactor"] = json!(0.999_999_999_999_999_9);
+        assert!(kept(&content(noisy), &content(text("left", "baseline", 1.0)), 0));
     }
 
     #[test]

@@ -503,12 +503,27 @@ pub fn fit_bounds(bounds: &crate::model3::Aabb, p: Option<Projection>, w: u32, h
 /// The drawing's model space drawn in `style` along `p`, fitted into a `w` × `h` image on `bg`
 /// (exports and plots of a shaded or 3D view).
 pub fn render_fitted(d: &Drawing, p: Option<Projection>, style: VisualStyle, w: u32, h: u32, bg: Rgb) -> Option<Raster> {
+    render_fitted_baked(d, p, style, w, h, bg, |_| None)
+}
+
+/// [`render_fitted`] with baked indirect light for the scene drawn (`baked`: given the scene,
+/// its lightmap's light, [`crate::lightmap::Baked::of`]): what Realistic shows of a baked model.
+pub fn render_fitted_baked(
+    d: &Drawing,
+    p: Option<Projection>,
+    style: VisualStyle,
+    w: u32,
+    h: u32,
+    bg: Rgb,
+    baked: impl FnOnce(&Scene) -> Option<crate::lightmap::Baked>,
+) -> Option<Raster> {
     let ext = d.extents(&Space::Model);
     let size = ext.width().max(ext.height());
     let size = if size.is_finite() && size > 0.0 { size } else { 1.0 };
     // Roughly first, for the extents on the view plane; then at the image's detail.
     let view = fit(&scene(d, &Space::Model, size / 500.0, bg), p, w, h)?;
-    let s = scene(d, &Space::Model, view.height / f64::from(view.height_px) * 0.5, bg);
+    let mut s = scene(d, &Space::Model, view.height / f64::from(view.height_px) * 0.5, bg);
+    s.baked = baked(&s);
     Some(rasterize(&s, &view, style, bg))
 }
 

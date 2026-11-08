@@ -2431,6 +2431,44 @@ fn round_loop(s: &Stroke) -> bool {
     closes && hi > 0.0 && lo / hi >= 0.88
 }
 
+/// The cells of the window `lo..=hi` (x, then y), a count that saturates instead of
+/// overflowing (cells come from hostile coordinates, cast with saturation).
+fn grid_window_cells(lo: (i64, i64), hi: (i64, i64)) -> i64 {
+    let span = |a: i64, b: i64| b.saturating_sub(a).saturating_add(1).max(0);
+    span(lo.0, hi.0).saturating_mul(span(lo.1, hi.1))
+}
+
+/// The occupied cells of a spatial grid inside the window `lo..=hi`, in the order a walk of the
+/// window visits them (x, then y). The window comes from the file (a text height, a coordinate)
+/// and is hostile: a text a billion points high asks for a window of billions of cells. When
+/// the window holds more cells than the grid has occupied, the grid's own cells are tested
+/// against it instead (sorted, so the order doesn't depend on the hash), so the cost is
+/// bounded by the grid, never by the window.
+fn grid_window<V>(grid: &HashMap<(i64, i64), V>, lo: (i64, i64), hi: (i64, i64)) -> Vec<&V> {
+    let cells = grid_window_cells(lo, hi);
+    if cells <= i64::try_from(grid.len()).unwrap_or(i64::MAX) {
+        let mut found = Vec::new();
+        for gx in lo.0..=hi.0 {
+            for gy in lo.1..=hi.1 {
+                if let Some(v) = grid.get(&(gx, gy)) {
+                    found.push(v);
+                }
+            }
+        }
+        return found;
+    }
+    let mut found: Vec<(&(i64, i64), &V)> = grid.iter().filter(|((gx, gy), _)| (lo.0..=hi.0).contains(gx) && (lo.1..=hi.1).contains(gy)).collect();
+    found.sort_unstable_by_key(|(k, _)| **k);
+    found.into_iter().map(|(_, v)| v).collect()
+}
+
+/// Whether a text height read from the file is a damaged value on a sheet `sheet_pts` across
+/// (points): not a number, or taller than the sheet. Such a text is no lettering on the sheet,
+/// and its height is never a search box.
+fn damaged_text_height(height: f64, sheet_pts: (f64, f64)) -> bool {
+    !height.is_finite() || height > sheet_pts.0.max(sheet_pts.1).max(72.0)
+}
+
 /// The boxes of a page's visible real text items, a quarter letter round, for finding what lies
 /// on them.
 struct TextCover {
@@ -2462,7 +2500,7 @@ impl TextCover {
                 (b[3] / Self::CELL).floor() as i64,
             );
             // a long note spans many cells; a hostile one is capped
-            if (gx1 - gx0 + 1).saturating_mul(gy1 - gy0 + 1) > 2_000 {
+            if grid_window_cells((gx0, gy0), (gx1, gy1)) > 2_000 {
                 continue;
             }
             let bi = boxes.len();
@@ -2856,7 +2894,8 @@ fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f
     let mut result: Vec<RecoveredText> = Vec::new();
 
     for ht in &hidden {
-        if ht.value.trim().is_empty() {
+        // a text taller than the sheet is a damaged value, not lettering to look for
+        if ht.value.trim().is_empty() || damaged_text_height(ht.height, (sw, sh)) {
             continue;
         }
         let h = ht.height.max(1.0);
@@ -2864,24 +2903,19 @@ fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f
         let est_w = h * 0.6 * ht.value.len().max(1) as f64;
         let (tx0, ty0) = (ht.at.0 - h * 0.2, ht.at.1 - h * 0.3);
         let (tx1, ty1) = (ht.at.0 + est_w + h * 0.2, ht.at.1 + h * 1.3);
-        // find short strokes inside this box
-        let gx0 = ((tx0 / cell).floor() as i64) - 1;
-        let gx1 = ((tx1 / cell).floor() as i64) + 1;
-        let gy0 = ((ty0 / cell).floor() as i64) - 1;
-        let gy1 = ((ty1 / cell).floor() as i64) + 1;
+        // find short strokes inside this box (a long string's box is bounded by the grid)
+        let at_cell = |v: f64| (v / cell).floor() as i64;
+        let lo = (at_cell(tx0).saturating_sub(1), at_cell(ty0).saturating_sub(1));
+        let hi = (at_cell(tx1).saturating_add(1), at_cell(ty1).saturating_add(1));
         let mut matched: Vec<usize> = Vec::new();
-        for gx in gx0..=gx1 {
-            for gy in gy0..=gy1 {
-                if let Some(members) = sgrid.get(&(gx, gy)) {
-                    for &si in members {
-                        let s = &short[si];
-                        if used.contains(&s.idx) {
-                            continue;
-                        }
-                        if s.cx >= tx0 && s.cx <= tx1 && s.cy >= ty0 && s.cy <= ty1 {
-                            matched.push(s.idx);
-                        }
-                    }
+        for members in grid_window(&sgrid, lo, hi) {
+            for &si in members {
+                let Some(s) = short.get(si) else { continue };
+                if used.contains(&s.idx) {
+                    continue;
+                }
+                if s.cx >= tx0 && s.cx <= tx1 && s.cy >= ty0 && s.cy <= ty1 {
+                    matched.push(s.idx);
                 }
             }
         }
@@ -3404,6 +3438,7 @@ pub struct OcrWord {
 }
 
 /// A matched glyph.
+#[derive(Clone)]
 struct MatchedGlyph {
     ch: char,
     /// A look-alike the shapes fit as well (see [`LOOK_ALIKES`]).
@@ -3727,18 +3762,23 @@ fn recover_shx_ocr_upright(
         near.sort_by(f64::total_cmp);
         near.get(near.len() / 2).copied()
     };
-    let mut matched: Vec<MatchedGlyph> = Vec::new();
-    for (gi, ((members, bb, pen), pts)) in glyphs.iter().zip(&glyph_pts).enumerate() {
+    // each glyph's row slant and its reading against the templates, on all cores (the reading
+    // is most of the OCR's time on a dense sheet)
+    let reads = crate::par_map(&glyph_pts.iter().enumerate().collect::<Vec<_>>(), |&(gi, pts)| {
         let slant = row_slant(gi);
         // a filled glyph's holes: the sum over the outlines its strokes came from
         let mut outlines: HashMap<usize, usize> = HashMap::new();
-        for m in members {
+        for m in glyphs.get(gi).map(|g| g.0.as_slice()).unwrap_or_default() {
             if let Some(&(shape, h)) = shapes.get(m) {
                 outlines.insert(shape, h);
             }
         }
         let holes = (!outlines.is_empty()).then(|| outlines.values().sum());
-        if let Some(GlyphRead { mut ch, dist, mut alt }) = read_glyph(pts, slant, &templates, holes) {
+        (slant, read_glyph(pts, slant, &templates, holes))
+    });
+    let mut matched: Vec<MatchedGlyph> = Vec::new();
+    for (gi, (((members, bb, pen), pts), (slant, read))) in glyphs.iter().zip(&glyph_pts).zip(reads).enumerate() {
+        if let Some(GlyphRead { mut ch, dist, mut alt }) = read {
             let straight = pts.len() == 1 && pts.first().is_some_and(|p| p.len() <= 2);
             let ring = (members.len() == 1 && members.first().and_then(|&i| strokes.get(i)).is_some_and(|s| s.closed))
                 || members.iter().any(|&i| strokes.get(i).is_some_and(|s| s.curved_loop));
@@ -3797,112 +3837,7 @@ fn recover_shx_ocr_upright(
     }
 
     // ---- phase 4: lines by baseline and height, then texts by spacing ----
-    // Letters and digits (full-height glyphs) build the lines, left to right; dashes, dots and
-    // quotes join the line whose letter band holds them.
-    matched.sort_by(|a, b| a.bb[0].total_cmp(&b.bb[0]));
-    struct TextLine {
-        pen: Pen,
-        bottom: f64,
-        height: f64,
-        x1: f64,
-        slant: f64,
-        members: Vec<usize>,
-    }
-    let mut lines: Vec<TextLine> = Vec::new();
-    let mut small: Vec<usize> = Vec::new();
-    for (gi, g) in matched.iter().enumerate() {
-        if small_glyph(g.ch) {
-            small.push(gi);
-            continue;
-        }
-        let h = g.bb[3] - g.bb[1];
-        let best = lines
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| {
-                let gap = g.bb[0] - l.x1;
-                l.pen == g.pen
-                    && (g.bb[1] - l.bottom).abs() <= l.height * 0.3
-                    && (0.7..=1.45).contains(&(h / l.height.max(1e-6)))
-                    // room for a dash or a dot between (they join the line afterwards)
-                    && gap <= l.height * 2.0
-                    && gap >= -l.height * 0.3
-            })
-            .min_by(|a, b| (g.bb[0] - a.1.x1).total_cmp(&(g.bb[0] - b.1.x1)))
-            .map(|(li, _)| li);
-        match best.and_then(|li| lines.get_mut(li)) {
-            Some(l) => {
-                l.x1 = l.x1.max(g.bb[2]);
-                l.members.push(gi);
-            }
-            None => lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: h, x1: g.bb[2], slant: g.slant, members: vec![gi] }),
-        }
-    }
-    for gi in small {
-        let Some(g) = matched.get(gi) else { continue };
-        // a dash or a quote stands above the baseline: on an oblique row it shifts with the slant
-        let on_oblique_line = |l: &TextLine| {
-            let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
-            let rise = g.bb[1] - l.bottom;
-            l.pen == g.pen
-                && l.slant.abs() >= 0.05
-                && (0.0..=l.height * 1.25).contains(&rise)
-                && g.bb[0] - l.slant * rise >= x0 - l.height * 1.2
-                && g.bb[2] - l.slant * rise <= l.x1 + l.height * 1.2
-        };
-        let shift = lines.iter().find(|l| on_oblique_line(l)).map(|l| l.slant * (g.bb[1] - l.bottom));
-        if let Some(shift) = shift
-            && let Some(g) = matched.get_mut(gi)
-        {
-            g.bb[0] -= shift;
-            g.bb[2] -= shift;
-        }
-        let Some(g) = matched.get(gi) else { continue };
-        let cy = (g.bb[1] + g.bb[3]) / 2.0;
-        let line = lines.iter_mut().find(|l| {
-            let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
-            l.pen == g.pen
-                && cy >= l.bottom - l.height * 0.25
-                && cy <= l.bottom + l.height * 1.25
-                && (g.bb[3] - g.bb[1]) <= l.height * if tall_glyph(g.ch) { 1.7 } else { 1.1 }
-                && g.bb[0] >= x0 - l.height * 1.2
-                && g.bb[2] <= l.x1 + l.height * 1.2
-        });
-        match line {
-            Some(l) => {
-                l.x1 = l.x1.max(g.bb[2]);
-                l.members.push(gi);
-            }
-            None => {
-                lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: (g.bb[3] - g.bb[1]).max(0.5), x1: g.bb[2], slant: 0.0, members: vec![gi] })
-            }
-        }
-    }
-
-    // lines the punctuation now bridges join: in "(A) #12" the parenthesis and the number sign
-    // left a gap between the A and the 12 that only they fill
-    let line_x0 = |l: &TextLine| l.members.iter().filter_map(|&m| matched.get(m)).map(|g| g.bb[0]).fold(f64::MAX, f64::min);
-    lines.sort_by(|a, b| line_x0(a).total_cmp(&line_x0(b)));
-    let mut joined: Vec<TextLine> = Vec::with_capacity(lines.len());
-    for l in lines {
-        let x0 = line_x0(&l);
-        let into = joined.iter_mut().rev().find(|m| {
-            let gap = x0 - m.x1;
-            m.pen == l.pen
-                && (l.bottom - m.bottom).abs() <= m.height * 0.3
-                && (0.7..=1.45).contains(&(l.height / m.height.max(1e-6)))
-                && gap <= m.height * 2.0
-                && gap >= -m.height * 0.3
-        });
-        match into {
-            Some(m) => {
-                m.x1 = m.x1.max(l.x1);
-                m.members.extend(l.members);
-            }
-            None => joined.push(l),
-        }
-    }
-    let lines = joined;
+    let lines = ocr_lines(&mut matched);
 
     let mut result: Vec<RecoveredText> = Vec::new();
     let mut marks: Vec<RecoveredText> = Vec::new();
@@ -4007,6 +3942,187 @@ fn recover_shx_ocr_upright(
     (result, report)
 }
 
+/// A line of OCR glyphs: its pen, baseline, letter height, right end and slant, and its glyphs
+/// (indices into the matched glyphs).
+struct TextLine {
+    pen: Pen,
+    bottom: f64,
+    height: f64,
+    x1: f64,
+    slant: f64,
+    members: Vec<usize>,
+}
+
+/// The lines built so far by baseline, in bands of letter height (a power of two each): a glyph
+/// asks only for the lines whose baseline lies near enough to take it, not for every line on
+/// the page.  A dense sheet reads tens of thousands of glyphs into as many lines, and asking
+/// every line for every glyph took most of the page's read.
+#[derive(Default)]
+struct LineIndex {
+    /// Per band: its tallest line, and its lines by baseline (in [`order_key`] order).
+    bands: BTreeMap<i32, (f64, BTreeMap<i64, Vec<usize>>)>,
+}
+
+impl LineIndex {
+    fn insert(&mut self, line: usize, bottom: f64, height: f64) {
+        // (a height that isn't a number goes in band 0: no test of height accepts its line)
+        let band = self.bands.entry(height.max(1e-12).log2().floor() as i32).or_insert((0.0, BTreeMap::new()));
+        band.0 = band.0.max(height);
+        band.1.entry(order_key(bottom)).or_default().push(line);
+    }
+
+    /// The lines, in the order they were added, whose baseline lies in `reach(height)` for the
+    /// tallest line of their band: every line whose baseline lies in `reach` of its own height
+    /// (`reach` widens with the height), and a few more for the caller's own test to drop.
+    fn near(&self, reach: impl Fn(f64) -> (f64, f64)) -> Vec<usize> {
+        let mut out = Vec::new();
+        for (tallest, by_bottom) in self.bands.values() {
+            let (lo, hi) = reach(*tallest);
+            // widened a hair, so rounding can't lose a line at the very edge
+            let slack = 1e-9 * (lo.abs() + hi.abs()) + 1e-9;
+            let (lo, hi) = (lo - slack, hi + slack);
+            if lo <= hi {
+                out.extend(by_bottom.range(order_key(lo)..=order_key(hi)).flat_map(|(_, lines)| lines));
+            } else {
+                // a bound that isn't a number: every line of the band
+                out.extend(by_bottom.values().flatten());
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+}
+
+/// `x`'s place in [`f64::total_cmp`] order, as an integer.
+fn order_key(x: f64) -> i64 {
+    let bits = x.to_bits() as i64;
+    bits ^ (((bits >> 63) as u64) >> 1) as i64
+}
+
+/// The glyphs' lines (the glyphs sorted left to right first).  Letters and digits (full-height
+/// glyphs) build the lines, left to right; dashes, dots and quotes join the line whose letter
+/// band holds them; then lines the punctuation bridges join.
+fn ocr_lines(matched: &mut [MatchedGlyph]) -> Vec<TextLine> {
+    matched.sort_by(|a, b| a.bb[0].total_cmp(&b.bb[0]));
+    let mut lines: Vec<TextLine> = Vec::new();
+    let mut index = LineIndex::default();
+    let mut small: Vec<usize> = Vec::new();
+    for (gi, g) in matched.iter().enumerate() {
+        if small_glyph(g.ch) {
+            small.push(gi);
+            continue;
+        }
+        let h = g.bb[3] - g.bb[1];
+        let best = index
+            .near(|lh| (g.bb[1] - lh * 0.3, g.bb[1] + lh * 0.3))
+            .into_iter()
+            .filter_map(|li| lines.get(li).map(|l| (li, l)))
+            .filter(|(_, l)| {
+                let gap = g.bb[0] - l.x1;
+                l.pen == g.pen
+                    && (g.bb[1] - l.bottom).abs() <= l.height * 0.3
+                    && (0.7..=1.45).contains(&(h / l.height.max(1e-6)))
+                    // room for a dash or a dot between (they join the line afterwards)
+                    && gap <= l.height * 2.0
+                    && gap >= -l.height * 0.3
+            })
+            .min_by(|a, b| (g.bb[0] - a.1.x1).total_cmp(&(g.bb[0] - b.1.x1)))
+            .map(|(li, _)| li);
+        match best.and_then(|li| lines.get_mut(li)) {
+            Some(l) => {
+                l.x1 = l.x1.max(g.bb[2]);
+                l.members.push(gi);
+            }
+            None => {
+                index.insert(lines.len(), g.bb[1], h);
+                lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: h, x1: g.bb[2], slant: g.slant, members: vec![gi] });
+            }
+        }
+    }
+    for gi in small {
+        let Some(g) = matched.get(gi) else { continue };
+        // a dash or a quote stands above the baseline: on an oblique row it shifts with the slant
+        let on_oblique_line = |l: &TextLine| {
+            let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+            let rise = g.bb[1] - l.bottom;
+            l.pen == g.pen
+                && l.slant.abs() >= 0.05
+                && (0.0..=l.height * 1.25).contains(&rise)
+                && g.bb[0] - l.slant * rise >= x0 - l.height * 1.2
+                && g.bb[2] - l.slant * rise <= l.x1 + l.height * 1.2
+        };
+        let shift = index
+            .near(|lh| (g.bb[1] - lh * 1.25, g.bb[1]))
+            .into_iter()
+            .filter_map(|li| lines.get(li))
+            .find(|l| on_oblique_line(l))
+            .map(|l| l.slant * (g.bb[1] - l.bottom));
+        if let Some(shift) = shift
+            && let Some(g) = matched.get_mut(gi)
+        {
+            g.bb[0] -= shift;
+            g.bb[2] -= shift;
+        }
+        let Some(g) = matched.get(gi) else { continue };
+        let cy = (g.bb[1] + g.bb[3]) / 2.0;
+        let line = index.near(|lh| (cy - lh * 1.25, cy + lh * 0.25)).into_iter().find(|&li| {
+            lines.get(li).is_some_and(|l| {
+                let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+                l.pen == g.pen
+                    && cy >= l.bottom - l.height * 0.25
+                    && cy <= l.bottom + l.height * 1.25
+                    && (g.bb[3] - g.bb[1]) <= l.height * if tall_glyph(g.ch) { 1.7 } else { 1.1 }
+                    && g.bb[0] >= x0 - l.height * 1.2
+                    && g.bb[2] <= l.x1 + l.height * 1.2
+            })
+        });
+        match line.and_then(|li| lines.get_mut(li)) {
+            Some(l) => {
+                l.x1 = l.x1.max(g.bb[2]);
+                l.members.push(gi);
+            }
+            None => {
+                let height = (g.bb[3] - g.bb[1]).max(0.5);
+                index.insert(lines.len(), g.bb[1], height);
+                lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height, x1: g.bb[2], slant: 0.0, members: vec![gi] });
+            }
+        }
+    }
+
+    // lines the punctuation now bridges join: in "(A) #12" the parenthesis and the number sign
+    // left a gap between the A and the 12 that only they fill
+    let matched: &[MatchedGlyph] = matched;
+    let line_x0 = |l: &TextLine| l.members.iter().filter_map(|&m| matched.get(m)).map(|g| g.bb[0]).fold(f64::MAX, f64::min);
+    lines.sort_by(|a, b| line_x0(a).total_cmp(&line_x0(b)));
+    let mut joined: Vec<TextLine> = Vec::with_capacity(lines.len());
+    let mut joined_index = LineIndex::default();
+    for l in lines {
+        let x0 = line_x0(&l);
+        // the latest line it continues
+        let into = joined_index.near(|mh| (l.bottom - mh * 0.3, l.bottom + mh * 0.3)).into_iter().rev().find(|&mi| {
+            joined.get(mi).is_some_and(|m| {
+                let gap = x0 - m.x1;
+                m.pen == l.pen
+                    && (l.bottom - m.bottom).abs() <= m.height * 0.3
+                    && (0.7..=1.45).contains(&(l.height / m.height.max(1e-6)))
+                    && gap <= m.height * 2.0
+                    && gap >= -m.height * 0.3
+            })
+        });
+        match into.and_then(|mi| joined.get_mut(mi)) {
+            Some(m) => {
+                m.x1 = m.x1.max(l.x1);
+                m.members.extend(l.members);
+            }
+            None => {
+                joined_index.insert(joined.len(), l.bottom, l.height);
+                joined.push(l);
+            }
+        }
+    }
+    joined
+}
+
 /// A lone glyph that may be a mark rather than linework: a letter or digit of a letter's shape
 /// (not a drawn circle, a box as wide as it is tall, or a stroke leaning off the upright).
 fn lone_mark_shape(g: &MatchedGlyph, strokes: &[Stroke]) -> bool {
@@ -4044,8 +4160,8 @@ fn keep_lone_marks(marks: Vec<RecoveredText>, words: &[RecoveredText], strokes: 
     let mut grid: HashMap<(i64, i64), Vec<(usize, (f64, f64), (f64, f64))>> = HashMap::new();
     for m in &marks {
         let (k0, k1) = (key(m.at.0 - m.height, m.at.1 - m.height), key(m.at.0 + m.height * 2.0, m.at.1 + m.height * 2.0));
-        for gx in k0.0..=k1.0.min(k0.0 + 8) {
-            for gy in k0.1..=k1.1.min(k0.1 + 8) {
+        for gx in k0.0..=k1.0.min(k0.0.saturating_add(8)) {
+            for gy in k0.1..=k1.1.min(k0.1.saturating_add(8)) {
                 grid.entry((gx, gy)).or_default();
             }
         }
@@ -4054,7 +4170,7 @@ fn keep_lone_marks(marks: Vec<RecoveredText>, words: &[RecoveredText], strokes: 
         let closing = if s.closed && s.pts.len() > 2 { s.pts.last().zip(s.pts.first()) } else { None };
         for (&a, &b) in s.pts.iter().zip(s.pts.iter().skip(1)).chain(closing) {
             let (k0, k1) = (key(a.0.min(b.0), a.1.min(b.1)), key(a.0.max(b.0), a.1.max(b.1)));
-            if (k1.0 - k0.0 + 1).saturating_mul(k1.1 - k0.1 + 1) > 400 {
+            if grid_window_cells(k0, k1) > 400 {
                 // a long diagonal: only the cells it passes near a mark
                 for (&(gx, gy), segs) in grid.iter_mut() {
                     let (x0, y0) = (gx as f64 * cell, gy as f64 * cell);
@@ -4083,13 +4199,10 @@ fn keep_lone_marks(marks: Vec<RecoveredText>, words: &[RecoveredText], strokes: 
             && m.stroke_indices.iter().filter_map(|&i| strokes.get(i)).all(|s| {
                 s.pts.iter().zip(s.pts.iter().skip(1)).all(|(&p, &q)| {
                     let (k0, k1) = (key(p.0.min(q.0) - clear, p.1.min(q.1) - clear), key(p.0.max(q.0) + clear, p.1.max(q.1) + clear));
-                    (k0.0..=k1.0).all(|gx| {
-                        (k0.1..=k1.1).all(|gy| {
-                            grid.get(&(gx, gy)).is_none_or(|segs| {
-                                segs.iter().all(|&(si, a, b)| m.stroke_indices.contains(&si) || polyline_gap(&[p, q], &[a, b]) > clear)
-                            })
-                        })
-                    })
+                    // (a mark's height comes from the file: the walk is bounded by the grid)
+                    grid_window(&grid, k0, k1)
+                        .into_iter()
+                        .all(|segs| segs.iter().all(|&(si, a, b)| m.stroke_indices.contains(&si) || polyline_gap(&[p, q], &[a, b]) > clear))
                 })
             });
         if free {
@@ -4145,11 +4258,30 @@ fn is_artifact_fill(f: &Fill, sheet: (f64, f64), texts: &[TextOut], strokes: &[S
 // Mask reduction: merge overlapping/adjacent wipeouts, drop those that mask nothing visible
 // ---------------------------------------------------------------------------------------------
 
+/// Most grid cells one mask is entered in when masks are grouped. A mask covering more of the
+/// page (a white fill far bigger than a tag) is compared with every other mask instead, so no
+/// mask adds more grid entries than this however big the file says it is.
+const MAX_MASK_CELLS: i64 = 64;
+
+/// Most mask pairs compared when grouping masks (a dense plan page compares about 5 million).
+/// Past it the masks not yet grouped stay as drawn: an unmerged mask hides exactly what the page
+/// hides, only as more wipeouts.
+const MAX_MASK_PAIRS: usize = 50_000_000;
+
 /// Reduce the mask count by merging spatially overlapping masks into combined bounding-box
-/// masks, and by dropping masks that do not overlap any visible non-white content.
-fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[TextOut], sheet: (f64, f64)) -> Vec<Fill> {
+/// masks, and by dropping masks that do not overlap any visible non-white content. Compares at
+/// most `max_pairs` mask pairs (normally [`MAX_MASK_PAIRS`]) and says whether it stopped there.
+fn reduce_masks(
+    masks: Vec<Fill>,
+    strokes: &[Stroke],
+    fills: &[Fill],
+    texts: &[TextOut],
+    sheet: (f64, f64),
+    page_box: [f64; 4],
+    max_pairs: usize,
+) -> (Vec<Fill>, bool) {
     if masks.is_empty() {
-        return masks;
+        return (masks, false);
     }
     let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
 
@@ -4165,18 +4297,31 @@ fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[T
         }
     }
     if infos.is_empty() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
 
     // grid-based spatial grouping: merge masks whose bounding boxes overlap or are close
     let cell_size = sw.min(sh) * 0.05; // 5% of sheet for grouping
     let cell_size = cell_size.max(20.0);
-    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let cell = |v: f64| (v / cell_size).floor() as i64;
+    // Every mask reaches into the page (the caller drops the rest), so a mask's cells are clamped
+    // to the page's: two masks that shared a cell still share one, and a fill millions of points
+    // across covers the page's few hundred cells, not millions.
+    let (px, py) = ((cell(page_box[0]), cell(page_box[2])), (cell(page_box[1]), cell(page_box[3])));
+    let clamp = |v: i64, (lo, hi): (i64, i64)| v.max(lo).min(hi);
+    let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    // masks covering more than MAX_MASK_CELLS cells of the page, compared with every mask
+    let mut oversized: Vec<usize> = Vec::new();
+    let mut spans: Vec<[i64; 4]> = Vec::with_capacity(infos.len());
     for (i, info) in infos.iter().enumerate() {
-        let gx0 = (info.bb[0] / cell_size).floor() as i64;
-        let gx1 = (info.bb[2] / cell_size).floor() as i64;
-        let gy0 = (info.bb[1] / cell_size).floor() as i64;
-        let gy1 = (info.bb[3] / cell_size).floor() as i64;
+        let (gx0, gx1) = (clamp(cell(info.bb[0]), px), clamp(cell(info.bb[2]), px));
+        let (gy0, gy1) = (clamp(cell(info.bb[1]), py), clamp(cell(info.bb[3]), py));
+        spans.push([gx0, gy0, gx1, gy1]);
+        let cells = gx1.saturating_sub(gx0).saturating_add(1).saturating_mul(gy1.saturating_sub(gy0).saturating_add(1));
+        if cells > MAX_MASK_CELLS {
+            oversized.push(i);
+            continue;
+        }
         for gx in gx0..=gx1 {
             for gy in gy0..=gy1 {
                 grid.entry((gx, gy)).or_default().push(i);
@@ -4194,18 +4339,36 @@ fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[T
         x
     };
     let pad = cell_size * 0.5; // generous tolerance for adjacency (masks behind nearby tags)
-    for members in grid.values() {
-        for (mi, &a) in members.iter().enumerate() {
-            for &b in &members[mi + 1..] {
-                let (ba, bb_) = (&infos[a].bb, &infos[b].bb);
-                // overlapping or adjacent (with padding)
-                if ba[0] <= bb_[2] + pad && ba[2] >= bb_[0] - pad && ba[1] <= bb_[3] + pad && ba[3] >= bb_[1] - pad {
-                    let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-                    if ra != rb {
-                        parent[rb] = ra;
-                    }
-                }
-            }
+    // overlapping or adjacent (with padding)
+    let near = |a: usize, b: usize| match (infos.get(a), infos.get(b)) {
+        (Some(ia), Some(ib)) => {
+            let (ba, bb_) = (&ia.bb, &ib.bb);
+            ba[0] <= bb_[2] + pad && ba[2] >= bb_[0] - pad && ba[1] <= bb_[3] + pad && ba[3] >= bb_[1] - pad
+        }
+        _ => false,
+    };
+    // in a common grid cell, as the masks the grid pairs are
+    let share_cell = |a: usize, b: usize| match (spans.get(a), spans.get(b)) {
+        (Some(sa), Some(sb)) => sa[0] <= sb[2] && sb[0] <= sa[2] && sa[1] <= sb[3] && sb[1] <= sa[3],
+        _ => false,
+    };
+    let mut pairs_left = max_pairs;
+    let mut capped = false;
+    let pairs = grid
+        .values()
+        .flat_map(|members| {
+            members.iter().enumerate().flat_map(move |(mi, &a)| members.get(mi + 1..).unwrap_or_default().iter().map(move |&b| (a, b)))
+        })
+        .chain(oversized.iter().flat_map(|&a| (0..infos.len()).map(move |b| (a, b))));
+    for (a, b) in pairs {
+        if pairs_left == 0 {
+            capped = true;
+            break;
+        }
+        pairs_left -= 1;
+        let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+        if ra != rb && share_cell(a, b) && near(a, b) {
+            parent[rb] = ra;
         }
     }
 
@@ -4269,7 +4432,7 @@ fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[T
             even_odd: false,
         });
     }
-    result
+    (result, capped)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -4417,30 +4580,29 @@ fn find_symbol_instances(
         let v = t.value.trim();
         let tx = t.at.0;
         let ty = t.at.1;
+        // a tag taller than the sheet is a damaged value, never a search radius
+        if damaged_text_height(t.height, (sheet.0 * 72.0, sheet.1 * 72.0)) {
+            continue;
+        }
         let search_r = t.height.max(5.0) * 4.0; // search radius: ~4× the text height
 
-        // find short strokes near this tag
-        let gx0 = (((tx - search_r) / cell).floor() as i64) - 1;
-        let gx1 = (((tx + search_r) / cell).floor() as i64) + 1;
-        let gy0 = (((ty - search_r) / cell).floor() as i64) - 1;
-        let gy1 = (((ty + search_r) / cell).floor() as i64) + 1;
+        // find short strokes near this tag (the walk is bounded by the grid)
+        let at_cell = |v: f64| (v / cell).floor() as i64;
+        let lo = (at_cell(tx - search_r).saturating_sub(1), at_cell(ty - search_r).saturating_sub(1));
+        let hi = (at_cell(tx + search_r).saturating_add(1), at_cell(ty + search_r).saturating_add(1));
 
         let mut nearby: Vec<usize> = Vec::new();
-        for gx in gx0..=gx1 {
-            for gy in gy0..=gy1 {
-                if let Some(members) = stroke_grid.get(&(gx, gy)) {
-                    for &si in members {
-                        if used_strokes.contains(&si) {
-                            continue;
-                        }
-                        let s = &strokes[si];
-                        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
-                            let sc = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
-                            let dist = (sc.0 - tx).hypot(sc.1 - ty);
-                            if dist < search_r {
-                                nearby.push(si);
-                            }
-                        }
+        for members in grid_window(&stroke_grid, lo, hi) {
+            for &si in members {
+                if used_strokes.contains(&si) {
+                    continue;
+                }
+                let Some(s) = strokes.get(si) else { continue };
+                if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+                    let sc = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+                    let dist = (sc.0 - tx).hypot(sc.1 - ty);
+                    if dist < search_r {
+                        nearby.push(si);
                     }
                 }
             }
@@ -4505,7 +4667,7 @@ fn find_symbol_instances(
         let mut cluster_fills = Vec::new();
         for dx in -1..=1 {
             for dy in -1..=1 {
-                if let Some(neighbors) = fill_grid.get(&(cgx + dx, cgy + dy)) {
+                if let Some(neighbors) = fill_grid.get(&(cgx.saturating_add(dx), cgy.saturating_add(dy))) {
                     for &fi in neighbors {
                         if let Some(fb) = bbox(&fills[fi].loops)
                             && fb[0] >= bounds[0] - 2.0
@@ -4830,10 +4992,17 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Skip when recover_text is off — keep raw masks for pre-merge compatibility.
     if opts.recover_text {
         let masks_before = masks.len();
-        masks = reduce_masks(masks, &strokes, &fills, &texts, sheet);
+        let (reduced, capped) = reduce_masks(masks, &strokes, &fills, &texts, sheet, page_box, MAX_MASK_PAIRS);
+        masks = reduced;
         let masks_merged = masks_before.saturating_sub(masks.len());
         if masks_merged > 0 {
             stats.insert("masks merged/dropped".into(), masks_merged);
+        }
+        if capped {
+            notes.push(format!(
+                "PDF: page {} has too many overlapping white fills to merge them all; the rest stay as drawn (more wipeouts, same look)",
+                opts.page.max(1)
+            ));
         }
     }
 
@@ -6751,6 +6920,83 @@ mod tests {
         assert!(blank_paper(&[254, 254, 254, 255]) && !blank_paper(&[254, 254, 254, 0]) && !blank_paper(&[]));
     }
 
+    /// A white mask over the box `[x0, y0, x1, y1]`, painted `order`th.
+    fn white_box(b: [f64; 4], order: usize) -> Fill {
+        let loops = vec![vec![(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])]];
+        Fill { loops, pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 }, layer: None, order, even_odd: false }
+    }
+
+    fn mask_boxes(masks: &[Fill]) -> Vec<[f64; 4]> {
+        let mut b: Vec<[f64; 4]> = masks.iter().filter_map(|m| bbox(&m.loops)).collect();
+        b.sort_by(|p, q| p.iter().zip(q).map(|(x, y)| x.total_cmp(y)).find(|o| o.is_ne()).unwrap_or(std::cmp::Ordering::Equal));
+        b
+    }
+
+    #[test]
+    fn a_white_fill_far_bigger_than_the_page_reads_in_bounded_memory() {
+        // One white fill ten million points across (each side 300,000 grid cells) once took a grid
+        // entry for every cell it covered: gigabytes, then an allocation abort no guard can catch.
+        let content = b"1 1 1 rg -5000000 -5000000 10000000 10000000 re f \
+            0 0 0 RG 1 w 100 100 m 101 104 l S 200 100 m 201 104 l S 300 300 m 340 300 l S \
+            1 1 1 rg -3000000 200 6000000 20 re f 400 -2000000 10 4000000 re f";
+        let started = std::time::Instant::now();
+        let r = match read(&pdf_with(content), &PdfOptions::default()) {
+            Ok(r) => r,
+            Err(e) => panic!("{e}"),
+        };
+        assert!(started.elapsed().as_secs() < 20, "took {:?}", started.elapsed());
+        // the strokes stay, and the whole-page fill (with the two masks it overlaps) is one mask
+        assert!(r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))).count() >= 3);
+        let wipeouts = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Wipeout(_))).count();
+        assert_eq!(wipeouts, 1, "{:?}", r.stats);
+    }
+
+    #[test]
+    fn oversized_masks_group_with_the_masks_they_share_a_cell_with() {
+        // 11x8.5 page: grid cells 30.6 points, adjacency pad half a cell
+        let (sheet, page) = ((11.0, 8.5), [0.0, 0.0, 792.0, 612.0]);
+        // a huge fill takes in a small mask inside it
+        let masks = vec![white_box([-5.0e6, -5.0e6, 5.0e6, 5.0e6], 1), white_box([100.0, 100.0, 110.0, 110.0], 2)];
+        let (out, capped) = reduce_masks(masks, &[], &[], &[], sheet, page, MAX_MASK_PAIRS);
+        assert_eq!((mask_boxes(&out), capped), (vec![[-5.0e6, -5.0e6, 5.0e6, 5.0e6]], false));
+        // a fill over 140 cells of the page (compared with every mask, not gridded) keeps the grid's
+        // rule: a mask 5 points off but in the next cell column stays apart, as one far away does,
+        // and one overlapping it joins it
+        let big = [0.0, 0.0, 425.0, 300.0];
+        let masks = vec![
+            white_box(big, 1),
+            white_box([430.0, 100.0, 440.0, 110.0], 2),
+            white_box([700.0, 500.0, 710.0, 510.0], 3),
+            white_box([420.0, 290.0, 424.0, 310.0], 4),
+        ];
+        let (out, capped) = reduce_masks(masks, &[], &[], &[], sheet, page, MAX_MASK_PAIRS);
+        assert!(!capped);
+        assert_eq!(mask_boxes(&out), vec![[0.0, 0.0, 425.0, 310.0], [430.0, 100.0, 440.0, 110.0], [700.0, 500.0, 710.0, 510.0]]);
+        // a mask whose box misses the page entirely still lands in a bounded set of cells
+        let masks = vec![white_box([1.0e9, 1.0e9, 2.0e9, 2.0e9], 1), white_box([1.5e9, 1.5e9, 1.6e9, 1.6e9], 2)];
+        let (out, _) = reduce_masks(masks, &[], &[], &[], sheet, page, MAX_MASK_PAIRS);
+        assert_eq!(mask_boxes(&out), vec![[1.0e9, 1.0e9, 2.0e9, 2.0e9]]);
+    }
+
+    #[test]
+    fn mask_grouping_stops_at_its_pair_cap_and_keeps_the_rest_as_drawn() {
+        let (sheet, page) = ((11.0, 8.5), [0.0, 0.0, 792.0, 612.0]);
+        // 30 overlapping masks in one grid cell, beside a line so the group is worth keeping
+        let masks = || (0..30).map(|i| white_box([100.0 + i as f64 * 0.5, 100.0, 104.0 + i as f64 * 0.5, 104.0], i)).collect::<Vec<_>>();
+        let pen = Pen { rgb: [0, 0, 0], lw: 25, transp: 0 };
+        let line =
+            [Stroke { pts: vec![(100.0, 98.0), (120.0, 98.0)], closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 99 }];
+        let (all, capped) = reduce_masks(masks(), &line, &[], &[], sheet, page, MAX_MASK_PAIRS);
+        assert_eq!((mask_boxes(&all), capped), (vec![[100.0, 100.0, 118.5, 104.0]], false));
+        let (some, capped) = reduce_masks(masks(), &line, &[], &[], sheet, page, 10);
+        assert!(capped);
+        assert!(some.len() > 1 && some.len() < 30, "{}", some.len());
+        // nothing the page hides is lost: every mask lies inside one that is kept
+        for m in mask_boxes(&masks()) {
+            assert!(mask_boxes(&some).iter().any(|k| k[0] <= m[0] && k[1] <= m[1] && k[2] >= m[2] && k[3] >= m[3]), "{m:?}");
+        }
+    }
+
     #[test]
     fn hostile_input_is_an_error_not_a_crash() {
         assert!(read(b"%PDF-1.4 garbage", &PdfOptions::default()).is_err());
@@ -6770,5 +7016,317 @@ mod tests {
         assert!(stands_alone(0, 8.0, &boxes));
         assert!(!stands_alone(2, 8.0, &boxes));
         assert!(!stands_alone(9, 8.0, &boxes));
+    }
+    /// The lines the OCR built before [`LineIndex`]: every glyph asked every line so far.
+    fn lines_asking_every_line(matched: &mut [super::MatchedGlyph]) -> Vec<super::TextLine> {
+        use super::*;
+        matched.sort_by(|a, b| a.bb[0].total_cmp(&b.bb[0]));
+        let mut lines: Vec<TextLine> = Vec::new();
+        let mut small: Vec<usize> = Vec::new();
+        for (gi, g) in matched.iter().enumerate() {
+            if small_glyph(g.ch) {
+                small.push(gi);
+                continue;
+            }
+            let h = g.bb[3] - g.bb[1];
+            let best = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| {
+                    let gap = g.bb[0] - l.x1;
+                    l.pen == g.pen
+                        && (g.bb[1] - l.bottom).abs() <= l.height * 0.3
+                        && (0.7..=1.45).contains(&(h / l.height.max(1e-6)))
+                        && gap <= l.height * 2.0
+                        && gap >= -l.height * 0.3
+                })
+                .min_by(|a, b| (g.bb[0] - a.1.x1).total_cmp(&(g.bb[0] - b.1.x1)))
+                .map(|(li, _)| li);
+            match best.and_then(|li| lines.get_mut(li)) {
+                Some(l) => {
+                    l.x1 = l.x1.max(g.bb[2]);
+                    l.members.push(gi);
+                }
+                None => lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: h, x1: g.bb[2], slant: g.slant, members: vec![gi] }),
+            }
+        }
+        for gi in small {
+            let Some(g) = matched.get(gi) else { continue };
+            let on_oblique_line = |l: &TextLine| {
+                let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+                let rise = g.bb[1] - l.bottom;
+                l.pen == g.pen
+                    && l.slant.abs() >= 0.05
+                    && (0.0..=l.height * 1.25).contains(&rise)
+                    && g.bb[0] - l.slant * rise >= x0 - l.height * 1.2
+                    && g.bb[2] - l.slant * rise <= l.x1 + l.height * 1.2
+            };
+            let shift = lines.iter().find(|l| on_oblique_line(l)).map(|l| l.slant * (g.bb[1] - l.bottom));
+            if let Some(shift) = shift
+                && let Some(g) = matched.get_mut(gi)
+            {
+                g.bb[0] -= shift;
+                g.bb[2] -= shift;
+            }
+            let Some(g) = matched.get(gi) else { continue };
+            let cy = (g.bb[1] + g.bb[3]) / 2.0;
+            let line = lines.iter_mut().find(|l| {
+                let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+                l.pen == g.pen
+                    && cy >= l.bottom - l.height * 0.25
+                    && cy <= l.bottom + l.height * 1.25
+                    && (g.bb[3] - g.bb[1]) <= l.height * if tall_glyph(g.ch) { 1.7 } else { 1.1 }
+                    && g.bb[0] >= x0 - l.height * 1.2
+                    && g.bb[2] <= l.x1 + l.height * 1.2
+            });
+            match line {
+                Some(l) => {
+                    l.x1 = l.x1.max(g.bb[2]);
+                    l.members.push(gi);
+                }
+                None => lines.push(TextLine {
+                    pen: g.pen,
+                    bottom: g.bb[1],
+                    height: (g.bb[3] - g.bb[1]).max(0.5),
+                    x1: g.bb[2],
+                    slant: 0.0,
+                    members: vec![gi],
+                }),
+            }
+        }
+        let line_x0 = |l: &TextLine| l.members.iter().filter_map(|&m| matched.get(m)).map(|g| g.bb[0]).fold(f64::MAX, f64::min);
+        lines.sort_by(|a, b| line_x0(a).total_cmp(&line_x0(b)));
+        let mut joined: Vec<TextLine> = Vec::with_capacity(lines.len());
+        for l in lines {
+            let x0 = line_x0(&l);
+            let into = joined.iter_mut().rev().find(|m| {
+                let gap = x0 - m.x1;
+                m.pen == l.pen
+                    && (l.bottom - m.bottom).abs() <= m.height * 0.3
+                    && (0.7..=1.45).contains(&(l.height / m.height.max(1e-6)))
+                    && gap <= m.height * 2.0
+                    && gap >= -m.height * 0.3
+            });
+            match into {
+                Some(m) => {
+                    m.x1 = m.x1.max(l.x1);
+                    m.members.extend(l.members);
+                }
+                None => joined.push(l),
+            }
+        }
+        joined
+    }
+
+    #[test]
+    fn ocr_lines_by_baseline_are_the_lines_of_asking_every_line() {
+        use super::*;
+        // Dense lettering in every size a sheet uses, upright and oblique rows packed close,
+        // punctuation, two pens, degenerate boxes and stray glyphs: the line index finds exactly
+        // the lines (members, ends, punctuation shifts) that asking every line found.
+        let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let pens = [Pen { rgb: [0, 0, 0], lw: 18, transp: 0 }, Pen { rgb: [0, 0, 255], lw: 35, transp: 0 }];
+        let chars = ['A', 'E', 'M', '1', '4', '0', '-', '.', ',', '\'', '"', '(', ')', '/', '#'];
+        for trial in 0..6 {
+            let mut glyphs: Vec<MatchedGlyph> = Vec::new();
+            let rows = 60 + trial * 40;
+            for _ in 0..rows {
+                let h = [2.5, 4.0, 4.5, 6.0, 9.0, 18.0, 36.0][(rnd() * 7.0) as usize % 7];
+                let base = (rnd() * 300.0 * h).round() / 4.0;
+                let slant = if rnd() < 0.25 { 0.21 } else { 0.0 };
+                let pen = pens[usize::from(rnd() < 0.2)];
+                let mut x = rnd() * 2000.0;
+                for _ in 0..(3 + (rnd() * 30.0) as usize) {
+                    let ch = chars[(rnd() * chars.len() as f64) as usize % chars.len()];
+                    let (w, gh, dy) = match ch {
+                        '-' => (h * 0.5, h * 0.05, h * 0.5),
+                        '.' | ',' => (h * 0.1, h * 0.1, 0.0),
+                        '\'' | '"' => (h * 0.15, h * 0.25, h * 0.75),
+                        '(' | ')' | '/' | '#' => (h * 0.4, h * 1.3, -h * 0.15),
+                        _ => (h * 0.67, h * (0.95 + rnd() * 0.1), (rnd() - 0.5) * h * 0.1),
+                    };
+                    let y = base + dy + slant * 0.0;
+                    let bb = [x + slant * dy, y, x + w + slant * dy, y + gh];
+                    glyphs.push(MatchedGlyph {
+                        ch,
+                        alt: None,
+                        bb,
+                        indices: vec![glyphs.len()],
+                        pen,
+                        confidence: 1.0,
+                        straight: false,
+                        ring: false,
+                        slant,
+                    });
+                    x += w + h * if rnd() < 0.15 { 1.5 + rnd() * 2.0 } else { 0.2 };
+                }
+            }
+            // strays: zero-height, huge, far off, and not a number at all
+            for k in 0..40 {
+                let (x, y) = (rnd() * 2400.0, rnd() * 1600.0);
+                let bb = match k % 4 {
+                    0 => [x, y, x + 3.0, y],
+                    1 => [x, y, x + 50.0, y + 80.0],
+                    2 => [x * 1e6, y * 1e6, x * 1e6 + 4.0, y * 1e6 + 4.0],
+                    _ => [x, f64::NAN, x + 3.0, y],
+                };
+                let ch = chars[k % chars.len()];
+                glyphs.push(MatchedGlyph {
+                    ch,
+                    alt: None,
+                    bb,
+                    indices: vec![],
+                    pen: pens[0],
+                    confidence: 0.5,
+                    straight: true,
+                    ring: false,
+                    slant: 0.0,
+                });
+            }
+            let mut a = glyphs.clone();
+            let mut b = glyphs;
+            let (fast, slow) = (ocr_lines(&mut a), lines_asking_every_line(&mut b));
+            let key = |lines: &[TextLine], g: &[MatchedGlyph]| -> Vec<String> {
+                lines
+                    .iter()
+                    .map(|l| {
+                        let bbs: Vec<[u64; 2]> = l.members.iter().filter_map(|&m| g.get(m)).map(|g| [g.bb[0].to_bits(), g.bb[2].to_bits()]).collect();
+                        format!("{:?} {} {} {} {} {:?} {bbs:?}", l.pen, l.bottom, l.height, l.x1, l.slant, l.members)
+                    })
+                    .collect()
+            };
+            assert!(slow.len() > rows, "the rows make lines, trial {trial}");
+            assert_eq!(key(&fast, &a), key(&slow, &b), "trial {trial}");
+        }
+    }
+
+    /// Runs `f` on its own thread; `None` when it hasn't returned within `secs` (a hang).
+    fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(secs)).ok()
+    }
+
+    /// 40 short pen strokes in a row, then invisible text `height` points high over them.
+    fn hidden_text_over_strokes(height: &str) -> Vec<u8> {
+        let mut content = String::from("0 0 0 RG 0.5 w ");
+        for i in 0..40 {
+            let x = 100 + 2 * i;
+            content.push_str(&format!("{x} 100 m {} 104 l S ", x + 1));
+        }
+        content.push_str(&format!("BT 3 Tr /F1 {height} Tf 100 100 Td (ABCDE) Tj ET"));
+        pdf_with(content.as_bytes())
+    }
+
+    #[test]
+    fn a_huge_hidden_text_height_does_not_hang_the_read() {
+        // Every height a damaged file can carry: the read returns at once and keeps the text
+        // (a height that overflows the text matrix drops the text, as before).
+        for height in ["1000000000", "100000", "1e300", "8"] {
+            let pdf = hidden_text_over_strokes(height);
+            let started = std::time::Instant::now();
+            let r = within(60, move || read(&pdf, &PdfOptions::default()).map(|r| r.drawing));
+            let Some(r) = r else { panic!("a hidden text {height} pt high hangs the read") };
+            let d = match r {
+                Ok(d) => d,
+                Err(e) => panic!("{height}: {e}"),
+            };
+            assert!(started.elapsed().as_secs_f64() < 10.0, "{height}: {:?}", started.elapsed());
+            let kept = d.model.iter().any(|e| e.common.layer == HIDDEN_TEXT_LAYER && matches!(&e.kind, EntityKind::Text(t) if t.value == "ABCDE"));
+            assert!(kept || height == "1e300", "{height}: the hidden text is kept");
+        }
+    }
+
+    #[test]
+    fn the_grid_window_walk_is_bounded_by_the_grid() {
+        let grid: HashMap<(i64, i64), usize> = [((3, 1), 31), ((-2, 5), 25), ((3, -4), 34), ((0, 0), 0)].into_iter().collect();
+        // a window bigger than the grid: the grid's cells in walk order (x, then y)
+        assert_eq!(grid_window(&grid, (i64::MIN, i64::MIN), (i64::MAX, i64::MAX)), vec![&25, &0, &34, &31]);
+        assert_eq!(grid_window(&grid, (-1_000_000_000, 0), (1_000_000_000, 1_000_000_000)), vec![&25, &0, &31]);
+        assert_eq!(grid_window(&grid, (0, -4), (3, 1)), vec![&0, &34, &31]);
+        // a window no bigger than the grid walks its own cells: the same answers
+        assert_eq!(grid_window(&grid, (3, 0), (3, 1)), vec![&31]);
+        assert_eq!(grid_window(&grid, (0, 0), (0, 0)), vec![&0]);
+        assert_eq!(grid_window(&grid, (-2, 5), (-1, 5)), vec![&25]);
+        // an empty window, an empty grid
+        assert!(grid_window(&grid, (5, 5), (4, 4)).is_empty());
+        assert!(grid_window(&HashMap::<(i64, i64), usize>::new(), (i64::MIN, 0), (i64::MAX, 0)).is_empty());
+        // the cell count saturates instead of overflowing
+        assert_eq!(grid_window_cells((i64::MIN, i64::MIN), (i64::MAX, i64::MAX)), i64::MAX);
+        assert_eq!(grid_window_cells((2, 2), (1, 9)), 0);
+        assert_eq!(grid_window_cells((0, 0), (2, 3)), 12);
+        // a text taller than the sheet (or not a number) is a damaged value
+        assert!(damaged_text_height(1e9, (792.0, 612.0)));
+        assert!(damaged_text_height(f64::NAN, (792.0, 612.0)));
+        assert!(damaged_text_height(f64::INFINITY, (792.0, 612.0)));
+        assert!(!damaged_text_height(12.0, (792.0, 612.0)));
+        assert!(!damaged_text_height(600.0, (792.0, 612.0)));
+    }
+
+    fn short_strokes() -> Vec<Stroke> {
+        (0..40)
+            .map(|i| {
+                let x = 100.0 + 2.0 * f64::from(i);
+                Stroke {
+                    pts: vec![(x, 100.0), (x + 1.0, 104.0)],
+                    closed: false,
+                    pen: Pen { rgb: [0, 0, 0], lw: 5, transp: 0 },
+                    layer: None,
+                    curve_loop: false,
+                    curved_loop: false,
+                    order: i as usize,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_huge_tag_height_does_not_hang_the_symbol_search() {
+        for height in [1e12, f64::INFINITY, f64::NAN, -1e12] {
+            let found = within(60, move || {
+                let strokes = short_strokes();
+                let anchors = [TagAnchor { value: "A1", at: (110.0, 90.0), height, text_idx: Some(0), ocr_idx: None }];
+                find_symbol_instances(&strokes, &[], &anchors, (11.0, 8.5), &HashSet::new(), false).len()
+            });
+            assert!(found.is_some(), "a tag {height} pt high hangs the symbol search");
+        }
+        // a tag of a usual height still finds the strokes round it
+        let found = within(60, || {
+            let strokes = short_strokes();
+            let anchors = [TagAnchor { value: "A1", at: (110.0, 98.0), height: 6.0, text_idx: Some(0), ocr_idx: None }];
+            find_symbol_instances(&strokes, &[], &anchors, (11.0, 8.5), &HashSet::new(), false).len()
+        });
+        assert_eq!(found, Some(1));
+    }
+
+    #[test]
+    fn a_huge_mark_height_does_not_hang_the_lone_mark_check() {
+        let found = within(60, || {
+            let strokes = short_strokes();
+            let mark = |height: f64| RecoveredText {
+                at: (100.0, 100.0),
+                height,
+                value: "I".into(),
+                stroke_indices: HashSet::from([0]),
+                pen: Pen { rgb: [0, 0, 0], lw: 5, transp: 0 },
+                layer: None,
+                unconfirmed: true,
+                confidence: Some(0.9),
+                review: false,
+                strokes_stay: false,
+                rotation: 0.0,
+            };
+            let words = [RecoveredText { value: "AB".into(), stroke_indices: HashSet::new(), ..mark(1e12) }];
+            keep_lone_marks(vec![mark(1e12)], &words, &strokes, 2.0).1
+        });
+        assert!(found.is_some(), "a mark 1e12 pt high hangs the lone-mark check");
     }
 }

@@ -19,8 +19,18 @@ fn line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
     d.model.push(e);
 }
 
-/// The two-room plan of the WALLGEN tests (a window gap and a doorway), built, plus a room
-/// volume and a plain box.
+/// Feet → a glass line in inches on A-GLAZ (a window's glazing drawn in its gap).
+fn glass(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
+    let p = |(x, y): (f64, f64)| Vec3 { x: x * 12.0, y: y * 12.0, z: 0.0 };
+    let h = Handle(d.handseed.max(0x100));
+    d.handseed = h.0 + 1;
+    let mut e = Entity::new(h, EntityKind::Line(Line { a: p(a), b: p(b) }));
+    e.common.layer = "A-GLAZ".into();
+    d.model.push(e);
+}
+
+/// The two-room plan of the WALLGEN tests (a window gap, its glazing drawn in it, and a
+/// doorway), built, plus a room volume and a plain box.
 fn building() -> Session {
     let mut d = Drawing::new_imperial();
     for (a, b) in [((0., 0.), (8., 0.)), ((12., 0.), (40., 0.)), ((40., 0.), (40., 10.)), ((40., 10.), (0., 10.)), ((0., 10.), (0., 0.))] {
@@ -35,6 +45,7 @@ fn building() -> Session {
         line(&mut d, (x, 0.5), (x, 3.0));
         line(&mut d, (x, 6.0), (x, 9.5));
     }
+    glass(&mut d, (8.0, 0.25), (12.0, 0.25));
     let swing: Vec<_> = (0..=9)
         .map(|i| f64::from(i) * std::f64::consts::FRAC_PI_2 / 9.0)
         .map(|a| json!({"p": {"x": (20.0 - 3.0 * a.sin()) * 12.0, "y": (3.0 + 3.0 * a.cos()) * 12.0}, "bulge": 0.0, "start_width": 0.0, "end_width": 0.0}))

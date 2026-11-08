@@ -4,7 +4,10 @@
 //! count, length, area or volume, and keeps each line's elements: on a per-level line, the
 //! elements of that level (a BOM line that lists a category's elements across levels is narrowed
 //! to the line's level, and a line without elements gets its level's built elements of that
-//! category). Each takeoff is compared with the last one kept in the drawing.
+//! category). Every line's level is one of the model's levels, as the model names it (a line
+//! naming `2` is on `Level 2`; a line naming none is on its elements' level), else the explicit
+//! `(unassigned level)` group, counted. Each takeoff is compared with the last one kept in the
+//! drawing.
 //!
 //! The estimate maps each takeoff line to a row of a cost table (item, unit, material $ per unit,
 //! labour hours per unit, optional waste %): an exact item name first, else the row whose words
@@ -29,6 +32,9 @@ const MAX_ROWS: usize = 20_000;
 const MAX_LINES: usize = 50_000;
 const MAX_REVISIONS: usize = 50;
 const MAX_LINE_ELEMENTS: usize = 5_000;
+/// The level of a takeoff line whose work is on no one level of the model (Q6271): a job-wide
+/// quantity, or a level the model has no such name for. Counted apart (`unassigned_level`).
+pub(crate) const UNASSIGNED_LEVEL: &str = "(unassigned level)";
 /// The labour rate when neither the call nor the table gives one, $ per hour.
 const DEFAULT_LABOR_RATE: f64 = 75.0;
 
@@ -36,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Model Takeoff", run)
             .alias(&["takeoffmodel"])
-            .params("{force?: bool (replace an existing file; otherwise it is refused), group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit) | [property key] (by the elements' properties, e.g. [\"level\", \"circuit\"]), filter?: {trade?, level?, category?, circuit?, text?} | text | {kind?, where?, key: value…} (by the elements' properties: e.g. {kind: \"device\", type: \"duplex\"}), compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level, circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status, made: drawn|derived|inferred}], totals: {count, length_ft, area_sf, volume_cy, by_made: {drawn, derived, inferred} (each the same totals)}, levels, changes?: {added, removed, changed}, revision, csv, path?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit) | [property key] (by the elements' properties, e.g. [\"level\", \"circuit\"]), filter?: {trade?, level?, category?, circuit?, text?} | text | {kind?, where?, key: value…} (by the elements' properties: e.g. {kind: \"device\", type: \"duplex\"}), compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level (one of the model's levels, else \"(unassigned level)\"), circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status, made: drawn|derived|inferred}], totals: {count, length_ft, area_sf, volume_cy, by_made: {drawn, derived, inferred} (each the same totals)}, levels, unassigned_level?: {level, lines, elements} (the lines on no one level of the model), changes?: {added, removed, changed}, revision, csv, path?}")
             .noundo(),
         CommandSpec::new(CMD_SHOW, "Show Takeoff Line", run_show)
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
@@ -107,20 +113,25 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
     // Per level and branch circuit: lines on no circuit are the level's as they are.
     let bom = s.execute("bim.bom", &json!({"group_by": "circuit", "all_elements": true}))?;
     let d = s.doc()?;
-    // Each built element's level, category and system.
+    let (sp, _) = crate::cmd::bspec::current(s, CMD)?;
+    // Each built element's level (as the model names it), category and system.
     let els = elements(d);
+    let on_elements: BTreeSet<String> = els.iter().map(|e| e.level.trim().to_string()).filter(|l| !l.is_empty()).collect();
+    let mut names: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut model_level =
+        |name: &str| -> Option<String> { names.entry(name.to_string()).or_insert_with(|| level_name(&sp, &on_elements, name)).clone() };
     let info: BTreeMap<String, (String, String, String)> =
-        els.iter().map(|e| (e.handle.hex(), (e.level.clone(), e.category.clone(), e.system.clone()))).collect();
+        els.iter().map(|e| (e.handle.hex(), (model_level(&e.level).unwrap_or_default(), e.category.clone(), e.system.clone()))).collect();
     let mut built: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for e in &els {
-        let v = built.entry((e.category.clone(), e.level.clone())).or_default();
+        let level = info.get(&e.handle.hex()).map(|i| i.0.clone()).unwrap_or_default();
+        let v = built.entry((e.category.clone(), level)).or_default();
         if v.len() < MAX_LINE_ELEMENTS {
             v.push(e.handle.hex());
         }
     }
     // The BOM names a spec run as `run:<index>`: the meshes built from it (their `mepid` starts
     // with the run's id).
-    let (sp, _) = crate::cmd::bspec::current(s, CMD)?;
     let mut by_run: BTreeMap<String, Vec<String>> = BTreeMap::new();
     // The BOM counts rooms from the ceilings built with a room's tag: a level's rooms are those.
     let mut room_ceilings: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -142,7 +153,7 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
         if let (Some(&"ceiling"), Some(level)) = (tags.first(), tags.get(1))
             && e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("room:"))
         {
-            let v = room_ceilings.entry((*level).to_string()).or_default();
+            let v = room_ceilings.entry(model_level(level).unwrap_or_else(|| (*level).to_string())).or_default();
             if v.len() < MAX_LINE_ELEMENTS {
                 v.push(e.handle.hex());
             }
@@ -169,13 +180,24 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             None => Handle::parse_hex(h).filter(|x| d.entity(*x).is_some()).map(|x| vec![x.hex()]).unwrap_or_default(),
         }
     };
+    let on_level = |h: &str, lv: &str| info.get(h).is_some_and(|(x, _, _)| x.eq_ignore_ascii_case(lv));
     let mut grouped: BTreeMap<String, Value> = BTreeMap::new();
     for l in bom_lines.iter().chain(wall_lines.iter()).take(MAX_LINES) {
-        let level = l["level"].as_str().unwrap_or_default().to_string();
+        // The line's level as the model names it (Q6271): `2` or `L2` is `Level 2`; a level no
+        // level of the model answers to stays as written while the elements are looked up.
+        let named = l["level"].as_str().unwrap_or_default().trim().to_string();
+        let resolved = model_level(&named);
+        let mut level = resolved.clone().unwrap_or_else(|| named.clone());
         let category = l["category"].as_str().unwrap_or_default().to_string();
         let mut elems: Vec<String> =
             l["elements"].as_array().map(|a| a.iter().filter_map(Value::as_str).flat_map(resolve).collect()).unwrap_or_default();
         elems.dedup();
+        // A line that names no level: its elements' level, when they are all on one.
+        if level.is_empty()
+            && let Some(lv) = one_level(&info, &elems)
+        {
+            level = lv;
+        }
         // On a level's line, that level's elements.
         if !level.is_empty() {
             elems.retain(|h| info.get(h).is_none_or(|(lv, _, _)| lv.is_empty() || lv.eq_ignore_ascii_case(&level)));
@@ -200,10 +222,15 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
         if elems.is_empty() && matches!(category.as_str(), "duct" | "pipe" | "conduit" | "tray" | "cable") {
             let item = l["item"].as_str().unwrap_or_default().to_ascii_uppercase();
             let of_kind: Vec<&super::El> =
-                els.iter().filter(|e| e.category == category && (level.is_empty() || e.level.eq_ignore_ascii_case(&level))).collect();
+                els.iter().filter(|e| e.category == category && (level.is_empty() || on_level(&e.handle.hex(), &level))).collect();
             let named: Vec<&&super::El> = of_kind.iter().filter(|e| !e.system.is_empty() && item.contains(&e.system.to_ascii_uppercase())).collect();
             elems = if named.is_empty() { of_kind.iter().map(|e| e.handle.hex()).collect() } else { named.iter().map(|e| e.handle.hex()).collect() };
             elems.truncate(MAX_LINE_ELEMENTS);
+        }
+        // Every line on one of the model's levels: still none, its elements' one level, else
+        // the unassigned group (counted), never a raw name or a blank.
+        if resolved.is_none() {
+            level = one_level(&info, &elems).unwrap_or_else(|| UNASSIGNED_LEVEL.to_string());
         }
         let system = elems
             .iter()
@@ -311,6 +338,29 @@ fn wall_size(e: &cadaddy_doc::Entity, lo: [f64; 3], hi: [f64; 3], upf: f64) -> (
     }
     let ok = |v: f64| if v.is_finite() && v > 0.0 { v } else { 0.0 };
     (ok(len / upf), ok(height))
+}
+
+/// The model's name of a level a line or an element names (Q6271): the spec's level it names in
+/// any form (`2`, `L2`, `SECOND FLOOR` find `Level 2`), else a level built elements stand on as
+/// written; none for a blank or a level the model has no such name for.
+fn level_name(sp: &cadaddy_walk3d::BuildingSpec, on_elements: &BTreeSet<String>, name: &str) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    if let Some(l) = sp.level(name) {
+        return Some(l.name.clone());
+    }
+    on_elements.iter().find(|l| l.eq_ignore_ascii_case(name)).cloned()
+}
+
+/// The one level `elems` are all on (elements of no level aside), if there is one.
+fn one_level(info: &BTreeMap<String, (String, String, String)>, elems: &[String]) -> Option<String> {
+    let on: BTreeSet<&str> = elems.iter().filter_map(|h| info.get(h)).map(|(lv, _, _)| lv.as_str()).filter(|lv| !lv.is_empty()).collect();
+    match on.len() {
+        1 => on.into_iter().next().map(str::to_string),
+        _ => None,
+    }
 }
 
 /// Wall lines for the levels whose built walls the BOM has no wall line for (walls built from the
@@ -432,6 +482,12 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         }))
         .collect();
     let mut out = json!({"lines": lines, "totals": totals, "levels": levels, "group_by": group_by, "revision": revision});
+    // The work on no one level of the model, counted (Q6271).
+    let unassigned: Vec<&Value> = lines.iter().filter(|l| l["level"] == UNASSIGNED_LEVEL).collect();
+    if !unassigned.is_empty() {
+        let elements: u64 = unassigned.iter().filter_map(|l| l["element_count"].as_u64()).sum();
+        out["unassigned_level"] = json!({"level": UNASSIGNED_LEVEL, "lines": unassigned.len(), "elements": elements});
+    }
     if let Some(b) = &before {
         out["changes"] = diff(b, &now);
     }

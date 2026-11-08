@@ -11,6 +11,7 @@ mod dwg_active_layout;
 mod dwg_anonymous_block_names;
 mod dwg_ctrl_chars;
 mod dwg_damaged;
+mod dwg_dim_null_block;
 mod dwg_dim_value;
 mod dwg_hatch_assoc_keep;
 mod dwg_header_vars;

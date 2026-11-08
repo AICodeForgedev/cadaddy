@@ -33,6 +33,8 @@ lopdf = { version = "0.45", default-features = false }
 quick-xml = { workspace = true }
 
 [dev-dependencies]
+# The bytes a save holds at most (a counting global allocator; tests/big_save_memory.rs).
+cadaddy-memcount = { workspace = true }
 # Reads CADaddy's DWG output as written (tests only; the same version as cadaddy-dwg's).
 acadrust = "0.6.5"
 tiny-skia = { workspace = true }

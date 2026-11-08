@@ -20,7 +20,7 @@ const MAX_ROWS: usize = 100_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD_TAKEOFF, "Automation Takeoff", run_takeoff).long().params(
-        "{format?: csv|xlsx (the file's kind; default: the path's extension, else csv), path?: file to write (.csv or .xlsx; added when the name has none), force?: bool (replace an existing file; otherwise it is refused)} → {source: model|drawing, command: bim.takeoff|takeoff, title, columns, rows: [[cell]], total_rows, shown, totals, levels?, by_trade?, note?, path?, format?}: the quantities the drawing holds as one table — with a built BIM model the model's takeoff per level, trade and type (bim.takeoff), otherwise the 2D takeoff by layer (takeoff)",
+        "{format?: csv|xlsx (the file's kind; default: the path's extension, else csv), path?: file to write (.csv or .xlsx; added when the name has none), force?: bool (replace an existing file; otherwise it is refused)} → {source: model|drawing, command: bim.takeoff|takeoff, title, columns, rows: [[cell]], total_rows, shown, totals, levels?, unassigned_level?: {level, lines, elements}, by_trade?, note?, path?, format?}: the quantities the drawing holds as one table — with a built BIM model the model's takeoff per level, trade and type (bim.takeoff), otherwise the 2D takeoff by layer (takeoff)",
     )]
 }
 
@@ -87,6 +87,9 @@ fn model_table(s: &mut Session) -> Result<Table> {
     let mut extra = serde_json::Map::new();
     extra.insert("totals".into(), r["totals"].clone());
     extra.insert("levels".into(), r["levels"].clone());
+    if r.get("unassigned_level").is_some() {
+        extra.insert("unassigned_level".into(), r["unassigned_level"].clone());
+    }
     extra.insert("by_trade".into(), json!(by_trade));
     Ok(Table { source: "model", command: "bim.takeoff", title: "Model Takeoff".into(), columns, rows, extra })
 }

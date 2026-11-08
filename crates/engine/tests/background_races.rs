@@ -26,6 +26,10 @@ fn hooks() {
     cadaddy_engine::cmd::file::set_write_as(|d, n, o| {
         cadaddy_io::write_with(d, n, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
+    // DXF saves are written as they are made, as the app writes them.
+    cadaddy_engine::cmd::file::set_write_streamed(|d, n, o, open| {
+        cadaddy_io::write_streamed(d, n, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }, open).map_err(|e| e.to_string())
+    });
 }
 
 fn draw(s: &mut Session) {

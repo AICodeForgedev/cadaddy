@@ -452,6 +452,10 @@ pub struct GuidedJob {
     /// The specification sections the build read (`bim.products`' `sections_read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spec_sections_read: Vec<String>,
+    /// The drawing sheets the project manual makes a division's specification (`DIVISION 26 --
+    /// ELECTRICAL: Refer Sheet E4.1`): read as specification text, never as plans.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spec_sheets: Vec<super::products::DivisionSheet>,
     /// The job goes on without a specification, as answered ("none"): it doesn't look again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub specs_declined: bool,
@@ -714,7 +718,7 @@ const FRAME_RULE_SHARE: f64 = 0.25;
 
 /// Each sheet's frame ([`cadaddy_mepfix::sheet_facts::sheet_frame`]): its long straight lines
 /// (one pass over the drawing), then its border and title block.
-fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mepfix::sheet_facts::SheetFrame> {
+pub(crate) fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mepfix::sheet_facts::SheetFrame> {
     use cadaddy_doc::EntityKind;
     use cadaddy_geom::Vec2;
     let shortest =
@@ -902,6 +906,7 @@ impl GuidedJob {
             specs_found: None,
             specs_how: Vec::new(),
             spec_sections_read: Vec::new(),
+            spec_sheets: Vec::new(),
             specs_declined: false,
             cost_db: None,
             submittal_types: Vec::new(),
@@ -1148,7 +1153,7 @@ fn run_import(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 /// sheet (number, title, discipline — never the file name); the same sheet in several files is one
 /// entry; plans carry the level their titles name. Asks when a discipline or level is unsure.
 fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
-    let classified = s.execute("printset.classify", &json!({}))?;
+    let mut classified = s.execute("printset.classify", &json!({}))?;
 
     // The current copy of every sheet, with its file and page, for the stages that import them.
     let sheets_result = s.execute("printset.sheets", &json!({"current": true}))?;
@@ -1161,6 +1166,11 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         "level_warnings": classified.get("level_warnings"),
         "number_conflicts": classified.get("number_conflicts"),
     }));
+
+    // The project manual (Q6168): found, or asked for. The sheets it makes a division's
+    // specification are no plans (Q6295).
+    look_for_specs(s, job, true);
+    mark_spec_sheets(s, job, &mut classified);
 
     // MUST 1: Check for empty results.
     // The index: one entry per real sheet (questions are asked once per sheet, not per copy).
@@ -1347,7 +1357,7 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(|l| l.get("name").and_then(Value::as_str)).map(str::to_string).collect())
             .unwrap_or_default();
-        let uncertain = |sh: &&Value| matches!(sh.get("level_source").and_then(Value::as_str), Some("default" | "ask"));
+        let uncertain = |sh: &&Value| matches!(sh.get("level_source").and_then(Value::as_str), Some("default" | "ask")) && !is_spec_sheet(sh);
         for sheet in sheets.iter().filter(uncertain).take(MAX_QUESTIONS_PER_STAGE) {
             let q = plan_level_question(job, sheet, &level_codes);
             job.add_question_to_worklist(&q);
@@ -1362,9 +1372,6 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(ref sheets) = sheets_vec {
         check_missing_trade_plans(sheets, job);
     }
-
-    // The project manual (Q6168): found, or asked for.
-    look_for_specs(s, job, true);
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
     Ok(classified)
@@ -1980,6 +1987,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let mut plan_sheets: Vec<&Value> = sheet_arr
         .iter()
         .filter(current)
+        .filter(|sh| !is_spec_sheet(sh))
         .filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan" | "rcp") || rcp_title(sh) || legend_title(sh))
         .collect();
     // The index's level (a plan whose title names none was given one) over the page's own.
@@ -2011,7 +2019,8 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     };
     let level_rank = |l: &str| (l.is_empty(), l == "R", l.parse::<u32>().unwrap_or(u32::MAX), l.to_string());
     plan_sheets.sort_by_key(|sh| level_rank(&level_of(sh)));
-    let mut all: Vec<&Value> = if plan_sheets.is_empty() { sheet_arr.iter().filter(current).collect() } else { plan_sheets };
+    let mut all: Vec<&Value> =
+        if plan_sheets.is_empty() { sheet_arr.iter().filter(current).filter(|sh| !is_spec_sheet(sh)).collect() } else { plan_sheets };
     // A several-view sheet (3RD and 4TH FLOOR PLANS) is one entry per view but one page:
     // import each page once, with its lowest level.
     let page_of = |sh: &Value| sh.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1);
@@ -4511,7 +4520,10 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     };
 
     // ── Secondary: schedules.read for device marks in schedule tables ──
-    match s.execute("schedules.read", &json!({})) {
+    // Each sheet's frame goes with it: its title block and border are never schedule rows.
+    let frames: Vec<Value> = job.sheet_regions.iter().map(|r| json!({"rect": r.rect, "area": r.area, "title_block": r.title_block})).collect();
+    let params = if frames.is_empty() { json!({}) } else { json!({"sheets": frames}) };
+    match s.execute("schedules.read", &params) {
         Ok(v) => {
             if let Some(items) = v.get("items").and_then(Value::as_array) {
                 total_items += items.len();
@@ -5433,7 +5445,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // A typical room's plan's pipes and ducts (ENLARGED GUESTROOM - SANITARY): into each
                 // room of its type, as its devices are.
                 let lost: Vec<cadaddy_walk3d::MepRun> = lost_runs.iter().map(|(_, _, r)| r.clone()).collect();
-                let typical = if lost.is_empty() { StampedRuns::default() } else { stamp_typical_runs(s.doc()?, job, &sp.mep.runs, &lost) };
+                let typical = if lost.is_empty() { StampedRuns::default() } else { stamp_typical_runs(s.doc()?, job, &sp, &lost) };
                 for ((key, ft, _), taken) in lost_runs.iter().zip(typical.taken.iter().copied().chain(std::iter::repeat(false))) {
                     if !taken {
                         let e = unplaced.entry(key.clone()).or_default();
@@ -5821,11 +5833,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The devices stage's devices, on their levels (bspec.draft started a new spec), before the
     // build: it makes each one an element carrying what was read about it (Q6002).
     // The plumbing fixtures the plumbing plans tag (named by the set's fixture schedule) go in
-    // with the devices: placed by their sheets the same way.
-    let schedule = if job.sheet_spans.iter().any(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sp.sheet).eq_ignore_ascii_case("P")) {
-        plumbing_schedule(s.doc()?, job)
-    } else {
-        None
+    // with the devices: placed by their sheets the same way. The schedule may be on any trade's
+    // sheet. What was found, for the finding when piped floors get no fixtures.
+    let (schedule, schedule_pages) = plumbing_schedule(s.doc()?, job);
+    let mut fixtures_read = match &schedule {
+        Some(sch) => format!("the plumbing fixture schedule lists {} tags", sch.rows.len()),
+        None => format!("no plumbing fixture schedule was found ({schedule_pages} pages looked at)"),
     };
     // The typical rooms' plans' marks the device reading left (symbols drawn loose, circuit labels
     // and switch designations no read device took): devices of the job's like the rest, so they
@@ -5859,12 +5872,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(sch) = &schedule {
         let fixtures = plumbing_fixtures(s.doc()?, job, sch);
         progress_line(&format!("  plumbing fixture schedule: {} tags; fixtures the plumbing plans tag: {}", sch.rows.len(), fixtures.len()));
+        fixtures_read = format!("{fixtures_read}; the plumbing plans ({} sheets) tag {} of them", plumbing_sheets(job).len(), fixtures.len());
         for f in &fixtures {
             fate(job, &f.handle, MarkFate::object("plumbing fixture", &format!("a tag the plumbing fixture schedule lists ({})", f.tag)));
         }
         all_devices.extend(fixtures);
     }
-    if schedule.is_some() || job.sheet_spans.iter().any(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sp.sheet).eq_ignore_ascii_case("P")) {
+    if schedule.is_none() {
+        progress_line(&format!("  plumbing fixture schedule: none found on {schedule_pages} pages looked at"));
+    }
+    if schedule.is_some() || !plumbing_sheets(job).is_empty() {
         let stacks = plumbing_stacks(s.doc()?, job);
         if !stacks.is_empty() {
             progress_line(&format!("  waste and vent stacks the plumbing plans letter: {}", stacks.len()));
@@ -6866,6 +6883,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     result["scope"] = scope_summary;
+    // Foreign pipe and duct out of electrical gear's dedicated space (NEC 110.26(E)(1)): what the
+    // plans run through it the build offset past the gear's side as the field installs it, the
+    // drawn route kept on the run beside the corrected one.
+    gear_space_finding(job, &result["gearSpace"], "");
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
     // Each sheet's registration onto its level's plan: how, the transform and its error or
@@ -7122,6 +7143,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             if let Ok((sp, _)) = super::bspec::current(s, "bim_build") {
                 let c = super::plumbing::connect(s.doc_mut()?, &sp);
                 progress_line(&format!("  plumbing fixtures connected to their lines: {c}"));
+                fixtureless_finding(job, &c, &fixtures_read);
                 result["plumbing"] = c;
             }
         }
@@ -7887,6 +7909,94 @@ fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Do
 
 /// The specifications the job reads: those given, else those it found ([`look_for_specs`]; a
 /// job from before the search looks now, by name only).
+/// Whether a sheet of the index is a specification printed on the drawings (by its title, or
+/// made one by the project manual: [`mark_spec_sheets`]).
+fn is_spec_sheet(sh: &Value) -> bool {
+    sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str) == Some(SPEC_SHEET)
+}
+
+/// The sheet type of a specification printed on the drawings.
+const SPEC_SHEET: &str = "specification";
+
+/// A sheet number's key for matching (`EL-4.1` is `EL41`).
+fn sheet_match_key(n: &str) -> String {
+    let base = n.split('/').next().unwrap_or(n);
+    base.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase()
+}
+
+/// The sheets of `index` (`{sheets: [...]}`) the manual makes a division's specification:
+/// typed [`SPEC_SHEET`] with the division they speak for. The numbers marked.
+pub(crate) fn apply_spec_sheets(pointers: &[super::products::DivisionSheet], index: &mut Value) -> Vec<String> {
+    let mut marked = Vec::new();
+    let Some(sheets) = index.get_mut("sheets").and_then(Value::as_array_mut) else { return marked };
+    for sh in sheets.iter_mut() {
+        let number = sh.get("number").and_then(Value::as_str).unwrap_or("").to_string();
+        let Some(d) = pointers.iter().find(|d| sheet_match_key(&d.sheet) == sheet_match_key(&number)) else { continue };
+        if let Some(o) = sh.as_object_mut() {
+            o.insert("type".into(), json!(SPEC_SHEET));
+            o.insert("spec_division".into(), json!(format!("{} {}", d.division, d.title).trim()));
+            o.insert("level".into(), json!(""));
+            o.remove("levels");
+            o.remove("level_source");
+        }
+        if !marked.contains(&number) {
+            marked.push(number);
+        }
+    }
+    marked
+}
+
+/// The project manual's divisions that point to drawing sheets for their specification (`Refer
+/// Sheet E4.1`): those sheets are typed specification in the job's sheet lists, so they are read
+/// as their division's specification after the build and never as plans (Q6295).
+fn mark_spec_sheets(s: &mut Session, job: &mut GuidedJob, classified: &mut Value) {
+    let specs = job_specs(job);
+    job.spec_sheets = if specs.is_empty() { Vec::new() } else { super::products::manual_division_sheets(&specs) };
+    if job.spec_sheets.is_empty() {
+        return;
+    }
+    let mut marked = apply_spec_sheets(&job.spec_sheets, classified);
+    for v in [job.sheets.as_mut(), job.index.as_mut()].into_iter().flatten() {
+        for n in apply_spec_sheets(&job.spec_sheets, v) {
+            if !marked.contains(&n) {
+                marked.push(n);
+            }
+        }
+    }
+    let said: Vec<String> = job.spec_sheets.iter().map(|d| format!("Division {} {} → sheet {}", d.division, d.title, d.sheet)).collect();
+    let missing: Vec<&str> = job
+        .spec_sheets
+        .iter()
+        .filter(|d| !marked.iter().any(|m| sheet_match_key(m) == sheet_match_key(&d.sheet)))
+        .map(|d| d.sheet.as_str())
+        .collect();
+    let line = format!(
+        "job: the specification points {} to the drawings: {} read as specifications, not plans{}",
+        said.join("; "),
+        if marked.is_empty() { "none of those sheets is in the set, so none is".to_string() } else { marked.join(", ") },
+        if missing.is_empty() { String::new() } else { format!(" (not in the set: {})", missing.join(", ")) }
+    );
+    report_progress(s, json!({"step": "spec_sheets", "sheets": marked}), &line);
+    s.echo(line);
+    job.audit("spec_sheets", "pipeline", None, Some(StageName::Classify), Some(json!({"pointers": job.spec_sheets, "marked": marked})));
+}
+
+/// The specification sheets' pages for `bim.products` (`[{number, file, page}]`): each sheet the
+/// manual points a division to, where the set has it.
+fn spec_sheet_pages(job: &GuidedJob) -> Vec<Value> {
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    job.spec_sheets
+        .iter()
+        .filter_map(|d| {
+            let c =
+                classified.iter().find(|c| sheet_match_key(c.get("number").and_then(Value::as_str).unwrap_or("")) == sheet_match_key(&d.sheet))?;
+            let file = c.get("file").and_then(Value::as_str)?;
+            let page = c.get("page").and_then(Value::as_u64).unwrap_or(1);
+            Some(json!({"number": d.sheet, "file": set_file_path(&job.pdfs_path, file).to_string_lossy(), "page": page}))
+        })
+        .collect()
+}
+
 fn job_specs(job: &GuidedJob) -> Vec<String> {
     if !job.specs.is_empty() {
         return job.specs.clone();
@@ -8002,7 +8112,7 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     if specs.is_empty() && job.submittals.is_empty() {
         return;
     }
-    let v = match s.execute("bim.products", &json!({"specs": specs})) {
+    let v = match s.execute("bim.products", &json!({"specs": specs, "sheets": spec_sheet_pages(job)})) {
         Ok(v) => v,
         Err(e) => {
             job.add_finding(
@@ -8019,7 +8129,8 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     };
     job.spec_sections_read =
         v.get("sections_read").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).take(2_000).collect();
-    if !specs.is_empty() && job.spec_sections_read.is_empty() {
+    let product_sections = v.get("product_sections").and_then(Value::as_u64).unwrap_or(0);
+    if !specs.is_empty() && product_sections == 0 {
         let unread: Vec<String> = v
             .get("unread")
             .and_then(Value::as_array)
@@ -8043,8 +8154,12 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         );
     }
     let line = format!(
-        "  product data: {} spec sections read, {} with products ({} requirements, kinds {}); records on {} elements; by kind {}",
+        "  product data: {} spec sections read ({} of the product divisions; {} from drawing sheets), {} with products ({} requirements, kinds {}); records on {} elements; by kind {}",
         job.spec_sections_read.len(),
+        product_sections,
+        v.get("division_sheets")
+            .and_then(Value::as_array)
+            .map_or(0, |a| a.iter().filter(|d| d.get("read").and_then(Value::as_bool) == Some(true)).count()),
         v.get("sections").and_then(Value::as_array).map_or(0, Vec::len),
         v.get("requirements").and_then(Value::as_u64).unwrap_or(0),
         v.get("kinds_specified").map(Value::to_string).unwrap_or_default(),
@@ -14005,6 +14120,69 @@ fn infer_missing_water(
     Value::Object(out)
 }
 
+/// The pipe and duct of `sp` (the step's spec, which it stores) through the dedicated space of
+/// the gear `tags` names, laid out or moved after the build: offset past it
+/// ([`super::gearspace::clear_built_of`]), the drawn route kept, their old pieces taken out and
+/// the runs built again; the job's finding says so.
+fn gear_space_after_layout(s: &mut Session, job: &mut GuidedJob, sp: &mut cadaddy_walk3d::BuildingSpec, tags: &BTreeSet<String>) -> Result<()> {
+    if tags.is_empty() {
+        return Ok(());
+    }
+    let c = super::gearspace::clear_built_of(s.doc()?, sp, Some(tags));
+    if !c.changed.is_empty() {
+        let olds: Vec<String> = c.changed.iter().map(|(_, b)| format!("{b}/")).collect();
+        let d = s.doc_mut()?;
+        let stale: Vec<cadaddy_doc::Handle> = d
+            .model
+            .iter()
+            .filter(|e| super::bimlook::made_tag(e, "mepid").is_some_and(|id| olds.iter().any(|b| id.starts_with(b.as_str()))))
+            .map(|e| e.handle)
+            .collect();
+        for h in &stale {
+            d.model.remove(*h);
+        }
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+        let runs: Vec<cadaddy_walk3d::MepRun> = c.changed.iter().filter_map(|(i, _)| sp.mep.runs.get(*i).cloned()).collect();
+        build_runs(s, sp, runs, &BTreeSet::new())?;
+    }
+    gear_space_finding(job, &c.json(), " (gear laid out or moved after the build)");
+    Ok(())
+}
+
+/// The job's finding of what the build ran through electrical gear's dedicated space (its
+/// `gearSpace` report, [`super::gearspace::Cleared::json`]): how many runs, how many offset.
+fn gear_space_finding(job: &mut GuidedJob, g: &Value, when: &str) {
+    let n = |k: &str| g[k].as_u64().map_or(0, |v| usize::try_from(v).unwrap_or(usize::MAX));
+    let (found, corrected) = (n("found"), n("corrected"));
+    if found == 0 {
+        return;
+    }
+    let list = |k: &str| g[k].as_array().map(|a| a.iter().filter_map(Value::as_str).take(20).collect::<Vec<_>>().join("; ")).unwrap_or_default();
+    let (moved, left) = (list("moved"), list("left"));
+    progress_line(&format!(
+        "  pipe and duct through gear's dedicated space{when}: {corrected} of {found} runs offset past the gear ({} ft longer, {} joined runs moved with them); left: {left}",
+        g["extra_ft"], g["joined_moved"]
+    ));
+    let ru = super::gearspace::rules();
+    job.add_conflict(
+        StageName::BimBuild,
+        &format!(
+            "{found} pipe or duct runs drawn through electrical gear's dedicated space{when} ({}): {corrected} offset past the gear, the drawn route kept beside",
+            ru.rule
+        ),
+        &format!(
+            "{}. Offset: {}.{}",
+            ru.basis,
+            if moved.is_empty() { "none" } else { moved.as_str() },
+            if left.is_empty() { String::new() } else { format!(" Still open: {left}") }
+        ),
+        2,
+        vec!["Check each offset against the plans; a crossing left open needs the run moved off the gear".into()],
+        found,
+        corrected,
+    );
+}
+
 /// The fill-in pass's waste, vent and duct (Q6216, [`super::fillin`]): on each floor with
 /// plumbing fixtures, each fixture's waste and vent line no drain or vent of its floor reaches
 /// (a vent: nor its waste stack), and each air terminal no duct of its system reaches, laid in
@@ -15203,6 +15381,9 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         }
     }
     s.touch();
+    // Pipe and duct through the dedicated space of the gear laid out or moved here: offset past
+    // it as the build does for the rest, those runs built again.
+    gear_space_after_layout(s, job, &mut sp, &new_tags)?;
     // The gear checked against what lands on it; each failure an RFI.
     let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
     let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
@@ -18711,11 +18892,29 @@ fn doc_objects_step(
         }
     }
     // A class nothing marks (or only a note names): the note's count, proposed, at its sheet's
-    // level (else the lowest), where its circuit's panel stands, else in the level's middle.
+    // level (else the lowest a plan gives), where its circuit's panel stands, else in the level's
+    // middle; with no real place on the level, listed for review and not built (Q6290).
     let marked: BTreeSet<String> = found.iter().map(|f| f.kind.clone()).collect();
-    let lowest =
-        sp.levels.iter().min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)).map(|l| l.name.clone()).unwrap_or_else(|| "Level 1".into());
+    let lowest = sp
+        .levels
+        .iter()
+        .min_by(|a, b| {
+            (plan_region_of(a.region).is_none(), a.elevation_ft)
+                .partial_cmp(&(plan_region_of(b.region).is_none(), b.elevation_ft))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|l| l.name.clone())
+        .unwrap_or_else(|| "Level 1".into());
+    let building_extent = sp.levels.iter().filter_map(|l| plan_region_of(l.region)).reduce(|a, b| {
+        [
+            a[0].min(a[2]).min(b[0].min(b[2])),
+            a[1].min(a[3]).min(b[1].min(b[3])),
+            a[0].max(a[2]).max(b[0].max(b[2])),
+            a[1].max(a[3]).max(b[1].max(b[3])),
+        ]
+    });
     let mut proposed: Vec<String> = Vec::new();
+    let mut proposed_not_placed: Vec<Value> = Vec::new();
     for (kind, (n, via, number, level, cite)) in &named {
         let Some(class) = dob::class_by_kind(kind) else { continue };
         if marked.contains(kind) || already.contains_key(kind) || existing.iter().any(|(k, ty, _, _, _)| dob::is_class(class, k, ty)) {
@@ -18728,18 +18927,20 @@ fn doc_objects_step(
         }
         let level = if level.is_empty() { lowest.clone() } else { level.clone() };
         let pc = circuit_of(cite, &panels);
-        let at = pc
+        let beside_panel = pc
             .as_ref()
             .and_then(|(p, _)| sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(p) && same_level_name(&e.level, &level)))
-            .map(|e| Vec2::new(e.max[0] + upf, (e.min[1] + e.max[1]) / 2.0))
-            .or_else(|| {
-                sp.levels
-                    .iter()
-                    .find(|l| same_level_name(&l.name, &level))
-                    .and_then(|l| l.region)
-                    .map(|g| Vec2::new((g[0] + g[2]) / 2.0, (g[1] + g[3]) / 2.0))
-            })
-            .unwrap_or(Vec2::ZERO);
+            .map(|e| Vec2::new(e.max[0] + upf, (e.min[1] + e.max[1]) / 2.0));
+        let level_region = sp.levels.iter().find(|l| same_level_name(&l.name, &level)).and_then(|l| l.region);
+        let Some(at) = note_object_at(beside_panel, level_region, building_extent) else {
+            if proposed_not_placed.len() < 200 {
+                proposed_not_placed.push(json!({
+                    "kind": kind, "name": class.name, "count": n, "level": level, "sheet": number, "note": cite,
+                    "why": "no place on its level: the level has no plan region and no panel the note names stands inside the building",
+                }));
+            }
+            continue;
+        };
         for i in 0..*n {
             found.push(Found {
                 kind: kind.clone(),
@@ -19128,6 +19329,20 @@ fn doc_objects_step(
             false,
         );
     }
+    if !proposed_not_placed.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} object(s) only a note names have no place on their level: listed for review, not built", proposed_not_placed.len()),
+            &format!(
+                "the level has no plan region (no plan draws it) and no panel the note names stands inside the building, so there is no position to build them at (a placeholder extent is never one): {}",
+                proposed_not_placed.iter().take(12).map(|v| format!("{} {} ({})", v["count"], v["name"].as_str().unwrap_or(""), v["note"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("; ")
+            ),
+            2,
+            vec!["Place each from the plans of its level, or name the panel it is beside".into()],
+            None,
+            false,
+        );
+    }
     if !rule_only.is_empty() {
         job.add_finding(
             StageName::BimBuild,
@@ -19174,11 +19389,37 @@ fn doc_objects_step(
     ));
     result["doc_objects"] = json!({
         "built": total, "by_kind": by_kind, "connection_boxes": boxes, "marks_read": marks_read, "already_in_model": already,
-        "proposed": proposed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
+        "proposed": proposed, "proposed_not_placed": proposed_not_placed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
         "sheets": read_by_sheet, "legend_rows": legend_used, "unregistered": unregistered, "tags_of_other_schedules": of_other_schedules,
         "notes_naming": named.iter().map(|(k, (n, via, sh, _, cite))| json!({"kind": k, "count": n, "via": via, "sheet": sh, "note": cite})).collect::<Vec<_>>(),
     });
     Ok(())
+}
+
+/// A level's plan region when it is a place in the building: finite, with area, and not a
+/// placeholder far off every sheet (the no-plan region a level only the MEP plans give takes, an
+/// empty extent) (Q6290).
+fn plan_region_of(g: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    g.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8) && r[0] != r[2] && r[1] != r[3])
+}
+
+/// Where an object only a note names goes: beside its circuit's panel when that is a place on
+/// the level (inside the level's plan region; on a level with none, inside the building's
+/// extent), else the middle of the level's plan region. `None` when the level gives no place:
+/// a placeholder or empty extent is never a position, and the origin is no fallback (Q6290).
+fn note_object_at(
+    beside_panel: Option<cadaddy_geom::Vec2>,
+    level_region: Option<[f64; 4]>,
+    building: Option<[f64; 4]>,
+) -> Option<cadaddy_geom::Vec2> {
+    let holds = |g: [f64; 4], p: cadaddy_geom::Vec2| {
+        p.x.is_finite() && p.y.is_finite() && p.x >= g[0].min(g[2]) && p.x <= g[0].max(g[2]) && p.y >= g[1].min(g[3]) && p.y <= g[1].max(g[3])
+    };
+    let level = plan_region_of(level_region);
+    let footprint = level.or_else(|| plan_region_of(building));
+    beside_panel
+        .filter(|p| footprint.is_some_and(|g| holds(g, *p)))
+        .or_else(|| level.map(|g| cadaddy_geom::Vec2::new((g[0] + g[2]) / 2.0, (g[1] + g[3]) / 2.0)))
 }
 
 /// The panel and circuit a note names (`… CIRCUIT LA-12`, `PANEL LA CKT 9`), by the panel
@@ -20220,7 +20461,6 @@ fn build_new_mep(
     runs: Vec<cadaddy_walk3d::MepRun>,
     new_equipment: &BTreeSet<String>,
 ) -> crate::Result<Vec<cadaddy_doc::Handle>> {
-    use cadaddy_geom::Vec2;
     for name in runs.iter().map(|r| r.system.clone()).collect::<BTreeSet<_>>() {
         if !sp.mep.systems.iter().any(|y| y.name == name) {
             sp.mep.systems.push(cadaddy_walk3d::MepSystem {
@@ -20237,6 +20477,18 @@ fn build_new_mep(
     }
     sp.mep.runs.extend(runs.iter().cloned());
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    build_runs(s, &sp, runs, new_equipment)
+}
+
+/// `runs` (and the equipment `new_equipment` names) of `sp` built into the model after its
+/// build, moved as the build moved their levels to stack them. The handles made.
+fn build_runs(
+    s: &mut Session,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    runs: Vec<cadaddy_walk3d::MepRun>,
+    new_equipment: &BTreeSet<String>,
+) -> crate::Result<Vec<cadaddy_doc::Handle>> {
+    use cadaddy_geom::Vec2;
     let offsets: BTreeMap<String, Vec2> = {
         let d = s.doc()?;
         let mut m = BTreeMap::new();
@@ -20250,7 +20502,7 @@ fn build_new_mep(
     let d = s.doc_mut()?;
     let before: BTreeSet<cadaddy_doc::Handle> = d.model.handles().into_iter().collect();
     if !new_equipment.is_empty() {
-        let _ = super::mep::build_equipment(d, &sp, Some(new_equipment));
+        let _ = super::mep::build_equipment(d, sp, Some(new_equipment));
     }
     let mut part = sp.clone();
     part.mep.runs = runs;
@@ -21589,9 +21841,17 @@ fn typical_basis(sheet: &str, title: &str, room: &str) -> String {
 /// names a room type, into every room of that type at the same place in the room, as their devices
 /// are ([`stamp_typical_rooms`]). A room the floor's own plans already run that system through
 /// (`placed`, in the model's coordinates) is left alone: no second count.
-fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadaddy_walk3d::MepRun], lost: &[cadaddy_walk3d::MepRun]) -> StampedRuns {
+fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, sp: &cadaddy_walk3d::BuildingSpec, lost: &[cadaddy_walk3d::MepRun]) -> StampedRuns {
     let mut out = StampedRuns { taken: vec![false; lost.len()], ..StampedRuns::default() };
-    let rooms = job_rooms(job);
+    let placed = &sp.mep.runs;
+    // Each room on its level as the spec names it (Q6271): the rooms stage may say `2` for
+    // `Level 2`; a copy keeps the spec's name, and the floor's runs are found by it.
+    let mut rooms = job_rooms(job);
+    for (_, level, _, _) in &mut rooms {
+        if let Some(l) = sp.level(level) {
+            level.clone_from(&l.name);
+        }
+    }
     let (types, vocabulary) = room_types(&rooms);
     if types.is_empty() {
         return out;
@@ -21612,7 +21872,7 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
     // The systems the floor's plans run through each room already.
     let run_through = |level: &str, outline: &[cadaddy_geom::Vec2], system: &str| {
         placed.iter().any(|q| {
-            q.level == level
+            sp.level(&q.level).map_or(q.level.as_str(), |l| l.name.as_str()).eq_ignore_ascii_case(level)
                 && q.system == system
                 && q.points.iter().any(|p| cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(p[0], p[1])))
         })
@@ -22068,16 +22328,160 @@ fn arch_plan_spans(job: &GuidedJob) -> Vec<(u64, u64, String)> {
         .collect()
 }
 
-/// The set's plumbing fixture schedule: on a plumbing sheet that isn't a plan, else on a plan.
-fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule> {
-    if let Some(s) = non_plan_pages(job, "P").iter().find_map(|(_, page)| cadaddy_mepfix::fixture_schedule::read(page)) {
-        return Some(s);
-    }
-    job_sheet_refs(job)
+/// Levels listed by name in the finding on piped floors with no fixtures, at most.
+const MAX_FIXTURELESS_LISTED: usize = 12;
+
+/// The finding on the storeys whose plans draw water or sanitary pipe and that got no plumbing
+/// fixture (`fixtureless_levels` of [`super::plumbing::connect`]'s report): pipe that serves
+/// fixtures and none built is a gap the job says, never a quiet zero. `read` says what the job
+/// found to build fixtures from (the schedule, the plans' tags).
+fn fixtureless_finding(job: &mut GuidedJob, report: &Value, read: &str) {
+    let Some(levels) = report.get("fixtureless_levels").and_then(Value::as_object).filter(|m| !m.is_empty()) else { return };
+    let fixtures = report.get("fixture_elements").and_then(Value::as_u64).unwrap_or(0);
+    let per: Vec<String> = levels
         .iter()
-        .filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("P"))
+        .take(MAX_FIXTURELESS_LISTED)
+        .map(|(level, by)| {
+            let systems: Vec<String> =
+                by.as_object().into_iter().flatten().map(|(sys, ft)| format!("{sys} {:.0} ft", ft.as_f64().unwrap_or(0.0))).collect();
+            format!("{} ({})", if level.is_empty() { "no level" } else { level }, systems.join(", "))
+        })
+        .collect();
+    let more = levels.len().saturating_sub(MAX_FIXTURELESS_LISTED);
+    let title = if fixtures == 0 {
+        format!("No plumbing fixtures built beside drawn water and sanitary pipe on {} levels", levels.len())
+    } else {
+        format!("{} levels with drawn water or sanitary pipe have no plumbing fixture", levels.len())
+    };
+    progress_line(&format!("  levels with drawn water or sanitary pipe and no plumbing fixture: {}", per.join("; ")));
+    job.add_finding(
+        StageName::BimBuild,
+        &title,
+        &format!(
+            "Drawn pipe that serves fixtures, with no fixture on its level: {}{}. Plumbing fixtures in the model: {fixtures}; {read}",
+            per.join("; "),
+            if more > 0 { format!(" and {more} more") } else { String::new() }
+        ),
+        if fixtures == 0 { 3 } else { 2 },
+        vec![
+            "Check that the plumbing fixture schedule was read (its sheet and title) and that the plumbing plans' fixture tags match its marks"
+                .into(),
+            "Where the plumbing plans tag no fixtures, place them from the architectural plans' fixture symbols".into(),
+        ],
+        None,
+        false,
+    );
+}
+
+/// The job's plumbing sheets (their numbers, upper case, as [`sheet_key`] gives them): the
+/// sheets numbered as plumbing ones, the ones classify gave the plumbing discipline, and the ones
+/// whose title names the plumbing trade (`sheets.title_discipline`): a plumbing plan whose
+/// number was read as another trade's, or that carries no trade letter, is still a plumbing plan.
+fn plumbing_sheets(job: &GuidedJob) -> BTreeSet<String> {
+    let p = |d: &str| d.eq_ignore_ascii_case("P");
+    let mut out: BTreeSet<String> =
+        job.sheet_spans.iter().map(|sp| sheet_key(&sp.sheet)).filter(|k| p(&cadaddy_mepfix::sheet_facts::discipline_of(k))).collect();
+    for c in job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).into_iter().flatten() {
+        let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("");
+        let number = sheet_key(text("number"));
+        if !number.is_empty() && (p(text("discipline")) || infer_discipline_from_title(text("title")).is_some_and(p)) {
+            out.insert(number);
+        }
+    }
+    out.extend(job.sheet_regions.iter().filter(|r| p(&r.discipline)).map(|r| sheet_key(&r.number)));
+    out
+}
+
+/// The set's plumbing fixture schedule: on a plumbing sheet that isn't a plan, else on a
+/// plumbing plan, else under a plumbing fixture schedule's title on any other trade's sheet
+/// (`schedules.plumbing_fixture_titles`: an architectural sheet's schedules, a combined schedules
+/// sheet, a plumbing sheet classify gave another trade's number), loaded or read again from its
+/// file. With the page it is on, its sheet and how many pages were looked at.
+fn find_plumbing_schedule(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+) -> (Option<(cadaddy_mepfix::fixture_schedule::FixtureSchedule, cadaddy_doc::Drawing, String)>, usize) {
+    use cadaddy_mepfix::fixture_schedule as fsch;
+    let plumbing = plumbing_sheets(job);
+    let mut looked = 0usize;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    // The plumbing sheets that aren't plans: the plumbing trade's, then the ones titled as
+    // plumbing sheets under another trade's letter.
+    let mut pages = non_plan_pages(job, "P");
+    pages.extend(pages_where(job, &|number: &str, d: &str, kind: &str, _title: &str| {
+        !kind.contains("plan") && !d.eq_ignore_ascii_case("P") && plumbing.contains(&sheet_key(number))
+    }));
+    for (name, page) in pages {
+        looked += 1;
+        seen.insert(sheet_key(&name));
+        if let Some(s) = fsch::read(&page) {
+            return (Some((s, page, name)), looked);
+        }
+    }
+    // The loaded plumbing sheets, then every other loaded sheet that prints the title.
+    let refs = job_sheet_refs(job);
+    let mut loaded = |r: &&super::printmep::SheetRef| r.view.is_none() && seen.insert(sheet_key(&r.number));
+    for r in refs
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("P") || plumbing.contains(&sheet_key(&r.number)))
+        .filter(|r| loaded(r))
         .take(MAX_LEGEND_SHEETS)
-        .find_map(|r| cadaddy_mepfix::fixture_schedule::read(&super::printmep::sheet_drawing(d, r)))
+    {
+        looked += 1;
+        let sd = super::printmep::sheet_drawing(d, r);
+        if let Some(s) = fsch::read(&sd) {
+            return (Some((s, sd, r.number.clone())), looked);
+        }
+    }
+    let titles: Vec<(u64, cadaddy_geom::Vec2)> = d
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) if t.rotation.abs() < 0.05 && fsch::is_plumbing_title(&t.value) => Some((e.handle.0, t.insert.xy())),
+            _ => None,
+        })
+        .take(MAX_LEGEND_SHEETS * 4)
+        .collect();
+    if !titles.is_empty() {
+        for r in refs.iter().filter(|r| loaded(r)) {
+            let [x0, y0, x1, y1] = r.rect;
+            let here = titles.iter().any(|(h, at)| match r.span {
+                Some((lo, hi)) => *h >= lo && *h < hi,
+                None => at.x >= x0 && at.x <= x1 && at.y >= y0 && at.y <= y1,
+            });
+            if !here {
+                continue;
+            }
+            looked += 1;
+            let sd = super::printmep::sheet_drawing(d, r);
+            if let Some(s) = fsch::read_under_title(&sd) {
+                return (Some((s, sd, r.number.clone())), looked);
+            }
+        }
+    }
+    // The other trades' schedule sheets the drawing doesn't hold, read again from their files.
+    let held: BTreeSet<String> = refs.iter().map(|r| sheet_key(&r.number)).collect();
+    let others = pages_where(job, &|number: &str, _d: &str, kind: &str, title: &str| {
+        let key = sheet_key(number);
+        !held.contains(&key)
+            && !seen.contains(&key)
+            && !kind.contains("plan")
+            && (kind == "schedule" || title.to_ascii_uppercase().contains("SCHEDULE") || fsch::is_plumbing_title(title))
+    });
+    for (name, page) in others {
+        looked += 1;
+        if let Some(s) = fsch::read_under_title(&page) {
+            return (Some((s, page, name)), looked);
+        }
+    }
+    (None, looked)
+}
+
+/// The set's plumbing fixture schedule ([`find_plumbing_schedule`]), and how many pages were
+/// looked at for it.
+fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule>, usize) {
+    let (found, looked) = find_plumbing_schedule(d, job);
+    (found.map(|(s, _, _)| s), looked)
 }
 
 /// The set's plumbing fixture schedule (as [`plumbing_schedule`] finds it), its sheet and the
@@ -22087,16 +22491,10 @@ pub(crate) fn plumbing_schedule_docs(
     job: &GuidedJob,
 ) -> Option<(cadaddy_mepfix::fixture_schedule::FixtureSchedule, Vec<cadaddy_mepfix::fixture_schedule::ConnectionRow>, String)> {
     use cadaddy_mepfix::fixture_schedule as fsch;
-    let pages = non_plan_pages(job, "P");
-    let found = pages.iter().find_map(|(name, page)| fsch::read(page).map(|s| (s, fsch::read_connections_on(page), name.clone()))).or_else(|| {
-        job_sheet_refs(job).iter().filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("P")).take(MAX_LEGEND_SHEETS).find_map(|r| {
-            let sd = super::printmep::sheet_drawing(d, r);
-            fsch::read(&sd).map(|s| (s, fsch::read_connections_on(&sd), r.number.clone()))
-        })
-    });
-    let (schedule, mut connections, sheet) = found?;
+    let (schedule, page, sheet) = find_plumbing_schedule(d, job).0?;
+    let mut connections = fsch::read_connections_on(&page);
     if connections.is_empty() {
-        connections = pages.iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default();
+        connections = non_plan_pages(job, "P").iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default();
     }
     Some((schedule, connections, sheet))
 }
@@ -22116,12 +22514,9 @@ fn plumbing_fixtures(
     schedule: &cadaddy_mepfix::fixture_schedule::FixtureSchedule,
 ) -> Vec<super::readers::ReadDevice> {
     let tags: BTreeSet<&str> = schedule.rows.iter().map(|r| r.tag.as_str()).collect();
-    let spans: Vec<(&str, u64, u64)> = job
-        .sheet_spans
-        .iter()
-        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("P"))
-        .map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi))
-        .collect();
+    let plumbing = plumbing_sheets(job);
+    let spans: Vec<(&str, u64, u64)> =
+        job.sheet_spans.iter().filter(|sp| plumbing.contains(&sheet_key(&sp.sheet))).map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi)).collect();
     // A detail callout's bubble (`7` over `P-7`) names a sheet of the set under its view number: not
     // a fixture, though the schedule has a P-7 and the bubble is the tags' own hexagon.
     let sheet_numbers: BTreeSet<String> = job
@@ -22203,12 +22598,9 @@ fn plumbing_fixtures(
 /// STACK`): each where its leader ends, as an item of kind `plumbing stack` (tag: its size and
 /// words, leg: its system, `SAN` or `V`), placed and laid into the rooms like the fixtures.
 fn plumbing_stacks(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<super::readers::ReadDevice> {
-    let spans: Vec<(&str, u64, u64)> = job
-        .sheet_spans
-        .iter()
-        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("P"))
-        .map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi))
-        .collect();
+    let plumbing = plumbing_sheets(job);
+    let spans: Vec<(&str, u64, u64)> =
+        job.sheet_spans.iter().filter(|sp| plumbing.contains(&sheet_key(&sp.sheet))).map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi)).collect();
     let sheet_of = |h: u64| spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&h)).map(|(s, _, _)| *s);
     let mut texts: Vec<(String, cadaddy_geom::Vec2, f64, &str)> = Vec::new();
     let mut segs: Vec<(cadaddy_geom::Vec2, cadaddy_geom::Vec2, &str)> = Vec::new();
@@ -26131,7 +26523,16 @@ fn specs_report(job: &GuidedJob) -> Value {
     } else {
         "the build reads the specification".to_string()
     };
-    json!({"how": job.specs_how, "paths": paths, "sections_read": job.spec_sections_read, "note": note})
+    // The divisions the manual points to drawing sheets for, and the sheets read as theirs.
+    let sheets: Vec<Value> = job
+        .spec_sheets
+        .iter()
+        .map(|d| {
+            let read = job.spec_sections_read.iter().any(|r| r.ends_with(&format!("(sheet {})", d.sheet)));
+            json!({"division": d.division, "title": d.title, "sheet": d.sheet, "read": read})
+        })
+        .collect();
+    json!({"how": job.specs_how, "paths": paths, "sections_read": job.spec_sections_read, "division_sheets": sheets, "note": note})
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -26841,6 +27242,31 @@ mod ckpt_tests {
 
 #[cfg(test)]
 mod tests {
+    /// The sheets the project manual points a division to are typed specification in the
+    /// job's sheet lists (Q6295): their level goes, and they are no plans to load.
+    #[test]
+    fn the_sheets_a_manual_points_to_are_specifications_not_plans() {
+        use super::*;
+        use crate::cmd::products::DivisionSheet;
+        let pointers = vec![
+            DivisionSheet { division: "26".into(), title: "ELECTRICAL".into(), sheet: "QE-41".into() },
+            DivisionSheet { division: "22".into(), title: "PLUMBING".into(), sheet: "QP41".into() },
+        ];
+        let mut index = json!({"sheets": [
+            {"number": "QE41", "type": "unknown", "level": "1", "level_source": "default"},
+            {"number": "QP41", "type": "cover"},
+            {"number": "QE201", "type": "plan", "level": "1"}
+        ]});
+        let marked = apply_spec_sheets(&pointers, &mut index);
+        assert_eq!(marked, ["QE41", "QP41"]);
+        let sheets = index["sheets"].as_array().unwrap();
+        assert!(is_spec_sheet(&sheets[0]) && is_spec_sheet(&sheets[1]) && !is_spec_sheet(&sheets[2]));
+        assert_eq!(sheets[0]["spec_division"], "26 ELECTRICAL");
+        assert_eq!(sheets[0]["level"], "", "a specification is on no level");
+        assert!(sheets[0].get("level_source").is_none(), "so no level question is asked of it");
+        assert_eq!(sheets[2]["type"], "plan");
+        assert!(apply_spec_sheets(&pointers, &mut json!({})).is_empty());
+    }
 
     #[test]
     fn no_panel_schedule_read_is_a_finding_and_gear_read_says_where_it_looked() {
@@ -29328,6 +29754,42 @@ mod tests {
     }
 
     #[test]
+    fn an_object_only_a_note_names_is_never_built_at_a_placeholder_region() {
+        use cadaddy_geom::Vec2;
+        // A level only the MEP plans give takes a unit square far off every sheet; an empty
+        // extent is inverted or infinite. None of them is a place.
+        let no_plan = [-1.0e9, -1.0e9, -1.0e9 + 1.0, -1.0e9 + 1.0];
+        let empty = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        let level = [100.0, 200.0, 1300.0, 1000.0];
+        let building = Some([0.0, 0.0, 3000.0, 2000.0]);
+        let sane = |p: Option<Vec2>| p.is_none_or(|p| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= 1.0e8 && p.y.abs() <= 1.0e8);
+        // No panel, a placeholder level: listed for review, not built (before Q6290: -1e9).
+        for g in [no_plan, empty, [5.0, 5.0, 5.0, 9.0], [f64::NAN, 0.0, 10.0, 10.0]] {
+            let at = note_object_at(None, Some(g), building);
+            assert!(sane(at), "{g:?} -> {at:?}");
+            assert_eq!(at, None, "{g:?}");
+        }
+        assert_eq!(note_object_at(None, None, building), None);
+        assert_eq!(note_object_at(None, None, None), None);
+        // A real level: its middle; beside the panel when that is on the level.
+        assert_eq!(note_object_at(None, Some(level), building), Some(Vec2::new(700.0, 600.0)));
+        assert_eq!(note_object_at(Some(Vec2::new(400.0, 500.0)), Some(level), building), Some(Vec2::new(400.0, 500.0)));
+        // A panel off the level's plan (or at a sentinel) is no place: the level's middle.
+        for p in [Vec2::new(-1.0e9 + 12.0, -1.0e9), Vec2::new(2500.0, 500.0), Vec2::new(f64::NAN, 1.0)] {
+            assert_eq!(note_object_at(Some(p), Some(level), building), Some(Vec2::new(700.0, 600.0)), "{p:?}");
+        }
+        // A level with no plan: beside its panel only where that is inside the building.
+        assert_eq!(note_object_at(Some(Vec2::new(2500.0, 500.0)), Some(no_plan), building), Some(Vec2::new(2500.0, 500.0)));
+        assert_eq!(note_object_at(Some(Vec2::new(-1.0e9 + 12.0, -1.0e9)), Some(no_plan), building), None);
+        assert_eq!(note_object_at(Some(Vec2::new(2500.0, 500.0)), Some(no_plan), None), None);
+        // The region check itself.
+        assert_eq!(plan_region_of(Some(no_plan)), None);
+        assert_eq!(plan_region_of(Some(empty)), None);
+        assert_eq!(plan_region_of(None), None);
+        assert_eq!(plan_region_of(Some(level)), Some(level));
+    }
+
+    #[test]
     fn a_fit_on_a_few_tags_must_be_one_to_one_and_square() {
         // Many tags: a sheet a little off its printed scale or turned a little.
         assert!(tag_fit_holds(26, 1.0, 0.5));
@@ -29702,6 +30164,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let mut runs = vec![
             run("SA", [[0.0, 0.0], [100.0, 0.0]], [12.0, 10.0], "tag"),
@@ -31152,6 +31615,101 @@ mod tests {
     }
 
     #[test]
+    fn a_plumbing_fixture_schedule_on_another_trades_sheet_names_the_plumbing_plans_tags() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let t = |s: &mut crate::Session, at: [f64; 2], v: &str, h: f64| {
+            s.execute("text", &json!({"at": at, "text": v, "height": h})).unwrap();
+        };
+        // A-601, the architectural schedules sheet: a luminaire schedule (its MARK and FIXTURE
+        // columns read like a fixture schedule's) and, beside it, the plumbing fixture schedule.
+        let a_lo = s.doc().unwrap().handseed;
+        t(&mut s, [100.0, 1000.0], "LIGHT FIXTURE SCHEDULE", 4.0);
+        for (x, v) in [(100.0, "MARK"), (120.0, "FIXTURE"), (170.0, "MANUFACTURER")] {
+            t(&mut s, [x, 990.0], v, 2.0);
+        }
+        for (y, mark, what) in [(985.0, "A", "DOWNLIGHT"), (980.0, "B", "WALL SCONCE")] {
+            t(&mut s, [100.0, y], mark, 2.0);
+            t(&mut s, [118.0, y], what, 2.0);
+            t(&mut s, [168.0, y], "MAKER ONE", 2.0);
+        }
+        t(&mut s, [600.0, 1000.0], "PLUMBING FIXTURE SCHEDULE", 4.0);
+        for (x, v) in [(600.0, "TAG"), (620.0, "FIXTURE"), (670.0, "MANUFACTURER")] {
+            t(&mut s, [x, 990.0], v, 2.0);
+        }
+        for (y, tag, what) in [(985.0, "WC-1", "WATER CLOSET"), (980.0, "LV-1", "LAVATORY")] {
+            t(&mut s, [600.0, y], tag, 2.0);
+            t(&mut s, [618.0, y], what, 2.0);
+            t(&mut s, [668.0, y], "MAKER TWO", 2.0);
+        }
+        let a_hi = s.doc().unwrap().handseed;
+        // P-201, the plumbing plan: its fixtures' tags.
+        for (x, tag) in [(5100.0, "WC-1"), (5300.0, "LV-1"), (5500.0, "WC-1")] {
+            t(&mut s, [x, 100.0], tag, 2.0);
+        }
+        let p_hi = s.doc().unwrap().handseed;
+        let region = |n: &str, discipline: &str, kind: &str, x: f64| SheetRegion {
+            number: n.into(),
+            level: "2".into(),
+            discipline: discipline.into(),
+            kind: kind.into(),
+            rect: [x, 0.0, x + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        job.sheet_regions = vec![region("A-601", "A", "schedule", 0.0), region("P-201", "P", "plan", 5000.0)];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-601".into(), lo: a_lo, hi: a_hi }, SheetSpan { sheet: "P-201".into(), lo: a_hi, hi: p_hi }];
+        let (schedule, _, sheet) = plumbing_schedule_docs(s.doc().unwrap(), &job).expect("the plumbing fixture schedule on A-601");
+        let tags: Vec<(&str, &str)> = schedule.rows.iter().map(|r| (r.tag.as_str(), r.fixture.as_str())).collect();
+        assert_eq!(tags, [("WC-1", "WATER CLOSET"), ("LV-1", "LAVATORY")], "not the luminaire schedule beside it");
+        assert_eq!(sheet, "A-601");
+        let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
+        assert_eq!(found.iter().filter(|f| f.sheet == "P-201").count(), 3, "{found:?}");
+    }
+
+    #[test]
+    fn a_plumbing_plan_under_another_trades_number_is_read_for_its_fixtures_by_its_title() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lo = s.doc().unwrap().handseed;
+        for x in [100.0, 300.0] {
+            s.execute("text", &json!({"at": [x, 100.0], "text": "WC-1", "height": 2.0})).unwrap();
+        }
+        let mid = s.doc().unwrap().handseed;
+        s.execute("text", &json!({"at": [5100.0, 100.0], "text": "WC-1", "height": 2.0})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        // Classify read the plumbing plan's number as a mechanical one; its title says what it is.
+        // The mechanical plan beside it letters the same mark (an equipment tag) and is not read.
+        job.sheets = Some(json!({"sheets": [
+            {"number": "M-201", "title": "SECOND FLOOR PLUMBING PLAN", "discipline": "M", "type": "plan"},
+            {"number": "M-202", "title": "SECOND FLOOR MECHANICAL PLAN", "discipline": "M", "type": "plan"}
+        ]}));
+        job.sheet_spans = vec![SheetSpan { sheet: "M-201".into(), lo, hi: mid }, SheetSpan { sheet: "M-202".into(), lo: mid, hi }];
+        let row =
+            |tag: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture { tag: tag.into(), fixture: "WATER CLOSET".into(), ..Default::default() };
+        let schedule = cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("WC-1")], extent: [0.0; 4], ..Default::default() };
+        let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
+        let sheets: Vec<&str> = found.iter().map(|f| f.sheet.as_str()).collect();
+        assert_eq!(sheets, ["M-201", "M-201"], "{found:?}");
+    }
+
+    #[test]
+    fn piped_levels_with_no_fixture_are_a_job_finding() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        fixtureless_finding(&mut job, &json!({"fixture_elements": 0, "fixtureless_levels": {}}), "x");
+        assert!(job.findings.is_empty(), "no piped level without fixtures: no finding");
+        let report = json!({"fixture_elements": 0, "fixtureless_levels": {"Level 2": {"CW": 120.4, "SAN": 80.0}, "Level 3": {"HW": 40.0}}});
+        fixtureless_finding(&mut job, &report, "no plumbing fixture schedule was found (4 pages looked at)");
+        let f = job.findings.first().expect("a finding");
+        assert!(f.description.contains("No plumbing fixtures") && f.description.contains("2 levels"), "{}", f.description);
+        assert!(f.why.contains("Level 2 (CW 120 ft, SAN 80 ft)") && f.why.contains("no plumbing fixture schedule was found"), "{}", f.why);
+        assert_eq!(f.severity, 3);
+    }
+
+    #[test]
     fn a_lavatory_tagged_with_its_sheets_number_is_a_fixture_and_the_sheets_number_is_not() {
         let mut s = crate::Session::new();
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
@@ -31906,6 +32464,19 @@ mod tests {
     /// none (no second count); a run outside every typical view stays unplaced.
     #[test]
     fn a_typical_rooms_pipe_goes_into_each_room_of_its_type() {
+        typical_rooms_pipe_into_each_room("Level 2");
+    }
+
+    /// A rooms stage that names a room's level another way than the spec (`2` for `Level 2`):
+    /// the stamped copy is on the spec's level (a takeoff would show a phantom level `2`
+    /// otherwise, Q6271), and the floor's own run through a room is still found.
+    #[test]
+    fn a_typical_rooms_pipe_is_on_the_specs_level_when_the_rooms_stage_names_it_otherwise() {
+        typical_rooms_pipe_into_each_room("2");
+    }
+
+    /// Two rooms of the type on `room_level` (the rooms stage's name for the spec's `Level 2`).
+    fn typical_rooms_pipe_into_each_room(room_level: &str) {
         let mut s = crate::Session::new();
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
         // One view per sheet: a 144 x 288 plan, its title over a SCALE line under it.
@@ -31947,7 +32518,7 @@ mod tests {
         job.sheet_regions = vec![SheetRegion { kind: "rcp".into(), ..region("A621", 0.0) }, region("E-6", 4234.0)];
         job.sheet_spans = vec![SheetSpan { sheet: "A621".into(), lo: rcp.0, hi: rcp.1 }, SheetSpan { sheet: "E-6".into(), lo: plan.0, hi: plan.1 }];
         // Two DOUBLE QUEEN rooms on Level 2, the floor plan's own receptacle in the first.
-        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": room_level, "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
         if let Some(st) = job.stage_mut(StageName::Rooms) {
             st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_200.0)]}));
         }
@@ -31969,6 +32540,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         // The sanitary line along the plan's long side; a vent line outside every view.
         let lost = vec![
@@ -31976,8 +32548,13 @@ mod tests {
             run("V", "T", "E-6", vec![[4234.0 + 1500.0, 900.0], [4234.0 + 1600.0, 900.0]]),
         ];
         // The floor's plan already runs SAN through room 202.
-        let placed = vec![run("SAN", "Level 2", "P-2", vec![[10_250.0, 50.0], [10_250.0, 150.0]])];
-        let st = stamp_typical_runs(s.doc().unwrap(), &job, &placed, &lost);
+        let mut sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}, {"name": "Level 2", "elevation_ft": 10, "height_ft": 10}],
+        }))
+        .unwrap();
+        sp.mep.runs = vec![run("SAN", "Level 2", "P-2", vec![[10_250.0, 50.0], [10_250.0, 150.0]])];
+        let st = stamp_typical_runs(s.doc().unwrap(), &job, &sp, &lost);
         assert_eq!(st.taken, vec![true, false]);
         assert_eq!(st.runs.len(), 1, "room 201 only: {:?}", st.report);
         let r = &st.runs[0];
@@ -32051,6 +32628,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             run("SAN", "Level 1"),
@@ -32151,6 +32729,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             // Room 301 as the enlarged plan draws it: waste, vent, and a water line on out to the main.
@@ -32316,6 +32895,7 @@ mod tests {
             slope_in_per_ft: 0.0,
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         };
         let runs = vec![
             // Floor 3 draws room 371's waste and vent; floor 4 only room 471's vent.
@@ -34999,5 +35579,55 @@ mod tests {
         lighting_step(&mut s, &mut job, &[], &mut result).unwrap();
         let again = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
         assert_eq!(again["total"], rfis["total"]);
+    }
+
+    /// A panel the gear step lays out after the build, under a vent already built: the vent is
+    /// offset past it, its drawn route kept, its old piece replaced by the one on its new route.
+    #[test]
+    fn gear_laid_out_after_the_build_has_the_pipe_through_its_space_offset_and_built_again() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let spec = json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+            "mep": {
+                "systems": [{"name": "V", "layer": "P-VENT", "kind": "pipe", "size_in": [2, 0], "bottom_ft": 8.5}],
+                "runs": [{"system": "V", "level": "L1", "points": [[0.0, 48.0], [200.0, 48.0]], "size_in": [2, 0], "bottoms_ft": [8.5], "id": "V1"}]
+            }
+        });
+        s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap_or_else(|e| panic!("{e}"));
+        s.execute("model.build", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        let segments = |s: &crate::Session| -> Vec<cadaddy_doc::props::Props> {
+            let Ok(d) = s.doc() else { panic!("no drawing") };
+            d.model
+                .iter()
+                .filter(|e| super::super::bimlook::made_tag(e, "mepid").is_some_and(|m| m.ends_with("/segment")))
+                .map(|e| cadaddy_doc::props::read(&e.common.xdata))
+                .collect()
+        };
+        assert_eq!(segments(&s).len(), 1);
+        let Ok((mut sp, true)) = super::super::bspec::current(&s, "test") else { panic!("stored spec") };
+        sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+            tag: "PL".into(),
+            kind: "panel".into(),
+            level: "L1".into(),
+            min: [90.0, 44.0],
+            max: [110.0, 48.0],
+            bottom_ft: 4.5,
+            height_ft: 2.0,
+            ..Default::default()
+        });
+        s.doc_mut().unwrap_or_else(|e| panic!("{e}")).building_spec = Some(sp.to_json()).into();
+        let tags: BTreeSet<String> = ["PL".to_string()].into_iter().collect();
+        gear_space_after_layout(&mut s, &mut job, &mut sp, &tags).unwrap_or_else(|e| panic!("{e}"));
+        // The step's own spec holds the correction (it stores it again after).
+        assert!(sp.mep.runs[0].corrections.iter().any(|c| c.key == "route"));
+        let after = segments(&s);
+        assert_eq!(after.len(), 1, "the old piece is gone, the run built once on its new route");
+        assert!(after[0].get("design:route").is_some() && after[0].get("correction:route").is_some(), "{:?}", after[0]);
+        let Ok((sp, true)) = super::super::bspec::current(&s, "test") else { panic!("stored spec") };
+        let r = &sp.mep.runs[0];
+        assert!(r.points.len() > 2 && r.corrections.iter().any(|c| c.key == "route"), "{r:?}");
+        assert!(job.findings.iter().any(|f| f.description.contains("gear laid out or moved after the build")), "{:?}", job.findings);
     }
 }

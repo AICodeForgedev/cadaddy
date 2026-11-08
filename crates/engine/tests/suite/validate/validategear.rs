@@ -1,6 +1,6 @@
 //! E-GEAR-SPACE, E-GEAR-FILL, E-GEAR-SIZE (Q6151) on a made-up one-storey job: an electrical
 //! room (11) west of a storage room (12), a partition between them with a 3 ft door that swings
-//! into 11. In 11: distribution panel DPA on the south wall (a supply duct crosses 7 ft over it),
+//! into 11. In 11: distribution panel DPA on the south wall (a supply duct drawn 7 ft over it),
 //! and panel LPB on the partition beside the door. Panel LPC stands in 12 with 30 in in front of it.
 //! DPA's feeder comes in as four parallel sets of 500 kcmil on main lugs that take two per phase,
 //! through a gutter too small for them; six 2" conduits leave through its top, whose drawn
@@ -139,11 +139,12 @@ fn job_on(spec: Value) -> Session {
 fn screen(s: &mut Session, rules: &[&str]) -> (Value, Vec<Value>) {
     let r = s.execute("validate.prescreen", &json!({"level": "L1", "all": true, "limit": 50, "rules": rules})).unwrap();
     let mut fs: Vec<Value> = r["findings"].as_array().cloned().unwrap_or_default();
-    let mut cursor = r["next"].clone();
+    // The next page's cursor (`next: {cursor}`).
+    let mut cursor = r["next"]["cursor"].clone();
     while let Some(c) = cursor.as_u64() {
         let more = s.execute("validate.prescreen", &json!({"level": "L1", "all": true, "limit": 50, "cursor": c, "rules": rules})).unwrap();
         fs.extend(more["findings"].as_array().cloned().unwrap_or_default());
-        cursor = more["next"].clone();
+        cursor = more["next"]["cursor"].clone();
     }
     (r, fs)
 }
@@ -176,11 +177,23 @@ fn the_gear_rules_are_built_in_and_run_by_the_prescreen() {
 fn working_space_clear_short_and_crossed_by_a_door() {
     let mut s = job();
     let (_, fs) = screen(&mut s, &["E-GEAR-SPACE"]);
-    // DPA faces 14 ft of room: clear, its ceiling 9 ft; the duct 7 ft over it is in its dedicated space.
+    // DPA faces 14 ft of room: clear, its ceiling 9 ft; the duct drawn 7 ft over it, in its
+    // dedicated space, the build offset past its side (its drawn route kept on the run).
     let dp1 = finding(&fs, "E-GEAR-SPACE", "DPA", "working space");
     assert_eq!(dp1["verdict"], "pass", "{dp1}");
     assert_eq!(dp1["measured"]["volts_to_ground"], json!(120.0), "{dp1}");
     assert_eq!(finding(&fs, "E-GEAR-SPACE", "DPA", "headroom")["verdict"], "pass");
+    let ded = finding(&fs, "E-GEAR-SPACE", "DPA", "dedicated space");
+    assert_eq!(ded["verdict"], "pass", "{ded}");
+    let g = s.execute("bspec.get", &json!({})).unwrap();
+    let d1 = &g["spec"]["mep"]["runs"][0];
+    assert_eq!((d1["id"].clone(), d1["corrections"][0]["key"].clone()), (json!("D1"), json!("route")), "{d1}");
+    // The duct put back where it is drawn (no build since): it fails.
+    let mut sp = g["spec"].clone();
+    sp["mep"]["runs"][0]["points"] = json!([[30.0, -20.0], [30.0, 100.0]]);
+    sp["mep"]["runs"][0]["bottoms_ft"] = json!([7.0]);
+    s.execute("bspec.set", &json!({"spec": sp, "replace": true})).unwrap();
+    let (_, fs) = screen(&mut s, &["E-GEAR-SPACE"]);
     let ded = finding(&fs, "E-GEAR-SPACE", "DPA", "dedicated space");
     assert_eq!(ded["verdict"], "fail", "{ded}");
     assert_eq!(ded["measured"]["through"][0]["run"], "D1", "{ded}");
@@ -298,7 +311,10 @@ fn gear_with_no_record_of_its_documents_is_never_a_pass() {
     let ws = finding(&fs, "E-GEAR-SPACE", "LPC", "working space");
     assert_ne!(ws["verdict"], "pass", "{ws}");
     assert_eq!(finding(&fs, "E-GEAR-FILL", "LPC", "raceways")["verdict"], "unsure");
-    assert!(fs.iter().all(|f| f["tag"] != "LPC" || f["verdict"] != "pass"), "{}", Value::Array(fs.clone()));
+    // Nothing its record would decide passes; its dedicated space and headroom are measured on
+    // the built model alone.
+    let measured = |f: &Value| f["measured"]["check"] == "dedicated space" || f["measured"]["check"] == "headroom";
+    assert!(fs.iter().all(|f| f["tag"] != "LPC" || f["verdict"] != "pass" || measured(f)), "{}", Value::Array(fs.clone()));
 }
 
 fn dir(name: &str) -> PathBuf {

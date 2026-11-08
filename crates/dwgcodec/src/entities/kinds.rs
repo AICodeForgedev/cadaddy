@@ -1044,9 +1044,53 @@ fn hatch(o: &mut Obj, g: &mut G) -> Result<()> {
     Ok(())
 }
 
-/// DIMENSION of each kind (spec §20.4.20–§20.4.26): the common dimension data, then the kind's
+/// DXF 70's dimension kind (low bits) of a dimension of DWG type `t`.
+fn dimension_kind(t: u16) -> i64 {
+    match t {
+        20 => 6,
+        21 => 0,
+        22 => 1,
+        23 => 5,
+        24 => 2,
+        25 => 4,
+        _ => 3,
+    }
+}
+
+/// A dimension's data (spec §20.4.21–§20.4.27), in DXF terms where it has them.
+struct DimData {
+    ext: [f64; 3],
+    mid: [f64; 2],
+    elevation: f64,
+    flags1: u8,
+    text: String,
+    text_rot: f64,
+    horiz: f64,
+    attach: i16,
+    spacing_style: i16,
+    spacing: f64,
+    measurement: f64,
+    p12: [f64; 2],
+    pts: Vec<(i32, [f64; 3])>,
+    rotation: Option<f64>,
+    oblique: Option<f64>,
+    leader: Option<f64>,
+    ord_x: bool,
+    style: Option<u64>,
+    /// The block with the dimension's drawn geometry; `None` for a null handle (the dimension
+    /// draws itself).
+    block: Option<u64>,
+}
+
+/// The handle of the block a dimension's data in `o` points at (after the entity's common data),
+/// `None` for a null handle.
+pub(crate) fn dimension_block(o: &mut Obj) -> Result<Option<u64>> {
+    Ok(dimension_data(o)?.block)
+}
+
+/// The data of a DIMENSION of each kind (spec §20.4.20–§20.4.26): the common dimension data, then the kind's
 /// points; the dimension style and the block that draws it are handles.
-fn dimension(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
+fn dimension_data(o: &mut Obj) -> Result<DimData> {
     if o.at_least(Version::R2010) {
         o.d.rc()?;
     }
@@ -1070,15 +1114,6 @@ fn dimension(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
     }
     let p12 = o.d.rd2()?;
     let t = o.type_code;
-    let base = match t {
-        20 => 6,
-        21 => 0,
-        22 => 1,
-        23 => 5,
-        24 => 2,
-        25 => 4,
-        _ => 3,
-    };
     // Points by kind, in DXF terms.
     let pts: Vec<(i32, [f64; 3])>;
     let (mut rotation, mut oblique, mut leader, mut ord_x) = (None, None, None, false);
@@ -1131,6 +1166,54 @@ fn dimension(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
     }
     let style = o.href()?;
     let block = o.href()?;
+    Ok(DimData {
+        ext,
+        mid,
+        elevation,
+        flags1,
+        text,
+        text_rot,
+        horiz,
+        attach,
+        spacing_style,
+        spacing,
+        measurement,
+        p12,
+        pts,
+        rotation,
+        oblique,
+        leader,
+        ord_x,
+        style,
+        block,
+    })
+}
+
+/// DIMENSION of each kind as DXF groups.
+fn dimension(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
+    let DimData {
+        ext,
+        mid,
+        elevation,
+        flags1,
+        text,
+        text_rot,
+        horiz,
+        attach,
+        spacing_style,
+        spacing,
+        measurement,
+        p12,
+        pts,
+        rotation,
+        oblique,
+        leader,
+        ord_x,
+        style,
+        block,
+    } = dimension_data(o)?;
+    let t = o.type_code;
+    let base = dimension_kind(t);
     let mut kind = base;
     if flags1 & 1 == 0 {
         kind |= 128;
@@ -1147,7 +1230,7 @@ fn dimension(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
     if matches!(t, 21 | 22) {
         g.p(12, [p12[0], p12[1], elevation]);
     }
-    g.i(70, i64::from(kind));
+    g.i(70, kind);
     if !text.is_empty() {
         g.s(1, text);
     }

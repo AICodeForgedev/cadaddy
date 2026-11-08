@@ -182,10 +182,29 @@ pub const MAX_TAGS: usize = 100_000_000;
 /// Environment variable overriding [`MAX_TAGS`] (a positive integer).
 pub const MAX_TAGS_ENV: &str = "CADADDY_MAX_DXF_TAGS";
 
-/// The group-code limit in effect: [`MAX_TAGS_ENV`] when set to a positive integer, else
-/// [`MAX_TAGS`].
+/// The group-code limit in effect: the one [`with_max_tags`] set on this thread, else
+/// [`MAX_TAGS_ENV`] when set to a positive integer, else [`MAX_TAGS`].
 pub fn max_tags() -> usize {
-    max_tags_from(std::env::var(MAX_TAGS_ENV).ok().as_deref())
+    MAX_TAGS_HERE.get().unwrap_or_else(|| max_tags_from(std::env::var(MAX_TAGS_ENV).ok().as_deref()))
+}
+
+thread_local! {
+    static MAX_TAGS_HERE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The limit [`with_max_tags`] set on this thread, if any.
+pub fn max_tags_here() -> Option<usize> {
+    MAX_TAGS_HERE.get()
+}
+
+/// Run `f` with the group-code limit at `limit` on this thread, whatever [`MAX_TAGS_ENV`] says
+/// (also for the DXF a DWG converts to): for a host with less memory to spare, or a test that
+/// tries a big file small.
+pub fn with_max_tags<T>(limit: usize, f: impl FnOnce() -> T) -> T {
+    let before = MAX_TAGS_HERE.replace(Some(limit.max(1)));
+    let r = f();
+    MAX_TAGS_HERE.set(before);
+    r
 }
 
 fn max_tags_from(v: Option<&str>) -> usize {
@@ -494,19 +513,13 @@ pub fn write_ascii(tags: &[Tag]) -> String {
 /// characters as they are) or escaped as `\U+XXXX` (older versions, see [`write_ascii`]). Line
 /// breaks inside strings become spaces either way.
 pub fn write_ascii_as(tags: &[Tag], utf8: bool) -> String {
-    let mut out = String::with_capacity(tags.len() * 16);
+    let mut out = Vec::with_capacity(tags.len() * 16);
+    let mut enc = Encoder::ascii(utf8);
     for t in tags {
-        let _ = write!(out, "{:>3}\r\n", t.code);
-        match &t.value {
-            Value::Str(s) => escape_unicode(s, utf8, &mut out, false),
-            Value::Real(r) => out.push_str(&format_real(*r)),
-            Value::Int(i) => out.push_str(&i.to_string()),
-            Value::Bool(b) => out.push_str(&i64::from(*b).to_string()),
-            Value::Hex(h) => out.push_str(h),
-        }
-        out.push_str("\r\n");
+        enc.put(t, &mut out);
     }
-    out
+    // Every piece is text, so the bytes are UTF-8.
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 /// Write tags as binary DXF (DXF Reference, "Binary DXF Files", R13+ layout): the sentinel,
@@ -528,20 +541,86 @@ pub fn write_binary_keeping_breaks(tags: &[Tag], utf8: bool) -> Vec<u8> {
 
 fn binary(tags: &[Tag], utf8: bool, keep_breaks: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(BINARY_SENTINEL.len() + tags.len() * 12);
-    out.extend_from_slice(BINARY_SENTINEL);
+    let mut enc = Encoder::binary(utf8, keep_breaks);
+    enc.start(&mut out);
     for t in tags {
-        let Ok(code) = i16::try_from(t.code) else { continue };
+        enc.put(t, &mut out);
+    }
+    out
+}
+
+/// Writes groups one at a time, as [`write_ascii_as`], [`write_binary`] and
+/// [`write_binary_keeping_breaks`] write a whole list (the same bytes): for a file written while
+/// it is made, never held whole.
+#[derive(Clone, Debug)]
+pub struct Encoder {
+    binary: bool,
+    utf8: bool,
+    keep_breaks: bool,
+    started: bool,
+    /// Scratch for a value's text.
+    text: String,
+}
+
+impl Encoder {
+    /// ASCII DXF, text in UTF-8 when `utf8`, else escaped ([`write_ascii_as`]).
+    pub fn ascii(utf8: bool) -> Self {
+        Encoder { binary: false, utf8, keep_breaks: false, started: false, text: String::new() }
+    }
+
+    /// Binary DXF ([`write_binary`]; line breaks in text kept when `keep_breaks`).
+    pub fn binary(utf8: bool, keep_breaks: bool) -> Self {
+        Encoder { binary: true, utf8, keep_breaks, started: false, text: String::new() }
+    }
+
+    /// The file's start (binary DXF's sentinel) into `out`, once; [`Self::put`] writes it before
+    /// the first group if this wasn't called.
+    pub fn start(&mut self, out: &mut Vec<u8>) {
+        if !self.started {
+            self.started = true;
+            if self.binary {
+                out.extend_from_slice(BINARY_SENTINEL);
+            }
+        }
+    }
+
+    /// The bytes of one group, appended to `out`.
+    pub fn put(&mut self, t: &Tag, out: &mut Vec<u8>) {
+        self.start(out);
+        if self.binary {
+            self.put_binary(t, out);
+            return;
+        }
+        let code = t.code.to_string();
+        out.extend(std::iter::repeat_n(b' ', 3usize.saturating_sub(code.len())));
+        out.extend_from_slice(code.as_bytes());
+        out.extend_from_slice(b"\r\n");
+        match &t.value {
+            Value::Str(s) => {
+                self.text.clear();
+                escape_unicode(s, self.utf8, &mut self.text, false);
+                out.extend_from_slice(self.text.as_bytes());
+            }
+            Value::Real(r) => out.extend_from_slice(format_real(*r).as_bytes()),
+            Value::Int(i) => out.extend_from_slice(i.to_string().as_bytes()),
+            Value::Bool(b) => out.extend_from_slice(if *b { b"1" } else { b"0" }),
+            Value::Hex(h) => out.extend_from_slice(h.as_bytes()),
+        }
+        out.extend_from_slice(b"\r\n");
+    }
+
+    fn put_binary(&mut self, t: &Tag, out: &mut Vec<u8>) {
+        let Ok(code) = i16::try_from(t.code) else { return };
         let code_bytes = code.to_le_bytes();
         match kind_of(t.code) {
             Kind::Str => {
                 out.extend_from_slice(&code_bytes);
-                let s = match &t.value {
-                    Value::Str(s) => s.clone(),
-                    v => v.as_str().into(),
-                };
-                let mut text = String::with_capacity(s.len());
-                escape_unicode(&s, utf8, &mut text, keep_breaks);
-                out.extend(text.bytes().filter(|&b| b != 0));
+                self.text.clear();
+                match &t.value {
+                    Value::Str(s) => escape_unicode(s, self.utf8, &mut self.text, self.keep_breaks),
+                    v => escape_unicode(&v.as_str(), self.utf8, &mut self.text, self.keep_breaks),
+                }
+                out.extend(self.text.bytes().filter(|&b| b != 0));
                 out.push(0);
             }
             Kind::Real => {
@@ -587,7 +666,6 @@ fn binary(tags: &[Tag], utf8: bool, keep_breaks: bool) -> Vec<u8> {
             }
         }
     }
-    out
 }
 
 /// The bytes of hex text, two digits each; anything that isn't a pair of hex digits is skipped.

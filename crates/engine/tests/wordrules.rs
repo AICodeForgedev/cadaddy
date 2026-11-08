@@ -428,6 +428,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "device | light_fixture",
         "model kinds and property values: our own names (Q6211 kindenum owns them), not words read off a document",
     ),
+    (
+        "crates/engine/src/cmd/products.rs",
+        "AND | &",
+        "grammar: joining words between the sheet numbers of a pointer (`E4.1, E4.2 and E4.3`), not words read as a document's content",
+    ),
     ("crates/engine/src/cmd/mountlist.rs", "• | ·", "grammar: ordinal, number, joining and markup words of the language"),
     (
         "crates/engine/src/cmd/mountlist.rs",

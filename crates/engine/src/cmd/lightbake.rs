@@ -110,6 +110,22 @@ pub fn current(s: &mut Session) -> Option<Arc<Lightmap>> {
     st.lightmap.clone()
 }
 
+/// [`baked_for`] from the lightmap already loaded or carried in the drawing, reading no file
+/// (exports and plots of a Realistic view; the views load one found beside the file).
+pub fn baked_loaded(s: &Session, scene: &Scene) -> Option<Baked> {
+    let st = s.state().ok()?;
+    let lm = match &st.lightmap {
+        Some(lm) => Arc::clone(lm),
+        None if !st.lightmap_tried => {
+            let d = &st.doc;
+            let (p, i) = (d.embedded.get(EMBEDDED.0)?, d.embedded.get(EMBEDDED.1)?);
+            Arc::new(read_lightmap(p, std::str::from_utf8(i).ok()?)?)
+        }
+        None => return None,
+    };
+    Some(Baked::of(scene, lm, &hashes(&st.doc)))
+}
+
 /// The baked light for a scene of the drawing's model space (objects changed since the bake show
 /// without it).
 pub fn baked_for(s: &mut Session, scene: &Scene) -> Option<Baked> {

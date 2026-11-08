@@ -22,6 +22,7 @@ pub mod dwg_worker {
 pub mod dwg_native;
 pub mod dwg_read;
 pub mod dwg_write;
+mod dxf_post;
 mod dxf_raw;
 /// 3D model exchange: glTF/GLB, OBJ+MTL and STL.
 pub mod ifc;
@@ -211,8 +212,14 @@ pub fn write_dwg(d: &Drawing, version: Version, engine: DwgEngine) -> Result<Vec
         check_dwg_size(bytes.len(), dwg_byte_caps().0)?;
         return Ok(bytes);
     }
-    let (dxf, linetypes, tags) = dxf_write::dwg_bridge(d, version);
+    // Counted before anything is made: a drawing too big is refused at once.
+    let views = dxf_write::Views::of(d);
+    let mut plan = dxf_post::Plan::new(&views, dxf_write::bridge_job(version));
     let (floor, ceil) = tag_caps();
+    check_reopens("DWG", plan.groups(), ceil.max(floor))?;
+    let (dxf, linetypes, tags) = dxf_write::dwg_bridge_from(d, &mut plan);
+    drop(plan);
+    drop(views);
     check_reopens("DWG", tags, ceil.max(floor))?;
     #[cfg(test)]
     tests::BRIDGE_CONVERSIONS.set(tests::BRIDGE_CONVERSIONS.get() + 1);
@@ -328,7 +335,7 @@ fn tag_caps() -> (usize, usize) {
     if let Some(c) = tests::TAG_CAPS.get() {
         return c;
     }
-    (cadaddy_dxf::max_tags(), MAX_DWG_TAGS)
+    (cadaddy_dxf::max_tags(), cadaddy_dxf::max_tags_here().map_or(MAX_DWG_TAGS, |l| l.min(MAX_DWG_TAGS)))
 }
 
 /// Most group codes of the DXF a DWG converts to that are read: the DWG is compressed, so its
@@ -371,7 +378,67 @@ fn read_dwg_bridge_capped(bytes: &[u8], floor: usize, ceil: usize) -> Result<Dra
     // The bridge's notes first, then what reading the converted DXF dropped (undefined or out-of-range coordinates).
     d.read_notes.splice(0..0, notes);
     mark_dynamic_copies_anonymous(&mut d);
+    null_dimension_blocks(&mut d, bytes);
     Ok(d)
+}
+
+/// Where an entity is: model space, a layout (by index) or a block (by name).
+enum At {
+    Model,
+    Layout(usize),
+    Block(String),
+}
+
+/// Dimensions the bridge read with a block the drawing doesn't have. The bridge names a block
+/// handle it can't resolve `*U` and the handle's number, so a null handle (the dimension has no
+/// block and draws itself, as AutoCAD writes constraint dimensions) came back as a block `*U0`
+/// that doesn't exist, and AUDIT found every such dimension damaged. The file's own handle,
+/// read with CADaddy's codec, settles each: a null handle is read as no block, as CADaddy's DWG
+/// reader reads it; a handle to a block record stays as the bridge named it. Only files with such
+/// dimensions are read again, and only those dimensions decoded.
+fn null_dimension_blocks(d: &mut Drawing, bytes: &[u8]) {
+    use cadaddy_doc::EntityKind;
+    let missing =
+        |e: &cadaddy_doc::Entity| matches!(&e.kind, EntityKind::Dimension(dim) if dim.block.as_deref().is_some_and(|b| d.block(b).is_none()));
+    let mut found: Vec<(At, cadaddy_doc::Handle)> = Vec::new();
+    found.extend(d.model.iter().filter(|e| missing(e)).map(|e| (At::Model, e.handle)));
+    for (i, l) in d.layouts.iter().enumerate() {
+        found.extend(l.entities.iter().filter(|e| missing(e)).map(|e| (At::Layout(i), e.handle)));
+    }
+    for (name, b) in d.blocks.iter() {
+        found.extend(b.entities.iter().filter(|e| missing(e)).map(|e| (At::Block(name.clone()), e.handle)));
+    }
+    if found.is_empty() {
+        return;
+    }
+    let Ok(dwg) = cadaddy_dwgcodec::read(bytes) else { return };
+    let handles: std::collections::HashSet<u64> = found.iter().map(|(_, h)| h.0).collect();
+    let stored = cadaddy_dwgcodec::entities::dimension_blocks(&dwg, &handles);
+    let unset = |e: &mut cadaddy_doc::Entity| {
+        if let EntityKind::Dimension(dim) = &mut e.kind {
+            dim.block = None;
+        }
+    };
+    for (at, h) in found {
+        if stored.get(&h.0) != Some(&None) {
+            continue;
+        }
+        match at {
+            At::Model => {
+                d.model.modify(h, unset);
+            }
+            At::Layout(i) => {
+                if let Some(l) = d.layouts.get_mut(i) {
+                    l.entities.modify(h, unset);
+                }
+            }
+            At::Block(name) => {
+                if let Some(b) = d.blocks.get_mut(&name).map(std::sync::Arc::make_mut) {
+                    b.entities.modify(h, unset);
+                }
+            }
+        }
+    }
 }
 
 /// The bridge hands AutoCAD's anonymous copies of dynamic blocks (`*U7`) back under the dynamic
@@ -473,15 +540,7 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
             Ok(if opts.binary { cadaddy_dxf::write_binary(&tags, false) } else { cadaddy_dxf::write_ascii_as(&tags, false).into_bytes() })
         }
         _ if version == Version::R12 => Err(IoError::Format("Release 12 is a DXF version: save a .dxf file".into())),
-        "dxf" | "" => {
-            let tags = dxf_write::tags(d, version);
-            check_reopens("DXF", tags.len(), tag_caps().0)?;
-            Ok(if opts.binary {
-                cadaddy_dxf::write_binary(&tags, version.utf8())
-            } else {
-                cadaddy_dxf::write_ascii_as(&tags, version.utf8()).into_bytes()
-            })
-        }
+        "dxf" | "" => dxf_streamed(d, version, opts.binary, || Ok(Vec::new())).map(|(_, out)| out),
         // The DWG bridge reads our R2000 DXF and writes the DWG at the version asked for. Without
         // one, at least 2004: R2000 DWG has no true colours, transparency, table styles or
         // gradients, so a drawing from an R2000 DXF doesn't lose them by default.
@@ -509,6 +568,68 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         }
         _ => write_framed(d, name, None),
     }
+}
+
+/// Write `d` as `name` with `opts` while it is made, never holding the file (DXF; `Ok(None)` for
+/// any other format and for Release 12, which [`write_with`] writes). It is counted first: a file
+/// too big to reopen is refused ([`check_reopens`]) before `open` is called. `open` then gives
+/// where the bytes go, written in pieces of [`STREAM_CHUNK`] bytes and flushed at the end. The
+/// bytes written.
+pub fn write_streamed(
+    d: &Drawing,
+    name: &str,
+    opts: &SaveOptions,
+    open: &mut dyn FnMut() -> std::io::Result<Box<dyn std::io::Write>>,
+) -> Result<Option<u64>> {
+    let version = opts.version.unwrap_or_else(|| save_version(d));
+    if !matches!(ext(name).as_str(), "dxf" | "") || version == Version::R12 {
+        return Ok(None);
+    }
+    dxf_streamed(d, version, opts.binary, open).map(|(n, _)| Some(n))
+}
+
+/// Bytes a streamed write hands on at a time.
+pub const STREAM_CHUNK: usize = 1 << 20;
+
+/// [`write_streamed`] for a DXF of `version`, binary when `binary`: the bytes written, and where
+/// they went.
+fn dxf_streamed<O: std::io::Write>(d: &Drawing, version: Version, binary: bool, open: impl FnOnce() -> std::io::Result<O>) -> Result<(u64, O)> {
+    let views = dxf_write::Views::of(d);
+    let mut plan = dxf_post::Plan::new(&views, dxf_write::job(version));
+    check_reopens("DXF", plan.groups(), tag_caps().0)?;
+    let failed = |e: std::io::Error| IoError::Format(format!("the file could not be written: {e}"));
+    let mut out = open().map_err(failed)?;
+    let mut enc = if binary { cadaddy_dxf::Encoder::binary(version.utf8(), false) } else { cadaddy_dxf::Encoder::ascii(version.utf8()) };
+    let mut buf: Vec<u8> = Vec::with_capacity(STREAM_CHUNK + 4096);
+    let mut written: u64 = 0;
+    let mut error: Option<std::io::Error> = None;
+    enc.start(&mut buf);
+    let mut flush = |buf: &mut Vec<u8>, out: &mut O| match out.write_all(buf) {
+        Ok(()) => {
+            written = written.saturating_add(buf.len() as u64);
+            buf.clear();
+            true
+        }
+        Err(e) => {
+            error = Some(e);
+            false
+        }
+    };
+    let done = plan.write(&mut |t| {
+        enc.put(t, &mut buf);
+        buf.len() < STREAM_CHUNK || flush(&mut buf, &mut out)
+    });
+    if done {
+        flush(&mut buf, &mut out);
+    }
+    if let Some(e) = error {
+        return Err(failed(e));
+    }
+    if !done {
+        return Err(IoError::Format("the file could not be written in full".into()));
+    }
+    out.flush().map_err(failed)?;
+    Ok((written, out))
 }
 
 /// Like [`write`], but image formats (PNG, SVG, PDF) show `window` (a model-space rectangle in

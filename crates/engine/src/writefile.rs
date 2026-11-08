@@ -10,10 +10,18 @@ pub fn write(path: impl AsRef<std::path::Path>, bytes: impl AsRef<[u8]>) -> std:
 }
 
 /// [`write`], replacing `path` atomically through an exclusively created temporary file (so a
-/// planted symlink at a predictable temporary name can't redirect the write, CWE-59).
+/// planted symlink at a predictable temporary name can't redirect the write, CWE-59). In the
+/// browser (no file system, no symlinks) a plain [`write`].
 pub fn write_atomic(path: impl AsRef<std::path::Path>, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
     check(path.as_ref())?;
-    crate::atomic_write::write_atomic(path.as_ref(), bytes.as_ref())
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::atomic_write::write_atomic(path.as_ref(), bytes.as_ref())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        std::fs::write(path, bytes)
+    }
 }
 
 /// Create (or truncate) `path` for writing (refused during a dry run).
