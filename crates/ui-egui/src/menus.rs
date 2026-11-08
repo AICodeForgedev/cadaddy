@@ -29,6 +29,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("cui", "Customize User Interface...", &["Tools", "Customize", "Interface..."], None),
     ("ui.customize", "Customize Interface", &[], None),
     ("ui.walk", "Walk", &["View", "Walk"], None),
+    ("ui.walk.export", "Export Tour Video", &[], None),
     ("ui.gpu", "3D Graphics Limits", &[], None),
     ("ui.bench3d", "3D View Benchmark", &[], None),
     ("ui.pdfimport", "PDF Import...", &[], None),
@@ -561,6 +562,8 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             Ok(app.gpu_caps.json())
         }
+        // A saved camera tour rendered to frames (and an MP4 with ffmpeg), for agents and scripts.
+        "ui.walk.export" => crate::walk::export::run(app, params),
         "ui.walk" => {
             // Toggles: opens walk mode on the active drawing, or goes back to the canvas.
             if app.walk.is_some() {
