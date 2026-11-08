@@ -378,7 +378,67 @@ fn read_dwg_bridge_capped(bytes: &[u8], floor: usize, ceil: usize) -> Result<Dra
     // The bridge's notes first, then what reading the converted DXF dropped (undefined or out-of-range coordinates).
     d.read_notes.splice(0..0, notes);
     mark_dynamic_copies_anonymous(&mut d);
+    null_dimension_blocks(&mut d, bytes);
     Ok(d)
+}
+
+/// Where an entity is: model space, a layout (by index) or a block (by name).
+enum At {
+    Model,
+    Layout(usize),
+    Block(String),
+}
+
+/// Dimensions the bridge read with a block the drawing doesn't have. The bridge names a block
+/// handle it can't resolve `*U` and the handle's number, so a null handle (the dimension has no
+/// block and draws itself, as AutoCAD writes constraint dimensions) came back as a block `*U0`
+/// that doesn't exist, and AUDIT found every such dimension damaged. The file's own handle,
+/// read with CADaddy's codec, settles each: a null handle is read as no block, as CADaddy's DWG
+/// reader reads it; a handle to a block record stays as the bridge named it. Only files with such
+/// dimensions are read again, and only those dimensions decoded.
+fn null_dimension_blocks(d: &mut Drawing, bytes: &[u8]) {
+    use cadaddy_doc::EntityKind;
+    let missing =
+        |e: &cadaddy_doc::Entity| matches!(&e.kind, EntityKind::Dimension(dim) if dim.block.as_deref().is_some_and(|b| d.block(b).is_none()));
+    let mut found: Vec<(At, cadaddy_doc::Handle)> = Vec::new();
+    found.extend(d.model.iter().filter(|e| missing(e)).map(|e| (At::Model, e.handle)));
+    for (i, l) in d.layouts.iter().enumerate() {
+        found.extend(l.entities.iter().filter(|e| missing(e)).map(|e| (At::Layout(i), e.handle)));
+    }
+    for (name, b) in d.blocks.iter() {
+        found.extend(b.entities.iter().filter(|e| missing(e)).map(|e| (At::Block(name.clone()), e.handle)));
+    }
+    if found.is_empty() {
+        return;
+    }
+    let Ok(dwg) = cadaddy_dwgcodec::read(bytes) else { return };
+    let handles: std::collections::HashSet<u64> = found.iter().map(|(_, h)| h.0).collect();
+    let stored = cadaddy_dwgcodec::entities::dimension_blocks(&dwg, &handles);
+    let unset = |e: &mut cadaddy_doc::Entity| {
+        if let EntityKind::Dimension(dim) = &mut e.kind {
+            dim.block = None;
+        }
+    };
+    for (at, h) in found {
+        if stored.get(&h.0) != Some(&None) {
+            continue;
+        }
+        match at {
+            At::Model => {
+                d.model.modify(h, unset);
+            }
+            At::Layout(i) => {
+                if let Some(l) = d.layouts.get_mut(i) {
+                    l.entities.modify(h, unset);
+                }
+            }
+            At::Block(name) => {
+                if let Some(b) = d.blocks.get_mut(&name).map(std::sync::Arc::make_mut) {
+                    b.entities.modify(h, unset);
+                }
+            }
+        }
+    }
 }
 
 /// The bridge hands AutoCAD's anonymous copies of dynamic blocks (`*U7`) back under the dynamic
