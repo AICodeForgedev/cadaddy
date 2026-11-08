@@ -28,7 +28,11 @@ pub const WORKER_ARG: &str = "--dwg-worker";
 /// Bumped when the messages change: an app updated while running may start a newer copy.
 const PROTOCOL: u8 = 1;
 const DECODE: u8 = 1;
+/// Write a DWG from a DXF from outside, held to [`Limits::DEFAULT`] (what apps before Q6280 sent;
+/// still served for one that starts this copy after an update).
 const ENCODE: u8 = 2;
+/// Write a DWG from the DXF CADaddy made of a drawing it holds ([`super::own_dxf_to_dwg`]).
+const ENCODE_OWN: u8 = 3;
 const CRASH: u8 = 0xff;
 /// Most linetype names one write request carries, and most bytes of one.
 const MAX_LINETYPES: usize = 1 << 16;
@@ -39,8 +43,14 @@ const TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_NOTES_BYTES: u64 = 64 << 20;
 /// Most bytes accepted as a written DWG.
 const MAX_DWG_REPLY: u64 = 2 << 30;
-/// Most bytes one request holds: the largest input, whichever the direction, and its header.
-const MAX_REQUEST: u64 = (2 << 30) + 256;
+/// Most bytes of CADaddy's own DXF sent to be written as DWG. The request comes from this app, so
+/// this isn't a guard against hostile input (the size limits for that are in [`Limits`]); it keeps
+/// one request within what a machine can hold. Saving a drawing CADaddy could still reopen needs
+/// far less (the DWG it reopens converts to at most 120 M group codes, under 2 GB of binary DXF).
+const MAX_OWN_DXF: u64 = 8 << 30;
+/// Most bytes one request holds: the largest input, whichever the direction, and its header (the
+/// linetype names a write request may carry: [`MAX_LINETYPES`] of [`MAX_LINETYPE_BYTES`]).
+const MAX_REQUEST: u64 = MAX_OWN_DXF + (1 << 30);
 
 struct Worker {
     program: PathBuf,
@@ -77,37 +87,52 @@ pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), St
         return super::dwg_to_dxf_noted(bytes, limits);
     }
     let reply_limit = (limits.max_dxf_bytes as u64).saturating_add(MAX_NOTES_BYTES);
-    match call(&request(DECODE, limits, ""), bytes, reply_limit, "reading this file") {
+    let too_big =
+        format!("DWG: converting this {} file produced more than {} {}", super::mb(bytes.len() as u64), super::mb(reply_limit), super::OVER_LIMIT);
+    match call(&request(DECODE, limits, ""), bytes, reply_limit, "reading this file", &too_big) {
         Some(reply) => reply?,
         None => super::dwg_to_dxf_noted(bytes, limits),
     }
 }
 
-/// [`super::dxf_to_dwg_named`] in the worker, when there is one.
+/// [`super::own_dxf_to_dwg`] in the worker, when there is one: `dxf` is the DXF CADaddy wrote from
+/// a drawing it holds, to save it as DWG, so no limit for untrusted input applies to it.
 pub fn encode_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
     if u8::try_from(version.len()).is_err() {
         return Err(super::unsupported(version));
     }
     // Names the request can't carry are written here, as without a worker.
     if linetypes.len() > MAX_LINETYPES || linetypes.iter().any(|n| n.len() > MAX_LINETYPE_BYTES) {
-        return super::dxf_to_dwg_named(dxf, version, linetypes);
+        return super::own_dxf_to_dwg(dxf, version, linetypes);
     }
-    let mut header = request(ENCODE, Limits::DEFAULT, version);
+    // Never sent cut short: a worker would write a DWG of part of the drawing.
+    if dxf.len() as u64 > MAX_OWN_DXF {
+        return Err(format!(
+            "this drawing is too large to save as DWG: the DWG writer would have to take {} of drawing data, more than the {} it takes. Save it as .cdy (no limit)",
+            super::mb(dxf.len() as u64),
+            super::mb(MAX_OWN_DXF)
+        ));
+    }
+    let mut header = request(ENCODE_OWN, Limits::DEFAULT, version);
     header.extend(u32::try_from(linetypes.len()).unwrap_or(0).to_le_bytes());
     for n in linetypes {
         header.extend(u32::try_from(n.len()).unwrap_or(0).to_le_bytes());
         header.extend(n.as_bytes());
     }
-    match call(&header, dxf, MAX_DWG_REPLY, "writing this file") {
+    let too_big = format!(
+        "this drawing is too large to save as DWG: the DWG would be larger than {}, the most CADaddy writes. Save it as .cdy (no limit)",
+        super::mb(MAX_DWG_REPLY)
+    );
+    match call(&header, dxf, MAX_DWG_REPLY, "writing this file", &too_big) {
         Some(reply) => reply?.map(|(dwg, _)| dwg),
-        None => super::dxf_to_dwg_named(dxf, version, linetypes),
+        None => super::own_dxf_to_dwg(dxf, version, linetypes),
     }
 }
 
 /// Make the worker abort, as the third-party code can: what the tests prove isolation with.
 #[doc(hidden)]
 pub fn crash_worker_for_test() -> Result<(), String> {
-    call(&request(CRASH, Limits::DEFAULT, ""), &[], 1024, "testing").ok_or("no worker")??.map(|_| ())
+    call(&request(CRASH, Limits::DEFAULT, ""), &[], 1024, "testing", "too much").ok_or("no worker")??.map(|_| ())
 }
 
 fn request(op: u8, limits: Limits, version: &str) -> Vec<u8> {
@@ -122,8 +147,9 @@ fn request(op: u8, limits: Limits, version: &str) -> Vec<u8> {
 type Reply = Result<(Vec<u8>, Vec<String>), String>;
 
 /// Run one request in a worker. `None`: none could be started, so the caller does the work.
-/// `Err`: the worker went wrong, and `doing` says at what, for the user.
-fn call(header: &[u8], payload: &[u8], reply_limit: u64, doing: &str) -> Option<Result<Reply, String>> {
+/// `Err`: the worker went wrong, and `doing` says at what, for the user; `too_big` is the error
+/// when the reply runs to `reply_limit` (it was cut off there, so it isn't used).
+fn call(header: &[u8], payload: &[u8], reply_limit: u64, doing: &str, too_big: &str) -> Option<Result<Reply, String>> {
     let mut command = {
         let worker = WORKER.lock().ok()?;
         let worker = worker.as_ref()?;
@@ -172,6 +198,7 @@ fn call(header: &[u8], payload: &[u8], reply_limit: u64, doing: &str) -> Option<
     let stopped = || format!("the DWG worker stopped while {doing}; nothing else is affected");
     Some(match (received, status) {
         (Err(RecvTimeoutError::Timeout), _) => Err(format!("{doing} took too long, so the DWG worker was stopped; nothing else is affected")),
+        (Ok(Ok(reply)), _) if reply.len() as u64 >= reply_limit => Err(too_big.to_string()),
         (Ok(Ok(reply)), Ok(status)) if status.success() => parse_reply(reply).ok_or_else(stopped),
         _ => Err(stopped()),
     })
@@ -254,14 +281,16 @@ fn handle(mut b: &[u8]) -> Reply {
     let version = take(&mut b, usize::from(version_len)).and_then(|v| std::str::from_utf8(v).ok()).ok_or_else(bad)?;
     match op {
         DECODE => super::dwg_to_dxf_noted(b, Limits { max_dwg_bytes, max_dxf_bytes }),
-        ENCODE => {
+        ENCODE | ENCODE_OWN => {
             let count = take_u32(&mut b).filter(|n| *n <= MAX_LINETYPES).ok_or_else(bad)?;
             let mut linetypes = Vec::new();
             for _ in 0..count {
                 let n = take_u32(&mut b).filter(|n| *n <= MAX_LINETYPE_BYTES).ok_or_else(bad)?;
                 linetypes.push(take(&mut b, n).and_then(|t| std::str::from_utf8(t).ok()).ok_or_else(bad)?.to_string());
             }
-            super::dxf_to_dwg_named(b, version, &linetypes).map(|dwg| (dwg, Vec::new()))
+            let written =
+                if op == ENCODE_OWN { super::own_dxf_to_dwg(b, version, &linetypes) } else { super::dxf_to_dwg_named(b, version, &linetypes) };
+            written.map(|dwg| (dwg, Vec::new()))
         }
         CRASH => std::process::abort(),
         _ => Err(bad()),
@@ -270,12 +299,19 @@ fn handle(mut b: &[u8]) -> Reply {
 
 /// Serve the one request on `input`. The exit code is 0 unless the reply couldn't be sent.
 fn serve(input: impl Read, mut output: impl Write) -> i32 {
-    let mut request = Vec::new();
-    let reply = match input.take(MAX_REQUEST).read_to_end(&mut request) {
-        Ok(_) => handle(&request),
-        Err(e) => Err(format!("the DWG worker could not read its request: {e}")),
-    };
+    let reply = read_request(input, MAX_REQUEST).and_then(|request| handle(&request));
     i32::from(write_reply(&mut output, reply).is_err())
+}
+
+/// The whole request on `input`, of at most `limit` bytes. A longer one is refused, never served
+/// cut short: a write request cut off at the limit would be a DWG of part of the drawing.
+fn read_request(input: impl Read, limit: u64) -> Result<Vec<u8>, String> {
+    let mut request = Vec::new();
+    input.take(limit.saturating_add(1)).read_to_end(&mut request).map_err(|e| format!("the DWG worker could not read its request: {e}"))?;
+    if request.len() as u64 > limit {
+        return Err(format!("the drawing is larger than the {} the DWG worker takes", super::mb(limit)));
+    }
+    Ok(request)
 }
 
 #[cfg(test)]
@@ -331,6 +367,29 @@ mod tests {
         let mut request = self::request(ENCODE, Limits::DEFAULT, "AC1032");
         request.extend(u32::MAX.to_le_bytes());
         assert!(handle(&request).is_err());
+    }
+
+    /// A request longer than the worker takes is refused whole, never served cut short (a write
+    /// request cut at the limit would be a DWG of part of the drawing).
+    #[test]
+    fn a_request_over_the_limit_is_refused_not_cut_short() {
+        assert_eq!(read_request(&b"0123456789"[..], 10).unwrap(), b"0123456789");
+        let e = read_request(&b"0123456789A"[..], 10).unwrap_err();
+        assert!(e.contains("larger than"), "{e}");
+    }
+
+    /// A write request for CADaddy's own DXF (Q6280) is served with no input limit, whatever
+    /// limits the request header carries; one from outside keeps to the default.
+    #[test]
+    fn serving_writes_cadaddys_own_dxf() {
+        let dxf = b"0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n5\n21\n5\n0\nENDSEC\n0\nEOF\n";
+        for op in [ENCODE_OWN, ENCODE] {
+            let mut request = self::request(op, Limits { max_dwg_bytes: 1, max_dxf_bytes: 1 }, "AC1018");
+            request.extend(0u32.to_le_bytes());
+            request.extend(dxf);
+            let (dwg, notes) = handle(&request).unwrap();
+            assert!(crate::is_dwg(&dwg) && notes.is_empty(), "{op}");
+        }
     }
 
     #[test]

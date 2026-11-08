@@ -2,6 +2,14 @@
   "about": "Trade practice the build follows where the documents are silent or wrong (Q6216): how each trade runs or places what the drawings leave out, and what the field installs where a drawn value can't be built. Order of authority: the documents, then the code (coderules.json and each trade's rules data, cited here where a rule uses a code number), then this file. Each rule: its id, the trade, what it fills in or corrects, its numbers, and its basis: the reason every object it lays in or value it corrects carries, so nothing it makes passes for drawn.",
   "rules": [
     {
+      "id": "E-RCP-LIGHT",
+      "trade": "electrical",
+      "fills": "a ceiling luminaire's place where the electrical plan's symbol and the reflected ceiling plan's light differ (numbers: reach_ft, the farthest a light is moved; connect_reach_ft, a light this close is at its spot)",
+      "basis": "trade practice: the electrician sets each ceiling light where the architect's reflected ceiling plan draws and dimensions it, the ceiling's layout aligning lights, sprinklers and sensors; the electrical plan's symbols show which lights and circuits, not where to the inch",
+      "reach_ft": 3.0,
+      "connect_reach_ft": 0.25
+    },
+    {
       "id": "P-BRANCH-WATER",
       "trade": "plumbing",
       "fills": "a fixture's cold or hot water branch, or a room's branches, no plan joins to a main (numbers: plumbing.json fill_in)",

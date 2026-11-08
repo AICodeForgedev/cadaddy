@@ -194,6 +194,12 @@ const DASH_GAP_MAX_IN: f64 = 12.0;
 const DASH_RUN: usize = 3;
 /// Dashed lines looked at, at most (hostile drawings).
 const MAX_DASH_LINES: usize = 200_000;
+/// A gap under this share of the piece beside it is a joint, not a dashed line's space: masonry
+/// units drawn one by one are about 3% joint, while a dashed line's spaces are a good part of its
+/// dashes.
+const JOINT_SHARE: f64 = 0.1;
+/// A joint is at most this wide, inches (a mortar joint drawn at any plan's scale).
+const JOINT_MAX_IN: f64 = 1.5;
 
 /// Takes out the dashes of dashed lines (hidden or overhead lines a print flattens into separate
 /// pieces: a soffit, a header or a wall above). Three or more pieces on one line, each at most
@@ -250,6 +256,7 @@ pub(crate) fn drop_dashes(segs: &mut Vec<Seg>, k: f64) -> usize {
             let (Some(prev), Some(cur)) = (rows.get(j - 1), rows.get(j)) else { continue };
             let gap = cur.0 - prev.1;
             let steady = gap > 0.05 * k
+                && gap > JOINT_SHARE * (prev.1 - prev.0).max(cur.1 - cur.0)
                 && gap <= max_gap
                 && close(prev.1 - prev.0, cur.1 - cur.0, 0.15, 0.25 * k)
                 && last_gap.is_none_or(|g| close(g, gap, 0.25, 0.5 * k));
@@ -267,6 +274,99 @@ pub(crate) fn drop_dashes(segs: &mut Vec<Seg>, k: f64) -> usize {
     let mut it = dash.iter();
     segs.retain(|_| !it.next().copied().unwrap_or(false));
     before - segs.len()
+}
+
+/// Joins the faces of a wall drawn unit by unit (masonry blocks, each face its own piece): three or
+/// more pieces on one line, about the same length, with joints of at most [`JOINT_MAX_IN`] and
+/// under [`JOINT_SHARE`] of a piece between them, become one line, so the wall's one wall and not
+/// a row of block-long ones. Each run keeps its first piece's layer. `k` is drawing units per
+/// inch. Returns how many pieces were merged away.
+pub(crate) fn join_unit_runs(segs: &mut Vec<Seg>, k: f64) -> usize {
+    use std::f64::consts::PI;
+    if !(k.is_finite() && k > 0.0) {
+        return 0;
+    }
+    let (max_len, max_joint, line_tol) = (DASH_MAX_IN * k, JOINT_MAX_IN * k, 0.5 * k);
+    let mut lines: std::collections::HashMap<(i64, i64), Vec<(f64, f64, usize)>> = std::collections::HashMap::new();
+    for (i, sg) in segs.iter().enumerate() {
+        let d = sg.b - sg.a;
+        let len = d.len();
+        if !(len > 1e-9 && len <= max_len) {
+            continue;
+        }
+        let ang = d.y.atan2(d.x).rem_euclid(PI);
+        let bucket = ((ang.to_degrees() * 2.0).round() as i64).rem_euclid(360);
+        let u = Vec2::new((bucket as f64 / 2.0).to_radians().cos(), (bucket as f64 / 2.0).to_radians().sin());
+        let off = (u.perp().dot(sg.a.mid(sg.b)) / line_tol).round() as i64;
+        let (s0, s1) = minmax(u.dot(sg.a), u.dot(sg.b));
+        if lines.len() < MAX_DASH_LINES || lines.contains_key(&(bucket, off)) {
+            lines.entry((bucket, off)).or_default().push((s0, s1, i));
+        }
+    }
+    // Each run: the pieces' indices.
+    let mut runs: Vec<Vec<usize>> = Vec::new();
+    for run in lines.values_mut() {
+        run.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut cur: Vec<usize> = Vec::new();
+        let mut last: Option<(f64, f64)> = None;
+        for &(s0, s1, i) in run.iter() {
+            let joined = last.is_some_and(|(p0, p1)| {
+                let gap = s0 - p1;
+                let (a, b) = (p1 - p0, s1 - s0);
+                gap >= 0.0 && gap <= max_joint && gap < JOINT_SHARE * a.max(b) && (a - b).abs() <= 0.15 * a.max(b) + 0.25 * k
+            });
+            if !joined {
+                if cur.len() >= DASH_RUN {
+                    runs.push(std::mem::take(&mut cur));
+                }
+                cur.clear();
+            }
+            cur.push(i);
+            last = Some((s0, s1));
+        }
+        if cur.len() >= DASH_RUN {
+            runs.push(cur);
+        }
+    }
+    let mut gone = vec![false; segs.len()];
+    let mut merged = 0usize;
+    // In a fixed order: which line a run's kept piece is doesn't depend on the map's.
+    runs.sort_by_key(|r| r.first().copied());
+    for run in &runs {
+        let (Some(&first), Some(&last)) = (run.first(), run.last()) else { continue };
+        let Some(end) = segs.get(last).cloned() else { continue };
+        let Some(head) = segs.get(first).cloned() else { continue };
+        // The far ends of the first and last pieces, as they run along the line.
+        let u = (end.a.mid(end.b)) - (head.a.mid(head.b));
+        let along = |p: Vec2| u.dot(p);
+        let start = if along(head.a) <= along(head.b) { head.a } else { head.b };
+        let stop = if along(end.a) >= along(end.b) { end.a } else { end.b };
+        if let Some(h) = segs.get_mut(first) {
+            h.a = start;
+            h.b = stop;
+            // No more one outline's side: the whole face of a wall.
+            h.outline_width = f64::INFINITY;
+        }
+        for &i in run.iter().skip(1) {
+            if let Some(g) = gone.get_mut(i) {
+                *g = true;
+                merged += 1;
+            }
+        }
+    }
+    let mut it = gone.iter();
+    segs.retain(|_| !it.next().copied().unwrap_or(false));
+    merged
+}
+
+/// The lines of the runs [`join_unit_runs`] joins: each wall face drawn unit by unit, end to end.
+pub(crate) fn unit_run_lines(segs: &[Seg], k: f64) -> Vec<(Vec2, Vec2)> {
+    let mut joined = segs.to_vec();
+    if join_unit_runs(&mut joined, k) == 0 {
+        return Vec::new();
+    }
+    // A run is longer than any piece of one.
+    joined.iter().filter(|g| g.a.dist(g.b) > DASH_MAX_IN * k && !segs.iter().any(|o| o.a == g.a && o.b == g.b)).map(|g| (g.a, g.b)).collect()
 }
 
 /// Drops the pairs a thin outline's side makes with another wall's face. A side of a closed
@@ -847,6 +947,11 @@ fn same_loop(a: &[Vec2], b: &[Vec2]) -> bool {
     (area(a) - area(b)).abs() <= 1e-6 * area(a).max(1.0) && a.iter().all(|p| b.iter().any(|q| p.dist(*q) < 1e-6))
 }
 
+/// An object smaller than this, inches, is a speck of a plan's stipple (a wall's, a slab's).
+const SPECK_MAX_IN: f64 = 1.0;
+/// A plan with at least this share of specks is stippled, and traced without them.
+const STIPPLED_SHARE: f64 = 0.25;
+
 /// A label's width per character, in its text height (a room tag's capitals).
 const LABEL_CHAR_WIDTH: f64 = 0.6;
 /// A tag's number is within this of its name, in the name's text height (under its last line:
@@ -1073,11 +1178,17 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         Some(rs) => {
             let inside =
                 |c: Vec2| rs.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
-            let keep: std::collections::HashSet<cadaddy_doc::Handle> = crate::cmd::bspec::plan_objects(d)
-                .into_iter()
-                .filter(|e| crate::cmd::bspec::centre(d, e).is_some_and(inside))
-                .map(|e| e.handle)
-                .collect();
+            let objects: Vec<&std::sync::Arc<Entity>> =
+                crate::cmd::bspec::plan_objects(d).into_iter().filter(|e| crate::cmd::bspec::centre(d, e).is_some_and(inside)).collect();
+            // A stippled plan (grout, concrete, earth drawn as thousands of dots) is too dense to
+            // search for a room's outline, and no speck bounds a room.
+            let speck = |e: &Entity| {
+                let b = cadaddy_doc::entity_bounds(d, e, 0);
+                b.width().max(b.height()) < SPECK_MAX_IN * k
+            };
+            let specks = objects.iter().filter(|e| speck(e)).count();
+            let stippled = specks as f64 >= STIPPLED_SHARE * objects.len() as f64;
+            let keep: std::collections::HashSet<cadaddy_doc::Handle> = objects.iter().filter(|e| !(stippled && speck(e))).map(|e| e.handle).collect();
             crate::cmd::bspec::room_plan_of(s, &keep)?
         }
         None => crate::cmd::bspec::room_plan(s)?,
@@ -1097,7 +1208,16 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     };
     // Doors close their rooms: each door swing's leaf, closed and open, drawn across its opening
     // (a print often draws the swing's arc alone, which leaves the room open at the door).
-    let leaves = door_leaves(plan.as_ref().unwrap_or(s).doc()?, k);
+    let mut leaves = door_leaves(plan.as_ref().unwrap_or(s).doc()?, k);
+    // A wall drawn block by block closes its rooms too: each run of faces drawn across its joints.
+    {
+        let pd = plan.as_ref().unwrap_or(s).doc()?;
+        let objects = crate::cmd::bspec::plan_objects(pd);
+        for (a, b) in unit_run_lines(&segments(&objects), k) {
+            let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(a.x, a.y, 0.0), b: cadaddy_geom::Vec3::new(b.x, b.y, 0.0) };
+            leaves.push((cadaddy_doc::Common::default(), line));
+        }
+    }
     phase("tag blocks and door leaves");
     let plan = if leaves.is_empty() || s.space().is_paper() {
         plan
@@ -1377,6 +1497,24 @@ mod tests {
         assert_eq!(segs.iter().filter(|s| s.a.y == 300.0).count(), 2);
         // No units: nothing taken.
         assert_eq!(drop_dashes(&mut segs, 0.0), 0);
+    }
+
+    #[test]
+    fn a_wall_drawn_block_by_block_is_one_face_and_no_dashed_line() {
+        // Inches (k = 1). Six 15.6" units with 0.4" joints: a masonry wall's face.
+        let mut segs: Vec<Seg> = (0..6).map(|i| f64::from(i) * 16.0).map(|x| seg((x, 0.0), (x + 15.6, 0.0), f64::INFINITY)).collect();
+        // A real dashed line beside it stays dashes: 18" dashes, 9" spaces.
+        segs.extend((0..5).map(|i| f64::from(i) * 27.0).map(|x| seg((x, 50.0), (x + 18.0, 50.0), f64::INFINITY)));
+        assert_eq!(drop_dashes(&mut segs, 1.0), 5, "only the dashed line's pieces go");
+        assert_eq!(join_unit_runs(&mut segs, 1.0), 5);
+        let [one] = segs.as_slice() else { panic!("{}", segs.len()) };
+        assert!((one.a.x).abs() < 1e-9 && (one.b.x - 95.6).abs() < 1e-9 && one.a.y == 0.0, "{:?} {:?}", one.a, one.b);
+        // Two pieces with a joint are not a run; a door's gap ends a run.
+        let mut segs = vec![seg((0.0, 0.0), (15.6, 0.0), f64::INFINITY), seg((16.0, 0.0), (31.6, 0.0), f64::INFINITY)];
+        assert_eq!(join_unit_runs(&mut segs, 1.0), 0);
+        let mut segs: Vec<Seg> = [0.0, 16.0, 32.0, 84.0, 100.0, 116.0].iter().map(|x| seg((*x, 0.0), (*x + 15.6, 0.0), f64::INFINITY)).collect();
+        assert_eq!(join_unit_runs(&mut segs, 1.0), 4);
+        assert_eq!(segs.len(), 2, "the opening stays open");
     }
 
     #[test]

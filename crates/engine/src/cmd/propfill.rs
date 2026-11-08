@@ -288,6 +288,8 @@ pub(crate) struct DeviceBuild {
     pub far_moves: usize,
     /// Devices outside their level's footprint (its floor and exterior walls), each with why.
     pub misplaced: Vec<Value>,
+    /// Devices drawn clear of every wall hung from the ceiling over them (Q6250).
+    pub hung: usize,
 }
 
 impl DeviceBuild {
@@ -304,6 +306,7 @@ impl DeviceBuild {
             "far_moves": self.far_moves,
             "misplaced": self.misplaced.len(),
             "misplaced_first": self.misplaced.iter().take(50).collect::<Vec<_>>(),
+            "hung_from_ceiling": self.hung,
         })
     }
 }
@@ -324,6 +327,284 @@ fn floor_fixture(words: &str) -> bool {
     let data: Value = serde_json::from_str(MOUNT_RULES).unwrap_or_default();
     let any = |key: &str| data[key].as_array().into_iter().flatten().filter_map(Value::as_str).any(|w| u.contains(w));
     !any("wall_fixture_words") && any("floor_fixture_words")
+}
+
+/// The rules data's devices that hang from the ceiling when the plan draws them clear of every
+/// wall (`mount_defaults.json`, `ceiling_when_clear_of_walls`, Q6250).
+struct ClearOfWalls {
+    /// No wall face this close to its symbol (feet): clear of the walls.
+    wall_ft: f64,
+    /// Kinds (spaces, lower case) and words of its kind, type or legend row that can hang there.
+    kinds: Vec<String>,
+    words: Vec<String>,
+    /// Words of its schedule's installation, legend row or type that allow a ceiling.
+    ceiling_words: Vec<String>,
+    /// Words that put it elsewhere when drawn there (a duct detector is in its duct).
+    except_words: Vec<String>,
+    why: String,
+}
+
+impl ClearOfWalls {
+    fn read() -> Self {
+        let data: Value = serde_json::from_str(MOUNT_RULES).unwrap_or_default();
+        let rule = &data["ceiling_when_clear_of_walls"];
+        let list = |k: &str| -> Vec<String> { rule[k].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect() };
+        Self {
+            wall_ft: rule["wall_ft"].as_f64().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(f64::INFINITY),
+            kinds: list("kinds").iter().map(|k| k.to_ascii_lowercase()).collect(),
+            words: list("words").iter().map(|w| w.to_ascii_uppercase()).collect(),
+            ceiling_words: list("ceiling_words").iter().map(|w| w.to_ascii_uppercase()).collect(),
+            except_words: list("except_words").iter().map(|w| w.to_ascii_uppercase()).collect(),
+            why: rule["why"].as_str().unwrap_or("a device drawn clear of every wall hangs from the ceiling").to_string(),
+        }
+    }
+
+    /// Whether a device of these kinds (spaces or underscores) and words can hang from a ceiling.
+    fn can_hang(&self, kinds: &[&str], words: &str) -> bool {
+        let words = words.to_ascii_uppercase();
+        let kinds_up = kinds.iter().map(|k| k.to_ascii_uppercase()).collect::<Vec<_>>().join(" ");
+        if self.except_words.iter().any(|w| words.contains(w) || kinds_up.contains(w)) {
+            return false;
+        }
+        kinds.iter().any(|k| self.kinds.iter().any(|x| x.eq_ignore_ascii_case(k.replace('_', " ").trim())))
+            || self.words.iter().any(|w| words.contains(w))
+    }
+
+    /// Whether these documents' words allow a ceiling (`CEILING/VARIES`).
+    fn allows_ceiling(&self, words: &str) -> bool {
+        let words = words.to_ascii_uppercase();
+        self.ceiling_words.iter().any(|w| words.contains(w))
+    }
+}
+
+/// The size of a light's round symbol on a reflected ceiling plan, inches across: smallest and
+/// largest (the rules data's `rcp_light_symbol_in`).
+pub(crate) fn rcp_light_size_in() -> (f64, f64) {
+    let data: Value = serde_json::from_str(MOUNT_RULES).unwrap_or_default();
+    let v = |i: usize| data["rcp_light_symbol_in"].get(i).and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0);
+    (v(0).unwrap_or(3.0), v(1).unwrap_or(24.0))
+}
+
+/// How far `p` is from the nearest face of its level's walls that reach `min_top` (drawing
+/// units: a wall under a window or a half wall holds no ceiling-height device), sheet units;
+/// none when its level has no such wall built.
+fn wall_face_gap(pieces: &[HostPiece], level: &str, p: Vec2, min_top: f64) -> Option<f64> {
+    pieces
+        .iter()
+        .filter(|w| w.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)) && w.z1 >= min_top)
+        .filter_map(|w| {
+            let ab = w.b - w.a;
+            let len = ab.len();
+            if !len.is_finite() || len <= 1e-9 {
+                return None;
+            }
+            let u = ab * (1.0 / len);
+            let t = ((p - w.a).x * u.x + (p - w.a).y * u.y).clamp(0.0, len);
+            let gap = ((w.a + u * t).dist(p) - w.half).max(0.0);
+            gap.is_finite().then_some(gap)
+        })
+        .min_by(f64::total_cmp)
+}
+
+/// A built ceiling (a room's, a reflected ceiling plan's area): its level, plan extent, underside,
+/// and the plan triangles of its faces (what it covers: a room's outline, not its extent's box,
+/// which takes in a corner of the next room).
+struct BuiltCeiling {
+    level: Option<String>,
+    bounds: Bounds2,
+    z: f64,
+    tris: Vec<[Vec2; 3]>,
+    area: f64,
+}
+
+impl BuiltCeiling {
+    fn covers(&self, p: Vec2) -> bool {
+        let side = |a: Vec2, b: Vec2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        self.bounds.contains(p)
+            && self.tris.iter().any(|[a, b, c]| {
+                let (s1, s2, s3) = (side(*a, *b), side(*b, *c), side(*c, *a));
+                (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0)
+            })
+    }
+}
+
+/// The underside of the smallest built ceiling of `level` over `p` (sheet units), inches over
+/// the floor at `floor` (drawing units): one that low is a soffit's or a cabinet's, not a room's
+/// ceiling, so it is passed over below 6'.
+fn ceiling_over(ceilings: &[BuiltCeiling], level: &str, p: Vec2, floor: f64, upf: f64) -> Option<f64> {
+    ceilings
+        .iter()
+        .filter(|c| c.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)) && c.covers(p))
+        .min_by(|a, b| a.area.total_cmp(&b.area))
+        .map(|c| (c.z - floor) / upf * 12.0)
+        .filter(|inches| inches.is_finite() && *inches > 72.0)
+}
+
+/// Faces of one ceiling looked at, at most.
+const MAX_CEILING_FACES: usize = 20_000;
+
+/// The built ceilings (rooms', the reflected ceiling plans').
+fn built_ceilings(d: &Drawing) -> Vec<BuiltCeiling> {
+    d.model
+        .iter()
+        .filter(|e| super::elemprops::element_kind(e).as_deref() == Some("ceiling"))
+        .filter_map(|e| {
+            let (bounds, z, _) = extent(d, e)?;
+            if bounds.is_empty() || !z.is_finite() {
+                return None;
+            }
+            let EntityKind::Mesh(m) = &e.kind else {
+                // Not a mesh: its extent is what it covers.
+                let [a, c] = [bounds.min, bounds.max];
+                let (b, dd) = (Vec2::new(c.x, a.y), Vec2::new(a.x, c.y));
+                return Some(BuiltCeiling {
+                    level: super::bspec::made_level(e),
+                    bounds,
+                    z,
+                    tris: vec![[a, b, c], [a, c, dd]],
+                    area: bounds.width() * bounds.height(),
+                });
+            };
+            let at = |i: &u32| m.vertices.get(usize::try_from(*i).ok()?).map(|v| Vec2::new(v.x, v.y));
+            let mut tris = Vec::new();
+            for f in m.faces.iter().take(MAX_CEILING_FACES) {
+                let pts: Vec<Vec2> = f.v.iter().filter_map(at).collect();
+                if let Some(first) = pts.first() {
+                    for w in pts.iter().skip(1).collect::<Vec<_>>().windows(2) {
+                        if let [b, c] = w {
+                            tris.push([*first, **b, **c]);
+                        }
+                    }
+                }
+            }
+            let area = tris.iter().map(|[a, b, c]| ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() / 2.0).sum::<f64>();
+            (area > 0.0).then(|| BuiltCeiling { level: super::bspec::made_level(e), bounds, z, tris, area })
+        })
+        .take(MAX_ELEMENTS)
+        .collect()
+}
+
+/// The devices the build hung at the ceiling by the rule (no document gives their height: `at the
+/// ceiling over it`, `at its level's ceiling`) set at the ceiling over them as it stands now: a
+/// room numbered after the build (from the same room on another floor, another trade's plan)
+/// takes its spec room's ceiling then, and its lights go up or down to it. How many moved.
+pub(crate) fn reseat_ceiling_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let ceilings = built_ceilings(d);
+    if ceilings.is_empty() {
+        return 0;
+    }
+    // Each room element's ceiling, by its level and number, for a device in a part of its room no
+    // built ceiling covers (a closet or alcove the trace left out).
+    let room_ceiling: HashMap<(String, String), f64> = d
+        .model
+        .iter()
+        .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
+        .filter_map(|e| {
+            let level = super::bspec::made_level(e)?.trim().to_ascii_uppercase();
+            let number = super::bimlook::made_tag(e, "number")?.trim().to_ascii_uppercase();
+            let ft = super::bimlook::made_tag(e, "ceiling_ft")?.parse::<f64>().ok().filter(|v| v.is_finite())?;
+            Some(((level, number), ft))
+        })
+        .take(MAX_ELEMENTS)
+        .collect();
+    let mut moves: Vec<(Handle, f64, f64, Prop, &'static str)> = Vec::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("device")).take(MAX_ELEMENTS) {
+        let ps = props::read(&e.common.xdata);
+        if ps.get("mount_height_from").map(Prop::text).as_deref() != Some("ceiling") {
+            continue;
+        }
+        let Some(level) = super::bspec::made_level(e).and_then(|l| sp.level(&l)) else { continue };
+        let Some((b, z0, z1)) = extent(d, e) else { continue };
+        let floor = level.elevation_ft * upf;
+        let in_room = || {
+            let room = ps.get("room").map(Prop::text)?.trim().to_ascii_uppercase();
+            room_ceiling.get(&(level.name.trim().to_ascii_uppercase(), room)).map(|ft| ft * 12.0).filter(|i| *i > 72.0)
+        };
+        let Some((inches, over)) = ceiling_over(&ceilings, &level.name, b.center(), floor, upf)
+            .map(|i| (i, "at the ceiling over it"))
+            .or_else(|| in_room().map(|i| (i, "at its room's ceiling")))
+        else {
+            continue;
+        };
+        let dz = floor + inches / 12.0 * upf - z1;
+        if dz.is_finite() && dz.abs() > 0.25 / 12.0 * upf {
+            let c = b.center() - super::bspec::stacked_by(e);
+            moves.push((e.handle, dz, inches, location_prop(c.x, c.y, (z0 + z1) / 2.0 + dz, upf), over));
+        }
+    }
+    let mut moved = 0;
+    for (h, dz, inches, location, over) in moves {
+        let Some(e) = d.model.get(h) else { continue };
+        let mut store = props::read(&e.common.xdata);
+        if let Some(old) = store.get("mount_height").cloned() {
+            let what =
+                old.source.doc.as_deref().and_then(|t| t.split(':').next()).map(str::trim).filter(|w| !w.is_empty()).unwrap_or("a ceiling device");
+            let src = Source::from_doc(old.source.kind, &format!("{what}: {over}"));
+            store.set("mount_height", Prop { value: json!(round2(inches)), source: src.clone(), ..old });
+            store.set("offset", Prop::new(round2(inches / 12.0), src).with_unit("ft"));
+        }
+        store.set("location", location);
+        let x = props::write(&e.common.xdata, &store);
+        if d.modify_entity(h, |e| {
+            if let EntityKind::Mesh(m) = &mut e.kind {
+                for v in &mut m.vertices {
+                    v.z += dz;
+                }
+            }
+            e.common.xdata = x.into();
+        })
+        .is_ok()
+        {
+            moved += 1;
+        }
+    }
+    moved
+}
+
+/// A device element a note puts in the ceiling (a keynote's ceiling-mounted box that is the
+/// plan's junction box) moved up there: its top at the underside of the built ceiling over it,
+/// else its level's ceiling; its mounting and height say so, with `why` as the source. Off the
+/// wall it was set in. Whether it moved.
+pub(crate) fn hang_at_ceiling(d: &mut Drawing, sp: &BuildingSpec, h: Handle, why: &str) -> bool {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let Some(e) = d.model.get(h) else { return false };
+    let Some(level) = super::bspec::made_level(e).and_then(|l| sp.level(&l)) else { return false };
+    let Some((b, z0, z1)) = extent(d, e) else { return false };
+    let floor = level.elevation_ft * upf;
+    let ceilings = built_ceilings(d);
+    let (inches, from) = match ceiling_over(&ceilings, &level.name, b.center(), floor, upf) {
+        Some(i) => (i, "at the ceiling over it"),
+        None if level.ceiling_ft.is_finite() && level.ceiling_ft > 6.0 => (level.ceiling_ft * 12.0, "at its level's ceiling"),
+        None => return false,
+    };
+    let dz = floor + inches / 12.0 * upf - z1;
+    // Already there (its note made it a ceiling device when it was placed): nothing moves.
+    if !dz.is_finite() || dz.abs() <= 0.25 / 12.0 * upf || (z1 - z0) <= 0.0 {
+        return false;
+    }
+    let mut store = props::read(&e.common.xdata);
+    let src = Source::from_doc(SourceKind::Note, why);
+    store.set("mount_height", Prop::new(round2(inches), src.clone()).with_unit("in").with_note(&format!("measured to its top; {from}")));
+    store.set("mount_datum", Prop::new("top", src.clone()).with_note("what its height is measured to on it"));
+    store.set("mount_height_from", Prop::new("ceiling", Source::computed()));
+    store.set("mounting", Prop::new("ceiling", src.clone()));
+    store.set("offset", Prop::new(round2(inches / 12.0), src).with_unit("ft"));
+    for k in ["host_wall", "host_face", "face_normal"] {
+        store.remove(k);
+    }
+    let c = b.center() - super::bspec::stacked_by(e);
+    store.set("location", location_prop(c.x, c.y, (z0 + z1) / 2.0 + dz, upf));
+    let x = props::write(&e.common.xdata, &store);
+    d.modify_entity(h, |e| {
+        if let EntityKind::Mesh(m) = &mut e.kind {
+            for v in &mut m.vertices {
+                v.z += dz;
+            }
+        }
+        e.common.xdata = x.into();
+    })
+    .is_ok()
 }
 
 /// A device's mounting height, where it came from (a step of the documents' order, the source
@@ -1003,14 +1284,8 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
     }
     // The built ceilings (rooms', the reflected ceiling plans'), for what hangs at the ceiling: a
     // luminaire, a smoke detector. Their level, plan extent and underside.
-    let ceilings: Vec<(Option<String>, Bounds2, f64)> = d
-        .model
-        .iter()
-        .filter(|e| super::elemprops::element_kind(e).as_deref() == Some("ceiling"))
-        .filter_map(|e| extent(d, e).map(|(b, z0, _)| (super::bspec::made_level(e), b, z0)))
-        .filter(|(_, b, z)| !b.is_empty() && z.is_finite())
-        .take(MAX_ELEMENTS)
-        .collect();
+    let ceilings = built_ceilings(d);
+    let clear_rule = ClearOfWalls::read();
     // The built walls' pieces, for setting a wall device in its wall's face; the floors, for what
     // lies outside the building.
     let pieces = host_pieces(d, upf);
@@ -1133,20 +1408,58 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 .or_else(|| docs.rule_of(&ask, &d.project_rules).map(|f| found(f, "project_rule", SourceKind::Rule)))
                 .filter(plausible)
         };
+        // Drawn clear of every wall, a luminaire, sensor, detector or exit sign hangs from the
+        // ceiling over it (a wall it isn't on can't hold it); one its documents put on a wall,
+        // only when its schedule, legend or type allows a ceiling too (`CEILING/VARIES`), and
+        // never one a document gives a wall height (a note's `44" AFF`).
+        let (installation, described) = {
+            let ty = super::lightsched::type_of(&mark);
+            sp.mep
+                .fixture_schedule
+                .iter()
+                .find(|r| !ty.is_empty() && r.tag == ty)
+                .map(|r| (r.installation.clone(), r.description.clone()))
+                .unwrap_or_default()
+        };
+        let stated_wall = field(t, "mount").as_deref() == Some("wall");
+        let gap_ft = wall_face_gap(&pieces, &level.name, Vec2::new(x, y), (level.elevation_ft + WALL_BOX_FT) * upf).map(|g| g / upf);
+        let hung = (mount == Mount::Wall
+            && gap_ft.is_some_and(|g| g > clear_rule.wall_ft)
+            && clear_rule.can_hang(&[kind, vkind.as_str()], &format!("{fixture_words} {legend_words} {described}"))
+            && (!stated_wall || clear_rule.allows_ceiling(&format!("{installation} {fixture_words} {legend_words}")))
+            && documented().is_none_or(|c| c.inches >= WALL_BOX_FT * 12.0))
+        .then(|| {
+            format!(
+                "drawn {:.1} ft from the nearest wall face{}: hung from the ceiling ({})",
+                gap_ft.unwrap_or_default(),
+                if stated_wall && !installation.trim().is_empty() {
+                    format!(", its schedule's installation {}", installation.trim())
+                } else {
+                    String::new()
+                },
+                clear_rule.why
+            )
+        });
+        let mount = if hung.is_some() {
+            report.hung += 1;
+            Mount::Ceiling
+        } else {
+            mount
+        };
         let floor = level.elevation_ft * upf;
         let height: Chosen = match mount {
             Mount::Ceiling => {
                 // A printed height of 7' and up (a wall-hung detector's, a high fixture's) first;
                 // else the underside of the ceiling over it (the smallest: a soffit in a room),
                 // else its level's ceiling.
-                let p = Vec2::new(x, y);
-                let over = ceilings
-                    .iter()
-                    .filter(|(l, b, _)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&level.name)) && b.contains(p))
-                    .min_by(|a, b| (a.1.width() * a.1.height()).total_cmp(&(b.1.width() * b.1.height())))
-                    .map(|(_, _, z)| (z - floor) / upf * 12.0)
-                    .filter(|inches| inches.is_finite() && *inches > 72.0);
-                let what = if kind == "fire alarm device" { "a detector" } else { "a luminaire" };
+                let over = ceiling_over(&ceilings, &level.name, Vec2::new(x, y), floor, upf);
+                let what = if kind == "fire alarm device" {
+                    "a detector"
+                } else if hung.is_some() {
+                    "a device drawn clear of the walls"
+                } else {
+                    "a luminaire"
+                };
                 documented().filter(|c| c.inches >= WALL_BOX_FT * 12.0).unwrap_or_else(|| match over {
                     Some(inches) => Chosen {
                         inches,
@@ -1346,7 +1659,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                     Mount::Ceiling => "ceiling",
                     Mount::Floor => "floor",
                 },
-                Source::computed(),
+                match &hung {
+                    Some(why) => Source::from_doc(SourceKind::Rule, why),
+                    None => Source::computed(),
+                },
             ),
         );
         // What it is: its element's kind as read (its legend row's, its sheet's), else its mark's.
@@ -1430,6 +1746,16 @@ const MAX_LISTED: usize = 10_000;
 
 /// The built walls' plan footprints (their meshes' outlines), with their levels and handles.
 pub(crate) fn wall_footprints(d: &Drawing) -> Vec<WallPiece> {
+    wall_pieces(d, false)
+}
+
+/// The same pieces where the plans draw them: a stacked level's taken back by what the build moved
+/// it, in the frame of the spec's own positions.
+pub(crate) fn wall_footprints_on_plans(d: &Drawing) -> Vec<WallPiece> {
+    wall_pieces(d, true)
+}
+
+fn wall_pieces(d: &Drawing, on_plans: bool) -> Vec<WallPiece> {
     d.model
         .iter()
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall"))
@@ -1439,8 +1765,9 @@ pub(crate) fn wall_footprints(d: &Drawing) -> Vec<WallPiece> {
         })
         .flat_map(|(e, m)| {
             let level = super::bspec::made_level(e);
+            let back = if on_plans { super::bspec::stacked_by(e) } else { Vec2::ZERO };
             mesh_pieces(m).into_iter().filter_map(move |(outline, z)| {
-                let h = super::mep::hull(&outline);
+                let h: Vec<Vec2> = super::mep::hull(&outline).into_iter().map(|p| p - back).collect();
                 (h.len() >= 3).then(|| (level.clone(), e.handle, h, z))
             })
         })
@@ -2631,6 +2958,92 @@ mod tests {
 
     fn piece(wall: u64, a: (f64, f64), b: (f64, f64), z: (f64, f64)) -> HostPiece {
         HostPiece { wall: Handle(wall), level: Some("L1".into()), a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), half: 3.0, z0: z.0, z1: z.1 }
+    }
+
+    /// Q6250: a wall under a window (to its 3' sill) is no wall a ceiling-height device could be
+    /// on: how far a device is from the walls counts only those reaching 7'.
+    #[test]
+    fn a_wall_under_a_window_does_not_hold_a_device_off_the_ceiling() {
+        // Inches: a sill wall 1' from the device, a full-height wall 3' away.
+        let pieces = vec![piece(1, (0.0, 12.0), (120.0, 12.0), (0.0, 36.0)), piece(2, (0.0, -36.0), (120.0, -36.0), (0.0, 120.0))];
+        let p = Vec2::new(60.0, 0.0);
+        assert_eq!(wall_face_gap(&pieces, "L1", p, 0.0), Some(9.0), "any wall: the sill's face, 9\" off");
+        assert_eq!(wall_face_gap(&pieces, "L1", p, 84.0), Some(33.0), "walls reaching 7': the full wall's face");
+        assert_eq!(wall_face_gap(&pieces, "L2", p, 84.0), None);
+    }
+
+    /// Q6250: a light the build hung at its level's ceiling (its room had no ceiling of its own
+    /// yet) goes to the room's ceiling once the room has one; a light a document sets stays.
+    #[test]
+    fn ceiling_lights_follow_the_ceiling_built_over_them_after_the_build() {
+        let mut d = Drawing::new_imperial();
+        let sp: BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [{"name": "L1", "elevation_ft": 10.0, "height_ft": 10.0, "ceiling_ft": 9.0}]
+        }))
+        .unwrap();
+        // The room's ceiling, 7'-10" over the L1 floor (at 10'), over x 0..20', y 0..12'.
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(0.0, 72.0), Vec2::new(240.0, 72.0), 144.0, 214.0, 214.5);
+        let x = super::super::wallgen::tag(cadaddy_walk3d::Part::Ceiling, "L1", Handle(0));
+        d.add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap();
+        // Two lights built at the level's 9' ceiling (their tops at 10' + 108"): one by the rule,
+        // one at a schedule's height.
+        let light = |d: &mut Drawing, at: Vec2, from: &str| -> Handle {
+            let mut ps = Props::default();
+            ps.set("mount_height", Prop::new(108.0, Source::from_doc(SourceKind::Rule, "a luminaire: at its level's ceiling")).with_unit("in"));
+            ps.set("mount_height_from", Prop::new(from, Source::computed()));
+            ps.set("location", location_prop(at.x, at.y, 120.0 + 106.0, 12.0));
+            let x = props::write(&super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "L1", Handle(0)), &ps);
+            let mut m = super::super::wallgen::empty_mesh();
+            super::super::wallgen::add_box(&mut m, at - Vec2::new(2.0, 0.0), at + Vec2::new(2.0, 0.0), 4.0, 224.0, 228.0);
+            d.add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap()
+        };
+        let rule = light(&mut d, Vec2::new(60.0, 60.0), "ceiling");
+        let scheduled = light(&mut d, Vec2::new(120.0, 60.0), "fixture_schedule");
+        // A light in its room's closet, which no ceiling covers: its room's ceiling (8').
+        let closet = light(&mut d, Vec2::new(300.0, 60.0), "ceiling");
+        let _ = d.modify_entity(closet, |e| {
+            let mut ps = props::read(&e.common.xdata);
+            ps.set("room", Prop::new("1A", Source::computed()));
+            e.common.xdata = props::write(&e.common.xdata, &ps).into();
+        });
+        let t = |v: &str| RawTag { code: 1000, value: v.into() };
+        let room_x =
+            vec![RawTag { code: 1001, value: super::super::wallgen::APP.into() }, t("room"), t("L1"), t("0"), t("number:1A"), t("ceiling_ft:8.00")];
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(250.0, 60.0), Vec2::new(330.0, 60.0), 40.0, 120.0, 120.0);
+        d.add(&Space::Model, Common { xdata: room_x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap();
+        assert_eq!(reseat_ceiling_devices(&mut d, &sp), 2);
+        let ps = props::read(&d.model.get(closet).unwrap().common.xdata);
+        assert_eq!(ps.get("mount_height").and_then(|p| p.source.doc.clone()).as_deref(), Some("a luminaire: at its room's ceiling"));
+        assert!((extent(&d, d.model.get(closet).unwrap()).unwrap().2 - 216.0).abs() < 1e-9, "its top at its room's 8'");
+        let top = |d: &Drawing, h: Handle| extent(d, d.model.get(h).unwrap()).unwrap().2;
+        assert!((top(&d, rule) - 214.0).abs() < 1e-9, "its top at the room's ceiling: {}", top(&d, rule));
+        assert!((top(&d, scheduled) - 228.0).abs() < 1e-9, "a document's height stays");
+        let ps = props::read(&d.model.get(rule).unwrap().common.xdata);
+        assert_eq!(ps.get("mount_height").and_then(|p| p.value.as_f64()), Some(94.0), "{ps:?}");
+        assert_eq!(ps.get("mount_height").and_then(|p| p.source.doc.clone()).as_deref(), Some("a luminaire: at the ceiling over it"));
+        assert_eq!(ps.get("location").map(Prop::text).as_deref(), Some("5.00, 5.00, 17.67"), "{ps:?}");
+        assert_eq!(reseat_ceiling_devices(&mut d, &sp), 0, "once");
+    }
+
+    /// Q6250: an L-shaped bath ceiling (8') whose extent's box takes in a corner of the bedroom
+    /// (9') is not over a light in that corner: the ceiling whose outline covers it is.
+    #[test]
+    fn the_ceiling_over_a_device_is_the_one_whose_outline_covers_it() {
+        let ft = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        let ceiling = |pts: Vec<Vec2>, z_ft: f64| {
+            let tris: Vec<[Vec2; 3]> = super::super::bspec::ear_clip(&pts).iter().map(|t| [pts[t[0]], pts[t[1]], pts[t[2]]]).collect();
+            let area = cadaddy_geom::shoelace(&pts).abs();
+            BuiltCeiling { level: Some("L1".into()), bounds: Bounds2::from_points(pts.iter().copied()), z: z_ft * 12.0, tris, area }
+        };
+        let bath = ceiling(vec![ft(0.0, 0.0), ft(8.0, 0.0), ft(8.0, 4.0), ft(4.0, 4.0), ft(4.0, 8.0), ft(0.0, 8.0)], 8.0);
+        let bedroom = ceiling(vec![ft(0.0, 0.0), ft(20.0, 0.0), ft(20.0, 12.0), ft(0.0, 12.0)], 9.0);
+        let both = [bath, bedroom];
+        assert_eq!(ceiling_over(&both, "L1", ft(6.0, 6.0), 0.0, 12.0), Some(108.0), "the corner in the bath's box is the bedroom's");
+        assert_eq!(ceiling_over(&both, "L1", ft(2.0, 2.0), 0.0, 12.0), Some(96.0), "in the bath: the bath's");
+        assert_eq!(ceiling_over(&both, "L2", ft(2.0, 2.0), 0.0, 12.0), None, "another level's ceilings are not over it");
     }
 
     #[test]
