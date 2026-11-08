@@ -546,18 +546,22 @@ pub const TABS: &[Tab] = &[
             },
         ],
     },
-    // Our own tab (not AutoCAD's): checks of the BIM model against its prints, done with an
-    // agent, and the model's quantities (Q6117).
+    // Our own tab (not AutoCAD's): the guided job from the prints (Q6266), checks of the BIM
+    // model against its prints, done with an agent, and the model's quantities (Q6117).
     Tab {
         name: "Automation",
-        panels: &[Panel {
-            name: "Model Checks",
-            items: &[
-                Item::Large(b(Icon::Validate, crate::validatepalette::COMMAND, "Validate")),
-                Item::Large(b(Icon::Takeoff, crate::takeoffwin::COMMAND, "Takeoff")),
-            ],
-            more: &[],
-        }],
+        panels: &[
+            // A guided job from the prints: start it, follow it, answer it (Q6266).
+            Panel { name: "Guided Job", items: &[Item::Large(b(Icon::Job, crate::jobpalette::COMMAND, "Job"))], more: &[] },
+            Panel {
+                name: "Model Checks",
+                items: &[
+                    Item::Large(b(Icon::Validate, crate::validatepalette::COMMAND, "Validate")),
+                    Item::Large(b(Icon::Takeoff, crate::takeoffwin::COMMAND, "Takeoff")),
+                ],
+                more: &[],
+            },
+        ],
     },
 ];
 
@@ -1309,13 +1313,15 @@ mod tests {
         assert_eq!(home, ["Draw", "Modify", "Annotation", "Layers", "Block", "Properties", "Groups", "Utilities", "Clipboard"]);
     }
 
-    /// Automation: Validate first, then Takeoff, both large buttons of one panel (Q6117).
+    /// Automation: the guided Job first (Q6266), then Validate and Takeoff, both large buttons of
+    /// one panel (Q6117).
     #[test]
-    fn automation_tab_has_validate_then_takeoff() {
+    fn automation_tab_has_job_then_validate_then_takeoff() {
         let tab = TABS.iter().find(|t| t.name == "Automation").expect("the Automation tab");
         let panels: Vec<_> = tab.panels.iter().map(|p| p.name).collect();
-        assert_eq!(panels, ["Model Checks"]);
-        let buttons: Vec<(&str, &str)> = tab.panels[0]
+        assert_eq!(panels, ["Guided Job", "Model Checks"]);
+        assert!(matches!(tab.panels[0].items, [Item::Large(Btn { icon: Icon::Job, cmd: crate::jobpalette::COMMAND, label: "Job", .. })]));
+        let buttons: Vec<(&str, &str)> = tab.panels[1]
             .items
             .iter()
             .filter_map(|i| match i {
@@ -1324,7 +1330,7 @@ mod tests {
             })
             .collect();
         assert_eq!(buttons, [("Validate", "ui.panel.validate"), ("Takeoff", "automation.takeoff")]);
-        assert!(matches!(tab.panels[0].items[0], Item::Large(Btn { icon: Icon::Validate, .. })));
-        assert!(matches!(tab.panels[0].items[1], Item::Large(Btn { icon: Icon::Takeoff, .. })));
+        assert!(matches!(tab.panels[1].items[0], Item::Large(Btn { icon: Icon::Validate, .. })));
+        assert!(matches!(tab.panels[1].items[1], Item::Large(Btn { icon: Icon::Takeoff, .. })));
     }
 }

@@ -179,6 +179,44 @@ low-level `execute` only when needed.
 | `answer_close_prompt` | Respond to a "save changes?" prompt (save, discard or cancel). |
 | `quit_app` | Quit the application. |
 
+## Long workflows: in the app, or for agents only
+
+A person runs the long workflows from the window. The guided job is **Automation ▸ Job** (also
+Window ▸ Job, and Tools ▸ Guided Job ▸ Start Job...): its panel asks for the prints folder, the
+goal and whether the job stops at each question or runs unattended, then shows the stage it is
+on with Cancel, the questions it waits on with their answer buttons, its findings, the rules it
+learned and its report. Validate and Takeoff are on the same Automation tab; Plans to Model,
+Levels, Clashes and Drywall Takeoff have their panels (Window and Tools ▸ Building).
+
+The commands below have no menu item or panel of their own. They are the steps the guided job
+runs for a person, or tools for agents and scripts: run them with `engine.execute` (MCP
+`execute`). The app's tests read this list: a long command with no way in from the window must be
+named here, and one named here must not have one.
+
+<!-- agent-only workflows: start -->
+- `printset.open`: the print-set stages the guided job runs
+- `printset.classify`
+- `printset.run`
+- `printset.reimport`
+- `printset.resume`
+- `walls.read`: the readers the job's stages run
+- `mep.read`
+- `mep.read_devices`
+- `mep.equipment.read`
+- `mep.qty`
+- `mep.qty.refresh`
+- `import.check`
+- `bim.from_pdf`
+- `bim.build`
+- `bim.atoms.build`
+- `bim.bom`
+- `bim.validate`
+- `model.update`
+- `validate.next`: the agent's half of a Validate run started in the app
+- `validate.packet`
+- `validate.prescreen`
+<!-- agent-only workflows: end -->
+
 ## MCP resources
 
 | URI | Description |

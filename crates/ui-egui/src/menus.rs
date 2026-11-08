@@ -48,6 +48,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.float.quickCalc", "QuickCalc", &["Window", "Palette Windows", "QuickCalc"], None),
     ("ui.panel.planstomodel", "Plans to Model", &["Window", "Plans to Model"], None),
     (crate::validatepalette::COMMAND, "Validate", &["Window", "Validate"], None),
+    (crate::jobpalette::COMMAND, "Job", &["Window", "Job"], None),
+    ("clashdetect", "Clashes", &["Tools", "Building", "Clashes"], None),
+    ("drywallpalette", "Drywall Takeoff", &["Tools", "Building", "Drywall Takeoff"], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
@@ -136,6 +139,22 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.window.dockall", "Dock All Windows", &["Window", "Dock All Windows"], None),
     ("ui.quickprops", "Quick Properties Lists", &[], None),
     ("ui.agentlog", "Agent Activity", &["Window", "Agent Activity"], None),
+];
+
+/// Long engine workflows a person runs from a panel rather than from a menu item of their own:
+/// (the command, the menu or ribbon command that opens the panel). Every long command
+/// ([`cadaddy_engine::CommandSpec::long`]) has a menu item, a ribbon button or a row here, or the
+/// agents' guide (docs/guide/for-ai-agents.md) names it as one for agents and scripts (Q6266).
+pub const PANEL_WORKFLOWS: &[(&str, &str)] = &[
+    ("job.next", crate::jobpalette::COMMAND),
+    ("job.answer", crate::jobpalette::COMMAND),
+    ("job.set_mode", crate::jobpalette::COMMAND),
+    ("validate", crate::validatepalette::COMMAND),
+    ("model.build", "ui.panel.planstomodel"),
+    ("levels.read", "levels"),
+    ("model.clashes", "clashdetect"),
+    ("model.clashes.report", "clashdetect"),
+    ("drywall.takeoff", "drywallpalette"),
 ];
 
 /// Typed commands that open a dialog only when typed alone: with more on the line (`color 1`,
@@ -273,6 +292,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     // the takeoff into its window. With parameters AUTOMATION.TAKEOFF is the engine's command.
     if id == crate::validatepalette::COMMAND {
         return Some(crate::validatepalette::open(app));
+    }
+    // Automation ▸ Job, Window ▸ Job, and JOB.START from a menu or typed alone open the Job
+    // panel (its start form when no job runs); with parameters JOB.START is the engine's command.
+    if id == crate::jobpalette::COMMAND || (id == crate::jobpalette::START && params.is_null()) {
+        return Some(crate::jobpalette::open(app));
     }
     if id == crate::takeoffwin::COMMAND && params.is_null() {
         return Some(crate::takeoffwin::run(app));
@@ -1504,6 +1528,96 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         } else {
             activate(app, id);
         }
+    }
+}
+
+#[cfg(test)]
+mod workflow_entries {
+    use std::collections::BTreeSet;
+
+    use super::{PANEL_WORKFLOWS, UI_COMMANDS};
+    use crate::ribbon;
+
+    const GUIDE: &str = include_str!("../../../docs/guide/for-ai-agents.md");
+
+    /// The commands the agents' guide names as for agents and scripts only (one per line between
+    /// its markers).
+    fn agent_only() -> BTreeSet<&'static str> {
+        let start = "<!-- agent-only workflows: start -->";
+        let end = "<!-- agent-only workflows: end -->";
+        let list = GUIDE.split_once(start).and_then(|(_, rest)| rest.split_once(end)).map_or("", |(list, _)| list);
+        list.lines().filter_map(|l| l.trim().strip_prefix("- `")?.split_once('`').map(|(id, _)| id)).collect()
+    }
+
+    /// Every command a ribbon button, flyout or slide-out runs.
+    fn ribbon_commands() -> BTreeSet<&'static str> {
+        let mut out = BTreeSet::new();
+        for panel in ribbon::TABS.iter().flat_map(|t| t.panels) {
+            out.extend(panel.more.iter().map(|f| f.1));
+            for item in panel.items {
+                let btns: &[ribbon::Btn] = match item {
+                    ribbon::Item::Large(b) => std::slice::from_ref(b),
+                    ribbon::Item::Smalls(bs) => bs,
+                    ribbon::Item::Layers => &[],
+                };
+                for b in btns {
+                    out.insert(b.cmd);
+                    out.extend(b.flyout.iter().map(|f| f.1));
+                }
+            }
+        }
+        out
+    }
+
+    /// A click reaches `id`: an engine command or UI command on a menu, or a ribbon button.
+    fn on_menu_or_ribbon(id: &str, ribbon: &BTreeSet<&str>) -> bool {
+        cadaddy_engine::find_command(id).is_some_and(|c| !c.menu.is_empty())
+            || UI_COMMANDS.iter().any(|c| c.0 == id && !c.2.is_empty())
+            || ribbon.contains(id)
+    }
+
+    /// Q6266 (test-asus-winsmoke: the guided job had no menu, ribbon or panel): every long engine
+    /// workflow has a way in from the window — a menu item, a ribbon button, or a panel one of them
+    /// opens — or the agents' guide says it is for agents and scripts only. Neither both nor
+    /// neither.
+    #[test]
+    fn every_long_workflow_has_a_way_in_from_the_window_or_is_documented_for_agents() {
+        let ribbon = ribbon_commands();
+        let agent_only = agent_only();
+        assert!(agent_only.len() >= 10, "the guide's list wasn't read: {agent_only:?}");
+        let mut problems = Vec::new();
+        for c in cadaddy_engine::command_specs().iter().filter(|c| c.long) {
+            let reached = on_menu_or_ribbon(c.id, &ribbon) || PANEL_WORKFLOWS.iter().any(|(w, _)| *w == c.id);
+            match (reached, agent_only.contains(c.id)) {
+                (false, false) => problems.push(format!("{}: no menu item, ribbon button or panel, and the agents' guide doesn't name it", c.id)),
+                (true, true) => problems.push(format!("{}: has a way in from the window, but the agents' guide lists it as for agents only", c.id)),
+                _ => {}
+            }
+        }
+        for (workflow, entry) in PANEL_WORKFLOWS {
+            if cadaddy_engine::find_command(workflow).is_none() {
+                problems.push(format!("{workflow}: no such command"));
+            }
+            if !on_menu_or_ribbon(entry, &ribbon) {
+                problems.push(format!("{workflow}: its panel's command {entry} is on no menu or ribbon"));
+            }
+        }
+        for id in &agent_only {
+            if !cadaddy_engine::find_command(id).is_some_and(|c| c.long) {
+                problems.push(format!("{id}: the agents' guide lists it, but it is no long command"));
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    /// The guided job's way in: Tools ▸ Guided Job ▸ Start Job... (the engine's command, which
+    /// the app turns into the Job panel's start form), Window ▸ Job, and Automation ▸ Job.
+    #[test]
+    fn the_guided_job_is_on_the_menus_and_the_ribbon() {
+        let start = cadaddy_engine::find_command("job.start").expect("job.start");
+        assert_eq!(start.menu, ["Tools", "Guided Job", "Start Job..."]);
+        assert!(UI_COMMANDS.iter().any(|c| c.0 == crate::jobpalette::COMMAND && c.2 == ["Window", "Job"]));
+        assert!(ribbon_commands().contains(crate::jobpalette::COMMAND));
     }
 }
 
