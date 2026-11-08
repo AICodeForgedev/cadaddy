@@ -3038,6 +3038,41 @@
     "M"
    ]
   },
+  "schedules.panel_title_not_tags": {
+   "source": "(panel schedule convention: words that follow PANEL in a heading, a label or a header field but are not the panel's tag: PANEL SCHEDULE, PANEL NAME:, PANELBOARD NOTES, PANEL SIZE & TYPE:, PANEL LOCATION:)",
+   "words": [
+    "SCHEDULE",
+    "SCHEDULES",
+    "SHALL",
+    "AND",
+    "WITH",
+    "TO",
+    "IN",
+    "FOR",
+    "NAME",
+    "DESIGNATION",
+    "TAG",
+    "ID",
+    "TYPE",
+    "NOTES",
+    "NOTE",
+    "TOTALS",
+    "SIZE",
+    "LOCATION",
+    "MOUNTING",
+    "VOLTAGE",
+    "VOLTS",
+    "RATING",
+    "FED",
+    "MAIN",
+    "MAINS",
+    "BUS",
+    "CABINET",
+    "ACCESSORIES",
+    "AIC",
+    "DIRECTORY"
+   ]
+  },
   "schedules.panel_header_words": {
    "source": "(panel schedule column headings as printed: breaker amps, poles, breaker type, load categories, circuit number, phases; a header line of only these words is several columns' names read as one text)",
    "words": [

@@ -45,10 +45,7 @@ pub(crate) fn title_panel(title: &str) -> Option<(String, Option<u32>)> {
         && tag.len() <= 12
         && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
         && tag.chars().any(|c| c.is_ascii_alphanumeric());
-    if !ok
-        || ["SCHEDULE", "SCHEDULES", "SHALL", "AND", "WITH", "TO", "IN", "FOR", "NAME", "DESIGNATION", "TAG", "ID", "TYPE", "NOTES", "NOTE", "TOTALS"]
-            .contains(&tag.as_str())
-    {
+    if !ok || cadaddy_mepfix::wordrules::words("schedules.panel_title_not_tags").contains(&tag.as_str()) {
         return None;
     }
     // A panel's other tables (its demand calculation, load summary) aren't its schedule.
@@ -1490,6 +1487,9 @@ mod tests {
         assert_eq!(title_panel("PANEL:\"P1\""), Some(("P1".into(), None)));
         // A heading over the panels' notes names no panel.
         assert_eq!(title_panel("PANELBOARD NOTES"), None);
+        // A schedule's header fields (`PANEL SIZE & TYPE:`, `PANEL LOCATION:`) name none either.
+        assert_eq!(title_panel("PANEL SIZE & TYPE:"), None);
+        assert_eq!(title_panel("PANEL LOCATION: UTILITY"), None);
         assert_eq!(title_panel("PANELBOARD DP1 DEMAND CALCULATION"), None);
         assert_eq!(title_panel("TOTAL CONNECTED PANELBOARD (VA)"), None);
     }
