@@ -630,7 +630,11 @@ pub(crate) struct ClearFace {
     pub wall: cadaddy_doc::Handle,
     /// How far from where it was read, inches.
     pub moved_in: f64,
-    pub was_clear_in: f64,
+    /// Its clear depth where it was read; `None` when it stood on no wall there.
+    pub was_clear_in: Option<f64>,
+    /// Where it was read a duct or pipe passed through its dedicated space (its working space
+    /// there was fine).
+    pub was_ducted: bool,
     pub now_clear_in: f64,
 }
 
@@ -640,6 +644,9 @@ pub(crate) struct FaceNeed {
     pub width_in: f64,
     pub height_in: f64,
     pub recessed: bool,
+    /// The ducts' and pipes' paths (feet) low enough to pass through its dedicated space (its
+    /// footprint to 6 ft over it): a face with none over it is taken before one with one.
+    pub overhead: Vec<Vec<[f64; 2]>>,
 }
 
 /// How far along a wall a panel is looked for either way, in steps of [`FACE_STEP_IN`].
@@ -665,9 +672,12 @@ fn piece_obstacle(handle: cadaddy_doc::Handle, poly: &[Vec2], z: [f64; 2], floor
     })
 }
 
-/// A panel whose place (lettering, a proposal: not a located symbol) leaves it no working space:
-/// the wall face near where it was read, in its own room, that has it. Nearest first, sound over
-/// unsure; `None` when its own place doesn't fail or no other face does better. Plan coordinates
+/// A panel whose place (lettering, a proposal: not a located symbol) leaves it no working space,
+/// stands it on no wall (a panelboard hangs on one; no wall within the build's reach of where
+/// it was read), or puts a duct or pipe through its dedicated space (NEC 110.26(E)): the wall
+/// face near where it was read, in its own room, that has its working space. Nearest first, sound
+/// over unsure; for a duct, only a face with none over it and space as good. `None` when its own
+/// place is on a wall and fails neither, or no face does better. Plan coordinates
 /// (drawing units): the walls' pieces where the plans draw them, `others` and `doors` in feet.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn clear_face(
@@ -703,18 +713,42 @@ pub(crate) fn clear_face(
     let mut obstacles: Vec<Obstacle> = others.to_vec();
     obstacles.extend(here.iter().filter_map(|(_, h, poly, z)| piece_obstacle(*h, poly, *z, floor, upf, need.height_in)));
     let space = |o: &Obb| working_space(o, need.need_in, need.width_in, need.height_in, &obstacles, doors, None);
+    let ducted = |o: &Obb| {
+        need.overhead.iter().any(|path| match path.as_slice() {
+            [one] => o.contains(*one),
+            more => more.windows(2).any(|w| match w {
+                [a, b] => clip(o.local(*a), o.local(*b), -o.hw, o.hw, -o.hd, o.hd).is_some(),
+                _ => false,
+            }),
+        })
+    };
     let box_on = |at: Vec2, along: Vec2, out: Vec2| {
         let mid = if need.recessed { at - out * (dp / 2.0) } else { at + out * (dp / 2.0) };
         (mid, Obb { c: [mid.x / upf, mid.y / upf], u: [along.x, along.y], hw: w / upf / 2.0, hd: dp / upf / 2.0 })
     };
     // Its place now: as the build would put it.
     let own: Vec<super::propfill::WallPiece> = here.iter().map(|p| (*p).clone()).collect();
-    let now = super::propfill::wall_face(&own, &e.level, read_at, reach, Some(z_mid))?;
-    let (_, here_box) = box_on(now.at, now.along, now.out);
-    let was = space(&here_box);
-    if was.verdict != "fail" {
-        return None;
-    }
+    // On no wall: any face of its room within the working space's reach (the room keeps it home).
+    let rank_of = |verdict: &str| match verdict {
+        "pass" => Some(2u8),
+        "unsure" => Some(1),
+        _ => None,
+    };
+    // Under a duct with its space: only a face as sound and with none over it, anywhere in its
+    // room (the room keeps it home).
+    let (was, face_reach, ducted_floor) = match super::propfill::wall_face(&own, &e.level, read_at, reach, Some(z_mid)) {
+        Some(now) => {
+            let (_, here_box) = box_on(now.at, now.along, now.out);
+            let was = space(&here_box);
+            match rank_of(was.verdict) {
+                None => (Some(was.clear_in), reach, None),
+                Some(r) if ducted(&here_box) && room.is_some() => (Some(was.clear_in), REACH_FT * upf, Some(r)),
+                Some(_) => return None,
+            }
+        }
+        None if room.is_some() => (None, REACH_FT * upf, None),
+        None => return None,
+    };
     let mut best: Option<(u8, f64, ClearFace)> = None;
     for (_, h, poly, z) in &here {
         if !(z[0] <= z_mid && z_mid <= z[1]) && z[0].is_finite() {
@@ -748,7 +782,7 @@ pub(crate) fn clear_face(
             let out = if ccw { Vec2::new(u.y, -u.x) } else { Vec2::new(-u.y, u.x) };
             let t0 = (read_at - *a).x * u.x + (read_at - *a).y * u.y;
             let foot = *a + u * t0.clamp(0.0, len);
-            if foot.dist(read_at) > reach {
+            if foot.dist(read_at) > face_reach {
                 continue;
             }
             for k in -FACE_STEPS..=FACE_STEPS {
@@ -777,11 +811,12 @@ pub(crate) fn clear_face(
                     continue;
                 }
                 let ws = space(&obb);
-                let rank = match ws.verdict {
-                    "pass" => 2u8,
-                    "unsure" => 1,
-                    _ => continue,
-                };
+                let Some(sound) = rank_of(ws.verdict) else { continue };
+                let under = ducted(&obb);
+                if ducted_floor.is_some_and(|f| under || sound < f) {
+                    continue;
+                }
+                let rank = sound * 2 + u8::from(!under);
                 let moved = mid.dist(read_at);
                 if best.as_ref().is_none_or(|(r, m, _)| rank > *r || (rank == *r && moved < *m - 1e-6)) {
                     let half = if u.x.abs() > u.y.abs() { Vec2::new(w / 2.0, dp / 2.0) } else { Vec2::new(dp / 2.0, w / 2.0) };
@@ -794,7 +829,8 @@ pub(crate) fn clear_face(
                             max: [g.x, g.y],
                             wall: *h,
                             moved_in: moved / inch,
-                            was_clear_in: was.clear_in,
+                            was_clear_in: was,
+                            was_ducted: ducted_floor.is_some(),
                             now_clear_in: ws.clear_in,
                         },
                     ));
@@ -2180,7 +2216,7 @@ mod tests {
     }
 
     fn need(recessed: bool) -> FaceNeed {
-        FaceNeed { need_in: Some([36.0, 36.0]), width_in: 30.0, height_in: 78.0, recessed }
+        FaceNeed { need_in: Some([36.0, 36.0]), width_in: 30.0, height_in: 78.0, recessed, overhead: Vec::new() }
     }
 
     #[test]
@@ -2192,7 +2228,63 @@ mod tests {
         let f = clear_face(&e, &walls, &[], &[], None, 0.0, &need(true), 12.0).expect("the east face is clear");
         assert_eq!(f.wall, cadaddy_doc::Handle(1), "{f:?}");
         assert!((f.max[0] - 104.2).abs() < 1e-6 && (f.min[0] - 100.2).abs() < 1e-6, "flush with the east face: {f:?}");
-        assert!(f.was_clear_in < 36.0 && f.now_clear_in >= 36.0, "{f:?}");
+        assert!(f.was_clear_in.is_some_and(|c| c < 36.0) && f.now_clear_in >= 36.0, "{f:?}");
+    }
+
+    #[test]
+    fn a_panel_read_on_no_wall_hangs_on_its_rooms_nearest_wall() {
+        // A 20' x 25' room; the panel's lettering 40 in off its east wall, past the build's reach
+        // of a wall: on the east wall's face, in its room. With no room known it stays.
+        let walls = [
+            piece(1, [-6.0, 0.0], [0.0, 300.0]),
+            piece(2, [240.0, 0.0], [246.0, 300.0]),
+            piece(3, [0.0, -6.0], [240.0, 0.0]),
+            piece(4, [0.0, 300.0], [240.0, 306.0]),
+        ];
+        let e = lettered([190.0, 147.0], [210.0, 153.0]);
+        let room = [Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), Vec2::new(240.0, 300.0), Vec2::new(0.0, 300.0)];
+        let f = clear_face(&e, &walls, &[], &[], Some(&room), 0.0, &need(false), 12.0).expect("onto a wall");
+        assert_eq!(f.wall, cadaddy_doc::Handle(2), "{f:?}");
+        assert!((f.max[0] - 240.0).abs() < 1e-6 && (f.min[0] - 234.0).abs() < 1e-6, "on the east wall's face: {f:?}");
+        assert!(f.min[1] < 150.0 && f.max[1] > 150.0, "level with where it was read: {f:?}");
+        assert!(f.was_clear_in.is_none() && f.now_clear_in >= 36.0, "{f:?}");
+        assert_eq!(clear_face(&e, &walls, &[], &[], None, 0.0, &need(false), 12.0), None);
+    }
+
+    #[test]
+    fn a_panel_moved_for_its_space_keeps_clear_of_a_duct_over_it() {
+        // As above, a duct crossing the east face where the panel would land: further along it.
+        let walls = [piece(1, [100.0, 0.0], [104.2, 200.0]), piece(2, [40.0, 90.0], [95.0, 110.0])];
+        let e = lettered([100.0, 93.0], [104.0, 107.0]);
+        let mut n = need(true);
+        n.overhead = vec![vec![[90.0 / 12.0, 100.0 / 12.0], [120.0 / 12.0, 100.0 / 12.0]]];
+        let f = clear_face(&e, &walls, &[], &[], None, 0.0, &n, 12.0).expect("the east face is clear");
+        assert!((f.min[0] - 100.2).abs() < 1e-6, "still the east face: {f:?}");
+        assert!(f.min[1] > 100.0 || f.max[1] < 100.0, "clear of the duct: {f:?}");
+        assert!(f.now_clear_in >= 36.0, "{f:?}");
+    }
+
+    #[test]
+    fn a_panel_with_its_space_under_a_duct_moves_along_its_room_clear_of_it() {
+        // A 20' x 25' room, the panel on its east wall with its space, a duct over it running
+        // east-west: along the same room's walls to a face with none over it. With no room known,
+        // or no duct, it stays.
+        let walls = [
+            piece(1, [-6.0, 0.0], [0.0, 300.0]),
+            piece(2, [240.0, 0.0], [246.0, 300.0]),
+            piece(3, [0.0, -6.0], [240.0, 0.0]),
+            piece(4, [0.0, 300.0], [240.0, 306.0]),
+        ];
+        let e = lettered([234.0, 140.0], [240.0, 160.0]);
+        let room = [Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), Vec2::new(240.0, 300.0), Vec2::new(0.0, 300.0)];
+        let mut n = need(false);
+        assert_eq!(clear_face(&e, &walls, &[], &[], Some(&room), 0.0, &n, 12.0), None, "no duct: it stays");
+        n.overhead = vec![vec![[0.0, 150.0 / 12.0], [240.0 / 12.0, 150.0 / 12.0]]];
+        assert_eq!(clear_face(&e, &walls, &[], &[], None, 0.0, &n, 12.0), None, "no room known: it stays");
+        let f = clear_face(&e, &walls, &[], &[], Some(&room), 0.0, &n, 12.0).expect("clear of the duct");
+        assert!(f.min[1] > 150.0 || f.max[1] < 150.0, "clear of the duct: {f:?}");
+        assert!(f.was_ducted && f.was_clear_in.is_some() && f.now_clear_in >= 36.0, "{f:?}");
+        assert!(f.min[0] >= 0.0 && f.max[0] <= 240.0 && f.min[1] >= 0.0 && f.max[1] <= 300.0, "in its room: {f:?}");
     }
 
     #[test]
