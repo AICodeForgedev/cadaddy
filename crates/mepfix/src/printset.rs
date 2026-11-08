@@ -1547,8 +1547,21 @@ fn split_number_clashes(out: &mut [SheetEntry], page_of: &[Option<usize>], pages
 }
 
 /// The discipline code a sheet number's letters stand for (`A` from `A111`, `FP` from `FP-1`).
+/// Letters the rule data lists as a discipline of their own (`FP`, `FA`, `SL`) stand for it;
+/// else a designator with a modifier (`AE111`, `AD-201`, `EP1.1`: the first letter names the
+/// discipline, the next ones the kind of sheet within it) stands for its first letter when that
+/// is a discipline. Other letters stay as they are.
 fn canonical_discipline(letters: &str) -> String {
-    letters.trim().to_ascii_uppercase()
+    let up = letters.trim().to_ascii_uppercase();
+    let known = crate::wordrules::pairs("sheets.discipline_prefix");
+    if let Some((_, d)) = known.iter().find(|(p, _)| *p == up) {
+        return (*d).to_string();
+    }
+    let first: String = up.chars().take(1).collect();
+    match known.iter().find(|(p, _)| *p == first) {
+        Some((_, d)) if up.len() > 1 && up.chars().all(|c| c.is_ascii_uppercase()) => (*d).to_string(),
+        _ => up,
+    }
 }
 
 fn is_plan_type(t: &str) -> bool {
@@ -2825,7 +2838,19 @@ impl PrintSetProject {
 
 #[cfg(test)]
 mod classify_tests {
-    use super::{SheetEntry, classify_sheet_type, level_by_number};
+    use super::{SheetEntry, canonical_discipline, classify_sheet_type, level_by_number};
+
+    #[test]
+    fn a_designator_with_a_modifier_is_its_discipline() {
+        // the first letter names the discipline, the next the kind of sheet within it
+        for (letters, want) in [("A", "A"), ("AC", "A"), ("AE", "A"), ("ep", "E"), ("MP", "M"), ("SD", "S")] {
+            assert_eq!(canonical_discipline(letters), want, "{letters}");
+        }
+        // two letters that are a discipline of their own stay it; letters naming none stay
+        for (letters, want) in [("FP", "FP"), ("FA", "FA"), ("SL", "SL"), ("LP", "LP"), ("XY", "XY"), ("", ""), ("A1", "A1")] {
+            assert_eq!(canonical_discipline(letters), want, "{letters}");
+        }
+    }
 
     fn plan(number: &str, title: &str) -> SheetEntry {
         SheetEntry { number: number.into(), title: title.into(), sheet_type: "plan".into(), ..SheetEntry::default() }
