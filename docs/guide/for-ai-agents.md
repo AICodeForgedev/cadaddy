@@ -212,6 +212,7 @@ named here, and one named here must not have one.
 - `bim.bom`
 - `bim.validate`
 - `model.update`
+- `model.buildings`: places the spec's buildings again after an edit to its `buildings` (the job places them itself)
 - `validate.next`: the agent's half of a Validate run started in the app
 - `validate.packet`
 - `validate.prescreen`
