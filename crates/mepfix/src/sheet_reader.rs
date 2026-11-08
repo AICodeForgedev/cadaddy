@@ -1438,6 +1438,12 @@ pub fn title_names(title: &str, list: &[&str]) -> bool {
     list.iter().any(|w| spaced.contains(&format!(" {w} ")))
 }
 
+/// Whether a sheet's or view's title names it a floor plan (`FLOOR PLAN`, not `FINISH PLAN` or
+/// `FLOOR FINISH PLAN`).
+pub fn names_floor_plan(title: &str) -> bool {
+    title_names(title, crate::wordrules::words("sheets.floor_plan_title_words"))
+}
+
 /// The floor plan of a sheet of one storey that prints it beside other plans of the same outline
 /// (`DIMENSIONED FLOOR PLAN` beside `REFLECTED CEILING PLAN` and `ROOF PLAN`), with its block of
 /// linework: the building is read from that view alone, since a ceiling's or a roof's lines

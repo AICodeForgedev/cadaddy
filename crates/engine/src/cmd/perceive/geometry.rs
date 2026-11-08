@@ -1053,6 +1053,27 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
 
 /// The rooms around the plan's name labels, traced.
 fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
+    // Several sheets: each traced on its own objects. A room left open on one (a doorway the
+    // print draws no leaf across) widens its search window to the plan's extents: those of the
+    // one sheet, not of every sheet side by side (where one open room searched them all).
+    if let Some(rs) = regions.filter(|r| r.len() > 1) {
+        let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
+        let mut out: Vec<FoundRoom> = Vec::new();
+        for (i, r) in rs.iter().enumerate() {
+            if out.len() >= MAX_ROOMS_ALL_REGIONS {
+                break;
+            }
+            // A label is its first region's (as one trace of them all took it).
+            let earlier = rs.get(..i).unwrap_or_default();
+            if earlier.contains(r) {
+                continue;
+            }
+            let found = trace_rooms_in(s, Some(std::slice::from_ref(r)))?;
+            out.extend(found.into_iter().filter(|f| !earlier.iter().any(|e| inside(e, f.at))));
+        }
+        out.truncate(MAX_ROOMS_ALL_REGIONS);
+        return Ok(out);
+    }
     // A slow phase (over 2 s) goes to the job's progress lines: which one held a long trace up.
     let started = web_time::Instant::now();
     let mut last = 0.0f64;

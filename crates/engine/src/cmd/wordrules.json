@@ -2895,6 +2895,32 @@
     "M"
    ]
   },
+  "sheets.subdiscipline_codes": {
+   "source": "(US National CAD Standard sheet designators: a discipline letter and a modifier letter name a sub-discipline of that trade, e.g. EP electrical power, EL electrical lighting, AS architectural site/shell, MH mechanical HVAC, PL plumbing; such a sheet is its trade's)",
+   "words": [
+    "AD",
+    "AE",
+    "AF",
+    "AG",
+    "AI",
+    "AS",
+    "EE",
+    "EL",
+    "EP",
+    "ES",
+    "EY",
+    "MD",
+    "ME",
+    "MH",
+    "MP",
+    "MS",
+    "PD",
+    "PE",
+    "PL",
+    "PP",
+    "PS"
+   ]
+  },
   "sheets.non_building_disciplines": {
    "source": "(drafting convention: the disciplines that don't carry building walls and doors (life safety, fire protection, fire alarm, general/civil, structural, telecom); moved from guided.rs `NON_BUILDING`)",
    "words": [

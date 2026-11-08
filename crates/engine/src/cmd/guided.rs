@@ -753,7 +753,98 @@ fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mep
             }
         }
     }
-    rects.iter().zip(&per).map(|(r, segs)| cadaddy_mepfix::sheet_facts::sheet_frame(segs, *r)).collect()
+    let mut frames: Vec<cadaddy_mepfix::sheet_facts::SheetFrame> =
+        rects.iter().zip(&per).map(|(r, segs)| cadaddy_mepfix::sheet_facts::sheet_frame(segs, *r)).collect();
+    title_blocks_by_repeated_text(d, rects, &mut frames);
+    frames
+}
+
+/// A text is the sheets' furniture when the same words stand at the same place (in the sheet's
+/// width and height) on at least this share of the sheets...
+const REPEATED_TEXT_SHARE: f64 = 0.5;
+/// ...and on at least this many.
+const REPEATED_TEXT_SHEETS: usize = 3;
+/// The same place: within this share of the sheet's width and height.
+const REPEATED_TEXT_NEAR: f64 = 0.004;
+/// A title-block strip is within this share of the sheet's right edge (or of its bottom edge,
+/// [`TITLE_STRIP_BOTTOM`])...
+const TITLE_STRIP_RIGHT: f64 = 0.25;
+const TITLE_STRIP_BOTTOM: f64 = 0.2;
+/// ...and holds at least this many of its repeated texts.
+const TITLE_STRIP_TEXTS: usize = 3;
+/// The most texts of one wording compared place by place.
+const MAX_REPEATED_TEXTS: usize = 4_000;
+
+/// The title block of a sheet that rules none (no border, no strip drawn from edge to edge): the
+/// strip along its right (else bottom) edge where the texts every sheet of the set prints at the
+/// same place stand (the project's name and address, the firm, the stamp). Nothing there is
+/// building: without it, a stamp's name was read as a room and its boxes as walls.
+fn title_blocks_by_repeated_text(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]], frames: &mut [cadaddy_mepfix::sheet_facts::SheetFrame]) {
+    if rects.len() < REPEATED_TEXT_SHEETS || frames.iter().all(|f| f.title_block.is_some() || f.border) {
+        return;
+    }
+    let norm = |r: &[f64; 4]| (r[0].min(r[2]), r[1].min(r[3]), (r[2] - r[0]).abs(), (r[3] - r[1]).abs());
+    // Each text by its words: its sheet, its place on the sheet (0..1 across and up), its height.
+    let mut by_words: BTreeMap<String, Vec<(usize, [f64; 2], f64, f64)>> = BTreeMap::new();
+    for t in cadaddy_mepfix::sheet_facts::texts(d) {
+        let Some(i) = rects.iter().position(|r| in_rect(r, [t.at.x, t.at.y])) else { continue };
+        let Some(r) = rects.get(i) else { continue };
+        let (x0, y0, w, h) = norm(r);
+        if !(w > 0.0 && h > 0.0) {
+            continue;
+        }
+        let list = by_words.entry(t.value.trim().to_ascii_uppercase()).or_default();
+        if list.len() < MAX_REPEATED_TEXTS {
+            list.push((i, [(t.at.x - x0) / w, (t.at.y - y0) / h], t.at.x, t.at.y + t.height));
+        }
+    }
+    let need = REPEATED_TEXT_SHEETS.max((REPEATED_TEXT_SHARE * rects.len() as f64).ceil() as usize);
+    // Per sheet: the repeated texts' left edges in its right band, their tops in its bottom band.
+    let mut right: Vec<Vec<f64>> = vec![Vec::new(); rects.len()];
+    let mut bottom: Vec<Vec<f64>> = vec![Vec::new(); rects.len()];
+    for list in by_words.values() {
+        let sheets: BTreeSet<usize> = list.iter().map(|x| x.0).collect();
+        if sheets.len() < need {
+            continue;
+        }
+        for (i, p, x, top) in list {
+            let near = |q: &[f64; 2]| (q[0] - p[0]).abs() <= REPEATED_TEXT_NEAR && (q[1] - p[1]).abs() <= REPEATED_TEXT_NEAR;
+            let same_place: BTreeSet<usize> = list.iter().filter(|o| near(&o.1)).map(|o| o.0).collect();
+            if same_place.len() < need {
+                continue;
+            }
+            if p[0] >= 1.0 - TITLE_STRIP_RIGHT
+                && let Some(v) = right.get_mut(*i)
+            {
+                v.push(*x);
+            } else if p[1] <= TITLE_STRIP_BOTTOM
+                && let Some(v) = bottom.get_mut(*i)
+            {
+                v.push(*top);
+            }
+        }
+    }
+    for (i, f) in frames.iter_mut().enumerate() {
+        // (A ruled sheet's frame is read from its rules; a typical floor's plan, the same on every
+        // floor's sheets, repeats its labels at one place too.)
+        let (Some(r), None, false) = (rects.get(i), f.title_block, f.border) else { continue };
+        let (x0, y0, w, h) = norm(r);
+        let pad = 0.005 * w.min(h);
+        let (xs, tops) = (right.get(i).map_or(&[][..], Vec::as_slice), bottom.get(i).map_or(&[][..], Vec::as_slice));
+        if xs.len() >= TITLE_STRIP_TEXTS {
+            let edge = xs.iter().copied().fold(f64::INFINITY, f64::min) - pad;
+            if edge > f.area[0] && edge < f.area[2] {
+                f.title_block = Some([edge, y0, x0 + w, y0 + h]);
+                f.area[2] = edge;
+            }
+        } else if tops.len() >= TITLE_STRIP_TEXTS {
+            let edge = tops.iter().copied().fold(f64::NEG_INFINITY, f64::max) + pad;
+            if edge > f.area[1] && edge < f.area[3] {
+                f.title_block = Some([x0, y0, x0 + w, edge]);
+                f.area[1] = edge;
+            }
+        }
+    }
 }
 
 impl GuidedJob {
@@ -3600,12 +3691,15 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ensure_sheets_loaded(s, job)?;
     // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
     // one reading traces: the last floors were left out).
+    // (A level's floor plan, not its finish or furniture plan: those print the floor again with
+    // legends and tags no room has.)
     let plans = |arch_only: bool| -> Vec<[f64; 4]> {
-        job.sheet_regions
+        let of: Vec<&SheetRegion> = job
+            .sheet_regions
             .iter()
             .filter(|r| r.kind == "plan" && r.not_built.is_empty() && (!arch_only || r.discipline.eq_ignore_ascii_case("A")))
-            .map(SheetRegion::plan_rect)
-            .collect()
+            .collect();
+        floor_plans_first(job, of).into_iter().map(SheetRegion::plan_rect).collect()
     };
     // Rooms come from the architectural floor plans: other trades' plans show the same rooms
     // again (and phantom ones). Any plan when the set has no architectural ones.
@@ -22981,6 +23075,32 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
     }
 }
 
+/// A plan region's title: its view's, else its sheet's as the set's index (or sheet list) gives it.
+fn region_title(job: &GuidedJob, r: &SheetRegion) -> String {
+    if let Some(v) = r.view.as_ref().filter(|v| !v.title.trim().is_empty()) {
+        return v.title.clone();
+    }
+    let same = |x: &&Value| x.get("number").and_then(Value::as_str).is_some_and(|n| n.split('/').next().unwrap_or(n).eq_ignore_ascii_case(&r.number));
+    [job.index.as_ref(), job.sheets.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter_map(|list| list.get("sheets").and_then(Value::as_array).and_then(|a| a.iter().find(same)))
+        .find_map(|x| x.get("title").and_then(Value::as_str))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Each level's floor plans among `plans`: where a level has a plan titled as its floor plan, its
+/// other plans (the finish, furniture and slab plans of the same floor, drawn again with their
+/// legends, notes and tags) are no floor plan of it. A plan of several levels stays while one of
+/// them has no titled floor plan.
+fn floor_plans_first<'a>(job: &GuidedJob, plans: Vec<&'a SheetRegion>) -> Vec<&'a SheetRegion> {
+    let key = |l: &str| level_name(l).to_ascii_uppercase();
+    let floor: Vec<bool> = plans.iter().map(|r| cadaddy_mepfix::sheet_reader::names_floor_plan(&region_title(job, r))).collect();
+    let titled: BTreeSet<String> = plans.iter().zip(&floor).filter(|(_, f)| **f).flat_map(|(r, _)| r.all_levels()).map(|l| key(&l)).collect();
+    plans.into_iter().zip(floor).filter(|(r, f)| *f || r.all_levels().iter().any(|l| !titled.contains(&key(l)))).map(|(r, _)| r).collect()
+}
+
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
     // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
@@ -23002,6 +23122,7 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
             plans = job.sheet_regions.iter().filter(|r| building_plan(r)).filter(|r| r.discipline == d).collect();
         }
     }
+    let mut plans = floor_plans_first(job, plans);
     plans.sort_by_key(|r| rank(&r.level));
     // Dedup by canonical level name so aliases (R/RF/ROOF/T.O.) merge into one level.
     plans.dedup_by(|a, b| level_name(&a.level).eq_ignore_ascii_case(&level_name(&b.level)));
@@ -31972,6 +32093,32 @@ mod tests {
     }
 
     #[test]
+    fn a_levels_floor_plan_is_its_building_not_its_finish_or_slab_plan() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![
+            region("A-11", "1", "A", "plan", 0.0),
+            region("A-14", "1", "A", "plan", 200.0),
+            region("A-12", "1", "A", "plan", 400.0),
+            region("A-21", "2", "A", "plan", 600.0),
+            region("A-22", "2", "A", "plan", 800.0),
+        ];
+        job.index = Some(json!({"sheets": [
+            {"number": "A-11", "title": "SLAB PLAN"},
+            {"number": "A-14", "title": "FLOOR FINISH PLAN"},
+            {"number": "A-12", "title": "FLOOR PLAN"},
+            {"number": "A-21", "title": "LEVEL 2 PLAN"},
+            {"number": "A-22", "title": "LEVEL 2 FURNITURE PLAN"}
+        ]}));
+        let levels = building_levels(&job);
+        let x0: Vec<f64> = levels.iter().filter_map(|l| l["region"][0].as_f64()).collect();
+        // Level 1 from the sheet titled its floor plan; level 2, with none so titled, as before
+        // (its first plan).
+        assert_eq!(x0, [400.0, 600.0], "{levels:?}");
+        let kept: Vec<&str> = floor_plans_first(&job, job.sheet_regions.iter().collect()).iter().map(|r| r.number.as_str()).collect();
+        assert_eq!(kept, ["A-12", "A-21", "A-22"]);
+    }
+
+    #[test]
     fn the_building_levels_are_the_architectural_floor_plans() {
         let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
         job.sheet_regions = vec![
@@ -32172,6 +32319,43 @@ mod tests {
         assert_eq!(levels.len(), 1, "{levels:?}");
         s.execute("bspec.draft", &json!({"store": true, "levels": levels, "stack": true})).unwrap();
         s.execute("model.build", &json!({})).unwrap()
+    }
+
+    #[test]
+    fn an_unruled_sheets_title_block_is_where_every_sheet_prints_the_same_words() {
+        // Four sheets 1000 x 600 side by side, no border, no rules: each prints the project's
+        // name, address and stamp down its right edge, and its own plan with its own rooms; the
+        // last also a note at the same place on only one other sheet.
+        let mut s = crate::Session::new();
+        let rects: Vec<[f64; 4]> = (0..4).map(|i| [f64::from(i) * 1200.0, 0.0, f64::from(i) * 1200.0 + 1000.0, 600.0]).collect();
+        for (i, r) in rects.iter().enumerate() {
+            let x0 = r[0];
+            rect(&mut s, x0 + 100.0, 100.0, x0 + 700.0, 500.0);
+            let mut texts = vec![
+                ("SAMPLE INN".to_string(), 900.0, 500.0),
+                ("12 MAIN ST".to_string(), 900.0, 450.0),
+                ("JANE ROE".to_string(), 910.0, 300.0),
+                (format!("ROOM {i}"), 300.0 + 40.0 * i as f64, 300.0),
+                // The plan's own label, at one place on every sheet: left of the strip's band.
+                ("OFFICE".to_string(), 400.0, 200.0),
+            ];
+            if i >= 2 {
+                texts.push(("SEE NOTE".to_string(), 800.0, 100.0));
+            }
+            for (t, x, y) in texts {
+                s.execute("text", &json!({"at": [x0 + x, y], "text": t, "height": 8.0})).unwrap();
+            }
+        }
+        let frames = sheet_frames(s.doc().unwrap(), &rects);
+        for (f, r) in frames.iter().zip(&rects) {
+            let tb = f.title_block.expect("title block found");
+            // The strip starts just left of the repeated texts; the plan stays whole.
+            assert!(tb[0] > r[0] + 890.0 && tb[0] < r[0] + 900.0, "{f:?}");
+            assert!(f.area[2] <= tb[0] && f.area[2] > r[0] + 700.0, "{f:?}");
+        }
+        // One sheet alone: nothing repeats, nothing is taken.
+        let one = sheet_frames(s.doc().unwrap(), &rects[..1]);
+        assert!(one.first().is_some_and(|f| f.title_block.is_none()), "{one:?}");
     }
 
     #[test]
