@@ -143,6 +143,24 @@ pub fn write_as() -> Option<WriteAsHook> {
     WRITE_AS.get().copied()
 }
 
+/// Write a drawing file while it is made, never holding it whole (installed by hosts whose writer
+/// can: DXF). `open` is called only once the save is allowed (a file too big to reopen is refused
+/// before it) and gives where the bytes go. The bytes written; `None` when the format isn't
+/// written that way ([`IoHooks::write`] and [`write_as`] write it).
+pub type WriteStreamedHook =
+    fn(&Drawing, &str, &SaveAs, &mut dyn FnMut() -> std::io::Result<Box<dyn std::io::Write>>) -> std::result::Result<Option<u64>, String>;
+
+static WRITE_STREAMED: OnceLock<WriteStreamedHook> = OnceLock::new();
+
+/// Install the host's streamed writer: saves and exports of the formats it writes that way are
+/// written into the file as they are made.
+pub fn set_write_streamed(h: WriteStreamedHook) {
+    let _ = WRITE_STREAMED.set(h);
+}
+pub fn write_streamed() -> Option<WriteStreamedHook> {
+    WRITE_STREAMED.get().copied()
+}
+
 /// What a .cdy file holds and where, as the io layer's .cdy saver last wrote or read it (opaque
 /// here: the engine only keeps it for the next save).
 pub type CdyState = std::sync::Arc<dyn std::any::Any + Send + Sync>;
@@ -1145,10 +1163,16 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
     let (n, incremental) = match save_cdy(s, path, opts)? {
         Some(r) => r,
         None => {
-            let bytes = write_bytes(s, cmd, path, opts)?;
-            let n = commit_save(s, path, &bytes, store)?;
-            // The first DWG/DXF save checks what the file keeps: it reads these bytes back
-            // instead of writing the drawing a second time.
+            // A DXF is written into the file as it is made; anything else whole, then stored.
+            let (n, bytes) = match save_streamed(s, cmd, path, opts)? {
+                Some(n) => (n, None),
+                None => {
+                    let bytes = write_bytes(s, cmd, path, opts)?;
+                    (commit_save(s, path, &bytes, store)?, Some(bytes))
+                }
+            };
+            // The first DWG/DXF save checks what the file keeps: it reads these bytes (or the
+            // file just written) back instead of writing the drawing a second time.
             if is_exchange_file(path) && KEEP_WRITTEN.get() && s.state().is_ok_and(|st| !st.kept_checked.contains(&kept_key(s, path, *opts))) {
                 JUST_WRITTEN.with(|w| *w.borrow_mut() = Some((path.to_string(), bytes)));
             }
@@ -1178,6 +1202,57 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
     let mut copy_kept = None;
     let copy = (is_cdy(path) && dwg_copy()).then(|| save_dwg_copy(s, cmd, path, &mut copy_kept));
     Ok(Saved { bytes: n, copy, copy_kept, incremental, note })
+}
+
+/// A DXF save written into the file as it is made ([`write_streamed`]): never held whole, and
+/// refused before the file or its .bak is touched when it would be too big to reopen. `None`
+/// when the host has no such writer or doesn't write `path` that way.
+fn save_streamed(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Option<usize>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(hook) = write_streamed().filter(|_| is_dxf(path) && opts.version != Some(Version::R12)) else { return Ok(None) };
+        let Some(n) = stream_to(cmd, s.state()?.drawing(), path, opts, true, hook)? else { return Ok(None) };
+        saved_to(s, path, n, None).map(Some)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, cmd, path, opts);
+        Ok(None)
+    }
+}
+
+/// Write `d` to `path` with `opts` through the host's streamed writer `hook`, into a temporary
+/// file put in place at the end. A save (`save`) makes the checks and keeps the .bak that
+/// [`store_keeping`] does; an export only those of any written file. The .bak is kept, and the
+/// temporary file made, only once the writer has counted the file and allowed it. The bytes
+/// written; `None` when `hook` doesn't write this format that way.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn stream_to(cmd: &str, d: &Drawing, path: &str, opts: &SaveAs, save: bool, hook: WriteStreamedHook) -> Result<Option<usize>> {
+    let p = std::path::Path::new(path);
+    let before =
+        if save { check_store(cmd, path)? } else { crate::writefile::check(p).map(|()| None).map_err(|e| bad(cmd, format!("{path}: {e}")))? };
+    let permissions = std::fs::symlink_metadata(p).ok().filter(std::fs::Metadata::is_file).map(|m| m.permissions());
+    let mut pending: Option<crate::atomic_write::Pending> = None;
+    let mut refused: Option<crate::EngineError> = None;
+    let written = hook(d, path, opts, &mut || {
+        if save && let Err(e) = keep_previous(path, before.is_some()) {
+            let msg = e.to_string();
+            refused = Some(e);
+            return Err(std::io::Error::other(msg));
+        }
+        let file = crate::atomic_write::Pending::create(p, permissions.clone())?;
+        let w = file.writer()?;
+        pending = Some(file);
+        Ok(Box::new(w))
+    });
+    let n = match written {
+        Ok(Some(n)) => n,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(refused.unwrap_or_else(|| bad(cmd, e))),
+    };
+    let file = pending.ok_or_else(|| bad(cmd, format!("{path}: nothing was written")))?;
+    file.commit().map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    Ok(Some(usize::try_from(n).unwrap_or(usize::MAX)))
 }
 
 /// Save to a .cdy file through the .cdy saver: appended to the file when it is the one the drawing
@@ -1300,40 +1375,11 @@ pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
 /// [`store`], keeping the previous drawing file as `.bak` only when `keep_bak`: a DWG copy
 /// (DWGCOPY) keeps none, as its `.bak` would replace the drawing's own.
 pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
-    crate::writefile::protected(std::path::Path::new(path)).map_err(|e| bad("save", e.to_string()))?;
-    name_fits(path)?;
-    // An agent's dry run changes nothing, files included.
-    if !crate::agent::writes_allowed() {
-        return Err(crate::EngineError::Other(format!("Dry run: {path} was not written.")));
-    }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // The file being replaced, if any: a read-only one is left alone (as AutoCAD does: save
-        // under another name), and the new file keeps its permissions.
-        let before = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file);
-        if let Some(m) = &before
-            && m.permissions().readonly()
-        {
-            return Err(bad("save", format!("{path} is read-only. Save it under another name with SAVEAS.")));
-        }
-        // A drawing saved over keeps its previous version as .bak, as AutoCAD does (ISAVEBAK). A
-        // file that is cut off never replaces a good .bak ([`backup`]).
-        if keep_bak && before.is_some() && is_drawing_file(path) && crate::autosave::isavebak() {
-            let bak = bak_path(path);
-            let keep = || -> std::io::Result<()> {
-                // An earlier read-only .bak is replaced, not refused (a rename can't replace one
-                // on Windows).
-                if let Ok(m) = std::fs::metadata(&bak)
-                    && m.permissions().readonly()
-                {
-                    let mut p = m.permissions();
-                    #[allow(clippy::permissions_set_readonly_false)]
-                    p.set_readonly(false);
-                    std::fs::set_permissions(&bak, p)?;
-                }
-                backup(std::path::Path::new(path))
-            };
-            keep().map_err(|e| bad("save", format!("{path}: couldn't keep the previous version as {bak} ({e}); nothing was saved")))?;
+        let before = check_store("save", path)?;
+        if keep_bak {
+            keep_previous(path, before.is_some())?;
         }
         // A failed save leaves nothing behind but the file as it was; the new file keeps the
         // replaced one's permissions.
@@ -1341,11 +1387,63 @@ pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<
     }
     #[cfg(target_arch = "wasm32")]
     {
+        crate::writefile::protected(std::path::Path::new(path)).map_err(|e| bad("save", e.to_string()))?;
+        name_fits(path)?;
+        // An agent's dry run changes nothing, files included.
+        if !crate::agent::writes_allowed() {
+            return Err(crate::EngineError::Other(format!("Dry run: {path} was not written.")));
+        }
         let _ = keep_bak;
         let name = file_name(path);
         let deliver = deliver().ok_or_else(|| bad("save", "saving files is not available in this build; use document.bytes"))?;
         deliver(&name, "application/octet-stream", bytes).map_err(|e| bad("save", format!("{name}: {e}")))
     }
+}
+
+/// What a save to `path` must be allowed before anything is written: not into a system folder,
+/// a name the file system takes, not during an agent's dry run, not over a read-only file. The
+/// file being replaced, if any.
+#[cfg(not(target_arch = "wasm32"))]
+fn check_store(cmd: &str, path: &str) -> Result<Option<std::fs::Metadata>> {
+    crate::writefile::protected(std::path::Path::new(path)).map_err(|e| bad(cmd, e.to_string()))?;
+    name_fits(path)?;
+    // An agent's dry run changes nothing, files included.
+    if !crate::agent::writes_allowed() {
+        return Err(crate::EngineError::Other(format!("Dry run: {path} was not written.")));
+    }
+    // The file being replaced, if any: a read-only one is left alone (as AutoCAD does: save
+    // under another name), and the new file keeps its permissions.
+    let before = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file);
+    if let Some(m) = &before
+        && m.permissions().readonly()
+    {
+        return Err(bad(cmd, format!("{path} is read-only. Save it under another name with SAVEAS.")));
+    }
+    Ok(before)
+}
+
+/// A drawing saved over keeps its previous version as .bak, as AutoCAD does (ISAVEBAK), when
+/// there was one (`existed`). A file that is cut off never replaces a good .bak ([`backup`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn keep_previous(path: &str, existed: bool) -> Result<()> {
+    if !(existed && is_drawing_file(path) && crate::autosave::isavebak()) {
+        return Ok(());
+    }
+    let bak = bak_path(path);
+    let keep = || -> std::io::Result<()> {
+        // An earlier read-only .bak is replaced, not refused (a rename can't replace one
+        // on Windows).
+        if let Ok(m) = std::fs::metadata(&bak)
+            && m.permissions().readonly()
+        {
+            let mut p = m.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            p.set_readonly(false);
+            std::fs::set_permissions(&bak, p)?;
+        }
+        backup(std::path::Path::new(path))
+    };
+    keep().map_err(|e| bad("save", format!("{path}: couldn't keep the previous version as {bak} ({e}); nothing was saved")))
 }
 
 /// The backup of the drawing file `path`, beside it. A DWG's is `<name>.bak`, as AutoCAD names it,
@@ -1539,8 +1637,13 @@ fn backup(path: &std::path::Path) -> std::io::Result<()> {
 fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&str, &[u8]) -> Result<()>) -> Result<usize> {
     s.state()?;
     store(path, bytes)?;
+    saved_to(s, path, bytes.len(), Some(bytes))
+}
+
+/// [`commit_save`] once the `n` bytes are in the file (`bytes`: them, when held).
+fn saved_to(s: &mut Session, path: &str, n: usize, bytes: Option<&[u8]>) -> Result<usize> {
     if !is_drawing_file(path) {
-        return Ok(bytes.len());
+        return Ok(n);
     }
     image_folder(Some(path));
     let st = s.state_mut()?;
@@ -1549,10 +1652,10 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
     st.title = file_name(path);
     // The file as this save left it: the next save there is checked against it. (A .cdy save may
     // have appended, so its bytes are not the file.)
-    st.disk_id = DiskId::of(path, (!is_cdy(path)).then_some(bytes));
+    st.disk_id = DiskId::of(path, bytes.filter(|_| !is_cdy(path)));
     // A BEgin group still open when the drawing is saved ends there.
     st.end_undo_group();
-    Ok(bytes.len())
+    Ok(n)
 }
 
 /// The save result; on the web it also names the file the browser downloaded.
@@ -1825,8 +1928,9 @@ fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTr
 
 thread_local! {
     /// The bytes of the DWG/DXF file a save just wrote, for [`report_not_kept`] (taken there, or
-    /// dropped at the end of the save).
-    static JUST_WRITTEN: std::cell::RefCell<Option<(String, Vec<u8>)>> = const { std::cell::RefCell::new(None) };
+    /// dropped at the end of the save); `None` when it was written as it was made (the file is
+    /// read back: [`written_back`]).
+    static JUST_WRITTEN: std::cell::RefCell<Option<(String, Option<Vec<u8>>)>> = const { std::cell::RefCell::new(None) };
     /// A save that reports what the file keeps is running (only it wants [`JUST_WRITTEN`]).
     static KEEP_WRITTEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -1862,6 +1966,29 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     }
     JUST_WRITTEN.with(|w| w.borrow_mut().take());
     Ok(r)
+}
+
+/// The largest file the "not kept" check reads back after a save that wrote it as it was made:
+/// reading a bigger one back would take far more memory than the save did.
+const KEPT_READ_MAX: u64 = 256 << 20;
+
+/// The file a save just wrote as it was made, read back for the "not kept" check (`Err` when
+/// over [`KEPT_READ_MAX`] or unreadable).
+fn written_back(path: &str) -> std::result::Result<Vec<u8>, String> {
+    let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if len > KEPT_READ_MAX {
+        return Err(too_big_to_check(len));
+    }
+    crate::readfile::read(path).map_err(|e| e.to_string())
+}
+
+/// Why a file of `len` bytes isn't read back for the "not kept" check.
+fn too_big_to_check(len: u64) -> String {
+    format!(
+        "the file is {} MB, too large to read back for the check (at most {} MB); what a .cdy keeps that the file doesn't is not listed",
+        len >> 20,
+        KEPT_READ_MAX >> 20
+    )
 }
 
 /// A finished "not kept" check: the target it was for, whether it ran to the end (a failed check
@@ -1931,7 +2058,8 @@ fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
         let spawned = std::thread::Builder::new().name("kept-check".into()).spawn(move || {
             let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let bytes = match written {
-                    Some(b) => Ok(b),
+                    Some(Some(b)) => Ok(b),
+                    Some(None) => written_back(&path_owned),
                     None => match write_as {
                         Some(w) => w(&d, &path_owned, &opts),
                         None => (hooks.write)(&d, &path_owned),
@@ -1957,7 +2085,17 @@ fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
     let d = st.drawing();
     // Written as the save wrote it (the version and binary DXF asked for): the bytes it wrote.
     let bytes = match JUST_WRITTEN.with(|w| w.borrow_mut().take()).filter(|(p, _)| p == path) {
-        Some((_, b)) => Ok(b),
+        Some((_, Some(b))) => Ok(b),
+        // Written as it was made: the file, unless it is too big to read back.
+        Some((_, None)) => match std::fs::metadata(path).map(|m| m.len()) {
+            Ok(len) if len > KEPT_READ_MAX => {
+                if let Some(o) = r.as_object_mut() {
+                    o.insert("notKeptSkipped".into(), json!(too_big_to_check(len)));
+                }
+                return;
+            }
+            _ => written_back(path),
+        },
         None => match WRITE_AS.get() {
             Some(write_as) if opts != SaveAs::default() => write_as(d, path, &opts),
             _ => (hooks.write)(d, path),
