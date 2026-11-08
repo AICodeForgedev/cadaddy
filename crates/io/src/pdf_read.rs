@@ -4911,10 +4911,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         // Fix 5: detect repeated symbol clusters, first beside the page's real tag texts.
         // This runs before the OCR: the OCR reads the short lines inside a symbol (the bars of
         // a receptacle, the letter in a circle) as glyphs, and a symbol robbed of them is lost.
+        // (Not the sheet's own number in its title block, nor any text far taller than the
+        // page's lettering: a title-block cell round its sheet number was made a device symbol,
+        // and the sheet lost its number.)
+        let sheet_no = sheet_number_index(&texts, &to_sheet, sheet);
+        let tall = MAX_TAG_HEIGHT_OVER_MEDIAN * median_text_height(&texts);
         let anchors: Vec<TagAnchor> = texts
             .iter()
             .enumerate()
-            .filter(|(_, t)| is_device_tag(&t.value))
+            .filter(|(i, t)| is_device_tag(&t.value) && Some(*i) != sheet_no && t.height <= tall)
             .map(|(i, t)| TagAnchor { value: &t.value, at: t.at, height: t.height, text_idx: Some(i), ocr_idx: None })
             .collect();
         let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false));
@@ -6263,9 +6268,27 @@ fn stitch_run(run: &[ImageOut], frame: &dyn Fn(&M) -> Option<((f64, f64), (f64, 
 /// The sheet number from the title block: the largest short text near the right or bottom edge
 /// that looks like one (E-4, A-101, M2.1).
 fn sheet_number(texts: &[TextOut], to_sheet: &dyn Fn(f64, f64) -> (f64, f64), sheet: (f64, f64)) -> Option<String> {
+    sheet_number_index(texts, to_sheet, sheet).and_then(|i| texts.get(i)).map(|t| t.value.trim().to_string())
+}
+
+/// A device mark is never taller than this many times the page's median lettering (a sheet
+/// number, a view title's bubble number is).
+const MAX_TAG_HEIGHT_OVER_MEDIAN: f64 = 2.5;
+
+/// The page's median text height (0 with no text: then no text is too tall).
+fn median_text_height(texts: &[TextOut]) -> f64 {
+    let mut h: Vec<f64> = texts.iter().map(|t| t.height).filter(|v| v.is_finite() && *v > 0.0).collect();
+    h.sort_by(f64::total_cmp);
+    h.get(h.len() / 2).copied().unwrap_or(f64::INFINITY)
+}
+
+/// Which text is the sheet's number: the tallest sheet-number-like text near the title block's
+/// edge of the sheet.
+fn sheet_number_index(texts: &[TextOut], to_sheet: &dyn Fn(f64, f64) -> (f64, f64), sheet: (f64, f64)) -> Option<usize> {
     texts
         .iter()
-        .filter(|t| {
+        .enumerate()
+        .filter(|(_, t)| {
             let v = t.value.trim();
             let (x, y) = to_sheet(t.at.0, t.at.1);
             v.len() <= 8
@@ -6274,8 +6297,8 @@ fn sheet_number(texts: &[TextOut], to_sheet: &dyn Fn(f64, f64) -> (f64, f64), sh
                 && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.'))
                 && (x > sheet.0 * 0.8 || y < sheet.1 * 0.2)
         })
-        .max_by(|a, b| a.height.total_cmp(&b.height))
-        .map(|t| t.value.trim().to_string())
+        .max_by(|a, b| a.1.height.total_cmp(&b.1.height))
+        .map(|(i, _)| i)
 }
 
 fn decode_pdf_string(b: &[u8]) -> String {
