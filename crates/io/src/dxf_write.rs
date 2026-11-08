@@ -12,9 +12,27 @@ use cadaddy_geom::{Bounds2, Vec2, Vec3};
 
 use crate::dxf_ext::{self, DimVal, K};
 
-struct W {
+/// Groups made between hand-overs to a streaming receiver ([`W::flush_some`]).
+const FLUSH_GROUPS: usize = 1 << 16;
+
+/// The receiver of a streamed write: the groups of whole records, in order; `false` when it
+/// wants no more (writing the file failed).
+pub(crate) type Records<'o> = &'o mut dyn FnMut(Vec<Tag>) -> bool;
+
+struct W<'o> {
     t: Vec<Tag>,
+    /// Streaming: records go here once nothing will patch them ([`W::flush`]), so the file is
+    /// never held whole; `None` keeps every group in `t`.
+    out: Option<Records<'o>>,
+    /// The receiver wants no more: what is made is dropped and the big loops stop.
+    stopped: bool,
+    /// Handles whose records are noted as they are written (group members), and those written.
+    watch: std::collections::HashSet<String>,
+    seen: std::collections::HashSet<String>,
     next: u64,
+    /// Where [`W::h`] started giving out handles, and the runs [`W::h_direct`] gave.
+    start: u64,
+    direct: Vec<(u64, u64)>,
     /// Upper-case plot style name → its `ACDBPLACEHOLDER` handle (group 390 of layers and objects).
     pstyles: HashMap<String, String>,
     /// Upper-case layer name → its LAYER table record handle (group 331 of viewports).
@@ -31,7 +49,52 @@ struct W {
     used: std::collections::HashSet<u64>,
 }
 
-impl W {
+impl W<'_> {
+    /// A writer that keeps every group, handing out handles from `next`.
+    fn new(next: u64) -> Self {
+        W {
+            t: Vec::new(),
+            out: None,
+            stopped: false,
+            watch: std::collections::HashSet::new(),
+            seen: std::collections::HashSet::new(),
+            next,
+            start: next,
+            direct: Vec::new(),
+            pstyles: HashMap::new(),
+            layers: HashMap::new(),
+            reactors: HashMap::new(),
+            materials: HashMap::new(),
+            kept: std::collections::BTreeMap::new(),
+            used: std::collections::HashSet::new(),
+        }
+    }
+    /// Streaming: hand the records made so far to the receiver. Called between records, once
+    /// nothing will patch them (from the BLOCKS section on).
+    fn flush(&mut self) {
+        let Some(out) = self.out.as_mut() else { return };
+        if self.stopped {
+            self.t.clear();
+            return;
+        }
+        if !self.watch.is_empty() {
+            for t in self.t.iter().filter(|t| t.code == 5) {
+                let h = t.str();
+                if self.watch.contains(&h) {
+                    self.seen.insert(h);
+                }
+            }
+        }
+        if !self.t.is_empty() && !out(std::mem::take(&mut self.t)) {
+            self.stopped = true;
+        }
+    }
+    /// [`Self::flush`] once enough groups are made (between records).
+    fn flush_some(&mut self) {
+        if self.out.is_some() && self.t.len() >= FLUSH_GROUPS {
+            self.flush();
+        }
+    }
     fn s(&mut self, c: i32, v: impl Into<cadaddy_dxf::SmolStr>) {
         self.t.push(Tag::s(c, v));
     }
@@ -50,22 +113,37 @@ impl W {
         self.f(c, p.x);
         self.f(c + 10, p.y);
     }
-    /// A new handle: one no object or kept handle has, recorded so [`Self::h_kept`] can't give it
-    /// out again (a kept handle equal to one given here made two objects share it).
+    /// A new handle: one no object or kept handle has. [`Self::h_kept`] can't give it out again
+    /// (a kept handle equal to one given here made two objects share it): every handle from
+    /// [`W::start`] up to `next` is given out or was taken already ([`Self::given`]), so none is
+    /// recorded (a large drawing's writer gives out millions).
     fn h(&mut self) -> String {
         while self.used.contains(&self.next) && self.next < u64::MAX {
             self.next += 1;
         }
         let n = self.next;
-        self.used.insert(n);
         self.next = n.saturating_add(1);
         format!("{n:X}")
+    }
+    /// The next handle as it is, for a generated entity: not one [`Self::h_kept`] counts as given.
+    fn h_direct(&mut self) -> u64 {
+        let n = self.next;
+        self.next = n.saturating_add(1);
+        match self.direct.last_mut() {
+            Some((_, end)) if *end == n => *end = self.next,
+            _ => self.direct.push((n, self.next)),
+        }
+        n
+    }
+    /// Whether [`Self::h`] gave out `k` or passed it as taken.
+    fn given(&self, k: u64) -> bool {
+        (self.start..self.next).contains(&k) && !self.direct.iter().any(|(a, b)| (*a..*b).contains(&k))
     }
     /// The handle the file gave the table record or object `key` (`LAYER/WALLS`, `DICT/ACAD_GROUP`…)
     /// when it is free, else a new one.
     fn h_kept(&mut self, key: &str) -> String {
         match self.kept.get(key).copied() {
-            Some(k) if k > 0 && k < self.next && self.used.insert(k) => format!("{k:X}"),
+            Some(k) if k > 0 && k < self.next && !self.given(k) && self.used.insert(k) => format!("{k:X}"),
             _ => self.h(),
         }
     }
@@ -118,6 +196,7 @@ fn write_xclips(w: &mut W, plan: &HashMap<Handle, XclipObj>, every: &[&Entity]) 
     let mut refs: Vec<(&Entity, &XclipObj)> = every.iter().filter_map(|e| plan.get(&e.handle).map(|x| (*e, x))).collect();
     refs.sort_by_key(|(e, _)| e.handle);
     for (e, x) in refs {
+        w.flush_some();
         let EntityKind::Insert(ins) = &e.kind else { continue };
         let Some(clip) = &ins.clip else { continue };
         let eh = e.handle.hex();
@@ -342,16 +421,7 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADADDY` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-    let mut ov = W {
-        t: Vec::new(),
-        next: 0,
-        pstyles: HashMap::new(),
-        layers: HashMap::new(),
-        reactors: HashMap::new(),
-        materials: HashMap::new(),
-        kept: std::collections::BTreeMap::new(),
-        used: std::collections::HashSet::new(),
-    };
+    let mut ov = W::new(0);
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -2464,62 +2534,110 @@ pub fn write(d: &Drawing) -> String {
     cadaddy_dxf::write_ascii(&tags(d, Version::R2000))
 }
 
+/// How a DXF declaring `version` is written (the file's own groups).
+pub(crate) fn job(version: Version) -> crate::dxf_post::Job {
+    crate::dxf_post::Job { version, target: version, dwg: false, bridge: false }
+}
+
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`.
 pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
-    tags_for(d, version, version, false, false)
+    crate::dxf_post::tags(&Views::of(d), job(version))
 }
 
 /// The tags CADaddy's own DWG codec encodes into a `version` DWG.
 pub(crate) fn dwg_tags(d: &Drawing, version: Version) -> Vec<Tag> {
-    tags_for(d, version, version, true, false)
+    crate::dxf_post::tags(&Views::of(d), crate::dxf_post::Job { dwg: true, ..job(version) })
 }
 
-/// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
-/// version's (MULTILEADER from 2007). Binary DXF (the converter reads it in about two thirds of
-/// the time of ASCII, and it is smaller and quicker to write), with the LTYPE table's names and
-/// its group-code count (binary DXF has no lines to count them by).
+/// The writing of the R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types
+/// are the DWG version's (MULTILEADER from 2007).
+pub(crate) fn bridge_job(dwg: Version) -> crate::dxf_post::Job {
+    crate::dxf_post::Job { version: Version::R2000, target: dwg, dwg: true, bridge: true }
+}
+
+/// The DXF the DWG bridge converts to a `dwg` version DWG ([`dwg_bridge_from`]).
+#[cfg(test)]
 pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>, usize) {
-    let mut tags = tags_for(d, Version::R2000, dwg, true, true);
-    bridge_markers(&mut tags);
-    let mut names = Vec::new();
-    let mut in_ltype = false;
-    for t in &tags {
-        match t.code {
-            0 => {
-                // The LTYPE table ends: no more names (the rest is not read).
-                if !names.is_empty() && t.str() == "ENDTAB" {
-                    break;
-                }
-                in_ltype = t.str() == "LTYPE";
-            }
-            2 if in_ltype => {
-                names.push(t.str());
-                in_ltype = false;
-            }
-            _ => {}
-        }
-    }
+    let views = Views::of(d);
+    let mut plan = crate::dxf_post::Plan::new(&views, bridge_job(dwg));
+    dwg_bridge_from(d, &mut plan)
+}
+
+/// The DXF the DWG bridge converts ([`bridge_job`]), written from `plan` (counted already, so a
+/// drawing too big is refused before this). Binary DXF (the converter reads it in about two
+/// thirds of the time of ASCII, and it is smaller and quicker to write), with the LTYPE table's
+/// names and its group-code count (binary DXF has no lines to count them by). Made as the groups
+/// come, never held as a list (only a drawing with other programs' custom records is: they are
+/// moved into a kept dictionary first).
+pub(crate) fn dwg_bridge_from(d: &Drawing, plan: &mut crate::dxf_post::Plan) -> (Vec<u8>, Vec<String>, usize) {
     // Binary is faster for the bridge, but the materials it passes on (entities' and layers'
     // group 347, and the MATERIAL colours) are read from text: a drawing with materials goes as
     // text (tester 0.7.7e: through DWG the assignments were lost and colours came back white).
     let uses_materials = !d.materials.is_empty()
         || d.layers.iter().any(|l| l.material.is_some())
         || d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).any(|e| e.common.material.is_some());
+    let encoder = || if uses_materials { cadaddy_dxf::Encoder::ascii(false) } else { cadaddy_dxf::Encoder::binary(false, true) };
     let write = |tags: &[Tag]| {
-        if uses_materials { cadaddy_dxf::write_ascii_as(tags, false).into_bytes() } else { cadaddy_dxf::write_binary_keeping_breaks(tags, false) }
+        let mut enc = encoder();
+        let mut out = Vec::with_capacity(tags.len() * 12);
+        enc.start(&mut out);
+        tags.iter().for_each(|t| enc.put(t, &mut out));
+        out
     };
-    if !uses_materials {
-        mtext_carets_decoded(&mut tags);
+    let mut names = Vec::new();
+    let mut names_done = false;
+    let mut in_ltype = false;
+    let mut in_mtext = false;
+    // The LTYPE table's names, then the groups as the bridge reads them: subclass markers it
+    // spells otherwise, and (binary) MTEXT carets decoded.
+    let mut each = |t: &Tag| -> Option<Tag> {
+        match t.code {
+            0 => {
+                let s = t.str();
+                // The LTYPE table ends: no more names (the rest is not read).
+                if !names.is_empty() && s == "ENDTAB" {
+                    names_done = true;
+                }
+                in_ltype = !names_done && s == "LTYPE";
+                in_mtext = s == "MTEXT";
+            }
+            2 if in_ltype => {
+                names.push(t.str());
+                in_ltype = false;
+            }
+            100 => return bridge_marker(t),
+            1 | 3 if in_mtext && !uses_materials => return mtext_carets_decoded(t),
+            _ => {}
+        }
+        None
+    };
+    if !has_custom(d) {
+        let mut enc = encoder();
+        let mut out = Vec::new();
+        enc.start(&mut out);
+        let mut count = 0usize;
+        plan.write(&mut |t| {
+            match each(t) {
+                Some(t) => enc.put(&t, &mut out),
+                None => enc.put(t, &mut out),
+            }
+            count += 1;
+            true
+        });
+        return (out, names, count);
     }
+    let mut tags = Vec::with_capacity(plan.groups());
+    plan.write(&mut |t| {
+        tags.push(each(t).unwrap_or_else(|| t.clone()));
+        true
+    });
     let dxf = write(&tags);
     // Other programs' custom entities and objects, which the DWG writer can't write from their
     // DXF groups, go in a kept dictionary of XRECORDs instead (`dwg_keep`; reading the DWG back
     // puts them where they were). Only a drawing with such data is checked.
-    if has_custom(d) {
-        let take = cadaddy_dwg::custom_records(&dxf);
-        if let Some((kept, _)) = crate::dwg_keep::stash_tags(&tags, &take) {
-            return (write(&kept), names, kept.len());
-        }
+    let take = cadaddy_dwg::custom_records(&dxf);
+    if let Some((kept, _)) = crate::dwg_keep::stash_tags(&tags, &take) {
+        return (write(&kept), names, kept.len());
     }
     (dxf, names, tags.len())
 }
@@ -2571,58 +2689,63 @@ fn has_custom(d: &Drawing) -> bool {
         || d.blocks.values().any(|b| custom(&b.entities))
 }
 
-/// The caret codes (`^I`, `^J`, `^ `) of MTEXT contents turned into the characters. The bridge
-/// reads the binary DXF without decoding them (only its ASCII reader does), so a tab or line
-/// break would be stored in the DWG as the two characters.
-fn mtext_carets_decoded(tags: &mut [Tag]) {
-    let mut in_mtext = false;
-    for t in tags.iter_mut() {
-        match t.code {
-            0 => in_mtext = t.str() == "MTEXT",
-            1 | 3 if in_mtext => {
-                let s = t.str();
-                if s.contains('^') {
-                    *t = Tag::s(t.code, crate::dxf_read::mtext_dxf::decode_contents(&s));
-                }
-            }
-            _ => {}
-        }
+/// An MTEXT contents group (1 or 3) with its caret codes (`^I`, `^J`, `^ `) turned into the
+/// characters (`None`: it has none). The bridge reads the binary DXF without decoding them (only
+/// its ASCII reader does), so a tab or line break would be stored in the DWG as the two characters.
+fn mtext_carets_decoded(t: &Tag) -> Option<Tag> {
+    let s = t.str();
+    s.contains('^').then(|| Tag::s(t.code, crate::dxf_read::mtext_dxf::decode_contents(&s)))
+}
+
+/// A subclass marker the DWG bridge knows by another spelling (it matches them exactly), as it
+/// spells it (`None`: any other). AutoCAD writes a dynamic block lookup parameter's as
+/// `AcDbBlockLookUpParameter`, the bridge reads `AcDbBlockLookupParameter`; otherwise the
+/// parameter loses its name and its lookup action in the DWG, and AutoCAD's lookups stop working.
+fn bridge_marker(t: &Tag) -> Option<Tag> {
+    t.str().trim().eq_ignore_ascii_case("AcDbBlockLookupParameter").then(|| Tag::s(100, "AcDbBlockLookupParameter"))
+}
+
+/// The drawing as the writer writes it: without an in-place block edit in progress (the drawing
+/// as before it), and as saved with its xrefs ([`crate::dxf_xref::saved_view`]: the post-passes
+/// see this one).
+pub(crate) struct Views<'a> {
+    committed: std::borrow::Cow<'a, Drawing>,
+    saved: Option<Drawing>,
+}
+
+impl<'a> Views<'a> {
+    pub(crate) fn of(d: &'a Drawing) -> Self {
+        let committed = d.committed();
+        let saved = crate::dxf_xref::saved_view(&committed);
+        Views { committed, saved }
+    }
+    pub(crate) fn committed(&self) -> &Drawing {
+        &self.committed
+    }
+    /// The drawing as saved (xref contents left out).
+    pub(crate) fn saved(&self) -> &Drawing {
+        self.saved.as_ref().unwrap_or(&self.committed)
     }
 }
 
-/// Subclass markers the DWG bridge knows by another spelling (it matches them exactly):
-/// AutoCAD writes a dynamic block lookup parameter's as `AcDbBlockLookUpParameter`, the bridge
-/// reads `AcDbBlockLookupParameter`; otherwise the parameter loses its name and its lookup
-/// action in the DWG, and AutoCAD's lookups stop working.
-fn bridge_markers(tags: &mut [Tag]) {
-    for t in tags.iter_mut().filter(|t| t.code == 100) {
-        if t.str().trim().eq_ignore_ascii_case("AcDbBlockLookupParameter") {
-            *t = Tag::s(100, "AcDbBlockLookupParameter");
-        }
-    }
-}
-
-/// The drawing's DXF tags, declaring `version` in `$ACADVER`, with what `target` (the version the
-/// file ends up in: `version`, or the DWG version the bridge writes) has.
-fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: bool) -> Vec<Tag> {
-    // An in-place block edit in progress is not written: the drawing as before it.
-    let committed = d.committed();
-    let d: &Drawing = &committed;
+/// Make the drawing's DXF records, declaring `version` in `$ACADVER`, with what `target` (the
+/// version the file ends up in: `version`, or the DWG version the bridge writes) has, handing
+/// them to `out` as they are made (the post-passes come after: [`crate::dxf_post`]). The handle
+/// seed is left `0` for them; the next free handle is returned.
+pub(crate) fn emit(v: &Views, version: Version, target: Version, dwg: bool, bridge: bool, out: Records) -> u64 {
+    let d: &Drawing = v.committed();
     // Structural handles start above every entity handle.
-    let mut w = W {
-        t: Vec::new(),
-        next: d.handseed.max(0x100).saturating_add(0x1000),
-        pstyles: HashMap::new(),
-        layers: HashMap::new(),
-        reactors: hatch_reactors(d),
-        materials: HashMap::new(),
-        kept: (*d.kept_handles).clone(),
-        used: std::iter::once(&d.model)
-            .chain(d.layouts.iter().map(|l| &l.entities))
-            .chain(d.blocks.values().map(|b| &b.entities))
-            .flat_map(|st| st.iter().map(|e| e.handle.0))
-            .collect(),
-    };
+    let mut w = W::new(d.handseed.max(0x100).saturating_add(0x1000));
+    w.out = Some(out);
+    w.reactors = hatch_reactors(d);
+    w.kept = (*d.kept_handles).clone();
+    w.used = std::iter::once(&d.model)
+        .chain(d.layouts.iter().map(|l| &l.entities))
+        .chain(d.blocks.values().map(|b| &b.entities))
+        .flat_map(|st| st.iter().map(|e| e.handle.0))
+        .collect();
+    // Group members: the GROUP objects list those written.
+    w.watch = d.groups.iter().flat_map(|g| g.members.iter().map(|m| m.hex())).collect();
     // Group handles first: each member lists its groups among its persistent reactors.
     let group_handles: Vec<String> =
         d.groups.iter().filter(|g| !g.name.is_empty()).map(|g| w.h_kept(&format!("GROUP/{}", g.name.to_ascii_uppercase()))).collect();
@@ -2640,8 +2763,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
     // The geographic location: model space's extension dictionary and its GEODATA object.
     let geo_handles: Option<(String, String)> = d.geo.as_ref().filter(|g| g.is_valid()).map(|_| (w.h(), w.h()));
     // Xrefs are saved as references: without their objects and the symbols that came with them.
-    let saved_view = crate::dxf_xref::saved_view(d);
-    let d = saved_view.as_ref().unwrap_or(d);
+    let d = v.saved();
     let ps_brs: Vec<(String, String, &Layout)> = paper_layouts
         .iter()
         .enumerate()
@@ -2968,7 +3090,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
         w.p(10, ext.max.to3(0.0));
     }
     header_vars(&mut w, d);
-    let seed_pos = w.t.len();
+    // Set by the post-passes, once every handle is given out.
     w.s(9, "$HANDSEED");
     w.s(5, "0");
     w.s(0, "ENDSEC");
@@ -3279,16 +3401,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
-        let mut newer = W {
-            t: Vec::new(),
-            next: 0,
-            pstyles: HashMap::new(),
-            layers: HashMap::new(),
-            reactors: HashMap::new(),
-            materials: HashMap::new(),
-            kept: std::collections::BTreeMap::new(),
-            used: std::collections::HashSet::new(),
-        };
+        let mut newer = W::new(0);
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             // DIMPOST is written even when empty: a reader that defaults a missing one to "<>"
@@ -3380,6 +3493,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
     w.s(0, "ENDSEC");
 
     // ---------------- BLOCKS ----------------
+    // Nothing before this is patched any more.
+    w.flush();
     w.s(0, "SECTION");
     w.s(2, "BLOCKS");
     let block = |w: &mut W, name: &str, desc: &str, brh: &str, base: Vec3, flags: i64, ents: &mut dyn Iterator<Item = &Entity>, paper: bool| {
@@ -3402,7 +3517,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
             w.s(4, desc);
         }
         for e in ents {
+            if w.stopped {
+                break;
+            }
             entity(w, d, e, brh, false, &cx);
+            w.flush_some();
         }
         let eh = w.h_kept(&format!("ENDBLK/{}", name.to_ascii_uppercase()));
         w.s(0, "ENDBLK");
@@ -3429,8 +3548,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
     // Generated geometry entities (dimension, arrowhead and table blocks) need handles.
     for (_, _, ents) in dim_defs.iter_mut().chain(arrow_defs.iter_mut()).chain(table_defs.iter_mut()) {
         for e in ents.iter_mut().filter(|e| e.handle.0 == 0) {
-            e.handle = Handle(w.next);
-            w.next = w.next.saturating_add(1);
+            e.handle = Handle(w.h_direct());
         }
     }
     for (n, h, ents) in &dim_defs {
@@ -3448,11 +3566,19 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
     w.s(0, "SECTION");
     w.s(2, "ENTITIES");
     for e in d.model.iter() {
+        if w.stopped {
+            break;
+        }
         entity(&mut w, d, e, &ms_br, false, &cx);
+        w.flush_some();
     }
     if let Some((_, h, l)) = ps_brs.first() {
         for e in sheet_first(l) {
+            if w.stopped {
+                break;
+            }
             entity(&mut w, d, e, h, true, &cx);
+            w.flush_some();
         }
     }
     w.s(0, "ENDSEC");
@@ -3460,7 +3586,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
     // ---------------- OBJECTS ----------------
     // Groups (members that still exist) and multileader styles.
     let group_owner = group_dict.clone();
-    let written: std::collections::HashSet<String> = w.t.iter().filter(|t| t.code == 5).map(Tag::str).collect();
+    let mut written = w.seen.clone();
+    written.extend(w.t.iter().filter(|t| t.code == 5).map(Tag::str).filter(|h| w.watch.contains(h)));
     let groups: Vec<(&Group, String)> = d.groups.iter().filter(|g| !g.name.is_empty()).zip(group_handles).collect();
     let mleader_dict = w.h_kept("DICT/ACAD_MLEADERSTYLE");
     let mleader_handles: Vec<String> = cx.mleader_styles.iter().map(|(_, h)| h.clone()).collect();
@@ -3604,18 +3731,21 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
     for (table, fs) in fields {
         let owner = table.hex();
         for f in fs {
+            w.flush_some();
             write_field(&mut w, f, &owner);
         }
     }
     write_xclips(&mut w, &cx.xclips, &every);
     // Texts' fields: extension dictionary, ACAD_FIELD dictionary, the `_text` field and its fields.
     for p in cx.field_plans.take() {
+        w.flush_some();
         write_fields(&mut w, &p);
     }
     // Dimension associativity: extension dictionary + DIMASSOC per dimension.
     let mut assoc: Vec<(&Handle, &AssocObj)> = cx.assoc.iter().collect();
     assoc.sort_by_key(|(h, _)| **h);
     for (dim, a) in assoc {
+        w.flush_some();
         let dh = dim.hex();
         w.s(0, "DICTIONARY");
         w.s(5, a.xdict.clone());
@@ -3766,74 +3896,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
     }
     w.s(0, "ENDSEC");
     w.s(0, "EOF");
-    let seed = format!("{:X}", w.next);
-    if let Some(t) = w.t.get_mut(seed_pos + 1) {
-        *t = Tag::s(5, seed);
-    }
-    crate::dxf_raw::finish(&mut w.t, d);
-    crate::dxf_raw::data_store(&mut w.t, d, target >= Version::R2013);
-    add_class_instance_counts(&mut w.t);
-    mark_xrefs(&mut w.t, d);
-    w.t
-}
-
-/// Write DXF Reference group 91 on every CLASS record. Count records after `dxf_raw::finish`
-/// restores foreign classes and objects so every class gets its actual instance count.
-fn add_class_instance_counts(tags: &mut Vec<Tag>) {
-    let mut counts: HashMap<String, i64> = HashMap::new();
-    for t in tags.iter().filter(|t| t.code == 0) {
-        let kind = t.str();
-        if kind != "CLASS" {
-            *counts.entry(kind.to_ascii_uppercase()).or_default() += 1;
-        }
-    }
-
-    let mut start = 0;
-    while start < tags.len() {
-        if tags.get(start).is_none_or(|t| t.code != 0 || t.str() != "CLASS") {
-            start += 1;
-            continue;
-        }
-        let end = tags[start + 1..].iter().position(|t| t.code == 0).map_or(tags.len(), |i| start + 1 + i);
-        let name = tags[start + 1..end].iter().find(|t| t.code == 1).map(Tag::str).unwrap_or_default().to_ascii_uppercase();
-        let count = counts.get(&name).copied().unwrap_or(0);
-        let inserted = if let Some(i) = tags[start + 1..end].iter().position(|t| t.code == 91) {
-            tags[start + 1 + i] = Tag::i(91, count);
-            false
-        } else if let Some(i) = tags[start + 1..end].iter().position(|t| t.code == 90) {
-            tags.insert(start + 2 + i, Tag::i(91, count));
-            true
-        } else {
-            false
-        };
-        // Inserting the group shifts the next record's start by one.
-        start = end + usize::from(inserted);
-    }
-}
-
-/// Xref blocks (DXF Reference, BLOCK): bit 4 of group 70 and the external drawing's path in
-/// group 1, set on the written BLOCK records of blocks that have an `xref_path`.
-fn mark_xrefs(tags: &mut [Tag], d: &Drawing) {
-    // Overlays add bit 8.
-    let xrefs: HashMap<String, (&str, i64)> = d
-        .blocks
-        .values()
-        .filter_map(|b| Some((b.name.to_ascii_uppercase(), (b.xref_path.as_deref()?, if b.xref_overlay { 12 } else { 4 }))))
-        .collect();
-    if xrefs.is_empty() {
-        return;
-    }
-    // Inside a BLOCK record: the path once its name (2) says it is an xref.
-    let mut block: Option<Option<(&str, i64)>> = None;
-    for t in tags.iter_mut() {
-        match (t.code, block) {
-            (0, _) => block = (t.str() == "BLOCK").then_some(None),
-            (2, Some(None)) => block = Some(xrefs.get(&t.str().to_ascii_uppercase()).copied()),
-            (70, Some(Some((_, flags)))) => *t = Tag::i(70, t.i64() | flags),
-            (1, Some(Some((p, _)))) => *t = Tag::s(1, p),
-            _ => {}
-        }
-    }
+    w.flush();
+    w.next
 }
 
 /// A TABLESTYLE object (DXF Reference, OBJECTS: TABLESTYLE): margins, title/header
@@ -3998,16 +4062,7 @@ pub fn entity_groups(d: &Drawing, e: &Entity) -> (String, Vec<Tag>) {
 /// Every record an entity is written as (a block reference's ATTRIBs and SEQEND follow its
 /// INSERT; a POLYLINE's VERTEXes and SEQEND follow it), each as [`entity_groups`] gives one.
 pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
-    let mut w = W {
-        t: Vec::new(),
-        next: d.handseed.max(0x100).saturating_add(0x1000),
-        pstyles: HashMap::new(),
-        layers: HashMap::new(),
-        reactors: HashMap::new(),
-        materials: HashMap::new(),
-        kept: std::collections::BTreeMap::new(),
-        used: std::collections::HashSet::new(),
-    };
+    let mut w = W::new(d.handseed.max(0x100).saturating_add(0x1000));
     let cx = Ctx { target: Version::R2018, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));
     entity(&mut w, d, e, "0", paper, &cx);
