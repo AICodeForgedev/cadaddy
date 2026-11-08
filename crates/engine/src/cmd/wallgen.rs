@@ -1974,9 +1974,16 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                         // end: the door shuts onto that end (its other jamb too short to be a wall
                         // piece).
                         let reach = o.width + w.thickness.max(2.0 * k);
-                        (fits && off <= w.thickness.max(2.0 * k) && s >= -reach && s <= len + reach).then_some((i, off))
+                        if !(fits && off <= w.thickness.max(2.0 * k) && s >= -reach && s <= len + reach) {
+                            return None;
+                        }
+                        // A window is the outside wall's (a line pair against its inside face,
+                        // a unit's sleeve or a sill, is no host): outside walls first.
+                        let inside = o.kind == "window" && !faces_outside(w.a + u * s.clamp(0.0, len), u.perp(), w.thickness, k, &pl.walls, &[]);
+                        Some((i, (inside, off)))
                     })
-                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .min_by(|a, b| a.1.0.cmp(&b.1.0).then(a.1.1.total_cmp(&b.1.1)))
+                    .map(|(i, (_, off))| (i, off))
             };
             // A leaf drawn to one end most often stands open there (against the wall beside the
             // door), so the wall at the other end comes first; a plan drawing the leaf shut in
@@ -2082,6 +2089,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         .filter(|c| c.kind == cadaddy_walk3d::CirculationKind::Corridor && c.level.eq_ignore_ascii_case(&level.name))
         .collect();
     let mut corridor_gaps = 0usize;
+    let mut crossing_gaps: Vec<(Vec2, Vec2)> = Vec::new();
     let n = pl.walls.len().min(10_000);
     let mut gaps = Vec::new();
     let gap_cell = max_gap.max(max_thick);
@@ -2137,7 +2145,14 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             // in a corridor's air (two units' entry or bath walls lined up across it): no header
             // spans it. A door swing hung there or the outside beyond it still make it a door or
             // a window (Q6160).
-            let in_air = in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness);
+            // Between two walls crossing its line at its ends (a corridor between lined-up walls
+            // when the corridor wasn't traced): as in the corridor's air.
+            let corridor_air = in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness);
+            let between = !corridor_air && gap_between_crossing_walls(&pl.walls[..n], i, j, a.b, a.b + u * gap, a.thickness.max(b.thickness));
+            if between && crossing_gaps.len() < MAX_OBJECTS && !crossing_gaps.iter().any(|o| same_gap(*o, (a.b, a.b + u * gap), k)) {
+                crossing_gaps.push((a.b, a.b + u * gap));
+            }
+            let in_air = corridor_air || between;
             let no_header = in_air || gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap);
             gaps.push((i, a.b, a.b + u * gap, a.thickness, no_header, in_air));
         }
@@ -2161,22 +2176,9 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             filled.len()
         ));
     }
-    // Outside: no other wall across one side of it.
-    let outside = |p: Vec2, nrm: Vec2, walls: &[PlanWall]| {
-        let hits = |dir: Vec2| {
-            walls.iter().any(|w| {
-                let (q, r) = (w.a, w.b - w.a);
-                let den = dir.cross(r);
-                if den.abs() < 1e-12 {
-                    return false;
-                }
-                let t = (q - p).cross(r) / den;
-                let v = (q - p).cross(dir) / den;
-                t > w.thickness && (0.0..=1.0).contains(&v)
-            })
-        };
-        !hits(nrm) || !hits(-nrm)
-    };
+    // Outside: no other wall, and no other wall's opening, across one side of it past its face.
+    let openings_of_walls: Vec<(Vec2, Vec2, f64)> = gaps.iter().take(MAX_OBJECTS).map(|(_, g0, g1, t, ..)| (*g0, *g1, *t)).collect();
+    let outside = |p: Vec2, nrm: Vec2, t: f64, walls: &[PlanWall]| faces_outside(p, nrm, t, k, walls, &openings_of_walls);
     // The swings drawn on the level (arcs and flattened arcs of a door's sweep and radius), for
     // the gaps to hang doors from.
     let swings = drawn_swings(&ents, k);
@@ -2208,7 +2210,9 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // The level's gaps in outside walls, and those a window tag marks.
     let outside_gaps: Vec<(Vec2, Vec2, f64)> = gaps
         .iter()
-        .filter(|(_, g0, g1, _, _, in_air)| !*in_air && outside((*g0 + *g1) * 0.5, ((*g1 - *g0) * (1.0 / g0.dist(*g1).max(1e-12))).perp(), &pl.walls))
+        .filter(|(_, g0, g1, t, _, in_air)| {
+            !*in_air && outside((*g0 + *g1) * 0.5, ((*g1 - *g0) * (1.0 / g0.dist(*g1).max(1e-12))).perp(), *t, &pl.walls)
+        })
         .map(|(_, g0, g1, t, ..)| (*g0, *g1, *t))
         .take(MAX_OBJECTS)
         .collect();
@@ -2238,7 +2242,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         // pier the wall's width, full height, and an opening each side of it. Inside, a wall
         // running across the gap parts it too (a demising wall between two units' entry doors);
         // across an outside wall's gap it is a mullion's or the frame's.
-        let is_outside = outside((g0 + g1) * 0.5, u.perp(), &pl.walls);
+        let is_outside = !in_air && outside((g0 + g1) * 0.5, u.perp(), t, &pl.walls);
         let crossing_parts = !is_outside;
         let mut piers: Vec<(f64, f64)> = pl
             .walls
@@ -2394,6 +2398,13 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         notes.push(format!(
             "{}: {corridor_gaps} gaps between lined-up walls (across a corridor, or another wall across them) left open (no header).",
             level.name
+        ));
+    }
+    if !crossing_gaps.is_empty() {
+        notes.push(format!(
+            "{}: {} gaps between two walls that cross their line at both ends (a corridor between lined-up walls) taken as no opening: no window, no header.",
+            level.name,
+            crossing_gaps.len()
         ));
     }
     let (bare_outside_gaps, drawn_windows, typical_windows) = (bare_outside_gaps.len(), drawn_windows.len(), typical_windows.len());
@@ -2572,6 +2583,69 @@ fn gap_crossed(walls: &[PlanWall], i: usize, j: usize, g0: Vec2, g1: Vec2) -> bo
         let past = margin / d.len().max(1e-9);
         s > margin && s < width - margin && t > past && t < 1.0 - past
     })
+}
+
+/// Whether a wall's side faces the outside at `p` (on its centreline, the wall `own_t` thick, `k`
+/// drawing units per inch): along `nrm` or along `-nrm`, the ray meets no other wall standing
+/// clear past its face, and no other wall's opening (`openings`: gaps between the pieces of one
+/// wall line, their ends and thickness). A room's window or door is still the building's wall: a
+/// ray out through it is inside. A wall just past this one's face (a line pair against an outside
+/// wall's inside face: a unit's sleeve, a sill) is a wall beyond it: this one is inside. A wall
+/// overlapping this one's thickness (the same wall read twice, one pair inside the other) is not.
+fn faces_outside(p: Vec2, nrm: Vec2, own_t: f64, k: f64, walls: &[PlanWall], openings: &[(Vec2, Vec2, f64)]) -> bool {
+    let face = (own_t / 2.0).max(0.0) - TOUCH_IN * k;
+    let meets = |dir: Vec2, q: Vec2, r: Vec2, t_other: f64| {
+        let den = dir.cross(r);
+        if den.abs() < 1e-12 {
+            return false;
+        }
+        let t = (q - p).cross(r) / den;
+        let v = (q - p).cross(dir) / den;
+        t - t_other.max(0.0) / 2.0 > face && (0.0..=1.0).contains(&v)
+    };
+    let hits = |dir: Vec2| {
+        walls.iter().take(MAX_OBJECTS).any(|w| meets(dir, w.a, w.b - w.a, w.thickness))
+            || openings.iter().take(MAX_OBJECTS).any(|(a, b, t)| meets(dir, *a, *b - *a, *t))
+    };
+    !hits(nrm) || !hits(-nrm)
+}
+
+/// Two parallel walls whose faces are this close (inches) or overlap less touch: the far one
+/// stands past the near one's face.
+const TOUCH_IN: f64 = 0.5;
+
+/// Whether a wall other than `i` and `j` (the pieces either side of the gap `g0`–`g1`, `t` thick)
+/// runs across the gap's line at each of its ends, on through it past both sides by more than `t`:
+/// the gap is the space between two walls that cross the line (a corridor between two units'
+/// lined-up demising walls, each ending at a corridor wall), not an opening in one wall. A wall
+/// meeting a jamb end-on from one side (a partition at an outside wall's window) doesn't count.
+fn gap_between_crossing_walls(walls: &[PlanWall], i: usize, j: usize, g0: Vec2, g1: Vec2, t: f64) -> bool {
+    let width = g0.dist(g1);
+    if !(width.is_finite() && width > 1e-9) {
+        return false;
+    }
+    let u = (g1 - g0) * (1.0 / width);
+    let crossed_at = |end: f64| {
+        walls.iter().enumerate().take(MAX_OBJECTS).any(|(kk, c)| {
+            if kk == i || kk == j {
+                return false;
+            }
+            let d = c.b - c.a;
+            let len = d.len();
+            let den = u.cross(d);
+            // (A zero-length or NaN wall: none.)
+            if len.is_nan() || len <= 1e-9 || den.abs() <= 0.5 * len {
+                return false;
+            }
+            // Where its line meets the gap's (s along the gap from g0, w along the wall).
+            let s = (c.a - g0).cross(d) / den;
+            let w = (c.a - g0).cross(u) / den;
+            let reach = c.thickness / 2.0 + t.max(0.0) / 2.0;
+            let beyond = t.max(0.0) / len;
+            (s - end).abs() <= reach && w > beyond && w < 1.0 - beyond
+        })
+    };
+    crossed_at(0.0) && crossed_at(width)
 }
 
 /// Whether a gap's middle `mid` is in a corridor's air: the corridor's floor on both sides of the
@@ -3609,6 +3683,188 @@ mod tests {
         // A tag farther than its reach from every gap marks none.
         let (windows, notes) = room_with_gaps(&[(3.0, 7.0)], &[], vec![("A-ANNO", text_ft((5.0, -9.0), "W5"))]);
         assert_eq!(windows, 0, "{notes:?}");
+    }
+
+    /// A level planned from `lines` (feet, layer A-WALL unless given): its window panes' ends
+    /// (feet) and the notes.
+    fn plan_lines(lines: Vec<(&str, EntityKind)>) -> (Vec<(Vec2, Vec2)>, Vec<String>) {
+        let mut d = Drawing::new_imperial();
+        for (layer, kind) in lines {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let mut e = Entity::new(h, kind);
+            e.common.layer = layer.into();
+            d.model.push(e);
+        }
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        let mut notes = Vec::new();
+        let pl = plan_level(&d, &g, &level, 12.0, &mut notes);
+        (pl.leaves.iter().filter(|l| l.window).map(|l| (l.a * (1.0 / 12.0), l.b * (1.0 / 12.0))).collect(), notes)
+    }
+
+    /// A wall's two face lines (feet) along x from `x0` to `x1` at `y` (its centreline), `t_in`
+    /// inches thick, broken at `gaps` (x from–to).
+    fn wall_x(y: f64, t_in: f64, x0: f64, x1: f64, gaps: &[(f64, f64)]) -> Vec<(&'static str, EntityKind)> {
+        let h = t_in / 24.0;
+        let mut out = Vec::new();
+        for face in [y - h, y + h] {
+            let mut from = x0;
+            for &(g0, g1) in gaps {
+                out.push(("A-WALL", line_ft((from, face), (g0, face))));
+                from = g1;
+            }
+            out.push(("A-WALL", line_ft((from, face), (x1, face))));
+        }
+        out
+    }
+
+    /// The same along y at `x`.
+    fn wall_y(x: f64, t_in: f64, y0: f64, y1: f64, gaps: &[(f64, f64)]) -> Vec<(&'static str, EntityKind)> {
+        let h = t_in / 24.0;
+        let mut out = Vec::new();
+        for face in [x - h, x + h] {
+            let mut from = y0;
+            for &(g0, g1) in gaps {
+                out.push(("A-WALL", line_ft((face, from), (face, g0))));
+                from = g1;
+            }
+            out.push(("A-WALL", line_ft((face, from), (face, y1))));
+        }
+        out
+    }
+
+    #[test]
+    fn a_line_pair_against_an_outside_walls_inside_face_hosts_no_window() {
+        // A 20' x 10' room of 6" walls, the south wall solid. Against its inside face (0.25"
+        // clear) two 3'-6" through-wall unit sleeves (a line pair 5" deep each) with 6' between them,
+        // a window mark by that gap. The sleeves' gap is no outside wall's: the solid south wall
+        // stands just past it. Before Q6308 the window was built there, inside the building
+        // (the south wall's centreline was nearer than its own thickness, so the ray skipped it).
+        let mut lines = Vec::new();
+        lines.extend(wall_x(0.25, 6.0, 0.0, 20.0, &[]));
+        lines.extend(wall_x(9.75, 6.0, 0.0, 20.0, &[]));
+        lines.extend(wall_y(0.25, 6.0, 0.0, 10.0, &[]));
+        lines.extend(wall_y(19.75, 6.0, 0.0, 10.0, &[]));
+        let y = 0.5 + 0.25 / 12.0 + 2.5 / 12.0;
+        lines.extend(wall_x(y, 5.0, 3.0, 16.0, &[(6.5, 12.5)]));
+        lines.push(("A-ANNO", text_ft((9.5, 2.0), "W5")));
+        let (windows, notes) = plan_lines(lines);
+        assert!(windows.is_empty(), "a window inside the building: {windows:?} {notes:?}");
+        // The same gap in the outside wall itself, its window tagged the same: built there, in
+        // the wall's thickness.
+        let mut lines = Vec::new();
+        lines.extend(wall_x(0.25, 6.0, 0.0, 20.0, &[(6.5, 12.5)]));
+        lines.extend(wall_x(9.75, 6.0, 0.0, 20.0, &[]));
+        lines.extend(wall_y(0.25, 6.0, 0.0, 10.0, &[]));
+        lines.extend(wall_y(19.75, 6.0, 0.0, 10.0, &[]));
+        lines.push(("A-ANNO", text_ft((9.5, 2.0), "W5")));
+        let (windows, notes) = plan_lines(lines);
+        assert_eq!(windows.len(), 1, "{notes:?}");
+        for (a, b) in &windows {
+            assert!((a.y - 0.25).abs() < 0.05 && (b.y - 0.25).abs() < 0.05, "pane off the outside wall's centreline: {a:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn a_gap_across_a_corridor_between_lined_up_walls_is_no_window() {
+        // Two rooms south of a 5' corridor and two north of it (6" walls, a 20' x 25' building),
+        // their demising walls lined up on x = 10 and ending at the corridor walls. The corridor
+        // is open at its east end (a gap in the outside wall), so a ray along it from the gap
+        // between the demising walls meets no wall. A window mark sits in the corridor by that
+        // gap. Before Q6308 the gap across the corridor was taken as an outside wall's and built
+        // as a window standing across the corridor.
+        let mut lines = Vec::new();
+        lines.extend(wall_x(0.25, 6.0, 0.0, 20.0, &[]));
+        lines.extend(wall_x(24.75, 6.0, 0.0, 20.0, &[]));
+        lines.extend(wall_y(0.25, 6.0, 0.0, 25.0, &[]));
+        lines.extend(wall_y(19.75, 6.0, 0.0, 25.0, &[(10.25, 14.75)]));
+        lines.extend(wall_x(10.0, 6.0, 0.5, 19.5, &[]));
+        lines.extend(wall_x(15.0, 6.0, 0.5, 19.5, &[]));
+        lines.extend(wall_y(10.0, 6.0, 0.5, 9.75, &[]));
+        lines.extend(wall_y(10.0, 6.0, 15.25, 24.5, &[]));
+        lines.push(("A-ANNO", text_ft((10.8, 12.5), "W5")));
+        let (windows, notes) = plan_lines(lines);
+        assert!(windows.is_empty(), "a window across the corridor: {windows:?} {notes:?}");
+        assert!(notes.iter().any(|n| n.contains("cross their line at both ends")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_ray_out_through_a_rooms_window_is_still_inside_the_building() {
+        // A row of rooms: the south outside wall has a 4' window (glazing drawn) at x 8-12; the
+        // room's north wall (on a corridor) has a 4' opening at the same x, nothing drawn in it;
+        // the corridor's north wall is the building's, solid. A ray south from the inner opening
+        // leaves through the window's opening: before Q6308 that made the inner wall an outside
+        // wall and the opening a typical window (the drawn one's width) inside the building.
+        let mut lines = Vec::new();
+        lines.extend(wall_x(0.25, 6.0, 0.0, 20.0, &[(8.0, 12.0)]));
+        lines.extend(wall_x(10.0, 6.0, 0.5, 19.5, &[(8.0, 12.0)]));
+        lines.extend(wall_x(15.75, 6.0, 0.0, 20.0, &[]));
+        lines.extend(wall_y(0.25, 6.0, 0.0, 16.0, &[]));
+        lines.extend(wall_y(19.75, 6.0, 0.0, 16.0, &[]));
+        lines.push(("A-GLAZ", line_ft((8.0, 0.2), (12.0, 0.2))));
+        lines.push(("A-GLAZ", line_ft((8.0, 0.3), (12.0, 0.3))));
+        let (windows, notes) = plan_lines(lines);
+        assert_eq!(windows.len(), 1, "one window, in the outside wall: {windows:?} {notes:?}");
+        assert!(windows.iter().all(|(a, b)| a.y < 0.6 && b.y < 0.6), "{windows:?}");
+    }
+
+    #[test]
+    fn faces_outside_counts_walls_clear_past_its_face_not_the_same_wall_read_twice() {
+        let w = |a: (f64, f64), b: (f64, f64), t: f64| PlanWall {
+            a: Vec2::new(a.0, a.1),
+            b: Vec2::new(b.0, b.1),
+            thickness: t,
+            top: 100.0,
+            source: Handle(1),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: None,
+        };
+        let (p, nrm) = (Vec2::new(50.0, 10.0), Vec2::new(0.0, 1.0));
+        // Alone: outside both ways.
+        assert!(faces_outside(p, nrm, 5.0, 1.0, &[], &[]));
+        // A 7" wall touching its face south and a wall far north: inside.
+        let touching = [w((0.0, 3.65), (100.0, 3.65), 7.3), w((0.0, 200.0), (100.0, 200.0), 6.0)];
+        assert!(!faces_outside(Vec2::new(50.0, 10.2), nrm, 5.0, 1.0, &touching, &[]));
+        // A 14" wall holding this 6" one inside its thickness (the same wall read twice): still
+        // outside to the south.
+        let holding = [w((0.0, 6.6), (100.0, 6.6), 14.0), w((0.0, 200.0), (100.0, 200.0), 6.0)];
+        assert!(faces_outside(Vec2::new(50.0, 10.0), nrm, 6.0, 1.0, &holding, &[]));
+        // Another wall's opening (a window's gap) south of it blocks the ray like the wall.
+        let north = [w((0.0, 200.0), (100.0, 200.0), 6.0)];
+        assert!(faces_outside(p, nrm, 6.0, 1.0, &north, &[]));
+        assert!(!faces_outside(p, nrm, 6.0, 1.0, &north, &[(Vec2::new(40.0, -100.0), Vec2::new(60.0, -100.0), 6.0)]));
+    }
+
+    #[test]
+    fn a_gap_between_walls_crossing_its_line_at_both_ends_is_found_but_not_a_jamb_return() {
+        let w = |a: (f64, f64), b: (f64, f64)| PlanWall {
+            a: Vec2::new(a.0, a.1),
+            b: Vec2::new(b.0, b.1),
+            thickness: 6.0,
+            top: 100.0,
+            source: Handle(1),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: None,
+        };
+        // Pieces 0 and 1 on x = 0 (y -100..-3 and 63..160); corridor walls on y = 0 and y = 60.
+        let corridor =
+            [w((0.0, -100.0), (0.0, -3.0)), w((0.0, 63.0), (0.0, 160.0)), w((-200.0, 0.0), (200.0, 0.0)), w((-200.0, 60.0), (200.0, 60.0))];
+        assert!(gap_between_crossing_walls(&corridor, 0, 1, Vec2::new(0.0, -3.0), Vec2::new(0.0, 63.0), 6.0));
+        // Partitions meeting the jambs from one side only (ending at the wall's line): no.
+        let returns = [w((0.0, -100.0), (0.0, -3.0)), w((0.0, 63.0), (0.0, 160.0)), w((3.0, 0.0), (200.0, 0.0)), w((3.0, 60.0), (200.0, 60.0))];
+        assert!(!gap_between_crossing_walls(&returns, 0, 1, Vec2::new(0.0, -3.0), Vec2::new(0.0, 63.0), 6.0));
+        // Crossed at one end only: no.
+        let one = [w((0.0, -100.0), (0.0, -3.0)), w((0.0, 63.0), (0.0, 160.0)), w((-200.0, 0.0), (200.0, 0.0))];
+        assert!(!gap_between_crossing_walls(&one, 0, 1, Vec2::new(0.0, -3.0), Vec2::new(0.0, 63.0), 6.0));
     }
 
     #[test]
