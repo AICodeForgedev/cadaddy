@@ -820,7 +820,12 @@ pub(crate) fn note_like(t: &str) -> bool {
     let plain: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
     let load = plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.load_note_words").contains(w));
     let area = plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.area_label_words").contains(w));
-    !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref || load || area
+    // A storey's name alone (`FIRST FLOOR`, `2ND FLR`, `MEZZANINE`): a view's title or a level
+    // marker, no room's name (one with a room's word, `GROUND FLOOR LOBBY`, is a room's).
+    let storey = plain.len() <= 3
+        && cadaddy_walk3d::levels::canonical_level(&up).is_some_and(|(_, k)| k != cadaddy_walk3d::levels::DatumKind::Penthouse)
+        && !plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(w));
+    !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref || load || area || storey
 }
 
 /// Whether a traced outline holds its label: the label's point or a corner of its box inside it,
@@ -943,7 +948,9 @@ pub(crate) fn lift_qualifiers(items: &mut [(cadaddy_doc::Handle, String, Vec2, f
 /// How well a text names a room: 3 with a room or unit-type word (`DOUBLE Q`, `CORRIDOR`), 1 for
 /// another name, 0 for an equipment or device tag, a note or a number.
 pub(crate) fn room_name_score(t: &str) -> u8 {
-    if equipment_tag(t) || note_like(t) || room_number(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 {
+    // Letters one by one (`L J`): a fragment of vertical or spaced text, no name.
+    let letters_only = tag_words(t).iter().all(|w| w.chars().count() <= 1);
+    if equipment_tag(t) || note_like(t) || room_number(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 || letters_only {
         0
     } else if tag_words(t).iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(&w.as_str())) {
         3
@@ -1859,10 +1866,26 @@ mod tests {
 
     #[test]
     fn load_strings_and_roof_or_canopy_labels_are_notes() {
-        for t in ["ROOF LIVE LOAD 20 PSF", "WIND 115 MPH", "3000 PSI", "LOW ROOF", "CANOPY ABOVE", "ROOF BELOW", "OVERHANG"] {
+        for t in [
+            "ROOF LIVE LOAD 20 PSF",
+            "WIND 115 MPH",
+            "3000 PSI",
+            "LOW ROOF",
+            "CANOPY ABOVE",
+            "ROOF BELOW",
+            "OVERHANG",
+            "ABOVE",
+            "LINE OF SOFFIT",
+            "FIRST FLOOR",
+            "2ND FLR",
+            "MEZZANINE",
+        ] {
             assert!(note_like(t) && room_name_score(t) == 0, "{t}");
         }
-        for t in ["OFFICE", "LOADING DOCK", "GUEST LAUNDRY", "DOUBLE Q", "ROOFTOP LOUNGE"] {
+        // Letters one by one, and a rated wall's label (a title block's or a legend's word).
+        assert_eq!(room_name_score("L J"), 0);
+        assert!(!crate::cmd::autospec::room_like_name("1 HOUR FIRE RATED BARRIER"));
+        for t in ["OFFICE", "LOADING DOCK", "GUEST LAUNDRY", "DOUBLE Q", "ROOFTOP LOUNGE", "GROUND FLOOR LOBBY", "BOH"] {
             assert!(!note_like(t) && room_name_score(t) > 0, "{t}");
         }
     }
