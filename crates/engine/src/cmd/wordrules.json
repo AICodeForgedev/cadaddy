@@ -2132,6 +2132,19 @@
     "HVAC"
    ]
   },
+  "rooms.area_units": {
+   "source": "A room's printed area is a figure and one of these units, spaces and dots left out (105 SF, 1,960 S.F., 12 SQ FT): never the room's name. (drafting convention)",
+   "words": [
+    "SF",
+    "SQFT",
+    "SQFEET",
+    "SQUAREFEET",
+    "M2",
+    "M\u00b2",
+    "SM",
+    "SQM"
+   ]
+  },
   "rooms.corridor_words": {
    "source": "trade practice: a route named with one of these runs along any corridor of the level (moved from guided.rs)",
    "words": [
@@ -2526,11 +2539,68 @@
    ]
   },
   "schedules.luminaire_titles": {
-   "source": "drafting convention: the titles of a luminaire schedule (moved from guided.rs)",
+   "source": "drafting convention: the titles of a luminaire schedule (moved from guided.rs); read on any trade's sheet (fix-lum-fixture-schedule-not-read)",
    "words": [
     "LIGHT FIXTURE SCHEDULE",
     "LIGHTING FIXTURE SCHEDULE",
-    "LUMINAIRE SCHEDULE"
+    "LUMINAIRE SCHEDULE",
+    "LUMINAIRE FIXTURE SCHEDULE",
+    "LIGHTING SCHEDULE",
+    "LIGHT FIXTURES SCHEDULE",
+    "LIGHTING FIXTURES SCHEDULE"
+   ]
+  },
+  "schedules.electrical_luminaire_titles": {
+   "source": "drafting convention: on an electrical sheet a plain FIXTURE SCHEDULE is the luminaire schedule (fix-lum-fixture-schedule-not-read)",
+   "words": [
+    "FIXTURE SCHEDULE"
+   ]
+  },
+  "schedules.not_luminaire_title_words": {
+   "source": "drafting convention: a schedule title naming another trade's or another table's fixtures is no luminaire schedule (fix-lum-fixture-schedule-not-read)",
+   "words": [
+    "PLUMBING",
+    "CASEWORK",
+    "PANEL",
+    "CONTROL"
+   ]
+  },
+  "schedules.title_reference_words": {
+   "source": "grammar of drawing notes: words that make a line naming a schedule a note sending the reader to it (`... ON LIGHT FIXTURE SCHEDULE.`, `SEE ... FIXTURE SCHEDULE`), not the schedule's title (fix-lum-fixture-schedule-not-read)",
+   "words": [
+    "ON",
+    "SEE",
+    "REFER",
+    "PER",
+    "IN",
+    "TO",
+    "FOR",
+    "BY",
+    "THE",
+    "AS",
+    "WITH",
+    "OF"
+   ]
+  },
+  "schedules.luminaire_type_headings": {
+   "source": "format vocabulary of luminaire schedules: the headings of the column of type marks, tried in this order; a column headed FIXTURE alone holds the marks too (fix-lum-fixture-schedule-not-read)",
+   "words": [
+    "TAG",
+    "TYPE",
+    "MARK",
+    "SYMBOL",
+    "FIXTURE"
+   ]
+  },
+  "schedules.variant_lead_words": {
+   "source": "grammar of schedule notes: the words that lead a list of fixture marks (`FIXTURES AE, BE AND CE ARE ...`) (fix-lum-fixture-schedule-not-read)",
+   "words": [
+    "FIXTURE",
+    "FIXTURES",
+    "TYPE",
+    "TYPES",
+    "LUMINAIRE",
+    "LUMINAIRES"
    ]
   },
   "schedules.mark_headings": {

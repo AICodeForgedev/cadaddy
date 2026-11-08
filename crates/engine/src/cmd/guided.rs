@@ -2655,6 +2655,40 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
         c.legend_types.extend(l.types.iter().cloned());
         legends.push(l);
     }
+    // A luminaire schedule read by its grid lists its types too, wherever it is printed (an
+    // architectural floor plan's fixture schedule beside its door schedule), each type with its
+    // schedule row: the plans' tags are matched against its marks before any is asked about.
+    for (g, l) in legends.iter_mut().enumerate() {
+        let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
+        let number = sheet.split('/').next().unwrap_or(&sheet).trim().to_string();
+        let electrical = job.sheet_regions.iter().find(|r| r.number.eq_ignore_ascii_case(&number)).map_or_else(
+            || cadaddy_mepfix::sheet_facts::discipline_of(&number).eq_ignore_ascii_case("E"),
+            |r| r.discipline.eq_ignore_ascii_case("E"),
+        );
+        let segs = || {
+            let mut out = Vec::new();
+            for e in objects.get(g).into_iter().flatten() {
+                if out.len() >= super::gridtable::MAX_SEGMENTS {
+                    break;
+                }
+                super::gridtable::entity_segments(&e.kind, &mut out);
+            }
+            out
+        };
+        let sheet_texts: &[TextItem] = texts.get(g).map_or(&[][..], Vec::as_slice);
+        for tb in luminaire_schedules(sheet_texts, segs, &number, electrical) {
+            let schedule = schedule_legend(&tb);
+            if schedule.types.is_empty() {
+                continue;
+            }
+            c.legend_tables += 1;
+            c.legend_types.extend(schedule.types.iter().cloned());
+            l.types.extend(schedule.types);
+            l.regions.extend(schedule.regions);
+            // The grid's row over a row the legend reader took from the same table.
+            l.rows.extend(schedule.rows);
+        }
+    }
     // The legends that speak for a sheet besides its own: on an electrical sheet every device
     // legend of the set (its legend sheet, the reflected ceiling plans' fixture legends); on
     // another trade's sheet that trade's (a mechanical plan's marks are the mechanical legend's,
@@ -14838,28 +14872,20 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     equipment_step(s, job, pages, &types, &tags, result)
 }
 
-/// The light fixture schedules on the electrical pages, read by their grid
-/// ([`super::lightsched`]): each type once, and whether their notes forbid substitutions.
-fn fixture_schedule(pages: &[(String, cadaddy_doc::Drawing)]) -> (Vec<cadaddy_walk3d::FixtureType>, bool) {
+/// The light fixture schedules on a set's pages, read by their grid ([`super::lightsched`]):
+/// each type once, and whether their notes forbid substitutions. `electrical` says which pages
+/// are electrical sheets (where a plain `FIXTURE SCHEDULE` is the luminaire schedule).
+fn fixture_schedule(pages: &[(String, cadaddy_doc::Drawing)], electrical: &dyn Fn(&str) -> bool) -> (Vec<cadaddy_walk3d::FixtureType>, bool) {
     let mut types: Vec<cadaddy_walk3d::FixtureType> = Vec::new();
     let mut no_subs = false;
     for (number, d) in pages {
         let texts = cadaddy_mepfix::sheet_facts::texts(d);
-        if !texts.iter().any(|t| {
-            let u = t.value.to_ascii_uppercase();
-            u.contains("FIXTURE SCHEDULE") || u.contains("LUMINAIRE SCHEDULE")
-        }) {
-            continue;
-        }
-        let segs = super::gridtable::segments(d);
-        for title in cadaddy_mepfix::wordrules::words("schedules.luminaire_titles") {
-            for tb in super::gridtable::read_titled(&texts, &segs, title, number) {
-                let (rows, ns) = super::lightsched::fixture_types(&tb);
-                no_subs |= ns;
-                for r in rows {
-                    if !types.iter().any(|t| t.tag == r.tag) {
-                        types.push(r);
-                    }
+        for tb in luminaire_schedules(&texts, || super::gridtable::segments(d), number, electrical(number)) {
+            let (rows, ns) = super::lightsched::fixture_types(&tb);
+            no_subs |= ns;
+            for r in rows {
+                if !types.iter().any(|t| t.tag == r.tag) {
+                    types.push(r);
                 }
             }
         }
@@ -14867,12 +14893,115 @@ fn fixture_schedule(pages: &[(String, cadaddy_doc::Drawing)]) -> (Vec<cadaddy_wa
     (types, no_subs)
 }
 
+/// Luminaire schedules read from one sheet, at most.
+const MAX_LUMINAIRE_SCHEDULES: usize = 8;
+
+/// The luminaire schedules on one sheet (`texts` its texts; `segs` makes its line segments, only
+/// when a title is there), read by their grid: each title once
+/// ([`super::lightsched::is_luminaire_title`]).
+fn luminaire_schedules(
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    segs: impl FnOnce() -> Vec<(cadaddy_geom::Vec2, cadaddy_geom::Vec2)>,
+    sheet: &str,
+    electrical: bool,
+) -> Vec<super::gridtable::GridTable> {
+    let titles: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts
+        .iter()
+        .filter(|t| t.rotation.abs() < 0.05 && super::lightsched::is_luminaire_title(&t.value, electrical))
+        .take(MAX_LUMINAIRE_SCHEDULES)
+        .collect();
+    if titles.is_empty() {
+        return Vec::new();
+    }
+    let segs = segs();
+    titles.into_iter().filter_map(|t| super::gridtable::read_at(texts, &segs, t, sheet)).collect()
+}
+
+/// A luminaire schedule as a legend: its types (and the variants its notes list), its extent
+/// (symbols drawn there are samples), and each type's row with the schedule's title, so a plan's
+/// tag that is one of its marks is a luminaire of that type with the row as its source.
+fn schedule_legend(tb: &super::gridtable::GridTable) -> cadaddy_mepfix::device_types::Legend {
+    let mut out = cadaddy_mepfix::device_types::Legend::default();
+    let (types, _) = super::lightsched::fixture_types(tb);
+    for f in types {
+        let description = [&f.description, &f.manufacturer, &f.model, &f.lamp, &f.installation, &f.notes]
+            .iter()
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.rows.insert(f.tag.clone(), cadaddy_mepfix::device_types::LegendRow { table: tb.title.clone(), description });
+        out.types.insert(f.tag);
+    }
+    if !out.types.is_empty() && tb.extent.iter().all(|v| v.is_finite()) {
+        out.regions.push(tb.extent);
+    }
+    out
+}
+
+/// The pages a set's luminaire schedule may be on: the electrical sheets' pages, every other
+/// loaded sheet that prints a luminaire schedule's title (an architectural floor plan with the
+/// fixture schedule beside its door schedule), and the other trades' schedule sheets the job's
+/// drawing doesn't hold. Each with whether it is an electrical sheet.
+fn fixture_schedule_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<(String, cadaddy_doc::Drawing)>, BTreeSet<String>) {
+    let mut pages = electrical_pages(d, job);
+    let electrical: BTreeSet<String> = pages.iter().map(|(n, _)| n.clone()).collect();
+    let mut seen = electrical.clone();
+    // The loaded sheets' luminaire schedule titles, by handle and where they are printed.
+    let titles: Vec<(u64, cadaddy_geom::Vec2)> = d
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) if t.rotation.abs() < 0.05 && super::lightsched::is_luminaire_title(&t.value, false) => {
+                Some((e.handle.0, t.insert.xy()))
+            }
+            _ => None,
+        })
+        .take(MAX_LEGEND_SHEETS * MAX_LUMINAIRE_SCHEDULES)
+        .collect();
+    let refs = job_sheet_refs(job);
+    if !titles.is_empty() {
+        for r in refs.iter().filter(|r| !r.discipline.eq_ignore_ascii_case("E")).cloned() {
+            let number = r.number.split('/').next().unwrap_or("").to_string();
+            let [x0, y0, x1, y1] = r.rect;
+            let here = titles.iter().any(|(h, at)| match r.span {
+                Some((lo, hi)) => *h >= lo && *h < hi,
+                None => at.x >= x0 && at.x <= x1 && at.y >= y0 && at.y <= y1,
+            });
+            if here && seen.insert(number.clone()) {
+                pages.push((number, super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..r })));
+            }
+        }
+    }
+    // The other trades' schedule sheets (not plans) the drawing doesn't hold (its own sheets'
+    // texts were looked at above).
+    let loaded: BTreeSet<String> = refs.iter().map(|r| r.number.split('/').next().unwrap_or("").trim().to_ascii_uppercase()).collect();
+    let schedule_sheet = |number: &str, discipline: &str, kind: &str, title: &str| {
+        !loaded.contains(&number.trim().to_ascii_uppercase())
+            && !seen.contains(number)
+            && !discipline.eq_ignore_ascii_case("E")
+            && !kind.contains("plan")
+            && (kind == "schedule" || title.to_ascii_uppercase().contains("SCHEDULE") || super::lightsched::is_luminaire_title(title, false))
+    };
+    let more = pages_where(job, &schedule_sheet);
+    pages.extend(more.into_iter().filter(|(n, _)| seen.insert(n.clone())));
+    (pages, electrical)
+}
+
 /// The fixture schedule into the spec before the model is built, so the luminaires' mounting
 /// heights can come from it (`propfill`'s height chain reads `mep.fixture_schedule`).
-/// Whether its notes forbid substitutions.
+/// Whether its notes forbid substitutions. The schedule may be on any trade's sheet.
 fn fixture_schedule_step(s: &mut Session, job: &GuidedJob) -> crate::Result<bool> {
-    let pages = electrical_pages(s.doc()?, job);
-    let (types, no_subs) = fixture_schedule(&pages);
+    let (pages, electrical) = fixture_schedule_pages(s.doc()?, job);
+    let (types, no_subs) = fixture_schedule(&pages, &|n| electrical.contains(n));
+    let sheets: BTreeSet<&str> = types.iter().filter_map(|t| t.source.split_whitespace().next()).collect();
+    progress_line(&format!(
+        "  light fixture schedule: {} types ({}) read from {:?} of {} pages looked at",
+        types.len(),
+        types.iter().map(|t| t.tag.as_str()).collect::<Vec<_>>().join(", "),
+        sheets,
+        pages.len()
+    ));
     if types.is_empty() {
         return Ok(false);
     }
@@ -14904,7 +15033,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let (mut types, mut no_subs) = (sp.mep.fixture_schedule.clone(), result["fixture_schedule_no_substitutions"].as_bool().unwrap_or(false));
     if types.is_empty() {
-        (types, no_subs) = fixture_schedule(pages);
+        (types, no_subs) = fixture_schedule(pages, &|_| true);
     }
     // The specification's luminaire and lighting control sections (`26 51 xx`, `26 09 xx`).
     let specs = job_specs(job);
@@ -21248,6 +21377,13 @@ fn unimported_designations(job: &GuidedJob) -> BTreeMap<String, String> {
 /// The pages of a discipline's sheets that aren't plans (legends, schedules, diagrams: the job's
 /// drawing keeps the plans), each read again from its file, numbered sheets in sheet order.
 fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc::Drawing)> {
+    pages_where(job, &|_number: &str, d: &str, kind: &str, _title: &str| d.eq_ignore_ascii_case(discipline) && !kind.contains("plan"))
+}
+
+/// The pages of the set's numbered sheets that `want` picks by their number, discipline, type
+/// (lower case) and title, each read again from its file, in sheet order, at most
+/// [`MAX_LEGEND_SHEETS`].
+fn pages_where(job: &GuidedJob, want: &dyn Fn(&str, &str, &str, &str) -> bool) -> Vec<(String, cadaddy_doc::Drawing)> {
     let mut out = Vec::new();
     let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
         progress_line("  the sheets' legends and schedules: no PDF reader in this build");
@@ -21262,8 +21398,8 @@ fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc
             let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
             let kind = if text("type").is_empty() { text("sheet_type") } else { text("type") };
             let number = c.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            (text("discipline").eq_ignore_ascii_case(discipline) && !kind.contains("plan") && cadaddy_mepfix::sheet_facts::is_sheet_number(&number))
-                .then_some((number, c))
+            let title = c.get("title").and_then(Value::as_str).unwrap_or("");
+            (want(&number, &text("discipline"), &kind, title) && cadaddy_mepfix::sheet_facts::is_sheet_number(&number)).then_some((number, c))
         })
         .collect();
     sheets.sort_by(|a, b| a.0.cmp(&b.0));
@@ -26346,6 +26482,91 @@ mod tests {
         let hp = on("Q-1").into_iter().find(|d| d.tag == "HP").unwrap_or_else(|| panic!("the heat pump's connection: {:?}", job.devices));
         assert_eq!((hp.kind.as_str(), hp.equipment.as_str()), ("equipment connection", "HP-3"), "{hp:?}");
         assert_eq!(r["device_types"]["unlisted_repeated"]["A"], json!(3), "the mechanical As are a question: {:#}", r["device_types"]);
+    }
+
+    /// fix-lum-fixture-schedule-not-read: a made-up set whose luminaire types are given only by
+    /// a fixture schedule printed on the architectural floor plan (A-1): drawn with row rules
+    /// but no border lines, its column of marks headed FIXTURE, its last row with no rule under
+    /// it, its title centred far right of the marks, a wall of the plan crossing its header's
+    /// height, and a note naming emergency variants of two types. The electrical plan (E-1) tags its fixtures with the schedule's marks: they
+    /// are luminaires of those types with the schedule row their source, not questions; a mark
+    /// listed nowhere is still asked about; and the model's fixture schedule is read off A-1.
+    #[test]
+    fn a_fixture_schedule_on_another_trades_sheet_types_the_plans_luminaires() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [
+            {"number": "A-1", "discipline": "A", "sheet_type": "plan", "level": "1"},
+            {"number": "E-1", "discipline": "E", "sheet_type": "plan", "level": "1"}
+        ]}));
+        job.sheets_loaded = true;
+        let schedule: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHT FIXTURE SCHEDULE", 2250.0, 800.0, 8.0),
+            ("FIXTURE", 2005.0, 780.0, 5.0),
+            ("DESCRIPTION", 2045.0, 780.0, 5.0),
+            ("MANUFACTURER", 2125.0, 780.0, 5.0),
+            ("REMARKS", 2205.0, 780.0, 5.0),
+            ("A", 2005.0, 765.0, 4.0),
+            ("2X4 LED TROFFER", 2045.0, 765.0, 4.0),
+            ("MAKER ONE", 2125.0, 765.0, 4.0),
+            ("B", 2005.0, 753.0, 4.0),
+            ("LED DOWNLIGHT", 2045.0, 753.0, 4.0),
+            ("WET LOCATION", 2205.0, 753.0, 4.0),
+            ("C", 2005.0, 741.0, 4.0),
+            ("WALL PACK", 2045.0, 741.0, 4.0),
+            ("NOTES:", 2002.0, 728.0, 3.0),
+            ("1. FIXTURES AE AND BE ARE ON EMERGENCY BATTERY BACKUP", 2002.0, 723.0, 3.0),
+            ("2. ALL FIXTURES TO BE LED", 2002.0, 718.0, 3.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        // The schedule's sample symbol, drawn in its first row's mark cell.
+        add_sheet(&mut s, &schedule, &[("A", 2030.0, 765.0)]);
+        let line = |a: (f64, f64), b: (f64, f64)| cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) };
+        let mut lines = vec![line((1900.0, 0.0), (1900.0, 1000.0)), line((1500.0, 700.0), (2600.0, 700.0))]; // the plan's walls
+        lines.extend([790.0, 772.0, 760.0, 748.0].map(|y| line((2000.0, y), (2600.0, y))));
+        for x in [2040.0, 2120.0, 2200.0] {
+            // A column line drawn a piece per row.
+            lines.extend([(790.0, 772.0), (772.0, 760.0), (760.0, 748.0), (748.0, 736.0)].map(|(a, b)| line((x, a), (x, b))));
+        }
+        if let Ok(d) = s.doc_mut() {
+            for l in lines {
+                d.add(&Space::Model, Common::default(), EntityKind::Line(l)).ok();
+            }
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "A-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [0.0, 0.0, 3000.0, 1000.0], ..region("A-1", "1", "A", "plan", 0.0) });
+        let lo = hi;
+        let mut marks: Vec<(&str, f64, f64)> = (0..4).map(|i| ("A", 3100.0 + 40.0 * f64::from(i), 300.0)).collect();
+        marks.extend((0..3).map(|i| ("BE", 3100.0 + 40.0 * f64::from(i), 200.0)));
+        marks.extend((0..4).map(|i| ("ZZ", 3100.0 + 40.0 * f64::from(i), 100.0))); // listed nowhere
+        add_sheet(&mut s, &[("ELECTRICAL PLAN", 3500.0, 900.0, 8.0)], &marks);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [3000.0, 0.0, 6000.0, 1000.0], ..region("E-1", "1", "E", "plan", 3000.0) });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let dt = &r["device_types"];
+        assert_eq!(dt["legend_types"], json!(["A", "AE", "B", "BE", "C"]), "{dt:#}");
+        assert_eq!(dt["legend_samples"], json!(1), "{dt:#}");
+        assert_eq!(r["devices"]["by_type"], json!({"A": 4, "BE": 3}), "{r:#}");
+        let on_e: Vec<_> = job.devices.iter().filter(|d| d.sheet == "E-1").collect();
+        assert!(on_e.iter().all(|d| d.kind == "luminaire" && d.ifc_class == "IfcLightFixture"), "{on_e:?}");
+        let a = on_e.iter().find(|d| d.tag == "A").unwrap_or_else(|| panic!("{on_e:?}"));
+        assert_eq!(a.kind_source, "A-1 LIGHT FIXTURE SCHEDULE: A 2X4 LED TROFFER MAKER ONE");
+        let be = on_e.iter().find(|d| d.tag == "BE").unwrap_or_else(|| panic!("{on_e:?}"));
+        assert!(be.kind_source.contains("LED DOWNLIGHT") && be.kind_source.contains("EMERGENCY"), "{be:?}");
+        // The mark listed nowhere is still a question; the schedule's marks are not.
+        let unk = r["devices"]["unknowns"].as_array().cloned().unwrap_or_default();
+        assert_eq!(unk.iter().map(|u| u["tag"].clone()).collect::<Vec<_>>(), vec![json!("ZZ")], "{unk:?}");
+        // The model's fixture schedule: read off the architectural sheet, its variants beside.
+        let (pages, electrical) = s.doc().map(|d| fixture_schedule_pages(d, &job)).unwrap_or_else(|e| panic!("{e}"));
+        let (types, _) = fixture_schedule(&pages, &|n| electrical.contains(n));
+        let tags: Vec<&str> = types.iter().map(|t| t.tag.as_str()).collect();
+        assert_eq!(tags, ["A", "B", "C", "AE", "BE"], "{types:#?}");
+        let b = types.iter().find(|t| t.tag == "BE").unwrap_or_else(|| panic!("{types:#?}"));
+        assert_eq!((b.description.as_str(), b.source.as_str()), ("LED DOWNLIGHT", "A-1 LIGHT FIXTURE SCHEDULE"));
+        assert!(b.notes.starts_with("WET LOCATION; 1. FIXTURES AE AND BE"), "{b:?}");
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
 
     /// Q6165: what a mark resolves to. A row's description (`legend_kind`), else its table (a

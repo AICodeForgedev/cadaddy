@@ -860,8 +860,19 @@ pub(crate) fn lift_qualifiers(items: &mut [(cadaddy_doc::Handle, String, Vec2, f
 
 /// How well a text names a room: 3 with a room or unit-type word (`DOUBLE Q`, `CORRIDOR`), 1 for
 /// another name, 0 for an equipment or device tag, a note or a number.
+/// A room's printed area (`105 SF`, `1,960 S.F.`, `12 SQ FT`, `11 m2`): never its name.
+pub(crate) fn area_figure(t: &str) -> bool {
+    let up = t.trim().to_ascii_uppercase();
+    let digits: String = up.chars().take_while(|c| c.is_ascii_digit() || *c == ',' || *c == '.').collect();
+    if !digits.chars().any(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let unit: String = up.get(digits.len()..).unwrap_or_default().chars().filter(|c| !c.is_whitespace() && *c != '.').collect();
+    cadaddy_mepfix::wordrules::words("rooms.area_units").contains(&unit.as_str())
+}
+
 pub(crate) fn room_name_score(t: &str) -> u8 {
-    if equipment_tag(t) || note_like(t) || room_number(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 {
+    if equipment_tag(t) || note_like(t) || room_number(t) || area_figure(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 {
         0
     } else if tag_words(t).iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(&w.as_str())) {
         3
@@ -1465,6 +1476,17 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_rooms_printed_area_is_never_its_name() {
+        for t in ["105 SF", "1,960 S.F.", "12 SQ FT", "11 m2", "58 sf"] {
+            assert!(area_figure(t), "{t}");
+            assert_eq!(room_name_score(t), 0, "{t}");
+        }
+        for t in ["BAKING", "SF OFFICE", "105", "ROOM 105"] {
+            assert!(!area_figure(t), "{t}");
+        }
+    }
+
     use super::*;
 
     fn seg(a: (f64, f64), b: (f64, f64), w: f64) -> Seg {
