@@ -5264,6 +5264,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                 job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
             }
+            // The door and window schedules the devices stage read go in too: the build sizes each
+            // tagged opening from its row, and each door takes its row's number, type, rating and
+            // hardware set.
+            if let Some(read) =
+                job.stage(StageName::Devices).and_then(|st| st.result.as_ref()).and_then(|r| r.get("schedules")).and_then(super::schedules::read_back)
+                && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                && sp.schedule.rows.is_empty()
+            {
+                let rows = read.rows.len();
+                sp.schedule = read;
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+                job.audit("opening_schedules", "pipeline", None, Some(StageName::BimBuild), Some(json!({"rows": rows})));
+            }
             // The rooms stage's rooms go in too: the drafted spec had none, so the build made no
             // room elements (and every later room read traced the whole print set again).
             let read: Vec<Value> = job
