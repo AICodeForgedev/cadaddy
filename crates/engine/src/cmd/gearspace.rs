@@ -128,6 +128,9 @@ pub(crate) struct Cleared {
     pub corrected: usize,
     /// Other runs moved because an end joined to a moved one moved.
     pub joined: usize,
+    /// Every run changed (corrected or joined): its index in the spec's runs and what its built
+    /// pieces were known by before ([`super::mep::run_base`]).
+    pub changed: Vec<(usize, String)>,
     /// Longer by (feet), all offsets.
     pub extra_ft: f64,
     /// What was moved: level, system, gear.
@@ -238,9 +241,16 @@ pub(crate) fn clear(sp: &mut BuildingSpec) -> Cleared {
 /// [`clear`] with the gear where the build stands it (`d`'s built walls): a panel on its wall's
 /// face ([`super::mep::equipment_plan`]).
 pub(crate) fn clear_built(d: &cadaddy_doc::Drawing, sp: &mut BuildingSpec) -> Cleared {
+    clear_built_of(d, sp, None)
+}
+
+/// [`clear_built`] for only the gear `tags` names (upper case; None: all of it), as a step that
+/// lays out or moves gear after the build calls it.
+pub(crate) fn clear_built_of(d: &cadaddy_doc::Drawing, sp: &mut BuildingSpec, tags: Option<&std::collections::BTreeSet<String>>) -> Cleared {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let has_gear = sp.mep.equipment.iter().any(super::validate_gear::is_gear);
-    let walls = if has_gear { super::propfill::wall_footprints(d) } else { Vec::new() };
+    // The walls where the plans draw them, as the gear is built on them.
+    let walls = if has_gear { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
     let levels = sp.levels.clone();
     let level_of = |name: &str| sp.level_matching(name).and_then(|i| levels.get(i)).cloned();
     let places: Vec<Option<Footprint>> = sp
@@ -248,6 +258,9 @@ pub(crate) fn clear_built(d: &cadaddy_doc::Drawing, sp: &mut BuildingSpec) -> Cl
         .equipment
         .iter()
         .map(|e| {
+            if tags.is_some_and(|t| !t.contains(&e.tag.trim().to_ascii_uppercase())) {
+                return None;
+            }
             let l = level_of(&e.level)?;
             let z0 = (l.elevation_ft + e.bottom_ft) * upf;
             let at = super::mep::equipment_plan(e, &l.name, &walls, upf, z0, z0 + e.height_ft * upf);
@@ -428,6 +441,7 @@ pub(crate) fn clear_with(sp: &mut BuildingSpec, ru: &Rules, place: &dyn Fn(usize
             rule: ru.rule.clone(),
         };
         let (system, level) = (r.system.clone(), r.level.clone());
+        out.changed.push((i, super::mep::run_base(r)));
         if let Some(r) = sp.mep.runs.get_mut(i) {
             r.points = pts;
             r.bottoms_ft = bottoms;
@@ -446,6 +460,7 @@ pub(crate) fn clear_with(sp: &mut BuildingSpec, ru: &Rules, place: &dyn Fn(usize
                     continue;
                 }
                 let before = o.points.clone();
+                let base = super::mep::run_base(o);
                 let mut changed = false;
                 for p in o.points.iter_mut().take(MAX_POINTS) {
                     if dist(*p, from) <= tol {
@@ -455,6 +470,7 @@ pub(crate) fn clear_with(sp: &mut BuildingSpec, ru: &Rules, place: &dyn Fn(usize
                 }
                 if changed {
                     out.joined += 1;
+                    out.changed.push((j, base));
                     if !o.corrections.iter().any(|c| c.key == "route") {
                         o.corrections.push(RunCorrection {
                             key: "route".into(),
@@ -618,6 +634,18 @@ mod tests {
 
     fn g_inside(g: &MepEquipment, p: [f64; 2]) -> bool {
         p[0] > g.min[0] && p[0] < g.max[0] && p[1] > g.min[1] && p[1] < g.max[1]
+    }
+
+    #[test]
+    fn gear_laid_out_after_the_build_clears_only_its_own_space_and_says_what_changed() {
+        let gear = vec![panel("PA", [100.0, 100.0], [130.0, 104.0], 4.5, 2.0), panel("PN", [300.0, 100.0], [330.0, 104.0], 4.5, 2.0)];
+        let mut sp = spec(vec![run("V", &[[40.0, 102.0], [200.0, 102.0]], 9.0, 2.0), run("V", &[[240.0, 102.0], [400.0, 102.0]], 9.0, 2.0)], gear);
+        let base = super::super::mep::run_base(&sp.mep.runs[1]);
+        let only: std::collections::BTreeSet<String> = ["PN".to_string()].into_iter().collect();
+        let c = clear_built_of(&cadaddy_doc::Drawing::new_imperial(), &mut sp, Some(&only));
+        assert_eq!((c.found, c.corrected), (1, 1), "{c:?}");
+        assert_eq!(c.changed, vec![(1, base)]);
+        assert!(sp.mep.runs[0].corrections.is_empty() && !sp.mep.runs[1].corrections.is_empty());
     }
 
     #[test]

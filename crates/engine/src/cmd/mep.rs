@@ -2595,7 +2595,7 @@ pub(crate) struct EquipmentPlan {
 }
 
 /// [`EquipmentPlan`] of `e` on `level` (heights `z0`..`z1`, drawing units): a panel on the face
-/// of the wall nearest it (`walls`: [`super::propfill::wall_footprints`]), recessed (its front
+/// of the wall nearest it (`walls`: [`super::propfill::wall_footprints_on_plans`]), recessed (its front
 /// flush, its back in the wall) when its mounting says so, else on the face, turned with the
 /// wall; anything else (and a panel no wall is near) its spec box.
 pub(crate) fn equipment_plan(
