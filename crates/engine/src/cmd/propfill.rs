@@ -3359,22 +3359,22 @@ mod tests {
     #[test]
     fn doors_nothing_numbers_take_their_rooms_number() {
         let doors = vec![
-            seen(1, None, Some("204")),
-            seen(2, None, Some("118")),
-            seen(3, None, Some("118")),
-            // A printed 305A: room 305's doors skip that letter.
-            seen(4, Some("305A"), Some("305")),
-            seen(5, None, Some("305")),
+            seen(1, None, Some("1204")),
+            seen(2, None, Some("1118")),
+            seen(3, None, Some("1118")),
+            // A printed 1305A: room 1305's doors skip that letter.
+            seen(4, Some("1305A"), Some("1305")),
+            seen(5, None, Some("1305")),
             // Nothing beside it is a numbered room: left unnumbered.
             seen(6, None, None),
             // Already numbered: kept.
-            seen(7, Some("12"), Some("204")),
+            seen(7, Some("12"), Some("1204")),
         ];
         let got: Vec<(u64, String)> = door_numbers(&doors).into_iter().map(|(h, n, _)| (h.0, n)).collect();
-        assert_eq!(got, vec![(2, "118A".to_string()), (3, "118B".to_string()), (1, "204".to_string()), (5, "305".to_string())]);
+        assert_eq!(got, vec![(2, "1118A".to_string()), (3, "1118B".to_string()), (1, "1204".to_string()), (5, "1305".to_string())]);
         // A room's only door whose number another door already has is lettered.
-        let got = door_numbers(&[seen(1, Some("204"), Some("204")), seen(2, None, Some("204"))]);
-        assert_eq!(got.first().map(|x| x.1.as_str()), Some("204A"));
+        let got = door_numbers(&[seen(1, Some("1204"), Some("1204")), seen(2, None, Some("1204"))]);
+        assert_eq!(got.first().map(|x| x.1.as_str()), Some("1204A"));
     }
 
     /// A door serves the numbered room beside it, not the corridor (by its name) or a room
@@ -3387,10 +3387,10 @@ mod tests {
             level: None,
             label: label.into(),
         };
-        let (corridor, room, bath) = (shape("C100"), shape("231"), shape("BATH"));
-        let names = |l: &str| Some(if l == "C100" { "CORRIDOR".to_string() } else { "GUEST ROOM".to_string() });
-        assert_eq!(served_room(&[&corridor, &room], names).as_deref(), Some("231"));
-        assert_eq!(served_room(&[&bath, &room], names).as_deref(), Some("231"));
+        let (corridor, room, bath) = (shape("C1000"), shape("1417"), shape("BATH"));
+        let names = |l: &str| Some(if l == "C1000" { "CORRIDOR".to_string() } else { "GUEST ROOM".to_string() });
+        assert_eq!(served_room(&[&corridor, &room], names).as_deref(), Some("1417"));
+        assert_eq!(served_room(&[&bath, &room], names).as_deref(), Some("1417"));
         assert_eq!(served_room(&[&bath], names), None);
     }
 }
