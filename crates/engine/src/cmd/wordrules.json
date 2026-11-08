@@ -2757,6 +2757,58 @@
     "EQUIPMENT MARK"
    ]
   },
+  "schedules.opening_mark_words": {
+   "source": "format vocabulary of door and window schedules: the last word of the heading of the column of marks (`MARK`, `DOOR NO.`, `WINDOW #`) (fix-title-block-read-as-schedule-rows)",
+   "words": [
+    "MARK",
+    "TAG",
+    "NO",
+    "NUMBER",
+    "NUM",
+    "#"
+   ]
+  },
+  "schedules.opening_mark_qualifiers": {
+   "source": "format vocabulary of door and window schedules: the words that may come before the mark word in the heading of the column of marks (`DOOR NO.`, `OPENING MARK`); a heading with any other word is a title-block field (`PROJECT NO.`, `SHEET NO.`), not a column of marks (fix-title-block-read-as-schedule-rows)",
+   "words": [
+    "DOOR",
+    "DR",
+    "WINDOW",
+    "WIN",
+    "WDW",
+    "WNDW",
+    "OPENING",
+    "OPNG",
+    "OPG",
+    "TYPE",
+    "FRAME"
+   ]
+  },
+  "schedules.not_marks": {
+   "source": "drafting convention: short title-block and stamp field labels that look like a code but are never a door or window mark (`NO.`, `BY`, `REV`, `DWG`) (fix-title-block-read-as-schedule-rows)",
+   "words": [
+    "NO",
+    "BY",
+    "REV",
+    "DWG",
+    "JOB",
+    "CHK",
+    "DRN",
+    "APP",
+    "PRJ",
+    "PROJ",
+    "FOR",
+    "OF",
+    "THE",
+    "AND",
+    "SHT",
+    "TYP",
+    "SIM",
+    "NTS",
+    "RE",
+    "SEE"
+   ]
+  },
   "sheets.device_disciplines": {
    "source": "The disciplines whose sheets draw devices (electrical, mechanical, plumbing, fire protection and alarm, technology). (drafting convention; moved from guided.rs `DEVICE_DISCIPLINES`)",
    "words": [
