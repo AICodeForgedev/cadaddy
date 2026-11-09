@@ -3811,7 +3811,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // The lighting documents of the types present (fixture schedule rows, submittal products and
     // their cut-sheet pages, the control legend), and each luminaire's and control's facts.
     let lighting = match here.objects.get_mut("elements") {
-        Some(Value::Array(els)) => super::validate_lighting::annotate(d, &model, &kinds, prints.as_ref(), &all_rules, els),
+        Some(Value::Array(els)) => super::validate_lighting::annotate(d, &sp, &model, &kinds, prints.as_ref(), &all_rules, els),
         _ => None,
     };
     if let Some((summary, pages)) = lighting {
@@ -3842,6 +3842,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         value: None,
         equip_docs: None,
         fixture_docs: None,
+        conduit_docs: None,
     });
     // The routed raceway (the conduit rules), measured on the model's own pieces over the area's
     // level: each finding names the area's pieces it covers (`handles`), so a run's, a circuit's
@@ -3860,7 +3861,9 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         let net = vc::Net::of(d, &sp);
         let only: Vec<String> = only_rules.iter().flatten().cloned().collect();
         let takeoff = vc::read_takeoff(s, &all_rules, &only);
-        let cx = vc::Ctx { d, sp: &sp, frame: &frame, areas: std::slice::from_ref(&area), whole_levels: true, takeoff: takeoff.as_ref() };
+        let docs = if which.derate.is_some() || which.vdrop.is_some() { vc::ScheduleDocs::read(s, d, &sp) } else { vc::ScheduleDocs::default() };
+        let cx =
+            vc::Ctx { d, sp: &sp, frame: &frame, areas: std::slice::from_ref(&area), whole_levels: true, takeoff: takeoff.as_ref(), docs: &docs };
         let got = vc::check_net(&cx, which, &net);
         let facts = vc::packet_raceways(&net, &sp, &frame, &own, vc::touch_in(which.continuity));
         // The findings about the area's own pieces, each naming only those (the rest are judged

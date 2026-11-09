@@ -16,6 +16,8 @@ pub(crate) const MAX_SEGMENTS: usize = 400_000;
 const MAX_NOTES: usize = 40;
 /// A blank band this many text heights tall ends a table's notes.
 const NOTE_GAP_H: f64 = 4.0;
+/// Group heading rules looked at in one table's header, at most.
+const MAX_GROUP_RULES: usize = 40;
 
 /// A table read off a sheet: its column headers and its rows (a cell per column).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -161,6 +163,21 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         .collect();
     ys.sort_by(|a, b| b.total_cmp(a));
     ys.dedup_by(|a, b| (*a - *b).abs() < 0.2 * h);
+    // The header's band: between the lines above and below it.
+    let above = ys.iter().copied().filter(|y| *y > header_y).fold(t.at.y, f64::min);
+    let below = ys.iter().copied().filter(|y| *y < header_y).fold(f64::NEG_INFINITY, f64::max);
+    // A group's sub-columns (`TYPE | COLOR` under `LAMPS`) are drawn from the rule under its
+    // heading down: their lines cross the header's band low, not where its first line is.
+    if below.is_finite() && above > below {
+        let reach = below + 0.25 * (above - below);
+        xs.extend(
+            segs.iter()
+                .filter(|(a, b)| (a.x - b.x).abs() < tol && a.y.min(b.y) <= below + tol && a.y.max(b.y) >= reach && a.x > x0 + tol && a.x < x1 - tol)
+                .map(|(a, _)| a.x),
+        );
+        xs.sort_by(f64::total_cmp);
+        xs.dedup_by(|a, b| (*a - *b).abs() < 0.2 * h);
+    }
     let col = |x: f64| xs.windows(2).position(|w| x >= w[0] - tol && x < w[1] - tol);
     let gather = |lo: f64, hi: f64| -> Vec<String> {
         let mut cells = vec![String::new(); xs.len() - 1];
@@ -177,10 +194,36 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         }
         cells
     };
-    // The header's band: between the lines above and below it.
-    let above = ys.iter().copied().filter(|y| *y > header_y).fold(t.at.y, f64::min);
-    let below = ys.iter().copied().filter(|y| *y < header_y).fold(f64::NEG_INFINITY, f64::max);
-    let headers = if below.is_finite() { gather(below, above) } else { gather(header_y - 0.6 * h, above) };
+    let header_lo = if below.is_finite() { below } else { header_y - 0.6 * h };
+    let mut headers = gather(header_lo, above);
+    // A group heading (`LAMPS` over `TYPE | COLOR | WATTS`): the text over a rule inside the
+    // header's band that runs under some of the columns only. Each column under it is headed by
+    // both (`LAMPS TYPE`), so a sub-column's `TYPE` is never the table's own `TYPE`.
+    let mut groups: Vec<(f64, f64, f64)> = segs
+        .iter()
+        .filter(|(a, b)| (a.y - b.y).abs() < tol && a.y > header_lo + tol && a.y < above - tol)
+        .map(|(a, b)| (a.y, a.x.min(b.x).max(x0), a.x.max(b.x).min(x1)))
+        .filter(|(_, lo, hi)| hi - lo < 0.9 * (x1 - x0))
+        .collect();
+    groups.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
+    groups.dedup_by(|a, b| (a.0 - b.0).abs() < tol && (a.1 - b.1).abs() < tol && (a.2 - b.2).abs() < tol);
+    for (y, lo, hi) in groups.into_iter().take(MAX_GROUP_RULES) {
+        let under: Vec<usize> =
+            xs.windows(2).enumerate().filter(|(_, w)| (w[0] + w[1]) / 2.0 > lo && (w[0] + w[1]) / 2.0 < hi).map(|(i, _)| i).collect();
+        if under.len() < 2 {
+            continue;
+        }
+        let (over, sub) = (gather(y, above), gather(header_lo, y));
+        let group = under.iter().filter_map(|c| over.get(*c)).filter(|v| !v.is_empty()).cloned().collect::<Vec<_>>().join(" ");
+        if group.is_empty() {
+            continue;
+        }
+        for c in under {
+            if let (Some(hd), Some(s)) = (headers.get_mut(c), sub.get(c)) {
+                *hd = if s.is_empty() { group.clone() } else { format!("{group} {s}") };
+            }
+        }
+    }
     let mut rows = Vec::new();
     let mut lower: Vec<f64> = ys.iter().copied().filter(|y| *y <= below + tol).collect();
     // Its last row has no rule under it: the column lines' ends close it.

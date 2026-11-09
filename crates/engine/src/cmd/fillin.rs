@@ -39,6 +39,9 @@ pub(crate) struct FixtureAt {
     pub what: String,
     pub words: String,
     pub lines: Vec<String>,
+    /// Its drainage branch sizes its documents give (schedule row, rough-in table), by system,
+    /// with their source ([`FillRules::doc_sizes_of`]): they size its branch before the rule's.
+    pub sizes: BTreeMap<String, (f64, String)>,
 }
 
 /// What one system's fill-in on one floor laid in.
@@ -111,9 +114,9 @@ pub(crate) fn fixture_lines(
                 system: sys.clone(),
                 pts: vec![f.at],
                 what: format!("fixture {}", f.what),
-                size_in: rule.size_for(&f.words),
+                size_in: f.sizes.get(sys).map_or_else(|| rule.size_for(&f.words), |z| z.0),
                 segs: Vec::new(),
-                size_basis: rule.id.clone(),
+                size_basis: f.sizes.get(sys).map_or_else(|| rule.id.clone(), |z| z.1.clone()),
             })
             .collect();
         if needs.is_empty() {
@@ -343,7 +346,13 @@ mod tests {
     }
 
     fn fixture(x: f64, y: f64, what: &str, words: &str) -> FixtureAt {
-        FixtureAt { at: [x * 12.0, y * 12.0], what: what.into(), words: words.into(), lines: vec!["SAN".into(), "V".into(), "CW".into()] }
+        FixtureAt {
+            at: [x * 12.0, y * 12.0],
+            what: what.into(),
+            words: words.into(),
+            lines: vec!["SAN".into(), "V".into(), "CW".into()],
+            sizes: BTreeMap::new(),
+        }
     }
 
     #[test]

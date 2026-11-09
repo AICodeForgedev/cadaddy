@@ -102,6 +102,24 @@ pub(crate) fn facts_of(sp: &BuildingSpec) -> Vec<Fact> {
     sp.trades.get("facts").and_then(Value::as_array).map(|a| a.iter().take(MAX_FACTS).filter_map(Fact::from_json).collect()).unwrap_or_default()
 }
 
+/// The roof framing the roof plans' notes give (the spec's exterior framing, Q6314), as the facts
+/// a truss submittal would give: that the roof is trussed, and the spacing a note read. A key the
+/// trades' documents already give is theirs (a submittal beats a plan note).
+pub(crate) fn roof_plan_facts(sp: &BuildingSpec, have: &[Fact]) -> Vec<Fact> {
+    let mut out = Vec::new();
+    let has = |k: &str| have.iter().any(|f| f.key == k);
+    for f in sp.exterior.framing.iter().filter(|f| f.member == "truss").take(1) {
+        let src = if f.source.is_empty() { format!("{} roof plan", f.level) } else { f.source.clone() };
+        if !has("framing.roof_framing") {
+            out.push(Fact::new("framing.roof_framing", "trusses", None, &src, &src));
+        }
+        if !has("framing.truss_spacing_in") && f.spacing_status == Some(cadaddy_walk3d::ValueStatus::Read) {
+            out.push(Fact::new("framing.truss_spacing_in", format!("{}\" o.c.", num_text(f.spacing_in)), Some(f.spacing_in), &src, &src));
+        }
+    }
+    out
+}
+
 /// The trade rule a fact's number sets, when it sets one.
 pub(crate) fn rule_path(key: &str) -> Option<&'static str> {
     Some(match key {

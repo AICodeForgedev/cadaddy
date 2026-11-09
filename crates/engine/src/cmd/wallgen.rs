@@ -417,6 +417,9 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     let mut levels_done = 0usize;
     let mut total_walls = 0usize;
     let mut budget_exceeded = false;
+    // The spaces open to the storey under them, on each level above the lowest (Q6322).
+    let lowest = g.rules.levels.iter().filter(|l| l.sheet.is_none()).map(|l| l.elevation_ft).fold(f64::INFINITY, f64::min);
+    let mut open_below: HashMap<usize, Vec<Vec2>> = HashMap::new();
     for (i, level) in g.rules.levels.iter().enumerate() {
         if level.sheet.is_some() {
             continue;
@@ -469,6 +472,12 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             let walls = pl.walls.len();
             let openings = pl.leaves.len();
             total_walls += walls;
+            if level.elevation_ft > lowest + 1e-6 {
+                let open = open_below_labels(s.doc()?, level);
+                if !open.is_empty() {
+                    open_below.insert(si, open);
+                }
+            }
             if level_ms > 100 {
                 notes.push(format!("{}: built {} walls, {} openings in {} ms.", level.name, walls, openings, level_ms));
             }
@@ -484,6 +493,33 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             notes.push(format!("Planning {} levels took {} ms.", total_levels, plan_ms));
         }
     }
+    // Each planned level's floor plate: inside its exterior walls' outside faces (an L plan's
+    // slab is its L), else the walls' extents when they do not close round it.
+    let mut plates: HashMap<usize, outline::Outline> = HashMap::new();
+    for (si, pl) in &planned {
+        let Some((lo, hi)) = pl.footprint() else { continue };
+        let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
+        let open = open_below.get(si).map_or(&[][..], Vec::as_slice);
+        let (plate, carved) = outline::building_open(&walls, lo, hi, upf, open);
+        match plate {
+            Some(o) => {
+                if carved > 0
+                    && let Some(level) = scene.levels.get(*si)
+                {
+                    notes.push(format!("{}: the floor slab leaves out {carved} space(s) labelled open to below.", level.name));
+                }
+                plates.insert(*si, o);
+            }
+            None => {
+                if let Some(level) = scene.levels.get(*si) {
+                    notes.push(format!("{}: the walls do not close round the building; its floor slab is their extents.", level.name));
+                }
+            }
+        }
+    }
+    // A mezzanine in a storey (Q6322): built once, the storey's walls under its slab stop there.
+    let bases = cadaddy_walk3d::level_bases(s.doc()?, &g.rules);
+    fit_mezzanines(&mut planned, &plates, &scene, &bases, g.slab_ft.max(0.0) * upf, upf, &mut notes);
     let d = s.doc_mut()?;
     let removed = remove_made(d);
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
@@ -508,23 +544,6 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             let common = Common { layer: layer_of(part).into(), xdata: xdata.into(), ..Common::default() };
             if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
                 *counts.entry(part_name(part)).or_insert(0) += 1;
-            }
-        }
-    }
-    // Each planned level's floor plate: inside its exterior walls' outside faces (an L plan's
-    // slab is its L), else the walls' extents when they do not close round it.
-    let mut plates: HashMap<usize, outline::Outline> = HashMap::new();
-    for (si, pl) in &planned {
-        let Some((lo, hi)) = pl.footprint() else { continue };
-        let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
-        match outline::building(&walls, lo, hi, upf) {
-            Some(o) => {
-                plates.insert(*si, o);
-            }
-            None => {
-                if let Some(level) = scene.levels.get(*si) {
-                    notes.push(format!("{}: the walls do not close round the building; its floor slab is their extents.", level.name));
-                }
             }
         }
     }
@@ -815,6 +834,136 @@ pub(crate) fn circulation_label(text: &str) -> Option<cadaddy_walk3d::Circulatio
     }
 }
 
+/// A mezzanine's wall repeating a wall of the storey it is in this much of its length is that wall.
+const REPEAT_SHARE: f64 = 0.8;
+/// How far off a storey's wall a mezzanine's repeat of it may be drawn, feet (registration).
+const REPEAT_REACH_FT: f64 = 0.5;
+
+/// Each mezzanine among the `planned` levels (Q6322), fitted into the storey it is in (the highest
+/// storey under it): its walls that repeat the storey's walls running up past its floor (the
+/// outside walls of a tall storey, drawn again on a mezzanine plan of the whole building) are left
+/// to the storey, built once; and the storey's walls standing under the mezzanine's slab (its
+/// `plates`, the open-to-below spaces left out) stop at the slab's underside. Plans are compared
+/// in building coordinates (each level's `bases`).
+fn fit_mezzanines(
+    planned: &mut [(usize, PlanLevel)],
+    plates: &HashMap<usize, outline::Outline>,
+    scene: &Scene,
+    bases: &[(String, Vec2)],
+    slab: f64,
+    upf: f64,
+    notes: &mut Vec<String>,
+) {
+    let info: Vec<(String, f64, Vec2)> = planned
+        .iter()
+        .map(|(si, _)| {
+            let l = scene.levels.get(*si);
+            let name = l.map(|l| l.name.clone()).unwrap_or_default();
+            let base = bases.iter().find(|(n, _)| *n == name).map_or(Vec2::new(0.0, 0.0), |(_, b)| *b);
+            (name, l.map_or(f64::NAN, |l| l.elevation_ft), base)
+        })
+        .collect();
+    let mezzanine = |i: usize| info.get(i).is_some_and(|x| cadaddy_walk3d::levels::is_mezzanine(&x.0));
+    for m in 0..planned.len() {
+        let (Some((m_name, m_el, m_base)), true) = (info.get(m).cloned(), mezzanine(m)) else { continue };
+        // The storey it is in: the highest one under it.
+        let Some(st) = (0..planned.len())
+            .filter(|&j| j != m && !mezzanine(j) && info.get(j).is_some_and(|x| x.1 < m_el))
+            .max_by(|a, b| info.get(*a).map_or(f64::NAN, |x| x.1).total_cmp(&info.get(*b).map_or(f64::NAN, |x| x.1)))
+        else {
+            continue;
+        };
+        let Some((st_name, _, st_base)) = info.get(st).cloned() else { continue };
+        let Some(z0) = planned.get(m).map(|(_, pl)| pl.z0) else { continue };
+        // The storey's walls in building coordinates, those reaching past the mezzanine's floor.
+        let tall: Vec<(Vec2, Vec2, f64)> = planned
+            .get(st)
+            .map(|(_, pl)| pl.walls.iter().filter(|w| w.top > z0 + 1e-6).map(|w| (w.a - st_base, w.b - st_base, w.thickness)).collect())
+            .unwrap_or_default();
+        let mut left = 0;
+        if let Some((_, pl)) = planned.get_mut(m) {
+            let before = pl.walls.len();
+            pl.walls.retain(|w| !repeats(w.a - m_base, w.b - m_base, w.thickness, &tall, upf));
+            left = before - pl.walls.len();
+        }
+        if left > 0 {
+            notes.push(format!(
+                "{m_name}: {left} wall(s) the storey under it builds full height (the mezzanine plan draws them again) are built once, by {st_name}."
+            ));
+        }
+        // The storey's walls under the mezzanine's slab stop at its underside.
+        let Some(plate) = planned.get(m).and_then(|(si, _)| plates.get(si)) else { continue };
+        let under = |p: Vec2| plate.rects.iter().any(|[a, b]| p.x > a.x && p.x < b.x && p.y > a.y && p.y < b.y);
+        let mut capped = 0;
+        if let Some((_, pl)) = planned.get_mut(st) {
+            for w in &mut pl.walls {
+                // Wholly under it: the wall's middle with its faces and a little more round it.
+                let mid = (w.a + w.b) * 0.5 - st_base + m_base;
+                let r = w.thickness / 2.0 + REPEAT_REACH_FT * upf;
+                let inside = [Vec2::new(r, 0.0), Vec2::new(-r, 0.0), Vec2::new(0.0, r), Vec2::new(0.0, -r)].iter().all(|d| under(mid + *d));
+                let top = z0 - slab;
+                if inside && w.top > top + 1e-6 && top > pl.z0 {
+                    w.top = top;
+                    capped += 1;
+                }
+            }
+        }
+        if capped > 0 {
+            notes.push(format!("{st_name}: {capped} wall(s) under the {m_name} slab stop at its underside."));
+        }
+    }
+}
+
+/// Whether a wall (centreline ends, thickness; building coordinates) repeats walls of `tall`: on
+/// their line (within half the thicker one and [`REPEAT_REACH_FT`]), along [`REPEAT_SHARE`] of
+/// its length.
+fn repeats(a: Vec2, b: Vec2, t: f64, tall: &[(Vec2, Vec2, f64)], upf: f64) -> bool {
+    let len = a.dist(b);
+    if !(len > 1e-9 && len.is_finite()) {
+        return false;
+    }
+    let u = (b - a) * (1.0 / len);
+    let mut covered = 0.0;
+    for (sa, sb, st) in tall.iter().take(MAX_OBJECTS) {
+        let sl = sa.dist(*sb);
+        if !(sl > 1e-9 && sl.is_finite()) {
+            continue;
+        }
+        let su = (*sb - *sa) * (1.0 / sl);
+        let off = |p: Vec2| (p - *sa).dot(su.perp()).abs();
+        let reach = t.max(*st) / 2.0 + REPEAT_REACH_FT * upf;
+        if u.cross(su).abs() > 0.05 || off(a) > reach || off(b) > reach {
+            continue;
+        }
+        let (ta, tb) = ((a - *sa).dot(su), (b - *sa).dot(su));
+        covered += (ta.max(tb).min(sl) - ta.min(tb).max(0.0)).max(0.0);
+    }
+    covered >= REPEAT_SHARE * len
+}
+
+/// Most open-to-below labels read on a level's plan.
+const MAX_OPEN_BELOW_LABELS: usize = 64;
+
+/// Where a level's plan (inside its region) labels a space open to the storey under it (rule data
+/// `levels.open_below_words`, the whole label word for word): its insertion point.
+fn open_below_labels(d: &Drawing, level: &cadaddy_walk3d::Level) -> Vec<Vec2> {
+    let words = |t: &str| t.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
+    let list: Vec<String> = cadaddy_mepfix::wordrules::words("levels.open_below_words").iter().map(|w| words(w)).collect();
+    let ents: Vec<&Arc<Entity>> =
+        d.model.iter().filter(|e| made_as(e).is_none() && matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_))).collect();
+    let mut out = Vec::new();
+    for (_, text, at, _) in super::perceive::texts(&ents) {
+        let on = level.region.is_none_or(|[x0, y0, x1, y1]| at.x >= x0.min(x1) && at.x <= x0.max(x1) && at.y >= y0.min(y1) && at.y <= y0.max(y1));
+        if at.is_finite() && on && list.contains(&words(&text)) {
+            out.push(at);
+        }
+        if out.len() >= MAX_OPEN_BELOW_LABELS {
+            break;
+        }
+    }
+    out
+}
+
 /// Whether `name` is the roof of a building with storeys under it (`Roof`, `MAIN ROOF`, `LOW
 /// ROOF`): it holds the roof, its parapets and what stands on it, not walls, a floor or rooms. A
 /// drawing of one level named so is still built as a storey.
@@ -959,6 +1108,13 @@ pub fn model_behind(s: &Session) -> bool {
 /// After a command: when the drawing has an associative model and an object on its rules'
 /// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
+    behind_after_command(s, before);
+    // Then the drawing state now follows the build it comes from (and a build this command
+    // made takes the model as the command left it).
+    super::revise3d::after_command(s, before);
+}
+
+fn behind_after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     let Some(before) = before else { return };
     let Ok(st) = s.state() else { return };
     let Some(g) = st.wallgen.as_ref().filter(|g| g.auto) else { return };
@@ -966,7 +1122,9 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
         touch(s);
         return;
     }
-    let built = st.model_record.as_ref().and_then(|r| r.built.as_ref());
+    // The build this command made, else the one its starting state comes from (after an undo,
+    // not the last build made).
+    let built = st.model_records.for_command(before, &st.doc).and_then(|r| r.built.as_ref());
     if built.is_some_and(|b| Arc::ptr_eq(&b.0, &st.doc)) {
         return;
     }
@@ -1144,8 +1302,9 @@ pub fn update_model(s: &mut Session) -> bool {
         }
         return false;
     };
+    // The plan of the build this state comes from: after an undo, not the last build's.
     let (old, rooms) =
-        st.model_record.as_ref().map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
+        st.model_records.for_state(&behind).map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
     let how = super::revise3d::Revise { by_handle: true, tolerance: None, rebuild: true, auto: true };
     s.model_updating = true;
     let r = super::revise3d::revise(s, &g, old, rooms, &how);

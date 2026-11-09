@@ -279,6 +279,38 @@ fn a_truss_is_passed_between_its_chords_never_bored() {
     assert!(pass.iter().all(|h| h.dia_in == 0.0));
 }
 
+/// Q6314: a top floor's run across the roof trusses, a few feet in from their ends, goes up
+/// between the chords and straight across: a pass through an open web bores nothing, so it is
+/// no labor, and the run never goes round the trusses' ends (past the walls they bear on).
+#[test]
+fn a_run_across_trusses_by_their_ends_passes_their_webs_never_round_the_ends() {
+    // Trusses along y (y = -240 to 240) every 24" over a 100' floor, 112" to 136".
+    let members = (0..=50)
+        .map(|k| {
+            let x = 24.0 * f64::from(k);
+            (
+                Obs {
+                    handle: Handle(0x56),
+                    lo: Vec3::new(x - 0.75, -240.0, 112.0),
+                    hi: Vec3::new(x + 0.75, 240.0, 136.0),
+                    category: FRAMING.into(),
+                    system: "roof truss".into(),
+                    trade: "framing",
+                },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 1.5, truss: true },
+            )
+        })
+        .collect();
+    let field = Field::with_framing(Vec::new(), members, UPF);
+    // 6" in from the trusses' end (y = 240), across 49 of them; the first tier meets the chords.
+    let (a, b) = (Vec2::new(12.0, 234.0), Vec2::new(1188.0, 234.0));
+    let leg = route_leg(a, b, &[114.0, 124.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty(), "{leg:?}");
+    assert!(leg.pts.iter().all(|p| p.y <= 240.0 - 1.25), "never past the trusses' ends: {leg:?}");
+    assert_eq!(leg.z, vec![124.0], "between the chords: {leg:?}");
+    assert_eq!(leg.holes, 0, "a pass through a truss's web is no bored hole");
+}
+
 #[test]
 fn hostile_framing_never_panics() {
     let bad = vec![
@@ -906,4 +938,19 @@ fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_lev
             .sum::<f64>()
     };
     assert!(wire("Middle") >= 4.0 * 10.0 - 0.1, "three hots and a neutral up the storey: {lines:#?}");
+}
+
+/// Q6314: a top floor (floor 0, top 96") under 24" roof trusses bearing on its walls (96" to
+/// 120") routes up through their webs, as it does through the floor above's joists in the
+/// storey's height; framing far above (another storey's) is not over it.
+#[test]
+fn a_top_floors_tiers_go_up_into_the_roof_trusses_bearing_on_its_walls() {
+    let keep = 2.125;
+    // The trusses wholly above the storey's top: their webs are routing space.
+    assert_eq!(framing_tier_top(0.0, 96.0, 96.0, 120.0, keep, UPF), Some(120.0 - keep));
+    // Joists within the storey's height, as before.
+    assert_eq!(framing_tier_top(0.0, 120.0, 108.0, 120.0, keep, UPF), Some(120.0 - keep));
+    // Framing a storey up (bearing 10' over this storey's top) is not this level's.
+    assert_eq!(framing_tier_top(0.0, 96.0, 216.0, 240.0, keep, UPF), None);
+    assert_eq!(framing_tier_top(0.0, 96.0, f64::NAN, f64::NAN, keep, UPF), None);
 }
