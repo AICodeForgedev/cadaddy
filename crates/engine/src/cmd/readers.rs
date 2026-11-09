@@ -1509,33 +1509,49 @@ pub(crate) fn switch_designation(t: &str) -> Option<(String, String)> {
     Some((tag, leg.to_string()))
 }
 
+/// The spec level a device's level code names (`2` → `Level 2`, `R` → `Roof`), if one does.
+fn named_level<'a>(sp: &'a cadaddy_walk3d::BuildingSpec, want: &str) -> Option<&'a cadaddy_walk3d::Level> {
+    let want = want.trim();
+    if want.is_empty() {
+        return None;
+    }
+    // Resolve the device's raw level code to its canonical form, then match by canonical name.
+    let canonical_want = cadaddy_walk3d::levels::canonical_level(want).map(|(c, _)| c);
+    let w = want.to_ascii_uppercase();
+    sp.levels.iter().find(|l| {
+        let n = l.name.trim().to_ascii_uppercase();
+        if n == w || n.ends_with(&format!(" {w}")) {
+            return true;
+        }
+        // Match by canonical form: "R" → "ROOF" matches a level named "Roof".
+        if let Some(ref cw) = canonical_want {
+            let cn = cadaddy_walk3d::levels::canonical_level(&n).map(|(c, _)| c);
+            if cn.as_deref() == Some(cw) {
+                return true;
+            }
+        }
+        false
+    })
+}
+
 /// The model level a device belongs on: the spec level whose plan region holds it, else the
 /// spec level named as its sheet's (`2` → `Level 2`), else its sheet's level named the way the
-/// spec names its levels, else the spec's level for the whole drawing.
+/// spec names its levels, else the spec's level for the whole drawing. Where several levels
+/// share the region (a roof with no plan of its own takes the plan of the storey under it), the
+/// one its own sheet names: a roof plan's device stays on the roof, never in the room under it.
 fn device_level(sp: &cadaddy_walk3d::BuildingSpec, dv: &ReadDevice) -> String {
-    let regional = cadaddy_walk3d::level_at(&sp.levels, dv.at[0], dv.at[1]).filter(|l| l.region.is_some());
-    if let Some(l) = regional {
-        return l.name.clone();
+    let (x, y) = (dv.at[0], dv.at[1]);
+    let holds = |l: &&cadaddy_walk3d::Level| {
+        l.sheet.is_none() && l.region.is_some_and(|[x0, y0, x1, y1]| x >= x0.min(x1) && x <= x0.max(x1) && y >= y0.min(y1) && y <= y0.max(y1))
+    };
+    let regional: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().filter(holds).collect();
+    let named = named_level(sp, &dv.level);
+    if let Some(first) = regional.first() {
+        let own = named.filter(|n| regional.iter().any(|l| l.name == n.name));
+        return own.unwrap_or(first).name.clone();
     }
     let want = dv.level.trim();
     if !want.is_empty() {
-        // Resolve the device's raw level code to its canonical form, then match by canonical name.
-        let canonical_want = cadaddy_walk3d::levels::canonical_level(want).map(|(c, _)| c);
-        let named = sp.levels.iter().find(|l| {
-            let n = l.name.trim().to_ascii_uppercase();
-            let w = want.to_ascii_uppercase();
-            if n == w || n.ends_with(&format!(" {w}")) {
-                return true;
-            }
-            // Match by canonical form: "R" → "ROOF" matches a level named "Roof".
-            if let Some(ref cw) = canonical_want {
-                let cn = cadaddy_walk3d::levels::canonical_level(&n).map(|(c, _)| c);
-                if cn.as_deref() == Some(cw) {
-                    return true;
-                }
-            }
-            false
-        });
         return match named {
             Some(l) => l.name.clone(),
             // Named as the spec names its levels (`Level 2` beside `Level 1`).
@@ -1778,6 +1794,34 @@ fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    /// A roof with no plan of its own takes the plan region of the storey under it (Q6313): a
+    /// device its roof plan reads stays on the roof, never in the room under it; a device of the
+    /// storey's own plan stays on the storey; with no level code the first level holding it.
+    #[test]
+    fn a_roof_device_stays_on_the_roof_when_the_roof_borrows_the_plan_under_it() {
+        let region = Some([1000.0, 0.0, 2000.0, 800.0]);
+        let lv = |name: &str, el: f64| cadaddy_walk3d::Level {
+            name: name.into(),
+            elevation_ft: el,
+            height_ft: 10.0,
+            ceiling_ft: 8.0,
+            region,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let sp = cadaddy_walk3d::BuildingSpec { levels: vec![lv("Level 3", 20.0), lv("Roof", 30.0)], ..Default::default() };
+        let dv =
+            |level: &str| super::ReadDevice { tag: "HP".into(), at: [1500.0, 400.0], sheet: "E-9".into(), level: level.into(), ..Default::default() };
+        assert_eq!(super::device_level(&sp, &dv("R")), "Roof");
+        assert_eq!(super::device_level(&sp, &dv("ROOF")), "Roof");
+        assert_eq!(super::device_level(&sp, &dv("3")), "Level 3");
+        assert_eq!(super::device_level(&sp, &dv("")), "Level 3");
+        // A level the region doesn't hold doesn't win over the region's.
+        let other = super::ReadDevice { at: [1500.0, 400.0], level: "7".into(), ..dv("") };
+        assert_eq!(super::device_level(&sp, &other), "Level 3");
+    }
+
     #[test]
     fn a_switchs_legend_designations_name_it() {
         let d: std::collections::BTreeMap<String, String> = [

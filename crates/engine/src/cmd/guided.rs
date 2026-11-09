@@ -489,6 +489,10 @@ pub struct GuidedJob {
     /// sheet's legend applies to its own symbols only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_spans: Vec<SheetSpan>,
+    /// How each imported sheet's scale was read (its note, lettering drawn as shapes, its
+    /// dimension strings, none): a plan left at paper size can't be measured (Q6323).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_scales: Vec<SheetScale>,
     /// The devices the devices stage confirmed (type, where, sheet, level, circuit): the
     /// bim_build stage puts them in the model after it drafts the building spec.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -565,6 +569,56 @@ pub struct SheetSpan {
     pub sheet: String,
     pub lo: u64,
     pub hi: u64,
+}
+
+/// How an imported sheet's scale was read (the PDF import's scale and its source).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SheetScale {
+    pub sheet: String,
+    /// The sheet's type (`plan`, `enlarged_plan`, `rcp` …).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    /// Drawing inches per sheet inch (1: paper size).
+    pub scale: f64,
+    /// What the import says the scale came from.
+    pub source: String,
+}
+
+impl SheetScale {
+    /// How the scale was read: `given`, `note`, `lettering` (a note drawn as shapes),
+    /// `dimensions`, `do not scale` or `none`.
+    pub fn how(&self) -> &'static str {
+        let src = self.source.as_str();
+        if src == "option" {
+            "given"
+        } else if src.contains("DO NOT SCALE") {
+            "do not scale"
+        } else if src.starts_with("scale note") && src.contains("lettering") {
+            "lettering"
+        } else if src.starts_with("scale note") {
+            "note"
+        } else if src.starts_with("dimension strings") {
+            "dimensions"
+        } else {
+            "none"
+        }
+    }
+    /// A floor plan imported at paper size with no scale read: nothing on it can be measured.
+    pub fn plan_at_paper_size(&self) -> bool {
+        matches!(self.kind.as_str(), "plan" | "enlarged_plan") && self.how() == "none" && self.scale <= 1.0
+    }
+}
+
+/// The report's sheet scales: how many sheets' scales were read each way, and the plans left at
+/// paper size.
+fn sheet_scales_report(job: &GuidedJob) -> Value {
+    let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+    for sc in &job.sheet_scales {
+        *by.entry(sc.how()).or_default() += 1;
+    }
+    let paper: Vec<&str> = job.sheet_scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.as_str()).collect();
+    let at_scale = job.sheet_scales.iter().filter(|sc| sc.scale > 1.0).count();
+    json!({"sheets": job.sheet_scales.len(), "at_real_scale": at_scale, "by": by, "plans_at_paper_size": paper})
 }
 
 /// An imported sheet's rectangle in the job's drawing.
@@ -917,6 +971,7 @@ impl GuidedJob {
             index: None,
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
+            sheet_scales: Vec::new(),
             devices: Vec::new(),
             mep: None,
             circuits: Vec::new(),
@@ -2095,10 +2150,17 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let mut placed = Vec::new();
     let mut regions = Vec::new();
     let mut typical = Vec::new();
+    let mut scales = Vec::new();
     for ((r, name), sh) in results.iter().zip(&names).zip(&all) {
         match r {
             super::exchange::PageImport::Done(rep) => {
                 imported += 1;
+                scales.push(SheetScale {
+                    sheet: name.clone(),
+                    kind: kind(sh),
+                    scale: rep.get("scale").and_then(Value::as_f64).unwrap_or(1.0),
+                    source: rep.get("scaleSource").and_then(Value::as_str).unwrap_or("").chars().take(240).collect(),
+                });
                 let rect = rep.get("rect").and_then(Value::as_array).and_then(|r| {
                     let v: Vec<f64> = r.iter().filter_map(Value::as_f64).collect();
                     <[f64; 4]>::try_from(v).ok()
@@ -2151,6 +2213,23 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         }
     }
     job.sheet_spans.extend(spans);
+    // A plan left at paper size (no scale note, none in its lettering, no dimension strings that
+    // agree) can't be measured: a finding, never silent.
+    let paper: Vec<String> = scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.clone()).collect();
+    job.sheet_scales = scales;
+    if !paper.is_empty() {
+        let list = paper.iter().take(MAX_QUESTIONS_PER_STAGE).cloned().collect::<Vec<_>>().join(", ");
+        s.echo(format!("guided: {} plan sheet(s) left at paper size (no scale read): {list}", paper.len()));
+        job.add_finding(
+            stage,
+            &format!("{} plan sheet(s) imported at paper size: no scale note and no dimension strings that agree ({list})", paper.len()),
+            "A plan at paper size can't be measured: its rooms, openings and runs come out a fraction of their size",
+            4,
+            vec!["Give the sheet's scale (its scale note as printed)".into(), "Check that the sheet is a plan".into()],
+            None,
+            false,
+        );
+    }
     // Each sheet's border and title block: what is read there is never building.
     let rects: Vec<[f64; 4]> = regions.iter().map(|r| r.rect).collect();
     for (r, f) in regions.iter_mut().zip(sheet_frames(s.doc()?, &rects)) {
@@ -5787,6 +5866,62 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                     sp.mep.runs.extend(mech.runs);
                 }
+                // The equipment the mechanical schedules list and a plan of a level tags (a roof's
+                // heat pumps and outdoor air unit, on their curbs and stands), not built yet (the
+                // typical rooms' units are by now): built where its plan tags it, put onto its
+                // level's plan by its sheet's registration as the rest of the sheet was (Q6313).
+                // Each tag's best place that lines up with its level's plan (a place whose sheet
+                // doesn't is passed over for the next, else the tag is said not placeable).
+                let mut found = scheduled_equipment(s, job, &sp)?;
+                let read_n = found.candidates.len();
+                found.choose(|e| match sim(e.min, &e.level) {
+                    Some(m) => {
+                        let (a, b) = (m.apply(e.min), m.apply(e.max));
+                        e.min = [a[0].min(b[0]), a[1].min(b[1])];
+                        e.max = [a[0].max(b[0]), a[1].max(b[1])];
+                        true
+                    }
+                    None => false,
+                });
+                if read_n > 0 || !found.unplaced.is_empty() {
+                    progress_line(&format!("  scheduled equipment the plans tag: {}", found.report()));
+                    if !found.unplaced.is_empty() {
+                        let tags: Vec<&str> = found.unplaced.iter().take(20).map(|(t, _)| t.as_str()).collect();
+                        job.add_finding(
+                            StageName::BimBuild,
+                            &format!("{} scheduled piece(s) of equipment no plan places", found.unplaced.len()),
+                            &format!(
+                                "the mechanical schedules list them but no mechanical plan of a level tags them, so they are not in the model: {}",
+                                tags.join(", ")
+                            ),
+                            2,
+                            vec!["Check the plans (a roof plan, an enlarged plan) for these tags".into()],
+                            None,
+                            false,
+                        );
+                    }
+                    if !found.not_placeable.is_empty() {
+                        let tags: Vec<&str> = found.not_placeable.iter().take(20).map(String::as_str).collect();
+                        job.add_finding(
+                            StageName::BimBuild,
+                            &format!("{} scheduled piece(s) of equipment a plan tags but could not be placed", found.not_placeable.len()),
+                            &format!(
+                                "the mechanical schedules list them and a plan tags them, but no sheet they are tagged on lines up with its level's plan, so they are not in the model (tag, the sheets): {}",
+                                tags.join("; ")
+                            ),
+                            2,
+                            vec!["Check that these sheets are assigned to their level and line up with its plan".into()],
+                            None,
+                            false,
+                        );
+                    }
+                }
+                sp.mep.equipment.extend(found.equipment);
+                // Each roof unit's line set to the indoor unit its schedule row pairs it with.
+                let sets = super::schedequip::line_sets(&mut sp);
+                if sets > 0 {
+                    progress_line(&format!("  refrigerant line sets from the roof units to the units they serve: {sets}"));
+                }
                 // Nothing more than 5' outside its storey's shell: past it, it isn't in the
                 // building (site work, or a reading put in the wrong place). Out, and said.
                 let before_out = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
@@ -6156,6 +6291,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     progress_line(&format!("  devices booked to their unit by its plan's footprint (bath, entry): {booked}"));
                 }
                 connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
+                // A mark naming a unit a schedule row built (a roof heat pump's `HP` over `3`) is
+                // its connection: at that unit, on its level, never in the room under it (Q6313).
+                let followed = super::schedequip::follow_units(&sp.mep.equipment, &mut out);
+                if followed > 0 {
+                    progress_line(&format!("  equipment connections moved to the scheduled unit their mark names: {followed}"));
+                }
                 // One connection per piece of equipment: the electrical plan's and the mechanical
                 // plan's tags of one fan, both put at it, are one.
                 let doubled = one_connection_each(&mut stamped, &mut out, upf_dev);
@@ -12602,6 +12743,33 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
         }
     }
     out
+}
+
+/// The equipment the set's mechanical schedules list and its mechanical plans of the levels tag,
+/// not built yet ([`super::schedequip::read`]), on its sheets' places in the drawing.
+fn scheduled_equipment(s: &Session, job: &GuidedJob, sp: &cadaddy_walk3d::BuildingSpec) -> Result<super::schedequip::Read> {
+    let refs: Vec<super::printmep::SheetRef> =
+        job_sheet_refs(job).into_iter().filter(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds()).take(MAX_STAMP_SHEETS).collect();
+    if refs.is_empty() {
+        return Ok(super::schedequip::Read::default());
+    }
+    let schedules = non_plan_pages(job, "M");
+    if schedules.is_empty() {
+        return Ok(super::schedequip::Read::default());
+    }
+    let d = s.doc()?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let subs: Vec<(cadaddy_doc::Drawing, f64)> = refs
+        .iter()
+        .map(|r| {
+            let sub = super::printmep::sheet_drawing(d, r);
+            let su = super::printmep::paper_units_per_foot(&sub, r).unwrap_or(upf);
+            (sub, su)
+        })
+        .collect();
+    let plans: Vec<super::schedequip::PlanIn> =
+        refs.iter().zip(&subs).map(|(sheet, (drawing, su))| super::schedequip::PlanIn { sheet, drawing, sheet_upf: *su, upf }).collect();
+    Ok(super::schedequip::read(&schedules, &plans, &sp.mep.equipment, &sp.levels))
 }
 
 /// The devices read off a mechanical plan whose mark names its equipment (a fan's `EF`): that
@@ -26630,6 +26798,12 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
         w.push(json!({"warning": "sheets not built", "detail": not_built.join("; ")}));
     }
 
+    // Plans imported at paper size (Q6323): nothing on them can be measured.
+    let paper: Vec<&str> = job.sheet_scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.as_str()).collect();
+    if !paper.is_empty() {
+        w.push(json!({"warning": "plans at paper size", "detail": format!("{} plan sheet(s) with no scale read (no scale note, no dimension strings that agree): {}", paper.len(), paper.join("; "))}));
+    }
+
     // Auto-guard rejections (Q6021).
     let rejected: Vec<String> = job
         .stages
@@ -26738,6 +26912,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "documented_objects": doc_objects_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
         "specifications": specs_report(&job),
+        "sheet_scales": sheet_scales_report(&job),
     }))
 }
 
@@ -34166,6 +34341,37 @@ mod tests {
         }
     }
 
+    /// Q6323: a plan imported at paper size (no scale note, none in its lettering, no dimension
+    /// strings) is a warning in the report, never silent; the report counts how each sheet's
+    /// scale was read.
+    #[test]
+    fn plans_left_at_paper_size_are_reported() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let sc =
+            |sheet: &str, kind: &str, scale: f64, source: &str| SheetScale { sheet: sheet.into(), kind: kind.into(), scale, source: source.into() };
+        job.sheet_scales = vec![
+            sc("P-1", "plan", 96.0, "scale note 1/8\" = 1'-0\""),
+            sc("P-2", "plan", 96.0, "scale note 1/8\" 1'-0\" (read from lettering drawn as shapes)"),
+            sc("P-3", "enlarged_plan", 48.0, "dimension strings: 4 of 5 measured agree on 48x (1/4\" = 1'-0\"); no scale note read"),
+            sc("P-4", "plan", 1.0, "none (the sheet in inches)"),
+            sc("X-1", "schedule", 1.0, "none (the sheet in inches)"),
+            sc("Q-1", "plan", 1.0, "DO NOT SCALE (the sheet in inches)"),
+        ];
+        let hows: Vec<&str> = job.sheet_scales.iter().map(SheetScale::how).collect();
+        assert_eq!(hows, ["note", "lettering", "dimensions", "none", "none", "do not scale"]);
+        let warnings = job_warnings(&job, None);
+        let w = warnings.iter().find(|w| w["warning"] == "plans at paper size").expect("a plan at paper size is a warning");
+        let detail = w["detail"].as_str().unwrap_or("");
+        assert!(detail.contains("P-4") && !detail.contains("X-1") && !detail.contains("Q-1"), "{detail}");
+        let r = sheet_scales_report(&job);
+        assert_eq!(r["at_real_scale"], json!(3));
+        assert_eq!(r["plans_at_paper_size"], json!(["P-4"]));
+        assert_eq!(r["by"]["lettering"], json!(1));
+        // every plan read at a scale: no warning
+        job.sheet_scales.retain(|sc| sc.sheet != "P-4");
+        assert!(job_warnings(&job, None).iter().all(|w| w["warning"] != "plans at paper size"));
+    }
+
     /// Q6037: auto-rejected questions are listed as open.
     #[test]
     fn auto_rejected_questions_count_as_open() {
@@ -34243,7 +34449,7 @@ mod tests {
         job.index = Some(json!({"sheets": [
             {"number": "A-11", "title": "SLAB PLAN"},
             {"number": "A-14", "title": "FLOOR FINISH PLAN"},
-            {"number": "A-12", "title": "FLOOR PLAN"},
+            {"number": "A-12", "title": "FLOOR PLANS - TENANT INTERIORS"},
             {"number": "A-21", "title": "LEVEL 2 PLAN"},
             {"number": "A-22", "title": "LEVEL 2 FURNITURE PLAN"}
         ]}));
