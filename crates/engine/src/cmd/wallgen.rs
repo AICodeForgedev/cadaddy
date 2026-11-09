@@ -1108,6 +1108,13 @@ pub fn model_behind(s: &Session) -> bool {
 /// After a command: when the drawing has an associative model and an object on its rules'
 /// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
+    behind_after_command(s, before);
+    // Then the drawing state now follows the build it comes from (and a build this command
+    // made takes the model as the command left it).
+    super::revise3d::after_command(s, before);
+}
+
+fn behind_after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     let Some(before) = before else { return };
     let Ok(st) = s.state() else { return };
     let Some(g) = st.wallgen.as_ref().filter(|g| g.auto) else { return };
@@ -1115,7 +1122,9 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
         touch(s);
         return;
     }
-    let built = st.model_record.as_ref().and_then(|r| r.built.as_ref());
+    // The build this command made, else the one its starting state comes from (after an undo,
+    // not the last build made).
+    let built = st.model_records.for_command(before, &st.doc).and_then(|r| r.built.as_ref());
     if built.is_some_and(|b| Arc::ptr_eq(&b.0, &st.doc)) {
         return;
     }
@@ -1293,8 +1302,9 @@ pub fn update_model(s: &mut Session) -> bool {
         }
         return false;
     };
+    // The plan of the build this state comes from: after an undo, not the last build's.
     let (old, rooms) =
-        st.model_record.as_ref().map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
+        st.model_records.for_state(&behind).map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
     let how = super::revise3d::Revise { by_handle: true, tolerance: None, rebuild: true, auto: true };
     s.model_updating = true;
     let r = super::revise3d::revise(s, &g, old, rooms, &how);

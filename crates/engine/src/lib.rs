@@ -355,8 +355,9 @@ pub struct DocState {
     pub disk_id: Option<cmd::file::DiskId>,
     /// The drawing's associative 3D building (WALLGEN): what it builds again from.
     pub wallgen: Option<cmd::wallgen::WallGen>,
-    /// The plan the model was last built from and what that build made (`model.revise`).
-    pub model_record: Option<cmd::revise3d::ModelRecord>,
+    /// The plans the model was built from and what those builds made, and which build each
+    /// drawing state comes from (`model.revise` and the live rebuild).
+    pub model_records: cmd::revise3d::ModelRecords,
     /// The drawing states the plan has moved past the associative model in: built again before
     /// the next command that reads the model, or when editing stops ([`cmd::wallgen::Behind`]).
     pub model_behind: cmd::wallgen::Behind,
@@ -450,7 +451,7 @@ impl DocState {
             dwg_copy_written: None,
             disk_id: None,
             wallgen: None,
-            model_record: None,
+            model_records: cmd::revise3d::ModelRecords::default(),
             model_behind: cmd::wallgen::Behind::default(),
             room_trace: cmd::RoomTraceCache::default(),
             last_revision: None,
