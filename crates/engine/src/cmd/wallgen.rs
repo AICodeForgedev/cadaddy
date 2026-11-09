@@ -2978,7 +2978,8 @@ fn is_window_mark(text: &str, schedule_marks: &[String]) -> bool {
     if schedule_marks.iter().any(|m| m.eq_ignore_ascii_case(t)) {
         return true;
     }
-    mark_with_prefix(t, "openings.window_mark_prefixes") || mark_with_prefix(t, "openings.storefront_mark_prefixes")
+    mark_with_prefix(t, cadaddy_mepfix::wordrules::words("openings.window_mark_prefixes"))
+        || mark_with_prefix(t, cadaddy_mepfix::wordrules::words("openings.storefront_mark_prefixes"))
 }
 
 /// Where the level's texts mark a window, and the mark (see [`is_window_mark`]): its texts, and
@@ -3230,14 +3231,14 @@ pub(crate) fn storefront_mark(mark: &str, row: Option<&cadaddy_walk3d::ScheduleR
     if row.is_some_and(|r| says(&r.kind_type) || says(&r.frame)) {
         return true;
     }
-    mark_with_prefix(mark, "openings.storefront_mark_prefixes")
+    mark_with_prefix(mark, cadaddy_mepfix::wordrules::words("openings.storefront_mark_prefixes"))
 }
 
-/// Whether `mark` is one of the rule data's prefixes (`key`) and a number of 1–3 digits, with an
+/// Whether `mark` is one of the rule data's `prefixes` and a number of 1–3 digits, with an
 /// optional letter after it (`W5`, `W-2`, `W3A`).
-fn mark_with_prefix(mark: &str, key: &str) -> bool {
+fn mark_with_prefix(mark: &str, prefixes: &[&str]) -> bool {
     let u = mark.trim().to_ascii_uppercase();
-    cadaddy_mepfix::wordrules::words(key).iter().any(|p| {
+    prefixes.iter().any(|p| {
         let Some(rest) = u.strip_prefix(&p.to_ascii_uppercase()) else { return false };
         let rest = rest.strip_prefix(['-', '.']).unwrap_or(rest);
         let digits = rest.chars().take_while(char::is_ascii_digit).count();
