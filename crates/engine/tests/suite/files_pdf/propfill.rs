@@ -134,7 +134,7 @@ fn plan_with(on_e_sheet: bool) -> Session {
                       "id": "R1", "size_source": "tag", "height_source": "estimated-route", "source_sheet": "M-101"}],
             "terminals": [{"system": "SA", "level": "L1", "at": [1500, 500], "size_in": [12, 12], "bottom_ft": 8, "terminal_kind": "diffuser"}],
             "equipment": [{"tag": "AHU-1", "kind": "ahu", "level": "L1", "min": [2000, 400], "max": [2060, 440], "height_ft": 5,
-                           "properties": {"CFM": "2000"}, "sources": {"schedule": "M-601"}},
+                           "properties": {"CFM": "2000", "MODEL": "XB-12"}, "sources": {"schedule": "M-601"}},
                           {"tag": "LP1", "kind": "panelboard", "level": "L1", "min": [2200, 400], "max": [2220, 410], "height_ft": 6,
                            "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20A", "poles": 1, "source": "E-601"}]}]
         }
@@ -738,6 +738,10 @@ fn ducts_terminals_and_equipment_carry_size_system_airflow_and_capacity() {
     assert_eq!(a["capacity"]["unit"], "cfm");
     assert_eq!(a["capacity"]["source"]["kind"], "schedule");
     assert_eq!(a["capacity"]["source"]["doc"], "M-601");
+    // Its schedule row's model, from the schedule (Q6313).
+    assert_eq!(a["model"]["value"], "XB-12", "{a:#}");
+    assert_eq!(a["model"]["source"]["kind"], "schedule");
+    assert_eq!(a["model"]["source"]["doc"], "M-601");
 }
 
 #[test]

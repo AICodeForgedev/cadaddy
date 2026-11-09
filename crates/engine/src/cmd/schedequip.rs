@@ -58,7 +58,7 @@ pub(crate) struct Read {
     /// by [`Read::choose`].
     pub equipment: Vec<MepEquipment>,
     /// Each scheduled tag the plans print, with every place they print it, best first: a place
-    /// with a unit's outline by the tag before one without (a duct's `DOAS-1` label on a floor
+    /// with a unit's outline by the tag before one without (a duct's unit label on a floor
     /// plan is no unit), then in plan order. Each place: the unit and its support.
     pub candidates: Vec<(String, Vec<Vec<MepEquipment>>)>,
     /// Scheduled tags the plans print but no place of which fits a plan (with where).
@@ -313,11 +313,8 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
         let lv = levels.iter().find(|l| l.name.eq_ignore_ascii_case(&level));
         let roof = is_roof(&plan.sheet.level) || is_roof(&level);
         // Each tag found here: (todo index, its point, its text height).
-        let found: Vec<(usize, [f64; 2], f64)> = todo
-            .iter()
-            .enumerate()
-            .filter_map(|(i, (t, _))| find_tag(&texts, t).map(|(at, h)| (i, at, h)))
-            .collect();
+        let found: Vec<(usize, [f64; 2], f64)> =
+            todo.iter().enumerate().filter_map(|(i, (t, _))| find_tag(&texts, t).map(|(at, h)| (i, at, h))).collect();
         // Candidate outlines, scored: nearness to the tag (as a share of the reach) plus how far
         // its size is from the expected one; the best pairs first, each outline and tag once.
         let mut cands: Vec<(f64, usize, usize)> = Vec::new();
@@ -881,12 +878,8 @@ mod tests {
             title: "OUTDOOR AIR UNIT SCHEDULE".into(),
             ..Default::default()
         };
-        let plans = [PlanIn { sheet: &s1, drawing: &floor, sheet_upf: 12.0, upf: 12.0 }, PlanIn {
-            sheet: &s9,
-            drawing: &roof,
-            sheet_upf: 12.0,
-            upf: 12.0,
-        }];
+        let plans =
+            [PlanIn { sheet: &s1, drawing: &floor, sheet_upf: 12.0, upf: 12.0 }, PlanIn { sheet: &s9, drawing: &roof, sheet_upf: 12.0, upf: 12.0 }];
         let r = chosen(place(std::slice::from_ref(&x), &plans, &[], &[]));
         let unit = r.equipment.iter().find(|e| e.tag == "OAU-2").unwrap_or_else(|| panic!("no unit"));
         assert_eq!(unit.level, "Roof");

@@ -592,7 +592,8 @@ pub fn kind_from_title(title: &str) -> Option<&'static str> {
     // A whole word (or its plural): `DOOR SCHEDULE`, never the `DOOR` of `OUTDOOR AIR UNIT`.
     let words: Vec<&str> = t.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
     let word = |w: &str| words.iter().any(|x| *x == w || x.strip_suffix('S') == Some(w));
-    if has("AIR DEVICE") || has("DIFFUSER") || has("GRILLE") || has("FIXTURE") || has("SHEET INDEX") || has("LIGHT") || word("DOOR") || word("WINDOW") {
+    if has("AIR DEVICE") || has("DIFFUSER") || has("GRILLE") || has("FIXTURE") || has("SHEET INDEX") || has("LIGHT") || word("DOOR") || word("WINDOW")
+    {
         return Some("");
     }
     // Electrical gear, its lugs and feeders: the gear reader's (`crate::gear_reader`).

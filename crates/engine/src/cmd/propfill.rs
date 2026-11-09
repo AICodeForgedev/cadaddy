@@ -2804,16 +2804,21 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                             })
                             .filter(|(k, _)| !k.starts_with("SOURCE "))
                             .collect();
+                        let sched = equipment
+                            .get(&tag.to_ascii_uppercase())
+                            .and_then(|q| q.sources.get("schedule").or_else(|| q.sources.values().next()).cloned())
+                            .unwrap_or_else(|| "equipment schedule".into());
                         if let Some((v, unit)) = capacity_of(&rows) {
-                            let sched = equipment
-                                .get(&tag.to_ascii_uppercase())
-                                .and_then(|q| q.sources.get("schedule").or_else(|| q.sources.values().next()).cloned())
-                                .unwrap_or_else(|| "equipment schedule".into());
                             let mut p = Prop::new(v, Source::from_doc(SourceKind::Schedule, &sched));
                             if !unit.is_empty() {
                                 p = p.with_unit(&unit);
                             }
                             put(&mut store, "capacity", p, tally);
+                        }
+                        // Its schedule row's model (Q6313: the equipment schedule names each
+                        // unit's product, a roof heat pump's as a fan's).
+                        if let Some((_, m)) = rows.iter().find(|(k, v)| k.trim().eq_ignore_ascii_case("MODEL") && !v.trim().is_empty()) {
+                            put(&mut store, "model", Prop::new(m.trim().to_string(), Source::from_doc(SourceKind::Schedule, &sched)), tally);
                         }
                         if let Some(r) = room_at(&rooms, lvl, b.center()) {
                             put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()), tally);
