@@ -949,12 +949,20 @@ pub(crate) fn read_loss(d: &Drawing) -> Option<String> {
     })
 }
 
-/// Whether two paths name the same file (resolved when they exist, else compared as written;
-/// without regard to case on Windows and macOS, whose file systems usually ignore it).
+/// Whether two paths name the same file: by identity when both exist (device and file number, so
+/// a hard link under another name is the same file), else resolved, else compared as written
+/// (without regard to case on Windows and macOS, whose file systems usually ignore it).
 pub(crate) fn same_file(a: &str, b: &str) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
-    if let (Ok(x), Ok(y)) = (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        return x == y;
+    {
+        // By identity, not by name: a hard link (`plan.cdy` linked as `plan.csv`), a symbolic
+        // link, `..` or another letter case all reach the same device and file number.
+        if let Ok(same) = ::same_file::is_same_file(a, b) {
+            return same;
+        }
+        if let (Ok(x), Ok(y)) = (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            return x == y;
+        }
     }
     if cfg!(any(windows, target_os = "macos")) { a.eq_ignore_ascii_case(b) } else { a == b }
 }
