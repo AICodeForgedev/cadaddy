@@ -911,17 +911,20 @@ impl BuildingSpec {
     /// Every level reaches the next level or storey datum above it (floor to floor); the top
     /// level keeps its height. Returns what changed.
     pub fn restack_heights(&mut self) -> Vec<String> {
-        let tops: Vec<f64> = self
+        // Each top and whether it is a mezzanine's: a floor's storey runs past the mezzanine in
+        // it to the next storey; a mezzanine's reaches whatever is next (Q6322).
+        let tops: Vec<(f64, bool)> = self
             .levels
             .iter()
             .filter(|l| !is_datum_name(&l.name))
-            .map(|l| l.elevation_ft)
-            .chain(self.datums.iter().filter(|d| d.kind.is_storey()).map(|d| d.elevation_ft))
-            .filter(|e| e.is_finite())
+            .map(|l| (l.elevation_ft, is_mezzanine(&l.name)))
+            .chain(self.datums.iter().filter(|d| d.kind.is_storey()).map(|d| (d.elevation_ft, d.kind == DatumKind::Mezzanine)))
+            .filter(|e| e.0.is_finite())
             .collect();
         let mut changes = Vec::new();
         for l in &mut self.levels {
-            let next = tops.iter().copied().filter(|t| *t > l.elevation_ft + 1e-6).fold(f64::INFINITY, f64::min);
+            let mezzanine = is_mezzanine(&l.name);
+            let next = tops.iter().filter(|t| mezzanine || !t.1).map(|t| t.0).filter(|t| *t > l.elevation_ft + 1e-6).fold(f64::INFINITY, f64::min);
             if next.is_finite() && (next - l.elevation_ft - l.height_ft).abs() > 1e-6 {
                 let h = next - l.elevation_ft;
                 changes.push(format!("{}: floor to floor {} → {}", l.name, crate::spec::feet(l.height_ft), crate::spec::feet(h)));
@@ -1176,6 +1179,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sp.level_matching("M"), Some(1));
+        // Heights restacked: the floor's storey runs past its mezzanine (a level or a datum) to
+        // the roof; the mezzanine's reaches the roof.
+        let mut sp = BuildingSpec::from_json(
+            &serde_json::json!({
+                "levels": [
+                    {"name": "Level 1", "elevation_ft": 0, "height_ft": 10},
+                    {"name": "Mezzanine", "elevation_ft": 10.5, "height_ft": 10}
+                ],
+                "datums": [{"name": "ROOF", "elevation_ft": 22, "kind": "roof"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        sp.restack_heights();
+        assert_eq!(sp.levels.iter().map(|l| l.height_ft).collect::<Vec<_>>(), [22.0, 11.5]);
+        let mut sp = BuildingSpec::from_json(
+            &serde_json::json!({
+                "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}],
+                "datums": [{"name": "MEZZANINE", "elevation_ft": 10.5, "kind": "mezzanine"}, {"name": "ROOF", "elevation_ft": 22, "kind": "roof"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        sp.restack_heights();
+        assert_eq!(sp.levels.first().map(|l| l.height_ft), Some(22.0));
         // The order check keeps a mezzanine between its floors: one marked over the second floor
         // is no reading of it.
         assert_eq!(in_order(&[(one, 0.0, 2), (m, 10.0, 1), (two, 14.0, 2)]), [true, true, true]);
