@@ -1499,10 +1499,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let from = devices.iter().find(|x| x.0 == *m).and_then(|x| x.2.get("mount_height_from").map(Prop::text)).unwrap_or_default();
                 super::super::propfill::HEIGHT_FROM_ORDER.iter().position(|f| from.trim().eq_ignore_ascii_case(f)).unwrap_or(usize::MAX)
             };
+            // Only a gang its devices' heights already make one (within the rules' reach): a box
+            // a keynote gangs across far heights is not set at one of them.
+            let (lo, hi) = pts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), (_, z)| (l.min(*z), h.max(*z)));
             let one = members
                 .iter()
                 .filter_map(|m| Some((m, rank(m), centre_of.get(m)?.1)))
                 .filter(|x| x.2.is_finite())
+                .filter(|_| hi - lo <= rl.gang.height_in * inch + 1e-9)
                 .min_by(|a, b| a.1.cmp(&b.1).then(a.2.total_cmp(&b.2)));
             let z = one.map_or_else(|| pts.iter().map(|(_, z)| *z).sum::<f64>() / k, |x| x.2);
             if let Some((by, ..)) = one {
