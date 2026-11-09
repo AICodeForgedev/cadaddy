@@ -3,7 +3,8 @@
 //! Each check reads the properties (and the links between elements: `fed_from`, `served_by`,
 //! `waste`, `vent`, `host_wall`) and lists what to look at, never changing the model:
 //!
-//! - general: `rated_door` (a door in a rated wall with no rating), `room_number` (a room with no
+//! - general: `rated_door` (a door in a rated wall with no rating), `door_schedule` (a door with
+//!   no door schedule row, or a set with no door schedule), `room_number` (a room with no
 //!   number), `default_height` (a device whose mounting height is assumed).
 //! - electrical: `no_circuit`, `no_fed_from` (a circuit with no panel), `gfci_wet` (a receptacle
 //!   in a wet room that is not GFCI), `circuit_load` (connected load over 80 % of the breaker),
@@ -29,11 +30,12 @@ use crate::{Result, Session};
 pub(crate) const CHECK: &str = "bim.props.check";
 
 /// Every check, in the order they run.
-pub const CHECKS: [&str; 21] = [
+pub const CHECKS: [&str; 22] = [
     "no_circuit",
     "no_fed_from",
     "default_height",
     "rated_door",
+    "door_schedule",
     "room_number",
     "gfci_wet",
     "circuit_load",
@@ -310,6 +312,12 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let level = str_param(p, "level").map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
     let lim = Limits::from(p.get("limits").unwrap_or(&Value::Null));
+    // The door schedule's marks (the building spec's rows).
+    let door_marks: BTreeSet<String> = crate::cmd::bspec::current(s, CHECK)
+        .map(|(sp, _)| {
+            sp.schedule.rows.iter().filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door).map(|r| r.mark.trim().to_ascii_uppercase()).collect()
+        })
+        .unwrap_or_default();
     let d = s.doc()?;
     let m = Model::new(d);
     let on = |el: &El| level.as_deref().is_none_or(|l| el.level().eq_ignore_ascii_case(l));
@@ -375,6 +383,29 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
                     format!("{} is in a {text} rated wall ({}) but has no fire rating", door.label(), wall.label()),
                     json!({"wall": wall.handle().hex(), "wall_rating_hr": hours}),
                 );
+            }
+        }
+    }
+    if wants(&set, "door_schedule") {
+        let doors: Vec<&El> = els.iter().copied().filter(|e| e.kind == "door").collect();
+        out.checked("door_schedule", doors.len());
+        if door_marks.is_empty() {
+            if !doors.is_empty() {
+                out.add(
+                    "door_schedule",
+                    "warning",
+                    None,
+                    format!("the documents give no door schedule: {} doors carry no type, fire rating or hardware set from one", doors.len()),
+                    json!({"doors": doors.len()}),
+                );
+            }
+        } else {
+            for door in doors {
+                let number = door.text("number").map(|n| n.trim().to_ascii_uppercase()).filter(|n| !n.is_empty());
+                if number.as_ref().is_none_or(|n| !door_marks.contains(n)) {
+                    let what = number.map_or_else(|| "has no number".to_string(), |n| format!("{n} has no row"));
+                    out.add("door_schedule", "warning", Some(door), format!("{} {what} in the door schedule", door.label()), Value::Null);
+                }
             }
         }
     }
