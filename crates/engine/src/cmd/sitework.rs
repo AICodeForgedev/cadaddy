@@ -1688,7 +1688,9 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         }
         let total = cum.last().copied().unwrap_or(0.0);
         let mut stops: Vec<(f64, Obj)> = Vec::new();
-        for (i, l) in read.lights.iter().enumerate() {
+        // Only a line that ends at one of the site's objects (a curb passing two poles is none).
+        let ends_at_one = ends.0.is_some() || ends.1.is_some();
+        for (i, l) in read.lights.iter().enumerate().filter(|_| ends_at_one) {
             let o = Some(Obj::Light(i));
             if o == ends.0 || o == ends.1 {
                 continue;
@@ -1739,6 +1741,30 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
             from = (at, Some(o));
         }
         lines.push(Line { pts: piece(from.0, total), ends: (from.1, ends.1) });
+    }
+    // Two objects one drawn run: the shortest line between them (a dashed circuit beside a curb
+    // that reaches both is the circuit).
+    {
+        let key = |l: &Line| match l.ends {
+            (Some(a), Some(b)) if a != b => Some(if a < b { (a, b) } else { (b, a) }),
+            _ => None,
+        };
+        let mut best: BTreeMap<(Obj, Obj), (usize, f64)> = BTreeMap::new();
+        for (i, l) in lines.iter().enumerate() {
+            if let Some(k) = key(l) {
+                let len = path_len(&l.pts);
+                if best.get(&k).is_none_or(|(_, b)| len < *b) {
+                    best.insert(k, (i, len));
+                }
+            }
+        }
+        let keep: BTreeSet<usize> = best.values().map(|(i, _)| *i).collect();
+        let mut i = 0usize;
+        lines.retain(|l| {
+            let ok = key(l).is_none() || keep.contains(&i);
+            i += 1;
+            ok
+        });
     }
     // A note's leader: the line from the note to the run it names.
     let called: Vec<Option<usize>> = read
@@ -2685,6 +2711,10 @@ mod tests {
             text(&mut d, "SP-5", x + 35.0, 3_440.0, h);
         }
         line(&mut d, "E-CIRC", [10_125.0, 3_400.0], [10_875.0, 3_400.0]);
+        // A curb passing the poles (its ends at none) and a stripe from one to the next beside
+        // the circuit: neither another run.
+        line(&mut d, "C-CURB", [10_000.0, 3_410.0], [11_000.0, 3_410.0]);
+        line(&mut d, "C-STRIPE", [10_125.0, 3_385.0], [10_475.0, 3_385.0]);
         // SP-7: three poles, no line.
         for (x, y) in [(10_100.0, 4_000.0), (10_700.0, 4_100.0), (11_200.0, 3_900.0)] {
             pline(&mut d, "E-SITE", &square([x, y], 25.0), true);
