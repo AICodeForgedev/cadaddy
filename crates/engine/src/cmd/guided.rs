@@ -23898,13 +23898,9 @@ fn arch_placer(
     let mid = |r: &[f64; 4]| [0.5 * (r[0] + r[2]), 0.5 * (r[1] + r[3])];
     // A sheet holding its level's plan region is that level's plan.
     let level_plan = |level: &str, rect: &[f64; 4]| plans.iter().any(|(k, r)| *k == level_key0(level) && inside(rect, mid(r)));
-    // Architecture's reference is the architectural sheet with the most tags; another trade's (no
-    // architectural plans) is the sheet the level's floor was taken from.
-    let reg = if arch_ref {
-        super::identity::register(d, &sheets, upf)
-    } else {
-        super::identity::register_onto(d, &sheets, upf, reference, &|t| level_plan(&t.level, &t.rect))
-    };
+    // A level's reference is the sheet its floor was taken from, then its plans' sheet with the
+    // most tags (a code sheet's room numbers make it no reference).
+    let reg = super::identity::register_onto(d, &sheets, upf, reference, &|t| level_plan(&t.level, &t.rect));
     lap("sheets registered by tags");
     // Each sheet's fit by its tags, and whether it places the sheet (the report says which fits
     // the build left to the sheet's grids, background or frame).
@@ -24140,6 +24136,112 @@ fn arch_placer(
     let sheet_fits: std::sync::Mutex<std::collections::HashMap<(usize, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
     let sheet_names: Vec<String> = super::identity::sheets_of(Some(sp)).into_iter().map(|b| b.number).collect();
     let log_p = log.clone();
+    let (parts_c, plan_of) = (parts.clone(), plan_sheet.clone());
+    // A sheet's own linework laid on its level's plan (Q6284: a trade plan whose tags are few or
+    // disagree draws the floor plan's walls all the same); once per sheet and level.
+    let own_fit = {
+        let lines = lines.clone();
+        let log_p = log_p.clone();
+        let sheet_names = sheet_names.clone();
+        move |i: usize, level: &str, key: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
+            let id = (i, key.to_string());
+            if let Some(f) = sheet_fits.lock().ok()?.get(&id) {
+                return *f;
+            }
+            let tgt = target(key);
+            let started = web_time::Instant::now();
+            // A sheet of another part of the site than the plan's: never fitted onto it.
+            let other = plan_sheet(key).and_then(|j| match (parts.get(i), parts.get(j)) {
+                (Some(a), Some(b)) if i != j => super::sheetreg::other_parts(a, b),
+                _ => None,
+            });
+            let fit = if other.is_some() { None } else { lines.fit(i, &tgt) };
+            let number = sheet_names.get(i).cloned().unwrap_or_default();
+            progress_line(&format!(
+                "  placer: {number} on {level} by its linework: {} ({:.1} s)",
+                fit.as_ref().map_or_else(
+                    || other.as_ref().map_or_else(
+                        || format!("no fit ({})", lines.best_tried(i, &tgt)),
+                        |o| format!("not fitted (its views name another part of the site: {o})")
+                    ),
+                    |f| format!(
+                        "scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best",
+                        f.sim.scale(),
+                        f.sim.tx,
+                        f.sim.ty,
+                        f.score * 100.0,
+                        f.margin * 100.0
+                    )
+                ),
+                started.elapsed().as_secs_f64()
+            ));
+            log_sheet(
+                &log_p,
+                match &fit {
+                    Some(f) => {
+                        json!({"sheet": number, "level": level, "method": "linework", "transform": {"a": f.sim.a, "b": f.sim.b, "tx": f.sim.tx, "ty": f.sim.ty},
+                        "scale": f.sim.scale(), "score": f.score, "margin": f.margin, "used": true})
+                    }
+                    None => json!({"sheet": number, "level": level, "method": "none", "used": false,
+                    "why_not": if tgt.is_empty() {
+                        "its level has no plan to put it onto".to_string()
+                    } else if let Some(o) = &other {
+                        format!("its views name another part of the site than its level's plan ({o}): its elements are left out")
+                    } else {
+                        "no tags, grid lines, frame or linework put it onto its level's plan: its elements are left out".to_string()
+                    }}),
+                },
+            );
+            let got = fit.map(|f| f.sim);
+            sheet_fits.lock().ok()?.insert(id, got);
+            got
+        }
+    };
+    // A sheet its own linework can't place, through another trade's sheet of the level that its
+    // own places, when the two lie on each other by their frames: one consultant's sheets draw
+    // the same background in the same spot on the page, and a dense plan can leave one of them
+    // too close to call.
+    let sheet_levels: Vec<String> = super::identity::sheets_of(Some(sp)).into_iter().map(|b| level_key(&b.level)).collect();
+    let chained: std::sync::Mutex<std::collections::HashMap<(usize, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
+    let (lines_c, log_c, names_c) = (lines.clone(), log_p.clone(), sheet_names.clone());
+    let fit_of = move |i: usize, level: &str, key: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
+        if let Some(m) = own_fit(i, level, key) {
+            return Some(m);
+        }
+        let id = (i, key.to_string());
+        if let Some(f) = chained.lock().ok()?.get(&id) {
+            return *f;
+        }
+        // Another part of the site is left out however alike its sheet is drawn (a unit of the
+        // same type draws the same background in the same spot).
+        let other = |a: usize, b: usize| matches!((parts_c.get(a), parts_c.get(b)), (Some(x), Some(y)) if a != b && super::sheetreg::other_parts(x, y).is_some());
+        if plan_of(key).is_some_and(|p| other(i, p)) {
+            return None;
+        }
+        let best = (0..names_c.len())
+            .filter(|j| *j != i && !other(i, *j) && sheet_levels.get(*j).is_some_and(|l| l == key))
+            .take(MAX_SIBLING_SHEETS)
+            .filter_map(|j| Some((j, lines_c.through_sibling(i, j, &own_fit(j, level, key)?)?)))
+            .max_by(|a, b| a.1.1.min(a.1.2).total_cmp(&b.1.1.min(b.1.2)));
+        let name = |k: usize| names_c.get(k).cloned().unwrap_or_default();
+        if let Some((j, (m, on, under))) = &best {
+            progress_line(&format!(
+                "  placer: {} on {level} through {}: {:.0}% of its linework on that sheet's, {:.0}% of that sheet's on its: used",
+                name(i),
+                name(*j),
+                on * 100.0,
+                under * 100.0
+            ));
+            log_sheet(
+                &log_c,
+                json!({"sheet": name(i), "level": level, "method": "sibling", "onto": name(*j), "transform": {"a": m.a, "b": m.b, "tx": m.tx, "ty": m.ty},
+                    "linework_on_sheet": on, "sheet_on_linework": under, "used": true}),
+            );
+        }
+        let got = best.map(|(_, (m, _, _))| m);
+        chained.lock().ok()?.insert(id, got);
+        got
+    };
     let place = move |p: [f64; 2], level: &str, lands: &dyn Fn(&cadaddy_mepfix::tagid::Sim) -> bool| {
         place(p, level)
             .filter(|m| lands(m))
@@ -24239,46 +24341,7 @@ fn arch_placer(
                 // The sheet's own linework laid on its level's plan (Q6284: a trade plan whose tags
                 // are few or disagree draws the floor plan's walls all the same).
                 let i = lines.sheet_at(p)?;
-                let key = level_key(level);
-                let id = (i, key.clone());
-                if let Some(f) = sheet_fits.lock().ok()?.get(&id) {
-                    return f.filter(|m| lands(m));
-                }
-                let tgt = target(&key);
-                let started = web_time::Instant::now();
-                // A sheet of another part of the site than the plan's: never fitted onto it.
-                let other = plan_sheet(&key).and_then(|j| match (parts.get(i), parts.get(j)) {
-                    (Some(a), Some(b)) if i != j => super::sheetreg::other_parts(a, b),
-                    _ => None,
-                });
-                let fit = if other.is_some() { None } else { lines.fit(i, &tgt) };
-                let number = sheet_names.get(i).cloned().unwrap_or_default();
-                progress_line(&format!(
-                    "  placer: {number} on {level} by its linework: {} ({:.1} s)",
-                    fit.as_ref().map_or_else(
-                        || other.as_ref().map_or_else(|| "no fit".to_string(), |o| format!("not fitted (its views name another part of the site: {o})")),
-                        |f| format!("scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best", f.sim.scale(), f.sim.tx, f.sim.ty, f.score * 100.0, f.margin * 100.0)
-                    ),
-                    started.elapsed().as_secs_f64()
-                ));
-                log_sheet(
-                    &log_p,
-                    match &fit {
-                        Some(f) => json!({"sheet": number, "level": level, "method": "linework", "transform": {"a": f.sim.a, "b": f.sim.b, "tx": f.sim.tx, "ty": f.sim.ty},
-                            "scale": f.sim.scale(), "score": f.score, "margin": f.margin, "used": true}),
-                        None => json!({"sheet": number, "level": level, "method": "none", "used": false,
-                            "why_not": if tgt.is_empty() {
-                                "its level has no plan to put it onto".to_string()
-                            } else if let Some(o) = &other {
-                                format!("its views name another part of the site than its level's plan ({o}): its elements are left out")
-                            } else {
-                                "no tags, grid lines, frame or linework put it onto its level's plan: its elements are left out".to_string()
-                            }}),
-                    },
-                );
-                let got = fit.map(|f| f.sim);
-                sheet_fits.lock().ok()?.insert(id, got);
-                got.filter(|m| lands(m))
+                fit_of(i, level, &level_key(level)).filter(|m| lands(m))
             })
     };
     // Architecture is the rule, the building's shell first: a placed point lands inside its
@@ -24372,6 +24435,8 @@ const MAX_PLACER_MEMO: usize = 500_000;
 
 /// Sheets whose fit by tags the placer reports at most.
 const MAX_SHEETS_REPORTED: usize = 200;
+/// Other sheets of a level weighed for placing a sheet its own linework can't.
+const MAX_SIBLING_SHEETS: usize = 24;
 
 /// Fewest tags a sheet's fit by its tags is taken on.
 const TAG_FIT_MIN: usize = 4;
