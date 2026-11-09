@@ -662,7 +662,8 @@ pub(crate) const PROPOSAL_PREFIX: &str = "ug ";
 
 /// Runs this module made (called, proposed, stack bases): a rerun of the job replaces them.
 pub(crate) fn made_here(r: &MepRun) -> bool {
-    r.height_source.starts_with(CALLED_PREFIX)
+    // Site work's runs a note calls are the site work step's (they carry the same mark).
+    (r.height_source.starts_with(CALLED_PREFIX) && !r.source_sheet.starts_with(super::sitework::SOURCE_PREFIX))
         || r.source_sheet.starts_with(PROPOSAL_PREFIX)
         || r.system.to_ascii_uppercase().starts_with(&format!("{P_UG}-"))
 }

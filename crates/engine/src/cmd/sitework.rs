@@ -2013,18 +2013,39 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         if count > 1 {
             basis = format!("{basis}; {} conduits, {}", count, r.parallel_source);
         }
+        // A note's run is the work it calls (as the underground plan marks its own: Validate
+        // counts it called), at the note's cover, with its steel elbows; its route drawn or
+        // inferred.
+        let called = note.map(|n| {
+            format!(
+                "{}{} ({}{})",
+                super::ugplan::CALLED_PREFIX,
+                n.callout.cite(),
+                n.callout.what,
+                if n.callout.steel_ells { format!(", {}", super::ugplan::STEEL_ELLS) } else { String::new() }
+            )
+        });
+        let cover = note.and_then(|n| n.callout.cover_in).filter(|c| c.is_finite() && *c > 0.0).unwrap_or(r.cover_in);
+        let bottom = -(cover + size) / 12.0;
+        let mark = |mut run: MepRun| {
+            if let Some(c) = &called {
+                run.height_source.clone_from(c);
+            }
+            run.bottoms_ft.iter_mut().for_each(|b| *b = bottom);
+            run
+        };
         // Parallel conduits side by side in their trench, each its own run.
         let pitch = (size + r.parallel_spacing_in.max(0.0)) / 12.0 * upf;
         for k in 0..count {
             let pts = offset_path(&pts, (f64::from(k) - f64::from(count - 1) / 2.0) * pitch);
             if pts.len() >= 2 {
-                out.runs.push(buried(slab, sheet, pts.clone(), size, made, basis.clone(), &size_from));
+                out.runs.push(mark(buried(slab, sheet, pts.clone(), size, made, basis.clone(), &size_from)));
             }
             for (o, p) in ends.iter().zip([pts.first(), pts.last()]) {
                 if let (Some(o), Some(p)) = (o, p)
                     && !matches!(o, Obj::Tag(_))
                 {
-                    out.runs.push(stub(slab, sheet, *p, size, top_at(*o), made, &basis));
+                    out.runs.push(mark(stub(slab, sheet, *p, size, top_at(*o), made, &basis)));
                 }
             }
         }
@@ -2504,6 +2525,9 @@ mod tests {
         let primary: Vec<&&MepRun> = ug.iter().filter(|r| (r.size_in[0] - 4.0).abs() < 1e-9).collect();
         assert_eq!(primary.len(), 2, "{ug:?}");
         assert!(primary.iter().all(|r| r.made == Made::Drawn && r.basis.contains("PROVIDE (2)4")), "{primary:?}");
+        // The work the note calls, as the underground plan marks it (drawn route, called work).
+        assert!(primary.iter().all(|r| r.height_source.starts_with(super::super::ugplan::CALLED_PREFIX)), "{primary:?}");
+        assert!(!primary.iter().any(|r| super::super::ugplan::made_here(r)), "the underground step leaves them");
         assert!(built.runs.iter().any(|r| r.top_ft.is_some()), "stub-ups");
         // Everything says where it came from, and forgetting takes it all out again.
         let mut sp2 = sp.clone();

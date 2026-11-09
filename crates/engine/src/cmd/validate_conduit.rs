@@ -2562,6 +2562,15 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         {
                             continue;
                         }
+                        // A buried run landing on equipment (stubbed up into a pole's base, a pad's
+                        // gear, ending in a box in grade): its entry, no clash.
+                        let floor = cx.sp.level(&s.level).map_or(0.0, |l| l.elevation_ft * upf);
+                        if o.category.to_ascii_lowercase().contains("equipment")
+                            && s.a.z.min(s.b.z) < floor - 1e-6
+                            && [s.a, s.b].iter().any(|p| box_dist2(*p, o.lo, o.hi) <= touch * touch)
+                        {
+                            continue;
+                        }
                         let pad = s.r + cl(&o.category) / 12.0 * upf;
                         let (lo, hi) = (o.lo - Vec3::new(pad, pad, pad), o.hi + Vec3::new(pad, pad, pad));
                         if !s.path.windows(2).any(|w| matches!(w, [p, q] if seg_hits_box(*p, *q, lo, hi))) || serves(&s.run, o) {
