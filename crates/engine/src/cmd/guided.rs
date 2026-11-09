@@ -15491,7 +15491,8 @@ fn utility_service(
 
 fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
-    if sp.mep.panel_schedules.is_empty() {
+    // No panel schedule and no one-line: no gear to build (a one-line alone still has its service).
+    if sp.mep.panel_schedules.is_empty() && !pages.iter().any(|(_, d)| super::onelinegear::is_diagram(&cadaddy_mepfix::sheet_facts::texts(d))) {
         return Ok(());
     }
     let tags: Vec<String> = sp.mep.panel_schedules.iter().map(|p| p.panel.clone()).collect();
@@ -28466,10 +28467,10 @@ mod tests {
 
     /// A made-up schedules sheet (Q6359), no gear submittal: a single-line diagram (a meter socket,
     /// a fused service-rated disconnect, panel PX, two ground rods, a lighting contactor fed by an
-    /// unsized tag), a feeder schedule (F1 sized, F2 printed `XX`) and PX's schedule (a 225 A,
+    /// unsized tag), a feeder schedule (FDR-A sized, FDR-B printed `XX`) and PX's schedule (a 225 A,
     /// 1-phase panel whose location no room of the model is). The panel is boxed by its rating and
     /// circuits and set along the building's walls; its rows are breakers, its spare a spare; the
-    /// one-line's pieces stand beside it with the F1 feeders between them; the takeoff carries
+    /// one-line's pieces stand beside it with the FDR-A feeders between them; the takeoff carries
     /// every one; the unsized feeder is a review finding, never a silent zero.
     #[test]
     fn a_one_lines_gear_and_a_schedule_only_panel_are_built_and_taken_off_without_a_submittal() {
@@ -28485,7 +28486,7 @@ mod tests {
         };
         let mut px = PanelSchedule {
             panel: "PX".into(),
-            source: "E-9".into(),
+            source: "EX-5".into(),
             circuits: vec![
                 ckt("1", "LIGHTING", "20"),
                 ckt("2", "RECEPTACLES", "20"),
@@ -28513,27 +28514,27 @@ mod tests {
         let mut page = cadaddy_doc::Drawing::default();
         let texts: Vec<(&str, f64, f64)> = vec![
             ("SINGLE LINE DIAGRAM", 10.0, 20.0),
-            ("F1", 9.0, 61.0),
+            ("FDR-A", 9.0, 61.0),
             ("200A METER SOCKET", 10.0, 58.0),
             ("120/240V, 1PH, 3W", 10.0, 56.8),
-            ("F1", 9.0, 51.0),
+            ("FDR-A", 9.0, 51.0),
             ("200A/2P FUSED DISCONNECT", 10.0, 48.0),
             ("175A FUSES, NEMA 3R, SE RATED", 10.0, 46.8),
-            ("F1", 9.0, 41.0),
+            ("FDR-A", 9.0, 41.0),
             ("PX", 10.0, 38.0),
             ("(2) GROUND RODS, #6 CU", 30.0, 38.0),
-            ("F2", 9.0, 31.0),
+            ("FDR-B", 9.0, 31.0),
             ("30A LIGHTING CONTACTOR", 10.0, 28.0),
             ("FEEDER SCHEDULE", 102.0, 70.0),
             ("TAG", 100.0, 68.5),
             ("CONDUIT SIZE", 106.0, 68.5),
             ("CONDUCTORS", 114.0, 68.5),
             ("GROUND", 124.0, 68.5),
-            ("F1", 100.2, 67.0),
+            ("FDR-A", 100.2, 67.0),
             ("(1) 2\"C", 106.0, 67.0),
             ("(3) #3/0 (CU)", 114.0, 67.0),
             ("#6G (CU)", 124.0, 67.0),
-            ("F2", 100.2, 65.5),
+            ("FDR-B", 100.2, 65.5),
             ("(1) 3/4\"C", 106.0, 65.5),
             ("XX", 114.0, 65.5),
             ("XX", 124.0, 65.5),
@@ -28543,7 +28544,7 @@ mod tests {
         for (v, x, y) in texts {
             page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, x, y, 1.0))).ok();
         }
-        let pages = vec![("E-9".to_string(), page)];
+        let pages = vec![("EX-5".to_string(), page)];
         let mut result = json!({});
         gear_step(&mut s, &mut job, &pages, &mut result).unwrap_or_else(|e| panic!("{e}"));
         let g = &result["gear"];
@@ -28562,16 +28563,16 @@ mod tests {
         let rods = sp.mep.grounding.as_ref().map(|g| g.electrodes.clone()).unwrap_or_default();
         assert_eq!(rods.len(), 1);
         assert_eq!((rods[0].kind.as_str(), rods[0].count, rods[0].gec_size.as_str()), ("ground_rod", 2, "#6"));
-        // The coded feeders: F1 between the meter, the disconnect and the panel, single-phase.
-        let f1: Vec<&cadaddy_walk3d::Feeder> = sp.mep.feeders.iter().filter(|f| f.tag == "F1").collect();
+        // The coded feeders: FDR-A between the meter, the disconnect and the panel, single-phase.
+        let f1: Vec<&cadaddy_walk3d::Feeder> = sp.mep.feeders.iter().filter(|f| f.tag == "FDR-A").collect();
         let ends: Vec<(&str, &str)> = f1.iter().map(|f| (f.from.as_str(), f.to.as_str())).collect();
         assert_eq!(ends, [("MTR-1", "DISC-1"), ("DISC-1", "PX")], "{:#?}", sp.mep.feeders);
         assert!(f1.iter().all(|f| f.size == "3/0" && f.phases == 2 && f.neutrals == 1 && f.ground_size == "6"), "{f1:#?}");
-        // F2 is printed unsized: a finding, and no feeder.
-        assert!(!sp.mep.feeders.iter().any(|f| f.tag == "F2"));
-        assert_eq!(ol["unsized"], json!([{"from": "PX", "to": "LC-1", "tag": "F2"}]), "{ol:#}");
+        // FDR-B is printed unsized: a finding, and no feeder.
+        assert!(!sp.mep.feeders.iter().any(|f| f.tag == "FDR-B"));
+        assert_eq!(ol["unsized"], json!([{"from": "PX", "to": "LC-1", "tag": "FDR-B"}]), "{ol:#}");
         assert!(
-            job.findings.iter().any(|f| f.description.contains("unsized") && f.description.contains("PX to LC-1 (tagged F2)")),
+            job.findings.iter().any(|f| f.description.contains("unsized") && f.description.contains("PX to LC-1 (tagged FDR-B)")),
             "{:#?}",
             job.findings
         );
@@ -28585,7 +28586,7 @@ mod tests {
         assert_eq!((b["breakers"].as_u64(), b["spares"].as_u64(), b["spaces"].as_u64()), (Some(3), Some(1), Some(1)), "{b:#}");
         let t = s.execute("bim.takeoff", &json!({"group_by": "type", "keep": false})).unwrap_or_else(|e| panic!("{e}"));
         let lines = t["lines"].as_array().cloned().unwrap_or_default();
-        let has = |what: &dyn Fn(&Value) -> bool| lines.iter().any(|l| what(l));
+        let has = |what: &dyn Fn(&Value) -> bool| lines.iter().any(what);
         let item = |l: &Value| l["item"].as_str().unwrap_or_default().to_string();
         for want in ["panel PX", "Meter socket MTR-1", "Disconnect switch DISC-1", "Lighting contactor LC-1"] {
             assert!(has(&|l: &Value| item(l) == want), "{want} not in the takeoff: {:#?}", lines.iter().map(item).collect::<Vec<_>>());

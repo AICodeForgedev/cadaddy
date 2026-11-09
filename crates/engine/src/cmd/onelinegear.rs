@@ -102,6 +102,9 @@ pub(crate) struct Rules {
     pub kinds: Vec<KindRule>,
     pub electrode_words: Vec<ElectrodeWords>,
     pub electrode_label_words: Vec<String>,
+    /// Words that make an electrode's label a conductor's callout instead (`GROUNDING ELECTRODE
+    /// CONDUCTOR`).
+    pub electrode_not_words: Vec<String>,
     pub electrode_tag_prefix: String,
     pub rod_length_ft: f64,
     pub rod_source: String,
@@ -137,6 +140,31 @@ pub(crate) fn is_oneline(e: &MepEquipment) -> bool {
 pub(crate) fn is_oneline_electrode(e: &Electrode) -> bool {
     let pre = format!("{}-", rules().electrode_tag_prefix);
     e.tag.strip_prefix(&pre).is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// A sheet's texts with each one printed twice in one place kept once (a PDF's hidden text layer
+/// under its visible text, a symbol's tag beside the text it came from): the same words within a
+/// third of the taller one's height. The first is kept; the order is the sheet's.
+pub(crate) fn dedup_texts(texts: &[TextItem]) -> Vec<TextItem> {
+    let texts = texts.get(..texts.len().min(MAX_TEXTS)).unwrap_or(texts);
+    let mut by_value: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    let mut out: Vec<TextItem> = Vec::with_capacity(texts.len());
+    for t in texts {
+        let v = t.value.trim();
+        let kept = by_value.entry(v).or_default();
+        let twin = kept.iter().filter_map(|i| out.get(*i)).any(|k| {
+            let reach = k.height.max(t.height).max(0.0) / 3.0;
+            k.at.dist(t.at) <= reach
+        });
+        if !twin {
+            // Bounded: a value printed many times keeps its first places to compare with.
+            if kept.len() < 4_000 {
+                kept.push(out.len());
+            }
+            out.push(t.clone());
+        }
+    }
+    out
 }
 
 /// Whether `w` stands in `up` as words of its own (not inside a longer word).
@@ -281,7 +309,7 @@ fn conductor_in(up: &str) -> String {
 
 /// A size printed on a label: `8"X8"X48"`, `24 X 18 X 8` (three numbers), sorted small to large.
 fn printed_size(up: &str) -> Option<[f64; 3]> {
-    let flat: String = up.replace('"', "").replace(' ', "");
+    let flat: String = up.replace(['"', ' '], "");
     for w in flat.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == 'X')) {
         let parts: Vec<&str> = w.split('X').collect();
         if parts.len() != 3 {
@@ -378,7 +406,8 @@ fn kind_of(up: &str, r: &Rules) -> Option<(String, usize)> {
             }
         }
     }
-    for w in r.electrode_label_words.iter().filter(|w| has_phrase(up, w)) {
+    let callout = r.electrode_not_words.iter().any(|w| has_phrase(up, w));
+    for w in r.electrode_label_words.iter().filter(|w| !callout && has_phrase(up, w)) {
         if best.as_ref().is_none_or(|b| w.len() > b.1) {
             best = Some(("electrode".into(), w.len()));
         }
@@ -452,6 +481,19 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, skip: &BTreeSet<String>) -> 
             .iter()
             .any(|w| has_phrase(&up, w));
         let top = members.iter().filter_map(|m| texts.get(*m)).map(|t| t.at.y + t.height.max(0.0)).fold(f64::NEG_INFINITY, f64::max);
+        // A piece the one-line draws carries its rating (amps, kVA, poles, how many, a size; an
+        // electrode its conductor or count): a legend's row or a note's line naming the kind
+        // carries none.
+        let (kva, poles, count, positions, size_in, conductor) =
+            (kva_in(&up), poles_in(&up), count_in(&up), positions_in(&up), printed_size(&up), conductor_in(&up));
+        let rated = if kind == "electrode" {
+            !conductor.is_empty() || count.is_some()
+        } else {
+            amps.first().is_some() || kva.is_some() || poles.is_some() || count.is_some() || positions.is_some() || size_in.is_some()
+        };
+        if !rated {
+            continue;
+        }
         out.push(Labelled {
             kind: kind.clone(),
             electrode,
@@ -461,17 +503,17 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, skip: &BTreeSet<String>) -> 
             h: l.height.max(1e-9),
             top: if top.is_finite() { top } else { l.at.y },
             amps: amps.first().copied(),
-            kva: kva_in(&up),
+            kva,
             fuse_amps: (fused == Some(true)).then(|| amps.get(1).copied()).flatten(),
-            poles: poles_in(&up),
+            poles,
             fused,
             se_rated: se,
             nema: nema_in(&up),
             volts: volts_in(&up),
-            count: count_in(&up).unwrap_or(1),
-            positions: positions_in(&up),
-            size_in: printed_size(&up),
-            conductor: conductor_in(&up),
+            count: count.unwrap_or(1),
+            positions,
+            size_in,
+            conductor,
         });
     }
     out
@@ -579,7 +621,7 @@ pub(crate) fn panel_circuits(p: &PanelSchedule) -> u32 {
         .iter()
         .filter_map(|c| {
             let n: u32 = c.number.trim().chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()?;
-            Some(n.saturating_add(c.poles.max(1).min(4) - 1))
+            Some(n.saturating_add(c.poles.clamp(1, 4) - 1))
         })
         .max()
         .unwrap_or(0);
@@ -932,11 +974,16 @@ pub(crate) fn build_into(sp: &mut BuildingSpec, pages: &[(String, cadaddy_doc::D
     let mut page_of: Vec<usize> = Vec::new();
     let mut page_texts: Vec<(usize, Vec<TextItem>)> = Vec::new();
     for (pi, (number, d)) in pages.iter().enumerate() {
-        let texts = cadaddy_mepfix::sheet_facts::texts_with_tags(d);
+        let texts = dedup_texts(&cadaddy_mepfix::sheet_facts::texts_with_tags(d));
         if !is_diagram(&texts) {
             continue;
         }
-        let found = read(&texts, number, &skip);
+        // A label right at a tag the model has is that gear's (its rating, its kind), not more gear.
+        let known_at: Vec<&TextItem> = texts.iter().filter(|t| known.iter().any(|k| k.eq_ignore_ascii_case(t.value.trim()))).collect();
+        let found: Vec<Labelled> = read(&texts, number, &skip)
+            .into_iter()
+            .filter(|g| !known_at.iter().any(|k| (k.at.y - g.at.y).abs() <= 1.5 * g.h && (k.at.x - g.at.x).abs() <= r.label_width_h.max(1.0) * g.h))
+            .collect();
         if found.is_empty() {
             continue;
         }
@@ -1099,10 +1146,10 @@ mod tests {
     fn oneline() -> Vec<TextItem> {
         vec![
             t("SINGLE LINE DIAGRAM", 0.0, -10.0),
-            t("F1", 1.0, 41.0),
+            t("FDR-A", 1.0, 41.0),
             t("200A METER SOCKET", 2.0, 38.0),
             t("120/240V, 1PH, 3W", 2.0, 36.8),
-            t("F1", 1.0, 31.0),
+            t("FDR-A", 1.0, 31.0),
             t("200A/2P FUSED DISCONNECT", 2.0, 28.0),
             t("175A FUSES, NEMA 3R, SE RATED", 2.0, 26.8),
             t("XX", 1.0, 21.0),
@@ -1118,8 +1165,8 @@ mod tests {
         let texts = oneline();
         assert!(is_diagram(&texts));
         assert!(!is_diagram(&[t("PANEL SCHEDULE", 0.0, 0.0)]));
-        let skip: BTreeSet<String> = ["PX".to_string(), "F1".into(), "XX".into(), "EXTERIOR LIGHTING PHOTOCELL".into()].into_iter().collect();
-        let g = read(&texts, "E-9", &skip);
+        let skip: BTreeSet<String> = ["PX".to_string(), "FDR-A".into(), "XX".into(), "EXTERIOR LIGHTING PHOTOCELL".into()].into_iter().collect();
+        let g = read(&texts, "EX-5", &skip);
         let kinds: Vec<&str> = g.iter().map(|x| x.kind.as_str()).collect();
         assert_eq!(kinds, ["meter_socket", "disconnect", "electrode"], "{g:#?}");
         let m = &g[0];
@@ -1140,28 +1187,28 @@ mod tests {
         let node = |tag: &str, x: f64, y: f64| Node { tag: tag.into(), at: Vec2::new(x, y), top: y + 1.0, h: 1.0 };
         let nodes = [node("MTR-1", 2.0, 38.0), node("DISC-1", 2.0, 28.0), node("PX", 2.0, 18.0)];
         let no_size: Vec<String> = rules().unsized_tags.clone();
-        let l = links(&texts, &nodes, &["F1".into()], &no_size);
+        let l = links(&texts, &nodes, &["FDR-A".into()], &no_size);
         assert_eq!(
             l,
             vec![
-                Link { from: "MTR-1".into(), to: "DISC-1".into(), tag: Some("F1".into()), no_size: false },
+                Link { from: "MTR-1".into(), to: "DISC-1".into(), tag: Some("FDR-A".into()), no_size: false },
                 Link { from: "DISC-1".into(), to: "PX".into(), tag: Some("XX".into()), no_size: true },
             ]
         );
         let ft = FeederType {
-            tag: "F1".into(),
+            tag: "FDR-A".into(),
             conduits: 1,
             conduit_in: 2.0,
             conductors: 3,
             size: "3/0".into(),
             material: "cu".into(),
             ground_size: "6".into(),
-            source: "FEEDER SCHEDULE E-9".into(),
+            source: "FEEDER SCHEDULE EX-5".into(),
         };
-        let f = feeders(&l, &[ft], &BTreeSet::new(), &|_| true, "E-9");
+        let f = feeders(&l, &[ft], &BTreeSet::new(), &|_| true, "EX-5");
         assert_eq!(f.len(), 1, "the unsized link builds no feeder: {f:?}");
         assert_eq!((f[0].from.as_str(), f[0].to.as_str(), f[0].phases, f[0].neutrals, f[0].size.as_str()), ("MTR-1", "DISC-1", 2, 1, "3/0"));
-        assert!(f[0].source.contains("one-line tag F1"), "{}", f[0].source);
+        assert!(f[0].source.contains("one-line tag FDR-A"), "{}", f[0].source);
     }
 
     #[test]
@@ -1195,8 +1242,8 @@ mod tests {
     #[test]
     fn the_pieces_stand_beside_the_gear_they_feed_in_the_one_lines_order() {
         let texts = oneline();
-        let skip: BTreeSet<String> = ["PX".to_string(), "F1".into(), "XX".into(), "EXTERIOR LIGHTING PHOTOCELL".into()].into_iter().collect();
-        let g = read(&texts, "E-9", &skip);
+        let skip: BTreeSet<String> = ["PX".to_string(), "FDR-A".into(), "XX".into(), "EXTERIOR LIGHTING PHOTOCELL".into()].into_iter().collect();
+        let g = read(&texts, "EX-5", &skip);
         let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
         sp.levels = serde_json::from_value(serde_json::json!([{"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0}])).unwrap_or_default();
         sp.mep.equipment.push(MepEquipment {
@@ -1211,7 +1258,7 @@ mod tests {
         let tags = tags_for(&g, &sp);
         assert_eq!(tags, vec![vec!["MTR-1".to_string()], vec!["DISC-1".to_string()], vec!["GE-1".to_string()]]);
         let l = vec![
-            Link { from: "MTR-1".into(), to: "DISC-1".into(), tag: Some("F1".into()), no_size: false },
+            Link { from: "MTR-1".into(), to: "DISC-1".into(), tag: Some("FDR-A".into()), no_size: false },
             Link { from: "DISC-1".into(), to: "PX".into(), tag: None, no_size: false },
         ];
         let laid = layout(&sp, &g, &tags, &l, "3/0");
@@ -1223,13 +1270,66 @@ mod tests {
         assert!((d.min[0] - (m.max[0] + 6.0)).abs() < 1e-9 && d.level == "L1", "{d:?}");
         assert_eq!(d.properties.get("FUSED").map(String::as_str), Some("fused, 175 A fuses"));
         assert!(d.properties.get("BOX").is_some_and(|b| b.starts_with("28 H x 17 W x 8 D in (inferred")), "{:?}", d.properties);
-        assert!(d.sources.get(SOURCE_KEY).is_some_and(|s| s.starts_with("E-9: 200A/2P FUSED DISCONNECT")));
+        assert!(d.sources.get(SOURCE_KEY).is_some_and(|s| s.starts_with("EX-5: 200A/2P FUSED DISCONNECT")));
         assert_eq!(laid.beside.get("DISC-1").map(String::as_str), Some("PX"));
         // The rods at the service gear, two of them, their conductor as printed.
         let r = &laid.electrodes[0];
         assert_eq!((r.tag.as_str(), r.kind.as_str(), r.count, r.gec_size.as_str(), r.level.as_str()), ("GE-1", "ground_rod", 2, "#6", "L1"));
         assert!(is_oneline(m) && is_oneline_electrode(r));
         assert!(laid.review.is_empty(), "{:?}", laid.review);
+    }
+
+    #[test]
+    fn a_legends_rows_a_notes_lines_and_a_known_gears_own_label_are_no_new_gear() {
+        // A one-line sheet's symbol legend and notes (made-up wording): each names a kind, none
+        // carries a rating; a conductor's callout names an electrode.
+        let mut v = vec![t("POWER ONE-LINE", 0.0, -40.0)];
+        for (i, l) in
+            ["XFMR TRANSFORMER", "M METER", "PHOTOCELL", "TIME SWITCH", "CONTACTOR, POLES AS SHOWN, OR APPROVED EQUAL", "NEMA 3R CT CABINET"]
+                .iter()
+                .enumerate()
+        {
+            v.push(t(l, 0.0, -1.3 * i as f64));
+        }
+        v.push(t("#4 CU GROUNDING ELECTRODE CONDUCTOR", 40.0, 0.0));
+        assert_eq!(read(&v, "EX-5", &BTreeSet::new()), Vec::new());
+        // A rated label beside a tag the model has: that gear's label.
+        let mut sp = BuildingSpec::default();
+        sp.mep.equipment.push(MepEquipment { tag: "T9".into(), kind: "transformer".into(), ..MepEquipment::default() });
+        let mut page = cadaddy_doc::Drawing::default();
+        for (s, x, y) in [("POWER ONE-LINE", 0.0, -40.0), ("T9", 0.0, 10.0), ("45KVA TRANSFORMER", 4.0, 10.0), ("60A/2P DISCONNECT", 0.0, 0.0)] {
+            let text = cadaddy_doc::Text {
+                insert: cadaddy_geom::Vec3::new(x, y, 0.0),
+                align_pt: None,
+                height: 1.0,
+                value: s.into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: cadaddy_doc::HAlign::default(),
+                valign: cadaddy_doc::VAlign::default(),
+            };
+            page.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Text(text)).ok();
+        }
+        let o = build_into(&mut sp, &[("EX-5".into(), page)], &[], &[]);
+        assert_eq!(o.by_kind, [("disconnect".to_string(), 1)].into_iter().collect(), "{o:#?}");
+    }
+
+    #[test]
+    fn a_text_printed_twice_in_one_place_is_read_once() {
+        let mut twice = oneline();
+        // A PDF's hidden text layer under its visible text: the same words, a slightly other height.
+        twice.extend(oneline().into_iter().map(|mut x| {
+            x.height *= 1.4;
+            x
+        }));
+        let d = dedup_texts(&twice);
+        assert_eq!(d.len(), oneline().len());
+        // The same words elsewhere are another text.
+        assert_eq!(dedup_texts(&[t("FDR-A", 0.0, 0.0), t("FDR-A", 0.0, 5.0)]).len(), 2);
+        let skip: BTreeSet<String> = ["PX".to_string(), "FDR-A".into(), "XX".into(), "EXTERIOR LIGHTING PHOTOCELL".into()].into_iter().collect();
+        assert_eq!(read(&d, "EX-5", &skip).len(), 3);
     }
 
     #[test]

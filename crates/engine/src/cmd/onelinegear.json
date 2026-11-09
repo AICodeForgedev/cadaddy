@@ -104,6 +104,7 @@
     {"kind": "ground_ring", "words": ["GROUND RING", "GROUNDING RING"]}
   ],
   "electrode_label_words": ["GROUNDING ELECTRODE", "GROUND ELECTRODE", "GROUND ROD", "GROUNDING ROD", "UFER", "CONCRETE ENCASED ELECTRODE", "CONCRETE-ENCASED ELECTRODE", "COLD WATER", "WATER PIPE", "BUILDING STEEL", "GROUND RING", "GND ROD"],
+  "electrode_not_words": ["ELECTRODE CONDUCTOR", "GROUNDING CONDUCTOR", "BONDING JUMPER", "EQUIPMENT GROUND"],
   "electrode_tag_prefix": "GE",
   "rod_length_ft": 8.0,
   "rod_source": "trade practice: a 5/8 in x 8 ft copper-clad rod (NEC 250.52(A)(5), 250.53(A)(4): 8 ft in contact with the earth)",

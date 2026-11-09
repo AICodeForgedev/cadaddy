@@ -89,6 +89,8 @@ pub(crate) fn feeder_types(texts: &[TextItem], sheet: &str) -> Vec<FeederType> {
 /// The feeder types of a sheet's `FEEDER SCHEDULE` tables, and the tags of its rows printed
 /// unsized (`XX`, `TBD` in the conductor or conduit column: the engineer hasn't sized them).
 pub(crate) fn feeder_rows(texts: &[TextItem], sheet: &str) -> (Vec<FeederType>, Vec<String>) {
+    // A text the sheet carries twice in one place (a PDF's hidden text layer) is one cell.
+    let texts = &super::onelinegear::dedup_texts(texts);
     let unsized_marks = &super::onelinegear::rules().unsized_tags;
     let unsized_cell = |v: Option<&String>| v.is_some_and(|v| unsized_marks.iter().any(|m| m.eq_ignore_ascii_case(v.trim())));
     let mut out = Vec::new();
@@ -1180,6 +1182,9 @@ mod tests {
             v.extend([t(0.25, y, tag), t(1.0, y, c), t(2.2, y, k), t(3.6, y, g), t(4.7, y, "-")]);
         }
         v.push(t(0.2, 8.2, "NOTE 1:"));
+        // Each text twice in one place (a PDF's hidden text layer under it): read once.
+        let twice: Vec<TextItem> = v.iter().chain(v.iter()).cloned().collect();
+        assert_eq!(feeder_types(&twice, "E-1"), feeder_types(&v, "E-1"));
         let f = feeder_types(&v, "E-1");
         assert_eq!(f.len(), 3, "{f:#?}");
         assert_eq!(
