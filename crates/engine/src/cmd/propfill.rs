@@ -2474,6 +2474,14 @@ fn window_props(
                 "inferred: the opening has no tag of its own",
             ),
             Some("tag_on_wall") => (Source::print(&sheet, None), "the tag printed by an outside wall drawn through: the window's place is inferred"),
+            Some("tag_jambs") => (
+                Source::print(&sheet, None),
+                "the tag printed by an outside wall drawn through, its type with no width given: the window's place is inferred, its width the jambs drawn there",
+            ),
+            Some("tag_typical_width") => (
+                Source::print(&sheet, None),
+                "the tag printed by an outside wall drawn through, its type with no width given: the window's place and width are inferred (the level's typical window)",
+            ),
             _ => (Source::print(&sheet, None), "the window tag printed at the opening"),
         };
         put(store, "type_mark", Prop::new(m.clone(), src).with_note(note), tally);

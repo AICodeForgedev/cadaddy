@@ -1397,6 +1397,12 @@ enum WindowBasis {
     /// A window tag by an outside wall drawn through, with no opening of its own: the tag's
     /// window cut there at its type's width (inferred position).
     TagOnWall,
+    /// As [`Self::TagOnWall`], for a mark with no width of its own (no schedule row, no opening
+    /// tagged): the width between the jambs the plan draws across the wall there (Q6369).
+    TagJambs,
+    /// As [`Self::TagJambs`] with no jambs drawn: the level's typical window width (inferred
+    /// position and width, Q6369).
+    TagTypicalWidth,
 }
 
 impl WindowBasis {
@@ -1407,6 +1413,8 @@ impl WindowBasis {
             Self::Symbol => "symbol",
             Self::Typical => "typical",
             Self::TagOnWall => "tag_on_wall",
+            Self::TagJambs => "tag_jambs",
+            Self::TagTypicalWidth => "tag_typical_width",
         }
     }
 
@@ -1423,6 +1431,12 @@ impl WindowBasis {
             }
             Self::TagOnWall => {
                 "a window tag printed by an outside wall the plan draws through: the tag's window cut there at its type's width, centred at the tag"
+            }
+            Self::TagJambs => {
+                "a window tag printed by an outside wall the plan draws through, its type with no width given (no schedule row, no opening of its own): the window cut there between the jambs the plan draws across the wall"
+            }
+            Self::TagTypicalWidth => {
+                "a window tag printed by an outside wall the plan draws through, its type with no width given (no schedule row, no opening of its own, no jambs drawn): the window cut there at the level's typical window width; a window schedule or the elevations would give its own"
             }
             Self::Tag | Self::Glazing | Self::Symbol => "",
         }
@@ -2190,6 +2204,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // Openings: each cuts the wall it lies in.
     let all_segs = segments(&ents);
     let mut ops = openings(d, &ents, &all_segs, k);
+
     // A family's size and heights for the blocks it covers (sheet units above the floor).
     let mut fitted: HashMap<Handle, (Option<f64>, Option<f64>)> = HashMap::new();
     if let Some(sp) = &g.spec {
@@ -2540,6 +2555,10 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         .map(|(_, g0, g1, t, ..)| (*g0, *g1, *t))
         .take(MAX_OBJECTS)
         .collect();
+    // The lines glazing may be drawn with: the level's, and those inside the window-sized blocks
+    // it inserts in its outside walls' gaps (a print's repeated window symbol arrives as a block,
+    // Q6369).
+    let glaze_segs = glazing_segments(d, &ents, &all_segs, &outside_gaps, k);
     // What each tag marks: the outside gap it is by (filling it, or its type's width centred in a
     // wider one), else nothing yet (the tags left over are placed after the gaps).
     let fits = window_tag_fits(&window_tags, &outside_gaps, k);
@@ -2561,7 +2580,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             let gw = g0.dist(*g1);
             match gap_fit(*g0, *g1) {
                 Some((mark, w)) => Some((gw, Some(mark), w)),
-                None => glazed(&all_segs, *g0, *g1, *t, k).then_some((gw, None, gw)),
+                None => glazed(&glaze_segs, *g0, *g1, *t, k).then_some((gw, None, gw)),
             }
         })
         .take(64)
@@ -2658,7 +2677,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             spans
                 .iter()
                 .map(|&(s0, s1)| {
-                    if gap_tagged(g0, g1) || glazed(&all_segs, g0 + u * s0, g0 + u * s1, t, k) {
+                    if gap_tagged(g0, g1) || glazed(&glaze_segs, g0 + u * s0, g0 + u * s1, t, k) {
                         Some(WindowBy::Drawn)
                     } else if s1 - s0 >= MIN_WINDOW_IN * k && tagged_widths.iter().any(|w| (w - (s1 - s0)).abs() <= TYPICAL_WIDTH_IN * k) {
                         Some(WindowBy::Typical)
@@ -2800,6 +2819,18 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // window is cut there at its type's width (an inferred position); else the tag has no wall to
     // host it (a finding).
     let reach = TAG_REACH_IN * k;
+    // The level's typical window: the width most of the windows built in its openings have.
+    let typical_width = {
+        let ws: Vec<f64> = pl
+            .leaves
+            .iter()
+            .filter(|l| l.window)
+            .map(|l| l.a.dist(l.b))
+            .filter(|w| w.is_finite() && *w >= MIN_WINDOW_IN * k)
+            .take(MAX_WINDOW_TAGS)
+            .collect();
+        most_common_width(&ws, MARK_WIDTH_TOL_IN * k)
+    };
     let mut no_host: Vec<(String, Vec2, &'static str)> = Vec::new();
     for (tag, f) in window_tags.iter().zip(&fits.per_tag) {
         if f.is_some() {
@@ -2813,7 +2844,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             .leaves
             .iter()
             .enumerate()
-            .filter(|(_, l)| near(l) && l.basis.is_none_or(|b| !matches!(b, WindowBasis::Tag | WindowBasis::TagOnWall)))
+            .filter(|(_, l)| {
+                near(l)
+                    && l.basis.is_none_or(|b| {
+                        !matches!(b, WindowBasis::Tag | WindowBasis::TagOnWall | WindowBasis::TagJambs | WindowBasis::TagTypicalWidth)
+                    })
+            })
             .min_by(|x, y| seg_dist(tag.at, x.1.a, x.1.b).total_cmp(&seg_dist(tag.at, y.1.a, y.1.b)))
             .map(|(i, _)| i);
         if let Some(l) = untyped.and_then(|i| pl.leaves.get_mut(i)) {
@@ -2821,11 +2857,31 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             l.basis = Some(WindowBasis::Tag);
             continue;
         }
-        let Some(width) = fits.width_of(&tag.mark) else {
-            no_host.push((tag.mark.clone(), tag.at, "no width: no schedule row and no opening of its own"));
-            continue;
+        let on_outside = |p: Vec2, nrm: Vec2, t: f64| outside(p, nrm, t, &pl.walls);
+        // Its width: its type's (the schedule row, its tags' openings); else, for a mark with
+        // neither (Q6369), the jambs the plan draws across the wall at the tag, else the level's
+        // typical window. A tag with no width is still a window the plan draws.
+        let (width, basis) = match fits.width_of(&tag.mark) {
+            Some(w) => (w, WindowBasis::TagOnWall),
+            None => {
+                let probe = MIN_WINDOW_IN * k;
+                let jambs = host_wall(&pl.walls, tag.at, probe, reach, k, min_gap, &on_outside)
+                    .and_then(|h| pl.walls.get(h.wall).and_then(|w| jamb_width(&all_segs, w, h.at, k)));
+                match (jambs, typical_width) {
+                    (Some(w), _) => (w, WindowBasis::TagJambs),
+                    (None, Some(w)) => (w, WindowBasis::TagTypicalWidth),
+                    (None, None) => {
+                        no_host.push((
+                            tag.mark.clone(),
+                            tag.at,
+                            "no width: no schedule row, no opening of its own, no jambs drawn and no other window on the level",
+                        ));
+                        continue;
+                    }
+                }
+            }
         };
-        let Some(host) = host_wall(&pl.walls, tag.at, width, reach, k, min_gap, &|p, nrm, t| outside(p, nrm, t, &pl.walls)) else {
+        let Some(host) = host_wall(&pl.walls, tag.at, width, reach, k, min_gap, &on_outside) else {
             no_host.push((tag.mark.clone(), tag.at, "no outside wall within its reach to hold it"));
             continue;
         };
@@ -2863,7 +2919,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             pair: None,
             frame: Some((a, b)),
             mark: Some(tag.mark.clone()),
-            basis: Some(WindowBasis::TagOnWall),
+            basis: Some(basis),
         });
         windows += 1;
     }
@@ -3366,6 +3422,55 @@ fn host_wall(
         .map(|(_, h)| h)
 }
 
+/// The width (drawing units, `k` per inch) between the jambs a plan draws across a wall drawn
+/// through at a window (Q6369): short lines across the wall from face to face (as long as the
+/// wall is thick, give or take a quarter of it, their middles on its centreline), the nearest on
+/// each side of the point `at` along the wall (from its end `a`), a window's width apart
+/// ([`MIN_WINDOW_IN`] to [`MAX_JAMB_SPAN_IN`]). None when the plan draws no such pair.
+fn jamb_width(segs: &[super::perceive::geometry::Seg], w: &PlanWall, at: f64, k: f64) -> Option<f64> {
+    let len = w.a.dist(w.b);
+    let t = w.thickness;
+    if !(len.is_finite() && len > 1e-9 && t.is_finite() && t > 0.0 && at.is_finite() && k.is_finite() && k > 0.0) {
+        return None;
+    }
+    let u = (w.b - w.a) * (1.0 / len);
+    let n = u.perp();
+    let span = MAX_JAMB_SPAN_IN * k;
+    let (mut left, mut right): (Option<f64>, Option<f64>) = (None, None);
+    for sg in segs.iter().take(MAX_OBJECTS) {
+        let d = sg.b - sg.a;
+        let l = d.len();
+        // Across the wall, face to face.
+        if !(l.is_finite() && (l - t).abs() <= 0.25 * t) || u.dot(d).abs() > 0.05 * l {
+            continue;
+        }
+        let mid = (sg.a + sg.b) * 0.5;
+        if n.dot(mid - w.a).abs() > 0.25 * t {
+            continue;
+        }
+        let s = u.dot(mid - w.a) - at;
+        if s.abs() > span {
+            continue;
+        }
+        if s < 0.0 {
+            left = Some(left.map_or(s, |x: f64| x.max(s)));
+        } else {
+            right = Some(right.map_or(s, |x: f64| x.min(s)));
+        }
+    }
+    let width = right? - left?;
+    (width >= MIN_WINDOW_IN * k && width <= span).then_some(width)
+}
+
+/// The widest a window between two jambs drawn across a wall is taken to be (inches).
+const MAX_JAMB_SPAN_IN: f64 = 192.0;
+
+/// The width most of `widths` are (within `tol`; the narrower on a tie). None when there are none.
+fn most_common_width(widths: &[f64], tol: f64) -> Option<f64> {
+    let count = |x: f64| widths.iter().filter(|y| (*y - x).abs() <= tol).count();
+    widths.iter().copied().filter(|w| w.is_finite()).max_by(|a, b| count(*a).cmp(&count(*b)).then(b.total_cmp(a)))
+}
+
 /// A window mark's head and sill above its floor (drawing units, `upf` per foot): its schedule
 /// row's (and the family its type names), a storefront's sill at the floor when none is given.
 fn window_heights(spec: Option<&cadaddy_walk3d::BuildingSpec>, mark: &str, upf: f64) -> (Option<f64>, Option<f64>) {
@@ -3504,8 +3609,9 @@ fn same_gap(a: (Vec2, Vec2), b: (Vec2, Vec2), k: f64) -> bool {
 }
 
 /// Whether the plan draws glazing in the opening `a`–`b` of a wall `t` thick (`k` units per inch):
-/// a line across it, in line with the wall, between its faces, spanning most of the opening and
-/// stopping at its jambs. A bare gap has none (Q6293).
+/// lines across it, in line with the wall, between its faces, stopping at its jambs, that cover
+/// most of the opening: one line, or the pieces of one pane line broken at its mullions (each a
+/// pane's width at least, Q6369). A bare gap has none (Q6293).
 fn glazed(segs: &[super::perceive::geometry::Seg], a: Vec2, b: Vec2, t: f64, k: f64) -> bool {
     let len = a.dist(b);
     if !(len.is_finite() && len > 1e-9) {
@@ -3516,19 +3622,122 @@ fn glazed(segs: &[super::perceive::geometry::Seg], a: Vec2, b: Vec2, t: f64, k: 
     // Strictly between the wall's faces (a face line running through is the wall, not glass).
     let band = (t / 2.0 - 0.25 * k).max(0.0);
     let reach = t + 2.0 * k;
-    segs.iter().take(MAX_OBJECTS).any(|sg| {
+    // The smallest piece of a pane line: a pane between mullions, not a dash.
+    let piece = (GLAZING_PIECE * len).max(GLAZING_PIECE_MIN_IN * k);
+    // Each line in the opening: its offset from the wall's line and its stretch along the opening.
+    let mut pieces: Vec<(f64, f64, f64)> = Vec::new();
+    for sg in segs.iter().take(MAX_OBJECTS) {
         let d = sg.b - sg.a;
         let l = d.len();
-        if !(l.is_finite() && l >= GLAZING_COVER * len) || u.cross(d).abs() > 0.02 * l {
-            return false;
+        if !(l.is_finite() && l >= piece.min(GLAZING_COVER * len)) || u.cross(d).abs() > 0.02 * l {
+            continue;
         }
-        if n.dot(sg.a - a).abs() >= band || n.dot(sg.b - a).abs() >= band {
-            return false;
+        let (o0, o1) = (n.dot(sg.a - a), n.dot(sg.b - a));
+        if o0.abs() >= band || o1.abs() >= band {
+            continue;
         }
         let (p0, p1) = (u.dot(sg.a - a).min(u.dot(sg.b - a)), u.dot(sg.a - a).max(u.dot(sg.b - a)));
-        p0 >= -reach && p1 <= len + reach && p1.min(len) - p0.max(0.0) >= GLAZING_COVER * len
-    })
+        if p0 < -reach || p1 > len + reach {
+            continue;
+        }
+        let (c0, c1) = (p0.max(0.0), p1.min(len));
+        if c1 - c0 >= GLAZING_COVER * len {
+            return true;
+        }
+        if c1 - c0 >= piece && pieces.len() < MAX_GLAZING_PIECES {
+            pieces.push(((o0 + o1) / 2.0, c0, c1));
+        }
+    }
+    // The pieces of one pane line (the same offset, within a quarter inch) together.
+    pieces.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
+    let tol = 0.25 * k;
+    let mut i = 0;
+    while i < pieces.len() {
+        let Some(&(off, ..)) = pieces.get(i) else { break };
+        let line: Vec<(f64, f64)> = pieces.iter().skip(i).take_while(|p| p.0 - off <= tol).map(|p| (p.1, p.2)).collect();
+        i += line.len().max(1);
+        let mut line = line;
+        line.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let (mut covered, mut to) = (0.0f64, f64::NEG_INFINITY);
+        for (c0, c1) in line {
+            let from = c0.max(to);
+            if c1 > from {
+                covered += c1 - from;
+            }
+            to = to.max(c1);
+        }
+        if covered >= GLAZING_COVER * len {
+            return true;
+        }
+    }
+    false
 }
+
+/// A pane line broken at mullions: each piece covers at least this share of the opening …
+const GLAZING_PIECE: f64 = 0.25;
+/// … and at least this (inches).
+const GLAZING_PIECE_MIN_IN: f64 = 6.0;
+/// Most pieces of glazing weighed in one opening (hostile drawings).
+const MAX_GLAZING_PIECES: usize = 256;
+
+/// The lines a plan's glazing may be drawn with ([`glazed`]): the level's own (`segs`), and the
+/// lines inside the blocks it inserts no larger than a window ([`MAX_GLAZING_BLOCK_IN`]),
+/// nested ones too (to [`GLAZING_BLOCK_DEPTH`]), where they stand in the plan (Q6369).
+fn glazing_segments(
+    d: &Drawing,
+    ents: &[&Arc<Entity>],
+    segs: &[super::perceive::geometry::Seg],
+    gaps: &[(Vec2, Vec2, f64)],
+    k: f64,
+) -> Vec<super::perceive::geometry::Seg> {
+    let mut out: Vec<super::perceive::geometry::Seg> = segs.to_vec();
+    if gaps.is_empty() {
+        return out;
+    }
+    let max_size = MAX_GLAZING_BLOCK_IN * k;
+    // A window-sized block over one of the gaps (its box reaching the gap's middle).
+    let small = |e: &Entity| {
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        !b.is_empty()
+            && b.width().max(b.height()) <= max_size
+            && gaps.iter().take(MAX_OBJECTS).any(|(g0, g1, t)| {
+                let m = (*g0 + *g1) * 0.5;
+                let r = t.max(0.0) + 2.0 * k;
+                m.x >= b.min.x - r && m.x <= b.max.x + r && m.y >= b.min.y - r && m.y <= b.max.y + r
+            })
+    };
+    let mut stack: Vec<(Entity, usize)> = ents
+        .iter()
+        .filter(|e| matches!(e.kind, EntityKind::Insert(_)))
+        .take(MAX_GLAZING_BLOCKS)
+        .filter(|e| small(e))
+        .map(|e| ((***e).clone(), 0))
+        .collect();
+    let mut inside: Vec<Arc<Entity>> = Vec::new();
+    while let Some((e, depth)) = stack.pop() {
+        if inside.len() >= MAX_GLAZING_BLOCK_LINES {
+            break;
+        }
+        for x in super::modify::explode_kind(d, &e).unwrap_or_default().into_iter().take(MAX_GLAZING_BLOCK_LINES) {
+            match x.kind {
+                EntityKind::Insert(_) if depth + 1 < GLAZING_BLOCK_DEPTH && stack.len() < MAX_GLAZING_BLOCKS => stack.push((x, depth + 1)),
+                EntityKind::Line(_) | EntityKind::LwPolyline(_) => inside.push(Arc::new(x)),
+                _ => {}
+            }
+        }
+    }
+    let refs: Vec<&Arc<Entity>> = inside.iter().collect();
+    out.extend(super::perceive::geometry::segments(&refs));
+    out
+}
+
+/// A block larger than this (inches, either way) holds no window's glazing.
+const MAX_GLAZING_BLOCK_IN: f64 = 240.0;
+/// Blocks in blocks looked into, at most this deep.
+const GLAZING_BLOCK_DEPTH: usize = 3;
+/// Most blocks looked into on a level, and most lines taken from them (hostile drawings).
+const MAX_GLAZING_BLOCKS: usize = 200_000;
+const MAX_GLAZING_BLOCK_LINES: usize = 2_000_000;
 
 /// A door swing drawn on a plan: its hinge (the centre), radius, two ends and source.
 struct Swing {
@@ -4317,7 +4526,19 @@ mod tests {
     /// walls broken at `south` and `north` (x from–to), with `extra` objects added (layer, kind).
     /// The level planned: (windows, notes).
     fn room_with_gaps(south: &[(f64, f64)], north: &[(f64, f64)], extra: Vec<(&str, EntityKind)>) -> (usize, Vec<String>) {
+        let (pl, notes) = plan_room(south, north, extra, &|_| {});
+        (pl.leaves.iter().filter(|l| l.window).count(), notes)
+    }
+
+    /// [`room_with_gaps`]'s room, `setup` run on the drawing first (its blocks): the level planned.
+    fn plan_room(
+        south: &[(f64, f64)],
+        north: &[(f64, f64)],
+        extra: Vec<(&str, EntityKind)>,
+        setup: &dyn Fn(&mut Drawing),
+    ) -> (PlanLevel, Vec<String>) {
         let mut d = Drawing::new_imperial();
+        setup(&mut d);
         let mut push = |d: &mut Drawing, layer: &str, kind: EntityKind| {
             let h = Handle(d.handseed);
             d.handseed = h.0 + 1;
@@ -4357,7 +4578,106 @@ mod tests {
         let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
         let mut notes = Vec::new();
         let pl = plan_level(&d, &g, &level, 12.0, &mut notes);
-        (pl.leaves.iter().filter(|l| l.window).count(), notes)
+        (pl, notes)
+    }
+
+    /// The windows of a planned level: (width in inches, basis).
+    fn windows_of(pl: &PlanLevel) -> Vec<(f64, Option<&'static str>)> {
+        pl.leaves.iter().filter(|l| l.window).map(|l| ((l.a.dist(l.b) * 10.0).round() / 10.0, l.basis.map(WindowBasis::as_str))).collect()
+    }
+
+    /// A block named `name` holding `lines` (feet, from its base at the origin).
+    fn block_of(d: &mut Drawing, name: &str, lines: &[((f64, f64), (f64, f64))]) {
+        let mut b = cadaddy_doc::Block::new(name);
+        for (i, (a, c)) in lines.iter().enumerate() {
+            b.entities.push(Entity::new(Handle(900_000 + i as u64), line_ft(*a, *c)));
+        }
+        d.blocks.insert(name.to_string(), Arc::new(b));
+    }
+
+    fn insert_ft(block: &str, at: (f64, f64)) -> EntityKind {
+        EntityKind::Insert(cadaddy_doc::Insert {
+            block: block.into(),
+            insert: Vec3::new(at.0 * 12.0, at.1 * 12.0, 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: Vec::new(),
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+            clip: None,
+        })
+    }
+
+    #[test]
+    fn glazing_drawn_inside_a_symbol_block_in_the_gap_makes_it_a_window() {
+        // A print's repeated window symbol arrives as a block (its name says nothing): its two
+        // pane lines span the 4' gap between the wall's faces (Q6369; before, a bare gap).
+        let panes = [((0.0, 0.2), (4.0, 0.2)), ((0.0, 0.3), (4.0, 0.3))];
+        let (pl, notes) = plan_room(&[(8.0, 12.0)], &[], vec![("A-GLAZ", insert_ft("SYM-7", (8.0, 0.0)))], &|d| block_of(d, "SYM-7", &panes));
+        assert_eq!(windows_of(&pl), [(48.0, Some("glazing"))], "{notes:?}");
+        // The same block's lines over no gap (a symbol elsewhere) make no window of a bare gap.
+        let (pl, notes) = plan_room(&[(8.0, 12.0)], &[], vec![("A-GLAZ", insert_ft("SYM-7", (2.0, 4.0)))], &|d| block_of(d, "SYM-7", &panes));
+        assert!(windows_of(&pl).is_empty(), "{notes:?}");
+        // Nested one block deep: still the glazing.
+        let (pl, notes) = plan_room(&[(8.0, 12.0)], &[], vec![("A-GLAZ", insert_ft("OUTER", (8.0, 0.0)))], &|d| {
+            block_of(d, "SYM-7", &panes);
+            let mut outer = cadaddy_doc::Block::new("OUTER");
+            outer.entities.push(Entity::new(Handle(910_000), insert_ft("SYM-7", (0.0, 0.0))));
+            d.blocks.insert("OUTER".into(), Arc::new(outer));
+        });
+        assert_eq!(windows_of(&pl).len(), 1, "{notes:?}");
+    }
+
+    #[test]
+    fn a_pane_line_broken_at_its_mullion_is_glazing_but_a_dashed_line_is_not() {
+        // Two panes, the line broken at the mullion in the middle: each piece under 3/4 of the gap.
+        let panes = vec![("A-GLAZ", line_ft((8.0, 0.25), (9.9, 0.25))), ("A-GLAZ", line_ft((10.1, 0.25), (12.0, 0.25)))];
+        let (pl, notes) = plan_room(&[(8.0, 12.0)], &[], panes, &|_| {});
+        assert_eq!(windows_of(&pl), [(48.0, Some("glazing"))], "{notes:?}");
+        // Three panes too.
+        let panes = vec![
+            ("A-GLAZ", line_ft((8.0, 0.25), (9.25, 0.25))),
+            ("A-GLAZ", line_ft((9.4, 0.25), (10.6, 0.25))),
+            ("A-GLAZ", line_ft((10.75, 0.25), (12.0, 0.25))),
+        ];
+        let (pl, notes) = plan_room(&[(8.0, 12.0)], &[], panes, &|_| {});
+        assert_eq!(windows_of(&pl).len(), 1, "{notes:?}");
+        // A dashed line across the gap (a header overhead, 6" dashes): no glass.
+        let dashes: Vec<(&str, EntityKind)> =
+            (0..6).map(|i| ("A-ANNO", line_ft((8.0 + 0.75 * f64::from(i), 0.25), (8.5 + 0.75 * f64::from(i), 0.25)))).collect();
+        let (pl, notes) = plan_room(&[(8.0, 12.0)], &[], dashes, &|_| {});
+        assert!(windows_of(&pl).is_empty(), "{notes:?}");
+        // Pieces on two different lines (one per face's side) don't add up to one pane line.
+        let split = vec![("A-GLAZ", line_ft((8.0, 0.15), (9.9, 0.15))), ("A-GLAZ", line_ft((10.1, 0.35), (12.0, 0.35)))];
+        let (pl, notes) = plan_room(&[(8.0, 12.0)], &[], split, &|_| {});
+        assert!(windows_of(&pl).is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn a_tag_with_no_width_of_its_own_is_still_its_window() {
+        // W7 outside the south wall, which the plan draws through; no schedule, no opening by it.
+        // The plan draws the window's jambs across the wall 3' apart: the window is that wide
+        // (Q6369; before, no window and the tag reported "no width").
+        let jambs =
+            vec![("A-ANNO", text_ft((10.0, -1.5), "W7")), ("A-WALL", line_ft((8.5, 0.0), (8.5, 0.5))), ("A-WALL", line_ft((11.5, 0.0), (11.5, 0.5)))];
+        let (pl, notes) = plan_room(&[], &[], jambs, &|_| {});
+        assert_eq!(windows_of(&pl), [(36.0, Some("tag_jambs"))], "{notes:?}");
+        assert_eq!(pl.leaves.iter().find(|l| l.window).and_then(|l| l.mark.clone()).as_deref(), Some("W7"));
+        // No jambs drawn: the level's typical window (the north wall's tagged 4' W1).
+        let typical = vec![("A-ANNO", text_ft((10.0, -1.5), "W7")), ("A-ANNO", text_ft((10.0, 11.5), "W1"))];
+        let (pl, notes) = plan_room(&[], &[(8.0, 12.0)], typical, &|_| {});
+        let mut got = windows_of(&pl);
+        got.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(got, [(48.0, Some("tag")), (48.0, Some("tag_typical_width"))], "{notes:?}");
+        // Neither: no window, and the tag is reported with why.
+        let (pl, notes) = plan_room(&[], &[], vec![("A-ANNO", text_ft((10.0, -1.5), "W7"))], &|_| {});
+        assert!(windows_of(&pl).is_empty(), "{notes:?}");
+        assert!(pl.window_tally.no_host.iter().any(|(m, _, why)| m == "W7" && why.contains("no jambs drawn")), "{:?}", pl.window_tally.no_host);
+        // The inferred ones say so: not drawn, and why.
+        assert!(!WindowBasis::TagJambs.drawn() && !WindowBasis::TagTypicalWidth.drawn());
+        assert!(WindowBasis::TagTypicalWidth.why().contains("typical window width"));
     }
 
     fn line_ft(a: (f64, f64), b: (f64, f64)) -> EntityKind {
