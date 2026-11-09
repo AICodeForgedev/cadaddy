@@ -14352,7 +14352,15 @@ fn window_tag_findings(job: &mut GuidedJob, rows: &Value) {
             .into_iter()
             .flatten()
             .take(5)
-            .map(|t| format!("{} at {:.0},{:.0} ({})", t["mark"].as_str().unwrap_or("?"), t["at"][0].as_f64().unwrap_or(0.0), t["at"][1].as_f64().unwrap_or(0.0), t["why"].as_str().unwrap_or("")))
+            .map(|t| {
+                format!(
+                    "{} at {:.0},{:.0} ({})",
+                    t["mark"].as_str().unwrap_or("?"),
+                    t["at"][0].as_f64().unwrap_or(0.0),
+                    t["at"][1].as_f64().unwrap_or(0.0),
+                    t["why"].as_str().unwrap_or("")
+                )
+            })
             .collect();
         job.add_finding(
             StageName::BimBuild,
@@ -27130,11 +27138,13 @@ fn dampers_summary(job: &GuidedJob) -> Value {
 /// The report's windows (Q6311): per level and type, the window tags on the plans and the windows
 /// built, the untyped windows and the tags with no window, with the totals.
 fn windows_summary(job: &GuidedJob) -> Value {
-    let Some(rows) = job.stages.iter().find(|st| st.name == StageName::BimBuild).and_then(|st| st.result.as_ref()).and_then(|r| r["window_tags"].as_array())
+    let Some(rows) =
+        job.stages.iter().find(|st| st.name == StageName::BimBuild).and_then(|st| st.result.as_ref()).and_then(|r| r["window_tags"].as_array())
     else {
         return Value::Null;
     };
-    let sum = |key: &str| -> u64 { rows.iter().flat_map(|r| r[key].as_object().into_iter().flat_map(|m| m.values())).filter_map(Value::as_u64).sum() };
+    let sum =
+        |key: &str| -> u64 { rows.iter().flat_map(|r| r[key].as_object().into_iter().flat_map(|m| m.values())).filter_map(Value::as_u64).sum() };
     let total = |key: &str| -> u64 { rows.iter().filter_map(|r| r[key].as_u64()).sum() };
     json!({
         "tagged": sum("tagged"),
