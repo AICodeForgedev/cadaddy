@@ -211,6 +211,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 gang: f("gang_with"),
                 drawn_at: None,
                 moved: String::new(),
+                label_at: None,
+                spot: String::new(),
             }
         })
         .collect();
@@ -1483,6 +1485,13 @@ pub struct ReadDevice {
     pub drawn_at: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub moved: String,
+    /// Made from a label (a circuit label, a switch designation, a fixture mark with no symbol
+    /// block): where that label is printed (drawing units), and how its spot was found from it
+    /// (the leader's end, the nearest symbol, or the label's own point: [`super::labelspot`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_at: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spot: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1716,6 +1725,10 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // Its spot when another document's gives it (the electrical plan's spot kept in the note).
         if !dv.located.is_empty() {
             e.set("location_note", dv.located.clone(), "note");
+        }
+        // Made from a label: how its spot was found from the label (Q6337).
+        if !dv.spot.is_empty() {
+            e.set("location_basis", dv.spot.clone(), "rule");
         }
         // What the keynotes by its symbol ask of it (features, mounting, ganging, its
         // low-voltage conduit), each with the keynote as its source.

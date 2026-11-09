@@ -390,6 +390,8 @@ pub(crate) struct View<'a> {
     pub rect: [f64; 4],
     pub texts: Vec<&'a TextItem>,
     pub read: Vec<&'a ReadDevice>,
+    /// Its straight pieces, for the leaders its labels are set on (none: no leader is followed).
+    pub leaders: Option<&'a super::labelspot::Leaders>,
 }
 
 /// What the documents say the view's marks are: the fixture marks of the fixture schedule and
@@ -586,6 +588,17 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
     // printed by it that adds a leg letter to it (the reading kept the circuit, not its leg) and
     // no fixture's mark is printed over.
     let mut took: BTreeSet<usize> = BTreeSet::new();
+    // A read device made from a label (and moved to where the label points) holds that label.
+    for (j, dv) in view.read.iter().enumerate() {
+        let Some(p) = dv.label_at.map(|p| Vec2::new(p[0], p[1])) else { continue };
+        if let Some(i) =
+            circuits.iter().enumerate().position(|(i, (t, _, _))| !taken.get(i).copied().unwrap_or(true) && t.at.dist(p) <= LABEL_AT_EPS_H * t.height)
+            && let Some(slot) = taken.get_mut(i)
+        {
+            *slot = true;
+            took.insert(j);
+        }
+    }
     for exact in [true, false] {
         let mut named: Vec<(f64, usize, usize)> = Vec::new();
         for (j, dv) in view.read.iter().enumerate().filter(|(j, dv)| !dv.circuit.is_empty() && !took.contains(j)) {
@@ -734,42 +747,96 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
             continue;
         }
         let circuit = full(c, *leg);
-        let mut dv = match (mark_over(t), leg, &marks.leg_rule) {
-            (Some((m, kind)), _, _) => {
-                // The fixture is drawn where its mark and circuit are printed: by them.
-                new(
-                    &m.value.trim().to_ascii_uppercase(),
-                    t.at,
-                    kind,
-                    &format!("a fixture mark the fixture schedule or submittals list ({}) over its circuit", m.value.trim()),
-                )
-            }
-            (None, Some(_), Some((sheet, row))) => new("LUMINAIRE", t.at, "luminaire", &format!("{sheet} legend: {row}")),
+        // Where the device is drawn: where the label points, never the label itself (Q6337). Its
+        // mark over it, or a keynote's marker beside it, may carry the leader.
+        let over = mark_over(t);
+        let mut with: Vec<&TextItem> = over.iter().map(|(m, _)| *m).collect();
+        with.extend(texts.iter().copied().filter(|k| keynote_number(k) && beside(k, t)));
+        let (spot_at, spot) = super::labelspot::locate(t, &with, view.leaders, &[], 0.0);
+        // A symbol the leader ends on, read with no circuit, is the one it names.
+        if spot == super::labelspot::Spot::Leader
+            && let Some(o) = out
+                .iter_mut()
+                .enumerate()
+                .filter(|(j, o)| !unpowered.contains(j) && o.circuit.is_empty() && o.leg.is_empty())
+                .map(|(_, o)| o)
+                .filter(|o| at_of(o).dist(spot_at) <= super::labelspot::LEADER_SNAP_H * t.height)
+                .min_by(|a, b| at_of(a).dist(spot_at).total_cmp(&at_of(b).dist(spot_at)))
+        {
+            o.circuit = circuit;
+            o.label_at = Some([t.at.x, t.at.y]);
+            o.spot = spot.basis(&t.value, view.sheet);
+            continue;
+        }
+        // A leader onto a symbol the device reading read already (with its own circuit label
+        // beside it) names that device: no second one stacked on it.
+        if spot == super::labelspot::Spot::Leader
+            && view.read.iter().any(|dv| kind_of(dv) != "switch" && at_of(dv).dist(spot_at) <= super::labelspot::LEADER_SNAP_H * t.height)
+        {
+            continue;
+        }
+        let mut dv = match (over, leg, &marks.leg_rule) {
+            (Some((m, kind)), _, _) => new(
+                &m.value.trim().to_ascii_uppercase(),
+                spot_at,
+                kind,
+                &format!("a fixture mark the fixture schedule or submittals list ({}) over its circuit", m.value.trim()),
+            ),
+            (None, Some(_), Some((sheet, row))) => new("LUMINAIRE", spot_at, "luminaire", &format!("{sheet} legend: {row}")),
             _ => {
                 let near: Vec<&str> = texts.iter().filter(|o| o.at.dist(t.at) <= 4.0 * t.height).map(|o| o.value.as_str()).collect();
-                new(&receptacle_mark(&near), t.at, "receptacle", "a symbol only its circuit labels: a receptacle")
+                new(&receptacle_mark(&near), spot_at, "receptacle", "a symbol only its circuit labels: a receptacle")
             }
         };
         dv.circuit = circuit;
+        dv.label_at = Some([t.at.x, t.at.y]);
+        dv.spot = spot.basis(&t.value, view.sheet);
         out.push(dv);
     }
     // The switch designations no read switch took: one switch each, whatever letters it
     // carries (a switch read on its lettering is the one it names).
+    // (A read switch stands on its designation, or holds it as the label it was made from.)
+    let on_label = |dv: &ReadDevice, t: &TextItem| {
+        at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height || dv.label_at.is_some_and(|p| Vec2::new(p[0], p[1]).dist(t.at) <= LABEL_AT_EPS_H * t.height)
+    };
     for t in &texts {
         let named = switch_designations(&t.value);
-        if view.read.iter().any(|dv| !dv.leg.is_empty() && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height) {
+        if view.read.iter().any(|dv| !dv.leg.is_empty() && on_label(dv, t)) {
             continue;
         }
         for (tag, leg) in &named {
-            let have = view.read.iter().copied().chain(out.iter()).any(|dv| {
-                dv.leg == *leg && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height && (dv.tag == *tag || (tag.is_empty() && kind_of(dv) == "switch"))
-            });
+            let have = view
+                .read
+                .iter()
+                .copied()
+                .chain(out.iter())
+                .any(|dv| dv.leg == *leg && on_label(dv, t) && (dv.tag == *tag || (tag.is_empty() && kind_of(dv) == "switch")));
             if have || out.len() >= MAX_VIEW_MARKS {
                 continue;
             }
             let tag = if tag.is_empty() { "S".to_string() } else { tag.clone() };
-            let mut dv = new(&tag, t.at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
+            // The switch symbol drawn by it (one of the legend's, read with no designation yet)
+            // is the switch it names (Q6337): that one takes it, no second switch at the lettering.
+            if let Some(o) = out
+                .iter_mut()
+                .filter(|o| o.leg.is_empty() && o.label_at.is_none() && kind_of(o) == "switch")
+                .filter(|o| at_of(o).dist(t.at) <= LABEL_REACH_H * t.height)
+                .min_by(|a, b| at_of(a).dist(t.at).total_cmp(&at_of(b).dist(t.at)))
+            {
+                o.leg.clone_from(leg);
+                if super::readers::device_kind(&tag) != "device" || o.tag.trim().is_empty() || o.tag == "SWITCH" {
+                    o.tag.clone_from(&tag);
+                }
+                o.label_at = Some([t.at.x, t.at.y]);
+                o.spot = super::labelspot::Spot::Symbol.basis(&t.value, view.sheet);
+                continue;
+            }
+            // Else where a leader from it ends; else (said so) its lettering.
+            let (spot_at, spot) = super::labelspot::locate(t, &[], view.leaders, &[], 0.0);
+            let mut dv = new(&tag, spot_at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
             dv.leg.clone_from(leg);
+            dv.label_at = Some([t.at.x, t.at.y]);
+            dv.spot = spot.basis(&t.value, view.sheet);
             if super::readers::device_kind(&tag) == "device" {
                 dv.kind = "switch".into();
             }
@@ -777,6 +844,18 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
         }
     }
     out
+}
+
+/// A label made a device it is printed at: within this share of its height of where it is.
+const LABEL_AT_EPS_H: f64 = 0.05;
+
+/// Whether a keynote's marker is printed beside a label, on its line (to its left or right, a
+/// couple of heights off at most): the label's leader may leave the marker.
+fn beside(marker: &TextItem, label: &TextItem) -> bool {
+    let h = label.height;
+    let (m, l) = (middle_of(marker), middle_of(label));
+    let half = 0.3 * h * label.value.trim().chars().count() as f64 + 0.3 * h * marker.value.trim().chars().count() as f64;
+    (m.y - l.y).abs() <= 0.6 * h && (m.x - l.x).abs() <= half + 2.5 * h
 }
 
 /// A receptacle's mark from what is printed by it: its designations (`GFCI`), else `REC`.
@@ -1032,7 +1111,7 @@ mod tests {
         scene.extend(light([300.0, 100.0]));
         let sc = Scene::new(scene, 10.0);
         let texts = [text("Q-2", [108.0, 98.0]), text("1", [299.0, 98.0]), text("QP1-5", [295.0, 110.0])];
-        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 400.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
+        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 400.0, 200.0], texts: texts.iter().collect(), read: Vec::new(), leaders: None };
         let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
         let found = find_symbols(&tps, &sc, view.rect, 4.0);
         assert_eq!(found.len(), 2, "both drawings match the legend's: {found:?}");
@@ -1043,12 +1122,86 @@ mod tests {
     }
 
     #[test]
+    fn a_label_on_a_leader_makes_its_device_at_the_leaders_end_never_at_the_label() {
+        // Q6337: a range receptacle's circuit `X-8` printed outside the room beside its keynote's
+        // marker `31`, its leader from the marker slanting to the cooktop wall at (60, 60); a
+        // receptacle's `X-4` with no leader and no symbol by it; a fixture `K2` over `X-1,a` on
+        // a leader with a level shoulder then a slant down to (158, 60).
+        let texts = [
+            text("X-8", [0.0, 100.0]),
+            text("31", [16.0, 100.0]),
+            text("X-4", [40.0, 150.0]),
+            text("K2", [120.0, 108.0]),
+            text("X-1,a", [120.0, 100.0]),
+        ];
+        let leaders = super::super::labelspot::Leaders::new(
+            vec![
+                (Vec2::new(23.5, 102.0), Vec2::new(32.0, 102.0)),
+                (Vec2::new(32.0, 102.0), Vec2::new(60.0, 60.0)),
+                (Vec2::new(141.0, 102.0), Vec2::new(150.0, 102.0)),
+                (Vec2::new(150.0, 102.0), Vec2::new(158.0, 60.0)),
+            ],
+            16.0,
+        );
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [-50.0, 0.0, 250.0, 200.0],
+            texts: texts.iter().collect(),
+            read: Vec::new(),
+            leaders: Some(&leaders),
+        };
+        let marks = Marks { luminaires: ["K2".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let got = read_view(&view, &[], &marks);
+        let at = |c: &str| got.iter().find(|d| d.circuit == c).map(|d| ([d.at[0].round() as i64, d.at[1].round() as i64], d.spot.clone()));
+        let (p, why) = at("X-8").unwrap();
+        assert_eq!(p, [60, 60], "{got:?}");
+        assert!(why.starts_with("at the end of the leader from its label X-8"), "{why}");
+        let (p, _) = at("X-1,a").unwrap();
+        assert_eq!(p, [158, 60], "{got:?}");
+        // No leader, no symbol: at its label, said so for review.
+        let (p, why) = at("X-4").unwrap();
+        assert_eq!(p, [40, 150]);
+        assert!(why.contains("location to check"), "{why}");
+        // Each holds the label it was made from.
+        assert!(got.iter().all(|d| d.label_at.is_some()), "{got:?}");
+        // Read again with those as read devices (moved off their labels): no second device.
+        let again = View { read: got.iter().collect(), ..view };
+        assert!(read_view(&again, &[], &marks).is_empty());
+    }
+
+    #[test]
+    fn a_switch_designation_names_the_legend_switch_drawn_by_it_one_switch_not_two() {
+        // A legend switch drawn loose at (60, 60), its designation `D,b` printed beside it: one
+        // dimmer on leg b at the symbol, not a second switch on the lettering.
+        let sw = Symbol {
+            at: Vec2::new(60.0, 60.0),
+            size: 6.0,
+            kind: "switch".into(),
+            ifc: String::new(),
+            source: "E-0 legend: SWITCH".into(),
+            mark: None,
+            powered: true,
+        };
+        let texts = [text("D,b", [66.0, 66.0])];
+        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new(), leaders: None };
+        let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let got = read_view(&view, &[sw], &marks);
+        let switches: Vec<(String, String, [i64; 2])> = got
+            .iter()
+            .filter(|d| kind_of(d) == "switch")
+            .map(|d| (d.tag.clone(), d.leg.clone(), [d.at[0].round() as i64, d.at[1].round() as i64]))
+            .collect();
+        assert_eq!(switches, [("SD".to_string(), "b".to_string(), [60, 60])], "{got:?}");
+    }
+
+    #[test]
     fn a_switch_leg_letter_over_a_circuit_is_no_fixture_type() {
         // The schedule's type D printed over its circuit is a luminaire D; the lower-case leg
         // letter `d` printed over another circuit (`Q-11` with its legs `d,e`) is that circuit's
         // switch leg, though the letter is the same.
         let texts = [text("D", [20.0, 28.0]), text("Q-2", [20.0, 20.0]), text("d", [80.0, 28.0]), text("Q-11", [80.0, 20.0])];
-        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
+        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new(), leaders: None };
         let marks = Marks { luminaires: ["D".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
         let got = read_view(&view, &[], &marks);
         let luminaires: Vec<(String, String)> =
@@ -1102,7 +1255,14 @@ mod tests {
             read("REC", [104.0, 96.0], "Q-1", ""),
             read("REC", [60.0, 120.0], "Q-3", ""),
         ];
-        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: have.iter().collect() };
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 200.0, 200.0],
+            texts: texts.iter().collect(),
+            read: have.iter().collect(),
+            leaders: None,
+        };
         let marks = Marks {
             luminaires: ["K2".to_string()].into(),
             wall_luminaires: BTreeSet::new(),
