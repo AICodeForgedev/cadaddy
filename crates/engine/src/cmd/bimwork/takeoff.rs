@@ -4,7 +4,9 @@
 //! count, length, area or volume, and keeps each line's elements: on a per-level line, the
 //! elements of that level (a BOM line that lists a category's elements across levels is narrowed
 //! to the line's level, and a line without elements gets its level's built elements of that
-//! category). Every line's level is one of the model's levels, as the model names it (a line
+//! category; a line that names its elements is those only, never its category's on the level).
+//! Another trade's devices (the BOM's `by_others`) are on lines of their own, `by others`, out of
+//! our totals and never priced, so every built device is on a line (`devices`). Every line's level is one of the model's levels, as the model names it (a line
 //! naming `2` is on `Level 2`; a line naming none is on its elements' level), else the explicit
 //! `(unassigned level)` group, counted. Each takeoff is compared with the last one kept in the
 //! drawing.
@@ -42,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Model Takeoff", run)
             .alias(&["takeoffmodel"])
-            .params("{force?: bool (replace an existing file; otherwise it is refused), group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit) | [property key] (by the elements' properties, e.g. [\"level\", \"circuit\"]), filter?: {trade?, level?, category?, circuit?, text?} | text | {kind?, where?, key: value…} (by the elements' properties: e.g. {kind: \"device\", type: \"duplex\"}), compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level (one of the model's levels, else \"(unassigned level)\"), circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status, made: drawn|derived|inferred}], totals: {count, length_ft, area_sf, volume_cy, by_made: {drawn, derived, inferred} (each the same totals)}, levels, unassigned_level?: {level, lines, elements} (the lines on no one level of the model), changes?: {added, removed, changed}, revision, csv, path?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit) | [property key] (by the elements' properties, e.g. [\"level\", \"circuit\"]), filter?: {trade?, level?, category?, circuit?, text?} | text | {kind?, where?, key: value…} (by the elements' properties: e.g. {kind: \"device\", type: \"duplex\"}), compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level (one of the model's levels, else \"(unassigned level)\"), circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements (exactly the elements counted on it), element_count, elements_unresolved? (named elements the model has none of), status (\"by others\": another trade's devices, never priced), scope?, owner?, made: drawn|derived|inferred}], totals: {count, length_ft, area_sf, volume_cy, by_made: {drawn, derived, inferred} (each the same totals), by_others: {lines, count}} (our lines: another trade's are apart), devices?: {built, on_lines, by_others, not_on_a_line, not_on_a_line_first} (every built device on a line, unfiltered), levels, unassigned_level?: {level, lines, elements} (the lines on no one level of the model), changes?: {added, removed, changed}, revision, csv, path?}")
             .noundo(),
         CommandSpec::new(CMD_SHOW, "Show Takeoff Line", run_show)
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
@@ -108,8 +110,36 @@ fn part_of(category: &str) -> Option<&'static str> {
     })
 }
 
-/// The takeoff lines, by `group_by`: each with its quantities and its elements.
+/// The takeoff lines, by `group_by`: each with its quantities and its elements. Our scope only:
+/// another trade's devices are not on them (`lines_of` with `others` adds them, apart).
 pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<Vec<Value>> {
+    lines_of(s, group_by, filter, false)
+}
+
+/// The status of a takeoff line for another trade's devices (the BOM's `by_others`): counted, so
+/// every built device is on a line, but not ours (out of our totals, never priced).
+pub(super) const BY_OTHERS: &str = "by others";
+
+/// The BOM's `by_others` devices as BOM lines: one per element, its owner's scope on it.
+fn by_others_lines(bom: &Value) -> Vec<Value> {
+    bom["by_others"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .take(MAX_LINES)
+        .filter_map(|o| {
+            let element = o["element"].as_str().filter(|e| !e.is_empty())?;
+            let kind = o["kind"].as_str().filter(|k| !k.is_empty())?;
+            Some(json!({"level": o["level"], "trade": o["trade"], "category": "devices", "item": kind, "size": "", "unit": "each", "net": 1.0,
+                "status": BY_OTHERS, "scope": o["scope"], "owner": o["owner"], "elements": [element], "made": "drawn"}))
+        })
+        .collect()
+}
+
+/// The takeoff lines; with `others`, also another trade's devices on their own lines (status
+/// `by others`, their owner's `scope`), each the built devices it names only.
+fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Result<Vec<Value>> {
     // Per level and branch circuit: lines on no circuit are the level's as they are.
     let bom = s.execute("bim.bom", &json!({"group_by": "circuit", "all_elements": true}))?;
     let d = s.doc()?;
@@ -136,13 +166,20 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
     // The BOM counts rooms from the ceilings built with a room's tag: a level's rooms are those.
     let mut room_ceilings: BTreeMap<String, Vec<String>> = BTreeMap::new();
     // The device elements by the spec device they were built from: a device line counts those.
-    let mut by_device: BTreeMap<String, String> = BTreeMap::new();
-    for e in d.model.iter().take(super::MAX_ELEMENTS) {
+    // The built elements by the name their build gave them (`EXIT_SIGN-1`): a line naming one
+    // counts it.
+    let mut by_device: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Built elements only, before the cap (Q6373): a print set's linework comes first, and a
+    // large job has well over the cap of entities, its built devices after them.
+    for e in d.model.iter().filter(|e| crate::cmd::bimlook::made_tags(e).is_some()).take(super::MAX_ELEMENTS) {
         let tags = crate::cmd::fieldview::wallgen_tags(e);
         if tags.first() == Some(&"device")
             && let Some(id) = crate::cmd::fieldview::tag_value(&tags, "devid")
         {
-            by_device.insert(id.to_string(), e.handle.hex());
+            by_device.entry(id.to_string()).or_default().push(e.handle.hex());
+        } else if let Some(name) = crate::cmd::bimlook::made_name(e).filter(|n| !n.is_empty()) {
+            by_name.entry(name.to_string()).or_default().push(e.handle.hex());
         }
         if tags.first() == Some(&"mep")
             && let Some(id) = crate::cmd::fieldview::tag_value(&tags, "mepid")
@@ -171,27 +208,53 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
         .collect();
     let bom_lines = bom_lines.as_slice();
     let wall_lines = built_wall_lines(d, &els, bom_lines, super::units_per_foot(s));
+    let other_lines = if others { by_others_lines(&bom) } else { Vec::new() };
     let resolve = |h: &str| -> Vec<String> {
         if let Some(el) = by_device.get(h) {
-            return vec![el.clone()];
+            return el.clone();
         }
         match h.strip_prefix("run:").and_then(|i| i.parse::<usize>().ok()) {
             Some(i) => sp.mep.runs.get(i).and_then(|r| by_run.get(&crate::cmd::mep::run_base(r))).cloned().unwrap_or_default(),
-            None => Handle::parse_hex(h).filter(|x| d.entity(*x).is_some()).map(|x| vec![x.hex()]).unwrap_or_default(),
+            None => match Handle::parse_hex(h).filter(|x| d.entity(*x).is_some()) {
+                Some(x) => vec![x.hex()],
+                None => by_name.get(h).cloned().unwrap_or_default(),
+            },
         }
     };
     let on_level = |h: &str, lv: &str| info.get(h).is_some_and(|(x, _, _)| x.eq_ignore_ascii_case(lv));
     let mut grouped: BTreeMap<String, Value> = BTreeMap::new();
-    for l in bom_lines.iter().chain(wall_lines.iter()).take(MAX_LINES) {
+    for l in bom_lines.iter().chain(wall_lines.iter()).chain(other_lines.iter()).take(MAX_LINES) {
+        let by_others = l["status"] == BY_OTHERS;
         // The line's level as the model names it (Q6271): `2` or `L2` is `Level 2`; a level no
         // level of the model answers to stays as written while the elements are looked up.
         let named = l["level"].as_str().unwrap_or_default().trim().to_string();
         let resolved = model_level(&named);
         let mut level = resolved.clone().unwrap_or_else(|| named.clone());
         let category = l["category"].as_str().unwrap_or_default().to_string();
-        let mut elems: Vec<String> =
-            l["elements"].as_array().map(|a| a.iter().filter_map(Value::as_str).flat_map(resolve).collect()).unwrap_or_default();
-        elems.dedup();
+        // The elements the BOM counted on the line: a line that names its own elements is those
+        // (Q6373), never every element of its category on its level when they are not found
+        // (those not found are counted on the line).
+        let named_els: Vec<&str> = l["elements"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        let mut unresolved = 0usize;
+        let mut elems: Vec<String> = Vec::new();
+        for h in &named_els {
+            let r = resolve(h);
+            if r.is_empty() {
+                unresolved += 1;
+            }
+            elems.extend(r);
+        }
+        let mut seen = BTreeSet::new();
+        elems.retain(|h| seen.insert(h.clone()));
+        let names_its_own = !named_els.is_empty();
+        // Another trade's line is its built devices only: one the model has none of is not a
+        // device of this model.
+        if by_others {
+            elems.retain(|h| info.get(h).is_some_and(|(_, c, _)| c == "device"));
+            if elems.is_empty() {
+                continue;
+            }
+        }
         // A line that names no level: its elements' level, when they are all on one.
         if level.is_empty()
             && let Some(lv) = one_level(&info, &elems)
@@ -203,23 +266,24 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             elems.retain(|h| info.get(h).is_none_or(|(lv, _, _)| lv.is_empty() || lv.eq_ignore_ascii_case(&level)));
         }
         if elems.is_empty()
+            && !names_its_own
             && let Some(part) = part_of(&category)
         {
             elems = built.get(&(part.to_string(), level.clone())).cloned().unwrap_or_default();
         }
-        if elems.is_empty() && category == "rooms" {
+        if elems.is_empty() && !names_its_own && category == "rooms" {
             elems = room_ceilings.get(&level).cloned().unwrap_or_default();
         }
         // Board and framing are on the walls: the level's walls (every level's, on a line the BOM
         // gives for the whole job).
-        if elems.is_empty() && matches!(category.as_str(), "drywall" | "framing") {
+        if elems.is_empty() && !names_its_own && matches!(category.as_str(), "drywall" | "framing") {
             elems =
                 built.iter().filter(|((p, lv), _)| p == "wall" && (level.is_empty() || *lv == level)).flat_map(|(_, h)| h.iter().cloned()).collect();
             elems.truncate(MAX_LINE_ELEMENTS);
         }
         // MEP lines (duct, pipe, conduit by system and size): the level's runs of that kind, of
         // the system the item names when it names one.
-        if elems.is_empty() && matches!(category.as_str(), "duct" | "pipe" | "conduit" | "tray" | "cable") {
+        if elems.is_empty() && !names_its_own && matches!(category.as_str(), "duct" | "pipe" | "conduit" | "tray" | "cable") {
             let item = l["item"].as_str().unwrap_or_default().to_ascii_uppercase();
             let of_kind: Vec<&super::El> =
                 els.iter().filter(|e| e.category == category && (level.is_empty() || on_level(&e.handle.hex(), &level))).collect();
@@ -253,6 +317,10 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
         if !circuit.is_empty() {
             line["circuit"] = json!(circuit);
         }
+        if by_others {
+            line["scope"] = l["scope"].clone();
+            line["owner"] = l["owner"].clone();
+        }
         // What the line's items are as a product (Q6164): lines of two products stay two.
         let mut product = String::new();
         for k in PRODUCT_FIELDS {
@@ -267,7 +335,11 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
         if !passes(filter, &line) {
             continue;
         }
-        let filled = if made == "drawn" { String::new() } else { format!("|{made}") };
+        let mut filled = if made == "drawn" { String::new() } else { format!("|{made}") };
+        if by_others {
+            filled.push('|');
+            filled.push_str(l["scope"].as_str().unwrap_or(BY_OTHERS));
+        }
         let key = match group_by {
             "trade" => format!("{trade}|{category}|{item}|{size}|{unit}{product}{filled}"),
             "system" => format!("{system}|{item}|{size}|{unit}{product}{filled}"),
@@ -284,6 +356,7 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             x["status"] = l["status"].clone();
             x["waste_pct"] = l["waste_pct"].clone();
             x["levels"] = json!([]);
+            x["elements_unresolved"] = json!(0);
             if !matches!(group_by, "level" | "circuit") {
                 x["level"] = json!("");
             }
@@ -293,6 +366,7 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             x
         });
         entry["qty"] = json!(entry["qty"].as_f64().unwrap_or(0.0) + qty);
+        entry["elements_unresolved"] = json!(entry["elements_unresolved"].as_u64().unwrap_or(0) + unresolved as u64);
         if let Some(a) = entry["elements"].as_array_mut() {
             let have: BTreeSet<String> = a.iter().filter_map(Value::as_str).map(str::to_string).collect();
             for h in elems {
@@ -320,9 +394,45 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
                 l[m] = json!(r3(q));
             }
             l["element_count"] = json!(l["elements"].as_array().map_or(0, Vec::len));
+            // The named elements the model has none of, counted; none: no field.
+            if l["elements_unresolved"].as_u64() == Some(0)
+                && let Some(o) = l.as_object_mut()
+            {
+                o.remove("elements_unresolved");
+            }
             l
         })
         .collect())
+}
+
+/// Built devices a takeoff names as on no line, at most.
+const MAX_UNLISTED: usize = 50;
+
+/// Whether every built device is on a takeoff line (Q6373): the model's devices, those on a line
+/// (ours or another trade's), those on another trade's, and those on none (the first of them).
+/// Only for an unfiltered takeoff; none for a model with no devices.
+fn device_check(d: &cadaddy_doc::Drawing, lines: &[Value], filter: &Value) -> Option<Value> {
+    if !filter.is_null() {
+        return None;
+    }
+    let built: Vec<String> = elements(d).into_iter().filter(|e| e.category == "device").map(|e| e.handle.hex()).collect();
+    if built.is_empty() {
+        return None;
+    }
+    let on = |by_others: bool| -> BTreeSet<&str> {
+        lines
+            .iter()
+            .filter(|l| (l["status"] == BY_OTHERS) == by_others)
+            .flat_map(|l| l["elements"].as_array().map(Vec::as_slice).unwrap_or_default())
+            .filter_map(Value::as_str)
+            .collect()
+    };
+    let (ours, theirs) = (on(false), on(true));
+    let unlisted: Vec<&String> = built.iter().filter(|h| !ours.contains(h.as_str()) && !theirs.contains(h.as_str())).collect();
+    let on_lines = built.len() - unlisted.len();
+    let by_others = built.iter().filter(|h| theirs.contains(h.as_str())).count();
+    Some(json!({"built": built.len(), "on_lines": on_lines, "by_others": by_others, "not_on_a_line": unlisted.len(),
+        "not_on_a_line_first": unlisted.into_iter().take(MAX_UNLISTED).collect::<Vec<_>>()}))
 }
 
 /// A built wall's length along the floor and its height, feet: the farthest two of its points in
@@ -428,16 +538,20 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "`group_by` is level, trade, system, type or circuit"));
     }
     let filter = p.get("filter").cloned().unwrap_or(Value::Null);
-    let lines = lines(s, &group_by, &filter)?;
-    let mut totals = json!({"lines": lines.len()});
+    // Our lines, and another trade's devices on lines of their own (Q6373).
+    let lines = lines_of(s, &group_by, &filter, true)?;
+    let ours: Vec<&Value> = lines.iter().filter(|l| l["status"] != BY_OTHERS).collect();
+    let theirs: Vec<&Value> = lines.iter().filter(|l| l["status"] == BY_OTHERS).collect();
+    let mut totals = json!({"lines": ours.len()});
     for m in ["count", "length_ft", "area_sf", "volume_cy"] {
-        totals[m] = json!(r3(lines.iter().filter_map(|l| l[m].as_f64()).sum::<f64>()));
+        totals[m] = json!(r3(ours.iter().filter_map(|l| l[m].as_f64()).sum::<f64>()));
     }
+    totals["by_others"] = json!({"lines": theirs.len(), "count": r3(theirs.iter().filter_map(|l| l["count"].as_f64()).sum::<f64>())});
     // Every total split by what the work is by the documents (Q6216): inferred work is in the
     // job's totals, and shown apart from the drawn.
     let mut by_made = serde_json::Map::new();
     for made in ["drawn", "derived", "inferred"] {
-        let of: Vec<&Value> = lines.iter().filter(|l| l["made"].as_str().unwrap_or("drawn") == made).collect();
+        let of: Vec<&Value> = ours.iter().copied().filter(|l| l["made"].as_str().unwrap_or("drawn") == made).collect();
         let mut t = json!({"lines": of.len()});
         for m in ["count", "length_ft", "area_sf", "volume_cy"] {
             t[m] = json!(r3(of.iter().filter_map(|l| l[m].as_f64()).sum::<f64>()));
@@ -464,9 +578,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let rows: Vec<Vec<String>> = std::iter::once(head)
         .chain(lines.iter().map(|l| {
             let f = |k: &str| l[k].as_str().unwrap_or_default().to_string();
+            // Another trade's line says so in its trade column.
+            let trade = if l["status"] == BY_OTHERS { format!("{} ({BY_OTHERS})", f("trade")) } else { f("trade") };
             let mut row = vec![
                 f("level"),
-                f("trade"),
+                trade,
                 f("system"),
                 f("category"),
                 f("item"),
@@ -481,7 +597,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             row
         }))
         .collect();
+    let devices = device_check(s.doc()?, &lines, &filter);
     let mut out = json!({"lines": lines, "totals": totals, "levels": levels, "group_by": group_by, "revision": revision});
+    if let Some(dv) = devices {
+        out["devices"] = dv;
+    }
     // Each scheduled luminaire type's count in the model beside the schedule's quantity
     // (fix-lum-schedule-type-column-wrong): both shown, a difference a review item.
     if let Ok((sp, _)) = crate::cmd::bspec::current(s, CMD) {

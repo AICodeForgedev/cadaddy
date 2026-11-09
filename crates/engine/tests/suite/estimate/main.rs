@@ -21,5 +21,6 @@ mod procure;
 mod pubcost;
 mod pulllist;
 mod schedules3d;
+mod takeoff_device_lines;
 mod valueeng;
 mod xlsx_link;
