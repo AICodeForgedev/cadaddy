@@ -730,6 +730,7 @@ dependencies = [
  "rayon",
  "rhai",
  "rstar",
+ "same-file",
  "serde",
  "serde_json",
  "sha2",
