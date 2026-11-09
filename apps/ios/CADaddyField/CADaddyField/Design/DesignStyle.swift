@@ -40,7 +40,7 @@ struct DesignStyle: Equatable {
 
     /// The ghost: one colour and one opacity for every shell face, so the blend is the same in any draw order.
     var ghost: UIColor { isDark ? UIColor(hex: 0xBFEDE6) : UIColor(hex: 0x6F8296) }
-    var ghostOpacity: Float { highContrast ? 0.12 : (isDark ? 0.07 : 0.07) }
+    var ghostOpacity: Float { highContrast ? 0.12 : 0.08 }
     var edge: UIColor {
         switch (background, highContrast) {
         case (.teal, false): return UIColor(hex: 0x4F8A83)

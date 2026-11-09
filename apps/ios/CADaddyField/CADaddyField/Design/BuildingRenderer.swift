@@ -186,6 +186,9 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     private func material(for e: BuildingElement, lit: Bool = false) -> RealityKit.Material {
         let boost: Float = lit ? 0.9 : (style.highContrast ? 0.35 : 0.12)
         switch e.role {
+        case .equipment where e.kind == "Panelboard":
+            // Panels read as small solid orange objects (the spec's floor view), not neutral gear.
+            return pbr("panel-\(lit)", style.color(.electrical), rough: 0.45, emissive: lit ? 0.6 : 0.15)
         case .equipment:
             return pbr("eq-\(e.system)-\(lit)", lit ? style.color(e.system) : style.equipment(e.system), rough: 0.55, emissive: lit ? 0.5 : 0.04)
         case .main:

@@ -116,7 +116,7 @@ struct BuildingView: View {
     }
 
     private func crumb(_ t: String, _ a: @escaping () -> Void) -> some View {
-        Button(action: a) { Text(t).font(.system(size: 13, weight: .semibold)).foregroundStyle(s.inkSecondary).padding(.vertical, 8).contentShape(Rectangle()) }
+        Button(action: a) { Text(t).font(.system(size: 13, weight: .semibold)).foregroundStyle(s.inkSecondary).frame(minHeight: 56).padding(.horizontal, 4).contentShape(Rectangle()) }
             .buttonStyle(.plain)
     }
 
@@ -218,7 +218,7 @@ extension View {
 @available(iOS 18.0, *)
 struct FloorRail: View {
     @ObservedObject var exp: BuildingExperience
-    private let item: CGFloat = 52
+    private let item: CGFloat = 56
 
     var body: some View {
         let levels = exp.building.railLevels
@@ -383,7 +383,7 @@ struct TraceStrip: View {
                         .font(.system(size: 12, weight: .semibold)).foregroundStyle(s.inkSecondary)
                     Spacer()
                     Button { exp.clearFocus() } label: {
-                        Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(s.inkSecondary).frame(width: 44, height: 32).contentShape(Rectangle())
+                        Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(s.inkSecondary).frame(width: 56, height: 40).contentShape(Rectangle())
                     }
                     .accessibilityLabel("Stop following")
                 }
@@ -402,7 +402,7 @@ struct TraceStrip: View {
                                         Text(st.tag).font(.system(size: 14, weight: .semibold, design: .monospaced)).foregroundStyle(s.ink)
                                     }
                                     .padding(.horizontal, 10)
-                                    .frame(minWidth: 56, minHeight: 50)
+                                    .frame(minWidth: 56, minHeight: 56)
                                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
                                         .fill(exp.selected == st.id ? s.swiftUI(tapped.system).opacity(0.28) : s.hairline.opacity(0.5)))
                                     .contentShape(Rectangle())
@@ -453,7 +453,7 @@ struct FloorSheet: View {
                     }
                 }
                 .padding(.horizontal, 14)
-                .frame(height: 50)
+                .frame(height: 56)
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(s.hairline.opacity(0.55)))
             }
             .padding(16)
@@ -539,10 +539,10 @@ struct RoomSheet: View {
                             }
                             .foregroundStyle(on ? s.ink : s.inkSecondary)
                             .padding(.horizontal, 12)
-                            .frame(minHeight: 36)
+                            .frame(minHeight: 40)
                             .background(Capsule().fill(on ? s.hairline.opacity(0.7) : Color.clear))
                             .overlay(Capsule().strokeBorder(s.hairline, lineWidth: 0.75))
-                            .frame(minHeight: 48)
+                            .frame(minHeight: 56)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -576,7 +576,7 @@ struct RoomSheet: View {
                     Text(Units.feetInches(Double(h))).font(.system(size: 13, weight: .medium, design: .monospaced)).foregroundStyle(s.inkSecondary)
                 }
             }
-            .frame(minHeight: 50)
+            .frame(minHeight: 56)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -597,6 +597,7 @@ struct ElementCard: View {
                 Button { exp.clearFocus() } label: {
                     Image(systemName: "chevron.left").font(.system(size: 15, weight: .bold)).foregroundStyle(s.ink)
                         .frame(width: 44, height: 44).background(Circle().fill(s.hairline.opacity(0.6)))
+                        .frame(width: 56, height: 56).contentShape(Rectangle())
                 }
                 .accessibilityLabel("Back to the room list")
                 VStack(alignment: .leading, spacing: 2) {
