@@ -236,6 +236,7 @@
   "steel_elbow_source": "the callout asks for steel elbows and risers: the elbows and the risers up through the floor are rigid steel (RMC), the rest of the run is its own material",
   "transition_item": "{from} to {to} transition adapter",
   "transition_source": "where a buried raceway comes up through the floor and runs on in the raceway above the slab, a transition adapter joins the two materials (trade practice; NEC 300.5(D) protection at the emergence)",
+  "floor_joint_source": "a raceway rising through a floor is one run of sticks: where the model cuts it at the floor (each level's riser on its own level) its sticks are joined by a coupling, not ended in connectors (trade practice)",
   "insulation": "THHN",
   "insulation_source": "THHN/THWN-2 copper where the specifications name no other (company default)",
   "makeup_ft": 1.5,

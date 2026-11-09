@@ -1852,6 +1852,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // Buried raceway that comes up into the raceway above the floor: the project's wiring method
     // there, else the default.
     let mut transitions = 0usize;
+    // Feeder risers' pieces joined where the model cut them at a floor or a stub-up (Q6347).
+    let mut floor_joints = 0usize;
     let above = wiring.as_ref().and_then(|(v, _)| rl.raceway_named(v)).map_or_else(|| rl.default_raceway.clone(), |(k, _)| k.to_string());
     let mut to_equipment = 0usize;
     let (mut feeder_chains, mut feeder_wire_ft) = (0usize, 0.0_f64);
@@ -2140,6 +2142,16 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             if m.buried && !m.cable {
                 let floor = sp.level(&key.level).map_or(0.0, |l| l.elevation_ft * upf);
                 transitions += bury(&mut pieces, floor, tol, key.steel, [lands[0].is_none(), lands[1].is_none()], &above, &m.name, rl);
+            }
+            // A feeder's riser cut at a floor (Q6347) runs on in the next level's piece: one
+            // coupling at the floor; where it rises out of its buried stub-up the transition
+            // there joins them.
+            if m.feeder.is_some()
+                && !m.cable
+                && let Some(rw) = rl.raceways.get(&m.name)
+            {
+                floor_joints +=
+                    feeder_floor_joints(sp, &key.level, key.buried, &c.pts, [lands[0].is_none(), lands[1].is_none()], tol, upf, &mut pieces, rw, rl);
             }
             // More bends between its ends than the code allows between pull points.
             let max_bends = if m.cable { 0.0 } else { rl.raceways.get(&m.name).map_or(0.0, |r| r.max_bends_deg) };
@@ -2735,6 +2747,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "endsWithNoDrop": entry_gaps,
         "runsOverBendLimit": over_bends,
         "buriedTransitions": transitions,
+        "feederFloorJoints": floor_joints,
         "landingFt": (landing_ft * 10.0).round() / 10.0,
         "racewayLaidOnce": {"stretches": laid.stretches, "ft": (laid.removed / upf * 10.0).round() / 10.0, "tees": laid.tees, "source": rl.one_raceway_source},
         "feedersLinked": feeders,
@@ -3064,6 +3077,62 @@ fn why_box(dec: &super::BoxDecision) -> String {
 /// tag and source (`feeder F7 PA→U-101→U-201`), and the gear it goes to first is the feeder's
 /// end, or a copy of it (`U-101` of a typical `U`). Feeders alike in all three are one type: the
 /// first.
+/// The ends of a feeder's chain `pts` (on `level`, `open`: landing in nothing) that stand where
+/// the model cut its riser (Q6347): its foot at its level's floor, over a level below, runs on
+/// down into that level's piece (its fittings go: the piece below takes the coupling); its head
+/// at a higher level's floor runs on up (a coupling there); its foot at the slab level's stub-up
+/// top (above the buried raceway) comes out of the stub's transition (its fittings go). Only a
+/// vertical end. Returns the joints made.
+#[allow(clippy::too_many_arguments)]
+fn feeder_floor_joints(
+    sp: &BuildingSpec,
+    level: &str,
+    buried: bool,
+    pts: &[Vec3],
+    open: [bool; 2],
+    tol: f64,
+    upf: f64,
+    pieces: &mut Pieces,
+    rw: &super::Raceway,
+    rl: &super::AtomRules,
+) -> usize {
+    let Some(here) = sp.level(level).map(|l| l.elevation_ft).filter(|e| e.is_finite()) else { return 0 };
+    let slab = super::super::ugplan::slab_level(sp);
+    let on_slab = slab.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(level));
+    let stub = super::super::ugplan::rules().stubup.conduit_top_ft;
+    let floors: Vec<f64> = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| e.is_finite()).collect();
+    let near = |a: f64, b: f64| (a - b).abs() <= tol.max(1e-6);
+    let mut made = 0usize;
+    // The head first: dropping the foot's fittings moves the pieces' indices, not the ends'.
+    for end in [1usize, 0] {
+        if !open.get(end).copied().unwrap_or(false) {
+            continue;
+        }
+        let (p, q) = if end == 0 { (pts.first(), pts.get(1)) } else { (pts.last(), pts.len().checked_sub(2).and_then(|i| pts.get(i))) };
+        let (Some(p), Some(q)) = (p, q) else { continue };
+        let vertical = (p.x - q.x).hypot(p.y - q.y) <= tol && (p.z - q.z).abs() > tol;
+        if !vertical {
+            continue;
+        }
+        let up = p.z > q.z;
+        let joint = if up {
+            floors.iter().any(|f| *f > here + 1e-6 && near(p.z, f * upf)).then_some((true, rl.floor_joint_source.as_str()))
+        } else if !on_slab && floors.iter().any(|f| *f < here - 1e-6) && near(p.z, here * upf) {
+            Some((false, rl.floor_joint_source.as_str()))
+        } else if on_slab && !buried && stub.is_finite() && near(p.z, (here + stub) * upf) {
+            Some((false, rl.transition_source.as_str()))
+        } else {
+            None
+        };
+        if let Some((keep, why)) = joint
+            && super::join_at_floor(pieces, end, keep, rw, why)
+        {
+            made += 1;
+        }
+    }
+    made
+}
+
 pub(crate) fn feeder_of_run(sp: &BuildingSpec, r: &MepRun) -> Option<usize> {
     let rest = r.source_sheet.strip_prefix("feeder ")?;
     sp.mep.feeders.iter().take(MAX_RUNS).position(|f| {

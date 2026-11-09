@@ -813,3 +813,86 @@ fn a_units_receptacle_runs_out_under_the_unit_and_rises_beside_it() {
     let (_, _, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[], rules());
     assert_eq!(blocked, Some(0));
 }
+
+/// Q6347: a feeder from the ground floor's switchboard to a panel two floors up, routed and cut
+/// into pieces: its takeoff has the buried raceway only under the slab (and its stub-up), the
+/// above-grade raceway rising on every level it passes and running on the panel's level, one
+/// coupling where the riser passes each floor, a firestop at each floor, and its conductors
+/// along the whole route on each level.
+#[test]
+fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_level() {
+    let mut s = crate::Session::empty();
+    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Feeder Riser", None);
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [
+            {"name": "Ground", "elevation_ft": 0, "height_ft": 11, "ceiling_ft": 9, "region": [0, 0, 1200, 1200]},
+            {"name": "Middle", "elevation_ft": 11, "height_ft": 10, "ceiling_ft": 8, "region": [2000, 0, 3200, 1200]},
+            {"name": "Upper", "elevation_ft": 21, "height_ft": 10, "ceiling_ft": 8, "region": [4000, 0, 5200, 1200]}
+        ],
+        "mep": {
+            "systems": [
+                {"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [3, 0], "bottom_ft": 10},
+                {"name": "E-UG", "layer": "E-UG", "kind": "conduit", "size_in": [3, 0], "bottom_ft": -1.5}
+            ],
+            "equipment": [
+                {"tag": "SB1", "kind": "switchboard", "level": "Ground", "min": [0, 0], "max": [48, 24], "height_ft": 7, "bottom_ft": 0},
+                {"tag": "PU", "kind": "panel", "level": "Upper", "min": [4600, 600], "max": [4624, 612], "height_ft": 4, "bottom_ft": 2}
+            ],
+            "feeders": [{"tag": "F7", "from": "SB1", "to": "PU", "sets": 1, "phases": 3, "size": "3/0", "material": "cu", "neutrals": 1,
+                         "neutral_size": "3/0", "grounds": 1, "ground_size": "#6", "conduits": 1, "conduit_in": 3, "entry": "top", "from_entry": "bottom",
+                         "source": "riser diagram"}]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
+    let (runs, left) = super::gearbuild::feeder_runs(&sp);
+    assert!(left.is_empty(), "{left:?}");
+    sp.mep.runs = runs;
+    s.execute("bspec.set", &json!({"replace": true, "spec": serde_json::to_value(&sp).unwrap()})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let r = s.execute("conduit.reroute", &json!({})).unwrap();
+    assert_eq!(r["routed"], json!(true), "{r}");
+    let t = s.execute("conduit.takeoff", &json!({"price": false})).unwrap();
+    let lines = t["lines"].as_array().cloned().unwrap_or_default();
+    let qty = |level: &str, kind: &str, ty: &str| {
+        lines
+            .iter()
+            .filter(|l| l["level"] == json!(level) && l["kind"] == json!(kind) && l["type"].as_str().unwrap_or_default().starts_with(ty))
+            .map(|l| l["qty"].as_f64().unwrap_or(0.0))
+            .sum::<f64>()
+    };
+    let stub = super::ugplan::rules().stubup.conduit_top_ft;
+    // Buried: only on the ground floor, the trench and the two vertical legs up to the floor and the stub's top.
+    assert_eq!(qty("Middle", "conduit", "PVC") + qty("Upper", "conduit", "PVC"), 0.0, "{lines:#?}");
+    assert!(qty("Ground", "conduit", "PVC") > 0.0, "{lines:#?}");
+    // Above the slab: the riser on the ground floor from the stub's top, the middle floor's full
+    // storey, and on the panel's level its rise, the run across and the drop into its top.
+    assert!((qty("Ground", "conduit", "EMT") - (11.0 - stub)).abs() < 0.05, "{lines:#?}");
+    assert!((qty("Middle", "conduit", "EMT") - 10.0).abs() < 0.05, "{lines:#?}");
+    assert!(qty("Upper", "conduit", "EMT") >= 9.0 + 1.5 + 3.0 - 0.05, "{lines:#?}");
+    // One coupling where the riser passes each floor, made as a floor joint; a transition out of the stub.
+    let d = s.doc().unwrap();
+    let joints = d
+        .model
+        .iter()
+        .map(|e| props::read(&e.common.xdata))
+        .filter(|p| p.get("atom").map(Prop::text).as_deref() == Some("coupling") && p.get("joint").map(Prop::text).as_deref() == Some("floor"))
+        .count();
+    assert_eq!(joints, 2, "{lines:#?}");
+    assert!(lines.iter().any(|l| l["item"].as_str().unwrap_or_default().contains("transition")), "{lines:#?}");
+    // A firestop at each floor it passes.
+    let fs = |level: &str| {
+        lines.iter().filter(|l| l["kind"] == json!("firestop") && l["level"] == json!(level)).map(|l| l["qty"].as_f64().unwrap_or(0.0)).sum::<f64>()
+    };
+    assert_eq!((fs("Ground"), fs("Middle"), fs("Upper")), (0.0, 1.0, 1.0), "{lines:#?}");
+    // Its conductors ride the whole route: on the middle floor, the storey's riser.
+    let wire = |level: &str| {
+        lines
+            .iter()
+            .filter(|l| l["kind"] == json!("wire") && l["level"] == json!(level) && l["size"].as_str().unwrap_or_default().contains("3/0"))
+            .map(|l| l["qty"].as_f64().unwrap_or(0.0))
+            .sum::<f64>()
+    };
+    assert!(wire("Middle") >= 4.0 * 10.0 - 0.1, "three hots and a neutral up the storey: {lines:#?}");
+}
