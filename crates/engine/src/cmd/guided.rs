@@ -24394,9 +24394,11 @@ fn placement_discipline(job: &GuidedJob) -> Option<String> {
 
 /// The roof levels' framing and parapets into the drafted spec: the framing the notes on each
 /// roof level's sheets name (trusses or joists, their spacing and depth; the rule's usual values
-/// where a note gives none), and the lowest top of parapet the sections and elevations mark above
-/// the roof's bearing, as a height over the framed roof's surface (the higher ones reported). A
-/// parapet an elevation read already gave the level is kept. What was put in (null: nothing).
+/// where a note gives none), bearing at the level's elevation, which then rises to the roof's
+/// surface on the members and deck (the storey under keeps its floor to the bearing); and the
+/// lowest top of parapet the sections and elevations mark above the bearing, as a height over
+/// the roof's surface (the higher ones reported). A parapet an elevation read already gave the
+/// level is kept. What was put in (null: nothing).
 fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
     let (mut sp, true) = super::bspec::current(s, "bim_build")? else { return Ok(Value::Null) };
     let roofs: Vec<String> = sp.levels.iter().filter(|l| super::wallgen::roof_level(&sp.levels, &l.name)).map(|l| l.name.clone()).collect();
@@ -24419,12 +24421,18 @@ fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
                 regions.push((r.number.clone(), b));
             }
         }
-        let framing = super::exterior::read_framing(s.doc()?, &regions, roof);
-        if let Some(f) = &framing {
+        let mut framing = super::exterior::read_framing(s.doc()?, &regions, roof);
+        // The level's elevation (the sections' top of plate or truss bearing) is where the
+        // framing bears; the roof's surface, its level's floor, is on the members and deck.
+        let assembly = super::exterior::assembly_ft(framing.as_ref());
+        if let Some(f) = framing.as_mut()
+            && let Some(level) = sp.levels.iter_mut().find(|l| l.name.eq_ignore_ascii_case(roof))
+        {
+            f.bearing_ft = Some(level.elevation_ft);
+            level.elevation_ft += assembly;
             sp.exterior.framing.retain(|x| !x.level.eq_ignore_ascii_case(roof));
             sp.exterior.framing.push(f.clone());
         }
-        let assembly = super::exterior::assembly_ft(&sp, roof);
         let parapets: Vec<f64> = index_levels
             .iter()
             .find(|l| l.get("name").and_then(Value::as_str).is_some_and(|n| level_name(n).eq_ignore_ascii_case(roof)))
@@ -34083,6 +34091,10 @@ mod tests {
         let f = sp.exterior.level_framing("Roof").expect("framed");
         assert_eq!((f.member.as_str(), f.spacing_in, f.depth_in), ("truss", 16.0, 30.0), "{out}");
         assert!(f.source.starts_with("S-4: PRE-MANUFACTURED ROOF TRUSSES"), "{}", f.source);
+        // It bears at the level's elevation; the level is now the roof's surface, 30" + 1.5" up.
+        assert_eq!(f.bearing_ft, Some(10.0));
+        assert!((sp.level("Roof").unwrap().elevation_ft - (10.0 + 31.5 / 12.0)).abs() < 1e-9);
+        assert_eq!(sp.level("Level 1").unwrap().height_ft, 10.0);
         // 5' over the bearing less the 30" trusses and 1.5" deck: 2'-4.5" over the deck.
         let h = sp.exterior.level_parapet("Roof").unwrap();
         assert!((h - (5.0 - 31.5 / 12.0)).abs() < 1e-9, "{h}");
@@ -34102,6 +34114,7 @@ mod tests {
         let (sp2, _) = super::super::bspec::current(&s2, "test").unwrap();
         assert!(sp2.exterior.level_framing("Roof").is_none());
         assert_eq!(sp2.exterior.level_parapet("Roof"), Some(5.0));
+        assert_eq!(sp2.level("Roof").unwrap().elevation_ft, 10.0);
     }
 
     #[test]

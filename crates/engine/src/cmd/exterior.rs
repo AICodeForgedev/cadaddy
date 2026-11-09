@@ -1015,16 +1015,22 @@ pub(crate) fn read_framing(d: &Drawing, regions: &[(String, Bounds2)], level: &s
     };
     let (spacing_in, spacing_status) = read(spaced.map(|s| s.1), rule.spacing_in);
     let (depth_in, depth_status) = read(deep.map(|d| d.0), rule.depth_in);
-    Some(RoofFraming { level: level.to_string(), member, spacing_in, depth_in, spacing_status, depth_status, source })
+    Some(RoofFraming { level: level.to_string(), member, spacing_in, depth_in, spacing_status, depth_status, bearing_ft: None, source })
 }
 
-/// How far a framed roof's surface stands over its level's elevation (where it bears): the
-/// members' depth and the deck, feet; 0 for a roof level not framed.
-pub(crate) fn assembly_ft(sp: &BuildingSpec, level: &str) -> f64 {
-    sp.exterior.level_framing(level).map_or(0.0, |f| {
+/// How far a framed roof's surface stands over where it bears: its members' depth and the deck,
+/// feet; 0 for none.
+pub(crate) fn assembly_ft(f: Option<&RoofFraming>) -> f64 {
+    f.map_or(0.0, |f| {
         let v = (f.depth_in + framing_rule().deck_in) / 12.0;
         if v.is_finite() && v > 0.0 { v } else { 0.0 }
     })
+}
+
+/// Where a framed roof's members bear, feet: as read, else its level's elevation (the roof's
+/// surface) less the members and deck.
+pub(crate) fn bearing_ft(f: &RoofFraming, level_ft: f64) -> f64 {
+    f.bearing_ft.filter(|b| b.is_finite() && *b <= level_ft).unwrap_or(level_ft - assembly_ft(Some(f)))
 }
 
 /// The members of a framed roof over `poly` (drawing units): one across the outline's short way
@@ -1149,11 +1155,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let z0 = level.elevation_ft * upf;
         let poly: Vec<Vec2> = r.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect();
         let rise = surface(r);
-        // A framed roof bears at its level's elevation: its members, then the deck on them.
+        // A framed roof: its members bear on the walls under it, the deck on them; the level's
+        // elevation is the deck's top (the roof's surface).
         let framing = sp.exterior.level_framing(&level.name);
         let depth = framing.map_or(0.0, |f| f.depth_in / 12.0 * upf);
         let deck = if framing.is_some() { rule.deck_in / 12.0 * upf } else { 0.0 };
-        let top = |p: Vec2| z0 + depth + deck + rise(p);
+        let bear = framing.map_or(z0, |f| bearing_ft(f, level.elevation_ft) * upf);
+        let top = |p: Vec2| z0 + rise(p);
         let plan_area = cadaddy_geom::shoelace(&poly).abs() / (upf * upf);
         if let Some(m) = slab(&poly, &top, if framing.is_some() { deck } else { upf })
             && !m.faces.is_empty()
@@ -1173,7 +1181,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
         if let Some(f) = framing {
-            framed += frame_roof(d, &FrameJob { level: &level.name, roof: &r.name, poly: &poly, z0, depth, upf, rise: &rise }, f, &rule);
+            // As deep as the members are, up to the deck's underside wherever the roof rises.
+            let under_deck = |p: Vec2| (z0 - deck + rise(p) - bear).max(depth) - depth;
+            framed += frame_roof(d, &FrameJob { level: &level.name, roof: &r.name, poly: &poly, z0: bear, depth, upf, rise: &under_deck }, f, &rule);
         }
         let parapet = r.parapet_ft.or_else(|| sp.exterior.level_parapet(&r.level));
         // Round the outline, 8" thick inside it: a parapet up to its height over the high point;
@@ -1183,7 +1193,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // sections mark its top as an elevation), and never under the deck's high point.
         let deck_high = poly.iter().map(|p| top(*p)).fold(f64::NEG_INFINITY, f64::max);
         let high = match framing {
-            Some(_) => (z0 + depth + deck + parapet.unwrap_or(0.0) * upf).max(deck_high),
+            Some(_) => (z0 + parapet.unwrap_or(0.0) * upf).max(deck_high),
             None => deck_high + parapet.unwrap_or(0.0) * upf,
         };
         if parapet.is_some() || framing.is_some() {
@@ -1198,7 +1208,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let u = (*b - *a) * (1.0 / len);
                 let inward = if ccw { Vec2::new(-u.y, u.x) } else { Vec2::new(u.y, -u.x) };
                 let (pa, pb) = (*a + inward * (t / 2.0), *b + inward * (t / 2.0));
-                super::wallgen::add_box(&mut m, pa, pb, t, z0, high);
+                super::wallgen::add_box(&mut m, pa, pb, t, bear, high);
             }
             let part = if parapet.is_some() { "parapet" } else { ROOF_WALL };
             let mut x = measured(tag(part, &level.name, &r.name), "lf", perimeter(&poly));
@@ -1266,13 +1276,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
     }
-    // The roof surface under a point of a level (for what stands on it): over a framed roof's
-    // members and deck.
+    // The roof surface under a point of a level (for what stands on it).
     let roof_at = |level: &str, p: Vec2| {
-        let on = assembly_ft(sp, level) * upf;
         ext.roofs.iter().filter(|r| r.level.eq_ignore_ascii_case(level)).find_map(|r| {
             let poly: Vec<Vec2> = r.outline.iter().map(|q| Vec2::new(q[0], q[1])).collect();
-            cadaddy_geom::point_in_polygon(&poly, p).then(|| on + surface(r)(p))
+            cadaddy_geom::point_in_polygon(&poly, p).then(|| surface(r)(p))
         })
     };
     for c in ext.crickets.iter().take(10_000) {

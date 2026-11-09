@@ -28,7 +28,8 @@ const ROOF_PLAN: [f64; 4] = [1900.0, -100.0, 3000.0, 1000.0];
 /// Two storeys of a 40' × 30' box of 6" walls (Level 1 at 0, Level 2 at 10', 8' floor to
 /// bearing), each plan on its own part of the sheet, and the roof plan beside them: the roof's
 /// edge and a rooftop unit. The roof level at `roof_ft`, its plan's corner moved by `roof_base`
-/// (none: where the stack puts it), the exterior's `framing` and `parapets` as given.
+/// (none: where the stack puts it), the exterior's `framing` (bearing at `roof_ft`) and
+/// `parapets` as given.
 fn building(roof_ft: f64, roof_base: Option<[f64; 2]>, framing: Value, parapets: Value) -> Session {
     building_with_roof(roof_ft, roof_base, framing, parapets, [2000.0, 0.0], [2480.0, 360.0])
 }
@@ -45,7 +46,17 @@ fn building_with_roof(roof_ft: f64, roof_base: Option<[f64; 2]>, framing: Value,
     rect(&mut s, a, b);
     rect(&mut s, [2100.0, 240.0], [2172.0, 288.0]);
     text(&mut s, [2105.0, 260.0], "RTU-1 H=4'-6\"");
-    let mut roof = json!({"name": "Roof", "elevation_ft": roof_ft, "height_ft": 4, "ceiling_ft": 4, "region": [1900, -200, 3100, 1100]});
+    // A framed roof's level is its surface: over the members (24") and the deck (1.5") on them,
+    // which bear at `roof_ft`.
+    let mut framing = framing;
+    let surface = match framing.as_array_mut().and_then(|a| a.first_mut()) {
+        Some(f) => {
+            f["bearing_ft"] = json!(roof_ft);
+            roof_ft + 25.5 / 12.0
+        }
+        None => roof_ft,
+    };
+    let mut roof = json!({"name": "Roof", "elevation_ft": surface, "height_ft": 4, "ceiling_ft": 4, "region": [1900, -200, 3100, 1100]});
     if let Some(b) = roof_base {
         roof["base"] = json!(b);
     }
