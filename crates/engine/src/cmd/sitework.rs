@@ -2124,7 +2124,10 @@ mod tests {
             levels: Vec::new(),
             view: None,
         };
-        job.sheet_regions = vec![region("E-001", "E", area, SITE_WORK), region("C-101", "C", [19_000.0, 1_000.0, 25_000.0, 5_000.0], "site/civil")];
+        // As a checkpoint made before site work marks them: the electrical site plan still
+        // `site/civil`, its discipline making it a trade's.
+        job.sheet_regions =
+            vec![region("E-001", "E", area, "site/civil"), region("C-101", "C", [19_000.0, 1_000.0, 25_000.0, 5_000.0], "site/civil")];
         let mut counts = Vec::new();
         for _ in 0..2 {
             let mut result = serde_json::json!({});
@@ -2153,6 +2156,7 @@ mod tests {
             assert!(marked > 0, "the built site work is marked");
             // The civil sheet stays out.
             assert_eq!(job.sheet_regions.get(1).map(|r| r.not_built.as_str()), Some("site/civil"));
+            assert_eq!(job.sheet_regions.first().map(|r| r.not_built.as_str()), Some(SITE_WORK));
         }
         // A rerun builds the same again, never twice.
         assert_eq!(counts.first(), counts.get(1), "{counts:?}");

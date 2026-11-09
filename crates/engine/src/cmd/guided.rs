@@ -20707,6 +20707,23 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
     // The site sheets: a trade's by its number or title; when the set has none, a site sheet its
     // content makes a trade's.
     let refs = job_sheet_refs(job);
+    // A job classified before site work (a checkpoint's): its trade site plans by their number
+    // and title, as the import marks them now.
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let title_of = |n: &str| {
+        classified
+            .iter()
+            .find(|c| c.get("number").and_then(Value::as_str).is_some_and(|x| x.split('/').next().unwrap_or(x).trim().eq_ignore_ascii_case(n)))
+            .and_then(|c| c.get("title").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_string()
+    };
+    for r in job.sheet_regions.iter_mut() {
+        if r.not_built == "site/civil" && sitework::trade_site_sheet(&r.discipline, &title_of(&r.number)) {
+            r.not_built = sitework::SITE_WORK.to_string();
+            r.level = sitework::SITE_LEVEL.to_string();
+        }
+    }
     let mut picked: Vec<usize> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (i, r) in job.sheet_regions.iter().enumerate() {
