@@ -20690,7 +20690,7 @@ fn plan_scale(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Option<String>
 /// its callout; each feed whose ends are on the slab level is weighed under the slab against
 /// overhead (reasons, alternative, an RFI to confirm); and a trade with buried work and no plan
 /// gets its generated sheet, registered to the slab level.
-/// Site work's RFIs made at most (the site loads asked about).
+/// Site loads listed at most in the site work's report.
 const MAX_SITE_RFIS: usize = 20;
 
 /// The trades' plans of the site built (Q6358): each site plan an electrical or MEP set issues (or,
@@ -20884,47 +20884,11 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
             color_index: 1,
         });
     }
-    // The site loads the panel schedules name that no site plan carries: asked about.
+    // The site loads the panel schedules name that no site plan carries: the breakers' review
+    // item for each row asks where it is (its feed runs underground once it is located).
     let carried: BTreeSet<String> = all.circuits.keys().map(|k| k.to_ascii_uppercase()).collect();
-    let loads = sitework::site_loads(&sp, &carried);
-    let mut asked: Vec<String> = Vec::new();
-    for l in loads.iter().take(MAX_SITE_RFIS) {
-        if sp.rfis.len() >= cadaddy_walk3d::rfi::MAX_RFIS {
-            break;
-        }
-        let mut hsh: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in format!("{}-{}", l.panel, l.number).bytes() {
-            hsh = (hsh ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
-        }
-        let id = format!("RFI-SITE{:08x}", hsh as u32);
-        let kind = cadaddy_walk3d::RfiKind::Conflict;
-        let rfi = cadaddy_walk3d::Rfi {
-            id: id.clone(),
-            kind: Some(kind),
-            severity: kind.severity(),
-            level: slab.clone(),
-            about: format!("site load: panel {} circuit {}", l.panel, l.number),
-            issue: format!(
-                "Panel {} circuit {} ({}, {}) feeds a load on the site that no site plan locates or draws a route to. Where is it?",
-                l.panel, l.number, l.description, l.source
-            ),
-            assumed: format!("Not built until located; then its feed runs underground from the building to it ({}).", rules.cover_source),
-            proposed: Some(format!(
-                "Locate the {} on the site plan: its circuit is trenched from the building wall nearest panel {} to it",
-                l.description.trim().to_ascii_lowercase(),
-                l.panel
-            )),
-            ..cadaddy_walk3d::Rfi::default()
-        };
-        match sp.rfis.iter_mut().find(|r| r.id == id) {
-            Some(old) => {
-                old.issue = rfi.issue;
-                old.assumed = rfi.assumed;
-            }
-            None => sp.rfis.push(rfi),
-        }
-        asked.push(format!("{}-{} {}", l.panel, l.number, l.description));
-    }
+    let asked: Vec<String> =
+        sitework::site_loads(&sp, &carried).iter().take(MAX_SITE_RFIS).map(|l| format!("{}-{} {}", l.panel, l.number, l.description)).collect();
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     // Built: the luminaires, then the concrete and the gear and runs, moved as the build moved
     // the slab level to stack it; each element marked as site work.
@@ -21022,7 +20986,7 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
         );
     }
     if !asked.is_empty() {
-        progress_line(&format!("  site work: site loads no site plan carries (asked): {}", asked.join("; ")));
+        progress_line(&format!("  site work: site loads no site plan carries (the breakers' review asks where each is): {}", asked.join("; ")));
     }
     result["site_work"] = json!({
         "sheets": lines,

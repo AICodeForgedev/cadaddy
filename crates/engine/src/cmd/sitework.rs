@@ -2040,6 +2040,11 @@ pub(crate) fn forget(sp: &mut BuildingSpec) -> usize {
     before - (sp.tags.len() + sp.mep.equipment.len() + sp.concrete.elements.len() + sp.concrete.pads.len() + sp.mep.runs.len())
 }
 
+/// Whether a panel schedule circuit's load is on the site (its description's words).
+pub(crate) fn is_site_load(description: &str) -> bool {
+    has_any(&description.to_ascii_uppercase(), &rules().site_load_words)
+}
+
 /// A panel schedule circuit whose load is on the site.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SiteLoad {
@@ -2052,12 +2057,10 @@ pub(crate) struct SiteLoad {
 /// The panel schedules' circuits whose load is on the site (their descriptions' words) and that
 /// no site work carries (`built`: the circuit tags the site plans built, `LP-7`).
 pub(crate) fn site_loads(sp: &BuildingSpec, built: &BTreeSet<String>) -> Vec<SiteLoad> {
-    let r = rules();
     let mut out = Vec::new();
     for ps in sp.mep.panel_schedules.iter().take(2_000) {
         for c in ps.circuits.iter().take(500) {
-            let up = c.description.to_ascii_uppercase();
-            if !has_any(&up, &r.site_load_words) {
+            if !is_site_load(&c.description) {
                 continue;
             }
             let label = format!("{}-{}", ps.panel.trim(), c.number.trim()).to_ascii_uppercase();
@@ -2407,7 +2410,7 @@ mod tests {
                 sp.mep.equipment.iter().filter(|e| e.sources.contains_key(MARK)).count(),
                 sp.concrete.elements.iter().filter(|e| e.id.starts_with(CONCRETE_PREFIX)).count(),
                 sp.mep.runs.iter().filter(|r| r.source_sheet.starts_with(SOURCE_PREFIX)).count(),
-                sp.rfis.iter().filter(|r| r.id.starts_with("RFI-SITE")).count(),
+                sp.rfis.len(),
                 marked,
             ));
             assert!(marked > 0, "the built site work is marked");
@@ -2417,7 +2420,8 @@ mod tests {
         }
         // A rerun builds the same again, never twice.
         assert_eq!(counts.first(), counts.get(1), "{counts:?}");
-        assert!(counts.first().is_some_and(|c| c.0 == 2 && c.1 == 3 && c.2 == 2 && c.3 > 4 && c.4 == 1), "{counts:?}");
+        // No review item of its own: the breakers' check asks about the sign's row.
+        assert!(counts.first().is_some_and(|c| c.0 == 2 && c.1 == 3 && c.2 == 2 && c.3 > 4 && c.4 == 0), "{counts:?}");
     }
 
     /// A site plan tagging its pole lights by their circuit only (no type mark), a monument sign
@@ -2488,6 +2492,21 @@ mod tests {
         }
         let carried: BTreeSet<String> = built.circuits.keys().cloned().collect();
         assert!(site_loads(&sp, &carried).is_empty(), "{carried:?}");
+    }
+
+    #[test]
+    fn a_site_load_no_plan_carries_is_asked_where_it_is() {
+        let row = |d: &str| super::super::breakers::Mismatch {
+            kind: "row_no_plan".into(),
+            panel: "LP".into(),
+            circuit: "LP-9".into(),
+            description: d.into(),
+            sheet: "E-601".into(),
+            ..Default::default()
+        };
+        let sign = row("MONUMENT SIGN").title();
+        assert!(sign.contains("on the site") && sign.contains("where is it?") && sign.contains("underground"), "{sign}");
+        assert!(!row("RECEPTACLES").title().contains("on the site"));
     }
 
     #[test]
