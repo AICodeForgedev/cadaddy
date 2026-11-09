@@ -93,12 +93,13 @@ fn run_attout(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => targets(s, p)?,
         None => s.selection(),
     };
+    let path = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).map_or_else(|| default_path(s), str::to_string);
+    crate::cmd::exchange::guard_typed_output(s, cmd, p, &path, &["txt", "tsv"], "tab-separated text")?;
     let refs = references(s, &picked)?;
     if refs.is_empty() {
         return Err(bad(cmd, "no block references with attributes"));
     }
     let (text, rows) = attout_text(s, &refs)?;
-    let path = str_param(p, "path").map_or_else(|| default_path(s), str::to_string);
     write_file(cmd, &path, &text)?;
     Ok(json!({ "path": path, "rows": rows }))
 }
@@ -193,7 +194,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("attout", "Export Attribute Information", run_attout)
             .menu(&["Tools", "Express Tools", "Blocks", "Export Attribute Information"])
-            .params("{path? (default: the drawing's name with .txt, by the drawing), handles? (block references; default the selection, else every one with attributes in the current space)} → {path, rows}")
+            .params("{path? (.txt or .tsv; default: the drawing's name with .txt, by the drawing), handles? (block references; default the selection, else every one with attributes in the current space), force?: bool (replace an existing file)} → {path, rows}")
             .noundo()
             .interactive(|s| Ok(Box::new(AttFileM::new(s, true)))),
         CommandSpec::new("attin", "Import Attribute Information", run_attin)
@@ -219,7 +220,8 @@ impl AttFileM {
     fn finish(&self, s: &mut Session, hs: Vec<Handle>) -> Result<Step> {
         let path = self.path.clone().unwrap_or_else(|| self.default.clone());
         let r = if self.out {
-            run_attout(s, &json!({ "path": path, "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+            // The name was typed (or its default taken) at the prompt: replacing that file is the user's choice.
+            run_attout(s, &json!({ "path": path, "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>(), "force": true }))
                 .map(|r| format!("{} block reference(s) written to {path}", r["rows"]))
         } else {
             run_attin(s, &json!({ "path": path })).map(|r| format!("{} attribute value(s) updated from {} row(s).", r["updated"], r["rows"]))

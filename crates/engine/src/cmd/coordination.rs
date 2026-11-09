@@ -48,7 +48,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("coordination.inspect", "Inspect Element", run_inspect)
             .params("{handle} → {handle, type, category, system, level, trade, source, status, confidence, sheet, spec, validators}")
             .noundo(),
-        CommandSpec::new("coordination.bcf", "BCF Export", run_bcf).params("{path, tolerance_in?} → {topics, path}").noundo(),
+        CommandSpec::new("coordination.bcf", "BCF Export", run_bcf)
+            .params("{path (.bcf or .bcfzip), tolerance_in?: inches, force?: bool (replace an existing file)} → {topics, path}")
+            .noundo(),
         // Mode, isolate, colour load and view restore change layers and visibility: each is one
         // undo step (a call that changes nothing leaves none).
         CommandSpec::new("coordination.mode", "Coordination Mode", run_mode)
@@ -610,7 +612,9 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
 // ─── BCF export ───────────────────────────────────────────────────────────────
 
 fn run_bcf(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| EngineError::Other("path required".into()))?;
+    let path =
+        p.get("path").and_then(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| EngineError::Other("path required".into()))?;
+    super::exchange::guard_typed_output(s, "coordination.bcf", p, path, &["bcf", "bcfzip"], "a BCF archive")?;
     let raw = s.execute("bim.clash", &json!({ "tolerance": p.get("tolerance_in") }))?;
     let clashes = raw.get("clashes").and_then(Value::as_array).cloned().unwrap_or_default();
 

@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handle? | handles? (default: selection)} → {walls: [{handle, level, wallType, assembly?: {tag, description, layers: [{material, thickness, side, category, inCavity}], height?, fireRating?, acousticRating?, external, thickness, head?: {track, trackKind, to (deck|ceiling), deflectionIn?, bottomTrack, detail?, text}}, grossAreaSqFt?, finishFaces?: [{side, room, board, finish}]}, ...], count}")
             .noundo(),
         CommandSpec::new("drywall.takeoff", "Drywall Takeoff", run_takeoff).long()
-            .params("{handles? | levels?: [name, ...] | wallTypes?: [name, ...] | rooms?: [name, ...], waste?: percent (default 10), sheetSize?: [w,h] feet (default [4,8]), file?: path (.csv), groupBy?: \"level\" | \"room\" | \"wallType\" (default \"wallType\"), ceilings?: bool (default true; off when handles, wallTypes or rooms are given)} → {rows: [{group, boards: [{material, thicknessIn, side, areaSqFt, sheets, sheetSize}], studs: {lengthFt, count, material, spacingIn}, track: {lengthFt} (plain top and bottom track), headTrack: [{part: top track|bottom track, wallType, material, lengthFt}] (walls marked on the plans whose type has a head of wall, by kind; a double track or angles count both runs), insulation: {areaSqFt, material}, cornerBead: {lengthFt}, trim: {lengthFt}}], ceilings: [{level, part: ceiling|ceiling framing|soffit bottom|soffit sides|soffit framing, assembly, material, layer, quantity, unit: sf|lf, sheets?}] (the spec's ceiling and soffit types, as rcp.takeoff), totals (boardAreaSqFt and sheets: walls; ceilingBoardAreaSqFt, soffitBoardAreaSqFt, ceilingSheets, ceilingFramingLengthFt; trackLengthFt = plain + head + bottom track, each wall once), waste}")
+            .params("{handles? | levels?: [name, ...] | wallTypes?: [name, ...] | rooms?: [name, ...], waste?: percent (default 10), sheetSize?: [w,h] feet (default [4,8]), file?: path (.csv; an existing file only with force), force?: bool, groupBy?: \"level\" | \"room\" | \"wallType\" (default \"wallType\"), ceilings?: bool (default true; off when handles, wallTypes or rooms are given)} → {rows: [{group, boards: [{material, thicknessIn, side, areaSqFt, sheets, sheetSize}], studs: {lengthFt, count, material, spacingIn}, track: {lengthFt} (plain top and bottom track), headTrack: [{part: top track|bottom track, wallType, material, lengthFt}] (walls marked on the plans whose type has a head of wall, by kind; a double track or angles count both runs), insulation: {areaSqFt, material}, cornerBead: {lengthFt}, trim: {lengthFt}}], ceilings: [{level, part: ceiling|ceiling framing|soffit bottom|soffit sides|soffit framing, assembly, material, layer, quantity, unit: sf|lf, sheets?}] (the spec's ceiling and soffit types, as rcp.takeoff), totals (boardAreaSqFt and sheets: walls; ceilingBoardAreaSqFt, soffitBoardAreaSqFt, ceilingSheets, ceilingFramingLengthFt; trackLengthFt = plain + head + bottom track, each wall once), waste}")
             .noundo(),
         CommandSpec::new("drywall.viewmode", "Drywall View Mode", run_viewmode)
             .params("{mode: \"type\" | \"rating\" | \"boardLayers\" | \"heightRule\" | \"off\"} → {mode, legend: [{label, color}]}")
@@ -216,11 +216,12 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "groupBy must be \"level\", \"room\" or \"wallType\"")),
     }
 
-    // Validate file extension.
-    if let Some(path) = str_param(p, "file")
-        && (path.ends_with(".xlsx") || path.ends_with(".XLSX"))
-    {
-        return Err(bad(cmd, "XLSX export is not supported; use .csv"));
+    // The CSV's name: a .csv file that isn't the open drawing, nor an existing file without force.
+    if let Some(path) = str_param(p, "file").map(str::trim).filter(|x| !x.is_empty()) {
+        if path.to_ascii_lowercase().ends_with(".xlsx") {
+            return Err(bad(cmd, "XLSX export is not supported; use .csv"));
+        }
+        super::exchange::guard_typed_output(s, cmd, p, path, &["csv"], "a CSV table")?;
     }
 
     // Collect all WALLGEN wall meshes.
@@ -472,7 +473,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     // Write CSV if requested.
-    if let Some(path) = str_param(p, "file") {
+    if let Some(path) = str_param(p, "file").map(str::trim).filter(|x| !x.is_empty()) {
         write_takeoff_csv(path, &rows, &ceilings, waste_pct)?;
     }
 

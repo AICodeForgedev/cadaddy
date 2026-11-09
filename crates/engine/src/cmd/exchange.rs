@@ -325,11 +325,25 @@ pub(crate) fn guard_params(s: &Session, cmd: &str, p: &Value, keys: &[&str]) -> 
 /// which have no command of their own): the extension must be one of `exts`, not a drawing file name,
 /// not an open drawing, and not an existing file unless the call says `force: true`.
 pub fn guard_image_output(s: &Session, cmd: &str, p: &Value, path: &str, exts: &[&str]) -> Result<()> {
+    guard_typed_output(s, cmd, p, path, exts, "a picture")
+}
+
+/// [`guard_output`] for a command that writes one kind of file (`what`: "a workbook", "a BCF
+/// archive"…): the name's extension must also be one of `exts`, so the bytes written are what the
+/// name says (no workbook under a .pdf name).
+pub(crate) fn guard_typed_output(s: &Session, cmd: &str, p: &Value, path: &str, exts: &[&str], what: &str) -> Result<()> {
     let path = path.trim();
     let got = extension(path);
     if !exts.contains(&got.as_str()) && !DRAWING_EXTS.contains(&got.as_str()) {
         let want = exts.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(" or ");
-        return Err(bad(cmd, format!("`path` ends in .{got} but this writes a picture: use a {want} name")));
+        return Err(bad(
+            cmd,
+            if got.is_empty() {
+                format!("{path} has no extension but this writes {what}: use a {want} name")
+            } else {
+                format!("`path` ends in .{got} but this writes {what}: use a {want} name")
+            },
+        ));
     }
     guard_output(s, cmd, p, path)
 }

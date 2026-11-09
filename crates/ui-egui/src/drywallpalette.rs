@@ -109,9 +109,10 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 app.session.log.push(format!("Drywall takeoff: {total_area:.0} sq ft board, {total_sheets} sheets, {stud_ft:.0} ft studs"));
             }
             if ui.button(crate::tl!("Export CSV...")).clicked() {
+                // The palette's own scratch file, replaced on each export.
                 let path = std::env::temp_dir().join("cadaddy-drywall-takeoff.csv");
                 let path_str = path.to_string_lossy().to_string();
-                match app.session.execute("drywall.takeoff", &json!({"file": path_str})) {
+                match app.session.execute("drywall.takeoff", &json!({"file": path_str, "force": true})) {
                     Ok(_) => app.session.log.push(format!("Takeoff saved to {path_str}")),
                     Err(e) => app.session.log.push(format!("Takeoff export failed: {e}")),
                 }

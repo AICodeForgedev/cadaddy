@@ -553,7 +553,7 @@ fn clashes_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
             // Export to a default path next to the drawing.
             let path = std::env::temp_dir().join("cadaddy_clashes.bcf");
             if let Some(p) = path.to_str() {
-                let _ = app.session.execute("coordination.bcf", &json!({ "path": p }));
+                let _ = app.session.execute("coordination.bcf", &json!({ "path": p, "force": true }));
                 app.set_status(format!("BCF exported to {p}"));
             }
         }
