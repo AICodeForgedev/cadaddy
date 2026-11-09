@@ -215,3 +215,78 @@ fn a_roof_plans_labels_are_no_leaking_rooms() {
     let levels: Vec<Value> = r["issues"].as_array().unwrap().iter().map(|i| i["level"].clone()).collect();
     assert_eq!(levels, [json!("Level 1")], "{r}");
 }
+
+/// The trade pieces (`trade:framing`, `part:atom:<kind>`) of the built model: each piece's body,
+/// its level and the element it is part of.
+fn pieces(s: &Session, kind: &str) -> Vec<(Mesh, String, String)> {
+    let part = format!("part:atom:{kind}");
+    s.doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter(|e| made_as(e).as_deref() == Some("atom"))
+        .filter(|e| e.common.xdata.iter().any(|t| t.value == "trade:framing") && e.common.xdata.iter().any(|t| t.value == part))
+        .filter_map(|e| {
+            let EntityKind::Mesh(m) = &e.kind else { return None };
+            let tags: Vec<&str> = e.common.xdata.iter().map(|t| t.value.as_str()).collect();
+            let level = tags.get(2).map(|t| t.to_string()).unwrap_or_default();
+            let host = cadaddy_engine::doc::props::read(&e.common.xdata).get("host").map(|p| p.text()).unwrap_or_default();
+            Some((m.clone(), level, host))
+        })
+        .collect()
+}
+
+/// Q6405: one roof framing system per roof. A framed roof sloped ¼"/ft: the framing trade's
+/// trusses are the roof's members (one each, hosted on it, its sloped body, on the roof level),
+/// never a second flat layout over the storey under it; the roof's sheathing lies on them.
+#[test]
+fn a_framed_roofs_trade_trusses_are_its_members_not_a_second_layout() {
+    let mut s = building(18.0, None, trusses(), json!([]));
+    let mut sp = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+    for r in sp["exterior"]["roofs"].as_array_mut().unwrap() {
+        r["slope"] = json!({"down": [1, 0], "rise_per_ft": 0.25 / 12.0});
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let members = made(&s, "roof-framing");
+    assert_eq!(members.len(), 19, "{r}");
+    let handles: Vec<String> =
+        s.doc().unwrap().model.iter().filter(|e| made_as(e).as_deref() == Some("roof-framing")).map(|e| e.handle.hex()).collect();
+    // The members rise with the roof: the high end's are deeper than the low end's.
+    let tops: Vec<f64> = members.iter().map(|(m, _)| z(m).1).collect();
+    assert!(tops.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - tops.iter().cloned().fold(f64::INFINITY, f64::min) > 6.0, "{tops:?}");
+    let trusses = pieces(&s, "truss");
+    assert_eq!(trusses.len(), members.len(), "one truss piece per roof member, not a second set: {r}");
+    let mut hosts: Vec<&str> = trusses.iter().map(|(_, _, h)| h.as_str()).collect();
+    hosts.sort_unstable();
+    hosts.dedup();
+    assert_eq!(hosts.len(), members.len(), "each member is one truss piece's host");
+    for (m, level, host) in &trusses {
+        assert_eq!(level, "Roof", "on the roof level, as its member");
+        assert!(handles.iter().any(|h| h == host), "hosted on a roof member: {host}");
+        let member = &members[handles.iter().position(|h| h == host).unwrap()].0;
+        assert_eq!(z(m), z(member), "the member's sloped body, not a flat 2' box at the bearing");
+        assert_eq!(xy(m), xy(member));
+    }
+    // The roof's sheathing lies on the members under it: none below their tops' lowest, and it
+    // rises with them.
+    let low = tops.iter().cloned().fold(f64::INFINITY, f64::min);
+    let sheathing: Vec<(Mesh, String, String)> = pieces(&s, "sheathing").into_iter().filter(|(_, l, _)| l == "Roof").collect();
+    assert!(!sheathing.is_empty(), "{r}");
+    assert!(sheathing.iter().all(|(m, _, _)| z(m).0 >= low - 1e-6), "{:?}", sheathing.iter().map(|p| z(&p.0)).collect::<Vec<_>>());
+    let bottoms: Vec<f64> = sheathing.iter().map(|(m, _, _)| z(m).0).collect();
+    assert!(bottoms.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - bottoms.iter().cloned().fold(f64::INFINITY, f64::min) > 4.0, "{bottoms:?}");
+    // One system: no truss piece clashes with the member it is (nor two trusses share space).
+    let clash = s.execute("bim.clash", &json!({})).unwrap();
+    let pairs: Vec<(String, String)> = clash["clashes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["a"]["handle"].as_str().unwrap_or_default().to_string(), c["b"]["handle"].as_str().unwrap_or_default().to_string()))
+        .collect();
+    let framing: Vec<&str> = handles.iter().map(String::as_str).chain(trusses.iter().map(|(_, _, h)| h.as_str())).collect();
+    assert!(!pairs.iter().any(|(a, b)| framing.contains(&a.as_str()) && framing.contains(&b.as_str())), "{clash}");
+    // Nothing of the roof's framing is laid on the storey under it.
+    assert!(pieces(&s, "truss").iter().all(|(_, l, _)| l != "Level 2"));
+    assert!(pieces(&s, "sheathing").iter().all(|(m, l, _)| l != "Level 2" || z(m).1 <= 216.0 + 1e-6), "no roof sheathing on Level 2");
+}

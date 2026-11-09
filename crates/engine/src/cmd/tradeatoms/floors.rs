@@ -9,8 +9,10 @@
 //! - The floors above, where the documents give their framing (an I-joist or floor truss
 //!   submittal): joists at their spacing across each floor's shorter span, rim board round it,
 //!   subfloor panels over it, and the underlayment the documents give.
-//! - The roof, where the documents give trusses: trusses at their spacing over the top storey
-//!   and the roof's sheathing panels.
+//! - The roof: a roof the build framed (its members, Q6314) is framed by those members, one
+//!   piece each with the member's body (bearing, spacing, slope) and the roof's sheathing on
+//!   them (Q6405: one framing system per roof); else, where the documents give trusses, trusses
+//!   at their spacing over the top storey and the roof's sheathing panels.
 
 use super::*;
 use cadaddy_walk3d::concrete::{ConcreteElement, Rebar};
@@ -335,8 +337,14 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
                 "the documents read give no floor framing (no joist or floor truss submittal): the upper floors' framing is not laid out".into(),
             );
         }
-        // The roof: over the top storey, trusses where the documents give them.
-        if r.fact("framing.roof_framing").is_some() || !r.is_default("framing.truss_spacing_in") {
+        // The roof: one framing system per roof (Q6405). A roof the build framed (its members
+        // from the roof plans' notes, bearing, spacing and slope) is framed by those members:
+        // the trade's pieces are they, never a second layout over the storey under it.
+        let members = roof_members(d, upf);
+        if !members.is_empty() {
+            framed_roof(d, &members, r, upf, batch);
+        } else if r.fact("framing.roof_framing").is_some() || !r.is_default("framing.truss_spacing_in") {
+            // Over the top storey, trusses where the documents give them.
             let roof: Vec<(String, Handle, Vec<Vec<Vec2>>, f64)> = d
                 .model
                 .iter()
@@ -859,8 +867,7 @@ fn framed_floor(level: &str, host: Handle, polys: &[Vec<Vec2>], top: f64, r: &Ru
         "framing.subfloor_in",
         level,
         host,
-        z1,
-        top,
+        &|_, _| (z1, top),
         upf,
         batch,
     );
@@ -876,7 +883,8 @@ fn framed_floor(level: &str, host: Handle, polys: &[Vec<Vec2>], top: f64, r: &Ru
     }
 }
 
-/// Panels (subfloor, roof sheathing) over polygons, each where it lands.
+/// Panels (subfloor, roof sheathing) over polygons, each where it lands; `z` gives a panel's
+/// underside and top from its corners (a roof's sheathing lies on the members under it).
 #[allow(clippy::too_many_arguments)]
 fn panels(
     polys: &[Vec<Vec2>],
@@ -887,8 +895,7 @@ fn panels(
     thick_path: &str,
     level: &str,
     host: Handle,
-    z0: f64,
-    z1: f64,
+    z: &dyn Fn(Vec2, Vec2) -> (f64, f64),
     upf: f64,
     batch: &mut Batch,
 ) {
@@ -913,6 +920,7 @@ fn panels(
                     r.source("framing.panel_ft"),
                 );
                 let cy = (a.y + b.y) / 2.0;
+                let (z0, z1) = z(a, b);
                 p.blocks.push(Block::new(Vec2::new(a.x, cy), Vec2::new(b.x, cy), b.y - a.y, z0, z1));
                 batch.push(p);
             }
@@ -920,6 +928,175 @@ fn panels(
             n += 1;
         }
         y += pw;
+    }
+}
+
+/// A framing member the roof build made over a roof (`exterior::ROOF_MEMBER`): its element,
+/// level, member kind (`truss`, `joist`), body, and the values it was laid out with.
+struct RoofMember {
+    handle: Handle,
+    level: String,
+    kind: &'static str,
+    mesh: Mesh,
+    block: Block,
+    lf: f64,
+    depth_in: f64,
+    spacing_in: f64,
+}
+
+/// Most roof members a build takes.
+const MAX_ROOF_MEMBERS: usize = 50_000;
+
+/// The roof's framing members the roof build made, in model order.
+fn roof_members(d: &Drawing, upf: f64) -> Vec<RoofMember> {
+    let num = |e: &cadaddy_doc::Entity, k: &str| super::super::bimlook::made_tag(e, k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
+    d.model
+        .iter()
+        .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some(super::super::exterior::ROOF_MEMBER))
+        .filter_map(|e| {
+            let EntityKind::Mesh(m) = &e.kind else { return None };
+            let block = member_block(m)?;
+            let kind = match super::super::bimlook::made_tag(e, "kind") {
+                Some(k) if k.eq_ignore_ascii_case("joist") => "joist",
+                _ => "truss",
+            };
+            Some(RoofMember {
+                handle: e.handle,
+                level: super::super::bspec::made_level(e).unwrap_or_default(),
+                kind,
+                mesh: m.clone(),
+                lf: num(e, "lf").filter(|v| *v > 0.0).unwrap_or(block.a.dist(block.b) / upf),
+                depth_in: num(e, "depth_in").unwrap_or(0.0),
+                spacing_in: num(e, "spacing_in").unwrap_or(0.0),
+                block,
+            })
+        })
+        .take(MAX_ROOF_MEMBERS)
+        .collect()
+}
+
+/// A member's body as a block: the box `wallgen::add_box` makes (its first four corners at the
+/// bottom, `a - n`, `b - n`, `b + n`, `a + n`, the next four over them), else its extents along
+/// their longer side.
+fn member_block(m: &Mesh) -> Option<Block> {
+    if !m.vertices.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    if let [v0, v1, v2, v3, v4, ..] = m.vertices.as_slice()
+        && m.vertices.len() == 8
+    {
+        let p = |v: &Vec3| Vec2::new(v.x, v.y);
+        let b = Block::new((p(v0) + p(v3)) * 0.5, (p(v1) + p(v2)) * 0.5, p(v0).dist(p(v3)), v0.z, v4.z);
+        if b.ok() && b.a.dist(b.b) > 1e-9 {
+            return Some(b);
+        }
+    }
+    let big = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let (lo, hi) = m.vertices.iter().fold((big, -big), |(lo, hi), v| {
+        (Vec3::new(lo.x.min(v.x), lo.y.min(v.y), lo.z.min(v.z)), Vec3::new(hi.x.max(v.x), hi.y.max(v.y), hi.z.max(v.z)))
+    });
+    let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+    let c = Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
+    let b = if w >= h {
+        Block::new(Vec2::new(lo.x, c.y), Vec2::new(hi.x, c.y), h, lo.z, hi.z)
+    } else {
+        Block::new(Vec2::new(c.x, lo.y), Vec2::new(c.x, hi.y), w, lo.z, hi.z)
+    };
+    (b.ok() && b.a.dist(b.b) > 1e-9).then_some(b)
+}
+
+/// A built roof's top faces (its upward faces, in plan): where its sheathing lies.
+fn roof_top(m: &Mesh) -> Vec<Vec<Vec2>> {
+    let mut out = Vec::new();
+    for f in m.faces.iter().take(200_000) {
+        let pts: Vec<Vec3> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize).copied()).collect();
+        if pts.len() < 3 || !pts.iter().all(|p| p.is_finite()) {
+            continue;
+        }
+        // Newell's normal: up-facing and more level than steep.
+        let n = pts
+            .iter()
+            .zip(pts.iter().cycle().skip(1))
+            .fold(Vec3::ZERO, |n, (a, b)| n + Vec3::new((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y)));
+        let len = n.len();
+        if !(len > 1e-12 && n.z / len > 0.5) {
+            continue;
+        }
+        out.push(pts.iter().map(|p| Vec2::new(p.x, p.y)).collect());
+    }
+    out
+}
+
+/// A roof the build framed, as the framing trade's pieces: each of its members one piece (a
+/// truss or a rafter joist), hosted on the member with its body, as the roof plans' notes and
+/// the framing rule laid it out (bearing, spacing, depth, the roof's slope); and the roof's
+/// sheathing panels on the members, hosted on the roof (Q6405: one framing system per roof).
+fn framed_roof(d: &Drawing, members: &[RoofMember], r: &Rules, upf: f64, batch: &mut Batch) {
+    let src = r.fact("framing.roof_framing").map_or_else(|| r.source("framing.truss_spacing_in"), |f| f.source_of());
+    for m in members {
+        let item = if m.kind == "joist" { "roof joist" } else { "roof truss" };
+        let mut p = Piece::new("framing", m.kind, item, &m.level, src.clone());
+        p.host = Some(m.handle);
+        p.length_ft = m.lf;
+        p.size = format!("{}' span", num_text(m.lf.round()));
+        if m.spacing_in > 0.0 {
+            p = p.with("spacing_in", num_text(m.spacing_in), src.clone());
+        }
+        if m.depth_in > 0.0 {
+            p = p.with("depth_in", num_text(m.depth_in), src.clone());
+        }
+        p = p.computed("body", "the roof's member as the roof is framed: its bearing, spacing and depth, up to the deck as the roof slopes");
+        p.blocks.push(m.block);
+        p.custom = Some(m.mesh.clone());
+        batch.push(p);
+    }
+    // The sheathing over each framed roof, on the members under each panel.
+    let levels: BTreeSet<&str> = members.iter().map(|m| m.level.as_str()).collect();
+    let th = r.num("framing.roof_sheathing_in", 0.625);
+    let rt = th / 12.0 * upf;
+    for e in d.model.iter().filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("roof")).take(1000) {
+        let level = super::super::bspec::made_level(e).unwrap_or_default();
+        if !levels.contains(level.as_str()) {
+            continue;
+        }
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let polys = roof_top(m);
+        if polys.is_empty() {
+            continue;
+        }
+        let under: Vec<&RoofMember> = members.iter().filter(|m| m.level == level).collect();
+        // On the highest member under the panel (its tops follow the roof up), else the nearest.
+        let on = |a: Vec2, b: Vec2| {
+            let (lo, hi) = (Vec2::new(a.x.min(b.x), a.y.min(b.y)), Vec2::new(a.x.max(b.x), a.y.max(b.y)));
+            let crosses = |k: &Block| {
+                let (p, q) = (Vec2::new(k.a.x.min(k.b.x), k.a.y.min(k.b.y)), Vec2::new(k.a.x.max(k.b.x), k.a.y.max(k.b.y)));
+                p.x <= hi.x && q.x >= lo.x && p.y <= hi.y && q.y >= lo.y
+            };
+            let c = (lo + hi) * 0.5;
+            let z = under.iter().filter(|m| crosses(&m.block)).map(|m| m.block.z1).fold(f64::NEG_INFINITY, f64::max);
+            let z = if z.is_finite() {
+                z
+            } else {
+                under
+                    .iter()
+                    .min_by(|x, y| x.block.a.lerp(x.block.b, 0.5).dist(c).total_cmp(&y.block.a.lerp(y.block.b, 0.5).dist(c)))
+                    .map_or(0.0, |m| m.block.z1)
+            };
+            (z, z + rt)
+        };
+        panels(
+            &polys,
+            "framing",
+            "sheathing",
+            &format!("{} roof sheathing panel", inches_text(th)),
+            r,
+            "framing.roof_sheathing_in",
+            &level,
+            e.handle,
+            &on,
+            upf,
+            batch,
+        );
     }
 }
 
@@ -957,8 +1134,7 @@ fn trusses(level: &str, host: Handle, polys: &[Vec<Vec2>], z: f64, r: &Rules, up
         "framing.roof_sheathing_in",
         level,
         host,
-        z + depth,
-        z + depth + rt,
+        &|_, _| (z + depth, z + depth + rt),
         upf,
         batch,
     );
