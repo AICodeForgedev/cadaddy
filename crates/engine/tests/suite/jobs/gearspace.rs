@@ -121,8 +121,9 @@ fn pipe_and_duct_drawn_over_a_panel_are_offset_past_it_with_the_drawn_route_kept
             .iter()
             .all(|c| c["design"].as_str().is_some_and(|d| d.contains("as drawn")) && c["reason"].as_str().is_some_and(|w| w.contains("110.26")))
     );
-    // A rebuild finds nothing more to move and the pieces still carry the correction.
-    let again = s.execute("model.build", &json!({})).unwrap();
+    // A rebuild (forced: nothing it reads changed, Q6403) finds nothing more to move and the
+    // pieces still carry the correction.
+    let again = s.execute("model.build", &json!({"force": true})).unwrap();
     assert_eq!(again["gearSpace"]["found"], json!(0), "{}", again["gearSpace"]);
     let p = s.execute("bim.provenance", &json!({"corrections": true})).unwrap();
     let n = p["corrections"]["listed"].as_array().map_or(0, |l| l.iter().filter(|c| c["key"] == "route").count());

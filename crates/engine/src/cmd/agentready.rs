@@ -1045,7 +1045,8 @@ fn built_counts(d: &Drawing) -> BTreeMap<String, BTreeMap<String, usize>> {
 }
 
 fn spec_hash(d: &Drawing) -> String {
-    d.building_spec.as_deref().map_or_else(String::new, hash)
+    // The build's own record (Q6403) is written after the build: no change of the spec.
+    d.building_spec.as_deref().map_or_else(String::new, |t| hash(&super::buildrec::without_record(t)))
 }
 
 fn discipline(part: &str) -> &'static str {

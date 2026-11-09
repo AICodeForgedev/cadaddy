@@ -5570,6 +5570,8 @@ fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Ins
     let secs = started.elapsed().as_secs_f64();
     let line = format!("{}: {step} done in {secs:.1} s", progress_tag(job, StageName::BimBuild));
     report_progress(s, json!({"stage": "bim_build", "step": step, "elapsed_s": secs}), &line);
+    // What the step changed in the built model goes into its record (Q6403).
+    super::buildrec::step(s, step);
 }
 
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {

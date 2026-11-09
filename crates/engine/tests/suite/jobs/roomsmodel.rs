@@ -165,7 +165,8 @@ fn notes_enlarged_views_and_rooms_off_the_plans_are_no_rooms() {
 #[test]
 fn a_rebuild_keeps_one_element_per_room_and_clear_removes_them() {
     let (mut s, _) = built();
-    let r = s.execute("model.build", &json!({})).unwrap();
+    // Laid out again (forced: nothing it reads changed, Q6403).
+    let r = s.execute("model.build", &json!({"force": true})).unwrap();
     assert_eq!(r["rooms"], json!(3), "{r}");
     let count = |s: &Session| s.doc().unwrap().model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("room")).count();
     assert_eq!(count(&s), 3);
