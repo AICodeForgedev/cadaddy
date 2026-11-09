@@ -810,7 +810,9 @@ fn a_door_takes_its_door_schedule_row() {
     fill(&mut s);
     let dp = get(&mut s, &door.hex());
     assert_eq!(dp["number"]["value"], "7", "{dp:#}");
-    for (key, want) in [("type", json!("B")), ("frame", json!("HM")), ("fire_rating", json!("20 MIN")), ("hardware_set", json!("HW-2")), ("width", json!(34.0))] {
+    for (key, want) in
+        [("type", json!("B")), ("frame", json!("HM")), ("fire_rating", json!("20 MIN")), ("hardware_set", json!("HW-2")), ("width", json!(34.0))]
+    {
         assert_eq!(dp[key]["value"], want, "{key}: {dp:#}");
         assert_eq!(dp[key]["source"]["kind"], "schedule", "{key}: {dp:#}");
     }
