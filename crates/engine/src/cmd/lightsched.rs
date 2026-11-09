@@ -53,12 +53,12 @@ const MAX_MARK: usize = 6;
 /// `MVOLT`, `UNV`), or a number or a pair of them (`120`, `120/277`, `347-480`) with a volt unit
 /// or none (`schedules.voltage_units`: `277V`, `24VDC`).
 fn voltage_shaped(v: &str) -> bool {
-    use cadaddy_mepfix::wordrules::words;
+    use cadaddy_mepfix::wordrules;
     let u = v.trim().to_ascii_uppercase();
-    if u.is_empty() || words("schedules.voltage_words").contains(&u.as_str()) {
+    if u.is_empty() || wordrules::words("schedules.voltage_words").contains(&u.as_str()) {
         return !u.is_empty();
     }
-    let mut units: Vec<&str> = words("schedules.voltage_units").to_vec();
+    let mut units: Vec<&str> = wordrules::words("schedules.voltage_units").to_vec();
     units.sort_by_key(|w| std::cmp::Reverse(w.len()));
     let number = units.iter().find_map(|w| u.strip_suffix(w)).unwrap_or(&u).trim_end();
     number.chars().any(|c| c.is_ascii_digit()) && number.chars().all(|c| c.is_ascii_digit() || matches!(c, '/' | '-' | '.'))
@@ -77,15 +77,16 @@ fn heads(t: &GridTable, c: usize, w: &str) -> bool {
 /// names. The plans' tags (`plan_tags`, upper case; none: no check) are the check: when that
 /// column's cells match none of them and another such column's do, that one.
 fn mark_column(t: &GridTable, plan_tags: &BTreeSet<String>) -> Option<usize> {
-    use cadaddy_mepfix::wordrules::words;
+    use cadaddy_mepfix::wordrules;
     let cells = |c: usize| -> Vec<&str> { t.rows.iter().map(|r| t.cell(r, Some(c))).filter(|v| !v.is_empty()).collect() };
     let marks = |c: usize| {
         let v = cells(c);
         !v.is_empty() && 2 * v.iter().filter(|x| mark_shaped(x)).count() > v.len()
     };
-    let other_field = |c: usize| words("schedules.not_mark_heading_words").iter().any(|w| heads(t, c, w));
-    let named: Vec<usize> =
-        (0..t.headers.len()).filter(|c| !other_field(*c) && words("schedules.luminaire_type_headings").iter().any(|w| heads(t, *c, w))).collect();
+    let other_field = |c: usize| wordrules::words("schedules.not_mark_heading_words").iter().any(|w| heads(t, c, w));
+    let named: Vec<usize> = (0..t.headers.len())
+        .filter(|c| !other_field(*c) && wordrules::words("schedules.luminaire_type_headings").iter().any(|w| heads(t, *c, w)))
+        .collect();
     let mut candidates: Vec<usize> = named.iter().copied().filter(|c| marks(*c)).collect();
     candidates.extend((0..t.headers.len()).filter(|c| !other_field(*c) && marks(*c) && !named.contains(c)));
     let on_plans = |c: usize| cells(c).iter().any(|v| plan_tags.contains(&v.to_ascii_uppercase()));
