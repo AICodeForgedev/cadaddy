@@ -321,13 +321,36 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
     if want("framing") {
         let joists = r.fact("framing.floor_framing").is_some() || !r.is_default("framing.joist_spacing_in");
         let mut framed = 0;
-        for level in levels.iter().skip(1) {
+        // The walls the floors bear on: each floor's joists span between the lines of the
+        // storey's walls under it that carry them.
+        let walls: Vec<super::walls::Wall> = if joists {
+            d.model
+                .iter()
+                .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("wall"))
+                .filter_map(|e| super::walls::read_wall(e))
+                .take(MAX_ELEMENTS)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for (i, level) in levels.iter().enumerate().skip(1) {
             if super::super::wallgen::roof_level(&sp.levels, &level.name) {
                 continue;
             }
             let Some((lv, h, polys, z)) = floors.iter().find(|f| f.0.eq_ignore_ascii_case(&level.name)) else { continue };
             if joists {
-                framed_floor(lv, *h, polys, *z, r, upf, batch);
+                // The storey's walls under the floor (over its plate), else the floor's own.
+                let below = levels.get(i.saturating_sub(1)).map(|l| l.name.as_str()).unwrap_or_default();
+                let over = |w: &&super::walls::Wall| {
+                    bounds_of(polys).is_some_and(|(lo, hi)| {
+                        w.ends().iter().any(|p| p.x >= lo.x - upf && p.x <= hi.x + upf && p.y >= lo.y - upf && p.y <= hi.y + upf)
+                    })
+                };
+                let mut under: Vec<&super::walls::Wall> = walls.iter().filter(|w| w.level.eq_ignore_ascii_case(below)).filter(over).collect();
+                if under.is_empty() {
+                    under = walls.iter().filter(|w| w.level.eq_ignore_ascii_case(lv)).filter(over).collect();
+                }
+                framed_floor(lv, *h, polys, *z, &under, sp, r, upf, batch);
                 framed += 1;
             }
         }
@@ -821,32 +844,355 @@ fn slab_on_grade(
     let _ = cr;
 }
 
-/// A floor framed with joists across its shorter span, rim board round it, subfloor panels and
-/// the documents' underlayment.
-fn framed_floor(level: &str, host: Handle, polys: &[Vec<Vec2>], top: f64, r: &Rules, upf: f64, batch: &mut Batch) {
+/// How one floor is framed: its members, their depth, spacing and series, each with where it came
+/// from. The floor's own (a joist layout's level heading, its framing plan's note) comes first;
+/// else the documents' value for the building, else the rules' default, marked as not given for
+/// the level.
+struct FloorJoists {
+    member: String,
+    depth: f64,
+    depth_src: Source,
+    /// `level`, `building` or `default`: whether the documents give this floor its depth.
+    depth_from: &'static str,
+    /// Another document's depth for the floor (the framing plan's note beside a joist
+    /// submittal's): the design value kept beside the one built.
+    design_depth: Option<(f64, Source)>,
+    spacing: f64,
+    spacing_src: Source,
+    series: String,
+    src: Source,
+}
+
+fn floor_joists(r: &Rules, level: &str) -> FloorJoists {
+    let mine = |key: &'static str| r.facts.iter().filter(move |f| f.key == key && docs::scope_level(f).is_some_and(|c| docs::same_level(c, level)));
+    let by_level = |key: &'static str| r.facts.iter().any(|f| f.key == key && docs::scope_level(f).is_some());
+    let depths: Vec<(f64, Source)> = mine("framing.joist_depth_in").filter_map(|f| f.number.map(|n| (n, f.source_of()))).collect();
+    let building_depth = r.num("framing.joist_depth_in", 11.875);
+    let (depth, depth_src, depth_from) = match depths.first() {
+        Some((n, s)) => (*n, s.clone(), "level"),
+        None if r.is_default("framing.joist_depth_in") => (building_depth, r.source("framing.joist_depth_in"), "default"),
+        // The documents give depths by level, but none for this one: the building's is a default
+        // here.
+        None if by_level("framing.joist_depth_in") => (building_depth, r.source("framing.joist_depth_in"), "default"),
+        None => (building_depth, r.source("framing.joist_depth_in"), "building"),
+    };
+    let design_depth = depths.iter().skip(1).find(|(n, _)| (n - depth).abs() > 1e-6).cloned();
+    let (spacing, spacing_src) = match mine("framing.joist_spacing_in").find_map(|f| f.number.map(|n| (n, f.source_of()))) {
+        Some(x) => x,
+        None => (r.num("framing.joist_spacing_in", 16.0), r.source("framing.joist_spacing_in")),
+    };
+    let building_series = || {
+        let same_depth = depth_from != "level" || (building_depth - depth).abs() < 1e-6;
+        r.facts.iter().find(|f| f.key == "framing.joist_series" && docs::scope_level(f).is_none()).filter(|_| same_depth).map(|f| f.value.clone())
+    };
+    let series = mine("framing.joist_series").map(|f| f.value.clone()).next().or_else(building_series).unwrap_or_default();
+    let member = mine("framing.floor_member").map(|f| f.value.clone()).next().unwrap_or_else(|| "joist".into());
+    let src = mine("framing.floor_framing")
+        .next()
+        .or_else(|| r.facts.iter().find(|f| f.key == "framing.floor_framing" && docs::scope_level(f).is_none()))
+        .map_or_else(|| r.source("framing.joist_spacing_in"), |f| f.source_of());
+    FloorJoists {
+        member,
+        depth: depth.clamp(4.0, 48.0),
+        depth_src,
+        depth_from,
+        design_depth,
+        spacing: spacing.clamp(8.0, 48.0),
+        spacing_src,
+        series,
+        src,
+    }
+}
+
+/// The joist bearing rule's data ([`BEARING_RULE`] in `tradepractice.json`).
+const BEARING_RULE: &str = "S-FLOOR-JOIST-BEARING";
+
+/// A line inside a floor its joists bear on: `at` along the joists, from `lo` to `hi` across
+/// them, and what it is.
+#[derive(Clone, Debug)]
+struct Bearing {
+    at: f64,
+    lo: f64,
+    hi: f64,
+    what: String,
+}
+
+/// The lines a floor's joists bear on between its outside walls ([`BEARING_RULE`]): the walls under
+/// it that run across the joists and carry them — one its type calls bearing, or a line of walls
+/// running most of the floor's length (a double-loaded corridor's walls, a bearing line with its
+/// doors) — never one its type calls non-bearing. A partition legend's stud material doesn't
+/// decide it: the structure's notes govern what bears (a wood-framed floor's corridor walls are
+/// framed to carry it whatever the legend reads), and a short partition never makes a line.
+fn bearing_lines(walls: &[&super::walls::Wall], sp: &BuildingSpec, dir: Vec2, polys: &[Vec<Vec2>], upf: f64) -> (Vec<Bearing>, BearingLook) {
+    let mut look = BearingLook { walls: walls.len(), ..BearingLook::default() };
+    let Some((lo, hi)) = bounds_of(polys) else { return (Vec::new(), look) };
+    let rule = super::super::provenance::rule_data(BEARING_RULE);
+    let num = |k: &str, d: f64| rule.get(k).and_then(Value::as_f64).filter(|x| x.is_finite() && *x >= 0.0).unwrap_or(d);
+    let words = |k: &str| -> Vec<String> {
+        rule.get(k)
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_ascii_uppercase).take(64).collect())
+            .unwrap_or_default()
+    };
+    let (bearing_words, non_words) = (words("bearing_words"), words("non_bearing_words"));
+    let fraction = num("line_fraction", 0.75).clamp(0.05, 1.0);
+    let tol = num("line_tol_in", 6.0) / 12.0 * upf;
+    let skew = num("angle_tol_deg", 10.0).clamp(0.0, 45.0).to_radians().sin();
+    let across = Vec2::new(-dir.y, dir.x);
+    let corners = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
+    let (a0, a1) = corners.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(m, x), c| (m.min(c.dot(across)), x.max(c.dot(across))));
+    let length = a1 - a0;
+    if !(length.is_finite() && length > 0.0) {
+        return (Vec::new(), look);
+    }
+    let mut out: Vec<Bearing> = Vec::new();
+    // (at, lo, hi) of the walls that may make a bearing line.
+    let mut lines: Vec<(f64, f64, f64, &str)> = Vec::new();
+    for w in walls.iter().take(MAX_ELEMENTS) {
+        if w.u.dot(dir).abs() > skew {
+            continue;
+        }
+        let [p, q] = w.ends();
+        let (s0, s1) = (p.dot(across).min(q.dot(across)).max(a0), p.dot(across).max(q.dot(across)).min(a1));
+        if s1 <= s0 {
+            continue;
+        }
+        look.across += 1;
+        let at = (p.dot(dir) + q.dot(dir)) / 2.0;
+        let wt = sp.wall_types.iter().find(|t| !w.wall_type.is_empty() && t.name.eq_ignore_ascii_case(&w.wall_type));
+        let text = wt.map(|t| {
+            let mut x = t.name.to_ascii_uppercase();
+            if let Some(a) = &t.assembly {
+                x.push(' ');
+                x.push_str(&a.tag.to_ascii_uppercase());
+                x.push(' ');
+                x.push_str(&a.description.to_ascii_uppercase());
+                for l in a.layers.iter().take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS) {
+                    if l.category.eq_ignore_ascii_case("framing") {
+                        x.push(' ');
+                        x.push_str(&l.material.to_ascii_uppercase());
+                    }
+                }
+            }
+            x
+        });
+        let text = text.unwrap_or_default();
+        if non_words.iter().any(|n| text.contains(n.as_str())) {
+            look.not_bearing += 1;
+            continue;
+        }
+        if bearing_words.iter().any(|b| text.contains(b.as_str())) {
+            out.push(Bearing { at, lo: s0 - tol, hi: s1 + tol, what: format!("bearing wall type {}", w.wall_type) });
+            continue;
+        }
+        lines.push((at, s0, s1, w.wall_type.as_str()));
+    }
+    // The other walls' lines: the walls on one line (within the tolerance), and the share of the
+    // floor's length they run.
+    lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut i = 0usize;
+    while i < lines.len() {
+        let first = lines.get(i).map_or(0.0, |l| l.0);
+        let group: Vec<(f64, f64, f64, &str)> = lines.iter().skip(i).take_while(|l| l.0 - first <= tol).copied().collect();
+        i += group.len().max(1);
+        let mut spans: Vec<(f64, f64)> = group.iter().map(|g| (g.1, g.2)).collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut run = 0.0;
+        let mut cur: Option<(f64, f64)> = None;
+        for (s0, s1) in spans {
+            cur = match cur {
+                Some((c0, c1)) if s0 <= c1 => Some((c0, c1.max(s1))),
+                Some((c0, c1)) => {
+                    run += c1 - c0;
+                    Some((s0, s1))
+                }
+                None => Some((s0, s1)),
+            };
+        }
+        if let Some((c0, c1)) = cur {
+            run += c1 - c0;
+        }
+        let share = run / length;
+        look.longest = look.longest.max(share);
+        if share + 1e-9 >= fraction {
+            let n = group.len() as f64;
+            let at = group.iter().map(|g| g.0).sum::<f64>() / n;
+            let (glo, ghi) = group.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(m, x), g| (m.min(g.1), x.max(g.2)));
+            // Its ends reach the walls it meets.
+            out.push(Bearing {
+                at,
+                lo: glo - tol,
+                hi: ghi + tol,
+                what: format!("a wall line running {}% of the floor's length{}", (share * 100.0).round(), types_of(&group)),
+            });
+        }
+    }
+    out.truncate(1000);
+    look.fraction = fraction;
+    (out, look)
+}
+
+/// The wall types of a line of walls, the longest run first (`: types B6A, A5A`).
+fn types_of(group: &[(f64, f64, f64, &str)]) -> String {
+    let mut by: Vec<(&str, f64)> = Vec::new();
+    for g in group.iter().filter(|g| !g.3.is_empty()) {
+        match by.iter_mut().find(|b| b.0 == g.3) {
+            Some(b) => b.1 += g.2 - g.1,
+            None => by.push((g.3, g.2 - g.1)),
+        }
+    }
+    by.sort_by(|a, b| b.1.total_cmp(&a.1));
+    if by.is_empty() { String::new() } else { format!(": types {}", by.iter().take(3).map(|b| b.0).collect::<Vec<_>>().join(", ")) }
+}
+
+/// What [`bearing_lines`] looked at: the walls under the floor, those across its joists, those
+/// their types keep from bearing, the longest line's share of the floor's length and the share a
+/// bearing line needs.
+#[derive(Clone, Copy, Debug, Default)]
+struct BearingLook {
+    walls: usize,
+    across: usize,
+    not_bearing: usize,
+    longest: f64,
+    fraction: f64,
+}
+
+/// The pieces a joist line from `a` to `b` (along `dir`, `x` across) is cut into at the bearing
+/// lines it crosses, each piece's ends: no cut closer than `min_span` to another, nor than `end`
+/// to the line's ends (a bearing that near the floor's edge is the joists' end bearing: they run
+/// on over it to the edge, a cantilever of one piece).
+fn joist_spans(a: Vec2, b: Vec2, dir: Vec2, x: f64, bearings: &[Bearing], min_span: f64, end: f64) -> Vec<(Vec2, Vec2, Option<String>)> {
+    let (ta, tb) = (a.dot(dir), b.dot(dir));
+    let (ta, tb, a, b) = if ta <= tb { (ta, tb, a, b) } else { (tb, ta, b, a) };
+    let eps = 1e-6 * (1.0 + x.abs());
+    let end = end.max(min_span);
+    let mut cuts: Vec<(f64, &str)> = bearings
+        .iter()
+        .filter(|g| g.lo - eps <= x && x <= g.hi + eps && g.at > ta + end && g.at < tb - end)
+        .map(|g| (g.at, g.what.as_str()))
+        .collect();
+    cuts.sort_by(|p, q| p.0.total_cmp(&q.0));
+    let mut kept: Vec<(f64, &str)> = Vec::new();
+    for c in cuts {
+        if kept.last().is_none_or(|k| c.0 - k.0 >= min_span) {
+            kept.push(c);
+        }
+    }
+    if kept.is_empty() {
+        return vec![(a, b, None)];
+    }
+    let at = |t: f64| a + dir * (t - ta);
+    let mut out = Vec::new();
+    let mut from = (ta, None::<&str>);
+    for (t, what) in kept.iter().copied().chain(std::iter::once((tb, ""))) {
+        let ends: Vec<&str> = [from.1, (!what.is_empty()).then_some(what)].into_iter().flatten().collect();
+        out.push((at(from.0), at(t), Some(ends.join("; "))));
+        from = (t, Some(what));
+    }
+    out
+}
+
+/// A floor framed with joists across its shorter span, each line cut into pieces at the bearing
+/// lines under it (counted per span), rim board round it, subfloor panels and the documents'
+/// underlayment.
+#[allow(clippy::too_many_arguments)]
+fn framed_floor(
+    level: &str,
+    host: Handle,
+    polys: &[Vec<Vec2>],
+    top: f64,
+    walls: &[&super::walls::Wall],
+    sp: &BuildingSpec,
+    r: &Rules,
+    upf: f64,
+    batch: &mut Batch,
+) {
     let Some((lo, hi)) = bounds_of(polys) else { return };
-    let spacing = r.num("framing.joist_spacing_in", 16.0).clamp(8.0, 48.0);
-    let depth = r.num("framing.joist_depth_in", 11.875).clamp(4.0, 48.0);
-    let series = r.fact("framing.joist_series").map(|f| f.value.clone()).unwrap_or_default();
-    let j_src = r.fact("framing.floor_framing").map_or_else(|| r.source("framing.joist_spacing_in"), |f| f.source_of());
+    let fj = floor_joists(r, level);
+    let (spacing, depth, series) = (fj.spacing, fj.depth, fj.series.clone());
+    let j_src = fj.src.clone();
     let sub_t = r.num("framing.subfloor_in", 0.75) / 12.0 * upf;
     let dz = depth / 12.0 * upf;
     let (z1, z0) = (top - sub_t, top - sub_t - dz);
     // Joists span the shorter way: they run across the long side, spaced along it.
     let along_x = hi.x - lo.x >= hi.y - lo.y;
     let dir = if along_x { Vec2::new(0.0, 1.0) } else { Vec2::new(1.0, 0.0) };
-    let item = if series.is_empty() { format!("{} I-joist", inches_text(depth)) } else { format!("{} {series} I-joist", inches_text(depth)) };
+    let truss = fj.member == "truss";
+    let kind_name = if truss { "floor truss" } else { "I-joist" };
+    let item = if series.is_empty() { format!("{} {kind_name}", inches_text(depth)) } else { format!("{} {series} {kind_name}", inches_text(depth)) };
     let w = 2.5 / 12.0 * upf;
+    let (bearings, look) = bearing_lines(walls, sp, dir, polys, upf);
+    let pct = |v: f64| (v * 100.0).round();
+    batch.notes.push(if bearings.is_empty() {
+        format!(
+            "{level}: the joists span the floor in one piece: no bearing line under it ({} walls, {} across the joists, {} kept from bearing by their type; the longest line of the others runs {}% of the floor's length, a bearing line {}%)",
+            look.walls,
+            look.across,
+            look.not_bearing,
+            pct(look.longest),
+            pct(look.fraction)
+        )
+    } else {
+        let d0 = polys.iter().flatten().map(|p| p.dot(dir)).fold(f64::INFINITY, f64::min);
+        let lines: Vec<String> = bearings.iter().take(12).map(|g| format!("{} ({})", cadaddy_walk3d::feet((g.at - d0) / upf), g.what)).collect();
+        format!(
+            "{level}: the joists span between the outside walls and {} bearing lines under the floor ({BEARING_RULE}): {}",
+            bearings.len(),
+            lines.join(", ")
+        )
+    });
+    let rule = super::super::provenance::rule(BEARING_RULE);
+    let rule_ft = |k: &str, d: f64| {
+        super::super::provenance::rule_data(BEARING_RULE).get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(d) * upf
+    };
+    let (min_span, end) = (rule_ft("min_span_ft", 2.0), rule_ft("end_bearing_ft", 4.0));
+    let across = Vec2::new(-dir.y, dir.x);
+    if fj.depth_from == "default" {
+        batch.notes.push(format!(
+            "{level}: the documents give no joist depth for this floor, so its joists are the default {} ({})",
+            inches_text(depth),
+            fj.depth_src.doc.as_deref().unwrap_or_default().chars().take(120).collect::<String>()
+        ));
+    }
+    if let Some((d, s)) = &fj.design_depth {
+        batch.notes.push(format!(
+            "{level}: joists built {} as the joist layout gives them; the design value {} ({}) is kept beside them",
+            inches_text(depth),
+            inches_text(*d),
+            s.doc.as_deref().unwrap_or_default().chars().take(120).collect::<String>()
+        ));
+    }
     for line in lines_across(polys, dir, spacing / 12.0 * upf, w) {
         for (a, b) in line {
-            let mut p = Piece::new("framing", "joist", item.clone(), level, j_src.clone());
-            p.host = Some(host);
-            p.size = inches_text(depth);
-            p.ty = if series.is_empty() { "I-joist".into() } else { series.clone() };
-            p.length_ft = a.dist(b) / upf;
-            p = p.with("spacing_in", num_text(spacing), r.source("framing.joist_spacing_in"));
-            p.blocks.push(Block::new(a, b, w, z0, z1));
-            batch.push(p);
+            let x = a.dot(across);
+            for (pa, pb, bears) in joist_spans(a, b, dir, x, &bearings, min_span, end) {
+                let mut p = Piece::new("framing", "joist", item.clone(), level, j_src.clone());
+                p.host = Some(host);
+                p.size = inches_text(depth);
+                p.ty = if !series.is_empty() {
+                    series.clone()
+                } else if truss {
+                    "floor truss".into()
+                } else {
+                    "I-joist".into()
+                };
+                p.length_ft = pa.dist(pb) / upf;
+                p = p.with("spacing_in", num_text(spacing), fj.spacing_src.clone()).with("depth_in", num_text(depth), fj.depth_src.clone());
+                if fj.depth_from != "level" {
+                    p = p.computed(
+                        "depth_from",
+                        if fj.depth_from == "default" { "default: not given for this floor" } else { "the documents' depth for the building" },
+                    );
+                }
+                if let Some((d, s)) = &fj.design_depth {
+                    p = p.with("design_depth_in", num_text(*d), s.clone());
+                }
+                if let Some(bears) = bears {
+                    p = p.with("bears_on", bears, Source::from_doc(SourceKind::Rule, &rule.basis_for("")));
+                }
+                p.blocks.push(Block::new(pa, pb, w, z0, z1));
+                batch.push(p);
+            }
         }
     }
     // Rim board round the outline: one piece per straight run of its edge.
@@ -1143,6 +1489,88 @@ fn trusses(level: &str, host: Handle, polys: &[Vec<Vec2>], z: f64, r: &Rules, up
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wall from `a` to `b` (12 units a foot) of type `ty` on level 1.
+    fn wall(a: Vec2, b: Vec2, ty: &str) -> super::super::walls::Wall {
+        let len = a.dist(b);
+        let u = (b - a) * (1.0 / len);
+        super::super::walls::Wall {
+            handle: Handle::default(),
+            level: "1".into(),
+            wall_type: ty.into(),
+            o: a,
+            u,
+            n: u.perp(),
+            s0: 0.0,
+            s1: len,
+            t: 5.5,
+            zf: 0.0,
+            zt: 120.0,
+            holes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn joists_bear_on_long_wall_lines_and_bearing_types_never_on_non_bearing_or_short_walls() {
+        let plate = vec![vec![Vec2::new(0.0, 0.0), Vec2::new(960.0, 0.0), Vec2::new(960.0, 744.0), Vec2::new(0.0, 744.0)]];
+        let dir = Vec2::new(0.0, 1.0);
+        let mut sp = BuildingSpec::default();
+        let asm = |tag: &str, description: &str, material: &str| cadaddy_walk3d::Assembly {
+            tag: tag.into(),
+            description: description.into(),
+            layers: vec![cadaddy_walk3d::AssemblyLayer { material: material.into(), category: "framing".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        for (name, a) in [
+            ("NB", asm("NB", "NON-BEARING PARTITION", "2x4 wood studs")),
+            ("LB", asm("LB", "LOAD BEARING WALL", "2x6 wood studs")),
+            ("MS", asm("MS", "PARTITION", "3 5/8\" 20 ga metal studs")),
+        ] {
+            sp.wall_types.push(cadaddy_walk3d::WallType {
+                name: name.into(),
+                height_ft: None,
+                thickness_in: 5.5,
+                from: cadaddy_walk3d::WallFrom::Pairs,
+                assembly: Some(a),
+            });
+        }
+        let walls = [
+            // A corridor wall the whole length in two pieces (a door's gap between).
+            wall(Vec2::new(7.0, 336.0), Vec2::new(450.0, 336.0), ""),
+            wall(Vec2::new(486.0, 336.0), Vec2::new(953.0, 336.0), ""),
+            // A short closet wall across the joists, and one along them: no bearing line.
+            wall(Vec2::new(120.0, 120.0), Vec2::new(216.0, 120.0), ""),
+            wall(Vec2::new(240.0, 7.0), Vec2::new(240.0, 330.0), ""),
+            // A short wall its type calls bearing bears; a long one typed non-bearing doesn't; a long
+            // line of a type the legend reads as steel studs does (the legend's material doesn't
+            // decide what bears).
+            wall(Vec2::new(600.0, 600.0), Vec2::new(700.0, 600.0), "LB"),
+            wall(Vec2::new(7.0, 500.0), Vec2::new(953.0, 500.0), "NB"),
+            wall(Vec2::new(7.0, 560.0), Vec2::new(953.0, 560.0), "MS"),
+        ];
+        let refs: Vec<&super::super::walls::Wall> = walls.iter().collect();
+        let (mut got, look) = bearing_lines(&refs, &sp, dir, &plate, 12.0);
+        assert_eq!((look.walls, look.across, look.not_bearing), (7, 6, 1), "{look:?}");
+        got.sort_by(|a, b| a.at.total_cmp(&b.at));
+        let at: Vec<f64> = got.iter().map(|b| b.at).collect();
+        assert_eq!(at, vec![336.0, 560.0, 600.0], "{got:?}");
+        // Across the joists the line runs the whole plate (`across` is -x here).
+        assert!(got.first().is_some_and(|b| b.lo <= -957.5 && b.hi >= -2.5 && b.what.contains("wall line")), "{got:?}");
+        // A joist line crossing the two long lines: three spans; one under the bearing wall too: four.
+        let spans = joist_spans(Vec2::new(26.5, 0.0), Vec2::new(26.5, 744.0), dir, -26.5, &got, 24.0, 48.0);
+        assert_eq!(spans.len(), 3, "{spans:?}");
+        assert!((spans.first().map_or(0.0, |s| s.0.dist(s.1)) - 336.0).abs() < 1e-9);
+        assert!(spans.iter().all(|s| s.2.as_deref().is_some_and(|w| w.contains("wall line"))));
+        let x = 650.0;
+        assert_eq!(joist_spans(Vec2::new(x, 0.0), Vec2::new(x, 744.0), dir, -x, &got, 24.0, 48.0).len(), 4);
+        // A bearing nearer an end than the end bearing's reach is no cut (the joist cantilevers).
+        let near = [Bearing { at: 10.0, lo: -1e9, hi: 1e9, what: "x".into() }];
+        assert_eq!(joist_spans(Vec2::new(0.0, 0.0), Vec2::new(0.0, 744.0), dir, 0.0, &near, 24.0, 48.0).len(), 1);
+        // Hostile input never panics.
+        let nan = [Bearing { at: f64::NAN, lo: f64::NAN, hi: f64::NAN, what: String::new() }];
+        let _ = joist_spans(Vec2::new(0.0, 0.0), Vec2::new(0.0, f64::INFINITY), dir, 0.0, &nan, 24.0, 48.0);
+        let _ = bearing_lines(&refs, &sp, dir, &[], 12.0);
+    }
 
     #[test]
     fn laps_and_clips() {

@@ -20,6 +20,19 @@
       "min_span_ft": 2.0
     },
     {
+      "id": "S-FLOOR-JOIST-BEARING",
+      "trade": "structural",
+      "fills": "where a framed floor's joists bear between its outside walls: each joist line is cut at the bearing lines of the storey's walls under it that run across the joists, and each span is its own piece (numbers: line_fraction, the share of the floor's length a line of walls runs to be a bearing line; line_tol_in, walls this close are one line; angle_tol_deg, a wall this near square to the joists runs across them; min_span_ft, the shortest span kept; end_bearing_ft, a bearing line this near the floor's edge is the joists' end bearing, the joists running on over it to the edge in one piece (a cantilever); words: bearing_words a wall type that carries the floor, non_bearing_words one that doesn't)",
+      "basis": "trade practice: floor joists span between bearing lines (the outside walls, interior bearing walls, beams and a double-loaded corridor's walls), each span a joist of its own lapped or butted over the bearing; a wall line running most of the building's length across the joists carries them (its doors under headers) whatever stud the partition legend names (the structure's notes govern what bears), a wall typed non-bearing or a partition line the rooms break up does not; a joist runs on over a bearing near the floor's edge to the edge (a cantilever), one piece",
+      "line_fraction": 0.75,
+      "line_tol_in": 6.0,
+      "angle_tol_deg": 10.0,
+      "min_span_ft": 2.0,
+      "end_bearing_ft": 4.0,
+      "bearing_words": ["BEARING"],
+      "non_bearing_words": ["NON-BEARING", "NONBEARING", "NON BEARING", "NON-LOAD", "NON LOAD"]
+    },
+    {
       "id": "E-RCP-LIGHT",
       "trade": "electrical",
       "fills": "a ceiling luminaire's place where the electrical plan's symbol and the reflected ceiling plan's light differ (numbers: reach_ft, the farthest a light is moved; connect_reach_ft, a light this close is at its spot)",

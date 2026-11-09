@@ -1104,6 +1104,102 @@ pub(crate) fn read_framing(d: &Drawing, regions: &[(String, Bounds2)], level: &s
     Some(RoofFraming { level: level.to_string(), member, spacing_in, depth_in, spacing_status, depth_status, bearing_ft: None, source })
 }
 
+/// A number of inches as printed before its inch mark (`16`, `7/8` after `11`: 11 7/8).
+fn inch_number(prev: Option<&str>, n: &str) -> Option<f64> {
+    let frac = |p: &str| -> Option<f64> {
+        let (a, b) = p.split_once('/')?;
+        let (a, b) = (a.parse::<f64>().ok()?, b.parse::<f64>().ok()?);
+        (b > 0.0).then(|| a / b)
+    };
+    let v = match frac(n) {
+        Some(f) => f + prev.and_then(|p| p.parse::<f64>().ok()).filter(|w| w.fract() == 0.0 && *w >= 0.0).unwrap_or(0.0),
+        None => n.parse::<f64>().ok()?,
+    };
+    v.is_finite().then_some(v)
+}
+
+/// What one note says of a floor's framing: the member it names, the depth printed just before it
+/// (`16" I-JOISTS`, `11 7/8" DEEP WOOD JOISTS`) and the spacing (`@ 24" OC`), inches, and whether
+/// it is the floor's typical framing (`TYP.`, `U.N.O.`). None when it names no member, or neither
+/// a depth nor a spacing (a note about the joists, not how the floor is framed).
+fn floor_framing_note(rule: &FramingRule, t: &str) -> Option<(String, Option<f64>, Option<f64>, bool)> {
+    let up = t.to_ascii_uppercase().replace(['”', '″'], "\"");
+    let (member, spacing, _) = framing_note(rule, &up)?;
+    let toks: Vec<&str> = up.split_whitespace().take(200).collect();
+    let alnum = |w: &str| -> Vec<String> { w.split(|c: char| !c.is_ascii_alphanumeric()).filter(|x| !x.is_empty()).map(str::to_string).collect() };
+    let names_member = |w: &str| {
+        let ws = alnum(w);
+        w == "DEEP" || rule.words.iter().any(|(_, list)| list.iter().any(|m| ws.contains(m)))
+    };
+    let mut depth = None;
+    for (i, w) in toks.iter().enumerate() {
+        if !names_member(w) {
+            continue;
+        }
+        for j in (i.saturating_sub(3)..i).rev() {
+            let Some(tok) = toks.get(j).map(|t| t.trim_end_matches([',', ';', ')'])) else { continue };
+            // A spacing's number is no depth.
+            if tok == "@" || matches!(tok.trim_end_matches('.'), "OC" | "O.C") {
+                break;
+            }
+            let Some(n) = tok.strip_suffix('"') else { continue };
+            depth = inch_number(j.checked_sub(1).and_then(|k| toks.get(k)).copied(), n);
+            break;
+        }
+        if depth.is_some() {
+            break;
+        }
+    }
+    let depth = depth.filter(|v| (6.0..=48.0).contains(v));
+    let words = alnum(&up);
+    let typical = cadaddy_mepfix::wordrules::words("framing.typical_note_words")
+        .iter()
+        .any(|t| if t.contains('.') { up.contains(t) } else { words.iter().any(|w| w == t) });
+    (depth.is_some() || spacing.is_some()).then_some((member, depth, spacing, typical))
+}
+
+/// A floor's framing as the notes in `regions` (its framing plans, `(sheet, area)` each) say: the
+/// floor's typical framing note (`TYP.`, `U.N.O.`) before the others, one giving the depth and
+/// spacing before one giving either; what that note leaves out from another note of the same
+/// member; the trade rules' usual values for what none gives. None when no note names a truss or
+/// joist with its depth or spacing.
+pub(crate) fn read_floor_framing(d: &Drawing, regions: &[(String, Bounds2)], level: &str) -> Option<RoofFraming> {
+    let rule = framing_rule();
+    let mut notes: Vec<(String, Option<f64>, Option<f64>, bool, String)> = Vec::new();
+    let mut looked = 0usize;
+    for (sheet, b) in regions.iter().take(64) {
+        let ents = objects_in(d, b);
+        for (_, t, _, _) in texts(&ents) {
+            looked += 1;
+            if looked > MAX_FRAMING_NOTES || notes.len() >= 1000 {
+                break;
+            }
+            if let Some((member, depth, spacing, typical)) = floor_framing_note(&rule, &t) {
+                notes.push((member, depth, spacing, typical, format!("{sheet}: {}", t.chars().take(120).collect::<String>())));
+            }
+        }
+    }
+    let score = |n: &(String, Option<f64>, Option<f64>, bool, String)| u8::from(n.3) * 4 + u8::from(n.1.is_some()) * 2 + u8::from(n.2.is_some());
+    let best = notes.iter().enumerate().max_by_key(|(i, n)| (score(n), std::cmp::Reverse(*i))).map(|(_, n)| n.clone())?;
+    let same: Vec<&(String, Option<f64>, Option<f64>, bool, String)> = notes.iter().filter(|n| n.0 == best.0).collect();
+    let depth = best.1.map(|v| (v, best.4.clone())).or_else(|| same.iter().find_map(|n| n.1.map(|v| (v, n.4.clone()))));
+    let spacing = best.2.map(|v| (v, best.4.clone())).or_else(|| same.iter().find_map(|n| n.2.map(|v| (v, n.4.clone()))));
+    let mut source = best.4.clone();
+    for (_, src) in [&depth, &spacing].into_iter().flatten() {
+        if !source.contains(src.as_str()) {
+            source = format!("{source}; {src}");
+        }
+    }
+    let usual = super::tradeatoms::Rules::default();
+    let read = |v: Option<f64>, d: f64| match v {
+        Some(v) => (v, Some(ValueStatus::Read)),
+        None => (d, Some(ValueStatus::Default)),
+    };
+    let (spacing_in, spacing_status) = read(spacing.map(|s| s.0), usual.num("framing.joist_spacing_in", 16.0));
+    let (depth_in, depth_status) = read(depth.map(|d| d.0), usual.num("framing.joist_depth_in", 11.875));
+    Some(RoofFraming { level: level.to_string(), member: best.0, spacing_in, depth_in, spacing_status, depth_status, bearing_ft: None, source })
+}
+
 /// How far a framed roof's surface stands over where it bears: its members' depth and the deck,
 /// feet; 0 for none.
 pub(crate) fn assembly_ft(f: Option<&RoofFraming>) -> f64 {
@@ -2121,6 +2217,24 @@ mod tests {
 
     /// A framing note's member, spacing (`@ 24" OC`) and depth (`24" DEEP`), whatever the note's
     /// wording; a note naming no member says nothing of the framing.
+    #[test]
+    fn floor_framing_notes_give_the_depth_before_the_member_and_the_spacing() {
+        let rule = framing_rule();
+        let note = |t: &str| floor_framing_note(&rule, t);
+        assert_eq!(note("FLOOR DECK ON 16\" DEEP PREFABRICATED WOOD JOISTS @ 24\" OC, U.N.O."), Some(("joist".into(), Some(16.0), Some(24.0), true)));
+        assert_eq!(note("11 7/8\" I-JOISTS @ 24\" OC TYP."), Some(("joist".into(), Some(11.875), Some(24.0), true)));
+        assert_eq!(note("FLOOR TRUSSES @ 19.2\" OC"), Some(("truss".into(), None, Some(19.2), false)));
+        assert_eq!(note("JOISTS @ 16\" O.C., 14\" DEEP"), Some(("joist".into(), Some(14.0), Some(16.0), false)));
+        // A spacing's number is no depth; a note naming the joists without either is no framing.
+        assert_eq!(note("@ 24\" OC JOISTS"), Some(("joist".into(), None, Some(24.0), false)));
+        assert_eq!(note("2X8 JOISTS"), None);
+        assert_eq!(note("SQUASH BLOCKS UNDER POSTS FROM ABOVE AT EACH JOIST (TYP.)"), None);
+        assert_eq!(note("DBL. 16\" LVL @ 24\" OC."), None);
+        // Hostile text never panics.
+        let _ = note(&"9\" ".repeat(10_000));
+        let _ = note("\"\" JOIST 1/0\" JOIST /\" JOIST");
+    }
+
     #[test]
     fn framing_notes_give_the_member_its_spacing_and_depth() {
         let rule = framing_rule();
