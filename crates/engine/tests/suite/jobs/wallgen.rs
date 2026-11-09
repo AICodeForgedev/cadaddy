@@ -621,8 +621,13 @@ fn box_walls(d: &mut Drawing, x0: f64) {
 #[test]
 fn a_mezzanine_slab_leaves_out_the_space_open_to_below() {
     let mut d = Drawing::new_imperial();
-    // Level 1's plan at x 0–60', the mezzanine's at x 100–160'.
+    // Level 1's plan at x 0–60' (a partition under the open space at x 20', one under the
+    // mezzanine at x 50'), the mezzanine's at x 100–160' drawn on the whole building.
     box_walls(&mut d, 0.0);
+    for x in [20.0, 50.0] {
+        line(&mut d, (x - 0.25, 0.5), (x - 0.25, 39.5));
+        line(&mut d, (x + 0.25, 0.5), (x + 0.25, 39.5));
+    }
     box_walls(&mut d, 100.0);
     // The guardrail wall at x 140' with a 3' gate.
     for (y0, y1) in [(0.5, 18.0), (21.0, 39.5)] {
@@ -648,4 +653,20 @@ fn a_mezzanine_slab_leaves_out_the_space_open_to_below() {
     // Level 1's whole slab; the mezzanine's floor east of its guardrail (20.25' × 40').
     assert!((sf(0.0) - 2400.0).abs() < 30.0, "{}", sf(0.0));
     assert!(sf(120.0) > 19.0 * 40.0 && sf(120.0) < 21.5 * 40.0, "{}", sf(120.0));
+    // The outside walls are built once, full height, by the storey; the mezzanine builds its
+    // guardrail wall only. The partition under the mezzanine stops at its slab's underside, the
+    // one under the open space runs up the storey.
+    assert!(
+        notes.contains("wall(s) the storey under it builds full height (the mezzanine plan draws them again) are built once, by Level 1"),
+        "{notes}"
+    );
+    assert!(notes.contains("Level 1: 1 wall(s) under the Mezzanine slab stop at its underside"), "{notes}");
+    let walls = made(&s, "wall");
+    let x_mid = |m: &Mesh| m.vertices.iter().map(|v| v.x).sum::<f64>() / m.vertices.len().max(1) as f64 / 12.0;
+    let on_mezz: Vec<&Mesh> = walls.iter().filter(|m| x_mid(m) > 100.0).collect();
+    assert_eq!(on_mezz.len(), 2, "the guardrail's two pieces");
+    assert!(on_mezz.iter().all(|m| (x_mid(m) - 140.0).abs() < 1.0));
+    let top_at = |x: f64| walls.iter().find(|m| (x_mid(m) - x).abs() < 1.0).map(|m| z_range(m).1);
+    assert_eq!(top_at(50.0), Some(114.0), "under the mezzanine: its floor (10') less its 6\" slab");
+    assert!(top_at(20.0).is_some_and(|t| t > 230.0), "under the open space: the storey's height");
 }
