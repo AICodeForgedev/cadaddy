@@ -199,7 +199,7 @@ const MAX_DASH_LINES: usize = 200_000;
 /// dashes.
 const JOINT_SHARE: f64 = 0.1;
 /// A joint is at most this wide, inches (a mortar joint drawn at any plan's scale).
-const JOINT_MAX_IN: f64 = 1.5;
+pub(crate) const JOINT_MAX_IN: f64 = 1.5;
 
 /// Takes out the dashes of dashed lines (hidden or overhead lines a print flattens into separate
 /// pieces: a soffit, a header or a wall above). Three or more pieces on one line, each at most
@@ -303,37 +303,17 @@ pub(crate) fn join_unit_runs(segs: &mut Vec<Seg>, k: f64) -> usize {
             lines.entry((bucket, off)).or_default().push((s0, s1, i));
         }
     }
-    // Each run: the pieces' indices.
-    let mut runs: Vec<Vec<usize>> = Vec::new();
+    // Each run: its units in order along the line, then the short pieces lying on them.
+    let mut runs: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
     for run in lines.values_mut() {
-        run.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut cur: Vec<usize> = Vec::new();
-        let mut last: Option<(f64, f64)> = None;
-        for &(s0, s1, i) in run.iter() {
-            let joined = last.is_some_and(|(p0, p1)| {
-                let gap = s0 - p1;
-                let (a, b) = (p1 - p0, s1 - s0);
-                gap >= 0.0 && gap <= max_joint && gap < JOINT_SHARE * a.max(b) && (a - b).abs() <= 0.15 * a.max(b) + 0.25 * k
-            });
-            if !joined {
-                if cur.len() >= DASH_RUN {
-                    runs.push(std::mem::take(&mut cur));
-                }
-                cur.clear();
-            }
-            cur.push(i);
-            last = Some((s0, s1));
-        }
-        if cur.len() >= DASH_RUN {
-            runs.push(cur);
-        }
+        runs.extend(unit_runs_on_line(run, max_joint, k));
     }
     let mut gone = vec![false; segs.len()];
     let mut merged = 0usize;
     // In a fixed order: which line a run's kept piece is doesn't depend on the map's.
-    runs.sort_by_key(|r| r.first().copied());
-    for run in &runs {
-        let (Some(&first), Some(&last)) = (run.first(), run.last()) else { continue };
+    runs.sort_by_key(|r| r.0.first().copied());
+    for (units, on) in &runs {
+        let (Some(&first), Some(&last)) = (units.first(), units.last()) else { continue };
         let Some(end) = segs.get(last).cloned() else { continue };
         let Some(head) = segs.get(first).cloned() else { continue };
         // The far ends of the first and last pieces, as they run along the line.
@@ -347,8 +327,8 @@ pub(crate) fn join_unit_runs(segs: &mut Vec<Seg>, k: f64) -> usize {
             // No more one outline's side: the whole face of a wall.
             h.outline_width = f64::INFINITY;
         }
-        for &i in run.iter().skip(1) {
-            if let Some(g) = gone.get_mut(i) {
+        for &i in units.iter().skip(1).chain(on) {
+            if let Some(g) = gone.get_mut(i).filter(|g| !**g) {
                 *g = true;
                 merged += 1;
             }
@@ -357,6 +337,74 @@ pub(crate) fn join_unit_runs(segs: &mut Vec<Seg>, k: f64) -> usize {
     let mut it = gone.iter();
     segs.retain(|_| !it.next().copied().unwrap_or(false));
     merged
+}
+
+/// The runs of units on one line (its pieces as `(start, end, index)` along it): each run's units
+/// in order, then the pieces lying on them. Units follow each other a joint apart and about the same
+/// length; a unit cut to fit (at a corner, an end or an opening) may start or end a run. A piece
+/// lying on a unit (a speck, a bit of a hatch or another line on the face, the face drawn twice)
+/// or a short one in the joint after it neither ends the run nor counts as a unit.
+fn unit_runs_on_line(run: &mut [(f64, f64, usize)], max_joint: f64, k: f64) -> Vec<(Vec<usize>, Vec<usize>)> {
+    type Piece = (f64, f64, usize);
+    // Along the line; of two starting together, the longer first (a unit before a speck on it).
+    run.sort_by(|a, b| a.0.total_cmp(&b.0).then(b.1.total_cmp(&a.1)));
+    let joint = |p: Piece, s: Piece| {
+        let gap = s.0 - p.1;
+        gap >= 0.0 && gap <= max_joint && gap < JOINT_SHARE * (p.1 - p.0).max(s.1 - s.0)
+    };
+    let alike = |a: f64, b: f64| (a - b).abs() <= 0.15 * a.max(b) + 0.25 * k;
+    // A unit cut to fit: longer than a joint, no longer than the run's units.
+    let cut = |len: f64, unit: f64| len >= max_joint && len <= unit + 0.15 * unit + 0.25 * k;
+    // A run of at least DASH_RUN units, with the cut units a joint before and after it; and
+    // whether it took the piece after it.
+    let finish = |cur: &[Piece], on: &[usize], before: Option<Piece>, after: Option<Piece>| -> Option<(Vec<usize>, Vec<usize>, bool)> {
+        let (Some(&f), Some(&l)) = (cur.first(), cur.last()) else { return None };
+        if cur.len() < DASH_RUN {
+            return None;
+        }
+        let mut units: Vec<usize> = before.filter(|b| joint(*b, f) && cut(b.1 - b.0, f.1 - f.0)).map(|b| b.2).into_iter().collect();
+        units.extend(cur.iter().map(|c| c.2));
+        let took = after.filter(|a| joint(l, *a) && cut(a.1 - a.0, l.1 - l.0)).map(|a| units.push(a.2)).is_some();
+        Some((units, on.to_vec(), took))
+    };
+    let mut out = Vec::new();
+    let mut cur: Vec<Piece> = Vec::new();
+    let mut on: Vec<usize> = Vec::new();
+    // The piece just before `cur` began, when it stood alone (a cut unit at the run's start, maybe).
+    let mut before: Option<Piece> = None;
+    for &p in run.iter() {
+        if let Some(&last) = cur.last() {
+            let (len, unit) = (p.1 - p.0, last.1 - last.0);
+            if p.1 <= last.1 + 0.25 * k || (len < 0.5 * unit && p.1 <= last.1 + max_joint) {
+                on.push(p.2);
+                continue;
+            }
+            if joint(last, p) && alike(unit, len) {
+                cur.push(p);
+                continue;
+            }
+            // The run ends here (taking this piece when it's a cut unit).
+            let lone = cur.first().copied().filter(|_| cur.len() == 1);
+            let done = finish(&cur, &on, before, Some(p));
+            cur.clear();
+            on.clear();
+            before = None;
+            match done {
+                Some((units, specks, took)) => {
+                    out.push((units, specks));
+                    if took {
+                        continue;
+                    }
+                }
+                None => before = lone,
+            }
+        }
+        cur.push(p);
+    }
+    if let Some((units, specks, _)) = finish(&cur, &on, before, None) {
+        out.push((units, specks));
+    }
+    out
 }
 
 /// The lines of the runs [`join_unit_runs`] joins: each wall face drawn unit by unit, end to end.
@@ -1157,6 +1205,27 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
 
 /// The rooms around the plan's name labels, traced.
 fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
+    // Several sheets: each traced on its own objects. A room left open on one (a doorway the
+    // print draws no leaf across) widens its search window to the plan's extents: those of the
+    // one sheet, not of every sheet side by side (where one open room searched them all).
+    if let Some(rs) = regions.filter(|r| r.len() > 1) {
+        let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
+        let mut out: Vec<FoundRoom> = Vec::new();
+        for (i, r) in rs.iter().enumerate() {
+            if out.len() >= MAX_ROOMS_ALL_REGIONS {
+                break;
+            }
+            // A label is its first region's (as one trace of them all took it).
+            let earlier = rs.get(..i).unwrap_or_default();
+            if earlier.contains(r) {
+                continue;
+            }
+            let found = trace_rooms_in(s, Some(std::slice::from_ref(r)))?;
+            out.extend(found.into_iter().filter(|f| !earlier.iter().any(|e| inside(e, f.at))));
+        }
+        out.truncate(MAX_ROOMS_ALL_REGIONS);
+        return Ok(out);
+    }
     // A slow phase (over 2 s) goes to the job's progress lines: which one held a long trace up.
     let started = web_time::Instant::now();
     let mut last = 0.0f64;
@@ -1726,6 +1795,43 @@ mod tests {
         let (a, b) = lines[0];
         assert!(a.x.abs() < 1e-9 && (b.x - 95.6).abs() < 1e-9, "{a:?} {b:?}");
         assert!(unit_run_lines(&segs[6..], 1.0).is_empty());
+    }
+
+    #[test]
+    fn specks_on_a_block_walls_face_and_cut_blocks_at_its_ends_dont_break_it_into_blocks() {
+        // Inches (k = 1). Eight 15.6" units with 0.4" joints from x 8, a cut unit 7.6" before them
+        // (x 0–7.6) and one 9.6" after (x 136–145.6): one face from 0 to 145.6.
+        let face = |y: f64| -> Vec<Seg> {
+            let mut s = vec![seg((0.0, y), (7.6, y), f64::INFINITY), seg((136.0, y), (145.6, y), f64::INFINITY)];
+            s.extend((0..8).map(|i| 8.0 + f64::from(i) * 16.0).map(|x| seg((x, y), (x + 15.6, y), f64::INFINITY)));
+            s
+        };
+        // A stippled plan: specks of the block's fill on the face, in each unit and in a joint,
+        // drawn either way; and one unit's face drawn twice (an outline and a line over it).
+        let mut segs = face(0.0);
+        segs.extend((0..8).map(|i| 16.0 + f64::from(i) * 16.0).map(|x| seg((x + 0.08, 0.0), (x, 0.0), f64::INFINITY)));
+        segs.push(seg((55.7, 0.0), (55.9, 0.0), f64::INFINITY));
+        segs.push(seg((40.0, 0.0), (55.6, 0.0), f64::INFINITY));
+        let n = segs.len();
+        assert_eq!(join_unit_runs(&mut segs, 1.0), n - 1);
+        let [one] = segs.as_slice() else { panic!("{} pieces: {segs:?}", segs.len()) };
+        assert!(one.a.x.abs() < 1e-9 && (one.b.x - 145.6).abs() < 1e-9, "{:?} {:?}", one.a, one.b);
+        // The same face drawn right to left, in drawing units of ½" (k = 2).
+        let mut segs: Vec<Seg> = face(0.0)
+            .into_iter()
+            .map(|s| Seg { a: Vec2::new(-2.0 * s.b.x, 2.0 * s.b.y), b: Vec2::new(-2.0 * s.a.x, 2.0 * s.a.y), ..s })
+            .chain((0..8).map(|i| -2.0 * (12.0 + f64::from(i) * 16.0)).map(|x| seg((x, 0.0), (x + 0.16, 0.0), f64::INFINITY)))
+            .collect();
+        let n = segs.len();
+        assert_eq!(join_unit_runs(&mut segs, 2.0), n - 1);
+        // A cut piece shorter than a joint, a speck alone or a piece longer than a unit a joint
+        // past a run is no cut unit: the run ends at its last full unit.
+        let mut segs = face(0.0);
+        segs.push(seg((145.8, 0.0), (146.0, 0.0), f64::INFINITY));
+        segs.push(seg((146.4, 0.0), (176.4, 0.0), f64::INFINITY));
+        join_unit_runs(&mut segs, 1.0);
+        assert!(segs.iter().any(|s| (s.b.x - 145.6).abs() < 1e-9 && s.a.x.abs() < 1e-9), "{segs:?}");
+        assert!(segs.iter().any(|s| s.a.x == 146.4), "the long piece stays its own");
     }
 
     #[test]

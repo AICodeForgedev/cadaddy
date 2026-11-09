@@ -499,6 +499,39 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// The door and window schedules a `schedules.read` answer holds (`v`): its rows, and the tags
+/// whose mark has a row. None when it read no row (a set with no schedule: its tags name
+/// nothing).
+pub(crate) fn read_back(v: &Value) -> Option<cadaddy_walk3d::Schedule> {
+    let rows: Vec<ScheduleRow> = v
+        .get("schedules")?
+        .as_array()?
+        .iter()
+        .filter_map(|f| f.get("rows")?.as_array().cloned())
+        .flatten()
+        .filter_map(|r| serde_json::from_value::<ScheduleRow>(r).ok())
+        .take(MAX_ROWS)
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+    let has_row = |m: &str| rows.iter().any(|r| r.mark.trim().eq_ignore_ascii_case(m.trim()));
+    let tags: Vec<OpeningTag> = v
+        .get("tags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            let mark = t.get("mark")?.as_str()?.to_string();
+            let at = t.get("at")?.as_array()?;
+            let at = [at.first()?.as_f64()?, at.get(1)?.as_f64()?];
+            (has_row(&mark) && at.iter().all(|c| c.is_finite())).then(|| OpeningTag { mark, at, ..OpeningTag::default() })
+        })
+        .take(MAX_ROWS)
+        .collect();
+    Some(cadaddy_walk3d::Schedule { rows, tags })
+}
+
 /// WALLGEN: each opening nearest a tag (within 6 feet) takes its schedule row's kind, width and
 /// heights (sheet units above the floor).
 pub(crate) fn size_openings(
@@ -611,5 +644,25 @@ mod tests {
         // Window types of letters alone keep theirs.
         let rows = vec![r("A", Some(48.0)), r("B", Some(36.0)), r("C", Some(24.0))];
         assert_eq!(fitting(rows).len(), 3);
+    }
+
+    /// A `schedules.read` answer's rows go back as the spec's schedule with the tags that name a
+    /// row; an answer with no row (a set with no door schedule) gives none.
+    #[test]
+    fn read_back_keeps_rows_and_the_tags_naming_them() {
+        let v = json!({
+            "schedules": [{"kind": "door", "rows": [
+                {"kind": "door", "mark": "101", "width_in": 36.0, "fire_rating": "20 MIN", "hardware": "3"}
+            ]}],
+            "tags": [
+                {"mark": "101", "at": [10.0, 20.0], "handle": "1A", "row": true},
+                {"mark": "Q", "at": [5.0, 5.0], "handle": "1B", "row": false}
+            ]
+        });
+        let sc = read_back(&v).unwrap_or_default();
+        assert_eq!(sc.rows.len(), 1);
+        assert_eq!(sc.rows.first().and_then(|r| r.fire_rating.as_deref()), Some("20 MIN"));
+        assert_eq!(sc.tags.iter().map(|t| (t.mark.as_str(), t.at)).collect::<Vec<_>>(), vec![("101", [10.0, 20.0])]);
+        assert!(read_back(&json!({"schedules": [], "tags": [{"mark": "101", "at": [0.0, 0.0]}]})).is_none());
     }
 }

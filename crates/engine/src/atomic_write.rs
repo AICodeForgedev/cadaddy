@@ -43,27 +43,61 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// with `permissions` given to it from its creation (`None`: the usual creation mode). A symlink
 /// at `path` is replaced by the new file, never written through.
 pub fn write_atomic_with(path: &Path, permissions: Option<Permissions>, fill: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let (mut file, tmp) = create_temp(&dir, permissions.as_ref())?;
-    let write = (|| {
-        if let Some(permissions) = permissions {
+    let mut pending = Pending::create(path, permissions)?;
+    let Some(file) = pending.file.as_mut() else { return Err(io::Error::other("the temporary file is gone")) };
+    fill(file)?;
+    pending.commit()
+}
+
+/// A replacement of a file being written: a fresh temporary file beside it ([`Pending::create`],
+/// as [`write_atomic`] makes one), filled by the caller, then put in place by [`Pending::commit`].
+/// Dropped without a commit (a failed or refused write), the temporary file is removed and the
+/// file is left as it was.
+pub struct Pending {
+    file: Option<File>,
+    tmp: PathBuf,
+    path: PathBuf,
+    dir: PathBuf,
+}
+
+impl Pending {
+    /// The temporary file for replacing `path`, with `permissions` from its creation (`None`:
+    /// the usual creation mode).
+    pub fn create(path: &Path, permissions: Option<Permissions>) -> io::Result<Pending> {
+        let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let (file, tmp) = create_temp(&dir, permissions.as_ref())?;
+        let pending = Pending { file: Some(file), tmp, path: path.to_path_buf(), dir };
+        if let (Some(permissions), Some(file)) = (permissions, &pending.file) {
             file.set_permissions(permissions)?;
         }
-        fill(&mut file)?;
-        file.flush()?;
-        file.sync_all()
-    })();
-    if let Err(e) = write {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
+        Ok(pending)
     }
-    drop(file);
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
+
+    /// Another handle to the temporary file, to write it through.
+    pub fn writer(&self) -> io::Result<File> {
+        self.file.as_ref().map_or_else(|| Err(io::Error::other("the temporary file is gone")), File::try_clone)
     }
-    sync_dir(&dir);
-    Ok(())
+
+    /// Make what was written durable and put it in place of the file.
+    pub fn commit(mut self) -> io::Result<()> {
+        let Some(mut file) = self.file.take() else { return Err(io::Error::other("the temporary file is gone")) };
+        let done = file.flush().and_then(|()| file.sync_all());
+        drop(file);
+        if let Err(e) = done.and_then(|()| std::fs::rename(&self.tmp, &self.path)) {
+            let _ = std::fs::remove_file(&self.tmp);
+            return Err(e);
+        }
+        sync_dir(&self.dir);
+        Ok(())
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        if self.file.take().is_some() {
+            let _ = std::fs::remove_file(&self.tmp);
+        }
+    }
 }
 
 /// Flush `dir` so a rename just made in it survives a crash or power loss (POSIX records a

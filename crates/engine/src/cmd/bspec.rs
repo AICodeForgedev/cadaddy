@@ -1330,6 +1330,12 @@ fn room_bounds(d: &Drawing) -> std::collections::BTreeMap<String, Vec<Vec<Vec2>>
                 n += 1;
             }
         }
+        // A door shut closes its opening: the line across it, jamb to jamb (its leaf is built
+        // standing open, so its footprint leaves the doorway open) (Q6297).
+        if let Some([a, b]) = wallgen::door_opening(e).filter(|[a, b]| a.dist(*b) > 1e-9) {
+            polys.push(vec![a, b]);
+            n += 1;
+        }
         if n >= MAX_BOUNDS {
             break;
         }
@@ -1418,6 +1424,140 @@ fn walls_session(bounds: &std::collections::BTreeMap<String, Vec<Vec<Vec2>>>, sp
     Some(t)
 }
 
+/// Widest open passage (feet) a room separation line closes: a wall whose line stops short of the
+/// next wall by no more than this leaves a cased opening or an open passage between two rooms,
+/// and an open-plan room ends where its walls' lines end (the line across, as a room separation
+/// line is drawn; area measurement runs it the same way). Wider than a pair of doors, narrower
+/// than a room's open side.
+const SEPARATION_REACH_FT: f64 = 8.0;
+/// Most wall ends looked at for room separation lines per level (hostile drawings).
+const MAX_SEPARATION_ENDS: usize = 200_000;
+
+/// The built walls' ends on a level (upper case), each with the way its wall runs out of it: the
+/// two short sides' midpoints of each wall's plan footprint (a long, thin box's bottom face).
+fn wall_ends(d: &Drawing, level: &str) -> Vec<(Vec2, Vec2)> {
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if wallgen::made_as(e).as_deref() != Some("wall") || !made_level(e).unwrap_or_default().trim().eq_ignore_ascii_case(level) {
+            continue;
+        }
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let z0 = m.vertices.iter().map(|v| v.z).filter(|z| z.is_finite()).fold(f64::INFINITY, f64::min);
+        if !z0.is_finite() {
+            continue;
+        }
+        for f in m.faces.iter().take(10_000) {
+            let vs: Vec<Vec2> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize)).filter(|v| (v.z - z0).abs() <= 1e-6).map(|v| v.xy()).collect();
+            let [a, b, c, dd] = vs.as_slice() else { continue };
+            if f.v.len() != 4 || !vs.iter().all(|p| p.is_finite()) {
+                continue;
+            }
+            // The short sides are a-b and c-d, or b-c and d-a.
+            let (s1, s2) = if a.dist(*b) <= b.dist(*c) { ((*a, *b), (*c, *dd)) } else { ((*b, *c), (*dd, *a)) };
+            let (m1, m2) = ((s1.0 + s1.1) * 0.5, (s2.0 + s2.1) * 0.5);
+            let (len, thick) = (m1.dist(m2), s1.0.dist(s1.1).max(s2.0.dist(s2.1)));
+            if !(len.is_finite() && len > 1e-9 && len >= 2.0 * thick) {
+                continue;
+            }
+            let u = (m2 - m1) * (1.0 / len);
+            out.push((m2, u));
+            out.push((m1, u * -1.0));
+            if out.len() >= MAX_SEPARATION_ENDS {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// Room separation lines on a level: from each free wall end, along its wall's line, to the first
+/// footprint it meets within `reach` (another wall, a door, a column). An end touching another
+/// footprint (a corner, a tee) gets none.
+fn separation_lines(
+    ends: &[(Vec2, Vec2)],
+    polys: &[Vec<Vec2>],
+    grid: &std::collections::HashMap<(i64, i64), Vec<usize>>,
+    cell: f64,
+    reach: f64,
+) -> Vec<(Vec2, Vec2)> {
+    let mut out = Vec::new();
+    if !(cell > 0.0 && reach > 0.0) {
+        return out;
+    }
+    let eps = (reach * 1e-3).max(1e-9);
+    let near = |p: Vec2, r: f64| -> Vec<usize> {
+        let (x0, x1) = (((p.x - r) / cell).floor() as i64, ((p.x + r) / cell).floor() as i64);
+        let (y0, y1) = (((p.y - r) / cell).floor() as i64, ((p.y + r) / cell).floor() as i64);
+        let mut ids: Vec<usize> = Vec::new();
+        for x in x0..=x1.min(x0.saturating_add(64)) {
+            for y in y0..=y1.min(y0.saturating_add(64)) {
+                if let Some(v) = grid.get(&(x, y)) {
+                    ids.extend(v.iter().copied());
+                }
+            }
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    for (p, u) in ends {
+        // Just past the end (clear of its own end face, which is `eps` off at most there).
+        let start = *p + *u * (2.0 * eps);
+        let touching = near(start, eps).iter().filter_map(|i| polys.get(*i)).any(|q| {
+            (q.len() >= 3 && cadaddy_geom::point_in_polygon(q, start))
+                || q.iter().zip(q.iter().cycle().skip(1)).any(|(a, b)| seg_dist(start, *a, *b) <= eps)
+        });
+        if touching {
+            continue;
+        }
+        let mid = *p + *u * (reach * 0.5);
+        let mut best: Option<f64> = None;
+        for q in near(mid, reach * 0.5 + eps).iter().filter_map(|i| polys.get(*i)) {
+            for (a, b) in q.iter().zip(q.iter().cycle().skip(1)) {
+                // The ray p + t u against the edge a + s (b - a).
+                let e = *b - *a;
+                let den = u.x * e.y - u.y * e.x;
+                if den.abs() <= 1e-12 {
+                    continue;
+                }
+                let w = *a - *p;
+                let t = (w.x * e.y - w.y * e.x) / den;
+                let s = (w.x * u.y - w.y * u.x) / den;
+                if t > eps && t <= reach && (-1e-9..=1.0 + 1e-9).contains(&s) && best.is_none_or(|b| t < b) {
+                    best = Some(t);
+                }
+            }
+        }
+        if let Some(t) = best {
+            out.push((*p, *p + *u * t));
+        }
+    }
+    out
+}
+
+/// A drawing of one level's built footprints' edges, its room separation lines and the
+/// circulation spaces' edges: the second try at a room an open passage leaves open.
+fn separated_session(polys: &[Vec<Vec2>], seps: &[(Vec2, Vec2)], sp: &BuildingSpec) -> Option<Session> {
+    let mut d = Drawing::default();
+    let lines = polys.iter().flat_map(|q| q.iter().zip(q.iter().cycle().skip(1)).map(|(a, b)| (*a, *b))).chain(seps.iter().copied());
+    for (a, b) in lines.take(MAX_BOUNDS * 4) {
+        if a.dist(b) <= 1e-9 {
+            continue;
+        }
+        let line = cadaddy_doc::Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) };
+        if d.add(&Space::Model, Common::default(), EntityKind::Line(line)).is_err() {
+            break;
+        }
+    }
+    if d.model.is_empty() {
+        return None;
+    }
+    add_circulation_edges(&mut d, sp);
+    let mut t = Session::empty();
+    t.open_drawing(d, "Built walls, rooms separated", None);
+    Some(t)
+}
+
 /// Add a room, or fold it into the same room already kept on its level (a name and a number
 /// in one room): the best name, the first number, the spec's room.
 fn keep_room(kept: &mut Vec<Traced>, t: Traced) {
@@ -1445,6 +1585,29 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     p.dist(a + d * t)
 }
 
+/// The footprints looked up by grid cell (`cell` wide, each footprint in every cell it comes
+/// within `tol` of).
+fn footprint_grid(polys: &[Vec<Vec2>], cell: f64, tol: f64) -> std::collections::HashMap<(i64, i64), Vec<usize>> {
+    let mut g: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+    let mut cells = 0usize;
+    for (i, q) in polys.iter().enumerate() {
+        let b = cadaddy_geom::Bounds2::from_points(q.iter().copied());
+        let (x0, x1) = (((b.min.x - tol) / cell).floor() as i64, ((b.max.x + tol) / cell).floor() as i64);
+        let (y0, y1) = (((b.min.y - tol) / cell).floor() as i64, ((b.max.y + tol) / cell).floor() as i64);
+        let span = x1.saturating_sub(x0).saturating_add(1).saturating_mul(y1.saturating_sub(y0).saturating_add(1));
+        if !(0..=10_000).contains(&span) || cells >= MAX_CELLS {
+            continue;
+        }
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                g.entry((x, y)).or_default().push(i);
+                cells += 1;
+            }
+        }
+    }
+    g
+}
+
 /// Keep the rooms of the building (Q5291 MUST 3, 4): on a level with built walls, a room's
 /// outline runs along them (at least [`ROOM_WALLED`] of it); a box of the title block, a note's
 /// frame, an enlarged view (its walls are not built) or a schedule's cell closes no room. A
@@ -1459,30 +1622,40 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
     let cell = 4.0 * upf;
     let mut grids: std::collections::HashMap<String, std::collections::HashMap<(i64, i64), Vec<usize>>> = std::collections::HashMap::new();
     for (level, polys) in &bounds {
-        let mut g: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
-        let mut cells = 0usize;
-        for (i, q) in polys.iter().enumerate() {
-            let b = cadaddy_geom::Bounds2::from_points(q.iter().copied());
-            let (x0, x1) = (((b.min.x - tol) / cell).floor() as i64, ((b.max.x + tol) / cell).floor() as i64);
-            let (y0, y1) = (((b.min.y - tol) / cell).floor() as i64, ((b.max.y + tol) / cell).floor() as i64);
-            let span = x1.saturating_sub(x0).saturating_add(1).saturating_mul(y1.saturating_sub(y0).saturating_add(1));
-            if !(0..=10_000).contains(&span) || cells >= MAX_CELLS {
-                continue;
-            }
-            for x in x0..=x1 {
-                for y in y0..=y1 {
-                    g.entry((x, y)).or_default().push(i);
-                    cells += 1;
-                }
-            }
-        }
-        grids.insert(level.clone(), g);
+        grids.insert(level.clone(), footprint_grid(polys, cell, tol));
     }
     // A tag whose outline is no room (a box around the tag, a piece of furniture, a gap the
     // lines leave open) is traced again on the level's built walls, doors and windows.
     let (min_area, max_area) = (MIN_ROOM_SF * upf * upf, MAX_ROOM_SF * upf * upf);
     let mut walls_plan: Option<Option<Session>> = None;
     let mut cache = None;
+    // Per level: the built walls with room separation lines across open passages, its outline
+    // cache, how many lines, and what bounds a room there (footprints, lines, closed rooms) with
+    // its grid (made the first time a room on the level needs them).
+    type Separated = (Option<Session>, Option<super::hatch::Outlines>, usize, Vec<Vec<Vec2>>, std::collections::HashMap<(i64, i64), Vec<usize>>);
+    let mut separated: std::collections::HashMap<String, Separated> = std::collections::HashMap::new();
+    let mut separated_rooms: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    // Every numbered room tag by level: where, and its number (a room's name label and its number
+    // tag are two tags of one room; two numbers are two rooms).
+    let tag_id = |t: &Traced| t.number.as_deref().map(|n| n.trim().to_ascii_uppercase()).filter(|n| !n.is_empty());
+    let mut tags: std::collections::HashMap<String, Vec<(Vec2, Option<String>)>> = std::collections::HashMap::new();
+    for t in rooms.iter().filter(|t| !t.on_floor && tag_id(t).is_some()) {
+        tags.entry(t.level.trim().to_ascii_uppercase()).or_default().push((t.at, tag_id(t)));
+    }
+    // The rooms closed by the built walls as drawn (their own outline), by level: a room traced
+    // again stops at them.
+    let mut firm: std::collections::HashMap<String, Vec<Vec<Vec2>>> = std::collections::HashMap::new();
+    for t in rooms.iter() {
+        let key = t.level.trim().to_ascii_uppercase();
+        let big = cadaddy_geom::shoelace(&t.outline).abs() >= min_area || t.room.is_some();
+        let closed = match (bounds.get(&key).filter(|p| !p.is_empty()), grids.get(&key)) {
+            (Some(polys), Some(grid)) => t.on_floor || (big && walled_share(&t.outline, grid, polys, cell, tol) >= ROOM_WALLED),
+            _ => false,
+        };
+        if closed && t.outline.len() >= 3 && !t.circulation {
+            firm.entry(key).or_default().push(t.outline.clone());
+        }
+    }
     let mut unwalled: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     // Which tags those were (name, number, where), the first few: a missing room is findable.
     let mut unwalled_tags: Vec<String> = Vec::new();
@@ -1522,6 +1695,50 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
             let a = cadaddy_geom::shoelace(&o).abs();
             (o.len() >= 3 && (min_area..=max_area).contains(&a) && walled_share(&o, grid, polys, cell, tol) >= ROOM_WALLED).then_some(o)
         });
+        // Still open: an open passage (no door, no wall across) joins it to the next room or the
+        // outside. Traced again with room separation lines across its level's passages (Q6297).
+        // ... or the trace got through one into the next room: another room's tag is inside it.
+        let joined = outline.as_ref().is_some_and(|o| {
+            let mine = tag_id(&t);
+            mine.is_some()
+                && tags
+                    .get(&key)
+                    .into_iter()
+                    .flatten()
+                    .any(|(at, id)| id.is_some() && *id != mine && at.dist(t.at) > tol && cadaddy_geom::point_in_polygon(o, *at))
+        });
+        let outline = match outline {
+            Some(o) if !joined => Some(o),
+            first if inside => {
+                let entry = separated.entry(key.clone()).or_insert_with(|| {
+                    let mut seps = separation_lines(&wall_ends(d, &key), polys, grid, cell, SEPARATION_REACH_FT * upf);
+                    let n = seps.len();
+                    // A room already closed by its walls bounds the next one: rooms don't overlap
+                    // (a counter or a rail between two rooms isn't a built wall).
+                    for o in firm.get(&key).into_iter().flatten() {
+                        seps.extend(o.iter().zip(o.iter().cycle().skip(1)).map(|(a, b)| (*a, *b)));
+                    }
+                    // What bounds a room here: the footprints, the separation lines, the rooms
+                    // already closed.
+                    let mut all = polys.clone();
+                    all.extend(seps.iter().map(|(a, b)| vec![*a, *b]));
+                    let all_grid = footprint_grid(&all, cell, tol);
+                    (separated_session(polys, &seps, sp), None, n, all, all_grid)
+                });
+                let (plan, sep_cache, _, all, all_grid) = entry;
+                plan.as_ref()
+                    .and_then(|plan| {
+                        let loops = super::hatch::loops_at_lazy(plan, t.at, sep_cache).ok()?;
+                        let outer = loops.iter().find(|l| l.outer).or(loops.first())?;
+                        let o = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
+                        let a = cadaddy_geom::shoelace(&o).abs();
+                        (o.len() >= 3 && (min_area..=max_area).contains(&a) && walled_share(&o, all_grid, all, cell, tol) >= ROOM_WALLED).then_some(o)
+                    })
+                    .inspect(|_| *separated_rooms.entry(t.level.clone()).or_default() += 1)
+                    .or(first)
+            }
+            first => first,
+        };
         match outline {
             Some(o) => {
                 // Q6029: update cached area/bounds when the outline is replaced.
@@ -1543,6 +1760,11 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
     *rooms = kept;
     if retraced > 0 {
         notes.push(format!("{retraced} room tag(s) traced again on the built walls (their drawn outline was a tag box or furniture, not the room)."));
+    }
+    for (level, n) in &separated_rooms {
+        notes.push(format!(
+            "{level}: {n} room(s) open to the next room by a passage (no door, no wall across) closed where their walls' lines end (a room separation line, up to {SEPARATION_REACH_FT}' across)."
+        ));
     }
     for (level, n) in &unwalled {
         notes.push(format!("{level}: {n} room tag(s) not inside built walls (an enlarged view, a note's or the title block's box) — no room built."));
@@ -2152,6 +2374,18 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // lights and diffusers.
     let rcp = super::ceilings::build(d, &sp);
     mark("reflected ceilings");
+    // Foreign pipe and duct out of electrical gear's dedicated space (NEC 110.26(E)(1)), the gear
+    // where it is built (a panel on its wall's face): offset past its side, the drawn route kept
+    // on the run; the drawing's spec takes the same correction.
+    let mut sp = sp;
+    let gear_space = super::gearspace::clear_built(d, &mut sp);
+    if gear_space.found > 0
+        && let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
+        && super::gearspace::clear_built(d, &mut stored).corrected > 0
+    {
+        d.building_spec = Some(stored.to_json()).into();
+    }
+    mark("gear's dedicated space");
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build_with(d, &sp, true);
     mark("MEP runs");
@@ -2272,6 +2506,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         "penetrations": routed.report["penetrations"].as_array().map_or(0, Vec::len),
     });
     r["deviceElements"] = json!(devices.built);
+    r["gearSpace"] = gear_space.json();
     r["deviceBuild"] = devices.to_json();
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
@@ -2689,5 +2924,43 @@ mod tests {
         assert_eq!(rooms.len(), 1);
         assert_eq!(rooms[0].name.as_deref(), Some("SUITE"));
         assert_eq!(rooms[0].number.as_deref(), Some("B7"));
+    }
+    /// Q6297: a wall whose line stops short of the next wall by a passage's width gets a room
+    /// separation line across the gap, to that wall; a wall end at a corner, a free end with
+    /// nothing within the reach, and the far side of a wall get none.
+    #[test]
+    fn separation_lines_cross_open_passages_only() {
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)];
+        let polys = vec![
+            // South wall, and a partition from the north stopping 48" short of it.
+            rect(0.0, 0.0, 480.0, 6.0),
+            rect(237.0, 54.0, 243.0, 360.0),
+            // A stub whose end has nothing within 96".
+            rect(400.0, 300.0, 406.0, 360.0),
+            // A wall meeting the south wall at a corner (touching it).
+            rect(0.0, 6.0, 6.0, 360.0),
+        ];
+        let cell = 48.0;
+        let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+        for (i, q) in polys.iter().enumerate() {
+            let b = cadaddy_geom::Bounds2::from_points(q.iter().copied());
+            for x in (b.min.x / cell).floor() as i64..=(b.max.x / cell).floor() as i64 {
+                for y in (b.min.y / cell).floor() as i64..=(b.max.y / cell).floor() as i64 {
+                    grid.entry((x, y)).or_default().push(i);
+                }
+            }
+        }
+        let ends = vec![
+            (Vec2::new(240.0, 54.0), Vec2::new(0.0, -1.0)),
+            (Vec2::new(240.0, 360.0), Vec2::new(0.0, 1.0)),
+            (Vec2::new(403.0, 300.0), Vec2::new(0.0, -1.0)),
+            (Vec2::new(3.0, 6.0), Vec2::new(0.0, -1.0)),
+        ];
+        let seps = separation_lines(&ends, &polys, &grid, cell, 96.0);
+        assert_eq!(seps.len(), 1, "{seps:?}");
+        let (a, b) = seps[0];
+        assert!(a.dist(Vec2::new(240.0, 54.0)) < 1e-9 && b.dist(Vec2::new(240.0, 6.0)) < 1e-6, "{seps:?}");
+        // Wider than the reach: none.
+        assert!(separation_lines(&ends, &polys, &grid, cell, 40.0).is_empty());
     }
 }

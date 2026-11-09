@@ -684,7 +684,14 @@ pub(crate) fn onto_clear_face(e: &mut cadaddy_walk3d::MepEquipment, f: &super::v
     if !upf.is_finite() || upf <= 0.0 || (f.min == e.min && f.max == e.max) {
         return false;
     }
-    let was = e.properties.get("DESIGN_VALUE").cloned().unwrap_or_else(|| "at its lettering on the plan".to_string());
+    // Where it was read, as it was got: CADaddy's own proposal says so, not lettering.
+    let was = e.properties.get("DESIGN_VALUE").cloned().unwrap_or_else(|| {
+        match (e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed")), e.sources.get("position")) {
+            (true, Some(p)) if !p.trim().is_empty() => format!("where CADaddy proposed it ({})", p.trim()),
+            (true, _) => "where CADaddy proposed it".to_string(),
+            _ => "at its lettering on the plan".to_string(),
+        }
+    });
     e.min = f.min;
     e.max = f.max;
     let (design, reason) = match f.was_clear_in {
@@ -1307,6 +1314,35 @@ mod tests {
     }
 
     #[test]
+    fn a_moved_panel_keeps_where_it_was_got_as_its_design_value() {
+        use cadaddy_walk3d::MepEquipment;
+        let f = crate::cmd::validate_gear::ClearFace {
+            min: [0.0, 10.0],
+            max: [6.0, 30.0],
+            wall: cadaddy_doc::Handle(7),
+            moved_in: 12.0,
+            was_clear_in: Some(60.0),
+            was_ducted: true,
+            now_clear_in: 168.0,
+        };
+        let panel = |sources: &[(&str, &str)]| MepEquipment {
+            tag: "E".into(),
+            min: [0.0, 0.0],
+            max: [6.0, 20.0],
+            sources: sources.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ..Default::default()
+        };
+        let mut proposed = panel(&[("status", "proposed"), ("position", "proposed in room 9 (STORAGE)")]);
+        assert!(onto_clear_face(&mut proposed, &f, 12.0));
+        let design = &proposed.properties["DESIGN_VALUE"];
+        assert!(design.starts_with("where CADaddy proposed it (proposed in room 9") && !design.contains("lettering"), "{design}");
+        assert!(design.contains("a duct or pipe over it") && proposed.properties["CORRECTION_REASON"].contains("110.26(E)"));
+        let mut lettered = panel(&[("position", crate::cmd::printcond::ROOM_PANEL_POSITION)]);
+        assert!(onto_clear_face(&mut lettered, &f, 12.0));
+        assert!(lettered.properties["DESIGN_VALUE"].starts_with("at its lettering on the plan"));
+    }
+
+    #[test]
     fn a_lettered_panel_slides_out_of_the_wall_that_crosses_its_own() {
         use cadaddy_walk3d::{MepEquipment, WallMark, WallType};
         let wall = |a: [f64; 2], b: [f64; 2]| -> WallMark {
@@ -1513,7 +1549,9 @@ impl RouteCtx<'_> {
             return Err("a level not in the model".into());
         };
         let pb_here = b0 - self.corner(&lb.name) + self.corner(&la.name);
-        let h_a = if a_bottom { -FEEDER_UNDER_FLOOR_FT } else { self.ceiling(&la.name) + FEEDER_OVER_CEILING_FT };
+        // A service from site gear (the utility's transformer) runs at its least cover in the ground.
+        let under = super::utilityxfmr::service_cover_ft(a, b, size).map_or(FEEDER_UNDER_FLOOR_FT, |v| v.max(FEEDER_UNDER_FLOOR_FT));
+        let h_a = if a_bottom { -under } else { self.ceiling(&la.name) + FEEDER_OVER_CEILING_FT };
         let za_out = if a_bottom { a.bottom_ft } else { a.bottom_ft + a.height_ft };
         let zb_in = if b_bottom { b.bottom_ft } else { b.bottom_ft + b.height_ft };
         let same = la.name == lb.name;
@@ -1529,7 +1567,7 @@ impl RouteCtx<'_> {
             return Ok(());
         }
         let rise = lb.elevation_ft - la.elevation_ft;
-        let h_b = if b_bottom { -FEEDER_UNDER_FLOOR_FT } else { self.ceiling(&lb.name) + FEEDER_OVER_CEILING_FT };
+        let h_b = if b_bottom { -under } else { self.ceiling(&lb.name) + FEEDER_OVER_CEILING_FT };
         let (lo, hi) = if rise >= 0.0 { (h_a, rise + h_b) } else { (rise + h_b, h_a) };
         self.riser(&la.name, src, end, lo, hi, size, runs);
         let beside = b0 + Vec2::new(RISER_BESIDE_FT * self.upf, 0.0);
@@ -1889,6 +1927,46 @@ mod feeder_route_tests {
             height_ft: height,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_service_from_the_utilitys_transformer_runs_in_the_ground_at_its_cover() {
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.levels = vec![
+            serde_json::from_value(serde_json::json!({"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0, "region": [0.0, 0.0, 1200.0, 1200.0]}))
+                .expect("level"),
+        ];
+        let mut x = gear("UTILITY-XFMR", "Level 1", [1400.0, 100.0], 0.0, 5.0);
+        x.kind = "transformer".into();
+        x.sources.insert(super::super::utilityxfmr::SITE_SOURCE.into(), "outside the building".into());
+        x.properties.insert(super::super::utilityxfmr::COVER_PROPERTY.into(), "30 in (note)".into());
+        sp.mep.equipment = vec![x, gear("MSB", "Level 1", [1100.0, 400.0], 0.0, 7.5)];
+        sp.mep.feeders = vec![cadaddy_walk3d::Feeder {
+            tag: "SV1".into(),
+            from: "UTILITY-XFMR".into(),
+            to: "MSB".into(),
+            conduits: 2,
+            sets: 2,
+            conduit_in: 4.0,
+            entry: "bottom".into(),
+            from_entry: "bottom".into(),
+            ..cadaddy_walk3d::Feeder::default()
+        }];
+        let (runs, left) = feeder_runs(&sp);
+        assert!(left.is_empty(), "{left:?}");
+        let across: Vec<&cadaddy_walk3d::MepRun> = runs.iter().filter(|r| r.points.len() >= 2).collect();
+        assert_eq!(across.len(), 2, "one per conduit");
+        for r in &across {
+            assert_eq!(r.system, super::super::ugplan::E_UG);
+            assert!(r.source_sheet.starts_with("feeder SV1 UTILITY-XFMR→MSB"), "{}", r.source_sheet);
+            // 30 in cover and the 4 in conduit.
+            assert!(r.bottoms_ft.iter().all(|b| (b + 34.0 / 12.0).abs() < 1e-9), "{:?}", r.bottoms_ft);
+        }
+        // A feeder between two pieces of gear in the building stays at the usual depth.
+        sp.mep.equipment.retain(|e| e.tag != "UTILITY-XFMR");
+        sp.mep.equipment.push(gear("UTILITY-XFMR", "Level 1", [900.0, 100.0], 0.0, 5.0));
+        let (runs, _) = feeder_runs(&sp);
+        assert!(runs.iter().filter(|r| r.points.len() >= 2).all(|r| r.bottoms_ft.iter().all(|b| (b + FEEDER_UNDER_FLOOR_FT).abs() < 1e-9)));
     }
 
     #[test]

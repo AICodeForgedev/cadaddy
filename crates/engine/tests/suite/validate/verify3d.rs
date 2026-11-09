@@ -274,6 +274,52 @@ fn renders_overlay_and_counts() {
 
 /// A big model's issues come a page at a time: `total` and `byKind` count them all, `next`
 /// walks the rest, and no issue is skipped or repeated.
+/// A 90° arc (feet) centred at `c` from `a0` to `a1` degrees.
+fn arc(s: Session, layer: &str, c: [f64; 2], r: f64, a0: f64, a1: f64) -> Session {
+    let mut d = (*s.doc().unwrap()).clone();
+    let h = d.new_handle();
+    let mut e = Entity::new(
+        h,
+        EntityKind::Arc(cadaddy_engine::doc::Arc {
+            center: Vec3::new(c[0] * 12.0, c[1] * 12.0, 0.0),
+            radius: r * 12.0,
+            start: a0.to_radians(),
+            end: a1.to_radians(),
+        }),
+    );
+    e.common.layer = layer.into();
+    d.model.push(e);
+    let mut s = Session::empty();
+    s.open_drawing(d, "Plan", None);
+    s
+}
+
+/// Only a door or window the build should have made and could not is a dropped opening: copies
+/// of openings in another view (off the level's plan, or on its sheet past the building) and a
+/// fixture's arc are not; a door drawn where no wall was built is, and says so.
+#[test]
+fn only_openings_the_build_reads_are_dropped_ones() {
+    let mut s = good();
+    // A fixture's arc in the office (shutting along no wall), the window again in another view
+    // off the level's plan, and in a detail on its sheet beside the building.
+    s = arc(s, "A-FIXT", [5.0, 8.0], 2.0, 45.0, 135.0);
+    s = place(s, "W36", "A-WIN", [80.0, 6.0], &[]);
+    s = arc(s, "A-FIXT", [80.0, 3.0], 3.0, 0.0, 90.0);
+    s = place(s, "W36", "A-WIN", [45.0, 6.0], &[]);
+    // A door drawn in the storage room's middle, where no wall is.
+    let mut s = place(s, "DOOR36", "A-DOOR", [20.0, 6.0], &[]);
+    let mut sp = spec();
+    sp["levels"][0]["region"] = json!([-120, -120, 600, 240]);
+    s.execute("bspec.set", &json!({"spec": sp, "replace": true})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let r = s.execute("model.issues", &json!({"kind": "opening_not_in_wall"})).unwrap();
+    let o = of_kind(&r, "opening_not_in_wall");
+    assert_eq!(o.len(), 1, "{o:?}");
+    assert_eq!(handle_layer(&s, &o[0]["handles"][0]), "A-DOOR");
+    assert!(o[0]["message"].as_str().unwrap().contains("no wall was built"), "{o:?}");
+    assert_eq!(o[0]["level"], json!("L1"));
+}
+
 fn issues_come_a_page_at_a_time(s: &mut Session) {
     let all = s.execute("model.issues", &json!({ "limit": 1000 })).unwrap();
     let total = all["total"].as_u64().unwrap() as usize;

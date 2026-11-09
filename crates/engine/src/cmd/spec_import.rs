@@ -158,6 +158,18 @@ pub(crate) fn pdf_text_pages(bytes: &[u8], path: &str, max_pages: u32) -> Result
     extract_pdf_text(bytes, path, max_pages.max(1))
 }
 
+/// One page's text (1-based `page`), its lines in reading order: a drawing sheet that holds a
+/// division's specification.
+pub(crate) fn pdf_page_text(bytes: &[u8], path: &str, page: u32) -> Result<String> {
+    let hooks = super::file::io().ok_or_else(|| bad(CMD_IMPORT, "PDF reading is not available in this build"))?;
+    let read_pdf = hooks.read_pdf.ok_or_else(|| bad(CMD_IMPORT, "PDF import is not available in this build"))?;
+    let opts = json!({"page": page.max(1), "text": true, "images": false});
+    let (drawing, _) = (read_pdf)(bytes, &opts).map_err(|e| bad(CMD_IMPORT, format!("{path}: {e}")))?;
+    let mut text = format!("--- page {} ---\n", page.max(1));
+    collect_texts(&drawing, &mut text);
+    Ok(text)
+}
+
 fn extract_pdf_text(bytes: &[u8], path: &str, max_pages: u32) -> Result<String> {
     let hooks = super::file::io().ok_or_else(|| bad(CMD_IMPORT, "PDF reading is not available in this build"))?;
     let read_pdf = hooks.read_pdf.ok_or_else(|| bad(CMD_IMPORT, "PDF import is not available in this build"))?;

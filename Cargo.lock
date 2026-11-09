@@ -771,6 +771,7 @@ dependencies = [
  "cadaddy-dxf",
  "cadaddy-fonts",
  "cadaddy-geom",
+ "cadaddy-memcount",
  "cadaddy-render",
  "cadaddy-walk3d",
  "crc32fast",

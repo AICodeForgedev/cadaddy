@@ -678,6 +678,23 @@ pub fn decode_all(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
     decode_entities(dwg, false)
 }
 
+/// The block each dimension in `handles` points at, as the file stores it (spec §20.4.20–§20.4.26):
+/// `None` for a null handle, when the dimension draws itself. Handles that aren't dimensions, and
+/// dimensions whose data can't be read, are left out. Only the dimensions asked for are decoded.
+pub fn dimension_blocks(dwg: &Dwg, handles: &std::collections::HashSet<u64>) -> std::collections::HashMap<u64, Option<u64>> {
+    let mut out = std::collections::HashMap::new();
+    for raw in dwg.objects.iter().filter(|r| (20..=26).contains(&r.type_code) && handles.contains(&r.handle)) {
+        let block = Obj::open(raw, dwg.version).and_then(|mut o| {
+            common(&mut o)?;
+            kinds::dimension_block(&mut o)
+        });
+        if let Ok(b) = block {
+            out.insert(raw.handle, b);
+        }
+    }
+    out
+}
+
 /// [`decode_all`], but an entity object that isn't decoded (a type not read yet, a custom class,
 /// proxies, solids, underlays; or damaged data) is kept raw ([`raw_entity`]) in its place, so
 /// nothing is left out: `failed` then holds only objects that couldn't be kept either.

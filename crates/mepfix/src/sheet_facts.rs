@@ -123,6 +123,29 @@ pub fn texts(d: &Drawing) -> Vec<TextItem> {
     out
 }
 
+/// [`texts`] and the visible attribute lettering of the drawing's block references (a PDF
+/// import keeps a symbol's tag, such as a one-line's feeder tag, as its attribute): what a table
+/// or diagram reader sees printed on the sheet.
+pub fn texts_with_tags(d: &Drawing) -> Vec<TextItem> {
+    let mut out = texts(d);
+    for e in d.model.iter() {
+        if out.len() >= MAX_TEXTS {
+            break;
+        }
+        let EntityKind::Insert(ins) = &e.kind else { continue };
+        for a in ins.attribs.iter().filter(|a| !a.invisible) {
+            let t = &a.text;
+            let value = t.value.trim().to_string();
+            let at = t.insert.xy();
+            if value.is_empty() || !at.is_finite() || !t.height.is_finite() || t.height <= 0.0 || out.len() >= MAX_TEXTS {
+                continue;
+            }
+            out.push(TextItem { value, at, height: t.height, rotation: if t.rotation.is_finite() { t.rotation } else { 0.0 } });
+        }
+    }
+    out
+}
+
 fn horizontal(t: &TextItem) -> bool {
     t.rotation.sin().abs() < 0.05 && t.rotation.cos() > 0.0
 }
@@ -149,6 +172,17 @@ pub fn is_sheet_number(t: &str) -> bool {
 
 /// The discipline letters of a sheet number (`E-6` → `E`, `FP101` → `FP`).
 pub fn discipline_of(number: &str) -> String {
+    let letters = designator_letters(number);
+    // A trade's two-letter sub-discipline (`EP` power, `EL` lighting, `AS` architectural shell,
+    // `MH` HVAC, `PL` plumbing) is that trade's sheet: the readers ask for `E`, `A`, `M`, `P`.
+    if crate::wordrules::words("sheets.subdiscipline_codes").contains(&letters.as_str()) {
+        return letters.chars().take(1).collect();
+    }
+    letters
+}
+
+/// A sheet number's leading capitals as printed (`EP` of `EP101`).
+pub fn designator_letters(number: &str) -> String {
     number.trim().chars().take_while(char::is_ascii_uppercase).collect()
 }
 
@@ -158,7 +192,7 @@ pub fn discipline_of(number: &str) -> String {
 /// drawing area: such a number is suspect, and a number at the title block's sheet-number spot
 /// wins over it.
 pub fn designator_prefix(number: &str) -> bool {
-    let letters = discipline_of(number);
+    let letters = designator_letters(number);
     crate::wordrules::words("sheets.number_prefixes").contains(&letters.as_str())
 }
 
@@ -295,7 +329,7 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
         .iter()
         .filter(|t| {
             let v = number_text(&t.value);
-            is_sheet_number(v) && discipline_of(v).len() <= 2 && designator_prefix(v) && t.height >= 2.0 * median && near_edge(t)
+            is_sheet_number(v) && designator_letters(v).len() <= 2 && designator_prefix(v) && t.height >= 2.0 * median && near_edge(t)
         })
         .max_by(|a, b| a.height.total_cmp(&b.height))
         .map(|n| SheetIdent {
@@ -688,6 +722,17 @@ mod tests {
     use cadaddy_doc::{Common, HAlign, Line, Space, Text, VAlign};
     use cadaddy_geom::Vec3;
 
+    #[test]
+    fn a_trades_sub_discipline_sheet_is_that_trades() {
+        // Power, lighting and HVAC sheets are E and M sheets; fire alarm and life safety keep
+        // their own designators; the letters as printed still check as a set's prefix.
+        let got: Vec<String> =
+            ["EP101", "EL101", "MH102", "PL103", "AS112", "E-101", "FA101", "LS-1", "SL111"].iter().map(|n| discipline_of(n)).collect();
+        assert_eq!(got, ["E", "E", "M", "P", "A", "E", "FA", "LS", "SL"]);
+        assert_eq!(designator_letters("EP101"), "EP");
+        assert!(designator_prefix("EP101") && !designator_prefix("RTU-1"));
+    }
+
     fn add(d: &mut Drawing, kind: EntityKind) {
         let _ = d.add(&Space::Model, Common { layer: "0".into(), ..Common::default() }, kind);
     }
@@ -709,6 +754,54 @@ mod tests {
             }),
         );
     }
+    #[test]
+    fn a_symbols_visible_tag_is_read_with_the_sheets_text() {
+        // A PDF import keeps a one-line's feeder tag as its symbol's attribute.
+        let mut d = Drawing::default();
+        text(&mut d, "FEEDER SCHEDULE", 0.0, 10.0, 0.1);
+        let lettering = |v: &str, x: f64| Text {
+            insert: Vec3::new(x, 5.0, 0.0),
+            align_pt: None,
+            height: 0.1,
+            value: v.into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: HAlign::Left,
+            valign: VAlign::Baseline,
+        };
+        let attrib = |v: &str, x: f64, invisible: bool| cadaddy_doc::Attrib {
+            tag: "TAG".into(),
+            text: lettering(v, x),
+            invisible,
+            constant: false,
+            prompt: String::new(),
+            props: Default::default(),
+            multiline: None,
+            modes: Default::default(),
+        };
+        add(
+            &mut d,
+            EntityKind::Insert(cadaddy_doc::Insert {
+                block: "SYM".into(),
+                insert: Vec3::new(1.0, 5.0, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs: vec![attrib("SE-1", 1.0, false), attrib("HIDDEN", 2.0, true)],
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+                clip: None,
+            }),
+        );
+        let plain: Vec<String> = texts(&d).into_iter().map(|t| t.value).collect();
+        assert_eq!(plain, ["FEEDER SCHEDULE"]);
+        let all: Vec<String> = texts_with_tags(&d).into_iter().map(|t| t.value).collect();
+        assert_eq!(all, ["FEEDER SCHEDULE", "SE-1"], "the visible tag, not the hidden one");
+    }
+
     fn line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
         add(d, EntityKind::Line(Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) }));
     }

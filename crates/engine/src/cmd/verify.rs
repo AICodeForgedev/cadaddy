@@ -17,7 +17,7 @@
 //! Wall overlap is the area common to two convex footprints, clipped after I. E. Sutherland and
 //! G. W. Hodgman, "Reentrant Polygon Clipping", Communications of the ACM 17(1), 1974.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, Space};
@@ -43,7 +43,7 @@ const MAX_PX: u32 = 4096;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("model.issues", "Model Issues", run_issues)
-            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
+            .params("{kind?: leak|opening_not_in_wall|window_not_in_wall|window_inside_building (a built window in no wall, or in a wall inside the building, not an outside wall)|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
             .files(),
         CommandSpec::new("model.render", "Render Model View", run_render)
             .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor), fidelity?: auto|building|floor|room|detail (draw the built model as the 3D view's fidelity tier does: auto by the view's height)} → {path?|png, width, height, triangles, fidelity?}")
@@ -189,6 +189,109 @@ impl Footprint {
     fn thickness(&self) -> f64 {
         self.polys.iter().flat_map(|q| edges(q).map(|(a, b)| a.dist(b))).filter(|l| *l > 1e-9).fold(f64::INFINITY, f64::min)
     }
+}
+
+/// A built mesh's boxes in plan (each eight corners: four at its bottom, the same four at its
+/// top, as wallgen's `add_box` makes them): centreline ends and thickness. Other meshes give none.
+fn plan_boxes(m: &Mesh) -> Vec<(Vec2, Vec2, f64)> {
+    m.vertices
+        .chunks_exact(8)
+        .take(MAX_BOXES)
+        .filter_map(|c| {
+            let [p0, p1, p2, p3, q0, q1, q2, q3] = c else { return None };
+            let same = |p: &Vec3, q: &Vec3| p.xy().dist(q.xy()) <= 1e-6 * (1.0 + p.xy().len());
+            if !(same(p0, q0) && same(p1, q1) && same(p2, q2) && same(p3, q3)) {
+                return None;
+            }
+            let a = (p0.xy() + p3.xy()) * 0.5;
+            let b = (p1.xy() + p2.xy()) * 0.5;
+            let t = p0.xy().dist(p3.xy());
+            (a.is_finite() && b.is_finite() && a.dist(b) > 1e-9 && t.is_finite() && t > 0.0).then_some((a, b, t))
+        })
+        .collect()
+}
+
+/// Boxes read off one built mesh, at most.
+const MAX_BOXES: usize = 4_096;
+/// Built windows checked, at most.
+const MAX_WINDOWS: usize = 20_000;
+/// How far (inches) a window's pane may stand off its host wall's faces, and past its own face a
+/// side is looked at for the level's floor.
+const WINDOW_TOL_IN: f64 = 0.5;
+const PAST_FACE_IN: f64 = 3.0;
+
+/// The built windows not in an outside wall (Q6308): a window's pane lies in the thickness of a
+/// wall parallel to it ("window_not_in_wall" when none holds it), and that wall has the outside
+/// beyond one face: no wall past it that way, or no floor just past that face (a courtyard)
+/// ("window_inside_building" when walls stand past both faces over the level's floor: a corridor,
+/// a line pair against the outside wall's inside face). `upf`: drawing units per foot.
+fn windows_off_walls(made: &[Built], upf: f64) -> Vec<Finding> {
+    let k = upf / 12.0;
+    let walls: Vec<(&str, Vec<(Vec2, Vec2, f64)>)> =
+        made.iter().filter(|b| b.part == "wall").take(MAX_WALLS).map(|b| (b.level.as_str(), plan_boxes(&b.mesh))).collect();
+    let floors: Vec<(&str, Footprint)> = made.iter().filter(|b| b.part == "floor").map(|b| (b.level.as_str(), footprint(&b.mesh))).collect();
+    let mut out = Vec::new();
+    for b in made.iter().filter(|b| b.part == "window").take(MAX_WINDOWS) {
+        let Some(&(a, e, _)) = plan_boxes(&b.mesh).first() else { continue };
+        let len = a.dist(e);
+        let u = (e - a) * (1.0 / len);
+        let (mid, nrm) = ((a + e) * 0.5, u.perp());
+        let level_walls = || walls.iter().filter(|(l, _)| l.eq_ignore_ascii_case(&b.level)).flat_map(|(_, bx)| bx.iter());
+        // Its host: a wall box along it whose thickness holds the pane's ends.
+        let host = level_walls()
+            .filter(|(wa, wb, wt)| {
+                let wl = wa.dist(*wb);
+                let wu = (*wb - *wa) * (1.0 / wl);
+                let within = |p: Vec2| wu.perp().dot(p - *wa).abs() <= wt / 2.0 + WINDOW_TOL_IN * k;
+                let s = wu.dot(mid - *wa);
+                u.cross(wu).abs() <= 0.09 && within(a) && within(e) && s >= -WINDOW_TOL_IN * k && s <= wl + WINDOW_TOL_IN * k
+            })
+            .map(|(_, _, wt)| *wt)
+            .fold(None, |m: Option<f64>, t| Some(m.map_or(t, |x| x.max(t))));
+        let at = Some(mid).filter(|p| p.is_finite());
+        let Some(host_t) = host else {
+            out.push(Finding {
+                kind: "window_not_in_wall",
+                message: format!("a window at {} is in no wall: no wall holds it within its frame depth", fmt_pt(mid)),
+                level: Some(b.level.clone()),
+                at,
+                handles: vec![b.handle, b.source],
+            });
+            continue;
+        };
+        // Each side: a wall past its face that way (a centreline the ray meets), and floor just
+        // past its face.
+        let side = |dir: Vec2| {
+            // (A wall overlapping the host's thickness is the host read twice, not one past it.)
+            let walled = level_walls().any(|(q, r_end, wt)| {
+                let r = *r_end - *q;
+                let den = dir.cross(r);
+                if den.abs() < 1e-12 {
+                    return false;
+                }
+                let t = (*q - mid).cross(r) / den;
+                let v = (*q - mid).cross(dir) / den;
+                t - wt / 2.0 > host_t / 2.0 - WINDOW_TOL_IN * k && (0.0..=1.0).contains(&v)
+            });
+            let probe = mid + dir * (host_t / 2.0 + PAST_FACE_IN * k);
+            let level_floors: Vec<&Footprint> = floors.iter().filter(|(l, _)| l.eq_ignore_ascii_case(&b.level)).map(|(_, f)| f).collect();
+            let floored = level_floors.is_empty() || level_floors.iter().any(|f| f.covers(probe, 0.0));
+            walled && floored
+        };
+        if side(nrm) && side(-nrm) {
+            out.push(Finding {
+                kind: "window_inside_building",
+                message: format!(
+                    "a window at {} is in a wall inside the building (walls and floor past both its faces), not an outside wall",
+                    fmt_pt(mid)
+                ),
+                level: Some(b.level.clone()),
+                at,
+                handles: vec![b.handle, b.source],
+            });
+        }
+    }
+    out
 }
 
 fn edges(q: &[Vec2]) -> impl Iterator<Item = (Vec2, Vec2)> + '_ {
@@ -489,26 +592,46 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             }
         }
     }
-    // Doors and windows of the plan that no wall took.
+    // Doors and windows of a storey's plan that no wall took. Only those the build reads: on a
+    // storey's plan, within its walls' extents (an opening on another sheet or view of the same
+    // building is that view's copy, not another door); and not those the build judged no door
+    // (a fixture's or furniture's arc) or the same opening as a built one.
     if !made.is_empty() {
+        let fates = super::wallgen::opening_fates(pd, &sp);
+        let taken: HashSet<Handle> = made.iter().filter(|b| matches!(b.part.as_str(), "door" | "window")).map(|b| b.source).collect();
         for o in plan_openings(pd, &sp, &ents) {
-            let level = level_at(&sp.levels, o.at.x, o.at.y);
-            if level.is_some_and(|l| l.sheet.is_some()) {
+            if taken.contains(&o.handle) {
                 continue;
             }
-            let taken = made.iter().any(|b| b.source == o.handle && matches!(b.part.as_str(), "door" | "window"));
-            if !taken {
-                push(Finding {
-                    kind: "opening_not_in_wall",
-                    message: format!("a {} at {} isn't in any wall, so it wasn't built", o.kind, fmt_pt(o.at)),
-                    level: level.map(|l| l.name.clone()),
-                    at: Some(o.at),
-                    handles: vec![o.handle],
-                });
+            let Some(level) = level_at(&sp.levels, o.at.x, o.at.y) else { continue };
+            let storey = fates.iter().find(|f| f.level.eq_ignore_ascii_case(&level.name));
+            let off_plan = storey.and_then(|f| f.footprint).is_some_and(|(lo, hi)| shell_dist(&Bounds2::new(lo, hi), o.at) > OUTSIDE_FT * upf);
+            if level.sheet.is_some() || off_plan {
+                continue;
             }
+            let why = storey.and_then(|f| f.skipped.iter().find(|x| x.source == o.handle)).map(|x| x.why);
+            if matches!(why, Some(super::wallgen::Skip::NotADoor | super::wallgen::Skip::Same)) {
+                continue;
+            }
+            push(Finding {
+                kind: "opening_not_in_wall",
+                message: format!(
+                    "a {} at {} is drawn where no wall was built (the wall it is drawn in is missing), so it wasn't built",
+                    o.kind,
+                    fmt_pt(o.at)
+                ),
+                level: Some(level.name.clone()),
+                at: Some(o.at),
+                handles: vec![o.handle],
+            });
         }
     }
     step("rooms that leak");
+    // Windows not in an outside wall: a window is hosted by the outside wall that holds it.
+    for w in windows_off_walls(&made, upf) {
+        push(w);
+    }
+    step("windows");
     // Walls without height, and walls overlapping each other.
     let walls: Vec<(&Built, Footprint)> = made.iter().filter(|b| b.part == "wall").take(MAX_WALLS).map(|b| (b, footprint(&b.mesh))).collect();
     for (b, f) in &walls {
@@ -1302,6 +1425,56 @@ fn run_counts(s: &mut Session, _p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A built box mesh of `part` on L1: centreline `a`–`b` (inches), `t` thick.
+    fn built_box(part: &str, h: u64, boxes: &[((f64, f64), (f64, f64), f64)]) -> Built {
+        let mut m = super::super::wallgen::empty_mesh();
+        for (a, b, t) in boxes {
+            super::super::wallgen::add_box(&mut m, Vec2::new(a.0, a.1), Vec2::new(b.0, b.1), *t, 0.0, 100.0);
+        }
+        Built { handle: Handle(h), part: part.into(), level: "L1".into(), source: Handle(h + 1000), mesh: m }
+    }
+
+    #[test]
+    fn a_window_inside_the_building_or_in_no_wall_is_a_finding_one_in_an_outside_wall_is_not() {
+        // A 240" x 240" building of 6" walls, a corridor wall across it at y = 120, its floor.
+        let shell = |extra: Vec<Built>| {
+            let mut v = vec![
+                built_box("wall", 1, &[((0.0, 0.0), (240.0, 0.0), 6.0)]),
+                built_box("wall", 2, &[((0.0, 240.0), (240.0, 240.0), 6.0)]),
+                built_box("wall", 3, &[((0.0, 0.0), (0.0, 240.0), 6.0)]),
+                built_box("wall", 4, &[((240.0, 0.0), (240.0, 240.0), 6.0)]),
+                built_box("wall", 5, &[((3.0, 120.0), (237.0, 120.0), 6.0)]),
+                built_box("floor", 6, &[((-3.0, 120.0), (243.0, 120.0), 246.0)]),
+            ];
+            v.extend(extra);
+            v
+        };
+        let kinds = |made: &[Built]| windows_off_walls(made, 12.0).into_iter().map(|f| f.kind).collect::<Vec<_>>();
+        // In the south outside wall (its sill box under it): none.
+        let ok =
+            shell(vec![built_box("wall", 7, &[((100.0, 0.0), (148.0, 0.0), 6.0)]), built_box("window", 8, &[((100.0, 0.0), (148.0, 0.0), 0.5)])]);
+        assert!(kinds(&ok).is_empty(), "{:?}", kinds(&ok));
+        // In the corridor wall: walls and floor past both faces.
+        let corridor = shell(vec![built_box("window", 8, &[((100.0, 120.0), (148.0, 120.0), 0.5)])]);
+        assert_eq!(kinds(&corridor), vec!["window_inside_building"]);
+        // In a 5" line pair against the south wall's inside face.
+        let sleeve =
+            shell(vec![built_box("wall", 7, &[((100.0, 5.75), (148.0, 5.75), 5.0)]), built_box("window", 8, &[((100.0, 5.75), (148.0, 5.75), 0.5)])]);
+        assert_eq!(kinds(&sleeve), vec!["window_inside_building"]);
+        // Free in a room: in no wall.
+        let free = shell(vec![built_box("window", 8, &[((100.0, 60.0), (148.0, 60.0), 0.5)])]);
+        assert_eq!(kinds(&free), vec!["window_not_in_wall"]);
+        // A courtyard's wall: walls past both faces, but no floor past one: outside.
+        let court = vec![
+            built_box("wall", 1, &[((0.0, 0.0), (240.0, 0.0), 6.0)]),
+            built_box("wall", 2, &[((0.0, 240.0), (240.0, 240.0), 6.0)]),
+            built_box("wall", 5, &[((0.0, 120.0), (240.0, 120.0), 6.0)]),
+            built_box("floor", 6, &[((0.0, 60.0), (240.0, 60.0), 126.0)]),
+            built_box("window", 8, &[((100.0, 120.0), (148.0, 120.0), 0.5)]),
+        ];
+        assert!(kinds(&court).is_empty(), "{:?}", kinds(&court));
+    }
 
     #[test]
     fn a_kind_past_the_cap_leaves_room_for_the_others_and_every_one_is_counted() {

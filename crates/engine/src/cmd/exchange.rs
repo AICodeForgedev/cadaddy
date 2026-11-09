@@ -384,6 +384,15 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return Ok(json!({ "path": path, "format": format, "files": files, "message": format!("Exported to {path}") }));
     }
+    // A DXF is written into the file as it is made, never held whole (refused before anything
+    // is written when it would be too big to reopen).
+    #[cfg(not(target_arch = "wasm32"))]
+    if format == "dxf"
+        && let (Some(path), Some(hook)) = (path, super::file::write_streamed())
+        && let Some(n) = super::file::stream_to("export", s.doc()?, path, &super::file::SaveAs::default(), false, hook)?
+    {
+        return Ok(json!({ "path": path, "format": format, "bytes": n, "message": format!("Exported to {path}") }));
+    }
     let shaded = if format == "png" { super::view::view3d::shaded_png(s, 2400, 1600) } else { None };
     let bytes = match shaded {
         Some(b) => b,

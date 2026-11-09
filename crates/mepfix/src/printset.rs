@@ -423,6 +423,12 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
     if up.contains("SCHEDULE") || up.contains("NOTES") || up.contains("LEGEND") || up.contains("ABBREVIATION") || up.contains("SYMBOLS") {
         return "schedule".into();
     }
+    // A specification printed on the drawings (`ELECTRICAL SPECIFICATIONS`): read as a
+    // specification, never a plan.
+    let spec_words = crate::wordrules::words("sheets.specification_title_words");
+    if up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| spec_words.contains(&w)) {
+        return "specification".into();
+    }
     if up.contains("DETAIL") {
         return "detail".into();
     }
@@ -903,10 +909,12 @@ pub fn run_classify(
 /// Run the classify stage on the prints themselves: each entry's sheet (a file, or a page of a
 /// merged set) loaded by `load` and read by the sheet reader. A sheet printing several plan
 /// views of different levels becomes one entry per view (`<number>/<level>`). A sheet number
-/// that a later file has again (a revision folder after the set) is marked superseded.
+/// that a later file has again (a revision folder after the set) is marked superseded. Several
+/// pages are read at once (`load` is called from several threads), a batch at a time, and taken
+/// in the set's order, so the result is the one a page-by-page read gives.
 pub fn run_classify_prints(
     project: &mut PrintSetProject,
-    load: &dyn Fn(&SheetEntry) -> Result<cadaddy_doc::Drawing, String>,
+    load: &(dyn Fn(&SheetEntry) -> Result<cadaddy_doc::Drawing, String> + Sync),
     cancel: &AtomicBool,
     progress: &mut ProgressFn<'_>,
 ) -> StageRecord {
@@ -919,46 +927,63 @@ pub fn run_classify_prints(
     let old = std::mem::take(&mut project.sheets);
     let mut pages: Vec<ClassifyPage> = Vec::with_capacity(total);
     let mut entries = 0usize;
-    for (i, entry) in old.into_iter().enumerate() {
-        if cancel.load(Ordering::Relaxed) || entries >= MAX_SHEETS {
-            entries += 1;
-            pages.push(ClassifyPage::Kept(Box::new(entry)));
-            continue;
+    let mut rest = old.into_iter().enumerate();
+    loop {
+        let batch: Vec<(usize, SheetEntry)> = rest.by_ref().take(CLASSIFY_BATCH).collect();
+        if batch.is_empty() {
+            break;
         }
-        progress(&Progress {
-            stage: "classify".into(),
-            sheet_index: i,
-            sheet_number: entry.number.clone(),
-            sheets_total: total,
-            items_so_far: classified,
+        // Past the cap nothing more is read (the batch's own entries are counted below).
+        let capped = entries >= MAX_SHEETS;
+        let readings = par_map(&batch, |(_, entry)| {
+            if capped || cancel.load(Ordering::Relaxed) {
+                PageReading::Skipped
+            } else if !entry.dirty && !entry.number.is_empty() {
+                PageReading::Known
+            } else {
+                match load(entry) {
+                    Ok(drawing) => PageReading::Read(Box::new(read_page(&drawing))),
+                    Err(err) => PageReading::Failed(err),
+                }
+            }
         });
-        if !entry.dirty && !entry.number.is_empty() {
-            entries += 1;
-            pages.push(ClassifyPage::Kept(Box::new(entry)));
-            classified += 1;
-            continue;
-        }
-        let drawing = match load(&entry) {
-            Ok(d) => d,
-            Err(err) => {
-                let mut e = entry;
-                e.stage_results.insert(
-                    "classify".into(),
-                    SheetStageResult { stage: "classify".into(), status: StageStatus::Failed, error: Some(err), ..SheetStageResult::default() },
-                );
+        for ((i, entry), reading) in batch.into_iter().zip(readings) {
+            if entries >= MAX_SHEETS || matches!(reading, PageReading::Skipped) {
                 entries += 1;
-                pages.push(ClassifyPage::Kept(Box::new(e)));
+                pages.push(ClassifyPage::Kept(Box::new(entry)));
                 continue;
             }
-        };
-        let texts = sheet_facts::texts(&drawing);
-        let facts = PageFacts::read_texts(&drawing, &texts);
-        let recs = sheet_reader::recognise_views(&drawing);
-        let candidates = sheet_facts::number_candidates(&drawing, &texts);
-        let read = ReadPage { entry, facts, recs, candidates, contents: content_signature(&texts), note: String::new() };
-        entries += read.recs.len().max(1);
-        pages.push(ClassifyPage::Read(Box::new(read)));
-        classified += 1;
+            progress(&Progress {
+                stage: "classify".into(),
+                sheet_index: i,
+                sheet_number: entry.number.clone(),
+                sheets_total: total,
+                items_so_far: classified,
+            });
+            match reading {
+                PageReading::Skipped | PageReading::Known => {
+                    entries += 1;
+                    pages.push(ClassifyPage::Kept(Box::new(entry)));
+                    classified += 1;
+                }
+                PageReading::Failed(err) => {
+                    let mut e = entry;
+                    e.stage_results.insert(
+                        "classify".into(),
+                        SheetStageResult { stage: "classify".into(), status: StageStatus::Failed, error: Some(err), ..SheetStageResult::default() },
+                    );
+                    entries += 1;
+                    pages.push(ClassifyPage::Kept(Box::new(e)));
+                }
+                PageReading::Read(r) => {
+                    let PageRead { facts, recs, candidates, contents } = *r;
+                    let read = ReadPage { entry, facts, recs, candidates, contents, note: String::new() };
+                    entries += read.recs.len().max(1);
+                    pages.push(ClassifyPage::Read(Box::new(read)));
+                    classified += 1;
+                }
+            }
+        }
     }
     set_numbers(&mut pages);
     let mut out: Vec<SheetEntry> = Vec::with_capacity(entries.min(MAX_SHEETS));
@@ -1180,40 +1205,135 @@ pub fn run_classify_prints(
 // ─── Sheet index ─────────────────────────────────────────────────────────────
 
 /// Reads the project's prints for [`run_classify_prints`]: a page of a PDF (no images, markups
-/// or layout: only what the title block and views say), or a drawing file. The file read last
-/// stays in memory, so a merged set's pages are read from one copy.
+/// or layout: only what the title block and views say), or a drawing file. The files read last
+/// stay in memory, so a merged set's pages are read from one copy, also by several threads at
+/// once.
 pub struct PrintLoader {
     dir: PathBuf,
-    last: std::cell::RefCell<Option<(String, std::rc::Rc<Vec<u8>>)>>,
+    /// The files read last, the latest at the end.
+    files: std::sync::Mutex<Vec<(String, std::sync::Arc<Vec<u8>>)>>,
 }
+
+/// Most files [`PrintLoader`] keeps: classify's threads read pages next to each other in the
+/// set, so a few files at most at a time.
+const MAX_KEPT_FILES: usize = 2 * CLASSIFY_THREADS;
 
 impl PrintLoader {
     pub fn new(dir: &Path) -> PrintLoader {
-        PrintLoader { dir: dir.to_path_buf(), last: std::cell::RefCell::new(None) }
+        PrintLoader { dir: dir.to_path_buf(), files: std::sync::Mutex::new(Vec::new()) }
+    }
+
+    /// `e`'s file, read once while it stays among the last ones read (the lock is held while a
+    /// file is read: the other threads wait for it instead of reading it again).
+    fn bytes(&self, e: &SheetEntry) -> Result<std::sync::Arc<Vec<u8>>, String> {
+        let mut files = self.files.lock().map_err(|_| format!("{}: the file cache failed", e.file))?;
+        if let Some((_, b)) = files.iter().find(|(f, _)| *f == e.file) {
+            return Ok(b.clone());
+        }
+        let path = self.dir.join(&e.file);
+        if path.metadata().map_or(true, |m| m.len() > MAX_FILE_BYTES) {
+            return Err(format!("{}: missing or too large", e.file));
+        }
+        let b = std::sync::Arc::new(std::fs::read(&path).map_err(|err| format!("{}: {err}", e.file))?);
+        files.push((e.file.clone(), b.clone()));
+        // at most a big file's worth kept besides the latest
+        while files.len() > 1
+            && (files.len() > MAX_KEPT_FILES || files.iter().rev().skip(1).map(|(_, b)| b.len() as u64).sum::<u64>() > MAX_FILE_BYTES)
+        {
+            files.remove(0);
+        }
+        Ok(b)
     }
 
     pub fn load(&self, e: &SheetEntry) -> Result<cadaddy_doc::Drawing, String> {
         if e.file.split(['/', '\\']).any(|part| part == "..") {
             return Err(format!("{}: outside the project folder", e.file));
         }
-        let cached = self.last.borrow().as_ref().filter(|(f, _)| *f == e.file).map(|(_, b)| b.clone());
-        let bytes = match cached {
-            Some(b) => b,
-            None => {
-                let path = self.dir.join(&e.file);
-                if path.metadata().map_or(true, |m| m.len() > MAX_FILE_BYTES) {
-                    return Err(format!("{}: missing or too large", e.file));
-                }
-                let b = std::rc::Rc::new(std::fs::read(&path).map_err(|err| format!("{}: {err}", e.file))?);
-                *self.last.borrow_mut() = Some((e.file.clone(), b.clone()));
-                b
-            }
-        };
+        let bytes = self.bytes(e)?;
         if e.file.to_ascii_lowercase().ends_with(".pdf") {
             let opts = cadaddy_io::pdf_read::PdfOptions { page: e.page.max(1), images: false, markups: false, layout: false, ..Default::default() };
             return cadaddy_io::pdf_read::read(&bytes, &opts).map(|i| i.drawing).map_err(|err| err.to_string());
         }
         cadaddy_io::read(&bytes, &e.file).map_err(|err| err.to_string())
+    }
+}
+
+/// Pages classify reads before taking them in order: enough to keep its threads busy, few enough
+/// that a cancel or the cap stops it soon.
+const CLASSIFY_BATCH: usize = 32;
+/// Pages classify reads at once. Each holds its drawing while it is read (a dense page's is
+/// hundreds of MB), so this bounds the memory, not the core count: the lettering of each page is
+/// read on all cores anyway.
+const CLASSIFY_THREADS: usize = 4;
+
+/// `f` over `items` on up to [`CLASSIFY_THREADS`] threads, the results in order. In the browser
+/// (no threads), or for what no thread took (none could be started), one at a time here.
+fn par_map<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync) -> Vec<U> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let done = on_threads(items, &f);
+    #[cfg(target_arch = "wasm32")]
+    let done: Vec<Option<U>> = Vec::new();
+    let mut done = done.into_iter();
+    items.iter().map(|item| done.next().flatten().unwrap_or_else(|| f(item))).collect()
+}
+
+/// `f` over `items` on up to [`CLASSIFY_THREADS`] threads, each taking the next item when done:
+/// each item's result, `None` for one no thread took.
+#[cfg(not(target_arch = "wasm32"))]
+fn on_threads<T: Sync, U: Send>(items: &[T], f: &(impl Fn(&T) -> U + Sync)) -> Vec<Option<U>> {
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, CLASSIFY_THREADS).min(items.len());
+    if threads < 2 {
+        return Vec::new();
+    }
+    let next = AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<U>>> = items.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            let work = || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let (Some(item), Some(slot)) = (items.get(i), slots.get(i)) else { break };
+                    let out = f(item);
+                    if let Ok(mut slot) = slot.lock() {
+                        *slot = Some(out);
+                    }
+                }
+            };
+            if std::thread::Builder::new().name("classify".into()).spawn_scoped(scope, work).is_err() {
+                break;
+            }
+        }
+    });
+    slots.into_iter().map(|slot| slot.into_inner().ok().flatten()).collect()
+}
+
+/// What became of one page of a classify batch.
+enum PageReading {
+    /// Not read: cancelled, or past the cap.
+    Skipped,
+    /// Read before and not changed since: kept as it is.
+    Known,
+    Failed(String),
+    Read(Box<PageRead>),
+}
+
+/// What classify reads on a page (its drawing is dropped once read).
+struct PageRead {
+    facts: PageFacts,
+    recs: Vec<RecognisedSheet>,
+    candidates: Vec<crate::sheet_facts::NumberCandidate>,
+    contents: Vec<u64>,
+}
+
+fn read_page(drawing: &cadaddy_doc::Drawing) -> PageRead {
+    let texts = sheet_facts::texts(drawing);
+    PageRead {
+        facts: PageFacts::read_texts(drawing, &texts),
+        recs: sheet_reader::recognise_views(drawing),
+        candidates: sheet_facts::number_candidates(drawing, &texts),
+        contents: content_signature(&texts),
     }
 }
 
@@ -2963,5 +3083,9 @@ mod classify_tests {
         assert_eq!(classify_sheet_type("A221", "FIRST FLOOR REFLECTED CEILING PLAN"), "rcp", "a floor's ceiling plan isn't a floor plan");
         assert_eq!(classify_sheet_type("A222", "RCP"), "rcp");
         assert_eq!(classify_sheet_type("A223", "REFLECTED CEILING PLAN"), "rcp");
+        assert_eq!(classify_sheet_type("Q41", "ELECTRICAL SPECIFICATIONS"), "specification");
+        assert_eq!(classify_sheet_type("Q702", "PLUMBING SPECIFICATION"), "specification");
+        assert_eq!(classify_sheet_type("Q703", "GENERAL NOTES AND SPECIFICATIONS"), "schedule", "notes stay notes");
+        assert_eq!(classify_sheet_type("Q201", "FLOOR PLAN"), "plan");
     }
 }

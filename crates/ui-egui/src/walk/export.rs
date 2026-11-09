@@ -125,6 +125,53 @@ pub fn encode_mp4(e: &Export, out: &Path) -> Result<bool, String> {
     cadaddy_walk3d::video::encode_mp4(&e.dir, e.fps, out)
 }
 
+/// The `ui.walk.export` command: tour `tour` of the open drawing rendered as numbered PNG frames
+/// in `folder` by the CPU walk renderer (each frame at most [`super::cpu::MAX_PIXELS`]; the
+/// headless `cadaddy-walk --tour` draws full-size frames on the GPU), and with `mp4` made into a
+/// video by ffmpeg. Without ffmpeg the reply carries the command to run instead (`ffmpeg`) and
+/// says so (`message`).
+pub fn run(app: &crate::CadApp, p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use serde_json::{Value, json};
+    let text = |k: &str| p.get(k).and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty());
+    let tour = text("tour").ok_or("`tour` (a saved camera tour's name) is required")?;
+    let folder = text("folder").ok_or("`folder` (where the frames go) is required")?;
+    let fps = p.get("fps").and_then(Value::as_f64).unwrap_or(30.0);
+    let side = |k: &str, dflt: u64| -> Result<u32, String> {
+        let v = p.get(k).and_then(Value::as_u64).unwrap_or(dflt);
+        u32::try_from(v).ok().filter(|v| (16..=MAX_SIDE).contains(v)).ok_or_else(|| format!("`{k}` is 16 to {MAX_SIDE} pixels"))
+    };
+    let size = super::cpu::frame_size((side("width", 640)?, side("height", 360)?));
+    let st = app.session.state().map_err(|e| e.to_string())?;
+    let b = Building::load(std::sync::Arc::clone(&st.doc), st.path.as_deref().map(Path::new))?;
+    let e = export_frames(&b, tour, fps, Path::new(folder), |w| {
+        let img = super::cpu::render(&b.scene, w, size, 1e9);
+        let [fw, fh] = img.size;
+        let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
+        Ok((u32::try_from(fw).map_err(|e| e.to_string())?, u32::try_from(fh).map_err(|e| e.to_string())?, rgba))
+    })?;
+    let mut out = json!({
+        "tour": tour, "frames": e.frames, "width": e.width, "height": e.height, "fps": e.fps, "duration": e.duration,
+        "folder": folder, "first": frame_name(0), "last": frame_name(e.frames.saturating_sub(1)),
+    });
+    if let Some(mp4) = text("mp4") {
+        let mp4 = Path::new(mp4);
+        #[cfg(not(target_arch = "wasm32"))]
+        match encode_mp4(&e, mp4)? {
+            true => out["mp4"] = json!(mp4.display().to_string()),
+            false => {
+                let cmd = ffmpeg_command(&e, mp4);
+                out["message"] = json!(format!("ffmpeg isn't installed; to make the video run: {cmd}"));
+                out["ffmpeg"] = json!(cmd);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            out["message"] = json!(format!("{}: a video can't be made in the browser", mp4.display()));
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

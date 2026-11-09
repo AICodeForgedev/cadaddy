@@ -2114,6 +2114,25 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
             );
             continue;
         }
+        // The utility's own gear (its pad-mounted transformer, Q6307): furnished and set by the
+        // utility, by others; its pad and service conduits and conductors stay ours.
+        let furnished = prop("FURNISHED BY");
+        let utility = super::utilityxfmr::rules().furnished_by.trim().to_ascii_lowercase();
+        if !utility.is_empty() && furnished.trim().to_ascii_lowercase().starts_with(&utility) {
+            if others.len() < MAX_LINES {
+                others.push(json!({
+                    "trade": "electrical", "element": st(&e, "tag"), "kind": st(&e, "kind"), "level": st(&e, "level"),
+                    "owner": utility, "furnish": utility, "install": utility,
+                    "scope": format!("by others ({utility})"),
+                    "reason": furnished,
+                    "source": st(&e, "title"),
+                    "ours": ["pad", "service conduits and conductors"],
+                    "decided": "documents",
+                    "cost_to_us": 0.0,
+                }));
+            }
+            continue;
+        }
         let electrical = matches!(
             st(&e, "kind").to_ascii_lowercase().as_str(),
             "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
@@ -2222,7 +2241,8 @@ fn drywall_from_built_model(s: &mut Session, lines: &mut Vec<Line>) {
     let Ok((sp, _)) = current(s, "bim.bom") else { return };
     let Ok(d) = s.doc() else { return };
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let mut ceiling_sf = 0.0f64;
+    // Per level, the level each ceiling is built on (Q6271: never one job-wide line on no level).
+    let mut ceiling_sf: BTreeMap<String, f64> = BTreeMap::new();
     for e in d.model.iter() {
         if super::wallgen::made_as(e).as_deref() == Some("ceiling") {
             let b = cadaddy_doc::entity_bounds(d, e, 0);
@@ -2230,12 +2250,12 @@ fn drywall_from_built_model(s: &mut Session, lines: &mut Vec<Line>) {
                 let w = (b.max.x - b.min.x) / upf;
                 let h = (b.max.y - b.min.y) / upf;
                 if w > 0.0 && h > 0.0 {
-                    ceiling_sf += w * h;
+                    *ceiling_sf.entry(super::bspec::made_level(e).unwrap_or_default()).or_default() += w * h;
                 }
             }
         }
     }
-    if ceiling_sf > 0.0 {
+    for (level, sf) in ceiling_sf.into_iter().filter(|(_, sf)| *sf > 0.0) {
         add(
             lines,
             Line {
@@ -2244,35 +2264,33 @@ fn drywall_from_built_model(s: &mut Session, lines: &mut Vec<Line>) {
                 item: "Board gypsum board".into(),
                 size: "0.625\"".into(),
                 unit: "sq ft",
-                net: ceiling_sf,
+                net: sf,
                 status: "model",
                 rule: Some("estimated from ceiling area (no wall assemblies)".into()),
+                level,
                 ..Line::default()
             },
         );
     }
 }
 
+/// The levels the walls' drywall is taken off one by one (more: the whole job's at once).
+const MAX_DRYWALL_LEVELS: usize = 200;
+
 /// Drywall from `drywall.takeoff`, where walls have assemblies.
 fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
-    // Collect wall handles and levels from the model for element tracking.
-    let (wall_handles, wall_level) = if let Ok(d) = s.doc() {
-        let mut handles = Vec::new();
-        let mut level = String::new();
+    // Each level's walls (a few of each, for element tracking).
+    let mut walls: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if let Ok(d) = s.doc() {
         for e in d.model.iter().take(MAX_LINES) {
             if super::wallgen::made_as(e).as_deref() == Some("wall") {
-                if handles.len() < 500 {
-                    handles.push(e.handle.hex());
-                }
-                if level.is_empty() {
-                    level = super::bspec::made_level(e).unwrap_or_default();
+                let v = walls.entry(super::bspec::made_level(e).unwrap_or_default()).or_default();
+                if v.len() < 10 {
+                    v.push(e.handle.hex());
                 }
             }
         }
-        (handles, level)
-    } else {
-        (Vec::new(), String::new())
-    };
+    }
     let Ok(q) = s.execute("drywall.takeoff", &json!({ "waste": 0 })) else {
         // Q5278: fallback — if drywall.takeoff fails but the model has ceiling elements,
         // produce a rough drywall line from ceiling area (board both sides of partition walls).
@@ -2282,9 +2300,34 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
     if q["rows"].as_array().is_none_or(|a| a.is_empty()) {
         drywall_from_built_model(s, lines);
     }
-    for r in q["rows"].as_array().into_iter().flatten() {
-        // Per-group handles: match the group name to wall entities with that type tag.
-        let group_handles: Vec<String> = wall_handles.iter().take(10).cloned().collect();
+    // The walls' board, studs and track per level, each level's walls alone (Q6271: one level
+    // never carries another's); the whole job's on no level if a level can't be taken off.
+    // The levels' totals must come to the whole job's, else nothing is split.
+    let all = || q["rows"].as_array().cloned().unwrap_or_default();
+    let total = |t: &Value| ["boardAreaSqFt", "trackLengthFt"].map(|k| t[k].as_f64().unwrap_or(0.0));
+    let per_level: Vec<(String, Vec<Value>)> = if walls.len() > 1 {
+        let mut sum = [0.0f64; 2];
+        walls
+            .keys()
+            .take(MAX_DRYWALL_LEVELS)
+            .map(|lv| {
+                let r = s.execute("drywall.takeoff", &json!({ "waste": 0, "levels": [lv], "ceilings": false })).ok()?;
+                for (acc, v) in sum.iter_mut().zip(total(&r["totals"])) {
+                    *acc += v;
+                }
+                r["rows"].as_array().cloned().map(|rows| (lv.clone(), rows))
+            })
+            .collect::<Option<Vec<_>>>()
+            .filter(|_| {
+                walls.len() <= MAX_DRYWALL_LEVELS && sum.iter().zip(total(&q["totals"])).all(|(a, b)| (a - b).abs() <= 0.01 * b.abs().max(1.0))
+            })
+            .unwrap_or_else(|| vec![(String::new(), all())])
+    } else {
+        vec![(walls.keys().next().cloned().unwrap_or_default(), all())]
+    };
+    for (wall_level, r) in per_level.iter().flat_map(|(lv, rows)| rows.iter().map(move |r| (lv, r))) {
+        // The level's walls (none on the whole job's line: they would put it on one level).
+        let group_handles: Vec<String> = walls.get(wall_level).cloned().unwrap_or_default();
         for b in r["boards"].as_array().into_iter().flatten() {
             let item = format!("Board {}", b["material"].as_str().unwrap_or_default());
             let size = format!("{}\"", b["thicknessIn"]);

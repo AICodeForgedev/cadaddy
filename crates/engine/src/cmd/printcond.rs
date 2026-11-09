@@ -498,6 +498,7 @@ pub(crate) fn run(system: &str, level: &str, sheet: &str, points: Vec<[f64; 2]>,
         slope_in_per_ft: 0.0,
         made: Default::default(),
         basis: String::new(),
+        corrections: Vec::new(),
     }
 }
 

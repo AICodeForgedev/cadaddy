@@ -124,7 +124,12 @@ fn a_project_manual_not_named_one_is_told_by_its_section_headers() {
     let job = job_state(&s);
     assert_eq!(job["specs_found"], json!([root.join("Owner Documents").join("Book.txt").display().to_string()]));
     assert!(job["specs_how"][0].as_str().is_some_and(|h| h.contains("CSI section headers")), "{}", job["specs_how"]);
-    assert_eq!(sections_read(&mut s), ["26 27 26 WIRING DEVICES"], "the manual's painting section is not a product division");
+    // Every section of the manual is read (Q6295); only the product division's gives products
+    // (the painting section's maker is no device's).
+    assert_eq!(sections_read(&mut s), ["09 91 23 INTERIOR PAINTING", "26 27 26 WIRING DEVICES"]);
+    let r = s.execute("bim.products", &json!({"specs": job["specs_found"].clone(), "plumbing": false})).expect("products");
+    assert_eq!(r["product_sections"], 1, "{r:#}");
+    assert!(r["sections"].as_array().is_some_and(|a| a.len() == 1 && a[0]["section"] == "26 27 26 WIRING DEVICES"), "{r:#}");
     let _ = std::fs::remove_dir_all(&root);
 }
 

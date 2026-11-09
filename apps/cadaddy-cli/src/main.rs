@@ -400,6 +400,10 @@ fn install_io() {
     cadaddy_engine::cmd::file::set_write_as(|d, name, o| {
         cadaddy_io::write_with(d, name, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
+    // DXF saves and exports are written into the file as they are made, never held whole.
+    cadaddy_engine::cmd::file::set_write_streamed(|d, name, o, open| {
+        cadaddy_io::write_streamed(d, name, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }, open).map_err(|e| e.to_string())
+    });
     // AutoLISP's entget, entmake and entmod see entities as DXF groups.
     cadaddy_engine::cmd::file::set_entity_codec(cadaddy_engine::cmd::file::EntityCodec {
         groups: cadaddy_io::entity_groups,
@@ -449,10 +453,23 @@ fn info(path: &str, full: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The bytes of `path` when it is a .cdy file (its container is described), read as opening
+/// reads files (regular files within the size limit); of any other file only its first bytes are
+/// read, so a file too big to open is never read whole.
+fn cdy_bytes(path: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    cadaddy_engine::readfile::open(path).ok()?.take(16).read_to_end(&mut head).ok()?;
+    if !cadaddy_io::cdy::is_cdy(&head) {
+        return None;
+    }
+    cadaddy_engine::readfile::read(path).ok()
+}
+
 /// The document [`info`] prints. What opening the file said about it (a damaged index, parts it
 /// lost) is in `warnings`, as `open` reports it.
 fn info_value(path: &str, full: bool) -> Result<Value, String> {
-    let container = std::fs::read(path).ok().and_then(|bytes| {
+    let container = cdy_bytes(path).and_then(|bytes| {
         let m = cadaddy_io::cdy::manifest(&bytes)?;
         let check = cadaddy_io::cdy::verify(&bytes).unwrap_or_default();
         Some(json!({ "manifest": m, "chunks": check["sizes"], "waste": check["waste"], "bytes": bytes.len() }))
@@ -2053,6 +2070,20 @@ mod b4polish_tests {
         // A sound file has none.
         let ok = temp_file("ok", &good);
         assert!(info_value(&ok, false).unwrap().get("warnings").is_none());
+    }
+
+    /// `info` reads a file whole only when it is a .cdy (its container is described): of any
+    /// other only the first bytes, so a file too big to open is refused by opening it, never read
+    /// into memory first (a 2.47 GB DXF filled 2.36 GB before the refusal).
+    #[test]
+    fn info_reads_only_a_cdy_file_whole() {
+        let good = cadaddy_io::write(&cadaddy_engine::sample::floor_plan(), "a.cdy").unwrap();
+        let cdy = temp_file("whole", &good);
+        assert_eq!(cdy_bytes(&cdy).as_deref(), Some(&good[..]));
+        let dxf = cadaddy_io::write(&cadaddy_engine::sample::floor_plan(), "a.dxf").unwrap();
+        let path = temp_file("dxf", &dxf);
+        assert!(cdy_bytes(&path).is_none());
+        assert!(cdy_bytes(&format!("{path}.missing")).is_none());
     }
 
     /// B4-031: `verify` on a file with only bytes appended says exactly that.

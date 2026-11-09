@@ -134,7 +134,7 @@ fn plan_with(on_e_sheet: bool) -> Session {
                       "id": "R1", "size_source": "tag", "height_source": "estimated-route", "source_sheet": "M-101"}],
             "terminals": [{"system": "SA", "level": "L1", "at": [1500, 500], "size_in": [12, 12], "bottom_ft": 8, "terminal_kind": "diffuser"}],
             "equipment": [{"tag": "AHU-1", "kind": "ahu", "level": "L1", "min": [2000, 400], "max": [2060, 440], "height_ft": 5,
-                           "properties": {"CFM": "2000"}, "sources": {"schedule": "M-601"}},
+                           "properties": {"CFM": "2000", "MODEL": "XB-12"}, "sources": {"schedule": "M-601"}},
                           {"tag": "LP1", "kind": "panelboard", "level": "L1", "min": [2200, 400], "max": [2220, 410], "height_ft": 6,
                            "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20A", "poles": 1, "source": "E-601"}]}]
         }
@@ -206,6 +206,62 @@ fn a_switch_takes_its_wiring_device_sections_product_record() {
     assert_eq!(product["resolved"]["configuration"], "single pole");
     // A kind no section speaks for and no submittal covers is listed with why.
     assert!(r["no_product_data"].as_object().is_some_and(|m| !m.is_empty()), "{r:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A project manual whose sections are headed `SECTION 03 3000` with the title on the next
+/// line, none of them in the product divisions, and whose Division 26 points to a drawing sheet
+/// for its specification (Q6295): every section is read, and the sheet is read as Division 26's
+/// specification (the switch takes its product record from it).
+#[test]
+fn a_manual_reads_every_division_and_the_sheet_it_points_a_division_to() {
+    let mut s = plan();
+    fill(&mut s);
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-manual-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manual = dir.join("Project Manual.txt");
+    std::fs::write(
+        &manual,
+        "PROJECT A\nTABLE OF CONTENTS\n2.01 DIVISION 03 -- CONCRETE\nA. 03 3000 - Cast-in-Place Concrete\n\
+         2.02 DIVISION 22 -- PLUMBING\nA. Refer Sheet Q8 for Plumbing Specifications\n\
+         2.03 DIVISION 26 -- ELECTRICAL\nA. Refer Sheet Q-9 for Electrical Specifications\n2.04 DIVISION 27 -- COMMUNICATIONS\n\
+         --- page 2 of 4 ---\nSECTION 03 3000\nCAST-IN-PLACE CONCRETE\nPART 1 GENERAL\n1.01 SUMMARY\nA. Footings.\n\
+         --- page 3 of 4 ---\nSECTION 04 2000\nUNIT MASONRY\nPART 1 GENERAL\nA. See Section 03 3000 - Cast-in-Place Concrete.\n\
+         --- page 4 of 4 ---\nSECTION 09 9000\nPAINTING AND COATING\nPART 1 GENERAL\n",
+    )
+    .unwrap();
+    // The sheet: a specification printed on the drawings, read as text.
+    let sheet = dir.join("sheet-q9.txt");
+    std::fs::write(
+        &sheet,
+        "ELECTRICAL SPECIFICATIONS\nPART 2 - PRODUCTS\n2.4 TOGGLE SWITCHES\nB. Switches, 120/277 V, 20 A:\n1. Single Pole:\n\
+         a. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\n1) Hubbell.\n2) Leviton.\nPART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    let r = s
+        .execute(
+            "bim.products",
+            &json!({"specs": [manual.to_string_lossy()], "sheets": [{"number": "Q9", "file": sheet.to_string_lossy(), "page": 1}]}),
+        )
+        .unwrap();
+    let read: Vec<&str> = r["sections_read"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(read.contains(&"03 30 00 CAST-IN-PLACE CONCRETE"), "every division's section, titled from the next line: {r:#}");
+    assert!(read.contains(&"04 20 00 UNIT MASONRY") && read.contains(&"09 90 00 PAINTING AND COATING"), "{r:#}");
+    assert!(!read.iter().any(|x| x.starts_with("03 30 00 -")), "a reference in a sentence is no header: {read:?}");
+    assert!(read.contains(&"26 ELECTRICAL (sheet Q-9)"), "the sheet is Division 26's specification: {r:#}");
+    assert_eq!(r["product_sections"], 1, "{r:#}");
+    let sheets = r["division_sheets"].as_array().unwrap();
+    assert_eq!(sheets.len(), 2, "{r:#}");
+    let e = sheets.iter().find(|d| d["division"] == "26").unwrap();
+    assert_eq!((e["sheet"].as_str(), e["read"].as_bool(), e["requirements"].as_u64()), (Some("Q-9"), Some(true), Some(1)), "{r:#}");
+    let p = sheets.iter().find(|d| d["division"] == "22").unwrap();
+    assert_eq!(p["read"], false, "a sheet the set doesn't give isn't read: {r:#}");
+    assert!(p["why"].as_str().is_some_and(|w| w.contains("not in the print set")), "{r:#}");
+    let sw = device_of(&mut s, "S");
+    let product: Value = serde_json::from_str(sw["product"]["value"].as_str().unwrap_or("null")).unwrap();
+    assert_eq!(product["required"]["section"], "26 ELECTRICAL (sheet Q-9)", "{product:#}");
+    assert!(sw["approved_makers"]["value"].as_str().is_some_and(|m| m.contains("Hubbell")), "{sw:#}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -682,6 +738,89 @@ fn ducts_terminals_and_equipment_carry_size_system_airflow_and_capacity() {
     assert_eq!(a["capacity"]["unit"], "cfm");
     assert_eq!(a["capacity"]["source"]["kind"], "schedule");
     assert_eq!(a["capacity"]["source"]["doc"], "M-601");
+    // Its schedule row's model, from the schedule (Q6313).
+    assert_eq!(a["model"]["value"], "XB-12", "{a:#}");
+    assert_eq!(a["model"]["source"]["kind"], "schedule");
+    assert_eq!(a["model"]["source"]["doc"], "M-601");
+}
+
+/// A door made like the build makes them in office 101's south wall (nothing printed by it);
+/// its handle and plan middle.
+fn door_in_south_wall(s: &mut Session) -> (Handle, Vec2) {
+    let wall = {
+        let d = s.doc().expect("doc");
+        d.model
+            .iter()
+            .filter(|e| made_as(e).as_deref() == Some("wall"))
+            .map(|e| (cadaddy_engine::doc::entity_bounds(d, e, 0).center().dist(Vec2::new(120.0, 0.0)), e.handle))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("a wall")
+            .1
+    };
+    let door = {
+        let d = s.doc_mut().expect("doc");
+        let mut e = (**d.entity(wall).expect("wall")).clone();
+        e.handle = d.new_handle();
+        e.common.layer = "3D-Doors".into();
+        e.common.xdata = vec![
+            RawTag { code: 1001, value: "CADADDY_WALLGEN".into() },
+            RawTag { code: 1000, value: "door".into() },
+            RawTag { code: 1000, value: "L1".into() },
+            RawTag { code: 1000, value: "0".into() },
+        ]
+        .into();
+        let h = e.handle;
+        d.model.push(e);
+        h
+    };
+    let at = cadaddy_engine::doc::entity_bounds(s.doc().expect("doc"), s.doc().expect("doc").entity(door).expect("door"), 0).center();
+    (door, at)
+}
+
+fn door_schedule_findings(s: &mut Session) -> Vec<Value> {
+    let r = s.execute("bim.props.check", &json!({"checks": ["door_schedule"]})).expect("check");
+    r["findings"].as_array().cloned().unwrap_or_default()
+}
+
+/// No door schedule and no number printed: the door takes the number of the room it serves,
+/// marked as a rule's with its basis, and the missing schedule is a finding.
+#[test]
+fn a_door_nothing_numbers_takes_its_rooms_number() {
+    let mut s = plan();
+    let (door, _) = door_in_south_wall(&mut s);
+    let r = fill(&mut s);
+    let dp = get(&mut s, &door.hex());
+    assert_eq!(dp["number"]["value"], "101", "{dp:#}");
+    assert_eq!(dp["number"]["source"]["kind"], "rule", "{dp:#}");
+    assert!(dp["number"]["note"].as_str().unwrap_or("").contains("only door of room 101"), "{dp:#}");
+    assert_eq!(r["doors"]["numbered_by_room"], json!(1), "{r}");
+    let f = door_schedule_findings(&mut s);
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(f[0]["message"].as_str().unwrap_or("").contains("no door schedule"), "{f:?}");
+}
+
+/// A door schedule's tag by the door names its row: the door takes the row's number, type,
+/// frame, fire rating, hardware set and size, each from the schedule.
+#[test]
+fn a_door_takes_its_door_schedule_row() {
+    let mut s = plan();
+    let (door, at) = door_in_south_wall(&mut s);
+    let schedule = json!({
+        "rows": [{"kind": "door", "mark": "7", "width_in": 34.0, "height_in": 84.0, "type": "B", "frame": "HM", "fire_rating": "20 MIN", "hardware": "HW-2"},
+                 {"kind": "door", "mark": "8", "width_in": 36.0}],
+        "tags": [{"mark": "7", "at": [at.x + 6.0, at.y + 30.0]}]
+    });
+    s.execute("bspec.set", &json!({"spec": {"schedule": schedule}})).expect("schedule");
+    fill(&mut s);
+    let dp = get(&mut s, &door.hex());
+    assert_eq!(dp["number"]["value"], "7", "{dp:#}");
+    for (key, want) in
+        [("type", json!("B")), ("frame", json!("HM")), ("fire_rating", json!("20 MIN")), ("hardware_set", json!("HW-2")), ("width", json!(34.0))]
+    {
+        assert_eq!(dp[key]["value"], want, "{key}: {dp:#}");
+        assert_eq!(dp[key]["source"]["kind"], "schedule", "{key}: {dp:#}");
+    }
+    assert!(door_schedule_findings(&mut s).is_empty());
 }
 
 #[test]
