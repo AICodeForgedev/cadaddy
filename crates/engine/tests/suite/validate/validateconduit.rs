@@ -626,3 +626,229 @@ fn a_packet_keeps_its_own_raceway_on_a_floor_dense_with_pieces_round_it() {
     let own: Vec<&str> = o["elements"].as_array().into_iter().flatten().filter_map(|e| e["handle"].as_str()).collect();
     assert!(own.contains(&inside.as_str()), "the stick in the area's middle is left out ({} elements)", own.len());
 }
+
+/// The stored schedule's spec (the build's reading), to change and put back.
+fn with_spec(s: &mut Session, f: impl FnOnce(&mut Value)) {
+    let spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = spec.get("spec").cloned().unwrap_or(spec);
+    f(&mut spec);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+}
+
+fn text_at(s: &mut Session, at: [f64; 2], t: &str, h: f64) {
+    s.execute("text", &json!({"at": at, "text": t, "height": h})).expect("text");
+}
+
+#[test]
+fn a_breaker_cell_holding_its_load_or_no_rating_is_never_read_as_amps() {
+    // Q6338: the schedule as read has circuit 1's 900 VA load in its breaker cell, and circuit 3
+    // a 700 in the breaker cell of a #10 row (a load or another column read as the breaker).
+    // Neither is a breaker: E-DERATE must not fail a #12 run on a "900 A breaker".
+    let mut s = building(Some(20), |_| {});
+    with_spec(&mut s, |sp| {
+        sp["mep"]["panel_schedules"][0]["circuits"][0]["breaker"] = json!("900");
+        sp["mep"]["panel_schedules"][0]["circuits"][1]["breaker"] = json!("700");
+        sp["mep"]["panel_schedules"][0]["circuits"][1]["wire"] = json!("10");
+        sp["mep"]["panel_schedules"][0]["circuits"][1]["load_va"] = json!(720.0);
+    });
+    let (_, fs) = screen(&mut s, &["E-DERATE", "E-VDROP"]);
+    let bad: Vec<&Value> = of(&fs, "E-DERATE")
+        .into_iter()
+        .filter(|f| f["measured"]["breakers"].as_array().is_some_and(|b| b.iter().any(|x| x["amps"].as_f64().is_some_and(|a| a > 100.0))))
+        .collect();
+    assert!(bad.is_empty(), "a VA or a stray number read as the breaker: {bad:#?}");
+    let on = |c: &str| -> Vec<&Value> {
+        of(&fs, "E-DERATE").into_iter().filter(|f| f["issue"].as_str().is_some_and(|i| i.contains(&format!("of circuit {c} isn't")))).collect()
+    };
+    let one = on("LP1-1");
+    assert!(!one.is_empty() && one.iter().all(|f| f["verdict"] == "unsure"), "{one:#?}");
+    assert!(one.iter().all(|f| f["issue"].as_str().is_some_and(|i| i.contains("its own load"))), "{one:#?}");
+    let three = on("LP1-3");
+    assert!(
+        !three.is_empty() && three.iter().all(|f| f["verdict"] == "unsure" && f["issue"].as_str().is_some_and(|i| i.contains("#10"))),
+        "{three:#?}"
+    );
+    // The voltage drop of those circuits says why too; circuit 5's real 20 A still reads.
+    let vd = of(&fs, "E-VDROP");
+    let v1 = vd.iter().find(|f| f["measured"]["circuit"] == "LP1-1").copied().cloned().unwrap_or_default();
+    assert_eq!(v1["verdict"], "unsure", "{v1}");
+    assert!(v1["issue"].as_str().is_some_and(|i| i.contains("isn't read")), "{v1}");
+    assert!(of(&fs, "E-DERATE").iter().any(|f| f["measured"]["breakers"][0]["amps"] == 20.0 && f["verdict"] == "pass"), "{fs:#?}");
+}
+
+/// A two-sided panel schedule drawn on the drawing (odd circuits left, even right), far from
+/// the building: `PANELBOARD LP1`, every breaker 20 A.
+fn drawn_schedule(s: &mut Session) {
+    let (ox, k) = (3000.0, 10.0);
+    let x = |v: f64| ox + v * k;
+    let y = |v: f64| v * k;
+    let h = 0.6;
+    text_at(s, [x(23.93), y(13.07)], "PANELBOARD LP1", 1.26);
+    text_at(s, [x(20.8), y(12.3)], "CKT", h);
+    text_at(s, [x(30.8), y(12.3)], "CKT", h);
+    for (vx, w) in [
+        (20.8, "#"),
+        (21.4, "DESCRIPTION"),
+        (23.2, "AMPS"),
+        (23.7, "P"),
+        (24.0, "SIZE"),
+        (24.5, "(VA)"),
+        (27.0, "(VA)"),
+        (27.6, "SIZE"),
+        (28.0, "P"),
+        (28.2, "AMPS"),
+        (28.9, "DESCRIPTION"),
+        (30.9, "#"),
+    ] {
+        text_at(s, [x(vx), y(12.2)], w, h);
+    }
+    for (vy, ln, ld, lva, rd, rn) in [
+        (12.0, "1", "RECEPTACLES", "900", "SPARE", "2"),
+        (11.9, "3", "RECEPTACLES", "720", "SPARE", "4"),
+        (11.8, "5", "RECEPTACLES", "1,500", "SPARE", "6"),
+    ] {
+        for (vx, w) in [
+            (20.8, ln),
+            (21.1, ld),
+            (23.4, "20"),
+            (23.7, "1"),
+            (24.0, "12"),
+            (24.5, lva),
+            (27.0, "0"),
+            (27.6, "12"),
+            (28.0, "1"),
+            (28.3, "20"),
+            (28.6, rd),
+            (30.9, rn),
+        ] {
+            text_at(s, [x(vx), y(vy)], w, 0.7);
+        }
+    }
+    text_at(s, [x(21.0), y(11.0)], "PER PHASE SUB-TOTALS", 0.7);
+}
+
+#[test]
+fn rows_the_stored_schedule_lacks_are_read_again_off_the_drawn_schedule() {
+    // Q6338: the build's stored reading of LP1 kept only circuit 1 (one side of a two-sided
+    // schedule, or a reading from an older checkpoint); the drawn schedule gives 1, 3 and 5.
+    let mut s = building(Some(20), |_| {});
+    with_spec(&mut s, |sp| {
+        if let Some(c) = sp["mep"]["panel_schedules"][0]["circuits"].as_array_mut() {
+            c.truncate(1);
+        }
+    });
+    drawn_schedule(&mut s);
+    let (_, fs) = screen(&mut s, &["E-DERATE", "E-VDROP"]);
+    let missing: Vec<&Value> = fs
+        .iter()
+        .filter(|f| f["issue"].as_str().is_some_and(|i| i.contains("panel schedule") && i.contains("isn't") || i.contains("aren't")))
+        .collect();
+    assert!(missing.is_empty(), "rows the drawn schedule gives: {missing:#?}");
+    let d3 = of(&fs, "E-DERATE").into_iter().find(|f| f["issue"].as_str().is_some_and(|i| i.contains("LP1-3"))).cloned().unwrap_or_default();
+    assert_eq!(d3["verdict"], "pass", "{d3}");
+    let from = d3["measured"]["breakers"][0]["from"].as_str().unwrap_or_default();
+    assert!(from.contains("read again"), "{d3}");
+    let v5 = of(&fs, "E-VDROP").into_iter().find(|f| f["measured"]["circuit"] == "LP1-5").cloned().unwrap_or_default();
+    assert!(v5["measured"]["load_from"].as_str().is_some_and(|l| l.contains("1500 VA")), "{v5}");
+}
+
+/// A gridded wire-length table drawn on the drawing, far from the building: 20 A / 120 V
+/// circuits take #12 to 50 ft, #10 to 100 ft, #8 to 150 ft, #6 to 250 ft.
+fn drawn_length_table(s: &mut Session) {
+    let (x0, y0) = (3000.0, -200.0);
+    text_at(s, [x0 + 10.0, y0 + 10.0], "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE", 2.0);
+    let line = |s: &mut Session, a: [f64; 2], b: [f64; 2]| {
+        s.execute("line", &json!({"points": [a, b]})).expect("line");
+    };
+    for yy in [7.0, 2.0, -3.0] {
+        line(s, [x0, y0 + yy], [x0 + 120.0, y0 + yy]);
+    }
+    for xx in [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0] {
+        line(s, [x0 + xx, y0 + 7.0], [x0 + xx, y0 - 3.0]);
+    }
+    for (i, (hd, row)) in
+        [("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#12", "50'"), ("#10", "100'"), ("#8", "150'"), ("#6", "250'")].iter().enumerate()
+    {
+        let x = x0 + 2.0 + 20.0 * i as f64;
+        text_at(s, [x, y0 + 4.0], hd, 1.5);
+        text_at(s, [x, y0 - 1.0], row, 1.5);
+    }
+}
+
+#[test]
+fn the_drawings_wire_length_table_decides_the_conductor_before_the_three_percent_drop() {
+    // Q6338: a set that prints a wire-length table by breaker and voltage: the table wins over
+    // NEC 210.19's 3% calculation. LP1-5 runs over 150 ft: the table asks #6 for it.
+    let mut s = building(Some(20), |_| {});
+    drawn_length_table(&mut s);
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let far = of(&fs, "E-VDROP").into_iter().find(|f| f["measured"]["circuit"] == "LP1-5").cloned().unwrap_or_default();
+    assert!(far["measured"]["length_ft"].as_f64().is_some_and(|l| l > 150.0 && l <= 250.0), "{far}");
+    assert_eq!(far["measured"]["needed"], "#6", "{far}");
+    assert!(far["measured"]["table"].as_str().is_some_and(|t| t.contains("VOLTAGE DROP")), "{far}");
+    assert!(far["measured"].get("drop_pct").is_none(), "the table, not the calculation: {far}");
+    let conductor = far["measured"]["conductor"].as_str().unwrap_or_default().to_string();
+    assert_eq!(far["verdict"], if conductor == "#6" { "pass" } else { "fail" }, "{far}");
+    assert!(far["verdict"] == "pass" || far["issue"].as_str().is_some_and(|i| i.contains("asks #6")), "{far}");
+    // Every circuit is judged by the table: a pass exactly when its conductor is the size the
+    // table asks for its length, or larger.
+    let rank = |s: &str| ["#14", "#12", "#10", "#8", "#6", "#4"].iter().position(|x| *x == s);
+    for f in of(&fs, "E-VDROP") {
+        let (have, need) =
+            (rank(f["measured"]["conductor"].as_str().unwrap_or_default()), rank(f["measured"]["needed"].as_str().unwrap_or_default()));
+        assert!(have.is_some() && need.is_some(), "{f}");
+        assert_eq!(f["verdict"], if have >= need { "pass" } else { "fail" }, "{f}");
+        let ft = f["measured"]["length_ft"].as_f64().unwrap_or_default();
+        let want = if ft <= 50.0 {
+            "#12"
+        } else if ft <= 100.0 {
+            "#10"
+        } else if ft <= 150.0 {
+            "#8"
+        } else {
+            "#6"
+        };
+        assert_eq!(f["measured"]["needed"], want, "{f}");
+    }
+}
+
+#[test]
+fn a_typical_panels_copies_each_judge_only_their_own_circuit() {
+    // Q6338: a panel there is one of per unit (LP1, typical of 2: copies LP1-A and LP1-B), each
+    // copy's circuit 1 in its own end of the building. Each copy's voltage drop is its own
+    // circuit's: its farthest device and only its own pieces, never the other copy's.
+    let devices = vec![
+        receptacle(1, 20.0, 10.0, "LP1-1"),
+        receptacle(2, 30.0, 10.0, "LP1-1"),
+        receptacle(3, 125.0, 10.0, "LP1-1"),
+        receptacle(4, 132.0, 10.0, "LP1-1"),
+    ];
+    let mut s = building_of(devices, Some(20), |_| {});
+    with_spec(&mut s, |sp| {
+        sp["mep"]["panel_schedules"][0]["typical_of"] = json!(2);
+        let a = sp["mep"]["equipment"][0].clone();
+        let mut b = a.clone();
+        sp["mep"]["equipment"][0]["tag"] = json!("LP1-A");
+        b["tag"] = json!("LP1-B");
+        b["min"] = json!([1650, -6]);
+        b["max"] = json!([1670, 6]);
+        sp["mep"]["equipment"] = json!([sp["mep"]["equipment"][0].clone(), b]);
+    });
+    s.execute("model.build", &json!({})).expect("build");
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let one: Vec<&Value> = of(&fs, "E-VDROP").into_iter().filter(|f| f["measured"]["circuit"] == "LP1-1").collect();
+    let panels: std::collections::BTreeSet<&str> = one.iter().filter_map(|f| f["measured"]["panel"].as_str()).collect();
+    assert_eq!(panels.len(), 2, "one finding per copy: {one:#?}");
+    let handles = |f: &Value| -> std::collections::BTreeSet<String> {
+        f["handles"].as_array().into_iter().flatten().filter_map(|h| h.as_str().map(str::to_string)).collect()
+    };
+    let (a, b) = (handles(one[0]), handles(one[1]));
+    assert!(!a.is_empty() && !b.is_empty(), "{one:#?}");
+    assert!(a.is_disjoint(&b), "each copy's finding covers its own pieces only: {:?}", a.intersection(&b).collect::<Vec<_>>());
+    // Each copy's farthest device is one of its own end's.
+    for f in &one {
+        let at = f["at"][0].as_f64().unwrap_or_default();
+        let near_a = f["measured"]["panel"] == "LP1-A";
+        assert!(if near_a { at < 70.0 } else { at > 70.0 }, "{f}");
+    }
+}

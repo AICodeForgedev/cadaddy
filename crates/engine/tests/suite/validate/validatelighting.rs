@@ -555,3 +555,28 @@ fn plan_counts_from_the_jobs_symbol_table() {
         assert_eq!(in101(m)["verdict"], "pass", "{m}: {r}");
     }
 }
+
+#[test]
+fn the_job_readers_fixture_schedule_is_the_lighting_rules_schedule() {
+    // Q6338: the job's reader read the light fixture schedule by its grid (`mep.fixture_schedule`)
+    // while the prints hold no schedule rows: E-LUM-TYPE uses it, never "no fixture schedule read".
+    let mut j = job();
+    let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    sp["prints"]["schedule"] = json!([]);
+    sp["mep"]["fixture_schedule"] = json!([
+        {"tag": "A", "manufacturer": "Acme Lighting", "model": "AC-100", "lamp": "LED", "va": 12.0, "voltage": "120V", "installation": "RECESSED", "description": "4\" RECESSED DOWNLIGHT", "notes": "", "source": "E-601"},
+        {"tag": "B", "manufacturer": "Acme Lighting", "model": "XB-100", "lamp": "LED", "voltage": "120V", "installation": "RECESSED", "description": "6\" RECESSED DOWNLIGHT", "notes": "", "source": "E-601"},
+        {"tag": "EM", "manufacturer": "Acme Lighting", "model": "EB-1", "lamp": "LED", "voltage": "120V", "installation": "RECESSED", "description": "EMERGENCY BATTERY DOWNLIGHT", "notes": "", "source": "E-601"}
+    ]);
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
+    let (r, fs) = screen(&mut j.s);
+    assert!(r["unmeasured"]["E-LUM-TYPE"].get("the documents read hold no fixture schedule").is_none(), "{r}");
+    let a = of(&fs, "E-LUM-TYPE", &j.a);
+    assert_eq!(a["verdict"], "pass", "{a}");
+    assert!(a["measured"]["schedule"][0]["source"].as_str().unwrap().contains("the job's light fixture schedule on E-601"), "{a}");
+    // B's catalog number differs between the schedule and the submittal; Q has no row.
+    assert_eq!(of(&fs, "E-LUM-TYPE", &j.b)["verdict"], "conflict");
+    let q = of(&fs, "E-LUM-TYPE", &j.q);
+    assert_eq!(q["verdict"], "conflict", "{q}");
+    assert!(q["issue"].as_str().unwrap().contains("not in the fixture schedule"), "{q}");
+}
