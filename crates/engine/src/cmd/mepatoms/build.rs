@@ -1340,6 +1340,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // devices.
     let mut clear_boxes: Vec<super::boxclear::ClearBox> = Vec::new();
     let mut clear_of: Vec<(usize, Option<usize>, Vec<Handle>)> = Vec::new();
+    // A ganged device set at its box's one height (Q6335): how far up or down, why, the rule.
+    let mut gang_height: HashMap<Handle, (f64, String, String)> = HashMap::new();
     // Each device's provenance: its box's (Q6216).
     let device_made: HashMap<Handle, (Made, String)> =
         devices.iter().filter_map(|(h, ..)| Some((*h, d.entity(*h).and_then(|e| super::super::provenance::of_element(e))?))).collect();
@@ -1487,11 +1489,44 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             Some(b) => (b, false),
             None => (br, ring),
         };
-        // A ganged box stands at the middle of its devices.
+        // A ganged box stands at the middle of its devices, at one height: the one of its
+        // devices whose height the documents give first (Q6335; the lower on a tie). The others
+        // move to it, their own height kept beside.
         let (c, zmid) = if n_gang > 1 {
             let pts: Vec<(Vec2, f64)> = members.iter().filter_map(|m| centre_of.get(m).copied()).collect();
             let k = pts.len().max(1) as f64;
-            (pts.iter().fold(Vec2::new(0.0, 0.0), |a, (p, _)| a + *p) * (1.0 / k), pts.iter().map(|(_, z)| *z).sum::<f64>() / k)
+            let rank = |m: &Handle| {
+                let from = devices.iter().find(|x| x.0 == *m).and_then(|x| x.2.get("mount_height_from").map(Prop::text)).unwrap_or_default();
+                super::super::propfill::HEIGHT_FROM_ORDER.iter().position(|f| from.trim().eq_ignore_ascii_case(f)).unwrap_or(usize::MAX)
+            };
+            // Only a gang its devices' heights already make one (within the rules' reach): a box
+            // a keynote gangs across far heights is not set at one of them.
+            let (lo, hi) = pts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), (_, z)| (l.min(*z), h.max(*z)));
+            let one = members
+                .iter()
+                .filter_map(|m| Some((m, rank(m), centre_of.get(m)?.1)))
+                .filter(|x| x.2.is_finite())
+                .filter(|_| hi - lo <= rl.gang.height_in * inch + 1e-9)
+                .min_by(|a, b| a.1.cmp(&b.1).then(a.2.total_cmp(&b.2)));
+            let z = one.map_or_else(|| pts.iter().map(|(_, z)| *z).sum::<f64>() / k, |x| x.2);
+            if let Some((by, ..)) = one {
+                for m in members {
+                    let Some(dz) = centre_of.get(m).map(|x| z - x.1).filter(|dz| dz.abs() >= 0.125 * inch) else { continue };
+                    let words = |h: &Handle| {
+                        let ps = devices.iter().find(|x| x.0 == *h).map(|x| &x.2);
+                        let kind = ps.and_then(|p| p.get("kind").map(Prop::text)).unwrap_or_else(|| "device".into());
+                        let from = ps.and_then(|p| p.get("mount_height_from").map(Prop::text)).unwrap_or_else(|| "no source".into());
+                        (format!("{} {}", kind.replace('_', " "), h.hex()), from)
+                    };
+                    let ((_, mine), (them, theirs)) = (words(m), words(by));
+                    let why = format!(
+                        "ganged in one box with {them}: set at its height ({theirs}, {} in up or down from its own {mine})",
+                        super::super::walltypes::frac(dz.abs() / inch)
+                    );
+                    gang_height.insert(*m, (dz, why, format!("{} ({})", rl.gang.source, rl.gang.height_source)));
+                }
+            }
+            (pts.iter().fold(Vec2::new(0.0, 0.0), |a, (p, _)| a + *p) * (1.0 / k), z)
         } else {
             (plan.center(), (z0 + z1) / 2.0)
         };
@@ -1628,6 +1663,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             wall: wall_of_box.filter(|_| wall_box),
             movable: wall_box && wall_of_box.is_some(),
             rated: false,
+            keep: rl.box_clear.back_to_back.keep_kinds.iter().any(|k| k.trim().eq_ignore_ascii_case(bk)),
         });
         clear_of.push((bi, ring_of_box, if n_gang > 1 { members.to_vec() } else { vec![*h] }));
         boxes.push(DevBox {
@@ -1653,17 +1689,56 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     for b in &mut clear_boxes {
         b.rated = b.wall.is_some_and(|w| rated_walls.contains(&w));
     }
+    // The wall pieces near each box that can move (its own and any meeting it), once: a move
+    // looks only at them.
+    let reach = (cr.max_move_in.max(0.0) + 24.0) * inch;
+    let near_walls: Vec<Vec<super::super::propfill::WallPiece>> = clear_boxes
+        .iter()
+        .map(|b| {
+            if !b.movable {
+                return Vec::new();
+            }
+            let c = Vec2::new(b.centre.x, b.centre.y);
+            walls
+                .iter()
+                .filter(|(l, ..)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&b.level)))
+                .filter(|(_, _, poly, _)| {
+                    let bb = Bounds2::from_points(poly.iter().copied());
+                    !bb.is_empty() && c.x >= bb.min.x - reach && c.x <= bb.max.x + reach && c.y >= bb.min.y - reach && c.y <= bb.max.y + reach
+                })
+                .cloned()
+                .collect()
+        })
+        .collect();
     let fits = |i: usize, p: Vec3| -> bool {
         let Some(b) = clear_boxes.get(i) else { return false };
         let Some(wall) = b.wall else { return false };
-        // Both ends of its front on its own wall's face, at its height.
+        let near = near_walls.get(i).map_or(&[][..], Vec::as_slice);
+        // Both ends of its front on its own wall's face, at its height (a door or window opening
+        // has no wall there), and just in front of them no other wall (one that meets its own:
+        // past it is another room).
         let front = Vec2::new(p.x, p.y) + b.out * (b.t / 2.0);
         [-1.0, 1.0].iter().all(|k| {
             let q = front + b.along * (k * b.w / 2.0);
-            super::super::propfill::wall_face(&walls, &b.level, q, 0.75 * inch, Some(p.z)).is_some_and(|f| f.wall == wall && f.out.dot(b.out) > 0.5)
+            let ahead = q + b.out * (0.5 * inch);
+            super::super::propfill::wall_face(near, &b.level, q, 0.75 * inch, Some(p.z)).is_some_and(|f| f.wall == wall && f.out.dot(b.out) > 0.5)
+                && !near.iter().any(|(_, h, poly, zr)| {
+                    *h != wall && (!zr[0].is_finite() || (zr[0] <= p.z && p.z <= zr[1])) && cadaddy_geom::point_in_polygon(poly, ahead)
+                })
         })
     };
-    let cleared = super::boxclear::clear(&clear_boxes, cr, inch, &fits);
+    // Fixed furniture (FURNISH's): a box never lands behind a piece standing against its face at
+    // its height, unless the documents put it there.
+    let furniture = furniture_bodies(d);
+    let behind = |b: &super::boxclear::ClearBox, p: Vec3| -> bool {
+        let front = Vec2::new(p.x, p.y) + b.out * (b.t / 2.0 + 2.0 * inch);
+        let (lo, hi) = (p.z - b.h / 2.0, p.z + b.h / 2.0);
+        furniture
+            .iter()
+            .any(|(bb, z0, z1)| *z0 < hi && *z1 > lo && front.x >= bb.min.x && front.x <= bb.max.x && front.y >= bb.min.y && front.y <= bb.max.y)
+    };
+    let lands = |i: usize, p: Vec3| -> bool { clear_boxes.get(i).is_some_and(|b| !behind(b, p) || behind(b, b.centre)) };
+    let cleared = super::boxclear::clear(&clear_boxes, cr, inch, &fits, &lands);
     let mut device_moves: HashMap<Handle, (Vec3, String, String)> = HashMap::new();
     let mut box_moves: BTreeMap<usize, (Vec3, Vec<String>, String)> = BTreeMap::new();
     let (mut moved_overlap, mut moved_back) = (0usize, 0usize);
@@ -1736,13 +1811,25 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             device_moves.insert(*h, (*shift, reason.clone(), rule.clone()));
         }
     }
+    // A ganged device set at its box's height: up or down, with any move along the wall.
+    for (h, (dz, why, rule)) in &gang_height {
+        let e = device_moves.entry(*h).or_insert_with(|| (Vec3::new(0.0, 0.0, 0.0), String::new(), rule.clone()));
+        e.0 = e.0 + Vec3::new(0.0, 0.0, *dz);
+        e.1 = if e.1.is_empty() { why.clone() } else { format!("{}; {why}", e.1) };
+    }
     let mut putty_pads = 0usize;
     for (i, j) in &cleared.putty {
         for k in [*i, *j] {
             let Some((bi, _, _)) = clear_of.get(k) else { continue };
             let Some((at, mut ctx)) = atoms.get(*bi).map(|(a, c)| (a.a, c.clone())) else { continue };
             let other = describe(if k == *i { *j } else { *i });
-            let why = format!("back to back with {other} on the other face of its fire-rated wall and no spot on its wall clears it");
+            let kept = [*i, *j].iter().filter_map(|x| clear_boxes.get(*x)).any(|b| b.keep);
+            let why = format!(
+                "back to back with {other} on the other face of its fire-rated wall{} and no spot within {} along an unbroken stretch of its wall clears it ({})",
+                if kept { format!(", a box that keeps its spot ({})", cr.back_to_back.keep_source) } else { String::new() },
+                super::super::walltypes::frac(if cr.back_to_back.max_move_in > 0.0 { cr.back_to_back.max_move_in } else { cr.max_move_in }),
+                cr.stud_bay_source
+            );
             if let Some(b) = atoms.get_mut(*bi) {
                 b.0.extra.push(("design:firestop", "none".into(), "computed: the box as placed".into()));
                 b.0.extra.push(("firestop", cr.back_to_back.putty_item.clone(), cr.back_to_back.putty_source.clone()));
@@ -2631,12 +2718,26 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         let c = super::super::provenance::Correction {
                             key: "location".into(),
                             design: old.text(),
-                            corrected: format!("{:.2}, {:.2}, {:.2}", x + shift.x / upf, y + shift.y / upf, z),
+                            corrected: format!("{:.2}, {:.2}, {:.2}", x + shift.x / upf, y + shift.y / upf, z + shift.z / upf),
                             reason: reason.clone(),
                             rule: rule.clone(),
                         };
                         super::super::provenance::correct(&mut ps, &c, old.source.clone());
                     }
+                }
+                // Set at its gang's height: its mounting height too.
+                if shift.z.abs() > 1e-9
+                    && let Some(old) = ps.get("mount_height").cloned()
+                    && let Ok(v) = old.text().trim().parse::<f64>()
+                {
+                    let c = super::super::provenance::Correction {
+                        key: "mount_height".into(),
+                        design: old.text(),
+                        corrected: format!("{}", ((v + shift.z * 12.0 / upf) * 100.0).round() / 100.0),
+                        reason: reason.clone(),
+                        rule: rule.clone(),
+                    };
+                    super::super::provenance::correct(&mut ps, &c, old.source.clone());
                 }
             }
             ps.set("box", Prop::new(bx.hex(), Source::computed()).with_note("the box it is set in"));
@@ -2744,6 +2845,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             "movedOffBackToBack": moved_back,
             "devicesMoved": device_moves.len(),
             "puttyPads": putty_pads,
+            "keptSpots": cleared.kept,
+            "devicesSetAtGangHeight": gang_height.len(),
             "overlapReview": cleared.stuck.len(),
             "source": cr.source,
             "backToBackSource": cr.back_to_back.source,
@@ -2889,6 +2992,40 @@ fn moved_for_field(ps: &Props, upf: f64) -> Option<Vec2> {
     };
     let moved = (xy("location")? - xy("design:location")?) * upf;
     (moved.len() > 1e-9 && moved.len().is_finite()).then_some(moved)
+}
+
+/// Fixed furniture placed from the plan (FURNISH's): each piece's plan extent and its body's
+/// bottom and top (drawing units). A piece whose height is unknown is left out.
+fn furniture_bodies(d: &Drawing) -> Vec<(Bounds2, f64, f64)> {
+    let zs = |m: &Mesh, k: f64, z: f64| {
+        m.vertices
+            .iter()
+            .take(100_000)
+            .filter(|v| v.z.is_finite())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v.z * k + z), b.max(v.z * k + z)))
+    };
+    d.model
+        .iter()
+        .filter(|e| e.common.xdata.iter().any(|t| t.code == 1001 && t.value == super::super::furnish::FURNISH_APP))
+        .take(MAX_DEVICES)
+        .filter_map(|e| {
+            let (z0, z1) = match &e.kind {
+                EntityKind::Mesh(m) => zs(m, 1.0, 0.0),
+                EntityKind::Insert(i) => d.blocks.get(&i.block).map_or((f64::INFINITY, f64::NEG_INFINITY), |b| {
+                    b.entities.iter().take(10_000).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, c), x| match &x.kind {
+                        EntityKind::Mesh(m) => {
+                            let (lo, hi) = zs(m, i.scale.z, i.insert.z);
+                            (a.min(lo.min(hi)), c.max(hi.max(lo)))
+                        }
+                        _ => (a, c),
+                    })
+                }),
+                _ => return None,
+            };
+            let bb = cadaddy_doc::entity_bounds(d, e, 0);
+            (z0 < z1 && z0.is_finite() && z1.is_finite() && !bb.is_empty()).then(|| (Bounds2::from_points([bb.min, bb.max]), z0, z1))
+        })
+        .collect()
 }
 
 /// Whether a built wall's type (its `type` build tag: a wall type of the spec by name or legend
