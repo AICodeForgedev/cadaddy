@@ -610,6 +610,9 @@ pub(crate) struct TypeCheck<'a> {
     pub submitted: &'a BTreeMap<String, (String, String, String)>,
     /// Luminaires built of each type, and their handles.
     pub on_plans: &'a BTreeMap<String, Vec<String>>,
+    /// Luminaires the plans show of each type as read off them (the job's devices), built or
+    /// not; empty: the built ones are the plans' count.
+    pub read: &'a BTreeMap<String, u32>,
     /// The submittal's quantity of each type, where it states one: (quantity, document).
     pub submitted_qty: &'a BTreeMap<String, (u32, String)>,
     /// The documents' names: the submittal and the plans.
@@ -651,7 +654,22 @@ pub(crate) fn type_conflicts(t: &TypeCheck) -> Vec<Conflict> {
                 .with_elements(hs.iter().cloned()),
             );
         }
-        let plan_n = hs.len() as u32;
+        let built_n = hs.len() as u32;
+        // The plans' count: as read off them (a luminaire whose sheet fits onto no level is read
+        // and not built), else as built.
+        let plan_n = t.read.get(&r.tag).copied().filter(|n| *n > 0).unwrap_or(built_n);
+        if plan_n > 0 && built_n == 0 {
+            out.push(
+                Conflict::new(
+                    "scheduled type read on the plans, none built",
+                    format!("lighting type {}", r.tag),
+                    format!("type {}: the plans show {plan_n}; none is in the model (their sheet is placed on no level)", r.tag),
+                    "Register the plan's sheet onto its level so its luminaires are built, or place them by hand",
+                )
+                .side("the plans", plan_n.to_string())
+                .side("the model", "0"),
+            );
+        }
         if plan_n == 0 {
             let mut c = Conflict::new(
                 "scheduled type on no plan",
@@ -1406,6 +1424,41 @@ pub(crate) fn plan_diff_conflicts(diffs: &[PlanDiff]) -> Vec<Conflict> {
         .collect()
 }
 
+/// Luminaires looked at for the schedule's quantities, at most.
+const MAX_COUNTED: usize = 2_000_000;
+
+/// Each scheduled luminaire type that has a quantity (`schedule`), beside it the luminaires of
+/// that type the plans show (`read`, as the job read them; none read: the built ones) and the
+/// model `d` has: `{type, plans, model, schedule, differ, source}`, `differ` the plans' count
+/// against the quantity. Neither number replaces the other; where they differ the lighting
+/// step's review item (`plan count vs quantity`) says so.
+pub(crate) fn schedule_quantities(d: &cadaddy_doc::Drawing, schedule: &[FixtureType], read: &BTreeMap<String, u32>) -> Vec<serde_json::Value> {
+    if !schedule.iter().any(|t| t.quantity.is_some()) {
+        return Vec::new();
+    }
+    let mut built: BTreeMap<String, u32> = BTreeMap::new();
+    for (e, base) in super::elemprops::elements(d).take(MAX_COUNTED) {
+        let kind = super::elemprops::reported_kind(e, base);
+        if !matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture") {
+            continue;
+        }
+        let st = cadaddy_doc::props::read(&e.common.xdata);
+        let text = |k: &str| st.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
+        let mark = text("type_mark");
+        let n = built.entry(super::lightsched::type_of(&if mark.is_empty() { text("type") } else { mark })).or_default();
+        *n = n.saturating_add(1);
+    }
+    schedule
+        .iter()
+        .filter_map(|t| {
+            let q = t.quantity?;
+            let n = built.get(&t.tag).copied().unwrap_or(0);
+            let plans = read.get(&t.tag).copied().filter(|r| *r > 0).unwrap_or(n);
+            Some(serde_json::json!({"type": t.tag, "plans": plans, "model": n, "schedule": q, "differ": plans != q, "source": t.source}))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1536,6 +1589,7 @@ mod tests {
             schedule: &schedule,
             submitted: &submitted,
             on_plans: &on_plans,
+            read: &BTreeMap::new(),
             submitted_qty: &qty,
             submittal_name: "Package",
         });
@@ -1549,6 +1603,23 @@ mod tests {
         assert!(cs.iter().all(|c| c.sides.len() >= 2), "every conflict cites both sides: {cs:?}");
         let two = cs.iter().find(|c| c.topic == "one product for two types").unwrap();
         assert!(two.sides.iter().any(|(_, s)| s.contains("EXIT SIGN")) && two.sides.iter().any(|(_, s)| s.contains("EMERGENCY LIGHT")), "{two:?}");
+        // fix-lum-schedule-type-column-wrong: the plans' count as read off them. Q1 read 3 (two
+        // built): its quantity agrees. Q5 read 4, none built (its sheet on no level): shown on the
+        // plans, not built, and 4 against no quantity is no count conflict.
+        let read: BTreeMap<String, u32> = [("Q1".to_string(), 3), ("Q5".to_string(), 4)].into_iter().collect();
+        let cs = type_conflicts(&TypeCheck {
+            schedule: &schedule,
+            submitted: &submitted,
+            on_plans: &on_plans,
+            read: &read,
+            submitted_qty: &qty,
+            submittal_name: "Package",
+        });
+        let topics = by_topic(&cs);
+        assert_eq!(topics.get("plan count vs quantity"), None, "Q1: 3 read, 3 scheduled: {topics:?}");
+        assert_eq!(topics.get("scheduled type on no plan"), None, "Q5 is on the plans: {topics:?}");
+        let q5 = cs.iter().find(|c| c.topic == "scheduled type read on the plans, none built").unwrap_or_else(|| panic!("{cs:?}"));
+        assert!(q5.issue.contains("type Q5: the plans show 4; none is in the model"), "{q5:?}");
     }
 
     fn dev(h: &str, kind: &str, mark: &str, room: &str, leg: &str, at: [f64; 2]) -> Dev {
