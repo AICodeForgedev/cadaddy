@@ -45,7 +45,7 @@ const MAX_OBJECTS: usize = 100_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("elev.read", "Read Elevation", run_elev).params(
-            "{region: [x0,y0,x1,y1] (the elevation on the sheet), facade?: north|south|east|west (else from its title), apply?: bool (into the spec: level elevations and heights, window sill and head, the facade's bands, the roof level's parapet height)} → {facade, levels: [{label, name, y, elevation_ft, matched?}], roof_ft?, parapet_ft?, parapet?: {level, height_ft, applied, roofs (given it), kept (roofs keeping their roof-plan note)}, windows: {count, sill_ft, head_ft}, bands: [...], assumed: [{item, value, assumed, why}], conflicts: [...], applied}",
+            "{region: [x0,y0,x1,y1] (the elevation on the sheet), facade?: north|south|east|west (else from its title), apply?: bool (into the spec: level elevations and heights, window sill and head, the facade's bands, the roof level's parapet height)} → {facade, levels: [{label, name, y, elevation_ft, matched?}], roof_ft?, parapet_ft?, parapet?: {level, height_ft, applied, roofs (given it), kept (roofs keeping their roof-plan note)}, parapets: [{height_ft, start_ft?, end_ft?}] (every top of parapet the elevation marks, lowest first, over the stretch of the facade where the silhouette's top stands at it; none = the whole facade; applied, they replace only this facade's), parapets_unplaced: [height_ft] (tops the silhouette meets nowhere while another's does), windows: {count, sill_ft, head_ft}, bands: [...], assumed: [{item, value, assumed, why}], conflicts: [...], applied}",
         ),
         CommandSpec::new("roof.read", "Read Roof Plan", run_roof).params(
             "{region: [x0,y0,x1,y1] (the roof plan on the sheet), level?: the roof level's name (default: one named ROOF), apply?: bool} → {roofs: [{name, outline, slope?: {down, rise_per_ft, direction_status?}, parapet_ft?, parapet_status?, parapet_from?}], crickets, equipment, drains, assumed: [{item, value, assumed, why}] (each default put in), conflicts: [...] (roof-plan parapet notes the elevation disagrees with), applied}",
@@ -249,6 +249,65 @@ fn settle_parapet(r: &mut Roof, elevation_ft: f64, conflicts: &mut Vec<Value>) -
     true
 }
 
+/// Most tops of parapet one elevation keeps (hostile drawings).
+const MAX_PARAPET_TOPS: usize = 64;
+
+/// The tops of parapet an elevation marks: for each PARAPET level line (its y and its height
+/// over the roof line, feet), the stretches of the facade (from `ends.0` to `ends.1`, the
+/// building's ends) where the silhouette's top lies on it: horizontal pieces of the drawing at
+/// its height other than the level lines (`datum`). A line the silhouette meets nowhere while
+/// another one's does is no top of this facade (another facade's, marked for reference): it is
+/// left out, by its height. With no line met anywhere, each marks the whole facade. A stretch
+/// over nearly the whole facade is the whole facade (no stretch). Lowest first.
+fn parapet_tops(lines: &[(f64, f64)], segs: &[(Vec2, Vec2, Handle)], datum: &[Handle], ends: (f64, f64), upf: f64) -> (Vec<LevelParapet>, Vec<f64>) {
+    let (left, right) = ends;
+    let length = (right - left).max(0.0);
+    let tol = upf / 48.0;
+    let round = |v: f64| (v * 96.0).round() / 96.0;
+    let mut met: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
+    for (y, h) in lines.iter().take(MAX_PARAPET_TOPS) {
+        let mut runs: Vec<(f64, f64)> = segs
+            .iter()
+            .filter(|(a, b, hd)| !datum.contains(hd) && (a.y - b.y).abs() <= tol && (a.y - y).abs() <= tol && a.dist(*b) >= 0.5 * upf)
+            .map(|(a, b, _)| (a.x.min(b.x).max(left) - left, a.x.max(b.x).min(right) - left))
+            .filter(|(a, b)| b > a)
+            .take(10_000)
+            .collect();
+        runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut merged: Vec<(f64, f64)> = Vec::new();
+        for (a, b) in runs {
+            match merged.last_mut() {
+                Some(last) if a <= last.1 + upf / 2.0 => last.1 = last.1.max(b),
+                _ => merged.push((a, b)),
+            }
+        }
+        met.push((*h, merged));
+    }
+    let any_met = met.iter().any(|(_, r)| !r.is_empty());
+    let (mut tops, mut unplaced) = (Vec::new(), Vec::new());
+    for (h, runs) in met {
+        let covered: f64 = runs.iter().map(|(a, b)| b - a).sum();
+        if runs.is_empty() && any_met {
+            unplaced.push(round(h));
+            continue;
+        }
+        let whole = runs.is_empty() || length <= 0.0 || covered >= 0.98 * length;
+        let same = |t: &LevelParapet| (t.height_ft - h).abs() < 1e-6;
+        if whole {
+            if !tops.iter().any(|t: &LevelParapet| same(t) && t.start_ft.is_none()) {
+                tops.push(LevelParapet { height_ft: round(h), ..LevelParapet::default() });
+            }
+            continue;
+        }
+        for (a, b) in runs {
+            tops.push(LevelParapet { height_ft: round(h), start_ft: Some(round(a / upf)), end_ft: Some(round(b / upf)), ..LevelParapet::default() });
+        }
+    }
+    tops.sort_by(|a, b| a.height_ft.total_cmp(&b.height_ft).then(a.start_ft.unwrap_or(0.0).total_cmp(&b.start_ft.unwrap_or(0.0))));
+    tops.truncate(MAX_PARAPET_TOPS);
+    (tops, unplaced)
+}
+
 // ---------------- elev.read ----------------
 
 struct LevelLine {
@@ -320,7 +379,8 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
         ));
     }
     let roof = levels.iter().find(|l| has(l, "ROOF")).map(rel);
-    let parapet = levels.iter().find(|l| has(l, "PARAPET")).map(rel).zip(roof).map(|(p, r)| p - r).filter(|p| *p > 0.0);
+    let parapet_lines: Vec<(f64, f64)> =
+        levels.iter().filter(|l| has(l, "PARAPET")).filter_map(|l| roof.map(|r| (l.y, rel(l) - r))).filter(|(_, h)| *h > 0.0).collect();
     let mut out_levels = Vec::new();
     for l in &levels {
         let name = label_name(&l.label);
@@ -341,6 +401,23 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
     let tall: Vec<f64> = segs.iter().filter(|(a, b, _)| (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() >= 4.0 * upf).map(|(a, _, _)| a.x).collect();
     let left = tall.iter().copied().fold(f64::INFINITY, f64::min);
     let left = if left.is_finite() { left } else { lines.first().map_or(region.min.x, |l| l.1) };
+    let right = tall.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let right = if right > left { right } else { lines.first().map_or(region.max.x, |l| l.2) };
+    // The tops of parapet: each one where the silhouette's top lies on its line (a parapet that
+    // steps along the facade), lowest first.
+    let datum_lines: Vec<Handle> = ents
+        .iter()
+        .filter(|e| match &e.kind {
+            EntityKind::Line(l) => {
+                let len = l.a.xy().dist(l.b.xy());
+                (l.a.y - l.b.y).abs() <= 1e-6 * len.max(1.0) && len >= 0.5 * region.width()
+            }
+            _ => false,
+        })
+        .map(|e| e.handle)
+        .collect();
+    let (tops, unplaced) = parapet_tops(&parapet_lines, &segs, &datum_lines, (left, right), upf);
+    let parapet = tops.iter().map(|t| t.height_ft).reduce(f64::min);
     let hatched: Vec<Bounds2> = ents.iter().filter(|e| matches!(e.kind, EntityKind::Hatch(_))).map(|e| cadaddy_doc::entity_bounds(d, e, 0)).collect();
     for (b, _) in &rects {
         // A building silhouette (holding other outlines) or a hatch's boundary is not an opening.
@@ -441,16 +518,23 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
     let parapet_out = match (parapet.map(round), roof_level(&sp)) {
         (None, _) => Value::Null,
         (Some(pp), None) => json!({ "height_ft": pp, "applied": false, "why": "the spec has no levels to put it on" }),
-        (Some(pp), Some(level)) => {
+        (Some(_), Some(level)) => {
+            // This facade's tops replace what an earlier reading of it gave; the other facades'
+            // stay (a parapet that steps keeps every top). The roofs take the level's lowest: what
+            // an edge nothing marks stands at.
+            let mut after = sp.exterior.parapets.clone();
+            after.retain(|x| !(x.level.eq_ignore_ascii_case(&level) && x.facade == side));
+            after.extend(tops.iter().map(|t| LevelParapet { level: level.clone(), facade: side, ..t.clone() }));
+            let low = Exterior { parapets: after.clone(), ..Exterior::default() }.level_parapet(&level).map(round).unwrap_or_default();
             let (mut given, mut kept) = (Vec::new(), Vec::new());
             let mut roofs = sp.exterior.roofs.clone();
             for r in roofs.iter_mut().filter(|r| r.level.eq_ignore_ascii_case(&level)) {
-                if settle_parapet(r, pp, &mut conflicts) { given.push(r.name.clone()) } else { kept.push(r.name.clone()) }
+                if settle_parapet(r, low, &mut conflicts) { given.push(r.name.clone()) } else { kept.push(r.name.clone()) }
             }
+            let pp = parapet.map(round).unwrap_or(low);
             if apply {
                 sp.exterior.roofs = roofs;
-                sp.exterior.parapets.retain(|x| !x.level.eq_ignore_ascii_case(&level));
-                sp.exterior.parapets.push(LevelParapet { level: level.clone(), height_ft: pp, facade: side });
+                sp.exterior.parapets = after;
             }
             json!({ "level": level, "height_ft": pp, "applied": apply, "roofs": given, "kept": kept })
         }
@@ -464,6 +548,8 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
         "roof_ft": roof.map(|r| round(base_ft + r)),
         "parapet_ft": parapet.map(round),
         "parapet": parapet_out,
+        "parapets": tops.iter().map(|t| json!({"height_ft": round(t.height_ft), "start_ft": t.start_ft, "end_ft": t.end_ft})).collect::<Vec<_>>(),
+        "parapets_unplaced": unplaced,
         "windows": { "count": sills.len(), "sill_ft": sill, "head_ft": head },
         "bands": serde_json::to_value(&bands).unwrap_or(Value::Null),
         "assumed": assumptions,
@@ -1157,6 +1243,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     };
     let rule = framing_rule();
     let mut framed = 0usize;
+    let mut tops_report: Vec<Value> = Vec::new();
     for r in ext.roofs.iter().take(10_000) {
         let Some(level) = sp.level(&r.level) else { continue };
         let z0 = level.elevation_ft * upf;
@@ -1208,16 +1295,75 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // A framed roof's parapet stands its height over the deck where the roof bears (the
         // sections mark its top as an elevation), and never under the deck's high point.
         let deck_high = poly.iter().map(|p| top(*p)).fold(f64::NEG_INFINITY, f64::max);
-        let high = match framing {
-            Some(_) => (z0 + parapet.unwrap_or(0.0) * upf).max(deck_high),
-            None => deck_high + parapet.unwrap_or(0.0) * upf,
+        let high_at = |h: f64| match framing {
+            Some(_) => (z0 + h * upf).max(deck_high),
+            None => deck_high + h * upf,
         };
+        let high = high_at(parapet.unwrap_or(0.0));
         // An unframed sloped roof whose underside rises over the walls under it: they carry up
         // to it as a framed roof's do, so nothing under its high side is open.
         let open_under = framing.is_none() && parapet.is_none() && deck_high - thick > z0 + 1e-9;
         // A parapet's top is level (its elevation); a roof wall stops at the deck, up its slope.
         let wall_top = |p: Vec2| if parapet.is_some() { high } else { top(p) };
-        if parapet.is_some() || framing.is_some() || open_under {
+        // Each edge's own top (a parapet that steps along its facades), one element per top.
+        let pieces = if parapet.is_some() { parapet_pieces(r, &poly, sp, roof_frame(&ext, &r.level), upf) } else { Vec::new() };
+        if !pieces.is_empty() {
+            let t = 8.0 / 12.0 * upf;
+            let ccw = cadaddy_geom::shoelace(&poly) > 0.0;
+            let mut groups: Vec<(f64, bool, Vec<&ParapetPiece>)> = Vec::new();
+            for pc in &pieces {
+                match groups.iter_mut().find(|g| (g.0 - pc.height_ft).abs() < 1e-6) {
+                    Some(g) => {
+                        g.1 &= pc.read;
+                        g.2.push(pc);
+                    }
+                    None => groups.push((pc.height_ft, pc.read, vec![pc])),
+                }
+            }
+            for (h, read, group) in &groups {
+                let z1 = high_at(*h);
+                let mut m = super::wallgen::empty_mesh();
+                let mut lf = 0.0;
+                for pc in group {
+                    let len = pc.a.dist(pc.b);
+                    if len <= 1e-9 {
+                        continue;
+                    }
+                    let u = (pc.b - pc.a) * (1.0 / len);
+                    let inward = if ccw { Vec2::new(-u.y, u.x) } else { Vec2::new(u.y, -u.x) };
+                    super::wallgen::add_box(&mut m, pc.a + inward * (t / 2.0), pc.b + inward * (t / 2.0), t, bear, z1);
+                    lf += len / upf;
+                }
+                let mut x = measured(tag("parapet", &level.name, &r.name), "lf", lf);
+                x.push(RawTag { code: 1000, value: format!("top_ft:{}", (z1 / upf * 1000.0).round() / 1000.0) });
+                let basis: Vec<&str> = group.iter().map(|pc| pc.basis.as_str()).fold(Vec::new(), |mut v, b| {
+                    if !v.contains(&b) {
+                        v.push(b);
+                    }
+                    v
+                });
+                let made = if *read { cadaddy_walk3d::Made::Derived } else { cadaddy_walk3d::Made::Inferred };
+                x.extend(super::provenance::tags(made, &basis.join("; ")));
+                if add(d, "3D-Parapets", x, m) {
+                    parapets += 1;
+                }
+            }
+            for pc in pieces.iter().take(MAX_PARAPET_REPORT.saturating_sub(tops_report.len())) {
+                let r2 = |v: f64| (v * 100.0).round() / 100.0;
+                tops_report.push(json!({
+                    "roof": r.name,
+                    "level": level.name,
+                    "facade": pc.facade.map(|f| f.name().to_ascii_lowercase()),
+                    "from_ft": r2(pc.from_ft),
+                    "to_ft": r2(pc.to_ft),
+                    "lf": r2(pc.a.dist(pc.b) / upf),
+                    "height_ft": r2(pc.height_ft),
+                    "top_ft": r2(high_at(pc.height_ft) / upf),
+                    "status": if pc.read { "read" } else { "default" },
+                    "basis": pc.basis,
+                }));
+            }
+        } else if parapet.is_some() || framing.is_some() || open_under {
             let t = 8.0 / 12.0 * upf;
             let ccw = cadaddy_geom::shoelace(&poly) > 0.0;
             let mut m = super::wallgen::empty_mesh();
@@ -1406,7 +1552,163 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
     }
-    json!({ "roofs": roofs, "parapets": parapets, "roofFraming": framed, "crickets": crickets, "equipment": equipment, "roofDrains": drains, "facadeGlass": glass, "roofNotes": notes })
+    json!({ "roofs": roofs, "parapets": parapets, "parapetTops": tops_report, "roofFraming": framed, "crickets": crickets, "equipment": equipment, "roofDrains": drains, "facadeGlass": glass, "roofNotes": notes })
+}
+
+/// Most pieces of parapet the build reports.
+const MAX_PARAPET_REPORT: usize = 2000;
+/// Most pieces one roof's parapet is cut into (hostile drawings).
+const MAX_PARAPET_PIECES: usize = 4096;
+
+/// A stretch of a roof's outline edge with its own top of parapet.
+struct ParapetPiece {
+    a: Vec2,
+    b: Vec2,
+    /// The facade the edge faces, and where along it (feet from its left end as seen).
+    facade: Option<Side>,
+    from_ft: f64,
+    to_ft: f64,
+    /// Over the roof, feet.
+    height_ft: f64,
+    /// Read off the drawings (else a default).
+    read: bool,
+    basis: String,
+}
+
+/// The extent the facades of a roof level are measured along: all its roofs' outlines (the
+/// building as the elevations show it).
+fn roof_frame(ext: &Exterior, level: &str) -> Bounds2 {
+    ext.roofs
+        .iter()
+        .filter(|r| r.level.eq_ignore_ascii_case(level))
+        .flat_map(|r| r.outline.iter().map(|p| Vec2::new(p[0], p[1])))
+        .fold(Bounds2::EMPTY, |b, p| b.union(&Bounds2::from_points([p])))
+}
+
+/// The facade an edge with outward normal `n` faces (plan north up), and how far along that
+/// facade a point is from its left end as seen from outside, feet.
+fn facade_of(n: Vec2) -> Side {
+    let pick = [(Side::South, -n.y), (Side::North, n.y), (Side::East, n.x), (Side::West, -n.x)];
+    pick.iter().copied().fold((Side::South, f64::NEG_INFINITY), |a, b| if b.1 > a.1 { b } else { a }).0
+}
+
+fn along(side: Side, frame: &Bounds2, p: Vec2, upf: f64) -> f64 {
+    let d = match side {
+        Side::South => p.x - frame.min.x,
+        Side::North => frame.max.x - p.x,
+        Side::East => p.y - frame.min.y,
+        Side::West => frame.max.y - p.y,
+    };
+    d / upf
+}
+
+/// A roof's parapet, edge by edge: the top each edge's facade marks (the narrowest stretch an
+/// elevation marks over it, else its facade's whole-facade top, the lowest when it gives several
+/// with no stretch); an edge nothing marks takes its neighbour's along the outline, marked as a
+/// default, and with no edge marked the roof's own height stands all round. A roof whose height
+/// is documented on its own (a roof-plan note, a value put in by hand) keeps it all round, as the
+/// readers report the elevations' disagreement.
+fn parapet_pieces(r: &Roof, poly: &[Vec2], sp: &BuildingSpec, frame: Bounds2, upf: f64) -> Vec<ParapetPiece> {
+    let Some(own) = r.parapet_ft.or_else(|| sp.exterior.level_parapet(&r.level)) else { return Vec::new() };
+    let own_read = r.parapet_ft.is_none() || !ValueStatus::is_default(&r.parapet_status);
+    let own_basis = match r.parapet_from.as_deref() {
+        Some(FROM_ROOF_PLAN) => "the roof plan's parapet note",
+        Some(FROM_DEFAULT) => "no drawing gives the parapet's height: 3'-0\" assumed",
+        _ => "the elevations' top of parapet",
+    };
+    let documented = r.parapet_ft.is_some() && own_read && r.parapet_from.as_deref() != Some(FROM_ELEVATION);
+    // Several tops marked with no facade: where each stands is not known; the lowest stands all
+    // round, as a default naming the others.
+    let mut general: Vec<f64> = sp.exterior.level_parapets(&r.level).filter(|p| p.facade.is_none()).map(|p| p.height_ft).collect();
+    general.sort_by(f64::total_cmp);
+    general.dedup_by(|x, y| (*x - *y).abs() < 1e-6);
+    let several = general.len() > 1 && !documented;
+    let own_read = own_read && !several;
+    let others = general.iter().filter(|h| (**h - own).abs() > 1e-6).map(|h| cadaddy_walk3d::feet(*h)).collect::<Vec<_>>().join(", ");
+    let own_basis = if several {
+        format!("the drawings mark several tops of parapet but not on which facade: {} taken all round, also {others}", cadaddy_walk3d::feet(own))
+    } else {
+        own_basis.to_string()
+    };
+    let marks: Vec<&LevelParapet> =
+        if documented { Vec::new() } else { sp.exterior.level_parapets(&r.level).filter(|p| p.facade.is_some()).collect() };
+    let ccw = cadaddy_geom::shoelace(poly) > 0.0;
+    let mut pieces: Vec<(ParapetPiece, bool)> = Vec::new();
+    for (a, b) in poly.iter().zip(poly.iter().cycle().skip(1)) {
+        let len = a.dist(*b);
+        if len <= 1e-9 || pieces.len() >= MAX_PARAPET_PIECES {
+            continue;
+        }
+        let u = (*b - *a) * (1.0 / len);
+        let outward = if ccw { Vec2::new(u.y, -u.x) } else { Vec2::new(-u.y, u.x) };
+        let side = facade_of(outward);
+        let (sa, sb) = (along(side, &frame, *a, upf), along(side, &frame, *b, upf));
+        let on: Vec<&&LevelParapet> = marks.iter().filter(|m| m.facade == Some(side)).collect();
+        // Cut the edge where a marked stretch starts or ends.
+        let (lo, hi) = (sa.min(sb), sa.max(sb));
+        let mut cuts: Vec<f64> = on.iter().flat_map(|m| [m.start_ft, m.end_ft]).flatten().filter(|c| *c > lo + 1e-6 && *c < hi - 1e-6).collect();
+        cuts.push(lo);
+        cuts.push(hi);
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup_by(|x, y| (*x - *y).abs() < 1e-6);
+        if sa > sb {
+            cuts.reverse();
+        }
+        for w in cuts.windows(2) {
+            let (Some(&c0), Some(&c1)) = (w.first(), w.get(1)) else { continue };
+            let at = |c: f64| if (sb - sa).abs() > 1e-12 { *a + (*b - *a) * ((c - sa) / (sb - sa)) } else { *a };
+            let mid = (c0 + c1) / 2.0;
+            let stretch = on
+                .iter()
+                .filter_map(|m| {
+                    m.start_ft.zip(m.end_ft).filter(|(s0, s1)| *s0 <= mid + 1e-6 && mid <= *s1 + 1e-6).map(|(s0, s1)| (s1 - s0, m.height_ft))
+                })
+                .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
+            let whole: Vec<f64> = on.iter().filter(|m| m.start_ft.is_none() || m.end_ft.is_none()).map(|m| m.height_ft).collect();
+            let fname = side.name().to_ascii_lowercase();
+            let (height, read, basis, marked) = match (stretch, whole.iter().copied().reduce(f64::min)) {
+                (Some((_, h)), _) => (h, true, format!("the {fname} elevation's top of parapet over this stretch"), true),
+                (None, Some(h)) if whole.iter().all(|w| (w - h).abs() < 1e-6) => (h, true, format!("the {fname} elevation's top of parapet"), true),
+                (None, Some(h)) => (
+                    h,
+                    false,
+                    format!("the {fname} elevation marks several tops of parapet but not where: the lowest taken, also {}", {
+                        let mut o: Vec<String> = whole.iter().filter(|w| (*w - h).abs() > 1e-6).map(|w| cadaddy_walk3d::feet(*w)).collect();
+                        o.dedup();
+                        o.join(", ")
+                    }),
+                    true,
+                ),
+                (None, None) => (own, own_read, own_basis.clone(), false),
+            };
+            let piece =
+                ParapetPiece { a: at(c0), b: at(c1), facade: Some(side), from_ft: c0.min(c1), to_ft: c0.max(c1), height_ft: height, read, basis };
+            pieces.push((piece, marked));
+        }
+    }
+    // An edge no elevation marks, on a roof some edges of which one does: its neighbour's top
+    // along the outline (the one before it, else after), marked as a default.
+    if pieces.iter().any(|(_, m)| *m) && pieces.iter().any(|(_, m)| !*m) {
+        let n = pieces.len();
+        let marked: Vec<Option<f64>> = pieces.iter().map(|(p, m)| m.then_some(p.height_ft)).collect();
+        for i in 0..n {
+            if marked.get(i).copied().flatten().is_some() {
+                continue;
+            }
+            let before = (1..n).find_map(|k| marked.get((i + n - k) % n).copied().flatten());
+            let after = (1..n).find_map(|k| marked.get((i + k) % n).copied().flatten());
+            if let (Some(h), Some((p, _))) = (before.or(after), pieces.get_mut(i)) {
+                p.height_ft = h;
+                p.read = false;
+                p.basis = format!(
+                    "no elevation marks this {} edge's top of parapet: its neighbour's {} taken",
+                    p.facade.map_or("", |f| f.name()).to_ascii_lowercase(),
+                    cadaddy_walk3d::feet(h)
+                );
+            }
+        }
+    }
+    pieces.into_iter().map(|(p, _)| p).collect()
 }
 
 /// The build part of a framed roof's outside walls carried up round its framing (no parapet).

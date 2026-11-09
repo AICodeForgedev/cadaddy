@@ -9,9 +9,11 @@
 //!   comparison ([`SheetLines`]);
 //! - a placement by the sheet frame holds when the sheet's own linework lies on the plan's
 //!   ([`SheetLines::frame_share`]): a sheet of another building in the same frame doesn't;
-//! - a sheet nothing else places is fitted onto its level's plan by its linework, one to one
-//!   (sheets come in at their printed scales), with the fit's score and its margin over the next
-//!   best placement recorded ([`SheetLines::fit`]);
+//! - a sheet nothing else places is fitted onto its level's plan by its linework, at the ratio
+//!   of the scales the two sheets' plans print at (one to one when both came in at their
+//!   printed scales; a quarter for a trade's 1/4" roof plan onto a roof plan read at a tenth of
+//!   its scale), with the fit's score and its margin over the next best placement recorded
+//!   ([`SheetLines::fit`]);
 //! - a sheet whose views name another part of the site than the plan's (`BUILDING 3 - UNIT 8`
 //!   against `BUILDING 2 - UNIT 6`: [`site_parts`]) is never laid on it, however alike its
 //!   linework (the units of a complex repeat a few typical layouts, so another building's unit
@@ -196,39 +198,48 @@ impl SheetLines {
         }
         let frame = Sim::scale_offset(1.0, [b[0] - a[0], b[1] - a[1]]);
         let (on, under) = self.frame_share(i, &frame, self.pts.get(j)?)?;
+        // Frame onto `j`, then where `j` goes: `j`'s scale about the offset its fit gives the
+        // frame's (a fit at the ratio of the sheets' printed scales too; never a turned one).
         let start = j_fit.apply([frame.tx, frame.ty]);
-        (on.min(under) >= SIBLING_SHARE && (j_fit.scale() - 1.0).abs() <= 1e-9).then(|| (Sim::scale_offset(1.0, start), on, under))
+        let k = j_fit.scale();
+        (on.min(under) >= SIBLING_SHARE && j_fit.b.abs() <= 1e-9 * k.max(1.0) && k.is_finite() && k > 0.0)
+            .then(|| (Sim::scale_offset(k, start), on, under))
     }
 
-    /// Why [`Self::fit`] found none, for the log: the best placement it weighed.
-    pub(crate) fn best_tried(&self, i: usize, tgt: &[Vec2]) -> String {
+    /// Why [`Self::fit`] found none, for the log: the best placement it weighed at `ratio`.
+    pub(crate) fn best_tried(&self, i: usize, tgt: &[Vec2], ratio: f64) -> String {
         let (Some(src), true) = (self.pts.get(i), self.stripped(i)) else { return "its template could not be told from its drawing".into() };
         if src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
             return format!("{} sheet points, {} plan points", src.len(), tgt.len());
         }
-        super::grids::linework_fit_part(src, tgt, self.k_in, 0.97, 1.03).map_or_else(
+        let r = fit_ratio(ratio);
+        super::grids::linework_fit_part(src, tgt, self.k_in, 0.97 * r, 1.03 * r).map_or_else(
             || "nothing to weigh".to_string(),
             |(s, _, score, margin)| format!("best scale {s:.3}, {:.0}% on the plan, {:.0} points over the next", score * 100.0, margin * 100.0),
         )
     }
 
-    /// Sheet `i` fitted onto `tgt` (its level's plan linework) by its linework, one to one within
-    /// 2.5% (a fit off that is its sampling's error, so one to one about its middle; one at the
-    /// end of the scales tried is no fit), the whole floor or a part of it (an enlarged plan). `None` without a fit that holds ([`FIT_F1`],
-    /// [`FIT_MARGIN`]).
-    pub(crate) fn fit(&self, i: usize, tgt: &[Vec2]) -> Option<LineworkFit> {
+    /// Sheet `i` fitted onto `tgt` (its level's plan linework) by its linework at `ratio` (the
+    /// plan's drawing units per foot over the sheet's, from the scales their plans print: 1 when
+    /// both came in at them) within 2.5% (a fit off that is its sampling's error, so at `ratio`
+    /// about its middle; one at the end of the scales tried is no fit), the whole floor or a part
+    /// of it (an enlarged plan). Never scaled to fit without that ratio. `None` without a fit
+    /// that holds ([`FIT_F1`], [`FIT_MARGIN`]).
+    pub(crate) fn fit(&self, i: usize, tgt: &[Vec2], ratio: f64) -> Option<LineworkFit> {
         let src = self.pts.get(i)?;
         if !self.stripped(i) || src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
             return None;
         }
-        self.fit_points(src, tgt).or_else(|| {
+        let r = fit_ratio(ratio);
+        self.fit_points(src, tgt, r).or_else(|| {
             // Schedules and notes beside the plan can leave the sheet wider than the plan it is
-            // laid on, so it can't be weighed whole: its biggest block of lines is its plan.
+            // laid on (at the ratio it is laid on at), so it can't be weighed whole: its biggest
+            // block of lines is its plan.
             let span = |p: &[Vec2]| {
                 let b = cadaddy_geom::Bounds2::from_points(p.iter().copied());
                 b.width().max(b.height())
             };
-            if span(src) <= MAX_SHEET_OVER_PLAN * span(tgt) {
+            if r * span(src) <= MAX_SHEET_OVER_PLAN * span(tgt) {
                 return None;
             }
             // A schedule's table can outweigh the plan: the biggest few are each tried, and only
@@ -239,7 +250,7 @@ impl SheetLines {
                 if block.len() < MIN_POINTS || block.len() >= src.len() {
                     return None;
                 }
-                if let Some(f) = self.fit_points(&block, tgt) {
+                if let Some(f) = self.fit_points(&block, tgt, r) {
                     return Some(f);
                 }
                 let taken: std::collections::HashSet<(u64, u64)> = block.iter().map(|p| (p.x.to_bits(), p.y.to_bits())).collect();
@@ -249,13 +260,33 @@ impl SheetLines {
         })
     }
 
-    fn fit_points(&self, src: &[Vec2], tgt: &[Vec2]) -> Option<LineworkFit> {
+    /// [`Self::fit`] of the points `src` at the ratio `r`.
+    fn fit_points(&self, src: &[Vec2], tgt: &[Vec2], r: f64) -> Option<LineworkFit> {
         // Each scale proposes its best few placements, so the margin is over a real runner-up.
-        let fit = super::grids::linework_fit_part(src, tgt, self.k_in, 0.97, 1.03);
-        let (s, t, score, margin) = fit.filter(|f| f.2 >= FIT_F1 && f.3 >= FIT_MARGIN && (f.0 - 1.0).abs() <= 0.025)?;
+        let fit = super::grids::linework_fit_part(src, tgt, self.k_in, 0.97 * r, 1.03 * r);
+        let (s, t, score, margin) = fit.filter(|f| f.2 >= FIT_F1 && f.3 >= FIT_MARGIN && (f.0 / r - 1.0).abs() <= 0.025)?;
         let mid = src.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / src.len().max(1) as f64);
-        let sim = Sim::scale_offset(1.0, [t.x + mid.x * (s - 1.0), t.y + mid.y * (s - 1.0)]);
+        let sim = Sim::scale_offset(r, [t.x + mid.x * (s - r), t.y + mid.y * (s - r)]);
         sim.is_finite().then_some(LineworkFit { sim, score, margin })
+    }
+}
+
+/// The ratios of printed scales a fit is tried at (a sheet a fiftieth of its plan's size, or fifty
+/// times it, is a misread note): outside them, and for one that isn't a number, one to one.
+const MIN_FIT_RATIO: f64 = 0.02;
+const MAX_FIT_RATIO: f64 = 50.0;
+
+fn fit_ratio(ratio: f64) -> f64 {
+    if ratio.is_finite() && (MIN_FIT_RATIO..=MAX_FIT_RATIO).contains(&ratio) { ratio } else { 1.0 }
+}
+
+/// The ratio a sheet is fitted onto its level's plan at: the plan's drawing units per foot over
+/// the sheet's (each the scale its sheet came in at times the scale its plans print), 1 when
+/// either is unknown.
+pub(crate) fn scale_ratio(plan_upf: Option<f64>, sheet_upf: Option<f64>) -> f64 {
+    match (plan_upf, sheet_upf) {
+        (Some(p), Some(q)) if p.is_finite() && q.is_finite() && p > 0.0 && q > 0.0 => fit_ratio(p / q),
+        _ => 1.0,
     }
 }
 
@@ -354,6 +385,79 @@ mod tests {
         assert!(lines.through_sibling(0, 2, &placed).is_none(), "another drawing is no sibling");
     }
 
+    /// A made-up floor's walls (inches, 150' by 100'), sampled every 6": an outline and
+    /// partitions at uneven spacings, so it lies on itself in one place only.
+    fn floor(scale: f64, at: [f64; 2]) -> Vec<Vec2> {
+        let scale = 2.5 * scale;
+        let walls: [[f64; 4]; 9] = [
+            [0.0, 0.0, 720.0, 0.0],
+            [720.0, 0.0, 720.0, 480.0],
+            [720.0, 480.0, 0.0, 480.0],
+            [0.0, 480.0, 0.0, 0.0],
+            [170.0, 0.0, 170.0, 300.0],
+            [0.0, 300.0, 410.0, 300.0],
+            [410.0, 120.0, 410.0, 480.0],
+            [530.0, 0.0, 530.0, 210.0],
+            [530.0, 210.0, 720.0, 210.0],
+        ];
+        let mut out = Vec::new();
+        for [x0, y0, x1, y1] in walls {
+            let n = ((x1 - x0).hypot(y1 - y0) / 6.0).ceil().max(1.0) as usize;
+            for k in 0..=n {
+                let t = k as f64 / n as f64;
+                out.push(Vec2::new(at[0] + scale * (x0 + t * (x1 - x0)), at[1] + scale * (y0 + t * (y1 - y0))));
+            }
+        }
+        out
+    }
+
+    /// Q6396: a trade's plan whose sheet came in at twice the scale of the architect's plan (its
+    /// plans print 1/4" where the architect's print 1/8", and the architect's was read at that)
+    /// fits onto it at the ratio of their printed scales, about its middle; one to one it has
+    /// nothing to weigh (a sheet twice the plan's size), as every such sheet had before.
+    #[test]
+    fn a_sheet_fits_onto_a_plan_at_the_ratio_of_their_scales() {
+        let plan = floor(1.0, [100.0, 50.0]);
+        let lines = SheetLines {
+            rects: vec![[0.0, 0.0, 2000.0, 1400.0], [5000.0, 0.0, 9000.0, 2800.0]],
+            pts: vec![plan.clone(), floor(2.0, [5200.0, 100.0])],
+            stripped: vec![true, true],
+            k_in: 1.0,
+        };
+        assert!(lines.fit(1, &plan, 1.0).is_none(), "one to one: no fit");
+        let f = lines.fit(1, &plan, 0.5).expect("a fit at the ratio");
+        assert!((f.sim.scale() - 0.5).abs() < 1e-9, "never scaled to fit: {}", f.sim.scale());
+        // The trade sheet's corner of the floor lands on the plan's.
+        let q = f.sim.apply([5200.0, 100.0]);
+        assert!((q[0] - 100.0).abs() <= 18.0 && (q[1] - 50.0).abs() <= 18.0, "{q:?}");
+        assert!(f.score >= FIT_F1, "{}", f.score);
+        // The log's best try is weighed at that ratio too.
+        let tried = lines.best_tried(1, &plan, 0.5);
+        let k: f64 = tried.trim_start_matches("best scale ").split(',').next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        assert!((k / 0.5 - 1.0).abs() <= 0.025, "{tried}");
+        // A sheet placed through a sibling fitted at the ratio keeps its scale.
+        let (m, _, _) = SheetLines {
+            rects: vec![[5000.0, 0.0, 9000.0, 2800.0], [10000.0, 0.0, 14000.0, 2800.0]],
+            pts: vec![floor(2.0, [5200.0, 100.0]), floor(2.0, [10200.0, 100.0])],
+            stripped: vec![true, true],
+            k_in: 1.0,
+        }
+        .through_sibling(1, 0, &f.sim)
+        .expect("the same background, frame on frame");
+        assert!((m.scale() - 0.5).abs() < 1e-9);
+        let q = m.apply([10200.0, 100.0]);
+        assert!((q[0] - 100.0).abs() <= 18.0 && (q[1] - 50.0).abs() <= 18.0, "{q:?}");
+    }
+
+    #[test]
+    fn a_misread_ratio_is_one_to_one() {
+        assert_eq!(scale_ratio(Some(12.0), Some(12.0)), 1.0);
+        assert_eq!(scale_ratio(Some(1.0), Some(1000.0)), 1.0, "a thousandth is a misread note");
+        assert_eq!(scale_ratio(Some(f64::NAN), Some(12.0)), 1.0);
+        assert_eq!(scale_ratio(Some(-3.0), Some(12.0)), 1.0);
+        assert_eq!(scale_ratio(Some(24.0), Some(12.0)), 2.0);
+    }
+
     #[test]
     fn a_sheet_with_schedules_beside_its_plan_is_fitted_by_its_plan() {
         // A floor of unlike rooms, and the same floor 100 along on a sheet with a schedule's table
@@ -388,7 +492,7 @@ mod tests {
             stripped: vec![true],
             k_in: 0.25,
         };
-        let f = whole_is_too_wide.fit(0, &plan).expect("its plan fits");
+        let f = whole_is_too_wide.fit(0, &plan, 1.0).expect("its plan fits");
         assert!((f.sim.tx + 100.0).abs() <= 15.0 && f.sim.ty.abs() <= 15.0, "{:?}", (f.sim.tx, f.sim.ty));
     }
 

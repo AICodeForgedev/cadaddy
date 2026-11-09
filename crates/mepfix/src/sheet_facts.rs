@@ -741,6 +741,73 @@ pub fn is_site_sheet(discipline: &str, title: &str) -> bool {
     words.iter().any(|w| crate::wordrules::words("sheets.site_title_words").contains(w))
 }
 
+/// Whether a view's title names a plan of some kind (`ROOF PLAN`, `FIRST FLOOR PLAN`, `RCP`): a
+/// word of the rules data's `sheets.plan_view_words`, and none of `sheets.not_plan_view_words`
+/// (`KEY PLAN`, `PLAN DETAIL`).
+pub fn names_a_plan(title: &str) -> bool {
+    let up = title.to_uppercase();
+    if crate::sheet_reader::names_no_plan(&up) {
+        return false;
+    }
+    let words = crate::wordrules::words("sheets.plan_view_words");
+    up.split(|c: char| !c.is_alphanumeric()).any(|w| words.contains(&w))
+}
+
+/// Most views weighed for a sheet's plan scale.
+const MAX_SCALE_VIEWS: usize = 500;
+
+/// The scale a sheet's plans print at (sheet inches per foot: 0.125 for `1/8" = 1'-0"`) and the
+/// biggest plan view printing it: the scale most of its plan views ([`names_a_plan`]) print, and
+/// between scales printed as often, the one whose views cover more of the sheet. A view not to
+/// scale or whose note doesn't read has no say. `None` without a plan view at a scale.
+pub fn plan_print_scale(views: &[ViewTitle]) -> Option<(f64, &ViewTitle)> {
+    // (scale, views, their area, the biggest of them and its area)
+    let mut by: Vec<(f64, usize, f64, &ViewTitle, f64)> = Vec::new();
+    for v in views.iter().take(MAX_SCALE_VIEWS) {
+        if v.not_to_scale || !names_a_plan(&v.title) {
+            continue;
+        }
+        let Some(k) = v.scale_text.as_deref().and_then(crate::sheet_reader::parse_scale).filter(|k| k.is_finite() && *k > 0.0) else {
+            continue;
+        };
+        let a = v.region.map_or(0.0, |r| ((r[2] - r[0]) * (r[3] - r[1])).abs()).max(0.0);
+        let a = if a.is_finite() { a } else { 0.0 };
+        match by.iter_mut().find(|e| (e.0 - k).abs() <= 1e-6 * k) {
+            Some(e) => {
+                e.1 += 1;
+                e.2 += a;
+                if a > e.4 {
+                    e.3 = v;
+                    e.4 = a;
+                }
+            }
+            None => by.push((k, 1, a, v, a)),
+        }
+    }
+    by.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(a.2.total_cmp(&b.2))).map(|e| (e.0, e.3))
+}
+
+/// [`plan_print_scale`] of a drawing of one sheet, read only when the sheet prints more than one
+/// scale note (with one, the sheet's note is its plans'): the scale and the view (cloned).
+pub fn sheet_plan_print_scale(d: &Drawing) -> Option<(f64, ViewTitle)> {
+    let t = texts(d);
+    // By the notes' lettering (a note the scale reader can't read is another scale all the same).
+    let mut seen: Vec<String> = Vec::new();
+    for note in t.iter().filter(|x| is_scale_line(x)).map(|x| scale_text(&x.value).to_ascii_uppercase().replace(char::is_whitespace, "")) {
+        if !note.is_empty() && !seen.contains(&note) {
+            seen.push(note);
+        }
+        if seen.len() > 1 {
+            break;
+        }
+    }
+    if seen.len() < 2 {
+        return None;
+    }
+    let views = view_titles(d, &t);
+    plan_print_scale(&views).map(|(k, v)| (k, v.clone()))
+}
+
 /// The sheet and its views.
 pub fn read_sheet_facts(d: &Drawing) -> SheetFacts {
     let t = texts(d);
@@ -752,6 +819,60 @@ mod tests {
     use super::*;
     use cadaddy_doc::{Common, HAlign, Line, Space, Text, VAlign};
     use cadaddy_geom::Vec3;
+
+    fn view(title: &str, scale: Option<&str>, area: f64) -> ViewTitle {
+        ViewTitle {
+            number: None,
+            title: title.into(),
+            scale_text: scale.map(str::to_string),
+            not_to_scale: false,
+            at: [0.0, 0.0],
+            region: (area > 0.0).then_some([0.0, 0.0, area, 1.0]),
+        }
+    }
+
+    /// Q6396: a sheet's plans print the scale most of its plan views do (a detail's or an
+    /// elevation's note is none of theirs, nor a key plan's), the bigger between scales printed as
+    /// often.
+    #[test]
+    fn a_sheets_plans_print_the_scale_of_its_plan_views() {
+        let roof = [
+            view("ROOF PLAN", Some("1/8\" = 1'-0\""), 900.0),
+            view("ELEVATION - EQUIPMENT SCREEN", Some("1/2\" = 1'-0\""), 200.0),
+            view("KEY PLAN", Some("1\" = 100'-0\""), 10.0),
+            view("PLAN DETAIL", Some("1 1/2\" = 1'-0\""), 30.0),
+        ];
+        let (k, v) = plan_print_scale(&roof).expect("a plan at a scale");
+        assert_eq!((k, v.title.as_str()), (0.125, "ROOF PLAN"));
+        // Two enlarged plans at 1/2" over one at 1/4", whatever their sizes.
+        let enlarged = [
+            view("ENLARGED PLAN - ROOM A", Some("1/2\" = 1'-0\""), 50.0),
+            view("ENLARGED PLAN - ROOM B", Some("1/2\" = 1'-0\""), 60.0),
+            view("PARTIAL FLOOR PLAN", Some("1/4\" = 1'-0\""), 500.0),
+            view("SECTION", Some("3/4\" = 1'-0\""), 80.0),
+        ];
+        assert_eq!(plan_print_scale(&enlarged).map(|(k, v)| (k, v.title.clone())), Some((0.5, "ENLARGED PLAN - ROOM B".to_string())));
+        // As often: the bigger.
+        let tie = [view("FLOOR PLAN", Some("1/4\" = 1'-0\""), 500.0), view("ENLARGED PLAN", Some("1/2\" = 1'-0\""), 300.0)];
+        assert_eq!(plan_print_scale(&tie).map(|(k, _)| k), Some(0.25));
+        // None to scale, or none a plan: nothing.
+        let mut nts = view("FLOOR PLAN", None, 100.0);
+        nts.not_to_scale = true;
+        assert!(plan_print_scale(&[nts, view("ELEVATION", Some("1/4\" = 1'-0\""), 10.0)]).is_none());
+        assert!(names_a_plan("Upper Level and Canopy Plan") && names_a_plan("RCP - LEVEL 2") && !names_a_plan("Planting Notes"));
+    }
+
+    /// A sheet that prints one scale note is never weighed (its note is its plans').
+    #[test]
+    fn a_sheet_of_one_scale_is_not_weighed() {
+        let mut d = Drawing::default();
+        text(&mut d, "ROOF PLAN", 0.0, 2.0, 0.25);
+        text(&mut d, "1/8\" = 1'-0\"", 0.0, 1.6, 0.12);
+        assert!(sheet_plan_print_scale(&d).is_none());
+        text(&mut d, "ELEVATION", 10.0, 2.0, 0.25);
+        text(&mut d, "1/2\" = 1'-0\"", 10.0, 1.6, 0.12);
+        assert_eq!(sheet_plan_print_scale(&d).map(|(k, v)| (k, v.title)), Some((0.125, "ROOF PLAN".to_string())));
+    }
 
     #[test]
     fn a_trades_sub_discipline_sheet_is_that_trades() {
