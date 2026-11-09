@@ -386,6 +386,7 @@ pub const STANDARD: &[(&str, &[&str])] = &[
     ("conduit", &["size", "system", "circuit", "elevation", "level"]),
     ("fixture", &["type_mark", "model", "circuit", "room", "level"]),
     ("light_fixture", &["type_mark", "model", "circuit", "mount_height", "room", "level"]),
+    ("plumbing_fixture", &["type_mark", "model", "mount_height", "room", "level"]),
     ("equipment", &["type_mark", "model", "circuit", "room", "level"]),
 ];
 
@@ -475,8 +476,10 @@ pub fn standard_ifc(kind: &str, key: &str) -> Option<(&'static str, &'static str
         ("room", "floor_finish") => ("Pset_SpaceCoveringRequirements", "FloorCovering"),
         ("room", "wall_finish") => ("Pset_SpaceCoveringRequirements", "WallCovering"),
         ("room", "ceiling_finish") => ("Pset_SpaceCoveringRequirements", "CeilingCovering"),
-        ("light_fixture" | "fixture" | "equipment" | "device", "type_mark") => ("Pset_ManufacturerTypeInformation", "ModelLabel"),
-        ("light_fixture" | "fixture" | "equipment", "model") => ("Pset_ManufacturerTypeInformation", "ModelReference"),
+        ("light_fixture" | "plumbing_fixture" | "fixture" | "equipment" | "device", "type_mark") => {
+            ("Pset_ManufacturerTypeInformation", "ModelLabel")
+        }
+        ("light_fixture" | "plumbing_fixture" | "fixture" | "equipment", "model") => ("Pset_ManufacturerTypeInformation", "ModelReference"),
         _ => return None,
     })
 }

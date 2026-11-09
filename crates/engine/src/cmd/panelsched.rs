@@ -980,7 +980,7 @@ fn run(s: &mut crate::Session, p: &serde_json::Value) -> crate::Result<serde_jso
     let d = s.doc()?;
     let mut on: BTreeMap<(String, String), OnCircuit> = BTreeMap::new();
     for (e, base) in super::elemprops::elements(d).take(2_000_000) {
-        if !matches!(base.as_str(), "device" | "light_fixture" | "fixture" | "equipment") {
+        if !matches!(base.as_str(), "device" | "light_fixture" | "plumbing_fixture" | "fixture" | "equipment") {
             continue;
         }
         let st = props::read(&e.common.xdata);

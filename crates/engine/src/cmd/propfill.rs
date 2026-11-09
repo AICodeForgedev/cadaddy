@@ -997,6 +997,16 @@ fn circuit_points(sp: &BuildingSpec, devices: &[&cadaddy_walk3d::tags::ElementTa
     out
 }
 
+/// A fixture's body size its build recorded (`body_size_in`: width, depth, height, inches).
+fn body_size(store: &Props) -> Option<[f64; 3]> {
+    let t = store.get("body_size_in")?.text();
+    let v: Vec<f64> = t.split('x').filter_map(|x| x.trim().parse::<f64>().ok()).filter(|x| x.is_finite() && *x > 0.0).collect();
+    match v.as_slice() {
+        [a, b, c] => Some([*a, *b, *c]),
+        _ => None,
+    }
+}
+
 /// The other devices of `circuit` on `level` near `p` (not at it).
 fn circuit_near(by: &HashMap<String, Vec<(String, Vec2)>>, circuit: Option<&str>, level: &str, p: Vec2, upf: f64) -> Vec<Vec2> {
     circuit
@@ -1059,7 +1069,22 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
                 let w = BOX_IN[0] * upf / 12.0;
                 let mut mesh = super::wallgen::empty_mesh();
                 let c = st.centre + off;
-                super::wallgen::add_box(&mut mesh, c - st.along * (l / 2.0), c + st.along * (l / 2.0), w, z0, z1);
+                // A fixture's body (Q6315) against the wall there now, out into its room; one where
+                // the architectural plan draws it stays there. Any other device its box.
+                let drawn = store.get("body_provenance").is_some_and(|p| p.text() == "drawn");
+                match body_size(&store) {
+                    _ if drawn => {
+                        if let EntityKind::Mesh(m) = &e.kind {
+                            mesh = m.clone();
+                        }
+                    }
+                    Some([bw, bd, _]) => {
+                        let (bw, bd) = (bw * upf / 12.0, bd * upf / 12.0);
+                        let bc = c + st.out * (w / 2.0 + bd / 2.0);
+                        super::wallgen::add_box(&mut mesh, bc - st.along * (bw / 2.0), bc + st.along * (bw / 2.0), bd, z0, z1);
+                    }
+                    None => super::wallgen::add_box(&mut mesh, c - st.along * (l / 2.0), c + st.along * (l / 2.0), w, z0, z1),
+                }
                 if mesh.faces.is_empty() {
                     continue;
                 }
@@ -1575,14 +1600,88 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             None => (p, Vec2::new(1.0, 0.0)),
         };
         let (x, y) = (centre.x, centre.y);
+        // What it is (Q6315): its element's kind as read (its legend row's, its sheet's), else its
+        // mark's; one read only as a device whose mark the light fixture schedule lists is that
+        // schedule's luminaire.
+        let own = t.kind.replace('_', " ");
+        let lum_row = {
+            let ty = super::lightsched::type_of(&mark);
+            sp.mep.fixture_schedule.iter().find(|r| !ty.is_empty() && r.tag == ty)
+        };
+        let (what, by_schedule) = if !(own.trim().is_empty() || own == "device") {
+            (own, false)
+        } else if let Some(k) = field(t, "device_kind") {
+            (k, false)
+        } else if kind == "device" && lum_row.is_some() {
+            ("luminaire".to_string(), true)
+        } else {
+            (kind.to_string(), false)
+        };
+        let class = super::fixturebody::class_of_kind(&what);
+        // A fixture's body (a luminaire, a water closet), sized from what is drawn, else printed,
+        // else its kind's usual size; any other device its box.
+        let schedule_words = match class {
+            Some(super::fixturebody::Class::Light) => {
+                lum_row.map(|r| format!("{} {} {}", r.description, r.model, r.installation)).unwrap_or_default()
+            }
+            _ => [field(t, "fixture"), field(t, "description")].into_iter().flatten().collect::<Vec<_>>().join(" "),
+        };
+        let words = format!("{what} {fixture_words} {legend_words}");
+        let drawn_in = field(t, "drawn_size_in").and_then(|v| super::fixturebody::drawn_size(&v));
+        let fixture_body = class.and_then(|c| {
+            super::fixturebody::body(&super::fixturebody::Ask {
+                class: c,
+                words: &words,
+                schedule: &schedule_words,
+                drawn_in,
+                on_wall: placed_on.is_some(),
+            })
+        });
         let mut m = super::wallgen::empty_mesh();
-        super::wallgen::add_box(&mut m, centre - along * (l / 2.0), centre + along * (l / 2.0), w, z0, z1);
+        match &fixture_body {
+            Some(b) => {
+                let inch = upf / 12.0;
+                let bh = b.size_in[2] * inch;
+                // Its height where its documents give it (a water closet's seat, a lavatory's
+                // rim): the box's top, bottom or middle there, as before; the body's own height
+                // from that datum.
+                let (b0, b1) = match (mount, height.datum) {
+                    (Mount::Floor, _) if documented_height && height.inches > 0.0 => (z0, z1),
+                    (Mount::Floor, _) => (floor, floor + bh),
+                    (_, Datum::Top) => (at_z - bh, at_z),
+                    (_, Datum::Bottom) => (at_z, at_z + bh),
+                    (_, Datum::Centre) => (at_z - bh / 2.0, at_z + bh / 2.0),
+                };
+                match (drawn_in, &placed_on) {
+                    // Where the architectural plan draws it, its drawn outline.
+                    (Some(_), _) => {
+                        let half = Vec2::new(b.size_in[0] * inch / 2.0, 0.0);
+                        super::wallgen::add_box(&mut m, p - half, p + half, b.size_in[1] * inch, b0, b1);
+                    }
+                    // Against its wall's face, out into its room.
+                    (None, Some(st)) => {
+                        let face = st.centre + st.out * (w / 2.0);
+                        let c = face + st.out * (b.size_in[1] * inch / 2.0);
+                        let half = st.along * (b.size_in[0] * inch / 2.0);
+                        super::wallgen::add_box(&mut m, c - half, c + half, b.size_in[1] * inch, b0, b1);
+                    }
+                    (None, None) => {
+                        let half = Vec2::new(b.size_in[0] * inch / 2.0, 0.0);
+                        super::wallgen::add_box(&mut m, centre - half, centre + half, b.size_in[1] * inch, b0, b1);
+                    }
+                }
+            }
+            None => super::wallgen::add_box(&mut m, centre - along * (l / 2.0), centre + along * (l / 2.0), w, z0, z1),
+        }
         if m.faces.is_empty() {
             continue;
         }
         let symbol = Handle::parse_hex(&symbol_hex).unwrap_or(Handle(0));
         let mut xdata = super::wallgen::tag(cadaddy_walk3d::Part::Device, &level.name, symbol);
         xdata.push(RawTag { code: 1000, value: format!("{DEVID}:{}", t.id.chars().take(240).collect::<String>()) });
+        // Its element kind, set when it is made (`elemprops::element_kind` reads it).
+        let element = class.map_or("device", super::fixturebody::Class::element_kind);
+        xdata.push(RawTag { code: 1000, value: format!("{}:{element}", super::elemprops::ELEMENT_TAG) });
         // What was read about it.
         let sheet = sheet_name.clone();
         let at = Some([read_at.x, read_at.y]);
@@ -1679,11 +1778,40 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 },
             ),
         );
-        // What it is: its element's kind as read (its legend row's, its sheet's), else its mark's.
-        let own = t.kind.replace('_', " ");
-        let what = if own.trim().is_empty() || own == "device" { field(t, "device_kind").unwrap_or_else(|| kind.to_string()) } else { own };
-        let what_src = field(t, "kind_source").map_or_else(|| Source::print(&sheet, at), |row| Source::print(&row, at));
+        // What it is (above), where that was read: its legend row, its sheet, else the light
+        // fixture schedule row its mark is.
+        let what_src = match (field(t, "kind_source"), lum_row.filter(|_| by_schedule)) {
+            (Some(row), _) => Source::print(&row, at),
+            (None, Some(r)) => Source::from_doc(SourceKind::Schedule, format!("{} type {}", r.source, r.tag).trim()),
+            (None, None) => Source::print(&sheet, at),
+        };
         store.set("kind", Prop::new(what.replace(' ', "_"), what_src.clone()));
+        // Its body: its size, where that came from and why (never passed off as drawn).
+        match &fixture_body {
+            Some(b) => {
+                let src = match (b.provenance, lum_row) {
+                    ("drawn", _) => Source::print(&sheet, at),
+                    ("derived", Some(r)) if class == Some(super::fixturebody::Class::Light) => {
+                        Source::from_doc(SourceKind::Schedule, format!("{} type {}", r.source, r.tag).trim())
+                    }
+                    ("derived", _) => Source::from_doc(SourceKind::Schedule, &format!("its fixture schedule row, type {mark}")),
+                    _ => Source::from_doc(SourceKind::Rule, "fixture body rules (fixturebody.json)"),
+                };
+                let [bw, bd, bh] = b.size_in;
+                store.set(
+                    "body_size_in",
+                    Prop::new(format!("{} x {} x {}", round2(bw), round2(bd), round2(bh)), src.clone())
+                        .with_unit("in")
+                        .with_note("width along its wall (plan x where it is on none), depth out from it, height"),
+                );
+                store.set("body_provenance", Prop::new(b.provenance, src.clone()));
+                store.set("body_basis", Prop::new(b.basis.clone(), src));
+            }
+            None if class.is_some() => {
+                store.set("body_basis", Prop::new(super::fixturebody::NO_BODY, Source::from_doc(SourceKind::Rule, "fixture body rules")));
+            }
+            None => {}
+        }
         if let Some(ifc) = field(t, "ifc_class") {
             store.set("ifc_class", Prop::new(ifc, what_src));
         }
@@ -2433,7 +2561,7 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         let level_z = lvl.and_then(|l| sp.level(l)).map_or(0.0, |l| l.elevation_ft * upf);
         let shift = super::bspec::stacked_by(e);
         match kind.as_str() {
-            "device" | "light_fixture" | "fixture" if made(e, DEVID).is_some() || kind == "device" => {
+            k if super::elemprops::is_device_kind(k) && (made(e, DEVID).is_some() || kind == "device") => {
                 let Some((b, z0, z1)) = ext else { continue };
                 let c = b.center();
                 let switch = store.get("type_mark").map(Prop::text).is_some_and(|m| kind_of(&m) == "switch");
