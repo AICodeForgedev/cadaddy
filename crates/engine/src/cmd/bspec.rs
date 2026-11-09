@@ -72,7 +72,16 @@ fn merged(s: &Session, cmd: &str, patch: Option<&Value>, replace: bool) -> Resul
     }
     let mut v = if replace { json!({}) } else { serde_json::to_value(current(s, cmd)?.0).map_err(|e| bad(cmd, e.to_string()))? };
     cadaddy_walk3d::merge(&mut v, patch);
-    BuildingSpec::from_json(&v.to_string()).map_err(|e| bad(cmd, e))
+    let mut sp = BuildingSpec::from_json(&v.to_string()).map_err(|e| bad(cmd, e))?;
+    // Replacing the spec replaces the spec, not the data other commands keep beside it in the
+    // same text (saved views, colour schemes…): those stay unless the new spec gives them. A
+    // stored spec that can't be read keeps nothing.
+    if replace && let Ok(Some(old)) = stored(s.doc()?) {
+        for (k, val) in old.kept {
+            sp.kept.entry(k).or_insert(val);
+        }
+    }
+    Ok(sp)
 }
 
 fn issue_json(i: &Issue) -> Value {

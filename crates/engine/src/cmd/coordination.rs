@@ -5,8 +5,9 @@
 //! experience for reviewing MEP and structural coordination in 3D.
 //!
 //! Coordination-specific data (viewpoints, section box, colour schemes, coordination views) is
-//! stored as extra JSON keys inside the drawing's `building_spec` text. The `BuildingSpec`
-//! deserializer ignores unknown keys, so they survive round-trips through the spec parser.
+//! stored as extra JSON keys inside the drawing's `building_spec` text. The `BuildingSpec` keeps
+//! the keys it doesn't own as written (`BuildingSpec::kept`), so every command that writes the
+//! spec back writes them back too.
 
 use cadaddy_doc::{Drawing, EntityKind};
 use cadaddy_geom::Vec3;
