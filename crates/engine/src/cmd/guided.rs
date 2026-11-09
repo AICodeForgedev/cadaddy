@@ -25655,17 +25655,50 @@ fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).collect())
             .unwrap_or_default();
+        // Each top with the facade whose elevation marks it (none: a section's), so a parapet
+        // that steps keeps a top per facade; an index without them gives the tops alone.
+        let tops: Vec<(f64, Option<cadaddy_walk3d::Side>)> = index_levels
+            .iter()
+            .find(|l| l.get("name").and_then(Value::as_str).is_some_and(|n| level_name(n).eq_ignore_ascii_case(roof)))
+            .and_then(|l| l.get("parapet_tops"))
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| {
+                        let h = t.get("height_ft").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0)?;
+                        let side = t.get("facade").and_then(|f| serde_json::from_value::<cadaddy_walk3d::Side>(f.clone()).ok());
+                        Some((h, side))
+                    })
+                    .take(64)
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut parapet = Value::Null;
         if let Some(low) = parapets.first().copied()
-            && sp.exterior.level_parapet(roof).is_none()
+            && sp.exterior.level_parapets(roof).next().is_none()
         {
             let h = (low - assembly).max(0.0);
-            sp.exterior.parapets.push(cadaddy_walk3d::LevelParapet { level: roof.clone(), height_ft: h, facade: None });
+            let by_facade: Vec<&(f64, Option<cadaddy_walk3d::Side>)> = tops.iter().filter(|(_, f)| f.is_some()).collect();
+            if by_facade.is_empty() {
+                sp.exterior.parapets.push(cadaddy_walk3d::LevelParapet { level: roof.clone(), height_ft: h, ..Default::default() });
+            } else {
+                for (t, f) in tops.iter() {
+                    let height_ft = (t - assembly).max(0.0);
+                    sp.exterior.parapets.push(cadaddy_walk3d::LevelParapet { level: roof.clone(), height_ft, facade: *f, ..Default::default() });
+                }
+            }
+            let facades: Vec<Value> = by_facade
+                .iter()
+                .map(|(t, f)| json!({"facade": f.map(|f| f.name().to_ascii_lowercase()), "height_ft": ((t - assembly).max(0.0) * 100.0).round() / 100.0}))
+                .collect();
             parapet = json!({
                 "height_ft": (h * 100.0).round() / 100.0,
                 "above_bearing_ft": parapets,
-                "note": if parapets.len() > 1 {
+                "by_facade": facades,
+                "note": if parapets.len() > 1 && by_facade.is_empty() {
                     format!("the parapet is built at its lowest top all round; the sections and elevations also mark {} above the bearing where it steps up", parapets.iter().skip(1).map(|v| cadaddy_walk3d::feet(*v)).collect::<Vec<_>>().join(", "))
+                } else if parapets.len() > 1 {
+                    "each facade's parapet is built at the top its elevation marks; an edge no elevation marks takes its neighbour's".to_string()
                 } else {
                     String::new()
                 },
@@ -35769,6 +35802,48 @@ mod tests {
         assert!(sp2.exterior.level_framing("Roof").is_none());
         assert_eq!(sp2.exterior.level_parapet("Roof"), Some(5.0));
         assert_eq!(sp2.level("Roof").unwrap().elevation_ft, 10.0);
+    }
+
+    /// fix-parapet-one-height-per-roof: an index whose tops of parapet carry the facade of the
+    /// elevation marking each gives the roof one top per facade (all kept); the build stands each
+    /// facade's parapet at its own top.
+    #[test]
+    fn roof_documents_keep_a_top_of_parapet_per_facade() {
+        let mut s = Session::new();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Roof", "elevation_ft": 10, "height_ft": 4, "ceiling_ft": 4}
+            ]}}),
+        )
+        .unwrap();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![region("A-1", "1", "A", "plan", 0.0)];
+        job.index = Some(json!({"levels": [{"name": "1", "elevation_ft": 0.0}, {"name": "R", "elevation_ft": 10.0, "parapets_ft": [5.0, 7.0],
+            "parapet_tops": [{"height_ft": 5.0, "facade": "east"}, {"height_ft": 5.0, "facade": "west"}, {"height_ft": 7.0, "facade": "north"}, {"height_ft": 7.0, "facade": "south"}]}]}));
+        let out = roof_documents(&mut s, &job).unwrap();
+        let (sp, _) = super::super::bspec::current(&s, "test").unwrap();
+        let mut kept: Vec<(String, f64)> =
+            sp.exterior.level_parapets("Roof").map(|p| (p.facade.map_or(String::new(), |f| f.name().to_string()), p.height_ft)).collect();
+        kept.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(kept, [("East".to_string(), 5.0), ("North".into(), 7.0), ("South".into(), 7.0), ("West".into(), 5.0)], "{out}");
+        assert_eq!(out["roofs"][0]["parapet"]["by_facade"].as_array().map(Vec::len), Some(4), "{out}");
+        // Without the facades, the lowest stands all round and the others are named.
+        job.index = Some(json!({"levels": [{"name": "1", "elevation_ft": 0.0}, {"name": "R", "elevation_ft": 10.0, "parapets_ft": [5.0, 7.0]}]}));
+        let mut s2 = Session::new();
+        s2.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Roof", "elevation_ft": 10, "height_ft": 4, "ceiling_ft": 4}
+            ]}}),
+        )
+        .unwrap();
+        let out2 = roof_documents(&mut s2, &job).unwrap();
+        let (sp2, _) = super::super::bspec::current(&s2, "test").unwrap();
+        assert_eq!(sp2.exterior.level_parapets("Roof").count(), 1);
+        assert!(out2["roofs"][0]["parapet"]["note"].as_str().unwrap().contains("7'-0\""), "{out2}");
     }
 
     #[test]
