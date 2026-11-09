@@ -5814,6 +5814,21 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             false,
                         );
                     }
+                    if !found.not_placeable.is_empty() {
+                        let tags: Vec<&str> = found.not_placeable.iter().take(20).map(String::as_str).collect();
+                        job.add_finding(
+                            StageName::BimBuild,
+                            &format!("{} scheduled piece(s) of equipment a plan tags but could not be placed", found.not_placeable.len()),
+                            &format!(
+                                "the mechanical schedules list them and a plan tags them, but no sheet they are tagged on lines up with its level's plan, so they are not in the model (tag, the sheets): {}",
+                                tags.join("; ")
+                            ),
+                            2,
+                            vec!["Check that these sheets are assigned to their level and line up with its plan".into()],
+                            None,
+                            false,
+                        );
+                    }
                 }
                 sp.mep.equipment.extend(found.equipment);
                 // Each roof unit's line set to the indoor unit its schedule row pairs it with.
