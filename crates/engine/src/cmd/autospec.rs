@@ -97,6 +97,12 @@ pub(crate) fn role_by_name(layer: &str) -> Option<(Role, &'static str)> {
     role.map(|r| (r, "plain layer name"))
 }
 
+/// Whether a layer is the OCR review layer: readings kept for a person to check (a lone letter, a
+/// tick or a corner misread), not the sheet's lettering.
+fn review_layer(layer: &str) -> bool {
+    layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::OCR_REVIEW_LAYER)
+}
+
 /// A name text (not a number) that reads as a room's name ([`room_like_name`]: no note
 /// sentence).
 fn room_name(t: &str) -> bool {
@@ -127,6 +133,13 @@ pub(crate) fn room_like_name(t: &str) -> bool {
         return false;
     }
     if t.contains([',', ';', '!', '?', '"']) || t.contains(". ") || (t.ends_with('.') && words >= 3) {
+        return false;
+    }
+    // OCR misreads of linework (`F--_t`, `|_-_|`): a name is mostly letters and digits, with no run
+    // of marks.
+    let marks = t.chars().filter(|c| !c.is_whitespace() && !c.is_alphanumeric()).count();
+    let run_of_marks = t.split_whitespace().any(|w| w.chars().collect::<Vec<char>>().windows(3).any(|r| r.iter().all(|c| !c.is_alphanumeric())));
+    if marks * 2 > t.chars().filter(|c| c.is_alphanumeric()).count() || run_of_marks {
         return false;
     }
     let first = t.split_whitespace().next().unwrap_or_default();
@@ -282,6 +295,11 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
     let mut roles: Vec<LayerRole> = Vec::new();
     let mut wall_types: Vec<WallType> = Vec::new();
     for layer in &layers {
+        // The OCR review layer keeps readings for a person to check: never what a layer of the
+        // building is (Q6332).
+        if review_layer(layer) {
+            continue;
+        }
         let mine = on(layer);
         let segs = segments(&mine);
         let found = pairs(d, &segs, &lim);
@@ -332,15 +350,29 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
         guess.insert(format!("layers/{layer}"), why);
         roles.push(lr);
     }
-    // Room tags: the room tag layers' texts, else names on a layer with no other role (a
-    // fixture's or a duct's label never names a room) that close an outline.
-    let tagged: Vec<&str> = roles.iter().filter(|r| r.role == Role::RoomTag).map(|r| r.layer.as_str()).collect();
+    // Room tags: the room tag layers' texts when they carry the plan's room labels, else names on
+    // a layer with no other role (a fixture's or a duct's label never names a room) that close an
+    // outline. Never the OCR review layer's readings.
+    let role_spec = |roles: &[LayerRole]| {
+        serde_json::from_value::<BuildingSpec>(json!({
+            "units_per_foot": 12.0 * k,
+            "layers": serde_json::to_value(roles).unwrap_or_default(),
+            "wall_types": serde_json::to_value(&wall_types).unwrap_or_default(),
+        }))
+        .ok()
+    };
+    let tagged: Vec<&str> = if role_spec(&roles).is_some_and(|sp| super::bspec::tags_carry_labels(&sp, &ents)) {
+        roles.iter().filter(|r| r.role == Role::RoomTag).map(|r| r.layer.as_str()).collect()
+    } else {
+        Vec::new()
+    };
     let layer_of = |h: cadaddy_doc::Handle| ents.iter().find(|e| e.handle == h).map(|e| e.common.layer.as_str());
     let candidates: Vec<(cadaddy_doc::Handle, String, Vec2, f64)> = all_texts
         .iter()
         .filter(|(h, t, _, _)| {
             let layer = layer_of(*h).unwrap_or_default();
             room_name(t)
+                && !review_layer(layer)
                 && if tagged.is_empty() {
                     !roles.iter().any(|r| r.layer.eq_ignore_ascii_case(layer))
                 } else {
@@ -351,13 +383,7 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
         .collect();
     // Traced on a plan of what bounds rooms (the wall, door and window layers just found, each
     // centreline wall as its two faces), so MEP lines, stairs and tags never split a room.
-    let roles_spec = serde_json::from_value::<BuildingSpec>(json!({
-        "units_per_foot": 12.0 * k,
-        "layers": serde_json::to_value(&roles).unwrap_or_default(),
-        "wall_types": serde_json::to_value(&wall_types).unwrap_or_default(),
-    }))
-    .ok();
-    let bounds_plan = super::bspec::room_plan_for(&plan, roles_spec)?;
+    let bounds_plan = super::bspec::room_plan_for(&plan, role_spec(&roles))?;
     let trace_on = bounds_plan.as_ref().unwrap_or(&plan);
     let ext = d.extents(&cadaddy_doc::Space::Model);
     let sheet = (ext.width() * ext.height()).max(1e-9);
@@ -422,12 +448,17 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
         }
         rooms.push(Room { name: room_name, number, level, ceiling_ft: ceiling, ..Room::default() });
     }
-    // Names found on a layer with no role make it a room tag layer.
-    for l in &room_layers {
-        if !roles.iter().any(|r| r.layer.eq_ignore_ascii_case(l)) {
-            roles.push(LayerRole { layer: l.clone(), role: Role::RoomTag, wall_type: None, height_ft: None });
+    // Names found on layers with no role make them room tag layers, when they carry the plan's
+    // room labels (a couple of names closing outlines on a layer of other text don't: room
+    // tracing would read only those).
+    let promoted: Vec<&String> = room_layers.iter().filter(|l| !roles.iter().any(|r| r.layer.eq_ignore_ascii_case(l))).collect();
+    let mut with = roles.clone();
+    with.extend(promoted.iter().map(|l| LayerRole { layer: (*l).clone(), role: Role::RoomTag, wall_type: None, height_ft: None }));
+    if !promoted.is_empty() && role_spec(&with).is_some_and(|sp| super::bspec::tags_carry_labels(&sp, &ents)) {
+        for l in promoted {
             guess.insert(format!("layers/{l}"), "room names on it close outlines".into());
         }
+        roles = with;
     }
     // One level, with the ceiling from the notes (else Walk mode's defaults).
     let note_ceiling = median(notes.iter().map(|(c, _)| *c).collect());
@@ -524,6 +555,18 @@ mod tests {
         }
         assert!(super::room_like_name("BOH"));
         assert!(super::room_like_name("EQUIPMENT"));
+    }
+
+    /// Q6332: OCR misreads of linework are no room names; names with a slash, a dot or an
+    /// ampersand still are.
+    #[test]
+    fn garbled_ocr_text_is_no_room_name() {
+        for junk in ["F--_t", "|_-_|", "rT--", "J._.L", "OFFICE..."] {
+            assert!(!super::room_like_name(junk), "{junk}: no room name");
+        }
+        for name in ["W/D", "MECH./ELEC.", "STOR & MECH", "JAN.", "BREAK ROOM", "STOR-1"] {
+            assert!(super::room_like_name(name), "{name}: a room name");
+        }
     }
 
     use super::*;

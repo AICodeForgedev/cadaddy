@@ -114,6 +114,8 @@ impl Rules {
     /// The rules for a drawing: the data, its spec's documents and its project rules.
     pub(crate) fn of(d: &Drawing, sp: &BuildingSpec) -> Rules {
         let mut r = Rules { facts: docs::facts_of(sp), ..Rules::default() };
+        let from_plans = docs::roof_plan_facts(sp, &r.facts);
+        r.facts.extend(from_plans);
         // The documents' facts that are rule values.
         for f in r.facts.clone() {
             if let Some(path) = docs::rule_path(&f.key)

@@ -2008,8 +2008,8 @@ fn plans_of_one_page(sheets: &[String]) -> bool {
 }
 
 /// Levels in building order (numbered floors, then the roof; unnamed last).
-fn level_key(l: &str) -> (bool, bool, u32) {
-    (l.is_empty(), l == "R", l.parse::<u32>().unwrap_or(u32::MAX))
+fn level_key(l: &str) -> (bool, (i32, String)) {
+    (l.is_empty(), sheet_reader::level_order(l))
 }
 
 /// The level an enlarged view shows: its title's, else its sheet's.

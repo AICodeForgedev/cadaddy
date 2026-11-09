@@ -43,7 +43,7 @@ const MAX_PX: u32 = 4096;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("model.issues", "Model Issues", run_issues)
-            .params("{kind?: leak|opening_not_in_wall|window_not_in_wall|window_inside_building (a built window in no wall, or in a wall inside the building, not an outside wall)|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
+            .params("{kind?: leak|opening_not_in_wall|window_not_in_wall|window_inside_building (a built window in no wall, or in a wall inside the building, not an outside wall)|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building|roof_off_walls (a roof standing over its walls on nothing, or off their outline), limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
             .files(),
         CommandSpec::new("model.render", "Render Model View", run_render)
             .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor), fidelity?: auto|building|floor|room|detail (draw the built model as the 3D view's fidelity tier does: auto by the view's height)} → {path?|png, width, height, triangles, fidelity?}")
@@ -85,6 +85,92 @@ fn built(d: &Drawing) -> Vec<Built> {
 /// The parts a building stands as: what a whole-building view frames, and what each level's
 /// other built objects should stand in.
 const SHELL: &[&str] = &["wall", "floor", "curtainwall", "column", "roof"];
+
+/// The parts a roof is built of: its deck, parapets, the walls carried up round its framing, and
+/// the framing.
+const ROOF_PARTS: &[&str] = &["roof", "parapet", super::exterior::ROOF_WALL, super::exterior::ROOF_MEMBER];
+/// Most a roof's underside may stand over the top of the walls under it, feet (a sill or a
+/// bearing pad; more is a roof standing on nothing).
+const ROOF_GAP_FT: f64 = 0.5;
+/// Most a roof's outline may run past the walls under it, or fall short of them, on a side,
+/// feet (an eave's overhang).
+const ROOF_OFF_FT: f64 = 3.0;
+
+/// The plan box and height range of meshes.
+fn mesh_box<'a>(ms: impl Iterator<Item = &'a Mesh>) -> (Bounds2, f64, f64) {
+    let (mut b, mut lo, mut hi) = (Bounds2::EMPTY, f64::INFINITY, f64::NEG_INFINITY);
+    for m in ms {
+        for v in m.vertices.iter().filter(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()) {
+            b = b.union(&Bounds2::new(v.xy(), v.xy()));
+            lo = lo.min(v.z);
+            hi = hi.max(v.z);
+        }
+    }
+    (b, lo, hi)
+}
+
+/// Roofs that don't meet their walls: a roof level's roof whose underside stands more than
+/// [`ROOF_GAP_FT`] over the top of the walls of the storey under it (nothing between them), or
+/// whose outline runs more than [`ROOF_OFF_FT`] past those walls or short of them on a side
+/// (shifted off the building).
+fn roofs_off_walls(sp: &BuildingSpec, made: &[Built], upf: f64) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let is = |b: &Built, level: &str, parts: &[&str]| b.level.eq_ignore_ascii_case(level) && parts.iter().any(|p| b.part.eq_ignore_ascii_case(p));
+    for roof in sp.levels.iter().filter(|l| super::wallgen::roof_level(&sp.levels, &l.name)).take(100) {
+        let parts: Vec<&Built> = made.iter().filter(|b| is(b, &roof.name, ROOF_PARTS)).collect();
+        if parts.is_empty() {
+            continue;
+        }
+        // The storey under it with walls built: the highest below it.
+        let mut storeys: Vec<&cadaddy_walk3d::Level> =
+            sp.levels.iter().filter(|l| l.elevation_ft < roof.elevation_ft && !super::wallgen::roof_level(&sp.levels, &l.name)).collect();
+        storeys.sort_by(|a, b| b.elevation_ft.total_cmp(&a.elevation_ft));
+        let Some((under, walls)) = storeys.into_iter().find_map(|l| {
+            let w: Vec<&Built> = made.iter().filter(|b| is(b, &l.name, &["wall"])).collect();
+            (!w.is_empty()).then_some((l, w))
+        }) else {
+            continue;
+        };
+        let (rb, r_lo, _) = mesh_box(parts.iter().map(|b| &b.mesh));
+        let (wb, _, w_hi) = mesh_box(walls.iter().map(|b| &b.mesh));
+        if rb.is_empty() || wb.is_empty() || !(r_lo.is_finite() && w_hi.is_finite()) {
+            continue;
+        }
+        let handles: Vec<Handle> = parts.iter().map(|b| b.handle).take(MAX_HANDLES).collect();
+        let gap = r_lo - w_hi;
+        if gap > ROOF_GAP_FT * upf {
+            out.push(Finding {
+                kind: "roof_off_walls",
+                message: format!(
+                    "{}'s roof stands {} over the top of {}'s walls with nothing between them (no framing, roof walls or parapet down to the walls)",
+                    roof.name,
+                    feet(gap, upf),
+                    under.name
+                ),
+                level: Some(roof.name.clone()),
+                at: Some(rb.center()),
+                handles: handles.clone(),
+            });
+        }
+        // Each side: how far the roof runs past the walls (+) or falls short of them (-).
+        let sides = [("west", wb.min.x - rb.min.x), ("east", rb.max.x - wb.max.x), ("south", wb.min.y - rb.min.y), ("north", rb.max.y - wb.max.y)];
+        let off: Vec<String> = sides
+            .iter()
+            .filter(|(_, v)| v.abs() > ROOF_OFF_FT * upf)
+            .map(|(s, v)| format!("{} on the {s} by {}", if *v > 0.0 { "past them" } else { "short of them" }, feet(v.abs(), upf)))
+            .collect();
+        if !off.is_empty() {
+            out.push(Finding {
+                kind: "roof_off_walls",
+                message: format!("{}'s roof is off {}'s walls: {}", roof.name, under.name, off.join(", ")),
+                level: Some(roof.name.clone()),
+                at: Some(rb.center()),
+                handles,
+            });
+        }
+    }
+    out
+}
 
 /// How far past its level's shell a built object stands before it is a finding (a wall pack, a
 /// condenser on its pad right by the wall are within it), feet.
@@ -436,7 +522,7 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
     let walls = super::bspec::room_plan(plan)?;
     let walls = walls.as_ref().unwrap_or(plan);
     let mut out = Vec::new();
-    let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
+    let tagged = super::bspec::tags_carry_labels(sp, &ents);
     // The plan's outlines are made once for every tag (not once per tag: 60k objects).
     let mut cache = None;
     for (h, t, at) in room_texts(sp, &ents) {
@@ -557,11 +643,21 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
         });
     }
     step("objects outside the building");
+    for f in roofs_off_walls(&sp, &made, upf) {
+        push(f);
+    }
+    step("roofs on their walls");
     // Rooms that leak.
     let rs = rooms(&plan, &sp)?;
     let mut reported: Vec<(Handle, Handle)> = Vec::new();
+    // A roof plan has no rooms (the build makes none from it): its roof areas' and details'
+    // labels are no leaks.
+    let on_roof = |name: &Option<String>| name.as_deref().is_some_and(|n| super::wallgen::roof_level(&sp.levels, n));
     for r in &rs {
         let level = level_at(&sp.levels, r.at.x, r.at.y).map(|l| l.name.clone());
+        if on_roof(&level) {
+            continue;
+        }
         match &r.outline {
             None => push(Finding {
                 kind: "leak",
@@ -604,6 +700,10 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
                 continue;
             }
             let Some(level) = level_at(&sp.levels, o.at.x, o.at.y) else { continue };
+            // A roof plan's lines are its edge, parapet and curbs: the build reads no doors off it.
+            if super::wallgen::roof_level(&sp.levels, &level.name) {
+                continue;
+            }
             let storey = fates.iter().find(|f| f.level.eq_ignore_ascii_case(&level.name));
             let off_plan = storey.and_then(|f| f.footprint).is_some_and(|(lo, hi)| shell_dist(&Bounds2::new(lo, hi), o.at) > OUTSIDE_FT * upf);
             if level.sheet.is_some() || off_plan {

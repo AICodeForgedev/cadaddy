@@ -830,6 +830,10 @@ pub struct Exterior {
     /// later, whatever the reading order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub parapets: Vec<LevelParapet>,
+    /// How each roof level is framed (trusses or joists bearing at the level's elevation, the
+    /// deck on them), as its roof plans' notes say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub framing: Vec<RoofFraming>,
 }
 
 impl Exterior {
@@ -840,12 +844,42 @@ impl Exterior {
             && self.equipment.is_empty()
             && self.drains.is_empty()
             && self.parapets.is_empty()
+            && self.framing.is_empty()
+    }
+
+    /// How a roof level is framed.
+    pub fn level_framing(&self, level: &str) -> Option<&RoofFraming> {
+        self.framing.iter().find(|f| f.level.eq_ignore_ascii_case(level))
     }
 
     /// The parapet height an elevation gives for a level, feet.
     pub fn level_parapet(&self, level: &str) -> Option<f64> {
         self.parapets.iter().find(|p| p.level.eq_ignore_ascii_case(level)).map(|p| p.height_ft)
     }
+}
+
+/// A roof level's framing: members (`truss` or `joist`) bearing on the walls under it at
+/// `bearing_ft` (the top of plate or truss bearing the sections mark), at a spacing, as deep as
+/// they are; the roof deck on them. The level's elevation is the roof's surface, on the deck, so
+/// what stands on the roof stands on it. Each value is read off the roof plans' notes or is the
+/// usual one (`*_status`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoofFraming {
+    pub level: String,
+    /// `truss` or `joist`.
+    pub member: String,
+    pub spacing_in: f64,
+    pub depth_in: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spacing_status: Option<ValueStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_status: Option<ValueStatus>,
+    /// Where the members bear, feet (the level's elevation less the members and deck when none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearing_ft: Option<f64>,
+    /// The note that names the framing, and its sheet (`S-1: ROOF TRUSSES @ 24" OC`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// A parapet height read from an elevation (above the roof line), for the roofs of a level.

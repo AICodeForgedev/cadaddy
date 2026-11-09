@@ -1242,12 +1242,9 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     let ext = d.extents(&s.space());
     let sheet = (ext.width() * ext.height()).max(1e-9);
     let spec = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok());
-    let tagged = spec.as_ref().is_some_and(|sp| sp.layers.iter().any(|r| r.role == cadaddy_walk3d::Role::RoomTag));
-    let on_tags: Vec<_> = ents
-        .iter()
-        .copied()
-        .filter(|e| !tagged || spec.as_ref().and_then(|sp| sp.role(&e.common.layer)).is_some_and(|r| r.role == cadaddy_walk3d::Role::RoomTag))
-        .collect();
+    let tagged = spec.as_ref().is_some_and(|sp| crate::cmd::bspec::tags_carry_labels(sp, &ents));
+    let on_tags: Vec<_> =
+        ents.iter().copied().filter(|e| !tagged || spec.as_ref().is_some_and(|sp| crate::cmd::bspec::room_tag_layer(sp, &e.common.layer))).collect();
     let mut read = texts(&on_tags);
     lift_qualifiers(&mut read);
     let mut all: Vec<Label> = read.into_iter().map(|(h, t, at, ht)| (h, t, at, ht, false)).collect();

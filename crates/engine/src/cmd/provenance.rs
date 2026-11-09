@@ -87,6 +87,8 @@ pub(crate) struct PracticeRule {
     pub sizes: Vec<SizeRow>,
     /// The size when no row matches (inches).
     pub default_size_in: f64,
+    /// A clear height kept (feet): under and over a mezzanine.
+    pub clear_ft: f64,
 }
 
 /// A size by the words of what is served (a fixture's schedule name, a terminal's kind).
@@ -106,6 +108,20 @@ struct RuleFile {
 /// The trade practice rules.
 pub(crate) fn rules() -> Vec<PracticeRule> {
     serde_json::from_str::<RuleFile>(RULES).map(|f| f.rules).unwrap_or_default()
+}
+
+/// The rule `id` as its rules data has it, numbers and lists a rule of its own reads (null when
+/// the data has none).
+pub(crate) fn rule_data(id: &str) -> serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(RULES)
+        .ok()
+        .and_then(|v| {
+            v.get("rules")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|a| a.iter().find(|r| r.get("id").and_then(serde_json::Value::as_str).is_some_and(|i| i.eq_ignore_ascii_case(id))))
+                .cloned()
+        })
+        .unwrap_or(serde_json::Value::Null)
 }
 
 /// The rule `id` (an empty one when the data has none).
