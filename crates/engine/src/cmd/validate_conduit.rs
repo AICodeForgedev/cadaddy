@@ -388,6 +388,8 @@ pub(crate) struct Net {
     pub cables: Vec<Cable>,
     pub boxes: Vec<BoxEl>,
     pub devs: Vec<Dev>,
+    /// Site work's devices (pole lights): fed by their buried runs, no branch raceway to follow.
+    pub site_devs: u64,
     pub gear: Vec<GearEl>,
     pub obstacles: Vec<Obstacle>,
     counted: Vec<Counted>,
@@ -523,6 +525,10 @@ impl Net {
             if made.as_deref() == Some("device") && n.devs.len() < MAX_PIECES {
                 let ps = props::read(&e.common.xdata);
                 if ps.get("misplaced").is_some() {
+                    continue;
+                }
+                if ps.get(super::sitework::MARK).is_some() {
+                    n.site_devs += 1;
                     continue;
                 }
                 let Some((lo, hi)) = plan_box(e) else { continue };
@@ -1891,6 +1897,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
         }
         if let Some(_r) = on.continuity {
             out.unmeasured(CONTINUITY, "a device with no circuit (nothing to follow)", no_circuit);
+            if net.site_devs > 0 {
+                out.unmeasured(CONTINUITY, "a site device (site work): fed by its buried run, no branch raceway to follow", net.site_devs);
+            }
         }
         // Each device's box: a gang box holds each of its devices.
         let mut box_of: HashMap<Handle, usize> = HashMap::new();

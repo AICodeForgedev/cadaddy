@@ -31,17 +31,17 @@
     "source": "the building outline the site plan draws, laid on the model's footprint: turned square to the model by its longest walls, the turn its walls' best fit, centred on the footprint; when the outline and the footprint differ in size the site plan is placed by its outline's centre and said so"
   },
   "equipment": [
-    {"kind": "transformer", "words": ["TRANSFORMER", "XFMR"], "height_in": 66.0},
-    {"kind": "switchgear", "words": ["SWITCHGEAR", "SWITCHBOARD"], "height_in": 90.0},
-    {"kind": "generator", "words": ["GENERATOR"], "height_in": 72.0},
-    {"kind": "meter", "words": ["CT CABINET", "METER CENTER", "ELECTRIC METER", "METER BANK"], "height_in": 48.0},
-    {"kind": "sign", "words": ["MONUMENT SIGN", "PYLON SIGN", "SITE SIGN", "POLE SIGN"], "height_in": 72.0},
-    {"kind": "pull_box", "words": ["PULL BOX", "PULLBOX", "HANDHOLE", "HAND HOLE", "SPLICE BOX"], "height_in": 24.0},
-    {"kind": "ev_charger", "words": ["EV CHARG", "ELECTRIC VEHICLE", "CAR CHARG"], "height_in": 60.0},
-    {"kind": "pedestal", "words": ["PEDESTAL"], "height_in": 42.0},
-    {"kind": "cabinet", "words": ["CABINET"], "height_in": 72.0}
+    {"kind": "transformer", "words": ["TRANSFORMER", "XFMR"], "height_in": 66.0, "max_ft": 16.0},
+    {"kind": "switchgear", "words": ["SWITCHGEAR", "SWITCHBOARD"], "height_in": 90.0, "max_ft": 30.0},
+    {"kind": "generator", "words": ["GENERATOR"], "height_in": 72.0, "max_ft": 30.0},
+    {"kind": "meter", "words": ["CT CABINET", "METER CENTER", "ELECTRIC METER", "METER BANK"], "height_in": 48.0, "max_ft": 8.0},
+    {"kind": "sign", "words": ["MONUMENT SIGN", "PYLON SIGN", "SITE SIGN", "POLE SIGN"], "height_in": 72.0, "max_ft": 25.0},
+    {"kind": "pull_box", "words": ["PULL BOX", "PULLBOX", "HANDHOLE", "HAND HOLE", "SPLICE BOX"], "height_in": 24.0, "max_ft": 6.0},
+    {"kind": "ev_charger", "words": ["EV CHARG", "ELECTRIC VEHICLE", "CAR CHARG"], "height_in": 60.0, "max_ft": 8.0},
+    {"kind": "pedestal", "words": ["PEDESTAL"], "height_in": 42.0, "max_ft": 6.0},
+    {"kind": "cabinet", "words": ["CABINET"], "height_in": 72.0, "max_ft": 10.0}
   ],
-  "equipment_source": "the equipment a site plan's labels name, each a box where its symbol is drawn; its height the kind's usual one (a utility's pad-mount transformer, a monument sign) where no document gives it",
+  "equipment_source": "the equipment a site plan's labels name, each a box where its symbol is drawn (the one its label's leader points at, else the nearest no larger than the kind is drawn); its height the kind's usual one (a utility's pad-mount transformer, a monument sign) where no document gives it",
   "utility_words": ["UTILITY", "POWER COMPANY", "ELECTRIC COMPANY", "SERVING ELECTRIC"],
   "action_words": ["PROVIDE", "FURNISH", "INSTALL", "ROUTE", "EXTEND", "STUB", "COORDINATE", "REFER", "SEE "],
   "pole": {
