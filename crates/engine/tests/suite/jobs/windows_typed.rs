@@ -36,6 +36,16 @@ fn office(tags: &[(f64, f64, &str)], rows: Value) -> (Session, Value) {
 /// [`office`], with `symbols`: tag symbols as blocks whose attribute holds the mark (x, y feet,
 /// mark), as a print's tag symbols come in.
 fn office_with(tags: &[(f64, f64, &str)], symbols: &[(f64, f64, &str)], rows: Value) -> (Session, Value) {
+    build(tags, symbols, rows, false)
+}
+
+/// [`office`], its north wall drawn as two pieces in line that meet at x = 6' (a 6" piece west of
+/// it, a 5 1/2" piece east of it, their inside faces apart), as two drawings of one wall meet.
+fn office_north_in_pieces(tags: &[(f64, f64, &str)], rows: Value) -> (Session, Value) {
+    build(tags, &[], rows, true)
+}
+
+fn build(tags: &[(f64, f64, &str)], symbols: &[(f64, f64, &str)], rows: Value, north_in_pieces: bool) -> (Session, Value) {
     let mut d = Drawing::new_imperial();
     for (x, y, mark) in symbols {
         let at = json!({"x": x * 12.0, "y": y * 12.0, "z": 0.0});
@@ -58,8 +68,19 @@ fn office_with(tags: &[(f64, f64, &str)], symbols: &[(f64, f64, &str)], rows: Va
     for (a, b) in [((24., 0.), (24., 12.)), ((24., 12.), (0., 12.)), ((0., 12.), (0., 0.))] {
         line(&mut d, a, b);
     }
-    for (a, b) in [((23.5, 0.5), (23.5, 11.5)), ((23.5, 11.5), (0.5, 11.5)), ((0.5, 11.5), (0.5, 0.5))] {
-        line(&mut d, a, b);
+    if north_in_pieces {
+        for (a, b) in [
+            ((23.5, 0.5), (23.5, 11.5 + 1.0 / 24.0)),
+            ((23.5, 11.5 + 1.0 / 24.0), (6.0, 11.5 + 1.0 / 24.0)),
+            ((6.0, 11.5), (0.5, 11.5)),
+            ((0.5, 11.5), (0.5, 0.5)),
+        ] {
+            line(&mut d, a, b);
+        }
+    } else {
+        for (a, b) in [((23.5, 0.5), (23.5, 11.5)), ((23.5, 11.5), (0.5, 11.5)), ((0.5, 11.5), (0.5, 0.5))] {
+            line(&mut d, a, b);
+        }
     }
     // The window's glazing drawn across the opening, between the wall's faces.
     for y in [0.2, 0.3] {
@@ -173,4 +194,29 @@ fn a_tag_symbols_attribute_is_a_window_tag() {
     assert_eq!(ws.len(), 1, "{built}");
     assert_eq!(value(&ws[0].1, "type_mark"), json!("W1"), "{}", ws[0].1);
     assert_eq!(built["window_tags"][0]["tagged"], json!({"W1": 1}), "{built}");
+}
+
+#[test]
+fn a_tag_where_two_pieces_of_its_wall_meet_is_its_window_across_the_joint() {
+    // W1 by the south opening (4'), W1 again by the north wall at x = 6', where its two pieces
+    // meet: the window (4..8') spans the joint, cut out of both pieces (Q6311: the print's
+    // outside walls came in pieces of a few feet, and tags by a joint found no wall).
+    let (mut s, built) = office_north_in_pieces(&[(11.0, -1.5, "W1"), (6.0, 13.0, "W1")], json!([]));
+    // The north wall line is read as more than one piece (else the test shows nothing).
+    let plan = s.execute("wallgen.plan", &json!({"level": "L1"})).expect("plan");
+    let north: Vec<&Value> = plan["walls"]
+        .as_array()
+        .expect("walls")
+        .iter()
+        .filter(|w| w["a"][1].as_f64().zip(w["b"][1].as_f64()).is_some_and(|(a, b)| a > 130.0 && b > 130.0))
+        .collect();
+    assert!(north.len() >= 2, "the north wall in pieces: {north:?}");
+    let ws = windows(&mut s);
+    assert_eq!(ws.len(), 2, "{built}");
+    let row = &built["window_tags"][0];
+    assert_eq!(row["no_host_count"], json!(0), "{row}");
+    assert_eq!((row["tagged"].clone(), row["built"].clone()), (json!({"W1": 2}), json!({"W1": 2})), "{row}");
+    for (_, p) in &ws {
+        assert_eq!(value(p, "width"), json!(48.0), "{p}");
+    }
 }

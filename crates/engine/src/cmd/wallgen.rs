@@ -1213,8 +1213,12 @@ impl WindowBasis {
     /// The basis of an inferred window (its provenance).
     fn why(self) -> &'static str {
         match self {
-            Self::Typical => "a typical window: the level's plan tags or glazes a window of this opening's width, this opening has no tag or glazing of its own",
-            Self::TagOnWall => "a window tag printed by an outside wall the plan draws through: the tag's window cut there at its type's width, centred at the tag",
+            Self::Typical => {
+                "a typical window: the level's plan tags or glazes a window of this opening's width, this opening has no tag or glazing of its own"
+            }
+            Self::TagOnWall => {
+                "a window tag printed by an outside wall the plan draws through: the tag's window cut there at its type's width, centred at the tag"
+            }
             Self::Tag | Self::Glazing | Self::Symbol => "",
         }
     }
@@ -2140,7 +2144,10 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 }
                 let b = &pl.walls[j];
                 let lb = b.a.dist(b.b);
-                if lb <= 1e-9 || u.cross((b.b - b.a) * (1.0 / lb)).abs() > 0.01 || u.perp().dot(b.a - start).abs() > a.thickness.max(b.thickness) / 2.0 {
+                if lb <= 1e-9
+                    || u.cross((b.b - b.a) * (1.0 / lb)).abs() > 0.01
+                    || u.perp().dot(b.a - start).abs() > a.thickness.max(b.thickness) / 2.0
+                {
                     continue;
                 }
                 // `b` starts past `a`'s end, with nothing of the line between.
@@ -2512,17 +2519,21 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             no_host.push((tag.mark.clone(), tag.at, "no width: no schedule row and no opening of its own"));
             continue;
         };
-        let Some((wi, s_at)) = host_wall(&pl.walls, tag.at, width, reach, &|p, nrm| outside(p, nrm, &pl.walls)) else {
+        let Some(host) = host_wall(&pl.walls, tag.at, width, reach, k, &|p, nrm| outside(p, nrm, &pl.walls)) else {
             no_host.push((tag.mark.clone(), tag.at, "no outside wall within its reach to hold it"));
             continue;
         };
         let (head, sill) = mark_heights(&tag.mark);
-        let Some(w) = pl.walls.get_mut(wi) else { continue };
+        for (j, s0, s1) in &host.spans {
+            if let Some(o) = pl.walls.get_mut(*j) {
+                o.cuts.push(Cut { s0: *s0, s1: *s1, window: true, head, sill });
+            }
+        }
+        let Some(w) = pl.walls.get(host.wall) else { continue };
         let len = w.a.dist(w.b);
         let u = (w.b - w.a) * (1.0 / len.max(1e-12));
         let half = width / 2.0;
-        w.cuts.push(Cut { s0: s_at - half, s1: s_at + half, window: true, head, sill });
-        let on = w.a + u * s_at;
+        let on = w.a + u * host.at;
         let (a, b) = (on - u * half, on + u * half);
         let (thickness, source) = (w.thickness, w.source);
         pl.leaves.push(Leaf {
@@ -2749,32 +2760,84 @@ fn window_tag_fits(tags: &[WindowTag], gaps: &[(Vec2, Vec2, f64)], k: f64) -> Ta
     TagFits { per_tag, widths }
 }
 
-/// The outside wall holding a window tag's window `width` wide (drawing units): the nearest wall
-/// within `reach` past its face whose length holds the window centred at the tag's foot, outside
-/// there (`outside(point, normal)`), with no opening cut there yet. (The wall, where along it.)
-fn host_wall(walls: &[PlanWall], at: Vec2, width: f64, reach: f64, outside: &dyn Fn(Vec2, Vec2) -> bool) -> Option<(usize, f64)> {
+/// Where a window tag's window goes in an outside wall ([`host_wall`]): the wall piece under the
+/// tag's foot (the window's leaf takes its thickness and source), where along it the window's
+/// middle is, and every piece of that wall line the window crosses with the window's span along
+/// each (in the piece's own direction). A plan's wall line often comes in pieces, joined end to
+/// end or overlapping where two drawings of it meet (Q6311): the window spans the joints and is
+/// cut out of every piece it crosses.
+struct WindowHost {
+    wall: usize,
+    at: f64,
+    spans: Vec<(usize, f64, f64)>,
+}
+
+/// Wall pieces of one line closer than this at a joint (inches) are joined there.
+const JOINT_GAP_IN: f64 = 1.0;
+
+/// The outside wall holding a window tag's window `width` wide (drawing units, `k` per inch):
+/// the nearest wall piece within `reach` past its face whose foot point under the tag is on it,
+/// its line (the piece and the pieces in line with it, end to end or overlapping) holding the
+/// window centred at the tag's foot with no opening cut there yet, outside there (`outside(point,
+/// normal)`).
+fn host_wall(walls: &[PlanWall], at: Vec2, width: f64, reach: f64, k: f64, outside: &dyn Fn(Vec2, Vec2) -> bool) -> Option<WindowHost> {
     if !(width.is_finite() && width > 0.0 && at.is_finite()) {
         return None;
     }
     let half = width / 2.0;
+    let joint = JOINT_GAP_IN * k;
+    let unit = |w: &PlanWall| {
+        let len = w.a.dist(w.b);
+        (len.is_finite() && len > 1e-9).then(|| (len, (w.b - w.a) * (1.0 / len)))
+    };
     walls
         .iter()
         .enumerate()
         .take(MAX_OBJECTS)
         .filter_map(|(i, w)| {
-            let len = w.a.dist(w.b);
-            if !(len.is_finite() && len >= width) {
-                return None;
-            }
-            let u = (w.b - w.a) * (1.0 / len);
+            let (len, u) = unit(w)?;
             let s = u.dot(at - w.a);
             let off = u.perp().dot(at - w.a).abs();
-            let free = !w.cuts.iter().any(|c| c.s0 < s + half && c.s1 > s - half);
-            (off <= w.thickness / 2.0 + reach && s >= half && s <= len - half && free).then_some((i, s, off, u))
+            if off > w.thickness / 2.0 + reach || s < 0.0 || s > len {
+                return None;
+            }
+            let mid = w.a + u * s;
+            // The line's pieces: parallel, their centrelines within half the thinner wall of
+            // this one's, each with its stretch along this one and the window's span along it.
+            let mut along: Vec<(f64, f64)> = Vec::new();
+            let mut spans: Vec<(usize, f64, f64)> = Vec::new();
+            for (j, o) in walls.iter().enumerate().take(MAX_OBJECTS) {
+                let Some((_, ou)) = unit(o) else { continue };
+                let side = |p: Vec2| u.perp().dot(p - w.a).abs();
+                if u.perp().dot(ou).abs() > 0.01 || side(o.a).max(side(o.b)) > w.thickness.min(o.thickness) / 2.0 {
+                    continue;
+                }
+                let (p0, p1) = (u.dot(o.a - w.a), u.dot(o.b - w.a));
+                let (p0, p1) = (p0.min(p1), p0.max(p1));
+                if p1 < s - half - joint || p0 > s + half + joint {
+                    continue;
+                }
+                along.push((p0, p1));
+                let c = ou.dot(mid - o.a);
+                if o.cuts.iter().any(|cut| cut.s0 < c + half && cut.s1 > c - half) {
+                    return None;
+                }
+                if p1.min(s + half) - p0.max(s - half) > joint {
+                    spans.push((j, c - half, c + half));
+                }
+            }
+            // The pieces cover the window's span, joint to joint.
+            along.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut reached = s - half;
+            for (p0, p1) in &along {
+                if *p0 <= reached + joint {
+                    reached = reached.max(*p1);
+                }
+            }
+            (reached >= s + half - joint && !spans.is_empty() && outside(mid, u.perp())).then_some((off, WindowHost { wall: i, at: s, spans }))
         })
-        .filter(|(i, s, _, u)| walls.get(*i).is_some_and(|w| outside(w.a + *u * *s, u.perp())))
-        .min_by(|a, b| a.2.total_cmp(&b.2))
-        .map(|(i, s, _, _)| (i, s))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, h)| h)
 }
 
 /// A window mark's head and sill above its floor (drawing units, `upf` per foot): its schedule
