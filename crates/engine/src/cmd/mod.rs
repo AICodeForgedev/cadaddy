@@ -201,6 +201,7 @@ pub(crate) mod runtidy;
 pub mod sheetfacts;
 pub mod sheetsout;
 pub mod sitetakeoff;
+pub(crate) mod sitework;
 pub mod spell;
 pub mod stairs;
 pub mod symbol;

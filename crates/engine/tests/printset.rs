@@ -269,8 +269,11 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
         let state = s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).unwrap_or_default();
         assert!(state.contains("Devices not placed"), "left out with a finding");
     }
+    // The site work step's pole lights (Q6358: here the set's civil sheets carry circuit tags, so
+    // they are a trade's site plans) are model devices too, built after the devices stage.
+    let site = built["result"]["site_work"]["luminaires"].as_u64().unwrap_or(0);
     let next = s.execute("job.next", &json!({})).expect("job.next");
-    assert_eq!(next["summary"]["devices"]["count"].as_u64(), Some(inserted), "the model's devices: {:#}", next["summary"]);
+    assert_eq!(next["summary"]["devices"]["count"].as_u64(), Some(inserted + site), "the model's devices: {:#}", next["summary"]);
     let by_level = next["summary"]["devices"]["by_level"].as_object().cloned().unwrap_or_default();
     eprintln!("devices by level: {by_level:?}");
     assert!(by_level.keys().all(|l| !l.is_empty()), "every device has a level: {by_level:?}");
@@ -283,7 +286,7 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     // Another trade's devices (thermostats, fire alarm, low voltage: bim.scope) leave the device
     // lines for `by_others`, one entry each (Q6167).
     let others = bom["by_others"].as_array().into_iter().flatten().filter(|x| x["trade"] != "concrete").count();
-    assert_eq!(units + others as f64, inserted as f64, "the BOM counts the model's devices: {lines:#?} by others {others}");
+    assert_eq!(units + others as f64, (inserted + site) as f64, "the BOM counts the model's devices: {lines:#?} by others {others}");
     assert!(lines.iter().all(|l| l["level"].as_str().is_some_and(|v| !v.is_empty())));
     assert!(lines.iter().all(|l| (l["category"] == "devices") == (l["trade"] == "electrical")), "{lines:#?}");
     assert!(!lines.iter().any(|l| l["item"].as_str().is_some_and(|i| i.starts_with("device type"))), "{lines:#?}");

@@ -361,6 +361,73 @@ fn the_model_tree_is_level_trade_category_type_element() {
     assert!(Look::of(s.doc().unwrap()).level.is_none());
 }
 
+/// Q6309: a level switched off in the tree takes everything of it out of the 3D view, and with it
+/// the grips and highlight of what was selected there (clicking a level's name selects it, so its
+/// points stayed drawn once its tick was off). Every level in turn, the elements no level holds
+/// too; a trade switched off and a level shown alone do the same.
+#[test]
+fn a_hidden_level_leaves_nothing_of_it_drawn_or_selected() {
+    let mut s = building();
+    // One element no level holds: the tree lists it under its own branch, which switches too.
+    let loose = {
+        let d = s.doc().unwrap();
+        d.model.iter().find(|e| bimlook::classify(d, e).is_some_and(|c| c.level == "Level 1" && c.category == "Walls")).unwrap().handle
+    };
+    s.doc_mut().unwrap().model.modify(loose, |e| {
+        let at = e.common.xdata.iter().position(|t| t.code == 1001 && t.value.eq_ignore_ascii_case(cadaddy_engine::cmd::wallgen::APP)).unwrap();
+        e.common.xdata[at + 2].value = String::new();
+    });
+    let r = s.execute("bim.tree", &json!({})).unwrap();
+    let levels: Vec<String> = r["levels"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap().to_string()).collect();
+    assert!(levels.iter().any(|l| l == bimlook::NO_LEVEL), "{levels:?}");
+    assert!(levels.len() > LEVELS.len(), "{levels:?}");
+    for lv in &levels {
+        let of = |d: &Drawing, e: &Entity| bimlook::classify(d, e).is_some_and(|c| c.tree_level().eq_ignore_ascii_case(lv));
+        // Its name clicked (selected), then its tick off.
+        let r = s.execute("bim.tree", &json!({"path": [lv], "select": true})).unwrap();
+        let n = r["selected"].as_u64().unwrap();
+        assert!(n > 0, "{lv}");
+        let r = s.execute("bim.tree", &json!({"path": [lv], "visible": false})).unwrap();
+        assert_eq!(child(&r, "levels", lv)["visible"], json!(false), "{lv}");
+        let d = s.doc().unwrap();
+        let v = bimlook::display(d).unwrap();
+        assert_eq!(v.model.iter().filter(|e| of(d, e)).count(), 0, "{lv}: nothing of it is drawn");
+        assert!(v.model.iter().any(|e| bimlook::classify(d, e).is_some()), "{lv}: the other levels still are");
+        let look = Look::of(d);
+        let grips: usize =
+            s.selection().iter().filter_map(|h| d.model.get(*h)).filter(|e| !bimlook::draws(d, &look, e)).map(|e| e.kind.grips().len()).sum();
+        assert_eq!(grips, 0, "{lv}: no grips of a hidden element");
+        assert_eq!(r["deselected"], json!(n), "{lv}: what it hid leaves the selection");
+        // A hidden level selects nothing: its grips would stand over an empty view.
+        let e = s.execute("bim.tree", &json!({"path": [lv], "select": true})).unwrap_err().to_string();
+        assert!(e.contains("hidden"), "{e}");
+        assert!(s.selection().is_empty(), "{lv}");
+        s.execute("bim.tree", &json!({"path": [lv], "visible": true})).unwrap();
+        let d = s.doc().unwrap();
+        assert!(bimlook::display(d).unwrap().model.iter().any(|e| of(d, e)), "{lv} shows again");
+    }
+    // A trade switched off in the colour table drops its selected elements, and only those.
+    let r = s.execute("bim.tree", &json!({"path": ["Level 2"], "select": true})).unwrap();
+    let n = r["selected"].as_u64().unwrap() as usize;
+    let r = s.execute("bim.trades", &json!({"visible": {"duct_supply": false}})).unwrap();
+    let dropped = r["deselected"].as_u64().unwrap() as usize;
+    assert!(dropped > 0 && dropped < n, "{dropped} of {n}");
+    let d = s.doc().unwrap();
+    assert!(s.selection().iter().filter_map(|h| d.model.get(*h)).all(|e| bimlook::classify(d, e).is_some_and(|c| c.key != "duct_supply")));
+    s.execute("bim.trades", &json!({"visible": {"duct_supply": true}})).unwrap();
+    // A level shown alone drops what is selected on the others.
+    let r = s.execute("bim.look", &json!({"level": "Level 3"})).unwrap();
+    assert_eq!(r["deselected"].as_u64().unwrap() as usize, n - dropped);
+    assert!(s.selection().is_empty());
+    s.execute("bim.look", &json!({"level": null})).unwrap();
+    // With the view off nothing is hidden, so nothing leaves the selection.
+    s.execute("bim.look", &json!({"on": false})).unwrap();
+    s.execute("bim.tree", &json!({"path": ["Level 1"], "select": true})).unwrap();
+    let r = s.execute("bim.tree", &json!({"path": ["Level 1"], "visible": false})).unwrap();
+    assert!(r.get("deselected").is_none(), "{r}");
+    assert!(!s.selection().is_empty());
+}
+
 #[test]
 fn the_building_shell_is_complete() {
     let s = building();

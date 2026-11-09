@@ -5,7 +5,7 @@
 //! (`GF - GROUND FAULT INTERRUPTER`) says what they are. The guided job keeps them in
 //! `mep.panel_schedules`; `bim.props.fill` puts each device's breaker and its type on it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cadaddy_mepfix::sheet_facts::TextItem;
 use cadaddy_walk3d::{PanelCircuit, PanelSchedule};
@@ -41,11 +41,7 @@ pub(crate) fn title_panel(title: &str) -> Option<(String, Option<u32>)> {
         .next()?
         .trim_matches(['\'', '"', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', ':', '[', ']', '(', ')', '<', '>'])
         .to_string();
-    let ok = !tag.is_empty()
-        && tag.len() <= 12
-        && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
-        && tag.chars().any(|c| c.is_ascii_alphanumeric());
-    if !ok || cadaddy_mepfix::wordrules::words("schedules.panel_title_not_tags").contains(&tag.as_str()) {
+    if !panel_tag(&tag) {
         return None;
     }
     // A panel's other tables (its demand calculation, load summary) aren't its schedule.
@@ -54,6 +50,16 @@ pub(crate) fn title_panel(title: &str) -> Option<(String, Option<u32>)> {
     }
     let typical = rest.split_once("TYPICAL OF").and_then(|(_, r)| r.split_whitespace().next()).and_then(|n| n.parse::<u32>().ok());
     Some((tag, typical))
+}
+
+/// A text that can be a panel's tag: short, letters, digits, `-` and `.`, and none of the words
+/// that follow PANEL in a heading or a label (`SCHEDULE`, `NAME`, `FED`).
+fn panel_tag(tag: &str) -> bool {
+    !tag.is_empty()
+        && tag.len() <= 12
+        && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+        && tag.chars().any(|c| c.is_ascii_alphanumeric())
+        && !cadaddy_mepfix::wordrules::words("schedules.panel_title_not_tags").contains(&tag)
 }
 
 /// A breaker type code as schedules print them beside a circuit: `AF`, `GF`, `AF/GF`, `ST`.
@@ -247,8 +253,76 @@ fn header_words(texts: &[TextItem]) -> Vec<TextItem> {
     out
 }
 
-/// The schedules on one sheet's texts (its PDF page re-read, or the drawing's).
+/// A schedule whose panel's name its sheet doesn't print as text (`PANEL NAME:` and nothing
+/// right of it: the name drawn as linework or an image), and where its label stands.
+struct Unnamed {
+    schedule: PanelSchedule,
+    page: usize,
+    at: cadaddy_geom::Vec2,
+    height: f64,
+}
+
+/// A schedule's header facts that say how its panel's name is known when its sheet doesn't print
+/// it: `inferred` (from the panels the set names elsewhere) or `unresolved` (a placeholder), and
+/// the basis.
+pub(crate) const NAME_MADE: &str = "panel name made";
+pub(crate) const NAME_BASIS: &str = "panel name basis";
+/// Most texts looked through for the panels a set names (hostile files).
+const MAX_MENTION_TEXTS: usize = 400_000;
+/// Most panel names taken from a set's notes.
+const MAX_MENTIONS: usize = 500;
+
+/// The schedules on one sheet's texts (its PDF page re-read, or the drawing's). A schedule whose
+/// panel's name the sheet doesn't print as text is named from the panels its other texts name
+/// (see [`read_set`]).
 pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
+    let (mut out, unnamed) = read_sheet(texts, sheet, 0);
+    if !unnamed.is_empty() {
+        let given = name_unnamed(&out, unnamed, &panel_mentions(&[texts]));
+        out.extend(given);
+    }
+    out
+}
+
+/// The schedules on a set's sheets (`(sheet, texts)`), each panel once (a panel named twice: the
+/// schedule with more breakers read). A schedule whose panel's name is not printed as text (drawn
+/// as linework or an image) takes a name the set prints elsewhere: its notes (`FROM PANEL "P1"`),
+/// its one-line's labels, the other schedules' feeder rows. A schedule that feeds panels takes
+/// the one no schedule feeds; the rest, in their order on the sheets, the others in theirs. Each
+/// carries how ([`NAME_MADE`], [`NAME_BASIS`]); with no name left, a placeholder marked
+/// `unresolved`.
+pub(crate) fn read_set(pages: &[(&str, &[TextItem])]) -> Vec<PanelSchedule> {
+    let mut out: Vec<PanelSchedule> = Vec::new();
+    let mut unnamed: Vec<Unnamed> = Vec::new();
+    for (i, (sheet, texts)) in pages.iter().enumerate() {
+        let (named, u) = read_sheet(texts, sheet, i);
+        for p in named {
+            keep_better(&mut out, p);
+        }
+        unnamed.extend(u);
+    }
+    if unnamed.is_empty() {
+        return out;
+    }
+    let texts: Vec<&[TextItem]> = pages.iter().map(|(_, t)| *t).collect();
+    for p in name_unnamed(&out, unnamed, &panel_mentions(&texts)) {
+        keep_better(&mut out, p);
+    }
+    out
+}
+
+/// `p` among `out`, a panel named twice keeping the schedule with more breakers read.
+fn keep_better(out: &mut Vec<PanelSchedule>, p: PanelSchedule) {
+    let read = |x: &PanelSchedule| x.circuits.iter().filter(|c| !c.breaker.is_empty()).count();
+    match out.iter_mut().find(|o| o.panel.eq_ignore_ascii_case(&p.panel)) {
+        Some(o) if read(&p) > read(o) => *o = p,
+        Some(_) => {}
+        None => out.push(p),
+    }
+}
+
+/// One sheet's schedules: those its titles name, and those whose name it doesn't print.
+fn read_sheet(texts: &[TextItem], sheet: &str, page: usize) -> (Vec<PanelSchedule>, Vec<Unnamed>) {
     let words = header_words(texts);
     let flat: Vec<&TextItem> =
         words.iter().filter(|t| t.rotation.abs() < 0.05 && t.height > 0.0 && t.at.x.is_finite() && t.at.y.is_finite()).collect();
@@ -270,34 +344,200 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
             legend.entry(k).or_insert(m);
         }
     }
-    // A title split in two: a `PANEL:` / `PANEL NAME:` label and the tag right of it.
-    let joined: Vec<TextItem> = flat
-        .iter()
-        .filter(|l| is_title_label(&l.value))
-        .filter_map(|l| {
-            flat.iter()
-                .filter(|t| (t.at.y - l.at.y).abs() <= 0.6 * l.height && t.at.x > l.at.x + 0.5 * l.height && t.at.x < l.at.x + 30.0 * l.height)
-                .min_by(|a, b| a.at.x.total_cmp(&b.at.x))
-                .map(|t| TextItem { value: format!("{} {}", l.value.trim(), t.value.trim()), ..(*l).clone() })
-        })
-        .take(MAX_SCHEDULES)
-        .collect();
+    // A title split in two: a `PANEL:` / `PANEL NAME:` label and the tag right of it. A label
+    // with no tag there (nothing, another label, an empty `""`) titles a schedule whose name the
+    // sheet doesn't print as text.
+    let mut joined: Vec<TextItem> = Vec::new();
+    let mut nameless: Vec<&TextItem> = Vec::new();
+    for l in flat.iter().copied().filter(|l| is_title_label(&l.value)).take(MAX_SCHEDULES) {
+        let tagged = flat
+            .iter()
+            .filter(|t| (t.at.y - l.at.y).abs() <= 0.6 * l.height && t.at.x > l.at.x + 0.5 * l.height && t.at.x < l.at.x + 30.0 * l.height)
+            .min_by(|a, b| a.at.x.total_cmp(&b.at.x))
+            .map(|t| TextItem { value: format!("{} {}", l.value.trim(), t.value.trim()), ..l.clone() })
+            .filter(|j| title_panel(&j.value).is_some());
+        match tagged {
+            Some(j) => joined.push(j),
+            None => nameless.push(l),
+        }
+    }
     let mut out = Vec::new();
     for title in flat.iter().copied().chain(joined.iter()) {
         if out.len() >= MAX_SCHEDULES {
             break;
         }
         let Some((panel, typical_of)) = title_panel(&title.value) else { continue };
-        // Its circuits numbered in a CKT column on each side, or down the middle (`1 A 2`): the
-        // reading with more circuits that have a description or a breaker.
-        let real = |p: &Option<PanelSchedule>| {
-            p.as_ref().map_or(0, |p| p.circuits.iter().filter(|c| !c.description.is_empty() || !c.breaker.is_empty()).count())
-        };
-        let by_ckt = read_ckt(&flat, title, &panel, typical_of, &legend, sheet);
-        let centred = read_centred(&flat, title, &panel, typical_of, &legend, sheet);
-        out.extend(if real(&centred) > real(&by_ckt) { centred } else { by_ckt });
+        out.extend(read_one(&flat, title, &panel, typical_of, &legend, sheet));
+    }
+    let mut unnamed: Vec<Unnamed> = Vec::new();
+    for l in nameless {
+        if out.len() + unnamed.len() >= MAX_SCHEDULES {
+            break;
+        }
+        let Some(schedule) = read_one(&flat, l, "", None, &legend, sheet) else { continue };
+        // A table a named title already read (its label one more line of its header) is that one.
+        if out.iter().any(|o| o.circuits == schedule.circuits) || unnamed.iter().any(|u| u.schedule.circuits == schedule.circuits) {
+            continue;
+        }
+        unnamed.push(Unnamed { schedule, page, at: l.at, height: l.height });
+    }
+    (out, unnamed)
+}
+
+/// The schedule under `title`: its circuits numbered in a CKT column on each side, or down the
+/// middle (`1 A 2`): the reading with more circuits that have a description or a breaker.
+fn read_one(
+    flat: &[&TextItem],
+    title: &TextItem,
+    panel: &str,
+    typical_of: Option<u32>,
+    legend: &BTreeMap<String, String>,
+    sheet: &str,
+) -> Option<PanelSchedule> {
+    let real = |p: &Option<PanelSchedule>| {
+        p.as_ref().map_or(0, |p| p.circuits.iter().filter(|c| !c.description.is_empty() || !c.breaker.is_empty()).count())
+    };
+    let by_ckt = read_ckt(flat, title, panel, typical_of, legend, sheet);
+    let centred = read_centred(flat, title, panel, typical_of, legend, sheet);
+    if real(&centred) > real(&by_ckt) { centred } else { by_ckt }
+}
+
+const QUOTES: [char; 6] = ['\'', '"', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}'];
+
+/// The panels a set's texts name, each once, in the order they come: a tag after `PANEL` or
+/// `PANELBOARD` (`FROM PANEL "P1"`, `PANEL LP-2`) that is quoted, has a digit, or is printed as a
+/// text of its own somewhere in the set (a one-line's label).
+fn panel_mentions(pages: &[&[TextItem]]) -> Vec<String> {
+    let all = || pages.iter().flat_map(|p| p.iter()).take(MAX_MENTION_TEXTS);
+    let lone: BTreeSet<String> = all().map(|t| t.value.trim().to_ascii_uppercase()).filter(|v| panel_tag(v)).collect();
+    let mut out: Vec<String> = Vec::new();
+    for t in all() {
+        if out.len() >= MAX_MENTIONS {
+            break;
+        }
+        let up = t.value.to_ascii_uppercase();
+        if !up.contains("PANEL") {
+            continue;
+        }
+        let words: Vec<&str> = up.split_whitespace().collect();
+        for (i, w) in words.iter().enumerate() {
+            let head = w.trim_end_matches([':', ',']);
+            if head != "PANEL" && head != "PANELBOARD" {
+                continue;
+            }
+            let at = if head == "PANEL" && words.get(i + 1) == Some(&"BOARD") { i + 2 } else { i + 1 };
+            let Some(next) = words.get(at) else { continue };
+            let quoted = next.starts_with(QUOTES);
+            let tag = next.trim_matches(|c: char| QUOTES.contains(&c) || ",.;:()[]".contains(c));
+            let named = panel_tag(tag) && (quoted || tag.chars().any(|c| c.is_ascii_digit()) || lone.contains(tag));
+            if named && !out.iter().any(|o| o == tag) {
+                out.push(tag.to_string());
+            }
+        }
     }
     out
+}
+
+/// A tag's order among its kind: `P2` before `P10`.
+fn natural(tag: &str) -> (String, u64, String) {
+    let lead: String = tag.chars().take_while(|c| !c.is_ascii_digit()).collect();
+    let rest = tag.get(lead.len()..).unwrap_or("");
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let tail = rest.get(digits.len()..).unwrap_or("").to_string();
+    (lead, digits.parse::<u64>().unwrap_or(u64::MAX), tail)
+}
+
+/// The panels a schedule's circuits feed among `names`: a circuit whose description names one.
+fn feeds(p: &PanelSchedule, names: &BTreeSet<String>) -> BTreeSet<String> {
+    p.circuits
+        .iter()
+        .flat_map(|c| {
+            c.description
+                .to_ascii_uppercase()
+                .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '.')
+                .filter(|w| names.contains(*w))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The unnamed schedules named ([`read_set`]): `named` the schedules their titles name,
+/// `mentions` the panels the set names.
+fn name_unnamed(named: &[PanelSchedule], mut unnamed: Vec<Unnamed>, mentions: &[String]) -> Vec<PanelSchedule> {
+    // In their order on the sheets: sheet by sheet, row of tables by row, left to right.
+    let row = |u: &Unnamed| -((u.at.y / (4.0 * u.height)).round() as i64);
+    unnamed.sort_by(|a, b| a.page.cmp(&b.page).then(row(a).cmp(&row(b))).then(a.at.x.total_cmp(&b.at.x)));
+    let taken: BTreeSet<String> = named.iter().map(|p| p.panel.to_ascii_uppercase()).collect();
+    let names: BTreeSet<String> = mentions.iter().cloned().collect();
+    let all_feed: BTreeSet<String> = named.iter().chain(unnamed.iter().map(|u| &u.schedule)).flat_map(|p| feeds(p, &names)).collect();
+    let mut free: Vec<String> = mentions.iter().filter(|m| !taken.contains(*m)).cloned().collect();
+    free.sort_by_key(|m| natural(m));
+    let list = |v: &[String]| v.join(", ");
+    let mut given: Vec<Option<(String, String, String)>> = unnamed.iter().map(|_| None).collect();
+    // A schedule that feeds panels: the panel named that no schedule feeds (the one upstream).
+    for (u, g) in unnamed.iter().zip(given.iter_mut()) {
+        let fed: Vec<String> = feeds(&u.schedule, &names).into_iter().collect();
+        if fed.is_empty() {
+            continue;
+        }
+        let Some(at) = free.iter().position(|c| !all_feed.contains(c) && !fed.contains(c)) else { continue };
+        let c = free.remove(at);
+        let basis = format!(
+            "its name is not printed as text; its circuits feed {}, and {c} is the panel the set names that no schedule read feeds",
+            list(&fed)
+        );
+        *g = Some((c, "inferred".into(), basis));
+    }
+    // The rest in their order on the sheets: the panels fed by a schedule first, in tag order.
+    free.sort_by_key(|c| !all_feed.contains(c));
+    let pool = free.clone();
+    let mut k = 0usize;
+    for (u, g) in unnamed.iter().zip(given.iter_mut()).filter(|(_, g)| g.is_none()) {
+        let fed = feeds(&u.schedule, &names);
+        let Some(at) = free.iter().position(|c| !fed.contains(c)) else { continue };
+        let c = free.remove(at);
+        k += 1;
+        let basis = format!(
+            "its name is not printed as text; the panels the set names that no schedule title prints ({}) given to the unnamed schedules in their order on the sheets, this the {}; another order is the alternative: check the panel's directory",
+            list(&pool),
+            ordinal(k)
+        );
+        *g = Some((c, "inferred".into(), basis));
+    }
+    let mut n = 0usize;
+    unnamed
+        .into_iter()
+        .zip(given)
+        .map(|(u, g)| {
+            let (panel, made, basis) = g.unwrap_or_else(|| {
+                n += 1;
+                (
+                    format!("UNNAMED-{n}"),
+                    "unresolved".into(),
+                    format!(
+                        "its name is not printed as text on {} and the set names no panel left for it: the engineer names it (a question)",
+                        u.schedule.source
+                    ),
+                )
+            });
+            let mut p = u.schedule;
+            p.panel = panel;
+            p.header.insert(NAME_MADE.into(), made);
+            p.header.insert(NAME_BASIS.into(), basis);
+            p
+        })
+        .collect()
+}
+
+fn ordinal(n: usize) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (1, x) if x != 11 => "st",
+        (2, x) if x != 12 => "nd",
+        (3, x) if x != 13 => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
 }
 
 /// A schedule whose circuits are numbered in a CKT column on each side (or one), under `title`.
@@ -334,9 +574,16 @@ fn read_ckt(
     // side's numbers, left of a right side's). Tables side by side share the header line; this
     // title's table starts at its last left-facing CKT before the title, and ends at the next
     // right-facing one before another table starts.
+    // (Within the reach the CKT columns are looked for in: a description beyond it is the next
+    // table's, whose CKT column is out of reach, and would turn this one's right side to face right.)
     let descs: Vec<f64> = flat
         .iter()
-        .filter(|t| t.value.to_ascii_uppercase().contains("DESCRIPTION") && t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h)
+        .filter(|t| {
+            t.value.to_ascii_uppercase().contains("DESCRIPTION")
+                && t.at.y <= top + 0.6 * row_h
+                && t.at.y > top - 2.6 * row_h
+                && (t.at.x - title.at.x).abs() < 80.0 * h
+        })
         .map(|t| t.at.x)
         .collect();
     // Right-facing: the next header right of it is a description, not another CKT (the right
@@ -1756,6 +2003,120 @@ mod tests {
             ]
         );
         assert_eq!(p.header.get("volts").map(String::as_str), Some("480Y/277V"), "{:?}", p.header);
+    }
+
+    /// A two-sided schedule `dx` right of the first whose name isn't printed as text: its
+    /// `PANEL NAME:` label followed by `after` (nothing, another label, an empty `""`), and its
+    /// circuits' descriptions.
+    fn nameless(dx: f64, after: &[&str], rows: [(&str, &str); 2]) -> Vec<TextItem> {
+        let x = |v: f64| v + dx;
+        let mut v = vec![t(x(100.0), 520.0, "PANEL NAME:", 6.0)];
+        for (i, a) in after.iter().enumerate() {
+            v.push(t(x(170.0 + 60.0 * i as f64), 520.0, a, 6.0));
+        }
+        v.extend([t(x(100.0), 505.0, "VOLTS:", 6.0), t(x(140.0), 505.0, "208Y/120V", 6.0)]);
+        for (vx, w) in [
+            (100.0, "CKT"),
+            (115.0, "DESCRIPTION"),
+            (200.0, "AMPS"),
+            (215.0, "P"),
+            (230.0, "LOAD"),
+            (330.0, "LOAD"),
+            (345.0, "P"),
+            (360.0, "AMPS"),
+            (375.0, "DESCRIPTION"),
+            (470.0, "CKT"),
+        ] {
+            v.push(t(x(vx), 490.0, w, 6.0));
+        }
+        for (i, (ld, rd)) in rows.iter().enumerate() {
+            let y = 472.0 - 10.0 * i as f64;
+            let (ln, rn) = ((2 * i + 1).to_string(), (2 * i + 2).to_string());
+            v.extend([t(x(100.0), y, &ln, 6.0), t(x(115.0), y, ld, 6.0), t(x(202.0), y, "20", 6.0), t(x(215.0), y, "1", 6.0)]);
+            v.extend([t(x(230.0), y, "500", 6.0), t(x(330.0), y, "400", 6.0), t(x(345.0), y, "1", 6.0), t(x(362.0), y, "20", 6.0)]);
+            v.extend([t(x(375.0), y, rd, 6.0), t(x(470.0), y, &rn, 6.0)]);
+        }
+        v.push(t(x(150.0), 445.0, "PER PHASE SUB-TOTALS", 6.0));
+        v
+    }
+
+    fn made(p: &PanelSchedule) -> (&str, &str) {
+        (p.header.get(NAME_MADE).map_or("", String::as_str), p.header.get(NAME_BASIS).map_or("", String::as_str))
+    }
+
+    #[test]
+    fn schedules_whose_panel_names_are_not_text_are_read_and_named_from_the_set() {
+        // Three schedules side by side, none printing its name: one label alone, one followed by
+        // the next label, one by an empty `""`. The rightmost feeds the other two.
+        let mut sheet = nameless(0.0, &[], [("LIGHTING SALES", "RECEPTACLES SALES"), ("SIGN", "SPARE")]);
+        sheet.extend(nameless(500.0, &["FED BY:"], [("KITCHEN HOOD", "WALK-IN COOLER"), ("FRYER", "SPACE")]));
+        sheet.extend(nameless(1000.0, &["\"\""], [("PANEL QA1", "PANEL QA2"), ("SPARE", "SPACE")]));
+        // Before: no schedule at all (the label has no tag); each table read now.
+        let alone = read(&sheet, "X-1");
+        assert_eq!(alone.len(), 3, "{alone:#?}");
+        assert!(alone.iter().all(|p| p.circuits.len() == 4), "{alone:#?}");
+        // On its own the sheet names QA1 and QA2 (feeder rows) but not the panel feeding them.
+        let feeder = alone.iter().find(|p| p.circuits.iter().any(|c| c.description == "PANEL QA1")).unwrap();
+        assert_eq!((feeder.panel.as_str(), made(feeder).0), ("UNNAMED-1", "unresolved"), "{alone:#?}");
+        // The set's notes on another sheet name the main panel (quoted) and the feeders.
+        let notes = vec![
+            t(50.0, 300.0, "1. SERVICE ENTRANCE CONDUCTORS FROM TRANSFORMER TO PANEL \"QM\".", 6.0),
+            t(50.0, 290.0, "2. PANEL SHALL BE SURFACE MOUNTED.", 6.0),
+            t(50.0, 280.0, "3. FEEDERS FROM PANEL \"QM\" TO PANEL \"QA2\" AND PANEL QA1.", 6.0),
+        ];
+        let set = read_set(&[("X-1", &sheet), ("X-2", &notes)]);
+        let by = |d: &str| set.iter().find(|p| p.circuits.iter().any(|c| c.description == d)).unwrap();
+        assert_eq!(set.len(), 3, "{set:#?}");
+        assert_eq!(by("PANEL QA1").panel, "QM", "the panel feeding the others is the one nothing feeds");
+        assert_eq!(by("LIGHTING SALES").panel, "QA1", "the rest in their order on the sheet, in tag order");
+        assert_eq!(by("KITCHEN HOOD").panel, "QA2");
+        for p in &set {
+            let (m, basis) = made(p);
+            assert_eq!(m, "inferred", "{p:#?}");
+            assert!(basis.contains("not printed as text"), "{basis}");
+        }
+        assert!(made(by("LIGHTING SALES")).1.contains("alternative"), "a real choice notes the other one");
+        // The feeder's circuits and breakers as read.
+        let qm = by("PANEL QA1");
+        assert_eq!(qm.circuits.iter().filter(|c| c.breaker == "20").count(), 4, "{qm:#?}");
+    }
+
+    #[test]
+    fn a_name_left_for_no_schedule_is_a_placeholder_and_a_printed_name_still_wins() {
+        // No notes: each unnamed schedule a placeholder of its own, never merged with another.
+        let mut sheet = nameless(0.0, &[], [("LIGHTING", "RECEPTACLES"), ("SIGN", "SPARE")]);
+        sheet.extend(nameless(500.0, &["VOLTAGE:"], [("HOOD", "COOLER"), ("FRYER", "SPACE")]));
+        let set = read_set(&[("X-1", &sheet)]);
+        let mut names: Vec<&str> = set.iter().map(|p| p.panel.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["UNNAMED-1", "UNNAMED-2"], "{set:#?}");
+        assert!(set.iter().all(|p| made(p).0 == "unresolved" && made(p).1.contains("X-1")));
+        // A printed title over the same table: one schedule, by its printed name, nothing inferred.
+        let mut titled = nameless(0.0, &[], [("LIGHTING", "RECEPTACLES"), ("SIGN", "SPARE")]);
+        titled.push(t(250.0, 535.0, "PANELBOARD QB3", 10.0));
+        let got = read(&titled, "X-1");
+        assert_eq!(got.len(), 1, "{got:#?}");
+        assert_eq!((got.first().map(|p| p.panel.as_str()), got.first().map(|p| made(p).0)), (Some("QB3"), Some("")));
+        // A label and its tag in two cells is the printed name, as before.
+        let mut split = nameless(0.0, &["QB4"], [("LIGHTING", "RECEPTACLES"), ("SIGN", "SPARE")]);
+        split.retain(|x| x.value != "VOLTS:" && x.value != "208Y/120V");
+        let got = read(&split, "X-1");
+        assert_eq!(got.iter().map(|p| p.panel.as_str()).collect::<Vec<_>>(), ["QB4"], "{got:#?}");
+    }
+
+    #[test]
+    fn the_panels_a_set_names_are_its_quoted_numbered_or_labelled_tags() {
+        let texts = vec![
+            t(0.0, 0.0, "FROM PANEL \u{201c}QM\u{201d} TO PANELBOARD QA-2.", 5.0),
+            t(0.0, -10.0, "PANEL SHALL BE FLUSH. PANEL BOARD QA3 BY OTHERS. PANEL WITH LOCK.", 5.0),
+            t(0.0, -20.0, "PANEL QZ IN STORAGE; PANEL QY BELOW", 5.0),
+            // The one-line labels QY on its own: a panel's tag.
+            t(50.0, -40.0, "QY", 5.0),
+            t(0.0, -30.0, "PANEL NAME:", 5.0),
+        ];
+        assert_eq!(panel_mentions(&[&texts]), ["QM", "QA-2", "QA3", "QY"]);
+        assert!(natural("QA2") < natural("QA10") && natural("QA10") < natural("QB1"));
+        assert_eq!((ordinal(1).as_str(), ordinal(2).as_str(), ordinal(11).as_str(), ordinal(23).as_str()), ("1st", "2nd", "11th", "23rd"));
     }
 
     #[test]

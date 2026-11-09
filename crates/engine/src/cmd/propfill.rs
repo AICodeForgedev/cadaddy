@@ -1264,6 +1264,12 @@ pub(crate) fn outside_floors(d: &Drawing, sp: &BuildingSpec) -> Vec<Outlier> {
         if ENVELOPE_PARTS.contains(&part.as_str()) {
             continue;
         }
+        // Site work (a trade's site plan's: pole lights, their poles and bases, site runs).
+        if super::bimlook::made_tag(e, "tag").is_some_and(|t| t.starts_with(super::sitework::CONCRETE_PREFIX))
+            || props::read(&e.common.xdata).get(super::sitework::MARK).is_some()
+        {
+            continue;
+        }
         if !site.is_empty() && super::bimlook::made_tag(e, "tag").is_some_and(|t| site.contains(&t.trim().to_ascii_uppercase())) {
             continue;
         }
@@ -1376,7 +1382,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         // A luminaire built into casework or millwork (its plan draws its junction box): in the
         // casework at its documented height, never hung from the ceiling or set in a wall face.
         let in_casework = field(t, "mount").as_deref() == Some(super::readers::CASEWORK_MOUNT);
+        // Site work (a pole light): at its pole's top, as its site plan and schedule give it.
+        let site = field(t, super::sitework::MARK);
         let mount = match field(t, "mount").as_deref() {
+            Some("pole") => Mount::Ceiling,
             Some("ceiling") => Mount::Ceiling,
             Some("wall") => Mount::Wall,
             _ if in_casework => Mount::Wall,
@@ -1584,6 +1593,18 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 })
             }
         };
+        // A pole light's height is its pole's top (the site work step's, as its schedule and the
+        // rules give it), above any storey's.
+        let height = match site.as_ref().and_then(|_| {
+            let inches = field(t, "mount_height_in")?.parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=1_800.0).contains(v))?;
+            let source =
+                if t.fields.get("mount_height_in").is_some_and(|f| f.source == "schedule") { SourceKind::Schedule } else { SourceKind::Rule };
+            let doc = field(t, "mount_height_note").unwrap_or_else(|| "site work".into());
+            Some(Chosen { inches, from: "site_work", source, doc, datum: if mount == Mount::Floor { Datum::Bottom } else { Datum::Top } })
+        }) {
+            Some(c) => c,
+            None => height,
+        };
         *report.heights.entry(height.from).or_default() += 1;
         if height.source == SourceKind::Default {
             *report.defaults.entry(vkind.clone()).or_default() += 1;
@@ -1719,6 +1740,9 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         if !mark.is_empty() {
             store.set("type", Prop::new(field(t, "device_type").unwrap_or_else(|| kind.to_string()), printed()));
             store.set("type_mark", Prop::new(mark.clone(), printed()));
+        }
+        if let Some(v) = &site {
+            store.set(super::sitework::MARK, Prop::new(v.clone(), printed()));
         }
         // Built where the plans are silent or wrong: the design value and the basis beside it.
         for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
@@ -1880,7 +1904,8 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             None => {}
         }
         // Outside its level's footprint (else the nearest one below's: a roof's): flagged, listed.
-        if let Some(fp) = footprint_of(&fps, sp, &level.name) {
+        // Site work stands outside the building by design.
+        if let Some(fp) = footprint_of(&fps, sp, &level.name).filter(|_| site.is_none()) {
             let off = fp.outside(centre) / upf;
             if off.is_finite() && off > OUTSIDE_FLOOR_FT {
                 let why = format!(
