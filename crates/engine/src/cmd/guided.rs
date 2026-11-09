@@ -21529,7 +21529,7 @@ const MAX_PANEL_SHEETS: usize = 24;
 /// PDFs. A set's schedules can be on any of its electrical sheets (past the few its legends are
 /// looked for on), on a combined `MEP` sheet, or on a sheet whose number was read under another
 /// code.
-fn panel_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
+pub(crate) fn panel_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
     let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
     let base = |n: &str| n.split('/').next().unwrap_or("").trim().to_string();
     let title_of = |n: &str| {
@@ -21658,7 +21658,7 @@ pub(crate) fn job_panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> 
 
 /// The panel schedules on the electrical sheets, each panel once (a panel named twice: the
 /// schedule with more breakers read).
-fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
+pub(crate) fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
     let mut out: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
     for (number, sub) in pages {
         for p in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(sub), number) {

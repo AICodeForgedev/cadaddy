@@ -945,6 +945,8 @@ pub(crate) struct Ctx<'a> {
     pub whole_levels: bool,
     /// `conduit.takeoff`'s answer (`{price: false, group_by: [level]}`), run by the caller.
     pub takeoff: Option<&'a Value>,
+    /// The schedules and wire-length tables read off the documents ([`ScheduleDocs::read`]).
+    pub docs: &'a ScheduleDocs,
 }
 
 /// The rules switched on.
@@ -1004,32 +1006,226 @@ pub(crate) fn read_takeoff(s: &mut crate::Session, rules: &[Effective], only: &[
     s.execute("conduit.takeoff", &json!({"price": false, "group_by": ["level"]})).ok()
 }
 
-/// A breaker's amps and poles, and its load (VA), from its panel's schedule.
-fn breaker(sp: &BuildingSpec, panel: &str, number: &str) -> Option<(f64, u32, Option<f64>, String)> {
-    let s = sp
-        .mep
-        .panel_schedules
-        .iter()
-        .find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))
-        .or_else(|| sp.mep.panel_schedules.iter().find(|p| is_panel(panel, &p.panel)))?;
-    // Its own row, else the multi-pole breaker whose poles take it (13 of a 2-pole at 11).
+/// What E-DERATE and E-VDROP read of the documents besides the model (Q6338): the panel
+/// schedules read again off the job's schedule sheets with the job's own reader (else off the
+/// sheets the drawing holds), for the rows the stored copy lacks or holds no breaker rating in
+/// (a model built from an older reading, a checkpoint), and the drawing's wire-length tables.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ScheduleDocs {
+    pub reread: Vec<cadaddy_walk3d::PanelSchedule>,
+    /// The sheets read again.
+    pub sheets: Vec<String>,
+    pub lengths: Vec<super::wiretable::LengthTable>,
+}
+
+/// No documents read (a check that needs none).
+pub(crate) static NO_DOCS: ScheduleDocs = ScheduleDocs { reread: Vec::new(), sheets: Vec::new(), lengths: Vec::new() };
+
+impl ScheduleDocs {
+    /// Read the job's schedule sheets (its PDFs' pages when the drawing doesn't hold them),
+    /// else the drawing's own texts.
+    pub(crate) fn read(s: &crate::Session, d: &Drawing, sp: &BuildingSpec) -> ScheduleDocs {
+        let mut out = ScheduleDocs::default();
+        let sheet_of = |p: Vec2| -> String {
+            sp.sheets
+                .iter()
+                .filter_map(|l| {
+                    let r = l.rect?;
+                    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
+                    (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).then(|| ((x1 - x0) * (y1 - y0), l.number.clone()))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, n)| n)
+                .unwrap_or_default()
+        };
+        out.lengths = super::wiretable::read_drawing(d, &sheet_of);
+        let job = super::guided::load_job(s).ok().flatten().filter(|j| j.sheets.is_some());
+        match job {
+            Some(job) => {
+                let pages = super::guided::panel_pages(d, &job);
+                out.reread = super::guided::panel_schedules(&pages);
+                for (number, page) in &pages {
+                    let have = out.lengths.iter().any(|t| t.sheet.eq_ignore_ascii_case(number));
+                    if !have && out.lengths.len() < 32 {
+                        let texts = cadaddy_mepfix::sheet_facts::texts(page);
+                        if texts.iter().any(|t| super::wiretable::is_title(&t.value) || (t.value.contains('#') && t.value.contains('\''))) {
+                            out.lengths.extend(super::wiretable::read_page(&texts, &super::gridtable::segments(page), number));
+                        }
+                    }
+                }
+                out.sheets = pages.into_iter().map(|(n, _)| n).collect();
+            }
+            None => {
+                let texts = cadaddy_mepfix::sheet_facts::texts(d);
+                for p in super::panelsched::read(&texts, "the drawing") {
+                    if !out.reread.iter().any(|o| o.panel.eq_ignore_ascii_case(&p.panel)) && out.reread.len() < 2_000 {
+                        out.reread.push(p);
+                    }
+                }
+                // Each one's sheet: the sheet its rows' panel title stands on is unknown here.
+                if !out.reread.is_empty() {
+                    out.sheets.push("the drawing".into());
+                }
+            }
+        }
+        // A table read twice (the drawing's sheet and its page) counts once.
+        let mut seen: Vec<super::wiretable::LengthTable> = Vec::new();
+        for t in std::mem::take(&mut out.lengths) {
+            if !seen.iter().any(|o| o.bands == t.bands) {
+                seen.push(t);
+            }
+        }
+        out.lengths = seen;
+        out
+    }
+
+    /// The first wire-length table read (the drawing's grid first, then the single-line form).
+    fn length_table(&self) -> Option<&super::wiretable::LengthTable> {
+        self.lengths.iter().find(|t| !t.bands.is_empty())
+    }
+}
+
+/// A circuit's breaker as the schedules give it.
+#[derive(Clone, Debug, PartialEq)]
+enum Brk {
+    /// Amps, poles, its load (VA) and where it was read.
+    Found(f64, u32, Option<f64>, String),
+    /// Its row was read but its breaker cell is no breaker's rating (why).
+    NotRating(String),
+    /// No schedule row for it.
+    Missing,
+}
+
+impl Brk {
+    fn found(&self) -> Option<(f64, u32, Option<f64>, String)> {
+        match self {
+            Brk::Found(a, p, l, s) => Some((*a, *p, *l, s.clone())),
+            _ => None,
+        }
+    }
+}
+
+/// The schedule of `panel` (a piece of gear's tag, or a typical room's instance of it) among
+/// `list`: its own, else the one it is an instance of.
+fn schedule_of<'a>(list: &'a [cadaddy_walk3d::PanelSchedule], panel: &str) -> Option<&'a cadaddy_walk3d::PanelSchedule> {
+    list.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim())).or_else(|| list.iter().find(|p| is_panel(panel, &p.panel)))
+}
+
+/// A circuit's row: its own, else the multi-pole breaker whose poles take it (13 of a 2-pole at 11).
+fn row_of<'a>(s: &'a cadaddy_walk3d::PanelSchedule, number: &str) -> Option<&'a cadaddy_walk3d::PanelCircuit> {
     let n: Option<u32> = number.trim().parse().ok();
-    let c = s.circuits.iter().find(|c| c.number.trim() == number.trim()).or_else(|| {
+    s.circuits.iter().find(|c| c.number.trim() == number.trim()).or_else(|| {
         let n = n?;
         s.circuits
             .iter()
             .find(|c| c.poles >= 2 && c.number.trim().parse::<u32>().is_ok_and(|f| f < n && (n - f) % 2 == 0 && (n - f) / 2 < c.poles.min(3)))
-    })?;
-    let digits: String = c.breaker.chars().skip_while(|ch| !ch.is_ascii_digit()).take_while(char::is_ascii_digit).collect();
-    let amps = digits.parse::<f64>().ok().filter(|a| (5.0..=4000.0).contains(a))?;
-    let src =
-        format!("panel {} schedule{} circuit {}", s.panel, if s.source.is_empty() { String::new() } else { format!(" ({})", s.source) }, c.number);
-    Some((amps, c.poles.max(1), c.load_va.filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0e6), src))
+    })
+}
+
+/// The amps a breaker cell reads (`20`, `20A`, `20/1`, `1P-20A`: the number marked amps, else
+/// the first), checked against the schedule: a standard rating (NEC 240.6(A)), not its own load
+/// (a VA read in the breaker's column), not over the panel's bus and not far over the row's own
+/// conductor (rules data `validate_schedules.json`).
+pub(crate) fn rating(c: &cadaddy_walk3d::PanelCircuit, s: &cadaddy_walk3d::PanelSchedule) -> std::result::Result<f64, String> {
+    let bd = &super::wiretable::data().breaker;
+    let cell = c.breaker.trim();
+    if cell.is_empty() {
+        return Err(format!("panel {} circuit {}: its breaker cell is blank", s.panel, c.number));
+    }
+    let u = cell.to_ascii_uppercase();
+    let mut nums: Vec<(f64, bool)> = Vec::new();
+    let cs: Vec<char> = u.chars().take(40).collect();
+    let mut i = 0usize;
+    while i < cs.len() {
+        if cs.get(i).is_some_and(char::is_ascii_digit) {
+            let start = i;
+            while cs.get(i).is_some_and(char::is_ascii_digit) {
+                i += 1;
+            }
+            let n: String = cs.get(start..i).unwrap_or_default().iter().collect();
+            let amps_mark = cs.get(i).is_some_and(|c| *c == 'A');
+            if let Ok(v) = n.parse::<f64>() {
+                nums.push((v, amps_mark));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    let Some(v) = nums.iter().find(|(_, a)| *a).or_else(|| nums.first()).map(|(v, _)| *v) else {
+        return Err(format!("panel {} circuit {}: its breaker cell reads {}, no number", s.panel, c.number, cite_cell(cell)));
+    };
+    let why = |what: String| format!("panel {} circuit {}: its breaker cell reads {}, {what}", s.panel, c.number, cite_cell(cell));
+    if let Some(load) = c.load_va.filter(|l| l.is_finite() && *l >= 100.0)
+        && (load - v).abs() < 0.5
+    {
+        return Err(why(format!("its own load ({load:.0} VA): the load's column, not the breaker's")));
+    }
+    if !bd.standard_a.iter().any(|r| (r - v).abs() < 0.5) {
+        return Err(why(format!("not a breaker rating ({})", bd.standard_source)));
+    }
+    let bus = s
+        .header
+        .iter()
+        .filter(|(k, _)| {
+            let k = k.to_ascii_uppercase();
+            bd.bus_words.iter().any(|w| k.split(|c: char| !c.is_ascii_alphanumeric()).any(|x| x == w))
+        })
+        .filter_map(|(_, val)| {
+            let d: String = val.chars().skip_while(|c| !c.is_ascii_digit()).take_while(char::is_ascii_digit).collect();
+            d.parse::<f64>().ok().filter(|a| *a >= 15.0)
+        })
+        .fold(None, |m: Option<f64>, a| Some(m.map_or(a, |m| m.max(a))));
+    if let Some(bus) = bus
+        && v > bus + 0.5
+    {
+        return Err(why(format!("over the panel's {bus} A bus")));
+    }
+    let rl = super::conduitroute::rules();
+    if let Some(a75) = rl.derate.amp_75c.get(&awg(&c.wire)).copied()
+        && v > bd.over_wire_factor * a75 + 0.5
+    {
+        return Err(why(format!("more than {} times its own #{} conductor's {a75} A ({})", bd.over_wire_factor, awg(&c.wire), bd.over_wire_source)));
+    }
+    Ok(v)
+}
+
+fn cite_cell(v: &str) -> String {
+    format!("\"{}\"", v.chars().take(24).collect::<String>())
+}
+
+/// A breaker's amps and poles, and its load (VA), from its panel's schedule: the stored one (the
+/// build's reading), else the documents read again ([`ScheduleDocs`]) for a row it lacks or
+/// whose breaker cell is no rating ([`rating`]).
+fn breaker(sp: &BuildingSpec, docs: &ScheduleDocs, panel: &str, number: &str) -> Brk {
+    let mut not = None;
+    for (list, again) in [(sp.mep.panel_schedules.as_slice(), false), (docs.reread.as_slice(), true)] {
+        let Some(s) = schedule_of(list, panel) else { continue };
+        let Some(c) = row_of(s, number) else { continue };
+        match rating(c, s) {
+            Ok(amps) => {
+                let src = format!(
+                    "panel {} schedule{} circuit {}{}",
+                    s.panel,
+                    if s.source.is_empty() { String::new() } else { format!(" ({})", s.source) },
+                    c.number,
+                    if again { ", read again off the sheet" } else { "" }
+                );
+                return Brk::Found(amps, c.poles.max(1), c.load_va.filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0e6), src);
+            }
+            Err(why) => {
+                not.get_or_insert(why);
+            }
+        }
+    }
+    not.map_or(Brk::Missing, Brk::NotRating)
 }
 
 /// A panel's voltages from its schedule's header (`120/208`): line to neutral, line to line.
-fn panel_volts(sp: &BuildingSpec, panel: &str) -> Option<(f64, f64)> {
-    let s = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()) || is_panel(panel, &p.panel))?;
+fn panel_volts(sp: &BuildingSpec, docs: &ScheduleDocs, panel: &str) -> Option<(f64, f64)> {
+    fn find<'a>(list: &'a [cadaddy_walk3d::PanelSchedule], panel: &str) -> Option<&'a cadaddy_walk3d::PanelSchedule> {
+        list.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()) || is_panel(panel, &p.panel))
+    }
+    let s = find(&sp.mep.panel_schedules, panel).filter(|s| !s.header.is_empty()).or_else(|| find(&docs.reread, panel))?;
     for (k, v) in &s.header {
         if !k.to_ascii_lowercase().contains("volt") {
             continue;
@@ -1345,10 +1541,23 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         .and_then(|f| f.get(2).copied())
                         .unwrap_or(0.35)
                 };
-                let breakers: Vec<Option<(f64, u32, Option<f64>, String)>> = match circuit_of(&lead.circuit) {
-                    Some((panel, nums)) => nums.iter().map(|n| breaker(cx.sp, if lead.panel.is_empty() { &panel } else { &lead.panel }, n)).collect(),
-                    None => vec![None],
+                // Each circuit by its panel and number: the run's own panel (a typical room's
+                // instance) first, else the label's.
+                let brks: Vec<Brk> = match circuit_of(&lead.circuit) {
+                    Some((panel, nums)) => nums
+                        .iter()
+                        .map(|n| match breaker(cx.sp, cx.docs, if lead.panel.is_empty() { &panel } else { &lead.panel }, n) {
+                            Brk::Missing if !lead.panel.is_empty() => breaker(cx.sp, cx.docs, &panel, n),
+                            b => b,
+                        })
+                        .collect(),
+                    None => vec![Brk::Missing],
                 };
+                let breakers: Vec<Option<(f64, u32, Option<f64>, String)>> = brks.iter().map(Brk::found).collect();
+                let not_rating = brks.iter().find_map(|b| match b {
+                    Brk::NotRating(w) => Some(w.clone()),
+                    _ => None,
+                });
                 let mut sizes: Vec<String> = hots.iter().map(|w| w.size.clone()).collect();
                 sizes.sort();
                 sizes.dedup();
@@ -1421,7 +1630,10 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         "conduit",
                         run,
                         "unsure",
-                        format!("raceway {run}: the breaker of circuit {} isn't in a panel schedule", lead.circuit),
+                        match &not_rating {
+                            Some(why) => format!("raceway {run}: the breaker of circuit {} isn't read: {why}", lead.circuit),
+                            None => format!("raceway {run}: the breaker of circuit {} isn't in a panel schedule", lead.circuit),
+                        },
                         expected,
                         makeup.clone(),
                         m,
@@ -1891,13 +2103,23 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             if by_gear.is_empty() {
                 out.unmeasured(VDROP, "a circuit not joined to its panel (E-CONDUIT-CONTINUITY fails it)", 1);
             }
+            // Each panel instance's own pieces (a typical room's panel: its room's circuit, not the
+            // same-named circuit of every other room's panel): the sticks whose ends its panel
+            // reaches first.
+            let mut gear_sticks: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+            for &(node, _, si) in &g.ends {
+                if let Some(Some((_, gi))) = dist.get(node) {
+                    gear_sticks.entry(*gi).or_default().insert(si);
+                }
+            }
             for (gi, (ft, di)) in by_gear {
                 let Some(dv) = net.devs.get(di) else { continue };
                 let Some(place) = in_scope(&dv.level, (dv.lo + dv.hi) * 0.5) else { continue };
                 let gtag = net.gear.get(gi).map_or_else(|| panel.clone(), |g| g.tag.clone());
+                let mine: Vec<usize> = gear_sticks.get(&gi).map(|s| s.iter().copied().filter(|i| *i != usize::MAX).collect()).unwrap_or_default();
                 // Its conductor: the smallest of its own runs' hots, else the phase it is on in a
                 // shared run.
-                let runs: BTreeSet<&str> = sticks.iter().filter_map(|i| net.sticks.get(*i)).map(|s| s.run.as_str()).collect();
+                let runs: BTreeSet<&str> = mine.iter().filter_map(|i| net.sticks.get(*i)).map(|s| s.run.as_str()).collect();
                 let own: Vec<&str> = runs
                     .iter()
                     .copied()
@@ -1916,163 +2138,166 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                     own.iter().flat_map(|run| run_wires.get(run).into_iter().flatten()).filter(|w| !w.ground()).map(|w| w.size.clone()).collect()
                 };
                 let smallest = pick.iter().filter_map(|s| size_rank(s, &rl.vdrop.sizes).map(|k| (k, s.clone()))).min_by_key(|x| x.0);
-                let brk = breaker(cx.sp, &gtag, number).or_else(|| breaker(cx.sp, panel, number));
-                let volts = panel_volts(cx.sp, &gtag).or_else(|| panel_volts(cx.sp, panel));
-                let (texts, _) = drawing_table(cx.d);
+                // Its breaker by its panel instance and number, else by the label's panel.
+                let brk = match breaker(cx.sp, cx.docs, &gtag, number) {
+                    Brk::Missing => breaker(cx.sp, cx.docs, panel, number),
+                    b => b,
+                };
+                let volts = panel_volts(cx.sp, cx.docs, &gtag).or_else(|| panel_volts(cx.sp, cx.docs, panel));
                 let key = format!("{label}|{gtag}");
-                let base = json!({"check": "vdrop", "circuit": label, "panel": gtag, "length_ft": r1(ft), "farthest": dv.handle.hex(), "conductor": smallest.as_ref().map(|s| format!("#{}", s.1))});
-                let Some((rank_have, size)) = smallest else {
-                    push(
-                        VDROP,
-                        r,
-                        Some(dv.handle),
-                        &dv.kind,
-                        &key,
-                        "unsure",
-                        format!("circuit {label}: its conductor size isn't known"),
-                        "the conductor size its length calls for".into(),
-                        "no conductor size".into(),
-                        base,
-                        &dv.level,
-                        place,
-                        "prescreen",
-                    );
-                    continue;
-                };
-                // The legend's table wins.
-                if !texts.0.is_empty() {
-                    let need = texts.0.iter().find(|(hi, _)| ft <= *hi + 1e-9).map(|(_, s)| s.clone());
-                    let mut m = base.clone();
-                    m["table"] = json!(texts.1);
-                    match need.as_ref().and_then(|n| size_rank(n, &rl.vdrop.sizes).map(|k| (k, n.clone()))) {
-                        Some((rank_need, n)) => {
-                            let ok = rank_have >= rank_need;
-                            m["needed"] = json!(format!("#{n}"));
-                            push(
-                                VDROP,
-                                r,
-                                Some(dv.handle),
-                                &dv.kind,
-                                &key,
-                                if ok { "pass" } else { "fail" },
-                                if ok {
-                                    format!("circuit {label}: {:.0} ft on #{size}, the drawing's table asks #{n}", ft)
-                                } else {
-                                    format!("circuit {label}: {:.0} ft on #{size}; the drawing's length table asks #{n}", ft)
-                                },
-                                format!("#{n} or larger for {:.0} ft (the drawing's table: {})", ft, texts.1),
-                                format!("#{size}"),
-                                m,
-                                &dv.level,
-                                place,
-                                "prescreen",
-                            );
-                        }
-                        None => push(
-                            VDROP,
-                            r,
-                            Some(dv.handle),
-                            &dv.kind,
-                            &key,
-                            "unsure",
-                            format!("circuit {label}: {:.0} ft is longer than the drawing's length table reaches", ft),
-                            format!("a size from the drawing's table ({})", texts.1),
-                            format!("#{size}"),
-                            m,
-                            &dv.level,
-                            place,
-                            "prescreen",
-                        ),
+                // What the finding covers: this panel instance's pieces of the circuit only.
+                let mut cov: Vec<Handle> = Vec::new();
+                for i in &mine {
+                    if let Some(s) = net.sticks.get(*i)
+                        && cov.len() < MAX_COVER
+                    {
+                        cov.push(s.handle);
                     }
-                    continue;
                 }
-                let Some((amps_brk, poles, load, src)) = brk else {
-                    push(
-                        VDROP,
-                        r,
-                        Some(dv.handle),
-                        &dv.kind,
-                        &key,
-                        "unsure",
-                        format!("circuit {label}: its breaker and load aren't in a panel schedule"),
-                        format!("at most {}% drop ({})", rl.vdrop.max_pct, rl.vdrop.source),
-                        format!("{:.0} ft on #{size}", ft),
-                        base,
-                        &dv.level,
-                        place,
-                        "prescreen",
-                    );
-                    continue;
-                };
-                let (v, mult) = match (poles, volts) {
-                    (1, Some((ln, _))) => (ln, 2.0),
-                    (1, None) => (rl.vdrop.voltage, 2.0),
-                    (2, Some((_, ll))) => (ll, 2.0),
-                    (_, Some((_, ll))) => (ll, 3f64.sqrt()),
-                    (_, None) => (0.0, 0.0),
-                };
-                let cmil = rl.vdrop.cmil.get(&size).copied();
-                let (amps, load_from) = match load {
-                    // A three-phase load's current is its VA over √3 times its line voltage (Q6234).
-                    Some(va) if v > 0.0 => (va / (v * if poles >= 3 { 3f64.sqrt() } else { 1.0 }), format!("{src}: {va:.0} VA")),
-                    _ => (
-                        amps_brk * rl.vdrop.load_pct / 100.0,
-                        format!("{}% of its {amps_brk} A breaker (rule; the schedule gives no load)", rl.vdrop.load_pct),
-                    ),
-                };
-                let (Some(cmil), true) = (cmil, v > 0.0) else {
-                    push(
-                        VDROP,
-                        r,
-                        Some(dv.handle),
-                        &dv.kind,
-                        &key,
-                        "unsure",
-                        format!("circuit {label}: no circular-mil area for #{size} or no voltage for a {poles}-pole circuit"),
-                        format!("at most {}%", rl.vdrop.max_pct),
-                        format!("{:.0} ft on #{size}", ft),
-                        base,
-                        &dv.level,
-                        place,
-                        "prescreen",
-                    );
-                    continue;
-                };
-                let vd = mult * rl.vdrop.k_copper * amps * ft / cmil;
-                let pct = vd / v * 100.0;
-                let ok = pct <= rl.vdrop.max_pct + 1e-9;
-                let mut m = base;
-                m["volts"] = json!(v);
-                m["amps"] = json!(r2(amps));
-                m["load_from"] = json!(load_from);
-                m["drop_pct"] = json!(r2(pct));
-                // A failure on the rule's share of the breaker (no load given) is not known.
-                let verdict = if ok {
-                    "pass"
-                } else if load.is_some() {
-                    "fail"
-                } else {
-                    "unsure"
-                };
-                push(
-                    VDROP,
-                    r,
-                    Some(dv.handle),
-                    &dv.kind,
-                    &key,
-                    verdict,
-                    if ok {
-                        format!("circuit {label}: {:.0} ft on #{size} drops {:.2}%", ft, pct)
+                for run in &runs {
+                    for h in run_pieces.get(run).into_iter().flatten() {
+                        if cov.len() < MAX_COVER && !cov.contains(h) {
+                            cov.push(*h);
+                        }
+                    }
+                }
+                let base = json!({"check": "vdrop", "circuit": label, "panel": gtag, "length_ft": r1(ft), "farthest": dv.handle.hex(), "conductor": smallest.as_ref().map(|s| format!("#{}", s.1))});
+                let (verdict, issue, expected, found, m): (&'static str, String, String, String, Value) = 'v: {
+                    let Some((rank_have, size)) = smallest else {
+                        break 'v (
+                            "unsure",
+                            format!("circuit {label}: its conductor size isn't known"),
+                            "the conductor size its length calls for".into(),
+                            "no conductor size".into(),
+                            base,
+                        );
+                    };
+                    let found_brk = brk.found();
+                    let poles = found_brk.as_ref().map_or(1, |b| b.1);
+                    // The circuit's voltage: line to neutral on one pole, line to line on more.
+                    let cv = match (poles, volts) {
+                        (1, Some((ln, _))) => Some(ln),
+                        (1, None) => Some(rl.vdrop.voltage),
+                        (_, Some((_, ll))) => Some(ll),
+                        (_, None) => None,
+                    };
+                    // The documents' own wire-length table wins where it has the circuit's row.
+                    let mut table_note: Option<String> = None;
+                    if let Some(t) = cx.docs.length_table() {
+                        let mut m = base.clone();
+                        m["table"] = json!(t.cite());
+                        m["table_from"] = json!(t.sheet);
+                        if let Some(b) = &found_brk {
+                            m["breaker_a"] = json!(b.0);
+                        }
+                        if let Some(v) = cv {
+                            m["volts"] = json!(v);
+                        }
+                        match t.need(ft, found_brk.as_ref().map(|b| b.0), cv, &rl.vdrop.sizes) {
+                            super::wiretable::Need::Size(n, band) => {
+                                let ok = size_rank(&n, &rl.vdrop.sizes).is_some_and(|need| rank_have >= need);
+                                m["needed"] = json!(format!("#{n}"));
+                                m["band"] = json!(band);
+                                break 'v (
+                                    if ok { "pass" } else { "fail" },
+                                    if ok {
+                                        format!("circuit {label}: {:.0} ft on #{size}, the drawing's table asks #{n}", ft)
+                                    } else {
+                                        format!("circuit {label}: {:.0} ft on #{size}; the drawing's length table asks #{n} ({band})", ft)
+                                    },
+                                    format!("#{n} or larger for {:.0} ft ({}: {band})", ft, t.cite()),
+                                    format!("#{size}"),
+                                    m,
+                                );
+                            }
+                            super::wiretable::Need::Beyond(w) => {
+                                break 'v (
+                                    "unsure",
+                                    format!("circuit {label}: {:.0} ft is longer than the drawing's length table reaches ({w})", ft),
+                                    format!("a size from {}", t.cite()),
+                                    format!("#{size}"),
+                                    m,
+                                );
+                            }
+                            // Not this circuit's table (another breaker or voltage): the
+                            // calculation decides, saying why.
+                            super::wiretable::Need::NotCovered(w) => table_note = Some(format!("{}: {w}", t.cite())),
+                        }
+                    }
+                    let mut base = base;
+                    if let Some(n) = &table_note {
+                        base["table_not_used"] = json!(n);
+                    }
+                    let Some((amps_brk, poles, load, src)) = found_brk else {
+                        let issue = match &brk {
+                            Brk::NotRating(why) => format!("circuit {label}: its breaker isn't read: {why}"),
+                            _ => format!("circuit {label}: its breaker and load aren't in a panel schedule"),
+                        };
+                        break 'v (
+                            "unsure",
+                            issue,
+                            format!("at most {}% drop ({})", rl.vdrop.max_pct, rl.vdrop.source),
+                            format!("{:.0} ft on #{size}", ft),
+                            base,
+                        );
+                    };
+                    let (v, mult) = match (poles, volts) {
+                        (1, Some((ln, _))) => (ln, 2.0),
+                        (1, None) => (rl.vdrop.voltage, 2.0),
+                        (2, Some((_, ll))) => (ll, 2.0),
+                        (_, Some((_, ll))) => (ll, 3f64.sqrt()),
+                        (_, None) => (0.0, 0.0),
+                    };
+                    let cmil = rl.vdrop.cmil.get(&size).copied();
+                    let (amps, load_from) = match load {
+                        // A three-phase load's current is its VA over √3 times its line voltage (Q6234).
+                        Some(va) if v > 0.0 => (va / (v * if poles >= 3 { 3f64.sqrt() } else { 1.0 }), format!("{src}: {va:.0} VA")),
+                        _ => (
+                            amps_brk * rl.vdrop.load_pct / 100.0,
+                            format!("{}% of its {amps_brk} A breaker (rule; the schedule gives no load)", rl.vdrop.load_pct),
+                        ),
+                    };
+                    let (Some(cmil), true) = (cmil, v > 0.0) else {
+                        break 'v (
+                            "unsure",
+                            format!("circuit {label}: no circular-mil area for #{size} or no voltage for a {poles}-pole circuit"),
+                            format!("at most {}%", rl.vdrop.max_pct),
+                            format!("{:.0} ft on #{size}", ft),
+                            base,
+                        );
+                    };
+                    let vd = mult * rl.vdrop.k_copper * amps * ft / cmil;
+                    let pct = vd / v * 100.0;
+                    let ok = pct <= rl.vdrop.max_pct + 1e-9;
+                    let mut m = base;
+                    m["volts"] = json!(v);
+                    m["amps"] = json!(r2(amps));
+                    m["load_from"] = json!(load_from);
+                    m["drop_pct"] = json!(r2(pct));
+                    // A failure on the rule's share of the breaker (no load given) is not known.
+                    let verdict = if ok {
+                        "pass"
+                    } else if load.is_some() {
+                        "fail"
                     } else {
-                        format!("circuit {label}: {:.0} ft on #{size} drops {:.2}%, over {}%", ft, pct, rl.vdrop.max_pct)
-                    },
-                    format!("at most {}% drop at {} V ({})", rl.vdrop.max_pct, v, rl.vdrop.source),
-                    format!("{:.2}% at {:.1} A ({load_from})", pct, amps),
-                    m,
-                    &dv.level,
-                    place,
-                    "prescreen",
-                );
+                        "unsure"
+                    };
+                    (
+                        verdict,
+                        if ok {
+                            format!("circuit {label}: {:.0} ft on #{size} drops {:.2}%", ft, pct)
+                        } else {
+                            format!("circuit {label}: {:.0} ft on #{size} drops {:.2}%, over {}%", ft, pct, rl.vdrop.max_pct)
+                        },
+                        format!("at most {}% drop at {} V ({})", rl.vdrop.max_pct, v, rl.vdrop.source),
+                        format!("{:.2}% at {:.1} A ({load_from})", pct, amps),
+                        m,
+                    )
+                };
+                if !cov.is_empty() {
+                    covers.insert(finding_id(VDROP, &dv.level, &key, verdict), cov);
+                }
+                push(VDROP, r, Some(dv.handle), &dv.kind, &key, verdict, issue, expected, found, m, &dv.level, place, "prescreen");
             }
         }
     }
@@ -2836,30 +3061,6 @@ pub(crate) fn packet_raceways(net: &Net, sp: &BuildingSpec, frame: &Frame, own: 
     out
 }
 
-/// The drawing's length table (bands, what it read), once.
-fn drawing_table(d: &Drawing) -> ((Vec<(f64, String)>, String), ()) {
-    thread_local! {
-        static CACHE: std::cell::RefCell<Option<(usize, (Vec<(f64, String)>, String))>> = const { std::cell::RefCell::new(None) };
-    }
-    let key = std::ptr::from_ref(d) as usize ^ d.model.len();
-    if let Some(hit) = CACHE.with(|c| c.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, v)| v.clone())) {
-        return (hit, ());
-    }
-    let texts: Vec<String> = d
-        .model
-        .iter()
-        .take(400_000)
-        .filter_map(|e| match &e.kind {
-            cadaddy_doc::EntityKind::Text(t) => Some(t.value.clone()),
-            cadaddy_doc::EntityKind::MText(t) => Some(t.contents.clone()),
-            _ => None,
-        })
-        .collect();
-    let got = super::conduitroute::length_table(&texts);
-    CACHE.with(|c| *c.borrow_mut() = Some((key, got.clone())));
-    (got, ())
-}
-
 /// Is a box (or device) linked to a panel through its pieces' links (a cable run)?
 fn linked_to_panel(net: &Net, from: Handle, panel: &str) -> bool {
     let gear: HashMap<Handle, &str> = net.gear.iter().map(|g| (g.handle, g.tag.as_str())).collect();
@@ -2936,10 +3137,36 @@ mod tests {
             ],
             ..Default::default()
         });
-        assert_eq!(breaker(&sp, "LPX", "1").map(|b| b.0), Some(20.0));
-        assert_eq!(breaker(&sp, "LPX", "15").map(|b| (b.0, b.1)), Some((30.0, 2)));
-        assert_eq!(breaker(&sp, "LPX", "17"), None);
-        assert_eq!(breaker(&sp, "LPX", "3"), None);
+        let none = ScheduleDocs::default();
+        assert_eq!(breaker(&sp, &none, "LPX", "1").found().map(|b| b.0), Some(20.0));
+        assert_eq!(breaker(&sp, &none, "LPX", "15").found().map(|b| (b.0, b.1)), Some((30.0, 2)));
+        assert_eq!(breaker(&sp, &none, "LPX", "17"), Brk::Missing);
+        assert_eq!(breaker(&sp, &none, "LPX", "3"), Brk::Missing);
+    }
+
+    #[test]
+    fn a_breaker_cell_reads_its_amps_only_when_it_is_a_breakers_rating() {
+        let row = |breaker: &str, wire: &str, load: Option<f64>| cadaddy_walk3d::PanelCircuit {
+            number: "1".into(),
+            breaker: breaker.into(),
+            wire: wire.into(),
+            load_va: load,
+            poles: 1,
+            ..Default::default()
+        };
+        let mut s = cadaddy_walk3d::PanelSchedule { panel: "LPX".into(), ..Default::default() };
+        assert_eq!(rating(&row("20", "12", Some(540.0)), &s), Ok(20.0));
+        assert_eq!(rating(&row("20A", "", None), &s), Ok(20.0));
+        assert_eq!(rating(&row("1P-20A", "", None), &s), Ok(20.0));
+        assert_eq!(rating(&row("20/1", "", None), &s), Ok(20.0));
+        assert!(rating(&row("540", "12", Some(540.0)), &s).is_err_and(|w| w.contains("its own load")));
+        assert!(rating(&row("37", "", None), &s).is_err_and(|w| w.contains("not a breaker rating")));
+        assert!(rating(&row("700", "10", None), &s).is_err_and(|w| w.contains("#10")));
+        assert!(rating(&row("", "", None), &s).is_err_and(|w| w.contains("blank")));
+        assert!(rating(&row("SPACE", "", None), &s).is_err());
+        s.header.insert("bus amps".into(), "125A".into());
+        assert!(rating(&row("200", "", None), &s).is_err_and(|w| w.contains("125 A bus")));
+        assert_eq!(rating(&row("100", "", None), &s), Ok(100.0));
     }
 
     #[test]
