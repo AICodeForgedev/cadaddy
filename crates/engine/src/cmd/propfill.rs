@@ -2363,7 +2363,9 @@ fn window_props(
     let width = b.width().max(b.height()) / upf * 12.0;
     if width.is_finite() && width > 0.0 {
         let src = match row.and_then(|r| r.width_in) {
-            Some(w) if (w - width).abs() <= 1.0 => Source::from_doc(SourceKind::Schedule, &format!("window schedule, mark {}", mark.as_deref().unwrap_or(""))),
+            Some(w) if (w - width).abs() <= 1.0 => {
+                Source::from_doc(SourceKind::Schedule, &format!("window schedule, mark {}", mark.as_deref().unwrap_or("")))
+            }
             _ => Source::computed(),
         };
         put(store, "width", Prop::new(round2(width), src).with_unit("in"), tally);
@@ -2392,12 +2394,22 @@ fn window_props(
     if let Some(l) = lvl {
         put(store, "level", Prop::new(l.to_string(), Source::computed()), tally);
     }
-    // The room it lights: a room on one side of it (an outside wall: only one).
-    let room = sides(b, SIDE_FT * upf).into_iter().chain([b.center()]).find_map(|p| room_at(rooms, lvl, p));
+    let room = window_room(rooms, lvl, b, upf);
     if let Some(r) = room {
         put(store, "room", Prop::new(r.label.clone(), Source::computed()), tally);
     }
 }
+
+/// The room a window (its box `b`, `upf` units per foot) lights: a room on one side of it (an
+/// outside wall's window: only one), the nearest past its wall's face, out to a few feet (a unit's
+/// sleeve, a furred wall or a sill drawn against the inside face keeps the room's outline off the
+/// wall there, Q6311), else the room its middle is in.
+fn window_room<'a>(rooms: &'a [RoomShape], lvl: Option<&str>, b: &Bounds2, upf: f64) -> Option<&'a RoomShape> {
+    (1..=WINDOW_ROOM_STEPS).flat_map(|n| sides(b, f64::from(n) * SIDE_FT * upf)).chain([b.center()]).find_map(|p| room_at(rooms, lvl, p))
+}
+
+/// How many [`SIDE_FT`] steps past its wall's faces a window looks for the room it lights.
+const WINDOW_ROOM_STEPS: u32 = 3;
 
 fn made(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tag(e, key).map(str::to_string).filter(|v| !v.trim().is_empty())
@@ -3056,6 +3068,24 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6311: a window lights the room past its wall even where the room's outline keeps off the
+    /// wall's face (a unit's sleeve or a furred stretch drawn against it), within a few feet.
+    #[test]
+    fn a_window_lights_the_room_whose_outline_keeps_off_its_wall() {
+        // Inches: a 6" wall on y = 0, the window's box across it; the room 20" off its inside face.
+        let b = Bounds2::new(Vec2::new(-24.0, -3.0), Vec2::new(24.0, 3.0));
+        let outline = |y0: f64| vec![Vec2::new(-120.0, y0), Vec2::new(120.0, y0), Vec2::new(120.0, 200.0), Vec2::new(-120.0, 200.0)];
+        let room =
+            |y0: f64| RoomShape { outline: outline(y0), bounds: Bounds2::from_points(outline(y0)), level: Some("L1".into()), label: "905".into() };
+        let rooms = vec![room(23.0)];
+        assert_eq!(window_room(&rooms, Some("L1"), &b, 12.0).map(|r| r.label.as_str()), Some("905"));
+        // Beyond a few feet: none (the window is no room's).
+        let far = vec![room(48.0)];
+        assert!(window_room(&far, Some("L1"), &b, 12.0).is_none());
+        // Another level's room: none.
+        assert!(window_room(&rooms, Some("L2"), &b, 12.0).is_none());
+    }
 
     fn piece(wall: u64, a: (f64, f64), b: (f64, f64), z: (f64, f64)) -> HostPiece {
         HostPiece { wall: Handle(wall), level: Some("L1".into()), a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), half: 3.0, z0: z.0, z1: z.1 }

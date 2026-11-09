@@ -51,10 +51,18 @@ fn office_north_slot(tags: &[(f64, f64, &str)], rows: Value) -> (Session, Value)
     build(tags, &[], rows, North::Slot)
 }
 
+/// [`office`], with a 6" piece of wall 4' long standing 1' inside its north wall at x 4–8'.
+fn office_north_sleeve(tags: &[(f64, f64, &str)], rows: Value) -> (Session, Value) {
+    build(tags, &[], rows, North::ThroughWithSleeve)
+}
+
 /// How the office's north wall is drawn.
 #[derive(Clone, Copy, PartialEq)]
 enum North {
     Through,
+    /// Drawn through, a 6" piece of wall 4' long standing 1' inside it at x 4–8' (a unit's
+    /// sleeve, a furred stretch).
+    ThroughWithSleeve,
     Pieces,
     Slot,
 }
@@ -104,6 +112,11 @@ fn build(tags: &[(f64, f64, &str)], symbols: &[(f64, f64, &str)], rows: Value, n
         }
     } else {
         for (a, b) in [((23.5, 0.5), (23.5, 11.5)), ((23.5, 11.5), (0.5, 11.5)), ((0.5, 11.5), (0.5, 0.5))] {
+            line(&mut d, a, b);
+        }
+    }
+    if north == North::ThroughWithSleeve {
+        for (a, b) in [((4.0, 10.5), (8.0, 10.5)), ((8.0, 10.0), (4.0, 10.0)), ((4.0, 10.0), (4.0, 10.5)), ((8.0, 10.0), (8.0, 10.5))] {
             line(&mut d, a, b);
         }
     }
@@ -257,4 +270,17 @@ fn a_tag_at_a_slot_between_two_pieces_of_its_wall_is_its_window_across_the_slot(
     let row = &built["window_tags"][0];
     assert_eq!(row["no_host_count"], json!(0), "{row}");
     assert_eq!(row["by_basis"], json!({"tag": 1, "tag_on_wall": 1}), "{row}");
+}
+
+#[test]
+fn a_window_behind_a_piece_of_wall_inside_lights_the_room_past_it() {
+    // W1 by the north wall drawn through, a piece of wall standing 1' inside it there: the room's
+    // outline keeps off the wall at the window, the window still lights that room (Q6311: a
+    // print's windows by units' sleeves had no room).
+    let (mut s, built) = office_north_sleeve(&[(11.0, -1.5, "W1"), (6.0, 13.0, "W1")], json!([]));
+    let ws = windows(&mut s);
+    assert_eq!(ws.len(), 2, "{built}");
+    for (_, p) in &ws {
+        assert!(value(p, "room").as_str().is_some_and(|r| r.contains("905")), "the room it lights: {p}");
+    }
 }
