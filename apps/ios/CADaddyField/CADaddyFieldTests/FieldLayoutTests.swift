@@ -116,6 +116,20 @@ final class FieldLayoutTests: XCTestCase {
         XCTAssertTrue(l.free.insetBy(dx: -1, dy: -1).contains(after))
     }
 
+    func testTurningNeverFramesSmallerAndStaysInside() {
+        let screen = CGSize(width: 402, height: 874)
+        let l = ChromeLayout.make(.init(screen: screen, safeTop: 62, safeBottom: 34, headerHeight: 116, bottomHeight: 154, railItems: 6))
+        for size in [SIMD3<Float>(120, 4, 14), SIMD3(56, 4, 18), SIMD3(30, 4, 30)] {
+            let pts = SceneFraming.corners(min: .zero, max: size)
+            let fixed = SceneFraming.fit(pts, yaw: -2.25, pitch: 0.74, fovYDegrees: fov, viewport: screen, free: l.free)
+            let turned = SceneFraming.fitTurning(pts, yaw: -2.25, spread: 0.6, pitch: 0.74, fovYDegrees: fov, viewport: screen, free: l.free)
+            XCTAssertLessThanOrEqual(turned.distance, fixed.distance + 1e-3, "\(size)")
+            XCTAssertLessThanOrEqual(abs(turned.yaw + 2.25), 0.6 + 1e-4)
+            let sb = try! XCTUnwrap(SceneFraming.screenBounds(pts, pose: turned, fovYDegrees: fov, viewport: screen))
+            XCTAssertTrue(l.free.insetBy(dx: -1, dy: -1).contains(sb), "\(size)")
+        }
+    }
+
     func testProjectionBehindTheCameraIsNil() {
         let pose = OrbitPose(target: .zero, yaw: 0, pitch: 0, distance: 10)
         XCTAssertNil(SceneFraming.project(SIMD3(0, 0, 20), pose: pose, fovYDegrees: fov, viewport: CGSize(width: 400, height: 800)))

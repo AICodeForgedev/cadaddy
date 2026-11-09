@@ -124,11 +124,12 @@ public struct ChromeLayout: Equatable, Sendable {
             }
         }
 
-        // Free area for the scene.
+        // Free area for the scene. With a rail: left of the right column, down to the bottom stack. Without one:
+        // whichever is larger of the full width above the layers button, or left of its column down to the stack.
         let freeTop = headerBottom + g
-        let freeRight = rail != nil ? right - t - g : right
-        let freeBottom = rail != nil ? bottom.minY - g : layers.minY - g
-        let free = CGRect(x: left, y: freeTop, width: max(freeRight - left, 1), height: max(freeBottom - freeTop, 1))
+        let beside = CGRect(x: left, y: freeTop, width: max(right - t - g - left, 1), height: max(bottom.minY - g - freeTop, 1))
+        let above = CGRect(x: left, y: freeTop, width: max(right - left, 1), height: max(layers.minY - g - freeTop, 1))
+        let free = rail != nil || beside.width * beside.height >= above.width * above.height ? beside : above
         return ChromeLayout(header: header, close: close, rail: rail, railMode: mode, layers: layers, bottom: bottom, free: free)
     }
 
@@ -207,6 +208,26 @@ public enum SceneFraming {
         var out: [SIMD3<Float>] = []
         for x in [a.x, b.x] { for y in [a.y, b.y] { for z in [a.z, b.z] { out.append(SIMD3(x, y, z)) } } }
         return out
+    }
+
+    /// Like `fit`, also turning the camera up to `spread` radians either way from `yaw` (in `steps` steps) and
+    /// keeping the turn that shows the subject largest. A mild cost per radian keeps the design angle unless
+    /// another angle is clearly better (a long thin building seen more end-on fills a portrait screen).
+    public static func fitTurning(_ pts: [SIMD3<Float>], yaw: Float, spread: Float, steps: Int = 4, pitch: Float, fovYDegrees: Float,
+                                  viewport: CGSize, free: CGRect, margin: CGFloat = 12, costPerRadian: Float = 0.25) -> OrbitPose {
+        var best = fit(pts, yaw: yaw, pitch: pitch, fovYDegrees: fovYDegrees, viewport: viewport, free: free, margin: margin)
+        var bestScore = best.distance
+        let n = max(steps, 0)
+        guard n > 0, spread > 0 else { return best }
+        for k in 1...n {
+            for sign in [Float(-1), 1] {
+                let dy = sign * spread * Float(k) / Float(n)
+                let p = fit(pts, yaw: yaw + dy, pitch: pitch, fovYDegrees: fovYDegrees, viewport: viewport, free: free, margin: margin)
+                let score = p.distance * (1 + costPerRadian * abs(dy))
+                if score < bestScore { best = p; bestScore = score }
+            }
+        }
+        return best
     }
 
     /// The pose at (`yaw`, `pitch`) whose view puts every point inside `free` (inset by `margin`), as large as

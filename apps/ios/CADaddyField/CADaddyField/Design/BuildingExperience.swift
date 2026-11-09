@@ -31,7 +31,13 @@ final class BuildingExperience: ObservableObject {
     @Published var fps: Double = 0
     @Published var search = ""
     @Published var hiddenGroups: Set<BuildingSystem> = []
-    @Published var showLayers = false
+    @Published var showLayers = false { didSet { if !showLayers { overlay = nil } } }
+    /// Where the chrome is on this screen (measured by the view, laid out by ChromeLayout).
+    @Published private(set) var chrome: ChromeLayout?
+    /// A floating panel over the scene (the layers panel), kept clear of labels.
+    var overlay: CGRect?
+    /// The room sheet pulled down to its handle and primary button.
+    @Published var sheetCollapsed = false
 
     private var store = LayerStore.shared
     private var subs: Set<AnyCancellable> = []
@@ -88,6 +94,13 @@ final class BuildingExperience: ObservableObject {
     }
 
     func detach() { renderer.stop() }
+
+    /// The view measured its chrome: frame the scene into what is left.
+    func setChrome(_ c: ChromeLayout) {
+        guard c != chrome else { return }
+        chrome = c
+        renderer.chromeChanged()
+    }
 
     func tick(_ dt: Double) {
         if let c = revealClock {
@@ -147,6 +160,7 @@ final class BuildingExperience: ObservableObject {
         if !keepFocus { clearFocus() }
         if case .building = s {} else { liftFocus = nil; railDetent = nil }
         scope = s
+        if case .room = s {} else { sheetCollapsed = false }
         selected = keepFocus ? selected : nil
         search = ""
         renderer.apply(scope: s, liftFocus: liftFocus)
@@ -274,7 +288,8 @@ final class BuildingExperience: ObservableObject {
             return rooms.isEmpty ? "\(n) objects" : "\(rooms.count) rooms · \(n.formatted()) objects"
         case let .room(num):
             guard let r = building.room(num) else { return "" }
-            let w = Units.feetInches(Double(r.max.x - r.min.x)), d = Units.feetInches(Double(r.max.y - r.min.y))
+            // Whole inches: the stat line is one quiet line, the card carries the exact sizes.
+            let w = Units.feetInches(Double(r.max.x - r.min.x), denominator: 1), d = Units.feetInches(Double(r.max.y - r.min.y), denominator: 1)
             return "\(r.name) · \(w) × \(d) · \(building.elements(in: num).count) objects"
         }
     }
