@@ -3174,9 +3174,14 @@ fn device_census(
                             kind: kind_of_tag(&t),
                             ..super::readers::ReadDevice::default()
                         };
-                        if dv.kind.is_empty() && super::readers::device_kind(&t) == "device" {
-                            let own = legend.rows.get(&t).map(|row| (sheet.as_str(), row));
-                            let other = shared_rows.get(&t).map(|(sh, row)| (sh.as_str(), row));
+                        let own = legend.rows.get(&t).map(|row| (sheet.as_str(), row));
+                        let other = shared_rows.get(&t).map(|(sh, row)| (sh.as_str(), row));
+                        // The set's own luminaire schedule speaks before the marks every set uses:
+                        // on its electrical plans a mark it lists (`S`, a strip light type) is
+                        // that luminaire, not the switch the mark usually is.
+                        let scheduled =
+                            electrical(&sheet) && own.or(other).is_some_and(|(_, r)| super::lightsched::is_luminaire_title(&r.table, true));
+                        if dv.kind.is_empty() && (scheduled || super::readers::device_kind(&t) == "device") {
                             resolve_mark(&mut dv, own.or(other), plumbing, sheet_texts, *tag_at);
                         }
                         let k = if dv.kind.is_empty() { super::readers::device_kind(&t).to_string() } else { dv.kind.clone() };
@@ -28401,6 +28406,8 @@ mod tests {
         let mut marks: Vec<(&str, f64, f64)> = (0..4).map(|i| ("A", 100.0 + 40.0 * f64::from(i), 300.0)).collect();
         marks.extend((0..3).map(|i| ("B", 100.0 + 40.0 * f64::from(i), 200.0)));
         marks.extend((0..4).map(|i| ("ZZ", 100.0 + 40.0 * f64::from(i), 100.0))); // listed nowhere
+        // A mark every set uses for a switch, scheduled here as a strip light.
+        marks.extend((0..2).map(|i| ("S", 300.0 + 40.0 * f64::from(i), 400.0)));
         // The plan's own symbol legend lists its junction box and time clock only.
         let legend = [
             ("ELECTRICAL PLAN", 500.0, 900.0, 8.0),
@@ -28451,8 +28458,14 @@ mod tests {
         assert!(legends.iter().all(|(n, l)| n == "X-602" && l.regions.is_empty()), "another page's extents: {legends:?}");
         let census = device_census(&s, &job, &[], &legends);
         let of = |tag: &str| census.placed.iter().filter(|d| d.tag == tag).collect::<Vec<_>>();
-        assert_eq!((of("A").len(), of("B").len()), (4, 3), "{:?}", census.placed);
-        assert!(of("A").iter().chain(of("B").iter()).all(|d| d.kind == "luminaire" && d.ifc_class == "IfcLightFixture"), "{:?}", census.placed);
+        assert!(before.placed.iter().filter(|d| d.tag == "S").all(|d| d.kind != "luminaire"), "S: a switch by its mark alone");
+        assert_eq!((of("A").len(), of("B").len(), of("S").len()), (4, 3, 2), "{:?}", census.placed);
+        assert!(
+            of("A").iter().chain(of("B").iter()).chain(of("S").iter()).all(|d| d.kind == "luminaire" && d.ifc_class == "IfcLightFixture"),
+            "{:?}",
+            census.placed
+        );
+        assert!(of("S").iter().all(|d| d.kind_source.starts_with("X-602 LIGHTING FIXTURE SCHEDULE: S LINEAR STRIP")), "{:?}", of("S"));
         let a = of("A");
         assert!(a.first().is_some_and(|d| d.kind_source.starts_with("X-602 LIGHTING FIXTURE SCHEDULE: A RECESSED DOWNLIGHT")), "{a:?}");
         assert_eq!(census.unlisted.keys().collect::<Vec<_>>(), ["ZZ"], "the mark listed nowhere is still a question");
