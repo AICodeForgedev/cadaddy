@@ -20,6 +20,12 @@
       "min_span_ft": 2.0
     },
     {
+      "id": "A-ROOF-SLOPED-DECK",
+      "trade": "architectural",
+      "fills": "a sloped roof's deck (or an unframed roof's slab): one thickness normal to its slope, its underside parallel to its top, on the framing's top chords, which follow the slope along and across the members; an unframed sloped roof whose underside rises over the walls under it has the outside walls carried up to it",
+      "basis": "trade practice: a wood or metal roof deck is a sheet of one thickness laid on the framing, the sloped joists or truss top chords setting the slope; only a flat structure with tapered fill or tapered insulation is a wedge, and that is its own layer; the outside walls close the space under a sloped roof's high side"
+    },
+    {
       "id": "E-RCP-LIGHT",
       "trade": "electrical",
       "fills": "a ceiling luminaire's place where the electrical plan's symbol and the reflected ceiling plan's light differ (numbers: reach_ft, the farthest a light is moved; connect_reach_ft, a light this close is at its spot)",
