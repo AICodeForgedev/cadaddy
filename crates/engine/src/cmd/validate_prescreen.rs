@@ -974,6 +974,9 @@ pub(crate) struct Scope<'a> {
     pub equip_docs: Option<&'a super::validate_equip::EquipDocs>,
     /// The fixture schedule and lighting submittals, re-read ([`super::validate_fixtures::read_docs`]).
     pub fixture_docs: Option<&'a super::validate_fixtures::FixtureDocs>,
+    /// The panel schedules read again and the wire-length tables
+    /// ([`super::validate_conduit::ScheduleDocs::read`]), for E-DERATE and E-VDROP.
+    pub conduit_docs: Option<&'a super::validate_conduit::ScheduleDocs>,
 }
 
 /// Run the three checks over a scope.
@@ -1478,8 +1481,17 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             })
             .collect();
         if lighting_on {
-            let inp =
-                vl::Input { d: sc.d, sp: sc.sp, frame: sc.frame, prints: sc.prints, kinds: &kinds, rules: sc.rules, areas: sc.areas, only: sc.only };
+            let inp = vl::Input {
+                d: sc.d,
+                sp: sc.sp,
+                frame: sc.frame,
+                prints: sc.prints,
+                kinds: &kinds,
+                rules: sc.rules,
+                areas: sc.areas,
+                only: sc.only,
+                fixture_docs: sc.fixture_docs,
+            };
             lighting = Some(vl::screen(&inp, &lits));
         }
         // The products (G-PRODUCT, G-PRODUCT-CODE).
@@ -2036,7 +2048,15 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     if sc.conduit {
         use super::validate_conduit as vc;
         let which = vc::On::of(|id| on(id));
-        let cx = vc::Ctx { d: sc.d, sp: sc.sp, frame: sc.frame, areas: sc.areas, whole_levels: sc.whole_levels, takeoff: sc.conduit_takeoff };
+        let cx = vc::Ctx {
+            d: sc.d,
+            sp: sc.sp,
+            frame: sc.frame,
+            areas: sc.areas,
+            whole_levels: sc.whole_levels,
+            takeoff: sc.conduit_takeoff,
+            docs: sc.conduit_docs.unwrap_or(&vc::NO_DOCS),
+        };
         let got = vc::check(&cx, which);
         for (rank, rule, verdict, f) in got.findings {
             tally(rule, verdict);
@@ -2306,7 +2326,12 @@ pub(crate) fn screen_session(s: &mut Session, p: &Value, only: &[String]) -> Res
     let conduit_takeoff = super::validate_conduit::read_takeoff(s, &rules, only);
     let value = super::validate_value::read(s, p, &rules, only).map_err(|e| bad(CMD, e))?;
     let equip_docs = if super::validate_equip::wanted(&rules, only) { super::validate_equip::read_docs(s, &sp) } else { None };
-    let fixture_docs = super::validate_fixtures::wanted(&rules, only).then(|| super::validate_fixtures::read_docs(s, d, &sp));
+    let wants = |id: &str| rules.iter().any(|r| r.enabled && r.rule.id == id) && (only.is_empty() || only.iter().any(|o| o.eq_ignore_ascii_case(id)));
+    // E-LUM-TYPE reads the schedule Validate re-reads too (beside the build's and the prints').
+    let fixture_docs = (super::validate_fixtures::wanted(&rules, only) || wants(super::validate_lighting::TYPE))
+        .then(|| super::validate_fixtures::read_docs(s, d, &sp));
+    let conduit_docs = (wants(super::validate_conduit::DERATE) || wants(super::validate_conduit::VDROP))
+        .then(|| super::validate_conduit::ScheduleDocs::read(s, d, &sp));
     let sc = Scope {
         d,
         sp: &sp,
@@ -2323,6 +2348,7 @@ pub(crate) fn screen_session(s: &mut Session, p: &Value, only: &[String]) -> Res
         value: value.as_ref(),
         equip_docs: equip_docs.as_ref(),
         fixture_docs: fixture_docs.as_ref(),
+        conduit_docs: conduit_docs.as_ref(),
     };
     let out = screen(&sc);
     Ok(Screen { doc, sp, model, key, areas, out })
@@ -2657,6 +2683,7 @@ mod tests {
             value: None,
             equip_docs: None,
             fixture_docs: None,
+            conduit_docs: None,
             rules: &rules,
             areas: &areas,
             whole_levels: true,
@@ -2737,6 +2764,7 @@ mod tests {
             value: None,
             equip_docs: None,
             fixture_docs: None,
+            conduit_docs: None,
             rules: &rules,
             areas: &areas,
             whole_levels: false,

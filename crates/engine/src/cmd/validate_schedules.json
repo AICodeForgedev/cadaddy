@@ -1,0 +1,23 @@
+{
+  "about": "What Validate's conduit rules (E-DERATE, E-VDROP) read off the documents' schedules (Q6338): the wire-length table a set prints to size its branch conductors by length (its title words and its column headers' words, any layout: sizes across with breaker and voltage rows, sizes down with length or voltage columns, or one length range and one size per row), and what a panel schedule's breaker cell must read to be its amps. Common practice on US electrical drawings. Add a project's words here, never in code.",
+  "source": "validate_schedules.json (Validate's schedule reading data)",
+  "length_table": {
+    "title_words": ["VOLTAGE DROP", "WIRE LENGTH", "WIRE SIZING", "WIRE SIZE", "CONDUCTOR SIZ", "CONDUCTOR LENGTH", "CIRCUIT LENGTH", "HOMERUN LENGTH", "HOME RUN LENGTH", "MAXIMUM LENGTH", "MAXIMUM CIRCUIT LENGTH", "BRANCH CIRCUIT LENGTH", "LENGTH OF RUN"],
+    "title_kinds": ["SCHEDULE", "TABLE", "CHART", "GUIDE"],
+    "not_titles": ["SEE ", "REFER ", "PER ", "AS SHOWN ON"],
+    "length_words": ["LENGTH", "DISTANCE", "FEET", "FT", "MAXIMUM", "MAX", "RUN"],
+    "amps_words": ["AMP", "AMPS", "AMPERE", "BREAKER", "TRIP", "CB", "OCPD", "RATING"],
+    "volts_words": ["VOLT", "VOLTS", "VOLTAGE", "SYSTEM"],
+    "size_words": ["WIRE", "CONDUCTOR", "CONDUCTORS", "SIZE", "AWG", "GAUGE", "CU"],
+    "max_title_chars": 100,
+    "window_h": [150.0, 300.0],
+    "source": "the drawing's own branch-circuit wire-length table: where a set prints one it decides the conductor for a length, ahead of the generic NEC 210.19(A) Informational Note No. 4 calculation"
+  },
+  "breaker": {
+    "standard_a": [15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500, 600, 700, 800, 1000, 1200, 1600, 2000, 2500, 3000, 4000, 5000, 6000],
+    "standard_source": "NEC 240.6(A) standard ampere ratings of fuses and inverse time circuit breakers (1 A to 10 A fuses aside)",
+    "bus_words": ["BUS", "MAIN", "MAINS", "MCB", "MLO", "AMPS", "RATING"],
+    "over_wire_factor": 4.0,
+    "over_wire_source": "NEC 240.4 and 430.52: a breaker protects its conductor; even a motor circuit's inverse time breaker is at most 250% of its full-load current (up to 400% for starting), so a breaker more than 4 times its own row's conductor ampacity (75 °C column) is no reading of that breaker"
+  }
+}
