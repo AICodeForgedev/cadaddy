@@ -482,6 +482,15 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         }))
         .collect();
     let mut out = json!({"lines": lines, "totals": totals, "levels": levels, "group_by": group_by, "revision": revision});
+    // Each scheduled luminaire type's count in the model beside the schedule's quantity
+    // (fix-lum-schedule-type-column-wrong): both shown, a difference a review item.
+    if let Ok((sp, _)) = crate::cmd::bspec::current(s, CMD) {
+        let read = crate::cmd::guided::load_job(s).ok().flatten().map(|j| crate::cmd::guided::read_luminaires(&j)).unwrap_or_default();
+        let q = crate::cmd::lighting::schedule_quantities(s.doc()?, &sp.mep.fixture_schedule, &read);
+        if !q.is_empty() {
+            out["luminaire_schedule_quantities"] = Value::Array(q);
+        }
+    }
     // The work on no one level of the model, counted (Q6271).
     let unassigned: Vec<&Value> = lines.iter().filter(|l| l["level"] == UNASSIGNED_LEVEL).collect();
     if !unassigned.is_empty() {

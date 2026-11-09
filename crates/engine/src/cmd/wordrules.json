@@ -2736,6 +2736,55 @@
     "FIXTURE"
    ]
   },
+  "schedules.not_mark_heading_words": {
+   "source": "format vocabulary of luminaire schedules: words of a column heading that name another field than the fixture's mark, so a TYPE under them is not the mark column (a lamp's TYPE under the LAMPS group heading, a MOUNTING TYPE, a VOLTAGE) (fix-lum-schedule-type-column-wrong)",
+   "words": [
+    "LAMP",
+    "LAMPS",
+    "SOURCE",
+    "DRIVER",
+    "BALLAST",
+    "LENS",
+    "OPTICS",
+    "DISTRIBUTION",
+    "MOUNTING",
+    "MOUNT",
+    "INSTALLATION",
+    "VOLTAGE",
+    "VOLTS",
+    "VOLT",
+    "DIMMING",
+    "CONTROL",
+    "CONTROLS",
+    "COLOR",
+    "CCT",
+    "TRIM",
+    "FINISH",
+    "HOUSING",
+    "BATTERY"
+   ]
+  },
+  "schedules.voltage_words": {
+   "source": "electrical trade vocabulary: the voltage designations a luminaire schedule prints in its voltage column (multi-volt and universal drivers), never a type mark (fix-lum-schedule-type-column-wrong)",
+   "words": [
+    "MVOLT",
+    "UNV",
+    "UNIV",
+    "UNIVERSAL",
+    "HVOLT",
+    "XVOLT"
+   ]
+  },
+  "schedules.voltage_units": {
+   "source": "electrical trade vocabulary: the units a voltage is printed with (277V, 24VDC, 120VAC), so a number with one of them is a voltage, never a type mark (fix-lum-schedule-type-column-wrong)",
+   "words": [
+    "V",
+    "VAC",
+    "VDC",
+    "VOLT",
+    "VOLTS"
+   ]
+  },
   "schedules.variant_lead_words": {
    "source": "grammar of schedule notes: the words that lead a list of fixture marks (`FIXTURES AE, BE AND CE ARE ...`) (fix-lum-fixture-schedule-not-read)",
    "words": [
