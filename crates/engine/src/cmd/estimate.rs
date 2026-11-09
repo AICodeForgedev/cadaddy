@@ -248,10 +248,13 @@ fn find_family_match(pool: &[Value], item: &str, unit: &str, category: &str, sys
         &["gas", "vent", "cw", "hw", "dcw", "dhw", "supply", "return", "exhaust", "sanitary", "storm", "fire", "refrigerant", "condensate"];
     const MATERIALS: &[&str] =
         &["copper", "pvc", "steel", "galvanized", "aluminum", "cast", "iron", "fiberglass", "stainless", "brass", "emt", "imc", "rigid"];
+    // Q6371: the building elements a line or row is of; a window's area is no wall's.
+    const ELEMENTS: &[&str] = &["wall", "door", "window", "ceiling", "floor", "roof", "stair"];
     let have = price_words(&format!("{item} {category} {system}"));
     let mep = matches!(category, "duct" | "pipe" | "conduit" | "tray" | "cable");
     let line_sys: BTreeSet<&str> = SYSTEMS.iter().copied().filter(|s| have.contains(*s)).collect();
     let line_mat: BTreeSet<&str> = MATERIALS.iter().copied().filter(|m| have.contains(*m)).collect();
+    let line_el: BTreeSet<&str> = ELEMENTS.iter().copied().filter(|m| have.contains(*m)).collect();
     // For MEP lines, the item's own words exclude the system name and numbers.
     let sys_words = if mep { price_words(system) } else { BTreeSet::new() };
     let iw: BTreeSet<String> = price_words(item).into_iter().filter(|w| !sys_words.contains(w) && !w.chars().any(|c| c.is_ascii_digit())).collect();
@@ -288,6 +291,11 @@ fn find_family_match(pool: &[Value], item: &str, unit: &str, category: &str, sys
         }
         let row_mat: BTreeSet<&str> = MATERIALS.iter().copied().filter(|m| want.contains(*m)).collect();
         if !row_mat.is_empty() && !line_mat.is_empty() && row_mat != line_mat {
+            continue;
+        }
+        // Nor across building elements: a row of one element never prices another's line.
+        let row_el: BTreeSet<&str> = ELEMENTS.iter().copied().filter(|m| want.contains(*m)).collect();
+        if !row_el.is_empty() && !line_el.is_empty() && row_el.is_disjoint(&line_el) {
             continue;
         }
         let score = score + covered;
@@ -1636,6 +1644,14 @@ fn run_bid_summary(s: &mut Session, _p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_family_match_never_crosses_building_elements() {
+        let pool = vec![json!({"item": "Wall area untyped", "unit": "sq ft"}), json!({"item": "Window", "unit": "each"})];
+        assert_eq!(find_family_match(&pool, "Window area", "sq ft", "windows", ""), None, "a window's area is no wall's");
+        assert_eq!(find_family_match(&pool, "Wall area", "sq ft", "walls", ""), Some(0));
+        assert_eq!(find_family_match(&pool, "Window unit", "each", "windows", ""), Some(1));
+    }
 
     /// An invented baseline in the open layout.
     fn baseline() -> std::path::PathBuf {

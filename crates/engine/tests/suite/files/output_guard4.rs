@@ -34,7 +34,7 @@ fn text(p: &Path) -> String {
 
 /// A made-up two-room plan (6" walls, a door, room tags, two tagged receptacle blocks), its
 /// model built, a BCF topic, a construction sequence and a render, saved as `d/name`.
-fn built(d: &Path, name: &str) -> (Session, String) {
+pub(crate) fn built(d: &Path, name: &str) -> (Session, String) {
     hooks();
     let mut s = Session::new();
     layer(&mut s, "A-WALL");
@@ -165,11 +165,11 @@ fn a_workbook_or_archive_is_never_written_under_another_kind_of_name() {
 }
 
 /// Parameter names that hold the file an output command writes.
-const OUTPUT_KEYS: &[&str] = &["path", "file", "output", "out", "png", "csv", "xlsx", "pdf", "dest", "target", "to", "report"];
+pub(crate) const OUTPUT_KEYS: &[&str] = &["path", "file", "output", "out", "png", "csv", "xlsx", "pdf", "dest", "target", "to", "report"];
 
 /// Commands that write a DRAWING to the path they are given (saving it is their job, the drawing's
 /// own path included), or that don't write their path at all but read it or act on the drawing.
-const NOT_OUTPUT_WRITERS: &[&str] = &[
+pub(crate) const NOT_OUTPUT_WRITERS: &[&str] = &[
     // they save the drawing itself: the open drawing's own path is a plain save
     "save",
     "saveas",
@@ -220,7 +220,7 @@ fn no_command_writes_over_the_open_drawing() {
 }
 
 /// The kinds of file the output commands write: each probe names an existing file of that kind.
-const DATA_EXTS: &[&str] =
+pub(crate) const DATA_EXTS: &[&str] =
     &["csv", "xlsx", "txt", "tsv", "json", "xml", "png", "jpg", "pdf", "svg", "bcf", "bcfzip", "zip", "ifc", "html", "md", "dwf", "dwfx"];
 
 /// Drawing and package writers whose plain call replaces the file it names, as a save does (the
