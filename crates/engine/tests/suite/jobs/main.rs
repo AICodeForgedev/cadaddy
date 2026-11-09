@@ -78,6 +78,7 @@ mod spectag;
 mod stairs;
 mod swing_joined;
 mod tagidentity;
+mod takeoff_drywall_pieces;
 mod tradeatoms;
 mod typicalfloors;
 mod ugplan;

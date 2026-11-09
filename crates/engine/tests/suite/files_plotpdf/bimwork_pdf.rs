@@ -143,9 +143,20 @@ fn takeoff_and_estimate_on_a_model_built_from_a_print() {
     let with_elements = lines.iter().filter(|l| l["element_count"].as_u64().unwrap_or(0) > 0).count();
     assert!(with_elements >= 8, "{}", t["csv"]);
     assert!(t["levels"].as_array().unwrap().len() >= 2, "{}", t["levels"]);
-    // The board line the BOM gives for the whole job points at the walls (both floors' 10).
-    let board = lines.iter().find(|l| l["category"] == "drywall").expect("a drywall line");
-    assert!(board["element_count"].as_u64().unwrap() >= 20, "{board}");
+    // Each floor's board is its own (Q6370: the model's pieces, never one line for the whole
+    // job), and its lines point at that floor's elements.
+    for lv in ["Level 3", "Level 4"] {
+        let boards: Vec<&Value> = lines.iter().filter(|l| l["category"] == "drywall" && l["unit"] == "sq ft" && l["level"] == lv).collect();
+        assert!(!boards.is_empty(), "{lv}: {}", t["csv"]);
+        for b in boards {
+            let hs = b["elements"].as_array().unwrap();
+            assert!(!hs.is_empty(), "{b}");
+            for h in hs {
+                let e = s.doc().unwrap().entity(Handle::parse_hex(h.as_str().unwrap()).unwrap()).unwrap();
+                assert!(e.common.xdata.iter().any(|t| t.code == 1000 && t.value == lv), "{h} not on {lv}");
+            }
+        }
+    }
 
     // Clash between trades that are not in the model: ran, nothing found.
     let c = s.execute("bim.clash", &json!({"a": "electrical", "b": "architecture"})).unwrap();
