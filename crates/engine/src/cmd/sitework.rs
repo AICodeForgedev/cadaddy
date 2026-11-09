@@ -133,6 +133,10 @@ pub(crate) struct Rules {
     pub action_words: Vec<String>,
     pub pole: Pole,
     pub ground_words: Vec<String>,
+    pub box_marks: Vec<String>,
+    pub site_light_words: Vec<String>,
+    pub site_type_words: Vec<String>,
+    pub site_type_source: String,
     pub trench_item: String,
     pub parallel_spacing_in: f64,
     pub parallel_source: String,
@@ -244,17 +248,19 @@ pub(crate) struct Seg {
 /// A luminaire its type tag marks: where its symbol is (sheet units).
 #[derive(Clone, Debug)]
 pub(crate) struct Light {
+    /// Its type mark (empty: a symbol only its circuit tags).
     pub mark: String,
     pub at: [f64; 2],
     pub bbox: [f64; 4],
     pub symbol: Option<Handle>,
+    /// The circuit tag printed by it in place of a type mark (`LP-7`).
+    pub circuit: Option<String>,
 }
 
 /// A panel circuit tag (`LP-7`) on the sheet.
 #[derive(Clone, Debug)]
 pub(crate) struct CircuitTag {
     pub label: String,
-    pub panel: String,
     pub bbox: [f64; 4],
 }
 
@@ -267,6 +273,8 @@ pub(crate) struct Equip {
     pub symbol: Handle,
     pub utility: bool,
     pub height_in: f64,
+    /// The circuit tags printed by it (`LP-11`).
+    pub circuits: Vec<String>,
 }
 
 /// A conduit note and where its lines are.
@@ -431,6 +439,67 @@ fn block(texts: &[&TextItem], i: usize) -> Vec<usize> {
     out
 }
 
+/// The symbol by `near`: the nearest unused shape no larger than `max` within `reach`, with
+/// its other pieces on its layer (a pole's circle by its head's box) within `join`: its box and
+/// its pieces.
+fn cluster_near(
+    shapes: &[Shape],
+    used: &BTreeSet<Handle>,
+    near: &[f64; 4],
+    reach: f64,
+    join: f64,
+    max: f64,
+    skip: &dyn Fn(&Shape) -> bool,
+) -> Option<([f64; 4], Vec<Handle>)> {
+    let s = shapes
+        .iter()
+        .filter(|s| s.size() <= max && !skip(s) && !used.contains(&s.handle))
+        .map(|s| (s, box_gap(near, &s.bbox())))
+        .filter(|(_, g)| *g <= reach)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(s, _)| s)?;
+    let mut bb = s.bbox();
+    let mut members = vec![s.handle];
+    for _ in 0..12 {
+        let more = shapes.iter().find(|o| {
+            !members.contains(&o.handle) && o.layer == s.layer && o.size() <= max && !used.contains(&o.handle) && box_gap(&bb, &o.bbox()) <= join
+        });
+        match more {
+            Some(o) => {
+                bb = union(bb, o.bbox());
+                members.push(o.handle);
+            }
+            None => break,
+        }
+    }
+    Some((bb, members))
+}
+
+/// A label's lines: `i`'s, the lines over it that run into it (none ending a sentence or asking
+/// for work), and those under it while it runs on (a line ending `.` ends it).
+fn label_lines(texts: &[&TextItem], i: usize, action: &[String]) -> Vec<usize> {
+    let all = block(texts, i);
+    let at = all.iter().position(|j| *j == i).unwrap_or(0);
+    let text = |j: usize| texts.get(j).map(|t| t.value.trim().to_ascii_uppercase()).unwrap_or_default();
+    let mut start = at;
+    while let Some(k) = start.checked_sub(1) {
+        let up = all.get(k).map(|j| text(*j)).unwrap_or_default();
+        if up.ends_with('.') || up.ends_with(':') || has_any(&up, action) {
+            break;
+        }
+        start = k;
+    }
+    let mut end = at;
+    while !all.get(end).map(|j| text(*j)).unwrap_or_default().ends_with('.') {
+        let Some(next) = all.get(end + 1).map(|j| text(*j)) else { break };
+        if has_any(&next, action) {
+            break;
+        }
+        end += 1;
+    }
+    all.get(start..=end).map(<[usize]>::to_vec).unwrap_or_else(|| vec![i])
+}
+
 fn in_area(area: &[f64; 4], p: [f64; 2]) -> bool {
     p[0] >= area[0].min(area[2]) && p[0] <= area[0].max(area[2]) && p[1] >= area[1].min(area[3]) && p[1] <= area[1].max(area[3])
 }
@@ -524,6 +593,7 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
     let big = |s: &Shape| out.outlines.iter().any(|(o, _)| o.len() == s.pts.len() && o.first() == s.pts.first());
     // The luminaires: each type tag the fixture schedule lists, at the symbol by it.
     let symbol_max = r.symbol_max_ft * upf;
+    let (reach, join) = (r.symbol_reach_h * h, r.symbol_join_h * h);
     let mut used: BTreeSet<Handle> = BTreeSet::new();
     for t in &texts {
         if out.lights.len() >= MAX_ITEMS {
@@ -534,61 +604,52 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
             continue;
         }
         let tb = text_box(t);
-        let seed = shapes
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.size() <= symbol_max && !big(s) && !used.contains(&s.handle))
-            .map(|(i, s)| (i, box_gap(&tb, &s.bbox())))
-            .filter(|(_, g)| *g <= r.symbol_reach_h * h)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        let light = match seed.and_then(|(i, _)| shapes.get(i)) {
-            Some(s) => {
-                // The symbol's other pieces (a pole's circle by its head's box), on its layer.
-                let mut bb = s.bbox();
-                let mut members = vec![s.handle];
-                for _ in 0..12 {
-                    let more = shapes.iter().find(|o| {
-                        !members.contains(&o.handle)
-                            && o.layer == s.layer
-                            && o.size() <= symbol_max
-                            && !used.contains(&o.handle)
-                            && box_gap(&bb, &o.bbox()) <= r.symbol_join_h * h
-                    });
-                    match more {
-                        Some(o) => {
-                            bb = union(bb, o.bbox());
-                            members.push(o.handle);
-                        }
-                        None => break,
-                    }
-                }
+        let light = match cluster_near(&shapes, &used, &tb, reach, join, symbol_max, &big) {
+            Some((bb, members)) => {
+                let symbol = members.first().copied();
                 used.extend(members);
-                Light { mark, at: centre(&bb), bbox: bb, symbol: Some(s.handle) }
+                Light { mark, at: centre(&bb), bbox: bb, symbol, circuit: None }
             }
-            None => Light { mark, at: centre(&tb), bbox: tb, symbol: None },
+            None => Light { mark, at: centre(&tb), bbox: tb, symbol: None, circuit: None },
         };
         out.lights.push(light);
     }
-    // The panel circuit tags.
+    // The boxes in grade their marks name (`J`, `PB`), at the symbol by each.
+    let pull_box = r.equipment.iter().find(|k| k.kind == "pull_box");
     for t in &texts {
-        if out.tags.len() >= MAX_ITEMS {
-            break;
+        let mark = t.value.trim().to_ascii_uppercase();
+        if out.equipment.len() >= MAX_ITEMS || !r.box_marks.iter().any(|m| *m == mark) {
+            continue;
         }
-        if let Some((label, panel, _)) = circuit_label(&t.value) {
-            out.tags.push(CircuitTag { label, panel, bbox: text_box(t) });
+        let tb = text_box(t);
+        if let Some((bb, members)) = cluster_near(&shapes, &used, &tb, reach, join, symbol_max, &big)
+            && let Some(symbol) = members.first().copied()
+        {
+            used.extend(members);
+            out.equipment.push(Equip {
+                kind: "pull_box".into(),
+                label: mark,
+                bbox: bb,
+                symbol,
+                utility: false,
+                height_in: pull_box.map_or(24.0, |k| k.height_in),
+                circuits: Vec::new(),
+            });
         }
     }
     // The site equipment its labels name, at the symbol by each.
+    let equip_words: BTreeSet<&str> = r.equipment.iter().flat_map(|k| k.words.iter().flat_map(|w| words_of(w))).collect();
     let mut labelled: BTreeSet<usize> = BTreeSet::new();
     for (i, t) in texts.iter().enumerate() {
         if out.equipment.len() >= MAX_ITEMS || labelled.contains(&i) {
             continue;
         }
+        // A line with a word of an equipment's name (`MONUMENT` over `SIGN`): its label read.
         let up = t.value.to_ascii_uppercase();
-        if !r.equipment.iter().any(|k| has_any(&up, &k.words)) {
+        if !words_of(&up).iter().any(|w| equip_words.contains(*w)) {
             continue;
         }
-        let lines = block(&texts, i);
+        let lines = label_lines(&texts, i, &r.action_words);
         labelled.extend(lines.iter().copied());
         let label = lines.iter().filter_map(|j| texts.get(*j)).map(|x| x.value.trim()).collect::<Vec<_>>().join(" ");
         let label_up = label.to_ascii_uppercase();
@@ -617,10 +678,45 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
                     symbol: s.handle,
                     utility: has_any(&label_up, &r.utility_words),
                     height_in: kind.height_in,
+                    circuits: Vec::new(),
                 });
             }
             None => out.unplaced_labels.push(label),
         }
+    }
+    // The panel circuit tags; one by a symbol no type mark names marks that symbol (a site plan
+    // tagging its pole lights by their circuit): what its schedule's load is says what it is.
+    for t in &texts {
+        if out.tags.len() >= MAX_ITEMS {
+            break;
+        }
+        let Some((label, _, _)) = circuit_label(&t.value) else { continue };
+        let tb = text_box(t);
+        let typed = out.lights.iter().any(|l| l.circuit.is_none() && box_gap(&tb, &l.bbox) <= reach);
+        // By a piece of site equipment its label names (a sign): that equipment's circuit.
+        let by_equipment = out
+            .equipment
+            .iter_mut()
+            .filter(|q| q.kind != "pull_box")
+            .map(|q| {
+                let g = box_gap(&tb, &q.bbox);
+                (q, g)
+            })
+            .filter(|(_, g)| *g <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((q, _)) = by_equipment {
+            if !q.circuits.contains(&label) && q.circuits.len() < 12 {
+                q.circuits.push(label.clone());
+            }
+        } else if !typed
+            && out.lights.len() < MAX_ITEMS
+            && let Some((bb, members)) = cluster_near(&shapes, &used, &tb, reach, join, symbol_max, &big)
+        {
+            let symbol = members.first().copied();
+            used.extend(members);
+            out.lights.push(Light { mark: String::new(), at: centre(&bb), bbox: bb, symbol, circuit: Some(label.clone()) });
+        }
+        out.tags.push(CircuitTag { label, bbox: tb });
     }
     // The conduit notes (the underground readers' callouts) and where their lines are.
     for c in super::ugplan::callouts(sheet, &owned).into_iter().filter(|c| c.trade == "E").take(MAX_ITEMS) {
@@ -1073,6 +1169,7 @@ pub(crate) struct Built {
     /// What the job is told (each a finding line).
     pub findings: Vec<String>,
     pub lights_on_building: usize,
+    pub equipment_on_building: usize,
     pub poles: usize,
     pub drawn_runs: usize,
     pub inferred_runs: usize,
@@ -1172,19 +1269,80 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         super::ugplan::slab_box(sp, slab).map(|b| vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]).unwrap_or_default()
     };
     let placed_by = if fit.fitted() { format!("{sheet} (site plan, {})", fit.why) } else { format!("{sheet} (site plan; {})", fit.why) };
-    // (1) The luminaires: each on its pole and base, unless on the building or a ground light.
+    // (1) The luminaires: each on its pole and base, unless on the building or a ground light. A
+    // symbol only its circuit tags is what that circuit's load is (a sign, a charger: equipment).
     let mut light_ids: Vec<Option<usize>> = vec![None; read.lights.len()];
+    let mut light_equip: Vec<Option<usize>> = vec![None; read.lights.len()];
     let mut light_top: Vec<f64> = vec![0.0; read.lights.len()];
+    // The fixture schedule's pole or site types: an untyped site light is the one there is.
+    let site_types: Vec<&cadaddy_walk3d::FixtureType> = sp
+        .mep
+        .fixture_schedule
+        .iter()
+        .filter(|x| has_any(&format!("{} {}", x.description, x.installation).to_ascii_uppercase(), &r.site_type_words))
+        .collect();
     for (i, l) in read.lights.iter().enumerate() {
         let m = to_model(l.at);
         if building.len() >= 3 && (inside(&building, m) || nearest_on(&building, m).is_some_and(|q| dist(q, m) <= upf)) {
             out.lights_on_building += 1;
             continue;
         }
-        if seq.lights.iter().any(|(p, k)| *k == l.mark && dist(*p, m) <= 3.0 * upf) {
+        let load = l.circuit.as_deref().and_then(|c| circuit_load(sp, c));
+        let load_up = load.as_ref().map(|(d, _)| d.to_ascii_uppercase()).unwrap_or_default();
+        let equipment_kind = (l.mark.is_empty() && !has_any(&load_up, &r.site_light_words))
+            .then(|| r.equipment.iter().find(|k| has_any(&load_up, &k.words)).map(|k| (k.kind.clone(), k.height_in)))
+            .flatten();
+        if let (Some((kind, height_in)), Some((desc, src))) = (equipment_kind, load.as_ref()) {
+            // Site equipment its circuit's load names, where its symbol is drawn.
+            seq.equipment += 1;
+            let half = ((l.bbox[2] - l.bbox[0]).max(l.bbox[3] - l.bbox[1]) / 2.0 * fit.reg.scale()).max(0.5 * upf);
+            let mut props = BTreeMap::new();
+            props.insert("NAME".into(), desc.clone());
+            props.insert("CIRCUIT".into(), l.circuit.clone().unwrap_or_default());
+            props.insert("PROVENANCE".into(), "drawn".into());
+            props.insert("TRADE".into(), "electrical".into());
+            props.insert("BASIS".into(), format!("drawn on {placed_by}: a symbol its circuit tags; what it is, the circuit's load on {src}"));
+            let mut sources = BTreeMap::new();
+            sources.insert(super::utilityxfmr::SITE_SOURCE.to_string(), "outside the building".to_string());
+            sources.insert(MARK.to_string(), sheet.to_string());
+            sources.insert("position".into(), format!("drawn: {placed_by}"));
+            sources.insert("height".into(), format!("rule: {}", r.equipment_source));
+            if let Some(x) = light_equip.get_mut(i) {
+                *x = Some(out.equipment.len());
+            }
+            out.equipment.push(MepEquipment {
+                tag: format!("SITE-{}-{}", kind.to_ascii_uppercase().replace('_', "-"), seq.equipment),
+                kind,
+                level: slab.to_string(),
+                min: [m[0] - half, m[1] - half],
+                max: [m[0] + half, m[1] + half],
+                height_ft: height_in / 12.0,
+                title: desc.clone(),
+                properties: props,
+                sources,
+                confidence: 0.6,
+                ..MepEquipment::default()
+            });
             continue;
         }
-        seq.lights.push((m, l.mark.clone()));
+        // An untyped site light: the schedule's one site type, else asked.
+        let (mark, mark_from) = if !l.mark.is_empty() {
+            (l.mark.clone(), "plan".to_string())
+        } else if let [only] = site_types.as_slice() {
+            (only.tag.clone(), format!("derived: the fixture schedule's one pole or site type ({}; {})", only.source, r.site_type_source))
+        } else {
+            out.findings.push(format!(
+                "{sheet}: a site luminaire on {} marks no type and the fixture schedule has {} pole or site types: built untyped (which type is it?)",
+                l.circuit.as_deref().unwrap_or("no circuit"),
+                site_types.len()
+            ));
+            (String::new(), String::new())
+        };
+        if seq.lights.iter().any(|(p, k)| *k == mark && dist(*p, m) <= 3.0 * upf) {
+            continue;
+        }
+        seq.lights.push((m, mark.clone()));
+        let l = &Light { mark: mark.clone(), ..l.clone() };
         let row = {
             let ty = super::lightsched::type_of(&l.mark);
             sp.mep.fixture_schedule.iter().find(|x| !ty.is_empty() && x.tag == ty)
@@ -1199,8 +1357,15 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
             at_ft,
             ..Default::default()
         };
-        e.set("type", l.mark.clone(), "plan");
-        e.set("device_type", format!("luminaire {}", l.mark), "schedule");
+        e.set("type", l.mark.clone(), if mark_from.starts_with("derived") { "schedule" } else { "plan" });
+        if !mark_from.is_empty() && mark_from != "plan" {
+            e.set("type_basis", mark_from.clone(), "schedule");
+        }
+        e.set(
+            "device_type",
+            if l.mark.is_empty() { "luminaire (site, type not marked)".to_string() } else { format!("luminaire {}", l.mark) },
+            "schedule",
+        );
         e.set("device_kind", "luminaire", "schedule");
         e.set("ifc_class", "IfcLightFixture", "schedule");
         e.set("sheet", sheet, "plan");
@@ -1302,6 +1467,11 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         let corners = [[q.bbox[0], q.bbox[1]], [q.bbox[2], q.bbox[1]], [q.bbox[2], q.bbox[3]], [q.bbox[0], q.bbox[3]]];
         let mb = bbox_of(&corners.iter().map(|p| to_model(*p)).collect::<Vec<_>>());
         let mc = centre(&mb);
+        // In the building: its floor plan's (a box by the switchboard), not site work.
+        if building.len() >= 3 && inside(&building, mc) {
+            out.equipment_on_building += 1;
+            continue;
+        }
         // The gear step's transformer (proposed by rule outside the slab edge) is this one: moved
         // to where the site plan draws it, its size kept.
         let existing = sp.mep.equipment.iter().find(|e| {
@@ -1459,16 +1629,46 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         })
         .collect();
     let note_of = |line: usize| read.notes.iter().zip(&called).find(|(_, c)| **c == Some(line)).map(|(n, _)| n);
-    // (4) The circuits: each tag's luminaire, and those its drawn lines reach.
-    let mut light_circuit: Vec<Option<usize>> = vec![None; read.lights.len()];
-    let mut links: Vec<(usize, usize, Option<usize>)> = Vec::new(); // light, light, drawn line
-    for (li, l) in lines.iter().enumerate() {
+    // (4) The circuits: those tagged by a symbol; each other tag's luminaire, and those its drawn
+    // lines reach.
+    let built_light = |i: usize| light_ids.get(i).copied().flatten().is_some() || light_equip.get(i).copied().flatten().is_some();
+    let mut light_circuit: Vec<Option<String>> = read.lights.iter().enumerate().map(|(i, l)| l.circuit.clone().filter(|_| built_light(i))).collect();
+    let mut links: Vec<(usize, usize)> = Vec::new();
+    for l in &lines {
         if let (Some(Obj::Light(a)), Some(Obj::Light(b))) = l.ends
             && a != b
         {
-            links.push((a, b, Some(li)));
+            links.push((a, b));
         }
     }
+    let spread = |light_circuit: &mut Vec<Option<String>>, home: usize, label: &str| {
+        let mut stack = vec![home];
+        let mut steps = 0usize;
+        while let Some(i) = stack.pop() {
+            steps += 1;
+            if steps > 10 * MAX_ITEMS || light_circuit.get(i).is_some_and(|c| c.as_deref().is_some_and(|x| x != label)) {
+                continue;
+            }
+            if light_circuit.get(i).is_some_and(Option::is_some) && i != home {
+                continue;
+            }
+            if let Some(c) = light_circuit.get_mut(i) {
+                *c = Some(label.to_string());
+            }
+            for (a, b) in &links {
+                let other = if *a == i {
+                    *b
+                } else if *b == i {
+                    *a
+                } else {
+                    continue;
+                };
+                if light_circuit.get(other).is_some_and(Option::is_none) && built_light(other) {
+                    stack.push(other);
+                }
+            }
+        }
+    };
     for (ti, t) in read.tags.iter().enumerate() {
         let drawn = lines.iter().find_map(|l| match l.ends {
             (Some(Obj::Tag(x)), Some(Obj::Light(y))) | (Some(Obj::Light(y)), Some(Obj::Tag(x))) if x == ti => Some(y),
@@ -1478,62 +1678,94 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
             read.lights
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| light_ids.get(*i).copied().flatten().is_some())
+                .filter(|(i, _)| built_light(*i))
                 .map(|(i, l)| (i, box_gap(&t.bbox, &l.bbox)))
                 .filter(|(_, g)| *g <= r.symbol_reach_h * h)
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(i, _)| i)
         });
-        let Some(home) = home else { continue };
-        let mut stack = vec![home];
-        while let Some(i) = stack.pop() {
-            if light_circuit.get(i).copied().flatten().is_some() {
-                continue;
-            }
-            if let Some(c) = light_circuit.get_mut(i) {
-                *c = Some(ti);
-            }
-            for (a, b, _) in &links {
-                if *a == i {
-                    stack.push(*b);
-                } else if *b == i {
-                    stack.push(*a);
-                }
-            }
+        if let Some(home) = home {
+            spread(&mut light_circuit, home, &t.label);
+        }
+    }
+    // Those a circuit's drawn lines reach from its tagged symbols.
+    for i in 0..read.lights.len() {
+        if let Some(label) = read.lights.get(i).and_then(|l| l.circuit.clone()).filter(|_| built_light(i)) {
+            spread(&mut light_circuit, i, &label);
         }
     }
     // A sheet of one circuit: its luminaires no line reaches are on it too (inferred).
     let mut inferred_links: Vec<(usize, usize)> = Vec::new();
-    if read.tags.len() == 1 {
+    let labels: BTreeSet<&str> = read.tags.iter().map(|t| t.label.as_str()).collect();
+    if let (1, Some(only)) = (labels.len(), labels.first()) {
         loop {
-            let on: Vec<usize> = (0..read.lights.len()).filter(|i| light_circuit.get(*i).copied().flatten().is_some()).collect();
+            let on: Vec<usize> = (0..read.lights.len()).filter(|i| light_circuit.get(*i).is_some_and(Option::is_some)).collect();
             let off = (0..read.lights.len())
-                .filter(|i| light_circuit.get(*i).copied().flatten().is_none() && light_ids.get(*i).copied().flatten().is_some())
+                .filter(|i| light_circuit.get(*i).is_some_and(Option::is_none) && built_light(*i))
                 .flat_map(|i| on.iter().map(move |j| (i, *j)))
                 .filter_map(|(i, j)| Some((i, j, dist(read.lights.get(i)?.at, read.lights.get(j)?.at))))
                 .min_by(|a, b| a.2.total_cmp(&b.2));
             let Some((i, j, _)) = off else { break };
             if let Some(c) = light_circuit.get_mut(i) {
-                *c = Some(0);
+                *c = Some((*only).to_string());
             }
             inferred_links.push((j, i));
         }
     }
     for (i, c) in light_circuit.iter().enumerate() {
-        let (Some(ti), Some(Some(ix))) = (c, light_ids.get(i)) else { continue };
-        let Some(t) = read.tags.get(*ti) else { continue };
-        if let Some(e) = out.tags.get_mut(*ix) {
-            e.set("circuit", t.label.clone(), "plan");
+        let Some(label) = c else { continue };
+        if let Some(Some(ix)) = light_ids.get(i)
+            && let Some(e) = out.tags.get_mut(*ix)
+        {
+            e.set("circuit", label.clone(), "plan");
         }
-        *out.circuits.entry(t.label.clone()).or_default() += 1;
+        if let Some(Some(ix)) = light_equip.get(i)
+            && let Some(e) = out.equipment.get_mut(*ix)
+        {
+            e.properties.insert("CIRCUIT".into(), label.clone());
+        }
+        *out.circuits.entry(label.clone()).or_default() += 1;
     }
     let unassigned = (0..read.lights.len())
-        .filter(|i| light_ids.get(*i).copied().flatten().is_some() && light_circuit.get(*i).copied().flatten().is_none())
+        .filter(|i| light_ids.get(*i).copied().flatten().is_some() && light_circuit.get(*i).is_some_and(Option::is_none))
         .count();
     if unassigned > 0 {
         out.findings.push(format!(
             "{sheet}: {unassigned} site luminaire(s) on no circuit the plan tags: built without their circuit (which circuit feeds them?)"
         ));
+    }
+    // The site equipment its labels name (a monument sign) on the panel schedules' circuits for
+    // that load (their descriptions' site-load words): fed from them.
+    let mut equip_circuits: Vec<(usize, Vec<String>)> = Vec::new();
+    for (qi, q) in read.equipment.iter().enumerate() {
+        if equip_at.get(qi).is_none_or(Option::is_none) {
+            continue;
+        }
+        let up = q.label.to_ascii_uppercase();
+        let words: Vec<&String> = r.site_load_words.iter().filter(|w| up.contains(w.as_str())).collect();
+        // The circuits printed by it, else those its name's load is on.
+        let mut found: Vec<String> = q.circuits.clone();
+        let by_name = found.is_empty() && !words.is_empty();
+        for ps in sp.mep.panel_schedules.iter().take(2_000).filter(|_| by_name) {
+            for c in ps.circuits.iter().take(500) {
+                let d = c.description.to_ascii_uppercase();
+                if words.iter().any(|w| d.contains(w.as_str())) && found.len() < 12 {
+                    found.push(format!("{}-{}", ps.panel.trim(), c.number.trim()));
+                }
+            }
+        }
+        if found.is_empty() {
+            continue;
+        }
+        for f in &found {
+            *out.circuits.entry(f.clone()).or_default() += 1;
+        }
+        if let Some(Some((_, _, tag))) = equip_at.get(qi)
+            && let Some(e) = out.equipment.iter_mut().find(|e| e.tag.eq_ignore_ascii_case(tag))
+        {
+            e.properties.insert("CIRCUIT".into(), found.join(", "));
+        }
+        equip_circuits.push((qi, found));
     }
     // (5) The runs.
     let model_end = |o: Obj, fallback: [f64; 2]| -> [f64; 2] {
@@ -1645,23 +1877,37 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
             format!("inferred: {sheet} shows no line between these luminaires of one circuit; trenched straight from the nearest (trade practice)");
         add_run(&mut out, vec![to_model(la.at), to_model(lb.at)], [Some(Obj::Light(*a)), Some(Obj::Light(*b))], Made::Inferred, None, &why, true);
     }
-    // Each circuit's home run: from its tag's luminaire to the building, then under the slab to its
-    // panel when the model has it (inferred).
-    for (ti, t) in read.tags.iter().enumerate() {
-        let lights: Vec<usize> = light_circuit.iter().enumerate().filter(|(_, c)| **c == Some(ti)).map(|(i, _)| i).collect();
-        if lights.is_empty() || lights.iter().any(|i| home_drawn.contains(i)) {
-            continue;
+    // Each circuit's home run: from the circuit's object nearest the building to the building,
+    // then under the slab to its panel when the model has it (inferred).
+    let mut homes: BTreeMap<String, Vec<(Obj, [f64; 2])>> = BTreeMap::new();
+    for (i, c) in light_circuit.iter().enumerate() {
+        if let (Some(label), Some(l)) = (c, read.lights.get(i))
+            && !home_drawn.contains(&i)
+        {
+            homes.entry(label.clone()).or_default().push((Obj::Light(i), to_model(l.at)));
         }
-        let panel = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&t.panel) && e.level.eq_ignore_ascii_case(slab));
+    }
+    let drawn_home: BTreeSet<String> =
+        light_circuit.iter().enumerate().filter(|(i, _)| home_drawn.contains(i)).filter_map(|(_, c)| c.clone()).collect();
+    for (qi, found) in &equip_circuits {
+        if let Some(Some((c, ..))) = equip_at.get(*qi) {
+            homes.entry(found.join(",")).or_default().push((Obj::Equip(*qi), *c));
+        }
+    }
+    for (label, members) in homes.iter().filter(|(k, _)| !drawn_home.contains(*k)).take(MAX_ITEMS) {
+        let panel_name = label.split_once('-').map_or(label.as_str(), |(p, _)| p).trim();
+        let panel = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(panel_name) && e.level.eq_ignore_ascii_case(slab));
         let pc = panel.map(|p| [(p.min[0] + p.max[0]) / 2.0, (p.min[1] + p.max[1]) / 2.0]);
-        // The luminaire nearest the building (the tag's, when a line reaches it from the tag).
-        let start = lights.iter().filter_map(|i| read.lights.get(*i).map(|l| (*i, to_model(l.at)))).min_by(|a, b| {
+        let start = members.iter().min_by(|a, b| {
             let d = |p: [f64; 2]| nearest_on(&building, p).map_or(f64::INFINITY, |q| dist(p, q));
             d(a.1).total_cmp(&d(b.1))
         });
-        let Some((li, from)) = start else { continue };
-        let toward = pc.unwrap_or(from);
-        let entry = nearest_on(&building, toward).and_then(|q| if pc.is_some() { Some(q) } else { nearest_on(&building, from) }).unwrap_or(from);
+        let Some((obj, from)) = start.copied() else { continue };
+        let entry = match pc {
+            Some(p) => nearest_on(&building, p),
+            None => nearest_on(&building, from),
+        }
+        .unwrap_or(from);
         let size = r.branch_conduit_in;
         let out_bottom = -(r.cover_in + size) / 12.0;
         let under = -super::ugplan::rules().depths.conduit_under_slab_ft;
@@ -1677,15 +1923,14 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         }
         let why = match panel {
             Some(p) => format!(
-                "inferred: home run of {} from its luminaires to panel {} (the site plan's home-run tag; routed by trade practice: straight to the nearest wall, under the slab to the panel)",
-                t.label, p.tag
+                "inferred: home run of {label} to panel {} (its site plan's circuit; routed by trade practice: straight to the nearest wall, under the slab to the panel)",
+                p.tag
             ),
             None => {
                 out.findings.push(format!(
-                    "{sheet}: circuit {}'s panel {} is not in the model: its home run ends at the building wall (continue it to the panel)",
-                    t.label, t.panel
+                    "{sheet}: circuit {label}'s panel {panel_name} is not in the model: its home run ends at the building wall (continue it to the panel)"
                 ));
-                format!("inferred: home run of {} to the building wall nearest its luminaires; panel {} is not in the model", t.label, t.panel)
+                format!("inferred: home run of {label} to the building wall nearest it; panel {panel_name} is not in the model")
             }
         };
         let mut run = buried(slab, sheet, pts.clone(), size, Made::Inferred, why.clone(), &format!("rule: {}", r.branch_conduit_source));
@@ -1693,7 +1938,7 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
             run.bottoms_ft = bottoms;
         }
         out.runs.push(run);
-        out.runs.push(stub(slab, sheet, from, size, top_at(Obj::Light(li)), Made::Inferred, &why));
+        out.runs.push(stub(slab, sheet, from, size, top_at(obj), Made::Inferred, &why));
         if let Some(last) = pts.last() {
             out.runs.push(stub(slab, sheet, *last, size, r.stub_top_ft, Made::Inferred, &why));
         }
@@ -1762,6 +2007,18 @@ pub(crate) fn trench_ft(sp: &BuildingSpec) -> BTreeMap<String, (f64, Vec<String>
         }
     }
     out
+}
+
+/// What a circuit tag's circuit feeds as its panel schedule prints it (`LP-7` → `SITE LIGHTING`)
+/// and the schedule's sheet; none when no schedule lists it.
+fn circuit_load(sp: &BuildingSpec, label: &str) -> Option<(String, String)> {
+    let (panel, rest) = label.split_once('-')?;
+    let number = rest.split(',').next()?.trim();
+    sp.mep
+        .panel_schedules
+        .iter()
+        .filter(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))
+        .find_map(|p| p.circuits.iter().find(|c| c.number.trim() == number).map(|c| (c.description.trim().to_string(), c.source.clone())))
 }
 
 /// A note this step built from (its runs' basis quotes it): the underground plan leaves it.
@@ -2161,6 +2418,76 @@ mod tests {
         // A rerun builds the same again, never twice.
         assert_eq!(counts.first(), counts.get(1), "{counts:?}");
         assert!(counts.first().is_some_and(|c| c.0 == 2 && c.1 == 3 && c.2 == 2 && c.3 > 4 && c.4 == 1), "{counts:?}");
+    }
+
+    /// A site plan tagging its pole lights by their circuit only (no type mark), a monument sign
+    /// its label names, a box in grade its mark names; a transformer label a note runs on from.
+    #[test]
+    fn symbols_tagged_by_their_circuit_are_what_the_circuit_feeds() {
+        let mut d = Drawing::default();
+        let h = 18.0;
+        pline(&mut d, "-BASEC-BUILD", &[[10_000.0, 2_000.0], [10_960.0, 2_000.0], [10_960.0, 2_600.0], [10_000.0, 2_600.0]], true);
+        for (x, c) in [(10_200.0, "SP-5"), (10_700.0, "SP-5"), (11_200.0, "SP-9")] {
+            pline(&mut d, "E-SITE", &square([x, 3_400.0], 25.0), true);
+            text(&mut d, c, x + 35.0, 3_390.0, h);
+        }
+        pline(&mut d, "E-SITE", &square([11_600.0, 3_000.0], 40.0), true);
+        text(&mut d, "MONUMENT", 11_660.0, 3_010.0, h);
+        text(&mut d, "SIGN", 11_660.0, 2_980.0, h);
+        // The sign's circuit printed by it: the sign's, no device of its own.
+        text(&mut d, "SP-11", 11_520.0, 3_060.0, h);
+        pline(&mut d, "E-SITE", &square([10_500.0, 3_200.0], 12.0), true);
+        text(&mut d, "J", 10_520.0, 3_195.0, h);
+        pline(&mut d, "E-POWR", &square([11_400.0, 2_200.0], 50.0), true);
+        text(&mut d, "UTILITY CO. PAD MOUNTED", 11_480.0, 2_210.0, h);
+        text(&mut d, "TRANSFORMER.", 11_480.0, 2_180.0, h);
+        text(&mut d, "COORDINATE WITH UTILITY", 11_480.0, 2_150.0, h);
+        text(&mut d, "FOR ALL REQUIREMENTS.", 11_480.0, 2_120.0, h);
+        let read = read("E-001", &d, [9_000.0, 1_000.0, 14_000.0, 5_000.0], &BTreeSet::new(), 12.0);
+        assert_eq!(read.lights.iter().filter(|l| l.circuit.is_some()).count(), 3, "{:?}", read.lights);
+        assert!(read.equipment.iter().any(|q| q.kind == "sign" && q.circuits == ["SP-11"]), "{:?}", read.equipment);
+        let kinds: Vec<&str> = read.equipment.iter().map(|q| q.kind.as_str()).collect();
+        assert!(kinds.contains(&"sign") && kinds.contains(&"pull_box") && kinds.contains(&"transformer"), "{kinds:?} {:?}", read.unplaced_labels);
+
+        let mut sp = spec_with_slab();
+        let circuit =
+            |n: &str, d: &str| cadaddy_walk3d::PanelCircuit { number: n.into(), description: d.into(), source: "E-601".into(), ..Default::default() };
+        sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule {
+            panel: "SP".into(),
+            circuits: vec![circuit("5", "SITE LIGHTING"), circuit("9", "EV CHARGER"), circuit("11", "MONUMENT SIGN")],
+            ..Default::default()
+        });
+        let fit = register(&read, &sp, "Level 1", true);
+        let built = plan(&sp, &read, &fit, "Level 1", &mut Seq::default());
+        // SP-5's two symbols: the schedule's one pole type on poles, on their circuit.
+        let lights: Vec<&ElementTag> = built.tags.iter().filter(|t| t.fields.get("device_kind").is_some_and(|f| f.value == "luminaire")).collect();
+        assert_eq!(lights.len(), 2, "{lights:?}");
+        assert!(
+            lights
+                .iter()
+                .all(|t| t.fields.get("type").is_some_and(|f| f.value == "SL1") && t.fields.get("circuit").is_some_and(|f| f.value == "SP-5"))
+        );
+        assert!(lights.iter().all(|t| t.fields.get("type_basis").is_some_and(|f| f.value.starts_with("derived"))));
+        assert_eq!(built.equipment.iter().filter(|e| e.kind == "pole").count(), 2);
+        // SP-9 feeds a charger: equipment, not a light; the sign takes the sign's circuit.
+        assert!(
+            built.equipment.iter().any(|e| e.kind == "ev_charger" && e.properties.get("CIRCUIT").is_some_and(|c| c == "SP-9")),
+            "{:?}",
+            built.equipment
+        );
+        assert!(
+            built.equipment.iter().any(|e| e.kind == "sign" && e.properties.get("CIRCUIT").is_some_and(|c| c == "SP-11")),
+            "{:?}",
+            built.equipment
+        );
+        assert!(built.equipment.iter().any(|e| e.kind == "pull_box" && e.bottom_ft < 0.0));
+        assert!(built.equipment.iter().any(|e| e.kind == "transformer"));
+        // Each circuit's home run, inferred; none of the three asked about.
+        for c in ["SP-5", "SP-9", "SP-11"] {
+            assert!(built.runs.iter().any(|r| r.made == Made::Inferred && r.basis.contains(&format!("home run of {c}"))), "{c}: {:?}", built.runs);
+        }
+        let carried: BTreeSet<String> = built.circuits.keys().cloned().collect();
+        assert!(site_loads(&sp, &carried).is_empty(), "{carried:?}");
     }
 
     #[test]

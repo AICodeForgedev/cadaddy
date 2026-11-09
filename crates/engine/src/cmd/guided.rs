@@ -20825,11 +20825,12 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
                 .sum::<f64>()
                 / upf;
             lines.push(format!(
-                "{} ({}): {} luminaire(s) ({} on the building left to its plans), {} pole(s) and base(s), {} site equipment ({} moved to where it is drawn), {} drawn run(s), {} called, {} inferred, {:.0} ft of buried conduit; circuits {:?}",
+                "{} ({}): {} luminaire(s) ({} luminaire(s) and {} equipment on the building left to its plans), {} pole(s) and base(s), {} site equipment ({} moved to where it is drawn), {} drawn run(s), {} called, {} inferred, {:.0} ft of buried conduit; circuits {:?}",
                 r.number,
                 fit.method,
                 built.tags.len(),
                 built.lights_on_building,
+                built.equipment_on_building,
                 built.poles,
                 built.equipment.iter().filter(|e| e.kind != "pole").count() + built.moved.len(),
                 built.moved.len(),

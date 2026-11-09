@@ -54,6 +54,10 @@
     "base_source": "trade practice: a light pole's cast-in-place base, round, by the pole's height: up to 15 ft 18 in by 4 ft, up to 25 ft 24 in by 6 ft, taller 30 in by 8 ft, standing 24 to 30 in above grade in paving (the structural detail governs; each row: pole height ft, diameter in, depth in, above grade in)"
   },
   "ground_words": ["BOLLARD", "GROUND MOUNT", "INGRADE", "IN-GRADE", "UPLIGHT"],
+  "box_marks": ["J", "JB", "PB", "HH"],
+  "site_light_words": ["SITE LIGHT", "SITE LTG", "POLE LIGHT", "PARKING", "AREA LIGHT", "LOT LIGHT", "SITE LUMINAIRE"],
+  "site_type_words": ["POLE", "AREA LIGHT", "SITE", "PARKING"],
+  "site_type_source": "a site lighting circuit's symbols that carry no type mark are the fixture schedule's one pole or site type (its description names a pole, an area or the site); with several such types, which one is asked",
   "trench_item": "Trench, excavate and backfill (buried site conduit)",
   "parallel_spacing_in": 2.0,
   "parallel_source": "trade practice: a note's parallel conduits laid side by side in one trench, 2 in apart on spacers (NEC 300.5(I): a circuit's conductors together; the trench one for the set)",
