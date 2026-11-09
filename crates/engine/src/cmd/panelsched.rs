@@ -315,7 +315,7 @@ fn read_ckt(
         .iter()
         .filter(|t| {
             let u = t.value.trim().to_ascii_uppercase();
-            (u == "CKT" || u == "CKT." || u == "CIR" || u == "CKT #" || u == "CKT NO.")
+            cadaddy_mepfix::wordrules::words("schedules.panel_circuit_headings").contains(&u.as_str())
                 && t.at.y < title.at.y
                 && t.at.y > title.at.y - HEADER_REACH * h
                 && (t.at.x - title.at.x).abs() < 80.0 * h
@@ -733,6 +733,10 @@ fn read_centred(
 /// until the subtotals, a gap of a few rows, or the next title; with the last row's height and
 /// the step between rows. A subtotal's line ends the rows whichever of its texts comes first (its
 /// number can sit a hair above its label).
+/// The first row can stand this many text heights under the header's line (a header two cells
+/// tall, its column names on the upper one).
+const FIRST_ROW_REACH: f64 = 6.0;
+
 fn rows_below<'a>(flat: &[&'a TextItem], head_bottom: f64, x0: f64, x1: f64, row_h: f64) -> (Vec<Vec<&'a TextItem>>, f64, Option<f64>) {
     let mut below: Vec<&'a TextItem> = flat.iter().copied().filter(|t| t.at.y < head_bottom - 0.5 * row_h && t.at.x >= x0 && t.at.x <= x1).collect();
     below.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
@@ -753,12 +757,15 @@ fn rows_below<'a>(flat: &[&'a TextItem], head_bottom: f64, x0: f64, x1: f64, row
                 if end_ys.iter().any(|y| (y - t.at.y).abs() <= 0.6 * row_h)
                     || (title_panel(&u).is_some() && t.height >= TITLE_OVER_CELLS * row_h)
                     || step.is_some_and(|s| gap > 2.6 * s)
-                    || (step.is_none() && gap > 4.0 * row_h)
+                    || (step.is_none() && gap > FIRST_ROW_REACH * row_h)
                     || lines.len() >= MAX_ROWS
                 {
                     break;
                 }
-                step.get_or_insert(gap);
+                // (The step is the rows' own, not the header's height above the first.)
+                if !lines.is_empty() {
+                    step.get_or_insert(gap);
+                }
                 last_y = t.at.y;
                 lines.push(vec![t]);
             }
@@ -1459,6 +1466,28 @@ mod tests {
             (dp1.circuits[0].description.as_str(), dp1.circuits[0].breaker.as_str(), dp1.circuits[0].poles),
             ("PANELBOARD G (4 UNITS)", "125", 2)
         );
+    }
+
+    #[test]
+    fn a_circuit_column_headed_circ_is_read() {
+        // The circuit numbers' column headed CIRC (not CKT), the description right of it; the
+        // header two cells tall (its first row five text heights under the column names).
+        let h = 0.063;
+        let mut v = vec![t(13.6, 24.59, "PANEL Q2", 0.126)];
+        for (x, w) in [(9.43, "CIRC"), (9.99, "LOAD DESCRIPTION"), (11.88, "AMPS"), (12.31, "POLES")] {
+            v.push(t(x, 23.84, w, h));
+        }
+        for (i, (n, d)) in [("1", "OFFICE RECEPTS"), ("3", "HAND DRYER"), ("5", "SPARE")].iter().enumerate() {
+            let y = 23.84 - 5.0 * h - 0.16 * i as f64;
+            v.push(t(9.47, y, n, h));
+            v.push(t(10.0, y, d, h));
+            v.push(t(11.93, y, "20", h));
+            v.push(t(12.35, y, "1", h));
+        }
+        let s = read(&v, "E-9");
+        let q = s.iter().find(|p| p.panel == "Q2").unwrap_or_else(|| panic!("{s:#?}"));
+        let got: Vec<(&str, &str, &str)> = q.circuits.iter().map(|c| (c.number.as_str(), c.breaker.as_str(), c.description.as_str())).collect();
+        assert_eq!(got, [("1", "20", "OFFICE RECEPTS"), ("3", "20", "HAND DRYER"), ("5", "20", "SPARE")]);
     }
 
     #[test]
