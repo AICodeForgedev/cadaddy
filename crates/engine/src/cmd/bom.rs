@@ -675,6 +675,31 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
             }
         }
     }
+    // The trench site work's buried conduit lies in (Q6358): one per path, by level.
+    let sw = super::sitework::rules();
+    for (level, (ft, runs)) in super::sitework::trench_ft(&sp) {
+        if ft.is_finite() && ft > 0.0 {
+            add(
+                lines,
+                Line {
+                    trade: "electrical",
+                    category: "trench".into(),
+                    item: sw.trench_item.clone(),
+                    size: format!("{}\" cover", sw.cover_in),
+                    unit: "ft",
+                    net: ft,
+                    status: "model",
+                    rule: Some(sw.cover_source.clone()),
+                    level,
+                    elements: runs,
+                    waste_qty: None,
+                    circuit: String::new(),
+                    product: Product::default(),
+                    made: "",
+                },
+            );
+        }
+    }
     // Branch conduit and its implied fittings; homerun wire over its route.
     let kind_of = |sys: &str| sp.mep.systems.iter().find(|x| x.name == sys).map(|x| x.kind);
     // Each circuit's conduit: feet and pulls (box to box), for its wire.
@@ -2136,7 +2161,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         let electrical = matches!(
             st(&e, "kind").to_ascii_lowercase().as_str(),
             "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
-        );
+        ) || prop("TRADE").eq_ignore_ascii_case("electrical");
         // A room's own panel (each guest room's G, tagged G-<room>): counted together by its
         // letter, each with its flush trim.
         let own = match (e["properties"]["PANEL"].as_str(), e["properties"]["ROOM"].as_str()) {

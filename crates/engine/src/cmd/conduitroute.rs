@@ -2107,7 +2107,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     for e in d.model.iter() {
         if super::wallgen::made_as(e).as_deref() == Some("device") && devs.len() < MAX_DEVICES {
             let ps = props::read(&e.common.xdata);
-            if ps.get("misplaced").is_some() {
+            // Site work's luminaires are fed by its buried runs, never through the building.
+            if ps.get("misplaced").is_some() || ps.get(super::sitework::MARK).is_some() {
                 continue;
             }
             let Some((lo, hi)) = mesh_box(e) else { continue };
