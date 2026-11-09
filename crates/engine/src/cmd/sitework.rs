@@ -2675,6 +2675,9 @@ mod tests {
         text(&mut d, "TRANSFORMER.", 11_480.0, 2_180.0, h);
         text(&mut d, "COORDINATE WITH UTILITY", 11_480.0, 2_150.0, h);
         text(&mut d, "FOR ALL REQUIREMENTS.", 11_480.0, 2_120.0, h);
+        // A note calling the primary's conduits with no line drawn for them.
+        text(&mut d, "PRIMARY FEEDER. PROVIDE (2) 3\" CONDUITS", 12_600.0, 4_600.0, h);
+        text(&mut d, "FROM THE UTILITY COMPANY.", 12_600.0, 4_570.0, h);
         let read = read("E-001", &d, [9_000.0, 1_000.0, 14_000.0, 5_000.0], &BTreeSet::new(), 12.0);
         assert_eq!(read.lights.iter().filter(|l| l.circuit.is_some()).count(), 3, "{:?}", read.lights);
         assert!(read.equipment.iter().any(|q| q.kind == "sign" && q.circuits == ["SP-11"]), "{:?}", read.equipment);
@@ -2714,6 +2717,11 @@ mod tests {
         );
         assert!(built.equipment.iter().any(|e| e.kind == "pull_box" && e.bottom_ft < 0.0));
         assert!(built.equipment.iter().any(|e| e.kind == "transformer"));
+        // The note no line carries: its two 3" conduits from the transformer away from the
+        // building, inferred, the work it calls.
+        let primary: Vec<&MepRun> = built.runs.iter().filter(|r| r.points.len() >= 2 && (r.size_in[0] - 3.0).abs() < 1e-9).collect();
+        assert_eq!(primary.len(), 2, "{:?}", built.runs);
+        assert!(primary.iter().all(|r| r.made == Made::Inferred && r.height_source.starts_with(super::super::ugplan::CALLED_PREFIX)), "{primary:?}");
         // Each circuit's home run, inferred; none of the three asked about.
         for c in ["SP-5", "SP-9", "SP-11"] {
             assert!(built.runs.iter().any(|r| r.made == Made::Inferred && r.basis.contains(&format!("home run of {c}"))), "{c}: {:?}", built.runs);
