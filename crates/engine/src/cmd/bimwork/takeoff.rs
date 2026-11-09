@@ -753,6 +753,8 @@ const SYSTEM_WORDS: &[&str] =
     &["gas", "vent", "cw", "hw", "dcw", "dhw", "supply", "return", "exhaust", "sanitary", "storm", "fire", "refrigerant", "condensate"];
 const MATERIAL_WORDS: &[&str] =
     &["copper", "pvc", "steel", "galvanized", "aluminum", "cast", "iron", "fiberglass", "stainless", "brass", "emt", "imc", "rigid"];
+/// Q6371: the building elements a line or row is of; a window's area is no wall's.
+const ELEMENT_WORDS: &[&str] = &["wall", "door", "window", "ceiling", "floor", "roof", "stair"];
 
 /// The cost row for a takeoff line: its index and how it matched.
 /// Q5301: exact match first, then family match (word-based, never crossing system/material/size).
@@ -776,6 +778,7 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
     // Line's system and material keywords for the never-cross check.
     let line_sys: BTreeSet<&str> = SYSTEM_WORDS.iter().copied().filter(|s| have.contains(*s)).collect();
     let line_mat: BTreeSet<&str> = MATERIAL_WORDS.iter().copied().filter(|m| have.contains(*m)).collect();
+    let line_el: BTreeSet<&str> = ELEMENT_WORDS.iter().copied().filter(|m| have.contains(*m)).collect();
     let mut best: Option<(usize, f64, usize)> = None;
     for (i, r) in rows.iter().enumerate() {
         if !unit_ok(r) {
@@ -798,6 +801,11 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
         }
         let row_mat: BTreeSet<&str> = MATERIAL_WORDS.iter().copied().filter(|m| want.contains(*m)).collect();
         if !row_mat.is_empty() && !line_mat.is_empty() && row_mat != line_mat {
+            continue;
+        }
+        // Nor across building elements (Q6371): a row of one element never prices another's line.
+        let row_el: BTreeSet<&str> = ELEMENT_WORDS.iter().copied().filter(|m| want.contains(*m)).collect();
+        if !row_el.is_empty() && !line_el.is_empty() && row_el.is_disjoint(&line_el) {
             continue;
         }
         let score = score + covered;
@@ -1081,6 +1089,11 @@ mod tests {
         assert_eq!(match_row(&rows, &l("Wall untyped", "sq ft", "walls")), None);
         assert_eq!(match_row(&rows, &l("Fan coil", "each", "equipment")), None);
         assert_eq!(match_row(&rows, &l("Door hardware set", "each", "doors")), None, "hardware is not the door");
+        // Never across building elements (Q6371): a wall's area row prices no window's area.
+        let rows = vec![row("Wall area untyped", "sq ft"), row("Window", "each")];
+        assert_eq!(match_row(&rows, &l("Window area", "sq ft", "windows")), None, "a window's area is no wall's");
+        assert_eq!(match_row(&rows, &l("Window", "each", "windows")), Some((1, "item")));
+        assert_eq!(match_row(&rows, &l("Wall area", "sq ft", "walls")).map(|m| m.0), Some(0));
         // What cost tables call by other names.
         let rows =
             vec![row("Interior partition, metal stud", "lf"), row("Drywall 5/8", "sf"), row("Duplex outlet", "ea"), row("LED luminaire", "ea")];

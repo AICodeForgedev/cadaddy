@@ -4,9 +4,10 @@
 //! require has a line, and what changed since the last BOM.
 //!
 //! `bim.bom` (typed `BOM`):
-//! - **Built model** (Q5243): every category that `model.build` creates (walls, doors, ceilings,
-//!   floors, rooms) gets BOM lines — wall framing (studs/track by type), doors by size/type +
-//!   hardware, ceilings by type (area), floor slabs (area), rooms (count/area by type). A built
+//! - **Built model** (Q5243): every category that `model.build` creates (walls, doors, windows,
+//!   ceilings, floors, rooms) gets BOM lines — wall framing (studs/track by type), doors by
+//!   size/type + hardware, windows by size/type (count and area, Q6371), ceilings by type
+//!   (area), floor slabs (area), rooms (count/area by type). A built
 //!   element with no BOM line is a test failure.
 //! - **Electrical devices** (Q5243): symbols on E-sheets (receptacles, switches, lights, fans/EF,
 //!   panels, data, FA) become device elements and BOM lines by type + level.
@@ -339,6 +340,7 @@ fn add(lines: &mut Vec<Line>, l: Line) {
             && x.trade == l.trade
             && x.status == l.status
             && x.rule == l.rule
+            && x.made == l.made
             && x.product.same(&l.product)
     };
     match lines.iter_mut().rev().find(|x| same(x)) {
@@ -1051,7 +1053,50 @@ fn mesh_plan_area(d: &cadaddy_doc::Drawing, handles: &[String]) -> f64 {
     total
 }
 
-/// Built-model BOM lines (Q5243): walls, doors, ceilings, floors, rooms from the spec and the
+/// A built window's area, square feet: the one its opening was given (`area_sf`), else its
+/// mesh's width (the longer plan side) by its height.
+fn window_area_sf(e: &cadaddy_doc::Entity, upf: f64) -> f64 {
+    let given = cadaddy_doc::props::read(&e.common.xdata).get("area_sf").and_then(|p| p.text().trim().parse::<f64>().ok());
+    if let Some(a) = given.filter(|a| a.is_finite() && *a > 0.0) {
+        return a;
+    }
+    let Some((lo, hi)) = super::fieldview::mesh_box(e) else { return 0.0 };
+    let a = (hi[0] - lo[0]).abs().max((hi[1] - lo[1]).abs()) * (hi[2] - lo[2]).abs() / (upf * upf);
+    if a.is_finite() { a } else { 0.0 }
+}
+
+/// The built windows' lines (Q6371): per level, what they are bought as, size, type and
+/// provenance, a count and their area, each line with its windows.
+fn window_lines(d: &cadaddy_doc::Drawing, upf: f64, lines: &mut Vec<Line>) {
+    // Built elements only, before the cap (a print set's linework comes first).
+    let windows = d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("window")).take(MAX_LINES);
+    for e in windows {
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        let ps = cadaddy_doc::props::read(&e.common.xdata);
+        let text = |k: &str| ps.get(k).map(|p| p.text().trim().chars().take(200).collect::<String>()).unwrap_or_default();
+        let bought_as = text("item");
+        let item = if bought_as.is_empty() { "Window".to_string() } else { capitalised(&bought_as) };
+        let made = super::provenance::of_element(e).map_or("", |(m, _)| made_of(m.as_str()));
+        let line = |item: String, unit: &'static str, net: f64| Line {
+            trade: "general",
+            category: "windows".into(),
+            item,
+            size: text("size"),
+            unit,
+            net,
+            status: "model",
+            level: level.clone(),
+            elements: vec![e.handle.hex()],
+            product: element_product(e),
+            made,
+            ..Line::default()
+        };
+        add(lines, line(item.clone(), "each", 1.0));
+        add(lines, line(format!("{item} area"), "sq ft", window_area_sf(e, upf)));
+    }
+}
+
+/// Built-model BOM lines (Q5243): walls, doors, windows, ceilings, floors, rooms from the spec and the
 /// 3D model that `model.build` created. Each built category must have lines; a built element
 /// with no BOM line is a test failure.
 /// Returns (`missing_categories`, `suspects`, `model_has_elements`).
@@ -1314,6 +1359,9 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     if has_any_built && door_count == 0 {
         missing.push("doors".into());
     }
+
+    // ── Windows: count and area by level, size and type (Q6371) ──
+    window_lines(d, upf, lines);
 
     // ── Ceilings: area by level ──
     let mut ceiling_sf_total = 0.0f64;
