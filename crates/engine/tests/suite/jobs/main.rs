@@ -54,6 +54,7 @@ mod mepduct_build;
 mod mepfix_wholejob;
 mod meppipe_build;
 mod mepreview;
+mod ocrreviewtags;
 mod pdfocrjunk;
 mod pdfplans;
 mod perceive;
