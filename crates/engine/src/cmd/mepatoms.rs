@@ -291,6 +291,8 @@ pub(crate) struct AtomRules {
     /// The fitting where a buried raceway comes up and runs on in another (`{from}`, `{to}`).
     pub transition_item: String,
     pub transition_source: String,
+    /// Why a riser cut at a floor is joined there by one coupling (Q6347).
+    pub floor_joint_source: String,
     pub insulation: String,
     pub insulation_source: String,
     /// Each conductor's makeup at each box, feet: the code's minimum and the field allowance
@@ -978,6 +980,33 @@ pub(crate) fn bury(p: &mut Pieces, floor_z: f64, tol: f64, steel: bool, open: [b
     made
 }
 
+/// A raceway's end `end` where it runs on through a floor into the same raceway's piece on the
+/// next level (a riser cut at the floor, Q6347): one coupling joins the two sticks there, not a
+/// connector, locknut and bushing on each. The lower piece's end (`keep`) takes the coupling
+/// (`rw`'s, of its material); the upper piece's end gives up its fittings. Returns whether it
+/// made the joint.
+pub(crate) fn join_at_floor(p: &mut Pieces, end: usize, keep: bool, rw: &Raceway, source: &str) -> bool {
+    let Some(ci) = p.ends.get(end).copied().flatten() else { return false };
+    if p.atoms.get(ci).is_none_or(|c| c.kind != "connector") {
+        return false;
+    }
+    let mut drop: BTreeSet<usize> =
+        p.atoms.iter().enumerate().filter(|(_, x)| matches!(x.kind, "locknut" | "bushing") && x.connects == [ci]).map(|(j, _)| j).collect();
+    if keep {
+        if let Some(c) = p.atoms.get_mut(ci) {
+            c.kind = "coupling";
+            c.item = rw.coupling.clone();
+            c.source = source.into();
+            c.extra.push(("joint", "floor".into(), source.into()));
+            c.connects.retain(|j| !drop.contains(j));
+        }
+    } else {
+        drop.insert(ci);
+    }
+    p.retain(|i, _| !drop.contains(&i));
+    true
+}
+
 /// A branch circuit's conductors (`2#12 + 1#12G`, `3#10, 1#10G`): count, size, ground.
 pub(crate) fn conductor_parts(makeup: &str) -> Vec<(u32, String, bool)> {
     makeup
@@ -1453,9 +1482,30 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     if !std::sync::Arc::ptr_eq(old, now) {
         return;
     }
-    let (added, modified, erased) = before.model.changes(&st.doc.model);
+    let Some(ix) = changed_index(before, &st.doc) else { return };
+    if let Ok(d) = s.doc_mut() {
+        store(d, &ix);
+    }
+}
+
+/// After a change made outside a command (the live rebuild's hand edits put back after the
+/// build): `d`'s stored index, still the one `before` held, follows what changed since.
+pub(crate) fn follow_changes(before: &Drawing, d: &mut Drawing) {
+    let (Some(old), Some(now)) = (before.embedded.get(INDEX_FILE), d.embedded.get(INDEX_FILE)) else { return };
+    if !std::sync::Arc::ptr_eq(old, now) || d.model.unchanged_from(&before.model) {
+        return;
+    }
+    if let Some(ix) = changed_index(before, d) {
+        store(d, &ix);
+    }
+}
+
+/// `before`'s stored index changed by what changed in the counted pieces from `before` to `now`
+/// (`None`: no counted piece changed, or `before` has no index).
+fn changed_index(before: &Drawing, now: &Drawing) -> Option<Index> {
+    let (added, modified, erased) = before.model.changes(&now.model);
     let was = |h: &Handle| before.model.get(*h).and_then(|e| counted(e));
-    let is = |h: &Handle| st.doc.model.get(*h).and_then(|e| counted(e));
+    let is = |h: &Handle| now.model.get(*h).and_then(|e| counted(e));
     let mut out = Vec::new();
     let mut new = Vec::new();
     for h in &modified {
@@ -1468,18 +1518,16 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     out.extend(erased.iter().filter_map(was));
     new.extend(added.iter().filter_map(is));
     if out.is_empty() && new.is_empty() {
-        return;
+        return None;
     }
-    let Some(mut ix) = stored(before) else { return };
+    let mut ix = stored(before)?;
     for (k, m) in &out {
         ix.remove(k, m);
     }
     for (k, m) in new {
         ix.add(k, &m);
     }
-    if let Ok(d) = s.doc_mut() {
-        store(d, &ix);
-    }
+    Some(ix)
 }
 
 /// A filter of `bim.count`: each given dimension must match.

@@ -211,11 +211,59 @@ pub(crate) fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handl
     room_texts_sized(sp, ents).into_iter().map(|(h, t, at, _)| (h, t, at)).collect()
 }
 
+/// Whether a layer is one of the spec's room tag layers. Never the OCR review layer: it keeps
+/// readings for a person to check, not the sheet's lettering (Q6332: a spec drafted with it as
+/// the room tag layer made room tracing read two misreads and skip every real room label).
+pub(crate) fn room_tag_layer(sp: &BuildingSpec, layer: &str) -> bool {
+    !layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::OCR_REVIEW_LAYER) && sp.role(layer).is_some_and(|r| r.role == Role::RoomTag)
+}
+
+/// Whether the spec's room tag layers carry the plan's room labels, so that rooms are read from
+/// their texts alone (on the levels' plans when the levels have regions): they hold a room label,
+/// and at least a third of the plan's room names (with no room name on the plan, a room number).
+/// Tag layers holding a couple of the plan's labels would leave every other room's label unread
+/// (Q6332): the plan is then read from all its text, as a plan with no room tag layer.
+pub(crate) fn tags_carry_labels(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> bool {
+    use super::perceive::geometry::{equipment_tag, room_name_score, room_number, tag_attribute};
+    if !sp.layers.iter().any(|r| r.role == Role::RoomTag && !r.layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::OCR_REVIEW_LAYER)) {
+        return false;
+    }
+    let regions: Vec<[f64; 4]> = sp.levels.iter().filter_map(|l| l.region).filter(|r| r.iter().all(|v| v.is_finite())).collect();
+    let on_plans = |c: Vec2| {
+        regions.is_empty() || regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]))
+    };
+    // (names, numbers) on the tag layers; names anywhere.
+    let (mut tag_names, mut tag_numbers, mut names) = (0usize, 0usize, 0usize);
+    for e in ents {
+        let read: Vec<(String, Vec2)> = match &e.kind {
+            EntityKind::Text(t) => vec![(t.value.trim().to_string(), t.justify_point())],
+            EntityKind::MText(t) => vec![(cadaddy_fonts::plain_text(&t.contents).split_whitespace().collect::<Vec<_>>().join(" "), t.insert.xy())],
+            EntityKind::Insert(i) => i
+                .attribs
+                .iter()
+                .filter(|a| tag_attribute(&a.tag).is_some())
+                .map(|a| (a.text.value.trim().to_string(), a.text.justify_point()))
+                .collect(),
+            _ => continue,
+        };
+        let tag = room_tag_layer(sp, &e.common.layer);
+        for (t, _) in read.iter().filter(|(t, at)| !t.is_empty() && t.chars().count() <= 40 && at.is_finite() && on_plans(*at)) {
+            let number = room_number(t) && !equipment_tag(t);
+            let name = !room_number(t) && room_name_score(t) > 0 && super::autospec::room_like_name(t);
+            names += usize::from(name);
+            if tag {
+                tag_names += usize::from(name);
+                tag_numbers += usize::from(number);
+            }
+        }
+    }
+    if names > 0 { tag_names > 0 && tag_names * 3 >= names } else { tag_numbers > 0 }
+}
+
 /// [`room_texts`] with each text's height.
 fn room_texts_sized(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handle, String, Vec2, f64)> {
-    let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
-    let on: Vec<&Arc<Entity>> =
-        ents.iter().copied().filter(|e| !tagged || sp.role(&e.common.layer).is_some_and(|r| r.role == Role::RoomTag)).collect();
+    let tagged = tags_carry_labels(sp, ents);
+    let on: Vec<&Arc<Entity>> = ents.iter().copied().filter(|e| !tagged || room_tag_layer(sp, &e.common.layer)).collect();
     let mut read = super::perceive::texts(&on);
     super::perceive::geometry::lift_qualifiers(&mut read);
     let mut out: Vec<(Handle, String, Vec2, f64)> = read.into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).collect();
@@ -710,7 +758,14 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     }
     let d = s.doc()?;
     let ents = plan_objects(d);
-    let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
+    let tagged = tags_carry_labels(sp, &ents);
+    if !tagged && sp.layers.iter().any(|r| r.role == Role::RoomTag) {
+        let tag_layers: Vec<&str> = sp.layers.iter().filter(|r| r.role == Role::RoomTag).map(|r| r.layer.as_str()).take(5).collect();
+        notes.push(format!(
+            "The room tag layer(s) {} hold few of the plan's room labels: rooms are traced from all the plan's text.",
+            tag_layers.join(", ")
+        ));
+    }
     // On the levels' own plans only: a whole print set side by side is so large its trace
     // tolerance (a fraction of the extents) opens every room.
     let regions: Vec<[f64; 4]> = sp.levels.iter().filter_map(|l| l.region).filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8)).collect();
@@ -2586,7 +2641,7 @@ pub(crate) fn stack_offsets(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, Vec2
     let mut offsets: Vec<(&str, Vec2)> = vec![(lowest.name.as_str(), Vec2::ZERO)];
     for level in here.iter().skip(1) {
         let roof = (level.base.is_none() && wallgen::roof_level(&sp.levels, &level.name))
-            .then(|| super::exterior::built_bounds(d, &level.name, &["roof", "parapet"]))
+            .then(|| super::exterior::built_bounds(d, &level.name, &["roof", "parapet", super::exterior::ROOF_WALL]))
             .filter(|b| !b.is_empty());
         let under = roof.and_then(|r| {
             offsets.iter().rev().find_map(|(n, off)| {

@@ -39,17 +39,29 @@ impl Outline {
 
 /// The outline of the building the walls (centreline ends and thickness, sheet units, `upf` per
 /// foot) stand round, inside `lo`–`hi` (their faces' extents); none when they do not enclose it.
+#[cfg(test)]
 pub(super) fn building(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64) -> Option<Outline> {
-    building_with(walls, lo, hi, upf, false)
+    building_with(walls, lo, hi, upf, false, &[], &mut 0)
+}
+
+/// [`building`] less the spaces labelled open to the storey under them (`OPEN TO BELOW` at each
+/// of `open_at`, Q6322): a mezzanine's or an upper floor's plate has no floor there. A space is
+/// traced from its label inside the walls (door gaps closed); one that gets out to most of the
+/// plate (its edge's guardrail drawn as no wall) or is smaller than a room stays floor.
+/// With how many spaces were left out.
+pub(super) fn building_open(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, open_at: &[Vec2]) -> (Option<Outline>, usize) {
+    let mut carved = 0;
+    let o = building_with(walls, lo, hi, upf, false, open_at, &mut carved);
+    (o, carved)
 }
 
 /// [`building`] with every gap up to the widest closed ([`CLOSE_FT`]): the whole building, a
 /// corridor open at its ends to the outside included (what may stand in it, not its slab).
 pub(super) fn building_whole(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64) -> Option<Outline> {
-    building_with(walls, lo, hi, upf, true)
+    building_with(walls, lo, hi, upf, true, &[], &mut 0)
 }
 
-fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whole: bool) -> Option<Outline> {
+fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whole: bool, open_at: &[Vec2], carved: &mut usize) -> Option<Outline> {
     let (w, h) = (hi.x - lo.x, hi.y - lo.y);
     if !(w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite() && upf.is_finite() && upf > 0.0) {
         return None;
@@ -74,6 +86,15 @@ fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whol
         return None;
     }
     let fill = if whole { fills.last()? } else { fills.iter().find(|g| total(g) as f64 >= 0.8 * widest as f64)? };
+    let less;
+    let fill = if open_at.is_empty() {
+        fill
+    } else {
+        let (f, n) = carve_open(fill, &wall, Grid { nx, ny, cell, origin }, upf, open_at);
+        *carved = n;
+        less = f;
+        &less
+    };
     let x_at = |i: usize| (origin.x + i as f64 * cell).clamp(lo.x, hi.x);
     let y_at = |j: usize| (origin.y + j as f64 * cell).clamp(lo.y, hi.y);
     let at = |i: usize, j: usize| i < nx && j < ny && fill.get(j * nx + i).copied().unwrap_or(false);
@@ -117,6 +138,96 @@ fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whol
     }
     out.edges.retain(|(a, b)| a.dist(*b) > 0.0);
     (!out.rects.is_empty()).then_some(out)
+}
+
+/// A raster's size and place: cells across and up, a cell's side, its corner (sheet units).
+#[derive(Clone, Copy)]
+struct Grid {
+    nx: usize,
+    ny: usize,
+    cell: f64,
+    origin: Vec2,
+}
+
+/// The thickest wall round a space open to below, feet: its cells go with the space.
+const OPEN_WALL_FT: f64 = 1.5;
+/// Most open-to-below labels looked at on one plate.
+const MAX_OPEN_LABELS: usize = 64;
+/// A space traced open to below that is more of the plate than this got out of its edge (a
+/// guardrail drawn as no wall): it stays floor.
+const MAX_OPEN_SHARE: f64 = 0.9;
+
+/// `fill` (a plate) less the space round each label of `open_at` ([`building_open`]), and how
+/// many spaces were left out.
+fn carve_open(fill: &[bool], wall: &[bool], g: Grid, upf: f64, open_at: &[Vec2]) -> (Vec<bool>, usize) {
+    let Grid { nx, ny, cell, origin } = g;
+    let mut out = fill.to_vec();
+    let mut carved = 0;
+    // Every cell left out.
+    let mut taken = vec![false; fill.len()];
+    let plate = fill.iter().filter(|f| **f).count();
+    // Blocked: a wall, or off the plate.
+    let blocked: Vec<bool> = fill.iter().zip(wall).map(|(f, w)| !*f || *w).collect();
+    let r = (DOOR_FT * upf / cell).ceil() as usize;
+    let reach = (LABEL_REACH_FT * upf / cell).ceil() as usize;
+    let grown = grow(&blocked, nx, ny, r);
+    let min_cells = ROOM_SF.0 * upf * upf / (cell * cell);
+    for at in open_at.iter().take(MAX_OPEN_LABELS) {
+        let (fi, fj) = ((at.x - origin.x) / cell, (at.y - origin.y) / cell);
+        if !(fi >= 0.0 && fj >= 0.0 && (fi as usize) < nx && (fj as usize) < ny) {
+            continue;
+        }
+        let k0 = fj as usize * nx + fi as usize;
+        if blocked.get(k0).copied().unwrap_or(true) {
+            continue;
+        }
+        let Some(start) = nearest(&blocked, &grown, nx, ny, k0, reach) else { continue };
+        let mut floor = vec![false; nx * ny];
+        let mut queue = VecDeque::from([start]);
+        if let Some(f) = floor.get_mut(start) {
+            *f = true;
+        }
+        while let Some(k) = queue.pop_front() {
+            let (i, j) = (k % nx, k / nx);
+            for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                let q = b * nx + a;
+                if a < nx && b < ny && !grown.get(q).copied().unwrap_or(true) && floor.get(q) == Some(&false) {
+                    if let Some(f) = floor.get_mut(q) {
+                        *f = true;
+                    }
+                    queue.push_back(q);
+                }
+            }
+        }
+        // Back out to the walls' faces.
+        let open: Vec<bool> = grow(&floor, nx, ny, r).into_iter().zip(&blocked).map(|(f, b)| f && !*b).collect();
+        let n = open.iter().filter(|f| **f).count();
+        if (n as f64) < min_cells || n as f64 > MAX_OPEN_SHARE * plate as f64 {
+            continue;
+        }
+        let mut any = false;
+        for ((o, f), t) in out.iter_mut().zip(&open).zip(taken.iter_mut()) {
+            if *f && *o {
+                *o = false;
+                *t = true;
+                any = true;
+            }
+        }
+        carved += usize::from(any);
+    }
+    if carved > 0 {
+        // The walls round a space left out go with it (the outside wall along an open space is
+        // no floor); a wall the floor kept is beside (its edge's guardrail, its own walls) stays.
+        let k = (OPEN_WALL_FT * upf / cell).ceil() as usize;
+        let floor: Vec<bool> = out.iter().zip(wall).map(|(o, w)| *o && !*w).collect();
+        let (near_floor, near_open) = (grow(&floor, nx, ny, k), grow(&taken, nx, ny, k));
+        for (q, o) in out.iter_mut().enumerate() {
+            if *o && wall.get(q) == Some(&true) && near_open.get(q) == Some(&true) && near_floor.get(q) != Some(&true) {
+                *o = false;
+            }
+        }
+    }
+    (out, carved)
 }
 
 /// The cells of `fill` as rectangles: each row's runs, a run carried up while the rows above
@@ -785,6 +896,35 @@ mod tests {
     /// 6" walls on centrelines (feet, 12 units per foot).
     fn wall(a: (f64, f64), b: (f64, f64)) -> (Vec2, Vec2, f64) {
         (Vec2::new(a.0 * 12.0, a.1 * 12.0), Vec2::new(b.0 * 12.0, b.1 * 12.0), 6.0)
+    }
+
+    #[test]
+    fn a_mezzanine_plate_leaves_out_the_space_open_to_below() {
+        // A mezzanine plan drawn on the whole building, 60' × 40': the mezzanine is the east 20',
+        // behind a guardrail wall at x = 40' with a 3' gate; the rest is labelled open to below.
+        let mut walls = ring(&[(0.25, 0.25), (59.75, 0.25), (59.75, 39.75), (0.25, 39.75)]);
+        walls.push(wall((40.0, 0.25), (40.0, 18.0)));
+        walls.push(wall((40.0, 21.0), (40.0, 39.75)));
+        let (lo, hi) = (Vec2::new(0.0, 0.0), Vec2::new(720.0, 480.0));
+        let whole = building(&walls, lo, hi, 12.0).unwrap();
+        let (plate, carved) = building_open(&walls, lo, hi, 12.0, &[Vec2::new(20.0 * 12.0, 20.0 * 12.0)]);
+        let plate = plate.unwrap();
+        assert_eq!(carved, 1);
+        assert!((sf(&whole) - 2400.0).abs() < 30.0, "{} sf", sf(&whole));
+        // The mezzanine's floor: its 20' (and the guardrail's and outer wall's width), no more.
+        assert!(sf(&plate) > 19.0 * 40.0 && sf(&plate) < 21.0 * 40.0, "{} sf", sf(&plate));
+        // Its boundary runs round the mezzanine only (the outside wall's stub at the guardrail
+        // kept): the outside wall along the open space went with it.
+        assert!(plate.edges.iter().all(|(a, b)| a.x >= 38.0 * 12.0 && b.x >= 38.0 * 12.0), "{:?}", plate.edges);
+        // A label in a space whose edge is drawn as no wall (the trace gets out to the whole
+        // plate) leaves the plate whole; so does a label off the plate, and none at all.
+        let open_ring = ring(&[(0.25, 0.25), (59.75, 0.25), (59.75, 39.75), (0.25, 39.75)]);
+        for (w, at) in [(&open_ring, Vec2::new(240.0, 240.0)), (&walls, Vec2::new(-500.0, 240.0))] {
+            let (p, n) = building_open(w, lo, hi, 12.0, &[at]);
+            assert_eq!(n, 0);
+            assert!((sf(&p.unwrap()) - 2400.0).abs() < 30.0);
+        }
+        assert_eq!(building_open(&walls, lo, hi, 12.0, &[]).1, 0);
     }
 
     /// A storey 130' × 46': a stair (0–10') behind a 3' door at the west end of a 6' corridor

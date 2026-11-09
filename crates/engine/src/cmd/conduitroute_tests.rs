@@ -279,6 +279,38 @@ fn a_truss_is_passed_between_its_chords_never_bored() {
     assert!(pass.iter().all(|h| h.dia_in == 0.0));
 }
 
+/// Q6314: a top floor's run across the roof trusses, a few feet in from their ends, goes up
+/// between the chords and straight across: a pass through an open web bores nothing, so it is
+/// no labor, and the run never goes round the trusses' ends (past the walls they bear on).
+#[test]
+fn a_run_across_trusses_by_their_ends_passes_their_webs_never_round_the_ends() {
+    // Trusses along y (y = -240 to 240) every 24" over a 100' floor, 112" to 136".
+    let members = (0..=50)
+        .map(|k| {
+            let x = 24.0 * f64::from(k);
+            (
+                Obs {
+                    handle: Handle(0x56),
+                    lo: Vec3::new(x - 0.75, -240.0, 112.0),
+                    hi: Vec3::new(x + 0.75, 240.0, 136.0),
+                    category: FRAMING.into(),
+                    system: "roof truss".into(),
+                    trade: "framing",
+                },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 1.5, truss: true },
+            )
+        })
+        .collect();
+    let field = Field::with_framing(Vec::new(), members, UPF);
+    // 6" in from the trusses' end (y = 240), across 49 of them; the first tier meets the chords.
+    let (a, b) = (Vec2::new(12.0, 234.0), Vec2::new(1188.0, 234.0));
+    let leg = route_leg(a, b, &[114.0, 124.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty(), "{leg:?}");
+    assert!(leg.pts.iter().all(|p| p.y <= 240.0 - 1.25), "never past the trusses' ends: {leg:?}");
+    assert_eq!(leg.z, vec![124.0], "between the chords: {leg:?}");
+    assert_eq!(leg.holes, 0, "a pass through a truss's web is no bored hole");
+}
+
 #[test]
 fn hostile_framing_never_panics() {
     let bad = vec![
@@ -812,4 +844,113 @@ fn a_units_receptacle_runs_out_under_the_unit_and_rises_beside_it() {
     assert!((z - 2.5).abs() < 1e-9, "out of the box's side, 1-1/2 in under its top: {z}");
     let (_, _, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[], rules());
     assert_eq!(blocked, Some(0));
+}
+
+/// Q6347: a feeder from the ground floor's switchboard to a panel two floors up, routed and cut
+/// into pieces: its takeoff has the buried raceway only under the slab (and its stub-up), the
+/// above-grade raceway rising on every level it passes and running on the panel's level, one
+/// coupling where the riser passes each floor, a firestop at each floor, and its conductors
+/// along the whole route on each level.
+#[test]
+fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_level() {
+    let mut s = crate::Session::empty();
+    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Feeder Riser", None);
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [
+            {"name": "Ground", "elevation_ft": 0, "height_ft": 11, "ceiling_ft": 9, "region": [0, 0, 1200, 1200]},
+            {"name": "Middle", "elevation_ft": 11, "height_ft": 10, "ceiling_ft": 8, "region": [2000, 0, 3200, 1200]},
+            {"name": "Upper", "elevation_ft": 21, "height_ft": 10, "ceiling_ft": 8, "region": [4000, 0, 5200, 1200]}
+        ],
+        "mep": {
+            "systems": [
+                {"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [3, 0], "bottom_ft": 10},
+                {"name": "E-UG", "layer": "E-UG", "kind": "conduit", "size_in": [3, 0], "bottom_ft": -1.5}
+            ],
+            "equipment": [
+                {"tag": "SB1", "kind": "switchboard", "level": "Ground", "min": [0, 0], "max": [48, 24], "height_ft": 7, "bottom_ft": 0},
+                {"tag": "PU", "kind": "panel", "level": "Upper", "min": [4600, 600], "max": [4624, 612], "height_ft": 4, "bottom_ft": 2},
+                {"tag": "PG", "kind": "panel", "level": "Ground", "min": [480, 600], "max": [504, 612], "height_ft": 3, "bottom_ft": 4}
+            ],
+            "feeders": [{"tag": "F7", "from": "SB1", "to": "PU", "sets": 1, "phases": 3, "size": "3/0", "material": "cu", "neutrals": 1,
+                         "neutral_size": "3/0", "grounds": 1, "ground_size": "#6", "conduits": 1, "conduit_in": 3, "entry": "top", "from_entry": "bottom",
+                         "source": "riser diagram"},
+                        {"tag": "F8", "from": "SB1", "to": "PG", "sets": 1, "phases": 3, "size": "3/0", "material": "cu", "neutrals": 1,
+                         "neutral_size": "3/0", "grounds": 1, "ground_size": "#6", "conduits": 1, "conduit_in": 3, "entry": "top", "from_entry": "bottom",
+                         "source": "riser diagram"}]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
+    let (runs, left) = super::gearbuild::feeder_runs(&sp);
+    assert!(left.is_empty(), "{left:?}");
+    sp.mep.runs = runs;
+    s.execute("bspec.set", &json!({"replace": true, "spec": serde_json::to_value(&sp).unwrap()})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let r = s.execute("conduit.reroute", &json!({})).unwrap();
+    assert_eq!(r["routed"], json!(true), "{r}");
+    let t = s.execute("conduit.takeoff", &json!({"price": false})).unwrap();
+    let lines = t["lines"].as_array().cloned().unwrap_or_default();
+    let qty = |level: &str, kind: &str, ty: &str| {
+        lines
+            .iter()
+            .filter(|l| l["level"] == json!(level) && l["kind"] == json!(kind) && l["type"].as_str().unwrap_or_default().starts_with(ty))
+            .map(|l| l["qty"].as_f64().unwrap_or(0.0))
+            .sum::<f64>()
+    };
+    let stub = super::ugplan::rules().stubup.conduit_top_ft;
+    // Buried: only on the ground floor, the trench and the two vertical legs up to the floor and the stub's top.
+    assert_eq!(qty("Middle", "conduit", "PVC") + qty("Upper", "conduit", "PVC"), 0.0, "{lines:#?}");
+    assert!(qty("Ground", "conduit", "PVC") > 0.0, "{lines:#?}");
+    // Above the slab: the riser on the ground floor from the stub's top (and, up beside the
+    // ground floor's panel PG, from its stub's top into PG's top at 7'), the middle floor's full
+    // storey, and on the panel's level its rise, the run across and the drop into its top.
+    assert!((qty("Ground", "conduit", "EMT") - (11.0 - stub) - (7.0 - stub)).abs() < 0.05, "{lines:#?}");
+    assert!((qty("Middle", "conduit", "EMT") - 10.0).abs() < 0.05, "{lines:#?}");
+    assert!(qty("Upper", "conduit", "EMT") >= 9.0 + 1.5 + 3.0 - 0.05, "{lines:#?}");
+    // One coupling where the riser passes each floor, made as a floor joint; a transition out of the stub.
+    let d = s.doc().unwrap();
+    let joints = d
+        .model
+        .iter()
+        .map(|e| props::read(&e.common.xdata))
+        .filter(|p| p.get("atom").map(Prop::text).as_deref() == Some("coupling") && p.get("joint").map(Prop::text).as_deref() == Some("floor"))
+        .count();
+    assert_eq!(joints, 2, "{lines:#?}");
+    // A transition where each stub-up meets the raceway above, also at the panel it rises into
+    // (its stub is no landing in the panel: no adapter or connector there of its own).
+    let transitions: f64 =
+        lines.iter().filter(|l| l["item"].as_str().unwrap_or_default().contains("transition")).map(|l| l["qty"].as_f64().unwrap_or(0.0)).sum();
+    assert_eq!(transitions, 2.0, "{lines:#?}");
+    // Ends into gear: out of SB1's bottom twice (PVC), into PU's and PG's tops (EMT).
+    assert_eq!((qty("Ground", "connector", "PVC"), qty("Ground", "connector", "EMT") + qty("Upper", "connector", "EMT")), (2.0, 2.0), "{lines:#?}");
+    // A firestop at each floor it passes.
+    let fs = |level: &str| {
+        lines.iter().filter(|l| l["kind"] == json!("firestop") && l["level"] == json!(level)).map(|l| l["qty"].as_f64().unwrap_or(0.0)).sum::<f64>()
+    };
+    assert_eq!((fs("Ground"), fs("Middle"), fs("Upper")), (0.0, 1.0, 1.0), "{lines:#?}");
+    // Its conductors ride the whole route: on the middle floor, the storey's riser.
+    let wire = |level: &str| {
+        lines
+            .iter()
+            .filter(|l| l["kind"] == json!("wire") && l["level"] == json!(level) && l["size"].as_str().unwrap_or_default().contains("3/0"))
+            .map(|l| l["qty"].as_f64().unwrap_or(0.0))
+            .sum::<f64>()
+    };
+    assert!(wire("Middle") >= 4.0 * 10.0 - 0.1, "three hots and a neutral up the storey: {lines:#?}");
+}
+
+/// Q6314: a top floor (floor 0, top 96") under 24" roof trusses bearing on its walls (96" to
+/// 120") routes up through their webs, as it does through the floor above's joists in the
+/// storey's height; framing far above (another storey's) is not over it.
+#[test]
+fn a_top_floors_tiers_go_up_into_the_roof_trusses_bearing_on_its_walls() {
+    let keep = 2.125;
+    // The trusses wholly above the storey's top: their webs are routing space.
+    assert_eq!(framing_tier_top(0.0, 96.0, 96.0, 120.0, keep, UPF), Some(120.0 - keep));
+    // Joists within the storey's height, as before.
+    assert_eq!(framing_tier_top(0.0, 120.0, 108.0, 120.0, keep, UPF), Some(120.0 - keep));
+    // Framing a storey up (bearing 10' over this storey's top) is not this level's.
+    assert_eq!(framing_tier_top(0.0, 96.0, 216.0, 240.0, keep, UPF), None);
+    assert_eq!(framing_tier_top(0.0, 96.0, f64::NAN, f64::NAN, keep, UPF), None);
 }

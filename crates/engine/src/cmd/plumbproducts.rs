@@ -609,7 +609,7 @@ fn words(s: &str) -> BTreeSet<String> {
 /// The rough-in table's row for a fixture: the one sharing most words with its name (and its
 /// description), a row for a narrower use (rules data `narrowing_words`) only when the fixture says
 /// it; a tie the name alone can't settle is no row. The row and the other rows that tied.
-fn connection_row<'a>(r: &Rules, rows: &'a [ConnectionRow], fixture: &str, description: &str) -> Option<(&'a ConnectionRow, Vec<String>)> {
+pub(crate) fn connection_row<'a>(r: &Rules, rows: &'a [ConnectionRow], fixture: &str, description: &str) -> Option<(&'a ConnectionRow, Vec<String>)> {
     let name = words(fixture);
     let all: BTreeSet<String> = name.union(&words(description)).cloned().collect();
     let narrow: BTreeSet<String> = r.narrowing_words.iter().map(|w| w.to_ascii_uppercase()).collect();

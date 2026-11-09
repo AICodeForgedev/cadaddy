@@ -444,9 +444,62 @@ fn submittal_source(s: &str) -> bool {
 impl Docs {
     /// Read the documents; `lum_marks` are the marks the model's luminaires carry, `file_of_mark`
     /// the submittal file their elements name.
-    pub fn of(d: &Drawing, kinds: &Kinds, prints: Option<&Prints>, lum_marks: &BTreeSet<String>, file_of_mark: &HashMap<String, String>) -> Docs {
+    /// The fixture schedule is the job reader's (`mep.fixture_schedule`, read by its grid), the
+    /// one Validate reads again (`again`, E-LUM-SCHEDULE's), and the prints' schedule and legend
+    /// rows (Q6338: a set whose schedule only the grid reader reads still has one).
+    pub(crate) fn of(
+        d: &Drawing,
+        sp: &BuildingSpec,
+        kinds: &Kinds,
+        prints: Option<&Prints>,
+        again: Option<&super::validate_fixtures::FixtureDocs>,
+        lum_marks: &BTreeSet<String>,
+        file_of_mark: &HashMap<String, String>,
+    ) -> Docs {
         let mut schedule: HashMap<String, Vec<Row>> = HashMap::new();
         let mut sheets = BTreeSet::new();
+        let add_row = |schedule: &mut HashMap<String, Vec<Row>>, m: String, source: String, fields: BTreeMap<String, String>| {
+            let list = schedule.entry(m).or_default();
+            if list.len() < 4 && !list.iter().any(|r| r.fields == fields) {
+                list.push(Row { source, fields, text: String::new() });
+            }
+        };
+        let fields_of = |maker: &str, model: &str, voltage: &str, lamp: &str, va: Option<f64>, installation: &str, description: &str| {
+            let mut f = BTreeMap::new();
+            for (k, v) in [
+                ("manufacturer", maker),
+                ("catalog", model),
+                ("voltage", voltage),
+                ("lamp", lamp),
+                ("installation", installation),
+                ("description", description),
+            ] {
+                if !v.trim().is_empty() {
+                    f.insert(k.to_string(), v.trim().chars().take(200).collect::<String>());
+                }
+            }
+            if let Some(va) = va.filter(|v| v.is_finite() && *v > 0.0) {
+                f.insert("va".to_string(), format!("{va}"));
+            }
+            f
+        };
+        for t in sp.mep.fixture_schedule.iter().take(MAX_ROWS) {
+            let Some(m) = mark_key(&t.tag) else { continue };
+            let on = if t.source.trim().is_empty() { String::new() } else { format!(" on {}", t.source.trim()) };
+            if !t.source.trim().is_empty() {
+                sheets.insert(t.source.trim().to_string());
+            }
+            let f = fields_of(&t.manufacturer, &t.model, &t.voltage, &t.lamp, t.va, &t.installation, &t.description);
+            add_row(&mut schedule, m, cite(&format!("the job's light fixture schedule{on}, type {}", t.tag)), f);
+        }
+        for r in again.map(|a| a.rows.values().collect::<Vec<_>>()).unwrap_or_default().into_iter().take(MAX_ROWS) {
+            let Some(m) = mark_key(&r.tag) else { continue };
+            if !r.sheet.trim().is_empty() {
+                sheets.insert(r.sheet.trim().to_string());
+            }
+            let f = fields_of(&r.maker, &r.model, &r.voltage, &r.lamp, r.va, &r.installation, &r.description);
+            add_row(&mut schedule, m, cite(&format!("{} on {}, type {} (read again)", r.title, r.sheet, r.tag)), f);
+        }
         let rows: &[ScheduleRow] = prints.map_or(&[][..], |p| p.schedule.as_slice());
         for r in rows.iter().take(MAX_ROWS) {
             let Some(m) = mark_key(&r.mark) else { continue };
@@ -457,10 +510,7 @@ impl Docs {
             }
             sheets.insert(r.sheet.clone());
             let source = cite(&format!("schedule {} on {}, mark {}", r.schedule, r.sheet, r.mark));
-            let list = schedule.entry(m).or_default();
-            if list.len() < 4 {
-                list.push(Row { source, fields: r.fields.clone(), text: String::new() });
-            }
+            add_row(&mut schedule, m, source, r.fields.clone());
         }
         // A fixture schedule drawn on a sheet (read as legend rows under its heading).
         for (m, said) in kinds.legend_said() {
@@ -750,6 +800,8 @@ pub(crate) struct Input<'a> {
     pub areas: &'a [Area],
     /// Only these rules (empty: all).
     pub only: &'a [String],
+    /// The fixture schedule Validate read again ([`super::validate_fixtures::read_docs`]).
+    pub fixture_docs: Option<&'a super::validate_fixtures::FixtureDocs>,
 }
 
 /// Is the rule `id` on (and asked for)?
@@ -793,7 +845,7 @@ pub(crate) fn screen(inp: &Input, items: &[Lit]) -> Found {
             file_of_mark.entry(m).or_insert(s);
         }
     }
-    let docs = Docs::of(inp.d, inp.kinds, inp.prints, &lum_marks, &file_of_mark);
+    let docs = Docs::of(inp.d, inp.sp, inp.kinds, inp.prints, inp.fixture_docs, &lum_marks, &file_of_mark);
     // Who controls what: a control reaches its room's luminaires on its leg (an unlettered
     // control the unlettered ones), and any it or they are linked to.
     let by_handle: HashMap<String, usize> = facts.iter().enumerate().map(|(i, f)| (f.it.handle.to_ascii_uppercase(), i)).collect();
@@ -1568,6 +1620,7 @@ fn carried(inp: &Input, facts: &[Fact], out: &mut Found) {
 /// when the area has no lighting.
 pub(crate) fn annotate(
     d: &Drawing,
+    sp: &BuildingSpec,
     model: &Model,
     kinds: &Kinds,
     prints: Option<&Prints>,
@@ -1614,7 +1667,7 @@ pub(crate) fn annotate(
             file_of_mark.entry(m.clone()).or_insert_with(|| sub.to_string());
         }
     }
-    let docs = Docs::of(d, kinds, prints, &lum_marks, &file_of_mark);
+    let docs = Docs::of(d, sp, kinds, prints, None, &lum_marks, &file_of_mark);
     let mut pages: BTreeSet<String> = BTreeSet::new();
     let mut types = Vec::new();
     for m in &lum_marks {

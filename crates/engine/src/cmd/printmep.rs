@@ -196,6 +196,7 @@ pub(crate) fn level_name(code: &str) -> String {
     match c {
         "" => "Level 1".to_string(),
         "R" | "r" => "Roof".to_string(),
+        l if l.eq_ignore_ascii_case(cadaddy_walk3d::levels::MEZZANINE_CODE) => "Mezzanine".to_string(),
         l if l.chars().all(|ch| ch.is_ascii_digit()) => format!("Level {l}"),
         l => l.to_string(),
     }
@@ -1086,6 +1087,8 @@ mod tests {
         assert_eq!(level_name("R"), "Roof");
         assert_eq!(level_name(""), "Level 1");
         assert_eq!(level_name("Mezzanine"), "Mezzanine");
+        // The print set's mezzanine code names the level the job drafts (guided `level_name`).
+        assert_eq!(level_name("M"), "Mezzanine");
     }
 
     #[test]

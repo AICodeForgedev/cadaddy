@@ -77,6 +77,12 @@ pub(crate) struct FillRules {
     pub vent: String,
     pub vent_stacks: Vec<String>,
     pub vent_stack_basis: String,
+    /// The documents' size columns (a schedule row's or the rough-in table's: `waste`, `vent`,
+    /// `trap`) that size a fixture's drainage branch, by system, tried in order; below grade (the
+    /// lowest storey) its own list (`waste_below` first), and why the documents come first.
+    pub doc_sizes: BTreeMap<String, Vec<String>>,
+    pub doc_sizes_below_grade: BTreeMap<String, Vec<String>>,
+    pub doc_size_basis: String,
     /// The size of a fixture's drainage branch by its system and words (the first that matches;
     /// no words: any fixture), with the code section.
     pub sizes: Vec<LineSize>,
@@ -180,6 +186,23 @@ impl FillRules {
             .map(|z| (z.size_in, z.source.as_str()))
     }
 
+    /// A fixture's drainage branch sizes from its documents' size cells (`cells`: a schedule row's
+    /// connection columns or the rough-in table row's, keyed `waste`, `vent`, `trap`,
+    /// `waste_below`), by system: the first column of the rules' list for the system (below grade:
+    /// [`Self::doc_sizes_below_grade`]) with a size in it, and where it is from (`source` and the
+    /// column). A blank cell (`--`) sizes nothing.
+    pub(crate) fn doc_sizes_of(&self, cells: &BTreeMap<String, String>, below_grade: bool, source: &str) -> BTreeMap<String, (f64, String)> {
+        let keys = if below_grade && !self.doc_sizes_below_grade.is_empty() { &self.doc_sizes_below_grade } else { &self.doc_sizes };
+        keys.iter()
+            .filter_map(|(sys, cols)| {
+                cols.iter().find_map(|c| {
+                    let v = super::propuse::codes::inches(cells.get(c)?)?;
+                    (v > 0.0 && v <= MAX_DOC_SIZE_IN).then(|| (sys.clone(), (v, format!("{source}, {c} column: {}", self.doc_size_basis))))
+                })
+            })
+            .collect()
+    }
+
     /// The systems [`infer`] runs lines of: the water, then the drainage.
     fn filled(&self) -> impl Iterator<Item = &String> {
         self.water.iter().chain(self.drainage.iter().filter(|d| !self.water.contains(d)))
@@ -191,6 +214,10 @@ struct File {
     #[serde(default)]
     fill_in: FillRules,
 }
+
+/// The largest fixture drain or vent size a document cell may give (inches): a larger number in
+/// the cell is not a size.
+const MAX_DOC_SIZE_IN: f64 = 12.0;
 
 /// The fill-in rules data.
 pub(crate) fn rules() -> FillRules {
@@ -649,8 +676,12 @@ pub(crate) struct Fixture {
     pub at: [f64; 2],
     pub what: String,
     pub lines: Vec<String>,
-    /// Its tag and schedule row's words (what sizes its drainage branches).
+    /// Its tag and schedule row's words (what sizes its drainage branches where its documents
+    /// don't).
     pub words: String,
+    /// Its drainage branch sizes its documents give, by system, with their source
+    /// ([`FillRules::doc_sizes_of`]); a system with none is sized by the code's table.
+    pub sizes: BTreeMap<String, (f64, String)>,
 }
 
 /// The building's lines on a floor: the direction (a unit vector, and the one square to it) its
@@ -722,7 +753,9 @@ pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: 
             if near_pipe(sys, f.at, reach, false) || (*sys == ru.vent && stack_near(f.at)) {
                 continue;
             }
-            let (size_in, size_basis) = if ru.drainage.contains(sys) {
+            let (size_in, size_basis) = if let Some((z, b)) = f.sizes.get(sys).filter(|_| ru.drainage.contains(sys)) {
+                (*z, b.clone())
+            } else if ru.drainage.contains(sys) {
                 ru.size_for(sys, &f.words).map_or((0.0, String::new()), |(z, b)| (z, b.to_string()))
             } else {
                 (0.0, String::new())
@@ -1117,7 +1150,13 @@ mod tests {
         let mains = vec![&main];
         // The fixture's tee (x 20, from the main at y 2.5 up to y 30) would cross a panel set in
         // the wall at y 15 (a foot wide, 4 in deep), its top at 6.5 ft: dedicated to 12.5 ft.
-        let fixtures = vec![Fixture { at: [20.0 * 12.0, 30.0 * 12.0], what: "P-91".into(), lines: vec!["CW".into()], words: String::new() }];
+        let fixtures = vec![Fixture {
+            at: [20.0 * 12.0, 30.0 * 12.0],
+            what: "P-91".into(),
+            lines: vec!["CW".into()],
+            words: String::new(),
+            sizes: BTreeMap::new(),
+        }];
         let panel = KeepOut { min: [19.6 * 12.0, 15.0 * 12.0], max: [20.6 * 12.0, 15.33 * 12.0], top_ft: 12.5, what: "PNL-9".into() };
         let n = needs(&mains, &fixtures, 15.0, 12.0, &r, true);
         let inf = infer_clear("Level 2", &mains, &mains, n.clone(), 12.0, &r, std::slice::from_ref(&panel));
@@ -1156,9 +1195,21 @@ mod tests {
         // Beside the main (x 20): straight across. Past its end (x 70): the main on to x 70, then
         // the branch. Out of reach (x 400): left, listed.
         let fixtures = vec![
-            Fixture { at: [20.0 * 12.0, 30.0 * 12.0], what: "P-91".into(), lines: vec!["CW".into(), "SAN".into()], words: String::new() },
-            Fixture { at: [70.0 * 12.0, 30.0 * 12.0], what: "P-92".into(), lines: vec!["CW".into(), "HW".into()], words: String::new() },
-            Fixture { at: [400.0 * 12.0, 30.0 * 12.0], what: "P-93".into(), lines: vec!["CW".into()], words: String::new() },
+            Fixture {
+                at: [20.0 * 12.0, 30.0 * 12.0],
+                what: "P-91".into(),
+                lines: vec!["CW".into(), "SAN".into()],
+                words: String::new(),
+                sizes: BTreeMap::new(),
+            },
+            Fixture {
+                at: [70.0 * 12.0, 30.0 * 12.0],
+                what: "P-92".into(),
+                lines: vec!["CW".into(), "HW".into()],
+                words: String::new(),
+                sizes: BTreeMap::new(),
+            },
+            Fixture { at: [400.0 * 12.0, 30.0 * 12.0], what: "P-93".into(), lines: vec!["CW".into()], words: String::new(), sizes: BTreeMap::new() },
         ];
         let n = needs(&mains, &fixtures, 15.0, 12.0, &r, true);
         // CW for all three (none within 15 ft), HW for the second, the first's waste.
@@ -1185,7 +1236,13 @@ mod tests {
         assert!((on.size_in[0] - 2.0).abs() < 1e-9);
         assert_eq!(inf.runs.len(), 3);
         // A fixture with water in reach needs nothing.
-        let near = vec![Fixture { at: [20.0 * 12.0, 10.0 * 12.0], what: "P-94".into(), lines: vec!["CW".into()], words: String::new() }];
+        let near = vec![Fixture {
+            at: [20.0 * 12.0, 10.0 * 12.0],
+            what: "P-94".into(),
+            lines: vec!["CW".into()],
+            words: String::new(),
+            sizes: BTreeMap::new(),
+        }];
         assert!(needs(&mains, &near, 15.0, 12.0, &r, true).is_empty());
     }
 
@@ -1225,8 +1282,8 @@ mod tests {
         // A lavatory and a tub 3' apart, 20' from the main: one line from the main to the first,
         // the second teed off it (not a second line beside it).
         let fixtures = vec![
-            Fixture { at: [40.0 * 12.0, 22.5 * 12.0], what: "P-91".into(), lines: vec!["CW".into()], words: String::new() },
-            Fixture { at: [43.0 * 12.0, 22.5 * 12.0], what: "P-92".into(), lines: vec!["CW".into()], words: String::new() },
+            Fixture { at: [40.0 * 12.0, 22.5 * 12.0], what: "P-91".into(), lines: vec!["CW".into()], words: String::new(), sizes: BTreeMap::new() },
+            Fixture { at: [43.0 * 12.0, 22.5 * 12.0], what: "P-92".into(), lines: vec!["CW".into()], words: String::new(), sizes: BTreeMap::new() },
         ];
         let n = needs(&[&main], &fixtures, 15.0, 12.0, &r, true);
         assert_eq!(n.len(), 2);
@@ -1268,6 +1325,7 @@ mod tests {
                 what: (*w).into(),
                 lines: vec!["HW".into()],
                 words: String::new(),
+                sizes: BTreeMap::new(),
             })
             .collect();
         let n = needs(&[&main], &fixtures, 15.0, 12.0, &r, true);
@@ -1303,7 +1361,8 @@ mod tests {
         let mut slant = run("CW", "Level 2", &[[0.0, 0.0], [10.0, 5.0]]);
         slant.height_source = DERIVED.into();
         let main2 = run("CW", "Level 2", &[[-40.0, -20.0], [60.0, -20.0]]);
-        let f = [Fixture { at: [24.0 * 12.0, 24.0 * 12.0], what: "P-96".into(), lines: vec!["CW".into()], words: String::new() }];
+        let f =
+            [Fixture { at: [24.0 * 12.0, 24.0 * 12.0], what: "P-96".into(), lines: vec!["CW".into()], words: String::new(), sizes: BTreeMap::new() }];
         let n = needs(&[&slant], &f, 15.0, 12.0, &r, true);
         let inf = infer("Level 2", &[&slant], &[&slant, &main2], n, 12.0, &r);
         assert_eq!(inf.served, 1);
@@ -1337,7 +1396,13 @@ mod tests {
         main.height_source = DERIVED.into();
         // A drawn pipe up from the main to 25 ft; the fixture's need came from the main alone.
         let up = run("CW", "Level 2", &[[20.0, 2.5], [20.0, 25.0]]);
-        let fixtures = vec![Fixture { at: [20.0 * 12.0, 30.0 * 12.0], what: "P-91".into(), lines: vec!["CW".into()], words: String::new() }];
+        let fixtures = vec![Fixture {
+            at: [20.0 * 12.0, 30.0 * 12.0],
+            what: "P-91".into(),
+            lines: vec!["CW".into()],
+            words: String::new(),
+            sizes: BTreeMap::new(),
+        }];
         let n = needs(&[&main], &fixtures, 15.0, 12.0, &r, true);
         assert_eq!(n.len(), 1);
         let inf = infer("Level 2", &[&main], &[&main, &up], n, 12.0, &r);
@@ -1390,7 +1455,9 @@ mod tests {
     fn a_pipe_at_the_edge_of_reach_is_not_counted_on() {
         let r = ru();
         let main = run("HW", "Level 2", &[[0.0, 0.0], [40.0, 0.0]]);
-        let at = |y: f64| vec![Fixture { at: [20.0 * 12.0, y * 12.0], what: "P-95".into(), lines: vec!["HW".into()], words: String::new() }];
+        let at = |y: f64| {
+            vec![Fixture { at: [20.0 * 12.0, y * 12.0], what: "P-95".into(), lines: vec!["HW".into()], words: String::new(), sizes: BTreeMap::new() }]
+        };
         assert_eq!(needs(&[&main], &at(14.8), 15.0, 12.0, &r, false).len(), 1);
         assert!(needs(&[&main], &at(13.5), 15.0, 12.0, &r, false).is_empty());
     }
@@ -1417,6 +1484,7 @@ mod tests {
             what: "P-91".into(),
             lines: vec!["SAN".into(), "V".into()],
             words: "P-91 WATER CLOSET floor mounted".into(),
+            sizes: BTreeMap::new(),
         };
         let all = vec![&san, &vent];
         let n = needs(&all, std::slice::from_ref(&wc), 15.0, 12.0, &r, false);
@@ -1449,6 +1517,44 @@ mod tests {
             assert_eq!(r.size_for(sys, words).map(|z| z.0), Some(size), "{sys} {words}");
         }
         assert!(r.size_for("CW", "P-91 WATER CLOSET").is_none());
+    }
+
+    #[test]
+    fn a_fixtures_drain_takes_the_documents_rough_in_size_before_the_codes_table() {
+        let r = ru();
+        let san = run("SAN", "Level 3", &[[0.0, 0.0], [10.0, 0.0]]);
+        let vent = run("V", "Level 3", &[[0.0, 0.0], [10.0, 0.0]]);
+        // A rough-in table row: waste 1-1/2", vent 1-1/4" (the code's table: lavatory 1-1/4").
+        let cells: BTreeMap<String, String> =
+            [("waste", "1-1/2\""), ("vent", "1-1/4\""), ("cw", "1/2\"")].iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+        let sizes = r.doc_sizes_of(&cells, false, "the rough-in table's LAVATORY row");
+        assert_eq!(sizes.get("SAN").map(|z| z.0), Some(1.5), "{sizes:?}");
+        assert_eq!(sizes.get("V").map(|z| z.0), Some(1.25));
+        assert!(sizes.get("SAN").is_some_and(|z| z.1.contains("LAVATORY row, waste column")), "{sizes:?}");
+        assert!(!sizes.contains_key("CW"), "water is not a drainage branch");
+        let lav = Fixture {
+            at: [20.0 * 12.0, 25.0 * 12.0],
+            what: "P-92".into(),
+            lines: vec!["SAN".into(), "V".into()],
+            words: "P-92 LAVATORY wall hung".into(),
+            sizes,
+        };
+        let all = vec![&san, &vent];
+        let n = needs(&all, std::slice::from_ref(&lav), 15.0, 12.0, &r, false);
+        let inf = infer("Level 3", &all, &all, n, 12.0, &r);
+        let s = inf.runs.iter().find(|x| x.system == "SAN" && x.size_source.contains("branch to")).expect("its waste branch");
+        assert!((s.size_in[0] - 1.5).abs() < 1e-9, "the documents' 1-1/2 in, not the code's 1-1/4: {:?}", s.size_in);
+        assert!(s.size_source.contains("rough-in table"), "{}", s.size_source);
+        // Below grade the below-grade waste column, blank cells size nothing.
+        let below: BTreeMap<String, String> =
+            [("waste", "1-1/2\""), ("waste_below", "2\""), ("vent", "--")].iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+        let z = r.doc_sizes_of(&below, true, "row");
+        assert_eq!(z.get("SAN").map(|x| x.0), Some(2.0));
+        assert!(!z.contains_key("V"), "{z:?}");
+        // No document size: the code's table.
+        let bare = Fixture { sizes: BTreeMap::new(), ..lav };
+        let n = needs(&all, std::slice::from_ref(&bare), 15.0, 12.0, &r, false);
+        assert!(n.iter().any(|x| x.system == "SAN" && (x.size_in - 1.25).abs() < 1e-9), "{n:?}");
     }
 
     #[test]

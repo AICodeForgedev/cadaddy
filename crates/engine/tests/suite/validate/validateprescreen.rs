@@ -145,6 +145,13 @@ fn job() -> Job {
 
 /// [`job`] with more receptacles at building points (feet): their handles.
 fn job_with(extra: &[[f64; 2]]) -> (Job, Vec<String>) {
+    job_full(extra, false)
+}
+
+/// [`job_with`]; with `shapes`, room 101 has a wall fin run in from its east partition and a
+/// chase notched into its north wall, and room 102 a bath fin off its north wall (its walls no
+/// longer read the same turned).
+fn job_full(extra: &[[f64; 2]], shapes: bool) -> (Job, Vec<String>) {
     let mut s = Session::new();
     // A 100' × 12' shell of 6" walls; partitions at 15' and 30'.
     layer(&mut s, "A-WALL");
@@ -153,6 +160,13 @@ fn job_with(extra: &[[f64; 2]]) -> (Job, Vec<String>) {
     layer(&mut s, "A-WALL-CL");
     line(&mut s, [15.0, 0.5], [15.0, 11.5]);
     line(&mut s, [30.0, 0.5], [30.0, 11.5]);
+    if shapes {
+        line(&mut s, [15.0, 6.0], [8.0, 6.0]);
+        line(&mut s, [5.0, 11.5], [5.0, 10.5]);
+        line(&mut s, [5.0, 10.5], [9.0, 10.5]);
+        line(&mut s, [9.0, 10.5], [9.0, 11.5]);
+        line(&mut s, [22.0, 11.5], [22.0, 7.5]);
+    }
     layer(&mut s, "A-ROOM-TAG");
     text(&mut s, at([5.0, 6.0]), "101");
     text(&mut s, at([20.0, 6.0]), "102");
@@ -1001,5 +1015,133 @@ fn a_packet_labels_only_the_types_own_views_and_an_unknown_turn_as_uncertain() {
     assert!(mech["orientation"]["read"].as_str().unwrap().contains("unsure"), "{mech}");
     let prompt = std::fs::read_to_string(out.join("prompt.md")).unwrap();
     assert!(prompt.contains("only the unit's hand says it is mirrored"), "{prompt}");
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+/// Sheets of room 102's unit type's views (Q6339), beside the others.
+const A821: f64 = 32000.0;
+const M601: f64 = 36000.0;
+const P701: f64 = 40000.0;
+const E601: f64 = 44000.0;
+
+/// `p` (feet round `mid`) as a view drawn turned `k` (as the validate turns: `k % 4` quarters
+/// counter-clockwise after a mirror for `k >= 4`, undone) at `scale` drawing units a foot, its
+/// middle at `vc`.
+fn drawn_at(p: [f64; 2], mid: [f64; 2], k: u8, vc: [f64; 2], scale: f64) -> [f64; 2] {
+    let d = [p[0] - mid[0], p[1] - mid[1]];
+    let q = match k % 4 {
+        1 => [d[1], -d[0]],
+        2 => [-d[0], -d[1]],
+        3 => [-d[1], d[0]],
+        _ => d,
+    };
+    let q = if k >= 4 { [-q[0], q[1]] } else { q };
+    [vc[0] + q[0] * scale, vc[1] + q[1] * scale]
+}
+
+/// Room 102 of [`job_full`] with its shapes as an enlarged view draws it (feet): both faces of
+/// its walls and its fin, and a bed.
+fn room_102_lines() -> Vec<([f64; 2], [f64; 2])> {
+    let mut v = vec![
+        ([14.8, 0.0], [30.2, 0.0]),
+        ([14.8, 0.5], [30.2, 0.5]),
+        ([14.8, 11.5], [30.2, 11.5]),
+        ([14.8, 12.0], [30.2, 12.0]),
+        ([14.797, 0.5], [14.797, 11.5]),
+        ([15.203, 0.5], [15.203, 11.5]),
+        ([29.797, 0.5], [29.797, 11.5]),
+        ([30.203, 0.5], [30.203, 11.5]),
+        ([21.797, 7.5], [21.797, 11.5]),
+        ([22.203, 7.5], [22.203, 11.5]),
+        ([21.797, 7.5], [22.203, 7.5]),
+    ];
+    let bed = [[24.0, 2.0], [29.0, 2.0], [29.0, 8.0], [24.0, 8.0]];
+    for i in 0..4 {
+        v.push((bed[i], bed[(i + 1) % 4]));
+    }
+    v
+}
+
+#[test]
+fn each_view_of_a_typical_room_is_turned_as_its_own_lines_lie_on_the_rooms_walls() {
+    // The stamping laid the type's unit plan (A-821, drawn turned 180°) into room 102. Its
+    // mechanical view (M-601) is drawn as the plan shows the room, its plumbing view (P-701)
+    // mirrored only, its power view (E-601) at another scale. Each crop says its own turn; the
+    // stamping's turn is no other sheet's (it said "turned 180°, certain" for all four).
+    let (mut j, _) = job_full(&[], true);
+    let a102 = area_of(&mut j.s, "102");
+    let mid = [22.5, 6.0];
+    let views = [
+        (A821, "A-821", "UNIT PLAN - KING", 2u8, 12.0),
+        (M601, "M-601", "MECH ENLARGED KING", 0, 12.0),
+        (P701, "P-701", "PLUMBING ENLARGED KING", 4, 12.0),
+        (E601, "E-601", "POWER ENLARGED KING", 0, 6.0),
+    ];
+    layer(&mut j.s, "G-ENLG");
+    let mut listed = Vec::new();
+    for (x, sheet, title, k, scale) in views {
+        let vc = [x + 1500.0, 1000.0];
+        for (a, b) in room_102_lines() {
+            j.s.execute("line", &json!({"points": [drawn_at(a, mid, k, vc, scale), drawn_at(b, mid, k, vc, scale)]})).unwrap();
+        }
+        let half = 9.5 * scale;
+        listed.push(json!({"sheet": sheet, "title": title, "rect": [vc[0] - half, vc[1] - half, vc[0] + half, vc[1] + half], "sheet_rect": [x, 0.0, x + SW, SH]}));
+    }
+    let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    sp["unit_types"][0]["items"] = json!([]);
+    sp["unit_types"][0]["views"] = json!(listed);
+    sp["unit_instances"][0]["fit"] =
+        json!({"rotation_deg": 180.0, "mirrored": false, "view": "A-821 UNIT PLAN - KING", "by": "linework (as the stamping)"});
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
+    let out = dir("p102turns");
+    j.s.execute("validate.packet", &json!({"area": a102, "out_dir": out.to_string_lossy(), "compare": false})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let prints = m["prints"].as_array().unwrap();
+    let crop = |sheet: &str| {
+        prints.iter().find(|c| c["sheet"] == sheet && c["placed_by"] == "unit_type").unwrap_or_else(|| panic!("no {sheet} crop: {m}")).clone()
+    };
+    let turn = |c: &Value| (c["orientation"]["rotation_deg"].as_f64().map(|d| (d / 90.0).round() as i64 % 4), c["orientation"]["mirrored"].clone());
+    let a = crop("A-821");
+    assert_eq!(turn(&a), (Some(2), json!(false)), "{a}");
+    assert_eq!(a["orientation"]["certain"], true, "{a}");
+    let mech = crop("M-601");
+    assert_eq!(turn(&mech), (Some(0), json!(false)), "{mech}");
+    assert_eq!((mech["orientation"]["by"].clone(), mech["orientation"]["certain"].clone()), (json!("wall fit"), json!(true)), "{mech}");
+    assert!(mech["orientation"]["coverage"].as_f64().unwrap() > 0.9, "{mech}");
+    assert!(mech["orientation"]["read"].is_null(), "drawn as the plan: nothing to say: {mech}");
+    let plumb = crop("P-701");
+    assert_eq!(turn(&plumb), (Some(0), json!(true)), "{plumb}");
+    assert_eq!(plumb["orientation"]["certain"], true, "{plumb}");
+    assert!(plumb["orientation"]["read"].as_str().is_some_and(|r| r.contains("mirrored") && !r.contains("turned")), "{plumb}");
+    // Drawn at another scale its lines lie on no wall: its turn is not known (not the
+    // stamping's), and the crop says so.
+    let power = crop("E-601");
+    assert!(power["orientation"]["rotation_deg"].is_null(), "{power}");
+    assert_eq!(power["orientation"]["certain"], false, "{power}");
+    assert!(power["orientation"]["wall_fit"]["certain"] == false || power["orientation"]["wall_fit"]["why"].is_string(), "{power}");
+    let prompt = std::fs::read_to_string(out.join("prompt.md")).unwrap();
+    assert!(prompt.contains("its turn against the room is not known"), "{prompt}");
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn a_rooms_model_elevations_face_its_outermost_sides_and_name_the_wall_they_face() {
+    // Room 101's north wall is notched by a chase (pieces of 4.5 ft and 6 ft) and a 7 ft wall
+    // fin runs in from its east partition: the fin's faces are inside the room, no side of it.
+    let (mut j, _) = job_full(&[], true);
+    let a101 = area_of(&mut j.s, "101");
+    let out = dir("p101elev");
+    j.s.execute("validate.packet", &json!({"area": a101, "out_dir": out.to_string_lossy(), "compare": false})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let elevs: Vec<&Value> = m["model"].as_array().unwrap().iter().filter(|x| x["kind"] == "elevation").collect();
+    assert_eq!(elevs.len(), 4, "{m}");
+    let walls: Vec<&str> = elevs.iter().filter_map(|e| e["wall"].as_str()).collect();
+    let mut once = walls.clone();
+    once.sort_unstable();
+    once.dedup();
+    assert_eq!(once.len(), walls.len(), "two elevations name one wall: {elevs:?}");
+    let north = elevs.iter().find(|e| e["what"].as_str().is_some_and(|w| w.starts_with("the north side"))).unwrap_or_else(|| panic!("{elevs:?}"));
+    let len: f64 = north["what"].as_str().unwrap().split('(').nth(1).and_then(|t| t.split(' ').next()).and_then(|n| n.parse().ok()).unwrap();
+    assert!(len > 12.0, "the north side is the whole north wall, not the fin's 7 ft face: {north}");
     let _ = std::fs::remove_dir_all(&out);
 }

@@ -574,6 +574,10 @@ impl Field {
     pub(crate) fn framing_top(&self) -> Option<f64> {
         self.frames.keys().filter_map(|i| self.obs.get(*i)).map(|o| o.hi.z).filter(|z| z.is_finite()).min_by(f64::total_cmp)
     }
+    /// The lowest bottom of the framing members over the level (where they bear).
+    pub(crate) fn framing_bottom(&self) -> Option<f64> {
+        self.frames.keys().filter_map(|i| self.obs.get(*i)).map(|o| o.lo.z).filter(|z| z.is_finite()).min_by(f64::total_cmp)
+    }
     pub(crate) fn new(obs: Vec<Obs>, upf: f64) -> Self {
         let cell = (CELL_FT * upf).max(1e-6);
         let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -897,7 +901,8 @@ pub(crate) struct Leg {
     pub pts: Vec<Vec2>,
     pub z: Vec<f64>,
     pub blocked: Vec<Blocked>,
-    /// The holes it bores through the framing (a cost: labor at each).
+    /// The holes it bores through the framing (a cost: labor at each); a pass through a truss's
+    /// web is none.
     pub holes: usize,
 }
 
@@ -912,7 +917,9 @@ fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[H
         let clear = |z: &f64| field.hit(*a, *b, *z, r, upf, skip, rl).is_none() && field.framing(*a, *b, *z, r, upf, rl).is_ok();
         match tiers.iter().copied().find(clear) {
             Some(z) => {
-                leg.holes += field.framing(*a, *b, z, r, upf, rl).map_or(0, |h| h.len());
+                // A pass through a truss's open web bores nothing: only bored holes are labor
+                // (Q6314: counted, a top floor's runs went round the trusses' ends, past the walls).
+                leg.holes += field.framing(*a, *b, z, r, upf, rl).map_or(0, |h| h.iter().filter(|h| h.dia_in > 0.0).count());
                 leg.z.push(z);
             }
             None => {
@@ -943,6 +950,19 @@ fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[H
         }
     }
     leg
+}
+
+/// How high a level's routing tiers go through the framing over it (`floor` and `storey_top` the
+/// level's floor and top; `bottom`, `top` the members' lowest bottom and top; `keep` what the
+/// rules keep clear under their top): up to `top - keep`, for the floor above's joists within
+/// the storey's height and for the roof's trusses bearing on its walls, which stand wholly
+/// above it (Q6314: a top floor's runs were kept under the trusses' bottom chords, so every run
+/// across them was blocked and went round their ends, past the walls). `None`: the framing is
+/// not over the level.
+pub(crate) fn framing_tier_top(floor: f64, storey_top: f64, bottom: f64, top: f64, keep: f64, upf: f64) -> Option<f64> {
+    let z = top - keep;
+    let over = z < storey_top + upf || (bottom >= floor && bottom < storey_top + upf);
+    (z.is_finite() && z > floor && over).then_some(z)
 }
 
 /// The best square route from `a` to `b`: fewest blocked pieces, then shortest (bends cost).
@@ -1649,6 +1669,54 @@ fn detour_run(r: &mut MepRun, at: Vec2, z_ft: f64, bx: [f64; 4], upf: f64) -> Op
     Some((pts.iter().map(|p| Vec2::new(p[0], p[1])).collect(), extra_ft))
 }
 
+/// The fire rating of the floor/ceiling assembly over `below` at `p` (a point of `below`'s plan):
+/// the ceiling type of its reflected ceiling plan's area there, where the documents give one.
+fn floor_rating(sp: &BuildingSpec, p: Vec2, below: &str) -> Option<String> {
+    sp.rcp
+        .ceilings
+        .iter()
+        .filter(|ca| same_level(&ca.level, below) && ca.outline.len() >= 3)
+        .find(|ca| inside(p, &ca.outline.iter().map(|q| Vec2::new(q[0], q[1])).collect::<Vec<_>>()))
+        .and_then(|ca| ca.ceiling_type.as_ref())
+        .and_then(|t| sp.ceiling_types.iter().find(|ct| ct.name.eq_ignore_ascii_case(t)))
+        .and_then(|ct| ct.fire_rating.clone())
+        .filter(|r| !r.trim().is_empty())
+}
+
+/// Each floor a feeder's riser passes (Q6347): a penetration with its firestop, rated by the
+/// floor/ceiling assembly under that floor where the documents give one. The feeder route cuts its
+/// risers at each floor (`gearbuild`), so a feeder's vertical piece standing on its level's floor,
+/// over a level below, passed that floor. `carry` takes a point of one level's plan onto another's.
+fn feeder_floor_penetrations(sp: &BuildingSpec, carry: &dyn Fn(Vec2, &str, &str) -> Vec2, rl: &RouteRules, out: &mut Vec<Value>) {
+    let mut levels: Vec<_> = sp.levels.iter().filter(|l| l.elevation_ft.is_finite()).collect();
+    levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+    for r in sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)) {
+        if out.len() >= MAX_ITEMS {
+            break;
+        }
+        let (Some(top), Some(bot), [p]) = (r.top_ft, r.bottoms_ft.first().copied(), r.points.as_slice()) else { continue };
+        if !(top > bot && bot.abs() < 1e-6) {
+            continue;
+        }
+        let Some(li) = levels.iter().position(|l| same_level(&l.name, &r.level)) else { continue };
+        let Some(below) = li.checked_sub(1).and_then(|j| levels.get(j)) else { continue };
+        let Some(l) = levels.get(li) else { continue };
+        let at = Vec2::new(p[0], p[1]);
+        let rating = floor_rating(sp, carry(at, &l.name, &below.name), &below.name);
+        let size_in = r.size_in[0];
+        out.push(json!({
+            "floor": l.name, "rating": rating.clone().unwrap_or_else(|| "not given".into()), "level": l.name,
+            "circuit": r.source_sheet, "raceway_in": size_in, "feeder": true,
+            "at": [r2(at.x), r2(at.y), 0.0],
+            "firestop": match &rating {
+                Some(v) => format!("{} for {} raceway through the {} floor ({v})", rl.firestop.item, super::mepatoms::trade_size(size_in), l.name),
+                None => format!("{} for {} raceway through the {} floor: rating {}", rl.firestop.item, super::mepatoms::trade_size(size_in), l.name, rl.firestop.floor_unrated),
+            },
+            "source": rl.firestop.source,
+        }));
+    }
+}
+
 fn same_level(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
@@ -2076,7 +2144,13 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         sp.tags.iter().enumerate().filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART)).take(MAX_CIRCUITS).collect();
     // Nothing to route: no circuits, and no low-voltage outlet for a pathway (Q6203).
     if circuit_tags.is_empty() && !lv::any_outlet(d) {
-        out.report = json!({"circuits": 0, "note": "no circuits in the spec: nothing to route"});
+        // The feeders' risers still pass their floors (Q6347).
+        let moves = level_moves(d, sp);
+        let move_of = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+        let carry = |p: Vec2, from: &str, to: &str| p + move_of(from) - move_of(to);
+        let mut penetrations = Vec::new();
+        feeder_floor_penetrations(sp, &carry, rl, &mut penetrations);
+        out.report = json!({"circuits": 0, "note": "no circuits in the spec: nothing to route", "penetrations": penetrations});
         return out;
     }
 
@@ -2648,10 +2722,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut zmax = floor + (l.height_ft.max(ceiling + 1.0) - rl.route.structure_depth_in / 12.0) * upf;
         // The documents' framing over the level is its structure: the tiers go up through the
         // joists' web (to its hole zone's top), not to a default depth under the floor.
-        if let Some(top) = fields.get(&level.to_ascii_lowercase()).and_then(Field::framing_top) {
+        if let Some(field) = fields.get(&level.to_ascii_lowercase())
+            && let (Some(top), Some(bottom)) = (field.framing_top(), field.framing_bottom())
+        {
             let keep = (rl.framing.flange_in.max(0.0) + rl.framing.edge_in.max(0.0) + 0.5) / 12.0 * upf;
-            if top - keep > floor && top - keep < floor + l.height_ft.max(ceiling + 1.0) * upf + upf {
-                zmax = zmax.max(top - keep);
+            if let Some(z) = framing_tier_top(floor, floor + l.height_ft.max(ceiling + 1.0) * upf, bottom, top, keep, upf) {
+                zmax = zmax.max(z);
             }
         }
         let step = (rl.route.tier_step_in.max(1.0) / 12.0) * upf;
@@ -3784,18 +3860,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     continue;
                 }
                 let below = li.checked_sub(1).and_then(|j| levels.get(j));
-                let rating = below.and_then(|b| {
-                    let p = carry(land, &lead_h.level, &b.name);
-                    sp.rcp
-                        .ceilings
-                        .iter()
-                        .filter(|ca| same_level(&ca.level, &b.name) && ca.outline.len() >= 3)
-                        .find(|ca| inside(p, &ca.outline.iter().map(|q| Vec2::new(q[0], q[1])).collect::<Vec<_>>()))
-                        .and_then(|ca| ca.ceiling_type.as_ref())
-                        .and_then(|t| sp.ceiling_types.iter().find(|ct| ct.name.eq_ignore_ascii_case(t)))
-                        .and_then(|ct| ct.fire_rating.clone())
-                        .filter(|r| !r.trim().is_empty())
-                });
+                let rating = below.and_then(|b| floor_rating(sp, carry(land, &lead_h.level, &b.name), &b.name));
                 let fl = json!({
                     "floor": l.name, "rating": rating.clone().unwrap_or_else(|| "not given".into()), "level": lead_h.level,
                     "circuit": labels.join(","), "raceway_in": size_in,
@@ -4436,6 +4501,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "rule": "a branch circuit's conductors are the smallest its breaker allows unless the documents give a size or a voltage-drop or derating calculation needs more",
         "voltage_drop": rl.vdrop.source, "load": rl.vdrop.moment_source, "homerun_first": rl.vdrop.homerun_first_source,
     });
+    // The feeders' risers through the floors (Q6347): their firestop with the branch circuits'.
+    feeder_floor_penetrations(sp, &carry, rl, &mut penetrations);
     out.report = json!({
         "circuits": circs.len(),
         "routed_circuits": homes.len(),

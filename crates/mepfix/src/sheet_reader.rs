@@ -417,14 +417,20 @@ pub fn detect_levels(title: &str) -> Vec<String> {
                 }
                 if before.is_empty() && saw_typical {
                     has_typical = true;
+                } else if words.get(i + 1).is_some_and(|w| is_mezzanine_word(w)) {
+                    // `SECOND FLOOR MEZZANINE PLAN`: the floor names whose mezzanine it is, no
+                    // plan of that floor.
                 } else {
                     found.extend(before.iter().map(u32::to_string));
                 }
             }
+            w if is_mezzanine_word(w) => found.push(cadaddy_walk3d::levels::MEZZANINE_CODE.to_string()),
             "LEVEL" | "LEVELS" => {
                 let rest = words.get(i + 1..).unwrap_or_default();
                 let numbers = numbers_after(rest);
-                if numbers.is_empty() && i > 0 && words.get(i - 1).is_some_and(|p| is_first_floor_word(p)) {
+                if numbers.len() == 1 && words.get(i + 2).is_some_and(|w| is_mezzanine_word(w)) {
+                    // `LEVEL 2 MEZZANINE`: the mezzanine's floor.
+                } else if numbers.is_empty() && i > 0 && words.get(i - 1).is_some_and(|p| is_first_floor_word(p)) {
                     // `GROUND LEVEL PLAN`, `GRADE LEVEL`: the first floor.
                     found.push("1".into());
                 } else if numbers.is_empty() {
@@ -452,10 +458,23 @@ pub fn detect_levels(title: &str) -> Vec<String> {
     if words.iter().any(|w| w == "ROOF") && words.iter().any(|w| w == "PLAN" || w == "PLANS") {
         found.push("R".to_string());
     }
-    let key = |c: &String| (c == "R", c.parse::<u32>().unwrap_or(u32::MAX), c.clone());
-    found.sort_by_key(key);
+    found.sort_by_key(|c| level_order(c));
     found.dedup();
     found
+}
+
+/// A word of a title naming a mezzanine (rule data `levels.mezzanine_words`).
+fn is_mezzanine_word(word: &str) -> bool {
+    crate::wordrules::words("levels.mezzanine_words").contains(&word)
+}
+
+/// Rank of a code no rank is known for (`PH`, `G`): over the floors, under the roof.
+const UNRANKED_LEVEL: i32 = 99_999;
+
+/// The order of the print set's level codes, lowest first: basements, the floors by number, a
+/// mezzanine over its floor (`1`, `M`, `2`), the codes of no known place, the roof last.
+pub fn level_order(code: &str) -> (i32, String) {
+    (cadaddy_walk3d::levels::code_rank(code).unwrap_or(UNRANKED_LEVEL), code.to_string())
 }
 
 /// Whether this levels list is the "typical floor" sentinel that needs expansion.
@@ -1620,7 +1639,7 @@ pub fn level_blocks(d: &Drawing, levels: &[String]) -> Vec<(PlanView, [f64; 4])>
     by_title.dedup();
     let titled = by_title.len() == n && named.iter().all(Option::is_some);
     let mut sorted: Vec<String> = levels.to_vec();
-    sorted.sort_by_key(|c| (c == "R", c.parse::<u32>().unwrap_or(u32::MAX), c.clone()));
+    sorted.sort_by_key(|c| level_order(c));
     cells
         .iter()
         .zip(&order)
@@ -1968,6 +1987,43 @@ mod tests {
         assert!(detect_levels("UNDERFLOOR PLAN - PLUMBING").is_empty());
         assert!(detect_levels("FLOOR PLAN - ELECTRICAL").is_empty());
         assert!(detect_levels("GROUND FAULT NOTES").is_empty());
+    }
+
+    #[test]
+    fn a_mezzanine_plan_is_on_the_mezzanine_between_its_floor_and_the_next() {
+        for t in ["MEZZANINE PLAN", "MEZZ. LIGHTING PLAN", "MECHANICAL MEZZANINE PLAN", "Power Mezzanine Plan", "MEZZANINE FLOOR PLAN"] {
+            assert_eq!(detect_levels(t), vec!["M"], "{t}");
+        }
+        // A floor that names whose mezzanine it is: the mezzanine's plan, not the floor's.
+        assert_eq!(detect_levels("SECOND FLOOR MEZZANINE PLAN"), vec!["M"]);
+        assert_eq!(detect_levels("LEVEL 2 MEZZANINE PLAN"), vec!["M"]);
+        // Two plans on one sheet: each level once, the mezzanine over its floor, the roof last.
+        assert_eq!(detect_levels("MEZZANINE AND LOW ROOF PLAN"), vec!["M", "R"]);
+        assert_eq!(detect_levels("FIRST FLOOR & MEZZANINE PLAN"), vec!["1", "M"]);
+        let mut codes = vec!["R".to_string(), "2".into(), "M".into(), "1".into(), "B1".into()];
+        codes.sort_by_key(|c| level_order(c));
+        assert_eq!(codes, ["B1", "1", "M", "2", "R"]);
+    }
+
+    /// A sheet printing the mezzanine plan beside the low roof plan is two views, each on its own
+    /// level.
+    #[test]
+    fn a_mezzanine_plan_beside_the_low_roof_plan_is_split_into_its_two_views() {
+        let mut d = Drawing::default();
+        for (x0, title) in [(0.0, "MEZZANINE PLAN"), (900.0, "LOW ROOF PLAN")] {
+            sheet_text(&mut d, [x0 + 200.0, -60.0], title, 18.0);
+            for i in 0..3 {
+                sheet_text(&mut d, [x0 + 90.0 + f64::from(i) * 200.0, 180.0], "ROOM", 9.0);
+            }
+        }
+        sheet_text(&mut d, [0.0, -120.0], "SCALE: 1/8\" = 1'-0\"", 6.0);
+        sheet_text(&mut d, [1700.0, -120.0], "A201", 12.0);
+        let cells = view_cells(&d);
+        let levels: Vec<Vec<String>> = cells.iter().map(|(v, _)| v.levels.clone()).collect();
+        assert_eq!(levels, [vec!["M".to_string()], vec!["R".to_string()]], "{cells:?}");
+        let [(_, a), (_, b)] = cells.as_slice() else { panic!("{cells:?}") };
+        // Each cell holds its own plan: the mezzanine's rooms end at 490, the roof's start at 990.
+        assert!(a[2] <= b[0] && a[2] > 490.0 && b[0] < 990.0, "{a:?} {b:?}");
     }
 
     #[test]
