@@ -371,3 +371,29 @@ fn hostile_gear_records_do_not_panic() {
     let r = s.execute("validate.prescreen", &json!({"rules": ["E-GEAR-SPACE", "E-GEAR-FILL", "E-GEAR-SIZE"], "all": true}));
     assert!(r.is_ok(), "{r:?}");
 }
+
+/// The utility's pad-mounted transformer outside the building (Q6307): site gear on its pad,
+/// which no wall hosts, isn't a floater for G-HOST; the same box without the site mark still is.
+#[test]
+fn site_gear_outside_the_building_is_not_a_wall_floater() {
+    let host_fail = |site: bool| {
+        let mut spec = spec();
+        let mut x = json!({
+            "tag": "UTIL-T1", "kind": "transformer", "level": "L1", "min": [450.0, 60.0], "max": [520.0, 124.0], "bottom_ft": 0.0, "height_ft": 5.0,
+            "properties": {"MOUNTING": "pad-mounted on grade, outdoors"}, "sources": {"status": "proposed"}, "confidence": 0.5,
+        });
+        if site {
+            x["sources"]["site"] = json!("outside the building");
+        }
+        spec["mep"]["equipment"].as_array_mut().unwrap().push(x);
+        let mut s = job_on(spec);
+        let (r, fs) = screen(&mut s, &["G-HOST"]);
+        let fail = fs.iter().any(|f| f["rule"] == "G-HOST" && f["verdict"] == "fail" && f["kind"] == "transformer");
+        (fail, r)
+    };
+    let (fail, r) = host_fail(true);
+    assert!(!fail, "{r}");
+    assert!(r.to_string().contains("site equipment on its pad outside the building"), "{r}");
+    let (fail, r) = host_fail(false);
+    assert!(fail, "a transformer with no site mark and no wall near still floats: {r}");
+}

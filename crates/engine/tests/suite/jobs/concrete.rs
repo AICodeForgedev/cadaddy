@@ -443,6 +443,32 @@ fn the_job_bom_takes_our_concrete_and_lists_the_rest_by_others() {
     assert!(near(&bom_line(&bom, "concrete", "4\"", "PAD-MSB")["total"], 0.30));
 }
 
+/// The utility's own transformer (Q6307): furnished and set by the utility, by others at no cost
+/// to us, its pad still on our BOM; a transformer that is ours stays an equipment line.
+#[test]
+fn the_utilitys_transformer_is_by_others_and_its_pad_is_ours() {
+    let tx_line = |bom: &Value| {
+        bom["lines"].as_array().unwrap().iter().any(|l| l["category"] == "equipment" && l["item"].as_str().is_some_and(|i| i.contains("TX-1")))
+    };
+    let mut s = session();
+    let bom = s.execute("bim.bom", &json!({})).unwrap();
+    assert!(tx_line(&bom), "ours by default: {bom:#}");
+    let mut sp = spec();
+    sp["mep"]["equipment"][1]["properties"] = json!({"FURNISHED BY": "utility (the one-line names it the utility's)"});
+    sp["concrete"]["pads"][1]["owner"] = json!("electrical");
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).unwrap();
+    let bom = s.execute("bim.bom", &json!({})).unwrap();
+    assert!(!tx_line(&bom), "{bom:#}");
+    let by = bom["by_others"].as_array().unwrap();
+    let tx = by.iter().find(|x| x["element"] == "TX-1").unwrap_or_else(|| panic!("TX-1 not listed: {by:?}"));
+    assert_eq!((tx["scope"].as_str(), tx["cost_to_us"].as_f64()), (Some("by others (utility)"), Some(0.0)));
+    let pad =
+        bom["lines"].as_array().unwrap().iter().any(|l| {
+            l["trade"] == "concrete" && l["category"] == "concrete" && l["elements"].as_array().is_some_and(|e| e.contains(&json!("PAD-TX-1")))
+        });
+    assert!(pad, "its pad is ours: {bom:#}");
+}
+
 /// The fixture with the grounding's concrete-encased electrode GE-1 (Q329) in the strip footing.
 fn with_electrode(s: &mut Session, extra: Value) {
     let mut sp = spec();

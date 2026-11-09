@@ -210,6 +210,7 @@ pub mod ugsheets;
 pub(crate) mod underlay;
 mod unitmarks;
 mod unittypes;
+pub(crate) mod utilityxfmr;
 pub mod validate;
 pub(crate) mod validate_basis;
 pub mod validate_conduit;
