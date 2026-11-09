@@ -650,8 +650,14 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
     // Rooms that leak.
     let rs = rooms(&plan, &sp)?;
     let mut reported: Vec<(Handle, Handle)> = Vec::new();
+    // A roof plan has no rooms (the build makes none from it): its roof areas' and details'
+    // labels are no leaks.
+    let on_roof = |name: &Option<String>| name.as_deref().is_some_and(|n| super::wallgen::roof_level(&sp.levels, n));
     for r in &rs {
         let level = level_at(&sp.levels, r.at.x, r.at.y).map(|l| l.name.clone());
+        if on_roof(&level) {
+            continue;
+        }
         match &r.outline {
             None => push(Finding {
                 kind: "leak",
@@ -694,6 +700,10 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
                 continue;
             }
             let Some(level) = level_at(&sp.levels, o.at.x, o.at.y) else { continue };
+            // A roof plan's lines are its edge, parapet and curbs: the build reads no doors off it.
+            if super::wallgen::roof_level(&sp.levels, &level.name) {
+                continue;
+            }
             let storey = fates.iter().find(|f| f.level.eq_ignore_ascii_case(&level.name));
             let off_plan = storey.and_then(|f| f.footprint).is_some_and(|(lo, hi)| shell_dist(&Bounds2::new(lo, hi), o.at) > OUTSIDE_FT * upf);
             if level.sheet.is_some() || off_plan {

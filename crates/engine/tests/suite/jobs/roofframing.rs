@@ -185,3 +185,22 @@ fn a_roof_plan_outline_short_of_the_storey_is_built_over_it_and_the_design_kept(
     let listed = p["corrections"]["listed"].as_array().unwrap();
     assert!(listed.iter().any(|c| c["key"] == "outline" && c["design"] == "30'-0\" x 30'-0\"" && c["corrected"] == "40'-0\" x 30'-0\""), "{p}");
 }
+
+/// A roof plan has no rooms or doors (the build makes none from it): the model check reports no
+/// leak for a label on it, while the same label on a storey's plan outside its walls is one.
+#[test]
+fn a_roof_plans_labels_are_no_leaking_rooms() {
+    let mut s = building(18.0, None, trusses(), json!([]));
+    let mut sp = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+    sp["layers"].as_array_mut().unwrap().push(json!({"layer": "A-ROOM-TAG", "role": "room_tag"}));
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).unwrap();
+    layer(&mut s, "A-ROOM-TAG");
+    // On the roof plan, by the unit: a roof area's label.
+    text(&mut s, [2300.0, 100.0], "STORAGE");
+    // On Level 1's plan, outside its walls: no closed outline round it.
+    text(&mut s, [700.0, 100.0], "STORAGE");
+    s.execute("model.build", &json!({})).unwrap();
+    let r = s.execute("model.issues", &json!({"kind": "leak"})).unwrap();
+    let levels: Vec<Value> = r["issues"].as_array().unwrap().iter().map(|i| i["level"].clone()).collect();
+    assert_eq!(levels, [json!("Level 1")], "{r}");
+}
