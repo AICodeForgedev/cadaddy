@@ -255,7 +255,31 @@ pub(crate) struct Outlines {
     /// inside the outline and outside every island is in the same area (a room's name and its
     /// number), so it has the same loops.
     found: Vec<(Vec<Vec2>, Vec<Vec<Vec2>>, Vec<HatchLoop>)>,
+    /// The bounds of every item that has bounds: a window holding them holds every item.
+    items_ext: Bounds2,
+    /// Whether an item is infinite (an XLINE or RAY: no bounds hold every outline then).
+    any_infinite: bool,
+    /// The searches of windows' outlines (their ends snapped) by the items in the window, with
+    /// the outlines' owners: made once for each set of items (the window of every outline too).
+    /// A room trace searches each of its labels' 8 points in windows widening to the whole
+    /// drawing, and the points of one plan share most of their windows' items: each search
+    /// snapped, split and joined the same outlines again (most of the 8 s a 13-room plan's trace
+    /// took).
+    searches: std::cell::RefCell<std::collections::HashMap<Vec<usize>, std::rc::Rc<WindowSearch>>>,
+    /// The outline points the kept searches were made from (what their memory follows).
+    searches_points: std::cell::Cell<usize>,
 }
+
+/// A window's outlines' owners, and its search ([`cadaddy_geom::region::Searcher`]).
+struct WindowSearch {
+    owners: Vec<Handle>,
+    searcher: cadaddy_geom::region::Searcher,
+}
+
+/// Window searches kept at once, and the outline points they may be made from in all (a print
+/// set's windows hold tens of thousands): past either, the kept ones are let go and made again.
+const WINDOW_SEARCHES_KEPT: usize = 256;
+const WINDOW_SEARCH_POINTS_KEPT: usize = 500_000;
 
 impl Outlines {
     pub(crate) fn new(s: &Session) -> Result<Outlines> {
@@ -289,28 +313,80 @@ impl Outlines {
         for (i, (b, _)) in objects.iter().enumerate() {
             object_grid.insert(i, b, false);
         }
-        Ok(Outlines { space, ext, items, item_grid, objects, object_grid, found: Vec::new() })
+        let mut items_ext = Bounds2::EMPTY;
+        for (b, infinite, _, _) in &items {
+            if !*infinite && !b.is_empty() {
+                items_ext.add(b.min);
+                items_ext.add(b.max);
+            }
+        }
+        let any_infinite = items.iter().any(|(_, infinite, _, _)| *infinite);
+        Ok(Outlines {
+            space,
+            ext,
+            items,
+            item_grid,
+            objects,
+            object_grid,
+            found: Vec::new(),
+            items_ext,
+            any_infinite,
+            searches: Default::default(),
+            searches_points: Default::default(),
+        })
     }
 
-    /// As [`outlines`] for this window (none: everything).
-    fn window(&self, near: Option<Bounds2>) -> (Vec<Vec<Vec2>>, Vec<Handle>) {
+    /// The items in window `n` (infinite ones in every window), in drawing order.
+    fn picked(&self, n: &Bounds2) -> Vec<usize> {
+        let mut picked = self.item_grid.near(n);
+        picked.retain(|&i| self.items.get(i).is_some_and(|(b, infinite, _, _)| *infinite || b.intersects(n)));
+        picked
+    }
+
+    /// These items' outlines, each with its owner (as [`outlines`] for their window).
+    fn outlines_of(&self, picked: &[usize]) -> (Vec<Vec<Vec2>>, Vec<Handle>) {
         let mut out = Vec::new();
         let mut owners = Vec::new();
-        let picked: Vec<usize> = match near {
-            Some(n) => self.item_grid.near(&n),
-            None => (0..self.items.len()).collect(),
-        };
-        for (b, infinite, h, polys) in picked.into_iter().filter_map(|i| self.items.get(i)) {
-            if let Some(n) = near
-                && !*infinite
-                && !b.intersects(&n)
-            {
-                continue;
-            }
+        for (_, _, h, polys) in picked.iter().filter_map(|&i| self.items.get(i)) {
             owners.extend(std::iter::repeat_n(*h, polys.len()));
             out.extend(polys.iter().cloned());
         }
         (out, owners)
+    }
+
+    /// Whether `w` holds every item's bounds (a larger window would find the same outlines).
+    fn holds_all(&self, w: &Bounds2) -> bool {
+        self.items_ext.is_empty() || w.contains_box(&self.items_ext)
+    }
+
+    /// Whether `p` is farther than `reach` outside every outline's bounds (and no infinite line
+    /// runs anywhere): no outline, however its ends are closed or snapped within that, goes round it.
+    fn beyond_all(&self, p: Vec2, reach: f64) -> bool {
+        let r = Vec2::new(reach, reach);
+        !self.any_infinite && !self.items_ext.is_empty() && !Bounds2::new(self.items_ext.min - r, self.items_ext.max + r).contains(p)
+    }
+
+    /// The search of these items' outlines, their ends snapped within `snap` (`tol`, `gap`: the
+    /// search's), made once.
+    fn search_of(&self, picked: Vec<usize>, snap: f64, tol: f64, gap: f64) -> std::rc::Rc<WindowSearch> {
+        if let Some(w) = self.searches.borrow().get(&picked) {
+            return std::rc::Rc::clone(w);
+        }
+        let (polys, owners) = self.outlines_of(&picked);
+        let polys = cadaddy_geom::region::snap_ends(&polys, snap, tol);
+        let points: usize = polys.iter().map(Vec::len).sum();
+        let made = std::rc::Rc::new(WindowSearch { owners, searcher: cadaddy_geom::region::Searcher::new(&polys, tol, gap) });
+        if points > WINDOW_SEARCH_POINTS_KEPT {
+            return made;
+        }
+        let mut searches = self.searches.borrow_mut();
+        if searches.len() >= WINDOW_SEARCHES_KEPT || self.searches_points.get() + points > WINDOW_SEARCH_POINTS_KEPT {
+            searches.clear();
+            self.searches_points.set(0);
+        }
+        searches.insert(picked, std::rc::Rc::clone(&made));
+        self.searches_points.set(self.searches_points.get() + points);
+        made
     }
 
     /// The visible objects whose bounds meet `b`, in drawing order, with their bounds.
@@ -453,6 +529,14 @@ pub(crate) fn loops_at_lazy_within(s: &Session, p: Vec2, cache: &mut Option<Outl
     Ok(loops)
 }
 
+/// The error of a boundary search too dense to finish.
+fn too_dense() -> EngineError {
+    EngineError::Other(
+        "Valid hatch boundary not found: the area around the point is too dense to search. Zoom in and pick inside a closed area, or select objects."
+            .into(),
+    )
+}
+
 fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f64>) -> Result<Vec<HatchLoop>> {
     let d = s.doc()?;
     let space = s.space();
@@ -470,30 +554,63 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
     // larger one holds the same curves.
     use cadaddy_geom::region::Search;
     let span = ext.width().max(ext.height());
+    // A point off the plan (a sheet's title, a note beside it) is in no area: each window up to
+    // the whole drawing was searched for it, and a room trace asks for every label 8 times.
+    if cache.is_some_and(|c| c.beyond_all(p, 2.0 * (gap + outline_tol(ext)) + tol)) {
+        return Err(EngineError::Other("Valid hatch boundary not found.".into()));
+    }
     let mut r = (span / 4096.0).max(gap * 4.0).max(tol * 1e6);
+    let inside = |w: &Bounds2, b: &cadaddy_geom::region::Boundary| {
+        let bb = Bounds2::from_points(b.outer.iter().copied());
+        bb.min.x > w.min.x && bb.min.y > w.min.y && bb.max.x < w.max.x && bb.max.y < w.max.y
+    };
+    // The last window searched over the outlines made once: how many items it held and what it
+    // found. A larger window holding as many holds the very same items (all the smaller one
+    // held), so it finds the same: not searched again.
+    let mut last: Option<(usize, std::rc::Rc<WindowSearch>, Option<cadaddy_geom::region::Boundary>)> = None;
     let (owners, found) = loop {
         if reach.is_some_and(|m| r > m) {
             return Err(EngineError::Other("Valid hatch boundary not found within reach.".into()));
         }
-        let full = !span.is_finite() || r >= span * 2.0;
-        let window = if full { None } else { Some(Bounds2::new(p - Vec2::new(r, r), p + Vec2::new(r, r))) };
-        let (polys, owners) = match cache {
-            Some(c) => c.window(window),
-            None => outlines(d, &space, window),
-        };
+        let near = Bounds2::new(p - Vec2::new(r, r), p + Vec2::new(r, r));
+        // A window holding every outline searches what the whole drawing would.
+        let full = !span.is_finite() || r >= span * 2.0 || cache.is_some_and(|c| c.holds_all(&near));
+        let window = if full { None } else { Some(near) };
+        if let Some(c) = cache {
+            let picked = match window {
+                Some(w) => c.picked(&w),
+                None => (0..c.items.len()).collect(),
+            };
+            if let (Some(w), Some((n, searched, b))) = (window, &last)
+                && *n == picked.len()
+            {
+                match b {
+                    Some(b) if inside(&w, b) => break (searched.owners.clone(), Some(b.clone())),
+                    _ => {
+                        r *= 2.0;
+                        continue;
+                    }
+                }
+            }
+            let n = picked.len();
+            // A line that ends on a flattened curve (an ellipse) can stop short of its chords.
+            let searched = c.search_of(picked, outline_tol(ext), tol, gap);
+            match (window, searched.searcher.at(p)) {
+                (_, Search::TooComplex) => return Err(too_dense()),
+                (None, Search::Found(b)) => break (searched.owners.clone(), Some(b)),
+                (None, Search::Missing) => break (searched.owners.clone(), None),
+                (Some(w), Search::Found(b)) if inside(&w, &b) => break (searched.owners.clone(), Some(b)),
+                (Some(_), found) => last = Some((n, searched, if let Search::Found(b) = found { Some(b) } else { None })),
+            }
+            r *= 2.0;
+            continue;
+        }
+        let (polys, owners) = outlines(d, &space, window);
         // A line that ends on a flattened curve (an ellipse) can stop short of its chords.
         let polys = cadaddy_geom::region::snap_ends(&polys, outline_tol(ext), tol);
         let found = cadaddy_geom::region::search_at_gap(&polys, p, tol, gap);
-        let inside = |w: &Bounds2, b: &cadaddy_geom::region::Boundary| {
-            let bb = Bounds2::from_points(b.outer.iter().copied());
-            bb.min.x > w.min.x && bb.min.y > w.min.y && bb.max.x < w.max.x && bb.max.y < w.max.y
-        };
         match (window, found) {
-            (_, Search::TooComplex) => {
-                return Err(EngineError::Other(
-                    "Valid hatch boundary not found: the area around the point is too dense to search. Zoom in and pick inside a closed area, or select objects.".into(),
-                ));
-            }
+            (_, Search::TooComplex) => return Err(too_dense()),
             (None, Search::Found(b)) => break (owners, Some(b)),
             (None, Search::Missing) => break (owners, None),
             (Some(w), Search::Found(b)) if inside(&w, &b) => break (owners, Some(b)),
@@ -1361,6 +1478,63 @@ mod tests {
         assert!(checked >= 24, "{checked}");
         // Outside everything: both find nothing.
         assert!(loops_at_lazy(&s, Vec2::new(-500.0, -500.0), &mut cache).is_err());
+    }
+
+    /// Rooms with a gap the gap tolerance closes, a wall that stops just short of its
+    /// neighbour and an arc, then labels all round and far off the plan: the outlines made once
+    /// answer every point as a search of the drawing does (off the plan: nothing, without a
+    /// search), and with an infinite line drawn too.
+    #[test]
+    fn outlines_made_once_answer_points_off_the_plan_as_a_search_does() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({"p1": [0, 0], "p2": [120, 100]})).unwrap();
+        s.execute("rectang", &json!({"p1": [120, 0], "p2": [240, 100]})).unwrap();
+        // A partition stopping short of the north wall, and a room on top left open by 1 at a corner.
+        s.execute("line", &json!({"points": [[180, 0], [180, 99.5]]})).unwrap();
+        s.execute("line", &json!({"points": [[0, 100], [0, 140], [119, 140]]})).unwrap();
+        s.execute("line", &json!({"points": [[120, 141], [120, 100]]})).unwrap();
+        s.execute("arc", &json!({"center": [60, 100], "radius": 20, "start": 0, "end": 180})).unwrap();
+        s.doc_mut().unwrap().header.set_f64("HPGAPTOL", 2.0);
+        for with_xline in [false, true] {
+            if with_xline {
+                s.execute("xline", &json!({"base": [0, 300], "through": [10, 310]})).unwrap();
+            }
+            let mut cache = None;
+            // Each loop from its lowest corner (the search over the whole drawing and the one
+            // over the outlines made once may start the same loop at another corner).
+            let from_lowest = |r: Result<Vec<HatchLoop>>| {
+                r.map(|loops| {
+                    loops
+                        .into_iter()
+                        .map(|l| {
+                            let mut v: Vec<(u64, u64)> = l.vertices.iter().map(|q| (q.p.x.to_bits(), q.p.y.to_bits())).collect();
+                            let low = (0..v.len()).min_by(|a, b| {
+                                let (pa, pb) = (&l.vertices[*a].p, &l.vertices[*b].p);
+                                pa.x.total_cmp(&pb.x).then(pa.y.total_cmp(&pb.y))
+                            });
+                            v.rotate_left(low.unwrap_or(0));
+                            (v, l.outer, l.sources)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|e| e.to_string())
+            };
+            let (mut found, mut off) = (0, 0);
+            for i in -6..=30 {
+                for j in -6..=18 {
+                    let p = Vec2::new(f64::from(i) * 10.0 + 0.5, f64::from(j) * 10.0 + 0.5);
+                    let plain = from_lowest(loops_at(&s, p));
+                    let cached = from_lowest(loops_at_lazy(&s, p, &mut cache));
+                    assert_eq!(plain, cached, "at {p:?}, xline {with_xline}");
+                    found += usize::from(plain.is_ok());
+                    off += usize::from(!(0.0..=240.0).contains(&p.x) || !(0.0..=141.0).contains(&p.y));
+                }
+            }
+            assert!(found > 250 && off > 300, "{found} found, {off} off the plan");
+            for far in [Vec2::new(-1e6, 50.0), Vec2::new(5e5, 5e5), Vec2::new(120.0, -1e7)] {
+                assert_eq!(from_lowest(loops_at(&s, far)), from_lowest(loops_at_lazy(&s, far, &mut cache)));
+            }
+        }
     }
 
     /// A search with a reach finds what lies within it and nothing farther: a point in a room

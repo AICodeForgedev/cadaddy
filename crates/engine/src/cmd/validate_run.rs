@@ -784,7 +784,12 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
         let conduit_takeoff = super::validate_conduit::read_takeoff(s, &all, &only);
         let value = super::validate_value::read(s, p, &all, &only).map_err(|e| bad(CMD_START, e))?;
         let equip_docs = if super::validate_equip::wanted(&all, &only) { super::validate_equip::read_docs(s, &sp) } else { None };
-        let fixture_docs = super::validate_fixtures::wanted(&all, &only).then(|| super::validate_fixtures::read_docs(s, d, &sp));
+        let wants =
+            |id: &str| all.iter().any(|r| r.enabled && r.rule.id == id) && (only.is_empty() || only.iter().any(|o| o.eq_ignore_ascii_case(id)));
+        let fixture_docs = (super::validate_fixtures::wanted(&all, &only) || wants(super::validate_lighting::TYPE))
+            .then(|| super::validate_fixtures::read_docs(s, d, &sp));
+        let conduit_docs = (wants(super::validate_conduit::DERATE) || wants(super::validate_conduit::VDROP))
+            .then(|| super::validate_conduit::ScheduleDocs::read(s, d, &sp));
         let measured = super::validate_prescreen::screen(&super::validate_prescreen::Scope {
             d,
             sp: &sp,
@@ -801,6 +806,7 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
             value: value.as_ref(),
             equip_docs: equip_docs.as_ref(),
             fixture_docs: fixture_docs.as_ref(),
+            conduit_docs: conduit_docs.as_ref(),
         });
         pre["measured"] = measured.summary();
     }

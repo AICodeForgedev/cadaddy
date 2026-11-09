@@ -75,6 +75,7 @@ fn key(p: Vec2, origin: Vec2, q: f64) -> (i64, i64) {
     (((p.x - origin.x) / q).round() as i64, ((p.y - origin.y) / q).round() as i64)
 }
 
+#[derive(Debug)]
 struct Graph {
     pts: Vec<Vec2>,
     adj: Vec<Vec<usize>>,
@@ -518,6 +519,16 @@ fn islands(g: &Graph, outer: &[usize], p: Vec2) -> Vec<Island> {
 /// into chords (an ellipse, a spline) lies up to the flattening tolerance off the true curve,
 /// so a line that ends on the true curve can stop just short of the chords.
 pub fn snap_ends(polys: &[Vec<Vec2>], snap: f64, tol: f64) -> Vec<Vec<Vec2>> {
+    snap_ends_within(polys, snap, tol, MAX_GAP_PAIRS)
+}
+
+/// [`snap_ends`], comparing at most `budget` (end, segment) pairs. Each end is compared with
+/// the segments near it only (a grid of the segments' boxes), in curve and segment order, but
+/// counted against the budget as one pair per segment of every other curve: what comparing it
+/// with all of them cost. So the ends snapped, and where, are those a comparison of every pair
+/// gives. (Comparing every pair took 0.6 ms a search window on a 550-curve plan, and a room trace
+/// searches thousands of windows: 6 s of every trace.)
+fn snap_ends_within(polys: &[Vec<Vec2>], snap: f64, tol: f64, budget: usize) -> Vec<Vec<Vec2>> {
     let mut out: Vec<Vec<Vec2>> = polys.to_vec();
     if !(snap.is_finite() && snap > tol) {
         return out;
@@ -527,48 +538,53 @@ pub fn snap_ends(polys: &[Vec<Vec2>], snap: f64, tol: f64) -> Vec<Vec<Vec2>> {
     if total > MAX_SEGMENTS {
         return out;
     }
+    let grid = SegmentGrid::new(polys, snap);
     // (target polyline, segment index, parameter on it, the point) for every vertex to insert.
     let mut inserts: Vec<(usize, usize, f64, Vec2)> = Vec::new();
-    let mut budget = MAX_GAP_PAIRS;
+    let mut budget = budget;
+    let mut near: Vec<(u32, u32)> = Vec::new();
     'ends: for (i, pl) in polys.iter().enumerate() {
         let (Some(&first), Some(&last)) = (pl.first(), pl.last()) else { continue };
         if pl.len() < 2 || first.near(last, tol) {
             continue;
         }
+        // The pairs this end costs: every segment of every other curve.
+        let cost = total - pl.len().saturating_sub(1);
         for at_end in [false, true] {
             let e = if at_end { last } else { first };
             if !e.is_finite() {
                 continue;
             }
+            // Out of pairs part way through this end: neither it nor any later end is snapped.
+            if cost > budget {
+                break 'ends;
+            }
+            budget -= cost;
+            grid.near(e, &mut near);
             let mut best: Option<(f64, usize, usize, f64, Vec2)> = None;
             let mut touching = false;
-            for (j, other) in polys.iter().enumerate() {
+            for &(j, k) in &near {
+                let (j, k) = (j as usize, k as usize);
                 if j == i {
                     continue;
                 }
-                for (k, w) in other.windows(2).enumerate() {
-                    if budget == 0 {
-                        break 'ends;
-                    }
-                    budget -= 1;
-                    let [a, b] = w else { continue };
-                    if !(a.is_finite() && b.is_finite())
-                        || e.x < a.x.min(b.x) - snap
-                        || e.x > a.x.max(b.x) + snap
-                        || e.y < a.y.min(b.y) - snap
-                        || e.y > a.y.max(b.y) + snap
-                    {
-                        continue;
-                    }
-                    let line = Line::new(*a, *b);
-                    let t = line.param_of(e).clamp(0.0, 1.0);
-                    let q = line.at(t);
-                    let d = q.dist(e);
-                    if d <= tol {
-                        touching = true;
-                    } else if d <= snap && best.is_none_or(|(bd, ..)| d < bd) {
-                        best = Some((d, j, k, t, q));
-                    }
+                let Some([a, b]) = polys.get(j).and_then(|o| o.get(k..k + 2)) else { continue };
+                if !(a.is_finite() && b.is_finite())
+                    || e.x < a.x.min(b.x) - snap
+                    || e.x > a.x.max(b.x) + snap
+                    || e.y < a.y.min(b.y) - snap
+                    || e.y > a.y.max(b.y) + snap
+                {
+                    continue;
+                }
+                let line = Line::new(*a, *b);
+                let t = line.param_of(e).clamp(0.0, 1.0);
+                let q = line.at(t);
+                let d = q.dist(e);
+                if d <= tol {
+                    touching = true;
+                } else if d <= snap && best.is_none_or(|(bd, ..)| d < bd) {
+                    best = Some((d, j, k, t, q));
                 }
             }
             let Some((_, j, k, t, q)) = best.filter(|_| !touching) else { continue };
@@ -593,6 +609,90 @@ pub fn snap_ends(polys: &[Vec<Vec2>], snap: f64, tol: f64) -> Vec<Vec<Vec2>> {
         }
     }
     out
+}
+
+/// The segments of a set of curves by the cells of a uniform grid, each in every cell its box
+/// grown by the reach meets (one over many cells kept aside, offered for every point): which
+/// segments may come within the reach of a point.
+struct SegmentGrid {
+    origin: Vec2,
+    cell: f64,
+    side: usize,
+    cells: Vec<Vec<(u32, u32)>>,
+    everywhere: Vec<(u32, u32)>,
+}
+
+impl SegmentGrid {
+    /// Most cells a side, and most cells one segment is filed in.
+    const SIDE: usize = 512;
+    const WIDE: usize = 64;
+
+    fn new(polys: &[Vec<Vec2>], reach: f64) -> SegmentGrid {
+        let segments = || {
+            polys.iter().enumerate().flat_map(|(j, p)| {
+                p.windows(2).enumerate().filter_map(move |(k, w)| match w {
+                    [a, b] if a.is_finite() && b.is_finite() => Some((j, k, *a, *b)),
+                    _ => None,
+                })
+            })
+        };
+        let mut ext = Bounds2::EMPTY;
+        let mut n = 0usize;
+        for (_, _, a, b) in segments() {
+            ext.add(a);
+            ext.add(b);
+            n += 1;
+        }
+        let empty = SegmentGrid { origin: Vec2::ZERO, cell: 1.0, side: 1, cells: vec![Vec::new()], everywhere: Vec::new() };
+        if ext.is_empty() {
+            return empty;
+        }
+        let (origin, span) = (ext.min - Vec2::new(reach, reach), ext.width().max(ext.height()) + 2.0 * reach);
+        let side = ((n as f64).sqrt().ceil() as usize).clamp(1, Self::SIDE);
+        let cell = span / side as f64;
+        if !(cell.is_finite() && cell > 0.0) {
+            // One point (or overflowing extents): every segment for every end.
+            return SegmentGrid {
+                everywhere: segments().filter_map(|(j, k, ..)| Some((u32::try_from(j).ok()?, u32::try_from(k).ok()?))).collect(),
+                ..empty
+            };
+        }
+        let mut g = SegmentGrid { origin, cell, side, cells: vec![Vec::new(); side * side], everywhere: Vec::new() };
+        for (j, k, a, b) in segments() {
+            let (Ok(j), Ok(k)) = (u32::try_from(j), u32::try_from(k)) else { continue };
+            let (x0, x1) = (g.cell_of(a.x.min(b.x) - reach, origin.x), g.cell_of(a.x.max(b.x) + reach, origin.x));
+            let (y0, y1) = (g.cell_of(a.y.min(b.y) - reach, origin.y), g.cell_of(a.y.max(b.y) + reach, origin.y));
+            if (x1 - x0 + 1) * (y1 - y0 + 1) > Self::WIDE {
+                g.everywhere.push((j, k));
+                continue;
+            }
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    if let Some(c) = g.cells.get_mut(y * side + x) {
+                        c.push((j, k));
+                    }
+                }
+            }
+        }
+        g
+    }
+
+    /// The cell (column or row) a coordinate is in, clamped to the grid.
+    fn cell_of(&self, v: f64, origin: f64) -> usize {
+        ((v - origin) / self.cell).floor().clamp(0.0, (self.side - 1) as f64) as usize
+    }
+
+    /// The segments that may come within the reach of `p`, in curve and segment order, into `out`.
+    fn near(&self, p: Vec2, out: &mut Vec<(u32, u32)>) {
+        out.clear();
+        out.extend_from_slice(&self.everywhere);
+        // A point off the grid is beyond every segment's reach: its edge cell offers a few more.
+        let (x, y) = (self.cell_of(p.x, self.origin.x), self.cell_of(p.y, self.origin.y));
+        if let Some(c) = self.cells.get(y * self.side + x) {
+            out.extend_from_slice(c);
+        }
+        out.sort_unstable();
+    }
 }
 
 /// The closed loop enclosing `p`, counter-clockwise, or `None`.
@@ -625,10 +725,27 @@ pub enum Search {
 /// [`boundary_at_gap`], telling a search that gave up on the work caps apart from one that
 /// found nothing.
 pub fn search_at_gap(polys: &[Vec<Vec2>], p: Vec2, tol: f64, gap: f64) -> Search {
-    match build_gap_r(polys, tol, gap) {
-        Err(Fail::Complex) => Search::TooComplex,
-        Err(Fail::Empty) => Search::Missing,
-        Ok(g) => boundary_in(&g, p).map_or(Search::Missing, Search::Found),
+    Searcher::new(polys, tol, gap).at(p)
+}
+
+/// The curves made ready for boundary searches at many points: [`search_at_gap`] at each point
+/// without splitting, merging and bridging the same curves again for each (that is most of a
+/// search's work, and none of it depends on the point).
+#[derive(Debug)]
+pub struct Searcher(Result<Graph, Fail>);
+
+impl Searcher {
+    pub fn new(polys: &[Vec<Vec2>], tol: f64, gap: f64) -> Searcher {
+        Searcher(build_gap_r(polys, tol, gap))
+    }
+
+    /// What [`search_at_gap`] finds at `p` among these curves.
+    pub fn at(&self, p: Vec2) -> Search {
+        match &self.0 {
+            Err(Fail::Complex) => Search::TooComplex,
+            Err(Fail::Empty) => Search::Missing,
+            Ok(g) => boundary_in(g, p).map_or(Search::Missing, Search::Found),
+        }
     }
 }
 
@@ -993,6 +1110,135 @@ mod tests {
         assert!((shoelace(&l) - 20.0).abs() < 1e-6, "{}", shoelace(&l));
         // Too far away: left alone.
         assert_eq!(snap_ends(&polys, 0.01, 1e-9), polys);
+    }
+
+    /// The pairwise [`snap_ends_within`] (every end against every segment of every other curve,
+    /// one pair off the budget each): what the grid's answer must equal.
+    fn snap_ends_pairwise(polys: &[Vec<Vec2>], snap: f64, tol: f64, budget: usize) -> Vec<Vec<Vec2>> {
+        let mut out: Vec<Vec<Vec2>> = polys.to_vec();
+        if !(snap.is_finite() && snap > tol) {
+            return out;
+        }
+        let mut inserts: Vec<(usize, usize, f64, Vec2)> = Vec::new();
+        let mut budget = budget;
+        'ends: for (i, pl) in polys.iter().enumerate() {
+            let (Some(&first), Some(&last)) = (pl.first(), pl.last()) else { continue };
+            if pl.len() < 2 || first.near(last, tol) {
+                continue;
+            }
+            for at_end in [false, true] {
+                let e = if at_end { last } else { first };
+                if !e.is_finite() {
+                    continue;
+                }
+                let mut best: Option<(f64, usize, usize, f64, Vec2)> = None;
+                let mut touching = false;
+                for (j, other) in polys.iter().enumerate() {
+                    if j == i {
+                        continue;
+                    }
+                    for (k, w) in other.windows(2).enumerate() {
+                        if budget == 0 {
+                            break 'ends;
+                        }
+                        budget -= 1;
+                        let [a, b] = w else { continue };
+                        if !(a.is_finite() && b.is_finite())
+                            || e.x < a.x.min(b.x) - snap
+                            || e.x > a.x.max(b.x) + snap
+                            || e.y < a.y.min(b.y) - snap
+                            || e.y > a.y.max(b.y) + snap
+                        {
+                            continue;
+                        }
+                        let line = Line::new(*a, *b);
+                        let t = line.param_of(e).clamp(0.0, 1.0);
+                        let q = line.at(t);
+                        let d = q.dist(e);
+                        if d <= tol {
+                            touching = true;
+                        } else if d <= snap && best.is_none_or(|(bd, ..)| d < bd) {
+                            best = Some((d, j, k, t, q));
+                        }
+                    }
+                }
+                let Some((_, j, k, t, q)) = best.filter(|_| !touching) else { continue };
+                let Some(slot) = out.get_mut(i).and_then(|v| if at_end { v.last_mut() } else { v.first_mut() }) else { continue };
+                *slot = q;
+                let ends = polys.get(j).and_then(|o| o.get(k).zip(o.get(k + 1)));
+                if let Some((&a, &b)) = ends
+                    && !q.near(a, tol)
+                    && !q.near(b, tol)
+                {
+                    inserts.push((j, k, t, q));
+                }
+            }
+        }
+        inserts.sort_by(|x, y| y.0.cmp(&x.0).then(y.1.cmp(&x.1)).then(y.2.total_cmp(&x.2)));
+        for (j, k, _, q) in inserts {
+            if let Some(v) = out.get_mut(j)
+                && k < v.len()
+            {
+                v.insert(k + 1, q);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn snapping_ends_by_the_grid_gives_what_comparing_every_pair_gives() {
+        // Seeded curve soups: short wall-like strokes with ends near others (some touching, some
+        // a hair short, ties at equal distance), long strokes over many cells, a far-off speck,
+        // points off any finite place, and budgets that run out part way.
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut snapped_any = 0;
+        for case in 0..60 {
+            let n = 5 + (next() * 120.0) as usize;
+            let mut polys: Vec<Vec<Vec2>> = Vec::new();
+            for _ in 0..n {
+                let grid = |v: f64| (v * 40.0).round() / 4.0;
+                let a = Vec2::new(grid(next()), grid(next()));
+                let mut pl = vec![a];
+                for _ in 0..1 + (next() * 4.0) as usize {
+                    let last = *pl.last().unwrap();
+                    let step = if next() < 0.1 { 6.0 } else { 0.8 };
+                    // Some ends stop just short of where another stroke lies.
+                    let short = if next() < 0.4 { 0.02 * (next() - 0.5) } else { 0.0 };
+                    pl.push(Vec2::new(last.x + step * (next() - 0.5) + short, last.y + step * (next() - 0.5)));
+                }
+                if next() < 0.1 {
+                    let first = pl[0];
+                    pl.push(first);
+                }
+                polys.push(pl);
+            }
+            if case % 7 == 0 {
+                polys.push(vec![Vec2::new(1e6, 1e6), Vec2::new(1e6 + 0.01, 1e6)]);
+            }
+            if case % 11 == 0 {
+                polys.push(vec![Vec2::new(f64::NAN, 0.0), Vec2::new(1.0, 1.0), Vec2::new(f64::INFINITY, 2.0)]);
+                polys.push(vec![Vec2::new(3.0, 3.0)]);
+                polys.push(Vec::new());
+            }
+            let total: usize = polys.iter().map(|p| p.len().saturating_sub(1)).sum();
+            for (snap, tol) in [(0.05, 1e-9), (0.3, 1e-6), (2.0, 1e-3)] {
+                for budget in [MAX_GAP_PAIRS, total * 3, total + 1, total.saturating_sub(1), 0] {
+                    // Bit for bit (a NaN point equals itself).
+                    let bits =
+                        |v: &[Vec<Vec2>]| v.iter().map(|p| p.iter().map(|q| (q.x.to_bits(), q.y.to_bits())).collect::<Vec<_>>()).collect::<Vec<_>>();
+                    let got = bits(&snap_ends_within(&polys, snap, tol, budget));
+                    assert_eq!(got, bits(&snap_ends_pairwise(&polys, snap, tol, budget)), "case {case}, snap {snap}, budget {budget}");
+                    snapped_any += usize::from(got != bits(&polys));
+                }
+            }
+        }
+        assert!(snapped_any > 100, "the cases snap ends ({snapped_any})");
     }
 
     #[test]

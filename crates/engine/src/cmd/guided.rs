@@ -2739,7 +2739,12 @@ const MAX_TAG_HANDLES: usize = 20;
 
 /// Sort the drawing's device symbols sheet by sheet: each sheet's legends and schedules say
 /// which symbols are samples; all of them together say which tags are device types.
-fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String, String)]) -> DeviceCensus {
+fn device_census(
+    s: &Session,
+    job: &GuidedJob,
+    bubbles: &[([f64; 2], f64, String, String)],
+    unloaded: &[(String, cadaddy_mepfix::device_types::Legend)],
+) -> DeviceCensus {
     use cadaddy_mepfix::device_types::{self, Legend, TagVerdict};
     use cadaddy_mepfix::sheet_facts::{self, TextItem};
     let mut c = DeviceCensus::default();
@@ -2835,7 +2840,9 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
     }
     // A luminaire schedule read by its grid lists its types too, wherever it is printed (an
     // architectural floor plan's fixture schedule beside its door schedule), each type with its
-    // schedule row: the plans' tags are matched against its marks before any is asked about.
+    // schedule row: the plans' tags are matched against its marks before any is asked about (and
+    // check which of its columns holds them).
+    let plan_tags: BTreeSet<String> = symbols.iter().flatten().map(|(tag, ..)| tag.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()).collect();
     for (g, l) in legends.iter_mut().enumerate() {
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let number = sheet.split('/').next().unwrap_or(&sheet).trim().to_string();
@@ -2855,7 +2862,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
         };
         let sheet_texts: &[TextItem] = texts.get(g).map_or(&[][..], Vec::as_slice);
         for tb in luminaire_schedules(sheet_texts, segs, &number, electrical) {
-            let schedule = schedule_legend(&tb);
+            let schedule = schedule_legend(&tb, &plan_tags);
             if schedule.types.is_empty() {
                 continue;
             }
@@ -2896,6 +2903,16 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
             }
             tl.merge(l.clone());
         }
+    }
+    // The luminaire schedules on the set's sheets the drawing doesn't hold (its electrical
+    // schedules sheet) speak for the electrical sheets as every legend of the set does.
+    for (sheet, l) in unloaded {
+        c.legend_tables += 1;
+        c.legend_types.extend(l.types.iter().cloned());
+        for (k, row) in &l.rows {
+            every_row.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
+        }
+        every_legend.merge(l.clone());
     }
     // A table whose heading names a trade speaks for that trade's sheets wherever it is printed
     // (a CASEWORK AND PLUMBING FIXTURE SCHEDULE on an architectural sheet types the plumbing
@@ -3274,9 +3291,14 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                             kind: kind_of_tag(&t),
                             ..super::readers::ReadDevice::default()
                         };
-                        if dv.kind.is_empty() && super::readers::device_kind(&t) == "device" {
-                            let own = legend.rows.get(&t).map(|row| (sheet.as_str(), row));
-                            let other = shared_rows.get(&t).map(|(sh, row)| (sh.as_str(), row));
+                        let own = legend.rows.get(&t).map(|row| (sheet.as_str(), row));
+                        let other = shared_rows.get(&t).map(|(sh, row)| (sh.as_str(), row));
+                        // The set's own luminaire schedule speaks before the marks every set uses:
+                        // on its electrical plans a mark it lists (`S`, a strip light type) is
+                        // that luminaire, not the switch the mark usually is.
+                        let scheduled =
+                            electrical(&sheet) && own.or(other).is_some_and(|(_, r)| super::lightsched::is_luminaire_title(&r.table, true));
+                        if dv.kind.is_empty() && (scheduled || super::readers::device_kind(&t) == "device") {
                             resolve_mark(&mut dv, own.or(other), plumbing, sheet_texts, *tag_at);
                         }
                         // A junction box tagged with a luminaire's type (and its circuit and
@@ -4716,7 +4738,27 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let links = job_links(s, job);
     let bubbles: Vec<([f64; 2], f64, String, String)> =
         links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius, c.detail.clone(), c.target_sheet.clone())).collect();
-    let mut census = device_census(s, job, &bubbles);
+    let mut census = device_census(s, job, &bubbles, &[]);
+    // Marks the loaded sheets' legends don't list may be a luminaire schedule's on a sheet the
+    // drawing doesn't hold (the set's electrical schedules sheet): read those, and count again
+    // when they list any.
+    if !census.unlisted.is_empty() {
+        let plan_tags: BTreeSet<String> = census.by_type.keys().chain(census.unlisted.keys()).map(|t| t.trim().to_ascii_uppercase()).collect();
+        let unloaded = schedule_legends_on(&unloaded_schedule_pages(job), &plan_tags);
+        let listed: Vec<&String> = census.unlisted.keys().filter(|t| unloaded.iter().any(|(_, l)| l.types.contains(t.as_str()))).collect();
+        if !unloaded.is_empty() {
+            progress_line(&format!(
+                "  luminaire schedules on sheets not loaded: {} on {:?}; the plans' unlisted marks they list: {:?}",
+                unloaded.len(),
+                unloaded.iter().map(|(n, _)| n.as_str()).collect::<BTreeSet<_>>(),
+                listed
+            ));
+        }
+        if !listed.is_empty() {
+            results["schedules_not_loaded"] = schedule_legends_json(&unloaded);
+            census = device_census(s, job, &bubbles, &unloaded);
+        }
+    }
     // Inside a registered enlarged plan's boundary its sheet is the authority: its devices move
     // onto the overall plan there, and the overall plan's own copies there are left out.
     if let Some(links) = links {
@@ -5516,6 +5558,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
             }
             job.audit("bspec_draft", "pipeline", None, Some(StageName::BimBuild), Some(json!({"stored": true})));
+            // The roof as the documents frame it: its framing from its plans' notes, its
+            // parapets from the sections' tops of parapet (Q6314).
+            match roof_documents(s, job) {
+                Ok(v) if !v.is_null() => job.audit("roof_documents", "pipeline", None, Some(StageName::BimBuild), Some(v)),
+                Ok(_) => {}
+                Err(e) => progress_line(&format!("  roof framing and parapets not read: {e}")),
+            }
             // The drafted spec is the plans' alone: the M and P plans' runs go back in, each on
             // its level, so the build makes them.
             if let Some(mep) = job.mep.clone().filter(|m| !m.runs.is_empty() || !m.terminals.is_empty() || !m.equipment.is_empty())
@@ -6173,7 +6222,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The plumbing fixtures the plumbing plans tag (named by the set's fixture schedule) go in
     // with the devices: placed by their sheets the same way. The schedule may be on any trade's
     // sheet. What was found, for the finding when piped floors get no fixtures.
-    let (schedule, schedule_pages) = plumbing_schedule(s.doc()?, job);
+    let (found_schedule, schedule_pages) = find_plumbing_schedule(s.doc()?, job);
+    // The rough-in table beside it: what sizes a fixture's waste and vent filled in.
+    let rough_in = found_schedule.as_ref().map(|(_, page, _)| rough_in_table(job, page)).unwrap_or_default();
+    let schedule = found_schedule.map(|(sch, _, _)| sch);
     let mut fixtures_read = match &schedule {
         Some(sch) => format!("the plumbing fixture schedule lists {} tags", sch.rows.len()),
         None => format!("no plumbing fixture schedule was found ({schedule_pages} pages looked at)"),
@@ -6811,7 +6863,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // A floor with no water plan: the water its derived mains don't reach, inferred from its
         // fixtures and its rooms' branches.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-            let inferred = infer_missing_water(job, &mut sp, &no_water_levels, &devices, schedule.as_ref());
+            let inferred = infer_missing_water(job, &mut sp, &no_water_levels, &devices, schedule.as_ref(), &rough_in);
             if inferred.as_object().is_some_and(|o| !o.is_empty()) {
                 s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
@@ -6819,7 +6871,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The rest of the fill-in pass (Q6216): each fixture's waste and vent no drain or vent
         // line of its floor reaches, each air terminal no duct of its system reaches.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-            let filled = fill_in_rest(job, &mut sp, &devices, schedule.as_ref());
+            let filled = fill_in_rest(job, &mut sp, &devices, schedule.as_ref(), &rough_in);
             if filled.get("runs").and_then(Value::as_u64).unwrap_or(0) > 0 {
                 s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
@@ -7930,7 +7982,8 @@ fn mark_fates(s: &Session, job: &GuidedJob) -> (std::collections::HashMap<u64, M
     let links = pages.as_ref().map(|(sheets, pages, _)| cadaddy_mepfix::printlinks::link_set(sheets, pages));
     let bubbles: Vec<([f64; 2], f64, String, String)> =
         links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius, c.detail.clone(), c.target_sheet.clone())).collect();
-    let mut census = device_census(s, job, &bubbles);
+    let unloaded = schedule_legends_from(job.stage(StageName::Devices).and_then(|st| st.result.as_ref()).and_then(|r| r.get("schedules_not_loaded")));
+    let mut census = device_census(s, job, &bubbles, &unloaded);
     if let Some(links) = &links {
         enlarged_authority(job, links, &mut census);
     }
@@ -14389,9 +14442,12 @@ fn infer_missing_water(
     levels: &[String],
     devices: &[super::readers::ReadDevice],
     schedule: Option<&cadaddy_mepfix::fixture_schedule::FixtureSchedule>,
+    rough_in: &[cadaddy_mepfix::fixture_schedule::ConnectionRow],
 ) -> Value {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let fill = super::waterfill::rules();
+    let products = super::plumbproducts::rules();
+    let lowest = super::plumbing::lowest_storey(sp).map(|l| storey_key(&l));
     let (_, reach_ft) = super::plumbing::fixture_lines("");
     // Each floor with fixtures, by its storey, named as its runs name it where it has no water
     // plan, else as the building's levels do (else its runs, else its fixtures).
@@ -14422,7 +14478,8 @@ fn infer_missing_water(
                 let row = schedule.and_then(|s| s.rows.iter().find(|r| r.tag.eq_ignore_ascii_case(d.tag.trim())));
                 let words = row.map_or_else(|| d.tag.clone(), |r| format!("{} {} {}", d.tag, r.fixture, r.description));
                 let (lines, _) = super::plumbing::fixture_lines(&words);
-                super::waterfill::Fixture { at: d.at, what: d.tag.clone(), lines, words }
+                let sizes = fixture_doc_sizes(&fill, &products, row, rough_in, lowest.as_deref() == Some(key.as_str()));
+                super::waterfill::Fixture { at: d.at, what: d.tag.clone(), lines, words, sizes }
             })
             .collect();
         let on: Vec<&cadaddy_walk3d::MepRun> = sp.mep.runs.iter().filter(|r| storey_key(&r.level) == *key).collect();
@@ -14633,9 +14690,12 @@ fn fill_in_rest(
     sp: &mut cadaddy_walk3d::BuildingSpec,
     devices: &[super::readers::ReadDevice],
     schedule: Option<&cadaddy_mepfix::fixture_schedule::FixtureSchedule>,
+    rough_in: &[cadaddy_mepfix::fixture_schedule::ConnectionRow],
 ) -> Value {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let drains = super::plumbing::drainage_systems();
+    let (fill, products) = (super::waterfill::rules(), super::plumbproducts::rules());
+    let lowest = super::plumbing::lowest_storey(sp).map(|l| storey_key(&l));
     let rules = [super::provenance::rule("P-BRANCH-WASTE"), super::provenance::rule("P-BRANCH-VENT")];
     // Each floor with fixtures, by its storey, named as its runs name it (else its level's name).
     // The fixtures are the ones the model builds: the spec's fixture tags (the read ones and the
@@ -14655,7 +14715,8 @@ fn fill_in_rest(
                 .find(|n| storey_key(n) == key)
                 .map_or_else(|| level.clone(), Clone::clone)
         };
-        let at = super::fillin::FixtureAt { at, what: tag.clone(), words, lines };
+        let sizes = fixture_doc_sizes(&fill, &products, row, rough_in, lowest.as_deref() == Some(key.as_str()));
+        let at = super::fillin::FixtureAt { at, what: tag.clone(), words, lines, sizes };
         match floors.get_mut(&key) {
             Some(f) => f.1.push(at),
             None => {
@@ -16075,14 +16136,19 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
 
 /// The light fixture schedules on a set's pages, read by their grid ([`super::lightsched`]):
 /// each type once, and whether their notes forbid substitutions. `electrical` says which pages
-/// are electrical sheets (where a plain `FIXTURE SCHEDULE` is the luminaire schedule).
-fn fixture_schedule(pages: &[(String, cadaddy_doc::Drawing)], electrical: &dyn Fn(&str) -> bool) -> (Vec<cadaddy_walk3d::FixtureType>, bool) {
+/// are electrical sheets (where a plain `FIXTURE SCHEDULE` is the luminaire schedule);
+/// `plan_tags` the tags the plans print, that check which column holds the marks.
+fn fixture_schedule(
+    pages: &[(String, cadaddy_doc::Drawing)],
+    electrical: &dyn Fn(&str) -> bool,
+    plan_tags: &BTreeSet<String>,
+) -> (Vec<cadaddy_walk3d::FixtureType>, bool) {
     let mut types: Vec<cadaddy_walk3d::FixtureType> = Vec::new();
     let mut no_subs = false;
     for (number, d) in pages {
         let texts = cadaddy_mepfix::sheet_facts::texts(d);
         for tb in luminaire_schedules(&texts, || super::gridtable::segments(d), number, electrical(number)) {
-            let (rows, ns) = super::lightsched::fixture_types(&tb);
+            let (rows, ns) = super::lightsched::fixture_types(&tb, plan_tags);
             no_subs |= ns;
             for r in rows {
                 if !types.iter().any(|t| t.tag == r.tag) {
@@ -16121,9 +16187,10 @@ fn luminaire_schedules(
 /// A luminaire schedule as a legend: its types (and the variants its notes list), its extent
 /// (symbols drawn there are samples), and each type's row with the schedule's title, so a plan's
 /// tag that is one of its marks is a luminaire of that type with the row as its source.
-fn schedule_legend(tb: &super::gridtable::GridTable) -> cadaddy_mepfix::device_types::Legend {
+/// `plan_tags`: the tags the plans print, that check which column holds the marks.
+fn schedule_legend(tb: &super::gridtable::GridTable, plan_tags: &BTreeSet<String>) -> cadaddy_mepfix::device_types::Legend {
     let mut out = cadaddy_mepfix::device_types::Legend::default();
-    let (types, _) = super::lightsched::fixture_types(tb);
+    let (types, _) = super::lightsched::fixture_types(tb, plan_tags);
     for f in types {
         let description = [&f.description, &f.manufacturer, &f.model, &f.lamp, &f.installation, &f.notes]
             .iter()
@@ -16189,12 +16256,114 @@ fn fixture_schedule_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<(St
     (pages, electrical)
 }
 
+/// The set's sheets the job's drawing doesn't hold that may print its luminaire schedule (its
+/// electrical sheets that aren't plans, another trade's schedule sheets), read again off their
+/// files: each by number, with whether it is an electrical sheet.
+fn unloaded_schedule_pages(job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing, bool)> {
+    let loaded: BTreeSet<String> = job_sheet_refs(job).iter().map(|r| r.number.split('/').next().unwrap_or("").trim().to_ascii_uppercase()).collect();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut pages: Vec<(String, cadaddy_doc::Drawing, bool)> = Vec::new();
+    for (n, d) in non_plan_pages(job, "E") {
+        if !loaded.contains(&n.trim().to_ascii_uppercase()) && seen.insert(n.clone()) {
+            pages.push((n, d, true));
+        }
+    }
+    let schedule_sheet = |number: &str, discipline: &str, kind: &str, title: &str| {
+        !loaded.contains(&number.trim().to_ascii_uppercase())
+            && !discipline.eq_ignore_ascii_case("E")
+            && !kind.contains("plan")
+            && (kind == "schedule" || title.to_ascii_uppercase().contains("SCHEDULE") || super::lightsched::is_luminaire_title(title, false))
+    };
+    for (n, d) in pages_where(job, &schedule_sheet) {
+        if seen.insert(n.clone()) {
+            pages.push((n, d, false));
+        }
+    }
+    pages
+}
+
+/// The luminaire schedules on sheets the job's drawing doesn't hold (`pages`, from
+/// [`unloaded_schedule_pages`]): each as a legend of its sheet, by number, its types checked
+/// against the tags the plans print (`plan_tags`). Their extents are another page's, so they
+/// carry none.
+fn schedule_legends_on(
+    pages: &[(String, cadaddy_doc::Drawing, bool)],
+    plan_tags: &BTreeSet<String>,
+) -> Vec<(String, cadaddy_mepfix::device_types::Legend)> {
+    let mut out = Vec::new();
+    for (number, d, electrical) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(d);
+        for tb in luminaire_schedules(&texts, || super::gridtable::segments(d), number, *electrical) {
+            let mut l = schedule_legend(&tb, plan_tags);
+            l.regions.clear();
+            if !l.types.is_empty() {
+                out.push((number.clone(), l));
+            }
+        }
+    }
+    out
+}
+
+/// Schedule legends ([`schedule_legends_on`]) as the devices stage keeps them: each sheet's
+/// rows by type.
+fn schedule_legends_json(legends: &[(String, cadaddy_mepfix::device_types::Legend)]) -> Value {
+    Value::Array(
+        legends
+            .iter()
+            .map(|(sheet, l)| {
+                let rows: serde_json::Map<String, Value> =
+                    l.rows.iter().map(|(k, r)| (k.clone(), json!({"table": r.table, "description": r.description}))).collect();
+                json!({"sheet": sheet, "types": l.types, "rows": rows})
+            })
+            .collect(),
+    )
+}
+
+/// [`schedule_legends_json`] read back.
+fn schedule_legends_from(v: Option<&Value>) -> Vec<(String, cadaddy_mepfix::device_types::Legend)> {
+    use cadaddy_mepfix::device_types::{Legend, LegendRow};
+    v.and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(MAX_LEGEND_SHEETS * MAX_LUMINAIRE_SCHEDULES)
+        .filter_map(|e| {
+            let sheet = e.get("sheet").and_then(Value::as_str)?.to_string();
+            let types = e.get("types").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+            let rows = e
+                .get("rows")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+                .map(|(k, r)| {
+                    let text = |f: &str| r.get(f).and_then(Value::as_str).unwrap_or("").to_string();
+                    (k.clone(), LegendRow { table: text("table"), description: text("description") })
+                })
+                .collect();
+            Some((sheet, Legend { types, rows, regions: Vec::new() }))
+        })
+        .collect()
+}
+
+/// The tags the set's plans print, upper case: the devices read off them and the unlisted marks
+/// the devices stage asked about.
+fn plan_device_tags(job: &GuidedJob) -> BTreeSet<String> {
+    let unknowns = job
+        .stage(StageName::Devices)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.pointer("/devices/unknowns"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|u| u.get("tag").and_then(Value::as_str));
+    job.devices.iter().map(|d| d.tag.as_str()).chain(unknowns).map(|t| t.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()).collect()
+}
+
 /// The fixture schedule into the spec before the model is built, so the luminaires' mounting
 /// heights can come from it (`propfill`'s height chain reads `mep.fixture_schedule`).
 /// Whether its notes forbid substitutions. The schedule may be on any trade's sheet.
 fn fixture_schedule_step(s: &mut Session, job: &GuidedJob) -> crate::Result<bool> {
     let (pages, electrical) = fixture_schedule_pages(s.doc()?, job);
-    let (types, no_subs) = fixture_schedule(&pages, &|n| electrical.contains(n));
+    let (types, no_subs) = fixture_schedule(&pages, &|n| electrical.contains(n), &plan_device_tags(job));
     let sheets: BTreeSet<&str> = types.iter().filter_map(|t| t.source.split_whitespace().next()).collect();
     progress_line(&format!(
         "  light fixture schedule: {} types ({}) read from {:?} of {} pages looked at",
@@ -16234,7 +16403,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let (mut types, mut no_subs) = (sp.mep.fixture_schedule.clone(), result["fixture_schedule_no_substitutions"].as_bool().unwrap_or(false));
     if types.is_empty() {
-        (types, no_subs) = fixture_schedule(pages, &|_| true);
+        (types, no_subs) = fixture_schedule(pages, &|_| true, &plan_device_tags(job));
     }
     // The specification's luminaire and lighting control sections (`26 51 xx`, `26 09 xx`).
     let specs = job_specs(job);
@@ -16451,10 +16620,12 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         result["luminaire_boxes_needed"] = json!(needed);
     }
     // The documents against each other: the types, each type's fields.
+    let read = read_luminaires(job);
     let mut conflicts: Vec<Conflict> = lt::type_conflicts(&lt::TypeCheck {
         schedule: &types,
         submitted: &submitted,
         on_plans: &on_plans,
+        read: &read,
         submitted_qty: &submitted_qty,
         submittal_name: &submittal_name,
     });
@@ -16768,6 +16939,16 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         "review_items": rfis,
     });
     Ok(())
+}
+
+/// The luminaires the plans show of each type as the job read them, built or not.
+pub(crate) fn read_luminaires(job: &GuidedJob) -> BTreeMap<String, u32> {
+    let mut out: BTreeMap<String, u32> = BTreeMap::new();
+    for d in job.devices.iter().filter(|d| matches!(device_kind_of(d), "luminaire" | "wall luminaire")) {
+        let n = out.entry(super::lightsched::type_of(&d.tag)).or_default();
+        *n = n.saturating_add(1);
+    }
+    out
 }
 
 /// A luminaire's type from its mark (`luminaire QX` → `QX`), a control's mark as printed.
@@ -21729,7 +21910,7 @@ const MAX_PANEL_SHEETS: usize = 24;
 /// PDFs. A set's schedules can be on any of its electrical sheets (past the few its legends are
 /// looked for on), on a combined `MEP` sheet, or on a sheet whose number was read under another
 /// code.
-fn panel_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
+pub(crate) fn panel_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
     let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
     let base = |n: &str| n.split('/').next().unwrap_or("").trim().to_string();
     let title_of = |n: &str| {
@@ -21858,7 +22039,7 @@ pub(crate) fn job_panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> 
 
 /// The panel schedules on the electrical sheets, each panel once (a panel named twice: the
 /// schedule with more breakers read).
-fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
+pub(crate) fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
     let mut out: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
     for (number, sub) in pages {
         for p in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(sub), number) {
@@ -23109,26 +23290,46 @@ fn find_plumbing_schedule(
     (None, looked)
 }
 
-/// The set's plumbing fixture schedule ([`find_plumbing_schedule`]), and how many pages were
-/// looked at for it.
-fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule>, usize) {
-    let (found, looked) = find_plumbing_schedule(d, job);
-    (found.map(|(s, _, _)| s), looked)
-}
-
-/// The set's plumbing fixture schedule (as [`plumbing_schedule`] finds it), its sheet and the
+/// The set's plumbing fixture schedule (as [`find_plumbing_schedule`] finds it), its sheet and the
 /// rough-in table: on the schedule's sheet, else on another plumbing sheet that isn't a plan.
 pub(crate) fn plumbing_schedule_docs(
     d: &cadaddy_doc::Drawing,
     job: &GuidedJob,
 ) -> Option<(cadaddy_mepfix::fixture_schedule::FixtureSchedule, Vec<cadaddy_mepfix::fixture_schedule::ConnectionRow>, String)> {
-    use cadaddy_mepfix::fixture_schedule as fsch;
     let (schedule, page, sheet) = find_plumbing_schedule(d, job).0?;
-    let mut connections = fsch::read_connections_on(&page);
-    if connections.is_empty() {
-        connections = non_plan_pages(job, "P").iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default();
-    }
+    let connections = rough_in_table(job, &page);
     Some((schedule, connections, sheet))
+}
+
+/// The set's rough-in table: on the fixture schedule's page, else on another plumbing sheet that
+/// isn't a plan.
+fn rough_in_table(job: &GuidedJob, page: &cadaddy_doc::Drawing) -> Vec<cadaddy_mepfix::fixture_schedule::ConnectionRow> {
+    use cadaddy_mepfix::fixture_schedule as fsch;
+    let connections = fsch::read_connections_on(page);
+    if !connections.is_empty() {
+        return connections;
+    }
+    non_plan_pages(job, "P").iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default()
+}
+
+/// A fixture's waste and vent sizes its documents give, by system ([`super::waterfill::FillRules::doc_sizes_of`]):
+/// its schedule row's own size columns, else (system by system) the rough-in table's row for its
+/// name; below grade (`below_grade`: on the lowest storey) the below-grade waste column first.
+pub(crate) fn fixture_doc_sizes(
+    fill: &super::waterfill::FillRules,
+    products: &super::plumbproducts::Rules,
+    row: Option<&cadaddy_mepfix::fixture_schedule::ScheduledFixture>,
+    rough_in: &[cadaddy_mepfix::fixture_schedule::ConnectionRow],
+    below_grade: bool,
+) -> BTreeMap<String, (f64, String)> {
+    let Some(row) = row else { return BTreeMap::new() };
+    let mut out = fill.doc_sizes_of(&row.connections, below_grade, &format!("the fixture schedule's {} row", row.tag.trim()));
+    if let Some((cr, _)) = super::plumbproducts::connection_row(products, rough_in, &row.fixture, &row.description) {
+        for (k, v) in fill.doc_sizes_of(&cr.sizes, below_grade, &format!("the rough-in table's {} row", cr.fixture.trim())) {
+            out.entry(k).or_insert(v);
+        }
+    }
+    out
 }
 
 /// Most plumbing fixtures read from a set's plans.
@@ -24868,6 +25069,81 @@ fn placement_discipline(job: &GuidedJob) -> Option<String> {
     level_plan_discipline(job)
 }
 
+/// The roof levels' framing and parapets into the drafted spec: the framing the notes on each
+/// roof level's sheets name (trusses or joists, their spacing and depth; the rule's usual values
+/// where a note gives none), bearing at the level's elevation, which then rises to the roof's
+/// surface on the members and deck (the storey under keeps its floor to the bearing); and the
+/// lowest top of parapet the sections and elevations mark above the bearing, as a height over
+/// the roof's surface (the higher ones reported). A parapet an elevation read already gave the
+/// level is kept. What was put in (null: nothing).
+fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
+    let (mut sp, true) = super::bspec::current(s, "bim_build")? else { return Ok(Value::Null) };
+    let roofs: Vec<String> = sp.levels.iter().filter(|l| super::wallgen::roof_level(&sp.levels, &l.name)).map(|l| l.name.clone()).collect();
+    if roofs.is_empty() {
+        return Ok(Value::Null);
+    }
+    let index_levels: Vec<Value> = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let rect = |r: [f64; 4]| {
+        cadaddy_geom::Bounds2::new(cadaddy_geom::Vec2::new(r[0].min(r[2]), r[1].min(r[3])), cadaddy_geom::Vec2::new(r[0].max(r[2]), r[1].max(r[3])))
+    };
+    let mut out = Vec::new();
+    for roof in &roofs {
+        let of_level =
+            |r: &SheetRegion| std::iter::once(&r.level).chain(r.levels.iter()).any(|l| !l.is_empty() && level_name(l).eq_ignore_ascii_case(roof));
+        let mut regions: Vec<(String, cadaddy_geom::Bounds2)> = Vec::new();
+        for r in job.sheet_regions.iter().filter(|r| r.not_built.is_empty() && of_level(r)) {
+            // The whole sheet inside its border: the framing notes stand beside the plan.
+            let b = rect(r.area.unwrap_or(r.rect));
+            if !regions.iter().any(|(n, x)| *n == r.number && *x == b) {
+                regions.push((r.number.clone(), b));
+            }
+        }
+        let mut framing = super::exterior::read_framing(s.doc()?, &regions, roof);
+        // The level's elevation (the sections' top of plate or truss bearing) is where the
+        // framing bears; the roof's surface, its level's floor, is on the members and deck.
+        let assembly = super::exterior::assembly_ft(framing.as_ref());
+        if let Some(f) = framing.as_mut()
+            && let Some(level) = sp.levels.iter_mut().find(|l| l.name.eq_ignore_ascii_case(roof))
+        {
+            f.bearing_ft = Some(level.elevation_ft);
+            level.elevation_ft += assembly;
+            sp.exterior.framing.retain(|x| !x.level.eq_ignore_ascii_case(roof));
+            sp.exterior.framing.push(f.clone());
+        }
+        let parapets: Vec<f64> = index_levels
+            .iter()
+            .find(|l| l.get("name").and_then(Value::as_str).is_some_and(|n| level_name(n).eq_ignore_ascii_case(roof)))
+            .and_then(|l| l.get("parapets_ft"))
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).collect())
+            .unwrap_or_default();
+        let mut parapet = Value::Null;
+        if let Some(low) = parapets.first().copied()
+            && sp.exterior.level_parapet(roof).is_none()
+        {
+            let h = (low - assembly).max(0.0);
+            sp.exterior.parapets.push(cadaddy_walk3d::LevelParapet { level: roof.clone(), height_ft: h, facade: None });
+            parapet = json!({
+                "height_ft": (h * 100.0).round() / 100.0,
+                "above_bearing_ft": parapets,
+                "note": if parapets.len() > 1 {
+                    format!("the parapet is built at its lowest top all round; the sections and elevations also mark {} above the bearing where it steps up", parapets.iter().skip(1).map(|v| cadaddy_walk3d::feet(*v)).collect::<Vec<_>>().join(", "))
+                } else {
+                    String::new()
+                },
+            });
+        }
+        if framing.is_some() || !parapet.is_null() {
+            out.push(json!({"level": roof, "framing": framing, "parapet": parapet}));
+        }
+    }
+    if out.is_empty() {
+        return Ok(Value::Null);
+    }
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    Ok(json!({"roofs": out}))
+}
+
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
     // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
@@ -24897,8 +25173,22 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     let given: Vec<Option<f64>> = plans.iter().map(|r| answered_level(job, &r.level).and_then(|a| a.elevation_ft)).collect();
     let read_good = |i: usize| reads.get(i).copied().flatten().filter(|_| in_order.get(i).copied().unwrap_or(false));
     let good = |i: usize| given.get(i).copied().flatten().or_else(|| read_good(i));
+    // A mezzanine is a partial floor inside the storey under it (Q6322): it doesn't end that
+    // storey, and storeys stack past it.
+    let mezzanine: Vec<bool> = plans.iter().map(|r| cadaddy_walk3d::levels::is_mezzanine(&r.level)).collect();
+    let is_mezz = |i: usize| mezzanine.get(i).copied().unwrap_or(false);
+    // Storeys (mezzanines not counted) from the lowest level to level `j`.
+    let storeys_to = |j: usize| (1..=j).filter(|k| !is_mezz(*k)).count();
     let mut out = Vec::new();
     let mut next_elevation = 0.0f64;
+    // The storey a mezzanine is inside: its floor's elevation and floor to floor.
+    let mut storey: Option<(f64, f64)> = None;
+    // The clear height under (and over) a mezzanine, and its floor's structure (rule data).
+    let mezz_rule = super::provenance::rule("A-MEZZANINE");
+    let clear = Some(mezz_rule.clear_ft).filter(|v| v.is_finite() && *v > 0.0 && *v < 50.0).unwrap_or(7.0);
+    let structure = Some(mezz_rule.default_size_in / 12.0).filter(|v| v.is_finite() && *v >= 0.0 && *v < 10.0).unwrap_or(1.0);
+    let mezz_under = clear + structure;
+    let mezz_storey = 2.0 * clear + structure;
     for (i, r) in plans.iter().enumerate() {
         let name = level_name(&r.level);
         let read_el = reads.get(i).copied().flatten();
@@ -24906,7 +25196,41 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         if i == 0 {
             // The lowest with no good reading: a storey under the first level read, if any (an
             // elevation the user gave a level above doesn't move it off 0).
-            next_elevation = (1..plans.len()).find_map(|j| read_good(j).map(|e| e - DEFAULT_STOREY_FT * j as f64)).unwrap_or(0.0);
+            next_elevation = (1..plans.len())
+                .filter(|j| !is_mezz(*j))
+                .find_map(|j| read_good(j).map(|e| e - DEFAULT_STOREY_FT * storeys_to(j) as f64))
+                .unwrap_or(0.0);
+        }
+        if is_mezz(i)
+            && let Some((floor_el, floor_h)) = storey
+        {
+            let top = floor_el + floor_h;
+            // Its own marks, else halfway up the storey, its clear height under it kept (trade
+            // practice A-MEZZANINE); it reaches the storey's top.
+            let (elevation, read) = match good(i).filter(|e| *e > floor_el && *e < top) {
+                Some(e) => (e, true),
+                None => {
+                    // A storey too low to keep the clear height under it: halfway all the same.
+                    let half = floor_el + floor_h / 2.0;
+                    let kept = (floor_el + mezz_under).max(half);
+                    (if kept < top - 1.0 { kept } else { half }, false)
+                }
+            };
+            let height = top - elevation;
+            let ceiling = (height - 1.0).clamp(7.0, 9.0).min(height);
+            let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": ceiling, "region": r.plan_rect()});
+            if !read {
+                level["guess"] = json!(format!(
+                    "{} plan {}: a mezzanine; its elevation is not read from the sections{}, so it is set halfway up the storey under it, at {} ({})",
+                    name,
+                    r.number,
+                    if read_el.is_some() { " (the one read is not inside the storey under it)" } else { "" },
+                    cadaddy_walk3d::feet(elevation),
+                    mezz_rule.basis_for("")
+                ));
+            }
+            out.push(level);
+            continue;
         }
         let (elevation, read_elevation) = match good(i) {
             Some(e) => (e, true),
@@ -24914,13 +25238,18 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         };
         // A floor to floor given as an answer is the building's.
         // The user put the level above at an elevation: this one reaches it.
-        let storey = |h: &f64| *h > 0.0 && *h <= 100.0;
-        let to_given = given.get(i + 1).copied().flatten().map(|up| up - elevation).filter(storey);
-        let (height, read_height) = match to_given.or_else(|| job.storey_ft.or_else(|| read(&r.level, "height_ft")).filter(storey)) {
+        let in_range = |h: &f64| *h > 0.0 && *h <= 100.0;
+        // The next storey up (a mezzanine over this floor is inside its storey).
+        let up = (i + 1..plans.len()).find(|j| !is_mezz(*j));
+        let to_given = up.and_then(|j| given.get(j).copied().flatten()).map(|up| up - elevation).filter(in_range);
+        let (height, read_height) = match to_given.or_else(|| job.storey_ft.or_else(|| read(&r.level, "height_ft")).filter(in_range)) {
             Some(h) => (h, true),
+            // A storey with a mezzanine in it keeps the clear height under and over it.
+            None if is_mezz(i + 1) => (DEFAULT_STOREY_FT.max(mezz_storey), false),
             None => (DEFAULT_STOREY_FT, false),
         };
         next_elevation = elevation + height;
+        storey = Some((elevation, height));
         let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.plan_rect()});
         if let (true, Some(e)) = (out_of_order, read_el) {
             level["guess"] = json!(format!(
@@ -24932,7 +25261,7 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
             ));
         } else if !(read_height && (read_elevation || job.storey_ft.is_some())) {
             // Stacked at a floor to floor the user gave is no guess either.
-            level["guess"] = json!(format!("{} plan {}: floor to floor not read from the sections; {}' assumed", name, r.number, DEFAULT_STOREY_FT));
+            level["guess"] = json!(format!("{} plan {}: floor to floor not read from the sections; {}' assumed", name, r.number, height));
         }
         out.push(level);
     }
@@ -28677,13 +29006,100 @@ mod tests {
         assert_eq!(unk.iter().map(|u| u["tag"].clone()).collect::<Vec<_>>(), vec![json!("ZZ")], "{unk:?}");
         // The model's fixture schedule: read off the architectural sheet, its variants beside.
         let (pages, electrical) = s.doc().map(|d| fixture_schedule_pages(d, &job)).unwrap_or_else(|e| panic!("{e}"));
-        let (types, _) = fixture_schedule(&pages, &|n| electrical.contains(n));
+        let (types, _) = fixture_schedule(&pages, &|n| electrical.contains(n), &BTreeSet::new());
         let tags: Vec<&str> = types.iter().map(|t| t.tag.as_str()).collect();
         assert_eq!(tags, ["A", "B", "C", "AE", "BE"], "{types:#?}");
         let b = types.iter().find(|t| t.tag == "BE").unwrap_or_else(|| panic!("{types:#?}"));
         assert_eq!((b.description.as_str(), b.source.as_str()), ("LED DOWNLIGHT", "A-1 LIGHT FIXTURE SCHEDULE"));
         assert!(b.notes.starts_with("WET LOCATION; 1. FIXTURES AE AND BE"), "{b:?}");
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
+    }
+
+    /// fix-lum-schedule-type-column-wrong: the set's luminaire schedule is only on a sheet the
+    /// job's drawing doesn't hold (its electrical schedules sheet, read again off its file), headed
+    /// TYPE | QTY | DESCRIPTION | MANUFACTURER | LAMPS (TYPE | COLOR) | VOLTAGE with voltages MVOLT,
+    /// 120 and UNV. Its marks are the first TYPE column's, never the voltages; the electrical
+    /// plan's tags of those marks are luminaires of their rows with that sheet as their source,
+    /// not questions; a mark it doesn't list is still asked about. The rows the devices stage
+    /// keeps read back the same (the census again, for the marks' fates).
+    #[test]
+    fn a_schedule_on_a_sheet_not_loaded_types_the_plans_luminaires_by_its_first_type_column() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [
+            {"number": "E-1", "discipline": "E", "sheet_type": "plan", "level": "1"},
+            {"number": "X-602", "discipline": "E", "sheet_type": "schedule"}
+        ]}));
+        job.sheets_loaded = true;
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        let mut marks: Vec<(&str, f64, f64)> = (0..4).map(|i| ("A", 100.0 + 40.0 * f64::from(i), 300.0)).collect();
+        marks.extend((0..3).map(|i| ("B", 100.0 + 40.0 * f64::from(i), 200.0)));
+        marks.extend((0..4).map(|i| ("ZZ", 100.0 + 40.0 * f64::from(i), 100.0))); // listed nowhere
+        // A mark every set uses for a switch, scheduled here as a strip light.
+        marks.extend((0..2).map(|i| ("S", 300.0 + 40.0 * f64::from(i), 400.0)));
+        // The plan's own symbol legend lists its junction box and time clock only.
+        let legend = [
+            ("ELECTRICAL PLAN", 500.0, 900.0, 8.0),
+            ("SYMBOL LEGEND", 700.0, 800.0, 8.0),
+            ("SYMBOL", 700.0, 785.0, 5.0),
+            ("DESCRIPTION", 730.0, 785.0, 5.0),
+            ("J", 700.0, 772.0, 5.0),
+            ("JUNCTION BOX", 730.0, 772.0, 5.0),
+            ("TC", 700.0, 760.0, 5.0),
+            ("TIME CLOCK", 730.0, 760.0, 5.0),
+        ];
+        add_sheet(&mut s, &legend, &marks);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [0.0, 0.0, 1000.0, 1000.0], ..region("E-1", "1", "E", "plan", 0.0) });
+        // Before: no legend lists A or B, so both are questions.
+        let before = device_census(&s, &job, &[], &[]);
+        assert!(
+            before.unlisted.contains_key("A") && before.unlisted.contains_key("B"),
+            "{:?} {:?} {:?}",
+            before.unlisted.keys(),
+            before.by_type,
+            before.legend_types
+        );
+        // The schedules sheet as the job reads it off its file: a page of its own.
+        let cols: [(&str, &str, &[&str]); 7] = [
+            ("", "TYPE", &["A", "B", "S"]),
+            ("", "QTY", &["4", "2", "2"]),
+            ("", "DESCRIPTION", &["RECESSED DOWNLIGHT", "SCONCE", "LINEAR STRIP"]),
+            ("", "MANUFACTURER", &["MAKER ONE", "MAKER TWO", "MAKER ONE"]),
+            ("LAMPS", "TYPE", &["LED", "LED", "LED"]),
+            ("LAMPS", "COLOR", &["3000K", "-", "4000K"]),
+            ("", "VOLTAGE", &["MVOLT", "120", "UNV"]),
+        ];
+        let (texts, segs) = super::super::lightsched::drawn_schedule(0.2, &cols);
+        let mut page = cadaddy_doc::Drawing::new_imperial();
+        for t in &texts {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(&t.value, t.at.x, t.at.y, t.height))).ok();
+        }
+        for (a, b) in &segs {
+            let l = cadaddy_doc::Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) };
+            page.add(&Space::Model, Common::default(), EntityKind::Line(l)).ok();
+        }
+        let tags: BTreeSet<String> = ["A", "B", "ZZ"].iter().map(|t| t.to_string()).collect();
+        let legends = schedule_legends_on(&[("X-602".to_string(), page, true)], &tags);
+        let types: Vec<&String> = legends.iter().flat_map(|(_, l)| l.types.iter()).collect();
+        assert_eq!(types, ["A", "B", "S"], "{legends:#?}");
+        assert!(legends.iter().all(|(n, l)| n == "X-602" && l.regions.is_empty()), "another page's extents: {legends:?}");
+        let census = device_census(&s, &job, &[], &legends);
+        let of = |tag: &str| census.placed.iter().filter(|d| d.tag == tag).collect::<Vec<_>>();
+        assert!(before.placed.iter().filter(|d| d.tag == "S").all(|d| d.kind != "luminaire"), "S: a switch by its mark alone");
+        assert_eq!((of("A").len(), of("B").len(), of("S").len()), (4, 3, 2), "{:?}", census.placed);
+        assert!(
+            of("A").iter().chain(of("B").iter()).chain(of("S").iter()).all(|d| d.kind == "luminaire" && d.ifc_class == "IfcLightFixture"),
+            "{:?}",
+            census.placed
+        );
+        assert!(of("S").iter().all(|d| d.kind_source.starts_with("X-602 LIGHTING FIXTURE SCHEDULE: S LINEAR STRIP")), "{:?}", of("S"));
+        let a = of("A");
+        assert!(a.first().is_some_and(|d| d.kind_source.starts_with("X-602 LIGHTING FIXTURE SCHEDULE: A RECESSED DOWNLIGHT")), "{a:?}");
+        assert_eq!(census.unlisted.keys().collect::<Vec<_>>(), ["ZZ"], "the mark listed nowhere is still a question");
+        // Kept in the stage's result and read back: the same legends.
+        assert_eq!(schedule_legends_from(Some(&schedule_legends_json(&legends))), legends);
     }
 
     /// Q6165: what a mark resolves to. A row's description (`legend_kind`), else its table (a
@@ -29546,6 +29962,37 @@ mod tests {
         let high = cadaddy_walk3d::MepEquipment { bottom_ft: 1.0, ..unit("205", 0.0) };
         let under = super::super::keynotes::equipment_receptacle("15A/2P RECEPTACLE FOR PTAC, BELOW THE UNIT").unwrap();
         assert_eq!(under_unit_height_in(&under, &high).0, 6.0);
+    }
+
+    /// fix-lum-schedule-type-column-wrong: a luminaire whose mark is one every set uses for another
+    /// device (`S`, a switch) is put in the model as a luminaire, like any other mark's.
+    #[test]
+    fn a_scheduled_luminaire_with_a_switch_mark_is_put_in_as_a_luminaire() {
+        let mut s = crate::Session::new();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 3000, 1000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let dv = |x: f64, tag: &str| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            kind: "luminaire".into(),
+            ifc_class: "IfcLightFixture".into(),
+            kind_source: format!("X-602 LIGHTING FIXTURE SCHEDULE: {tag} LINEAR STRIP"),
+            at: [x, 120.0],
+            sheet: "E-9".into(),
+            level: "Level 1".into(),
+            handle: format!("{:X}", 0x100 + x as u64),
+            ..Default::default()
+        };
+        super::super::readers::place_devices(&mut s, &[dv(120.0, "S"), dv(480.0, "A")], "test").unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        for (h, mark) in [("178", "S"), ("2E0", "A")] {
+            let t = sp.tags.iter().find(|t| t.fields.get("symbol").is_some_and(|f| f.value == h)).unwrap_or_else(|| panic!("{h}: {:?}", sp.tags));
+            assert_eq!(t.kind, "device", "{mark}: {t:?}");
+            assert_eq!(t.fields.get("device_kind").map(|f| f.value.as_str()), Some("luminaire"), "{mark}: {t:?}");
+            assert_eq!(t.fields.get("device_type").map(|f| f.value.clone()), Some(format!("luminaire {mark}")), "{mark}");
+        }
     }
 
     /// Q6247: the model's receptacle of a unit carries its keynote's rating, configuration,
@@ -34715,6 +35162,59 @@ mod tests {
     }
 
     /// Q6037: level_name canonicalises aliases to one name per real level.
+    /// Q6314: the roof level's framing comes from the notes on its sheets (here a structural
+    /// roof plan), and its parapet from the index's lowest top of parapet above the bearing, as a
+    /// height over the framed roof's deck; the higher tops are reported, not built.
+    #[test]
+    fn roof_documents_frame_the_roof_and_give_it_its_parapet() {
+        let mut s = Session::new();
+        // The structural roof plan's notes, on its sheet (x 1000–1100).
+        s.execute("text", &json!({"at": [1010, 20], "text": "PRE-MANUFACTURED ROOF TRUSSES @ 16\" OC. MAX.", "height": 2})).unwrap();
+        s.execute("text", &json!({"at": [1010, 30], "text": "MIN. 30\" DEEP TRUSS", "height": 2})).unwrap();
+        // A truss note on another floor's sheet is not the roof's.
+        s.execute("text", &json!({"at": [10, 20], "text": "FLOOR TRUSSES @ 19.2\" OC", "height": 2})).unwrap();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Roof", "elevation_ft": 10, "height_ft": 4, "ceiling_ft": 4}
+            ]}}),
+        )
+        .unwrap();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![region("A-1", "1", "A", "plan", 0.0), region("S-4", "R", "S", "plan", 1000.0)];
+        job.index = Some(json!({"levels": [{"name": "1", "elevation_ft": 0.0}, {"name": "R", "elevation_ft": 10.0, "parapets_ft": [5.0, 7.0]}]}));
+        let out = roof_documents(&mut s, &job).unwrap();
+        let (sp, _) = super::super::bspec::current(&s, "test").unwrap();
+        let f = sp.exterior.level_framing("Roof").expect("framed");
+        assert_eq!((f.member.as_str(), f.spacing_in, f.depth_in), ("truss", 16.0, 30.0), "{out}");
+        assert!(f.source.starts_with("S-4: PRE-MANUFACTURED ROOF TRUSSES"), "{}", f.source);
+        // It bears at the level's elevation; the level is now the roof's surface, 30" + 1.5" up.
+        assert_eq!(f.bearing_ft, Some(10.0));
+        assert!((sp.level("Roof").unwrap().elevation_ft - (10.0 + 31.5 / 12.0)).abs() < 1e-9);
+        assert_eq!(sp.level("Level 1").unwrap().height_ft, 10.0);
+        // 5' over the bearing less the 30" trusses and 1.5" deck: 2'-4.5" over the deck.
+        let h = sp.exterior.level_parapet("Roof").unwrap();
+        assert!((h - (5.0 - 31.5 / 12.0)).abs() < 1e-9, "{h}");
+        assert!(out["roofs"][0]["parapet"]["note"].as_str().unwrap().contains("7'-0\""), "{out}");
+        // A roof no sheet frames: no framing, and the parapet as high over the roof as the
+        // sections mark it over the bearing.
+        let mut s2 = Session::new();
+        s2.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Roof", "elevation_ft": 10, "height_ft": 4, "ceiling_ft": 4}
+            ]}}),
+        )
+        .unwrap();
+        roof_documents(&mut s2, &job).unwrap();
+        let (sp2, _) = super::super::bspec::current(&s2, "test").unwrap();
+        assert!(sp2.exterior.level_framing("Roof").is_none());
+        assert_eq!(sp2.exterior.level_parapet("Roof"), Some(5.0));
+        assert_eq!(sp2.level("Roof").unwrap().elevation_ft, 10.0);
+    }
+
     #[test]
     fn level_name_uses_canonical_names() {
         assert_eq!(level_name("R"), "Roof");
@@ -34925,6 +35425,58 @@ mod tests {
         // Only E/M plans: no building levels (the build reads what was imported, as before).
         job.sheet_regions = vec![region("E-104", "4", "E", "plan", 0.0)];
         assert!(building_levels(&job).is_empty());
+    }
+
+    /// A mezzanine is a level inside the storey under it (Q6322): ranked over its floor, at its
+    /// own mark, else halfway up the storey keeping the code's clear height under it; the floor's
+    /// storey runs past it to the next storey.
+    #[test]
+    fn a_mezzanine_is_a_level_inside_the_storey_under_it() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![
+            region("A103", "R", "A", "plan", 0.0),
+            region("A102", "M", "A", "plan", 200.0),
+            region("A101", "1", "A", "plan", 400.0),
+            region("E102", "M", "E", "plan", 600.0),
+        ];
+        job.index = Some(json!({"levels": [
+            {"name": "1", "elevation_ft": 0.0, "height_ft": 22.0},
+            {"name": "M", "elevation_ft": 10.5, "height_ft": 11.5},
+            {"name": "R", "elevation_ft": 22.0}
+        ]}));
+        let levels = building_levels(&job);
+        let row = |l: &Value| (l["name"].as_str().unwrap_or("").to_string(), l["elevation_ft"].as_f64(), l["height_ft"].as_f64());
+        let rows: Vec<_> = levels.iter().map(row).collect();
+        assert_eq!(
+            rows.get(..2),
+            Some(&[("Level 1".to_string(), Some(0.0), Some(22.0)), ("Mezzanine".to_string(), Some(10.5), Some(11.5))][..]),
+            "{levels:?}"
+        );
+        assert_eq!(rows.get(2).map(|r| (r.0.as_str(), r.1)), Some(("Roof", Some(22.0))), "{levels:?}");
+        assert!(levels[0].get("guess").is_none() && levels[1].get("guess").is_none(), "{levels:?}");
+        // The mezzanine's region is its own plan's (a partial floor), not the floor's.
+        assert_eq!(levels[1]["region"][0].as_f64(), Some(200.0));
+
+        // Nothing read: the storey holds the clear height under and over the mezzanine, which is
+        // set over its floor's clear height and marked a guess with its rule.
+        job.index = None;
+        let levels = building_levels(&job);
+        let rule = super::super::provenance::rule("A-MEZZANINE");
+        let storey = 2.0 * rule.clear_ft + rule.default_size_in / 12.0;
+        assert!(storey > DEFAULT_STOREY_FT, "{storey}");
+        let el: Vec<f64> = levels.iter().filter_map(|l| l["elevation_ft"].as_f64()).collect();
+        assert_eq!(el, [0.0, rule.clear_ft + rule.default_size_in / 12.0, storey], "{levels:?}");
+        assert_eq!(levels[1]["height_ft"].as_f64(), Some(rule.clear_ft));
+        assert!(levels[1]["guess"].as_str().is_some_and(|g| g.contains("mezzanine") && g.contains("A-MEZZANINE")), "{levels:?}");
+        // A mark over the storey's top is no mezzanine's: halfway all the same.
+        job.index = Some(json!({"levels": [
+            {"name": "1", "elevation_ft": 0.0, "height_ft": 20.0},
+            {"name": "M", "elevation_ft": 31.0},
+            {"name": "R", "elevation_ft": 20.0}
+        ]}));
+        let levels = building_levels(&job);
+        assert_eq!(levels[1]["elevation_ft"].as_f64(), Some(10.0), "{levels:?}");
+        assert!(levels[1]["guess"].is_string(), "{levels:?}");
     }
 
     #[test]
@@ -36492,6 +37044,57 @@ mod tests {
         lighting_step(&mut s, &mut job, &[], &mut result).unwrap();
         let again = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
         assert_eq!(again["total"], rfis["total"]);
+    }
+
+    /// fix-lum-schedule-type-column-wrong: a schedule with a QTY column: the takeoff shows each
+    /// type's luminaires in the model beside the schedule's quantity (neither replaces the other)
+    /// and a difference is a review item.
+    #[test]
+    fn the_takeoff_shows_the_schedules_quantity_beside_the_models_count() {
+        let mut s = crate::Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let row = |tag: &str, q: Option<u32>| cadaddy_walk3d::FixtureType {
+            tag: tag.into(),
+            description: "DOWNLIGHT".into(),
+            source: "E-9 LIGHTING FIXTURE SCHEDULE".into(),
+            quantity: q,
+            ..Default::default()
+        };
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.mep.fixture_schedule = vec![row("Q1", Some(3)), row("Q8", Some(1)), row("Q5", None)];
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
+        lit_device(&mut s, "luminaire", "Q1", "A1", "", [0.0, 0.0], &[]);
+        lit_device(&mut s, "luminaire", "Q1", "A1", "", [10.0, 0.0], &[]);
+        lit_device(&mut s, "luminaire", "Q8", "A1", "", [20.0, 0.0], &[]);
+        lit_device(&mut s, "luminaire", "Q5", "A1", "", [30.0, 0.0], &[]);
+        let t = s.execute("bim.takeoff", &json!({"group_by": "type", "keep": false})).unwrap();
+        assert_eq!(
+            t["luminaire_schedule_quantities"],
+            json!([
+                {"type": "Q1", "plans": 2, "model": 2, "schedule": 3, "differ": true, "source": "E-9 LIGHTING FIXTURE SCHEDULE"},
+                {"type": "Q8", "plans": 1, "model": 1, "schedule": 1, "differ": false, "source": "E-9 LIGHTING FIXTURE SCHEDULE"}
+            ]),
+            "{t:#}"
+        );
+        // The job read three Q8s off the plans (two on a sheet placed on no level): the plans'
+        // count is the read one, the model's beside it.
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lum = |x: f64| super::super::readers::ReadDevice { tag: "Q8".into(), at: [x, 0.0], kind: "luminaire".into(), ..Default::default() };
+        job.devices = vec![lum(0.0), lum(1.0), lum(2.0)];
+        save_job(&mut s, &job).unwrap();
+        let t = s.execute("bim.takeoff", &json!({"group_by": "type", "keep": false})).unwrap();
+        assert_eq!(t["luminaire_schedule_quantities"][1]["plans"], json!(3), "{t:#}");
+        assert_eq!(
+            (t["luminaire_schedule_quantities"][1]["model"].clone(), t["luminaire_schedule_quantities"][1]["differ"].clone()),
+            (json!(1), json!(true))
+        );
+        job.devices.clear();
+        let mut result = json!({});
+        lighting_step(&mut s, &mut job, &[], &mut result).unwrap();
+        let rfis = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
+        let qty: Vec<&Value> = rfis["items"].as_array().into_iter().flatten().filter(|r| r["topic"] == "lighting: plan count vs quantity").collect();
+        assert_eq!(qty.len(), 1, "Q1 only: {rfis:#}");
+        assert!(qty[0]["issue"].as_str().is_some_and(|i| i.contains("show 2") && i.contains("quantity is 3")), "{:?}", qty[0]);
     }
 
     /// A panel the gear step lays out after the build, under a vent already built: the vent is
