@@ -506,9 +506,14 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
             if !l.is_finite() || *l <= 1e-9 {
                 continue;
             }
+            let top = bottoms.get(i).copied().unwrap_or(0.0) + section_ft;
+            // A run in the ground (below its floor: a buried conduit, a drain under the slab)
+            // hangs from nothing.
+            if top < -1e-6 {
+                continue;
+            }
             let nf = (l / spacing).ceil().max(1.0);
             let n = if nf.is_finite() { (nf as usize).min(MAX_ITEMS) } else { 0 };
-            let top = bottoms.get(i).copied().unwrap_or(0.0) + section_ft;
             row.count = row.count.saturating_add(n);
             row.rod_ft += n as f64 * (height - top).max(0.0);
         }
@@ -1099,6 +1104,24 @@ mod tests {
         assert_eq!(st.gauge([60.0, 20.0]).map(|g| g.gauge), Some(20));
         assert_eq!(st.gauge([120.0, 20.0]).map(|g| g.gauge), Some(18));
         assert_eq!(st.gauge([20.0, 0.0]).map(|g| g.gauge), Some(22), "round: 19–30\" is 22 ga");
+    }
+
+    #[test]
+    fn a_buried_run_hangs_from_nothing() {
+        let mut sp: BuildingSpec = serde_json::from_value(serde_json::json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10}],
+            "mep": {"systems": [{"name": "E-UG", "layer": "E-UG", "kind": "conduit", "size_in": [1, 0], "bottom_ft": -2, "show": true}]}
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let run = |bottom: f64| super::super::printcond::run("E-UG", "L1", "", vec![[0.0, 0.0], [600.0, 0.0]], 1.0, bottom);
+        sp.mep.runs = vec![run(-2.0)];
+        let types = cadaddy_doc::bimspec::BimTypes::default();
+        let buried = takeoff(&sp, &Settings::default(), &types);
+        assert_eq!(buried.hangers.values().map(|r| r.count).sum::<usize>(), 0);
+        sp.mep.runs = vec![run(9.0)];
+        let overhead = takeoff(&sp, &Settings::default(), &types);
+        assert!(overhead.hangers.values().map(|r| r.count).sum::<usize>() > 0);
     }
 
     #[test]

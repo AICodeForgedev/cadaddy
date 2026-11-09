@@ -588,6 +588,15 @@ impl Mismatch {
                 self.panel,
                 if self.sheet.is_empty() { "its schedule" } else { &self.sheet }
             ),
+            // A load on the site (a monument sign, site lighting) no site plan locates: where is it?
+            "row_no_plan" if super::sitework::is_site_load(&self.description) => format!(
+                "Panel {} circuit {} ({}) is on the schedule ({}) and feeds a load on the site no site plan locates: where is it? Once located, its feed runs underground from the building to it ({})",
+                self.panel,
+                self.circuit,
+                self.description,
+                if self.sheet.is_empty() { "its schedule" } else { &self.sheet },
+                super::sitework::rules().cover_source
+            ),
             "row_no_plan" => format!(
                 "Panel {} circuit {} ({}) is on the schedule ({}) but nothing on the plans is on it",
                 self.panel,

@@ -746,15 +746,22 @@ impl SheetRegion {
     }
 }
 
+/// A sheet of the site (`site/civil`, or a trade's plan of the site built as site work).
+fn is_site_reason(why: &str) -> bool {
+    why == "site/civil" || why == super::sitework::SITE_WORK
+}
+
 fn in_rect(r: &[f64; 4], at: [f64; 2]) -> bool {
     at[0] >= r[0].min(r[2]) && at[0] <= r[0].max(r[2]) && at[1] >= r[1].min(r[3]) && at[1] <= r[1].max(r[3])
 }
 
 /// Why a sheet is never built into a building level: a civil, landscape or site sheet, or a
-/// plan whose title and number name no level (it was only given the lowest, to confirm).
+/// plan whose title and number name no level (it was only given the lowest, to confirm). A
+/// trade's plan of the site (its discipline or its title a trade's: `SITE PLAN - MEP`) is built
+/// as site work ([`super::sitework`]), not on a storey.
 pub fn not_built_reason(discipline: &str, title: &str, level: &str, level_source: &str) -> &'static str {
     if cadaddy_walk3d::levels::is_datum_name(level) || cadaddy_mepfix::sheet_facts::is_site_sheet(discipline, title) {
-        "site/civil"
+        if super::sitework::trade_site_sheet(discipline, title) { super::sitework::SITE_WORK } else { "site/civil" }
     } else if level.trim().is_empty() || level_source == "default" {
         "no level"
     } else {
@@ -797,7 +804,7 @@ pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetReg
             continue;
         }
         for v in found {
-            let not_built = if r.not_built == "site/civil" { r.not_built.clone() } else { String::new() };
+            let not_built = if is_site_reason(&r.not_built) { r.not_built.clone() } else { String::new() };
             out.push(SheetRegion {
                 level: v.level,
                 levels: v.levels,
@@ -2247,6 +2254,9 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                     let field =
                         |k: &str| index_entry(base).and_then(|x| x.get(k)).or_else(|| sh.get(k)).and_then(Value::as_str).unwrap_or("").to_string();
                     let not_built = not_built_reason(&discipline, &field("title"), &level, &field("level_source"));
+                    // A trade's plan of the site reads on the site datum: no storey's stage
+                    // takes its objects (the site work step builds them).
+                    let level = if not_built == super::sitework::SITE_WORK { super::sitework::SITE_LEVEL.to_string() } else { level };
                     let levels: Vec<String> = sh
                         .get("levels")
                         .and_then(Value::as_array)
@@ -7376,6 +7386,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
     }
+    // An earlier pass's site work out of the spec: the site work step builds it again from the
+    // site plans (never twice).
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+        && super::sitework::forget(&mut sp) > 0
+    {
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     few_openings_findings(job, &result);
     result["scope"] = scope_summary;
@@ -7587,6 +7604,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["doc_objects_error"] = json!(e.to_string());
     }
     bim_step(s, job, "documented objects", t);
+    // The trades' plans of the site (Q6358): pole lights, site gear where the site plan draws it,
+    // the buried runs between them and the site circuits' home runs; before the feeder routes,
+    // so a site transformer's feeder leaves from where the site plan puts it.
+    let t = web_time::Instant::now();
+    if let Err(e) = site_work_step(s, job, &mut result) {
+        result["site_work_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "site work", t);
     // The feeders' conduit, gear to gear (proposed).
     let t = web_time::Instant::now();
     if let Err(e) = feeder_step(s, job, &mut result) {
@@ -8208,10 +8233,11 @@ fn forms_step(s: &mut Session, result: &mut Value) {
     }
 }
 
-/// The plan sheets never built into a building level, as `A010: not built: site/civil`.
+/// The plan sheets never built into a building level, as `A010: not built: site/civil` (a
+/// trade's plan of the site is built as site work: it is listed by [`site_work_sheets`]).
 fn not_built_sheets(job: &GuidedJob) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for r in job.sheet_regions.iter().filter(|r| !r.not_built.is_empty()).take(MAX_QUESTIONS_PER_STAGE) {
+    for r in job.sheet_regions.iter().filter(|r| !r.not_built.is_empty() && r.not_built != super::sitework::SITE_WORK).take(MAX_QUESTIONS_PER_STAGE) {
         let line = format!("{}: not built: {}", if r.number.is_empty() { "?" } else { &r.number }, r.not_built);
         if !out.contains(&line) {
             out.push(line);
@@ -20967,6 +20993,357 @@ fn plan_scale(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Option<String>
 /// its callout; each feed whose ends are on the slab level is weighed under the slab against
 /// overhead (reasons, alternative, an RFI to confirm); and a trade with buried work and no plan
 /// gets its generated sheet, registered to the slab level.
+/// Site loads listed at most in the site work's report.
+const MAX_SITE_RFIS: usize = 20;
+
+/// The trades' plans of the site built (Q6358): each site plan an electrical or MEP set issues (or,
+/// when the set has none, a site sheet carrying a trade's content), laid onto the slab level by
+/// the building outline it draws; its pole lights on their poles and bases, its site equipment
+/// where it is drawn (the gear step's transformer moved there), the runs drawn or called between
+/// them, buried, and each site circuit's home run. The panel schedules' site loads no site plan
+/// carries are asked about. A rerun replaces what an earlier one built.
+pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate::Result<()> {
+    use super::sitework;
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let Some(slab) = super::ugplan::slab_level(&sp) else { return Ok(()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let rules = sitework::rules();
+    // The luminaire types the set's fixture schedule lists (a number alone is no type).
+    let lum_types: BTreeSet<String> = sp
+        .mep
+        .fixture_schedule
+        .iter()
+        .map(|f| f.tag.clone())
+        .chain(job.luminaire_types.iter().cloned())
+        .map(|t| super::lightsched::type_of(&t))
+        .filter(|t| !t.is_empty() && t.len() <= 8 && t.chars().any(|c| c.is_ascii_alphabetic()))
+        .collect();
+    // The site sheets: a trade's by its number or title; when the set has none, a site sheet its
+    // content makes a trade's.
+    let refs = job_sheet_refs(job);
+    // A job classified before site work (a checkpoint's): its trade site plans by their number
+    // and title, as the import marks them now.
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let title_of = |n: &str| {
+        classified
+            .iter()
+            .find(|c| c.get("number").and_then(Value::as_str).is_some_and(|x| x.split('/').next().unwrap_or(x).trim().eq_ignore_ascii_case(n)))
+            .and_then(|c| c.get("title").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_string()
+    };
+    for r in job.sheet_regions.iter_mut() {
+        if r.not_built == "site/civil" && sitework::trade_site_sheet(&r.discipline, &title_of(&r.number)) {
+            r.not_built = sitework::SITE_WORK.to_string();
+            r.level = sitework::SITE_LEVEL.to_string();
+        }
+    }
+    let mut picked: Vec<usize> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for (i, r) in job.sheet_regions.iter().enumerate() {
+        if r.not_built == sitework::SITE_WORK && seen.insert(r.number.to_ascii_uppercase()) {
+            picked.push(i);
+        }
+    }
+    let mut promoted: Vec<String> = Vec::new();
+    if picked.is_empty() {
+        let d = s.doc()?;
+        for (i, r) in job.sheet_regions.iter().enumerate() {
+            if r.not_built != "site/civil" || seen.contains(&r.number.to_ascii_uppercase()) || picked.len() >= rules.max_sheets.max(1) {
+                continue;
+            }
+            let Some(sh) = refs.get(i) else { continue };
+            let page = super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() });
+            let area = r.area.unwrap_or(r.rect);
+            let texts: Vec<cadaddy_mepfix::sheet_facts::TextItem> = cadaddy_mepfix::sheet_facts::texts_with_tags(&page)
+                .into_iter()
+                .filter(|t| {
+                    t.at.x >= area[0].min(area[2])
+                        && t.at.x <= area[0].max(area[2])
+                        && t.at.y >= area[1].min(area[3])
+                        && t.at.y <= area[1].max(area[3])
+                })
+                .collect();
+            if let Some(why) = sitework::trade_content(&texts, &lum_types) {
+                seen.insert(r.number.to_ascii_uppercase());
+                picked.push(i);
+                promoted.push(format!("{}: {why}", r.number));
+            }
+        }
+        for i in &picked {
+            if let Some(r) = job.sheet_regions.get_mut(*i) {
+                r.not_built = sitework::SITE_WORK.to_string();
+                r.level = sitework::SITE_LEVEL.to_string();
+            }
+        }
+    }
+    // What an earlier pass built goes (the spec's and the model's).
+    let forgot = sitework::forget(&mut sp);
+    {
+        let d = s.doc_mut()?;
+        let stale: Vec<cadaddy_doc::Handle> = d
+            .model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).is_some() && cadaddy_doc::props::read(&e.common.xdata).get(sitework::MARK).is_some())
+            .map(|e| e.handle)
+            .collect();
+        for h in stale {
+            d.model.remove(h);
+        }
+    }
+    let mut seq = sitework::Seq::default();
+    let mut all = sitework::Built::default();
+    let mut lines: Vec<String> = Vec::new();
+    let mut unfitted: Vec<String> = Vec::new();
+    {
+        let d = s.doc()?;
+        for i in picked.iter().take(rules.max_sheets.max(1)) {
+            let (Some(r), Some(sh)) = (job.sheet_regions.get(*i), refs.get(*i)) else { continue };
+            let page = super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() });
+            let area = r.area.unwrap_or(r.rect);
+            let sheet_real = job
+                .sheet_scales
+                .iter()
+                .find(|x| x.sheet.split('/').next().unwrap_or(&x.sheet).trim().eq_ignore_ascii_case(&r.number))
+                .is_some_and(|x| x.scale > 1.0);
+            let read = sitework::read(&r.number, &page, area, &lum_types, upf);
+            let fit = sitework::register(&read, &sp, &slab, sheet_real);
+            let built = sitework::plan(&sp, &read, &fit, &slab, &mut seq);
+            if !fit.fitted() {
+                unfitted.push(format!("{}: {}", r.number, fit.why));
+            }
+            let ug_ft: f64 = built
+                .runs
+                .iter()
+                .filter(|x| x.points.len() >= 2)
+                .map(|x| {
+                    x.points
+                        .windows(2)
+                        .filter_map(|w| match w {
+                            [a, b] => Some((a[0] - b[0]).hypot(a[1] - b[1])),
+                            _ => None,
+                        })
+                        .sum::<f64>()
+                })
+                .sum::<f64>()
+                / upf;
+            lines.push(format!(
+                "{} ({}): {} luminaire(s) ({} luminaire(s) and {} equipment on the building left to its plans), {} pole(s) and base(s), {} site equipment ({} moved to where it is drawn), {} drawn run(s), {} called, {} inferred, {:.0} ft of buried conduit; circuits {:?}",
+                r.number,
+                fit.method,
+                built.tags.len(),
+                built.lights_on_building,
+                built.equipment_on_building,
+                built.poles,
+                built.equipment.iter().filter(|e| e.kind != "pole").count() + built.moved.len(),
+                built.moved.len(),
+                built.drawn_runs,
+                built.called_runs,
+                built.inferred_runs,
+                ug_ft,
+                built.circuits
+            ));
+            all.tags.extend(built.tags);
+            all.equipment.extend(built.equipment);
+            all.moved.extend(built.moved);
+            all.concrete.extend(built.concrete);
+            all.pads.extend(built.pads);
+            all.runs.extend(built.runs);
+            for (k, v) in built.circuits {
+                *all.circuits.entry(k).or_default() += v;
+            }
+            all.findings.extend(built.findings);
+        }
+    }
+    // Into the spec.
+    let new_tags: BTreeSet<String> =
+        all.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).chain(all.moved.iter().map(|m| m.0.to_ascii_uppercase())).collect();
+    for (tag, lo, hi, why) in &all.moved {
+        if let Some(e) = sp.mep.equipment.iter_mut().find(|e| e.tag.eq_ignore_ascii_case(tag)) {
+            let was = e.sources.get("position").cloned().unwrap_or_default();
+            e.min = *lo;
+            e.max = *hi;
+            e.sources.insert("position".into(), format!("drawn: {why}"));
+            e.sources.insert("status".into(), "drawn".into());
+            e.properties.insert("PLACEMENT".into(), format!("drawn: {why}"));
+            if !was.is_empty() {
+                e.properties.insert("RULE PLACEMENT".into(), was);
+            }
+        }
+    }
+    sp.tags.extend(all.tags.iter().cloned());
+    sp.mep.equipment.extend(all.equipment.iter().cloned());
+    sp.concrete.elements.extend(all.concrete.iter().cloned());
+    sp.concrete.pads.extend(all.pads.iter().cloned());
+    if !all.runs.is_empty() && !sp.mep.systems.iter().any(|y| y.name.eq_ignore_ascii_case(super::ugplan::E_UG)) {
+        sp.mep.systems.push(cadaddy_walk3d::MepSystem {
+            name: super::ugplan::E_UG.into(),
+            layer: super::ugplan::E_UG.into(),
+            kind: cadaddy_walk3d::MepKind::Conduit,
+            size_in: [1.0, 0.0],
+            bottom_ft: -2.0,
+            show: true,
+            duct_type: None,
+            color_index: 1,
+        });
+    }
+    // The site loads the panel schedules name that no site plan carries: the breakers' review
+    // item for each row asks where it is (its feed runs underground once it is located).
+    let carried: BTreeSet<String> = all.circuits.keys().map(|k| k.to_ascii_uppercase()).collect();
+    let asked: Vec<String> =
+        sitework::site_loads(&sp, &carried).iter().take(MAX_SITE_RFIS).map(|l| format!("{}-{} {}", l.panel, l.number, l.description)).collect();
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    // Built: the luminaires, then the concrete and the gear and runs, moved as the build moved
+    // the slab level to stack it; each element marked as site work.
+    if !all.tags.is_empty() || forgot > 0 {
+        super::propfill::rebuild_devices(s, "bim_build")?;
+    }
+    let before: BTreeSet<cadaddy_doc::Handle> = s.doc()?.model.handles().into_iter().collect();
+    {
+        let d = s.doc_mut()?;
+        // The moved gear and its pad come down from where the gear step built them.
+        let old: Vec<cadaddy_doc::Handle> = d
+            .model
+            .iter()
+            .filter(|e| {
+                super::bimlook::made_tag(e, "tag").is_some_and(|t| {
+                    let t = t.trim().to_ascii_uppercase();
+                    all.moved.iter().any(|m| m.0.eq_ignore_ascii_case(&t) || format!("PAD-{}", m.0).eq_ignore_ascii_case(&t))
+                })
+            })
+            .map(|e| e.handle)
+            .collect();
+        for h in old {
+            d.model.remove(h);
+        }
+        let mut part =
+            cadaddy_walk3d::BuildingSpec { units_per_foot: sp.units_per_foot, levels: sp.levels.clone(), ..cadaddy_walk3d::BuildingSpec::default() };
+        part.mep.equipment = sp.mep.equipment.iter().filter(|e| new_tags.contains(&e.tag.to_ascii_uppercase())).cloned().collect();
+        part.concrete.elements = all.concrete.clone();
+        part.concrete.pads = sp.concrete.pads.iter().filter(|p| new_tags.contains(&p.equipment.trim().to_ascii_uppercase())).cloned().collect();
+        let top = d.model.iter().map(|e| e.handle.0).max().unwrap_or(0);
+        if !part.concrete.elements.is_empty() || !part.concrete.pads.is_empty() {
+            let _ = super::concrete::build(d, &part);
+        }
+        let made: Vec<cadaddy_doc::Handle> = d.model.iter().filter(|e| e.handle.0 > top).map(|e| e.handle).collect();
+        let off = d
+            .model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
+            .find(|e| super::bspec::made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(&slab)))
+            .map(|e| super::bspec::stacked_by(e))
+            .unwrap_or(cadaddy_geom::Vec2::ZERO);
+        if off.len() > 1e-9 {
+            let m = cadaddy_geom::Mat3::translate(off);
+            for h in made {
+                let _ = d.modify_entity(h, |e| {
+                    e.kind.transform(&m);
+                    e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
+                });
+            }
+        }
+    }
+    let runs = all.runs.clone();
+    if !runs.is_empty() || !new_tags.is_empty() {
+        let _ = build_new_mep(s, sp, runs, &new_tags)?;
+    }
+    {
+        let d = s.doc_mut()?;
+        let fresh: Vec<cadaddy_doc::Handle> = d.model.handles().into_iter().filter(|h| !before.contains(h)).collect();
+        for h in fresh {
+            let _ = d.modify_entity(h, |e| {
+                let mut store = cadaddy_doc::props::read(&e.common.xdata);
+                store.set(sitework::MARK, cadaddy_doc::props::Prop::new("site plan", cadaddy_doc::props::Source::computed()));
+                e.common.xdata = cadaddy_doc::props::write(&e.common.xdata, &store).into();
+            });
+        }
+    }
+    s.touch();
+    // Said: what was built, how each sheet was placed, what is asked.
+    for l in &lines {
+        progress_line(&format!("  site work: {l}"));
+    }
+    if !promoted.is_empty() {
+        progress_line(&format!("  site work: site sheets that are a trade's by their content: {}", promoted.join("; ")));
+    }
+    if !unfitted.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} site plan(s) not laid on the building by its outline", unfitted.len()),
+            &unfitted.join("; "),
+            3,
+            vec!["Check where the site work stands against the building; give the site plan's scale or the building's outline".into()],
+            None,
+            false,
+        );
+    }
+    if !all.findings.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Site work: {} item(s) to check", all.findings.len()),
+            &all.findings.iter().take(20).cloned().collect::<Vec<_>>().join("; "),
+            2,
+            vec!["review.list {}".into()],
+            None,
+            false,
+        );
+    }
+    if !asked.is_empty() {
+        progress_line(&format!("  site work: site loads no site plan carries (the breakers' review asks where each is): {}", asked.join("; ")));
+    }
+    result["site_work"] = json!({
+        "sheets": lines,
+        "promoted": promoted,
+        "unfitted": unfitted,
+        "luminaires": all.tags.len(),
+        "poles": all.equipment.iter().filter(|e| e.kind == "pole").count(),
+        "equipment": all.equipment.iter().filter(|e| e.kind != "pole").count(),
+        "moved": all.moved.iter().map(|m| m.0.clone()).collect::<Vec<_>>(),
+        "runs": all.runs.iter().filter(|r| r.points.len() >= 2).count(),
+        "stub_ups": all.runs.iter().filter(|r| r.top_ft.is_some()).count(),
+        "circuits": all.circuits,
+        "site_loads_asked": asked,
+        "findings": all.findings,
+        "basis": [rules.trade_source.clone(), rules.register.source.clone(), rules.line_source.clone()],
+    });
+    Ok(())
+}
+
+/// The trades' plans of the site built as site work, as `E-001: built as site work: 2
+/// luminaires, …` (the report's).
+fn site_work_sheets(s: &Session, job: &GuidedJob) -> Vec<String> {
+    let mut numbers: Vec<&str> = Vec::new();
+    for r in job.sheet_regions.iter().filter(|r| r.not_built == super::sitework::SITE_WORK) {
+        if !numbers.iter().any(|n| n.eq_ignore_ascii_case(&r.number)) {
+            numbers.push(&r.number);
+        }
+    }
+    if numbers.is_empty() {
+        return Vec::new();
+    }
+    let sp = super::bspec::current(s, "job.report").ok().map(|(sp, _)| sp).unwrap_or_default();
+    numbers
+        .iter()
+        .take(MAX_QUESTIONS_PER_STAGE)
+        .map(|n| {
+            let of = |v: &str| {
+                v.eq_ignore_ascii_case(n)
+                    || v.starts_with(&format!("{n} "))
+                    || v.eq_ignore_ascii_case(&format!("{}{n}", super::sitework::SOURCE_PREFIX))
+            };
+            let lights = sp
+                .tags
+                .iter()
+                .filter(|t| t.fields.contains_key(super::sitework::MARK) && t.fields.get("sheet").is_some_and(|f| of(&f.value)))
+                .count();
+            let equipment = sp.mep.equipment.iter().filter(|e| e.sources.get(super::sitework::MARK).is_some_and(|v| of(v)));
+            let (poles, other) = equipment.fold((0usize, 0usize), |a, e| if e.kind == "pole" { (a.0 + 1, a.1) } else { (a.0, a.1 + 1) });
+            let runs = sp.mep.runs.iter().filter(|r| r.points.len() >= 2 && of(&r.source_sheet)).count();
+            format!("{n}: built as site work: {lights} luminaire(s), {poles} pole(s), {other} site equipment, {runs} buried run(s)")
+        })
+        .collect()
+}
+
 fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
     use super::ugplan::{self, Callout};
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
@@ -21034,11 +21411,12 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
     sp.mep.runs.retain(|r| !ugplan::made_here(r));
     // (c) The called work CADaddy can locate. A keynote's buried conduit is the keynotes step's.
     let keynote_built = |c: &Callout| {
-        c.from == "keynote"
-            && c.mark.as_ref().is_some_and(|m| {
-                let key = format!("{} keynote {m} ", c.sheet);
-                sp.mep.runs.iter().any(|r| r.system == ugplan::E_UG && r.height_source.contains(&key))
-            })
+        super::sitework::built_callout(&sp, c)
+            || c.from == "keynote"
+                && c.mark.as_ref().is_some_and(|m| {
+                    let key = format!("{} keynote {m} ", c.sheet);
+                    sp.mep.runs.iter().any(|r| r.system == ugplan::E_UG && r.height_source.contains(&key))
+                })
     };
     let rooms: Vec<ugplan::Room> = {
         let d = s.doc()?;
@@ -27641,6 +28019,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "inventory": inventory_coverage(s),
         "completeness": completeness_summary(s),
         "not_built": not_built_sheets(&job).join("; "),
+        "site_work": site_work_sheets(s, &job).join("; "),
         "placement": placement_summary(&job),
         "keynote_systems": keynote_summary(&job),
         "dampers": dampers_summary(&job),
@@ -35210,6 +35589,18 @@ mod tests {
             kind: QuestionKind::Verify,
         });
         assert!(check_rejected_samples(&stage));
+    }
+
+    #[test]
+    fn a_trades_site_plan_is_built_as_site_work_and_a_civil_one_is_not() {
+        // A site plan an electrical or MEP set issues is that trade's plan of the site (Q6358);
+        // a civil, landscape or architectural site plan stays out of the build.
+        assert_eq!(not_built_reason("MEP", "SITE PLAN - MEP", "1", "default"), "site work");
+        assert_eq!(not_built_reason("E", "ELECTRICAL SITE PLAN", "SITE", "title"), "site work");
+        assert_eq!(not_built_reason("C", "SITE LIGHTING PLAN", "1", "default"), "site work");
+        assert_eq!(not_built_reason("C", "SITE PLAN", "1", "default"), "site/civil");
+        assert_eq!(not_built_reason("L", "PLANTING PLAN", "1", "title"), "site/civil");
+        assert_eq!(not_built_reason("E", "FIRST FLOOR POWER PLAN", "1", "title"), "");
     }
 
     fn region(number: &str, level: &str, discipline: &str, kind: &str, x: f64) -> SheetRegion {
