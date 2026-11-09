@@ -2571,9 +2571,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             if !gap::is_power_device(&dv.kind) {
                 continue;
             }
+            // Site gear (the utility's transformer, a pole) feeds no branch circuit in the building.
+            let site = |g: &GearEl| sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&g.tag) && super::utilityxfmr::is_site(e));
             let near = gear
                 .iter()
-                .filter(|g| same_level(&g.level, &dv.level) && electrical(g))
+                .filter(|g| same_level(&g.level, &dv.level) && electrical(g) && !site(g))
                 .map(|g| (manhattan(gear_ctr(g), dv.at), g))
                 .filter(|(dd, _)| *dd <= reach)
                 .min_by(|a, b| a.0.total_cmp(&b.0));
@@ -4167,9 +4169,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             if !gap::is_power_device(&dv.kind) || proposed.len() >= MAX_ITEMS || inferred_devs.contains(di) {
                 continue;
             }
+            let site = |g: &GearEl| sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&g.tag) && super::utilityxfmr::is_site(e));
             let near_gear = gear
                 .iter()
-                .filter(|g| same_level(&g.level, &dv.level) && electrical(g))
+                .filter(|g| same_level(&g.level, &dv.level) && electrical(g) && !site(g))
                 .min_by(|a, b| manhattan(gear_ctr(a), dv.at).total_cmp(&manhattan(gear_ctr(b), dv.at)));
             let Some(g) = near_gear else { continue };
             // A unit's copy (`P-1A`) has its typical panel's schedule (`P`).
