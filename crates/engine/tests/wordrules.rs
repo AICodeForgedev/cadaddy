@@ -400,6 +400,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/engine/src/cmd/spec_import.rs",
+        "const HEADER_LABELS",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
+    ),
+    (
+        "crates/engine/src/cmd/spec_import.rs",
         "const CONTROL_WORDS",
         "rows with numbers or extra fields (sizes, defaults, flags, exclusion words): a table, not a word list; a later item can give it a table shape",
     ),

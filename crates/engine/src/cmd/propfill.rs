@@ -626,6 +626,9 @@ struct Chosen {
 const MOUNT_RULES: &str = include_str!("mount_defaults.json");
 
 /// The rules data's default for `kind` (spaces or underscores), else a receptacle's.
+/// The rules data's kind (`mount_defaults.json`) of a luminaire built into casework or millwork.
+const CASEWORK_LUMINAIRE: &str = "casework luminaire";
+
 fn rules_default(kind: &str, fixture_words: &str) -> (f64, super::mountlist::Datum, String) {
     let data: Value = serde_json::from_str(MOUNT_RULES).unwrap_or_default();
     let rows: Vec<Value> = data["defaults"].as_array().cloned().unwrap_or_default();
@@ -1359,12 +1362,16 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let detector = kind == "fire alarm device"
             && (legend_words.contains("SMOKE DETECTOR") || legend_words.contains("HEAT DETECTOR") || legend_words.contains("DETECTOR AND"))
             && !legend_words.contains("DUCT");
+        // A luminaire built into casework or millwork (its plan draws its junction box): in the
+        // casework at its documented height, never hung from the ceiling or set in a wall face.
+        let in_casework = field(t, "mount").as_deref() == Some(super::readers::CASEWORK_MOUNT);
         // Site work (a pole light): at its pole's top, as its site plan and schedule give it.
         let site = field(t, super::sitework::MARK);
         let mount = match field(t, "mount").as_deref() {
             Some("pole") => Mount::Ceiling,
             Some("ceiling") => Mount::Ceiling,
             Some("wall") => Mount::Wall,
+            _ if in_casework => Mount::Wall,
             Some("floor") => Mount::Floor,
             _ if detector => Mount::Ceiling,
             // An exhaust fan's connection is at the fan, in the ceiling.
@@ -1472,6 +1479,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let stated_wall = field(t, "mount").as_deref() == Some("wall");
         let gap_ft = wall_face_gap(&pieces, &level.name, Vec2::new(x, y), (level.elevation_ft + WALL_BOX_FT) * upf).map(|g| g / upf);
         let hung = (mount == Mount::Wall
+            && !in_casework
             && gap_ft.is_some_and(|g| g > clear_rule.wall_ft)
             && clear_rule.can_hang(&[kind, vkind.as_str()], &format!("{fixture_words} {legend_words} {described}"))
             && (!stated_wall || clear_rule.allows_ceiling(&format!("{installation} {fixture_words} {legend_words}")))
@@ -1495,90 +1503,90 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             mount
         };
         let floor = level.elevation_ft * upf;
-        let site_height = site.as_ref().and_then(|_| {
+        let height: Chosen = match mount {
+            Mount::Ceiling => {
+                // A printed height of 7' and up (a wall-hung detector's, a high fixture's) first;
+                // else the underside of the ceiling over it (the smallest: a soffit in a room),
+                // else its level's ceiling.
+                let over = ceiling_over(&ceilings, &level.name, Vec2::new(x, y), floor, upf);
+                let what = if kind == "fire alarm device" {
+                    "a detector"
+                } else if hung.is_some() {
+                    "a device drawn clear of the walls"
+                } else {
+                    "a luminaire"
+                };
+                documented().filter(|c| c.inches >= WALL_BOX_FT * 12.0).unwrap_or_else(|| match over {
+                    Some(inches) => Chosen {
+                        inches,
+                        from: "ceiling",
+                        source: SourceKind::Rule,
+                        doc: format!("{what}: at the ceiling over it"),
+                        datum: Datum::Top,
+                    },
+                    None if level.ceiling_ft.is_finite() && level.ceiling_ft > 6.0 => Chosen {
+                        inches: level.ceiling_ft * 12.0,
+                        from: "ceiling",
+                        source: SourceKind::Rule,
+                        doc: format!("{what}: at its level's ceiling"),
+                        datum: Datum::Top,
+                    },
+                    None => {
+                        let (inches, datum, why) = rules_default(kind, &fixture_words);
+                        Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
+                    }
+                })
+            }
+            // A floor box is flush in the floor (a wall height the general notes give a
+            // receptacle is not its own); its keynote, else its words, say so.
+            Mount::Floor if fixture_words.to_ascii_uppercase().contains("FLOOR BOX") => Chosen {
+                inches: 0.0,
+                from: "floor",
+                source: if t.fields.get("mount").is_some_and(|f| f.source == "note") { SourceKind::Note } else { SourceKind::Print },
+                doc: field(t, "keynote")
+                    .map_or_else(|| "a floor box: flush in the floor".to_string(), |k| format!("a floor box, flush in the floor: {k}")),
+                datum: Datum::Bottom,
+            },
+            Mount::Floor => documented().filter(|c| c.inches <= 48.0).unwrap_or_else(|| Chosen {
+                inches: 0.0,
+                from: "floor",
+                source: if name.is_some() { SourceKind::Schedule } else { SourceKind::Print },
+                doc: format!(
+                    "on the floor: {}",
+                    name.clone().map_or_else(|| format!("a {mark} is set in the floor"), |n| format!("its schedule's {}", n.to_ascii_lowercase()))
+                ),
+                datum: Datum::Bottom,
+            }),
+            Mount::Wall => {
+                // A luminaire on a wall (an exit sign, a sconce, a wall pack): 7'-6" unless printed.
+                let wall_light = (field(t, "mount").as_deref() == Some("wall")).then(|| Chosen {
+                    inches: WALL_LUMINAIRE_IN,
+                    from: "wall_luminaire_rule",
+                    source: SourceKind::Rule,
+                    doc: "a wall luminaire (exit sign, sconce): 7'-6\" over the floor".into(),
+                    datum: Datum::Centre,
+                });
+                // (A lower printed height is a receptacle's or a switch's by it, unless the documents
+                // measure it for the luminaire itself: an elevation's sconce.)
+                let lowest = if wall_light.is_some() { 72.0 } else { 0.0 };
+                let its_own = |c: &Chosen| wall_light.is_some() && c.doc.to_ascii_lowercase().contains("luminaire");
+                documented().filter(|c| c.inches >= lowest || its_own(c)).or(wall_light).unwrap_or_else(|| {
+                    let (inches, datum, why) = rules_default(if in_casework { CASEWORK_LUMINAIRE } else { kind }, &fixture_words);
+                    Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
+                })
+            }
+        };
+        // A pole light's height is its pole's top (the site work step's, as its schedule and the
+        // rules give it), above any storey's.
+        let height = match site.as_ref().and_then(|_| {
             let inches = field(t, "mount_height_in")?.parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=1_800.0).contains(v))?;
             let source =
                 if t.fields.get("mount_height_in").is_some_and(|f| f.source == "schedule") { SourceKind::Schedule } else { SourceKind::Rule };
             let doc = field(t, "mount_height_note").unwrap_or_else(|| "site work".into());
             Some(Chosen { inches, from: "site_work", source, doc, datum: if mount == Mount::Floor { Datum::Bottom } else { Datum::Top } })
-        });
-        let height: Chosen = if let Some(c) = site_height {
-            c
-        } else {
-            match mount {
-                Mount::Ceiling => {
-                    // A printed height of 7' and up (a wall-hung detector's, a high fixture's) first;
-                    // else the underside of the ceiling over it (the smallest: a soffit in a room),
-                    // else its level's ceiling.
-                    let over = ceiling_over(&ceilings, &level.name, Vec2::new(x, y), floor, upf);
-                    let what = if kind == "fire alarm device" {
-                        "a detector"
-                    } else if hung.is_some() {
-                        "a device drawn clear of the walls"
-                    } else {
-                        "a luminaire"
-                    };
-                    documented().filter(|c| c.inches >= WALL_BOX_FT * 12.0).unwrap_or_else(|| match over {
-                        Some(inches) => Chosen {
-                            inches,
-                            from: "ceiling",
-                            source: SourceKind::Rule,
-                            doc: format!("{what}: at the ceiling over it"),
-                            datum: Datum::Top,
-                        },
-                        None if level.ceiling_ft.is_finite() && level.ceiling_ft > 6.0 => Chosen {
-                            inches: level.ceiling_ft * 12.0,
-                            from: "ceiling",
-                            source: SourceKind::Rule,
-                            doc: format!("{what}: at its level's ceiling"),
-                            datum: Datum::Top,
-                        },
-                        None => {
-                            let (inches, datum, why) = rules_default(kind, &fixture_words);
-                            Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
-                        }
-                    })
-                }
-                // A floor box is flush in the floor (a wall height the general notes give a
-                // receptacle is not its own); its keynote, else its words, say so.
-                Mount::Floor if fixture_words.to_ascii_uppercase().contains("FLOOR BOX") => Chosen {
-                    inches: 0.0,
-                    from: "floor",
-                    source: if t.fields.get("mount").is_some_and(|f| f.source == "note") { SourceKind::Note } else { SourceKind::Print },
-                    doc: field(t, "keynote")
-                        .map_or_else(|| "a floor box: flush in the floor".to_string(), |k| format!("a floor box, flush in the floor: {k}")),
-                    datum: Datum::Bottom,
-                },
-                Mount::Floor => documented().filter(|c| c.inches <= 48.0).unwrap_or_else(|| Chosen {
-                    inches: 0.0,
-                    from: "floor",
-                    source: if name.is_some() { SourceKind::Schedule } else { SourceKind::Print },
-                    doc: format!(
-                        "on the floor: {}",
-                        name.clone()
-                            .map_or_else(|| format!("a {mark} is set in the floor"), |n| format!("its schedule's {}", n.to_ascii_lowercase()))
-                    ),
-                    datum: Datum::Bottom,
-                }),
-                Mount::Wall => {
-                    // A luminaire on a wall (an exit sign, a sconce, a wall pack): 7'-6" unless printed.
-                    let wall_light = (field(t, "mount").as_deref() == Some("wall")).then(|| Chosen {
-                        inches: WALL_LUMINAIRE_IN,
-                        from: "wall_luminaire_rule",
-                        source: SourceKind::Rule,
-                        doc: "a wall luminaire (exit sign, sconce): 7'-6\" over the floor".into(),
-                        datum: Datum::Centre,
-                    });
-                    // (A lower printed height is a receptacle's or a switch's by it, unless the documents
-                    // measure it for the luminaire itself: an elevation's sconce.)
-                    let lowest = if wall_light.is_some() { 72.0 } else { 0.0 };
-                    let its_own = |c: &Chosen| wall_light.is_some() && c.doc.to_ascii_lowercase().contains("luminaire");
-                    documented().filter(|c| c.inches >= lowest || its_own(c)).or(wall_light).unwrap_or_else(|| {
-                        let (inches, datum, why) = rules_default(kind, &fixture_words);
-                        Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
-                    })
-                }
-            }
+        }) {
+            Some(c) => c,
+            None => height,
         };
         *report.heights.entry(height.from).or_default() += 1;
         if height.source == SourceKind::Default {
@@ -1611,7 +1619,8 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         // A connection set at its unit (a roof unit's: `connection to HP-7 at the unit`) is on
         // the unit, in no wall.
         let at_unit = field(t, "mount_height_note").is_some_and(|n| n.starts_with("connection to") && n.contains("at the unit"));
-        let on_wall = wall_kind && !at_unit && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
+        let on_wall =
+            wall_kind && !at_unit && !in_casework && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);

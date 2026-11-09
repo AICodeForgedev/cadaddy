@@ -1947,6 +1947,16 @@ fn csv(rows: &[Vec<String>]) -> String {
 
 fn run_qty(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "concrete.qty";
+    if let Some(path) = str_param(p, "file").map(str::trim).filter(|x| !x.is_empty()) {
+        // The name's extension says what is written; a `format` the call names must agree with it.
+        let (exts, what): (&[&str], &str) = match str_param(p, "format").map(|f| f.trim().to_ascii_lowercase()).as_deref() {
+            None => (&["csv", "xlsx"], "a CSV table or an Excel workbook"),
+            Some("csv") => (&["csv"], "a CSV table"),
+            Some("xlsx") => (&["xlsx"], "an Excel workbook"),
+            Some(_) => return Err(bad(CMD, "`format` is csv or xlsx")),
+        };
+        super::exchange::guard_typed_output(s, CMD, p, path, exts, what)?;
+    }
     let sp = spec(CMD, s)?;
     let r = Rules::of(&sp);
     let upf = upf(&sp);
@@ -1994,7 +2004,7 @@ fn run_qty(s: &mut Session, p: &Value) -> Result<Value> {
         "rows": rows.len().saturating_sub(1),
         "csv": csv(&rows),
     });
-    if let Some(path) = str_param(p, "file").filter(|x| !x.trim().is_empty()) {
+    if let Some(path) = str_param(p, "file").map(str::trim).filter(|x| !x.is_empty()) {
         let format = match str_param(p, "format") {
             Some(f) => f.to_ascii_lowercase(),
             None => std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("csv").to_ascii_lowercase(),
@@ -2103,7 +2113,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("concrete.review", "Concrete Coordination Review", run_review)
             .params("{today?: YYYY-MM-DD} → as concrete.check, and every failure an RFI (pad_undecided, pour_hold, embed_conflict): {errors, rfis: [id], findings}"),
         CommandSpec::new("concrete.qty", "Concrete Quantities", run_qty)
-            .params("{level?, scope?: all|ours|others, file?: path (.csv/.xlsx), format?: csv|xlsx} → {elements, totals: {cy, cy_with_waste, cy_ours_with_waste, forms_sf, edge_lf, chamfer_lf, mesh_sf, rebar: [{bar, lf, lb}], rebar_lb}, rows, csv, path?} (each row's scope: ours, by others (owner) or unassigned)")
+            .params("{level?, scope?: all|ours|others, file?: path (.csv/.xlsx; an existing file only with force), format?: csv|xlsx (must agree with the name), force?: bool} → {elements, totals: {cy, cy_with_waste, cy_ours_with_waste, forms_sf, edge_lf, chamfer_lf, mesh_sf, rebar: [{bar, lf, lb}], rebar_lb}, rows, csv, path?} (each row's scope: ours, by others (owner) or unassigned)")
             .noundo(),
         CommandSpec::new("concrete.holds", "Pour Hold Points", run_holds)
             .params("{pour?: id, today?: YYYY-MM-DD} → {pours: [{pour, name, date, placed, days_to_pour, items: [{pour, date, item, element, level, kind, size, count, length_ft, owner, source, signed_by, signed_on, status: signed|missed|due|open|not drawn, days_to_pour, alternative, cost, cost_basis}], open, ready}], unscheduled}")

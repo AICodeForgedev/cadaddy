@@ -197,6 +197,12 @@ pub struct BuildingSpec {
     /// shipped with CADaddy plus any user additions.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub codebook: serde_json::Value,
+    /// Data other commands keep beside the spec in the same JSON text (saved coordination
+    /// views, viewpoints and colour schemes, the BIM look, the field app's rules…), by its key,
+    /// kept as written: a command that writes the spec back writes these back too, so it changes
+    /// only what it is about. Never a field of the spec itself (those are the fields above).
+    #[serde(flatten)]
+    pub kept: BTreeMap<String, serde_json::Value>,
 }
 
 /// Several buildings built from one set of plans (Q6292).
@@ -3034,6 +3040,7 @@ impl BuildingSpec {
             sources: BTreeMap::new(),
             print_baseline: Vec::new(),
             codebook: serde_json::Value::Null,
+            kept: BTreeMap::new(),
         }
     }
 
@@ -3798,6 +3805,27 @@ pub fn level_at(levels: &[Level], x: f64, y: f64) -> Option<&Level> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Keys the spec doesn't own (data other commands keep in the same text) come back out as
+    /// written, once, beside a changed field; the spec's own fields never land among them.
+    #[test]
+    fn keys_the_spec_does_not_own_are_kept_as_written() {
+        let text = r#"{"version":1,"levels":[],"store_a":[{"name":"one","n":[1,2.5]}],"store_b":{"on":true}}"#;
+        let mut sp = BuildingSpec::from_json(text).unwrap();
+        assert_eq!(sp.kept.len(), 2, "{:?}", sp.kept);
+        assert!(!sp.kept.contains_key("levels") && !sp.kept.contains_key("version"));
+        sp.units_per_foot = 1.0;
+        let out = sp.to_json();
+        let back: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(back["store_a"], serde_json::json!([{"name": "one", "n": [1, 2.5]}]), "{out}");
+        assert_eq!(back["store_b"], serde_json::json!({"on": true}), "{out}");
+        assert_eq!(back["units_per_foot"], serde_json::json!(1.0));
+        assert_eq!(out.matches("store_a").count(), 1, "{out}");
+        assert_eq!(BuildingSpec::from_json(&out).unwrap(), sp, "the same spec reads back");
+        // A spec with nothing kept writes no extra keys.
+        assert!(BuildingSpec::default().kept.is_empty());
+        assert!(!BuildingSpec::default().to_json().contains("kept"));
+    }
 
     /// A spec whose MEP holds only panel schedules (read before anything is built) keeps them
     /// when it is saved and read back.

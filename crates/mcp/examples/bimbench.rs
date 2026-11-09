@@ -767,7 +767,7 @@ fn run_size(size_name: &str, size: HotelSize, seed: u64, scratch: &Path) -> Resu
     });
     let bcf = dir.join("clashes.bcfzip");
     b.stage("export_bcf", |b| {
-        b.exec(&mut job, "coordination.bcf", json!({ "path": bcf.to_string_lossy() }));
+        b.exec(&mut job, "coordination.bcf", json!({ "path": bcf.to_string_lossy(), "force": true }));
         b.check(bcf.exists(), || "no BCF file written".into());
     });
     let png = dir.join("render.png");

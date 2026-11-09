@@ -535,6 +535,24 @@ impl Units {
         Units(out)
     }
 
+    /// The rectangles of every unit type's own views (sheet units), each once.
+    pub(crate) fn view_rects(&self) -> Vec<[f64; 4]> {
+        let mut seen: BTreeSet<[u64; 4]> = BTreeSet::new();
+        let mut out = Vec::new();
+        let mut types: BTreeSet<&str> = BTreeSet::new();
+        for u in self.0.values() {
+            if !types.insert(u.id.as_str()) {
+                continue;
+            }
+            for r in super::validate_packet::type_view_rects(&u.ty) {
+                if seen.insert(r.map(f64::to_bits)) {
+                    out.push(r);
+                }
+            }
+        }
+        out
+    }
+
     /// The unit type of room `number` on `level` (an instance with no level is any level's).
     pub(crate) fn get(&self, level: &str, number: Option<&str>) -> Option<&UnitOf> {
         let n = number.map(str::trim).filter(|n| !n.is_empty())?.to_ascii_lowercase();
@@ -1556,6 +1574,9 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     if let Some(r) = on("G-PRESENT") {
         let tol_ft = tol(r, "plan_in", 6.0) / 12.0;
         let symbols = vp::Symbols::of(sc.d, sc.sp, sc.frame, &kinds, sc.rules);
+        // The unit types' views, each measured on its room's walls for its turn (Q6339).
+        let unit_views = super::validate_packet::UnitViews::of(sc.d, &units.view_rects(), sc.frame.upf());
+        let measure = |level: &str, view: [f64; 4], room: [f64; 4]| unit_views.turn(view, sc.model, level, room);
         // The prints' marks of each kind (G-COVERAGE's reading): an element no symbol the job
         // read stands for, with a mark of its own kind by it, is one the prints show.
         let (stands, of_kind) = reading.as_ref().zip(kinds_of.as_ref()).map(|(rd, asg)| vc::stands(rd, asg)).unwrap_or_default();
@@ -1627,7 +1648,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 None
             } else {
                 let look: Vec<vp::Held> = held.iter().map(|it| vp::Held { kind: &it.kind, mark: it.mark.as_deref(), at: it.at }).collect();
-                unit.and_then(|u| symbols.enlarged(parts, u, &look, tol_ft)).or_else(|| symbols.trade_plans(parts, tol_ft))
+                unit.and_then(|u| symbols.enlarged(parts, u, &look, tol_ft, &measure)).or_else(|| symbols.trade_plans(parts, tol_ft))
             };
             if let Some(set) = &printed {
                 present.room(&room_type, &a.level, set.basis, !counted);
@@ -1674,7 +1695,10 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                     let matched = got.get(&i).and_then(|(j, dd)| held.get(*j).map(|it| (*it, *dd)));
                     // Where an unregistered (or loosely fitted) sheet puts a symbol is no measure:
                     // unsure, found or not.
-                    let verdict = match (&ex.doubt, matched.is_some()) {
+                    // A view laid by a turn that isn't measured: what it shows and the room
+                    // lacks is unsure (Q6339); what the room has passes.
+                    let doubt = ex.doubt.clone().or_else(|| ex.turn_doubt.clone().filter(|_| matched.is_none()));
+                    let verdict = match (&doubt, matched.is_some()) {
                         (Some(_), _) => "unsure",
                         (None, true) => "pass",
                         (None, false) => "missing",
@@ -1702,9 +1726,9 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                             })
                     });
                     let (issue, found, handle) = match matched {
-                        _ if ex.doubt.is_some() => {
+                        _ if doubt.is_some() => {
                             doubted += 1;
-                            let why = ex.doubt.clone().unwrap_or_default();
+                            let why = doubt.clone().unwrap_or_default();
                             measured["position_doubt"] = json!(why);
                             if let Some((it, dd)) = matched {
                                 measured["nearest_in"] = json!(r2(dd * 12.0));

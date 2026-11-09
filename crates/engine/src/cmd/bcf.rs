@@ -141,7 +141,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bcf.delete", "Delete BCF Issue", run_delete).params("{topic} → {deleted}"),
         CommandSpec::new("bcf.export", "Export BCF", run_export)
             .menu(&["File", "Export", "BCF Issues..."])
-            .params("{path: .bcf file, topics?: [GlobalId or index] (default all), version?: 2.1|3.0 (default 2.1)} → {path, topics, version}")
+            .params("{path: .bcf or .bcfzip file, force?: bool (replace an existing file), topics?: [GlobalId or index] (default all), version?: 2.1|3.0 (default 2.1)} → {path, topics, version}")
             .noundo(),
         CommandSpec::new("bcf.import", "Import BCF", run_import)
             .menu(&["File", "Import", "BCF Issues..."])
@@ -733,6 +733,7 @@ pub fn write_bcf_version(topics: &[&Topic], v3: bool) -> std::result::Result<Vec
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("bcf.export", "path required"))?;
+    super::exchange::guard_typed_output(s, "bcf.export", p, path, &["bcf", "bcfzip"], "a BCF archive")?;
     let topics = load(s.doc()?);
     let pick: Vec<&Topic> = match p.get("topics").and_then(Value::as_array) {
         Some(a) => {

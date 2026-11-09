@@ -7,8 +7,10 @@
 //!   (its elevations, sections and details are not plans; a view of one floor's rooms counts
 //!   only for a room on that floor). Each view is laid into the room turned and mirrored as the
 //!   room's layout fit says for the view it was fitted by; another view of the type takes the
-//!   turn that matches the most of the room's elements (the fit's turn on a tie, else the
-//!   room's hand). The view's middle goes on the room's middle, then moves by the offset (within
+//!   turn its own lines measure on the room's model walls when that is certain (Q6339:
+//!   [`super::validate_register::view_turn`]), else the turn that matches the most of the room's
+//!   elements (the fit's turn on a tie for a view of the fitted view's sheet, else the room's
+//!   hand), and what it shows that the room lacks is unsure, not missing. The view's middle goes on the room's middle, then moves by the offset (within
 //!   the slack the view's box leaves round the room) that matches the most of the room's
 //!   elements, so a view whose box is wider than the room on one side still lands right. A
 //!   symbol two views show (the same kind within the tolerance) counts once.
@@ -34,6 +36,7 @@ use super::validate_packet::{
     Area, bbox, corners, grow, inside, intersect, norm_rect, point_in, r2, seg_dist, sheet_kind, shows_level, trade_of_discipline, trade_of_kind,
 };
 use super::validate_prescreen::UnitOf;
+use super::validate_register as vreg;
 use super::validate_rules::Effective;
 
 /// Symbols read, at most.
@@ -91,6 +94,9 @@ pub(crate) struct Expected {
     /// Its sheet's note that makes its spots reference only: present or not is judged, where it
     /// is not.
     pub reference_only: Option<String>,
+    /// Why the turn its view was laid in by is not measured (Q6339): found, it passes; not found,
+    /// it is `unsure`, not missing.
+    pub turn_doubt: Option<String>,
 }
 
 /// A room's expected set off the prints.
@@ -517,14 +523,25 @@ impl<'a> Symbols<'a> {
         }
         for (i, at, trade, from, sheet, doubt, reference_only) in found {
             out.trades.insert(trade);
-            self.add(&mut out, Expected { sym: i, at, view: None, from, sheet, doubt, reference_only }, tol);
+            self.add(&mut out, Expected { sym: i, at, view: None, from, sheet, doubt, reference_only, turn_doubt: None }, tol);
         }
         Some(out)
     }
 
     /// What a typical room's unit type's enlarged plans show, laid into the room. None when the
     /// type's plan views hold nothing the job read.
-    pub(crate) fn enlarged(&self, parts: &[&Area], unit: &UnitOf, held: &[Held], tol: f64) -> Option<RoomSet> {
+    ///
+    /// Each view is laid by the turn `measure` (level, view rectangle, room box) measures from its
+    /// lines on the room's walls when that is certain (Q6339); the job's fit's turn is preferred
+    /// only on the sheet of the view it was fitted on.
+    pub(crate) fn enlarged(
+        &self,
+        parts: &[&Area],
+        unit: &UnitOf,
+        held: &[Held],
+        tol: f64,
+        measure: &dyn Fn(&str, [f64; 4], [f64; 4]) -> std::result::Result<vreg::Turned, String>,
+    ) -> Option<RoomSet> {
         let first = parts.first()?;
         let room_box = parts.iter().map(|a| a.bbox).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])?;
         let centre = [(room_box[0] + room_box[2]) / 2.0, (room_box[1] + room_box[3]) / 2.0];
@@ -589,12 +606,25 @@ impl<'a> Symbols<'a> {
                 .collect();
             let (vw, vh) = ((r[2] - r[0]) / self.upf, (r[3] - r[1]) / self.upf);
             let fitted = is_fit(sheet, title) && fit_k.is_some();
+            // The view's turn measured on the room's walls; the job's fit's only on its own sheet.
+            let measured = if fitted { None } else { Some(measure(&first.level, *r, room_box)) };
+            let wall_k = measured.as_ref().and_then(|m| m.as_ref().ok()).and_then(vreg::Turned::certain_k);
+            let stamped_here = super::validate_packet::stamped_on(&unit.fit, sheet);
             // Turns to try, the preferred first (it wins a tie).
-            let turns: Vec<u8> = match (fitted, fit_k) {
-                (true, Some(k)) => vec![k],
-                (_, Some(k)) => std::iter::once(k).chain(std::iter::once(hand_k)).chain(0..8).collect(),
-                (_, None) => std::iter::once(hand_k).chain(0..8).collect(),
+            let turns: Vec<u8> = match (wall_k, fitted, fit_k) {
+                (Some(k), ..) => vec![k],
+                (None, true, Some(k)) => vec![k],
+                (None, _, Some(k)) if stamped_here => std::iter::once(k).chain(std::iter::once(hand_k)).chain(0..8).collect(),
+                _ => std::iter::once(hand_k).chain(0..8).collect(),
             };
+            let turn_doubt = (wall_k.is_none() && !fitted && !stamped_here).then(|| {
+                let why = match &measured {
+                    Some(Ok(t)) => t.why.clone().unwrap_or_default(),
+                    Some(Err(e)) => e.clone(),
+                    None => String::new(),
+                };
+                format!("{sheet} {title} is laid in the room by its symbols: its turn against the room is not measured ({why})")
+            });
             // Another turn than the preferred one must match clearly more (two more, and a
             // quarter more): a few elements match some turn by chance.
             let mut best: Option<(u8, [f64; 2], usize)> = None;
@@ -639,20 +669,30 @@ impl<'a> Symbols<'a> {
                     sheet: sheet.clone(),
                     doubt: None,
                     reference_only: self.reference_note(sheet),
+                    turn_doubt: turn_doubt.clone(),
                 };
                 self.add(&mut out, expected, tol);
             }
             if out.sources.len() < MAX_VIEWS {
-                out.sources.push(json!({
+                let mut src = json!({
                     "sheet": view,
                     "symbols": local.len(),
                     "outside_room": outside,
                     "rotation_deg": f64::from(k % 4) * 90.0,
                     "mirrored": k >= 4,
-                    "turn_by": if fitted { "layout_fit" } else { "symbols" },
+                    "turn_by": if wall_k.is_some() { "wall_fit" } else if fitted { "layout_fit" } else { "symbols" },
                     "offset_ft": [r2(offset[0]), r2(offset[1])],
                     "matched": matched,
-                }));
+                });
+                match &measured {
+                    Some(Ok(t)) => src["wall_fit"] = vreg::turn_json(t),
+                    Some(Err(why)) => src["wall_fit"] = json!({"why": why}),
+                    None => {}
+                }
+                if let Some(why) = &turn_doubt {
+                    src["turn_doubt"] = json!(why);
+                }
+                out.sources.push(src);
             }
         }
         (!out.items.is_empty()).then_some(out)

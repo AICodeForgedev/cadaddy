@@ -31,6 +31,7 @@ mod dwg_save_keeps_ole;
 mod dwg_switch;
 mod dwg_write_native;
 mod dwt_template;
+mod embedded_project_data;
 mod low_handseed;
 mod q249_native_objects;
 mod savefuzz_repros;

@@ -456,15 +456,25 @@ fn way(lines: &[Line], turn: f64, vertical: bool) -> Vec<(f64, f64)> {
 
 /// The shift votes of one way at scale `s`: smoothed histogram over [−REACH, REACH].
 fn shift_votes(model: &[(f64, f64)], print: &[(f64, f64)], s: f64) -> Vec<f64> {
-    let n = (2.0 * REACH_FT / SHIFT_BIN_FT).round() as usize + 1;
+    scaled_votes(model, print, s, REACH_FT)
+}
+
+/// [`shift_votes`] at scale 1 over [−reach, reach] (a view laid on a room, Q6339).
+fn votes(model: &[(f64, f64)], print: &[(f64, f64)], reach: f64) -> Vec<f64> {
+    scaled_votes(model, print, 1.0, reach)
+}
+
+fn scaled_votes(model: &[(f64, f64)], print: &[(f64, f64)], s: f64, reach: f64) -> Vec<f64> {
+    let reach = if reach.is_finite() { reach.clamp(SHIFT_BIN_FT, MAX_TURN_SLACK_FT) } else { REACH_FT };
+    let n = (2.0 * reach / SHIFT_BIN_FT).round() as usize + 1;
     let mut h = vec![0.0f64; n];
     for (x, lm) in model {
         for (xp, lp) in print {
             let t = xp - s * x;
-            if t.abs() > REACH_FT {
+            if t.is_nan() || t.abs() > reach {
                 continue;
             }
-            let k = ((t + REACH_FT) / SHIFT_BIN_FT).round() as usize;
+            let k = ((t + reach) / SHIFT_BIN_FT).round() as usize;
             if let Some(v) = h.get_mut(k) {
                 *v += (s * lm).min(*lp);
             }
@@ -739,6 +749,363 @@ pub(crate) fn prompt_section(prints: &[Value]) -> String {
     )
 }
 
+// ---------------------------------------------------------------- a view's turn on a room
+
+/// A turn is certain (Q6339) when it lays this share of the room's own walls on the view's
+/// lines, and against the next best turn the walls only it lays on them (feet) are at least
+/// this long and this many times those only the other does.
+const MIN_TURN_COVERAGE: f64 = 0.6;
+const MIN_DECISIVE_FT: f64 = 2.0;
+const DECISIVE_RATIO: f64 = 2.0;
+/// How much the walls round the room (those the laid view covers) count beside the room's own:
+/// they tell a view of two mirrored rooms which of them this room is.
+const CONTEXT_WEIGHT: f64 = 0.5;
+/// Shifts tried each way for each turn; how far (feet) the view's middle may lie off the room's
+/// beyond the size difference, and at most.
+const TURN_SHIFTS: usize = 3;
+const TURN_SLACK_FT: f64 = 3.0;
+const MAX_TURN_SLACK_FT: f64 = 40.0;
+/// The room's own walls: those within this (feet) of its box.
+const ROOM_WALL_FT: f64 = 1.0;
+/// Shifts whose walls round the room are looked at, per turn (the best by the room's own).
+const CONTEXT_TRIED: usize = 2;
+/// Two layings are one picture when this share of the view's lines, laid one way and taken
+/// back the other, falls on its own lines (a view of two mirrored rooms is its own mirror).
+const SAME_PICTURE: f64 = 0.9;
+/// The view's line samples looked at for that, at most.
+const MAX_VIEW_SAMPLES: usize = 2_000;
+
+/// A view's straight lines (a typical room's enlarged plan, drawn anywhere on its sheet) in feet
+/// round the view's middle, read once for [`view_turn`] on every room of its type.
+pub(crate) struct ViewLines {
+    grid: Grid,
+    /// Its lines' main axis, radians modulo 90°.
+    axis: f64,
+    /// Half its width and height, feet.
+    half: [f64; 2],
+    /// Its lines each way (after its axis is turned onto x): place across, length.
+    ups: Vec<(f64, f64)>,
+    acrosses: Vec<(f64, f64)>,
+    /// Samples along its lines, for telling one picture from another.
+    samples: Vec<Sample>,
+    count: usize,
+}
+
+impl ViewLines {
+    /// The view `view` (sheet units, `unit` a foot) from `print`, its lines; none when it has
+    /// none of 1 ft or more.
+    pub(crate) fn new(print: &[Seg], unit: f64, view: [f64; 4]) -> Option<ViewLines> {
+        if !(unit.is_finite() && unit > 0.0) {
+            return None;
+        }
+        let mid = [(view[0] + view[2]) / 2.0, (view[1] + view[3]) / 2.0];
+        let half = [(view[2] - view[0]).abs() / 2.0 / unit, (view[3] - view[1]).abs() / 2.0 / unit];
+        if !(mid.iter().chain(half.iter()).all(|v| v.is_finite()) && half[0] > 0.0 && half[1] > 0.0) {
+            return None;
+        }
+        let local = |p: [f64; 2]| [(p[0] - mid[0]) / unit, (p[1] - mid[1]) / unit];
+        let mut lines: Vec<Line> = print.iter().filter_map(|(a, b)| Line::of(local(*a), local(*b))).collect();
+        if lines.is_empty() {
+            return None;
+        }
+        if lines.len() > MAX_PRINT_LINES {
+            lines.sort_by(|x, y| y.len.total_cmp(&x.len).then(x.a[0].total_cmp(&y.a[0])).then(x.a[1].total_cmp(&y.a[1])));
+            lines.truncate(MAX_PRINT_LINES);
+        }
+        let axis = peaks(&directions(&lines), 1, 1).first().map_or(0.0, |p| (p.0 as f64 * ANGLE_BIN_DEG).to_radians());
+        let (ups, acrosses) = (way(&lines, -axis, true), way(&lines, -axis, false));
+        let all = sample(&lines);
+        let samples: Vec<Sample> = all.iter().step_by((all.len() / MAX_VIEW_SAMPLES).max(1)).copied().collect();
+        let count = lines.len();
+        Some(ViewLines { grid: Grid::new(lines, ON_LINE_FT), axis, half, ups, acrosses, samples, count })
+    }
+}
+
+/// One way of laying a view on a room: `k` of eight (`k % 4` quarter turns counter-clockwise
+/// after a mirror across the view's up-down axis for `k >= 4`, as
+/// [`super::validate_present::turn`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Laid {
+    pub k: u8,
+    /// The turn that lays the (mirrored) view on the plan, degrees counter-clockwise in [0, 360).
+    pub rotation_deg: f64,
+    pub mirrored: bool,
+    /// Where the view's middle lands, off the room's middle, feet.
+    pub offset_ft: [f64; 2],
+    /// The share of the room's own walls' length on the view's lines.
+    pub coverage: f64,
+    /// The share of the walls round it, inside the laid view, on its lines.
+    pub context: f64,
+    pub score: f64,
+}
+
+impl Laid {
+    /// A point of the view (feet off its middle, as drawn) on the plan (feet off the room's
+    /// middle), and back.
+    fn to_plan(self, v: [f64; 2]) -> [f64; 2] {
+        let q = rotate(mirror(v, self.mirrored), self.rotation_deg.to_radians());
+        [q[0] + self.offset_ft[0], q[1] + self.offset_ft[1]]
+    }
+    fn to_view(self, p: [f64; 2]) -> [f64; 2] {
+        mirror(rotate([p[0] - self.offset_ft[0], p[1] - self.offset_ft[1]], -self.rotation_deg.to_radians()), self.mirrored)
+    }
+    /// Where the room's middle is on the view, feet off the view's middle as drawn.
+    pub(crate) fn room_in_view(self) -> [f64; 2] {
+        self.to_view([0.0, 0.0])
+    }
+}
+
+/// Each wall sample under the laying `l`: on the view's lines (true), off them (false), or
+/// unknown (`None`: a wall round the room the laid view doesn't reach). The room's own walls
+/// (`own`) are on or off wherever they are.
+fn states(view: &ViewLines, l: &Laid, own: &[Sample], round: &[Sample]) -> Vec<Option<bool>> {
+    let o = l.to_view([0.0, 0.0]);
+    let on = |sm: &Sample, need_inside: bool| {
+        let p = l.to_view(sm.p);
+        if need_inside && (p[0].abs() > view.half[0] || p[1].abs() > view.half[1]) {
+            return None;
+        }
+        let e = l.to_view(sm.u);
+        Some(view.grid.nearest(p, unit([e[0] - o[0], e[1] - o[1]]), ON_LINE_FT).is_some())
+    };
+    own.iter().map(|sm| on(sm, false)).chain(round.iter().map(|sm| on(sm, true))).collect()
+}
+
+/// The wall length (feet) only `a` lays on the view's lines, and only `b` does.
+fn decisive(view: &ViewLines, a: &Laid, b: &Laid, own: &[Sample], round: &[Sample]) -> (f64, f64) {
+    let (sa, sb) = (states(view, a, own, round), states(view, b, own, round));
+    let mut out = (0.0, 0.0);
+    for ((x, y), sm) in sa.iter().zip(&sb).zip(own.iter().chain(round)) {
+        match (x, y) {
+            (Some(true), Some(false)) => out.0 += sm.w,
+            (Some(false), Some(true)) => out.1 += sm.w,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether laying `view` by `a` and by `b` draws one picture: its lines laid by `b` and taken
+/// back by `a` fall on its own lines (a symmetric view: two mirrored rooms side by side).
+fn same_picture(view: &ViewLines, a: &Laid, b: &Laid) -> bool {
+    let (mut on, mut all) = (0.0, 0.0);
+    for sm in &view.samples {
+        let p = a.to_view(b.to_plan(sm.p));
+        let o = a.to_view(b.to_plan([0.0, 0.0]));
+        let e = a.to_view(b.to_plan(sm.u));
+        all += sm.w;
+        if view.grid.nearest(p, unit([e[0] - o[0], e[1] - o[1]]), ON_LINE_FT).is_some() {
+            on += sm.w;
+        }
+    }
+    all > 0.0 && on / all >= SAME_PICTURE
+}
+
+/// How a view lies on a room, measured: the best of the eight turns, the next best of another
+/// turn, and whether the best is certain (why not, when it isn't).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Turned {
+    pub best: Laid,
+    pub runner_up: Option<Laid>,
+    pub certain: bool,
+    pub why: Option<String>,
+    /// The room's own wall length looked at (feet) and the view's lines.
+    pub walls_ft: f64,
+    pub lines: usize,
+}
+
+impl Turned {
+    /// The certain turn's `k`, none when it isn't certain.
+    pub(crate) fn certain_k(&self) -> Option<u8> {
+        self.certain.then_some(self.best.k)
+    }
+}
+
+/// `p` mirrored across x = 0 when `m`.
+fn mirror(p: [f64; 2], m: bool) -> [f64; 2] {
+    if m { [-p[0], p[1]] } else { p }
+}
+
+/// How `view` lies on the room whose box is `room` (feet), by the model's wall faces `walls`
+/// (feet: the room's and those round it): each of the eight turns, the room's walls carried into
+/// the view's frame, the shifts both ways the most wall length votes for (each wall against each
+/// parallel line of the view), each scored by the share of the room's own walls on the view's
+/// lines, plus half the share of the walls round it that the laid view covers. A turn is
+/// certain when it lays most of the room's walls and scores clearly over every other turn: a
+/// symmetric room, a view of other rooms, or a view drawn at another scale are not. Err: why it
+/// can't be measured.
+pub(crate) fn view_turn(view: &ViewLines, walls: &[Seg], room: [f64; 4]) -> Result<Turned, String> {
+    let mid = [(room[0] + room[2]) / 2.0, (room[1] + room[3]) / 2.0];
+    let room_half = [(room[2] - room[0]).abs() / 2.0, (room[3] - room[1]).abs() / 2.0];
+    if !(mid.iter().chain(room_half.iter()).all(|v| v.is_finite())) {
+        return Err("the room's box is unknown".into());
+    }
+    let local = |p: [f64; 2]| [p[0] - mid[0], p[1] - mid[1]];
+    let own_box = [room[0] - ROOM_WALL_FT, room[1] - ROOM_WALL_FT, room[2] + ROOM_WALL_FT, room[3] + ROOM_WALL_FT];
+    let all: Vec<Line> = walls.iter().take(MAX_MODEL_LINES).filter_map(|(a, b)| Line::of(local(*a), local(*b))).collect();
+    let own: Vec<Line> =
+        walls.iter().take(MAX_MODEL_LINES).filter_map(|(a, b)| clip_seg(*a, *b, own_box)).filter_map(|(a, b)| Line::of(local(a), local(b))).collect();
+    let walls_ft: f64 = own.iter().map(|l| l.len).sum();
+    if walls_ft < 2.0 * MIN_FAMILY_FT {
+        return Err("the room has no model walls to lay its views on (model.build makes them)".into());
+    }
+    let wall_axis = peaks(&directions(&own), 1, 1).first().map_or(0.0, |p| (p.0 as f64 * ANGLE_BIN_DEG).to_radians());
+    let (own_samples, all_samples) = (sample(&own), sample(&all));
+    let own_total: f64 = own_samples.iter().map(|s| s.w).sum();
+    let mut laid: Vec<Laid> = Vec::new();
+    for k in 0..8u8 {
+        let mirrored = k >= 4;
+        // The turn laying the mirrored view on the plan: its axis onto the walls', then quarters.
+        let view_axis = if mirrored { (-view.axis).rem_euclid(std::f64::consts::FRAC_PI_2) } else { view.axis };
+        let theta = wall_axis - view_axis + f64::from(k % 4) * std::f64::consts::FRAC_PI_2;
+        // Plan → view: the turn undone, then the mirror (its own inverse).
+        let to_view = |p: [f64; 2]| mirror(rotate(p, -theta), mirrored);
+        let own_v: Vec<Line> =
+            own.iter().filter_map(|l| Line::of(to_view(l.a), to_view([l.a[0] + l.u[0] * l.len, l.a[1] + l.u[1] * l.len]))).collect();
+        // The shifts (view frame, its axis on x) the walls vote for, within the slack the view's
+        // box leaves round the room.
+        let (rw, rh) = if k % 2 == 1 { (room_half[1], room_half[0]) } else { (room_half[0], room_half[1]) };
+        let slack = ((view.half[0] - rw).abs().max((view.half[1] - rh).abs()) + TURN_SLACK_FT).min(MAX_TURN_SLACK_FT);
+        let xs = peaks(&votes(&way(&own_v, -view.axis, true), &view.ups, slack), 5, TURN_SHIFTS);
+        let ys = peaks(&votes(&way(&own_v, -view.axis, false), &view.acrosses, slack), 5, TURN_SHIFTS);
+        let at = |bin: usize| bin as f64 * SHIFT_BIN_FT - slack;
+        let mut shifts: Vec<[f64; 2]> = Vec::new();
+        for x in xs.iter().map(|p| at(p.0)) {
+            for y in ys.iter().map(|p| at(p.0)) {
+                shifts.push(rotate([x, y], view.axis));
+            }
+        }
+        // Each shift by the room's own walls on the view's lines; the best few by those round
+        // the room too.
+        let on = |samples: &[Sample], u: [f64; 2], inside_only: bool| -> (f64, f64) {
+            let (mut got, mut all) = (0.0, 0.0);
+            for sm in samples {
+                let q = to_view(sm.p);
+                let p = [q[0] + u[0], q[1] + u[1]];
+                if inside_only && (p[0].abs() > view.half[0] || p[1].abs() > view.half[1]) {
+                    continue;
+                }
+                all += sm.w;
+                if view.grid.nearest(p, unit(to_view(sm.u)), ON_LINE_FT).is_some() {
+                    got += sm.w;
+                }
+            }
+            (got, all)
+        };
+        let mut by_own: Vec<([f64; 2], f64)> = shifts
+            .into_iter()
+            .map(|u| {
+                let (got, _) = on(&own_samples, u, false);
+                (u, if own_total > 0.0 { got / own_total } else { 0.0 })
+            })
+            .collect();
+        by_own.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0[0].hypot(a.0[1]).total_cmp(&b.0[0].hypot(b.0[1]))));
+        let best_k = by_own
+            .into_iter()
+            .take(CONTEXT_TRIED)
+            .map(|(u, coverage)| {
+                let (got, all) = on(&all_samples, u, true);
+                let context = if all > 0.0 { got / all } else { 0.0 };
+                // The view's middle on the plan: from view = to_view(plan) + u, at view = 0.
+                let o = rotate(mirror([-u[0], -u[1]], mirrored), theta);
+                Laid {
+                    k,
+                    rotation_deg: theta.to_degrees().rem_euclid(360.0),
+                    mirrored,
+                    offset_ft: o,
+                    coverage,
+                    context,
+                    score: coverage + CONTEXT_WEIGHT * context,
+                }
+            })
+            .max_by(|a, b| a.score.total_cmp(&b.score).then(b.offset_ft[0].hypot(b.offset_ft[1]).total_cmp(&a.offset_ft[0].hypot(a.offset_ft[1]))));
+        if let Some(l) = best_k {
+            laid.push(l);
+        }
+    }
+    // The best turn (the plain way, then the lower k, on a tie) and the best of the others that
+    // draws another picture: a turn that lays the view's lines where the best does is the same
+    // laying told another way (a view of two mirrored rooms, mirrored, is itself).
+    laid.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.k.cmp(&b.k)));
+    let mut it = laid.into_iter();
+    let Some(best) = it.next() else { return Err("the view's lines vote for no place on the room".into()) };
+    let runner_up = it.find(|r| !same_picture(view, &best, r));
+    // The walls round the room (outside its own box), for what tells two layings apart.
+    let round: Vec<Sample> = all_samples
+        .iter()
+        .filter(|sm| {
+            let p = [sm.p[0] + mid[0], sm.p[1] + mid[1]];
+            !(p[0] >= own_box[0] && p[0] <= own_box[2] && p[1] >= own_box[1] && p[1] <= own_box[3])
+        })
+        .copied()
+        .collect();
+    let why = if best.coverage < MIN_TURN_COVERAGE {
+        Some(format!("its best turn lays only {:.0}% of the room's walls on the view's lines", best.coverage * 100.0))
+    } else {
+        runner_up.and_then(|r| {
+            let (only_best, only_other) = decisive(view, &best, &r, &own_samples, &round);
+            (only_best < MIN_DECISIVE_FT || only_best < DECISIVE_RATIO * only_other).then(|| {
+                format!(
+                    "turned {:.0}°{} fits about as well: {only_best:.1} ft of wall only the best turn lays on the view's lines, {only_other:.1} ft only that one does",
+                    r.rotation_deg,
+                    if r.mirrored { " and mirrored" } else { "" },
+                )
+            })
+        })
+    };
+    Ok(Turned { best, runner_up, certain: why.is_none(), why, walls_ft, lines: view.count })
+}
+
+/// A measured turn as the packet and the prescreen report it.
+pub(crate) fn turn_json(t: &Turned) -> Value {
+    let laid = |l: &Laid| {
+        json!({
+            "rotation_deg": r2(l.rotation_deg), "mirrored": l.mirrored, "coverage": r2(l.coverage), "context": r2(l.context),
+            "offset_ft": [r2(l.offset_ft[0]), r2(l.offset_ft[1])],
+        })
+    };
+    let mut o = laid(&t.best);
+    let v = t.best.room_in_view();
+    o["room_in_view_ft"] = json!([r2(v[0]), r2(v[1])]);
+    o["by"] = json!("wall fit");
+    o["certain"] = json!(t.certain);
+    o["walls_ft"] = json!(r2(t.walls_ft.min(1e6)));
+    o["lines"] = json!(t.lines);
+    if let Some(r) = &t.runner_up {
+        o["runner_up"] = laid(r);
+    }
+    if let Some(w) = &t.why {
+        o["why"] = json!(w);
+    }
+    o
+}
+
+/// `a`–`b` cut to the rectangle `r`; none when it misses it.
+pub(crate) fn clip_seg(a: [f64; 2], b: [f64; 2], r: [f64; 4]) -> Option<Seg> {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [(-dx, a[0] - r[0]), (dx, r[2] - a[0]), (-dy, a[1] - r[1]), (dy, r[3] - a[1])] {
+        if p.abs() < 1e-12 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            t0 = t0.max(t);
+        } else {
+            t1 = t1.min(t);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    let at = |t: f64| [a[0] + dx * t, a[1] + dy * t];
+    let out = (at(t0), at(t1));
+    out.0.iter().chain(out.1.iter()).all(|v| v.is_finite()).then_some(out)
+}
+
 // ---------------------------------------------------------------- the project rule
 
 /// Is `key` a registration rule (`validate.registration.…`)?
@@ -961,5 +1328,128 @@ mod tests {
         let mut pr = ProjectRules::new();
         pr.set(RuleDomain::Tolerance, RESIDUAL_KEY, cadaddy_doc::projrules::RuleValue::new("wide"), "imported");
         assert_eq!(threshold(&pr).0, DEFAULT_RESIDUAL_FT);
+    }
+
+    // ------------------------------------------------ a view's turn on a room (Q6339)
+
+    /// A made-up guest room, feet: 20' × 13' inside, a bath fin off the north wall at 12', a
+    /// closet return in the south-west corner; `x0` its west face, mirrored across its middle
+    /// when `mirrored`. Single faces.
+    fn guest_room(x0: f64, mirrored: bool) -> Vec<Seg> {
+        let fx = |x: f64| if mirrored { x0 + 20.0 - x } else { x0 + x };
+        let raw: [([f64; 2], [f64; 2]); 6] = [
+            ([0.0, 0.0], [20.0, 0.0]),
+            ([20.0, 0.0], [20.0, 13.0]),
+            ([20.0, 13.0], [0.0, 13.0]),
+            ([0.0, 13.0], [0.0, 0.0]),
+            ([12.0, 13.0], [12.0, 8.5]),
+            ([0.0, 3.0], [4.0, 3.0]),
+        ];
+        raw.iter().map(|(a, b)| ([fx(a[0]), a[1]], [fx(b[0]), b[1]])).collect()
+    }
+
+    /// A bed and two night stands drawn in the room (furniture: no walls).
+    fn furniture(x0: f64, mirrored: bool) -> Vec<Seg> {
+        let fx = |x: f64| if mirrored { x0 + 20.0 - x } else { x0 + x };
+        let boxes = [[13.0, 3.0, 19.5, 10.0], [17.5, 10.5, 19.5, 12.5], [17.5, 0.5, 19.5, 2.5]];
+        let mut out = Vec::new();
+        for b in boxes {
+            let c = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]];
+            for i in 0..4 {
+                let (p, q) = (c[i], c[(i + 1) % 4]);
+                out.push(([fx(p[0]), p[1]], [fx(q[0]), q[1]]));
+            }
+        }
+        out
+    }
+
+    /// [`super::super::validate_present::turn`] undone: plan → view.
+    fn unturn(p: [f64; 2], k: u8) -> [f64; 2] {
+        let q = match k % 4 {
+            1 => [p[1], -p[0]],
+            2 => [-p[0], -p[1]],
+            3 => [-p[1], p[0]],
+            _ => p,
+        };
+        if k >= 4 { [-q[0], q[1]] } else { q }
+    }
+
+    /// The segments `plan` (feet, round `mid`) drawn as a view turned by `k` on a sheet (12 units a
+    /// foot, its middle at `vc`), and the view's rectangle (`half` feet each way as drawn).
+    fn drawn(plan: &[Seg], mid: [f64; 2], k: u8, vc: [f64; 2], half: [f64; 2]) -> (Vec<Seg>, [f64; 4]) {
+        let to = |p: [f64; 2]| {
+            let v = unturn([p[0] - mid[0], p[1] - mid[1]], k);
+            [vc[0] + v[0] * 12.0, vc[1] + v[1] * 12.0]
+        };
+        let (hx, hy) = if k % 2 == 1 { (half[1], half[0]) } else { (half[0], half[1]) };
+        (plan.iter().map(|(a, b)| (to(*a), to(*b))).collect(), [vc[0] - hx * 12.0, vc[1] - hy * 12.0, vc[0] + hx * 12.0, vc[1] + hy * 12.0])
+    }
+
+    #[test]
+    fn each_of_the_eight_turns_of_a_view_is_measured_on_the_rooms_walls() {
+        let room = [0.0, 0.0, 20.0, 13.0];
+        let walls = guest_room(0.0, false);
+        let mut drawing: Vec<Seg> = walls.clone();
+        drawing.extend(furniture(0.0, false));
+        for k in 0..8u8 {
+            let (print, rect) = drawn(&drawing, [10.0, 6.5], k, [5000.0, 3000.0], [11.5, 8.0]);
+            let v = ViewLines::new(&print, 12.0, rect).unwrap();
+            let t = view_turn(&v, &walls, room).unwrap();
+            assert_eq!(t.best.k, k, "turn {k}: {t:?}");
+            assert!(t.certain, "turn {k}: {t:?}");
+            assert!(t.best.coverage > 0.95, "turn {k}: {t:?}");
+            assert!(t.best.offset_ft[0].abs() < 0.3 && t.best.offset_ft[1].abs() < 0.3, "turn {k}: {t:?}");
+            assert_eq!(t.best.mirrored, k >= 4);
+            let deg = f64::from(k % 4) * 90.0;
+            assert!((t.best.rotation_deg - deg).abs() < 0.2, "turn {k}: {t:?}");
+            let j = turn_json(&t);
+            assert_eq!((j["by"].clone(), j["certain"].clone()), (json!("wall fit"), json!(true)), "{j}");
+        }
+    }
+
+    #[test]
+    fn a_room_whose_walls_read_the_same_turned_is_no_certain_turn() {
+        // A plain box: turned half round it lies on the same walls; the view's furniture tells
+        // the two pictures apart, the walls can't.
+        let room = [0.0, 0.0, 20.0, 13.0];
+        let walls: Vec<Seg> = guest_room(0.0, false).into_iter().take(4).collect();
+        let mut drawing = walls.clone();
+        drawing.extend(furniture(0.0, false));
+        let (print, rect) = drawn(&drawing, [10.0, 6.5], 2, [5000.0, 3000.0], [11.5, 8.0]);
+        let t = view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &walls, room).unwrap();
+        assert!(!t.certain, "{t:?}");
+        assert!(t.why.as_deref().is_some_and(|w| w.contains("fits about as well")), "{t:?}");
+        // A view of another room (its walls nowhere on this one's): not certain either.
+        let other: Vec<Seg> = vec![([0.0, 0.0], [7.0, 0.0]), ([7.0, 0.0], [7.0, 30.0]), ([7.0, 30.0], [0.0, 30.0]), ([0.0, 30.0], [0.0, 0.0])];
+        let (print, rect) = drawn(&other, [3.5, 15.0], 0, [5000.0, 3000.0], [5.0, 17.0]);
+        let t = view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &guest_room(0.0, false), room).unwrap();
+        assert!(!t.certain, "{t:?}");
+        // Nothing to measure: no walls, no lines.
+        assert!(view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &[], room).is_err());
+        assert!(ViewLines::new(&[], 12.0, rect).is_none());
+        assert!(ViewLines::new(&print, f64::NAN, rect).is_none());
+        assert!(view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &walls, [f64::NAN, 0.0, 1.0, 1.0]).is_err());
+    }
+
+    #[test]
+    fn a_view_of_two_mirrored_rooms_finds_which_of_them_the_room_is() {
+        // The view draws the room and its mirror image across their shared wall; the model has
+        // the room (west) and its mirrored neighbour (east), the room turned half round on the
+        // view (drawn 180°). Mirrored and the other room is the same picture: still certain.
+        let room = [0.0, 0.0, 20.0, 13.0];
+        let mut walls = guest_room(0.0, false);
+        walls.extend(guest_room(20.0, true));
+        let mut drawing = walls.clone();
+        drawing.extend(furniture(0.0, false));
+        drawing.extend(furniture(20.0, true));
+        let (print, rect) = drawn(&drawing, [20.0, 6.5], 2, [5000.0, 3000.0], [21.5, 8.0]);
+        let t = view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &walls, room).unwrap();
+        assert!(t.certain, "{t:?}");
+        assert_eq!(t.best.k, 2, "{t:?}");
+        // The view's middle (the shared wall) lies 10 ft east of the room's middle; on the view,
+        // drawn turned, the room is its right half.
+        assert!((t.best.offset_ft[0] - 10.0).abs() < 0.3 && t.best.offset_ft[1].abs() < 0.3, "{t:?}");
+        let v = t.best.room_in_view();
+        assert!((v[0] - 10.0).abs() < 0.3 && v[1].abs() < 0.3, "{t:?}");
     }
 }

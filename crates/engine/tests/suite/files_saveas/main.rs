@@ -13,6 +13,7 @@ mod b4polish;
 mod blockhatchassoc;
 mod classic2d;
 mod dwgconvert;
+mod embeddedstores;
 mod exchangeloss;
 mod justifiedtext;
 mod keptnotices2;

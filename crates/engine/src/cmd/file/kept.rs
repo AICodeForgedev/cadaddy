@@ -143,7 +143,7 @@ fn step(len: usize) -> usize {
 }
 
 /// The parts of a drawing compared, named as the notice names them.
-const PARTS: [&str; 22] = [
+const PARTS: [&str; 23] = [
     "objects",
     "object properties",
     "layers",
@@ -165,6 +165,7 @@ const PARTS: [&str; 22] = [
     "parameters",
     "the scale list",
     "materials",
+    "embedded project data",
     "other programs' data",
 ];
 
@@ -221,8 +222,20 @@ fn part_kept(part: &str, d: &Drawing, back: &Drawing) -> bool {
         "geometric and dimensional constraints" => same(&d.constraints, &back.constraints),
         "parameters" => same(&d.parametric, &back.parametric),
         "the scale list" => same(&d.scales, &back.scales),
+        "embedded project data" => embedded_lost(d, back).next().is_none(),
         _ => true,
     }
+}
+
+/// The files the drawing carries inside itself (the project data commands keep: object forms,
+/// estimate revisions, clash status, reports; textures, the lightmap) that `back` no longer holds
+/// as they were, by name: `dropped` or `changed`.
+fn embedded_lost<'a>(d: &'a Drawing, back: &'a Drawing) -> impl Iterator<Item = (&'a String, &'static str)> {
+    d.embedded.iter().filter_map(|(name, bytes)| match back.embedded.get(name) {
+        None => Some((name, "dropped")),
+        Some(b) if b.as_slice() != bytes.as_slice() => Some((name, "changed")),
+        Some(_) => None,
+    })
 }
 
 /// [`kept`] of `{count, objects}` for two object lists (`depth`: where the pair sits), the objects
@@ -737,6 +750,10 @@ fn losses_and_parts(d: &Drawing, back: &Drawing) -> (Vec<Loss>, Vec<&'static str
             });
             l.count = count;
         }
+    }
+    out.in_part("embedded project data");
+    for (name, what) in embedded_lost(d, back) {
+        out.add("embedded project data".into(), what, None, Some(name.clone()));
     }
     compare_foreign(d, back, out.in_part("other programs' data"));
     let mut list: Vec<Loss> = out.by_feature.into_values().collect();

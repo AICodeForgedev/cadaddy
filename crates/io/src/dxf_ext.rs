@@ -942,6 +942,82 @@ pub(crate) fn parse_layer_filters(text: &str) -> Option<Vec<cadaddy_doc::LayerFi
     (p.version == 1 && p.filters.len() <= MAX_LAYER_FILTERS).then_some(p.filters)
 }
 
+/// The files a drawing carries inside itself ([`cadaddy_doc::Drawing::embedded`]: the project
+/// data commands keep, texture images, the baked lightmap) in the `CADADDY_EMBEDDED` XRECORD:
+/// each file's name and its bytes in base64.
+#[derive(Serialize, Deserialize)]
+struct EmbeddedPayload {
+    version: u32,
+    #[serde(default)]
+    files: Vec<EmbeddedFile>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct EmbeddedFile {
+    name: String,
+    data: String,
+}
+
+/// The JSON text of the embedded files that fit in `budget` bytes of it (in name order; a file
+/// that doesn't fit is left out and the next ones tried), and the names of those left out.
+/// `None` when the drawing carries no files. A file left out is told by the save's check of
+/// what the file keeps, by name.
+pub(crate) fn embedded_json(d: &cadaddy_doc::Drawing, budget: usize) -> Option<(String, Vec<String>)> {
+    if d.embedded.is_empty() {
+        return None;
+    }
+    // `{"version":1,"files":[]}` and per file `{"name":"","data":""},` (names escaped at most 6×).
+    let mut used = 32usize;
+    let (mut files, mut left_out) = (Vec::new(), Vec::new());
+    for (name, bytes) in &d.embedded {
+        let size = bytes.len().div_ceil(3).saturating_mul(4).saturating_add(name.len().saturating_mul(6)).saturating_add(24);
+        if files.len() >= MAX_EMBEDDED_FILES || used.saturating_add(size) > budget {
+            left_out.push(name.clone());
+            continue;
+        }
+        used = used.saturating_add(size);
+        files.push(EmbeddedFile { name: name.clone(), data: crate::svg::base64(bytes) });
+    }
+    if files.is_empty() {
+        return Some((String::new(), left_out));
+    }
+    let json = serde_json::to_string(&EmbeddedPayload { version: 1, files }).ok()?;
+    Some((json, left_out))
+}
+
+/// JSON chunks for the embedded files XRECORD, or `None` when the drawing carries none (or none
+/// fits).
+pub(crate) fn embedded_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    embedded_json(d, MAX_EMBEDDED_PAYLOAD).map(|(j, _)| j).filter(|j| !j.is_empty()).map(|j| json_chunks(&j))
+}
+
+/// The embedded files of the XRECORD's text: names that are not empty, not too long and hold no
+/// control characters, with bytes that decode (capped; a newer version is left out).
+pub(crate) fn parse_embedded(text: &str) -> Vec<(String, Vec<u8>)> {
+    if text.len() > MAX_EMBEDDED_PAYLOAD {
+        return Vec::new();
+    }
+    let Ok(p) = serde_json::from_str::<EmbeddedPayload>(text) else { return Vec::new() };
+    if p.version != 1 {
+        return Vec::new();
+    }
+    p.files
+        .into_iter()
+        .take(MAX_EMBEDDED_FILES)
+        .filter(|f| !f.name.is_empty() && f.name.len() <= MAX_EMBEDDED_NAME && !f.name.chars().any(char::is_control))
+        .filter_map(|f| Some((f.name, crate::svg_style::base64_decode(&f.data)?)))
+        .collect()
+}
+
+/// Named-object-dictionary key of the XRECORD holding the drawing's embedded files.
+pub(crate) const EMBEDDED_KEY: &str = "CADADDY_EMBEDDED";
+/// Most text of the embedded files XRECORD (written and read): about 192 MB of files.
+pub(crate) const MAX_EMBEDDED_PAYLOAD: usize = 256 << 20;
+/// Most embedded files read from a file (as many as a .cdy file reads).
+pub(crate) const MAX_EMBEDDED_FILES: usize = 100_000;
+/// Longest embedded file name read.
+const MAX_EMBEDDED_NAME: usize = 4096;
+
 /// JSON chunks for the building spec XRECORD, or `None` without a spec.
 pub(crate) fn building_spec_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
     d.building_spec.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
