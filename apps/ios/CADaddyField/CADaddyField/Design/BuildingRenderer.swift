@@ -717,11 +717,12 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     func frame(element id: String) {
         guard let e = b.element(id) else { return }
         let lift = liftGoal.indices.contains(e.level) ? liftGoal[e.level] : 0
-        targetGoal = e.shape.anchor + SIMD3(0, lift, 0)
         let bb = e.shape.bounds
         let span = simd_length(bb.max - bb.min)
-        orbitGoal.z = max(min(span * 2.2 + 8, 70), e.detail == .room ? 6 : 12)
-        orbitGoal.y = 0.55
+        // Enough room around it to read what it connects to; the bottom sheet covers the lower part of the screen.
+        orbitGoal.z = e.detail == .room ? 16 : min(max(span * 1.2 + 30, 40), 90)
+        orbitGoal.y = 0.62
+        targetGoal = e.shape.anchor + SIMD3(0, lift - orbitGoal.z * 0.1, 0)
         if reduceMotion { snapCamera() }
     }
 

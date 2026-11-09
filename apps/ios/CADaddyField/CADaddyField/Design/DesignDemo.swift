@@ -26,7 +26,7 @@ enum DesignDemo {
         let room = "207"
         let outlet = b.elements.first { $0.room == room && $0.tag == "R1" }?.id ?? ""
         let panel = b.elements.first { $0.kind == "Panelboard" && $0.tag == "2LA" }?.id ?? ""
-        func after(_ t: Double, _ f: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: f) }
+        func after(_ t: Double, _ f: @escaping @MainActor @Sendable () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: f) }
         switch shot {
         case "reveal":
             after(0.1) { exp.setRevealForScreenshot(0.46) }
@@ -48,6 +48,10 @@ enum DesignDemo {
         case "panel":
             after(0.1) { exp.go(.floor(2)) }
             after(1.2) { exp.tapElement(panel) }
+        case "gear":
+            after(0.1) { exp.go(.room(room)) }
+            after(1.0) { exp.tapElement(outlet) }
+            after(1.6) { if let s = exp.focus?.steps.first(where: { $0.link == "Gear" }) { exp.flyTo(s) } }
         case "layers":
             after(0.1) { exp.go(.floor(2)) }
             after(1.0) { exp.showLayers = true }
@@ -60,7 +64,7 @@ enum DesignDemo {
 
     /// The whole flow for the recording (~36 s).
     static func tour(_ exp: BuildingExperience, room: String, outlet: String) {
-        func at(_ t: Double, _ f: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: f) }
+        func at(_ t: Double, _ f: @escaping @MainActor @Sendable () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: f) }
         // 0-4 s: the solid building, then the reveal sweeps it to X-ray.
         // 4-10 s: a slow orbit (the ghost holds still: no flicker, no layer swaps).
         at(4.2) { exp.renderer.autoOrbitSpeed = 0.32 }

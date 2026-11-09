@@ -61,7 +61,7 @@ struct BuildingView: View {
     private func bottomReserve(_ h: CGFloat) -> CGFloat {
         switch exp.scope {
         case .building: return exp.focus == nil ? 0 : 70
-        case .floor: return 150
+        case .floor: return exp.focus == nil ? 150 : 250
         case .room: return min(h * 0.44, 400)
         }
     }
