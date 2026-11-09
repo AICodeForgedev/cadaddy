@@ -144,8 +144,47 @@ pub(crate) fn is_oneline_electrode(e: &Electrode) -> bool {
 
 /// A sheet's texts with each one printed twice in one place kept once (a PDF's hidden text layer
 /// under its visible text, a symbol's tag beside the text it came from): the same words within a
-/// third of the taller one's height. The first is kept; the order is the sheet's.
+/// third of the taller one's height. The first is kept; the order is the sheet's. A text that is
+/// the tail of a longer one on its line, starting inside it (`P FUSED DISCONNECT` of
+/// `200A/2P FUSED DISCONNECT`: what a text recovery read of the same words), is that one.
 pub(crate) fn dedup_texts(texts: &[TextItem]) -> Vec<TextItem> {
+    let once = same_place_once(texts);
+    // Along each line, longest first: a tail inside a longer text on its baseline goes.
+    let mut order: Vec<usize> = (0..once.len()).collect();
+    order.sort_by(|a, b| {
+        let (ta, tb) = (once.get(*a).map_or(0.0, |t| t.at.y), once.get(*b).map_or(0.0, |t| t.at.y));
+        ta.total_cmp(&tb)
+    });
+    let mut drop = vec![false; once.len()];
+    for (k, &i) in order.iter().enumerate() {
+        let Some(t) = once.get(i) else { continue };
+        let v = t.value.trim();
+        if v.chars().count() < 2 || !t.at.x.is_finite() || !t.at.y.is_finite() {
+            continue;
+        }
+        let near = order.iter().skip(k.saturating_sub(MAX_LINE_NEIGHBOURS)).take(2 * MAX_LINE_NEIGHBOURS + 1);
+        for &j in near {
+            let Some(o) = once.get(j).filter(|_| j != i) else { continue };
+            let w = o.value.trim();
+            let h = o.height.max(t.height).max(0.0);
+            // The longer text's span along its line, at most a text height a letter.
+            let span = w.chars().count() as f64 * o.height.max(0.0);
+            if w.len() > v.len() && w.ends_with(v) && (o.at.y - t.at.y).abs() <= h / 3.0 && t.at.x >= o.at.x - h / 3.0 && t.at.x <= o.at.x + span {
+                if let Some(d) = drop.get_mut(i) {
+                    *d = true;
+                }
+                break;
+            }
+        }
+    }
+    once.into_iter().zip(drop).filter(|(_, d)| !d).map(|(t, _)| t).collect()
+}
+
+/// Texts compared with each one along its line, either side (bounds [`dedup_texts`]).
+const MAX_LINE_NEIGHBOURS: usize = 64;
+
+/// The texts with each repeated in one place kept once ([`dedup_texts`]).
+fn same_place_once(texts: &[TextItem]) -> Vec<TextItem> {
     let texts = texts.get(..texts.len().min(MAX_TEXTS)).unwrap_or(texts);
     let mut by_value: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     let mut out: Vec<TextItem> = Vec::with_capacity(texts.len());
@@ -1328,6 +1367,16 @@ mod tests {
         assert_eq!(d.len(), oneline().len());
         // The same words elsewhere are another text.
         assert_eq!(dedup_texts(&[t("FDR-A", 0.0, 0.0), t("FDR-A", 0.0, 5.0)]).len(), 2);
+        // A text recovery's tail of a longer text on its line is that text; the same tail on
+        // another line, or past the longer one's end, is a text of its own.
+        let tails = [
+            t("200A/2P FUSED DISCONNECT", 0.0, 0.0),
+            t("P FUSED DISCONNECT", 6.0, 0.1),
+            t("P FUSED DISCONNECT", 6.0, 3.0),
+            t("P FUSED DISCONNECT", 40.0, 0.0),
+        ];
+        let kept: Vec<(f64, f64)> = dedup_texts(&tails).iter().map(|x| (x.at.x, x.at.y)).collect();
+        assert_eq!(kept, [(0.0, 0.0), (6.0, 3.0), (40.0, 0.0)]);
         let skip: BTreeSet<String> = ["PX".to_string(), "FDR-A".into(), "XX".into(), "EXTERIOR LIGHTING PHOTOCELL".into()].into_iter().collect();
         assert_eq!(read(&d, "EX-5", &skip).len(), 3);
     }
