@@ -701,7 +701,7 @@ fn elevations_on_any_datum_from_finish_floor_and_top_of_plate() {
 #[test]
 fn a_truss_bearing_is_the_roofs_elevation_and_parapet_tops_its_parapets() {
     let section = marked(
-        "A311",
+        "A301",
         &["BUILDING SECTIONS"],
         &[
             ("SECOND FLOOR", "110'-0\""),
@@ -710,7 +710,7 @@ fn a_truss_bearing_is_the_roofs_elevation_and_parapet_tops_its_parapets() {
             ("T.O. PARAPET (HIGH)", "127'-7 1/2\""),
         ],
     );
-    let elevation = marked("A211", &["EXTERIOR ELEVATIONS"], &[("FIRST FLOOR", "100'-0\""), ("T.O. PARAPET (LOW)", "123'-7 1/2\"")]);
+    let elevation = marked("A201", &["EXTERIOR ELEVATIONS"], &[("FIRST FLOOR", "100'-0\""), ("T.O. PARAPET (LOW)", "123'-7 1/2\"")]);
     let index = printset::sheet_index(&classify(vec![
         ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
         ("Set.pdf", 2, sheet("A102", &["SECOND FLOOR PLAN"], "")),
@@ -731,7 +731,7 @@ fn a_truss_bearing_is_the_roofs_elevation_and_parapet_tops_its_parapets() {
 /// its own.
 #[test]
 fn a_long_markers_elevation_under_its_far_end_is_read() {
-    let mut section = sheet("A321", &["WALL SECTIONS"], "");
+    let mut section = sheet("A302", &["WALL SECTIONS"], "");
     // The floors and `TRUSS BEARING` short, the elevation under them; the parapets' names
     // long, their elevations 60 to the right (10 letters' worth) and a line under.
     for (name, el, y, dx) in [

@@ -1776,7 +1776,7 @@ pub const MARK_FINISH_FLOOR: &str = "FF";
 /// The [`LevelMark::level`] of a top-of-plate marker (`T.O. PLATE 112'-0"`, `TRUSS BEARING`):
 /// where the roof bears.
 pub const MARK_PLATE: &str = "PLATE";
-/// The [`LevelMark::level`] of a top-of-parapet marker (`T.O. PARAPET (LOW) 141'-10"`): how high
+/// The [`LevelMark::level`] of a top-of-parapet marker (`T.O. PARAPET (LOW) 124'-0"`): how high
 /// the roof's parapets stand.
 pub const MARK_PARAPET: &str = "PARAPET";
 
