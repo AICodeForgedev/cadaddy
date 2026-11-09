@@ -533,11 +533,12 @@ pub(crate) fn read_back(v: &Value) -> Option<cadaddy_walk3d::Schedule> {
 }
 
 /// WALLGEN: each opening nearest a tag (within 6 feet) takes its schedule row's kind, width and
-/// heights (sheet units above the floor).
+/// heights (sheet units above the floor), and its mark (`marks`).
 pub(crate) fn size_openings(
     sp: &cadaddy_walk3d::BuildingSpec,
     ops: &mut [super::perceive::geometry::Opening],
     fitted: &mut std::collections::HashMap<Handle, (Option<f64>, Option<f64>)>,
+    marks: &mut std::collections::HashMap<Handle, String>,
     upf: f64,
 ) {
     if sp.schedule.rows.is_empty() || sp.schedule.tags.is_empty() {
@@ -549,6 +550,7 @@ pub(crate) fn size_openings(
         let at = Vec2::new(tag.at[0], tag.at[1]);
         let Some(o) = ops.iter_mut().filter(|o| o.at.dist(at) <= 72.0 * k).min_by(|a, b| a.at.dist(at).total_cmp(&b.at.dist(at))) else { continue };
         o.kind = if r.kind == FamilyKind::Door { "door" } else { "window" };
+        marks.insert(o.handle, r.mark.trim().chars().take(40).collect());
         if let Some(w) = r.width_in {
             let new_w = w * k;
             // When the opening has a swing (arc endpoints), scale the endpoints to the schedule
