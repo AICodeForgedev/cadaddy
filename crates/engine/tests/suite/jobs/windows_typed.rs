@@ -118,7 +118,7 @@ fn build(tags: &[(f64, f64, &str)], symbols: &[(f64, f64, &str)], rows: Value, n
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Floor Plan", None);
     text(&mut s, "A-ROOM-TAG", [120.0, 80.0], "OFFICE");
-    text(&mut s, "A-ROOM-TAG", [126.0, 68.0], "101");
+    text(&mut s, "A-ROOM-TAG", [126.0, 68.0], "905");
     for (x, y, t) in tags {
         text(&mut s, "A-ANNO", [x * 12.0, y * 12.0], t);
     }
@@ -160,7 +160,7 @@ fn a_tagged_opening_is_found_whichever_way_its_pieces_run_and_the_window_is_type
     assert_eq!(p["sill_height"]["source"]["kind"], json!("schedule"), "{p}");
     assert_eq!(value(p, "type"), json!("FIXED ALUMINUM"), "{p}");
     assert_eq!(value(p, "frame"), json!("AL"), "{p}");
-    assert!(value(p, "room").as_str().is_some_and(|r| r.contains("101")), "the room it lights: {p}");
+    assert!(value(p, "room").as_str().is_some_and(|r| r.contains("905")), "the room it lights: {p}");
     assert_eq!(value(p, "level"), json!("L1"), "{p}");
     // The report: one W1 tagged, one built.
     let row = &built["window_tags"][0];
