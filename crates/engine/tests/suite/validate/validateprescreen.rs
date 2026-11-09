@@ -358,6 +358,48 @@ fn a_heights_rule_from_the_project_fails_a_switch_at_the_wrong_height() {
 }
 
 #[test]
+fn a_device_set_at_its_gangs_height_is_measured_at_its_gang_mates_documented_height() {
+    // Test finding (fix-fire-separation-box-move-wrong): the build sets the devices of one box at
+    // one height, the one the documents give first, the other's own kept as its design value.
+    // G-HEIGHT measured each device against its own documents only, so the device set at its
+    // gang's height failed. Here the switch's own height is 48" (a project rule) and its gang-mate's
+    // 36", the switch standing at 36".
+    use cadaddy_engine::doc::props::{self, Prop, Source};
+    let mut j = job();
+    rule(&mut j.s, "mounting_height", "switch/general", "48\"").unwrap();
+    rule(&mut j.s, "mounting_height", "receptacle/general", "36\"").unwrap();
+    let mut box_props = props::Props::default();
+    box_props.set("atom", Prop::new("box", Source::computed()));
+    box_props.set("devices", Prop::new(format!("{},{}", j.switch, j.on_wall), Source::computed()));
+    {
+        let d = j.s.doc_mut().unwrap();
+        let h = d.new_handle();
+        let mut e = Entity::new(h, EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(1.0, 0.0, 0.0) }));
+        e.common.xdata = props::write(&e.common.xdata, &box_props).into();
+        d.model.push(e);
+    }
+    let switch_reading = |s: &mut Session, h: &str| {
+        let (r, fs) = heights(s);
+        of(&fs, "G-HEIGHT", h).cloned().unwrap_or_else(|| panic!("no G-HEIGHT reading for the switch: {r}"))
+    };
+    // In one box but not set at its gang's height by the build: its own documents only.
+    let sw = switch_reading(&mut j.s, &j.switch);
+    assert_eq!(sw["verdict"], "fail", "{sw}");
+    // Set at its gang's height, its own kept beside: measured at its gang-mate's 36".
+    let h = cadaddy_engine::doc::Handle::parse_hex(&j.switch).unwrap();
+    assert!(j.s.doc_mut().unwrap().model.modify(h, |e| {
+        let mut store = props::read(&e.common.xdata);
+        store.set("design:mount_height", Prop::new("48", Source::computed()));
+        store.set("correction:mount_height", Prop::new("one height under one plate: ganged in one box with a receptacle", Source::computed()));
+        e.common.xdata = props::write(&e.common.xdata, &store).into();
+    }));
+    let sw = switch_reading(&mut j.s, &j.switch);
+    assert_eq!(sw["verdict"], "pass", "{sw}");
+    assert!((sw["measured"]["expected_in"].as_f64().unwrap() - 36.0).abs() < 1e-6, "{sw}");
+    assert!(sw["measured"]["expected_from"].as_str().unwrap().contains("ganged with it"), "{sw}");
+}
+
+#[test]
 fn a_room_types_expected_set_finds_the_missing_ptac() {
     let mut j = job();
     // Refused: a set that doesn't read, or in the wrong domain.
