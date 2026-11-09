@@ -39,6 +39,13 @@ pub(crate) const MIN_POINTS: usize = 200;
 /// alone is no test: a dense electrical plan covers half of any plan by chance (a plan of another
 /// building in the same title block lay half on it), and a sparse plan lies on a dense one.
 pub(crate) const FRAME_SHARE: f64 = 0.4;
+/// A sheet this much wider than the plan it's laid on can't be weighed whole
+/// ([`super::grids::linework_fit_part`] won't try).
+const MAX_SHEET_OVER_PLAN: f64 = 1.2;
+
+/// Most blocks of a too-wide sheet's lines tried as its plan.
+const MAX_BLOCKS_TRIED: usize = 3;
+
 /// How much of two sheets' linework must lie on each other, both ways, for one to be placed
 /// through the other: the same consultant's background in the same spot agrees nearly line for
 /// line, where a sheet laid on the architect's plan differs by the architect's own detail.
@@ -223,8 +230,39 @@ impl SheetLines {
         if !self.stripped(i) || src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
             return None;
         }
-        // Each scale proposes its best few placements, so the margin is over a real runner-up.
         let r = fit_ratio(ratio);
+        self.fit_points(src, tgt, r).or_else(|| {
+            // Schedules and notes beside the plan can leave the sheet wider than the plan it is
+            // laid on (at the ratio it is laid on at), so it can't be weighed whole: its biggest
+            // block of lines is its plan.
+            let span = |p: &[Vec2]| {
+                let b = cadaddy_geom::Bounds2::from_points(p.iter().copied());
+                b.width().max(b.height())
+            };
+            if r * span(src) <= MAX_SHEET_OVER_PLAN * span(tgt) {
+                return None;
+            }
+            // A schedule's table can outweigh the plan: the biggest few are each tried, and only
+            // a plan passes the fit.
+            let mut rest = src.clone();
+            for _ in 0..MAX_BLOCKS_TRIED {
+                let block = super::grids::largest_block(&rest, 48.0 * self.k_in);
+                if block.len() < MIN_POINTS || block.len() >= src.len() {
+                    return None;
+                }
+                if let Some(f) = self.fit_points(&block, tgt, r) {
+                    return Some(f);
+                }
+                let taken: std::collections::HashSet<(u64, u64)> = block.iter().map(|p| (p.x.to_bits(), p.y.to_bits())).collect();
+                rest.retain(|p| !taken.contains(&(p.x.to_bits(), p.y.to_bits())));
+            }
+            None
+        })
+    }
+
+    /// [`Self::fit`] of the points `src` at the ratio `r`.
+    fn fit_points(&self, src: &[Vec2], tgt: &[Vec2], r: f64) -> Option<LineworkFit> {
+        // Each scale proposes its best few placements, so the margin is over a real runner-up.
         let fit = super::grids::linework_fit_part(src, tgt, self.k_in, 0.97 * r, 1.03 * r);
         let (s, t, score, margin) = fit.filter(|f| f.2 >= FIT_F1 && f.3 >= FIT_MARGIN && (f.0 / r - 1.0).abs() <= 0.025)?;
         let mid = src.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / src.len().max(1) as f64);
@@ -418,6 +456,44 @@ mod tests {
         assert_eq!(scale_ratio(Some(f64::NAN), Some(12.0)), 1.0);
         assert_eq!(scale_ratio(Some(-3.0), Some(12.0)), 1.0);
         assert_eq!(scale_ratio(Some(24.0), Some(12.0)), 2.0);
+    }
+
+    #[test]
+    fn a_sheet_with_schedules_beside_its_plan_is_fitted_by_its_plan() {
+        // A floor of unlike rooms, and the same floor 100 along on a sheet with a schedule's table
+        // far beside it: the sheet is much wider than the plan.
+        let walls = |dx: f64| -> Vec<Vec2> {
+            let mut p = Vec::new();
+            let mut line = |a: (f64, f64), b: (f64, f64)| {
+                let n = ((b.0 - a.0).abs() + (b.1 - a.1).abs()) as i32 / 6;
+                p.extend((0..=n).map(|i| f64::from(i) / f64::from(n.max(1))).map(|f| Vec2::new(dx + a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)));
+            };
+            line((0.0, 0.0), (900.0, 0.0));
+            line((900.0, 0.0), (900.0, 500.0));
+            line((900.0, 500.0), (0.0, 500.0));
+            line((0.0, 500.0), (0.0, 0.0));
+            for (x, h) in [(130.0, 410.0), (290.0, 170.0), (370.0, 500.0), (610.0, 260.0), (770.0, 390.0)] {
+                line((x, 0.0), (x, h));
+            }
+            for (y, a, b) in [(90.0, 0.0, 370.0), (340.0, 130.0, 610.0), (220.0, 370.0, 900.0), (430.0, 610.0, 900.0)] {
+                line((a, y), (b, y));
+            }
+            p
+        };
+        let plan = walls(0.0);
+        let mut sheet = walls(100.0);
+        let table: Vec<Vec2> = (0..40).flat_map(|r| (0..40).map(move |c| Vec2::new(2000.0 + f64::from(c) * 20.0, f64::from(r) * 12.0))).collect();
+        let whole_is_too_wide = SheetLines {
+            rects: vec![[0.0, 0.0, 3000.0, 600.0]],
+            pts: vec![{
+                sheet.extend(table);
+                sheet
+            }],
+            stripped: vec![true],
+            k_in: 0.25,
+        };
+        let f = whole_is_too_wide.fit(0, &plan, 1.0).expect("its plan fits");
+        assert!((f.sim.tx + 100.0).abs() <= 15.0 && f.sim.ty.abs() <= 15.0, "{:?}", (f.sim.tx, f.sim.ty));
     }
 
     #[test]

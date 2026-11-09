@@ -568,6 +568,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/engine/src/cmd/propfill.rs",
+        "const HEIGHT_FROM_ORDER",
+        "our own output: the `mount_height_from` codes the height choice writes, in the order it takes them (Q6335), not words read off a document",
+    ),
+    (
+        "crates/engine/src/cmd/propfill.rs",
         "const ENVELOPE_PARTS",
         "model kinds and property values: our own names (Q6211 kindenum owns them), not words read off a document",
     ),

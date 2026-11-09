@@ -70,6 +70,10 @@ image = { workspace = true, features = ["bmp", "tiff"] }
 rayon = { workspace = true }
 # Sandboxed WASM plug-in runtime: a pure-Rust interpreter with fuel metering (MIT OR Apache-2.0).
 wasmi = "0.41"
+# Whether two paths name one file (device and file number; a hard link is the same file under
+# another name): the output guard never writes over an open drawing. Unlicense OR MIT; already in
+# the lock file (walkdir's).
+same-file = "1"
 
 # The test programs under tests/suite/: each folds many test files into one binary (one link
 # of the crate instead of one per file). A test file that needs a process of its own stays a

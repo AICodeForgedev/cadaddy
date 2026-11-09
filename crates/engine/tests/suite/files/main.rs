@@ -32,6 +32,7 @@ mod labels;
 mod layer_tools;
 mod layout_template_saveas;
 mod output_guard4;
+mod output_guard5;
 mod oversize;
 mod parity2_commands;
 mod part;
