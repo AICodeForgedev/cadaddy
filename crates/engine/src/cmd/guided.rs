@@ -2911,6 +2911,33 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
             }
         }
     }
+    // The luminaire types the set's own fixture schedules and legends list (rows that say
+    // luminaire, on an electrical sheet or in a luminaire schedule wherever printed), besides the
+    // submittals': a type with no cut sheet among them (one the casework or millwork maker
+    // supplies) is still a luminaire's mark, its row the source (Q6354).
+    let scheduled_luminaires: BTreeMap<String, String> = every_row
+        .iter()
+        .filter(|(k, _)| !k.trim().is_empty() && !k.chars().any(|ch| ch.is_ascii_lowercase()))
+        .filter(|(_, (sh, row))| {
+            let table = row.table.to_ascii_uppercase();
+            (trade_of(sh) == "E" || cadaddy_mepfix::wordrules::words("schedules.luminaire_table_words").iter().any(|w| table.contains(w)))
+                && matches!(row_kind(row, false), Some(("luminaire", _)))
+        })
+        .map(|(k, (sh, row))| (k.trim().to_ascii_uppercase(), format!("{sh} {}: {} {}", row.table, k.trim(), row.description).trim().to_string()))
+        .collect();
+    // A luminaire's mark (the submittals' or the schedules'), and what it is: its kind and the
+    // document that says so.
+    let luminaire_mark = |m: &str| {
+        let m = m.trim();
+        !m.chars().any(|ch| ch.is_ascii_lowercase())
+            && (job.luminaire_types.iter().chain(&job.wall_luminaire_types).any(|l| l.trim().eq_ignore_ascii_case(m))
+                || scheduled_luminaires.contains_key(&m.to_ascii_uppercase()))
+    };
+    let luminaire_of = |m: &str| -> (String, String) {
+        let listed = |types: &[String]| types.iter().any(|l| l.trim().eq_ignore_ascii_case(m.trim()));
+        let row = scheduled_luminaires.get(&m.trim().to_ascii_uppercase()).cloned().unwrap_or_default();
+        if listed(&job.wall_luminaire_types) { ("wall luminaire".into(), row) } else { ("luminaire".into(), row) }
+    };
     let k_in = super::perceive::units_per_inch(d);
     // Tags an answer made device types.
     let learned: std::collections::BTreeSet<String> = job
@@ -3055,12 +3082,20 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
             // luminaire's mark only, one the lighting submittals list: a note by a receptacle,
             // `HOR`, is no type.)
             let marked = if electrical(&sheet) && kind.is_empty() && is_circuit_tag(tag) && !legend.covers(*at) && !refused.contains(tag.as_str()) {
-                type_mark_by(*at, *h, *tag_at)
-                    .filter(|m| job.luminaire_types.iter().chain(&job.wall_luminaire_types).any(|l| l.eq_ignore_ascii_case(m)))
+                type_mark_by(*at, *h, *tag_at).filter(|m| luminaire_mark(m))
             } else {
                 None
             };
             if let Some(t) = marked.filter(|_| job.level_at([at.x, at.y]).is_none_or(|r| super::printmep::building_level(&r.level))) {
+                let (lum, source) = luminaire_of(&t);
+                // A junction box lettered at the symbol (`J` in its circle): the luminaire's
+                // connection, the luminaire built into casework or millwork.
+                let label_h = tag_at.map_or(DEFAULT_MARK_HEIGHT, |(_, lh)| lh).max(f64::MIN_POSITIVE);
+                let connection = page_texts
+                    .iter()
+                    .find(|x| junction_lettering(&x.value) && x.at.dist(*at) <= JUNCTION_LETTER_H * label_h)
+                    .map(|x| junction_connection(&sheet, x.value.trim(), &t, tag))
+                    .unwrap_or_default();
                 c.placed.push(super::readers::ReadDevice {
                     tag: t.clone(),
                     at: [at.x, at.y],
@@ -3068,7 +3103,9 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                     level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
                     circuit: tag.clone(),
                     handle: h.hex(),
-                    kind: kind_of_tag(&t),
+                    kind: lum,
+                    kind_source: source,
+                    connection,
                     ..super::readers::ReadDevice::default()
                 });
                 *c.by_type.entry(t).or_default() += 1;
@@ -3179,6 +3216,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                         gang: String::new(),
                         drawn_at: None,
                         moved: String::new(),
+                        connection: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -3241,6 +3279,27 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                             let other = shared_rows.get(&t).map(|(sh, row)| (sh.as_str(), row));
                             resolve_mark(&mut dv, own.or(other), plumbing, sheet_texts, *tag_at);
                         }
+                        // A junction box tagged with a luminaire's type (and its circuit and
+                        // switch leg) is that luminaire's connection: a luminaire built into
+                        // casework or millwork, which the plan draws only as its box. Built as
+                        // that luminaire there, on that circuit (Q6354).
+                        let junction = super::readers::device_kind(&t).contains("junction") || dv.kind.contains("junction");
+                        if junction && electrical(&sheet) && kind.is_empty() {
+                            let others: Vec<cadaddy_geom::Vec2> = syms.iter().filter(|(_, _, oh, _)| oh != h).map(|(_, o, _, _)| *o).collect();
+                            let label_h = tag_at.map_or(DEFAULT_MARK_HEIGHT, |(_, lh)| lh);
+                            if let Some((m, label)) = junction_luminaire(*at, label_h, sheet_texts, &luminaire_mark, &sheet_numbers, &others) {
+                                let (lum, source) = luminaire_of(&m);
+                                if let Some(l) = label {
+                                    dv.circuit = l;
+                                }
+                                dv.connection = junction_connection(&sheet, &t, &m, &dv.circuit);
+                                dv.tag = m;
+                                dv.kind = lum;
+                                dv.kind_source = source;
+                                dv.ifc_class = "IfcLightFixture".into();
+                            }
+                        }
+                        let t = dv.tag.clone();
                         let k = if dv.kind.is_empty() { super::readers::device_kind(&t).to_string() } else { dv.kind.clone() };
                         // A low-voltage outlet carries no branch circuit: a circuit label read by
                         // it is a power device's drawn with it (the import may make one symbol of
@@ -3341,12 +3400,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
         // read beside it: a luminaire there on that circuit. The mark as the schedule prints it:
         // a lower-case letter is a switch leg (`d` of `Q-11 d,e`), never a fixture type.
         if electrical(&sheet) && kind.is_empty() {
-            let luminaire = |v: &str| {
-                job.luminaire_types
-                    .iter()
-                    .chain(&job.wall_luminaire_types)
-                    .any(|l| l.trim().eq_ignore_ascii_case(v) && !v.chars().any(|c| c.is_ascii_lowercase()))
-            };
+            let luminaire = |v: &str| luminaire_mark(v);
             let sheet_texts: &[TextItem] = texts.get(g).map_or(&[][..], Vec::as_slice);
             // The labels the read symbols carry as their tags: each is its own device's (one label
             // names one device), never a mark's beside it.
@@ -3392,14 +3446,27 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                 let tag = t.value.trim().to_ascii_uppercase();
                 // The whole label: its circuit numbers and the switch leg printed after them.
                 let circuit = label_circuit(&label.value);
+                let (lum, source) = luminaire_of(&tag);
+                // A junction box lettered by the mark and its label (`J` in its circle, no symbol
+                // made of it): the luminaire's connection there, the luminaire built into
+                // casework or millwork (Q6354).
+                let jbox = sheet_texts
+                    .iter()
+                    .filter(|x| junction_lettering(&x.value) && x.at.dist(spot) <= reach && !legend.covers(x.at))
+                    .min_by(|a, b| a.at.dist(spot).total_cmp(&b.at.dist(spot)));
+                let connection = jbox.map(|x| junction_connection(&sheet, x.value.trim(), &tag, &circuit)).unwrap_or_default();
+                // Between the mark and its circuit label: where the symbol is drawn (the box,
+                // when lettered).
+                let at = jbox.map_or([spot.x, spot.y], |x| [x.at.x, x.at.y]);
                 lone.push(super::readers::ReadDevice {
                     tag: tag.clone(),
-                    // Between the mark and its circuit label: where the symbol is drawn.
-                    at: [(t.at.x + label.at.x) / 2.0, (t.at.y + label.at.y) / 2.0],
+                    at,
                     sheet: sheet.clone(),
                     level: job.level_at([t.at.x, t.at.y]).map_or_else(String::new, |r| r.level.clone()),
                     circuit,
-                    kind: kind_of_tag(&tag),
+                    kind: lum,
+                    kind_source: source,
+                    connection,
                     ..super::readers::ReadDevice::default()
                 });
             }
@@ -4460,6 +4527,129 @@ const LONE_SYMBOL_H: f64 = 2.0;
 const TAKEN_LABEL_EPS: f64 = 0.05;
 /// Most luminaires one sheet's lone marks add.
 const MAX_LONE_MARKS: usize = 2_000;
+/// The casework luminaires among `groups` (devices placed on their level's plan, `upi` drawing
+/// units per inch) laid out by the casework details on the job's architectural and interiors
+/// sheets ([`super::caseworklights`]).
+fn casework_luminaires(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    groups: &mut [&mut [super::readers::ReadDevice]],
+    upi: f64,
+) -> super::caseworklights::Laid {
+    let mut marks: Vec<String> = groups
+        .iter()
+        .flat_map(|g| g.iter())
+        .filter(|dv| !dv.connection.trim().is_empty() && dv.kind.contains("luminaire"))
+        .map(|dv| dv.tag.trim().to_ascii_uppercase())
+        .collect();
+    marks.sort();
+    marks.dedup();
+    if marks.is_empty() {
+        return super::caseworklights::Laid::default();
+    }
+    let architecture = |number: &str| {
+        let n = number.split('/').next().unwrap_or(number).trim();
+        let discipline = job
+            .sheet_regions
+            .iter()
+            .find(|r| r.number.eq_ignore_ascii_case(n))
+            .map_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(n), |r| r.discipline.clone());
+        cadaddy_mepfix::wordrules::words("casework.detail_disciplines").iter().any(|w| discipline.trim().eq_ignore_ascii_case(w))
+    };
+    let sheets: Vec<(String, u64, u64)> =
+        job.sheet_spans.iter().filter(|sp| architecture(&sp.sheet)).map(|sp| (sp.sheet.clone(), sp.lo, sp.hi)).collect();
+    let reads = super::caseworklights::read_details(d, &sheets, &marks);
+    let mut total = super::caseworklights::Laid::default();
+    for g in groups.iter_mut() {
+        let laid = super::caseworklights::lay_out(g, &reads, upi);
+        total.luminaires += laid.luminaires;
+        total.heights += laid.heights;
+        total.moved += laid.moved;
+        for m in laid.undimensioned {
+            if !total.undimensioned.contains(&m) {
+                total.undimensioned.push(m);
+            }
+        }
+    }
+    total
+}
+
+/// A junction box's lettering (`J` in its circle) within this many of a symbol's label heights
+/// of it is that symbol's: the symbol is the box.
+const JUNCTION_LETTER_H: f64 = 1.0;
+/// How far from a junction box its luminaire's type mark and label are printed, in the label's
+/// heights (beside or over the box, as a luminaire's mark is by its symbol).
+const JUNCTION_MARK_REACH_H: f64 = 4.0;
+
+/// Whether `text` is a junction box's lettering: a mark the rules data names a junction box
+/// (`devices.kind_by_mark`: `J`, `JB`).
+fn junction_lettering(text: &str) -> bool {
+    super::readers::device_kind(text).contains("junction")
+}
+
+/// What a luminaire built at a junction box says of it: the box its plan draws, the type and
+/// circuit printed by it, and the rule.
+fn junction_connection(sheet: &str, mark: &str, luminaire: &str, circuit: &str) -> String {
+    let on = if circuit.trim().is_empty() { String::new() } else { format!(" on {}", circuit.trim()) };
+    format!(
+        "{sheet} draws a junction box ({}) tagged with luminaire type {}{on}: the connection of a luminaire built into casework or millwork, built as that luminaire there",
+        mark.trim(),
+        luminaire.trim()
+    )
+}
+
+/// The luminaire a junction box at `at` is the connection of: the luminaire type mark printed by
+/// it (within [`JUNCTION_MARK_REACH_H`] of its label height `h`, no other symbol nearer), as its
+/// own text (`X3` over `K-4,b`) or the first word of one text with its label (`X3 K-4,b`), with
+/// that circuit label (circuit and switch leg) when one is printed with the mark. None when no
+/// luminaire mark is printed by it.
+fn junction_luminaire(
+    at: cadaddy_geom::Vec2,
+    h: f64,
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    luminaire: &dyn Fn(&str) -> bool,
+    sheet_numbers: &BTreeSet<String>,
+    others: &[cadaddy_geom::Vec2],
+) -> Option<(String, Option<String>)> {
+    let h = if h.is_finite() && h > 0.0 { h } else { DEFAULT_MARK_HEIGHT };
+    let reach = JUNCTION_MARK_REACH_H * h;
+    let mine = |p: cadaddy_geom::Vec2| p.dist(at) <= reach && !others.iter().any(|o| o.dist(p) < p.dist(at));
+    let mut best: Option<(f64, String, Option<String>)> = None;
+    for t in texts.iter().filter(|t| mine(t.at)) {
+        let v = t.value.trim();
+        let found = if luminaire(v) {
+            // Its label: a circuit printed under the mark, lettered alike.
+            let label = texts
+                .iter()
+                .filter(|o| {
+                    let dy = t.at.y - o.at.y;
+                    circuit_text(&o.value, sheet_numbers)
+                        && dy > 0.3 * t.height
+                        && dy <= MARK_OVER_LABEL_H * t.height.max(o.height)
+                        && (o.at.x - t.at.x).abs() <= 2.0 * t.height.max(o.height)
+                        && t.height <= LONE_MARK_SIZE * o.height
+                        && o.height <= LONE_MARK_SIZE * t.height
+                })
+                .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
+                .map(|o| label_circuit(&o.value));
+            Some((v.to_ascii_uppercase(), label))
+        } else {
+            // One text holding the mark and its label.
+            let mut words = v.split(|c: char| c.is_whitespace() || c == '/').filter(|w| !w.is_empty());
+            match (words.next(), words.collect::<Vec<_>>().join(" ")) {
+                (Some(m), rest) if luminaire(m) && circuit_text(&rest, sheet_numbers) => Some((m.to_ascii_uppercase(), Some(label_circuit(&rest)))),
+                _ => None,
+            }
+        };
+        if let Some((m, label)) = found {
+            let d = t.at.dist(at);
+            if best.as_ref().is_none_or(|(bd, _, _)| d < *bd) {
+                best = Some((d, m, label));
+            }
+        }
+    }
+    best.map(|(_, m, l)| (m, l))
+}
 /// A circuit label read by a low-voltage outlet is printed within this many of its heights of the
 /// outlet's symbol.
 const FUSED_LABEL_REACH_H: f64 = 10.0;
@@ -6188,6 +6378,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let side_by_side = side_by_side + gang_together(&mut out, upf_dev);
                 if side_by_side > 0 {
                     progress_line(&format!("  devices a keynote gangs set side by side in their box: {side_by_side}"));
+                }
+                // The luminaires built into casework (their plans draw only their junction
+                // boxes): laid along their casework at the heights and distances the
+                // architecture's casework details dimension (Q6354).
+                let laid = casework_luminaires(s.doc()?, job, &mut [&mut out[..], &mut stamped[..]], upf_dev / 12.0);
+                if laid.luminaires > 0 {
+                    progress_line(&format!(
+                        "  casework luminaires (built at their junction boxes): {}; heights from the architecture's casework details {}, laid along their casework {}; types no detail dimensions {:?}",
+                        laid.luminaires, laid.heights, laid.moved, laid.undimensioned
+                    ));
                 }
                 // An electrical tag naming mechanical equipment (EF, PTAC) is its connection: at
                 // the equipment the room's mechanical plan puts there, not a device of its own.
@@ -28947,6 +29147,186 @@ mod tests {
         // The `H` over `K-1,a` is a fixture of its own beside the receptacle.
         let by_mark = job.devices.iter().filter(|d| d.tag == "H" && d.at[0] > 1100.0).count();
         assert_eq!(by_mark, 1, "{:?}", job.devices);
+    }
+
+    /// Q6354: an enlarged electrical plan draws the luminaires built into casework only as their
+    /// junction boxes, each tagged with its luminaire type, circuit and switch leg; the type is
+    /// in the set's fixture schedule but has no cut sheet among the submittals (the millwork
+    /// maker supplies it). Each box is that luminaire, on that circuit, its connection said: the
+    /// box symbol tagged `J` with the type over its label beside it, a box symbol the import
+    /// tagged with its circuit (`J` lettered in it, the type over it), and a box with the type
+    /// and label in one text. A receptacle stays one; a ceiling luminaire is no casework's.
+    #[test]
+    fn a_junction_box_tagged_with_a_luminaire_type_is_that_luminaire_built_into_casework() {
+        let mut s = crate::Session::new();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 9000, 2000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [
+            {"number": "E-0", "discipline": "E", "sheet_type": "legend", "level": ""},
+            {"number": "E-1", "discipline": "E", "sheet_type": "plan", "level": "1"}
+        ]}));
+        job.sheets_loaded = true;
+        // The submittals' luminaires: the downlight only.
+        job.luminaire_types = vec!["H".into()];
+        // The fixture schedule (E-0): the downlight and the strip light in the millwork.
+        let schedule: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHT FIXTURE SCHEDULE", 2250.0, 800.0, 8.0),
+            ("FIXTURE", 2005.0, 780.0, 5.0),
+            ("DESCRIPTION", 2045.0, 780.0, 5.0),
+            ("MANUFACTURER", 2125.0, 780.0, 5.0),
+            ("H", 2005.0, 765.0, 4.0),
+            ("LED DOWNLIGHT", 2045.0, 765.0, 4.0),
+            ("MAKER ONE", 2125.0, 765.0, 4.0),
+            ("X3", 2005.0, 753.0, 4.0),
+            ("LED STRIP IN MILLWORK", 2045.0, 753.0, 4.0),
+            ("MAKER TWO", 2125.0, 753.0, 4.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &schedule, &[]);
+        let line = |a: (f64, f64), b: (f64, f64)| cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) };
+        let mut lines: Vec<cadaddy_doc::Line> = [790.0, 772.0, 760.0, 748.0].map(|y| line((2000.0, y), (2200.0, y))).to_vec();
+        lines.extend([2000.0, 2040.0, 2120.0, 2200.0].map(|x| line((x, 790.0), (x, 748.0))));
+        if let Ok(d) = s.doc_mut() {
+            for l in lines {
+                d.add(&Space::Model, Common::default(), EntityKind::Line(l)).ok();
+            }
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-0".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [1900.0, 600.0, 2700.0, 1000.0], ..region("E-0", "", "E", "legend", 1900.0) });
+        // The enlarged plan (E-1), lettering 2 high. Box 1: a `J` symbol at (3300, 500), `X3` over
+        // `K-4,b` beside it. Box 2: a symbol the import tagged `K-6,b` at (3700, 500), `J` lettered
+        // in it, `X3` over it. Box 3: a `J` symbol at (4100, 500), `X3 K-12,b` beside it. A
+        // receptacle `K-8` at (4500, 500); a downlight `H` over `K-2,a` at (4900, 500).
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("X3", 3306.0, 504.5, 2.0),
+            ("K-4,b", 3306.0, 502.0, 2.0),
+            ("J", 3700.0, 500.0, 2.0),
+            ("X3", 3700.0, 506.0, 2.0),
+            ("X3 K-12,b", 4106.0, 503.0, 2.0),
+            ("H", 4900.0, 504.5, 2.0),
+        ];
+        let syms: Vec<(&str, f64, f64)> =
+            vec![("J", 3300.0, 500.0), ("K-6,b", 3700.0, 500.0), ("J", 4100.0, 500.0), ("K-8", 4500.0, 500.0), ("K-2,a", 4900.0, 500.0)];
+        let lo = hi;
+        add_sheet(&mut s, &texts, &syms);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [3000.0, 0.0, 6000.0, 1000.0], ..region("E-1", "1", "E", "plan", 3000.0) });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let on_e1: Vec<_> = job.devices.iter().filter(|d| d.sheet == "E-1").collect();
+        let mut x3: Vec<(f64, String)> = on_e1.iter().filter(|d| d.tag == "X3").map(|d| (d.at[0], d.circuit.clone())).collect();
+        x3.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let circuits: Vec<&str> = x3.iter().map(|(_, c)| c.as_str()).collect();
+        assert_eq!(circuits, ["K-4,b", "K-6,b", "K-12,b"], "{on_e1:#?} {r:#}");
+        // At their boxes, one object each: no junction box beside, no receptacle on the label.
+        let xs: Vec<f64> = x3.iter().map(|(x, _)| *x).collect();
+        assert_eq!(xs, [3300.0, 3700.0, 4100.0], "{on_e1:#?}");
+        assert!(!on_e1.iter().any(|d| d.tag == "J" || d.kind.contains("junction")), "{on_e1:#?}");
+        let recs: Vec<&str> = on_e1.iter().filter(|d| d.kind == "receptacle").map(|d| d.circuit.as_str()).collect();
+        assert_eq!(recs, ["K-8"], "{on_e1:#?}");
+        for d in on_e1.iter().filter(|d| d.tag == "X3") {
+            assert_eq!(d.kind, "luminaire", "{d:?}");
+            assert!(d.kind_source.contains("LIGHT FIXTURE SCHEDULE") && d.kind_source.contains("MILLWORK"), "{d:?}");
+            assert!(d.connection.contains("junction box") && d.connection.contains("X3") && d.connection.contains("E-1"), "{d:?}");
+        }
+        let h = on_e1.iter().find(|d| d.tag == "H").unwrap_or_else(|| panic!("{on_e1:#?}"));
+        assert!(h.connection.is_empty() && h.kind == "luminaire", "{h:?}");
+        // In the model: mounted in the casework (not at the ceiling), the connection and where it
+        // stands said.
+        super::super::readers::place_devices(&mut s, &job.devices, "test").unwrap_or_else(|e| panic!("{e}"));
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(d.building_spec.as_deref().unwrap_or("")).unwrap_or_else(|e| panic!("{e}"));
+        let f = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).map(|v| v.value.clone()).unwrap_or_default();
+        let tags: Vec<_> = sp.tags.iter().filter(|t| f(t, "type") == "X3").collect();
+        assert_eq!(tags.len(), 3, "{:?}", sp.tags);
+        for t in &tags {
+            assert_eq!(f(t, "mount"), "casework", "{t:?}");
+            assert_eq!(f(t, "device_kind"), "luminaire", "{t:?}");
+            assert!(f(t, "connection").contains("junction box"), "{t:?}");
+            assert_eq!(f(t, "position_provenance"), "drawn", "{t:?}");
+        }
+        let h = sp.tags.iter().find(|t| f(t, "type") == "H").unwrap_or_else(|| panic!("{:?}", sp.tags));
+        assert_eq!(f(h, "mount"), "ceiling");
+    }
+
+    /// Q6354: the build lays the casework luminaires out by the casework detail an architectural
+    /// sheet draws (a counter's elevation: its dimension string from the end through each
+    /// fixture, a height note by the type's tag), the electrical plan's boxes diagrammatic; the
+    /// same detail on an electrical sheet is not the architect's and lays out nothing.
+    #[test]
+    fn the_build_lays_casework_luminaires_out_by_the_architectures_detail() {
+        let elevation = |s: &mut crate::Session, x0: f64| {
+            let Ok(d) = s.doc_mut() else { panic!("no drawing") };
+            let mut lines = Vec::new();
+            let y = -10.0;
+            lines.push(((x0 - 1.0, y), (x0 + 61.0, y)));
+            for x in [0.0, 6.0, 30.0, 54.0, 60.0] {
+                lines.push(((x0 + x - 0.5, y - 0.5), (x0 + x + 0.5, y + 0.5)));
+                lines.push(((x0 + x, y + 1.0), (x0 + x, 18.0)));
+            }
+            lines.push(((x0 + 30.5, 37.0), (x0 + 30.0, 21.0)));
+            for (a, b) in lines {
+                let l = cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) };
+                d.add(&Space::Model, Common::default(), EntityKind::Line(l)).ok();
+            }
+            for (v, x, yy) in [
+                ("6\"", 2.0, y + 0.4),
+                ("2'-0\"", 16.0, y + 0.4),
+                ("2'-0\"", 40.0, y + 0.4),
+                ("6\"", 55.5, y + 0.4),
+                ("X3", 30.0, 38.0),
+                ("42\" AFF", 33.0, 30.0),
+            ] {
+                d.add(&Space::Model, Common::default(), EntityKind::Text(text(v, x0 + x, yy, 1.5))).ok();
+            }
+        };
+        let casework = |x: f64| super::super::readers::ReadDevice {
+            tag: "X3".into(),
+            at: [x, 500.0],
+            kind: "luminaire".into(),
+            level: "Level 1".into(),
+            connection: "E-1 draws a junction box (J) tagged with luminaire type X3".into(),
+            ..Default::default()
+        };
+        for (discipline, laid_out) in [("A", true), ("E", false)] {
+            let mut s = crate::Session::new();
+            let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+            let lo = s.doc().map_or(0, |d| d.handseed);
+            elevation(&mut s, 0.0);
+            let hi = s.doc().map_or(0, |d| d.handseed);
+            job.sheet_spans.push(SheetSpan { sheet: "A-50".into(), lo, hi });
+            job.sheet_regions.push(SheetRegion { rect: [-100.0, -100.0, 200.0, 200.0], ..region("A-50", "", discipline, "detail", -100.0) });
+            // Three boxes drawn unevenly along a counter (1 unit = 1 inch), and a ceiling light.
+            let mut devices = vec![
+                casework(1000.0),
+                casework(1050.0),
+                casework(1070.0),
+                super::super::readers::ReadDevice { tag: "H".into(), at: [1030.0, 500.0], kind: "luminaire".into(), ..Default::default() },
+            ];
+            let laid = s.doc().map(|d| casework_luminaires(d, &job, &mut [&mut devices[..]], 1.0)).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(laid.luminaires, 3, "{laid:?}");
+            if !laid_out {
+                assert_eq!((laid.heights, laid.moved), (0, 0), "an electrical sheet's detail: {laid:?}");
+                assert_eq!(laid.undimensioned, vec!["X3".to_string()]);
+                assert!(devices.iter().all(|d| d.drawn_at.is_none() && d.aff_in.is_none()), "{devices:?}");
+                continue;
+            }
+            assert_eq!((laid.heights, laid.moved), (3, 3), "{laid:?}");
+            let mut xs: Vec<f64> = devices.iter().take(3).map(|d| (d.at[0] * 10.0).round() / 10.0).collect();
+            xs.sort_by(f64::total_cmp);
+            assert_eq!(xs.windows(2).map(|w| ((w[1] - w[0]) * 10.0).round() / 10.0).collect::<Vec<_>>(), vec![24.0, 24.0], "{xs:?}");
+            for d in devices.iter().take(3) {
+                assert_eq!(d.aff_in, Some(42.0), "{d:?}");
+                assert!(d.aff_note.contains("A-50"), "{d:?}");
+                assert!(d.moved.contains("A-50") && d.moved.contains("from the casework's end") && d.drawn_at.is_some(), "{d:?}");
+            }
+            assert_eq!(devices[3].at, [1030.0, 500.0], "the ceiling light stays");
+        }
     }
 
     /// A luminaire's label (its type mark over its circuit, `F` over `Q-3`) set clear of the light,

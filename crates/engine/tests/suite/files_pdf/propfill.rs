@@ -1111,3 +1111,39 @@ fn a_stamped_device_on_a_neighbours_wall_line_is_fed_from_its_units_panel() {
     let panel = find(&mut s, "equipment", json!({"type_mark": "LP1-102"}));
     assert_eq!(a["fed_from_handle"]["value"], json!(panel[0]), "its unit's panel: {a:#}");
 }
+
+/// Q6354: a luminaire built into casework (its plan draws only its junction box) stands in the
+/// casework at the height its casework detail gives, else at the rules' casework height: never
+/// hung from the ceiling, even drawn clear of every wall (a bar's or an island's casework).
+#[test]
+fn a_casework_luminaire_takes_its_details_height_and_is_never_hung_from_the_ceiling() {
+    let mut s = plan();
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = spec["tags"].as_array_mut() {
+        for (x, mark, symbol, height) in [(8.0, "X3", "1FA", Some("42")), (12.0, "X4", "1FB", None)] {
+            let mut l = device(x, 5.0, mark, "K-4,b", symbol);
+            l["fields"]["device_type"] = json!({"value": format!("luminaire {mark}"), "source": "plan"});
+            l["fields"]["device_kind"] = json!({"value": "luminaire", "source": "submittal"});
+            l["fields"]["mount"] = json!({"value": "casework", "source": "plan"});
+            l["fields"]["connection"] = json!({"value": "E-1 draws a junction box (J) tagged with luminaire type", "source": "plan"});
+            if let Some(h) = height {
+                l["fields"]["mount_height_in"] = json!({"value": h, "source": "note"});
+                l["fields"]["mount_height_note"] = json!({"value": "A-50 casework detail, luminaire X3: 3'-6\" AFF", "source": "note"});
+            }
+            t.push(l);
+        }
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    fill(&mut s);
+    let luminaire = |s: &mut Session, mark: &str| {
+        let hs = find(s, "light_fixture", json!({"type_mark": mark}));
+        assert_eq!(hs.len(), 1, "one luminaire {mark}: {hs:?}");
+        get(s, &hs[0])
+    };
+    let x3 = luminaire(&mut s, "X3");
+    assert_eq!(x3["mount_height"]["value"], json!(42.0), "its casework detail's height: {x3:#}");
+    let x4 = luminaire(&mut s, "X4");
+    assert_eq!(x4["mount_height"]["value"], json!(54.0), "the rules' casework height, not the ceiling: {x4:#}");
+    assert_eq!(x4["mount_height"]["source"]["kind"], "default", "never presented as read: {x4:#}");
+}
