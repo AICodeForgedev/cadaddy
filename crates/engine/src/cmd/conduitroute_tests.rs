@@ -279,6 +279,38 @@ fn a_truss_is_passed_between_its_chords_never_bored() {
     assert!(pass.iter().all(|h| h.dia_in == 0.0));
 }
 
+/// Q6314: a top floor's run across the roof trusses, a few feet in from their ends, goes up
+/// between the chords and straight across: a pass through an open web bores nothing, so it is
+/// no labor, and the run never goes round the trusses' ends (past the walls they bear on).
+#[test]
+fn a_run_across_trusses_by_their_ends_passes_their_webs_never_round_the_ends() {
+    // Trusses along y (y = -240 to 240) every 24" over a 100' floor, 112" to 136".
+    let members = (0..=50)
+        .map(|k| {
+            let x = 24.0 * f64::from(k);
+            (
+                Obs {
+                    handle: Handle(0x56),
+                    lo: Vec3::new(x - 0.75, -240.0, 112.0),
+                    hi: Vec3::new(x + 0.75, 240.0, 136.0),
+                    category: FRAMING.into(),
+                    system: "roof truss".into(),
+                    trade: "framing",
+                },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 1.5, truss: true },
+            )
+        })
+        .collect();
+    let field = Field::with_framing(Vec::new(), members, UPF);
+    // 6" in from the trusses' end (y = 240), across 49 of them; the first tier meets the chords.
+    let (a, b) = (Vec2::new(12.0, 234.0), Vec2::new(1188.0, 234.0));
+    let leg = route_leg(a, b, &[114.0, 124.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty(), "{leg:?}");
+    assert!(leg.pts.iter().all(|p| p.y <= 240.0 - 1.25), "never past the trusses' ends: {leg:?}");
+    assert_eq!(leg.z, vec![124.0], "between the chords: {leg:?}");
+    assert_eq!(leg.holes, 0, "a pass through a truss's web is no bored hole");
+}
+
 #[test]
 fn hostile_framing_never_panics() {
     let bad = vec![

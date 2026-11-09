@@ -897,7 +897,8 @@ pub(crate) struct Leg {
     pub pts: Vec<Vec2>,
     pub z: Vec<f64>,
     pub blocked: Vec<Blocked>,
-    /// The holes it bores through the framing (a cost: labor at each).
+    /// The holes it bores through the framing (a cost: labor at each); a pass through a truss's
+    /// web is none.
     pub holes: usize,
 }
 
@@ -912,7 +913,9 @@ fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[H
         let clear = |z: &f64| field.hit(*a, *b, *z, r, upf, skip, rl).is_none() && field.framing(*a, *b, *z, r, upf, rl).is_ok();
         match tiers.iter().copied().find(clear) {
             Some(z) => {
-                leg.holes += field.framing(*a, *b, z, r, upf, rl).map_or(0, |h| h.len());
+                // A pass through a truss's open web bores nothing: only bored holes are labor
+                // (Q6314: counted, a top floor's runs went round the trusses' ends, past the walls).
+                leg.holes += field.framing(*a, *b, z, r, upf, rl).map_or(0, |h| h.iter().filter(|h| h.dia_in > 0.0).count());
                 leg.z.push(z);
             }
             None => {
