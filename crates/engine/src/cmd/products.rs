@@ -1043,7 +1043,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut changes: Vec<(Handle, props::Props)> = Vec::new();
     let mut by_kind: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
     for (e, base) in super::elemprops::elements(d).take(MAX_ELEMENTS) {
-        if !matches!(base.as_str(), "device" | "light_fixture" | "fixture" | "equipment") {
+        if !matches!(base.as_str(), "device" | "light_fixture" | "plumbing_fixture" | "fixture" | "equipment") {
             continue;
         }
         let mut store = props::read(&e.common.xdata);

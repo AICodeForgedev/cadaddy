@@ -725,7 +725,8 @@ pub(crate) fn receptacles_inside(fits: &[Fit], devices: &[ReadDevice], upf: f64,
 
 /// Each fit onto the model's plumbing fixture it is (its symbol, where it is): where its tag put
 /// it (`tag_at_ft`), what it sits on (`position_provenance`: `drawn`, or `inferred` at its tag)
-/// and why (`position_basis`). The fixtures written.
+/// and why (`position_basis`); a drawn one's outline size (`drawn_size_in`, its body). The
+/// fixtures written.
 pub(crate) fn record(sp: &mut cadaddy_walk3d::BuildingSpec, fits: &[Fit]) -> usize {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let mut by: BTreeMap<&str, Vec<&Fit>> = BTreeMap::new();
@@ -743,6 +744,14 @@ pub(crate) fn record(sp: &mut cadaddy_walk3d::BuildingSpec, fits: &[Fit]) -> usi
         t.set("tag_at_ft", format!("{:.2}, {:.2}", f.tag_at[0] / upf, f.tag_at[1] / upf), "plan");
         t.set("position_provenance", f.provenance, if f.provenance == "drawn" { "plan" } else { "rule" });
         t.set("position_basis", f.basis.clone(), if f.provenance == "drawn" { "plan" } else { "rule" });
+        // The drawn fixture's size (inches along plan x and y): the body the build makes it
+        // (Q6315), drawn.
+        if let Some([x0, y0, x1, y1]) = f.outline.filter(|_| f.provenance == "drawn") {
+            let (w, h) = ((x1 - x0).abs() / upf * 12.0, (y1 - y0).abs() / upf * 12.0);
+            if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
+                t.set("drawn_size_in", format!("{w:.1}, {h:.1}"), "plan");
+            }
+        }
         n += 1;
     }
     n
@@ -973,11 +982,13 @@ mod tests {
             at: [22.0, 14.5],
             provenance: "drawn",
             basis: "on the water closet A-1 draws".into(),
-            outline: None,
+            outline: Some([12.0, 0.5, 32.0, 29.0]),
             level: String::new(),
             family: "water closet".into(),
         };
         assert_eq!(record(&mut sp, &[fit]), 1);
+        let drawn = sp.tags.first().and_then(|t| t.fields.get("drawn_size_in")).map(|f| f.value.clone());
+        assert_eq!(drawn.as_deref(), Some("20.0, 28.5"), "the drawn outline's size, for its body");
         let f = |k: &str| sp.tags.first().and_then(|t| t.fields.get(k)).map(|f| (f.value.clone(), f.source.clone()));
         assert_eq!(f("tag_at_ft"), Some(("2.00, 5.00".to_string(), "plan".to_string())));
         assert_eq!(f("position_provenance"), Some(("drawn".to_string(), "plan".to_string())));

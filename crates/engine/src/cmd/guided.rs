@@ -16110,7 +16110,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         let kind = super::elemprops::reported_kind(e, base.clone());
         let is_lum = matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture");
         let is_ctl = matches!(kind.as_str(), "switch" | "3way_switch" | "dimmer" | "occupancy_sensor");
-        if !is_lum && !is_ctl && !matches!(base.as_str(), "device" | "equipment" | "fixture") {
+        if !is_lum && !is_ctl && !super::elemprops::is_device_kind(&base) && base != "equipment" {
             continue;
         }
         let mut store = props::read(&e.common.xdata);
@@ -33461,7 +33461,8 @@ mod tests {
         super::super::readers::place_devices(&mut s, &devices, "test").unwrap_or_else(|e| panic!("{e}"));
         super::super::propfill::rebuild_devices(&mut s, "test").unwrap_or_else(|e| panic!("{e}"));
         super::super::propfill::fill(&mut s, false).unwrap_or_else(|e| panic!("{e}"));
-        let found = s.execute("bim.props.find", &json!({"kind": "device"})).unwrap_or_else(|e| panic!("{e}"));
+        // (A water closet is a plumbing fixture element, Q6315.)
+        let found = s.execute("bim.props.find", &json!({"kind": "plumbing_fixture"})).unwrap_or_else(|e| panic!("{e}"));
         let got = s.execute("bim.props.get", &json!({"handles": found["handles"]})).unwrap_or_else(|e| panic!("{e}"));
         let els = got["elements"].as_array().cloned().unwrap_or_default();
         assert_eq!(els.len(), 2, "{got:#}");

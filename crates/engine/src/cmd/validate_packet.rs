@@ -1232,7 +1232,7 @@ struct BuiltPart {
 /// there are more than [`MAX_BUILT`] (a dense floor's raceway pieces), so a part in the area is
 /// never left out for one farther off that came first in the drawing.
 fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach: f64, kinds: &Kinds) -> Vec<BuiltPart> {
-    const MEP_KINDS: [&str; 7] = ["duct", "pipe", "conduit", "equipment", "fixture", "device", "light_fixture"];
+    const MEP_KINDS: [&str; 8] = ["duct", "pipe", "conduit", "equipment", "fixture", "device", "light_fixture", "plumbing_fixture"];
     let upf = frame.upf();
     let floor = sp.level(&area.level).map_or(0.0, |l| l.elevation_ft) * upf;
     let r = grow(area.bbox, reach);

@@ -613,7 +613,7 @@ pub(super) fn plan(pen: &mut Pen, ctx: &PlanCtx, items: &[&Item], kind: PlanKind
                 pipe(pen, ctx, it, "P-PIPE");
             }
             pen.layer("P-FIXT");
-            for it in mine.iter().filter(|it| it.kind == "fixture" || it.kind == "device") {
+            for it in mine.iter().filter(|it| matches!(it.kind.as_str(), "fixture" | "plumbing_fixture" | "device")) {
                 outline(pen, f, it, 0.12);
                 pen.count("fixtures");
                 if let Some(t) = it.first(&["type_mark", "tag", "type"]) {
@@ -909,7 +909,7 @@ pub(super) fn section(d: &Drawing, items: &[Item], line: &Upright, depth: f64) -
     let mut out = UprightDrawing::default();
     let mut beyond = HashSet::new();
     for it in items {
-        if matches!(it.kind.as_str(), "device" | "light_fixture" | "fixture" | "conduit") {
+        if matches!(it.kind.as_str(), "device" | "light_fixture" | "plumbing_fixture" | "fixture" | "conduit") {
             continue;
         }
         let Some((s0, s1)) = line.cut(&it.hull) else {

@@ -28,7 +28,7 @@ const MAX_ELEMENTS: usize = 500_000;
 /// Marks listed in a report.
 const MAX_LISTED: usize = 200;
 /// The element kinds a submittal product goes on (doors and walls have type marks of their own).
-const PRODUCT_KINDS: &[&str] = &["device", "light_fixture", "fixture", "equipment"];
+const PRODUCT_KINDS: &[&str] = &["device", "light_fixture", "plumbing_fixture", "fixture", "equipment"];
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
