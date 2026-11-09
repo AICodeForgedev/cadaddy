@@ -1562,7 +1562,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let highest = if documented_height && storey_in.is_finite() { storey_in.max(WALL_BOX_FT * 12.0 + 12.0) } else { WALL_BOX_FT * 12.0 + 12.0 };
         // (A box its keynote puts low in the wall under a unit is still in the wall.)
         let low_in_wall = documented_height && field(t, "placement").is_some();
-        let on_wall = wall_kind && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
+        // A connection set at its unit (a roof unit's: `connection to HP-7 at the unit`) is on
+        // the unit, in no wall.
+        let at_unit = field(t, "mount_height_note").is_some_and(|n| n.starts_with("connection to") && n.contains("at the unit"));
+        let on_wall = wall_kind && !at_unit && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
@@ -2853,16 +2856,21 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                             })
                             .filter(|(k, _)| !k.starts_with("SOURCE "))
                             .collect();
+                        let sched = equipment
+                            .get(&tag.to_ascii_uppercase())
+                            .and_then(|q| q.sources.get("schedule").or_else(|| q.sources.values().next()).cloned())
+                            .unwrap_or_else(|| "equipment schedule".into());
                         if let Some((v, unit)) = capacity_of(&rows) {
-                            let sched = equipment
-                                .get(&tag.to_ascii_uppercase())
-                                .and_then(|q| q.sources.get("schedule").or_else(|| q.sources.values().next()).cloned())
-                                .unwrap_or_else(|| "equipment schedule".into());
                             let mut p = Prop::new(v, Source::from_doc(SourceKind::Schedule, &sched));
                             if !unit.is_empty() {
                                 p = p.with_unit(&unit);
                             }
                             put(&mut store, "capacity", p, tally);
+                        }
+                        // Its schedule row's model (Q6313: the equipment schedule names each
+                        // unit's product, a roof heat pump's as a fan's).
+                        if let Some((_, m)) = rows.iter().find(|(k, v)| k.trim().eq_ignore_ascii_case("MODEL") && !v.trim().is_empty()) {
+                            put(&mut store, "model", Prop::new(m.trim().to_string(), Source::from_doc(SourceKind::Schedule, &sched)), tally);
                         }
                         if let Some(r) = room_at(&rooms, lvl, b.center()) {
                             put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()), tally);

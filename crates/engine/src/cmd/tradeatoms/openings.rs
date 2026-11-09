@@ -381,7 +381,7 @@ fn firestops(d: &Drawing, sp: &BuildingSpec, r: &Rules, batch: &mut Batch, upf: 
                 p.ty = "floor (its rating not read)".into();
                 p = p.computed("penetrant", kind.clone()).computed("riser_level", level.clone());
                 p.touches = vec![*h];
-                let at = Vec2::new(a.x, a.y);
+                let at = on_floor(sp, level, name, Vec2::new(a.x, a.y));
                 let r0 = 3.0 * k;
                 p.blocks.push(Block::new(at - Vec2::new(r0, 0.0), at + Vec2::new(r0, 0.0), 2.0 * r0, z - r0, z + r0));
                 batch.push(p);
@@ -395,9 +395,62 @@ fn firestops(d: &Drawing, sp: &BuildingSpec, r: &Rules, batch: &mut Batch, upf: 
     let _ = made;
 }
 
+/// A riser's spot on the plan of a floor it passes, where that floor's firestop goes: each
+/// level's plan is drawn in its own place, so the riser's spot moves from its own level's plan
+/// origin to the floor's (their base points, else their plan regions' corners; a roof with no
+/// plan of its own takes the storey's under it). Levels with no such origin share one plan: the
+/// spot stays (Q6313: a roof unit's line set dropping to a unit below put its floors' firestops
+/// thousands of feet off the building).
+fn on_floor(sp: &BuildingSpec, riser_level: &str, floor: &str, at: Vec2) -> Vec2 {
+    match super::super::schedequip::origins(sp, riser_level, floor) {
+        Some((from, to)) if from.iter().chain(to.iter()).all(|v| v.is_finite()) => Vec2::new(at.x - from[0] + to[0], at.y - from[1] + to[1]),
+        _ => at,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A riser drawn on the first floor's plan, through the floors drawn beside it: each floor's
+    /// firestop is on that floor's plan at the riser's spot, the roof's (no plan of its own) on
+    /// the top storey's; levels sharing one plan leave it where it is.
+    #[test]
+    fn a_risers_floor_firestop_is_on_the_floors_own_plan() {
+        let lv = |name: &str, el: f64, x0: f64, base: Option<[f64; 2]>| cadaddy_walk3d::Level {
+            name: name.into(),
+            elevation_ft: el,
+            height_ft: 10.0,
+            ceiling_ft: 8.0,
+            region: Some([x0, 0.0, x0 + 1000.0, 800.0]),
+            base,
+            attr: None,
+            sheet: None,
+        };
+        let sp = BuildingSpec {
+            levels: vec![
+                lv("Level 1", 0.0, 0.0, Some([100.0, 50.0])),
+                lv("Level 2", 10.0, 5000.0, Some([5100.0, 60.0])),
+                lv("Roof", 20.0, 5000.0, None),
+            ],
+            ..Default::default()
+        };
+        let at = Vec2::new(400.0, 300.0);
+        let l2 = on_floor(&sp, "Level 1", "Level 2", at);
+        assert!((l2.x - 5400.0).abs() < 1e-9 && (l2.y - 310.0).abs() < 1e-9, "{l2:?}");
+        let roof = on_floor(&sp, "Level 1", "Roof", at);
+        assert!((roof.x - 5400.0).abs() < 1e-9 && (roof.y - 310.0).abs() < 1e-9, "{roof:?}");
+        assert_eq!(on_floor(&sp, "Level 1", "Level 1", at), at);
+        // One plan for every level (no regions, no base points): where it is.
+        let mut one = sp.clone();
+        for l in &mut one.levels {
+            l.region = None;
+            l.base = None;
+        }
+        assert_eq!(on_floor(&one, "Level 1", "Level 2", at), at);
+        // A riser of no known level: where it is.
+        assert_eq!(on_floor(&sp, "", "Level 2", at), at);
+    }
 
     #[test]
     fn schedule_sizes_read() {
