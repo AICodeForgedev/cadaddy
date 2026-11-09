@@ -436,7 +436,7 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
     let walls = super::bspec::room_plan(plan)?;
     let walls = walls.as_ref().unwrap_or(plan);
     let mut out = Vec::new();
-    let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
+    let tagged = super::bspec::tags_carry_labels(sp, &ents);
     // The plan's outlines are made once for every tag (not once per tag: 60k objects).
     let mut cache = None;
     for (h, t, at) in room_texts(sp, &ents) {

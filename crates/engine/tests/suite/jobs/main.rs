@@ -15,6 +15,7 @@ mod archbuild;
 mod arexport;
 mod asbuilt;
 mod autospec;
+mod ocrreviewtags;
 mod bimux_rw1;
 mod bimwork;
 mod bimwork_levels;
