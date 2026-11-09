@@ -582,6 +582,9 @@ pub struct SheetScale {
     pub scale: f64,
     /// What the import says the scale came from.
     pub source: String,
+    /// The sheet's paper size (inches, width × height), when the import reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper: Option<[f64; 2]>,
 }
 
 impl SheetScale {
@@ -609,6 +612,65 @@ impl SheetScale {
     }
 }
 
+/// A plan read at another scale than the set's other plans of its paper size (Q6395).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OffSetScale {
+    pub sheet: String,
+    /// The scale it was read at, and how.
+    pub scale: f64,
+    pub how: &'static str,
+    /// The scale the set's other plans of its paper size share, and how many do.
+    pub set_scale: f64,
+    pub set_sheets: usize,
+}
+
+/// How closely (relative) two sheets' scales, or paper sizes, must agree to be the same.
+const SET_SCALE_AGREE: f64 = 0.01;
+
+/// The floor plans read at another scale than the set's other floor plans of the same paper
+/// size: a set draws its floor plans at one scale, so a plan that comes in at another (a scale
+/// note misread, two dimension strings taken for one) is a different size from the rest. Only
+/// where at least two other plans agree on one scale and it is the most common; a scale the job
+/// was given is the user's.
+pub fn plans_off_set_scale(scales: &[SheetScale]) -> Vec<OffSetScale> {
+    let same = |a: f64, b: f64| (a / b - 1.0).abs() <= SET_SCALE_AGREE;
+    let plans: Vec<(&SheetScale, [f64; 2])> = scales
+        .iter()
+        .filter(|sc| sc.kind == "plan" && sc.how() != "given" && sc.scale.is_finite() && sc.scale > 0.0)
+        .filter_map(|sc| {
+            let [w, h] = sc.paper?;
+            (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((sc, [w.max(h), w.min(h)]))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (sc, paper) in &plans {
+        let peers: Vec<&SheetScale> =
+            plans.iter().filter(|(o, p)| !std::ptr::eq(*o, *sc) && same(p[0], paper[0]) && same(p[1], paper[1])).map(|(o, _)| *o).collect();
+        // the peers' most common scale
+        let Some((set_scale, n)) = peers
+            .iter()
+            .map(|a| (a.scale, peers.iter().filter(|b| same(b.scale, a.scale)).count()))
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.total_cmp(&a.0)))
+        else {
+            continue;
+        };
+        let with_it = peers.iter().filter(|b| same(b.scale, sc.scale)).count() + 1;
+        if n >= 2 && !same(sc.scale, set_scale) && n > with_it {
+            out.push(OffSetScale { sheet: sc.sheet.clone(), scale: sc.scale, how: sc.how(), set_scale, set_sheets: n });
+        }
+    }
+    out
+}
+
+/// `P-3 at 25x (note) against 96x on 2 other plans`, for a finding or a warning.
+fn off_set_scale_list(off: &[OffSetScale]) -> String {
+    off.iter()
+        .take(MAX_QUESTIONS_PER_STAGE)
+        .map(|o| format!("{} at {}x ({}) against {}x on {} other plan(s) of its paper size", o.sheet, o.scale, o.how, o.set_scale, o.set_sheets))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// The report's sheet scales: how many sheets' scales were read each way, and the plans left at
 /// paper size.
 fn sheet_scales_report(job: &GuidedJob) -> Value {
@@ -618,7 +680,11 @@ fn sheet_scales_report(job: &GuidedJob) -> Value {
     }
     let paper: Vec<&str> = job.sheet_scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.as_str()).collect();
     let at_scale = job.sheet_scales.iter().filter(|sc| sc.scale > 1.0).count();
-    json!({"sheets": job.sheet_scales.len(), "at_real_scale": at_scale, "by": by, "plans_at_paper_size": paper})
+    let off: Vec<Value> = plans_off_set_scale(&job.sheet_scales)
+        .iter()
+        .map(|o| json!({"sheet": o.sheet, "scale": o.scale, "how": o.how, "set_scale": o.set_scale, "set_sheets": o.set_sheets}))
+        .collect();
+    json!({"sheets": job.sheet_scales.len(), "at_real_scale": at_scale, "by": by, "plans_at_paper_size": paper, "plans_off_set_scale": off})
 }
 
 /// An imported sheet's rectangle in the job's drawing.
@@ -2160,6 +2226,10 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                     kind: kind(sh),
                     scale: rep.get("scale").and_then(Value::as_f64).unwrap_or(1.0),
                     source: rep.get("scaleSource").and_then(Value::as_str).unwrap_or("").chars().take(240).collect(),
+                    paper: rep.get("sheet").and_then(Value::as_array).and_then(|a| match a.as_slice() {
+                        [w, h] => Some([w.as_f64()?, h.as_f64()?]),
+                        _ => None,
+                    }),
                 });
                 let rect = rep.get("rect").and_then(Value::as_array).and_then(|r| {
                     let v: Vec<f64> = r.iter().filter_map(Value::as_f64).collect();
@@ -2216,6 +2286,25 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     // A plan left at paper size (no scale note, none in its lettering, no dimension strings that
     // agree) can't be measured: a finding, never silent.
     let paper: Vec<String> = scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.clone()).collect();
+    // A plan read at another scale than the set's other plans of its paper size comes in a
+    // different size from them (Q6395): a finding, never silent.
+    let off = plans_off_set_scale(&scales);
+    if !off.is_empty() {
+        let list = off_set_scale_list(&off);
+        s.echo(format!("guided: {} plan sheet(s) read at another scale than the set's other plans: {list}", off.len()));
+        job.add_finding(
+            stage,
+            &format!("{} plan sheet(s) read at another scale than the set's other plans of their paper size ({list})", off.len()),
+            "A plan at the wrong scale is built the wrong size: its rooms, walls, openings and devices come out that much too small or too large, and its level loses what falls outside",
+            4,
+            vec![
+                "Check the sheet's scale note as printed and give the sheet's scale".into(),
+                "Keep the scale read when the sheet really is drawn at another scale".into(),
+            ],
+            None,
+            false,
+        );
+    }
     job.sheet_scales = scales;
     if !paper.is_empty() {
         let list = paper.iter().take(MAX_QUESTIONS_PER_STAGE).cloned().collect::<Vec<_>>().join(", ");
@@ -27179,6 +27268,11 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
     if !paper.is_empty() {
         w.push(json!({"warning": "plans at paper size", "detail": format!("{} plan sheet(s) with no scale read (no scale note, no dimension strings that agree): {}", paper.len(), paper.join("; "))}));
     }
+    // Plans read at another scale than the set's other plans (Q6395).
+    let off = plans_off_set_scale(&job.sheet_scales);
+    if !off.is_empty() {
+        w.push(json!({"warning": "plan scale differs from the set", "detail": format!("{} plan sheet(s): {}", off.len(), off_set_scale_list(&off))}));
+    }
 
     // Auto-guard rejections (Q6021).
     let rejected: Vec<String> = job
@@ -34904,8 +34998,13 @@ mod tests {
     #[test]
     fn plans_left_at_paper_size_are_reported() {
         let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
-        let sc =
-            |sheet: &str, kind: &str, scale: f64, source: &str| SheetScale { sheet: sheet.into(), kind: kind.into(), scale, source: source.into() };
+        let sc = |sheet: &str, kind: &str, scale: f64, source: &str| SheetScale {
+            sheet: sheet.into(),
+            kind: kind.into(),
+            scale,
+            source: source.into(),
+            paper: None,
+        };
         job.sheet_scales = vec![
             sc("P-1", "plan", 96.0, "scale note 1/8\" = 1'-0\""),
             sc("P-2", "plan", 96.0, "scale note 1/8\" 1'-0\" (read from lettering drawn as shapes)"),
@@ -34927,6 +35026,45 @@ mod tests {
         // every plan read at a scale: no warning
         job.sheet_scales.retain(|sc| sc.sheet != "P-4");
         assert!(job_warnings(&job, None).iter().all(|w| w["warning"] != "plans at paper size"));
+    }
+
+    /// Q6395: a floor plan read at another scale than the set's other floor plans of its paper
+    /// size (a misread scale note: 25x where the rest are 96x) is a warning and in the report;
+    /// plans of another paper size, enlarged plans, a scale the job was given and a set with no
+    /// agreeing majority are not.
+    #[test]
+    fn a_plan_off_the_sets_scale_is_reported() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let sc = |sheet: &str, kind: &str, scale: f64, source: &str, paper: [f64; 2]| SheetScale {
+            sheet: sheet.into(),
+            kind: kind.into(),
+            scale,
+            source: source.into(),
+            paper: Some(paper),
+        };
+        let big = [42.0, 30.0];
+        job.sheet_scales = vec![
+            sc("P-1", "plan", 96.0, "scale note 1/8\" = 1'-0\"", big),
+            sc("P-2", "plan", 96.0, "scale note 1/8\" = 1'-0\"", [30.0, 42.0]),
+            sc("P-3", "plan", 25.0, "scale note 8\" 16'-8\"", big),
+            sc("P-4", "plan", 96.0, "dimension strings: 4 of 5 measured agree on 96x", big),
+            sc("P-5", "plan", 48.0, "option", big),
+            sc("P-6", "plan", 48.0, "scale note 1/4\" = 1'-0\"", [17.0, 11.0]),
+            sc("P-7", "enlarged_plan", 48.0, "scale note 1/4\" = 1'-0\"", big),
+        ];
+        let off = plans_off_set_scale(&job.sheet_scales);
+        assert_eq!(off.len(), 1, "{off:?}");
+        let o = off.first().expect("one plan off the set's scale");
+        assert_eq!((o.sheet.as_str(), o.scale, o.how, o.set_scale, o.set_sheets), ("P-3", 25.0, "note", 96.0, 3));
+        let warnings = job_warnings(&job, None);
+        let w = warnings.iter().find(|w| w["warning"] == "plan scale differs from the set").expect("a warning");
+        let detail = w["detail"].as_str().unwrap_or("");
+        assert!(detail.contains("P-3 at 25x") && detail.contains("against 96x"), "{detail}");
+        assert_eq!(sheet_scales_report(&job)["plans_off_set_scale"][0]["sheet"], json!("P-3"));
+        // two plans at two scales: no majority, no finding
+        job.sheet_scales.retain(|sc| sc.sheet == "P-1" || sc.sheet == "P-3");
+        assert!(plans_off_set_scale(&job.sheet_scales).is_empty());
+        assert!(job_warnings(&job, None).iter().all(|w| w["warning"] != "plan scale differs from the set"));
     }
 
     /// Q6037: auto-rejected questions are listed as open.
