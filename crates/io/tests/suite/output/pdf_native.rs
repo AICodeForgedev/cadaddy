@@ -661,6 +661,72 @@ fn a_symbols_tag_stays_where_it_was_printed() {
     }
 }
 
+#[test]
+fn the_sheets_own_number_is_never_a_symbols_tag() {
+    // Tagged diamonds as a plan prints them, and in the title block corner the sheet's number
+    // in 36 pt type with the same small mark beside it: the number stays a text (the sheet is
+    // read by it), not the TAG of one more symbol.
+    let diamond = |cx: i32, cy: i32, out: &mut Vec<u8>| {
+        let sz = 6;
+        out.extend_from_slice(
+            format!(
+                "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
+                cx,
+                cy - sz,
+                cx + sz,
+                cy,
+                cx + sz,
+                cy,
+                cx,
+                cy + sz,
+                cx,
+                cy + sz,
+                cx - sz,
+                cy,
+                cx - sz,
+                cy,
+                cx,
+                cy - sz,
+                cx - 3,
+                cy - 3,
+                cx + 3,
+                cy + 3,
+                cx - 3,
+                cy + 3,
+                cx + 3,
+                cy - 3
+            )
+            .as_bytes(),
+        );
+    };
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
+    for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
+        diamond(cx, cy, &mut content);
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (L4) Tj ET ", cx + 10, cy).as_bytes());
+    }
+    // Two marks of the sheet number's letter (view callouts: E2), as plans print beside their views.
+    for cx in [450, 550] {
+        diamond(cx, 300, &mut content);
+        content.extend_from_slice(format!("BT /F1 6 Tf {} 300 Td (E2) Tj ET ", cx + 10).as_bytes());
+    }
+    diamond(690, 40, &mut content);
+    content.extend_from_slice(b"BT /F1 36 Tf 700 30 Td (E101) Tj ET Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let tags: Vec<String> = r
+        .drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Insert(i) if i.block.starts_with("PDF-SYM-") => i.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(tags.iter().all(|t| t != "E101") && tags.len() >= 4, "symbol tags: {tags:?}");
+    let number_text = r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Text(t) if t.value.trim() == "E101"));
+    assert!(number_text, "the sheet number stays a text");
+}
+
 // -----------------------------------------------------------------------------------------
 // SHX OCR: stroke-template character recognition on sheets without hidden text
 // -----------------------------------------------------------------------------------------

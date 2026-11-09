@@ -190,6 +190,19 @@ fn printed_values_parse() {
     assert_eq!(kind_from_title("AIR DEVICE SCHEDULE"), Some(""));
     assert_eq!(kind_from_title("PLUMBING FIXTURE SCHEDULE"), Some(""));
     assert_eq!(kind_from_title("EQUIPMENT SCHEDULE"), None);
+    // A heat pump is no pump, a fan coil unit no fan, a packaged terminal unit no rooftop unit
+    // (the rules data's title words, before the reader's own).
+    assert_eq!(kind_from_title("HEAT PUMP SCHEDULE"), Some("heat_pump"));
+    assert_eq!(kind_from_title("FAN COIL UNIT SCHEDULE"), Some("fan_coil_unit"));
+    assert_eq!(kind_from_title("PACKAGED TERMINAL AIR CONDITIONER SCHEDULE"), Some("ptac"));
+    assert_eq!(kind_from_title("DEDICATED OUTDOOR AIR UNIT SCHEDULE"), Some("outdoor_air_unit"));
+    // The `DOOR` of `OUTDOOR` is no door schedule's; a door or window schedule still is none.
+    assert_eq!(kind_from_title("OUTDOOR AIR UNIT SCHEDULE"), Some("outdoor_air_unit"));
+    assert_eq!(kind_from_title("DOOR SCHEDULE"), Some(""));
+    assert_eq!(kind_from_title("DOORS AND FRAMES"), Some(""));
+    assert_eq!(kind_from_title("WINDOW SCHEDULE"), Some(""));
+    assert_eq!(kind_from_tag("HP-7"), Some("heat_pump"));
+    assert_eq!(kind_from_tag("OAU-2"), Some("outdoor_air_unit"));
 }
 
 // ---- Hand-made sheets ---------------------------------------------------------------------------

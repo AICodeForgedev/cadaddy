@@ -17,7 +17,7 @@
 //! Wall overlap is the area common to two convex footprints, clipped after I. E. Sutherland and
 //! G. W. Hodgman, "Reentrant Polygon Clipping", Communications of the ACM 17(1), 1974.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, Space};
@@ -592,23 +592,38 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             }
         }
     }
-    // Doors and windows of the plan that no wall took.
+    // Doors and windows of a storey's plan that no wall took. Only those the build reads: on a
+    // storey's plan, within its walls' extents (an opening on another sheet or view of the same
+    // building is that view's copy, not another door); and not those the build judged no door
+    // (a fixture's or furniture's arc) or the same opening as a built one.
     if !made.is_empty() {
+        let fates = super::wallgen::opening_fates(pd, &sp);
+        let taken: HashSet<Handle> = made.iter().filter(|b| matches!(b.part.as_str(), "door" | "window")).map(|b| b.source).collect();
         for o in plan_openings(pd, &sp, &ents) {
-            let level = level_at(&sp.levels, o.at.x, o.at.y);
-            if level.is_some_and(|l| l.sheet.is_some()) {
+            if taken.contains(&o.handle) {
                 continue;
             }
-            let taken = made.iter().any(|b| b.source == o.handle && matches!(b.part.as_str(), "door" | "window"));
-            if !taken {
-                push(Finding {
-                    kind: "opening_not_in_wall",
-                    message: format!("a {} at {} isn't in any wall, so it wasn't built", o.kind, fmt_pt(o.at)),
-                    level: level.map(|l| l.name.clone()),
-                    at: Some(o.at),
-                    handles: vec![o.handle],
-                });
+            let Some(level) = level_at(&sp.levels, o.at.x, o.at.y) else { continue };
+            let storey = fates.iter().find(|f| f.level.eq_ignore_ascii_case(&level.name));
+            let off_plan = storey.and_then(|f| f.footprint).is_some_and(|(lo, hi)| shell_dist(&Bounds2::new(lo, hi), o.at) > OUTSIDE_FT * upf);
+            if level.sheet.is_some() || off_plan {
+                continue;
             }
+            let why = storey.and_then(|f| f.skipped.iter().find(|x| x.source == o.handle)).map(|x| x.why);
+            if matches!(why, Some(super::wallgen::Skip::NotADoor | super::wallgen::Skip::Same)) {
+                continue;
+            }
+            push(Finding {
+                kind: "opening_not_in_wall",
+                message: format!(
+                    "a {} at {} is drawn where no wall was built (the wall it is drawn in is missing), so it wasn't built",
+                    o.kind,
+                    fmt_pt(o.at)
+                ),
+                level: Some(level.name.clone()),
+                at: Some(o.at),
+                handles: vec![o.handle],
+            });
         }
     }
     step("rooms that leak");

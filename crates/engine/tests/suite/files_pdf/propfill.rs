@@ -134,7 +134,7 @@ fn plan_with(on_e_sheet: bool) -> Session {
                       "id": "R1", "size_source": "tag", "height_source": "estimated-route", "source_sheet": "M-101"}],
             "terminals": [{"system": "SA", "level": "L1", "at": [1500, 500], "size_in": [12, 12], "bottom_ft": 8, "terminal_kind": "diffuser"}],
             "equipment": [{"tag": "AHU-1", "kind": "ahu", "level": "L1", "min": [2000, 400], "max": [2060, 440], "height_ft": 5,
-                           "properties": {"CFM": "2000"}, "sources": {"schedule": "M-601"}},
+                           "properties": {"CFM": "2000", "MODEL": "XB-12"}, "sources": {"schedule": "M-601"}},
                           {"tag": "LP1", "kind": "panelboard", "level": "L1", "min": [2200, 400], "max": [2220, 410], "height_ft": 6,
                            "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20A", "poles": 1, "source": "E-601"}]}]
         }
@@ -738,6 +738,89 @@ fn ducts_terminals_and_equipment_carry_size_system_airflow_and_capacity() {
     assert_eq!(a["capacity"]["unit"], "cfm");
     assert_eq!(a["capacity"]["source"]["kind"], "schedule");
     assert_eq!(a["capacity"]["source"]["doc"], "M-601");
+    // Its schedule row's model, from the schedule (Q6313).
+    assert_eq!(a["model"]["value"], "XB-12", "{a:#}");
+    assert_eq!(a["model"]["source"]["kind"], "schedule");
+    assert_eq!(a["model"]["source"]["doc"], "M-601");
+}
+
+/// A door made like the build makes them in office 101's south wall (nothing printed by it);
+/// its handle and plan middle.
+fn door_in_south_wall(s: &mut Session) -> (Handle, Vec2) {
+    let wall = {
+        let d = s.doc().expect("doc");
+        d.model
+            .iter()
+            .filter(|e| made_as(e).as_deref() == Some("wall"))
+            .map(|e| (cadaddy_engine::doc::entity_bounds(d, e, 0).center().dist(Vec2::new(120.0, 0.0)), e.handle))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("a wall")
+            .1
+    };
+    let door = {
+        let d = s.doc_mut().expect("doc");
+        let mut e = (**d.entity(wall).expect("wall")).clone();
+        e.handle = d.new_handle();
+        e.common.layer = "3D-Doors".into();
+        e.common.xdata = vec![
+            RawTag { code: 1001, value: "CADADDY_WALLGEN".into() },
+            RawTag { code: 1000, value: "door".into() },
+            RawTag { code: 1000, value: "L1".into() },
+            RawTag { code: 1000, value: "0".into() },
+        ]
+        .into();
+        let h = e.handle;
+        d.model.push(e);
+        h
+    };
+    let at = cadaddy_engine::doc::entity_bounds(s.doc().expect("doc"), s.doc().expect("doc").entity(door).expect("door"), 0).center();
+    (door, at)
+}
+
+fn door_schedule_findings(s: &mut Session) -> Vec<Value> {
+    let r = s.execute("bim.props.check", &json!({"checks": ["door_schedule"]})).expect("check");
+    r["findings"].as_array().cloned().unwrap_or_default()
+}
+
+/// No door schedule and no number printed: the door takes the number of the room it serves,
+/// marked as a rule's with its basis, and the missing schedule is a finding.
+#[test]
+fn a_door_nothing_numbers_takes_its_rooms_number() {
+    let mut s = plan();
+    let (door, _) = door_in_south_wall(&mut s);
+    let r = fill(&mut s);
+    let dp = get(&mut s, &door.hex());
+    assert_eq!(dp["number"]["value"], "101", "{dp:#}");
+    assert_eq!(dp["number"]["source"]["kind"], "rule", "{dp:#}");
+    assert!(dp["number"]["note"].as_str().unwrap_or("").contains("only door of room 101"), "{dp:#}");
+    assert_eq!(r["doors"]["numbered_by_room"], json!(1), "{r}");
+    let f = door_schedule_findings(&mut s);
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(f[0]["message"].as_str().unwrap_or("").contains("no door schedule"), "{f:?}");
+}
+
+/// A door schedule's tag by the door names its row: the door takes the row's number, type,
+/// frame, fire rating, hardware set and size, each from the schedule.
+#[test]
+fn a_door_takes_its_door_schedule_row() {
+    let mut s = plan();
+    let (door, at) = door_in_south_wall(&mut s);
+    let schedule = json!({
+        "rows": [{"kind": "door", "mark": "7", "width_in": 34.0, "height_in": 84.0, "type": "B", "frame": "HM", "fire_rating": "20 MIN", "hardware": "HW-2"},
+                 {"kind": "door", "mark": "8", "width_in": 36.0}],
+        "tags": [{"mark": "7", "at": [at.x + 6.0, at.y + 30.0]}]
+    });
+    s.execute("bspec.set", &json!({"spec": {"schedule": schedule}})).expect("schedule");
+    fill(&mut s);
+    let dp = get(&mut s, &door.hex());
+    assert_eq!(dp["number"]["value"], "7", "{dp:#}");
+    for (key, want) in
+        [("type", json!("B")), ("frame", json!("HM")), ("fire_rating", json!("20 MIN")), ("hardware_set", json!("HW-2")), ("width", json!(34.0))]
+    {
+        assert_eq!(dp[key]["value"], want, "{key}: {dp:#}");
+        assert_eq!(dp[key]["source"]["kind"], "schedule", "{key}: {dp:#}");
+    }
+    assert!(door_schedule_findings(&mut s).is_empty());
 }
 
 #[test]
