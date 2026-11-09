@@ -5983,7 +5983,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The plumbing fixtures the plumbing plans tag (named by the set's fixture schedule) go in
     // with the devices: placed by their sheets the same way. The schedule may be on any trade's
     // sheet. What was found, for the finding when piped floors get no fixtures.
-    let (schedule, schedule_pages) = plumbing_schedule(s.doc()?, job);
+    let (found_schedule, schedule_pages) = find_plumbing_schedule(s.doc()?, job);
+    // The rough-in table beside it: what sizes a fixture's waste and vent filled in.
+    let rough_in = found_schedule.as_ref().map(|(_, page, _)| rough_in_table(job, page)).unwrap_or_default();
+    let schedule = found_schedule.map(|(sch, _, _)| sch);
     let mut fixtures_read = match &schedule {
         Some(sch) => format!("the plumbing fixture schedule lists {} tags", sch.rows.len()),
         None => format!("no plumbing fixture schedule was found ({schedule_pages} pages looked at)"),
@@ -6611,7 +6614,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // A floor with no water plan: the water its derived mains don't reach, inferred from its
         // fixtures and its rooms' branches.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-            let inferred = infer_missing_water(job, &mut sp, &no_water_levels, &devices, schedule.as_ref());
+            let inferred = infer_missing_water(job, &mut sp, &no_water_levels, &devices, schedule.as_ref(), &rough_in);
             if inferred.as_object().is_some_and(|o| !o.is_empty()) {
                 s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
@@ -6619,7 +6622,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The rest of the fill-in pass (Q6216): each fixture's waste and vent no drain or vent
         // line of its floor reaches, each air terminal no duct of its system reaches.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-            let filled = fill_in_rest(job, &mut sp, &devices, schedule.as_ref());
+            let filled = fill_in_rest(job, &mut sp, &devices, schedule.as_ref(), &rough_in);
             if filled.get("runs").and_then(Value::as_u64).unwrap_or(0) > 0 {
                 s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
@@ -14188,9 +14191,12 @@ fn infer_missing_water(
     levels: &[String],
     devices: &[super::readers::ReadDevice],
     schedule: Option<&cadaddy_mepfix::fixture_schedule::FixtureSchedule>,
+    rough_in: &[cadaddy_mepfix::fixture_schedule::ConnectionRow],
 ) -> Value {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let fill = super::waterfill::rules();
+    let products = super::plumbproducts::rules();
+    let lowest = super::plumbing::lowest_storey(sp).map(|l| storey_key(&l));
     let (_, reach_ft) = super::plumbing::fixture_lines("");
     // Each floor with fixtures, by its storey, named as its runs name it where it has no water
     // plan, else as the building's levels do (else its runs, else its fixtures).
@@ -14221,7 +14227,8 @@ fn infer_missing_water(
                 let row = schedule.and_then(|s| s.rows.iter().find(|r| r.tag.eq_ignore_ascii_case(d.tag.trim())));
                 let words = row.map_or_else(|| d.tag.clone(), |r| format!("{} {} {}", d.tag, r.fixture, r.description));
                 let (lines, _) = super::plumbing::fixture_lines(&words);
-                super::waterfill::Fixture { at: d.at, what: d.tag.clone(), lines, words }
+                let sizes = fixture_doc_sizes(&fill, &products, row, rough_in, lowest.as_deref() == Some(key.as_str()));
+                super::waterfill::Fixture { at: d.at, what: d.tag.clone(), lines, words, sizes }
             })
             .collect();
         let on: Vec<&cadaddy_walk3d::MepRun> = sp.mep.runs.iter().filter(|r| storey_key(&r.level) == *key).collect();
@@ -14432,9 +14439,12 @@ fn fill_in_rest(
     sp: &mut cadaddy_walk3d::BuildingSpec,
     devices: &[super::readers::ReadDevice],
     schedule: Option<&cadaddy_mepfix::fixture_schedule::FixtureSchedule>,
+    rough_in: &[cadaddy_mepfix::fixture_schedule::ConnectionRow],
 ) -> Value {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let drains = super::plumbing::drainage_systems();
+    let (fill, products) = (super::waterfill::rules(), super::plumbproducts::rules());
+    let lowest = super::plumbing::lowest_storey(sp).map(|l| storey_key(&l));
     let rules = [super::provenance::rule("P-BRANCH-WASTE"), super::provenance::rule("P-BRANCH-VENT")];
     // Each floor with fixtures, by its storey, named as its runs name it (else its level's name).
     // The fixtures are the ones the model builds: the spec's fixture tags (the read ones and the
@@ -14454,7 +14464,8 @@ fn fill_in_rest(
                 .find(|n| storey_key(n) == key)
                 .map_or_else(|| level.clone(), Clone::clone)
         };
-        let at = super::fillin::FixtureAt { at, what: tag.clone(), words, lines };
+        let sizes = fixture_doc_sizes(&fill, &products, row, rough_in, lowest.as_deref() == Some(key.as_str()));
+        let at = super::fillin::FixtureAt { at, what: tag.clone(), words, lines, sizes };
         match floors.get_mut(&key) {
             Some(f) => f.1.push(at),
             None => {
@@ -22851,26 +22862,46 @@ fn find_plumbing_schedule(
     (None, looked)
 }
 
-/// The set's plumbing fixture schedule ([`find_plumbing_schedule`]), and how many pages were
-/// looked at for it.
-fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule>, usize) {
-    let (found, looked) = find_plumbing_schedule(d, job);
-    (found.map(|(s, _, _)| s), looked)
-}
-
-/// The set's plumbing fixture schedule (as [`plumbing_schedule`] finds it), its sheet and the
+/// The set's plumbing fixture schedule (as [`find_plumbing_schedule`] finds it), its sheet and the
 /// rough-in table: on the schedule's sheet, else on another plumbing sheet that isn't a plan.
 pub(crate) fn plumbing_schedule_docs(
     d: &cadaddy_doc::Drawing,
     job: &GuidedJob,
 ) -> Option<(cadaddy_mepfix::fixture_schedule::FixtureSchedule, Vec<cadaddy_mepfix::fixture_schedule::ConnectionRow>, String)> {
-    use cadaddy_mepfix::fixture_schedule as fsch;
     let (schedule, page, sheet) = find_plumbing_schedule(d, job).0?;
-    let mut connections = fsch::read_connections_on(&page);
-    if connections.is_empty() {
-        connections = non_plan_pages(job, "P").iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default();
-    }
+    let connections = rough_in_table(job, &page);
     Some((schedule, connections, sheet))
+}
+
+/// The set's rough-in table: on the fixture schedule's page, else on another plumbing sheet that
+/// isn't a plan.
+fn rough_in_table(job: &GuidedJob, page: &cadaddy_doc::Drawing) -> Vec<cadaddy_mepfix::fixture_schedule::ConnectionRow> {
+    use cadaddy_mepfix::fixture_schedule as fsch;
+    let connections = fsch::read_connections_on(page);
+    if !connections.is_empty() {
+        return connections;
+    }
+    non_plan_pages(job, "P").iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default()
+}
+
+/// A fixture's waste and vent sizes its documents give, by system ([`super::waterfill::FillRules::doc_sizes_of`]):
+/// its schedule row's own size columns, else (system by system) the rough-in table's row for its
+/// name; below grade (`below_grade`: on the lowest storey) the below-grade waste column first.
+pub(crate) fn fixture_doc_sizes(
+    fill: &super::waterfill::FillRules,
+    products: &super::plumbproducts::Rules,
+    row: Option<&cadaddy_mepfix::fixture_schedule::ScheduledFixture>,
+    rough_in: &[cadaddy_mepfix::fixture_schedule::ConnectionRow],
+    below_grade: bool,
+) -> BTreeMap<String, (f64, String)> {
+    let Some(row) = row else { return BTreeMap::new() };
+    let mut out = fill.doc_sizes_of(&row.connections, below_grade, &format!("the fixture schedule's {} row", row.tag.trim()));
+    if let Some((cr, _)) = super::plumbproducts::connection_row(products, rough_in, &row.fixture, &row.description) {
+        for (k, v) in fill.doc_sizes_of(&cr.sizes, below_grade, &format!("the rough-in table's {} row", cr.fixture.trim())) {
+            out.entry(k).or_insert(v);
+        }
+    }
+    out
 }
 
 /// Most plumbing fixtures read from a set's plans.

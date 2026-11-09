@@ -7,6 +7,8 @@
   ],
   "below_slab_invert_in": 18.0,
   "below_slab_why": "company default: the invert of drainage under a slab on grade where the plans print none",
+  "in_floor_top_in": 2.0,
+  "in_floor_why": "IPC 704.1 and trade practice: a gravity drain is run below the floor it serves; above grade a branch no plan draws runs inside the floor/ceiling assembly, its top under the floor deck (2 in: subfloor and topping, company default), falling to the stack, never on the finished floor and never below the ceiling under it",
   "stack_join_ft": 2.0,
   "connect_reach_ft": 15.0,
   "needs": [
@@ -30,6 +32,9 @@
     "drainage": ["SAN", "V"],
     "drain_basis": "code and trade practice: a fixture whose waste or vent no plan draws within reach is drained and vented the way a plumber runs it, its branch teed off the nearest pipe of that system at right angles at the code's fixture drain or vent size, the drain falling at the slope IPC 704.1 sets for its size",
     "vent": "V",
+    "doc_sizes": {"SAN": ["waste", "trap"], "V": ["vent"]},
+    "doc_sizes_below_grade": {"SAN": ["waste_below", "waste", "trap"], "V": ["vent"]},
+    "doc_size_basis": "the documents first: a fixture's waste and vent sizes from its fixture schedule row, else the rough-in table's row for its name (below grade its below-grade waste column), the code's table only where the documents give none",
     "vent_stacks": ["SAN"],
     "vent_stack_basis": "IPC chapter 9: a fixture beside a waste stack is vented by the stack carried up as the stack vent",
     "sizes": [

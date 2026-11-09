@@ -24,6 +24,10 @@ struct Rules {
     drainage_slope: Vec<Slope>,
     below_slab_invert_in: f64,
     below_slab_why: String,
+    /// A drain no plan draws, above grade: its top this far under the finished floor it serves
+    /// (the floor's deck), inside the floor/ceiling assembly, and why.
+    in_floor_top_in: f64,
+    in_floor_why: String,
     stack_join_ft: f64,
     connect_reach_ft: f64,
     needs: Vec<Need>,
@@ -68,6 +72,11 @@ fn slope_for(r: &Rules, size_in: f64) -> Option<(f64, &str)> {
     r.drainage_slope.iter().find(|s| size_in <= s.max_size_in + 1e-9).map(|s| (s.in_per_ft, s.source.as_str()))
 }
 
+/// The name of the building's lowest storey (the slab on grade), as [`drainage`] takes it.
+pub(crate) fn lowest_storey(sp: &BuildingSpec) -> Option<String> {
+    storeys(sp).first().map(|l| l.name.clone())
+}
+
 /// The building's levels lowest first (not the roof, not a level drawn in another file).
 fn storeys(sp: &BuildingSpec) -> Vec<&Level> {
     let mut v: Vec<&Level> =
@@ -76,15 +85,35 @@ fn storeys(sp: &BuildingSpec) -> Vec<&Level> {
     v
 }
 
+/// How far above its level's finished floor a drain's bottom may be and still be "on the floor"
+/// (feet; a pipe laid at the floor reads 0).
+const FLOOR_EPS_FT: f64 = 1e-3;
+
 /// The spec's drainage runs as they are installed: each horizontal sanitary or storm run falls at
 /// the slope the code sets for its size, and those on the lowest storey with no height of their
-/// own run under its slab (at the invert the rules data gives). What changed.
+/// own run under its slab (at the invert the rules data gives). A drain no plan draws (derived or
+/// inferred) is never above the finished floor it serves: laid at or over it, it runs under the
+/// slab on the lowest storey, and above grade inside the floor/ceiling assembly under the floor
+/// (its top under the deck: rules data `in_floor_top_in`; not below the ceiling of the storey
+/// under it, from the levels), its height source saying so after its provenance. What changed.
 pub(crate) fn drainage(sp: &mut BuildingSpec) -> Value {
     let r = rules();
     let lowest = storeys(sp).first().map(|l| l.name.clone());
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let invert_ft = r.below_slab_invert_in / 12.0;
-    let (mut sloped, mut below, mut below_ft) = (0usize, 0usize, 0.0);
+    // Each storey above the lowest: the depth of the floor/ceiling assembly under its floor (its
+    // floor down to the ceiling of the storey below), where the levels give it.
+    let floor_space: HashMap<String, Option<f64>> = {
+        let st = storeys(sp);
+        st.iter()
+            .zip(st.iter().skip(1))
+            .map(|(below, l)| {
+                let d = l.elevation_ft - (below.elevation_ft + below.ceiling_ft);
+                (l.name.trim().to_ascii_uppercase(), (d.is_finite() && d > 0.0).then_some(d))
+            })
+            .collect()
+    };
+    let (mut sloped, mut below, mut below_ft, mut in_floor, mut in_floor_ft) = (0usize, 0usize, 0.0, 0usize, 0.0);
     let mut by_slope: BTreeMap<String, usize> = BTreeMap::new();
     for run in sp.mep.runs.iter_mut().take(MAX_ITEMS) {
         if run.top_ft.is_some() || !r.drainage_systems.contains(&run.system) {
@@ -98,16 +127,45 @@ pub(crate) fn drainage(sp: &mut BuildingSpec) -> Value {
             *by_slope.entry(src.to_string()).or_default() += 1;
         }
         let default = matches!(run.height_source.trim(), "" | "default");
-        if default && lowest.as_deref() == Some(run.level.as_str()) && invert_ft > 0.0 {
+        let made = super::waterfill::provenance(run);
+        // A drain no plan draws (derived, inferred) laid at or above the floor it serves: a
+        // gravity drain is built below that floor.
+        let on_floor = made != super::waterfill::DRAWN && run.points.len() >= 2 && run.bottoms_ft.iter().any(|b| *b > -FLOOR_EPS_FT);
+        let len_ft = run.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
+        if (default || on_floor) && lowest.as_deref().is_some_and(|l| l.trim().eq_ignore_ascii_case(run.level.trim())) && invert_ft > 0.0 {
             for b in &mut run.bottoms_ft {
                 *b = -invert_ft;
             }
-            run.height_source = format!("below slab: {}", r.below_slab_why);
+            if run.bottoms_ft.is_empty() {
+                run.bottoms_ft.push(-invert_ft);
+            }
+            run.height_source =
+                if default { format!("below slab: {}", r.below_slab_why) } else { format!("{made} (below slab: {})", r.below_slab_why) };
             below += 1;
-            below_ft += run.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
+            below_ft += len_ft;
+        } else if on_floor && let Some(space) = floor_space.get(&run.level.trim().to_ascii_uppercase()) {
+            // Above grade: inside the floor/ceiling assembly under the floor, its top under the
+            // deck, never below the ceiling of the storey under it.
+            let size_ft = run.size_in[0].max(0.0) / 12.0;
+            let mut bottom = -(r.in_floor_top_in.max(0.0) / 12.0 + size_ft);
+            if let Some(depth) = space {
+                bottom = bottom.max(-depth);
+            }
+            for b in &mut run.bottoms_ft {
+                *b = bottom;
+            }
+            if run.bottoms_ft.is_empty() {
+                run.bottoms_ft.push(bottom);
+            }
+            run.height_source = format!("{made} (in the floor/ceiling assembly under the floor: {})", r.in_floor_why);
+            in_floor += 1;
+            in_floor_ft += len_ft;
         }
     }
-    json!({"sloped": sloped, "slopes": by_slope, "below_slab": below, "below_slab_ft": (below_ft * 10.0).round() / 10.0})
+    json!({
+        "sloped": sloped, "slopes": by_slope, "below_slab": below, "below_slab_ft": (below_ft * 10.0).round() / 10.0,
+        "in_floor": in_floor, "in_floor_ft": (in_floor_ft * 10.0).round() / 10.0,
+    })
 }
 
 /// Where a level's plan sits: the point its plan's base is (the model stacks the levels by it),
@@ -543,6 +601,63 @@ mod tests {
         // Upstairs and pressure piping keep their heights.
         assert_eq!(r[1].bottoms_ft, vec![0.0]);
         assert_eq!(r[2].bottoms_ft, vec![0.0]);
+    }
+
+    #[test]
+    fn a_drain_no_plan_draws_is_built_below_the_floor_it_serves_never_on_it() {
+        use cadaddy_walk3d::Made;
+        let mut sp = spec();
+        let inferred = |level: &str, size: f64, bottom: f64| {
+            let mut r = run("SAN", level, vec![[0.0, 0.0], [120.0, 0.0], [120.0, 60.0]], size, None);
+            r.bottoms_ft = vec![bottom; 2];
+            r.height_source = "inferred".into();
+            super::super::provenance::set_run(&mut r, Made::Inferred, "a rule");
+            r
+        };
+        // The levels: 10 ft floor to floor, 9 ft ceilings: a 1 ft floor/ceiling assembly.
+        sp.mep.runs = vec![
+            inferred("Level 1", 1.25, 0.0),
+            inferred("Level 2", 1.5, 0.0),
+            inferred("Level 3", 3.0, 0.125),
+            // Laid in the ceiling of its own floor: still above the floor it serves.
+            inferred("Level 2", 2.0, 8.5),
+            // Drawn on its plan: its height is the plan's.
+            run("SAN", "Level 2", vec![[0.0, 0.0], [240.0, 0.0]], 2.0, None),
+            // A vent is not a gravity drain.
+            {
+                let mut v = inferred("Level 2", 1.5, 0.0);
+                v.system = "V".into();
+                v
+            },
+        ];
+        let out = drainage(&mut sp);
+        assert_eq!((out["below_slab"].as_u64(), out["in_floor"].as_u64()), (Some(1), Some(3)), "{out}");
+        let r = &sp.mep.runs;
+        // On grade: under the slab, at the invert.
+        assert_eq!(r[0].bottoms_ft, vec![-1.5; 2]);
+        assert!(r[0].height_source.starts_with("inferred (below slab"), "{}", r[0].height_source);
+        // Above grade: its top 2 in under the floor, inside the assembly.
+        let b = r[1].bottoms_ft.first().copied().unwrap_or_default();
+        assert!((b - -(2.0 + 1.5) / 12.0).abs() < 1e-9 && b > -1.0, "{:?}", r[1].bottoms_ft);
+        assert!(r[1].height_source.starts_with("inferred (in the floor/ceiling assembly"), "{}", r[1].height_source);
+        assert!(r[2].bottoms_ft.iter().all(|b| (b - -5.0 / 12.0).abs() < 1e-9), "{:?}", r[2].bottoms_ft);
+        assert!(r[3].bottoms_ft.iter().all(|b| *b < 0.0 && *b >= -1.0), "{:?}", r[3].bottoms_ft);
+        // The drawn run and the vent keep theirs; every drain still falls.
+        assert_eq!(r[4].bottoms_ft, vec![0.0]);
+        assert_eq!(r[5].bottoms_ft, vec![0.0; 2]);
+        assert!(r.iter().filter(|x| x.system == "SAN").all(|x| x.slope_in_per_ft > 0.0));
+        // A floor/ceiling assembly too thin for the deck and the pipe: the pipe sits on the ceiling
+        // under it, not through it.
+        let mut thin = spec();
+        for l in thin.levels.iter_mut().filter(|l| l.elevation_ft == 0.0) {
+            l.ceiling_ft = 9.75;
+        }
+        thin.mep.runs = vec![inferred("Level 2", 3.0, 0.0)];
+        drainage(&mut thin);
+        assert!(thin.mep.runs[0].bottoms_ft.iter().all(|b| (b - -0.25).abs() < 1e-9), "{:?}", thin.mep.runs[0].bottoms_ft);
+        // A rerun moves nothing again.
+        let again = drainage(&mut sp);
+        assert_eq!((again["below_slab"].as_u64(), again["in_floor"].as_u64()), (Some(0), Some(0)), "{again}");
     }
 
     #[test]
