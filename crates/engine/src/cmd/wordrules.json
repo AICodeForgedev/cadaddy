@@ -3042,7 +3042,8 @@
   "sheets.floor_plan_title_words": {
    "source": "A view or sheet title that names a floor plan. (drafting convention: general, no job's title)",
    "words": [
-    "FLOOR PLAN"
+    "FLOOR PLAN",
+    "FLOOR PLANS"
    ]
   },
   "sheets.import_discipline_prefix": {
@@ -3141,6 +3142,19 @@
     "ACCESSORIES",
     "AIC",
     "DIRECTORY"
+   ]
+  },
+  "schedules.panel_circuit_headings": {
+   "source": "(panel schedule convention: the heading over the circuit-number column, as sets print it: CKT, CIR, CIRC, CIRCUIT, CKT #, CKT NO.)",
+   "words": [
+    "CKT",
+    "CKT.",
+    "CIR",
+    "CKT #",
+    "CKT NO.",
+    "CIRC",
+    "CIRC.",
+    "CKT NO"
    ]
   },
   "schedules.panel_header_words": {

@@ -34108,7 +34108,7 @@ mod tests {
         job.index = Some(json!({"sheets": [
             {"number": "A-11", "title": "SLAB PLAN"},
             {"number": "A-14", "title": "FLOOR FINISH PLAN"},
-            {"number": "A-12", "title": "FLOOR PLAN"},
+            {"number": "A-12", "title": "FLOOR PLANS - TENANT INTERIORS"},
             {"number": "A-21", "title": "LEVEL 2 PLAN"},
             {"number": "A-22", "title": "LEVEL 2 FURNITURE PLAN"}
         ]}));
