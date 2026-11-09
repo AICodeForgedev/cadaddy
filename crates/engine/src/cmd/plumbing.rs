@@ -28,6 +28,11 @@ struct Rules {
     /// (the floor's deck), inside the floor/ceiling assembly, and why.
     in_floor_top_in: f64,
     in_floor_why: String,
+    /// The vent systems, and how far over its storey's ceiling a vent no plan draws that was laid
+    /// under the ceiling runs (inches), and why.
+    vent_systems: Vec<String>,
+    vent_above_ceiling_in: f64,
+    vent_why: String,
     stack_join_ft: f64,
     connect_reach_ft: f64,
     needs: Vec<Need>,
@@ -95,7 +100,9 @@ const FLOOR_EPS_FT: f64 = 1e-3;
 /// inferred) is never above the finished floor it serves: laid at or over it, it runs under the
 /// slab on the lowest storey, and above grade inside the floor/ceiling assembly under the floor
 /// (its top under the deck: rules data `in_floor_top_in`; not below the ceiling of the storey
-/// under it, from the levels), its height source saying so after its provenance. What changed.
+/// under it, from the levels), its height source saying so after its provenance; a vent no plan
+/// draws laid under its storey's ceiling runs over it (rules data `vent_above_ceiling_in`), above
+/// the flood rims of the fixtures it serves. What changed.
 pub(crate) fn drainage(sp: &mut BuildingSpec) -> Value {
     let r = rules();
     let lowest = storeys(sp).first().map(|l| l.name.clone());
@@ -113,9 +120,36 @@ pub(crate) fn drainage(sp: &mut BuildingSpec) -> Value {
             })
             .collect()
     };
+    // Each storey's ceiling and floor-to-floor height (feet over its floor).
+    let storey_space: HashMap<String, (f64, f64)> = storeys(sp)
+        .iter()
+        .filter(|l| l.ceiling_ft.is_finite() && l.height_ft.is_finite() && l.ceiling_ft > 0.0 && l.height_ft > l.ceiling_ft)
+        .map(|l| (l.name.trim().to_ascii_uppercase(), (l.ceiling_ft, l.height_ft)))
+        .collect();
     let (mut sloped, mut below, mut below_ft, mut in_floor, mut in_floor_ft) = (0usize, 0usize, 0.0, 0usize, 0.0);
+    let (mut vents_up, mut vents_up_ft) = (0usize, 0.0);
     let mut by_slope: BTreeMap<String, usize> = BTreeMap::new();
     for run in sp.mep.runs.iter_mut().take(MAX_ITEMS) {
+        // A vent no plan draws laid under its storey's ceiling (on the floor, through the room):
+        // over the ceiling, above the fixtures' flood rims, as the field runs it.
+        if run.top_ft.is_none()
+            && r.vent_systems.contains(&run.system)
+            && run.points.len() >= 2
+            && super::waterfill::provenance(run) != super::waterfill::DRAWN
+            && let Some((ceiling, height)) = storey_space.get(&run.level.trim().to_ascii_uppercase())
+            && run.bottoms_ft.iter().any(|b| *b < *ceiling)
+        {
+            let size_ft = run.size_in[0].max(0.0) / 12.0;
+            let bottom = (ceiling + r.vent_above_ceiling_in.max(0.0) / 12.0).min(height - size_ft).max(*ceiling);
+            run.bottoms_ft.fill(bottom);
+            if run.bottoms_ft.is_empty() {
+                run.bottoms_ft.push(bottom);
+            }
+            run.height_source = format!("{} (over the ceiling: {})", super::waterfill::provenance(run), r.vent_why);
+            vents_up += 1;
+            vents_up_ft += run.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
+            continue;
+        }
         if run.top_ft.is_some() || !r.drainage_systems.contains(&run.system) {
             continue;
         }
@@ -165,6 +199,7 @@ pub(crate) fn drainage(sp: &mut BuildingSpec) -> Value {
     json!({
         "sloped": sloped, "slopes": by_slope, "below_slab": below, "below_slab_ft": (below_ft * 10.0).round() / 10.0,
         "in_floor": in_floor, "in_floor_ft": (in_floor_ft * 10.0).round() / 10.0,
+        "vents_over_ceiling": vents_up, "vents_over_ceiling_ft": (vents_up_ft * 10.0).round() / 10.0,
     })
 }
 
@@ -623,7 +658,7 @@ mod tests {
             inferred("Level 2", 2.0, 8.5),
             // Drawn on its plan: its height is the plan's.
             run("SAN", "Level 2", vec![[0.0, 0.0], [240.0, 0.0]], 2.0, None),
-            // A vent is not a gravity drain.
+            // A vent is not a gravity drain: it runs above the flood rims.
             {
                 let mut v = inferred("Level 2", 1.5, 0.0);
                 v.system = "V".into();
@@ -642,9 +677,12 @@ mod tests {
         assert!(r[1].height_source.starts_with("inferred (in the floor/ceiling assembly"), "{}", r[1].height_source);
         assert!(r[2].bottoms_ft.iter().all(|b| (b - -5.0 / 12.0).abs() < 1e-9), "{:?}", r[2].bottoms_ft);
         assert!(r[3].bottoms_ft.iter().all(|b| *b < 0.0 && *b >= -1.0), "{:?}", r[3].bottoms_ft);
-        // The drawn run and the vent keep theirs; every drain still falls.
+        // The drawn run keeps its height; the vent laid on the floor runs over the 9 ft ceiling
+        // (2 in over it), above the fixtures' flood rims; every drain still falls.
         assert_eq!(r[4].bottoms_ft, vec![0.0]);
-        assert_eq!(r[5].bottoms_ft, vec![0.0; 2]);
+        assert!(r[5].bottoms_ft.iter().all(|b| (b - (9.0 + 2.0 / 12.0)).abs() < 1e-9), "{:?}", r[5].bottoms_ft);
+        assert!(r[5].height_source.starts_with("inferred (over the ceiling"), "{}", r[5].height_source);
+        assert_eq!(out["vents_over_ceiling"].as_u64(), Some(1), "{out}");
         assert!(r.iter().filter(|x| x.system == "SAN").all(|x| x.slope_in_per_ft > 0.0));
         // A floor/ceiling assembly too thin for the deck and the pipe: the pipe sits on the ceiling
         // under it, not through it.
@@ -658,6 +696,7 @@ mod tests {
         // A rerun moves nothing again.
         let again = drainage(&mut sp);
         assert_eq!((again["below_slab"].as_u64(), again["in_floor"].as_u64()), (Some(0), Some(0)), "{again}");
+        assert_eq!(again["vents_over_ceiling"].as_u64(), Some(0), "{again}");
     }
 
     #[test]
