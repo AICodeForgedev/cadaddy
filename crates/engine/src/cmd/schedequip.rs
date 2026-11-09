@@ -480,7 +480,7 @@ fn own_or_below(sp: &BuildingSpec, level: &str, get: &dyn Fn(&cadaddy_walk3d::Le
 
 /// Two levels' plan origins, measured the same way: their plans' base points when both have
 /// one, else their plan regions' corners (each level's plan is drawn in its own place).
-fn origins(sp: &BuildingSpec, a: &str, b: &str) -> Option<([f64; 2], [f64; 2])> {
+pub(crate) fn origins(sp: &BuildingSpec, a: &str, b: &str) -> Option<([f64; 2], [f64; 2])> {
     let base = |l: &cadaddy_walk3d::Level| l.base.filter(|p| p.iter().all(|v| v.is_finite()));
     let corner = |l: &cadaddy_walk3d::Level| l.region.filter(|r| r.iter().all(|v| v.is_finite())).map(|r| [r[0].min(r[2]), r[1].min(r[3])]);
     match (own_or_below(sp, a, &base), own_or_below(sp, b, &base)) {
@@ -836,12 +836,13 @@ mod tests {
         assert!(sp.mep.systems.iter().any(|s| s.name == REFRIGERANT));
         // Not twice.
         assert_eq!(line_sets(&mut sp), 0);
-        // Levels with no base point yet (early in a build): their plan regions' corners.
+        // Levels with no base point yet (early in a build): their plan regions' corners (the roof
+        // shares the plan region of the storey under it).
         let mut sp2 = sp.clone();
         sp2.mep.runs.clear();
         for l in &mut sp2.levels {
             l.base = None;
-            l.region = Some(if l.name == "Roof" { [1000.0, 0.0, 2000.0, 900.0] } else { [1000.0, 0.0, 2000.0, 900.0] });
+            l.region = Some([1000.0, 0.0, 2000.0, 900.0]);
         }
         assert_eq!(line_sets(&mut sp2), 1);
         let roof2 = sp2.mep.runs.iter().find(|r| r.level == "Roof").unwrap_or_else(|| panic!("roof run"));
