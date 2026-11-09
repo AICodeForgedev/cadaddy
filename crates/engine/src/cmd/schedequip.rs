@@ -54,8 +54,15 @@ pub(crate) struct PlanIn<'a> {
 #[derive(Default)]
 pub(crate) struct Read {
     /// Each unit (and a roof unit's curb or stand), on its sheet's place in the drawing (the
-    /// build registers it onto its level's plan with the rest of the sheet's reading).
+    /// build registers it onto its level's plan with the rest of the sheet's reading): filled
+    /// by [`Read::choose`].
     pub equipment: Vec<MepEquipment>,
+    /// Each scheduled tag the plans print, with every place they print it, best first: a place
+    /// with a unit's outline by the tag before one without (a duct's `DOAS-1` label on a floor
+    /// plan is no unit), then in plan order. Each place: the unit and its support.
+    pub candidates: Vec<(String, Vec<Vec<MepEquipment>>)>,
+    /// Scheduled tags the plans print but no place of which fits a plan (with where).
+    pub not_placeable: Vec<String>,
     /// Tables and scheduled rows read.
     pub tables: usize,
     pub scheduled: usize,
@@ -66,6 +73,29 @@ pub(crate) struct Read {
 }
 
 impl Read {
+    /// Each tag's first place `fits` takes (it may move the pieces onto their level's plan; all
+    /// of a place's pieces must fit), into [`Read::equipment`]; a tag none of whose places fits
+    /// into [`Read::not_placeable`].
+    pub(crate) fn choose(&mut self, mut fits: impl FnMut(&mut MepEquipment) -> bool) {
+        for (tag, places) in std::mem::take(&mut self.candidates) {
+            let mut sheets: Vec<String> = Vec::new();
+            let mut done = false;
+            for mut place in places {
+                if place.iter_mut().all(&mut fits) {
+                    self.equipment.extend(place);
+                    done = true;
+                    break;
+                }
+                if let Some(s) = place.first().and_then(|e| e.sources.get("sheet")) {
+                    sheets.push(s.clone());
+                }
+            }
+            if !done {
+                self.not_placeable.push(format!("{tag} ({})", sheets.join(", ")));
+            }
+        }
+    }
+
     pub(crate) fn report(&self) -> serde_json::Value {
         let mut by: BTreeMap<(String, String), usize> = BTreeMap::new();
         for e in &self.equipment {
@@ -77,6 +107,7 @@ impl Read {
             "already_built": self.already,
             "built": by.iter().map(|((l, k), n)| json!({"level": l, "kind": k, "count": n})).collect::<Vec<_>>(),
             "unplaced": self.unplaced.iter().take(50).map(|(t, why)| json!({"tag": t, "why": why})).collect::<Vec<_>>(),
+            "not_placeable": self.not_placeable.iter().take(50).collect::<Vec<_>>(),
         })
     }
 }
@@ -269,11 +300,9 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
             }
         }
     }
-    let mut placed: BTreeSet<String> = BTreeSet::new();
-    for plan in plans {
-        if todo.iter().all(|(t, _)| placed.contains(t)) {
-            break;
-        }
+    // Each todo tag's places: (has the unit's outline, plan order, its pieces).
+    let mut places: BTreeMap<usize, Vec<(bool, usize, Vec<MepEquipment>)>> = BTreeMap::new();
+    for (plan_i, plan) in plans.iter().enumerate() {
         let texts = plan_texts(plan.drawing);
         let outlines = plan_outlines(plan.drawing);
         let su = if plan.sheet_upf.is_finite() && plan.sheet_upf > 0.0 { plan.sheet_upf } else { 12.0 };
@@ -287,7 +316,6 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
         let found: Vec<(usize, [f64; 2], f64)> = todo
             .iter()
             .enumerate()
-            .filter(|(_, (t, _))| !placed.contains(t))
             .filter_map(|(i, (t, _))| find_tag(&texts, t).map(|(at, h)| (i, at, h)))
             .collect();
         // Candidate outlines, scored: nearness to the tag (as a share of the reach) plus how far
@@ -331,7 +359,9 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
             let Some((tag, x)) = todo.get(*ti) else { continue };
             let size = x.size_ft.filter(|s| s[0] > 0.0 && s[1] > 0.0);
             let rule = equip_reader::rule_size(&x.kind);
-            let (lo, hi, footprint, made) = match outline_of.get(&fi).and_then(|oi| outlines.get(*oi)) {
+            let outlined = outline_of.get(&fi).and_then(|oi| outlines.get(*oi));
+            let mut pieces: Vec<MepEquipment> = Vec::new();
+            let (lo, hi, footprint, made) = match outlined {
                 Some((lo, hi)) => {
                     (*lo, *hi, "outline: the plan's outline by its tag, its size the schedule's (or its kind's usual)".to_string(), Made::Drawn)
                 }
@@ -389,7 +419,7 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
                 let mut ss = BTreeMap::new();
                 ss.insert("sheet".to_string(), plan.sheet.number.clone());
                 ss.insert("height".to_string(), basis);
-                out.equipment.push(MepEquipment {
+                pieces.push(MepEquipment {
                     tag: format!("{tag} {}", if part == "roof_curb" { "CURB" } else { "STAND" }),
                     kind: part.to_string(),
                     level: level.clone(),
@@ -404,7 +434,7 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
                     ..Default::default()
                 });
             }
-            out.equipment.push(MepEquipment {
+            pieces.push(MepEquipment {
                 tag: tag.clone(),
                 kind: x.kind.clone(),
                 level: level.clone(),
@@ -419,9 +449,16 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
                 confidence: if made.is_drawn() { 0.8 } else { 0.5 },
                 ..Default::default()
             });
-            placed.insert(tag.clone());
+            places.entry(*ti).or_default().push((outlined.is_some(), plan_i, pieces));
         }
     }
+    for (ti, (tag, _)) in todo.iter().enumerate() {
+        if let Some(mut p) = places.remove(&ti) {
+            p.sort_by_key(|(outlined, plan_i, _)| (!*outlined, *plan_i));
+            out.candidates.push((tag.clone(), p.into_iter().map(|(_, _, pieces)| pieces).collect()));
+        }
+    }
+    let placed: BTreeSet<&String> = out.candidates.iter().map(|(t, _)| t).collect();
     out.unplaced = todo
         .iter()
         .filter(|(t, _)| !placed.contains(t))
@@ -572,6 +609,11 @@ mod tests {
     use super::*;
     use cadaddy_doc::{Common, Space};
 
+    fn chosen(mut r: Read) -> Read {
+        r.choose(|_| true);
+        r
+    }
+
     #[test]
     fn a_shared_row_names_both_units() {
         assert_eq!(tag_variants("FC/CU-2"), vec!["FC-2".to_string(), "CU-2".to_string()]);
@@ -654,7 +696,7 @@ mod tests {
             ..Default::default()
         };
         let plan = PlanIn { sheet: &sheet, drawing: &d, sheet_upf: 12.0, upf: 12.0 };
-        let r = place(std::slice::from_ref(&x), std::slice::from_ref(&plan), &[], &[]).equipment;
+        let r = chosen(place(std::slice::from_ref(&x), std::slice::from_ref(&plan), &[], &[])).equipment;
         let unit = r.iter().find(|e| e.tag == "OAU-2").unwrap_or_else(|| panic!("no unit: {:?}", r.iter().map(|e| &e.tag).collect::<Vec<_>>()));
         assert_eq!(unit.level, "Roof");
         assert_eq!((unit.min, unit.max), ([160.0, 0.0], [256.0, 84.0]), "the 8 x 7 ft outline");
@@ -690,7 +732,7 @@ mod tests {
             ..Default::default()
         };
         let plan = PlanIn { sheet: &sheet, drawing: &d, sheet_upf: 12.0, upf: 12.0 };
-        let r = place(std::slice::from_ref(&x), std::slice::from_ref(&plan), &[], &[]);
+        let r = chosen(place(std::slice::from_ref(&x), std::slice::from_ref(&plan), &[], &[]));
         let unit = r.equipment.iter().find(|e| e.tag == "HP-7").unwrap_or_else(|| panic!("no unit"));
         assert_eq!((unit.min, unit.max), ([90.0, 20.0], [126.0, 56.0]));
         assert!(r.equipment.iter().any(|e| e.kind == "equipment_stand" && e.tag == "HP-7 STAND"));
@@ -735,7 +777,7 @@ mod tests {
             },
         ];
         let have = vec![MepEquipment { tag: "PTAC-1".into(), kind: "ptac".into(), level: "Level 2".into(), ..Default::default() }];
-        let r = place(&rows, std::slice::from_ref(&plan), &have, &[]);
+        let r = chosen(place(&rows, std::slice::from_ref(&plan), &have, &[]));
         assert_eq!(r.already, 1);
         assert!(r.equipment.is_empty());
         assert_eq!(r.unplaced.len(), 1);
@@ -808,39 +850,59 @@ mod tests {
         let roof2 = sp2.mep.runs.iter().find(|r| r.level == "Roof").unwrap_or_else(|| panic!("roof run"));
         assert_eq!(roof2.points.last(), Some(&[1224.0, 112.0]));
     }
-}
 
-#[cfg(test)]
-mod scratch_debug {
+    /// A floor plan's duct label naming the unit (`S OAU-2`, no unit by it) is no place for it:
+    /// the roof plan's tag with the unit's outline is, whatever order the plans come in; its
+    /// curb, which the roof plan's note names, is derived from that note. A place whose sheet
+    /// doesn't line up with a plan is passed over for the next.
     #[test]
-    #[ignore]
-    fn line_sets_on_a_saved_spec() {
-        let Ok(p) = std::env::var("SPEC_JSON") else { return };
-        let t = std::fs::read_to_string(p).unwrap_or_default();
-        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(&t).unwrap_or_else(|e| panic!("{e}"));
-        sp.mep.runs.retain(|r| r.system != super::REFRIGERANT);
-        for e in sp.mep.equipment.iter().filter(|e| super::is_roof(&e.level)) {
-            eprintln!("{} {:?} serves {:?}", e.tag, e.level, e.properties.get("SERVES"));
-        }
-        let n = super::line_sets(&mut sp);
-        eprintln!("line sets {n}");
-    }
-
-    #[test]
-    #[ignore]
-    fn tables_on_a_saved_page() {
-        let Ok(p) = std::env::var("PAGE_CDY") else { return };
-        let b = std::fs::read(p).unwrap_or_default();
-        let d = cadaddy_io::cdy::read_cdy(&b).unwrap_or_else(|e| panic!("{e}"));
-        let tables = cadaddy_mepfix::equip_reader::read_tables(&d, "M-0");
-        for t in &tables {
-            eprintln!("TABLE {:?} cols {:?} rows {}", t.title, t.columns, t.rows.len());
-            for r in t.rows.iter().take(3) {
-                eprintln!("    {r:?}");
-            }
-        }
-        for x in cadaddy_mepfix::equip_reader::scheduled(&tables) {
-            eprintln!("SCHED {} {} {:?}", x.tag, x.kind, x.title);
-        }
+    fn a_duct_label_on_a_floor_plan_does_not_take_the_roof_units_place() {
+        let mut floor = Drawing::default();
+        text(&mut floor, "S", 90.0, 300.0);
+        text(&mut floor, "OAU-2", 100.0, 300.0);
+        let mut roof = Drawing::default();
+        text(&mut roof, "OAU", 100.0, 100.0);
+        text(&mut roof, "2", 110.0, 82.0);
+        rect(&mut roof, [160.0, 0.0], [256.0, 72.0]);
+        text(&mut roof, "HORIZONTAL PLENUM CURB TO OAU-2 UNIT", 400.0, 400.0);
+        let sheet = |n: &str, level: &str| SheetRef {
+            number: n.into(),
+            level: level.into(),
+            discipline: "M".into(),
+            kind: "plan".into(),
+            rect: [0.0, -500.0, 1000.0, 500.0],
+            ..Default::default()
+        };
+        let (s1, s9) = (sheet("M-1", "1"), sheet("M-9", "R"));
+        let x = Scheduled {
+            tag: "OAU-2".into(),
+            kind: "outdoor_air_unit".into(),
+            sheet: "M-0".into(),
+            title: "OUTDOOR AIR UNIT SCHEDULE".into(),
+            ..Default::default()
+        };
+        let plans = [PlanIn { sheet: &s1, drawing: &floor, sheet_upf: 12.0, upf: 12.0 }, PlanIn {
+            sheet: &s9,
+            drawing: &roof,
+            sheet_upf: 12.0,
+            upf: 12.0,
+        }];
+        let r = chosen(place(std::slice::from_ref(&x), &plans, &[], &[]));
+        let unit = r.equipment.iter().find(|e| e.tag == "OAU-2").unwrap_or_else(|| panic!("no unit"));
+        assert_eq!(unit.level, "Roof");
+        assert_eq!(unit.sources.get("sheet").map(String::as_str), Some("M-9"));
+        assert_eq!((unit.min, unit.max), ([160.0, 0.0], [256.0, 72.0]));
+        let curb = r.equipment.iter().find(|e| e.kind == "roof_curb").unwrap_or_else(|| panic!("no curb"));
+        assert_eq!(curb.properties.get("STATUS").map(String::as_str), Some("derived"));
+        assert_eq!(r.equipment.iter().filter(|e| e.tag == "OAU-2").count(), 1, "built once");
+        // The roof sheet doesn't line up with a plan: the floor plan's place is the one left.
+        let mut r = place(std::slice::from_ref(&x), &plans, &[], &[]);
+        r.choose(|e| e.sources.get("sheet").map(String::as_str) != Some("M-9"));
+        assert_eq!(r.equipment.iter().map(|e| e.level.as_str()).collect::<Vec<_>>(), vec!["Level 1"]);
+        // Neither lines up: not placeable, with both sheets named.
+        let mut r = place(std::slice::from_ref(&x), &plans, &[], &[]);
+        r.choose(|_| false);
+        assert!(r.equipment.is_empty());
+        assert_eq!(r.not_placeable, vec!["OAU-2 (M-9, M-1)".to_string()]);
     }
 }

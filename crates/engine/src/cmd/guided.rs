@@ -5771,26 +5771,21 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // heat pumps and outdoor air unit, on their curbs and stands), not built yet (the
                 // typical rooms' units are by now): built where its plan tags it, put onto its
                 // level's plan by its sheet's registration as the rest of the sheet was (Q6313).
+                // Each tag's best place that lines up with its level's plan (a place whose sheet
+                // doesn't is passed over for the next, else the tag is said not placeable).
                 let mut found = scheduled_equipment(s, job, &sp)?;
-                let read_n = found.equipment.len();
-                let mut not_placeable: Vec<String> = Vec::new();
-                found.equipment.retain_mut(|e| match sim(e.min, &e.level) {
+                let read_n = found.candidates.len();
+                found.choose(|e| match sim(e.min, &e.level) {
                     Some(m) => {
                         let (a, b) = (m.apply(e.min), m.apply(e.max));
                         e.min = [a[0].min(b[0]), a[1].min(b[1])];
                         e.max = [a[0].max(b[0]), a[1].max(b[1])];
                         true
                     }
-                    None => {
-                        not_placeable.push(format!("{} ({})", e.tag, e.sources.get("sheet").map_or("?", String::as_str)));
-                        false
-                    }
+                    None => false,
                 });
                 if read_n > 0 || !found.unplaced.is_empty() {
-                    progress_line(&format!(
-                        "  scheduled equipment the plans tag: {}; not placeable onto a plan (its sheet doesn't line up with one): {not_placeable:?}",
-                        found.report()
-                    ));
+                    progress_line(&format!("  scheduled equipment the plans tag: {}", found.report()));
                     if !found.unplaced.is_empty() {
                         let tags: Vec<&str> = found.unplaced.iter().take(20).map(|(t, _)| t.as_str()).collect();
                         job.add_finding(
