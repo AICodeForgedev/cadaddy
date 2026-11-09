@@ -47,6 +47,7 @@ mod import_check;
 mod jobjunk_doors;
 mod levelsread;
 mod lighting;
+mod liverecord;
 mod mep3d;
 mod mepatoms;
 mod mepduct_build;

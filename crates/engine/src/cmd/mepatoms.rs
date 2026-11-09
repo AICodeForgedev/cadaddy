@@ -1451,9 +1451,30 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     if !std::sync::Arc::ptr_eq(old, now) {
         return;
     }
-    let (added, modified, erased) = before.model.changes(&st.doc.model);
+    let Some(ix) = changed_index(before, &st.doc) else { return };
+    if let Ok(d) = s.doc_mut() {
+        store(d, &ix);
+    }
+}
+
+/// After a change made outside a command (the live rebuild's hand edits put back after the
+/// build): `d`'s stored index, still the one `before` held, follows what changed since.
+pub(crate) fn follow_changes(before: &Drawing, d: &mut Drawing) {
+    let (Some(old), Some(now)) = (before.embedded.get(INDEX_FILE), d.embedded.get(INDEX_FILE)) else { return };
+    if !std::sync::Arc::ptr_eq(old, now) || d.model.unchanged_from(&before.model) {
+        return;
+    }
+    if let Some(ix) = changed_index(before, d) {
+        store(d, &ix);
+    }
+}
+
+/// `before`'s stored index changed by what changed in the counted pieces from `before` to `now`
+/// (`None`: no counted piece changed, or `before` has no index).
+fn changed_index(before: &Drawing, now: &Drawing) -> Option<Index> {
+    let (added, modified, erased) = before.model.changes(&now.model);
     let was = |h: &Handle| before.model.get(*h).and_then(|e| counted(e));
-    let is = |h: &Handle| st.doc.model.get(*h).and_then(|e| counted(e));
+    let is = |h: &Handle| now.model.get(*h).and_then(|e| counted(e));
     let mut out = Vec::new();
     let mut new = Vec::new();
     for h in &modified {
@@ -1466,18 +1487,16 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     out.extend(erased.iter().filter_map(was));
     new.extend(added.iter().filter_map(is));
     if out.is_empty() && new.is_empty() {
-        return;
+        return None;
     }
-    let Some(mut ix) = stored(before) else { return };
+    let mut ix = stored(before)?;
     for (k, m) in &out {
         ix.remove(k, m);
     }
     for (k, m) in new {
         ix.add(k, &m);
     }
-    if let Ok(d) = s.doc_mut() {
-        store(d, &ix);
-    }
+    Some(ix)
 }
 
 /// A filter of `bim.count`: each given dimension must match.
