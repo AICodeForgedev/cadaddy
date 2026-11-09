@@ -61,10 +61,10 @@ pub fn specs() -> Vec<CommandSpec> {
             "{activity: id, crew?: people, days?: working days (fixes the duration), hours?: labor hours (instead of quantity × rate), clear?: bool (drop the activity's edits)} → {activity, span, changed: [ids whose dates moved]}",
         ),
         CommandSpec::new("schedule.view", "Show Sequence at Date", run_view).params(
-            "{date?: e.g. 2026-03-09 | activity?: id (the day after it finishes: the model with that work in place), png?: path (render the model as it stands), width?: 1280, height?: 720, view?: \"swiso\", ghost?: bool (show not-yet work pale), handles?: bool (default false)} → {date, counts: {built, inProgress, notYet, unscheduled}, in_progress: [activity ids], finished, upcoming: [next activities], png?, built?, inProgressHandles?}",
+            "{date?: e.g. 2026-03-09 | activity?: id (the day after it finishes: the model with that work in place), png?: path (.png: render the model as it stands; an existing file only with force), force?: bool, width?: 1280, height?: 720, view?: \"swiso\", ghost?: bool (show not-yet work pale), handles?: bool (default false)} → {date, counts: {built, inProgress, notYet, unscheduled}, in_progress: [activity ids], finished, upcoming: [next activities], png?, built?, inProgressHandles?}",
         ),
         CommandSpec::new("schedule.export", "Export Construction Sequence", run_export)
-            .params("{path: .csv, .xlsx or .xml (MS Project XML) file, format?: csv|xlsx|msproject (from the extension)} → {path, activities, format}")
+            .params("{path: .csv, .xlsx or .xml (MS Project XML) file, format?: csv|xlsx|msproject (from the extension; must agree with it), force?: bool (replace an existing file)} → {path, activities, format}")
             .noundo(),
         CommandSpec::new("schedule.conflicts", "Sequence Trade Conflicts", run_conflicts)
             .params("{level?, tight_in?: ceiling space margin below which overhead order matters most (6)} → {schedule: tasks checked, findings: [{kind: trade_overlap|covered_before_roughin|cover_without_inspection|before_host|overhead_order, severity, level, zone, tasks, trades?, dates?, elements, message, phases?}], by_kind, ok}")
@@ -1493,6 +1493,9 @@ fn fourd_from_sequence(d: &Drawing, seq: &Sequence) -> bool {
 
 fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "schedule.view";
+    if let Some(png) = str_param(p, "png").map(str::trim).filter(|x| !x.is_empty()) {
+        super::exchange::guard_image_output(s, CMD, p, png, &["png"])?;
+    }
     let sc = super::fourd::load(s.doc()?).map_err(|e| bad(CMD, e))?;
     let Some((first, _)) = sc.span() else { return Err(bad(CMD, "the drawing has no 4D schedule: run schedule.build (or fourd.import)")) };
     let date = match (p.get("date").filter(|v| !v.is_null()), str_param(p, "activity")) {
@@ -1533,7 +1536,7 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
             out[key] = els.iter().zip(&ph).filter(|(_, p)| **p == Some(want)).map(|(e, _)| json!(e.handle.hex())).take(10_000).collect();
         }
     }
-    if let Some(png) = str_param(p, "png") {
+    if let Some(png) = str_param(p, "png").map(str::trim).filter(|x| !x.is_empty()) {
         let side = |k: &str, dflt: u32| -> Result<u32> {
             let v = p.get(k).and_then(Value::as_u64).unwrap_or(u64::from(dflt));
             u32::try_from(v).ok().filter(|v| (16..=8192).contains(v)).ok_or_else(|| bad(CMD, format!("`{k}` is 16 to 8192 pixels")))
@@ -1652,7 +1655,7 @@ fn msproject(seq: &Sequence) -> String {
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "schedule.export";
-    let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` is required"))?;
+    let path = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad(CMD, "`path` is required"))?;
     let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     let format = match str_param(p, "format").map(str::to_ascii_lowercase).as_deref().unwrap_or(ext.as_str()) {
         "csv" => "csv",
@@ -1660,6 +1663,13 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         "xml" | "msproject" | "mspdi" => "msproject",
         other => return Err(bad(CMD, format!("`{other}`: the sequence exports to .csv, .xlsx or .xml (MS Project)"))),
     };
+    // The name's extension matches what is written; never the open drawing, nor an existing file without force.
+    let (exts, what): (&[&str], &str) = match format {
+        "csv" => (&["csv"], "a CSV table"),
+        "xlsx" => (&["xlsx"], "an Excel workbook"),
+        _ => (&["xml"], "MS Project XML"),
+    };
+    super::exchange::guard_typed_output(s, CMD, p, path, exts, what)?;
     let seq = current(s, CMD)?;
     if seq.acts.is_empty() {
         return Err(bad(CMD, "the sequence has no activities: build the model first"));

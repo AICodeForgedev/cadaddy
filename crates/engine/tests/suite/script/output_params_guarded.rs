@@ -1,6 +1,6 @@
 //! A command that writes a file from one of its parameters goes through `exchange::guard_output` /
-//! `guard_params` (not a drawing file name, never an open drawing, an existing file only with
-//! `force: true`). This scan fails when a file under `src/cmd` that writes with `writefile::write*` /
+//! `guard_params` / `guard_typed_output` (not a drawing file name, never an open drawing, an
+//! existing file only with `force: true`). This scan fails when a file under `src/cmd` that writes with `writefile::write*` /
 //! `write_file(` is neither guarded nor on the list of writers that predate the helper: a new writer
 //! calls the helper (or is added below with the reason it needs none).
 
@@ -8,19 +8,26 @@ use std::path::{Path, PathBuf};
 
 /// Files whose output commands call the helper.
 const GUARDED: &[&str] = &[
+    "cmd/bcf.rs",
     "cmd/bimwork/takeoff.rs",
     "cmd/blocks/extract.rs",
     "cmd/bom.rs",
     "cmd/clashreport.rs",
     "cmd/classic/attext.rs",
+    "cmd/cobie.rs",
+    "cmd/concrete.rs",
+    "cmd/coordination.rs",
+    "cmd/drywall.rs",
     "cmd/estimate.rs",
     "cmd/exchange.rs",
+    "cmd/express/attio.rs",
     "cmd/fieldview.rs",
     "cmd/ifcmodel.rs",
     "cmd/projrules.rs",
     "cmd/pulllist.rs",
     "cmd/render.rs",
     "cmd/rfi.rs",
+    "cmd/sequence.rs",
     "cmd/table/cells.rs",
     "cmd/takeoff.rs",
     "cmd/underlay.rs",
@@ -36,7 +43,6 @@ const UNCHECKED: &[&str] = &[
     "cmd/actions.rs",
     "cmd/asbuilt.rs",
     "cmd/audit.rs",
-    "cmd/bcf.rs",
     // bim.estimate {price_book, file}: its only caller, run_estimate in bimwork/takeoff.rs, runs
     // guard_params on `file` before it hands over
     "cmd/bimwork/priced.rs",
@@ -47,14 +53,9 @@ const UNCHECKED: &[&str] = &[
     "cmd/classic/mkltype.rs",
     "cmd/classic/shapes.rs",
     "cmd/clipboard.rs",
-    "cmd/cobie.rs",
-    "cmd/concrete.rs",
-    "cmd/coordination.rs",
     "cmd/copricing.rs",
     "cmd/dgn.rs",
-    "cmd/drywall.rs",
     "cmd/estimate/outputs.rs",
-    "cmd/express/attio.rs",
     "cmd/file.rs",
     "cmd/file/compare.rs",
     "cmd/file/convert.rs",
@@ -87,7 +88,6 @@ const UNCHECKED: &[&str] = &[
     "cmd/props/linfile.rs",
     "cmd/propuse.rs",
     "cmd/rasterout.rs",
-    "cmd/sequence.rs",
     // ve.study RFI sketches: <id>.svg into the sketches folder the call names (made if missing);
     // the caller in valueeng/scenario.rs keeps an existing file unless force: true
     "cmd/valueeng/sketch.rs",
@@ -121,10 +121,13 @@ fn every_output_writer_is_guarded_or_listed() {
     for f in files {
         let rel = format!("cmd/{}", f.strip_prefix(src.join("cmd")).unwrap().to_string_lossy().replace('\\', "/"));
         let text = std::fs::read_to_string(&f).unwrap();
-        let guarded = text.contains("guard_output(") || text.contains("guard_params(") || text.contains("guard_image_output(");
+        let guarded = text.contains("guard_output(")
+            || text.contains("guard_params(")
+            || text.contains("guard_image_output(")
+            || text.contains("guard_typed_output(");
         if GUARDED.contains(&rel.as_str()) {
             if !guarded {
-                bad.push(format!("{rel} is listed as guarded but doesn't call guard_output / guard_params"));
+                bad.push(format!("{rel} is listed as guarded but doesn't call guard_output / guard_params / guard_typed_output"));
             }
         } else if writes_a_file(&text) && !guarded && !UNCHECKED.contains(&rel.as_str()) {
             bad.push(format!("{rel} writes a file: route its output path through exchange::guard_output"));

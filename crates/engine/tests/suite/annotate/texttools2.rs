@@ -334,6 +334,8 @@ fn attout_and_attin_round_trip_through_a_tab_separated_file() {
     assert!(s.execute("attin", &json!({"path": path})).is_err());
     assert!(s.execute("attin", &json!({"path": dir.join("missing.txt").display().to_string()})).is_err());
     // Only the selected references.
-    let r = s.execute("attout", &json!({"path": path, "handles": [refs[0].hex()]})).unwrap();
+    // The file is there now: replacing it takes force.
+    assert!(s.execute("attout", &json!({"path": path, "handles": [refs[0].hex()]})).unwrap_err().to_string().contains("force:true"));
+    let r = s.execute("attout", &json!({"path": path, "handles": [refs[0].hex()], "force": true})).unwrap();
     assert_eq!(r["rows"], 1);
 }
