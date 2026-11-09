@@ -3422,7 +3422,7 @@ mod tests {
         ];
         let p = Vec2::new(21000.0, 450.0);
         let off: Vec<f64> = under.iter().map(|(fp, b)| fp.outside(in_plan_of(&stack, "Roof", b.as_deref().unwrap_or(""), p)) / 12.0).collect();
-        assert!(off.iter().any(|o| *o == 0.0), "{off:?}");
+        assert!(off.contains(&0.0), "{off:?}");
         assert!(off.iter().any(|o| *o > 40.0), "{off:?}");
         // A move not known: the point as it is.
         assert_eq!(in_plan_of(&stack, "Roof", "Basement", p), p);

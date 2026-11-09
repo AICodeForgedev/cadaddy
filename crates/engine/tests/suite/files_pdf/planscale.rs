@@ -44,7 +44,7 @@ fn sheet(plan_title: &str, plan_scale: &str, detail: bool) -> Session {
         text(&mut s, [11.0, 1.15], "ELEVATION - EQUIPMENT SCREEN", 0.25);
         text(&mut s, [11.0, 0.9], "1/2\" = 1'-0\"", 0.12);
     }
-    text(&mut s, [15.0, 0.6], "A-103", 0.4);
+    text(&mut s, [15.0, 0.6], "A-501", 0.4);
     s
 }
 

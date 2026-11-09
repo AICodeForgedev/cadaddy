@@ -859,7 +859,7 @@ mod tests {
         let mut nts = view("FLOOR PLAN", None, 100.0);
         nts.not_to_scale = true;
         assert!(plan_print_scale(&[nts, view("ELEVATION", Some("1/4\" = 1'-0\""), 10.0)]).is_none());
-        assert!(names_a_plan("Mezzanine and Low Roof Plan") && names_a_plan("RCP - LEVEL 2") && !names_a_plan("Planting Notes"));
+        assert!(names_a_plan("Upper Level and Canopy Plan") && names_a_plan("RCP - LEVEL 2") && !names_a_plan("Planting Notes"));
     }
 
     /// A sheet that prints one scale note is never weighed (its note is its plans').

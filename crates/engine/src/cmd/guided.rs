@@ -25189,7 +25189,7 @@ fn region_title(job: &GuidedJob, r: &SheetRegion) -> String {
 
 /// A level's plan among its architectural plans `(rect, titled as a floor plan, levels it draws)`:
 /// one titled as its floor plan over its other plans, then one of this level alone over one that
-/// draws others too (a mezzanine and low roof plan is neither the mezzanine's floor plan nor the
+/// draws others too (one plan of an upper floor and a canopy is neither the floor's plan nor the
 /// roof plan), then the largest (a several-view sheet's floor plan, not its enlarged plans).
 /// Sheets come in at their plans' scales, so a 1/8" sheet is twice the size of a 1/4" one and its
 /// size alone says nothing of which plan is the level's (Q6396).
@@ -35445,7 +35445,7 @@ mod tests {
     }
 
     /// Q6396: a level's plan is the one titled as its floor plan, then the one drawn for it alone,
-    /// and only then the largest: a mezzanine and low roof plan read at its 1/8" scale is bigger
+    /// and only then the largest: a plan of two levels read at its 1/8" scale is bigger
     /// than the mezzanine's 1/4" floor plan, and is neither it nor the roof plan.
     #[test]
     fn a_levels_plan_is_its_own_before_the_biggest() {
