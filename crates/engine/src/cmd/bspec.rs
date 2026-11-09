@@ -2366,6 +2366,22 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // where it is built (a panel on its wall's face): offset past its side, the drawn route kept
     // on the run; the drawing's spec takes the same correction.
     let mut sp = sp;
+    // What stands on a framed roof stands on its deck: its level's elevation is where the roof
+    // bears (the top of plate), so the passes after this one (equipment, devices, MEP, pieces)
+    // take the roof's surface, over its members and deck, as that level's floor. The stored spec
+    // keeps the bearing.
+    let on_deck: Vec<(String, f64)> = sp
+        .levels
+        .iter()
+        .filter(|l| wallgen::roof_level(&sp.levels, &l.name))
+        .map(|l| (l.name.clone(), super::exterior::assembly_ft(&sp, &l.name)))
+        .filter(|(_, a)| *a > 0.0)
+        .collect();
+    for (name, a) in &on_deck {
+        if let Some(l) = sp.levels.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name)) {
+            l.elevation_ft += a;
+        }
+    }
     let gear_space = super::gearspace::clear_built(d, &mut sp);
     if gear_space.found > 0
         && let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
@@ -2574,7 +2590,7 @@ pub(crate) fn stack_offsets(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, Vec2
     let mut offsets: Vec<(&str, Vec2)> = vec![(lowest.name.as_str(), Vec2::ZERO)];
     for level in here.iter().skip(1) {
         let roof = (level.base.is_none() && wallgen::roof_level(&sp.levels, &level.name))
-            .then(|| super::exterior::built_bounds(d, &level.name, &["roof", "parapet"]))
+            .then(|| super::exterior::built_bounds(d, &level.name, &["roof", "parapet", super::exterior::ROOF_WALL]))
             .filter(|b| !b.is_empty());
         let under = roof.and_then(|r| {
             offsets.iter().rev().find_map(|(n, off)| {

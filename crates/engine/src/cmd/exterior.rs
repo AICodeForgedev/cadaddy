@@ -28,7 +28,8 @@ use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, MeshFace, M
 use cadaddy_geom::{Bounds2, Polyline, Vec2, Vec3};
 use cadaddy_walk3d::levels::DatumKind;
 use cadaddy_walk3d::{
-    Band, BandKind, BuildingSpec, Cricket, Equipment, Exterior, Facade, LevelParapet, Role, Roof, RoofDrain, RoofSlope, Side, ValueStatus,
+    Band, BandKind, BuildingSpec, Cricket, Equipment, Exterior, Facade, LevelParapet, Role, Roof, RoofDrain, RoofFraming, RoofSlope, Side,
+    ValueStatus,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -911,6 +912,161 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     p.dist(a + d * t)
 }
 
+// ---------------- roof framing ----------------
+
+/// The trade practice rule roof framing is built by.
+pub(crate) const FRAMING_RULE: &str = "S-ROOF-FRAMING";
+/// Most notes looked at for a roof level's framing, and most members built per roof (hostile
+/// drawings).
+const MAX_FRAMING_NOTES: usize = 20_000;
+const MAX_MEMBERS: usize = 5_000;
+
+/// The framing rule's numbers and words ([`FRAMING_RULE`] in `tradepractice.json`).
+#[derive(Clone, Debug)]
+pub(crate) struct FramingRule {
+    /// Member (`truss`, `joist`) by the words naming it.
+    pub words: Vec<(String, Vec<String>)>,
+    pub spacing_in: f64,
+    pub depth_in: f64,
+    pub chord_in: f64,
+    pub deck_in: f64,
+    pub min_span_ft: f64,
+    pub basis: String,
+}
+
+pub(crate) fn framing_rule() -> FramingRule {
+    let v = super::provenance::rule_data(FRAMING_RULE);
+    let num = |k: &str, d: f64| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0).unwrap_or(d);
+    let words = v
+        .get("member_words")
+        .and_then(Value::as_object)
+        .map(|o| {
+            o.iter()
+                .map(|(m, w)| {
+                    (m.clone(), w.as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_ascii_uppercase).collect()).unwrap_or_default())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    FramingRule {
+        words,
+        spacing_in: num("spacing_in", 24.0),
+        depth_in: num("depth_in", 24.0),
+        chord_in: num("chord_in", 3.5),
+        deck_in: num("deck_in", 1.5),
+        min_span_ft: num("min_span_ft", 2.0),
+        basis: super::provenance::rule(FRAMING_RULE).basis_for(""),
+    }
+}
+
+/// What one note says of a roof's framing: the member it names, and the spacing (`@ 24" OC`) or
+/// depth (`24" DEEP`) it gives, inches.
+fn framing_note(rule: &FramingRule, t: &str) -> Option<(String, Option<f64>, Option<f64>)> {
+    let up = t.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let member = rule.words.iter().find(|(_, ws)| ws.iter().any(|w| words.contains(&w.as_str())))?.0.clone();
+    let oc = words.windows(2).any(|w| w == ["O", "C"]) || words.contains(&"OC");
+    let spacing = up.split_once('@').filter(|_| oc).and_then(|(_, rest)| feet_inches(rest)).filter(|v| (6.0..=96.0).contains(v));
+    let depth = words.contains(&"DEEP").then(|| feet_inches(&up)).flatten().filter(|v| (6.0..=120.0).contains(v) && spacing.is_none());
+    Some((member, spacing, depth))
+}
+
+/// A roof level's framing as the notes in `regions` (its roof plans, `(sheet, area)` each) say:
+/// the member a note names with its spacing (else the member most notes name), the depth a note
+/// gives, the rule's usual values for what none gives. None when no note names a truss or joist.
+pub(crate) fn read_framing(d: &Drawing, regions: &[(String, Bounds2)], level: &str) -> Option<RoofFraming> {
+    let rule = framing_rule();
+    let mut spaced: Option<(String, f64, String)> = None;
+    let mut deep: Option<(f64, String)> = None;
+    let mut named: Vec<(String, usize, String)> = Vec::new();
+    let mut looked = 0usize;
+    for (sheet, b) in regions.iter().take(64) {
+        let ents = objects_in(d, b);
+        for (_, t, _, _) in texts(&ents) {
+            looked += 1;
+            if looked > MAX_FRAMING_NOTES {
+                break;
+            }
+            let Some((member, spacing, depth)) = framing_note(&rule, &t) else { continue };
+            let src = format!("{sheet}: {}", t.chars().take(120).collect::<String>());
+            if let (Some(s), None) = (spacing, &spaced) {
+                spaced = Some((member.clone(), s, src.clone()));
+            }
+            if let (Some(v), None) = (depth, &deep) {
+                deep = Some((v, src.clone()));
+            }
+            match named.iter_mut().find(|n| n.0 == member) {
+                Some(n) => n.1 += 1,
+                None => named.push((member, 1, src)),
+            }
+        }
+    }
+    let (member, first) = match &spaced {
+        Some((m, _, src)) => (m.clone(), src.clone()),
+        None => named.iter().max_by_key(|n| n.1).map(|n| (n.0.clone(), n.2.clone()))?,
+    };
+    let mut source = first;
+    if let Some((_, src)) = deep.as_ref().filter(|(_, s)| *s != source) {
+        source = format!("{source}; {src}");
+    }
+    let read = |v: Option<f64>, d: f64| match v {
+        Some(v) => (v, Some(ValueStatus::Read)),
+        None => (d, Some(ValueStatus::Default)),
+    };
+    let (spacing_in, spacing_status) = read(spaced.map(|s| s.1), rule.spacing_in);
+    let (depth_in, depth_status) = read(deep.map(|d| d.0), rule.depth_in);
+    Some(RoofFraming { level: level.to_string(), member, spacing_in, depth_in, spacing_status, depth_status, source })
+}
+
+/// How far a framed roof's surface stands over its level's elevation (where it bears): the
+/// members' depth and the deck, feet; 0 for a roof level not framed.
+pub(crate) fn assembly_ft(sp: &BuildingSpec, level: &str) -> f64 {
+    sp.exterior.level_framing(level).map_or(0.0, |f| {
+        let v = (f.depth_in + framing_rule().deck_in) / 12.0;
+        if v.is_finite() && v > 0.0 { v } else { 0.0 }
+    })
+}
+
+/// The members of a framed roof over `poly` (drawing units): one across the outline's short way
+/// every `spacing`, clipped to the outline (pieces shorter than `min_span` left out). Each its two
+/// ends on the plan.
+fn members(poly: &[Vec2], spacing: f64, min_span: f64) -> Vec<(Vec2, Vec2)> {
+    let bb = Bounds2::from_points(poly.iter().copied());
+    if bb.is_empty() || !(spacing.is_finite() && spacing > 0.0) {
+        return Vec::new();
+    }
+    // Across the short way: members run along y when the outline is longer in x.
+    let along_y = bb.width() >= bb.height();
+    let (lo, hi) = if along_y { (bb.min.x, bb.max.x) } else { (bb.min.y, bb.max.y) };
+    let mut out = Vec::new();
+    let mut k = 1usize;
+    loop {
+        let c = lo + spacing * k as f64;
+        if c >= hi - 1e-9 || out.len() >= MAX_MEMBERS || k > MAX_MEMBERS * 4 {
+            break;
+        }
+        k += 1;
+        // Where the line crosses the outline, in order along it: the pieces inside it.
+        let mut cuts: Vec<f64> = Vec::new();
+        for (a, b) in poly.iter().zip(poly.iter().cycle().skip(1)) {
+            let (ac, bc, ao, bo) = if along_y { (a.x, b.x, a.y, b.y) } else { (a.y, b.y, a.x, b.x) };
+            if (ac <= c && bc > c) || (bc <= c && ac > c) {
+                cuts.push(ao + (c - ac) / (bc - ac) * (bo - ao));
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        for w in cuts.chunks(2) {
+            let [s, e] = w else { continue };
+            if e - s < min_span {
+                continue;
+            }
+            let (p, q) = if along_y { (Vec2::new(c, *s), Vec2::new(c, *e)) } else { (Vec2::new(*s, c), Vec2::new(*e, c)) };
+            out.push((p, q));
+        }
+    }
+    out
+}
+
 // ---------------- building ----------------
 
 /// The roof surface's height above its level at a plan point, drawing units: 0 at its lowest
@@ -986,21 +1142,33 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         !m.faces.is_empty()
             && d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
     };
+    let rule = framing_rule();
+    let mut framed = 0usize;
     for r in ext.roofs.iter().take(10_000) {
         let Some(level) = sp.level(&r.level) else { continue };
         let z0 = level.elevation_ft * upf;
         let poly: Vec<Vec2> = r.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect();
         let rise = surface(r);
-        let top = |p: Vec2| z0 + rise(p);
+        // A framed roof bears at its level's elevation: its members, then the deck on them.
+        let framing = sp.exterior.level_framing(&level.name);
+        let depth = framing.map_or(0.0, |f| f.depth_in / 12.0 * upf);
+        let deck = if framing.is_some() { rule.deck_in / 12.0 * upf } else { 0.0 };
+        let top = |p: Vec2| z0 + depth + deck + rise(p);
         let plan_area = cadaddy_geom::shoelace(&poly).abs() / (upf * upf);
-        if let Some(m) = slab(&poly, &top, upf)
+        if let Some(m) = slab(&poly, &top, if framing.is_some() { deck } else { upf })
             && add(d, "3D-Roofs", measured(tag("roof", &level.name, &r.name), "area", plan_area), m)
         {
             roofs += 1;
         }
-        if let Some(h) = r.parapet_ft.or_else(|| sp.exterior.level_parapet(&r.level)) {
-            // Round the outline, 8" thick inside it, up to the parapet over the high point.
-            let high = poly.iter().map(|p| top(*p)).fold(f64::NEG_INFINITY, f64::max) + h * upf;
+        if let Some(f) = framing {
+            framed += frame_roof(d, &FrameJob { level: &level.name, roof: &r.name, poly: &poly, z0, depth, upf, rise: &rise }, f, &rule);
+        }
+        let parapet = r.parapet_ft.or_else(|| sp.exterior.level_parapet(&r.level));
+        // Round the outline, 8" thick inside it: a parapet up to its height over the high point;
+        // a framed roof's outside walls carried up round its framing to the deck when it has none
+        // (nothing between the walls and the deck is open).
+        let high = poly.iter().map(|p| top(*p)).fold(f64::NEG_INFINITY, f64::max) + parapet.unwrap_or(0.0) * upf;
+        if parapet.is_some() || framing.is_some() {
             let t = 8.0 / 12.0 * upf;
             let ccw = cadaddy_geom::shoelace(&poly) > 0.0;
             let mut m = super::wallgen::empty_mesh();
@@ -1014,7 +1182,17 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let (pa, pb) = (*a + inward * (t / 2.0), *b + inward * (t / 2.0));
                 super::wallgen::add_box(&mut m, pa, pb, t, z0, high);
             }
-            if add(d, "3D-Parapets", measured(tag("parapet", &level.name, &r.name), "lf", perimeter(&poly)), m) {
+            let part = if parapet.is_some() { "parapet" } else { ROOF_WALL };
+            let mut x = measured(tag(part, &level.name, &r.name), "lf", perimeter(&poly));
+            if parapet.is_none()
+                && let Some(f) = framing
+            {
+                x.extend(super::provenance::tags(
+                    cadaddy_walk3d::Made::Inferred,
+                    &rule_basis(&rule, f, "the outside walls up round the framing to the deck"),
+                ));
+            }
+            if add(d, "3D-Parapets", x, m) {
                 parapets += 1;
             }
         }
@@ -1070,11 +1248,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
     }
-    // The roof surface under a point of a level (for what stands on it).
+    // The roof surface under a point of a level (for what stands on it): over a framed roof's
+    // members and deck.
     let roof_at = |level: &str, p: Vec2| {
+        let on = assembly_ft(sp, level) * upf;
         ext.roofs.iter().filter(|r| r.level.eq_ignore_ascii_case(level)).find_map(|r| {
             let poly: Vec<Vec2> = r.outline.iter().map(|q| Vec2::new(q[0], q[1])).collect();
-            cadaddy_geom::point_in_polygon(&poly, p).then(|| surface(r)(p))
+            cadaddy_geom::point_in_polygon(&poly, p).then(|| on + surface(r)(p))
         })
     };
     for c in ext.crickets.iter().take(10_000) {
@@ -1173,7 +1353,78 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
     }
-    json!({ "roofs": roofs, "parapets": parapets, "crickets": crickets, "equipment": equipment, "roofDrains": drains, "facadeGlass": glass, "roofNotes": notes })
+    json!({ "roofs": roofs, "parapets": parapets, "roofFraming": framed, "crickets": crickets, "equipment": equipment, "roofDrains": drains, "facadeGlass": glass, "roofNotes": notes })
+}
+
+/// The build part of a framed roof's outside walls carried up round its framing (no parapet).
+pub(crate) const ROOF_WALL: &str = "roof-wall";
+/// The build part of a roof framing member.
+pub(crate) const ROOF_MEMBER: &str = "roof-framing";
+
+/// A roof being framed: its level and name, outline, bearing height and the members' depth
+/// (drawing units), and its rise over the plan.
+struct FrameJob<'a> {
+    level: &'a str,
+    roof: &'a str,
+    poly: &'a [Vec2],
+    z0: f64,
+    depth: f64,
+    upf: f64,
+    rise: &'a dyn Fn(Vec2) -> f64,
+}
+
+/// The basis a framed roof's piece carries: what the notes gave (their sheet and words) and what
+/// the rule put in.
+fn rule_basis(rule: &FramingRule, f: &RoofFraming, what: &str) -> String {
+    let given = |s: &Option<ValueStatus>| !ValueStatus::is_default(s);
+    let mut read = Vec::new();
+    if given(&f.spacing_status) {
+        read.push(format!("{}\" o.c.", f.spacing_in));
+    }
+    if given(&f.depth_status) {
+        read.push(format!("{}\" deep", f.depth_in));
+    }
+    let from = if f.source.is_empty() { String::new() } else { format!("; read: {} ({})", read.join(", "), f.source) };
+    format!("{FRAMING_RULE}: {what}{from}; {}", rule.basis.trim_start_matches(&format!("{FRAMING_RULE}: ")))
+}
+
+/// A framed roof's members over its outline, each an element bearing at the level's elevation:
+/// how many were built.
+fn frame_roof(d: &mut Drawing, j: &FrameJob, f: &RoofFraming, rule: &FramingRule) -> usize {
+    if d.layer("3D-Framing").is_none() {
+        d.layers.push(cadaddy_doc::Layer { name: "3D-Framing".into(), color: cadaddy_doc::color::Color::Index(42), ..cadaddy_doc::Layer::default() });
+    }
+    let spacing = f.spacing_in / 12.0 * j.upf;
+    let chord = rule.chord_in / 12.0 * j.upf;
+    // Every value a note gave: derived from it; else the rule's usual: inferred.
+    let all_read = !ValueStatus::is_default(&f.spacing_status) && !ValueStatus::is_default(&f.depth_status);
+    let made = if all_read { cadaddy_walk3d::Made::Derived } else { cadaddy_walk3d::Made::Inferred };
+    let basis = rule_basis(rule, f, &format!("{} across the roof's short way", f.member));
+    let mut n = 0usize;
+    for (i, (a, b)) in members(j.poly, spacing, rule.min_span_ft * j.upf).into_iter().enumerate() {
+        let mid = (a + b) * 0.5;
+        let mut m = super::wallgen::empty_mesh();
+        super::wallgen::add_box(&mut m, a, b, chord, j.z0, j.z0 + j.depth + (j.rise)(mid));
+        let t = |code: i32, v: String| RawTag { code, value: v };
+        let mut x = vec![
+            t(1001, super::wallgen::APP.into()),
+            t(1000, ROOF_MEMBER.into()),
+            t(1000, j.level.chars().take(255).collect()),
+            t(1000, Handle(0).hex()),
+            t(1000, format!("{} {} {}", j.roof, f.member, i + 1).chars().take(240).collect()),
+            t(1000, format!("kind:{}", f.member)),
+            t(1000, format!("lf:{}", (a.dist(b) / j.upf * 100.0).round() / 100.0)),
+            t(1000, format!("depth_in:{}", f.depth_in)),
+            t(1000, format!("spacing_in:{}", f.spacing_in)),
+        ];
+        x.extend(super::provenance::tags(made, &basis));
+        if !m.faces.is_empty()
+            && d.add(&Space::Model, Common { layer: "3D-Framing".into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
+        {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// The spec's exterior with the roofs of roof levels it has none for: read off the level's
@@ -1478,6 +1729,43 @@ pub(crate) fn built_bounds(d: &Drawing, level: &str, parts: &[&str]) -> Bounds2 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A framing note's member, spacing (`@ 24" OC`) and depth (`24" DEEP`), whatever the note's
+    /// wording; a note naming no member says nothing of the framing.
+    #[test]
+    fn framing_notes_give_the_member_its_spacing_and_depth() {
+        let rule = framing_rule();
+        let note = |t: &str| framing_note(&rule, t);
+        assert_eq!(note("PRE-MANUFACTURED ROOF TRUSSES @ 24\" OC. MAX."), Some(("truss".into(), Some(24.0), None)));
+        assert_eq!(note("ROOF TRUSSES @ 2'-0\" O.C."), Some(("truss".into(), Some(24.0), None)));
+        assert_eq!(note("MIN. 24\" DEEP TRUSS"), Some(("truss".into(), None, Some(24.0))));
+        assert_eq!(note("16\" DEEP OPEN WEB JOISTS @ 32\" O.C."), Some(("joist".into(), Some(32.0), None)));
+        assert_eq!(note("GIRDER TRUSS"), Some(("truss".into(), None, None)));
+        // `@` with no on-centre word is no spacing.
+        assert_eq!(note("TRUSS @ GRID 4"), Some(("truss".into(), None, None)));
+        assert_eq!(note("5/8\" SHEATHING @ 24\" OC"), None);
+    }
+
+    /// Members cross the outline's short way every spacing, clipped to it: an L outline's
+    /// members stop at its inside corner.
+    #[test]
+    fn members_span_the_short_way_clipped_to_the_outline() {
+        // 40' × 30' in feet (1 unit = 1 ft): a member every 2' along x, each 30'.
+        let rect = [Vec2::new(0.0, 0.0), Vec2::new(40.0, 0.0), Vec2::new(40.0, 30.0), Vec2::new(0.0, 30.0)];
+        let m = members(&rect, 2.0, 1.0);
+        assert_eq!(m.len(), 19);
+        assert!(m.iter().all(|(a, b)| (a.x - b.x).abs() < 1e-9 && (a.dist(*b) - 30.0).abs() < 1e-9));
+        // Taller than wide: the members run along x.
+        let tall = [Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 20.0), Vec2::new(0.0, 20.0)];
+        assert!(members(&tall, 2.0, 1.0).iter().all(|(a, b)| (a.y - b.y).abs() < 1e-9 && (a.dist(*b) - 10.0).abs() < 1e-9));
+        // An L: 40' long, 30' deep for its west 20', 10' deep for the rest.
+        let l =
+            [Vec2::new(0.0, 0.0), Vec2::new(40.0, 0.0), Vec2::new(40.0, 10.0), Vec2::new(20.0, 10.0), Vec2::new(20.0, 30.0), Vec2::new(0.0, 30.0)];
+        let spans: Vec<f64> = members(&l, 4.0, 1.0).iter().map(|(a, b)| a.dist(*b)).collect();
+        assert_eq!(spans, [30.0, 30.0, 30.0, 30.0, 10.0, 10.0, 10.0, 10.0, 10.0]);
+        // Hostile spacing: nothing, never a loop without end.
+        assert!(members(&rect, 0.0, 1.0).is_empty() && members(&rect, f64::NAN, 1.0).is_empty());
+    }
 
     #[test]
     fn a_floor_plate_takes_in_every_face_of_the_slab() {
