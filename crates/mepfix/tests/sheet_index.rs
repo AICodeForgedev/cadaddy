@@ -767,6 +767,33 @@ fn a_truss_bearing_is_the_roofs_elevation_and_parapet_tops_its_parapets() {
     assert!(index.levels.iter().take(2).all(|l| l.parapets_ft.is_empty()));
 }
 
+/// fix-parapet-one-height-per-roof: tops of parapet on a sheet of exterior elevations carry the
+/// facade of the view title nearest them; a section's carry none. Every top is kept by facade.
+#[test]
+fn tops_of_parapet_keep_the_facade_their_elevation_shows() {
+    let section = marked("A301", &["BUILDING SECTIONS"], &[("SECOND FLOOR", "110'-0\""), ("TRUSS BEARING", "119'-1 1/2\"")]);
+    let mut elevations = sheet("A201", &["EXTERIOR ELEVATIONS"], "");
+    // Two elevations one over the other, each titled under it, its marks at its right end.
+    for (title, y, top) in [("NORTH ELEVATION", 380.0, "127'-7 1/2\""), ("EAST ELEVATION", 140.0, "123'-7 1/2\"")] {
+        text(&mut elevations, title, 300.0, y, 10.0);
+        text(&mut elevations, "T.O. PARAPET", 1100.0, y + 120.0, 6.0);
+        text(&mut elevations, top, 1100.0, y + 112.0, 6.0);
+        text(&mut elevations, "FIRST FLOOR", 1100.0, y + 30.0, 6.0);
+        text(&mut elevations, "100'-0\"", 1100.0, y + 22.0, 6.0);
+    }
+    let index = printset::sheet_index(&classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["SECOND FLOOR PLAN"], "")),
+        ("Set.pdf", 3, sheet("A103", &["ROOF PLAN"], "")),
+        ("Set.pdf", 4, section),
+        ("Set.pdf", 5, elevations),
+    ]));
+    let roof = index.levels.last().expect("roof");
+    assert_eq!(roof.parapets_ft, [4.5, 8.5], "{roof:?}");
+    let tops: Vec<(f64, Option<&str>)> = roof.parapet_tops.iter().map(|t| (t.height_ft, t.facade.as_deref())).collect();
+    assert_eq!(tops, [(4.5, Some("east")), (8.5, Some("north"))], "{roof:?}");
+}
+
 /// A marker whose name is long prints its elevation under the name's far end, farther from the
 /// name's start than a short marker's: it is still the marker's, and the next marker up keeps
 /// its own.

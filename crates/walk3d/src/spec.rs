@@ -858,9 +858,23 @@ impl Exterior {
         self.framing.iter().find(|f| f.level.eq_ignore_ascii_case(level))
     }
 
-    /// The parapet height an elevation gives for a level, feet.
+    /// The parapet height the elevations give for a level, feet: the lowest top marked with no
+    /// facade, else the lowest of all (a parapet that steps keeps every top in
+    /// [`Exterior::level_parapets`]; this is the one an edge nothing marks falls back to).
     pub fn level_parapet(&self, level: &str) -> Option<f64> {
-        self.parapets.iter().find(|p| p.level.eq_ignore_ascii_case(level)).map(|p| p.height_ft)
+        let low = |general: bool| {
+            self.level_parapets(level)
+                .filter(|p| !general || p.facade.is_none())
+                .map(|p| p.height_ft)
+                .fold(None, |a: Option<f64>, h| Some(a.map_or(h, |a| a.min(h))))
+        };
+        low(true).or_else(|| low(false))
+    }
+
+    /// Every parapet top the elevations give for a level: by facade and, where the top steps
+    /// along a facade, by the stretch of it each one marks.
+    pub fn level_parapets<'a>(&'a self, level: &'a str) -> impl Iterator<Item = &'a LevelParapet> + 'a {
+        self.parapets.iter().filter(move |p| p.level.eq_ignore_ascii_case(level))
     }
 }
 
@@ -888,14 +902,21 @@ pub struct RoofFraming {
     pub source: String,
 }
 
-/// A parapet height read from an elevation (above the roof line), for the roofs of a level.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A parapet height read from an elevation (above the roof line), for the roofs of a level. A
+/// parapet whose top steps has one per top and facade, each on the stretch of the facade it
+/// marks (`start_ft`..`end_ft`, along the facade from its left end as seen, as [`Band`]s are);
+/// none = the whole facade (or, with no facade, every edge no other one marks).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LevelParapet {
     pub level: String,
     pub height_ft: f64,
     /// The facade whose elevation gave it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facade: Option<Side>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_ft: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ft: Option<f64>,
 }
 
 /// Whether a value was read from the drawings or is a default put in because they don't say.
@@ -3421,6 +3442,13 @@ impl BuildingSpec {
         for (i, p) in self.exterior.parapets.iter().enumerate().take(MAX_ITEMS) {
             if !(fin(p.height_ft) && (0.0..=50.0).contains(&p.height_ft)) {
                 out.push(Issue::error(format!("exterior.parapets[{i}].height_ft"), "the parapet must be from 0 to 50 feet"));
+            }
+            let along = |v: Option<f64>| v.is_none_or(|v| fin(v) && (0.0..=100_000.0).contains(&v));
+            if !(along(p.start_ft) && along(p.end_ft) && p.start_ft.zip(p.end_ft).is_none_or(|(a, b)| a < b)) {
+                out.push(Issue::error(
+                    format!("exterior.parapets[{i}]"),
+                    "a parapet's stretch along its facade must run from start_ft to a greater end_ft",
+                ));
             }
         }
         for (i, r) in self.schedule.rows.iter().enumerate().take(100_000) {
