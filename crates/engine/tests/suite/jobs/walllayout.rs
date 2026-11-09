@@ -410,7 +410,18 @@ fn plates_that_would_overlap_are_one_ganged_box() {
         let plate = verdict(&layout_findings(&mut s, m), "plate");
         assert!(!plate.is_empty() && plate.iter().all(|v| v.starts_with("pass")), "{m}: {plate:?}");
     }
-    // Overlapping plates at two heights are not ganged: a fail naming both heights.
+    // Drawn at one spot at two heights (18" on one sheet, 21" on another): the build gangs them
+    // at one height (Q6335: one box, one plate; the lower on a tie of sources), the other's own
+    // height kept beside.
+    let (p1, p2) = (props(&mut s, "H1"), props(&mut s, "H2"));
+    assert_eq!(p1["plate_group"]["value"], p2["plate_group"]["value"], "{p1:#}\n{p2:#}");
+    let design = &p2["design:mount_height"]["value"];
+    assert_eq!(design.as_f64().or_else(|| design.as_str().and_then(|t| t.parse().ok())), Some(21.0), "{p2:#}");
+    // Overlapping plates at two heights (a hand moved one back up) are not ganged: a fail naming
+    // both heights.
+    let h2 = handle_of(&mut s, "H2");
+    s.execute("override.add", &json!({"handle": h2, "kind": "move", "delta": [0, 0, 3]})).expect("move");
+    s.execute("bim.layout.rehost", &json!({})).expect("rehost");
     assert_ne!(props(&mut s, "H1")["plate_group"]["value"], props(&mut s, "H2")["plate_group"]["value"]);
     let ph = verdict(&layout_findings(&mut s, "H1"), "plate");
     assert!(ph.iter().any(|v| v.starts_with("fail") && v.contains("centre 18 in AFF") && v.contains("centre 21 in AFF")), "{ph:?}");

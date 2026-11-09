@@ -160,6 +160,8 @@ pub(crate) struct GangRule {
     /// The families that may share one box when a keynote says to gang them (power devices; low
     /// voltage never with power).
     pub power_families: Vec<String>,
+    /// Why a gang's devices stand at one height, and which (Q6335).
+    pub height_source: String,
 }
 
 /// The box a kind of device takes, on raceway and on cable, and whether it takes a ring.

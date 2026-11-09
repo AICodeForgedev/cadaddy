@@ -693,3 +693,162 @@ fn a_device_moved_off_a_back_to_back_box_never_gangs_with_its_new_neighbour() {
         assert!(y >= b.2[1] - 3.0 && y <= b.3[1] + 3.0, "device at y {y}, box {:?}-{:?}", b.2, b.3);
     }
 }
+
+fn plan_line(d: &mut Drawing, layer: &str, a: (f64, f64), b: (f64, f64)) {
+    let p = |(x, y): (f64, f64)| Vec3 { x: x * 12.0, y: y * 12.0, z: 0.0 };
+    let h = Handle(d.handseed.max(0x100));
+    d.handseed = h.0 + 1;
+    let mut e = Entity::new(h, EntityKind::Line(Line { a: p(a), b: p(b) }));
+    e.common.layer = layer.into();
+    d.model.push(e);
+}
+
+/// [`two_rooms_with`] (the wall between them fire-rated) with a door in that wall from `door.0`
+/// to `door.1` ft (jambs, the open leaf and its swing), every device as (kind, x ft, y ft,
+/// mounting height in or none: not printed). The build's report beside it.
+fn two_rooms_with_door(devices: &[(&str, f64, f64, Option<f64>)], door: (f64, f64)) -> (Session, Value) {
+    let mut d = Drawing::new_imperial();
+    let o = [((0., 0.), (40., 0.)), ((40., 0.), (40., 10.)), ((40., 10.), (0., 10.)), ((0., 10.), (0., 0.))];
+    let i = [((0.5, 0.5), (39.5, 0.5)), ((39.5, 0.5), (39.5, 9.5)), ((39.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
+    let (y0, y1) = door;
+    let mid = [
+        ((19.75, 0.5), (19.75, y0)),
+        ((19.75, y1), (19.75, 9.5)),
+        ((20.25, 0.5), (20.25, y0)),
+        ((20.25, y1), (20.25, 9.5)),
+        ((19.75, y0), (20.25, y0)),
+        ((19.75, y1), (20.25, y1)),
+    ];
+    for (a, b) in o.into_iter().chain(i).chain(mid) {
+        plan_line(&mut d, "A-WALL", a, b);
+    }
+    plan_line(&mut d, "A-DOOR", (20.25, y1), (20.25 + (y1 - y0), y1));
+    let h = Handle(d.handseed.max(0x100));
+    d.handseed = h.0 + 1;
+    let mut arc = Entity::new(
+        h,
+        EntityKind::Arc(cadaddy_engine::doc::Arc {
+            center: Vec3 { x: 20.25 * 12.0, y: y1 * 12.0, z: 0.0 },
+            radius: (y1 - y0) * 12.0,
+            start: 1.5 * std::f64::consts::PI,
+            end: 0.0,
+        }),
+    );
+    arc.common.layer = "A-DOOR".into();
+    d.model.push(arc);
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    let tags: Vec<Value> = devices
+        .iter()
+        .map(|(kind, x, y, h)| {
+            let mut fields = json!({
+                "symbol": {"value": "1F0", "source": "plan"}, "sheet": {"value": "E-101", "source": "plan"},
+                "circuit": {"value": "LP1-3", "source": "plan"}
+            });
+            if let (Some(h), Some(f)) = (h, fields.as_object_mut()) {
+                f.insert("mount_height_in".into(), json!({"value": h.to_string(), "source": "note"}));
+            }
+            json!({"id": format!("device:L1:{x},{y}"), "kind": kind, "level": "L1", "at_ft": [x, y], "fields": fields})
+        })
+        .collect();
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}, {"layer": "A-DOOR", "role": "door"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6, "assembly": {"tag": "P1", "fire_rating": "1 HR"}}],
+        "openings": {"enabled": true, "min_ft": 1.5, "max_ft": 16.0, "door_head_ft": 7.0, "window_head_ft": 7.0, "window_sill_ft": 2.0},
+        "tags": tags
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    let built = s.execute("model.build", &json!({})).expect("build");
+    (s, built)
+}
+
+/// A box's centre (inches) from its body.
+fn mid(b: &(String, String, [f64; 3], [f64; 3], cadaddy_engine::doc::props::Props)) -> [f64; 3] {
+    [(b.2[0] + b.3[0]) / 2.0, (b.2[1] + b.3[1]) / 2.0, (b.2[2] + b.3[2]) / 2.0]
+}
+
+#[test]
+fn a_fire_separation_move_never_jumps_a_door_opening_it_pads_both_boxes() {
+    // Test finding (fix-fire-separation-box-move-wrong): a box moved off its back-to-back partner
+    // went 47.5" along its wall, through the door opening to the hinge side behind the leaf; only
+    // the spot it landed on was checked. Two units' receptacles 1.2" apart on the faces of the
+    // rated wall, 4.8" south of a 3' door (y 3'-6'); south the wall ends.
+    let devices = [("receptacle", 19.6, 2.6, Some(18.0)), ("receptacle", 20.4, 2.7, Some(18.0))];
+    let (mut s, built) = two_rooms_with_door(&devices, (3.0, 6.0));
+    let d = s.doc().expect("doc");
+    let doors = d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("door")).count();
+    assert_eq!(doors, 1, "the fixture's door: {built}");
+    let boxes = box_bodies(&mut s);
+    assert_eq!(boxes.len(), 2, "{boxes:?}");
+    for b in &boxes {
+        let c = mid(b);
+        // Neither box in or past the door opening (y 36"-72").
+        assert!(c[1] < 36.0, "box {} moved through the door to {c:?}", b.0);
+    }
+    // Neither moved; both carry the listed putty pad, with why.
+    assert!(boxes.iter().all(|b| b.4.get("design:location").is_none()), "{boxes:?}");
+    for b in &boxes {
+        let why = b.4.get("correction:firestop").map(|p| p.text()).unwrap_or_default();
+        assert!(why.contains("IBC 714.4.2") && why.contains("unbroken"), "{why}");
+    }
+    assert!(built.to_string().contains("\"puttyPads\":2"), "{built}");
+}
+
+#[test]
+fn a_switch_keeps_its_spot_and_the_box_on_the_other_face_moves_the_full_distance() {
+    // Test finding: a bed-wall switch was moved 23.5" off the architectural spot behind the
+    // headboard. The switch's spot wins: the receptacle behind it on the other face moves, its
+    // full 24" clear (IBC 714.4.2 exception 1.1). The switch is the later device (it used to
+    // move first).
+    let devices = [("receptacle", 20.4, 5.0, Some(18.0)), ("switch", 19.6, 5.1, Some(46.0))];
+    let (mut s, built) = two_rooms_with_door(&devices, (7.0, 9.4));
+    let boxes = box_bodies(&mut s);
+    assert_eq!(boxes.len(), 2, "{built}");
+    let kind_of = |b: &(String, String, [f64; 3], [f64; 3], cadaddy_engine::doc::props::Props)| {
+        let d = s.doc().expect("doc");
+        let dev = Handle::parse_hex(&b.1).expect("device");
+        cadaddy_engine::doc::props::read(&d.model.get(dev).expect("device").common.xdata).get("kind").map(|p| p.text()).unwrap_or_default()
+    };
+    let sw = boxes.iter().find(|b| kind_of(b) == "switch").expect("switch box");
+    let rc = boxes.iter().find(|b| kind_of(b) == "receptacle").expect("receptacle box");
+    assert!(sw.4.get("design:location").is_none(), "the switch stays: {:?}", sw.4.get("correction:location").map(|p| p.text()));
+    assert!(rc.4.get("design:location").is_some(), "the receptacle moves: {built}");
+    let edge = (sw.2[1] - rc.3[1]).max(rc.2[1] - sw.3[1]);
+    assert!(edge >= 24.0 - 1e-6, "{edge} in apart");
+    let report = built.to_string();
+    assert!(report.contains("\"keptSpots\":1"), "{report}");
+}
+
+#[test]
+fn ganged_devices_stand_at_one_height_the_one_the_documents_give() {
+    // Test finding: a dimmer and a 3-way ganged by their keynote were built in one box at two
+    // heights (46" and 43.75"), their plates overlapping. One box, one plate, one height: the one
+    // the documents give first (here both notes: the lower), the other's kept beside.
+    let devices = [("switch", 5.0, 0.8, Some(46.0)), ("switch", 5.5, 0.8, Some(43.75))];
+    let (mut s, built) = two_rooms_with_door(&devices, (7.0, 9.4));
+    let boxes = box_bodies(&mut s);
+    assert_eq!(boxes.len(), 1, "one ganged box: {boxes:?} {built}");
+    let d = s.doc().expect("doc");
+    let mut zs = Vec::new();
+    let mut corrected = 0;
+    for e in d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("device")) {
+        let EntityKind::Mesh(m) = &e.kind else { panic!("device mesh") };
+        let (lo, hi) = m.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v.z), b.max(v.z)));
+        zs.push((lo + hi) / 2.0);
+        let ps = cadaddy_engine::doc::props::read(&e.common.xdata);
+        if let Some(h) = ps.get("design:mount_height") {
+            corrected += 1;
+            assert_eq!(ps.get("mount_height").map(|p| p.text()).as_deref(), Some("43.75"), "design {}", h.text());
+            let why = ps.get("correction:mount_height").map(|p| p.text()).unwrap_or_default();
+            assert!(why.contains("ganged"), "{why}");
+        }
+    }
+    assert_eq!(zs.len(), 2);
+    assert!((zs[0] - zs[1]).abs() < 0.01, "one height: {zs:?}");
+    assert!((zs[0] - 43.75).abs() < 0.6, "at 43.75\": {zs:?}");
+    assert_eq!(corrected, 1, "the one not at it says so");
+    let c = mid(&boxes[0]);
+    assert!((c[2] - 43.75).abs() < 0.6, "the box at it too: {c:?}");
+}
