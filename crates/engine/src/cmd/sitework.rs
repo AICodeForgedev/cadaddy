@@ -178,7 +178,7 @@ pub(crate) fn trade_site_sheet(discipline: &str, title: &str) -> bool {
     [up.as_str(), joined.as_str()].iter().any(|t| words_of(t).iter().any(|w| r.trade_title_words.iter().any(|x| x == w)))
 }
 
-/// A panel circuit tag as printed (`HP-7`, `A-1,3`, an arrow's glyph after it): the tag, its
+/// A panel circuit tag as printed (`LP-7`, `A-1,3`, an arrow's glyph after it): the tag, its
 /// panel and its circuits.
 pub(crate) fn circuit_label(v: &str) -> Option<(String, String, String)> {
     let clean: String = v.trim().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == ',').collect();
@@ -250,7 +250,7 @@ pub(crate) struct Light {
     pub symbol: Option<Handle>,
 }
 
-/// A panel circuit tag (`HP-7`) on the sheet.
+/// A panel circuit tag (`LP-7`) on the sheet.
 #[derive(Clone, Debug)]
 pub(crate) struct CircuitTag {
     pub label: String,
@@ -1068,7 +1068,7 @@ pub(crate) struct Built {
     pub concrete: Vec<ConcreteElement>,
     pub pads: Vec<PadDecision>,
     pub runs: Vec<MepRun>,
-    /// The circuits built (`HP-7`) and their luminaires.
+    /// The circuits built (`LP-7`) and their luminaires.
     pub circuits: BTreeMap<String, usize>,
     /// What the job is told (each a finding line).
     pub findings: Vec<String>,
@@ -1793,7 +1793,7 @@ pub(crate) struct SiteLoad {
 }
 
 /// The panel schedules' circuits whose load is on the site (their descriptions' words) and that
-/// no site work carries (`built`: the circuit tags the site plans built, `HP-7`).
+/// no site work carries (`built`: the circuit tags the site plans built, `LP-7`).
 pub(crate) fn site_loads(sp: &BuildingSpec, built: &BTreeSet<String>) -> Vec<SiteLoad> {
     let r = rules();
     let mut out = Vec::new();
@@ -1896,7 +1896,7 @@ mod tests {
 
     #[test]
     fn circuit_tags_lose_the_home_run_arrow() {
-        assert_eq!(circuit_label("HP-7\u{2260}"), Some(("HP-7".into(), "HP".into(), "7".into())));
+        assert_eq!(circuit_label("SP-5\u{2260}"), Some(("SP-5".into(), "SP".into(), "5".into())));
         assert_eq!(circuit_label("L-1,3"), Some(("L-1,3".into(), "L".into(), "1,3".into())));
         assert!(circuit_label("C-POLE").is_none());
     }
@@ -2167,7 +2167,7 @@ mod tests {
     fn site_loads_no_site_plan_carries_are_listed() {
         let mut sp = BuildingSpec::default();
         let circuit =
-            |n: &str, d: &str| cadaddy_walk3d::PanelCircuit { number: n.into(), description: d.into(), source: "E-6".into(), ..Default::default() };
+            |n: &str, d: &str| cadaddy_walk3d::PanelCircuit { number: n.into(), description: d.into(), source: "E-601".into(), ..Default::default() };
         sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule {
             panel: "LP".into(),
             circuits: vec![
