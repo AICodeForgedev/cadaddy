@@ -2584,7 +2584,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             no_host.push((tag.mark.clone(), tag.at, "no width: no schedule row and no opening of its own"));
             continue;
         };
-        let Some(host) = host_wall(&pl.walls, tag.at, width, reach, k, &|p, nrm, t| outside(p, nrm, t, &pl.walls)) else {
+        let Some(host) = host_wall(&pl.walls, tag.at, width, reach, k, min_gap, &|p, nrm, t| outside(p, nrm, t, &pl.walls)) else {
             no_host.push((tag.mark.clone(), tag.at, "no outside wall within its reach to hold it"));
             continue;
         };
@@ -2593,6 +2593,15 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             if let Some(o) = pl.walls.get_mut(*j) {
                 o.cuts.push(Cut { s0: *s0, s1: *s1, window: true, head, sill });
             }
+        }
+        // The slots it spans were built solid: the window stands there instead.
+        let half_w = width / 2.0;
+        for o in pl.walls.iter_mut().take(MAX_OBJECTS) {
+            let t = o.thickness;
+            o.extra.retain(|(e0, e1, ..)| {
+                let m = (*e0 + *e1) * 0.5 - host.mid;
+                !(host.u.perp().dot(m).abs() <= t / 2.0 && host.u.dot(m).abs() < half_w)
+            });
         }
         let Some(w) = pl.walls.get(host.wall) else { continue };
         let len = w.a.dist(w.b);
@@ -3015,29 +3024,43 @@ fn window_tag_fits(tags: &[WindowTag], gaps: &[(Vec2, Vec2, f64)], k: f64) -> Ta
 /// Where a window tag's window goes in an outside wall ([`host_wall`]): the wall piece under the
 /// tag's foot (the window's leaf takes its thickness and source), where along it the window's
 /// middle is, and every piece of that wall line the window crosses with the window's span along
-/// each (in the piece's own direction). A plan's wall line often comes in pieces, joined end to
-/// end or overlapping where two drawings of it meet (Q6311): the window spans the joints and is
-/// cut out of every piece it crosses.
+/// each (in the piece's own direction), and the window's middle and the line's direction. A
+/// plan's wall line often comes in pieces, joined end to end, overlapping where two drawings of
+/// it meet, or a slot apart narrower than any opening (a joint, a post: built solid, Q6297): the
+/// window spans the joints and is cut out of every piece it crosses (Q6311).
 struct WindowHost {
     wall: usize,
     at: f64,
     spans: Vec<(usize, f64, f64)>,
+    mid: Vec2,
+    u: Vec2,
 }
 
-/// Wall pieces of one line closer than this at a joint (inches) are joined there.
+/// A window's ends stand on its wall's pieces within this (inches).
 const JOINT_GAP_IN: f64 = 1.0;
 
 /// The outside wall holding a window tag's window `width` wide (drawing units, `k` per inch):
-/// the nearest wall piece within `reach` past its face whose foot point under the tag is on it,
-/// its line (the piece and the pieces in line with it, end to end or overlapping) holding the
-/// window centred at the tag's foot with no opening cut there yet, outside there (`outside(point,
-/// normal, the wall's thickness)`).
-fn host_wall(walls: &[PlanWall], at: Vec2, width: f64, reach: f64, k: f64, outside: &dyn Fn(Vec2, Vec2, f64) -> bool) -> Option<WindowHost> {
+/// the nearest wall piece within `reach` past its face whose foot point under the tag is on it
+/// (or in a slot at its end),
+/// its line (the piece and the pieces in line with it, end to end, overlapping or a slot narrower
+/// than `slot` apart) holding the window centred at the tag's foot, its ends on pieces, with no
+/// opening cut there yet, outside there (`outside(point, normal, the wall's thickness)`).
+#[allow(clippy::too_many_arguments)]
+fn host_wall(
+    walls: &[PlanWall],
+    at: Vec2,
+    width: f64,
+    reach: f64,
+    k: f64,
+    slot: f64,
+    outside: &dyn Fn(Vec2, Vec2, f64) -> bool,
+) -> Option<WindowHost> {
     if !(width.is_finite() && width > 0.0 && at.is_finite()) {
         return None;
     }
     let half = width / 2.0;
     let joint = JOINT_GAP_IN * k;
+    let slot = if slot.is_finite() { slot.max(joint) } else { joint };
     let unit = |w: &PlanWall| {
         let len = w.a.dist(w.b);
         (len.is_finite() && len > 1e-9).then(|| (len, (w.b - w.a) * (1.0 / len)))
@@ -3050,7 +3073,7 @@ fn host_wall(walls: &[PlanWall], at: Vec2, width: f64, reach: f64, k: f64, outsi
             let (len, u) = unit(w)?;
             let s = u.dot(at - w.a);
             let off = u.perp().dot(at - w.a).abs();
-            if off > w.thickness / 2.0 + reach || s < 0.0 || s > len {
+            if off > w.thickness / 2.0 + reach || s < -slot || s > len + slot {
                 return None;
             }
             let mid = w.a + u * s;
@@ -3066,7 +3089,7 @@ fn host_wall(walls: &[PlanWall], at: Vec2, width: f64, reach: f64, k: f64, outsi
                 }
                 let (p0, p1) = (u.dot(o.a - w.a), u.dot(o.b - w.a));
                 let (p0, p1) = (p0.min(p1), p0.max(p1));
-                if p1 < s - half - joint || p0 > s + half + joint {
+                if p1 < s - half - slot || p0 > s + half + slot {
                     continue;
                 }
                 along.push((p0, p1));
@@ -3078,16 +3101,19 @@ fn host_wall(walls: &[PlanWall], at: Vec2, width: f64, reach: f64, k: f64, outsi
                     spans.push((j, c - half, c + half));
                 }
             }
-            // The pieces cover the window's span, joint to joint.
+            // The pieces cover the window's span, joint to joint, its ends on pieces.
             along.sort_by(|a, b| a.0.total_cmp(&b.0));
+            if !along.iter().any(|(p0, p1)| *p0 <= s - half + joint && *p1 > s - half) {
+                return None;
+            }
             let mut reached = s - half;
             for (p0, p1) in &along {
-                if *p0 <= reached + joint {
+                if *p0 <= reached + slot {
                     reached = reached.max(*p1);
                 }
             }
             (reached >= s + half - joint && !spans.is_empty() && outside(mid, u.perp(), w.thickness))
-                .then_some((off, WindowHost { wall: i, at: s, spans }))
+                .then_some((off, WindowHost { wall: i, at: s, spans, mid, u }))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, h)| h)

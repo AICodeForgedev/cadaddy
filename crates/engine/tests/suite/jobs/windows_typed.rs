@@ -36,16 +36,30 @@ fn office(tags: &[(f64, f64, &str)], rows: Value) -> (Session, Value) {
 /// [`office`], with `symbols`: tag symbols as blocks whose attribute holds the mark (x, y feet,
 /// mark), as a print's tag symbols come in.
 fn office_with(tags: &[(f64, f64, &str)], symbols: &[(f64, f64, &str)], rows: Value) -> (Session, Value) {
-    build(tags, symbols, rows, false)
+    build(tags, symbols, rows, North::Through)
 }
 
 /// [`office`], its north wall drawn as two pieces in line that meet at x = 6' (a 6" piece west of
 /// it, a 5 1/2" piece east of it, their inside faces apart), as two drawings of one wall meet.
 fn office_north_in_pieces(tags: &[(f64, f64, &str)], rows: Value) -> (Session, Value) {
-    build(tags, &[], rows, true)
+    build(tags, &[], rows, North::Pieces)
 }
 
-fn build(tags: &[(f64, f64, &str)], symbols: &[(f64, f64, &str)], rows: Value, north_in_pieces: bool) -> (Session, Value) {
+/// [`office`], its north wall drawn as two pieces a 3" slot apart at x = 6' (a joint, a post),
+/// narrower than any opening.
+fn office_north_slot(tags: &[(f64, f64, &str)], rows: Value) -> (Session, Value) {
+    build(tags, &[], rows, North::Slot)
+}
+
+/// How the office's north wall is drawn.
+#[derive(Clone, Copy, PartialEq)]
+enum North {
+    Through,
+    Pieces,
+    Slot,
+}
+
+fn build(tags: &[(f64, f64, &str)], symbols: &[(f64, f64, &str)], rows: Value, north: North) -> (Session, Value) {
     let mut d = Drawing::new_imperial();
     for (x, y, mark) in symbols {
         let at = json!({"x": x * 12.0, "y": y * 12.0, "z": 0.0});
@@ -65,10 +79,21 @@ fn build(tags: &[(f64, f64, &str)], symbols: &[(f64, f64, &str)], rows: Value, n
     // The opening's jambs.
     line(&mut d, (10.0, 0.0), (10.0, 0.5));
     line(&mut d, (14.0, 0.0), (14.0, 0.5));
-    for (a, b) in [((24., 0.), (24., 12.)), ((24., 12.), (0., 12.)), ((0., 12.), (0., 0.))] {
-        line(&mut d, a, b);
+    let slot = (6.0 - 1.5 / 12.0, 6.0 + 1.5 / 12.0);
+    if north == North::Slot {
+        for (a, b) in [((24., 0.), (24., 12.)), ((24., 12.), (slot.1, 12.)), ((slot.0, 12.), (0., 12.)), ((0., 12.), (0., 0.))] {
+            line(&mut d, a, b);
+        }
+    } else {
+        for (a, b) in [((24., 0.), (24., 12.)), ((24., 12.), (0., 12.)), ((0., 12.), (0., 0.))] {
+            line(&mut d, a, b);
+        }
     }
-    if north_in_pieces {
+    if north == North::Slot {
+        for (a, b) in [((23.5, 0.5), (23.5, 11.5)), ((23.5, 11.5), (slot.1, 11.5)), ((slot.0, 11.5), (0.5, 11.5)), ((0.5, 11.5), (0.5, 0.5))] {
+            line(&mut d, a, b);
+        }
+    } else if north == North::Pieces {
         for (a, b) in [
             ((23.5, 0.5), (23.5, 11.5 + 1.0 / 24.0)),
             ((23.5, 11.5 + 1.0 / 24.0), (6.0, 11.5 + 1.0 / 24.0)),
@@ -219,4 +244,17 @@ fn a_tag_where_two_pieces_of_its_wall_meet_is_its_window_across_the_joint() {
     for (_, p) in &ws {
         assert_eq!(value(p, "width"), json!(48.0), "{p}");
     }
+}
+
+#[test]
+fn a_tag_at_a_slot_between_two_pieces_of_its_wall_is_its_window_across_the_slot() {
+    // W1 by the south opening (4'), W1 again by the north wall at x = 6', where its two pieces
+    // stand a 3" slot apart (narrower than any opening: built solid): the window (4..8') spans the
+    // slot (Q6311: a print's outside wall pieces a few inches apart, every tag there had no wall).
+    let (mut s, built) = office_north_slot(&[(11.0, -1.5, "W1"), (6.0, 13.0, "W1")], json!([]));
+    let ws = windows(&mut s);
+    assert_eq!(ws.len(), 2, "{built}");
+    let row = &built["window_tags"][0];
+    assert_eq!(row["no_host_count"], json!(0), "{row}");
+    assert_eq!(row["by_basis"], json!({"tag": 1, "tag_on_wall": 1}), "{row}");
 }
