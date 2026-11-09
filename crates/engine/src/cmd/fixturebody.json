@@ -1,0 +1,37 @@
+{
+  "_what": "What a built device is (fixturebody.rs, Q6315): the device kinds (as read: its own kind, lower case, spaces as underscores) that make it a light fixture or a plumbing fixture element, and the 3D body each kind of fixture is built as when nothing drawn or printed gives its size.",
+  "_basis": "IFC 4 classes the model's fixtures apart from its devices: IfcLightFixture for luminaires, exit signs and emergency lights; IfcSanitaryTerminal for water closets, urinals, lavatories, sinks, tubs, showers, drinking fountains and floor drains. Sizes are the common catalog sizes of each kind (trade practice), used only where no document gives one, and marked inferred.",
+  "light_kinds": ["luminaire", "wall_luminaire", "light_fixture", "lighting_fixture", "light", "exit_sign", "emergency_light", "emergency_luminaire", "downlight", "sconce"],
+  "plumbing_kinds": ["plumbing_fixture", "water_closet", "urinal", "lavatory", "sink", "service_sink", "mop_sink", "tub", "bathtub", "shower", "drinking_fountain", "water_cooler", "floor_drain", "floor_sink", "eyewash"],
+  "_size_in": "A body's size, inches: [along the wall it is set against (its width), out from the wall (its depth), its height]. One set clear of every wall (a ceiling luminaire) has its width along plan x. Where it sits up and down stays its mounting height's (the documents', else the rules' default): a documented floor fixture's top is its documented height.",
+  "light_families": [
+    {"name": "exit sign", "words": ["EXIT"], "size_in": [12.0, 2.5, 8.0], "basis": "trade practice: an edge-lit or thermoplastic exit sign, about 12 in by 8 in, 2-3 in deep"},
+    {"name": "emergency light", "words": ["EMERGENCY LIGHT", "EMERGENCY UNIT", "BUG EYE", "EGRESS UNIT"], "size_in": [12.0, 4.0, 6.0], "basis": "trade practice: a two-head emergency battery unit, about 12 in wide, 4 in deep, 6 in high"},
+    {"name": "troffer", "words": ["TROFFER", "FLAT PANEL", "LAY IN", "LAY-IN", "RECESSED PANEL"], "size_in": [24.0, 48.0, 5.0], "basis": "trade practice: a lay-in troffer is nominal 2 ft by 4 ft, about 5 in deep"},
+    {"name": "downlight", "words": ["DOWNLIGHT", "DOWN LIGHT", "CAN", "PINHOLE", "RECESSED ROUND", "WAFER"], "size_in": [7.5, 7.5, 6.0], "basis": "trade practice: a 6 in aperture recessed downlight, its trim about 7-8 in across, 6 in deep"},
+    {"name": "strip", "words": ["STRIP", "WRAP", "LINEAR", "INDUSTRIAL"], "size_in": [5.0, 48.0, 4.0], "basis": "trade practice: a strip or wrap luminaire, nominal 4 ft long, 4-6 in wide"},
+    {"name": "vanity light", "words": ["VANITY", "BATH BAR", "MIRROR LIGHT"], "size_in": [24.0, 5.0, 6.0], "basis": "trade practice: a vanity bar over a mirror, about 24 in long, 5 in from the wall"},
+    {"name": "wall pack", "words": ["WALL PACK", "WALLPACK"], "size_in": [12.0, 8.0, 9.0], "basis": "trade practice: an exterior wall pack, about 12 in wide, 8 in out from the wall"},
+    {"name": "sconce", "words": ["SCONCE", "WALL MOUNT", "WALL MOUNTED", "WALL LIGHT"], "size_in": [6.0, 6.0, 10.0], "basis": "trade practice: a wall sconce, about 6 in wide and out from the wall, 10 in high"},
+    {"name": "pendant", "words": ["PENDANT", "CHANDELIER"], "size_in": [16.0, 16.0, 12.0], "basis": "trade practice: a decorative pendant, about 16 in across"},
+    {"name": "high bay", "words": ["HIGH BAY", "HIGHBAY", "LOW BAY"], "size_in": [16.0, 16.0, 8.0], "basis": "trade practice: a round high-bay luminaire, about 16 in across"}
+  ],
+  "light_default": {"name": "luminaire", "size_in": [12.0, 12.0, 6.0], "basis": "trade practice: no size printed and no word naming its shape: a nominal 1 ft square luminaire, 6 in deep"},
+  "_light_wall_default": "A luminaire set in a wall's face (a wall luminaire) of no known shape: a sconce's size.",
+  "light_wall_default": {"name": "wall luminaire", "size_in": [6.0, 6.0, 10.0], "basis": "trade practice: a wall luminaire of no printed size or shape: a sconce's, about 6 in wide and out from the wall, 10 in high"},
+  "plumbing_families": [
+    {"name": "water closet", "words": ["WATER CLOSET", "TOILET", "WC"], "size_in": [20.0, 28.0, 30.0], "basis": "trade practice: a floor-mounted tank water closet, about 20 in wide, 28 in out from the wall, 30 in to its tank top"},
+    {"name": "urinal", "words": ["URINAL"], "size_in": [18.0, 14.0, 26.0], "basis": "trade practice: a wall-hung urinal, about 18 in wide, 14 in out from the wall, 26 in high"},
+    {"name": "floor drain", "words": ["FLOOR DRAIN", "FLOOR SINK", "AREA DRAIN", "SHOWER DRAIN", "TRENCH DRAIN", "FD"], "size_in": [6.0, 6.0, 1.0], "basis": "trade practice: a floor drain's strainer, about 6 in square, at the floor"},
+    {"name": "tub", "words": ["TUB", "BATHTUB", "BATH TUB", "BATH"], "size_in": [60.0, 30.0, 20.0], "basis": "trade practice: a recessed bathtub, 60 in by 30 in, 20 in high"},
+    {"name": "shower", "words": ["SHOWER", "ROLL IN", "ROLL-IN"], "size_in": [36.0, 36.0, 4.0], "basis": "trade practice: a shower receptor, 36 in square, its curb about 4 in high"},
+    {"name": "service sink", "words": ["MOP", "SERVICE SINK", "JANITOR", "MOP SINK", "SLOP SINK", "MOP BASIN", "SERVICE BASIN"], "size_in": [24.0, 24.0, 12.0], "basis": "trade practice: a floor mop basin, 24 in square, 12 in high"},
+    {"name": "lavatory", "words": ["LAVATORY", "LAV", "VANITY"], "size_in": [20.0, 18.0, 8.0], "basis": "trade practice: a lavatory, about 20 in wide, 18 in out from the wall, its bowl about 8 in deep"},
+    {"name": "sink", "words": ["SINK"], "size_in": [25.0, 22.0, 9.0], "basis": "trade practice: a counter sink, about 25 in by 22 in, 9 in deep"},
+    {"name": "drinking fountain", "words": ["DRINKING FOUNTAIN", "WATER COOLER", "BOTTLE FILLER", "BOTTLE FILLING"], "size_in": [18.0, 19.0, 20.0], "basis": "trade practice: a wall-mounted drinking fountain, about 18 in wide, 19 in out from the wall, 20 in high"},
+    {"name": "eyewash", "words": ["EYEWASH", "EYE WASH", "EMERGENCY SHOWER"], "size_in": [16.0, 14.0, 12.0], "basis": "trade practice: a wall-mounted eyewash bowl, about 16 in wide, 14 in out from the wall, 12 in high"}
+  ],
+  "_plumbing_default": "A plumbing fixture of no known kind (a hose bibb, a washer box, a trap primer) keeps its rough-in box: no catalog size fits every one of them, so none is guessed (its body_basis says so).",
+  "size_limits_in": [1.0, 120.0],
+  "_size_limits_in": "A size its schedule prints (`2X4`, `60X32`) is taken only with each side in this range, inches: a value outside it is something else (a lamp count and wattage, a model number)."
+}

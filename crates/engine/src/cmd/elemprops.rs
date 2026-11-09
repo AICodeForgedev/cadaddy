@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(SET, "Set Element Property (BIM)", run_set)
             .params("{handle? | handles? | filter?: {kind?, where?: {key: value | \"exists\" | \"missing\"}} (default: the selection), key?: string, value?: string | number | bool | null (null clears), unit?, note?, props?: {key: value} (several at once; with or instead of key)} → {set, elements: [{handle, kind, override?}], skipped}: source user; kept through rebuilds"),
         CommandSpec::new(FIND, "Find Elements by Property", run_find)
-            .params("{kind?: string (wall, door, window, room, floor, ceiling, roof, device, fixture, light_fixture, equipment, duct, pipe, conduit, or a build part such as column), where?: {key: value | \"exists\" | \"missing\"}, select?: bool, limit? (default 200)} → {count, handles, elements: [{handle, kind, level?}], more}")
+            .params("{kind?: string (wall, door, window, room, floor, ceiling, roof, device, light_fixture, plumbing_fixture, fixture, equipment, duct, pipe, conduit, or a build part such as column), where?: {key: value | \"exists\" | \"missing\"}, select?: bool, limit? (default 200)} → {count, handles, elements: [{handle, kind, level?}], more}")
             .noundo(),
         CommandSpec::new(SUMMARY, "Element Property Summary", run_summary)
             .params("{kind?} → {kinds: {kind: {count, filled: {key: n_with_value}, sources: {key: {source: n}}, standard: [key]}}, elements}")
@@ -79,12 +79,47 @@ pub fn element_kind(e: &Entity) -> Option<String> {
 }
 
 /// What an element is, said as a reader would: a device's own kind as the build wrote it
-/// (`receptacle`, `smoke_detector`, from its legend row or its sheet), else [`element_kind`]'s.
+/// (`receptacle`, `smoke_detector`, `wall_luminaire`, from its legend row or its sheet), else
+/// [`element_kind`]'s.
 pub(crate) fn reported_kind(e: &Entity, kind: String) -> String {
-    if kind != "device" {
+    if !is_device_kind(&kind) || kind == "fixture" {
         return kind;
     }
     cadaddy_doc::props::read(&e.common.xdata).get("kind").map(|p| p.text()).filter(|k| !k.trim().is_empty() && k != "device").unwrap_or(kind)
+}
+
+/// The build tag that says what element kind a built device is (`element:light_fixture`), set
+/// when it is made.
+pub(crate) const ELEMENT_TAG: &str = "element";
+
+/// Whether an element kind is one of a built device's: a device, a light fixture, a plumbing
+/// fixture (or a fixture of a trade's layer).
+pub(crate) fn is_device_kind(kind: &str) -> bool {
+    matches!(kind, "device" | "light_fixture" | "plumbing_fixture" | "fixture")
+}
+
+/// The element kind of a built device (Q6315): a luminaire a `light_fixture`, a plumbing fixture
+/// a `plumbing_fixture`, as the build set it ([`ELEMENT_TAG`]), else (a model built before it
+/// did) as its kind as read says (`fixturebody.json`); else its layer's (a lighting layer's, a
+/// plumbing layer's), else a `device`.
+fn device_kind(e: &Entity, layer: &str) -> &'static str {
+    let tagged = super::bimlook::made_tag(e, ELEMENT_TAG);
+    let class = match tagged {
+        Some("light_fixture") => Some(super::fixturebody::Class::Light),
+        Some("plumbing_fixture") => Some(super::fixturebody::Class::Plumbing),
+        Some(_) => None,
+        None => props::read(&e.common.xdata).get("kind").and_then(|p| super::fixturebody::class_of_kind(&p.text())),
+    };
+    if let Some(c) = class {
+        return c.element_kind();
+    }
+    if layer.contains("LIGHT") || layer.contains("LTG") {
+        "light_fixture"
+    } else if layer.contains("PLUMB") || layer.contains("FIXT") || layer.contains("SPRINK") {
+        "fixture"
+    } else {
+        "device"
+    }
 }
 
 fn kind_of_part<'a>(e: &Entity, part: &'a str) -> &'a str {
@@ -95,8 +130,7 @@ fn kind_of_part<'a>(e: &Entity, part: &'a str) -> &'a str {
         "roof" | "cricket" => "roof",
         "light" => "light_fixture",
         "diffuser" => "fixture",
-        "device" if layer.contains("LIGHT") || layer.contains("LTG") => "light_fixture",
-        "device" if layer.contains("PLUMB") || layer.contains("FIXT") || layer.contains("SPRINK") => "fixture",
+        "device" => device_kind(e, &layer),
         "mep" => {
             let kind = super::bimlook::made_tag(e, "kind").unwrap_or("").to_ascii_lowercase();
             let mpart = super::bimlook::made_tag(e, "part").unwrap_or("").to_ascii_lowercase();

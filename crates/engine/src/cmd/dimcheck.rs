@@ -202,7 +202,7 @@ fn read_legs(d: &Drawing) -> Legs {
             break;
         }
         let Some(kind) = super::elemprops::element_kind(e) else { continue };
-        if kind != "device" && kind != "light_fixture" {
+        if !matches!(kind.as_str(), "device" | "light_fixture" | "plumbing_fixture") {
             continue;
         }
         let store = props::read(&e.common.xdata);
