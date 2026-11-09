@@ -2112,7 +2112,7 @@ const MAX_SPLIT_NOTE_PIECES: usize = 2000;
 /// A scale note whose "=" didn't come through reads as two texts on one line, the paper length
 /// (`SCALE 1/8"`) and the real one (`1'-0"`) a gap apart: each such pair joined, where it reads
 /// as a scale ([`parse_scale_pair`]) and neither piece does alone.
-fn join_split_scale_notes(texts: &[NoteText]) -> Vec<NoteText> {
+fn join_split_scale_notes(texts: &[NoteText]) -> Vec<(NoteText, [usize; 2])> {
     let paper_piece = |v: &str| {
         let v = v.trim();
         v.len() <= 24 && !v.contains('\'') && !v.contains('=') && (v.ends_with('"') || v.ends_with(|c: char| c.is_ascii_digit()) && v.contains('/'))
@@ -2121,10 +2121,10 @@ fn join_split_scale_notes(texts: &[NoteText]) -> Vec<NoteText> {
         let v = v.trim();
         v.len() <= 16 && v.contains('\'') && v.starts_with(|c: char| c.is_ascii_digit() || c == '=' || c == '-')
     };
-    let papers: Vec<&NoteText> = texts.iter().filter(|t| paper_piece(&t.value)).take(MAX_SPLIT_NOTE_PIECES).collect();
-    let reals: Vec<&NoteText> = texts.iter().filter(|t| real_piece(&t.value)).take(MAX_SPLIT_NOTE_PIECES).collect();
+    let papers: Vec<(usize, &NoteText)> = texts.iter().enumerate().filter(|(_, t)| paper_piece(&t.value)).take(MAX_SPLIT_NOTE_PIECES).collect();
+    let reals: Vec<(usize, &NoteText)> = texts.iter().enumerate().filter(|(_, t)| real_piece(&t.value)).take(MAX_SPLIT_NOTE_PIECES).collect();
     let mut out = Vec::new();
-    for a in papers {
+    for (ia, a) in papers {
         if !(a.height.is_finite() && a.height > 0.0) || parse_scale(&a.value).is_some() {
             continue;
         }
@@ -2132,8 +2132,8 @@ fn join_split_scale_notes(texts: &[NoteText]) -> Vec<NoteText> {
         let (ux, uy) = (r.cos(), r.sin());
         // the gap an "=" and its spaces leave, past the paper piece's own letters
         let reach = (a.value.trim().chars().count() as f64 + 6.0) * a.height;
-        let mut best: Option<(f64, &NoteText)> = None;
-        for b in &reals {
+        let mut best: Option<(f64, usize, &NoteText)> = None;
+        for &(ib, b) in &reals {
             let same_size = b.height >= a.height * 0.7 && b.height <= a.height * 1.4;
             let turn = (b.rotation - a.rotation).rem_euclid(360.0);
             if !same_size || turn.min(360.0 - turn) > 2.0 {
@@ -2142,14 +2142,14 @@ fn join_split_scale_notes(texts: &[NoteText]) -> Vec<NoteText> {
             let (dx, dy) = (b.at.0 - a.at.0, b.at.1 - a.at.1);
             let along = dx * ux + dy * uy;
             let across = -dx * uy + dy * ux;
-            if across.abs() <= a.height * 0.35 && along > 0.0 && along <= reach && best.is_none_or(|(d, _)| along < d) {
-                best = Some((along, b));
+            if across.abs() <= a.height * 0.35 && along > 0.0 && along <= reach && best.is_none_or(|(d, _, _)| along < d) {
+                best = Some((along, ib, b));
             }
         }
-        let Some((_, b)) = best else { continue };
+        let Some((_, ib, b)) = best else { continue };
         let value = format!("{} {}", a.value.trim(), b.value.trim().trim_start_matches(['=', '-', ' ']));
         if parse_scale_pair(&value).is_some() && parse_scale(&b.value).is_none() {
-            out.push(NoteText { value, ..a.clone() });
+            out.push((NoteText { value, ..a.clone() }, [ia, ib]));
         }
     }
     out
@@ -2160,12 +2160,18 @@ fn join_split_scale_notes(texts: &[NoteText]) -> Vec<NoteText> {
 /// the source text.
 fn detect_scale_note(texts: &[TextOut], sheet: (f64, f64)) -> Option<(f64, String)> {
     let notes: Vec<NoteText> = texts.iter().map(NoteText::of_text).collect();
-    detect_scale_note_in(&notes, sheet)
+    detect_scale_note_in(&notes, &[], sheet)
 }
 
 /// [`detect_scale_note`] over any texts: a note with its "=" (or its "SCALE" label), a paper and
-/// a real length with no "=" between them, or the two pieces of one split at its gap.
-fn detect_scale_note_in(texts: &[NoteText], sheet: (f64, f64)) -> Option<(f64, String)> {
+/// a real length with no "=" between them, or the two pieces of one split at its gap. `context`
+/// is the sheet's other texts (never a note themselves): a view title or a SCALE label beside a
+/// note may be among them.
+///
+/// A paper/real pair with no "=" is a note only when it is a standard scale
+/// ([`standard_pair_scale`]) and stands as a note ([`stands_as_note`]): two dimension strings
+/// set side by side (`8"` beside `16'-8"`) read the same way, and are neither (Q6395).
+fn detect_scale_note_in(texts: &[NoteText], context: &[NoteText], sheet: (f64, f64)) -> Option<(f64, String)> {
     struct Candidate {
         scale: f64,
         text: String,
@@ -2175,7 +2181,8 @@ fn detect_scale_note_in(texts: &[NoteText], sheet: (f64, f64)) -> Option<(f64, S
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
     let joined = join_split_scale_notes(texts);
-    for t in texts.iter().chain(&joined) {
+    let singles = texts.iter().enumerate().map(|(i, t)| (t, [i, i]));
+    for (t, own) in singles.chain(joined.iter().map(|(t, own)| (t, *own))) {
         let v = t.value.trim();
         let up = v.to_ascii_uppercase();
         let k = if up.contains('=') || up.starts_with("SCALE") {
@@ -2189,6 +2196,16 @@ fn detect_scale_note_in(texts: &[NoteText], sheet: (f64, f64)) -> Option<(f64, S
             None
         };
         let Some(k) = k else { continue };
+        // a pair with no "=": a standard scale, standing as a note (never a lone pair among a
+        // plan's dimension strings)
+        let k = if !up.contains('=') && up.contains('\'') && parse_scale_pair(v).is_some() {
+            match standard_pair_scale(v) {
+                Some(k) if stands_as_note(t, own, texts, context, sheet) => k,
+                _ => continue,
+            }
+        } else {
+            k
+        };
         let key = scale_note_body(v).trim_start_matches(|c: char| !c.is_ascii_digit()).to_string();
         let layer_up = t.layer.as_deref().unwrap_or("").to_ascii_uppercase();
         let on_title = layer_up.contains("TITLE") || layer_up.contains("BORDER") || layer_up.contains("TBLOCK");
@@ -2217,6 +2234,110 @@ fn detect_scale_note_in(texts: &[NoteText], sheet: (f64, f64)) -> Option<(f64, S
     // best = lowest priority, then most occurrences
     candidates.sort_by(|a, b| a.priority.cmp(&b.priority).then(b.count.cmp(&a.count)));
     candidates.into_iter().next().map(|c| (c.scale, c.text))
+}
+
+/// Engineering scales (feet to the inch) of the standard list, beside the architectural
+/// inch-to-foot ones of [`imperial_scales`].
+const ENGINEERING_FEET_PER_INCH: [f64; 12] = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 80.0, 100.0, 200.0, 300.0, 400.0, 500.0];
+
+/// The drawing's standard scales (drawing inches per sheet inch, name): [`imperial_scales`] and
+/// the engineering inch-to-feet scales. `feet_only` keeps the scales a paper length and a real
+/// length in feet give (no metric ratio).
+fn standard_scales(feet_only: bool) -> Vec<(f64, String)> {
+    let mut v: Vec<(f64, String)> = imperial_scales()
+        .into_iter()
+        .filter(|sc| sc.is_valid() && sc.paper_units > 0.0 && (!feet_only || sc.name.contains('\'')))
+        .map(|sc| (sc.drawing_units / sc.paper_units, sc.name))
+        .collect();
+    v.extend(ENGINEERING_FEET_PER_INCH.iter().map(|ft| (ft * 12.0, format!("1\" = {ft}'-0\""))));
+    v
+}
+
+/// How closely (relative) a note without its "=" must give a standard scale.
+const PAIR_STANDARD_TOLERANCE: f64 = 0.005;
+
+/// The scale of a paper/real pair with no "=" ([`parse_scale_pair`], or after a SCALE label)
+/// when it is one of the standard scales ([`standard_scales`]): `1/8" 1'-0"` is 96, `1" 20'` is
+/// 240; `8" 16'-8"` (25) is two dimension strings, no scale.
+fn standard_pair_scale(text: &str) -> Option<f64> {
+    let k = implicit_pair(&scale_note_body(text))?;
+    standard_scales(true).into_iter().map(|(s, _)| s).find(|s| (k / s - 1.0).abs() <= PAIR_STANDARD_TOLERANCE)
+}
+
+/// Texts looked at around a scale note for its view title, SCALE label or dimension strings.
+const MAX_NOTE_CONTEXT_TEXTS: usize = 20_000;
+
+/// Whether a paper/real pair stands as a scale note (Q6395): after a SCALE word (its own, or a
+/// SCALE label just before or over it), under or beside a view title (lettering of words at
+/// least its size), or in the title block (a title-block layer, the sheet's bottom-right) — and,
+/// but for a SCALE word, not among dimension strings (another one within a few text heights).
+/// `own` are the indices in `texts` of the pieces the note was read from.
+fn stands_as_note(note: &NoteText, own: [usize; 2], texts: &[NoteText], context: &[NoteText], sheet: (f64, f64)) -> bool {
+    let h = note.height;
+    if !(h.is_finite() && h > 0.0) {
+        return false;
+    }
+    let body = note.value.trim().to_ascii_uppercase();
+    if body.starts_with("SCALE") {
+        return true;
+    }
+    let r = note.rotation.to_radians();
+    let (ux, uy) = (r.cos(), r.sin());
+    // the note's length along its line: its pieces' extent
+    let width_of = |t: &NoteText| t.value.trim().chars().count() as f64 * t.height * 0.8;
+    let mut len = width_of(note);
+    for i in own {
+        if let Some(p) = texts.get(i) {
+            let along = (p.at.0 - note.at.0) * ux + (p.at.1 - note.at.1) * uy;
+            len = len.max(along + width_of(p));
+        }
+    }
+    let layer_up = note.layer.as_deref().unwrap_or("").to_ascii_uppercase();
+    let in_title_block = layer_up.contains("TITLE")
+        || layer_up.contains("BORDER")
+        || layer_up.contains("TBLOCK")
+        || (note.at.0 / 72.0 > sheet.0 * 0.6 && note.at.1 / 72.0 < sheet.1 * 0.3);
+    let mut titled = false;
+    let mut scale_label = false;
+    let mut dimensions = 0usize;
+    let others = texts.iter().enumerate().filter(|(i, _)| !own.contains(i)).map(|(_, t)| t).chain(context).take(MAX_NOTE_CONTEXT_TEXTS);
+    for t in others {
+        if !(t.height.is_finite() && t.height > 0.0) {
+            continue;
+        }
+        let (dx, dy) = (t.at.0 - note.at.0, t.at.1 - note.at.1);
+        let along = dx * ux + dy * uy;
+        let up = -dx * uy + dy * ux;
+        if along.abs() > len + 12.0 * h || up.abs() > 12.0 * h {
+            continue;
+        }
+        let v = t.value.trim().to_ascii_uppercase();
+        if dimension_length(&v).is_some() {
+            if along > -6.0 * h && along < len + 6.0 * h && up.abs() <= 6.0 * h {
+                dimensions += 1;
+            }
+            continue;
+        }
+        let turn = (t.rotation - note.rotation).rem_euclid(360.0);
+        if turn.min(360.0 - turn) > 2.0 {
+            continue;
+        }
+        let tw = width_of(t);
+        let overlaps = along < len + 2.0 * h && along + tw > -2.0 * h;
+        let on_line = up.abs() <= 0.6 * h.max(t.height);
+        // over it (a title or a label a line or two up), or beside it on its line
+        let over = up > 0.5 * h && up <= 4.0 * h.max(t.height) && overlaps;
+        let beside = on_line && (along + tw > -6.0 * h && along + tw <= 0.5 * h || along >= len - 0.5 * h && along <= len + 6.0 * h);
+        if !(over || beside) {
+            continue;
+        }
+        if v.trim_end_matches(':').trim() == "SCALE" {
+            scale_label = true;
+        } else if t.height >= h * 0.8 && v.chars().filter(char::is_ascii_alphabetic).count() >= 3 && !v.contains('\'') && !v.contains('"') {
+            titled = true;
+        }
+    }
+    scale_label || ((titled || in_title_block) && dimensions == 0)
 }
 
 /// A dimension string's length in inches: feet with their mark, then inches (`12'-6"`,
@@ -2384,14 +2505,12 @@ fn scale_from_dimensions(texts: &[NoteText], strokes: &[Stroke]) -> Option<Dimen
         return None;
     }
     let median = *ks.get(i + agree / 2)?;
-    let named = imperial_scales()
+    let named = standard_scales(false)
         .into_iter()
-        .filter(|sc| sc.is_valid() && sc.paper_units > 0.0)
-        .map(|sc| (sc.drawing_units / sc.paper_units, sc.name))
         .filter(|(k, _)| (k / median - 1.0).abs() <= DIMENSION_AGREE)
         .min_by(|a, b| (a.0 / median - 1.0).abs().total_cmp(&(b.0 / median - 1.0).abs()));
     Some(match named {
-        Some((k, name)) => DimensionScale { scale: k, agree, measured: n, named: Some(name.to_string()) },
+        Some((k, name)) => DimensionScale { scale: k, agree, measured: n, named: Some(name) },
         None => DimensionScale { scale: median, agree, measured: n, named: None },
     })
 }
@@ -4203,13 +4322,16 @@ fn recover_shx_ocr_upright(
     for (gi, (_, bb, _)) in glyphs.iter().enumerate() {
         by_cell.entry((((bb[0] + bb[2]) / 2.0 / cell).floor() as i64, ((bb[1] + bb[3]) / 2.0 / cell).floor() as i64)).or_default().push(gi);
     }
+    // a glyph of one straight stroke (an I, a 1, a slash): whether it leans with its row or by
+    // design is what the row's slant is wanted for, so it can't say that slant itself
+    let lone_stroke: Vec<bool> = glyph_pts.iter().map(|p| p.len() == 1 && p.first().is_some_and(|s| s.len() <= 2)).collect();
     let row_slant = |gi: usize| -> f64 {
         let Some((_, bb, pen)) = glyphs.get(gi) else { return 0.0 };
         let (cx, cy, h) = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0, (bb[3] - bb[1]).max(0.5));
         let reach = ((h * 4.0 / cell).ceil() as i64).clamp(1, 4);
         let (gx, gy) = ((cx / cell).floor() as i64, (cy / cell).floor() as i64);
-        // (height, lean) of the glyphs beside it
-        let mut near: Vec<(f64, Option<f64>)> = Vec::new();
+        // (height, lean, lone stroke, itself) of the glyphs beside it and its own
+        let mut near: Vec<(f64, Option<f64>, bool, bool)> = Vec::new();
         for dx in -reach..=reach {
             for dy in -1..=1 {
                 for &gj in by_cell.get(&(gx + dx, gy + dy)).map(Vec::as_slice).unwrap_or_default() {
@@ -4220,7 +4342,7 @@ fn recover_shx_ocr_upright(
                         && ((b2[0] + b2[2]) / 2.0 - cx).abs() <= h * 4.0
                         && (0.6..=1.6).contains(&(h2 / h))
                     {
-                        near.push((h2, leans.get(gj).copied().flatten()));
+                        near.push((h2, leans.get(gj).copied().flatten(), lone_stroke.get(gj).copied().unwrap_or(false), gj == gi));
                     }
                 }
             }
@@ -4230,9 +4352,29 @@ fn recover_shx_ocr_upright(
         let mut heights: Vec<f64> = near.iter().map(|n| n.0).collect();
         heights.sort_by(f64::total_cmp);
         let Some(&hm) = heights.get(heights.len() / 2) else { return 0.0 };
-        let mut votes: Vec<f64> = near.iter().filter(|n| (hm * 0.85..=hm * 1.15).contains(&n.0)).filter_map(|n| n.1).collect();
+        let voters: Vec<&(f64, Option<f64>, bool, bool)> = near.iter().filter(|n| (hm * 0.85..=hm * 1.15).contains(&n.0)).collect();
+        // the glyphs with a stem (an L, a 4, a serifed I) say the slant; their median
+        let mut votes: Vec<f64> = voters.iter().filter(|n| !n.2).filter_map(|n| n.1).collect();
         votes.sort_by(f64::total_cmp);
-        votes.get(votes.len() / 2).copied().unwrap_or(0.0)
+        if let Some(&k) = votes.get(votes.len() / 2) {
+            return k;
+        }
+        // else the lone strokes: only beside another one (alone its lean is its own: in `3/32"`
+        // the slash is the only straight stroke, and would read as an oblique I), and of two
+        // middle votes the more upright (in `1/8"` drawn with a lone-stroke 1, the slash leans
+        // by design)
+        if !voters.iter().any(|n| n.2 && !n.3 && n.1.is_some()) {
+            return 0.0;
+        }
+        let mut votes: Vec<f64> = voters.iter().filter(|n| n.2).filter_map(|n| n.1).collect();
+        votes.sort_by(f64::total_cmp);
+        let n = votes.len();
+        let upper = votes.get(n / 2).copied();
+        let lower = if n.is_multiple_of(2) { (n / 2).checked_sub(1).and_then(|i| votes.get(i)).copied() } else { None };
+        match (lower, upper) {
+            (Some(a), Some(b)) if a.abs() < b.abs() => a,
+            (_, b) => b.unwrap_or(0.0),
+        }
     };
     // the letter height of each glyph's row: the median height of the taller glyphs beside it
     // whose letter band holds its centre (none for a glyph standing alone)
@@ -5752,7 +5894,8 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         // text gave none: the lettering is read from the same shapes the sheet prints.
         if opts.scale.is_none() && best_note.is_none() {
             let readings: Vec<NoteText> = recovered_texts.iter().map(NoteText::of_reading).collect();
-            if let Some((k, note)) = detect_scale_note_in(&readings, sheet) {
+            let page: Vec<NoteText> = texts.iter().map(NoteText::of_text).collect();
+            if let Some((k, note)) = detect_scale_note_in(&readings, &page, sheet) {
                 let e_sheet_drawn = is_e_sheet && !do_not_scale_visible && opts.e_sheet_at_note_scale;
                 if do_not_scale && !e_sheet_drawn {
                     scale_source = format!("DO NOT SCALE (detected {note} in lettering read from its shapes, scale {k}x — sheet kept at sheet size)");
@@ -8126,5 +8269,69 @@ mod tests {
         let strokes = vec![line((-1e300, 0.0), (1e300, 0.0)), line((0.0, 0.0), (180.0, 0.0))];
         let texts = vec![text((60.0, 2.0), 1e300), text((1e300, 2.0), 6.0), text((60.0, 2.0), f64::NAN)];
         assert_eq!(scale_from_dimensions(&texts, &strokes), None);
+    }
+
+    /// A chain of dimension strings in the page's text, inside the drawing: an inch value set
+    /// beside a feet-inch value on one line (`inch` then `feet`), with more of the chain around.
+    fn dimension_pair_in_plan(inch: &str, feet: &str) -> String {
+        [
+            dimension((150.0, 330.0), 30.0, inch, false),
+            dimension((176.0, 330.0), 40.0, feet, false),
+            dimension((150.0, 360.0), 180.0, "15'-0\"", false),
+            dimension((360.0, 330.0), 90.0, "7'-6\"", false),
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn two_dimension_strings_side_by_side_are_not_the_scale_note() {
+        // Q6395: no scale in the page's text; the sheet's 1/8" = 1'-0" note is lettering drawn as
+        // shapes under its view title; inside the plan an inch dimension stands beside a feet-inch
+        // one. The pair is not a scale note (it isn't a standard scale, or it stands among the
+        // plan's dimension strings, not as a note): the sheet comes in at its note's 1/8".
+        let title = [stroked("FLOOR PLAN", (90.0, 120.0), 9.0), stroked("1/8\" = 1'-0\"", (90.0, 100.0), 9.0)].concat();
+        // `8"` then `16'-8"` reads as 200/8 = 25x (no standard scale); `1"` then `4'-0"` reads as
+        // 48x, the 1/4" scale, but stands among dimension strings with no title or SCALE word
+        for (inch, feet) in [("8\"", "16'-8\""), ("10\"", "1'-9\""), ("1\"", "4'-0\"")] {
+            let r = read_page(&[dimension_pair_in_plan(inch, feet), title.clone()].concat());
+            assert_eq!(r.scale, 96.0, "{inch} {feet}: {} {:?}", r.scale_source, r.notes);
+            assert!(r.scale_source.starts_with("scale note") && r.scale_source.contains("lettering"), "{}", r.scale_source);
+        }
+        // With no note at all, the same pairs go on to the dimension-string fallback (the chain's
+        // strings measured along their lines), never to the pair's scale.
+        let r = read_page(&dimension_pair_in_plan("8\"", "16'-8\""));
+        assert_ne!(r.scale, 25.0, "{}", r.scale_source);
+        assert!(!r.scale_source.starts_with("scale note"), "{}", r.scale_source);
+        // A pair that is a standard scale and stands as a note still reads: under its view title,
+        // after a SCALE word, or in the title block.
+        let r = read_page("BT /F1 9 Tf 90 120 Td (ENLARGED PLAN) Tj ET BT /F1 6 Tf 90 108 Td (1/4\") Tj ET BT /F1 6 Tf 120 108 Td (1'-0\") Tj ET");
+        assert_eq!(r.scale, 48.0, "under a title: {}", r.scale_source);
+        let r = read_page("BT /F1 6 Tf 90 300 Td (SCALE 3/16\" 1'-0\") Tj ET");
+        assert_eq!(r.scale, 64.0, "after SCALE: {}", r.scale_source);
+        // a pair under a title that isn't a standard scale is no note, title or not
+        let r = read_page("BT /F1 9 Tf 90 120 Td (ENLARGED PLAN) Tj ET BT /F1 6 Tf 90 108 Td (8\") Tj ET BT /F1 6 Tf 120 108 Td (16'-8\") Tj ET");
+        assert_eq!(r.scale, 1.0, "{}", r.scale_source);
+    }
+
+    #[test]
+    fn a_slash_between_digits_in_stroked_lettering_reads_as_a_slash() {
+        // Q6395: in `1/8"` the 1 and the slash are the row's only straight strokes; the slash
+        // leans by design and must not set the row's slant (it read as an oblique I, so `1/8"`
+        // came in as `118"` and the note was lost)
+        for (note, k) in [("1/8\" = 1'-0\"", 96.0), ("3/16\" = 1'-0\"", 64.0), ("3/32\" = 1'-0\"", 128.0)] {
+            let r = read_page(&stroked(note, (500.0, 60.0), 9.0));
+            assert_eq!(r.scale, k, "{note}: {} {:?}", r.scale_source, r.ocr.words.iter().map(|w| &w.value).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn a_pair_without_its_equals_sign_must_be_a_standard_scale() {
+        // the architectural inch-to-foot and engineering inch-to-feet scales, nothing between
+        for (pair, k) in [("1/8\" 1'-0\"", Some(96.0)), ("3/32\" 1'-0\"", Some(128.0)), ("1\" 20'", Some(240.0)), ("1\" 50'-0\"", Some(600.0))] {
+            assert_eq!(standard_pair_scale(pair), k, "{pair}");
+        }
+        for pair in ["8\" 16'-8\"", "10\" 1'-9\"", "3\" 6'-2\"", "1/8\" 1'-1\"", "1\" 25'"] {
+            assert_eq!(standard_pair_scale(pair), None, "{pair}");
+        }
     }
 }

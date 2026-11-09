@@ -1262,15 +1262,11 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         };
         let mut why_kind: BTreeMap<String, u64> = BTreeMap::new();
         let mut skip = |why: String| *why_kind.entry(why).or_default() += 1;
-        for (it, a) in mine.iter().filter(|(it, _)| (it.mounting == Mounting::Wall || it.aff_documented) && applies(r, it)) {
-            // A wall item's middle; a ceiling-band part its documents mount on a wall, its middle too.
-            let z = if it.aff_documented { it.z_span_in.map(|(lo, hi)| (lo + hi) / 2.0) } else { it.z_in };
-            let Some(z) = z else {
-                skip("no height in the model".to_string());
-                continue;
-            };
-            let origin = vh::model_origin(it.record.as_ref());
-            let room = room_near(it, *a);
+        // A device the build set at its gang's one height (Q6335: one box, one plate), its own
+        // design height kept beside: its gang-mates by handle, to measure it at theirs.
+        let mates = gang_mates(sc.d);
+        let ask_of = |it: &Item, a: Option<&Area>| -> Option<vh::Found> {
+            let room = room_near(it, a);
             let ask = vh::Ask {
                 handle: &it.handle,
                 kind: &it.kind,
@@ -1282,7 +1278,25 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 name: it.name.as_deref(),
                 ada: vh::is_ada(it.mark.as_deref(), it.name.as_deref()),
             };
-            let Some(want) = docs.expected(&ask, sc.prints, &sc.d.project_rules) else {
+            docs.expected(&ask, sc.prints, &sc.d.project_rules)
+        };
+        let at_datum = |it: &Item, z: f64, want: &vh::Found| -> (f64, bool) {
+            match (want.datum, it.z_span_in) {
+                (vh::Datum::Top, Some((_, hi))) => (hi, false),
+                (vh::Datum::Bottom, Some((lo, _))) => (lo, false),
+                (vh::Datum::Centre, _) => (z, false),
+                (_, None) => (z, true),
+            }
+        };
+        for (it, a) in mine.iter().filter(|(it, _)| (it.mounting == Mounting::Wall || it.aff_documented) && applies(r, it)) {
+            // A wall item's middle; a ceiling-band part its documents mount on a wall, its middle too.
+            let z = if it.aff_documented { it.z_span_in.map(|(lo, hi)| (lo + hi) / 2.0) } else { it.z_in };
+            let Some(z) = z else {
+                skip("no height in the model".to_string());
+                continue;
+            };
+            let origin = vh::model_origin(it.record.as_ref());
+            let Some(want) = ask_of(it, *a) else {
                 let kind = it.kind.replace('_', " ");
                 if origin == Some("default") {
                     // A height nobody documented: reported as the default it is.
@@ -1321,16 +1335,32 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             // A height to its top (or bottom) is compared at its top (bottom): a plan element's
             // built part's. With no built part the model holds only its middle: compared there,
             // and said so.
-            let (z, at_middle) = match (want.datum, it.z_span_in) {
-                (vh::Datum::Top, Some((_, hi))) => (hi, false),
-                (vh::Datum::Bottom, Some((lo, _))) => (lo, false),
-                (vh::Datum::Centre, _) => (z, false),
-                (_, None) => (z, true),
+            let (zw, at_middle) = at_datum(it, z, &want);
+            let off = zw - want.inches;
+            // Off its own documents' height but set at its gang's: measured at the gang-mate's.
+            let gang = (off.abs() > t).then(|| mates.get(&it.handle)).flatten().filter(|_| set_at_gang_height(sc.d, &it.handle)).and_then(|ms| {
+                ms.iter().find_map(|m| {
+                    let (mi, ma) = mine.iter().find(|(x, _)| x.handle == *m)?;
+                    let mw = ask_of(mi, *ma)?;
+                    let (mz, _) = at_datum(it, z, &mw);
+                    ((mz - mw.inches).abs() <= t).then(|| (mi.kind.replace('_', " "), mi.handle.clone(), mw))
+                })
+            });
+            let (z, want, off) = match &gang {
+                Some((_, _, mw)) => {
+                    let (mz, _) = at_datum(it, z, mw);
+                    (mz, mw.clone(), mz - mw.inches)
+                }
+                None => (zw, want, off),
             };
-            let off = z - want.inches;
             let verdict = if off.abs() <= t { "pass" } else { "fail" };
             tally(&r.rule.id, verdict);
-            let src = &want.what;
+            let src = &match &gang {
+                Some((kind, h, _)) => {
+                    format!("{} (set at the height of the {kind} {h} ganged with it in one box; its own height kept as its design value)", want.what)
+                }
+                None => want.what.clone(),
+            };
             let defaulted = if origin == Some("default") { "; its model height is a default, not from a document" } else { "" };
             let issue = if verdict == "pass" {
                 format!("{} at {:.1} in AFF as {src} gives{defaulted}", it.kind, z)
@@ -2528,6 +2558,29 @@ fn walls_summary(model: &Model, areas: &[Area]) -> Value {
         "pieces": model.walls.iter().filter(|w| on(&w.level)).count(),
         "over_openings": model.wall_spans.iter().filter(|s| on(&s.wall.level)).count(),
         "unmeasured": {"walls": why.values().sum::<u64>(), "why": why, "first": first},
+    })
+}
+
+/// Each device in a ganged box (a box atom's `devices`): the other devices in it, by handle.
+fn gang_mates(d: &Drawing) -> HashMap<String, Vec<String>> {
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for e in d.model.iter().take(2_000_000) {
+        let ps = cadaddy_doc::props::read(&e.common.xdata);
+        let Some(list) = ps.get("devices").map(|p| p.text()).filter(|_| ps.get("atom").is_some()) else { continue };
+        let hs: Vec<String> = list.split(',').map(|h| h.trim().to_ascii_uppercase()).filter(|h| !h.is_empty()).take(16).collect();
+        for h in &hs {
+            out.entry(h.clone()).or_default().extend(hs.iter().filter(|x| *x != h).cloned());
+        }
+    }
+    out
+}
+
+/// Whether the build set a device at its gang's height (its `mount_height` corrected, its own
+/// kept as `design:mount_height`).
+fn set_at_gang_height(d: &Drawing, handle: &str) -> bool {
+    cadaddy_doc::Handle::parse_hex(handle).and_then(|h| d.model.get(h)).is_some_and(|e| {
+        let ps = cadaddy_doc::props::read(&e.common.xdata);
+        ps.get("design:mount_height").is_some() && ps.get("correction:mount_height").is_some_and(|c| c.text().contains("ganged"))
     })
 }
 
