@@ -3476,8 +3476,11 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                 } else {
                     (String::new(), String::new())
                 };
-                // Where a leader from the designation ends (Q6337), else (said so) its lettering.
-                let (at, spot) = super::labelspot::locate(t, &[], Some(leaders_of(t.height)), &[], 0.0);
+                // Where a leader from the designation ends (Q6337), else the switch symbol by it
+                // the import read as a big letter, else (said so) its lettering.
+                let page: Vec<&TextItem> = texts.get(g).into_iter().flatten().collect();
+                let glyphs = super::labelspot::glyph_symbols(t, &page);
+                let (at, spot) = super::labelspot::locate(t, &[], Some(leaders_of(t.height)), &glyphs, super::labelspot::SWITCH_SYMBOL_REACH_H);
                 c.placed.push(super::readers::ReadDevice {
                     tag: tag.clone(),
                     at: [at.x, at.y],

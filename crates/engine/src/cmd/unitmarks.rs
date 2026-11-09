@@ -831,8 +831,10 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
                 o.spot = super::labelspot::Spot::Symbol.basis(&t.value, view.sheet);
                 continue;
             }
-            // Else where a leader from it ends; else (said so) its lettering.
-            let (spot_at, spot) = super::labelspot::locate(t, &[], view.leaders, &[], 0.0);
+            // Else where a leader from it ends, else the switch symbol drawn by it that the import
+            // read as a big letter; else (said so) its lettering.
+            let glyphs = super::labelspot::glyph_symbols(t, &view.texts);
+            let (spot_at, spot) = super::labelspot::locate(t, &[], view.leaders, &glyphs, super::labelspot::SWITCH_SYMBOL_REACH_H);
             let mut dv = new(&tag, spot_at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
             dv.leg.clone_from(leg);
             dv.label_at = Some([t.at.x, t.at.y]);

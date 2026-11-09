@@ -301,6 +301,38 @@ pub(crate) fn locate(label: &TextItem, with: &[&TextItem], leaders: Option<&Lead
     (label.at, Spot::Label)
 }
 
+/// A symbol whose strokes the lettering reader took for a letter (a switch's `S` read as `1`,
+/// a box read as `O`): one or two characters lettered this many times as high as the label
+/// beside it, at least and at most.
+const GLYPH_MIN_H: f64 = 2.5;
+const GLYPH_MAX_H: f64 = 6.0;
+/// A switch designation is printed this near its symbol, in its heights.
+pub(crate) const SWITCH_SYMBOL_REACH_H: f64 = 6.0;
+
+/// The symbols drawn by a label that the import read as oversized letters (see [`GLYPH_MIN_H`]):
+/// each one's middle. A switch symbol drawn as an `S` is the common case; a switch's
+/// designation is printed beside it.
+pub(crate) fn glyph_symbols(label: &TextItem, texts: &[&TextItem]) -> Vec<Vec2> {
+    let h = label.height;
+    if !h.is_finite() || h <= 0.0 {
+        return Vec::new();
+    }
+    let (s, e, _) = baseline(label);
+    let mid = s.mid(e);
+    texts
+        .iter()
+        .filter(|t| {
+            let n = t.value.trim().chars().count();
+            (1..=2).contains(&n) && t.height.is_finite() && t.height >= GLYPH_MIN_H * h && t.height <= GLYPH_MAX_H * h
+        })
+        .map(|t| {
+            let (a, b, _) = baseline(t);
+            a.mid(b)
+        })
+        .filter(|p| p.is_finite() && p.dist(mid) <= (SWITCH_SYMBOL_REACH_H + GLYPH_MAX_H) * h)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,6 +393,20 @@ mod tests {
         let (at, spot) = locate(&l, &[&marker], Some(&leaders), &[], 6.0);
         assert_eq!(spot, Spot::Leader);
         assert!(at.dist(Vec2::new(-30.0, 25.0)) < 1e-9, "{at:?}");
+    }
+
+    #[test]
+    fn a_switch_symbol_read_as_a_big_letter_is_the_symbol_its_designation_names() {
+        // The switch's `S` strokes read as a `1` four times the designation's height, beside `D,b`.
+        let l = text("D,b", 20.0, 10.0);
+        let glyph = TextItem { value: "1".into(), at: Vec2::new(0.0, 0.0), height: 16.0, rotation: 0.0 };
+        let small = text("c", 4.0, 30.0);
+        let far = TextItem { value: "1".into(), at: Vec2::new(400.0, 0.0), height: 16.0, rotation: 0.0 };
+        let syms = glyph_symbols(&l, &[&glyph, &small, &far]);
+        assert_eq!(syms.len(), 1, "{syms:?}");
+        let (at, spot) = locate(&l, &[], None, &syms, SWITCH_SYMBOL_REACH_H);
+        assert_eq!(spot, Spot::Symbol);
+        assert!(at.dist(Vec2::new(6.4, 8.0)) < 1e-9, "{at:?}");
     }
 
     #[test]
