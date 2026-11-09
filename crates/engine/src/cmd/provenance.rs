@@ -87,6 +87,8 @@ pub(crate) struct PracticeRule {
     pub sizes: Vec<SizeRow>,
     /// The size when no row matches (inches).
     pub default_size_in: f64,
+    /// A clear height kept (feet): under and over a mezzanine.
+    pub clear_ft: f64,
 }
 
 /// A size by the words of what is served (a fixture's schedule name, a terminal's kind).

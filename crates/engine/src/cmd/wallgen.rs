@@ -429,6 +429,9 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     let mut levels_done = 0usize;
     let mut total_walls = 0usize;
     let mut budget_exceeded = false;
+    // The spaces open to the storey under them, on each level above the lowest (Q6322).
+    let lowest = g.rules.levels.iter().filter(|l| l.sheet.is_none()).map(|l| l.elevation_ft).fold(f64::INFINITY, f64::min);
+    let mut open_below: HashMap<usize, Vec<Vec2>> = HashMap::new();
     for (i, level) in g.rules.levels.iter().enumerate() {
         if level.sheet.is_some() {
             continue;
@@ -481,6 +484,12 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             let walls = pl.walls.len();
             let openings = pl.leaves.len();
             total_walls += walls;
+            if level.elevation_ft > lowest + 1e-6 {
+                let open = open_below_labels(s.doc()?, level);
+                if !open.is_empty() {
+                    open_below.insert(si, open);
+                }
+            }
             if level_ms > 100 {
                 notes.push(format!("{}: built {} walls, {} openings in {} ms.", level.name, walls, openings, level_ms));
             }
@@ -532,8 +541,15 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     for (si, pl) in &planned {
         let Some((lo, hi)) = pl.footprint() else { continue };
         let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
-        match outline::building(&walls, lo, hi, upf) {
+        let open = open_below.get(si).map_or(&[][..], Vec::as_slice);
+        let (plate, carved) = outline::building_open(&walls, lo, hi, upf, open);
+        match plate {
             Some(o) => {
+                if carved > 0
+                    && let Some(level) = scene.levels.get(*si)
+                {
+                    notes.push(format!("{}: the floor slab leaves out {carved} space(s) labelled open to below.", level.name));
+                }
                 plates.insert(*si, o);
             }
             None => {
@@ -816,6 +832,29 @@ pub(crate) fn circulation_label(text: &str) -> Option<cadaddy_walk3d::Circulatio
         "hoistway" => Some(Hoistway),
         _ => None,
     }
+}
+
+/// Most open-to-below labels read on a level's plan.
+const MAX_OPEN_BELOW_LABELS: usize = 64;
+
+/// Where a level's plan (inside its region) labels a space open to the storey under it (rule data
+/// `levels.open_below_words`, the whole label word for word): its insertion point.
+fn open_below_labels(d: &Drawing, level: &cadaddy_walk3d::Level) -> Vec<Vec2> {
+    let words = |t: &str| t.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
+    let list: Vec<String> = cadaddy_mepfix::wordrules::words("levels.open_below_words").iter().map(|w| words(w)).collect();
+    let ents: Vec<&Arc<Entity>> =
+        d.model.iter().filter(|e| made_as(e).is_none() && matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_))).collect();
+    let mut out = Vec::new();
+    for (_, text, at, _) in super::perceive::texts(&ents) {
+        let on = level.region.is_none_or(|[x0, y0, x1, y1]| at.x >= x0.min(x1) && at.x <= x0.max(x1) && at.y >= y0.min(y1) && at.y <= y0.max(y1));
+        if at.is_finite() && on && list.contains(&words(&text)) {
+            out.push(at);
+        }
+        if out.len() >= MAX_OPEN_BELOW_LABELS {
+            break;
+        }
+    }
+    out
 }
 
 /// Whether `name` is the roof of a building with storeys under it (`Roof`, `MAIN ROOF`, `LOW

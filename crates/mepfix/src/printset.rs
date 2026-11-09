@@ -1689,8 +1689,8 @@ fn is_key_plan(title: &str) -> bool {
 }
 
 /// Level codes in building order: basements, numbered floors, then the roof.
-fn level_key(c: &str) -> (bool, u32, String) {
-    (c == "R", c.parse::<u32>().unwrap_or(u32::MAX), c.to_string())
+fn level_key(c: &str) -> (i32, String) {
+    sheet_reader::level_order(c)
 }
 
 /// Whether two copies of a sheet are told apart by their printed dates.
@@ -2140,7 +2140,9 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
     // floor). A building of one storey may name it nowhere: its plans are titled `FLOOR PLAN`
     // and only the roof plan names a level. Its plans that name none are on that one floor,
     // which is a level of the building even though no title names it.
-    let floors: Vec<&String> = codes.iter().filter(|c| c.as_str() != "R").collect();
+    // A mezzanine is inside a storey, no storey of its own: a building of one storey with a
+    // mezzanine is still of one storey.
+    let floors: Vec<&String> = codes.iter().filter(|c| c.as_str() != "R" && !cadaddy_walk3d::levels::is_mezzanine(c)).collect();
     let one_level = floors.len() <= 1;
     let lowest = floors.iter().find(|c| c.parse::<u32>().is_ok()).map_or_else(|| "1".to_string(), |c| (*c).clone());
     if one_level && !codes.contains(&lowest) {
@@ -2238,7 +2240,15 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
     let datum = elevation.get("1").copied().filter(|e| e.is_finite()).unwrap_or(0.0);
     for (i, c) in codes.iter().enumerate() {
         let el = elevation.get(c).map(|e| e - datum);
-        let next = codes.get(i + 1).and_then(|n| elevation.get(n)).map(|e| e - datum);
+        // Floor to floor reaches the next storey: a mezzanine over a floor is inside its storey.
+        let mezzanine = cadaddy_walk3d::levels::is_mezzanine(c);
+        let next = codes
+            .get(i + 1..)
+            .unwrap_or_default()
+            .iter()
+            .find(|n| mezzanine || !cadaddy_walk3d::levels::is_mezzanine(n))
+            .and_then(|n| elevation.get(n))
+            .map(|e| e - datum);
         out.levels.push(IndexLevel {
             name: c.clone(),
             sheets: by_level.get(c).cloned().unwrap_or_default(),

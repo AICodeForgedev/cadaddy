@@ -582,3 +582,70 @@ fn doors_drawn_open_against_a_wall_are_doors_not_walls() {
     assert!(!wall_at(&walls, 25.25 * 12.0, 5.5 * 12.0, 40.0), "the bath door is open");
     assert!(wall_at(&walls, 5.0 * 12.0, 10.25 * 12.0, 40.0) && wall_at(&walls, 25.25 * 12.0, 2.0 * 12.0, 40.0), "the walls beside them");
 }
+
+/// A text on the plan (feet → inches).
+fn label(d: &mut Drawing, s: &str, at: (f64, f64)) {
+    let h = Handle(d.handseed.max(0x100));
+    d.handseed = h.0 + 1;
+    let t = cadaddy_engine::doc::Text {
+        insert: Vec3 { x: at.0 * 12.0, y: at.1 * 12.0, z: 0.0 },
+        align_pt: None,
+        height: 12.0,
+        value: s.into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: cadaddy_engine::doc::HAlign::Left,
+        valign: cadaddy_engine::doc::VAlign::Baseline,
+    };
+    let mut e = Entity::new(h, EntityKind::Text(t));
+    e.common.layer = "A-ANNO-TEXT".into();
+    d.model.push(e);
+}
+
+/// A 60' × 40' box of 6" walls with its south-west corner at `x0` (feet).
+fn box_walls(d: &mut Drawing, x0: f64) {
+    let ring = |d: &mut Drawing, a: f64, b: f64, c: f64, e: f64| {
+        for (p, q) in [((a, b), (c, b)), ((c, b), (c, e)), ((c, e), (a, e)), ((a, e), (a, b))] {
+            line(d, p, q);
+        }
+    };
+    ring(d, x0, 0.0, x0 + 60.0, 40.0);
+    ring(d, x0 + 0.5, 0.5, x0 + 59.5, 39.5);
+}
+
+/// A mezzanine plan drawn on the whole building (Q6322): the mezzanine's floor slab is its own
+/// part behind its guardrail wall, the space labelled open to below left out, while the floor
+/// under it keeps its whole slab (the label on the lowest level would leave nothing out).
+#[test]
+fn a_mezzanine_slab_leaves_out_the_space_open_to_below() {
+    let mut d = Drawing::new_imperial();
+    // Level 1's plan at x 0–60', the mezzanine's at x 100–160'.
+    box_walls(&mut d, 0.0);
+    box_walls(&mut d, 100.0);
+    // The guardrail wall at x 140' with a 3' gate.
+    for (y0, y1) in [(0.5, 18.0), (21.0, 39.5)] {
+        line(&mut d, (139.75, y0), (139.75, y1));
+        line(&mut d, (140.25, y0), (140.25, y1));
+    }
+    label(&mut d, "OPEN TO BELOW", (115.0, 20.0));
+    let mut s = Session::empty();
+    s.open_drawing(d, "Plan", None);
+    let rules = json!({
+        "units_per_foot": 12,
+        "levels": [
+            {"name": "Level 1", "elevation_ft": 0, "height_ft": 20, "ceiling_ft": 9, "base": [0, 0], "region": [-60, -60, 900, 540]},
+            {"name": "Mezzanine", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "base": [1200, 0], "region": [1140, -60, 2100, 540]}
+        ],
+        "layers": [{"layer": "A-WALL", "kind": "wall", "skip_curves": true}]
+    });
+    let r = s.execute("wallgen", &json!({"rules": rules})).unwrap();
+    assert_eq!(r["floors"], json!(2), "{r}");
+    let notes = r["notes"].to_string();
+    assert!(notes.contains("Mezzanine: the floor slab leaves out 1 space(s) labelled open to below"), "{notes}");
+    let sf = |z: f64| made(&s, "floor").iter().map(|f| flat_area(f, z)).sum::<f64>() / 144.0;
+    // Level 1's whole slab; the mezzanine's floor east of its guardrail (20.25' × 40').
+    assert!((sf(0.0) - 2400.0).abs() < 30.0, "{}", sf(0.0));
+    assert!(sf(120.0) > 19.0 * 40.0 && sf(120.0) < 21.5 * 40.0, "{}", sf(120.0));
+}

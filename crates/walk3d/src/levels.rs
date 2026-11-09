@@ -564,11 +564,34 @@ pub fn level_rank(name: &str) -> Option<i32> {
     }
 }
 
-/// The level code a print set's index uses (`1`, `2`, `B1`, `R`) as a canonical level rank.
+/// The print set's level code of a mezzanine (a plan titled `MEZZANINE PLAN`, `MEZZ. PLAN`).
+pub const MEZZANINE_CODE: &str = "M";
+
+/// Where a mezzanine ranks among the print set's codes: over the first floor and under the second
+/// (a partial floor inside the first storey, the usual place of a building's one mezzanine).
+const MEZZANINE_RANK: i32 = 15;
+
+/// Whether a level code or name is a mezzanine's (`M`, `MEZZ`, `Mezzanine`): a partial floor
+/// inside the storey under it, no storey of its own.
+pub fn is_mezzanine(code: &str) -> bool {
+    level_or_code(code).is_some_and(|(_, k)| k == DatumKind::Mezzanine)
+}
+
+/// [`canonical_level`], or a print set's level code it doesn't take as a name: [`MEZZANINE_CODE`]
+/// (a lone `M` in a drawing's text is a grid line or a mark, never read as a level there).
+pub fn level_or_code(name: &str) -> Option<(String, DatumKind)> {
+    canonical_level(name).or_else(|| name.trim().eq_ignore_ascii_case(MEZZANINE_CODE).then(|| ("MEZZANINE".to_string(), DatumKind::Mezzanine)))
+}
+
+/// The level code a print set's index uses (`1`, `2`, `B1`, `M`, `R`) as a canonical level rank:
+/// a mezzanine between its floor and the next ([`MEZZANINE_RANK`]).
 pub fn code_rank(code: &str) -> Option<i32> {
     let c = code.trim().to_ascii_uppercase();
     if c == "R" {
         return Some(100_000);
+    }
+    if is_mezzanine(&c) {
+        return Some(MEZZANINE_RANK);
     }
     if let Some(b) = c.strip_prefix('B') {
         return Some(-10 * if b.is_empty() { 1 } else { b.parse::<i32>().ok()? });
@@ -711,7 +734,7 @@ impl BuildingSpec {
             return Some(i);
         }
         // 2. Canonical name match (both sides normalised).
-        if let Some(want) = canonical_level(name).map(|(c, _)| c)
+        if let Some(want) = level_or_code(name).map(|(c, _)| c)
             && let Some(i) = self.levels.iter().position(|l| canonical_level(&l.name).is_some_and(|(c, _)| c == want))
         {
             return Some(i);
@@ -1132,6 +1155,31 @@ mod tests {
         assert_eq!(code_rank("R"), level_rank("ROOF"));
         assert_eq!(code_rank("B2"), level_rank("BASEMENT 2"));
         assert_eq!(in_order(&[(Some(10), 0.0, 1), (None, -5.0, 1), (Some(20), f64::NAN, 2)]), [true, true, false]);
+    }
+
+    #[test]
+    fn a_mezzanine_code_is_a_level_between_its_floor_and_the_next() {
+        assert_eq!(level_or_code("M"), Some(("MEZZANINE".into(), DatumKind::Mezzanine)));
+        // A lone `M` in a drawing (a grid bubble) is no level marker.
+        assert_eq!(canonical_level("M"), None);
+        assert!(is_mezzanine("M") && is_mezzanine("Mezzanine") && is_mezzanine("MEZZ.") && !is_mezzanine("1") && !is_mezzanine("R"));
+        let (one, m, two, roof) = (code_rank("1"), code_rank("M"), code_rank("2"), code_rank("R"));
+        assert!(m.is_some() && one < m && m < two && two < roof, "{one:?} {m:?} {two:?} {roof:?}");
+        assert_eq!(code_rank("MEZZ"), m);
+        // A spec level named Mezzanine is the one the code `M` names.
+        let sp = BuildingSpec::from_json(
+            &serde_json::json!({"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 20},
+                {"name": "Mezzanine", "elevation_ft": 10, "height_ft": 10}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(sp.level_matching("M"), Some(1));
+        // The order check keeps a mezzanine between its floors: one marked over the second floor
+        // is no reading of it.
+        assert_eq!(in_order(&[(one, 0.0, 2), (m, 10.0, 1), (two, 14.0, 2)]), [true, true, true]);
+        assert_eq!(in_order(&[(one, 0.0, 2), (m, 30.0, 1), (two, 14.0, 2)]), [true, false, true]);
     }
 
     #[test]

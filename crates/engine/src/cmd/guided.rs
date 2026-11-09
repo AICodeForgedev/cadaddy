@@ -24582,8 +24582,22 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     let given: Vec<Option<f64>> = plans.iter().map(|r| answered_level(job, &r.level).and_then(|a| a.elevation_ft)).collect();
     let read_good = |i: usize| reads.get(i).copied().flatten().filter(|_| in_order.get(i).copied().unwrap_or(false));
     let good = |i: usize| given.get(i).copied().flatten().or_else(|| read_good(i));
+    // A mezzanine is a partial floor inside the storey under it (Q6322): it doesn't end that
+    // storey, and storeys stack past it.
+    let mezzanine: Vec<bool> = plans.iter().map(|r| cadaddy_walk3d::levels::is_mezzanine(&r.level)).collect();
+    let is_mezz = |i: usize| mezzanine.get(i).copied().unwrap_or(false);
+    // Storeys (mezzanines not counted) from the lowest level to level `j`.
+    let storeys_to = |j: usize| (1..=j).filter(|k| !is_mezz(*k)).count();
     let mut out = Vec::new();
     let mut next_elevation = 0.0f64;
+    // The storey a mezzanine is inside: its floor's elevation and floor to floor.
+    let mut storey: Option<(f64, f64)> = None;
+    // The clear height under (and over) a mezzanine, and its floor's structure (rule data).
+    let mezz_rule = super::provenance::rule("A-MEZZANINE");
+    let clear = Some(mezz_rule.clear_ft).filter(|v| v.is_finite() && *v > 0.0 && *v < 50.0).unwrap_or(7.0);
+    let structure = Some(mezz_rule.default_size_in / 12.0).filter(|v| v.is_finite() && *v >= 0.0 && *v < 10.0).unwrap_or(1.0);
+    let mezz_under = clear + structure;
+    let mezz_storey = 2.0 * clear + structure;
     for (i, r) in plans.iter().enumerate() {
         let name = level_name(&r.level);
         let read_el = reads.get(i).copied().flatten();
@@ -24591,7 +24605,41 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         if i == 0 {
             // The lowest with no good reading: a storey under the first level read, if any (an
             // elevation the user gave a level above doesn't move it off 0).
-            next_elevation = (1..plans.len()).find_map(|j| read_good(j).map(|e| e - DEFAULT_STOREY_FT * j as f64)).unwrap_or(0.0);
+            next_elevation = (1..plans.len())
+                .filter(|j| !is_mezz(*j))
+                .find_map(|j| read_good(j).map(|e| e - DEFAULT_STOREY_FT * storeys_to(j) as f64))
+                .unwrap_or(0.0);
+        }
+        if is_mezz(i)
+            && let Some((floor_el, floor_h)) = storey
+        {
+            let top = floor_el + floor_h;
+            // Its own marks, else halfway up the storey, its clear height under it kept (trade
+            // practice A-MEZZANINE); it reaches the storey's top.
+            let (elevation, read) = match good(i).filter(|e| *e > floor_el && *e < top) {
+                Some(e) => (e, true),
+                None => {
+                    // A storey too low to keep the clear height under it: halfway all the same.
+                    let half = floor_el + floor_h / 2.0;
+                    let kept = (floor_el + mezz_under).max(half);
+                    (if kept < top - 1.0 { kept } else { half }, false)
+                }
+            };
+            let height = top - elevation;
+            let ceiling = (height - 1.0).clamp(7.0, 9.0).min(height);
+            let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": ceiling, "region": r.plan_rect()});
+            if !read {
+                level["guess"] = json!(format!(
+                    "{} plan {}: a mezzanine; its elevation is not read from the sections{}, so it is set halfway up the storey under it, at {} ({})",
+                    name,
+                    r.number,
+                    if read_el.is_some() { " (the one read is not inside the storey under it)" } else { "" },
+                    cadaddy_walk3d::feet(elevation),
+                    mezz_rule.basis_for("")
+                ));
+            }
+            out.push(level);
+            continue;
         }
         let (elevation, read_elevation) = match good(i) {
             Some(e) => (e, true),
@@ -24599,13 +24647,18 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         };
         // A floor to floor given as an answer is the building's.
         // The user put the level above at an elevation: this one reaches it.
-        let storey = |h: &f64| *h > 0.0 && *h <= 100.0;
-        let to_given = given.get(i + 1).copied().flatten().map(|up| up - elevation).filter(storey);
-        let (height, read_height) = match to_given.or_else(|| job.storey_ft.or_else(|| read(&r.level, "height_ft")).filter(storey)) {
+        let in_range = |h: &f64| *h > 0.0 && *h <= 100.0;
+        // The next storey up (a mezzanine over this floor is inside its storey).
+        let up = (i + 1..plans.len()).find(|j| !is_mezz(*j));
+        let to_given = up.and_then(|j| given.get(j).copied().flatten()).map(|up| up - elevation).filter(in_range);
+        let (height, read_height) = match to_given.or_else(|| job.storey_ft.or_else(|| read(&r.level, "height_ft")).filter(in_range)) {
             Some(h) => (h, true),
+            // A storey with a mezzanine in it keeps the clear height under and over it.
+            None if is_mezz(i + 1) => (DEFAULT_STOREY_FT.max(mezz_storey), false),
             None => (DEFAULT_STOREY_FT, false),
         };
         next_elevation = elevation + height;
+        storey = Some((elevation, height));
         let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.plan_rect()});
         if let (true, Some(e)) = (out_of_order, read_el) {
             level["guess"] = json!(format!(
@@ -24617,7 +24670,7 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
             ));
         } else if !(read_height && (read_elevation || job.storey_ft.is_some())) {
             // Stacked at a floor to floor the user gave is no guess either.
-            level["guess"] = json!(format!("{} plan {}: floor to floor not read from the sections; {}' assumed", name, r.number, DEFAULT_STOREY_FT));
+            level["guess"] = json!(format!("{} plan {}: floor to floor not read from the sections; {}' assumed", name, r.number, height));
         }
         out.push(level);
     }
@@ -34367,6 +34420,58 @@ mod tests {
         // Only E/M plans: no building levels (the build reads what was imported, as before).
         job.sheet_regions = vec![region("E-104", "4", "E", "plan", 0.0)];
         assert!(building_levels(&job).is_empty());
+    }
+
+    /// A mezzanine is a level inside the storey under it (Q6322): ranked over its floor, at its
+    /// own mark, else halfway up the storey keeping the code's clear height under it; the floor's
+    /// storey runs past it to the next storey.
+    #[test]
+    fn a_mezzanine_is_a_level_inside_the_storey_under_it() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![
+            region("A103", "R", "A", "plan", 0.0),
+            region("A102", "M", "A", "plan", 200.0),
+            region("A101", "1", "A", "plan", 400.0),
+            region("E102", "M", "E", "plan", 600.0),
+        ];
+        job.index = Some(json!({"levels": [
+            {"name": "1", "elevation_ft": 0.0, "height_ft": 22.0},
+            {"name": "M", "elevation_ft": 10.5, "height_ft": 11.5},
+            {"name": "R", "elevation_ft": 22.0}
+        ]}));
+        let levels = building_levels(&job);
+        let row = |l: &Value| (l["name"].as_str().unwrap_or("").to_string(), l["elevation_ft"].as_f64(), l["height_ft"].as_f64());
+        let rows: Vec<_> = levels.iter().map(row).collect();
+        assert_eq!(
+            rows.get(..2),
+            Some(&[("Level 1".to_string(), Some(0.0), Some(22.0)), ("Mezzanine".to_string(), Some(10.5), Some(11.5))][..]),
+            "{levels:?}"
+        );
+        assert_eq!(rows.get(2).map(|r| (r.0.as_str(), r.1)), Some(("Roof", Some(22.0))), "{levels:?}");
+        assert!(levels[0].get("guess").is_none() && levels[1].get("guess").is_none(), "{levels:?}");
+        // The mezzanine's region is its own plan's (a partial floor), not the floor's.
+        assert_eq!(levels[1]["region"][0].as_f64(), Some(200.0));
+
+        // Nothing read: the storey holds the clear height under and over the mezzanine, which is
+        // set over its floor's clear height and marked a guess with its rule.
+        job.index = None;
+        let levels = building_levels(&job);
+        let rule = super::super::provenance::rule("A-MEZZANINE");
+        let storey = 2.0 * rule.clear_ft + rule.default_size_in / 12.0;
+        assert!(storey > DEFAULT_STOREY_FT, "{storey}");
+        let el: Vec<f64> = levels.iter().filter_map(|l| l["elevation_ft"].as_f64()).collect();
+        assert_eq!(el, [0.0, rule.clear_ft + rule.default_size_in / 12.0, storey], "{levels:?}");
+        assert_eq!(levels[1]["height_ft"].as_f64(), Some(rule.clear_ft));
+        assert!(levels[1]["guess"].as_str().is_some_and(|g| g.contains("mezzanine") && g.contains("A-MEZZANINE")), "{levels:?}");
+        // A mark over the storey's top is no mezzanine's: halfway all the same.
+        job.index = Some(json!({"levels": [
+            {"name": "1", "elevation_ft": 0.0, "height_ft": 20.0},
+            {"name": "M", "elevation_ft": 31.0},
+            {"name": "R", "elevation_ft": 20.0}
+        ]}));
+        let levels = building_levels(&job);
+        assert_eq!(levels[1]["elevation_ft"].as_f64(), Some(10.0), "{levels:?}");
+        assert!(levels[1]["guess"].is_string(), "{levels:?}");
     }
 
     #[test]
