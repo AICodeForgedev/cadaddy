@@ -695,6 +695,59 @@ fn elevations_on_any_datum_from_finish_floor_and_top_of_plate() {
     assert_eq!(index.levels.first().map(|l| l.elevation_source.as_str()), Some("finish floor"));
 }
 
+/// A truss bearing marked on the sections is where the roof bears (no roof level marked), and
+/// the tops of parapet marked above it are the roof's parapets, lowest first, as heights above
+/// it (Q6314: the roof stood a default storey over the top floor and had no parapet).
+#[test]
+fn a_truss_bearing_is_the_roofs_elevation_and_parapet_tops_its_parapets() {
+    let section = marked(
+        "A311",
+        &["BUILDING SECTIONS"],
+        &[
+            ("SECOND FLOOR", "110'-0\""),
+            ("TRUSS BEARING", "119'-1 1/2\""),
+            ("T.O. PARAPET (LOW)", "123'-7 1/2\""),
+            ("T.O. PARAPET (HIGH)", "127'-7 1/2\""),
+        ],
+    );
+    let elevation = marked("A211", &["EXTERIOR ELEVATIONS"], &[("FIRST FLOOR", "100'-0\""), ("T.O. PARAPET (LOW)", "123'-7 1/2\"")]);
+    let index = printset::sheet_index(&classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["SECOND FLOOR PLAN"], "")),
+        ("Set.pdf", 3, sheet("A103", &["ROOF PLAN"], "")),
+        ("Set.pdf", 4, section),
+        ("Set.pdf", 5, elevation),
+    ]));
+    assert!(index.level_warnings.is_empty(), "{:?}", index.level_warnings);
+    assert_eq!(levels_of(&index), [lv("1", Some(0.0), Some(10.0)), lv("2", Some(10.0), Some(9.13)), lv("R", Some(19.13), None)]);
+    let roof = index.levels.last().expect("roof");
+    assert_eq!(roof.elevation_source, "top of plate");
+    assert_eq!(roof.parapets_ft, [4.5, 8.5], "{roof:?}");
+    assert!(index.levels.iter().take(2).all(|l| l.parapets_ft.is_empty()));
+}
+
+/// A sheet printing a plan beside its details (`OVERALL ROOF PLAN & DETAILS`) is that plan: it
+/// goes on its level. A sheet of details only (`ROOF DETAILS`, `PLAN DETAILS`) stays a detail.
+#[test]
+fn a_plan_printed_with_its_details_is_a_plan_of_its_level() {
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["SECOND FLOOR PLAN"], "")),
+        ("Set.pdf", 3, sheet("A105", &["OVERALL ROOF PLAN &", "DETAILS"], "")),
+        ("Set.pdf", 4, sheet("A501", &["ROOF DETAILS"], "")),
+        ("Set.pdf", 5, sheet("A502", &["PLAN DETAILS"], "")),
+        ("Set.pdf", 6, sheet("A301", &["FLOOR PLAN AND", "WALL SECTIONS"], "")),
+    ]);
+    let index = printset::sheet_index(&project);
+    let kind = |n: &str| index.sheets.iter().find(|s| s.number == n).map(|s| (s.sheet_type.clone(), s.level.clone())).unwrap_or_default();
+    assert_eq!(kind("A105"), ("plan".to_string(), "R".to_string()), "{:?}", index.sheets);
+    assert_eq!(kind("A501").0, "detail");
+    assert_eq!(kind("A502").0, "detail");
+    assert_eq!(kind("A301").0, "plan");
+    let roof = index.levels.iter().find(|l| l.name == "R").map(|l| l.sheets.clone()).unwrap_or_default();
+    assert_eq!(roof, [serde_json::json!({"sheet": "A105", "typical": false})]);
+}
+
 /// Marks that give one level different elevations: the most marks win and the others are
 /// reported, never used silently.
 #[test]

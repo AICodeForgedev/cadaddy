@@ -2014,7 +2014,7 @@
    ]
   },
   "levels.plate_mark_words": {
-   "source": "drafting convention: a level marker on a section or elevation at the top of the wall plate or the masonry bearing wall, where the roof framing bears (`T.O. PLATE 112'-0\"`, `TOP OF CMU 10'-0\"`); when no roof level is marked it gives the roof's elevation. Compared word for word, punctuation and EL/ELEV ignored (Q6286)",
+   "source": "drafting convention: a level marker on a section or elevation at the top of the wall plate or the masonry bearing wall, where the roof framing bears (`T.O. PLATE 112'-0\"`, `TOP OF CMU 10'-0\"`); when no roof level is marked it gives the roof's elevation. A truss or joist bearing mark (`TRUSS BEARING 121'-4\"`, `TRUSS BRG. ELEV.`) is the same line: where the roof framing sits (Q6314). Compared word for word, punctuation and EL/ELEV ignored (Q6286)",
    "words": [
     "TOP OF PLATE",
     "T O PLATE",
@@ -2029,6 +2029,13 @@
     "T O P",
     "BEARING",
     "ROOF BEARING HEIGHT",
+    "TRUSS BEARING",
+    "TRUSS BRG",
+    "ROOF TRUSS BEARING",
+    "JOIST BEARING",
+    "JOIST BRG",
+    "ROOF BEARING",
+    "BRG",
     "TOP OF CMU",
     "T O CMU",
     "TOP OF MASONRY",
