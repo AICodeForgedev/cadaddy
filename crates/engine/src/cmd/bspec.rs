@@ -229,8 +229,9 @@ pub(crate) fn tags_carry_labels(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> boo
         return false;
     }
     let regions: Vec<[f64; 4]> = sp.levels.iter().filter_map(|l| l.region).filter(|r| r.iter().all(|v| v.is_finite())).collect();
-    let on_plans =
-        |c: Vec2| regions.is_empty() || regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
+    let on_plans = |c: Vec2| {
+        regions.is_empty() || regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]))
+    };
     // (names, numbers) on the tag layers; names anywhere.
     let (mut tag_names, mut tag_numbers, mut names) = (0usize, 0usize, 0usize);
     for e in ents {

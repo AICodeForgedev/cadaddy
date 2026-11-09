@@ -64,12 +64,7 @@ fn read_rooms() -> Value {
 fn built_rooms(s: &mut Session) -> Vec<String> {
     let b = s.execute("model.build", &json!({})).unwrap();
     let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
-    let mut names: Vec<String> = list["rooms"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|r| r["name"].as_str().map(str::to_ascii_uppercase))
-        .collect();
+    let mut names: Vec<String> = list["rooms"].as_array().unwrap().iter().filter_map(|r| r["name"].as_str().map(str::to_ascii_uppercase)).collect();
     names.sort_unstable();
     assert_eq!(b["rooms"].as_u64(), Some(names.len() as u64), "{b}");
     names

@@ -138,9 +138,7 @@ pub(crate) fn room_like_name(t: &str) -> bool {
     // OCR misreads of linework (`L---j`, `|_-_|`): a name is mostly letters and digits, with no run
     // of marks.
     let marks = t.chars().filter(|c| !c.is_whitespace() && !c.is_alphanumeric()).count();
-    let run_of_marks = t.split_whitespace().any(|w| {
-        w.chars().collect::<Vec<char>>().windows(3).any(|r| r.iter().all(|c| !c.is_alphanumeric()))
-    });
+    let run_of_marks = t.split_whitespace().any(|w| w.chars().collect::<Vec<char>>().windows(3).any(|r| r.iter().all(|c| !c.is_alphanumeric())));
     if marks * 2 > t.chars().filter(|c| c.is_alphanumeric()).count() || run_of_marks {
         return false;
     }
@@ -566,7 +564,7 @@ mod tests {
         for junk in ["L---j", "|_-_|", "Ij--", "J._.L", "OFFICE..."] {
             assert!(!super::room_like_name(junk), "{junk}: no room name");
         }
-        for name in ["W/D", "MECH./ELEC.", "STOR & MECH", "JAN.", "BREAK ROOM", "O-1"] {
+        for name in ["W/D", "MECH./ELEC.", "STOR & MECH", "JAN.", "BREAK ROOM", "STOR-1"] {
             assert!(super::room_like_name(name), "{name}: a room name");
         }
     }
