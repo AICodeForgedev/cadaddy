@@ -2031,6 +2031,25 @@
     "EXIT LIGHT"
    ]
   },
+  "framing.layout_heading_words": {
+   "source": "(drafting convention: the words of a joist or floor framing layout's heading that names the floor it is for, `2ND FLOOR FRAMING`, `LEVEL 3 JOIST LAYOUT`; Q6400)",
+   "words": [
+    "FRAMING",
+    "LAYOUT",
+    "JOIST",
+    "FLOOR SYSTEM"
+   ]
+  },
+  "framing.typical_note_words": {
+   "source": "(drafting convention: the words that make a framing plan's note the floor's typical framing, `TYP.`, `U.N.O.` (unless noted otherwise); one with a full stop is matched as written, the others as whole words; Q6400)",
+   "words": [
+    "TYP",
+    "TYPICAL",
+    "UNO",
+    "UNLESS",
+    "U.N.O"
+   ]
+  },
   "keynotes.box_words": {
    "source": "trade practice: a keynote with one of these names a box (its size is read) (moved from keynotes.rs)",
    "words": [

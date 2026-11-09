@@ -116,8 +116,14 @@ impl Rules {
         let mut r = Rules { facts: docs::facts_of(sp), ..Rules::default() };
         let from_plans = docs::roof_plan_facts(sp, &r.facts);
         r.facts.extend(from_plans);
-        // The documents' facts that are rule values.
+        let floors = docs::floor_plan_facts(sp, &r.facts);
+        r.facts.extend(floors);
+        // The documents' facts that are rule values (a fact kept to one level is that level's
+        // only: the layout asks for it by level).
         for f in r.facts.clone() {
+            if docs::scope_level(&f).is_some() {
+                continue;
+            }
             if let Some(path) = docs::rule_path(&f.key)
                 && let Some(n) = f.number
             {
