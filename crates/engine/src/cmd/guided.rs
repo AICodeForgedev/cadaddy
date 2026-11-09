@@ -7225,6 +7225,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if !not.is_empty() {
             progress_line(&format!("  storeys not lined up by their rooms: {}", not.join("; ")));
         }
+        // Then by the grids of their architectural plans, where those agree: a shell's corner
+        // differs by the wall build-up from floor to floor, the grid lines don't (Q6404).
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        let (moved, not) = super::grids::align_storeys(s.doc()?, &mut sp, MAX_REGISTER_FT * upf);
+        if !moved.is_empty() {
+            progress_line(&format!("  storeys lined up on their grids: {}", moved.join("; ")));
+        }
+        if !not.is_empty() {
+            progress_line(&format!("  storeys not lined up by their grids: {}", not.join("; ")));
+        }
         // The shells go to the build: a wall line well past its storey's is none of its walls.
         // Without their slivers (a strip a wall thick: a stray wall line traced into the shell,
         // L4's ran 7' past the building), so the stray line is measured from the floor.
