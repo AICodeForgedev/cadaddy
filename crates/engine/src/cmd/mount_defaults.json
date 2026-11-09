@@ -25,6 +25,7 @@
     {"kind": "plumbing fixture", "words": ["EXPANSION TANK"], "inches": 72, "to": "centre", "why": "trade practice: an expansion tank hangs on the water heater's cold supply above the heater (72\" to its middle), no document gives one"},
     {"kind": "plumbing fixture", "words": ["MIXING VALVE", "WATER VALVE", "SHUT OFF", "SHUTOFF", "BALANCING VALVE"], "inches": 60, "to": "centre", "why": "trade practice: a valve on the water heater or supply piping is set where it can be reached and serviced (60\" to its middle), no document gives one"},
     {"kind": "plumbing fixture", "inches": 18, "to": "centre", "why": "the usual height of a wall plumbing connection, no document gives one"},
+    {"kind": "casework luminaire", "inches": 54, "to": "top", "why": "trade practice: a luminaire built into casework is most often a task light under the upper cabinet, whose underside is 54\" over the floor (a 36\" counter and 18\" to the cabinet): its top there, no document gives one (the alternatives, a toe-kick or display light, take their detail's height)"},
     {"kind": "device", "inches": 18, "to": "centre", "why": "the usual height of a receptacle or device (18\" to its middle), no document gives one"}
   ]
 }

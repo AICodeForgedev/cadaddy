@@ -117,6 +117,7 @@ pub mod bcf;
 pub mod breakers;
 pub mod callouts;
 pub mod casework;
+pub(crate) mod caseworklights;
 pub mod clashreport;
 pub mod cobie;
 pub mod concrete;

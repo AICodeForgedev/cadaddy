@@ -626,6 +626,9 @@ struct Chosen {
 const MOUNT_RULES: &str = include_str!("mount_defaults.json");
 
 /// The rules data's default for `kind` (spaces or underscores), else a receptacle's.
+/// The rules data's kind (`mount_defaults.json`) of a luminaire built into casework or millwork.
+const CASEWORK_LUMINAIRE: &str = "casework luminaire";
+
 fn rules_default(kind: &str, fixture_words: &str) -> (f64, super::mountlist::Datum, String) {
     let data: Value = serde_json::from_str(MOUNT_RULES).unwrap_or_default();
     let rows: Vec<Value> = data["defaults"].as_array().cloned().unwrap_or_default();
@@ -1353,9 +1356,13 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let detector = kind == "fire alarm device"
             && (legend_words.contains("SMOKE DETECTOR") || legend_words.contains("HEAT DETECTOR") || legend_words.contains("DETECTOR AND"))
             && !legend_words.contains("DUCT");
+        // A luminaire built into casework or millwork (its plan draws its junction box): in the
+        // casework at its documented height, never hung from the ceiling or set in a wall face.
+        let in_casework = field(t, "mount").as_deref() == Some(super::readers::CASEWORK_MOUNT);
         let mount = match field(t, "mount").as_deref() {
             Some("ceiling") => Mount::Ceiling,
             Some("wall") => Mount::Wall,
+            _ if in_casework => Mount::Wall,
             Some("floor") => Mount::Floor,
             _ if detector => Mount::Ceiling,
             // An exhaust fan's connection is at the fan, in the ceiling.
@@ -1463,6 +1470,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let stated_wall = field(t, "mount").as_deref() == Some("wall");
         let gap_ft = wall_face_gap(&pieces, &level.name, Vec2::new(x, y), (level.elevation_ft + WALL_BOX_FT) * upf).map(|g| g / upf);
         let hung = (mount == Mount::Wall
+            && !in_casework
             && gap_ft.is_some_and(|g| g > clear_rule.wall_ft)
             && clear_rule.can_hang(&[kind, vkind.as_str()], &format!("{fixture_words} {legend_words} {described}"))
             && (!stated_wall || clear_rule.allows_ceiling(&format!("{installation} {fixture_words} {legend_words}")))
@@ -1554,7 +1562,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 let lowest = if wall_light.is_some() { 72.0 } else { 0.0 };
                 let its_own = |c: &Chosen| wall_light.is_some() && c.doc.to_ascii_lowercase().contains("luminaire");
                 documented().filter(|c| c.inches >= lowest || its_own(c)).or(wall_light).unwrap_or_else(|| {
-                    let (inches, datum, why) = rules_default(kind, &fixture_words);
+                    let (inches, datum, why) = rules_default(if in_casework { CASEWORK_LUMINAIRE } else { kind }, &fixture_words);
                     Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
                 })
             }
@@ -1590,7 +1598,8 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         // A connection set at its unit (a roof unit's: `connection to HP-7 at the unit`) is on
         // the unit, in no wall.
         let at_unit = field(t, "mount_height_note").is_some_and(|n| n.starts_with("connection to") && n.contains("at the unit"));
-        let on_wall = wall_kind && !at_unit && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
+        let on_wall =
+            wall_kind && !at_unit && !in_casework && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
