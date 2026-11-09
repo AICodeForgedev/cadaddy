@@ -1044,6 +1044,22 @@ mod tests {
     }
 
     #[test]
+    fn a_kind_of_element_the_build_stops_making_is_a_regression() {
+        // A build that made 145 windows, then one that makes none (the kind's key is gone from
+        // its row) or a fifth of them: both fail the gate, naming the kind (Q6369).
+        let r = rules().unwrap();
+        let a = row("aaaaaaa1", &[("elements.window", 145.0), ("elements.door", 274.0), ("elements.total", 3000.0)]);
+        let none = row("bbbbbbb2", &[("elements.door", 274.0), ("elements.total", 2855.0)]);
+        let g = compare(r, &a, &none);
+        let w = g.iter().find(|x| x.metric == "elements.window").map(|x| (x.verdict, x.why.as_str(), x.current));
+        assert_eq!(w, Some(("regression", "not measured now", None)), "{g:?}");
+        let few = row("ccccccc3", &[("elements.window", 26.0), ("elements.door", 274.0), ("elements.total", 2881.0)]);
+        let g = compare(r, &a, &few);
+        let w = g.iter().find(|x| x.metric == "elements.window").map(|x| (x.verdict, x.why.as_str()));
+        assert_eq!(w, Some(("regression", "fell")), "{g:?}");
+    }
+
+    #[test]
     fn worse_beyond_the_tolerance_is_a_regression_and_within_it_is_not() {
         let r = rules().unwrap();
         let a =
