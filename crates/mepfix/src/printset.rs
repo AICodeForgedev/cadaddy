@@ -1366,6 +1366,9 @@ const MAX_MARK_TEXTS: usize = 400;
 const MAX_LEVEL_WARNINGS: usize = 8;
 /// Highest a top of plate can stand above the top floor and still be its roof's (feet).
 const MAX_STOREY_FT: f64 = 30.0;
+/// A letter's width in its text's height, about (the run of a marker's name: drafting fonts are
+/// 0.6 to 0.9 as wide as tall).
+const CHAR_WIDTH: f64 = 0.75;
 /// Most parapet heights a roof keeps (hostile files).
 const MAX_PARAPETS: usize = 16;
 
@@ -1829,18 +1832,27 @@ fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
     let mut out = Vec::new();
     let short: Vec<&crate::sheet_facts::TextItem> =
         texts.iter().filter(|t| t.value.len() <= 40 && !t.value.contains('=')).take(MAX_MARK_TEXTS * 50).collect();
+    // How far a text is from a marker's name: from anywhere along the name's line of lettering
+    // (a long name, `T.O. PARAPET (LOW)`, prints its elevation under its far end).
+    let from_name = |t: &crate::sheet_facts::TextItem, u: &crate::sheet_facts::TextItem| {
+        let run = cadaddy_geom::Vec2::new(t.rotation.cos(), t.rotation.sin()) * (t.value.chars().count() as f64 * t.height * CHAR_WIDTH);
+        let (a, d) = (t.at, run);
+        let l2 = d.dot(d);
+        let k = if l2 > 1e-18 { ((u.at - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        u.at.dist(a + d * k)
+    };
     // The elevation printed right beside a marker's name (the marker's second line).
     let beside = |t: &crate::sheet_facts::TextItem| {
         short
             .iter()
             .filter(|u| {
                 u.at != t.at
-                    && u.at.dist(t.at) <= 4.0 * t.height.max(u.height)
+                    && from_name(t, u) <= 4.0 * t.height.max(u.height)
                     && canonical_level(&u.value).is_none()
                     && datum_label(&u.value).is_none()
                     && parse_elevation(&u.value).is_some()
             })
-            .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
+            .min_by(|a, b| from_name(t, a).total_cmp(&from_name(t, b)))
             .copied()
     };
     let mut looked = 0usize;

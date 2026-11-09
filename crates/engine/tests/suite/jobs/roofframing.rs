@@ -30,6 +30,11 @@ const ROOF_PLAN: [f64; 4] = [1900.0, -100.0, 3000.0, 1000.0];
 /// edge and a rooftop unit. The roof level at `roof_ft`, its plan's corner moved by `roof_base`
 /// (none: where the stack puts it), the exterior's `framing` and `parapets` as given.
 fn building(roof_ft: f64, roof_base: Option<[f64; 2]>, framing: Value, parapets: Value) -> Session {
+    building_with_roof(roof_ft, roof_base, framing, parapets, [2000.0, 0.0], [2480.0, 360.0])
+}
+
+/// [`building`] with the roof plan's roof outline from `a` to `b`.
+fn building_with_roof(roof_ft: f64, roof_base: Option<[f64; 2]>, framing: Value, parapets: Value, a: [f64; 2], b: [f64; 2]) -> Session {
     let mut s = Session::new();
     layer(&mut s, "A-WALL");
     for y in [0.0, 1200.0] {
@@ -37,7 +42,7 @@ fn building(roof_ft: f64, roof_base: Option<[f64; 2]>, framing: Value, parapets:
         rect(&mut s, [6.0, y + 6.0], [474.0, y + 354.0]);
     }
     layer(&mut s, "A-ROOF");
-    rect(&mut s, [2000.0, 0.0], [2480.0, 360.0]);
+    rect(&mut s, a, b);
     rect(&mut s, [2100.0, 240.0], [2172.0, 288.0]);
     text(&mut s, [2105.0, 260.0], "RTU-1 H=4'-6\"");
     let mut roof = json!({"name": "Roof", "elevation_ft": roof_ft, "height_ft": 4, "ceiling_ft": 4, "region": [1900, -200, 3100, 1100]});
@@ -162,4 +167,21 @@ fn a_roof_over_its_walls_on_nothing_or_off_them_is_a_finding() {
     let found = roof_issues(&mut s);
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].contains("off Level 2's walls") && found[0].contains("10'-0\""), "{found:?}");
+}
+
+#[test]
+fn a_roof_plan_outline_short_of_the_storey_is_built_over_it_and_the_design_kept() {
+    // The roof plan's outline is 30' long over the 40' building: a roof area, not its edge.
+    let mut s = building_with_roof(18.0, None, trusses(), json!([]), [2060.0, 0.0], [2420.0, 360.0]);
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let roof = &made(&s, "roof")[0].0;
+    let (x0, _, x1, _) = xy(roof);
+    assert!(near(x1 - x0, 480.0), "built over the whole storey: {:?} {r}", xy(roof));
+    assert_eq!(made(&s, "roof-framing").len(), 19);
+    assert!(r["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap_or_default().contains("A-ROOF-COVERS-STOREY")), "{r}");
+    assert_eq!(roof_issues(&mut s), Vec::<String>::new());
+    // The plan's outline kept beside the built one.
+    let p = s.execute("bim.provenance", &json!({"corrections": true, "part": "roof"})).unwrap();
+    let listed = p["corrections"]["listed"].as_array().unwrap();
+    assert!(listed.iter().any(|c| c["key"] == "outline" && c["design"] == "30'-0\" x 30'-0\"" && c["corrected"] == "40'-0\" x 30'-0\""), "{p}");
 }

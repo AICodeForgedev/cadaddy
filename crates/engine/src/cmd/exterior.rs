@@ -1113,7 +1113,7 @@ fn slab(poly: &[Vec2], top: &dyn Fn(Vec2) -> f64, t: f64) -> Option<Mesh> {
 /// glass and materials. The counts.
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let upf = units(sp);
-    let (ext, notes) = with_plan_roofs(d, sp);
+    let (ext, notes, corrections) = with_plan_roofs(d, sp);
     for (layer, color) in [("3D-Roofs", 33), ("3D-Parapets", 8), ("3D-Equipment", 252)] {
         if d.layer(layer).is_none() {
             d.layers.push(cadaddy_doc::Layer { name: layer.into(), color: cadaddy_doc::color::Color::Index(color), ..cadaddy_doc::Layer::default() });
@@ -1156,9 +1156,21 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let top = |p: Vec2| z0 + depth + deck + rise(p);
         let plan_area = cadaddy_geom::shoelace(&poly).abs() / (upf * upf);
         if let Some(m) = slab(&poly, &top, if framing.is_some() { deck } else { upf })
-            && add(d, "3D-Roofs", measured(tag("roof", &level.name, &r.name), "area", plan_area), m)
+            && !m.faces.is_empty()
+            && let Ok(h) = d.add(
+                &Space::Model,
+                Common {
+                    layer: "3D-Roofs".into(),
+                    xdata: measured(tag("roof", &level.name, &r.name), "area", plan_area).into(),
+                    ..Common::default()
+                },
+                EntityKind::Mesh(m),
+            )
         {
             roofs += 1;
+            for (_, c) in corrections.iter().filter(|(n, _)| *n == r.name) {
+                super::provenance::correct_element(d, h, c);
+            }
         }
         if let Some(f) = framing {
             framed += frame_roof(d, &FrameJob { level: &level.name, roof: &r.name, poly: &poly, z0, depth, upf, rise: &rise }, f, &rule);
@@ -1167,7 +1179,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // Round the outline, 8" thick inside it: a parapet up to its height over the high point;
         // a framed roof's outside walls carried up round its framing to the deck when it has none
         // (nothing between the walls and the deck is open).
-        let high = poly.iter().map(|p| top(*p)).fold(f64::NEG_INFINITY, f64::max) + parapet.unwrap_or(0.0) * upf;
+        // A framed roof's parapet stands its height over the deck where the roof bears (the
+        // sections mark its top as an elevation), and never under the deck's high point.
+        let deck_high = poly.iter().map(|p| top(*p)).fold(f64::NEG_INFINITY, f64::max);
+        let high = match framing {
+            Some(_) => (z0 + depth + deck + parapet.unwrap_or(0.0) * upf).max(deck_high),
+            None => deck_high + parapet.unwrap_or(0.0) * upf,
+        };
         if parapet.is_some() || framing.is_some() {
             let t = 8.0 / 12.0 * upf;
             let ccw = cadaddy_geom::shoelace(&poly) > 0.0;
@@ -1430,10 +1448,11 @@ fn frame_roof(d: &mut Drawing, j: &FrameJob, f: &RoofFraming, rule: &FramingRule
 /// The spec's exterior with the roofs of roof levels it has none for: read off the level's
 /// roof plan ([`read_plan`]), else a flat roof over the walls of the storey under it, moved onto
 /// the roof plan's sheet (so stacking puts it over them). What was done, as notes.
-fn with_plan_roofs(d: &Drawing, sp: &BuildingSpec) -> (Exterior, Vec<String>) {
+fn with_plan_roofs(d: &Drawing, sp: &BuildingSpec) -> (Exterior, Vec<String>, Vec<(String, super::provenance::Correction)>) {
     let upf = units(sp);
     let mut ext = sp.exterior.clone();
     let mut notes = Vec::new();
+    let mut corrections = Vec::new();
     let rect = |r: [f64; 4]| Bounds2::new(Vec2::new(r[0].min(r[2]), r[1].min(r[3])), Vec2::new(r[0].max(r[2]), r[1].max(r[3])));
     for level in sp.levels.iter().filter(|l| l.sheet.is_none() && super::wallgen::roof_level(&sp.levels, &l.name)).take(100) {
         if ext.roofs.iter().any(|r| r.level.eq_ignore_ascii_case(&level.name)) {
@@ -1495,7 +1514,67 @@ fn with_plan_roofs(d: &Drawing, sp: &BuildingSpec) -> (Exterior, Vec<String>) {
             if plate.len() >= 3 { "floor plate" } else { "walls" }
         ));
     }
-    (ext, notes)
+    // Every roof level's roofs, read or given, cover the storey under them.
+    for level in sp.levels.iter().filter(|l| l.sheet.is_none() && super::wallgen::roof_level(&sp.levels, &l.name)).take(100) {
+        let (mut mine, rest): (Vec<Roof>, Vec<Roof>) =
+            std::mem::take(&mut ext.roofs).into_iter().partition(|r| r.level.eq_ignore_ascii_case(&level.name));
+        if let Some((note, c)) = cover_storey(d, sp, &level.name, &mut mine) {
+            notes.push(note);
+            corrections.push(c);
+        }
+        ext.roofs = rest;
+        ext.roofs.extend(mine);
+    }
+    (ext, notes, corrections)
+}
+
+/// The trade practice rule a roof short of its walls is corrected by.
+pub(crate) const COVER_RULE: &str = "A-ROOF-COVERS-STOREY";
+/// Most a roof plan's roofs may fall short of the storey under them, along its length or across
+/// it, before the roof is built over the storey's whole floor plate, feet.
+const ROOF_SHORT_FT: f64 = 3.0;
+
+/// A roof plan's roofs that fall short of the storey under them (a roof area read off the plan,
+/// not the roof's edge: the walls under it would stand open to the sky): the field roofs the whole
+/// storey, so they become one roof over its floor plate (its slope and parapet the largest read
+/// roof's), centred where the read roofs are. The note and the correction for the built roof
+/// (`roof name`, the plan's extent kept as the design value), or none when they cover it.
+fn cover_storey(d: &Drawing, sp: &BuildingSpec, level: &str, roofs: &mut Vec<Roof>) -> Option<(String, (String, super::provenance::Correction))> {
+    let upf = units(sp);
+    let elevation = sp.level(level)?.elevation_ft;
+    let (under, _) = top_walls(d, sp, elevation)?;
+    let plate = floor_plate(d, &under.name);
+    let pb = Bounds2::from_points(plate.iter().copied());
+    let rb = Bounds2::from_points(roofs.iter().flat_map(|r| r.outline.iter().map(|p| Vec2::new(p[0], p[1]))));
+    if plate.len() < 3 || pb.is_empty() || rb.is_empty() {
+        return None;
+    }
+    let short = (pb.width() - rb.width()).max(pb.height() - rb.height());
+    if short <= ROOF_SHORT_FT * upf {
+        return None;
+    }
+    let area = |r: &Roof| cadaddy_geom::shoelace(&r.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect::<Vec<_>>()).abs();
+    let main = roofs.iter().max_by(|a, b| area(a).total_cmp(&area(b)))?.clone();
+    let shift = rb.center() - pb.center();
+    let size = |b: &Bounds2| format!("{} x {}", cadaddy_walk3d::feet(b.width() / upf), cadaddy_walk3d::feet(b.height() / upf));
+    let rule = super::provenance::rule(COVER_RULE);
+    let reason = format!(
+        "the roof plan's roof outline ({}, {} roof area(s)) falls {} short of {}'s floor plate ({}) under it; the roof is built over the whole storey",
+        size(&rb),
+        roofs.len(),
+        cadaddy_walk3d::feet(short / upf),
+        under.name,
+        size(&pb)
+    );
+    let c = super::provenance::Correction {
+        key: "outline".into(),
+        design: size(&rb),
+        corrected: size(&pb),
+        reason: reason.clone(),
+        rule: rule.id.clone(),
+    };
+    *roofs = vec![Roof { outline: plate.iter().map(|p| [p.x + shift.x, p.y + shift.y]).collect(), ..main.clone() }];
+    Some((format!("{level}: {reason} ({}).", rule.id), (main.name, c)))
 }
 
 /// The highest storey under `below_ft` with walls built (not a roof), and their plan extents.

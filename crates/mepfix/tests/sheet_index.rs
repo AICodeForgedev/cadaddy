@@ -726,6 +726,35 @@ fn a_truss_bearing_is_the_roofs_elevation_and_parapet_tops_its_parapets() {
     assert!(index.levels.iter().take(2).all(|l| l.parapets_ft.is_empty()));
 }
 
+/// A marker whose name is long prints its elevation under the name's far end, farther from the
+/// name's start than a short marker's: it is still the marker's, and the next marker up keeps
+/// its own.
+#[test]
+fn a_long_markers_elevation_under_its_far_end_is_read() {
+    let mut section = sheet("A321", &["WALL SECTIONS"], "");
+    // The floors and `TRUSS BEARING` short, the elevation under them; the parapets' names
+    // long, their elevations 60 to the right (10 letters' worth) and a line under.
+    for (name, el, y, dx) in [
+        ("FIRST FLOOR", "100'-0\"", 60.0, 0.0),
+        ("SECOND FLOOR", "110'-0\"", 120.0, 0.0),
+        ("TRUSS BEARING", "119'-1 1/2\"", 180.0, 0.0),
+        ("T.O. PARAPET (LOW)", "123'-7 1/2\"", 240.0, 60.0),
+        ("T.O. PARAPET (HIGH)", "125'-7 1/2\"", 262.0, 60.0),
+    ] {
+        text(&mut section, name, 950.0, y, 6.0);
+        text(&mut section, el, 950.0 + dx, y - 8.0, 6.0);
+    }
+    let index = printset::sheet_index(&classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["SECOND FLOOR PLAN"], "")),
+        ("Set.pdf", 3, sheet("A103", &["ROOF PLAN"], "")),
+        ("Set.pdf", 4, section),
+    ]));
+    let roof = index.levels.last().expect("roof");
+    assert_eq!((roof.name.as_str(), roof.elevation_ft.map(|v| (v * 100.0).round() / 100.0)), ("R", Some(19.13)), "{:?}", index.levels);
+    assert_eq!(roof.parapets_ft, [4.5, 6.5], "{roof:?}");
+}
+
 /// A sheet printing a plan beside its details (`OVERALL ROOF PLAN & DETAILS`) is that plan: it
 /// goes on its level. A sheet of details only (`ROOF DETAILS`, `PLAN DETAILS`) stays a detail.
 #[test]
