@@ -26,7 +26,7 @@ pub fn export_window_with(d: &Drawing, space: &Space, window: Option<Bounds2>, t
 }
 
 /// Standard base64 (RFC 4648, padded), for data URLs.
-fn base64(data: &[u8]) -> String {
+pub(crate) fn base64(data: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for c in data.chunks(3) {
