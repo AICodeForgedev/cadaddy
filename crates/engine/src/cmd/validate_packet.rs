@@ -3892,12 +3892,14 @@ fn area_sides(outline: &[[f64; 2]]) -> Vec<Side> {
 }
 
 /// The model wall on `level` a camera at `eye` looking along `dir` (unit) faces: the first whose
-/// centreline its line of sight crosses within `reach` (feet), and how far the wall's face is.
+/// centreline its line of sight crosses within `reach` (feet), a wall over an opening (a window
+/// head) too, and how far the wall's face is.
 fn faced_wall<'m>(model: &'m Model, level: &str, eye: [f64; 2], dir: [f64; 2], reach: f64) -> Option<(&'m v::ModelWall, f64)> {
     let cross = |p: [f64; 2], q: [f64; 2]| p[0] * q[1] - p[1] * q[0];
     model
         .walls
         .iter()
+        .chain(model.wall_spans.iter().map(|s| &s.wall))
         .filter(|w| w.level.eq_ignore_ascii_case(level))
         .take(100_000)
         .filter_map(|w| {
@@ -3912,6 +3914,36 @@ fn faced_wall<'m>(model: &'m Model, level: &str, eye: [f64; 2], dir: [f64; 2], r
             ((0.0..=1.0).contains(&u) && t > 0.05 && t <= reach && face.is_finite()).then_some((w, face.max(0.0)))
         })
         .min_by(|x, y| x.1.total_cmp(&y.1).then(x.0.id.cmp(&y.0.id)))
+}
+
+/// The kind of the model's opening (`door`, `window`) a camera at `eye` looking along `dir`
+/// sees within `reach` (feet): the first its line of sight passes through.
+fn faced_opening<'m>(model: &'m Model, level: &str, eye: [f64; 2], dir: [f64; 2], reach: f64) -> Option<&'m str> {
+    model
+        .openings
+        .iter()
+        .filter(|o| o.level.eq_ignore_ascii_case(level))
+        .take(100_000)
+        .filter_map(|o| {
+            // The ray through the opening's box (slab test), its entry distance.
+            let (mut t0, mut t1) = (0.0f64, reach);
+            for k in 0..2 {
+                let (lo, hi) = (o.min[k].min(o.max[k]), o.min[k].max(o.max[k]));
+                let (e, d) = (*eye.get(k)?, *dir.get(k)?);
+                if d.abs() < 1e-12 {
+                    if e < lo || e > hi {
+                        return None;
+                    }
+                } else {
+                    let (a, b) = ((lo - e) / d, (hi - e) / d);
+                    t0 = t0.max(a.min(b));
+                    t1 = t1.min(a.max(b));
+                }
+            }
+            (t0 <= t1 && t0.is_finite()).then_some((t0, o.kind.as_str()))
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+        .map(|(_, k)| k)
 }
 
 fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
@@ -4523,9 +4555,13 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             // The model wall the camera faces: the first its line of sight crosses.
             let faced = faced_wall(&model, &area.level, eye_ft, side.dir, back + SIDE_DEPTH_FT + 1.0);
             let wall = faced.map(|(w, _)| w.id.clone());
+            let opening = faced_opening(&model, &area.level, eye_ft, side.dir, back + SIDE_DEPTH_FT + 1.0)
+                .filter(|k| !k.trim().is_empty())
+                .map(|k| format!(", a {} in it", k.trim().to_ascii_lowercase()))
+                .unwrap_or_default();
             let on_wall = match faced {
-                None => ", no model wall on it".to_string(),
-                Some((w, at)) if at >= back - SIDE_DEPTH_FT - 0.5 => format!(", wall {}", w.id),
+                None => format!(", no model wall on it{opening}"),
+                Some((w, at)) if at >= back - SIDE_DEPTH_FT - 0.5 => format!(", wall {}{opening}", w.id),
                 Some((w, at)) => format!(", facing wall {} {at:.1} ft from the camera, in front of the side", w.id),
             };
             let e = frame.to_built(&area.level, eye_ft);
@@ -5431,5 +5467,21 @@ mod tests {
         assert!((at - (3.0 - 2.0 / 12.0)).abs() < 1e-6, "{at}");
         assert!(faced_wall(&model, "L1", [6.0, 5.0], [-1.0, 0.0], 10.0).is_none(), "nothing west of it");
         assert!(faced_wall(&model, "L1", [6.0, 23.5], [0.0, 1.0], 2.0).is_none(), "out of reach");
+        // The south wall is a window: the piece over it is the wall the camera faces.
+        let head = wall("HEAD", [0.0, -0.25], [12.0, -0.25], 6.0);
+        model.wall_spans.push(v::WallSpan { wall: head, bottom_in: 84.0, top_in: 108.0 });
+        model.openings.push(v::ModelOpening {
+            id: "W1".into(),
+            level: "L1".into(),
+            kind: "window".into(),
+            min: [2.0, -0.5],
+            max: [10.0, 0.0],
+            ..Default::default()
+        });
+        let (w, _) = faced_wall(&model, "L1", [6.0, 5.0], [0.0, -1.0], 10.0).unwrap();
+        assert_eq!(w.id, "HEAD");
+        assert_eq!(faced_opening(&model, "L1", [6.0, 5.0], [0.0, -1.0], 10.0), Some("window"));
+        assert_eq!(faced_opening(&model, "L1", [11.0, 5.0], [0.0, -1.0], 10.0), None, "beside the window");
+        assert_eq!(faced_opening(&model, "L1", [6.0, 5.0], [0.0, 1.0], 10.0), None, "behind the camera");
     }
 }
