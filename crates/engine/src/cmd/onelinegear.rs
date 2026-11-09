@@ -501,6 +501,10 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, skip: &BTreeSet<String>) -> 
             tb.total_cmp(&ta).then(a.cmp(b))
         });
         let lines: Vec<String> = members.iter().filter_map(|m| texts.get(*m)).map(|t| t.value.trim().to_string()).collect();
+        // A legend's key (`60/3 = 60 AMP SWITCH, 3 POLE`) explains a notation; it is no piece.
+        if lines.iter().any(|l| l.contains('=')) {
+            continue;
+        }
         let up = lines.join(" ").to_ascii_uppercase();
         let amps = amps_all(&up);
         let electrode = if kind == "electrode" {
@@ -528,7 +532,7 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, skip: &BTreeSet<String>) -> 
         let rated = if kind == "electrode" {
             !conductor.is_empty() || count.is_some()
         } else {
-            amps.first().is_some() || kva.is_some() || poles.is_some() || count.is_some() || positions.is_some() || size_in.is_some()
+            !amps.is_empty() || kva.is_some() || poles.is_some() || count.is_some() || positions.is_some() || size_in.is_some()
         };
         if !rated {
             continue;
@@ -977,6 +981,8 @@ pub(crate) struct Outcome {
     pub no_size: Vec<(String, String, String)>,
     pub review: Vec<String>,
     pub by_kind: BTreeMap<String, usize>,
+    /// Labels naming gear that is on no line of the one-line (a legend's row): not built.
+    pub skipped: Vec<String>,
 }
 
 /// Whether a voltage text is single-phase (`120/240V`, `1PH`, `1 PH`).
@@ -1037,29 +1043,45 @@ pub(crate) fn build_into(sp: &mut BuildingSpec, pages: &[(String, cadaddy_doc::D
     if gear.is_empty() {
         return out;
     }
-    let tags = tags_for(&gear, sp);
     // The connections, page by page: the labelled pieces and the known gear's tags as nodes.
-    let mut all_links: Vec<Link> = Vec::new();
-    for (pi, texts) in &page_texts {
-        let mut nodes: Vec<Node> = gear
-            .iter()
-            .zip(&tags)
-            .zip(&page_of)
-            .filter(|((g, _), p)| **p == *pi && g.kind != "electrode")
-            .filter_map(|((g, t), _)| Some(Node { tag: t.first()?.clone(), at: g.at, top: g.top, h: g.h }))
-            .collect();
-        for t in texts.iter().take(MAX_TEXTS) {
-            if let Some(k) = known.iter().find(|k| k.eq_ignore_ascii_case(t.value.trim())) {
-                nodes.push(Node { tag: k.clone(), at: t.at, top: t.at.y + t.height.max(0.0), h: t.height.max(1e-9) });
+    let connections = |gear: &[Labelled], tags: &[Vec<String>], page_of: &[usize]| -> Vec<Link> {
+        let mut all: Vec<Link> = Vec::new();
+        for (pi, texts) in &page_texts {
+            let mut nodes: Vec<Node> = gear
+                .iter()
+                .zip(tags)
+                .zip(page_of)
+                .filter(|((g, _), p)| **p == *pi && g.kind != "electrode")
+                .filter_map(|((g, t), _)| Some(Node { tag: t.first()?.clone(), at: g.at, top: g.top, h: g.h }))
+                .collect();
+            for t in texts.iter().take(MAX_TEXTS) {
+                if let Some(k) = known.iter().find(|k| k.eq_ignore_ascii_case(t.value.trim())) {
+                    nodes.push(Node { tag: k.clone(), at: t.at, top: t.at.y + t.height.max(0.0), h: t.height.max(1e-9) });
+                }
+            }
+            for l in links(texts, &nodes, &type_tags, &no_size) {
+                let dup = all.iter().any(|x| x.from.eq_ignore_ascii_case(&l.from) && x.to.eq_ignore_ascii_case(&l.to));
+                if !l.from.eq_ignore_ascii_case(&l.to) && !dup {
+                    all.push(l);
+                }
             }
         }
-        for l in links(texts, &nodes, &type_tags, &no_size) {
-            let dup = all_links.iter().any(|x| x.from.eq_ignore_ascii_case(&l.from) && x.to.eq_ignore_ascii_case(&l.to));
-            if !l.from.eq_ignore_ascii_case(&l.to) && !dup {
-                all_links.push(l);
-            }
-        }
+        all
+    };
+    // A piece the one-line draws is on its lines: fed from another, or feeding one. A legend's
+    // row (a symbol and its words, an example rating) is on none.
+    let first = tags_for(&gear, sp);
+    let linked: BTreeSet<String> =
+        connections(&gear, &first, &page_of).iter().flat_map(|l| [l.from.to_ascii_uppercase(), l.to.to_ascii_uppercase()]).collect();
+    let keep: Vec<bool> =
+        gear.iter().zip(&first).map(|(g, t)| g.kind == "electrode" || t.first().is_some_and(|x| linked.contains(&x.to_ascii_uppercase()))).collect();
+    out.skipped.extend(gear.iter().zip(&keep).filter(|(_, k)| !**k).take(12).map(|(g, _)| g.label()));
+    let (gear, page_of): (Vec<Labelled>, Vec<usize>) = gear.into_iter().zip(page_of).zip(&keep).filter(|(_, k)| **k).map(|(x, _)| x).unzip();
+    if gear.is_empty() {
+        return out;
     }
+    let tags = tags_for(&gear, sp);
+    let all_links = connections(&gear, &tags, &page_of);
     // An untagged connection carries the conductors coming into the piece above it.
     let mut resolved = all_links.clone();
     let mut continued: BTreeSet<usize> = BTreeSet::new();
@@ -1082,7 +1104,15 @@ pub(crate) fn build_into(sp: &mut BuildingSpec, pages: &[(String, cadaddy_doc::D
             break;
         }
     }
+    // Unsized: a connection to or from a one-line piece whose fed end has no feeder yet (gear the
+    // schedules already feed, panel to panel, is theirs).
+    let fed: BTreeSet<String> = sp.mep.feeders.iter().map(|f| f.to.to_ascii_uppercase()).collect();
+    let labelled: BTreeSet<String> = tags.iter().flatten().map(|t| t.to_ascii_uppercase()).collect();
     for l in &resolved {
+        let ours = labelled.contains(&l.from.to_ascii_uppercase()) || labelled.contains(&l.to.to_ascii_uppercase());
+        if !ours || fed.contains(&l.to.to_ascii_uppercase()) {
+            continue;
+        }
         match &l.tag {
             Some(t) if l.no_size => out.no_size.push((l.from.clone(), l.to.clone(), t.clone())),
             None => out.no_size.push((l.from.clone(), l.to.clone(), String::new())),
@@ -1107,7 +1137,6 @@ pub(crate) fn build_into(sp: &mut BuildingSpec, pages: &[(String, cadaddy_doc::D
             single.insert(p.panel.to_ascii_uppercase(), single_phase_text(&v));
         }
     }
-    let fed: BTreeSet<String> = sp.mep.feeders.iter().map(|f| f.to.to_ascii_uppercase()).collect();
     let sheet = out.sheets.join(", ");
     let walk = |start: &str, up: bool| -> Option<bool> {
         let mut at = start.to_ascii_uppercase();
@@ -1331,6 +1360,9 @@ mod tests {
             v.push(t(l, 0.0, -1.3 * i as f64));
         }
         v.push(t("#4 CU GROUNDING ELECTRODE CONDUCTOR", 40.0, 0.0));
+        // A legend's key under its symbol's name: an example rating.
+        v.push(t("SAFETY SWITCH", 80.0, 0.0));
+        v.push(t("30/2 = 30 AMP, 2 POLE", 80.0, -1.2));
         assert_eq!(read(&v, "EX-5", &BTreeSet::new()), Vec::new());
         // A rated label beside a tag the model has: that gear's label.
         let mut sp = BuildingSpec::default();
@@ -1353,6 +1385,35 @@ mod tests {
         }
         let o = build_into(&mut sp, &[("EX-5".into(), page)], &[], &[]);
         assert_eq!(o.by_kind, [("disconnect".to_string(), 1)].into_iter().collect(), "{o:#?}");
+        // Gear the schedules feed, under other known gear with no tag between: not the one-line's
+        // to size; a one-line piece under it with no tag and nothing coming in is.
+        let mut sp = BuildingSpec::default();
+        for t in ["SB9", "PQ9"] {
+            sp.mep.equipment.push(MepEquipment { tag: t.into(), kind: "panel".into(), ..MepEquipment::default() });
+        }
+        sp.mep.feeders.push(Feeder { tag: "FDR-A".into(), from: "SB9".into(), to: "PQ9".into(), ..Feeder::default() });
+        let mut page = cadaddy_doc::Drawing::default();
+        for (s, x, y) in [("POWER ONE-LINE", 0.0, -40.0), ("SB9", 0.0, 30.0), ("PQ9", 0.0, 20.0), ("60A/2P DISCONNECT", 0.0, 10.0)] {
+            let text = cadaddy_doc::Text {
+                insert: cadaddy_geom::Vec3::new(x, y, 0.0),
+                align_pt: None,
+                height: 1.0,
+                value: s.into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: cadaddy_doc::HAlign::default(),
+                valign: cadaddy_doc::VAlign::default(),
+            };
+            page.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Text(text)).ok();
+        }
+        let o = build_into(&mut sp, &[("EX-5".into(), page.clone())], &[], &[]);
+        assert_eq!(o.no_size, [("PQ9".to_string(), "DISC-1".to_string(), String::new())], "{o:#?}");
+        // A rated label on no line of the one-line (a legend's sample) is not built.
+        let mut sp = BuildingSpec::default();
+        let o = build_into(&mut sp, &[("EX-5".into(), page)], &[], &[]);
+        assert!(o.gear.is_empty() && o.skipped == ["60A/2P DISCONNECT"], "{o:#?}");
     }
 
     #[test]

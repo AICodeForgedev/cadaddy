@@ -15819,7 +15819,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     if !inferred_boxes.is_empty() || !oneline.sheets.is_empty() {
         let kinds: Vec<String> = oneline.by_kind.iter().map(|(k, n)| format!("{k} {n}")).collect();
         let l = format!(
-            "  gear without a submittal: {} panels boxed by their rating and circuits (inferred: {}); one-line gear ({}): {} pieces ({}), {} feeders ({} carrying the conductors coming in), {} connections unsized, {} for review",
+            "  gear without a submittal: {} panels boxed by their rating and circuits (inferred: {}); one-line gear ({}): {} pieces ({}), {} feeders ({} carrying the conductors coming in), {} connections unsized, {} for review; labels on no line of the one-line, not built: {:?}",
             inferred_boxes.len(),
             inferred_boxes.join(", "),
             oneline.sheets.join(", "),
@@ -15828,7 +15828,8 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             oneline.feeders,
             oneline.continued,
             oneline.no_size.len(),
-            oneline.review.len()
+            oneline.review.len(),
+            oneline.skipped
         );
         report_progress(s, json!({"step": "electrical gear"}), &l);
         s.echo(l);
@@ -16035,7 +16036,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             "sheets": oneline.sheets, "gear": oneline.gear, "electrodes": oneline.electrodes, "by_kind": oneline.by_kind,
             "feeders": oneline.feeders, "continued": oneline.continued,
             "unsized": oneline.no_size.iter().map(|(f, t, tag)| json!({"from": f, "to": t, "tag": tag})).collect::<Vec<_>>(),
-            "review": oneline.review,
+            "review": oneline.review, "skipped": oneline.skipped,
         },
     });
     equipment_step(s, job, pages, &types, &tags, result)

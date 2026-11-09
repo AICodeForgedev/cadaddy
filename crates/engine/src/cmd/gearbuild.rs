@@ -1184,7 +1184,7 @@ mod tests {
         v.push(t(0.2, 8.2, "NOTE 1:"));
         // Each text twice in one place (a PDF's hidden text layer under it): read once.
         let twice: Vec<TextItem> = v.iter().chain(v.iter()).cloned().collect();
-        assert_eq!(feeder_types(&twice, "E-1"), feeder_types(&v, "E-1"));
+        assert_eq!(feeder_types(&twice, "EX-5"), feeder_types(&v, "EX-5"));
         let f = feeder_types(&v, "E-1");
         assert_eq!(f.len(), 3, "{f:#?}");
         assert_eq!(
