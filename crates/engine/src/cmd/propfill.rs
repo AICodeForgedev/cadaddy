@@ -1123,6 +1123,10 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
 struct Footprint {
     polys: Vec<Vec<Vec2>>,
     boxes: Vec<[f64; 4]>,
+    /// How far `model.build` moved its level's floors to stack them (drawing units), when it
+    /// built one: a level that borrows this footprint (a roof's, drawn on a sheet of its own)
+    /// compares its stacked elements here less this, in this level's plan.
+    stacked: Option<Vec2>,
 }
 
 impl Footprint {
@@ -1149,7 +1153,9 @@ fn footprints(d: &Drawing, sp: &BuildingSpec) -> HashMap<String, Footprint> {
         let Some(level) = super::bspec::made_level(e) else { continue };
         let off = super::bspec::stacked_by(e);
         let polys = super::validate::plan_quads(m).into_iter().map(|q| q.into_iter().map(|v| v - off).collect::<Vec<Vec2>>());
-        out.entry(level.to_ascii_lowercase()).or_default().polys.extend(polys.filter(|q| q.len() >= 3));
+        let fp = out.entry(level.to_ascii_lowercase()).or_default();
+        fp.polys.extend(polys.filter(|q| q.len() >= 3));
+        fp.stacked.get_or_insert(off);
     }
     // The shells by their levels (named as the spec names them, or by their number).
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
@@ -1166,17 +1172,31 @@ fn footprints(d: &Drawing, sp: &BuildingSpec) -> HashMap<String, Footprint> {
     out
 }
 
-/// The footprint of `level`, else of the nearest level below with one (a roof's).
-fn footprint_of<'a>(fps: &'a HashMap<String, Footprint>, sp: &BuildingSpec, level: &str) -> Option<&'a Footprint> {
+/// The footprint of `level`; else (a roof's, which has no floor of its own) those of every level
+/// below with one, each with its level's name: a roof covers the building under it, a mezzanine
+/// and the storey round it alike (Q6396: a roof was judged by a mezzanine's footprint alone).
+fn footprints_of<'a>(fps: &'a HashMap<String, Footprint>, sp: &BuildingSpec, level: &str) -> Vec<(&'a Footprint, Option<String>)> {
     if let Some(f) = fps.get(&level.to_ascii_lowercase()).filter(|f| !f.is_empty()) {
-        return Some(f);
+        return vec![(f, None)];
     }
-    let el = sp.level(level)?.elevation_ft;
+    let Some(el) = sp.level(level).map(|l| l.elevation_ft) else { return Vec::new() };
     sp.levels
         .iter()
-        .filter(|l| l.elevation_ft < el && fps.get(&l.name.to_ascii_lowercase()).is_some_and(|f| !f.is_empty()))
-        .max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))
-        .and_then(|l| fps.get(&l.name.to_ascii_lowercase()))
+        .filter(|l| l.elevation_ft < el)
+        .filter_map(|l| Some((fps.get(&l.name.to_ascii_lowercase()).filter(|f| !f.is_empty())?, Some(l.name.clone()))))
+        .collect()
+}
+
+/// A point of `level`'s plan in the plan of `below` (whose footprint it is judged by), by the
+/// moves `model.build` stacks the two by ([`super::bspec::stack_offsets`], from the drawing
+/// before it stacks): a roof plan is on a sheet of its own, far from the storey's (Q6396). The
+/// point itself when either move is unknown.
+fn in_plan_of(stack: &[(String, Vec2)], level: &str, below: &str, p: Vec2) -> Vec2 {
+    let off = |n: &str| stack.iter().find(|(l, _)| l.eq_ignore_ascii_case(n)).map(|(_, o)| *o);
+    match (off(level), off(below)) {
+        (Some(a), Some(b)) if (a - b).x.is_finite() && (a - b).y.is_finite() => p + a - b,
+        _ => p,
+    }
 }
 
 /// How far `p` is outside `polys` (0 inside one).
@@ -1251,13 +1271,26 @@ pub(crate) fn outside_floors(d: &Drawing, sp: &BuildingSpec) -> Vec<Outlier> {
             continue;
         }
         let Some(level) = super::bspec::made_level(e) else { continue };
-        let Some(fp) = footprint_of(&fps, sp, &level) else { continue };
+        let under = footprints_of(&fps, sp, &level);
+        if under.is_empty() {
+            continue;
+        }
         let b = cadaddy_doc::entity_bounds(d, e, 0);
         if b.is_empty() {
             continue;
         }
-        let c = b.center() - super::bspec::stacked_by(e);
-        let off = fp.outside(c) / upf;
+        // In its level's plan; a stacked element against another level's footprint (a roof's
+        // over the storeys under it, Q6396: its plan is on a sheet of its own) in that level's.
+        let own = super::bspec::stacked_by(e);
+        let c = b.center() - own;
+        let off = under
+            .iter()
+            .map(|(fp, other)| match fp.stacked {
+                Some(theirs) if other.is_some() && own.len() > 1e-9 => fp.outside(b.center() - theirs),
+                _ => fp.outside(c),
+            })
+            .fold(f64::INFINITY, f64::min)
+            / upf;
         if off.is_finite() && off > OUTSIDE_FLOOR_FT {
             let base = sp.level(&level).and_then(|l| l.base).map_or(Vec2::new(0.0, 0.0), |[x, y]| Vec2::new(x, y));
             out.push(Outlier { handle: e.handle, part, level, at_ft: [(c.x - base.x) / upf, (c.y - base.y) / upf], outside_ft: off });
@@ -1333,6 +1366,9 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
     let pieces = host_pieces(d, upf);
     let sides = Sides::of(d, sp);
     let fps = footprints(d, sp);
+    // How the levels stack (before the build stacks them): a roof's devices are judged by the
+    // storey's footprint in the storey's plan.
+    let stack = super::bspec::stack_offsets(d, sp);
     let by_circuit = circuit_points(sp, &devices);
     for t in devices {
         let Some(level) = sp.level(&t.level).filter(|l| l.sheet.is_none()) else { continue };
@@ -1863,8 +1899,13 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             None => {}
         }
         // Outside its level's footprint (else the nearest one below's: a roof's): flagged, listed.
-        if let Some(fp) = footprint_of(&fps, sp, &level.name) {
-            let off = fp.outside(centre) / upf;
+        let under = footprints_of(&fps, sp, &level.name);
+        if !under.is_empty() {
+            let off = under
+                .iter()
+                .map(|(fp, below)| fp.outside(below.as_deref().map_or(centre, |b| in_plan_of(&stack, &level.name, b, centre))))
+                .fold(f64::INFINITY, f64::min)
+                / upf;
             if off.is_finite() && off > OUTSIDE_FLOOR_FT {
                 let why = format!(
                     "{:.1} ft outside {}'s footprint (its floor and exterior walls), where it was read on {} (its sheet may be placed wrong, or it is outside the building)",

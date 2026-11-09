@@ -564,6 +564,10 @@ fn run_pdfimport(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let (src, mut report) = read_pdf(&bytes, &p).map_err(|e| bad("pdfimport", e))?;
+    let (src, mut report) = match reread_at_plan_scale(read_pdf, &bytes, &p, &src, &mut report) {
+        Some(again) => again.map_err(|e| bad("pdfimport", e))?,
+        None => (src, report),
+    };
     let count = src.model.len();
     if p.get("newDrawing").and_then(Value::as_bool).unwrap_or(false) {
         let index = s.open_drawing(src, &stem, None);
@@ -619,6 +623,50 @@ pub(crate) enum PageImport {
     Failed(String),
 }
 
+/// How far (relative) a page's scale may be from its plans' before it is read again at theirs.
+const PLAN_SCALE_TOLERANCE: f64 = 0.02;
+
+/// A page whose plans print at another scale than the one its reading took, read again at its
+/// plans' scale (Q6396: a roof plan at 1/8" = 1'-0" came in at a detail's 1/2" note from the
+/// corner of its sheet, a quarter of its size, and no trade's roof plan fitted onto it). The
+/// plans' scale is the one most of the sheet's plan views print ([`cadaddy_mepfix::sheet_facts::plan_print_scale`]);
+/// the report's `scaleSource` says which view gave it and what the first reading took, and
+/// `planPrintScale` (sheet inches per foot) is recorded in `report` whenever it was read, so a
+/// sheet left at another scale (given, DO NOT SCALE) is fitted onto its plan at their ratio.
+/// `None` (the first reading stands) when the scale was given, the sheet stayed at paper size,
+/// it prints one scale only, or its plans print the scale it has.
+fn reread_at_plan_scale(
+    read_pdf: super::file::PdfHook,
+    bytes: &[u8],
+    params: &Value,
+    d: &Drawing,
+    report: &mut Value,
+) -> Option<std::result::Result<(Drawing, Value), String>> {
+    let (v, view) = cadaddy_mepfix::sheet_facts::sheet_plan_print_scale(d)?;
+    report["planPrintScale"] = json!(v);
+    if params.get("scale").is_some_and(|x| x.as_str().is_none_or(|t| !t.trim().eq_ignore_ascii_case("auto"))) {
+        return None;
+    }
+    let k = report.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 1.5)?;
+    let want = 12.0 * super::perceive::units_per_inch(d) / v;
+    if !(want.is_finite() && want > 1.5 && want <= 1.0e5) || (want / k - 1.0).abs() <= PLAN_SCALE_TOLERANCE {
+        return None;
+    }
+    let mut p = params.clone();
+    p["scale"] = json!(want);
+    let first = report.get("scaleSource").and_then(Value::as_str).unwrap_or("").chars().take(160).collect::<String>();
+    Some(read_pdf(bytes, &p).map(|(d2, mut r2)| {
+        r2["scaleSource"] = json!(format!(
+            "scale note {} (the scale the sheet's plans print, view {}; first read at {k}x from {first})",
+            view.scale_text.as_deref().unwrap_or(""),
+            view.title.chars().take(80).collect::<String>()
+        ));
+        r2["planPrintScale"] = json!(v);
+        r2["planScaleReread"] = json!({"from": k, "to": want, "view": view.title, "first_source": first});
+        (d2, r2)
+    }))
+}
+
 /// The scale a DO NOT SCALE sheet's report says it detected ("… scale 96x — sheet kept …").
 fn detected_scale(report: &Value) -> Option<f64> {
     let src = report.get("scaleSource").and_then(Value::as_str)?;
@@ -670,7 +718,7 @@ pub(crate) fn import_pdf_pages(
             Some(Err(e)) => return Err(e.clone()),
             None => return Err(format!("{}: not read", pg.path)),
         };
-        let (d, report) = read_pdf(&bytes, &pg.params)?;
+        let (mut d, mut report) = read_pdf(&bytes, &pg.params)?;
         if full_scale
             && pg.params.get("scale").is_none()
             && report.get("needs_registration").and_then(Value::as_bool).unwrap_or(false)
@@ -680,9 +728,12 @@ pub(crate) fn import_pdf_pages(
         {
             let mut p = pg.params.clone();
             p["scale"] = json!(k);
-            return read_pdf(&bytes, &p);
+            (d, report) = read_pdf(&bytes, &p)?;
         }
-        Ok((d, report))
+        match reread_at_plan_scale(read_pdf, &bytes, &pg.params, &d, &mut report) {
+            Some(again) => again,
+            None => Ok((d, report)),
+        }
     };
     // A page per core at a time, at most [`MAX_PAGES_AT_ONCE`]: the converted pages wait in
     // memory until they are added.

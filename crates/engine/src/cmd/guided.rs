@@ -582,6 +582,10 @@ pub struct SheetScale {
     pub scale: f64,
     /// What the import says the scale came from.
     pub source: String,
+    /// The scale its plan views print (sheet inches per foot), when the import read it from a
+    /// sheet of several scales: with `scale`, how many drawing units a foot of its plans is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_scale: Option<f64>,
 }
 
 impl SheetScale {
@@ -2160,6 +2164,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                     kind: kind(sh),
                     scale: rep.get("scale").and_then(Value::as_f64).unwrap_or(1.0),
                     source: rep.get("scaleSource").and_then(Value::as_str).unwrap_or("").chars().take(240).collect(),
+                    plan_scale: rep.get("planPrintScale").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0),
                 });
                 let rect = rep.get("rect").and_then(Value::as_array).and_then(|r| {
                     let v: Vec<f64> = r.iter().filter_map(Value::as_f64).collect();
@@ -3688,6 +3693,19 @@ struct EnlargedFit {
 
 /// The job's registered enlarged views of a part of a floor (not a typical room's), from its sheet
 /// map.
+/// How many drawing units a foot of each imported sheet's plans is, by the sheet's number: the
+/// scale it came in at (drawing units per sheet inch) times the scale its plan views print, for
+/// the sheets whose import read the latter (Q6396).
+fn sheet_import_scales(job: &GuidedJob) -> Vec<(String, f64)> {
+    job.sheet_scales
+        .iter()
+        .filter_map(|sc| {
+            let u = sc.scale * sc.plan_scale?;
+            (u.is_finite() && u > 0.0).then(|| (sc.sheet.split('/').next().unwrap_or(&sc.sheet).to_string(), u))
+        })
+        .collect()
+}
+
 fn enlarged_fits(job: &GuidedJob) -> Vec<EnlargedFit> {
     let rooms = job_rooms(job);
     let (types, vocabulary) = room_types(&rooms);
@@ -5641,7 +5659,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // (Its floor plan where one is titled so, not its finish or furniture plan.)
             let arch: Vec<&SheetRegion> =
                 job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case("A")).collect();
-            let arch_plans: Vec<(String, [f64; 4])> = floor_plans_first(job, arch).into_iter().map(|r| (r.level.clone(), r.plan_rect())).collect();
+            // Each plan with whether it is titled as a floor plan and how many levels it draws.
+            let arch_plans: Vec<(String, [f64; 4], bool, usize)> = floor_plans_first(job, arch)
+                .into_iter()
+                .map(|r| {
+                    let floor = cadaddy_mepfix::sheet_reader::names_floor_plan(&region_title(job, r));
+                    (r.level.clone(), r.plan_rect(), floor, r.all_levels().len().max(1))
+                })
+                .collect();
             if !arch_plans.is_empty()
                 && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
             {
@@ -5652,10 +5677,23 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 };
                 for level in &mut sp.levels {
                     let want = key(&level.name);
-                    let rects: Vec<[f64; 4]> = arch_plans.iter().filter(|(l, _)| !l.is_empty() && key(l) == want).map(|(_, r)| *r).collect();
+                    let mut rects: Vec<&(String, [f64; 4], bool, usize)> =
+                        arch_plans.iter().filter(|(l, _, _, _)| !l.is_empty() && key(l) == want).collect();
+                    // The level's plan titled as its floor plan over its other plans, then a plan of
+                    // this level alone over one that draws others too (a mezzanine and low roof plan
+                    // is neither the mezzanine's floor plan nor the roof plan): sheets come in at
+                    // their plans' scales, so a 1/8" sheet is twice the size of a 1/4" one and its
+                    // size says nothing of which is the level's (Q6396).
+                    if rects.iter().any(|x| x.2) {
+                        rects.retain(|x| x.2);
+                    }
+                    if let Some(fewest) = rects.iter().map(|x| x.3).min() {
+                        rects.retain(|x| x.3 == fewest);
+                    }
                     // The largest view of the level (a several-view sheet's floor plan, not its enlarged plans).
                     if let Some(r) = rects
                         .into_iter()
+                        .map(|x| x.1)
                         .max_by(|a, b| ((a[2] - a[0]).abs() * (a[3] - a[1]).abs()).total_cmp(&((b[2] - b[0]).abs() * (b[3] - b[1]).abs())))
                     {
                         progress_line(&format!("  level {}: region from its architectural plan {:?}", level.name, r.map(|v| v.round())));
@@ -5714,7 +5752,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         shells
                     })
                     .clone();
-                let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), reference);
+                let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference);
                 placer_log = Some(log);
                 let sim = placer.insert(Box::new(place));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
@@ -6300,7 +6338,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             shells
                         })
                         .clone();
-                    let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), reference.as_deref().unwrap_or("A"));
+                    let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference.as_deref().unwrap_or("A"));
                     placer_log = Some(log);
                     placer = Some(Box::new(place));
                 }
@@ -23869,6 +23907,7 @@ fn arch_placer(
     sp: &cadaddy_walk3d::BuildingSpec,
     shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)],
     enlarged: Vec<EnlargedFit>,
+    plan_units: &[(String, f64)],
     reference: &str,
 ) -> (impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<>, PlacerLog) {
     let log: PlacerLog = Default::default();
@@ -23967,16 +24006,45 @@ fn arch_placer(
     // check a placement by the frame and to fit a sheet nothing else places (Q6284).
     let k_in0 = super::perceive::units_per_inch(d);
     let lines = std::sync::Arc::new(super::sheetreg::SheetLines::new(d, &sheets.iter().map(|b| b.rect).collect::<Vec<_>>(), k_in0));
+    // A level's plan linework leaves out what its sheet's other views draw (an elevation or a
+    // detail beside the plan, Q6396: a trade's roof plan fitted onto the roof sheet's elevation
+    // of a screen wall), each sheet's views read off it alone. A point in a plan view stays.
     let targets: std::sync::Arc<Vec<(String, usize, Vec<cadaddy_geom::Vec2>)>> = std::sync::Arc::new(
         plans
             .iter()
             .filter_map(|(k, r)| {
                 let i = sheets.iter().position(|b| inside(&b.rect, mid(r)))?;
-                Some((k.clone(), i, lines.points(i, Some(r))))
+                let (plan_v, other_v) = sheets.get(i).map(|b| own_views(d, &b.rect)).unwrap_or_default();
+                let pts = lines
+                    .points(i, Some(r))
+                    .into_iter()
+                    .filter(|p| {
+                        let at = [p.x, p.y];
+                        plan_v.iter().any(|v| inside(v, at)) || !other_v.iter().any(|v| inside(v, at))
+                    })
+                    .collect();
+                Some((k.clone(), i, pts))
             })
             .collect(),
     );
     lap("sheets' linework sampled");
+    // Each sheet's plans in drawing units per foot (Q6396), as its import read them (`None`: a
+    // sheet of one scale, at it). A sheet whose plans came in at another scale than its level's
+    // plan is fitted onto it at the ratio of the two, never one to one.
+    let plan_upf: std::sync::Arc<Vec<Option<f64>>> = std::sync::Arc::new(
+        sheets.iter().map(|b| plan_units.iter().find(|(n, _)| n.eq_ignore_ascii_case(&b.number)).map(|(_, u)| *u)).collect(),
+    );
+    // A level's plan whose units per foot aren't the job's: said, never silent.
+    for (_, i, _) in targets.iter() {
+        if let (Some(Some(u)), Some(b)) = (plan_upf.get(*i), sheets.get(*i))
+            && (u / upf - 1.0).abs() > 0.02
+        {
+            progress_line(&format!(
+                "  placer: {} (level {}'s plan) prints {u:.2} drawing units per foot, the job {upf:.2}: its sheets fit onto it at that ratio",
+                b.number, b.level
+            ));
+        }
+    }
     let target = {
         let targets = targets.clone();
         move |key: &str| targets.iter().find(|(k, _, _)| k == key).map(|(_, _, v)| v.clone()).unwrap_or_default()
@@ -24155,13 +24223,17 @@ fn arch_placer(
                 (Some(a), Some(b)) if i != j => super::sheetreg::other_parts(a, b),
                 _ => None,
             });
-            let fit = if other.is_some() { None } else { lines.fit(i, &tgt) };
+            let ratio = super::sheetreg::scale_ratio(
+                plan_sheet(key).and_then(|j| plan_upf.get(j).copied().flatten()),
+                plan_upf.get(i).copied().flatten(),
+            );
+            let fit = if other.is_some() { None } else { lines.fit(i, &tgt, ratio) };
             let number = sheet_names.get(i).cloned().unwrap_or_default();
             progress_line(&format!(
                 "  placer: {number} on {level} by its linework: {} ({:.1} s)",
                 fit.as_ref().map_or_else(
                     || other.as_ref().map_or_else(
-                        || format!("no fit ({})", lines.best_tried(i, &tgt)),
+                        || format!("no fit ({})", lines.best_tried(i, &tgt, ratio)),
                         |o| format!("not fitted (its views name another part of the site: {o})")
                     ),
                     |f| format!(
@@ -24390,6 +24462,36 @@ fn arch_placer(
         m
     };
     (place, log)
+}
+
+/// The regions of sheet `rect`'s plan views and of its other views (elevations, sections,
+/// details, risers, diagrams, schedules: [`cadaddy_mepfix::sheet_reader::names_no_plan`]), the
+/// sheet read on its own.
+fn own_views(d: &cadaddy_doc::Drawing, rect: &[f64; 4]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
+    let mine: Vec<cadaddy_doc::Entity> = d
+        .model
+        .iter()
+        .filter(|e| {
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            let c = b.center();
+            !b.is_empty() && c.x >= rect[0] && c.x <= rect[2] && c.y >= rect[1] && c.y <= rect[3]
+        })
+        .map(|e| (**e).clone())
+        .collect();
+    if mine.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let mut sub = d.clone();
+    let mut store = cadaddy_doc::EntityStore::new();
+    store.push_many(mine);
+    sub.model = store;
+    let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+    let (mut plans, mut others) = (Vec::new(), Vec::new());
+    for v in cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts) {
+        let Some(r) = v.region else { continue };
+        if cadaddy_mepfix::sheet_reader::names_no_plan(&v.title) { others.push(r) } else { plans.push(r) }
+    }
+    (plans, others)
 }
 
 /// The regions of the plan views (not elevations, sections, details, risers, diagrams,
@@ -30951,7 +31053,7 @@ mod tests {
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let (place, _) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), "A");
+        let (place, _) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
         let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p)).map(|q| [q[0].round(), q[1].round()]);
         // A duct's point where M-101 draws it lands where A-101 has that spot, by M-101's tags.
         assert_eq!(at([2560.0, 430.0]), Some([500.0, 400.0]));
@@ -31058,7 +31160,7 @@ mod tests {
     #[test]
     fn a_sheet_of_another_building_in_the_same_title_block_is_not_stacked_on_the_plan() {
         let (s, sp) = frame_sheets();
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), "A");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
         let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p));
         // The mechanical plan draws the floor plan's walls where the floor plan's sheet has them:
         // its frame holds.
@@ -31147,7 +31249,7 @@ mod tests {
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), "M");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "M");
         let q = place([2800.0, 450.0], "Level 2").map(|m| m.apply([2800.0, 450.0]));
         assert!(q.is_some_and(|q| (q[0] - 500.0).abs() < 1.0 && (q[1] - 400.0).abs() < 1.0), "{q:?} {:#?}", log.lock().map(|l| l.clone()));
         let l = log.lock().map(|l| l.clone()).unwrap_or_default();
@@ -35350,7 +35452,7 @@ mod tests {
     fn plans_left_at_paper_size_are_reported() {
         let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
         let sc =
-            |sheet: &str, kind: &str, scale: f64, source: &str| SheetScale { sheet: sheet.into(), kind: kind.into(), scale, source: source.into() };
+            |sheet: &str, kind: &str, scale: f64, source: &str| SheetScale { sheet: sheet.into(), kind: kind.into(), scale, source: source.into(), plan_scale: None };
         job.sheet_scales = vec![
             sc("P-1", "plan", 96.0, "scale note 1/8\" = 1'-0\""),
             sc("P-2", "plan", 96.0, "scale note 1/8\" 1'-0\" (read from lettering drawn as shapes)"),

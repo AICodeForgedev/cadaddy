@@ -3473,6 +3473,14 @@
     "KEY PLAN"
    ]
   },
+  "sheets.plan_view_words": {
+   "source": "A view-title word that names a plan of some kind (floor, roof, ceiling, enlarged), for the scale a sheet's plans print at; a title with one of sheets.not_plan_view_words is no plan. (drafting convention: general, no job's title)",
+   "words": [
+    "PLAN",
+    "PLANS",
+    "RCP"
+   ]
+  },
   "sheets.other_plan_title_words": {
    "source": "A view title that names a plan which is not the floor plan, though it can share the floor plan's sheet and draw the same outline: the ceiling, the roof, the structure or the demolition. (drafting convention: general, no job's title)",
    "words": [
