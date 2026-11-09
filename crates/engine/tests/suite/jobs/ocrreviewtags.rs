@@ -20,11 +20,11 @@ fn text(s: &mut Session, at: [f64; 2], t: &str, h: f64) {
 }
 
 const ROOMS: [(&str, &str, [f64; 2]); 5] = [
-    ("OFFICE", "101", [100.0, 120.0]),
-    ("STORAGE", "102", [340.0, 120.0]),
-    ("LOBBY", "103", [580.0, 120.0]),
-    ("CONFERENCE", "104", [820.0, 120.0]),
-    ("BREAK ROOM", "105", [220.0, 360.0]),
+    ("OFFICE", "7011", [100.0, 120.0]),
+    ("STORAGE", "7012", [340.0, 120.0]),
+    ("LOBBY", "7013", [580.0, 120.0]),
+    ("CONFERENCE", "7014", [820.0, 120.0]),
+    ("BREAK ROOM", "7015", [220.0, 360.0]),
 ];
 
 /// Six rooms in 6" walls (inches). Five are labelled, name over number, in plain text on the
@@ -45,8 +45,8 @@ fn plan() -> Session {
         text(&mut s, [at[0], at[1] - 20.0], number, 6.0);
     }
     layer(&mut s, "PDF-OCR-REVIEW");
-    text(&mut s, [700.0, 360.0], "L---j", 12.0);
-    text(&mut s, [60.0, 200.0], "Ij", 12.0);
+    text(&mut s, [700.0, 360.0], "F--_t", 12.0);
+    text(&mut s, [60.0, 200.0], "rT", 12.0);
     layer(&mut s, "0");
     s.execute("layer.set", &json!({"name": "PDF-OCR-REVIEW", "on": false})).unwrap();
     s
@@ -83,7 +83,7 @@ fn the_ocr_review_layer_is_never_the_room_tag_layer() {
     let sp = &r["spec"];
     assert!(role(sp, "PDF-OCR-REVIEW").is_none(), "the review layer takes no role: {sp}");
     assert!(
-        !sp["rooms"].as_array().unwrap().iter().any(|x| x["name"].as_str().is_some_and(|n| n.contains("---") || n.eq_ignore_ascii_case("ij"))),
+        !sp["rooms"].as_array().unwrap().iter().any(|x| x["name"].as_str().is_some_and(|n| n.contains("--") || n.eq_ignore_ascii_case("rt"))),
         "an OCR misread names no room: {sp}"
     );
     // Stored, with the rooms the job read: every labelled room is traced.

@@ -135,7 +135,7 @@ pub(crate) fn room_like_name(t: &str) -> bool {
     if t.contains([',', ';', '!', '?', '"']) || t.contains(". ") || (t.ends_with('.') && words >= 3) {
         return false;
     }
-    // OCR misreads of linework (`L---j`, `|_-_|`): a name is mostly letters and digits, with no run
+    // OCR misreads of linework (`F--_t`, `|_-_|`): a name is mostly letters and digits, with no run
     // of marks.
     let marks = t.chars().filter(|c| !c.is_whitespace() && !c.is_alphanumeric()).count();
     let run_of_marks = t.split_whitespace().any(|w| w.chars().collect::<Vec<char>>().windows(3).any(|r| r.iter().all(|c| !c.is_alphanumeric())));
@@ -561,7 +561,7 @@ mod tests {
     /// ampersand still are.
     #[test]
     fn garbled_ocr_text_is_no_room_name() {
-        for junk in ["L---j", "|_-_|", "Ij--", "J._.L", "OFFICE..."] {
+        for junk in ["F--_t", "|_-_|", "rT--", "J._.L", "OFFICE..."] {
             assert!(!super::room_like_name(junk), "{junk}: no room name");
         }
         for name in ["W/D", "MECH./ELEC.", "STOR & MECH", "JAN.", "BREAK ROOM", "STOR-1"] {
