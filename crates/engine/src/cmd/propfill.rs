@@ -67,6 +67,23 @@ const WALL_BOX_FT: f64 = 7.0;
 /// close: it stays, for review.
 pub(crate) const HOST_SNAP_FT: f64 = 3.0;
 
+/// Where a device's `mount_height_from` says its height came from, the documents first (the
+/// order the heights are taken in): a gang's devices take the one of them that stands first.
+pub(crate) const HEIGHT_FROM_ORDER: [&str; 12] = [
+    "own_note",
+    "elevation",
+    "enlarged_plan_note",
+    "fixture_schedule",
+    "legend",
+    "general_notes",
+    "project_rule",
+    "ceiling",
+    "floor",
+    "equipment",
+    "wall_luminaire_rule",
+    "default",
+];
+
 /// A device box this low (inches over the floor) is in the floor, not on a wall.
 const FLOOR_BOX_IN: f64 = 2.0;
 /// How far beyond a wall's face the rooms on its sides are looked for, feet.
