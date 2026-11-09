@@ -837,9 +837,13 @@ fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_lev
             ],
             "equipment": [
                 {"tag": "SB1", "kind": "switchboard", "level": "Ground", "min": [0, 0], "max": [48, 24], "height_ft": 7, "bottom_ft": 0},
-                {"tag": "PU", "kind": "panel", "level": "Upper", "min": [4600, 600], "max": [4624, 612], "height_ft": 4, "bottom_ft": 2}
+                {"tag": "PU", "kind": "panel", "level": "Upper", "min": [4600, 600], "max": [4624, 612], "height_ft": 4, "bottom_ft": 2},
+                {"tag": "PG", "kind": "panel", "level": "Ground", "min": [480, 600], "max": [504, 612], "height_ft": 3, "bottom_ft": 4}
             ],
             "feeders": [{"tag": "F7", "from": "SB1", "to": "PU", "sets": 1, "phases": 3, "size": "3/0", "material": "cu", "neutrals": 1,
+                         "neutral_size": "3/0", "grounds": 1, "ground_size": "#6", "conduits": 1, "conduit_in": 3, "entry": "top", "from_entry": "bottom",
+                         "source": "riser diagram"},
+                        {"tag": "F8", "from": "SB1", "to": "PG", "sets": 1, "phases": 3, "size": "3/0", "material": "cu", "neutrals": 1,
                          "neutral_size": "3/0", "grounds": 1, "ground_size": "#6", "conduits": 1, "conduit_in": 3, "entry": "top", "from_entry": "bottom",
                          "source": "riser diagram"}]
         }
@@ -866,9 +870,10 @@ fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_lev
     // Buried: only on the ground floor, the trench and the two vertical legs up to the floor and the stub's top.
     assert_eq!(qty("Middle", "conduit", "PVC") + qty("Upper", "conduit", "PVC"), 0.0, "{lines:#?}");
     assert!(qty("Ground", "conduit", "PVC") > 0.0, "{lines:#?}");
-    // Above the slab: the riser on the ground floor from the stub's top, the middle floor's full
+    // Above the slab: the riser on the ground floor from the stub's top (and, up beside the
+    // ground floor's panel PG, from its stub's top into PG's top at 7'), the middle floor's full
     // storey, and on the panel's level its rise, the run across and the drop into its top.
-    assert!((qty("Ground", "conduit", "EMT") - (11.0 - stub)).abs() < 0.05, "{lines:#?}");
+    assert!((qty("Ground", "conduit", "EMT") - (11.0 - stub) - (7.0 - stub)).abs() < 0.05, "{lines:#?}");
     assert!((qty("Middle", "conduit", "EMT") - 10.0).abs() < 0.05, "{lines:#?}");
     assert!(qty("Upper", "conduit", "EMT") >= 9.0 + 1.5 + 3.0 - 0.05, "{lines:#?}");
     // One coupling where the riser passes each floor, made as a floor joint; a transition out of the stub.
@@ -880,7 +885,13 @@ fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_lev
         .filter(|p| p.get("atom").map(Prop::text).as_deref() == Some("coupling") && p.get("joint").map(Prop::text).as_deref() == Some("floor"))
         .count();
     assert_eq!(joints, 2, "{lines:#?}");
-    assert!(lines.iter().any(|l| l["item"].as_str().unwrap_or_default().contains("transition")), "{lines:#?}");
+    // A transition where each stub-up meets the raceway above, also at the panel it rises into
+    // (its stub is no landing in the panel: no adapter or connector there of its own).
+    let transitions: f64 =
+        lines.iter().filter(|l| l["item"].as_str().unwrap_or_default().contains("transition")).map(|l| l["qty"].as_f64().unwrap_or(0.0)).sum();
+    assert_eq!(transitions, 2.0, "{lines:#?}");
+    // Ends into gear: out of SB1's bottom twice (PVC), into PU's and PG's tops (EMT).
+    assert_eq!((qty("Ground", "connector", "PVC"), qty("Ground", "connector", "EMT") + qty("Upper", "connector", "EMT")), (2.0, 2.0), "{lines:#?}");
     // A firestop at each floor it passes.
     let fs = |level: &str| {
         lines.iter().filter(|l| l["kind"] == json!("firestop") && l["level"] == json!(level)).map(|l| l["qty"].as_f64().unwrap_or(0.0)).sum::<f64>()
