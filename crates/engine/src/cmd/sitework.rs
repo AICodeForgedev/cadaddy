@@ -1354,6 +1354,9 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
     // symbol only its circuit tags is what that circuit's load is (a sign, a charger: equipment).
     let mut light_ids: Vec<Option<usize>> = vec![None; read.lights.len()];
     let mut light_equip: Vec<Option<usize>> = vec![None; read.lights.len()];
+    // Circuits a symbol brings to the site equipment its label names beside it (a sign's other
+    // circuits tagged at its other symbol): that equipment's, no second one.
+    let mut extra_circuits: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut light_top: Vec<f64> = vec![0.0; read.lights.len()];
     // The fixture schedule's pole or site types: an untyped site light is the one there is.
     let site_types: Vec<&cadaddy_walk3d::FixtureType> = sp
@@ -1374,6 +1377,10 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
             .then(|| r.equipment.iter().find(|k| has_any(&load_up, &k.words)).map(|k| (k.kind.clone(), k.height_in)))
             .flatten();
         if let (Some((kind, height_in)), Some((desc, src))) = (equipment_kind, load.as_ref()) {
+            if let Some(qi) = read.equipment.iter().position(|q| q.kind == kind && box_gap(&q.bbox, &l.bbox) <= r.equipment_reach_h * h) {
+                extra_circuits.entry(qi).or_default().extend(l.circuit.iter().flat_map(|c| c.split_whitespace().map(str::to_string)));
+                continue;
+            }
             // Site equipment its circuit's load names, where its symbol is drawn.
             seq.equipment += 1;
             let half = ((l.bbox[2] - l.bbox[0]).max(l.bbox[3] - l.bbox[1]) / 2.0 * fit.reg.scale()).max(0.5 * upf);
@@ -1947,8 +1954,13 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         }
         let up = q.label.to_ascii_uppercase();
         let words: Vec<&String> = r.site_load_words.iter().filter(|w| up.contains(w.as_str())).collect();
-        // The circuits printed by it, else those its name's load is on.
+        // The circuits printed by it (and by its other symbols), else those its name's load is on.
         let mut found: Vec<String> = q.circuits.clone();
+        for c in extra_circuits.get(&qi).into_iter().flatten() {
+            if !found.contains(c) && found.len() < 12 {
+                found.push(c.clone());
+            }
+        }
         let by_name = found.is_empty() && !words.is_empty();
         for ps in sp.mep.panel_schedules.iter().take(2_000).filter(|_| by_name) {
             for c in ps.circuits.iter().take(500) {
@@ -2668,6 +2680,9 @@ mod tests {
         text(&mut d, "SIGN", 11_660.0, 2_980.0, h);
         // The sign's circuit printed by it: the sign's, no device of its own.
         text(&mut d, "SP-11", 11_520.0, 3_060.0, h);
+        // Another of its circuits tagged at a symbol of its own further off: still the sign's.
+        pline(&mut d, "E-SITE", &square([11_600.0, 3_250.0], 12.0), true);
+        text(&mut d, "SP-13", 11_640.0, 3_245.0, h);
         pline(&mut d, "E-SITE", &square([10_500.0, 3_200.0], 12.0), true);
         text(&mut d, "J", 10_520.0, 3_195.0, h);
         pline(&mut d, "E-POWR", &square([11_400.0, 2_200.0], 50.0), true);
@@ -2679,7 +2694,7 @@ mod tests {
         text(&mut d, "PRIMARY FEEDER. PROVIDE (2) 3\" CONDUITS", 12_600.0, 4_600.0, h);
         text(&mut d, "FROM THE UTILITY COMPANY.", 12_600.0, 4_570.0, h);
         let read = read("E-001", &d, [9_000.0, 1_000.0, 14_000.0, 5_000.0], &BTreeSet::new(), 12.0);
-        assert_eq!(read.lights.iter().filter(|l| l.circuit.is_some()).count(), 3, "{:?}", read.lights);
+        assert_eq!(read.lights.iter().filter(|l| l.circuit.is_some()).count(), 4, "{:?}", read.lights);
         assert!(read.equipment.iter().any(|q| q.kind == "sign" && q.circuits == ["SP-11"]), "{:?}", read.equipment);
         let kinds: Vec<&str> = read.equipment.iter().map(|q| q.kind.as_str()).collect();
         assert!(kinds.contains(&"sign") && kinds.contains(&"pull_box") && kinds.contains(&"transformer"), "{kinds:?} {:?}", read.unplaced_labels);
@@ -2689,11 +2704,14 @@ mod tests {
             |n: &str, d: &str| cadaddy_walk3d::PanelCircuit { number: n.into(), description: d.into(), source: "E-601".into(), ..Default::default() };
         sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule {
             panel: "SP".into(),
-            circuits: vec![circuit("5", "SITE LIGHTING"), circuit("9", "EV CHARGER"), circuit("11", "MONUMENT SIGN")],
+            circuits: vec![circuit("5", "SITE LIGHTING"), circuit("9", "EV CHARGER"), circuit("11", "MONUMENT SIGN"), circuit("13", "MONUMENT SIGN")],
             ..Default::default()
         });
         let fit = register(&read, &sp, "Level 1", true);
         let built = plan(&sp, &read, &fit, "Level 1", &mut Seq::default());
+        let signs: Vec<&MepEquipment> = built.equipment.iter().filter(|e| e.kind == "sign").collect();
+        assert_eq!(signs.len(), 1, "{signs:?}");
+        assert!(signs.iter().all(|e| e.properties.get("CIRCUIT").is_some_and(|c| c == "SP-11, SP-13")), "{signs:?}");
         // SP-5's two symbols: the schedule's one pole type on poles, on their circuit.
         let lights: Vec<&ElementTag> = built.tags.iter().filter(|t| t.fields.get("device_kind").is_some_and(|f| f.value == "luminaire")).collect();
         assert_eq!(lights.len(), 2, "{lights:?}");
@@ -2711,7 +2729,7 @@ mod tests {
             built.equipment
         );
         assert!(
-            built.equipment.iter().any(|e| e.kind == "sign" && e.properties.get("CIRCUIT").is_some_and(|c| c == "SP-11")),
+            built.equipment.iter().any(|e| e.kind == "sign" && e.properties.get("CIRCUIT").is_some_and(|c| c == "SP-11, SP-13")),
             "{:?}",
             built.equipment
         );
@@ -2723,7 +2741,7 @@ mod tests {
         assert_eq!(primary.len(), 2, "{:?}", built.runs);
         assert!(primary.iter().all(|r| r.made == Made::Inferred && r.height_source.starts_with(super::super::ugplan::CALLED_PREFIX)), "{primary:?}");
         // Each circuit's home run, inferred; none of the three asked about.
-        for c in ["SP-5", "SP-9", "SP-11"] {
+        for c in ["SP-5", "SP-9", "SP-11,SP-13"] {
             assert!(built.runs.iter().any(|r| r.made == Made::Inferred && r.basis.contains(&format!("home run of {c}"))), "{c}: {:?}", built.runs);
         }
         let carried: BTreeSet<String> = built.circuits.keys().cloned().collect();
