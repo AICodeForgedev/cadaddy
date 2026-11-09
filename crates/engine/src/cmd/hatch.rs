@@ -1385,6 +1385,24 @@ mod tests {
         assert!((b.width() - 120.0).abs() < 1e-6, "{b:?}");
     }
 
+    /// A plan smaller than the reach (a level's footprint under a room trace's 150 ft) caps the
+    /// search at its own size: once the window holds the whole plan it is searched once and the
+    /// search ends there ("not found"), however far the reach would let it widen.
+    #[test]
+    fn a_search_on_a_plan_smaller_than_its_reach_stops_at_the_plan() {
+        let mut s = Session::new();
+        // a room open on one side and a closed one: a footprint 620" across
+        s.execute("pline", &json!({ "points": [[0, 0], [0, 144], [120, 144], [120, 0], [70, 0]] })).unwrap();
+        s.execute("rectang", &json!({ "p1": [500, 0], "p2": [620, 144] })).unwrap();
+        let mut cache = None;
+        let open = loops_at_lazy_within(&s, Vec2::new(60.0, 72.0), &mut cache, Some(1.0e12));
+        let Err(e) = open else { panic!("an open room closes nothing: {open:?}") };
+        assert!(!e.to_string().contains("within reach"), "ended at the plan, not at the reach: {e}");
+        let room = loops_at_lazy_within(&s, Vec2::new(560.0, 72.0), &mut cache, Some(1.0e12)).expect("the closed room");
+        let b = Bounds2::from_points(room.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
+        assert!((b.width() - 120.0).abs() < 1e-6, "{b:?}");
+    }
+
     /// Sheets of rooms side by side (a print set's job), with text and closed islands in the
     /// rooms and a line across all of them: the outlines' grid gives the same loops at every point
     /// as looking at every object.
