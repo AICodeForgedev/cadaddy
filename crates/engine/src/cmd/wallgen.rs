@@ -2084,12 +2084,31 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if strings > 0 {
         notes.push(format!("{}: {strings} line pairs of dimension strings and their extension lines not taken for walls.", level.name));
     }
+    // A window drawn across a gap in a wall (its frame's outline the wall's depth, its sill and
+    // glazing lines, or two glazing lines from jamb to jamb): its lines are no wall bridging the
+    // gap, which stays the window's opening (Q6424).
+    let all_segs = segments(&ents);
+    let range = (oz.min_ft * upf, oz.max_ft * upf);
+    let frames = frames_in_gaps(&found, &segs, &found, &all_segs, range, k);
+    let mut it = frames.iter();
+    found.retain(|_| !it.next().copied().unwrap_or(false));
+    let mut frame_pairs = frames.iter().filter(|x| **x).count();
     // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
-    // window's glazing drawn lighter): it is wall too.
+    // storefront's glazing drawn lighter): it is wall too, unless it is a window's across the gap.
     if !screened_ents.is_empty() && !found.is_empty() {
-        let fills: Vec<_> =
-            pairs(d, &segments(&screened_ents), &lim).into_iter().filter(|p| fills_a_wall(p.c0, p.c1, p.thickness, &found, k)).collect();
+        let screened_segs = segments(&screened_ents);
+        let mut fills: Vec<_> = pairs(d, &screened_segs, &lim).into_iter().filter(|p| fills_a_wall(p.c0, p.c1, p.thickness, &found, k)).collect();
+        let frames = frames_in_gaps(&fills, &screened_segs, &found, &all_segs, range, k);
+        let mut it = frames.iter();
+        fills.retain(|_| !it.next().copied().unwrap_or(false));
+        frame_pairs += frames.iter().filter(|x| **x).count();
         found.extend(fills);
+    }
+    if frame_pairs > 0 {
+        notes.push(format!(
+            "{}: {frame_pairs} line pairs of window frames and glazing drawn across wall gaps not taken for walls (the gaps are the windows' openings).",
+            level.name
+        ));
     }
     if found.is_empty() && centre_ents.is_empty() {
         notes.push(format!(
@@ -2202,7 +2221,6 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         notes.push(format!("{}: {corners} corners where two walls stopped short (a corner post between them) closed.", level.name));
     }
     // Openings: each cuts the wall it lies in.
-    let all_segs = segments(&ents);
     let mut ops = openings(d, &ents, &all_segs, k);
 
     // A family's size and heights for the blocks it covers (sheet units above the floor).
@@ -3808,6 +3826,145 @@ fn fills_a_wall(a: Vec2, b: Vec2, t: f64, walls: &[super::perceive::geometry::Pa
         let reach = t.max(w.thickness) + 3.0 * k;
         off <= 0.5 * t.max(w.thickness) && [a, b].iter().any(|p| p.dist(w.c0).min(p.dist(w.c1)) <= reach)
     })
+}
+
+/// How far (inches) a window's frame line may run past the jamb of the gap it is drawn in (into
+/// the wall's end, or short of it), and still lie within the gap.
+const FRAME_REACH_IN: f64 = 2.0;
+
+/// Most pairs looked at as a window's frame across a gap (a level; hostile drawings).
+const MAX_FRAME_CANDIDATES: usize = 200_000;
+
+/// Which of the pairs `cands` (faces in `faces`) are a window drawn across a gap in a wall, not a
+/// wall bridging it (Q6424): both faces lie wholly within the gap's extent (between the ends of
+/// two of the walls `hosts` in line, an opening's width apart: `range`, sheet units) and within
+/// those walls' depth, and a line of the level's (`lines`) is drawn strictly between the walls'
+/// faces across the gap ([`glazed`]: the frame's glazing or sill line, or two glazing lines from
+/// jamb to jamb paired up themselves). A wall piece in line with nothing inside it, and the
+/// pairs of a line running on past the gap (a wall drawn with a line between its faces), stay
+/// walls. `k`: sheet units per inch.
+fn frames_in_gaps(
+    cands: &[super::perceive::geometry::Pair],
+    faces: &[super::perceive::geometry::Seg],
+    hosts: &[super::perceive::geometry::Pair],
+    lines: &[super::perceive::geometry::Seg],
+    (min_gap, max_gap): (f64, f64),
+    k: f64,
+) -> Vec<bool> {
+    let mut out = vec![false; cands.len()];
+    if !(k.is_finite() && k > 0.0 && min_gap.is_finite() && max_gap.is_finite() && max_gap >= min_gap) || cands.is_empty() || hosts.len() < 2 {
+        return out;
+    }
+    let (reach, tol) = (FRAME_REACH_IN * k, 0.5 * k);
+    let longest = max_gap + 2.0 * reach;
+    let seg_len = |i: usize| faces.get(i).map(|s| s.a.dist(s.b));
+    // A candidate is no longer than an opening, nor are its faces.
+    let short = |p: &super::perceive::geometry::Pair| {
+        p.c0.dist(p.c1) <= longest && p.faces.iter().all(|&f| seg_len(f).is_some_and(|l| l.is_finite() && l <= longest))
+    };
+    if !cands.iter().any(short) {
+        return out;
+    }
+    // The hosts by the cells of their ends, the lines by their middles' (2' cells).
+    let cell = 24.0 * k;
+    let at = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut host_cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, h) in hosts.iter().enumerate().take(MAX_OBJECTS) {
+        if h.c0.is_finite() && h.c1.is_finite() && h.thickness.is_finite() {
+            for p in [h.c0, h.c1] {
+                host_cells.entry(at(p)).or_default().push(i);
+            }
+        }
+    }
+    let mut line_cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, s) in lines.iter().enumerate().take(MAX_OBJECTS) {
+        let m = s.a.mid(s.b);
+        if m.is_finite() && s.a.dist(s.b) <= longest + 2.0 * max_gap.max(cell) {
+            line_cells.entry(at(m)).or_default().push(i);
+        }
+    }
+    let near = |cells: &HashMap<(i64, i64), Vec<usize>>, lo: Vec2, hi: Vec2| -> Vec<usize> {
+        let ((x0, y0), (x1, y1)) = (at(lo), at(hi));
+        let mut v: Vec<usize> = Vec::new();
+        // A gap spans a few cells (at most an opening's width and a wall's depth).
+        if (x1 - x0).saturating_add(y1 - y0) > 64 {
+            return v;
+        }
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                v.extend(cells.get(&(x, y)).into_iter().flatten().copied());
+            }
+        }
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    for (ci, c) in cands.iter().enumerate().take(MAX_FRAME_CANDIDATES) {
+        if !short(c) {
+            continue;
+        }
+        let len = c.c0.dist(c.c1);
+        if !(len.is_finite() && len > 1e-9) {
+            continue;
+        }
+        let u = (c.c1 - c.c0) * (1.0 / len);
+        let n = u.perp();
+        // The walls in line ending at either end of it: (end along it, centreline offset,
+        // thickness) — before its start, and past its end.
+        let (mut before, mut after): (Option<(f64, f64, f64)>, Option<(f64, f64, f64)>) = (None, None);
+        let r = Vec2::new(reach + cell, reach + cell);
+        let mut by: Vec<usize> = near(&host_cells, c.c0 - r, c.c0 + r);
+        by.extend(near(&host_cells, c.c1 - r, c.c1 + r));
+        for hi in by {
+            let Some(h) = hosts.get(hi) else { continue };
+            let hl = h.c0.dist(h.c1);
+            if !(hl > 1e-9) || u.cross((h.c1 - h.c0) * (1.0 / hl)).abs() > 0.02 || h.thickness + tol < c.thickness {
+                continue;
+            }
+            let off = n.dot(h.c0 - c.c0);
+            if off.abs() + c.thickness / 2.0 > h.thickness / 2.0 + tol {
+                continue;
+            }
+            let (s0, s1) = (u.dot(h.c0 - c.c0).min(u.dot(h.c1 - c.c0)), u.dot(h.c0 - c.c0).max(u.dot(h.c1 - c.c0)));
+            // The thickest wall of each side: the wall, not a lining of it.
+            let pick = |cur: Option<(f64, f64, f64)>, end: f64| match cur {
+                Some(x) if x.2 >= h.thickness => Some(x),
+                _ => Some((end, off, h.thickness)),
+            };
+            if s1.abs() <= reach && s0 < -reach {
+                before = pick(before, s1);
+            } else if (s0 - len).abs() <= reach && s1 > len + reach {
+                after = pick(after, s0);
+            }
+        }
+        let (Some((g0, off0, t0)), Some((g1, off1, t1))) = (before, after) else { continue };
+        let gap = g1 - g0;
+        if gap < min_gap || gap > max_gap {
+            continue;
+        }
+        // Both faces wholly within the gap's extent.
+        let within = c.faces.iter().all(|&f| {
+            faces.get(f).is_some_and(|s| {
+                let (p0, p1) = (u.dot(s.a - c.c0), u.dot(s.b - c.c0));
+                p0.min(p1) >= g0 - reach && p0.max(p1) <= g1 + reach
+            })
+        });
+        if !within {
+            continue;
+        }
+        // Glazing (or a sill line) drawn between the walls' faces across the gap.
+        let (t, off) = (t0.min(t1), (off0 + off1) / 2.0);
+        let (a, b) = (c.c0 + u * g0 + n * off, c.c0 + u * g1 + n * off);
+        let pad = Vec2::new(t + reach, t + reach);
+        let (lo, hi) = (Vec2::new(a.x.min(b.x), a.y.min(b.y)) - pad, Vec2::new(a.x.max(b.x), a.y.max(b.y)) + pad);
+        let here: Vec<super::perceive::geometry::Seg> = near(&line_cells, lo, hi).into_iter().filter_map(|i| lines.get(i).cloned()).collect();
+        if glazed(&here, a, b, t, k)
+            && let Some(x) = out.get_mut(ci)
+        {
+            *x = true;
+        }
+    }
+    out
 }
 
 /// The share of a plan's lines (on its wall layers) drawn solid for its screened lines to be left
