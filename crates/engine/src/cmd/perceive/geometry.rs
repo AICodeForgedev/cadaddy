@@ -1033,6 +1033,50 @@ const TRACES_KEPT: usize = 4;
 #[derive(Clone, Debug, Default)]
 pub struct TraceCache {
     traces: Vec<Trace>,
+    /// The latest traces by what they were traced from, whichever drawing state that was: an
+    /// edit that changes nothing a trace reads (a stair, device or run line, a line off the plan,
+    /// the model a rebuild regenerated) reads the rooms again instead of tracing them. Every
+    /// update of an associative model traced its plan's rooms again (8 s on a 13-room plan),
+    /// also when the edit bounded no room and nothing was rebuilt.
+    by_inputs: Vec<(cadaddy_doc::Space, Option<Vec<[f64; 4]>>, std::sync::Arc<TraceInputs>, std::sync::Arc<Vec<FoundRoom>>)>,
+    /// How many times the labels' outlines were searched (the trace's costly part) in this drawing.
+    traced: usize,
+}
+
+/// Traces remembered by their inputs: one a sheet region of a print set (each traced on its own).
+const INPUT_TRACES_KEPT: usize = 64;
+
+/// What the outline search of a room trace reads, past the labels: the labels to trace and the
+/// numbers they may take, the plan it traces on (its objects, the door leaves and wall-run
+/// joints drawn across, and the layers, blocks and header values they are drawn with), the
+/// drawing unit and the sheet's area. The same inputs trace the same rooms.
+#[derive(Debug)]
+pub(crate) struct TraceInputs {
+    k: f64,
+    sheet: f64,
+    names: Vec<Label>,
+    numbers: Vec<Label>,
+    model: Vec<std::sync::Arc<Entity>>,
+    leaves: Vec<(cadaddy_doc::Common, cadaddy_doc::Line)>,
+    header: cadaddy_doc::Header,
+    layers: Vec<cadaddy_doc::Layer>,
+    blocks: cadaddy_doc::shared::Shared<std::collections::BTreeMap<String, std::sync::Arc<cadaddy_doc::Block>>>,
+}
+
+impl TraceInputs {
+    fn same_as(&self, o: &TraceInputs) -> bool {
+        self.k.to_bits() == o.k.to_bits()
+            && self.sheet.to_bits() == o.sheet.to_bits()
+            && self.names == o.names
+            && self.numbers == o.numbers
+            && self.leaves == o.leaves
+            && self.layers == o.layers
+            && self.header == o.header
+            && self.blocks == o.blocks
+            && self.model.len() == o.model.len()
+            // An object no edit touched is the very same one (shared by both states).
+            && self.model.iter().zip(&o.model).all(|(a, b)| std::sync::Arc::ptr_eq(a, b) || a == b)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1074,10 +1118,31 @@ impl TraceCache {
         }
         self.traces.push(Trace { state: std::sync::Arc::downgrade(d), space, regions: regions.map(<[_]>::to_vec), rooms });
     }
+    /// The rooms last traced from these inputs (in this space and regions).
+    fn by_inputs(&self, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: &TraceInputs) -> Option<std::sync::Arc<Vec<FoundRoom>>> {
+        self.by_inputs
+            .iter()
+            .rev()
+            .find(|(sp, rs, i, _)| sp == space && rs.as_deref() == regions && i.same_as(inputs))
+            .map(|(.., rooms)| std::sync::Arc::clone(rooms))
+    }
+    fn put_inputs(&mut self, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: TraceInputs, rooms: std::sync::Arc<Vec<FoundRoom>>) {
+        self.traced += 1;
+        // An edit and its undo (a wall moved and moved back) each find their plan's trace.
+        if self.by_inputs.len() >= INPUT_TRACES_KEPT {
+            self.by_inputs.remove(0);
+        }
+        self.by_inputs.push((space, regions.map(<[_]>::to_vec), std::sync::Arc::new(inputs), rooms));
+    }
     /// How many traces are remembered.
     #[cfg(test)]
     fn len(&self) -> usize {
         self.traces.len()
+    }
+    /// How many times the labels' outlines were searched.
+    #[cfg(test)]
+    pub(crate) fn traced(&self) -> usize {
+        self.traced
     }
 }
 
@@ -1299,6 +1364,24 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         }
     }
     phase("tag blocks and door leaves");
+    // Traced from these very inputs before (in another drawing state): the same rooms.
+    let inputs = {
+        let pd = plan.as_ref().unwrap_or(s).doc()?;
+        TraceInputs {
+            k,
+            sheet,
+            names: names.clone(),
+            numbers: numbers.clone(),
+            model: pd.model.iter().cloned().collect(),
+            leaves: leaves.clone(),
+            header: pd.header.clone(),
+            layers: pd.layers.clone(),
+            blocks: pd.blocks.clone(),
+        }
+    };
+    if let Some(rooms) = s.state()?.room_trace.by_inputs(&s.space(), regions, &inputs) {
+        return Ok(rooms.as_ref().clone());
+    }
     let plan = if leaves.is_empty() || s.space().is_paper() {
         plan
     } else {
@@ -1469,6 +1552,10 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         }
     }
     phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name)", out.len()));
+    let space = s.space();
+    if let Ok(st) = s.state_mut() {
+        st.room_trace.put_inputs(space, regions, inputs, std::sync::Arc::new(out.clone()));
+    }
     Ok(out)
 }
 
@@ -1831,5 +1918,130 @@ mod tests {
         // Different regions are a different question.
         assert!(rooms_found_in(&mut s, Some(&[[0.0, 0.0, 200.0, 200.0]])).unwrap().is_empty());
         assert_eq!(s.state().unwrap().room_trace.len(), 2);
+    }
+
+    /// Two rooms of 6" walls on A-WALL (OFFICE west, STORAGE east of a partition at 15'), their
+    /// names on A-ROOM-TAG, a stair line in the office and a note far off the plan, under a spec
+    /// naming the layers' roles; built by an associative `model.build`.
+    fn spec_plan() -> Session {
+        let mut s = Session::new();
+        let layer = |s: &mut Session, name: &str| s.execute("layer.new", &json!({"name": name, "current": true})).unwrap();
+        let ft = |x: f64, y: f64| json!([x * 12.0, y * 12.0]);
+        let rect = |s: &mut Session, (x0, y0): (f64, f64), (x1, y1): (f64, f64)| {
+            s.execute("pline", &json!({"vertices": [ft(x0, y0), ft(x1, y0), ft(x1, y1), ft(x0, y1)], "closed": true})).unwrap();
+        };
+        let line = |s: &mut Session, (x0, y0): (f64, f64), (x1, y1): (f64, f64)| {
+            s.execute("line", &json!({"points": [ft(x0, y0), ft(x1, y1)]})).unwrap();
+        };
+        layer(&mut s, "A-WALL");
+        rect(&mut s, (0.0, 0.0), (30.0, 12.0));
+        rect(&mut s, (0.5, 0.5), (29.5, 11.5));
+        line(&mut s, (15.0, 0.5), (15.0, 11.5));
+        line(&mut s, (15.5, 0.5), (15.5, 11.5));
+        layer(&mut s, "A-FLOR-STRS");
+        line(&mut s, (2.0, 2.0), (8.0, 2.0));
+        layer(&mut s, "A-ROOM-TAG");
+        for (at, t) in [((5.0, 6.0), "OFFICE"), ((20.0, 6.0), "STORAGE"), ((80.0, 40.0), "STORAGE NOTE")] {
+            s.execute("text", &json!({"at": ft(at.0, at.1), "text": t, "height": 6})).unwrap();
+        }
+        let spec = json!({
+            "version": 1,
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [
+                {"layer": "A-WALL", "role": "wall", "wall_type": "Wall"},
+                {"layer": "A-FLOR-STRS", "role": "stair"},
+                {"layer": "A-ROOM-TAG", "role": "room_tag"}
+            ],
+            "wall_types": [{"name": "Wall", "thickness_in": 6, "from": "pairs"}]
+        });
+        s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap();
+        s.execute("model.build", &json!({})).unwrap();
+        s
+    }
+
+    fn handles_on(s: &Session, layer: &str, keep: impl Fn(&Entity) -> bool) -> Vec<String> {
+        s.doc()
+            .unwrap()
+            .model
+            .iter()
+            .filter(|e| crate::cmd::wallgen::made_as(e).is_none() && e.common.layer == layer && keep(e))
+            .map(|e| e.handle.hex())
+            .collect()
+    }
+
+    /// The rooms as (name, area to a hundredth of a square inch).
+    fn found(s: &mut Session) -> Vec<(String, i64)> {
+        rooms_found(s).unwrap().into_iter().map(|r| (r.name, (r.area * 100.0).round() as i64)).collect()
+    }
+
+    fn traced(s: &Session) -> usize {
+        s.state().unwrap().room_trace.traced()
+    }
+
+    #[test]
+    fn a_live_update_traces_rooms_only_when_what_bounds_them_changed() {
+        // Soak S6-004: every update of an associative model traced every room again, also when
+        // the edit touched nothing a room is bounded by (the update then rebuilt nothing).
+        let mut s = spec_plan();
+        let rooms = found(&mut s);
+        assert_eq!(rooms.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["OFFICE", "STORAGE"], "{rooms:?}");
+        let n = traced(&s);
+        assert!(n >= 1);
+        // The stair line moved: the model is behind its plan (a stair is part of it), and the update
+        // traces no room (no wall, door or window moved, no label).
+        let stair = handles_on(&s, "A-FLOR-STRS", |_| true);
+        s.execute("move", &json!({"handles": stair, "from": [0, 0], "to": [12, 12]})).unwrap();
+        assert!(crate::cmd::wallgen::model_behind(&s), "a stair edit leaves the model behind");
+        s.execute("model.update", &json!({})).unwrap();
+        assert!(!crate::cmd::wallgen::model_behind(&s));
+        assert_eq!(traced(&s), n, "no room traced again for a stair line");
+        assert_eq!(found(&mut s), rooms);
+        assert_eq!(traced(&s), n, "nor in the rebuilt model's state");
+        // The partition moved: traced again, and the bigger office is seen; the rebuilt model
+        // reads that trace.
+        let partition: Vec<String> = handles_on(&s, "A-WALL", |e| matches!(&e.kind, EntityKind::Line(_)));
+        assert_eq!(partition.len(), 2, "its two faces");
+        s.execute("move", &json!({"handles": partition, "from": [0, 0], "to": [24, 0]})).unwrap();
+        s.execute("model.update", &json!({})).unwrap();
+        assert_eq!(traced(&s), n + 1, "the moved partition: traced once");
+        let moved = found(&mut s);
+        assert_eq!(traced(&s), n + 1, "the rebuilt model's state reads that trace");
+        let area = |rs: &[(String, i64)], name: &str| rs.iter().find(|r| r.0 == name).map(|r| r.1);
+        assert!(area(&moved, "OFFICE") > area(&rooms, "OFFICE"), "{moved:?} vs {rooms:?}");
+        // Moved back: the plan traced before, read again.
+        let partition: Vec<String> = handles_on(&s, "A-WALL", |e| matches!(&e.kind, EntityKind::Line(_)));
+        s.execute("move", &json!({"handles": partition, "from": [24, 0], "to": [0, 0]})).unwrap();
+        s.execute("model.update", &json!({})).unwrap();
+        assert_eq!(found(&mut s), rooms);
+        assert_eq!(traced(&s), n + 1, "the plan as it was is read, not traced");
+        // A label edited: traced again.
+        let office = handles_on(&s, "A-ROOM-TAG", |e| matches!(&e.kind, EntityKind::Text(t) if t.value == "OFFICE"));
+        s.execute("move", &json!({"handles": office, "from": [0, 0], "to": [6, 0]})).unwrap();
+        let _ = found(&mut s);
+        assert_eq!(traced(&s), n + 2, "a moved label is traced again");
+    }
+
+    #[test]
+    fn a_trace_read_again_by_its_inputs_is_the_trace_done_afresh() {
+        // Edits that change nothing the trace reads, then the same trace in a fresh session.
+        let mut s = spec_plan();
+        let first = rooms_found(&mut s).unwrap();
+        let stair = handles_on(&s, "A-FLOR-STRS", |_| true);
+        s.execute("erase", &json!({"handles": stair})).unwrap();
+        let n = traced(&s);
+        let again = rooms_found(&mut s).unwrap();
+        assert_eq!(traced(&s), n, "read by its inputs");
+        let mut fresh = Session::empty();
+        fresh.open_drawing((*s.doc().unwrap()).clone(), "Plan", None);
+        let traced_afresh = rooms_found(&mut fresh).unwrap();
+        assert_eq!(traced(&fresh), 1);
+        let key = |rs: &[FoundRoom]| {
+            rs.iter()
+                .map(|r| format!("{}|{:?}|{}|{:?}|{:.6}|{:.6}|{:.6}", r.name, r.number, r.label.hex(), r.outline, r.area, r.perimeter, r.confidence))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(key(&again), key(&traced_afresh));
+        assert_eq!(key(&again), key(&first));
     }
 }
