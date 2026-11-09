@@ -2133,10 +2133,17 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
             }
             continue;
         }
-        let electrical = matches!(
-            st(&e, "kind").to_ascii_lowercase().as_str(),
-            "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
-        );
+        // The one-line's own gear (Q6359): meter sockets, gutters, CT cabinets, controls.
+        let oneline = super::onelinegear::rules()
+            .kinds
+            .iter()
+            .find(|k| k.kind.eq_ignore_ascii_case(&st(&e, "kind")))
+            .filter(|_| e["properties"][super::onelinegear::LABEL_PROPERTY].is_string());
+        let electrical = oneline.is_some()
+            || matches!(
+                st(&e, "kind").to_ascii_lowercase().as_str(),
+                "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
+            );
         // A room's own panel (each guest room's G, tagged G-<room>): counted together by its
         // letter, each with its flush trim.
         let own = match (e["properties"]["PANEL"].as_str(), e["properties"]["ROOM"].as_str()) {
@@ -2165,12 +2172,20 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
             Line {
                 trade: if electrical { "electrical" } else { "mechanical" },
                 category: "equipment".into(),
-                item: match &own {
-                    Some(p) => format!("{} {p}, one per room", st(&e, "kind")),
-                    None => format!("{} {}", st(&e, "kind"), st(&e, "tag")),
+                item: match (&own, oneline) {
+                    (Some(p), _) => format!("{} {p}, one per room", st(&e, "kind")),
+                    (None, Some(k)) => format!("{} {}", k.title, st(&e, "tag")),
+                    (None, None) => format!("{} {}", st(&e, "kind"), st(&e, "tag")),
                 },
-                // One size for all of them (their boxes turn with their walls).
-                size: own.as_ref().and_then(|_| e["properties"]["SIZE"].as_str()).map_or_else(|| st(&e, "size"), str::to_string),
+                // One size for all of them (their boxes turn with their walls); the one-line's gear
+                // by its rating.
+                size: match (&own, oneline.and(e["properties"]["RATING"].as_str())) {
+                    (Some(_), _) => e["properties"]["SIZE"].as_str().map_or_else(|| st(&e, "size"), str::to_string),
+                    (None, Some(r)) => r.to_string(),
+                    (None, None) => st(&e, "size"),
+                },
+                // Called by the one-line, placed by rule: derived (Q6216).
+                made: if oneline.is_some() { "derived" } else { "" },
                 unit: "each",
                 net: 1.0,
                 status: "firm",
