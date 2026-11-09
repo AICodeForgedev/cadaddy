@@ -16134,7 +16134,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     if !inferred_boxes.is_empty() || !oneline.sheets.is_empty() {
         let kinds: Vec<String> = oneline.by_kind.iter().map(|(k, n)| format!("{k} {n}")).collect();
         let l = format!(
-            "  gear without a submittal: {} panels boxed by their rating and circuits (inferred: {}); one-line gear ({}): {} pieces ({}), {} feeders ({} carrying the conductors coming in), {} connections unsized, {} for review; labels on no line of the one-line, not built: {:?}",
+            "  gear without a submittal: {} panels boxed by their rating and circuits (inferred: {}); one-line gear ({}): {} pieces ({}), {} feeders ({} carrying the conductors coming in), {} connections unsized ({} built by code for their gear's rating), {} for review; labels on no line of the one-line, not built: {:?}",
             inferred_boxes.len(),
             inferred_boxes.join(", "),
             oneline.sheets.join(", "),
@@ -16143,6 +16143,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             oneline.feeders,
             oneline.continued,
             oneline.no_size.len(),
+            oneline.code_sized.len(),
             oneline.review.len(),
             oneline.skipped
         );
@@ -16154,14 +16155,22 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             .no_size
             .iter()
             .take(12)
-            .map(|(f, t, tag)| if tag.is_empty() { format!("{f} to {t} (no tag)") } else { format!("{f} to {t} (tagged {tag})") })
+            .map(|(f, t, tag)| {
+                let printed = if tag.is_empty() { format!("{f} to {t} (no tag)") } else { format!("{f} to {t} (tagged {tag})") };
+                match oneline.code_sized.iter().find(|c| c.0 == *f && c.1 == *t) {
+                    Some(c) => format!("{printed}, built by code as {} (inferred)", c.3),
+                    None => format!("{printed}, not built: no rating to size it by"),
+                }
+            })
             .collect();
+        let r = super::onelinegear::rules();
+        let basis = if oneline.code_sized.is_empty() { r.unsized_source.clone() } else { format!("{}; {}", r.unsized_source, r.code_size_source) };
         job.add_finding(
             StageName::BimBuild,
             &format!("{} feeders on the one-line are unsized: {}", oneline.no_size.len(), list.join("; ")),
-            &super::onelinegear::rules().unsized_source,
+            &basis,
             2,
-            vec!["Give each its conductors, ground and conduit (a feeder schedule row for its tag)".into()],
+            vec!["Confirm each one built by code, or give its conductors, ground and conduit (a feeder schedule row for its tag)".into()],
             None,
             false,
         );
@@ -16351,6 +16360,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             "sheets": oneline.sheets, "gear": oneline.gear, "electrodes": oneline.electrodes, "by_kind": oneline.by_kind,
             "feeders": oneline.feeders, "continued": oneline.continued,
             "unsized": oneline.no_size.iter().map(|(f, t, tag)| json!({"from": f, "to": t, "tag": tag})).collect::<Vec<_>>(),
+            "sized_by_code": oneline.code_sized.iter().map(|(f, t, tag, m)| json!({"from": f, "to": t, "tag": tag, "makeup": m, "provenance": "inferred"})).collect::<Vec<_>>(),
             "review": oneline.review, "skipped": oneline.skipped,
         },
     });
@@ -29216,7 +29226,8 @@ mod tests {
     /// 1-phase panel whose location no room of the model is). The panel is boxed by its rating and
     /// circuits and set along the building's walls; its rows are breakers, its spare a spare; the
     /// one-line's pieces stand beside it with the FDR-A feeders between them; the takeoff carries
-    /// every one; the unsized feeder is a review finding, never a silent zero.
+    /// every one; the unsized feeder is built by code for the contactor's rating (inferred) and a
+    /// review finding, never a silent zero.
     #[test]
     fn a_one_lines_gear_and_a_schedule_only_panel_are_built_and_taken_off_without_a_submittal() {
         use cadaddy_walk3d::{BuildingSpec, PanelCircuit, PanelSchedule};
@@ -29313,11 +29324,24 @@ mod tests {
         let ends: Vec<(&str, &str)> = f1.iter().map(|f| (f.from.as_str(), f.to.as_str())).collect();
         assert_eq!(ends, [("MTR-1", "DISC-1"), ("DISC-1", "PX")], "{:#?}", sp.mep.feeders);
         assert!(f1.iter().all(|f| f.size == "3/0" && f.phases == 2 && f.neutrals == 1 && f.ground_size == "6"), "{f1:#?}");
-        // FDR-B is printed unsized: a finding, and no feeder.
-        assert!(!sp.mep.feeders.iter().any(|f| f.tag == "FDR-B"));
+        // FDR-B is printed unsized: still built, the way the field sizes it for the contactor's
+        // 30 A on PX's single-phase system (inferred), and a finding to confirm it.
+        let fb: Vec<&cadaddy_walk3d::Feeder> = sp.mep.feeders.iter().filter(|f| f.tag == "FDR-B").collect();
+        assert_eq!(fb.len(), 1, "{:#?}", sp.mep.feeders);
+        assert_eq!(
+            (fb[0].from.as_str(), fb[0].to.as_str(), fb[0].size.as_str(), fb[0].phases, fb[0].neutrals, fb[0].ground_size.as_str()),
+            ("PX", "LC-1", "10", 2, 1, "10")
+        );
+        assert!(fb[0].source.starts_with("inferred (code)"), "{}", fb[0].source);
         assert_eq!(ol["unsized"], json!([{"from": "PX", "to": "LC-1", "tag": "FDR-B"}]), "{ol:#}");
+        assert_eq!(
+            ol["sized_by_code"],
+            json!([{"from": "PX", "to": "LC-1", "tag": "FDR-B", "makeup": "3#10 + 1#10G in 0.5\" EMT", "provenance": "inferred"}]),
+            "{ol:#}"
+        );
         assert!(
-            job.findings.iter().any(|f| f.description.contains("unsized") && f.description.contains("PX to LC-1 (tagged FDR-B)")),
+            job.findings.iter().any(|f| f.description.contains("unsized")
+                && f.description.contains("PX to LC-1 (tagged FDR-B), built by code as 3#10 + 1#10G in 0.5\" EMT (inferred)")),
             "{:#?}",
             job.findings
         );

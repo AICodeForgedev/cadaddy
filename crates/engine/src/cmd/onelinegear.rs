@@ -97,6 +97,13 @@ pub(crate) struct Rules {
     pub source_side_h: f64,
     pub unsized_tags: Vec<String>,
     pub unsized_source: String,
+    /// NEC Table 250.122: each row the largest overcurrent device (amps) and its copper
+    /// equipment ground; the raceway an unsized feeder is built in, its smallest trade size, and
+    /// the basis of the sizing.
+    pub egc_table: Vec<(f64, String)>,
+    pub code_conduit: String,
+    pub code_conduit_min_in: f64,
+    pub code_size_source: String,
     pub gap_in: f64,
     pub layout_source: String,
     pub kinds: Vec<KindRule>,
@@ -650,6 +657,60 @@ pub(crate) fn feeders(links: &[Link], types: &[FeederType], fed: &BTreeSet<Strin
     out
 }
 
+/// A feeder the one-line leaves unsized (`XX`, no tag), built the way the field sizes it for the
+/// `amps` rating of the gear it feeds (`code_size_source` in the rules): the smallest copper the
+/// rating allows, the equipment ground by NEC Table 250.122 (never over the phase size), a
+/// neutral with the phases, the raceway by fill. None: no rating, or over the tables (left for
+/// review only).
+pub(crate) fn code_sized(from: &str, to: &str, tag: &str, amps: f64, single_phase: bool, sheet: &str) -> Option<Feeder> {
+    let r = rules();
+    let rl = super::conduitroute::rules();
+    if !(amps.is_finite() && amps > 0.0) {
+        return None;
+    }
+    let phases: u32 = if single_phase { 2 } else { 3 };
+    let mut sizes: Vec<(&String, f64)> = rl.derate.amp_75c.iter().map(|(s, a)| (s, *a)).collect();
+    sizes.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let order = |s: &str| sizes.iter().position(|(x, _)| x.as_str() == s);
+    let size = sizes.iter().map(|(s, _)| (*s).clone()).find(|s| super::conduitroute::size::carries(s, phases, amps, rl))?;
+    let egc = r.egc_table.iter().find(|(max, _)| amps <= *max + 1e-9).map(|(_, g)| g.trim_start_matches('#').to_string())?;
+    let ground = match (order(&egc), order(&size)) {
+        (Some(g), Some(p)) if g > p => size.clone(),
+        _ => egc,
+    };
+    let parts = [(phases + 1, size.clone(), false), (1, ground.clone(), true)];
+    let method = if r.code_conduit.trim().is_empty() { "EMT" } else { r.code_conduit.trim() };
+    let (conduit_in, _, _) = super::conduitroute::fill_size(&parts, method, r.code_conduit_min_in.max(0.5), rl)?;
+    let printed = if tag.trim().is_empty() { "with no tag".to_string() } else { format!("tagged {}", tag.trim()) };
+    let tag = if tag.trim().is_empty() { format!("{from}-{to}") } else { tag.trim().to_string() };
+    Some(Feeder {
+        source: format!(
+            "{}; {from} to {to} on the one-line ({sheet}) {printed}, unsized: built for {to}'s {amps:.0} A as {}#{size} + 1#{ground}G in {conduit_in}\" {method}",
+            r.code_size_source,
+            phases + 1
+        ),
+        tag,
+        from: from.to_string(),
+        to: to.to_string(),
+        sets: 1,
+        phases,
+        size,
+        material: "cu".into(),
+        neutrals: 1,
+        grounds: 1,
+        ground_size: ground,
+        conduits: 1,
+        conduit_in,
+        entry: "top".into(),
+        ..Feeder::default()
+    })
+}
+
+/// The makeup of a feeder as the field reads it: `4#10 + 1#10G in 3/4" EMT`.
+pub(crate) fn makeup(f: &Feeder, method: &str) -> String {
+    format!("{}#{} + {}#{}G in {}\" {method}", f.phases + f.neutrals, f.size, f.grounds, f.ground_size, f.conduit_in)
+}
+
 /// A panel's amp rating from its schedule's header (`bus amps`, `rating`, else its main).
 pub(crate) fn panel_amps(p: &PanelSchedule) -> Option<f64> {
     let num = |v: &str| first_number(v, 15.0, 10_000.0);
@@ -979,6 +1040,8 @@ pub(crate) struct Outcome {
     pub feeders: usize,
     pub continued: usize,
     pub no_size: Vec<(String, String, String)>,
+    /// Of `no_size`, the ones built by code for their gear's rating: from, to, tag, makeup.
+    pub code_sized: Vec<(String, String, String, String)>,
     pub review: Vec<String>,
     pub by_kind: BTreeMap<String, usize>,
     /// Labels naming gear that is on no line of the one-line (a legend's row): not built.
@@ -1164,6 +1227,24 @@ pub(crate) fn build_into(sp: &mut BuildingSpec, pages: &[(String, cadaddy_doc::D
             out.continued += 1;
         }
     }
+    // An unsized connection is still built, the way the field sizes it for the rating of the
+    // gear it feeds (inferred, the finding keeps it in review); one with no rating stays out.
+    let rating_of = |t: &str| -> Option<f64> {
+        gear.iter()
+            .zip(&tags)
+            .find(|(_, ts)| ts.iter().any(|x| x.eq_ignore_ascii_case(t)))
+            .and_then(|(g, _)| g.amps.or(g.fuse_amps))
+            .or_else(|| sp.mep.panel_schedules.iter().find(|p| p.panel.eq_ignore_ascii_case(t)).and_then(panel_amps))
+    };
+    let method = if r.code_conduit.trim().is_empty() { "EMT" } else { r.code_conduit.trim() };
+    for (from, to, tag) in &out.no_size {
+        if new_feeders.iter().any(|f| f.to.eq_ignore_ascii_case(to)) {
+            continue;
+        }
+        let Some(f) = rating_of(to).and_then(|a| code_sized(from, to, tag, a, one_phase(to), &sheet)) else { continue };
+        out.code_sized.push((from.clone(), to.clone(), f.tag.clone(), makeup(&f, method)));
+        new_feeders.push(f);
+    }
     // The largest service conductor: the electrodes' conductor goes by it.
     let service_conductor = new_feeders
         .iter()
@@ -1277,6 +1358,23 @@ mod tests {
         assert_eq!(f.len(), 1, "the unsized link builds no feeder: {f:?}");
         assert_eq!((f[0].from.as_str(), f[0].to.as_str(), f[0].phases, f[0].neutrals, f[0].size.as_str()), ("MTR-1", "DISC-1", 2, 1, "3/0"));
         assert!(f[0].source.contains("one-line tag FDR-A"), "{}", f[0].source);
+    }
+
+    #[test]
+    fn an_unsized_feeder_is_built_for_its_gears_rating_by_code() {
+        // A 30 A single-phase load: #10 (240.4(D)), a #10 ground (250.122, 60 A row), a neutral.
+        let f = code_sized("PX", "LC-1", "XX", 30.0, true, "EX-5").unwrap_or_else(|| panic!("sized"));
+        assert_eq!((f.tag.as_str(), f.phases, f.neutrals, f.size.as_str(), f.ground_size.as_str()), ("XX", 2, 1, "10", "10"));
+        assert_eq!(makeup(&f, "EMT"), "3#10 + 1#10G in 0.5\" EMT");
+        assert!(f.source.starts_with("inferred (code)") && f.source.contains("LC-1's 30 A"), "{}", f.source);
+        // A 200 A three-phase panel: 3/0 at 75 C, a #6 ground, four in 2 in EMT by fill.
+        let f = code_sized("MDP", "P2", "", 200.0, false, "EX-5").unwrap_or_else(|| panic!("sized"));
+        assert_eq!((f.tag.as_str(), f.phases, f.size.as_str(), f.ground_size.as_str(), f.conduit_in), ("MDP-P2", 3, "3/0", "6", 2.0));
+        assert!(f.source.contains("with no tag"), "{}", f.source);
+        // No rating, a hostile one, or over the tables: not built (left for review).
+        for a in [0.0, -5.0, f64::NAN, f64::INFINITY, 5000.0] {
+            assert!(code_sized("A", "B", "XX", a, false, "EX-5").is_none(), "{a}");
+        }
     }
 
     #[test]

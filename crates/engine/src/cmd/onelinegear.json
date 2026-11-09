@@ -11,6 +11,10 @@
   "source_side_h": 8.0,
   "unsized_tags": ["XX", "XXX", "X", "TBD", "?", "N/A"],
   "unsized_source": "a feeder tagged unsized (XX, TBD) or with a feeder schedule row giving no conductors: the engineer still has to size it",
+  "egc_table": [[15.0, "14"], [20.0, "12"], [60.0, "10"], [100.0, "8"], [200.0, "6"], [300.0, "4"], [400.0, "3"], [500.0, "2"], [600.0, "1"], [800.0, "1/0"], [1000.0, "2/0"], [1200.0, "3/0"]],
+  "code_conduit": "EMT",
+  "code_conduit_min_in": 0.5,
+  "code_size_source": "inferred (code): the feeder the one-line leaves unsized is built the way the field sizes it, for the rating of the gear it feeds: the smallest copper whose 75 C ampacity carries it (NEC 215.2(A), 240.4, Table 310.16), its equipment ground by NEC Table 250.122 (never larger than the phase conductors), a neutral with the phases, and the raceway by NEC Chapter 9 fill; the engineer's size replaces it",
   "gap_in": 6.0,
   "layout_source": "proposed: beside the gear it feeds, in the one-line's order (the plans don't locate it); trade practice sets service gear side by side on one wall",
   "kinds": [
