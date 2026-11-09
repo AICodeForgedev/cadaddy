@@ -618,7 +618,7 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
     let pull_box = r.equipment.iter().find(|k| k.kind == "pull_box");
     for t in &texts {
         let mark = t.value.trim().to_ascii_uppercase();
-        if out.equipment.len() >= MAX_ITEMS || !r.box_marks.iter().any(|m| *m == mark) {
+        if out.equipment.len() >= MAX_ITEMS || !r.box_marks.contains(&mark) {
             continue;
         }
         let tb = text_box(t);
