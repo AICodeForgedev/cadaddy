@@ -1616,7 +1616,15 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // what its mark says. A luminaire and a fire alarm detector are on the ceiling.
         let read = dv.kind.trim();
         let luminaire = matches!(read, "luminaire" | "wall luminaire");
-        let kind = if read.is_empty() || luminaire { device_kind(tag) } else { read };
+        // A luminaire is a `device` element whatever another device its mark usually is (an `S`
+        // the set's fixture schedule lists is no switch): its `device_kind` says luminaire.
+        let kind = if luminaire {
+            "device"
+        } else if read.is_empty() {
+            device_kind(tag)
+        } else {
+            read
+        };
         let mut e = cadaddy_walk3d::tags::ElementTag { id, kind: kind.replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
         e.set("type", tag, "plan");
         let item = match read {

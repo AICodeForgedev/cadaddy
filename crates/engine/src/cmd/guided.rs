@@ -29241,6 +29241,37 @@ mod tests {
         assert_eq!(under_unit_height_in(&under, &high).0, 6.0);
     }
 
+    /// fix-lum-schedule-type-column-wrong: a luminaire whose mark is one every set uses for another
+    /// device (`S`, a switch) is put in the model as a luminaire, like any other mark's.
+    #[test]
+    fn a_scheduled_luminaire_with_a_switch_mark_is_put_in_as_a_luminaire() {
+        let mut s = crate::Session::new();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 3000, 1000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let dv = |x: f64, tag: &str| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            kind: "luminaire".into(),
+            ifc_class: "IfcLightFixture".into(),
+            kind_source: format!("X-602 LIGHTING FIXTURE SCHEDULE: {tag} LINEAR STRIP"),
+            at: [x, 120.0],
+            sheet: "E-9".into(),
+            level: "Level 1".into(),
+            handle: format!("{:X}", 0x100 + x as u64),
+            ..Default::default()
+        };
+        super::super::readers::place_devices(&mut s, &[dv(120.0, "S"), dv(480.0, "A")], "test").unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        for (h, mark) in [("178", "S"), ("2E0", "A")] {
+            let t = sp.tags.iter().find(|t| t.fields.get("symbol").is_some_and(|f| f.value == h)).unwrap_or_else(|| panic!("{h}: {:?}", sp.tags));
+            assert_eq!(t.kind, "device", "{mark}: {t:?}");
+            assert_eq!(t.fields.get("device_kind").map(|f| f.value.as_str()), Some("luminaire"), "{mark}: {t:?}");
+            assert_eq!(t.fields.get("device_type").map(|f| f.value.clone()), Some(format!("luminaire {mark}")), "{mark}");
+        }
+    }
+
     /// Q6247: the model's receptacle of a unit carries its keynote's rating, configuration,
     /// poles, orientation and place, the keynote their source; one no unit took is asked about.
     #[test]
