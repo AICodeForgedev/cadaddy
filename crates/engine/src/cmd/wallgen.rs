@@ -697,6 +697,29 @@ pub(crate) fn planned_walls(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, leve
     plan_level(d, &g, lv, upf, &mut Vec::new()).walls.iter().map(|w| (w.a, w.b, w.thickness)).collect()
 }
 
+/// What `model.build` makes of one storey's openings: the extents of its planned walls (none
+/// when it has no walls) and the openings of its plan it built no door or window for, and why.
+pub(crate) struct StoreyOpenings {
+    pub level: String,
+    pub footprint: Option<(Vec2, Vec2)>,
+    pub skipped: Vec<Skipped>,
+}
+
+/// Each storey's openings as `model.build` plans them (the roof's plan has none).
+pub(crate) fn opening_fates(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> Vec<StoreyOpenings> {
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    g.rules
+        .levels
+        .iter()
+        .filter(|l| l.sheet.is_none() && !roof_level(&g.rules.levels, &l.name))
+        .map(|level| {
+            let pl = plan_level(d, &g, level, upf, &mut Vec::new());
+            StoreyOpenings { level: level.name.clone(), footprint: pl.footprint(), skipped: pl.skipped }
+        })
+        .collect()
+}
+
 /// How much two storeys' shells may differ in size (feet) and still be the same building, their
 /// stairs and hoistways one above the other.
 const STACK_TOL_FT: f64 = 2.0;
@@ -1199,10 +1222,34 @@ struct Leaf {
     frame: Option<(Vec2, Vec2)>,
 }
 
+/// Why no door or window was built for an opening of the plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Skip {
+    /// A swing with no open wall where it shuts, or on a wall drawn solid through it: a
+    /// fixture's, equipment's or furniture's arc, not a door.
+    NotADoor,
+    /// A door or window drawn where no wall was found within its frame depth: the wall it is
+    /// drawn in is missing (a wall finding, not a dropped door).
+    NoWall,
+    /// The same opening as another door or window (drawn twice, or a double door's other leaf).
+    Same,
+}
+
+/// An opening of the plan no door or window was built for, and why.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Skipped {
+    pub source: Handle,
+    pub kind: &'static str,
+    pub at: Vec2,
+    pub why: Skip,
+}
+
 /// One level built from its plan.
 struct PlanLevel {
     walls: Vec<PlanWall>,
     leaves: Vec<Leaf>,
+    /// The plan's openings no door or window was built for.
+    skipped: Vec<Skipped>,
     /// Floor, wall top, door head, window sill and head (sheet units).
     z0: f64,
     top: f64,
@@ -1692,6 +1739,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let mut pl = PlanLevel {
         walls: Vec::new(),
         leaves: Vec::new(),
+        skipped: Vec::new(),
         z0,
         // Just under the next floor, as Walk mode leaves 0.1' for its structure.
         top: z0 + (height_ft - 0.1).max(0.1) * upf,
@@ -1941,7 +1989,9 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // along (Q5273). For a drawn swing, whether that wall runs solid through where it shuts.
     // Uses a spatial grid so each opening only checks nearby walls.
     let open_grid = WallGrid::build(&pl.walls, max_thick.max(2.0 * k));
-    let placed: Vec<Option<(usize, bool)>> = ops
+    // Each opening's wall (and whether it runs solid through a drawn swing), and whether any wall
+    // lies under it within its frame depth at all (however it would shut).
+    let placed: Vec<(Option<(usize, bool)>, bool)> = ops
         .iter()
         .take(MAX_OBJECTS)
         .map(|o| {
@@ -1992,30 +2042,44 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 let closed = if ends[0].dist(open) <= ends[1].dist(open) { ends[1] } else { ends[0] };
                 [closed, closed]
             });
-            let (wi, _) = shut_end.and_then(|e| pick(Some(e))).or_else(|| pick(drawn_swing))?;
-            Some((wi, drawn_swing.is_some_and(|ends| solid_through_grid(&pl.walls, Some(&open_grid), wi, o.at, ends, k))))
+            let Some((wi, _)) = shut_end.and_then(|e| pick(Some(e))).or_else(|| pick(drawn_swing)) else {
+                return (None, drawn_swing.is_some() && pick(None).is_some());
+            };
+            (Some((wi, drawn_swing.is_some_and(|ends| solid_through_grid(&pl.walls, Some(&open_grid), wi, o.at, ends, k)))), true)
         })
         .collect();
     // A plan that breaks its walls for its doors (most drawn swings hang in an opening) draws
     // no door on a solid wall: a swing there, leaf or not, is a cabinet's, a shower's or a
     // fixture's. Drawings with unbroken walls keep the swings drawn with their leaf.
     let drawn = |o: &&super::perceive::geometry::Opening| o.kind == "door" && o.block.is_none() && o.swing.is_some();
-    let (open_swings, solid_swings) = ops.iter().zip(&placed).filter(|(o, _)| drawn(o)).fold((0usize, 0usize), |(a, b), (_, p)| match p {
+    let (open_swings, solid_swings) = ops.iter().zip(&placed).filter(|(o, _)| drawn(o)).fold((0usize, 0usize), |(a, b), (_, (p, _))| match p {
         Some((_, false)) => (a + 1, b),
         Some((_, true)) => (a, b + 1),
         None => (a, b),
     });
     let walls_broken_for_doors = open_swings >= BROKEN_WALL_SHARE * solid_swings && open_swings > 0;
-    for (o, at) in ops.iter().zip(&placed) {
+    let mut skipped: Vec<Skipped> = Vec::new();
+    let mut skip = |o: &super::perceive::geometry::Opening, why: Skip| {
+        if skipped.len() < MAX_OBJECTS {
+            skipped.push(Skipped { source: o.handle, kind: o.kind, at: o.at, why });
+        }
+    };
+    for (o, (at, walled)) in ops.iter().zip(&placed) {
         let drawn_swing = if drawn(&o) { o.swing.map(|(_, ends)| ends) } else { None };
         let Some((wi, solid)) = *at else {
-            not_doors += usize::from(drawn_swing.is_some());
+            // A swing that shuts along no wall is a fixture's or furniture's arc, unless its leaf
+            // is drawn and no wall at all lies under its hinge: a door whose wall is missing. A
+            // door or window block with no wall under it is drawn in a missing wall.
+            let why = if drawn_swing.is_some() && (*walled || !o.leaf) { Skip::NotADoor } else { Skip::NoWall };
+            not_doors += usize::from(why == Skip::NotADoor);
+            skip(o, why);
             continue;
         };
         // A bare arc on a solid wall is no door; one with its leaf drawn is a door symbol on a
         // wall drawn unbroken (as some drawings do), cut as before.
         if drawn_swing.is_some() && solid && (!o.leaf || walls_broken_for_doors) {
             not_doors += 1;
+            skip(o, Skip::NotADoor);
             continue;
         }
         let Some(w) = pl.walls.get_mut(wi) else { continue };
@@ -2076,6 +2140,14 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             }
         }
     }
+    let no_wall = skipped.iter().filter(|x| x.why == Skip::NoWall).count();
+    if no_wall > 0 {
+        notes.push(format!(
+            "{}: {no_wall} doors or windows drawn where no wall was found under them (the wall they are drawn in is missing): not built.",
+            level.name
+        ));
+    }
+    pl.skipped = skipped;
     // Gaps between two pieces of one wall line: a door where a swing hangs from a jamb (or a
     // door swing's opening covers it), a window in an outside wall, else a cased opening.
     // Uses a spatial grid so each wall only checks nearby collinear neighbors for gaps.
@@ -2420,8 +2492,13 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             level.name
         ));
     }
-    let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k).unwrap_or((doors, windows));
-    let doors = doors.saturating_sub(one_door_per_opening(&mut pl.leaves, 6.0 * k));
+    let mut same = Vec::new();
+    let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k, &mut same).unwrap_or((doors, windows));
+    let doors = doors.saturating_sub(one_door_per_opening(&mut pl.leaves, 6.0 * k, &mut same));
+    for (source, window, at) in same.into_iter().take(MAX_OBJECTS) {
+        let kind = if window { "window" } else { "door" };
+        pl.skipped.push(Skipped { source, kind, at, why: Skip::Same });
+    }
     notes.push(format!("{}: {} walls from {} face pairs, {} doors, {} windows.", level.name, pl.walls.len(), found.len(), doors, windows));
     if not_doors > 0 {
         notes.push(format!("{}: {not_doors} arcs not taken for doors (no open wall where they shut: fixtures, equipment, furniture).", level.name));
@@ -3121,8 +3198,8 @@ fn solid_through_grid(walls: &[PlanWall], grid: Option<&WallGrid>, wi: usize, at
 /// One door per swing: a swing drawn twice (an arc and its chords, a path stroked twice on the
 /// print), or found both from its swing and at a gap, is one door; the same for window panes.
 /// Leaves are the same when their ends lie within `tol` of each other's. The doors and windows
-/// left, when any were dropped.
-fn one_per_swing(leaves: &mut Vec<Leaf>, tol: f64) -> Option<(usize, usize)> {
+/// left, when any were dropped. The dropped leaves (source, window, hinge) go to `gone`.
+fn one_per_swing(leaves: &mut Vec<Leaf>, tol: f64, gone: &mut Vec<(Handle, bool, Vec2)>) -> Option<(usize, usize)> {
     if !(tol.is_finite() && tol > 0.0) {
         return None;
     }
@@ -3138,6 +3215,7 @@ fn one_per_swing(leaves: &mut Vec<Leaf>, tol: f64) -> Option<(usize, usize)> {
             (-1..=1).any(|dx| (-1..=1).any(|dy| seen.get(&(cx + dx, cy + dy)).is_some_and(|ix| ix.iter().any(|&i| kept.get(i).is_some_and(same)))));
         if dup {
             dropped = true;
+            gone.push((l.source, l.window, l.a));
             continue;
         }
         seen.entry(cell(l.a)).or_default().push(kept.len());
@@ -3155,8 +3233,9 @@ const MAX_PAIRED: usize = 5_000;
 /// meeting in the middle of the opening (a double door) becomes one door with two leaves, and a
 /// swing overlapping another's span (the same leaf read again from another hinge) goes. Swings to
 /// either side of a wall (back-to-back connecting doors) stay doors of their own. `tol`: how near
-/// a pair's closed ends meet. How many leaves were folded into another or dropped.
-fn one_door_per_opening(leaves: &mut Vec<Leaf>, tol: f64) -> usize {
+/// a pair's closed ends meet. How many leaves were folded into another or dropped; those go to
+/// `same`.
+fn one_door_per_opening(leaves: &mut Vec<Leaf>, tol: f64, same: &mut Vec<(Handle, bool, Vec2)>) -> usize {
     if !(tol.is_finite() && tol > 0.0) || leaves.len() > MAX_PAIRED {
         return 0;
     }
@@ -3231,9 +3310,12 @@ fn one_door_per_opening(leaves: &mut Vec<Leaf>, tol: f64) -> usize {
         }
     }
     let mut k = 0;
-    leaves.retain(|_| {
+    leaves.retain(|l| {
         let keep = !gone.get(k).copied().unwrap_or(false);
         k += 1;
+        if !keep {
+            same.push((l.source, l.window, l.a));
+        }
         keep
     });
     folded

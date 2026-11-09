@@ -42,6 +42,9 @@ const MAX_ELEMENTS: usize = 500_000;
 const BOX_IN: [f64; 3] = [2.0, 4.0, 4.0];
 /// How far a door number may be printed from its door, and a terminal's airflow from it, feet.
 const DOOR_TAG_FT: f64 = 3.0;
+/// A door schedule's tag this far from a door (feet) or nearer names the door's row (as the build
+/// sizes the opening nearest a tag).
+const SCHEDULE_TAG_FT: f64 = 6.0;
 const CFM_TAG_FT: f64 = 4.0;
 /// How far from a wall a device may stand and still be on it, feet.
 const HOST_WALL_FT: f64 = 1.5;
@@ -2410,6 +2413,10 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         sp.tags.iter().filter(|t| t.id.starts_with("device:")).map(|t| (t.id.as_str(), Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf))).collect();
     // Not into a typical room's unit: its devices are its plans' (stamped and booked by the build),
     // not another trade's or a floor above's that stands over it.
+    // Each door: its number (none when nothing names it), the room it serves, and whether a
+    // schedule row was found for it.
+    let mut doors: Vec<DoorSeen> = Vec::new();
+    let door_rows = sp.schedule.rows.iter().filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door).count();
     let unit_rooms: BTreeSet<String> = sp
         .unit_instances
         .as_array()
@@ -2685,16 +2692,47 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                 let Some((b, z0, z1)) = ext else { continue };
                 // The number printed at the opening (on the plan: the build moved stacked levels).
                 let at_plan = b.center() - shift;
-                if let Some((t, q, _)) =
-                    grid.near(at_plan, DOOR_TAG_FT * upf).into_iter().find(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t))
-                {
+                let printed = grid.near(at_plan, DOOR_TAG_FT * upf).into_iter().find(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t));
+                if let Some((t, q, _)) = &printed {
                     put(
                         &mut store,
                         "number",
-                        Prop::new(t.trim().to_string(), Source::print(&sheet_at(&sp, q, lvl), Some([q.x, q.y])))
+                        Prop::new(t.trim().to_string(), Source::print(&sheet_at(&sp, *q, lvl), Some([q.x, q.y])))
                             .with_note("the tag printed at the opening"),
                         tally,
                     );
+                }
+                // Its door schedule row: the printed number's, else the nearest schedule tag's.
+                let is_door_row = |m: &str| sp.schedule.row(m).filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door);
+                let by_number = printed.as_ref().and_then(|(t, _, _)| is_door_row(t));
+                let by_tag = || {
+                    sp.schedule
+                        .tags
+                        .iter()
+                        .filter(|t| is_door_row(&t.mark).is_some())
+                        .map(|t| (t, Vec2::new(t.at[0], t.at[1]).dist(at_plan)))
+                        .filter(|(_, dd)| dd.is_finite() && *dd <= SCHEDULE_TAG_FT * upf)
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                        .and_then(|(t, _)| is_door_row(&t.mark).map(|r| (r, Vec2::new(t.at[0], t.at[1]))))
+                };
+                let row = by_number.map(|r| (r, printed.as_ref().map_or(at_plan, |(_, q, _)| *q))).or_else(by_tag);
+                let numbered = printed.is_some() || row.is_some();
+                if let Some((r, q)) = row {
+                    let src = || Source::from_doc(SourceKind::Schedule, "door schedule");
+                    if printed.is_none() {
+                        put(
+                            &mut store,
+                            "number",
+                            Prop::new(r.mark.trim().to_string(), Source::print(&sheet_at(&sp, q, lvl), Some([q.x, q.y])))
+                                .with_note("the door schedule's tag at the opening"),
+                            tally,
+                        );
+                    }
+                    for (key, v) in [("type", &r.kind_type), ("frame", &r.frame), ("fire_rating", &r.fire_rating), ("hardware_set", &r.hardware)] {
+                        if let Some(v) = v.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                            put(&mut store, key, Prop::new(v.to_string(), src()), tally);
+                        }
+                    }
                 }
                 let width = b.width().max(b.height()) / upf * 12.0;
                 if width.is_finite() && width > 0.0 {
@@ -2716,6 +2754,20 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                 }
                 if let Some(r) = near.get(1) {
                     put(&mut store, "to_room", Prop::new(r.label.clone(), Source::computed()), tally);
+                }
+                // The schedule's size over the opening's measured one.
+                if let Some((r, _)) = row {
+                    let src = Source::from_doc(SourceKind::Schedule, "door schedule");
+                    for (key, v) in [("width", r.width_in), ("height", r.height_in)] {
+                        if let Some(v) = v.filter(|v| v.is_finite() && *v > 0.0) {
+                            put(&mut store, key, Prop::new(round2(v), src.clone()).with_unit("in"), tally);
+                        }
+                    }
+                }
+                let served = served_room(&near, |label| room_level(label).map(|x| x.name.clone()));
+                let number = store.get("number").map(Prop::text).filter(|t| !t.trim().is_empty());
+                if doors.len() < MAX_ELEMENTS {
+                    doors.push(DoorSeen { handle: *h, number, served, row: row.is_some(), numbered_here: numbered });
                 }
             }
             "wall" => {
@@ -2832,6 +2884,32 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
             changes.push((*h, store));
         }
     }
+    // Doors no tag numbers take the number of the room they serve (field practice: a door is
+    // numbered by its room, lettered when the room has several), marked as a rule's.
+    let numbers = door_numbers(&doors);
+    let door_tally = filled.entry("door".to_string()).or_default();
+    let mut at: HashMap<Handle, usize> = changes.iter().enumerate().map(|(i, (h, _))| (*h, i)).collect();
+    for (h, number, basis) in &numbers {
+        let i = match at.get(h) {
+            Some(i) => *i,
+            None => {
+                let Some(e) = d.model.get(*h) else { continue };
+                changes.push((*h, props::read(&e.common.xdata)));
+                at.insert(*h, changes.len() - 1);
+                changes.len() - 1
+            }
+        };
+        if let Some((_, store)) = changes.get_mut(i) {
+            put(store, "number", Prop::new(number.clone(), Source::from_doc(SourceKind::Rule, "door numbering")).with_note(basis), door_tally);
+        }
+    }
+    let doors_json = json!({
+        "count": doors.len(),
+        "numbered_by_tag": doors.iter().filter(|x| x.numbered_here).count(),
+        "numbered_by_room": numbers.len(),
+        "with_schedule_row": doors.iter().filter(|x| x.row).count(),
+        "schedule_rows": door_rows,
+    });
     // The spec's read devices with no room take their element's (the takeoff counts by room).
     let mut tags_roomed = 0usize;
     if stored && !tag_rooms.is_empty() {
@@ -2871,7 +2949,62 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         "wall_boxes_untyped": untyped_boxes,
         "devices_in_no_room": no_room,
         "device_tags_roomed": tags_roomed,
+        "doors": doors_json,
     }))
+}
+
+/// A built door as the fill saw it.
+struct DoorSeen {
+    handle: Handle,
+    /// Its number (printed, the schedule's, or a person's).
+    number: Option<String>,
+    /// The room it serves (see [`served_room`]).
+    served: Option<String>,
+    /// A door schedule row was found for it.
+    row: bool,
+    /// A tag at the opening numbers it.
+    numbered_here: bool,
+}
+
+/// The room a door serves, of the rooms beside it (`near`, labels): a numbered room, not the
+/// circulation (a corridor, stair or lobby by its name, `name_of`); of two numbered rooms the
+/// first beside it.
+fn served_room(near: &[&RoomShape], name_of: impl Fn(&str) -> Option<String>) -> Option<String> {
+    near.iter()
+        .map(|r| r.label.trim())
+        .filter(|l| l.chars().any(|c| c.is_ascii_digit()) && door_number(l))
+        .find(|l| name_of(l).is_none_or(|n| super::wallgen::circulation_label(&n).is_none()))
+        .map(str::to_string)
+}
+
+/// Numbers for the doors nothing numbers (`doors` with no number): each takes its room's number
+/// when it is that room's only door and the number is free, else the number and a letter (A, B,
+/// … in the order the doors were built), skipping numbers taken. Each with its basis.
+fn door_numbers(doors: &[DoorSeen]) -> Vec<(Handle, String, String)> {
+    let mut taken: BTreeSet<String> = doors.iter().filter_map(|x| x.number.as_ref()).map(|n| n.trim().to_ascii_uppercase()).collect();
+    let mut by_room: BTreeMap<&str, Vec<Handle>> = BTreeMap::new();
+    for x in doors.iter().filter(|x| x.number.is_none()) {
+        if let Some(r) = x.served.as_deref() {
+            by_room.entry(r).or_default().push(x.handle);
+        }
+    }
+    let mut out = Vec::new();
+    for (room, hs) in by_room {
+        let one = hs.len() == 1 && !taken.contains(&room.to_ascii_uppercase());
+        let mut letters =
+            ('A'..='Z').map(|c| format!("{room}{c}")).filter(|n| !taken.contains(&n.to_ascii_uppercase())).collect::<Vec<_>>().into_iter();
+        for h in hs {
+            let (number, basis) = if one {
+                (room.to_string(), format!("no door number is printed here: the only door of room {room} takes its number"))
+            } else {
+                let Some(n) = letters.next() else { break };
+                (n, format!("no door number is printed here: one of room {room}'s doors, lettered in turn (another numbering would do as well)"))
+            };
+            taken.insert(number.to_ascii_uppercase());
+            out.push((h, number, basis));
+        }
+    }
+    out
 }
 
 /// Gear standing within this of its floor stands on it (a switchboard), inches: no wall height.
@@ -3236,5 +3369,49 @@ mod tests {
         let mut z: Vec<[f64; 2]> = mesh_pieces(&m).into_iter().map(|(_, z)| z).collect();
         z.sort_by(|a, b| a[0].total_cmp(&b[0]));
         assert_eq!(z, vec![[0.0, 108.0], [84.0, 108.0]]);
+    }
+
+    fn seen(handle: u64, number: Option<&str>, served: Option<&str>) -> DoorSeen {
+        DoorSeen { handle: Handle(handle), number: number.map(String::from), served: served.map(String::from), row: false, numbered_here: false }
+    }
+
+    /// A door nothing numbers takes its room's number: the room's only door the number itself,
+    /// a room's several doors the number lettered in turn, never a number another door has.
+    #[test]
+    fn doors_nothing_numbers_take_their_rooms_number() {
+        let doors = vec![
+            seen(1, None, Some("1204")),
+            seen(2, None, Some("1118")),
+            seen(3, None, Some("1118")),
+            // A printed 1305A: room 1305's doors skip that letter.
+            seen(4, Some("1305A"), Some("1305")),
+            seen(5, None, Some("1305")),
+            // Nothing beside it is a numbered room: left unnumbered.
+            seen(6, None, None),
+            // Already numbered: kept.
+            seen(7, Some("12"), Some("1204")),
+        ];
+        let got: Vec<(u64, String)> = door_numbers(&doors).into_iter().map(|(h, n, _)| (h.0, n)).collect();
+        assert_eq!(got, vec![(2, "1118A".to_string()), (3, "1118B".to_string()), (1, "1204".to_string()), (5, "1305".to_string())]);
+        // A room's only door whose number another door already has is lettered.
+        let got = door_numbers(&[seen(1, Some("1204"), Some("1204")), seen(2, None, Some("1204"))]);
+        assert_eq!(got.first().map(|x| x.1.as_str()), Some("1204A"));
+    }
+
+    /// A door serves the numbered room beside it, not the corridor (by its name) or a room
+    /// named only.
+    #[test]
+    fn a_door_serves_its_numbered_room_not_the_corridor() {
+        let shape = |label: &str| RoomShape {
+            outline: vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)],
+            bounds: Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0)),
+            level: None,
+            label: label.into(),
+        };
+        let (corridor, room, bath) = (shape("C1000"), shape("1417"), shape("BATH"));
+        let names = |l: &str| Some(if l == "C1000" { "CORRIDOR".to_string() } else { "GUEST ROOM".to_string() });
+        assert_eq!(served_room(&[&corridor, &room], names).as_deref(), Some("1417"));
+        assert_eq!(served_room(&[&bath, &room], names).as_deref(), Some("1417"));
+        assert_eq!(served_room(&[&bath], names), None);
     }
 }
