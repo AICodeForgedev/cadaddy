@@ -149,21 +149,25 @@ pub(crate) fn holes_fit(ch: char, holes: usize) -> bool {
     }
 }
 
-/// The background's pieces the shape encloses (4-connected): its holes.
-fn count_holes(g: &Grid) -> usize {
+/// The background's pieces the shape encloses (4-connected): its holes. With `seams`, a piece
+/// every pixel of which touches ink (a hairline where two filled pieces meet) is no hole.
+fn count_holes(g: &Grid, seams: bool) -> usize {
     let mut seen = vec![false; g.w * g.h];
     let mut pieces = 0usize;
     for start in 0..g.w * g.h {
         if seen.get(start).copied().unwrap_or(true) || g.px.get(start).copied().unwrap_or(true) {
             continue;
         }
-        pieces += 1;
+        let mut roomy = !seams;
         let mut stack = vec![start];
         if let Some(v) = seen.get_mut(start) {
             *v = true;
         }
         while let Some(i) = stack.pop() {
             let (x, y) = ((i % g.w) as i64, (i / g.w) as i64);
+            if !roomy && !RING.iter().any(|&(dx, dy)| g.at(x + dx, y + dy)) {
+                roomy = true;
+            }
             for (dx, dy) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
                 let (nx, ny) = (x + dx, y + dy);
                 if nx < 0 || ny < 0 || nx as usize >= g.w || ny as usize >= g.h {
@@ -178,8 +182,11 @@ fn count_holes(g: &Grid) -> usize {
                 }
             }
         }
+        if roomy {
+            pieces += 1;
+        }
     }
-    // the margin keeps the outside one piece
+    // the margin keeps the outside one piece (and roomy)
     pieces.saturating_sub(1)
 }
 
@@ -213,11 +220,19 @@ const RING: [(i64, i64); 8] = [(0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1
 /// rasterised, thinned to one pixel (Zhang–Suen) and traced from end to end and junction to
 /// junction, with the short spurs thinning leaves at corners cut off. `None` for an empty or
 /// degenerate outline.
+#[cfg(test)]
 pub(crate) fn skeleton(loops: &[&[(f64, f64)]], even_odd: bool) -> Option<Skeleton> {
-    if loops.iter().flat_map(|l| l.iter()).any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+    skeleton_parts(&[(loops, even_odd)])
+}
+
+/// [`skeleton`] of a glyph a page fills in several pieces (a stem, a flag and a foot, each its
+/// own fill with its own rule): the pieces' ink together, so the holes and centre lines are the
+/// whole glyph's, not each piece's.
+pub(crate) fn skeleton_parts(parts: &[(&[&[(f64, f64)]], bool)]) -> Option<Skeleton> {
+    if parts.iter().flat_map(|(loops, _)| loops.iter().flat_map(|l| l.iter())).any(|p| !p.0.is_finite() || !p.1.is_finite()) {
         return None;
     }
-    let pts = loops.iter().flat_map(|l| l.iter());
+    let pts = parts.iter().flat_map(|(loops, _)| loops.iter().flat_map(|l| l.iter()));
     let (x0, y0, x1, y1) = pts.fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, &(x, y)| (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y)));
     let long = (x1 - x0).max(y1 - y0);
     if !long.is_finite() || long <= 1e-9 {
@@ -234,35 +249,38 @@ pub(crate) fn skeleton(loops: &[&[(f64, f64)]], even_odd: bool) -> Option<Skelet
     let mut ink = 0usize;
     for row in 0..gh {
         let yc = uy(row as f64);
-        let mut cross: Vec<(f64, i32)> = Vec::new();
-        for l in loops {
-            let n = l.len();
-            for i in 0..n {
-                let (Some(&p), Some(&q)) = (l.get(i), l.get((i + 1) % n)) else { continue };
-                if (p.1 <= yc) != (q.1 <= yc) {
-                    let x = p.0 + (yc - p.1) * (q.0 - p.0) / (q.1 - p.1);
-                    cross.push((x, if q.1 > p.1 { 1 } else { -1 }));
+        // each piece by its own fill rule; their ink adds up
+        for &(loops, even_odd) in parts {
+            let mut cross: Vec<(f64, i32)> = Vec::new();
+            for l in loops {
+                let n = l.len();
+                for i in 0..n {
+                    let (Some(&p), Some(&q)) = (l.get(i), l.get((i + 1) % n)) else { continue };
+                    if (p.1 <= yc) != (q.1 <= yc) {
+                        let x = p.0 + (yc - p.1) * (q.0 - p.0) / (q.1 - p.1);
+                        cross.push((x, if q.1 > p.1 { 1 } else { -1 }));
+                    }
                 }
             }
-        }
-        cross.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut wind = 0i32;
-        for (i, &(x, dir)) in cross.iter().enumerate() {
-            wind += if even_odd { 1 } else { dir };
-            let inside = if even_odd { wind % 2 != 0 } else { wind != 0 };
-            let Some(&(next, _)) = cross.get(i + 1) else { break };
-            if !inside {
-                continue;
-            }
-            let (c0, c1) = (col(x).ceil().max(0.0) as usize, col(next).floor().min(gw as f64 - 1.0));
-            if c1 < 0.0 {
-                continue;
-            }
-            for c in c0..=(c1 as usize) {
-                if !g.at(c as i64, row as i64) {
-                    ink += 1;
+            cross.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut wind = 0i32;
+            for (i, &(x, dir)) in cross.iter().enumerate() {
+                wind += if even_odd { 1 } else { dir };
+                let inside = if even_odd { wind % 2 != 0 } else { wind != 0 };
+                let Some(&(next, _)) = cross.get(i + 1) else { break };
+                if !inside {
+                    continue;
                 }
-                g.set(c, row, true);
+                let (c0, c1) = (col(x).ceil().max(0.0) as usize, col(next).floor().min(gw as f64 - 1.0));
+                if c1 < 0.0 {
+                    continue;
+                }
+                for c in c0..=(c1 as usize) {
+                    if !g.at(c as i64, row as i64) {
+                        ink += 1;
+                    }
+                    g.set(c, row, true);
+                }
             }
         }
     }
@@ -270,7 +288,9 @@ pub(crate) fn skeleton(loops: &[&[(f64, f64)]], even_odd: bool) -> Option<Skelet
     if ink == 0 {
         return None;
     }
-    let holes = count_holes(&g);
+    // pieces filled side by side can leave a hairline of background where they meet: a seam,
+    // not a counter (every pixel of it touches ink; a letter's counter has room inside)
+    let holes = count_holes(&g, parts.len() > 1);
     thin(&mut g);
     // the stroke width w with ink = w × (centre length + w): thinning eats half a width off
     // each end of a stroke, which matters for a short thick one (a bold I)
@@ -518,6 +538,37 @@ mod tests {
             (rect(12.0, 12.0, 48.0, 44.0).into_iter().rev().collect(), rect(12.0, 56.0, 48.0, 88.0).into_iter().rev().collect());
         assert_eq!(skeleton(&[&outer, &w1, &w2], false).expect("skeleton").holes, 2);
         assert!(holes_fit('8', 2) && holes_fit('B', 2) && !holes_fit('6', 2) && holes_fit('4', 0) && holes_fit('4', 1) && !holes_fit('T', 1));
+    }
+
+    #[test]
+    fn a_glyph_filled_in_pieces_has_the_whole_glyphs_holes() {
+        // a 0 filled as two halves of its ring, each its own fill: one hole between them
+        let left = [(30.0, 0.0), (0.0, 0.0), (0.0, 100.0), (30.0, 100.0), (30.0, 88.0), (12.0, 88.0), (12.0, 12.0), (30.0, 12.0)];
+        let right: Vec<(f64, f64)> = left.iter().map(|&(x, y)| (60.0 - x, y)).collect();
+        let (l, r): ([&[(f64, f64)]; 1], [&[(f64, f64)]; 1]) = ([&left], [&right]);
+        assert_eq!(skeleton(&l, false).expect("skeleton").holes, 0, "each half alone is a C");
+        let sk = skeleton_parts(&[(&l, false), (&r, true)]).expect("skeleton");
+        assert_eq!(sk.holes, 1, "the counter between the halves");
+        assert!(sk.lines.iter().any(|(_, closed)| *closed), "{:?}", sk.lines);
+        // four bars round a box with a hairline left between the two middle ones: a seam
+        // where the pieces meet, not a counter
+        let (low, high, west, east) =
+            (rect(0.0, 0.0, 60.0, 49.0), rect(0.0, 51.5, 60.0, 100.0), rect(0.0, 0.0, 6.0, 100.0), rect(54.0, 0.0, 60.0, 100.0));
+        let pieces: Vec<[&[(f64, f64)]; 1]> = vec![[&low], [&high], [&west], [&east]];
+        let parts: Vec<(&[&[(f64, f64)]], bool)> = pieces.iter().map(|p| (p.as_slice(), false)).collect();
+        assert_eq!(skeleton_parts(&parts).expect("skeleton").holes, 0);
+        // a box of pieces whose top stops a pixel short of its side: open (a 9's tail that
+        // comes close to its bowl doesn't close it)
+        let (short, top, bottom) = (rect(0.0, 94.0, 51.5, 100.0), rect(0.0, 94.0, 60.0, 100.0), rect(0.0, 0.0, 60.0, 6.0));
+        let pieces: Vec<[&[(f64, f64)]; 1]> = vec![[&short], [&bottom], [&west], [&east]];
+        let parts: Vec<(&[&[(f64, f64)]], bool)> = pieces.iter().map(|p| (p.as_slice(), false)).collect();
+        assert_eq!(skeleton_parts(&parts).expect("skeleton").holes, 0);
+        // closed, it is a counter
+        let pieces: Vec<[&[(f64, f64)]; 1]> = vec![[&top], [&bottom], [&west], [&east]];
+        let parts: Vec<(&[&[(f64, f64)]], bool)> = pieces.iter().map(|p| (p.as_slice(), false)).collect();
+        assert_eq!(skeleton_parts(&parts).expect("skeleton").holes, 1);
+        // the same outlines in one fill keep every hole they draw
+        assert_eq!(skeleton(&[&low, &high, &west, &east], false).expect("skeleton").holes, 1);
     }
 
     #[test]

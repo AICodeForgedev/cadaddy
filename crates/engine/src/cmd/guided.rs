@@ -7036,6 +7036,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
+    few_openings_findings(job, &result);
     result["scope"] = scope_summary;
     // Foreign pipe and duct out of electrical gear's dedicated space (NEC 110.26(E)(1)): what the
     // plans run through it the build offset past the gear's side as the field installs it, the
@@ -16109,7 +16110,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         let kind = super::elemprops::reported_kind(e, base.clone());
         let is_lum = matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture");
         let is_ctl = matches!(kind.as_str(), "switch" | "3way_switch" | "dimmer" | "occupancy_sensor");
-        if !is_lum && !is_ctl && !matches!(base.as_str(), "device" | "equipment" | "fixture") {
+        if !is_lum && !is_ctl && !super::elemprops::is_device_kind(&base) && base != "equipment" {
             continue;
         }
         let mut store = props::read(&e.common.xdata);
@@ -19856,6 +19857,63 @@ fn block_texts(d: &cadaddy_doc::Drawing) -> Vec<cadaddy_mepfix::sheet_facts::Tex
         }
     }
     out
+}
+
+/// A floor built with at least this many walls is a real floor plan's worth of them ...
+const FEW_OPENINGS_MIN_WALLS: u64 = 50;
+/// ... and one with fewer than a door or window per this many walls has its openings drawn on a
+/// plan the build didn't read: a building's rooms have doors (a floor of rooms has about one per
+/// five walls), its outside walls windows.
+const WALLS_PER_OPENING: u64 = 25;
+
+/// A job finding for each level `model.build` (its `openings_by_level`) built with many walls and
+/// almost no doors or windows: the plan it was built from draws few (another trade's plan, a
+/// framing plan), or its swings weren't read. Says whether the level has an architectural floor
+/// plan in the set as read, and how many pages classify couldn't identify (where it may be).
+fn few_openings_findings(job: &mut GuidedJob, built: &Value) {
+    let Some(levels) = built.get("openings_by_level").and_then(Value::as_array) else { return };
+    let unidentified = job
+        .sheets
+        .as_ref()
+        .and_then(|v| v.get("sheets"))
+        .and_then(Value::as_array)
+        .map_or(0, |a| a.iter().filter(|sh| sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str) == Some("unknown")).count());
+    let mut found: Vec<(String, u64, u64, u64, bool)> = Vec::new();
+    for l in levels.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let name = l.get("level").and_then(Value::as_str).unwrap_or("?").to_string();
+        let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or(0);
+        let (walls, doors, windows) = (n("walls"), n("doors"), n("windows"));
+        if walls < FEW_OPENINGS_MIN_WALLS || (doors + windows).saturating_mul(WALLS_PER_OPENING) >= walls {
+            continue;
+        }
+        let arch = job
+            .sheet_regions
+            .iter()
+            .any(|r| r.kind == "plan" && r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case("A") && same_level_name(&r.level, &name));
+        found.push((name, walls, doors, windows, arch));
+    }
+    for (name, walls, doors, windows, arch) in found {
+        let why = if arch {
+            "Its architectural floor plan was read, but few door swings or window marks were found in its walls (swings drawn in a way the reader doesn't take, or openings shown only by tags)".to_string()
+        } else {
+            format!(
+                "No architectural floor plan of this level was identified in the set, so its walls come from another plan (a trade plan's background or a framing plan) that draws few openings; {unidentified} page(s) of the set could not be identified (no readable sheet number or title) and may hold it"
+            )
+        };
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{name}: {walls} walls but {doors} doors and {windows} windows"),
+            &why,
+            3,
+            vec![
+                "Check which plan the level was built from (bspec parts: levels)".into(),
+                "Name the level's architectural floor plan (printset.classify, or answer its sheet's level)".into(),
+                "Count the doors and windows on the plans against the model".into(),
+            ],
+            None,
+            false,
+        );
+    }
 }
 
 /// Whether two level names are one level (`Level 2`, `2`, `LEVEL 02`): their digits, else the names.
@@ -27671,6 +27729,47 @@ mod tests {
     }
 
     #[test]
+    fn a_floor_of_walls_with_almost_no_openings_is_a_finding() {
+        use super::*;
+        let built = json!({"openings_by_level": [
+            {"level": "Level 1", "walls": 400, "doors": 70, "windows": 30},
+            {"level": "Level 2", "walls": 480, "doors": 1, "windows": 13},
+            {"level": "Level 3", "walls": 30, "doors": 0, "windows": 0},
+        ]});
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "X1", "type": "unknown"}, {"number": "A101", "type": "plan"}]}));
+        few_openings_findings(&mut job, &built);
+        let found: Vec<&JobFinding> = job.findings.iter().filter(|f| f.description.contains("walls but")).collect();
+        // Only the floor with hundreds of walls and a handful of openings; not a full one, nor a
+        // floor of a few walls (a penthouse, a roof structure).
+        assert_eq!(found.len(), 1, "{:?}", job.findings);
+        assert!(found[0].description.starts_with("Level 2: 480 walls but 1 doors and 13 windows"), "{}", found[0].description);
+        assert!(found[0].why.contains("No architectural floor plan") && found[0].why.contains("1 page(s)"), "{}", found[0].why);
+        // With its architectural plan read, the finding says so instead.
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions.push(SheetRegion {
+            number: "A102".into(),
+            level: "2".into(),
+            discipline: "A".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 100.0, 100.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        few_openings_findings(&mut job, &built);
+        let f = job.findings.iter().find(|f| f.description.contains("walls but")).map(|f| f.why.clone()).unwrap_or_default();
+        assert!(f.contains("architectural floor plan was read"), "{f}");
+        // Nothing to read: no finding, no panic.
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        few_openings_findings(&mut job, &json!({"openings_by_level": [{"level": 5, "walls": "x"}, null]}));
+        few_openings_findings(&mut job, &json!(null));
+        assert!(job.findings.is_empty());
+    }
+
+    #[test]
     fn no_panel_schedule_read_is_a_finding_and_gear_read_says_where_it_looked() {
         use super::*;
         let mut s = Session::new();
@@ -33362,7 +33461,8 @@ mod tests {
         super::super::readers::place_devices(&mut s, &devices, "test").unwrap_or_else(|e| panic!("{e}"));
         super::super::propfill::rebuild_devices(&mut s, "test").unwrap_or_else(|e| panic!("{e}"));
         super::super::propfill::fill(&mut s, false).unwrap_or_else(|e| panic!("{e}"));
-        let found = s.execute("bim.props.find", &json!({"kind": "device"})).unwrap_or_else(|e| panic!("{e}"));
+        // (A water closet is a plumbing fixture element, Q6315.)
+        let found = s.execute("bim.props.find", &json!({"kind": "plumbing_fixture"})).unwrap_or_else(|e| panic!("{e}"));
         let got = s.execute("bim.props.get", &json!({"handles": found["handles"]})).unwrap_or_else(|e| panic!("{e}"));
         let els = got["elements"].as_array().cloned().unwrap_or_default();
         assert_eq!(els.len(), 2, "{got:#}");

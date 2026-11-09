@@ -87,7 +87,8 @@ fn build(s: &mut Session, sp: Value) {
 }
 
 fn handle_of(s: &mut Session, mark: &str) -> String {
-    let r = s.execute("bim.props.find", &json!({"kind": "device", "where": {"type_mark": mark}, "limit": 10})).expect("find");
+    // A device, a luminaire or a plumbing fixture (each its own element kind, Q6315).
+    let r = s.execute("bim.props.find", &json!({"where": {"type_mark": mark}, "limit": 10})).expect("find");
     let hs: Vec<String> = r["handles"].as_array().expect("handles").iter().filter_map(|h| h.as_str().map(str::to_string)).collect();
     assert_eq!(hs.len(), 1, "one device {mark}: {hs:?}");
     hs[0].clone()
@@ -195,6 +196,39 @@ fn a_device_whose_wall_is_merged_away_goes_in_the_wall_there_now() {
     assert_eq!(pa["host_wall"]["value"], json!(copy.hex()), "{pa:#}");
     let (a, _, _) = extent(&mut s, "A");
     assert!((a[0] - 19.75 * 12.0).abs() <= 0.25, "still flush with the west face: {a:?}");
+}
+
+/// A plumbing fixture's body (Q6315) stays its body when its wall is merged away: against the
+/// wall there now, out into its room, not a 2x4" box.
+#[test]
+fn a_fixtures_body_follows_its_wall_when_the_wall_is_merged_away() {
+    let _g = serial();
+    let mut s = Session::empty();
+    s.open_drawing(two_rooms(), "Merged Wall Fixture", None);
+    let lav = device(19.6, 5.0, "PL-1", "plumbing_fixture", "1F0", json!({"fixture": "LAVATORY"}));
+    build(&mut s, spec(vec![lav], json!({})));
+    let before = extent(&mut s, "PL-1").0;
+    let host = props(&mut s, "PL-1")["host_wall"]["value"].as_str().expect("host").to_string();
+    let copy = {
+        let d = s.doc_mut().expect("doc");
+        let h = Handle::parse_hex(&host).expect("hex");
+        let mut e = (**d.entity(h).expect("wall")).clone();
+        e.handle = d.new_handle();
+        let c = e.handle;
+        d.model.push(e);
+        d.model.remove(h);
+        c
+    };
+    let r = s.execute("bim.props.fill", &json!({})).expect("fill");
+    assert_eq!(r["reseated"], json!(1), "{r:#}");
+    let p = props(&mut s, "PL-1");
+    assert_eq!(p["host_wall"]["value"], json!(copy.hex()), "{p:#}");
+    assert_eq!(p["body_provenance"]["value"], "inferred", "{p:#}");
+    let b = extent(&mut s, "PL-1").0;
+    // Its back on the west face (19.75'), its 18" depth out into the west room, 20" along it.
+    assert!((b[2] - 19.75 * 12.0).abs() <= 0.25 && (b[0] - (19.75 * 12.0 - 18.0)).abs() <= 0.25, "{b:?}");
+    assert!(((b[3] - b[1]) - 20.0).abs() <= 0.25, "{b:?}");
+    assert!(before.iter().zip(&b).all(|(x, y)| (x - y).abs() <= 0.25), "where it was: {before:?} {b:?}");
 }
 
 /// A notes list of device heights, a legend, a fire alarm symbol list and an AFF note by a
@@ -440,9 +474,10 @@ fn a_wall_light_its_schedule_mounts_at_eight_feet_is_set_in_its_wall() {
     assert_eq!(p["mount_height"]["value"], json!(96.0), "{p:#}");
     assert!(p["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()), "set in its wall: {p:#}");
     assert!(p["placement"]["value"].as_str().is_some_and(|t| t.starts_with("in its wall")), "{p:#}");
-    // Its box in the wall's outer face (0'), not a foot out where it was drawn.
+    // Its body against the wall's outer face (0'), out from it by its depth, not a foot out where
+    // it was drawn.
     let (b, z0, z1) = extent(&mut s, "Q7");
-    assert!(b[1].abs() <= 0.25 && b[3] <= 6.0 + 1e-6, "in the outer face: {b:?}");
+    assert!(b[3].abs() <= 0.25 && b[1] > -12.0 && b[1] < 0.0, "against the outer face: {b:?}");
     assert!(((z0 + z1) / 2.0 - 96.0).abs() < 0.5, "{z0} {z1}");
     // 9'-10" is past the storey's top for a box: it stays where it was drawn.
     let q = props(&mut s, "Q6");

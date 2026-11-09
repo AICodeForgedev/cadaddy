@@ -531,7 +531,7 @@ pub fn template_for<'a>(ts: &'a [Template], kind: &str) -> Option<&'a Template> 
 /// equipment's or terminal's kind (`ptac`, `grille`), else the model's kind.
 pub fn form_kind(e: &Entity, base: String) -> String {
     let k = super::elemprops::reported_kind(e, base);
-    if matches!(k.as_str(), "equipment" | "fixture" | "device")
+    if matches!(k.as_str(), "equipment" | "fixture" | "plumbing_fixture" | "device")
         && let Some(part) = super::bimlook::made_tag(e, "part")
     {
         let p = part.trim().to_ascii_lowercase();

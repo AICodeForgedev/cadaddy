@@ -417,9 +417,12 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         "equipment" => mk("equipment", "Equipment", typed(&source_block(d, e).unwrap_or_else(|| "Equipment".into()))),
         "device" => {
             let ty = own_type.clone().or_else(|| source_block(d, e)).unwrap_or_else(|| e.common.layer.to_string());
-            if layer.contains("LIGHT") || layer.contains("LTG") {
+            // A luminaire or a plumbing fixture the build made (its element kind, Q6315), else its
+            // layer's trade.
+            let kind = super::elemprops::element_kind(e).unwrap_or_default();
+            if kind == "light_fixture" || layer.contains("LIGHT") || layer.contains("LTG") {
                 mk("lights", "Light Fixtures", ty)
-            } else if layer.contains("PLUMB") || layer.contains("FIXT") {
+            } else if kind == "plumbing_fixture" || layer.contains("PLUMB") || layer.contains("FIXT") {
                 mk("fixtures", "Plumbing Fixtures", ty)
             } else if layer.contains("SPRINK") || layer.contains("FIRE") {
                 mk("fire", "Sprinklers", ty)
@@ -456,7 +459,7 @@ fn classify_other(e: &Entity) -> Option<Class> {
         "pipe" => ("pipe", "Pipe"),
         "conduit" => ("conduit", "Conduit"),
         "light_fixture" => ("lights", "Light Fixtures"),
-        "fixture" => ("fixtures", "Plumbing Fixtures"),
+        "fixture" | "plumbing_fixture" => ("fixtures", "Plumbing Fixtures"),
         "device" => ("devices", "Devices"),
         "equipment" => ("equipment", "Equipment"),
         _ => ("architecture", "Elements"),

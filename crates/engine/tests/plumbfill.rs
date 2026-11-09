@@ -96,7 +96,8 @@ fn layers(s: &Session) -> Vec<String> {
 }
 
 fn fixture_props(s: &mut Session) -> Value {
-    let r = s.execute("bim.props.find", &json!({"kind": "device", "where": {"type_mark": "WC-9"}, "limit": 10})).expect("find");
+    // (A water closet is a plumbing fixture element, Q6315.)
+    let r = s.execute("bim.props.find", &json!({"kind": "plumbing_fixture", "where": {"type_mark": "WC-9"}, "limit": 10})).expect("find");
     let Some(h) = r["handles"][0].as_str().map(str::to_string) else {
         let all = s.execute("bim.props.find", &json!({"limit": 50})).expect("all");
         panic!("one fixture: {r}\n{all}")

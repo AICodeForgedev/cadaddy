@@ -263,7 +263,7 @@ pub(crate) fn trade_of(kind: &str) -> &'static str {
     match kind {
         "device" | "light_fixture" | "conduit" => "electrical",
         "duct" | "equipment" => "mechanical",
-        "pipe" | "fixture" => "plumbing",
+        "pipe" | "fixture" | "plumbing_fixture" => "plumbing",
         _ => "architectural",
     }
 }
@@ -288,9 +288,10 @@ pub(crate) fn is_sprinkler(el: &El) -> bool {
     has_any(&el.words(), &["sprinkler", "fire protection head"])
 }
 
-/// A plumbing fixture (a fixture that is not an air terminal or a sprinkler head).
+/// A plumbing fixture: a plumbing fixture element, or a fixture (of a trade's layer) that is not
+/// an air terminal or a sprinkler head.
 pub(crate) fn is_plumbing_fixture(el: &El) -> bool {
-    el.kind == "fixture" && !is_terminal(el) && !is_sprinkler(el)
+    el.kind == "plumbing_fixture" || (el.kind == "fixture" && !is_terminal(el) && !is_sprinkler(el))
 }
 
 pub(crate) fn is_receptacle(el: &El) -> bool {
@@ -316,7 +317,7 @@ pub(crate) fn is_panel(el: &El) -> bool {
 }
 
 pub(crate) fn is_water_heater(el: &El) -> bool {
-    if !matches!(el.kind.as_str(), "equipment" | "fixture") {
+    if !matches!(el.kind.as_str(), "equipment" | "fixture" | "plumbing_fixture") {
         return false;
     }
     let tag = el.tag().unwrap_or_default().to_ascii_uppercase();

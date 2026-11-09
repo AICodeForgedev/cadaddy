@@ -691,7 +691,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
     // A plan element's built twin may hold its host wall, and its bottom and top.
     let mut twin_host: HashMap<String, String> = HashMap::new();
     let mut twin_span: HashMap<String, (f64, f64)> = HashMap::new();
-    const MEP_KINDS: [&str; 5] = ["equipment", "fixture", "device", "light_fixture", "terminal"];
+    const MEP_KINDS: [&str; 6] = ["equipment", "fixture", "device", "light_fixture", "plumbing_fixture", "terminal"];
     let upf = frame.upf();
     for e in d.model.iter().take(MAX_ENTITIES) {
         if out.len() >= MAX_ELEMENTS {
@@ -717,7 +717,8 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             continue;
         }
         let Some(kind) = super::elemprops::element_kind(e).filter(|k| MEP_KINDS.contains(&k.as_str())) else { continue };
-        let device = kind == "device";
+        // (A built luminaire or plumbing fixture is a device the build made too.)
+        let device = matches!(kind.as_str(), "device" | "light_fixture" | "plumbing_fixture");
         let kind = super::elemprops::reported_kind(e, kind);
         let Some(level) = super::elemprops::level_of(e) else { continue };
         let b = cadaddy_doc::entity_bounds(d, e, 0);

@@ -223,7 +223,7 @@ fn rank(kind: &str, discipline: &str, has_schedule_value: bool) -> u8 {
     }
     let a = discipline.eq_ignore_ascii_case("A") || discipline.eq_ignore_ascii_case("ID");
     match kind {
-        "device" | "equipment" | "fixture" | "light_fixture" if !a && !discipline.is_empty() => 1,
+        "device" | "equipment" | "fixture" | "light_fixture" | "plumbing_fixture" if !a && !discipline.is_empty() => 1,
         "door" | "window" | "wall" | "room" if a => 1,
         _ if discipline.is_empty() => 3,
         _ => 2,
