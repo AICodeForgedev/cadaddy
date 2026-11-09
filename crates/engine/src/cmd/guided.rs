@@ -5677,25 +5677,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 };
                 for level in &mut sp.levels {
                     let want = key(&level.name);
-                    let mut rects: Vec<&(String, [f64; 4], bool, usize)> =
-                        arch_plans.iter().filter(|(l, _, _, _)| !l.is_empty() && key(l) == want).collect();
-                    // The level's plan titled as its floor plan over its other plans, then a plan of
-                    // this level alone over one that draws others too (a mezzanine and low roof plan
-                    // is neither the mezzanine's floor plan nor the roof plan): sheets come in at
-                    // their plans' scales, so a 1/8" sheet is twice the size of a 1/4" one and its
-                    // size says nothing of which is the level's (Q6396).
-                    if rects.iter().any(|x| x.2) {
-                        rects.retain(|x| x.2);
-                    }
-                    if let Some(fewest) = rects.iter().map(|x| x.3).min() {
-                        rects.retain(|x| x.3 == fewest);
-                    }
-                    // The largest view of the level (a several-view sheet's floor plan, not its enlarged plans).
-                    if let Some(r) = rects
-                        .into_iter()
-                        .map(|x| x.1)
-                        .max_by(|a, b| ((a[2] - a[0]).abs() * (a[3] - a[1]).abs()).total_cmp(&((b[2] - b[0]).abs() * (b[3] - b[1]).abs())))
-                    {
+                    let rects: Vec<([f64; 4], bool, usize)> =
+                        arch_plans.iter().filter(|(l, _, _, _)| !l.is_empty() && key(l) == want).map(|x| (x.1, x.2, x.3)).collect();
+                    if let Some(r) = level_plan_rect(rects) {
                         progress_line(&format!("  level {}: region from its architectural plan {:?}", level.name, r.map(|v| v.round())));
                         level.region = Some(r);
                     }
@@ -6338,7 +6322,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             shells
                         })
                         .clone();
-                    let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference.as_deref().unwrap_or("A"));
+                    let (place, log) =
+                        arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference.as_deref().unwrap_or("A"));
                     placer_log = Some(log);
                     placer = Some(Box::new(place));
                 }
@@ -24031,9 +24016,8 @@ fn arch_placer(
     // Each sheet's plans in drawing units per foot (Q6396), as its import read them (`None`: a
     // sheet of one scale, at it). A sheet whose plans came in at another scale than its level's
     // plan is fitted onto it at the ratio of the two, never one to one.
-    let plan_upf: std::sync::Arc<Vec<Option<f64>>> = std::sync::Arc::new(
-        sheets.iter().map(|b| plan_units.iter().find(|(n, _)| n.eq_ignore_ascii_case(&b.number)).map(|(_, u)| *u)).collect(),
-    );
+    let plan_upf: std::sync::Arc<Vec<Option<f64>>> =
+        std::sync::Arc::new(sheets.iter().map(|b| plan_units.iter().find(|(n, _)| n.eq_ignore_ascii_case(&b.number)).map(|(_, u)| *u)).collect());
     // A level's plan whose units per foot aren't the job's: said, never silent.
     for (_, i, _) in targets.iter() {
         if let (Some(Some(u)), Some(b)) = (plan_upf.get(*i), sheets.get(*i))
@@ -24223,10 +24207,8 @@ fn arch_placer(
                 (Some(a), Some(b)) if i != j => super::sheetreg::other_parts(a, b),
                 _ => None,
             });
-            let ratio = super::sheetreg::scale_ratio(
-                plan_sheet(key).and_then(|j| plan_upf.get(j).copied().flatten()),
-                plan_upf.get(i).copied().flatten(),
-            );
+            let ratio =
+                super::sheetreg::scale_ratio(plan_sheet(key).and_then(|j| plan_upf.get(j).copied().flatten()), plan_upf.get(i).copied().flatten());
             let fit = if other.is_some() { None } else { lines.fit(i, &tgt, ratio) };
             let number = sheet_names.get(i).cloned().unwrap_or_default();
             progress_line(&format!(
@@ -25203,6 +25185,23 @@ fn region_title(job: &GuidedJob, r: &SheetRegion) -> String {
         .find_map(|x| x.get("title").and_then(Value::as_str))
         .unwrap_or("")
         .to_string()
+}
+
+/// A level's plan among its architectural plans `(rect, titled as a floor plan, levels it draws)`:
+/// one titled as its floor plan over its other plans, then one of this level alone over one that
+/// draws others too (a mezzanine and low roof plan is neither the mezzanine's floor plan nor the
+/// roof plan), then the largest (a several-view sheet's floor plan, not its enlarged plans).
+/// Sheets come in at their plans' scales, so a 1/8" sheet is twice the size of a 1/4" one and its
+/// size alone says nothing of which plan is the level's (Q6396).
+fn level_plan_rect(mut rects: Vec<([f64; 4], bool, usize)>) -> Option<[f64; 4]> {
+    if rects.iter().any(|x| x.1) {
+        rects.retain(|x| x.1);
+    }
+    if let Some(fewest) = rects.iter().map(|x| x.2).min() {
+        rects.retain(|x| x.2 == fewest);
+    }
+    let area = |a: &[f64; 4]| (a[2] - a[0]).abs() * (a[3] - a[1]).abs();
+    rects.into_iter().map(|x| x.0).max_by(|a, b| area(a).total_cmp(&area(b)))
 }
 
 /// Each level's floor plans among `plans`: where a level has a plan titled as its floor plan, its
@@ -35445,14 +35444,54 @@ mod tests {
         }
     }
 
+    /// Q6396: a level's plan is the one titled as its floor plan, then the one drawn for it alone,
+    /// and only then the largest: a mezzanine and low roof plan read at its 1/8" scale is bigger
+    /// than the mezzanine's 1/4" floor plan, and is neither it nor the roof plan.
+    #[test]
+    fn a_levels_plan_is_its_own_before_the_biggest() {
+        let small = [0.0, 0.0, 1500.0, 1000.0];
+        let big = [5000.0, 0.0, 8000.0, 2000.0];
+        // The mezzanine: its floor plan (titled, one level) over the bigger two-level sheet.
+        assert_eq!(level_plan_rect(vec![(big, false, 2), (small, true, 1)]), Some(small));
+        // The roof: its own roof plan over the two-level sheet, however big.
+        assert_eq!(level_plan_rect(vec![(big, false, 2), (small, false, 1)]), Some(small));
+        // Plans alike: the largest (a several-view sheet's plan, not its enlarged plans).
+        assert_eq!(level_plan_rect(vec![(small, true, 1), (big, true, 1)]), Some(big));
+        assert_eq!(level_plan_rect(Vec::new()), None);
+    }
+
+    /// Q6396: each sheet's plans in drawing units per foot, from its import scale and the scale its
+    /// plan views print; a sheet of one scale (none read) has none.
+    #[test]
+    fn a_sheets_plan_units_come_from_its_import() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let sc = |sheet: &str, scale: f64, plan: Option<f64>| SheetScale {
+            sheet: sheet.into(),
+            kind: "plan".into(),
+            scale,
+            source: "scale note".into(),
+            plan_scale: plan,
+        };
+        job.sheet_scales = vec![sc("A-3", 24.0, Some(0.125)), sc("P-4/1", 48.0, Some(0.25)), sc("M-4", 48.0, None), sc("X-1", 96.0, Some(f64::NAN))];
+        assert_eq!(sheet_import_scales(&job), vec![("A-3".to_string(), 3.0), ("P-4".to_string(), 12.0)]);
+        // The trade's plan onto the architect's at a quarter, never one to one.
+        assert_eq!(super::super::sheetreg::scale_ratio(Some(3.0), Some(12.0)), 0.25);
+        assert_eq!(super::super::sheetreg::scale_ratio(None, Some(12.0)), 1.0);
+    }
+
     /// Q6323: a plan imported at paper size (no scale note, none in its lettering, no dimension
     /// strings) is a warning in the report, never silent; the report counts how each sheet's
     /// scale was read.
     #[test]
     fn plans_left_at_paper_size_are_reported() {
         let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
-        let sc =
-            |sheet: &str, kind: &str, scale: f64, source: &str| SheetScale { sheet: sheet.into(), kind: kind.into(), scale, source: source.into(), plan_scale: None };
+        let sc = |sheet: &str, kind: &str, scale: f64, source: &str| SheetScale {
+            sheet: sheet.into(),
+            kind: kind.into(),
+            scale,
+            source: source.into(),
+            plan_scale: None,
+        };
         job.sheet_scales = vec![
             sc("P-1", "plan", 96.0, "scale note 1/8\" = 1'-0\""),
             sc("P-2", "plan", 96.0, "scale note 1/8\" 1'-0\" (read from lettering drawn as shapes)"),

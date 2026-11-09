@@ -17,6 +17,7 @@ mod jobunits;
 mod levelregions;
 mod mepnoise;
 mod pdf_underlay;
+mod planscale;
 mod printlinks;
 mod propfill;
 mod roofreal;

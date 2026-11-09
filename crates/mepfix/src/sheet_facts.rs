@@ -820,6 +820,60 @@ mod tests {
     use cadaddy_doc::{Common, HAlign, Line, Space, Text, VAlign};
     use cadaddy_geom::Vec3;
 
+    fn view(title: &str, scale: Option<&str>, area: f64) -> ViewTitle {
+        ViewTitle {
+            number: None,
+            title: title.into(),
+            scale_text: scale.map(str::to_string),
+            not_to_scale: false,
+            at: [0.0, 0.0],
+            region: (area > 0.0).then_some([0.0, 0.0, area, 1.0]),
+        }
+    }
+
+    /// Q6396: a sheet's plans print the scale most of its plan views do (a detail's or an
+    /// elevation's note is none of theirs, nor a key plan's), the bigger between scales printed as
+    /// often.
+    #[test]
+    fn a_sheets_plans_print_the_scale_of_its_plan_views() {
+        let roof = [
+            view("ROOF PLAN", Some("1/8\" = 1'-0\""), 900.0),
+            view("ELEVATION - EQUIPMENT SCREEN", Some("1/2\" = 1'-0\""), 200.0),
+            view("KEY PLAN", Some("1\" = 100'-0\""), 10.0),
+            view("PLAN DETAIL", Some("1 1/2\" = 1'-0\""), 30.0),
+        ];
+        let (k, v) = plan_print_scale(&roof).expect("a plan at a scale");
+        assert_eq!((k, v.title.as_str()), (0.125, "ROOF PLAN"));
+        // Two enlarged plans at 1/2" over one at 1/4", whatever their sizes.
+        let enlarged = [
+            view("ENLARGED PLAN - ROOM A", Some("1/2\" = 1'-0\""), 50.0),
+            view("ENLARGED PLAN - ROOM B", Some("1/2\" = 1'-0\""), 60.0),
+            view("PARTIAL FLOOR PLAN", Some("1/4\" = 1'-0\""), 500.0),
+            view("SECTION", Some("3/4\" = 1'-0\""), 80.0),
+        ];
+        assert_eq!(plan_print_scale(&enlarged).map(|(k, v)| (k, v.title.clone())), Some((0.5, "ENLARGED PLAN - ROOM B".to_string())));
+        // As often: the bigger.
+        let tie = [view("FLOOR PLAN", Some("1/4\" = 1'-0\""), 500.0), view("ENLARGED PLAN", Some("1/2\" = 1'-0\""), 300.0)];
+        assert_eq!(plan_print_scale(&tie).map(|(k, _)| k), Some(0.25));
+        // None to scale, or none a plan: nothing.
+        let mut nts = view("FLOOR PLAN", None, 100.0);
+        nts.not_to_scale = true;
+        assert!(plan_print_scale(&[nts, view("ELEVATION", Some("1/4\" = 1'-0\""), 10.0)]).is_none());
+        assert!(names_a_plan("Mezzanine and Low Roof Plan") && names_a_plan("RCP - LEVEL 2") && !names_a_plan("Planting Notes"));
+    }
+
+    /// A sheet that prints one scale note is never weighed (its note is its plans').
+    #[test]
+    fn a_sheet_of_one_scale_is_not_weighed() {
+        let mut d = Drawing::default();
+        text(&mut d, "ROOF PLAN", 0.0, 2.0, 0.25);
+        text(&mut d, "1/8\" = 1'-0\"", 0.0, 1.6, 0.12);
+        assert!(sheet_plan_print_scale(&d).is_none());
+        text(&mut d, "ELEVATION", 10.0, 2.0, 0.25);
+        text(&mut d, "1/2\" = 1'-0\"", 10.0, 1.6, 0.12);
+        assert_eq!(sheet_plan_print_scale(&d).map(|(k, v)| (k, v.title)), Some((0.125, "ROOF PLAN".to_string())));
+    }
+
     #[test]
     fn a_trades_sub_discipline_sheet_is_that_trades() {
         // Power, lighting and HVAC sheets are E and M sheets; fire alarm and life safety keep

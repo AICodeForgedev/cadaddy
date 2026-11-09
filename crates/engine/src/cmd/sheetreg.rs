@@ -347,6 +347,79 @@ mod tests {
         assert!(lines.through_sibling(0, 2, &placed).is_none(), "another drawing is no sibling");
     }
 
+    /// A made-up floor's walls (inches, 150' by 100'), sampled every 6": an outline and
+    /// partitions at uneven spacings, so it lies on itself in one place only.
+    fn floor(scale: f64, at: [f64; 2]) -> Vec<Vec2> {
+        let scale = 2.5 * scale;
+        let walls: [[f64; 4]; 9] = [
+            [0.0, 0.0, 720.0, 0.0],
+            [720.0, 0.0, 720.0, 480.0],
+            [720.0, 480.0, 0.0, 480.0],
+            [0.0, 480.0, 0.0, 0.0],
+            [170.0, 0.0, 170.0, 300.0],
+            [0.0, 300.0, 410.0, 300.0],
+            [410.0, 120.0, 410.0, 480.0],
+            [530.0, 0.0, 530.0, 210.0],
+            [530.0, 210.0, 720.0, 210.0],
+        ];
+        let mut out = Vec::new();
+        for [x0, y0, x1, y1] in walls {
+            let n = ((x1 - x0).hypot(y1 - y0) / 6.0).ceil().max(1.0) as usize;
+            for k in 0..=n {
+                let t = k as f64 / n as f64;
+                out.push(Vec2::new(at[0] + scale * (x0 + t * (x1 - x0)), at[1] + scale * (y0 + t * (y1 - y0))));
+            }
+        }
+        out
+    }
+
+    /// Q6396: a trade's plan whose sheet came in at twice the scale of the architect's plan (its
+    /// plans print 1/4" where the architect's print 1/8", and the architect's was read at that)
+    /// fits onto it at the ratio of their printed scales, about its middle; one to one it has
+    /// nothing to weigh (a sheet twice the plan's size), as every such sheet had before.
+    #[test]
+    fn a_sheet_fits_onto_a_plan_at_the_ratio_of_their_scales() {
+        let plan = floor(1.0, [100.0, 50.0]);
+        let lines = SheetLines {
+            rects: vec![[0.0, 0.0, 2000.0, 1400.0], [5000.0, 0.0, 9000.0, 2800.0]],
+            pts: vec![plan.clone(), floor(2.0, [5200.0, 100.0])],
+            stripped: vec![true, true],
+            k_in: 1.0,
+        };
+        assert!(lines.fit(1, &plan, 1.0).is_none(), "one to one: no fit");
+        let f = lines.fit(1, &plan, 0.5).expect("a fit at the ratio");
+        assert!((f.sim.scale() - 0.5).abs() < 1e-9, "never scaled to fit: {}", f.sim.scale());
+        // The trade sheet's corner of the floor lands on the plan's.
+        let q = f.sim.apply([5200.0, 100.0]);
+        assert!((q[0] - 100.0).abs() <= 18.0 && (q[1] - 50.0).abs() <= 18.0, "{q:?}");
+        assert!(f.score >= FIT_F1, "{}", f.score);
+        // The log's best try is weighed at that ratio too.
+        let tried = lines.best_tried(1, &plan, 0.5);
+        let k: f64 = tried.trim_start_matches("best scale ").split(',').next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        assert!((k / 0.5 - 1.0).abs() <= 0.025, "{tried}");
+        // A sheet placed through a sibling fitted at the ratio keeps its scale.
+        let (m, _, _) = SheetLines {
+            rects: vec![[5000.0, 0.0, 9000.0, 2800.0], [10000.0, 0.0, 14000.0, 2800.0]],
+            pts: vec![floor(2.0, [5200.0, 100.0]), floor(2.0, [10200.0, 100.0])],
+            stripped: vec![true, true],
+            k_in: 1.0,
+        }
+        .through_sibling(1, 0, &f.sim)
+        .expect("the same background, frame on frame");
+        assert!((m.scale() - 0.5).abs() < 1e-9);
+        let q = m.apply([10200.0, 100.0]);
+        assert!((q[0] - 100.0).abs() <= 18.0 && (q[1] - 50.0).abs() <= 18.0, "{q:?}");
+    }
+
+    #[test]
+    fn a_misread_ratio_is_one_to_one() {
+        assert_eq!(scale_ratio(Some(12.0), Some(12.0)), 1.0);
+        assert_eq!(scale_ratio(Some(1.0), Some(1000.0)), 1.0, "a thousandth is a misread note");
+        assert_eq!(scale_ratio(Some(f64::NAN), Some(12.0)), 1.0);
+        assert_eq!(scale_ratio(Some(-3.0), Some(12.0)), 1.0);
+        assert_eq!(scale_ratio(Some(24.0), Some(12.0)), 2.0);
+    }
+
     #[test]
     fn views_name_the_part_of_the_site_they_draw() {
         let texts = vec![

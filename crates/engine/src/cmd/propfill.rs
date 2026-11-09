@@ -3388,6 +3388,46 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
 mod tests {
     use super::*;
 
+    /// Q6396: a roof (no floor of its own) is judged by every storey under it, each in its own
+    /// plan: a roof over a mezzanine covers the storey round it, and its plan is on a sheet of
+    /// its own (moved onto the storey's by how the build stacks them).
+    #[test]
+    fn a_roof_is_judged_by_the_storeys_under_it_in_their_plans() {
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.levels.clear();
+        for (name, el) in [("Level 1", 0.0), ("Mezzanine", 9.0), ("Roof", 22.0)] {
+            sp.levels.push(cadaddy_walk3d::Level {
+                name: name.into(),
+                elevation_ft: el,
+                height_ft: 10.0,
+                ceiling_ft: 9.0,
+                region: None,
+                base: None,
+                attr: None,
+                sheet: None,
+            });
+        }
+        let mut fps: HashMap<String, Footprint> = HashMap::new();
+        fps.entry("level 1".into()).or_default().boxes.push([0.0, 0.0, 1200.0, 900.0]);
+        fps.entry("mezzanine".into()).or_default().boxes.push([5000.0, 0.0, 5400.0, 300.0]);
+        let under = footprints_of(&fps, &sp, "Roof");
+        assert_eq!(under.len(), 2, "both storeys under the roof");
+        assert_eq!(footprints_of(&fps, &sp, "Mezzanine").len(), 1, "a level with a footprint has its own");
+        // A roof point over the storey's far end, its plan 20000 units to the right of Level 1's
+        // and the mezzanine's 5000: inside Level 1, 50 ft off the mezzanine.
+        let stack = vec![
+            ("Level 1".to_string(), Vec2::new(0.0, 0.0)),
+            ("Mezzanine".to_string(), Vec2::new(-5000.0, 0.0)),
+            ("Roof".to_string(), Vec2::new(-20000.0, 0.0)),
+        ];
+        let p = Vec2::new(21000.0, 450.0);
+        let off: Vec<f64> = under.iter().map(|(fp, b)| fp.outside(in_plan_of(&stack, "Roof", b.as_deref().unwrap_or(""), p)) / 12.0).collect();
+        assert!(off.iter().any(|o| *o == 0.0), "{off:?}");
+        assert!(off.iter().any(|o| *o > 40.0), "{off:?}");
+        // A move not known: the point as it is.
+        assert_eq!(in_plan_of(&stack, "Roof", "Basement", p), p);
+    }
+
     /// Q6311: a window lights the room past its wall even where the room's outline keeps off the
     /// wall's face (a unit's sleeve or a furred stretch drawn against it), within a few feet.
     #[test]

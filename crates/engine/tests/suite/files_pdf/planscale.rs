@@ -37,11 +37,11 @@ fn sheet(plan_title: &str, plan_scale: &str, detail: bool) -> Session {
     rect(&mut s, [2.0, 4.0], [3.5, 5.0]);
     rect(&mut s, [5.0, 6.5], [6.0, 7.5]);
     rect(&mut s, [7.0, 4.0], [7.4, 4.4]);
-    text(&mut s, [1.0, 2.3], plan_title, 0.25);
+    text(&mut s, [1.0, 2.15], plan_title, 0.25);
     text(&mut s, [1.0, 1.9], plan_scale, 0.12);
     if detail {
         rect(&mut s, [11.0, 1.8], [14.0, 2.8]);
-        text(&mut s, [11.0, 1.3], "ELEVATION - EQUIPMENT SCREEN", 0.25);
+        text(&mut s, [11.0, 1.15], "ELEVATION - EQUIPMENT SCREEN", 0.25);
         text(&mut s, [11.0, 0.9], "1/2\" = 1'-0\"", 0.12);
     }
     text(&mut s, [15.0, 0.6], "A-103", 0.4);
