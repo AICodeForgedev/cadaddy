@@ -1423,7 +1423,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     let mut outline_cache = None;
     let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
     // A storey of a full set has thousands of names: say how far the trace is.
-    let (total, trace_started) = (names.len(), std::time::Instant::now());
+    let (total, trace_started) = (names.len(), web_time::Instant::now());
     let mut searching = std::time::Duration::ZERO;
     for (traced, (h, name, at, height, _)) in names.into_iter().enumerate() {
         if traced > 0 && traced % TRACE_PROGRESS_EVERY == 0 {
@@ -1463,7 +1463,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         // round it then either.
         let mut note = false;
         for (i, seed) in seeds.into_iter().enumerate() {
-            let search = std::time::Instant::now();
+            let search = web_time::Instant::now();
             let found = crate::cmd::hatch::loops_at_lazy_within(plan, seed, &mut outline_cache, Some(ROOM_REACH_FT * 12.0 * k));
             searching += search.elapsed();
             let Ok(loops) = found else { continue };
@@ -1514,7 +1514,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
             Some((poly, area)) if area >= least => (poly, area, false),
             _ if note => continue,
             _ => {
-                let search = std::time::Instant::now();
+                let search = web_time::Instant::now();
                 let found = crate::cmd::bspec::outline_round_label_within(plan, at, &mut outline_cache, least, Some(ROOM_REACH_FT * 12.0 * k));
                 searching += search.elapsed();
                 let Some(p) = found else { continue };
