@@ -1202,10 +1202,21 @@ pub(crate) fn outside_floors(d: &Drawing, sp: &BuildingSpec) -> Vec<Outlier> {
         return Vec::new();
     }
     let mut out = Vec::new();
+    // Site gear (the utility's transformer) and its pad stand outside the building by design.
+    let site: std::collections::BTreeSet<String> = sp
+        .mep
+        .equipment
+        .iter()
+        .filter(|e| super::utilityxfmr::is_site(e))
+        .flat_map(|e| [e.tag.to_ascii_uppercase(), format!("PAD-{}", e.tag.to_ascii_uppercase())])
+        .collect();
     // The built elements come after the sheets' objects: every object is looked at, the built
     // ones counted.
     for (e, part) in d.model.iter().filter_map(|e| super::wallgen::made_as(e).map(|p| (e, p))).take(MAX_ELEMENTS) {
         if ENVELOPE_PARTS.contains(&part.as_str()) {
+            continue;
+        }
+        if !site.is_empty() && super::bimlook::made_tag(e, "tag").is_some_and(|t| site.contains(&t.trim().to_ascii_uppercase())) {
             continue;
         }
         let Some(level) = super::bspec::made_level(e) else { continue };
