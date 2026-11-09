@@ -22052,21 +22052,13 @@ pub(crate) fn job_panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> 
 }
 
 /// The panel schedules on the electrical sheets, each panel once (a panel named twice: the
-/// schedule with more breakers read).
+/// schedule with more breakers read; one whose name is not printed as text named from the set's
+/// notes and one-line, [`super::panelsched::read_set`]).
 pub(crate) fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
-    let mut out: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
-    for (number, sub) in pages {
-        for p in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(sub), number) {
-            // A panel named twice: the schedule with more breakers read.
-            let read = |x: &cadaddy_walk3d::PanelSchedule| x.circuits.iter().filter(|c| !c.breaker.is_empty()).count();
-            match out.iter_mut().find(|o| o.panel.eq_ignore_ascii_case(&p.panel)) {
-                Some(o) if read(&p) > read(o) => *o = p,
-                Some(_) => {}
-                None => out.push(p),
-            }
-        }
-    }
-    out
+    let texts: Vec<(&str, Vec<cadaddy_mepfix::sheet_facts::TextItem>)> =
+        pages.iter().map(|(number, sub)| (number.as_str(), cadaddy_mepfix::sheet_facts::texts(sub))).collect();
+    let set: Vec<(&str, &[cadaddy_mepfix::sheet_facts::TextItem])> = texts.iter().map(|(n, t)| (*n, t.as_slice())).collect();
+    super::panelsched::read_set(&set)
 }
 
 /// The fire alarm plans of the set: the sheets whose title says fire alarm.
