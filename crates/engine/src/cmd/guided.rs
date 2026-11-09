@@ -7041,6 +7041,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // plans run through it the build offset past the gear's side as the field installs it, the
     // drawn route kept on the run beside the corrected one.
     gear_space_finding(job, &result["gearSpace"], "");
+    window_tag_findings(job, &result["window_tags"]);
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
     // Each sheet's registration onto its level's plan: how, the transform and its error or
@@ -14332,6 +14333,62 @@ fn gear_space_after_layout(s: &mut Session, job: &mut GuidedJob, sp: &mut cadadd
 
 /// The job's finding of what the build ran through electrical gear's dedicated space (its
 /// `gearSpace` report, [`super::gearspace::Cleared::json`]): how many runs, how many offset.
+/// The build's window tags against its windows (`window_tags`, one row a level, Q6311): a tag no
+/// window was built for is a finding a level, and the window types the plans tag that no window
+/// schedule row gives one finding (their sizes are the plan's openings, their sill and head the
+/// building's defaults).
+fn window_tag_findings(job: &mut GuidedJob, rows: &Value) {
+    let Some(rows) = rows.as_array() else { return };
+    let mut unscheduled: BTreeSet<String> = BTreeSet::new();
+    for r in rows.iter().take(MAX_LEVELS_REPORTED) {
+        let level = r["level"].as_str().unwrap_or("?");
+        unscheduled.extend(r["marks_without_schedule_row"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string));
+        let n = r["no_host_count"].as_u64().unwrap_or(0);
+        if n == 0 {
+            continue;
+        }
+        let listed: Vec<String> = r["no_host"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(5)
+            .map(|t| {
+                format!(
+                    "{} at {:.0},{:.0} ({})",
+                    t["mark"].as_str().unwrap_or("?"),
+                    t["at"][0].as_f64().unwrap_or(0.0),
+                    t["at"][1].as_f64().unwrap_or(0.0),
+                    t["why"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{n} window tags on {level} have no window built"),
+            &format!("Every window tag on a plan is a window in the outside wall that holds it; these found none: {}", listed.join("; ")),
+            2,
+            vec!["Check the tags against the plan's outside walls and the window schedule".into()],
+            None,
+            false,
+        );
+    }
+    if !unscheduled.is_empty() {
+        let marks: Vec<&str> = unscheduled.iter().map(String::as_str).take(20).collect();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Window types {} have no window schedule row", marks.join(", ")),
+            "The plans tag these window types but no window schedule read gives their size, sill or head: the windows take the plan's opening widths and the building's default sill and head, marked as defaults",
+            2,
+            vec!["Read the window types from the window schedule or legend (elevations), or ask the architect (RFI)".into()],
+            None,
+            false,
+        );
+    }
+}
+
+/// Most levels' window rows turned into findings.
+const MAX_LEVELS_REPORTED: usize = 200;
+
 fn gear_space_finding(job: &mut GuidedJob, g: &Value, when: &str) {
     let n = |k: &str| g[k].as_u64().map_or(0, |v| usize::try_from(v).unwrap_or(usize::MAX));
     let (found, corrected) = (n("found"), n("corrected"));
@@ -26828,6 +26885,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "keynote_systems": keynote_summary(&job),
         "dampers": dampers_summary(&job),
         "documented_objects": doc_objects_summary(&job),
+        "windows": windows_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
         "specifications": specs_report(&job),
         "sheet_scales": sheet_scales_report(&job),
@@ -27077,6 +27135,26 @@ fn dampers_summary(job: &GuidedJob) -> Value {
 /// What the build's documented-objects step did (Q6192): its counts by kind and level, each
 /// object with where it was read and its connection, what it proposed from notes and why other
 /// notes built nothing; null before.
+/// The report's windows (Q6311): per level and type, the window tags on the plans and the windows
+/// built, the untyped windows and the tags with no window, with the totals.
+fn windows_summary(job: &GuidedJob) -> Value {
+    let Some(rows) =
+        job.stages.iter().find(|st| st.name == StageName::BimBuild).and_then(|st| st.result.as_ref()).and_then(|r| r["window_tags"].as_array())
+    else {
+        return Value::Null;
+    };
+    let sum =
+        |key: &str| -> u64 { rows.iter().flat_map(|r| r[key].as_object().into_iter().flat_map(|m| m.values())).filter_map(Value::as_u64).sum() };
+    let total = |key: &str| -> u64 { rows.iter().filter_map(|r| r[key].as_u64()).sum() };
+    json!({
+        "tagged": sum("tagged"),
+        "built_typed": sum("built"),
+        "untyped": total("untyped"),
+        "tags_with_no_window": total("no_host_count"),
+        "by_level": rows,
+    })
+}
+
 fn doc_objects_summary(job: &GuidedJob) -> Value {
     job.stages
         .iter()
