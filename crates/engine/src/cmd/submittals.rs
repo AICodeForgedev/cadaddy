@@ -33,7 +33,7 @@ const PRODUCT_KINDS: &[&str] = &["device", "light_fixture", "plumbing_fixture", 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Apply Submittals", run)
-            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, category, quantity, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, dimmers: {protocol: n}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; each dimmer takes the dimming of the fixtures on its leg (mixed: a question); a person's values stay; luminaire_boxes_removed / luminaire_boxes_needed: a luminaire whose cut sheet gives it its own junction box (canless, remote driver, integral) loses the outlet box the build gave it (one that now needs one gets it at the next build)")
+            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, header ({named, why}: a page header naming a product its own cut sheet doesn't show: not taken, said as the elements' submittal_header), category, quantity, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, dimmers: {protocol: n}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; each dimmer takes the dimming of the fixtures on its leg (mixed: a question); a person's values stay; luminaire_boxes_removed / luminaire_boxes_needed: a luminaire whose cut sheet gives it its own junction box (canless, remote driver, integral) loses the outlet box the build gave it (one that now needs one gets it at the next build)")
             .menu(&["Tools", "Building", "Apply Submittals"]),
     ]
 }
@@ -52,6 +52,20 @@ impl Product {
     }
     fn value(&self, key: &str) -> Option<String> {
         self.field(key).and_then(|f| f.get("value")).and_then(Value::as_str).map(|v| v.trim().to_string())
+    }
+    /// The maker and catalog number its page header named that its own cut sheet doesn't show
+    /// (Q6336), and why it isn't taken: `("OTHERCO ZQ50RB", "page header only: …")`.
+    fn header(&self) -> Option<(String, String)> {
+        use super::spec_import::{CUT_SHEET_CODES, HEADER_CATALOG, HEADER_MANUFACTURER};
+        let cat = self.value(HEADER_CATALOG)?;
+        let maker = self.value(HEADER_MANUFACTURER).or_else(|| self.value(keys::MANUFACTURER)).unwrap_or_default();
+        let shows = self.value(CUT_SHEET_CODES).map(|c| format!(" (it shows {c})")).unwrap_or_default();
+        Some((
+            format!("{maker} {cat}").trim().to_string(),
+            format!(
+                "page header only: its own cut sheet doesn't show {cat}{shows}; not taken as the product (G-DOC-ORDER: the cut sheet outranks its page header)"
+            ),
+        ))
     }
 }
 
@@ -169,6 +183,12 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         set.push(("submittal", Prop::new(product.doc.clone(), src.clone())));
+        // A page header its own cut sheet contradicts (Q6336) is said beside the element, never
+        // built: the maker and catalog number it named stay off (the schedule's stand).
+        let header = product.header();
+        if let Some((named, why)) = &header {
+            set.push(("submittal_header", Prop::new(named.clone(), src.clone()).with_note(why)));
+        }
         for h in handles {
             let Some(e) = d.model.get(*h) else { continue };
             let mut store = props::read(&e.common.xdata);
@@ -178,6 +198,16 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                 if store.get(key).is_none_or(|old| old.source.kind != SourceKind::User) {
                     store.set(key, prop.clone());
                 }
+            }
+            if header.is_some() {
+                // What an earlier reading took from that header goes.
+                for (key, field) in [("catalog_number", keys::CATALOG_NUMBER), ("manufacturer", keys::MANUFACTURER)] {
+                    if product.value(field).is_none() && store.get(key).is_some_and(|old| old.source.kind == SourceKind::Submittal) {
+                        store.remove(key);
+                    }
+                }
+            } else if store.get("submittal_header").is_some_and(|old| old.source.kind == SourceKind::Submittal) {
+                store.remove("submittal_header");
             }
             if store != before {
                 changes.push((*h, store));
@@ -244,6 +274,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                 json!({
                     "manufacturer": p.value(keys::MANUFACTURER).unwrap_or_default(),
                     "catalog_number": p.value(keys::CATALOG_NUMBER).unwrap_or_default(),
+                    "header": p.header().map(|(named, why)| json!({"named": named, "why": why})),
                     "category": p.proposal.get("category").and_then(Value::as_str).unwrap_or_default(),
                     "quantity": p.value(super::spec_import::QUANTITY).and_then(|q| q.parse::<u32>().ok()),
                     "doc": p.doc,
@@ -299,10 +330,15 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
             // only a word on a page, unless its cut sheet shows a luminaire (a custom fixture's
             // shop drawing names its type and no maker).
             let luminaire = prop.get("category").and_then(Value::as_str) == Some("luminaire");
-            if mark.is_empty() || (!luminaire && product.value(keys::MANUFACTURER).is_none() && product.value(keys::CATALOG_NUMBER).is_none()) {
+            if mark.is_empty()
+                || (!luminaire
+                    && product.value(keys::MANUFACTURER).is_none()
+                    && product.value(keys::CATALOG_NUMBER).is_none()
+                    && product.header().is_none())
+            {
                 continue;
             }
-            let page = [keys::CATALOG_NUMBER, keys::MANUFACTURER]
+            let page = [keys::CATALOG_NUMBER, keys::MANUFACTURER, super::spec_import::HEADER_CATALOG]
                 .iter()
                 .find_map(|k| product.field(k).and_then(|f| f.get("source")).and_then(Value::as_str).map(str::to_string))
                 .unwrap_or_default();
@@ -487,6 +523,47 @@ Model Number : WRAP 48 840
         assert_eq!(prop(&s, b, "catalog_number").unwrap().text(), "MINE-1", "a person's value stays");
         assert!(prop(&s, other, "manufacturer").is_none());
         assert!(s.doc().unwrap().bim_types.get("Q7").is_some(), "the product is in the type catalog");
+    }
+
+    /// Q6336: a type whose page header names a product its own cut sheet doesn't show gets neither
+    /// that maker nor that catalog number (one an earlier reading put there goes); the header is
+    /// said beside it, and the type is still a submitted product.
+    #[test]
+    fn a_page_header_its_cut_sheet_contradicts_is_said_not_applied() {
+        let mut s = Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let a = device(&mut s, "Q4", 0.0);
+        {
+            let d = s.doc_mut().unwrap();
+            let mut store = props::read(&d.model.get(a).unwrap().common.xdata);
+            store.set("catalog_number", Prop::new("ZQ50RB", Source::from_doc(SourceKind::Submittal, "Old Package p.1")));
+            store.set("manufacturer", Prop::new("OTHERCO LIGHTING", Source::from_doc(SourceKind::Submittal, "Old Package p.1")));
+            d.modify_entity(a, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).unwrap();
+        }
+        let file = std::env::temp_dir().join(format!("cadaddy-submittal-header-{}.txt", std::process::id()));
+        let text = "\
+--- page 1 of 1 ---
+Job Name : SOME JOB   Type : Q4
+Manufacturer : OTHERCO LIGHTING
+Model Number : ZQ50RB
+Brightco Duo battery units throw two beams of light down a corridor when the power goes out.
+Each head turns and tilts on its own, and a test button on the front checks the battery every month.
+Mount it high on a wall or under a soffit; it ships with a knockout plate and a hanging bracket.
+Ordering guide   Example: EU2BK
+EU2 Duo twin head battery unit   B Lithium cells   K Black   4M Remote heads
+";
+        std::fs::write(&file, text).unwrap();
+        let r = s.execute(CMD, &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        std::fs::remove_file(&file).ok();
+        assert_eq!(r["applied"]["Q4"], 1, "still the type's submittal: {r}");
+        assert_eq!(r["products"]["Q4"]["catalog_number"], "", "{r}");
+        assert_eq!(r["products"]["Q4"]["header"]["named"], "OTHERCO LIGHTING ZQ50RB", "{r}");
+        assert!(prop(&s, a, "catalog_number").is_none(), "the header's number, read before, goes");
+        assert!(prop(&s, a, "manufacturer").is_none(), "and its maker");
+        let h = prop(&s, a, "submittal_header").unwrap();
+        assert_eq!((h.text(), h.source.kind), ("OTHERCO LIGHTING ZQ50RB".to_string(), SourceKind::Submittal));
+        assert!(h.note.as_deref().is_some_and(|n| n.contains("page header only") && n.contains("EU2")), "{:?}", h.note);
+        assert!(r["questions"].as_array().is_some_and(|q| q.iter().any(|q| q["mark"] == "Q4")), "a question: {r}");
     }
 
     /// A luminaire or a switch element of type `mark` on leg `leg` of room 101.
