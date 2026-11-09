@@ -306,6 +306,77 @@ fn hidden_text_confirms_outlined_lettering() {
     assert!(hatches.iter().filter(|e| near(e, 300.0)).all(|e| e.common.layer != SHX_SOURCE_LAYER));
 }
 
+/// A glyph's strokes, for a page that fills each stroke of a letter on its own: an A's two legs
+/// and its bar, a C's arc in three, a 1's stem, flag and foot, a 0's ring in halves.
+fn glyph_strokes(ch: char) -> Vec<Vec<(f64, f64)>> {
+    let arc = |cx: f64, cy: f64, rx: f64, ry: f64, a0: f64, a1: f64| -> Vec<(f64, f64)> {
+        (0..=8)
+            .map(|i| {
+                let a = (a0 + (a1 - a0) * i as f64 / 8.0).to_radians();
+                (cx + rx * a.cos(), cy + ry * a.sin())
+            })
+            .collect()
+    };
+    match ch {
+        'A' => vec![vec![(4.0, 0.0), (24.0, 70.0)], vec![(24.0, 70.0), (44.0, 0.0)], vec![(11.0, 24.0), (37.0, 24.0)]],
+        'C' => vec![arc(24.0, 35.0, 20.0, 31.0, 45.0, 135.0), arc(24.0, 35.0, 20.0, 31.0, 125.0, 235.0), arc(24.0, 35.0, 20.0, 31.0, 225.0, 315.0)],
+        '1' => vec![vec![(24.0, 0.0), (24.0, 70.0)], vec![(24.0, 70.0), (10.0, 56.0)], vec![(10.0, 0.0), (38.0, 0.0)]],
+        '0' => vec![arc(22.0, 35.0, 12.0, 31.0, 85.0, 275.0), arc(22.0, 35.0, 12.0, 31.0, 265.0, 455.0)],
+        '4' => vec![vec![(32.0, 0.0), (32.0, 70.0)], vec![(32.0, 70.0), (4.0, 22.0)], vec![(4.0, 22.0), (44.0, 22.0)]],
+        _ => Vec::new(),
+    }
+}
+
+/// `text` filled stroke by stroke (one `f` per stroke, each stroke one closed outline round
+/// it), its cap `height` points tall at `at`; a period is a filled square.
+fn outlined_in_pieces(text: &str, at: (f64, f64), height: f64) -> String {
+    let k = height / 70.0;
+    let mut out = String::from("0 0 0 rg\n");
+    let mut along = 0.0;
+    for ch in text.chars() {
+        let m = [k, 0.0, 0.0, k, at.0 + along * k, at.1];
+        // a period's cell is narrow
+        along += if ch == '.' { 22.0 } else { 56.0 };
+        if ch == '.' {
+            out.push_str(&path(&[vec![(4.0, 0.0), (14.0, 0.0), (14.0, 10.0), (4.0, 10.0)]], m));
+            out.push_str("f\n");
+        }
+        for stroke in glyph_strokes(ch) {
+            // the stroke's outline: one side out, the other back
+            let pieces = thick(&stroke, 8.0);
+            let mut ring: Vec<(f64, f64)> = pieces.iter().filter_map(|q| Some([*q.first()?, *q.get(1)?])).flatten().collect();
+            ring.extend(pieces.iter().rev().filter_map(|q| Some([*q.get(2)?, *q.get(3)?])).flatten());
+            out.push_str(&path(&[ring], m));
+            out.push_str("f\n");
+        }
+    }
+    out
+}
+
+#[test]
+fn lettering_filled_stroke_by_stroke_reads_as_its_letters() {
+    // a title block's sheet number, each letter filled in pieces, and smaller ones, with a
+    // period in them (nothing else on the page tells what they are)
+    let content = [
+        outlined_in_pieces("CA401", (500.0, 60.0), 20.0),
+        outlined_in_pieces("CA10.4", (100.0, 300.0), 14.0),
+        outlined_in_pieces("CA14", (100.0, 200.0), 14.0),
+        outlined_in_pieces("CA10.1", (300.0, 200.0), 14.0),
+    ]
+    .concat();
+    let r = read(&content);
+    let all = texts(&r);
+    for (value, at, h) in
+        [("CA401", (500.0, 60.0), 20.0), ("CA10.4", (100.0, 300.0), 14.0), ("CA14", (100.0, 200.0), 14.0), ("CA10.1", (300.0, 200.0), 14.0)]
+    {
+        let t = find(&all, value);
+        assert!((t.at.0 - at.0).abs() < h * 0.3 && (t.at.1 - at.1).abs() < h * 0.2, "{value} at {:?}", t.at);
+        assert!((t.height - h).abs() < h * 0.2, "{value} height {}", t.height);
+    }
+    // and no letter read twice from its pieces
+    assert!(all.iter().all(|t| t.value.len() <= 6), "{:?}", all.iter().map(|t| &t.value).collect::<Vec<_>>());
+}
+
 #[test]
 fn shapes_that_are_not_lettering_stay_shapes() {
     let mut content = String::from("0 0 0 rg\n");

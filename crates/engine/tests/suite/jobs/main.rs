@@ -72,6 +72,7 @@ mod slabarea;
 mod soak5speed;
 mod spectag;
 mod stairs;
+mod swing_joined;
 mod tagidentity;
 mod tradeatoms;
 mod typicalfloors;

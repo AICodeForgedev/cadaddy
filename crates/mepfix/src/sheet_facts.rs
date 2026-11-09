@@ -150,6 +150,13 @@ fn horizontal(t: &TextItem) -> bool {
     t.rotation.sin().abs() < 0.05 && t.rotation.cos() > 0.0
 }
 
+/// A text's lettering as a sheet number would be written: without the marks lettering read off
+/// the page can carry at either end (a box's edge read as `)` or `#`, a speck as `.`). A
+/// number starts with a letter and ends with a letter or digit.
+pub fn number_text(v: &str) -> &str {
+    v.trim().trim_matches(|c: char| !c.is_ascii_alphanumeric())
+}
+
 /// A sheet number: one to three letters, maybe a dash, then digits with maybe a dotted part
 /// (`E-6`, `A122`, `FP-1.1`, `M2.01`).
 pub fn is_sheet_number(t: &str) -> bool {
@@ -234,10 +241,10 @@ pub fn number_candidates(d: &Drawing, texts: &[TextItem]) -> Vec<NumberCandidate
     let median = heights.get(heights.len() / 2).copied().filter(|h| *h > 0.0).unwrap_or(1.0);
     texts
         .iter()
-        .filter(|t| is_sheet_number(&t.value) || crate::sheet_reader::looks_like_sheet_number(&t.value))
+        .filter(|t| is_sheet_number(number_text(&t.value)) || crate::sheet_reader::looks_like_sheet_number(number_text(&t.value)))
         .take(MAX_CANDIDATES)
         .map(|t| NumberCandidate {
-            value: t.value.trim().to_string(),
+            value: number_text(&t.value).to_string(),
             at: [(t.at.x - lo[0]) / size[0], (t.at.y - lo[1]) / size[1]],
             size: t.height / median,
         })
@@ -255,8 +262,10 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
         // The sheet number: the largest sheet-number lettering below the label, near it.
         let number = texts
             .iter()
-            .filter(|t| is_sheet_number(&t.value) && t.at.y < l.at.y && t.at.x >= l.at.x - 5.0 * h && t.at.dist(l.at) <= 60.0 * h)
-            .max_by(|a, b| designator_prefix(&a.value).cmp(&designator_prefix(&b.value)).then(a.height.total_cmp(&b.height)));
+            .filter(|t| is_sheet_number(number_text(&t.value)) && t.at.y < l.at.y && t.at.x >= l.at.x - 5.0 * h && t.at.dist(l.at) <= 60.0 * h)
+            .max_by(|a, b| {
+                designator_prefix(number_text(&a.value)).cmp(&designator_prefix(number_text(&b.value))).then(a.height.total_cmp(&b.height))
+            });
         // The title: the lines right under the label, top down, until a gap or the number.
         let mut lines: Vec<&TextItem> = texts
             .iter()
@@ -266,7 +275,7 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
                     && t.at.y < l.at.y
                     && t.at.y > l.at.y - 14.0 * h
                     && t.height >= 0.9 * h
-                    && !is_sheet_number(&t.value)
+                    && !is_sheet_number(number_text(&t.value))
             })
             .collect();
         lines.sort_by(|a, b| b.at.y.total_cmp(&a.at.y));
@@ -281,9 +290,9 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
         }
         if let Some(n) = number {
             return Some(SheetIdent {
-                number: n.value.trim().to_string(),
+                number: number_text(&n.value).to_string(),
                 title: title.join(" "),
-                discipline: discipline_of(&n.value),
+                discipline: discipline_of(number_text(&n.value)),
                 source: "title_block".into(),
             });
         }
@@ -292,15 +301,17 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
     // sheet-number lettering nearest the label.
     if let Some(l) = texts.iter().filter(|t| horizontal(t)).find(|t| is_number_label(&t.value)) {
         let h = l.height;
-        if let Some(n) = texts
-            .iter()
-            .filter(|t| is_sheet_number(&t.value) && t.height >= h && t.at.dist(l.at) <= 25.0 * h)
-            .min_by(|a, b| designator_prefix(&b.value).cmp(&designator_prefix(&a.value)).then(a.at.dist(l.at).total_cmp(&b.at.dist(l.at))))
+        if let Some(n) =
+            texts.iter().filter(|t| is_sheet_number(number_text(&t.value)) && t.height >= h && t.at.dist(l.at) <= 25.0 * h).min_by(|a, b| {
+                designator_prefix(number_text(&b.value))
+                    .cmp(&designator_prefix(number_text(&a.value)))
+                    .then(a.at.dist(l.at).total_cmp(&b.at.dist(l.at)))
+            })
         {
             return Some(SheetIdent {
-                number: n.value.trim().to_string(),
+                number: number_text(&n.value).to_string(),
                 title: String::new(),
-                discipline: discipline_of(&n.value),
+                discipline: discipline_of(number_text(&n.value)),
                 source: "number_label".into(),
             });
         }
@@ -317,17 +328,14 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
     texts
         .iter()
         .filter(|t| {
-            is_sheet_number(&t.value)
-                && designator_letters(&t.value).len() <= 2
-                && designator_prefix(&t.value)
-                && t.height >= 2.0 * median
-                && near_edge(t)
+            let v = number_text(&t.value);
+            is_sheet_number(v) && designator_letters(v).len() <= 2 && designator_prefix(v) && t.height >= 2.0 * median && near_edge(t)
         })
         .max_by(|a, b| a.height.total_cmp(&b.height))
         .map(|n| SheetIdent {
-            number: n.value.trim().to_string(),
+            number: number_text(&n.value).to_string(),
             title: String::new(),
-            discipline: discipline_of(&n.value),
+            discipline: discipline_of(number_text(&n.value)),
             source: "largest_number".into(),
         })
 }
@@ -875,6 +883,21 @@ mod tests {
         text(&mut d, "M2.01", 900.0, 10.0, 16.0);
         let s = identify_sheet(&texts(&d)).expect("number");
         assert_eq!((s.number.as_str(), s.discipline.as_str(), s.source.as_str()), ("M2.01", "M", "largest_number"));
+    }
+
+    #[test]
+    fn a_number_read_with_marks_at_its_ends_is_still_the_number() {
+        // lettering read off the page (outlines, strokes) can carry a box edge or a speck
+        let mut d = Drawing::default();
+        for i in 0..20 {
+            text(&mut d, "NOTE", 10.0, f64::from(i) * 10.0, 4.0);
+        }
+        text(&mut d, ".)M2.01", 900.0, 10.0, 16.0);
+        let s = identify_sheet(&texts(&d)).expect("number");
+        assert_eq!((s.number.as_str(), s.discipline.as_str()), ("M2.01", "M"));
+        let c = number_candidates(&d, &texts(&d));
+        assert_eq!(c.iter().map(|c| c.value.as_str()).collect::<Vec<_>>(), ["M2.01"]);
+        assert_eq!((number_text("# XA411 "), number_text("(A)"), number_text("..."), number_text("")), ("XA411", "A", "", ""));
     }
 
     #[test]

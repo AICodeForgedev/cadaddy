@@ -568,9 +568,19 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     let c = |k: &str| counts.get(k).copied().unwrap_or(0);
     // Each planned level's window tags against its windows (Q6311).
     let window_tags: Vec<Value> = planned.iter().filter_map(|(si, pl)| scene.levels.get(*si).map(|l| pl.window_tally.to_json(&l.name))).collect();
+    // Each level built from its plan: its walls and the doors and windows cut in them (a floor of
+    // walls with almost no openings is read from a plan that draws none: see the guided job).
+    let by_level: Vec<Value> = planned
+        .iter()
+        .filter_map(|(si, pl)| {
+            let level = scene.levels.get(*si)?;
+            let windows = pl.leaves.iter().filter(|l| l.window).count();
+            Some(json!({"level": level.name, "walls": pl.walls.len(), "doors": pl.leaves.len() - windows, "windows": windows}))
+        })
+        .collect();
     let mut r = json!({
         "walls": c("wall"), "doors": c("door"), "windows": c("window"), "floors": c("floor"), "ceilings": c("ceiling"),
-        "levels": scene.levels.len(), "removed": removed, "notes": notes, "window_tags": window_tags,
+        "levels": scene.levels.len(), "removed": removed, "notes": notes, "window_tags": window_tags, "openings_by_level": by_level,
     });
     if budget_exceeded {
         r["budget_exceeded"] = json!(true);
@@ -3369,13 +3379,14 @@ struct Swing {
     handle: Handle,
 }
 
-/// The door swings among `ents`: arcs and open polylines (a swing flattened, as prints arrive)
-/// on one circle through 60–100°, a door's radius (16"–54" at `k` units per inch).
+/// The door swings among `ents`: arcs and open polylines (a swing flattened, as prints arrive,
+/// alone or joined to its leaf and the wall's lines) on one circle through 60–100°, a door's
+/// radius (16"–54" at `k` units per inch).
 fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
     let (rmin, rmax) = (16.0 * k, 54.0 * k);
     let mut out = Vec::new();
     for e in ents.iter().take(MAX_OBJECTS) {
-        let swing = match &e.kind {
+        let swings: Vec<(Vec2, f64, [Vec2; 2])> = match &e.kind {
             EntityKind::Arc(a) => {
                 let mut sweep = (a.end - a.start).rem_euclid(std::f64::consts::TAU);
                 if sweep < 1e-9 {
@@ -3385,14 +3396,19 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
                 (60.0..=100.0)
                     .contains(&sweep.to_degrees())
                     .then(|| (c, a.radius, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
+                    .into_iter()
+                    .collect()
             }
             EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
                 let pts = cadaddy_geom::Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
-                super::perceive::geometry::flat_swing(&pts).map(|(c, r, _, ends)| (c, r, ends))
+                super::perceive::geometry::flat_swings(&pts).into_iter().map(|(c, r, _, ends)| (c, r, ends)).collect()
             }
-            _ => None,
+            _ => Vec::new(),
         };
-        if let Some((c, r, ends)) = swing.filter(|(c, r, _)| c.is_finite() && (rmin..=rmax).contains(r)) {
+        for (c, r, ends) in swings.into_iter().filter(|(c, r, _)| c.is_finite() && (rmin..=rmax).contains(r)) {
+            if out.len() >= MAX_OBJECTS {
+                break;
+            }
             out.push(Swing { c, r, ends, handle: e.handle });
         }
     }
