@@ -134,6 +134,8 @@ pub(crate) struct Rules {
     pub pole: Pole,
     pub ground_words: Vec<String>,
     pub trench_item: String,
+    pub parallel_spacing_in: f64,
+    pub parallel_source: String,
     pub cover_in: f64,
     pub cover_source: String,
     pub branch_conduit_in: f64,
@@ -990,6 +992,42 @@ fn ordered(v: f64) -> Ord64 {
     Ord64(v)
 }
 
+/// A path moved `d` to its left (each corner on both its sides' offsets).
+fn offset_path(pts: &[[f64; 2]], d: f64) -> Vec<[f64; 2]> {
+    if d.abs() < 1e-12 || pts.len() < 2 {
+        return pts.to_vec();
+    }
+    let normal = |a: [f64; 2], b: [f64; 2]| {
+        let l = dist(a, b);
+        if l > 1e-12 { Some([-(b[1] - a[1]) / l, (b[0] - a[0]) / l]) } else { None }
+    };
+    let n = pts.len();
+    (0..n)
+        .map(|i| {
+            let before = i.checked_sub(1).and_then(|j| pts.get(j).zip(pts.get(i))).and_then(|(a, b)| normal(*a, *b));
+            let after = pts.get(i + 1).and_then(|b| normal(*pts.get(i)?, *b));
+            let p = pts.get(i).copied().unwrap_or_default();
+            let m = match (before, after) {
+                (Some(a), Some(b)) => {
+                    let s = [a[0] + b[0], a[1] + b[1]];
+                    let dot = (1.0 + a[0] * b[0] + a[1] * b[1]) / 2.0;
+                    // The corner's miter, kept short at a sharp turn.
+                    let k = if dot > 0.1 { 1.0 / (2.0 * dot) } else { 5.0 };
+                    [s[0] * k, s[1] * k]
+                }
+                (Some(a), None) | (None, Some(a)) => a,
+                (None, None) => [0.0, 0.0],
+            };
+            [p[0] + m[0] * d, p[1] + m[1] * d]
+        })
+        .collect()
+}
+
+/// Whether two runs lie in one trench: as many points, each within `tol` of the other's.
+fn same_trench(a: &[[f64; 2]], b: &[[f64; 2]], tol: f64) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(p, q)| dist(*p, *q) <= tol)
+}
+
 fn path_len(pts: &[[f64; 2]]) -> f64 {
     pts.windows(2)
         .map(|w| match w {
@@ -1532,11 +1570,17 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
             None if branch => (1, r.branch_conduit_in, format!("rule: {}", r.branch_conduit_source)),
             None => (1, super::keynotes::BURIED_MIN_IN, "rule: smallest trade size (no note or schedule gives it)".to_string()),
         };
-        let basis = match note {
+        let mut basis = match note {
             Some(n) => format!("{why}; called by {}: {}", n.callout.cite(), n.callout.text.chars().take(160).collect::<String>()),
             None => why.to_string(),
         };
-        for _ in 0..count {
+        if count > 1 {
+            basis = format!("{basis}; {} conduits, {}", count, r.parallel_source);
+        }
+        // Parallel conduits side by side in their trench, each its own run.
+        let pitch = (size + r.parallel_spacing_in.max(0.0)) / 12.0 * upf;
+        for k in 0..count {
+            let pts = offset_path(&pts, (f64::from(k) - f64::from(count - 1) / 2.0) * pitch);
             if pts.len() >= 2 {
                 out.runs.push(buried(slab, sheet, pts.clone(), size, made, basis.clone(), &size_from));
             }
@@ -1700,16 +1744,17 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
 /// (a note's parallel conduits share it), its stub-ups none.
 pub(crate) fn trench_ft(sp: &BuildingSpec) -> BTreeMap<String, (f64, Vec<String>)> {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let mut seen: BTreeSet<(String, Vec<[i64; 2]>)> = BTreeSet::new();
+    let tol = 2.0 * upf;
+    let mut seen: Vec<(&str, &[[f64; 2]])> = Vec::new();
     let mut out: BTreeMap<String, (f64, Vec<String>)> = BTreeMap::new();
-    for (i, r) in sp.mep.runs.iter().enumerate().take(200_000) {
+    for (i, r) in sp.mep.runs.iter().enumerate().take(20_000) {
         if !r.source_sheet.starts_with(SOURCE_PREFIX) || r.points.len() < 2 || r.top_ft.is_some() {
             continue;
         }
-        let key: Vec<[i64; 2]> = r.points.iter().map(|p| [(p[0] * 10.0).round() as i64, (p[1] * 10.0).round() as i64]).collect();
-        if !seen.insert((r.level.clone(), key)) {
+        if seen.iter().any(|(l, p)| *l == r.level.as_str() && same_trench(p, &r.points, tol)) {
             continue;
         }
+        seen.push((r.level.as_str(), &r.points));
         let e = out.entry(r.level.clone()).or_default();
         e.0 += path_len(&r.points) / upf;
         if e.1.len() < 200 {
@@ -2007,7 +2052,13 @@ mod tests {
         let conduit_ft: f64 = built.runs.iter().filter(|r| r.top_ft.is_none()).map(|r| path_len(&r.points) / 12.0).sum();
         let primary_ft = primary.first().map_or(0.0, |r| path_len(&r.points) / 12.0);
         let trench: f64 = trench_ft(&sp2).values().map(|(f, _)| *f).sum();
-        assert!(primary_ft > 0.0 && (trench - (conduit_ft - primary_ft)).abs() < 1e-6, "{trench} {conduit_ft} {primary_ft}");
+        assert!(primary_ft > 0.0 && (trench - (conduit_ft - primary_ft)).abs() < 0.1, "{trench} {conduit_ft} {primary_ft}");
+        // Side by side, 6 in apart centre to centre (4 in conduits, 2 in between).
+        let gap_in = match (primary.first(), primary.get(1)) {
+            (Some(a), Some(b)) => a.points.first().zip(b.points.first()).map(|(p, q)| dist(*p, *q)),
+            _ => None,
+        };
+        assert!(gap_in.is_some_and(|g| (g - 6.0).abs() < 1e-6), "{gap_in:?}");
         assert!(forget(&mut sp2) > 0);
         assert_eq!(sp2, sp);
     }

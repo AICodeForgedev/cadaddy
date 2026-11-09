@@ -55,6 +55,8 @@
   },
   "ground_words": ["BOLLARD", "GROUND MOUNT", "INGRADE", "IN-GRADE", "UPLIGHT"],
   "trench_item": "Trench, excavate and backfill (buried site conduit)",
+  "parallel_spacing_in": 2.0,
+  "parallel_source": "trade practice: a note's parallel conduits laid side by side in one trench, 2 in apart on spacers (NEC 300.5(I): a circuit's conductors together; the trench one for the set)",
   "cover_in": 24.0,
   "cover_source": "NEC Table 300.5: rigid nonmetallic conduit 18 in cover, 24 in under parking lots and drives; a site run crosses paving, so 24 in",
   "branch_conduit_in": 1.0,
