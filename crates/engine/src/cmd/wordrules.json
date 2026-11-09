@@ -1320,6 +1320,83 @@
     [
      "GM",
      "gas_meter"
+    ],
+    [
+     "HP",
+     "heat_pump"
+    ],
+    [
+     "AHP",
+     "heat_pump"
+    ],
+    [
+     "DOAS",
+     "outdoor_air_unit"
+    ],
+    [
+     "OAU",
+     "outdoor_air_unit"
+    ],
+    [
+     "ERV",
+     "energy_recovery_unit"
+    ],
+    [
+     "FCU",
+     "fan_coil_unit"
+    ],
+    [
+     "PTAC",
+     "ptac"
+    ],
+    [
+     "UH",
+     "unit_heater"
+    ],
+    [
+     "EUH",
+     "unit_heater"
+    ]
+   ]
+  },
+  "equipment.kind_by_title_words": {
+   "source": "trade practice: an equipment schedule's title words and the kind of what its rows are, the first pair whose words the title has (a heat pump is no pump, a fan coil unit no fan, a packaged terminal unit no rooftop unit); read before equip_reader.rs `kind_from_title`'s own words (Q6313)",
+   "pairs": [
+    [
+     "HEAT PUMP",
+     "heat_pump"
+    ],
+    [
+     "FAN COIL",
+     "fan_coil_unit"
+    ],
+    [
+     "PACKAGED TERMINAL",
+     "ptac"
+    ],
+    [
+     "DEDICATED OUTDOOR AIR",
+     "outdoor_air_unit"
+    ],
+    [
+     "OUTDOOR AIR UNIT",
+     "outdoor_air_unit"
+    ],
+    [
+     "ENERGY RECOVERY",
+     "energy_recovery_unit"
+    ],
+    [
+     "DUCTLESS SPLIT",
+     "split_system"
+    ],
+    [
+     "SPLIT SYSTEM",
+     "split_system"
+    ],
+    [
+     "UNIT HEATER",
+     "unit_heater"
     ]
    ]
   },
@@ -1627,7 +1704,11 @@
     "VRF",
     "KEF",
     "TEF",
-    "GEF"
+    "GEF",
+    "AHP",
+    "DOAS",
+    "OAU",
+    "FCU"
    ]
   },
   "equipment.typical_load_words": {
