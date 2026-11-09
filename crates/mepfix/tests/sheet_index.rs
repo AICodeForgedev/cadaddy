@@ -910,3 +910,30 @@ fn classify_reads_several_pages_at_once_and_keeps_the_sets_order() {
     assert_eq!(parallel.sheets.iter().filter(|e| !e.superseded_by.is_empty()).count(), 6, "the later set's copies are current");
     assert_eq!(entries_of(&parallel).iter().filter(|e| e.6 == "Failed").map(|e| e.7.clone()).collect::<Vec<_>>(), [Some("no such page".to_string())]);
 }
+
+/// A building of one storey with a mezzanine (Q6322): the mezzanine's plans of every trade are on
+/// its own level, ranked over the floor and under the roof; the building is still of one storey,
+/// so a plan naming no level is on its floor; the floor's height runs past the mezzanine to the
+/// roof, the mezzanine's from its own mark up to the roof.
+#[test]
+fn a_mezzanine_is_a_level_inside_its_storey() {
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["MEZZANINE PLAN"], "")),
+        ("Set.pdf", 3, sheet("A103", &["ROOF PLAN"], "")),
+        ("Set.pdf", 4, sheet("M102", &["MECHANICAL", "MEZZANINE PLAN"], "")),
+        ("Set.pdf", 5, sheet("E101", &["POWER PLAN"], "")),
+        ("Set.pdf", 6, sheet("E102", &["LIGHTING MEZZ. PLAN"], "")),
+        ("Set.pdf", 7, marked("A301", &["BUILDING SECTIONS"], &[("FIRST FLOOR", "100'-0\""), ("MEZZANINE", "110'-6\""), ("ROOF", "122'-0\"")])),
+    ]);
+    let index = printset::sheet_index(&project);
+    assert_eq!(levels_of(&index), [lv("1", Some(0.0), Some(22.0)), lv("M", Some(10.5), Some(11.5)), lv("R", Some(22.0), None)]);
+    for (n, level, source) in
+        [("A102", "M", "title"), ("M102", "M", "title"), ("E102", "M", "title"), ("A101", "1", "default"), ("E101", "1", "default")]
+    {
+        let s = index.sheets.iter().find(|s| s.number == n).expect("sheet");
+        assert_eq!((s.level.as_str(), s.level_source.as_str()), (level, source), "{n}");
+    }
+    let m = index.levels.iter().find(|l| l.name == "M").expect("mezzanine");
+    assert_eq!(m.sheets.len(), 3, "{:?}", m.sheets);
+}

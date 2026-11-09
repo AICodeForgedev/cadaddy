@@ -204,7 +204,8 @@ fn index_levels(job: Option<&Value>) -> Vec<LevelNote> {
         } else {
             c.clone()
         };
-        let Some((name, kind)) = levels::canonical_level(&spelled) else { continue };
+        // `M`: the mezzanine's code.
+        let Some((name, kind)) = levels::level_or_code(&spelled) else { continue };
         out.push(LevelNote { name, kind, elevation_ft: e, source: format!("sheet index: level {code}") });
     }
     out
@@ -261,7 +262,8 @@ fn roof_estimate(sp: &BuildingSpec, job: Option<&Value>) -> Option<(f64, String)
         .take(levels::MAX_NOTES)
         .filter_map(|l| {
             let code = l.get("name").and_then(Value::as_str)?.trim().to_ascii_uppercase();
-            let r = levels::code_rank(&code).filter(|r| *r < 100_000)?;
+            // A mezzanine is inside a storey: the roof goes over the storey, not over it.
+            let r = levels::code_rank(&code).filter(|r| *r < 100_000 && !levels::is_mezzanine(&code))?;
             let f = |k: &str| l.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
             Some((r, code, f("elevation_ft"), f("height_ft").filter(|h| *h > 0.0)))
         })
