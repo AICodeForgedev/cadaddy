@@ -316,15 +316,12 @@ fn run_gear_read(s: &mut Session, p: &Value) -> Result<Value> {
         ranked.sort();
         let wanted: std::collections::BTreeSet<&str> = ranked.iter().take(MAX_GEAR_SHEETS).map(|(_, n)| *n).collect();
         let (t, refs) = super::printmep::load_project_plans(&pr, &|r| wanted.contains(r.number.as_str()))?;
-        let mut schedules: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
+        let mut texts: Vec<(&str, Vec<cadaddy_mepfix::sheet_facts::TextItem>)> = Vec::new();
         for r in &refs {
-            let sub = super::printmep::sheet_drawing(t.doc()?, r);
-            for x in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(&sub), &r.number) {
-                if !schedules.iter().any(|o| o.panel.eq_ignore_ascii_case(&x.panel)) {
-                    schedules.push(x);
-                }
-            }
+            texts.push((r.number.as_str(), cadaddy_mepfix::sheet_facts::texts(&super::printmep::sheet_drawing(t.doc()?, r))));
         }
+        let set: Vec<(&str, &[cadaddy_mepfix::sheet_facts::TextItem])> = texts.iter().map(|(n, x)| (*n, x.as_slice())).collect();
+        let schedules = super::panelsched::read_set(&set);
         (schedules, refs.iter().map(|r| r.number.clone()).collect(), "the print set's sheets")
     };
     let panels: Vec<Value> = schedules

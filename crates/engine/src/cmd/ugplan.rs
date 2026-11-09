@@ -278,6 +278,17 @@ pub(crate) struct Parsed {
 /// BELOW GRADE` → 2, 5", PVC Sch 40, 48" cover, steel elbows.
 pub(crate) fn parse(text: &str) -> Parsed {
     let up = text.to_ascii_uppercase().replace(['\u{201d}', '\u{2033}'], "\"");
+    // `(2)4"` printed tight is `(2) 4"`: the count, then the size.
+    let mut spaced = String::with_capacity(up.len() + 8);
+    let mut prev = ' ';
+    for c in up.chars() {
+        if prev == ')' && c.is_ascii_digit() {
+            spaced.push(' ');
+        }
+        spaced.push(c);
+        prev = c;
+    }
+    let up = spaced;
     let words: Vec<&str> = up.split_whitespace().take(400).collect();
     // `(2)` first (the digits a count in words repeats), else a count word before the size.
     let mut p = Parsed {
@@ -651,7 +662,8 @@ pub(crate) const PROPOSAL_PREFIX: &str = "ug ";
 
 /// Runs this module made (called, proposed, stack bases): a rerun of the job replaces them.
 pub(crate) fn made_here(r: &MepRun) -> bool {
-    r.height_source.starts_with(CALLED_PREFIX)
+    // Site work's runs a note calls are the site work step's (they carry the same mark).
+    (r.height_source.starts_with(CALLED_PREFIX) && !r.source_sheet.starts_with(super::sitework::SOURCE_PREFIX))
         || r.source_sheet.starts_with(PROPOSAL_PREFIX)
         || r.system.to_ascii_uppercase().starts_with(&format!("{P_UG}-"))
 }
@@ -1904,6 +1916,15 @@ mod tests {
 
     fn t(x: f64, y: f64, v: &str, h: f64) -> TextItem {
         TextItem { value: v.into(), at: Vec2::new(x, y), height: h, rotation: 0.0 }
+    }
+
+    #[test]
+    fn a_count_printed_tight_against_its_size_is_both() {
+        // `(2)4"` (no space) is two 4" conduits, as `(2) 4"` is.
+        let p = parse("PRIMARY FEEDER. PROVIDE (2)4\" CONDUITS WITH PULL-STRINGS.");
+        assert_eq!((p.count, p.size_in), (Some(2), Some(4.0)));
+        let p = parse("PROVIDE (3)2\" PVC CONDUITS TO THE PAD");
+        assert_eq!((p.count, p.size_in), (Some(3), Some(2.0)));
     }
 
     #[test]

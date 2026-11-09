@@ -2120,6 +2120,26 @@ mod tests {
     }
 
     #[test]
+    fn a_finish_floor_plan_beside_the_floor_plan_is_not_the_floor_plan() {
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 600.0, "FLOOR PLAN");
+        titled_block(&mut d, 700.0, 600.0, "FINISH FLOOR PLAN");
+        let (v, r) = floor_plan_view(&d).expect("the floor plan's view");
+        assert_eq!(v.title, "FLOOR PLAN");
+        assert!(r[2] < 600.0, "only the floor plan's block: {r:?}");
+    }
+
+    #[test]
+    fn a_slab_plan_beside_the_dimension_floor_plan_is_not_the_floor_plan() {
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 600.0, "DIMENSION FLOOR PLAN");
+        titled_block(&mut d, 700.0, 600.0, "SLAB PENETRATION PLAN");
+        let (v, r) = floor_plan_view(&d).expect("the floor plan's view");
+        assert_eq!(v.title, "DIMENSION FLOOR PLAN");
+        assert!(r[2] < 600.0, "only the floor plan's block: {r:?}");
+    }
+
+    #[test]
     fn a_sheet_not_mixing_a_floor_plan_with_other_plans_is_read_whole() {
         // Only a floor plan and a detail.
         let mut d = bordered();
