@@ -845,3 +845,18 @@ fn a_units_receptacle_runs_out_under_the_unit_and_rises_beside_it() {
     let (_, _, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[], rules());
     assert_eq!(blocked, Some(0));
 }
+
+/// Q6314: a top floor (floor 0, top 96") under 24" roof trusses bearing on its walls (96" to
+/// 120") routes up through their webs, as it does through the floor above's joists in the
+/// storey's height; framing far above (another storey's) is not over it.
+#[test]
+fn a_top_floors_tiers_go_up_into_the_roof_trusses_bearing_on_its_walls() {
+    let keep = 2.125;
+    // The trusses wholly above the storey's top: their webs are routing space.
+    assert_eq!(framing_tier_top(0.0, 96.0, 96.0, 120.0, keep, UPF), Some(120.0 - keep));
+    // Joists within the storey's height, as before.
+    assert_eq!(framing_tier_top(0.0, 120.0, 108.0, 120.0, keep, UPF), Some(120.0 - keep));
+    // Framing a storey up (bearing 10' over this storey's top) is not this level's.
+    assert_eq!(framing_tier_top(0.0, 96.0, 216.0, 240.0, keep, UPF), None);
+    assert_eq!(framing_tier_top(0.0, 96.0, f64::NAN, f64::NAN, keep, UPF), None);
+}
