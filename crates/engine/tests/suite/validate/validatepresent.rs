@@ -122,7 +122,8 @@ fn spec() -> Value {
         "devices": {"by_type": {
             "REC": {"ceiling": false, "aff_ft": 1.5},
             "SW": {"ceiling": false, "aff_ft": 4.0},
-            "TV": {"ceiling": false, "aff_ft": 1.5}
+            "TV": {"ceiling": false, "aff_ft": 1.5},
+            "TSTAT": {"ceiling": false, "aff_ft": 4.0}
         }},
         "sheets": [
             {"number": "A-101", "title": "FLOOR PLAN - LEVEL 1", "discipline": "A", "level": "L1", "source": "model", "rect": [0.0, 0.0, SW, SH],
@@ -159,6 +160,20 @@ fn in_room(c: [f64; 2], off: [f64; 2], mirrored: bool) -> [f64; 2] {
 }
 
 fn job() -> Job {
+    job_full(false)
+}
+
+/// The mechanical enlarged plans' sheet (Q6339).
+const M601: f64 = 20000.0;
+/// The mechanical view's middle on its sheet.
+const MC: [f64; 2] = [M601 + 1500.0, 1000.0];
+/// A thermostat in the guest rooms, feet off the room's middle (as room 101 lies).
+const TSTAT: [f64; 2] = [5.0, 4.0];
+
+/// [`job`]; with `turned`, each guest room has a bath fin off its north wall (room 102's
+/// mirrored), a thermostat, and the type has a mechanical view on another sheet (M-601) drawn
+/// turned 180° against room 101, the thermostat on it.
+fn job_full(turned: bool) -> Job {
     let mut s = Session::new();
     // A 60' × 14' shell of 6" walls; partitions at 20' and 40'.
     layer(&mut s, "A-WALL");
@@ -167,12 +182,35 @@ fn job() -> Job {
     layer(&mut s, "A-WALL-CL");
     line(&mut s, [20.0, 0.5], [20.0, 13.5]);
     line(&mut s, [40.0, 0.5], [40.0, 13.5]);
+    if turned {
+        line(&mut s, [13.0, 13.5], [13.0, 9.0]);
+        line(&mut s, [27.0, 13.5], [27.0, 9.0]);
+        // The mechanical view: room 101's walls (both faces) and fin, turned 180°.
+        layer(&mut s, "M-ENLG");
+        let lines: [([f64; 2], [f64; 2]); 10] = [
+            ([0.0, 0.0], [20.2, 0.0]),
+            ([0.0, 0.5], [20.2, 0.5]),
+            ([0.0, 13.5], [20.2, 13.5]),
+            ([0.0, 14.0], [20.2, 14.0]),
+            ([0.5, 0.5], [0.5, 13.5]),
+            ([0.0, 0.0], [0.0, 14.0]),
+            ([19.797, 0.5], [19.797, 13.5]),
+            ([20.203, 0.5], [20.203, 13.5]),
+            ([12.797, 9.0], [12.797, 13.5]),
+            ([13.203, 9.0], [13.203, 13.5]),
+        ];
+        let mid = [10.25, 7.0];
+        let on_mech = |p: [f64; 2]| [MC[0] - (p[0] - mid[0]) * 12.0, MC[1] - (p[1] - mid[1]) * 12.0];
+        for (a, b) in lines {
+            s.execute("line", &json!({"points": [on_mech(a), on_mech(b)]})).unwrap();
+        }
+    }
     layer(&mut s, "A-ROOM-TAG");
     text(&mut s, at([10.0, 9.0]), "101");
     text(&mut s, at([30.0, 9.0]), "102");
     text(&mut s, at([50.0, 9.0]), "103");
     layer(&mut s, "G-FRAME");
-    for x in [0.0, E101, E601] {
+    for x in [0.0, E101, E601, M601] {
         s.execute("pline", &json!({"vertices": [[x, 0.0], [x + SW, 0.0], [x + SW, SH], [x, SH]], "closed": true})).unwrap();
     }
     // The model. Room 101: the layout as drawn, less the north receptacle, plus one in the
@@ -199,10 +237,12 @@ fn job() -> Job {
     sws.push([50.0, 13.3]); // a switch no plan shows
     let (s, rec_h) = place(s, "RECEP", "E-POWR", &recs, "REC");
     let (s, sw_h) = place(s, "SWITCH", "E-POWR", &sws, "SW");
-    let (mut s, tv_h) = place(s, "TVOUT", "E-POWR", &tvs, "TV");
+    let (s, tv_h) = place(s, "TVOUT", "E-POWR", &tvs, "TV");
+    let stats: Vec<[f64; 2]> = if turned { vec![in_room(C101, TSTAT, false), in_room(C102, TSTAT, true)] } else { Vec::new() };
+    let (mut s, t_h) = place(s, "TSTATU", "E-POWR", &stats, "TSTAT");
     s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
     s.execute("model.build", &json!({})).unwrap();
-    for (hs, kind) in [(&rec_h, "receptacle"), (&sw_h, "switch"), (&tv_h, "tv_outlet")] {
+    for (hs, kind) in [(&rec_h, "receptacle"), (&sw_h, "switch"), (&tv_h, "tv_outlet"), (&t_h, "thermostat")] {
         for h in hs.iter() {
             s.execute("bim.source", &json!({"handles": [h], "status": "fixed", "source": "E-101", "kind": kind})).unwrap();
         }
@@ -215,6 +255,13 @@ fn job() -> Job {
         "views": [{"sheet": "E-601", "title": "ENLARGED GUEST ROOM POWER PLAN", "rect": view, "sheet_rect": [E601, 0.0, E601 + SW, SH]},
                   {"sheet": "E-601", "title": "GUEST ROOM - BED WALL", "rect": [E601 + 2600.0, 200.0, E601 + 3200.0, 600.0]}],
         "source": {"sheet": "E-601", "by": "made-up test"}}]);
+    if turned {
+        let mech = [MC[0] - 10.75 * 12.0, MC[1] - 7.5 * 12.0, MC[0] + 10.75 * 12.0, MC[1] + 7.5 * 12.0];
+        sp["unit_types"][0]["views"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"sheet": "M-601", "title": "ENLARGED GUEST ROOM MECHANICAL PLAN", "rect": mech, "sheet_rect": [M601, 0.0, M601 + SW, SH]}));
+    }
     let fit =
         |mirrored: bool| json!({"rotation_deg": 0.0, "mirrored": mirrored, "view": "E-601 ENLARGED GUEST ROOM POWER PLAN", "by": "made-up test"});
     sp["unit_instances"] = json!([
@@ -230,6 +277,11 @@ fn job() -> Job {
         [("REC", "receptacle", [45.0, 0.7]), ("REC", "receptacle", [55.0, 13.3]), ("SW", "switch", [40.3, 7.0]), ("REC", "receptacle", [15.0, 10.0])]
     {
         devices.push(json!({"tag": tag, "kind": kind, "at": on_power_plan(p), "sheet": "E-101", "level": "L1"}));
+    }
+    if turned {
+        devices.push(
+            json!({"tag": "TSTAT", "kind": "thermostat", "at": [MC[0] - TSTAT[0] * 12.0, MC[1] - TSTAT[1] * 12.0], "sheet": "M-601", "level": "L1"}),
+        );
     }
     set_job(&mut s, json!(devices));
     Job { s, added: rec_h[3].clone(), stray: sw_h[3].clone() }
@@ -528,4 +580,24 @@ fn an_element_matched_to_its_own_source_symbol_is_not_measured_for_place() {
     assert!(own["measured"]["compared_to"].as_str().unwrap().contains("its own source"), "{own}");
     assert!(own["measured"].get("off_in").is_none(), "{own}");
     assert!(!own["found"].as_str().unwrap().contains("0.0 in off"), "{own}");
+}
+
+#[test]
+fn a_view_on_another_sheet_is_laid_by_its_own_turn_on_the_rooms_walls() {
+    // The job's fit names the power plan's turn (drawn as room 101 lies); the mechanical view is
+    // drawn turned 180°. Laid by the fit's turn its thermostat lands across the room (missing,
+    // and the room's thermostat extra); its own lines on the room's walls say 180° (and, for the
+    // mirrored room 102, mirrored and 180°).
+    let mut j = job_full(true);
+    for room in ["101", "102"] {
+        let (r, fs) = present(&mut j.s, json!({"room": room}));
+        let mine = in_area(&fs, room);
+        let stat: Vec<&&Value> = mine.iter().filter(|f| f["kind"] == "thermostat").collect();
+        assert_eq!(stat.len(), 1, "room {room}: {r}");
+        assert_eq!(stat[0]["verdict"], "pass", "room {room}: {stat:?}");
+        assert_eq!(stat[0]["measured"]["view"], "M-601 ENLARGED GUEST ROOM MECHANICAL PLAN", "{stat:?}");
+        // The power plan is laid as before: room 101 still misses one receptacle.
+        let (_, missing, _) = verdicts(&mine);
+        assert_eq!(missing, usize::from(room == "101"), "room {room}: {r}");
+    }
 }

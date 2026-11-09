@@ -896,17 +896,92 @@ fn turn_words(o: &Value) -> Option<String> {
     if let Some(why) = turn_doubt(o) {
         return Some(format!("{why}: match it to the room by the walls and doors; a position read off it is unsure"));
     }
-    match (turned, mirrored) {
+    // A measured view that draws more than the room (two mirrored rooms side by side): which
+    // part of it the room is.
+    let part = o
+        .get("room_in_view_ft")
+        .and_then(Value::as_array)
+        .and_then(|v| Some([v.first()?.as_f64()?, v.get(1)?.as_f64()?]))
+        .filter(|v| v[0].hypot(v[1]) >= ROOM_OFF_MIDDLE_FT)
+        .map(|v| {
+            let side = if v[0].abs() >= v[1].abs() {
+                if v[0] < 0.0 { "left" } else { "right" }
+            } else if v[1] < 0.0 {
+                "lower"
+            } else {
+                "upper"
+            };
+            format!("the room is the {side} part of the view ({:.1} ft off its middle)", v[0].hypot(v[1]))
+        });
+    let words = match (turned, mirrored) {
         (None, false) => None,
         (Some(d), false) => Some(format!("drawn turned {d}° from the room as the plan shows it")),
         (None, true) => Some("drawn mirrored (the room is the opposite hand)".into()),
         (Some(d), true) => Some(format!("drawn mirrored and turned {d}° from the room as the plan shows it")),
+    };
+    match (words, part) {
+        (Some(w), Some(p)) => Some(format!("{w}; {p}")),
+        (None, Some(p)) => Some(format!("drawn as the plan shows the room; {p}")),
+        (w, None) => w,
     }
 }
+
+/// A room this far (feet) off a measured view's middle is said to be one part of it.
+const ROOM_OFF_MIDDLE_FT: f64 = 3.0;
 
 /// A view's turn against the plan from its registration (a fit has no mirror).
 fn orientation_of(r: &SheetRegistration, by: &str) -> Value {
     let mut o = json!({"rotation_deg": turn_deg(r.b.atan2(r.a)), "mirrored": false, "scale": r4(r.scale()), "by": by});
+    if let Some(w) = turn_words(&o) {
+        o["read"] = json!(w);
+    }
+    o
+}
+
+/// The sheet of the view a job's stamping fit (`{.., view: "<sheet> <title>"}`) was measured on,
+/// none when the fit names no view.
+pub(crate) fn fit_sheet(fit: &Value) -> Option<String> {
+    let v = fit.get("view")?.as_str()?.trim();
+    let first = v.split_whitespace().next()?;
+    Some(first.split('/').next().unwrap_or(first).trim().to_ascii_uppercase())
+}
+
+/// Whether the stamping fit `fit` tells the turn of a view on `sheet`: a view of the sheet it was
+/// measured on (drawn with it), or any when it names no view. A view on another sheet (another
+/// trade's enlarged plan) may be drawn turned another way (Q6339).
+pub(crate) fn stamped_on(fit: &Value, sheet: &str) -> bool {
+    let base = sheet.split('/').next().unwrap_or(sheet).trim().to_ascii_uppercase();
+    fit_sheet(fit).is_none_or(|s| s == base)
+}
+
+/// A unit type's view's turn and mirror against the room (Q6339): a plan view's measured from its
+/// lines on the room's model walls (`measure`) when that is certain, else `fallback` (what the
+/// job's fits say) with the measurement beside it.
+fn measured_turn(
+    fallback: Value,
+    plan_like: bool,
+    rect: [f64; 4],
+    u: &UnitOf,
+    measure: &dyn Fn([f64; 4]) -> std::result::Result<vreg::Turned, String>,
+) -> Value {
+    let measured = plan_like.then(|| measure(rect));
+    let mut o = match &measured {
+        Some(Ok(t)) if t.certain => vreg::turn_json(t),
+        Some(Ok(t)) => {
+            let mut o = fallback;
+            o["wall_fit"] = vreg::turn_json(t);
+            o
+        }
+        Some(Err(why)) => {
+            let mut o = fallback;
+            o["wall_fit"] = json!({"why": why});
+            o
+        }
+        None => fallback,
+    };
+    o["hand"] = json!(u.hand);
+    o["unit_type"] = json!(u.id);
+    o["certain"] = json!(turn_doubt(&o).is_none());
     if let Some(w) = turn_words(&o) {
         o["read"] = json!(w);
     }
@@ -2541,31 +2616,6 @@ pub(crate) fn shows_level(l: &SheetLink, level: &str) -> bool {
 }
 
 /// `a`–`b` cut to `r`, if any of it is inside.
-fn clip_seg(a: [f64; 2], b: [f64; 2], r: [f64; 4]) -> Option<vreg::Seg> {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let (mut t0, mut t1) = (0.0f64, 1.0f64);
-    for (p, q) in [(-dx, a[0] - r[0]), (dx, r[2] - a[0]), (-dy, a[1] - r[1]), (dy, r[3] - a[1])] {
-        if p.abs() < 1e-12 {
-            if q < 0.0 {
-                return None;
-            }
-            continue;
-        }
-        let t = q / p;
-        if p < 0.0 {
-            t0 = t0.max(t);
-        } else {
-            t1 = t1.min(t);
-        }
-        if t0 > t1 {
-            return None;
-        }
-    }
-    let at = |t: f64| [a[0] + dx * t, a[1] + dy * t];
-    let out = (at(t0), at(t1));
-    out.0.iter().chain(out.1.iter()).all(|v| v.is_finite()).then_some(out)
-}
-
 /// The model's wall faces round the area (both faces of each wall, its centreline when it has no
 /// thickness), carried onto a sheet as a crop is placed and cut to the crop's rectangle.
 fn wall_faces(model: &Model, frame: &Frame, area: &Area, margin: f64, place: &Place, r: [f64; 4]) -> Vec<vreg::Seg> {
@@ -2586,7 +2636,7 @@ fn wall_faces(model: &Model, frame: &Frame, area: &Area, margin: f64, place: &Pl
         let sides: &[f64] = if half > 0.0 { &[-1.0, 1.0] } else { &[0.0] };
         for s in sides {
             let (Some(a), Some(b)) = (to([w.a[0] + nx * s, w.a[1] + ny * s]), to([w.b[0] + nx * s, w.b[1] + ny * s])) else { continue };
-            if let Some(seg) = clip_seg(a, b, r) {
+            if let Some(seg) = vreg::clip_seg(a, b, r) {
                 out.push(seg);
             }
         }
@@ -2597,6 +2647,92 @@ fn wall_faces(model: &Model, frame: &Frame, area: &Area, margin: f64, place: &Pl
     out
 }
 
+/// The model's wall faces on `level` (feet: both faces of each wall, its centreline when it has
+/// no thickness) cut to `near`.
+pub(crate) fn faces_round(model: &Model, level: &str, near: [f64; 4]) -> Vec<vreg::Seg> {
+    let mut out = Vec::new();
+    for w in model.walls.iter().filter(|w| w.level.eq_ignore_ascii_case(level) && segment_touches(near, w.a, w.b)).take(MAX_OBJECTS) {
+        let (dx, dy) = (w.b[0] - w.a[0], w.b[1] - w.a[1]);
+        let l = dx.hypot(dy);
+        if !(l.is_finite() && l > 1e-9) {
+            continue;
+        }
+        let half = (w.thickness_in / 24.0).max(0.0);
+        let (nx, ny) = (-dy / l * half, dx / l * half);
+        let sides: &[f64] = if half > 0.0 { &[-1.0, 1.0] } else { &[0.0] };
+        for s in sides {
+            if let Some(seg) = vreg::clip_seg([w.a[0] + nx * s, w.a[1] + ny * s], [w.b[0] + nx * s, w.b[1] + ny * s], near) {
+                out.push(seg);
+            }
+        }
+        if out.len() >= vreg::MAX_MODEL_LINES {
+            break;
+        }
+    }
+    out
+}
+
+/// The rectangles of a unit type's own views (`views[].rect`, and the sheet each is on), sheet units.
+pub(crate) fn type_view_rects(ty: &Value) -> Vec<[f64; 4]> {
+    let rect4 = |v: Option<&Value>| -> Option<[f64; 4]> {
+        let r = v?.as_array()?;
+        let n = |i: usize| r.get(i).and_then(Value::as_f64).filter(|x| x.is_finite());
+        Some(norm_rect([n(0)?, n(1)?, n(2)?, n(3)?]))
+    };
+    ty.get("views")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(MAX_TYPE_VIEWS)
+        .flat_map(|v| [rect4(v.get("rect")), rect4(v.get("sheet_rect"))])
+        .flatten()
+        .collect()
+}
+
+/// How far round a room (feet) the model's walls are looked at to lay a view on it.
+const TURN_WALLS_FT: f64 = 50.0;
+/// Views whose lines are kept read, at most.
+const MAX_READ_VIEWS: usize = 2_000;
+
+/// The unit types' views' lines, each read once (Q6339): how a view is turned and mirrored on a
+/// room is measured from them on the room's model walls ([`vreg::view_turn`]), never assumed
+/// from another view of the type.
+pub(crate) struct UnitViews<'a> {
+    d: &'a Drawing,
+    index: PrintIndex<'a>,
+    upf: f64,
+    read: std::cell::RefCell<BTreeMap<[u64; 4], Option<std::rc::Rc<vreg::ViewLines>>>>,
+}
+
+impl<'a> UnitViews<'a> {
+    /// For views lying in `within` (sheet rectangles), `upf` drawing units a foot.
+    pub(crate) fn of(d: &'a Drawing, within: &[[f64; 4]], upf: f64) -> UnitViews<'a> {
+        let index = if within.is_empty() { PrintIndex(Vec::new()) } else { PrintIndex::of(d, within) };
+        UnitViews { d, index, upf, read: std::cell::RefCell::new(BTreeMap::new()) }
+    }
+
+    /// How the view `view` (a sheet rectangle) lies on the room whose box is `room` (feet) on
+    /// `level`, by the model's walls. Err: why it can't be measured.
+    pub(crate) fn turn(&self, view: [f64; 4], model: &Model, level: &str, room: [f64; 4]) -> std::result::Result<vreg::Turned, String> {
+        let view = norm_rect(view);
+        let key = view.map(f64::to_bits);
+        let known = self.read.borrow().get(&key).cloned();
+        let lines = match known {
+            Some(l) => l,
+            None => {
+                let l = vreg::ViewLines::new(&sheet_lines(self.d, &self.index, view), self.upf, view).map(std::rc::Rc::new);
+                let mut read = self.read.borrow_mut();
+                if read.len() < MAX_READ_VIEWS {
+                    read.insert(key, l.clone());
+                }
+                l
+            }
+        };
+        let Some(v) = lines else { return Err("the view holds no straight lines of 1 ft or more".into()) };
+        vreg::view_turn(&v, &faces_round(model, level, grow(room, TURN_WALLS_FT)), room)
+    }
+}
+
 /// The sheet's straight lines in `r` as the page prints them: lines, polyline pieces and the
 /// edges of solid fills (a wall's poche), cut to `r`.
 fn sheet_lines(d: &Drawing, index: &PrintIndex, r: [f64; 4]) -> Vec<vreg::Seg> {
@@ -2605,7 +2741,7 @@ fn sheet_lines(d: &Drawing, index: &PrintIndex, r: [f64; 4]) -> Vec<vreg::Seg> {
     let cap = vreg::MAX_PRINT_LINES * 4;
     let mut add = |out: &mut Vec<vreg::Seg>, a: [f64; 2], b: [f64; 2]| {
         if out.len() < cap
-            && let Some(s) = clip_seg(a, b, r)
+            && let Some(s) = vreg::clip_seg(a, b, r)
         {
             out.push(s);
         }
@@ -2693,6 +2829,7 @@ fn plan_crops(
     keynotes: &[super::validate_keynote::CropAsk],
     docs: &DocInput,
     register: &dyn Fn(&Place, [f64; 4]) -> vreg::Registered,
+    measure: &dyn Fn([f64; 4]) -> std::result::Result<vreg::Turned, String>,
 ) -> Planned {
     let cited = &keys.cited;
     let mut crops: Vec<Crop> = Vec::new();
@@ -2936,20 +3073,16 @@ fn plan_crops(
             let Some(rect) = l.rect.map(norm_rect).and_then(|sr| intersect(norm_rect(*vr), sr)) else { continue };
             let up = title.to_ascii_uppercase();
             let kind = if up.contains(" WALL") || up.contains("ELEVATION") { "elevation" } else { "enlarged_plan" };
-            let unit_fit = Some(&u.fit).filter(|f| f.is_object());
-            let mut o = match (fit, unit_fit) {
+            // The stamping's turn only for a view of the sheet it was fitted on.
+            let unit_fit = Some(&u.fit).filter(|f| f.is_object() && stamped_on(f, &l.number));
+            let fallback = match (fit, unit_fit) {
                 (Some(f), _) => {
                     json!({"rotation_deg": f["rotation_deg"], "mirrored": f["mirrored"], "by": "layout_fit", "fit_ft": f["fit_ft"], "matched": f["matched"]})
                 }
                 (None, Some(f)) => json!({"rotation_deg": f["rotation_deg"], "mirrored": f["mirrored"], "by": f["by"]}),
                 (None, None) => json!({"rotation_deg": null, "mirrored": u.hand == "mirrored", "by": "unit hand"}),
             };
-            o["hand"] = json!(u.hand);
-            o["unit_type"] = json!(u.id);
-            o["certain"] = json!(turn_doubt(&o).is_none());
-            if let Some(w) = turn_words(&o) {
-                o["read"] = json!(w);
-            }
+            let o = measured_turn(fallback, kind == "enlarged_plan", rect, u, measure);
             push(&mut crops, l, kind, trade, rect, "unit_type", None, Some(format!("unit type {}: {title}", u.name)), Some(o));
         }
         for l in links.iter().filter(|l| !listed.iter().any(|(sh, ..)| l.number.eq_ignore_ascii_case(sh))) {
@@ -2986,7 +3119,7 @@ fn plan_crops(
                     .and_then(|r| intersect(r, sr)),
             };
             let Some(rect) = rect else { continue };
-            let mut o = match (fit, &l.registration) {
+            let fallback = match (fit, &l.registration) {
                 (Some(f), _) => {
                     json!({"rotation_deg": f["rotation_deg"], "mirrored": f["mirrored"], "by": "layout_fit", "fit_ft": f["fit_ft"], "matched": f["matched"]})
                 }
@@ -2998,12 +3131,7 @@ fn plan_crops(
                 }
                 (None, None) => json!({"rotation_deg": null, "mirrored": u.hand == "mirrored", "by": "unit hand"}),
             };
-            o["hand"] = json!(u.hand);
-            o["unit_type"] = json!(u.id);
-            o["certain"] = json!(turn_doubt(&o).is_none());
-            if let Some(w) = turn_words(&o) {
-                o["read"] = json!(w);
-            }
+            let o = measured_turn(fallback, true, rect, u, measure);
             n_unit += 1;
             push(&mut crops, l, "enlarged_plan", trade, rect, "unit_type", None, Some(format!("unit type {}", u.name)), Some(o));
         }
@@ -3710,6 +3838,82 @@ fn pdf_pages(
 
 // ---------------------------------------------------------------- the packet
 
+/// How far in from the outermost edge (feet) an edge facing the same way still is that side
+/// of the area (a ragged outline's jogs round columns and chases).
+const SIDE_DEPTH_FT: f64 = 1.5;
+
+/// One side of an area for its model elevation: the way a camera inside looks at it (unit), its
+/// edges (longest first), their total length, its first edge's index in the outline.
+#[derive(Clone, Debug, PartialEq)]
+struct Side {
+    dir: [f64; 2],
+    edges: Vec<([f64; 2], [f64; 2])>,
+    len: f64,
+    first: usize,
+}
+
+/// The sides of an outline (feet), longest first: its edges grouped by the way they face (out of
+/// the area), each way's outermost edges (within [`SIDE_DEPTH_FT`] of the farthest) one side.
+fn area_sides(outline: &[[f64; 2]]) -> Vec<Side> {
+    // Each edge: the way out of the area across it, how far out that way it lies, its length.
+    let mut edges: Vec<([f64; 2], f64, f64, usize, [f64; 2], [f64; 2])> = Vec::new();
+    for (i, (a, b)) in outline.iter().zip(outline.iter().cycle().skip(1)).enumerate().take(MAX_OUTLINE) {
+        let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+        if !(len.is_finite() && len >= 0.1) {
+            continue;
+        }
+        let (dx, dy) = ((b[0] - a[0]) / len, (b[1] - a[1]) / len);
+        let m = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+        let step = (len / 4.0).min(0.5);
+        let Some(out) = [[dy, -dx], [-dy, dx]].into_iter().find(|n| point_in(outline, [m[0] - n[0] * step, m[1] - n[1] * step])) else { continue };
+        edges.push((out, m[0] * out[0] + m[1] * out[1], len, i, *a, *b));
+    }
+    let mut ways: Vec<[f64; 2]> = Vec::new();
+    for (out, ..) in &edges {
+        if !ways.iter().any(|w| w[0] * out[0] + w[1] * out[1] > 0.98) {
+            ways.push(*out);
+        }
+    }
+    let mut sides: Vec<Side> = ways
+        .into_iter()
+        .filter_map(|w| {
+            let mine: Vec<&([f64; 2], f64, f64, usize, [f64; 2], [f64; 2])> = edges.iter().filter(|e| w[0] * e.0[0] + w[1] * e.0[1] > 0.98).collect();
+            let far = mine.iter().map(|e| e.1).fold(f64::NEG_INFINITY, f64::max);
+            let mut outer: Vec<&&([f64; 2], f64, f64, usize, [f64; 2], [f64; 2])> = mine.iter().filter(|e| e.1 >= far - SIDE_DEPTH_FT).collect();
+            outer.sort_by(|x, y| y.2.total_cmp(&x.2).then(x.3.cmp(&y.3)));
+            let len: f64 = outer.iter().map(|e| e.2).sum();
+            let first = outer.iter().map(|e| e.3).min()?;
+            let edges = outer.iter().filter(|e| e.2 >= 1.0).map(|e| (e.4, e.5)).collect::<Vec<_>>();
+            (len >= 2.0 && !edges.is_empty()).then_some(Side { dir: w, edges, len, first })
+        })
+        .collect();
+    sides.sort_by(|x, y| y.len.total_cmp(&x.len).then(x.first.cmp(&y.first)));
+    sides
+}
+
+/// The model wall on `level` a camera at `eye` looking along `dir` (unit) faces: the first whose
+/// centreline its line of sight crosses within `reach` (feet), and how far the wall's face is.
+fn faced_wall<'m>(model: &'m Model, level: &str, eye: [f64; 2], dir: [f64; 2], reach: f64) -> Option<(&'m v::ModelWall, f64)> {
+    let cross = |p: [f64; 2], q: [f64; 2]| p[0] * q[1] - p[1] * q[0];
+    model
+        .walls
+        .iter()
+        .filter(|w| w.level.eq_ignore_ascii_case(level))
+        .take(100_000)
+        .filter_map(|w| {
+            let ab = [w.b[0] - w.a[0], w.b[1] - w.a[1]];
+            let den = cross(dir, ab);
+            if !den.is_finite() || den.abs() < 1e-9 {
+                return None;
+            }
+            let ae = [w.a[0] - eye[0], w.a[1] - eye[1]];
+            let (t, u) = (cross(ae, ab) / den, cross(ae, dir) / den);
+            let face = t - (w.thickness_in / 24.0).max(0.0);
+            ((0.0..=1.0).contains(&u) && t > 0.05 && t <= reach && face.is_finite()).then_some((w, face.max(0.0)))
+        })
+        .min_by(|x, y| x.1.total_cmp(&y.1).then(x.0.id.cmp(&y.0.id)))
+}
+
 fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = CMD_PACKET;
     let start = web_time::Instant::now();
@@ -4147,10 +4351,18 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             reg_threshold,
         )
     };
+    // A unit type's views, each measured on the room's walls for its turn and mirror (Q6339).
+    let view_rects: Vec<[f64; 4]> = unit.as_ref().map_or_else(Vec::new, |u| {
+        let mut r: Vec<[f64; 4]> = sp.sheets.iter().filter_map(|l| l.rect.map(norm_rect)).collect();
+        r.extend(type_view_rects(&u.ty));
+        r
+    });
+    let unit_views = UnitViews::of(d, &view_rects, upf);
+    let measure = |r: [f64; 4]| unit_views.turn(r, &model, &area.level, area.bbox);
     let in_drawing: Vec<super::validate_docs::DocSheet> = doc_sheets.0.iter().filter(|x| x.rect.is_some()).cloned().collect();
     let docs = DocInput { sheets: &in_drawing, cites: &cites, regions: &regions };
     let Planned { mut crops, mut left_out, mut not_shown } =
-        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops, &docs, &register);
+        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops, &docs, &register, &measure);
     left_out.extend(doc_sheets.1.iter().cloned());
     // The deciding sheets the drawing doesn't hold (cited, or a schedule, legend or notes sheet
     // only the job's index has): their PDF pages, whole, at the packet's dpi.
@@ -4274,72 +4486,55 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             over: None,
         });
         let z = level_spec.map_or(0.0, |l| l.elevation_ft) * upf + 5.0 * upf;
-        // One elevation per side of the area (its outline's edges of 2' or more, longest first),
-        // the camera inside the area looking square at the side; a camera that would stand
-        // outside the area, or repeat another's view, is not used.
+        // One elevation per side of the area, the camera inside the area looking square at it: a
+        // side is the outline's edges facing one way that lie outermost that way (within
+        // SIDE_DEPTH_FT: a ragged outline's jogs), longest side first; a wall fin or notch inside
+        // the area is no side (Q6339). The camera stands before the side's longest edge it can.
         let outline: Vec<[f64; 2]> =
             if area.outline.len() >= 3 { area.outline.iter().take(MAX_OUTLINE).copied().collect() } else { corners(area.bbox).to_vec() };
-        let mut sides: Vec<(f64, usize, [f64; 2], [f64; 2])> = outline
-            .iter()
-            .zip(outline.iter().cycle().skip(1))
-            .enumerate()
-            .map(|(i, (a, b))| ((b[0] - a[0]).hypot(b[1] - a[1]), i, *a, *b))
-            .filter(|(l, ..)| l.is_finite() && *l >= 2.0)
-            .collect();
-        sides.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)));
+        let sides = area_sides(&outline);
         let mut cameras: Vec<([f64; 2], [f64; 2])> = Vec::new();
-        for (len, i, a, b) in sides {
-            let (dx, dy) = ((b[0] - a[0]) / len, (b[1] - a[1]) / len);
-            let m = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
-            let side = format!("side {} of the outline ({len:.1} ft)", i + 1);
-            // The normal into the area, and how far back the camera can stand inside it.
-            let inward = [(-dy, dx), (dy, -dx)].into_iter().find(|(nx, ny)| point_in(&outline, [m[0] + nx * 0.5, m[1] + ny * 0.5]));
-            let Some((nx, ny)) = inward else {
-                left_out.push((format!("model elevation of {side}"), "no point just inside the area faces it".into()));
+        for side in sides {
+            let len = side.len;
+            let label = format!("side {} of the outline ({len:.1} ft)", side.first + 1);
+            // How far back the camera can stand inside the area before one of the side's edges.
+            let placed = side.edges.iter().find_map(|&(a, b)| {
+                let m = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+                let (nx, ny) = (-side.dir[0], -side.dir[1]);
+                let back = [6.0, 4.0, 3.0, 2.0, 1.0]
+                    .into_iter()
+                    .find(|d| (1..=4).all(|k| point_in(&outline, [m[0] + nx * d * f64::from(k) / 4.0, m[1] + ny * d * f64::from(k) / 4.0])))?;
+                Some((m, back))
+            });
+            let Some((m, back)) = placed else {
+                left_out.push((format!("model elevation of {label}"), "the area is too narrow there for a camera inside it".into()));
                 continue;
             };
-            let back = [6.0, 4.0, 3.0, 2.0, 1.0]
-                .into_iter()
-                .find(|d| (1..=4).all(|k| point_in(&outline, [m[0] + nx * d * f64::from(k) / 4.0, m[1] + ny * d * f64::from(k) / 4.0])));
-            let Some(back) = back else {
-                left_out.push((format!("model elevation of {side}"), "the area is too narrow there for a camera inside it".into()));
-                continue;
-            };
+            let (nx, ny) = (-side.dir[0], -side.dir[1]);
             let eye_ft = [m[0] + nx * back, m[1] + ny * back];
-            // The render frames the area's box, so two cameras facing the same way draw the same
-            // picture: one per direction.
-            if let Some(k) = cameras.iter().position(|(_, d)| d[0] * -nx + d[1] * -ny > 0.98) {
-                left_out.push((format!("model elevation of {side}"), format!("the same view as model/elevation_{:02}.png", k + 1)));
-                continue;
-            }
             if cameras.len() >= MAX_ELEVATIONS {
                 left_out.push((
-                    format!("model elevation of {side}"),
+                    format!("model elevation of {label}"),
                     format!("over the packet's {MAX_ELEVATIONS} wall elevations (the longest sides are drawn)"),
                 ));
                 continue;
             }
-            cameras.push((eye_ft, [-nx, -ny]));
-            // The model wall on that side, if there is one.
-            let wall = model
-                .walls
-                .iter()
-                .filter(|w| w.level.eq_ignore_ascii_case(&area.level))
-                .map(|w| (seg_dist(m, w.a, w.b).0, w))
-                .filter(|(d, w)| *d <= 1.0 + w.thickness_in / 24.0)
-                .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.id.cmp(&y.1.id)))
-                .map(|(_, w)| w.id.clone());
+            cameras.push((eye_ft, side.dir));
+            // The model wall the camera faces: the first its line of sight crosses.
+            let faced = faced_wall(&model, &area.level, eye_ft, side.dir, back + SIDE_DEPTH_FT + 1.0);
+            let wall = faced.map(|(w, _)| w.id.clone());
+            let on_wall = match faced {
+                None => ", no model wall on it".to_string(),
+                Some((w, at)) if at >= back - SIDE_DEPTH_FT - 0.5 => format!(", wall {}", w.id),
+                Some((w, at)) => format!(", facing wall {} {at:.1} ft from the camera, in front of the side", w.id),
+            };
             let e = frame.to_built(&area.level, eye_ft);
             let t = frame.to_built(&area.level, m);
             let k = cameras.len();
             model_imgs.push(ModelImage {
                 file: format!("model/elevation_{k:02}.png"),
                 kind: "elevation",
-                what: format!(
-                    "the {} side of the area ({len:.1} ft{}) seen from inside it, {back:.0} ft back",
-                    compass(-nx, -ny),
-                    wall.as_ref().map_or_else(|| ", no model wall on it".to_string(), |w| format!(", wall {w}"))
-                ),
+                what: format!("the {} side of the area ({len:.1} ft{on_wall}) seen from inside it, {back:.0} ft back", compass(side.dir[0], side.dir[1])),
                 of: None,
                 rect: None,
                 px: Some([1200, 900]),
@@ -5169,5 +5364,72 @@ mod tests {
         assert_eq!(view_at(&views, "p-1 ", [2.0, 1.0, 13.0, 9.0]).as_deref(), Some("PLAN - SANITARY"));
         assert_eq!(view_at(&views, "P-1", [40.0, 40.0, 50.0, 50.0]), None);
         assert_eq!(view_at(&views, "P-3", [0.0, 0.0, 5.0, 5.0]), None);
+    }
+
+    /// A made-up 12' × 29.5' guest room as a ragged trace: jogs round a column on the north side,
+    /// a chase on the west, and a bath partition (a wall fin) running in from the east wall,
+    /// the outline wrapping both its faces.
+    fn ragged_room() -> Vec<[f64; 2]> {
+        vec![
+            [0.0, 0.0],
+            [12.0, 0.0],
+            [12.0, 8.5],
+            [5.0, 8.5],
+            [5.0, 8.75],
+            [12.0, 8.75],
+            [12.0, 29.5],
+            [8.0, 29.5],
+            [8.0, 28.25],
+            [4.0, 28.25],
+            [4.0, 29.25],
+            [0.0, 29.25],
+            [0.0, 20.0],
+            [0.25, 20.0],
+            [0.25, 14.0],
+            [0.0, 14.0],
+        ]
+    }
+
+    fn wall(id: &str, a: [f64; 2], b: [f64; 2], thickness_in: f64) -> v::ModelWall {
+        v::ModelWall { id: id.into(), level: "L1".into(), a, b, thickness_in, stud_in: None, wall_type: None }
+    }
+
+    #[test]
+    fn an_areas_sides_are_its_outermost_edges_each_way_not_a_wall_fin_inside_it() {
+        let sides = area_sides(&ragged_room());
+        let ways: Vec<&str> = sides.iter().map(|s| compass(s.dir[0], s.dir[1])).collect();
+        assert_eq!(ways, ["east", "west", "south", "north"], "{sides:?}");
+        let len = |w: &str| sides.iter().find(|s| compass(s.dir[0], s.dir[1]) == w).map(|s| s.len).unwrap();
+        // The east wall less the fin's root; the north side all three of its jogged pieces.
+        assert!((len("east") - 29.25).abs() < 1e-6, "{sides:?}");
+        assert!((len("north") - 12.0).abs() < 1e-6, "{sides:?}");
+        assert!((len("south") - 12.0).abs() < 1e-6, "{sides:?}");
+        // The fin's faces (7 ft, facing north and south mid-room) are no side.
+        assert!(sides.iter().all(|s| s.edges.iter().all(|(a, b)| !((a[1] - 8.5).abs() < 1e-9 && (b[1] - 8.5).abs() < 1e-9))), "{sides:?}");
+        assert!(sides.iter().all(|s| s.edges.iter().all(|(a, b)| !((a[1] - 8.75).abs() < 1e-9 && (b[1] - 8.75).abs() < 1e-9))), "{sides:?}");
+        // The camera before each side's longest edge first.
+        let north = sides.iter().find(|s| compass(s.dir[0], s.dir[1]) == "north").unwrap();
+        assert!(north.edges.len() == 3, "{north:?}");
+        // Hostile outlines give no side and never panic.
+        assert!(area_sides(&[]).is_empty());
+        assert!(area_sides(&[[0.0, 0.0], [f64::NAN, 1.0], [1.0, 1.0]]).iter().all(|s| s.len.is_finite()));
+    }
+
+    #[test]
+    fn a_camera_names_the_wall_it_faces() {
+        let mut model = Model::default();
+        // The north wall (6"), and a 4" partition 3 ft in front of a camera looking east.
+        model.walls.push(wall("N", [0.0, 29.75], [12.0, 29.75], 6.0));
+        model.walls.push(wall("P", [9.0, 10.0], [9.0, 20.0], 4.0));
+        model.walls.push(wall("E", [12.25, 0.0], [12.25, 29.5], 6.0));
+        model.walls.push(v::ModelWall { level: "L2".into(), ..wall("UP", [0.0, 25.0], [12.0, 25.0], 6.0) });
+        let (w, at) = faced_wall(&model, "L1", [6.0, 23.5], [0.0, 1.0], 10.0).unwrap();
+        assert_eq!(w.id, "N", "another level's wall is no wall here");
+        assert!((at - 6.0).abs() < 1e-6, "{at}");
+        let (w, at) = faced_wall(&model, "L1", [6.0, 15.0], [1.0, 0.0], 10.0).unwrap();
+        assert_eq!(w.id, "P");
+        assert!((at - (3.0 - 2.0 / 12.0)).abs() < 1e-6, "{at}");
+        assert!(faced_wall(&model, "L1", [6.0, 5.0], [-1.0, 0.0], 10.0).is_none(), "nothing west of it");
+        assert!(faced_wall(&model, "L1", [6.0, 23.5], [0.0, 1.0], 2.0).is_none(), "out of reach");
     }
 }
