@@ -3017,6 +3017,9 @@ pub(crate) fn emit(v: &Views, version: Version, target: Version, dwg: bool, brid
     if let Some(chunks) = dxf_ext::agent_chunks(d) {
         xrecords.push((dxf_ext::AGENT_KEY, w.h(), chunks));
     }
+    if let Some(chunks) = dxf_ext::embedded_chunks(d) {
+        xrecords.push((dxf_ext::EMBEDDED_KEY, w.h(), chunks));
+    }
     if let Some(chunks) = dxf_ext::bim_types_chunks(d) {
         xrecords.push((dxf_ext::BIM_TYPES_KEY, w.h(), chunks));
     }

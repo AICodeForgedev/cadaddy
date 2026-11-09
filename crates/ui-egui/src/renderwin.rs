@@ -61,7 +61,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     if save
         && let Some(pick) = &app.services.pick_save_image
         && let Some(path) = pick("render.png")
-        && let Err(e) = app.run("saveimg", serde_json::json!({ "path": path }))
+        && let Err(e) = app.run("saveimg", serde_json::json!({ "path": path, "force": true }))
     {
         app.session.echo(e);
     }

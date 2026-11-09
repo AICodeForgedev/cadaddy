@@ -1669,6 +1669,54 @@ fn detour_run(r: &mut MepRun, at: Vec2, z_ft: f64, bx: [f64; 4], upf: f64) -> Op
     Some((pts.iter().map(|p| Vec2::new(p[0], p[1])).collect(), extra_ft))
 }
 
+/// The fire rating of the floor/ceiling assembly over `below` at `p` (a point of `below`'s plan):
+/// the ceiling type of its reflected ceiling plan's area there, where the documents give one.
+fn floor_rating(sp: &BuildingSpec, p: Vec2, below: &str) -> Option<String> {
+    sp.rcp
+        .ceilings
+        .iter()
+        .filter(|ca| same_level(&ca.level, below) && ca.outline.len() >= 3)
+        .find(|ca| inside(p, &ca.outline.iter().map(|q| Vec2::new(q[0], q[1])).collect::<Vec<_>>()))
+        .and_then(|ca| ca.ceiling_type.as_ref())
+        .and_then(|t| sp.ceiling_types.iter().find(|ct| ct.name.eq_ignore_ascii_case(t)))
+        .and_then(|ct| ct.fire_rating.clone())
+        .filter(|r| !r.trim().is_empty())
+}
+
+/// Each floor a feeder's riser passes (Q6347): a penetration with its firestop, rated by the
+/// floor/ceiling assembly under that floor where the documents give one. The feeder route cuts its
+/// risers at each floor (`gearbuild`), so a feeder's vertical piece standing on its level's floor,
+/// over a level below, passed that floor. `carry` takes a point of one level's plan onto another's.
+fn feeder_floor_penetrations(sp: &BuildingSpec, carry: &dyn Fn(Vec2, &str, &str) -> Vec2, rl: &RouteRules, out: &mut Vec<Value>) {
+    let mut levels: Vec<_> = sp.levels.iter().filter(|l| l.elevation_ft.is_finite()).collect();
+    levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+    for r in sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)) {
+        if out.len() >= MAX_ITEMS {
+            break;
+        }
+        let (Some(top), Some(bot), [p]) = (r.top_ft, r.bottoms_ft.first().copied(), r.points.as_slice()) else { continue };
+        if !(top > bot && bot.abs() < 1e-6) {
+            continue;
+        }
+        let Some(li) = levels.iter().position(|l| same_level(&l.name, &r.level)) else { continue };
+        let Some(below) = li.checked_sub(1).and_then(|j| levels.get(j)) else { continue };
+        let Some(l) = levels.get(li) else { continue };
+        let at = Vec2::new(p[0], p[1]);
+        let rating = floor_rating(sp, carry(at, &l.name, &below.name), &below.name);
+        let size_in = r.size_in[0];
+        out.push(json!({
+            "floor": l.name, "rating": rating.clone().unwrap_or_else(|| "not given".into()), "level": l.name,
+            "circuit": r.source_sheet, "raceway_in": size_in, "feeder": true,
+            "at": [r2(at.x), r2(at.y), 0.0],
+            "firestop": match &rating {
+                Some(v) => format!("{} for {} raceway through the {} floor ({v})", rl.firestop.item, super::mepatoms::trade_size(size_in), l.name),
+                None => format!("{} for {} raceway through the {} floor: rating {}", rl.firestop.item, super::mepatoms::trade_size(size_in), l.name, rl.firestop.floor_unrated),
+            },
+            "source": rl.firestop.source,
+        }));
+    }
+}
+
 fn same_level(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
@@ -2096,7 +2144,13 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         sp.tags.iter().enumerate().filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART)).take(MAX_CIRCUITS).collect();
     // Nothing to route: no circuits, and no low-voltage outlet for a pathway (Q6203).
     if circuit_tags.is_empty() && !lv::any_outlet(d) {
-        out.report = json!({"circuits": 0, "note": "no circuits in the spec: nothing to route"});
+        // The feeders' risers still pass their floors (Q6347).
+        let moves = level_moves(d, sp);
+        let move_of = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+        let carry = |p: Vec2, from: &str, to: &str| p + move_of(from) - move_of(to);
+        let mut penetrations = Vec::new();
+        feeder_floor_penetrations(sp, &carry, rl, &mut penetrations);
+        out.report = json!({"circuits": 0, "note": "no circuits in the spec: nothing to route", "penetrations": penetrations});
         return out;
     }
 
@@ -2107,7 +2161,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     for e in d.model.iter() {
         if super::wallgen::made_as(e).as_deref() == Some("device") && devs.len() < MAX_DEVICES {
             let ps = props::read(&e.common.xdata);
-            if ps.get("misplaced").is_some() {
+            // Site work's luminaires are fed by its buried runs, never through the building.
+            if ps.get("misplaced").is_some() || ps.get(super::sitework::MARK).is_some() {
                 continue;
             }
             let Some((lo, hi)) = mesh_box(e) else { continue };
@@ -2516,9 +2571,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             if !gap::is_power_device(&dv.kind) {
                 continue;
             }
+            // Site gear (the utility's transformer, a pole) feeds no branch circuit in the building.
+            let site = |g: &GearEl| sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&g.tag) && super::utilityxfmr::is_site(e));
             let near = gear
                 .iter()
-                .filter(|g| same_level(&g.level, &dv.level) && electrical(g))
+                .filter(|g| same_level(&g.level, &dv.level) && electrical(g) && !site(g))
                 .map(|g| (manhattan(gear_ctr(g), dv.at), g))
                 .filter(|(dd, _)| *dd <= reach)
                 .min_by(|a, b| a.0.total_cmp(&b.0));
@@ -3806,18 +3863,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     continue;
                 }
                 let below = li.checked_sub(1).and_then(|j| levels.get(j));
-                let rating = below.and_then(|b| {
-                    let p = carry(land, &lead_h.level, &b.name);
-                    sp.rcp
-                        .ceilings
-                        .iter()
-                        .filter(|ca| same_level(&ca.level, &b.name) && ca.outline.len() >= 3)
-                        .find(|ca| inside(p, &ca.outline.iter().map(|q| Vec2::new(q[0], q[1])).collect::<Vec<_>>()))
-                        .and_then(|ca| ca.ceiling_type.as_ref())
-                        .and_then(|t| sp.ceiling_types.iter().find(|ct| ct.name.eq_ignore_ascii_case(t)))
-                        .and_then(|ct| ct.fire_rating.clone())
-                        .filter(|r| !r.trim().is_empty())
-                });
+                let rating = below.and_then(|b| floor_rating(sp, carry(land, &lead_h.level, &b.name), &b.name));
                 let fl = json!({
                     "floor": l.name, "rating": rating.clone().unwrap_or_else(|| "not given".into()), "level": lead_h.level,
                     "circuit": labels.join(","), "raceway_in": size_in,
@@ -4123,9 +4169,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             if !gap::is_power_device(&dv.kind) || proposed.len() >= MAX_ITEMS || inferred_devs.contains(di) {
                 continue;
             }
+            let site = |g: &GearEl| sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&g.tag) && super::utilityxfmr::is_site(e));
             let near_gear = gear
                 .iter()
-                .filter(|g| same_level(&g.level, &dv.level) && electrical(g))
+                .filter(|g| same_level(&g.level, &dv.level) && electrical(g) && !site(g))
                 .min_by(|a, b| manhattan(gear_ctr(a), dv.at).total_cmp(&manhattan(gear_ctr(b), dv.at)));
             let Some(g) = near_gear else { continue };
             // A unit's copy (`P-1A`) has its typical panel's schedule (`P`).
@@ -4458,6 +4505,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "rule": "a branch circuit's conductors are the smallest its breaker allows unless the documents give a size or a voltage-drop or derating calculation needs more",
         "voltage_drop": rl.vdrop.source, "load": rl.vdrop.moment_source, "homerun_first": rl.vdrop.homerun_first_source,
     });
+    // The feeders' risers through the floors (Q6347): their firestop with the branch circuits'.
+    feeder_floor_penetrations(sp, &carry, rl, &mut penetrations);
     out.report = json!({
         "circuits": circs.len(),
         "routed_circuits": homes.len(),

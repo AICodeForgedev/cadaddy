@@ -837,8 +837,17 @@ fn read_submittals(s: &mut crate::Session, job: &super::guided::GuidedJob, docs:
                 let src = f.and_then(|f| f.get("source")).and_then(Value::as_str).unwrap_or_default().trim().to_string();
                 (v, src)
             };
-            let (maker, msrc) = field(keys::MANUFACTURER);
-            let (catalog, csrc) = field(keys::CATALOG_NUMBER);
+            let (mut maker, mut msrc) = field(keys::MANUFACTURER);
+            let (mut catalog, mut csrc) = field(keys::CATALOG_NUMBER);
+            // A page header its own cut sheet doesn't back (the reader sets it aside, Q6336) is
+            // still what the submittal's header says: compared, and cited as the header.
+            let header_only = catalog.is_empty() && !field(super::spec_import::HEADER_CATALOG).0.is_empty();
+            if header_only {
+                (catalog, csrc) = field(super::spec_import::HEADER_CATALOG);
+                if maker.is_empty() {
+                    (maker, msrc) = field(super::spec_import::HEADER_MANUFACTURER);
+                }
+            }
             let luminaire = p.get("category").and_then(Value::as_str) == Some("luminaire");
             if maker.is_empty() && catalog.is_empty() && !luminaire {
                 continue;
@@ -853,7 +862,11 @@ fn read_submittals(s: &mut crate::Session, job: &super::guided::GuidedJob, docs:
                 catalog,
                 voltage,
                 wattage,
-                cite: page.map_or_else(|| name.clone(), |n| format!("{name} p.{n}")),
+                cite: format!(
+                    "{}{}",
+                    page.map_or_else(|| name.clone(), |n| format!("{name} p.{n}")),
+                    if header_only { " (page header only: its own cut sheet doesn't show it)" } else { "" }
+                ),
                 revision,
                 status,
                 others: Vec::new(),

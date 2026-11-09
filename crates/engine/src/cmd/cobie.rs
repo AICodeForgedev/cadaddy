@@ -1308,12 +1308,16 @@ fn write_out(cmd: &str, path: &str, bytes: &[u8], out: &mut Value) -> Result<()>
     Ok(())
 }
 
-fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
-    str_param(p, "path").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad(cmd, "path required (an .xlsx file)"))
+/// The workbook's `path`: an .xlsx name that isn't the open drawing, nor an existing file unless the
+/// call says `force: true` (checked before anything is built).
+fn path_param<'a>(s: &Session, cmd: &str, p: &'a Value) -> Result<&'a str> {
+    let path = str_param(p, "path").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad(cmd, "path required (an .xlsx file)"))?;
+    super::exchange::guard_typed_output(s, cmd, p, path, &["xlsx"], "an Excel workbook")?;
+    Ok(path)
 }
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = path_param("cobie.export", p)?;
+    let path = path_param(s, "cobie.export", p)?;
     let o = Opts::from("cobie.export", p)?;
     let (d, source) = model("cobie.export", s)?;
     let topics = super::bcf::load(s.doc()?);
@@ -1426,7 +1430,7 @@ fn schedules(d: &Drawing, which: &[String]) -> Book {
 }
 
 fn run_schedules(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = path_param("handover.schedules", p)?;
+    let path = path_param(s, "handover.schedules", p)?;
     let which: Vec<String> = match p.get("schedules") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
@@ -1449,7 +1453,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("cobie.export", "Export COBie", run_export)
             .menu(&["File", "Export", "COBie..."])
-            .params("{path: .xlsx file, author?: email (default handover@example.com), company?, project?, facility?, category?, phase?, currency?, created_on?: yyyy-mm-ddThh:mm:ss (default now), zones?: [{name, category?, spaces: [space name]}]} → {source, rows: {sheet: count}, validation: {ok, errors, warnings, problems}, path}")
+            .params("{path: .xlsx file, force?: bool (replace an existing file), author?: email (default handover@example.com), company?, project?, facility?, category?, phase?, currency?, created_on?: yyyy-mm-ddThh:mm:ss (default now), zones?: [{name, category?, spaces: [space name]}]} → {source, rows: {sheet: count}, validation: {ok, errors, warnings, problems}, path}")
             .noundo(),
         CommandSpec::new("cobie.validate", "Validate COBie", run_validate)
             .enabled(always)
@@ -1457,7 +1461,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("handover.schedules", "Export Handover Schedules", run_schedules)
             .menu(&["File", "Export", "Handover Schedules..."])
-            .params("{path: .xlsx file, schedules?: [rooms, doors, equipment] (default all)} → {source, rows: {sheet: count}, path}")
+            .params("{path: .xlsx file, force?: bool (replace an existing file), schedules?: [rooms, doors, equipment] (default all)} → {source, rows: {sheet: count}, path}")
             .noundo(),
     ]
 }

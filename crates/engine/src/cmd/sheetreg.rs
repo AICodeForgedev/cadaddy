@@ -37,6 +37,17 @@ pub(crate) const MIN_POINTS: usize = 200;
 /// alone is no test: a dense electrical plan covers half of any plan by chance (a plan of another
 /// building in the same title block lay half on it), and a sparse plan lies on a dense one.
 pub(crate) const FRAME_SHARE: f64 = 0.4;
+/// A sheet this much wider than the plan it's laid on can't be weighed whole
+/// ([`super::grids::linework_fit_part`] won't try).
+const MAX_SHEET_OVER_PLAN: f64 = 1.2;
+
+/// Most blocks of a too-wide sheet's lines tried as its plan.
+const MAX_BLOCKS_TRIED: usize = 3;
+
+/// How much of two sheets' linework must lie on each other, both ways, for one to be placed
+/// through the other: the same consultant's background in the same spot agrees nearly line for
+/// line, where a sheet laid on the architect's plan differs by the architect's own detail.
+pub(crate) const SIBLING_SHARE: f64 = 0.8;
 /// A linework fit holds with this F1 of the two drawings' lines on each other (a whole sheet's
 /// walls are the plan's walls: another building's plan of rooms on the same grid of partitions
 /// lies on it two thirds of the way)...
@@ -175,6 +186,32 @@ impl SheetLines {
         Some((on_plan, on_sheet))
     }
 
+    /// Sheet `i` placed through sheet `j` that `j_fit` already places: by their frames, if the
+    /// sheets are one size and `i`'s lines lie on `j`'s both ways. The placement, and the two shares.
+    pub(crate) fn through_sibling(&self, i: usize, j: usize, j_fit: &Sim) -> Option<(Sim, f64, f64)> {
+        let (a, b) = (self.rects.get(i)?, self.rects.get(j)?);
+        let alike = |p: f64, q: f64| (p - q).abs() <= 0.01 * q.abs();
+        if !alike(a[2] - a[0], b[2] - b[0]) || !alike(a[3] - a[1], b[3] - b[1]) {
+            return None;
+        }
+        let frame = Sim::scale_offset(1.0, [b[0] - a[0], b[1] - a[1]]);
+        let (on, under) = self.frame_share(i, &frame, self.pts.get(j)?)?;
+        let start = j_fit.apply([frame.tx, frame.ty]);
+        (on.min(under) >= SIBLING_SHARE && (j_fit.scale() - 1.0).abs() <= 1e-9).then(|| (Sim::scale_offset(1.0, start), on, under))
+    }
+
+    /// Why [`Self::fit`] found none, for the log: the best placement it weighed.
+    pub(crate) fn best_tried(&self, i: usize, tgt: &[Vec2]) -> String {
+        let (Some(src), true) = (self.pts.get(i), self.stripped(i)) else { return "its template could not be told from its drawing".into() };
+        if src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
+            return format!("{} sheet points, {} plan points", src.len(), tgt.len());
+        }
+        super::grids::linework_fit_part(src, tgt, self.k_in, 0.97, 1.03).map_or_else(
+            || "nothing to weigh".to_string(),
+            |(s, _, score, margin)| format!("best scale {s:.3}, {:.0}% on the plan, {:.0} points over the next", score * 100.0, margin * 100.0),
+        )
+    }
+
     /// Sheet `i` fitted onto `tgt` (its level's plan linework) by its linework, one to one within
     /// 2.5% (a fit off that is its sampling's error, so one to one about its middle; one at the
     /// end of the scales tried is no fit), the whole floor or a part of it (an enlarged plan). `None` without a fit that holds ([`FIT_F1`],
@@ -184,6 +221,35 @@ impl SheetLines {
         if !self.stripped(i) || src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
             return None;
         }
+        self.fit_points(src, tgt).or_else(|| {
+            // Schedules and notes beside the plan can leave the sheet wider than the plan it is
+            // laid on, so it can't be weighed whole: its biggest block of lines is its plan.
+            let span = |p: &[Vec2]| {
+                let b = cadaddy_geom::Bounds2::from_points(p.iter().copied());
+                b.width().max(b.height())
+            };
+            if span(src) <= MAX_SHEET_OVER_PLAN * span(tgt) {
+                return None;
+            }
+            // A schedule's table can outweigh the plan: the biggest few are each tried, and only
+            // a plan passes the fit.
+            let mut rest = src.clone();
+            for _ in 0..MAX_BLOCKS_TRIED {
+                let block = super::grids::largest_block(&rest, 48.0 * self.k_in);
+                if block.len() < MIN_POINTS || block.len() >= src.len() {
+                    return None;
+                }
+                if let Some(f) = self.fit_points(&block, tgt) {
+                    return Some(f);
+                }
+                let taken: std::collections::HashSet<(u64, u64)> = block.iter().map(|p| (p.x.to_bits(), p.y.to_bits())).collect();
+                rest.retain(|p| !taken.contains(&(p.x.to_bits(), p.y.to_bits())));
+            }
+            None
+        })
+    }
+
+    fn fit_points(&self, src: &[Vec2], tgt: &[Vec2]) -> Option<LineworkFit> {
         // Each scale proposes its best few placements, so the margin is over a real runner-up.
         let fit = super::grids::linework_fit_part(src, tgt, self.k_in, 0.97, 1.03);
         let (s, t, score, margin) = fit.filter(|f| f.2 >= FIT_F1 && f.3 >= FIT_MARGIN && (f.0 - 1.0).abs() <= 0.025)?;
@@ -261,6 +327,69 @@ mod tests {
 
     fn set(pairs: &[(&str, &str)]) -> BTreeSet<(String, String)> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// The same drawing on two sheets side by side, and a third of the same size drawing another.
+    fn three_sheets() -> SheetLines {
+        // Upright lines 150 apart: a drawing shifted half way lies clear of the overlay's reach.
+        let drawing = |x0: f64, phase: f64| -> Vec<Vec2> {
+            (0..600).map(f64::from).map(|n| Vec2::new(x0 + phase + 150.0 * (n % 6.0), 5.0 * (n / 6.0).floor())).collect()
+        };
+        SheetLines {
+            rects: vec![[0.0, 0.0, 1000.0, 600.0], [2000.0, 0.0, 3000.0, 600.0], [4000.0, 0.0, 5000.0, 600.0]],
+            pts: vec![drawing(0.0, 20.0), drawing(2000.0, 20.0), drawing(4000.0, 95.0)],
+            stripped: vec![true, true, true],
+            k_in: 1.0,
+        }
+    }
+
+    #[test]
+    fn a_sheet_is_placed_through_one_that_draws_the_same_background() {
+        let lines = three_sheets();
+        let placed = Sim::scale_offset(1.0, [500.0, -7.0]);
+        let (m, on, under) = lines.through_sibling(0, 1, &placed).expect("the same drawing, frame on frame");
+        assert!(on > 0.9 && under > 0.9, "{on} {under}");
+        // Onto sheet 1 by the frame (+2000), then where sheet 1 goes.
+        assert_eq!(m.apply([10.0, 10.0]), [2510.0, 3.0]);
+        assert!(lines.through_sibling(0, 2, &placed).is_none(), "another drawing is no sibling");
+    }
+
+    #[test]
+    fn a_sheet_with_schedules_beside_its_plan_is_fitted_by_its_plan() {
+        // A floor of unlike rooms, and the same floor 100 along on a sheet with a schedule's table
+        // far beside it: the sheet is much wider than the plan.
+        let walls = |dx: f64| -> Vec<Vec2> {
+            let mut p = Vec::new();
+            let mut line = |a: (f64, f64), b: (f64, f64)| {
+                let n = ((b.0 - a.0).abs() + (b.1 - a.1).abs()) as i32 / 6;
+                p.extend((0..=n).map(|i| f64::from(i) / f64::from(n.max(1))).map(|f| Vec2::new(dx + a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)));
+            };
+            line((0.0, 0.0), (900.0, 0.0));
+            line((900.0, 0.0), (900.0, 500.0));
+            line((900.0, 500.0), (0.0, 500.0));
+            line((0.0, 500.0), (0.0, 0.0));
+            for (x, h) in [(130.0, 410.0), (290.0, 170.0), (370.0, 500.0), (610.0, 260.0), (770.0, 390.0)] {
+                line((x, 0.0), (x, h));
+            }
+            for (y, a, b) in [(90.0, 0.0, 370.0), (340.0, 130.0, 610.0), (220.0, 370.0, 900.0), (430.0, 610.0, 900.0)] {
+                line((a, y), (b, y));
+            }
+            p
+        };
+        let plan = walls(0.0);
+        let mut sheet = walls(100.0);
+        let table: Vec<Vec2> = (0..40).flat_map(|r| (0..40).map(move |c| Vec2::new(2000.0 + f64::from(c) * 20.0, f64::from(r) * 12.0))).collect();
+        let whole_is_too_wide = SheetLines {
+            rects: vec![[0.0, 0.0, 3000.0, 600.0]],
+            pts: vec![{
+                sheet.extend(table);
+                sheet
+            }],
+            stripped: vec![true],
+            k_in: 0.25,
+        };
+        let f = whole_is_too_wide.fit(0, &plan).expect("its plan fits");
+        assert!((f.sim.tx + 100.0).abs() <= 15.0 && f.sim.ty.abs() <= 15.0, "{:?}", (f.sim.tx, f.sim.ty));
     }
 
     #[test]

@@ -160,6 +160,8 @@ pub(crate) struct GangRule {
     /// The families that may share one box when a keynote says to gang them (power devices; low
     /// voltage never with power).
     pub power_families: Vec<String>,
+    /// Why a gang's devices stand at one height, and which (Q6335).
+    pub height_source: String,
 }
 
 /// The box a kind of device takes, on raceway and on cable, and whether it takes a ring.
@@ -289,6 +291,8 @@ pub(crate) struct AtomRules {
     /// The fitting where a buried raceway comes up and runs on in another (`{from}`, `{to}`).
     pub transition_item: String,
     pub transition_source: String,
+    /// Why a riser cut at a floor is joined there by one coupling (Q6347).
+    pub floor_joint_source: String,
     pub insulation: String,
     pub insulation_source: String,
     /// Each conductor's makeup at each box, feet: the code's minimum and the field allowance
@@ -974,6 +978,33 @@ pub(crate) fn bury(p: &mut Pieces, floor_z: f64, tol: f64, steel: bool, open: [b
         p.retain(|i, _| !drop.contains(&i));
     }
     made
+}
+
+/// A raceway's end `end` where it runs on through a floor into the same raceway's piece on the
+/// next level (a riser cut at the floor, Q6347): one coupling joins the two sticks there, not a
+/// connector, locknut and bushing on each. The lower piece's end (`keep`) takes the coupling
+/// (`rw`'s, of its material); the upper piece's end gives up its fittings. Returns whether it
+/// made the joint.
+pub(crate) fn join_at_floor(p: &mut Pieces, end: usize, keep: bool, rw: &Raceway, source: &str) -> bool {
+    let Some(ci) = p.ends.get(end).copied().flatten() else { return false };
+    if p.atoms.get(ci).is_none_or(|c| c.kind != "connector") {
+        return false;
+    }
+    let mut drop: BTreeSet<usize> =
+        p.atoms.iter().enumerate().filter(|(_, x)| matches!(x.kind, "locknut" | "bushing") && x.connects == [ci]).map(|(j, _)| j).collect();
+    if keep {
+        if let Some(c) = p.atoms.get_mut(ci) {
+            c.kind = "coupling";
+            c.item = rw.coupling.clone();
+            c.source = source.into();
+            c.extra.push(("joint", "floor".into(), source.into()));
+            c.connects.retain(|j| !drop.contains(j));
+        }
+    } else {
+        drop.insert(ci);
+    }
+    p.retain(|i, _| !drop.contains(&i));
+    true
 }
 
 /// A branch circuit's conductors (`2#12 + 1#12G`, `3#10, 1#10G`): count, size, ground.

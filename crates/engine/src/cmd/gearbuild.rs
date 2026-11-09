@@ -1548,6 +1548,8 @@ const RISER_BESIDE_FT: f64 = 1.5;
 const STACK_REACH_FT: f64 = 6.0;
 /// The most copies of a typical panel chained (a bound on hostile input).
 const MAX_TYPICAL: usize = 5000;
+/// The most levels a riser is cut at (a bound on hostile input).
+const MAX_LEVELS: usize = 500;
 
 type Gear = cadaddy_walk3d::MepEquipment;
 
@@ -1590,9 +1592,39 @@ impl RouteCtx<'_> {
         r.height_source = "proposed".into();
         r
     }
+    /// A vertical leg at `at` on `level`'s plan from `lo` to `hi` (feet over `level`'s floor),
+    /// cut where the field's raceway changes and where it passes a floor (Q6347): a leg up out of
+    /// the slab level's ground is the buried raceway to its stub-up's top (the underground rules'
+    /// stub height over the floor, where it meets the raceway above in a transition), the
+    /// above-grade raceway over it; a leg through another level's floor is that level's from its
+    /// floor up (and the level below's under it), each piece on its own level's plan, so each
+    /// level's riser is counted on that level and each floor it passes is a penetration.
     fn riser(&self, level: &str, src: &str, at: Vec2, lo: f64, hi: f64, size: f64, runs: &mut Vec<cadaddy_walk3d::MepRun>) {
-        if hi - lo > 0.05 {
-            runs.push(self.run(level, src, vec![[at.x, at.y]], size, lo, Some(hi)));
+        if !(lo.is_finite() && hi.is_finite()) || hi - lo <= 0.05 {
+            return;
+        }
+        let base = self.elevation(level);
+        let mut cuts = vec![lo, hi];
+        let stub = super::ugplan::rules().stubup.conduit_top_ft;
+        let on_slab = super::ugplan::slab_level(self.sp).is_some_and(|l| l.eq_ignore_ascii_case(level));
+        if on_slab && lo < 0.0 && stub.is_finite() && stub >= 0.0 && hi > stub {
+            cuts.push(stub);
+        }
+        // The floors it passes (a bound on hostile input: the model's levels); the slab level's
+        // own is the ground's top, where the stub-up is the cut.
+        let floors: Vec<(&str, f64)> =
+            self.sp.levels.iter().filter(|l| l.elevation_ft.is_finite()).take(MAX_LEVELS).map(|l| (l.name.as_str(), l.elevation_ft - base)).collect();
+        cuts.extend(
+            floors.iter().filter(|f| !(on_slab && f.0.eq_ignore_ascii_case(level))).map(|f| f.1).filter(|z| *z > lo + 1e-6 && *z < hi - 1e-6),
+        );
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        for w in cuts.windows(2) {
+            let [a, b] = w else { continue };
+            // The level whose storey it stands in: the highest floor at or under its foot, else its own.
+            let owner = floors.iter().filter(|f| f.1 <= a + 1e-6).max_by(|x, y| x.1.total_cmp(&y.1)).map_or((level, 0.0), |f| (f.0, f.1));
+            let p = at - self.corner(level) + self.corner(owner.0);
+            runs.push(self.run(owner.0, src, vec![[p.x, p.y]], size, a - owner.1, Some(b - owner.1)));
         }
     }
 
@@ -2065,14 +2097,83 @@ mod feeder_route_tests {
         let (runs, left) = feeder_runs(&sp);
         assert!(left.is_empty(), "G, two copies, has its nearer one fed: {left:?}");
         // DP1, same level, bottom out and top in: down, across under the floor, up into its top; twice.
+        // The leg up into it is the buried raceway to the stub-up's top, the raceway above over it (Q6347).
         let dp1: Vec<_> = runs.iter().filter(|r| r.source_sheet.contains("DP1")).collect();
-        assert_eq!(dp1.len(), 6, "{dp1:#?}");
-        let into = dp1.iter().find(|r| r.top_ft.is_some() && r.points[0][1] > 300.0).expect("up into DP1");
-        assert_eq!((into.bottoms_ft[0], into.top_ft), (-1.5, Some(6.0)));
-        // DP2, two levels up: the riser beside it reaches its level's route (20 + 9 + 1 ft).
-        let up = runs.iter().filter(|r| r.source_sheet.contains("DP2") && r.top_ft == Some(30.0)).count();
+        assert_eq!(dp1.len(), 8, "{dp1:#?}");
+        let stub = super::super::ugplan::rules().stubup.conduit_top_ft;
+        let into: Vec<_> =
+            dp1.iter().filter(|r| r.top_ft.is_some() && r.points[0][1] > 300.0).map(|r| (r.system.as_str(), r.bottoms_ft[0], r.top_ft)).collect();
+        assert_eq!(into[..2], [(super::super::ugplan::E_UG, -1.5, Some(stub)), (FEEDER_SYSTEM, stub, Some(6.0))]);
+        // DP2, two levels up: the riser beside it reaches its level's route (20 + 9 + 1 ft), cut
+        // at the stub-up's top and at Level 3's floor (Q6347).
+        let up = runs
+            .iter()
+            .filter(|r| {
+                r.source_sheet.contains("DP2") && r.level == "Level 3" && r.points.len() == 1 && r.bottoms_ft == [0.0] && r.top_ft == Some(10.0)
+            })
+            .count();
         assert_eq!(up, 1, "{runs:#?}");
         assert!(runs.iter().any(|r| r.source_sheet.contains("DP2") && r.level == "Level 3" && r.top_ft == Some(10.0)), "down into DP2's top");
+    }
+
+    /// Q6347: a feeder from the ground floor's gear to a panel two floors up is built in its three
+    /// parts: the buried leg with its stub-up (to the stub's top over the slab), the riser in the
+    /// above-grade raceway on each level it passes (each floor a cut), and the run on the panel's
+    /// level; none of the riser is the buried system or counted on the ground floor alone.
+    #[test]
+    fn a_feeder_to_an_upper_floor_rises_level_by_level_in_the_raceway_above_the_slab() {
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        // Unequal storeys, each level's plan in its own place on the sheet.
+        sp.levels.clear();
+        for (n, e, r) in [
+            ("First", 0.0, [0.0, 0.0, 1200.0, 1200.0]),
+            ("Second", 11.0, [3000.0, 0.0, 4200.0, 1200.0]),
+            ("Third", 20.5, [6000.0, 500.0, 7200.0, 1700.0]),
+        ] {
+            sp.levels.push(
+                serde_json::from_value(serde_json::json!({"name": n, "elevation_ft": e, "height_ft": 10.0, "ceiling_ft": 8.0, "region": r}))
+                    .expect("level"),
+            );
+        }
+        sp.mep.equipment = vec![gear("SWBD", "First", [100.0, 100.0], 0.0, 7.5), gear("P3", "Third", [6700.0, 1100.0], 2.0, 4.0)];
+        sp.mep.feeders = vec![cadaddy_walk3d::Feeder {
+            tag: "F1".into(),
+            from: "SWBD".into(),
+            to: "P3".into(),
+            conduits: 1,
+            conduit_in: 3.0,
+            from_entry: "bottom".into(),
+            entry: "top".into(),
+            ..Default::default()
+        }];
+        let (runs, left) = feeder_runs(&sp);
+        assert!(left.is_empty(), "{left:?}");
+        let stub = super::super::ugplan::rules().stubup.conduit_top_ft;
+        let vertical = |r: &&cadaddy_walk3d::MepRun| r.points.len() == 1 && r.top_ft.is_some();
+        // The buried part: on the ground floor, below the stub's top.
+        for r in runs.iter().filter(|r| r.system == super::super::ugplan::E_UG) {
+            assert_eq!(r.level, "First", "{r:#?}");
+            assert!(r.top_ft.unwrap_or(r.bottoms_ft[0]) <= stub + 1e-9, "the buried raceway stops at its stub-up: {r:#?}");
+        }
+        assert!(runs.iter().any(|r| r.system == super::super::ugplan::E_UG && vertical(&r) && r.top_ft == Some(stub)), "the stub-up: {runs:#?}");
+        // The riser: in the above-grade raceway on every level it passes, floor to floor.
+        let risers: Vec<_> = runs.iter().filter(|r| r.system == FEEDER_SYSTEM).filter(vertical).collect();
+        let on = |l: &str| risers.iter().filter(|r| r.level == l).map(|r| (r.bottoms_ft[0], r.top_ft.unwrap_or(0.0))).collect::<Vec<_>>();
+        assert_eq!(on("First"), vec![(stub, 11.0)], "{risers:#?}");
+        assert_eq!(on("Second"), vec![(0.0, 9.5)], "{risers:#?}");
+        // On the panel's level: up from its floor to the route over its ceiling, and down into the panel's top.
+        assert_eq!(on("Third"), vec![(0.0, 9.0), (6.0, 9.0)], "{risers:#?}");
+        // Each piece stands on its own level's plan, one stack: the same spot from each level's corner.
+        let spot = |r: &cadaddy_walk3d::MepRun| {
+            let c = sp.levels.iter().find(|l| l.name == r.level).and_then(|l| l.region).unwrap_or_default();
+            ((r.points[0][0] - c[0]).round(), (r.points[0][1] - c[1]).round())
+        };
+        let stack: Vec<_> = risers.iter().filter(|r| r.level != "Third" || r.bottoms_ft[0] == 0.0).map(|r| spot(r)).collect();
+        assert!(stack.windows(2).all(|w| w[0] == w[1]), "{stack:?}");
+        // Nothing lost: the vertical feet are the floor-to-floor rise plus the ends.
+        let up: f64 = runs.iter().filter(vertical).map(|r| r.top_ft.unwrap_or(0.0) - r.bottoms_ft[0]).sum();
+        // Out of the gear's bottom (1.5), up to the third level's route (20.5 + 9 + 1.5), down into the top (3).
+        assert!((up - (1.5 + 20.5 + 9.0 + 1.5 + 3.0)).abs() < 1e-9, "{up}");
     }
 
     #[test]
@@ -2112,11 +2213,13 @@ mod feeder_route_tests {
         assert!(runs.iter().any(|r| r.source_sheet == "feeder 123 DP1→G-101→G-201"), "{runs:#?}");
         assert!(runs.iter().any(|r| r.source_sheet == "feeder 123 DP1→G-102→G-202"));
         // Through G-101's lugs: out of its top (7 ft), through the floor into G-201's bottom (10 + 4 ft).
-        let through = runs.iter().filter(|r| r.source_sheet.contains("G-101") && r.level == "Level 1" && r.top_ft == Some(14.0)).collect::<Vec<_>>();
+        // Cut at the floor (Q6347): Level 1's to its ceiling side of the floor, Level 2's from its floor.
+        let through = runs.iter().filter(|r| r.source_sheet.contains("G-101") && r.level == "Level 1" && r.top_ft == Some(10.0)).collect::<Vec<_>>();
         assert_eq!(through.len(), 1, "{runs:#?}");
         assert_eq!(through[0].bottoms_ft[0], 7.0);
+        assert!(runs.iter().any(|r| r.source_sheet.contains("G-101") && r.level == "Level 2" && r.bottoms_ft == [0.0] && r.top_ft == Some(4.0)));
         // G-201 sits 2 inches off G-101 on plan: no leg for that.
-        assert!(!runs.iter().any(|r| r.source_sheet.contains("G-101") && r.level == "Level 2"));
+        assert!(!runs.iter().any(|r| r.source_sheet.contains("G-101") && r.level == "Level 2" && r.points.len() >= 2));
         // Every route is its feeder's (Q6201: its conductors ride it), a typical copy's too.
         let mut with_runs = sp.clone();
         with_runs.mep.runs = runs.clone();
@@ -2179,7 +2282,15 @@ mod feeder_route_tests {
         assert_eq!((level[0].level.as_str(), level[0].points.len()), ("Level 1", 3), "one L: {level:#?}");
         assert!(level[0].bottoms_ft.iter().all(|b| (b - h).abs() < 1e-9), "{level:#?}");
         assert!(through.iter().any(|r| r.top_ft == Some(h) && r.bottoms_ft == vec![7.0]), "{through:#?}");
-        assert!(through.iter().any(|r| r.top_ft == Some(14.0) && r.bottoms_ft == vec![h] && r.points == vec![[324.0, 630.0]]), "{through:#?}");
+        // Cut at Level 2's floor (Q6347): Level 1's piece to the floor, Level 2's on its own plan into G-201's bottom.
+        assert!(
+            through.iter().any(|r| r.level == "Level 1" && r.top_ft == Some(10.0) && r.bottoms_ft == vec![h] && r.points == vec![[324.0, 630.0]]),
+            "{through:#?}"
+        );
+        assert!(
+            through.iter().any(|r| r.level == "Level 2" && r.top_ft == Some(4.0) && r.bottoms_ft == vec![0.0] && r.points == vec![[5324.0, 630.0]]),
+            "{through:#?}"
+        );
     }
 
     #[test]

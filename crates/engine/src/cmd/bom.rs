@@ -4,9 +4,10 @@
 //! require has a line, and what changed since the last BOM.
 //!
 //! `bim.bom` (typed `BOM`):
-//! - **Built model** (Q5243): every category that `model.build` creates (walls, doors, ceilings,
-//!   floors, rooms) gets BOM lines — wall framing (studs/track by type), doors by size/type +
-//!   hardware, ceilings by type (area), floor slabs (area), rooms (count/area by type). A built
+//! - **Built model** (Q5243): every category that `model.build` creates (walls, doors, windows,
+//!   ceilings, floors, rooms) gets BOM lines — wall framing (studs/track by type), doors by
+//!   size/type + hardware, windows by size/type (count and area, Q6371), ceilings by type
+//!   (area), floor slabs (area), rooms (count/area by type). A built
 //!   element with no BOM line is a test failure.
 //! - **Electrical devices** (Q5243): symbols on E-sheets (receptacles, switches, lights, fans/EF,
 //!   panels, data, FA) become device elements and BOM lines by type + level.
@@ -339,6 +340,7 @@ fn add(lines: &mut Vec<Line>, l: Line) {
             && x.trade == l.trade
             && x.status == l.status
             && x.rule == l.rule
+            && x.made == l.made
             && x.product.same(&l.product)
     };
     match lines.iter_mut().rev().find(|x| same(x)) {
@@ -673,6 +675,31 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     );
                 }
             }
+        }
+    }
+    // The trench site work's buried conduit lies in (Q6358): one per path, by level.
+    let sw = super::sitework::rules();
+    for (level, (ft, runs)) in super::sitework::trench_ft(&sp) {
+        if ft.is_finite() && ft > 0.0 {
+            add(
+                lines,
+                Line {
+                    trade: "electrical",
+                    category: "trench".into(),
+                    item: sw.trench_item.clone(),
+                    size: format!("{}\" cover", sw.cover_in),
+                    unit: "ft",
+                    net: ft,
+                    status: "model",
+                    rule: Some(sw.cover_source.clone()),
+                    level,
+                    elements: runs,
+                    waste_qty: None,
+                    circuit: String::new(),
+                    product: Product::default(),
+                    made: "",
+                },
+            );
         }
     }
     // Branch conduit and its implied fittings; homerun wire over its route.
@@ -1051,7 +1078,50 @@ fn mesh_plan_area(d: &cadaddy_doc::Drawing, handles: &[String]) -> f64 {
     total
 }
 
-/// Built-model BOM lines (Q5243): walls, doors, ceilings, floors, rooms from the spec and the
+/// A built window's area, square feet: the one its opening was given (`area_sf`), else its
+/// mesh's width (the longer plan side) by its height.
+fn window_area_sf(e: &cadaddy_doc::Entity, upf: f64) -> f64 {
+    let given = cadaddy_doc::props::read(&e.common.xdata).get("area_sf").and_then(|p| p.text().trim().parse::<f64>().ok());
+    if let Some(a) = given.filter(|a| a.is_finite() && *a > 0.0) {
+        return a;
+    }
+    let Some((lo, hi)) = super::fieldview::mesh_box(e) else { return 0.0 };
+    let a = (hi[0] - lo[0]).abs().max((hi[1] - lo[1]).abs()) * (hi[2] - lo[2]).abs() / (upf * upf);
+    if a.is_finite() { a } else { 0.0 }
+}
+
+/// The built windows' lines (Q6371): per level, what they are bought as, size, type and
+/// provenance, a count and their area, each line with its windows.
+fn window_lines(d: &cadaddy_doc::Drawing, upf: f64, lines: &mut Vec<Line>) {
+    // Built elements only, before the cap (a print set's linework comes first).
+    let windows = d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("window")).take(MAX_LINES);
+    for e in windows {
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        let ps = cadaddy_doc::props::read(&e.common.xdata);
+        let text = |k: &str| ps.get(k).map(|p| p.text().trim().chars().take(200).collect::<String>()).unwrap_or_default();
+        let bought_as = text("item");
+        let item = if bought_as.is_empty() { "Window".to_string() } else { capitalised(&bought_as) };
+        let made = super::provenance::of_element(e).map_or("", |(m, _)| made_of(m.as_str()));
+        let line = |item: String, unit: &'static str, net: f64| Line {
+            trade: "general",
+            category: "windows".into(),
+            item,
+            size: text("size"),
+            unit,
+            net,
+            status: "model",
+            level: level.clone(),
+            elements: vec![e.handle.hex()],
+            product: element_product(e),
+            made,
+            ..Line::default()
+        };
+        add(lines, line(item.clone(), "each", 1.0));
+        add(lines, line(format!("{item} area"), "sq ft", window_area_sf(e, upf)));
+    }
+}
+
+/// Built-model BOM lines (Q5243): walls, doors, windows, ceilings, floors, rooms from the spec and the
 /// 3D model that `model.build` created. Each built category must have lines; a built element
 /// with no BOM line is a test failure.
 /// Returns (`missing_categories`, `suspects`, `model_has_elements`).
@@ -1314,6 +1384,9 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     if has_any_built && door_count == 0 {
         missing.push("doors".into());
     }
+
+    // ── Windows: count and area by level, size and type (Q6371) ──
+    window_lines(d, upf, lines);
 
     // ── Ceilings: area by level ──
     let mut ceiling_sf_total = 0.0f64;
@@ -2143,7 +2216,8 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
             || matches!(
                 st(&e, "kind").to_ascii_lowercase().as_str(),
                 "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
-            );
+            )
+            || prop("TRADE").eq_ignore_ascii_case("electrical");
         // A room's own panel (each guest room's G, tagged G-<room>): counted together by its
         // letter, each with its flush trim.
         let own = match (e["properties"]["PANEL"].as_str(), e["properties"]["ROOM"].as_str()) {
@@ -2291,29 +2365,172 @@ fn drywall_from_built_model(s: &mut Session, lines: &mut Vec<Line>) {
 
 /// The levels the walls' drywall is taken off one by one (more: the whole job's at once).
 const MAX_DRYWALL_LEVELS: usize = 200;
+/// The pieces of one board line listed as its elements.
+const PIECE_ELEMENTS: usize = 10;
 
-/// Drywall from `drywall.takeoff`, where walls have assemblies.
+/// The model's own drywall (Q6370): the board sheets `bim.atoms.build` laid on the walls' faces
+/// and the ceilings (what `bim.count {trade: drywall, kind: sheet}` counts), and what they cover.
+#[derive(Default)]
+struct BoardPieces {
+    /// The board by face (ceiling or wall), then level, what it is bought as, size, type and
+    /// provenance.
+    lines: BTreeMap<(bool, super::mepatoms::Key), BoardLine>,
+    /// The walls with board pieces on a face.
+    walls: BTreeSet<cadaddy_doc::Handle>,
+}
+
+/// One board line of the pieces: their area, sheets and a few of them.
+#[derive(Default)]
+struct BoardLine {
+    area_sf: f64,
+    sheets: f64,
+    elements: Vec<String>,
+}
+
+/// The board line a piece counts on: its key without the room and the stock sheet size.
+fn board_key(k: &super::mepatoms::Key) -> super::mepatoms::Key {
+    super::mepatoms::Key {
+        kind: k.kind.clone(),
+        item: board_material(&k.item).to_string(),
+        size: k.size.clone(),
+        ty: k.ty.clone(),
+        level: k.level.clone(),
+        trade: k.trade.clone(),
+        made: k.made.clone(),
+        ..super::mepatoms::Key::default()
+    }
+}
+
+/// A sheet's material without its stock size (`5/8" type X gypsum board, 4x10` → `5/8" type X
+/// gypsum board`): one line for the board whatever lengths it is bought in.
+fn board_material(item: &str) -> &str {
+    match item.rsplit_once(", ") {
+        Some((m, stock)) if stock.split_once('x').is_some_and(|(a, b)| a.trim().parse::<f64>().is_ok() && b.trim().parse::<f64>().is_ok()) => m,
+        _ => item,
+    }
+}
+
+/// The drywall board pieces of the built model; none when it has none (not laid out).
+fn board_pieces(d: &cadaddy_doc::Drawing) -> Option<BoardPieces> {
+    let mut out = BoardPieces::default();
+    for e in d.model.iter().filter(|e| super::tradeatoms::is_trade_piece(e)) {
+        let Some((k, m)) = super::mepatoms::counted(e).filter(|(k, _)| k.trade == "drywall" && k.kind == "sheet") else { continue };
+        let ps = cadaddy_doc::props::read(&e.common.xdata);
+        let ceiling = ps.get("face").map(cadaddy_doc::props::Prop::text).as_deref() == Some("ceiling");
+        if !ceiling && let Some(h) = ps.get("host").and_then(|h| cadaddy_doc::Handle::parse_hex(&h.text())) {
+            out.walls.insert(h);
+        }
+        let l = out.lines.entry((ceiling, board_key(&k))).or_default();
+        if m.area_sf.is_finite() {
+            l.area_sf += m.area_sf;
+        }
+        l.sheets += if m.qty.is_finite() && m.qty > 0.0 { m.qty } else { 1.0 };
+        if l.elements.len() < PIECE_ELEMENTS {
+            l.elements.push(e.handle.hex());
+        }
+    }
+    (!out.lines.is_empty()).then_some(out)
+}
+
+/// The board lines of the model's drywall pieces, each on the level its pieces are on; a
+/// level's ceilings only where `typed` (the documents' ceiling takeoff by type and layer) has none.
+fn board_piece_lines(pieces: &BoardPieces, typed: &BTreeSet<String>, lines: &mut Vec<Line>) {
+    for ((ceiling, k), b) in &pieces.lines {
+        if *ceiling && typed.contains(&k.level) {
+            continue;
+        }
+        let ty = if k.ty.is_empty() { String::new() } else { format!(", type {}", k.ty) };
+        let face = if *ceiling { "ceilings" } else { "walls" };
+        add(
+            lines,
+            Line {
+                trade: "drywall",
+                category: "drywall".into(),
+                item: format!("Board {}", k.item),
+                size: k.size.clone(),
+                unit: "sq ft",
+                net: b.area_sf,
+                status: "model",
+                rule: Some(format!("the model's drywall pieces on its {face} (bim.count trade drywall, kind sheet): {} sheets{ty}", b.sheets)),
+                level: k.level.clone(),
+                elements: b.elements.clone(),
+                made: made_of(&k.made),
+                ..Line::default()
+            },
+        );
+    }
+}
+
+/// Drywall: the board the model's pieces are (Q6370), each level's on its level; the walls the
+/// model has no board pieces on by `drywall.takeoff` (their wall types' layers, both faces);
+/// studs and track by `drywall.takeoff`.
 fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
-    // Each level's walls (a few of each, for element tracking).
+    // Each level's walls (a few of each, for element tracking), and those with no board pieces.
+    let pieces = s.doc().ok().and_then(board_pieces);
     let mut walls: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut bare: BTreeMap<String, Vec<String>> = BTreeMap::new();
     if let Ok(d) = s.doc() {
-        for e in d.model.iter().take(MAX_LINES) {
-            if super::wallgen::made_as(e).as_deref() == Some("wall") {
-                let v = walls.entry(super::bspec::made_level(e).unwrap_or_default()).or_default();
-                if v.len() < 10 {
-                    v.push(e.handle.hex());
-                }
+        // The walls found are capped, not the elements looked at: a job's print linework comes
+        // before the walls built from it (Q6370).
+        for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall")).take(MAX_LINES) {
+            let level = super::bspec::made_level(e).unwrap_or_default();
+            if let Some(p) = &pieces
+                && !p.walls.contains(&e.handle)
+            {
+                bare.entry(level.clone()).or_default().push(e.handle.hex());
+            }
+            let v = walls.entry(level).or_default();
+            if v.len() < 10 {
+                v.push(e.handle.hex());
             }
         }
     }
     let Ok(q) = s.execute("drywall.takeoff", &json!({ "waste": 0 })) else {
         // Q5278: fallback — if drywall.takeoff fails but the model has ceiling elements,
-        // produce a rough drywall line from ceiling area (board both sides of partition walls).
-        drywall_from_built_model(s, lines);
+        // produce a rough drywall line from ceiling area; never where the model holds the board.
+        match &pieces {
+            Some(p) => board_piece_lines(p, &BTreeSet::new(), lines),
+            None => drywall_from_built_model(s, lines),
+        }
         return;
     };
-    if q["rows"].as_array().is_none_or(|a| a.is_empty()) {
+    // The levels whose ceiling board the documents' ceiling types give (below, by type and layer).
+    let typed: BTreeSet<String> = q["ceilings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["part"] == "ceiling" && c["unit"] == "sf")
+        .map(|c| c["level"].as_str().unwrap_or_default().to_string())
+        .collect();
+    if let Some(p) = &pieces {
+        board_piece_lines(p, &typed, lines);
+    }
+    if pieces.is_none() && q["rows"].as_array().is_none_or(|a| a.is_empty()) {
         drywall_from_built_model(s, lines);
+    }
+    // The walls with no board pieces: their board by drywall.takeoff, each level's alone.
+    if pieces.is_some() {
+        for (level, hs) in bare.iter().take(MAX_DRYWALL_LEVELS) {
+            let Ok(r) = s.execute("drywall.takeoff", &json!({ "waste": 0, "handles": hs, "levels": [level] })) else { continue };
+            for b in r["rows"].as_array().into_iter().flatten().flat_map(|r| r["boards"].as_array().into_iter().flatten()) {
+                add(
+                    lines,
+                    Line {
+                        trade: "drywall",
+                        category: "drywall".into(),
+                        item: format!("Board {}", b["material"].as_str().unwrap_or_default()),
+                        size: format!("{}\"", b["thicknessIn"]),
+                        unit: "sq ft",
+                        net: b["areaSqFt"].as_f64().unwrap_or(0.0),
+                        status: "model",
+                        rule: Some(format!("walls the model has no board pieces on ({}): their faces by drywall.takeoff", hs.len())),
+                        level: level.clone(),
+                        elements: hs.iter().take(PIECE_ELEMENTS).cloned().collect(),
+                        ..Line::default()
+                    },
+                );
+            }
+        }
     }
     // The walls' board, studs and track per level, each level's walls alone (Q6271: one level
     // never carries another's); the whole job's on no level if a level can't be taken off.
@@ -2343,7 +2560,8 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
     for (wall_level, r) in per_level.iter().flat_map(|(lv, rows)| rows.iter().map(move |r| (lv, r))) {
         // The level's walls (none on the whole job's line: they would put it on one level).
         let group_handles: Vec<String> = walls.get(wall_level).cloned().unwrap_or_default();
-        for b in r["boards"].as_array().into_iter().flatten() {
+        // The board is the pieces' where the model has them (above).
+        for b in r["boards"].as_array().into_iter().flatten().filter(|_| pieces.is_none()) {
             let item = format!("Board {}", b["material"].as_str().unwrap_or_default());
             let size = format!("{}\"", b["thicknessIn"]);
             add(

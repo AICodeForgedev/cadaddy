@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handle? | handles? (default: selection)} → {walls: [{handle, level, wallType, assembly?: {tag, description, layers: [{material, thickness, side, category, inCavity}], height?, fireRating?, acousticRating?, external, thickness, head?: {track, trackKind, to (deck|ceiling), deflectionIn?, bottomTrack, detail?, text}}, grossAreaSqFt?, finishFaces?: [{side, room, board, finish}]}, ...], count}")
             .noundo(),
         CommandSpec::new("drywall.takeoff", "Drywall Takeoff", run_takeoff).long()
-            .params("{handles? | levels?: [name, ...] | wallTypes?: [name, ...] | rooms?: [name, ...], waste?: percent (default 10), sheetSize?: [w,h] feet (default [4,8]), file?: path (.csv), groupBy?: \"level\" | \"room\" | \"wallType\" (default \"wallType\"), ceilings?: bool (default true; off when handles, wallTypes or rooms are given)} → {rows: [{group, boards: [{material, thicknessIn, side, areaSqFt, sheets, sheetSize}], studs: {lengthFt, count, material, spacingIn}, track: {lengthFt} (plain top and bottom track), headTrack: [{part: top track|bottom track, wallType, material, lengthFt}] (walls marked on the plans whose type has a head of wall, by kind; a double track or angles count both runs), insulation: {areaSqFt, material}, cornerBead: {lengthFt}, trim: {lengthFt}}], ceilings: [{level, part: ceiling|ceiling framing|soffit bottom|soffit sides|soffit framing, assembly, material, layer, quantity, unit: sf|lf, sheets?}] (the spec's ceiling and soffit types, as rcp.takeoff), totals (boardAreaSqFt and sheets: walls; ceilingBoardAreaSqFt, soffitBoardAreaSqFt, ceilingSheets, ceilingFramingLengthFt; trackLengthFt = plain + head + bottom track, each wall once), waste}")
+            .params("{handles? | levels?: [name, ...] | wallTypes?: [name, ...] | rooms?: [name, ...], waste?: percent (default 10), sheetSize?: [w,h] feet (default [4,8]), file?: path (.csv; an existing file only with force), force?: bool, groupBy?: \"level\" | \"room\" | \"wallType\" (default \"wallType\"), ceilings?: bool (default true; off when handles, wallTypes or rooms are given)} → {rows: [{group, boards: [{material, thicknessIn, side, areaSqFt, sheets, sheetSize}], studs: {lengthFt, count, material, spacingIn}, track: {lengthFt} (plain top and bottom track), headTrack: [{part: top track|bottom track, wallType, material, lengthFt}] (walls marked on the plans whose type has a head of wall, by kind; a double track or angles count both runs), insulation: {areaSqFt, material}, cornerBead: {lengthFt}, trim: {lengthFt}}], ceilings: [{level, part: ceiling|ceiling framing|soffit bottom|soffit sides|soffit framing, assembly, material, layer, quantity, unit: sf|lf, sheets?}] (the spec's ceiling and soffit types, as rcp.takeoff), totals (boardAreaSqFt and sheets: walls; ceilingBoardAreaSqFt, soffitBoardAreaSqFt, ceilingSheets, ceilingFramingLengthFt; trackLengthFt = plain + head + bottom track, each wall once), waste}")
             .noundo(),
         CommandSpec::new("drywall.viewmode", "Drywall View Mode", run_viewmode)
             .params("{mode: \"type\" | \"rating\" | \"boardLayers\" | \"heightRule\" | \"off\"} → {mode, legend: [{label, color}]}")
@@ -216,11 +216,12 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "groupBy must be \"level\", \"room\" or \"wallType\"")),
     }
 
-    // Validate file extension.
-    if let Some(path) = str_param(p, "file")
-        && (path.ends_with(".xlsx") || path.ends_with(".XLSX"))
-    {
-        return Err(bad(cmd, "XLSX export is not supported; use .csv"));
+    // The CSV's name: a .csv file that isn't the open drawing, nor an existing file without force.
+    if let Some(path) = str_param(p, "file").map(str::trim).filter(|x| !x.is_empty()) {
+        if path.to_ascii_lowercase().ends_with(".xlsx") {
+            return Err(bad(cmd, "XLSX export is not supported; use .csv"));
+        }
+        super::exchange::guard_typed_output(s, cmd, p, path, &["csv"], "a CSV table")?;
     }
 
     // Collect all WALLGEN wall meshes.
@@ -472,7 +473,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     // Write CSV if requested.
-    if let Some(path) = str_param(p, "file") {
+    if let Some(path) = str_param(p, "file").map(str::trim).filter(|x| !x.is_empty()) {
         write_takeoff_csv(path, &rows, &ceilings, waste_pct)?;
     }
 
@@ -601,10 +602,9 @@ fn run_viewmode(s: &mut Session, p: &Value) -> Result<Value> {
             let vm = ViewMode { mode: mode.into(), legend: legend.clone() };
             // Build the handle→colour map for the renderer.
             let mut overrides = BTreeMap::new();
-            for e in d.model.iter().take(MAX_WALLS) {
-                if let Some(c) = viewmode_color(e, &Some(sp.clone()), &vm) {
-                    overrides.insert(e.handle, c);
-                }
+            let sp_some = Some(sp.clone());
+            for (h, c) in d.model.iter().filter_map(|e| viewmode_color(e, &sp_some, &vm).map(|c| (e.handle, c))).take(MAX_WALLS) {
+                overrides.insert(h, c);
             }
             // Compute layer boundary lines for the renderer.
             let layer_lines = compute_layer_lines(d, &sp);
@@ -693,10 +693,9 @@ fn run_finishfaces(s: &mut Session, _p: &Value) -> Result<Value> {
     let room_map = build_room_map(d, &sp);
     let mut faces = Vec::new();
 
-    for e in d.model.iter().take(MAX_WALLS) {
-        if wallgen::made_as(e).as_deref() != Some("wall") {
-            continue;
-        }
+    // The walls found are capped, not the elements looked at (Q6370: a job's print linework
+    // comes before the walls built from it).
+    for e in d.model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("wall")).take(MAX_WALLS) {
         let tags = wallgen_tags(e);
         let type_name = tags.iter().skip(3).find_map(|v| v.strip_prefix("type:").map(str::to_string));
         let Some(ref tn) = type_name else { continue };
@@ -857,10 +856,9 @@ fn collect_walls(d: &Drawing, sp: &BuildingSpec) -> Vec<WallData> {
     // Collect door/window entities for opening deduction.
     let openings = collect_openings(d, k);
 
-    for e in d.model.iter().take(MAX_WALLS) {
-        if wallgen::made_as(e).as_deref() != Some("wall") {
-            continue;
-        }
+    // The walls found are capped, not the elements looked at (Q6370: a job's print linework
+    // comes before the walls built from it).
+    for e in d.model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("wall")).take(MAX_WALLS) {
         let tags = wallgen_tags(e);
         let level = tags.get(1).cloned().unwrap_or_default();
         let type_name = tags.iter().skip(3).find_map(|v| v.strip_prefix("type:").map(str::to_string));
@@ -904,12 +902,7 @@ struct Opening {
 /// Collect door and window entities for opening deduction.
 fn collect_openings(d: &Drawing, k: f64) -> Vec<Opening> {
     let mut out = Vec::new();
-    for e in d.model.iter().take(MAX_WALLS) {
-        let part = wallgen::made_as(e);
-        let is_opening = matches!(part.as_deref(), Some("door") | Some("window"));
-        if !is_opening {
-            continue;
-        }
+    for e in d.model.iter().filter(|e| matches!(wallgen::made_as(e).as_deref(), Some("door") | Some("window"))).take(MAX_WALLS) {
         let EntityKind::Mesh(ref mesh) = e.kind else { continue };
         if mesh.vertices.is_empty() {
             continue;
@@ -1163,10 +1156,9 @@ fn wall_rooms(centreline: &WallCentreline, rooms: &[RoomPoint]) -> (Option<Strin
 fn compute_layer_lines(d: &Drawing, sp: &BuildingSpec) -> Vec<([f64; 3], [f64; 3])> {
     let k = insunits_per_ft(d);
     let mut lines = Vec::new();
-    for e in d.model.iter().take(MAX_WALLS) {
-        if wallgen::made_as(e).as_deref() != Some("wall") {
-            continue;
-        }
+    // The walls found are capped, not the elements looked at (Q6370: a job's print linework
+    // comes before the walls built from it).
+    for e in d.model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("wall")).take(MAX_WALLS) {
         let EntityKind::Mesh(ref mesh) = e.kind else { continue };
         if mesh.vertices.is_empty() {
             continue;

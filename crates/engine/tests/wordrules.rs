@@ -400,6 +400,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/engine/src/cmd/spec_import.rs",
+        "const HEADER_LABELS",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
+    ),
+    (
+        "crates/engine/src/cmd/spec_import.rs",
         "const CONTROL_WORDS",
         "rows with numbers or extra fields (sizes, defaults, flags, exclusion words): a table, not a word list; a later item can give it a table shape",
     ),
@@ -560,6 +565,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "crates/engine/src/cmd/import_check.rs",
         "const DO_NOT_SCALE_PATTERNS",
         "standard title-block boilerplate (DO NOT SCALE...), the same on every set",
+    ),
+    (
+        "crates/engine/src/cmd/propfill.rs",
+        "const HEIGHT_FROM_ORDER",
+        "our own output: the `mount_height_from` codes the height choice writes, in the order it takes them (Q6335), not words read off a document",
     ),
     (
         "crates/engine/src/cmd/propfill.rs",

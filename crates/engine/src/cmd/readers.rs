@@ -211,6 +211,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 gang: f("gang_with"),
                 drawn_at: None,
                 moved: String::new(),
+                connection: f("connection"),
             }
         })
         .collect();
@@ -315,15 +316,12 @@ fn run_gear_read(s: &mut Session, p: &Value) -> Result<Value> {
         ranked.sort();
         let wanted: std::collections::BTreeSet<&str> = ranked.iter().take(MAX_GEAR_SHEETS).map(|(_, n)| *n).collect();
         let (t, refs) = super::printmep::load_project_plans(&pr, &|r| wanted.contains(r.number.as_str()))?;
-        let mut schedules: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
+        let mut texts: Vec<(&str, Vec<cadaddy_mepfix::sheet_facts::TextItem>)> = Vec::new();
         for r in &refs {
-            let sub = super::printmep::sheet_drawing(t.doc()?, r);
-            for x in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(&sub), &r.number) {
-                if !schedules.iter().any(|o| o.panel.eq_ignore_ascii_case(&x.panel)) {
-                    schedules.push(x);
-                }
-            }
+            texts.push((r.number.as_str(), cadaddy_mepfix::sheet_facts::texts(&super::printmep::sheet_drawing(t.doc()?, r))));
         }
+        let set: Vec<(&str, &[cadaddy_mepfix::sheet_facts::TextItem])> = texts.iter().map(|(n, x)| (*n, x.as_slice())).collect();
+        let schedules = super::panelsched::read_set(&set);
         (schedules, refs.iter().map(|r| r.number.clone()).collect(), "the print set's sheets")
     };
     let panels: Vec<Value> = schedules
@@ -1483,6 +1481,11 @@ pub struct ReadDevice {
     pub drawn_at: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub moved: String,
+    /// A luminaire whose plan draws only its connection: a junction box tagged with its type (a
+    /// luminaire built into casework or millwork). What the plan draws and the rule that made
+    /// it this luminaire. Empty: its plan draws the luminaire itself.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub connection: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1571,6 +1574,10 @@ fn device_item(tag: &str) -> String {
     }
 }
 
+/// How a luminaire built into casework or millwork is mounted (`mount`): in its casework, at the
+/// height its documents give, never hung from the ceiling or set in a wall's face.
+pub(crate) const CASEWORK_MOUNT: &str = "casework";
+
 /// The start of an unresolved device's BOM item.
 pub(crate) const UNRESOLVED: &str = "UNRESOLVED device mark";
 
@@ -1637,7 +1644,13 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // A smoke, heat or duct detector: `S`, `SD`, or its mark with a subscript (`SR`).
         let up = tag.to_ascii_uppercase();
         let detector = read == "fire alarm device" && up.chars().count() <= 2 && up.starts_with(['S', 'H', 'D']);
-        if read == "wall luminaire" {
+        // A luminaire its plan draws only as the junction box it connects at is built into
+        // casework or millwork: there, not at the ceiling, its connection said (Q6354).
+        let casework = luminaire && !dv.connection.trim().is_empty();
+        if casework {
+            e.set("mount", CASEWORK_MOUNT, "plan");
+            e.set("connection", dv.connection.clone(), "plan");
+        } else if read == "wall luminaire" {
             e.set("mount", "wall", "submittal");
         } else if luminaire || detector {
             e.set("mount", "ceiling", if luminaire { "submittal" } else { "plan" });
@@ -1734,6 +1747,21 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         if let Some(p) = dv.drawn_at.filter(|_| !dv.moved.is_empty()) {
             e.set("design_at", format!("{:.2},{:.2}", p[0] / upf, p[1] / upf), "plan");
             e.set("correction", dv.moved.clone(), "rule");
+        }
+        // A casework luminaire: where it stands and why. Laid out by the architecture's casework
+        // detail (derived from its dimensions), else at the box its electrical plan draws.
+        if casework {
+            if dv.drawn_at.is_some() && !dv.moved.is_empty() {
+                e.set("position_provenance", "derived", "rule");
+                e.set("position_basis", dv.moved.clone(), "rule");
+            } else {
+                e.set("position_provenance", "drawn", "plan");
+                e.set(
+                    "position_basis",
+                    "at the junction box its electrical plan draws (no casework detail dimensions it: the plan's spot is diagrammatic)",
+                    "plan",
+                );
+            }
         }
         // Its height as printed by it on its typical room's plan.
         if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {

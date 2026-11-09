@@ -327,7 +327,7 @@ fn room_door_and_equipment_schedules() {
     let fcu = eq.iter().find(|r| r[0] == "FCU-101").unwrap();
     assert_eq!(fcu[1..8], ["UnitaryEquipment", "FCU-1", "Acme Air", "FC-400", "Chilled Water, Supply Air", "101", "Level 1"].map(String::from));
     // One schedule only; a wrong name is refused.
-    let r = s.execute("handover.schedules", &json!({"path": file.display().to_string(), "schedules": ["doors"]})).unwrap();
+    let r = s.execute("handover.schedules", &json!({"path": file.display().to_string(), "schedules": ["doors"], "force": true})).unwrap();
     assert_eq!(r["rows"], json!({"Doors": 2}));
     assert!(s.execute("handover.schedules", &json!({"path": file.display().to_string(), "schedules": "rooms,windows"})).is_err());
 }
@@ -410,11 +410,11 @@ fn bad_requests_are_refused_without_panicking() {
         }
     }
     // Zones, as told.
-    let r = s.execute("cobie.export", &json!({"path": out, "created_on": ON, "zones": [{"name": "Guest rooms", "category": "Occupancy", "spaces": ["101", "102"]}, {"name": "Ghost", "spaces": ["999"]}]})).unwrap();
+    let r = s.execute("cobie.export", &json!({"path": out, "force": true, "created_on": ON, "zones": [{"name": "Guest rooms", "category": "Occupancy", "spaces": ["101", "102"]}, {"name": "Ghost", "spaces": ["999"]}]})).unwrap();
     assert_eq!(r["validation"]["errors"], 1, "the ghost zone's room isn't a space: {r}");
     // An empty drawing has nothing to hand over.
     let mut e = Session::empty();
     e.new_drawing(false);
-    let err = e.execute("cobie.export", &json!({"path": out})).unwrap_err().to_string();
+    let err = e.execute("cobie.export", &json!({"path": out, "force": true})).unwrap_err().to_string();
     assert!(err.contains("nothing to hand over"), "{err}");
 }

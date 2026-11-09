@@ -948,8 +948,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Some(None) => Ok(Value::Null),
             None => Err("BCF.IMPORT: there is no file dialog here; run it with parameters, e.g. bcf.import {\"path\": \"issues.bcf\"}".into()),
         },
+        // The save dialogs below ask before they name an existing file: the export may replace it.
         "cobie.export" if params.is_null() => match app.services.pick_save.as_ref().map(|p| p("COBie.xlsx")) {
-            Some(Some(path)) => app.run("cobie.export", json!({ "path": path })).inspect(|r| {
+            Some(Some(path)) => app.run("cobie.export", json!({ "path": path, "force": true })).inspect(|r| {
                 let errors = r["validation"]["errors"].as_u64().unwrap_or(0);
                 app.set_status(if errors == 0 {
                     format!("COBie: {path}")
@@ -961,7 +962,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             None => Err("COBIE.EXPORT: there is no file dialog here; run it with parameters, e.g. cobie.export {\"path\": \"COBie.xlsx\"}".into()),
         },
         "handover.schedules" if params.is_null() => match app.services.pick_save.as_ref().map(|p| p("Schedules.xlsx")) {
-            Some(Some(path)) => app.run("handover.schedules", json!({ "path": path })),
+            Some(Some(path)) => app.run("handover.schedules", json!({ "path": path, "force": true })),
             Some(None) => Ok(Value::Null),
             None => Err(
                 "HANDOVER.SCHEDULES: there is no file dialog here; run it with parameters, e.g. handover.schedules {\"path\": \"Schedules.xlsx\"}"
@@ -978,7 +979,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
         }
         "bcf.export" if params.is_null() => match app.services.pick_save.as_ref().map(|p| p("issues.bcf")) {
-            Some(Some(path)) => app.run("bcf.export", json!({ "path": path })),
+            Some(Some(path)) => app.run("bcf.export", json!({ "path": path, "force": true })),
             Some(None) => Ok(Value::Null),
             None => Err("BCF.EXPORT: there is no file dialog here; run it with parameters, e.g. bcf.export {\"path\": \"issues.bcf\"}".into()),
         },

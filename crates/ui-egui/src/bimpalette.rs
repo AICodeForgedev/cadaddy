@@ -184,9 +184,20 @@ fn branch(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, path: &[String], 
                     let h = child.get("handle").and_then(Value::as_str).unwrap_or("");
                     let name = child.get("name").and_then(Value::as_str).unwrap_or(h);
                     if ui.selectable_label(false, name).clicked() {
-                        let _ = app.session.execute("zoom", &json!({ "mode": "object", "handles": [h] }));
-                        if let Some(hh) = cadaddy_doc::Handle::parse_hex(h) {
-                            app.session.set_selection(vec![hh]);
+                        // A hidden element isn't selected: its grips would stand alone in the view.
+                        let hh = cadaddy_doc::Handle::parse_hex(h);
+                        let drawn = |s: &cadaddy_engine::Session| {
+                            let Ok(d) = s.doc() else { return true };
+                            let look = cadaddy_engine::cmd::bimlook::Look::of(d);
+                            hh.and_then(|hh| d.model.get(hh)).is_none_or(|e| cadaddy_engine::cmd::bimlook::draws(d, &look, e))
+                        };
+                        if !drawn(&app.session) {
+                            app.set_status(crate::i18n::t("That element is hidden in the BIM view: tick its branch to show it first."));
+                        } else {
+                            let _ = app.session.execute("zoom", &json!({ "mode": "object", "handles": [h] }));
+                            if let Some(hh) = hh {
+                                app.session.set_selection(vec![hh]);
+                            }
                         }
                     }
                 } else {
@@ -553,7 +564,7 @@ fn clashes_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
             // Export to a default path next to the drawing.
             let path = std::env::temp_dir().join("cadaddy_clashes.bcf");
             if let Some(p) = path.to_str() {
-                let _ = app.session.execute("coordination.bcf", &json!({ "path": p }));
+                let _ = app.session.execute("coordination.bcf", &json!({ "path": p, "force": true }));
                 app.set_status(format!("BCF exported to {p}"));
             }
         }

@@ -24,7 +24,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::new(CropM::default()))),
         // Saved from the Render window (its Save button); scripts and agents give the path.
-        CommandSpec::new("saveimg", "Save Image", run_saveimg).params("{path} (.png or .jpg: the last render)").noundo(),
+        CommandSpec::new("saveimg", "Save Image", run_saveimg).params("{path (.png or .jpg: the last render), force?: bool (replace an existing file)}").noundo(),
         CommandSpec::new("renderenvironment", "Render Environment", run_renderenv)
             .menu(&["View", "Render", "Render Environment"])
             .alias(&["renderenv"])
@@ -205,7 +205,8 @@ fn write(_path: &str, _bytes: &[u8]) -> Result<()> {
 }
 
 fn run_saveimg(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = str_param(p, "path").ok_or_else(|| bad("saveimg", "`path` is required"))?;
+    let path = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad("saveimg", "`path` is required"))?;
+    super::exchange::guard_image_output(s, "saveimg", p, path, &["png", "jpg", "jpeg"])?;
     save(s, path)?;
     Ok(json!({ "path": path }))
 }

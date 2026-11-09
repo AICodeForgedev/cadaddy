@@ -9,6 +9,7 @@
 #[path = "../helper.rs"]
 mod helper;
 
+mod coordkeep;
 mod coordviews;
 mod edit3d;
 mod fourd;

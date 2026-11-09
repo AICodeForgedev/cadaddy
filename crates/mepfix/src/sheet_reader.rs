@@ -2097,6 +2097,48 @@ mod tests {
         assert!(r[1] >= 500.0 && r[0] < 150.0 && r[2] < 600.0, "only the floor plan's block: {r:?}");
     }
 
+    /// As [`titled_block`], the view's designator in the title's place and its name beside it.
+    fn boxed_block(d: &mut Drawing, x: f64, y: f64, designator: &str, name: &str) {
+        for i in 0..6 {
+            let at = x + f64::from(i) * 60.0;
+            sheet_line(d, [at, y], [at, y + 300.0]);
+            sheet_line(d, [x, y + f64::from(i) * 60.0], [x + 300.0, y + f64::from(i) * 60.0]);
+        }
+        sheet_text(d, [x, y - 20.0], designator, 8.0);
+        sheet_text(d, [x + 30.0, y - 19.0], name, 6.0);
+        sheet_text(d, [x, y - 32.0], "1/4\" = 1'-0\"", 4.0);
+    }
+
+    #[test]
+    fn a_boxed_view_title_is_the_name_beside_its_designator() {
+        let mut d = bordered();
+        boxed_block(&mut d, 100.0, 600.0, "A1", "MEZZANINE PLAN");
+        boxed_block(&mut d, 700.0, 600.0, "A9", "ENLARGED PLAN - RESTROOMS");
+        let (v, r) = floor_plan_view(&d).expect("the mezzanine's view");
+        assert_eq!(v.title, "MEZZANINE PLAN");
+        assert!(r[2] < 600.0, "only the mezzanine's block: {r:?}");
+    }
+
+    #[test]
+    fn a_finish_floor_plan_beside_the_floor_plan_is_not_the_floor_plan() {
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 600.0, "FLOOR PLAN");
+        titled_block(&mut d, 700.0, 600.0, "FINISH FLOOR PLAN");
+        let (v, r) = floor_plan_view(&d).expect("the floor plan's view");
+        assert_eq!(v.title, "FLOOR PLAN");
+        assert!(r[2] < 600.0, "only the floor plan's block: {r:?}");
+    }
+
+    #[test]
+    fn a_slab_plan_beside_the_dimension_floor_plan_is_not_the_floor_plan() {
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 600.0, "DIMENSION FLOOR PLAN");
+        titled_block(&mut d, 700.0, 600.0, "SLAB PENETRATION PLAN");
+        let (v, r) = floor_plan_view(&d).expect("the floor plan's view");
+        assert_eq!(v.title, "DIMENSION FLOOR PLAN");
+        assert!(r[2] < 600.0, "only the floor plan's block: {r:?}");
+    }
+
     #[test]
     fn a_sheet_not_mixing_a_floor_plan_with_other_plans_is_read_whole() {
         // Only a floor plan and a detail.

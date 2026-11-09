@@ -210,7 +210,8 @@
     "raceway": ["sq4-2.125", "sq4-2.125", "gang3-steel", "gang4-steel"],
     "cable": ["nm1-18", "nm2-32", "nm3-53", "nm4-68"],
     "power_families": ["switch", "receptacle"],
-    "source": "devices of one kind side by side on one wall face, at one mounting height, within 2 ft of each other (a plan symbol is about that wide at 1/8 in scale: symbols drawn together are ganged) share one box and one ring, up to 4 gangs: 2 gangs in a 4 in square with a 2 gang ring, 3 and 4 in a gang box (company default; power and low voltage never share one: NEC 800.133(A))"
+    "source": "devices of one kind side by side on one wall face, at one mounting height, within 2 ft of each other (a plan symbol is about that wide at 1/8 in scale: symbols drawn together are ganged) share one box and one ring, up to 4 gangs: 2 gangs in a 4 in square with a 2 gang ring, 3 and 4 in a gang box (company default; power and low voltage never share one: NEC 800.133(A))",
+    "height_source": "the devices in one box stand at one height, under one plate: the height of the one whose height the documents give first (its own note, an elevation, the enlarged plan's note, then the schedules, legend and general notes; the lower on a tie), the others' own heights kept beside (trade practice: a ganged plate is one height)"
   },
   "box_clear": {
     "gap_in": 0.25,
@@ -222,8 +223,13 @@
       "rated_only": true,
       "source": "IBC 714.4.2 exception 1.1 (membrane penetrations of fire-resistance-rated walls): steel boxes on opposite sides of the wall are separated by a horizontal distance of at least 24 in where the stud cavities don't communicate; the trade moves one box to the next stud bays, its device with it (the usual choice; the alternative, listed putty pads on both boxes, exception 1.4)",
       "putty_item": "Putty pad, listed, for an outlet box",
-      "putty_source": "IBC 714.4.2 exception 1.4: boxes on opposite sides of a fire-resistance-rated wall closer than 24 in, where neither can move that far on its wall, are both protected by listed putty pads"
-    }
+      "putty_source": "IBC 714.4.2 exception 1.4: boxes on opposite sides of a fire-resistance-rated wall closer than 24 in, where neither can move that far on its wall, are both protected by listed putty pads",
+      "max_move_in": 32.0,
+      "keep_kinds": ["switch"],
+      "keep_source": "a switch's spot is where its door's latch side, the bed or the counter it serves puts it: the field keeps it and moves the box on the other face, else pads both (trade practice; the designed device location wins over a move)"
+    },
+    "stud_bay_in": 16.0,
+    "stud_bay_source": "the next stud bays: a box moved for the field goes no farther than two 16 in o.c. bays (past that the putty pads keep both where they are), never into a bay another box on that face stands in, nor across an opening or into a wall that meets its own, nor behind fixed furniture (trade practice)"
   },
   "ring": { "item": "Plaster ring", "size": "1 gang", "depth_in": 0.5, "source": "the trade's usual ring: 1 gang, 1/2 in raised (the wall's board on the box face decides it)" },
   "default_raceway": "EMT",
@@ -236,6 +242,7 @@
   "steel_elbow_source": "the callout asks for steel elbows and risers: the elbows and the risers up through the floor are rigid steel (RMC), the rest of the run is its own material",
   "transition_item": "{from} to {to} transition adapter",
   "transition_source": "where a buried raceway comes up through the floor and runs on in the raceway above the slab, a transition adapter joins the two materials (trade practice; NEC 300.5(D) protection at the emergence)",
+  "floor_joint_source": "a raceway rising through a floor is one run of sticks: where the model cuts it at the floor (each level's riser on its own level) its sticks are joined by a coupling, not ended in connectors (trade practice)",
   "insulation": "THHN",
   "insulation_source": "THHN/THWN-2 copper where the specifications name no other (company default)",
   "makeup_ft": 1.5,

@@ -293,6 +293,55 @@
     "BLDG"
    ]
   },
+  "casework.callout_words": {
+   "source": "drafting convention: a casework or millwork detail calls a luminaire out by its type mark with one of these words (`TYPE X`, `LED STRIP LIGHT X`); the mark alone is its tag (Q6354)",
+   "words": [
+    "TYPE",
+    "FIXTURE",
+    "LIGHT",
+    "LIGHTING",
+    "LUMINAIRE",
+    "LED",
+    "STRIP",
+    "TAPE",
+    "LINEAR",
+    "UNDERCABINET",
+    "UNDER-CABINET",
+    "TYP."
+   ]
+  },
+  "casework.detail_disciplines": {
+   "source": "drafting convention: the disciplines whose sheets draw casework and millwork details (architectural, interiors) (Q6354)",
+   "words": [
+    "A",
+    "I",
+    "ID"
+   ]
+  },
+  "casework.end_words": {
+   "source": "drafting convention: a note giving a casework luminaire's distance from the end of its casework (`6\" FROM END`) has one of these (Q6354)",
+   "words": [
+    "FROM END",
+    "FROM EDGE",
+    "FROM FACE",
+    "FROM CORNER",
+    "FROM EACH END",
+    "FROM SIDE"
+   ]
+  },
+  "casework.spacing_words": {
+   "source": "drafting convention: a note giving casework luminaires' spacing (`2'-0\" O.C.`) has one of these (Q6354)",
+   "words": [
+    "O.C.",
+    " OC",
+    "ON CENTER",
+    "ON CENTRE",
+    "CENTERS",
+    "CENTRES",
+    "SPACING",
+    "SPACED"
+   ]
+  },
   "conduit.below_slab_words": {
    "source": "trade practice: a wiring method applies below the slab when its application has one of these (moved from ugplan.rs)",
    "words": [
@@ -3197,7 +3246,9 @@
    "source": "A view or sheet title that names a floor plan. (drafting convention: general, no job's title)",
    "words": [
     "FLOOR PLAN",
-    "FLOOR PLANS"
+    "FLOOR PLANS",
+    "MEZZANINE PLAN",
+    "MEZZ PLAN"
    ]
   },
   "sheets.import_discipline_prefix": {
@@ -3432,7 +3483,13 @@
     "FRAMING PLAN",
     "FOUNDATION PLAN",
     "DEMOLITION PLAN",
-    "DEMO PLAN"
+    "DEMO PLAN",
+    "ENLARGED",
+    "FINISH FLOOR PLAN",
+    "FLOOR FINISH PLAN",
+    "FINISH PLAN",
+    "SLAB PENETRATION PLAN",
+    "SLAB PLAN"
    ]
   },
   "sheets.reference_words": {

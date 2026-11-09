@@ -67,6 +67,23 @@ const WALL_BOX_FT: f64 = 7.0;
 /// close: it stays, for review.
 pub(crate) const HOST_SNAP_FT: f64 = 3.0;
 
+/// Where a device's `mount_height_from` says its height came from, the documents first (the
+/// order the heights are taken in): a gang's devices take the one of them that stands first.
+pub(crate) const HEIGHT_FROM_ORDER: [&str; 12] = [
+    "own_note",
+    "elevation",
+    "enlarged_plan_note",
+    "fixture_schedule",
+    "legend",
+    "general_notes",
+    "project_rule",
+    "ceiling",
+    "floor",
+    "equipment",
+    "wall_luminaire_rule",
+    "default",
+];
+
 /// A device box this low (inches over the floor) is in the floor, not on a wall.
 const FLOOR_BOX_IN: f64 = 2.0;
 /// How far beyond a wall's face the rooms on its sides are looked for, feet.
@@ -626,6 +643,9 @@ struct Chosen {
 const MOUNT_RULES: &str = include_str!("mount_defaults.json");
 
 /// The rules data's default for `kind` (spaces or underscores), else a receptacle's.
+/// The rules data's kind (`mount_defaults.json`) of a luminaire built into casework or millwork.
+const CASEWORK_LUMINAIRE: &str = "casework luminaire";
+
 fn rules_default(kind: &str, fixture_words: &str) -> (f64, super::mountlist::Datum, String) {
     let data: Value = serde_json::from_str(MOUNT_RULES).unwrap_or_default();
     let rows: Vec<Value> = data["defaults"].as_array().cloned().unwrap_or_default();
@@ -1244,6 +1264,12 @@ pub(crate) fn outside_floors(d: &Drawing, sp: &BuildingSpec) -> Vec<Outlier> {
         if ENVELOPE_PARTS.contains(&part.as_str()) {
             continue;
         }
+        // Site work (a trade's site plan's: pole lights, their poles and bases, site runs).
+        if super::bimlook::made_tag(e, "tag").is_some_and(|t| t.starts_with(super::sitework::CONCRETE_PREFIX))
+            || props::read(&e.common.xdata).get(super::sitework::MARK).is_some()
+        {
+            continue;
+        }
         if !site.is_empty() && super::bimlook::made_tag(e, "tag").is_some_and(|t| site.contains(&t.trim().to_ascii_uppercase())) {
             continue;
         }
@@ -1353,9 +1379,16 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let detector = kind == "fire alarm device"
             && (legend_words.contains("SMOKE DETECTOR") || legend_words.contains("HEAT DETECTOR") || legend_words.contains("DETECTOR AND"))
             && !legend_words.contains("DUCT");
+        // A luminaire built into casework or millwork (its plan draws its junction box): in the
+        // casework at its documented height, never hung from the ceiling or set in a wall face.
+        let in_casework = field(t, "mount").as_deref() == Some(super::readers::CASEWORK_MOUNT);
+        // Site work (a pole light): at its pole's top, as its site plan and schedule give it.
+        let site = field(t, super::sitework::MARK);
         let mount = match field(t, "mount").as_deref() {
+            Some("pole") => Mount::Ceiling,
             Some("ceiling") => Mount::Ceiling,
             Some("wall") => Mount::Wall,
+            _ if in_casework => Mount::Wall,
             Some("floor") => Mount::Floor,
             _ if detector => Mount::Ceiling,
             // An exhaust fan's connection is at the fan, in the ceiling.
@@ -1463,6 +1496,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let stated_wall = field(t, "mount").as_deref() == Some("wall");
         let gap_ft = wall_face_gap(&pieces, &level.name, Vec2::new(x, y), (level.elevation_ft + WALL_BOX_FT) * upf).map(|g| g / upf);
         let hung = (mount == Mount::Wall
+            && !in_casework
             && gap_ft.is_some_and(|g| g > clear_rule.wall_ft)
             && clear_rule.can_hang(&[kind, vkind.as_str()], &format!("{fixture_words} {legend_words} {described}"))
             && (!stated_wall || clear_rule.allows_ceiling(&format!("{installation} {fixture_words} {legend_words}")))
@@ -1554,10 +1588,22 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 let lowest = if wall_light.is_some() { 72.0 } else { 0.0 };
                 let its_own = |c: &Chosen| wall_light.is_some() && c.doc.to_ascii_lowercase().contains("luminaire");
                 documented().filter(|c| c.inches >= lowest || its_own(c)).or(wall_light).unwrap_or_else(|| {
-                    let (inches, datum, why) = rules_default(kind, &fixture_words);
+                    let (inches, datum, why) = rules_default(if in_casework { CASEWORK_LUMINAIRE } else { kind }, &fixture_words);
                     Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
                 })
             }
+        };
+        // A pole light's height is its pole's top (the site work step's, as its schedule and the
+        // rules give it), above any storey's.
+        let height = match site.as_ref().and_then(|_| {
+            let inches = field(t, "mount_height_in")?.parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=1_800.0).contains(v))?;
+            let source =
+                if t.fields.get("mount_height_in").is_some_and(|f| f.source == "schedule") { SourceKind::Schedule } else { SourceKind::Rule };
+            let doc = field(t, "mount_height_note").unwrap_or_else(|| "site work".into());
+            Some(Chosen { inches, from: "site_work", source, doc, datum: if mount == Mount::Floor { Datum::Bottom } else { Datum::Top } })
+        }) {
+            Some(c) => c,
+            None => height,
         };
         *report.heights.entry(height.from).or_default() += 1;
         if height.source == SourceKind::Default {
@@ -1590,7 +1636,8 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         // A connection set at its unit (a roof unit's: `connection to HP-7 at the unit`) is on
         // the unit, in no wall.
         let at_unit = field(t, "mount_height_note").is_some_and(|n| n.starts_with("connection to") && n.contains("at the unit"));
-        let on_wall = wall_kind && !at_unit && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
+        let on_wall =
+            wall_kind && !at_unit && !in_casework && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
@@ -1693,6 +1740,9 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         if !mark.is_empty() {
             store.set("type", Prop::new(field(t, "device_type").unwrap_or_else(|| kind.to_string()), printed()));
             store.set("type_mark", Prop::new(mark.clone(), printed()));
+        }
+        if let Some(v) = &site {
+            store.set(super::sitework::MARK, Prop::new(v.clone(), printed()));
         }
         // Built where the plans are silent or wrong: the design value and the basis beside it.
         for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
@@ -1854,7 +1904,8 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             None => {}
         }
         // Outside its level's footprint (else the nearest one below's: a roof's): flagged, listed.
-        if let Some(fp) = footprint_of(&fps, sp, &level.name) {
+        // Site work stands outside the building by design.
+        if let Some(fp) = footprint_of(&fps, sp, &level.name).filter(|_| site.is_none()) {
             let off = fp.outside(centre) / upf;
             if off.is_finite() && off > OUTSIDE_FLOOR_FT {
                 let why = format!(
@@ -2474,6 +2525,14 @@ fn window_props(
                 "inferred: the opening has no tag of its own",
             ),
             Some("tag_on_wall") => (Source::print(&sheet, None), "the tag printed by an outside wall drawn through: the window's place is inferred"),
+            Some("tag_jambs") => (
+                Source::print(&sheet, None),
+                "the tag printed by an outside wall drawn through, its type with no width given: the window's place is inferred, its width the jambs drawn there",
+            ),
+            Some("tag_typical_width") => (
+                Source::print(&sheet, None),
+                "the tag printed by an outside wall drawn through, its type with no width given: the window's place and width are inferred (the level's typical window)",
+            ),
             _ => (Source::print(&sheet, None), "the window tag printed at the opening"),
         };
         put(store, "type_mark", Prop::new(m.clone(), src).with_note(note), tally);
