@@ -1974,38 +1974,92 @@ fn as_circle(s: &Stroke) -> Option<((f64, f64), f64)> {
 // ---------------------------------------------------------------------------------------------
 
 /// Drawing units (inches) per sheet inch from a note like `1/8" = 1'-0"`, `3/16"=1'-0"`,
-/// `1" = 20'`, `1:100`.
+/// `1" = 20'`, `1:100`. A note whose "=" didn't come through (lettering read from its strokes or
+/// outlines: the reader has no "=", two short strokes in a hatch would read as one) still reads
+/// when it is a paper length followed by a real length in feet: `1/8" 1'-0"` (see
+/// [`parse_scale_pair`]).
 pub fn parse_scale(text: &str) -> Option<f64> {
-    let t = text.replace(['\u{2019}', '\u{2032}'], "'").replace(['\u{201D}', '\u{2033}'], "\"");
-    let t = t.to_ascii_uppercase();
-    let t = t.trim_start_matches("SCALE").trim_start_matches(':').trim();
+    let t = scale_note_body(text);
     // architectural / engineering: <paper>" = <feet>'-<inches>"
     if let Some((lhs, rhs)) = t.split_once('=') {
-        let lhs = lhs.trim().trim_end_matches('"').trim();
-        let paper = if let Some((a, b)) = lhs.split_once('/') {
-            let (whole, num) = match a.trim().split_once(' ') {
-                Some((w, n)) => (w.trim().parse::<f64>().ok()?, n.trim().parse::<f64>().ok()?),
-                None => (0.0, a.trim().parse::<f64>().ok()?),
-            };
-            whole + num / b.trim().parse::<f64>().ok()?
-        } else {
-            lhs.parse::<f64>().ok()?
-        };
-        let rhs = rhs.trim();
-        let (ft, inch) = match rhs.split_once('\'') {
-            Some((f, rest)) => {
-                let i = rest.trim().trim_start_matches('-').trim().trim_end_matches('"').trim();
-                (f.trim().parse::<f64>().ok()?, if i.is_empty() { 0.0 } else { i.parse::<f64>().ok()? })
-            }
-            None => (0.0, rhs.trim_end_matches('"').trim().parse::<f64>().ok()?),
-        };
-        let real = ft * 12.0 + inch;
-        return (paper > 0.0 && real > 0.0).then(|| real / paper).filter(|k| k.is_finite() && (0.001..=1e6).contains(k));
+        return paper_and_real(lhs, rhs).map(|(paper, real)| real / paper).filter(|k| k.is_finite() && (0.001..=1e6).contains(k));
+    }
+    if let Some(k) = implicit_pair(&t) {
+        return Some(k);
     }
     // metric ratio 1:100 (drawing in the sheet's units: inches)
     let (a, b) = t.split_once(':')?;
     let (a, b) = (a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?);
     (a > 0.0 && b > 0.0).then(|| b / a)
+}
+
+/// [`parse_scale`] for a note with no "=" and no "SCALE" before it: only the paper/real pair
+/// (`1/8" 1'-0"`, `1/4"-1'-0"`, `1" 20'`), never a ratio (a time, a count) or a lone length.
+pub fn parse_scale_pair(text: &str) -> Option<f64> {
+    let t = scale_note_body(text);
+    if t.contains('=') {
+        return None;
+    }
+    implicit_pair(&t)
+}
+
+/// A scale note's value: quote marks made plain, upper case, the "SCALE" label and its colon
+/// off; a value with no letter but O (what a reader of drawn lettering takes a 0 for) has its
+/// Os as zeros.
+fn scale_note_body(text: &str) -> String {
+    let t = text.replace(['\u{2019}', '\u{2032}'], "'").replace(['\u{201D}', '\u{2033}'], "\"");
+    let t = t.to_ascii_uppercase();
+    let t = t.trim().trim_start_matches("SCALE").trim_start_matches(':').trim();
+    if t.chars().any(|c| c.is_ascii_alphabetic() && c != 'O') { t.to_string() } else { t.replace('O', "0") }
+}
+
+/// The paper length (inches) and the real length (inches) of a scale note's two sides.
+fn paper_and_real(lhs: &str, rhs: &str) -> Option<(f64, f64)> {
+    let lhs = lhs.trim().trim_end_matches('"').trim();
+    let paper = if let Some((a, b)) = lhs.split_once('/') {
+        // a whole number before the fraction: `1 1/2`, `1-1/2`
+        let (whole, num) = match a.trim().rsplit_once([' ', '-']) {
+            Some((w, n)) => (w.trim().parse::<f64>().ok()?, n.trim().parse::<f64>().ok()?),
+            None => (0.0, a.trim().parse::<f64>().ok()?),
+        };
+        whole + num / b.trim().parse::<f64>().ok()?
+    } else {
+        lhs.parse::<f64>().ok()?
+    };
+    let rhs = rhs.trim();
+    let (ft, inch) = match rhs.split_once('\'') {
+        Some((f, rest)) => {
+            let i = rest.trim().trim_start_matches('-').trim().trim_end_matches('"').trim();
+            (f.trim().parse::<f64>().ok()?, if i.is_empty() { 0.0 } else { i.parse::<f64>().ok()? })
+        }
+        None => (0.0, rhs.trim_end_matches('"').trim().parse::<f64>().ok()?),
+    };
+    let real = ft * 12.0 + inch;
+    (paper.is_finite() && real.is_finite() && paper > 0.0 && real > 0.0).then_some((paper, real))
+}
+
+/// The largest paper length a scale note without its "=" may give (inches): full size is a foot
+/// to the foot.
+const IMPLICIT_SCALE_MAX_PAPER_IN: f64 = 12.0;
+
+/// A paper length followed by a real length in feet, with no "=" between them (`1/8" 1'-0"`):
+/// the paper side is marked as inches or is a fraction, the real side carries a foot mark and is
+/// at least as long. Anything else (a lone length, two lengths in feet) is no scale.
+fn implicit_pair(t: &str) -> Option<f64> {
+    let feet = t.find('\'')?;
+    // the real length's number runs back from its foot mark
+    let head = t.get(..feet)?;
+    let start = head.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.').len();
+    if start == head.len() {
+        return None;
+    }
+    let (lhs, rhs) = (t.get(..start)?, t.get(start..)?);
+    let lhs = lhs.trim_end().trim_end_matches(['-', ' ']).trim_end();
+    if lhs.is_empty() || lhs.contains('\'') || !(lhs.ends_with('"') || lhs.contains('/')) {
+        return None;
+    }
+    let (paper, real) = paper_and_real(lhs, rhs)?;
+    (paper <= IMPLICIT_SCALE_MAX_PAPER_IN && real >= paper).then(|| real / paper).filter(|k| k.is_finite() && *k <= 1e6)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2030,10 +2084,88 @@ fn has_do_not_scale_note(texts: &[TextOut]) -> bool {
     false
 }
 
+/// A text a scale note may be read from: the page's own text or lettering read from strokes
+/// or outlines (sheet points).
+#[derive(Clone, Debug)]
+struct NoteText {
+    value: String,
+    at: (f64, f64),
+    height: f64,
+    /// degrees, counter-clockwise
+    rotation: f64,
+    layer: Option<String>,
+}
+
+impl NoteText {
+    fn of_text(t: &TextOut) -> Self {
+        Self { value: t.value.clone(), at: t.at, height: t.height, rotation: t.rotation, layer: t.layer.clone() }
+    }
+    fn of_reading(t: &RecoveredText) -> Self {
+        Self { value: t.value.clone(), at: t.at, height: t.height, rotation: t.rotation, layer: t.layer.clone() }
+    }
+}
+
+/// Texts looked at for a note split in two ([`join_split_scale_notes`]), each side: a page with
+/// more is a page of notes, and its scale is in its first ones.
+const MAX_SPLIT_NOTE_PIECES: usize = 2000;
+
+/// A scale note whose "=" didn't come through reads as two texts on one line, the paper length
+/// (`SCALE 1/8"`) and the real one (`1'-0"`) a gap apart: each such pair joined, where it reads
+/// as a scale ([`parse_scale_pair`]) and neither piece does alone.
+fn join_split_scale_notes(texts: &[NoteText]) -> Vec<NoteText> {
+    let paper_piece = |v: &str| {
+        let v = v.trim();
+        v.len() <= 24 && !v.contains('\'') && !v.contains('=') && (v.ends_with('"') || v.ends_with(|c: char| c.is_ascii_digit()) && v.contains('/'))
+    };
+    let real_piece = |v: &str| {
+        let v = v.trim();
+        v.len() <= 16 && v.contains('\'') && v.starts_with(|c: char| c.is_ascii_digit() || c == '=' || c == '-')
+    };
+    let papers: Vec<&NoteText> = texts.iter().filter(|t| paper_piece(&t.value)).take(MAX_SPLIT_NOTE_PIECES).collect();
+    let reals: Vec<&NoteText> = texts.iter().filter(|t| real_piece(&t.value)).take(MAX_SPLIT_NOTE_PIECES).collect();
+    let mut out = Vec::new();
+    for a in papers {
+        if !(a.height.is_finite() && a.height > 0.0) || parse_scale(&a.value).is_some() {
+            continue;
+        }
+        let r = a.rotation.to_radians();
+        let (ux, uy) = (r.cos(), r.sin());
+        // the gap an "=" and its spaces leave, past the paper piece's own letters
+        let reach = (a.value.trim().chars().count() as f64 + 6.0) * a.height;
+        let mut best: Option<(f64, &NoteText)> = None;
+        for b in &reals {
+            let same_size = b.height >= a.height * 0.7 && b.height <= a.height * 1.4;
+            let turn = (b.rotation - a.rotation).rem_euclid(360.0);
+            if !same_size || turn.min(360.0 - turn) > 2.0 {
+                continue;
+            }
+            let (dx, dy) = (b.at.0 - a.at.0, b.at.1 - a.at.1);
+            let along = dx * ux + dy * uy;
+            let across = -dx * uy + dy * ux;
+            if across.abs() <= a.height * 0.35 && along > 0.0 && along <= reach && best.is_none_or(|(d, _)| along < d) {
+                best = Some((along, b));
+            }
+        }
+        let Some((_, b)) = best else { continue };
+        let value = format!("{} {}", a.value.trim(), b.value.trim().trim_start_matches(['=', '-', ' ']));
+        if parse_scale_pair(&value).is_some() && parse_scale(&b.value).is_none() {
+            out.push(NoteText { value, ..a.clone() });
+        }
+    }
+    out
+}
+
 /// Detect scale notes in text entities, with preference for those on TITLE/BORDER layers or
 /// near the bottom/right of the sheet (the title block area). Returns the best scale factor and
 /// the source text.
 fn detect_scale_note(texts: &[TextOut], sheet: (f64, f64)) -> Option<(f64, String)> {
+    let notes: Vec<NoteText> = texts.iter().map(NoteText::of_text).collect();
+    detect_scale_note_in(&notes, sheet)
+}
+
+/// [`detect_scale_note`] over any texts: a note with its "=" (or its "SCALE" label), a paper and
+/// a real length with no "=" between them, or the two pieces of one split at its gap.
+fn detect_scale_note_in(texts: &[NoteText], sheet: (f64, f64)) -> Option<(f64, String)> {
     struct Candidate {
         scale: f64,
         text: String,
@@ -2042,14 +2174,22 @@ fn detect_scale_note(texts: &[TextOut], sheet: (f64, f64)) -> Option<(f64, Strin
     }
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
-    for t in texts {
+    let joined = join_split_scale_notes(texts);
+    for t in texts.iter().chain(&joined) {
         let v = t.value.trim();
         let up = v.to_ascii_uppercase();
-        if !(up.contains('=') || up.starts_with("SCALE")) || !(up.contains('\'') || up.contains('"') || up.contains(':')) {
-            continue;
-        }
-        let Some(k) = parse_scale(v) else { continue };
-        let key = v.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string();
+        let k = if up.contains('=') || up.starts_with("SCALE") {
+            if !(up.contains('\'') || up.contains('"') || up.contains(':')) {
+                continue;
+            }
+            parse_scale(v)
+        } else if up.contains('\'') {
+            parse_scale_pair(v)
+        } else {
+            None
+        };
+        let Some(k) = k else { continue };
+        let key = scale_note_body(v).trim_start_matches(|c: char| !c.is_ascii_digit()).to_string();
         let layer_up = t.layer.as_deref().unwrap_or("").to_ascii_uppercase();
         let on_title = layer_up.contains("TITLE") || layer_up.contains("BORDER") || layer_up.contains("TBLOCK");
         // sheet position: the title block is typically in the bottom-right quadrant
@@ -2077,6 +2217,183 @@ fn detect_scale_note(texts: &[TextOut], sheet: (f64, f64)) -> Option<(f64, Strin
     // best = lowest priority, then most occurrences
     candidates.sort_by(|a, b| a.priority.cmp(&b.priority).then(b.count.cmp(&a.count)));
     candidates.into_iter().next().map(|c| (c.scale, c.text))
+}
+
+/// A dimension string's length in inches: feet with their mark, then inches (`12'-6"`,
+/// `3' - 4 1/2"`, `25'`). A value with any other word, or no foot mark, is none.
+fn dimension_length(v: &str) -> Option<f64> {
+    let t = v.trim().to_ascii_uppercase().replace(['\u{2019}', '\u{2032}'], "'").replace(['\u{201D}', '\u{2033}'], "\"");
+    let t = if t.chars().any(|c| c.is_ascii_alphabetic() && c != 'O') { return None } else { t.replace('O', "0") };
+    if t.len() > 16 || !t.chars().all(|c| c.is_ascii_digit() || " '\"-/.".contains(c)) {
+        return None;
+    }
+    let (ft, rest) = t.split_once('\'')?;
+    let ft: f64 = ft.trim().parse().ok()?;
+    let rest = rest.trim().trim_start_matches('-').trim();
+    let inch = rest.strip_suffix('"').unwrap_or(rest).trim();
+    let inches = if inch.is_empty() {
+        0.0
+    } else if let Some((a, b)) = inch.split_once('/') {
+        let (whole, num) = match a.trim().rsplit_once([' ', '-']) {
+            Some((w, n)) => (w.trim().parse::<f64>().ok()?, n.trim().parse::<f64>().ok()?),
+            None => (0.0, a.trim().parse::<f64>().ok()?),
+        };
+        let den: f64 = b.trim().parse().ok()?;
+        (den > 0.0).then(|| whole + num / den)?
+    } else {
+        inch.parse::<f64>().ok()?
+    };
+    let len = ft * 12.0 + inches;
+    (len.is_finite() && len > 0.0 && inches < 12.0 && ft <= DIMENSION_MAX_FEET).then_some(len)
+}
+
+/// The longest dimension string read for a sheet's scale (feet).
+const DIMENSION_MAX_FEET: f64 = 5000.0;
+/// Dimension strings and line segments looked at for a sheet's scale: a page with more is
+/// read from its first ones.
+const MAX_DIMENSION_TEXTS: usize = 5000;
+const MAX_DIMENSION_SEGMENTS: usize = 400_000;
+/// Grid cells (points) the segments are filed in, and the most cells one segment files in.
+const DIMENSION_CELL: f64 = 36.0;
+const MAX_CELLS_PER_SEGMENT: usize = 256;
+/// Dimension strings that must agree, and how closely (relative), for a sheet's scale.
+const DIMENSION_MIN_AGREE: usize = 3;
+const DIMENSION_AGREE: f64 = 0.03;
+
+/// A sheet's scale measured from its dimension strings.
+#[derive(Debug, Clone, PartialEq)]
+struct DimensionScale {
+    /// drawing inches per sheet inch
+    scale: f64,
+    /// the dimension strings that agree on it, of `measured`
+    agree: usize,
+    measured: usize,
+    /// the scale of the drawing's standard list it is (`1/8" = 1'-0"`), when one is that close
+    named: Option<String>,
+}
+
+/// The scale a sheet's dimension strings give, for a sheet whose scale note can't be read: each
+/// dimension string's length ([`dimension_length`]) over the length of the line it is written
+/// along (a stroke segment parallel to it, its middle beside the text, within two text heights).
+/// At least [`DIMENSION_MIN_AGREE`] (and a third) of them must agree within
+/// [`DIMENSION_AGREE`]; their scale is the drawing's standard one that close, else their median.
+fn scale_from_dimensions(texts: &[NoteText], strokes: &[Stroke]) -> Option<DimensionScale> {
+    // the segments, filed by grid cell
+    let mut segs: Vec<((f64, f64), (f64, f64))> = Vec::new();
+    'all: for s in strokes {
+        let close = if s.closed { s.pts.first().zip(s.pts.last()).map(|(a, b)| (*b, *a)) } else { None };
+        for seg in s
+            .pts
+            .windows(2)
+            .filter_map(|w| match w {
+                [a, b] => Some((*a, *b)),
+                _ => None,
+            })
+            .chain(close)
+        {
+            if segs.len() >= MAX_DIMENSION_SEGMENTS {
+                break 'all;
+            }
+            let len = (seg.1.0 - seg.0.0).hypot(seg.1.1 - seg.0.1);
+            if len.is_finite() && len > 1.0 {
+                segs.push(seg);
+            }
+        }
+    }
+    let cell = |x: f64, y: f64| ((x / DIMENSION_CELL).floor() as i64, (y / DIMENSION_CELL).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, (a, b)) in segs.iter().enumerate() {
+        let len = (b.0 - a.0).hypot(b.1 - a.1);
+        let steps = ((len / (DIMENSION_CELL / 2.0)).ceil() as usize).clamp(1, MAX_CELLS_PER_SEGMENT);
+        let mut last = None;
+        for k in 0..=steps {
+            let f = k as f64 / steps as f64;
+            let c = cell(a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
+            if last != Some(c) {
+                grid.entry(c).or_default().push(i);
+                last = Some(c);
+            }
+        }
+    }
+    let mut ks: Vec<f64> = Vec::new();
+    for t in texts.iter().filter(|t| t.height.is_finite() && t.height > 0.0 && t.height < 1e4).take(MAX_DIMENSION_TEXTS) {
+        let Some(real) = dimension_length(&t.value) else { continue };
+        let r = t.rotation.to_radians();
+        let (ux, uy) = (r.cos(), r.sin());
+        let h = t.height;
+        let w = t.value.trim().chars().count() as f64 * h * 0.75;
+        // the text's middle
+        let c = (t.at.0 + ux * w / 2.0 - uy * h / 2.0, t.at.1 + uy * w / 2.0 + ux * h / 2.0);
+        let reach = 2.0 * h;
+        let (lo, hi) = (cell(c.0 - reach, c.1 - reach), cell(c.0 + reach, c.1 + reach));
+        if hi.0.saturating_sub(lo.0).saturating_mul(hi.1.saturating_sub(lo.1)) > 64 {
+            continue;
+        }
+        let mut best: Option<(f64, f64)> = None;
+        let mut looked: HashSet<usize> = HashSet::new();
+        for gx in lo.0..=hi.0 {
+            for gy in lo.1..=hi.1 {
+                for &i in grid.get(&(gx, gy)).into_iter().flatten() {
+                    if !looked.insert(i) {
+                        continue;
+                    }
+                    let Some(&(a, b)) = segs.get(i) else { continue };
+                    let len = (b.0 - a.0).hypot(b.1 - a.1);
+                    let (dx, dy) = ((b.0 - a.0) / len, (b.1 - a.1) / len);
+                    // parallel to the text
+                    if (ux * dy - uy * dx).abs() > 0.035 || len < w * 0.8 {
+                        continue;
+                    }
+                    let (px, py) = (c.0 - a.0, c.1 - a.1);
+                    let along = (px * dx + py * dy) / len;
+                    let off = (px * dy - py * dx).abs();
+                    if !(0.15..=0.85).contains(&along) || off > reach {
+                        continue;
+                    }
+                    if best.is_none_or(|(o, _)| off < o) {
+                        best = Some((off, len));
+                    }
+                }
+            }
+        }
+        if let Some((_, len)) = best {
+            let k = real / (len / 72.0);
+            if k.is_finite() && (1.0..=1e5).contains(&k) {
+                ks.push(k);
+            }
+        }
+    }
+    ks.sort_by(f64::total_cmp);
+    let n = ks.len();
+    // the largest group within the tolerance of its smallest
+    let mut best: Option<(usize, usize)> = None;
+    let mut j = 0;
+    for i in 0..n {
+        let Some(&lo) = ks.get(i) else { break };
+        j = j.max(i);
+        while ks.get(j + 1).is_some_and(|&k| k <= lo * (1.0 + 2.0 * DIMENSION_AGREE)) {
+            j += 1;
+        }
+        if best.is_none_or(|(a, b)| j - i > b - a) {
+            best = Some((i, j));
+        }
+    }
+    let (i, j) = best?;
+    let agree = j - i + 1;
+    if agree < DIMENSION_MIN_AGREE || agree * 3 < n {
+        return None;
+    }
+    let median = *ks.get(i + agree / 2)?;
+    let named = imperial_scales()
+        .into_iter()
+        .filter(|sc| sc.is_valid() && sc.paper_units > 0.0)
+        .map(|sc| (sc.drawing_units / sc.paper_units, sc.name))
+        .filter(|(k, _)| (k / median - 1.0).abs() <= DIMENSION_AGREE)
+        .min_by(|a, b| (a.0 / median - 1.0).abs().total_cmp(&(b.0 / median - 1.0).abs()));
+    Some(match named {
+        Some((k, name)) => DimensionScale { scale: k, agree, measured: n, named: Some(name.to_string()) },
+        None => DimensionScale { scale: median, agree, measured: n, named: None },
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -4835,7 +5152,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Initial scale detection — may be overridden after SHX text recovery if a DO NOT SCALE
     // note only exists in stroked (hidden) text.
     let do_not_scale_visible = if opts.recover_text { has_do_not_scale_note(&out.texts) } else { false };
-    let best_note = if opts.scale.is_some() {
+    let mut best_note = if opts.scale.is_some() {
         None
     } else if opts.recover_text {
         detect_scale_note(&out.texts, sheet)
@@ -5230,6 +5547,28 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         if !recovered_texts.is_empty() {
             stats.insert("SHX text clusters recovered".into(), recovered_texts.len());
         }
+        // A scale note drawn as lettering (strokes or outlines) is the sheet's scale when its
+        // text gave none: the lettering is read from the same shapes the sheet prints.
+        if opts.scale.is_none() && best_note.is_none() {
+            let readings: Vec<NoteText> = recovered_texts.iter().map(NoteText::of_reading).collect();
+            if let Some((k, note)) = detect_scale_note_in(&readings, sheet) {
+                let e_sheet_drawn = is_e_sheet && !do_not_scale_visible && opts.e_sheet_at_note_scale;
+                if do_not_scale && !e_sheet_drawn {
+                    scale_source = format!("DO NOT SCALE (detected {note} in lettering read from its shapes, scale {k}x — sheet kept at sheet size)");
+                } else {
+                    scale = k;
+                    scale_source = if e_sheet_drawn {
+                        format!(
+                            "scale note {note} (read from lettering drawn as shapes; E sheet: DO NOT SCALE, locations approximate; register it to the architectural plans)"
+                        )
+                    } else {
+                        format!("scale note {note} (read from lettering drawn as shapes)")
+                    };
+                }
+                notes.push(format!("scale note {note} read from lettering drawn as strokes or outlines (scale {k}x)"));
+                best_note = Some((k, note));
+            }
+        }
         // Also check recovered text for DO NOT SCALE (MUST 5): the note may only exist in
         // SHX-stroked form, not as real PDF text.
         let recovered_do_not_scale = recovered_texts.iter().any(|rt| {
@@ -5277,6 +5616,26 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     } else {
         (Vec::new(), HashSet::new(), Vec::new(), HashSet::new(), HashSet::new(), HashSet::new(), HashSet::new(), false)
     };
+
+    // A sheet whose scale note can't be read is scaled from its dimension strings; one left
+    // at paper size says so (a plan at paper size can't be measured).
+    if opts.recover_text && opts.scale.is_none() && best_note.is_none() && !do_not_scale && !recovered_do_not_scale {
+        let all: Vec<NoteText> = texts.iter().map(NoteText::of_text).chain(recovered_texts.iter().map(NoteText::of_reading)).collect();
+        match scale_from_dimensions(&all, &strokes) {
+            Some(ds) => {
+                let named = ds.named.as_deref().map_or_else(String::new, |n| format!(" ({n})"));
+                scale = ds.scale;
+                scale_source = format!("dimension strings: {} of {} measured agree on {}x{named}; no scale note read", ds.agree, ds.measured, ds.scale);
+                notes.push(format!(
+                    "scale {}x{named} measured from {} of {} dimension strings (each string's length over the line it is written along); no scale note was read",
+                    ds.scale, ds.agree, ds.measured
+                ));
+            }
+            None => notes.push(
+                "scale not read: no scale note and no dimension strings that agree; the sheet stays at paper size (a plan at paper size is a finding: give the scale)".to_string(),
+            ),
+        }
+    }
 
     // the drawing
     let mut d = Drawing::new_imperial();
@@ -7328,5 +7687,178 @@ mod tests {
             keep_lone_marks(vec![mark(1e12)], &words, &strokes, 2.0).1
         });
         assert!(found.is_some(), "a mark 1e12 pt high hangs the lone-mark check");
+    }
+
+    #[test]
+    fn scale_notes_without_their_equals_sign() {
+        // a paper length and a real length with no "=" between them (lettering read from its
+        // shapes has no "="), in any of the ways a note spaces or dashes it
+        assert_eq!(parse_scale("SCALE 1/8\" 1'-0\""), Some(96.0));
+        assert_eq!(parse_scale("1/4\"1'-0\""), Some(48.0));
+        assert_eq!(parse_scale("3/16\" - 1'-0\""), Some(64.0));
+        assert_eq!(parse_scale("1 1/2\" 1'-0\""), Some(8.0));
+        assert_eq!(parse_scale("1-1/2\" = 1'-0\""), Some(8.0));
+        assert_eq!(parse_scale("1\" 20'"), Some(240.0));
+        assert_eq!(parse_scale("1/8 1'-0\""), Some(96.0), "a fraction is a paper length without its inch mark");
+        // a 0 the reader took for an O, and a space in the real length
+        assert_eq!(parse_scale("1/8\" 1' -O\""), Some(96.0));
+        assert_eq!(parse_scale_pair("1/4\" 1'-O\""), Some(48.0));
+        // not a scale: lone lengths, two lengths in feet, words, a paper side bigger than the real one
+        for not in ["12'-6\"", "3'-0\" 4'-0\"", "1/2\" PLYWOOD 2'-0\"", "NOT TO SCALE", "18\" 1'-0\"", "6 20'", "SCALE 1/8\""] {
+            assert_eq!(parse_scale(not), None, "{not}");
+        }
+        // without "SCALE" or "=" a ratio isn't a scale (a time, a count)
+        assert_eq!(parse_scale_pair("10:30"), None);
+        assert_eq!(parse_scale_pair("1/8\" = 1'-0\""), None, "a note with its = is parse_scale's");
+    }
+
+    /// `text` as single-stroke plot lettering (the stroke font), its cap `cap` points tall at
+    /// `at`: what a plotter's SHX lettering leaves in a PDF, open strokes and no text.
+    fn stroked(text: &str, at: (f64, f64), cap: f64) -> String {
+        let k = cap / 6.0;
+        let mut out = String::from("0 0 0 RG 0.5 w\n");
+        let mut x = at.0;
+        for ch in text.chars() {
+            let Some((w, spec)) = cadaddy_fonts::stroke::glyph(ch) else {
+                x += 4.0 * k;
+                continue;
+            };
+            for line in cadaddy_fonts::stroke::strokes(spec) {
+                for (i, (px, py)) in line.iter().enumerate() {
+                    out.push_str(&format!("{:.3} {:.3} {}\n", x + px * k, at.1 + py * k, if i == 0 { "m" } else { "l" }));
+                }
+                out.push_str("S\n");
+            }
+            x += (w + 2.0) * k;
+        }
+        out
+    }
+
+    fn read_page(content: &str) -> PdfImport {
+        match read(&pdf_with(content.as_bytes()), &PdfOptions::default()) {
+            Ok(r) => r,
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    #[test]
+    fn a_scale_note_in_stroked_lettering_scales_the_sheet() {
+        // The note is plotter lettering: the reader reads it without its "=" (no such
+        // character), split at the gap the "=" leaves, a 0 perhaps as an O.
+        for (note, k) in [("SCALE 1/8\" = 1'-0\"", 96.0), ("1/4\" = 1'-0\"", 48.0), ("SCALE 3/16\"=1'-0\"", 64.0)] {
+            let content = [stroked(note, (500.0, 60.0), 9.0), stroked("FLOOR PLAN", (100.0, 300.0), 9.0)].concat();
+            let r = read_page(&content);
+            assert_eq!(r.scale, k, "{note}: {} {:?}", r.scale_source, r.notes);
+            assert!(r.scale_source.starts_with("scale note") && r.scale_source.contains("lettering"), "{}", r.scale_source);
+            // the drawing is at that scale: the plan's lettering stands where the sheet shows it, times k
+            let plan = r.drawing.model.iter().find_map(|e| match &e.kind {
+                EntityKind::Text(t) if t.value == "FLOOR PLAN" => Some(t.insert),
+                _ => None,
+            });
+            assert!(plan.is_some_and(|p| (p.y - 300.0 / 72.0 * k).abs() < 0.05 * k), "{plan:?}");
+        }
+        // A DO NOT SCALE sheet keeps sheet size, and says what it read.
+        let content = [stroked("SCALE 1/8\" = 1'-0\"", (500.0, 60.0), 9.0), stroked("DO NOT SCALE", (100.0, 60.0), 9.0)].concat();
+        let r = read_page(&content);
+        assert_eq!(r.scale, 1.0, "{}", r.scale_source);
+        assert!(r.scale_source.contains("DO NOT SCALE") && r.scale_source.contains("96x"), "{}", r.scale_source);
+    }
+
+    #[test]
+    fn a_scale_note_split_in_two_texts_reads_as_one() {
+        // the page's own text: the paper length and the real one as two strings, no "="
+        let r = read_page("BT /F1 8 Tf 600 60 Td (SCALE: 1/4\") Tj ET BT /F1 8 Tf 660 60 Td (1'-0\") Tj ET BT /F1 8 Tf 72 300 Td (PLAN) Tj ET");
+        assert_eq!(r.scale, 48.0, "{}", r.scale_source);
+        // pieces on different lines, or far apart, are not one note
+        let r = read_page("BT /F1 8 Tf 600 60 Td (SCALE: 1/4\") Tj ET BT /F1 8 Tf 660 90 Td (1'-0\") Tj ET");
+        assert_eq!(r.scale, 1.0, "{}", r.scale_source);
+        let r = read_page("BT /F1 8 Tf 100 60 Td (SCALE: 1/4\") Tj ET BT /F1 8 Tf 600 60 Td (1'-0\") Tj ET");
+        assert_eq!(r.scale, 1.0, "{}", r.scale_source);
+    }
+
+    /// A dimension: its line `len` points long at `at`, ticks at its ends, its string above it.
+    fn dimension(at: (f64, f64), len: f64, value: &str, vertical: bool) -> String {
+        let (x, y) = at;
+        if vertical {
+            format!(
+                "0 0 0 RG 0.25 w {x} {y} m {x} {} l S {} {} m {} {} l S BT /F1 6 Tf 0 1 -1 0 {} {} Tm ({value}) Tj ET\n",
+                y + len,
+                x - 3.0,
+                y - 3.0,
+                x + 3.0,
+                y + 3.0,
+                x - 2.0,
+                y + len / 2.0 - 12.0
+            )
+        } else {
+            format!(
+                "0 0 0 RG 0.25 w {x} {y} m {} {y} l S {} {} m {} {} l S BT /F1 6 Tf {} {} Td ({value}) Tj ET\n",
+                x + len,
+                x - 3.0,
+                y - 3.0,
+                x + 3.0,
+                y + 3.0,
+                x + len / 2.0 - 12.0,
+                y + 2.0
+            )
+        }
+    }
+
+    #[test]
+    fn a_sheet_with_no_scale_note_is_scaled_from_its_dimension_strings() {
+        // 1/8" = 1'-0" (96x): 20'-0" is 2.5 in on the sheet (180 pt), 12'-6" is 112.5 pt, 8'-0"
+        // is 72 pt; one string is off (a dimension "not to scale"), a line beside no string
+        let content = [
+            dimension((100.0, 100.0), 180.0, "20'-0\"", false),
+            dimension((100.0, 200.0), 112.5, "12'-6\"", false),
+            dimension((400.0, 100.0), 72.0, "8'-0\"", true),
+            dimension((400.0, 300.0), 100.0, "40'-0\"", false),
+            "0 0 0 RG 1 w 50 500 m 700 500 l S\n".to_string(),
+        ]
+        .concat();
+        let r = read_page(&content);
+        assert_eq!(r.scale, 96.0, "{} {:?}", r.scale_source, r.notes);
+        assert!(r.scale_source.contains("dimension strings: 3 of 4"), "{}", r.scale_source);
+        assert!(r.scale_source.contains("1/8\" = 1'-0\""), "the standard scale it is: {}", r.scale_source);
+        assert!(r.notes.iter().any(|n| n.contains("measured from 3 of 4 dimension strings")), "{:?}", r.notes);
+        // two that agree aren't enough: the sheet stays at paper size, and says so
+        let content = [dimension((100.0, 100.0), 180.0, "20'-0\"", false), dimension((100.0, 200.0), 112.5, "12'-6\"", false)].concat();
+        let r = read_page(&content);
+        assert_eq!(r.scale, 1.0, "{}", r.scale_source);
+        assert!(r.notes.iter().any(|n| n.starts_with("scale not read")), "{:?}", r.notes);
+        // a scale note wins over the dimensions (they are only for a sheet whose note can't be read)
+        let r =
+            read_page(&[dimension((100.0, 100.0), 180.0, "20'-0\"", false), "BT /F1 8 Tf 600 60 Td (SCALE: 1/4\" = 1'-0\") Tj ET".into()].concat());
+        assert_eq!(r.scale, 48.0, "{}", r.scale_source);
+    }
+
+    #[test]
+    fn dimension_strings_read_as_lengths() {
+        assert_eq!(dimension_length("12'-6\""), Some(150.0));
+        assert_eq!(dimension_length("3' - 4 1/2\""), Some(40.5));
+        assert_eq!(dimension_length("25'"), Some(300.0));
+        assert_eq!(dimension_length("1O'-O\""), Some(120.0), "Os read for 0s");
+        for not in ["6\"", "ROOM 12'", "12'-14\"", "1/8\" = 1'-0\"", "99999999'", "'", "-'-"] {
+            assert_eq!(dimension_length(not), None, "{not}");
+        }
+    }
+
+    #[test]
+    fn hostile_dimension_strings_are_bounded() {
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let line = |a: (f64, f64), b: (f64, f64)| Stroke {
+            pts: vec![a, b],
+            closed: false,
+            pen,
+            layer: None,
+            curve_loop: false,
+            curved_loop: false,
+            order: 0,
+        };
+        let text = |at: (f64, f64), height: f64| NoteText { value: "20'-0\"".into(), at, height, rotation: 0.0, layer: None };
+        // a segment across the number range, a text 1e300 high and one at 1e300: nothing hangs or overflows
+        let strokes = vec![line((-1e300, 0.0), (1e300, 0.0)), line((0.0, 0.0), (180.0, 0.0))];
+        let texts = vec![text((60.0, 2.0), 1e300), text((1e300, 2.0), 6.0), text((60.0, 2.0), f64::NAN)];
+        assert_eq!(scale_from_dimensions(&texts, &strokes), None);
     }
 }

@@ -489,6 +489,10 @@ pub struct GuidedJob {
     /// sheet's legend applies to its own symbols only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_spans: Vec<SheetSpan>,
+    /// How each imported sheet's scale was read (its note, lettering drawn as shapes, its
+    /// dimension strings, none): a plan left at paper size can't be measured (Q6323).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_scales: Vec<SheetScale>,
     /// The devices the devices stage confirmed (type, where, sheet, level, circuit): the
     /// bim_build stage puts them in the model after it drafts the building spec.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -565,6 +569,56 @@ pub struct SheetSpan {
     pub sheet: String,
     pub lo: u64,
     pub hi: u64,
+}
+
+/// How an imported sheet's scale was read (the PDF import's scale and its source).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SheetScale {
+    pub sheet: String,
+    /// The sheet's type (`plan`, `enlarged_plan`, `rcp` …).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    /// Drawing inches per sheet inch (1: paper size).
+    pub scale: f64,
+    /// What the import says the scale came from.
+    pub source: String,
+}
+
+impl SheetScale {
+    /// How the scale was read: `given`, `note`, `lettering` (a note drawn as shapes),
+    /// `dimensions`, `do not scale` or `none`.
+    pub fn how(&self) -> &'static str {
+        let src = self.source.as_str();
+        if src == "option" {
+            "given"
+        } else if src.contains("DO NOT SCALE") {
+            "do not scale"
+        } else if src.starts_with("scale note") && src.contains("lettering") {
+            "lettering"
+        } else if src.starts_with("scale note") {
+            "note"
+        } else if src.starts_with("dimension strings") {
+            "dimensions"
+        } else {
+            "none"
+        }
+    }
+    /// A floor plan imported at paper size with no scale read: nothing on it can be measured.
+    pub fn plan_at_paper_size(&self) -> bool {
+        matches!(self.kind.as_str(), "plan" | "enlarged_plan") && self.how() == "none" && self.scale <= 1.0
+    }
+}
+
+/// The report's sheet scales: how many sheets' scales were read each way, and the plans left at
+/// paper size.
+fn sheet_scales_report(job: &GuidedJob) -> Value {
+    let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+    for sc in &job.sheet_scales {
+        *by.entry(sc.how()).or_default() += 1;
+    }
+    let paper: Vec<&str> = job.sheet_scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.as_str()).collect();
+    let at_scale = job.sheet_scales.iter().filter(|sc| sc.scale > 1.0).count();
+    json!({"sheets": job.sheet_scales.len(), "at_real_scale": at_scale, "by": by, "plans_at_paper_size": paper})
 }
 
 /// An imported sheet's rectangle in the job's drawing.
@@ -917,6 +971,7 @@ impl GuidedJob {
             index: None,
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
+            sheet_scales: Vec::new(),
             devices: Vec::new(),
             mep: None,
             circuits: Vec::new(),
@@ -2095,10 +2150,17 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let mut placed = Vec::new();
     let mut regions = Vec::new();
     let mut typical = Vec::new();
+    let mut scales = Vec::new();
     for ((r, name), sh) in results.iter().zip(&names).zip(&all) {
         match r {
             super::exchange::PageImport::Done(rep) => {
                 imported += 1;
+                scales.push(SheetScale {
+                    sheet: name.clone(),
+                    kind: kind(sh),
+                    scale: rep.get("scale").and_then(Value::as_f64).unwrap_or(1.0),
+                    source: rep.get("scaleSource").and_then(Value::as_str).unwrap_or("").chars().take(240).collect(),
+                });
                 let rect = rep.get("rect").and_then(Value::as_array).and_then(|r| {
                     let v: Vec<f64> = r.iter().filter_map(Value::as_f64).collect();
                     <[f64; 4]>::try_from(v).ok()
@@ -2151,6 +2213,23 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         }
     }
     job.sheet_spans.extend(spans);
+    // A plan left at paper size (no scale note, none in its lettering, no dimension strings that
+    // agree) can't be measured: a finding, never silent.
+    let paper: Vec<String> = scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.clone()).collect();
+    job.sheet_scales = scales;
+    if !paper.is_empty() {
+        let list = paper.iter().take(MAX_QUESTIONS_PER_STAGE).cloned().collect::<Vec<_>>().join(", ");
+        s.echo(format!("guided: {} plan sheet(s) left at paper size (no scale read): {list}", paper.len()));
+        job.add_finding(
+            stage,
+            &format!("{} plan sheet(s) imported at paper size: no scale note and no dimension strings that agree ({list})", paper.len()),
+            "A plan at paper size can't be measured: its rooms, openings and runs come out a fraction of their size",
+            4,
+            vec!["Give the sheet's scale (its scale note as printed)".into(), "Check that the sheet is a plan".into()],
+            None,
+            false,
+        );
+    }
     // Each sheet's border and title block: what is read there is never building.
     let rects: Vec<[f64; 4]> = regions.iter().map(|r| r.rect).collect();
     for (r, f) in regions.iter_mut().zip(sheet_frames(s.doc()?, &rects)) {
@@ -26800,6 +26879,12 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
         w.push(json!({"warning": "sheets not built", "detail": not_built.join("; ")}));
     }
 
+    // Plans imported at paper size (Q6323): nothing on them can be measured.
+    let paper: Vec<&str> = job.sheet_scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.as_str()).collect();
+    if !paper.is_empty() {
+        w.push(json!({"warning": "plans at paper size", "detail": format!("{} plan sheet(s) with no scale read (no scale note, no dimension strings that agree): {}", paper.len(), paper.join("; "))}));
+    }
+
     // Auto-guard rejections (Q6021).
     let rejected: Vec<String> = job
         .stages
@@ -26908,6 +26993,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "documented_objects": doc_objects_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
         "specifications": specs_report(&job),
+        "sheet_scales": sheet_scales_report(&job),
     }))
 }
 
@@ -34368,6 +34454,37 @@ mod tests {
                 assert!(detail.is_string(), "warning detail must be a string, got: {detail}");
             }
         }
+    }
+
+    /// Q6323: a plan imported at paper size (no scale note, none in its lettering, no dimension
+    /// strings) is a warning in the report, never silent; the report counts how each sheet's
+    /// scale was read.
+    #[test]
+    fn plans_left_at_paper_size_are_reported() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let sc =
+            |sheet: &str, kind: &str, scale: f64, source: &str| SheetScale { sheet: sheet.into(), kind: kind.into(), scale, source: source.into() };
+        job.sheet_scales = vec![
+            sc("P-1", "plan", 96.0, "scale note 1/8\" = 1'-0\""),
+            sc("P-2", "plan", 96.0, "scale note 1/8\" 1'-0\" (read from lettering drawn as shapes)"),
+            sc("P-3", "enlarged_plan", 48.0, "dimension strings: 4 of 5 measured agree on 48x (1/4\" = 1'-0\"); no scale note read"),
+            sc("P-4", "plan", 1.0, "none (the sheet in inches)"),
+            sc("X-1", "schedule", 1.0, "none (the sheet in inches)"),
+            sc("Q-1", "plan", 1.0, "DO NOT SCALE (the sheet in inches)"),
+        ];
+        let hows: Vec<&str> = job.sheet_scales.iter().map(SheetScale::how).collect();
+        assert_eq!(hows, ["note", "lettering", "dimensions", "none", "none", "do not scale"]);
+        let warnings = job_warnings(&job, None);
+        let w = warnings.iter().find(|w| w["warning"] == "plans at paper size").expect("a plan at paper size is a warning");
+        let detail = w["detail"].as_str().unwrap_or("");
+        assert!(detail.contains("P-4") && !detail.contains("X-1") && !detail.contains("Q-1"), "{detail}");
+        let r = sheet_scales_report(&job);
+        assert_eq!(r["at_real_scale"], json!(3));
+        assert_eq!(r["plans_at_paper_size"], json!(["P-4"]));
+        assert_eq!(r["by"]["lettering"], json!(1));
+        // every plan read at a scale: no warning
+        job.sheet_scales.retain(|sc| sc.sheet != "P-4");
+        assert!(job_warnings(&job, None).iter().all(|w| w["warning"] != "plans at paper size"));
     }
 
     /// Q6037: auto-rejected questions are listed as open.
