@@ -574,6 +574,10 @@ impl Field {
     pub(crate) fn framing_top(&self) -> Option<f64> {
         self.frames.keys().filter_map(|i| self.obs.get(*i)).map(|o| o.hi.z).filter(|z| z.is_finite()).min_by(f64::total_cmp)
     }
+    /// The lowest bottom of the framing members over the level (where they bear).
+    pub(crate) fn framing_bottom(&self) -> Option<f64> {
+        self.frames.keys().filter_map(|i| self.obs.get(*i)).map(|o| o.lo.z).filter(|z| z.is_finite()).min_by(f64::total_cmp)
+    }
     pub(crate) fn new(obs: Vec<Obs>, upf: f64) -> Self {
         let cell = (CELL_FT * upf).max(1e-6);
         let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -897,7 +901,8 @@ pub(crate) struct Leg {
     pub pts: Vec<Vec2>,
     pub z: Vec<f64>,
     pub blocked: Vec<Blocked>,
-    /// The holes it bores through the framing (a cost: labor at each).
+    /// The holes it bores through the framing (a cost: labor at each); a pass through a truss's
+    /// web is none.
     pub holes: usize,
 }
 
@@ -912,7 +917,9 @@ fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[H
         let clear = |z: &f64| field.hit(*a, *b, *z, r, upf, skip, rl).is_none() && field.framing(*a, *b, *z, r, upf, rl).is_ok();
         match tiers.iter().copied().find(clear) {
             Some(z) => {
-                leg.holes += field.framing(*a, *b, z, r, upf, rl).map_or(0, |h| h.len());
+                // A pass through a truss's open web bores nothing: only bored holes are labor
+                // (Q6314: counted, a top floor's runs went round the trusses' ends, past the walls).
+                leg.holes += field.framing(*a, *b, z, r, upf, rl).map_or(0, |h| h.iter().filter(|h| h.dia_in > 0.0).count());
                 leg.z.push(z);
             }
             None => {
@@ -943,6 +950,19 @@ fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[H
         }
     }
     leg
+}
+
+/// How high a level's routing tiers go through the framing over it (`floor` and `storey_top` the
+/// level's floor and top; `bottom`, `top` the members' lowest bottom and top; `keep` what the
+/// rules keep clear under their top): up to `top - keep`, for the floor above's joists within
+/// the storey's height and for the roof's trusses bearing on its walls, which stand wholly
+/// above it (Q6314: a top floor's runs were kept under the trusses' bottom chords, so every run
+/// across them was blocked and went round their ends, past the walls). `None`: the framing is
+/// not over the level.
+pub(crate) fn framing_tier_top(floor: f64, storey_top: f64, bottom: f64, top: f64, keep: f64, upf: f64) -> Option<f64> {
+    let z = top - keep;
+    let over = z < storey_top + upf || (bottom >= floor && bottom < storey_top + upf);
+    (z.is_finite() && z > floor && over).then_some(z)
 }
 
 /// The best square route from `a` to `b`: fewest blocked pieces, then shortest (bends cost).
@@ -2648,10 +2668,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut zmax = floor + (l.height_ft.max(ceiling + 1.0) - rl.route.structure_depth_in / 12.0) * upf;
         // The documents' framing over the level is its structure: the tiers go up through the
         // joists' web (to its hole zone's top), not to a default depth under the floor.
-        if let Some(top) = fields.get(&level.to_ascii_lowercase()).and_then(Field::framing_top) {
+        if let Some(field) = fields.get(&level.to_ascii_lowercase())
+            && let (Some(top), Some(bottom)) = (field.framing_top(), field.framing_bottom())
+        {
             let keep = (rl.framing.flange_in.max(0.0) + rl.framing.edge_in.max(0.0) + 0.5) / 12.0 * upf;
-            if top - keep > floor && top - keep < floor + l.height_ft.max(ceiling + 1.0) * upf + upf {
-                zmax = zmax.max(top - keep);
+            if let Some(z) = framing_tier_top(floor, floor + l.height_ft.max(ceiling + 1.0) * upf, bottom, top, keep, upf) {
+                zmax = zmax.max(z);
             }
         }
         let step = (rl.route.tier_step_in.max(1.0) / 12.0) * upf;

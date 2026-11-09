@@ -5368,6 +5368,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
             }
             job.audit("bspec_draft", "pipeline", None, Some(StageName::BimBuild), Some(json!({"stored": true})));
+            // The roof as the documents frame it: its framing from its plans' notes, its
+            // parapets from the sections' tops of parapet (Q6314).
+            match roof_documents(s, job) {
+                Ok(v) if !v.is_null() => job.audit("roof_documents", "pipeline", None, Some(StageName::BimBuild), Some(v)),
+                Ok(_) => {}
+                Err(e) => progress_line(&format!("  roof framing and parapets not read: {e}")),
+            }
             // The drafted spec is the plans' alone: the M and P plans' runs go back in, each on
             // its level, so the build makes them.
             if let Some(mep) = job.mep.clone().filter(|m| !m.runs.is_empty() || !m.terminals.is_empty() || !m.equipment.is_empty())
@@ -24831,6 +24838,81 @@ fn placement_discipline(job: &GuidedJob) -> Option<String> {
     level_plan_discipline(job)
 }
 
+/// The roof levels' framing and parapets into the drafted spec: the framing the notes on each
+/// roof level's sheets name (trusses or joists, their spacing and depth; the rule's usual values
+/// where a note gives none), bearing at the level's elevation, which then rises to the roof's
+/// surface on the members and deck (the storey under keeps its floor to the bearing); and the
+/// lowest top of parapet the sections and elevations mark above the bearing, as a height over
+/// the roof's surface (the higher ones reported). A parapet an elevation read already gave the
+/// level is kept. What was put in (null: nothing).
+fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
+    let (mut sp, true) = super::bspec::current(s, "bim_build")? else { return Ok(Value::Null) };
+    let roofs: Vec<String> = sp.levels.iter().filter(|l| super::wallgen::roof_level(&sp.levels, &l.name)).map(|l| l.name.clone()).collect();
+    if roofs.is_empty() {
+        return Ok(Value::Null);
+    }
+    let index_levels: Vec<Value> = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let rect = |r: [f64; 4]| {
+        cadaddy_geom::Bounds2::new(cadaddy_geom::Vec2::new(r[0].min(r[2]), r[1].min(r[3])), cadaddy_geom::Vec2::new(r[0].max(r[2]), r[1].max(r[3])))
+    };
+    let mut out = Vec::new();
+    for roof in &roofs {
+        let of_level =
+            |r: &SheetRegion| std::iter::once(&r.level).chain(r.levels.iter()).any(|l| !l.is_empty() && level_name(l).eq_ignore_ascii_case(roof));
+        let mut regions: Vec<(String, cadaddy_geom::Bounds2)> = Vec::new();
+        for r in job.sheet_regions.iter().filter(|r| r.not_built.is_empty() && of_level(r)) {
+            // The whole sheet inside its border: the framing notes stand beside the plan.
+            let b = rect(r.area.unwrap_or(r.rect));
+            if !regions.iter().any(|(n, x)| *n == r.number && *x == b) {
+                regions.push((r.number.clone(), b));
+            }
+        }
+        let mut framing = super::exterior::read_framing(s.doc()?, &regions, roof);
+        // The level's elevation (the sections' top of plate or truss bearing) is where the
+        // framing bears; the roof's surface, its level's floor, is on the members and deck.
+        let assembly = super::exterior::assembly_ft(framing.as_ref());
+        if let Some(f) = framing.as_mut()
+            && let Some(level) = sp.levels.iter_mut().find(|l| l.name.eq_ignore_ascii_case(roof))
+        {
+            f.bearing_ft = Some(level.elevation_ft);
+            level.elevation_ft += assembly;
+            sp.exterior.framing.retain(|x| !x.level.eq_ignore_ascii_case(roof));
+            sp.exterior.framing.push(f.clone());
+        }
+        let parapets: Vec<f64> = index_levels
+            .iter()
+            .find(|l| l.get("name").and_then(Value::as_str).is_some_and(|n| level_name(n).eq_ignore_ascii_case(roof)))
+            .and_then(|l| l.get("parapets_ft"))
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).collect())
+            .unwrap_or_default();
+        let mut parapet = Value::Null;
+        if let Some(low) = parapets.first().copied()
+            && sp.exterior.level_parapet(roof).is_none()
+        {
+            let h = (low - assembly).max(0.0);
+            sp.exterior.parapets.push(cadaddy_walk3d::LevelParapet { level: roof.clone(), height_ft: h, facade: None });
+            parapet = json!({
+                "height_ft": (h * 100.0).round() / 100.0,
+                "above_bearing_ft": parapets,
+                "note": if parapets.len() > 1 {
+                    format!("the parapet is built at its lowest top all round; the sections and elevations also mark {} above the bearing where it steps up", parapets.iter().skip(1).map(|v| cadaddy_walk3d::feet(*v)).collect::<Vec<_>>().join(", "))
+                } else {
+                    String::new()
+                },
+            });
+        }
+        if framing.is_some() || !parapet.is_null() {
+            out.push(json!({"level": roof, "framing": framing, "parapet": parapet}));
+        }
+    }
+    if out.is_empty() {
+        return Ok(Value::Null);
+    }
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    Ok(json!({"roofs": out}))
+}
+
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
     // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
@@ -34616,6 +34698,59 @@ mod tests {
     }
 
     /// Q6037: level_name canonicalises aliases to one name per real level.
+    /// Q6314: the roof level's framing comes from the notes on its sheets (here a structural
+    /// roof plan), and its parapet from the index's lowest top of parapet above the bearing, as a
+    /// height over the framed roof's deck; the higher tops are reported, not built.
+    #[test]
+    fn roof_documents_frame_the_roof_and_give_it_its_parapet() {
+        let mut s = Session::new();
+        // The structural roof plan's notes, on its sheet (x 1000–1100).
+        s.execute("text", &json!({"at": [1010, 20], "text": "PRE-MANUFACTURED ROOF TRUSSES @ 16\" OC. MAX.", "height": 2})).unwrap();
+        s.execute("text", &json!({"at": [1010, 30], "text": "MIN. 30\" DEEP TRUSS", "height": 2})).unwrap();
+        // A truss note on another floor's sheet is not the roof's.
+        s.execute("text", &json!({"at": [10, 20], "text": "FLOOR TRUSSES @ 19.2\" OC", "height": 2})).unwrap();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Roof", "elevation_ft": 10, "height_ft": 4, "ceiling_ft": 4}
+            ]}}),
+        )
+        .unwrap();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![region("A-1", "1", "A", "plan", 0.0), region("S-4", "R", "S", "plan", 1000.0)];
+        job.index = Some(json!({"levels": [{"name": "1", "elevation_ft": 0.0}, {"name": "R", "elevation_ft": 10.0, "parapets_ft": [5.0, 7.0]}]}));
+        let out = roof_documents(&mut s, &job).unwrap();
+        let (sp, _) = super::super::bspec::current(&s, "test").unwrap();
+        let f = sp.exterior.level_framing("Roof").expect("framed");
+        assert_eq!((f.member.as_str(), f.spacing_in, f.depth_in), ("truss", 16.0, 30.0), "{out}");
+        assert!(f.source.starts_with("S-4: PRE-MANUFACTURED ROOF TRUSSES"), "{}", f.source);
+        // It bears at the level's elevation; the level is now the roof's surface, 30" + 1.5" up.
+        assert_eq!(f.bearing_ft, Some(10.0));
+        assert!((sp.level("Roof").unwrap().elevation_ft - (10.0 + 31.5 / 12.0)).abs() < 1e-9);
+        assert_eq!(sp.level("Level 1").unwrap().height_ft, 10.0);
+        // 5' over the bearing less the 30" trusses and 1.5" deck: 2'-4.5" over the deck.
+        let h = sp.exterior.level_parapet("Roof").unwrap();
+        assert!((h - (5.0 - 31.5 / 12.0)).abs() < 1e-9, "{h}");
+        assert!(out["roofs"][0]["parapet"]["note"].as_str().unwrap().contains("7'-0\""), "{out}");
+        // A roof no sheet frames: no framing, and the parapet as high over the roof as the
+        // sections mark it over the bearing.
+        let mut s2 = Session::new();
+        s2.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Roof", "elevation_ft": 10, "height_ft": 4, "ceiling_ft": 4}
+            ]}}),
+        )
+        .unwrap();
+        roof_documents(&mut s2, &job).unwrap();
+        let (sp2, _) = super::super::bspec::current(&s2, "test").unwrap();
+        assert!(sp2.exterior.level_framing("Roof").is_none());
+        assert_eq!(sp2.exterior.level_parapet("Roof"), Some(5.0));
+        assert_eq!(sp2.level("Roof").unwrap().elevation_ft, 10.0);
+    }
+
     #[test]
     fn level_name_uses_canonical_names() {
         assert_eq!(level_name("R"), "Roof");

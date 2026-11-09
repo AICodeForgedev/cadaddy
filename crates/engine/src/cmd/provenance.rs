@@ -108,6 +108,20 @@ pub(crate) fn rules() -> Vec<PracticeRule> {
     serde_json::from_str::<RuleFile>(RULES).map(|f| f.rules).unwrap_or_default()
 }
 
+/// The rule `id` as its rules data has it, numbers and lists a rule of its own reads (null when
+/// the data has none).
+pub(crate) fn rule_data(id: &str) -> serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(RULES)
+        .ok()
+        .and_then(|v| {
+            v.get("rules")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|a| a.iter().find(|r| r.get("id").and_then(serde_json::Value::as_str).is_some_and(|i| i.eq_ignore_ascii_case(id))))
+                .cloned()
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
 /// The rule `id` (an empty one when the data has none).
 pub(crate) fn rule(id: &str) -> PracticeRule {
     rules().into_iter().find(|r| r.id.eq_ignore_ascii_case(id)).unwrap_or_default()

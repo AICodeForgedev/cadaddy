@@ -2586,7 +2586,7 @@ pub(crate) fn stack_offsets(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, Vec2
     let mut offsets: Vec<(&str, Vec2)> = vec![(lowest.name.as_str(), Vec2::ZERO)];
     for level in here.iter().skip(1) {
         let roof = (level.base.is_none() && wallgen::roof_level(&sp.levels, &level.name))
-            .then(|| super::exterior::built_bounds(d, &level.name, &["roof", "parapet"]))
+            .then(|| super::exterior::built_bounds(d, &level.name, &["roof", "parapet", super::exterior::ROOF_WALL]))
             .filter(|b| !b.is_empty());
         let under = roof.and_then(|r| {
             offsets.iter().rev().find_map(|(n, off)| {

@@ -2,6 +2,24 @@
   "about": "Trade practice the build follows where the documents are silent or wrong (Q6216): how each trade runs or places what the drawings leave out, and what the field installs where a drawn value can't be built. Order of authority: the documents, then the code (coderules.json and each trade's rules data, cited here where a rule uses a code number), then this file. Each rule: its id, the trade, what it fills in or corrects, its numbers, and its basis: the reason every object it lays in or value it corrects carries, so nothing it makes passes for drawn.",
   "rules": [
     {
+      "id": "A-ROOF-COVERS-STOREY",
+      "trade": "architectural",
+      "fills": "a roof whose roof plan outline falls short of the storey under it: the roof is built over the storey's whole floor plate, its slope and parapet the plan's, the plan's outline kept as the design value",
+      "basis": "trade practice: a roof covers the whole building under it, out to (and onto) its outside walls; a roof plan line well inside the walls is a roof area, cricket or slope line drawn on the roof, not its edge, and the roofer and framer carry the roof to the walls"
+    },
+    {
+      "id": "S-ROOF-FRAMING",
+      "trade": "structural",
+      "fills": "a roof level's framing where the roof plans name trusses or joists: the members across the roof's short way at their spacing, as deep as the notes say, bearing on the walls at the level's elevation (its top of plate or truss bearing), the deck on them, the outside walls carried up round them to the deck or the parapet (numbers: spacing_in and depth_in when a note gives none; chord_in, a member's width; deck_in, the deck and roofing over the members; min_span_ft, the shortest piece kept)",
+      "basis": "trade practice: pre-engineered wood roof trusses (and open-web joists) are set at 24\" on centre across the building's short way, bearing on the outside walls' top plate, at least 24\" deep for a flat or low-slope roof; the sheathing and roofing go on their top chords, and the outside walls (or a parapet) close the truss space round the edge",
+      "member_words": {"truss": ["TRUSS", "TRUSSES"], "joist": ["JOIST", "JOISTS"]},
+      "spacing_in": 24.0,
+      "depth_in": 24.0,
+      "chord_in": 3.5,
+      "deck_in": 1.5,
+      "min_span_ft": 2.0
+    },
+    {
       "id": "E-RCP-LIGHT",
       "trade": "electrical",
       "fills": "a ceiling luminaire's place where the electrical plan's symbol and the reflected ceiling plan's light differ (numbers: reach_ft, the farthest a light is moved; connect_reach_ft, a light this close is at its spot)",
