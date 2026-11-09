@@ -3197,7 +3197,9 @@
    "source": "A view or sheet title that names a floor plan. (drafting convention: general, no job's title)",
    "words": [
     "FLOOR PLAN",
-    "FLOOR PLANS"
+    "FLOOR PLANS",
+    "MEZZANINE PLAN",
+    "MEZZ PLAN"
    ]
   },
   "sheets.import_discipline_prefix": {
@@ -3432,7 +3434,8 @@
     "FRAMING PLAN",
     "FOUNDATION PLAN",
     "DEMOLITION PLAN",
-    "DEMO PLAN"
+    "DEMO PLAN",
+    "ENLARGED"
    ]
   },
   "sheets.reference_words": {

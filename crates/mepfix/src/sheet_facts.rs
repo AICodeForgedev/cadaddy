@@ -377,7 +377,19 @@ fn scale_text(t: &str) -> String {
     after.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The views on the sheet: a title is the larger line right above a "SCALE:" line.
+/// How far beside its designator a boxed view title's name starts, in the designator's heights.
+const MAX_BOXED_TITLE_REACH: f64 = 8.0;
+
+/// A view's designator on a sheet: `A1`, `D12`, `4`; no word.
+fn is_view_designator(t: &str) -> bool {
+    let t = t.trim();
+    let letters = t.chars().take_while(char::is_ascii_alphabetic).count();
+    let digits = t.len().saturating_sub(letters);
+    letters <= 2 && (1..=2).contains(&digits) && t.chars().skip(letters).all(|c| c.is_ascii_digit())
+}
+
+/// The views on the sheet: a title is the larger line right above a "SCALE:" line, or the name
+/// beside the designator that stands above it.
 pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
     let regions = view_regions(d);
     let mut out: Vec<ViewTitle> = Vec::new();
@@ -397,18 +409,37 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
         else {
             continue;
         };
-        let th = title.height;
-        let number = texts
-            .iter()
-            .filter(|t| {
-                t.value.len() <= 3
-                    && t.value.chars().all(|c| c.is_ascii_digit())
-                    && t.at.x < title.at.x
-                    && title.at.x - t.at.x <= 8.0 * th
-                    && (t.at.y - title.at.y).abs() <= 2.5 * th
+        // A boxed title: the view's designator (`A1`) stands over the scale, its name beside it.
+        let boxed = is_view_designator(&title.value)
+            .then(|| {
+                texts
+                    .iter()
+                    .filter(|t| {
+                        horizontal(t)
+                            && !is_scale_line(t)
+                            && !is_view_designator(&t.value)
+                            && t.at.x > title.at.x
+                            && t.at.x - title.at.x <= MAX_BOXED_TITLE_REACH * title.height
+                            && (t.at.y - title.at.y).abs() <= title.height
+                    })
+                    .min_by(|a, b| a.at.x.total_cmp(&b.at.x))
             })
-            .min_by(|a, b| (title.at.x - a.at.x).total_cmp(&(title.at.x - b.at.x)))
-            .map(|t| t.value.clone());
+            .flatten();
+        let (title, designator) = boxed.map_or((title, None), |name| (name, Some(title.value.trim().to_string())));
+        let th = title.height;
+        let number = designator.or_else(|| {
+            texts
+                .iter()
+                .filter(|t| {
+                    t.value.len() <= 3
+                        && t.value.chars().all(|c| c.is_ascii_digit())
+                        && t.at.x < title.at.x
+                        && title.at.x - t.at.x <= 8.0 * th
+                        && (t.at.y - title.at.y).abs() <= 2.5 * th
+                })
+                .min_by(|a, b| (title.at.x - a.at.x).total_cmp(&(title.at.x - b.at.x)))
+                .map(|t| t.value.clone())
+        });
         let st = scale_text(&s.value);
         let nts = st.to_ascii_uppercase().contains("NOT TO SCALE") || st.eq_ignore_ascii_case("NTS");
         if out.iter().any(|v| v.title == title.value && v.at == [title.at.x, title.at.y]) {
