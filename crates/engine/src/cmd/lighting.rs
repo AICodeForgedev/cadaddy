@@ -600,6 +600,26 @@ pub(crate) fn field_conflicts(ty: &str, fcs: &[FieldConflict], elements: &[Strin
         .collect()
 }
 
+/// A fixture type whose submittal page header names a product its own cut sheet doesn't show
+/// (Q6336): the header isn't taken (the cut sheet's body outranks its page header), the type is
+/// built as its schedule row, and the documents' disagreement is a conflict citing both.
+pub(crate) fn header_conflict(ty: &str, named: &str, why: &str, doc: &str, row: &FixtureType, elements: &[String]) -> Conflict {
+    let basis = format!("{} {}", row.manufacturer, row.model).trim().to_string();
+    let row_doc = format!("{} type {}", row.source, row.tag);
+    let why = if why.is_empty() { String::new() } else { format!(" ({why})") };
+    Conflict::new(
+        "submittal header vs its cut sheet",
+        format!("lighting type {ty}"),
+        format!(
+            "type {ty}: the submittal's page header names {named}, its own cut sheet doesn't{why}; built as the schedule's {basis}, not corrected"
+        ),
+        format!("Confirm type {ty}'s product: correct the submittal's page header, or resubmit its cut sheet"),
+    )
+    .side(doc, format!("page header: {named}"))
+    .side(row_doc, basis)
+    .with_elements(elements.iter().cloned())
+}
+
 /// The schedule, the submittal and the plans' counts of each type against each other: a plan's
 /// type the schedule lacks; a scheduled type no submittal covers; a submitted type the schedule
 /// lacks; one submitted product for two types; a scheduled (or submitted) type no plan shows; a

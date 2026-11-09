@@ -16105,6 +16105,9 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     let mut others: Vec<Dev> = Vec::new();
     let mut handles: BTreeMap<String, cadaddy_doc::Handle> = BTreeMap::new();
     let mut given_row = 0usize;
+    // Each type's submittal page header its own cut sheet contradicts: (named, why, document,
+    // its luminaires).
+    let mut header_says: BTreeMap<String, (String, String, String, Vec<String>)> = BTreeMap::new();
     for (e, base) in super::elemprops::elements(d).take(2_000_000) {
         let kind = super::elemprops::reported_kind(e, base.clone());
         let is_lum = matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture");
@@ -16167,6 +16170,13 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         lums.push(dv);
         let Some(row) = types.iter().find(|t| t.tag == mark) else { continue };
         given_row += 1;
+        // A submittal page header its own cut sheet contradicts (Q6336): not built, a conflict.
+        if let Some(h) = store.get("submittal_header").filter(|p| p.has_value() && p.source.kind == SourceKind::Submittal) {
+            let entry = header_says.entry(mark.clone()).or_insert_with(|| {
+                (h.text().trim().to_string(), h.note.clone().unwrap_or_default(), h.source.doc.clone().unwrap_or_default(), Vec::new())
+            });
+            entry.3.push(hex.clone());
+        }
         let before = store.clone();
         // What its submittal says (the values `bim.submittals` put on it, sourced so).
         let sub_props: Vec<(&'static str, String, String)> = lt::FIELDS
@@ -16257,6 +16267,10 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         submitted_qty: &submitted_qty,
         submittal_name: &submittal_name,
     });
+    for (ty, (named, why, doc, hs)) in &header_says {
+        let Some(row) = types.iter().find(|t| &t.tag == ty) else { continue };
+        conflicts.push(lt::header_conflict(ty, named, why, doc, row, hs));
+    }
     for (ty, fcs) in &field_conflicts {
         let mut cs = lt::field_conflicts(ty, fcs, on_plans.get(ty).map_or(&[][..], Vec::as_slice));
         if no_subs {
@@ -36012,6 +36026,59 @@ mod tests {
         lighting_step(&mut s, &mut job, &[], &mut result).unwrap();
         let again = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
         assert_eq!(again["total"], rfis["total"]);
+    }
+
+    /// Q6336: a luminaire whose submittal page header names a product its own cut sheet doesn't
+    /// show (`bim.submittals` said it as `submittal_header`, no catalog number) is built as its
+    /// schedule row, not corrected to the header, and the disagreement is one conflict citing both.
+    #[test]
+    fn a_submittal_header_its_cut_sheet_contradicts_is_a_conflict_not_a_correction() {
+        use cadaddy_doc::props::{self, SourceKind};
+        let mut s = crate::Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.mep.fixture_schedule = vec![cadaddy_walk3d::FixtureType {
+            tag: "Q4".into(),
+            manufacturer: "MAKER ONE".into(),
+            model: "EU2-B-K-4M".into(),
+            lamp: "LED 2VA".into(),
+            voltage: "120".into(),
+            installation: "WALL".into(),
+            description: "EMERGENCY UNIT".into(),
+            source: "E-9 LIGHT FIXTURE SCHEDULE".into(),
+            ..Default::default()
+        }];
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
+        let sub = [("submittal_header", "OTHERCO LIGHTING ZQ50RB")];
+        let a = lit_device(&mut s, "luminaire", "Q4", "A1", "", [0.0, 0.0], &sub);
+        let b = lit_device(&mut s, "luminaire", "Q4", "A1", "", [10.0, 0.0], &sub);
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let mut result =
+            json!({"submittal_products": {"Q4": {"manufacturer": "", "catalog_number": "", "category": "luminaire", "doc": "Package p.4"}}});
+        lighting_step(&mut s, &mut job, &[], &mut result).unwrap();
+        let d = s.doc().unwrap();
+        let get = |h: cadaddy_doc::Handle, k: &str| {
+            d.model.get(h).and_then(|e| props::read(&e.common.xdata).get(k).cloned()).map(|p| (p.text(), p.source.kind))
+        };
+        for h in [a, b] {
+            assert_eq!(get(h, "catalog_number"), Some(("EU2-B-K-4M".to_string(), SourceKind::Schedule)), "the schedule's, the cut sheet's");
+            assert_eq!(get(h, "manufacturer"), Some(("MAKER ONE".to_string(), SourceKind::Schedule)));
+            assert!(get(h, "correction:catalog_number").is_none() && get(h, "design:catalog_number").is_none(), "no correction from the header");
+        }
+        let rfis = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
+        let mine: Vec<&Value> =
+            rfis["items"].as_array().into_iter().flatten().filter(|r| r["topic"] == "lighting: submittal header vs its cut sheet").collect();
+        assert_eq!(mine.len(), 1, "one per type: {rfis}");
+        let issue = mine[0]["issue"].as_str().unwrap_or_default();
+        assert!(issue.contains("OTHERCO LIGHTING ZQ50RB") && issue.contains("MAKER ONE EU2-B-K-4M"), "{issue}");
+        assert_eq!(mine[0]["sides"].as_array().map(Vec::len), Some(2), "{rfis}");
+        assert!(
+            job.findings
+                .iter()
+                .any(|f| f.description.starts_with("Lighting conflicts, submittal header vs its cut sheet: 1")
+                    && f.corrected.is_none_or(|c| c[1] == 0)),
+            "said, not counted as corrected"
+        );
     }
 
     /// A panel the gear step lays out after the build, under a vent already built: the vent is
