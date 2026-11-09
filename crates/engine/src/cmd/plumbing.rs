@@ -185,9 +185,7 @@ pub(crate) fn drainage(sp: &mut BuildingSpec) -> Value {
             if let Some(depth) = space {
                 bottom = bottom.max(-depth);
             }
-            for b in &mut run.bottoms_ft {
-                *b = bottom;
-            }
+            run.bottoms_ft.fill(bottom);
             if run.bottoms_ft.is_empty() {
                 run.bottoms_ft.push(bottom);
             }
