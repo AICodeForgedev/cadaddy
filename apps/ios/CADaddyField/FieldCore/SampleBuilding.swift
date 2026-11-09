@@ -269,7 +269,7 @@ extension SampleBuilding {
                           catalog: "SAMPLE-SWBD-2000", size: "2000 A, 480Y/277 V", upstream: xf, detail: .building, link: "Gear")
             _ = add("Service", "S1", .electrical, .main, level: 0,
                     .run(points: [SIMD3(-5, 0.3, 13.5), SIMD3(-5, -0.9, 13.5), SIMD3(-5, -0.9, 17.0), SIMD3(6.5, -0.9, 17.0), SIMD3(6.5, 0.3, 17.0)],
-                         profile: .round(radius: 0.08)),
+                         profile: .round(radius: 0.11)),
                     size: "4 sets 4\" PVC", upstream: xf, detail: .building, link: "Service")
             // Rooftop unit feeder.
             var feederSlot: Float = 0
@@ -283,11 +283,17 @@ extension SampleBuilding {
                 let feeder = add("Feeder", "F-\(panelTag)", .electrical, .main, level: lv,
                                  .run(points: [SIMD3(8 + s, 2.3, 17.35), SIMD3(8 + s, 3.95, 17.35), SIMD3(shaft + 0.4 + s, 3.95, 17.35),
                                                SIMD3(shaft + 0.4 + s, ph + 1.0, 17.35), SIMD3(px - 0.2, ph + 1.0, 17.35), SIMD3(px - 0.2, ph + 0.75, pz)],
-                                      profile: .round(radius: 0.045)),
+                                      profile: .round(radius: 0.065)),
                                  size: "4#3/0 + 1#6 G, 2\" EMT", upstream: msb, detail: .building, link: "Feeder")
                 let panel = add("Panelboard", panelTag, .electrical, .equipment, level: lv, room: lv == 1 ? "1E" : "\(lv)E",
                                 .box(center: SIMD3(px, ph, pz), size: SIMD3(0.56, 1.5, 0.2)), height: 1.35,
                                 catalog: "SAMPLE-PB-225-42", size: "225 A, 42 circuits", upstream: feeder, detail: .building, link: "Panel")
+                // The corridor cable tray the home runs ride in (a main: it shows at building scale).
+                let trayY = ceiling(lv) + 0.42
+                _ = add("Cable Tray", "CT-\(lv)", .electrical, .main, level: lv,
+                        .run(points: [SIMD3(px, trayY, pz - 0.3), SIMD3(px, trayY, 9.1), SIMD3(1.2, trayY, 9.1), SIMD3(54.8, trayY, 9.1)],
+                             profile: .rect(width: 0.3, height: 0.1)),
+                        size: "12\" ladder tray", upstream: panel, detail: .building, link: "Tray")
                 // One home run per guest room, along the corridor ceiling and into the room.
                 var circuit = 1
                 for r in guestRooms(lv) {
@@ -312,7 +318,7 @@ extension SampleBuilding {
                 let f = add("Feeder", "F-\(tag)", .electrical, .main, level: 5,
                             .run(points: [SIMD3(8 + s, 2.3, 17.35), SIMD3(8 + s, 3.95, 17.35), SIMD3(shaft + 0.4 + s, 3.95, 17.35),
                                           SIMD3(shaft + 0.4 + s, elev(5) + 0.6, 17.35), SIMD3(x, elev(5) + 0.6, 17.35), SIMD3(x, elev(5) + 0.6, 10.6)],
-                                 profile: .round(radius: 0.04)),
+                                 profile: .round(radius: 0.055)),
                             size: "3#4 + 1#8 G, 1-1/4\" EMT", upstream: msb, detail: .building, link: "Feeder")
                 feederIDs[tag] = f
             }
