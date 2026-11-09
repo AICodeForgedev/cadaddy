@@ -2869,12 +2869,14 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     // numbered by its room, lettered when the room has several), marked as a rule's.
     let numbers = door_numbers(&doors);
     let door_tally = filled.entry("door".to_string()).or_default();
+    let mut at: HashMap<Handle, usize> = changes.iter().enumerate().map(|(i, (h, _))| (*h, i)).collect();
     for (h, number, basis) in &numbers {
-        let i = match changes.iter().position(|(c, _)| c == h) {
-            Some(i) => i,
+        let i = match at.get(h) {
+            Some(i) => *i,
             None => {
                 let Some(e) = d.model.get(*h) else { continue };
                 changes.push((*h, props::read(&e.common.xdata)));
+                at.insert(*h, changes.len() - 1);
                 changes.len() - 1
             }
         };
