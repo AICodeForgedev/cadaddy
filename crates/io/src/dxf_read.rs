@@ -2613,11 +2613,16 @@ impl Objects {
 
     /// The text of the CADaddy XRECORD stored under `key` in a dictionary (its 1/3 strings).
     fn xrecord_text(&self, key: &str) -> Option<String> {
+        self.xrecord_text_upto(key, crate::dxf_ext::MAX_PAYLOAD)
+    }
+
+    /// [`Self::xrecord_text`] of a record allowed up to `cap` bytes of text.
+    fn xrecord_text_upto(&self, key: &str, cap: usize) -> Option<String> {
         let h = self.names.iter().find(|(_, n)| n.as_str() == key).map(|(h, _)| h)?;
         let tags = self.xrecords.get(h)?;
         let mut text = String::new();
         for t in tags.iter().filter(|t| t.code == 1 || t.code == 3) {
-            if text.len() > crate::dxf_ext::MAX_PAYLOAD {
+            if text.len() > cap {
                 break;
             }
             text.push_str(&t.str());
@@ -2734,6 +2739,12 @@ impl Objects {
         }
         if let Some(o) = self.xrecord_text(crate::dxf_ext::OVERRIDES_KEY).and_then(|t| crate::dxf_ext::parse_overrides(&t)) {
             d.overrides = Some(o).into();
+        }
+        // The files the drawing carries inside itself (the project data commands keep in it).
+        if let Some(text) = self.xrecord_text_upto(crate::dxf_ext::EMBEDDED_KEY, crate::dxf_ext::MAX_EMBEDDED_PAYLOAD) {
+            for (name, bytes) in crate::dxf_ext::parse_embedded(&text) {
+                d.embedded.entry(name).or_insert_with(|| std::sync::Arc::new(bytes));
+            }
         }
         if let Some(bt) = self.xrecord_text(crate::dxf_ext::BIM_TYPES_KEY).and_then(|t| crate::dxf_ext::parse_bim_types(&t)) {
             d.bim_types = bt;

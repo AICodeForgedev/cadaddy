@@ -643,7 +643,7 @@ pub(crate) fn data_url(href: &str, max: usize) -> Option<(String, Vec<u8>)> {
     Some((mime, base64_decode(payload)?))
 }
 
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(s.len() / 4 * 3);
     let mut acc = 0u32;
     let mut bits = 0u32;
