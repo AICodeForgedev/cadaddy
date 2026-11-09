@@ -1465,9 +1465,137 @@ fn read_title_block(p: &mut SpecProposal, lines: &[String]) {
     }
 }
 
+/// A cut sheet's header catalog number its own pages don't back (Q6336): kept under this key, not
+/// as the product's catalog number, so nothing builds or corrects from it.
+pub(crate) const HEADER_CATALOG: &str = "headerCatalogNumber";
+/// The header's maker, when the header's catalog number isn't backed and its pages never name
+/// that maker either.
+pub(crate) const HEADER_MANUFACTURER: &str = "headerManufacturer";
+/// The ordering codes a cut sheet's own pages show (letters and digits), the first few: what the
+/// sheet is, said beside a header it contradicts.
+pub(crate) const CUT_SHEET_CODES: &str = "cutSheetCodes";
+/// Words a cut sheet's body needs before its header is checked against it: a scanned page or one
+/// with only its header says nothing either way.
+const MIN_BODY_WORDS: usize = 40;
+/// Ordering codes kept in [`CUT_SHEET_CODES`].
+const MAX_CUT_SHEET_CODES: usize = 12;
+/// A cover sheet's header labels besides the product's own fields (the job's name).
+const HEADER_LABELS: &[&str] = &["job name:", "job:", "project name:", "project:"];
+
+/// Whether a segment of a cut-sheet line is one of its header's fields (type, maker, model, job).
+fn header_segment(seg: &str) -> bool {
+    let lower = seg.to_ascii_lowercase();
+    type_header(seg).is_some()
+        || is_mark_label(seg)
+        || CUT_SHEET_FIELDS.iter().any(|(labels, _)| labels.iter().any(|l| lower.starts_with(l)))
+        || HEADER_LABELS.iter().any(|l| lower.starts_with(l))
+}
+
+/// The words of a text a catalog number is built of: runs of letters and digits (upper case), three
+/// characters or more, with a letter in them.
+fn code_words(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 3 && w.chars().any(|c| c.is_ascii_alphabetic()))
+        .map(str::to_ascii_uppercase)
+}
+
+/// What a cut sheet's own pages (its lines without the header's fields) say of the header's
+/// catalog number and maker.
+#[derive(Debug, PartialEq)]
+enum HeaderCheck {
+    /// The body is too short to say (a scan, a header-only page), or nothing to check.
+    Unread,
+    /// One of the body's ordering codes starts the header's catalog number (or it is whole there).
+    Backed,
+    /// No code on its pages builds the header's catalog number: whether its pages name the
+    /// header's maker, and the codes they do show.
+    Contradicted { maker_named: bool, codes: Vec<String> },
+}
+
+/// The header's catalog number against its cut sheet's body (Q6336). A product's catalog number is
+/// built of its ordering guide's codes (`AB6` + `10` + `D010`…), so a body with any code that
+/// starts it backs it; a readable body none of whose codes does is another product (a page header
+/// copied from the next type's sheet): the cut sheet's body outranks its page header.
+fn check_header(catalog: &str, maker: &str, lines: &[String]) -> HeaderCheck {
+    let key: String = catalog.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
+    if key.len() < 3 {
+        return HeaderCheck::Unread;
+    }
+    let body: Vec<&str> = lines
+        .iter()
+        .flat_map(|l| l.split(COLUMN_BREAK))
+        .map(str::trim)
+        .filter(|x| !x.is_empty() && !header_segment(x))
+        .take(MAX_BLOCK_LINES)
+        .collect();
+    if body.iter().map(|x| x.split_whitespace().count()).sum::<usize>() < MIN_BODY_WORDS {
+        return HeaderCheck::Unread;
+    }
+    let mut words: Vec<String> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for w in body.iter().flat_map(|x| code_words(x)).take(200_000) {
+        if seen.insert(w.clone()) {
+            words.push(w);
+        }
+    }
+    if words.iter().any(|w| key.starts_with(w.as_str()) || w.starts_with(key.as_str())) {
+        return HeaderCheck::Backed;
+    }
+    let maker_word: String =
+        maker.split_whitespace().next().unwrap_or("").chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
+    let maker_named = maker_word.len() < 3 || seen.contains(&maker_word);
+    // Its ordering codes: a letter first and a digit in them (`EU2`, `RB4`; not a size, `90MM`).
+    let codes = words
+        .into_iter()
+        .filter(|w| w.starts_with(|c: char| c.is_ascii_alphabetic()) && w.chars().any(|c| c.is_ascii_digit()))
+        .take(MAX_CUT_SHEET_CODES)
+        .collect();
+    HeaderCheck::Contradicted { maker_named, codes }
+}
+
+/// A cut-sheet product whose header names a catalog number its own pages don't show: the header's
+/// values move aside ([`HEADER_CATALOG`], [`HEADER_MANUFACTURER`] when the pages don't name that
+/// maker either), the codes the pages do show are kept, and it is a question.
+fn header_against_body(p: &mut SpecProposal, lines: &[String], result: &mut SpecImportResult, counter: &mut u32) {
+    let Some(cat) = p.bim_type.get_field(bimspec::keys::CATALOG_NUMBER).cloned() else { return };
+    let maker = p.bim_type.get_field(bimspec::keys::MANUFACTURER).cloned();
+    let HeaderCheck::Contradicted { maker_named, codes } = check_header(&cat.value, maker.as_ref().map_or("", |m| m.value.as_str()), lines) else {
+        return;
+    };
+    let why = "page header only: its cut sheet doesn't show it";
+    p.bim_type.fields.remove(bimspec::keys::CATALOG_NUMBER);
+    p.bim_type.set_field(HEADER_CATALOG, SpecField::new(&cat.value).with_source(format!("{} ({why})", cat.source)));
+    let mut named = cat.value.clone();
+    if let Some(m) = maker.filter(|_| !maker_named) {
+        p.bim_type.fields.remove(bimspec::keys::MANUFACTURER);
+        p.bim_type.set_field(HEADER_MANUFACTURER, SpecField::new(&m.value).with_source(format!("{} ({why})", m.source)));
+        named = format!("{} {}", m.value, cat.value);
+    }
+    let shows = if codes.is_empty() { String::new() } else { format!(" (it shows {})", codes.join(", ")) };
+    if !codes.is_empty() {
+        p.bim_type.set_field(CUT_SHEET_CODES, SpecField::new(codes.join(", ")).with_source(&p.file_source));
+    }
+    if result.rfis.len() < MAX_RFI_ITEMS {
+        *counter = counter.saturating_add(1);
+        let mark = p.bim_type.mark.clone();
+        result.rfis.push(RfiItem {
+            id: format!("RFI-{counter:03}"),
+            description: format!(
+                "type {mark}: its page header names {named}, its own cut sheet doesn't{shows}: the header isn't taken as the product (confirm the product)"
+            ),
+            mark,
+            field: bimspec::keys::CATALOG_NUMBER.into(),
+            severity: "medium".into(),
+            sources: vec![p.file_source.clone()],
+            ..Default::default()
+        });
+    }
+}
+
 fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &mut SpecImportResult, counter: &mut u32) {
     for (i, p) in types.iter_mut().enumerate() {
         let lines = blocks.get(i).map(Vec::as_slice).unwrap_or(&[]);
+        header_against_body(p, lines, result, counter);
         if p.bim_type.get_field(bimspec::keys::MANUFACTURER).is_none() || p.bim_type.get_field(bimspec::keys::CATALOG_NUMBER).is_none() {
             read_title_block(p, lines);
         }
@@ -2226,6 +2354,82 @@ Dimming   Non-Dimming   0-10V
         assert!(field("Q8", "dimming").is_null(), "two controls named, none ordered: {r}");
         let rfis = arr(&r["rfis"]);
         assert!(rfis.iter().any(|q| q["mark"] == "Q8" && q["field"] == "dimming"), "Q8's dimming is a question: {r}");
+    }
+
+    /// Q6336: a cut sheet whose page header names another product (copied from the next type's
+    /// sheet) doesn't give its type that product: the cut sheet's body outranks its header.
+    #[test]
+    fn a_page_header_its_own_cut_sheet_contradicts_is_not_the_product() {
+        let mut s = session();
+        // The body of an emergency unit's sheet: its ordering guide's codes, its maker's name.
+        let unit_body = "\
+Brightco Duo battery units throw two beams of light down a corridor when the power goes out.
+Each head turns and tilts on its own, and a test button on the front checks the battery every month.
+Mount it high on a wall or under a soffit; it ships with a knockout plate and a hanging bracket.
+Ordering guide   Example: EU2BK
+Family   Cells   Housing   Extras
+EU2 Duo twin head battery unit   B Lithium cells   K Black   4M Remote heads
+EU3 Duo triple head battery unit   B Lithium cells   K Black   3M Remote heads
+";
+        // A sign's sheet whose number is built of its ordering codes (ZQ5 + 0 + RB).
+        let sign_body = "\
+Otherco ZQ signs are slim cast frames that hang from a ceiling, sit on a wall or stick out from one.
+How to order   Example: ZQ50RB
+ZQ4 one face, ZQ5 two faces   0 amber letters, 9 blue letters   RB backup cells
+Every sign glows from a strip of diodes, keeps running for an hour and a half, and fits any canopy.
+";
+        let text = format!(
+            "--- page 1 of 3 ---\nJob Name : SOME JOB   Type : Q4\nManufacturer : OTHERCO LIGHTING\nModel Number : ZQ50RB\n{unit_body}\
+             --- page 2 of 3 ---\nJob Name : SOME JOB   Type : Q5\nManufacturer : OTHERCO LIGHTING\nModel Number : ZQ50RB\n{sign_body}\
+             --- page 3 of 3 ---\nJob Name : SOME JOB   Type : Q6\nManufacturer : THIRD CO\nModel Number : TC-100\nscanned page\n"
+        );
+        let r = s.execute("bim.spec_import", &json!({"text": text, "format": "submittal"})).unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let field = |mark: &str, key: &str| proposals.iter().find(|p| p["mark"] == mark).map(|p| p["fields"][key].clone()).unwrap_or_default();
+        // The unit's sheet shows EU2/EU3, never ZQ50RB nor its maker: the header isn't the product.
+        assert!(field("Q4", "catalogNumber").is_null(), "the header's number is not Q4's product: {r}");
+        assert!(field("Q4", "manufacturer").is_null(), "nor the header's maker, its pages never name it: {r}");
+        assert_eq!(field("Q4", "headerCatalogNumber")["value"], "ZQ50RB", "kept aside, cited: {r}");
+        assert_eq!(field("Q4", "headerManufacturer")["value"], "OTHERCO LIGHTING");
+        assert!(field("Q4", "headerCatalogNumber")["source"].as_str().is_some_and(|x| x.starts_with("p.1") && x.contains("page header only")), "{r}");
+        assert!(field("Q4", "cutSheetCodes")["value"].as_str().is_some_and(|c| c.contains("EU2")), "what its sheet shows: {r}");
+        let rfis = arr(&r["rfis"]);
+        assert!(
+            rfis.iter().any(|q| q["mark"] == "Q4"
+                && q["field"] == "catalogNumber"
+                && q["description"].as_str().is_some_and(|d| d.contains("OTHERCO LIGHTING ZQ50RB") && d.contains("EU2"))),
+            "a question naming both: {r}"
+        );
+        // A number built of its sheet's ordering codes is the product; a page with no body to read
+        // keeps its header.
+        assert_eq!(field("Q5", "catalogNumber")["value"], "ZQ50RB", "{r}");
+        assert_eq!(field("Q5", "manufacturer")["value"], "OTHERCO LIGHTING");
+        assert_eq!(field("Q6", "catalogNumber")["value"], "TC-100", "too little body to say: {r}");
+        assert!(!rfis.iter().any(|q| q["mark"] == "Q5" || q["mark"] == "Q6"), "{r}");
+    }
+
+    #[test]
+    fn a_header_whose_maker_its_sheet_names_keeps_the_maker() {
+        let lines: Vec<String> = [
+            "Job Name : SOME JOB   Type : Q4",
+            "Manufacturer : BRIGHTCO",
+            "Model Number : ZQ50RB",
+            "Brightco battery units light a corridor when the power fails, aimed by hand and tested from a button on the front.",
+            "How to order: EU2 Duo twin head battery unit; EU3 Duo triple head battery unit; B lithium cells; K black housing.",
+            "4M remote heads; 3M remote heads; RB4 cage guard sold on its own for walls in gyms and stairs of any building.",
+        ]
+        .iter()
+        .map(|l| super::squash_colon(l))
+        .collect();
+        match super::check_header("ZQ50RB", "BRIGHTCO", &lines) {
+            super::HeaderCheck::Contradicted { maker_named, codes } => {
+                assert!(maker_named, "its sheet names the maker");
+                assert_eq!(codes.first().map(String::as_str), Some("EU2"));
+            }
+            other => panic!("ZQ50RB is on none of its codes: {other:?}"),
+        }
+        assert_eq!(super::check_header("EU2-B-K-4M", "BRIGHTCO", &lines), super::HeaderCheck::Backed);
+        assert_eq!(super::check_header("EU2BK", "BRIGHTCO", &lines[..3]), super::HeaderCheck::Unread, "the header alone says nothing");
     }
 
     #[test]
