@@ -6,7 +6,8 @@
 //! - `bim.trades {colors?, visible?, reset?}`: the trade colour table.
 //! - `bim.tree {level?, group?, category?, type?, path?, visible?, select?, zoom?}`: the model
 //!   tree, Level ▸ Trade ▸ Category ▸ Type ▸ element; a branch shown or hidden, selected and
-//!   zoomed to.
+//!   zoomed to. What a switch hides leaves the selection too (no grips or highlight of it stay in
+//!   the view), and a branch selects only what the view shows of it.
 //! - `bim.element {handle?, open_source?}`: one element's properties (type, size, level,
 //!   system, circuit, quantity, source sheet and spot, linked issues) and where it is (plan
 //!   point, bottom and top, height above its floor, host wall and face); `open_source` goes to
@@ -43,6 +44,8 @@ const MAX_LISTED: usize = 20_000;
 /// Most tree branches kept hidden, and parts of a path.
 const MAX_PATHS: usize = 500;
 const MAX_PATH_PARTS: usize = 4;
+/// The tree's level for the elements no level holds.
+pub const NO_LEVEL: &str = "(no level)";
 
 /// One row of the trade colour table.
 #[derive(Clone, Copy, Debug)]
@@ -153,7 +156,7 @@ impl Look {
     }
 
     fn path_hidden(&self, c: &Class) -> bool {
-        let parts = [c.level.as_str(), c.group, c.category.as_str(), c.ty.as_str()];
+        let parts = [c.tree_level(), c.group, c.category.as_str(), c.ty.as_str()];
         self.hidden_paths.iter().any(|p| !p.is_empty() && p.iter().zip(parts).all(|(a, b)| part_is(a, b)))
     }
 
@@ -163,23 +166,47 @@ impl Look {
     }
 }
 
-fn save(s: &mut Session, look: &Look) -> Result<()> {
+/// Keeps `look` in the building spec; what it hides leaves the selection. Returns how many
+/// selected objects that dropped.
+fn save(s: &mut Session, look: &Look) -> Result<usize> {
     let d = s.doc()?;
     let mut spec: Value = d.building_spec.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or(json!({}));
     let val = serde_json::to_value(look).unwrap_or(Value::Null);
     let val = if val.as_object().is_some_and(|o| o.is_empty()) { Value::Null } else { val };
-    if spec.get(KEY).cloned().unwrap_or(Value::Null) == val {
-        return Ok(());
-    }
-    if let Some(o) = spec.as_object_mut() {
-        if val.is_null() {
-            o.remove(KEY);
-        } else {
-            o.insert(KEY.into(), val);
+    if spec.get(KEY).cloned().unwrap_or(Value::Null) != val {
+        if let Some(o) = spec.as_object_mut() {
+            if val.is_null() {
+                o.remove(KEY);
+            } else {
+                o.insert(KEY.into(), val);
+            }
         }
+        s.doc_mut()?.building_spec = Some(spec.to_string()).into();
     }
-    s.doc_mut()?.building_spec = Some(spec.to_string()).into();
-    Ok(())
+    deselect_hidden(s, look)
+}
+
+/// Whether the BIM view in `look` draws the built element `e` of `d` (true for an object the
+/// build didn't make, and for everything while the view is off).
+pub fn draws(d: &Drawing, look: &Look, e: &Entity) -> bool {
+    look.off || classify(d, e).is_none_or(|c| look.shows(&c))
+}
+
+/// Drops from the selection the elements the view in `look` hides: a level, trade or branch
+/// switched off takes its grips and highlight out of the view with it (they would stand there
+/// as points of something no longer drawn). Returns how many it dropped.
+fn deselect_hidden(s: &mut Session, look: &Look) -> Result<usize> {
+    let sel = s.selection();
+    if sel.is_empty() || look.off {
+        return Ok(0);
+    }
+    let d = s.doc()?;
+    let keep: Vec<Handle> = sel.iter().copied().filter(|h| d.model.get(*h).is_none_or(|e| draws(d, look, e))).collect();
+    let dropped = sel.len() - keep.len();
+    if dropped > 0 {
+        s.set_selection(keep);
+    }
+    Ok(dropped)
 }
 
 // ─── What an element is ──────────────────────────────────────────────────────
@@ -192,6 +219,13 @@ pub struct Class {
     pub category: String,
     pub ty: String,
     pub level: String,
+}
+
+impl Class {
+    /// Its level's name in the tree ([`NO_LEVEL`] when no level holds it).
+    pub fn tree_level(&self) -> &str {
+        if self.level.is_empty() { NO_LEVEL } else { &self.level }
+    }
 }
 
 /// The tags after the build's marker: `[part, level, source, more…]`.
@@ -624,13 +658,13 @@ pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.look", "BIM View", run_look).menu(&["View", "BIM View"]).params(
-            "{on?: bool, ghost?: bool | \"auto\" (the shell see-through, MEP solid; auto: when there is MEP), ghost_opacity?: 0.02-1 (0.2), sheet?: bool (the sheet's own lines in 3D too; default false), level?: name | null (show one level), apart?: bool (filled-in work apart from drawn: derived and inferred elements each in their own colour), style?: visual style (default shadededges)} → {on, ghost, ghost_opacity, sheet, level, apart, made: {drawn, derived, inferred}, style, built, trades}: how 3D and model.render draw the built model",
+            "{on?: bool, ghost?: bool | \"auto\" (the shell see-through, MEP solid; auto: when there is MEP), ghost_opacity?: 0.02-1 (0.2), sheet?: bool (the sheet's own lines in 3D too; default false), level?: name | null (show one level), apart?: bool (filled-in work apart from drawn: derived and inferred elements each in their own colour), style?: visual style (default shadededges)} → {on, ghost, ghost_opacity, sheet, level, apart, made: {drawn, derived, inferred}, style, built, trades, deselected?: selected objects the level shown alone hid}: how 3D and model.render draw the built model",
         ),
         CommandSpec::new("bim.trades", "Trade Colours", run_trades).params(
-            "{colors?: {trade: [r, g, b] | \"#rrggbb\"}, visible?: {trade: bool}, reset?: bool | [trade]} → {trades: [{trade, label, group, color, default, visible, ghosted, count}]}: the one colour table every trade is drawn in",
+            "{colors?: {trade: [r, g, b] | \"#rrggbb\"}, visible?: {trade: bool}, reset?: bool | [trade]} → {trades: [{trade, label, group, color, default, visible, ghosted, count}], deselected?: selected objects a hidden trade dropped}: the one colour table every trade is drawn in",
         ),
         CommandSpec::new("bim.tree", "Model Tree", run_tree).params(
-            "{level?, group?, category?, type? (filters: the tree trade is the group), path?: [level, trade?, category?, type?] (`*` for any), visible?: bool (show or hide that branch in the view; with filters and no path, what they name on every level they don't limit), select?: bool (select its elements), zoom?: bool (zoom to them), limit?: elements listed per type (50, max 1000)} → {levels: [{name, count, visible, trades: [{name, count, visible, categories: [{name, count, visible, types: [{name, count, visible, elements: [{handle, name}]}]}]}]}], total, selected?}",
+            "{level?, group?, category?, type? (filters: the tree trade is the group), path?: [level, trade?, category?, type?] (`*` for any; `(no level)` for the elements no level holds), visible?: bool (show or hide that branch in the view, a hidden one leaving the selection; with filters and no path, what they name on every level they don't limit), select?: bool (select the elements of it the view shows), zoom?: bool (zoom to them), limit?: elements listed per type (50, max 1000)} → {levels: [{name, count, visible, trades: [{name, count, visible, categories: [{name, count, visible, types: [{name, count, visible, elements: [{handle, name}]}]}]}]}], total, selected?, deselected?: selected objects the switch hid}",
         ),
         CommandSpec::new("bim.element", "Element Properties", run_element)
             .params(
@@ -728,7 +762,7 @@ fn run_look(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => return Err(bad("bim.look", format!("`level` must be a level name or null, got {v}"))),
         None => {}
     }
-    save(s, &look)?;
+    let deselected = save(s, &look)?;
     // The view's style: shaded with edges unless asked otherwise.
     let style = match str_param(p, "style") {
         Some(st) => {
@@ -745,7 +779,11 @@ fn run_look(s: &mut Session, p: &Value) -> Result<Value> {
         s.touch();
     }
     let name = s.state()?.visual_style.name();
-    Ok(look_json(s.doc()?, &look, name))
+    let mut out = look_json(s.doc()?, &look, name);
+    if deselected > 0 {
+        out["deselected"] = json!(deselected);
+    }
+    Ok(out)
 }
 
 // ─── bim.trades ──────────────────────────────────────────────────────────────
@@ -812,7 +850,7 @@ fn run_trades(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    save(s, &look)?;
+    let deselected = save(s, &look)?;
     let d = s.doc()?;
     let ghost = ghosting(d, &look);
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -836,7 +874,11 @@ fn run_trades(s: &mut Session, p: &Value) -> Result<Value> {
             })
         })
         .collect();
-    Ok(json!({ "trades": trades }))
+    let mut out = json!({ "trades": trades });
+    if deselected > 0 {
+        out["deselected"] = json!(deselected);
+    }
+    Ok(out)
 }
 
 // ─── bim.tree ────────────────────────────────────────────────────────────────
@@ -857,7 +899,7 @@ fn path_param(cmd: &str, p: &Value) -> Result<Option<Vec<String>>> {
 }
 
 fn under(path: &[String], c: &Class) -> bool {
-    let parts = [c.level.as_str(), c.group, c.category.as_str(), c.ty.as_str()];
+    let parts = [c.tree_level(), c.group, c.category.as_str(), c.ty.as_str()];
     path.iter().zip(parts).all(|(a, b)| part_is(a, b))
 }
 
@@ -873,6 +915,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
     let filt = |k: &str| str_param(p, k).map(str::trim).filter(|t| !t.is_empty());
     let (fl, fg, fc, ft) = (filt("level"), filt("group"), filt("category"), filt("type"));
     let mut selected: Option<usize> = None;
+    let mut deselected = 0usize;
     // Shown or hidden by the filters alone: the branch they name on every level (or theirs).
     let path = match path {
         None if p.get("visible").is_some() && [fl, fg, fc, ft].iter().any(Option::is_some) => {
@@ -891,11 +934,18 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
             if !vis && look.hidden_paths.len() < MAX_PATHS {
                 look.hidden_paths.push(path.clone());
             }
-            save(s, &look)?;
+            deselected = save(s, &look)?;
         }
         if bool_or(p, "select", false) || bool_or(p, "zoom", false) {
             let d = s.doc()?;
-            let hs: Vec<Handle> = model_elements(d).filter(|(_, c)| under(path, c)).map(|(e, _)| e.handle).collect();
+            let look = Look::of(d);
+            // What the view shows of the branch: a hidden element selected would leave its grips
+            // standing in the view with nothing drawn under them.
+            let (shown, hidden): (Vec<_>, Vec<_>) = model_elements(d).filter(|(_, c)| under(path, c)).partition(|(_, c)| look.off || look.shows(c));
+            let hs: Vec<Handle> = shown.into_iter().map(|(e, _)| e.handle).collect();
+            if hs.is_empty() && !hidden.is_empty() {
+                return Err(bad(CMD, format!("everything under {path:?} is hidden in the BIM view: tick it (visible: true) to show it first")));
+            }
             if hs.is_empty() {
                 return Err(bad(CMD, format!("nothing in the model is under {path:?}")));
             }
@@ -936,7 +986,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         total += 1;
-        let level = if c.level.is_empty() { "(no level)".to_string() } else { c.level.clone() };
+        let level = c.tree_level().to_string();
         tree.entry(level).or_default().entry(c.group).or_default().entry(c.category).or_default().entry(c.ty).or_default().push(e.handle);
     }
     let mut listed = 0usize;
@@ -980,6 +1030,9 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({ "levels": levels, "total": total });
     if let Some(n) = selected {
         out["selected"] = json!(n);
+    }
+    if deselected > 0 {
+        out["deselected"] = json!(deselected);
     }
     if total == 0 {
         out["next_step"] = json!("nothing is built yet: run model.build or bim.build");

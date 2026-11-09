@@ -3484,7 +3484,12 @@
     "FOUNDATION PLAN",
     "DEMOLITION PLAN",
     "DEMO PLAN",
-    "ENLARGED"
+    "ENLARGED",
+    "FINISH FLOOR PLAN",
+    "FLOOR FINISH PLAN",
+    "FINISH PLAN",
+    "SLAB PENETRATION PLAN",
+    "SLAB PLAN"
    ]
   },
   "sheets.reference_words": {

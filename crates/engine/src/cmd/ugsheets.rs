@@ -1234,7 +1234,7 @@ fn takeoff_json(ug: &Ug) -> Value {
     for trade in ["E", "P"] {
         let runs: Vec<&Buried> = ug.runs.iter().chain(&ug.pipes).filter(|r| r.trade == trade).collect();
         let mut lines: BTreeMap<(String, String, bool), (f64, u64)> = BTreeMap::new();
-        let mut trench: Vec<(String, f64)> = Vec::new();
+        let mut trench: Vec<(&[[f64; 2]], f64)> = Vec::new();
         for r in &runs {
             let size = if r.size_in > 0.0 { trade_size(r.size_in) } else { "?".into() };
             let material = if r.material.is_empty() { r.system.clone() } else { r.material.clone() };
@@ -1242,10 +1242,13 @@ fn takeoff_json(ug: &Ug) -> Value {
             e.0 += r.length_ft * f64::from(r.conduits.max(1));
             // Elbows: each 90 of the route's bends, each raceway.
             e.1 += ((r.bends_deg / 90.0).round().max(0.0) as u64).saturating_mul(u64::from(r.conduits.max(1)));
-            // One trench for runs on the same path (a feeder's parallel conduits).
-            let key = r.points.iter().map(|p| format!("{:.0},{:.0}", p[0], p[1])).collect::<Vec<_>>().join(" ");
-            if !trench.iter().any(|(k, _)| *k == key) {
-                trench.push((key, r.length_ft));
+            // One trench for runs on the same path (a feeder's parallel conduits, laid side by side
+            // or on one line): as many points, each within 2 ft.
+            let len_units = length(&r.points);
+            let tol = if r.length_ft > 0.0 && len_units > 0.0 { 2.0 * len_units / r.length_ft } else { 0.5 };
+            let near = |a: &[[f64; 2]]| a.len() == r.points.len() && a.iter().zip(&r.points).all(|(p, q)| (p[0] - q[0]).hypot(p[1] - q[1]) <= tol);
+            if !trench.iter().any(|(k, _)| near(k)) {
+                trench.push((&r.points, r.length_ft));
             }
         }
         let stubs: u64 = ug.stubs.iter().filter(|s| s.trade == trade).map(|s| u64::from(s.conduits)).sum();

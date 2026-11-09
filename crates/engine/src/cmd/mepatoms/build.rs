@@ -1236,11 +1236,17 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 .filter(|p| p.z.is_finite())
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.z), b.max(p.z)));
             let b = cadaddy_doc::entity_bounds(d, e, 0);
+            let ps = props::read(&e.common.xdata);
+            // Site work's luminaires (pole lights) are wired in their poles, fed by their buried
+            // runs: no outlet box.
+            if ps.get(super::super::sitework::MARK).is_some() {
+                return None;
+            }
             (z0 <= z1 && !b.is_empty()).then(|| {
                 (
                     e.handle,
                     super::super::bspec::made_level(e).unwrap_or_default(),
-                    props::read(&e.common.xdata),
+                    ps,
                     e.common.layer.to_string(),
                     Bounds2::from_points([b.min, b.max]),
                     z0,
