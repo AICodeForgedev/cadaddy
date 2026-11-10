@@ -30782,7 +30782,7 @@ mod tests {
         let schedule: [(&str, &str, &[&str]); 9] = [
             ("", "MARK", &["A", "AE", "B", "F2", "F2E"]),
             ("", "MANUFACTURER", &["MAKER ONE", "MAKER ONE", "MAKER TWO", "MAKER TWO", "MAKER TWO"]),
-            ("", "MODEL", &["DL6-LED", "DL6-LED-EM", "WS-20", "PL-40", "PL-40-EM"]),
+            ("", "MODEL", &["DL6-LED", "DL6-LED-EM", "SC-20", "PL-40", "PL-40-EM"]),
             ("", "VOLTAGE", &["120", "120", "MVOLT", "277", "277"]),
             ("", "REF. NOTE", &["1", "1,2", "", "3", "2,3"]),
             ("", "MOUNTING", &["RECESSED", "RECESSED", "WALL", "POLE", "POLE"]),
