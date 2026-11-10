@@ -634,11 +634,12 @@ const PLAN_SCALE_TOLERANCE: f64 = 0.02;
 /// `planPrintScale` (sheet inches per foot) is recorded in `report` whenever it was read, so a
 /// sheet left at another scale (given, DO NOT SCALE) is fitted onto its plan at their ratio.
 /// `None` (the first reading stands) when the scale was given, the sheet stayed at paper size,
-/// it prints one scale only, or its plans print the scale it has. A reading no view but a plan
-/// prints stands too (Q6498): a power plan whose scale note is in its title block (or whose note
-/// doesn't read) with two enlarged plans at twice its scale beside it was read again at theirs,
-/// the floor's plan came in at half its size, and its devices were placed nowhere; its
-/// `planPrintScale` is then the reading's when a plan view prints it, else none.
+/// it prints one scale only, or its plans print the scale it has. A reading a plan view prints,
+/// or a scale note's that no view but a plan prints, stands too (Q6498): a power plan whose scale
+/// note is in its title block (or whose note doesn't read) with two enlarged plans at twice its
+/// scale beside it was read again at theirs, the floor's plan came in at half its size, and its
+/// devices were placed nowhere; its `planPrintScale` is then the reading's when a plan view
+/// prints it, else none.
 fn reread_at_plan_scale(
     read_pdf: super::file::PdfHook,
     bytes: &[u8],
@@ -658,11 +659,10 @@ fn reread_at_plan_scale(
     if !(want.is_finite() && want > 1.5 && want <= 1.0e5) || (want / k - 1.0).abs() <= PLAN_SCALE_TOLERANCE {
         return None;
     }
-    // The scale the reading took (sheet inches per foot): another view's than a plan's, or it stands.
+    // The scale the reading took (sheet inches per foot).
     let read_at = 12.0 * upi / k;
-    let a_plans = scales.prints(read_at, true, PLAN_SCALE_TOLERANCE);
-    if a_plans || !scales.prints(read_at, false, PLAN_SCALE_TOLERANCE) {
-        if a_plans {
+    if reading_stands(&scales, read_at, report.get("scaleSource").and_then(Value::as_str).unwrap_or("")) {
+        if scales.prints(read_at, true, PLAN_SCALE_TOLERANCE) {
             report["planPrintScale"] = json!(read_at);
         } else if let Some(o) = report.as_object_mut() {
             o.remove("planPrintScale");
@@ -682,6 +682,16 @@ fn reread_at_plan_scale(
         r2["planScaleReread"] = json!({"from": k, "to": want, "view": view.title, "first_source": first});
         (d2, r2)
     }))
+}
+
+/// Whether a sheet's reading at `read_at` sheet inches per foot (from `source`, the import's
+/// `scaleSource`) stands against its plans' scale ([`reread_at_plan_scale`]): a plan view prints
+/// it, or a scale note gave it (the title block's, or a plan's own that the views don't read) and
+/// no view but a plan prints it (an elevation's or a detail's is no plan's, Q6396). One measured
+/// off the dimension strings that no plan view prints is the plans' guess only (Q6498).
+fn reading_stands(scales: &cadaddy_mepfix::sheet_facts::SheetScales, read_at: f64, source: &str) -> bool {
+    let noted = source.starts_with("scale note") || source.starts_with("option");
+    scales.prints(read_at, true, PLAN_SCALE_TOLERANCE) || (noted && !scales.prints(read_at, false, PLAN_SCALE_TOLERANCE))
 }
 
 /// The scale a DO NOT SCALE sheet's report says it detected ("… scale 96x — sheet kept …").
@@ -1709,5 +1719,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&job);
         let _ = std::fs::remove_dir_all(&a);
         let _ = std::fs::remove_file(&own);
+    }
+
+    /// Q6498: a reading of a sheet of several scales stands against its plans' scale when a plan
+    /// view prints it, or a scale note gave it that no other view prints; an elevation's note
+    /// (Q6396), or a scale measured off the dimension strings that no plan prints, is read again.
+    #[test]
+    fn a_reading_stands_when_it_is_the_plans_or_a_note_no_other_view_prints() {
+        let view = cadaddy_mepfix::sheet_facts::ViewTitle {
+            number: None,
+            title: "ENLARGED PLAN".into(),
+            scale_text: Some("1/2\" = 1'-0\"".into()),
+            not_to_scale: false,
+            at: [0.0, 0.0],
+            region: None,
+        };
+        // Two enlarged plans at 1/2" beside a floor plan whose 1/4" note is in the title block,
+        // and an elevation at 3/4".
+        let sc = cadaddy_mepfix::sheet_facts::SheetScales { plans: 0.5, view, plan_views: vec![0.5], other_views: vec![0.75] };
+        assert!(reading_stands(&sc, 0.25, "scale note 1/4\" = 1'-0\""), "the title block's note, no other view's");
+        assert!(reading_stands(&sc, 0.25, "option"));
+        assert!(reading_stands(&sc, 0.5, "dimension strings: 9 of 10 measured agree on 24x"), "a plan's scale");
+        assert!(!reading_stands(&sc, 0.75, "scale note 3/4\" = 1'-0\""), "the elevation's note");
+        assert!(!reading_stands(&sc, 0.791, "dimension strings: 4 of 5 measured agree on 15.17x"), "a guess no plan prints");
     }
 }
