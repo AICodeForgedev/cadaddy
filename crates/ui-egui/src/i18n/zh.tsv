@@ -3521,3 +3521,14 @@
 	Previous Sheet	上一张图纸
 	Page {n}	第 {n} 页
 	Page Up and Page Down step through the sheets.	用 Page Up 和 Page Down 逐张浏览图纸。
+# BIM views (Q6419).
+	MEP	机电
+	Full MEP	完整机电
+	Cabinets	橱柜
+	Following the system	正在跟随系统
+	Stop following	停止跟随
+	Follow System	跟随系统
+	Pipes with no size, not drawn	无尺寸的管道，未绘制
+	BIM Views	BIM 视图
+	BIM View Rules	BIM 视图规则
+	BIM View Report	BIM 视图报告

@@ -1824,6 +1824,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if idle_dbl {
         app.session.pending_window = None;
         app.canvas.drag_window = false;
+        // In the 3D BIM view: the next view down at the element (its level, then its room).
+        if inside {
+            crate::shaded::enter_at_selection(app);
+        }
     }
     // Hyperlinks: the tooltip over a linked object; Ctrl+click (⌘-click) follows its link.
     let link_pick = if inside && pressed_primary && mods.command {

@@ -3441,3 +3441,14 @@ menu	View	عرض
 	Previous Sheet	الورقة السابقة
 	Page {n}	الصفحة {n}
 	Page Up and Page Down step through the sheets.	يتنقل مفتاحا Page Up وPage Down بين الأوراق.
+# BIM views (Q6419).
+	MEP	MEP
+	Full MEP	MEP كامل
+	Cabinets	الخزائن
+	Following the system	تتبع النظام
+	Stop following	إيقاف التتبع
+	Follow System	تتبع النظام
+	Pipes with no size, not drawn	أنابيب بلا قطر، غير مرسومة
+	BIM Views	عروض BIM
+	BIM View Rules	قواعد عروض BIM
+	BIM View Report	تقرير عروض BIM

@@ -3235,3 +3235,14 @@
 	Previous Sheet	Feuille précédente
 	Page {n}	Page {n}
 	Page Up and Page Down step through the sheets.	Page préc. et Page suiv. parcourent les feuilles.
+# BIM views (Q6419).
+	MEP	CVC-Plomberie-Électricité
+	Full MEP	Réseaux complets
+	Cabinets	Meubles fixes
+	Following the system	Suivi du réseau
+	Stop following	Arrêter le suivi
+	Follow System	Suivre le réseau
+	Pipes with no size, not drawn	Tuyaux sans diamètre, non dessinés
+	BIM Views	Vues BIM
+	BIM View Rules	Règles des vues BIM
+	BIM View Report	Rapport des vues BIM

@@ -3427,3 +3427,14 @@ menu	Modify	Modifikace
 	Previous Sheet	Předchozí list
 	Page {n}	Stránka {n}
 	Page Up and Page Down step through the sheets.	Klávesy Page Up a Page Down procházejí listy.
+# BIM views (Q6419).
+	MEP	TZB
+	Full MEP	Celé TZB
+	Cabinets	Skříňky
+	Following the system	Sledování soustavy
+	Stop following	Ukončit sledování
+	Follow System	Sledovat soustavu
+	Pipes with no size, not drawn	Potrubí bez dimenze, nezobrazeno
+	BIM Views	Pohledy BIM
+	BIM View Rules	Pravidla pohledů BIM
+	BIM View Report	Zpráva o pohledech BIM

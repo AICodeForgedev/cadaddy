@@ -10,6 +10,7 @@ mod animation_effects;
 mod appload_dialog;
 mod author_palette;
 mod baked_view;
+mod bim_views_bar;
 mod block_description_palette;
 mod chrome_geometry;
 mod context_menu;

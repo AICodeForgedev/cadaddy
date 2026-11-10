@@ -3519,3 +3519,14 @@ menu	Modify	Edita
 	Previous Sheet	Foglio precedente
 	Page {n}	Pagina {n}
 	Page Up and Page Down step through the sheets.	Pag su e Pag giù scorrono i fogli.
+# BIM views (Q6419).
+	MEP	MEP
+	Full MEP	MEP completo
+	Cabinets	Mobili fissi
+	Following the system	Sistema seguito
+	Stop following	Smetti di seguire
+	Follow System	Segui il sistema
+	Pipes with no size, not drawn	Tubi senza diametro, non disegnati
+	BIM Views	Viste BIM
+	BIM View Rules	Regole delle viste BIM
+	BIM View Report	Rapporto delle viste BIM

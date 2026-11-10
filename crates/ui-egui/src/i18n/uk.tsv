@@ -3604,3 +3604,14 @@
 	Move MEP Element	Перемістити елемент MEP
 	Resize MEP Element	Змінити розмір елемента MEP
 	Set MEP Element Properties	Задати властивості елемента MEP
+# BIM views (Q6419).
+	MEP	Інженерні системи
+	Full MEP	Усі інженерні системи
+	Cabinets	Шафи
+	Following the system	Відстеження системи
+	Stop following	Припинити відстеження
+	Follow System	Відстежити систему
+	Pipes with no size, not drawn	Труби без розміру, не показано
+	BIM Views	Види BIM
+	BIM View Rules	Правила видів BIM
+	BIM View Report	Звіт про види BIM

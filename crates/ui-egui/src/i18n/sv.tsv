@@ -3610,3 +3610,14 @@ menu	Modify	Ändra
 	Previous Sheet	Föregående ark
 	Page {n}	Sida {n}
 	Page Up and Page Down step through the sheets.	Page Up och Page Down bläddrar mellan arken.
+# BIM views (Q6419).
+	MEP	Installationer
+	Full MEP	Alla installationer
+	Cabinets	Skåp
+	Following the system	Följer systemet
+	Stop following	Sluta följa
+	Follow System	Följ systemet
+	Pipes with no size, not drawn	Rör utan dimension, inte ritade
+	BIM Views	BIM-vyer
+	BIM View Rules	Regler för BIM-vyer
+	BIM View Report	Rapport för BIM-vyer

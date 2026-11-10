@@ -392,6 +392,9 @@ pub struct DocState {
     pub ifc_view: cmd::ifcmodel::ViewState,
     /// A print set's open sheet ([`sheetnav`]): the screen works on it alone.
     pub sheet_nav: sheetnav::SheetNav,
+    /// What the 3D BIM view draws of the drawing as it stands ([`cmd::bimviews::ShownCache`]):
+    /// what 3D object snaps find.
+    pub bim_shown: cmd::bimviews::ShownCache,
 }
 
 /// The view that shows `ext` with `margin` (1.05 = 5% more) in a viewport `px` wide and high,
@@ -471,6 +474,7 @@ impl DocState {
             ifc_stamps: std::collections::HashMap::new(),
             ifc_view: cmd::ifcmodel::ViewState::default(),
             sheet_nav: sheetnav::SheetNav::default(),
+            bim_shown: cmd::bimviews::ShownCache::default(),
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet
@@ -3152,7 +3156,10 @@ impl Session {
         let ap = self.pixel_size() * self.settings.aperture.max(1.0);
         let base = prompt.base.map(|_| self.last_point3);
         let on_face = self.settings.ducs && prompt.point3 && proj.is_some();
-        snap3::osnap3(&st.doc, &st.edit_space(), proj, cursor, ap, self.settings.osmode3, base, on_face)
+        // In the shaded BIM view, what its active view draws (Q6419): no snap to what isn't there.
+        let shown = self.bim_shown_3d();
+        let d = shown.as_deref().unwrap_or(&st.doc);
+        snap3::osnap3(d, &st.edit_space(), proj, cursor, ap, self.settings.osmode3, base, on_face)
     }
 
     pub fn input(&mut self, input: Input) -> Result<()> {
@@ -4044,15 +4051,35 @@ impl Session {
     ///
     /// PICKADD on (the default): picks add to the selection and Shift removes. PICKADD off: each pick
     /// replaces the selection and Shift adds (Shift+pick on a selected object removes it).
+    /// What the shaded 3D BIM view draws of the drawing (its active view, Q6419), when the view
+    /// is a shaded 3D one showing the built model: what clicks, windows and snaps there find.
+    pub fn bim_shown_3d(&self) -> Option<Arc<Drawing>> {
+        let st = self.state().ok()?;
+        if st.projection().is_none() || st.visual_style == cadaddy_render::shade::VisualStyle::Wireframe2d || st.space != Space::Model {
+            return None;
+        }
+        st.bim_shown.of(st)
+    }
+
     pub fn idle_click(&mut self, p: Vec2, shift: bool) -> Result<()> {
         let space = self.space();
+        // In the shaded BIM view only what its view draws is picked.
+        let shown = self.bim_shown_3d();
         if let Some(pw) = self.pending_window.take() {
-            let hs = self.window_selection(&space, pw.corner, p)?;
+            let mut hs = self.window_selection(&space, pw.corner, p)?;
+            if let Some(sh) = &shown {
+                hs.retain(|h| sh.model.contains(*h));
+            }
             self.idle_select_area(hs, shift);
             return Ok(());
         }
         let ap = self.pick_aperture();
-        match select::pick(&*self.view_doc()?, &space, p, ap) {
+        let doc = self.doc()?;
+        let hit = match &shown {
+            Some(sh) => select::pick(sh, &space, p, ap).filter(|h| doc.model.contains(*h)),
+            None => select::pick(&*self.view_doc()?, &space, p, ap),
+        };
+        match hit {
             // A piece the 3D view draws only as part of its run (a coarse fidelity tier): the run.
             Some(h) => match cmd::fidelity::pick(self, h) {
                 run if run.len() > 1 => self.idle_select_area(run, shift),

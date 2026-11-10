@@ -3446,3 +3446,14 @@ menu	Modify	수정
 	Previous Sheet	이전 시트
 	Page {n}	페이지 {n}
 	Page Up and Page Down step through the sheets.	Page Up과 Page Down으로 시트를 넘깁니다.
+# BIM views (Q6419).
+	MEP	MEP
+	Full MEP	전체 MEP
+	Cabinets	캐비닛
+	Following the system	시스템 따라가기
+	Stop following	따라가기 중지
+	Follow System	시스템 따라가기
+	Pipes with no size, not drawn	크기 없는 배관, 그리지 않음
+	BIM Views	BIM 보기
+	BIM View Rules	BIM 보기 규칙
+	BIM View Report	BIM 보기 보고서

@@ -150,10 +150,17 @@ fn branch_header(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, path: &[&s
     }
     let text = RichText::new(format!("{name}  ({count})"));
     let text = if strong { text.strong() } else { text };
-    if ui.selectable_label(false, text).clicked()
-        && let Err(e) = app.session.execute("bim.tree", &json!({ "path": path, "select": true, "zoom": true }))
-    {
-        app.set_status(e.to_string());
+    if ui.selectable_label(false, text).clicked() {
+        // A level picked in the tree is its Floor view (Q6419); then its elements are selected.
+        if let [level] = path
+            && *level != cadaddy_engine::cmd::bimlook::NO_LEVEL
+            && let Err(e) = app.run("bim.view", json!({ "level": level }))
+        {
+            app.set_status(e);
+        }
+        if let Err(e) = app.session.execute("bim.tree", &json!({ "path": path, "select": true, "zoom": true })) {
+            app.set_status(e.to_string());
+        }
     }
 }
 
