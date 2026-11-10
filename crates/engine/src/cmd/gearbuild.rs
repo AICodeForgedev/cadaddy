@@ -89,6 +89,18 @@ pub(crate) fn feeder_types(texts: &[TextItem], sheet: &str) -> Vec<FeederType> {
     feeder_rows(texts, sheet).0
 }
 
+/// The header text naming a column (every one of `words`; not the isolated ground's unless
+/// asked), the highest of `from`.
+fn header_col<'a>(from: &[&'a TextItem], words: &[&str]) -> Option<&'a TextItem> {
+    from.iter()
+        .copied()
+        .filter(|t| {
+            let u = t.value.to_ascii_uppercase();
+            words.iter().all(|w| u.contains(w)) && (words.contains(&"ISOLATED") || !u.contains("ISOLATED"))
+        })
+        .max_by(|a, b| a.at.y.total_cmp(&b.at.y))
+}
+
 /// The feeder types of a sheet's `FEEDER SCHEDULE` tables, and the tags of its rows printed
 /// unsized (`XX`, `TBD` in the conductor or conduit column: the engineer hasn't sized them).
 pub(crate) fn feeder_rows(texts: &[TextItem], sheet: &str) -> (Vec<FeederType>, Vec<String>) {
@@ -102,27 +114,35 @@ pub(crate) fn feeder_rows(texts: &[TextItem], sheet: &str) -> (Vec<FeederType>, 
         let h = title.height.max(1e-9);
         // The header: texts under the title naming the columns; its lowest line is the last. A
         // wide table's columns run on past a fixed reach of a small title (a PDF's text layer
-        // keeps the title smaller than printed, Q6359): they go to the next schedule's title on
-        // its band, at most `HEADER_REACH_H` title heights.
+        // keeps the title smaller than printed, Q6359): they go on while they stay together (a
+        // gap far wider than the header's own ends it: a detail beside the table on its band),
+        // to the next schedule's title on its band, at most `HEADER_REACH_H` title heights.
         let next_title = texts
             .iter()
             .filter(|t| t.value.to_ascii_uppercase().contains("SCHEDULE") && (t.at.y - title.at.y).abs() < 3.0 * h && t.at.x > title.at.x + 2.0 * h)
             .map(|t| t.at.x)
             .fold(f64::INFINITY, f64::min);
         let right = (title.at.x + HEADER_REACH_H * h).min(next_title - h);
-        let near: Vec<&TextItem> = texts
+        let wide: Vec<&TextItem> = texts
             .iter()
             .filter(|t| t.at.y < title.at.y && t.at.y > title.at.y - 12.0 * h && t.at.x > title.at.x - 40.0 * h && t.at.x < right)
             .collect();
-        let col = |words: &[&str]| -> Option<&TextItem> {
-            near.iter()
-                .copied()
-                .filter(|t| {
-                    let u = t.value.to_ascii_uppercase();
-                    words.iter().all(|w| u.contains(w)) && (words.contains(&"ISOLATED") || !u.contains("ISOLATED"))
-                })
-                .max_by(|a, b| a.at.y.total_cmp(&b.at.y))
-        };
+        let Some(tag_hdr) = header_col(&wide, &["TAG"]) else { continue };
+        // The header's texts from the TAG column right, while they stay together.
+        let mut band: Vec<f64> = wide.iter().filter(|t| t.at.y >= tag_hdr.at.y - 0.5 * h && t.at.x >= tag_hdr.at.x - h).map(|t| t.at.x).collect();
+        band.sort_by(f64::total_cmp);
+        let (mut end, mut widest) = (tag_hdr.at.x, 0.0f64);
+        for x in band {
+            let gap = x - end;
+            let limit = if widest > 0.0 { (2.0 * widest).max(12.0 * h) } else { 40.0 * h };
+            if gap > limit {
+                break;
+            }
+            widest = widest.max(gap);
+            end = end.max(x);
+        }
+        let near: Vec<&TextItem> = wide.iter().copied().filter(|t| t.at.x <= end + 2.0 * h).collect();
+        let col = |words: &[&str]| header_col(&near, words);
         // The column that names the size (a spanning `EACH CONDUIT` above several isn't one).
         let conduit = col(&["CONDUIT", "SIZE"]).or_else(|| col(&["CONDUIT"]).filter(|t| !t.value.to_ascii_uppercase().contains("EACH")));
         let (Some(tag), Some(conduit), Some(cond)) = (col(&["TAG"]), conduit, col(&["CONDUCTOR"])) else { continue };
@@ -1226,6 +1246,9 @@ mod tests {
             t(2.0, 9.5, "(1) 2\"C"),
             t(4.0, 9.5, "(3) #3/0 (CU)"),
             t(6.0, 9.5, "#6G (CU)"),
+            // A detail beside it on the band (no title of a schedule), a label higher than the
+            // header's: not one of its columns.
+            t(12.0, 9.9, "GROUND ROD"),
             // The next table on the band, its header a little higher.
             t(9.0, 10.0, "GROUNDING SCHEDULE"),
             t(9.5, 9.8, "GROUND"),
@@ -1234,8 +1257,8 @@ mod tests {
         let f = feeder_types(&v, "EX-5");
         assert_eq!(f.len(), 1, "{f:#?}");
         assert_eq!((f[0].tag.as_str(), f[0].size.as_str(), f[0].ground_size.as_str(), f[0].conduit_in), ("FX1", "3/0", "6", 2.0));
-        // No schedule beside it: the far column is still its own.
-        v.truncate(9);
+        // No schedule beside it: the far column is still its own, the detail's label not.
+        v.truncate(10);
         assert_eq!(feeder_types(&v, "EX-5").first().map(|f| f.ground_size.clone()), Some("6".into()));
     }
 

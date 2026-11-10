@@ -1163,16 +1163,18 @@ pub(crate) fn build_into(sp: &mut BuildingSpec, pages: &[(String, cadaddy_doc::D
     let first_links = connections(&gear, &first, &page_of);
     let up = |v: &str| v.to_ascii_uppercase();
     let linked: BTreeSet<String> = first_links.iter().flat_map(|l| [up(&l.from), up(&l.to)]).collect();
-    // A piece with no rating of its own is on the one-line's lines when its line reaches gear
-    // the model knows, a rated piece or a feeder tag (a legend's rows, stacked, reach none).
-    let mut on: BTreeSet<String> = known.iter().map(|k| up(k)).collect();
-    on.extend(gear.iter().zip(&first).filter(|(g, _)| g.rated).flat_map(|(_, t)| t.iter().map(|x| up(x))).filter(|t| linked.contains(t)));
-    on.extend(first_links.iter().filter(|l| l.tag.is_some()).flat_map(|l| [up(&l.from), up(&l.to)]));
+    // A piece with no rating of its own is on the one-line's lines when its line reaches a
+    // feeder tag or a rated piece, piece to piece (a legend's rows, stacked, reach none; a
+    // schedule sheet's panel names are no line).
+    let pieces: BTreeSet<String> = first.iter().flatten().map(|t| up(t)).collect();
+    let mut on: BTreeSet<String> =
+        gear.iter().zip(&first).filter(|(g, _)| g.rated).flat_map(|(_, t)| t.iter().map(|x| up(x))).filter(|t| linked.contains(t)).collect();
+    on.extend(first_links.iter().filter(|l| l.tag.is_some()).flat_map(|l| [up(&l.from), up(&l.to)]).filter(|t| pieces.contains(t)));
     for _ in 0..MAX_HOPS {
         let mut grew = false;
         for l in &first_links {
             let (f, t) = (up(&l.from), up(&l.to));
-            if on.contains(&f) != on.contains(&t) {
+            if pieces.contains(&f) && pieces.contains(&t) && on.contains(&f) != on.contains(&t) {
                 on.insert(f);
                 on.insert(t);
                 grew = true;
