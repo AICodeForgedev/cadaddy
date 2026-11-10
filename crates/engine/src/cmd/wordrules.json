@@ -1455,7 +1455,48 @@
     [
      "UNIT HEATER",
      "unit_heater"
+    ],
+    [
+     "RELIEF HOOD",
+     "relief_hood"
+    ],
+    [
+     "ROOF HOOD",
+     "relief_hood"
     ]
+   ]
+  },
+  "equipment.every_tag_kinds": {
+   "source": "drafting convention: a kind of equipment a schedule lists once for many units, its tag a type mark printed by every one (a relief hood over each exhaust chase), so it is built at every place a plan prints its tag, not once (schedequip.rs, Q6496)",
+   "words": [
+    "relief_hood"
+   ]
+  },
+  "mechanical.exhaust_riser_titles": {
+   "source": "drafting convention: a detail whose title has these words draws a typical exhaust riser (TYPICAL EXHAUST RISER, 12 FANS): the fans' ducts stacked in a chase up to the roof terminal it tags (exhaustrisers.rs, Q6496)",
+   "rules": [
+    {
+     "value": "exhaust_riser",
+     "any": [
+      "EXHAUST"
+     ],
+     "all": [
+      "RISER"
+     ]
+    }
+   ]
+  },
+  "mechanical.continuous_exhaust_duct_notes": {
+   "source": "code and specification language: a note with these words requires each exhaust fan's duct to be continuous from the fan to the outside (EACH EXHAUST DUCT TO RUN CONTINUOUS TO THE OUTSIDE), so a riser carries one duct per fan, never a shared one (exhaustrisers.rs, Q6496)",
+   "rules": [
+    {
+     "value": "continuous",
+     "all": [
+      "EXHAUST",
+      "DUCT",
+      "CONTINUOUS"
+     ]
+    }
    ]
   },
   "equipment.load_words": {

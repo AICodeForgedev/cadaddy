@@ -1060,6 +1060,15 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
             }
             j += 1;
         }
+        // Its items, up to the next set: each its own fact, how many go on each door.
+        let end = (i + 1..lines.len().min(i + 400))
+            .find(|k| lines.get(*k).is_some_and(|x| x.1.trim().to_ascii_uppercase().starts_with("HARDWARE SET")))
+            .unwrap_or_else(|| lines.len().min(i + 400));
+        if !groups.is_empty() {
+            for (n, (at, row, it)) in hardware_items(lines.get(i + 1..end).unwrap_or_default()).into_iter().enumerate() {
+                out.push(Fact::new("openings.hardware_item", it.value(), Some(it.qty), &src(at), row).scoped(&format!("{id}|item {}", n + 1)));
+            }
+        }
         for (openings, size, frame) in &groups {
             total += openings;
             if first.is_empty() {
@@ -1119,6 +1128,237 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
             k += 2;
         }
     }
+}
+
+/// A hardware schedule item heading's columns.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HwCol {
+    Total,
+    Qty,
+    Uom,
+    Mfr,
+    Type,
+    Model,
+    Finish,
+    Other,
+}
+
+/// A schedule row's cells (the text reader keeps a wide gap between cells as 3 spaces).
+fn cells_of(l: &str) -> Vec<&str> {
+    l.split("  ").map(str::trim).filter(|c| !c.is_empty()).take(40).collect()
+}
+
+/// A hardware set's item heading (`Tot Qty Qty   UOM   Manf   Item Type   Item
+/// Series/Description   Finish`, any order, by the rules' column words): its columns.
+fn hardware_heading(r: &Rules, l: &str) -> Option<Vec<HwCol>> {
+    let cells = cells_of(l);
+    if cells.len() < 3 {
+        return None;
+    }
+    let col = |name: &str| r.words(&format!("openings.hardware_columns_{name}"));
+    let words_of = |c: &str| -> Vec<String> {
+        c.to_ascii_uppercase().split(|ch: char| !ch.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    };
+    let (total, qty) = (col("total"), col("qty"));
+    let named: [(HwCol, Vec<String>); 5] = [
+        (HwCol::Model, col("model")),
+        (HwCol::Mfr, col("manufacturer")),
+        (HwCol::Finish, col("finish")),
+        (HwCol::Uom, col("uom")),
+        (HwCol::Type, col("type")),
+    ];
+    let mut cols = Vec::new();
+    for c in cells {
+        let ws = words_of(c);
+        // A cell can hold two headings run together (`Tot Qty Qty`).
+        let qtys = ws.iter().filter(|w| qty.contains(w)).count();
+        if qtys > 0 {
+            if ws.iter().any(|w| total.contains(w)) {
+                cols.push(HwCol::Total);
+                if qtys > 1 {
+                    cols.push(HwCol::Qty);
+                }
+            } else {
+                cols.push(HwCol::Qty);
+            }
+            continue;
+        }
+        cols.push(named.iter().find(|(_, list)| ws.iter().any(|w| list.contains(w))).map_or(HwCol::Other, |(c, _)| *c));
+    }
+    (cols.contains(&HwCol::Qty) && (cols.contains(&HwCol::Type) || cols.contains(&HwCol::Model))).then_some(cols)
+}
+
+/// One item of a hardware set as its schedule lists it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct HwItem {
+    /// How many go on each door (in its unit).
+    pub qty: f64,
+    pub uom: String,
+    /// What it is (`Hinge`, `Closer`), its model or description, finish and maker.
+    pub ty: String,
+    pub model: String,
+    pub finish: String,
+    pub mfr: String,
+}
+
+impl HwItem {
+    /// As a fact's value: `type | model | finish | maker | unit`.
+    fn value(&self) -> String {
+        [&self.ty, &self.model, &self.finish, &self.mfr, &self.uom].iter().map(|s| s.replace('|', "/")).collect::<Vec<_>>().join(" | ")
+    }
+    /// From an `openings.hardware_item` fact.
+    pub(crate) fn of(f: &Fact) -> Option<HwItem> {
+        let qty = f.number.filter(|n| *n > 0.0 && n.is_finite())?;
+        let mut p = f.value.split(" | ").map(|s| s.trim().to_string());
+        let mut next = || p.next().unwrap_or_default();
+        let (ty, model, finish, mfr, uom) = (next(), next(), next(), next(), next());
+        (!(ty.is_empty() && model.is_empty())).then_some(HwItem { qty, uom, ty, model, finish, mfr })
+    }
+}
+
+/// A number cell (`3`, `1.5`).
+fn qty_cell(c: &str) -> Option<f64> {
+    c.trim().parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0 && *n <= 100_000.0)
+}
+
+/// A set's item rows: under an item heading by its columns; with no heading, the rows that start
+/// with a quantity and an item unit (`3   EA   Hinge   5BB1   652   Maker`) and name a kind of
+/// hardware the rules know. Each with its byte offset and its words.
+fn hardware_items<'a>(block: &[(usize, &'a str)]) -> Vec<(usize, &'a str, HwItem)> {
+    let r = Rules::default();
+    let units = r.words("openings.hardware_item_units");
+    let mut cols: Option<Vec<HwCol>> = None;
+    let mut out = Vec::new();
+    for (at, l) in block.iter().copied() {
+        if out.len() >= 200 {
+            break;
+        }
+        // The set's rule line ends its items (what follows is another document's page).
+        if !out.is_empty() && l.trim().len() >= 5 && l.trim().chars().all(|c| c == '_') {
+            break;
+        }
+        if let Some(h) = hardware_heading(&r, l) {
+            cols = Some(h);
+            continue;
+        }
+        let cells = cells_of(l);
+        let mut it = HwItem::default();
+        let fill = |it: &mut HwItem, c: HwCol, w: &str| {
+            let slot = match c {
+                HwCol::Uom => &mut it.uom,
+                HwCol::Mfr => &mut it.mfr,
+                HwCol::Type => &mut it.ty,
+                HwCol::Finish => &mut it.finish,
+                _ => &mut it.model,
+            };
+            if !slot.is_empty() {
+                slot.push(' ');
+            }
+            slot.push_str(w);
+        };
+        match cols.as_ref() {
+            Some(cols) if cells.len() == cols.len() => {
+                // A cell under each heading.
+                let Some(qty) = cols.iter().position(|c| *c == HwCol::Qty).and_then(|i| cells.get(i)).and_then(|c| qty_cell(c)) else { continue };
+                it.qty = qty;
+                for (c, w) in cols.iter().zip(&cells) {
+                    if !matches!(c, HwCol::Total | HwCol::Qty | HwCol::Other) {
+                        fill(&mut it, *c, w);
+                    }
+                }
+            }
+            Some(cols) => {
+                // The number cells first (total, then per door, as the heading orders them),
+                // then the words: a row that leaves a cell out lines up on the cell naming a kind
+                // of hardware (its item type), the cells before and after it in the heading's
+                // order.
+                let nums: Vec<f64> = cells.iter().map_while(|c| qty_cell(c)).collect();
+                if nums.is_empty() {
+                    continue;
+                }
+                let words: Vec<&str> = cells.get(nums.len()..).unwrap_or_default().to_vec();
+                let num_cols: Vec<HwCol> = cols.iter().copied().filter(|c| matches!(c, HwCol::Total | HwCol::Qty)).collect();
+                let word_cols: Vec<HwCol> = cols.iter().copied().filter(|c| !matches!(c, HwCol::Total | HwCol::Qty)).collect();
+                let qty = if nums.len() >= num_cols.len() {
+                    num_cols.iter().position(|c| *c == HwCol::Qty).and_then(|i| nums.get(i)).copied()
+                } else {
+                    // Fewer numbers than number columns: the last is the door's.
+                    nums.last().copied()
+                };
+                let Some(qty) = qty else { continue };
+                it.qty = qty;
+                let ti = word_cols.iter().position(|c| *c == HwCol::Type);
+                let ai = words.iter().position(|w| openings_kind(&r, w, "").is_some());
+                match (ti, ai) {
+                    (Some(ti), Some(ai)) if words.len() < word_cols.len() => {
+                        for (k, w) in words.iter().enumerate() {
+                            let c = match k.cmp(&ai) {
+                                std::cmp::Ordering::Less => word_cols.get(..ti).and_then(|b| b.get(k)).copied().unwrap_or(HwCol::Model),
+                                std::cmp::Ordering::Equal => HwCol::Type,
+                                std::cmp::Ordering::Greater => word_cols.get(ti + 1 + (k - ai - 1)).copied().unwrap_or(HwCol::Model),
+                            };
+                            fill(&mut it, c, w);
+                        }
+                    }
+                    _ => {
+                        for (k, w) in words.iter().enumerate() {
+                            fill(&mut it, word_cols.get(k).copied().unwrap_or(HwCol::Model), w);
+                        }
+                    }
+                }
+                if it.ty.is_empty() && it.model.is_empty() {
+                    continue;
+                }
+            }
+            None => {
+                // `3   EA   Hinge   …` or `3 EA HINGE …` as one cell.
+                let Some(first) = cells.first().and_then(|c| qty_cell(c.split_whitespace().next().unwrap_or_default())) else { continue };
+                let one: Vec<&str>;
+                let cells = if cells.len() == 1 {
+                    one = l.split_whitespace().take(40).collect();
+                    &one
+                } else {
+                    &cells
+                };
+                let Some(unit) = cells.get(1).map(|u| u.trim_end_matches('.').to_ascii_uppercase()) else { continue };
+                if !units.contains(&unit) {
+                    continue;
+                }
+                let rest: Vec<&str> = cells.get(2..).unwrap_or_default().to_vec();
+                let joined = rest.join(" ");
+                if openings_kind(&r, &joined, "").is_none() {
+                    continue;
+                }
+                it.qty = first;
+                it.uom = unit;
+                if cells.len() == rest.len() + 2 && l.contains("  ") {
+                    it.ty = rest.first().map(|s| s.to_string()).unwrap_or_default();
+                    it.model = rest.get(1).map(|s| s.to_string()).unwrap_or_default();
+                    it.finish = rest.get(2).map(|s| s.to_string()).unwrap_or_default();
+                    it.mfr = rest.get(3..).map(|s| s.join(" ")).unwrap_or_default();
+                } else {
+                    it.ty = joined;
+                }
+            }
+        }
+        // An item has a unit an item is counted in or names a kind of hardware (a table of
+        // ratings or sizes under a heading of its own is not one).
+        let named = openings_kind(&r, &it.ty, &format!("{} {}", it.ty, it.model)).is_some();
+        if it.qty.is_nan() || it.qty <= 0.0 || !(named || units.contains(&it.uom.trim_end_matches('.').to_ascii_uppercase())) {
+            continue;
+        }
+        let cap = |s: &mut String| *s = s.chars().take(60).collect();
+        for s in [&mut it.ty, &mut it.model, &mut it.finish, &mut it.mfr, &mut it.uom] {
+            cap(s);
+        }
+        out.push((at, l, it));
+    }
+    out
+}
+
+/// The kind of hardware a schedule item is (by the rules' words, its item type first).
+fn openings_kind(r: &Rules, ty: &str, row: &str) -> Option<&'static str> {
+    super::openings::hardware_kind(r, ty, row).map(|k| k.kind)
 }
 
 fn accessory_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> String, out: &mut Vec<Fact>) {
@@ -1222,6 +1462,44 @@ pub(crate) fn compare(facts: &[Fact], ix: &super::super::mepatoms::Index, level:
         if mine {
             j["level"] = json!(scope_level(f));
         } else if level.is_some() {
+            j["note"] = json!("the documents' number is the whole job's; the model's is the level asked");
+        }
+        out.push(j);
+    }
+    // The hardware schedule's items by kind: each set's quantity per door times its openings.
+    let r = Rules::default();
+    let pairs = r.words("openings.hardware_pair_units");
+    let mut openings: BTreeMap<String, f64> = BTreeMap::new();
+    for f in facts.iter().filter(|f| f.key == "openings.hardware_set").take(MAX_FACTS) {
+        let id = f.scope.split('|').next().unwrap_or_default().to_ascii_uppercase();
+        *openings.entry(id).or_default() += f.number.unwrap_or(0.0);
+    }
+    let mut by_kind: BTreeMap<&'static str, (f64, String)> = BTreeMap::new();
+    for f in facts.iter().filter(|f| f.key == "openings.hardware_item").take(MAX_FACTS) {
+        let Some(it) = HwItem::of(f) else { continue };
+        let id = f.scope.split('|').next().unwrap_or_default().to_ascii_uppercase();
+        let kind = openings_kind(&r, &it.ty, &format!("{} {}", it.ty, it.model)).unwrap_or("hardware_item");
+        let per = if pairs.contains(&it.uom.to_ascii_uppercase()) { 2.0 } else { 1.0 };
+        let e = by_kind.entry(kind).or_insert_with(|| (0.0, f.source.clone()));
+        e.0 += (it.qty * per).round() * openings.get(&id).copied().unwrap_or(0.0);
+    }
+    for (kind, (n, source)) in by_kind {
+        if n <= 0.0 {
+            continue;
+        }
+        let model = q("openings", kind, None).pieces();
+        let mut j = json!({
+            "what": format!("door hardware: {kind}"),
+            "documents": n,
+            "documents_say": "the hardware schedule's sets: each item's quantity per door times the set's openings",
+            "source": source,
+            "model": model,
+            "model_query": {"trade": "openings", "kind": kind},
+        });
+        if let Some(p) = pct(n, model) {
+            j["difference_pct"] = json!(p);
+        }
+        if level.is_some() {
             j["note"] = json!("the documents' number is the whole job's; the model's is the level asked");
         }
         out.push(j);
@@ -1344,6 +1622,79 @@ mod tests {
         let f = facts(fl, "Sample Flooring");
         let sf = num(&f, "finishes.flooring_piece_sf").unwrap();
         assert!((sf - 3.75).abs() < 1e-9);
+    }
+
+    /// Q6508: a set's items, each its own fact with its quantity per door, from a schedule with
+    /// an item heading (any column order, a wrapped cell, a cell left out) or without one.
+    #[test]
+    fn hardware_items_read_with_and_without_a_heading() {
+        let items = |f: &[Fact]| -> Vec<(String, HwItem)> {
+            f.iter().filter(|x| x.key == "openings.hardware_item").filter_map(|x| HwItem::of(x).map(|i| (x.scope.clone(), i))).collect()
+        };
+        let hw = "Hardware Set#: A2\nQty Units   Door#   Door Location   Hand\n4 Single   X1   Hall To Room   LH\n--------------------------\n\
+4 Single   Size: 3-0 X 7-0 X 1 3/4   Wood Door X HM Frame\nTot Qty Qty   UOM   Manf   Item Type   Item Series/Description   Finish\n\
+24   6   EA   MKA   Spring Hinge - (4-1/2 Std   SH-1 4-1/2\" x 4-1/2\"   F9\n   Wt)\n8   2   EA   MKB   Door Bottom   DB-1   D\n\
+4   1   EA   Closer   CL-2   ALUM\n_____\nHardware Set#: B7\n2 Pair   Size: 6-0 X 7-0   HM Door X HM Frame\n\
+Finish   Qty   Description   Item   Manufacturer\nF3   1   EX-9   Exit Device   MKC\n";
+        let f = facts(hw, "Sample Door Hardware");
+        let got = items(&f);
+        assert_eq!(got.len(), 4, "{f:?}");
+        assert_eq!(got[0].0, "A2|item 1");
+        let hinge = &got[0].1;
+        assert_eq!((hinge.qty, hinge.ty.as_str(), hinge.mfr.as_str(), hinge.finish.as_str()), (6.0, "Spring Hinge - (4-1/2 Std", "MKA", "F9"));
+        assert_eq!(got[1].1.qty, 2.0, "two door bottoms per door, not the total: {:?}", got[1]);
+        // A row with one number (no total) and no maker: the door's quantity, the rest shifted.
+        assert_eq!((got[2].1.qty, got[2].1.ty.as_str()), (1.0, "Closer"));
+        // Another column order: by the heading's words.
+        let ex = &got[3];
+        assert_eq!(ex.0, "B7|item 1");
+        assert_eq!(
+            (ex.1.qty, ex.1.ty.as_str(), ex.1.model.as_str(), ex.1.finish.as_str(), ex.1.mfr.as_str()),
+            (1.0, "Exit Device", "EX-9", "F3", "MKC")
+        );
+        // A schedule with no heading: rows that start with a quantity and an item unit and name
+        // a kind of hardware; the door and size rows are not items.
+        let plain = "Hardware Set#: 12\n3 Single   Size: 3-0 X 7-0   HM Door X HM Frame\n3 EA HINGE 5BB1 4.5 X 4.5 652\n1 EA STOREROOM LOCK ND80 626\n1   EA   Closer   4040XP   689   MKD\n2 EA SILENCER SR64\n";
+        let f = facts(plain, "Sample Door Hardware");
+        let got = items(&f);
+        let kinds: Vec<(f64, &str)> = got.iter().map(|(_, i)| (i.qty, i.ty.as_str())).collect();
+        assert_eq!(
+            kinds,
+            vec![(3.0, "HINGE 5BB1 4.5 X 4.5 652"), (1.0, "STOREROOM LOCK ND80 626"), (1.0, "Closer"), (2.0, "SILENCER SR64")],
+            "{f:?}"
+        );
+        assert_eq!((got[2].1.model.as_str(), got[2].1.finish.as_str(), got[2].1.mfr.as_str()), ("4040XP", "689", "MKD"));
+        // The kinds by the rules' words.
+        let r = Rules::default();
+        let k = |t: &str| super::super::openings::hardware_kind(&r, t, "").map(|k| k.kind);
+        assert_eq!(k("Spring Hinge"), Some("hinge"));
+        assert_eq!(k("Mortise Card Lock"), Some("lockset"));
+        assert_eq!(k("Deadlock - Cylindrical"), Some("deadbolt"));
+        assert_eq!(k("Privacy Set (no thru-bolts)"), Some("lockset"));
+        assert_eq!(k("Baseboard Stop"), Some("stop"));
+        assert_eq!(k("Overhead Stop"), Some("holder"));
+        assert_eq!(k("Door Guard"), Some("guard"));
+        assert_eq!(k("Gasketing"), Some("gasketing"));
+        assert_eq!(k("Door Bottom"), Some("door_bottom"));
+        assert_eq!(k("Threshold"), Some("threshold"));
+        assert_eq!(k("Kick Plate"), Some("kick_plate"));
+        assert_eq!(k("Continuous Hinge"), Some("continuous_hinge"));
+        assert_eq!(k("Hinge - Continuous"), Some("continuous_hinge"));
+        assert_eq!(k("Exit Device - Rim"), Some("exit_device"));
+        assert_eq!(k("Exit Device Trim Only"), Some("exit_trim"));
+        assert_eq!(k("ASA Strike"), Some("strike"));
+        assert_eq!(k("Lever Lockset w/ ASA Strike"), Some("lockset"));
+        assert_eq!(k("Hall To Room"), None);
+        // The set's rule line ends its items: a product sheet's table after the last set (its
+        // own heading, ratings and sizes) is not the set's.
+        let tail = "Hardware Set#: 58\n1 Single   Size: 3-0 X 7-0   HM Door X HM Frame\nTot Qty Qty   UOM   Manf   Item Type   Item Series/Description   Finish\n\
+3   3   EA   MKA   Hinge   H1   F1\n_______________\n--- page 9 of 9 ---\nQty   Item Type   Rating   Size\n20   Frame   45 min   1296 in.2\n2   Label   1 1/2 h   8'0\" x 8'0\"\n";
+        let f = facts(tail, "Sample Door Hardware");
+        assert_eq!(items(&f).len(), 1, "{f:?}");
+        // Under a heading, a row with no item unit naming no kind of hardware is not an item.
+        let junk = "Hardware Set#: 3\n1 Single   Size: 3-0 X 7-0   HM Door X HM Frame\nQty   UOM   Item Type   Description\n1   EA   Closer   C1\n20   45 min   Rating   1296 in.2\n";
+        let f = facts(junk, "Sample Door Hardware");
+        assert_eq!(items(&f).len(), 1, "{f:?}");
     }
 
     #[test]

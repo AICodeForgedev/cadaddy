@@ -1135,6 +1135,25 @@ mod tests {
     }
 
     #[test]
+    fn a_riser_is_as_long_as_it_rises() {
+        let sp: BuildingSpec = serde_json::from_value(serde_json::json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10}],
+            "mep": {
+                "systems": [{"name": "EA", "layer": "M-EXH", "kind": "duct", "size_in": [4, 0], "bottom_ft": 9, "show": true}],
+                "runs": [
+                    {"system": "EA", "level": "L1", "points": [[0, 0], [120, 0]], "size_in": [4, 0], "bottoms_ft": [9]},
+                    {"system": "EA", "level": "L1", "points": [[120, 0]], "size_in": [4, 0], "bottoms_ft": [9], "top_ft": 29}
+                ]
+            }
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let t = takeoff(&sp, &Settings::default(), &cadaddy_doc::bimspec::BimTypes::default());
+        let ft: f64 = t.ducts.values().map(|r| r.length_ft).sum();
+        assert!((ft - 30.0).abs() < 1e-9, "10 ft across and 20 ft up: {ft}");
+    }
+
+    #[test]
     fn hanger_spacing_by_size() {
         let st = Settings::default();
         assert_eq!(st.spacing(MepKind::Pipe, [0.75, 0.0]), 6.0);
