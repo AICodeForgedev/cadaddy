@@ -34,6 +34,7 @@ mod drywall_views;
 mod duct3d_truth;
 mod elemprops;
 mod emtsize;
+mod equip_mounting;
 mod exterior;
 mod feederwire;
 mod fixturekinds;

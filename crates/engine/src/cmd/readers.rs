@@ -611,7 +611,10 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
 pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy_walk3d::BuildingSpec) -> cadaddy_walk3d::Mep {
     let duct_bottom_ft = sp.mep.band_bottom_ft("duct").unwrap_or(10.0);
     let terminal_bottom_ft = sp.mep.band_bottom_ft("terminal").unwrap_or(8.5);
-    let equipment_height_ft = sp.mep.band_bottom_ft("equipment").unwrap_or(6.0);
+    // The project's equipment band is where floor-standing equipment's bottom is, never a height.
+    let equipment_bottom_ft = sp.mep.band_bottom_ft("equipment").filter(|b| b.is_finite() && *b >= 0.0);
+    let ceiling_ft = sp.level(level).map_or(8.0, |l| l.ceiling_ft);
+    let roof = super::schedequip::is_roof(level);
     let mut mep = cadaddy_walk3d::Mep::default();
     let mut sys_map: BTreeMap<String, MepSystem> = BTreeMap::new();
     for run in &net.runs {
@@ -685,13 +688,36 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
         if !sheet.is_empty() {
             sources.insert("sheet".to_string(), sheet.to_string());
         }
+        // No height on the sheet: where its kind is mounted (M-EQUIP-MOUNT), else on the floor
+        // (or the project's equipment band), the usual height of its kind (Q6494).
+        let usual = cadaddy_mepfix::equip_reader::rule_size(&de.kind)[2];
+        let mount =
+            if roof { None } else { super::schedequip::mounting(&de.kind, &format!("{} {}", de.kind.replace('_', " "), de.tag), ceiling_ft, None) };
+        let (bottom_ft, height_ft) = match mount {
+            Some(m) => {
+                let h = m.height_ft.unwrap_or(usual);
+                sources.insert("elevation".to_string(), m.basis.clone());
+                sources.insert("height".to_string(), if m.height_ft.is_some() { m.basis } else { "rule: the usual height of its kind".to_string() });
+                (m.bottom_ft, h)
+            }
+            None => {
+                let b = equipment_bottom_ft.unwrap_or(0.0);
+                sources.insert(
+                    "elevation".to_string(),
+                    if equipment_bottom_ft.is_some() { format!("the project's equipment band, {b:.2} ft") } else { "on the floor".to_string() },
+                );
+                sources.insert("height".to_string(), "rule: the usual height of its kind".to_string());
+                (b, usual)
+            }
+        };
         mep.equipment.push(MepEquipment {
             tag: de.tag.clone(),
             kind: de.kind.clone(),
             level: level.to_string(),
             min: [de.min.x, de.min.y],
             max: [de.max.x, de.max.y],
-            height_ft: equipment_height_ft,
+            bottom_ft,
+            height_ft,
             systems: vec![match de.kind.as_str() {
                 "ahu" | "rtu" | "vav" => "SA".to_string(),
                 "exhaust_fan" => "EA".to_string(),

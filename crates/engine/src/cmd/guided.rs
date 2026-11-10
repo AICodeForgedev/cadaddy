@@ -12908,6 +12908,16 @@ const WALL_CAP_CIRCLES: usize = 3;
 /// A PTAC's height and an exhaust fan's housing (feet) when no schedule gives them.
 const PTAC_HEIGHT_FT: f64 = 16.0 / 12.0;
 const EF_HEIGHT_FT: f64 = 10.0 / 12.0;
+
+/// Where a typical room's unit (not its exhaust fan) laid into a room sits: where its kind is
+/// mounted ([`super::schedequip::mounting`]: a PTAC on its sub-base), else on the floor; with
+/// what its height is from (Q6494).
+fn stamped_unit_mount(kind: &str, ceiling_ft: f64) -> (f64, String) {
+    match super::schedequip::mounting(kind, kind, ceiling_ft, Some(PTAC_HEIGHT_FT)) {
+        Some(m) => (m.bottom_ft, m.basis),
+        None => (0.0, "rule: on the floor, 16\" high".to_string()),
+    }
+}
 /// A PTAC's face grille read as a return grille: a return grille this close (feet) to a PTAC.
 const PTAC_GRILLE_FT: f64 = 3.0;
 
@@ -13287,14 +13297,12 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                         placed.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max),
                     ];
                     let fan = it.kind == "exhaust_fan";
+                    let (unit_bottom, unit_height) = stamped_unit_mount(it.kind, ceiling);
                     let mut sources = BTreeMap::new();
                     sources.insert("sheet".to_string(), sh.number.clone());
                     sources.insert("position".to_string(), format!("typical room view {title} laid into room {room}"));
                     sources.insert("outline".to_string(), it.how.clone());
-                    sources.insert(
-                        "height".to_string(),
-                        if fan { format!("in the room's ceiling ({ceiling:.2} ft)") } else { "rule: on the floor, 16\" high".into() },
-                    );
+                    sources.insert("height".to_string(), if fan { format!("in the room's ceiling ({ceiling:.2} ft)") } else { unit_height });
                     let mut properties = BTreeMap::new();
                     properties.insert("room".to_string(), room.clone());
                     // No plan draws it in this room: the typical room's, laid in (Q6216).
@@ -13306,7 +13314,7 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                         level: lv.name.clone(),
                         min: lo,
                         max: hi,
-                        bottom_ft: if fan { ceiling } else { 0.0 },
+                        bottom_ft: if fan { ceiling } else { unit_bottom },
                         height_ft: if fan { EF_HEIGHT_FT } else { PTAC_HEIGHT_FT },
                         systems: vec![if fan { "EA".into() } else { "M-DUCT".into() }],
                         title: title.clone(),
@@ -13531,8 +13539,11 @@ fn seat_on_sub_bases<'a>(equipment: &mut [cadaddy_walk3d::MepEquipment], devices
         else {
             continue;
         };
+        // Seated already, or raised higher by something else: left. At its sub-base by the
+        // mounting rule only (M-EQUIP-MOUNT): the keynote is the documents' word for it.
         let bottom_in = if e.bottom_ft.is_finite() { e.bottom_ft * 12.0 } else { 0.0 };
-        if bottom_in >= base_in {
+        let by_rule = e.sources.get("height").is_some_and(|h| h.starts_with(super::schedequip::MOUNT_RULE));
+        if bottom_in >= base_in && !(by_rule && bottom_in <= base_in + 1e-6) {
             continue;
         }
         e.bottom_ft = base_in / 12.0;
@@ -31618,6 +31629,11 @@ mod tests {
         let (h, why) = under_unit_height_in(&super::super::keynotes::equipment_receptacle(note).unwrap(), &equipment[0]);
         assert_eq!(h, 2.0, "{why}");
         assert_eq!(seat_on_sub_bases(&mut equipment, devs.iter()), 0);
+        // Seated by the mounting rule (Q6494): the keynote becomes its source, the unit unmoved.
+        equipment[0].sources.insert("height".into(), stamped_unit_mount("ptac", 9.0).1);
+        assert_eq!(seat_on_sub_bases(&mut equipment, devs.iter()), 1);
+        assert!((equipment[0].bottom_ft * 12.0 - 4.0).abs() < 1e-9);
+        assert!(equipment[0].sources.get("height").is_some_and(|h| h.contains("keynote 4")), "{:?}", equipment[0].sources);
         // Under a unit standing high enough already, with no sub-base said: half way under it.
         let high = cadaddy_walk3d::MepEquipment { bottom_ft: 1.0, ..unit("205", 0.0) };
         let under = super::super::keynotes::equipment_receptacle("15A/2P RECEPTACLE FOR PTAC, BELOW THE UNIT").unwrap();
@@ -33926,6 +33942,15 @@ mod tests {
         let laid = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0]], cadaddy_walk3d::Made::Inferred)];
         let mut runs = vec![run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn)];
         assert_eq!(drop_fan_duct_repeats(&mut runs, &systems, &laid, 12.0).0, 0);
+    }
+
+    #[test]
+    fn a_typical_rooms_ptac_is_laid_in_on_its_sub_base_not_on_the_floor() {
+        let (bottom, said) = stamped_unit_mount("ptac", 9.0);
+        assert!((bottom - 4.0 / 12.0).abs() < 1e-9, "{bottom}");
+        assert!(said.starts_with("M-EQUIP-MOUNT"), "{said}");
+        // A kind no mounting names stays on the floor, said so.
+        assert_eq!(stamped_unit_mount("water_heater", 9.0), (0.0, "rule: on the floor, 16\" high".to_string()));
     }
 
     #[test]
