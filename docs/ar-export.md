@@ -227,8 +227,10 @@ bim.export.ar {set: true, dir: "exports"}       then serve `exports` (its manife
   schedule describes with `elevator.branch_words`): they are never in a building package.
 - **Main or branch.** Ducts at `sizes.main_duct_in` and up are mains. For plumbing pipe,
   `main_pipe_in` and up are mains, and the full view adds pipe from `plumbing_min_in` up. Fire
-  protection pipe is a main when it is a riser or at `fire_main_in` and up. A pipe the documents
-  give no size is left out and counted (`left_out` in the sidecars and the index).
+  protection pipe is a main when it is a riser or at `fire_main_in` and up. Role decides first and
+  size only when the role is unknown: a pipe the documents give no size still shows when it is a
+  riser or passes through a floor, and one with neither a role nor a size shows in Full MEP with
+  `inferred` on its node saying so, counted in the index (`shown_inferred`); it is never dropped.
 - **Feeder or branch.** A raceway is a feeder when it belongs to a feeder of the feeder schedule
   (to a house panel, gear, large equipment or an elevator's disconnect: the mains; to any other
   panel: full). With a circuit it is a branch. With neither, it is a feeder from `feeder_min_in` up.

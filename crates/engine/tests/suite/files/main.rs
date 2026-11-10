@@ -40,6 +40,7 @@ mod path_case;
 mod printrev;
 mod projects;
 mod renderenv;
+mod sheet_nav;
 mod sprinkler_reader;
 mod standards;
 mod table_breaks;

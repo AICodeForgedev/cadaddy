@@ -15,6 +15,9 @@
     "drop_step_in": 6,
     "bend_penalty_ft": 3.0,
     "max_detour_ft": 8.0,
+    "roof_support_in": 4,
+    "roof_band_in": 14,
+    "roof_source": "trade practice: a roof level has no ceiling: its raceway runs exposed on the deck on roof supports (blocks or pipe stands on the membrane) about 4 in up, never under 7/8 in (NEC 310.15(B)(2): within 7/8 in of the roof a raceway in sunlight takes a 33 C temperature adder), its tiers no higher than a standard 14 in equipment curb; the alternative, under the deck in the top storey's ceiling space with a roof penetration at each unit, is the project's choice",
     "source": "company default: conduit 3 in above the ceiling, tiers 4 in apart up to the structure (12 in deep where the documents give none); homeruns by the corridor when the panel is 20 ft or more away; branches in the wall between boxes of one wall up to 12 ft apart; a drop blocked over its box rises in the wall up to 2 ft along it (6 in steps) where it is clear; trade practice: a unit's own receptacle under it (its keynote's), every way over its box blocked by the unit: the raceway leaves the box's side (1-1/2 in under its top, a side knockout) and runs along the wall under the unit, up to 4 ft, to rise clear of it"
   },
   "clearance_in": {

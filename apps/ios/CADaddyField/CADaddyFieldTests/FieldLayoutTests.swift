@@ -103,6 +103,52 @@ final class FieldLayoutTests: XCTestCase {
         }
     }
 
+    /// design-2 review (Q6431 addendum 1): in the building views the model filled only the middle quarter of the
+    /// screen with empty bands above and below. Every building view, both densities, the smallest and the largest
+    /// iPhone: the picture covers the free area, not a band across it, and refits when the view changes.
+    func testBuildingViewsFillTheFreeAreaNotABandAcrossIt() {
+        let b = SampleBuilding.sample()
+        let phonesSmallLarge: [(CGSize, CGFloat, CGFloat)] = [(CGSize(width: 375, height: 667), 20, 0), (CGSize(width: 440, height: 956), 62, 34)]
+        // The building's whole box, and a long thin real-sized one (a 300 ft bar of 6 storeys).
+        let subjects: [(String, [SIMD3<Float>])] = [
+            ("sample", SceneFraming.corners(min: SIMD3(b.footprintMin.x, -0.3, b.footprintMin.y), max: SIMD3(b.footprintMax.x, b.height, b.footprintMax.y))),
+            ("long bar", SceneFraming.corners(min: SIMD3(0, 0, -20), max: SIMD3(91, 19, 0))),
+            ("square", SceneFraming.corners(min: SIMD3(0, 0, -40), max: SIMD3(40, 18, 0))),
+        ]
+        for (screen, top, bottom) in phonesSmallLarge {
+            for bottomStack in [CGFloat(110), 64] {   // the Full MEP control and its note, or the view control alone
+                let l = ChromeLayout.make(.init(screen: screen, safeTop: top, safeBottom: bottom, headerHeight: 62, bottomHeight: bottomStack, railItems: 6))
+                for (name, pts) in subjects {
+                    let old = SceneFraming.fit(pts, yaw: -2.25, pitch: 0.56, fovYDegrees: fov, viewport: screen, free: l.free)
+                    let new = SceneFraming.fitFilling(pts, yaw: -2.25, pitch: 0.56, fovYDegrees: fov, viewport: screen, free: l.free)
+                    let c0 = SceneFraming.coverage(pts, pose: old, fovYDegrees: fov, viewport: screen, free: l.free)
+                    let c1 = SceneFraming.coverage(pts, pose: new, fovYDegrees: fov, viewport: screen, free: l.free)
+                    let sb = try! XCTUnwrap(SceneFraming.screenBounds(pts, pose: new, fovYDegrees: fov, viewport: screen))
+                    let tag = "\(name) on \(screen) bottom \(bottomStack): before area \(c0.area) bands \(c0.top)/\(c0.bottom), after \(c1.area) bands \(c1.top)/\(c1.bottom)"
+                    print("FRAMING", tag)
+                    XCTAssertTrue(l.free.insetBy(dx: -1, dy: -1).contains(sb), tag)
+                    XCTAssertGreaterThanOrEqual(c1.area, c0.area - 1e-6, tag)
+                    // As large as fits: one side fills the free area (less the margin).
+                    XCTAssertGreaterThan(max(sb.width / (l.free.width - 24), sb.height / (l.free.height - 24)), 0.97, tag)
+                    if name != "square" {
+                        // A building longer than it is deep turns and tilts to fill the height: no empty bands.
+                        XCTAssertLessThan(c1.top + c1.bottom, 0.15, "no wide empty bands above and below: \(tag)")
+                        XCTAssertGreaterThan(c1.area, 0.8, tag)
+                    } else {
+                        // A square plan in a tall free area is limited by its own proportions: wider than design-2's.
+                        XCTAssertGreaterThan(c1.area, c0.area + 0.05, tag)
+                    }
+                }
+            }
+        }
+        // design-2's own framing of the sample on a Pro Max: a band across the middle (the reported look).
+        let l = ChromeLayout.make(.init(screen: CGSize(width: 440, height: 956), safeTop: 62, safeBottom: 34, headerHeight: 62, bottomHeight: 110, railItems: 6))
+        let pts = subjects[0].1
+        let old = SceneFraming.coverage(pts, pose: SceneFraming.fit(pts, yaw: -2.25, pitch: 0.56, fovYDegrees: fov, viewport: CGSize(width: 440, height: 956), free: l.free),
+                                        fovYDegrees: fov, viewport: CGSize(width: 440, height: 956), free: l.free)
+        XCTAssertGreaterThan(old.top + old.bottom, 0.4, "design-2's fit reproduces the empty bands")
+    }
+
     /// design-1 framed the building with constants (target, distance). On a Pro phone the sample building ran
     /// under the floor rail and off the right edge, with the top third empty.
     func testDesignOneBuildingFramingRanUnderTheRail() {
@@ -141,6 +187,45 @@ final class FieldLayoutTests: XCTestCase {
     }
 
     // MARK: labels
+
+    /// design-2 review (Q6431 addendum 2): in MEP mains the equipment labels crowded where gear sits close together.
+    /// The sample's mains equipment, framed as the app frames it, on the smallest and the largest iPhone: no two label
+    /// rectangles overlap (nor touch the chrome); the biggest gear keeps its label; a label the layout hid shows when
+    /// its object is tapped.
+    func testMainsEquipmentLabelsNeverOverlapAndATappedHiddenOneShows() {
+        let b = SampleBuilding.sample()
+        let f = ViewFilter(b)
+        let mains = f.drawn(ViewState(view: .mep), prefs: LayerPrefs(off: [])).compactMap { b.element($0) }
+            .filter { $0.role == .equipment && $0.part != .panel && $0.part != .disconnect }
+        XCTAssertGreaterThan(mains.count, 8)
+        let pts = SceneFraming.corners(min: SIMD3(b.footprintMin.x, -0.3, b.footprintMin.y), max: SIMD3(b.footprintMax.x, b.height, b.footprintMax.y))
+        for (screen, top, bottom) in [(CGSize(width: 375, height: 667), CGFloat(20), CGFloat(0)), (CGSize(width: 440, height: 956), 62, 34)] {
+            let l = ChromeLayout.make(.init(screen: screen, safeTop: top, safeBottom: bottom, headerHeight: 62, bottomHeight: 110, railItems: 6))
+            let pose = SceneFraming.fitFilling(pts, yaw: -2.25, pitch: 0.56, fovYDegrees: fov, viewport: screen, free: l.free)
+            // Each label: 8.5 pt per character of 12 pt monospaced text plus its padding, 22 pt high.
+            let cands = mains.compactMap { e -> LabelCandidate? in
+                let a = e.shape.bounds.max * SIMD3(0, 1, 0) + e.shape.anchor * SIMD3(1, 0, 1) + SIMD3(0, 0.6, 0)
+                guard let s = SceneFraming.project(a, pose: pose, fovYDegrees: fov, viewport: screen) else { return nil }
+                return LabelCandidate(id: e.id, anchor: s, size: CGSize(width: CGFloat(e.tag.count) * 8.5 + 14, height: 22), priority: LabelLayout.priority(e))
+            }
+            let avoid = [l.header, l.close, l.layers, l.bottom] + (l.rail.map { [$0] } ?? [])
+            let bounds = CGRect(origin: .zero, size: screen)
+            let placed = LabelLayout.place(cands, bounds: bounds, avoid: avoid)
+            for (i, a) in placed.enumerated() {
+                for c in placed[(i + 1)...] { XCTAssertFalse(a.frame.insetBy(dx: -2, dy: -2).intersects(c.frame), "\(a.id) and \(c.id) on \(screen)") }
+                for r in avoid { XCTAssertFalse(r.intersects(a.frame), "\(a.id) under the chrome on \(screen)") }
+            }
+            let biggest = try! XCTUnwrap(cands.max { $0.priority < $1.priority })
+            XCTAssertTrue(placed.contains { $0.id == biggest.id }, "the biggest gear keeps its label on \(screen)")
+            // Tapping a hidden one shows it (and still nothing overlaps).
+            if let hidden = cands.first(where: { c in !placed.contains { $0.id == c.id } }) {
+                let boosted = cands.map { $0.id == hidden.id ? LabelCandidate(id: $0.id, anchor: $0.anchor, size: $0.size, priority: $0.priority + LabelLayout.tappedBoost) : $0 }
+                let again = LabelLayout.place(boosted, bounds: bounds, avoid: avoid)
+                XCTAssertTrue(again.contains { $0.id == hidden.id }, "a tapped hidden label shows on \(screen)")
+                for (i, a) in again.enumerated() { for c in again[(i + 1)...] { XCTAssertFalse(a.frame.intersects(c.frame)) } }
+            }
+        }
+    }
 
     /// design-1: a water closet and lavatory label 12 pt apart sat on top of each other.
     func testCloseLabelsNeverOverlap() {

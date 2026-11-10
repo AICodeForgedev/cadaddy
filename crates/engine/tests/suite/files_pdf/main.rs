@@ -12,6 +12,7 @@ mod helper;
 mod bimjobstate;
 mod bimpdfpages;
 mod devicefit;
+mod fpshopdrawings;
 mod jobmep;
 mod jobunits;
 mod levelregions;
