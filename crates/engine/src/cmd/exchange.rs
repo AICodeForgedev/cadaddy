@@ -626,15 +626,19 @@ pub(crate) enum PageImport {
 /// How far (relative) a page's scale may be from its plans' before it is read again at theirs.
 const PLAN_SCALE_TOLERANCE: f64 = 0.02;
 
-/// A page whose plans print at another scale than the one its reading took, read again at its
-/// plans' scale (Q6396: a roof plan at 1/8" = 1'-0" came in at a detail's 1/2" note from the
-/// corner of its sheet, a quarter of its size, and no trade's roof plan fitted onto it). The
-/// plans' scale is the one most of the sheet's plan views print ([`cadaddy_mepfix::sheet_facts::plan_print_scale`]);
+/// A page read at the scale of one of its views that is no plan (an elevation, a section, a
+/// detail), read again at its plans' scale (Q6396: a roof plan at 1/8" = 1'-0" came in at a
+/// detail's 1/2" note from the corner of its sheet, a quarter of its size, and no trade's roof
+/// plan fitted onto it). The plans' scale is [`cadaddy_mepfix::sheet_facts::plan_print_scale`];
 /// the report's `scaleSource` says which view gave it and what the first reading took, and
 /// `planPrintScale` (sheet inches per foot) is recorded in `report` whenever it was read, so a
 /// sheet left at another scale (given, DO NOT SCALE) is fitted onto its plan at their ratio.
 /// `None` (the first reading stands) when the scale was given, the sheet stayed at paper size,
-/// it prints one scale only, or its plans print the scale it has.
+/// it prints one scale only, or its plans print the scale it has. A reading no view but a plan
+/// prints stands too (Q6498): a power plan whose scale note is in its title block (or whose note
+/// doesn't read) with two enlarged plans at twice its scale beside it was read again at theirs,
+/// the floor's plan came in at half its size, and its devices were placed nowhere; its
+/// `planPrintScale` is then the reading's when a plan view prints it, else none.
 fn reread_at_plan_scale(
     read_pdf: super::file::PdfHook,
     bytes: &[u8],
@@ -642,14 +646,27 @@ fn reread_at_plan_scale(
     d: &Drawing,
     report: &mut Value,
 ) -> Option<std::result::Result<(Drawing, Value), String>> {
-    let (v, view) = cadaddy_mepfix::sheet_facts::sheet_plan_print_scale(d)?;
+    let scales = cadaddy_mepfix::sheet_facts::sheet_scales(d)?;
+    let (v, view) = (scales.plans, &scales.view);
     report["planPrintScale"] = json!(v);
     if params.get("scale").is_some_and(|x| x.as_str().is_none_or(|t| !t.trim().eq_ignore_ascii_case("auto"))) {
         return None;
     }
     let k = report.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 1.5)?;
-    let want = 12.0 * super::perceive::units_per_inch(d) / v;
+    let upi = super::perceive::units_per_inch(d);
+    let want = 12.0 * upi / v;
     if !(want.is_finite() && want > 1.5 && want <= 1.0e5) || (want / k - 1.0).abs() <= PLAN_SCALE_TOLERANCE {
+        return None;
+    }
+    // The scale the reading took (sheet inches per foot): another view's than a plan's, or it stands.
+    let read_at = 12.0 * upi / k;
+    let a_plans = scales.prints(read_at, true, PLAN_SCALE_TOLERANCE);
+    if a_plans || !scales.prints(read_at, false, PLAN_SCALE_TOLERANCE) {
+        if a_plans {
+            report["planPrintScale"] = json!(read_at);
+        } else if let Some(o) = report.as_object_mut() {
+            o.remove("planPrintScale");
+        }
         return None;
     }
     let mut p = params.clone();
