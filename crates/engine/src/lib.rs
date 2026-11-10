@@ -44,6 +44,7 @@ pub mod sample;
 pub mod script_tools;
 pub mod secureload;
 pub mod select;
+pub mod sheetnav;
 pub mod snap;
 pub mod snap3;
 pub mod spatial;
@@ -388,6 +389,8 @@ pub struct DocState {
     pub ifc_stamps: std::collections::HashMap<String, cmd::ifcref::Stamp>,
     /// The IFC model viewer's section box and camera ([`cmd::ifcmodel`]).
     pub ifc_view: cmd::ifcmodel::ViewState,
+    /// A print set's open sheet ([`sheetnav`]): the screen works on it alone.
+    pub sheet_nav: sheetnav::SheetNav,
 }
 
 /// The view that shows `ext` with `margin` (1.05 = 5% more) in a viewport `px` wide and high,
@@ -466,6 +469,7 @@ impl DocState {
             legibility_hinted: 0,
             ifc_stamps: std::collections::HashMap::new(),
             ifc_view: cmd::ifcmodel::ViewState::default(),
+            sheet_nav: sheetnav::SheetNav::default(),
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet
@@ -3253,7 +3257,8 @@ impl Session {
                     let hs = self.window_selection(&space, pw.corner, p)?;
                     return Ok(Some(Input::Pick(cmd::groups::expand(self, hs))));
                 }
-                match select::pick(self.doc()?, &space, p, ap) {
+                // With a print set's sheet open, only its objects (`sheetnav`).
+                match select::pick(&*self.view_doc()?, &space, p, ap) {
                     Some(h) => Ok(Some(Input::Pick(cmd::groups::expand(self, vec![h])))),
                     None => {
                         self.pending_window = Some(PendingWindow { corner: p, during_command: true });
@@ -3263,7 +3268,8 @@ impl Session {
             }
             Input::Text(ref t) | Input::Keyword(ref t) => {
                 let tl = t.trim().to_ascii_lowercase();
-                let d = self.doc()?;
+                let shown = self.view_doc()?;
+                let d = &*shown;
                 let store = d.space(&space);
                 let picked = match tl.as_str() {
                     "all" => store.map(|s| s.iter().filter(|e| d.is_visible(e)).map(|e| e.handle).collect()),
@@ -3297,7 +3303,7 @@ impl Session {
                     Ok(None)
                 }
                 Input::Text(name) | Input::Keyword(name) => {
-                    let hs = select::select_class(self.doc()?, &self.space(), &name);
+                    let hs = select::select_class(&*self.view_doc()?, &self.space(), &name);
                     if hs.is_empty() {
                         self.echo(format!("No objects of class \"{}\".", name.trim()));
                         return Ok(None);
@@ -3316,7 +3322,7 @@ impl Session {
         if mode.kind == select::SelectKind::Group {
             return match input {
                 Input::Text(name) | Input::Keyword(name) => match select::select_group(self.doc()?, &self.space(), &name) {
-                    Some(hs) => Ok(Some(Input::Pick(hs))),
+                    Some(hs) => Ok(Some(Input::Pick(self.in_sheet_view(hs)))),
                     None => {
                         self.echo(format!("No group named \"{}\".", name.trim()));
                         Ok(None)
@@ -3335,14 +3341,14 @@ impl Session {
         match input {
             Input::Point(p) => {
                 if mode.push(p) {
-                    return Ok(mode.select(self.doc()?, &self.space()).map(Input::Pick));
+                    return Ok(mode.select(&*self.view_doc()?, &self.space()).map(Input::Pick));
                 }
             }
             Input::Keyword(k) if k == "Undo" => {
                 mode.pts.pop();
             }
             // Enter ends a fence or polygon; with too few points the mode is dropped.
-            Input::Enter => return Ok(mode.select(self.doc()?, &self.space()).map(Input::Pick)),
+            Input::Enter => return Ok(mode.select(&*self.view_doc()?, &self.space()).map(Input::Pick)),
             Input::Cancel | Input::Pick(_) => return Ok(Some(input)),
             _ => self.echo("Invalid point."),
         }
@@ -4024,7 +4030,7 @@ impl Session {
             return Ok(());
         }
         let ap = self.pick_aperture();
-        match select::pick(self.doc()?, &space, p, ap) {
+        match select::pick(&*self.view_doc()?, &space, p, ap) {
             // A piece the 3D view draws only as part of its run (a coarse fidelity tier): the run.
             Some(h) => match cmd::fidelity::pick(self, h) {
                 run if run.len() > 1 => self.idle_select_area(run, shift),
@@ -4088,7 +4094,7 @@ impl Session {
         if !self.selecting_objects() {
             return Ok(());
         }
-        let hs = select::select_lasso(self.doc()?, &self.space(), path, mode);
+        let hs = select::select_lasso(&*self.view_doc()?, &self.space(), path, mode);
         if self.running.is_some() {
             let hs = cmd::groups::expand(self, hs);
             return self.input(Input::Pick(hs));
@@ -4099,7 +4105,7 @@ impl Session {
 
     /// The objects under `p` that selection cycling steps through, nearest first.
     pub fn pick_candidates(&self, p: Vec2) -> Result<Vec<Handle>> {
-        Ok(select::pick_all(self.doc()?, &self.space(), p, self.pick_aperture()))
+        Ok(select::pick_all(&*self.view_doc()?, &self.space(), p, self.pick_aperture()))
     }
 
     /// Pick the object `h` (one of [`Self::pick_candidates`], chosen by selection cycling) as a
@@ -4126,7 +4132,9 @@ impl Session {
     /// right on screen, a crossing window right to left. In a twisted plan view the window is
     /// the screen's rectangle, a turned one in the drawing.
     fn window_selection(&self, space: &Space, a: Vec2, b: Vec2) -> Result<Vec<Handle>> {
-        let d = self.doc()?;
+        // With a print set's sheet open, only its objects (`sheetnav`).
+        let shown = self.view_doc()?;
+        let d = &*shown;
         let twisted = self.state()?.projection().filter(|p| cadaddy_geom::view3::is_plan(p.dir));
         let Some(pr) = twisted else { return Ok(select::select_window(d, space, Bounds2::new(a, b), b.x < a.x)) };
         let (sa, sb) = (pr.project(a.to3(0.0)), pr.project(b.to3(0.0)));
@@ -4168,6 +4176,10 @@ impl Session {
     /// print set's import spreads far and wide).
     pub fn view_extents(&self) -> Result<Bounds2> {
         let st = self.state()?;
+        // A print set's open sheet is all the screen shows of it (`sheetnav`).
+        if let Some(sheet) = self.sheet_scope() {
+            return Ok(sheet);
+        }
         Ok(match st.projection() {
             Some(p) => match cmd::bimlook::display(&st.doc) {
                 Some(shown) => cmd::view::view3d::projected_extents(&shown, &p),

@@ -3512,3 +3512,9 @@
 	Guided Job	引导作业
 	Start Job...	开始作业...
 	Place Buildings	放置建筑
+	List Sheets	列出图纸
+	Open Sheet	打开图纸
+	Next Sheet	下一张图纸
+	Previous Sheet	上一张图纸
+	Page {n}	第 {n} 页
+	Page Up and Page Down step through the sheets.	用 Page Up 和 Page Down 逐张浏览图纸。

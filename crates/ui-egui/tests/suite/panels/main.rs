@@ -65,6 +65,7 @@ mod rooms_palette;
 mod rtl;
 mod security_policy;
 mod shared_controls;
+mod sheet_navigator;
 mod shortcut_menus;
 mod status_bar_toggles;
 mod style_dialogs;

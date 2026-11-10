@@ -3418,3 +3418,9 @@ menu	Modify	Modifikace
 	Guided Job	Řízená úloha
 	Start Job...	Spustit úlohu...
 	Place Buildings	Umístit budovy
+	List Sheets	Vypsat listy
+	Open Sheet	Otevřít list
+	Next Sheet	Další list
+	Previous Sheet	Předchozí list
+	Page {n}	Stránka {n}
+	Page Up and Page Down step through the sheets.	Klávesy Page Up a Page Down procházejí listy.

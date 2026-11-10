@@ -1482,6 +1482,9 @@ pub fn default_shortcuts() -> Vec<(egui::KeyboardShortcut, &'static str)> {
         (sc(Modifiers::NONE, Key::F10), "polar"),
         (sc(Modifiers::NONE, Key::F11), "otrack"),
         (sc(Modifiers::NONE, Key::F12), "dynmode"),
+        // A print set's sheets, one at a time (`cadaddy_engine::sheetnav`).
+        (sc(Modifiers::NONE, Key::PageDown), "sheet.next"),
+        (sc(Modifiers::NONE, Key::PageUp), "sheet.previous"),
     ]
 }
 
@@ -1511,6 +1514,10 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
     });
     for id in fire {
         let id = id.as_str();
+        // Page Up and Page Down step through a print set's sheets; Walk moves with them.
+        if id.starts_with("sheet.") && (app.walk.is_some() || app.session.print_sheets().is_empty()) {
+            continue;
+        }
         // F1 over a menu item or toolbar/ribbon button: that command's help page.
         if id == "ui.dialog.commands"
             && let Some(hovered) = hovered_command(ctx)
@@ -1526,7 +1533,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
             continue;
         }
         // Toggles run transparently (they don't cancel the active command).
-        let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle"].contains(&id);
+        let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle", "sheet.next", "sheet.previous"].contains(&id);
         if transparent || id.starts_with("ui.") {
             run_transparent(app, id);
         } else {
