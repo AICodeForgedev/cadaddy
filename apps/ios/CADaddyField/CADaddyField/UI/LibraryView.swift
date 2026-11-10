@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @EnvironmentObject var app: AppModel
+    static var buildingAvailable: Bool { if #available(iOS 18.0, *) { return true } else { return false } }
     @State private var showImporter = false
     @State private var columns: NavigationSplitViewVisibility = .all
 
@@ -36,6 +37,9 @@ struct LibraryView: View {
                         Button { showImporter = true } label: { Label("Open from Files…", systemImage: "folder") }
                         Button { app.addSample() } label: { Label("Add sample room", systemImage: "cube.transparent") }
                         Button { app.addSample(rooms: 40) } label: { Label("Add large sample (40 rooms)", systemImage: "square.grid.3x3") }
+                        if #available(iOS 18.0, *) {
+                            Button { app.showBuilding = true } label: { Label("Sample building (design preview)", systemImage: "building.2") }
+                        }
                         Divider()
                         Button { app.askAddress = true } label: { Label("Office address for Update…", systemImage: "network") }
                     } label: { Label("Add", systemImage: "plus") }
@@ -56,6 +60,11 @@ struct LibraryView: View {
             if case let .failure(err) = result { app.alert = err.localizedDescription }
         }
         .sheet(isPresented: $app.askAddress) { ServerAddressSheet().environmentObject(app) }
+        .fullScreenCover(isPresented: Binding(get: { app.showBuilding && Self.buildingAvailable }, set: { app.showBuilding = $0 })) {
+            if #available(iOS 18.0, *) {
+                BuildingView(onClose: { app.showBuilding = false }, onStandInRoom: { app.standInSampleRoom() })
+            }
+        }
         .sheet(item: Binding(get: { app.updateReport.map(ReportItem.init) }, set: { if $0 == nil { app.updateReport = nil } })) { item in
             UpdateReportSheet(report: item.report).environmentObject(app)
         }
@@ -70,6 +79,9 @@ struct LibraryView: View {
             Text("Export a room from CADaddy with “Export for AR”, then open the .glb (or the folder or .zip with its .json) here. Packages stay on this device.")
                 .font(.subheadline).foregroundStyle(.secondary)
             Button("Add sample room") { app.addSample() }.buttonStyle(.bordered)
+            if Self.buildingAvailable {
+                Button("Sample building (design preview)") { app.showBuilding = true }.buttonStyle(.bordered)
+            }
         }
         .padding(.vertical, 8)
     }

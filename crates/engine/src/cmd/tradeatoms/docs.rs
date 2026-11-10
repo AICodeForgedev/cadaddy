@@ -120,6 +120,47 @@ pub(crate) fn roof_plan_facts(sp: &BuildingSpec, have: &[Fact]) -> Vec<Fact> {
     out
 }
 
+/// The floor framing each floor's framing plans' notes give (the spec's floor framing), as the
+/// facts a joist submittal's level heading would give, kept to the level: that it is framed, with
+/// what, and the depth and spacing a note read. A joist submittal's own facts for the level come
+/// first (they are read before these).
+pub(crate) fn floor_plan_facts(sp: &BuildingSpec, have: &[Fact]) -> Vec<Fact> {
+    let mut out = Vec::new();
+    let any_floor = have.iter().any(|f| f.key == "framing.floor_framing" && scope_level(f).is_none());
+    for f in sp.floor_framing.iter().take(1000) {
+        if f.level.trim().is_empty() {
+            continue;
+        }
+        let scope = level_scope(&f.level);
+        let src = if f.source.is_empty() { format!("{} framing plan", f.level) } else { f.source.clone() };
+        let what = if f.member == "truss" { "floor trusses" } else { "joists" };
+        if !any_floor && out.is_empty() {
+            out.push(Fact::new("framing.floor_framing", what, None, &src, &src));
+        }
+        out.push(Fact::new("framing.floor_framing", what, None, &src, &src).scoped(&scope));
+        out.push(Fact::new("framing.floor_member", f.member.clone(), None, &src, &src).scoped(&scope));
+        if f.depth_status == Some(cadaddy_walk3d::ValueStatus::Read) && f.depth_in.is_finite() {
+            out.push(Fact::new("framing.joist_depth_in", inches_text(f.depth_in), Some(f.depth_in), &src, &src).scoped(&scope));
+        }
+        if f.spacing_status == Some(cadaddy_walk3d::ValueStatus::Read) && f.spacing_in.is_finite() {
+            out.push(
+                Fact::new("framing.joist_spacing_in", format!("{}\" o.c.", num_text(f.spacing_in)), Some(f.spacing_in), &src, &src).scoped(&scope),
+            );
+        }
+    }
+    out
+}
+
+/// Whether a level code or name a fact is kept to is the level `name` (`2`, `L2`, `Level 2`,
+/// `SECOND FLOOR` are one level).
+pub(crate) fn same_level(code: &str, name: &str) -> bool {
+    if code.trim().eq_ignore_ascii_case(name.trim()) {
+        return true;
+    }
+    let canon = |s: &str| cadaddy_walk3d::levels::level_or_code(s).map(|(c, _)| c);
+    canon(code).is_some_and(|c| canon(name).is_some_and(|n| n == c))
+}
+
 /// The trade rule a fact's number sets, when it sets one.
 pub(crate) fn rule_path(key: &str) -> Option<&'static str> {
     Some(match key {
@@ -644,103 +685,14 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
     if joist_doc {
         let at = lines.first().map_or(0, |l| l.0);
         out.push(Fact::new("framing.floor_framing", "I-joists", None, &src(at), title.trim()));
-        let mut spacings: Vec<(f64, String)> = Vec::new();
-        let mut listed: BTreeMap<String, f64> = BTreeMap::new();
-        let mut listed_src = String::new();
-        let mut depths: Vec<(f64, String)> = Vec::new();
-        let mut material: Vec<(String, String, f64, f64, String, String)> = Vec::new();
-        for (at, l) in lines {
-            let u = l.trim().to_ascii_uppercase().replace(['”', '″'], "\"");
-            // A layout's labels: `A1 - 12 @ 16"`, `A4- 12 @ 16"`: 12 joists of mark A4 at 16"
-            // (a row of the text can hold several).
-            let labels = layout_labels(&u);
-            for (mark, n, spv) in &labels {
-                *listed.entry(mark.clone()).or_default() += n;
-                spacings.push((*spv, format!("{}|{mark}- {n} @ {spv}\"", src(*at))));
-                if listed_src.is_empty() {
-                    listed_src = src(*at);
-                }
-            }
-            if !labels.is_empty() {
-                continue;
-            }
-            // A material list's row: mark, product, width, depth, quantity (plies and the pieces
-            // they make), length (`A4   XJ 40   2.5   14   30   16-0-0`).
-            if let Some((mark, product, depth, pieces)) = material_row(l) {
-                material.push((mark, product, depth, pieces, src(*at), l.trim().to_string()));
-                continue;
-            }
-            if (u.contains("O.C") || u.contains(" OC"))
-                && let Some(q) = u.find('"')
-                && let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| [12.0, 16.0, 19.2, 24.0].iter().any(|s| (s - v).abs() < 1e-6))
-            {
-                spacings.push((v, format!("{}|{}", src(*at), l.trim())));
-            }
-            for d in [9.5, 11.875, 14.0, 16.0, 18.0, 20.0, 24.0] {
-                let txt = inches_text(d);
-                if u.contains(&txt) && (u.contains("JOIST") || u.trim() == txt) {
-                    depths.push((d, format!("{}|{}", src(*at), l.trim())));
-                }
-            }
-        }
-        if let Some((v, q, _)) = most_common(&spacings) {
-            let (s, quote) = q.split_once('|').unwrap_or((&q, ""));
-            out.push(Fact::new("framing.joist_spacing_in", format!("{}\" o.c.", num_text(v)), Some(v), s, quote));
-        }
-        // The material list's joists: the marks the layout labels (its beams and blocking are
-        // other marks).
-        if !listed.is_empty() {
-            material.retain(|m| listed.contains_key(&m.0));
-        }
-        // The depth and series the material list gives (by its pieces), else the depth named
-        // most beside the joists.
-        let mut by_depth: Vec<(f64, f64, String)> = Vec::new();
-        for m in &material {
-            match by_depth.iter_mut().find(|x| (x.0 - m.2).abs() < 1e-6) {
-                Some(x) => x.1 += m.3,
-                None => by_depth.push((m.2, m.3, format!("{}|{}", m.4, m.5))),
-            }
-        }
-        let heaviest = by_depth.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(d, _, q)| (d, q));
-        if let Some((v, q)) = heaviest.or_else(|| most_common(&depths).map(|(v, q, _)| (v, q))) {
-            let (s, quote) = q.split_once('|').unwrap_or((&q, ""));
-            out.push(Fact::new("framing.joist_depth_in", inches_text(v), Some(v), s, quote));
-        }
-        let mut series: BTreeMap<String, f64> = BTreeMap::new();
-        for m in &material {
-            *series.entry(m.1.clone()).or_default() += m.3;
-        }
-        if let Some((name, _)) = series.iter().max_by(|a, b| a.1.total_cmp(b.1))
-            && let Some(m) = material.iter().find(|m| &m.1 == name)
-        {
-            out.push(Fact::new("framing.joist_series", name.clone(), None, &m.4, &m.5));
-        }
-        if !material.is_empty() {
-            let total: f64 = material.iter().map(|m| m.3).sum();
-            let mut by: BTreeMap<String, f64> = BTreeMap::new();
-            for m in &material {
-                *by.entry(m.0.clone()).or_default() += m.3;
-            }
-            let marks = by.iter().map(|(m, n)| format!("{m} {n}")).collect::<Vec<_>>().join(", ");
-            let first = material.first().map(|m| m.4.clone()).unwrap_or_default();
-            out.push(Fact::new(
-                "framing.joists_material",
-                format!("{total} pieces ({marks})"),
-                Some(total),
-                &first,
-                "the material list's quantities",
-            ));
-        }
-        if !listed.is_empty() {
-            let total: f64 = listed.values().sum();
-            let marks = listed.iter().map(|(m, n)| format!("{m} {n}")).collect::<Vec<_>>().join(", ");
-            out.push(Fact::new(
-                "framing.joists_listed",
-                format!("{total} joists ({marks})"),
-                Some(total),
-                &listed_src,
-                "the layout's labels (mark - count @ spacing)",
-            ));
+        // The whole document's, then each floor's its layout headings name (`2ND FLOOR FRAMING`):
+        // a building's floors can be framed with joists of different depths.
+        joist_layout_facts(lines, src, "", out);
+        let under = line_levels(lines, src);
+        let codes: BTreeSet<&String> = under.iter().flatten().collect();
+        for code in codes.into_iter().take(64) {
+            let mine: Vec<(usize, &str)> = lines.iter().zip(&under).filter(|(_, u)| u.contains(code)).map(|(l, _)| *l).collect();
+            joist_layout_facts(&mine, src, &level_scope(code), out);
         }
     }
     if truss_doc {
@@ -775,6 +727,165 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
         if qty > 0.0 {
             out.push(Fact::new("framing.trusses_listed", format!("{qty} trusses"), Some(qty), &q_src, "the truss designs' Qty"));
         }
+    }
+}
+
+/// The scope of a fact about one level only (`level:2`): the set's level code.
+pub(crate) fn level_scope(code: &str) -> String {
+    format!("{LEVEL_SCOPE}{}", code.trim())
+}
+
+/// The prefix of a fact's scope that keeps it to one level.
+pub(crate) const LEVEL_SCOPE: &str = "level:";
+
+/// The level a fact is kept to (`level:2` → `2`), if it is.
+pub(crate) fn scope_level(f: &Fact) -> Option<&str> {
+    f.scope.strip_prefix(LEVEL_SCOPE).map(str::trim).filter(|c| !c.is_empty())
+}
+
+/// The levels a heading of a joist layout names, as the set's level codes: `2ND FLOOR FRAMING`,
+/// `Level: THIRD & FOURTH FLOOR FRAMING`, `LEVEL 2 JOIST LAYOUT` (a short line about the framing,
+/// never a layout's label or a note's sentence).
+fn heading_levels(line: &str) -> Option<Vec<String>> {
+    let u = line.trim().to_ascii_uppercase();
+    if u.is_empty() || u.len() > 80 || u.contains('@') {
+        return None;
+    }
+    let about = cadaddy_mepfix::wordrules::words("framing.layout_heading_words").iter().any(|w| u.contains(w)) || u.starts_with("LEVEL");
+    if !about {
+        return None;
+    }
+    let mut codes: Vec<String> = Vec::new();
+    for c in cadaddy_mepfix::sheet_reader::detect_levels(&u) {
+        if c != "T" && !codes.contains(&c) {
+            codes.push(c);
+        }
+    }
+    (!codes.is_empty()).then_some(codes)
+}
+
+/// The levels each line of a joist layout is under: the floor its page's headings name; on a page
+/// whose headings name different floors, the last heading above the line (the page's first for
+/// the lines over it); none on a page with no heading.
+fn line_levels(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String) -> Vec<Vec<String>> {
+    let heads: Vec<Option<Vec<String>>> = lines.iter().map(|(_, l)| heading_levels(l)).collect();
+    let pages: Vec<String> = lines.iter().map(|(at, _)| src(*at)).collect();
+    let mut out: Vec<Vec<String>> = vec![Vec::new(); lines.len()];
+    let mut start = 0usize;
+    while start < lines.len() {
+        let page = pages.get(start).cloned().unwrap_or_default();
+        let len = pages.iter().skip(start).take_while(|p| **p == page).count().max(1);
+        let on: Vec<&Vec<String>> = heads.iter().skip(start).take(len).flatten().collect();
+        if let Some(first) = on.first().copied() {
+            let one = on.iter().all(|h| *h == first);
+            let mut cur = first.clone();
+            for (h, slot) in heads.iter().skip(start).take(len).zip(out.iter_mut().skip(start)) {
+                if !one && let Some(h) = h {
+                    cur = h.clone();
+                }
+                *slot = cur.clone();
+            }
+        }
+        start += len;
+    }
+    out
+}
+
+/// A joist layout's facts from its lines: the spacing, depth, series and quantities its labels
+/// and material list give, each kept to `scope` (a level's, or the whole document's when empty).
+fn joist_layout_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, scope: &str, out: &mut Vec<Fact>) {
+    let fact = |key: &str, value: String, number: Option<f64>, s: &str, quote: &str| Fact::new(key, value, number, s, quote).scoped(scope);
+    let mut spacings: Vec<(f64, String)> = Vec::new();
+    let mut listed: BTreeMap<String, f64> = BTreeMap::new();
+    let mut listed_src = String::new();
+    let mut depths: Vec<(f64, String)> = Vec::new();
+    let mut material: Vec<(String, String, f64, f64, String, String)> = Vec::new();
+    for (at, l) in lines {
+        let u = l.trim().to_ascii_uppercase().replace(['”', '″'], "\"");
+        // A layout's labels: `A1 - 12 @ 16"`, `A4- 12 @ 16"`: 12 joists of mark A4 at 16"
+        // (a row of the text can hold several).
+        let labels = layout_labels(&u);
+        for (mark, n, spv) in &labels {
+            *listed.entry(mark.clone()).or_default() += n;
+            spacings.push((*spv, format!("{}|{mark}- {n} @ {spv}\"", src(*at))));
+            if listed_src.is_empty() {
+                listed_src = src(*at);
+            }
+        }
+        if !labels.is_empty() {
+            continue;
+        }
+        // A material list's row: mark, product, width, depth, quantity (plies and the pieces
+        // they make), length (`A4   XJ 40   2.5   14   30   16-0-0`).
+        if let Some((mark, product, depth, pieces)) = material_row(l) {
+            material.push((mark, product, depth, pieces, src(*at), l.trim().to_string()));
+            continue;
+        }
+        if (u.contains("O.C") || u.contains(" OC"))
+            && let Some(q) = u.find('"')
+            && let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| [12.0, 16.0, 19.2, 24.0].iter().any(|s| (s - v).abs() < 1e-6))
+        {
+            spacings.push((v, format!("{}|{}", src(*at), l.trim())));
+        }
+        for d in [9.5, 11.875, 14.0, 16.0, 18.0, 20.0, 24.0] {
+            let txt = inches_text(d);
+            if u.contains(&txt) && (u.contains("JOIST") || u.trim() == txt) {
+                depths.push((d, format!("{}|{}", src(*at), l.trim())));
+            }
+        }
+    }
+    if let Some((v, q, _)) = most_common(&spacings) {
+        let (s, quote) = q.split_once('|').unwrap_or((&q, ""));
+        out.push(fact("framing.joist_spacing_in", format!("{}\" o.c.", num_text(v)), Some(v), s, quote));
+    }
+    // The material list's joists: the marks the layout labels (its beams and blocking are
+    // other marks).
+    if !listed.is_empty() {
+        material.retain(|m| listed.contains_key(&m.0));
+    }
+    // The depth and series the material list gives (by its pieces), else the depth named
+    // most beside the joists.
+    let mut by_depth: Vec<(f64, f64, String)> = Vec::new();
+    for m in &material {
+        match by_depth.iter_mut().find(|x| (x.0 - m.2).abs() < 1e-6) {
+            Some(x) => x.1 += m.3,
+            None => by_depth.push((m.2, m.3, format!("{}|{}", m.4, m.5))),
+        }
+    }
+    let heaviest = by_depth.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(d, _, q)| (d, q));
+    if let Some((v, q)) = heaviest.or_else(|| most_common(&depths).map(|(v, q, _)| (v, q))) {
+        let (s, quote) = q.split_once('|').unwrap_or((&q, ""));
+        out.push(fact("framing.joist_depth_in", inches_text(v), Some(v), s, quote));
+    }
+    let mut series: BTreeMap<String, f64> = BTreeMap::new();
+    for m in &material {
+        *series.entry(m.1.clone()).or_default() += m.3;
+    }
+    if let Some((name, _)) = series.iter().max_by(|a, b| a.1.total_cmp(b.1))
+        && let Some(m) = material.iter().find(|m| &m.1 == name)
+    {
+        out.push(fact("framing.joist_series", name.clone(), None, &m.4, &m.5));
+    }
+    if !material.is_empty() {
+        let total: f64 = material.iter().map(|m| m.3).sum();
+        let mut by: BTreeMap<String, f64> = BTreeMap::new();
+        for m in &material {
+            *by.entry(m.0.clone()).or_default() += m.3;
+        }
+        let marks = by.iter().map(|(m, n)| format!("{m} {n}")).collect::<Vec<_>>().join(", ");
+        let first = material.first().map(|m| m.4.clone()).unwrap_or_default();
+        out.push(fact("framing.joists_material", format!("{total} pieces ({marks})"), Some(total), &first, "the material list's quantities"));
+    }
+    if !listed.is_empty() {
+        let total: f64 = listed.values().sum();
+        let marks = listed.iter().map(|(m, n)| format!("{m} {n}")).collect::<Vec<_>>().join(", ");
+        out.push(fact(
+            "framing.joists_listed",
+            format!("{total} joists ({marks})"),
+            Some(total),
+            &listed_src,
+            "the layout's labels (mark - count @ spacing)",
+        ));
     }
 }
 
@@ -1078,8 +1189,16 @@ pub(crate) fn compare(facts: &[Fact], ix: &super::super::mepatoms::Index, level:
     };
     let pct = |doc: f64, model: f64| if doc > 0.0 { Some(((model - doc) / doc * 1000.0).round() / 10.0) } else { None };
     let mut out = Vec::new();
+    // A level asked for: its own numbers where the documents give them by level.
+    let by_level = |f: &Fact| level.is_some_and(|l| scope_level(f).is_some_and(|c| same_level(c, l)));
+    let own: BTreeSet<&str> = facts.iter().filter(|f| by_level(f)).map(|f| f.key.as_str()).collect();
     for f in facts.iter().take(MAX_FACTS) {
         let Some(n) = f.number else { continue };
+        let mine = by_level(f);
+        // Another level's, or the whole job's where the level asked has its own.
+        if !mine && (scope_level(f).is_some() || own.contains(f.key.as_str())) {
+            continue;
+        }
         let (what, model, query) = match f.key.as_str() {
             "framing.joists_listed" => ("floor joists", q("framing", "joist", None).count as f64, json!({"trade": "framing", "kind": "joist"})),
             "framing.joists_material" => {
@@ -1100,7 +1219,9 @@ pub(crate) fn compare(facts: &[Fact], ix: &super::super::mepatoms::Index, level:
         if let Some(p) = pct(n, model) {
             j["difference_pct"] = json!(p);
         }
-        if level.is_some() {
+        if mine {
+            j["level"] = json!(scope_level(f));
+        } else if level.is_some() {
             j["note"] = json!("the documents' number is the whole job's; the model's is the level asked");
         }
         out.push(j);
@@ -1175,6 +1296,34 @@ mod tests {
         assert_eq!(num(&f, "concrete.vapor_mil"), Some(10.0));
         assert!(f.iter().any(|x| x.key == "concrete.pt"));
         assert_eq!(f.iter().find(|x| x.key == "concrete.mesh").map(|x| x.value.as_str()), Some("6x6-W1.4xW1.4"));
+    }
+
+    #[test]
+    fn a_joist_layouts_level_headings_keep_its_facts_to_their_floors() {
+        let j = "--- page 1 of 3 ---\nCOVER\n--- page 2 of 3 ---\nSECOND FLOOR FRAMING\nJ1   XJ 60   2.5   16   30   20-0-0\nJ1- 30 @ 16\"\n\
+                 --- page 3 of 3 ---\nJ2   XJ 40   2.5   11.875   50   20-0-0\nJ2- 50 @ 19.2\"\nLevel: THIRD & FOURTH FLOOR FRAMING\n";
+        let f = facts(j, "Sample I-Joist Layout");
+        let scoped = |key: &str, scope: &str| f.iter().find(|x| x.key == key && x.scope == scope).and_then(|x| x.number);
+        // The whole document's, as before: the depth the most pieces have.
+        assert_eq!(num(&f, "framing.joist_depth_in"), Some(11.875));
+        assert_eq!(num(&f, "framing.joists_listed"), Some(80.0));
+        assert_eq!(scoped("framing.joist_depth_in", "level:2"), Some(16.0));
+        assert_eq!(scoped("framing.joist_spacing_in", "level:2"), Some(16.0));
+        assert_eq!(scoped("framing.joists_listed", "level:2"), Some(30.0));
+        // The heading at the page's foot is the page's.
+        for l in ["level:3", "level:4"] {
+            assert_eq!(scoped("framing.joist_depth_in", l), Some(11.875), "{l}");
+            assert_eq!(scoped("framing.joist_spacing_in", l), Some(19.2), "{l}");
+        }
+        assert!(f.iter().any(|x| x.key == "framing.joist_series" && x.scope == "level:3" && x.value == "XJ 40"));
+        // The cover page names no floor: nothing kept to a level from it.
+        assert!(f.iter().all(|x| x.scope.is_empty() || ["level:2", "level:3", "level:4"].contains(&x.scope.as_str())), "{f:?}");
+        // Headings: short framing lines naming a floor; never a label or a sentence.
+        assert_eq!(heading_levels("2ND FLOOR FRAMING"), Some(vec!["2".to_string()]));
+        assert_eq!(heading_levels("LEVEL 3 JOIST LAYOUT"), Some(vec!["3".to_string()]));
+        assert_eq!(heading_levels("J1- 30 @ 16\""), None);
+        assert_eq!(heading_levels("FLOOR JOIST LAYOUT"), None);
+        assert!(same_level("2", "Level 2") && same_level("LEVEL 2", "2") && !same_level("2", "3"));
     }
 
     #[test]

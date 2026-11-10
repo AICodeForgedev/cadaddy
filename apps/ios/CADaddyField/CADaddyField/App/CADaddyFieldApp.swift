@@ -12,6 +12,9 @@ struct CADaddyFieldApp: App {
 
     init() {
         ElementComponent.registerComponent()
+        ElementTagComponent.registerComponent()
+        RoomTagComponent.registerComponent()
+        LevelTagComponent.registerComponent()
     }
 
     var body: some SwiftUI.Scene {
@@ -49,6 +52,10 @@ final class AppModel: ObservableObject {
     private var updateTask: Task<Void, Never>?
     /// Debug-only screen automation for screenshots: `-demo library|elements|card|marks|preview`.
     let demoScreen: String?
+    // The building / floor / room design prototype (Q6421), on the made-up sample building.
+    @Published var showBuilding = false
+    /// Set by "Stand in this room": the package detail opens AR on the selected sample room.
+    @Published var openARRequest = false
 
     init() {
         library = try? PackageLibrary(root: PackageLibrary.defaultRoot())
@@ -65,6 +72,7 @@ final class AppModel: ObservableObject {
         // `-updateserver URL` presets the address and `-autoupdate` taps Update once at launch (simulator end-to-end run).
         if let i = args.firstIndex(of: "-updateserver"), args.indices.contains(i + 1) { serverAddress = args[i + 1] }
         if args.contains("-autoupdate") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.tapUpdate() } }
+        if args.contains("-design") { showBuilding = true }
         #endif
     }
 
@@ -169,6 +177,28 @@ final class AppModel: ObservableObject {
                 self.importing = false
                 self.reload()
                 if let id { self.selection = id }
+                if let message { self.alert = message }
+            }
+        }
+    }
+
+    /// "Stand in this room" from the building prototype: open the sample room package and go to AR alignment.
+    /// (The prototype is not wired to real exports yet, so it always uses the built-in sample room.)
+    func standInSampleRoom() {
+        showBuilding = false
+        if let r = packages.first(where: { $0.name == SamplePackage.title }) {
+            selection = r.id
+            openARRequest = true
+            return
+        }
+        guard let library else { return }
+        importing = true
+        Task.detached(priority: .userInitiated) {
+            let (id, message) = Self.makeSample(rooms: 1, library: library)
+            await MainActor.run {
+                self.importing = false
+                self.reload()
+                if let id { self.selection = id; self.openARRequest = true }
                 if let message { self.alert = message }
             }
         }
