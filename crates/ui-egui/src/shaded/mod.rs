@@ -165,11 +165,10 @@ pub struct State {
     bench: Option<Bench>,
     /// The section box while one of its faces is dragged (min, max), set when let go.
     sbox_drag: Option<([f64; 3], [f64; 3])>,
-    /// Fidelity: the tier Auto chose last (its hysteresis), the streamed cells, and Auto's
-    /// thresholds and the drawing's units per foot (for the drawing they were read from).
-    auto_tier: Option<Tier>,
+    /// Fidelity: the streamed cells.
     stream: Stream,
-    auto_for: Option<((usize, u64), model3::AutoTiers, f64)>,
+    /// The BIM view's state (`bim.view`), for the state of the drawing it was read from.
+    view_for: Option<((usize, u64), serde_json::Value)>,
     /// When the GPU last drew a frame, and while frames follow one another (a moving view): how
     /// many have, and their running average interval in milliseconds.
     drawn_at: Option<web_time::Instant>,
@@ -396,7 +395,7 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             markers = model.visible_at(&view, tier, Some(force)).markers;
         }
         draw_markers(painter, xf, &model, &markers);
-        fidelity_bar(app, ui, xf, tier);
+        view_bar(app, ui, xf);
     }
     // An orbit benchmark: the next frame's view, and another frame straight away.
     if let Some(mut b) = app.canvas.shade.bench {
@@ -425,11 +424,12 @@ const MOVING_GAP_MS: f64 = 400.0;
 const SLOW_FRAMES: u32 = 30;
 const SLOW_MS: f64 = 50.0;
 
-/// The fidelity tier the view draws `model` at, `height` drawing units tall, and the elements a
-/// search marks: the session's fixed tier, else Auto's for the zoom (the last one held until the
-/// zoom is past the margin). The session hears which tier was drawn: a click on a piece drawn
-/// only as part of its run picks the run. A model without tiers draws everything.
-fn fidelity(app: &mut CadApp, model: &Model3, height: f64) -> (Tier, Option<Force>) {
+/// The fidelity tier the view draws `model` at and the elements a search marks: the session's
+/// fixed tier (`view.fidelity`), else everything the active BIM view allows (Q6419: the view
+/// decides what is drawn, so zooming never adds detail; `_height` no longer picks a tier). The
+/// session hears which tier was drawn: a click on a piece drawn only as part of its run picks
+/// the run. A model without tiers draws everything.
+fn fidelity(app: &mut CadApp, model: &Model3, _height: f64) -> (Tier, Option<Force>) {
     if model.fid.is_none() {
         app.canvas.shade.stats.tier = None;
         app.canvas.shade.stats.auto = false;
@@ -437,19 +437,8 @@ fn fidelity(app: &mut CadApp, model: &Model3, height: f64) -> (Tier, Option<Forc
     }
     let Ok(st) = app.session.state() else { return (Tier::Detail, None) };
     let (mode, force) = (st.fidelity.mode, st.fidelity.force.clone());
-    let doc_key = (Arc::as_ptr(&st.doc) as usize, st.revision);
-    let (auto, upf) = match app.canvas.shade.auto_for {
-        Some((k, a, u)) if k == doc_key => (a, u),
-        _ => {
-            let a = cadaddy_engine::cmd::fidelity::Rules::of(&st.doc).0.auto.tiers();
-            let u = cadaddy_engine::cmd::fidelity::units_per_foot(&st.doc);
-            app.canvas.shade.auto_for = Some((doc_key, a, u));
-            (a, u)
-        }
-    };
-    let tier = mode.unwrap_or_else(|| auto.tier(height / upf.max(1e-9), app.canvas.shade.auto_tier));
+    let tier = mode.unwrap_or(Tier::Detail);
     let shade = &mut app.canvas.shade;
-    shade.auto_tier = Some(tier);
     shade.stats.tier = Some(tier.name());
     shade.stats.auto = mode.is_none();
     if let Ok(st) = app.session.state_mut()
@@ -478,46 +467,158 @@ fn draw_markers(painter: &egui::Painter, xf: &Xf, model: &Model3, markers: &[u32
     }
 }
 
-/// A tier's name in the view's menu.
-fn tier_label(t: Tier) -> &'static str {
-    match t {
-        Tier::Building => crate::i18n::t("Building"),
-        Tier::Floor => crate::i18n::t("Floor"),
-        Tier::Room => crate::i18n::t("Room"),
-        Tier::Detail => crate::i18n::t("Detail"),
+/// The BIM view's state (`bim.view`), read once per state of the drawing.
+fn view_state(app: &mut CadApp) -> Option<serde_json::Value> {
+    let st = app.session.state().ok()?;
+    let key = (Arc::as_ptr(&st.doc) as usize, st.revision);
+    if let Some((k, v)) = &app.canvas.shade.view_for
+        && *k == key
+    {
+        return Some(v.clone());
+    }
+    let v = app.session.execute("bim.view", &serde_json::json!({})).ok()?;
+    app.canvas.shade.view_for = Some((key, v.clone()));
+    Some(v)
+}
+
+/// The BIM view's state when the 3D view shows the built model in it (the BIM view on, and a
+/// model built).
+fn bim_view_on(app: &mut CadApp) -> Option<serde_json::Value> {
+    let on = app.session.state().ok().is_some_and(|st| !cadaddy_engine::cmd::bimlook::Look::of(&st.doc).off);
+    view_state(app).filter(|v| on && v.get("total").and_then(serde_json::Value::as_u64).unwrap_or(0) > 0)
+}
+
+/// A switch's name on the view's bar.
+fn switch_label(k: &str) -> &'static str {
+    match k {
+        "m" => "M",
+        "e" => "E",
+        "p" => "P",
+        "cabinets" => crate::i18n::t("Cabinets"),
+        _ => crate::i18n::t("Furniture"),
     }
 }
 
-/// The view's fidelity in its top left corner, Auto (and the tier it chose) or the fixed tier,
-/// with a menu to fix a tier or go back to Auto (`view.fidelity {level}`).
-fn fidelity_bar(app: &mut CadApp, ui: &egui::Ui, xf: &Xf, tier: Tier) {
-    let auto = app.canvas.shade.stats.auto;
-    let label = if auto {
-        format!("{}: {} · {}", crate::i18n::t("Fidelity"), crate::i18n::t("Auto"), tier_label(tier))
-    } else {
-        format!("{}: {}", crate::i18n::t("Fidelity"), tier_label(tier))
-    };
-    let mut pick: Option<Option<Tier>> = None;
-    egui::Area::new(ui.id().with("fidelity-bar")).order(egui::Order::Middle).fixed_pos(xf.rect.left_top() + egui::vec2(8.0, 8.0)).show(
+/// The BIM view's control in the view's top left corner (Q6419), always there: the four views
+/// (Architectural, MEP, Floor, Room; one at a time), Full MEP in the MEP view, the level and
+/// room pickers, the trade switches the view offers, the breadcrumb back up (Building ▸ level ▸
+/// room; Esc does the same), and what the view leaves out or follows.
+fn view_bar(app: &mut CadApp, ui: &egui::Ui, xf: &Xf) {
+    use cadaddy_engine::cmd::bimviews::View;
+    let Some(v) = view_state(app) else { return };
+    let view = v.get("view").and_then(serde_json::Value::as_str).and_then(View::parse).unwrap_or_default();
+    let text = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_string);
+    let (level, room) = (text("level"), text("room"));
+    let list = |k: &str| v.get(k).and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+    let mut run: Option<serde_json::Value> = None;
+    egui::Area::new(ui.id().with("bim-view-bar")).order(egui::Order::Middle).fixed_pos(xf.rect.left_top() + egui::vec2(8.0, 8.0)).show(
         ui.ctx(),
         |ui| {
-            egui::ComboBox::from_id_salt("fidelity-level").selected_text(label).show_ui(ui, |ui| {
-                if ui.selectable_label(auto, crate::i18n::t("Auto")).clicked() {
-                    pick = Some(None);
-                }
-                for t in Tier::ALL {
-                    if ui.selectable_label(!auto && t == tier, tier_label(t)).clicked() {
-                        pick = Some(Some(t));
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for w in View::ALL {
+                        if ui.selectable_label(w == view, crate::i18n::t(w.label())).clicked() && w != view {
+                            run = Some(serde_json::json!({ "view": w.name() }));
+                        }
                     }
+                    if view == View::Mep {
+                        ui.separator();
+                        let mut full = v.get("full").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                        if ui.checkbox(&mut full, crate::i18n::t("Full MEP")).changed() {
+                            run = Some(serde_json::json!({ "full": full }));
+                        }
+                    }
+                    let offered = list("offered");
+                    if !offered.is_empty() {
+                        ui.separator();
+                    }
+                    for k in offered.iter().filter_map(serde_json::Value::as_str) {
+                        let on = v.get("switches").and_then(|s| s.get(k)).and_then(serde_json::Value::as_bool).unwrap_or(true);
+                        if ui.selectable_label(on, switch_label(k)).clicked() {
+                            run = Some(serde_json::json!({ "switches": { k: !on } }));
+                        }
+                    }
+                });
+                // Where the view is: Building ▸ level ▸ room, each a step back up.
+                ui.horizontal(|ui| {
+                    if ui.link(crate::i18n::t("Building")).clicked() && view.per_level() {
+                        run = Some(serde_json::json!({ "level": null }));
+                    }
+                    if view.per_level() {
+                        ui.label("›");
+                        let levels = list("levels");
+                        let shown = level.clone().unwrap_or_default();
+                        egui::ComboBox::from_id_salt("bim-view-level").selected_text(shown.clone()).show_ui(ui, |ui| {
+                            for l in levels.iter().filter_map(serde_json::Value::as_str) {
+                                if ui.selectable_label(l == shown, l).clicked() && l != shown {
+                                    run = Some(serde_json::json!({ "level": l }));
+                                }
+                            }
+                        });
+                        let rooms = list("rooms");
+                        ui.label("›");
+                        let pick = room.clone().unwrap_or_else(|| crate::i18n::t("Room").to_string());
+                        egui::ComboBox::from_id_salt("bim-view-room").selected_text(pick).show_ui(ui, |ui| {
+                            for r in &rooms {
+                                let n = r.get("number").and_then(serde_json::Value::as_str).unwrap_or_default();
+                                let name = r.get("name").and_then(serde_json::Value::as_str).unwrap_or_default();
+                                let label = if name.is_empty() || name == n { n.to_string() } else { format!("{n} {name}") };
+                                if ui.selectable_label(room.as_deref() == Some(n), label).clicked() {
+                                    run = Some(serde_json::json!({ "room": n }));
+                                }
+                            }
+                        });
+                    }
+                });
+                if let Some(f) = v.get("follow") {
+                    ui.horizontal(|ui| {
+                        let n = f.get("elements").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                        ui.label(format!("{}: {n}", crate::i18n::t("Following the system")));
+                        if ui.button(crate::i18n::t("Stop following")).clicked() {
+                            run = Some(serde_json::json!({ "follow": null }));
+                        }
+                    });
+                } else if let Some(h) = app.session.selection().first().copied().filter(|_| app.session.selection().len() == 1)
+                    && ui.button(crate::i18n::t("Follow System")).clicked()
+                {
+                    run = Some(serde_json::json!({ "follow": h.hex() }));
+                }
+                let left = v.get("left_out").cloned().unwrap_or_default();
+                let n = |k: &str| left.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+                if view == View::Mep && n("pipe_unknown_size") > 0 {
+                    ui.label(egui::RichText::new(format!("{}: {}", crate::i18n::t("Pipes with no size, not drawn"), n("pipe_unknown_size"))).small());
                 }
             });
         },
     );
-    if let Some(p) = pick
-        && let Err(e) = app.run("view.fidelity", serde_json::json!({ "level": p.map_or("auto", Tier::name) }))
+    if let Some(p) = run
+        && let Err(e) = app.run("bim.view", p)
     {
-        app.set_status(format!("{}: {e}", crate::i18n::t("Fidelity")));
+        app.set_status(format!("{}: {e}", crate::i18n::t("BIM View")));
     }
+}
+
+/// Esc in the 3D BIM view with nothing to cancel and nothing selected: one view up (Room to
+/// Floor to the whole building). Whether it went up.
+pub fn escape_up(app: &mut CadApp) -> bool {
+    if active(app).is_none() || app.session.running.is_some() {
+        return false;
+    }
+    let Some(v) = bim_view_on(app) else { return false };
+    let per_level =
+        v.get("view").and_then(serde_json::Value::as_str).and_then(cadaddy_engine::cmd::bimviews::View::parse).is_some_and(|w| w.per_level());
+    per_level && app.run("bim.view", serde_json::json!({ "up": true })).is_ok()
+}
+
+/// A double-click on an element in the 3D BIM view: the next view down at it (its level, then
+/// its room).
+pub fn enter_at_selection(app: &mut CadApp) {
+    if active(app).is_none() || bim_view_on(app).is_none() {
+        return;
+    }
+    let sel = app.session.selection();
+    let [h] = sel.as_slice() else { return };
+    let _ = app.run("bim.view", serde_json::json!({ "enter": h.hex() }));
 }
 
 /// The model of `doc`: with fidelity tiers when it is the built model (the BIM view's drawing).
@@ -2399,6 +2500,103 @@ mod tests {
         g.render(device, queue, &view, VisualStyle::Shaded, bg, Tier::Building, None, &stream);
         let again = read_frame(&g, device, queue, w, h);
         assert_eq!(at(&again, dev), at(&far, dev), "back to the building tier's picture");
+    }
+
+    /// Each BIM view (Q6419) on a large made-up building, on this machine's wgpu (a benchmark,
+    /// run by hand): `CADADDY_VIEWS_BENCH=levels,rooms cargo test -p cadaddy-ui-egui --release
+    /// --lib bim_views_bench -- --ignored --nocapture`. Per view: the built elements drawn, the
+    /// model's build, upload and frame times, the GPU buffers' and the model's memory.
+    #[test]
+    #[ignore = "a benchmark: set CADADDY_VIEWS_BENCH to levels,rooms"]
+    fn bim_views_bench() {
+        use super::*;
+        use cadaddy_engine::cmd::{bimlook, bimviews};
+        let Ok(size) = std::env::var("CADADDY_VIEWS_BENCH") else { return };
+        let mut n = size.split(',').filter_map(|x| x.trim().parse::<usize>().ok());
+        let (levels, rooms) = (n.next().unwrap_or(12), n.next().unwrap_or(80));
+        let (w, h) = (1600u32, 1000u32);
+        let t0 = web_time::Instant::now();
+        let doc = cadaddy_engine::sample::bim_building(levels, rooms);
+        let made_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let total = doc.model.iter().filter(|e| bimlook::classify(&doc, e).is_some()).count();
+        let bg = Rgb(255, 255, 255);
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let (device, queue) = (&rs.device, &rs.queue);
+        let info = rs.adapter.get_info();
+        let wait = || {
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(120)) }).unwrap();
+        };
+        let proj = cadaddy_geom::view3::Projection::new(Vec3::new(-1.0, -1.0, 1.0));
+        let style = VisualStyle::ShadedEdges;
+        let mut out = serde_json::Map::new();
+        let base = bimlook::Look::of(&doc);
+        for (name, view, full) in [
+            ("before_everything", bimviews::View::Mep, false),
+            ("architectural", bimviews::View::Architectural, false),
+            ("mep", bimviews::View::Mep, false),
+            ("mep_full", bimviews::View::Mep, true),
+            ("floor", bimviews::View::Floor, false),
+            ("room", bimviews::View::Room, false),
+        ] {
+            let mut look = base.clone();
+            bimviews::set_view(&mut look, view);
+            look.full_mep = full;
+            if view.per_level() {
+                look.level = Some(format!("L{}", levels.div_ceil(2)));
+            }
+            if view == bimviews::View::Room {
+                look.room = Some(format!("{}02", levels.div_ceil(2)));
+            }
+            let t1 = web_time::Instant::now();
+            // Before (next as it was): every built element, the shell ghosted.
+            let before = name == "before_everything";
+            let drawn = if before { total } else { bimviews::drawn_set(&doc, &look).0.len() };
+            let md = Arc::new(if before {
+                bimlook::compose(&doc, &base, bimlook::ghosting(&doc, &base), true, &|_, _| true)
+            } else {
+                bimlook::display_of(&doc, &look).unwrap()
+            });
+            let compose_ms = t1.elapsed().as_secs_f64() * 1000.0;
+            let ext = md.extents(&cadaddy_doc::Space::Model);
+            let tol = ext.width().max(ext.height()) / 1500.0;
+            let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
+            let t2 = web_time::Instant::now();
+            let model = Arc::new(build3(&md, true, tol, bg, &p, &t, &[]));
+            let build_ms = t2.elapsed().as_secs_f64() * 1000.0;
+            let whole = shade::fit_bounds(&model.bounds, proj, w, h).unwrap();
+            let tier = Tier::Detail;
+            let mut g = Gpu::new(device, 4);
+            let mut stream = Stream::default();
+            let t3 = web_time::Instant::now();
+            stream.update(&model, &whole, tier, f64::INFINITY);
+            g.upload(device, queue, &model, style, bg);
+            g.load_tiers(device, &model, tier);
+            g.upload_stream(device, &stream, style, bg);
+            let vis = g.render(device, queue, &whole, style, bg, tier, None, &stream);
+            wait();
+            let first_ms = t3.elapsed().as_secs_f64() * 1000.0;
+            let frames = 5;
+            let t4 = web_time::Instant::now();
+            for _ in 0..frames {
+                g.render(device, queue, &whole, style, bg, tier, None, &stream);
+                wait();
+            }
+            let frame_ms = t4.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+            out.insert(
+                name.into(),
+                serde_json::json!({
+                    "drawn": drawn, "compose_ms": compose_ms.round(), "build_ms": build_ms.round(),
+                    "upload_and_first_frame_ms": first_ms.round(), "frame_ms": (frame_ms * 10.0).round() / 10.0,
+                    "tris_drawn": vis.tris + stream.tris(),
+                    "gpu_buffers_mb": ((g.bytes + g.tier_bytes.iter().sum::<usize>() + g.stream_bytes) as f64 / 1048576.0 * 10.0).round() / 10.0,
+                    "model_mb": ((model.bytes() + stream.bytes) as f64 / 1048576.0 * 10.0).round() / 10.0,
+                }),
+            );
+        }
+        println!(
+            "VIEWS_BENCH {}",
+            serde_json::json!({"adapter": format!("{} ({:?})", info.name, info.device_type), "levels": levels, "rooms": rooms, "built_elements": total, "made_ms": made_ms.round(), "views": out})
+        );
     }
 
     /// The hotel-scale numbers on this machine's wgpu (a benchmark, run by hand):

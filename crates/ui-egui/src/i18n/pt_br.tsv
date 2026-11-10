@@ -3458,3 +3458,14 @@
 	Frame rate to hold while moving	Taxa de quadros a manter ao mover
 	Lower the resolution while panning and zooming when the graphics are slow	Reduzir a resolução ao mover e ampliar quando os gráficos estiverem lentos
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	O desenho fica nítido assim que a vista para. Plotagens, exportações e capturas de tela são sempre em resolução total.
+# BIM views (Q6419).
+	MEP	MEP
+	Full MEP	MEP completo
+	Cabinets	Armários
+	Following the system	Seguindo o sistema
+	Stop following	Parar de seguir
+	Follow System	Seguir o sistema
+	Pipes with no size, not drawn	Tubos sem bitola, não desenhados
+	BIM Views	Vistas BIM
+	BIM View Rules	Regras das vistas BIM
+	BIM View Report	Relatório das vistas BIM

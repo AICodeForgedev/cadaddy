@@ -171,6 +171,13 @@ fn shown_rgb(d: &Drawing, e: &Entity) -> Option<[u8; 3]> {
     }
 }
 
+/// Every built element in the BIM view's look: no one view draws them all (Q6419), so the trade
+/// colours, ghosting and switches are checked on this.
+fn whole(d: &Drawing) -> Drawing {
+    let look = Look::of(d);
+    bimlook::compose(d, &look, bimlook::ghosting(d, &look), true, &|_, _| true)
+}
+
 fn ghosted(d: &Drawing, e: &Entity) -> bool {
     d.material_of(e, None).is_some_and(|m| m.name == GHOST_MATERIAL && m.opacity < 0.5)
 }
@@ -183,7 +190,10 @@ fn the_bim_view_draws_only_the_built_model_in_trade_colours() {
     assert!(sheet_lines > 20, "the sheet has its own linework: {sheet_lines}");
     let v = bimlook::display(&d).expect("a built model: the BIM view is on by default");
     assert!(v.model.iter().all(|e| made_as(e).is_some()), "no sheet linework (title block, plan lines) in 3D");
-    assert_eq!(v.model.len(), d.model.iter().filter(|e| made_as(e).is_some()).count(), "every built element");
+    let built = d.model.iter().filter(|e| made_as(e).is_some()).count();
+    assert!(!v.model.is_empty() && v.model.len() < built, "one view, never every built element (Q6419)");
+    let v = whole(&d);
+    assert_eq!(v.model.len(), built, "every built element in the look");
     // Every trade the building has, in its table colour; the shell ghosted (there is MEP).
     for key in [
         "architecture",
@@ -214,7 +224,7 @@ fn the_bim_view_draws_only_the_built_model_in_trade_colours() {
     // The sheet's lines on request; ghosting off; the view off.
     let r = s.execute("bim.look", &json!({"sheet": true, "ghost": false})).unwrap();
     assert_eq!((r["sheet"].clone(), r["ghost"].clone()), (json!(true), json!(false)), "{r}");
-    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    let v = whole(s.doc().unwrap());
     assert_eq!(v.model.len(), s.doc().unwrap().model.len());
     assert!(v.model.iter().all(|e| !ghosted(&v, e)));
     s.execute("bim.look", &json!({"on": false})).unwrap();
@@ -246,7 +256,7 @@ fn the_trade_table_is_one_editable_list() {
     assert_eq!(row(&r, "pipe_hot")["color"], json!([250, 0, 0]));
     assert_eq!(row(&r, "conduit")["color"], json!([0, 255, 127]));
     assert_eq!(row(&r, "fire")["visible"], json!(false));
-    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    let v = whole(s.doc().unwrap());
     assert!(of_trade(&v, "fire").is_empty(), "a hidden trade leaves the view");
     assert!(of_trade(&v, "pipe_hot").iter().all(|e| shown_rgb(&v, e) == Some([250, 0, 0])));
     assert!(!of_trade(s.doc().unwrap(), "fire").is_empty(), "…not the drawing");
@@ -323,13 +333,13 @@ fn the_model_tree_is_level_trade_category_type_element() {
     // Hide a branch: it leaves the view and shows unticked; show it again.
     let r = s.execute("bim.tree", &json!({"path": ["Level 2", "Mechanical"], "visible": false})).unwrap();
     assert_eq!(child(child(&r, "levels", "Level 2"), "trades", "Mechanical")["visible"], json!(false));
-    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    let v = whole(s.doc().unwrap());
     let hidden =
         |v: &Drawing| v.model.iter().filter(|e| bimlook::classify(v, e).is_some_and(|c| c.level == "Level 2" && c.group == "Mechanical")).count();
     assert_eq!(hidden(&v), 0);
     assert!(v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.level == "Level 1" && c.group == "Mechanical")));
     s.execute("bim.tree", &json!({"path": ["level 2"], "visible": true})).unwrap();
-    assert!(hidden(&bimlook::display(s.doc().unwrap()).unwrap()) > 0, "showing the level shows what is under it");
+    assert!(hidden(&whole(s.doc().unwrap())) > 0, "showing the level shows what is under it");
     // One call hides a trade on every level, and one shows it again.
     let r = s.execute("bim.tree", &json!({"group": "Mechanical", "visible": false})).unwrap();
     for lv in r["levels"].as_array().unwrap() {
@@ -337,12 +347,14 @@ fn the_model_tree_is_level_trade_category_type_element() {
             assert_eq!(t["visible"], json!(false), "{lv}");
         }
     }
-    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    let v = whole(s.doc().unwrap());
     assert!(!v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.group == "Mechanical")));
     assert!(v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.group == "Plumbing")));
     s.execute("bim.tree", &json!({"group": "mechanical", "visible": true})).unwrap();
-    assert!(hidden(&bimlook::display(s.doc().unwrap()).unwrap()) > 0, "showing the trade shows it on every level");
-    // Select and zoom: the branch's elements are selected.
+    assert!(hidden(&whole(s.doc().unwrap())) > 0, "showing the trade shows it on every level");
+    // Select and zoom: the branch's elements the view draws are selected (Level 1's Floor view
+    // draws all its pipe).
+    s.execute("bim.view", &json!({"level": "Level 1"})).unwrap();
     let r = s.execute("bim.tree", &json!({"path": ["Level 1", "Plumbing", "Pipe"], "select": true, "zoom": true})).unwrap();
     let n = r["selected"].as_u64().unwrap() as usize;
     assert!(n >= 5, "cold, hot, sanitary, vent and gas (sprinkler pipe is fire protection): {n}");
@@ -377,6 +389,8 @@ fn a_hidden_level_leaves_nothing_of_it_drawn_or_selected() {
         let at = e.common.xdata.iter().position(|t| t.code == 1001 && t.value.eq_ignore_ascii_case(cadaddy_engine::cmd::wallgen::APP)).unwrap();
         e.common.xdata[at + 2].value = String::new();
     });
+    // The Architectural view draws something of every level (walls, the roof).
+    s.execute("bim.view", &json!({"view": "architectural"})).unwrap();
     let r = s.execute("bim.tree", &json!({})).unwrap();
     let levels: Vec<String> = r["levels"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap().to_string()).collect();
     assert!(levels.iter().any(|l| l == bimlook::NO_LEVEL), "{levels:?}");
@@ -406,7 +420,9 @@ fn a_hidden_level_leaves_nothing_of_it_drawn_or_selected() {
         let d = s.doc().unwrap();
         assert!(bimlook::display(d).unwrap().model.iter().any(|e| of(d, e)), "{lv} shows again");
     }
-    // A trade switched off in the colour table drops its selected elements, and only those.
+    // A trade switched off in the colour table drops its selected elements, and only those (in
+    // Level 2's Floor view: its walls and its MEP).
+    s.execute("bim.view", &json!({"level": "Level 2"})).unwrap();
     let r = s.execute("bim.tree", &json!({"path": ["Level 2"], "select": true})).unwrap();
     let n = r["selected"].as_u64().unwrap() as usize;
     let r = s.execute("bim.trades", &json!({"visible": {"duct_supply": false}})).unwrap();
@@ -675,7 +691,8 @@ fn a_60k_element_model_composes_quickly() {
     let t = std::time::Instant::now();
     let v = bimlook::display(&d).unwrap();
     let took = t.elapsed();
-    assert!(v.model.len() >= 60_000);
+    assert!(!v.model.is_empty() && v.model.len() < 60_000, "the opening view, not all of it: {}", v.model.len());
+    assert!(whole(&d).model.len() >= 60_000);
     assert!(took.as_millis() < 3_000, "the BIM view of 60k elements in {took:?}");
     let t = std::time::Instant::now();
     let r = s.execute("bim.tree", &json!({"limit": 5})).unwrap();

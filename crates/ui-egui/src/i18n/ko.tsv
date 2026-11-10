@@ -3449,3 +3449,14 @@ menu	Modify	수정
 	Frame rate to hold while moving	이동 중 유지할 프레임 속도
 	Lower the resolution while panning and zooming when the graphics are slow	그래픽이 느릴 때 이동 및 확대/축소 중 해상도 낮추기
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	보기가 멈추면 바로 도면이 선명해집니다. 플롯, 내보내기, 스크린샷은 항상 전체 해상도입니다.
+# BIM views (Q6419).
+	MEP	MEP
+	Full MEP	전체 MEP
+	Cabinets	캐비닛
+	Following the system	시스템 따라가기
+	Stop following	따라가기 중지
+	Follow System	시스템 따라가기
+	Pipes with no size, not drawn	크기 없는 배관, 그리지 않음
+	BIM Views	BIM 보기
+	BIM View Rules	BIM 보기 규칙
+	BIM View Report	BIM 보기 보고서

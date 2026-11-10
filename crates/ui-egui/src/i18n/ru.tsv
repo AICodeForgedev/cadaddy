@@ -3239,3 +3239,14 @@
 	Frame rate to hold while moving	Частота кадров при движении
 	Lower the resolution while panning and zooming when the graphics are slow	Снижать разрешение при панорамировании и масштабировании, если графика медленная
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Чертёж становится чётким, как только вид останавливается. Печать, экспорт и снимки экрана всегда в полном разрешении.
+# BIM views (Q6419).
+	MEP	Инженерные системы
+	Full MEP	Все инженерные системы
+	Cabinets	Шкафы
+	Following the system	Отслеживание системы
+	Stop following	Прекратить отслеживание
+	Follow System	Отследить систему
+	Pipes with no size, not drawn	Трубы без размера, не показаны
+	BIM Views	Виды BIM
+	BIM View Rules	Правила видов BIM
+	BIM View Report	Отчёт о видах BIM

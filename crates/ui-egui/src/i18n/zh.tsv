@@ -3524,3 +3524,14 @@
 	Frame rate to hold while moving	移动时保持的帧率
 	Lower the resolution while panning and zooming when the graphics are slow	图形较慢时，平移和缩放期间降低分辨率
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	视图一停止，图形即变清晰。打印、导出和屏幕截图始终为全分辨率。
+# BIM views (Q6419).
+	MEP	机电
+	Full MEP	完整机电
+	Cabinets	橱柜
+	Following the system	正在跟随系统
+	Stop following	停止跟随
+	Follow System	跟随系统
+	Pipes with no size, not drawn	无尺寸的管道，未绘制
+	BIM Views	BIM 视图
+	BIM View Rules	BIM 视图规则
+	BIM View Report	BIM 视图报告

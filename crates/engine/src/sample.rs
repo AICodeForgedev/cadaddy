@@ -6,6 +6,9 @@ use cadaddy_geom::{PolyVertex, Vec2, Vec3, arc_to_bulge};
 
 use crate::cmd::helpers::{arc, circle, line, lwpoly, rect_vertices, v3};
 
+mod bim;
+pub use bim::bim_building;
+
 fn layer(name: &str, color: u8, lt: &str, lw: u16) -> Layer {
     Layer { name: name.into(), color: Color::Index(color), linetype: lt.into(), lineweight: Lineweight::Mm100(lw), ..Layer::default() }
 }

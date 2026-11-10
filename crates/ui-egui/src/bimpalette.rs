@@ -150,10 +150,17 @@ fn branch_header(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, path: &[&s
     }
     let text = RichText::new(format!("{name}  ({count})"));
     let text = if strong { text.strong() } else { text };
-    if ui.selectable_label(false, text).clicked()
-        && let Err(e) = app.session.execute("bim.tree", &json!({ "path": path, "select": true, "zoom": true }))
-    {
-        app.set_status(e.to_string());
+    if ui.selectable_label(false, text).clicked() {
+        // A level picked in the tree is its Floor view (Q6419); then its elements are selected.
+        if let [level] = path
+            && *level != cadaddy_engine::cmd::bimlook::NO_LEVEL
+            && let Err(e) = app.run("bim.view", json!({ "level": level }))
+        {
+            app.set_status(e);
+        }
+        if let Err(e) = app.session.execute("bim.tree", &json!({ "path": path, "select": true, "zoom": true })) {
+            app.set_status(e.to_string());
+        }
     }
 }
 
@@ -186,6 +193,20 @@ fn branch(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, path: &[String], 
                     if ui.selectable_label(false, name).clicked() {
                         // A hidden element isn't selected: its grips would stand alone in the view.
                         let hh = cadaddy_doc::Handle::parse_hex(h);
+                        // A room picked in the tree is its Room view (Q6419): from the whole
+                        // building, its level's first.
+                        let is_room = hh.is_some_and(|hh| {
+                            app.session.doc().ok().and_then(|d| d.model.get(hh)).and_then(|e| cadaddy_engine::cmd::wallgen::made_as(e)).as_deref()
+                                == Some("room")
+                        });
+                        if is_room {
+                            for _ in 0..2 {
+                                let r = app.run("bim.view", json!({ "enter": h }));
+                                if r.as_ref().is_ok_and(|v| v.get("view").and_then(Value::as_str) == Some("room")) || r.is_err() {
+                                    break;
+                                }
+                            }
+                        }
                         let drawn = |s: &cadaddy_engine::Session| {
                             let Ok(d) = s.doc() else { return true };
                             let look = cadaddy_engine::cmd::bimlook::Look::of(d);

@@ -3430,3 +3430,14 @@ menu	Modify	Modifikace
 	Frame rate to hold while moving	Snímková frekvence při pohybu
 	Lower the resolution while panning and zooming when the graphics are slow	Snížit rozlišení při posunu a zvětšování, když je grafika pomalá
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Výkres se zaostří, jakmile se pohled zastaví. Tisk, export a snímky obrazovky jsou vždy v plném rozlišení.
+# BIM views (Q6419).
+	MEP	TZB
+	Full MEP	Celé TZB
+	Cabinets	Skříňky
+	Following the system	Sledování soustavy
+	Stop following	Ukončit sledování
+	Follow System	Sledovat soustavu
+	Pipes with no size, not drawn	Potrubí bez dimenze, nezobrazeno
+	BIM Views	Pohledy BIM
+	BIM View Rules	Pravidla pohledů BIM
+	BIM View Report	Zpráva o pohledech BIM
