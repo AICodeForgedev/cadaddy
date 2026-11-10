@@ -320,8 +320,10 @@ pub(crate) fn derived_height(sp: &BuildingSpec, level: &str, rule: &Rule) -> Opt
 
 /// Set each room's ceiling height from its candidates by the rule: the first source in the
 /// rule's order that gives one; a room with none keeps a height its own record carries from the
-/// documents, else is derived (marked inferred). `ceiling_source` names the source.
-pub(crate) fn settle(sp: &mut BuildingSpec, cands: &[Candidate], rule: &Rule) -> Settled {
+/// documents, else is derived (marked inferred) on its level: its record's, else `levels`' (by
+/// room index: where the rooms stage found it), else the spec's one level. `ceiling_source`
+/// names the source.
+pub(crate) fn settle(sp: &mut BuildingSpec, cands: &[Candidate], rule: &Rule, levels: &[Option<String>]) -> Settled {
     let mut out = Settled::default();
     let mut by_room: BTreeMap<usize, Vec<&Candidate>> = BTreeMap::new();
     for c in cands.iter().take(MAX_CANDIDATES).filter(|c| c.ft.is_finite() && c.ft > 0.0) {
@@ -369,7 +371,7 @@ pub(crate) fn settle(sp: &mut BuildingSpec, cands: &[Candidate], rule: &Rule) ->
     let only = (sp.levels.len() == 1).then(|| sp.levels.first().map(|l| l.name.clone())).flatten();
     let label = rule.label(Src::Derived).to_string();
     for i in derive {
-        let Some(level) = sp.rooms.get(i).and_then(|r| r.level.clone()).or_else(|| only.clone()) else {
+        let Some(level) = sp.rooms.get(i).and_then(|r| r.level.clone()).or_else(|| levels.get(i).cloned().flatten()).or_else(|| only.clone()) else {
             out.unset += 1;
             continue;
         };
@@ -427,7 +429,7 @@ mod tests {
             cand(1, Src::UnitRcp, 8.5, "8'-6\" ceiling tag on A-5 UNIT RCP"),
             cand(1, Src::RoomRcp, 9.0, "9'-0\" ceiling tag on A-2 RCP"),
         ];
-        let s = settle(&mut sp, &c, &rule);
+        let s = settle(&mut sp, &c, &rule, &[]);
         assert_eq!(sp.rooms[0].ceiling_ft, Some(8.5));
         assert!(sp.rooms[0].ceiling_source.as_deref().is_some_and(|s| s.starts_with("unit RCP: ")), "{:?}", sp.rooms[0].ceiling_source);
         assert_eq!(sp.rooms[1].ceiling_ft, Some(9.0));
@@ -445,7 +447,7 @@ mod tests {
     fn a_room_no_source_gives_is_derived_and_marked_inferred() {
         let rule = Rule::load();
         let mut sp = spec();
-        let s = settle(&mut sp, &[], &rule);
+        let s = settle(&mut sp, &[], &rule, &[]);
         // 10' floor to floor less 14" joists, 1.5" deck and 1.5" membrane: 8'-5".
         let r = &sp.rooms[2];
         let ft = r.ceiling_ft.unwrap_or_default();
@@ -455,8 +457,25 @@ mod tests {
         assert!(src.contains("inferred") && src.contains("A-CEILING-HEIGHT") && src.contains("floor framing"), "{src}");
         assert_eq!(s.derived.len(), 3, "{:?}", s.derived);
         // Settled again: the derived rooms are derived again, not kept as documented.
-        let again = settle(&mut sp, &[], &rule);
+        let again = settle(&mut sp, &[], &rule, &[]);
         assert_eq!(again.derived.len(), 3);
+    }
+
+    #[test]
+    fn a_room_with_no_level_of_its_own_is_derived_on_the_level_given() {
+        let rule = Rule::load();
+        let mut sp = spec();
+        sp.rooms.push(cadaddy_walk3d::SpecRoom { name: "Hall".into(), ..Default::default() });
+        let i = sp.rooms.len() - 1;
+        // Two levels and none given: left at the level's ceiling.
+        let s = settle(&mut sp, &[], &rule, &[]);
+        assert_eq!(s.unset, 1);
+        assert_eq!(sp.rooms[i].ceiling_ft, None);
+        let mut levels = vec![None; sp.rooms.len()];
+        levels[i] = Some("L1".to_string());
+        let s = settle(&mut sp, &[], &rule, &levels);
+        assert_eq!(s.unset, 0);
+        assert!(sp.rooms[i].ceiling_source.as_deref().is_some_and(|x| x.starts_with("derived: ")));
     }
 
     #[test]
@@ -466,7 +485,7 @@ mod tests {
             r#"{"version":1,"units_per_foot":12,"levels":[{"name":"L1","elevation_ft":0,"height_ft":8.5,"ceiling_ft":7},{"name":"L2","elevation_ft":8.5,"height_ft":10}],"rooms":[{"name":"Hall","level":"L1"}]}"#,
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        settle(&mut sp, &[], &rule);
+        settle(&mut sp, &[], &rule, &[]);
         assert_eq!(sp.rooms[0].ceiling_ft, Some(7.5));
         assert!(sp.rooms[0].ceiling_source.as_deref().is_some_and(|s| s.contains("least ceiling height")));
     }

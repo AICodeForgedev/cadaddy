@@ -6229,13 +6229,17 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // unit RCP of its type, its ceiling type's legend, a section or elevation, only
                 // then derived (inferred, asked).
                 let rule = super::ceilheight::Rule::load();
-                let cands = room_ceiling_candidates(&sp, &areas, &typical, &measured, job);
-                let settled = super::ceilheight::settle(&mut sp, &cands, &rule);
+                let (cands, other_level) = room_ceiling_candidates(&sp, &areas, &typical, &measured, job);
+                let room_levels = spec_room_levels(&sp, job);
+                let settled = super::ceilheight::settle(&mut sp, &cands, &rule, &room_levels);
                 progress_line(&format!(
-                    "  room ceiling heights by rule {}: {:?}; {} where a lower source disagrees",
+                    "  room ceiling heights by rule {} ({} rooms): {:?}; {} left at the level's ceiling (no level); {} where a lower source disagrees; {} rooms of an RCP area's name on another level not given its height",
                     super::ceilheight::RULE,
+                    sp.rooms.len(),
                     settled.by_source,
-                    settled.disagree.len()
+                    settled.unset,
+                    settled.disagree.len(),
+                    other_level
                 ));
                 job.audit("ceiling_heights", "pipeline", None, Some(StageName::BimBuild), Some(settled.to_json()));
                 if !settled.derived.is_empty() {
@@ -11974,6 +11978,35 @@ const NOTE_CHAR_W: f64 = 0.8;
 /// Straight pieces of a sheet looked at for height notes' leaders, at most.
 const MAX_LEADER_PIECES: usize = 400_000;
 
+/// Each spec room's level (spec name) when its record names none: the level of the rooms stage's
+/// room of its number, else of its name when only one level has a room of that name.
+fn spec_room_levels(sp: &cadaddy_walk3d::BuildingSpec, job: &GuidedJob) -> Vec<Option<String>> {
+    let rooms = job_rooms(job);
+    let spec_level = |l: &str| sp.level(l).map(|x| x.name.clone());
+    sp.rooms
+        .iter()
+        .map(|r| {
+            if r.level.is_some() {
+                return None;
+            }
+            let by_number = r
+                .number
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .and_then(|n| rooms.iter().find(|(_, _, _, m)| m.trim().eq_ignore_ascii_case(n)).and_then(|(_, l, _, _)| spec_level(l)));
+            by_number.or_else(|| {
+                let named: BTreeSet<String> = rooms
+                    .iter()
+                    .filter(|(name, _, _, _)| name.trim().eq_ignore_ascii_case(r.name.trim()))
+                    .filter_map(|(_, l, _, _)| spec_level(l))
+                    .collect();
+                (named.len() == 1).then(|| named.into_iter().next()).flatten()
+            })
+        })
+        .collect()
+}
+
 /// Every source's ceiling height for each spec room (Q6512, [`super::ceilheight`]): its own area
 /// of the reflected ceiling plans (`room_rcp`), its area of its type's unit RCP (`unit_rcp`), its
 /// ceiling type's legend height (`legend`; the type its RCP area or finish schedule names) and
@@ -11985,18 +12018,24 @@ fn room_ceiling_candidates(
     typical: &[cadaddy_walk3d::CeilingArea],
     measured: &[(BTreeSet<String>, f64, String)],
     job: &GuidedJob,
-) -> Vec<super::ceilheight::Candidate> {
+) -> (Vec<super::ceilheight::Candidate>, usize) {
     use super::ceilheight::{Candidate, Src};
     let mut out = Vec::new();
-    let of_area = |a: &cadaddy_walk3d::CeilingArea| -> Vec<usize> {
+    let levels = spec_room_levels(sp, job);
+    let level_of = |i: usize, r: &cadaddy_walk3d::SpecRoom| r.level.clone().or_else(|| levels.get(i).cloned().flatten());
+    // Rooms of an area's label on another level (a corridor's name on every floor): not its.
+    let mut other_level = 0usize;
+    let mut of_area = |a: &cadaddy_walk3d::CeilingArea| -> Vec<usize> {
         let Some(label) = a.room.as_deref().map(str::trim).filter(|l| !l.is_empty()) else { return Vec::new() };
-        sp.rooms
+        let named: Vec<(usize, bool)> = sp
+            .rooms
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&a.level)))
             .filter(|(_, r)| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(label)) || r.name.trim().eq_ignore_ascii_case(label))
-            .map(|(i, _)| i)
-            .collect()
+            .map(|(i, r)| (i, level_of(i, r).is_none_or(|l| l.eq_ignore_ascii_case(&a.level))))
+            .collect();
+        other_level += named.iter().filter(|(_, same)| !same).count();
+        named.into_iter().filter(|(_, same)| *same).map(|(i, _)| i).collect()
     };
     // Each room's ceiling type: its RCP area's, else the one its finish schedule names.
     let mut types: BTreeMap<usize, String> = BTreeMap::new();
@@ -12049,7 +12088,7 @@ fn room_ceiling_candidates(
             }
         }
     }
-    out
+    (out, other_level)
 }
 
 /// The ceilings the typical rooms' reflected ceiling plans print ("UNIT RCP - SINGLE QUEEN": a
@@ -39155,7 +39194,9 @@ mod tests {
                     {"name":"Suite A","number":"R-12","level":"L1"},
                     {"name":"Store","number":"R-13","level":"L1"},
                     {"name":"Office","number":"R-14","level":"L1","materials":{"ceiling":"C2 GYP BD"}},
-                    {"name":"Lounge","number":"R-15","level":"L1","materials":{"ceiling":"C1"}}
+                    {"name":"Lounge","number":"R-15","level":"L1","materials":{"ceiling":"C1"}},
+                    {"name":"Corridor","level":"L2"},
+                    {"name":"Lobby","number":"R-16"}
                 ]}"#,
         )
         .unwrap_or_else(|e| panic!("{e}"));
@@ -39169,16 +39210,28 @@ mod tests {
             grid: None,
             guess: None,
         };
-        let overall = vec![area("R-11", 9.0, None, "9'-0\" ceiling tag on SAMPLE FLOOR RCP")];
+        let overall = vec![
+            area("R-11", 9.0, None, "9'-0\" ceiling tag on SAMPLE FLOOR RCP"),
+            area("Corridor", 8.0, None, "8'-0\" ceiling tag on SAMPLE FLOOR RCP"),
+        ];
         let typical = vec![
             area("R-11", 8.5, Some("C1"), "8'-6\" ceiling tag on Q-5 SUITE A RCP"),
             area("R-12", 8.5, Some("C1"), "8'-6\" ceiling tag on Q-5 SUITE A RCP"),
         ];
         let measured = vec![(type_words("Suite A", None), 8.5, "8'-6\" measured on Q-6 SUITE A SECTION".to_string())];
-        let job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
-        let cands = room_ceiling_candidates(&sp, &overall, &typical, &measured, &job);
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        // R-16's spec record names no level: the rooms stage found it on L1.
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result =
+                Some(json!({"rooms": [{"name": "Lobby", "number": "R-16", "level": "L1", "outline": [[0, 0], [100, 0], [100, 100], [0, 100]]}]}));
+        }
+        assert_eq!(spec_room_levels(&sp, &job).last().cloned().flatten().as_deref(), Some("L1"));
+        let (cands, other_level) = room_ceiling_candidates(&sp, &overall, &typical, &measured, &job);
+        // The corridor on L2 is not the L1 RCP's corridor.
+        assert_eq!(other_level, 1);
         let rule = crate::cmd::ceilheight::Rule::load();
-        let settled = crate::cmd::ceilheight::settle(&mut sp, &cands, &rule);
+        let room_levels = spec_room_levels(&sp, &job);
+        let settled = crate::cmd::ceilheight::settle(&mut sp, &cands, &rule, &room_levels);
         let get = |n: &str| {
             let r = sp.rooms.iter().find(|r| r.number.as_deref() == Some(n)).unwrap_or_else(|| panic!("{n}"));
             (r.ceiling_ft.unwrap_or_default(), r.ceiling_source.clone().unwrap_or_default())
@@ -39198,13 +39251,19 @@ mod tests {
             assert!((h - 8.0).abs() < 1e-9, "{n} {h}");
             assert!(src.starts_with("derived: ") && src.contains("inferred") && src.contains("A-CEILING-HEIGHT"), "{src}");
         }
-        assert_eq!(settled.derived.len(), 2);
+        // L2's corridor: under the roof (no level over it: the usual assembly), not L1's 8'-0" tag.
+        let corridor = sp.rooms.iter().find(|r| r.name == "Corridor").and_then(|r| r.ceiling_source.clone()).unwrap_or_default();
+        assert!(corridor.starts_with("derived: "), "{corridor}");
+        let lobby = sp.rooms.iter().find(|r| r.name == "Lobby").map(|r| (r.ceiling_ft, r.ceiling_source.clone().unwrap_or_default()));
+        assert!(lobby.as_ref().is_some_and(|(h, src)| *h == Some(8.0) && src.starts_with("derived: ")), "{lobby:?}");
+        assert_eq!(settled.derived.len(), 4);
+        assert_eq!(settled.unset, 0);
         // R-11's unit RCP and section disagree with its own tag: reported beside it.
         assert!(settled.disagree.iter().all(|d| d.0 == "R-11") && settled.disagree.len() == 2, "{:?}", settled.disagree);
         let j = settled.to_json();
         assert_eq!(j["by_source"]["room_rcp"], json!(1));
         assert_eq!(j["by_source"]["unit_rcp"], json!(1));
         assert_eq!(j["by_source"]["legend"], json!(1));
-        assert_eq!(j["by_source"]["derived"], json!(2));
+        assert_eq!(j["by_source"]["derived"], json!(4));
     }
 }
