@@ -16054,6 +16054,17 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     sp.mep.equipment.retain(|e| !super::utilityxfmr::is_site(e));
     sp.concrete.pads.retain(|p| !old_site.contains(&p.equipment.trim().to_ascii_uppercase()));
     let service = utility_service(&mut sp, pages, &types);
+    // The utility's service conductors land on the first piece of the service the one-line
+    // draws (a CT cabinet, a meter ahead of the service gear), not past it to the gear (Q6359):
+    // from there the one-line's own pieces carry the line on.
+    if let Some(f) = service.as_ref().ok().and_then(|p| p.feeder.as_ref())
+        && let Some((piece, _)) = oneline.entries.iter().find(|(_, t)| t.eq_ignore_ascii_case(&f.tag))
+        && let Some(x) = sp.mep.feeders.iter_mut().rev().find(|x| x.tag == f.tag && x.from == f.from && x.to == f.to)
+    {
+        x.source = format!("{}; lands on {piece}, the first piece of the service the one-line draws (it carries the line on to {})", x.source, x.to);
+        x.to = piece.clone();
+        x.to_point = "line".into();
+    }
     let site_tags: BTreeSet<String> =
         sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
     new_tags.extend(site_tags.iter().cloned());

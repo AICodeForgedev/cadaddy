@@ -600,7 +600,8 @@ pub(crate) struct Node {
 
 /// The one-line's connections between `nodes`: each node's incoming tag (a feeder tag in `types`
 /// or an unsized one in `no_size`, just above it) and the node above that tag that feeds it;
-/// a node right under another with no tag between is bolted to it.
+/// a node right under another with no tag between is bolted to it. A tag with no node above it
+/// is the line coming onto the one-line: its link has no `from` (the service's entry).
 pub(crate) fn links(texts: &[TextItem], nodes: &[Node], types: &[String], no_size: &[String]) -> Vec<Link> {
     let r = rules();
     let texts = texts.get(..texts.len().min(MAX_TEXTS)).unwrap_or(texts);
@@ -639,10 +640,15 @@ pub(crate) fn links(texts: &[TextItem], nodes: &[Node], types: &[String], no_siz
                     && (o.at.x - n.at.x).abs() < r.source_side_h.max(1.0) * h
             })
             .min_by(|a, b| (a.at.y - from_y).total_cmp(&(b.at.y - from_y)));
-        let Some(f) = feeder else { continue };
         let tag = incoming.map(|t| t.value.trim().to_string());
         let unsized_tag = tag.as_deref().is_some_and(|v| is(v, no_size));
-        out.push(Link { from: f.tag.clone(), to: n.tag.clone(), tag, no_size: unsized_tag });
+        // A tag with nothing above it on the one-line: fed from off it (the utility's service).
+        let from = match (feeder, &tag) {
+            (Some(f), _) => f.tag.clone(),
+            (None, Some(_)) => String::new(),
+            (None, None) => continue,
+        };
+        out.push(Link { from, to: n.tag.clone(), tag, no_size: unsized_tag });
     }
     out
 }
@@ -653,7 +659,7 @@ pub(crate) fn links(texts: &[TextItem], nodes: &[Node], types: &[String], no_siz
 pub(crate) fn feeders(links: &[Link], types: &[FeederType], fed: &BTreeSet<String>, single_phase: &dyn Fn(&str) -> bool, sheet: &str) -> Vec<Feeder> {
     let mut out = Vec::new();
     for l in links {
-        if fed.contains(&l.to.to_ascii_uppercase()) || l.no_size {
+        if fed.contains(&l.to.to_ascii_uppercase()) || l.no_size || l.from.is_empty() {
             continue;
         }
         let Some(ft) = l.tag.as_deref().and_then(|k| types.iter().find(|t| t.tag.eq_ignore_ascii_case(k))) else { continue };
@@ -736,8 +742,10 @@ pub(crate) fn makeup(f: &Feeder, method: &str) -> String {
 /// A panel's amp rating from its schedule's header (`bus amps`, `rating`, else its main).
 pub(crate) fn panel_amps(p: &PanelSchedule) -> Option<f64> {
     let num = |v: &str| first_number(v, 15.0, 10_000.0);
-    let by = |keys: &[&str]| p.header.iter().filter(|(k, _)| keys.iter().any(|w| k.contains(w))).find_map(|(_, v)| num(v));
-    by(&["bus", "amp", "rating"]).or_else(|| by(&["main", "mcb", "mlo"]))
+    // An interrupting or fault rating (`AIC RATING 65,000A`) is no ampere rating of the bus.
+    let fault = |k: &str| ["aic", "afc", "interrupt", "sccr", "fault", "short", "withstand", "nema"].iter().any(|w| k.contains(w));
+    let by = |keys: &[&str]| p.header.iter().filter(|(k, _)| !fault(k) && keys.iter().any(|w| k.contains(w))).find_map(|(_, v)| num(v));
+    by(&["bus"]).or_else(|| by(&["main", "mcb", "mlo"])).or_else(|| by(&["amp", "rating"]))
 }
 
 /// How many circuit spaces a panel's schedule uses (its highest pole).
@@ -1068,6 +1076,9 @@ pub(crate) struct Outcome {
     pub no_size: Vec<(String, String, String)>,
     /// Of `no_size`, the ones built by code for their gear's rating: from, to, tag, makeup.
     pub code_sized: Vec<(String, String, String, String)>,
+    /// The pieces the line comes onto the one-line at (fed from off it, the utility's service),
+    /// with that line's tag.
+    pub entries: Vec<(String, String)>,
     pub review: Vec<String>,
     pub by_kind: BTreeMap<String, usize>,
     /// Labels naming gear that is on no line of the one-line (a legend's row): not built.
@@ -1285,6 +1296,14 @@ pub(crate) fn build_into(sp: &mut BuildingSpec, pages: &[(String, cadaddy_doc::D
     let fed: BTreeSet<String> = sp.mep.feeders.iter().map(|f| f.to.to_ascii_uppercase()).collect();
     let labelled: BTreeSet<String> = tags.iter().flatten().map(|t| t.to_ascii_uppercase()).collect();
     for l in &resolved {
+        if l.from.is_empty() {
+            if let (Some(t), false) = (&l.tag, l.no_size)
+                && labelled.contains(&l.to.to_ascii_uppercase())
+            {
+                out.entries.push((l.to.clone(), t.clone()));
+            }
+            continue;
+        }
         let ours = labelled.contains(&l.from.to_ascii_uppercase()) || labelled.contains(&l.to.to_ascii_uppercase());
         if !ours || fed.contains(&l.to.to_ascii_uppercase()) {
             continue;
@@ -1453,6 +1472,8 @@ mod tests {
         assert_eq!(
             l,
             vec![
+                // The meter's FDR-A has nothing above it: the line coming onto the one-line.
+                Link { from: String::new(), to: "MTR-1".into(), tag: Some("FDR-A".into()), no_size: false },
                 Link { from: "MTR-1".into(), to: "DISC-1".into(), tag: Some("FDR-A".into()), no_size: false },
                 Link { from: "DISC-1".into(), to: "PX".into(), tag: Some("XX".into()), no_size: true },
             ]
@@ -1503,7 +1524,10 @@ mod tests {
         assert!(g.source.starts_with("inferred") && g.source.contains("225 A, 42 circuits"), "{}", g.source);
         // Its main when no bus rating is printed; no rating at all: the rules' default, said.
         let mut q = PanelSchedule { panel: "Q".into(), circuits: vec![row("1", 1)], ..PanelSchedule::default() };
+        q.header.insert("aic rating".into(), "65,000A FULLY RATED".into());
         q.header.insert("mains".into(), "100A MCB".into());
+        // Its interrupting rating (`AIC RATING 65,000A`) is no ampere rating of its bus.
+        assert_eq!(panel_amps(&q), Some(100.0));
         assert_eq!(panel_box(&q).map(|g| g.size_in), Some([30.0, 20.0, 5.75]));
         q.header.clear();
         assert!(panel_box(&q).is_some_and(|g| g.source.contains("rating not printed")));
@@ -1693,10 +1717,13 @@ mod tests {
             assert_eq!(e.properties.get("RATING").map(String::as_str), Some("1600 A"), "{e:#?}");
             assert!(e.sources.get("rating").is_some_and(|r| r.starts_with("derived") && r.contains("SWX")), "{e:#?}");
         }
-        // The meter feeds the switchboard by its tag; the CT enclosure's tag above it isn't the
-        // meter's.
+        // The line comes onto the one-line at the CT enclosure (SV9 with nothing above it: the
+        // utility's); the pieces bolted under it carry it on, and the meter feeds the switchboard
+        // by its own tag (the CT enclosure's tag above isn't the meter's).
+        assert_eq!(o.entries, [("CTC-1".to_string(), "SV9".to_string())], "{o:#?}");
         let f: Vec<(&str, &str, &str)> = sp.mep.feeders.iter().map(|f| (f.tag.as_str(), f.from.as_str(), f.to.as_str())).collect();
-        assert_eq!(f, [("SV9", "MTR-1", "SWX")], "{:#?}", sp.mep.feeders);
+        assert_eq!(f, [("SV9", "CTC-1", "DISC-1"), ("SV9", "DISC-1", "MTR-1"), ("SV9", "MTR-1", "SWX")], "{:#?}", sp.mep.feeders);
+        assert!(o.no_size.is_empty() && o.continued == 2, "{o:#?}");
         // A stack of the same words with nothing on their line (a legend) is not built.
         let legend: Vec<TextItem> = v.iter().filter(|x| !matches!(x.value.as_str(), "SV9" | "SWX")).cloned().collect();
         // The sheet's grounding detail: its electrodes print no conductor, yet they are the
