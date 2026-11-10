@@ -302,7 +302,9 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
         }
         let mine = on(layer);
         let segs = segments(&mine);
-        let found = pairs(d, &segs, &lim);
+        let mut found = pairs(d, &segs, &lim);
+        // A stair's tread lines pair up like wall faces: a layer of treads is no wall layer (Q6429).
+        super::wallgen::drop_stair_treads(&segs, &mut found, k);
         let by_name = role_by_name(layer);
         // Else what it holds: wall face pairs, door swings, room names. Not on a layer that is
         // off or frozen: what it holds isn't on the sheet (an imported PDF's lettering strokes,

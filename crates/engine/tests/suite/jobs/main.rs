@@ -77,6 +77,7 @@ mod sitework;
 mod slabarea;
 mod soak5speed;
 mod spectag;
+mod stair_treads_walls;
 mod stairs;
 mod swing_joined;
 mod tagidentity;
