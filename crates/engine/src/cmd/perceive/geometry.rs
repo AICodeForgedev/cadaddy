@@ -298,9 +298,14 @@ const FACET_MAX_IN: f64 = 24.0;
 /// The share of a rounded outline's length a wall's other face must run beside for it to be a
 /// wall's face ("its whole length", less a little for where its walls meet others).
 const PARTNER_SHARE: f64 = 0.95;
+/// The share of its arcs' length a rounded wall face's other face runs beside (concentric).
+const ARC_PARTNER_SHARE: f64 = 0.5;
 /// How far a partner face may turn from the outline, degrees (a concentric arc's chords meet the
 /// outline's at up to half a facet's turn).
-const PARTNER_TURN_DEG: f64 = 20.0;
+const PARTNER_TURN_DEG: f64 = 10.0;
+/// A chord is an arc's when both its ends turn at least this much, degrees (a flattened arc's
+/// chords turn less the bigger it is).
+const ARC_PIECE_TURN_DEG: f64 = 1.0;
 /// The outline is probed every this many inches along its length.
 const PARTNER_STEP_IN: f64 = 2.0;
 /// Rounded outlines looked at, and probes made, at most (hostile drawings).
@@ -391,8 +396,9 @@ fn has_rounded_corner(p: &cadaddy_doc::LwPolyline, k: f64) -> bool {
 
 /// The polylines with rounded corners that are no wall's face: a rounded outline (an arc or a
 /// faceted arc at a corner, see [`has_rounded_corner`]) is a wall's face only where a wall's other
-/// face runs beside it, parallel and a wall's thickness away, for its whole length (the share
-/// [`PARTNER_SHARE`]), the arcs too: a wall with rounded corners draws both faces round them. One
+/// face runs beside it, parallel, a wall's thickness away and on one side, for its whole length
+/// (the share [`PARTNER_SHARE`]), round its arcs too ([`ARC_PARTNER_SHARE`]): a wall with rounded
+/// corners draws both faces round them. One
 /// that isn't — an enlarged-plan callout's boundary round a stair, a core or a unit, drawn closed or
 /// in pieces (each corner piece a dash running round the arc), a revision cloud, a door swing — is
 /// an annotation: paired with a wall's face beside it, it made walls across corridors and in
@@ -417,23 +423,38 @@ pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, l
     if rounded.is_empty() {
         return out;
     }
-    // The probes along each outline: (point, direction, length it stands for).
+    // The probes along each outline: (point, direction, length it stands for, on an arc). A chord
+    // is an arc's when both its ends turn a little (a flattened curve), not a side between corners.
     let step = (PARTNER_STEP_IN * k).max(1e-9);
     let mut budget = MAX_PROBES;
-    let probes: Vec<Vec<(Vec2, Vec2, f64)>> = rounded
+    let probes: Vec<Vec<(Vec2, Vec2, f64, bool)>> = rounded
         .iter()
         .map(|(_, pts)| {
+            let closed = pts.len() > 3 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9);
+            let m = pts.len();
+            let turns = |i: usize| -> bool {
+                // The turn at vertex `i` (a loop's first and last vertex are one: from its last
+                // chord to its first).
+                let ends = closed && (i == 0 || i + 1 == m);
+                let prev = if ends { m.checked_sub(2) } else { i.checked_sub(1) }.and_then(|j| pts.get(j));
+                let next = if ends { pts.get(1) } else { pts.get(i + 1) };
+                let (Some(&a), Some(&b), Some(&c)) = (prev, pts.get(i), next) else { return false };
+                let (u, v) = (b - a, c - b);
+                let t = u.cross(v).atan2(u.dot(v)).to_degrees().abs();
+                (ARC_PIECE_TURN_DEG..=FACET_TURN_DEG.1).contains(&t)
+            };
             let mut v = Vec::new();
-            for w in pts.windows(2) {
+            for (i, w) in pts.windows(2).enumerate() {
                 let (Some(&a), Some(&b)) = (w.first(), w.get(1)) else { continue };
                 let len = a.dist(b);
                 if len <= 1e-9 || budget == 0 {
                     continue;
                 }
+                let arc = len <= FACET_MAX_IN * k && turns(i) && turns(i + 1);
                 let n = ((len / step).ceil() as usize).clamp(1, budget);
                 budget -= n;
                 let u = (b - a) * (1.0 / len);
-                v.extend((0..n).map(|j| (a + (b - a) * ((j as f64 + 0.5) / n as f64), u, len / n as f64)));
+                v.extend((0..n).map(|j| (a + (b - a) * ((j as f64 + 0.5) / n as f64), u, len / n as f64, arc)));
             }
             v
         })
@@ -482,39 +503,51 @@ pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, l
     }
     let max_turn = PARTNER_TURN_DEG.to_radians().sin();
     for ((own, _), probes) in rounded.iter().zip(&probes) {
-        let total: f64 = probes.iter().map(|p| p.2).sum();
-        if total <= 1e-9 {
-            continue;
+        // The length (all, and on its arcs) with a partner on each side: a wall's other face is on
+        // one side all along (a leader or a wall's face across the corner is no partner).
+        let (mut all, mut arcs) = (0.0f64, 0.0f64);
+        let mut beside = [[0.0f64; 2]; 2];
+        for &(p, u, w, arc) in probes {
+            all += w;
+            if arc {
+                arcs += w;
+            }
+            let (cx, cy) = key(p);
+            let mut sides = [false; 2];
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for &(a, b, i) in grid.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                        if i == *own {
+                            continue;
+                        }
+                        let d = b - a;
+                        let len = d.len();
+                        if len <= 1e-9 || (d * (1.0 / len)).cross(u).abs() > max_turn {
+                            continue;
+                        }
+                        // The nearest point on it lies across the outline, a wall's thickness off.
+                        let t = ((p - a).dot(d) / (len * len)).clamp(0.0, 1.0);
+                        let off = a + d * t - p;
+                        let gap = off.len();
+                        if (lim.min_thick..=lim.max_thick).contains(&gap) && off.dot(u).abs() <= 0.5 * gap {
+                            if let Some(s) = sides.get_mut(usize::from(u.cross(off) < 0.0)) {
+                                *s = true;
+                            }
+                        }
+                    }
+                }
+            }
+            for (side, found) in sides.iter().enumerate() {
+                if *found && let Some(b) = beside.get_mut(side) {
+                    b[0] += w;
+                    if arc {
+                        b[1] += w;
+                    }
+                }
+            }
         }
-        let beside: f64 = probes
-            .iter()
-            .filter(|(p, u, _)| {
-                let (cx, cy) = key(*p);
-                (-1..=1).any(|dx| {
-                    (-1..=1).any(|dy| {
-                        grid.get(&(cx + dx, cy + dy)).into_iter().flatten().any(|&(a, b, i)| {
-                            if i == *own {
-                                return false;
-                            }
-                            let d = b - a;
-                            let len = d.len();
-                            if len <= 1e-9 || (d * (1.0 / len)).cross(*u).abs() > max_turn {
-                                return false;
-                            }
-                            // The nearest point on it lies across the outline, a wall's thickness off.
-                            let t = ((*p - a).dot(d) / (len * len)).clamp(0.0, 1.0);
-                            let off = a + d * t - *p;
-                            let gap = off.len();
-                            (lim.min_thick..=lim.max_thick).contains(&gap) && off.dot(*u).abs() <= 0.5 * gap
-                        })
-                    })
-                })
-            })
-            .map(|p| p.2)
-            .sum();
-        if beside < PARTNER_SHARE * total
-            && let Some(e) = ents.get(*own)
-        {
+        let faced = all > 1e-9 && beside.iter().any(|b| b[0] >= PARTNER_SHARE * all && (arcs <= 1e-9 || b[1] >= ARC_PARTNER_SHARE * arcs));
+        if !faced && let Some(e) = ents.get(*own) {
             out.insert(e.handle);
         }
     }
