@@ -15,6 +15,9 @@
 //! give is inferred from the trade practice rules (`M-ROOF-CURB`, `M-ROOF-STAND`), a line set
 //! no plan routes from `M-REFRIG-LINESET`. Equipment already built (a typical room's stamped
 //! unit, an exhaust fan) is never built twice. A scheduled tag no plan places is listed.
+//!
+//! A kind the schedule lists once for many units (a relief hood: one row, a hood over every
+//! chase; rules data `equipment.every_tag_kinds`) is built at every place its tag is printed.
 
 use super::printmep::SheetRef;
 use cadaddy_doc::{Drawing, EntityKind};
@@ -61,6 +64,11 @@ pub(crate) struct Read {
     /// with a unit's outline by the tag before one without (a duct's unit label on a floor
     /// plan is no unit), then in plan order. Each place: the unit and its support.
     pub candidates: Vec<(String, Vec<Vec<MepEquipment>>)>,
+    /// A kind built at every place its tag is printed (`equipment.every_tag_kinds`): each place's
+    /// pieces, on its sheet's place in the drawing; [`Read::choose`] keeps those that fit.
+    pub every: Vec<Vec<MepEquipment>>,
+    /// Places of [`Read::every`] that fit no plan.
+    pub every_not_placed: usize,
     /// Scheduled tags the plans print but no place of which fits a plan (with where).
     pub not_placeable: Vec<String>,
     /// Tables and scheduled rows read.
@@ -94,6 +102,13 @@ impl Read {
                 self.not_placeable.push(format!("{tag} ({})", sheets.join(", ")));
             }
         }
+        for mut place in std::mem::take(&mut self.every) {
+            if place.iter_mut().all(&mut fits) {
+                self.equipment.extend(place);
+            } else {
+                self.every_not_placed += 1;
+            }
+        }
     }
 
     pub(crate) fn report(&self) -> serde_json::Value {
@@ -108,6 +123,7 @@ impl Read {
             "built": by.iter().map(|((l, k), n)| json!({"level": l, "kind": k, "count": n})).collect::<Vec<_>>(),
             "unplaced": self.unplaced.iter().take(50).map(|(t, why)| json!({"tag": t, "why": why})).collect::<Vec<_>>(),
             "not_placeable": self.not_placeable.iter().take(50).collect::<Vec<_>>(),
+            "every_tag_not_placed": self.every_not_placed,
         })
     }
 }
@@ -140,14 +156,14 @@ fn split_tag(tag: &str) -> Option<(String, String)> {
 }
 
 /// A text on a plan: its words, point and height.
-struct Txt {
-    value: String,
-    at: [f64; 2],
-    h: f64,
+pub(crate) struct Txt {
+    pub value: String,
+    pub at: [f64; 2],
+    pub h: f64,
 }
 
 /// The plan's texts, block attributes too (a mark's tag is often its symbol's attribute).
-fn plan_texts(d: &Drawing) -> Vec<Txt> {
+pub(crate) fn plan_texts(d: &Drawing) -> Vec<Txt> {
     let mut out = Vec::new();
     let mut push = |v: &str, at: cadaddy_geom::Vec2, h: f64| {
         let v = v.trim();
@@ -192,11 +208,15 @@ pub(crate) fn plan_outlines(d: &Drawing) -> Vec<([f64; 2], [f64; 2])> {
 /// Where a tag is printed on a plan: its point (between its letters and number when they are
 /// apart) and its text height. Its text whole first, else its letters with its number by them.
 fn find_tag(texts: &[Txt], tag: &str) -> Option<([f64; 2], f64)> {
-    if let Some(t) = texts.iter().find(|t| t.value == tag) {
-        return Some((t.at, t.h));
-    }
-    let (letters, number) = split_tag(tag)?;
-    texts.iter().filter(|t| t.value == letters).find_map(|t| {
+    find_tags(texts, tag).into_iter().next()
+}
+
+/// Every place a tag is printed ([`find_tag`]'s order: its text whole, then its letters with its
+/// number by them).
+pub(crate) fn find_tags(texts: &[Txt], tag: &str) -> Vec<([f64; 2], f64)> {
+    let mut out: Vec<([f64; 2], f64)> = texts.iter().filter(|t| t.value == tag).map(|t| (t.at, t.h)).collect();
+    let Some((letters, number)) = split_tag(tag) else { return out };
+    out.extend(texts.iter().filter(|t| t.value == letters).filter_map(|t| {
         let reach = NUMBER_REACH_H * t.h;
         let n = texts
             .iter()
@@ -211,7 +231,8 @@ fn find_tag(texts: &[Txt], tag: &str) -> Option<([f64; 2], f64)> {
             .filter(|o| o.value == letters && !std::ptr::eq(*o, t))
             .any(|o| (o.at[0] - n.at[0]).hypot(o.at[1] - n.at[1]) < (t.at[0] - n.at[0]).hypot(t.at[1] - n.at[1]));
         (!nearer_other).then_some(([(t.at[0] + n.at[0]) / 2.0, (t.at[1] + n.at[1]) / 2.0], t.h))
-    })
+    }));
+    out
 }
 
 /// How far an outline's size is from `want` (feet, plan, either way round): the larger log
@@ -389,11 +410,19 @@ pub(crate) fn read(schedules: &[(String, Drawing)], plans: &[PlanIn], have: &[Me
     out
 }
 
+/// [`read`] for rows already read off their schedules.
+#[cfg(test)]
+pub(crate) fn read_scheduled(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &[cadaddy_walk3d::Level]) -> Read {
+    place(sched, plans, have, levels)
+}
+
 /// [`read`] once the schedules are read: each scheduled row's tags found on the plans and built.
 fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &[cadaddy_walk3d::Level]) -> Read {
     let mut out = Read { scheduled: sched.len(), ..Read::default() };
     let built: BTreeSet<String> = have.iter().map(|e| e.tag.trim().to_ascii_uppercase()).collect();
     let all_tags: BTreeSet<String> = sched.iter().flat_map(|x| tag_variants(&x.tag)).chain(built.iter().cloned()).collect();
+    let every_kinds = cadaddy_mepfix::wordrules::words("equipment.every_tag_kinds");
+    let every = |x: &Scheduled| every_kinds.iter().any(|k| x.kind.eq_ignore_ascii_case(k));
     // (tag, its row) still to place.
     let mut todo: Vec<(String, &Scheduled)> = Vec::new();
     for x in sched {
@@ -407,6 +436,8 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
     }
     // Each todo tag's places: (has the unit's outline, plan order, its pieces).
     let mut places: BTreeMap<usize, Vec<(bool, usize, Vec<MepEquipment>)>> = BTreeMap::new();
+    // The kinds built at every tag that some plan prints.
+    let mut typed_found: BTreeSet<usize> = BTreeSet::new();
     for (plan_i, plan) in plans.iter().enumerate() {
         let texts = plan_texts(plan.drawing);
         let outlines = plan_outlines(plan.drawing);
@@ -417,9 +448,16 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
         let level = super::printmep::level_name(&plan.sheet.level);
         let lv = levels.iter().find(|l| l.name.eq_ignore_ascii_case(&level));
         let roof = is_roof(&plan.sheet.level) || is_roof(&level);
-        // Each tag found here: (todo index, its point, its text height).
-        let found: Vec<(usize, [f64; 2], f64)> =
-            todo.iter().enumerate().filter_map(|(i, (t, _))| find_tag(&texts, t).map(|(at, h)| (i, at, h))).collect();
+        // Each tag found here: (todo index, its point, its text height); a kind built at every
+        // tag, each place.
+        let found: Vec<(usize, [f64; 2], f64)> = todo
+            .iter()
+            .enumerate()
+            .flat_map(|(i, (t, x))| {
+                let at: Vec<([f64; 2], f64)> = if every(x) { find_tags(&texts, t) } else { find_tag(&texts, t).into_iter().collect() };
+                at.into_iter().map(move |(at, h)| (i, at, h))
+            })
+            .collect();
         // Candidate outlines, scored: nearness to the tag (as a share of the reach) plus how far
         // its size is from the expected one; the best pairs first, each outline and tag once.
         let mut cands: Vec<(f64, usize, usize)> = Vec::new();
@@ -572,7 +610,12 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
                 confidence: if made.is_drawn() { 0.8 } else { 0.5 },
                 ..Default::default()
             });
-            places.entry(*ti).or_default().push((outlined.is_some(), plan_i, pieces));
+            if every(x) {
+                out.every.push(pieces);
+                typed_found.insert(*ti);
+            } else {
+                places.entry(*ti).or_default().push((outlined.is_some(), plan_i, pieces));
+            }
         }
     }
     for (ti, (tag, _)) in todo.iter().enumerate() {
@@ -584,7 +627,9 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
     let placed: BTreeSet<&String> = out.candidates.iter().map(|(t, _)| t).collect();
     out.unplaced = todo
         .iter()
-        .filter(|(t, _)| !placed.contains(t))
+        .enumerate()
+        .filter(|(i, (t, _))| !placed.contains(t) && !typed_found.contains(i))
+        .map(|(_, tx)| tx)
         .map(|(t, x)| (t.clone(), format!("{} {} lists it; no mechanical plan of a level tags it", x.sheet, x.title).trim().to_string()))
         .collect();
     out
