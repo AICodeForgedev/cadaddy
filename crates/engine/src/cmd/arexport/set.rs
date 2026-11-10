@@ -480,7 +480,9 @@ fn role_of(d: &Drawing, cx: &Cx, it: &Item) -> Role {
     let mpart = made_tag(it.e, "part").unwrap_or("segment").to_ascii_lowercase();
     let size = made_tag(it.e, "size").and_then(size_in);
     let crossing_kind = rules.crossing.kinds.iter().any(|k| k.eq_ignore_ascii_case(&kind));
-    let crosses = crossing_kind && cx.crosses(it.lo[2], it.hi[2]);
+    // A riser's piece in one storey (Q6493) stops at the floor it passes: it is one riser through it.
+    let riser_piece = made_tag(it.e, crate::cmd::mep::RISER_TAG).is_some_and(|r| !r.is_empty());
+    let crosses = crossing_kind && (riser_piece || cx.crosses(it.lo[2], it.hi[2]));
     match part {
         _ if is_equipment(it) => equipment_role(cx, it, &toks, &tag, &mut r),
         "mep" => {
