@@ -50,6 +50,7 @@ mod mspace_viewport_view;
 mod named_viewports_dialog;
 mod no_network;
 mod options_dialog;
+mod palette_rail;
 mod palette_windows;
 mod part_palette;
 mod parts_palette;

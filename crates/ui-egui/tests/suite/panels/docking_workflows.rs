@@ -15,8 +15,13 @@ fn harness(state: Option<UiState>, width: f32, scale: f32) -> Harness<'static, C
     app.run("view.set", json!({"center":[100,70],"height":220})).unwrap();
     match state {
         Some(state) => app.ui = state,
-        // the ribbon workspace hides Tool Sets; these workflows move it around, so show it
-        None => app.ui.show_toolsets = true,
+        // the ribbon workspace hides Tool Sets; these workflows move it around, so show it, with
+        // the palettes docked (pinned) as they stood before the rail
+        None => {
+            app.ui.docking = cadaddy_ui_egui::docking::Workspace::docked();
+            app.ui.show_toolsets = true;
+            app.ui.show_palettes = true;
+        }
     }
     app.ui.in_window_menu = false;
     app.integrated_titlebar = true;
@@ -177,7 +182,7 @@ fn stack_boundary_resizes_by_pointer_and_keyboard_without_changing_the_drawing()
 fn grouped_restore_preserves_order_and_rectangle_in_both_close_orders_after_reload() {
     use craft_ui::docking::{Action, Placement};
     for order in [[Panel::Layers, Panel::Properties], [Panel::Properties, Panel::Layers]] {
-        let mut workspace = cadaddy_ui_egui::docking::Workspace::default();
+        let mut workspace = cadaddy_ui_egui::docking::Workspace::docked();
         let rect = [50.0, 60.0, 320.0, 400.0];
         workspace.apply(Action::Float { panel: Panel::Layers, rect }).unwrap();
         workspace
@@ -374,10 +379,11 @@ fn collapsed_tool_sets_leave_a_visible_control_that_expands_them() {
     h.run_steps(4);
     assert!(!h.state().ui.show_toolsets);
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "Tool Sets").is_none());
-    h.get_by_label("Expand Tool Sets").click();
+    // The palette rail at the window's edge has a Tool Sets button that brings them back.
+    let rail = h.get_all_by_label("Tool Sets").find(|n| n.rect().right() <= cadaddy_ui_egui::rail::WIDTH + 20.0).unwrap().rect();
+    h.get_all_by_label("Tool Sets").find(|n| n.rect() == rail).unwrap().click();
     h.run_steps(4);
     assert!(h.state().ui.show_toolsets);
-    assert!(h.query_by_label("Expand Tool Sets").is_none());
     h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tool Sets").click();
     h.run_steps(3);
     // the ribbon has a Line button too; the Tool Sets one is below it

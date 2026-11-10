@@ -478,8 +478,11 @@ mod tests {
         assert!(app.session.pending_window.is_none());
         assert_eq!(view(&app), fitted);
         // A click in the drawing still reaches the drawing.
-        let empty = canvas(&app).center() + vec2(0.0, -300.0);
+        // (The margin zoom extents leaves beside the drawing: the drawing fills the window's
+        // width since the palettes wait on the rail.)
+        let empty = egui::pos2(canvas(&app).left() + 16.0, canvas(&app).center().y);
         click(&mut app, &ctx, empty, egui::PointerButton::Primary);
+        assert!(app.session.selection().is_empty(), "nothing drawn there");
         assert!(app.session.pending_window.is_some(), "an empty-space click starts a selection window");
     }
 

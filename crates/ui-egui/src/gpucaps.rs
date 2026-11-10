@@ -6,11 +6,16 @@
 //! - **memory budget**: the render targets (colour, depth, the multisampled copies) are kept
 //!   within a budget for the kind of GPU (discrete 512 MB, integrated 256 MB, virtual or
 //!   software 64 MB); a view that wouldn't fit is drawn smaller and scaled up;
+//! - **lighting quality**: Full on a discrete GPU; Balanced on an integrated one (hard shadows,
+//!   no ambient occlusion: two of the three scene passes and the 32 shadow and 16 occlusion
+//!   samples a pixel go); Performance (no shadow pass, no point lights) when asked for or when
+//!   the view stays slow (see `shaded`);
 //! - **the CPU**: a software adapter, a GPU error or device loss, or `cpu: true` draws the 3D
 //!   views with the CPU rasterizers (the shaded view's, and Walk's own).
 //!
 //! The limits can be forced (tests, and machines that misreport): `ui.gpu {msaa?, maxTexture?,
-//! budgetMb?, cpu?, reset?}`, or `CADADDY_GPU_LIMITS="msaa=1,texture=1024,budget=64,cpu"` at
+//! budgetMb?, quality?, cpu?, reset?}`, or
+//! `CADADDY_GPU_LIMITS="msaa=1,texture=1024,budget=64,quality=performance,cpu"` at
 //! start. Anything stepped down is said once, in the status line.
 
 use egui_wgpu::wgpu;
@@ -18,6 +23,56 @@ use serde_json::{Value, json};
 
 /// Samples the 3D views ask for.
 pub const MSAA_WANTED: u32 = 4;
+
+/// How much lighting the 3D views draw (what each costs is in [`Quality::passes`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Quality {
+    /// No shadow pass, no ambient occlusion, no point lights: sun and sky only.
+    Performance,
+    /// Shadows with hard edges (9 samples a pixel, not 32); no ambient occlusion.
+    Balanced,
+    /// Soft shadows and ambient occlusion, as the drawing's lighting asks.
+    #[default]
+    Full,
+}
+
+impl Quality {
+    pub fn name(self) -> &'static str {
+        match self {
+            Quality::Performance => "performance",
+            Quality::Balanced => "balanced",
+            Quality::Full => "full",
+        }
+    }
+
+    pub fn from_name(n: &str) -> Option<Quality> {
+        [Quality::Performance, Quality::Balanced, Quality::Full].into_iter().find(|q| q.name().eq_ignore_ascii_case(n.trim()))
+    }
+
+    /// The next level down, if there is one.
+    pub fn lower(self) -> Option<Quality> {
+        match self {
+            Quality::Full => Some(Quality::Balanced),
+            Quality::Balanced => Some(Quality::Performance),
+            Quality::Performance => None,
+        }
+    }
+
+    /// Soft shadows and ambient occlusion are drawn.
+    pub fn soft(self) -> bool {
+        self == Quality::Full
+    }
+
+    /// The sun's shadow map is drawn and read.
+    pub fn shadows(self) -> bool {
+        self != Quality::Performance
+    }
+
+    /// Point and spot lights are added up at each pixel.
+    pub fn lights(self) -> bool {
+        self != Quality::Performance
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GpuCaps {
@@ -32,6 +87,10 @@ pub struct GpuCaps {
     pub budget_mb: u32,
     /// Draw the 3D views on the CPU.
     pub cpu: bool,
+    /// The lighting the 3D views draw, and whether it was asked for (`ui.gpu`, the environment):
+    /// a level asked for is never stepped down for a slow view.
+    pub quality: Quality,
+    pub quality_forced: bool,
     /// Why, when something was stepped down.
     pub notes: Vec<String>,
 }
@@ -47,6 +106,8 @@ impl Default for GpuCaps {
             msaa: 1,
             budget_mb: 64,
             cpu: true,
+            quality: Quality::Full,
+            quality_forced: false,
             notes: Vec::new(),
         }
     }
@@ -58,6 +119,16 @@ fn soft_name(name: &str) -> bool {
     ["llvmpipe", "lavapipe", "softpipe", "swiftshader", "microsoft basic render", "warp", "virgl", "vmware svga", "virtualbox", "parallels display"]
         .iter()
         .any(|s| n.contains(s))
+}
+
+impl Quality {
+    /// The level a kind of adapter starts at: an integrated GPU (it shares the system's memory
+    /// and its bus) the balanced level, anything else everything. A software adapter draws
+    /// everything too: what it draws is checked against the CPU's pictures, and nobody waits on
+    /// its speed.
+    pub fn of(kind: wgpu::DeviceType, software: bool) -> Quality {
+        if kind == wgpu::DeviceType::IntegratedGpu && !software { Quality::Balanced } else { Quality::Full }
+    }
 }
 
 impl GpuCaps {
@@ -81,8 +152,13 @@ impl GpuCaps {
             msaa: if msaa_ok && !software { MSAA_WANTED } else { 1 },
             budget_mb: if software { 64 } else { budget_mb },
             cpu: false,
+            quality: Quality::of(info.device_type, software),
+            quality_forced: false,
             notes: Vec::new(),
         };
+        if c.quality == Quality::Balanced {
+            c.notes.push(format!("{} is integrated graphics: 3D views use hard shadows and no ambient occlusion", info.name));
+        }
         if !msaa_ok {
             c.notes.push("no 4× multisampling: edges are drawn without smoothing".into());
         }
@@ -108,6 +184,11 @@ impl GpuCaps {
         if let Some(b) = p.get("budgetMb").and_then(Value::as_u64) {
             self.budget_mb = u32::try_from(b).unwrap_or(u32::MAX).clamp(1, 65_536);
             self.notes.push(format!("3D view memory limited to {} MB", self.budget_mb));
+        }
+        if let Some(q) = p.get("quality").and_then(Value::as_str).and_then(Quality::from_name) {
+            self.quality = q;
+            self.quality_forced = true;
+            self.notes.push(format!("3D lighting set to {}", q.name()));
         }
         if let Some(c) = p.get("cpu").and_then(Value::as_bool) {
             self.cpu = c;
@@ -141,7 +222,8 @@ impl GpuCaps {
     pub fn json(&self) -> Value {
         json!({
             "adapter": self.adapter, "backend": self.backend, "software": self.software,
-            "maxTexture": self.max_texture, "msaa": self.msaa, "budgetMb": self.budget_mb, "cpu": self.cpu, "notes": self.notes,
+            "maxTexture": self.max_texture, "msaa": self.msaa, "budgetMb": self.budget_mb, "cpu": self.cpu,
+            "quality": self.quality.name(), "notes": self.notes,
         })
     }
 
@@ -161,6 +243,7 @@ pub fn from_spec(spec: &str) -> Value {
             ("msaa", Some(n)) => v["msaa"] = json!(n),
             ("texture" | "maxtexture", Some(n)) => v["maxTexture"] = json!(n),
             ("budget" | "budgetmb", Some(n)) => v["budgetMb"] = json!(n),
+            ("quality", _) if Quality::from_name(val).is_some() => v["quality"] = json!(val.to_ascii_lowercase()),
             ("cpu" | "software", _) => v["cpu"] = json!(val != "0" && val != "false"),
             _ => {}
         }
@@ -199,5 +282,28 @@ mod tests {
         weak.force(&json!({"msaa": 4, "maxTexture": 99999}));
         assert_eq!((weak.msaa, weak.max_texture), (1, 2048));
         assert!(soft_name("llvmpipe (LLVM 15.0.7, 256 bits)") && soft_name("Microsoft Basic Render Driver") && !soft_name("Apple M3"));
+    }
+
+    /// The lighting quality: by the kind of adapter, a level down at a time, and as asked for.
+    #[test]
+    fn lighting_quality_by_adapter_and_as_asked() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, VirtualGpu};
+        assert_eq!(Quality::of(DiscreteGpu, false), Quality::Full);
+        assert_eq!(Quality::of(IntegratedGpu, false), Quality::Balanced);
+        assert_eq!([Quality::of(Cpu, false), Quality::of(VirtualGpu, false), Quality::of(IntegratedGpu, true)], [Quality::Full; 3]);
+        assert_eq!(Quality::Full.lower().and_then(Quality::lower), Some(Quality::Performance));
+        assert_eq!(Quality::Performance.lower(), None);
+        assert!(Quality::Full.soft() && !Quality::Balanced.soft() && Quality::Balanced.shadows() && !Quality::Performance.shadows());
+        assert!(Quality::Balanced.lights() && !Quality::Performance.lights());
+        let mut c = GpuCaps { cpu: false, quality: Quality::Balanced, ..GpuCaps::default() };
+        assert!(!c.quality_forced);
+        c.force(&from_spec("quality=Performance"));
+        assert_eq!((c.quality, c.quality_forced), (Quality::Performance, true));
+        assert_eq!(c.json()["quality"], "performance");
+        c.force(&json!({"quality": "full"}));
+        assert_eq!(c.quality, Quality::Full);
+        // A word that is no level changes nothing.
+        c.force(&from_spec("quality=ultra"));
+        assert_eq!(c.quality, Quality::Full);
     }
 }
