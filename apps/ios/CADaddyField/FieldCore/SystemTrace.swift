@@ -10,6 +10,12 @@ public struct TraceStep: Equatable, Sendable {
     /// The tag: "R1", "2LA-7", "2LA", "MSB".
     public var tag: String
     public var level: Int
+    /// How the link from this step to the next (its source) is known; nil = the sample, or the path's last step.
+    public var state: LinkState?
+
+    public init(id: String, link: String, tag: String, level: Int, state: LinkState? = nil) {
+        self.id = id; self.link = link; self.tag = tag; self.level = level; self.state = state
+    }
 }
 
 public enum TraceResult: Equatable, Sendable {
@@ -26,6 +32,14 @@ public struct SystemFocus: Equatable, Sendable {
     public var trace: TraceResult
     /// True when the tapped element feeds others (a panel, gear, unit): everything downstream is lit.
     public var showsDownstream: Bool
+    /// Said at the end of the path when it stops at a link nobody gives ("Unknown: …").
+    public var note: String?
+    /// How many objects the tapped one feeds (from the graph or the sample's links).
+    public var downstreamCount: Int
+
+    public init(tapped: String, lit: Set<String>, trace: TraceResult, showsDownstream: Bool, note: String? = nil, downstreamCount: Int = 0) {
+        self.tapped = tapped; self.lit = lit; self.trace = trace; self.showsDownstream = showsDownstream; self.note = note; self.downstreamCount = downstreamCount
+    }
 
     public var steps: [TraceStep] { if case let .chain(s) = trace { return s } else { return [] } }
 }
@@ -72,7 +86,7 @@ extension SampleBuilding {
         var lit = Set<String>([id])
         if case let .chain(s) = t { lit.formUnion(s.map(\.id)) }
         if isSource { lit.formUnion(kids) }
-        return SystemFocus(tapped: id, lit: lit, trace: t, showsDownstream: isSource)
+        return SystemFocus(tapped: id, lit: lit, trace: t, showsDownstream: isSource, downstreamCount: kids.count)
     }
 }
 

@@ -1,0 +1,872 @@
+{
+  "anchor": {
+    "entry": null,
+    "floor_elevation_ft": 0.0,
+    "how": "the room's south-west corner (no door found on its outline)",
+    "kind": "room_corner",
+    "level": "L1",
+    "model": [
+      0,
+      0,
+      0
+    ],
+    "name": "104 ELEC corner 7",
+    "plan_units": "ft",
+    "plan_x": 40.25,
+    "plan_y": 0.5,
+    "room": "104 ELEC"
+  },
+  "axes": "x = plan x (east), y = up from the anchor level's finished floor, z = minus plan y",
+  "counts": {
+    "meshes": 23,
+    "nodes": 28,
+    "triangles": 575
+  },
+  "cut_to_scope": 6,
+  "dropped": {
+    "context_off": 0,
+    "filtered": 0,
+    "not_meshes": 0,
+    "over_caps": {},
+    "over_element_cap": 0,
+    "small_parts": {}
+  },
+  "elements": [
+    {
+      "bottom_aff_in": 72.0,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "1FC",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 72.0,
+      "mounting_height_m": 1.8288,
+      "node": "conduit",
+      "panel": "MDP",
+      "part": "mep",
+      "position": [
+        1.4625,
+        1.8288,
+        -0.0465
+      ],
+      "role": "feeder",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-F-PH-L1)",
+      "system": "conduit",
+      "top_aff_in": 120.0,
+      "trade": "electrical",
+      "type": "EMT conduit 1-1/4\""
+    },
+    {
+      "bottom_aff_in": 72.0,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "221",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 72.0,
+      "mounting_height_m": 1.8288,
+      "node": "conduit_2",
+      "panel": "PH",
+      "part": "mep",
+      "position": [
+        1.5138,
+        1.8288,
+        -0.0389
+      ],
+      "role": "feeder",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-F-PU1-L1)",
+      "system": "conduit",
+      "top_aff_in": 120.0,
+      "trade": "electrical",
+      "type": "EMT conduit 1\""
+    },
+    {
+      "bottom_aff_in": 72.0,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "237",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 72.0,
+      "mounting_height_m": 1.8288,
+      "node": "conduit_3",
+      "panel": "PH",
+      "part": "mep",
+      "position": [
+        1.5662,
+        1.8288,
+        -0.0389
+      ],
+      "role": "feeder",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-F-PU2-L1)",
+      "system": "conduit",
+      "top_aff_in": 120.0,
+      "trade": "electrical",
+      "type": "EMT conduit 1\""
+    },
+    {
+      "bottom_aff_in": 12.0,
+      "category": "Equipment",
+      "group": "electrical",
+      "id": "1BB",
+      "kind": "equipment",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 12.0,
+      "mounting_height_m": 0.3048,
+      "node": "equipment_PH",
+      "part": "mep",
+      "position": [
+        1.4478,
+        0.3048,
+        -0.1524
+      ],
+      "role": "panel",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "tag": "PH",
+      "top_aff_in": 72.0,
+      "trade": "mechanical",
+      "type": "PH"
+    },
+    {
+      "bottom_aff_in": 43.2,
+      "category": "Breakers",
+      "circuit": "PH-2",
+      "group": "electrical",
+      "id": "25C",
+      "kind": "breaker",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 43.2,
+      "mounting_height_m": 1.0973,
+      "node": "breaker",
+      "panel": "PH",
+      "part": "mep",
+      "position": [
+        1.7907,
+        1.0973,
+        -0.1143
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Polyface Mesh 1BB (layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "top_aff_in": 64.8,
+      "trade": "mechanical",
+      "type": "Circuit breaker, panel PH 1P"
+    },
+    {
+      "bottom_aff_in": 19.2,
+      "category": "Breakers",
+      "circuit": "PH-4",
+      "group": "electrical",
+      "id": "25D",
+      "kind": "breaker",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 19.2,
+      "mounting_height_m": 0.4877,
+      "node": "breaker_2",
+      "panel": "PH",
+      "part": "mep",
+      "position": [
+        1.7907,
+        0.4877,
+        -0.1143
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Polyface Mesh 1BB (layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "top_aff_in": 40.8,
+      "trade": "mechanical",
+      "type": "Circuit breaker, panel PH 1P"
+    },
+    {
+      "bottom_aff_in": 90.0,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "209",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 90.0,
+      "mounting_height_m": 2.286,
+      "node": "conduit_4",
+      "panel": "MDP",
+      "part": "mep",
+      "position": [
+        2.9865,
+        2.286,
+        -0.1989
+      ],
+      "role": "feeder",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-F-PH-L1)",
+      "system": "conduit",
+      "top_aff_in": 120.0,
+      "trade": "electrical",
+      "type": "EMT conduit 1-1/4\""
+    },
+    {
+      "bottom_aff_in": 90.0,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "24F",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 90.0,
+      "mounting_height_m": 2.286,
+      "node": "conduit_5",
+      "panel": "MDP",
+      "part": "mep",
+      "position": [
+        3.0477,
+        2.286,
+        -0.1989
+      ],
+      "role": "feeder",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-F-ELEV-L1)",
+      "system": "conduit",
+      "top_aff_in": 120.0,
+      "trade": "electrical",
+      "type": "EMT conduit 1-1/4\""
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Equipment",
+      "group": "electrical",
+      "id": "1BA",
+      "kind": "equipment",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 0.0,
+      "mounting_height_m": 0.0,
+      "node": "equipment_MDP",
+      "part": "mep",
+      "position": [
+        2.9718,
+        0.0,
+        -0.762
+      ],
+      "role": "gear",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "tag": "MDP",
+      "top_aff_in": 90.0,
+      "trade": "mechanical",
+      "type": "MDP"
+    },
+    {
+      "bottom_aff_in": 112.425,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "1E1",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 112.425,
+      "mounting_height_m": 2.8556,
+      "node": "conduit_6",
+      "part": "mep",
+      "position": [
+        2.9623,
+        2.8556,
+        -4.9276
+      ],
+      "role": "branch",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-PWR-L1)",
+      "system": "conduit",
+      "top_aff_in": 113.175,
+      "trade": "electrical",
+      "type": "EMT conduit 3/4\""
+    },
+    {
+      "bottom_aff_in": 112.8,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "1EF",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 112.8,
+      "mounting_height_m": 2.8651,
+      "node": "conduit_7",
+      "part": "mep",
+      "position": [
+        0.4223,
+        2.8651,
+        -4.9371
+      ],
+      "role": "branch",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-PWR-L1)",
+      "system": "conduit",
+      "top_aff_in": 232.8,
+      "trade": "electrical",
+      "type": "EMT conduit 3/4\""
+    },
+    {
+      "bottom_aff_in": 66.0,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "242",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 66.0,
+      "mounting_height_m": 1.6764,
+      "node": "conduit_8",
+      "panel": "MDP",
+      "part": "mep",
+      "position": [
+        3.4945,
+        1.6764,
+        -5.8885
+      ],
+      "role": "feeder",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-F-ELEV-L1)",
+      "system": "conduit",
+      "top_aff_in": 120.0,
+      "trade": "electrical",
+      "type": "EMT conduit 1-1/4\""
+    },
+    {
+      "bottom_aff_in": 48.0,
+      "category": "Equipment",
+      "group": "electrical",
+      "id": "1C1",
+      "kind": "equipment",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 48.0,
+      "mounting_height_m": 1.2192,
+      "node": "equipment_DS_ELEV",
+      "part": "mep",
+      "position": [
+        3.4798,
+        1.2192,
+        -5.9436
+      ],
+      "role": "elevator_disconnect",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "tag": "DS-ELEV",
+      "top_aff_in": 66.0,
+      "trade": "mechanical",
+      "type": "DS-ELEV"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Equipment",
+      "group": "mechanical",
+      "id": "1C0",
+      "kind": "equipment",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 0.0,
+      "mounting_height_m": 0.0,
+      "node": "equipment_ELEV_1",
+      "part": "mep",
+      "position": [
+        3.9878,
+        0.0,
+        -5.9436
+      ],
+      "role": "hoistway",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "tag": "ELEV-1",
+      "top_aff_in": 240.0,
+      "trade": "mechanical",
+      "type": "ELEV-1"
+    },
+    {
+      "bottom_aff_in": 112.8,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "1E8",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 112.8,
+      "mounting_height_m": 2.8651,
+      "node": "conduit_9",
+      "part": "mep",
+      "position": [
+        5.2483,
+        2.8651,
+        -4.9371
+      ],
+      "role": "branch",
+      "room": "104 ELEC",
+      "source": "model.build (mep, layer 3D-MEP-PWR-L1)",
+      "system": "conduit",
+      "top_aff_in": 232.8,
+      "trade": "electrical",
+      "type": "EMT conduit 3/4\""
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "175",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall",
+      "part": "wall",
+      "position": [
+        -0.3048,
+        0.0,
+        0.0
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Line 10D (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16D",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_2",
+      "part": "wall",
+      "position": [
+        -0.1524,
+        0.0,
+        -5.9436
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Line 111 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16B",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_3",
+      "part": "wall",
+      "position": [
+        -0.1524,
+        0.0,
+        0.0
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Line 112 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "group": "base",
+      "id": "19E",
+      "kind": "ceiling",
+      "level": "L1",
+      "node": "ceiling",
+      "part": "ceiling",
+      "position": [
+        0.0,
+        2.7432,
+        -5.7912
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Text 15E (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "19D",
+      "kind": "ceiling",
+      "level": "L1",
+      "node": "ceiling_2",
+      "part": "ceiling",
+      "position": [
+        -0.3048,
+        2.7432,
+        -5.7912
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Text 15C (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    },
+    {
+      "bottom_aff_in": -6.0,
+      "category": "Floors",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "198",
+      "kind": "floor",
+      "level": "L1",
+      "node": "floor",
+      "part": "floor",
+      "position": [
+        -0.3048,
+        -0.1524,
+        -6.096
+      ],
+      "room": "104 ELEC",
+      "source": "model.build (floor, layer 3D-Floors)",
+      "system": "architecture",
+      "top_aff_in": 0.0,
+      "trade": "architecture",
+      "type": "Floor"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "178",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_4",
+      "part": "wall",
+      "position": [
+        -0.1524,
+        0.0,
+        -5.9436
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Line 113 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "17E",
+      "kind": "door",
+      "level": "L1",
+      "node": "door",
+      "part": "door",
+      "position": [
+        2.3622,
+        0.0,
+        -5.9627
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Arc 129 (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "172",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_5",
+      "part": "wall",
+      "position": [
+        -0.3048,
+        0.0,
+        -5.9436
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Line 10F (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16C",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_6",
+      "part": "wall",
+      "position": [
+        5.8674,
+        0.0,
+        -5.9436
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Line 116 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "174",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_7",
+      "part": "wall",
+      "position": [
+        2.3622,
+        0.0,
+        -5.9436
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Line 114 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "19F",
+      "kind": "ceiling",
+      "level": "L1",
+      "node": "ceiling_3",
+      "part": "ceiling",
+      "position": [
+        -0.3048,
+        2.7432,
+        -6.096
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Text 160 (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "170",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_8",
+      "part": "wall",
+      "position": [
+        5.8674,
+        0.0,
+        -6.096
+      ],
+      "room": "104 ELEC",
+      "source": "model.build from the plan's Line 11D (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    }
+  ],
+  "exported": "2026-11-10T05:06:18Z",
+  "field_alignment": true,
+  "generator": "CADaddy bim.export.ar",
+  "generic": false,
+  "glb": "L1-104-ELEC.glb",
+  "groups": {
+    "base": {
+      "default_on": true,
+      "nodes": 13,
+      "nodes_off": 0
+    },
+    "electrical": {
+      "default_on": true,
+      "nodes": 14,
+      "nodes_off": 0
+    },
+    "mechanical": {
+      "default_on": true,
+      "nodes": 1,
+      "nodes_off": 0
+    }
+  },
+  "meters_per_unit": 1,
+  "model": "L1-104-ELEC.usdz",
+  "package": {
+    "level": "L1",
+    "name": "rooms/L1-104-ELEC",
+    "room": "104 ELEC",
+    "view": "room"
+  },
+  "points": [
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "104 ELEC corner 1",
+      "plan": [
+        59.5,
+        0.5
+      ],
+      "position": [
+        5.8674,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "104 ELEC corner 2",
+      "plan": [
+        59.5,
+        19.5
+      ],
+      "position": [
+        5.8674,
+        0.0,
+        -5.7912
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "104 ELEC corner 3",
+      "plan": [
+        51.0,
+        19.5
+      ],
+      "position": [
+        3.2766,
+        0.0,
+        -5.7912
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "104 ELEC corner 4",
+      "plan": [
+        48.0,
+        16.5
+      ],
+      "position": [
+        2.3622,
+        0.0,
+        -4.8768
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "104 ELEC corner 5",
+      "plan": [
+        48.0,
+        19.5
+      ],
+      "position": [
+        2.3622,
+        0.0,
+        -5.7912
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "104 ELEC corner 6",
+      "plan": [
+        40.25,
+        19.5
+      ],
+      "position": [
+        0.0,
+        0.0,
+        -5.7912
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "104 ELEC corner 7",
+      "plan": [
+        40.25,
+        0.5
+      ],
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "rules": {
+    "source": "shipped rules (arexport.json)",
+    "version": 1
+  },
+  "schema": "cadaddy.ar/1",
+  "scope": {
+    "box": null,
+    "context": "translucent",
+    "default_room": false,
+    "kinds": [],
+    "level": null,
+    "rooms": [
+      {
+        "label": "104 ELEC",
+        "level": "L1",
+        "name": "ELEC",
+        "number": "104"
+      }
+    ],
+    "small_parts": false,
+    "trades": []
+  },
+  "simplified": "nothing",
+  "units": "m",
+  "up_axis": "Y",
+  "usdz": "L1-104-ELEC.usdz",
+  "version": 1
+}

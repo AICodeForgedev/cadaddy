@@ -1,0 +1,3283 @@
+{
+  "equipment": [
+    {
+      "group": "electrical",
+      "id": "1BA",
+      "kind": "switchboard",
+      "level": "L1",
+      "panel_scope": null,
+      "position_ft": [
+        53.0,
+        2.0,
+        0.0
+      ],
+      "tag": "MDP",
+      "view": "mains"
+    },
+    {
+      "group": "electrical",
+      "id": "1BB",
+      "kind": "panel",
+      "level": "L1",
+      "panel_scope": "house",
+      "position_ft": [
+        45.8333,
+        0.75,
+        1.0
+      ],
+      "tag": "PH",
+      "view": "mains"
+    },
+    {
+      "group": "electrical",
+      "id": "1BC",
+      "kind": "panel",
+      "level": "L1",
+      "panel_scope": "unit",
+      "position_ft": [
+        17.25,
+        0.6667,
+        4.0
+      ],
+      "tag": "PU-1",
+      "view": "full"
+    },
+    {
+      "group": "electrical",
+      "id": "1BD",
+      "kind": "panel",
+      "level": "L1",
+      "panel_scope": "unknown",
+      "position_ft": [
+        37.25,
+        0.6667,
+        4.0
+      ],
+      "tag": "PU-2",
+      "view": "full"
+    },
+    {
+      "group": "mechanical",
+      "id": "1BE",
+      "kind": "ahu",
+      "level": "L2",
+      "panel_scope": null,
+      "position_ft": [
+        52.5,
+        7.0,
+        10.0
+      ],
+      "tag": "AHU-1",
+      "view": "mains"
+    },
+    {
+      "group": "mechanical",
+      "id": "1BF",
+      "kind": "exhaust_fan",
+      "level": "L1",
+      "panel_scope": null,
+      "position_ft": [
+        5.0,
+        5.0,
+        8.6
+      ],
+      "tag": "EF-1",
+      "view": "full"
+    },
+    {
+      "group": "mechanical",
+      "id": "1C0",
+      "kind": "elevator",
+      "level": "L1",
+      "panel_scope": null,
+      "position_ft": [
+        55.8333,
+        17.5,
+        0.0
+      ],
+      "tag": "ELEV-1",
+      "view": "mains"
+    },
+    {
+      "group": "electrical",
+      "id": "1C1",
+      "kind": "disconnect",
+      "level": "L1",
+      "panel_scope": null,
+      "position_ft": [
+        52.0,
+        19.8333,
+        4.0
+      ],
+      "tag": "DS-ELEV",
+      "view": "mains"
+    },
+    {
+      "group": "mechanical",
+      "id": "1C2",
+      "kind": "fire_pump",
+      "level": "L1",
+      "panel_scope": null,
+      "position_ft": [
+        3.0,
+        26.0,
+        0.0
+      ],
+      "tag": "FPMP-1",
+      "view": "mains"
+    }
+  ],
+  "exported": "2026-11-10T05:06:19Z",
+  "frame": {
+    "datum_elevation_ft": 0.0,
+    "how": "building and level packages: x = plan x − origin x, y = elevation − datum, z = −(plan y − origin y), metres; a room package's origin is its anchor (rooms[].anchor) on its floor",
+    "origin_plan_ft": [
+      0.0,
+      -1.0
+    ]
+  },
+  "generator": "CADaddy bim.export.ar (set)",
+  "graph": {
+    "elements": [
+      {
+        "group": "base",
+        "id": "16A",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "16B",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-104-ELEC"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "16C",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "16D",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "16E",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "16F",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "170",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "171",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "172",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "173",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "174",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "175",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-104-ELEC"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "176",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "177",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "178",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "179",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "17A",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "17B",
+        "kind": "wall",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "17C",
+        "kind": "door",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "17D",
+        "kind": "door",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "17E",
+        "kind": "door",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "17F",
+        "kind": "window",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "180",
+        "kind": "window",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1",
+          "rooms/L1-102-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "181",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "182",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-204-ELEC"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "183",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "184",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "185",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "186",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "187",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "188",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "189",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "18A",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "18B",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "18C",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-204-ELEC"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "18D",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-202-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "18E",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-202-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "18F",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "190",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "191",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "192",
+        "kind": "wall",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "193",
+        "kind": "door",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "194",
+        "kind": "door",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "195",
+        "kind": "door",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "196",
+        "kind": "window",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-201-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "197",
+        "kind": "window",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2",
+          "rooms/L2-202-GUEST"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "198",
+        "kind": "floor",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "19A",
+        "kind": "floor",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "building-mep-mains",
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "19C",
+        "kind": "ceiling",
+        "level": "L1",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "19D",
+        "kind": "ceiling",
+        "level": "L1",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "19E",
+        "kind": "ceiling",
+        "level": "L1",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "19F",
+        "kind": "ceiling",
+        "level": "L1",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "1A0",
+        "kind": "ceiling",
+        "level": "L2",
+        "packages": [
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "1A1",
+        "kind": "ceiling",
+        "level": "L2",
+        "packages": [
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "1A2",
+        "kind": "ceiling",
+        "level": "L2",
+        "packages": [
+          "levels/L2",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "group": "base",
+        "id": "1A3",
+        "kind": "ceiling",
+        "level": "L2",
+        "packages": [
+          "levels/L2",
+          "rooms/L2-201-GUEST",
+          "rooms/L2-202-GUEST",
+          "rooms/L2-204-ELEC",
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BE",
+            "link": "known",
+            "tag": "AHU-1",
+            "via": "SA"
+          }
+        ],
+        "group": "mechanical",
+        "id": "1AC",
+        "kind": "duct",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "main",
+        "serves": [],
+        "system": "SA"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BE",
+            "link": "known",
+            "tag": "AHU-1",
+            "via": "SA"
+          }
+        ],
+        "group": "mechanical",
+        "id": "1AD",
+        "kind": "duct",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "branch",
+        "serves": [],
+        "system": "SA"
+      },
+      {
+        "fed_by": [],
+        "group": "plumbing",
+        "id": "1AE",
+        "kind": "pipe",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "main",
+        "serves": [],
+        "system": "CW"
+      },
+      {
+        "fed_by": [],
+        "group": "plumbing",
+        "id": "1AF",
+        "kind": "pipe",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "branch",
+        "serves": [],
+        "system": "CW"
+      },
+      {
+        "fed_by": [],
+        "group": "plumbing",
+        "id": "1B0",
+        "kind": "pipe",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "riser",
+        "serves": [],
+        "system": "CW"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1B1",
+        "kind": "duct",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ],
+        "role": "branch",
+        "serves": [],
+        "system": "EA"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1B2",
+        "kind": "pipe",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "main",
+        "serves": [],
+        "system": "FP"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1B3",
+        "kind": "pipe",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "branch",
+        "serves": [],
+        "system": "FP"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1B4",
+        "kind": "pipe",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "riser",
+        "serves": [],
+        "system": "FP"
+      },
+      {
+        "fed_by": [],
+        "group": "plumbing",
+        "id": "1B5",
+        "kind": "pipe",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "main",
+        "serves": [],
+        "system": "CW"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1B6",
+        "kind": "pipe",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "main",
+        "serves": [],
+        "system": "FP"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BE",
+            "link": "known",
+            "tag": "AHU-1",
+            "via": "SA"
+          }
+        ],
+        "group": "mechanical",
+        "id": "1B7",
+        "kind": "duct",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "main",
+        "serves": [],
+        "system": "SA"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BE",
+            "link": "known",
+            "tag": "AHU-1",
+            "via": "SA"
+          }
+        ],
+        "group": "mechanical",
+        "id": "1B8",
+        "kind": "fixture",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ],
+        "serves": [],
+        "system": "SA"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1B9",
+        "kind": "fixture",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-101-GUEST",
+          "rooms/L1-102-GUEST"
+        ],
+        "serves": [],
+        "system": "FP"
+      },
+      {
+        "fed_by": [],
+        "group": "electrical",
+        "id": "1BA",
+        "kind": "equipment",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "role": "gear",
+        "serves": [
+          {
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH",
+            "via": "F-PH"
+          },
+          {
+            "id": "1C1",
+            "link": "known",
+            "tag": "DS-ELEV",
+            "via": "F-ELEV"
+          }
+        ],
+        "tag": "MDP"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BA",
+            "link": "known",
+            "tag": "MDP",
+            "via": "F-PH"
+          }
+        ],
+        "group": "electrical",
+        "id": "1BB",
+        "kind": "equipment",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "panel_scope": {
+          "basis": "fed straight from gear (MDP)",
+          "scope": "house"
+        },
+        "role": "panel",
+        "serves": [
+          {
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1",
+            "via": "F-PU1"
+          },
+          {
+            "id": "1BD",
+            "link": "known",
+            "tag": "PU-2",
+            "via": "F-PU2"
+          },
+          {
+            "circuit": "2",
+            "description": "CORRIDOR LIGHTS",
+            "link": "known"
+          },
+          {
+            "circuit": "4",
+            "description": "STAIR",
+            "link": "known"
+          }
+        ],
+        "tag": "PH"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH",
+            "via": "F-PU1"
+          }
+        ],
+        "group": "electrical",
+        "id": "1BC",
+        "kind": "equipment",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ],
+        "panel_scope": {
+          "basis": "its circuits serve one room (101)",
+          "scope": "unit"
+        },
+        "role": "panel",
+        "serves": [
+          {
+            "circuit": "1",
+            "description": "RECEPTACLES",
+            "link": "known"
+          },
+          {
+            "circuit": "5",
+            "description": "LIGHTS",
+            "link": "known"
+          }
+        ],
+        "tag": "PU-1"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH",
+            "via": "F-PU2"
+          }
+        ],
+        "group": "electrical",
+        "id": "1BD",
+        "kind": "equipment",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-102-GUEST"
+        ],
+        "panel_scope": {
+          "basis": "the distribution data don't say what it serves",
+          "scope": "unknown"
+        },
+        "role": "panel",
+        "serves": [],
+        "tag": "PU-2"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1BE",
+        "kind": "equipment",
+        "level": "L2",
+        "link": "unknown",
+        "packages": [
+          "building-mep-mains",
+          "levels/L2",
+          "rooms/L2-204-ELEC"
+        ],
+        "role": "equipment",
+        "serves": [
+          {
+            "link": "known",
+            "system": "SA"
+          }
+        ],
+        "system": "SA",
+        "tag": "AHU-1"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1BF",
+        "kind": "equipment",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ],
+        "role": "equipment",
+        "serves": [],
+        "tag": "EF-1"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1C0",
+        "kind": "equipment",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "hoistway",
+        "serves": [],
+        "tag": "ELEV-1"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BA",
+            "link": "known",
+            "tag": "MDP",
+            "via": "F-ELEV"
+          }
+        ],
+        "group": "electrical",
+        "id": "1C1",
+        "kind": "equipment",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "elevator_disconnect",
+        "serves": [],
+        "tag": "DS-ELEV"
+      },
+      {
+        "fed_by": [],
+        "group": "mechanical",
+        "id": "1C2",
+        "kind": "equipment",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "equipment",
+        "serves": [],
+        "tag": "FPMP-1"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "1",
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1"
+          }
+        ],
+        "group": "electrical",
+        "id": "1C3",
+        "kind": "receptacle",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "rooms/L1-101-GUEST"
+        ],
+        "serves": [],
+        "tag": "REC"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "3",
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1"
+          }
+        ],
+        "group": "electrical",
+        "id": "1C4",
+        "kind": "receptacle",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "rooms/L1-101-GUEST"
+        ],
+        "serves": [],
+        "tag": "REC"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "5",
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1"
+          }
+        ],
+        "group": "electrical",
+        "id": "1C5",
+        "kind": "light_fixture",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ],
+        "serves": [],
+        "tag": "A"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "5",
+            "id": "1BD",
+            "link": "known",
+            "tag": "PU-2"
+          }
+        ],
+        "group": "electrical",
+        "id": "1C6",
+        "kind": "light_fixture",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-102-GUEST"
+        ],
+        "serves": [],
+        "tag": "A"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "7",
+            "id": "1BD",
+            "link": "inferred",
+            "tag": "PU-2"
+          }
+        ],
+        "group": "electrical",
+        "id": "1C7",
+        "kind": "receptacle",
+        "level": "L1",
+        "link": "inferred",
+        "packages": [
+          "rooms/L1-102-GUEST"
+        ],
+        "serves": [],
+        "tag": "REC"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "2",
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH"
+          }
+        ],
+        "group": "electrical",
+        "id": "1C8",
+        "kind": "light_fixture",
+        "level": "L2",
+        "link": "known",
+        "packages": [
+          "levels/L2",
+          "rooms/L2-201-GUEST"
+        ],
+        "serves": [],
+        "tag": "A"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "1",
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1"
+          }
+        ],
+        "group": "electrical",
+        "id": "1C9",
+        "kind": "box",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "rooms/L1-101-GUEST"
+        ],
+        "serves": [],
+        "system": "ELECTRICAL BOXES"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "3",
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1"
+          }
+        ],
+        "group": "electrical",
+        "id": "1CB",
+        "kind": "box",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "rooms/L1-101-GUEST"
+        ],
+        "serves": [],
+        "system": "ELECTRICAL BOXES"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "5",
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1"
+          }
+        ],
+        "group": "electrical",
+        "id": "1CD",
+        "kind": "box",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "rooms/L1-101-GUEST"
+        ],
+        "serves": [],
+        "system": "ELECTRICAL BOXES"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "5",
+            "id": "1BD",
+            "link": "known",
+            "tag": "PU-2"
+          }
+        ],
+        "group": "electrical",
+        "id": "1CF",
+        "kind": "box",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "rooms/L1-102-GUEST"
+        ],
+        "serves": [],
+        "system": "ELECTRICAL BOXES"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "7",
+            "link": "unknown",
+            "why": "its panel is not given"
+          }
+        ],
+        "group": "electrical",
+        "id": "1D1",
+        "kind": "box",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "rooms/L1-102-GUEST"
+        ],
+        "serves": [],
+        "system": "ELECTRICAL BOXES"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "2",
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH"
+          }
+        ],
+        "group": "electrical",
+        "id": "1D3",
+        "kind": "box",
+        "level": "L2",
+        "link": "known",
+        "packages": [
+          "rooms/L2-201-GUEST"
+        ],
+        "serves": [],
+        "system": "ELECTRICAL BOXES"
+      },
+      {
+        "fed_by": [],
+        "group": "electrical",
+        "id": "1D5",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "rooms/L1-102-GUEST"
+        ],
+        "role": "branch",
+        "serves": [],
+        "system": "DATA"
+      },
+      {
+        "fed_by": [],
+        "group": "electrical",
+        "id": "1DB",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-102-GUEST"
+        ],
+        "role": "feeder",
+        "serves": [],
+        "system": "E-FEEDER"
+      },
+      {
+        "fed_by": [],
+        "group": "electrical",
+        "id": "1E1",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "branch",
+        "serves": [],
+        "system": "PWR"
+      },
+      {
+        "fed_by": [],
+        "group": "electrical",
+        "id": "1E8",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "role": "branch",
+        "serves": [],
+        "system": "PWR"
+      },
+      {
+        "fed_by": [],
+        "group": "electrical",
+        "id": "1EF",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "role": "branch",
+        "serves": [],
+        "system": "PWR"
+      },
+      {
+        "fed_by": [],
+        "group": "electrical",
+        "id": "1F6",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-102-GUEST"
+        ],
+        "role": "feeder",
+        "serves": [],
+        "system": "PWR"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BA",
+            "link": "known",
+            "tag": "MDP",
+            "via": "F-PH"
+          }
+        ],
+        "group": "electrical",
+        "id": "1FC",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "role": "feeder",
+        "serves": [
+          {
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH",
+            "via": "F-PH"
+          }
+        ],
+        "system": "F-PH"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BA",
+            "link": "known",
+            "tag": "MDP",
+            "via": "F-PH"
+          }
+        ],
+        "group": "electrical",
+        "id": "209",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "role": "feeder",
+        "serves": [
+          {
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH",
+            "via": "F-PH"
+          }
+        ],
+        "system": "F-PH"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH",
+            "via": "F-PU1"
+          }
+        ],
+        "group": "electrical",
+        "id": "216",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ],
+        "role": "feeder",
+        "serves": [
+          {
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1",
+            "via": "F-PU1"
+          }
+        ],
+        "system": "F-PU1"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH",
+            "via": "F-PU1"
+          }
+        ],
+        "group": "electrical",
+        "id": "221",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "role": "feeder",
+        "serves": [
+          {
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1",
+            "via": "F-PU1"
+          }
+        ],
+        "system": "F-PU1"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH",
+            "via": "F-PU2"
+          }
+        ],
+        "group": "electrical",
+        "id": "22C",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-102-GUEST"
+        ],
+        "role": "feeder",
+        "serves": [
+          {
+            "id": "1BD",
+            "link": "known",
+            "tag": "PU-2",
+            "via": "F-PU2"
+          }
+        ],
+        "system": "F-PU2"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH",
+            "via": "F-PU2"
+          }
+        ],
+        "group": "electrical",
+        "id": "237",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "role": "feeder",
+        "serves": [
+          {
+            "id": "1BD",
+            "link": "known",
+            "tag": "PU-2",
+            "via": "F-PU2"
+          }
+        ],
+        "system": "F-PU2"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BA",
+            "link": "known",
+            "tag": "MDP",
+            "via": "F-ELEV"
+          }
+        ],
+        "group": "electrical",
+        "id": "242",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-104-ELEC",
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "role": "feeder",
+        "serves": [
+          {
+            "id": "1C1",
+            "link": "known",
+            "tag": "DS-ELEV",
+            "via": "F-ELEV"
+          }
+        ],
+        "system": "F-ELEV"
+      },
+      {
+        "fed_by": [
+          {
+            "id": "1BA",
+            "link": "known",
+            "tag": "MDP",
+            "via": "F-ELEV"
+          }
+        ],
+        "group": "electrical",
+        "id": "24F",
+        "kind": "conduit",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "building-mep-mains",
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "role": "feeder",
+        "serves": [
+          {
+            "id": "1C1",
+            "link": "known",
+            "tag": "DS-ELEV",
+            "via": "F-ELEV"
+          }
+        ],
+        "system": "F-ELEV"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "2",
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH"
+          }
+        ],
+        "group": "electrical",
+        "id": "25C",
+        "kind": "breaker",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "serves": [],
+        "system": "PANEL BREAKERS"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "4",
+            "id": "1BB",
+            "link": "known",
+            "tag": "PH"
+          }
+        ],
+        "group": "electrical",
+        "id": "25D",
+        "kind": "breaker",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-104-ELEC"
+        ],
+        "serves": [],
+        "system": "PANEL BREAKERS"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "1",
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1"
+          }
+        ],
+        "group": "electrical",
+        "id": "25E",
+        "kind": "breaker",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ],
+        "serves": [],
+        "system": "PANEL BREAKERS"
+      },
+      {
+        "fed_by": [
+          {
+            "circuit": "5",
+            "id": "1BC",
+            "link": "known",
+            "tag": "PU-1"
+          }
+        ],
+        "group": "electrical",
+        "id": "25F",
+        "kind": "breaker",
+        "level": "L1",
+        "link": "known",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ],
+        "serves": [],
+        "system": "PANEL BREAKERS"
+      },
+      {
+        "group": "cabinets",
+        "id": "518",
+        "kind": "casework",
+        "level": "L1",
+        "packages": [
+          "levels/L1",
+          "rooms/L1-101-GUEST"
+        ]
+      },
+      {
+        "fed_by": [],
+        "group": "plumbing",
+        "id": "519",
+        "kind": "pipe",
+        "level": "L1",
+        "link": "unknown",
+        "packages": [
+          "building-mep-full",
+          "levels/L1",
+          "rooms/L1-102-GUEST"
+        ],
+        "serves": [],
+        "system": "SAN"
+      },
+      {
+        "group": "base",
+        "id": "1A4",
+        "kind": "room",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1"
+        ],
+        "tag": "101 GUEST"
+      },
+      {
+        "group": "base",
+        "id": "1A5",
+        "kind": "room",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1"
+        ],
+        "tag": "102 GUEST"
+      },
+      {
+        "group": "base",
+        "id": "1A6",
+        "kind": "room",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1"
+        ],
+        "tag": "104 ELEC"
+      },
+      {
+        "group": "base",
+        "id": "1A7",
+        "kind": "room",
+        "level": "L1",
+        "packages": [
+          "building-architectural",
+          "levels/L1"
+        ],
+        "tag": "103 CORRIDOR"
+      },
+      {
+        "group": "base",
+        "id": "1A8",
+        "kind": "room",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2"
+        ],
+        "tag": "201 GUEST"
+      },
+      {
+        "group": "base",
+        "id": "1A9",
+        "kind": "room",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2"
+        ],
+        "tag": "202 GUEST"
+      },
+      {
+        "group": "base",
+        "id": "1AA",
+        "kind": "room",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2"
+        ],
+        "tag": "204 ELEC"
+      },
+      {
+        "group": "base",
+        "id": "1AB",
+        "kind": "room",
+        "level": "L2",
+        "packages": [
+          "building-architectural",
+          "levels/L2"
+        ],
+        "tag": "203 CORRIDOR"
+      }
+    ],
+    "links": {
+      "inferred": 1,
+      "known": 30,
+      "unknown": 23
+    },
+    "rule": "known: the documents give it (feeder schedule, panel schedule, the plan's circuit tags); inferred: a rule or default gave it; unknown: the documents don't say, so it is not guessed"
+  },
+  "groups": {
+    "base": {
+      "always_on": true,
+      "default_on": true
+    },
+    "cabinets": {
+      "always_on": false,
+      "default_on": true
+    },
+    "electrical": {
+      "always_on": false,
+      "default_on": true
+    },
+    "furniture": {
+      "always_on": false,
+      "default_on": false
+    },
+    "mechanical": {
+      "always_on": false,
+      "default_on": true
+    },
+    "plumbing": {
+      "always_on": false,
+      "default_on": true
+    }
+  },
+  "left_out": {
+    "furniture_outside_rooms": 0,
+    "not_meshes": 0,
+    "pipe_size_unknown": 0,
+    "small_parts": {
+      "atom:base": 8,
+      "atom:compound": 8,
+      "atom:firestop": 4,
+      "atom:flooring": 8,
+      "atom:frame": 6,
+      "atom:hardware_set": 6,
+      "atom:paint": 16,
+      "atom:pour": 1,
+      "atom:screws": 8,
+      "atom:sheet": 620,
+      "atom:tape": 8,
+      "atom:vapor_barrier": 2,
+      "mep:bushing": 8,
+      "mep:connector": 28,
+      "mep:locknut": 28,
+      "mep:ring": 6,
+      "mep:strap": 17,
+      "mep:wire": 40
+    }
+  },
+  "levels": [
+    {
+      "elevation_ft": 0.0,
+      "height_ft": 10.0,
+      "name": "L1",
+      "outline": [
+        [
+          [
+            0.0,
+            30.0
+          ],
+          [
+            0.0,
+            29.5
+          ],
+          [
+            0.0,
+            20.0
+          ],
+          [
+            0.0,
+            19.5
+          ],
+          [
+            0.0,
+            0.5
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            60.0,
+            0.0
+          ],
+          [
+            60.0,
+            0.5
+          ],
+          [
+            60.0,
+            19.5
+          ],
+          [
+            60.0,
+            20.0
+          ],
+          [
+            60.0,
+            29.5
+          ],
+          [
+            60.0,
+            30.0
+          ],
+          [
+            0.0,
+            30.0
+          ]
+        ]
+      ],
+      "package": "levels/L1",
+      "rooms": 4
+    },
+    {
+      "elevation_ft": 10.0,
+      "height_ft": 10.0,
+      "name": "L2",
+      "outline": [
+        [
+          [
+            0.0,
+            30.0
+          ],
+          [
+            0.0,
+            29.5
+          ],
+          [
+            0.0,
+            20.0
+          ],
+          [
+            0.0,
+            19.5
+          ],
+          [
+            0.0,
+            0.5
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            60.0,
+            0.0
+          ],
+          [
+            60.0,
+            0.5
+          ],
+          [
+            60.0,
+            19.5
+          ],
+          [
+            60.0,
+            20.0
+          ],
+          [
+            60.0,
+            29.5
+          ],
+          [
+            60.0,
+            30.0
+          ],
+          [
+            0.0,
+            30.0
+          ]
+        ]
+      ],
+      "package": "levels/L2",
+      "rooms": 4
+    }
+  ],
+  "packages": [
+    {
+      "content_hash": "15d1c52b7cb25f227d1110fe93e98a6d83e1c37eb02cdcb94f3166478478b46e",
+      "field_alignment": false,
+      "files": {
+        "glb": {
+          "bytes": 60024,
+          "path": "building-architectural.glb",
+          "sha256": "521f84524419eb62be35b6b433b8436e76b03549c56b1bea4d838928c6d5eb49"
+        },
+        "sidecar": {
+          "bytes": 28876,
+          "path": "building-architectural.json",
+          "sha256": "3e43714b11e3441dd27c3c818f5ec124ae6141280f1dc07c73032db6f8f126e5"
+        },
+        "usdz": {
+          "bytes": 103530,
+          "path": "building-architectural.usdz",
+          "sha256": "538a2f3f4a76ff5529d7f88de48b94323e2d172c1cdbf4438daba3dfac37dc2b"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 0.0,
+          "how": "the low corner of the building's plan, the lowest floor's elevation",
+          "kind": "building_origin",
+          "level": "L1",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "building origin",
+          "plan_units": "ft",
+          "plan_x": 0.0,
+          "plan_y": -1.0,
+          "room": null
+        }
+      },
+      "generic": true,
+      "level": null,
+      "name": "building-architectural",
+      "nodes": 58,
+      "simplified": "nothing",
+      "triangles": 1092,
+      "view": "architectural"
+    },
+    {
+      "content_hash": "9596997732751b88ffaec108babebe7cd8373b0a7dabfa8be2138dba5e437cba",
+      "field_alignment": false,
+      "files": {
+        "glb": {
+          "bytes": 66900,
+          "path": "building-mep-mains.glb",
+          "sha256": "fdde05a99507b4c0ba9e1ff13678a86652daea7f30a035a4891cd701970ee87f"
+        },
+        "sidecar": {
+          "bytes": 14823,
+          "path": "building-mep-mains.json",
+          "sha256": "265b1b016c5bdabff960cf00825795ad385431ca15b44839d1faf4b4013af267"
+        },
+        "usdz": {
+          "bytes": 109768,
+          "path": "building-mep-mains.usdz",
+          "sha256": "5408215b479f86bc4579a9ee19f704fd7310de38ee0b419db8f2342d3a2d4ba1"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 0.0,
+          "how": "the low corner of the building's plan, the lowest floor's elevation",
+          "kind": "building_origin",
+          "level": "L1",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "building origin",
+          "plan_units": "ft",
+          "plan_x": 0.0,
+          "plan_y": -1.0,
+          "room": null
+        }
+      },
+      "generic": true,
+      "level": null,
+      "name": "building-mep-mains",
+      "nodes": 20,
+      "simplified": "nothing",
+      "triangles": 908,
+      "view": "mep"
+    },
+    {
+      "content_hash": "b4ab09d9d721cff136c7a0b62ae3b543143b25ddeabec76ac524d8509cd32352",
+      "field_alignment": false,
+      "files": {
+        "glb": {
+          "bytes": 34460,
+          "path": "building-mep-full.glb",
+          "sha256": "d6cddea5eedc93635763a15b2746fae579b4d86f986e3d7e157a48e6ca0bae85"
+        },
+        "sidecar": {
+          "bytes": 12133,
+          "path": "building-mep-full.json",
+          "sha256": "9efccdeb4b6d61f6f58482a12567cd41ac0161e95fa7b88baa0f2b561cf3b0c2"
+        },
+        "usdz": {
+          "bytes": 58290,
+          "path": "building-mep-full.usdz",
+          "sha256": "79eda88cffd81f379b57846804e5a67bc97692bfc1597a9332c97d696764931d"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 0.0,
+          "how": "the low corner of the building's plan, the lowest floor's elevation",
+          "kind": "building_origin",
+          "level": "L1",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "building origin",
+          "plan_units": "ft",
+          "plan_x": 0.0,
+          "plan_y": -1.0,
+          "room": null
+        }
+      },
+      "generic": true,
+      "level": null,
+      "name": "building-mep-full",
+      "nodes": 15,
+      "simplified": "nothing",
+      "triangles": 372,
+      "view": "mep"
+    },
+    {
+      "content_hash": "a7bb228807a00b5319d460fa96d617ad6d0afcd5b00b69ca79ea5b4d281236d3",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 151464,
+          "path": "levels/L1.glb",
+          "sha256": "5aee1f2187d8b5fe733bb2ebb5e35e340f67ae3ad4c493471a1e34fbb1ff037a"
+        },
+        "sidecar": {
+          "bytes": 43059,
+          "path": "levels/L1.json",
+          "sha256": "0398e7815823e48a42383cf65a91d5ae9cc2bce2a5ea7f77d24a28bd671c2226"
+        },
+        "usdz": {
+          "bytes": 254774,
+          "path": "levels/L1.usdz",
+          "sha256": "090e2c6dadc8dd2ac0c3be570f316fe68eaf32a7a5857b6cf4d6b0ab03b54b37"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 0.0,
+          "how": "the low corner of the building's plan, the lowest floor's elevation",
+          "kind": "building_origin",
+          "level": "L1",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "building origin",
+          "plan_units": "ft",
+          "plan_x": 0.0,
+          "plan_y": -1.0,
+          "room": null
+        }
+      },
+      "generic": false,
+      "level": "L1",
+      "name": "levels/L1",
+      "nodes": 74,
+      "simplified": "nothing",
+      "triangles": 2050,
+      "view": "floor"
+    },
+    {
+      "content_hash": "948eebea5c49b3c2b0b728dc371647c54db69f4a464802608ac34ee7d4110bee",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 51128,
+          "path": "levels/L2.glb",
+          "sha256": "875ec66613e76ce4f62591f50f6624649773a40f0073edaa68101b76bcefd1b5"
+        },
+        "sidecar": {
+          "bytes": 18382,
+          "path": "levels/L2.json",
+          "sha256": "f95ff7802556d207f902ad517154715625be948f95df213ef6dea805c793e29e"
+        },
+        "usdz": {
+          "bytes": 82296,
+          "path": "levels/L2.usdz",
+          "sha256": "ccebc78060505842ed0a5d143ca260e038020864c4b33db90af4049f4bc354b4"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 0.0,
+          "how": "the low corner of the building's plan, the lowest floor's elevation",
+          "kind": "building_origin",
+          "level": "L1",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "building origin",
+          "plan_units": "ft",
+          "plan_x": 0.0,
+          "plan_y": -1.0,
+          "room": null
+        }
+      },
+      "generic": false,
+      "level": "L2",
+      "name": "levels/L2",
+      "nodes": 34,
+      "simplified": "nothing",
+      "triangles": 750,
+      "view": "floor"
+    }
+  ],
+  "room_packages": [
+    {
+      "content_hash": "6809973eaa1d1a9b8a1a159247980056a5aa4b05e55514835d82fe1f7f619a2c",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 69216,
+          "path": "rooms/L1-101-GUEST.glb",
+          "sha256": "debdf235878aeac1a774b35ac4eb24ad5a7e4b165c220637a12e597d4fa87a0f"
+        },
+        "sidecar": {
+          "bytes": 22714,
+          "path": "rooms/L1-101-GUEST.json",
+          "sha256": "ca6c7a133aa7d6ffe84ff3d0d8e535fc2e0ee21e07a4c278b8ab701a3156c416"
+        },
+        "usdz": {
+          "bytes": 113424,
+          "path": "rooms/L1-101-GUEST.usdz",
+          "sha256": "38a103d5534de72e2d5cd6b72c05d4f3277d4ac24e1dda8ddf665ed09da22c54"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 0.0,
+          "how": "the room's south-west corner (no door found on its outline)",
+          "kind": "room_corner",
+          "level": "L1",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "101 GUEST corner 7",
+          "plan_units": "ft",
+          "plan_x": 0.5,
+          "plan_y": 0.5,
+          "room": "101 GUEST"
+        }
+      },
+      "generic": false,
+      "level": "L1",
+      "name": "rooms/L1-101-GUEST",
+      "nodes": 32,
+      "simplified": "nothing",
+      "triangles": 729,
+      "view": "room"
+    },
+    {
+      "content_hash": "c5ec2e4f3d05d44fbc359a9ad1cdd4bc2bc0af2dc25f46f07576c0f9e79a6d72",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 70340,
+          "path": "rooms/L1-102-GUEST.glb",
+          "sha256": "0f15db9257e3efdd8f2016b265f2468d058c4da8373a8f88e4c3af13ed336383"
+        },
+        "sidecar": {
+          "bytes": 20997,
+          "path": "rooms/L1-102-GUEST.json",
+          "sha256": "07acf56d198d2b4c65e763a605c5835f155af478aeb1a3feae4297b7c9985b16"
+        },
+        "usdz": {
+          "bytes": 114435,
+          "path": "rooms/L1-102-GUEST.usdz",
+          "sha256": "c70eec0fd2cf2ba0f57276e96a0f07effc445a4ec8bd3e8bf5e0939d3d51e10f"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 0.0,
+          "how": "the room's south-west corner (no door found on its outline)",
+          "kind": "room_corner",
+          "level": "L1",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "102 GUEST corner 7",
+          "plan_units": "ft",
+          "plan_x": 20.25,
+          "plan_y": 0.5,
+          "room": "102 GUEST"
+        }
+      },
+      "generic": false,
+      "level": "L1",
+      "name": "rooms/L1-102-GUEST",
+      "nodes": 30,
+      "simplified": "nothing",
+      "triangles": 750,
+      "view": "room"
+    },
+    {
+      "content_hash": "9fd88e5b758f38c0a6f46c8c40ed19ac3d7328fe7bc4618b053a37f7769a6106",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 54888,
+          "path": "rooms/L1-104-ELEC.glb",
+          "sha256": "1b78ed028fa8cc703be974402374b1325432ba07b1453d82f2f8a14cc1c32577"
+        },
+        "sidecar": {
+          "bytes": 20046,
+          "path": "rooms/L1-104-ELEC.json",
+          "sha256": "c32cb43f4cc5d645530a88a2088e5b47b2c236fab7b006055b283c97012f7cb8"
+        },
+        "usdz": {
+          "bytes": 87879,
+          "path": "rooms/L1-104-ELEC.usdz",
+          "sha256": "88927c2761c05beab955f0d7c248de7143807f107e4b3b038eb017f84b720acb"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 0.0,
+          "how": "the room's south-west corner (no door found on its outline)",
+          "kind": "room_corner",
+          "level": "L1",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "104 ELEC corner 7",
+          "plan_units": "ft",
+          "plan_x": 40.25,
+          "plan_y": 0.5,
+          "room": "104 ELEC"
+        }
+      },
+      "generic": false,
+      "level": "L1",
+      "name": "rooms/L1-104-ELEC",
+      "nodes": 28,
+      "simplified": "nothing",
+      "triangles": 575,
+      "view": "room"
+    },
+    {
+      "content_hash": "ae532e7cf9b8a58a37b0a9b680e459a7cc806e26262dd714d683fa300dca1d89",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 92456,
+          "path": "rooms/L1-103-CORRIDOR.glb",
+          "sha256": "13f11f61a574491be3c2cb6b342e14cb09ae1ef7176bf5c5496b4ecffbb3ce1b"
+        },
+        "sidecar": {
+          "bytes": 26193,
+          "path": "rooms/L1-103-CORRIDOR.json",
+          "sha256": "10ef8577dbd73da93c20cea64f2b6ba39dee0ad87e11afdc4865006c113d8e0e"
+        },
+        "usdz": {
+          "bytes": 153732,
+          "path": "rooms/L1-103-CORRIDOR.usdz",
+          "sha256": "0ced824ba12fc6296ed48c179eca0b0a5300dd2f864ff2623405a16c0daeab4e"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": {
+            "at": [
+              29.5,
+              18.2813
+            ],
+            "door": "17D",
+            "to": "102 GUEST"
+          },
+          "floor_elevation_ft": 0.0,
+          "how": "the room corner nearest its entry door",
+          "kind": "room_corner",
+          "level": "L1",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "103 CORRIDOR corner 7",
+          "plan_units": "ft",
+          "plan_x": 11.0,
+          "plan_y": 20.0,
+          "room": "103 CORRIDOR"
+        }
+      },
+      "generic": false,
+      "level": "L1",
+      "name": "rooms/L1-103-CORRIDOR",
+      "nodes": 37,
+      "simplified": "nothing",
+      "triangles": 1234,
+      "view": "room"
+    },
+    {
+      "content_hash": "f70fdfb477dcdf0ce3fa4fbf91164d5a6a721670757268fae9efc7cc021d1eb3",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 34868,
+          "path": "rooms/L2-201-GUEST.glb",
+          "sha256": "4396b11f681e1edd302b65af673a32f7c733f866666e9b315014a587397193de"
+        },
+        "sidecar": {
+          "bytes": 12609,
+          "path": "rooms/L2-201-GUEST.json",
+          "sha256": "aec02db893f569fc3ad960df600012f666debb639562bf1bffdf19f432c40609"
+        },
+        "usdz": {
+          "bytes": 53644,
+          "path": "rooms/L2-201-GUEST.usdz",
+          "sha256": "7846dcd6f59a6ecf084912aca5eac895d306b832801eb8cedf2be47a376dc300"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 10.0,
+          "how": "the room's south-west corner (no door found on its outline)",
+          "kind": "room_corner",
+          "level": "L2",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "201 GUEST corner 7",
+          "plan_units": "ft",
+          "plan_x": 0.5,
+          "plan_y": 0.5,
+          "room": "201 GUEST"
+        }
+      },
+      "generic": false,
+      "level": "L2",
+      "name": "rooms/L2-201-GUEST",
+      "nodes": 17,
+      "simplified": "nothing",
+      "triangles": 357,
+      "view": "room"
+    },
+    {
+      "content_hash": "6b9c46eb1dccd3a7b1f8346bf950b8c2a3bc77eba723195d4a3cbc6cc24dffdb",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 35740,
+          "path": "rooms/L2-202-GUEST.glb",
+          "sha256": "a56e9450dc921e06ec6959e1bafbad6f7dbe0c6195a8a58760e89cb63723ac3a"
+        },
+        "sidecar": {
+          "bytes": 12200,
+          "path": "rooms/L2-202-GUEST.json",
+          "sha256": "a733e99c46868bf3dafc4db45a41b85051526ab1943179421b6269714c4d43e7"
+        },
+        "usdz": {
+          "bytes": 53923,
+          "path": "rooms/L2-202-GUEST.usdz",
+          "sha256": "0bf81836dab07a6ca5b8f6c5dc77d88fe6d7e9f44333d3e80d5a4f31eafb8e36"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 10.0,
+          "how": "the room's south-west corner (no door found on its outline)",
+          "kind": "room_corner",
+          "level": "L2",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "202 GUEST corner 7",
+          "plan_units": "ft",
+          "plan_x": 20.25,
+          "plan_y": 0.5,
+          "room": "202 GUEST"
+        }
+      },
+      "generic": false,
+      "level": "L2",
+      "name": "rooms/L2-202-GUEST",
+      "nodes": 17,
+      "simplified": "nothing",
+      "triangles": 354,
+      "view": "room"
+    },
+    {
+      "content_hash": "e13b873d6670c40ffdc29dfa710b7f8c32cb2ab54d87f94a8d7d52ac4f0bacfc",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 29348,
+          "path": "rooms/L2-204-ELEC.glb",
+          "sha256": "da9723f9c3d398c72bc78352242cae87fb2152eb725097742b8b9c75735a6fe5"
+        },
+        "sidecar": {
+          "bytes": 10788,
+          "path": "rooms/L2-204-ELEC.json",
+          "sha256": "349031e4d9b8a60e82d67341bcfd4293000b6470cdb5f81a65f9e5e207fafb89"
+        },
+        "usdz": {
+          "bytes": 44438,
+          "path": "rooms/L2-204-ELEC.usdz",
+          "sha256": "648ad31cb8471bcf03d375a9b20fe7f476965c8078b2573a8dcb1676949108ff"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": null,
+          "floor_elevation_ft": 10.0,
+          "how": "the room's south-west corner (no door found on its outline)",
+          "kind": "room_corner",
+          "level": "L2",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "204 ELEC corner 7",
+          "plan_units": "ft",
+          "plan_x": 40.25,
+          "plan_y": 0.5,
+          "room": "204 ELEC"
+        }
+      },
+      "generic": false,
+      "level": "L2",
+      "name": "rooms/L2-204-ELEC",
+      "nodes": 14,
+      "simplified": "nothing",
+      "triangles": 263,
+      "view": "room"
+    },
+    {
+      "content_hash": "e90367f259a298172331229ffdf6427dfd191bad6e63a3c796020abc86791b19",
+      "field_alignment": true,
+      "files": {
+        "glb": {
+          "bytes": 35428,
+          "path": "rooms/L2-203-CORRIDOR.glb",
+          "sha256": "547e8b40029e6457dbc9d4c50a233ba60209721b2f91483dc929edd3caa19b33"
+        },
+        "sidecar": {
+          "bytes": 15718,
+          "path": "rooms/L2-203-CORRIDOR.json",
+          "sha256": "bd6c5c2e1351465f6025ef625d1058768d946de1f61634c4deea9ac824d4cbe3"
+        },
+        "usdz": {
+          "bytes": 55745,
+          "path": "rooms/L2-203-CORRIDOR.usdz",
+          "sha256": "8639b40b574cb478473f3c18c8721ee14a0cf70c4d8d7033e2e2bd9f75e1adbd"
+        }
+      },
+      "frame": {
+        "anchor": {
+          "entry": {
+            "at": [
+              29.5,
+              18.2813
+            ],
+            "door": "194",
+            "to": "202 GUEST"
+          },
+          "floor_elevation_ft": 10.0,
+          "how": "the room corner nearest its entry door",
+          "kind": "room_corner",
+          "level": "L2",
+          "model": [
+            0,
+            0,
+            0
+          ],
+          "name": "203 CORRIDOR corner 7",
+          "plan_units": "ft",
+          "plan_x": 11.0,
+          "plan_y": 20.0,
+          "room": "203 CORRIDOR"
+        }
+      },
+      "generic": false,
+      "level": "L2",
+      "name": "rooms/L2-203-CORRIDOR",
+      "nodes": 21,
+      "simplified": "nothing",
+      "triangles": 512,
+      "view": "room"
+    }
+  ],
+  "rooms": [
+    {
+      "anchor": {
+        "floor_elevation_ft": 0.0,
+        "how": "the room's south-west corner (no door found on its outline)",
+        "kind": "room_corner",
+        "name": "101 GUEST corner 7",
+        "plan_x": 0.5,
+        "plan_y": 0.5
+      },
+      "area_sf": 358.7104,
+      "bounds": {
+        "max": [
+          19.75,
+          19.5
+        ],
+        "min": [
+          0.5,
+          0.5
+        ]
+      },
+      "elements": 32,
+      "id": "1A4",
+      "label": "101 GUEST",
+      "level": "L1",
+      "name": "GUEST",
+      "number": "101",
+      "package": "rooms/L1-101-GUEST"
+    },
+    {
+      "anchor": {
+        "floor_elevation_ft": 0.0,
+        "how": "the room's south-west corner (no door found on its outline)",
+        "kind": "room_corner",
+        "name": "102 GUEST corner 7",
+        "plan_x": 20.25,
+        "plan_y": 0.5
+      },
+      "area_sf": 363.4604,
+      "bounds": {
+        "max": [
+          39.75,
+          19.5
+        ],
+        "min": [
+          20.25,
+          0.5
+        ]
+      },
+      "elements": 30,
+      "id": "1A5",
+      "label": "102 GUEST",
+      "level": "L1",
+      "name": "GUEST",
+      "number": "102",
+      "package": "rooms/L1-102-GUEST"
+    },
+    {
+      "anchor": {
+        "floor_elevation_ft": 0.0,
+        "how": "the room's south-west corner (no door found on its outline)",
+        "kind": "room_corner",
+        "name": "104 ELEC corner 7",
+        "plan_x": 40.25,
+        "plan_y": 0.5
+      },
+      "area_sf": 358.7104,
+      "bounds": {
+        "max": [
+          59.5,
+          19.5
+        ],
+        "min": [
+          40.25,
+          0.5
+        ]
+      },
+      "elements": 28,
+      "id": "1A6",
+      "label": "104 ELEC",
+      "level": "L1",
+      "name": "ELEC",
+      "number": "104",
+      "package": "rooms/L1-104-ELEC"
+    },
+    {
+      "anchor": {
+        "floor_elevation_ft": 0.0,
+        "how": "the room corner nearest its entry door",
+        "kind": "room_corner",
+        "name": "103 CORRIDOR corner 7",
+        "plan_x": 11.0,
+        "plan_y": 20.0
+      },
+      "area_sf": 586.1187,
+      "bounds": {
+        "max": [
+          59.5,
+          29.5
+        ],
+        "min": [
+          0.5,
+          16.5
+        ]
+      },
+      "elements": 37,
+      "id": "1A7",
+      "label": "103 CORRIDOR",
+      "level": "L1",
+      "name": "CORRIDOR",
+      "number": "103",
+      "package": "rooms/L1-103-CORRIDOR"
+    },
+    {
+      "anchor": {
+        "floor_elevation_ft": 10.0,
+        "how": "the room's south-west corner (no door found on its outline)",
+        "kind": "room_corner",
+        "name": "201 GUEST corner 7",
+        "plan_x": 0.5,
+        "plan_y": 0.5
+      },
+      "area_sf": 358.7104,
+      "bounds": {
+        "max": [
+          19.75,
+          19.5
+        ],
+        "min": [
+          0.5,
+          0.5
+        ]
+      },
+      "elements": 17,
+      "id": "1A8",
+      "label": "201 GUEST",
+      "level": "L2",
+      "name": "GUEST",
+      "number": "201",
+      "package": "rooms/L2-201-GUEST"
+    },
+    {
+      "anchor": {
+        "floor_elevation_ft": 10.0,
+        "how": "the room's south-west corner (no door found on its outline)",
+        "kind": "room_corner",
+        "name": "202 GUEST corner 7",
+        "plan_x": 20.25,
+        "plan_y": 0.5
+      },
+      "area_sf": 363.4604,
+      "bounds": {
+        "max": [
+          39.75,
+          19.5
+        ],
+        "min": [
+          20.25,
+          0.5
+        ]
+      },
+      "elements": 17,
+      "id": "1A9",
+      "label": "202 GUEST",
+      "level": "L2",
+      "name": "GUEST",
+      "number": "202",
+      "package": "rooms/L2-202-GUEST"
+    },
+    {
+      "anchor": {
+        "floor_elevation_ft": 10.0,
+        "how": "the room's south-west corner (no door found on its outline)",
+        "kind": "room_corner",
+        "name": "204 ELEC corner 7",
+        "plan_x": 40.25,
+        "plan_y": 0.5
+      },
+      "area_sf": 358.7104,
+      "bounds": {
+        "max": [
+          59.5,
+          19.5
+        ],
+        "min": [
+          40.25,
+          0.5
+        ]
+      },
+      "elements": 14,
+      "id": "1AA",
+      "label": "204 ELEC",
+      "level": "L2",
+      "name": "ELEC",
+      "number": "204",
+      "package": "rooms/L2-204-ELEC"
+    },
+    {
+      "anchor": {
+        "floor_elevation_ft": 10.0,
+        "how": "the room corner nearest its entry door",
+        "kind": "room_corner",
+        "name": "203 CORRIDOR corner 7",
+        "plan_x": 11.0,
+        "plan_y": 20.0
+      },
+      "area_sf": 586.1187,
+      "bounds": {
+        "max": [
+          59.5,
+          29.5
+        ],
+        "min": [
+          0.5,
+          16.5
+        ]
+      },
+      "elements": 21,
+      "id": "1AB",
+      "label": "203 CORRIDOR",
+      "level": "L2",
+      "name": "CORRIDOR",
+      "number": "203",
+      "package": "rooms/L2-203-CORRIDOR"
+    }
+  ],
+  "rules": {
+    "source": "shipped rules (arexport.json)"
+  },
+  "schema": "cadaddy.ar.building/1",
+  "shown_inferred": {
+    "no_role_no_size": 1,
+    "rule": "role decides first (main, riser, a run through a floor), size only when the role is unknown; an object with neither shows in Full MEP marked inferred"
+  },
+  "systems": {
+    "electrical": [
+      {
+        "full": 1,
+        "kind": "conduit",
+        "mains": 0,
+        "name": "E-FEEDER"
+      },
+      {
+        "full": 0,
+        "kind": "conduit",
+        "mains": 2,
+        "name": "F-ELEV"
+      },
+      {
+        "full": 0,
+        "kind": "conduit",
+        "mains": 2,
+        "name": "F-PH"
+      },
+      {
+        "full": 2,
+        "kind": "conduit",
+        "mains": 0,
+        "name": "F-PU1"
+      },
+      {
+        "full": 2,
+        "kind": "conduit",
+        "mains": 0,
+        "name": "F-PU2"
+      },
+      {
+        "full": 2,
+        "kind": "conduit",
+        "mains": 0,
+        "name": "PWR"
+      }
+    ],
+    "mechanical": [
+      {
+        "full": 1,
+        "kind": "duct",
+        "mains": 0,
+        "name": "EA"
+      },
+      {
+        "full": 0,
+        "kind": "pipe",
+        "mains": 3,
+        "name": "FP"
+      },
+      {
+        "full": 2,
+        "kind": "duct",
+        "mains": 3,
+        "name": "SA"
+      }
+    ],
+    "plumbing": [
+      {
+        "full": 1,
+        "kind": "pipe",
+        "mains": 2,
+        "name": "CW"
+      },
+      {
+        "full": 1,
+        "kind": "pipe",
+        "mains": 0,
+        "name": "SAN"
+      }
+    ]
+  },
+  "title": "Sample Building",
+  "units": {
+    "models": "m",
+    "plan": "ft",
+    "up_axis": "Y"
+  },
+  "views": {
+    "architectural": {
+      "packages": [
+        "building-architectural"
+      ]
+    },
+    "default": {
+      "density": "mains",
+      "view": "mep"
+    },
+    "floor": {
+      "by_level": {
+        "L1": [
+          "levels/L1"
+        ],
+        "L2": [
+          "levels/L2"
+        ]
+      }
+    },
+    "mep": {
+      "default_density": "mains",
+      "densities": {
+        "full": [
+          "building-mep-mains",
+          "building-mep-full"
+        ],
+        "mains": [
+          "building-mep-mains"
+        ]
+      }
+    },
+    "room": {
+      "by_room": {
+        "1A4": [
+          "rooms/L1-101-GUEST"
+        ],
+        "1A5": [
+          "rooms/L1-102-GUEST"
+        ],
+        "1A6": [
+          "rooms/L1-104-ELEC"
+        ],
+        "1A7": [
+          "rooms/L1-103-CORRIDOR"
+        ],
+        "1A8": [
+          "rooms/L2-201-GUEST"
+        ],
+        "1A9": [
+          "rooms/L2-202-GUEST"
+        ],
+        "1AA": [
+          "rooms/L2-204-ELEC"
+        ],
+        "1AB": [
+          "rooms/L2-203-CORRIDOR"
+        ]
+      },
+      "furniture": "its own group, off by default"
+    }
+  }
+}

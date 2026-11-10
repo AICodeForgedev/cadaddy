@@ -806,7 +806,8 @@ impl crate::Session {
         s.orthomode ^= q.shift;
         let angbase = self.angle_settings().angbase;
         let Ok(st) = self.state() else { return CursorSnap { point: raw, ..Default::default() } };
-        let (doc, space) = (st.doc.clone(), st.edit_space());
+        // With a print set's sheet open, only its objects are snapped to (`sheetnav`).
+        let (doc, space) = (self.view_doc().unwrap_or_else(|_| st.doc.clone()), st.edit_space());
         if !raw.is_finite() {
             return CursorSnap { point: raw, ..Default::default() };
         }

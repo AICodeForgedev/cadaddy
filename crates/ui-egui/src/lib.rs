@@ -1538,6 +1538,11 @@ impl CadApp {
         }
         control::observe_drawn(ui.ctx());
         self.frame_ms = now_ms() - t0;
+        // The overlay shows the 2D draw statistics, so they are counted while it is up.
+        if self.debug_overlay && !self.canvas.stats.is_on() {
+            self.canvas.stats.set_on(true);
+        }
+        self.canvas.stats.frame_done(t0, self.frame_ms, self.canvas.draw_ms, gpu::take_slowest_upload());
         if self.debug_overlay {
             debug_overlay::show(self, ui.ctx());
         }

@@ -3513,3 +3513,9 @@ menu	Modify	Edita
 	Pin	Fissa
 	Unpin	Sblocca
 	Coordination	Coordinamento
+	List Sheets	Elenca fogli
+	Open Sheet	Apri foglio
+	Next Sheet	Foglio successivo
+	Previous Sheet	Foglio precedente
+	Page {n}	Pagina {n}
+	Page Up and Page Down step through the sheets.	Pag su e Pag giù scorrono i fogli.
