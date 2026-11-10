@@ -85,16 +85,48 @@ const AO_BIAS: f32 = 0.1;
 @group(0) @binding(8) var bg_tex: texture_2d<f32>;
 @group(0) @binding(9) var bg_sampler: sampler;
 
+// The material table: roughness, metallic, texture layer (−1: none), opacity; MAT_ROW rows
+// across.
+@group(0) @binding(10) var materials: texture_2d<f32>;
+const MAT_ROW: u32 = 256u;
+
+// A triangle's corner.
 struct VI {
     @location(0) p: vec3<f32>,
-    @location(1) n: vec3<f32>,
+    // The normal, folded onto a square (octahedral; see `unoct`).
+    @location(1) n: vec2<f32>,
     @location(2) c: vec4<f32>,
+    // Its row in the material table.
+    @location(4) mat: u32,
+};
+// A corner's second stream (only buffers with textures or baked light have one).
+struct VX {
     @location(3) uv: vec2<f32>,
-    // roughness, metallic, texture layer (−1: none), opacity
-    @location(4) m: vec4<f32>,
     // lightmap coordinates of the front (xy) and back (zw); negative: none
     @location(8) lm: vec4<f32>,
 };
+// A line's end.
+struct VL {
+    @location(0) p: vec3<f32>,
+    @location(2) c: vec4<f32>,
+};
+// A corner's position alone (the shadow map and the depth pre-pass).
+struct VP {
+    @location(0) p: vec3<f32>,
+};
+
+// The unit normal a folded one (two numbers on the square −1 … 1) stands for.
+fn unoct(e: vec2<f32>) -> vec3<f32> {
+    var n = vec3<f32>(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.0);
+    n.x = n.x + select(t, -t, n.x >= 0.0);
+    n.y = n.y + select(t, -t, n.y >= 0.0);
+    return normalize(n);
+}
+
+fn material(id: u32) -> vec4<f32> {
+    return textureLoad(materials, vec2<u32>(id % MAT_ROW, id / MAT_ROW), 0);
+}
 // An instance's placement: the rows of a 3 × 4 matrix (block coordinates to the view's, relative
 // to its origin). The base geometry draws with the identity.
 struct II {
@@ -174,45 +206,58 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, y <= vec3<f32>(0.0031308));
 }
 
-@vertex
-fn vs_tri(v: VI, i: II) -> VO {
+fn corner(v: VI, i: II) -> VO {
     var o: VO;
     let p = place(i, v.p);
     o.pos = u.vp * vec4<f32>(p, 1.0);
     o.c = vec4<f32>(lin(v.c.rgb), v.c.a);
-    o.n = turn(i, v.n);
+    o.n = turn(i, unoct(v.n));
     o.wp = p;
-    o.uv = v.uv;
-    o.m = v.m;
-    o.lm = v.lm;
+    o.uv = vec2<f32>(0.0);
+    o.m = material(v.mat);
+    o.lm = vec4<f32>(-1.0);
+    return o;
+}
+
+@vertex
+fn vs_tri(v: VI, i: II) -> VO {
+    return corner(v, i);
+}
+
+// With the second stream: texture and lightmap coordinates.
+@vertex
+fn vs_tri_x(v: VI, i: II, x: VX) -> VO {
+    var o = corner(v, i);
+    o.uv = x.uv;
+    o.lm = x.lm;
     return o;
 }
 
 // Lines sit a little in front of the faces they lie on.
 @vertex
-fn vs_line(v: VI, i: II) -> VO {
+fn vs_line(v: VL, i: II) -> VO {
     var o: VO;
     let p = place(i, v.p);
     o.pos = u.vp * vec4<f32>(p, 1.0);
     o.pos.z = o.pos.z - 0.002 * o.pos.w;
     o.c = vec4<f32>(lin(v.c.rgb), v.c.a);
-    o.n = turn(i, v.n);
+    o.n = turn(i, vec3<f32>(0.0, 0.0, 1.0));
     o.wp = p;
-    o.uv = v.uv;
-    o.m = v.m;
-    o.lm = v.lm;
+    o.uv = vec2<f32>(0.0);
+    o.m = vec4<f32>(0.6, 0.0, -1.0, 1.0);
+    o.lm = vec4<f32>(-1.0);
     return o;
 }
 
 // The sun's view, for the shadow map.
 @vertex
-fn vs_shadow(v: VI, i: II) -> @builtin(position) vec4<f32> {
+fn vs_shadow(v: VP, i: II) -> @builtin(position) vec4<f32> {
     return u.shadow_vp * vec4<f32>(place(i, v.p), 1.0);
 }
 
 // The view's opaque surfaces, for the ambient occlusion's depth pre-pass.
 @vertex
-fn vs_depth(v: VI, i: II) -> @builtin(position) vec4<f32> {
+fn vs_depth(v: VP, i: II) -> @builtin(position) vec4<f32> {
     return u.vp * vec4<f32>(place(i, v.p), 1.0);
 }
 
