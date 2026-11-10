@@ -1080,7 +1080,10 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         orbitGoal.x = pose.yaw
         orbitGoal.z = pose.distance
         lastFree = freeArea
+        fittedViewport = vp
     }
+    /// The view size the last fit used: a fit asked for before the view had a size is redone once it has one.
+    private var fittedViewport: CGSize = .zero
     private var frameTurn: Float = 0
     /// The design angle each scope starts from (turning from the last fitted angle would drift).
     private var designYaw: Float = -2.25
@@ -1088,7 +1091,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// The chrome moved (a sheet grew, the text size changed): frame the same subject again, unless the user has
     /// moved the camera since.
     func chromeChanged() {
-        guard !userMoved, !framePoints.isEmpty, freeArea != lastFree else { return }
+        guard !userMoved, !framePoints.isEmpty, freeArea != lastFree || viewport != fittedViewport else { return }
         fit(framePoints, yaw: frameTurn > 0 ? nearestAngle(designYaw, to: orbitGoal.x) : orbitGoal.x, pitch: orbitGoal.y, turn: frameTurn)
         if reduceMotion { snapCamera() }
     }
@@ -1311,6 +1314,8 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
                 targetGoal = pose.target; orbitGoal.z = pose.distance
             }
         }
+        // The view got its size (or a new one) after the subject was chosen: frame it now.
+        if let vp = viewport, vp != fittedViewport, !framePoints.isEmpty, !userMoved { chromeChanged() }
         spring.step(&target, &targetVel, toward: targetGoal, dt: dt)
         spring.step(&orbit, &orbitVel, toward: orbitGoal, dt: dt)
         for i in lift.indices {
@@ -1488,6 +1493,9 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         for (k, l) in labels where want[k] == nil {
             l.removeFromSuperview()
             labels[k] = nil
+        }
+        // Every key the view no longer wants, including labels still waiting to be made.
+        for k in Array(labelAnchors.keys) where want[k] == nil {
             labelAnchors[k] = nil
             labelPriority[k] = nil
             labelSlots[k] = nil

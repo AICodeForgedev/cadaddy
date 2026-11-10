@@ -55,8 +55,9 @@ struct BuildingView: View {
 
                 VStack(spacing: 0) {
                     Spacer(minLength: 0)
+                    // Measured at its natural height (a max-height frame here would grow to the cap and feed back
+                    // into the layout); the room sheet gets what the cap leaves it and scrolls inside.
                     bottom(cap: layout.maxBottom)
-                        .frame(maxHeight: layout.maxBottom, alignment: .bottom)
                         .background(GeometryReader { g in Color.clear.preference(key: BottomHeightKey.self, value: g.size.height) })
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
