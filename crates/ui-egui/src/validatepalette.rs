@@ -99,7 +99,8 @@ impl Default for Choices {
     }
 }
 
-/// What the panel shows, read from the engine once per drawing revision.
+/// What the panel shows, read from the engine once per drawing revision (kept shared, behind an
+/// `Arc`).
 #[derive(Clone, Debug, Default)]
 struct View {
     key: (u64, u64, bool),
@@ -245,11 +246,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut c: Choices = ctx.data(|d| d.get_temp(choices_id())).unwrap_or_default();
     let (uid, revision) = doc_key(app);
     let key = (uid, revision, c.all);
-    let view = match ctx.data(|d| d.get_temp::<View>(view_id())) {
+    // Shared: a frame reads it without copying every finding and rule (Q6482).
+    let view: std::sync::Arc<View> = match ctx.data(|d| d.get_temp::<std::sync::Arc<View>>(view_id())) {
         Some(v) if v.key == key => v,
         _ => {
-            let v = read_view(app, key, c.all);
-            ctx.data_mut(|d| d.insert_temp(view_id(), v.clone()));
+            let v = std::sync::Arc::new(read_view(app, key, c.all));
+            ctx.data_mut(|d| d.insert_temp(view_id(), std::sync::Arc::clone(&v)));
             v
         }
     };

@@ -18,7 +18,7 @@ pub fn show(app: &CadApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new("DEBUG").color(egui::Color32::YELLOW).text_style(mono.clone()));
             ui.label(egui::RichText::new(format!("frame: {:.1} ms", app.frame_ms)).text_style(mono.clone()).color(egui::Color32::WHITE));
 
-            if let Some(rss) = process_rss_mb() {
+            if let Some(rss) = memory_shown() {
                 ui.label(egui::RichText::new(format!("memory: {rss:.0} MB")).text_style(mono.clone()).color(egui::Color32::WHITE));
             }
 
@@ -26,8 +26,14 @@ pub fn show(app: &CadApp, ctx: &egui::Context) {
             let cmd = app.session.running.as_ref().map_or("-", |r| r.id.as_str());
             ui.label(egui::RichText::new(format!("command: {cmd}")).text_style(mono.clone()).color(egui::Color32::WHITE));
             if let Ok(doc) = app.session.doc() {
-                let n = doc.model.iter().count();
+                // Its count kept, not counted: walking a million objects every frame was the
+                // overlay's own cost (Q6482).
+                let n = doc.model.len();
                 ui.label(egui::RichText::new(format!("objects: {n}")).text_style(mono.clone()).color(egui::Color32::WHITE));
+            }
+            // Where the frame's CPU time goes, the costliest parts (`framecost`).
+            for line in crate::framecost::overlay_lines(8) {
+                ui.label(egui::RichText::new(line).text_style(mono.clone()).color(egui::Color32::LIGHT_GRAY));
             }
             // Where the 2D canvas's time goes (`canvas::drawstats`).
             for line in app.canvas.stats.lines(&adapter_name(app)) {
@@ -46,6 +52,25 @@ pub fn adapter_name(app: &CadApp) -> String {
 /// The 2D draw statistics (`ui.draw2d`, see `canvas::drawstats`).
 pub fn draw2d_json(app: &CadApp) -> serde_json::Value {
     app.canvas.stats.json(&adapter_name(app), app.canvas.gpu.is_some(), crate::gpu::gpu_bytes(), process_rss_mb())
+}
+
+thread_local! {
+    static MEMORY_SHOWN: std::cell::Cell<(f64, Option<f64>)> = const { std::cell::Cell::new((f64::NEG_INFINITY, None)) };
+}
+
+/// The memory the overlay shows, read at most once a second: on macOS a read starts `ps`, a
+/// process per frame otherwise (Q6482).
+fn memory_shown() -> Option<f64> {
+    let now = crate::now_ms();
+    MEMORY_SHOWN.with(|m| {
+        let (at, mb) = m.get();
+        if now - at < 1000.0 && now >= at {
+            return mb;
+        }
+        let mb = process_rss_mb();
+        m.set((now, mb));
+        mb
+    })
 }
 
 /// Approximate resident set size of this process in megabytes (safe, no FFI).
