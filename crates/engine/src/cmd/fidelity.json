@@ -3,6 +3,25 @@
   "source": "company default: CADaddy fidelity rules (view.fidelity.rules edits them per project)",
   "auto": { "building_ft": 240, "floor_ft": 90, "room_ft": 12, "margin": 0.15 },
   "default_tier": "floor",
+  "plan": {
+    "why": "the 2D screen's detail levels: what is drawn as less while it is too small on screen to show (plots, exports, counts and the takeoff always get everything)",
+    "dot_px": 1,
+    "text_bar_px": 3,
+    "hatch_tint_px": 4,
+    "box_px": 4,
+    "tier_px": { "building": 0, "floor": 8, "room": 16, "detail": 32 },
+    "default_tier": "floor",
+    "bar_transparency": 55,
+    "tint_transparency": 75,
+    "image_px": 2048,
+    "symbols": [
+      { "words": ["north", "arrow", "title", "logo", "stamp", "seal", "border", "key plan", "keyplan", "bubble", "callout", "section", "elevation", "scale", "match line", "matchline"], "tier": "building", "why": "sheet furniture and callouts: shown at every zoom" },
+      { "words": ["screw", "bolt", "washer", "anchor", "strap", "hanger", "clip", "fastener", "coupling", "locknut", "bushing"], "tier": "detail", "why": "fittings, supports and fasteners: only seen up close" },
+      { "words": ["panel", "panelboard", "switchboard", "switchgear", "transformer", "xfmr", "disconnect", "starter", "equipment", "equip", "door", "window", "stair", "elevator", "column", "casework", "cabinet"], "tier": "floor", "why": "panels, gear, openings and casework: in a floor's view" },
+      { "words": ["receptacle", "recep", "outlet", "duplex", "fourplex", "gfci", "switch", "dimmer", "occupancy", "sensor", "detector", "smoke", "horn", "strobe", "speaker", "pull station", "jack", "data", "phone", "voice", "telecom", "catv", "camera", "card reader", "keypad", "thermostat", "tstat", "light", "luminaire", "fixture", "lamp", "exit", "downlight", "sprinkler", "diffuser", "grille", "register", "device", "junction", "j-box", "jbox"], "tier": "room", "why": "devices, luminaires, plumbing fixtures, sprinkler heads and air outlets: in a room's view" },
+      { "layers": ["devc", "powr", "lite", "ltng", "fixt", "spkl", "comm", "tele", "alrm", "secu", "symb"], "tier": "room", "why": "on a device, lighting, telecom, fire alarm or symbol layer" }
+    ]
+  },
   "rules": [
     { "kinds": ["wire", "conductor"], "tier": "detail", "why": "pulled inside a raceway: hidden by it at every scale" },
     { "kinds": ["coupling", "connector", "locknut", "bushing", "strap", "ring", "hanger", "support", "clip", "anchor", "fastener", "screw", "nail", "seam", "tape"], "tier": "detail", "why": "fittings, supports and fasteners: only seen up close" },

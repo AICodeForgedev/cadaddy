@@ -199,6 +199,16 @@ pub struct CanvasState {
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,
+    /// The open sheet's pictures, drawn instead of its linework zoomed out ([`sheetimage`]).
+    pub sheet_images: sheetimage::SheetImages,
+    /// Draw everything in full on screen: no detail levels and no sheet pictures, the screen as
+    /// it was before them (for measuring them).
+    pub full_detail: bool,
+    /// The detail level `list` was built at (`None`: in full), see [`cadaddy_render::detail`].
+    pub list_detail: Option<cadaddy_render::detail::Detail>,
+    /// The drawing's detail rules (`plan` in its fidelity rules data), for which drawing and
+    /// building spec.
+    plan_rules: Option<((u64, usize, usize), std::sync::Arc<cadaddy_render::detail::PlanRules>)>,
 }
 
 impl CanvasState {
@@ -216,8 +226,9 @@ impl CanvasState {
     }
 
     /// Put a finished background build in place, with its GPU vertex data when it has some.
-    fn install(&mut self, key: ListKey, window: Option<Bounds2>, built: rebuild::Built) {
+    fn install(&mut self, key: ListKey, window: Option<Bounds2>, detail: Option<cadaddy_render::detail::Detail>, built: rebuild::Built) {
         self.list_gen = self.list_gen.wrapping_add(1);
+        self.list_detail = detail;
         if let Some(m) = built.mesh {
             if let Ok(mut slot) = self.mesh_slot.lock() {
                 *slot = Some(m.data);
@@ -322,6 +333,9 @@ fn prim_color32(prim: &cadaddy_render::DPrim, bg: Rgb) -> Color32 {
 /// yet, is built at once.
 fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::Context) {
     let px = 1.0 / xf.scale;
+    // The screen's detail levels (model space's plan view only).
+    let rules = detail_rules(app);
+    let picture = sheet_picture_want(app, rules.as_ref());
     // What the screen shows of the drawing: with a print set's sheet open, that sheet's objects
     // alone (`cadaddy_engine::sheetnav`).
     let Ok(shown) = app.session.view_doc() else { return };
@@ -349,6 +363,8 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         {
             (h, vp.view_center.x.to_bits(), vp.view_center.y.to_bits(), vp.view_height.to_bits()).hash(&mut s);
         }
+        // Detail levels on or off, and by which rules.
+        rules.as_ref().map(|r| std::sync::Arc::as_ptr(r) as usize).hash(&mut s);
         s.finish()
     };
     let (lwdisplay, transparency_display) = (app.session.settings.lwdisplay, app.session.settings.transparency_display);
@@ -359,10 +375,10 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         match job.poll() {
             rebuild::Poll::Pending => {}
             rebuild::Poll::Done(built) => {
-                let (job_key, window) = (job.key, job.window);
+                let (job_key, window, detail) = (job.key, job.window, job.detail.clone());
                 app.canvas.job = None;
                 if app.canvas.list.is_some() && same_content(&job_key, &key) {
-                    app.canvas.install(job_key, window, *built);
+                    app.canvas.install(job_key, window, detail, *built);
                 }
             }
             rebuild::Poll::Lost => {
@@ -380,6 +396,13 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
     // Only the view moved: keep drawing the current list and build the new one in the background.
     let view_only = app.canvas.list.is_some() && same_content(&app.canvas.key, &key);
     if view_only && app.canvas.job.as_ref().is_some_and(|j| j.serves(&key, &visible)) {
+        return;
+    }
+    // Zoomed out on a sheet whose picture is drawn instead of the list: the list (kept for
+    // highlights) needs no new build for the view.
+    let screen_px = px / f64::from(ctx.pixels_per_point()).max(1e-6);
+    if view_only && picture.as_ref().is_some_and(|w| w.covers(screen_px) && app.canvas.sheet_images.ready(w)) {
+        app.canvas.job = None;
         return;
     }
     // A build for another view, or for a drawing that has since changed, is no longer wanted:
@@ -408,6 +431,9 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         // Drywall layer boundary lines.
         layer_lines: app.session.drywall_layer_lines.clone(),
         skip_hatches: false,
+        // The band's finest zoom, as the level of detail above: the list serves every zoom in
+        // the band, so what it draws as less must stay under a pixel at the finest one.
+        detail: rules.and_then(|r| cadaddy_render::detail::Detail::new(2f64.powi(lod_band), r)),
     };
     if view_only {
         let t = Tokens::get();
@@ -434,7 +460,54 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
     app.canvas.key = key;
     app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
+    app.canvas.list_detail = opts.detail;
     app.canvas.build_ms = crate::now_ms() - t0;
+}
+
+/// The drawing's detail rules when the screen draws at detail levels: model space's plan view,
+/// not turned off ([`CanvasState::full_detail`]). Kept per drawing and building spec.
+fn detail_rules(app: &mut CadApp) -> Option<std::sync::Arc<cadaddy_render::detail::PlanRules>> {
+    if app.canvas.full_detail {
+        return None;
+    }
+    let st = app.session.state().ok()?;
+    if st.space != cadaddy_doc::Space::Model || st.mspace.is_some() || st.projection().is_some() || st.list_projection().is_some() {
+        return None;
+    }
+    let spec = st.doc.building_spec.as_deref().map_or((0, 0), |s| (s.as_ptr() as usize, s.len()));
+    let key = (st.uid, spec.0, spec.1);
+    if let Some((k, r)) = &app.canvas.plan_rules
+        && *k == key
+    {
+        return Some(r.clone());
+    }
+    let r = std::sync::Arc::new(cadaddy_engine::cmd::fidelity::plan_rules(&st.doc));
+    app.canvas.plan_rules = Some((key, r.clone()));
+    Some(r)
+}
+
+/// The open sheet's picture the screen would draw zoomed out ([`sheetimage`]): with a print
+/// set's sheet open in model space's plan view and detail levels on.
+fn sheet_picture_want(app: &CadApp, rules: Option<&std::sync::Arc<cadaddy_render::detail::PlanRules>>) -> Option<sheetimage::Want> {
+    let rules = rules?;
+    let st = app.session.state().ok()?;
+    if st.block_edit.is_some() || st.active_viewport().is_some() {
+        return None;
+    }
+    let (i, sheet) = app.session.active_sheet()?;
+    let t = Tokens::get();
+    let bg = view_background(app).unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b()));
+    sheetimage::Want::new(st.uid, st.revision, i, sheet.rect, bg, rules.image_px)
+}
+
+/// Draw the open sheet's picture instead of its linework when zoomed out enough (asking for it
+/// when it isn't ready). True when it was drawn.
+fn draw_sheet_picture(app: &mut CadApp, p: &egui::Painter, xf: &Xf, ctx: &egui::Context) -> bool {
+    let rules = detail_rules(app);
+    let want = sheet_picture_want(app, rules.as_ref());
+    let px = 1.0 / (xf.scale * f64::from(ctx.pixels_per_point())).max(1e-300);
+    let session = &app.session;
+    app.canvas.sheet_images.draw(want.as_ref(), || session.view_doc().ok(), rules.unwrap_or_default(), px, p, xf, ctx)
 }
 
 /// The active MSPACE viewport when its contents are drawn apart from the layout's list (see
@@ -575,6 +648,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             color_overrides: app.session.drywall_color_overrides.iter().map(|(&h, &c)| (h, c)).collect(),
             layer_lines: app.session.drywall_layer_lines.clone(),
             skip_hatches: false,
+            detail: None,
         };
         c.list = cadaddy_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);
@@ -1990,6 +2064,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     } else {
         ensure_list(app, &xf_paper, &views, ui.ctx());
     }
+    // The snaps offer only what the list draws in full.
+    let drawn_at = app.canvas.list.as_ref().and(app.canvas.list_detail.clone());
+    app.session.set_screen_detail(drawn_at);
     let sheet = app.canvas.list.as_ref().and_then(|l| l.sheet);
     let surround = Color32::from_rgb(0x50, 0x57, 0x63);
     let (bg, paper_rect) = match sheet {
@@ -2038,6 +2115,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         // The Model tab in a 3D visual style: the shaded view stands for the display list, with
         // the section box's face handles over it.
         crate::shaded::section_box_handles(app, ui, &painter, &xf);
+    } else if sheet.is_none() && active_vp.is_none() && draw_sheet_picture(app, &painter, &xf_paper, ui.ctx()) {
+        // Zoomed out on a print set's sheet: its picture stands for the linework.
     } else if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {
@@ -3479,6 +3558,8 @@ mod refedit;
 
 /// Background rebuilds of the display list for a new view.
 mod rebuild;
+/// The open sheet's picture, drawn zoomed out (Q6417).
+pub mod sheetimage;
 
 #[cfg(test)]
 mod hatch_pick_tests {

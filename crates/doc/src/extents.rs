@@ -12,6 +12,13 @@ pub const MAX_BLOCK_DEPTH: usize = 16;
 /// Bounds of a single-line TEXT / ATTDEF / ATTRIB of `len` characters, following its justification
 /// the same way the renderer places it (the stroke font is about 0.88 of the height per character).
 fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
+    Bounds2::from_points(text_quad(t, len))
+}
+
+/// The box a single-line TEXT / ATTDEF / ATTRIB of `len` characters takes, along its rotation
+/// (bottom left, bottom right, top right, top left): where [`entity_bounds`] measures it, and
+/// where the screen draws it as a bar when it is too small to read.
+pub fn text_quad(t: &crate::Text, len: usize) -> [Vec2; 4] {
     use crate::{HAlign, VAlign};
     let w = t.height * 0.9 * t.width_factor.abs().max(0.01) * len.max(1) as f64;
     // Justified text (TL, ML and BL too) hangs from its alignment point (DXF group 11).
@@ -29,7 +36,7 @@ fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
         (_, VAlign::Top) => -t.height,
     };
     let local = [Vec2::new(dx, dy), Vec2::new(dx + w, dy), Vec2::new(dx + w, dy + t.height), Vec2::new(dx, dy + t.height)];
-    Bounds2::from_points(local.map(|p| origin + p.rotate(t.rotation)))
+    local.map(|p| origin + p.rotate(t.rotation))
 }
 
 /// Whether an entity inside a block definition shows: its own invisible flag and its layer count,
@@ -50,6 +57,12 @@ fn blank(s: &str) -> bool {
 
 /// Approximate box of an MTEXT, from its attachment point, width and line count.
 fn mtext_box(t: &crate::MText) -> Bounds2 {
+    Bounds2::from_points(mtext_quad(t))
+}
+
+/// The box an MTEXT takes, along its rotation (top left, top right, bottom right, bottom left),
+/// from its attachment point, width and line count.
+pub fn mtext_quad(t: &crate::MText) -> [Vec2; 4] {
     let lines = t.contents.split("\\P").count().max(1);
     let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
     let mut w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
@@ -70,9 +83,7 @@ fn mtext_box(t: &crate::MText) -> Bounds2 {
         _ => 0.0,
     };
     let o = t.insert.xy();
-    let pts = [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)]
-        .map(|p| o + p.rotate(t.rotation));
-    Bounds2::from_points(pts)
+    [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)].map(|p| o + p.rotate(t.rotation))
 }
 
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {

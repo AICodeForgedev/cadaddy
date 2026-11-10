@@ -391,6 +391,10 @@ pub struct DocState {
     pub ifc_view: cmd::ifcmodel::ViewState,
     /// A print set's open sheet ([`sheetnav`]): the screen works on it alone.
     pub sheet_nav: sheetnav::SheetNav,
+    /// The detail level the screen last drew model space's plan view at
+    /// ([`cadaddy_render::detail`]): the snaps offer no point of what it drew as less. View
+    /// state, never saved; `None` draws (and snaps to) everything.
+    pub screen_detail: Option<cadaddy_render::detail::Detail>,
 }
 
 /// The view that shows `ext` with `margin` (1.05 = 5% more) in a viewport `px` wide and high,
@@ -470,6 +474,7 @@ impl DocState {
             ifc_stamps: std::collections::HashMap::new(),
             ifc_view: cmd::ifcmodel::ViewState::default(),
             sheet_nav: sheetnav::SheetNav::default(),
+            screen_detail: None,
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet

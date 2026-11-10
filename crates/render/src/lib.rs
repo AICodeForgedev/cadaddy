@@ -13,6 +13,7 @@ mod cache;
 pub use cache::{ChunkCache, build_cached, build_cached_into};
 pub mod clip;
 pub mod clouds;
+pub mod detail;
 mod dim;
 pub mod emf;
 pub mod encode;
@@ -349,6 +350,10 @@ pub struct Options {
     /// Leave hatches out (their pattern lines and fills): a boundary search follows only the
     /// linework, also inside block references and arrays.
     pub skip_hatches: bool,
+    /// The screen's detail level ([`detail`]): what is under a pixel, unreadable text, fine
+    /// hatch patterns and symbols too small for their tier are drawn as less. `None` (plots,
+    /// exports, picks and every other build) draws everything in full; plots ignore it.
+    pub detail: Option<detail::Detail>,
 }
 
 impl Options {
@@ -377,6 +382,7 @@ impl Default for Options {
             color_overrides: std::collections::BTreeMap::new(),
             layer_lines: Vec::new(),
             skip_hatches: false,
+            detail: None,
         }
     }
 }
@@ -1514,6 +1520,28 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     };
     let tol = b.opts.tolerance / detail_scale(b, &ctx.xf).max(1e-12);
     let lw = if b.opts.lineweights { lw } else { 0.0 };
+    // The screen's detail level: drawn as less when too small to show (never in a plot).
+    if !b.plotting
+        && let Some(det) = &b.opts.detail
+    {
+        match det.look(ctx.d, e, &ctx.xf) {
+            detail::Look::Full => {}
+            detail::Look::Dot(p) => return b.point(ctx, rgb, p),
+            detail::Look::Box([p0, p1, p2, p3]) => {
+                b.polyline(ctx, rgb, lw, &[p0, p1, p2, p3, p0]);
+                if let EntityKind::Insert(ins) = &e.kind {
+                    attributes(b, ctx, e, ins, rgb);
+                }
+                return;
+            }
+            detail::Look::Bars(quads) => {
+                if b.opts.text {
+                    bars(b, ctx, rgb, &quads, det.rules.bar_transparency);
+                }
+                return;
+            }
+        }
+    }
     // Stroke a polyline with the entity's linetype.
     let stroke = |b: &mut Builder, pts: &[Vec2]| match &lt {
         Some(lt) => {
@@ -2522,6 +2550,22 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
             None => insert_contents(b, ctx, e, ins, blk),
         }
     }
+    attributes(b, ctx, e, ins, rgb);
+}
+
+/// Text bars (filled quads in `ctx`'s coordinates) in `rgb`, at least `transparency` see-through:
+/// text too small to read, as the screen's detail level draws it.
+fn bars(b: &mut Builder, ctx: &Ctx, rgb: Ink, quads: &[[Vec2; 4]], transparency: u8) {
+    let saved = b.transparency;
+    b.transparency = b.transparency.max(transparency);
+    for [p0, p1, p2, p3] in quads {
+        b.tris(ctx, rgb, &[*p0, *p1, *p2, *p0, *p2, *p3]);
+    }
+    b.transparency = saved;
+}
+
+/// A block reference's attributes (`rgb`: the reference's colour).
+fn attributes(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb: Ink) {
     if b.opts.text {
         // ATTMODE (ATTDISP): 0 shows no attributes, 1 the visible ones, 2 all of them.
         let attmode = ctx.d.header.i64("ATTMODE", 1);
@@ -2541,7 +2585,6 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
             }
             // A multiline attribute is drawn as its multiline text.
             let multiline = a.multiline_text();
-            let sh = if multiline.is_none() { Some(place_text_entity(ctx.d, &a.text, &a.text.value).0) } else { None };
             // Properties of the attribute's definition (as AutoCAD copies them to the attribute
             // on insertion), except those set on the attribute itself: ByBlock = the reference's,
             // layer 0 = the reference's layer.
@@ -2558,6 +2601,25 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
             if shown {
                 b.transparency = t;
                 let lw = if b.opts.lineweights { lw } else { 0.0 };
+                // Too small to read on screen: a bar.
+                let look = b
+                    .opts
+                    .detail
+                    .as_ref()
+                    .filter(|_| !b.plotting && multiline.is_none())
+                    .map(|det| (det.text_look(&ctx.xf, &a.text, a.text.value.chars().count()), det.rules.bar_transparency));
+                match look {
+                    Some((detail::Look::Bars(quads), t)) => {
+                        bars(b, ctx, ink, &quads, t);
+                        continue;
+                    }
+                    Some((detail::Look::Dot(p), _)) => {
+                        b.point(ctx, ink, p);
+                        continue;
+                    }
+                    _ => {}
+                }
+                let sh = if multiline.is_none() { Some(place_text_entity(ctx.d, &a.text, &a.text.value).0) } else { None };
                 match (&multiline, &sh) {
                     (Some(m), _) => mtext(b, ctx, m, ink, lw),
                     (None, Some(sh)) if qtext(ctx.d) => qtext_box(b, ctx, ink, lw, &[sh], a.text.rotation),
