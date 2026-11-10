@@ -1263,6 +1263,15 @@
     "SWITCHBOARD"
    ]
   },
+  "equipment.switchboard_words": {
+   "source": "drafting convention: the words that name a switchboard or switchgear on a plan's label or a schedule's header (`SWBD MDP`); the word and the tag after it label the gear (Q6437)",
+   "words": [
+    "SWITCHBOARD",
+    "SWITCHGEAR",
+    "SWBD",
+    "SWGR"
+   ]
+  },
   "equipment.kind_by_tag_prefix": {
    "source": "trade practice: an equipment tag's letters and the kind they name (AHU-1: ahu) (moved from equip_reader.rs `kind_from_tag`)",
    "pairs": [

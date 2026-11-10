@@ -39,6 +39,19 @@
       "basis": "trade practice: a wood or metal roof deck is a sheet of one thickness laid on the framing, the sloped joists or truss top chords setting the slope; only a flat structure with tapered fill or tapered insulation is a wedge, and that is its own layer; the outside walls close the space under a sloped roof's high side"
     },
     {
+      "id": "E-GEAR-DRAWN",
+      "trade": "electrical",
+      "fills": "where a panelboard or switchboard stands when a plan draws it: the rectangle its label sits on or beside (numbers: label_reach_h text heights plus reach_ft feet from the label; a footprint depth_in and length_in in range, its long side at least min_ratio times its depth; panel_height_in and switchboard_height_in when no submittal gives the box)",
+      "basis": "trade practice: the electrician sets gear where the plans draw it, the drawn rectangle its footprint and the wall it touches the one it hangs or stands on; a schedule's LOCATION only names the room, so it places only gear no plan draws (and that placement is proposed)",
+      "reach_ft": 1.0,
+      "label_reach_h": 3.0,
+      "depth_in": [3, 54],
+      "length_in": [10, 480],
+      "min_ratio": 1.5,
+      "panel_height_in": 48,
+      "switchboard_height_in": 90
+    },
+    {
       "id": "E-RCP-LIGHT",
       "trade": "electrical",
       "fills": "a ceiling luminaire's place where the electrical plan's symbol and the reflected ceiling plan's light differ (numbers: reach_ft, the farthest a light is moved; connect_reach_ft, a light this close is at its spot)",
