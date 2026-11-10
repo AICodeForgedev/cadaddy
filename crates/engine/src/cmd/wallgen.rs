@@ -3832,6 +3832,10 @@ fn fills_a_wall(a: Vec2, b: Vec2, t: f64, walls: &[super::perceive::geometry::Pa
 /// the wall's end, or short of it), and still lie within the gap.
 const FRAME_REACH_IN: f64 = 2.0;
 
+/// How far (inches) a window's sill, stool or trim may be drawn past the face of the wall it is
+/// in.
+const FRAME_SILL_IN: f64 = 6.0;
+
 /// Most pairs looked at as a window's frame across a gap (a level; hostile drawings).
 const MAX_FRAME_CANDIDATES: usize = 200_000;
 
@@ -3841,9 +3845,9 @@ const MAX_FRAME_CANDIDATES: usize = 200_000;
 /// within the gap's extent and its centreline within the walls' depth, and a line of the level's
 /// (`lines`) is drawn strictly between the walls' faces across the gap ([`glazed`]: the frame's
 /// glazing or sill line, or two glazing lines from jamb to jamb paired up themselves). Every pair
-/// of `cands` in line lying wholly within such a gap's extent, a face of it in the wall's depth,
-/// is the window's (its frame's outline, an inner frame inset from the jambs, the frame paired
-/// with a sill or stool past the wall's face). The walls either
+/// of `cands` in line lying wholly within such a gap's extent, its faces in the wall's depth or a
+/// sill's projection past it ([`FRAME_SILL_IN`]), is the window's (its frame's outline, an inner
+/// frame inset from the jambs, the frame paired with a sill, a sill's or stool's outline). The walls either
 /// side must be walls: not themselves such a piece between two others (`hosts_are_cands`: the
 /// same list), so a facade of short piers drawn with lines inside them between windows keeps its
 /// piers. A wall piece in line with nothing inside it, and the pairs of a line running on past
@@ -3861,7 +3865,7 @@ fn frames_in_gaps(
     if !(k.is_finite() && k > 0.0 && min_gap.is_finite() && max_gap.is_finite() && max_gap >= min_gap) || cands.is_empty() || hosts.len() < 2 {
         return out;
     }
-    let (reach, tol) = (FRAME_REACH_IN * k, 0.5 * k);
+    let (reach, tol, sill) = (FRAME_REACH_IN * k, 0.5 * k, FRAME_SILL_IN * k);
     let longest = max_gap + 2.0 * reach;
     let seg_len = |i: usize| faces.get(i).map(|s| s.a.dist(s.b));
     // A pair no longer than an opening, nor are its faces.
@@ -4007,9 +4011,9 @@ fn frames_in_gaps(
                     p0.min(p1) >= -reach && p0.max(p1) <= len + reach
                 })
             });
-            // A face of it in the wall's depth: the frame's (paired with another of its lines, or
-            // with a sill or stool drawn past the wall's face).
-            let framed = c.faces.iter().any(|&f| faces.get(f).is_some_and(|s| n.dot(s.a.mid(s.b) - a).abs() <= t / 2.0 + tol));
+            // Its faces in the wall's depth or a sill's projection past its face: the frame's
+            // lines, and a sill's, a stool's or trim's.
+            let framed = c.faces.iter().all(|&f| faces.get(f).is_some_and(|s| n.dot(s.a.mid(s.b) - a).abs() <= t / 2.0 + sill));
             if inside
                 && framed
                 && let Some(x) = out.get_mut(ci)

@@ -36,7 +36,8 @@ enum InGap {
     /// length (a wall drawn with a line between its faces): the wall runs through.
     LineThrough,
     /// The frame's outline as in `Frame`, an inner frame (the sash) 6" deep inset 2 1/2" from
-    /// each jamb inside it, and a sill line 4" outside the wall's face along the opening.
+    /// each jamb inside it, a sill line 4" outside the wall's face along the opening and a
+    /// stool's outline past its inside face.
     InsetFrame,
 }
 
@@ -78,6 +79,9 @@ fn building(in_gap: InGap) -> Session {
             line(&mut d, (189.5, t / 2.0 - 3.0), (189.5, t / 2.0 + 3.0));
             line(&mut d, (122.5, t / 2.0), (189.5, t / 2.0));
             line(&mut d, (120.0, -4.0), (192.0, -4.0));
+            // A stool's outline 27" long, 3" deep, 1"–4" past the wall's inside face.
+            line(&mut d, (142.5, t + 1.0), (169.5, t + 1.0));
+            line(&mut d, (142.5, t + 4.0), (169.5, t + 4.0));
         }
         InGap::LineThrough => {
             line(&mut d, (120.0, 0.0), (192.0, 0.0));
@@ -188,6 +192,9 @@ fn an_inner_frame_inset_from_the_jambs_and_a_sill_are_no_wall_either() {
     let mut s = building(InGap::InsetFrame);
     let bridged = walls_in_gap(&mut s);
     assert!(bridged.is_empty(), "no pair of the frame, the sash or the sill bridges the gap: {bridged:?}");
+    let plan = s.execute("wallgen.plan", &json!({"level": "L1"})).expect("plan");
+    let stool = plan["walls"].as_array().expect("walls").iter().any(|w| w["a"][1].as_f64().is_some_and(|y| y > 14.0 && y < 19.0));
+    assert!(!stool, "the stool is no wall: {plan}");
     let (r, windows, solid) = built(&mut s);
     assert_eq!(windows, 1, "{r}");
     assert!(!solid, "{r}");
