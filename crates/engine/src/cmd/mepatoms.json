@@ -226,7 +226,17 @@
       "putty_source": "IBC 714.4.2 exception 1.4: boxes on opposite sides of a fire-resistance-rated wall closer than 24 in, where neither can move that far on its wall, are both protected by listed putty pads",
       "max_move_in": 32.0,
       "keep_kinds": ["switch"],
-      "keep_source": "a switch's spot is where its door's latch side, the bed or the counter it serves puts it: the field keeps it and moves the box on the other face, else pads both (trade practice; the designed device location wins over a move)"
+      "keep_source": "a switch's spot is where its door's latch side, the bed or the counter it serves puts it: the field keeps it and moves the box on the other face, else pads both (trade practice; the designed device location wins over a move)",
+      "remedy": "separate",
+      "remedy_source": "the usual remedy where no project rule, specification or note names one (trade practice): the boxes separated by distance, one moved to the next stud bays; the alternative, listed putty pads on both boxes at the drawn positions (IBC 714.4.2 exception 1.4), is the project's choice (project rule clearance/rated_wall_boxes: putty pads)",
+      "rule_domain": "clearance",
+      "rule_key": "rated_wall_boxes",
+      "putty_words": ["PUTTY PAD", "PUTTY-PAD", "BOX INSERT", "BOX PAD", "INTUMESCENT PAD", "MOLDABLE PUTTY", "MOLDABLE PAD", "FIRESTOP PAD", "FIRE STOP PAD"],
+      "separate_words": ["SEPARATE", "SEPARATION", "APART", "DISTANCE", "OFFSET", "STAGGER", "MOVE"],
+      "box_words": ["BOX", "OUTLET", "DEVICE"],
+      "pair_words": ["OPPOSITE", "BACK TO BACK", "BACK-TO-BACK", "BOTH SIDES", "EACH SIDE"],
+      "not_words": ["NOT PERMITTED", "NOT ALLOWED", "NOT ACCEPTABLE", "NOT BE USED", "PROHIBITED", "DO NOT USE", "SHALL NOT USE"],
+      "putty_choice_source": "IBC 714.4.2 exception 1.4: listed putty pads on both boxes of a back-to-back pair in a fire-resistance-rated wall keep the devices where the documents put them (the remedy the project names)"
     },
     "stud_bay_in": 16.0,
     "stud_bay_source": "the next stud bays: a box moved for the field goes no farther than two 16 in o.c. bays (past that the putty pads keep both where they are), never into a bay another box on that face stands in, nor across an opening or into a wall that meets its own, nor behind fixed furniture (trade practice)"

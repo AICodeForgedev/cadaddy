@@ -443,6 +443,28 @@ fn items(s: &mut Session) -> Vec<Item> {
                 });
             }
         }
+        // A circuit none of whose devices is in the model (Q6489): not routed, no raceway built
+        // or taken off for it; are its devices missing from the model, or is it no circuit?
+        for u in r["unrouted"].as_array().into_iter().flatten().filter(|u| u["no_device"] == json!(true)).take(MAX_QUEUED_QUESTIONS) {
+            let text = |k: &str| u[k].as_str().unwrap_or_default().to_string();
+            let (label, level, sheet, tag) = (text("circuit"), text("level"), text("sheet"), text("tag"));
+            out.push(Item {
+                id: format!("RV-U{}", hash(&format!("unrouted|{tag}|{label}|{level}"))),
+                kind: "question",
+                level: level.clone(),
+                title: cut(&format!("Circuit {label} on {level} is not routed: none of its devices is in the model. Where are its devices?"), 160),
+                detail: u.clone(),
+                candidates: vec![
+                    json!({"answer": "its devices are missing: build them, then route again (conduit.reroute)", "from": if sheet.is_empty() { "the plans".to_string() } else { sheet.clone() }}),
+                    json!({"answer": "no circuit: the label is not a circuit of devices (a note, a spare, another trade's)", "from": "the plans and the panel schedule"}),
+                ],
+                documents: [sheet.clone(), "the panel schedule of its panel".into()].into_iter().filter(|x| !x.is_empty()).collect(),
+                documented: true,
+                rank: 1.5,
+                key: json!({"unrouted": tag, "circuit": label, "level": level}),
+                system: super::conduitroute::BRANCH_SYSTEM.into(),
+            });
+        }
     }
     out.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.id.cmp(&b.id)));
     out
@@ -763,6 +785,11 @@ fn breaker_items(s: &Session) -> Vec<Item> {
 /// An answered device-mark question into the model: its devices take the kind (`not a device`
 /// takes them out), the answer and its citation their source.
 fn answer_question(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, who: &str) -> Result<()> {
+    // A circuit not routed for want of a device (Q6489): the decision is the record (its devices
+    // are built, and it routes, from the documents; never a raceway from the answer alone).
+    if item.key.get("unrouted").is_some() {
+        return Ok(());
+    }
     // Whose work a class is (Q6167): the answer is kept as the project's rule for it.
     if let Some(class) = item.key["scope"].as_str() {
         let source = match cite {
@@ -840,6 +867,9 @@ fn how(i: &Item) -> Value {
         }
         "conflict" => {
             json!({"call": "review.resolve", "example": {"id": i.id, "answer": "20A 125V", "citation": {"kind": "submittal", "document": "the approved product data", "ref": "page 2"}}, "or": "review.rfi_draft {id, question} when no document settles it"})
+        }
+        "question" if i.key.get("unrouted").is_some() => {
+            json!({"call": "review.resolve", "example": {"id": i.id, "answer": "its devices are missing: build them, then route again", "citation": {"kind": "drawing", "document": i.documents.first().cloned().unwrap_or_default(), "ref": "the circuit's devices"}}, "or": "review.rfi_draft {id, question} when no document settles it"})
         }
         "question" if i.key.get("scope").is_some() => {
             json!({"call": "review.resolve", "example": {"id": i.id, "answer": if i.key["aspect"] == "ours" { json!({"ours": ["box", "conduit"]}) } else { json!("fire alarm") }, "citation": {"kind": "spec", "document": "the division of work", "ref": "the section that says"}}, "or": "review.rfi_draft {id, question} when no document settles it"})

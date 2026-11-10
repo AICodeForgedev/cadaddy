@@ -472,13 +472,14 @@ fn the_set_follows_the_four_views_and_never_holds_everything() {
         "branch_through_floor",
         "unknown_1_25",
         "feeder_by_name",
+        "unsized_pipe",
     ] {
         has_all(&full, k, "building-mep-full");
     }
     let mep: BTreeSet<String> = mains.union(&full).cloned().collect();
     // Never in a building MEP package: the shell, wires' boxes, devices, fixtures, furniture,
-    // branch circuits (the elevator's even through a floor), small or unsized pipe, sprinkler
-    // heads and branch lines that stay on their floor.
+    // branch circuits (the elevator's even through a floor), small pipe, sprinkler heads and
+    // branch lines that stay on their floor.
     for k in [
         "shell",
         "device",
@@ -490,7 +491,6 @@ fn the_set_follows_the_four_views_and_never_holds_everything() {
         "cw_branch",
         "sprinkler_head",
         "sprinkler_branch",
-        "unsized_pipe",
         "low_voltage",
     ] {
         has_none(&mep, k, "the building MEP packages");
@@ -504,8 +504,14 @@ fn the_set_follows_the_four_views_and_never_holds_everything() {
     assert_eq!(mains_els.iter().filter(|e| e["kind"] == json!("outline")).count(), 1, "one outline");
     has_all(&mains, "floor", "building-mep-mains");
     assert!(full_els.iter().all(|e| e["view_basis"].is_string()), "every full element says why it is there");
-    assert!(mains_side["left_out"]["pipe size unknown"].as_u64().unwrap() >= 1, "{}", mains_side["left_out"]);
-    assert_eq!(index["left_out"]["pipe_size_unknown"], mains_side["left_out"]["pipe size unknown"]);
+    // A pipe with neither a role nor a size is not dropped (Q6431): role decides first, size only
+    // when the role is unknown, and with neither it shows in Full MEP marked inferred, counted.
+    assert!(mains_side["left_out"]["pipe size unknown"].is_null(), "{}", mains_side["left_out"]);
+    assert_eq!(index["left_out"]["pipe_size_unknown"], json!(0));
+    assert_eq!(index["shown_inferred"]["no_role_no_size"], json!(1), "{}", index["shown_inferred"]);
+    let no_size: Vec<&Value> = full_els.iter().filter(|e| all("unsized_pipe").contains(e["id"].as_str().unwrap_or_default())).collect();
+    assert_eq!(no_size.len(), 1, "the unsized pipe is in Full MEP");
+    assert!(no_size[0]["inferred"].as_str().is_some_and(|w| w.contains("no role and no size")), "{}", no_size[0]);
     // The hoistway is one simple volume.
     let hoist = mains_els.iter().find(|e| all("hoistway").contains(e["id"].as_str().unwrap())).unwrap();
     assert_eq!(hoist["simplified"], json!("box"), "{hoist}");
@@ -671,4 +677,93 @@ fn a_building_wide_request_for_everything_is_refused() {
     let e = s.execute("bim.export.ar", &json!({"set": true, "dir": f.to_string_lossy()})).unwrap_err().to_string();
     assert!(e.contains("force"), "{e}");
     s.execute("bim.export.ar", &json!({"set": true, "dir": f.to_string_lossy(), "force": true})).expect("with force");
+}
+
+/// The field app's test fixture (apps/ios/CADaddyField/CADaddyFieldTests/Fixtures/SyntheticSet)
+/// comes from this exporter, never by hand: this building's set, with one receptacle whose panel
+/// a rule gave (so the graph has known, inferred and unknown links). With
+/// `CADADDY_FIELD_FIXTURE=<dir>` it writes the set's models, sidecars and index there
+/// (`apps/ios/CADaddyField/CADaddyFieldTests/Fixtures/regenerate.sh`).
+#[test]
+fn the_field_apps_fixture_comes_from_this_exporter() {
+    use cadaddy_doc::props::{self, Prop, Source, SourceKind};
+    let _g = serial();
+    let mut s = built();
+    {
+        let d = s.doc_mut().unwrap();
+        let mut hit = Vec::new();
+        for e in d.model.iter() {
+            if tags(e).first().map(String::as_str) != Some("device") {
+                continue;
+            }
+            let store = props::read(&e.common.xdata);
+            if store.get("circuit").map(Prop::text).as_deref() == Some("7") && store.get("panel").is_none_or(|p| !p.has_value()) {
+                hit.push(e.handle);
+            }
+        }
+        assert_eq!(hit.len(), 1, "one receptacle on circuit 7 with no panel");
+        for h in hit {
+            d.model.modify(h, |e| {
+                let mut store = props::read(&e.common.xdata);
+                store.set("panel", Prop::new("PU-2", Source::of(SourceKind::Rule)));
+                e.common.xdata = props::write(&e.common.xdata, &store).into();
+            });
+        }
+    }
+    let d = dir("fixture");
+    s.execute("bim.export.ar", &json!({"set": true, "dir": d.to_string_lossy()})).unwrap_or_else(|e| panic!("set: {e}"));
+    let index = read_json(&d.join("building.json"));
+    let links = &index["graph"]["links"];
+    for k in ["known", "inferred", "unknown"] {
+        assert!(links[k].as_u64().is_some_and(|n| n > 0), "the fixture has {k} links: {links}");
+    }
+    // The next export after one change in one room (the bed of 101 taken out): only that room's
+    // package changes its content hash, so Update pulls that package and nothing else.
+    {
+        let doc = s.doc_mut().unwrap();
+        let bed: Vec<Handle> = doc.model.iter().filter(|e| tags(e).first().map(String::as_str) == Some("furniture")).map(|e| e.handle).collect();
+        assert_eq!(bed.len(), 1, "one bed");
+        for h in bed {
+            doc.model.remove(h);
+        }
+    }
+    let d2 = dir("fixture-v2");
+    s.execute("bim.export.ar", &json!({"set": true, "dir": d2.to_string_lossy()})).unwrap_or_else(|e| panic!("set v2: {e}"));
+    let index2 = read_json(&d2.join("building.json"));
+    let hashes = |v: &Value| -> BTreeMap<String, Value> {
+        v["packages"]
+            .as_array()
+            .into_iter()
+            .chain(v["room_packages"].as_array())
+            .flatten()
+            .map(|p| (p["name"].as_str().unwrap_or_default().to_string(), p["content_hash"].clone()))
+            .collect()
+    };
+    let (h1, h2) = (hashes(&index), hashes(&index2));
+    let changed: Vec<&String> = h2.iter().filter(|(k, v)| h1.get(*k) != Some(*v)).map(|(k, _)| k).collect();
+    assert_eq!(changed, vec!["rooms/L1-101-GUEST"], "only the changed room's package changes");
+    let Ok(out) = std::env::var("CADADDY_FIELD_FIXTURE") else { return };
+    let out = PathBuf::from(out);
+    // The whole first export, then the second one's index with just its changed packages.
+    let copy = |from: &Path, to: &Path, idx: &Value, only: Option<&[&String]>| {
+        let _ = std::fs::remove_dir_all(to);
+        let mut files = vec![PathBuf::from("building.json"), PathBuf::from("manifest.json")];
+        for p in idx["packages"].as_array().into_iter().chain(idx["room_packages"].as_array()).flatten() {
+            if only.is_some_and(|o| !o.iter().any(|n| p["name"].as_str() == Some(n.as_str()))) {
+                continue;
+            }
+            for k in ["glb", "sidecar"] {
+                if let Some(f) = p["files"][k]["path"].as_str() {
+                    files.push(PathBuf::from(f));
+                }
+            }
+        }
+        for f in files {
+            let t = to.join(&f);
+            std::fs::create_dir_all(t.parent().unwrap()).unwrap();
+            std::fs::copy(from.join(&f), &t).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        }
+    };
+    copy(&d, &out, &index, None);
+    copy(&d2, &out.with_file_name(format!("{}V2", out.file_name().unwrap().to_string_lossy())), &index2, Some(&changed));
 }

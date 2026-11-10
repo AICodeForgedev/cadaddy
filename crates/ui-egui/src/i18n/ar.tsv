@@ -3435,3 +3435,9 @@ menu	View	عرض
 	Pin	تثبيت
 	Unpin	إلغاء التثبيت
 	Coordination	التنسيق
+	List Sheets	سرد الأوراق
+	Open Sheet	فتح الورقة
+	Next Sheet	الورقة التالية
+	Previous Sheet	الورقة السابقة
+	Page {n}	الصفحة {n}
+	Page Up and Page Down step through the sheets.	يتنقل مفتاحا Page Up وPage Down بين الأوراق.

@@ -194,7 +194,24 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         }
         cells
     };
-    let header_lo = if below.is_finite() { below } else { header_y - 0.6 * h };
+    let mut header_lo = if below.is_finite() { below } else { header_y - 0.6 * h };
+    // Rows with no rules between them or under the header (the table ruled only round its
+    // header and rows): its first column's text lines in the band, the first its heading and
+    // each next one a row's start, the lines down to the next one (a wrapped description) its own.
+    let key_lines: Vec<(f64, f64)> = {
+        let mut ks: Vec<(f64, f64)> = texts
+            .iter()
+            .filter(|x| x.rotation.abs() < 0.05 && x.at.y > header_lo && x.at.y < above && col(x.at.x) == Some(0) && !x.value.trim().is_empty())
+            .map(|x| (x.at.y, x.height.max(1e-9)))
+            .collect();
+        ks.sort_by(|a, b| b.0.total_cmp(&a.0));
+        ks.dedup_by(|a, b| (a.0 - b.0).abs() < 0.5 * b.1);
+        ks
+    };
+    let unruled = below.is_finite() && key_lines.len() >= MIN_UNRULED_LINES;
+    if unruled && let Some((y, hk)) = key_lines.get(1) {
+        header_lo = y + 0.7 * hk;
+    }
     let mut headers = gather(header_lo, above);
     // A group heading (`LAMPS` over `TYPE | COLOR | WATTS`): the text over a rule inside the
     // header's band that runs under some of the columns only. Each column under it is headed by
@@ -225,7 +242,7 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         }
     }
     let mut rows = Vec::new();
-    let mut lower: Vec<f64> = ys.iter().copied().filter(|y| *y <= below + tol).collect();
+    let mut lower: Vec<f64> = if unruled { Vec::new() } else { ys.iter().copied().filter(|y| *y <= below + tol).collect() };
     // Its last row has no rule under it: the column lines' ends close it.
     if lower.len() >= 2
         && let (Some(f), Some(l)) = (floor, lower.last().copied())
@@ -233,9 +250,18 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
     {
         lower.push(f);
     }
-    if lower.len() >= 2 {
+    if unruled {
+        for (i, (y, hk)) in key_lines.iter().enumerate().skip(1).take(MAX_ROWS) {
+            let lo = key_lines.get(i + 1).map_or(below, |(n, hn)| n + 0.7 * hn);
+            rows.push(gather(lo, y + 0.7 * hk));
+        }
+    } else if lower.len() >= 2 {
         for w in lower.windows(2).take(MAX_ROWS) {
             let r = gather(w[1], w[0]);
+            // Another table drawn on under it (its notes' table): its title's row ends this one.
+            if another_title(&r) {
+                break;
+            }
             if r.iter().any(|c| !c.is_empty()) {
                 rows.push(r);
             }
@@ -254,7 +280,13 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
     }
     // The table's bottom: its last row line, else where its column lines end, else its
     // last text line.
-    let bottom = if lower.len() >= 2 { lower.last().copied() } else { floor }.unwrap_or(below.max(header_y - 80.0 * h));
+    let bottom = if unruled {
+        below
+    } else if lower.len() >= 2 {
+        lower.last().copied().unwrap_or(below)
+    } else {
+        floor.unwrap_or(below.max(header_y - 80.0 * h))
+    };
     let (notes, notes_bottom) = notes_under(texts, x0, x1, bottom);
     Some(GridTable {
         headers,
@@ -264,6 +296,22 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         notes,
         extent: [x0, notes_bottom.min(bottom), x1, t.at.y + h],
     })
+}
+
+/// A table's band holding this many lines in its first column has rows with no rules between
+/// them (a heading and two rows at least).
+const MIN_UNRULED_LINES: usize = 3;
+
+/// A row that is another table's title: one cell printed, naming a schedule or a table of notes.
+fn another_title(r: &[String]) -> bool {
+    let printed: Vec<&String> = r.iter().filter(|c| !c.trim().is_empty()).collect();
+    match printed.as_slice() {
+        [one] => {
+            let u = one.trim().trim_end_matches(':').to_ascii_uppercase();
+            u.contains("SCHEDULE") || u.ends_with("NOTES")
+        }
+        _ => false,
+    }
 }
 
 /// The text lines printed right under a table (`x0`..`x1`, its bottom at `bottom`), top down,
@@ -335,6 +383,68 @@ mod tests {
             vec![vec!["A".to_string(), "ML4DM10 13VA".into(), "PUBLIC SPACES".into()], vec!["C".into(), String::new(), "LINEAR LED".into()]]
         );
         assert_eq!(tb.column(&["DESCRIPTION"]), Some(2));
+    }
+
+    /// A schedule ruled only round its header and rows (no rule under the header, none between
+    /// rows): its first column's lines are its heading and each row's start, a description's
+    /// wrapped line is its row's; the table of notes drawn on under it is no part of it.
+    #[test]
+    fn a_schedule_with_no_rules_between_its_rows_is_read_by_its_first_columns_lines() {
+        let v = vec![
+            t(2.0, 10.0, "LIGHTING FIXTURE SCHEDULE"),
+            t(0.1, 9.5, "Type"),
+            t(1.1, 9.5, "DESCRIPTION"),
+            t(3.1, 9.5, "WATTS"),
+            t(0.1, 9.1, "EL-1"),
+            t(1.1, 9.1, "EMERGENCY UNIT"),
+            t(3.1, 9.1, "5 VA"),
+            t(1.1, 8.85, "BATTERY"),
+            t(0.1, 8.5, "EX-1"),
+            t(1.1, 8.5, "EXIT SIGN"),
+            t(3.1, 8.5, "2 VA"),
+            t(0.1, 8.1, "LA-1"),
+            t(1.1, 8.1, "TROFFER"),
+            t(1.1, 7.85, "2X4"),
+            t(3.1, 8.1, "29 VA"),
+            t(1.1, 7.3, "LIGHTING FIXTURE SCHEDULE NOTES"),
+            t(0.1, 7.0, "1 INSTALL PER MANUFACTURER"),
+        ];
+        let mut segs: Vec<(Vec2, Vec2)> = [0.0, 1.0, 3.0, 6.0].iter().map(|x| (Vec2::new(*x, 6.9), Vec2::new(*x, 9.7))).collect();
+        segs.extend([9.7, 7.5, 7.2, 6.9].iter().map(|y| (Vec2::new(0.0, *y), Vec2::new(6.0, *y))));
+        let Some(title) = v.first() else { return };
+        let tb = read_at(&v, &segs, title, "X-2").unwrap_or_else(|| panic!("no table"));
+        assert_eq!(tb.headers, ["Type", "DESCRIPTION", "WATTS"], "{tb:#?}");
+        assert_eq!(
+            tb.rows,
+            vec![
+                vec!["EL-1".to_string(), "EMERGENCY UNIT BATTERY".into(), "5 VA".into()],
+                vec!["EX-1".into(), "EXIT SIGN".into(), "2 VA".into()],
+                vec!["LA-1".into(), "TROFFER 2X4".into(), "29 VA".into()],
+            ],
+            "{tb:#?}"
+        );
+    }
+
+    /// A ruled schedule with the table of its notes drawn on under it: the notes' title row ends it.
+    #[test]
+    fn the_title_of_a_table_drawn_on_under_a_schedule_ends_its_rows() {
+        let v = vec![
+            t(2.0, 10.0, "LIGHT FIXTURE SCHEDULE"),
+            t(0.1, 9.5, "TYPE"),
+            t(1.1, 9.5, "DESCRIPTION"),
+            t(0.1, 9.1, "A"),
+            t(1.1, 9.1, "TROFFER"),
+            t(0.1, 8.7, "B"),
+            t(1.1, 8.7, "DOWNLIGHT"),
+            t(1.1, 8.3, "FIXTURE SCHEDULE NOTES"),
+            t(0.1, 7.9, "1"),
+            t(1.1, 7.9, "INSTALL PER MANUFACTURER"),
+        ];
+        let mut segs: Vec<(Vec2, Vec2)> = [0.0, 1.0, 6.0].iter().map(|x| (Vec2::new(*x, 7.7), Vec2::new(*x, 9.7))).collect();
+        segs.extend([9.7, 9.3, 8.9, 8.5, 8.1, 7.7].iter().map(|y| (Vec2::new(0.0, *y), Vec2::new(6.0, *y))));
+        let tables = read_titled(&v, &segs, "light fixture schedule", "X-3");
+        let first: Vec<&str> = tables.iter().flat_map(|tb| tb.rows.iter().filter_map(|r| r.first().map(String::as_str))).collect();
+        assert_eq!(first, ["A", "B"], "{tables:#?}");
     }
 
     /// fix-lum-fixture-schedule-not-read: a table drawn with its row rules but no border lines

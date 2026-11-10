@@ -5319,13 +5319,23 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let cond = super::printcond::read_sheets(s.doc()?, &refs, upf, &job.devices);
     let mut read_sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
     read_sheets.extend(cond.sheets.iter().map(|r| r.sheet.clone()));
+    // Fire protection (Q6497): the FP plans of the set and the sprinkler shop drawings among the
+    // submittals (a deferred submittal's), each shop-drawing page put onto its floor's plan.
+    let fp = {
+        let stored = super::bspec::current(s, "mep_read").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
+        let ceiling = super::printfp::ceiling_lookup(stored.as_ref());
+        super::printfp::read(s.doc()?, &refs, upf, &job.submittals, &job.pdfs_path, &ceiling)
+    };
+    read_sheets.extend(fp.source_names());
     let mut mep = read.mep.clone();
-    for sy in &cond.mep.systems {
+    for sy in cond.mep.systems.iter().chain(&fp.mep.systems) {
         if !mep.systems.iter().any(|m| m.name == sy.name) {
             mep.systems.push(sy.clone());
         }
     }
     mep.runs.extend(cond.mep.runs.iter().cloned());
+    mep.runs.extend(fp.mep.runs.iter().cloned());
+    mep.terminals.extend(fp.mep.terminals.iter().cloned());
     // A spec already stored (a re-run) takes the reading now; the BIM build puts it into the
     // spec it drafts in any case.
     if let Ok((mut sp, true)) = super::bspec::current(s, "mep_read") {
@@ -5383,8 +5393,20 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         ));
     }
 
+    if fp.heads() + fp.mep.runs.len() > 0 {
+        trade_summary.push_str(&format!(
+            "; {} sprinkler head(s) and {:.0} ft of sprinkler pipe from {} fire protection source(s) ({} FP plan(s), {} shop-drawing page(s))",
+            fp.heads(),
+            fp.pipe_ft(),
+            fp.sources.len(),
+            fp.fp_sheets,
+            fp.sources.iter().filter(|x| x.kind == "shop_drawing").count()
+        ));
+    }
+    fire_protection_findings(job, &fp);
+
     // Per-trade summary question: present the summary and ask if anything was missed.
-    if duct_runs + pipe_runs + cond.circuits.len() + cond.mep.runs.len() > 0 {
+    if duct_runs + pipe_runs + cond.circuits.len() + cond.mep.runs.len() + fp.heads() > 0 {
         let qid = job.next_qid(StageName::MepRead);
         let q = Question {
             id: qid,
@@ -5466,8 +5488,69 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     out["length_ft"] = json!(super::printmep::r1(duct_ft + pipe_ft));
     out["fittings"] = json!(0);
     out["conduit"] = cond.to_json();
+    out["fire_protection"] = fp.to_json();
     out["trade_summary"] = json!(trade_summary);
     Ok(out)
+}
+
+/// What the fire protection read leaves to say (Q6497): no source at all (the trade is missing,
+/// not silently empty), shop-drawing pages no floor plan could take, and head tables the heads
+/// counted on their page don't agree with.
+fn fire_protection_findings(job: &mut GuidedJob, fp: &super::printfp::FpRead) {
+    if fp.missing() {
+        let looked = if fp.files.is_empty() {
+            "no submittal file named for fire protection was given or found beside the prints".to_string()
+        } else {
+            format!("{} fire protection submittal file(s) were read and none holds a sprinkler plan page", fp.files.len())
+        };
+        job.add_finding(
+            StageName::MepRead,
+            "No fire protection in the documents: no sprinkler heads or pipe are modelled",
+            &format!(
+                "the set has no fire protection (FP) plan and {looked}; a sprinklered building's fire protection is often a deferred submittal drawn only on the sprinkler shop drawings"
+            ),
+            2,
+            vec![
+                "Give the sprinkler shop drawings (job.start {submittals: [file or folder]})".into(),
+                "Or confirm the building is not sprinklered".into(),
+            ],
+            None,
+            false,
+        );
+    }
+    if !fp.unplaced.is_empty() {
+        let pages: Vec<String> = fp.unplaced.iter().take(20).map(|(p, why)| format!("{p}: {why}")).collect();
+        job.add_finding(
+            StageName::MepRead,
+            &format!("{} sprinkler shop-drawing page(s) could not be put onto a floor plan", fp.unplaced.len()),
+            &format!("their heads and pipe are not modelled: {}", pages.join("; ")),
+            2,
+            vec!["Check that the shop drawings print the room numbers of the architectural plans".into()],
+            None,
+            false,
+        );
+    }
+    let differs: Vec<String> = fp
+        .sources
+        .iter()
+        .filter(|x| x.table_differs)
+        .take(40)
+        .map(|x| {
+            let rows: Vec<String> = x.table.iter().filter(|(_, n, c)| n != c).map(|(l, n, c)| format!("{l}: table {n}, drawn {c}")).collect();
+            format!("{} ({})", x.source, rows.join(", "))
+        })
+        .collect();
+    if !differs.is_empty() {
+        job.add_finding(
+            StageName::MepRead,
+            &format!("Sprinkler heads drawn differ from the head table on {} page(s)", differs.len()),
+            &format!("the model has the heads as drawn; the table's counts are beside them: {}", differs.join("; ")),
+            1,
+            vec!["Check the shop drawing's head table against its plan".into()],
+            None,
+            false,
+        );
+    }
 }
 
 /// Run the BIM build stage (MUST 1).
@@ -7426,7 +7509,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // the model ends with (= bim.tree), the build's would be a second, earlier set.
     // The specification's wiring methods by area, minimum raceway and circuits per homerun: what
     // the build routes the circuits by (Q6152).
-    route_methods_step(s, job);
+    route_methods_step(s, job, &scope_docs);
     // The documents' low-voltage pathways (Q6203): what the build routes each outlet's by.
     lv_pathways_step(s, job, &scope_docs);
     // The slab level's drains its plans give no height (Q6148): under its floor to the building
@@ -20975,10 +21058,24 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
 
 /// The specification's wiring-methods tables (26 05 19), its minimum raceway size and the
 /// circuits a homerun may share, stored in the drawing for the router (Q6152).
-fn route_methods_step(s: &mut Session, job: &GuidedJob) {
+fn route_methods_step(s: &mut Session, job: &GuidedJob, docs: &[super::scope::Doc]) {
     let specs = job_specs(job);
     let mut m = super::conduitroute::Methods::default();
+    let b2b = &super::mepatoms::rules().box_clear.back_to_back;
+    // The remedy for boxes back to back in a rated wall (Q6488): the pads wherever a document
+    // names them, else a separation one names.
+    let mut remedy: Option<(super::mepatoms::boxclear::Remedy, String)> = None;
+    let mut take = |found: Option<(super::mepatoms::boxclear::Remedy, String)>, at: &str| {
+        if let Some((r, line)) = found
+            && remedy
+                .as_ref()
+                .is_none_or(|(have, _)| *have != super::mepatoms::boxclear::Remedy::Putty && r == super::mepatoms::boxclear::Remedy::Putty)
+        {
+            remedy = Some((r, format!("{at}: {line}")));
+        }
+    };
     for (section, text) in super::valueeng::spec_texts(&specs) {
+        take(b2b.remedy_in(&text), &format!("spec {}", section.trim()));
         m.applications.extend(super::valueeng::wiring_applications(&text, &section).into_iter().map(|a| super::conduitroute::MethodApp {
             section: a.section,
             item: a.item,
@@ -20987,6 +21084,23 @@ fn route_methods_step(s: &mut Session, job: &GuidedJob) {
         }));
         super::conduitroute::spec_limits(&text, &section, &mut m);
     }
+    for doc in docs.iter().take(10_000) {
+        for p in doc.paras.iter().take(10_000) {
+            take(b2b.remedy_in(&p.text), &format!("{} {}", doc.name.trim(), p.at.trim()));
+        }
+    }
+    if let Some((r, src)) = remedy {
+        m.rated_box_remedy = r.as_str().to_string();
+        m.rated_box_remedy_source = src;
+    }
+    progress_line(&format!(
+        "  rated-wall boxes back to back: {}",
+        if m.rated_box_remedy.is_empty() {
+            "no document names the remedy (the rules' default)".to_string()
+        } else {
+            format!("{} ({})", m.rated_box_remedy, m.rated_box_remedy_source)
+        }
+    ));
     progress_line(&format!(
         "  wiring methods for routing: {} application(s) from {} spec file(s); minimum raceway {}; circuits per homerun {}",
         m.applications.len(),
@@ -25094,12 +25208,17 @@ fn arch_placer(
                         |o| format!("not fitted (its views name another part of the site: {o})")
                     ),
                     |f| format!(
-                        "scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best",
+                        "scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best{}",
                         f.sim.scale(),
                         f.sim.tx,
                         f.sim.ty,
                         f.score * 100.0,
-                        f.margin * 100.0
+                        f.margin * 100.0,
+                        f.off_scale.map_or_else(String::new, |k| format!(
+                            "; drawn {:.1}% {} than its printed scale (placed at the scale it is drawn at)",
+                            (k - 1.0).abs() * 100.0,
+                            if k < 1.0 { "smaller" } else { "larger" }
+                        ))
                     )
                 ),
                 started.elapsed().as_secs_f64()
@@ -25109,7 +25228,7 @@ fn arch_placer(
                 match &fit {
                     Some(f) => {
                         json!({"sheet": number, "level": level, "method": "linework", "transform": {"a": f.sim.a, "b": f.sim.b, "tx": f.sim.tx, "ty": f.sim.ty},
-                        "scale": f.sim.scale(), "score": f.score, "margin": f.margin, "used": true})
+                        "scale": f.sim.scale(), "score": f.score, "margin": f.margin, "drawn_off_scale": f.off_scale, "used": true})
                     }
                     None => json!({"sheet": number, "level": level, "method": "none", "used": false,
                     "why_not": if tgt.is_empty() {

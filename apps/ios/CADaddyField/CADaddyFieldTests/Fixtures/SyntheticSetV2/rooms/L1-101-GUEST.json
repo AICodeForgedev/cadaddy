@@ -1,0 +1,978 @@
+{
+  "anchor": {
+    "entry": null,
+    "floor_elevation_ft": 0.0,
+    "how": "the room's south-west corner (no door found on its outline)",
+    "kind": "room_corner",
+    "level": "L1",
+    "model": [
+      0,
+      0,
+      0
+    ],
+    "name": "101 GUEST corner 7",
+    "plan_units": "ft",
+    "plan_x": 0.5,
+    "plan_y": 0.5,
+    "room": "101 GUEST"
+  },
+  "axes": "x = plan x (east), y = up from the anchor level's finished floor, z = minus plan y",
+  "counts": {
+    "meshes": 26,
+    "nodes": 32,
+    "triangles": 729
+  },
+  "cut_to_scope": 8,
+  "dropped": {
+    "context_off": 0,
+    "filtered": 0,
+    "not_meshes": 0,
+    "over_caps": {},
+    "over_element_cap": 0,
+    "small_parts": {}
+  },
+  "elements": [
+    {
+      "bottom_aff_in": 16.0,
+      "category": "Devices",
+      "circuit": "PU-1-1",
+      "devid": "device:L1:4.0,0.8:REC",
+      "group": "electrical",
+      "id": "1C3",
+      "kind": "receptacle",
+      "level": "L1",
+      "mounting_height_from": "documented",
+      "mounting_height_in": 18.0,
+      "mounting_height_m": 0.4572,
+      "node": "receptacle_REC",
+      "panel": "PU-1",
+      "part": "device",
+      "position": [
+        1.016,
+        0.4064,
+        0.0
+      ],
+      "room": "101 GUEST",
+      "source": "model.build (device, layer 3D-Devices)",
+      "system": "devices",
+      "tag": "REC",
+      "top_aff_in": 20.0,
+      "trade": "electrical",
+      "type": "3D-Devices",
+      "type_mark": "REC"
+    },
+    {
+      "bottom_aff_in": 16.0,
+      "category": "Boxes",
+      "circuit": "PU-1-1",
+      "group": "electrical",
+      "id": "1C9",
+      "kind": "box",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 16.0,
+      "mounting_height_m": 0.4064,
+      "node": "box",
+      "panel": "PU-1",
+      "part": "mep",
+      "position": [
+        1.016,
+        0.4064,
+        0.0
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Polyface Mesh 1C3 (layer 3D-Devices)",
+      "system": "conduit",
+      "top_aff_in": 20.0,
+      "trade": "electrical",
+      "type": "Box, 4\" square 4\" square"
+    },
+    {
+      "bottom_aff_in": 103.2,
+      "category": "Equipment",
+      "group": "mechanical",
+      "id": "1BF",
+      "kind": "equipment",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 103.2,
+      "mounting_height_m": 2.6213,
+      "node": "equipment_EF_1",
+      "part": "mep",
+      "position": [
+        1.2192,
+        2.6213,
+        -1.524
+      ],
+      "role": "equipment",
+      "room": "101 GUEST",
+      "source": "model.build (mep, layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "tag": "EF-1",
+      "top_aff_in": 112.8,
+      "trade": "mechanical",
+      "type": "EF-1"
+    },
+    {
+      "bottom_aff_in": 102.0,
+      "category": "Duct",
+      "group": "mechanical",
+      "id": "1B1",
+      "kind": "duct",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 102.0,
+      "mounting_height_m": 2.5908,
+      "node": "duct",
+      "part": "mep",
+      "position": [
+        1.2954,
+        2.5908,
+        -5.4356
+      ],
+      "role": "branch",
+      "room": "101 GUEST",
+      "source": "model.build (mep, layer 3D-MEP-EA-L1)",
+      "system": "duct_exhaust",
+      "top_aff_in": 108.0,
+      "trade": "mechanical",
+      "type": "EA 6"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Air Terminals",
+      "group": "mechanical",
+      "id": "1B8",
+      "kind": "fixture",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 108.0,
+      "mounting_height_m": 2.7432,
+      "node": "fixture",
+      "part": "mep",
+      "position": [
+        2.7432,
+        2.7432,
+        -2.7432
+      ],
+      "room": "101 GUEST",
+      "source": "model.build (mep, layer 3D-MEP-SA-L1)",
+      "system": "terminals",
+      "top_aff_in": 114.0,
+      "trade": "mechanical",
+      "type": "SA Diffuser 12x12"
+    },
+    {
+      "bottom_aff_in": 15.0,
+      "category": "Light Fixtures",
+      "circuit": "PU-1-5",
+      "devid": "device:L1:10.0,10.0:A",
+      "group": "electrical",
+      "id": "1C5",
+      "kind": "light_fixture",
+      "level": "L1",
+      "mounting_height_from": "documented",
+      "mounting_height_in": 18.0,
+      "mounting_height_m": 0.4572,
+      "node": "light_fixture_A",
+      "panel": "PU-1",
+      "part": "device",
+      "position": [
+        2.7432,
+        0.381,
+        -3.048
+      ],
+      "room": "101 GUEST",
+      "source": "model.build (device, layer 3D-Devices)",
+      "system": "lights",
+      "tag": "A",
+      "top_aff_in": 21.0,
+      "trade": "electrical",
+      "type": "3D-Devices",
+      "type_mark": "A"
+    },
+    {
+      "bottom_aff_in": 20.0625,
+      "category": "Boxes",
+      "circuit": "PU-1-5",
+      "group": "electrical",
+      "id": "1CD",
+      "kind": "box",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 20.0625,
+      "mounting_height_m": 0.5096,
+      "node": "box_2",
+      "panel": "PU-1",
+      "part": "mep",
+      "position": [
+        2.8448,
+        0.5096,
+        -2.9464
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Polyface Mesh 1C5 (layer 3D-Devices)",
+      "system": "conduit",
+      "top_aff_in": 24.0625,
+      "trade": "electrical",
+      "type": "Box, 4\" square 4\" square"
+    },
+    {
+      "bottom_aff_in": 16.0,
+      "category": "Devices",
+      "circuit": "PU-1-3",
+      "devid": "device:L1:16.0,0.8:REC",
+      "group": "electrical",
+      "id": "1C4",
+      "kind": "receptacle",
+      "level": "L1",
+      "mounting_height_from": "documented",
+      "mounting_height_in": 18.0,
+      "mounting_height_m": 0.4572,
+      "node": "receptacle_REC_2",
+      "panel": "PU-1",
+      "part": "device",
+      "position": [
+        4.6736,
+        0.4064,
+        0.0
+      ],
+      "room": "101 GUEST",
+      "source": "model.build (device, layer 3D-Devices)",
+      "system": "devices",
+      "tag": "REC",
+      "top_aff_in": 20.0,
+      "trade": "electrical",
+      "type": "3D-Devices",
+      "type_mark": "REC"
+    },
+    {
+      "bottom_aff_in": 16.0,
+      "category": "Boxes",
+      "circuit": "PU-1-3",
+      "group": "electrical",
+      "id": "1CB",
+      "kind": "box",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 16.0,
+      "mounting_height_m": 0.4064,
+      "node": "box_3",
+      "panel": "PU-1",
+      "part": "mep",
+      "position": [
+        4.6736,
+        0.4064,
+        0.0
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Polyface Mesh 1C4 (layer 3D-Devices)",
+      "system": "conduit",
+      "top_aff_in": 20.0,
+      "trade": "electrical",
+      "type": "Box, 4\" square 4\" square"
+    },
+    {
+      "bottom_aff_in": 78.0,
+      "category": "Conduit",
+      "group": "electrical",
+      "id": "216",
+      "kind": "conduit",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 78.0,
+      "mounting_height_m": 1.9812,
+      "node": "conduit",
+      "panel": "PH",
+      "part": "mep",
+      "position": [
+        4.9411,
+        1.9812,
+        -0.0389
+      ],
+      "role": "feeder",
+      "room": "101 GUEST",
+      "source": "model.build (mep, layer 3D-MEP-F-PU1-L1)",
+      "system": "conduit",
+      "top_aff_in": 120.0,
+      "trade": "electrical",
+      "type": "EMT conduit 1\""
+    },
+    {
+      "bottom_aff_in": 67.4,
+      "category": "Breakers",
+      "circuit": "PU-1-1",
+      "group": "electrical",
+      "id": "25E",
+      "kind": "breaker",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 67.4,
+      "mounting_height_m": 1.712,
+      "node": "breaker",
+      "panel": "PU-1",
+      "part": "mep",
+      "position": [
+        4.9784,
+        1.712,
+        -0.0813
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Polyface Mesh 1BC (layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "top_aff_in": 74.6,
+      "trade": "mechanical",
+      "type": "Circuit breaker, panel PU-1 1P"
+    },
+    {
+      "bottom_aff_in": 51.4,
+      "category": "Breakers",
+      "circuit": "PU-1-5",
+      "group": "electrical",
+      "id": "25F",
+      "kind": "breaker",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 51.4,
+      "mounting_height_m": 1.3056,
+      "node": "breaker_2",
+      "panel": "PU-1",
+      "part": "mep",
+      "position": [
+        4.9784,
+        1.3056,
+        -0.0813
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Polyface Mesh 1BC (layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "top_aff_in": 58.6,
+      "trade": "mechanical",
+      "type": "Circuit breaker, panel PU-1 1P"
+    },
+    {
+      "bottom_aff_in": 48.0,
+      "category": "Equipment",
+      "group": "electrical",
+      "id": "1BC",
+      "kind": "equipment",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 48.0,
+      "mounting_height_m": 1.2192,
+      "node": "equipment_PU_1",
+      "part": "mep",
+      "position": [
+        4.9276,
+        1.2192,
+        -0.1016
+      ],
+      "role": "panel",
+      "room": "101 GUEST",
+      "source": "model.build (mep, layer 3D-MEP-EQUIP-L1)",
+      "system": "equipment",
+      "tag": "PU-1",
+      "top_aff_in": 78.0,
+      "trade": "mechanical",
+      "type": "PU-1"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Casework",
+      "group": "cabinets",
+      "id": "518",
+      "kind": "casework",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 0.0,
+      "mounting_height_m": 0.0,
+      "node": "casework",
+      "part": "casework",
+      "position": [
+        0.4572,
+        0.0,
+        -5.4864
+      ],
+      "room": "101 GUEST",
+      "source": "model.build (casework, layer 3D-Other)",
+      "system": "architecture",
+      "top_aff_in": 34.0,
+      "trade": "architecture",
+      "type": "Vanity"
+    },
+    {
+      "bottom_aff_in": 96.0,
+      "category": "Duct",
+      "cut_to_scope": true,
+      "group": "mechanical",
+      "id": "1AD",
+      "kind": "duct",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 96.0,
+      "mounting_height_m": 2.4384,
+      "node": "duct_2",
+      "part": "mep",
+      "position": [
+        2.7686,
+        2.4384,
+        -6.096
+      ],
+      "role": "branch",
+      "room": "101 GUEST",
+      "source": "model.build (mep, layer 3D-MEP-SA-L1)",
+      "system": "duct_supply",
+      "top_aff_in": 104.0,
+      "trade": "mechanical",
+      "type": "SA 10x8"
+    },
+    {
+      "bottom_aff_in": 107.75,
+      "category": "Sprinklers",
+      "group": "mechanical",
+      "id": "1B9",
+      "kind": "fixture",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 107.75,
+      "mounting_height_m": 2.7369,
+      "node": "fixture_2",
+      "part": "mep",
+      "position": [
+        5.9182,
+        2.7369,
+        -2.921
+      ],
+      "room": "101 GUEST",
+      "source": "model.build (mep, layer 3D-MEP-FP-L1)",
+      "system": "fire",
+      "top_aff_in": 110.5,
+      "trade": "fire_protection",
+      "type": "FP Sprinkler Pendent 1"
+    },
+    {
+      "bottom_aff_in": 110.4,
+      "category": "Pipe",
+      "cut_to_scope": true,
+      "group": "mechanical",
+      "id": "1B3",
+      "kind": "pipe",
+      "level": "L1",
+      "mounting_height_from": "model bottom",
+      "mounting_height_in": 110.4,
+      "mounting_height_m": 2.8042,
+      "node": "pipe",
+      "part": "mep",
+      "position": [
+        5.9309,
+        2.8042,
+        -6.096
+      ],
+      "role": "branch",
+      "room": "101 GUEST",
+      "source": "model.build (mep, layer 3D-MEP-FP-L1)",
+      "system": "fire",
+      "top_aff_in": 111.4,
+      "trade": "fire_protection",
+      "type": "FP 1"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "17A",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall",
+      "part": "wall",
+      "position": [
+        -0.1524,
+        0.0,
+        0.0
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Line 106 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16F",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_2",
+      "part": "wall",
+      "position": [
+        -0.1524,
+        0.0,
+        -5.9436
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Line 10A (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 36.0,
+      "category": "Windows",
+      "context": true,
+      "group": "base",
+      "id": "17F",
+      "kind": "window",
+      "level": "L1",
+      "node": "window",
+      "part": "window",
+      "position": [
+        2.286,
+        0.9144,
+        -0.0191
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Block Reference 156 (layer A-GLAZ)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Window"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "group": "base",
+      "id": "19C",
+      "kind": "ceiling",
+      "level": "L1",
+      "node": "ceiling",
+      "part": "ceiling",
+      "position": [
+        0.0,
+        2.7432,
+        -5.7912
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Text 15A (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "177",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_3",
+      "part": "wall",
+      "position": [
+        2.286,
+        0.0,
+        0.0
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Line 107 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "17B",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_4",
+      "part": "wall",
+      "position": [
+        -0.1524,
+        0.0,
+        -5.9436
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Line 108 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "17C",
+      "kind": "door",
+      "level": "L1",
+      "node": "door",
+      "part": "door",
+      "position": [
+        2.286,
+        0.0,
+        -5.9627
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Arc 121 (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16E",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_5",
+      "part": "wall",
+      "position": [
+        5.8674,
+        0.0,
+        -5.9436
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Line 10B (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "176",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_6",
+      "part": "wall",
+      "position": [
+        5.8674,
+        0.0,
+        0.0
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Line 10C (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "173",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_7",
+      "part": "wall",
+      "position": [
+        2.286,
+        0.0,
+        -5.9436
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Line 109 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "171",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_8",
+      "part": "wall",
+      "position": [
+        -0.1524,
+        0.0,
+        -6.096
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Line 11C (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "179",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_9",
+      "part": "wall",
+      "position": [
+        5.8674,
+        0.0,
+        -5.9436
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Line 10E (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "19D",
+      "kind": "ceiling",
+      "level": "L1",
+      "node": "ceiling_2",
+      "part": "ceiling",
+      "position": [
+        6.0198,
+        2.7432,
+        -5.7912
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Text 15C (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    },
+    {
+      "bottom_aff_in": -6.0,
+      "category": "Floors",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "198",
+      "kind": "floor",
+      "level": "L1",
+      "node": "floor",
+      "part": "floor",
+      "position": [
+        -0.1524,
+        -0.1524,
+        -6.096
+      ],
+      "room": "101 GUEST",
+      "source": "model.build (floor, layer 3D-Floors)",
+      "system": "architecture",
+      "top_aff_in": 0.0,
+      "trade": "architecture",
+      "type": "Floor"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "19F",
+      "kind": "ceiling",
+      "level": "L1",
+      "node": "ceiling_3",
+      "part": "ceiling",
+      "position": [
+        0.0,
+        2.7432,
+        -6.096
+      ],
+      "room": "101 GUEST",
+      "source": "model.build from the plan's Text 160 (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    }
+  ],
+  "exported": "2026-11-10T05:06:19Z",
+  "field_alignment": true,
+  "generator": "CADaddy bim.export.ar",
+  "generic": false,
+  "glb": "L1-101-GUEST.glb",
+  "groups": {
+    "base": {
+      "default_on": true,
+      "nodes": 15,
+      "nodes_off": 0
+    },
+    "cabinets": {
+      "default_on": true,
+      "nodes": 1,
+      "nodes_off": 0
+    },
+    "electrical": {
+      "default_on": true,
+      "nodes": 10,
+      "nodes_off": 0
+    },
+    "mechanical": {
+      "default_on": true,
+      "nodes": 6,
+      "nodes_off": 0
+    }
+  },
+  "meters_per_unit": 1,
+  "model": "L1-101-GUEST.usdz",
+  "package": {
+    "level": "L1",
+    "name": "rooms/L1-101-GUEST",
+    "room": "101 GUEST",
+    "view": "room"
+  },
+  "points": [
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "101 GUEST corner 1",
+      "plan": [
+        19.75,
+        0.5
+      ],
+      "position": [
+        5.8674,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "101 GUEST corner 2",
+      "plan": [
+        19.75,
+        19.5
+      ],
+      "position": [
+        5.8674,
+        0.0,
+        -5.7912
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "101 GUEST corner 3",
+      "plan": [
+        11.0,
+        19.5
+      ],
+      "position": [
+        3.2004,
+        0.0,
+        -5.7912
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "101 GUEST corner 4",
+      "plan": [
+        8.0,
+        16.5
+      ],
+      "position": [
+        2.286,
+        0.0,
+        -4.8768
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "101 GUEST corner 5",
+      "plan": [
+        8.0,
+        19.5
+      ],
+      "position": [
+        2.286,
+        0.0,
+        -5.7912
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "101 GUEST corner 6",
+      "plan": [
+        0.5,
+        19.5
+      ],
+      "position": [
+        0.0,
+        0.0,
+        -5.7912
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L1",
+      "name": "101 GUEST corner 7",
+      "plan": [
+        0.5,
+        0.5
+      ],
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "rules": {
+    "source": "shipped rules (arexport.json)",
+    "version": 1
+  },
+  "schema": "cadaddy.ar/1",
+  "scope": {
+    "box": null,
+    "context": "translucent",
+    "default_room": false,
+    "kinds": [],
+    "level": null,
+    "rooms": [
+      {
+        "label": "101 GUEST",
+        "level": "L1",
+        "name": "GUEST",
+        "number": "101"
+      }
+    ],
+    "small_parts": false,
+    "trades": []
+  },
+  "simplified": "nothing",
+  "units": "m",
+  "up_axis": "Y",
+  "usdz": "L1-101-GUEST.usdz",
+  "version": 1
+}

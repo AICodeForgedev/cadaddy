@@ -23,11 +23,16 @@ public enum ElementPart: String, Sendable, CaseIterable {
     case cableTray, raceway, duct, pipe
     case hoistway, elevatorMachine
     case door, window, stair, casework, furniture
+    /// A package set's architecture: walls, floor plates and ceilings, a room's floor tile, the solid exterior the
+    /// opening sweeps away, and MEP's one outline.
+    case wall, slab, roomTile, exterior, outline
 }
 
 /// What an element is to its system: big source equipment, a main or feeder, a branch, or an end device.
 public enum ElementRole: String, Sendable {
     case equipment, main, branch, terminal, fixture, casework, furniture, shell
+    /// The model does not say what it is to its system (no role given).
+    case unknown
 }
 
 /// The closest scope at which an element is drawn. Building shows only mains and big equipment; a floor adds its
@@ -42,11 +47,39 @@ public enum RunProfile: Equatable, Sendable {
     case rect(width: Float, height: Float)
 }
 
+/// Triangles from an exported package, already in the building frame (metres, Y up). A reference type: the
+/// vertex arrays are shared, never copied with the element, and released with the package that brought them.
+public final class ElementMesh: Equatable, Sendable {
+    public let positions: [SIMD3<Float>]
+    public let normals: [SIMD3<Float>]
+    public let indices: [UInt32]
+    /// Linear RGBA base colour of the first material.
+    public let color: SIMD4<Float>
+    public let min: SIMD3<Float>
+    public let max: SIMD3<Float>
+
+    public init(positions: [SIMD3<Float>], normals: [SIMD3<Float>], indices: [UInt32], color: SIMD4<Float>) {
+        self.positions = positions; self.normals = normals; self.indices = indices; self.color = color
+        var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
+        for p in positions { lo = simd_min(lo, p); hi = simd_max(hi, p) }
+        if positions.isEmpty { lo = .zero; hi = .zero }
+        min = lo; max = hi
+    }
+
+    /// Bytes held by the vertex and index arrays (the memory budget counts these).
+    public var bytes: Int { positions.count * 16 + normals.count * 16 + indices.count * 4 }
+    public var triangleCount: Int { indices.count / 3 }
+
+    public static func == (a: ElementMesh, b: ElementMesh) -> Bool { a === b }
+}
+
 public enum ElementShape: Equatable, Sendable {
     /// An axis-aligned solid (equipment, devices, fixtures, furniture).
     case box(center: SIMD3<Float>, size: SIMD3<Float>)
     /// A run of duct, pipe or conduit through its points, listed from the source to the load.
     case run(points: [SIMD3<Float>], profile: RunProfile)
+    /// The exported triangles of a package's node (a real building's object).
+    case mesh(ElementMesh)
 
     /// Where the camera looks and where a label sits: the box centre or the run's middle point.
     public var anchor: SIMD3<Float> {
@@ -55,6 +88,7 @@ public enum ElementShape: Equatable, Sendable {
         case let .run(p, _):
             guard let first = p.first else { return .zero }
             return p.count > 1 ? (p[p.count / 2 - (p.count % 2 == 0 ? 1 : 0)] + p[p.count / 2]) / 2 : first
+        case let .mesh(m): return (m.min + m.max) / 2
         }
     }
 
@@ -68,6 +102,7 @@ public enum ElementShape: Equatable, Sendable {
             for q in p { lo = simd_min(lo, q); hi = simd_max(hi, q) }
             if p.isEmpty { return (.zero, .zero) }
             return (lo - r, hi + r)
+        case let .mesh(m): return (m.min, m.max)
         }
     }
 }
@@ -86,12 +121,23 @@ public struct BuildingLevel: Equatable, Sendable {
 
 public struct BuildingRoom: Equatable, Sendable, Identifiable {
     public var id: String { number }
+    /// The room's key (the sample's room number; a package set's room id).
     public var number: String
     public var name: String
     public var level: Int
     /// Plan rectangle (x, z) min and max.
     public var min: SIMD2<Float>
     public var max: SIMD2<Float>
+    /// The number printed on the plans when the key is not it (a package set's rooms).
+    public var shownNumber: String?
+    /// True when this room has its own package (a real room: it can be aligned in the field).
+    public var hasPackage = false
+
+    public init(number: String, name: String, level: Int, min: SIMD2<Float>, max: SIMD2<Float>, shownNumber: String? = nil, hasPackage: Bool = false) {
+        self.number = number; self.name = name; self.level = level; self.min = min; self.max = max; self.shownNumber = shownNumber; self.hasPackage = hasPackage
+    }
+
+    public var displayNumber: String { shownNumber ?? number }
 
     public var center: SIMD2<Float> { (min + max) / 2 }
     public func contains(_ p: SIMD3<Float>, margin: Float = 0.01) -> Bool {
@@ -127,8 +173,37 @@ public struct BuildingElement: Equatable, Sendable, Identifiable {
     public var load: String?
     /// The step name in the follow-the-system path strip ("Outlet", "Circuit", "Panel", "Feeder", "Gear").
     public var link: String
+    /// The export's element id (marks, the graph). The same as `id` except where one element is in several
+    /// packages with its own geometry in each (a level's or a room's copy): there `id` names the copy.
+    public var sourceID: String
+    /// The package this copy came from (nil = the sample).
+    public var package: String?
+    /// The package node group's layer when the export gives one (it decides the switches, e.g. fire protection
+    /// rides with Mechanical in an export); nil = the system's own layer.
+    public var groupLayer: FieldLayer?
+    /// A shell group node (always on, no switch).
+    public var isBaseGroup = false
+    /// The export's own words when it marks the object as inferred (no role and no size, shown anyway).
+    public var inferredNote: String?
+
+    public init(id: String, kind: String, tag: String, system: BuildingSystem, role: ElementRole, level: Int, room: String?, shape: ElementShape,
+                mountingHeight: Float?, catalog: String?, circuit: String?, panel: String?, size: String?, upstream: String?, detail: DetailScope,
+                part: ElementPart, nominal: Float?, load: String?, link: String, sourceID: String? = nil, package: String? = nil,
+                groupLayer: FieldLayer? = nil, isBaseGroup: Bool = false, inferredNote: String? = nil) {
+        self.id = id; self.kind = kind; self.tag = tag; self.system = system; self.role = role; self.level = level; self.room = room
+        self.shape = shape; self.mountingHeight = mountingHeight; self.catalog = catalog; self.circuit = circuit; self.panel = panel
+        self.size = size; self.upstream = upstream; self.detail = detail; self.part = part; self.nominal = nominal; self.load = load
+        self.link = link; self.sourceID = sourceID ?? id; self.package = package; self.groupLayer = groupLayer; self.isBaseGroup = isBaseGroup
+        self.inferredNote = inferredNote
+    }
 
     public var title: String { "\(kind) \(tag)" }
+
+    /// The trade switch this element answers to (nil = the shell, always on).
+    public var layer: FieldLayer? {
+        if isBaseGroup { return nil }
+        return groupLayer ?? FieldLayer.of(system)
+    }
 }
 
 public struct SampleBuilding: Sendable {
@@ -142,24 +217,40 @@ public struct SampleBuilding: Sendable {
     /// Bay width of the exterior grid (the reveal sweeps bay by bay).
     public var bay: Float
 
+    /// True for a real building opened from its package set (false for the design preview's invented sample).
+    public var isPackageSet = false
+
     private var byID: [String: Int] = [:]
     private var children: [String: [String]] = [:]
+    private var bySource: [String: [Int]] = [:]
+    private var roomIndex: [String: Int] = [:]
+    private var inRoom: [String: [Int]] = [:]
 
     public init(name: String, levels: [BuildingLevel], rooms: [BuildingRoom], elements: [BuildingElement],
-                footprintMin: SIMD2<Float>, footprintMax: SIMD2<Float>, bay: Float) {
+                footprintMin: SIMD2<Float>, footprintMax: SIMD2<Float>, bay: Float, isPackageSet: Bool = false) {
         self.name = name; self.levels = levels; self.rooms = rooms; self.elements = elements
-        self.footprintMin = footprintMin; self.footprintMax = footprintMax; self.bay = bay
+        self.footprintMin = footprintMin; self.footprintMax = footprintMax; self.bay = bay; self.isPackageSet = isPackageSet
         for (i, e) in elements.enumerated() where byID[e.id] == nil { byID[e.id] = i }
         for e in elements { if let u = e.upstream { children[u, default: []].append(e.id) } }
+        for (i, e) in elements.enumerated() {
+            if e.sourceID != e.id || isPackageSet { bySource[e.sourceID, default: []].append(i) }
+            if let r = e.room { inRoom[r, default: []].append(i) }
+        }
+        for (i, r) in rooms.enumerated() where roomIndex[r.number] == nil { roomIndex[r.number] = i }
     }
 
     public func element(_ id: String) -> BuildingElement? { byID[id].flatMap { elements.indices.contains($0) ? elements[$0] : nil } }
+    /// Every loaded copy of the export's element `source` (the sample: the element itself).
+    public func copies(of source: String) -> [BuildingElement] {
+        if let list = bySource[source] { return list.compactMap { elements.indices.contains($0) ? elements[$0] : nil } }
+        return element(source).map { [$0] } ?? []
+    }
     public func index(of id: String) -> Int? { byID[id] }
     public func feeds(_ id: String) -> [String] { children[id] ?? [] }
     public func level(_ i: Int) -> BuildingLevel? { levels.indices.contains(i) ? levels[i] : nil }
-    public func room(_ number: String) -> BuildingRoom? { rooms.first { $0.number == number } }
+    public func room(_ number: String) -> BuildingRoom? { roomIndex[number].map { rooms[$0] } }
     public func rooms(on level: Int) -> [BuildingRoom] { rooms.filter { $0.level == level } }
-    public func elements(in room: String) -> [BuildingElement] { elements.filter { $0.room == room } }
+    public func elements(in room: String) -> [BuildingElement] { (inRoom[room] ?? []).compactMap { elements.indices.contains($0) ? elements[$0] : nil } }
 
     /// Rail order, top to bottom: Roof, 4, 3, 2, 1, Site.
     public var railLevels: [BuildingLevel] { levels.reversed() }
@@ -689,8 +780,9 @@ extension SampleBuilding {
                     }
                 }
             }
-            // A laundry drain the model gives no size for: no view guesses it; Full MEP counts it in a note.
-            _ = add("Drain", "LD-1", .plumbing, .main, level: 1,
+            // A laundry drain the model gives neither a role nor a size: Full MEP shows it, marked inferred, and
+            // says so in a note; no view guesses its size.
+            _ = add("Drain", "LD-1", .plumbing, .unknown, level: 1,
                     .run(points: [SIMD3(22.5, -0.3, 12.0), SIMD3(26.5, -0.3, 12.0)], profile: .round(radius: 0.04)),
                     detail: .floor, link: "Drain")
         }

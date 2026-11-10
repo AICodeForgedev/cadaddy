@@ -802,12 +802,42 @@ fn an_estimate_for_another_tag_of_a_routed_circuit_goes_and_a_rooms_own_stays() 
         feeders: BTreeSet::new(),
         cable: Vec::new(),
         minimum: None,
+        no_device: BTreeSet::new(),
     };
     let gone = estimates_routed_elsewhere(&sp, &routed);
     assert_eq!(gone.iter().map(String::as_str).collect::<Vec<_>>(), ["circuit:L1:E-601:LP1-7", "circuit:L1:room-SUITE TYPE 2:U-3"], "{gone:?}");
     assert_eq!(circuit_key("circuit:Level 1:E-101:LP1-3@P2~sw3"), Some(("level 1".into(), "E-101".into(), "LP1-3".into())));
     assert_eq!(circuit_key("device:L1:3"), None);
     assert_eq!(circuit_key("circuit:L1:E-101:"), None);
+}
+
+/// Q6489: a circuit the routing found no device of keeps no estimated route (even when nothing
+/// else was routed), its tag says it is not routed, and what went is kept for the next routing.
+#[test]
+fn a_circuit_with_no_device_built_keeps_no_estimated_route() {
+    let est = |id: &str| {
+        let mut r = crate::cmd::printcond::run(crate::cmd::printcond::CIRCUIT_SYSTEM, "Roof", "E-9", vec![[0.0, 0.0], [816.0, 0.0]], 0.75, 8.25);
+        r.id = format!("{id}#1");
+        r
+    };
+    let tag = |id: &str| ElementTag { id: id.into(), kind: "circuit".into(), level: "Roof".into(), ..Default::default() };
+    let mut sp = BuildingSpec::default();
+    sp.mep.runs = vec![est("circuit:Roof:E-9:PA-3"), est("circuit:Roof:E-9:PA-7")];
+    sp.tags = vec![tag("circuit:Roof:E-9:PA-3"), tag("circuit:Roof:E-9:PA-7")];
+    let routed = Routed { no_device: BTreeSet::from(["circuit:Roof:E-9:PA-3".to_string()]), ..Routed::default() };
+    let replaced = apply(&mut sp, &routed);
+    let ids: Vec<&str> = sp.mep.runs.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["circuit:Roof:E-9:PA-7#1"], "the other circuit's estimate stays");
+    let t = sp.tags.iter().find(|t| t.id == "circuit:Roof:E-9:PA-3").expect("tag");
+    assert_eq!(t.fields.get("route").map(|f| f.value.as_str()), Some("not routed"));
+    assert!(t.fields.get(NOT_ROUTED).is_some_and(|f| f.value.starts_with(NO_DEVICE_REASON)), "{t:?}");
+    assert_eq!(t.issues, ["no_device_built"]);
+    assert_eq!(replaced.runs.len(), 1);
+    assert_eq!(replaced.tags.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["circuit:Roof:E-9:PA-3"]);
+    assert!(replaced.tags.iter().all(|t| t.issues.is_empty()), "the tag as read is kept");
+    // Applied again (a routed spec routed again): marked once.
+    apply(&mut sp, &routed);
+    assert_eq!(sp.tags.iter().filter(|t| t.issues.iter().any(|i| i == "no_device_built")).count(), 1);
 }
 
 #[test]

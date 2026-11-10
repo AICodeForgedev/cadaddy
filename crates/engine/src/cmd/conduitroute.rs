@@ -57,6 +57,11 @@ pub(crate) const METHODS_FILE: &str = "route/methods.json";
 const RULES: &str = include_str!("conduitroute.json");
 /// What marks a homerun's own tag (the circuits it carries): `circuit:<level>:home:<panel>:<n>`.
 const HOME_PART: &str = ":home:";
+/// Why a circuit none of whose devices is in the model is not routed (Q6489).
+pub(crate) const NO_DEVICE_REASON: &str = "circuit not routed: no device of this circuit is in the model";
+/// The field a circuit tag not routed for want of a built device carries (Q6489), and its issue.
+pub(crate) const NOT_ROUTED: &str = "not_routed";
+const NO_DEVICE_ISSUE: &str = "no_device_built";
 /// A circuit tag's design conductors where the routing upsized them for voltage drop, and why
 /// (Q6216: the correction keeps the design value beside the installed one).
 pub(crate) const DESIGN_CONDUCTORS: &str = "design:conductors";
@@ -158,7 +163,21 @@ pub(crate) struct RouteGeom {
     pub drop_step_in: f64,
     pub bend_penalty_ft: f64,
     pub max_detour_ft: f64,
+    /// A roof level's raceway (it has no ceiling, Q6489): on supports this high over the deck,
+    /// its tiers up to `roof_band_in`, inches; where that comes from.
+    pub roof_support_in: f64,
+    pub roof_band_in: f64,
+    pub roof_source: String,
     pub source: String,
+}
+
+impl RouteGeom {
+    /// A roof level's raceway band over its deck, feet: (lowest, highest) (Q6489).
+    pub(crate) fn roof_band_ft(&self) -> (f64, f64) {
+        let low = if self.roof_support_in.is_finite() && self.roof_support_in > 0.0 { self.roof_support_in } else { 4.0 } / 12.0;
+        let high = if self.roof_band_in.is_finite() { self.roof_band_in / 12.0 } else { low };
+        (low, high.max(low))
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -361,6 +380,10 @@ pub(crate) struct Methods {
     /// The circuits a homerun may share, and where it says so.
     pub max_circuits: Option<usize>,
     pub max_circuits_source: String,
+    /// The remedy the documents name for boxes back to back in a rated wall (`putty pads`,
+    /// `separate`; empty: none named), and where (Q6488).
+    pub rated_box_remedy: String,
+    pub rated_box_remedy_source: String,
 }
 
 impl Methods {
@@ -1762,6 +1785,10 @@ pub(crate) struct Routed {
     /// The raceway's minimum trade size the routing used, and where it came from (the
     /// specification's, else the rules'): an estimated route left takes it (Q6235).
     pub minimum: Option<(f64, String)>,
+    /// The circuit tags (ids) none of whose devices is in the model, and whose label the routing
+    /// routed under no other tag of their level (Q6489): not routed, so their estimated routes
+    /// connect nothing and go; each is a question for review.
+    pub no_device: BTreeSet<String>,
 }
 
 /// The feeder a circuit's breaker serves, when it is one: its panel's schedule row for the
@@ -2719,6 +2746,20 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let tiers_of = |level: &str, over: Option<f64>| -> (f64, Vec<f64>) {
         let Some(l) = sp.level(level) else { return (0.0, vec![rl.route.default_ceiling_ft * upf]) };
         let floor = l.elevation_ft * upf;
+        // A roof has no ceiling (Q6489): its raceway runs on supports on the deck (the level's
+        // elevation is the deck's top), up to the curb band, never a ceiling's height over it.
+        if super::wallgen::roof_level(&sp.levels, &l.name) {
+            let (low, high) = rl.route.roof_band_ft();
+            let step = (rl.route.tier_step_in.max(1.0) / 12.0) * upf;
+            let mut tiers = vec![floor + low * upf];
+            while let Some(&z) = tiers.last() {
+                if z + step > floor + high * upf + 1e-9 || tiers.len() >= 12 {
+                    break;
+                }
+                tiers.push(z + step);
+            }
+            return (floor, tiers);
+        }
         let ceiling = if l.ceiling_ft > 0.0 { l.ceiling_ft } else { rl.route.default_ceiling_ft };
         let ceiling = over.map(|z| (z - floor) / upf).filter(|c| *c > 0.0 && *c < l.height_ft.max(ceiling + 1.0)).unwrap_or(ceiling);
         let z0 = floor + (ceiling + rl.route.above_ceiling_in / 12.0) * upf;
@@ -2914,6 +2955,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut penetrations: Vec<Value> = Vec::new();
     let mut bored: Vec<Bored> = Vec::new();
     let mut unrouted: Vec<Value> = Vec::new();
+    // The circuits with no device in the model: (tag id, label, level, sheet).
+    let mut no_device: Vec<(String, String, String, String)> = Vec::new();
     let mut methods_used: BTreeMap<String, (usize, String)> = BTreeMap::new();
     let mut runs: Vec<MepRun> = Vec::new();
     let mut tags: Vec<ElementTag> = Vec::new();
@@ -3010,7 +3053,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let Some(tag) = tag_at(c.tag) else { continue };
         let members: Vec<&Dev> = c.devs.iter().filter_map(|i| devs.get(*i)).collect();
         if members.is_empty() {
-            unrouted.push(json!({"circuit": c.label, "level": c.level, "reason": "no device of this circuit is in the model"}));
+            // Listed after the routing, unless its label is routed under another of its tags.
+            no_device.push((tag.id.clone(), c.label.clone(), c.level.clone(), tag_sheet(tag)));
             continue;
         }
         let field = fields.get(&c.level.to_ascii_lowercase()).unwrap_or(&empty);
@@ -4371,6 +4415,26 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     });
 
     // -- The runs and tags out; the report. --
+    // A circuit none of whose devices is in the model is not routed (Q6489): its estimated route
+    // would connect nothing (a raceway in the air where its devices were never built). Listed,
+    // its route gone, a question for review; a label routed under another tag of its level is
+    // routed (its other tags' estimates go as that one's, Q6235).
+    let routed_labels: BTreeSet<(String, String)> = tags
+        .iter()
+        .filter(|t| !t.id.contains(HOME_PART))
+        .filter_map(|t| Some((t.level.to_ascii_lowercase(), field_of(t, "circuit")?.trim().to_ascii_uppercase())))
+        .collect();
+    for (id, label, level, sheet) in no_device {
+        if routed_labels.contains(&(level.to_ascii_lowercase(), label.trim().to_ascii_uppercase())) || !out.no_device.insert(id.clone()) {
+            continue;
+        }
+        if unrouted.len() < MAX_ITEMS {
+            unrouted.push(json!({
+                "circuit": label, "level": level, "tag": id, "sheet": sheet, "no_device": true,
+                "reason": NO_DEVICE_REASON,
+            }));
+        }
+    }
     let mut by_pair: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for c in &clashes {
         let pair = c["pair"].as_str().unwrap_or("electrical × ?").to_string();
@@ -4996,6 +5060,35 @@ pub(crate) fn estimates_routed_elsewhere(sp: &BuildingSpec, routed: &Routed) -> 
         .collect()
 }
 
+/// The circuits the routing found no device of in the model (Q6489): their estimated routes go
+/// (a raceway that connects nothing is never built or taken off) and each tag says it is not
+/// routed, with the question. What went is kept in `replaced`, so a routing after their devices
+/// are built routes them.
+fn set_aside_unbuilt(sp: &mut BuildingSpec, routed: &Routed, replaced: &mut Replaced) {
+    if routed.no_device.is_empty() {
+        return;
+    }
+    let unbuilt = |r: &MepRun| {
+        r.system == super::printcond::CIRCUIT_SYSTEM && super::printcond::circuit_of_run(r).is_some_and(|c| routed.no_device.contains(c))
+    };
+    replaced.runs.extend(sp.mep.runs.iter().filter(|r| unbuilt(r)).take(MAX_RUNS).cloned());
+    sp.mep.runs.retain(|r| !unbuilt(r));
+    for t in sp.tags.iter_mut().filter(|t| routed.no_device.contains(&t.id) && !t.fields.contains_key(NOT_ROUTED)) {
+        if replaced.tags.len() < MAX_CIRCUITS {
+            replaced.tags.push(t.clone());
+        }
+        t.set("route", "not routed", "computed");
+        t.set(
+            NOT_ROUTED,
+            format!("{NO_DEVICE_REASON}: no raceway is built or taken off for it; build its devices (or say it is no circuit) and route again"),
+            "computed",
+        );
+        if !t.issues.iter().any(|i| i == NO_DEVICE_ISSUE) {
+            t.issues.push(NO_DEVICE_ISSUE.into());
+        }
+    }
+}
+
 /// How an estimated route left is sized (its `size_source`), so a later routing sizes it again.
 const EST_FILL: &str = "rule: an estimated route's conductors' fill at the routing's minimum: ";
 
@@ -5004,6 +5097,7 @@ const EST_FILL: &str = "rule: an estimated route's conductors' fill at the routi
 /// estimated runs as read (a routing's own earlier output is not among them).
 pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     let mut replaced = Replaced::default();
+    set_aside_unbuilt(sp, routed, &mut replaced);
     if routed.runs.is_empty() {
         return replaced;
     }
@@ -5020,8 +5114,8 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
             || (r.system == super::printcond::CIRCUIT_SYSTEM
                 && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c) || elsewhere.contains(c)))
     };
-    replaced.runs =
-        sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && r.system != lv::LV_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
+    let room = MAX_RUNS.saturating_sub(replaced.runs.len());
+    replaced.runs.extend(sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && r.system != lv::LV_SYSTEM && gone(r)).take(room).cloned());
     sp.mep.runs.retain(|r| !gone(r));
     // An estimated route left (its circuit not routed) is the raceway its conductors fill, at
     // the routing's minimum, not the reader's default size (Q6235).
@@ -5071,7 +5165,8 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
         r
     }));
     let routing_made = |t: &ElementTag| t.id.contains(HOME_PART) || t.fields.contains_key("split_of") || t.fields.contains_key(gap::RESOLVED);
-    replaced.tags = sp.tags.iter().filter(|t| routed_tags.contains(t.id.as_str()) && !routing_made(t)).take(MAX_CIRCUITS).cloned().collect();
+    let room = MAX_CIRCUITS.saturating_sub(replaced.tags.len());
+    replaced.tags.extend(sp.tags.iter().filter(|t| routed_tags.contains(t.id.as_str()) && !routing_made(t)).take(room).cloned());
     // Each circuit's routed tag (or its parts) where its tag was read, so the spec keeps its order
     // (the order a later routing reads the circuits in); the homerun tags after them.
     let mut by_read: HashMap<&str, Vec<&ElementTag>> = HashMap::new();
@@ -5138,7 +5233,8 @@ pub(crate) fn unrouted(d: &Drawing, sp: &BuildingSpec) -> BuildingSpec {
     // The low-voltage pathways are the routing's own (none read).
     out.mep.runs.retain(|r| r.system != lv::LV_SYSTEM);
     out.tags.retain(|t| t.kind != lv::TAG_KIND);
-    if !sp.mep.runs.iter().any(|r| r.system == BRANCH_SYSTEM) {
+    // A routing went in: its routed runs, or circuits it set aside for want of a device (Q6489).
+    if !sp.mep.runs.iter().any(|r| r.system == BRANCH_SYSTEM) && !sp.tags.iter().any(|t| t.fields.contains_key(NOT_ROUTED)) {
         return out;
     }
     let Some(base) = d.embedded.get(BASE_FILE).and_then(|b| serde_json::from_slice::<Replaced>(b).ok()) else { return out };
@@ -5343,6 +5439,8 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         "routed": true, "removed": old.len(), "atoms": atoms["atoms"], "seconds": (t0.elapsed().as_secs_f64() * 10.0).round() / 10.0,
         "boxes": {"made": atoms["boxesMade"], "by_reason": atoms["boxesByReason"], "no_box": atoms["noBox"], "gang_boxes": atoms["gangBoxes"],
             "ganged_devices": atoms["gangedDevices"], "ends_at_equipment": atoms["endsAtEquipment"], "open_ends": atoms["openEnds"]},
+        // What the boxes did to clear each other, and the rated-wall remedy used (Q6488).
+        "box_clearance": atoms["boxClearance"],
         "circuits": routed.report["routed_circuits"], "homeruns": routed.report["homeruns"], "routed_ft": routed.report["routed_ft"],
         "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len), "unrouted": routed.report["unrouted"].as_array().map_or(0, Vec::len),
     }))
@@ -5418,7 +5516,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])
-            .params("{} → {routed, removed, atoms, seconds, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
+            .params("{} → {routed, removed, atoms, seconds, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, box_clearance: {movedOffOverlap, movedOffBackToBack, devicesMoved, puttyPads, ratedWallRemedy: separate|putty pads, ratedWallRemedySource, devicesPutBack, ...}, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
             .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the cost DB's manpower rate, else the estimate's rate), price?: bool (default true), scenario?: a value engineering scenario id (ve.scenario: its pieces in place of the design's it replaces)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")

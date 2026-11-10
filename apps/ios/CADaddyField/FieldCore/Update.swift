@@ -358,7 +358,8 @@ public final class PackageUpdater: @unchecked Sendable {
     /// One update: fetch the manifest at `address`, then each new or changed package. A failure in one package is
     /// reported for it and leaves its old version working; an unreachable server or a bad manifest fails the run
     /// with a plain message and changes nothing.
-    public func run(address: String, progress: @escaping @Sendable (UpdateProgress) -> Void = { _ in }) async throws -> UpdateReport {
+    /// `excluding`: package names another updater owns (a building's set, updated by `SetUpdater`).
+    public func run(address: String, excluding: Set<String> = [], progress: @escaping @Sendable (UpdateProgress) -> Void = { _ in }) async throws -> UpdateReport {
         let manifestURL = try UpdateServer.manifestURL(address)
         let work = try library.makeIncomingFolder()
         defer { try? FileManager.default.removeItem(at: work) }
@@ -375,6 +376,7 @@ public final class PackageUpdater: @unchecked Sendable {
         var report = UpdateReport()
         report.notes += manifest.problems
         let plan = UpdatePlanner.plan(manifest, records: library.list(), sidecarHash: { self.library.storedSidecarHash($0) })
+            .filter { !excluding.contains($0.package.name) }
         let todo = plan.filter { if case .unchanged = $0.action { return false } else { return true } }
         for item in plan { if case .unchanged = item.action { report.unchanged.append(item.package.label) } }
         for (i, item) in todo.enumerated() {

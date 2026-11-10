@@ -728,13 +728,21 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, devices: &
 }
 
 /// Put the estimated routes at their level's ceiling (just above it), now the spec has its
-/// levels: the legs at that height, each drop up to it. Drawn conduit keeps its own.
+/// levels: the legs at that height, each drop up to it. A roof has no ceiling (Q6489): its legs
+/// lie on supports on the deck (the routing rules' roof band), never a ceiling's height over it.
+/// Drawn conduit keeps its own.
 pub(crate) fn seat_heights(sp: &mut BuildingSpec) {
+    let on_deck = super::conduitroute::rules().route.roof_band_ft().0;
     let ceilings: BTreeMap<String, f64> = sp
         .levels
         .iter()
-        .filter(|l| l.ceiling_ft.is_finite() && l.ceiling_ft > 0.0 && l.ceiling_ft + ABOVE_CEILING_FT < l.height_ft.max(l.ceiling_ft + 1.0))
-        .map(|l| (l.name.to_ascii_lowercase(), l.ceiling_ft + ABOVE_CEILING_FT))
+        .filter_map(|l| {
+            if super::wallgen::roof_level(&sp.levels, &l.name) {
+                return Some((l.name.to_ascii_lowercase(), on_deck));
+            }
+            (l.ceiling_ft.is_finite() && l.ceiling_ft > 0.0 && l.ceiling_ft + ABOVE_CEILING_FT < l.height_ft.max(l.ceiling_ft + 1.0))
+                .then(|| (l.name.to_ascii_lowercase(), l.ceiling_ft + ABOVE_CEILING_FT))
+        })
         .collect();
     for r in sp.mep.runs.iter_mut().filter(|r| r.system == CIRCUIT_SYSTEM) {
         let Some(&h) = ceilings.get(&r.level.to_ascii_lowercase()) else { continue };
@@ -1353,5 +1361,33 @@ mod tests {
         let leg = sp.mep.runs.iter().find(|x| x.top_ft.is_none()).expect("leg");
         assert_eq!(leg.bottoms_ft, vec![9.25]);
         assert!(sp.mep.runs.iter().filter(|x| x.top_ft.is_some()).all(|x| x.top_ft == Some(9.25) && x.bottoms_ft == vec![4.0]));
+    }
+
+    /// Q6489: a roof has no ceiling: an estimated route on it lies on the deck (the routing rules'
+    /// roof supports), never the default ceiling's height in the air over it.
+    #[test]
+    fn a_roofs_estimated_route_lies_on_the_deck() {
+        let level = |name: &str, elevation_ft: f64, height_ft: f64| cadaddy_walk3d::Level {
+            name: name.into(),
+            elevation_ft,
+            height_ft,
+            ceiling_ft: 8.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let mut sp = BuildingSpec { levels: vec![level("Level 1", 0.0, 12.0), level("Roof", 12.0, 4.0)], ..BuildingSpec::default() };
+        let bottom = DEFAULT_CEILING_FT + ABOVE_CEILING_FT;
+        sp.mep.runs = vec![
+            run(CIRCUIT_SYSTEM, "Roof", "E-9", vec![[0.0, 0.0], [816.0, 0.0]], DEFAULT_SIZE_IN, bottom),
+            run(CIRCUIT_SYSTEM, "Level 1", "E-1", vec![[0.0, 0.0], [120.0, 0.0]], DEFAULT_SIZE_IN, bottom),
+        ];
+        seat_heights(&mut sp);
+        let deck = super::super::conduitroute::rules().route.roof_band_ft();
+        let roof = sp.mep.runs.iter().find(|r| r.level == "Roof").expect("roof leg");
+        assert!(roof.bottoms_ft.iter().all(|b| (deck.0..=deck.1).contains(b) && *b < 2.0), "{:?}", roof.bottoms_ft);
+        let storey = sp.mep.runs.iter().find(|r| r.level == "Level 1").expect("storey leg");
+        assert_eq!(storey.bottoms_ft, vec![8.25], "a storey's stays over its ceiling");
     }
 }

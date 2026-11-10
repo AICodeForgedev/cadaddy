@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1259,
-    "count": 1259,
+    "callableAsJson": 1264,
+    "count": 1264,
     "ids": [
       "-attedit",
       "-block",
@@ -161,6 +161,7 @@
       "bim.layout.object",
       "bim.layout.rehost",
       "bim.layout.tie",
+      "bim.level.move",
       "bim.loadcalc",
       "bim.look",
       "bim.prints",
@@ -1020,6 +1021,10 @@
       "shapes",
       "share",
       "sheet.facts",
+      "sheet.list",
+      "sheet.next",
+      "sheet.open",
+      "sheet.previous",
       "sheetset",
       "sheetset.from_model",
       "showurls",
