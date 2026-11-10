@@ -25568,8 +25568,15 @@ fn apply_wall_legend(s: &Session, sp: &mut cadaddy_walk3d::BuildingSpec, job: &G
     let d = s.doc()?;
     let mut report = Vec::new();
     let mut types: Vec<cadaddy_walk3d::WallType> = Vec::new();
+    // The structural sheets' framing notes name the stud material a detail leaves out.
+    let structural: Vec<([f64; 4], String)> =
+        job.sheet_regions.iter().filter(|r| r.discipline.trim().eq_ignore_ascii_case("S")).map(|r| (r.rect, r.number.clone())).collect();
+    let framing = super::walltypes::framing_note(d, &structural);
+    if let Some(f) = &framing {
+        report.push(format!("stud material where a wall type detail names none: {} studs ({})", if f.wood { "wood" } else { "metal" }, f.source));
+    }
     for r in job.sheet_regions.iter().filter(|r| r.kind == "legend") {
-        let lg = super::walltypes::read_legend(d, Some(r.rect), &r.number);
+        let lg = super::walltypes::read_legend(d, Some(r.rect), &r.number, framing.as_ref());
         report.push(format!(
             "{}: {} wall types{}",
             r.number,

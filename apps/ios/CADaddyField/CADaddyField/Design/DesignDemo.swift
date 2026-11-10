@@ -1,5 +1,5 @@
 // CADaddy Field — debug-only screen automation for the design screenshots and the screen recording.
-//   -design building|reveal|lifted|floor|room|card|trace|panel|layers|tour
+//   -design building|reveal|lifted|floor|room|card|trace|panel|layers|arch|archlifted|mepfull|tour
 //   -designbg white|teal   -designhc   (-fpslog prints FIELD-PERF lines)
 
 #if DEBUG
@@ -55,6 +55,16 @@ enum DesignDemo {
         case "layers":
             after(0.1) { exp.go(.floor(2)) }
             after(1.0) { exp.showLayers = true }
+        case "arch":
+            exp.finishReveal()
+            after(0.1) { exp.setView(.architectural) }
+        case "archlifted":
+            exp.finishReveal()
+            after(0.1) { exp.setView(.architectural) }
+            after(0.3) { exp.setLiftForScreenshot(2) }
+        case "mepfull":
+            exp.finishReveal()
+            after(0.1) { exp.setDensity(.full) }
         case "tour":
             tour(exp, room: room, outlet: outlet)
         default:
@@ -91,6 +101,17 @@ enum DesignDemo {
         // 31: back up to the building.
         at(31.2) { exp.clearFocus(); exp.goUp() }
         at(33.0) { exp.goUp() }
+        // 35: the view control: Full MEP, Architectural, back to MEP.
+        at(35.0) { exp.setDensity(.full) }
+        at(38.0) { exp.renderer.autoOrbitSpeed = 0.25 }
+        at(40.5) { exp.renderer.autoOrbitSpeed = 0 }
+        at(41.0) { exp.setView(.architectural) }
+        for (k, f) in stride(from: Float(0.02), through: 0.62, by: 0.02).enumerated() {
+            at(43.5 + Double(k) * 0.06) { exp.railChanged(f) }
+        }
+        at(45.6) { exp.railEnded() }
+        at(47.0) { exp.setView(.mep) }
+        at(48.0) { exp.setDensity(.mains) }
     }
 }
 #endif
