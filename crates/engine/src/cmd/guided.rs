@@ -24699,12 +24699,17 @@ fn arch_placer(
                         |o| format!("not fitted (its views name another part of the site: {o})")
                     ),
                     |f| format!(
-                        "scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best",
+                        "scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best{}",
                         f.sim.scale(),
                         f.sim.tx,
                         f.sim.ty,
                         f.score * 100.0,
-                        f.margin * 100.0
+                        f.margin * 100.0,
+                        f.off_scale.map_or_else(String::new, |k| format!(
+                            "; drawn {:.1}% {} than its printed scale (placed at the scale it is drawn at)",
+                            (k - 1.0).abs() * 100.0,
+                            if k < 1.0 { "smaller" } else { "larger" }
+                        ))
                     )
                 ),
                 started.elapsed().as_secs_f64()
@@ -24714,7 +24719,7 @@ fn arch_placer(
                 match &fit {
                     Some(f) => {
                         json!({"sheet": number, "level": level, "method": "linework", "transform": {"a": f.sim.a, "b": f.sim.b, "tx": f.sim.tx, "ty": f.sim.ty},
-                        "scale": f.sim.scale(), "score": f.score, "margin": f.margin, "used": true})
+                        "scale": f.sim.scale(), "score": f.score, "margin": f.margin, "drawn_off_scale": f.off_scale, "used": true})
                     }
                     None => json!({"sheet": number, "level": level, "method": "none", "used": false,
                     "why_not": if tgt.is_empty() {
