@@ -178,6 +178,10 @@ impl MeshData {
     pub fn quad_instances(&self) -> usize {
         self.quads.len() / INSTANCE_SIZE
     }
+    /// Bytes of vertex data waiting to be uploaded.
+    pub fn bytes(&self) -> usize {
+        self.lines.len() + self.tris.len() + self.quads.len() + self.images.iter().map(|im| im.verts.len()).sum::<usize>()
+    }
 }
 
 fn rel(p: Vec2, origin: Vec2) -> [f32; 2] {
@@ -1034,6 +1038,16 @@ pub fn take_slowest_prepare() -> f64 {
     SLOWEST_PREPARE.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 100.0
 }
 
+/// The slowest upload of a drawing's vertex buffers made while preparing a frame (the list was
+/// converted on the UI thread) since [`take_slowest_upload`], in hundredths of a millisecond:
+/// the 2D draw statistics' part of the preparation (`canvas::drawstats`).
+static SLOWEST_UPLOAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The slowest upload in a frame's preparation since the last call (ms), and start again.
+pub fn take_slowest_upload() -> f64 {
+    SLOWEST_UPLOAD.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 100.0
+}
+
 /// Vertices (or instances) per uploaded piece: small, so that after an edit only the pieces whose
 /// bytes changed are made again ([`upload`]).
 const PIECE: usize = 65_536;
@@ -1193,7 +1207,9 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
             let pending = self.slot.lock().ok().and_then(|mut s| s.take());
             if let Some(mut m) = pending {
                 if m.uploaded.is_none() {
+                    let t = web_time::Instant::now();
                     m.upload_now(device);
+                    SLOWEST_UPLOAD.fetch_max((t.elapsed().as_secs_f64() * 100_000.0) as u64, std::sync::atomic::Ordering::Relaxed);
                 }
                 if let Some(u) = m.uploaded {
                     (res.lines, res.tris, res.quads, res.images) = (u.lines, u.tris, u.quads, u.images);
