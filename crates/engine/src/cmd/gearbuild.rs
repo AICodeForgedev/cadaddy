@@ -2018,12 +2018,15 @@ pub(crate) fn typical_feeds(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<TypicalFe
                 };
                 pool.extend(rest);
                 let text = marks.iter().find(|m| m.1 == i).map(|m| m.2.clone()).unwrap_or_default();
-                if by_label.contains_key(&i) {
-                    let first = kept.first().and_then(|&e| eq.get(e)).map_or("?", |g| g.tag.as_str());
-                    notes.push(format!("{first}: its plan label {text} names a breaker another stack's label names; fed as if unlabelled"));
-                    pool.push(kept);
-                } else {
-                    by_label.insert(i, (kept, text));
+                match by_label.entry(i) {
+                    std::collections::btree_map::Entry::Occupied(_) => {
+                        let first = kept.first().and_then(|&e| eq.get(e)).map_or("?", |g| g.tag.as_str());
+                        notes.push(format!("{first}: its plan label {text} names a breaker another stack's label names; fed as if unlabelled"));
+                        pool.push(kept);
+                    }
+                    std::collections::btree_map::Entry::Vacant(v) => {
+                        v.insert((kept, text));
+                    }
                 }
                 k = end;
             }
