@@ -36,6 +36,7 @@ pub mod pen;
 pub mod pia;
 mod plotstyle;
 mod point;
+pub mod profile;
 pub mod raster;
 pub mod shade;
 pub mod shapes;
@@ -354,6 +355,8 @@ pub struct Options {
     /// hatch patterns and symbols too small for their tier are drawn as less. `None` (plots,
     /// exports, picks and every other build) draws everything in full; plots ignore it.
     pub detail: Option<detail::Detail>,
+    /// Count where the build spends its time ([`profile`]); `None` (the default) counts nothing.
+    pub profile: Option<std::sync::Arc<profile::BuildProfile>>,
 }
 
 impl Options {
@@ -383,6 +386,7 @@ impl Default for Options {
             layer_lines: Vec::new(),
             skip_hatches: false,
             detail: None,
+            profile: None,
         }
     }
 }
@@ -451,6 +455,8 @@ struct Builder<'a> {
     /// Drawing paper space itself (a layout's title block), not model space plotted or seen
     /// through a viewport.
     paper: bool,
+    /// Where the time goes, when [`Options::profile`] asks.
+    prof: profile::Local,
 }
 
 /// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
@@ -764,8 +770,17 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
     let opts = &with_point_view(d, space, opts);
     let styler = style_table(d, space, opts, plotting).map(|t| plotstyle::Styler::new(d, t));
     let paper = matches!(space, Space::Paper(_));
-    let mut b =
-        Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None, shared_budget: None, transparency: 0, paper };
+    let mut b = Builder {
+        list: DisplayList::default(),
+        opts,
+        plotting,
+        styles: styler.as_ref(),
+        named: None,
+        shared_budget: None,
+        transparency: 0,
+        paper,
+        prof: profile::Local::new(opts),
+    };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
@@ -843,6 +858,7 @@ fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadaddy_doc::EntityStore
                 shared_budget: Some(&budget),
                 transparency: 0,
                 paper: false,
+                prof: profile::Local::new(opts),
             };
             for e in chunk {
                 top_entity(&mut part, d, e);
@@ -982,6 +998,7 @@ pub fn viewport_content(d: &Drawing, space: &Space, handle: Handle, area: Bounds
         shared_budget: None,
         transparency: 0,
         paper: false,
+        prof: profile::Local::new(opts),
     };
     contents(&mut b, d, vp, area, &Clip::Rect(area));
     b.list
@@ -1056,6 +1073,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
         shared_budget: Some(&budget),
         transparency: 0,
         paper: false,
+        prof: profile::Local::new(b.opts),
     };
     #[cfg(not(target_arch = "wasm32"))]
     let parallel = !b.plotting && b.styles.is_none() && d.model.len() >= 2 * PARALLEL_CHUNK;
@@ -1080,6 +1098,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
                         shared_budget: Some(&budget),
                         transparency: 0,
                         paper: false,
+                        prof: profile::Local::new(opts),
                     };
                     let c = ctx();
                     for me in chunk.iter().filter(|me| seen(me)) {
@@ -1246,6 +1265,7 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
         shared_budget: None,
         transparency: 0,
         paper: false,
+        prof: profile::Local::new(opts),
     };
     for e in ents {
         top_entity(&mut b, d, e);
@@ -1452,7 +1472,9 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     let (saved, saved_transparency) = (b.named, b.transparency);
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
     let first = b.list.prims.len();
+    let timed = b.prof.start();
     entity_parts(b, ctx, e);
+    b.prof.stop(timed, profile::Part::of(&e.kind), ctx.depth == 0, b.list.prims.len() > first);
     // While a reference is edited in place, the rest of the drawing is faded (XFADECTL).
     if ctx.depth == 0
         && !b.plotting
@@ -2364,6 +2386,7 @@ fn underlay(b: &mut Builder, ctx: &Ctx, u: &cadaddy_doc::Underlay, rgb: Ink, lw:
         shared_budget: b.shared_budget,
         transparency: 0,
         paper: false,
+        prof: profile::Local::off(),
     };
     part.list.expanded = b.list.expanded;
     for pe in page.model.iter() {
@@ -2524,6 +2547,7 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
                     shared_budget: b.shared_budget,
                     transparency: b.transparency,
                     paper: b.paper,
+                    prof: profile::Local::off(),
                 };
                 // The same expansion budget as the rest of the list.
                 part.list.expanded = b.list.expanded;

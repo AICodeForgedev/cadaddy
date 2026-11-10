@@ -223,6 +223,8 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
         let moved: Vec<(Handle, Handle)> = sources.iter().map(|(_, _, e)| e.handle).zip(handles.iter().copied()).collect();
         let copies: std::collections::HashMap<Handle, Handle> = moved.iter().copied().collect();
         super::clip_partners::after_transform(d, &moved, m, true)?;
+        // Model elements copied keep none of their source's links (Q6501).
+        super::circuitlinks::after_copy(d, &moved);
         if !d.groups.is_empty() {
             let source = d.groups.clone();
             super::groups::copy_groups(d, &source, &copies);
@@ -260,6 +262,10 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
         }
     }
     super::clip_partners::after_transform(d, &moved, m, copy)?;
+    if copy {
+        // Model elements copied keep none of their source's links (Q6501).
+        super::circuitlinks::after_copy(d, &moved);
+    }
     if !copies.is_empty() && !d.groups.is_empty() {
         let source = d.groups.clone();
         super::groups::copy_groups(d, &source, &copies);

@@ -90,7 +90,7 @@ fn look_at(h: &mut Harness<'_, CadApp>, center: Vec2, height: f64) {
 /// out on a sheet, every symbol was drawn in full, its circle and lines, as every other object.
 #[test]
 fn zoomed_out_a_symbol_is_drawn_as_its_box() {
-    let h = harness(sample::print_set(2, 3000));
+    let h = harness(sample::job_print_set(2, 3000));
     let syms = symbols(h.state());
     assert!(syms.len() > 100, "the sheet has symbols: {}", syms.len());
     let boxes = syms.iter().filter(|(s, _)| prims(h.state(), *s) == vec![(Kind::Polyline, 5)]).count();
@@ -101,7 +101,7 @@ fn zoomed_out_a_symbol_is_drawn_as_its_box() {
 /// again, and the picture gives way to the linework.
 #[test]
 fn zoomed_out_a_sheet_draws_less_and_zooming_in_brings_its_detail_back() {
-    let mut h = harness(sample::print_set(2, 3000));
+    let mut h = harness(sample::job_print_set(2, 3000));
     let syms = symbols(h.state());
     assert!(syms.len() > 100, "the sheet has symbols: {}", syms.len());
     // Zoomed out (the sheet fitted): every symbol is its box, one closed outline.
@@ -132,7 +132,7 @@ fn zoomed_out_a_sheet_draws_less_and_zooming_in_brings_its_detail_back() {
 /// the new picture is ready.
 #[test]
 fn an_edit_is_drawn_at_once_and_the_picture_follows() {
-    let mut h = harness(sample::print_set(2, 1500));
+    let mut h = harness(sample::job_print_set(2, 1500));
     assert!(settle(&mut h, |a| a.canvas.sheet_images.shown));
     let builds = h.state().canvas.sheet_images.builds;
     let c = h.state().session.state().map(|st| st.view().center).unwrap_or(Vec2::ZERO);
@@ -151,7 +151,7 @@ fn an_edit_is_drawn_at_once_and_the_picture_follows() {
 /// only; zoomed in, its lines' endpoints too.
 #[test]
 fn snaps_offer_only_what_is_drawn() {
-    let mut h = harness(sample::print_set(1, 1500));
+    let mut h = harness(sample::job_print_set(1, 1500));
     let syms = symbols(h.state());
     let (_, at) = syms[0];
     // The symbol's crossbar ends 4 units either side of its insertion point.
@@ -183,7 +183,7 @@ fn snaps_offer_only_what_is_drawn() {
 /// What the commands read never depends on the zoom or on the detail levels.
 #[test]
 fn counts_and_takeoff_are_the_same_at_every_zoom() {
-    let mut h = harness(sample::print_set(2, 1500));
+    let mut h = harness(sample::job_print_set(2, 1500));
     let read = |h: &mut Harness<'_, CadApp>| -> Vec<Value> {
         let s = &mut h.state_mut().session;
         let mut run = |c: &str, p: Value| s.execute(c, &p).unwrap_or_else(|e| panic!("{c}: {e}"));
@@ -222,7 +222,7 @@ fn an_ordinary_view_draws_as_before() {
 /// An ordinary drawing (no sheets) gets the detail levels but no picture.
 #[test]
 fn an_ordinary_drawing_has_no_picture() {
-    let mut d = sample::print_set(1, 1500);
+    let mut d = sample::job_print_set(1, 1500);
     d.agent = None.into();
     let mut h = harness(d);
     h.run_steps(20);
@@ -460,7 +460,7 @@ fn zoom_detail_frame_times() {
                 let bytes = std::fs::read(f).unwrap_or_else(|e| panic!("{f}: {e}"));
                 cadaddy_io::read(&bytes, f).unwrap_or_else(|e| panic!("{f}: {e}"))
             }
-            None => sample::print_set(sheets, per),
+            None => sample::job_print_set(sheets, per),
         };
         if whole {
             d.agent = None.into();

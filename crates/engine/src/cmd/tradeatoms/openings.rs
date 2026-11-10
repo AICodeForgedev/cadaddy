@@ -368,8 +368,17 @@ fn firestops(d: &Drawing, sp: &BuildingSpec, r: &Rules, batch: &mut Batch, upf: 
             continue;
         }
         let (z0, z1) = (a.z.min(b.z), a.z.max(b.z));
+        // A riser's piece cut at the floors (Q6493) stands on the floor it passes: that floor is
+        // named on it.
+        let named: Vec<String> = d
+            .model
+            .get(*h)
+            .and_then(|e| super::super::bimlook::made_prop(e, super::super::mep::FLOOR_PENETRATION).map(str::to_string))
+            .map(|v| v.split(", ").map(|f| f.trim().to_string()).collect())
+            .unwrap_or_default();
         for (name, z) in floors.iter().skip(1) {
-            if *z > z0 + 1e-6 && *z < z1 - 1e-6 {
+            let passed = named.iter().any(|f| f.eq_ignore_ascii_case(name)) && *z >= z0 - 1e-6 && *z < z1 - 1e-6;
+            if passed || *z > z0 + 1e-6 && *z < z1 - 1e-6 {
                 let mut p = Piece::new(
                     "firestopping",
                     "firestop",

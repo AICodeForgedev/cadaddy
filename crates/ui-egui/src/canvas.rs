@@ -209,6 +209,8 @@ pub struct CanvasState {
     /// The drawing's detail rules (`plan` in its fidelity rules data), for which drawing and
     /// building spec.
     plan_rules: Option<((u64, usize, usize), std::sync::Arc<cadaddy_render::detail::PlanRules>)>,
+    /// Where frames and regenerations spend their time (the `--debug` overlay, `ui.draw2d`).
+    pub stats: drawstats::DrawStats,
 }
 
 impl CanvasState {
@@ -229,7 +231,9 @@ impl CanvasState {
     fn install(&mut self, key: ListKey, window: Option<Bounds2>, detail: Option<cadaddy_render::detail::Detail>, built: rebuild::Built) {
         self.list_gen = self.list_gen.wrapping_add(1);
         self.list_detail = detail;
+        self.stats.built(&built.list, built.objects, built.build_ms, true, built.profile);
         if let Some(m) = built.mesh {
+            self.stats.meshed_counts(m.counts, m.ms - m.upload_ms, m.upload_ms);
             if let Ok(mut slot) = self.mesh_slot.lock() {
                 *slot = Some(m.data);
             }
@@ -434,6 +438,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         // The band's finest zoom, as the level of detail above: the list serves every zoom in
         // the band, so what it draws as less must stay under a pixel at the finest one.
         detail: rules.and_then(|r| cadaddy_render::detail::Detail::new(2f64.powi(lod_band), r)),
+        profile: app.canvas.stats.profile_for_build(),
     };
     if view_only {
         let t = Tokens::get();
@@ -462,6 +467,10 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
     app.canvas.list_detail = opts.detail;
     app.canvas.build_ms = crate::now_ms() - t0;
+    if let Some(list) = &app.canvas.list {
+        let objects = st.doc.space(&space).map_or(0, |s| s.len());
+        app.canvas.stats.built(list, objects, app.canvas.build_ms, false, None);
+    }
 }
 
 /// The drawing's detail rules when the screen draws at detail levels: model space's plan view,
@@ -649,6 +658,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             layer_lines: app.session.drywall_layer_lines.clone(),
             skip_hatches: false,
             detail: None,
+            profile: None,
         };
         c.list = cadaddy_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);
@@ -937,8 +947,8 @@ fn clip_infinite(xf: &Xf, base: Vec2, dir: Vec2, ray: bool) -> Option<[Pos2; 2]>
     Some([xf.to_screen(a), xf.to_screen(b)])
 }
 
-/// Draw a display list.
-pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay: bool) {
+/// Draw a display list; returns the shapes made for it (what is in view).
+pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay: bool) -> usize {
     let vis = xf.world_bounds();
     let mut shapes: Vec<Shape> = Vec::with_capacity(list.prims.len());
     let px = 1.0 / xf.scale;
@@ -1017,7 +1027,9 @@ pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb,
             }
         }
     }
+    let n = shapes.len();
     p.extend(shapes);
+    n
 }
 
 /// Textures of the images drawn by the CPU canvas, by their pixels (each entry keeps its pixels
@@ -1178,6 +1190,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
     if c.mesh_key != Some(key) {
         let t0 = crate::now_ms();
         let mesh = crate::gpu::build_mesh(list, origin, bg, lwdisplay);
+        c.stats.meshed(&mesh, crate::now_ms() - t0, 0.0);
         if let Ok(mut slot) = c.mesh_slot.lock() {
             *slot = Some(mesh);
         }
@@ -1211,6 +1224,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
         }
     }
     p.extend(shapes);
+    c.stats.drew(list, c.list_gen, &xf.world_bounds(), None);
 }
 
 /// How a highlight is drawn: lines `width` points wide, and either solid with fills filled or
@@ -1586,9 +1600,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // A print set opens on its first sheet, its sheet list beside it: there is no view of the
     // whole set (`cadaddy_engine::sheetnav`). The list takes room from the canvas, so the sheet
     // is fitted again next frame.
-    if app.session.open_first_sheet() {
-        crate::sheetsets::open_sheet_list(app);
-    }
+    crate::sheetload::open_first_sheet(app);
+    crate::sheetload::park_when_idle(app);
     let Ok(st) = app.session.state() else { return };
     let view = st.view();
     let scale = f64::from(rect.height()) / view.height.max(1e-12);
@@ -2123,7 +2136,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     } else if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {
-        draw_list(&painter, &xf_paper, list, bg, app.session.settings.lwdisplay);
+        let sent = draw_list(&painter, &xf_paper, list, bg, app.session.settings.lwdisplay);
+        app.canvas.stats.drew(list, app.canvas.list_gen, &xf_paper.world_bounds(), Some(sent));
     }
     if let Some(vp) = &active_vp {
         // The active viewport: a heavy border, highlights in model units clipped to it.
@@ -3560,6 +3574,7 @@ mod lasso;
 mod refedit;
 
 /// Background rebuilds of the display list for a new view.
+pub mod drawstats;
 mod rebuild;
 /// The open sheet's picture, drawn zoomed out (Q6417).
 pub mod sheetimage;

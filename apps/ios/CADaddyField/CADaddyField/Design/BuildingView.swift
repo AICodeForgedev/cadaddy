@@ -6,9 +6,24 @@ import SwiftUI
 
 @available(iOS 18.0, *)
 struct BuildingView: View {
-    @StateObject private var exp = BuildingExperience()
+    @StateObject private var exp: BuildingExperience
     var onClose: () -> Void
-    var onStandInRoom: () -> Void
+    /// "Stand in this room" on a real room package: the room's id (the app opens field alignment on it).
+    var onStandInRoom: (String) -> Void
+
+    /// The design preview: the invented sample building.
+    init(onClose: @escaping () -> Void, onStandInRoom: @escaping (String) -> Void = { _ in }) {
+        _exp = StateObject(wrappedValue: BuildingExperience())
+        self.onClose = onClose
+        self.onStandInRoom = onStandInRoom
+    }
+
+    /// A real building from its package set, with its opening packages already read.
+    init(experience: @autoclosure @escaping () -> BuildingExperience, onClose: @escaping () -> Void, onStandInRoom: @escaping (String) -> Void) {
+        _exp = StateObject(wrappedValue: experience())
+        self.onClose = onClose
+        self.onStandInRoom = onStandInRoom
+    }
 
     /// Measured heights of the title block and the bottom stack at the current text size.
     @State private var headerHeight: CGFloat = 70
@@ -52,6 +67,13 @@ struct BuildingView: View {
                 }
 
                 LayersButton(exp: exp).offset(x: local(layout.layers).minX, y: local(layout.layers).minY)
+
+                if exp.loading != nil || exp.notice != nil {
+                    SetBanner(exp: exp)
+                        .frame(width: max(local(layout.header).width, 220), alignment: .leading)
+                        .offset(x: local(layout.header).minX, y: local(layout.header).maxY + 6)
+                        .transition(.opacity)
+                }
 
                 VStack(spacing: 0) {
                     Spacer(minLength: 0)
@@ -149,7 +171,7 @@ struct BuildingView: View {
             }
             if let r = exp.currentRoom {
                 Image(systemName: "chevron.right").fieldFont(9, .bold).foregroundStyle(s.inkSecondary)
-                Text(r).fieldFont(13, .semibold, .monospaced).foregroundStyle(s.inkSecondary).lineLimit(1)
+                Text(exp.building.room(r)?.displayNumber ?? r).fieldFont(13, .semibold, .monospaced).foregroundStyle(s.inkSecondary).lineLimit(1)
             }
         }
         .lineLimit(1)
@@ -191,15 +213,15 @@ struct BuildingView: View {
         case let .floor(i):
             FloorSheet(exp: exp, level: i).transition(.move(edge: .bottom).combined(with: .opacity))
         case let .room(n):
-            RoomSheet(exp: exp, number: n, onStandInRoom: onStandInRoom, cap: cap).transition(.move(edge: .bottom).combined(with: .opacity))
+            RoomSheet(exp: exp, number: n, onStandInRoom: { onStandInRoom(n) }, cap: cap).transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
     private var hint: String {
         guard exp.revealDone else { return "Drag across the building to reveal its systems" }
-        if exp.wholeView == .mep && exp.density == .full && exp.unknownSizePipes > 0 {
-            let n = exp.unknownSizePipes
-            return "\(n) \(n == 1 ? "pipe has" : "pipes have") no size in the model and \(n == 1 ? "is" : "are") left out"
+        if exp.wholeView == .mep && exp.density == .full && exp.inferredInFullMEP > 0 {
+            let n = exp.inferredInFullMEP
+            return "\(n) \(n == 1 ? "object has" : "objects have") no role or size in the model: shown as inferred"
         }
         return "Tap a floor, or drag the rail to lift floors apart"
     }
@@ -563,6 +585,30 @@ struct LayersPanel: View {
     }
 }
 
+// MARK: - Loading and plain messages (a package set)
+
+@available(iOS 18.0, *)
+struct SetBanner: View {
+    @ObservedObject var exp: BuildingExperience
+    var body: some View {
+        let s = exp.style
+        HStack(spacing: 8) {
+            if let l = exp.loading {
+                ProgressView().controlSize(.small)
+                Text(l).fieldFont(13, .semibold).foregroundStyle(s.ink)
+            } else if let n = exp.notice {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.orange)
+                Text(n).fieldFont(13, .medium).foregroundStyle(s.ink).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button { exp.notice = nil } label: { Image(systemName: "xmark").fieldFont(12, .bold).foregroundStyle(s.inkSecondary).frame(width: 44, height: 44) }
+                    .accessibilityLabel("Dismiss")
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .glass(s, radius: 16)
+    }
+}
+
 // MARK: - Path strip (follow the system)
 
 @available(iOS 18.0, *)
@@ -572,11 +618,11 @@ struct TraceStrip: View {
 
     var body: some View {
         let s = exp.style
-        if let f = exp.focus, let tapped = exp.building.element(f.tapped) {
+        if let f = exp.focus, let tapped = exp.renderer.shown(f.tapped) ?? exp.building.element(f.tapped) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Circle().fill(s.swiftUI(tapped.system)).frame(width: 8, height: 8)
-                    Text(f.showsDownstream ? "\(tapped.tag) feeds \(exp.building.downstream(of: f.tapped).count) objects" : "Follow the system")
+                    Text(f.showsDownstream ? "\(tapped.tag.isEmpty ? tapped.kind : tapped.tag) feeds \(f.downstreamCount) objects" : "Follow the system")
                         .fieldFont(12, .semibold).foregroundStyle(s.inkSecondary)
                     Spacer()
                     Button { exp.clearFocus() } label: {
@@ -597,6 +643,11 @@ struct TraceStrip: View {
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(st.link.uppercased()).fieldFont(9, .semibold).tracking(0.8).foregroundStyle(s.inkSecondary)
                                         Text(st.tag).fieldFont(14, .semibold, .monospaced).foregroundStyle(s.ink)
+                                        // How the link to the next step is known: known plainly, inferred and unknown said.
+                                        if let state = st.state, state != .known, i < steps.count - 1 || state == .unknown {
+                                            Text(state == .inferred ? "INFERRED LINK" : "LINK UNKNOWN").fieldFont(8, .bold).tracking(0.6)
+                                                .foregroundStyle(state == .inferred ? Color.orange : s.inkSecondary)
+                                        }
                                     }
                                     .padding(.horizontal, 10)
                                     .frame(minWidth: 56, minHeight: 56)
@@ -605,9 +656,13 @@ struct TraceStrip: View {
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("\(st.link) \(st.tag)")
+                                .disabled(st.id.isEmpty)
+                                .accessibilityLabel("\(st.link) \(st.tag)\(st.state == .inferred ? ", inferred link" : st.state == .unknown ? ", link unknown" : "")")
                             }
                         }
+                    }
+                    if let note = f.note {
+                        Label(note, systemImage: "questionmark.circle").fieldFont(13, .medium).foregroundStyle(s.inkSecondary).lineLimit(2)
                     }
                 }
             }
@@ -688,7 +743,7 @@ struct RoomSheet: View {
     /// Handle (28) and the primary button with its padding (78).
     private var contentCap: CGFloat { max(min(cap, 420) - 28 - 78 - 4, 60) }
 
-    private let order: [BuildingSystem] = [.electrical, .lowVoltage, .mechanical, .plumbing, .fire, .cabinets, .furniture]
+    private let order: [BuildingSystem] = [.electrical, .lowVoltage, .mechanical, .plumbing, .fire, .conveying, .cabinets, .furniture]
 
     var body: some View {
         let s = exp.style
@@ -713,16 +768,24 @@ struct RoomSheet: View {
                     list
                 }
             }
-            Button(action: onStandInRoom) {
-                HStack(spacing: 10) {
-                    Image(systemName: "arkit").fieldFont(18, .semibold)
-                    Text("Stand in this room").fieldFont(17, .semibold)
+            // Field alignment only for a real room package; the building and the design preview never offer it.
+            if exp.canStandInRoom {
+                Button(action: onStandInRoom) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arkit").fieldFont(18, .semibold)
+                        Text("Stand in this room").fieldFont(17, .semibold)
+                    }
+                    .foregroundStyle(s.isDark ? Color.black : Color.white)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(s.isDark ? Color.white : Color(uiColor: UIColor(hex: 0x0E1A24))))
                 }
-                .foregroundStyle(s.isDark ? Color.black : Color.white)
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(s.isDark ? Color.white : Color(uiColor: UIColor(hex: 0x0E1A24))))
+                .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 14)
+            } else {
+                Text(exp.session == nil ? "Design preview: invented rooms can't be aligned in the field" : "This room has no package to align in the field")
+                    .fieldFont(13, .medium).foregroundStyle(s.inkSecondary)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .padding(.horizontal, 16).padding(.bottom, 10)
             }
-            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 14)
         }
         .glass(s, radius: 28)
         .padding(.horizontal, 8)
@@ -731,7 +794,7 @@ struct RoomSheet: View {
     }
 
     private var groups: [(BuildingSystem, [BuildingElement])] {
-        let items = exp.building.elements(in: number)
+        let items = exp.building.elements(in: number).filter { !$0.isBaseGroup && $0.system != .architecture && (exp.session == nil || exp.filter.allows($0, exp.viewState, prefs: exp.layers)) }
         return order.compactMap { sys in
             let list = items.filter { $0.system == sys }
             return list.isEmpty ? nil : (sys, list)

@@ -240,6 +240,9 @@ struct Cache {
 pub struct SheetNav {
     /// The open sheet, an index into [`Session::print_sheets`].
     pub active: Option<usize>,
+    /// The sheets opened last, the latest first (with sheets on demand, those stay in memory:
+    /// [`crate::sheetstore::CACHE`]).
+    pub recent: Vec<usize>,
     cache: Arc<Mutex<Cache>>,
 }
 
@@ -365,6 +368,8 @@ impl Session {
         st.sheet_nav.active = Some(i);
         let view: View = crate::framed(sheet.rect, (w, h), inset, |a| a, 1.02);
         st.set_zoom_frame(view);
+        // With sheets on demand, the sheet is in memory and all but the recent ones are not.
+        self.keep_open_sheets(i)?;
         Ok(sheet)
     }
 

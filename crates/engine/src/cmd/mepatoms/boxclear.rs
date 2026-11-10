@@ -61,6 +61,106 @@ pub(crate) struct BackToBack {
     /// The kinds of box (its device's: `switch`) that keep their spot: the other moves.
     pub keep_kinds: Vec<String>,
     pub keep_source: String,
+    /// The remedy where nothing names one (`separate`, `putty`), and why.
+    pub remedy: String,
+    pub remedy_source: String,
+    /// The project rule that chooses it (its domain and key).
+    pub rule_domain: String,
+    pub rule_key: String,
+    /// Words naming the putty pads (or listed box inserts) in a note, a specification or the
+    /// project rule's value.
+    pub putty_words: Vec<String>,
+    /// Words naming the separation by distance (a rule's value; in the documents with a box and
+    /// a pair word beside them).
+    pub separate_words: Vec<String>,
+    pub box_words: Vec<String>,
+    pub pair_words: Vec<String>,
+    /// Words that forbid what the sentence names (`putty pads are not permitted`).
+    pub not_words: Vec<String>,
+    /// Why the pads, when the project chooses them.
+    pub putty_choice_source: String,
+    /// The project's choice for this build: every back-to-back pair takes the pads, at the drawn
+    /// spots (set by the caller, never read from the rules file).
+    #[serde(skip)]
+    pub pads: bool,
+    /// Most vertical clear distance between the two boxes' bodies at which they still count,
+    /// inches (0: their heights overlap; none: any heights in the wall both are hosted in).
+    pub max_vertical_in: Option<f64>,
+    pub vertical_source: String,
+}
+
+/// The remedy for boxes back to back in a rated wall (IBC 714.4.2 exceptions 1.1 and 1.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Remedy {
+    /// One box moved along its face until the pair is the code's distance apart.
+    Separate,
+    /// Listed putty pads (box inserts) on both boxes, at the drawn spots.
+    Putty,
+}
+
+impl Remedy {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Remedy::Separate => "separate",
+            Remedy::Putty => "putty pads",
+        }
+    }
+}
+
+/// Most characters of a document looked at for the remedy (hostile files).
+const MAX_TEXT: usize = 4_000_000;
+
+/// The longest run between stops read as one sentence, bytes.
+const MAX_SENTENCE: usize = 1_200;
+
+fn has_any(up: &str, words: &[String]) -> bool {
+    words.iter().map(|w| w.trim()).any(|w| !w.is_empty() && up.contains(&w.to_ascii_uppercase()))
+}
+
+impl BackToBack {
+    /// The remedy a value names (a project rule's: `putty pads`, `separate`): none when it names
+    /// neither.
+    pub(crate) fn remedy_named(&self, value: &str) -> Option<Remedy> {
+        let up = value.to_ascii_uppercase();
+        if up.contains("PUTTY") || has_any(&up, &self.putty_words) {
+            return Some(if has_any(&up, &self.not_words) { Remedy::Separate } else { Remedy::Putty });
+        }
+        has_any(&up, &self.separate_words).then_some(Remedy::Separate)
+    }
+
+    /// The remedy a document's text names, and the sentence that does: a sentence naming the
+    /// putty pads (one forbidding them names the separation), else one naming the separation of
+    /// boxes on opposite sides. Pads named anywhere win: a document that allows them keeps the
+    /// drawn spots.
+    pub(crate) fn remedy_in(&self, text: &str) -> Option<(Remedy, String)> {
+        let mut separate: Option<String> = None;
+        let mut forbidden: Option<String> = None;
+        let text: String = text.chars().take(MAX_TEXT).collect();
+        // A sentence runs on over the lines a page wraps it in; one longer than a paragraph
+        // (a table, a page with no stops) is read line by line.
+        let sentences = text.split(['.', ';']).take(200_000).flat_map(|s| {
+            if s.len() > MAX_SENTENCE {
+                s.lines().map(str::to_string).collect::<Vec<_>>()
+            } else {
+                vec![s.split_whitespace().collect::<Vec<_>>().join(" ")]
+            }
+        });
+        for sentence in sentences.take(400_000) {
+            let up = sentence.to_ascii_uppercase();
+            let cut = || sentence.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect::<String>();
+            if has_any(&up, &self.putty_words) {
+                if has_any(&up, &self.not_words) {
+                    forbidden.get_or_insert_with(cut);
+                    continue;
+                }
+                return Some((Remedy::Putty, cut()));
+            }
+            if separate.is_none() && has_any(&up, &self.separate_words) && has_any(&up, &self.box_words) && has_any(&up, &self.pair_words) {
+                separate = Some(cut());
+            }
+        }
+        forbidden.or(separate).map(|s| (Remedy::Separate, s))
+    }
 }
 
 /// A box as the clearance sees it (drawing units): its centre, its face's direction along and
@@ -127,7 +227,8 @@ fn overlaps(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3, gap: f64) -> bool {
 }
 
 /// How far apart along the wall `a` at `ca` and `b` at `cb` are, edge to edge, when they are
-/// on opposite faces of one wall the back-to-back rule applies to.
+/// on opposite faces of one wall the back-to-back rule applies to (each hosted in it at its own
+/// height: the caller gives a box a wall only where that wall stands at the box's height).
 fn apart_back_to_back(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3) -> Option<f64> {
     if !(a.movable && b.movable && a.rated && a.wall.is_some() && a.wall == b.wall && a.out.dot(b.out) < -0.9) {
         return None;
@@ -139,12 +240,19 @@ fn apart_back_to_back(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3) -> Option<
     Some(d.dot(a.along).abs() - (a.w + b.w) / 2.0)
 }
 
-/// The two boxes' conflict, if any.
-fn conflict(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3, gap: f64, apart: f64) -> Option<Why> {
+/// The vertical clear distance between `a` at `ca` and `b` at `cb` (0 where their heights overlap).
+fn vertical_gap(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3) -> f64 {
+    ((ca.z - cb.z).abs() - (a.h + b.h) / 2.0).max(0.0)
+}
+
+/// The two boxes' conflict, if any (`vertical`: the back-to-back rule's vertical reach, drawing
+/// units; none: any heights).
+fn conflict(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3, gap: f64, apart: f64, vertical: Option<f64>) -> Option<Why> {
     if overlaps(a, ca, b, cb, gap) {
         return Some(Why::Overlap);
     }
-    (apart > 0.0 && apart_back_to_back(a, ca, b, cb).is_some_and(|e| e < apart - 1e-9)).then_some(Why::BackToBack)
+    let near_in_height = vertical.is_none_or(|v| vertical_gap(a, ca, b, cb) <= v + 1e-9);
+    (apart > 0.0 && near_in_height && apart_back_to_back(a, ca, b, cb).is_some_and(|e| e < apart - 1e-9)).then_some(Why::BackToBack)
 }
 
 /// The boxes near a point, by level and grid cell.
@@ -209,6 +317,7 @@ pub(crate) fn clear(
     }
     let gap = rule.gap_in.max(0.0) * upi;
     let apart = rule.back_to_back.min_apart_in.max(0.0) * upi;
+    let vertical = rule.back_to_back.max_vertical_in.filter(|v| v.is_finite()).map(|v| v.max(0.0) * upi);
     let step = rule.step_in.max(0.125) * upi;
     let steps = ((rule.max_move_in.max(0.0) * upi / step).floor() as usize).min(1_000);
     let b2b_move =
@@ -237,7 +346,7 @@ pub(crate) fn clear(
     let free = |grid: &Grid, at: &[Vec3], x: usize, p: Vec3| -> bool {
         let Some(bx) = boxes.get(x) else { return false };
         grid.near(&bx.level, p).into_iter().filter(|y| *y != x).all(|y| match (boxes.get(y), at.get(y)) {
-            (Some(by), Some(cy)) => conflict(bx, p, by, *cy, gap, apart).is_none(),
+            (Some(by), Some(cy)) => conflict(bx, p, by, *cy, gap, apart, vertical).is_none(),
             _ => true,
         })
     };
@@ -263,8 +372,13 @@ pub(crate) fn clear(
         others.sort_unstable();
         for j in others {
             let (Some(b), Some(&ci), Some(&cj)) = (boxes.get(j), at.get(i), at.get(j)) else { continue };
-            let Some(why) = conflict(a, ci, b, cj, gap, apart) else { continue };
+            let Some(why) = conflict(a, ci, b, cj, gap, apart, vertical) else { continue };
             let back = why == Why::BackToBack;
+            // The project's pads: both boxes stay where the documents put them.
+            if back && rule.back_to_back.pads {
+                out.putty.push((i, j));
+                continue;
+            }
             if back && (a.keep || b.keep) {
                 out.kept += 1;
             }
@@ -382,6 +496,30 @@ mod tests {
         assert!(m.shift.y < 0.0 && m.shift.x.abs() < 1e-9);
         let p = boxes[1].centre + Vec3::new(m.shift.x, m.shift.y, 0.0);
         assert!(!overlaps(&boxes[0], boxes[0].centre, &boxes[1], p, 0.25));
+    }
+
+    #[test]
+    fn back_to_back_boxes_count_at_heights_within_the_rules_vertical_reach() {
+        // A switch at 46 in and a receptacle at 18 in on the two faces of one rated wall, 1 in
+        // apart along it: one stud cavity, back to back at any heights (no vertical reach) ...
+        let a = wall_box(50.0, 2.0, 46.0, Vec2::new(0.0, 1.0), 7, true);
+        let b = wall_box(51.0, -2.0, 18.0, Vec2::new(0.0, -1.0), 7, true);
+        let c = clear(&[a.clone(), b.clone()], &rule(), 1.0, &|_, _| true, &|_, _| true);
+        assert_eq!(c.moved.len(), 1, "{c:?}");
+        // ... and not where the rule's reach says their heights must overlap or come close.
+        let mut r = rule();
+        r.back_to_back.max_vertical_in = Some(0.0);
+        let c = clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true);
+        assert!(c.moved.is_empty() && c.putty.is_empty(), "{c:?}");
+        r.back_to_back.max_vertical_in = Some(24.0);
+        assert_eq!(clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true).moved.len(), 1);
+        // A box not hosted in the wall (no wall: above it) never counts.
+        let mut up = b.clone();
+        up.wall = None;
+        up.movable = false;
+        up.centre.z = 150.0;
+        let c = clear(&[a, up], &rule(), 1.0, &|_, _| true, &|_, _| true);
+        assert!(c.moved.is_empty() && c.putty.is_empty(), "{c:?}");
     }
 
     #[test]
@@ -529,6 +667,65 @@ mod tests {
         let e = ends(&c, &a, 0);
         assert!(!headboard(e) && e.x > a.centre.x, "{c:?}");
         assert!(apart_back_to_back(&a, e, &sw, sw.centre).unwrap_or(0.0) >= 24.0 - 1e-9);
+    }
+
+    #[test]
+    fn with_the_projects_putty_pads_a_back_to_back_pair_stays_and_an_overlap_still_moves() {
+        // Mirrored units: their receptacles back to back at one spot, the wall long enough to
+        // move one. With the pads chosen neither moves; a coincident pair still parts.
+        let a = wall_box(50.0, 2.0, 18.0, Vec2::new(0.0, 1.0), 7, true);
+        let b = wall_box(50.0, -2.0, 18.0, Vec2::new(0.0, -1.0), 7, true);
+        let mut r = field_rule();
+        assert_eq!(clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true).moved.len(), 1);
+        r.back_to_back.pads = true;
+        let c = clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true);
+        assert!(c.moved.is_empty(), "{c:?}");
+        assert_eq!(c.putty, vec![(0, 1)]);
+        let n = Vec2::new(0.0, 1.0);
+        let c = clear(&[wall_box(10.0, 0.0, 44.0, n, 1, true), wall_box(10.0, 0.0, 44.0, n, 1, true)], &r, 1.0, &|_, _| true, &|_, _| true);
+        assert_eq!((c.moved.len(), c.putty.len()), (1, 0), "{c:?}");
+    }
+
+    fn words() -> BackToBack {
+        let w = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        BackToBack {
+            putty_words: w(&["PUTTY PAD", "BOX INSERT"]),
+            separate_words: w(&["SEPARATE", "APART"]),
+            box_words: w(&["BOX", "OUTLET"]),
+            pair_words: w(&["OPPOSITE", "BACK TO BACK"]),
+            not_words: w(&["NOT PERMITTED"]),
+            ..BackToBack::default()
+        }
+    }
+
+    #[test]
+    fn the_remedy_is_read_from_a_documents_words_and_a_rules_value() {
+        let b = words();
+        // A specification paragraph and a general note, in either wording.
+        let spec =
+            "3.4 FIRESTOPPING\nA. Outlet boxes in rated walls: protect with listed putty pads where boxes on opposite sides are within 24 inches.";
+        let (r, line) = b.remedy_in(spec).unwrap_or((Remedy::Separate, String::new()));
+        assert_eq!(r, Remedy::Putty);
+        assert!(line.contains("putty pads") && !line.contains('\n'), "{line}");
+        assert_eq!(b.remedy_in("2. PROVIDE FIRE-RATED BOX INSERTS AT DEVICES IN DEMISING WALLS.").map(|x| x.0), Some(Remedy::Putty));
+        // Wrapped over two lines by the page.
+        let wrapped = "C. Where outlet boxes are installed on opposite sides of a rated wall, protect them with listed putty\n   pads (both boxes).";
+        assert_eq!(b.remedy_in(wrapped).map(|x| x.0), Some(Remedy::Putty));
+        // Separation, or the pads forbidden: separate.
+        let sep = "Boxes on opposite sides of rated walls shall be separated 24 in apart horizontally.";
+        assert_eq!(b.remedy_in(sep).map(|x| x.0), Some(Remedy::Separate));
+        assert_eq!(b.remedy_in("Putty pads are not permitted.").map(|x| x.0), Some(Remedy::Separate));
+        // Pads named anywhere win over a separation named first.
+        assert_eq!(b.remedy_in(&format!("{sep} Alternatively use listed putty pads.")).map(|x| x.0), Some(Remedy::Putty));
+        // Nothing about it: none. A separation of something that isn't a box pair: none.
+        assert!(b.remedy_in("Conduit shall be EMT. Separate the low voltage from power.").is_none());
+        assert!(b.remedy_in("").is_none());
+        // A rule's value.
+        assert_eq!(b.remedy_named("putty pads"), Some(Remedy::Putty));
+        assert_eq!(b.remedy_named("Separate"), Some(Remedy::Separate));
+        assert_eq!(b.remedy_named("whatever"), None);
+        // Hostile text: long, no breaks.
+        assert!(b.remedy_in(&"X".repeat(5_000_000)).is_none());
     }
 
     #[test]

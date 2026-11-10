@@ -1,0 +1,744 @@
+{
+  "anchor": {
+    "entry": {
+      "at": [
+        29.5,
+        18.2813
+      ],
+      "door": "194",
+      "to": "202 GUEST"
+    },
+    "floor_elevation_ft": 10.0,
+    "how": "the room corner nearest its entry door",
+    "kind": "room_corner",
+    "level": "L2",
+    "model": [
+      0,
+      0,
+      0
+    ],
+    "name": "203 CORRIDOR corner 7",
+    "plan_units": "ft",
+    "plan_x": 11.0,
+    "plan_y": 20.0,
+    "room": "203 CORRIDOR"
+  },
+  "axes": "x = plan x (east), y = up from the anchor level's finished floor, z = minus plan y",
+  "counts": {
+    "meshes": 13,
+    "nodes": 21,
+    "triangles": 512
+  },
+  "cut_to_scope": 8,
+  "dropped": {
+    "context_off": 0,
+    "filtered": 0,
+    "not_meshes": 0,
+    "over_caps": {},
+    "over_element_cap": 0,
+    "small_parts": {}
+  },
+  "elements": [
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "193",
+      "kind": "door",
+      "level": "L2",
+      "node": "door",
+      "part": "door",
+      "position": [
+        -0.9144,
+        0.0,
+        -0.0191
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Arc 14B (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "18A",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall",
+      "part": "wall",
+      "position": [
+        -0.9144,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 133 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "192",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_2",
+      "part": "wall",
+      "position": [
+        -3.3528,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 132 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "1A0",
+      "kind": "ceiling",
+      "level": "L2",
+      "node": "ceiling",
+      "part": "ceiling",
+      "position": [
+        -3.2004,
+        2.7432,
+        0.1524
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Text 162 (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "188",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_3",
+      "part": "wall",
+      "position": [
+        -3.3528,
+        0.0,
+        -3.048
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 146 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "190",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_4",
+      "part": "wall",
+      "position": [
+        2.667,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 138 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "185",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_5",
+      "part": "wall",
+      "position": [
+        2.667,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 135 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "186",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_6",
+      "part": "wall",
+      "position": [
+        -3.3528,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 134 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "194",
+      "kind": "door",
+      "level": "L2",
+      "node": "door_2",
+      "part": "door",
+      "position": [
+        5.1816,
+        0.0,
+        -0.0191
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Arc 14F (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "group": "base",
+      "id": "1A3",
+      "kind": "ceiling",
+      "level": "L2",
+      "node": "ceiling_2",
+      "part": "ceiling",
+      "position": [
+        -3.2004,
+        2.7432,
+        -2.8956
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Text 168 (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    },
+    {
+      "bottom_aff_in": -6.0,
+      "category": "Floors",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "19A",
+      "kind": "floor",
+      "level": "L2",
+      "node": "floor",
+      "part": "floor",
+      "position": [
+        -3.3528,
+        -0.1524,
+        -3.048
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build (floor, layer 3D-Floors)",
+      "system": "architecture",
+      "top_aff_in": 0.0,
+      "trade": "architecture",
+      "type": "Floor"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "181",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_7",
+      "part": "wall",
+      "position": [
+        -3.3528,
+        0.0,
+        -3.048
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 12A (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "1A1",
+      "kind": "ceiling",
+      "level": "L2",
+      "node": "ceiling_3",
+      "part": "ceiling",
+      "position": [
+        2.8194,
+        2.7432,
+        0.1524
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Text 164 (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "189",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_8",
+      "part": "wall",
+      "position": [
+        5.1816,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 139 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "184",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_9",
+      "part": "wall",
+      "position": [
+        8.763,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 13B (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "18F",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_10",
+      "part": "wall",
+      "position": [
+        8.763,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 13D (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "195",
+      "kind": "door",
+      "level": "L2",
+      "node": "door_3",
+      "part": "door",
+      "position": [
+        11.2776,
+        0.0,
+        -0.0191
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Arc 153 (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 108.0,
+      "category": "Ceilings",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "1A2",
+      "kind": "ceiling",
+      "level": "L2",
+      "node": "ceiling_4",
+      "part": "ceiling",
+      "position": [
+        8.9154,
+        2.7432,
+        0.1524
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Text 166 (layer A-ROOM-TAG)",
+      "system": "architecture",
+      "top_aff_in": 108.0,
+      "trade": "architecture",
+      "type": "Ceiling"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "18B",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_11",
+      "part": "wall",
+      "position": [
+        11.2776,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 13E (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "187",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_12",
+      "part": "wall",
+      "position": [
+        14.7828,
+        0.0,
+        -3.048
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 147 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "cut_to_scope": true,
+      "group": "base",
+      "id": "183",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_13",
+      "part": "wall",
+      "position": [
+        14.7828,
+        0.0,
+        0.0
+      ],
+      "room": "203 CORRIDOR",
+      "source": "model.build from the plan's Line 140 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    }
+  ],
+  "exported": "2026-11-10T05:06:18Z",
+  "field_alignment": true,
+  "generator": "CADaddy bim.export.ar",
+  "generic": false,
+  "glb": "L2-203-CORRIDOR.glb",
+  "groups": {
+    "base": {
+      "default_on": true,
+      "nodes": 21,
+      "nodes_off": 0
+    }
+  },
+  "meters_per_unit": 1,
+  "model": "L2-203-CORRIDOR.usdz",
+  "package": {
+    "level": "L2",
+    "name": "rooms/L2-203-CORRIDOR",
+    "room": "203 CORRIDOR",
+    "view": "room"
+  },
+  "points": [
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 1",
+      "plan": [
+        59.5,
+        20.0
+      ],
+      "position": [
+        14.7828,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 2",
+      "plan": [
+        59.5,
+        29.5
+      ],
+      "position": [
+        14.7828,
+        0.0,
+        -2.8956
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 3",
+      "plan": [
+        0.5,
+        29.5
+      ],
+      "position": [
+        -3.2004,
+        0.0,
+        -2.8956
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 4",
+      "plan": [
+        0.5,
+        20.0
+      ],
+      "position": [
+        -3.2004,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 5",
+      "plan": [
+        8.0,
+        20.0
+      ],
+      "position": [
+        -0.9144,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 6",
+      "plan": [
+        8.0,
+        16.5
+      ],
+      "position": [
+        -0.9144,
+        0.0,
+        1.0668
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 7",
+      "plan": [
+        11.0,
+        20.0
+      ],
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 8",
+      "plan": [
+        28.0,
+        20.0
+      ],
+      "position": [
+        5.1816,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 9",
+      "plan": [
+        28.0,
+        16.5
+      ],
+      "position": [
+        5.1816,
+        0.0,
+        1.0668
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 10",
+      "plan": [
+        31.0,
+        20.0
+      ],
+      "position": [
+        6.096,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 11",
+      "plan": [
+        48.0,
+        20.0
+      ],
+      "position": [
+        11.2776,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 12",
+      "plan": [
+        48.0,
+        16.5
+      ],
+      "position": [
+        11.2776,
+        0.0,
+        1.0668
+      ]
+    },
+    {
+      "kind": "room_corner",
+      "level": "L2",
+      "name": "203 CORRIDOR corner 13",
+      "plan": [
+        51.0,
+        20.0
+      ],
+      "position": [
+        12.192,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "rules": {
+    "source": "shipped rules (arexport.json)",
+    "version": 1
+  },
+  "schema": "cadaddy.ar/1",
+  "scope": {
+    "box": null,
+    "context": "translucent",
+    "default_room": false,
+    "kinds": [],
+    "level": null,
+    "rooms": [
+      {
+        "label": "203 CORRIDOR",
+        "level": "L2",
+        "name": "CORRIDOR",
+        "number": "203"
+      }
+    ],
+    "small_parts": false,
+    "trades": []
+  },
+  "simplified": "nothing",
+  "units": "m",
+  "up_axis": "Y",
+  "usdz": "L2-203-CORRIDOR.usdz",
+  "version": 1
+}

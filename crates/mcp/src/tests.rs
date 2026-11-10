@@ -1163,3 +1163,24 @@ fn the_validate_tool_tells_the_loop() {
     let e = tool_err(&mut s, "validate", json!({"action": "next"}));
     assert!(e.contains("no validate run yet"), "{e}");
 }
+
+#[test]
+fn mep_tool_adds_moves_and_lists_single_elements() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    tool(
+        &mut s,
+        "execute",
+        json!({"command": "bspec.set", "params": {"replace": true, "spec": {
+        "units_per_foot": 12.0,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9}],
+        "mep": {"systems": [{"name": "SA", "layer": "M-SUPP", "kind": "duct", "size_in": [12, 8], "bottom_ft": 10}],
+                "runs": [{"system": "SA", "level": "L1", "points": [[0, 0], [120, 0]], "size_in": [12, 8], "bottoms_ft": [10], "id": "R1"}]}}}}),
+    );
+    let added =
+        tool(&mut s, "mep", json!({"action": "add", "element": "duct", "points": [[0, 0], [120, 96]], "from": {"run": "R1"}, "rebuild": false}));
+    assert_eq!(added["edit"]["run"]["points"][0], json!([120.0, 0.0]), "joined at the run's nearer end: {added}");
+    tool(&mut s, "mep", json!({"action": "move", "edit": "ME-1", "delta_ft": [1, 0], "rebuild": false}));
+    let listed = tool(&mut s, "mep", json!({"action": "edits"}));
+    assert_eq!((listed["total"].as_u64(), listed["applied"].as_u64()), (Some(2), Some(2)), "{listed}");
+}

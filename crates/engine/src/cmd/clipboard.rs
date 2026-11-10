@@ -118,6 +118,8 @@ pub(crate) fn paste(s: &mut Session, m: &Mat3) -> Result<Vec<Handle>> {
     // Pasted viewports clip their pasted boundary and get their own ids.
     let moved: Vec<(Handle, Handle)> = copies.into_iter().collect();
     super::clip_partners::after_transform(d, &moved, m, true)?;
+    // Pasted model elements keep none of their source's links (Q6501).
+    super::circuitlinks::after_copy(d, &moved);
     s.set_selection(out.clone());
     Ok(out)
 }

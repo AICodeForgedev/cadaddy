@@ -132,7 +132,13 @@ impl Writer {
     /// Append a chunk [`pack`] made (on another thread, perhaps): `raw_len` is its payload's
     /// length before compression.
     pub fn chunk_packed(&mut self, tag: [u8; 4], version: u16, raw_len: usize, packed: &Packed) {
-        let (flags, stored): (u16, &[u8]) = (if packed.deflated { FLAG_DEFLATE } else { 0 }, &packed.stored);
+        self.chunk_stored(tag, version, raw_len, &packed.stored, packed.deflated);
+    }
+
+    /// Append a chunk whose payload is `stored` as it is (deflated or not, as `deflated` says):
+    /// a chunk copied from a file byte for byte.
+    pub fn chunk_stored(&mut self, tag: [u8; 4], version: u16, raw_len: usize, stored: &[u8], deflated: bool) {
+        let flags: u16 = if deflated { FLAG_DEFLATE } else { 0 };
         let data_len = raw_len;
         let offset = self.base + self.out.len() as u64;
         self.out.extend_from_slice(&tag);

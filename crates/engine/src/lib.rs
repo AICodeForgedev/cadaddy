@@ -45,6 +45,7 @@ pub mod script_tools;
 pub mod secureload;
 pub mod select;
 pub mod sheetnav;
+pub mod sheetstore;
 pub mod snap;
 pub mod snap3;
 pub mod spatial;
@@ -2178,6 +2179,13 @@ pub struct Session {
     /// Pixels at the top and bottom of the viewport that the interface covers (the floating
     /// command line and its history): zooming to the extents fits the drawing between them.
     pub viewport_inset_px: (f64, f64),
+    /// A print set's sheets load on demand (the interface, Q6418): only the open sheet and a few
+    /// recent ones are held, the others stay as stored ([`sheetstore`]). Off in headless sessions,
+    /// whose drawings hold everything.
+    pub sheets_on_demand: bool,
+    /// A command read the whole print set: every sheet is in memory until the interface is idle
+    /// ([`Session::park_idle_sheets`]).
+    pub(crate) whole_set_loaded: bool,
     pub clipboard: Vec<Entity>,
     pub clipboard_base: Vec2,
     pub pending_window: Option<PendingWindow>,
@@ -2363,6 +2371,8 @@ impl Session {
             tracking: snap::tracking::Tracker::default(),
             viewport_px: (1200.0, 800.0),
             viewport_inset_px: (0.0, 0.0),
+            sheets_on_demand: false,
+            whole_set_loaded: false,
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
             pending_window: None,
@@ -2647,6 +2657,11 @@ impl Session {
 
     fn execute_guarded(&mut self, id: &str, params: &Value) -> Result<Value> {
         self.poll_background();
+        // A command that may read the whole print set has it (Q6418: the interface holds the
+        // open sheet and a few recent ones; the app loads the rest off the UI thread first).
+        if self.needs_whole_set(id) {
+            self.load_all_sheets()?;
+        }
         // The active drawing's own words in the readers' word lists (`words:` project rules).
         cmd::wordrules::sync(self);
         // An agent's outermost call: parameters the command doesn't take are refused (before a
@@ -2935,6 +2950,10 @@ impl Session {
 
     /// Start a command by name or alias as if typed at the command line.
     pub fn start(&mut self, name: &str) -> Result<()> {
+        // A command that may read the whole print set has it (Q6418).
+        if self.needs_whole_set(name) {
+            self.load_all_sheets()?;
+        }
         // A command an agent types has the rails of its `execute` calls (dry run, confirmations).
         if self.journal.is_outer()
             && self.agent.from_agent
@@ -3574,6 +3593,9 @@ impl Session {
         cmd::table::after_command(self, before);
         cmd::annotate::dimbreak_after_command(self, before);
         fields::after_command(self, before);
+        // Built elements moved to another storey are filed under it (before the model's own
+        // record of the command, which takes the drawing as this leaves it).
+        cmd::relevel::after_command(self, before);
         cmd::wallgen::after_command(self, before);
         // After the live rebuild: the model's count index follows every change to its pieces.
         cmd::mepatoms::after_command(self, before, uid);

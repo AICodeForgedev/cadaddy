@@ -66,7 +66,7 @@ fn region(d: &cadaddy_engine::doc::Drawing, i: usize) -> Bounds2 {
 /// Page Down did nothing. Only what the app had then is used.
 #[test]
 fn opening_a_print_set_draws_its_first_sheet_and_page_down_the_next() {
-    let set = sample::print_set(3, 120);
+    let set = sample::job_print_set(3, 120);
     let (first, second) = (region(&set, 0), region(&set, 1));
     let mut h = harness(set);
     assert_eq!(drawn(h.state()), on(h.state(), &first), "only the first sheet's objects are drawn");
@@ -77,7 +77,7 @@ fn opening_a_print_set_draws_its_first_sheet_and_page_down_the_next() {
 
 #[test]
 fn a_print_set_opens_on_its_first_sheet_and_draws_only_it() {
-    let mut h = harness(sample::print_set(3, 120));
+    let mut h = harness(sample::job_print_set(3, 120));
     let sheets = h.state().session.print_sheets();
     assert_eq!(sheets.len(), 3);
     assert_eq!(h.state().session.active_sheet().map(|(i, _)| i), Some(0), "opened on its first sheet");
@@ -111,7 +111,7 @@ fn a_print_set_opens_on_its_first_sheet_and_draws_only_it() {
 
 #[test]
 fn page_down_and_page_up_step_through_the_sheets() {
-    let mut h = harness(sample::print_set(3, 60));
+    let mut h = harness(sample::job_print_set(3, 60));
     let sheets = h.state().session.print_sheets();
     key(&mut h, Key::PageDown);
     assert_eq!(h.state().session.active_sheet().map(|(i, _)| i), Some(1));
@@ -128,7 +128,7 @@ fn page_down_and_page_up_step_through_the_sheets() {
 
 #[test]
 fn an_ordinary_drawing_is_drawn_whole() {
-    let mut d = sample::print_set(3, 60);
+    let mut d = sample::job_print_set(3, 60);
     // The same objects without a job's records: one drawing, no sheets.
     d.agent = None.into();
     let mut h = harness(d);
@@ -156,11 +156,27 @@ fn median_ms(n: usize, mut f: impl FnMut()) -> f64 {
     t.get(n / 2).copied().unwrap_or(0.0)
 }
 
-/// What the screen does with `d` open: objects drawn, display list and CPU frame times.
+/// What the screen does with `d` open: objects drawn, display list and CPU frame times. The
+/// whole drawing stays in memory (as before sheets loaded on demand, Q6418).
 fn measure(label: &str, d: cadaddy_engine::doc::Drawing) {
     let mut s = Session::new();
     s.open_drawing(d, "Sample Set", None);
     let mut app = CadApp::new(s, Services::default());
+    app.session.sheets_on_demand = false;
+    measure_app(label, app);
+}
+
+/// [`measure`] of the .cdy file at `path` opened as the interface opens it: sheets on demand.
+fn measure_file(label: &str, path: &str) {
+    let mut s = Session::new();
+    s.sheets_on_demand = true;
+    let t = Instant::now();
+    s.finish_open(cadaddy_engine::cmd::file::read_file_on_demand(path).unwrap()).unwrap();
+    println!("{label}: read on demand in {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+    measure_app(label, CadApp::new(s, Services::default()));
+}
+
+fn measure_app(label: &str, mut app: CadApp) {
     app.canvas.zoom_pending = true;
     let ctx = egui::Context::default();
     let size = vec2(1600.0, 1000.0);
@@ -216,7 +232,8 @@ fn measure(label: &str, d: cadaddy_engine::doc::Drawing) {
             let _ = app.session.execute("sheet.next", &json!({}));
             frame(&mut app, None);
         });
-        format!("   next sheet {ms:.1} ms")
+        let total = app.session.doc().map_or(0, |d| d.model.len());
+        format!("   next sheet {ms:.1} ms (then {total} objects in memory)")
     };
     let mid = |v: &mut Vec<f64>| {
         v.sort_by(f64::total_cmp);
@@ -235,9 +252,19 @@ fn sheet_navigator_frame_times() {
     let n = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
     let (sheets, per) = (n("SHEETNAV_SHEETS", 10), n("SHEETNAV_PER", 2000));
     // Each made on its own: nothing (a spatial index, a display list) carries from one to the other.
-    let mut whole = sample::print_set(sheets, per);
+    let mut whole = sample::job_print_set(sheets, per);
     println!("\n{sheets} sheets x {per} objects ({} objects)", whole.model.len());
     whole.agent = None.into();
     measure("before: the whole set (no sheets)", whole);
-    measure("after: one sheet open", sample::print_set(sheets, per));
+    measure("after: one sheet open", sample::job_print_set(sheets, per));
+    // Sheets on demand (Q6418): the set saved to .cdy and opened from it.
+    let dir = std::env::temp_dir().join(format!("cadaddy-sheetnav-bench-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("Sample Set.cdy").to_string_lossy().into_owned();
+    let mut set = sample::job_print_set(sheets, per);
+    set.sheet_store.sheets = std::sync::Arc::new(cadaddy_engine::sheetstore::rects_of(&cadaddy_engine::sheetnav::print_sheets(&set)));
+    std::fs::write(&path, cadaddy_io::cdy::write_cdy_checkpoint(&set).unwrap()).unwrap();
+    drop(set);
+    measure_file("after Q6418: sheets on demand", &path);
+    let _ = std::fs::remove_dir_all(&dir);
 }

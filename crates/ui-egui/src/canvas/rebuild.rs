@@ -48,6 +48,10 @@ pub(super) struct Built {
     pub list: DisplayList,
     pub build_ms: f64,
     pub mesh: Option<BuiltMesh>,
+    /// Objects in the space built, and where the build's time went when it was profiled
+    /// ([`super::drawstats`]).
+    pub objects: usize,
+    pub profile: Option<cadaddy_render::profile::ProfileReport>,
 }
 
 pub(super) struct BuiltMesh {
@@ -58,6 +62,10 @@ pub(super) struct BuiltMesh {
     /// Indices of the infinite lines (drawn on the CPU in GPU mode).
     pub infinite: Vec<usize>,
     pub ms: f64,
+    /// Line vertices, fill vertices, quad instances and bytes of the vertex data (counted before
+    /// the upload lets the CPU copy go), and the upload's milliseconds.
+    pub counts: [usize; 4],
+    pub upload_ms: f64,
 }
 
 /// A build in flight: the list key and area it is for, and where its result arrives. Dropping
@@ -119,14 +127,19 @@ fn run(req: Request) -> Option<Built> {
             if req.opts.cancelled() {
                 return None;
             }
+            let counts = [data.line_vertices(), data.tri_vertices(), data.quad_instances(), data.bytes()];
+            let t2 = crate::now_ms();
             if let Some(device) = &m.device {
                 data.upload_now(device);
             }
+            let t3 = crate::now_ms();
             let infinite = list.prims.iter().enumerate().filter(|(_, p)| matches!(p.kind, Kind::Infinite { .. })).map(|(i, _)| i).collect();
-            Some(BuiltMesh { data, origin, bg, lwdisplay: m.lwdisplay, infinite, ms: crate::now_ms() - t1 })
+            Some(BuiltMesh { data, origin, bg, lwdisplay: m.lwdisplay, infinite, ms: t3 - t1, counts, upload_ms: t3 - t2 })
         }
     };
-    Some(Built { list, build_ms, mesh })
+    let objects = req.doc.space(&req.space).map_or(0, |s| s.len());
+    let profile = req.opts.profile.as_ref().map(|p| p.report());
+    Some(Built { list, build_ms, mesh, objects, profile })
 }
 
 /// Start building `req` on a worker thread for `key` / `window`; the worker asks `ctx` for a

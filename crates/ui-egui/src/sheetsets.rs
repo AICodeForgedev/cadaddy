@@ -144,7 +144,8 @@ fn sheet_list(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(i) = open
         && active != Some(i)
     {
-        let _ = app.run("sheet.open", json!({ "sheet": i + 1 }));
+        // Off the UI thread when the sheet is out of memory (Q6418).
+        crate::sheetload::run_sheet(app, "sheet.open", json!({ "sheet": i + 1 }));
     }
     ui.separator();
 }

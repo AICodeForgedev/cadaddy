@@ -30,7 +30,7 @@ mod homerun;
 mod twinline;
 
 /// Runs and segments handled, at most (hostile drawings).
-const MAX_RUNS: usize = 20_000;
+pub(crate) const MAX_RUNS: usize = 20_000;
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).
 const SLAB_FT: f64 = 0.5;
@@ -2103,7 +2103,7 @@ fn seg_near(p: Vec2, a: Vec2, b: Vec2) -> (f64, Vec2) {
 /// different sizes a transition (a reducer when both are round), two at an angle an elbow, three
 /// a tee, four or more a cross. Ends must also meet in height. Also, per run, the points where a
 /// tee sits on it (no elbow is drawn there).
-fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
+fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>, Vec<(usize, usize)>) {
     let inch = upf / 12.0;
     let half = |s: [f64; 2]| s[0] / 2.0 * inch;
     let ends: Vec<RunEnd> = geo.iter().enumerate().flat_map(|(i, g)| g.ends(i, upf)).collect();
@@ -2133,6 +2133,8 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
     let mut used = vec![false; ends.len()];
     let mut joints: Vec<Joint> = Vec::new();
     let mut skip: Vec<Vec<Vec2>> = vec![Vec::new(); geo.len()];
+    // Runs meeting end to end with no fitting between them (a straight run on, a riser's end).
+    let mut meets: Vec<(usize, usize)> = Vec::new();
     // On another run's side.
     let mut side: Vec<(usize, Vec2, Vec<usize>)> = Vec::new();
     for (ei, e) in ends.iter().enumerate() {
@@ -2218,7 +2220,10 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
         let je: Vec<RunEnd> = at.iter().filter_map(|k| ends.get(*k)).copied().collect();
         let kind = match je.as_slice() {
             // A riser's end: the drop is its fitting.
-            [a, b] if a.into.is_none() || b.into.is_none() => continue,
+            [a, b] if a.into.is_none() || b.into.is_none() => {
+                meets.push((a.run, b.run));
+                continue;
+            }
             [a, b] => {
                 let turn = matches!((a.into, b.into), (Some(u), Some(v)) if turns(u, v * -1.0));
                 if turn {
@@ -2226,6 +2231,7 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
                 } else if (a.size[0] - b.size[0]).abs() > 1e-6 || (a.size[1] - b.size[1]).abs() > 1e-6 {
                     if a.size[1] > 0.0 || b.size[1] > 0.0 { FittingKind::Transition } else { FittingKind::Reducer }
                 } else {
+                    meets.push((a.run, b.run));
                     continue;
                 }
             }
@@ -2236,7 +2242,7 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
         let owner = je.iter().max_by(|a, b| (a.size[0] * a.size[1].max(1.0)).total_cmp(&(b.size[0] * b.size[1].max(1.0)))).map_or(e.run, |x| x.run);
         joints.push(Joint { kind, at: e.at, owner, ends: je });
     }
-    (joints, skip)
+    (joints, skip, meets)
 }
 
 // ---- mesh generation for pieces ----
@@ -2514,10 +2520,15 @@ fn piece_mesh(m: &mut Mesh, p: &Piece, upf: f64) {
 /// tagged with its kind, tag, systems and schedule row for IFC; `only` (upper-case tags) limits it
 /// to those (gear added to a built model). The handles built.
 pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&std::collections::BTreeSet<String>>) -> Vec<Handle> {
+    build_equipment_indexed(d, sp, only).into_iter().map(|(_, h)| h).collect()
+}
+
+/// [`build_equipment`], each handle with the place of its item in the spec's equipment.
+pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: Option<&std::collections::BTreeSet<String>>) -> Vec<(usize, Handle)> {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // -- Equipment: a box (or an upright cylinder) per scheduled item, tagged with its kind,
     // tag, systems and schedule row for IFC. --
-    let mut built: Vec<Handle> = Vec::new();
+    let mut built: Vec<(usize, Handle)> = Vec::new();
     let t = |code: i32, v: String| RawTag { code, value: v };
     // Equipment on a housekeeping pad stands on it.
     let pads = super::concrete::elements(sp, &d.bim_types);
@@ -2526,7 +2537,7 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
     let panel = |k: &str| matches!(k.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
     // (Where the plans draw them, as the spec's positions are: a rebuild comes after the stacking.)
     let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
-    for e in sp.mep.equipment.iter().take(MAX_RUNS).filter(|e| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
+    for (k, e) in sp.mep.equipment.iter().enumerate().take(MAX_RUNS).filter(|(_, e)| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
         let Some(level) = sp.level(&e.level) else { continue };
         let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
         if !ok || e.height_ft <= 0.0 || e.height_ft > 100.0 {
@@ -2578,8 +2589,17 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
             None if panel(&e.kind) => xdata.push(t(1000, "prop:PLACEMENT=review: no wall within 3' of where it was read".into())),
             None => {}
         }
+        // An item an edit added: what it is by the documents and why (Q6502).
+        if let Some(made) = e.sources.get("made").and_then(|m| cadaddy_walk3d::Made::parse(m)).filter(|m| !m.is_drawn()) {
+            xdata.extend(super::provenance::tags(made, e.sources.get("basis").map_or("", String::as_str)));
+        }
+        // What an edit changed on it, the documents' value beside it, and its type mark (Q6502).
+        let mut xdata = super::provenance::with_corrections(xdata, &e.corrections);
+        if !e.type_mark.trim().is_empty() {
+            xdata.extend(cadaddy_doc::bimspec::type_mark_xdata(&cap(e.type_mark.trim().to_string())));
+        }
         if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)) {
-            built.push(h);
+            built.push((k, h));
         }
     }
     built
@@ -2765,6 +2785,29 @@ pub(crate) fn feeder_stubs(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimT
     out
 }
 
+/// WALLGEN's tag on each storey's piece of a riser through several (Q6493): the riser's name,
+/// the same on every piece.
+pub(crate) const RISER_TAG: &str = "riser";
+
+/// The tags of a riser's piece in one storey (Q6493): the riser it is a piece of (`riser:`), and
+/// as properties which piece it is, the level the riser is given on and the floors it passes
+/// (each a penetration with its firestop).
+fn riser_tags(c: &super::risercut::StoreyCut) -> Vec<RawTag> {
+    let t = |v: String| RawTag { code: 1000, value: v };
+    let mut x = vec![
+        t(format!("{RISER_TAG}:{}", c.riser.chars().take(200).collect::<String>())),
+        t(format!("prop:RISER_PIECE={} of {}", c.index + 1, c.count)),
+        t(format!("prop:RISER_LEVEL={}", c.given_level.chars().take(64).collect::<String>())),
+    ];
+    if !c.floors.is_empty() {
+        x.push(t(format!("prop:{FLOOR_PENETRATION}={}", c.floors.join(", ").chars().take(200).collect::<String>())));
+    }
+    x
+}
+
+/// The property naming the floors a riser's piece passes (Q6493): each a floor penetration.
+pub(crate) const FLOOR_PENETRATION: &str = "FLOOR_PENETRATION";
+
 /// Build the layer name for a system on a level: `3D-MEP-<system>-<level>`.
 pub(crate) fn mep_layer_name(system: &str, level: &str) -> String {
     let sys = sanitise(system, 40);
@@ -2797,19 +2840,22 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         sy: &'a MepSystem,
         level: String,
         base_z: f64,
+        /// A riser's piece in one storey of those it passes (Q6493).
+        cut: Option<&'a super::risercut::StoreyCut>,
     }
-    let shown: Vec<Shown> = sp
-        .mep
-        .runs
+    // A riser through several storeys is built a piece per storey, each on its own level (Q6493).
+    let given = sp.mep.runs.get(..sp.mep.runs.len().min(MAX_RUNS)).unwrap_or_default();
+    let storeys = super::risercut::all_storey_runs(sp, given, MAX_RUNS);
+    let shown: Vec<Shown> = storeys
         .iter()
-        .take(MAX_RUNS)
-        .filter_map(|r| {
+        .filter_map(|(_, st)| {
+            let r: &MepRun = &st.run;
             let sy = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show)?;
             if atoms && matches!(sy.kind, MepKind::Conduit | MepKind::Cable) {
                 return None;
             }
             let level = sp.level(&r.level)?;
-            Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf })
+            Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf, cut: st.cut.as_ref() })
         })
         .collect();
     let mut groups: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
@@ -2821,6 +2867,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         groups.entry((s.sy.name.as_str(), s.level.as_str())).or_default().push(i);
     }
     let mut all_joints: Vec<Joint> = Vec::new();
+    let mut all_meets: Vec<(usize, usize)> = Vec::new();
     let mut skip_at: Vec<Vec<Vec2>> = vec![Vec::new(); shown.len()];
     for members in groups.values() {
         let geo: Vec<RunGeo> = members
@@ -2828,8 +2875,9 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             .filter_map(|i| shown.get(*i))
             .map(|s| RunGeo { run: s.run, pts: s.run.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect(), base_z: s.base_z })
             .collect();
-        let (js, sk) = joints(&geo, upf);
+        let (js, sk, mt) = joints(&geo, upf);
         let global = |k: usize| members.get(k).copied().unwrap_or(usize::MAX);
+        all_meets.extend(mt.into_iter().map(|(a, b)| (global(a), global(b))));
         for (k, pts) in sk.into_iter().enumerate() {
             if let Some(s) = skip_at.get_mut(global(k)) {
                 *s = pts;
@@ -2892,6 +2940,11 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         x.extend(super::provenance::tags(made, &basis));
         x
     };
+    // What is laid, for joining the ducts and pipes (`bim.chain` walks them, Q6502).
+    let mut seg_of: Vec<Option<Handle>> = vec![None; shown.len()];
+    let mut fittings_of: Vec<Vec<Handle>> = vec![Vec::new(); shown.len()];
+    let mut joint_handles: Vec<(Handle, Vec<usize>)> = Vec::new();
+    let mut terminal_handles: Vec<(Handle, &cadaddy_walk3d::MepTerminal)> = Vec::new();
     for (i, s) in shown.iter().enumerate() {
         let (r, sy) = (s.run, s.sy);
         let layer = layer_of(r, sy, &s.level);
@@ -2910,11 +2963,25 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let mut seg_mesh = super::wallgen::empty_mesh();
             add_upright_cylinder(&mut seg_mesh, Vec2::new(pt[0], pt[1]), radius, z0, z1);
             if !seg_mesh.faces.is_empty() {
-                let x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment")));
-                if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
-                    .is_ok()
+                // A riser's piece (Q6493): the riser's name on every piece, which piece it is and
+                // the floor it passes; the lowest keeps the id the whole riser had.
+                let id = match s.cut {
+                    Some(c) if c.index > 0 => format!("{}/segment:{}", c.riser, s.level),
+                    Some(c) => format!("{}/segment", c.riser),
+                    None => format!("{base}/segment"),
+                };
+                let mut x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], id));
+                if let Some(c) = s.cut {
+                    x.extend(riser_tags(c));
+                }
+                let x = super::provenance::with_run_corrections(x, r);
+                if let Ok(h) =
+                    d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
                 {
                     total_runs += 1;
+                    if let Some(x) = seg_of.get_mut(i) {
+                        *x = Some(h);
+                    }
                 }
             }
             continue;
@@ -2930,9 +2997,13 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
                 mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"))),
                 r,
             );
-            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok()
+            if let Ok(h) =
+                d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
             {
                 total_runs += 1;
+                if let Some(x) = seg_of.get_mut(i) {
+                    *x = Some(h);
+                }
             }
         }
         // Each fitting its own object, tagged with its kind.
@@ -2947,8 +3018,11 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let n = nth.entry(ks).or_default();
             *n += 1;
             let x = mark(r, sy, tags(&s.level, source, sy, format!("part:fitting:{ks}"), &[p.size_a], format!("{base}/{ks}{n}")));
-            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            if let Ok(h) = d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)) {
                 total_fittings += 1;
+                if let Some(f) = fittings_of.get_mut(i) {
+                    f.push(h);
+                }
             }
         }
         total_elbows += counts.elbows;
@@ -2979,8 +3053,9 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             s.sy,
             tags(&s.level, source_of(&s.run.objects), s.sy, format!("part:fitting:{ks}"), &sizes, format!("{ks}@{:.2},{:.2}", j.at.x, j.at.y)),
         );
-        if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+        if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)) {
             total_fittings += 1;
+            joint_handles.push((h, j.ends.iter().map(|e| e.run).collect()));
             match j.kind {
                 FittingKind::Tee => total_tees += 1,
                 FittingKind::Cross => total_crosses += 1,
@@ -3019,13 +3094,37 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
                 x.push(t(1000, format!("prop:SOURCE sheet={}", term.source_sheet.chars().take(64).collect::<String>())));
             }
             x.extend(super::provenance::tags(term.made, &term.basis));
-            if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            // What an edit changed on it, the documents' value beside it (Q6502).
+            let x = super::provenance::with_corrections(x, &term.corrections);
+            if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)) {
                 total_terminals += 1;
+                terminal_handles.push((h, term));
             }
         }
     }
 
-    let total_equipment = build_equipment(d, sp, None).len();
+    let equipment_built = build_equipment_indexed(d, sp, None);
+    let total_equipment = equipment_built.len();
+    // The ducts and pipes joined: runs that meet, their fittings, terminals and units (Q6502).
+    let net = super::mepedit::Net {
+        runs: shown
+            .iter()
+            .enumerate()
+            .map(|(i, s)| super::mepedit::NetRun {
+                run: s.run,
+                kind: s.sy.kind,
+                level: s.level.clone(),
+                floor_ft: s.base_z / upf,
+                seg: seg_of.get(i).copied().flatten(),
+                fittings: fittings_of.get(i).cloned().unwrap_or_default(),
+            })
+            .collect(),
+        joints: joint_handles,
+        meets: all_meets,
+        terminals: terminal_handles,
+        equipment: equipment_built.iter().filter_map(|(k, h)| sp.mep.equipment.get(*k).map(|e| (*h, e))).collect(),
+    };
+    let total_joined = super::mepedit::join(d, &net, upf);
 
     // -- Feeders: their raceways where they come in through each gear's entry plates (rows
     // across the gear from one corner; what doesn't fit runs past its edge, so a crowded plate
@@ -3141,7 +3240,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
     json!({
         "mepRuns": total_runs, "elbows": total_elbows, "drops": total_drops, "tees": total_tees, "crosses": total_crosses,
         "transitions": total_transitions, "reducers": total_reducers, "fittings": total_fittings, "terminals": total_terminals, "mepEquipment": total_equipment, "feederRaceways": total_stubs,
-        "grounding": total_ground,
+        "grounding": total_ground, "mepConnections": total_joined,
     })
 }
 
@@ -3159,8 +3258,12 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         run: &'a MepRun,
         piece: Piece,
         w: f64,
-        /// A conduit or cable dropping down a wall to its device: below the ceiling by design.
+        /// A conduit or cable dropping down a wall to its device, or a riser's piece through
+        /// its storey (Q6493): below the ceiling by design.
         drop: bool,
+        /// A riser's piece that runs on through the floor over it into the next storey's piece
+        /// (Q6493): in the floor structure by design (its penetration).
+        through_up: bool,
     }
     let wiring = |sys: &str| {
         sp.mep
@@ -3170,7 +3273,11 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             .is_some_and(|x| matches!(x.kind, cadaddy_walk3d::MepKind::Conduit | cadaddy_walk3d::MepKind::Cable))
     };
     let mut items: Vec<Item> = Vec::new();
-    for r in sp.mep.runs.iter().take(MAX_RUNS) {
+    // A riser through several storeys is a piece per storey, each in its own level's scope (Q6493).
+    let given = sp.mep.runs.get(..sp.mep.runs.len().min(MAX_RUNS)).unwrap_or_default();
+    let storeys = super::risercut::all_storey_runs(&sp, given, MAX_RUNS);
+    for (_, st) in &storeys {
+        let r: &MepRun = &st.run;
         let Some(level) = sp.level(&r.level) else { continue };
         let w = r.size_in[0] / 12.0 * upf;
         // Vertical runs (risers): a single-point piece spanning bottom to top.
@@ -3181,13 +3288,14 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 let z1 = (level.elevation_ft + top) * upf;
                 let at = Vec2::new(pt[0], pt[1]);
                 // Ending at a device's height above its floor (an outlet, a switch), not on it.
-                let drop = wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft;
-                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop });
+                let drop = st.cut.is_some() || (wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft);
+                let through_up = st.cut.as_ref().is_some_and(|c| c.index + 1 < c.count);
+                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop, through_up });
             }
             continue;
         }
         let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
-        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w, drop: false }));
+        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w, drop: false, through_up: false }));
     }
     let handles = |r: &MepRun| r.objects.iter().take(5).cloned().collect::<Vec<_>>();
     // Below the ceiling of the room it passes through (else the level's), into the slab above.
@@ -3219,7 +3327,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             }));
         }
         let above = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| *e > level.elevation_ft + 1e-6).fold(f64::INFINITY, f64::min);
-        if above.is_finite() {
+        if above.is_finite() && !it.through_up {
             let structure = (above - SLAB_FT) * upf;
             if it.piece.z1 > structure + tol {
                 out.push(json!({

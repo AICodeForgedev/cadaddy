@@ -345,14 +345,14 @@ pub(crate) fn paper_units_per_foot(d: &Drawing, sh: &SheetRef) -> Option<f64> {
 
 /// Where a sheet's reading goes: `to + (p - from) * k`.
 #[derive(Clone, Copy, Debug)]
-struct Placement {
+pub(crate) struct Placement {
     from: [f64; 2],
     to: [f64; 2],
     k: f64,
 }
 
 impl Placement {
-    fn apply(&self, p: [f64; 2]) -> [f64; 2] {
+    pub(crate) fn apply(&self, p: [f64; 2]) -> [f64; 2] {
         [self.to[0] + (p[0] - self.from[0]) * self.k, self.to[1] + (p[1] - self.from[1]) * self.k]
     }
 }
@@ -364,7 +364,7 @@ impl Placement {
 /// would be read as the architectural sheet's and placed by that sheet's frame alone: a plan
 /// drawn elsewhere on its sheet than the architectural plan is on its own put its ducts and
 /// grilles feet away from its devices.
-fn placement(sh: &SheetRef, k: f64) -> Placement {
+pub(crate) fn placement(sh: &SheetRef, k: f64) -> Placement {
     let own = sh.view.unwrap_or(sh.rect);
     let from = [own[0], own[1]];
     Placement { from, to: from, k }
@@ -644,7 +644,7 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, only: Opti
 }
 
 /// Additional level codes (beyond the primary) for a multi-level sheet.
-fn extra_levels_for(sh: &SheetRef) -> Vec<String> {
+pub(crate) fn extra_levels_for(sh: &SheetRef) -> Vec<String> {
     if sh.levels.len() <= 1 {
         return Vec::new();
     }

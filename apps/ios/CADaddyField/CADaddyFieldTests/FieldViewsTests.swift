@@ -82,7 +82,7 @@ final class FieldViewsTests: XCTestCase {
                 XCTAssertTrue(c.crossing.contains(e.id), "branch circuit \(e.title) in Full MEP")
             }
             if e.system == .plumbing, e.part == .pipe {
-                XCTAssertTrue((e.nominal ?? 0) >= c.rules.plumbingMainMinInches || c.crossing.contains(e.id), e.title)
+                XCTAssertTrue((e.nominal ?? 0) >= c.rules.plumbingMainMinInches || c.crossing.contains(e.id) || c.isInferred(e), e.title)
             }
         }
         // There are branch circuits and small pipes in the model, and none made it.
@@ -194,6 +194,9 @@ final class FieldViewsTests: XCTestCase {
             run("p2", .plumbing, .main, nominal: 2),
             run("p1", .plumbing, .main, nominal: 1.5),
             run("pnil", .plumbing, .main, nominal: nil),
+            run("pq", .plumbing, .unknown, nominal: nil),      // neither role nor size: shown, inferred
+            run("pu", .plumbing, .unknown, nominal: 1.5),      // role unknown: size decides
+            run("pv", .plumbing, .unknown, nominal: 2),
             run("fbig", .fire, .terminal, nominal: 3),     // a sprinkler pipe of unknown role: size decides
             run("fsmall", .fire, .terminal, nominal: 2),
         ]
@@ -202,22 +205,28 @@ final class FieldViewsTests: XCTestCase {
         let full = vf.drawn(ViewState(view: .mep, density: .full), prefs: allOn)
         XCTAssertTrue(full.contains("big")); XCTAssertFalse(full.contains("small"))
         XCTAssertTrue(full.contains("cross"))
-        XCTAssertTrue(full.contains("p2")); XCTAssertFalse(full.contains("p1"))
-        XCTAssertFalse(full.contains("pnil"))
-        XCTAssertEqual(vf.classifier.unknownSizeCount(sb), 1)
+        // Role decides first (Q6431): a main shows whatever its size, and with no size; size decides only when the
+        // role is unknown; with neither, Full MEP shows it marked inferred (never dropped).
+        XCTAssertTrue(full.contains("p2")); XCTAssertTrue(full.contains("p1")); XCTAssertTrue(full.contains("pnil"))
+        XCTAssertTrue(full.contains("pq")); XCTAssertFalse(full.contains("pu")); XCTAssertTrue(full.contains("pv"))
+        XCTAssertEqual(vf.classifier.unknownSizeCount(sb), 2)
+        XCTAssertEqual(sb.elements.filter(vf.classifier.isInferred).map(\.id), ["pq"])
         XCTAssertTrue(full.contains("fbig")); XCTAssertFalse(full.contains("fsmall"))
         // A project can move the limits (rules data).
         var r = ViewRules(); r.plumbingMainMinInches = 1.5; r.feederMinInches = 2
         let moved = ViewFilter(sb, rules: r).drawn(ViewState(view: .mep, density: .full), prefs: allOn)
-        XCTAssertTrue(moved.contains("p1")); XCTAssertFalse(moved.contains("big"))
+        XCTAssertTrue(moved.contains("pu")); XCTAssertFalse(moved.contains("big"))
         let decoded = try! ViewRules.decode(Data(#"{"plumbingMainMinInches": 3}"#.utf8))
         XCTAssertEqual(decoded.plumbingMainMinInches, 3); XCTAssertEqual(decoded.fireMainMinInches, 2.5)
     }
 
-    func testTheSamplesUnsizedPipeIsLeftOutAndCounted() {
+    func testTheSamplesPipeWithNoRoleOrSizeShowsInFullMEPMarkedInferred() {
+        // Design-2 left it out with a note (owner review: wrong). It shows, marked inferred, and the note says so.
         XCTAssertEqual(f.classifier.unknownSizeCount(b), 1)
         let pipe = try! XCTUnwrap(b.elements.first { $0.part == .pipe && $0.nominal == nil })
-        XCTAssertFalse(fullMEP.contains(pipe.id))
+        XCTAssertTrue(fullMEP.contains(pipe.id))
+        XCTAssertTrue(f.classifier.isInferred(pipe))
+        XCTAssertEqual(f.classifier.inferredCount(b), 1)
     }
 
     // MARK: Floor and Room

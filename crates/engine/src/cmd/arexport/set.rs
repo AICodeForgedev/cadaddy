@@ -240,6 +240,8 @@ struct Role {
     left_out: Option<&'static str>,
     /// main, branch, riser, feeder, panel, gear, hoistway…
     role: Option<String>,
+    /// Shown although the model gives it neither a role nor a size: why, said on the node (`inferred`).
+    inferred: Option<&'static str>,
     house: Option<(&'static str, String)>,
     feeder: Option<usize>,
 }
@@ -480,7 +482,9 @@ fn role_of(d: &Drawing, cx: &Cx, it: &Item) -> Role {
     let mpart = made_tag(it.e, "part").unwrap_or("segment").to_ascii_lowercase();
     let size = made_tag(it.e, "size").and_then(size_in);
     let crossing_kind = rules.crossing.kinds.iter().any(|k| k.eq_ignore_ascii_case(&kind));
-    let crosses = crossing_kind && cx.crosses(it.lo[2], it.hi[2]);
+    // A riser's piece in one storey (Q6493) stops at the floor it passes: it is one riser through it.
+    let riser_piece = made_tag(it.e, crate::cmd::mep::RISER_TAG).is_some_and(|r| !r.is_empty());
+    let crosses = crossing_kind && (riser_piece || cx.crosses(it.lo[2], it.hi[2]));
     match part {
         _ if is_equipment(it) => equipment_role(cx, it, &toks, &tag, &mut r),
         "mep" => {
@@ -601,8 +605,22 @@ fn equipment_role(cx: &Cx, it: &Item, toks: &[String], tag: &str, r: &mut Role) 
 fn pipe_role(cx: &Cx, it: &Item, size: Option<f64>, crosses: bool, r: &mut Role) {
     let sizes = &cx.rules.sizes;
     let vertical = is_vertical(it);
+    // Role decides first and size only when the role is unknown: a riser or a run through a floor shows by
+    // what it is; with neither a role nor a size it still shows in the full view, marked inferred, never dropped.
     let Some(z) = size else {
-        r.left_out = Some("pipe size unknown");
+        if vertical && it.class.key == "fire" {
+            r.mains = Some("fire riser (size not given)".into());
+            r.role = Some("riser".into());
+        } else if vertical {
+            r.full = Some("riser (size not given)".into());
+            r.role = Some("riser".into());
+        } else if crosses {
+            r.full = Some("crosses a floor (size not given)".into());
+            r.role = Some("branch".into());
+        } else {
+            r.full = Some("no role and no size in the model: shown, inferred".into());
+            r.inferred = Some("the model gives this pipe no role and no size; shown in Full MEP, not sized");
+        }
         return;
     };
     if it.class.key == "fire" {
@@ -1023,6 +1041,7 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let mut mains = Pkg { name: "building-mep-mains".into(), view: "mep", mode: "translucent", ..pkg_like(&arch) };
     let mut full = Pkg { name: "building-mep-full".into(), view: "mep", mode: "translucent", ..pkg_like(&arch) };
+    let mut shown_inferred = 0usize;
     for (it, r) in items.iter().zip(&roles) {
         if r.arch {
             let mut x = with(it, r, &[]);
@@ -1047,6 +1066,10 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         } else if let Some(why) = &r.full {
             let mut x = with(it, r, &[("view_basis", json!(why))]);
             x.context = false;
+            if let Some(note) = r.inferred {
+                x.extra.insert("inferred".into(), json!(note));
+                shown_inferred += 1;
+            }
             full.items.push(x);
         } else if mep && let Some(why) = r.left_out {
             *mains.left_out.entry(why.to_string()).or_default() += 1;
@@ -1610,6 +1633,10 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
             "elements": graph,
             "links": {"known": links.0, "inferred": links.1, "unknown": links.2},
             "rule": "known: the documents give it (feeder schedule, panel schedule, the plan's circuit tags); inferred: a rule or default gave it; unknown: the documents don't say, so it is not guessed",
+        },
+        "shown_inferred": {
+            "no_role_no_size": shown_inferred,
+            "rule": "role decides first (main, riser, a run through a floor), size only when the role is unknown; an object with neither shows in Full MEP marked inferred",
         },
         "left_out": {
             "pipe_size_unknown": unknown_pipes,

@@ -106,6 +106,38 @@ Debug launch arguments: `-design reveal|building|lifted|floor|room|card|panel|ge
 `-designbg teal|white`, `-designhc`, and `-fpslog` (prints `FIELD-PERF design fps …` once a second, plus
 `FIELD-SLOW` / `FIELD-ITEM` / `FIELD-APPLY` lines for long frames, long work items and view changes).
 
+## A real building: its package set (Q6431)
+
+`bim.export.ar {set: true, dir}` writes a building as the four views' packages plus `building.json` (schema
+`cadaddy.ar.building/1`). The app opens that folder (Files, or Update from the office) as a **building**:
+
+- **Views from the index.** Each view loads exactly the packages `views` names: Architectural
+  `building-architectural`; MEP `building-mep-mains`, Full MEP adds `building-mep-full`; Floor its level package;
+  Room its room package. The app never composes its own combination. A model opens in the index's default view
+  (MEP, mains). An index with no `views` section is an older export and says so.
+- **Same renderer and chrome** as the design preview; each package's copy of an element is its own object (a
+  level's walls cut at 4 ft, a room's clipped to the room). The design preview (`SampleBuilding`) is the only place
+  invented data appears.
+- **On demand, inside a budget.** Opening reads the index and the default view (plus the architectural package for
+  the reveal). Levels and rooms load when opened; packages out of view are released, least recently used first:
+  at most 2 spare levels and 4 spare rooms, and 320 MB of package geometry (`PackageCache`). Dense packages draw
+  as merged chunks (taps are picked against each object's bounds).
+- **Follow the system** runs on the index's connection graph by element id, across floors, without loading any
+  package. Each step says how its link is known: known plainly, `INFERRED LINK`, or `LINK UNKNOWN`; a path that
+  stops at a link nobody gives ends with "Unknown: the documents don't say …". Nothing is guessed.
+- **Layers** (M, E, P, Cabinets, Furniture) follow the packages' node groups (fire protection rides with M, as the
+  export groups it); furniture exists only in Room and is off by default. The switches are the same store AR uses.
+- **Field alignment** only from a real room package: "Stand in this room" makes the room a library package (its
+  marks and saved alignment stay with it) and opens AR on it. The building views never offer it.
+- **Update** fetches `building.json` beside the office's `manifest.json` and pulls only packages whose
+  `content_hash` changed; rooms opened in AR are updated through the library, so their marks stay on their
+  element ids (a mark whose element is gone stays, flagged).
+- **Failures are plain**: a missing, damaged (checksum) or older-version package says which and how to fix it;
+  the rest of the building keeps working.
+- Test fixture: `CADaddyFieldTests/Fixtures/SyntheticSet` (+ `SyntheticSetV2`, one room changed) comes from the
+  exporter (`regenerate.sh`); never edit it by hand. Scale runs: `-bigset N` generates an invented N-room
+  building (`FieldCore/SyntheticSet.swift`); `-openset FOLDER -design SHOT` opens a set for screenshots.
+
 ## Opening packages
 
 From the Files app (+ › Open from Files…), the share sheet, AirDrop, or "Open in" you can open:

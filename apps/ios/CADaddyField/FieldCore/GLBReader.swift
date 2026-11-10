@@ -61,6 +61,9 @@ public struct FieldModel: Sendable {
     /// Anchor/metadata embedded in the model file (glTF asset or scene extras), if any.
     public var embeddedSidecar: Sidecar?
     public var warnings: [String]
+    /// The export's own header (asset extras `cadaddy`): `schema`, and `package.name` / `package.view` /
+    /// `package.level` / `package.room` for a package of a building's set. Empty for other files.
+    public var header: [String: String] = [:]
 
     public init(meshes: [ModelMesh], elements: [FieldElement], embeddedSidecar: Sidecar? = nil, warnings: [String] = []) {
         self.meshes = meshes; self.elements = elements; self.embeddedSidecar = embeddedSidecar; self.warnings = warnings
@@ -241,8 +244,14 @@ public enum GLBReader {
             materialColors = mats.map { Self.color(of: $0 as? [String: Any] ?? [:]) }
 
             var embedded: Sidecar?
+            var header: [String: String] = [:]
             if let asset = root["asset"] as? [String: Any], let ex = asset["extras"] as? [String: Any] {
                 embedded = Self.sidecarFrom(extras: ex)
+                let c = (ex["cadaddy"] as? [String: Any]) ?? ex
+                if let s = c["schema"] as? String { header["schema"] = s.clipped() }
+                if let p = c["package"] as? [String: Any] {
+                    for k in ["name", "view", "level", "room"] { if let v = p[k] as? String { header["package." + k] = v.clipped() } }
+                }
             }
 
             // Scene roots.
@@ -265,7 +274,9 @@ public enum GLBReader {
                          depth: 0, path: &path, elements: &elements)
             }
             for i in elements.indices { computeBounds(&elements[i]) }
-            return FieldModel(meshes: meshes, elements: elements, embeddedSidecar: embedded, warnings: Array(warnings.prefix(50)))
+            var model = FieldModel(meshes: meshes, elements: elements, embeddedSidecar: embedded, warnings: Array(warnings.prefix(50)))
+            model.header = header
+            return model
         }
 
         static func sidecarFrom(extras: [String: Any]) -> Sidecar? {
