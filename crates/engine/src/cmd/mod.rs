@@ -186,6 +186,7 @@ pub mod plugins_cmd;
 pub mod plumbing;
 pub(crate) mod plumbproducts;
 pub(crate) mod printcond;
+pub(crate) mod printfp;
 pub(crate) mod printmep;
 pub mod printrev;
 pub mod printset;

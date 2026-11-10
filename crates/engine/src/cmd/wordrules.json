@@ -2040,6 +2040,85 @@
     "EXIT LIGHT"
    ]
   },
+  "fp.head_kinds": {
+   "source": "Words of a sprinkler head legend or schedule row and the head kind they name, first match wins (NFPA 13 head orientations: sidewall, upright, pendent; concealed and recessed heads hang pendent; Q6497).",
+   "pairs": [
+    [
+     "SIDEWALL",
+     "sprinkler_sidewall"
+    ],
+    [
+     "SIDE WALL",
+     "sprinkler_sidewall"
+    ],
+    [
+     "UPRIGHT",
+     "sprinkler_upright"
+    ],
+    [
+     "PENDENT",
+     "sprinkler_pendent"
+    ],
+    [
+     "PENDANT",
+     "sprinkler_pendent"
+    ],
+    [
+     "CONCEALED",
+     "sprinkler_pendent"
+    ],
+    [
+     "RECESSED",
+     "sprinkler_pendent"
+    ]
+   ]
+  },
+  "fp.head_table_titles": {
+   "source": "Titles of the head table a sprinkler shop drawing counts its heads in (drafting convention; Q6497).",
+   "words": [
+    "HEAD SCHEDULE",
+    "SPRINKLER SCHEDULE",
+    "HEAD TABLE",
+    "HEAD COUNT",
+    "HEAD SUMMARY",
+    "HEAD LIST"
+   ]
+  },
+  "fp.page_words": {
+   "source": "Words a page's own text names fire protection by: a page that prints none is no sprinkler plan (trade vocabulary; Q6497).",
+   "words": [
+    "SPRINKLER",
+    "FIRE PROTECTION",
+    "FIRE SUPPRESSION"
+   ]
+  },
+  "fp.quantity_headers": {
+   "source": "Column headings of a table's count column (drafting convention; Q6497).",
+   "words": [
+    "QTY",
+    "QUANTITY",
+    "COUNT",
+    "NO. REQ",
+    "TOTAL"
+   ]
+  },
+  "fp.shop_drawing_path_words": {
+   "source": "Words in a submittal file's or folder's name that make it a fire protection submittal whose pages are read for sprinkler shop drawings (trade vocabulary and the CSI MasterFormat 21 13 13 wet-pipe sprinkler section number; Q6497).",
+   "words": [
+    "SPRINKLER",
+    "FIRE PROTECTION",
+    "FIRE SUPPRESSION",
+    "211313",
+    "21 13 13",
+    "21-13-13"
+   ]
+  },
+  "fp.submittal_folder_words": {
+   "source": "Words in the name of a folder beside the prints that make it the project's submittals (looked in for sprinkler shop drawings when the job is given none; Q6497).",
+   "words": [
+    "SUBMITTAL"
+   ]
+  },
   "framing.layout_heading_words": {
    "source": "(drafting convention: the words of a joist or floor framing layout's heading that names the floor it is for, `2ND FLOOR FRAMING`, `LEVEL 3 JOIST LAYOUT`; Q6400)",
    "words": [
