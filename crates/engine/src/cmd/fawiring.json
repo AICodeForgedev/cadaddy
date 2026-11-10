@@ -24,7 +24,6 @@
   },
   "cables": {
     "nac": {"type": "FPLR", "size": "14/2", "awg": 14, "item": "Fire alarm cable"},
-    "nac_upsized": {"type": "FPLR", "size": "12/2", "awg": 12, "item": "Fire alarm cable"},
     "slc": {"type": "FPLR", "size": "18/2 twisted", "awg": 18, "item": "Fire alarm cable"},
     "annunciator": {"type": "FPLR", "size": "18/4 twisted", "awg": 18, "item": "Fire alarm cable"},
     "trigger": {"type": "FPLR", "size": "14/2", "awg": 14, "item": "Fire alarm cable"},
@@ -65,7 +64,15 @@
     "class_a_words": ["CLASS A", "CLASS \"A\"", "STYLE 6", "STYLE 7", "STYLE Z"],
     "raceway": "EMT",
     "raceway_in": 0.75,
-    "source": "a document statement of the fire alarm wiring method: a note or specification paragraph naming conduit or raceway for the fire alarm wiring (all of it, or below a height: NEC 760.130(B)(1) protection from physical damage), a plenum cable, or Class A circuits; read from the drawing's own notes"
+    "source": "a document statement of the fire alarm wiring method: a note or specification paragraph naming conduit or raceway for the fire alarm wiring (all of it, or below a height: NEC 760.130(B)(1) protection from physical damage), a plenum cable, or Class A circuits (a statement that requires it, not product data listing it), a wire legend's sizes; read from the job's documents (specifications, submittals, sheets) and the drawing's own notes",
+    "require_words": ["SHALL", "REQUIRED", "MUST", "PROVIDE"],
+    "class_b_words": ["CLASS B", "CLASS \"B\"", "STYLE 4", "STYLE Y", "A OR B", "A/B", "A AND B"],
+    "legend": {
+      "slc": ["SIGNALING LINE CIRCUIT", "SIGNALLING LINE CIRCUIT", "SLC LOOP"],
+      "nac": ["NOTIFICATION APPLIANCE CIRCUIT", "NOTIFICATION CIRCUIT", "NAC CIRCUIT"],
+      "annunciator": ["ANNUNCIATOR BUS", "ANNUNCIATOR CIRCUIT", "ANNUNCIATOR WIRING"]
+    },
+    "legend_source": "a wire legend on the documents (a circuit's name, then its wire size and conductor count, `16 AWG 2 CONDUCTOR`, and its cable type): it sets that circuit's cable"
   },
   "riser_source": "trade practice: the circuits between storeys run in one riser over the control panel (its place carried up and down the stacked plans), through the floors in a sleeve, firestopped (NEC 760.3(A), 300.21)"
 }

@@ -79,7 +79,6 @@ pub(crate) struct Cable {
 #[serde(default)]
 pub(crate) struct Cables {
     pub nac: Cable,
-    pub nac_upsized: Cable,
     pub slc: Cable,
     pub annunciator: Cable,
     pub trigger: Cable,
@@ -127,6 +126,11 @@ pub(crate) struct Placement {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct DocWords {
+    pub require_words: Vec<String>,
+    pub class_b_words: Vec<String>,
+    /// A wire legend's circuit names, by the circuit they are (`slc`, `nac`, `annunciator`).
+    pub legend: BTreeMap<String, Vec<String>>,
+    pub legend_source: String,
     pub raceway_words: Vec<String>,
     pub wiring_words: Vec<String>,
     pub subject_words: Vec<String>,
@@ -380,6 +384,17 @@ pub(crate) fn is_system(system: &str) -> bool {
 
 // ─── The documents ───────────────────────────────────────────────────────────
 
+/// A cable a wire legend gives a circuit: its size, conductors and type, and the words.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct DocCable {
+    pub awg: u32,
+    pub conductors: u32,
+    #[serde(rename = "type")]
+    pub ty: String,
+    pub words: String,
+}
+
 /// What the documents say of the fire alarm wiring method.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -391,22 +406,107 @@ pub(crate) struct WiringDocs {
     pub plenum: Option<String>,
     /// Class A circuits, and the words.
     pub class_a: Option<String>,
+    /// The cable a wire legend gives each circuit (`slc`, `nac`, `annunciator`).
+    pub cables: BTreeMap<String, DocCable>,
 }
 
-/// The statements of the fire alarm wiring method among `texts` (each text a statement; `fa_sheet`
-/// says a text is on a fire alarm sheet, where the subject is the fire alarm system already).
-pub(crate) fn read_docs(texts: &[(String, bool)]) -> WiringDocs {
-    let w = &rules().documents;
-    let mut out = WiringDocs::default();
-    for (t, fa_sheet) in texts.iter().take(400_000) {
-        let s = spaced(t);
-        if !(*fa_sheet || has_any(&s, &w.subject_words) || s.contains(" 760 ")) {
+/// One statement to read: where it is (its document and place), its words, and whether its
+/// document is the fire alarm system's own (its subject is that system already).
+pub(crate) struct Statement {
+    pub cite: String,
+    pub text: String,
+    pub fa_doc: bool,
+}
+
+/// Up to `before` and `after` bytes of `flat` round byte `at`, on character boundaries.
+fn window(flat: &str, at: usize, before: usize, after: usize) -> String {
+    let start = at.saturating_sub(before);
+    let end = at.saturating_add(after).min(flat.len());
+    let s = (0..=start).rev().find(|i| flat.is_char_boundary(*i)).unwrap_or(0);
+    let e = (end..=flat.len()).find(|i| flat.is_char_boundary(*i)).unwrap_or(flat.len());
+    let mut q = flat.get(s..e).unwrap_or_default().trim().to_string();
+    if s > 0 {
+        q = format!("…{q}");
+    }
+    if e < flat.len() {
+        q.push('…');
+    }
+    q
+}
+
+/// Where in `up` (upper case) the first of `words` is (as whole words).
+fn first_at(up: &str, words: &[String]) -> Option<usize> {
+    words
+        .iter()
+        .filter(|w| !w.trim().is_empty())
+        .filter_map(|w| {
+            let w = w.to_ascii_uppercase();
+            up.match_indices(w.as_str())
+                .find(|(i, _)| {
+                    let before = up.get(..*i).and_then(|b| b.chars().next_back());
+                    let after = up.get(i + w.len()..).and_then(|a| a.chars().next());
+                    before.is_none_or(|c| !c.is_ascii_alphanumeric()) && after.is_none_or(|c| !c.is_ascii_alphanumeric())
+                })
+                .map(|(i, _)| i)
+        })
+        .min()
+}
+
+/// The cable a wire legend gives each circuit: the circuit's name, then (before the next
+/// circuit's name) its `N AWG M CONDUCTOR` and its cable type.
+fn legend_cables(flat: &str, cite: &str, w: &DocWords, out: &mut BTreeMap<String, DocCable>) {
+    let up = flat.to_ascii_uppercase();
+    let mut names: Vec<(usize, usize, &str)> = Vec::new();
+    for (role, phrases) in &w.legend {
+        for ph in phrases.iter().filter(|p| !p.trim().is_empty()) {
+            let ph = ph.to_ascii_uppercase();
+            for (i, _) in up.match_indices(ph.as_str()).take(64) {
+                names.push((i, i + ph.len(), role.as_str()));
+            }
+        }
+    }
+    names.sort_unstable();
+    for (k, (start, end, role)) in names.iter().enumerate() {
+        if out.contains_key(*role) {
             continue;
         }
-        let quote: String = t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(300).collect();
+        let stop = names.iter().skip(k + 1).map(|n| n.0).find(|n| *n >= *end).unwrap_or(up.len()).min(end + 160);
+        let Some(seg) = up.get(*end..stop) else { continue };
+        let toks: Vec<&str> = seg.split(|c: char| c.is_whitespace() || c == ',' || c == '(' || c == ')').filter(|t| !t.is_empty()).collect();
+        let num = |t: &str| t.trim_start_matches('#').parse::<u32>().ok();
+        let awg = toks.windows(2).find(|p| matches!(p, [_, b] if *b == "AWG")).and_then(|p| p.first().and_then(|a| num(a)));
+        let conductors = toks
+            .windows(2)
+            .find(|p| matches!(p, [_, b] if b.starts_with("CONDUCTOR") || *b == "COND." || *b == "COND"))
+            .and_then(|p| p.first().and_then(|a| num(a)));
+        let ty = toks.iter().find(|t| matches!(**t, "FPL" | "FPLR" | "FPLP")).map(|t| t.to_string()).unwrap_or_default();
+        if let (Some(awg), Some(n)) = (awg, conductors)
+            && (10..=24).contains(&awg)
+            && (1..=12).contains(&n)
+        {
+            out.insert(
+                (*role).to_string(),
+                DocCable { awg, conductors: n, ty, words: format!("{cite}: {}", window(flat, *start, 0, (stop - start).min(200))) },
+            );
+        }
+    }
+}
+
+/// The statements of the fire alarm wiring method among `texts`.
+pub(crate) fn read_docs(texts: &[Statement]) -> WiringDocs {
+    let w = &rules().documents;
+    let mut out = WiringDocs::default();
+    for st in texts.iter().take(400_000) {
+        let flat: String = st.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let s = spaced(&flat);
+        if !(st.fa_doc || has_any(&s, &w.subject_words) || s.contains(" 760 ")) {
+            continue;
+        }
+        let up = flat.to_ascii_uppercase();
+        let quote =
+            |at: usize| if st.cite.is_empty() { window(&flat, at, 120, 180) } else { format!("{}: {}", st.cite, window(&flat, at, 120, 180)) };
         if out.raceway.is_none() && has_any(&s, &w.raceway_words) && has_any(&s, &w.wiring_words) && !has_any(&s, &w.not_words) {
             // `BELOW 7'`: the height the raceway goes to; none named, all of it.
-            let up = t.to_ascii_uppercase();
             let below = w.below_words.iter().filter_map(|b| up.find(b.as_str()).map(|i| i + b.len())).min().and_then(|i| {
                 let rest = up.get(i..)?;
                 let first = numbers(rest.get(..rest.len().min(16))?).into_iter().next()?;
@@ -414,14 +514,25 @@ pub(crate) fn read_docs(texts: &[(String, bool)]) -> WiringDocs {
                 let ft = if inches.starts_with('"') || inches.starts_with("IN") { first / 12.0 } else { first };
                 (ft.is_finite() && ft > 0.0 && ft < 40.0).then_some(ft)
             });
-            out.raceway = Some((w.raceway.clone(), below, quote.clone()));
+            let at = first_at(&up, &w.raceway_words).unwrap_or(0);
+            out.raceway = Some((w.raceway.clone(), below, quote(at)));
         }
-        if out.plenum.is_none() && has_any(&s, &w.plenum_words) && (has_any(&s, &w.wiring_words) || s.contains(" FPLP ")) {
-            out.plenum = Some(quote.clone());
+        if out.plenum.is_none()
+            && let Some(at) = first_at(&up, &w.plenum_words)
+            && (has_any(&s, &w.wiring_words) || s.contains(" FPLP "))
+        {
+            out.plenum = Some(quote(at));
         }
-        if out.class_a.is_none() && w.class_a_words.iter().any(|c| t.to_ascii_uppercase().contains(c.as_str())) {
-            out.class_a = Some(quote);
+        // Class A where a statement requires it (not product data listing what a panel takes,
+        // nor a choice of A or B).
+        if out.class_a.is_none()
+            && let Some(at) = first_at(&up, &w.class_a_words)
+            && has_any(&s, &w.require_words)
+            && !w.class_b_words.iter().any(|b| up.contains(&b.to_ascii_uppercase()))
+        {
+            out.class_a = Some(quote(at));
         }
+        legend_cables(&flat, &st.cite, w, &mut out.cables);
     }
     out
 }
@@ -439,7 +550,27 @@ impl WiringDocs {
 
     /// Each statement this reading has, else the other's.
     pub(crate) fn or(self, other: WiringDocs) -> WiringDocs {
-        WiringDocs { raceway: self.raceway.or(other.raceway), plenum: self.plenum.or(other.plenum), class_a: self.class_a.or(other.class_a) }
+        let mut cables = other.cables;
+        cables.extend(self.cables);
+        WiringDocs { raceway: self.raceway.or(other.raceway), plenum: self.plenum.or(other.plenum), class_a: self.class_a.or(other.class_a), cables }
+    }
+
+    /// The cable of circuits of `role` (`nac`, `slc`, `annunciator`): the wire legend's, else
+    /// `base`; a plenum cable where the documents call for one. And whether a document gave it.
+    fn cable(&self, role: &str, base: &Cable) -> (Cable, bool) {
+        let mut c = base.clone();
+        let doc = self.cables.get(role);
+        if let Some(dc) = doc {
+            c.awg = dc.awg;
+            c.size = format!("{}/{}", dc.awg, dc.conductors);
+            if !dc.ty.is_empty() {
+                c.ty = dc.ty.clone();
+            }
+        }
+        if self.plenum.is_some() && doc.is_none_or(|d| d.ty.is_empty()) {
+            c.ty = "FPLP".into();
+        }
+        (c, doc.is_some())
     }
 }
 
@@ -447,13 +578,14 @@ impl WiringDocs {
 /// sections, submittals): each paragraph's sentences, a fire alarm document's own on its subject
 /// already; each cited by its document and place.
 pub(crate) fn read_documents(docs: &[scope::Doc]) -> WiringDocs {
-    let mut texts: Vec<(String, bool)> = Vec::new();
+    let mut texts: Vec<Statement> = Vec::new();
     for doc in docs.iter().take(5_000) {
         let fa_doc = doc.trade.as_deref() == Some("fire alarm");
         for p in doc.paras.iter().take(20_000) {
+            let cite = format!("{} {}", doc.name, p.at).trim().to_string();
             for sentence in super::lv::sentences(&p.text).into_iter().take(200) {
                 if texts.len() < 400_000 {
-                    texts.push((format!("{} {}: {sentence}", doc.name, p.at).trim().to_string(), fa_doc));
+                    texts.push(Statement { cite: cite.clone(), text: sentence, fa_doc });
                 }
             }
         }
@@ -462,15 +594,17 @@ pub(crate) fn read_documents(docs: &[scope::Doc]) -> WiringDocs {
 }
 
 /// The drawing's texts, each marked when it lies on a fire alarm sheet (`FA` discipline).
-fn drawing_texts(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, bool)> {
+fn drawing_texts(d: &Drawing, sp: &BuildingSpec) -> Vec<Statement> {
     let fa_rects: Vec<[f64; 4]> =
         sp.sheets.iter().filter(|s| s.discipline.as_deref().is_some_and(|x| x.eq_ignore_ascii_case("FA"))).filter_map(|s| s.rect).take(500).collect();
     cadaddy_mepfix::sheet_facts::texts(d)
         .into_iter()
         .map(|t| {
-            let on =
-                fa_rects.iter().any(|r| t.at.x >= r[0].min(r[2]) && t.at.x <= r[0].max(r[2]) && t.at.y >= r[1].min(r[3]) && t.at.y <= r[1].max(r[3]));
-            (t.value, on)
+            let within = |r: &[f64; 4]| t.at.x >= r[0].min(r[2]) && t.at.x <= r[0].max(r[2]) && t.at.y >= r[1].min(r[3]) && t.at.y <= r[1].max(r[3]);
+            let fa_doc = fa_rects.iter().any(within);
+            let cite =
+                sp.sheets.iter().find(|s| s.rect.as_ref().is_some_and(within)).map_or_else(|| "the drawing's note".to_string(), |s| s.number.clone());
+            Statement { cite, text: t.value, fa_doc }
         })
         .collect()
 }
@@ -797,7 +931,8 @@ struct Circuit {
     order: &'static str,
     rule: &'static str,
     class_a: bool,
-    upsized: Option<String>,
+    /// Its design cable size and why it was upsized.
+    upsized: Option<(String, String)>,
     blocked: usize,
     /// What its appliances' currents were taken as (`177 cd`, `no candela read: …`).
     amps_why: BTreeSet<String>,
@@ -969,13 +1104,11 @@ pub(super) fn route(cx: &Ctx) -> Out {
         (runs, ft, blocked)
     };
     let body = fr.cables.body_in.max(0.1);
-    let plenum = |c: &Cable| -> Cable {
-        let mut c = c.clone();
-        if docs.plenum.is_some() {
-            c.ty = "FPLP".into();
-        }
-        c
-    };
+    // Each circuit's cable: the documents' wire legend, else the rules' (plenum where they say).
+    let cable_of = |role: &str, base: &Cable| docs.cable(role, base).0;
+    let nac_cable = cable_of("nac", &fr.cables.nac);
+    // One size up where a NAC's drop needs it (#14 to #12, #12 to #10).
+    let up_awg = nac_cable.awg.saturating_sub(2).max(10);
     let class_a = docs.class_a.is_some();
     let mut circuits: Vec<Circuit> = Vec::new();
     let new_circuit =
@@ -1039,7 +1172,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
             NAC_SYSTEM,
             "nac",
             &source,
-            plenum(&fr.cables.nac),
+            nac_cable.clone(),
             if by_address { "addresses" } else { "nearest neighbour" },
             RULE_NAC,
         );
@@ -1085,24 +1218,14 @@ pub(super) fn route(cx: &Ctx) -> Out {
             let full = c.as_ref().is_some_and(|c| {
                 let amps = c.amps + m.amps;
                 let total = c.ft() + ft;
-                amps > cap + 1e-9
-                    || (fr.nac.max_devices > 0 && c.members.len() >= fr.nac.max_devices)
-                    || fr.drop(amps, total, fr.cables.nac_upsized.awg) > allowed
+                amps > cap + 1e-9 || (fr.nac.max_devices > 0 && c.members.len() >= fr.nac.max_devices) || fr.drop(amps, total, up_awg) > allowed
             });
             if full && let Some(done) = c.take() {
                 circuits.push(done);
             }
             if c.is_none() {
                 k += 1;
-                c = Some(new_circuit(
-                    format!("{}-N{k}", source.tag),
-                    NAC_SYSTEM,
-                    "nac",
-                    &source,
-                    plenum(&fr.cables.nac),
-                    "nearest neighbour",
-                    RULE_NAC,
-                ));
+                c = Some(new_circuit(format!("{}-N{k}", source.tag), NAC_SYSTEM, "nac", &source, nac_cable.clone(), "nearest neighbour", RULE_NAC));
                 if at.handle != source.handle {
                     (runs, ft, bl) = leg(&source, &n, body, &mut penetrations);
                     at = source.clone();
@@ -1120,17 +1243,20 @@ pub(super) fn route(cx: &Ctx) -> Out {
         }
         nac_counts.insert(source.handle, k);
     }
-    // Each NAC's drop: #14 where it carries the circuit, else #12 (the reason kept).
+    // Each NAC's drop: its cable where it carries the circuit, else one size up (the design
+    // size and the reason kept beside).
     for c in circuits.iter_mut().filter(|c| c.role == "nac") {
         let ft = c.ft();
-        let d14 = fr.drop(c.amps, ft, c.cable.awg.max(1));
-        if d14 > allowed {
-            let up = plenum(&fr.cables.nac_upsized);
-            let d12 = fr.drop(c.amps, ft, up.awg.max(1));
-            c.upsized = Some(format!(
+        let d0 = fr.drop(c.amps, ft, c.cable.awg.max(1));
+        if d0 > allowed && up_awg < c.cable.awg {
+            let conductors = c.cable.size.split_once('/').map_or("2", |(_, n)| n.trim());
+            let up = Cable { awg: up_awg, size: format!("{up_awg}/{conductors}"), ..c.cable.clone() };
+            let d1 = fr.drop(c.amps, ft, up_awg);
+            let why = format!(
                 "{:.2} A over {:.0} ft drops {:.2} V on #{} (more than the {:.1} V from {:.1} V to the last appliance's {:.1} V): #{} drops {:.2} V; {}",
-                c.amps, ft, d14, c.cable.awg, allowed, fr.nac.supply_volts, fr.nac.end_volts_min, up.awg, d12, fr.ohms_source
-            ));
+                c.amps, ft, d0, c.cable.awg, allowed, fr.nac.supply_volts, fr.nac.end_volts_min, up_awg, d1, fr.ohms_source
+            );
+            c.upsized = Some((c.cable.size.clone(), why));
             c.cable = up;
         }
     }
@@ -1141,7 +1267,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
             NAC_SYSTEM,
             "power supply start",
             &facp,
-            plenum(&fr.cables.trigger),
+            cable_of("nac", &fr.cables.trigger),
             "the riser",
             RULE_SUPPLY,
         );
@@ -1164,7 +1290,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
             None => rest.push(n),
         }
     }
-    let slc_cable = plenum(&fr.cables.slc);
+    let slc_cable = cable_of("slc", &fr.cables.slc);
     let mut slc_n = 0usize;
     for (name, mut members) in loops.into_iter().take(MAX_CIRCUITS) {
         let by_address = members.iter().all(|m| info.get(&m.handle).is_some_and(|x| address_number(&x.address).is_some()));
@@ -1231,7 +1357,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
             SLC_SYSTEM,
             "annunciator",
             &facp,
-            plenum(&fr.cables.annunciator),
+            cable_of("annunciator", &fr.cables.annunciator),
             "the riser",
             RULE_SLC,
         );
@@ -1293,11 +1419,25 @@ pub(super) fn route(cx: &Ctx) -> Out {
         t.set("source", c.source.tag.clone(), "rule");
         t.set("source_handle", c.source.handle.hex(), "computed");
         t.set("class", if c.class_a { "A" } else { "B" }, if c.class_a { "note" } else { "rule" });
-        t.set("cable_type", c.cable.ty.clone(), if docs.plenum.is_some() { "note" } else { "rule" });
-        t.set("cable_size", c.cable.size.clone(), "rule");
+        // The cable as the documents' wire legend gives it, else the rules'.
+        let legend = docs.cables.get(match c.role {
+            "slc" => "slc",
+            "annunciator" => "annunciator",
+            _ => "nac",
+        });
+        let cable_src = if legend.is_some() {
+            "submittal"
+        } else if docs.plenum.is_some() {
+            "note"
+        } else {
+            "rule"
+        };
+        t.set("cable_type", c.cable.ty.clone(), cable_src);
+        t.set("cable_size", c.cable.size.clone(), if legend.is_some() { "submittal" } else { "rule" });
         t.set("cable_item", c.cable.item.clone(), "rule");
-        t.set("cable_awg", c.cable.awg.to_string(), "rule");
-        t.set("cable_source", fr.cables.source.clone(), "rule");
+        t.set("cable_awg", c.cable.awg.to_string(), if legend.is_some() { "submittal" } else { "rule" });
+        let words = legend.map(|l| format!("{} ({})", l.words, fr.documents.legend_source));
+        t.set("cable_source", words.unwrap_or_else(|| fr.cables.source.clone()), cable_src);
         t.set("members", c.members.iter().map(|h| h.hex()).collect::<Vec<_>>().join(","), "computed");
         t.set("order", c.order, src_kind);
         t.set("made", Made::Inferred.as_str(), "rule");
@@ -1309,8 +1449,8 @@ pub(super) fn route(cx: &Ctx) -> Out {
             let why: Vec<&str> = c.amps_why.iter().map(String::as_str).collect();
             t.set("amps_basis", format!("{}: {}", why.join(", "), fr.amps_source), "rule");
         }
-        if let Some(why) = &c.upsized {
-            t.set("design:cable_size", fr.cables.nac.size.clone(), "rule");
+        if let Some((design, why)) = &c.upsized {
+            t.set("design:cable_size", design.clone(), cable_src);
             t.set("correction:cable_size", why.clone(), "rule");
         }
         if let Some((rw, below, words)) = &raceway {
@@ -1325,7 +1465,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
                 "devices": c.members.len(), "legs": c.legs.len(), "ft": r1(ft), "amps": if c.role == "nac" { json!(r2(c.amps)) } else { Value::Null },
                 "drop_v": if c.role == "nac" { json!(r2(fr.drop(c.amps, ft, c.cable.awg.max(1)))) } else { Value::Null },
                 "cable": format!("{} {}", c.cable.ty, c.cable.size), "class": if c.class_a { "A" } else { "B" }, "order": c.order,
-                "upsized": c.upsized, "blocked": c.blocked,
+                "upsized": c.upsized.as_ref().map(|u| u.1.clone()), "blocked": c.blocked,
             }));
         }
     }
@@ -1374,6 +1514,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
         "documents": {
             "raceway": raceway.as_ref().map(|(m, below, w)| json!({"method": m, "below_ft": below.map_or_else(|| json!("all"), |b| json!(b)), "words": w})),
             "plenum": docs.plenum, "class_a": docs.class_a,
+            "cables": docs.cables.iter().map(|(k, c)| (k.clone(), json!({"cable": format!("{} {}/{}", c.ty, c.awg, c.conductors).trim().to_string(), "words": c.words}))).collect::<serde_json::Map<_, _>>(),
         },
         "circuit_list": rows,
         "rules": {"nac": fr.nac.source, "slc": fr.slc.source, "amps": fr.amps_source, "cable": fr.cables.source, "riser": fr.riser_source},

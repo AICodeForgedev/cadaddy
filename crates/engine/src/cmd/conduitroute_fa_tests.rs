@@ -352,7 +352,7 @@ fn with_no_panel_in_the_documents_one_is_placed_by_rule_and_wired() {
 
 #[test]
 fn the_wiring_statements_are_read_by_their_words() {
-    let read = |t: &str, fa_sheet: bool| read_docs(&[(t.to_string(), fa_sheet)]);
+    let read = |t: &str, fa_sheet: bool| read_docs(&[Statement { cite: String::new(), text: t.to_string(), fa_doc: fa_sheet }]);
     let r = read("ALL WIRING BELOW 7' SHALL BE INSTALLED IN CONDUIT PER NFPA 70 ARTICLE 760.", false);
     assert_eq!(r.raceway.as_ref().map(|x| (x.0.as_str(), x.1)), Some(("EMT", Some(7.0))));
     let r = read("FIRE ALARM WIRING BELOW 84\" AFF SHALL BE IN EMT.", false);
@@ -366,6 +366,30 @@ fn the_wiring_statements_are_read_by_their_words() {
     assert!(read("ALL CIRCUITS SHALL BE CLASS A.", true).class_a.is_some());
     assert!(read("ALL CIRCUITS SHALL BE CLASS A.", false).class_a.is_none());
     assert!(read("SIGNALING LINE CIRCUIT 16 AWG 2 CONDUCTOR FPLP WIRE", true).plenum.is_some());
+    // Class A only where a statement requires it: not product data listing what a panel takes.
+    assert!(read("FIRE ALARM PANEL FEATURES: SUPPORTS CLASS A OR CLASS B WIRING ON EVERY SLC", true).class_a.is_none());
+    assert!(read("FIRE ALARM PANEL FEATURES: 1,000 ADDRESSES, CLASS A CAPABLE", true).class_a.is_none());
+    assert!(read("ALL FIRE ALARM SIGNALING LINE CIRCUITS SHALL BE WIRED CLASS A.", false).class_a.is_some());
+}
+
+#[test]
+fn a_wire_legend_gives_each_circuits_cable() {
+    let legend = "WIRE LEGEND DESCRIPTION WIRE SIZE CIRCUIT PATH CLASS Signaling Line Circuit #1 (SLC1) 16 AWG 2 Conductor FPLP Wire B \
+                  Auxiliary Power Circuit for Door Holders (FP N#) 14 AWG 2 Conductor FPLP Wire B Notification Appliance Circuit (FP N#) \
+                  12 AWG 2 Conductor FPLP Wire B Annunciator Bus (RS-485) 18 AWG 4 Conductor FPLP Wire Data Circuit";
+    let r = read_docs(&[Statement { cite: "Sample Submittal page 2".into(), text: legend.into(), fa_doc: true }]);
+    let got: Vec<(String, u32, u32, String)> = r.cables.iter().map(|(k, c)| (k.clone(), c.awg, c.conductors, c.ty.clone())).collect();
+    assert_eq!(
+        got,
+        vec![("annunciator".into(), 18, 4, "FPLP".into()), ("nac".into(), 12, 2, "FPLP".into()), ("slc".into(), 16, 2, "FPLP".into())],
+        "{r:?}"
+    );
+    assert!(r.cables["slc"].words.starts_with("Sample Submittal page 2: …Signaling Line Circuit #1 (SLC1) 16 AWG"), "{:?}", r.cables["slc"]);
+    // The router's cable: the legend's.
+    let (c, documented) = r.cable("slc", &rules().cables.slc);
+    assert_eq!((c.ty.as_str(), c.size.as_str(), c.awg, documented), ("FPLP", "16/2", 16, true));
+    let (c, documented) = WiringDocs::default().cable("slc", &rules().cables.slc);
+    assert_eq!((c.ty.as_str(), c.awg, documented), ("FPLR", 18, false));
 }
 
 #[test]
@@ -388,7 +412,14 @@ fn currents_drops_addresses_and_orders_by_the_rules() {
 
 #[test]
 fn hostile_fire_alarm_wiring_never_panics() {
-    let _ = read_docs(&[(String::new(), true), ("BELOW".into(), true), ("FIRE ALARM WIRING BELOW 9999999999999999999999' IN CONDUIT".into(), false)]);
+    let st = |t: &str, fa_doc: bool| Statement { cite: "\u{1F525}".into(), text: t.into(), fa_doc };
+    let _ = read_docs(&[
+        st("", true),
+        st("BELOW", true),
+        st("FIRE ALARM WIRING BELOW 9999999999999999999999' IN CONDUIT", false),
+        st("SIGNALING LINE CIRCUIT 99999999999999 AWG 99999999999 CONDUCTOR \u{e9}\u{e9}", true),
+        st("NOTIFICATION APPLIANCE CIRCUIT", true),
+    ]);
     let _ = numbers(&"9".repeat(500));
     let _ = address_number("....");
     let _ = below(&[Vec3::new(f64::NAN, 0.0, 0.0), Vec3::new(0.0, f64::INFINITY, 1.0)], 5.0);
