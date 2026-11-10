@@ -898,12 +898,24 @@ pub fn panel_roles(sp: &cadaddy_walk3d::BuildingSpec, r: &Rules) -> HashMap<Stri
         let t = format!("{} {}", e.kind, e.title).replace('_', " ").to_ascii_lowercase();
         has_any(&t, &r.panel_words)
     };
-    let is_gear = |tag: &str| {
-        sp.mep.equipment.iter().find(|e| e.tag.trim().eq_ignore_ascii_case(tag.trim())).is_some_and(|e| {
+    // Each list read once: the gear (not panels) by tag, what feeds each tag, how often each
+    // panel is placed.
+    let gear: HashSet<String> = sp
+        .mep
+        .equipment
+        .iter()
+        .filter(|e| {
             let t = format!("{} {} {}", e.kind, e.title, e.tag).replace('_', " ").to_ascii_lowercase();
             !has_any(&t, &r.panel_words) && has_any(&t, &r.gear_words)
         })
-    };
+        .map(|e| e.tag.trim().to_ascii_uppercase())
+        .collect();
+    let mut fed_by: HashMap<String, Vec<String>> = HashMap::new();
+    for f in &sp.mep.feeders {
+        for to in f.to.split([',', ';', '&']).map(|t| t.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()) {
+            fed_by.entry(to).or_default().push(f.from.trim().to_ascii_uppercase());
+        }
+    }
     let mut copies: HashMap<String, usize> = HashMap::new();
     for e in sp.mep.equipment.iter().filter(|e| is_panel(e)) {
         *copies.entry(e.tag.trim().to_ascii_uppercase()).or_default() += 1;
@@ -912,8 +924,7 @@ pub fn panel_roles(sp: &cadaddy_walk3d::BuildingSpec, r: &Rules) -> HashMap<Stri
     for e in sp.mep.equipment.iter().filter(|e| is_panel(e)) {
         let tag = e.tag.trim().to_ascii_uppercase();
         let rooms: BTreeSet<String> = e.circuits.iter().map(|c| c.room.trim().to_ascii_uppercase()).filter(|r| !r.is_empty()).collect();
-        let fed_from_gear =
-            sp.mep.feeders.iter().any(|f| f.to.split([',', ';', '&']).any(|t| t.trim().eq_ignore_ascii_case(&tag)) && is_gear(&f.from));
+        let fed_from_gear = fed_by.get(&tag).is_some_and(|from| from.iter().any(|f| gear.contains(f)));
         let role = if rooms.len() == 1 {
             (PanelRole::Unit, true)
         } else if rooms.len() > 1 || fed_from_gear {
