@@ -313,8 +313,13 @@ fn notes_calling_for_conduit_below_a_height_class_a_and_plenum_cable_are_built_a
         .filter_map(|e| mesh_box(e))
         .map(|(lo, hi)| (lo.z / 12.0, hi.z / 12.0))
         .collect();
-    assert!(!sticks.is_empty(), "the drop below 7 ft is in conduit");
-    assert!(sticks.iter().all(|(_, hi)| *hi <= 7.1), "{sticks:?}");
+    // The pull station's box (48") stubbed up into the ceiling space: from under 7 ft to over
+    // the 9 ft ceiling; nothing laid across over the ceiling in it.
+    assert!(!sticks.is_empty(), "the wiring below 7 ft is in conduit");
+    assert!(sticks.iter().all(|(lo, hi)| *lo < 7.0 || (hi - lo) > 0.5), "{sticks:?}");
+    assert!(sticks.iter().any(|(lo, hi)| *lo < 4.5 && *hi > 9.0), "{sticks:?}");
+    let across: f64 = sticks.iter().filter(|(lo, hi)| (hi - lo) < 0.2 && *lo > 9.0).count() as f64;
+    assert_eq!(across, 0.0, "{sticks:?}");
 }
 
 #[test]
@@ -406,10 +411,13 @@ fn currents_drops_addresses_and_orders_by_the_rules() {
     assert_eq!(numbers("15/75cd"), vec![15.0, 75.0]);
     let pts = [(0, Vec2::new(30.0, 0.0)), (1, Vec2::new(10.0, 0.0)), (2, Vec2::new(20.0, 0.0))];
     assert_eq!(nn_order(Vec2::new(0.0, 0.0), &pts), vec![1, 2, 0]);
-    let path = [Vec3::new(0.0, 0.0, 48.0), Vec3::new(0.0, 0.0, 110.0), Vec3::new(100.0, 0.0, 110.0)];
+    // A box at 4 ft: its rise into the ceiling space whole, not the run across over the ceiling.
+    let path = [Vec3::new(0.0, 0.0, 48.0), Vec3::new(0.0, 0.0, 110.0), Vec3::new(100.0, 0.0, 110.0), Vec3::new(100.0, 0.0, 40.0)];
     let low = below(&path, 84.0);
-    assert_eq!(low.len(), 1);
-    assert!(low[0].iter().all(|p| p.z <= 84.0 + 1e-9) && low[0].last().is_some_and(|p| (p.z - 84.0).abs() < 1e-9), "{low:?}");
+    assert_eq!(low.len(), 2, "{low:?}");
+    assert_eq!((low[0][0].z, low[0][1].z, low[0].len()), (48.0, 110.0, 2), "{low:?}");
+    assert_eq!((low[1][0].z, low[1][1].z), (110.0, 40.0), "{low:?}");
+    assert!(below(&path, 30.0).is_empty());
 }
 
 #[test]

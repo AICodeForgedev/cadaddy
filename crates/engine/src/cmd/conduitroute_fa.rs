@@ -1561,42 +1561,30 @@ pub(crate) fn legs_of<'a>(t: &ElementTag, runs: &'a [MepRun]) -> Vec<(Handle, Ha
     out
 }
 
-/// A path's pieces below `z` (absolute): each stretch of it under that height, as its own path.
+/// A path's stretches the documents' raceway takes where it is called for below `z` (absolute):
+/// each run of pieces that starts or ends under that height, whole (a box's rise is stubbed up
+/// to the ceiling space as the field runs it, not cut off mid-wall), as its own path.
 pub(crate) fn below(path: &[Vec3], z: f64) -> Vec<Vec<Vec3>> {
     let mut out: Vec<Vec<Vec3>> = Vec::new();
     let mut cur: Vec<Vec3> = Vec::new();
     for w in path.windows(2).take(20_000) {
         let [a, b] = w else { continue };
         let (a, b) = (*a, *b);
-        let (ina, inb) = (a.z < z - 1e-9, b.z < z - 1e-9);
-        let cut = |p: Vec3, q: Vec3| {
-            let t = if (q.z - p.z).abs() > 1e-12 { ((z - p.z) / (q.z - p.z)).clamp(0.0, 1.0) } else { 0.0 };
-            p + (q - p) * t
-        };
-        match (ina, inb) {
-            (true, true) => {
-                if cur.is_empty() {
-                    cur.push(a);
-                }
-                cur.push(b);
+        if a.z.min(b.z) < z - 1e-9 {
+            if cur.is_empty() {
+                cur.push(a);
             }
-            (true, false) => {
-                if cur.is_empty() {
-                    cur.push(a);
-                }
-                cur.push(cut(a, b));
-                out.push(std::mem::take(&mut cur));
-            }
-            (false, true) => {
-                cur = vec![cut(a, b), b];
-            }
-            (false, false) => {}
+            cur.push(b);
+        } else if !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
         }
     }
     if cur.len() >= 2 {
         out.push(cur);
     }
-    out.retain(|p| p.len() >= 2 && p.windows(2).any(|w| matches!(w, [a, b] if super::super::mepatoms::dist(*a, *b) > 1e-6)));
+    out.retain(|p| {
+        p.len() >= 2 && p.iter().all(|q| q.is_finite()) && p.windows(2).any(|w| matches!(w, [a, b] if super::super::mepatoms::dist(*a, *b) > 1e-6))
+    });
     out
 }
 
