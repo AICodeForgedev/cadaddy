@@ -82,3 +82,4 @@ mod viewport_double_click_selection;
 mod walk_mode;
 mod workspace_focus;
 mod workspaces;
+mod zoom_detail;

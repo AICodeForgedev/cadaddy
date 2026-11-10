@@ -1044,6 +1044,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if !matches!(sy.kind, MepKind::Conduit | MepKind::Cable) {
             continue;
         }
+        // The fire alarm circuits' legs are cut on their own, end to end between the elements
+        // their tags name (Q6503).
+        if super::super::conduitroute::fa::is_system(&r.system) {
+            continue;
+        }
         let Some(level) = sp.level(&r.level) else { continue };
         let pts = run_path(r, level.elevation_ft * upf, upf);
         if pts.len() < 2 {
@@ -2690,6 +2695,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
     }
 
+    // -- The fire alarm circuits' cable (Q6503), each leg from the element it leaves to the one
+    // it reaches. --
+    let fa_report = fa_atoms(sp, upf, &boxes, &mut atoms, &mut external);
+
     // -- Into the model: each atom an element; then what it connects to, by handle. --
     let mut handles: Vec<Option<Handle>> = Vec::with_capacity(atoms.len());
     let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -2924,6 +2933,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             e.common.xdata = x.into();
         });
     }
+    fa_links(d, sp);
     let rows = super::reindex(d);
     let total: usize = by_kind.values().sum();
     for (why, n) in &no_box {
@@ -3004,7 +3014,166 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "atomIndexRows": rows,
         "atomsMs": (started.elapsed().as_secs_f64() * 1000.0).round(),
         "atomNotes": notes,
+        "fireAlarm": fa_report,
     })
+}
+
+/// Join atoms `i` and `j` both ways.
+fn join(atoms: &mut [(Atom, AtomCtx)], i: usize, j: usize) {
+    if let Some(a) = atoms.get_mut(i) {
+        a.0.connects.push(j);
+    }
+    if let Some(b) = atoms.get_mut(j) {
+        b.0.connects.push(i);
+    }
+}
+
+/// The fire alarm circuits' cable (Q6503): each leg of each circuit's tag one cable per piece
+/// (across, up or down the riser, across), the pieces joined end to end, the first landing on the
+/// element the leg leaves (a device's box when it has one) and the last on the one it reaches;
+/// and the raceway the documents call for below a height, along the cable there.
+fn fa_atoms(sp: &BuildingSpec, upf: f64, boxes: &[DevBox], atoms: &mut Vec<(Atom, AtomCtx)>, external: &mut Vec<(usize, Handle)>) -> Value {
+    use super::super::conduitroute::fa;
+    let fr = fa::rules();
+    let rl = rules();
+    let box_of: HashMap<Handle, usize> = boxes.iter().map(|b| (b.device, b.atom)).collect();
+    let (mut cables, mut legs, mut ft, mut raceway_ft) = (0usize, 0usize, 0.0f64, 0.0f64);
+    let mut by_system: BTreeMap<String, f64> = BTreeMap::new();
+    for t in sp.tags.iter().filter(|t| t.kind == fa::TAG_KIND).take(MAX_RUNS) {
+        let f = |k: &str| t.fields.get(k).map(|x| x.value.trim().to_string()).unwrap_or_default();
+        let system = f("system");
+        if !fa::is_system(&system) {
+            continue;
+        }
+        let (circuit, source_tag, size) = (f("circuit"), f("source"), f("cable_size"));
+        let ty = format!("{} {size}", f("cable_type")).trim().to_string();
+        let item = format!("{}, {ty}", if f("cable_item").is_empty() { "Fire alarm cable".to_string() } else { f("cable_item") });
+        let src = Source::from_doc(SourceKind::Rule, &f("cable_source"));
+        let basis = f("basis");
+        let raceway = Some(f("raceway")).filter(|r| !r.is_empty()).and_then(|r| {
+            let rw = rl.raceways.get(&r)?;
+            let below = f("raceway_below_ft").parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(f64::INFINITY);
+            Some((r, rw, below, f("raceway_source")))
+        });
+        for (from, to, runs) in fa::legs_of(t, &sp.mep.runs) {
+            let (mut first, mut prev): (Option<usize>, Option<usize>) = (None, None);
+            for r in runs {
+                let Some(level) = sp.level(&r.level) else { continue };
+                let floor = level.elevation_ft * upf;
+                let path = run_path(r, floor, upf);
+                let (Some(p0), Some(p1)) = (path.first().copied(), path.last().copied()) else { continue };
+                if path.len() < 2 || atoms.len() >= MAX_ATOMS {
+                    continue;
+                }
+                let len = super::path_ft(&path, upf);
+                let ctx = AtomCtx {
+                    level: level.name.clone(),
+                    system: system.clone(),
+                    circuit: circuit.clone(),
+                    panel: source_tag.clone(),
+                    run: r.id.clone(),
+                    estimated: false,
+                    source: Handle(0),
+                    body: None,
+                    src: src.clone(),
+                    made: Made::Inferred,
+                    basis: basis.clone(),
+                };
+                let i = atoms.len();
+                atoms.push((
+                    Atom {
+                        kind: "cable",
+                        item: item.clone(),
+                        ty: ty.clone(),
+                        size: size.clone(),
+                        body_in: fr.cables.body_in.max(0.1),
+                        length_ft: len,
+                        a: p0,
+                        b: p1,
+                        path: path.clone(),
+                        extra: vec![
+                            ("circuit_role", f("role"), "computed".into()),
+                            ("circuit_class", f("class"), f("cable_source")),
+                            ("conductors", format!("2 #{}", f("cable_awg")), f("cable_source")),
+                        ],
+                        source: f("cable_source"),
+                        ..Atom::default()
+                    },
+                    ctx.clone(),
+                ));
+                if let Some(p) = prev {
+                    join(atoms, p, i);
+                }
+                first.get_or_insert(i);
+                prev = Some(i);
+                cables += 1;
+                ft += len;
+                *by_system.entry(system.clone()).or_default() += len;
+                // In its raceway where the documents call for one (below a height, or all of it).
+                if let Some((name, rw, below, why)) = &raceway {
+                    let z = if below.is_finite() { floor + below * upf } else { f64::INFINITY };
+                    for sub in fa::below(&path, z) {
+                        let pieces = raceway_pieces(&sub, upf, fr.documents.raceway_in, name, rw, false, rl);
+                        raceway_ft += pieces.length_ft;
+                        let base = atoms.len();
+                        let mut rctx = ctx.clone();
+                        rctx.src = Source::from_doc(SourceKind::Print, why);
+                        for mut a in pieces.atoms {
+                            for x in &mut a.connects {
+                                *x += base;
+                            }
+                            atoms.push((a, rctx.clone()));
+                        }
+                    }
+                }
+            }
+            // Its ends: a device's box where it has one, else the device or the gear itself.
+            for (end, h) in [(first, from), (prev, to)] {
+                let Some(i) = end else { continue };
+                match box_of.get(&h) {
+                    Some(j) => join(atoms, i, *j),
+                    None => external.push((i, h)),
+                }
+            }
+            legs += 1;
+        }
+    }
+    json!({
+        "cables": cables, "legs": legs, "cableFt": (ft * 10.0).round() / 10.0,
+        "cableFtBySystem": by_system.iter().map(|(k, v)| (k.clone(), json!((v * 10.0).round() / 10.0))).collect::<serde_json::Map<_, _>>(),
+        "racewayFt": (raceway_ft * 10.0).round() / 10.0,
+    })
+}
+
+/// Each fire alarm element its circuit's names (`fa_circuit`, `fa_system`, `fa_source`), what
+/// `bim.chain` walks by; each power supply fed from the control panel its start circuit leaves.
+fn fa_links(d: &mut Drawing, sp: &BuildingSpec) {
+    use super::super::conduitroute::fa;
+    for t in sp.tags.iter().filter(|t| t.kind == fa::TAG_KIND).take(MAX_RUNS) {
+        let f = |k: &str| t.fields.get(k).map(|x| x.value.trim().to_string()).unwrap_or_default();
+        let (circuit, system, source, role) = (f("circuit"), f("system"), f("source"), f("role"));
+        let from = Handle::parse_hex(&f("source_handle"));
+        let why = Source::from_doc(SourceKind::Rule, &f("basis"));
+        for h in f("members").split(',').filter_map(|x| Handle::parse_hex(x.trim())).take(MAX_DEVICES) {
+            let _ = d.modify_entity(h, |e| {
+                let mut ps = props::read(&e.common.xdata);
+                ps.set("fa_circuit", Prop::new(circuit.clone(), why.clone()).with_note("the fire alarm circuit it is wired on"));
+                ps.set("fa_system", Prop::new(system.clone(), Source::computed()));
+                ps.set("fa_source", Prop::new(source.clone(), why.clone()).with_note("the panel or power supply its circuit leaves"));
+                if role == "power supply start"
+                    && let Some(u) = from
+                {
+                    ps.set(
+                        "fed_from",
+                        Prop::new(u.hex(), why.clone())
+                            .with_note(&format!("started by {source} over its circuit {circuit} (and powered by its own 120 V branch circuit)")),
+                    );
+                }
+                let x = props::write(&e.common.xdata, &ps);
+                e.common.xdata = x.into();
+            });
+        }
+    }
 }
 
 /// The plaster rings as their devices' walls need them (`mud_ring`, which `bim.props.fill`
