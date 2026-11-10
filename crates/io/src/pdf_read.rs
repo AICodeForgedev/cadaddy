@@ -5183,14 +5183,95 @@ fn symbol_size_range(sheet: (f64, f64)) -> (f64, f64) {
 }
 
 /// Group symbol instances by device type (in tag order); each type with ≥2 instances becomes
-/// a block.  Within a group, instances keep their order (the first one draws the block).
-fn group_symbols(instances: Vec<SymbolInstance>) -> Vec<Vec<SymbolInstance>> {
+/// a block.  Within a group, instances keep their order (the first one draws the block), each
+/// rid of the drawing round it its cluster took ([`release_unshared_strokes`]).
+fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke]) -> Vec<Vec<SymbolInstance>> {
     let mut groups: BTreeMap<String, Vec<SymbolInstance>> = BTreeMap::new();
     for inst in instances {
         let key = inst.device_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
         groups.entry(key).or_default().push(inst);
     }
-    groups.into_values().filter(|g| g.len() >= 2).collect()
+    let mut out: Vec<Vec<SymbolInstance>> = groups.into_values().filter(|g| g.len() >= 2).collect();
+    for group in &mut out {
+        release_unshared_strokes(group, strokes);
+    }
+    out
+}
+
+/// A tag's cluster can take the drawing round it: the frame and glazing of the window a window
+/// tag marks. A block draws its first instance's strokes at every instance, so that window would
+/// be drawn at every tag of its type, and lost where it is when its tag is not the first (Q6435).
+/// The symbol is what its instances share: a stroke drawn alike (same shape, wherever it stands)
+/// in fewer than [`SHARED_STROKE_MIN`] of its type's instances (or one in [`SHARED_STROKE_SHARE`]
+/// of them, if more) and longer than the outline they share (the tag's hexagon, circle or box)
+/// is not the symbol's, and stays loose where printed. An instance sharing no outline keeps all
+/// its strokes (a symbol drawn turned).
+fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
+    let need = SHARED_STROKE_MIN.max(group.len().div_ceil(SHARED_STROKE_SHARE));
+    let keys: Vec<Vec<Option<StrokeKey>>> =
+        group.iter().map(|inst| inst.stroke_indices.iter().map(|&si| strokes.get(si).map(stroke_key)).collect()).collect();
+    let mut count: HashMap<&StrokeKey, usize> = HashMap::new();
+    for of_inst in &keys {
+        let mut seen: HashSet<&StrokeKey> = HashSet::new();
+        for k in of_inst.iter().flatten() {
+            if seen.insert(k) {
+                *count.entry(k).or_default() += 1;
+            }
+        }
+    }
+    let extent = |b: [f64; 4]| (b[2] - b[0]).max(b[3] - b[1]);
+    for (inst, of_inst) in group.iter_mut().zip(&keys) {
+        let shared: Vec<bool> = of_inst.iter().map(|k| k.as_ref().is_some_and(|k| count.get(k).copied().unwrap_or(0) >= need)).collect();
+        let size = inst
+            .stroke_indices
+            .iter()
+            .zip(&shared)
+            .filter(|(_, sh)| **sh)
+            .filter_map(|(&si, _)| strokes.get(si))
+            .filter(|s| is_outline(s))
+            .filter_map(|s| bbox(std::slice::from_ref(&s.pts)).map(extent))
+            .fold(0.0f64, f64::max);
+        if size <= 0.0 {
+            continue;
+        }
+        let kept: Vec<usize> = inst
+            .stroke_indices
+            .iter()
+            .zip(&shared)
+            .filter(|(si, sh)| **sh || strokes.get(**si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= size))
+            .map(|(&si, _)| si)
+            .collect();
+        // The symbol stays where it was found (its centre is where the readers place the device).
+        inst.stroke_indices = kept;
+    }
+}
+
+/// A stroke kept in a symbol is drawn alike in at least this many of its type's instances …
+const SHARED_STROKE_MIN: usize = 2;
+/// … and in one in this many of them (rounded up), if more.
+const SHARED_STROKE_SHARE: usize = 4;
+/// Most points of a stroke its shape is told by.
+const MAX_KEY_POINTS: usize = 64;
+/// Strokes drawn alike match to this (points).
+const KEY_TOL_PT: f64 = 0.5;
+
+/// A stroke's shape wherever it stands: closed or not, its point count, and each point's offset
+/// from its first, to [`KEY_TOL_PT`] (whichever way round reads first).
+type StrokeKey = (bool, usize, Vec<(i64, i64)>);
+
+fn stroke_key(s: &Stroke) -> StrokeKey {
+    let offsets = |pts: &mut dyn Iterator<Item = &(f64, f64)>| -> Vec<(i64, i64)> {
+        let mut first: Option<(f64, f64)> = None;
+        pts.take(MAX_KEY_POINTS)
+            .map(|p| {
+                let o = *first.get_or_insert(*p);
+                (((p.0 - o.0) / KEY_TOL_PT).round() as i64, ((p.1 - o.1) / KEY_TOL_PT).round() as i64)
+            })
+            .collect()
+    };
+    let fwd = offsets(&mut s.pts.iter());
+    let back = offsets(&mut s.pts.iter().rev());
+    (s.closed, s.pts.len(), fwd.min(back))
 }
 
 /// Find device symbols: for each tag anchor, the compact cluster of short strokes around it
@@ -5751,7 +5832,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             .filter(|(i, t)| is_device_tag(&t.value) && Some(*i) != sheet_no && t.height <= tall)
             .map(|(i, t)| TagAnchor { value: &t.value, at: t.at, height: t.height, text_idx: Some(i), ocr_idx: None })
             .collect();
-        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false));
+        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false), &strokes);
         let mut instances: Vec<SymbolInstance> = found.into_iter().flatten().collect();
         let mut taken: HashSet<usize> = shx_stroke_indices.clone();
         for inst in &instances {
@@ -5929,7 +6010,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
         }
 
-        let symbol_groups = group_symbols(instances);
+        let symbol_groups = group_symbols(instances, &strokes);
         let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
         let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
         let mut symbol_text_indices: HashSet<usize> = HashSet::new();

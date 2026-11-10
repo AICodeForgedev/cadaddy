@@ -14750,6 +14750,43 @@ fn gear_space_after_layout(s: &mut Session, job: &mut GuidedJob, sp: &mut cadadd
 
 /// The job's finding of what the build ran through electrical gear's dedicated space (its
 /// `gearSpace` report, [`super::gearspace::Cleared::json`]): how many runs, how many offset.
+/// A level's open holes (its `window_tags` row's `open_holes`, Q6435): the gaps in its outside
+/// walls with no door or window drawn in them, built open. One finding a level, for review: a
+/// window drawn where the build couldn't read it, or a real opening.
+fn open_hole_finding(job: &mut GuidedJob, level: &str, row: &Value) {
+    let n = row["open_hole_count"].as_u64().unwrap_or(0);
+    if n == 0 {
+        return;
+    }
+    let listed: Vec<String> = row["open_holes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(5)
+        .map(|h| {
+            format!(
+                "{:.0},{:.0} to {:.0},{:.0}",
+                h["from"][0].as_f64().unwrap_or(0.0),
+                h["from"][1].as_f64().unwrap_or(0.0),
+                h["to"][0].as_f64().unwrap_or(0.0),
+                h["to"][1].as_f64().unwrap_or(0.0)
+            )
+        })
+        .collect();
+    job.add_finding(
+        StageName::BimBuild,
+        &format!("{n} gaps in outside walls on {level} are built as open holes"),
+        &format!(
+            "No door swing, glazing or window tag was found in these gaps in the outside walls, so each is built open, not closed silently: {}",
+            listed.join("; ")
+        ),
+        2,
+        vec!["Check each against the plans: a window or door drawn there the build could not read, or a real opening".into()],
+        None,
+        false,
+    );
+}
+
 /// The build's window tags against its windows (`window_tags`, one row a level, Q6311): a tag no
 /// window was built for is a finding a level, and the window types the plans tag that no window
 /// schedule row gives one finding (their sizes are the plan's openings, their sill and head the
@@ -14760,6 +14797,7 @@ fn window_tag_findings(job: &mut GuidedJob, rows: &Value) {
     for r in rows.iter().take(MAX_LEVELS_REPORTED) {
         let level = r["level"].as_str().unwrap_or("?");
         unscheduled.extend(r["marks_without_schedule_row"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string));
+        open_hole_finding(job, level, r);
         let n = r["no_host_count"].as_u64().unwrap_or(0);
         if n == 0 {
             continue;
@@ -28831,6 +28869,22 @@ mod model_stats_tests {
         assert_eq!(st["elements"]["total"], 3, "{}", st["elements"]);
         assert_eq!(st["elements"]["by_kind"], json!({"door": 1, "wall": 2}));
         assert_eq!(st["elements"]["count"], json!({"complete": true, "scanned": 600_003}));
+    }
+
+    /// A level whose outside walls keep gaps with no door or window in them raises one finding
+    /// for review, saying where (Q6435); a level with none raises nothing.
+    #[test]
+    fn open_holes_in_outside_walls_are_a_finding_for_review() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        let rows = json!([
+            {"level": "L1", "no_host_count": 0, "open_hole_count": 2,
+             "open_holes": [{"from": [0.0, 0.0], "to": [60.0, 0.0], "width": 60.0}, {"from": [100.0, 0.0], "to": [148.0, 0.0], "width": 48.0}]},
+            {"level": "L2", "no_host_count": 0, "open_hole_count": 0, "open_holes": []}
+        ]);
+        window_tag_findings(&mut job, &rows);
+        let holes: Vec<&JobFinding> = job.findings.iter().filter(|f| f.description.contains("open holes")).collect();
+        assert_eq!(holes.len(), 1, "{:?}", job.findings.iter().map(|f| &f.description).collect::<Vec<_>>());
+        assert!(holes.iter().all(|f| f.description.contains("2 gaps") && f.description.contains("L1") && f.why.contains("0,0 to 60,0")));
     }
 
     /// A count the cap cuts short says so and raises no "0 elements" warning; a complete count

@@ -2818,16 +2818,16 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             crossing_gaps.len()
         ));
     }
-    let (bare_outside_gaps, drawn_windows, typical_windows) = (bare_outside_gaps.len(), drawn_windows.len(), typical_windows.len());
+    let (bare_gaps, drawn_windows, typical_windows) = (bare_outside_gaps.len(), drawn_windows.len(), typical_windows.len());
     if drawn_windows + typical_windows > 0 {
         notes.push(format!(
             "{}: windows in outside walls' gaps: {drawn_windows} drawn (glazing lines or a window tag by the gap), {typical_windows} inferred (no glazing or tag of their own, the width of a drawn one on the level: a typical window).",
             level.name
         ));
     }
-    if bare_outside_gaps > 0 {
+    if bare_gaps > 0 {
         notes.push(format!(
-            "{}: {bare_outside_gaps} gaps in outside walls with no window drawn (no glazing lines, no window tag) left as openings, not windows.",
+            "{}: {bare_gaps} gaps in outside walls with no door or window drawn (no swing, no glazing lines, no window tag) left as open holes, listed for review.",
             level.name
         ));
     }
@@ -2944,6 +2944,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let mut same = Vec::new();
     let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k, &mut same).unwrap_or((doors, windows));
     pl.window_tally = WindowTally::of(&window_tags, &pl.leaves, no_host, g.spec.as_ref());
+    // The outside walls' gaps no door or window fills, even after the leftover tags were placed:
+    // open holes in the shell, each listed for review (never built silently, Q6435).
+    pl.window_tally.open_holes = bare_outside_gaps
+        .into_iter()
+        .filter(|&(g0, g1)| !pl.leaves.iter().any(|l| seg_dist((l.a + l.b) * 0.5, g0, g1) <= l.thickness.max(k)))
+        .collect();
     if !pl.window_tally.no_host.is_empty() {
         notes.push(format!(
             "{}: {} window tags with no window built (no opening, no outside wall to hold them).",
@@ -3549,6 +3555,8 @@ pub(crate) struct WindowTally {
     pub untyped: usize,
     pub by_basis: std::collections::BTreeMap<&'static str, usize>,
     pub no_host: Vec<(String, Vec2, &'static str)>,
+    /// The gaps in outside walls with no door or window drawn in them: (from, to).
+    pub open_holes: Vec<(Vec2, Vec2)>,
     pub storefront: usize,
     pub unscheduled: Vec<String>,
 }
@@ -3595,6 +3603,8 @@ impl WindowTally {
             "storefront": self.storefront,
             "no_host": self.no_host.iter().take(MAX_LISTED_TAGS).map(|(m, at, why)| json!({"mark": m, "at": [at.x, at.y], "why": why})).collect::<Vec<_>>(),
             "no_host_count": self.no_host.len(),
+            "open_holes": self.open_holes.iter().take(MAX_LISTED_TAGS).map(|(a, b)| json!({"from": [a.x, a.y], "to": [b.x, b.y], "width": a.dist(*b)})).collect::<Vec<_>>(),
+            "open_hole_count": self.open_holes.len(),
             "marks_without_schedule_row": self.unscheduled,
         })
     }
@@ -4723,10 +4733,21 @@ mod tests {
         // (before Q6293 every such gap became one).
         let (windows, notes) = room_with_gaps(&[(8.0, 12.0)], &[], Vec::new());
         assert_eq!(windows, 0, "{notes:?}");
-        assert!(notes.iter().any(|n| n.contains("1 gaps in outside walls with no window drawn")), "{notes:?}");
-        // Gaps in both outside walls, still nothing drawn in them.
-        let (windows, notes) = room_with_gaps(&[(3.0, 7.0), (12.0, 15.0)], &[(8.0, 12.0)], Vec::new());
-        assert_eq!(windows, 0, "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("1 gaps in outside walls with no door or window drawn")), "{notes:?}");
+        // Gaps in both outside walls, still nothing drawn in them: each an open hole listed for
+        // review, where it is and how wide (Q6435; before, only a count in the notes).
+        let (pl, notes) = plan_room(&[(3.0, 7.0), (12.0, 15.0)], &[(8.0, 12.0)], Vec::new(), &|_| {});
+        assert!(windows_of(&pl).is_empty(), "{notes:?}");
+        let mut holes: Vec<f64> = pl.window_tally.open_holes.iter().map(|(a, b)| (a.dist(*b) / 12.0 * 10.0).round() / 10.0).collect();
+        holes.sort_by(f64::total_cmp);
+        assert_eq!(holes, [3.0, 4.0, 4.0], "{notes:?}");
+        let row = pl.window_tally.to_json("L1");
+        assert_eq!(row["open_hole_count"], 3);
+        assert_eq!(row["open_holes"].as_array().map(Vec::len), Some(3));
+        // A gap a window fills is no hole.
+        let glass = vec![("A-GLAZ", line_ft((8.0, 0.2), (12.0, 0.2))), ("A-GLAZ", line_ft((8.0, 0.3), (12.0, 0.3)))];
+        let (pl, notes) = plan_room(&[(8.0, 12.0)], &[], glass, &|_| {});
+        assert!(pl.window_tally.open_holes.is_empty() && windows_of(&pl).len() == 1, "{notes:?}");
     }
 
     #[test]
@@ -4752,7 +4773,7 @@ mod tests {
         // the 6' gap has no window of its width drawn: an opening.
         assert_eq!(windows, 2, "{notes:?}");
         assert!(notes.iter().any(|n| n.contains("1 drawn") && n.contains("1 inferred")), "{notes:?}");
-        assert!(notes.iter().any(|n| n.contains("1 gaps in outside walls with no window drawn")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("1 gaps in outside walls with no door or window drawn")), "{notes:?}");
         // A text that is no window mark (a room number, a door's) marks nothing.
         for text in ["R12", "D1", "WALL", "W"] {
             let (windows, notes) = room_with_gaps(&[(3.0, 7.0)], &[], vec![("A-ANNO", text_ft((5.0, -1.5), text))]);
