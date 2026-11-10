@@ -3444,3 +3444,4 @@ menu	View	عرض
 	Frame rate to hold while moving	معدل الإطارات المطلوب أثناء التحريك
 	Lower the resolution while panning and zooming when the graphics are slow	خفض الدقة أثناء التحريك والتكبير عندما تكون الرسومات بطيئة
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	يصبح الرسم حادًا بمجرد توقف العرض. الطباعة والتصدير ولقطات الشاشة دائمًا بالدقة الكاملة.
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	يفعل عرض النموذج ثلاثي الأبعاد والتجول الشيء نفسه أثناء الدوران والمشي؛ تبقى الإضاءة والتفاصيل كما هي.

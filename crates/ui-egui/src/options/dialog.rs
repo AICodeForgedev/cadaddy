@@ -255,6 +255,7 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         changes.insert("DYNRESMODE".into(), json!(i32::from(dynres)));
     }
     hint(ui, crate::tl!("The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution."));
+    hint(ui, crate::tl!("The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are."));
     let mut system_cursor = app.ui.system_cursor;
     if ui.checkbox(&mut system_cursor, crate::tl!("Keep the system cursor visible over the drawing area")).changed() {
         changes.insert("systemCursor".into(), json!(system_cursor));

@@ -3456,3 +3456,4 @@
 	Frame rate to hold while moving	Fotogramas por segundo a mantener al moverse
 	Lower the resolution while panning and zooming when the graphics are slow	Bajar la resolución al desplazar y hacer zoom cuando los gráficos son lentos
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	El dibujo se vuelve nítido en cuanto la vista se detiene. Los trazados, las exportaciones y las capturas de pantalla siempre tienen resolución completa.
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	La vista 3D del modelo y el recorrido hacen lo mismo al orbitar y al caminar; su iluminación y su detalle no cambian.

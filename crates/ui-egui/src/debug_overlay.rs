@@ -37,6 +37,14 @@ pub fn show(app: &CadApp, ctx: &egui::Context) {
             }) {
                 ui.label(egui::RichText::new(line).text_style(mono.clone()).color(egui::Color32::WHITE));
             }
+            // The 3D views' resolution while moving.
+            if let Some(line) = crate::dynres::with_3d(|c| {
+                let gpu = c.mean_ms().map_or_else(|| "untimed".to_string(), |m| format!("GPU {m:.1} ms"));
+                let shown = app.walk.as_ref().map(|w| w.scale).or(app.canvas.shade.stats.scale).unwrap_or(1.0);
+                format!("3D scale: {:.0} % moving, {:.0} % shown ({gpu}, {}× MSAA)", c.moving_scale() * 100.0, shown * 100.0, app.gpu_caps.msaa)
+            }) {
+                ui.label(egui::RichText::new(line).text_style(mono.clone()).color(egui::Color32::WHITE));
+            }
             // Where the 2D canvas's time goes (`canvas::drawstats`).
             for line in app.canvas.stats.lines(&adapter_name(app)) {
                 ui.label(egui::RichText::new(line).text_style(mono.clone()).color(egui::Color32::LIGHT_GRAY));

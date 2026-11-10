@@ -129,6 +129,10 @@ pub struct Stats {
     pub quality: Option<&'static str>,
     pub scene_passes: u32,
     pub shadows_kept: u64,
+    /// The scale the GPU drew the last frame at each way ([`crate::dynres`]: below 1 while the
+    /// view moves on a GPU that can't hold the frame rate, 1 at rest), and the samples a pixel.
+    pub scale: Option<f32>,
+    pub msaa: u32,
 }
 
 /// An orbit benchmark under way: frames left, the azimuth reached, when it started.
@@ -174,6 +178,8 @@ pub struct State {
     /// many have, and their running average interval in milliseconds.
     drawn_at: Option<web_time::Instant>,
     moving: Option<(u32, f64)>,
+    /// Whether the camera is moving ([`crate::dynres`]: a moving view may be drawn smaller).
+    motion: crate::dynres::Motion,
     /// The section box and coordination mode of the drawing (for the state they were read from).
     sbox_for: Option<((usize, u64), cadaddy_engine::cmd::coordination::CoordRenderState)>,
 }
@@ -255,14 +261,26 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
     let caps = app.gpu_caps.clone();
     if let Some(rs) = app.wgpu_rs.clone().filter(|_| !caps.cpu) {
         let (gw, gh) = caps.target_size(w, h);
+        // While the camera moves (orbit, pan, zoom) on a GPU that can't hold the frame rate: a
+        // smaller picture, scaled up; sharp once the view has been still for the settle time.
+        let st = &mut app.canvas.shade;
+        let v = &view;
+        let camera = [v.dir.x, v.dir.y, v.dir.z, v.right.x, v.right.y, v.right.z, v.up.x, v.up.y, v.up.z, v.center.x, v.center.y, v.height];
+        let since = st.motion.track(&camera, crate::now_ms());
+        let ((gw, gh), scale) = crate::dynres::size_3d(ui.ctx(), (gw, gh), since);
         let view = ShadeView::new(xf.proj, xf.center, height, gw, gh);
         let (w, h) = (gw, gh);
-        let st = &mut app.canvas.shade;
         if st.gpu.as_ref().is_some_and(|g| g.samples != caps.msaa) {
             st.gpu = None;
             st.uploaded = None;
         }
         let g = st.gpu.get_or_insert_with(|| Gpu::new(&rs.device, caps.msaa));
+        // The GPU times of earlier frames that have arrived.
+        if let Some(t) = &g.timer {
+            t.read(&rs.device, &rs.queue, |ms, s| {
+                crate::dynres::with_3d(|c| c.sample(ms, s));
+            });
+        }
         // The last frame's picture stands while nothing it was drawn from has changed (the
         // pointer moving over a still view, overlays, a hover): no upload, cull or pass.
         let frame = FrameKey::new(key, style, bg, &view, caps.msaa, tier, force.clone(), st.stream.generation, lit.clone(), caps.quality);
@@ -282,9 +300,12 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             g.upload_stream(&rs.device, &st.stream, style, bg);
             g.set_lighting(&rs.device, &rs.queue, lit.as_ref());
             let t0 = web_time::Instant::now();
+            g.time_scale = Some(scale);
             let vis = g.render(&rs.device, &rs.queue, &view, style, bg, tier, force.as_ref(), &st.stream);
             st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
             st.stats.frames_rendered += 1;
+            st.stats.scale = Some(scale);
+            st.stats.msaa = g.samples;
             // Frames drawn one after another (a moving view): how long each takes, lately.
             let now = web_time::Instant::now();
             match st.drawn_at.map(|at| now.duration_since(at).as_secs_f64() * 1000.0) {
@@ -325,6 +346,10 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             painter.image(id, xf.rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             drawn = true;
         }
+    }
+    if let Some(note) = crate::dynres::note_3d() {
+        app.set_status(format!("3D graphics: {note}."));
+        app.gpu_caps.notes.push(note);
     }
     if let Some(avg) = step_down
         && !app.gpu_caps.quality_forced
@@ -831,6 +856,11 @@ struct Gpu {
     last: Option<(FrameKey, model3::Visible)>,
     /// The lighting quality frames are drawn at.
     quality: Quality,
+    /// Times the next frame's passes on the GPU for the 3D views' dynamic resolution
+    /// ([`crate::dynres`]), when the device has timestamp queries; the scale the next frame is
+    /// drawn at, when it is to be timed (the live view's frames, not tests' or exports').
+    timer: Option<crate::gpu::PassTimer>,
+    time_scale: Option<f32>,
     /// What the shadow map holds (a hash of the sun's view and of everything drawn into it):
     /// a frame that would draw the same into it keeps it. The times the last frame drew the
     /// scene, and frames that kept the shadow map.
@@ -1096,6 +1126,8 @@ impl Gpu {
             bg_image: 0,
             last: None,
             quality: Quality::Full,
+            timer: crate::gpu::PassTimer::on(device),
+            time_scale: None,
             shadow_shows: None,
             scene_passes: 0,
             shadows_kept: 0,
@@ -1670,6 +1702,12 @@ impl Gpu {
         };
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shaded") });
         let mut passes = 1;
+        // The frame's GPU time, from the first pass's beginning to the main pass's end (when it
+        // is to be timed and a slot is free).
+        let time_scale = self.time_scale.take();
+        let timed = time_scale.and_then(|_| self.timer.as_ref().and_then(|t| Some((t, t.free_slot()?))));
+        let mut first = true;
+        let mut writes = |end: bool| timed.and_then(|(t, i)| t.writes(i, std::mem::take(&mut first), end));
         // The opaque surfaces' depth, for the ambient occlusion.
         if physical && self.quality.soft() && self.lighting.as_ref().is_some_and(|l| l.ao > 0.0) {
             passes += 1;
@@ -1681,7 +1719,7 @@ impl Gpu {
                     depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: writes(false),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1737,7 +1775,7 @@ impl Gpu {
                     depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: writes(false),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1778,7 +1816,7 @@ impl Gpu {
                     depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: writes(true),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1808,6 +1846,9 @@ impl Gpu {
                     }
                 }
             }
+        }
+        if let (Some((t, i)), Some(scale)) = (timed, time_scale) {
+            t.written(&mut enc, i, Some(scale));
         }
         queue.submit([enc.finish()]);
         if physical && sun {

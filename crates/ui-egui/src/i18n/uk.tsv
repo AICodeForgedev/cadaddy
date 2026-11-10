@@ -3607,3 +3607,4 @@
 	Frame rate to hold while moving	Частота кадрів під час руху
 	Lower the resolution while panning and zooming when the graphics are slow	Знижувати роздільність під час панорамування й масштабування, коли графіка повільна
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Креслення стає чітким, щойно вигляд зупиняється. Друк, експорт і знімки екрана завжди мають повну роздільність.
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D-вигляд моделі та прогулянка роблять те саме під час обертання й ходьби; освітлення та деталізація не змінюються.

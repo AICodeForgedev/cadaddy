@@ -3613,3 +3613,4 @@ menu	Modify	Ändra
 	Frame rate to hold while moving	Bildfrekvens att hålla vid rörelse
 	Lower the resolution while panning and zooming when the graphics are slow	Sänk upplösningen vid panorering och zoomning när grafiken är långsam
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Ritningen blir skarp så snart vyn står still. Plottar, exporter och skärmbilder har alltid full upplösning.
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D-modellvyn och promenaden gör likadant vid kretsning och gång; belysning och detaljnivå förblir som de är.

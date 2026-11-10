@@ -3430,3 +3430,4 @@ menu	Modify	Modifikace
 	Frame rate to hold while moving	Snímková frekvence při pohybu
 	Lower the resolution while panning and zooming when the graphics are slow	Snížit rozlišení při posunu a zvětšování, když je grafika pomalá
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Výkres se zaostří, jakmile se pohled zastaví. Tisk, export a snímky obrazovky jsou vždy v plném rozlišení.
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D zobrazení modelu a procházka dělají totéž při otáčení a chůzi; jejich osvětlení a podrobnosti zůstávají stejné.

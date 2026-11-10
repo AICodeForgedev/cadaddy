@@ -3239,3 +3239,4 @@
 	Frame rate to hold while moving	Частота кадров при движении
 	Lower the resolution while panning and zooming when the graphics are slow	Снижать разрешение при панорамировании и масштабировании, если графика медленная
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Чертёж становится чётким, как только вид останавливается. Печать, экспорт и снимки экрана всегда в полном разрешении.
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D-вид модели и прогулка делают то же самое при вращении и ходьбе; освещение и детализация не меняются.
