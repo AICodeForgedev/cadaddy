@@ -196,6 +196,7 @@ pub(crate) mod provenance;
 pub mod pulllist;
 pub mod readers;
 pub mod redline;
+pub mod relevel;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub mod rooms3d;
@@ -947,6 +948,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(identity::specs());
         v.extend(inventory::specs());
         v.extend(bimlook::specs());
+        v.extend(relevel::specs());
         v.extend(fidelity::specs());
         v.extend(projrules::specs());
         v.extend(codebook::specs());

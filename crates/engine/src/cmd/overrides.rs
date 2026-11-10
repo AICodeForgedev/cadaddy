@@ -205,11 +205,16 @@ fn apply(d: &mut Drawing, o: &mut Override, h: Option<Handle>, touched: &mut Vec
         }
         Change::Move { delta } => {
             let (h, dl) = (h?, *delta);
+            let from = d.entity(h).and_then(|e| Some((super::bspec::made_level(e)?, super::relevel::bottom(e)?)));
             d.modify_entity(h, |e| {
                 translated(e, dl);
                 e.common.xdata = overrides::mark(&e.common.xdata, id).into();
             })
             .ok()?;
+            // Moved to another storey: filed under it (Q6491), after every build too.
+            if let Some((from, bottom)) = from {
+                super::relevel::refile_moved(d, h, &from, bottom, dl[2]);
+            }
             touched.push(h);
             Some(h)
         }
@@ -286,11 +291,15 @@ fn unapply(d: &mut Drawing, o: &Override, touched: &mut Vec<Handle>) -> Option<H
         Change::Move { delta } => {
             let h = marked(d, o)?;
             let back = [-delta[0], -delta[1], -delta[2]];
+            let from = d.entity(h).and_then(|e| Some((super::bspec::made_level(e)?, super::relevel::bottom(e)?)));
             d.modify_entity(h, |e| {
                 translated(e, back);
                 e.common.xdata = overrides::unmark(&e.common.xdata, id).into();
             })
             .ok()?;
+            if let Some((from, bottom)) = from {
+                super::relevel::refile_moved(d, h, &from, bottom, back[2]);
+            }
             touched.push(h);
             Some(h)
         }

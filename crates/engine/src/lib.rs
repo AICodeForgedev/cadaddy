@@ -3563,6 +3563,9 @@ impl Session {
         cmd::table::after_command(self, before);
         cmd::annotate::dimbreak_after_command(self, before);
         fields::after_command(self, before);
+        // Built elements moved to another storey are filed under it (before the model's own
+        // record of the command, which takes the drawing as this leaves it).
+        cmd::relevel::after_command(self, before);
         cmd::wallgen::after_command(self, before);
         // After the live rebuild: the model's count index follows every change to its pieces.
         cmd::mepatoms::after_command(self, before, uid);

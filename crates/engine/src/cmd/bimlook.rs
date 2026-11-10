@@ -668,7 +668,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new("bim.element", "Element Properties", run_element)
             .params(
-                "{handle? (default the one selected), open_source?: bool (plan view, zoomed to its source on the sheet, the source selected)} → {handle, trade, group, category, type, size, level, system, circuit, quantity: {count, length_ft?, area_sf?, height_ft?}, source: {handle, kind, layer, at, sheet?, sheet_file?}, attributes, issues: [{kind: bcf|rfi, guid|id, title, status}], at: [x,y] (building feet on its level's plan), bottom_ft, top_ft (above the datum), aff_in, center_aff_in, top_aff_in (above its level's floor), at_ceiling, host: {wall, type, face, off_face_in, off_centreline_in, thickness_in, along_ft, from: stored|nearest} | null (when hosted: its stored host wall's face, else the face of a wall there at its height, within the G-HOST tolerance), in_opening? (on the face line of a wall piece over an opening, below it: that face + wall_from_aff_in, wall_to_aff_in), stored_host? (its stored host wall is not among its level's built walls), nearest_wall (within 10 ft; a wall: itself, measured from its longest piece, `at` that piece's middle), wall_unmeasured? (a wall whose footprint gives no centreline: why), form: {kind, template, trade, project, required, filled, missing: [key], conflicts: [key], fields: [{key, required, status: documented|derived|default|conflict|missing|n/a, value?, unit?, source?, from_key?, reason?, check?}]} (its kind's object form, bim.forms)}",
+                "{handle? (default the one selected), open_source?: bool (plan view, zoomed to its source on the sheet, the source selected)} → {handle, trade, group, category, type, size, level, system, circuit, quantity: {count, length_ft?, area_sf?, height_ft?}, source: {handle, kind, layer, at, sheet?, sheet_file?}, attributes, issues: [{kind: bcf|rfi, guid|id, title, status}], at: [x,y] (building feet on its level's plan), bottom_ft, top_ft (above the datum), aff_in, center_aff_in, top_aff_in (above its level's floor), at_ceiling, host: {wall, type, face, off_face_in, off_centreline_in, thickness_in, along_ft, from: stored|nearest} | null (when hosted: its stored host wall's face, else the face of a wall there at its height, within the G-HOST tolerance), in_opening? (on the face line of a wall piece over an opening, below it: that face + wall_from_aff_in, wall_to_aff_in), stored_host? (its stored host wall is not among its level's built walls), nearest_wall (within 10 ft; a wall: itself, measured from its longest piece, `at` that piece's middle), wall_unmeasured? (a wall whose footprint gives no centreline: why), level_conflict?: {stored, level, why, fix} (a stored level property naming another level than the one it is filed under; its level follows its place: moved or copied to another storey it is filed under that one, bim.level.move moves it to a level), form: {kind, template, trade, project, required, filled, missing: [key], conflicts: [key], fields: [{key, required, status: documented|derived|default|conflict|missing|n/a, value?, unit?, source?, from_key?, reason?, check?}]} (its kind's object form, bim.forms)}",
             )
             .noundo(),
     ]
@@ -1303,6 +1303,10 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
     });
     if let Some(o) = out.as_object_mut() {
         o.extend(place);
+        // A stored level property naming another level (Q6491).
+        if let Some(c) = super::relevel::stored_conflict(&e) {
+            o.insert("level_conflict".into(), c);
+        }
     }
     // A piece of a run: what it is, its run, circuit and neighbours; a device: its box and what
     // feeds it, and how its face stands off its wall's (Q6157).
