@@ -484,3 +484,103 @@ fn hostile_params_never_panic() {
     let r = s.execute("bim.atoms.report", &json!({"level": 5, "trade": null})).unwrap();
     assert!(r["levels"].as_array().unwrap().is_empty());
 }
+
+/// The plan box (min, max; x, y, z, sheet units) of each piece of `kind`.
+fn piece_boxes(s: &Session, kind: &str) -> Vec<([f64; 3], [f64; 3])> {
+    let tag = format!("part:atom:{kind}");
+    s.doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("atom") && e.common.xdata.iter().any(|t| t.value == tag))
+        .filter_map(|e| {
+            let cadaddy_doc::EntityKind::Mesh(m) = &e.kind else { return None };
+            let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for v in &m.vertices {
+                for (i, c) in [v.x, v.y, v.z].into_iter().enumerate() {
+                    lo[i] = lo[i].min(c);
+                    hi[i] = hi[i].max(c);
+                }
+            }
+            Some((lo, hi))
+        })
+        .collect()
+}
+
+/// Q6508: each item of a door's hardware set is its own piece on the door (not one "set"
+/// piece): its kind, item, finish and maker from the schedule, as many as the set lists per
+/// door, where trade practice puts it, sided by the door's drawn swing.
+#[test]
+fn each_hardware_item_of_a_doors_set_is_its_own_piece() {
+    let mut s = building();
+    let dir = std::env::temp_dir().join(format!("cadaddy-hwitems-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let schedule = "--- page 1 of 1 ---\nFinish Hardware Schedule\nHardware Set#: 4\nQty Units   Door#   Door Location   Hand   Label\n\
+1 Single   D1   Office To Unit   RH\n--------------------------\n1 Single   Size: 3-0 X 7-0 X 1 3/4   Wood Door X HM Frame\n\
+Tot Qty Qty   UOM   Manf   Item Type   Item Series/Description   Finish\n\
+3   3   EA   MK1   Hinge - 4-1/2 x 4-1/2   H-100 4.5x4.5   F1\n\
+1   1   EA   MK2   Lever Lockset (office)   L-20   F1\n\
+1   1   EA   MK3   Closer   C-300   ALUM\n\
+1   1   EA   MK4   Wall Stop   S-5   F2\n\
+1   1   EA   MK4   Door Viewer   V-2   F1\n\
+3   3   EA   MK4   Silencer   SL-1   GREY\n\
+___________________________\n";
+    std::fs::write(dir.join("Sample Doors Frames and Hardware.txt"), schedule).unwrap();
+    let r = s.execute("bim.atoms.docs", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let items = r["facts"].as_array().unwrap().iter().filter(|f| f["key"] == json!("openings.hardware_item")).count();
+    assert_eq!(items, 6, "each schedule item read: {r}");
+    s.execute("bim.atoms.build", &json!({"trades": ["openings"]})).unwrap();
+    // One door (level 1): the set's counts per door.
+    assert_eq!(n(&count(&mut s, json!({"trade": "openings", "kind": "door"})), "count"), 1.0);
+    for (kind, want) in [("hinge", 3.0), ("lockset", 1.0), ("closer", 1.0), ("stop", 1.0), ("viewer", 1.0), ("silencer", 3.0)] {
+        let c = count(&mut s, json!({"trade": "openings", "kind": kind}));
+        assert_eq!(n(&c, "count"), want, "{kind}: {c}");
+    }
+    // The set itself stays (what is bought as a set), its items linked to it.
+    assert_eq!(n(&count(&mut s, json!({"trade": "openings", "kind": "hardware_set"})), "count"), 1.0);
+    let hinge = count(&mut s, json!({"trade": "openings", "kind": "hinge", "group_by": "item"}));
+    assert_eq!(hinge["rows"][0]["item"], json!("Hinge - 4-1/2 x 4-1/2 H-100 4.5x4.5"), "{hinge}");
+    // A hinge's properties: finish and maker from the schedule, its set, its door's hand.
+    let ps = {
+        let doc = s.doc().unwrap();
+        let e = doc.model.iter().find(|e| e.common.xdata.iter().any(|t| t.value == "part:atom:hinge")).unwrap();
+        cadaddy_doc::props::read(&e.common.xdata)
+    };
+    let prop = |k: &str| ps.get(k).map(|p| p.text()).unwrap_or_default();
+    assert_eq!((prop("finish"), prop("manufacturer"), prop("model"), prop("set")), ("F1".into(), "MK1".into(), "H-100 4.5x4.5".into(), "4".into()));
+    assert_eq!(prop("hand"), "RH (the door's drawn swing)");
+    assert!(prop("source_rule").contains("Sample Doors Frames and Hardware.txt p.1"), "{}", prop("source_rule"));
+    assert!(prop("position").contains("10\" from the floor"), "{}", prop("position"));
+    // Where trade practice puts them: the door's opening runs along x = 240 from y = 100 (its
+    // hinge, the swing's centre) to y = 136, 84" high. Hinges on the hinge jamb, the top one's
+    // top 5" below the head, the bottom one's bottom 10" above the floor; the lever by the
+    // latch edge with its centre 38" up; the closer at the head; the viewer 58" up.
+    let hinges = piece_boxes(&s, "hinge");
+    assert_eq!(hinges.len(), 3);
+    assert!(hinges.iter().all(|(lo, hi)| (lo[1] + hi[1]) / 2.0 < 106.0), "hinges on the hinge side: {hinges:?}");
+    let top = hinges.iter().map(|(_, hi)| hi[2]).fold(f64::NEG_INFINITY, f64::max);
+    let bottom = hinges.iter().map(|(lo, _)| lo[2]).fold(f64::INFINITY, f64::min);
+    let door = piece_boxes(&s, "frame");
+    let head = door.iter().map(|(_, hi)| hi[2]).fold(f64::NEG_INFINITY, f64::max);
+    assert!((head - top - 5.0).abs() < 0.01, "top hinge 5\" below the head ({head}): {top}");
+    assert!((bottom - 10.0).abs() < 0.01, "bottom hinge 10\" up: {bottom}");
+    let lever = piece_boxes(&s, "lockset");
+    let (lo, hi) = lever[0];
+    assert!((lo[1] + hi[1]) / 2.0 > 125.0, "the lever on the latch side: {lever:?}");
+    assert!(((lo[2] + hi[2]) / 2.0 - 38.0).abs() < 0.01, "lever 38\" up: {lever:?}");
+    let closer = piece_boxes(&s, "closer");
+    assert!(closer[0].1[2] > head - 5.0, "closer at the head: {closer:?}");
+    let viewer = piece_boxes(&s, "viewer");
+    assert!(((viewer[0].0[2] + viewer[0].1[2]) / 2.0 - 58.0).abs() < 0.01, "{viewer:?}");
+    // The stop behind the swing (the leaf opens toward +x), on the floor.
+    let stop = piece_boxes(&s, "stop");
+    assert!(stop[0].0[0] > 250.0 && stop[0].0[2] < 4.0, "{stop:?}");
+    // The door carries its hand; the report sets the schedule's totals beside the model's.
+    let rep = s.execute("bim.atoms.report", &json!({})).unwrap();
+    let cmp = rep["compare"].as_array().unwrap();
+    let row = |what: &str| cmp.iter().find(|c| c["what"] == json!(what)).cloned().unwrap_or(Value::Null);
+    assert_eq!((row("door hardware: hinge")["documents"].clone(), row("door hardware: hinge")["model"].clone()), (json!(3.0), json!(3.0)), "{rep}");
+    assert_eq!(row("door hardware: silencer")["model"], json!(3.0), "{rep}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
