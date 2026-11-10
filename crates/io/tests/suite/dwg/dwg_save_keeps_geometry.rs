@@ -42,7 +42,7 @@ fn extrusions_come_back_as_they_were() {
     let down = ["210", "0", "220", "0", "230", "-1"];
     let ext = |e: &[&str; 6]| format!("{}\n{}\n{}\n{}\n{}\n{}\n", e[0], e[1], e[2], e[3], e[4], e[5]);
     let mut s = String::new();
-    // A circle in a tilted plane, an arc and a trace under a mirrored one, a line that says so (stale).
+    // A circle in a tilted plane, an arc and a trace under a mirrored one, a line under a mirrored one.
     s += &format!("0\nCIRCLE\n5\n100\n8\n0\n10\n1\n20\n2\n30\n3\n40\n2\n{}", ext(&n));
     s += &format!("0\nARC\n5\n101\n8\n0\n10\n5\n20\n5\n30\n0\n40\n2\n50\n10\n51\n80\n{}", ext(&down));
     s += &format!("0\nTRACE\n5\n102\n8\n0\n10\n0\n20\n0\n30\n0\n11\n1\n21\n0\n31\n0\n12\n0\n22\n1\n32\n0\n13\n1\n23\n1\n33\n0\n{}", ext(&down));
@@ -72,9 +72,10 @@ fn extrusions_come_back_as_they_were() {
             }
         }
     }
-    // The tilted circle keeps its plane; the mirrored ones are read into the world system.
+    // The tilted circle keeps its plane; a line keeps its extrusion (its points are world ones and
+    // the writer writes 210, #2241), so the generations above kept (0, 0, -1).
     assert!(before[0].common.extrusion.y > 0.5 && before[0].common.extrusion.z > 0.5);
-    assert!(near(before[3].common.extrusion, Vec3::Z), "{:?}", before[3].common.extrusion);
+    assert!(near(before[3].common.extrusion, Vec3::new(0.0, 0.0, -1.0)), "{:?}", before[3].common.extrusion);
 }
 
 #[test]

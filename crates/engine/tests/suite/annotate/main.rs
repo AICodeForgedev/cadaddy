@@ -7,6 +7,7 @@
 
 #[allow(dead_code)]
 #[path = "../helper.rs"]
+mod attribute_value_baseline;
 mod helper;
 
 mod annomon;
@@ -56,6 +57,7 @@ mod hatch_edit_boundaries;
 mod hatch_numeric_validation;
 mod hatch_options;
 mod hatchnotices;
+mod insert_attribute_prompts;
 mod insert_prompts;
 mod lin_pat_files;
 mod ltype_define;

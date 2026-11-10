@@ -85,6 +85,7 @@ fn sample() -> Drawing {
         &Space::Model,
         c("0"),
         EntityKind::Dimension(Box::new(Dimension {
+            insertion_point: Default::default(),
             kind: DimKind::Linear { rotation: 0.0 },
             defpt: Vec3::new(0.0, -1.0, 0.0),
             text_mid: Vec3::ZERO,
@@ -341,6 +342,64 @@ fn entity_transparency_roundtrips_as_group_440() {
     assert_eq!(d.model.iter().map(|e| e.common.transparency).collect::<Vec<_>>(), [Transparency::ByLayer, Transparency::Percent(90)]);
 }
 
+/// Several SORTENTSTABLEs for one space sort it once, in the last table's order.
+#[test]
+fn repeated_sortents_tables_use_the_last() {
+    let table =
+        |a: u32, b: u32| format!("0\nSORTENTSTABLE\n5\n{:X}\n100\nAcDbSortentsTable\n330\n1F\n331\nA\n5\n{a:X}\n331\nB\n5\n{b:X}\n", 0x100 + a);
+    let mut t = String::from(
+        "0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nBLOCK_RECORD\n0\nBLOCK_RECORD\n5\n1F\n2\n*Model_Space\n0\nENDTAB\n0\nENDSEC\n\
+         0\nSECTION\n2\nENTITIES\n0\nLINE\n5\nA\n330\n1F\n10\n0\n20\n0\n11\n1\n21\n1\n0\nLINE\n5\nB\n330\n1F\n10\n0\n20\n0\n11\n2\n21\n2\n0\nENDSEC\n\
+         0\nSECTION\n2\nOBJECTS\n0\nDICTIONARY\n5\nC\n",
+    );
+    for _ in 0..1000 {
+        t.push_str(&table(2, 1));
+    }
+    t.push_str(&table(1, 2));
+    t.push_str("0\nENDSEC\n0\nEOF\n");
+    let d = read(t.as_bytes(), "s.dxf").unwrap();
+    assert_eq!(d.model.iter().map(|e| e.handle.0).collect::<Vec<_>>(), [0xA, 0xB]);
+    let reversed = t.replacen(&table(1, 2), &table(2, 1), 1);
+    let d = read(reversed.as_bytes(), "s.dxf").unwrap();
+    assert_eq!(d.model.iter().map(|e| e.handle.0).collect::<Vec<_>>(), [0xB, 0xA]);
+}
+
+/// A table declaring 10 000 rows and no columns (or the reverse) is read as an empty table.
+#[test]
+fn table_with_an_empty_dimension_allocates_nothing() {
+    for (rows, cols) in [(10_000, 0), (0, 10_000)] {
+        let t = format!("0\nSECTION\n2\nENTITIES\n0\nACAD_TABLE\n100\nAcDbTable\n91\n{rows}\n92\n{cols}\n0\nENDSEC\n0\nEOF\n");
+        let d = read(t.as_bytes(), "t.dxf").unwrap();
+        let tables: Vec<_> = d.model.iter().filter_map(|e| if let EntityKind::Table(t) = &e.kind { Some(t) } else { None }).collect();
+        assert_eq!(tables.len(), 1, "the table is read");
+        for t in tables {
+            assert!(t.row_heights.is_empty() && t.col_widths.is_empty() && t.cells.is_empty());
+        }
+    }
+}
+
+/// Many distinct layer, linetype and style names (in the tables and on entities) read in linear
+/// time, with the duplicate rules kept: first LTYPE wins, last STYLE wins, layers case-insensitive.
+#[test]
+fn many_distinct_symbol_names_read_quickly() {
+    const N: usize = 40_000;
+    let mut t = String::from("0\nSECTION\n2\nTABLES\n");
+    for i in 0..N {
+        t.push_str(&format!("0\nLTYPE\n2\nLT{i}\n3\nfirst\n0\nSTYLE\n2\nST{i}\n40\n1\n"));
+    }
+    t.push_str("0\nLTYPE\n2\nlt0\n3\nsecond\n0\nSTYLE\n2\nst0\n40\n2\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n");
+    for i in 0..N {
+        t.push_str(&format!("0\nLINE\n8\nL{i}\n10\n0\n20\n0\n11\n1\n21\n1\n"));
+    }
+    t.push_str("0\nLINE\n8\nl0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n");
+    let started = std::time::Instant::now();
+    let d = read(t.as_bytes(), "many.dxf").unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
+    assert!(d.layers.len() > N && d.layers.len() < N + 3, "{}", d.layers.len());
+    assert_eq!(d.linetype("LT0").map(|l| l.description.as_str()), Some("first"));
+    assert_eq!(d.text_style("ST0").map(|s| s.height), Some(2.0));
+}
+
 #[test]
 fn hostile_dxf_does_not_panic() {
     for t in [
@@ -577,6 +636,7 @@ fn dxf_roundtrips_page_setup() {
 
 fn dim(kind: DimKind, p13: Vec3, p14: Vec3) -> Dimension {
     Dimension {
+        insertion_point: Default::default(),
         kind,
         defpt: Vec3::new(p13.x, p13.y - 2.0, 0.0),
         text_mid: Vec3::ZERO,
@@ -684,6 +744,12 @@ fn viewport_layer_linetypes_and_lineweights_roundtrip() {
     assert!(found.contains(&(3, Vec::new(), Vec::new())), "{found:?}");
 }
 
+/// `d` as an R2018 DXF (frozen viewport layers in group 331).
+fn dxf_2018(d: &Drawing) -> String {
+    let opts = SaveOptions { version: Some(Version::R2018), binary: false };
+    String::from_utf8(write_with(d, "t.dxf", &opts).unwrap()).unwrap()
+}
+
 /// A layout with viewport 2 frozen on `Walls` and `A B` (both real layers), and its written DXF as
 /// (code, value) pairs.
 fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {
@@ -708,10 +774,14 @@ fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {
         anno_scale: None,
     }));
     d.add(&paper, Common::default(), vp).unwrap();
-    let text = write_dxf(&d);
+    let text = dxf_2018(&d);
+    (d, pairs(&text))
+}
+
+/// The (code, value) pairs of DXF text.
+fn pairs(text: &str) -> Vec<(String, String)> {
     let lines: Vec<&str> = text.lines().collect();
-    let pairs = lines.chunks(2).map(|c| (c[0].trim().to_string(), c.get(1).copied().unwrap_or("").to_string())).collect();
-    (d, pairs)
+    lines.chunks(2).map(|c| (c[0].trim().to_string(), c.get(1).copied().unwrap_or("").to_string())).collect()
 }
 
 /// The pair range of the VIEWPORT record whose group 69 is `id`.
@@ -760,47 +830,60 @@ fn join(p: &[(String, String)]) -> String {
         .collect()
 }
 
+/// The group 331 values of viewport 2's record.
+fn frozen_331(p: &[(String, String)]) -> Vec<String> {
+    p[vp_record(p, "2")].iter().filter(|(c, _)| c == "331").map(|(_, v)| v.trim().to_string()).collect()
+}
+
 #[test]
 fn viewport_frozen_layers_written_as_331_handles() {
+    // Real layers go out as handles only, before group 90.
     let (_, p) = frozen_vp_dxf();
-    let r = vp_record(&p, "2");
-    let rec = &p[r];
-    let h331: Vec<&str> = rec.iter().filter(|(c, _)| c == "331").map(|(_, v)| v.as_str()).collect();
-    assert_eq!(h331, vec![layer_handle(&p, "Walls").as_str(), layer_handle(&p, "A B").as_str()]);
-    let last331 = rec.iter().rposition(|(c, _)| c == "331").unwrap();
-    let x = rec.iter().position(|(c, _)| c == "1001").expect("xdata");
-    assert!(last331 < x, "331 must precede the xdata");
+    assert_eq!(frozen_331(&p), [layer_handle(&p, "Walls"), layer_handle(&p, "A B")]);
+    let rec = &p[vp_record(&p, "2")];
+    assert!(!rec.iter().any(|(c, v)| c == "1000" && v == "VPFROZEN"), "no xdata for layers with a handle");
+    assert!(rec.iter().position(|(c, _)| c == "331") < rec.iter().position(|(c, _)| c == "90"));
+    // An R2000 DXF holds them in group 341, as the DXF 2000 Reference has them.
+    let (d, _) = frozen_vp_dxf();
+    let p = pairs(&write_dxf(&d));
+    let h341: Vec<String> = p[vp_record(&p, "2")].iter().filter(|(c, _)| c == "341").map(|(_, v)| v.clone()).collect();
+    assert_eq!(h341, [layer_handle(&p, "Walls"), layer_handle(&p, "A B")]);
+    assert!(frozen_331(&p).is_empty());
 }
 
 #[test]
-fn viewport_frozen_layers_read_from_331_without_xdata() {
+fn viewport_frozen_layers_read_from_331_or_341_once_each() {
     let (_, p) = frozen_vp_dxf();
     let r = vp_record(&p, "2");
-    // Strip the CADaddy xdata, and add a 331 to a handle that names no layer.
-    let x = p[r.clone()].iter().position(|(c, _)| c == "1001").unwrap() + r.start;
-    let mut q: Vec<(String, String)> = p[..r.start].to_vec();
-    let mut head = p[r.start..x].to_vec();
-    head.push(("331".into(), "FFFFF".into()));
-    q.extend(head);
-    q.extend(p[r.end..].iter().cloned());
-    let back = read_dxf(join(&q).as_bytes()).unwrap();
-    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
-}
-
-#[test]
-fn viewport_frozen_xdata_wins_over_331() {
-    let (_, p) = frozen_vp_dxf();
-    let r = vp_record(&p, "2");
-    // Point every 331 at layer 0: the xdata list must still be what is read.
-    let zero = layer_handle(&p, "0");
+    // 341 instead of 331, then Walls again in 331 and a handle that names no layer.
     let mut q = p.clone();
-    for t in &mut q[r] {
+    for t in &mut q[r.clone()] {
         if t.0 == "331" {
-            t.1 = zero.clone();
+            t.0 = "341".into();
         }
     }
+    q.splice(r.end..r.end, [("331".into(), "FFFFF".into()), ("331".into(), layer_handle(&p, "Walls"))]);
+    // A 331 inside another application's `102 {…}` group isn't a frozen layer.
+    let app = [("102".into(), "{ACAD_OTHER".into()), ("331".into(), layer_handle(&p, "0")), ("102".into(), "}".into())];
+    q.splice(r.start + 2..r.start + 2, app);
     let back = read_dxf(join(&q).as_bytes()).unwrap();
-    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+    assert_eq!(viewport_frozen(&back, 2), ["Walls", "A B"]);
+}
+
+#[test]
+fn viewport_freeze_edited_in_autocad_is_read_as_edited() {
+    // Every layer thawed in AutoCAD (no 331 left) stays thawed; a layer it froze instead is read.
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    let thawed: Vec<(String, String)> = p.iter().enumerate().filter(|(i, (c, _))| !(r.contains(i) && c == "331")).map(|(_, t)| t.clone()).collect();
+    assert!(viewport_frozen(&read_dxf(join(&thawed).as_bytes()).unwrap(), 2).is_empty());
+    let mut zero = p.clone();
+    for t in &mut zero[r] {
+        if t.0 == "331" {
+            t.1 = layer_handle(&p, "0");
+        }
+    }
+    assert_eq!(viewport_frozen(&read_dxf(join(&zero).as_bytes()).unwrap(), 2), ["0"]);
 }
 
 #[test]
@@ -809,7 +892,9 @@ fn viewport_frozen_layers_survive_dwg() {
     let dwg = write(&d, "t.dwg").unwrap();
     let back = read(&dwg, "t.dwg").unwrap();
     assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
-    // Survives via the CADaddy xdata: the DWG converter does not yet carry group 331 itself.
+    // The DWG holds them in group 331, what AutoCAD reads.
+    let p = pairs(&String::from_utf8(cadaddy_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap());
+    assert_eq!(frozen_331(&p), [layer_handle(&p, "Walls"), layer_handle(&p, "A B")]);
 }
 
 #[test]
@@ -3365,7 +3450,6 @@ fn dxf_objects_whose_size_is_beyond_the_limit_are_dropped_with_the_same_note() {
         "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n1e13\n",
         "0\nARC\n8\n0\n10\n0\n20\n0\n40\n1e300\n50\n0\n51\n90\n",
         "0\nTEXT\n8\n0\n10\n0\n20\n0\n40\n1e300\n1\nbig\n",
-        "0\nMTEXT\n8\n0\n10\n0\n20\n0\n40\n1\n41\n1e300\n1\nwide text\n",
         "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e13\n",
         "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e300\n42\n1e300\n",
         "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1e300\n10\n10\n20\n0\n",
@@ -3378,6 +3462,8 @@ fn dxf_objects_whose_size_is_beyond_the_limit_are_dropped_with_the_same_note() {
         "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n0.5\n10\n10\n20\n0\n",
         // A segment barely bent: a huge radius, but it stays by its chord.
         "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1e-9\n10\n10000\n20\n0\n",
+        // A garbage wrap width only narrows an MTEXT's box (#2465): its box is its text.
+        "0\nMTEXT\n8\n0\n10\n0\n20\n0\n40\n1\n41\n1e300\n1\nwide text\n",
     ];
     let dxf = format!("{block}0\nSECTION\n2\nENTITIES\n{}{}0\nENDSEC\n0\nEOF\n", far.concat(), kept.concat());
     let d = read(dxf.as_bytes(), "sizes.dxf").unwrap();
@@ -3605,4 +3691,20 @@ fn a_drawing_whose_bridge_dxf_is_over_1_gb_saves_as_dwg_and_reopens() {
     let back = read(&dwg, "big.dwg").unwrap();
     eprintln!("reopened in {:.1} s", t.elapsed().as_secs_f64());
     assert_eq!(back.entity_count(), n);
+}
+
+/// A SOLID hatch keeps its angle (52), scale (41) and double flag (77) through a save: the writer
+/// wrote them for pattern fills only.
+#[test]
+fn solid_hatch_keeps_angle_scale_and_double_flag() {
+    let src = "0\nSECTION\n2\nENTITIES\n0\nHATCH\n5\n40\n8\n0\n100\nAcDbHatch\n10\n0\n20\n0\n30\n0\n2\nSOLID\n70\n1\n71\n0\n\
+91\n1\n92\n2\n72\n0\n73\n1\n93\n4\n10\n0\n20\n0\n10\n40\n20\n0\n10\n40\n20\n40\n10\n0\n20\n40\n97\n0\n\
+75\n0\n76\n1\n52\n30\n41\n2\n77\n0\n98\n0\n0\nENDSEC\n0\nEOF\n";
+    let out = write_dxf(&read_dxf(src.as_bytes()).unwrap());
+    let pairs = dxf_pairs(&out);
+    let h = dxf_records(&pairs, "HATCH")[0];
+    let f = |code: &str| group(h, code).and_then(|v| v.parse::<f64>().ok());
+    assert!(f("52").is_some_and(|a| (a - 30.0).abs() < 1e-9), "{h:?}");
+    assert!(f("41").is_some_and(|s| (s - 2.0).abs() < 1e-12), "{h:?}");
+    assert_eq!(group(h, "77"), Some("0"), "{h:?}");
 }

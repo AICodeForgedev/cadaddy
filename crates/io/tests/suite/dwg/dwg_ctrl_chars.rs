@@ -39,6 +39,7 @@ fn attrib(tag: &str, value: &str) -> cadaddy_doc::Attrib {
 
 fn dimension(t: &str) -> Dimension {
     Dimension {
+        insertion_point: Default::default(),
         kind: DimKind::Linear { rotation: 0.0 },
         defpt: v(5.0, 3.0),
         text_mid: v(5.0, 6.0),

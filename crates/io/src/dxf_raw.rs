@@ -585,7 +585,7 @@ impl<'d> DataStore<'d> {
         if !modern || ds.is_empty() {
             return None;
         }
-        let owners = ds.iter().filter(|t| t.code == 320).map(|t| norm(&t.value)).collect();
+        let owners = cadaddy_doc::foreign::data_store_records(ds).into_iter().filter_map(cadaddy_doc::foreign::data_store_owner).map(|t| norm(&t.value)).collect();
         Some(DataStore { ds, owners, written: HashSet::new() })
     }
 
@@ -608,17 +608,13 @@ impl<'d> DataStore<'d> {
         let first = ds.iter().position(|t| t.code == 0).unwrap_or(ds.len());
         out.extend(ds.iter().take(first).map(tag));
         let mut records = 0usize;
-        let mut i = first;
-        while i < ds.len() {
-            let end = ds.iter().skip(i + 1).position(|t| t.code == 0).map_or(ds.len(), |k| i + 1 + k);
-            let rec = ds.get(i..end).unwrap_or(&[]);
+        for rec in cadaddy_doc::foreign::data_store_records(ds) {
             let is_record = rec.first().is_some_and(|t| t.value.trim().eq_ignore_ascii_case("ACDSRECORD"));
-            let owner = rec.iter().find(|t| t.code == 320).map(|t| norm(&t.value));
+            let owner = cadaddy_doc::foreign::data_store_owner(rec).map(|t| norm(&t.value));
             if !is_record || owner.as_ref().is_some_and(|h| self.written.contains(h)) {
                 records += usize::from(is_record);
                 out.extend(rec.iter().map(tag));
             }
-            i = end;
         }
         if records == 0 {
             return Vec::new();
@@ -991,12 +987,16 @@ pub(crate) struct Finisher<'d> {
     planned: HashMap<Before, Vec<(String, Vec<Tag>)>>,
     left: HashMap<Before, Vec<(String, Vec<Tag>)>>,
     place: Place,
+    /// Reactors the writer planned for sources it doesn't write (a DIMASSOC on an entity of a
+    /// type CADaddy doesn't model): written handles, by the source.
+    reactors: HashMap<Handle, Vec<String>>,
 }
 
 impl<'d> Finisher<'d> {
     /// The plan for `d` from the scan of its written records; `seed` is the next free handle the
-    /// writer left (the header's `$HANDSEED`).
-    pub(crate) fn new(scan: Scan<'d>, seed: u64) -> Self {
+    /// writer left (the header's `$HANDSEED`), `reactors` the reactors it planned by source. A
+    /// `modern` file (a DXF of 2013 or later) leaves out solids with SAT text (#2334).
+    pub(crate) fn new(scan: Scan<'d>, seed: u64, modern: bool, reactors: HashMap<Handle, Vec<String>>) -> Self {
         let d = scan.d;
         let f = d.foreign.as_ref();
         let xd: XdataOf = all_entities(d).filter(|e| !e.common.xdata.is_empty()).map(|e| (e.handle, e.common.xdata.as_slice())).collect();
@@ -1019,7 +1019,7 @@ impl<'d> Finisher<'d> {
         }
         let renumber = |old: Option<i64>| class_index(old).and_then(|i| f.class_order.get(i)).and_then(|n| numbers.get(n).copied());
         // Entities of types CADaddy doesn't model, placed among the written ones.
-        let mut planned = plan_unknown(d, &scan, &roles);
+        let mut planned = plan_unknown(d, &scan, &roles, modern);
         for list in planned.values_mut() {
             list.retain_mut(|(_, t)| {
                 if !t.first().is_some_and(|z| dxf_proxy(&z.str(), t.iter().map(|x| (x.code, x.str())))) {
@@ -1111,7 +1111,7 @@ impl<'d> Finisher<'d> {
         let entities: HashSet<u64> = all_entities(d).map(|e| e.handle.0).filter(|h| written.contains(h)).collect();
         let map = Map { f, alive, raw: objs.keys().cloned().collect(), roles, entities };
         let left = planned.clone();
-        Finisher { f, xd, map, numbers, class_names, planned, left, place: Place::default() }
+        Finisher { f, xd, map, numbers, class_names, planned, left, place: Place::default(), reactors }
     }
 
     /// Start another pass over the records.
@@ -1166,8 +1166,10 @@ impl<'d> Finisher<'d> {
                 let (Some(zero), Some(ub)) = (t.first(), t.get(1..)) else { continue };
                 let ur = Rec { sec, kind: zero.str() };
                 let x = head(ub).handle.and_then(|h| handle(&h)).and_then(|h| entity_extra(f, &self.xd, h));
+                // Reactors the writer planned for this source (a DIMASSOC, an associative hatch).
+                let extra = head(ub).handle.and_then(|h| handle(&h)).and_then(|h| self.reactors.get(&h)).map_or(&[][..], Vec::as_slice);
                 out.push(zero.clone());
-                record(map, &ur, ub, x.as_deref(), true, false, out);
+                record(map, &ur, ub, x.as_deref(), Some(extra), false, out);
             }
         }
         out.push(zero.clone());
@@ -1178,13 +1180,15 @@ impl<'d> Finisher<'d> {
             out.extend(b.iter().cloned());
             return;
         }
-        record(map, &r, b, x.as_deref(), false, root, out);
+        record(map, &r, b, x.as_deref(), None, root, out);
     }
 }
 
 /// Where the entities of types CADaddy doesn't model go: each before the next written entity of
-/// its space or block (the drawing's order), else at the end of its space or block.
-fn plan_unknown(d: &Drawing, scan: &Scan, roles: &HashMap<ForeignKey, String>) -> HashMap<Before, Vec<(String, Vec<Tag>)>> {
+/// its space or block (the drawing's order), else at the end of its space or block. A `modern`
+/// file leaves out solids with SAT text ([`cadaddy_doc::foreign::sat_text_acis`]).
+fn plan_unknown(d: &Drawing, scan: &Scan, roles: &HashMap<ForeignKey, String>, modern: bool) -> HashMap<Before, Vec<(String, Vec<Tag>)>> {
+    let stored = d.foreign.data_store_entities();
     let mut out: HashMap<Before, Vec<(String, Vec<Tag>)>> = HashMap::new();
     let written = |e: &Entity| scan.at.contains(&e.handle.0);
     let endblk = |name: &str| {
@@ -1215,6 +1219,9 @@ fn plan_unknown(d: &Drawing, scan: &Scan, roles: &HashMap<ForeignKey, String>) -
         for e in store.iter() {
             match &e.kind {
                 EntityKind::Unknown(u) => {
+                    if modern && cadaddy_doc::foreign::sat_text_acis(u, e.handle, &stored) {
+                        continue;
+                    }
                     let t = unknown_entity(u, e, &owner, paper);
                     if !t.is_empty() {
                         pending.push((sec.to_string(), t));
@@ -1234,10 +1241,23 @@ fn plan_unknown(d: &Drawing, scan: &Scan, roles: &HashMap<ForeignKey, String>) -
     out
 }
 
+/// The reactor handles a written record gains: the kept foreign ones (remapped) unless the record
+/// is an unknown entity that already carries its own, then `extra` (handles of the written file,
+/// such as a DIMASSOC), without repeating any the record already names. They go into the one
+/// `{ACAD_REACTORS` group the record has, or a new one, so no reactor is lost to a second group.
+fn reactors_to_add(map: &Map, h: &Head, x: Option<&ForeignExtra>, unknown: Option<&[String]>) -> Vec<String> {
+    let extra = unknown.unwrap_or_default();
+    let mut have: HashSet<String> = h.reactors.iter().cloned().collect();
+    let kept = x.filter(|_| !(unknown.is_some() && h.has_reactors)).into_iter().flat_map(|x| x.reactors.iter()).filter_map(|r| map.get(&r.hex()));
+    kept.chain(extra.iter().cloned()).filter(|r| r != "0" && have.insert(norm(r))).collect()
+}
+
 /// A written record with its kept extras, remapped references (unknown entities) and kept
 /// dictionary entries (the named object dictionary).
-fn record(map: &Map, r: &Rec, b: &[Tag], x: Option<&ForeignExtra>, unknown: bool, root: bool, out: &mut Vec<Tag>) {
+fn record(map: &Map, r: &Rec, b: &[Tag], x: Option<&ForeignExtra>, unknown: Option<&[String]>, root: bool, out: &mut Vec<Tag>) {
     let h = head(b);
+    let adds = reactors_to_add(map, &h, x, unknown);
+    let mut in_reactors = false;
     let entity = matches!(r.sec.as_str(), "ENTITIES" | "BLOCKS") && r.kind != "BLOCK";
     let xdata_at = b.iter().position(|t| t.code == 1001).unwrap_or(b.len());
     let own_apps: HashSet<String> = b.iter().filter(|t| t.code == 1001).map(|t| up(&t.str())).collect();
@@ -1254,6 +1274,12 @@ fn record(map: &Map, r: &Rec, b: &[Tag], x: Option<&ForeignExtra>, unknown: bool
     let rgb = b.iter().take(xdata_at).find(|t| t.code == 420).map(Tag::str);
     let has_book = b.iter().take(xdata_at).any(|t| t.code == 430);
     let handle_at = b.iter().position(|t| matches!(t.code, 5 | 105));
+    // A kept extension dictionary follows the reactors group, as the DXF reference orders them.
+    let reactors_end = b.iter().position(|t| t.code == 102 && t.str().trim() == "{ACAD_REACTORS").and_then(|s| {
+        let rest = b.get(s + 1..)?;
+        rest.iter().position(|t| t.code == 102 && t.str().trim() == "}").map(|e| s + 1 + e)
+    });
+    let xdict_at = if h.has_reactors { reactors_end.or(handle_at) } else { handle_at };
     let mut seen_owner = false;
     for (i, t) in b.iter().enumerate() {
         if i == props_at
@@ -1272,8 +1298,18 @@ fn record(map: &Map, r: &Rec, b: &[Tag], x: Option<&ForeignExtra>, unknown: bool
         {
             xdata(map, x, &own_apps, out);
         }
+        if t.code == 102 {
+            match t.str().trim() {
+                "{ACAD_REACTORS" => in_reactors = true,
+                "}" if in_reactors => {
+                    in_reactors = false;
+                    out.extend(adds.iter().map(|a| Tag::s(330, a.clone())));
+                }
+                _ => {}
+            }
+        }
         let mut t = t.clone();
-        if unknown && i < xdata_at && is_pointer(t.code) && t.code != 102 {
+        if unknown.is_some() && i < xdata_at && is_pointer(t.code) && t.code != 102 {
             if t.code == 330 && !seen_owner {
                 seen_owner = true;
             } else {
@@ -1281,18 +1317,17 @@ fn record(map: &Map, r: &Rec, b: &[Tag], x: Option<&ForeignExtra>, unknown: bool
             }
         }
         out.push(t);
-        if Some(i) == handle_at
+        if Some(i) == handle_at && !h.has_reactors && !adds.is_empty() {
+            out.push(Tag::s(102, "{ACAD_REACTORS"));
+            out.extend(adds.iter().map(|a| Tag::s(330, a.clone())));
+            out.push(Tag::s(102, "}"));
+        }
+        if Some(i) == xdict_at
             && let Some(x) = x
+            && h.xdict.is_none()
+            && let Some(xd) = x.xdict
         {
-            if !h.has_reactors {
-                let rs: Vec<String> = x.reactors.iter().map(|r| r.hex()).collect();
-                map.handle_group(out, "ACAD_REACTORS", 330, &rs);
-            }
-            if h.xdict.is_none()
-                && let Some(xd) = x.xdict
-            {
-                map.handle_group(out, "ACAD_XDICTIONARY", 360, &[xd.hex()]);
-            }
+            map.handle_group(out, "ACAD_XDICTIONARY", 360, &[xd.hex()]);
         }
     }
     if let Some(x) = x {
