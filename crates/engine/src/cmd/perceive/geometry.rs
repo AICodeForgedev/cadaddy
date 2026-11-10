@@ -1727,6 +1727,26 @@ pub(crate) fn note_like(t: &str) -> bool {
     !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref || load || area || storey
 }
 
+/// How near a side of the area it is traced in an outline's side may stop and still be the
+/// area's border, as a share of the area's width or height.
+const FRAME_SHARE: f64 = 0.01;
+
+/// Whether a traced outline (its bounds `b`) is the border of the area `r` (`[x0, y0, x1, y1]`)
+/// it is traced in, or a frame round it: it reaches every side of the area, within
+/// [`FRAME_SHARE`]. A sheet's border, the box round its drawing area or a view's frame, never a
+/// room: a building's rooms stand inside the view that draws them, with the view's title, notes
+/// and schedules round them.
+fn frames_area(b: &cadaddy_geom::Bounds2, r: &[f64; 4]) -> bool {
+    let (x0, x1) = minmax(r[0], r[2]);
+    let (y0, y1) = minmax(r[1], r[3]);
+    let (w, h) = (x1 - x0, y1 - y0);
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && b.min.x.is_finite() && b.max.y.is_finite()) {
+        return false;
+    }
+    let (tx, ty) = (FRAME_SHARE * w, FRAME_SHARE * h);
+    b.min.x <= x0 + tx && b.min.y <= y0 + ty && b.max.x >= x1 - tx && b.max.y >= y1 - ty
+}
+
 /// Whether a traced outline holds its label: the label's point or a corner of its box inside it,
 /// or its point within half the text height `th` of the outline (a tag's point on a storefront's
 /// line).
@@ -2344,6 +2364,8 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     let mut any_size: Vec<(usize, String)> = Vec::new();
     // Whether each room in `out` was traced from round what its name is printed on.
     let mut out_probed: Vec<bool> = Vec::new();
+    // Outlines that were a sheet's border or a view's frame ([`frames_area`]).
+    let mut frames = 0usize;
     let mut outline_cache = None;
     let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
     // A storey of a full set has thousands of names: say how far the trace is.
@@ -2462,6 +2484,12 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         // (The same loop traced from another seed, or again from round the furniture its name is
         // on, may start at another corner.)
         let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
+        // A sheet's border or a view's frame is no room, whichever label sits in it (a
+        // schedule's header, a note's line): every room is drawn inside the area it is read in.
+        if regions.into_iter().flatten().any(|r| frames_area(&b, r)) {
+            frames += 1;
+            continue;
+        }
         let tol = SAME_OUTLINE_SHARE * (b.width() + b.height());
         if out.iter().zip(&out_probed).any(|(q, q_probed)| {
             let qb = cadaddy_geom::Bounds2::from_points(q.outline.iter().copied());
@@ -2519,7 +2547,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
             r.number = Some(t);
         }
     }
-    phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name)", out.len()));
+    phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name, {frames} sheet borders or view frames left out)", out.len()));
     let space = s.space();
     if let Ok(st) = s.state_mut() {
         st.room_trace.put_inputs(space, regions, inputs, std::sync::Arc::new(out.clone()));
@@ -3106,6 +3134,45 @@ mod tests {
         assert!(holds_label(&sq, Vec2::new(-10.0, 50.0), &corners(Vec2::new(-10.0, 50.0)), 6.0));
         // A loop under the tag's box: another space's.
         assert!(!holds_label(&sq, Vec2::new(40.0, 120.0), &corners(Vec2::new(40.0, 120.0)), 6.0));
+    }
+
+    #[test]
+    fn a_sheet_border_is_no_room_whatever_label_sits_in_it() {
+        // Q6432: once a note line no longer claimed the sheet's border, the next label inside it
+        // (a schedule's header, its cell's number beside it) took the whole border for its room.
+        // A 36" x 24" sheet's border at 1/2" = 1'-0" (inches: 72 x 48 ft, inside a room trace's
+        // reach): a room drawn inside it, a schedule's header and a cell's number in the
+        // border's corner, the schedule's rows ruled across with no cell closed.
+        let mut s = plan_of(&[
+            ([0.0, 0.0, 864.0, 576.0], &[("DESCRIPTION", 40.0, 530.0), ("204", 40.0, 512.0)]),
+            ([400.0, 150.0, 700.0, 450.0], &[("OFFICE", 500.0, 300.0), ("101", 510.0, 282.0)]),
+        ]);
+        for y in [525.0, 507.0, 489.0] {
+            s.execute("line", &json!({"points": [[20.0, y], [300.0, y]]})).unwrap();
+        }
+        // Traced in the sheet's drawing area (inside its border), in its whole rect, and in one
+        // view of it: the border is never a room, the room in it is.
+        for region in [[10.0, 10.0, 854.0, 566.0], [0.0, 0.0, 864.0, 576.0], [0.0, 0.0, 720.0, 576.0]] {
+            let rooms = rooms_found_in(&mut s, Some(&[region])).unwrap();
+            let names: Vec<(String, Option<String>)> = rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+            assert_eq!(names, vec![("OFFICE".to_string(), Some("101".to_string()))], "{region:?}");
+        }
+    }
+
+    #[test]
+    fn an_outline_reaching_every_side_of_its_area_is_its_frame() {
+        let b = |x0: f64, y0: f64, x1: f64, y1: f64| cadaddy_geom::Bounds2::new(Vec2::new(x0, y0), Vec2::new(x1, y1));
+        let area = [10.0, 10.0, 1010.0, 710.0];
+        // The border outside the area, the area's own box, a frame stopping just short of it.
+        assert!(frames_area(&b(0.0, 0.0, 1020.0, 720.0), &area));
+        assert!(frames_area(&b(10.0, 10.0, 1010.0, 710.0), &area));
+        assert!(frames_area(&b(15.0, 14.0, 1005.0, 706.0), &[1010.0, 710.0, 10.0, 10.0]));
+        // A building or a room: short of a side, however big.
+        assert!(!frames_area(&b(10.0, 10.0, 1010.0, 600.0), &area));
+        assert!(!frames_area(&b(100.0, 100.0, 900.0, 600.0), &area));
+        // No area to frame.
+        assert!(!frames_area(&b(0.0, 0.0, 1.0, 1.0), &[0.0, 0.0, 0.0, 0.0]));
+        assert!(!frames_area(&b(0.0, 0.0, 1.0, 1.0), &[0.0, 0.0, f64::NAN, 1.0]));
     }
 
     #[test]
