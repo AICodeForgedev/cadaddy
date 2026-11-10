@@ -126,6 +126,23 @@ pub struct Common {
     pub material: Rare<Option<String>>,
 }
 
+impl Common {
+    /// Whether "Match orientation to layout" is on for this annotative object (AutoCAD's
+    /// `AcadAnnoPO` xdata = 1). AutoCAD draws such text upright and ignores its stored rotation.
+    /// The object's own `AcadAnnotative` xdata never reaches [`Common::xdata`] (the reader drops
+    /// it), so the `AcadAnnoPO` flag alone decides.
+    pub fn matches_layout_orientation(&self) -> bool {
+        let app = self.xdata.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case("AcadAnnoPO"));
+        let Some(at) = app else { return false };
+        self.xdata
+            .iter()
+            .skip(at + 1)
+            .take_while(|t| t.code != 1001)
+            .find(|t| t.code == 1070)
+            .is_some_and(|t| t.value.trim().parse::<i64>().is_ok_and(|v| v != 0))
+    }
+}
+
 impl Default for Common {
     fn default() -> Self {
         Common {
@@ -666,6 +683,11 @@ pub struct Dimension {
     /// User moved the text (text_mid is authoritative).
     #[serde(default)]
     pub user_text_pos: bool,
+    /// Insertion point (DXF group 12): a dimension moved by an older AutoCAD keeps its offset
+    /// here with the `*D` block's contents left where they were, and is drawn translated by it.
+    /// Zero once the geometry is regenerated from the definition points.
+    #[serde(default)]
+    pub insertion_point: Vec3,
     /// Anonymous block with the rendered geometry (from files); regenerated when edited.
     #[serde(default)]
     pub block: Option<String>,

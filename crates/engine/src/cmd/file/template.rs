@@ -60,8 +60,10 @@ pub(super) fn run_new(s: &mut Session, p: &Value) -> Result<Option<Value>> {
         && hi.x > lo.x
         && hi.y > lo.y
     {
-        let center = cadaddy_geom::Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
-        st.set_view_quiet(crate::View { center, height: (hi.y - lo.y).max(1e-6) });
+        // The limits as the template's saved view twist (if any) sees them.
+        let lim = cadaddy_geom::Bounds2::new(lo.xy(), hi.xy());
+        let (center, _, h) = st.seen_box(lim);
+        st.set_view_quiet(crate::View { center, height: h.max(1e-6) });
     }
     Ok(Some(json!({ "index": i, "title": title, "template": path })))
 }

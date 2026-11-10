@@ -168,11 +168,15 @@ fn in_text(d: &Drawing, e: &Entity, p: Vec2) -> bool {
         // A dimension with a block (as AutoCAD saves them) is drawn from that block: its text is
         // the text there, not the text the dimension's own geometry would place.
         EntityKind::Dimension(dm) => match dm.block.as_ref().and_then(|n| d.block(n)) {
-            Some(blk) => blk.entities.iter().any(|be| match &be.kind {
-                EntityKind::MText(t) => in_box(cadaddy_render::layout_mtext_entity(d, t).strokes.into_iter().flatten(), t.rotation, p),
-                EntityKind::Text(_) => entity_bounds(d, be, 0).contains(p),
-                _ => false,
-            }),
+            // The block draws translated by the insertion point (group 12): test there.
+            Some(blk) => {
+                let p = p - if dm.insertion_point.is_finite() { dm.insertion_point.xy() } else { Vec2::ZERO };
+                blk.entities.iter().any(|be| match &be.kind {
+                    EntityKind::MText(t) => in_box(cadaddy_render::layout_mtext_entity(d, t).strokes.into_iter().flatten(), t.rotation, p),
+                    EntityKind::Text(_) => entity_bounds(d, be, 0).contains(p),
+                    _ => false,
+                })
+            }
             None => {
                 let g = cadaddy_render::dimension_in(d, dm);
                 in_box(g.text.iter().flatten().chain(g.text_glyphs.iter().flatten().flatten()).copied(), g.text_angle, p)
