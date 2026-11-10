@@ -13,9 +13,11 @@
 //! - [`submittal_gear`]: per panel tag the schedules name, the gear submittal's box size
 //!   (`50 X 20 X 5.75`: the smallest the depth, the largest the height), feed (top or bottom),
 //!   main lug range (`(2)3/0-500KCMIL`) and branch lug range.
-//! - [`place_along_walls`]: gear the plans don't locate is laid out in the room its schedule
-//!   names, along the room's walls with its working space in front (NEC 110.26, the rule as data
-//!   in `coderules.json`), each marked proposed.
+//! - [`plan`]: gear the plans don't draw is laid out in the room the prints call it in (its
+//!   schedule's location, a riser or one-line label, a plan note: [`called_in_texts`]), along the
+//!   room's walls with its working space in front (NEC 110.26, the rule as data in
+//!   `coderules.json`), clear of door swings and nearest the gear feeding it, marked located with
+//!   that basis; only gear no print locates is proposed (unsure), along the building's walls.
 //!
 //! Every value records where it came from; nothing is known about one job.
 
@@ -547,6 +549,20 @@ pub(crate) fn place_clear_of(
     space_d: f64,
     gap: f64,
 ) -> Vec<Option<Placed>> {
+    place_toward(outline, keep_clear, sizes, &[], space_w, space_d, gap)
+}
+
+/// [`place_clear_of`], each piece with a point its feed comes from (`toward`, by index; none: the
+/// longest walls first): the free spot along the walls nearest that point.
+pub(crate) fn place_toward(
+    outline: &[Vec2],
+    keep_clear: &[([f64; 2], [f64; 2])],
+    sizes: &[(f64, f64)],
+    toward: &[Option<Vec2>],
+    space_w: f64,
+    space_d: f64,
+    gap: f64,
+) -> Vec<Option<Placed>> {
     let n = outline.len();
     let mut edges: Vec<(Vec2, Vec2)> = (0..n).map(|i| (outline[i], outline[(i + 1) % n])).filter(|(a, b)| a.dist(*b) > 1e-9).collect();
     edges.sort_by(|a, b| b.0.dist(b.1).total_cmp(&a.0.dist(a.1)));
@@ -555,8 +571,10 @@ pub(crate) fn place_clear_of(
         taken.iter().all(|(a, b)| hi[0] <= a[0] + 1e-9 || lo[0] >= b[0] - 1e-9 || hi[1] <= a[1] + 1e-9 || lo[1] >= b[1] - 1e-9)
     };
     let mut out = Vec::new();
-    for &(w, d) in sizes {
-        let mut got = None;
+    for (i, &(w, d)) in sizes.iter().enumerate() {
+        let to = toward.get(i).copied().flatten().filter(|p| p.x.is_finite() && p.y.is_finite());
+        // The spot taken and how far its middle is from where its feed comes from.
+        let mut got: Option<(Placed, f64)> = None;
         'edges: for (a, b) in &edges {
             let len = a.dist(*b);
             let dir = Vec2::new((b.x - a.x) / len, (b.y - a.y) / len);
@@ -588,15 +606,24 @@ pub(crate) fn place_clear_of(
                 .iter()
                 .all(|c| inside(outline, *c));
                 if ok && clear(gmin, gmax, &taken) && clear(smin, smax, &taken) {
-                    taken.push((gmin, gmax));
-                    taken.push((smin, smax));
-                    got = Some(Placed { min: gmin, max: gmax, space_min: smin, space_max: smax });
-                    break 'edges;
+                    let spot = Placed { min: gmin, max: gmax, space_min: smin, space_max: smax };
+                    let Some(to) = to else {
+                        got = Some((spot, 0.0));
+                        break 'edges;
+                    };
+                    let far = Vec2::new((gmin[0] + gmax[0]) / 2.0, (gmin[1] + gmax[1]) / 2.0).dist(to);
+                    if got.as_ref().is_none_or(|(_, f)| far < *f - 1e-9) {
+                        got = Some((spot, far));
+                    }
                 }
                 s += gap.max(1e-3);
             }
         }
-        out.push(got);
+        if let Some((p, _)) = &got {
+            taken.push((p.min, p.max));
+            taken.push((p.space_min, p.space_max));
+        }
+        out.push(got.map(|(p, _)| p));
     }
     out
 }
@@ -741,7 +768,7 @@ pub(crate) fn clear_of_crossing_walls(
     true
 }
 
-/// A panel placed by lettering or a proposal, whose place leaves it no working space (or stands
+/// A panel placed by lettering or laid out by the build (located or proposed), whose place leaves it no working space (or stands
 /// it on no wall, or under a duct): on the wall
 /// face near it that has it, in its own room, the place it was read kept beside it. What it moved
 /// from and to go on the object. Whether it moved.
@@ -751,9 +778,13 @@ pub(crate) fn onto_clear_face(e: &mut cadaddy_walk3d::MepEquipment, f: &super::v
     }
     // Where it was read, as it was got: CADaddy's own proposal says so, not lettering.
     let was = e.properties.get("DESIGN_VALUE").cloned().unwrap_or_else(|| {
-        match (e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed")), e.sources.get("position")) {
-            (true, Some(p)) if !p.trim().is_empty() => format!("where CADaddy proposed it ({})", p.trim()),
-            (true, _) => "where CADaddy proposed it".to_string(),
+        let status = e.sources.get("status").map(|s| s.trim().to_ascii_lowercase()).unwrap_or_default();
+        let position = e.sources.get("position").map(|p| p.trim()).filter(|p| !p.is_empty());
+        match (status.as_str(), position) {
+            (PROPOSED, Some(p)) => format!("where CADaddy proposed it ({p})"),
+            (PROPOSED, None) => "where CADaddy proposed it".to_string(),
+            (LOCATED, Some(p)) => format!("where CADaddy set it in the room the prints call ({p})"),
+            (LOCATED, None) => "where CADaddy set it in the room the prints call".to_string(),
             _ => "at its lettering on the plan".to_string(),
         }
     });
@@ -772,7 +803,7 @@ pub(crate) fn onto_clear_face(e: &mut cadaddy_walk3d::MepEquipment, f: &super::v
         "CORRECTED_VALUE".into(),
         format!("{:.0} in from there on wall {}: {:.0} in clear in front", f.moved_in, f.wall.hex(), f.now_clear_in),
     );
-    e.properties.insert("CORRECTION_REASON".into(), format!("{reason}; that place is lettering or a proposal, not a located symbol"));
+    e.properties.insert("CORRECTION_REASON".into(), format!("{reason}; that place is lettering or the build's own layout, not a drawn symbol"));
     e.sources.insert("footprint".into(), "rule: the nearest wall face in its room with its working space".into());
     true
 }
@@ -925,6 +956,145 @@ fn room_named<'a>(rooms: &'a [RoomBox], location: &str) -> Option<&'a RoomBox> {
     number
         .and_then(|n| rooms().find(|r| r.number.eq_ignore_ascii_case(n)))
         .or_else(|| rooms().find(|r| !r.name.is_empty() && u.contains(&r.name.to_ascii_uppercase())))
+}
+
+/// The status of gear this build laid out in the room the prints call it in (its schedule's
+/// location, a riser or one-line label, a plan note): the room is the documents', its wall the
+/// rule's (Q6513). Not a proposal.
+pub(crate) const LOCATED: &str = "located";
+/// The status of gear no print locates, laid out where the build supposes it: unsure.
+pub(crate) const PROPOSED: &str = "proposed";
+/// What the basis of gear in the room the prints call it in begins with.
+pub(crate) const LOCATION_CALLED: &str = "location called in prints";
+/// Longest place read after a location phrase (characters).
+const MAX_PLACE: usize = 60;
+
+/// Whether this build laid the gear out itself, in the room the prints call it in or proposed:
+/// its spot on the wall is the build's, so a drawn symbol replaces it and a face with its working
+/// space may take it.
+pub(crate) fn laid_out(e: &cadaddy_walk3d::MepEquipment) -> bool {
+    e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case(PROPOSED) || s.eq_ignore_ascii_case(LOCATED))
+}
+
+/// Where a print calls a piece of gear: the place as printed and what printed it
+/// (`EX-4 panel schedule LOCATION`, `EX-6 riser label`).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CalledAt {
+    pub place: String,
+    pub source: String,
+}
+
+/// The place a panel's schedule names in its header (`LOCATION:`, `MOUNTED IN:`; the labels as
+/// data, in the order they are trusted).
+pub(crate) fn schedule_location(p: &cadaddy_walk3d::PanelSchedule) -> Option<CalledAt> {
+    cadaddy_mepfix::wordrules::words("schedules.panel_location_labels").iter().find_map(|label| {
+        let (k, v) = p.header.iter().find(|(k, v)| k.trim().eq_ignore_ascii_case(label) && !blank_place(v))?;
+        let sheet = p.source.trim();
+        let field = format!("panel schedule {}", k.trim().to_ascii_uppercase());
+        Some(CalledAt { place: v.trim().to_string(), source: if sheet.is_empty() { field } else { format!("{sheet} {field}") } })
+    })
+}
+
+/// A header value that names no place (`-`, `N/A`, `TBD`).
+fn blank_place(v: &str) -> bool {
+    let t = v.trim().trim_matches(['-', '.', '_', '?']).trim();
+    t.is_empty() || t.eq_ignore_ascii_case("N/A") || t.eq_ignore_ascii_case("NA") || t.eq_ignore_ascii_case("TBD")
+}
+
+/// A line split at the first location phrase it carries (the longest phrase where several
+/// start at one place): what is before it, and the place after it.
+fn at_phrase(line: &str) -> Option<(String, String)> {
+    let u = line.trim().to_ascii_uppercase();
+    let mut best: Option<(usize, usize)> = None;
+    for w in cadaddy_mepfix::wordrules::words("equipment.gear_location_phrases") {
+        let w = w.trim().to_ascii_uppercase();
+        if w.is_empty() {
+            continue;
+        }
+        // A whole-word phrase: not inside another word.
+        let found = u.match_indices(w.as_str()).find(|(i, _)| {
+            let before = u[..*i].chars().next_back();
+            let after = u[i + w.len()..].chars().next();
+            before.is_none_or(|c| !c.is_ascii_alphanumeric()) && (w.ends_with(':') || after.is_none_or(|c| !c.is_ascii_alphanumeric()))
+        });
+        if let Some((i, _)) = found
+            && best.is_none_or(|(bi, bl)| i < bi || (i == bi && w.len() > bl))
+        {
+            best = Some((i, w.len()));
+        }
+    }
+    let (i, l) = best?;
+    let before = u[..i].trim().trim_end_matches([',', '-', '(', ':']).trim().to_string();
+    let after: String = u[i + l..]
+        .trim()
+        .trim_start_matches(':')
+        .split([';', '(', ')'])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .trim_end_matches(['.', ','])
+        .trim()
+        .chars()
+        .take(MAX_PLACE)
+        .collect();
+    (!blank_place(&after)).then_some((before, after))
+}
+
+/// Where the texts of one print (`sheet`: a riser or one-line, a plan's notes) call each of the
+/// gear `tags` (upper case keys): a line naming the gear and a location phrase and its place
+/// (`PANEL 'A' LOCATED IN ELEC 1120`), or a label's line led by the phrase under a line naming it
+/// (the same text's, else the text just above it). `what` names the print's kind in the source.
+pub(crate) fn called_in_texts(texts: &[TextItem], sheet: &str, what: &str, tags: &[String]) -> BTreeMap<String, CalledAt> {
+    let mut out: BTreeMap<String, CalledAt> = BTreeMap::new();
+    let tags: Vec<&String> = tags.iter().filter(|t| !t.trim().is_empty()).take(MAX_GEAR_TAGS).collect();
+    if tags.is_empty() {
+        return out;
+    }
+    let texts: Vec<&TextItem> = texts.iter().take(MAX_SHEET_ITEMS).collect();
+    let source = format!("{} {what}", sheet.trim()).trim().to_string();
+    let named = |line: &str| tags.iter().find(|t| names_gear(line, t)).map(|t| t.trim().to_ascii_uppercase());
+    let mut put = |tag: String, place: String| {
+        out.entry(tag).or_insert_with(|| CalledAt { place, source: source.clone() });
+    };
+    for (i, t) in texts.iter().enumerate() {
+        let lines: Vec<&str> = t.value.split(['\n', '\r']).flat_map(|l| l.split("\\P")).map(str::trim).filter(|l| !l.is_empty()).take(8).collect();
+        for (k, line) in lines.iter().enumerate() {
+            let Some((before, place)) = at_phrase(line) else { continue };
+            if !before.is_empty() {
+                if let Some(tag) = named(&before) {
+                    put(tag, place);
+                }
+                continue;
+            }
+            // A label's line under the line (or the text) naming the gear.
+            let above = match k.checked_sub(1).and_then(|j| lines.get(j)) {
+                Some(prev) => named(prev),
+                None => {
+                    let h = t.height.max(1e-6);
+                    texts
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, o)| {
+                            *j != i && o.at.y > t.at.y && o.at.y - t.at.y <= 2.5 * h.max(o.height) && (o.at.x - t.at.x).abs() <= 10.0 * h
+                        })
+                        .min_by(|a, b| (a.1.at.y - t.at.y).total_cmp(&(b.1.at.y - t.at.y)))
+                        .and_then(|(_, o)| {
+                            o.value.split(['\n', '\r']).flat_map(|l| l.split("\\P")).filter(|l| !l.trim().is_empty()).last().and_then(named)
+                        })
+                }
+            };
+            if let Some(tag) = above {
+                put(tag, place);
+            }
+        }
+    }
+    out
+}
+
+/// The room of the model a place the prints call names (its number, else its name), as an index
+/// into `rooms`.
+pub(crate) fn room_index(rooms: &[RoomBox], place: &str) -> Option<usize> {
+    room_named(rooms, place).and_then(|r| rooms.iter().position(|x| std::ptr::eq(x, r)))
 }
 
 /// The building outline gear goes in when its schedule names no room of the model: the lowest
@@ -1198,15 +1368,20 @@ pub(crate) fn drawn_equipment(
     }
 }
 
-/// The gear (panels the schedules list, sized by the submittal, in the rooms their schedules
-/// name) and the feeders between them (a schedule row naming a panel, its type the one-line's
-/// tag above that panel, the type's conduits and conductors).
+/// The gear (panels the schedules list, sized by the submittal) and the feeders between them (a
+/// schedule row naming a panel, its type the one-line's tag above that panel, the type's conduits
+/// and conductors). An undrawn panel goes in the first room of the model the prints call it in:
+/// its schedule's own location, then `called` (upper case tag: a riser or one-line label, a
+/// note; [`called_in_texts`]), on the wall the rule picks (its working space, clear of door
+/// swings, nearest the gear feeding it), marked [`LOCATED`] with that basis. Only a panel no
+/// print locates is [`PROPOSED`] (unsure), along the building's walls.
 pub(crate) fn plan(
     sp: &cadaddy_walk3d::BuildingSpec,
     types: &[FeederType],
     incoming: &BTreeMap<String, String>,
     gear: &BTreeMap<String, SubmittedGear>,
     rooms: &[RoomBox],
+    called: &BTreeMap<String, Vec<CalledAt>>,
 ) -> Planned {
     use cadaddy_walk3d::{Enclosure, Feeder, MepEquipment, Termination};
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -1246,8 +1421,8 @@ pub(crate) fn plan(
             }
         }
     }
-    // Gear: the panels the plans don't place, in their schedules' rooms.
-    let mut by_room: BTreeMap<usize, Vec<(String, SubmittedGear)>> = BTreeMap::new();
+    // Gear: the panels the plans don't place, in the rooms the prints call them in (Q6513).
+    let mut by_room: BTreeMap<usize, Vec<(String, SubmittedGear, Option<CalledAt>)>> = BTreeMap::new();
     for p in schedules.iter().filter(|p| p.typical_of.is_none()) {
         if sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&p.panel)) {
             continue;
@@ -1256,16 +1431,39 @@ pub(crate) fn plan(
             out.unplaced.push((p.panel.clone(), "no box size in a gear submittal".into()));
             continue;
         };
-        let loc = p.header.get("location").cloned().unwrap_or_default();
-        let named = room_named(rooms, &loc).and_then(|r| rooms.iter().position(|x| std::ptr::eq(x, r)));
-        // No room of the model is its schedule's location: along the building's walls (Q6359).
-        match named.or_else(|| building_box(sp, rooms).map(|(i, _)| i)) {
-            Some(i) => by_room.entry(i).or_default().push((p.panel.clone(), g.clone())),
-            None => out
-                .unplaced
-                .push((p.panel.clone(), format!("its schedule's location ({}) is no room of the model", if loc.is_empty() { "none" } else { &loc }))),
+        // Its schedule's own location first, then the other prints'.
+        let calls: Vec<CalledAt> =
+            schedule_location(p).into_iter().chain(called.get(&p.panel.trim().to_ascii_uppercase()).into_iter().flatten().cloned()).collect();
+        let found = calls.iter().find_map(|c| room_index(rooms, &c.place).map(|i| (i, c)));
+        // Prints that call it in another room of the model: the field asks; it stands in the first's.
+        if let Some((i, c)) = found {
+            for o in calls.iter().filter(|o| room_index(rooms, &o.place).is_some_and(|j| j != i)) {
+                out.room_issues.push(format!(
+                    "{}: {} calls it in {} but {} in {}; set in {} (the first that names a room of the model)",
+                    p.panel, c.source, c.place, o.source, o.place, c.place
+                ));
+            }
+        }
+        // No print names a room of the model: along the building's walls, proposed (Q6359).
+        match found.map(|(i, c)| (i, Some(c.clone()))).or_else(|| building_box(sp, rooms).map(|(i, _)| (i, None))) {
+            Some((i, c)) => by_room.entry(i).or_default().push((p.panel.clone(), g.clone(), c)),
+            None => {
+                let loc = calls.first().map_or_else(|| "none".to_string(), |c| c.place.clone());
+                out.unplaced.push((p.panel.clone(), format!("its schedule's location ({loc}) is no room of the model")));
+            }
         }
     }
+    // Where each panel's feed comes from on its level: the gear feeding it, as the plans or this
+    // layout place it (plan units).
+    let feeders: Vec<(String, String)> =
+        sp.mep.feeders.iter().chain(out.feeders.iter()).map(|f| (f.from.trim().to_ascii_uppercase(), f.to.trim().to_ascii_uppercase())).collect();
+    let mut placed_at: Vec<(String, String, Vec2)> = sp
+        .mep
+        .equipment
+        .iter()
+        .map(|e| (e.tag.trim().to_ascii_uppercase(), e.level.clone(), Vec2::new((e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0)))
+        .filter(|(_, _, c)| c.x.is_finite() && c.y.is_finite())
+        .collect();
     let inch = upf / 12.0;
     for (index, list) in by_room {
         let Some(room) = rooms.get(index) else { continue };
@@ -1281,8 +1479,19 @@ pub(crate) fn plan(
             let v = volts_to_ground(&header(tag, "volts/phase")).unwrap_or(150.0);
             rule.depth_in.iter().find(|r| v <= r[0]).map_or(36.0, |r| r[1])
         };
-        let space_d = list.iter().map(|(t, _)| depth_for(t)).fold(0.0, f64::max);
-        let sizes: Vec<(f64, f64)> = list.iter().map(|(_, g)| (g.size_in[1] * inch, g.size_in[2] * inch)).collect();
+        let space_d = list.iter().map(|(t, _, _)| depth_for(t)).fold(0.0, f64::max);
+        let sizes: Vec<(f64, f64)> = list.iter().map(|(_, g, _)| (g.size_in[1] * inch, g.size_in[2] * inch)).collect();
+        // Each one's feed: the gear feeding it on this level, where it stands (outline units).
+        let fed_from: Vec<Option<(String, Vec2)>> = list
+            .iter()
+            .map(|(tag, _, _)| {
+                let t = tag.trim().to_ascii_uppercase();
+                feeders.iter().filter(|(_, to)| *to == t).find_map(|(from, _)| {
+                    placed_at.iter().find(|(pt, pl, _)| pt == from && pl.eq_ignore_ascii_case(&level)).map(|(pt, _, c)| (pt.clone(), *c))
+                })
+            })
+            .collect();
+        let toward: Vec<Option<Vec2>> = fed_from.iter().map(|f| f.as_ref().map(|(_, c)| *c)).collect();
         // Door swings stay clear: a door's width all round its centre, on either side of its wall.
         let swings: Vec<([f64; 2], [f64; 2])> = room
             .doors
@@ -1293,15 +1502,15 @@ pub(crate) fn plan(
             })
             .collect();
         let (sw, sd, gap) = (rule.width_in.unwrap_or(30.0) * inch, space_d * inch, 6.0 * inch);
-        let mut placed = place_clear_of(&outline, &swings, &sizes, sw, sd, gap);
+        let mut placed = place_toward(&outline, &swings, &sizes, &toward, sw, sd, gap);
         if placed.iter().any(Option::is_none) && !swings.is_empty() {
-            let without = place_along_walls(&outline, &sizes, sw, sd, gap);
+            let without = place_toward(&outline, &[], &sizes, &toward, sw, sd, gap);
             if without.iter().filter(|p| p.is_some()).count() > placed.iter().filter(|p| p.is_some()).count() {
                 placed = without;
                 out.room_issues.push(format!("{place}: its gear only fits inside a door's swing; move the door or the gear"));
             }
         }
-        for (tag, g) in &list {
+        for (tag, g, _) in &list {
             let bus = header(tag, "bus amps").chars().take_while(char::is_ascii_digit).collect::<String>().parse::<f64>().ok();
             if needs_second_exit(bus, g.size_in[1], room.doors.len(), &rule) {
                 out.room_issues.push(format!(
@@ -1316,7 +1525,7 @@ pub(crate) fn plan(
         let corner = outline.iter().fold([f64::INFINITY, f64::INFINITY], |m, p| [m[0].min(p.x), m[1].min(p.y)]);
         let mut cursor = corner[0] + 12.0 * inch;
         let mut review_place = BTreeSet::new();
-        for ((tag, g), at) in list.iter().zip(placed) {
+        for (((tag, g, call), at), feed) in list.iter().zip(placed).zip(&fed_from) {
             let at = match at {
                 Some(at) => at,
                 None if room.building && corner.iter().all(|v| v.is_finite()) => {
@@ -1350,16 +1559,36 @@ pub(crate) fn plan(
                     rule.cite
                 ),
             );
+            // The room the prints call it in (the documents'), its wall by rule; else proposed.
+            let wall_rule = format!(
+                "its wall by rule: {} working space in front, clear of door swings{}",
+                rule.cite,
+                feed.as_ref().map_or_else(String::new, |(from, _)| format!(", nearest its feed from {from}"))
+            );
+            let called_basis = call.as_ref().map(|c| format!("{LOCATION_CALLED}: {} ({})", c.source, c.place));
             properties.insert(
                 "PLACEMENT".into(),
-                if review_place.contains(tag) {
-                    format!("review: {place} has no wall run long enough for it and its working space; set at its corner, its place to confirm")
-                } else if room.building {
-                    format!("proposed: along a wall of {place}; the plans don't locate it")
-                } else {
-                    format!("proposed: along a wall of {place}, its schedule's location; the plans don't locate it")
+                match (&called_basis, review_place.contains(tag)) {
+                    (Some(b), true) => format!(
+                        "review: {place}, {b}, has no wall run long enough for it and its working space; set at its corner, its place to confirm"
+                    ),
+                    (Some(b), false) => format!("located: along a wall of {place}, {b}; {wall_rule}"),
+                    (None, true) => {
+                        format!("review: {place} has no wall run long enough for it and its working space; set at its corner, its place to confirm")
+                    }
+                    (None, false) => format!("proposed (unsure): along a wall of {place}; no print locates it ({wall_rule})"),
                 },
             );
+            match &called_basis {
+                Some(b) => {
+                    properties.insert("STATUS".into(), "derived".into());
+                    properties.insert("BASIS".into(), format!("{b}; {wall_rule}"));
+                }
+                None => {
+                    properties.insert("STATUS".into(), PROPOSED.into());
+                    properties.insert("BASIS".into(), format!("proposed: no print locates it; along a wall of {place}, {wall_rule}"));
+                }
+            }
             // Where conduit may come in: each side's area (the submittal's drawn windows, else the
             // box less the rule's margins) and its source; the router lands raceways inside them.
             let drawn = g.top_plate_in.is_some() || g.bottom_plate_in.is_some();
@@ -1382,8 +1611,16 @@ pub(crate) fn plan(
             }
             let mut sources = BTreeMap::new();
             sources.insert("size".into(), g.source.clone());
-            sources.insert("position".into(), format!("proposed in {place} ({})", header(tag, "location")));
-            sources.insert("status".into(), "proposed".into());
+            match &called_basis {
+                Some(b) => {
+                    sources.insert("position".into(), format!("{b}, in {place}"));
+                    sources.insert("status".into(), LOCATED.into());
+                }
+                None => {
+                    sources.insert("position".into(), format!("proposed in {place} (no print locates it)"));
+                    sources.insert("status".into(), PROPOSED.into());
+                }
+            }
             let mut terminations = Vec::new();
             if let Some((n, range)) = &g.main_lugs {
                 terminations.push(Termination {
@@ -1409,6 +1646,7 @@ pub(crate) fn plan(
                     ..Termination::default()
                 });
             }
+            placed_at.push((tag.trim().to_ascii_uppercase(), level.clone(), Vec2::new((at.min[0] + at.max[0]) / 2.0, (at.min[1] + at.max[1]) / 2.0)));
             out.zones.push(Zone {
                 tag: tag.clone(),
                 level: level.clone(),
@@ -1427,7 +1665,8 @@ pub(crate) fn plan(
                 title: format!("{} {tag}", if g.kind == "switchboard" { "SWITCHBOARD" } else { "PANELBOARD" }),
                 properties,
                 sources,
-                confidence: 0.5,
+                // The room is the documents'; the spot on its wall the rule's.
+                confidence: if call.is_some() { 0.9 } else { 0.5 },
                 terminations,
                 enclosure: Some(Enclosure { top_entry_in: top_plate, bottom_entry_in: bottom_plate, gutter_in: [0.0, 0.0] }),
                 ..MepEquipment::default()
@@ -1668,7 +1907,7 @@ mod tests {
             doors: Vec::new(),
             building: false,
         };
-        let p = plan(&sp, &types, &incoming, &gear, &[room]);
+        let p = plan(&sp, &types, &incoming, &gear, &[room], &BTreeMap::new());
         assert_eq!(p.feeders.len(), 2, "{:#?}", p.feeders);
         let f = &p.feeders[0];
         assert_eq!(
@@ -1681,7 +1920,8 @@ mod tests {
         assert!(((e.max[0] - e.min[0]).max(e.max[1] - e.min[1]) - 20.0).abs() < 1e-6, "{e:?}");
         assert_eq!(e.enclosure.as_ref().map(|x| x.top_entry_in), Some([16.0, 4.25]));
         assert!((e.bottom_ft - 28.0 / 12.0).abs() < 1e-9);
-        assert_eq!(e.sources.get("status").map(String::as_str), Some("proposed"));
+        // Its schedule names room 101 (ELEC 101): located there, not proposed (Q6513).
+        assert_eq!(e.sources.get("status").map(String::as_str), Some(LOCATED));
         assert!(e.properties.get("WORKING SPACE").is_some_and(|w| w.contains("36 D")), "{:?}", e.properties);
         assert!(
             e.properties.get("TOP CONDUIT AREA").is_some_and(|a| a.starts_with("16 W x 4.25 D in") && a.contains("derived")),
@@ -1967,6 +2207,151 @@ mod tests {
         // A room too shallow for the working space takes none.
         let closet = [Vec2::new(0.0, 0.0), Vec2::new(40.0, 0.0), Vec2::new(40.0, 30.0), Vec2::new(0.0, 30.0)];
         assert_eq!(place_along_walls(&closet, &[(20.0, 6.0)], 30.0, 36.0, 6.0), vec![None]);
+    }
+
+    fn located_room(level: &str, number: &str, name: &str, lo: [f64; 2], hi: [f64; 2]) -> RoomBox {
+        RoomBox {
+            level: level.into(),
+            number: number.into(),
+            name: name.into(),
+            outline: vec![Vec2::new(lo[0], lo[1]), Vec2::new(hi[0], lo[1]), Vec2::new(hi[0], hi[1]), Vec2::new(lo[0], hi[1])],
+            ..RoomBox::default()
+        }
+    }
+
+    /// Q6513: an undrawn panel goes in the room the prints call it in (its schedule's LOCATION,
+    /// else a riser label), on the wall the rule picks: its working space clear of the door's
+    /// swing, nearest the gear feeding it; its basis says so and it is no proposal. Only a panel no
+    /// print locates is proposed, unsure.
+    #[test]
+    fn an_undrawn_panel_goes_in_the_room_the_prints_call_on_a_wall_with_its_working_space() {
+        use cadaddy_walk3d::{BuildingSpec, Feeder, MepEquipment, PanelSchedule};
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
+        sp.levels = serde_json::from_value(serde_json::json!([{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 10.0}]))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let sched = |tag: &str, loc: &str| {
+            let mut header: BTreeMap<String, String> = [("volts/phase".to_string(), "208Y/120V, 3PH, 4W".to_string())].into_iter().collect();
+            if !loc.is_empty() {
+                header.insert("location".into(), loc.into());
+            }
+            PanelSchedule { panel: tag.into(), source: "EX-4".into(), header, ..PanelSchedule::default() }
+        };
+        sp.mep.panel_schedules = vec![sched("LP1", "ELEC 1120"), sched("LP2", ""), sched("LP3", "-"), sched("LP4", "ELEC 1120")];
+        // The switchboard feeding LP1, drawn just east of the room.
+        sp.mep.equipment.push(MepEquipment {
+            tag: "SB1".into(),
+            kind: "switchboard".into(),
+            level: "Level 1".into(),
+            min: [196.0, 40.0],
+            max: [226.0, 88.0],
+            ..MepEquipment::default()
+        });
+        sp.mep.feeders.push(Feeder { tag: "F1".into(), from: "SB1".into(), to: "LP1".into(), ..Feeder::default() });
+        let gear: BTreeMap<String, SubmittedGear> = ["LP1", "LP2", "LP3", "LP4"]
+            .iter()
+            .map(|t| ((*t).to_string(), SubmittedGear { size_in: [48.0, 20.0, 6.0], source: "sub".into(), ..SubmittedGear::default() }))
+            .collect();
+        // Room 1120 (16 x 10 ft, its door in the south wall), room 1104, the building.
+        let mut elec = located_room("Level 1", "1120", "ELEC", [0.0, 0.0], [192.0, 120.0]);
+        elec.doors = vec![(Vec2::new(96.0, 0.0), 36.0)];
+        let storage = located_room("Level 1", "1104", "STORAGE", [300.0, 0.0], [420.0, 96.0]);
+        let mut building = located_room("Level 1", "", "", [-600.0, -600.0], [1200.0, 1200.0]);
+        building.building = true;
+        let rooms = [elec, storage, building];
+        let riser = CalledAt { place: "STORAGE 1104".into(), source: "EX-6 riser or one-line label".into() };
+        let called: BTreeMap<String, Vec<CalledAt>> =
+            [("LP3".to_string(), vec![riser.clone()]), ("LP4".to_string(), vec![riser])].into_iter().collect();
+        let p = plan(&sp, &[], &BTreeMap::new(), &gear, &rooms, &called);
+        let get = |t: &str| p.equipment.iter().find(|e| e.tag == t).unwrap_or_else(|| panic!("{t} not laid out: {:?}", p.unplaced));
+        let within = |e: &MepEquipment, lo: [f64; 2], hi: [f64; 2]| {
+            e.min[0] >= lo[0] - 1e-6 && e.min[1] >= lo[1] - 1e-6 && e.max[0] <= hi[0] + 1e-6 && e.max[1] <= hi[1] + 1e-6
+        };
+        // LP1: in room 1120, on its east wall (the feed's side, though the north and south walls are
+        // longer), its basis the schedule's LOCATION.
+        let lp1 = get("LP1");
+        assert!(within(lp1, [0.0, 0.0], [192.0, 120.0]), "{lp1:?}");
+        assert!((lp1.max[0] - 192.0).abs() < 1e-6 && (lp1.max[0] - lp1.min[0] - 6.0).abs() < 1e-6, "on the east wall: {lp1:?}");
+        assert_eq!(lp1.sources.get("status").map(String::as_str), Some(LOCATED));
+        assert_eq!(lp1.sources["position"], "location called in prints: EX-4 panel schedule LOCATION (ELEC 1120), in room 1120");
+        assert_eq!(lp1.properties.get("STATUS").map(String::as_str), Some("derived"));
+        let basis = &lp1.properties["BASIS"];
+        assert!(
+            basis.starts_with("location called in prints: EX-4 panel schedule LOCATION (ELEC 1120)")
+                && basis.contains("110.26")
+                && basis.contains("nearest its feed from SB1"),
+            "{basis}"
+        );
+        assert!(lp1.properties["PLACEMENT"].starts_with("located:") && !lp1.properties["PLACEMENT"].contains("propos"), "{:?}", lp1.properties);
+        assert!(lp1.confidence > 0.5);
+        // Its working space: 36 in deep (120 V to ground), inside the room, off the door's swing.
+        let z = p.zones.iter().find(|z| z.tag == "LP1").unwrap_or_else(|| panic!("{:?}", p.zones));
+        assert!((z.max[0] - z.min[0] - 36.0).abs() < 1e-6 && z.min[0] >= -1e-6, "{z:?}");
+        for zone in p.zones.iter().filter(|z| z.level == "Level 1" && z.max[0] <= 192.0 + 1e-6) {
+            let swing = ([60.0, -36.0], [132.0, 36.0]);
+            let off = zone.max[0] <= swing.0[0] || zone.min[0] >= swing.1[0] || zone.max[1] <= swing.0[1] || zone.min[1] >= swing.1[1];
+            assert!(off, "{} working space in the door's swing: {zone:?}", zone.tag);
+        }
+        // LP3: its schedule says nothing; the riser's label puts it in room 1104.
+        let lp3 = get("LP3");
+        assert!(within(lp3, [300.0, 0.0], [420.0, 96.0]), "{lp3:?}");
+        assert_eq!(lp3.sources["position"], "location called in prints: EX-6 riser or one-line label (STORAGE 1104), in room 1104");
+        // LP4: schedule and riser name two rooms: the schedule's, and a review issue naming both.
+        let lp4 = get("LP4");
+        assert!(within(lp4, [0.0, 0.0], [192.0, 120.0]), "{lp4:?}");
+        assert!(p.room_issues.iter().any(|i| i.starts_with("LP4:") && i.contains("ELEC 1120") && i.contains("STORAGE 1104")), "{:?}", p.room_issues);
+        // LP2: no print locates it: proposed along the building's walls, unsure.
+        let lp2 = get("LP2");
+        assert_eq!(lp2.sources.get("status").map(String::as_str), Some(PROPOSED));
+        assert!(lp2.properties["PLACEMENT"].starts_with("proposed (unsure)"), "{:?}", lp2.properties);
+        assert_eq!(lp2.properties.get("STATUS").map(String::as_str), Some(PROPOSED));
+        assert!((lp2.confidence - 0.5).abs() < 1e-9);
+        // Each is laid out by the build: a drawn symbol replaces it, a clear face may take it.
+        assert!(p.equipment.iter().all(laid_out));
+        // Built, each says what it is by the documents: LP1 derived (its room the prints'), LP2
+        // inferred (a proposal), each with its basis.
+        let mut built_sp = sp.clone();
+        built_sp.mep.equipment = vec![lp1.clone(), lp2.clone()];
+        let mut d = cadaddy_doc::Drawing::default();
+        let hs = crate::cmd::mep::build_equipment(&mut d, &built_sp, None);
+        let made: Vec<(cadaddy_walk3d::Made, String)> =
+            hs.iter().filter_map(|h| d.model.get(*h)).filter_map(|e| crate::cmd::provenance::of_element(e)).collect();
+        assert_eq!(made.len(), 2, "{made:?}");
+        assert_eq!(made[0].0, cadaddy_walk3d::Made::Derived, "{made:?}");
+        assert!(made[0].1.starts_with("location called in prints: EX-4 panel schedule LOCATION (ELEC 1120)"), "{made:?}");
+        assert_eq!(made[1].0, cadaddy_walk3d::Made::Inferred, "{made:?}");
+        assert!(made[1].1.starts_with("proposed: no print locates it"), "{made:?}");
+    }
+
+    /// Q6513: a riser or one-line label, or a note, calls a panel's room: on its own line after a
+    /// location phrase, or on the label's next line (the same text's or the text under it).
+    #[test]
+    fn a_riser_label_or_a_note_calls_a_panels_room() {
+        let tags: Vec<String> = ["LP3", "LP4", "LP5", "LP6", "LP7", "LP8"].iter().map(|t| (*t).to_string()).collect();
+        let v = vec![
+            t(0.0, 0.0, "PANEL 'LP3' LOCATED IN STORAGE 1104"),
+            t(50.0, 10.0, "LP4"),
+            t(50.0, 9.85, "MOUNTED IN ELEC 1120"),
+            t(80.0, 0.0, "PNLBD 'LP5'\\PTO BE LOCATED IN CORRIDOR 1110."),
+            // A phrase under nothing that names gear; a label with no place; a word holding a
+            // phrase; a blank place.
+            t(120.0, 0.0, "LOCATED IN ELEC 1120"),
+            t(150.0, 0.0, "PANEL 'LP6'"),
+            t(180.0, 0.0, "PANEL 'LP7' ALLOCATED IN STORAGE 1104"),
+            t(210.0, 0.0, "PANEL 'LP8' LOCATED IN -"),
+        ];
+        let got = called_in_texts(&v, "EX-6", "riser or one-line label", &tags);
+        let place = |k: &str| got.get(k).map(|c| c.place.as_str());
+        assert_eq!((place("LP3"), place("LP4"), place("LP5")), (Some("STORAGE 1104"), Some("ELEC 1120"), Some("CORRIDOR 1110")), "{got:?}");
+        assert_eq!(got.len(), 3, "{got:?}");
+        assert_eq!(got["LP3"].source, "EX-6 riser or one-line label");
+        // A schedule names the room under any of its location labels; a blank one is none.
+        let mut p = cadaddy_walk3d::PanelSchedule { panel: "LP9".into(), source: "EX-4".into(), ..Default::default() };
+        p.header.insert("location".into(), "-".into());
+        assert_eq!(schedule_location(&p), None);
+        p.header.insert("mounted in".into(), "STORAGE 1104".into());
+        assert_eq!(schedule_location(&p), Some(CalledAt { place: "STORAGE 1104".into(), source: "EX-4 panel schedule MOUNTED IN".into() }));
+        let rooms = [located_room("L1", "1104", "STORAGE", [0.0, 0.0], [10.0, 10.0]), located_room("L1", "1120", "ELEC", [20.0, 0.0], [30.0, 10.0])];
+        assert_eq!((room_index(&rooms, "STORAGE 1104"), room_index(&rooms, "ELEC 1120"), room_index(&rooms, "ROOF")), (Some(0), Some(1), None));
     }
 }
 
@@ -3182,7 +3567,7 @@ mod feeder_route_tests {
             source: "FEEDER SCHEDULE".into(),
         }];
         let incoming: BTreeMap<String, String> = [("G".to_string(), "604".to_string())].into_iter().collect();
-        plan(sp, &types, &incoming, &BTreeMap::new(), &[]).feeders
+        plan(sp, &types, &incoming, &BTreeMap::new(), &[], &BTreeMap::new()).feeders
     }
 
     fn row(n: &str, d: &str) -> cadaddy_walk3d::PanelCircuit {

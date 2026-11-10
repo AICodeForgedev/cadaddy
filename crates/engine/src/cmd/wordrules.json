@@ -1263,6 +1263,34 @@
     "SWITCHBOARD"
    ]
   },
+  "equipment.gear_location_phrases": {
+   "source": "drafting convention: the words a riser or one-line label, or a plan note, puts between a panel's name and the room it is in (`PANEL 'A' LOCATED IN ELEC 1120`, a label's next line `MOUNTED IN STORAGE 1104`); the longest first (Q6513)",
+   "words": [
+    "TO BE LOCATED IN",
+    "SHALL BE LOCATED IN",
+    "TO BE MOUNTED IN",
+    "SHALL BE MOUNTED IN",
+    "LOCATED IN",
+    "LOCATED AT",
+    "MOUNTED IN",
+    "MOUNTED AT",
+    "LOCATION:",
+    "LOC:",
+    "IN ROOM"
+   ]
+  },
+  "schedules.panel_location_labels": {
+   "source": "drafting convention: the header labels a panel schedule names the panel's room by (`LOCATION:`, `MOUNTED IN:`), in the order they are trusted (Q6513)",
+   "words": [
+    "LOCATION",
+    "PANEL LOCATION",
+    "LOCATED",
+    "LOCATED IN",
+    "MOUNTED IN",
+    "LOC",
+    "ROOM"
+   ]
+  },
   "equipment.switchboard_words": {
    "source": "drafting convention: the words that name a switchboard or switchgear on a plan's label or a schedule's header (`SWBD MDP`); the word and the tag after it label the gear (Q6437)",
    "words": [
