@@ -83,11 +83,12 @@ final class BuildingDesignTests: XCTestCase {
     }
 
     func testBuildingScopeShowsOnlyMainsAndBigEquipment() {
-        for e in b.elements where e.detail == .building {
+        let c = ViewClassifier(b)
+        for e in b.elements where c.tier(e.id) == .mains {
             XCTAssertTrue(e.role == .main || e.role == .equipment, e.title)
         }
-        XCTAssertTrue(b.elements.contains { $0.detail == .building && $0.kind == "Switchboard" })
-        XCTAssertTrue(b.elements.filter { $0.role == .terminal }.allSatisfy { $0.detail != .building })
+        XCTAssertTrue(b.elements.contains { c.tier($0.id) == .mains && $0.part == .switchgear })
+        XCTAssertTrue(b.elements.filter { $0.role == .terminal }.allSatisfy { c.tier($0.id) != .mains })
     }
 
     func testNoRealJobTextInTheSample() {
@@ -113,16 +114,19 @@ final class BuildingDesignTests: XCTestCase {
     func testLayerPrefsPersistAndCarryToAR() {
         let d = UserDefaults(suiteName: "layers-test-\(UUID().uuidString)")!
         var p = LayerPrefs.load(d)
-        XCTAssertEqual(p.off, [])
+        XCTAssertEqual(p.off, [.furniture])   // furniture is off until switched on
+        p.set(.furniture, on: true)
         p.set(.mechanical, on: false); p.set(.furniture, on: false)
         p.save(d)
         let q = LayerPrefs.load(d)
         XCTAssertEqual(q, p)
         XCTAssertFalse(q.shows(.mechanical)); XCTAssertTrue(q.shows(.architecture)); XCTAssertTrue(q.shows(.fire))
         XCTAssertEqual(q.hiddenTrades(["electrical", "mechanical", "context"]), ["mechanical"])
-        XCTAssertTrue(FieldLayer.cabinets.isDimmed(at: .building))
-        XCTAssertFalse(FieldLayer.cabinets.isDimmed(at: .floor))
-        XCTAssertFalse(FieldLayer.electrical.isDimmed(at: .building))
+        // Each view offers only its own switches: furniture only in Room, cabinets in Floor and Room.
+        XCTAssertEqual(FieldView.architectural.layers, [])
+        XCTAssertEqual(FieldView.mep.layers, [.mechanical, .electrical, .plumbing])
+        XCTAssertEqual(FieldView.floor.layers, [.mechanical, .electrical, .plumbing, .cabinets])
+        XCTAssertEqual(FieldView.room.layers, FieldLayer.allCases)
     }
 
     // MARK: motion

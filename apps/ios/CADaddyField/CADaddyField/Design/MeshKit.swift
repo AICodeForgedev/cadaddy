@@ -53,6 +53,38 @@ struct MeshKit {
         }
     }
 
+    /// Outline edges of a run with a rectangular profile: the 12 edges of each segment's box as thin bars, the
+    /// same boxes `run` builds. Round profiles have no edges: their shading carries the form.
+    mutating func runEdges(_ points: [SIMD3<Float>], profile: RunProfile, width w: Float) {
+        guard points.count >= 2, case let .rect(pw, ph) = profile else { return }
+        for i in 1..<points.count {
+            let a = points[i - 1], b = points[i]
+            let d = b - a
+            let len = simd_length(d)
+            guard len > 1e-4 else { continue }
+            let dir = d / len
+            let ref: SIMD3<Float> = abs(dir.y) > 0.9 ? SIMD3(1, 0, 0) : SIMD3(0, 1, 0)
+            let side = simd_normalize(simd_cross(ref, dir))
+            let up = simd_cross(dir, side)
+            let ext = max(pw, ph) / 2
+            let c = (a + b) / 2, hx = len / 2 + ext, hy = ph / 2, hz = pw / 2
+            for sy in [Float(-1), 1] { for sz in [Float(-1), 1] { bar(c + up * (sy * hy) + side * (sz * hz), dir * hx, w) } }
+            for sx in [Float(-1), 1] { for sz in [Float(-1), 1] { bar(c + dir * (sx * hx) + side * (sz * hz), up * hy, w) } }
+            for sx in [Float(-1), 1] { for sy in [Float(-1), 1] { bar(c + dir * (sx * hx) + up * (sy * hy), side * hz, w) } }
+        }
+    }
+
+    /// A thin square bar centred at `c` reaching ±`half` along its axis.
+    private mutating func bar(_ c: SIMD3<Float>, _ half: SIMD3<Float>, _ w: Float) {
+        let len = simd_length(half)
+        guard len > 1e-5 else { return }
+        let dir = half / len
+        let ref: SIMD3<Float> = abs(dir.y) > 0.9 ? SIMD3(1, 0, 0) : SIMD3(0, 1, 0)
+        let side = simd_normalize(simd_cross(ref, dir))
+        let up = simd_cross(dir, side)
+        oriented(center: c, axes: (dir, up, side), half: SIMD3(len + w / 2, w / 2, w / 2))
+    }
+
     /// A flat disc facing up (light glow pools, contact shadows).
     mutating func disc(center c: SIMD3<Float>, radius r: Float, sides: Int = 24) {
         let base = UInt32(positions.count)
@@ -146,6 +178,44 @@ struct MeshKit {
             guard let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.45, 1]) else { return }
             ctx.cgContext.drawRadialGradient(g, startCenter: CGPoint(x: s / 2, y: s / 2), startRadius: 0,
                                              endCenter: CGPoint(x: s / 2, y: s / 2), endRadius: s / 2, options: [])
+        }
+        guard let cg = img.cgImage else { return nil }
+        return try? TextureResource.generate(from: cg, options: .init(semantic: .color))
+    }
+
+    /// The ground under the building in ONE texture (one quad, so nothing to sort): an optional wide pool of
+    /// light (so a shadow has something to darken on a dark backdrop) and a soft contact shadow shaped like the
+    /// footprint. `footprint` is the footprint's share of the quad (0…1 each way).
+    static func groundTexture(glow: UIColor?, shadow: UIColor, footprint: CGSize, width: Int = 512, height: Int = 256) -> TextureResource? {
+        let w = CGFloat(width), h = CGFloat(height)
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        fmt.opaque = false
+        let img = UIGraphicsImageRenderer(size: CGSize(width: w, height: h), format: fmt).image { ctx in
+            let cg = ctx.cgContext
+            let centre = CGPoint(x: w / 2, y: h / 2)
+            if let glow {
+                let colors = [glow.cgColor, glow.withAlphaComponent(glow.cgAlpha * 0.4).cgColor, glow.withAlphaComponent(0).cgColor] as CFArray
+                if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.55, 1]) {
+                    // An ellipse stretched to the quad.
+                    cg.saveGState()
+                    cg.translateBy(x: centre.x, y: centre.y)
+                    cg.scaleBy(x: 1, y: h / w)
+                    cg.drawRadialGradient(g, startCenter: .zero, startRadius: 0, endCenter: .zero, endRadius: w / 2, options: [])
+                    cg.restoreGState()
+                }
+            }
+            // The contact shadow: the footprint, blurred. Drawn far off-canvas so only its shadow lands.
+            let fw = w * min(max(footprint.width, 0.05), 1), fh = h * min(max(footprint.height, 0.05), 1)
+            let blur = max(min(fw, fh) * 0.22, 6)
+            let rect = CGRect(x: centre.x - fw / 2, y: centre.y - fh / 2, width: fw, height: fh)
+            let off: CGFloat = 4 * w
+            cg.saveGState()
+            cg.setShadow(offset: CGSize(width: off, height: 0), blur: blur, color: shadow.cgColor)
+            cg.setFillColor(UIColor.black.cgColor)
+            cg.addPath(UIBezierPath(roundedRect: rect.offsetBy(dx: -off, dy: 0), cornerRadius: blur).cgPath)
+            cg.fillPath()
+            cg.restoreGState()
         }
         guard let cg = img.cgImage else { return nil }
         return try? TextureResource.generate(from: cg, options: .init(semantic: .color))
