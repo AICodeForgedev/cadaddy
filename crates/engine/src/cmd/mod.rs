@@ -138,6 +138,7 @@ pub(crate) mod fixturefit;
 pub mod fourd;
 pub mod framing;
 pub mod furnish;
+pub(crate) mod furniture;
 pub mod gear;
 pub mod gearbuild;
 pub(crate) mod gearspace;

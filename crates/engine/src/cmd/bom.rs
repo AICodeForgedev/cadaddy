@@ -1521,6 +1521,41 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
             );
         }
     }
+    // Casework and furniture (Q6422): each its own trade, by kind and size, level and provenance;
+    // never the electrical or mechanical work.
+    let mut fitted: BTreeMap<(&'static str, String, String, String, &'static str), Vec<String>> = BTreeMap::new();
+    for e in d.model.iter() {
+        let Some(trade) = super::furniture::trade_of(e) else { continue };
+        let ty = super::bimlook::made_tag(e, "type").unwrap_or(if trade == "cabinets" { "Casework" } else { "Furniture" }).to_string();
+        let size = super::bimlook::made_tag(e, "size").map(|z| z.replace('x', "\" x ") + "\"").unwrap_or_default();
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        let made = super::provenance::of_element(e).map_or("", |(m, _)| made_of(m.as_str()));
+        let hs = fitted.entry((trade, level, ty, size, made)).or_default();
+        if hs.len() < MAX_LINE_ELEMENTS {
+            hs.push(e.handle.hex());
+        }
+        if fitted.len() >= MAX_LINES {
+            break;
+        }
+    }
+    for ((trade, level, item, size, made), handles) in fitted {
+        add(
+            lines,
+            Line {
+                trade,
+                category: if trade == "cabinets" { "casework".into() } else { "furniture".into() },
+                item,
+                size,
+                unit: "each",
+                net: handles.len() as f64,
+                status: "model",
+                level,
+                elements: handles,
+                made,
+                ..Line::default()
+            },
+        );
+    }
     // Rooftop units and curbs, by name.
     let mut on_roof: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for e in
