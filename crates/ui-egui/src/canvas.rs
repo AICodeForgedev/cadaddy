@@ -144,9 +144,6 @@ pub struct CanvasState {
     infinite: Vec<usize>,
     /// Milliseconds spent converting the display list to vertex data (last rebuild).
     pub mesh_ms: f64,
-    /// Draw every object as it is on the GPU canvas, also those under a pixel (normally drawn as
-    /// dots and boxes: [`crate::gpu::build_screen_mesh`]); for comparing the two.
-    pub full_detail: bool,
     pub rect: Option<Rect>,
     pub xf: Option<Xf>,
     pub hover: Option<Handle>,
@@ -204,8 +201,9 @@ pub struct CanvasState {
     pub snap_cycle: Option<SnapCycle>,
     /// The open sheet's pictures, drawn instead of its linework zoomed out ([`sheetimage`]).
     pub sheet_images: sheetimage::SheetImages,
-    /// Draw everything in full on screen: no detail levels and no sheet pictures, the screen as
-    /// it was before them (for measuring them).
+    /// Draw everything in full on screen: no detail levels, no sheet pictures, and every object
+    /// as it is on the GPU canvas, also those under a pixel (normally drawn as dots and boxes:
+    /// [`crate::gpu::build_screen_mesh`]); the screen as it was before them (for measuring them).
     pub full_detail: bool,
     /// The detail level `list` was built at (`None`: in full), see [`cadaddy_render::detail`].
     pub list_detail: Option<cadaddy_render::detail::Detail>,
