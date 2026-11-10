@@ -808,7 +808,7 @@ pub(crate) fn body(a: &Atom, upf: f64) -> Mesh {
         // A field bend is part of its stick: a thin band marks it.
         "bend" => tube(&mut m, a.a - dir * (r * 0.3), a.a + dir * (r * 0.3), r * 1.05, SIDES),
         // A value engineering scenario's own boxes, brackets, plates and fittings (Q6202).
-        "box" | "bracket" | "nail_plate" | "fitting" => {
+        "box" | "bracket" | "nail_plate" | "fitting" | "firestop" => {
             let s = a.body_in.max(0.1) / 12.0 * upf;
             block(&mut m, a.a, plan, s, s * 0.5, s);
         }
@@ -900,6 +900,83 @@ fn wiring_method(d: &Drawing) -> Option<(String, Source)> {
     let r = d.project_rules.get(cadaddy_doc::projrules::RuleDomain::WiringMethod, "general")?;
     let v = r.active.value.trim().to_string();
     (!v.is_empty()).then(|| (v.clone(), Source::from_doc(SourceKind::Rule, &format!("project rule wiring_method/general: {v}"))))
+}
+
+/// The remedy for boxes back to back in a rated wall (Q6488): the project rule's (rules
+/// `rule_domain`/`rule_key`), else the one the job's specifications or notes name, else the
+/// rules' default; the source that says so and whether anything named it.
+pub(crate) fn rated_box_remedy(d: &Drawing, b: &super::boxclear::BackToBack) -> (super::boxclear::Remedy, String, bool) {
+    use super::boxclear::Remedy;
+    let rule = cadaddy_doc::projrules::RuleDomain::parse(&b.rule_domain).and_then(|dom| d.project_rules.get(dom, b.rule_key.trim()));
+    if let Some(r) = rule
+        && let Some(m) = b.remedy_named(&r.active.value)
+    {
+        let src = format!("project rule {}/{}: {} ({})", b.rule_domain.trim(), b.rule_key.trim(), r.active.value.trim(), r.active.source.trim());
+        return (m, src, true);
+    }
+    let methods = super::super::conduitroute::Methods::stored(d);
+    if let Some(m) = b.remedy_named(&methods.rated_box_remedy).filter(|_| !methods.rated_box_remedy.trim().is_empty()) {
+        return (m, methods.rated_box_remedy_source.clone(), true);
+    }
+    let m = b.remedy_named(&b.remedy).unwrap_or(Remedy::Separate);
+    (m, b.remedy_source.clone(), false)
+}
+
+/// The devices an earlier build moved off a back-to-back partner (their location's correction
+/// is the back-to-back rule's), put back where the documents draw them: the project's remedy
+/// is now the putty pads at the drawn spots (Q6488). How many.
+fn replace_back_to_back_moves(d: &mut Drawing, b2b_rule: &str, upf: f64) -> usize {
+    let rule = b2b_rule.trim();
+    if rule.is_empty() {
+        return 0;
+    }
+    let moved: Vec<(Handle, Vec2)> = d
+        .model
+        .iter()
+        .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("device"))
+        .take(MAX_DEVICES)
+        .filter_map(|e| {
+            let ps = props::read(&e.common.xdata);
+            let why = ps.get("correction:location").map(Prop::text)?;
+            (why.starts_with(rule)).then_some(())?;
+            Some((e.handle, moved_for_field(&ps, upf)?))
+        })
+        .collect();
+    let mut n = 0usize;
+    for (h, m) in moved {
+        let back = Vec3::new(-m.x, -m.y, 0.0);
+        let ok = d.modify_entity(h, |e| {
+            if let EntityKind::Mesh(mesh) = &mut e.kind {
+                for v in mesh.vertices.iter_mut().take(100_000) {
+                    *v = *v + back;
+                }
+            }
+            let mut ps = props::read(&e.common.xdata);
+            let nums =
+                |p: Option<&Prop>| -> Vec<f64> { p.map(Prop::text).unwrap_or_default().split(',').filter_map(|x| x.trim().parse().ok()).collect() };
+            let (design, now) = (nums(ps.get("design:location")), nums(ps.get("location")));
+            if let ([x, y, dz], [_, _, z]) = (&design[..], &now[..]) {
+                let src = ps.get("design:location").map(|p| p.source.clone());
+                let level = (dz - z).abs() < 1e-6;
+                if let Some(src) = src {
+                    let mut p = Prop::new(format!("{x:.2}, {y:.2}, {z:.2}"), src);
+                    p.note = None;
+                    ps.set("location", p);
+                }
+                if level {
+                    ps.remove("design:location");
+                    ps.remove("correction:location");
+                } else if let Some(g) = ps.get("correction:mount_height").cloned() {
+                    // Still at its gang's height: that correction is the one left.
+                    ps.set("correction:location", g);
+                }
+            }
+            let x = props::write(&e.common.xdata, &ps);
+            e.common.xdata = x.into();
+        });
+        n += usize::from(ok.is_ok());
+    }
+    n
 }
 
 /// The tags that make an atom a built MEP element (its level, source, system, kind and part).
@@ -1226,6 +1303,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // Each box atom's stock (its knockouts), and the largest raceway landing in it (Q6243).
     let mut box_rule_at: HashMap<usize, BoxRule> = HashMap::new();
     let mut box_raceway: HashMap<usize, f64> = HashMap::new();
+    // The remedy for boxes back to back in a rated wall (Q6488); pads put back what an earlier
+    // build moved for the other remedy.
+    let (remedy, remedy_src, remedy_named) = rated_box_remedy(d, &rl.box_clear.back_to_back);
+    let pads_first = remedy == super::boxclear::Remedy::Putty;
+    let replaced = if pads_first { replace_back_to_back_moves(d, &rl.box_clear.back_to_back.source, upf) } else { 0 };
     let devices: Vec<(Handle, String, Props, String, Bounds2, f64, f64)> = d
         .model
         .iter()
@@ -1689,7 +1771,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // -- Boxes never share space (Q6252): a wall box over another moves along its face clear of
     // it; boxes back to back in one rated wall end up the code's distance apart (else putty
     // pads). Its devices move with it; the design spot is kept beside the corrected one. --
-    let cr = &rl.box_clear;
+    let mut cr_rule = rl.box_clear.clone();
+    cr_rule.back_to_back.pads = pads_first;
+    let cr = &cr_rule;
     let rated_walls: BTreeSet<Handle> = clear_boxes
         .iter()
         .filter_map(|b| b.wall)
@@ -1827,24 +1911,40 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         e.1 = if e.1.is_empty() { why.clone() } else { format!("{}; {why}", e.1) };
     }
     let mut putty_pads = 0usize;
+    // One pad a box, whatever pairs it stands in.
+    let mut padded: BTreeSet<usize> = BTreeSet::new();
     for (i, j) in &cleared.putty {
         for k in [*i, *j] {
             let Some((bi, _, _)) = clear_of.get(k) else { continue };
+            if !padded.insert(*bi) {
+                continue;
+            }
             let Some((at, mut ctx)) = atoms.get(*bi).map(|(a, c)| (a.a, c.clone())) else { continue };
             let other = describe(if k == *i { *j } else { *i });
             let kept = [*i, *j].iter().filter_map(|x| clear_boxes.get(*x)).any(|b| b.keep);
-            let why = format!(
-                "back to back with {other} on the other face of its fire-rated wall{} and no spot within {} along an unbroken stretch of its wall clears it ({})",
-                if kept { format!(", a box that keeps its spot ({})", cr.back_to_back.keep_source) } else { String::new() },
-                super::super::walltypes::frac(if cr.back_to_back.max_move_in > 0.0 { cr.back_to_back.max_move_in } else { cr.max_move_in }),
-                cr.stud_bay_source
-            );
+            let why = if pads_first {
+                format!(
+                    "back to back with {other} on the other face of its fire-rated wall, closer than {} apart: listed putty pads on both boxes, the devices where the documents put them ({}; {remedy_src})",
+                    super::super::walltypes::frac(cr.back_to_back.min_apart_in),
+                    cr.back_to_back.putty_choice_source
+                )
+            } else {
+                format!(
+                    "back to back with {other} on the other face of its fire-rated wall{} and no spot within {} along an unbroken stretch of its wall clears it ({})",
+                    if kept { format!(", a box that keeps its spot ({})", cr.back_to_back.keep_source) } else { String::new() },
+                    super::super::walltypes::frac(if cr.back_to_back.max_move_in > 0.0 { cr.back_to_back.max_move_in } else { cr.max_move_in }),
+                    cr.stud_bay_source
+                )
+            };
             if let Some(b) = atoms.get_mut(*bi) {
                 b.0.extra.push(("design:firestop", "none".into(), "computed: the box as placed".into()));
                 b.0.extra.push(("firestop", cr.back_to_back.putty_item.clone(), cr.back_to_back.putty_source.clone()));
                 b.0.extra.push(("correction:firestop", format!("{}: {why}", cr.back_to_back.putty_source), cr.back_to_back.putty_source.clone()));
             }
-            ctx.body = None;
+            // The pad wraps the box's back and sides: its body just round the box's (an element
+            // of its own, so the takeoff counts it; without a body it was never made).
+            let pad_in = 0.125 * inch;
+            ctx.body = ctx.body.map(|(c, along, w, t, h)| (c, along, w + 2.0 * pad_in, t + pad_in, h + 2.0 * pad_in));
             ctx.src = rule_source(&cr.back_to_back.putty_source);
             let mut pad = Atom::fitting(
                 "firestop",
@@ -1861,6 +1961,25 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             atoms.push((pad, ctx));
             putty_pads += 1;
         }
+    }
+    // Which remedy the pairs took, and why (Q6488).
+    let pairs = moved_back + cleared.putty.len();
+    if (pairs > 0 || replaced > 0) && notes.len() < 200 {
+        notes.push(if pads_first {
+            format!(
+                "rated-wall boxes back to back: {} pair(s) take putty pads at the drawn positions ({remedy_src}){}; the alternative, separating the boxes by distance, is project rule {}/{}: separate",
+                cleared.putty.len(),
+                if replaced > 0 { format!("; {replaced} device(s) an earlier build moved put back where the documents draw them") } else { String::new() },
+                cr.back_to_back.rule_domain,
+                cr.back_to_back.rule_key
+            )
+        } else {
+            format!(
+                "rated-wall boxes back to back: {moved_back} pair(s) separated by distance, one box moved to the next stud bays{} ({}{remedy_src})",
+                if cleared.putty.is_empty() { String::new() } else { format!(", {} pair(s) with nowhere to move take putty pads", cleared.putty.len()) },
+                if remedy_named { "" } else { "nothing names the remedy: " }
+            )
+        });
     }
     if !cleared.stuck.is_empty() && notes.len() < 200 {
         notes.push(format!(
@@ -2859,6 +2978,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             "overlapReview": cleared.stuck.len(),
             "source": cr.source,
             "backToBackSource": cr.back_to_back.source,
+            "ratedWallRemedy": remedy.as_str(),
+            "ratedWallRemedySource": remedy_src,
+            "devicesPutBack": replaced,
         },
         "boxesSizedForRaceway": boxes_for_raceway,
         "boxesRacewayReview": raceway_reviews,
@@ -3540,6 +3662,32 @@ mod tests {
         let r3 = build(&mut d3, &sp);
         assert_eq!(r3["racewayLaidOnce"]["ft"], json!(20.0), "{r3}");
         assert_eq!(r3["junctionBoxes"], json!(1), "the shared raceway meets the homerun: {r3}");
+    }
+
+    #[test]
+    fn the_rated_wall_remedy_is_the_project_rules_else_the_documents_else_the_default() {
+        use super::super::boxclear::Remedy;
+        let b = &super::super::rules().box_clear.back_to_back;
+        let mut d = Drawing::default();
+        let (r, src, named) = rated_box_remedy(&d, b);
+        assert_eq!((r, named), (Remedy::Separate, false));
+        assert!(src.contains("putty pads"), "the default names the alternative: {src}");
+        // The job's documents named the pads.
+        let m = super::super::super::conduitroute::Methods {
+            rated_box_remedy: "putty pads".into(),
+            rated_box_remedy_source: "spec 26 05 33: protect boxes with listed putty pads".into(),
+            ..Default::default()
+        };
+        m.store(&mut d);
+        let (r, src, named) = rated_box_remedy(&d, b);
+        assert_eq!((r, named), (Remedy::Putty, true));
+        assert!(src.starts_with("spec 26 05 33"), "{src}");
+        // A project rule over them.
+        let v = cadaddy_doc::projrules::RuleValue::new("separate").with_source("RFI 7");
+        d.project_rules.set(cadaddy_doc::projrules::RuleDomain::Clearance, "rated_wall_boxes", v, "answered");
+        let (r, src, _) = rated_box_remedy(&d, b);
+        assert_eq!(r, Remedy::Separate);
+        assert!(src.contains("RFI 7"), "{src}");
     }
 
     /// Two routed runs of one circuit leaving a box the same way: the circuit's shared stretch is
