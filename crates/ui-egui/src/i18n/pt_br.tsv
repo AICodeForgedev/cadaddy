@@ -3449,3 +3449,9 @@
 	Pin	Fixar
 	Unpin	Desafixar
 	Coordination	Coordenação
+	List Sheets	Listar folhas
+	Open Sheet	Abrir folha
+	Next Sheet	Próxima folha
+	Previous Sheet	Folha anterior
+	Page {n}	Página {n}
+	Page Up and Page Down step through the sheets.	Page Up e Page Down percorrem as folhas.

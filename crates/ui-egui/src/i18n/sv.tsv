@@ -3604,3 +3604,9 @@ menu	Modify	Ändra
 	Pin	Fäst
 	Unpin	Lossa
 	Coordination	Samordning
+	List Sheets	Lista ark
+	Open Sheet	Öppna ark
+	Next Sheet	Nästa ark
+	Previous Sheet	Föregående ark
+	Page {n}	Sida {n}
+	Page Up and Page Down step through the sheets.	Page Up och Page Down bläddrar mellan arken.
