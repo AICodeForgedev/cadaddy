@@ -911,19 +911,30 @@ fn read_inward(
         .filter(|t| t.value.to_ascii_uppercase().contains("DESCRIPTION") && t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h)
         .map(|t| t.at.x)
         .collect();
-    // The pair of CKT columns with no description between them, one left of the first and one
-    // right of the second: the one whose left description is nearest the title.
+    // The phases' columns of the header (`A | B | C`).
+    let phase_heads: Vec<f64> = flat
+        .iter()
+        .filter(|t| PHASE_HEADS.contains(&t.value.trim().to_ascii_uppercase().as_str()) && t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h)
+        .map(|t| t.at.x)
+        .collect();
+    // The pair of CKT columns with the phases' columns and no description between them, one
+    // left of the first and one right of the second (not the gap between two tables side by
+    // side, each one's description inside its own): the one whose left description is nearest
+    // the title.
     let (c1, c2, d1) = line
         .windows(2)
         .filter_map(|w| match w {
-            [a, b] if *b - *a > 4.0 * row_h && !descs.iter().any(|d| d > a && d < b) => {
+            [a, b]
+                if *b - *a > 4.0 * row_h && !descs.iter().any(|d| d > a && d < b) && phase_heads.iter().filter(|x| *x > a && *x < b).count() >= 2 =>
+            {
                 let left = descs.iter().copied().filter(|d| d < a).max_by(f64::total_cmp)?;
                 descs.iter().any(|d| d > b).then_some((*a, *b, left))
             }
             _ => None,
         })
         .min_by(|x, y| (x.2 - title.at.x).abs().total_cmp(&(y.2 - title.at.x).abs()))?;
-    if (d1 - title.at.x).abs() > 20.0 * h {
+    // Its title over its left side, not over the table left of it.
+    if (d1 - title.at.x).abs() > 20.0 * h || title.at.x < d1 - 6.0 * row_h {
         return None;
     }
     let first_row = flat
@@ -2475,6 +2486,35 @@ mod tests {
             "{:?}",
             p.header
         );
+    }
+
+    #[test]
+    fn two_schedules_side_by_side_are_not_read_as_one_whose_numbers_face_inward() {
+        // Each two-sided (numbers outside, descriptions inside, phases between), its title
+        // centred over it: the gap between the first's right numbers and the second's left ones
+        // has a description outside each and none between, but no phases.
+        let mut sheet = Vec::new();
+        for (dx, name) in [(0.0, "PANELBOARD QC1"), (500.0, "PANELBOARD QC2")] {
+            sheet.extend(nameless(dx, &[], [("LIGHTING", "RECEPTACLES"), ("SIGN", "SPARE")]));
+            sheet.extend([
+                t(dx + 250.0, 535.0, name, 10.0),
+                t(dx + 260.0, 490.0, "A", 6.0),
+                t(dx + 280.0, 490.0, "B", 6.0),
+                t(dx + 300.0, 490.0, "C", 6.0),
+            ]);
+        }
+        let flat: Vec<&TextItem> = sheet.iter().collect();
+        let Some(title) = sheet.iter().find(|t| t.value == "PANELBOARD QC1") else { return };
+        assert!(
+            read_inward(&flat, title, "QC1", None, &BTreeMap::new(), "X-10").is_none(),
+            "{:#?}",
+            read_inward(&flat, title, "QC1", None, &BTreeMap::new(), "X-10")
+        );
+        let got = read(&sheet, "X-10");
+        let qc1 = got.iter().find(|p| p.panel == "QC1").unwrap_or_else(|| panic!("{got:#?}"));
+        let mut d: Vec<&str> = qc1.circuits.iter().map(|c| c.description.as_str()).collect();
+        d.sort_unstable();
+        assert_eq!(d, ["LIGHTING", "RECEPTACLES", "SIGN", "SPARE"], "{got:#?}");
     }
 
     #[test]
