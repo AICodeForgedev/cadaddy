@@ -92,6 +92,8 @@ pub(crate) struct Rules {
     /// A piece's incoming tag: how far above it and how far to either side (text heights).
     pub incoming_reach_h: f64,
     pub incoming_side_h: f64,
+    /// A tag set left of its label (the label beside the one-line's line, the tag across it).
+    pub incoming_left_h: f64,
     /// The piece feeding a tag: how far above it and to either side (text heights).
     pub source_reach_h: f64,
     pub source_side_h: f64,
@@ -113,6 +115,10 @@ pub(crate) struct Rules {
     /// CONDUCTOR`).
     pub electrode_not_words: Vec<String>,
     pub electrode_tag_prefix: String,
+    /// Titles of a grounding detail or diagram: an electrode label under one is the service's
+    /// electrode even with no conductor printed on it (a legend's row has no such title).
+    pub electrode_detail_titles: Vec<String>,
+    pub electrode_detail_reach_h: f64,
     pub rod_length_ft: f64,
     pub rod_source: String,
     pub ufer_length_ft: f64,
@@ -422,6 +428,11 @@ pub(crate) struct Labelled {
     pub size_in: Option<[f64; 3]>,
     /// A conductor size printed on it (an electrode's).
     pub conductor: String,
+    /// Whether the label prints a rating of its own. One that prints none is gear only on the
+    /// one-line's lines (a legend's row or a note's line prints none and is on none).
+    pub rated: bool,
+    /// Where its rating came from when the label prints none (the gear it feeds).
+    pub rating_from: String,
 }
 
 impl Labelled {
@@ -531,9 +542,9 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, skip: &BTreeSet<String>) -> 
             .iter()
             .any(|w| has_phrase(&up, w));
         let top = members.iter().filter_map(|m| texts.get(*m)).map(|t| t.at.y + t.height.max(0.0)).fold(f64::NEG_INFINITY, f64::max);
-        // A piece the one-line draws carries its rating (amps, kVA, poles, how many, a size; an
-        // electrode its conductor or count): a legend's row or a note's line naming the kind
-        // carries none.
+        // A piece the one-line draws mostly carries its rating (amps, kVA, poles, how many, a size;
+        // an electrode its conductor or count); a legend's row or a note's line naming the kind
+        // carries none. One without is kept only if it is on the one-line's lines ([`build_into`]).
         let (kva, poles, count, positions, size_in, conductor) =
             (kva_in(&up), poles_in(&up), count_in(&up), positions_in(&up), printed_size(&up), conductor_in(&up));
         let rated = if kind == "electrode" {
@@ -541,9 +552,6 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, skip: &BTreeSet<String>) -> 
         } else {
             !amps.is_empty() || kva.is_some() || poles.is_some() || count.is_some() || positions.is_some() || size_in.is_some()
         };
-        if !rated {
-            continue;
-        }
         out.push(Labelled {
             kind: kind.clone(),
             electrode,
@@ -564,6 +572,8 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, skip: &BTreeSet<String>) -> 
             positions,
             size_in,
             conductor,
+            rated,
+            rating_from: String::new(),
         });
     }
     out
@@ -597,14 +607,26 @@ pub(crate) fn links(texts: &[TextItem], nodes: &[Node], types: &[String], no_siz
     let is = |v: &str, list: &[String]| list.iter().any(|x| x.eq_ignore_ascii_case(v.trim()));
     let tags: Vec<&TextItem> = texts.iter().filter(|t| is(&t.value, types) || is(&t.value, no_size)).collect();
     let mut out = Vec::new();
+    let side = r.incoming_side_h.max(0.5);
+    let left = r.incoming_left_h.max(side);
     for n in nodes {
         let h = n.h.max(1e-9);
+        // The piece right above it on its line: a tag above that piece is that piece's.
+        let above = nodes
+            .iter()
+            .filter(|o| {
+                o.tag != n.tag
+                    && o.at.y > n.top
+                    && o.at.y - n.top < r.source_reach_h.max(1.0) * h
+                    && (o.at.x - n.at.x).abs() < r.source_side_h.max(1.0) * h
+            })
+            .map(|o| o.at.y)
+            .fold(f64::INFINITY, f64::min);
         let incoming = tags
             .iter()
             .filter(|t| {
-                t.at.y > n.top - 0.2 * h
-                    && t.at.y - n.top < r.incoming_reach_h.max(1.0) * h
-                    && (t.at.x - n.at.x).abs() < r.incoming_side_h.max(0.5) * h
+                let dx = t.at.x - n.at.x;
+                t.at.y > n.top - 0.2 * h && t.at.y - n.top < r.incoming_reach_h.max(1.0) * h && dx < side * h && dx > -left * h && t.at.y < above
             })
             .min_by(|a, b| (a.at.y - n.top).total_cmp(&(b.at.y - n.top)));
         let from_y = incoming.map_or(n.top, |t| t.at.y);
@@ -913,6 +935,7 @@ pub(crate) fn layout(sp: &BuildingSpec, gear: &[Labelled], tags: &[Vec<String>],
         };
         put(LABEL_PROPERTY, g.label());
         put("RATING", g.amps.map(|a| format!("{a:.0} A")).or_else(|| g.kva.map(|v| format!("{v} kVA"))).unwrap_or_default());
+        put("RATING SOURCE", g.rating_from.clone());
         put("POLES", g.poles.map(|p| p.to_string()).unwrap_or_default());
         put(
             "FUSED",
@@ -935,6 +958,9 @@ pub(crate) fn layout(sp: &BuildingSpec, gear: &[Labelled], tags: &[Vec<String>],
         put("PLACEMENT", position.clone());
         let mut sources = BTreeMap::new();
         sources.insert("size".into(), size_src);
+        if !g.rating_from.is_empty() {
+            sources.insert("rating".into(), g.rating_from.clone());
+        }
         sources.insert("position".into(), position);
         sources.insert("status".into(), "proposed".into());
         sources.insert(SOURCE_KEY.into(), format!("{}: {}", g.sheet, g.label()));
@@ -1134,17 +1160,102 @@ pub(crate) fn build_into(sp: &mut BuildingSpec, pages: &[(String, cadaddy_doc::D
     // A piece the one-line draws is on its lines: fed from another, or feeding one. A legend's
     // row (a symbol and its words, an example rating) is on none.
     let first = tags_for(&gear, sp);
-    let linked: BTreeSet<String> =
-        connections(&gear, &first, &page_of).iter().flat_map(|l| [l.from.to_ascii_uppercase(), l.to.to_ascii_uppercase()]).collect();
-    let keep: Vec<bool> =
-        gear.iter().zip(&first).map(|(g, t)| g.kind == "electrode" || t.first().is_some_and(|x| linked.contains(&x.to_ascii_uppercase()))).collect();
+    let first_links = connections(&gear, &first, &page_of);
+    let up = |v: &str| v.to_ascii_uppercase();
+    let linked: BTreeSet<String> = first_links.iter().flat_map(|l| [up(&l.from), up(&l.to)]).collect();
+    // A piece with no rating of its own is on the one-line's lines when its line reaches gear
+    // the model knows, a rated piece or a feeder tag (a legend's rows, stacked, reach none).
+    let mut on: BTreeSet<String> = known.iter().map(|k| up(k)).collect();
+    on.extend(gear.iter().zip(&first).filter(|(g, _)| g.rated).flat_map(|(_, t)| t.iter().map(|x| up(x))).filter(|t| linked.contains(t)));
+    on.extend(first_links.iter().filter(|l| l.tag.is_some()).flat_map(|l| [up(&l.from), up(&l.to)]));
+    for _ in 0..MAX_HOPS {
+        let mut grew = false;
+        for l in &first_links {
+            let (f, t) = (up(&l.from), up(&l.to));
+            if on.contains(&f) != on.contains(&t) {
+                on.insert(f);
+                on.insert(t);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    // An electrode under a grounding detail's title is the service's, its conductor or not.
+    let in_detail = |g: &Labelled, pi: usize| -> bool {
+        let reach = r.electrode_detail_reach_h.max(1.0) * g.h;
+        page_texts.iter().filter(|(p, _)| *p == pi).flat_map(|(_, ts)| ts.iter().take(MAX_TEXTS)).any(|t| {
+            let u = t.value.trim().to_ascii_uppercase();
+            u.len() <= 80 && r.electrode_detail_titles.iter().any(|w| has_phrase(&u, w)) && (t.at.x - g.at.x).hypot(t.at.y - g.at.y) <= reach
+        })
+    };
+    let keep: Vec<bool> = gear
+        .iter()
+        .zip(&first)
+        .zip(&page_of)
+        .map(|((g, t), pi)| match (g.kind == "electrode", g.rated) {
+            (true, rated) => rated || in_detail(g, *pi),
+            (false, true) => t.first().is_some_and(|x| linked.contains(&up(x))),
+            (false, false) => t.first().is_some_and(|x| on.contains(&up(x))),
+        })
+        .collect();
     out.skipped.extend(gear.iter().zip(&keep).filter(|(_, k)| !**k).take(12).map(|(g, _)| g.label()));
-    let (gear, page_of): (Vec<Labelled>, Vec<usize>) = gear.into_iter().zip(page_of).zip(&keep).filter(|(_, k)| **k).map(|(x, _)| x).unzip();
+    let (mut gear, page_of): (Vec<Labelled>, Vec<usize>) = gear.into_iter().zip(page_of).zip(&keep).filter(|(_, k)| **k).map(|(x, _)| x).unzip();
+    // Ground rods a detail draws one by one are one set of that many rods.
+    let mut rods: BTreeMap<String, usize> = BTreeMap::new();
+    let mut merged: Vec<bool> = vec![false; gear.len()];
+    for i in 0..gear.len() {
+        let Some(g) = gear.get(i) else { continue };
+        if g.kind != "electrode" || g.electrode != "ground_rod" || !g.conductor.is_empty() {
+            continue;
+        }
+        let (sheet, n) = (g.sheet.clone(), g.count.max(1));
+        match rods.get(&sheet).copied() {
+            Some(first) => {
+                if let Some(f) = gear.get_mut(first) {
+                    f.count = f.count.max(1).saturating_add(n).min(MAX_COUNT);
+                }
+                if let Some(m) = merged.get_mut(i) {
+                    *m = true;
+                }
+            }
+            None => {
+                rods.insert(sheet, i);
+            }
+        }
+    }
+    let (mut gear, page_of): (Vec<Labelled>, Vec<usize>) = gear.into_iter().zip(page_of).zip(&merged).filter(|(_, m)| !**m).map(|(x, _)| x).unzip();
     if gear.is_empty() {
         return out;
     }
     let tags = tags_for(&gear, sp);
     let all_links = connections(&gear, &tags, &page_of);
+    // A piece printing no rating takes the rating of the gear it feeds, down its line (the CT
+    // cabinet and the service disconnect of a 2000 A service are its rating).
+    for i in 0..gear.len() {
+        let Some(g) = gear.get(i) else { continue };
+        if g.rated || g.kind == "electrode" || g.amps.is_some() || g.kva.is_some() {
+            continue;
+        }
+        let Some(mut at) = tags.get(i).and_then(|t| t.first()).cloned() else { continue };
+        let mut found: Option<(f64, String)> = None;
+        for _ in 0..MAX_HOPS {
+            let Some(next) = all_links.iter().find(|l| l.from.eq_ignore_ascii_case(&at)) else { break };
+            let to = next.to.clone();
+            let piece = gear.iter().zip(&tags).find(|(x, ts)| x.rated && ts.iter().any(|y| y.eq_ignore_ascii_case(&to))).and_then(|(x, _)| x.amps);
+            let panel = sp.mep.panel_schedules.iter().find(|p| p.panel.eq_ignore_ascii_case(&to)).and_then(panel_amps);
+            if let Some(a) = piece.or(panel) {
+                found = Some((a, to));
+                break;
+            }
+            at = to;
+        }
+        if let (Some((a, to)), Some(g)) = (found, gear.get_mut(i)) {
+            g.amps = Some(a);
+            g.rating_from = format!("derived: its label prints no rating; {to}'s {a:.0} A, the gear it feeds on the one-line");
+        }
+    }
     // An untagged connection carries the conductors coming into the piece above it.
     let mut resolved = all_links.clone();
     let mut continued: BTreeSet<usize> = BTreeSet::new();
@@ -1461,7 +1572,14 @@ mod tests {
         // A legend's key under its symbol's name: an example rating.
         v.push(t("SAFETY SWITCH", 80.0, 0.0));
         v.push(t("30/2 = 30 AMP, 2 POLE", 80.0, -1.2));
-        assert_eq!(read(&v, "EX-5", &BTreeSet::new()), Vec::new());
+        // Read, each with no rating of its own (the key's row not at all), and on no line of a
+        // one-line: none is built.
+        let rows = read(&v, "EX-5", &BTreeSet::new());
+        assert_eq!(rows.len(), 6, "{rows:#?}");
+        assert!(rows.iter().all(|g| !g.rated && g.kind != "electrode" && !g.label().contains('=')), "{rows:#?}");
+        let legend = page_of(&v);
+        let o = build_into(&mut BuildingSpec::default(), &[("EX-5".into(), legend)], &[], &[]);
+        assert!(o.gear.is_empty() && o.electrodes.is_empty() && o.skipped.len() == 6, "{o:#?}");
         // A rated label beside a tag the model has: that gear's label.
         let mut sp = BuildingSpec::default();
         sp.mep.equipment.push(MepEquipment { tag: "T9".into(), kind: "transformer".into(), ..MepEquipment::default() });
@@ -1512,6 +1630,111 @@ mod tests {
         let mut sp = BuildingSpec::default();
         let o = build_into(&mut sp, &[("EX-5".into(), page)], &[], &[]);
         assert!(o.gear.is_empty() && o.skipped == ["60A/2P DISCONNECT"], "{o:#?}");
+    }
+
+    fn page_of(texts: &[TextItem]) -> cadaddy_doc::Drawing {
+        let mut page = cadaddy_doc::Drawing::default();
+        for x in texts {
+            let text = cadaddy_doc::Text {
+                insert: cadaddy_geom::Vec3::new(x.at.x, x.at.y, 0.0),
+                align_pt: None,
+                height: x.height,
+                value: x.value.clone(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: cadaddy_doc::HAlign::default(),
+                valign: cadaddy_doc::VAlign::default(),
+            };
+            page.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Text(text)).ok();
+        }
+        page
+    }
+
+    /// Test finding (Q6359): a service drawn as labels with no rating of their own (a CT
+    /// enclosure and its disconnect, the utility's meter) between the utility's transformer and
+    /// the main switchboard, the feeder tags across the line from the labels. They are on the
+    /// one-line's line, so they are gear: each built, rated by the switchboard they feed
+    /// (derived), the CT enclosure's tag its own (not the meter's), the meter fed by its tag.
+    #[test]
+    fn unrated_pieces_on_the_one_lines_line_are_built_rated_by_the_gear_they_feed() {
+        let v = vec![
+            t("SINGLE LINE DIAGRAM", 0.0, -40.0),
+            t("UTILITY TRANSFORMER", 5.0, 50.0),
+            t("SV9", -2.0, 45.0),
+            t("NEMA 3R CT ENCLOSURE", 5.0, 42.0),
+            t("AND DISCONNECT", 5.0, 40.5),
+            t("UTILITY METER", 5.0, 36.0),
+            t("SV9", -2.0, 32.0),
+            t("SWX", 5.0, 30.0),
+        ];
+        let mut sp = BuildingSpec::default();
+        let mut sw = PanelSchedule { panel: "SWX".into(), ..PanelSchedule::default() };
+        sw.header.insert("bus amps".into(), "1600A".into());
+        sp.mep.panel_schedules.push(sw);
+        sp.mep.equipment.push(MepEquipment { tag: "SWX".into(), kind: "switchboard".into(), level: "1".into(), ..MepEquipment::default() });
+        let sv = FeederType {
+            tag: "SV9".into(),
+            conduits: 4,
+            conduit_in: 4.0,
+            conductors: 4,
+            size: "500 kcmil".into(),
+            material: "cu".into(),
+            ..FeederType::default()
+        };
+        let o = build_into(&mut sp, &[("EX-5".into(), page_of(&v))], &[sv], &[]);
+        let want: BTreeMap<String, usize> =
+            [("ct_cabinet", 1), ("disconnect", 1), ("meter_socket", 1)].into_iter().map(|(k, n)| (k.to_string(), n)).collect();
+        assert_eq!(o.by_kind, want, "{o:#?}");
+        for e in sp.mep.equipment.iter().filter(|e| is_oneline(e)) {
+            assert_eq!(e.properties.get("RATING").map(String::as_str), Some("1600 A"), "{e:#?}");
+            assert!(e.sources.get("rating").is_some_and(|r| r.starts_with("derived") && r.contains("SWX")), "{e:#?}");
+        }
+        // The meter feeds the switchboard by its tag; the CT enclosure's tag above it isn't the
+        // meter's.
+        let f: Vec<(&str, &str, &str)> = sp.mep.feeders.iter().map(|f| (f.tag.as_str(), f.from.as_str(), f.to.as_str())).collect();
+        assert_eq!(f, [("SV9", "MTR-1", "SWX")], "{:#?}", sp.mep.feeders);
+        // A stack of the same words with nothing on their line (a legend) is not built.
+        let legend: Vec<TextItem> = v.iter().filter(|x| !matches!(x.value.as_str(), "SV9" | "SWX")).cloned().collect();
+        // The sheet's grounding detail: its electrodes print no conductor, yet they are the
+        // service's: two rods drawn one by one (one set of two), the footing's and the water
+        // service's; the same words as a legend's rows are none.
+        let mut g = v.clone();
+        g.extend([
+            t("SYSTEM GROUNDING DETAIL", 60.0, 0.0),
+            t("GROUND ROD", 60.0, 6.0),
+            t("GROUND ROD", 66.0, 6.0),
+            t("BUILDING FOOTER (UFER)", 72.0, 5.0),
+            t("WATER SERVICE", 80.0, 6.0),
+            t("GROUND ROD", 140.0, 6.0),
+        ]);
+        let mut sp = BuildingSpec::default();
+        let mut sw = PanelSchedule { panel: "SWX".into(), ..PanelSchedule::default() };
+        sw.header.insert("bus amps".into(), "1600A".into());
+        sp.mep.panel_schedules.push(sw);
+        sp.mep.equipment.push(MepEquipment { tag: "SWX".into(), kind: "switchboard".into(), level: "1".into(), ..MepEquipment::default() });
+        let sv = FeederType {
+            tag: "SV9".into(),
+            conduits: 4,
+            conduit_in: 4.0,
+            conductors: 4,
+            size: "500 kcmil".into(),
+            material: "cu".into(),
+            ..FeederType::default()
+        };
+        let o = build_into(&mut sp, &[("EX-5".into(), page_of(&g))], &[sv], &[]);
+        let es = sp.mep.grounding.as_ref().map(|x| x.electrodes.clone()).unwrap_or_default();
+        let kinds: Vec<(&str, u32)> = es.iter().map(|e| (e.kind.as_str(), e.count)).collect();
+        assert_eq!(kinds.len(), 3, "{es:#?} {o:#?}");
+        assert!(
+            kinds.contains(&("ground_rod", 2)) && kinds.iter().any(|k| k.0 == "concrete_encased") && kinds.iter().any(|k| k.0 == "water_pipe"),
+            "{kinds:?}"
+        );
+        assert!(o.skipped.iter().any(|x| x == "GROUND ROD"), "the far rod is a legend's: {o:#?}");
+        let mut sp2 = BuildingSpec::default();
+        let o2 = build_into(&mut sp2, &[("EX-5".into(), page_of(&legend))], &[], &[]);
+        assert!(o2.gear.is_empty(), "{o2:#?}");
     }
 
     #[test]

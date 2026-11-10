@@ -16159,7 +16159,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
                 let printed = if tag.is_empty() { format!("{f} to {t} (no tag)") } else { format!("{f} to {t} (tagged {tag})") };
                 match oneline.code_sized.iter().find(|c| c.0 == *f && c.1 == *t) {
                     Some(c) => format!("{printed}, built by code as {} (inferred)", c.3),
-                    None => format!("{printed}, not built: no rating to size it by"),
+                    None => format!("{printed}, not built: no rating to size it by, or more than one set of the code tables carries (the engineer sizes parallel sets)"),
                 }
             })
             .collect();
