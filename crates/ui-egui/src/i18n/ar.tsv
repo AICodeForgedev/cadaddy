@@ -3455,3 +3455,4 @@ menu	View	عرض
 	BIM Views	عروض BIM
 	BIM View Rules	قواعد عروض BIM
 	BIM View Report	تقرير عروض BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	يفعل عرض النموذج ثلاثي الأبعاد والتجول الشيء نفسه أثناء الدوران والمشي؛ تبقى الإضاءة والتفاصيل كما هي.

@@ -3618,3 +3618,4 @@
 	BIM Views	Види BIM
 	BIM View Rules	Правила видів BIM
 	BIM View Report	Звіт про види BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D-вигляд моделі та прогулянка роблять те саме під час обертання й ходьби; освітлення та деталізація не змінюються.

@@ -3467,3 +3467,4 @@
 	BIM Views	Vistas BIM
 	BIM View Rules	Reglas de vistas BIM
 	BIM View Report	Informe de vistas BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	La vista 3D del modelo y el recorrido hacen lo mismo al orbitar y al caminar; su iluminación y su detalle no cambian.

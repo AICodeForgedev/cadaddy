@@ -3441,3 +3441,4 @@ menu	Modify	Modifikace
 	BIM Views	Pohledy BIM
 	BIM View Rules	Pravidla pohledů BIM
 	BIM View Report	Zpráva o pohledech BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D zobrazení modelu a procházka dělají totéž při otáčení a chůzi; jejich osvětlení a podrobnosti zůstávají stejné.

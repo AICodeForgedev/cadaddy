@@ -1,6 +1,7 @@
-//! Dynamic resolution for the 2D canvas, as games do it: while the view pans or zooms, a drawing
+//! Dynamic resolution for the 2D canvas and the 3D views, as games do it: while the view pans or
+//! zooms (or orbits, or walks), a picture
 //! that the GPU can't draw at the target frame rate is drawn into a smaller picture and scaled up
-//! to the canvas; once the view has been still for the settle time it is drawn once at full
+//! to the view; once the view has been still for the settle time it is drawn once at full
 //! resolution. At rest the picture is always the full-resolution one.
 //!
 //! The scale comes from the GPU's own time for drawing the drawing (timestamp queries around the
@@ -19,6 +20,11 @@
 //! - never goes below the floor (half resolution each way, the last level);
 //! - keeps its level from one pan to the next, so a slow drawing starts the next pan at the
 //!   scale it needed.
+//!
+//! The 3D views (the shaded Model view and Walk) have a controller of their own ([`with_3d`]),
+//! with the same rules and settings: their GPU time is a different picture's (the shaded passes
+//! from the first to the main one, timed in `shaded` and `walk::gpu`), and a [`Motion`] says when
+//! their camera moves. Only pixels change: the fidelity tier and the lighting are what they were.
 //!
 //! The settings: DYNRESMODE (on/off) and DYNRESFPS (the target), in Options ▸ Display; `ui.gpu
 //! {dynamicScale}` or `CADADDY_GPU_LIMITS=dynscale=50` forces a scale while moving (tests, and
@@ -231,11 +237,101 @@ thread_local! {
     /// The app's controller (one for every canvas: they share the GPU). The app's frames, the
     /// canvas's paint callbacks and the timings are all on the interface's thread.
     static CONTROLLER: RefCell<Controller> = RefCell::new(Controller::default());
+    /// The 3D views' controller (the shaded Model view and Walk: one is shown at a time).
+    static CONTROLLER_3D: RefCell<Controller> = RefCell::new(Controller::default());
 }
 
 /// Run `f` on the app's controller (`None` only while it is already borrowed).
 pub fn with<R>(f: impl FnOnce(&mut Controller) -> R) -> Option<R> {
     CONTROLLER.with(|c| c.try_borrow_mut().ok().map(|mut c| f(&mut c)))
+}
+
+/// Run `f` on the 3D views' controller (`None` only while it is already borrowed).
+pub fn with_3d<R>(f: impl FnOnce(&mut Controller) -> R) -> Option<R> {
+    CONTROLLER_3D.with(|c| c.try_borrow_mut().ok().map(|mut c| f(&mut c)))
+}
+
+/// Whether a 3D view's camera is moving: the camera it was drawn from changed within the settle
+/// time. Fed the camera each frame (any values that change when the picture's view does).
+#[derive(Clone, Debug, Default)]
+pub struct Motion {
+    camera: Option<Vec<u64>>,
+    /// When the camera last changed (ms, [`crate::now_ms`]'s clock).
+    changed_at: f64,
+}
+
+impl Motion {
+    /// This frame's camera at `now_ms`: the milliseconds since it last changed (0 when it just
+    /// did; a first frame is not a move and returns infinity).
+    pub fn track(&mut self, camera: &[f64], now_ms: f64) -> f64 {
+        let bits: Vec<u64> = camera.iter().map(|v| v.to_bits()).collect();
+        match &self.camera {
+            None => {
+                self.camera = Some(bits);
+                self.changed_at = f64::NEG_INFINITY;
+            }
+            Some(c) if *c != bits => {
+                self.camera = Some(bits);
+                self.changed_at = now_ms;
+            }
+            Some(_) => {}
+        }
+        now_ms - self.changed_at
+    }
+
+    /// Moving: changed within the settle time.
+    pub fn moving(since_ms: f64) -> bool {
+        since_ms < SETTLE_MS
+    }
+}
+
+/// A 3D view's size this frame: `size` (its full-resolution picture) at the 3D controller's
+/// scale while `moving` (at full resolution at rest, and whenever the controller is busy), and
+/// that scale. When moving, `ctx` is asked for a frame after the settle time, so the still view
+/// is drawn sharp even when nothing else repaints; once still, a pan's lessons are forgotten.
+pub fn size_3d(ctx: &egui::Context, size: (u32, u32), since_ms: f64) -> ((u32, u32), f32) {
+    let moving = Motion::moving(since_ms);
+    if moving {
+        ctx.request_repaint_after(std::time::Duration::from_millis((SETTLE_MS - since_ms).max(1.0) as u64 + 5));
+    } else if since_ms < SETTLE_MS * 4.0 {
+        with_3d(Controller::still);
+    }
+    let scale = with_3d(|c| c.scale(moving)).unwrap_or(1.0);
+    let [w, h] = scaled_size([size.0, size.1], scale);
+    let scale = if (w, h) == size { 1.0 } else { scale };
+    ((w, h), scale)
+}
+
+/// The first time the 3D controller draws a moving view smaller this session, the status line's
+/// note (said once).
+pub fn note_3d() -> Option<String> {
+    thread_local! {
+        static SAID: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    let (scale, fps, forced) = with_3d(|c| (c.moving_scale(), (1000.0 / c.target_ms).round(), c.forced.is_some()))?;
+    if scale >= 1.0 || forced || SAID.with(std::cell::Cell::get) {
+        return None;
+    }
+    SAID.with(|s| s.set(true));
+    Some(format!("the 3D view is drawn at {:.0} % resolution while it moves, to hold {fps} fps; sharp when it stops", scale * 100.0))
+}
+
+/// What `ui.inspect`'s `perf.dynamicResolution3d` reports.
+pub fn json_3d(shown: f32) -> serde_json::Value {
+    with_3d(|c| {
+        serde_json::json!({
+            "on": c.on,
+            "targetFps": (1000.0 / c.target_ms).round(),
+            "scale": c.moving_scale(),
+            "shown": shown,
+            "level": c.level(),
+            "forced": c.forced,
+            "gpuMs": c.mean_ms().map(|m| (m * 100.0).round() / 100.0),
+            "last": c.last.map(|(ms, s)| serde_json::json!({"ms": (ms * 100.0).round() / 100.0, "scale": s})),
+            "timed": c.timed,
+        })
+    })
+    .unwrap_or(serde_json::Value::Null)
 }
 
 /// What `ui.inspect`'s `perf.dynamicResolution` reports.
@@ -366,6 +462,19 @@ mod tests {
             c.sample(bad, 1.0);
         }
         assert_eq!(c.mean_ms(), None);
+    }
+
+    /// A camera that changes is moving for the settle time after; the first frame is still.
+    #[test]
+    fn a_3d_camera_moves_until_it_has_been_still_for_the_settle_time() {
+        let mut m = Motion::default();
+        assert!(!Motion::moving(m.track(&[1.0, 2.0], 0.0)), "the first frame is not a move");
+        assert!(!Motion::moving(m.track(&[1.0, 2.0], 1000.0)));
+        assert_eq!(m.track(&[1.0, 2.5], 1000.0), 0.0);
+        assert!(Motion::moving(m.track(&[1.0, 2.5], 1000.0 + SETTLE_MS * 0.5)));
+        assert!(!Motion::moving(m.track(&[1.0, 2.5], 1000.0 + SETTLE_MS + 1.0)), "still: drawn sharp");
+        // A different count of values is a different camera.
+        assert!(Motion::moving(m.track(&[1.0], 5000.0)));
     }
 
     #[test]

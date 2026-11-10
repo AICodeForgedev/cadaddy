@@ -558,7 +558,8 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             app.canvas.shade.reset_gpu();
             if let Some(w) = app.walk.as_mut() {
-                w.gpu = None;
+                // (Uploaded again too: a new renderer starts empty.)
+                w.reset_gpu();
             }
             Ok(app.gpu_caps.json())
         }

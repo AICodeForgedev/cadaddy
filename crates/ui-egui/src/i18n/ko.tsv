@@ -3460,3 +3460,4 @@ menu	Modify	수정
 	BIM Views	BIM 보기
 	BIM View Rules	BIM 보기 규칙
 	BIM View Report	BIM 보기 보고서
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D 모델 뷰와 걷기도 궤도 회전과 걷기 중에 같은 방식으로 동작하며, 조명과 상세 수준은 그대로 유지됩니다.

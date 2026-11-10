@@ -924,10 +924,12 @@ pub fn pass_timer_on() -> bool {
     PASS_TIMER.load(Ordering::Relaxed)
 }
 
-/// Device features the canvas uses when the adapter has them: timestamp queries time the
-/// drawing's pass for [`crate::dynres`]. Ask for them when the device is made.
+/// Device features the canvas and the 3D views use when the adapter has them: timestamp queries
+/// time the drawing's pass and the 3D frames for [`crate::dynres`]; the adapter's own format
+/// features allow the 3D views' 2× multisampling on integrated graphics (without them only 1×
+/// and 4× may be asked for, see [`crate::gpucaps`]). Ask for them when the device is made.
 pub fn wanted_features(adapter: &wgpu::Adapter) -> wgpu::Features {
-    adapter.features() & wgpu::Features::TIMESTAMP_QUERY
+    adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
 }
 
 /// Once per app frame, after the last frame went to the GPU: read the drawing passes' timings
@@ -936,7 +938,9 @@ pub fn read_pass_times(rs: &egui_wgpu::RenderState) {
     if let Some(res) = rs.renderer.read().callback_resources.get::<Resources>()
         && let Some(t) = &res.timer
     {
-        t.read(&rs.device, &rs.queue);
+        t.read(&rs.device, &rs.queue, |ms, scale| {
+            crate::dynres::with(|c| c.sample(ms, scale));
+        });
     }
 }
 
@@ -1891,7 +1895,7 @@ impl Resources {
 /// readback buffer in the same encoder; the next app frame (the commands have gone to the GPU)
 /// maps it, and a later one reads it. A slot is reused once read, so at most [`TIMER_SLOTS`]
 /// passes are in flight; a pass with no free slot isn't timed.
-struct PassTimer {
+pub(crate) struct PassTimer {
     set: wgpu::QuerySet,
     resolve: Tracked,
     slots: Vec<TimerSlot>,
@@ -1914,6 +1918,11 @@ const SLOT_MAPPED: u8 = 3;
 const SLOT_FAILED: u8 = 4;
 
 impl PassTimer {
+    /// A timer on a device with timestamp queries (none without them).
+    pub(crate) fn on(device: &wgpu::Device) -> Option<PassTimer> {
+        device.features().contains(wgpu::Features::TIMESTAMP_QUERY).then(|| PassTimer::new(device))
+    }
+
     fn new(device: &wgpu::Device) -> PassTimer {
         let set = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("cad_frame_time"),
@@ -1941,12 +1950,23 @@ impl PassTimer {
         PassTimer { set, resolve, slots }
     }
 
-    fn free_slot(&self) -> Option<usize> {
+    /// The timestamp writes of a pass in slot `i`'s span: at its beginning, its end, or both
+    /// (the span may run over several passes: the first's beginning to the last's end).
+    pub(crate) fn writes(&self, i: usize, begin: bool, end: bool) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        let at = 2 * u32::try_from(i).ok()?;
+        (begin || end).then(|| wgpu::RenderPassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: begin.then_some(at),
+            end_of_pass_write_index: end.then_some(at + 1),
+        })
+    }
+
+    pub(crate) fn free_slot(&self) -> Option<usize> {
         self.slots.iter().position(|s| s.state.load(Ordering::Acquire) == SLOT_FREE)
     }
 
     /// Slot `i`'s pass was recorded: resolve its queries and copy them out.
-    fn written(&self, encoder: &mut wgpu::CommandEncoder, i: usize, scale: Option<f32>) {
+    pub(crate) fn written(&self, encoder: &mut wgpu::CommandEncoder, i: usize, scale: Option<f32>) {
         let Some(slot) = self.slots.get(i) else { return };
         let at = TIMER_STRIDE * i as u64;
         encoder.resolve_query_set(&self.set, 2 * i as u32..2 * i as u32 + 2, &self.resolve, at);
@@ -1955,8 +1975,9 @@ impl PassTimer {
         slot.state.store(SLOT_WRITTEN, Ordering::Release);
     }
 
-    /// Map the slots written last frame; read the mapped ones into the controller.
-    fn read(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    /// Map the slots written last frame; hand the mapped ones to `sink` (GPU milliseconds, the
+    /// scale the picture was drawn at).
+    pub(crate) fn read(&self, device: &wgpu::Device, queue: &wgpu::Queue, mut sink: impl FnMut(f64, f32)) {
         let _ = device.poll(wgpu::PollType::Poll);
         let period = f64::from(queue.get_timestamp_period());
         for slot in &self.slots {
@@ -1980,7 +2001,7 @@ impl PassTimer {
                         // A pass ends after it starts; anything else is a reset counter.
                         if end > start {
                             let ms = (end - start) as f64 * period / 1e6;
-                            crate::dynres::with(|c| c.sample(ms, scale));
+                            sink(ms, scale);
                         }
                     }
                 }

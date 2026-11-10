@@ -3535,3 +3535,4 @@
 	BIM Views	BIM 视图
 	BIM View Rules	BIM 视图规则
 	BIM View Report	BIM 视图报告
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	三维模型视图和漫游在环绕和行走时也是如此；其照明和细节保持不变。

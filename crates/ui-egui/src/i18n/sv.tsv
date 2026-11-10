@@ -3624,3 +3624,4 @@ menu	Modify	Ändra
 	BIM Views	BIM-vyer
 	BIM View Rules	Regler för BIM-vyer
 	BIM View Report	Rapport för BIM-vyer
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D-modellvyn och promenaden gör likadant vid kretsning och gång; belysning och detaljnivå förblir som de är.
