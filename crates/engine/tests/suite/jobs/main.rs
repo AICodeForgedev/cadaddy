@@ -79,6 +79,7 @@ mod soak5speed;
 mod spectag;
 mod stairs;
 mod swing_joined;
+mod symbol_walls;
 mod tagidentity;
 mod takeoff_drywall_pieces;
 mod takeoff_windows;
