@@ -194,6 +194,8 @@ const DASH_GAP_MAX_IN: f64 = 12.0;
 const DASH_RUN: usize = 3;
 /// Dashed lines looked at, at most (hostile drawings).
 const MAX_DASH_LINES: usize = 200_000;
+/// The longest pattern of pieces a dashed line repeats: a dash (1), dash-dot (2), dash-dot-dot (3).
+const DASH_PERIOD_MAX: usize = 3;
 /// A gap under this share of the piece beside it is a joint, not a dashed line's space: masonry
 /// units drawn one by one are about 3% joint, while a dashed line's spaces are a good part of its
 /// dashes.
@@ -205,8 +207,10 @@ pub(crate) const JOINT_MAX_IN: f64 = 1.5;
 /// pieces: a soffit, a header or a wall above). Three or more pieces on one line, each at most
 /// [`DASH_MAX_IN`] long and about as long as the next, with about equal gaps of at most
 /// [`DASH_GAP_MAX_IN`] between them, are a dashed line: no wall's face (paired with another line
-/// it made a wall across a door's opening). A wall's face broken by other walls (pieces much
-/// longer) or by doors and windows (gaps wider) is kept. `k` is drawing units per inch. Returns
+/// it made a wall across a door's opening). So are pieces repeating a pattern of two or three
+/// (a dash-dot or dash-dot-dot line: a callout's or a centre line's dashes and dots, each piece
+/// about as long as the one a pattern before it) in at least three repeats. A wall's face broken
+/// by other walls (pieces much longer) or by doors and windows (gaps wider) is kept. `k` is drawing units per inch. Returns
 /// how many pieces were taken out.
 pub(crate) fn drop_dashes(segs: &mut Vec<Seg>, k: f64) -> usize {
     use std::f64::consts::PI;
@@ -239,41 +243,282 @@ pub(crate) fn drop_dashes(segs: &mut Vec<Seg>, k: f64) -> usize {
             continue;
         }
         run.sort_by(|a, b| a.0.total_cmp(&b.0));
-        // Grow rows of dashes: each piece about as long as the last, each gap about as wide.
-        let mut start = 0usize;
-        let mut last_gap: Option<f64> = None;
-        let mark = |from: usize, to: usize, dash: &mut Vec<bool>| {
-            if to + 1 - from >= DASH_RUN {
-                for r in run.get(from..=to).into_iter().flatten() {
-                    if let Some(d) = dash.get_mut(r.2) {
-                        *d = true;
+        let rows: Vec<(f64, f64, usize)> = run.clone();
+        let len = |j: usize| rows.get(j).map_or(0.0, |r| r.1 - r.0);
+        let gap = |j: usize| match (j.checked_sub(1).and_then(|i| rows.get(i)), rows.get(j)) {
+            (Some(p), Some(c)) => c.0 - p.1,
+            _ => f64::NAN,
+        };
+        // Grow rows of dashes: each piece about as long as the one a pattern before it (the last
+        // for a dashed line, two back for a dash-dot one, three for dash-dot-dot), each gap about
+        // as wide.
+        for period in 1..=DASH_PERIOD_MAX {
+            let mark = |from: usize, to: usize, dash: &mut Vec<bool>| {
+                if to + 1 - from > (DASH_RUN - 1) * period {
+                    for r in rows.get(from..=to).into_iter().flatten() {
+                        if let Some(d) = dash.get_mut(r.2) {
+                            *d = true;
+                        }
                     }
                 }
+            };
+            let mut start = 0usize;
+            for j in 1..rows.len() {
+                let g = gap(j);
+                let spaced = g > 0.05 * k && g > JOINT_SHARE * len(j - 1).max(len(j)) && g <= max_gap;
+                let back = j.checked_sub(period).filter(|&b| b >= start);
+                let steady = spaced
+                    && back.is_none_or(|b| close(len(b), len(j), 0.15, 0.25 * k))
+                    && back.filter(|&b| b > start).is_none_or(|b| close(gap(b), g, 0.25, 0.5 * k));
+                if !steady {
+                    mark(start, j - 1, &mut dash);
+                    start = j;
+                }
             }
-        };
-        let rows: Vec<(f64, f64, usize)> = run.clone();
-        for j in 1..rows.len() {
-            let (Some(prev), Some(cur)) = (rows.get(j - 1), rows.get(j)) else { continue };
-            let gap = cur.0 - prev.1;
-            let steady = gap > 0.05 * k
-                && gap > JOINT_SHARE * (prev.1 - prev.0).max(cur.1 - cur.0)
-                && gap <= max_gap
-                && close(prev.1 - prev.0, cur.1 - cur.0, 0.15, 0.25 * k)
-                && last_gap.is_none_or(|g| close(g, gap, 0.25, 0.5 * k));
-            if steady {
-                last_gap = Some(gap);
-            } else {
-                mark(start, j - 1, &mut dash);
-                start = j;
-                last_gap = None;
-            }
+            mark(start, rows.len() - 1, &mut dash);
         }
-        mark(start, rows.len() - 1, &mut dash);
     }
     let before = segs.len();
     let mut it = dash.iter();
     segs.retain(|_| !it.next().copied().unwrap_or(false));
     before - segs.len()
+}
+
+/// A faceted arc (a print's flattened curve) turns at least this many vertices in a row.
+const ARC_TURNS: usize = 3;
+/// Each of a faceted arc's turns, degrees: at least (less is a straight line drawn in pieces), at
+/// most (more is a corner).
+const FACET_TURN_DEG: (f64, f64) = (2.0, 40.0);
+/// A rounded corner turns at least this far in all, degrees.
+const ROUNDED_TURN_DEG: f64 = 45.0;
+/// A faceted arc's chords are at least (shorter ones are a scanned line's jitter) and at most
+/// this long, inches.
+const FACET_MIN_IN: f64 = 0.25;
+const FACET_MAX_IN: f64 = 24.0;
+/// The share of a rounded outline's length a wall's other face must run beside for it to be a
+/// wall's face ("its whole length", less a little for where its walls meet others).
+const PARTNER_SHARE: f64 = 0.95;
+/// How far a partner face may turn from the outline, degrees (a concentric arc's chords meet the
+/// outline's at up to half a facet's turn).
+const PARTNER_TURN_DEG: f64 = 20.0;
+/// The outline is probed every this many inches along its length.
+const PARTNER_STEP_IN: f64 = 2.0;
+/// Rounded outlines looked at, and probes made, at most (hostile drawings).
+const MAX_ROUNDED: usize = 20_000;
+const MAX_PROBES: usize = 2_000_000;
+/// Grid cells a partner line is entered in, at most over all of them.
+const MAX_PARTNER_CELLS: usize = 8_000_000;
+
+/// The points of a polyline's path, arcs flattened (within a quarter inch).
+fn path_points(p: &cadaddy_doc::LwPolyline, k: f64) -> Vec<Vec2> {
+    let mut pts = Polyline { vertices: p.vertices.clone(), closed: p.closed }.tessellate((0.25 * k).max(1e-9));
+    if p.closed && pts.len() > 1 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) > 1e-9) {
+        pts.extend(pts.first().copied());
+    }
+    pts.retain(|v| v.is_finite());
+    pts
+}
+
+/// Whether a polyline has a rounded corner: an arc (a bulge), or a faceted one — at least
+/// [`ARC_TURNS`] vertices in a row each turning the same way by [`FACET_TURN_DEG`] between short
+/// chords ([`FACET_MIN_IN`]..[`FACET_MAX_IN`]) about as long as each other, [`ROUNDED_TURN_DEG`] or more in all.
+fn has_rounded_corner(p: &cadaddy_doc::LwPolyline, k: f64) -> bool {
+    let n = p.vertices.len();
+    let arcs = if p.closed { n } else { n.saturating_sub(1) };
+    if p.vertices.iter().take(arcs).any(|v| v.bulge.is_finite() && v.bulge.abs() > 1e-6) {
+        return true;
+    }
+    let mut pts: Vec<Vec2> = Vec::with_capacity(n);
+    for v in &p.vertices {
+        if v.p.is_finite() && pts.last().is_none_or(|l: &Vec2| l.dist(v.p) > 1e-6 * k.max(1e-9)) {
+            pts.push(v.p);
+        }
+    }
+    let closed = p.closed || (pts.len() > 3 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-6 * k.max(1e-9)));
+    if closed && pts.len() > 1 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-6 * k.max(1e-9)) {
+        pts.pop();
+    }
+    let m = pts.len();
+    if m < 3 {
+        return false;
+    }
+    // Each vertex's turn (signed, degrees) and the chord after it; the ends of an open one don't turn.
+    let at = |i: usize| pts.get(i % m).copied().unwrap_or_default();
+    let turn = |i: usize| -> Option<f64> {
+        if !closed && (i == 0 || i + 1 >= m) {
+            return None;
+        }
+        let (a, b, c) = (at(i + m - 1), at(i), at(i + 1));
+        let (u, v) = (b - a, c - b);
+        let t = u.cross(v).atan2(u.dot(v)).to_degrees();
+        t.is_finite().then_some(t)
+    };
+    let facet = |t: Option<f64>| t.filter(|t| (FACET_TURN_DEG.0..=FACET_TURN_DEG.1).contains(&t.abs()));
+    // A closed outline is read from a vertex that is no facet's (all facets: a circle).
+    let start = if closed { (0..m).find(|&i| facet(turn(i)).is_none()) } else { Some(0) };
+    let Some(start) = start else { return true };
+    let (mut run, mut total, mut sign, mut chords) = (0usize, 0.0f64, 0.0f64, (f64::INFINITY, 0.0f64));
+    let (min_chord, max_chord) = (FACET_MIN_IN * k, FACET_MAX_IN * k);
+    for step in 0..=m {
+        let i = start + step;
+        let t = if step == m { None } else { facet(turn(i)) };
+        // The chord into this vertex, when the last one turned too: inside the arc.
+        let chord = at(i).dist(at(i + m - 1));
+        let goes_on = t.is_some_and(|t| run == 0 || t.signum() == sign) && (run == 0 || (min_chord..=max_chord).contains(&chord));
+        if goes_on {
+            if run > 0 {
+                chords = (chords.0.min(chord), chords.1.max(chord));
+            }
+            run += 1;
+            total += t.map_or(0.0, f64::abs);
+            sign = t.map_or(0.0, f64::signum);
+            continue;
+        }
+        let alike = run < 2 || chords.1 <= 2.0 * chords.0 + 0.1 * k;
+        if run >= ARC_TURNS && total >= ROUNDED_TURN_DEG && alike {
+            return true;
+        }
+        // This vertex may begin the next run.
+        (run, total, chords) = (0, 0.0, (f64::INFINITY, 0.0));
+        if let Some(t) = t {
+            run = 1;
+            total = t.abs();
+            sign = t.signum();
+        }
+    }
+    false
+}
+
+/// The polylines with rounded corners that are no wall's face: a rounded outline (an arc or a
+/// faceted arc at a corner, see [`has_rounded_corner`]) is a wall's face only where a wall's other
+/// face runs beside it, parallel and a wall's thickness away, for its whole length (the share
+/// [`PARTNER_SHARE`]), the arcs too: a wall with rounded corners draws both faces round them. One
+/// that isn't — an enlarged-plan callout's boundary round a stair, a core or a unit, drawn closed or
+/// in pieces (each corner piece a dash running round the arc), a revision cloud, a door swing — is
+/// an annotation: paired with a wall's face beside it, it made walls across corridors and in
+/// stairs, and a second gap and window where it ran along an outside wall. `ents` are the objects
+/// the faces come from (any other one may be the partner), `k` drawing units per inch. Returns the
+/// handles of the polylines to leave out.
+pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, lim: &Limits) -> std::collections::HashSet<cadaddy_doc::Handle> {
+    use std::collections::{HashMap, HashSet};
+    let mut out = HashSet::new();
+    if !(k.is_finite() && k > 0.0 && lim.max_thick.is_finite() && lim.max_thick > 0.0) {
+        return out;
+    }
+    let rounded: Vec<(usize, Vec<Vec2>)> = ents
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match &e.kind {
+            EntityKind::LwPolyline(p) if p.vertices.len() >= 3 && has_rounded_corner(p, k) => Some((i, path_points(p, k))),
+            _ => None,
+        })
+        .take(MAX_ROUNDED)
+        .collect();
+    if rounded.is_empty() {
+        return out;
+    }
+    // The probes along each outline: (point, direction, length it stands for).
+    let step = (PARTNER_STEP_IN * k).max(1e-9);
+    let mut budget = MAX_PROBES;
+    let probes: Vec<Vec<(Vec2, Vec2, f64)>> = rounded
+        .iter()
+        .map(|(_, pts)| {
+            let mut v = Vec::new();
+            for w in pts.windows(2) {
+                let (Some(&a), Some(&b)) = (w.first(), w.get(1)) else { continue };
+                let len = a.dist(b);
+                if len <= 1e-9 || budget == 0 {
+                    continue;
+                }
+                let n = ((len / step).ceil() as usize).clamp(1, budget);
+                budget -= n;
+                let u = (b - a) * (1.0 / len);
+                v.extend((0..n).map(|j| (a + (b - a) * ((j as f64 + 0.5) / n as f64), u, len / n as f64)));
+            }
+            v
+        })
+        .collect();
+    // The other objects' straight pieces near the probes, by grid cell.
+    let cell = lim.max_thick.max(1e-9);
+    let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<(Vec2, Vec2, usize)>> = HashMap::new();
+    for p in probes.iter().flatten() {
+        let (cx, cy) = key(p.0);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                grid.entry((cx + dx, cy + dy)).or_default();
+            }
+        }
+    }
+    let mut cells_left = MAX_PARTNER_CELLS;
+    'ents: for (i, e) in ents.iter().enumerate() {
+        let pieces: Vec<(Vec2, Vec2)> = match &e.kind {
+            EntityKind::Line(l) => vec![(l.a.xy(), l.b.xy())],
+            EntityKind::LwPolyline(p) => path_points(p, k).windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).collect(),
+            _ => continue,
+        };
+        for (a, b) in pieces {
+            if !(a.is_finite() && b.is_finite()) || a.dist(b) <= 1e-9 {
+                continue;
+            }
+            // The cells along it (half a cell apart), entered where a probe looks.
+            let n = ((a.dist(b) / (0.5 * cell)).ceil() as usize).saturating_add(1);
+            if n > cells_left {
+                break 'ents;
+            }
+            cells_left -= n;
+            let mut last = None;
+            for j in 0..=n {
+                let c = key(a + (b - a) * (j as f64 / n as f64));
+                if last == Some(c) {
+                    continue;
+                }
+                last = Some(c);
+                if let Some(list) = grid.get_mut(&c) {
+                    list.push((a, b, i));
+                }
+            }
+        }
+    }
+    let max_turn = PARTNER_TURN_DEG.to_radians().sin();
+    for ((own, _), probes) in rounded.iter().zip(&probes) {
+        let total: f64 = probes.iter().map(|p| p.2).sum();
+        if total <= 1e-9 {
+            continue;
+        }
+        let beside: f64 = probes
+            .iter()
+            .filter(|(p, u, _)| {
+                let (cx, cy) = key(*p);
+                (-1..=1).any(|dx| {
+                    (-1..=1).any(|dy| {
+                        grid.get(&(cx + dx, cy + dy)).into_iter().flatten().any(|&(a, b, i)| {
+                            if i == *own {
+                                return false;
+                            }
+                            let d = b - a;
+                            let len = d.len();
+                            if len <= 1e-9 || (d * (1.0 / len)).cross(*u).abs() > max_turn {
+                                return false;
+                            }
+                            // The nearest point on it lies across the outline, a wall's thickness off.
+                            let t = ((*p - a).dot(d) / (len * len)).clamp(0.0, 1.0);
+                            let off = a + d * t - *p;
+                            let gap = off.len();
+                            (lim.min_thick..=lim.max_thick).contains(&gap) && off.dot(*u).abs() <= 0.5 * gap
+                        })
+                    })
+                })
+            })
+            .map(|p| p.2)
+            .sum();
+        if beside < PARTNER_SHARE * total
+            && let Some(e) = ents.get(*own)
+        {
+            out.insert(e.handle);
+        }
+    }
+    out
 }
 
 /// Joins the faces of a wall drawn unit by unit (masonry blocks, each face its own piece): three or
@@ -1841,6 +2086,63 @@ mod tests {
         assert_eq!(segs.iter().filter(|s| s.a.y == 300.0).count(), 2);
         // No units: nothing taken.
         assert_eq!(drop_dashes(&mut segs, 0.0), 0);
+    }
+
+    #[test]
+    fn a_dash_dot_line_in_pieces_is_no_wall_face() {
+        // Inches (k = 1). A callout's dash-dot side: 18" dashes, 2" dots, 4" spaces (4 dashes, 3
+        // dots); a dash-dot-dot centre line (24", 2", 2", 3" spaces, 3 repeats and a dash).
+        let mut segs = Vec::new();
+        let mut x = 0.0;
+        for i in 0..7 {
+            let len = if i % 2 == 0 { 18.0 } else { 2.0 };
+            segs.push(seg((x, 0.0), (x + len, 0.0), f64::INFINITY));
+            x += len + 4.0;
+        }
+        let mut x = 0.0;
+        for i in 0..10 {
+            let len = if i % 3 == 0 { 24.0 } else { 2.0 };
+            segs.push(seg((x, 60.0), (x + len, 60.0), f64::INFINITY));
+            x += len + 3.0;
+        }
+        // Two dashes and a dot are too few to tell; a wall face in two pieces with a post between.
+        segs.extend([seg((0.0, 120.0), (18.0, 120.0), f64::INFINITY), seg((22.0, 120.0), (24.0, 120.0), f64::INFINITY)]);
+        segs.push(seg((28.0, 120.0), (46.0, 120.0), f64::INFINITY));
+        segs.extend([seg((0.0, 180.0), (28.0, 180.0), f64::INFINITY), seg((34.0, 180.0), (62.0, 180.0), f64::INFINITY)]);
+        assert_eq!(drop_dashes(&mut segs, 1.0), 17);
+        assert!(segs.iter().all(|s| s.a.y >= 120.0), "{segs:?}");
+        assert_eq!(segs.len(), 5);
+    }
+
+    fn lwpoly(pts: &[(f64, f64, f64)], closed: bool) -> cadaddy_doc::LwPolyline {
+        let vertices: Vec<Value> =
+            pts.iter().map(|&(x, y, b)| json!({"p": {"x": x, "y": y}, "bulge": b, "start_width": 0.0, "end_width": 0.0})).collect();
+        serde_json::from_value(json!({"vertices": vertices, "closed": closed})).unwrap()
+    }
+
+    #[test]
+    fn rounded_corners_are_arcs_and_faceted_arcs_not_corners_or_jitter() {
+        // Inches (k = 1). A callout's corner piece: a dash, a quarter circle in six chords, a dash.
+        let mut pts = vec![(-10.0, -12.0, 0.0)];
+        pts.extend((0..=6).map(|i| (f64::from(i) * 15.0 + 270.0).to_radians()).map(|a| (12.0 * a.cos(), 12.0 * a.sin(), 0.0)));
+        pts.push((12.0, 8.0, 0.0));
+        assert!(has_rounded_corner(&lwpoly(&pts, false), 1.0));
+        // An arc (a bulge) between two sides.
+        assert!(has_rounded_corner(&lwpoly(&[(0.0, 0.0, 0.0), (20.0, 0.0, 0.414), (30.0, 10.0, 0.0), (30.0, 40.0, 0.0)], false), 1.0));
+        // A rectangle, an octagon (45° corners), a wall face with a jog, a line drawn with jitter.
+        assert!(!has_rounded_corner(&lwpoly(&[(0.0, 0.0, 0.0), (40.0, 0.0, 0.0), (40.0, 6.0, 0.0), (0.0, 6.0, 0.0)], true), 1.0));
+        let oct: Vec<(f64, f64, f64)> = (0..8).map(|i| (f64::from(i) * 45.0).to_radians()).map(|a| (10.0 * a.cos(), 10.0 * a.sin(), 0.0)).collect();
+        assert!(!has_rounded_corner(&lwpoly(&oct, true), 1.0));
+        assert!(!has_rounded_corner(&lwpoly(&[(0.0, 0.0, 0.0), (50.0, 0.0, 0.0), (50.0, 2.0, 0.0), (90.0, 2.0, 0.0)], false), 1.0));
+        let jitter: Vec<(f64, f64, f64)> = (0..40).map(|i| (f64::from(i) * 0.1, 0.01 * f64::from(i % 3), 0.0)).collect();
+        assert!(!has_rounded_corner(&lwpoly(&jitter, false), 1.0));
+        // A circle in chords is all arc.
+        let circle: Vec<(f64, f64, f64)> = (0..24).map(|i| (f64::from(i) * 15.0).to_radians()).map(|a| (10.0 * a.cos(), 10.0 * a.sin(), 0.0)).collect();
+        assert!(has_rounded_corner(&lwpoly(&circle, true), 1.0));
+        // No units: nothing to probe.
+        let e = std::sync::Arc::new(Entity::new(cadaddy_doc::Handle(1), EntityKind::LwPolyline(lwpoly(&circle, true))));
+        assert!(rounded_outlines_alone(&[&e], 0.0, &Limits { min_thick: 2.5, max_thick: 20.0, min_len: 12.0 }).is_empty());
+        assert_eq!(rounded_outlines_alone(&[&e], 1.0, &Limits { min_thick: 2.5, max_thick: 20.0, min_len: 12.0 }).len(), 1);
     }
 
     #[test]

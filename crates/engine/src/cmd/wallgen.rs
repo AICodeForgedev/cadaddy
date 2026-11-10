@@ -2055,6 +2055,17 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // Layers whose wall type draws the centreline aren't paired: each line is a wall.
     let (centre_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) =
         wall_ents.iter().copied().partition(|e| wall_type(g, &e.common.layer).is_some_and(|t| t.from == cadaddy_walk3d::WallFrom::Centerline));
+    // A rounded outline with no wall's other face beside it all along (a callout's boundary, a
+    // door swing) is no wall's face.
+    let alone = super::perceive::geometry::rounded_outlines_alone(&pair_ents, k, &lim);
+    if !alone.is_empty() {
+        notes.push(format!(
+            "{}: {} rounded outlines (callout boundaries, swings) with no wall's other face along them not taken for wall faces.",
+            level.name,
+            alone.len()
+        ));
+    }
+    let pair_ents: Vec<&Arc<Entity>> = pair_ents.into_iter().filter(|e| !alone.contains(&e.handle)).collect();
     let mut segs = segments(&pair_ents);
     // A dashed line (an overhead or hidden line drawn in pieces) is no wall's face.
     let dashes = super::perceive::geometry::drop_dashes(&mut segs, k);

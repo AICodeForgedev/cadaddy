@@ -88,6 +88,7 @@ mod ugplan;
 mod unittypes;
 mod wall_assemblies;
 mod wallgen;
+mod callout_walls;
 mod walllayout;
 mod wholejob;
 mod windows_typed;
