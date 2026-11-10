@@ -83,7 +83,8 @@ pub fn mtext_quad(t: &crate::MText) -> [Vec2; 4] {
         _ => 0.0,
     };
     let o = t.insert.xy();
-    [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)].map(|p| o + p.rotate(t.rotation))
+    [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)]
+        .map(|p| o + p.rotate(t.rotation))
 }
 
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {

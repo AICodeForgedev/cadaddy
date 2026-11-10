@@ -108,7 +108,11 @@ fn zoomed_out_a_sheet_draws_less_and_zooming_in_brings_its_detail_back() {
     let (sym, at) = syms[syms.len() / 2];
     look_at(&mut h, at, 120.0);
     assert!(!h.state().canvas.sheet_images.shown, "zoomed in, the linework is drawn");
-    assert!(settle(&mut h, |a| !a.canvas.building() && prims(a, sym).len() > 1), "zoomed in, the symbol's contents are drawn: {:?}", prims(h.state(), sym));
+    assert!(
+        settle(&mut h, |a| !a.canvas.building() && prims(a, sym).len() > 1),
+        "zoomed in, the symbol's contents are drawn: {:?}",
+        prims(h.state(), sym)
+    );
     // Zoomed back out: the picture again, at once (it was kept).
     let builds = h.state().canvas.sheet_images.builds;
     let _ = h.state_mut().session.execute("zoom", &json!({"mode": "extents"}));
@@ -188,6 +192,20 @@ fn counts_and_takeoff_are_the_same_at_every_zoom() {
     assert_eq!(read(&mut h), zoomed_out, "without detail levels");
 }
 
+/// A drawing at an ordinary zoom looks as it did: the sample part drawing at its extents has
+/// nothing too small to show, so its list is the one drawn in full (the screenshots' scenes).
+#[test]
+fn an_ordinary_view_draws_as_before() {
+    let mut h = harness(sample::default_sample());
+    let list = |a: &CadApp| a.canvas.list.as_ref().map(|l| (l.prims.clone(), l.verts.clone(), l.tris.clone()));
+    let with = list(h.state());
+    assert!(h.state().canvas.list_detail.is_some());
+    h.state_mut().canvas.full_detail = true;
+    h.run_steps(3);
+    assert!(h.state().canvas.list_detail.is_none());
+    assert!(with.is_some() && with == list(h.state()), "the same list with detail levels as without");
+}
+
 /// An ordinary drawing (no sheets) gets the detail levels but no picture.
 #[test]
 fn an_ordinary_drawing_has_no_picture() {
@@ -210,7 +228,12 @@ fn memory_mb() -> (f64, f64) {
     {
         let pid = std::process::id();
         let out = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &format!("$p = Get-Process -Id {pid}; \"$($p.WorkingSet64) $($p.PeakWorkingSet64)\"")])
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("$p = Get-Process -Id {pid}; \"$($p.WorkingSet64) $($p.PeakWorkingSet64)\""),
+            ])
             .output();
         let text = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
         let v: Vec<f64> = text.split_whitespace().filter_map(|t| t.parse::<f64>().ok()).collect();
@@ -219,7 +242,9 @@ fn memory_mb() -> (f64, f64) {
     #[cfg(not(target_os = "windows"))]
     {
         let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
-        let kb = |key: &str| status.lines().find_map(|l| l.strip_prefix(key)).and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok()).unwrap_or(0.0);
+        let kb = |key: &str| {
+            status.lines().find_map(|l| l.strip_prefix(key)).and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok()).unwrap_or(0.0)
+        };
         (kb("VmRSS:") / 1e3, kb("VmHWM:") / 1e3)
     }
 }
@@ -324,7 +349,16 @@ fn measure(label: &str, d: cadaddy_engine::doc::Drawing, full: bool, rs: Option<
             let drawn = if picture { 4 } else { m.line_vertices() + m.tri_vertices() + m.quad_instances() * 4 };
             (l.prims.len(), l.verts.len() + l.tris.len(), m.lines.len() + m.tris.len() + m.quads.len(), drawn)
         });
-        Seen { prims, verts, gpu_bytes, gpu_drawn, build_ms: a.canvas.build_ms, ready_ms, frame_ms: ms.get(ms.len() / 2).copied().unwrap_or(0.0), picture }
+        Seen {
+            prims,
+            verts,
+            gpu_bytes,
+            gpu_drawn,
+            build_ms: a.canvas.build_ms,
+            ready_ms,
+            frame_ms: ms.get(ms.len() / 2).copied().unwrap_or(0.0),
+            picture,
+        }
     };
     let t0 = Instant::now();
     frame(&mut h, None);

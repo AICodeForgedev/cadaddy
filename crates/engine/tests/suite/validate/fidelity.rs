@@ -225,7 +225,10 @@ fn plan_detail_rules_are_data_the_project_edits() {
     assert_eq!(built_in.tier_of("WIDGET", "0"), Tier::Floor, "the default");
     // The project raises the text threshold and adds a symbol rule; the rest stays built-in.
     let r = s
-        .execute("view.fidelity.rules", &json!({"plan": {"text_bar_px": 6, "symbols": [{"words": ["widget"], "tier": "detail", "why": "this project"}]}}))
+        .execute(
+            "view.fidelity.rules",
+            &json!({"plan": {"text_bar_px": 6, "symbols": [{"words": ["widget"], "tier": "detail", "why": "this project"}]}}),
+        )
         .unwrap();
     assert_eq!(r["source"], "project");
     assert_eq!(r["plan"]["text_bar_px"], json!(6.0));

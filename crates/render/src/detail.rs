@@ -37,7 +37,8 @@ impl SymbolRule {
         if self.words.is_empty() && self.layers.is_empty() {
             return false;
         }
-        (self.words.is_empty() || self.words.iter().any(|w| has_word(block, w))) && (self.layers.is_empty() || self.layers.iter().any(|w| has_word(layer, w)))
+        (self.words.is_empty() || self.words.iter().any(|w| has_word(block, w)))
+            && (self.layers.is_empty() || self.layers.iter().any(|w| has_word(layer, w)))
     }
 }
 
@@ -441,7 +442,12 @@ mod tests {
             EntityKind::Hatch(Box::new(Hatch {
                 pattern: "ANSI31".into(),
                 solid: false,
-                loops: vec![HatchLoop { curves: Vec::new(), vertices: rect.iter().map(|p| PolyVertex::new(*p)).collect(), outer: true, sources: Vec::new() }],
+                loops: vec![HatchLoop {
+                    curves: Vec::new(),
+                    vertices: rect.iter().map(|p| PolyVertex::new(*p)).collect(),
+                    outer: true,
+                    sources: Vec::new(),
+                }],
                 scale: 12.0,
                 angle: 0.0,
                 associative: false,
@@ -502,7 +508,12 @@ mod tests {
         assert!(of(&near, outlet).len() > 1, "zoomed in, the outlet's contents come in");
         // And far out the list is much smaller.
         let far_full = build(&d, &Space::Model, &Options { detail: None, ..at(1.2) });
-        assert!(far.prims.len() + far.verts.len() < (far_full.prims.len() + far_full.verts.len()) / 2, "{} / {}", far.verts.len(), far_full.verts.len());
+        assert!(
+            far.prims.len() + far.verts.len() < (far_full.prims.len() + far_full.verts.len()) / 2,
+            "{} / {}",
+            far.verts.len(),
+            far_full.verts.len()
+        );
     }
 
     #[test]

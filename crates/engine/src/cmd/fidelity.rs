@@ -655,7 +655,10 @@ fn run_rules(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(v) = p.get("plan").filter(|v| !v.is_null()) {
         if !v.is_object() {
-            return Err(bad(RULES_CMD, "`plan` must be an object: {dot_px?, text_bar_px?, hatch_tint_px?, box_px?, tier_px?, default_tier?, symbols?, …}"));
+            return Err(bad(
+                RULES_CMD,
+                "`plan` must be an object: {dot_px?, text_bar_px?, hatch_tint_px?, box_px?, tier_px?, default_tier?, symbols?, …}",
+            ));
         }
         let o = own.get_or_insert_with(|| json!({}));
         let mut plan = o.get("plan").cloned().unwrap_or_else(|| json!({}));

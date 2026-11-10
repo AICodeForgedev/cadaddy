@@ -8,8 +8,8 @@ mod viewport;
 pub use viewport::ViewportPoint;
 
 use cadaddy_doc::{Drawing, EntityKind, Insert, MAX_BLOCK_DEPTH, Prim, Space};
-use cadaddy_render::detail::{Detail, Look};
 use cadaddy_geom::{Bounds2, Circle, EPS, Ellipse, Mat3, PI, Segment, Vec2, intersect_ext};
+use cadaddy_render::detail::{Detail, Look};
 use serde::Serialize;
 
 /// OSMODE bits.
@@ -162,7 +162,16 @@ pub fn osnap(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u3
 /// drawn as less (a dot, a bar, a symbol's box) offers only its insertion point, never a point
 /// of geometry the screen doesn't show. `None`: everything in full.
 #[allow(clippy::too_many_arguments)]
-pub fn osnap_drawn(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32, base: Option<Vec2>, deferred: bool, detail: Option<&Detail>) -> Option<SnapHit> {
+pub fn osnap_drawn(
+    d: &Drawing,
+    space: &Space,
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+    base: Option<Vec2>,
+    deferred: bool,
+    detail: Option<&Detail>,
+) -> Option<SnapHit> {
     if osmode == 0 || osmode & mode::OFF != 0 {
         return None;
     }
