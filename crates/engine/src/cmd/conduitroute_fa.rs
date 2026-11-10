@@ -1083,7 +1083,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
     // -- The signaling line circuits: the documents' loops by address, else storey by storey up
     // the riser, nearest neighbour, a loop closed at its device capacity. --
     let initiating: Vec<Node> =
-        fa_devs.iter().filter(|x| x.role == Role::Initiating).map(|x| node_of_dev(x)).chain(modules.iter().cloned()).collect();
+        fa_devs.iter().filter(|x| x.role == Role::Initiating).map(node_of_dev).chain(modules.iter().cloned()).collect();
     let info: HashMap<Handle, &FaDevice> = fa_devs.iter().map(|x| (x.handle, x)).collect();
     let mut loops: BTreeMap<String, Vec<Node>> = BTreeMap::new();
     let mut rest: Vec<Node> = Vec::new();

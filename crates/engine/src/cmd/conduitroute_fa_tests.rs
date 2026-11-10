@@ -257,7 +257,7 @@ fn the_documents_circuits_and_addresses_set_the_order_and_the_loop_rises_to_the_
     let xs: Vec<f64> = t.fields["members"]
         .value
         .split(',')
-        .filter_map(|h| Handle::parse_hex(h))
+        .filter_map(Handle::parse_hex)
         .filter_map(|h| d.model.get(h))
         .filter_map(|e| mesh_box(e))
         .map(|(lo, hi)| ((lo.x + hi.x) / 24.0).round())

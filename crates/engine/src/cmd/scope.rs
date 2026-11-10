@@ -2018,6 +2018,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let rooms = room_boxes(s.doc()?);
             let (placed, not) = place_panels(&mut sp, &panel_places(&docs), &rooms);
             s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+            // A panel the fire alarm wiring placed by rule goes for the documents' (Q6503).
+            super::conduitroute::fa::remove_placed(s.doc_mut()?, &placed);
             let built = build_panels(s.doc_mut()?, &sp, &placed, &rooms);
             out["panels"] =
                 json!({"placed": placed, "built": built, "not_placed": not.iter().map(|(t, w)| json!({"tag": t, "why": w})).collect::<Vec<_>>()});

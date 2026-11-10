@@ -118,7 +118,10 @@ fn other_trades_devices_are_listed_by_others_and_the_documents_decide_our_part()
     // Nothing read yet: each class by its default, said so.
     let bom = s.execute("bim.bom", &json!({})).expect("bom");
     let by = others(&bom);
-    assert_eq!(by.len(), 6, "the thermostat, four fire alarm devices and the TV outlet: {by:#?}");
+    // With the fire alarm control panel the wiring places by rule while no document places it
+    // (Q6503).
+    assert_eq!(by.len(), 7, "the thermostat, four fire alarm devices, the TV outlet and the rule's panel: {by:#?}");
+    assert!(by.iter().any(|x| x["element"] == "FACP"), "{by:#?}");
     assert!(
         by.iter().all(|x| x["decided"] == "default" && x["cost_to_us"] == 0.0 && x["reason"].as_str().unwrap().starts_with("no document says")),
         "{by:#?}"
