@@ -947,7 +947,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             setVisible(outline, !architectural && liftFocus == nil)
             for id in risers { if let e = elementEntities[id] { setOpacity(e, liftFocus == nil ? 1 : 0.18) } }
             orbitGoal.y = liftFocus == nil ? 0.56 : 0.38
-            fit(buildingPoints(lift: offs, architectural: architectural, full: fullOn), yaw: orbitGoal.x, pitch: orbitGoal.y)
+            fit(buildingPoints(lift: offs, architectural: architectural, full: fullOn), yaw: nearestAngle(designYaw, to: orbitGoal.x), pitch: orbitGoal.y, filling: true)
             for (number, _) in raise { raise[number]?.goal = 0 }
         case let .floor(i):
             dropRoom()
@@ -1117,12 +1117,18 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
 
     /// Points the camera so `pts` fill the free area, centred. `turn` lets it turn up to that many radians from
     /// `yaw` when another angle shows the subject clearly larger.
-    private func fit(_ pts: [SIMD3<Float>], yaw: Float, pitch: Float, turn: Float = 0) {
+    private func fit(_ pts: [SIMD3<Float>], yaw: Float, pitch: Float, turn: Float = 0, filling: Bool = false) {
         framePoints = pts
         frameTurn = turn
+        frameFilling = filling
+        if filling { fillPitch = pitch }
         guard let vp = viewport, !pts.isEmpty else { return }
-        let pose = SceneFraming.fitTurning(pts, yaw: yaw, spread: turn, pitch: pitch, fovYDegrees: Self.fov, viewport: vp, free: freeArea, margin: 14)
+        // The building views fill the free area (Q6431): they may turn and look down a little to do it.
+        let pose = filling
+            ? SceneFraming.fitFilling(pts, yaw: yaw, pitch: fillPitch, fovYDegrees: Self.fov, viewport: vp, free: freeArea, margin: 14)
+            : SceneFraming.fitTurning(pts, yaw: yaw, spread: turn, pitch: pitch, fovYDegrees: Self.fov, viewport: vp, free: freeArea, margin: 14)
         targetGoal = pose.target
+        orbitGoal.y = pose.pitch
         orbitGoal.x = pose.yaw
         orbitGoal.z = pose.distance
         lastFree = freeArea
@@ -1131,6 +1137,9 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// The view size the last fit used: a fit asked for before the view had a size is redone once it has one.
     private var fittedViewport: CGSize = .zero
     private var frameTurn: Float = 0
+    private var frameFilling = false
+    /// The design pitch a filling fit started from (it may look down more; a refit starts from the same place).
+    private var fillPitch: Float = 0.56
     /// The design angle each scope starts from (turning from the last fitted angle would drift).
     private var designYaw: Float = -2.25
 
@@ -1138,7 +1147,8 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// moved the camera since.
     func chromeChanged() {
         guard !userMoved, !framePoints.isEmpty, freeArea != lastFree || viewport != fittedViewport else { return }
-        fit(framePoints, yaw: frameTurn > 0 ? nearestAngle(designYaw, to: orbitGoal.x) : orbitGoal.x, pitch: orbitGoal.y, turn: frameTurn)
+        fit(framePoints, yaw: frameTurn > 0 || frameFilling ? nearestAngle(designYaw, to: orbitGoal.x) : orbitGoal.x, pitch: frameFilling ? fillPitch : orbitGoal.y,
+            turn: frameTurn, filling: frameFilling)
         if reduceMotion { snapCamera() }
     }
 
@@ -1516,16 +1526,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
 
     /// Label priority (higher keeps its place): the selected element, then equipment by size, then rooms by
     /// area, then fixtures, then terminals.
-    static func labelPriority(_ e: BuildingElement) -> Int {
-        let bb = e.shape.bounds
-        let v = (bb.max - bb.min)
-        let size = min(Int(v.x * v.y * v.z * 10), 999)
-        switch e.role {
-        case .equipment: return 3000 + size
-        case .fixture: return 1500 + size
-        default: return 1000 + size
-        }
-    }
+    static func labelPriority(_ e: BuildingElement) -> Int { LabelLayout.priority(e) }
 
     func refreshLabels(_ scope: DesignScope) {
         var want: [String: (String, SIMD3<Float>, Int, Bool, Int)] = [:]   // key → text, point, level, mono, priority
@@ -1604,14 +1605,16 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// leader, or dropped lowest priority first (LabelLayout).
     private func positionLabels() {
         guard let v = view, !labels.isEmpty else { leaderLayer.path = nil; return }
-        let selectedKey = exp?.selected.map { "d-\($0)" }
+        // The tapped object's label shows even when the layout had hidden it (it outranks every other).
+        let sel = exp?.selected
+        let selectedKeys: Set<String> = sel.map { ["d-\($0)", "e-\($0)"] } ?? []
         var cands: [LabelCandidate] = []
         cands.reserveCapacity(labels.count)
         for (k, l) in labels {
             guard let (p, lv) = labelAnchors[k] else { continue }
             let up = lift.indices.contains(lv) ? lift[lv] : 0
             guard let s = v.project(p + SIMD3(0, up, 0)) else { continue }
-            let prio = (labelPriority[k] ?? 0) + (k == selectedKey ? 10_000 : 0)
+            let prio = (labelPriority[k] ?? 0) + (selectedKeys.contains(k) ? LabelLayout.tappedBoost : 0)
             cands.append(LabelCandidate(id: k, anchor: s, size: l.bounds.size, priority: prio))
         }
         var avoid: [CGRect] = []

@@ -232,6 +232,40 @@ public enum SceneFraming {
         return best
     }
 
+    /// How much of `free` the subject's screen rectangle covers (0…1), and the empty bands above and below it as
+    /// fractions of the free height.
+    public static func coverage(_ pts: [SIMD3<Float>], pose: OrbitPose, fovYDegrees: Float, viewport: CGSize, free: CGRect) -> (area: CGFloat, top: CGFloat, bottom: CGFloat) {
+        guard let sb = screenBounds(pts, pose: pose, fovYDegrees: fovYDegrees, viewport: viewport), free.width > 0, free.height > 0 else { return (0, 1, 1) }
+        let i = sb.intersection(free)
+        guard !i.isNull else { return (0, 1, 1) }
+        return (i.width * i.height / (free.width * free.height), max(sb.minY - free.minY, 0) / free.height, max(free.maxY - sb.maxY, 0) / free.height)
+    }
+
+    /// The building views' framing: the subject fills the free area (between the title block, the bottom controls and
+    /// the floor rail), not just a band across its middle. Fits at the design angle, then turns up to `yawSpread`
+    /// either way and looks down up to `pitchUp` more, and keeps the pose whose picture covers the most of the free
+    /// area (a mild cost per radian keeps the design angle when another is not clearly better). Every pose keeps the
+    /// whole subject inside the free area, centred.
+    public static func fitFilling(_ pts: [SIMD3<Float>], yaw: Float, pitch: Float, fovYDegrees: Float, viewport: CGSize, free: CGRect,
+                                  margin: CGFloat = 12, yawSpread: Float = 1.1, pitchUp: Float = 0.4, maxPitch: Float = 1.0,
+                                  costPerRadian: CGFloat = 0.06) -> OrbitPose {
+        var best = fit(pts, yaw: yaw, pitch: pitch, fovYDegrees: fovYDegrees, viewport: viewport, free: free, margin: margin)
+        var bestScore = coverage(pts, pose: best, fovYDegrees: fovYDegrees, viewport: viewport, free: free).area
+        let yawSteps = 8, pitchSteps = 4
+        for pk in 0...pitchSteps {
+            let dp = pitchUp * Float(pk) / Float(pitchSteps)
+            let p = min(pitch + dp, max(maxPitch, pitch))
+            for yk in -yawSteps...yawSteps {
+                let dy = yawSpread * Float(yk) / Float(yawSteps)
+                if pk == 0 && yk == 0 { continue }
+                let pose = fit(pts, yaw: yaw + dy, pitch: p, fovYDegrees: fovYDegrees, viewport: viewport, free: free, margin: margin)
+                let score = coverage(pts, pose: pose, fovYDegrees: fovYDegrees, viewport: viewport, free: free).area - costPerRadian * CGFloat(abs(dy) + (p - pitch))
+                if score > bestScore + 0.005 { best = pose; bestScore = score }
+            }
+        }
+        return best
+    }
+
     /// The pose at (`yaw`, `pitch`) whose view puts every point inside `free` (inset by `margin`), as large as
     /// possible and centred in it. The target slides sideways and up/down in the camera plane to centre the
     /// projection; the distance is the smallest that fits.
@@ -298,8 +332,25 @@ public struct PlacedLabel: Equatable, Sendable {
 }
 
 public enum LabelLayout {
-    /// Gap kept between two labels, and between a label and the chrome.
+    /// Gap kept between a label and the screen edge or the chrome.
     public static let spacing: CGFloat = 3
+    /// Gap kept between two labels: wide enough that close gear never reads as one crowded block.
+    public static let labelGap: CGFloat = 6
+    /// Added to the tapped object's label: it shows even where the layout would hide it.
+    public static let tappedBoost = 10_000
+
+    /// Label priority (higher keeps its place): equipment by size (the biggest gear keeps its label), then
+    /// fixtures, then the rest by size.
+    public static func priority(_ e: BuildingElement) -> Int {
+        let bb = e.shape.bounds
+        let v = (bb.max - bb.min)
+        let size = min(Int(v.x * v.y * v.z * 10), 999)
+        switch e.role {
+        case .equipment: return 3000 + size
+        case .fixture: return 1500 + size
+        default: return 1000 + size
+        }
+    }
 
     /// Offsets tried in order: on the anchor, then above, below, right, left, the diagonals, then farther out.
     /// Each is in label-size units plus a leader length, so a big label moves as far as it needs to.
@@ -334,7 +385,7 @@ public enum LabelLayout {
                 let f = CGRect(x: c.anchor.x + o.x - c.size.width / 2, y: c.anchor.y + o.y - c.size.height / 2, width: c.size.width, height: c.size.height)
                 guard inner.contains(f) else { continue }
                 if blocked.contains(where: { $0.intersects(f) }) { continue }
-                let grown = f.insetBy(dx: -spacing, dy: -spacing)
+                let grown = f.insetBy(dx: -labelGap, dy: -labelGap)
                 if placed.contains(where: { $0.frame.intersects(grown) }) { continue }
                 placed.append(PlacedLabel(id: c.id, frame: f, slot: slot, anchor: c.anchor))
                 break

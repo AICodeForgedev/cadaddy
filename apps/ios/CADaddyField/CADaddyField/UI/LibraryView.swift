@@ -10,8 +10,17 @@ struct LibraryView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
             List(selection: $app.selection) {
-                if app.packages.isEmpty {
+                if app.packages.isEmpty && app.buildings.isEmpty {
                     emptyState
+                }
+                if !app.buildings.isEmpty, Self.buildingAvailable {
+                    Section("Buildings") {
+                        ForEach(app.buildings) { b in
+                            Button { app.open(building: b) } label: { BuildingRow(record: b) }
+                                .buttonStyle(.plain)
+                        }
+                        .onDelete { idx in app.deleteBuildings(idx.map { app.buildings[$0].id }) }
+                    }
                 }
                 ForEach(app.packages) { r in
                     PackageRow(record: r, hasRoom: app.library?.hasWorldMap(r) ?? false,
@@ -45,7 +54,7 @@ struct LibraryView: View {
                     } label: { Label("Add", systemImage: "plus") }
                 }
             }
-            .overlay { if app.importing { ProgressView("Opening…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+            .overlay { if app.importing || app.openingBuilding { ProgressView("Opening…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
             .overlay(alignment: .bottom) { if let p = app.updateProgress { UpdateProgressView(progress: p) { app.cancelUpdate() }.padding() } }
         } detail: {
             if let r = app.record(app.selection), let lib = app.library {
@@ -63,6 +72,13 @@ struct LibraryView: View {
         .fullScreenCover(isPresented: Binding(get: { app.showBuilding && Self.buildingAvailable }, set: { app.showBuilding = $0 })) {
             if #available(iOS 18.0, *) {
                 BuildingView(onClose: { app.showBuilding = false })
+            }
+        }
+        .fullScreenCover(item: Binding(get: { Self.buildingAvailable ? app.openBuilding : nil }, set: { app.openBuilding = $0 })) { open in
+            if #available(iOS 18.0, *) {
+                BuildingView(experience: BuildingExperience(set: open.model, opening: open.opening, failures: open.failures),
+                             onClose: { app.openBuilding = nil },
+                             onStandInRoom: { room in app.standIn(room: room, of: open.record) })
             }
         }
         .sheet(item: Binding(get: { app.updateReport.map(ReportItem.init) }, set: { if $0 == nil { app.updateReport = nil } })) { item in
@@ -84,6 +100,22 @@ struct LibraryView: View {
             }
         }
         .padding(.vertical, 8)
+    }
+}
+
+struct BuildingRow: View {
+    let record: SetRecord
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(record.title, systemImage: "building.2").font(.headline).lineLimit(2)
+            HStack(spacing: 10) {
+                if let e = record.exported { Text("Exported \(e.prefix(10))") }
+                if let u = record.updated { Text("Updated \(u.formatted(date: .abbreviated, time: .shortened))") } else { Text(record.added, style: .date) }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+        .accessibilityHint("Opens the building: MEP, Architectural, each floor and room")
     }
 }
 
