@@ -3453,3 +3453,6 @@
 	Previous Sheet	Plano anterior
 	Page {n}	Página {n}
 	Page Up and Page Down step through the sheets.	Re Pág y Av Pág recorren los planos.
+	Frame rate to hold while moving	Fotogramas por segundo a mantener al moverse
+	Lower the resolution while panning and zooming when the graphics are slow	Bajar la resolución al desplazar y hacer zoom cuando los gráficos son lentos
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	El dibujo se vuelve nítido en cuanto la vista se detiene. Los trazados, las exportaciones y las capturas de pantalla siempre tienen resolución completa.

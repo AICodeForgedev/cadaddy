@@ -3604,3 +3604,6 @@
 	Move MEP Element	Перемістити елемент MEP
 	Resize MEP Element	Змінити розмір елемента MEP
 	Set MEP Element Properties	Задати властивості елемента MEP
+	Frame rate to hold while moving	Частота кадрів під час руху
+	Lower the resolution while panning and zooming when the graphics are slow	Знижувати роздільність під час панорамування й масштабування, коли графіка повільна
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Креслення стає чітким, щойно вигляд зупиняється. Друк, експорт і знімки екрана завжди мають повну роздільність.

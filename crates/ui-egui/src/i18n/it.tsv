@@ -3519,3 +3519,6 @@ menu	Modify	Edita
 	Previous Sheet	Foglio precedente
 	Page {n}	Pagina {n}
 	Page Up and Page Down step through the sheets.	Pag su e Pag giù scorrono i fogli.
+	Frame rate to hold while moving	Frequenza di fotogrammi da mantenere in movimento
+	Lower the resolution while panning and zooming when the graphics are slow	Abbassa la risoluzione durante panoramica e zoom quando la grafica è lenta
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Il disegno torna nitido appena la vista si ferma. Stampe, esportazioni e schermate sono sempre a piena risoluzione.

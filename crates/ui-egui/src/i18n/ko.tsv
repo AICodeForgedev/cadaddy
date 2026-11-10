@@ -3446,3 +3446,6 @@ menu	Modify	수정
 	Previous Sheet	이전 시트
 	Page {n}	페이지 {n}
 	Page Up and Page Down step through the sheets.	Page Up과 Page Down으로 시트를 넘깁니다.
+	Frame rate to hold while moving	이동 중 유지할 프레임 속도
+	Lower the resolution while panning and zooming when the graphics are slow	그래픽이 느릴 때 이동 및 확대/축소 중 해상도 낮추기
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	보기가 멈추면 바로 도면이 선명해집니다. 플롯, 내보내기, 스크린샷은 항상 전체 해상도입니다.

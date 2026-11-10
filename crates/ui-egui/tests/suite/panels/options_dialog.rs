@@ -248,3 +248,27 @@ fn selection_highlight_settings_set_save_and_show_in_the_selection_tab() {
         assert!(text.contains(label), "{label} missing from:\n{text}");
     }
 }
+
+/// Dynamic resolution's settings (DYNRESMODE, DYNRESFPS) show on the Display tab, are set by the
+/// JSON form, survive a restart, and reach the 2D canvas's controller on the next frame.
+#[test]
+fn dynamic_resolution_settings_show_set_and_reach_the_canvas() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    a.ui.dialog = Some("options:display".into());
+    let text = render(&mut a, &ctx);
+    assert!(text.contains("Lower the resolution while panning and zooming"), "{text}");
+    assert!(text.contains("Frame rate to hold while moving"), "{text}");
+    let r = a.run("options", json!({"DYNRESMODE": 0, "DYNRESFPS": 60})).unwrap();
+    assert_eq!((r["DYNRESMODE"].clone(), r["DYNRESFPS"].clone()), (json!(0), json!(60)));
+    assert!(a.run("options", json!({"DYNRESFPS": 500})).is_err());
+    render(&mut a, &ctx);
+    let (on, target) = cadaddy_ui_egui::dynres::with(|c| (c.on, c.target_ms)).unwrap();
+    assert!(!on && (target - 1000.0 / 60.0).abs() < 1e-9, "{on} {target}");
+    let mut b = app();
+    b.load_profile(&a.profile_json());
+    assert!(!b.session.settings.dynres && b.session.settings.dynres_fps == 60);
+    a.run("options", json!({"DYNRESMODE": 1, "DYNRESFPS": 30})).unwrap();
+    render(&mut a, &ctx);
+    assert_eq!(cadaddy_ui_egui::dynres::with(|c| c.on), Some(true));
+}

@@ -16,7 +16,7 @@
 //! canvas falls back to the CPU path when no wgpu render state was handed to the app.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cadaddy_color::Rgb;
@@ -384,6 +384,51 @@ pub struct CanvasCallback {
     pub dash: f32,
     /// How the draw uses the stencil buffer.
     pub stencil: Stencil,
+    /// The view is moving (a pan or a zoom in the last [`crate::dynres::SETTLE_MS`]): the
+    /// drawing may be drawn at a lower resolution ([`crate::dynres`]). Set by
+    /// [`CanvasCallback::track_motion`].
+    pub moving: bool,
+}
+
+thread_local! {
+    /// Per drawing layer: the view it was last drawn at and when that changed (ms).
+    static VIEWS: std::cell::RefCell<std::collections::HashMap<usize, (Vec<u32>, f64)>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+impl CanvasCallback {
+    /// Whether this is a drawing's own layer (the drawing, or model space through the active
+    /// viewport): the layers drawn at a lower resolution while the view moves. Highlight, drag
+    /// previews, the crosshair and every overlay stay at full resolution.
+    pub fn reducible(&self) -> bool {
+        matches!(self.layer % LAYERS_PER_CANVAS, LAYER_DRAWING | LAYER_VIEWPORT) && self.stencil == Stencil::Off
+    }
+
+    /// Note this frame's view of the layer: [`Self::moving`] is set while it changed in the last
+    /// settle time, and a frame is asked for when the settle time is over, so the still view is
+    /// drawn at full resolution even when nothing else repaints.
+    pub fn track_motion(mut self, ctx: &egui::Context) -> Self {
+        let now = crate::now_ms();
+        let view: Vec<u32> = self.offset.iter().chain(&[self.scale]).chain(&self.center).chain(&self.xform).map(|v| v.to_bits()).collect();
+        let since = VIEWS.with(|m| {
+            let mut m = m.borrow_mut();
+            let e = m.entry(self.layer).or_insert_with(|| (view.clone(), f64::NEG_INFINITY));
+            // (A layer's first frame is not a move: its entry starts at this view.)
+            if e.0 != view {
+                e.1 = now;
+                e.0 = view;
+            }
+            now - e.1
+        });
+        let settle = crate::dynres::SETTLE_MS;
+        self.moving = since < settle;
+        if self.moving {
+            ctx.request_repaint_after(std::time::Duration::from_millis((settle - since).max(1.0) as u64 + 5));
+        } else if self.reducible() && since < settle * 4.0 {
+            // The pan is over: what it learnt about steps that didn't pay is forgotten.
+            crate::dynres::with(crate::dynres::Controller::still);
+        }
+        self
+    }
 }
 
 /// How a [`CanvasCallback`] uses the stencil buffer ([`GpuTarget::stencil`]): a clipped
@@ -556,9 +601,12 @@ struct FrameCache {
     /// The pass's stencil buffer, when the canvas pipelines name one.
     stencil: Option<TrackedView>,
     group: wgpu::BindGroup,
+    /// The texture's size: the window's, or less while the view moves ([`crate::dynres`]).
     size: [u32; 2],
-    /// What the texture shows: the mesh and the view uniform's bytes.
-    shows: Option<(u64, Vec<u8>)>,
+    /// The window's size the picture covers.
+    window: [u32; 2],
+    /// What the texture shows: the mesh, the view uniform's bytes and the texture's size.
+    shows: Option<(u64, Vec<u8>, [u32; 2])>,
     used: web_time::Instant,
 }
 
@@ -576,6 +624,37 @@ static FRAMES_KEPT: AtomicU64 = AtomicU64::new(0);
 /// it unchanged (`ui.inspect`'s `perf.frameCache`).
 pub fn frame_cache_counts() -> (u64, u64) {
     (FRAMES_DRAWN.load(Ordering::Relaxed), FRAMES_KEPT.load(Ordering::Relaxed))
+}
+
+/// The scale the drawing was last drawn at (f32 bits): 1 at rest ([`crate::dynres`]).
+static SHOWN_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000);
+/// The GPU times the drawing's pass (timestamp queries).
+static PASS_TIMER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The scale the drawing was last drawn at each way: 1 is full resolution.
+pub fn shown_scale() -> f32 {
+    f32::from_bits(SHOWN_SCALE.load(Ordering::Relaxed))
+}
+
+/// Whether the GPU times the drawing's pass, so the moving scale can follow it.
+pub fn pass_timer_on() -> bool {
+    PASS_TIMER.load(Ordering::Relaxed)
+}
+
+/// Device features the canvas uses when the adapter has them: timestamp queries time the
+/// drawing's pass for [`crate::dynres`]. Ask for them when the device is made.
+pub fn wanted_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    adapter.features() & wgpu::Features::TIMESTAMP_QUERY
+}
+
+/// Once per app frame, after the last frame went to the GPU: read the drawing passes' timings
+/// that have arrived, and ask for the ones written last frame.
+pub fn read_pass_times(rs: &egui_wgpu::RenderState) {
+    if let Some(res) = rs.renderer.read().callback_resources.get::<Resources>()
+        && let Some(t) = &res.timer
+    {
+        t.read(&rs.device, &rs.queue);
+    }
 }
 
 /// Free the kept frames of layers that are no longer drawn (a closed drawing, a view switched to
@@ -608,6 +687,11 @@ struct Resources {
     /// Shows a layer's kept frame ([`FrameCache`]) in the window's pass.
     blit_pipeline: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
+    /// Shows a smaller kept frame (drawn while the view moved) scaled up, filtered.
+    scaled_pipeline: wgpu::RenderPipeline,
+    scaled_layout: wgpu::BindGroupLayout,
+    /// Times the passes that draw kept frames, when the device has timestamp queries.
+    timer: Option<PassTimer>,
     target: GpuTarget,
     /// Vertices a layer holds before its frame is kept ([`FRAME_CACHE_MIN`]; tests lower it).
     frame_cache_min: u64,
@@ -788,6 +872,33 @@ fn fs_blit(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Shows a kept frame drawn smaller than the window (the view was moving): one triangle over the
+/// window, the texture stretched over it and filtered. Premultiplied values filter correctly.
+const SCALED_SHADER: &str = r#"
+@group(0) @binding(0) var frame: texture_2d<f32>;
+@group(0) @binding(1) var smp: sampler;
+
+struct VOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_scaled(@builtin(vertex_index) i: u32) -> VOut {
+    let x = f32((i << 1u) & 2u);
+    let y = f32(i & 2u);
+    var o: VOut;
+    o.pos = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    o.uv = vec2<f32>(x, y);
+    return o;
+}
+
+@fragment
+fn fs_scaled(v: VOut) -> @location(0) vec4<f32> {
+    return textureSampleLevel(frame, smp, v.uv, 0.0);
+}
+"#;
+
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     const ATTRS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Unorm8x4];
     wgpu::VertexBufferLayout { array_stride: VERTEX_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &ATTRS }
@@ -940,6 +1051,63 @@ impl Resources {
             multiview_mask: None,
             cache: None,
         });
+        let scaled_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cad_frame_scaled"),
+            source: wgpu::ShaderSource::Wgsl(SCALED_SHADER.into()),
+        });
+        let scaled_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("cad_frame_scaled"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let scaled_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cad_frame_scaled"),
+            bind_group_layouts: &[Some(&scaled_layout)],
+            immediate_size: 0,
+        });
+        let scaled_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cad_frame_scaled"),
+            layout: Some(&scaled_pl),
+            vertex: wgpu::VertexState {
+                module: &scaled_module,
+                entry_point: Some("vs_scaled"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: stencil_state(Stencil::Off),
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            fragment: Some(wgpu::FragmentState {
+                module: &scaled_module,
+                entry_point: Some("fs_scaled"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target.format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let timer = device.features().contains(wgpu::Features::TIMESTAMP_QUERY).then(|| PassTimer::new(device));
+        PASS_TIMER.store(timer.is_some(), Ordering::Relaxed);
         use wgpu::PrimitiveTopology::{LineList, TriangleList};
         Resources {
             line_pipeline: pipeline("cad_lines", "vs_line", LineList, vertex_layout(), Stencil::Off),
@@ -965,6 +1133,9 @@ impl Resources {
             textures: std::collections::HashMap::new(),
             blit_pipeline,
             blit_layout,
+            scaled_pipeline,
+            scaled_layout,
+            timer,
             target,
             frame_cache_min: FRAME_CACHE_MIN,
             linear_out: target.format.is_srgb(),
@@ -1247,8 +1418,8 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         // Whole-screen device pixels; egui already set the scissor to the canvas clip rect.
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
         // The frame kept for this mesh and view (see `keep_frame`): its picture, not the layer.
-        if let Some(c) = res.cache.as_ref().filter(|c| res.cached && c.size == [sw, sh]) {
-            pass.set_pipeline(&shared.blit_pipeline);
+        if let Some(c) = res.cache.as_ref().filter(|c| res.cached && c.window == [sw, sh]) {
+            pass.set_pipeline(if c.size == c.window { &shared.blit_pipeline } else { &shared.scaled_pipeline });
             pass.set_bind_group(0, &c.group, &[]);
             pass.draw(0..3, 0..1);
             return;
@@ -1320,12 +1491,19 @@ impl Resources {
             res.cache = None;
             return;
         }
+        // While the view moves a slow drawing is drawn smaller and shown scaled up.
+        let scale = if cb.reducible() { crate::dynres::with(|c| c.scale(cb.moving)).unwrap_or(1.0) } else { 1.0 };
+        let tex = crate::dynres::scaled_size(size, scale);
+        let scale = if tex == size { 1.0 } else { scale };
+        if cb.reducible() {
+            SHOWN_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+        }
         let mut cache = match res.cache.take() {
-            Some(c) if c.size == size => c,
-            _ => self.new_frame_cache(device, size),
+            Some(c) if c.size == tex && c.window == size => c,
+            _ => self.new_frame_cache(device, tex, size),
         };
         cache.used = now;
-        let shows = (cb.key, uniform);
+        let shows = (cb.key, uniform, tex);
         if cache.shows.as_ref() == Some(&shows) {
             FRAMES_KEPT.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -1335,6 +1513,7 @@ impl Resources {
                 depth_ops: format.has_depth_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
                 stencil_ops: format.has_stencil_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Discard }),
             });
+            let timed = self.timer.as_ref().and_then(|t| Some((t, t.free_slot()?)));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("cad_frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1344,7 +1523,11 @@ impl Resources {
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: stencil,
-                timestamp_writes: None,
+                timestamp_writes: timed.map(|(t, i)| wgpu::RenderPassTimestampWrites {
+                    query_set: &t.set,
+                    beginning_of_pass_write_index: Some(2 * i as u32),
+                    end_of_pass_write_index: Some(2 * i as u32 + 1),
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1352,6 +1535,10 @@ impl Resources {
                 self.draw(res, Stencil::Off, &mut pass);
             }
             drop(pass);
+            if let Some((t, i)) = timed {
+                // Timed only when it is the drawing's own picture: the scale is the controller's.
+                t.written(encoder, i, if cb.reducible() { Some(scale) } else { None });
+            }
             cache.shows = Some(shows);
         }
         if let Some(res) = self.layers.get_mut(cb.layer) {
@@ -1370,7 +1557,8 @@ impl Resources {
         }
     }
 
-    fn new_frame_cache(&self, device: &wgpu::Device, size: [u32; 2]) -> FrameCache {
+    /// A kept frame `size` big covering a `window`-size window (smaller while the view moves).
+    fn new_frame_cache(&self, device: &wgpu::Device, size: [u32; 2], window: [u32; 2]) -> FrameCache {
         let extent = wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 };
         let texture = |label: &str, format: wgpu::TextureFormat, usage: wgpu::TextureUsages| {
             Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
@@ -1386,18 +1574,136 @@ impl Resources {
             .into_view(&wgpu::TextureViewDescriptor::default())
         };
         let view = texture("cad_frame", self.target.format, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("cad_frame"),
-            layout: &self.blit_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }],
-        });
+        // The window's size: shown pixel for pixel; smaller: shown stretched and filtered.
+        let group = if size == window {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cad_frame"),
+                layout: &self.blit_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }],
+            })
+        } else {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cad_frame_scaled"),
+                layout: &self.scaled_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                ],
+            })
+        };
         FrameCache {
             view,
             stencil: self.target.stencil.map(|f| texture("cad_frame_stencil", f, wgpu::TextureUsages::RENDER_ATTACHMENT)),
             group,
             size,
+            window,
             shows: None,
             used: web_time::Instant::now(),
+        }
+    }
+}
+
+/// Times the passes that draw kept frames with GPU timestamps, for [`crate::dynres`]: each pass
+/// writes its start and end into a slot's two queries, resolved and copied into the slot's
+/// readback buffer in the same encoder; the next app frame (the commands have gone to the GPU)
+/// maps it, and a later one reads it. A slot is reused once read, so at most [`TIMER_SLOTS`]
+/// passes are in flight; a pass with no free slot isn't timed.
+struct PassTimer {
+    set: wgpu::QuerySet,
+    resolve: Tracked,
+    slots: Vec<TimerSlot>,
+}
+
+struct TimerSlot {
+    read: Tracked,
+    state: Arc<AtomicU8>,
+    /// The scale the timed picture was drawn at (f32 bits); NaN: not the drawing's own.
+    scale: AtomicU32,
+}
+
+const TIMER_SLOTS: usize = 4;
+/// Where each slot's queries are resolved in [`PassTimer::resolve`] (the resolve alignment).
+const TIMER_STRIDE: u64 = wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT;
+const SLOT_FREE: u8 = 0;
+const SLOT_WRITTEN: u8 = 1;
+const SLOT_MAPPING: u8 = 2;
+const SLOT_MAPPED: u8 = 3;
+const SLOT_FAILED: u8 = 4;
+
+impl PassTimer {
+    fn new(device: &wgpu::Device) -> PassTimer {
+        let set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("cad_frame_time"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2 * TIMER_SLOTS as u32,
+        });
+        let resolve = Tracked::new(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cad_frame_time"),
+            size: TIMER_STRIDE * TIMER_SLOTS as u64,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+        let slots = (0..TIMER_SLOTS)
+            .map(|_| TimerSlot {
+                read: Tracked::new(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("cad_frame_time_read"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })),
+                state: Arc::new(AtomicU8::new(SLOT_FREE)),
+                scale: AtomicU32::new(f32::NAN.to_bits()),
+            })
+            .collect();
+        PassTimer { set, resolve, slots }
+    }
+
+    fn free_slot(&self) -> Option<usize> {
+        self.slots.iter().position(|s| s.state.load(Ordering::Acquire) == SLOT_FREE)
+    }
+
+    /// Slot `i`'s pass was recorded: resolve its queries and copy them out.
+    fn written(&self, encoder: &mut wgpu::CommandEncoder, i: usize, scale: Option<f32>) {
+        let Some(slot) = self.slots.get(i) else { return };
+        let at = TIMER_STRIDE * i as u64;
+        encoder.resolve_query_set(&self.set, 2 * i as u32..2 * i as u32 + 2, &self.resolve, at);
+        encoder.copy_buffer_to_buffer(&self.resolve, at, &slot.read, 0, 16);
+        slot.scale.store(scale.unwrap_or(f32::NAN).to_bits(), Ordering::Relaxed);
+        slot.state.store(SLOT_WRITTEN, Ordering::Release);
+    }
+
+    /// Map the slots written last frame; read the mapped ones into the controller.
+    fn read(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let _ = device.poll(wgpu::PollType::Poll);
+        let period = f64::from(queue.get_timestamp_period());
+        for slot in &self.slots {
+            match slot.state.load(Ordering::Acquire) {
+                SLOT_WRITTEN => {
+                    slot.state.store(SLOT_MAPPING, Ordering::Release);
+                    let state = Arc::clone(&slot.state);
+                    slot.read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                        state.store(if r.is_ok() { SLOT_MAPPED } else { SLOT_FAILED }, Ordering::Release);
+                    });
+                }
+                SLOT_MAPPED => {
+                    let ticks = slot.read.slice(..).get_mapped_range().ok().and_then(|r| {
+                        let t = |b: Option<&[u8]>| b.and_then(|b| <[u8; 8]>::try_from(b).ok()).map(u64::from_le_bytes);
+                        Some((t(r.get(0..8))?, t(r.get(8..16))?))
+                    });
+                    slot.read.unmap();
+                    slot.state.store(SLOT_FREE, Ordering::Release);
+                    let scale = f32::from_bits(slot.scale.load(Ordering::Relaxed));
+                    if let (Some((start, end)), false) = (ticks, scale.is_nan()) {
+                        // A pass ends after it starts; anything else is a reset counter.
+                        if end > start {
+                            let ms = (end - start) as f64 * period / 1e6;
+                            crate::dynres::with(|c| c.sample(ms, scale));
+                        }
+                    }
+                }
+                SLOT_FAILED => slot.state.store(SLOT_FREE, Ordering::Release),
+                _ => {}
+            }
         }
     }
 }
@@ -1702,6 +2008,8 @@ mod tests {
             r.insert(res);
             r
         };
+        // Whether the frames below are of a moving view (dynamic resolution).
+        let moving = std::cell::Cell::new(false);
         let frame = |r: &mut egui_wgpu::CallbackResources, key: u64, scale: f32| -> Vec<u8> {
             let slot: MeshSlot = Arc::new(Mutex::new(Some(mesh())));
             let cb = CanvasCallback {
@@ -1714,6 +2022,7 @@ mod tests {
                 xform: IDENTITY_XFORM,
                 dash: 0.0,
                 stencil: Stencil::Off,
+                moving: moving.get(),
             };
             let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: 1.0 };
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -1806,13 +2115,55 @@ mod tests {
         assert!(res.layers[LAYER_DRAWING].cache.is_some());
         res.free_idle_frames(web_time::Instant::now() + FRAME_CACHE_IDLE + std::time::Duration::from_secs(1));
         assert!(res.layers[LAYER_DRAWING].cache.is_none());
+
+        // Dynamic resolution. A moving view at half scale: the drawing is drawn into a picture a
+        // quarter the pixels and stretched over the window.
+        let kept_size = |r: &egui_wgpu::CallbackResources| {
+            r.get::<Resources>().and_then(|res| res.layers[LAYER_DRAWING].cache.as_ref().map(|c| (c.size, c.window)))
+        };
+        crate::dynres::with(|c| c.configure(true, 30, Some(0.5)));
+        moving.set(true);
+        let small = frame(&mut kept, 9, 1.0);
+        assert_eq!(kept_size(&kept), Some(([32, 32], [64, 64])), "drawn at half resolution each way");
+        assert_eq!(shown_scale(), 0.5);
+        assert_eq!(at(&small, 12, 44), [255, 0, 0], "inside the red fill it is still red");
+        assert!(differ(&small, &first).1 > 0, "the edges are the smaller picture's");
+        // The view stops: drawn once at full resolution, exactly today's picture.
+        moving.set(false);
+        let rest = frame(&mut kept, 9, 1.0);
+        assert_eq!(kept_size(&kept), Some(([64, 64], [64, 64])));
+        assert_eq!(shown_scale(), 1.0);
+        assert_eq!(differ(&rest, &first), (0, 0), "at rest the picture is the full-resolution one");
+        // Off (DYNRESMODE 0): a moving view is drawn at full resolution.
+        crate::dynres::with(|c| c.configure(false, 30, Some(0.5)));
+        moving.set(true);
+        let off = frame(&mut kept, 10, 1.0);
+        assert_eq!(kept_size(&kept), Some(([64, 64], [64, 64])));
+        assert_eq!(differ(&off, &first), (0, 0));
+        // A screenshot waiting: full resolution too.
+        crate::dynres::with(|c| {
+            c.configure(true, 30, Some(0.5));
+            c.full = true;
+        });
+        let _ = frame(&mut kept, 11, 1.0);
+        assert_eq!(kept_size(&kept), Some(([64, 64], [64, 64])));
+        crate::dynres::with(|c| {
+            c.full = false;
+            c.configure(true, 30, None);
+        });
     }
 
     #[test]
     fn frame_shader_is_valid_for_webgpu_and_webgl2() {
-        let module = naga::front::wgsl::parse_str(BLIT_SHADER).unwrap();
+        for (source, vs, fs) in [(BLIT_SHADER, "vs_blit", "fs_blit"), (SCALED_SHADER, "vs_scaled", "fs_scaled")] {
+            frame_shader_valid(source, vs, fs);
+        }
+    }
+
+    fn frame_shader_valid(source: &str, vs: &str, fs: &str) {
+        let module = naga::front::wgsl::parse_str(source).unwrap();
         let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
-        for (stage, entry) in [(naga::ShaderStage::Vertex, "vs_blit"), (naga::ShaderStage::Fragment, "fs_blit")] {
+        for (stage, entry) in [(naga::ShaderStage::Vertex, vs), (naga::ShaderStage::Fragment, fs)] {
             let options = naga::back::glsl::Options { version: naga::back::glsl::Version::new_gles(300), ..Default::default() };
             let pipeline = naga::back::glsl::PipelineOptions { shader_stage: stage, entry_point: entry.into(), multiview: None };
             let mut out = String::new();

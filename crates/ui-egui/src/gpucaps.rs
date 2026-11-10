@@ -14,9 +14,10 @@
 //!   views with the CPU rasterizers (the shaded view's, and Walk's own).
 //!
 //! The limits can be forced (tests, and machines that misreport): `ui.gpu {msaa?, maxTexture?,
-//! budgetMb?, quality?, cpu?, reset?}`, or
-//! `CADADDY_GPU_LIMITS="msaa=1,texture=1024,budget=64,quality=performance,cpu"` at
-//! start. Anything stepped down is said once, in the status line.
+//! budgetMb?, quality?, cpu?, dynamicScale?, reset?}`, or
+//! `CADADDY_GPU_LIMITS="msaa=1,texture=1024,budget=64,quality=performance,cpu,dynscale=50"` at
+//! start. `dynamicScale` (0.5–1, or `null` to measure again; `dynscale` in percent) is the scale
+//! the 2D canvas draws a moving view at instead of the measured one (`crate::dynres`). Anything stepped down is said once, in the status line.
 
 use egui_wgpu::wgpu;
 use serde_json::{Value, json};
@@ -91,6 +92,8 @@ pub struct GpuCaps {
     /// a level asked for is never stepped down for a slow view.
     pub quality: Quality,
     pub quality_forced: bool,
+    /// The scale the 2D canvas draws a moving view at, instead of the measured one.
+    pub dynamic_scale: Option<f32>,
     /// Why, when something was stepped down.
     pub notes: Vec<String>,
 }
@@ -108,6 +111,7 @@ impl Default for GpuCaps {
             cpu: true,
             quality: Quality::Full,
             quality_forced: false,
+            dynamic_scale: None,
             notes: Vec::new(),
         }
     }
@@ -154,6 +158,7 @@ impl GpuCaps {
             cpu: false,
             quality: Quality::of(info.device_type, software),
             quality_forced: false,
+            dynamic_scale: None,
             notes: Vec::new(),
         };
         if c.quality == Quality::Balanced {
@@ -190,6 +195,17 @@ impl GpuCaps {
             self.quality_forced = true;
             self.notes.push(format!("3D lighting set to {}", q.name()));
         }
+        match p.get("dynamicScale") {
+            Some(Value::Null) => self.dynamic_scale = None,
+            Some(v) => {
+                if let Some(s) = v.as_f64().filter(|s| s.is_finite()) {
+                    let s = (s as f32).clamp(crate::dynres::floor(), 1.0);
+                    self.dynamic_scale = Some(s);
+                    self.notes.push(format!("2D views drawn at {} % while moving", (s * 100.0).round()));
+                }
+            }
+            None => {}
+        }
         if let Some(c) = p.get("cpu").and_then(Value::as_bool) {
             self.cpu = c;
             if c {
@@ -223,7 +239,7 @@ impl GpuCaps {
         json!({
             "adapter": self.adapter, "backend": self.backend, "software": self.software,
             "maxTexture": self.max_texture, "msaa": self.msaa, "budgetMb": self.budget_mb, "cpu": self.cpu,
-            "quality": self.quality.name(), "notes": self.notes,
+            "quality": self.quality.name(), "dynamicScale": self.dynamic_scale, "notes": self.notes,
         })
     }
 
@@ -245,6 +261,7 @@ pub fn from_spec(spec: &str) -> Value {
             ("budget" | "budgetmb", Some(n)) => v["budgetMb"] = json!(n),
             ("quality", _) if Quality::from_name(val).is_some() => v["quality"] = json!(val.to_ascii_lowercase()),
             ("cpu" | "software", _) => v["cpu"] = json!(val != "0" && val != "false"),
+            ("dynscale" | "dynamicscale", Some(n)) => v["dynamicScale"] = json!(n as f64 / 100.0),
             _ => {}
         }
     }
@@ -277,6 +294,14 @@ mod tests {
         assert!(c.notice().is_some_and(|n| n.contains("1024")));
         c.force(&from_spec("cpu"));
         assert!(c.cpu);
+        // The 2D canvas's scale while moving, in percent, held to the floor; null measures again.
+        c.force(&from_spec("dynscale=70"));
+        assert_eq!(c.dynamic_scale, Some(0.7));
+        c.force(&json!({"dynamicScale": 0.1}));
+        assert_eq!(c.dynamic_scale, Some(crate::dynres::floor()));
+        assert_eq!(c.json()["dynamicScale"], json!(0.5));
+        c.force(&json!({"dynamicScale": null}));
+        assert_eq!(c.dynamic_scale, None);
         // Forcing can't ask for more than the GPU has.
         let mut weak = GpuCaps { msaa: 1, max_texture: 2048, cpu: false, ..GpuCaps::default() };
         weak.force(&json!({"msaa": 4, "maxTexture": 99999}));
