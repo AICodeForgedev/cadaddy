@@ -323,6 +323,23 @@ impl Session {
         })
     }
 
+    /// The detail level the screen draws the current view at (see [`crate::DocState::screen_detail`]):
+    /// only in model space's plan view, where the screen sets it.
+    pub fn screen_detail(&self) -> Option<cadaddy_render::detail::Detail> {
+        let st = self.state().ok()?;
+        let plan = st.space == Space::Model && st.mspace.is_none() && st.projection().is_none();
+        st.screen_detail.clone().filter(|_| plan)
+    }
+
+    /// Say what detail level the screen drew the current view at (`None`: everything in full).
+    pub fn set_screen_detail(&mut self, detail: Option<cadaddy_render::detail::Detail>) {
+        if let Ok(st) = self.state_mut()
+            && st.screen_detail != detail
+        {
+            st.screen_detail = detail;
+        }
+    }
+
     /// Of `hs`, those in the open sheet's view (all of them when no sheet is open).
     pub fn in_sheet_view(&self, hs: Vec<Handle>) -> Vec<Handle> {
         if self.sheet_scope().is_none() {
