@@ -873,6 +873,7 @@ pub fn read_file_on_demand(path: &str) -> std::result::Result<ReadFile, String> 
 
 /// A print set read with its sheets out of memory gets its first sheet in (it opens on it), and
 /// its sheet list. One whose records name no sheet (they changed) gets everything in.
+#[cfg(not(target_arch = "wasm32"))]
 fn first_sheet_only(d: &mut Drawing) {
     if !d.sheet_store.has_parked() {
         return;
