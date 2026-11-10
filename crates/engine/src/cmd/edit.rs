@@ -757,7 +757,9 @@ fn run_clear(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn run_selectall(s: &mut Session, _p: &Value) -> Result<Value> {
     let space = s.space();
-    let d = s.doc()?;
+    // With a print set's sheet open, everything on it (`sheetnav`): never what isn't shown.
+    let shown = s.view_doc()?;
+    let d = &*shown;
     let hs: Vec<Handle> = d
         .space(&space)
         .map(|st| st.iter().filter(|e| d.is_visible(e) && d.layer(&e.common.layer).is_none_or(|l| !l.locked)).map(|e| e.handle).collect())

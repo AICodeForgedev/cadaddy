@@ -529,6 +529,135 @@ pub fn print_set(sheets: usize) -> Drawing {
     d
 }
 
+/// A made-up print set as a job leaves it (Q6416): `sheets` sheets side by side in model space,
+/// each page to the right of the one before with a gap of a twentieth of its width, as the job's
+/// import lays them, holding about `per_sheet` objects in a plan sheet's mix: a border and title
+/// block, wall lines and room outlines, solid and pattern hatches, room tags and notes, and
+/// symbol blocks. The job's records say where each sheet is (`sheet_regions`) and what it is
+/// (its sheet index: numbers `Q-001`… and titles `Sample Sheet 1`…), in the drawing's agent
+/// state. Deterministic; nothing of any real job.
+pub fn job_print_set(sheets: usize, per_sheet: usize) -> Drawing {
+    let mut d = Drawing::new_imperial();
+    d.layers.extend([
+        layer("G-BORD", 7, "Continuous", 50),
+        layer("A-WALL", 7, "Continuous", 35),
+        layer("A-ROOM", 3, "Continuous", 18),
+        layer("A-PATT", 8, "Continuous", 13),
+        layer("A-ANNO", 2, "Continuous", 18),
+        layer("E-SYMB", 1, "Continuous", 25),
+    ]);
+    let mut sym = cadaddy_doc::Block::new("SYM-OUTLET");
+    for k in [circle(Vec2::ZERO, 4.0), line(Vec2::new(-4.0, 0.0), Vec2::new(4.0, 0.0)), line(Vec2::new(0.0, 4.0), Vec2::new(0.0, 9.0))] {
+        sym.entities.push(cadaddy_doc::Entity::new(d.new_handle(), k));
+    }
+    d.blocks.insert(sym.name.clone(), std::sync::Arc::new(sym));
+    // A page 36" x 24" at 1/4" = 1'-0": 144' x 96' of plan, in inches.
+    let (w, h) = (36.0 * 48.0, 24.0 * 48.0);
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let m = Space::Model;
+    let mut regions = Vec::new();
+    let mut index = Vec::new();
+    for sh in 0..sheets {
+        let x0 = sh as f64 * w * 1.05;
+        let at = |x: f64, y: f64| Vec2::new(x0 + x, y);
+        let number = format!("Q-{:03}", sh + 1);
+        let title = format!("Sample Sheet {}", sh + 1);
+        let mut ents: Vec<(Common, EntityKind)> = vec![
+            (on("G-BORD"), lwpoly(rect_vertices(at(0.0, 0.0), at(w, h)), true)),
+            (on("G-BORD"), lwpoly(rect_vertices(at(24.0, 24.0), at(w - 24.0, h - 24.0)), true)),
+            (on("G-BORD"), lwpoly(rect_vertices(at(w - 300.0, 24.0), at(w - 24.0, h - 24.0)), true)),
+            (on("G-BORD"), text(at(w - 280.0, 60.0), 24.0, &number)),
+            (on("G-BORD"), text(at(w - 280.0, 110.0), 12.0, &title)),
+        ];
+        // The plan area left of the title block.
+        let (pw, ph) = (w - 360.0, h - 72.0);
+        while ents.len() < per_sheet.max(6) {
+            let (x, y) = (48.0 + rnd() * (pw - 96.0), 48.0 + rnd() * (ph - 96.0));
+            let k = ents.len() % 20;
+            let e = match k {
+                0..=8 => {
+                    // A wall run: a pair of faces 6" apart.
+                    let len = 24.0 + rnd() * 240.0;
+                    let across = k.is_multiple_of(2);
+                    let (dx, dy) = if across { (len, 0.0) } else { (0.0, len) };
+                    let off = if across { Vec2::new(0.0, 6.0) } else { Vec2::new(6.0, 0.0) };
+                    let a = at(x, y) + if k > 4 { off } else { Vec2::ZERO };
+                    (on("A-WALL"), line(a, a + Vec2::new(dx.min(pw - x), dy.min(ph - y))))
+                }
+                9..=11 => {
+                    let (rw, rh) = (60.0 + rnd() * 180.0, 60.0 + rnd() * 120.0);
+                    (on("A-ROOM"), lwpoly(rect_vertices(at(x, y), at((x + rw).min(pw), (y + rh).min(ph))), true))
+                }
+                12 => {
+                    let b = at((x + 30.0 + rnd() * 60.0).min(pw), (y + 30.0 + rnd() * 60.0).min(ph));
+                    let solid = rnd() < 0.5;
+                    (
+                        on("A-PATT"),
+                        EntityKind::Hatch(Box::new(Hatch {
+                            pattern: if solid { "SOLID".into() } else { "ANSI31".into() },
+                            solid,
+                            loops: vec![HatchLoop { curves: Vec::new(), vertices: rect_vertices(at(x, y), b), outer: true, sources: Vec::new() }],
+                            scale: 12.0,
+                            angle: 0.0,
+                            associative: false,
+                            style: 0,
+                            elevation: 0.0,
+                            gradient: None,
+                            origin: Vec2::ZERO,
+                            background: None,
+                            pattern_lines: Vec::new(),
+                        })),
+                    )
+                }
+                13..=15 => (
+                    on("A-ANNO"),
+                    text(
+                        at(x, y),
+                        6.0 + rnd() * 6.0,
+                        if k == 13 {
+                            "ROOM"
+                        } else if k == 14 {
+                            "101"
+                        } else {
+                            "SEE NOTE 4"
+                        },
+                    ),
+                ),
+                16 => (on("A-ANNO"), circle(at(x, y), 6.0 + rnd() * 18.0)),
+                _ => (
+                    on("E-SYMB"),
+                    EntityKind::Insert(cadaddy_doc::Insert {
+                        block: "SYM-OUTLET".into(),
+                        insert: v3(at(x, y)),
+                        scale: Vec3::new(1.0, 1.0, 1.0),
+                        rotation: if rnd() < 0.5 { 0.0 } else { std::f64::consts::FRAC_PI_2 },
+                        attribs: Vec::new(),
+                        cols: 1,
+                        rows: 1,
+                        col_spacing: 0.0,
+                        row_spacing: 0.0,
+                        clip: None,
+                    }),
+                ),
+            };
+            ents.push(e);
+        }
+        for (c, k) in ents {
+            let _ = d.add(&m, c, k);
+        }
+        regions.push(serde_json::json!({ "number": number, "level": "", "rect": [x0, 0.0, x0 + w, h] }));
+        index.push(serde_json::json!({ "number": number, "title": title }));
+    }
+    d.agent = Some(serde_json::json!({ "guided_job": { "sheet_regions": regions, "index": { "sheets": index } } }).to_string()).into();
+    d
+}
+
 /// The sample used by `--sample`.
 pub fn default_sample() -> Drawing {
     bracket()

@@ -3440,3 +3440,9 @@ menu	Modify	수정
 	Pin	고정
 	Unpin	고정 해제
 	Coordination	조정
+	List Sheets	시트 목록
+	Open Sheet	시트 열기
+	Next Sheet	다음 시트
+	Previous Sheet	이전 시트
+	Page {n}	페이지 {n}
+	Page Up and Page Down step through the sheets.	Page Up과 Page Down으로 시트를 넘깁니다.

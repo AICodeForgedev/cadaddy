@@ -326,6 +326,9 @@ fn prim_color32(prim: &cadaddy_render::DPrim, bg: Rgb) -> Color32 {
 /// yet, is built at once.
 fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::Context) {
     let px = 1.0 / xf.scale;
+    // What the screen shows of the drawing: with a print set's sheet open, that sheet's objects
+    // alone (`cadaddy_engine::sheetnav`).
+    let Ok(shown) = app.session.view_doc() else { return };
     let Ok(st) = app.session.state() else { return };
     // Rebuild when the drawing changes, the zoom moves by more than 2x (tessellation band) or a
     // view leaves the area the list was built for.
@@ -353,7 +356,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         s.finish()
     };
     let (lwdisplay, transparency_display) = (app.session.settings.lwdisplay, app.session.settings.transparency_display);
-    let key: ListKey = (st.uid, st.revision, band(px), lod_band, lwdisplay, transparency_display, std::sync::Arc::as_ptr(&st.doc) as usize, vp_view);
+    let key: ListKey = (st.uid, st.revision, band(px), lod_band, lwdisplay, transparency_display, std::sync::Arc::as_ptr(&shown) as usize, vp_view);
     // A background build that finished: use it unless the drawing has changed since it started
     // (or the list was dropped to force a rebuild).
     if let Some(job) = &app.canvas.job {
@@ -422,7 +425,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
             device: app.canvas.gpu_device.clone(),
         });
         let window = opts.view;
-        let req = rebuild::Request { doc: st.doc.clone(), space: st.space.clone(), opts: opts.clone(), mesh };
+        let req = rebuild::Request { doc: shown.clone(), space: st.space.clone(), opts: opts.clone(), mesh };
         if let Some(job) = rebuild::spawn(req, key, window, ctx) {
             app.canvas.job = Some(job);
             return;
@@ -432,7 +435,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
     // The list it replaces goes back to the cache: an edit that changed objects in place is
     // written into it instead of joining every part again.
     let prev = app.canvas.list.take();
-    app.canvas.list = Some(cadaddy_render::build_cached_into(&st.doc, &space, &opts, &mut app.canvas.chunk_cache, prev));
+    app.canvas.list = Some(cadaddy_render::build_cached_into(&shown, &space, &opts, &mut app.canvas.chunk_cache, prev));
     app.canvas.key = key;
     app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
@@ -1520,6 +1523,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.zoom_pending = false;
         let _ = app.session.zoom_extents();
     }
+    // A print set opens on its first sheet, its sheet list beside it: there is no view of the
+    // whole set (`cadaddy_engine::sheetnav`). The list takes room from the canvas, so the sheet
+    // is fitted again next frame.
+    if app.session.open_first_sheet() {
+        crate::sheetsets::open_sheet_list(app);
+    }
     let Ok(st) = app.session.state() else { return };
     let view = st.view();
     let scale = f64::from(rect.height()) / view.height.max(1e-12);
@@ -1819,9 +1828,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     // Hyperlinks: the tooltip over a linked object; Ctrl+click (⌘-click) follows its link.
     let link_pick = if inside && pressed_primary && mods.command {
-        raw_world
-            .zip(app.session.state().ok())
-            .and_then(|(w, st)| cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale))
+        raw_world.zip(app.session.state().ok().zip(app.session.view_doc().ok())).and_then(|(w, (st, shown))| {
+            cadaddy_engine::select::pick(&shown, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+        })
     } else {
         app.canvas.hover
     };
@@ -1963,10 +1972,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let selecting = app.session.previews_selection();
     if inside && selecting && app.session.pending_window.is_none() {
         if hover_pos != app.canvas.hover_at
-            && let (Some(w), Ok(st)) = (raw_world, app.session.state())
+            && let (Some(w), Ok(st), Ok(shown)) = (raw_world, app.session.state(), app.session.view_doc())
         {
             let filter = app.session.settings.previewfilter;
-            app.canvas.hover = cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+            // With a print set's sheet open, only its objects (`sheetnav`).
+            app.canvas.hover = cadaddy_engine::select::pick(&shown, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
                 .filter(|h| st.doc.entity(*h).is_none_or(|e| !cadaddy_engine::select::preview_filtered(&st.doc, e, filter)));
             app.canvas.hover_at = hover_pos;
         }
@@ -2426,7 +2436,7 @@ fn tooltip(p: &egui::Painter, at: Pos2, text: &str) {
 fn hatch_at(app: &CadApp, w: Vec2, scale: f64) -> Option<Handle> {
     let st = app.session.state().ok()?;
     let aperture = app.session.settings.pickbox.max(1.0) * 1.5 / scale.max(1e-12);
-    let h = cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, aperture)?;
+    let h = cadaddy_engine::select::pick(&*app.session.view_doc().ok()?, &st.edit_space(), w, aperture)?;
     matches!(st.doc.entity(h)?.kind, cadaddy_doc::EntityKind::Hatch(_)).then_some(h)
 }
 
@@ -2462,13 +2472,13 @@ fn override_cursor(app: &mut CadApp, raw: Vec2, xf: &Xf) {
     let deferred = prompt.as_ref().is_some_and(|p| p.deferred);
     let s = &app.session.settings;
     let osmode = over.unwrap_or(s.osmode) | if s.osnaphatch { snap::mode::HATCH } else { 0 };
-    let Ok(st) = app.session.state() else { return };
+    let (Ok(st), Ok(shown)) = (app.session.state(), app.session.view_doc()) else { return };
     let hit = match cycle {
         Some(i) => {
-            let cands = cadaddy_engine::pointmod::snap_candidates(&st.doc, &st.edit_space(), raw, ap, osmode, base, deferred);
+            let cands = cadaddy_engine::pointmod::snap_candidates(&shown, &st.edit_space(), raw, ap, osmode, base, deferred);
             cands.get(i % cands.len().max(1)).copied()
         }
-        None => snap::osnap(&st.doc, &st.edit_space(), raw, ap, osmode, base, deferred),
+        None => snap::osnap(&shown, &st.edit_space(), raw, ap, osmode, base, deferred),
     };
     let p = match (hit, app.canvas.snap) {
         (Some(h), _) => {

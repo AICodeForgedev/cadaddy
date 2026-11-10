@@ -5,6 +5,11 @@
 //! callouts), custom properties of the set and its sheets, a page setup override for publishing,
 //! named views placed on sheets with callouts to them, sheet set fields, and publish to one PDF.
 //! The set's file is remembered.
+//!
+//! A drawing holding a whole print set (a job's import, [`cadaddy_engine::sheetnav`]) lists its
+//! sheets at the top, each with a thumbnail, its number and title, as a PDF reader lists pages:
+//! a click opens that sheet, and the screen then works on it alone (Page Up and Page Down step
+//! through them).
 
 use egui::RichText;
 use serde_json::{Value, json};
@@ -48,6 +53,102 @@ fn id() -> egui::Id {
     egui::Id::new("cadaddy-sheetset-palette")
 }
 
+/// A sheet thumbnail's size in pixels, and its row's height.
+const THUMB: [u32; 2] = [96, 64];
+const ROW: f32 = 70.0;
+
+/// The print set's sheet thumbnails made so far: for which drawing and sheet list, and each with
+/// the drawing revision it shows.
+#[derive(Clone, Default)]
+struct Thumbs {
+    key: (u64, usize),
+    made: std::collections::HashMap<usize, (u64, egui::TextureHandle)>,
+}
+
+fn thumbs_id() -> egui::Id {
+    egui::Id::new("cadaddy-sheet-thumbnails")
+}
+
+/// The print set's sheets (`sheet.list`): a row per sheet with its thumbnail, number and title,
+/// the open one highlighted; a click opens it (`sheet.open`). Only the rows in view are laid out,
+/// and one missing thumbnail is made per frame (a set has hundreds of sheets).
+fn sheet_list(app: &mut CadApp, ui: &mut egui::Ui) {
+    let sheets = app.session.print_sheets();
+    if sheets.is_empty() {
+        return;
+    }
+    let ctx = ui.ctx().clone();
+    let t = Tokens::get();
+    let active = app.session.active_sheet().map(|(i, _)| i);
+    let (uid, revision) = app.session.state().map_or((0, 0), |st| (st.uid, st.revision));
+    let mut thumbs: Thumbs = ctx.data(|d| d.get_temp(thumbs_id())).unwrap_or_default();
+    let key = (uid, std::sync::Arc::as_ptr(&sheets) as usize);
+    if thumbs.key != key {
+        thumbs = Thumbs { key, ..Default::default() };
+    }
+    let mut open: Option<usize> = None;
+    let mut wanted: Option<usize> = None;
+    ui.label(RichText::new(crate::tl!("Sheets")).strong()).on_hover_text(crate::tl!("Page Up and Page Down step through the sheets."));
+    egui::ScrollArea::vertical().id_salt("sheetset-print-sheets").max_height(ROW * 6.0).auto_shrink([false, true]).show_rows(
+        ui,
+        ROW,
+        sheets.len(),
+        |ui, rows| {
+            for i in rows {
+                let Some(sh) = sheets.get(i) else { continue };
+                // The open sheet's thumbnail follows its edits; the others are made once.
+                let fresh = thumbs.made.get(&i).filter(|(rev, _)| active != Some(i) || *rev == revision);
+                if fresh.is_none() && wanted.is_none() {
+                    wanted = Some(i);
+                }
+                let r = ui
+                    .horizontal(|ui| {
+                        let size = egui::vec2(THUMB[0] as f32, THUMB[1] as f32);
+                        match thumbs.made.get(&i) {
+                            Some((_, tex)) => {
+                                ui.add(egui::Image::new((tex.id(), size)));
+                            }
+                            None => {
+                                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                                ui.painter().rect_filled(rect, 2.0, t.canvas);
+                            }
+                        }
+                        ui.vertical(|ui| {
+                            let number = if sh.number.is_empty() { crate::tf!("Page {n}", n = i + 1) } else { sh.number.clone() };
+                            let text = RichText::new(number).strong();
+                            if ui.selectable_label(active == Some(i), text).clicked() {
+                                open = Some(i);
+                            }
+                            if !sh.title.is_empty() {
+                                ui.label(RichText::new(&sh.title).color(t.text_dim));
+                            }
+                        });
+                    })
+                    .response
+                    .interact(egui::Sense::click());
+                if r.clicked() {
+                    open = Some(i);
+                }
+            }
+        },
+    );
+    if let Some(i) = wanted
+        && let Some(px) = app.session.sheet_thumbnail_rgba(i, THUMB[0], THUMB[1])
+    {
+        let img = egui::ColorImage::from_rgba_premultiplied([THUMB[0] as usize, THUMB[1] as usize], &px);
+        let tex = ctx.load_texture(format!("sheet-thumb-{}-{i}", key.0), img, egui::TextureOptions::LINEAR);
+        thumbs.made.insert(i, (revision, tex));
+        ctx.request_repaint();
+    }
+    ctx.data_mut(|d| d.insert_temp(thumbs_id(), thumbs));
+    if let Some(i) = open
+        && active != Some(i)
+    {
+        let _ = app.run("sheet.open", json!({ "sheet": i + 1 }));
+    }
+    ui.separator();
+}
+
 /// Open the palette (SHEETSET, SSM): floating beside the drawing the first time, afterwards
 /// where it was closed.
 pub fn open(app: &mut CadApp) -> Result<Value, String> {
@@ -61,6 +162,50 @@ pub fn open(app: &mut CadApp) -> Result<Value, String> {
     let (w, h) = (380.0, (area.height() - 40.0).clamp(240.0, 720.0));
     let rect = [area.right() - w - 16.0, area.top() + 24.0, w, h];
     crate::docking::command(app, false, &json!({ "operation": "float", "panel": panel.id(), "rect": rect }))
+}
+
+/// Open the palette for a print set's sheet list: the first time docked on the left of the
+/// drawing, as a reader lists a document's pages, so the sheet stays in full view; afterwards
+/// where it was closed. The canvas fits the open sheet again once it has its new width.
+pub fn open_sheet_list(app: &mut CadApp) {
+    let panel = Panel::SheetSets;
+    if app.ui.docking.layout.contains(&panel) || app.ui.docking.is_detached(panel) {
+        return;
+    }
+    let first = !app.ui.docking.hidden.iter().any(|(p, _)| *p == panel);
+    if crate::docking::command(app, false, &json!({ "operation": "open", "panel": panel.id() })).is_err() {
+        return;
+    }
+    if first {
+        let _ =
+            crate::docking::command(app, false, &json!({ "operation": "move", "panel": panel.id(), "target": Panel::Canvas.id(), "zone": "left" }));
+        // A list column, not half the window.
+        if let Some(path) = app.ui.docking.layout.root.as_ref().and_then(|root| list_split(root, Vec::new())) {
+            let _ = crate::docking::command(app, false, &json!({ "operation": "resizeSplit", "path": path, "size": { "FixedFirst": LIST_WIDTH } }));
+        }
+    }
+    app.canvas.zoom_pending = true;
+}
+
+/// The docked sheet list's width, in points.
+const LIST_WIDTH: f32 = 300.0;
+
+/// The path (second child or not, from the root) to the split whose first side is the sheet
+/// list alone.
+fn list_split(node: &craft_ui::docking::Node<Panel>, path: Vec<bool>) -> Option<Vec<bool>> {
+    use craft_ui::docking::Node;
+    let Node::Split { first, second, .. } = node else { return None };
+    if matches!(first.as_ref(), Node::Tabs { panels, .. } if panels.as_slice() == [Panel::SheetSets]) {
+        return Some(path);
+    }
+    if path.len() >= 32 {
+        return None;
+    }
+    let mut left = path.clone();
+    left.push(false);
+    let mut right = path;
+    right.push(true);
+    list_split(first, left).or_else(|| list_split(second, right))
 }
 
 /// Run a SHEETSET action on the current set; a failure is echoed and returned.
@@ -121,6 +266,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let ui = &mut *body;
         let t = Tokens::get();
         ui.add_space(4.0);
+        sheet_list(app, ui);
         ui.horizontal(|ui| {
             if ui.button(crate::tl!("New Sheet Set...")).clicked() {
                 pick = Some("new");
