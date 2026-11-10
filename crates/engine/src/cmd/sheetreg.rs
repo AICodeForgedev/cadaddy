@@ -43,6 +43,18 @@ pub(crate) const FRAME_SHARE: f64 = 0.4;
 /// ([`super::grids::linework_fit_part`] won't try).
 const MAX_SHEET_OVER_PLAN: f64 = 1.2;
 
+/// A sheet drawn up to this share off the scale it prints (an engineer's background plotted a few
+/// percent off the architect's, the same note on both) is still placed, at the scale it is drawn
+/// at, when its fit is decisive: [`OFF_SCALE_F1`] of their lines on each other and
+/// [`OFF_SCALE_MARGIN`] over the next best, its best scale inside the scales tried.
+const MAX_OFF_SCALE: f64 = 0.07;
+const OFF_SCALE_F1: f64 = 0.85;
+const OFF_SCALE_MARGIN: f64 = 0.06;
+/// A fit at the ratio whose best scale is this far off it is weighed against the off-scale fit.
+const OFF_SCALE_SUSPECT: f64 = 0.015;
+/// Scales whose fit is this close to the best one's are among the best.
+const PLATEAU: f64 = 0.02;
+
 /// Most blocks of a too-wide sheet's lines tried as its plan.
 const MAX_BLOCKS_TRIED: usize = 3;
 
@@ -74,6 +86,9 @@ pub(crate) struct LineworkFit {
     pub score: f64,
     /// Over the next best placement 10' or more away.
     pub margin: f64,
+    /// Placed at the scale its linework is drawn at, this share of the ratio its printed scale
+    /// gives (its drawing a few percent off its scale note); `None` at the ratio.
+    pub off_scale: Option<f64>,
 }
 
 impl SheetLines {
@@ -213,25 +228,37 @@ impl SheetLines {
             return format!("{} sheet points, {} plan points", src.len(), tgt.len());
         }
         let r = fit_ratio(ratio);
-        super::grids::linework_fit_part(src, tgt, self.k_in, 0.97 * r, 1.03 * r).map_or_else(
+        let at_ratio = super::grids::linework_fit_part(src, tgt, self.k_in, 0.97 * r, 1.03 * r).map_or_else(
             || "nothing to weigh".to_string(),
             |(s, _, score, margin)| format!("best scale {s:.3}, {:.0}% on the plan, {:.0} points over the next", score * 100.0, margin * 100.0),
-        )
+        );
+        match self.off_scale(src, tgt, r) {
+            Err(why) => format!("{at_ratio}; {why}"),
+            Ok(_) => at_ratio,
+        }
     }
 
     /// Sheet `i` fitted onto `tgt` (its level's plan linework) by its linework at `ratio` (the
     /// plan's drawing units per foot over the sheet's, from the scales their plans print: 1 when
     /// both came in at them) within 2.5% (a fit off that is its sampling's error, so at `ratio`
     /// about its middle; one at the end of the scales tried is no fit), the whole floor or a part
-    /// of it (an enlarged plan). Never scaled to fit without that ratio. `None` without a fit
-    /// that holds ([`FIT_F1`], [`FIT_MARGIN`]).
+    /// of it (an enlarged plan). Never scaled to fit without that ratio, but for a sheet drawn a
+    /// few percent off its printed scale whose fit is decisive ([`MAX_OFF_SCALE`]): placed at the
+    /// scale it is drawn at. `None` without a fit that holds ([`FIT_F1`], [`FIT_MARGIN`]).
     pub(crate) fn fit(&self, i: usize, tgt: &[Vec2], ratio: f64) -> Option<LineworkFit> {
         let src = self.pts.get(i)?;
         if !self.stripped(i) || src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
             return None;
         }
         let r = fit_ratio(ratio);
-        self.fit_points(src, tgt, r).or_else(|| {
+        // A fit whose best scale is well off the ratio may be a sheet drawn off its scale: the
+        // off-scale fit, when it is the better one.
+        let at_ratio = match self.fit_points_at(src, tgt, r) {
+            Some((f, s)) if (s / r - 1.0).abs() <= OFF_SCALE_SUSPECT => Some(f),
+            Some((f, _)) => Some(self.fit_off_scale(src, tgt, r).filter(|o| o.score >= f.score).unwrap_or(f)),
+            None => self.fit_off_scale(src, tgt, r),
+        };
+        at_ratio.or_else(|| {
             // Schedules and notes beside the plan can leave the sheet wider than the plan it is
             // laid on (at the ratio it is laid on at), so it can't be weighed whole: its biggest
             // block of lines is its plan.
@@ -262,12 +289,74 @@ impl SheetLines {
 
     /// [`Self::fit`] of the points `src` at the ratio `r`.
     fn fit_points(&self, src: &[Vec2], tgt: &[Vec2], r: f64) -> Option<LineworkFit> {
+        self.fit_points_at(src, tgt, r).map(|(f, _)| f)
+    }
+
+    /// [`Self::fit_points`] and the scale its best placement was weighed at.
+    fn fit_points_at(&self, src: &[Vec2], tgt: &[Vec2], r: f64) -> Option<(LineworkFit, f64)> {
         // Each scale proposes its best few placements, so the margin is over a real runner-up.
         let fit = super::grids::linework_fit_part(src, tgt, self.k_in, 0.97 * r, 1.03 * r);
-        let (s, t, score, margin) = fit.filter(|f| f.2 >= FIT_F1 && f.3 >= FIT_MARGIN && (f.0 / r - 1.0).abs() <= 0.025)?;
+        let holds = |f: &(f64, Vec2, f64, f64)| f.2 >= FIT_F1 && f.3 >= FIT_MARGIN;
+        // A small building's lines fit nearly as well over a range of scales (a few percent is
+        // under the fit's foot at its walls), and a tie goes to the first scale tried: its best
+        // scale off the ratio, the fit at the ratio itself when that is among the best.
+        let fit = match fit {
+            Some(f) if holds(&f) && (f.0 / r - 1.0).abs() > 0.025 => super::grids::linework_fit_part(src, tgt, self.k_in, r, r)
+                .filter(|g| holds(g) && g.2 >= f.2 - PLATEAU && (g.0 / r - 1.0).abs() <= 0.025)
+                .or(Some(f)),
+            other => other,
+        };
+        let (s, t, score, margin) = fit.filter(|f| holds(f) && (f.0 / r - 1.0).abs() <= 0.025)?;
         let mid = src.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / src.len().max(1) as f64);
         let sim = Sim::scale_offset(r, [t.x + mid.x * (s - r), t.y + mid.y * (s - r)]);
-        sim.is_finite().then_some(LineworkFit { sim, score, margin })
+        sim.is_finite().then_some((LineworkFit { sim, score, margin, off_scale: None }, s))
+    }
+
+    /// [`Self::fit`] of the points `src` drawn a few percent off the ratio `r` (up to
+    /// [`MAX_OFF_SCALE`]): each scale a percent apart weighed on its own, the scale it is drawn at
+    /// the middle of the run of scales that fit best (a fit holds over a range of scales, wider the
+    /// smaller the plan), placed there when that fit is decisive and the run is inside the scales
+    /// tried and away from the ratio.
+    fn fit_off_scale(&self, src: &[Vec2], tgt: &[Vec2], r: f64) -> Option<LineworkFit> {
+        self.off_scale(src, tgt, r).ok()
+    }
+
+    /// [`Self::fit_off_scale`], or why there is none (each scale weighed and what was missing).
+    fn off_scale(&self, src: &[Vec2], tgt: &[Vec2], r: f64) -> Result<LineworkFit, String> {
+        let steps = (2.0 * MAX_OFF_SCALE / 0.01).round() as i32;
+        let profile: Vec<(f64, f64, f64)> = (0..=steps)
+            .filter_map(|k| {
+                let sk = r * (1.0 - MAX_OFF_SCALE + 0.01 * f64::from(k));
+                super::grids::linework_fit_part(src, tgt, self.k_in, sk, sk).map(|(_, _, score, margin)| (sk, score, margin))
+            })
+            .collect();
+        let weighed = || profile.iter().map(|(k, f, m)| format!("{:.2}: {:.0}%/{:.0}", k / r, f * 100.0, m * 100.0)).collect::<Vec<_>>().join(", ");
+        let best = profile.iter().map(|p| p.1).fold(0.0, f64::max);
+        if best < OFF_SCALE_F1 {
+            return Err(format!("drawn off its scale: none fits well enough ({})", weighed()));
+        }
+        let top: Vec<usize> = (0..profile.len()).filter(|i| profile.get(*i).is_some_and(|p| p.1 >= best - PLATEAU)).collect();
+        let (Some(&first), Some(&last)) = (top.first(), top.last()) else { return Err("drawn off its scale: nothing weighed".into()) };
+        // One run of them, not at the ends of the scales tried.
+        if last - first + 1 != top.len() || first == 0 || last + 1 >= profile.len() {
+            return Err(format!("drawn off its scale: the best scales are not one run inside those tried ({})", weighed()));
+        }
+        let (Some(lo), Some(hi)) = (profile.get(first), profile.get(last)) else { return Err("drawn off its scale: nothing weighed".into()) };
+        let drawn = (lo.0 * hi.0).sqrt();
+        let off = drawn / r;
+        if (off - 1.0).abs() <= OFF_SCALE_SUSPECT {
+            return Err(format!("drawn off its scale: it fits best at its printed scale ({})", weighed()));
+        }
+        let (s, t, score, margin) =
+            super::grids::linework_fit_part(src, tgt, self.k_in, drawn, drawn).ok_or_else(|| format!("drawn off its scale: no fit at {:.3}", off))?;
+        if score < OFF_SCALE_F1 || margin < OFF_SCALE_MARGIN {
+            return Err(format!("drawn off its scale: at {:.3} {:.0}% on the plan, {:.0} points over the next ({})", off, score * 100.0, margin * 100.0, weighed()));
+        }
+        let sim = Sim::scale_offset(s, [t.x, t.y]);
+        if !sim.is_finite() {
+            return Err("drawn off its scale: no finite placement".into());
+        }
+        Ok(LineworkFit { sim, score, margin, off_scale: Some(s / r) })
     }
 }
 
@@ -409,6 +498,57 @@ mod tests {
             }
         }
         out
+    }
+
+    /// A small building's sheet at its printed scale whose lines fit about as well a few percent
+    /// either way (each wall within the fit's foot) is placed at that scale, not refused for a
+    /// best scale that is only the first of the ties.
+    #[test]
+    fn a_small_buildings_sheet_whose_fit_is_flat_over_scales_is_placed_at_its_printed_scale() {
+        let plan = floor(0.15, [100.0, 50.0]);
+        let lines = SheetLines {
+            rects: vec![[0.0, 0.0, 400.0, 300.0], [5000.0, 0.0, 5400.0, 300.0]],
+            pts: vec![plan.clone(), floor(0.15, [5100.0, 60.0])],
+            stripped: vec![true, true],
+            k_in: 1.0,
+        };
+        let f = lines.fit(1, &plan, 1.0).unwrap_or_else(|| panic!("no fit: {}", lines.best_tried(1, &plan, 1.0)));
+        assert!((f.sim.scale() - 1.0).abs() < 1e-9 && f.off_scale.is_none(), "{} {:?}", f.sim.scale(), f.off_scale);
+        let q = f.sim.apply([5100.0, 60.0]);
+        assert!((q[0] - 100.0).abs() <= 18.0 && (q[1] - 50.0).abs() <= 18.0, "{q:?}");
+    }
+
+    /// A trade's sheet whose drawing is a few percent smaller (or larger) than the architect's at
+    /// the same printed scale (its background plotted off) is placed at the scale it is drawn at,
+    /// and says so; one drawn far off it, or one whose fit is weak, is not.
+    #[test]
+    fn a_sheet_drawn_a_few_percent_off_its_printed_scale_is_placed_at_its_drawn_scale() {
+        let plan = floor(1.0, [100.0, 50.0]);
+        for (drawn, placed) in [(0.96, true), (1.045, true), (0.85, false)] {
+            let lines = SheetLines {
+                rects: vec![[0.0, 0.0, 2000.0, 1400.0], [5000.0, 0.0, 9000.0, 2800.0]],
+                pts: vec![plan.clone(), floor(1.0 / drawn, [5200.0, 100.0])],
+                stripped: vec![true, true],
+                k_in: 1.0,
+            };
+            let f = lines.fit(1, &plan, 1.0);
+            assert_eq!(f.is_some(), placed, "drawn at {drawn}: {}", lines.best_tried(1, &plan, 1.0));
+            let Some(f) = f else { continue };
+            // (to the fit's steps of a percent)
+            assert!((f.sim.scale() / drawn - 1.0).abs() <= 0.02, "placed at the scale it is drawn at: {} for {drawn}", f.sim.scale());
+            assert!(f.off_scale.is_some_and(|k| (k / drawn - 1.0).abs() <= 0.02), "{:?}", f.off_scale);
+            // The trade sheet's corner of the floor lands on the plan's.
+            let q = f.sim.apply([5200.0, 100.0]);
+            assert!((q[0] - 100.0).abs() <= 18.0 && (q[1] - 50.0).abs() <= 18.0, "{q:?}");
+        }
+        // At its printed scale: placed at the ratio, nothing off.
+        let lines = SheetLines {
+            rects: vec![[0.0, 0.0, 2000.0, 1400.0], [5000.0, 0.0, 9000.0, 2800.0]],
+            pts: vec![plan.clone(), floor(1.0, [5200.0, 100.0])],
+            stripped: vec![true, true],
+            k_in: 1.0,
+        };
+        assert!(lines.fit(1, &plan, 1.0).is_some_and(|f| f.off_scale.is_none()));
     }
 
     /// Q6396: a trade's plan whose sheet came in at twice the scale of the architect's plan (its
