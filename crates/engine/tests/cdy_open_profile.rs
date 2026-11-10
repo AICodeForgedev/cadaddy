@@ -163,3 +163,108 @@ fn a_million_object_model_opens_with_its_breakdown() {
     print(n, &o);
     assert!(o.peak < o.drawing + o.drawing / 4, "opening peaked at {} MB for a {} MB drawing", o.peak / MB, o.drawing / MB);
 }
+
+// ─── A print set opened one sheet at a time (Q6418) ──────────────────────────────────────────
+
+/// What the interface held and took to open a print set, before (every sheet read and kept, a
+/// sheet open on screen: Q6416) and after (sheets on demand), and that every count is the same.
+///
+/// `cargo test -p cadaddy-engine --test cdy_open_profile print_set_on_demand -- --ignored --nocapture`
+/// (`SHEETS`, `PER`: the made-up set's size, 100 x 10 000 by default; `PRINT_SET_CDY`: a .cdy print
+/// set of your own instead, read only: it is copied and saved again with sheet sections first).
+#[test]
+#[ignore = "a measurement: run by hand (see the doc comment)"]
+fn print_set_on_demand_breakdown() {
+    let _g = serial();
+    hooks();
+    let n = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let dir = std::env::temp_dir().join(format!("cadaddy-ondemand-bench-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("set.cdy").to_string_lossy().into_owned();
+    // The set saved as a headless session (a job) saves it: with its sheet sections.
+    let t = Instant::now();
+    {
+        let mut s = Session::new();
+        match std::env::var("PRINT_SET_CDY").ok() {
+            Some(src) => {
+                s.execute("open", &serde_json::json!({ "path": src })).unwrap();
+            }
+            None => {
+                s.open_drawing(cadaddy_engine::sample::job_print_set(n("SHEETS", 100), n("PER", 10_000)), "Sample Set", None);
+            }
+        }
+        s.execute("saveas", &serde_json::json!({ "path": path })).unwrap();
+    }
+    let saved = t.elapsed();
+    let bytes = std::fs::metadata(&path).unwrap().len();
+    println!("\nset saved with sheet sections in {saved:.2?}: {:.1} MB", bytes as f64 / MB as f64);
+    let readings = |s: &mut Session| -> Vec<serde_json::Value> {
+        let mut run = |c: &str, p: serde_json::Value| s.execute(c, &p).unwrap_or_else(|e| panic!("{c}: {e}"));
+        vec![
+            run("entities", serde_json::json!({"limit": 1}))["count"].clone(),
+            run("count", serde_json::json!({"block": "SYM-OUTLET", "space": "model"})),
+            run("bim.tree", serde_json::json!({}))["total"].clone(),
+        ]
+    };
+    // BEFORE: read whole (as the interface read every file), first sheet open.
+    let base = ALLOC.live();
+    ALLOC.reset_peak();
+    let t = Instant::now();
+    let mut before = Session::new();
+    before.viewport_px = (1600.0, 1000.0);
+    before.finish_open(read_file(&path).unwrap()).unwrap();
+    before.open_first_sheet();
+    let (b_time, b_peak, b_held) = (t.elapsed(), ALLOC.peak().saturating_sub(base), ALLOC.live().saturating_sub(base));
+    let b_objects = before.doc().unwrap().model.len();
+    let sheets = before.print_sheets().len();
+    let t = Instant::now();
+    for _ in 0..3 {
+        before.execute("sheet.next", &serde_json::json!({})).unwrap();
+    }
+    let b_step = t.elapsed() / 3;
+    let want = readings(&mut before);
+    drop(before);
+    // AFTER: sheets on demand, as the interface opens it now.
+    let base = ALLOC.live();
+    ALLOC.reset_peak();
+    let t = Instant::now();
+    let mut after = Session::new();
+    after.viewport_px = (1600.0, 1000.0);
+    after.sheets_on_demand = true;
+    after.finish_open(cadaddy_engine::cmd::file::read_file_on_demand(&path).unwrap()).unwrap();
+    after.open_first_sheet();
+    let (a_time, a_peak, a_held) = (t.elapsed(), ALLOC.peak().saturating_sub(base), ALLOC.live().saturating_sub(base));
+    let a_objects = after.doc().unwrap().model.len();
+    let parked = after.doc().unwrap().sheet_store.parked_objects();
+    let t = Instant::now();
+    for _ in 0..3 {
+        after.execute("sheet.next", &serde_json::json!({})).unwrap();
+    }
+    let a_step = t.elapsed() / 3;
+    let a_step_held = ALLOC.live().saturating_sub(base);
+    // A one-line edit on the open sheet, saved.
+    let c = after.active_sheet().map(|(_, s)| s.rect.center()).unwrap();
+    after.execute("line", &serde_json::json!({ "points": [[c.x, c.y], [c.x + 40.0, c.y]] })).unwrap();
+    let t = Instant::now();
+    let r = after.execute("qsave", &serde_json::json!({})).unwrap();
+    let a_save = t.elapsed();
+    let grew = std::fs::metadata(&path).unwrap().len().saturating_sub(bytes);
+    // The whole set, for a command that reads it (loaded in place by the engine's guard).
+    let t = Instant::now();
+    after.execute("undo", &serde_json::json!({})).unwrap();
+    let got = readings(&mut after);
+    let a_whole = t.elapsed();
+    assert_eq!(got, want, "the same counts with the sheets on demand");
+    println!("{sheets} sheets; counts identical before and after: {want:?}");
+    println!("| | before (whole set held, one sheet shown) | after (sheets on demand) |");
+    println!("|---|---|---|");
+    println!("| open to the first sheet | {b_time:.2?} | {a_time:.2?} |");
+    println!("| peak memory while opening | {} MB | {} MB |", b_peak / MB, a_peak / MB);
+    println!("| held once open | {} MB | {} MB |", b_held / MB, a_held / MB);
+    println!("| objects in memory | {b_objects} | {a_objects} (+ {parked} parked as stored) |");
+    println!("| Page Down (next sheet) | {b_step:.2?} | {a_step:.2?} (held after 3: {} MB) |", a_step_held / MB);
+    println!("| QSAVE after a one-line edit | n/a | {a_save:.2?}, file +{grew} bytes, incremental {} |", r["incremental"]);
+    println!("| a whole-set command (load every sheet + counts) | n/a | {a_whole:.2?} |");
+    let _ = std::fs::remove_dir_all(&dir);
+}

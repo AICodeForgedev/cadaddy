@@ -1064,6 +1064,7 @@ fn add_source(
                 source_sheet: source.to_string(),
                 made: Made::Drawn,
                 basis: String::new(),
+                corrections: Vec::new(),
             });
         }
         for p in &page.pipes {

@@ -1,0 +1,17 @@
+{
+  "about": "Single MEP element edits (mep.add, mep.move, mep.resize, mep.delete, mep.set; Q6502) and how the build joins ducts, pipes, air terminals, sprinkler heads and equipment so bim.chain can walk them. Each number with its basis.",
+  "match_ft": 1.0,
+  "match_basis": "company default: an element read again within a foot of where an edit found it is the same element (a single-line plan read again lands within inches of its last reading)",
+  "equipment_reach_ft": 1.0,
+  "equipment_basis": "trade practice: a duct or pipe that ends at a unit's casing, or within a foot of it (its flexible connector, its valve set), is connected to it",
+  "terminal_rule": "M-BRANCH-DUCT",
+  "terminal_basis": "trade practice (tradepractice.json M-BRANCH-DUCT): an air terminal is fed by a branch duct off the nearest duct of its system within the rule's connect reach",
+  "sprinkler_reach_ft": 2.0,
+  "sprinkler_basis": "trade practice (NFPA 13 armovers, sprigs and drops): a head is fed from the branch line of its system it stands within two feet of",
+  "unconnected_kinds": ["panel", "panelboard", "load_center", "switchboard", "switchgear", "transformer", "disconnect", "mcc", "motor_control_center", "meter_center", "transfer_switch", "ats"],
+  "unconnected_basis": "electrical distribution gear is fed by its feeders (bim.chain walks them), never by a duct or pipe that passes it",
+  "terminal_size_in": [12.0, 12.0],
+  "terminal_size_basis": "company default: the size the plan readers give a terminal symbol that prints none",
+  "sprinkler_size_in": [0.5, 0.0],
+  "sprinkler_size_basis": "company default: a head's half-inch connection"
+}

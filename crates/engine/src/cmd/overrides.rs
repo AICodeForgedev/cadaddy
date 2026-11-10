@@ -183,6 +183,12 @@ fn set_mark(xdata: &[cadaddy_doc::RawTag], mark: Option<&str>) -> Vec<cadaddy_do
 
 /// Apply `o` to element `h` (or, for an added item, put it in). Returns the element it now
 /// applies to. `touched` collects every handle changed.
+/// Whether a properties override sets what an element's circuit links are derived from (its
+/// circuit or panel): applied or taken off, the links follow (Q6501).
+fn moves_circuit(o: &Override) -> bool {
+    matches!(&o.change, Change::Props { props, .. } if props.iter().any(|en| super::circuitlinks::is_input(&en.key)))
+}
+
 fn apply(d: &mut Drawing, o: &mut Override, h: Option<Handle>, touched: &mut Vec<Handle>) -> Option<Handle> {
     let id = o.id;
     match &mut o.change {
@@ -357,6 +363,7 @@ pub fn reapply(d: &mut Drawing, fresh: bool, touched: &mut Vec<Handle>) -> std::
     let idx = index(d);
     let src = sources(d);
     let mut by_id: HashMap<u32, Handle> = HashMap::new();
+    let mut relink: Vec<Handle> = Vec::new();
     for e in d.model.iter() {
         for id in overrides::applied_ids(&e.common.xdata) {
             by_id.entry(id).or_insert(e.handle);
@@ -384,8 +391,11 @@ pub fn reapply(d: &mut Drawing, fresh: bool, touched: &mut Vec<Handle>) -> std::
             } else {
                 o.applied = apply(d, o, target, touched);
                 o.status = if o.applied.is_some() { settled } else { Status::Orphaned };
-                if o.applied.is_some() {
+                if let Some(h) = o.applied {
                     out.applied.push(o.id);
+                    if moves_circuit(o) {
+                        relink.push(h);
+                    }
                 }
             }
         }
@@ -395,6 +405,7 @@ pub fn reapply(d: &mut Drawing, fresh: bool, touched: &mut Vec<Handle>) -> std::
             Status::Orphaned => out.orphaned.push(o.id),
         }
     }
+    super::circuitlinks::relink(d, &relink);
     d.overrides = Some(ov.to_json().map_err(|e| format!("overrides: {e}"))?).into();
     Ok(out)
 }
@@ -484,6 +495,8 @@ pub(crate) fn set_props(
     }
     let mut touched = Vec::new();
     let mut out = Vec::new();
+    let relink: Vec<Handle> =
+        plan.iter().filter(|(_, props, _)| props.iter().any(|en| super::circuitlinks::is_input(&en.key))).map(|(h, ..)| *h).collect();
     let d = s.doc_mut()?;
     for (h, props, slot) in plan {
         let o = match slot {
@@ -519,6 +532,7 @@ pub(crate) fn set_props(
         o.applied = applied;
         out.push((h, o.label()));
     }
+    super::circuitlinks::relink(d, &relink);
     save(d, &ov)?;
     super::revise3d::resync(s, &touched);
     Ok(out)
@@ -706,6 +720,9 @@ fn run_revert(s: &mut Session, p: &Value) -> Result<Value> {
     let mut touched = Vec::new();
     let d = s.doc_mut()?;
     let element = if ov.hidden { None } else { unapply(d, &o, &mut touched) };
+    if let Some(h) = element.filter(|_| moves_circuit(&o)) {
+        super::circuitlinks::relink(d, &[h]);
+    }
     save(d, &ov)?;
     super::revise3d::resync(s, &touched);
     s.echo(format!("{} reverted.", o.label()));
@@ -745,15 +762,20 @@ fn run_show(s: &mut Session, p: &Value) -> Result<Value> {
     let mut changed = 0;
     if hide && !ov.hidden {
         // Newest first: a later override on the same element comes off before an earlier one.
+        let mut relink = Vec::new();
         for i in (0..ov.items.len()).rev() {
             let Some(o) = ov.items.get(i) else { continue };
-            if unapply(d, o, &mut touched).is_some() {
+            if let Some(h) = unapply(d, o, &mut touched) {
                 changed += 1;
+                if moves_circuit(o) {
+                    relink.push(h);
+                }
             }
             if let Some(o) = ov.items.get_mut(i) {
                 o.applied = None;
             }
         }
+        super::circuitlinks::relink(d, &relink);
         ov.hidden = true;
         save(d, &ov)?;
     } else if !hide && ov.hidden {

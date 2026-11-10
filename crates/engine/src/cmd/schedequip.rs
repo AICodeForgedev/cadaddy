@@ -237,6 +237,111 @@ pub(crate) fn is_roof(level: &str) -> bool {
     l.eq_ignore_ascii_case("R") || cadaddy_walk3d::levels::canonical_level(l).is_some_and(|(_, k)| k == cadaddy_walk3d::levels::DatumKind::Roof)
 }
 
+/// The trade practice rule a unit's mounting comes from when the documents give none (Q6494).
+pub(crate) const MOUNT_RULE: &str = "M-EQUIP-MOUNT";
+/// The ceiling a ceiling-hung unit goes to when its level has none, feet.
+const CEILING_FT: f64 = 8.0;
+
+/// One mounting row of [`MOUNT_RULE`]: the kinds (and schedule words) it is for and where they go.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct MountRow {
+    kinds: Vec<String>,
+    words: Vec<String>,
+    /// `above_ceiling` (bottom `gap_in` over the ceiling) or `floor` (bottom `bottom_in` over it).
+    at: String,
+    gap_in: f64,
+    bottom_in: f64,
+    height_in: f64,
+    basis: String,
+}
+
+/// Where a unit sits by [`mounting`]: its bottom over its level's floor, its height when the
+/// row gives one, and why (the rule, its row's reason and the numbers).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Mount {
+    pub bottom_ft: f64,
+    pub height_ft: Option<f64>,
+    pub basis: String,
+}
+
+/// Where a unit of `kind` goes when no schedule, submittal or plan note gives its height: the
+/// first row of [`MOUNT_RULE`] naming its kind whose words (if it has any) `words` has (its
+/// schedule's title, type and mounting words), with its level's (or room's) ceiling and its
+/// printed height (feet, when the schedule gives one). None when no row names it: it stands on
+/// the floor.
+pub(crate) fn mounting(kind: &str, words: &str, ceiling_ft: f64, printed_ft: Option<f64>) -> Option<Mount> {
+    let data = super::provenance::rule_data(MOUNT_RULE);
+    let rows: Vec<MountRow> = data.get("mountings").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default();
+    let spaced =
+        |s: &str| format!(" {} ", s.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric() && c != '-').collect::<Vec<_>>().join(" "));
+    let up = spaced(words);
+    let row = rows.iter().take(200).find(|r| {
+        r.kinds.iter().any(|k| k.eq_ignore_ascii_case(kind))
+            && (r.words.is_empty() || r.words.iter().any(|w| !w.trim().is_empty() && up.contains(&spaced(w.trim()))))
+    })?;
+    let inches = |v: f64| (v.is_finite() && v > 0.0).then_some(v / 12.0);
+    let height_ft = printed_ft.filter(|h| h.is_finite() && *h > 0.0).or_else(|| inches(row.height_in));
+    let ceiling = if ceiling_ft.is_finite() && ceiling_ft > 0.0 { ceiling_ft } else { CEILING_FT };
+    let (bottom_ft, said) = match row.at.as_str() {
+        "above_ceiling" => {
+            let b = ceiling + inches(row.gap_in).unwrap_or(0.0);
+            (b, format!("bottom {b:.2} ft, in the {ceiling:.2} ft ceiling"))
+        }
+        "floor" => match inches(row.bottom_in) {
+            Some(b) => {
+                // Raised off the floor, its top at the ceiling at most.
+                let b = height_ft.map_or(b, |h| b.min(ceiling - h)).max(0.0);
+                (b, format!("bottom {b:.2} ft over the floor"))
+            }
+            None => (0.0, "on the floor".to_string()),
+        },
+        _ => return None,
+    };
+    let rule = super::provenance::rule(MOUNT_RULE);
+    let basis = format!("{}: trade practice: {} ({kind}: {said})", rule.id, row.basis);
+    Some(Mount { bottom_ft, height_ft, basis })
+}
+
+/// The schedule columns whose words say how a unit is mounted (`TYPE: CEILING`, `MOUNTING: WALL`).
+const MOUNT_COLUMNS: [&str; 8] = ["TYPE", "DESCRIPTION", "MOUNTING", "MOUNT", "ARRANGEMENT", "CONFIGURATION", "STYLE", "LOCATION"];
+
+/// The words a unit's mounting row is matched with: its kind, its schedule's title and its row's
+/// type and mounting words.
+fn mount_words(x: &Scheduled) -> String {
+    let said: Vec<&str> = x
+        .properties
+        .iter()
+        .filter(|(c, _)| {
+            let c = c.to_ascii_uppercase();
+            MOUNT_COLUMNS.iter().any(|m| c.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| w == *m))
+        })
+        .map(|(_, v)| v.as_str())
+        .take(16)
+        .collect();
+    format!("{} {}", words_of(x), said.join(" "))
+}
+
+/// The bottom over the floor (feet) a schedule row prints for its unit, with its column: a
+/// mounting height or AFF column (`MTG HT`, `MOUNTING HEIGHT`, `BOTTOM AFF`: `8'-0"`), or a
+/// mounting column giving a height AFF (`MOUNTING`: `WALL @ 7'-0" AFF`). A remark's height is
+/// some other part's (`THERMOSTAT AT 48" AFF`), never the unit's.
+pub(crate) fn schedule_bottom_ft(x: &Scheduled) -> Option<(f64, String)> {
+    let height_column = |c: &str| ["AFF", "A.F.F", "MOUNTING HEIGHT", "MOUNTING HT", "MTG HT", "MTG. HT", "MTG HEIGHT"].iter().any(|w| c.contains(w));
+    x.properties.iter().take(64).find_map(|(c, v)| {
+        let c = c.to_ascii_uppercase();
+        let v = v.to_ascii_uppercase().replace("A.F.F.", "AFF");
+        if !(height_column(&c) || (c.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| w == "MOUNTING") && v.contains("AFF"))) {
+            return None;
+        }
+        // The length just before its `AFF` (or the cell's last): `7'-0"`, `84"`, `8'`.
+        let toks: Vec<&str> = v.split("AFF").next().unwrap_or("").split_whitespace().collect();
+        let last = toks.last()?.trim_matches([',', ';', '@', '(', ')']);
+        let f = equip_reader::parse_length_ft(last, c.contains("(IN") || c.contains("INCH")).filter(|f| *f < 60.0)?;
+        Some((f, c.trim().to_string()))
+    })
+}
+
 /// The kind words a rule's size rows are matched with: the kind and its schedule's title.
 fn words_of(x: &Scheduled) -> String {
     format!("{} {}", x.kind.replace('_', " "), x.title).to_ascii_uppercase()
@@ -374,10 +479,29 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
                     )
                 }
             };
-            let (h_ft, height_from) = match size.filter(|s| s[2] > 0.0) {
-                Some(s) => (s[2], "schedule"),
-                None => (rule[2], "rule: the usual height of its kind"),
+            let printed = size.map(|s| s[2]).filter(|h| *h > 0.0);
+            let (mut h_ft, mut height_from) = match printed {
+                Some(h) => (h, "schedule".to_string()),
+                None => (rule[2], "rule: the usual height of its kind".to_string()),
             };
+            let hung = equip_reader::hangs(x);
+            let ceiling = lv.map_or(CEILING_FT, |l| l.ceiling_ft);
+            // Where it sits off a roof: the schedule's mounting height, else its kind's mounting
+            // (M-EQUIP-MOUNT), else on the floor (Q6494).
+            let mut elevation: Option<(f64, String)> = None;
+            if !hung && !roof {
+                if let Some((b, column)) = schedule_bottom_ft(x) {
+                    elevation = Some((b, format!("schedule: its {column} {b:.2} ft")));
+                } else if let Some(m) = mounting(&x.kind, &mount_words(x), ceiling, printed) {
+                    if printed.is_none()
+                        && let Some(h) = m.height_ft
+                    {
+                        h_ft = h;
+                        height_from = m.basis.clone();
+                    }
+                    elevation = Some((m.bottom_ft, m.basis));
+                }
+            }
             let (a, b) = (to_drawing(lo), to_drawing(hi));
             let (min, max) = ([a[0].min(b[0]), a[1].min(b[1])], [a[0].max(b[0]), a[1].max(b[1])]);
             let mut sources = BTreeMap::new();
@@ -385,7 +509,10 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
             sources.insert("schedule".to_string(), format!("{} {}", x.sheet, x.title).trim().to_string());
             sources.insert("position".to_string(), format!("its tag {tag} on {}", plan.sheet.number));
             sources.insert("outline".to_string(), footprint.clone());
-            sources.insert("height".to_string(), height_from.to_string());
+            sources.insert("height".to_string(), height_from);
+            if let Some((_, how)) = &elevation {
+                sources.insert("elevation".to_string(), how.clone());
+            }
             let mut properties: BTreeMap<String, String> = x.properties.clone();
             properties.insert("STATUS".to_string(), made.as_str().to_string());
             if !made.is_drawn() {
@@ -403,8 +530,7 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
             } else if let Some(serves) = named() {
                 properties.insert("SERVES".to_string(), serves);
             }
-            let hung = equip_reader::hangs(x);
-            let mut bottom = if hung { lv.map_or(8.0, |l| l.ceiling_ft) } else { 0.0 };
+            let mut bottom = if hung { ceiling } else { elevation.as_ref().map_or(0.0, |(b, _)| *b) };
             if roof && !hung {
                 let (part, ft, smade, basis) = roof_support(x, tag, &texts);
                 bottom = ft;
@@ -898,5 +1024,103 @@ mod tests {
         r.choose(|_| false);
         assert!(r.equipment.is_empty());
         assert_eq!(r.not_placeable, vec!["OAU-2 (M-9, M-1)".to_string()]);
+    }
+
+    /// Q6494: a fan schedule's ceiling exhaust fan, a PTAC schedule's unit, a unit heater whose
+    /// schedule prints its mounting height, a roof fan tagged on a floor plan and a water heater,
+    /// none with a printed height, each tagged on a Level 2 plan with a 9 ft ceiling.
+    #[test]
+    fn equipment_with_no_printed_height_is_mounted_where_its_kind_goes() {
+        let mut d = Drawing::default();
+        for (i, tag) in ["EF-1", "PTAC-1", "UH-1", "EF-9", "WH-1"].iter().enumerate() {
+            text(&mut d, tag, 100.0 + 200.0 * i as f64, 100.0);
+        }
+        let sheet = SheetRef {
+            number: "M-2".into(),
+            level: "2".into(),
+            discipline: "M".into(),
+            kind: "plan".into(),
+            rect: [0.0, -500.0, 2000.0, 500.0],
+            ..Default::default()
+        };
+        let plan = PlanIn { sheet: &sheet, drawing: &d, sheet_upf: 12.0, upf: 12.0 };
+        let row = |tag: &str, kind: &str, title: &str, props: &[(&str, &str)]| Scheduled {
+            tag: tag.into(),
+            kind: kind.into(),
+            kind_from: "title".into(),
+            sheet: "M-0".into(),
+            title: title.into(),
+            properties: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ..Default::default()
+        };
+        let rows = vec![
+            row("EF-1", "exhaust_fan", "FAN SCHEDULE", &[("CFM", "80"), ("REMARKS", "THERMOSTAT AT 48\" AFF")]),
+            row("PTAC-1", "ptac", "PACKAGED TERMINAL AIR CONDITIONER SCHEDULE", &[]),
+            row("UH-1", "unit_heater", "UNIT HEATER SCHEDULE", &[("MTG HT", "7'-6\"")]),
+            row("EF-9", "exhaust_fan", "FAN SCHEDULE", &[("TYPE", "ROOF UPBLAST")]),
+            row("WH-1", "water_heater", "WATER HEATER SCHEDULE", &[]),
+        ];
+        let levels = vec![cadaddy_walk3d::Level {
+            name: "Level 2".into(),
+            elevation_ft: 10.0,
+            height_ft: 10.0,
+            ceiling_ft: 9.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        }];
+        let r = chosen(place(&rows, std::slice::from_ref(&plan), &[], &levels)).equipment;
+        let got = |tag: &str| r.iter().find(|e| e.tag == tag).unwrap_or_else(|| panic!("{tag}: {r:?}"));
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        // Its housing above the ceiling, its grille in it; never a box on the floor.
+        let ef = got("EF-1");
+        assert!(near(ef.bottom_ft, 9.0) && near(ef.height_ft, 10.0 / 12.0), "{ef:?}");
+        assert!(ef.sources.get("elevation").is_some_and(|s| s.starts_with("M-EQUIP-MOUNT")), "the rule named: {:?}", ef.sources);
+        // On its 4 in sub-base, 16 in high.
+        let ptac = got("PTAC-1");
+        assert!(near(ptac.bottom_ft, 4.0 / 12.0) && near(ptac.height_ft, 16.0 / 12.0), "{ptac:?}");
+        // The schedule's mounting height governs.
+        let uh = got("UH-1");
+        assert!(near(uh.bottom_ft, 7.5), "{uh:?}");
+        assert!(uh.sources.get("elevation").is_some_and(|s| s.contains("MTG HT")), "{:?}", uh.sources);
+        // A roof fan tagged on a floor plan, and a kind no row names, stand on the floor.
+        assert!(near(got("EF-9").bottom_ft, 0.0));
+        let wh = got("WH-1");
+        assert!(near(wh.bottom_ft, 0.0) && near(wh.height_ft, equip_reader::rule_size("water_heater")[2]), "{wh:?}");
+    }
+
+    #[test]
+    fn a_mounting_rule_reads_its_kind_and_words_and_keeps_a_raised_unit_under_the_ceiling() {
+        let m = |kind: &str, words: &str, ceiling: f64, h: Option<f64>| mounting(kind, words, ceiling, h);
+        // A unit heater 18 in high under an 8 ft ceiling: its top at the ceiling, not at 8'-6".
+        let uh = m("unit_heater", "unit heater", 8.0, Some(1.5)).unwrap_or_else(|| panic!("unit heater"));
+        assert!((uh.bottom_ft - 6.5).abs() < 1e-9, "{uh:?}");
+        // Its words pick the row: a cabinet unit heater stands on the floor.
+        assert_eq!(m("unit_heater", "UNIT HEATER CABINET", 8.0, None).map(|x| x.bottom_ft), Some(0.0));
+        // A word inside another word is not it (`WALL` in `DRYWALL`).
+        let fan = m("exhaust_fan", "EXHAUST FAN DRYWALL CEILING", 9.0, None).unwrap_or_else(|| panic!("fan"));
+        assert!((fan.bottom_ft - 9.0).abs() < 1e-9, "{fan:?}");
+        // A damper sits in its duct just above the ceiling; a printed height is kept.
+        let fd = m("fire_damper", "", 9.0, Some(0.5)).unwrap_or_else(|| panic!("damper"));
+        assert!((fd.bottom_ft - (9.0 + 2.0 / 12.0)).abs() < 1e-9 && fd.height_ft == Some(0.5), "{fd:?}");
+        // No ceiling known: the usual one.
+        assert_eq!(m("vav", "", f64::NAN, None).map(|x| x.bottom_ft), Some(8.5));
+        assert_eq!(m("water_heater", "", 9.0, None), None);
+        assert_eq!(m("", "", 9.0, None), None);
+    }
+
+    #[test]
+    fn a_schedule_mounting_height_is_read_from_its_column_never_a_remark() {
+        let row = |props: &[(&str, &str)]| Scheduled {
+            properties: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ..Default::default()
+        };
+        assert_eq!(schedule_bottom_ft(&row(&[("MOUNTING HEIGHT", "8'-0\" AFF")])).map(|x| x.0), Some(8.0));
+        assert_eq!(schedule_bottom_ft(&row(&[("BOTTOM AFF (IN)", "84")])).map(|x| x.0), Some(7.0));
+        assert_eq!(schedule_bottom_ft(&row(&[("MOUNTING", "WALL @ 7'-0\" A.F.F.")])).map(|x| x.0), Some(7.0));
+        assert_eq!(schedule_bottom_ft(&row(&[("MOUNTING", "CEILING")])), None);
+        assert_eq!(schedule_bottom_ft(&row(&[("REMARKS", "THERMOSTAT AT 48\" AFF")])), None);
+        assert_eq!(schedule_bottom_ft(&row(&[("MTG HT", "")])), None);
     }
 }

@@ -212,6 +212,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 drawn_at: None,
                 moved: String::new(),
                 connection: f("connection"),
+                fire_alarm: None,
             }
         })
         .collect();
@@ -610,7 +611,10 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
 pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy_walk3d::BuildingSpec) -> cadaddy_walk3d::Mep {
     let duct_bottom_ft = sp.mep.band_bottom_ft("duct").unwrap_or(10.0);
     let terminal_bottom_ft = sp.mep.band_bottom_ft("terminal").unwrap_or(8.5);
-    let equipment_height_ft = sp.mep.band_bottom_ft("equipment").unwrap_or(6.0);
+    // The project's equipment band is where floor-standing equipment's bottom is, never a height.
+    let equipment_bottom_ft = sp.mep.band_bottom_ft("equipment").filter(|b| b.is_finite() && *b >= 0.0);
+    let ceiling_ft = sp.level(level).map_or(8.0, |l| l.ceiling_ft);
+    let roof = super::schedequip::is_roof(level);
     let mut mep = cadaddy_walk3d::Mep::default();
     let mut sys_map: BTreeMap<String, MepSystem> = BTreeMap::new();
     for run in &net.runs {
@@ -676,6 +680,7 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
             source_sheet: sheet.to_string(),
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
         });
     }
     for de in &net.equipment {
@@ -683,13 +688,36 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
         if !sheet.is_empty() {
             sources.insert("sheet".to_string(), sheet.to_string());
         }
+        // No height on the sheet: where its kind is mounted (M-EQUIP-MOUNT), else on the floor
+        // (or the project's equipment band), the usual height of its kind (Q6494).
+        let usual = cadaddy_mepfix::equip_reader::rule_size(&de.kind)[2];
+        let mount =
+            if roof { None } else { super::schedequip::mounting(&de.kind, &format!("{} {}", de.kind.replace('_', " "), de.tag), ceiling_ft, None) };
+        let (bottom_ft, height_ft) = match mount {
+            Some(m) => {
+                let h = m.height_ft.unwrap_or(usual);
+                sources.insert("elevation".to_string(), m.basis.clone());
+                sources.insert("height".to_string(), if m.height_ft.is_some() { m.basis } else { "rule: the usual height of its kind".to_string() });
+                (m.bottom_ft, h)
+            }
+            None => {
+                let b = equipment_bottom_ft.unwrap_or(0.0);
+                sources.insert(
+                    "elevation".to_string(),
+                    if equipment_bottom_ft.is_some() { format!("the project's equipment band, {b:.2} ft") } else { "on the floor".to_string() },
+                );
+                sources.insert("height".to_string(), "rule: the usual height of its kind".to_string());
+                (b, usual)
+            }
+        };
         mep.equipment.push(MepEquipment {
             tag: de.tag.clone(),
             kind: de.kind.clone(),
             level: level.to_string(),
             min: [de.min.x, de.min.y],
             max: [de.max.x, de.max.y],
-            height_ft: equipment_height_ft,
+            bottom_ft,
+            height_ft,
             systems: vec![match de.kind.as_str() {
                 "ahu" | "rtu" | "vav" => "SA".to_string(),
                 "exhaust_fan" => "EA".to_string(),
@@ -1486,6 +1514,42 @@ pub struct ReadDevice {
     /// it this luminaire. Empty: its plan draws the luminaire itself.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub connection: String,
+    /// A notification appliance the approved fire alarm shop drawings give (Q6495): its
+    /// address, circuit, candela, mounting and source, and the design device it superseded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_alarm: Option<FireAlarmFacts>,
+}
+
+/// What a fire alarm shop drawing says of one notification appliance ([`super::fashop`]).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FireAlarmFacts {
+    /// `P2.N3.07`, and its notification circuit `P2.N3`; an initiating device's loop address
+    /// (`L7.42`) and its loop (`L7`).
+    pub address: String,
+    pub circuit: String,
+    /// An initiating device on a signalling line circuit (its circuit is a loop), not an appliance.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loop_device: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candela: Option<u32>,
+    /// `ceiling` or `wall` as its legend row says (empty: it doesn't).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mount: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    #[serde(default)]
+    pub weatherproof: bool,
+    /// The shop drawing and page, and its plan's title.
+    pub source: String,
+    /// Its legend row's description, and how its row was told (its symbol, or inferred).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub row: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub row_basis: String,
+    /// The design plan's device it took the place of (its mark, sheet, spot, how far), empty
+    /// when the design shows none there.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub design: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1761,6 +1825,38 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
                     "at the junction box its electrical plan draws (no casework detail dimensions it: the plan's spot is diagrammatic)",
                     "plan",
                 );
+            }
+        }
+        // A notification appliance the approved fire alarm shop drawing gives: its address,
+        // circuit, candela and mounting, the shop drawing its source; the design device it took
+        // the place of kept beside (Q6495).
+        if let Some(fa) = &dv.fire_alarm {
+            e.set("address", fa.address.clone(), "submittal");
+            e.set(if fa.loop_device { "slc_circuit" } else { "nac_circuit" }, fa.circuit.clone(), "submittal");
+            if let Some(cd) = fa.candela {
+                e.set("candela", format!("{cd} cd"), "submittal");
+            }
+            if !fa.mount.is_empty() {
+                e.set("mount", fa.mount.clone(), "submittal");
+            }
+            if !fa.model.is_empty() {
+                e.set("model", fa.model.clone(), "submittal");
+            }
+            if fa.weatherproof {
+                e.set("weatherproof", "yes", "submittal");
+            }
+            if !fa.row.is_empty() {
+                e.set("legend", fa.row.clone(), "submittal");
+                e.set("device_type", fa.row.to_ascii_lowercase(), "submittal");
+            }
+            e.set("shop_drawing", fa.source.clone(), "submittal");
+            e.set("position_provenance", "drawn", "submittal");
+            e.set("position_basis", format!("the approved fire alarm shop drawing {} supersedes the design symbols", fa.source), "submittal");
+            if !fa.row_basis.is_empty() {
+                e.set("kind_basis", fa.row_basis.clone(), "submittal");
+            }
+            if !fa.design.is_empty() {
+                e.set("design_device", fa.design.clone(), "plan");
             }
         }
         // Its height as printed by it on its typical room's plan.

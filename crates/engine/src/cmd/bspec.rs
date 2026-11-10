@@ -48,7 +48,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The drawing's stored spec, if it has one.
-fn stored(d: &Drawing) -> std::result::Result<Option<BuildingSpec>, String> {
+pub(crate) fn stored(d: &Drawing) -> std::result::Result<Option<BuildingSpec>, String> {
     d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).map(BuildingSpec::from_json).transpose()
 }
 
@@ -2320,7 +2320,9 @@ fn build_step(s: &mut Session, step: &str, started: web_time::Instant) {
 
 /// [`build_spec`] with an explicit time budget (seconds).
 pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64) -> Result<Value> {
-    let Some(sp) = g.spec.clone() else { return wallgen::build(s, g) };
+    let Some(mut sp) = g.spec.clone() else { return wallgen::build(s, g) };
+    // The edits made to single MEP elements (Q6502), on the lists as the documents give them now.
+    let mep_edits = super::mepedit::apply(&mut sp);
     let deadline = web_time::Instant::now() + std::time::Duration::from_secs(budget_s);
     let build_start = web_time::Instant::now();
     // What a person set on a room element (bim.props.set) goes on the rebuilt room.
@@ -2527,7 +2529,6 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // Foreign pipe and duct out of electrical gear's dedicated space (NEC 110.26(E)(1)), the gear
     // where it is built (a panel on its wall's face): offset past its side, the drawn route kept
     // on the run; the drawing's spec takes the same correction.
-    let mut sp = sp;
     let gear_space = super::gearspace::clear_built(d, &mut sp);
     if gear_space.found > 0
         && let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
@@ -2664,6 +2665,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // with its basis.
     r["provenance"] = super::provenance::stamp(d).to_json();
     mark("provenance");
+    if !mep_edits.is_empty() {
+        r["mepEdits"] = super::mepedit::report(&mep_edits);
+    }
     // One building: the levels' 3D moved off their plans onto the lowest level's.
     if sp.stack {
         r["stacked"] = json!(stack_levels(d, &sp));

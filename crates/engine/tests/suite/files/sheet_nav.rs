@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::helper::{hooks, run, scratch, session};
 
 /// A session holding the made-up print set of `sheets` sheets of about `per` objects each.
-fn print_set(sheets: usize, per: usize) -> Session {
+fn job_print_set(sheets: usize, per: usize) -> Session {
     let mut s = session();
     s.open_drawing(sample::job_print_set(sheets, per), "Sample Set", None);
     s
@@ -104,7 +104,7 @@ fn an_ordinary_drawing_has_no_sheets_and_shows_itself_whole() {
 
 #[test]
 fn a_print_set_opens_on_its_first_sheet_and_steps_through_them() {
-    let mut s = print_set(4, 60);
+    let mut s = job_print_set(4, 60);
     assert_eq!(s.print_sheets().len(), 4);
     assert!(s.open_first_sheet(), "a print set with no sheet open opens on its first");
     assert!(!s.open_first_sheet(), "once");
@@ -138,7 +138,7 @@ fn a_print_set_opens_on_its_first_sheet_and_steps_through_them() {
 
 #[test]
 fn an_open_sheet_is_all_that_is_drawn_picked_selected_and_snapped_to() {
-    let mut s = print_set(3, 200);
+    let mut s = job_print_set(3, 200);
     s.open_sheet(1).unwrap();
     let sheets = s.print_sheets();
     let (here, there) = (sheets[1].rect, sheets[2].rect);
@@ -198,7 +198,7 @@ fn readings(s: &mut Session) -> Vec<Value> {
 #[test]
 fn commands_read_the_whole_drawing_with_a_sheet_open() {
     hooks();
-    let mut s = print_set(3, 150);
+    let mut s = job_print_set(3, 150);
     let total = s.doc().unwrap().model.len();
     let before = readings(&mut s);
     s.open_sheet(1).unwrap();
@@ -221,7 +221,7 @@ fn commands_read_the_whole_drawing_with_a_sheet_open() {
 /// made anew.
 #[test]
 fn the_sheet_view_follows_edits_and_undo() {
-    let mut s = print_set(3, 150);
+    let mut s = job_print_set(3, 150);
     s.open_sheet(1).unwrap();
     let sheets = s.print_sheets();
     let (here, there) = (sheets[1].rect, sheets[2].rect);

@@ -6,7 +6,7 @@
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use web_time::{Duration, Instant};
 
-use cadaddy_engine::cmd::file::{ReadFile, read_file};
+use cadaddy_engine::cmd::file::{ReadFile, read_file_on_demand};
 
 use crate::theme::Tokens;
 
@@ -30,7 +30,8 @@ impl Opening {
         let (tx, rx) = channel();
         let p = path.to_string();
         let spawned = std::thread::Builder::new().name("cadaddy-open".into()).spawn(move || {
-            let _ = tx.send(read_file(&p));
+            // A .cdy print set is read with only its first sheet in memory (Q6418).
+            let _ = tx.send(read_file_on_demand(&p));
         });
         if spawned.is_err() {
             // No thread to read on: report it like any other failed open.
