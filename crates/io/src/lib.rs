@@ -537,6 +537,7 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
 
 /// [`read`], also returning the DXF rendition a DWG was read through by the DWG bridge (`None`
 /// for other files and for CADaddy's own DWG reader), which the round-trip harness counts.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_source(bytes: &[u8], name: &str) -> Result<(Drawing, Option<Vec<u8>>)> {
     let d = read(bytes, name)?;
     if cadaddy_dwg::is_dwg(bytes) && dwg_engine(true) == DwgEngine::Bridge {
