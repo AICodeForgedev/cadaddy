@@ -3174,7 +3174,8 @@ mod tests {
     /// The hotel-scale numbers on this machine's wgpu (a benchmark, run by hand):
     /// `CADADDY_FIDELITY_BENCH=model.cdy cargo test -p cadaddy-ui-egui --lib fidelity_bench -- --ignored --nocapture`;
     /// `CADADDY_FIDELITY_BENCH=synthetic` (and `CADADDY_FIDELITY_STOREYS`, 8 by default) the
-    /// made-up building of [`synthetic_building`].
+    /// made-up building of [`synthetic_building`]; `CADADDY_FIDELITY_REPEAT` frames timed a tier (5),
+    /// `CADADDY_FIDELITY_FRAMES` a folder for each tier's first frame (raw RGBA).
     /// The whole building at each tier, and without fidelity: build, upload and frame times, the
     /// buffers' bytes; then a zoom into the room round one receptacle: the time until it is drawn.
     #[test]
@@ -3253,7 +3254,7 @@ mod tests {
                 let tri_bytes: usize = tri_bufs.flatten().map(|b| b.vertex_bytes + b.index_bytes).sum();
                 let held = model.loaded_at(tier).0 + stream.tris();
                 let (vb, ib) = g.buffer_bytes();
-                let n = 5;
+                let n: u32 = std::env::var("CADADDY_FIDELITY_REPEAT").ok().and_then(|s| s.parse().ok()).unwrap_or(5).clamp(1, 10_000);
                 let t2 = web_time::Instant::now();
                 // The CPU's share of a frame (culling, placements, encoding).
                 let mut encode = 0.0;
