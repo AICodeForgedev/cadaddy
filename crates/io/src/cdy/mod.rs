@@ -12,7 +12,7 @@ mod tokens;
 use cadaddy_doc::{Drawing, Space};
 
 pub use container::{FORMAT_VERSION, is_cdy};
-pub use model::{ENTITY_CHUNK, ReadReport};
+pub use model::{ENTITY_CHUNK, OpenProfile, ReadReport};
 pub use save::{MAX_WASTE, Output, SaveState, save, seed};
 
 use crate::{IoError, Result};

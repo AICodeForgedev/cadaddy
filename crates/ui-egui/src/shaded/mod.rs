@@ -29,6 +29,43 @@ struct SceneKey {
     fourd: Option<crate::fourdpalette::Shown>,
 }
 
+/// Everything a GPU frame's pixels come from: the model, the style and background, the view and
+/// the target's size and samples, the fidelity tier and marks, the streamed cells held and the
+/// lighting. Two frames with equal keys are the same picture.
+#[derive(Clone, Debug, PartialEq)]
+struct FrameKey {
+    scene: SceneKey,
+    style: VisualStyle,
+    bg: [u8; 3],
+    /// The view's direction, right, up, centre and height, bit for bit.
+    view: [u64; 12],
+    size: (u32, u32),
+    samples: u32,
+    tier: Tier,
+    force: Option<Force>,
+    stream: u64,
+    lighting: Option<cadaddy_render::light::Lighting>,
+}
+
+impl FrameKey {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        scene: SceneKey,
+        style: VisualStyle,
+        bg: Rgb,
+        v: &ShadeView,
+        samples: u32,
+        tier: Tier,
+        force: Option<Force>,
+        stream: u64,
+        lighting: Option<cadaddy_render::light::Lighting>,
+    ) -> FrameKey {
+        let view =
+            [v.dir.x, v.dir.y, v.dir.z, v.right.x, v.right.y, v.right.z, v.up.x, v.up.y, v.up.z, v.center.x, v.center.y, v.height].map(f64::to_bits);
+        FrameKey { scene, style, bg: [bg.0, bg.1, bg.2], view, size: (v.width_px, v.height_px), samples, tier, force, stream, lighting }
+    }
+}
+
 /// A model being built off the UI thread, and how far it has got.
 struct Pending {
     key: SceneKey,
@@ -79,6 +116,10 @@ pub struct Stats {
     pub stream_ms: f64,
     /// Elements a search marks that the tier doesn't draw.
     pub markers: usize,
+    /// Frames the GPU drew, and frames shown from the last one's picture because nothing it
+    /// was drawn from had changed.
+    pub frames_rendered: u64,
+    pub frames_reused: u64,
 }
 
 /// An orbit benchmark under way: frames left, the azimuth reached, when it started.
@@ -120,6 +161,8 @@ pub struct State {
     auto_tier: Option<Tier>,
     stream: Stream,
     auto_for: Option<((usize, u64), model3::AutoTiers, f64)>,
+    /// The section box and coordination mode of the drawing (for the state they were read from).
+    sbox_for: Option<((usize, u64), cadaddy_engine::cmd::coordination::CoordRenderState)>,
 }
 
 impl State {
@@ -206,23 +249,35 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             st.uploaded = None;
         }
         let g = st.gpu.get_or_insert_with(|| Gpu::new(&rs.device, caps.msaa));
-        let up = Some((key, style, [bg.0, bg.1, bg.2]));
-        if st.uploaded != up {
-            g.upload(&rs.device, &rs.queue, &model, style, bg);
-            g.stream_gen = None;
-            st.uploaded = up;
+        // The last frame's picture stands while nothing it was drawn from has changed (the
+        // pointer moving over a still view, overlays, a hover): no upload, cull or pass.
+        let frame = FrameKey::new(key, style, bg, &view, caps.msaa, tier, force.clone(), st.stream.generation, lit.clone());
+        let reused = g.shows(&frame);
+        if reused {
+            st.stats.frames_reused += 1;
+        } else {
+            let up = Some((key, style, [bg.0, bg.1, bg.2]));
+            if st.uploaded != up {
+                g.upload(&rs.device, &rs.queue, &model, style, bg);
+                g.stream_gen = None;
+                st.uploaded = up;
+            }
+            g.load_tiers(&rs.device, &model, tier);
+            g.upload_stream(&rs.device, &st.stream, style, bg);
+            g.set_lighting(&rs.device, &rs.queue, lit.as_ref());
+            let t0 = web_time::Instant::now();
+            let vis = g.render(&rs.device, &rs.queue, &view, style, bg, tier, force.as_ref(), &st.stream);
+            st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            st.stats.frames_rendered += 1;
+            g.last = Some((frame, vis));
         }
-        g.load_tiers(&rs.device, &model, tier);
-        g.upload_stream(&rs.device, &st.stream, style, bg);
-        g.set_lighting(&rs.device, &rs.queue, lit.as_ref());
-        let t0 = web_time::Instant::now();
-        let vis = g.render(&rs.device, &rs.queue, &view, style, bg, tier, force.as_ref(), &st.stream);
-        st.stats.markers = vis.markers.len();
-        markers = vis.markers;
-        st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        st.stats.tris_drawn = vis.tris;
-        st.stats.instances_drawn = vis.instances.iter().map(|g| g.2.len()).sum();
-        st.stats.chunks_drawn = vis.chunks.len();
+        if let Some((_, vis)) = &g.last {
+            st.stats.markers = vis.markers.len();
+            markers = vis.markers.clone();
+            st.stats.tris_drawn = vis.tris;
+            st.stats.instances_drawn = vis.instances.iter().map(|g| g.2.len()).sum();
+            st.stats.chunks_drawn = vis.chunks.len();
+        }
         // Buffers and textures, plus the render targets (4× colour and depth, the resolved image,
         // the pre-pass depth) and the shadow map.
         let (tw, th) = (u64::from(w), u64::from(h));
@@ -231,7 +286,7 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             + g.stream_bytes
             + (tw * th * (u64::from(g.samples) * 8 + 8)) as usize
             + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
-        if let Some(tv) = g.view() {
+        if let Some(tv) = g.view().filter(|_| !reused || st.texture.is_none()) {
             let mut r = rs.renderer.write();
             match st.texture {
                 Some(id) => r.update_egui_texture_from_wgpu_texture(&rs.device, tv, wgpu::FilterMode::Linear, id),
@@ -449,7 +504,17 @@ const BOX_EDGES: [(usize, usize); 12] = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2),
 pub fn section_box_handles(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf) {
     use cadaddy_engine::cmd::coordination::{self as coord, BoxFace};
     let Ok(st) = app.session.state() else { return };
-    let crs = coord::coord_render_state(&st.doc);
+    // The section box is read out of the building spec, which is parsed whole to find it: on a
+    // hotel-size model that is most of a frame, so it is read once per state of the drawing.
+    let doc_key = (Arc::as_ptr(&st.doc) as usize, st.revision);
+    let crs = match &app.canvas.shade.sbox_for {
+        Some((k, crs)) if *k == doc_key => crs.clone(),
+        _ => {
+            let crs = coord::coord_render_state(&st.doc);
+            app.canvas.shade.sbox_for = Some((doc_key, crs.clone()));
+            crs
+        }
+    };
     if !crs.sbox_on {
         app.canvas.shade.sbox_drag = None;
         return;
@@ -718,6 +783,8 @@ struct Gpu {
     bg_view: TrackedView,
     bg_sampler: wgpu::Sampler,
     bg_image: usize,
+    /// What the target shows: the frame drawn last and what it drew.
+    last: Option<(FrameKey, model3::Visible)>,
     target: Option<Target>,
     /// Samples per pixel (see [`crate::gpucaps`]).
     samples: u32,
@@ -975,6 +1042,7 @@ impl Gpu {
                 ..Default::default()
             }),
             bg_image: 0,
+            last: None,
             target: None,
             samples,
         }
@@ -1478,6 +1546,9 @@ impl Gpu {
         force: Option<&Force>,
         stream: &Stream,
     ) -> model3::Visible {
+        // The target is about to change: what it showed no longer stands (the caller says what
+        // it shows once this frame is drawn).
+        self.last = None;
         let size = (v.width_px, v.height_px);
         if self.target.as_ref().is_none_or(|t| t.size != size) {
             self.target = Some(target(device, size, self.samples));
@@ -1655,6 +1726,11 @@ impl Gpu {
         vis
     }
 
+    /// The target already shows the frame `key` asks for.
+    fn shows(&self, key: &FrameKey) -> bool {
+        self.target.is_some() && self.last.as_ref().is_some_and(|(k, _)| k == key)
+    }
+
     fn view(&self) -> Option<&wgpu::TextureView> {
         self.target.as_ref().map(|t| &t.view)
     }
@@ -1830,6 +1906,132 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
+    /// A frame is drawn again exactly when something its pixels come from changes: the drawing
+    /// (revision, detail band, baked light, 4D date), the style or background, the view, the
+    /// target's size or samples, the fidelity tier or marks, the streamed cells, the lighting.
+    /// The pointer moving over a still view changes none of them.
+    #[test]
+    fn a_frame_key_changes_with_every_input_of_the_picture() {
+        use super::*;
+        use cadaddy_geom::Vec2;
+        let scene = SceneKey { doc: 1, revision: 7, band: -3, lightmap: 0, fourd: None };
+        let view = ShadeView::new(None, Vec2::new(50.0, 50.0), 100.0, 640, 480);
+        let lit = cadaddy_render::light::Lighting::of(&cadaddy_doc::Drawing::new_metric(), &cadaddy_doc::Space::Model);
+        let key = |f: &dyn Fn(&mut FrameKey)| {
+            let mut k = FrameKey::new(scene, VisualStyle::Shaded, Rgb(255, 255, 255), &view, 4, Tier::Floor, None, 3, Some(lit.clone()));
+            f(&mut k);
+            k
+        };
+        let base = key(&|_| {});
+        assert_eq!(base, key(&|_| {}), "the same inputs are the same frame");
+        let moved = FrameKey::new(
+            scene,
+            VisualStyle::Shaded,
+            Rgb(255, 255, 255),
+            &ShadeView::new(None, Vec2::new(50.5, 50.0), 100.0, 640, 480),
+            4,
+            Tier::Floor,
+            None,
+            3,
+            Some(lit.clone()),
+        );
+        let zoomed = FrameKey::new(
+            scene,
+            VisualStyle::Shaded,
+            Rgb(255, 255, 255),
+            &ShadeView::new(None, Vec2::new(50.0, 50.0), 99.0, 640, 480),
+            4,
+            Tier::Floor,
+            None,
+            3,
+            Some(lit.clone()),
+        );
+        let resized = FrameKey::new(
+            scene,
+            VisualStyle::Shaded,
+            Rgb(255, 255, 255),
+            &ShadeView::new(None, Vec2::new(50.0, 50.0), 100.0, 641, 480),
+            4,
+            Tier::Floor,
+            None,
+            3,
+            Some(lit.clone()),
+        );
+        let mut dimmer = lit.clone();
+        dimmer.exposure += 0.5;
+        let changed: Vec<(&str, FrameKey)> = vec![
+            ("pan", moved),
+            ("zoom", zoomed),
+            ("size", resized),
+            ("edit", key(&|k| k.scene.revision += 1)),
+            ("another drawing", key(&|k| k.scene.doc += 1)),
+            ("detail band", key(&|k| k.scene.band += 1)),
+            ("baked light", key(&|k| k.scene.lightmap += 1)),
+            ("style", key(&|k| k.style = VisualStyle::Hidden)),
+            ("background", key(&|k| k.bg = [0, 0, 0])),
+            ("samples", key(&|k| k.samples = 1)),
+            ("tier", key(&|k| k.tier = Tier::Room)),
+            ("marks", key(&|k| k.force = Some(Force { kind: "receptacle".into(), level: None }))),
+            ("streamed cells", key(&|k| k.stream += 1)),
+            ("lighting", key(&|k| k.lighting = Some(dimmer.clone()))),
+            ("no lighting", key(&|k| k.lighting = None)),
+        ];
+        for (what, k) in &changed {
+            assert_ne!(&base, k, "{what} must draw the frame again");
+        }
+    }
+
+    /// On the GPU: a target shows a frame only once it has drawn it, a second look at the same
+    /// frame is not drawn again, and any other frame (or a render by anyone else) is.
+    #[test]
+    fn the_gpu_keeps_a_frame_until_its_inputs_change() {
+        use super::*;
+        use serde_json::json;
+        let mut s = cadaddy_engine::Session::new();
+        s.execute("box", &json!({ "corner": [0, 0, 0], "length": 10, "width": 10, "height": 10 })).unwrap();
+        let d = s.doc().unwrap().clone();
+        let bg = Rgb(255, 255, 255);
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
+        let model = Arc::new(model3::build_clipped(&d, &cadaddy_doc::Space::Model, 0.05, bg, &p, &t, &[]));
+        let (w, h) = (64u32, 64u32);
+        let view = shade::fit(&model.flatten(), None, w, h).unwrap();
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let (device, queue) = (&rs.device, &rs.queue);
+        let mut g = Gpu::new(device, 1);
+        let stream = Stream::default();
+        let style = VisualStyle::Shaded;
+        let scene = SceneKey { doc: 1, revision: 1, band: 0, lightmap: 0, fourd: None };
+        let key = |v: &ShadeView| FrameKey::new(scene, style, bg, v, 1, Tier::Detail, None, stream.generation, None);
+        // What the canvas does each frame; true when the frame was drawn.
+        let frame = |g: &mut Gpu, v: &ShadeView| {
+            let k = key(v);
+            if g.shows(&k) {
+                return false;
+            }
+            if g.model.is_none() {
+                g.upload(device, queue, &model, style, bg);
+            }
+            let vis = g.render(device, queue, v, style, bg, Tier::Detail, None, &stream);
+            g.last = Some((k, vis));
+            true
+        };
+        assert!(!g.shows(&key(&view)), "nothing is shown before the first frame");
+        assert!(frame(&mut g, &view), "the first frame is drawn");
+        let tris = g.last.as_ref().map(|(_, v)| v.tris).unwrap();
+        assert!(tris > 0);
+        for _ in 0..5 {
+            assert!(!frame(&mut g, &view), "a still view is not drawn again");
+        }
+        assert_eq!(g.last.as_ref().map(|(_, v)| v.tris), Some(tris), "what the kept frame drew is still known");
+        let mut turned = view;
+        turned.center.x += 1.0;
+        assert!(frame(&mut g, &turned), "a moved view is drawn");
+        assert!(frame(&mut g, &view), "and so is the first view again: the target shows the moved one");
+        // A render the canvas didn't ask for leaves the target showing no known frame.
+        let _ = g.render(device, queue, &turned, style, bg, Tier::Detail, None, &stream);
+        assert!(!g.shows(&key(&view)) && !g.shows(&key(&turned)));
     }
 
     /// The live view on the GPU and on the CPU show the same render environment: the same
