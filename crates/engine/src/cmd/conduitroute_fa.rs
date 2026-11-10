@@ -452,6 +452,18 @@ fn first_at(up: &str, words: &[String]) -> Option<usize> {
         .min()
 }
 
+/// Whether a word that requires (`SHALL`, `REQUIRED`) stands within a few words of byte `at` of
+/// `up`: the requirement is of what is there (`… SHALL BE CLASS A`), not a sentence's far end.
+fn required_near(up: &str, at: usize, words: &[String]) -> bool {
+    const NEAR_WORDS: usize = 8;
+    let word_index = |i: usize| up.get(..i).map_or(0, |b| b.split_whitespace().count());
+    let k = word_index(at);
+    words.iter().filter(|w| !w.trim().is_empty()).any(|w| {
+        let w = w.to_ascii_uppercase();
+        up.match_indices(w.as_str()).take(64).any(|(i, _)| word_index(i).abs_diff(k) <= NEAR_WORDS)
+    })
+}
+
 /// The cable a wire legend gives each circuit: the circuit's name, then (before the next
 /// circuit's name) its `N AWG M CONDUCTOR` and its cable type.
 fn legend_cables(flat: &str, cite: &str, w: &DocWords, out: &mut BTreeMap<String, DocCable>) {
@@ -527,7 +539,7 @@ pub(crate) fn read_docs(texts: &[Statement]) -> WiringDocs {
         // nor a choice of A or B).
         if out.class_a.is_none()
             && let Some(at) = first_at(&up, &w.class_a_words)
-            && has_any(&s, &w.require_words)
+            && required_near(&up, at, &w.require_words)
             && !w.class_b_words.iter().any(|b| up.contains(&b.to_ascii_uppercase()))
         {
             out.class_a = Some(quote(at));

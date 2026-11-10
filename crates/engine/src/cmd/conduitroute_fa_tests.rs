@@ -370,6 +370,8 @@ fn the_wiring_statements_are_read_by_their_words() {
     assert!(read("FIRE ALARM PANEL FEATURES: SUPPORTS CLASS A OR CLASS B WIRING ON EVERY SLC", true).class_a.is_none());
     assert!(read("FIRE ALARM PANEL FEATURES: 1,000 ADDRESSES, CLASS A CAPABLE", true).class_a.is_none());
     assert!(read("ALL FIRE ALARM SIGNALING LINE CIRCUITS SHALL BE WIRED CLASS A.", false).class_a.is_some());
+    let far = "FIRE ALARM MODULE FEATURES: A CLASS A CONVERTER THAT TURNS THE LOOP AND THE OUTPUTS OF THE PANEL INTO A RING SO THE SENSORS PROVIDE A STATUS";
+    assert!(read(far, true).class_a.is_none(), "a requirement word at the far end is not about it");
 }
 
 #[test]
