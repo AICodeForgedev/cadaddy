@@ -410,8 +410,8 @@ const MAX_TILES: usize = 4096;
 const TILE_MIN_PX: f64 = 1024.0;
 /// The most pixels a point the screen may have (a primitive's reach is counted at it).
 const MAX_PPP: f64 = 4.0;
-/// A primitive whose neighbourhood covers more cells than this is placed above everything of the
-/// other tiles in its group (looking at every cell would cost more than it saves).
+/// A box over more cells than this is marked and looked up a whole cell at a time, not sub-cell
+/// by sub-cell ([`Marks`]).
 const MAX_NEIGHBOUR_CELLS: usize = 64;
 
 impl Tiling {
@@ -809,9 +809,6 @@ fn facts_of(
 ) {
     out.clear();
     out.resize(prims.len(), Fact::NONE);
-    let threads = threads.clamp(1, MAX_WRITERS);
-    let per = prims.len().div_ceil(threads).max(1);
-    let n_tiles = bounds.len();
     let sub_per = SUB as f64 / t.cell;
     let work = |fs: &mut [Fact], ps: &[cadaddy_render::DPrim], bounds: &mut [Bounds2], prims_in: &mut [usize]| {
         for (f, p) in fs.iter_mut().zip(ps) {
@@ -825,8 +822,13 @@ fn facts_of(
             }
         }
     };
+    // (The web build has no threads.)
+    #[cfg(target_arch = "wasm32")]
+    let _ = threads;
     #[cfg(not(target_arch = "wasm32"))]
     if threads > 1 {
+        let per = prims.len().div_ceil(threads.min(MAX_WRITERS)).max(1);
+        let n_tiles = bounds.len();
         let parts: Vec<(Vec<Bounds2>, Vec<usize>)> = std::thread::scope(|s| {
             let handles: Vec<_> = out
                 .chunks_mut(per)
@@ -1133,6 +1135,7 @@ fn phase(k: usize, t0: web_time::Instant) {
 }
 
 /// Tiles' vertices written at once on a single thread below this; above, on several.
+#[cfg(not(target_arch = "wasm32"))]
 const PARALLEL_VERTICES: usize = 500_000;
 /// Most threads writing a mesh.
 const MAX_WRITERS: usize = 8;
@@ -3026,7 +3029,7 @@ mod tests {
                 (_, 0..=8) => add(&mut l, Kind::Polyline, color, 0.0, 0, vec![p, q, q + Vec2::new(r.f(6.0), -r.f(6.0))]),
                 (_, 9 | 10) => add(&mut l, Kind::Polyline, color, 0.5, 0, vec![p, q]),
                 (_, 11 | 12) => {
-                    let t = if r.next() % 2 == 0 { 0 } else { 50 };
+                    let t = if r.next().is_multiple_of(2) { 0 } else { 50 };
                     add(&mut l, Kind::Tris, color, 0.0, t, vec![p, q, Vec2::new(p.x, q.y)]);
                 }
                 (_, 13 | 14) => add(&mut l, Kind::Point, color, 0.0, 0, vec![p]),
@@ -3144,7 +3147,7 @@ mod tests {
             let tiles = tiled().tiles.unwrap();
             assert_eq!(tiles.bounds.len(), 65, "8 × 8 cells and the large tile");
             assert!(tiles.groups.len() > 5, "wipeouts and masks start groups: {}", tiles.groups.len());
-            let held = tiles.drawn(&vec![true; 65]);
+            let held = tiles.drawn(&[true; 65]);
             assert_eq!(held.vertices, whole().line_vertices() + whole().tri_vertices() + 6 * whole().quad_instances());
             // Whole: every tile drawn. (A kept frame blends a see-through pixel in two steps,
             // which may round it apart from drawing it directly: each is compared with its own.)
@@ -3227,7 +3230,7 @@ mod tests {
         assert!(
             t.min.x <= b.min.x && t.min.y <= b.min.y && t.min.x + t.cell * t.cols as f64 >= b.max.x && t.min.y + t.cell * t.rows as f64 >= b.max.y
         );
-        assert_eq!(((t.cell.log2() * 2.0).round() - t.cell.log2() * 2.0).abs() < 1e-9, true, "{}", t.cell);
+        assert!(((t.cell.log2() * 2.0).round() - t.cell.log2() * 2.0).abs() < 1e-9, "{}", t.cell);
         // (Where the vertex count sets the side, not the pixels: zoomed in.)
         let z = Tiling::for_bounds(&b, 10_000_000, 0.1).unwrap();
         assert_eq!(Tiling::for_bounds(&b, 11_000_000, 0.1), Some(z));

@@ -667,26 +667,45 @@ mod tests {
         let d = three_areas_and_a_hatch();
         let everywhere = Bounds2::new(Vec2::new(-1000.0, -1000.0), Vec2::new(41_000.0, 2000.0));
         let coarse = Options { tolerance: 1.0, min_dash: 4.0, view: Some(everywhere), ..Options::default() };
-        let mut cache = ChunkCache::default();
-        let list = build_cached(&d, &Space::Model, &coarse, &mut cache);
-        same(&list, &build(&d, &Space::Model, &coarse));
-        // Zoomed in on the middle area: only its part is tessellated again, finer.
         let fine = Options { tolerance: 0.01, min_dash: 0.04, view: Some(area(10_000.0)), ..Options::default() };
-        let list = build_cached(&d, &Space::Model, &fine, &mut cache);
-        assert_eq!((cache.rebuilt, cache.reused, cache.kept), (1, 3, 3), "{cache:?}");
-        let full_fine = build(&d, &Space::Model, &fine);
-        assert_eq!(points_in(&list, &area(10_000.0)), points_in(&full_fine, &area(10_000.0)), "in view: the fine build");
-        assert_eq!(points_in(&list, &area(0.0)), points_in(&build(&d, &Space::Model, &coarse), &area(0.0)), "out of view: as before");
-        assert!(list.verts.len() * 2 < full_fine.verts.len(), "{} points, a fine build of everything {}", list.verts.len(), full_fine.verts.len());
-        // The same zoom panned to the first area: the middle stays fine, the first is built.
-        let list = build_cached(&d, &Space::Model, &Options { view: Some(area(0.0)), ..fine.clone() }, &mut cache);
-        assert_eq!((cache.rebuilt, cache.kept), (1, 3), "{cache:?}");
-        assert_eq!(points_in(&list, &area(0.0)), points_in(&full_fine, &area(0.0)));
-        // Zoomed out again: a part finer than asked is built again even out of view (the list
-        // never holds more than a build at the asked detail would), so this is the coarse list.
-        let list = build_cached(&d, &Space::Model, &Options { view: Some(area(20_000.0)), ..coarse.clone() }, &mut cache);
-        assert_eq!(cache.rebuilt, 3, "{cache:?}");
-        same(&list, &build(&d, &Space::Model, &coarse));
+        // The parts cache starts over when the loaded images change (`images::generation`), which
+        // other tests running beside this one do: the steps are counted again until no image
+        // changed while they ran.
+        for _ in 0..50 {
+            let generation = images::generation();
+            let mut cache = ChunkCache::default();
+            let first = build_cached(&d, &Space::Model, &coarse, &mut cache);
+            // Zoomed in on the middle area: only its part is tessellated again, finer.
+            let zoomed = build_cached(&d, &Space::Model, &fine, &mut cache);
+            let zoom_counts = (cache.rebuilt, cache.reused, cache.kept);
+            // The same zoom panned to the first area: the middle stays fine, the first is built.
+            let panned = build_cached(&d, &Space::Model, &Options { view: Some(area(0.0)), ..fine.clone() }, &mut cache);
+            let pan_counts = (cache.rebuilt, cache.kept);
+            // Zoomed out again: a part finer than asked is built again even out of view (the
+            // list never holds more than a build at the asked detail would): the coarse list.
+            let out = build_cached(&d, &Space::Model, &Options { view: Some(area(20_000.0)), ..coarse.clone() }, &mut cache);
+            let out_rebuilt = cache.rebuilt;
+            if images::generation() != generation {
+                continue;
+            }
+            same(&first, &build(&d, &Space::Model, &coarse));
+            assert_eq!(zoom_counts, (1, 3, 3), "{cache:?}");
+            let full_fine = build(&d, &Space::Model, &fine);
+            assert_eq!(points_in(&zoomed, &area(10_000.0)), points_in(&full_fine, &area(10_000.0)), "in view: the fine build");
+            assert_eq!(points_in(&zoomed, &area(0.0)), points_in(&build(&d, &Space::Model, &coarse), &area(0.0)), "out of view: as before");
+            assert!(
+                zoomed.verts.len() * 2 < full_fine.verts.len(),
+                "{} points, a fine build of everything {}",
+                zoomed.verts.len(),
+                full_fine.verts.len()
+            );
+            assert_eq!(pan_counts, (1, 3), "{cache:?}");
+            assert_eq!(points_in(&panned, &area(0.0)), points_in(&full_fine, &area(0.0)));
+            assert_eq!(out_rebuilt, 3, "{cache:?}");
+            same(&out, &build(&d, &Space::Model, &coarse));
+            return;
+        }
+        panic!("the loaded images kept changing");
     }
 
     /// A part whose only object is a hatch the build area left without pattern lines draws
