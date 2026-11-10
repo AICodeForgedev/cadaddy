@@ -6421,6 +6421,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The stamped rooms' panels (where a typical room's plan letters them), for their circuits.
         let mut room_panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
         let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
+        // The plans' breaker labels of the feeders to a typical panel, placed (Q6436).
+        let mut feeder_marks: Vec<super::gearbuild::PlanLabel> = Vec::new();
         let mut sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) if reference.is_some() => {
@@ -6492,6 +6494,28 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         None,
                         false,
                     );
+                }
+                // The panel schedules (read into the spec later in the build: read here too).
+                let schedules =
+                    if sp.mep.panel_schedules.is_empty() { panel_schedules(&panel_pages(s.doc()?, job)) } else { sp.mep.panel_schedules.clone() };
+                // The plans' breaker labels of the feeders to a typical panel (`SB2-5` in a unit),
+                // placed as the devices are: each for the copy of the panel in its room (Q6436).
+                let breakers = super::gearbuild::typical_breakers(&schedules);
+                if !breakers.is_empty() {
+                    let read = feeder_label_marks(s.doc()?, job, &breakers);
+                    let n = read.len();
+                    for dv in read {
+                        let Some(m) = placeable(&dv) else { continue };
+                        let at = m.apply(dv.at);
+                        if outside_shell(shells.as_deref().unwrap_or(&[]), &dv.level, at, upf_dev) {
+                            continue;
+                        }
+                        feeder_marks.push(super::gearbuild::PlanLabel { text: dv.tag, level: dv.level, at, sheet: dv.sheet });
+                    }
+                    progress_line(&format!(
+                        "  feeder breaker labels on the plans (typical panels' feeders): {n} read, {} placed",
+                        feeder_marks.len()
+                    ));
                 }
                 let mut why: BTreeMap<String, usize> = BTreeMap::new();
                 for dv in all_devices.iter().filter(|dv| placeable(dv).is_none()) {
@@ -6579,9 +6603,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let reach = CONNECT_REACH_FT * upf_dev;
                 // Equipment in a unit room no plan connects (its feed only a keynote): its
                 // connection on the circuit the room's panel schedule names it on.
-                // (The panel schedules are read into the spec later in the build: read here too.)
-                let schedules =
-                    if sp.mep.panel_schedules.is_empty() { panel_schedules(&panel_pages(s.doc()?, job)) } else { sp.mep.panel_schedules.clone() };
+                // (The panel schedules, read above.)
                 drop(e_pages);
                 let scheduled = scheduled_connections(&schedules, &sp.mep.equipment, &stamped);
                 if !scheduled.is_empty() {
@@ -6865,7 +6887,17 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // A stamped room's circuits are its own (a guest room's own panel, in the room's wall):
         // their routes in the room, where the sheet's reading can't put them.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-            let (gear, room_panels) = super::printcond::room_panel_equipment(&room_panels, &panel_rooms, sp.units_per_foot);
+            let (mut gear, room_panels) = super::printcond::room_panel_equipment(&room_panels, &panel_rooms, sp.units_per_foot);
+            // Each copy of a typical panel takes the breaker label lettered in its room (Q6436).
+            if !feeder_marks.is_empty() {
+                let rep = super::gearbuild::label_typical_copies(&mut gear, &feeder_marks, &panel_rooms);
+                progress_line(&format!(
+                    "  typical panels' feeder labels: {} copies took the label in their room; {} labels in no copy's room; rooms with two labels {:?}",
+                    rep.labelled,
+                    rep.unmatched,
+                    rep.conflicts.iter().take(6).collect::<Vec<_>>()
+                ));
+            }
             let (runs, circuits) = super::printcond::room_circuits(&devices, &room_panels, sp.units_per_foot);
             if !gear.is_empty() || !circuits.is_empty() {
                 progress_line(&format!(
@@ -21772,6 +21804,20 @@ fn feeder_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crat
         .map(|(tag, placed, of)| format!("{tag}: {placed} of the {of} its schedule is typical of are placed"))
         .collect();
     let line = if short.is_empty() { line } else { format!("{line}; {}", short.join("; ")) };
+    // Each typical panel's copy records its feed: the plan's breaker label's, else proposed (Q6436).
+    let fed = super::gearbuild::record_typical_feeds(&mut sp);
+    let line = if fed.by_label + fed.proposed + fed.unfed == 0 {
+        line
+    } else {
+        format!(
+            "{line}; typical panels' copies fed: {} by the plans' breaker labels, {} proposed by the nearest stack, {} unfed{}",
+            fed.by_label,
+            fed.proposed,
+            fed.unfed,
+            if fed.notes.is_empty() { String::new() } else { format!(" ({})", fed.notes.iter().take(6).cloned().collect::<Vec<_>>().join("; ")) }
+        )
+    };
+    result["typical_feeds"] = json!({"by_label": fed.by_label, "proposed": fed.proposed, "unfed": fed.unfed, "notes": fed.notes});
     let n = runs.len();
     build_new_mep(s, sp, runs, &BTreeSet::new())?;
     report_progress(s, json!({"step": "feeder routes"}), &line);
@@ -24023,6 +24069,53 @@ fn plumbing_stacks(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<super::read
             level: job.level_at([end.x, end.y]).map_or_else(String::new, |r| r.level.clone()),
             kind: "plumbing stack".into(),
             leg: system.into(),
+            ..Default::default()
+        });
+        if out.len() >= MAX_FIXTURES {
+            break;
+        }
+    }
+    out
+}
+
+/// The breaker labels the electrical plans letter for the feeders to a typical panel (`DP1-3`
+/// in a unit: the breaker feeding that unit's stack; `breakers`: [`super::gearbuild::typical_breakers`]),
+/// each where it is lettered on its sheet, as an item of kind `feeder label` (tag: the label),
+/// to be placed as the devices are (Q6436).
+fn feeder_label_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, breakers: &BTreeMap<(String, u32), String>) -> Vec<super::readers::ReadDevice> {
+    let e = |k: &str| cadaddy_mepfix::sheet_facts::discipline_of(k).eq_ignore_ascii_case("E");
+    let spans: Vec<(&str, u64, u64)> =
+        job.sheet_spans.iter().filter(|sp| e(&sheet_key(&sp.sheet))).map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi)).collect();
+    if spans.is_empty() || breakers.is_empty() {
+        return Vec::new();
+    }
+    let sheet_of = |h: u64| spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&h)).map(|(s, _, _)| *s);
+    let mut out: Vec<super::readers::ReadDevice> = Vec::new();
+    for ent in d.model.iter() {
+        let Some(sheet) = sheet_of(ent.handle.0) else { continue };
+        let (value, at, h, aligned) = match &ent.kind {
+            cadaddy_doc::EntityKind::Text(t) => (t.value.trim(), t.align_pt.unwrap_or(t.insert).xy(), t.height, t.align_pt.is_some()),
+            cadaddy_doc::EntityKind::MText(t) => (t.contents.trim(), t.insert.xy(), t.height, false),
+            _ => continue,
+        };
+        if !(h.is_finite() && h > 0.0 && at.x.is_finite() && at.y.is_finite()) {
+            continue;
+        }
+        let Some(key) = super::gearbuild::breaker_label(value) else { continue };
+        if !breakers.contains_key(&key) {
+            continue;
+        }
+        // Its middle (an unaligned text's insert is its lower left corner).
+        let mid = if aligned { at } else { cadaddy_geom::Vec2::new(at.x + 0.3 * h * value.chars().count() as f64, at.y + 0.5 * h) };
+        if out.iter().any(|o| o.sheet == sheet && o.tag.eq_ignore_ascii_case(value) && (o.at[0] - mid.x).hypot(o.at[1] - mid.y) < h) {
+            continue;
+        }
+        out.push(super::readers::ReadDevice {
+            tag: value.to_ascii_uppercase(),
+            at: [mid.x, mid.y],
+            sheet: sheet.to_string(),
+            level: job.level_at([mid.x, mid.y]).map_or_else(String::new, |r| r.level.clone()),
+            kind: "feeder label".into(),
             ..Default::default()
         });
         if out.len() >= MAX_FIXTURES {

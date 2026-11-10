@@ -903,7 +903,7 @@ pub(crate) fn plan(
                     conduit_in: ft.conduit_in,
                     entry: gear.get(child).map_or_else(|| "top".to_string(), |g| if g.feed.is_empty() { "top".into() } else { g.feed.clone() }),
                     from_entry: gear.get(&p.panel).map(|g| g.feed.clone()).unwrap_or_default(),
-                    source: format!("{}; one-line tag {} above {child}; panel {} schedule circuit {}", ft.source, ft.tag, p.panel, c.number),
+                    source: format!("{}; one-line tag {} above {child}; panel {} {SCHEDULE_CIRCUIT}{}", ft.source, ft.tag, p.panel, c.number),
                     ..Feeder::default()
                 });
             }
@@ -1759,37 +1759,392 @@ fn units_per_feeder(sp: &cadaddy_walk3d::BuildingSpec, f: &cadaddy_walk3d::Feede
         .filter(|n| (1..=64).contains(n))
 }
 
-/// A typical panel's placed copies (`G` → `G-101`, `G-201`…, or many tagged `G`) in chains of
-/// `n`: copies stacked floor to floor (one place on each level's plan) chained bottom to top, a
-/// stack longer than `n` cut in `n`s; a copy stacked with none is a chain of its own.
-fn typical_chains<'a>(ctx: &RouteCtx<'_>, family: &[&'a Gear], n: Option<usize>) -> Vec<Vec<&'a Gear>> {
+/// A typical panel's placed copies (indices into the spec's equipment) in stacks: copies stacked
+/// floor to floor (one place on each level's plan), each stack bottom to top; a copy stacked
+/// with none is a stack of its own.
+fn typical_stacks(ctx: &RouteCtx<'_>, family: &[usize]) -> Vec<Vec<usize>> {
+    let eq = &ctx.sp.mep.equipment;
     let reach = STACK_REACH_FT * ctx.upf;
-    let mut stacks: Vec<(Vec2, Vec<&'a Gear>)> = Vec::new();
-    for &e in family.iter().take(MAX_TYPICAL) {
+    let mut stacks: Vec<(Vec2, Vec<usize>)> = Vec::new();
+    for &i in family.iter().take(MAX_TYPICAL) {
+        let Some(e) = eq.get(i) else { continue };
         let p = ctx.plan(e);
-        match stacks.iter_mut().find(|s| (s.0 - p).len() <= reach && !s.1.iter().any(|o| o.level.eq_ignore_ascii_case(&e.level))) {
-            Some(s) => s.1.push(e),
-            None => stacks.push((p, vec![e])),
+        let same_level = |o: &usize| eq.get(*o).is_some_and(|o| o.level.eq_ignore_ascii_case(&e.level));
+        match stacks.iter_mut().find(|s| (s.0 - p).len() <= reach && !s.1.iter().any(same_level)) {
+            Some(s) => s.1.push(i),
+            None => stacks.push((p, vec![i])),
         }
     }
-    let mut out = Vec::new();
-    for (_, mut s) in stacks {
-        s.sort_by(|a, b| ctx.elevation(&a.level).total_cmp(&ctx.elevation(&b.level)));
-        let len = n.unwrap_or(s.len()).max(1);
-        out.extend(s.chunks(len).map(<[&Gear]>::to_vec));
+    let elevation = |i: &usize| eq.get(*i).map_or(0.0, |e| ctx.elevation(&e.level));
+    stacks
+        .into_iter()
+        .map(|(_, mut s)| {
+            s.sort_by(|a, b| elevation(a).total_cmp(&elevation(b)));
+            s
+        })
+        .collect()
+}
+
+/// The property a typical panel's copy carries the plan's label of the breaker that feeds its
+/// stack (`SB2-5`, lettered in its room), set by [`label_typical_copies`].
+pub(crate) const FEEDER_LABEL: &str = "FEEDER LABEL";
+/// The property each copy of a typical panel carries its feed: its source panel's breaker and
+/// feeder, or the copy whose feed-through lugs feed it ([`record_typical_feeds`]).
+pub(crate) const FED_BY: &str = "FED BY";
+/// How a feeder read off a schedule row names that row (`… panel SB2 schedule circuit 5`).
+const SCHEDULE_CIRCUIT: &str = "schedule circuit ";
+
+/// A circuit number's first number (`3`, `1,3,5`, `13/15`: 1 and 13).
+fn first_number(s: &str) -> Option<u32> {
+    s.split(|c: char| !c.is_ascii_digit()).find(|w| !w.is_empty())?.parse().ok()
+}
+
+/// A breaker label as a plan letters it: a source panel and its (first) circuit, `SB2-5`,
+/// `SB-2-11`, `SB2-5,7,9`. One word, nothing else.
+pub(crate) fn breaker_label(text: &str) -> Option<(String, u32)> {
+    let t = text.trim();
+    if t.is_empty() || t.len() > 24 || t.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let first = t.split(',').next()?.trim();
+    let (panel, number) = first.rsplit_once('-')?;
+    let panel = panel.trim().trim_end_matches('-');
+    let ok = !panel.is_empty()
+        && panel.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && panel.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit());
+    if !ok {
+        return None;
+    }
+    Some((panel.to_ascii_uppercase(), number.parse().ok()?))
+}
+
+/// The source breaker of a feeder read off a schedule row: its panel and circuit.
+fn feeder_breaker(f: &cadaddy_walk3d::Feeder) -> Option<(String, u32)> {
+    let (_, rest) = f.source.rsplit_once(SCHEDULE_CIRCUIT)?;
+    Some((f.from.trim().to_ascii_uppercase(), first_number(rest)?))
+}
+
+/// The breakers that feed a typical panel (one schedule for many rooms): each schedule row of
+/// another panel naming it (`PANELBOARD U (4 UNITS)`), by its panel and first circuit number,
+/// with the typical panel's tag. A panel is typical when its schedule is typical of several
+/// rooms or the row feeding it serves several units.
+pub(crate) fn typical_breakers(schedules: &[cadaddy_walk3d::PanelSchedule]) -> BTreeMap<(String, u32), String> {
+    let mut out = BTreeMap::new();
+    for p in schedules.iter().filter(|p| p.typical_of.is_none()) {
+        for c in &p.circuits {
+            let units = c.description.to_ascii_uppercase().contains("UNITS");
+            let Some(t) = schedules
+                .iter()
+                .filter(|t| !t.panel.eq_ignore_ascii_case(&p.panel) && (t.typical_of.is_some() || units))
+                .find(|t| names_panel(&c.description, &t.panel))
+            else {
+                continue;
+            };
+            if let Some(n) = first_number(&c.number) {
+                out.insert((p.panel.trim().to_ascii_uppercase(), n), t.panel.clone());
+            }
+        }
     }
     out
+}
+
+/// A label lettered on a plan, placed onto the model: its text, level, place, sheet.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PlanLabel {
+    pub text: String,
+    pub level: String,
+    pub at: [f64; 2],
+    pub sheet: String,
+}
+
+/// Whether two names are one level (`2`, `Level 2`, `LEVEL 2`).
+fn same_level(a: &str, b: &str) -> bool {
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    a.trim().eq_ignore_ascii_case(b.trim())
+        || super::printmep::level_name(a).eq_ignore_ascii_case(&super::printmep::level_name(b))
+        || (!digits(a).is_empty() && digits(a) == digits(b))
+}
+
+/// What [`label_typical_copies`] did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LabelReport {
+    /// Copies that took a label.
+    pub labelled: usize,
+    /// Labels in no copy's room.
+    pub unmatched: usize,
+    /// Rooms with two different labels in them (none taken).
+    pub conflicts: Vec<String>,
+}
+
+/// Each typical panel's copy in a room (its `ROOM` property; `rooms`: by room, its level and
+/// outline) takes the breaker label lettered in that room on its level ([`breaker_label`]):
+/// the plan's word for which breaker feeds the copy's stack. A room with two different labels
+/// takes neither (said which). An earlier label goes first (a rerun).
+pub(crate) fn label_typical_copies(
+    copies: &mut [cadaddy_walk3d::MepEquipment],
+    labels: &[PlanLabel],
+    rooms: &BTreeMap<String, (String, Vec<Vec2>, bool)>,
+) -> LabelReport {
+    let mut out = LabelReport::default();
+    let mut used = vec![false; labels.len()];
+    for e in copies.iter_mut() {
+        e.properties.remove(FEEDER_LABEL);
+        e.sources.remove("feeder label");
+        let Some((level, outline, _)) = e.properties.get("ROOM").and_then(|r| rooms.get(r)) else { continue };
+        if outline.len() < 3 {
+            continue;
+        }
+        let here: Vec<usize> = labels
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| breaker_label(&l.text).is_some() && same_level(&l.level, level))
+            .filter(|(_, l)| cadaddy_geom::point_in_polygon(outline, Vec2::new(l.at[0], l.at[1])))
+            .map(|(i, _)| i)
+            .collect();
+        for &i in &here {
+            if let Some(u) = used.get_mut(i) {
+                *u = true;
+            }
+        }
+        let keys: BTreeSet<(String, u32)> = here.iter().filter_map(|&i| labels.get(i).and_then(|l| breaker_label(&l.text))).collect();
+        let Some(first) = here.first().and_then(|&i| labels.get(i)) else { continue };
+        if keys.len() > 1 {
+            let texts: BTreeSet<&str> = here.iter().filter_map(|&i| labels.get(i)).map(|l| l.text.as_str()).collect();
+            out.conflicts.push(format!("{}: {} labels in its room ({})", e.tag, keys.len(), texts.into_iter().collect::<Vec<_>>().join(", ")));
+            continue;
+        }
+        e.properties.insert(FEEDER_LABEL.into(), first.text.trim().to_ascii_uppercase());
+        e.sources.insert("feeder label".into(), format!("plan label {} lettered in its room ({})", first.text.trim(), first.sheet));
+        out.labelled += 1;
+    }
+    out.unmatched = used.iter().filter(|u| !**u).count();
+    out
+}
+
+/// One feeder to a typical panel and the copies it feeds: the feeder's index, its copies
+/// (indices into the equipment) in feed order from its source (through their feed-through
+/// lugs), and the plan label that gave them (none: the nearest stack, proposed).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TypicalFeed {
+    pub feeder: usize,
+    pub chain: Vec<usize>,
+    pub label: Option<String>,
+}
+
+/// The feeders to typical panels (one schedule for many rooms: `PANELBOARD U (4 UNITS)`), each
+/// with the copies it feeds through their feed-through lugs. The documents first: a stack whose
+/// copies carry a breaker label ([`FEEDER_LABEL`]) is fed by the feeder from that breaker (each
+/// copy the nearest labelled copy's in its stack; no more copies than the units the breaker's
+/// row serves, those nearest the label). The stacks no label names are then chained in the
+/// units each feeder serves and handed to the feeders no label names, nearest first
+/// (proposed). With notes on labels that name no feeder or two stacks.
+pub(crate) fn typical_feeds(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<TypicalFeed>, Vec<String>) {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let ctx = RouteCtx { sp, upf };
+    let eq = &sp.mep.equipment;
+    let tagged = |tag: &str| eq.iter().enumerate().filter(|(_, e)| e.tag.eq_ignore_ascii_case(tag)).map(|(i, _)| i).collect::<Vec<_>>();
+    let one = |tag: &str| {
+        let m = tagged(tag);
+        (m.len() == 1).then(|| m[0])
+    };
+    // A typical panel's copies: many tagged as it, or tagged `<it>-…`.
+    let family = |tag: &str| {
+        let m = tagged(tag);
+        if m.len() > 1 {
+            return m;
+        }
+        let pre = format!("{}-", tag.to_ascii_uppercase());
+        eq.iter().enumerate().filter(|(_, e)| e.kind == "panel" && e.tag.to_ascii_uppercase().starts_with(&pre)).map(|(i, _)| i).collect()
+    };
+    let mut typical: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, f) in sp.mep.feeders.iter().enumerate() {
+        if one(&f.from).is_some() && one(&f.to).is_none() {
+            typical.entry(f.to.to_ascii_uppercase()).or_default().push(i);
+        }
+    }
+    let mut out: Vec<TypicalFeed> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    for (tag, feeders) in &typical {
+        let fam = family(tag);
+        if fam.is_empty() {
+            continue;
+        }
+        let n = feeders.iter().find_map(|&i| sp.mep.feeders.get(i).and_then(|f| units_per_feeder(sp, f)));
+        let breaker = |i: usize| sp.mep.feeders.get(i).and_then(feeder_breaker);
+        // The feeder a copy's label names.
+        let named = |e: usize| -> Option<(usize, String)> {
+            let text = eq.get(e)?.properties.get(FEEDER_LABEL)?;
+            let key = breaker_label(text)?;
+            feeders.iter().copied().find(|&i| breaker(i).as_ref() == Some(&key)).map(|i| (i, text.clone()))
+        };
+        let mut pool: Vec<Vec<usize>> = Vec::new();
+        let mut by_label: BTreeMap<usize, (Vec<usize>, String)> = BTreeMap::new();
+        for stack in typical_stacks(&ctx, &fam) {
+            for &e in &stack {
+                if let Some(text) = eq.get(e).and_then(|g| g.properties.get(FEEDER_LABEL))
+                    && named(e).is_none()
+                {
+                    notes.push(format!("{}: its plan label {text} names no feeder to {tag}", eq.get(e).map_or("?", |g| g.tag.as_str())));
+                }
+            }
+            let marks: Vec<(usize, usize, String)> = stack.iter().enumerate().filter_map(|(k, &e)| named(e).map(|(i, t)| (k, i, t))).collect();
+            if marks.is_empty() {
+                pool.push(stack);
+                continue;
+            }
+            // Each copy the nearest labelled copy's feeder (a tie: the lower one's).
+            let owner: Vec<usize> = (0..stack.len()).map(|k| marks.iter().min_by_key(|m| (m.0.abs_diff(k), m.0)).map_or(0, |m| m.1)).collect();
+            let mut k = 0;
+            while k < stack.len() {
+                let Some(&i) = owner.get(k) else { break };
+                let mut end = k;
+                while owner.get(end) == Some(&i) {
+                    end += 1;
+                }
+                let piece: Vec<usize> = stack.get(k..end).map(<[usize]>::to_vec).unwrap_or_default();
+                // No more than the units its row serves: those nearest its label.
+                let mark = marks.iter().filter(|m| m.1 == i && m.0 >= k && m.0 < end).map(|m| m.0 - k).next().unwrap_or(0);
+                let (kept, rest): (Vec<usize>, Vec<Vec<usize>>) = match n {
+                    Some(n) if piece.len() > n => {
+                        let from = mark.min(piece.len() - n);
+                        let kept = piece.get(from..from + n).map(<[usize]>::to_vec).unwrap_or_default();
+                        let below = piece.get(..from).map(<[usize]>::to_vec).unwrap_or_default();
+                        let above = piece.get(from + n..).map(<[usize]>::to_vec).unwrap_or_default();
+                        (kept, [below, above].into_iter().filter(|p| !p.is_empty()).collect())
+                    }
+                    _ => (piece, Vec::new()),
+                };
+                pool.extend(rest);
+                let text = marks.iter().find(|m| m.1 == i).map(|m| m.2.clone()).unwrap_or_default();
+                if by_label.contains_key(&i) {
+                    let first = kept.first().and_then(|&e| eq.get(e)).map_or("?", |g| g.tag.as_str());
+                    notes.push(format!("{first}: its plan label {text} names a breaker another stack's label names; fed as if unlabelled"));
+                    pool.push(kept);
+                } else {
+                    by_label.insert(i, (kept, text));
+                }
+                k = end;
+            }
+        }
+        // The rest: chained in the units each feeder serves, nearest first to the feeders left.
+        let len = n.unwrap_or(usize::MAX).max(1);
+        let chains: Vec<Vec<usize>> = pool.iter().flat_map(|s| s.chunks(len.min(s.len().max(1))).map(<[usize]>::to_vec)).collect();
+        let mut pairs = Vec::new();
+        for &i in feeders.iter().filter(|i| !by_label.contains_key(i)) {
+            let Some(src) = sp.mep.feeders.get(i).and_then(|f| one(&f.from)).and_then(|s| eq.get(s)) else { continue };
+            for (c, chain) in chains.iter().enumerate() {
+                let d = chain.iter().filter_map(|&e| eq.get(e)).map(|e| ctx.apart(src, e)).fold(f64::INFINITY, f64::min);
+                pairs.push((d, i, c));
+            }
+        }
+        pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut taken = vec![false; chains.len()];
+        let mut proposed: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (_, i, c) in pairs {
+            if proposed.contains_key(&i) || taken.get(c).copied().unwrap_or(true) {
+                continue;
+            }
+            if let (Some(t), Some(chain)) = (taken.get_mut(c), chains.get(c)) {
+                *t = true;
+                proposed.insert(i, chain.clone());
+            }
+        }
+        let feeds = by_label.into_iter().map(|(i, (c, t))| (i, c, Some(t))).chain(proposed.into_iter().map(|(i, c)| (i, c, None)));
+        for (i, mut chain, label) in feeds {
+            // From the chain's end nearer the source.
+            let src = sp.mep.feeders.get(i).and_then(|f| one(&f.from)).and_then(|s| eq.get(s));
+            if let (Some(a), Some(first), Some(last)) = (src, chain.first().and_then(|&e| eq.get(e)), chain.last().and_then(|&e| eq.get(e)))
+                && ctx.apart(a, last) < ctx.apart(a, first)
+            {
+                chain.reverse();
+            }
+            out.push(TypicalFeed { feeder: i, chain, label });
+        }
+    }
+    out.sort_by_key(|f| f.feeder);
+    (out, notes)
+}
+
+/// What [`record_typical_feeds`] recorded.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct FedReport {
+    /// Copies whose feed the plan's labels give, and those proposed by the nearest stack.
+    pub by_label: usize,
+    pub proposed: usize,
+    /// Copies of a typical panel no feeder reaches.
+    pub unfed: usize,
+    pub notes: Vec<String>,
+}
+
+/// Each typical panel's copy takes its feed onto itself ([`FED_BY`], [`typical_feeds`]): the
+/// first of a chain its source breaker and feeder, the rest the copy whose feed-through lugs
+/// feed it; where it came from (the plan's breaker label, or proposed by the nearest stack). A
+/// rerun's earlier feed goes first.
+pub(crate) fn record_typical_feeds(sp: &mut cadaddy_walk3d::BuildingSpec) -> FedReport {
+    let (feeds, notes) = typical_feeds(sp);
+    let mut out = FedReport { notes, ..FedReport::default() };
+    for e in sp.mep.equipment.iter_mut() {
+        if e.sources.remove("fed by").is_some() {
+            e.properties.remove(FED_BY);
+        }
+    }
+    let mut fed: BTreeSet<usize> = BTreeSet::new();
+    for f in &feeds {
+        let Some(feeder) = sp.mep.feeders.get(f.feeder).cloned() else { continue };
+        let breaker = feeder_breaker(&feeder).map_or_else(|| feeder.from.clone(), |(p, n)| format!("{p} circuit {n}"));
+        let what = if feeder.tag.is_empty() { format!("from {breaker}") } else { format!("feeder {} from {breaker}", feeder.tag) };
+        let basis = match &f.label {
+            Some(t) => format!("the plan's breaker label {t} in its stack"),
+            None => format!("proposed: the stack nearest {} that no plan label names", feeder.from),
+        };
+        let mut prev: Option<String> = None;
+        for &e in &f.chain {
+            let Some(g) = sp.mep.equipment.get_mut(e) else { continue };
+            let value = match &prev {
+                None => what.clone(),
+                Some(p) => format!("{p}'s feed-through lugs ({what})"),
+            };
+            g.properties.insert(FED_BY.into(), value);
+            g.sources.insert("fed by".into(), basis.clone());
+            prev = Some(g.tag.clone());
+            fed.insert(e);
+            if f.label.is_some() {
+                out.by_label += 1;
+            } else {
+                out.proposed += 1;
+            }
+        }
+    }
+    let typical: BTreeSet<String> = sp.mep.panel_schedules.iter().filter(|p| p.typical_of.is_some()).map(|p| p.panel.to_ascii_uppercase()).collect();
+    out.unfed = sp
+        .mep
+        .equipment
+        .iter()
+        .enumerate()
+        .filter(|(i, e)| {
+            !fed.contains(i)
+                && e.kind == "panel"
+                && typical.iter().any(|t| e.tag.eq_ignore_ascii_case(t) || e.tag.to_ascii_uppercase().starts_with(&format!("{t}-")))
+        })
+        .count();
+    out
+}
+
+/// The feeder into each typical panel's copy, by the copy's index: [`typical_feeds`]' feeder.
+pub(crate) fn typical_feeder_in(sp: &cadaddy_walk3d::BuildingSpec) -> BTreeMap<usize, usize> {
+    typical_feeds(sp).0.into_iter().flat_map(|f| f.chain.into_iter().map(move |e| (e, f.feeder))).collect()
 }
 
 /// The feeders' conduit, proposed (Q6152): each conduit of each feeder from its gear's exit (top
 /// or bottom, as the feeder's entries say) up over the level's ceiling (or down under its floor),
 /// across in two legs to its other gear, rising floor to floor beside it when that gear is on
 /// another level, and into it (top or bottom). Parallel conduits a trade size and an inch apart.
-/// A feeder to a typical panel (one schedule for many rooms: `PANELBOARD G (4 UNITS)`) feeds a
-/// chain of its copies through their feed-through lugs: the copies are chained by stack (see
-/// [`typical_chains`]), each such feeder given the nearest chain left, routed to the chain's end
-/// nearer it and on through the chain. A feeder with no placed gear at an end is left out, said
-/// why.
+/// A feeder to a typical panel (one schedule for many rooms: `PANELBOARD U (4 UNITS)`) feeds a
+/// chain of its copies through their feed-through lugs ([`typical_feeds`]: the stack the plan's
+/// breaker label names, else the nearest stack left), routed to the chain's end nearer it and on
+/// through the chain. A feeder with no placed gear at an end is left out, said why.
 pub(crate) fn feeder_runs(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<cadaddy_walk3d::MepRun>, Vec<String>) {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let ctx = RouteCtx { sp, upf };
@@ -1809,41 +2164,10 @@ pub(crate) fn feeder_runs(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<cadaddy_wal
         let pre = format!("{}-", tag.to_ascii_uppercase());
         sp.mep.equipment.iter().filter(|e| e.kind == "panel" && e.tag.to_ascii_uppercase().starts_with(&pre)).collect()
     };
-    // Each typical panel's chains, handed to its feeders nearest first.
-    let mut chain_of: BTreeMap<usize, Vec<&Gear>> = BTreeMap::new();
-    let mut typical: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (i, f) in sp.mep.feeders.iter().enumerate() {
-        if one(&f.from).is_some() && one(&f.to).is_none() {
-            typical.entry(f.to.to_ascii_uppercase()).or_default().push(i);
-        }
-    }
-    for (tag, feeders) in &typical {
-        let fam = family(tag);
-        if fam.is_empty() {
-            continue;
-        }
-        let n = feeders.iter().find_map(|&i| sp.mep.feeders.get(i).and_then(|f| units_per_feeder(sp, f)));
-        let chains = typical_chains(&ctx, &fam, n);
-        let mut pairs = Vec::new();
-        for &i in feeders {
-            let Some(src) = sp.mep.feeders.get(i).and_then(|f| one(&f.from)) else { continue };
-            for (c, chain) in chains.iter().enumerate() {
-                let d = chain.iter().map(|e| ctx.apart(src, e)).fold(f64::INFINITY, f64::min);
-                pairs.push((d, i, c));
-            }
-        }
-        pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut taken = vec![false; chains.len()];
-        for (_, i, c) in pairs {
-            if chain_of.contains_key(&i) || taken.get(c).copied().unwrap_or(true) {
-                continue;
-            }
-            if let (Some(t), Some(chain)) = (taken.get_mut(c), chains.get(c)) {
-                *t = true;
-                chain_of.insert(i, chain.clone());
-            }
-        }
-    }
+    let typical: BTreeSet<String> =
+        sp.mep.feeders.iter().filter(|f| one(&f.from).is_some() && one(&f.to).is_none()).map(|f| f.to.to_ascii_uppercase()).collect();
+    let chain_of: BTreeMap<usize, Vec<&Gear>> =
+        typical_feeds(sp).0.into_iter().map(|f| (f.feeder, f.chain.iter().filter_map(|&e| sp.mep.equipment.get(e)).collect())).collect();
     // Each conduit's leg, gear to gear; a chain's feed-throughs after its first leg.
     let mut legs: Vec<Leg> = Vec::new();
     let mut chained: Vec<(usize, Vec<&Gear>, f64, String, String)> = Vec::new();
@@ -1859,8 +2183,8 @@ pub(crate) fn feeder_runs(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<cadaddy_wal
         let (b, src) = if let Some(b) = one(&f.to) {
             (b, format!("feeder {what}"))
         } else {
-            let Some(mut chain) = chain_of.get(&i).cloned() else {
-                let why = if typical.contains_key(&f.to.to_ascii_uppercase()) && !family(&f.to).is_empty() {
+            let Some(chain) = chain_of.get(&i).cloned() else {
+                let why = if typical.contains(&f.to.to_ascii_uppercase()) && !family(&f.to).is_empty() {
                     "no placed copy of it left to feed"
                 } else {
                     "not one placed piece of gear at its end"
@@ -1868,12 +2192,6 @@ pub(crate) fn feeder_runs(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<cadaddy_wal
                 left.push(format!("{what}: {why}"));
                 continue;
             };
-            // From the chain's end nearer the source.
-            if let (Some(first), Some(last)) = (chain.first(), chain.last())
-                && ctx.apart(a, last) < ctx.apart(a, first)
-            {
-                chain.reverse();
-            }
             let names = chain.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>().join("→");
             let src = format!("feeder {} {}→{}", f.tag, f.from, names);
             let Some(&b) = chain.first() else { continue };
@@ -2282,5 +2600,232 @@ mod feeder_route_tests {
         // Seven 2" conduits don't fit one 16" row (six do): a second row behind the first.
         let ys: BTreeSet<i64> = at_dp1.iter().map(|p| (p[1] * 100.0).round() as i64).collect();
         assert_eq!(ys.len(), 2, "{at_dp1:?}");
+    }
+
+    /// Levels `Level 1`… one over another, 10 ft apart, all their plans at one place.
+    fn levels(n: usize) -> Vec<cadaddy_walk3d::Level> {
+        (1..=n)
+            .map(|k| {
+                serde_json::from_value(
+                    serde_json::json!({"name": format!("Level {k}"), "elevation_ft": 10.0 * (k as f64 - 1.0), "height_ft": 10.0, "ceiling_ft": 9.0}),
+                )
+                .expect("level")
+            })
+            .collect()
+    }
+
+    /// A copy of typical panel `T` in room `<level><stack>` (`T-203`), as the typical-room plans
+    /// stamp it, with the room's outline around it.
+    fn copy(t: &str, level: usize, stack: usize, x: f64, rooms: &mut BTreeMap<String, (String, Vec<Vec2>, bool)>) -> cadaddy_walk3d::MepEquipment {
+        let room = format!("{level}{stack:02}");
+        let mut g = gear(&format!("{t}-{room}"), &format!("Level {level}"), [x, 600.0], 4.0, 3.0);
+        g.properties.insert("ROOM".into(), room.clone());
+        let o = vec![Vec2::new(x - 120.0, 480.0), Vec2::new(x + 120.0, 480.0), Vec2::new(x + 120.0, 900.0), Vec2::new(x - 120.0, 900.0)];
+        rooms.insert(room, (format!("Level {level}"), o, true));
+        g
+    }
+
+    /// Feeders read as the job reads them: a schedule row of each source naming `G`, the one-line's type.
+    fn schedule_feeders(sp: &cadaddy_walk3d::BuildingSpec) -> Vec<cadaddy_walk3d::Feeder> {
+        let types = vec![FeederType {
+            tag: "604".into(),
+            conduits: 1,
+            conduit_in: 1.25,
+            conductors: 3,
+            size: "#2".into(),
+            material: "cu".into(),
+            ground_size: "#8".into(),
+            source: "FEEDER SCHEDULE".into(),
+        }];
+        let incoming: BTreeMap<String, String> = [("G".to_string(), "604".to_string())].into_iter().collect();
+        plan(sp, &types, &incoming, &BTreeMap::new(), &[]).feeders
+    }
+
+    fn row(n: &str, d: &str) -> cadaddy_walk3d::PanelCircuit {
+        cadaddy_walk3d::PanelCircuit { number: n.into(), description: d.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn breaker_labels_read_a_source_panel_and_its_first_circuit() {
+        assert_eq!(breaker_label("DP1-3"), Some(("DP1".to_string(), 3)));
+        assert_eq!(breaker_label(" dp-2-11 "), Some(("DP-2".to_string(), 11)));
+        assert_eq!(breaker_label("DP1-3,5,7"), Some(("DP1".to_string(), 3)));
+        for not in ["G-7a", "ROOM 101", "DP1", "-3", "3-4", "DP1-", "PANEL DP1-3"] {
+            assert_eq!(breaker_label(not), None, "{not}");
+        }
+        // The breakers feeding a typical panel: rows naming it, by their first circuit number.
+        let schedules = vec![
+            cadaddy_walk3d::PanelSchedule {
+                panel: "DP1".into(),
+                circuits: vec![row("1,3,5", "PANELBOARD G (4 UNITS)"), row("2", "PANEL H"), row("7", "RECEPTACLES")],
+                ..Default::default()
+            },
+            cadaddy_walk3d::PanelSchedule { panel: "G".into(), typical_of: Some(16), ..Default::default() },
+            cadaddy_walk3d::PanelSchedule { panel: "H".into(), ..Default::default() },
+        ];
+        let b = typical_breakers(&schedules);
+        assert_eq!(b.into_iter().collect::<Vec<_>>(), vec![(("DP1".to_string(), 1), "G".to_string())]);
+    }
+
+    /// Q6436: two distribution panels on two floors, four stacks of four copies of typical panel
+    /// G; each stack's breaker lettered in one of its rooms names a source that is NOT the nearest.
+    /// Each stack is fed from its labelled breaker, and every copy records its feed.
+    #[test]
+    fn typical_stacks_are_fed_by_the_breakers_their_plan_labels_name_not_the_nearest_source() {
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, levels: levels(4), ..Default::default() };
+        let mut rooms = BTreeMap::new();
+        // DP1 on the first floor beside stacks 3 and 4; DP2 on the second beside stacks 1 and 2.
+        sp.mep.equipment = vec![gear("DP1", "Level 1", [4300.0, 100.0], 2.0, 6.0), gear("DP2", "Level 2", [700.0, 100.0], 2.0, 6.0)];
+        for level in 1..=4 {
+            for stack in 1..=4 {
+                sp.mep.equipment.push(copy("G", level, stack, 1000.0 * stack as f64, &mut rooms));
+            }
+        }
+        sp.mep.panel_schedules = vec![
+            cadaddy_walk3d::PanelSchedule {
+                panel: "DP1".into(),
+                circuits: vec![row("1", "PANELBOARD G (4 UNITS)"), row("2", "PANELBOARD G (4 UNITS)")],
+                ..Default::default()
+            },
+            cadaddy_walk3d::PanelSchedule {
+                panel: "DP2".into(),
+                circuits: vec![row("1", "PANELBOARD G (4 UNITS)"), row("2", "PANELBOARD G (4 UNITS)")],
+                ..Default::default()
+            },
+            cadaddy_walk3d::PanelSchedule { panel: "G".into(), typical_of: Some(16), ..Default::default() },
+        ];
+        sp.mep.feeders = schedule_feeders(&sp);
+        assert_eq!(sp.mep.feeders.len(), 4, "{:#?}", sp.mep.feeders);
+        // The labels, one per stack, lettered in its second-floor room (and one in a corridor).
+        let label = |text: &str, stack: usize| PlanLabel {
+            text: text.into(),
+            level: "2".into(),
+            at: [1000.0 * stack as f64 + 30.0, 700.0],
+            sheet: "E-2".into(),
+        };
+        let labels = vec![
+            label("DP1-1", 1),
+            label("DP1-2", 2),
+            label("DP2-1", 3),
+            label("DP2-2", 4),
+            PlanLabel { text: "DP2-2".into(), level: "2".into(), at: [2500.0, 300.0], sheet: "E-2".into() },
+        ];
+        let rep = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms);
+        assert_eq!(rep, LabelReport { labelled: 4, unmatched: 1, conflicts: Vec::new() });
+        assert_eq!(sp.mep.equipment.iter().find(|e| e.tag == "G-201").and_then(|e| e.properties.get(FEEDER_LABEL)), Some(&"DP1-1".to_string()));
+
+        let (runs, left) = feeder_runs(&sp);
+        assert!(left.is_empty(), "{left:?}");
+        let fed = |src: &str, stack: usize| {
+            let copies: Vec<String> = (1..=4).map(|l| format!("G-{l}{stack:02}")).collect();
+            runs.iter().any(|r| {
+                let Some(rest) = r.source_sheet.strip_prefix(&format!("feeder 604 {src}→")) else { return false };
+                let names: BTreeSet<&str> = rest.split('→').collect();
+                names.len() == 4 && copies.iter().all(|c| names.contains(c.as_str()))
+            })
+        };
+        // By distance DP1 would feed stacks 3 and 4: the labels say 1 and 2.
+        assert!(
+            fed("DP1", 1) && fed("DP1", 2) && fed("DP2", 3) && fed("DP2", 4),
+            "{:#?}",
+            runs.iter().map(|r| &r.source_sheet).collect::<BTreeSet<_>>()
+        );
+
+        // Every copy is its own gear end with its feed recorded on it.
+        let rep = record_typical_feeds(&mut sp);
+        assert_eq!((rep.by_label, rep.proposed, rep.unfed), (16, 0, 0), "{rep:?}");
+        let fed_by = |t: &str| sp.mep.equipment.iter().find(|e| e.tag == t).and_then(|e| e.properties.get(FED_BY)).cloned().unwrap_or_default();
+        assert_eq!(fed_by("G-101"), "feeder 604 from DP1 circuit 1");
+        assert_eq!(fed_by("G-201"), "G-101's feed-through lugs (feeder 604 from DP1 circuit 1)");
+        assert_eq!(fed_by("G-404"), "G-304's feed-through lugs (feeder 604 from DP2 circuit 2)");
+        let src = sp.mep.equipment.iter().find(|e| e.tag == "G-303").and_then(|e| e.sources.get("fed by")).cloned().unwrap_or_default();
+        assert_eq!(src, "the plan's breaker label DP2-1 in its stack");
+        let into = typical_feeder_in(&sp);
+        assert_eq!(into.len(), 16);
+        // A rerun records the same, once.
+        let again = record_typical_feeds(&mut sp);
+        assert_eq!((again.by_label, again.proposed), (16, 0));
+
+        // Without the labels: the nearest stacks, said proposed (the earlier behaviour).
+        for e in sp.mep.equipment.iter_mut() {
+            e.properties.remove(FEEDER_LABEL);
+        }
+        let (runs, _) = feeder_runs(&sp);
+        let near = |src: &str, stack: usize| {
+            runs.iter().any(|r| r.source_sheet.starts_with(&format!("feeder 604 {src}→")) && r.source_sheet.contains(&format!("G-1{stack:02}")))
+        };
+        assert!(near("DP1", 4) && near("DP2", 1), "{:#?}", runs.iter().map(|r| &r.source_sheet).collect::<BTreeSet<_>>());
+        let rep = record_typical_feeds(&mut sp);
+        assert_eq!((rep.by_label, rep.proposed, rep.unfed), (0, 16, 0));
+        let src = sp.mep.equipment.iter().find(|e| e.tag == "G-303").and_then(|e| e.sources.get("fed by")).cloned().unwrap_or_default();
+        assert!(src.starts_with("proposed: the stack nearest"), "{src}");
+    }
+
+    /// A stack taller than the units a breaker serves: the label's breaker takes the copies
+    /// nearest its label, the rest go to the breaker no label names.
+    #[test]
+    fn a_label_takes_no_more_copies_than_its_breaker_serves_and_the_rest_are_proposed() {
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, levels: levels(8), ..Default::default() };
+        let mut rooms = BTreeMap::new();
+        sp.mep.equipment = vec![gear("DP1", "Level 1", [100.0, 100.0], 2.0, 6.0)];
+        for level in 1..=8 {
+            sp.mep.equipment.push(copy("G", level, 1, 1000.0, &mut rooms));
+        }
+        sp.mep.panel_schedules = vec![
+            cadaddy_walk3d::PanelSchedule {
+                panel: "DP1".into(),
+                circuits: vec![row("1", "PANELBOARD G (4 UNITS)"), row("3", "PANELBOARD G (4 UNITS)")],
+                ..Default::default()
+            },
+            cadaddy_walk3d::PanelSchedule { panel: "G".into(), typical_of: Some(8), ..Default::default() },
+        ];
+        sp.mep.feeders = schedule_feeders(&sp);
+        let labels = vec![PlanLabel { text: "DP1-3".into(), level: "Level 7".into(), at: [1000.0, 700.0], sheet: "E-7".into() }];
+        assert_eq!(label_typical_copies(&mut sp.mep.equipment, &labels, &rooms).labelled, 1);
+        let (feeds, notes) = typical_feeds(&sp);
+        assert!(notes.is_empty(), "{notes:?}");
+        let tags = |f: &TypicalFeed| f.chain.iter().map(|&e| sp.mep.equipment[e].tag.clone()).collect::<Vec<_>>();
+        let by_label = feeds.iter().find(|f| f.label.is_some()).expect("labelled");
+        assert_eq!(sp.mep.feeders[by_label.feeder].source.rsplit(' ').next(), Some("3"));
+        assert_eq!(tags(by_label), ["G-501", "G-601", "G-701", "G-801"]);
+        let proposed = feeds.iter().find(|f| f.label.is_none()).expect("proposed");
+        assert_eq!(tags(proposed), ["G-101", "G-201", "G-301", "G-401"]);
+    }
+
+    /// A room with two different breaker labels takes neither; a label naming a breaker that feeds
+    /// no typical panel is said, never followed.
+    #[test]
+    fn two_labels_in_a_room_and_a_label_of_no_feeder_are_said_not_guessed() {
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, levels: levels(2), ..Default::default() };
+        let mut rooms = BTreeMap::new();
+        sp.mep.equipment = vec![gear("DP1", "Level 1", [100.0, 100.0], 2.0, 6.0)];
+        for stack in 1..=2 {
+            for level in 1..=2 {
+                sp.mep.equipment.push(copy("G", level, stack, 1000.0 * stack as f64, &mut rooms));
+            }
+        }
+        sp.mep.panel_schedules = vec![
+            cadaddy_walk3d::PanelSchedule {
+                panel: "DP1".into(),
+                circuits: vec![row("1", "PANELBOARD G (2 UNITS)"), row("2", "PANELBOARD G (2 UNITS)")],
+                ..Default::default()
+            },
+            cadaddy_walk3d::PanelSchedule { panel: "G".into(), typical_of: Some(4), ..Default::default() },
+        ];
+        sp.mep.feeders = schedule_feeders(&sp);
+        let at = |x: f64| [x, 700.0];
+        let labels = vec![
+            PlanLabel { text: "DP1-1".into(), level: "1".into(), at: at(1000.0), sheet: "E-1".into() },
+            PlanLabel { text: "DP1-2".into(), level: "1".into(), at: at(1040.0), sheet: "E-1".into() },
+            PlanLabel { text: "DP1-9".into(), level: "1".into(), at: at(2000.0), sheet: "E-1".into() },
+        ];
+        let rep = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms);
+        assert_eq!(rep.labelled, 1);
+        assert_eq!(rep.conflicts, vec!["G-101: 2 labels in its room (DP1-1, DP1-2)".to_string()]);
+        let (feeds, notes) = typical_feeds(&sp);
+        assert_eq!(notes, vec!["G-102: its plan label DP1-9 names no feeder to G".to_string()]);
+        // Both stacks still fed (proposed): no label taken, none guessed.
+        assert_eq!(feeds.len(), 2);
+        assert!(feeds.iter().all(|f| f.label.is_none() && f.chain.len() == 2), "{feeds:?}");
     }
 }
