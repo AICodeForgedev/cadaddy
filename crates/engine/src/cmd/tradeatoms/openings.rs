@@ -40,6 +40,241 @@ fn set_size(text: &str) -> Option<(f64, f64)> {
     Some((parse(it.next()?)?, parse(it.next()?)?))
 }
 
+/// The kinds a door hardware piece can be: the rules' `openings.hardware_kinds` name them by
+/// these; a name not here is a `hardware_item`.
+const HW_KINDS: &[&str] = &[
+    "continuous_hinge",
+    "pivot",
+    "hinge",
+    "exit_trim",
+    "exit_device",
+    "flush_bolt",
+    "deadbolt",
+    "electric_strike",
+    "strike",
+    "card_reader",
+    "lockset",
+    "coordinator",
+    "closer",
+    "holder",
+    "stop",
+    "viewer",
+    "door_bottom",
+    "gasketing",
+    "guard",
+    "threshold",
+    "silencer",
+    "kick_plate",
+    "push_pull",
+    "astragal",
+    "hardware_item",
+];
+
+/// A leaf's thickness, inches (where a piece sits on a face).
+const LEAF_IN: f64 = 1.75;
+
+/// A kind of door hardware the rules know, and where trade practice puts it on the door.
+#[derive(Clone, Debug)]
+pub(super) struct HwKind {
+    pub kind: &'static str,
+    /// How it is placed (`hinges`, `latch`, `head`, `behind_swing`, …).
+    pub place: String,
+    /// Its centre's height above the floor, inches.
+    pub z_in: Option<f64>,
+    /// From the leaf's latch edge, inches.
+    pub backset_in: f64,
+    /// Along the leaf, across it, high, inches (0: the opening's).
+    pub size_in: [f64; 3],
+}
+
+/// The kind of a hardware schedule item: the first of the rules' kinds whose words its item type
+/// names (else the whole row's words).
+pub(super) fn hardware_kind(r: &Rules, ty: &str, row: &str) -> Option<HwKind> {
+    let kinds = r.list("openings.hardware_kinds");
+    for text in [ty, row] {
+        let u = text.to_ascii_uppercase();
+        if u.trim().is_empty() {
+            continue;
+        }
+        for k in kinds.iter().take(64) {
+            let words = k.get("words").and_then(Value::as_array).cloned().unwrap_or_default();
+            let hit = words.iter().filter_map(Value::as_str).take(64).any(|w| !w.trim().is_empty() && u.contains(&w.to_ascii_uppercase()));
+            if !hit {
+                continue;
+            }
+            let name = k.get("kind").and_then(Value::as_str).unwrap_or_default();
+            let kind = HW_KINDS.iter().copied().find(|x| x.eq_ignore_ascii_case(name.trim())).unwrap_or("hardware_item");
+            let num = |key: &str| k.get(key).and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0 && *v <= 240.0);
+            let size: Vec<f64> = k
+                .get("size_in")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().take(3).map(|v| v.as_f64().filter(|x| x.is_finite() && *x >= 0.0 && *x <= 240.0).unwrap_or(0.0)).collect())
+                .unwrap_or_default();
+            return Some(HwKind {
+                kind,
+                place: k.get("place").and_then(Value::as_str).unwrap_or("latch").to_string(),
+                z_in: num("z_in"),
+                backset_in: num("backset_in").unwrap_or(2.75),
+                size_in: [size.first().copied().unwrap_or(0.0), size.get(1).copied().unwrap_or(0.0), size.get(2).copied().unwrap_or(0.0)],
+            });
+        }
+    }
+    None
+}
+
+/// A door's leaf as hardware is placed on it: the hinge end and the latch end of the shut leaf on
+/// the wall line, the way it swings, its bottom and height, the wall's thickness (sheet units).
+struct Leaf {
+    hinge: Vec2,
+    latch: Vec2,
+    /// From the hinge end toward the latch end.
+    inward: Vec2,
+    /// The side it swings to.
+    swing: Vec2,
+    width: f64,
+    bottom: f64,
+    height: f64,
+    t: f64,
+    /// Sheet units per inch.
+    k: f64,
+}
+
+/// The boxes of the `n` pieces of one item of kind `hk` on the leaf (`n` past one stacks or
+/// spreads them the way the kind's place does).
+fn hardware_blocks(lf: &Leaf, hk: &HwKind, r: &Rules, n: usize) -> Vec<Vec<Block>> {
+    let k = lf.k;
+    let [sa, sx, sz] = hk.size_in;
+    let top = lf.bottom + lf.height;
+    let at_z = |z_in: f64| lf.bottom + z_in * k;
+    // Proud of a face: on the swing side (`1.0`) or the other (`-1.0`).
+    let face = |side: f64, across: f64| lf.swing * (side * (LEAF_IN / 2.0 + across / 2.0) * k);
+    let mut out = Vec::new();
+    for i in 0..n {
+        let fi = i as f64;
+        let b = match hk.place.as_str() {
+            "hinges" => {
+                let hs = r.num("openings.hinge_size_in", 4.5).clamp(1.0, 12.0) * k;
+                let hi = top - r.num("openings.hinge_top_in", 5.0).clamp(0.0, 48.0) * k - hs / 2.0;
+                let lo = lf.bottom + r.num("openings.hinge_bottom_in", 10.0).clamp(0.0, 48.0) * k + hs / 2.0;
+                let zc = if n <= 1 || hi <= lo { hi } else { hi - (hi - lo) * fi / (n - 1) as f64 };
+                vec![Block::new(lf.hinge, lf.hinge + lf.inward * k, 2.0 * k, zc - hs / 2.0, zc + hs / 2.0)]
+            }
+            "hinge_edge" => vec![Block::new(lf.hinge, lf.hinge + lf.inward * k, 2.0 * k, lf.bottom + 0.5 * k, top - 0.5 * k)],
+            "across" => {
+                let z = at_z(hk.z_in.unwrap_or(38.0)) + fi * (sz + 1.0) * k;
+                let o = face(-1.0, sx);
+                vec![Block::new(
+                    lf.hinge + lf.inward * (3.0 * k) + o,
+                    lf.latch - lf.inward * (2.0 * k) + o,
+                    sx.max(0.5) * k,
+                    z - sz * k / 2.0,
+                    z + sz * k / 2.0,
+                )]
+            }
+            "head" => {
+                let o = face(1.0, sx);
+                let a = lf.hinge + lf.inward * (2.0 * k) + o;
+                let len = if sa > 0.0 { (sa * k).min(lf.width - 3.0 * k) } else { lf.width - 3.0 * k };
+                let z1 = top - (1.0 + fi * (sz + 0.5)) * k;
+                vec![Block::new(a, a + lf.inward * len.max(k), sx.max(0.5) * k, z1 - sz.max(0.5) * k, z1)]
+            }
+            "behind_swing" => {
+                let p = lf.hinge + lf.swing * (lf.width - 2.0 * k) + lf.inward * (fi * (sa + 1.0) * k);
+                let z0 = at_z((hk.z_in.unwrap_or(2.0) - sz / 2.0).max(0.0));
+                vec![Block::new(
+                    p - lf.inward * (sa.max(0.5) * k / 2.0),
+                    p + lf.inward * (sa.max(0.5) * k / 2.0),
+                    sx.max(0.5) * k,
+                    z0,
+                    z0 + sz.max(0.5) * k,
+                )]
+            }
+            "leaf" => {
+                let p = lf.hinge + lf.inward * (lf.width / 2.0);
+                let z = at_z(hk.z_in.unwrap_or(58.0)) - fi * (sz + 1.0) * k;
+                vec![Block::new(
+                    p - lf.inward * (sa.max(0.5) * k / 2.0),
+                    p + lf.inward * (sa.max(0.5) * k / 2.0),
+                    sx.max(0.5) * k,
+                    z - sz.max(0.5) * k / 2.0,
+                    z + sz.max(0.5) * k / 2.0,
+                )]
+            }
+            "perimeter" => {
+                let s = (0.5 + fi * 0.25) * k;
+                vec![
+                    Block::new(lf.hinge, lf.hinge + lf.inward * s, LEAF_IN * k, lf.bottom, top),
+                    Block::new(lf.latch - lf.inward * s, lf.latch, LEAF_IN * k, lf.bottom, top),
+                    Block::new(lf.hinge, lf.latch, LEAF_IN * k, top - s, top),
+                ]
+            }
+            "bottom" => {
+                let z0 = at_z(hk.z_in.unwrap_or(0.0)) + fi * sz.max(0.5) * k;
+                let o = if hk.z_in.is_some() { face(-1.0, sx) } else { Vec2::new(0.0, 0.0) };
+                vec![Block::new(lf.hinge + lf.inward * k + o, lf.latch - lf.inward * k + o, sx.max(0.25) * k, z0, z0 + sz.max(0.25) * k)]
+            }
+            "threshold" => vec![Block::new(lf.hinge, lf.latch, lf.t.max(sx * k), lf.bottom, lf.bottom + sz.max(0.25) * k)],
+            "frame_latch" => {
+                let p = lf.latch + lf.inward * (0.5 * k);
+                let z = match hk.z_in {
+                    Some(z) if n <= 1 => at_z(z),
+                    _ => lf.bottom + lf.height * (fi + 1.0) / (n as f64 + 1.0),
+                };
+                let h = sz.max(0.5) * k;
+                vec![Block::new(
+                    p - lf.inward * (sa.max(0.5) * k / 2.0),
+                    p + lf.inward * (sa.max(0.5) * k / 2.0),
+                    sx.max(0.5) * k,
+                    z - h / 2.0,
+                    z + h / 2.0,
+                )]
+            }
+            "meeting_edge" => {
+                let (z0, z1) = if sz <= 0.0 {
+                    (lf.bottom, top)
+                } else if i % 2 == 0 {
+                    (top - sz * k, top)
+                } else {
+                    (lf.bottom, lf.bottom + sz * k)
+                };
+                vec![Block::new(lf.latch - lf.inward * (sa.max(0.5) * k), lf.latch, sx.max(0.5) * k, z0, z1)]
+            }
+            "wall_latch" => {
+                let p = lf.latch + lf.inward * ((6.0 + sa / 2.0) * k) - lf.swing * (lf.t / 2.0 + sx * k / 2.0);
+                let z = at_z(hk.z_in.unwrap_or(42.0)) + fi * (sz + 1.0) * k;
+                vec![Block::new(
+                    p - lf.inward * (sa.max(0.5) * k / 2.0),
+                    p + lf.inward * (sa.max(0.5) * k / 2.0),
+                    sx.max(0.5) * k,
+                    z - sz.max(0.5) * k / 2.0,
+                    z + sz.max(0.5) * k / 2.0,
+                )]
+            }
+            // `latch` and any other: on the leaf by its latch edge.
+            _ => {
+                let p = lf.latch - lf.inward * (hk.backset_in * k);
+                let z = at_z(hk.z_in.unwrap_or(38.0)) + fi * (sz.max(0.5) + 1.0) * k;
+                vec![Block::new(
+                    p - lf.inward * (sa.max(0.5) * k / 2.0),
+                    p + lf.inward * (sa.max(0.5) * k / 2.0),
+                    sx.max(0.5) * k,
+                    z - sz.max(0.5) * k / 2.0,
+                    z + sz.max(0.5) * k / 2.0,
+                )]
+            }
+        };
+        out.push(b);
+    }
+    out
+}
+
+/// A door's hand (`LH`/`RH`) from its swing: seen from the side it swings away from, hinges on
+/// the left are left-handed.
+fn hand_of(lf: &Leaf) -> &'static str {
+    let right = Vec2::new(lf.swing.y, -lf.swing.x);
+    if (lf.hinge - lf.latch).dot(right) < 0.0 { "LH" } else { "RH" }
+}
+
 pub(super) fn lay_out(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Batch, want: &dyn Fn(&str) -> bool) {
     let upf = ctx.upf;
     let k = upf / 12.0;
@@ -101,6 +336,12 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
                 }
             }
             _ => (c0, width0, along0),
+        };
+        // A built door's opening (its jambs on the wall's line) is where its frame and leaf are:
+        // its mesh's box also holds the leaf standing open across the wall.
+        let (c, width, along) = match super::super::wallgen::door_opening(e).filter(|_| part == "door") {
+            Some([a, b]) if a.dist(b) > 1e-6 => (Vec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0), a.dist(b), (b - a) * (1.0 / a.dist(b))),
+            _ => (c, width, along),
         };
         let (wf, hf) = (width / upf, height / upf);
         let size = format!("{} x {}", ft_in(wf), ft_in(hf));
@@ -204,6 +445,70 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
         hp.blocks.push(Block::new(lever - along * (1.0 * k), lever + along * (1.0 * k), t + 3.0 * k, bottom + 36.0 * k, bottom + 40.0 * k));
         let hi = batch.push(hp);
         batch.link(fi, hi);
+        // The set's items, each its own piece on the door, as many as the schedule lists for
+        // one door, where trade practice puts it, sided by the door's swing.
+        if !set_id.is_empty() {
+            let swing = super::super::wallgen::door_swing(e);
+            let hs = swing.map_or(-1.0, |[a, _, _]| if (a - c).dot(along) < 0.0 { -1.0 } else { 1.0 });
+            let perp = Vec2::new(-along.y, along.x);
+            let ns = swing.map_or(1.0, |[a, b, _]| if (b - a).dot(perp) < 0.0 { -1.0 } else { 1.0 });
+            let hinge = c + along * (hs * width / 2.0);
+            let inward = along * -hs;
+            let lf = Leaf { hinge, latch: hinge + inward * width, inward, swing: perp * ns, width, bottom, height, t, k };
+            let hand = if swing.is_some() {
+                format!("{} (the door's drawn swing)", hand_of(&lf))
+            } else {
+                "not drawn: hinges taken at the opening's first end, swinging to its left; check the door's hand".to_string()
+            };
+            if swing.is_some() {
+                props.push(("hand", hand_of(&lf).to_string(), Source::computed()));
+            }
+            let pairs = r.words("openings.hardware_pair_units");
+            let most = r.num("openings.hardware_most_per_door", 24.0).clamp(1.0, 200.0) as usize;
+            let place_src = r.source_text("openings.hardware_kinds");
+            let items = r.facts_of("openings.hardware_item").filter(|f| f.scope.split('|').next().is_some_and(|x| x.eq_ignore_ascii_case(&set_id)));
+            for f in items.take(200) {
+                let Some(it) = super::docs::HwItem::of(f) else { continue };
+                let hk = hardware_kind(r, &it.ty, &format!("{} {}", it.ty, it.model)).unwrap_or(HwKind {
+                    kind: "hardware_item",
+                    place: "latch".into(),
+                    z_in: Some(42.0),
+                    backset_in: 6.0,
+                    size_in: [1.0, 1.0, 1.0],
+                });
+                let per = if pairs.contains(&it.uom.to_ascii_uppercase()) { 2.0 } else { 1.0 };
+                let units = (it.qty * per).round().clamp(0.0, 10_000.0) as usize;
+                if units == 0 {
+                    continue;
+                }
+                // Past the most laid out one by one: one piece standing for all of them.
+                let (pieces, each) = if units > most { (1, units as f64) } else { (units, 0.0) };
+                let item = if it.model.is_empty() { it.ty.clone() } else { format!("{} {}", it.ty, it.model).trim().to_string() };
+                let basis = if hk.place == "hinges" { r.source_text("openings.hinge_source") } else { place_src.clone() };
+                for blocks in hardware_blocks(&lf, &hk, r, pieces) {
+                    let mut p = Piece::new("openings", hk.kind, item.clone(), &level, f.source_of())
+                        .computed("set", set_id.clone())
+                        .computed("qty_per_door", num_text(it.qty))
+                        .computed("position", basis.clone())
+                        .computed("hand", hand.clone());
+                    for (key, v) in [("model", &it.model), ("finish", &it.finish), ("manufacturer", &it.mfr), ("unit", &it.uom)] {
+                        if !v.is_empty() {
+                            p = p.with(key, v.clone(), f.source_of());
+                        }
+                    }
+                    p.ty = it.ty.clone();
+                    p.host = Some(h);
+                    p.room = room.clone();
+                    p.qty = each;
+                    p.blocks = blocks;
+                    let pi = batch.push(p);
+                    batch.link(hi, pi);
+                    if let Some(p) = batch.pieces.get_mut(pi) {
+                        p.touches.push(h);
+                    }
+                }
+            }
+        }
         if let Some(p) = batch.pieces.get_mut(fi) {
             p.touches.push(h);
         }
