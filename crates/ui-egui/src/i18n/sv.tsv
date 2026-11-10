@@ -3625,3 +3625,19 @@ menu	Modify	Ändra
 	BIM View Rules	Regler för BIM-vyer
 	BIM View Report	Rapport för BIM-vyer
 	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D-modellvyn och promenaden gör likadant vid kretsning och gång; belysning och detaljnivå förblir som de är.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Ange namn på utdatafilen
+	Enter decimal places of accuracy (0 to 16)	Ange antal decimaler för noggrannhet (0 till 16)
+	Enter name of existing block	Ange namn på ett befintligt block
+	Choose mode for selected object conversion	Välj läge för konvertering av valda objekt
+	Current settings: Object conversion=Delete	Aktuella inställningar: Objektkonvertering=Ta bort
+	Enter attribute values	Ange attributvärden
+	Verify attribute values	Kontrollera attributvärden
+	Convert to block	Konvertera till block
+	Retain	Behåll
+	Binary	Binär
+	mOde	Läge
+	define new drawing	definiera ny ritning
+	= (block=output file)	= (block=utdatafil)
+	* (whole drawing)	* (hela ritningen)
+	Requires an integer between 0 and 16.	Ett heltal mellan 0 och 16 krävs.

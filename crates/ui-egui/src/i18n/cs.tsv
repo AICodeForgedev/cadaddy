@@ -3442,3 +3442,19 @@ menu	Modify	Modifikace
 	BIM View Rules	Pravidla pohledů BIM
 	BIM View Report	Zpráva o pohledech BIM
 	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D zobrazení modelu a procházka dělají totéž při otáčení a chůzi; jejich osvětlení a podrobnosti zůstávají stejné.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Zadejte název výstupního souboru
+	Enter decimal places of accuracy (0 to 16)	Zadejte počet desetinných míst přesnosti (0 až 16)
+	Enter name of existing block	Zadejte název existujícího bloku
+	Choose mode for selected object conversion	Zvolte režim převodu vybraných objektů
+	Current settings: Object conversion=Delete	Aktuální nastavení: Převod objektů=Odstranit
+	Enter attribute values	Zadejte hodnoty atributů
+	Verify attribute values	Ověřte hodnoty atributů
+	Convert to block	Převést na blok
+	Retain	Zachovat
+	Binary	Binární
+	mOde	Režim
+	define new drawing	definovat nový výkres
+	= (block=output file)	= (blok=výstupní soubor)
+	* (whole drawing)	* (celý výkres)
+	Requires an integer between 0 and 16.	Je třeba celé číslo od 0 do 16.

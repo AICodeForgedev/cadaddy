@@ -3468,3 +3468,19 @@
 	BIM View Rules	Reglas de vistas BIM
 	BIM View Report	Informe de vistas BIM
 	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	La vista 3D del modelo y el recorrido hacen lo mismo al orbitar y al caminar; su iluminación y su detalle no cambian.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Escriba el nombre del archivo de salida
+	Enter decimal places of accuracy (0 to 16)	Escriba los decimales de precisión (de 0 a 16)
+	Enter name of existing block	Escriba el nombre de un bloque existente
+	Choose mode for selected object conversion	Elija el modo de conversión de los objetos seleccionados
+	Current settings: Object conversion=Delete	Parámetros actuales: Conversión de objetos=Suprimir
+	Enter attribute values	Escriba los valores de atributo
+	Verify attribute values	Verifique los valores de atributo
+	Convert to block	Convertir en bloque
+	Retain	Conservar
+	Binary	Binario
+	mOde	Modo
+	define new drawing	definir dibujo nuevo
+	= (block=output file)	= (bloque=archivo de salida)
+	* (whole drawing)	* (todo el dibujo)
+	Requires an integer between 0 and 16.	Se requiere un entero entre 0 y 16.

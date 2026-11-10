@@ -3251,3 +3251,19 @@
 	BIM View Rules	Правила видов BIM
 	BIM View Report	Отчёт о видах BIM
 	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D-вид модели и прогулка делают то же самое при вращении и ходьбе; освещение и детализация не меняются.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Введите имя выходного файла
+	Enter decimal places of accuracy (0 to 16)	Введите число десятичных знаков точности (от 0 до 16)
+	Enter name of existing block	Введите имя существующего блока
+	Choose mode for selected object conversion	Выберите режим преобразования выбранных объектов
+	Current settings: Object conversion=Delete	Текущие настройки: Преобразование объектов=Удалить
+	Enter attribute values	Введите значения атрибутов
+	Verify attribute values	Проверьте значения атрибутов
+	Convert to block	Преобразовать в блок
+	Retain	Сохранить
+	Binary	Двоичный
+	mOde	Режим
+	define new drawing	определить новый чертеж
+	= (block=output file)	= (блок=выходной файл)
+	* (whole drawing)	* (весь чертеж)
+	Requires an integer between 0 and 16.	Требуется целое число от 0 до 16.

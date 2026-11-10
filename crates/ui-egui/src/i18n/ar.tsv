@@ -3456,3 +3456,19 @@ menu	View	عرض
 	BIM View Rules	قواعد عروض BIM
 	BIM View Report	تقرير عروض BIM
 	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	يفعل عرض النموذج ثلاثي الأبعاد والتجول الشيء نفسه أثناء الدوران والمشي؛ تبقى الإضاءة والتفاصيل كما هي.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	أدخل اسم ملف الإخراج
+	Enter decimal places of accuracy (0 to 16)	أدخل عدد المنازل العشرية للدقة (من 0 إلى 16)
+	Enter name of existing block	أدخل اسم كتلة موجودة
+	Choose mode for selected object conversion	اختر وضع تحويل الكائنات المحددة
+	Current settings: Object conversion=Delete	الإعدادات الحالية: تحويل الكائنات=حذف
+	Enter attribute values	أدخل قيم السمات
+	Verify attribute values	تحقق من قيم السمات
+	Convert to block	تحويل إلى كتلة
+	Retain	الاحتفاظ
+	Binary	ثنائي
+	mOde	الوضع
+	define new drawing	تعريف رسم جديد
+	= (block=output file)	= (الكتلة=ملف الإخراج)
+	* (whole drawing)	* (الرسم بالكامل)
+	Requires an integer between 0 and 16.	يلزم عدد صحيح بين 0 و16.
