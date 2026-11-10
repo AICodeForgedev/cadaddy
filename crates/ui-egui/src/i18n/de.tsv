@@ -3264,3 +3264,8 @@
 	Previous Sheet	Vorheriger Plan
 	Page {n}	Seite {n}
 	Page Up and Page Down step through the sheets.	Bild auf und Bild ab blättern durch die Pläne.
+	Symbol Table	Symboltabelle
+	Change Symbol Table	Symboltabelle ändern
+	Symbol Table Log	Protokoll der Symboltabelle
+	Revert Symbol Table Change	Änderung der Symboltabelle zurücknehmen
+	Promote Symbol to Library	Symbol in die Bibliothek übernehmen

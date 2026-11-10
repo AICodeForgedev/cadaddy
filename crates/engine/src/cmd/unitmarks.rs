@@ -102,6 +102,14 @@ pub(crate) struct Template {
     text_h: f64,
     /// Whether its row is a low voltage device's (on no power circuit: no circuit label is its).
     pub low_voltage: bool,
+    /// The lettering drawn inside it (`SD` in a smoke detector's circle, `J` in a junction
+    /// box's), when its drawing is known by that too (Q6484): a copy is one only with those
+    /// letters inside. Empty: its linework alone.
+    pub letters: Vec<String>,
+    /// Whether its drawing is a plain outline (a triangle, a square, a lone circle: each side on
+    /// its outline, nothing inside), so plan linework draws it by chance (a door swing's end, a
+    /// column bubble, a section mark): a copy found on a plan counts only with a second cue.
+    pub simple: bool,
 }
 
 /// A legend symbol of fewer pieces than this is no drawing to look for (a lone circle is every
@@ -145,7 +153,53 @@ impl Template {
             return None;
         }
         let mid = Vec2::new((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
-        let pieces = drawn
+        let pieces: Vec<Piece> = drawn
+            .iter()
+            .map(|p| match *p {
+                Piece::Seg(a, b) => Piece::Seg(a - mid, b - mid),
+                Piece::Round(c, r) => Piece::Round(c - mid, r),
+            })
+            .collect();
+        let simple = outline_only(&pieces, size);
+        Some(Template {
+            row: row.trim().to_string(),
+            sheet: sheet.to_string(),
+            kind: kind.to_string(),
+            ifc: ifc.to_string(),
+            pieces,
+            size,
+            text_h,
+            low_voltage: false,
+            letters: Vec::new(),
+            simple,
+        })
+    }
+
+    /// A symbol table's drawing (Q6484: the shared library's, a set's legend row's, an answer's):
+    /// as [`Template::new`], except that a drawing known by the lettering inside it too may be
+    /// one or two pieces (a circle with `SD` in it) or a plain box (a box with `J` in it).
+    pub(crate) fn drawing(row: &str, sheet: &str, kind: &str, ifc: &str, drawn: &[Piece], text_h: f64, letters: &[String]) -> Option<Template> {
+        let letters: Vec<String> =
+            letters.iter().map(|l| l.trim().to_ascii_uppercase()).filter(|l| !l.is_empty() && l.chars().count() <= 6).take(8).collect();
+        if letters.is_empty() {
+            return Template::new(row, sheet, kind, ifc, drawn, text_h);
+        }
+        if !(text_h.is_finite() && text_h > 0.0) {
+            return None;
+        }
+        let drawn: Vec<Piece> = drawn.iter().filter(|p| usable(p)).copied().take(MAX_TEMPLATE_PIECES + 1).collect();
+        if drawn.is_empty() || drawn.len() > MAX_TEMPLATE_PIECES {
+            return None;
+        }
+        let b = drawn.iter().map(piece_box).fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |a, q| {
+            [a[0].min(q[0]), a[1].min(q[1]), a[2].max(q[2]), a[3].max(q[3])]
+        });
+        let size = (b[2] - b[0]).max(b[3] - b[1]);
+        if !(size.is_finite() && size > 0.0) {
+            return None;
+        }
+        let mid = Vec2::new((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        let pieces: Vec<Piece> = drawn
             .iter()
             .map(|p| match *p {
                 Piece::Seg(a, b) => Piece::Seg(a - mid, b - mid),
@@ -157,12 +211,56 @@ impl Template {
             sheet: sheet.to_string(),
             kind: kind.to_string(),
             ifc: ifc.to_string(),
+            simple: outline_only(&pieces, size),
             pieces,
             size,
             text_h,
             low_voltage: false,
+            letters,
         })
     }
+
+    /// Its pieces about the middle of their box.
+    pub(crate) fn pieces(&self) -> &[Piece] {
+        &self.pieces
+    }
+
+    /// Its box's larger side, in its own sheet's units.
+    pub(crate) fn size(&self) -> f64 {
+        self.size
+    }
+
+    /// The lettering height it was taken at.
+    pub(crate) fn text_h(&self) -> f64 {
+        self.text_h
+    }
+
+    /// A copy looked for `unit` times its own size (one sheet's units over its own sheet's):
+    /// [`find_symbols`] with a lettering height of 1 then looks for it at that size.
+    pub(crate) fn at_unit(&self, unit: f64) -> Option<Template> {
+        (unit.is_finite() && unit > 0.0).then(|| Template { text_h: 1.0 / unit, ..self.clone() })
+    }
+}
+
+/// Whether a drawing is a plain outline: each straight piece on its box's edges or a side of one
+/// closed outline of at most four sides with nothing inside (a triangle, a square), or one circle
+/// alone.
+fn outline_only(pieces: &[Piece], size: f64) -> bool {
+    let rounds: Vec<(Vec2, f64)> = pieces.iter().filter_map(|p| if let Piece::Round(c, r) = *p { Some((c, r)) } else { None }).collect();
+    let segs: Vec<(Vec2, Vec2)> = pieces.iter().filter_map(|p| if let Piece::Seg(a, b) = *p { Some((a, b)) } else { None }).collect();
+    if segs.is_empty() {
+        return rounds.len() <= 1;
+    }
+    if !rounds.is_empty() || segs.len() > 4 {
+        return false;
+    }
+    // Each end met by another side's end: one closed outline.
+    let eps = 4.0 * BOX_EDGE_SHARE * size;
+    segs.len() >= 3
+        && segs
+            .iter()
+            .enumerate()
+            .all(|(i, (a, b))| [a, b].iter().all(|p| segs.iter().enumerate().any(|(j, (c, d))| j != i && (p.dist(*c) <= eps || p.dist(*d) <= eps))))
 }
 
 /// A view's linework, by cells, to look the legend's symbols up in.
@@ -199,6 +297,28 @@ impl Scene {
         Scene { pieces, cell, grid }
     }
 
+    /// The pieces filed within `r` of `p` (each once), with their places.
+    fn near_idx(&self, p: Vec2, r: f64) -> Vec<(usize, &Piece)> {
+        let (x0, y0, x1, y1) = (
+            ((p.x - r) / self.cell).floor() as i64,
+            ((p.y - r) / self.cell).floor() as i64,
+            ((p.x + r) / self.cell).floor() as i64,
+            ((p.y + r) / self.cell).floor() as i64,
+        );
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > MAX_PIECE_CELLS {
+            return Vec::new();
+        }
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                if let Some(v) = self.grid.get(&(x, y)) {
+                    seen.extend(v.iter().copied());
+                }
+            }
+        }
+        seen.into_iter().filter_map(|i| self.pieces.get(i).map(|q| (i, q))).collect()
+    }
+
     /// The pieces filed within `r` of `p` (each once).
     fn near(&self, p: Vec2, r: f64) -> Vec<&Piece> {
         let (x0, y0, x1, y1) = (
@@ -228,6 +348,8 @@ pub(crate) struct Found {
     pub at: Vec2,
     pub template: usize,
     pub size: f64,
+    /// How many quarter turns counter-clockwise from its template's drawing.
+    pub turn: u8,
 }
 
 /// How much larger or smaller than its legend drawing a symbol may be drawn.
@@ -288,12 +410,123 @@ fn drawn_at(tp: &Template, scene: &Scene, k: u8, s: f64, t: Vec2) -> bool {
     })
 }
 
+/// Whether each of the template's circles and lines (its straight pieces on one line taken
+/// together) is drawn by a piece of its own in the scene, at the turn, scale and place given: a
+/// drawing of three bars is no template of four, however near each other its bars are.
+fn drawn_apart(tp: &Template, scene: &Scene, k: u8, s: f64, t: Vec2) -> bool {
+    let tol = PIECE_TOL * tp.size * s;
+    let placed: Vec<Piece> = tp
+        .pieces
+        .iter()
+        .map(|p| match *p {
+            Piece::Round(c, r) => Piece::Round(t + quarter(c, k) * s, r * s),
+            Piece::Seg(a, b) => Piece::Seg(t + quarter(a, k) * s, t + quarter(b, k) * s),
+        })
+        .collect();
+    // The template's lines: its straight pieces grouped where they lie on one line.
+    let mut line_of: Vec<usize> = Vec::new();
+    let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
+    for p in &placed {
+        if let Piece::Seg(a, b) = *p {
+            let at = lines.iter().position(|(c, d)| parallel(b - a, *d - *c) && line_dist(a, *c, *d) <= tol && line_dist(b, *c, *d) <= tol);
+            match at {
+                Some(i) => line_of.push(i),
+                None => {
+                    lines.push((a, b));
+                    line_of.push(lines.len() - 1);
+                }
+            }
+        } else {
+            line_of.push(usize::MAX);
+        }
+    }
+    // Each line's, and each circle's, candidate scene pieces.
+    let mut wants: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); lines.len()];
+    let mut rounds: Vec<BTreeSet<usize>> = Vec::new();
+    for (p, li) in placed.iter().zip(line_of.iter()) {
+        match *p {
+            Piece::Round(c, r) => {
+                let c2: BTreeSet<usize> = scene
+                    .near_idx(c, tol)
+                    .into_iter()
+                    .filter(|(_, q)| matches!(**q, Piece::Round(qc, qr) if qc.dist(c) <= tol && (qr - r).abs() <= tol))
+                    .map(|(i, _)| i)
+                    .collect();
+                rounds.push(c2);
+            }
+            Piece::Seg(a, b) => {
+                let m = (a + b) * 0.5;
+                let c2 = scene
+                    .near_idx(m, tol)
+                    .into_iter()
+                    .filter(|(_, q)| matches!(**q, Piece::Seg(qa, qb) if parallel(qb - qa, b - a) && seg_dist(m, qa, qb) <= tol))
+                    .map(|(i, _)| i);
+                if let Some(w) = wants.get_mut(*li) {
+                    w.extend(c2);
+                }
+            }
+        }
+    }
+    let all: Vec<BTreeSet<usize>> = wants.into_iter().chain(rounds).collect();
+    distinct(&all)
+}
+
+/// The distance from `p` to the whole line through `a` and `b`.
+fn line_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let ab = b - a;
+    let l = ab.len();
+    if l <= 0.0 {
+        return p.dist(a);
+    }
+    ((p - a).cross(ab) / l).abs()
+}
+
+/// Whether each want can take a candidate no other want takes (a matching that covers them all).
+fn distinct(wants: &[BTreeSet<usize>]) -> bool {
+    if wants.len() > MAX_TEMPLATE_PIECES || wants.iter().any(BTreeSet::is_empty) {
+        return false;
+    }
+    let mut owner: HashMap<usize, usize> = HashMap::new();
+    fn take(w: usize, wants: &[BTreeSet<usize>], owner: &mut HashMap<usize, usize>, seen: &mut BTreeSet<usize>, depth: usize) -> bool {
+        if depth > MAX_TEMPLATE_PIECES {
+            return false;
+        }
+        let Some(cands) = wants.get(w) else { return false };
+        for &c in cands.iter().take(64) {
+            if !seen.insert(c) {
+                continue;
+            }
+            let free = match owner.get(&c).copied() {
+                None => true,
+                Some(o) => take(o, wants, owner, seen, depth + 1),
+            };
+            if free {
+                owner.insert(c, w);
+                return true;
+            }
+        }
+        false
+    }
+    (0..wants.len()).all(|w| take(w, wants, &mut owner, &mut BTreeSet::new(), 0))
+}
+
 /// Every place in the scene's `area` (`[x0, y0, x1, y1]`, lettered `text_h` high) where one of
 /// the templates is drawn: the template's largest circle (else its longest straight piece) laid
 /// on each circle (straight piece) of the scene that size or so, each quarter turn, then the rest
 /// checked. Where two templates are found at one place the one of more pieces stays (the more
 /// detailed symbol).
 pub(crate) fn find_symbols(templates: &[Template], scene: &Scene, area: [f64; 4], text_h: f64) -> Vec<Found> {
+    find_symbols_with(templates, scene, area, text_h, false)
+}
+
+/// [`find_symbols`], each template's circles and lines drawn by pieces of their own
+/// ([`drawn_apart`]): for a set's symbol table, whose library and legend drawings differ by a
+/// bar where a typical room's few views don't.
+pub(crate) fn find_symbols_apart(templates: &[Template], scene: &Scene, area: [f64; 4], text_h: f64) -> Vec<Found> {
+    find_symbols_with(templates, scene, area, text_h, true)
+}
+
+fn find_symbols_with(templates: &[Template], scene: &Scene, area: [f64; 4], text_h: f64, apart: bool) -> Vec<Found> {
     let inside = |p: Vec2| p.x >= area[0] && p.x <= area[2] && p.y >= area[1] && p.y <= area[3];
     let mut found: Vec<(Found, usize, f64)> = Vec::new();
     for (ti, tp) in templates.iter().enumerate() {
@@ -351,8 +584,8 @@ pub(crate) fn find_symbols(templates: &[Template], scene: &Scene, area: [f64; 4]
             if !inside(t) || found.iter().any(|(f, _, _)| f.template == ti && f.at.dist(t) <= 0.5 * tp.size * s) {
                 continue;
             }
-            if drawn_at(tp, scene, k, s, t) {
-                found.push((Found { at: t, template: ti, size: tp.size * s }, tp.pieces.len(), drawn_length(tp) * s));
+            if drawn_at(tp, scene, k, s, t) && (!apart || drawn_apart(tp, scene, k, s, t)) {
+                found.push((Found { at: t, template: ti, size: tp.size * s, turn: k }, tp.pieces.len(), drawn_length(tp) * s));
             }
         }
     }

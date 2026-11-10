@@ -3521,3 +3521,8 @@
 	Previous Sheet	上一张图纸
 	Page {n}	第 {n} 页
 	Page Up and Page Down step through the sheets.	用 Page Up 和 Page Down 逐张浏览图纸。
+	Symbol Table	符号表
+	Change Symbol Table	更改符号表
+	Symbol Table Log	符号表日志
+	Revert Symbol Table Change	撤销符号表更改
+	Promote Symbol to Library	将符号提升到库

@@ -403,6 +403,22 @@ fn generate_device_plan(d: &mut Drawing, el: &ModelElement, level: &str, counts:
                 clip: None,
             }),
         );
+    } else if let Some((strokes, turn)) = library_symbol(d, model_ent) {
+        // Its kind's universal symbol from the shared library (Q6484), whatever its print drew,
+        // at the size a 1/4" = 1'-0" plan draws it, turned as the print drew it.
+        let k = 4.0 * super::elemprops::units_per_foot(d);
+        for st in strokes.iter().take(64) {
+            let kind = match st.turned(turn) {
+                super::symtable::Stroke::Seg([a, b, x, y]) => EntityKind::Line(cadaddy_doc::Line {
+                    a: v3(Vec2::new(pos.x + a * k, pos.y + b * k)),
+                    b: v3(Vec2::new(pos.x + x * k, pos.y + y * k)),
+                }),
+                super::symtable::Stroke::Round([x, y, r]) => {
+                    EntityKind::Circle(cadaddy_doc::Circle { center: v3(Vec2::new(pos.x + x * k, pos.y + y * k)), radius: r * k })
+                }
+            };
+            let _ = d.add(&Space::Model, Common { layer: layer.into(), xdata: xtags.clone().into(), ..Common::default() }, kind);
+        }
     } else {
         let _ = d.add(
             &Space::Model,
@@ -411,6 +427,18 @@ fn generate_device_plan(d: &mut Drawing, el: &ModelElement, level: &str, counts:
         );
     }
     counts.devices += 1;
+}
+
+/// The shared library's drawing a device is shown with (its `symbol_shown_as`, Q6484), and its
+/// quarter turn.
+fn library_symbol(d: &Drawing, e: &Entity) -> Option<(Vec<super::symtable::Stroke>, u8)> {
+    let props = super::elemprops::effective(e, "device", super::elemprops::units_per_foot(d));
+    let get = |key: &str| props.iter().find(|(k, p, _)| k.eq_ignore_ascii_case(key) && p.has_value()).map(|(_, p, _)| p.text());
+    let name = get("symbol_shown_as")?;
+    let turn = get("symbol_turn").and_then(|t| t.trim().parse::<u8>().ok()).unwrap_or(0);
+    let lib = super::symtable::library(None);
+    let sym = lib.into_iter().map(|(s, _)| s).find(|s| s.name.eq_ignore_ascii_case(name.trim()) && !s.strokes.is_empty())?;
+    Some((sym.strokes, turn))
 }
 
 fn device_plan_layer(e: &Entity) -> &'static str {

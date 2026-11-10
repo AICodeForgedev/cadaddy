@@ -3604,3 +3604,8 @@
 	Move MEP Element	Перемістити елемент MEP
 	Resize MEP Element	Змінити розмір елемента MEP
 	Set MEP Element Properties	Задати властивості елемента MEP
+	Symbol Table	Таблиця символів
+	Change Symbol Table	Змінити таблицю символів
+	Symbol Table Log	Журнал таблиці символів
+	Revert Symbol Table Change	Скасувати зміну таблиці символів
+	Promote Symbol to Library	Додати символ до бібліотеки

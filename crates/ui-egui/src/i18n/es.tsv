@@ -3453,3 +3453,8 @@
 	Previous Sheet	Plano anterior
 	Page {n}	Página {n}
 	Page Up and Page Down step through the sheets.	Re Pág y Av Pág recorren los planos.
+	Symbol Table	Tabla de símbolos
+	Change Symbol Table	Cambiar tabla de símbolos
+	Symbol Table Log	Registro de la tabla de símbolos
+	Revert Symbol Table Change	Revertir cambio de la tabla de símbolos
+	Promote Symbol to Library	Convertir símbolo en símbolo de biblioteca

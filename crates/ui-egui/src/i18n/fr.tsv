@@ -3235,3 +3235,8 @@
 	Previous Sheet	Feuille précédente
 	Page {n}	Page {n}
 	Page Up and Page Down step through the sheets.	Page préc. et Page suiv. parcourent les feuilles.
+	Symbol Table	Table des symboles
+	Change Symbol Table	Modifier la table des symboles
+	Symbol Table Log	Journal de la table des symboles
+	Revert Symbol Table Change	Annuler une modification de la table des symboles
+	Promote Symbol to Library	Promouvoir le symbole dans la bibliothèque

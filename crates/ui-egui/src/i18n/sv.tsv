@@ -3610,3 +3610,8 @@ menu	Modify	Ändra
 	Previous Sheet	Föregående ark
 	Page {n}	Sida {n}
 	Page Up and Page Down step through the sheets.	Page Up och Page Down bläddrar mellan arken.
+	Symbol Table	Symboltabell
+	Change Symbol Table	Ändra symboltabell
+	Symbol Table Log	Logg för symboltabell
+	Revert Symbol Table Change	Återställ ändring i symboltabell
+	Promote Symbol to Library	Flytta upp symbol till biblioteket

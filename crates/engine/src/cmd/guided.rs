@@ -3341,6 +3341,7 @@ fn device_census(
                         moved: String::new(),
                         connection: String::new(),
                         fire_alarm: None,
+                        symbol: None,
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -6491,7 +6492,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             "  typical rooms' plans: devices read off them that were moved onto a floor's plan, put back on their views: {restored}"
         ));
     }
-    let legend_pages = if job.devices.is_empty() && schedule.is_none() { Vec::new() } else { legend_pages(s.doc()?, job) };
+    // (A set with no devices read yet still has its plans searched for the symbol library's.)
+    let legend_pages = legend_pages(s.doc()?, job);
     let typical = typical_view_marks(s.doc()?, job, &legend_pages);
     if !typical.added.is_empty() {
         let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
@@ -6505,6 +6507,88 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             devices_clock.elapsed().as_secs_f64()
         ));
         job.devices.extend(typical.added.iter().cloned());
+    }
+    // Every plan searched for the set's symbol table (Q6484): the shared library's symbols and
+    // the set's legend rows, wherever they are drawn as linework.
+    let symbol_report: Value;
+    {
+        let symbols_clock = web_time::Instant::now();
+        let lib = super::symtable::library(None);
+        let folder = crate::control_auth::config_dir().map(|d| d.join("symbols"));
+        let found = plan_symbols(s, job, &legend_pages, &typical, &lib, folder.as_deref())?;
+        let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+        let mut derived = 0usize;
+        for dv in &found.added {
+            *kinds.entry(super::unitmarks::kind_of(dv)).or_default() += 1;
+            derived += usize::from(dv.symbol.as_ref().is_some_and(|y| y.status == "derived"));
+        }
+        let rows: Vec<String> = found
+            .report
+            .by_row
+            .iter()
+            .map(|(id, by)| format!("{id}: {}", by.iter().map(|(sh, n)| format!("{n} on {sh}")).collect::<Vec<_>>().join(", ")))
+            .take(60)
+            .collect();
+        let sheets: Vec<String> = found
+            .report
+            .by_sheet
+            .iter()
+            .filter(|(_, c)| c.iter().any(|n| *n > 0))
+            .map(|(sh, c)| format!("{sh} {}/{}/{}", c[0], c[1], c[2]))
+            .take(80)
+            .collect();
+        progress_line(&format!(
+            "  symbol table on every plan: {} entries ({} changes now); {} plans searched{}; devices found by their drawings: {} ({derived} from the shared library alone, derived) by kind {kinds:?}; copies of devices read already {}; plain outlines with no second cue left out {}; known non-devices {}; questions {} in {:.1} s",
+            found.entries,
+            found.calibrated,
+            found.sheets,
+            if found.timed_out { " (time or sheet limit reached: the rest not searched)" } else { "" },
+            found.added.len(),
+            found.read_already,
+            found.uncued,
+            found.known_not_devices,
+            found.asked,
+            symbols_clock.elapsed().as_secs_f64()
+        ));
+        if !rows.is_empty() {
+            progress_line(&format!("  symbol table hits per row: {}", rows.join("; ")));
+            progress_line(&format!("  symbol table per sheet (found/devices/asked): {}", sheets.join("; ")));
+        }
+        if !found.zero_rows.is_empty() {
+            progress_line(&format!(
+                "  legend rows no plan draws: {} {:?}",
+                found.zero_rows.len(),
+                found.zero_rows.iter().take(40).collect::<Vec<_>>()
+            ));
+        }
+        if found.timed_out {
+            job.add_finding(
+                StageName::BimBuild,
+                "Symbol search stopped early",
+                &format!("the plans' symbol search stopped after {} sheets ({SYMBOL_SEARCH_SECS:.0} s or {MAX_SYMBOL_SHEETS} sheets): the plans after them were not searched", found.sheets),
+                2,
+                vec!["Report the set's size and sheet count".into()],
+                None,
+                false,
+            );
+        }
+        symbol_report = json!({
+            "entries": found.entries,
+            "changes": found.calibrated,
+            "plans_searched": found.sheets,
+            "stopped_early": found.timed_out,
+            "devices": found.added.len(),
+            "derived": derived,
+            "by_kind": kinds,
+            "read_already": found.read_already,
+            "no_second_cue": found.uncued,
+            "known_not_devices": found.known_not_devices,
+            "questions": found.asked,
+            "rows_on_no_plan": found.zero_rows,
+            "by_row": found.report.by_row,
+            "by_sheet": found.report.by_sheet.iter().map(|(sh, c)| (sh.clone(), json!({"found": c[0], "devices": c[1], "asked": c[2]}))).collect::<serde_json::Map<String, Value>>(),
+        });
+        job.devices.extend(found.added);
     }
     let mut all_devices = job.devices.clone();
     // Where each plumbing fixture went: onto the fixture the architectural plan draws, or left at
@@ -6787,6 +6871,23 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         keep
                     });
                     progress_line(&format!("  floor plans' devices a typical plan stamped at their spot (left out): {}", duplicates.len()));
+                }
+                // A floor plan's device found by its drawing (Q6484) in a room a typical view
+                // stamped: that view shows the room's devices (no second count).
+                let level_key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+                let in_unit = |dv: &super::readers::ReadDevice| {
+                    dv.symbol.is_some()
+                        && footprints.iter().any(|(l, _, c, _)| {
+                            level_key(l) == level_key(&dv.level) && cadaddy_geom::point_in_polygon(c, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))
+                        })
+                };
+                let n = out.len();
+                out.retain(|dv| !in_unit(dv));
+                if out.len() < n {
+                    progress_line(&format!(
+                        "  floor plans' symbols found by their drawings in a room a typical view stamped (that view counts them), left out: {}",
+                        n - out.len()
+                    ));
                 }
                 let before = out.len();
                 // A device of the plans in no room but in a unit's footprint (its bath, its entry:
@@ -7679,6 +7780,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(v) = placed {
         result["devices"] = v;
     }
+    result["symbol_table"] = symbol_report;
     // The circuits stay in the spec after the build's own steps.
     if !circuits.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
@@ -10179,8 +10281,14 @@ fn stamp_typical_rooms(
         })
     };
     // A room the floor's plans already put devices in: two or more.
+    // (Not the devices the symbol search found by their drawings (Q6484): a typical room's view
+    // is the authority for the rooms of its type, and the floor plan's copies there go.)
     let furnished = |level: &str, o: &[cadaddy_geom::Vec2]| {
-        placed.iter().filter(|dv| dv.level == level && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))).take(2).count()
+        placed
+            .iter()
+            .filter(|dv| dv.symbol.is_none() && dv.level == level && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])))
+            .take(2)
+            .count()
             >= 2
     };
     // The typical plans' copies stamped into each room (their place in `out`, the room, the
@@ -10730,6 +10838,403 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
         }
     }
     out
+}
+
+/// What [`plan_symbols`] did (Q6484): the devices it found on the plans, the table's counts per
+/// row and per sheet, the plans it searched, the plain outlines left out for want of a second
+/// cue, the copies of devices read already, the legend rows no plan draws, the questions it
+/// asked, the table's changes and size, and whether its time ran out.
+#[derive(Default)]
+struct PlanSymbols {
+    added: Vec<super::readers::ReadDevice>,
+    report: super::symtable::Report,
+    sheets: usize,
+    uncued: usize,
+    read_already: usize,
+    known_not_devices: usize,
+    zero_rows: Vec<String>,
+    asked: usize,
+    calibrated: usize,
+    entries: usize,
+    timed_out: bool,
+}
+
+/// Plan sheets searched for the symbol table's drawings, at most, and for how long (the rest are
+/// said); questions about drawings nothing explains, at most, each repeating this often or more.
+const MAX_SYMBOL_SHEETS: usize = 600;
+const SYMBOL_SEARCH_SECS: f64 = 300.0;
+const MAX_SYMBOL_QUESTIONS: usize = 8;
+const MIN_SYMBOL_REPEATS: usize = 3;
+/// Pieces of one sheet looked at, at most.
+const MAX_SYMBOL_PIECES: usize = 200_000;
+/// What a question about a drawing nothing explains begins with.
+const SYMBOL_QUESTION: &str = "Unexplained symbol: ";
+/// The answer to one that makes its drawing no device.
+const NOT_A_DEVICE: &str = "not a device";
+/// A learned rule's key for an answered drawing (its shape follows).
+const SYMBOL_RULE: &str = "symdraw:";
+
+/// A sheet's drawing units per paper inch, when the import knows its scale.
+fn sheet_paper_unit(d: &cadaddy_doc::Drawing, job: &GuidedJob, sheet: &str) -> Option<f64> {
+    let key = sheet_key(sheet);
+    let k = super::perceive::units_per_inch(d);
+    job.sheet_scales.iter().find(|sc| sheet_key(&sc.sheet) == key).map(|sc| sc.scale * k).filter(|u| u.is_finite() && *u > 0.0)
+}
+
+/// A sheet's width (its region's), drawing units.
+fn sheet_width(job: &GuidedJob, sheet: &str) -> Option<f64> {
+    let key = sheet_key(sheet);
+    job.sheet_regions.iter().find(|r| sheet_key(&r.number) == key).map(|r| r.rect[2] - r.rect[0]).filter(|w| w.is_finite() && *w > 0.0)
+}
+
+/// The answers' drawings, as table entries (`symdraw:` rules).
+fn answered_symbols(job: &GuidedJob) -> Vec<super::symtable::Entry> {
+    job.rules
+        .iter()
+        .filter_map(|r| {
+            let sig = r.key.strip_prefix(SYMBOL_RULE)?;
+            let v: Value = serde_json::from_str(&r.value).ok()?;
+            let kind = v.get("kind").and_then(Value::as_str)?.trim().to_string();
+            let strokes: Vec<super::symtable::Stroke> = serde_json::from_value(v.get("strokes")?.clone()).ok()?;
+            let num = |k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0);
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in sig.bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+            let name =
+                v.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| kind.replace('_', " "), str::to_string);
+            Some(super::symtable::Entry {
+                id: format!("answer:{h:016x}"),
+                name,
+                kind,
+                strokes,
+                text_h: num("text_h").unwrap_or(0.0),
+                upi: num("upi"),
+                sheet_w: num("sheet_w"),
+                origin: "answer".into(),
+                source: format!("answer {}", r.from_question),
+                confirmed: v.get("by").and_then(Value::as_str).filter(|b| *b == "user").map_or("agent", |_| "user").into(),
+                ..super::symtable::Entry::default()
+            })
+        })
+        .collect()
+}
+
+/// The set's symbol table on every plan (Q6484). The table — the shared library `lib`, then the
+/// set's legend rows (`pages`) and its answers — is made and kept in the drawing; an answer's
+/// drawing not in the library yet goes into it (`promote_to`, the settings folder's). Then every
+/// plan of the trades whose sheets draw devices (not its legend and schedule tables, its title
+/// block, or its typical-room views, whose marks [`typical_view_marks`] reads) is searched for
+/// every entry that is on: each copy is a device of the entry's kind at its sheet point, unless a
+/// device was read there already. A drawing that repeats on the plans and that nothing explains
+/// is asked about once (with a crop): its answer is learned and the build finds every copy.
+fn plan_symbols(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    pages: &[(String, cadaddy_doc::Drawing)],
+    typical: &TypicalMarks,
+    lib: &[(super::symtable::LibSymbol, bool)],
+    promote_to: Option<&std::path::Path>,
+) -> Result<PlanSymbols> {
+    let clock = web_time::Instant::now();
+    let mut out = PlanSymbols::default();
+    // The table: the library, the legends' rows, the answers.
+    let (templates, _) = legend_templates(pages);
+    let legend: Vec<super::symtable::LegendDrawing> = {
+        let d = s.doc()?;
+        templates
+            .iter()
+            .map(|tp| super::symtable::LegendDrawing {
+                sheet: tp.sheet.clone(),
+                row: tp.row.clone(),
+                kind: tp.kind.clone(),
+                ifc: tp.ifc.clone(),
+                strokes: tp.pieces().iter().map(super::symtable::Stroke::of).collect(),
+                letters: tp.letters.clone(),
+                text_h: tp.text_h(),
+                upi: sheet_paper_unit(d, job, &tp.sheet),
+                sheet_w: sheet_width(job, &tp.sheet),
+                low_voltage: tp.low_voltage,
+            })
+            .collect()
+    };
+    let mut table = super::symtable::stored(s.doc()?);
+    out.calibrated = super::symtable::calibrate(&mut table, lib, &legend, &answered_symbols(job));
+    if let Some(dir) = promote_to {
+        let fresh: Vec<super::symtable::Entry> =
+            table.entries.iter().filter(|e| e.origin == "answer" && !e.promoted && e.kind != "not_device").cloned().collect();
+        for e in fresh {
+            match super::symtable::promote(dir, &e) {
+                Ok((path, _)) => super::symtable::promoted(&mut table, &e.id, super::symtable::JOB, &path),
+                Err(why) => progress_line(&format!("  symbol table: {} not put into the shared library: {why}", e.id)),
+            }
+        }
+    }
+    out.entries = table.entries.len();
+    super::symtable::keep(s.doc_mut()?, &table).map_err(|e| bad("bim_build", format!("symbol table: {e}")))?;
+    // The plans.
+    let d = s.doc()?;
+    let disciplines = cadaddy_mepfix::wordrules::words("sheets.device_disciplines");
+    let fire_alarm = fire_alarm_sheets(job);
+    let sheet_numbers = job_sheet_numbers(job);
+    let read_handles: BTreeSet<String> = job.devices.iter().map(|dv| dv.handle.to_ascii_uppercase()).filter(|h| !h.is_empty()).collect();
+    let mut read: BTreeMap<String, Vec<[f64; 2]>> = BTreeMap::new();
+    for dv in job.devices.iter().chain(typical.added.iter()) {
+        read.entry(sheet_key(&dv.sheet)).or_default().push(dv.at);
+    }
+    // Each drawing nothing explained: its copies (sheet, middle, size, handles, its pieces and
+    // its sheet's units).
+    type Copy = (String, cadaddy_geom::Vec2, f64, Vec<u64>, Vec<super::symtable::Stroke>, super::symtable::SheetUnits, Option<(u64, u64)>);
+    let mut unexplained: BTreeMap<String, Vec<Copy>> = BTreeMap::new();
+    let mut hits_by_entry: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut done: BTreeSet<String> = BTreeSet::new();
+    let refs = job_sheet_refs(job);
+    for sh in refs.iter().filter(|r| r.view.is_none()) {
+        let key = sheet_key(&sh.number);
+        let number = sh.number.split('/').next().unwrap_or(&sh.number).trim().to_string();
+        let discipline = sh.discipline.trim().to_ascii_uppercase();
+        if !matches!(sh.kind.as_str(), "plan" | "enlarged_plan")
+            || !disciplines.contains(&discipline.as_str())
+            || fire_alarm.contains(&number.to_ascii_uppercase())
+            || !done.insert(key.clone())
+        {
+            continue;
+        }
+        if out.sheets >= MAX_SYMBOL_SHEETS || clock.elapsed().as_secs_f64() > SYMBOL_SEARCH_SECS {
+            out.timed_out = true;
+            break;
+        }
+        out.sheets += 1;
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let region = job.sheet_regions.iter().find(|r| sheet_key(&r.number) == key);
+        let area = region.map_or(sh.rect, |r| r.area.unwrap_or(r.rect));
+        let mut exclude: Vec<[f64; 4]> = symbol_table_rects(&texts);
+        exclude.extend(symbol_list_rects(&texts));
+        exclude.extend(region.and_then(|r| r.title_block));
+        exclude.extend(typical.views.get(&key).into_iter().flatten().copied());
+        let mut pieces: Vec<(super::unitmarks::Piece, u64)> = Vec::new();
+        for e in sub.model.iter() {
+            if pieces.len() >= MAX_SYMBOL_PIECES {
+                break;
+            }
+            let mut mine = Vec::new();
+            match &e.kind {
+                cadaddy_doc::EntityKind::Insert(_) => {
+                    if read_handles.contains(&e.handle.hex().to_ascii_uppercase()) {
+                        continue;
+                    }
+                    for part in super::modify::explode_kind(&sub, e).unwrap_or_default().iter().take(MAX_TEMPLATE_PARTS) {
+                        super::unitmarks::pieces(&part.kind, &mut mine);
+                    }
+                }
+                k => super::unitmarks::pieces(k, &mut mine),
+            }
+            pieces.extend(mine.into_iter().map(|p| (p, e.handle.0)));
+        }
+        let mut heights: Vec<f64> =
+            texts.iter().filter(|t| t.value.trim().chars().count() <= 6).map(|t| t.height).filter(|h| h.is_finite() && *h > 0.0).collect();
+        heights.sort_by(f64::total_cmp);
+        let units = super::symtable::SheetUnits {
+            upi: sheet_paper_unit(d, job, &number),
+            lettering_h: heights.get(heights.len() / 2).copied(),
+            width: sh.rect[2] - sh.rect[0],
+        };
+        let scene = super::symtable::SheetScene { pieces, texts, area, exclude, units, sheet_numbers: sheet_numbers.clone() };
+        let found = super::symtable::search(&table, &scene);
+        out.uncued += found.uncued;
+        let counts = out.report.by_sheet.entry(number.clone()).or_default();
+        counts[0] += found.hits.len();
+        let mut circuits_taken: BTreeSet<usize> = BTreeSet::new();
+        for hit in &found.hits {
+            let Some(e) = table.entries.get(hit.entry) else { continue };
+            *hits_by_entry.entry(hit.entry).or_default() += 1;
+            *out.report.by_row.entry(e.id.clone()).or_default().entry(number.clone()).or_default() += 1;
+            if e.kind == "not_device" {
+                out.known_not_devices += 1;
+                continue;
+            }
+            let at = [hit.at.x, hit.at.y];
+            let reach = hit.size.max(1e-9);
+            if read.get(&key).is_some_and(|v| v.iter().any(|p| (p[0] - at[0]).hypot(p[1] - at[1]) <= reach)) {
+                out.read_already += 1;
+                continue;
+            }
+            read.entry(key.clone()).or_default().push(at);
+            // Its circuit: the nearest circuit label by it no other copy took.
+            let circuit = scene
+                .texts
+                .iter()
+                .enumerate()
+                .filter(|(i, t)| {
+                    !circuits_taken.contains(i)
+                        && !e.low_voltage
+                        && t.at.dist(hit.at) <= 3.0 * reach.max(t.height)
+                        && cadaddy_mepfix::sheet_facts::is_circuit_label(&t.value)
+                        && !sheet_numbers.contains(&t.value.trim().to_ascii_uppercase())
+                })
+                .min_by(|a, b| a.1.at.dist(hit.at).total_cmp(&b.1.at.dist(hit.at)));
+            let circuit = circuit.map(|(i, t)| {
+                circuits_taken.insert(i);
+                t.value.trim().to_string()
+            });
+            let level = job.level_at(at).map_or_else(|| sh.level.clone(), |r| r.level.clone());
+            let drawn_as = if e.origin == "legend" { e.name.clone() } else { format!("{} ({})", e.name, e.source) };
+            let derived = (e.status() == "derived").then(|| {
+                format!("derived: the shared symbol library's {} drawing found on {number} ({}); no document of this set lists it", e.name, hit.cue)
+            });
+            let handle = hit.handles.first().map(|h| cadaddy_doc::Handle(*h).hex()).unwrap_or_default();
+            for h in &hit.handles {
+                fate(
+                    job,
+                    &cadaddy_doc::Handle(*h).hex(),
+                    MarkFate::object(&e.kind, &format!("a copy of the symbol table's {} ({})", e.name, e.source)),
+                );
+            }
+            out.added.push(super::readers::ReadDevice {
+                tag: e.kind.to_ascii_uppercase(),
+                at,
+                sheet: number.clone(),
+                level,
+                circuit: circuit.unwrap_or_default(),
+                handle,
+                kind: e.kind.clone(),
+                kind_source: e.source.clone(),
+                ifc_class: e.ifc.clone(),
+                derived: derived.unwrap_or_default(),
+                symbol: Some(super::readers::SymbolFacts {
+                    entry: e.id.clone(),
+                    status: e.status().into(),
+                    as_drawn: super::symtable::signature(&hit.drawn),
+                    drawn_as,
+                    shown_as: e.shown_as.clone(),
+                    turn: hit.turn,
+                    cue: hit.cue.into(),
+                }),
+                ..super::readers::ReadDevice::default()
+            });
+            if let Some(c) = out.report.by_sheet.get_mut(&number) {
+                c[1] += 1;
+            }
+        }
+        for c in found.clusters {
+            let list = unexplained.entry(c.signature.clone()).or_default();
+            if list.len() < 200 {
+                list.push((number.clone(), c.at, c.size, c.handles, c.strokes, units, sh.span));
+            }
+        }
+    }
+    // The legend rows no plan draws.
+    for (i, e) in table.entries.iter().enumerate() {
+        if e.origin == "legend" && !e.off && !hits_by_entry.contains_key(&i) {
+            out.zero_rows.push(e.source.clone());
+        }
+    }
+    // A drawing that repeats and that nothing explains: one question for all its copies.
+    let known: BTreeSet<String> = table.entries.iter().map(|e| super::symtable::signature(&e.strokes)).filter(|sg| !sg.is_empty()).collect();
+    let asked: BTreeSet<String> = job
+        .stages
+        .iter()
+        .flat_map(|st| &st.questions)
+        .filter(|q| q.question.starts_with(SYMBOL_QUESTION))
+        .filter_map(|q| q.evidence.as_ref()?.values.as_ref()?.get("signature")?.as_str().map(str::to_string))
+        .collect();
+    let mut repeats: Vec<(&String, &Vec<Copy>)> = unexplained
+        .iter()
+        .filter(|(sig, v)| v.len() >= MIN_SYMBOL_REPEATS && !sig.is_empty() && !known.contains(*sig) && !asked.contains(*sig))
+        .collect();
+    repeats.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(b.0)));
+    let mut kinds: Vec<String> = table.entries.iter().filter(|e| e.kind != "not_device").map(|e| e.kind.clone()).collect();
+    kinds.sort();
+    kinds.dedup();
+    let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("symbols");
+    for (sig, copies) in repeats.into_iter().take(MAX_SYMBOL_QUESTIONS) {
+        let Some((sheet, at, _, handles, strokes, units, span)) = copies.first() else { continue };
+        let mut sheets: BTreeMap<&str, usize> = BTreeMap::new();
+        for c in copies {
+            *sheets.entry(c.0.as_str()).or_default() += 1;
+        }
+        let on: Vec<String> = sheets.iter().map(|(sh, n)| format!("{n} on {sh}")).collect();
+        let first = handles.first().map(|h| cadaddy_doc::Handle(*h).hex());
+        let crop = span.and_then(|sp| tag_crop(s, [at.x, at.y], sp, first.as_deref(), &crop_dir, "symbol", sheet));
+        let mut choices: Vec<String> = kinds.iter().take(20).cloned().collect();
+        choices.push(NOT_A_DEVICE.into());
+        choices.push("skip".into());
+        let qid = job.next_qid(StageName::BimBuild);
+        let q = Question {
+            id: qid,
+            stage: StageName::BimBuild,
+            question: format!(
+                "{SYMBOL_QUESTION}this drawing is on the plans {} times ({}) and no legend row or library symbol is it: which object is it? (answer a kind, or {{kind, name}}; \"{NOT_A_DEVICE}\" if it is none)",
+                copies.len(),
+                on.join(", ")
+            ),
+            why: "Every symbol on a plan is an object: one answer classifies all its copies on the set, and the drawing goes into the shared symbol library".into(),
+            choices,
+            evidence: Some(QuestionEvidence {
+                crop_png_path: crop,
+                sheet: Some(sheet.clone()),
+                at: Some([at.x, at.y]),
+                values: Some(json!({
+                    "signature": sig,
+                    "count": copies.len(),
+                    "sheets": on,
+                    "strokes": strokes,
+                    "text_h": units.lettering_h,
+                    "upi": units.upi,
+                    "sheet_w": units.width,
+                })),
+                handles: handles.iter().map(|h| cadaddy_doc::Handle(*h).hex()).collect(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
+            default: Some("skip".into()),
+            answer_schema: Some(json!({"type": "object", "properties": {"kind": {"type": "string"}, "name": {"type": "string"}}})),
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Completeness,
+        };
+        job.add_question_to_worklist(&q);
+        if let Some(st) = job.stage_mut(StageName::BimBuild) {
+            st.questions.push(q);
+        }
+        out.asked += 1;
+        if let Some(c) = out.report.by_sheet.get_mut(sheet) {
+            c[2] += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// Learn a symbol question's answer: its drawing is that kind on this set (a `symdraw:` rule).
+fn learn_symbol_answer(job: &mut GuidedJob, q: &Question) {
+    let Some(answer) = &q.answer else { return };
+    let (kind, name) = match answer {
+        Value::String(t) => (t.trim().to_string(), String::new()),
+        Value::Object(o) => (
+            o.get("kind").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+            o.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+        ),
+        _ => return,
+    };
+    if kind.is_empty() || kind.eq_ignore_ascii_case("skip") {
+        return;
+    }
+    let kind =
+        if kind.eq_ignore_ascii_case(NOT_A_DEVICE) { "not_device".to_string() } else { kind.chars().take(120).collect::<String>().replace(' ', "_") };
+    let Some(v) = q.evidence.as_ref().and_then(|e| e.values.as_ref()) else { return };
+    let Some(sig) = v.get("signature").and_then(Value::as_str) else { return };
+    let rule = json!({
+        "kind": kind,
+        "name": name,
+        "strokes": v.get("strokes").cloned().unwrap_or(Value::Null),
+        "text_h": v.get("text_h").cloned().unwrap_or(Value::Null),
+        "upi": v.get("upi").cloned().unwrap_or(Value::Null),
+        "sheet_w": v.get("sheet_w").cloned().unwrap_or(Value::Null),
+        "by": q.answered_by.clone().unwrap_or_default(),
+    });
+    job.learn_rule(&format!("{SYMBOL_RULE}{sig}"), &rule.to_string(), &q.id, q.stage);
 }
 
 /// Two devices stamped into one room from different trades' plans within this of each other (feet)
@@ -27534,6 +28039,12 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
     if !text.is_empty() && q.default.as_deref() == Some(text) {
         return (None, "kept what the job read".into());
     }
+    if q.stage == StageName::BimBuild
+        && q.question.starts_with(SYMBOL_QUESTION)
+        && !answer.as_str().is_some_and(|a| a.trim().eq_ignore_ascii_case("skip"))
+    {
+        return (Some(StageName::BimBuild), "the build finds every copy of the drawing on the set as that object".into());
+    }
     if q.stage == StageName::BimBuild && q.question.starts_with(EQUIP_QUESTION) && answer.is_object() {
         return (Some(StageName::BimBuild), "the build checks the drawings against the submittal's data".into());
     }
@@ -29381,6 +29892,11 @@ pub fn learn_from_answer(job: &mut GuidedJob, q: &Question) {
         Some(v) => v,
         None => return,
     };
+
+    // A drawing on the plans nothing explained (Q6484): the set's symbol table takes it.
+    if q.stage == StageName::BimBuild && q.question.starts_with(SYMBOL_QUESTION) {
+        learn_symbol_answer(job, q);
+    }
 
     // Learn symbol → device mappings from completeness answers.
     if q.kind == QuestionKind::Completeness
@@ -39450,3 +39966,7 @@ mod tests {
         assert_eq!(j["by_source"]["derived"], json!(4));
     }
 }
+
+#[cfg(test)]
+#[path = "guided_symbols_tests.rs"]
+mod symbols_tests;

@@ -213,6 +213,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 moved: String::new(),
                 connection: f("connection"),
                 fire_alarm: None,
+                symbol: None,
             }
         })
         .collect();
@@ -1518,6 +1519,31 @@ pub struct ReadDevice {
     /// address, circuit, candela, mounting and source, and the design device it superseded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire_alarm: Option<FireAlarmFacts>,
+    /// A device found by its drawing on a plan (Q6484): the symbol table's entry it is a copy of,
+    /// how the print draws it and the library symbol it is shown with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<SymbolFacts>,
+}
+
+/// What the symbol table says of a device found by its drawing ([`super::symtable`]).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SymbolFacts {
+    /// The table's entry (`legend:e-001:duplex-receptacle`, `library:duplex-receptacle`).
+    pub entry: String,
+    /// `documented` (the set's legend, an answer, a person) or `derived` (the shared library).
+    pub status: String,
+    /// The drawing as the print draws it: its shape ([`super::symtable::signature`]).
+    pub as_drawn: String,
+    /// What the print's drawing is: its legend row's words, else the library symbol's name.
+    pub drawn_as: String,
+    /// The library symbol it is shown with (its kind's universal drawing); empty: the set's own.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub shown_as: String,
+    /// Quarter turns from the entry's drawing, and the cue that confirmed it on its plan.
+    #[serde(default)]
+    pub turn: u8,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cue: String,
 }
 
 /// What a fire alarm shop drawing says of one notification appliance ([`super::fashop`]).
@@ -1749,6 +1775,27 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         }
         e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
         e.set("symbol", dv.handle.clone(), "plan");
+        // Found by its drawing (Q6484): the print's drawing kept beside the library symbol it is
+        // shown with, so a reviewer sees both.
+        if let Some(sym) = &dv.symbol {
+            let src = if sym.status == "derived" { "rule" } else { "legend" };
+            e.set("symbol_entry", sym.entry.clone(), src);
+            e.set("symbol_status", sym.status.clone(), src);
+            e.set("symbol_as_drawn", sym.as_drawn.clone(), "plan");
+            e.set("symbol_turn", sym.turn.to_string(), "plan");
+            if !sym.shown_as.is_empty() {
+                e.set("symbol_shown_as", sym.shown_as.clone(), "rule");
+            }
+            e.set(
+                "symbol_note",
+                if sym.shown_as.is_empty() {
+                    format!("drawn on the print as {}, shown as drawn (the library draws no {kind})", sym.drawn_as)
+                } else {
+                    format!("drawn on the print as {}, shown as {}", sym.drawn_as, sym.shown_as)
+                },
+                "rule",
+            );
+        }
         // A typical room's device knows the room it was stamped into (its bath, its closet are
         // that room's, traced as a room or not).
         if !dv.room.is_empty() {

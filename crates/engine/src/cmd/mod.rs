@@ -101,6 +101,7 @@ mod setbylayer;
 pub(crate) mod sheetreg;
 pub mod spec_import;
 pub mod submittals;
+pub mod symtable;
 pub mod tags;
 mod vpsync;
 pub mod wholejob;
@@ -951,6 +952,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(bimprops::specs());
         v.extend(elemprops::specs());
         v.extend(forms::specs());
+        v.extend(symtable::specs());
         v.extend(propfill::specs());
         v.extend(walllayout::specs());
         v.extend(propuse::specs());

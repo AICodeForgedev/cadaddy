@@ -3236,3 +3236,8 @@
 	Previous Sheet	Предыдущий лист
 	Page {n}	Страница {n}
 	Page Up and Page Down step through the sheets.	Page Up и Page Down листают листы.
+	Symbol Table	Таблица символов
+	Change Symbol Table	Изменить таблицу символов
+	Symbol Table Log	Журнал таблицы символов
+	Revert Symbol Table Change	Отменить изменение таблицы символов
+	Promote Symbol to Library	Добавить символ в библиотеку

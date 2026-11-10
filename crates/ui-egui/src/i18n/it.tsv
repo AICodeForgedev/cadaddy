@@ -3519,3 +3519,8 @@ menu	Modify	Edita
 	Previous Sheet	Foglio precedente
 	Page {n}	Pagina {n}
 	Page Up and Page Down step through the sheets.	Pag su e Pag giù scorrono i fogli.
+	Symbol Table	Tabella dei simboli
+	Change Symbol Table	Modifica tabella dei simboli
+	Symbol Table Log	Registro della tabella dei simboli
+	Revert Symbol Table Change	Annulla modifica della tabella dei simboli
+	Promote Symbol to Library	Promuovi simbolo nella libreria

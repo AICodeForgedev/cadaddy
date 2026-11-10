@@ -128,20 +128,18 @@ fn model() -> Session {
         el(&mut d, "equipment", level, "E-EQPM", [0.5, 1.0, z], [1.5, 1.5, z + 6.0], &[("tag", json!(panel)), ("type", json!("Panelboard"))]);
         for (i, c) in [(0, "1"), (1, "1"), (2, "3")] {
             let x = 4.0 + 8.0 * f64::from(i);
-            el(
-                &mut d,
-                "device",
-                level,
-                "E-POWER",
-                [x, 0.4, z + 1.5],
-                [x + 0.33, 0.57, z + 1.83],
-                &[
-                    ("type", json!("Duplex receptacle")),
-                    ("type_mark", json!("DR")),
-                    ("circuit", json!(format!("{panel}-{c}"))),
-                    ("load_va", json!(180)),
-                ],
-            );
+            let mut ps = vec![
+                ("type", json!("Duplex receptacle")),
+                ("type_mark", json!("DR")),
+                ("circuit", json!(format!("{panel}-{c}"))),
+                ("load_va", json!(180)),
+            ];
+            // One found on its print by its odd drawing (Q6484): shown with the library's duplex.
+            if i == 0 {
+                ps.push(("symbol_shown_as", json!("duplex receptacle")));
+                ps.push(("symbol_turn", json!("1")));
+            }
+            el(&mut d, "device", level, "E-POWER", [x, 0.4, z + 1.5], [x + 0.33, 0.57, z + 1.83], &ps);
         }
         for i in 0..2 {
             let x = 6.0 + 8.0 * f64::from(i);
@@ -326,6 +324,8 @@ fn a_two_level_model_makes_its_drawing_set_and_pdf() {
     assert_eq!(count(sheet(&r, "A105"), "roofs"), 1);
     let e101 = sheet(&r, "E101");
     assert_eq!(count(e101, "devices"), 3);
+    // The receptacle the print drew its own way is drawn with the library's symbol on each level.
+    assert_eq!(count(e101, "library_symbols"), 1, "{}", e101["counts"]);
     assert_eq!(count(e101, "home_runs"), 2, "LP1-1 and LP1-3: {}", e101["counts"]);
     assert_eq!(count(e101, "circuit_tags"), 3);
     assert_eq!(count(e101, "panels"), 1);

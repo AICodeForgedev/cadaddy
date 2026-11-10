@@ -3446,3 +3446,8 @@ menu	Modify	수정
 	Previous Sheet	이전 시트
 	Page {n}	페이지 {n}
 	Page Up and Page Down step through the sheets.	Page Up과 Page Down으로 시트를 넘깁니다.
+	Symbol Table	기호 표
+	Change Symbol Table	기호 표 변경
+	Symbol Table Log	기호 표 기록
+	Revert Symbol Table Change	기호 표 변경 되돌리기
+	Promote Symbol to Library	기호를 라이브러리로 승격

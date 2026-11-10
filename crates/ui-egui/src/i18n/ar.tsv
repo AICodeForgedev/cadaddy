@@ -3441,3 +3441,8 @@ menu	View	عرض
 	Previous Sheet	الورقة السابقة
 	Page {n}	الصفحة {n}
 	Page Up and Page Down step through the sheets.	يتنقل مفتاحا Page Up وPage Down بين الأوراق.
+	Symbol Table	جدول الرموز
+	Change Symbol Table	تغيير جدول الرموز
+	Symbol Table Log	سجل جدول الرموز
+	Revert Symbol Table Change	التراجع عن تغيير جدول الرموز
+	Promote Symbol to Library	ترقية الرمز إلى المكتبة
