@@ -1,0 +1,42 @@
+{
+  "_doc": "Fire protection read from the documents (Q6497): the fire protection plans of the set and the sprinkler shop drawings among the submittals. Every value carries its source. Symbol sizes are paper sizes (inches on the printed sheet); heights are feet or inches as named.",
+  "symbols": {
+    "head_radius_in": [0.02, 0.2],
+    "no_legend_head_radius_in": [0.03, 0.1],
+    "legend_match": 0.2,
+    "legend_reach_heights": 8.0,
+    "inner_mark_min": 0.3,
+    "source": "drafting convention: a sprinkler head is a small circle on the sheet (about 1/16 to 3/16 in across the radius range here), typed by the sheet's own head legend (its symbol beside its description, matched within 20 % of the legend symbol's radius and by its fill: plain, marked inside (hatched or crossed) or solid); with no legend, circles of 0.03-0.1 in radius are taken as heads of no type"
+  },
+  "bars": {
+    "width_in": [0.004, 0.12],
+    "min_aspect": 4.0,
+    "class_step": 1.25,
+    "joint_slack_in": 0.03,
+    "label_reach_heights": 4.0,
+    "head_reach_radii": 2.0,
+    "source": "drafting convention of sprinkler shop drawings: pipe is drawn as filled bars, one bar weight per pipe role (branch lines thinner than cross mains and mains); a bar is at least four times as long as it is wide; bars more than 25 % apart in width are two weights; a size label is lettered within about four text heights of its pipe; a head sits on its branch line (within two head radii)"
+  },
+  "sizes": {
+    "branch_in": 1.0,
+    "main_in": 2.0,
+    "source": "NFPA 13 (2022) pipe schedule 28.5.2: the smallest branch line pipe is 1 in (steel) and a cross main feeding several branch lines is 2 in or more; used only where neither a label nor a labelled pipe of the same weight gives the size (size_source says so)"
+  },
+  "heights": {
+    "default_ceiling_ft": 9.0,
+    "pendent_below_ceiling_in": 0.0,
+    "upright_below_ceiling_in": 3.0,
+    "sidewall_below_ceiling_in": 4.0,
+    "source": "NFPA 13 (2022) 10.2.6.1 and 11.2.6.1: deflectors 1-12 in below an unobstructed ceiling, a sidewall's 4-6 in below it; trade practice: a pendent's escutcheon at the finished ceiling (0 in), an upright 3 in under the deck, a sidewall at 4 in; the level's ceiling from the documents, else 9 ft"
+  },
+  "pages": {
+    "max_files": 64,
+    "max_pages": 200,
+    "max_depth": 4,
+    "min_tags": 3,
+    "tag_tol_ft": 1.5,
+    "page_scale_in_per_ft": [0.03125, 1.0],
+    "duplicate_head_ft": 0.5,
+    "source": "company default: up to 64 shop-drawing files of up to 200 pages each, four folders deep; a page is put onto its floor by at least three room numbers it shares with the floor's architectural plan (within 1.5 ft), drawn at a scale between 1/32 in and 1 in to the foot; a head another page draws within 6 in is the same head"
+  }
+}
