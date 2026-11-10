@@ -585,14 +585,24 @@ pub(crate) fn take_submitted_size(e: &mut cadaddy_walk3d::MepEquipment, g: &Subm
     let inch = upf / 12.0;
     let (dx, dy) = ((e.max[0] - e.min[0]).abs(), (e.max[1] - e.min[1]).abs());
     let (wx, wy) = if dx >= dy { (w * inch, dp * inch) } else { (dp * inch, w * inch) };
-    let bottom = (rule.mount_top_in.unwrap_or(78.0) - h).max(0.0) / 12.0;
+    // A switchboard stands on the floor; a panelboard's top is at the rule's height.
+    let bottom = if e.kind == "switchboard" { 0.0 } else { (rule.mount_top_in.unwrap_or(78.0) - h).max(0.0) / 12.0 };
     let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
     if close(dx, wx) && close(dy, wy) && close(e.height_ft, h / 12.0) && close(e.bottom_ft, bottom) {
         return false;
     }
     let c = [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0];
+    let (was_min, was_max) = (e.min, e.max);
     e.min = [c[0] - wx / 2.0, c[1] - wy / 2.0];
     e.max = [c[0] + wx / 2.0, c[1] + wy / 2.0];
+    // Gear drawn against a wall keeps its back on that wall.
+    match e.sources.get("back").map(String::as_str) {
+        Some("x-") => (e.min[0], e.max[0]) = (was_min[0], was_min[0] + wx),
+        Some("x+") => (e.min[0], e.max[0]) = (was_max[0] - wx, was_max[0]),
+        Some("y-") => (e.min[1], e.max[1]) = (was_min[1], was_min[1] + wy),
+        Some("y+") => (e.min[1], e.max[1]) = (was_max[1] - wy, was_max[1]),
+        _ => {}
+    }
     e.height_ft = h / 12.0;
     e.bottom_ft = bottom;
     e.properties.insert("BOX".into(), format!("{h} H x {w} W x {dp} D in"));
@@ -859,6 +869,268 @@ fn room_named<'a>(rooms: &'a [RoomBox], location: &str) -> Option<&'a RoomBox> {
     number
         .and_then(|n| rooms.iter().find(|r| r.number.eq_ignore_ascii_case(n)))
         .or_else(|| rooms.iter().find(|r| !r.name.is_empty() && u.contains(&r.name.to_ascii_uppercase())))
+}
+
+/// The trade practice rule gear the plans draw is placed by (`tradepractice.json`).
+pub(crate) const DRAWN_RULE: &str = "E-GEAR-DRAWN";
+/// What a drawn piece of gear's footprint source starts with (a rerun replaces its own).
+pub(crate) const DRAWN_FOOTPRINT: &str = "drawn: the plan's rectangle by its label";
+/// Most texts, outlines and scheduled tags looked at on one sheet (hostile drawings).
+const MAX_SHEET_ITEMS: usize = 200_000;
+const MAX_GEAR_TAGS: usize = 500;
+
+/// The numbers of [`DRAWN_RULE`]: how near its label a rectangle is (text heights plus feet),
+/// what a gear footprint measures (its depth and length, inches; its long side at least
+/// `min_ratio` times its depth), and the heights used when no submittal gives one.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DrawnRule {
+    pub reach_h: f64,
+    pub reach_ft: f64,
+    pub depth_in: [f64; 2],
+    pub length_in: [f64; 2],
+    pub min_ratio: f64,
+    pub panel_height_in: f64,
+    pub switchboard_height_in: f64,
+    pub basis: String,
+}
+
+impl DrawnRule {
+    /// The rule as its data has it (each number its usual value where the data has none).
+    pub(crate) fn from_data() -> Self {
+        let v = super::provenance::rule_data(DRAWN_RULE);
+        let n = |k: &str, d: f64| v.get(k).and_then(serde_json::Value::as_f64).filter(|x| x.is_finite() && *x > 0.0).unwrap_or(d);
+        let pair = |k: &str, d: [f64; 2]| {
+            v.get(k)
+                .and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]))
+                .filter(|p| p.iter().all(|x| x.is_finite() && *x > 0.0) && p[0] <= p[1])
+                .unwrap_or(d)
+        };
+        DrawnRule {
+            reach_h: n("label_reach_h", 3.0),
+            reach_ft: n("reach_ft", 1.0),
+            depth_in: pair("depth_in", [3.0, 54.0]),
+            length_in: pair("length_in", [10.0, 480.0]),
+            min_ratio: n("min_ratio", 1.5),
+            panel_height_in: n("panel_height_in", 48.0),
+            switchboard_height_in: n("switchboard_height_in", 90.0),
+            basis: super::provenance::rule(DRAWN_RULE).basis_for(""),
+        }
+    }
+}
+
+/// Whether a plan's text labels the gear `tag`: a line of it is the tag (two or more
+/// characters: a lone letter is a circuit's or a fixture's), or a gear word and the tag
+/// (`PNLBD 'A'`, `PANEL DP4`, `SWBD MDP`).
+pub(crate) fn names_gear(text: &str, tag: &str) -> bool {
+    let t = tag.trim().to_ascii_uppercase();
+    if t.is_empty() {
+        return false;
+    }
+    let named = |rest: &str| rest.trim().trim_start_matches(':').trim().trim_matches(['\'', '"']).trim() == t;
+    text.split(['\n', '\r']).flat_map(|l| l.split("\\P")).take(8).any(|line| {
+        let u = line.trim().to_ascii_uppercase();
+        let bare = u.trim_matches(['\'', '"']).trim();
+        if bare == t {
+            return t.chars().count() >= 2;
+        }
+        super::printcond::panel_lettering(&u).is_some_and(|n| n == t)
+            || cadaddy_mepfix::wordrules::words("equipment.switchboard_words").iter().any(|w| u.strip_prefix(w).is_some_and(named))
+    })
+}
+
+/// One plan sheet looked at for drawn gear: its texts and its outlines' boxes (sheet units) and
+/// its drawing units per foot.
+pub(crate) struct GearSheet {
+    pub number: String,
+    pub texts: Vec<TextItem>,
+    pub outlines: Vec<([f64; 2], [f64; 2])>,
+    pub upf: f64,
+}
+
+/// A piece of gear a plan draws: the rectangle (sheet units) its label is on or beside.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DrawnGear {
+    pub tag: String,
+    pub sheet: String,
+    pub label: String,
+    pub min: [f64; 2],
+    pub max: [f64; 2],
+}
+
+fn box_dist(p: Vec2, lo: [f64; 2], hi: [f64; 2]) -> f64 {
+    let dx = (lo[0] - p.x).max(0.0).max(p.x - hi[0]);
+    let dy = (lo[1] - p.y).max(0.0).max(p.y - hi[1]);
+    dx.hypot(dy)
+}
+
+/// The gear among `tags` that `sheet` draws: each label naming one ([`names_gear`]) and the
+/// rectangle of a gear's proportions ([`DrawnRule`]) it sits on or beside, the nearest pairs
+/// first, each rectangle and label once and no two pieces of gear in one place. Each tag once
+/// (its nearest), in `tags`' order.
+pub(crate) fn drawn_gear(tags: &[String], sheet: &GearSheet, rule: &DrawnRule) -> Vec<DrawnGear> {
+    let su = if sheet.upf.is_finite() && sheet.upf > 0.0 { sheet.upf } else { 12.0 };
+    let tags: Vec<&String> = tags.iter().take(MAX_GEAR_TAGS).collect();
+    let labels: Vec<(usize, &TextItem)> = sheet
+        .texts
+        .iter()
+        .take(MAX_SHEET_ITEMS)
+        .filter(|t| t.at.is_finite() && t.height.is_finite() && t.height > 0.0)
+        .flat_map(|t| tags.iter().enumerate().filter(|(_, g)| names_gear(&t.value, g)).map(move |(i, _)| (i, t)))
+        .take(MAX_SHEET_ITEMS)
+        .collect();
+    if labels.is_empty() {
+        return Vec::new();
+    }
+    let fits = |lo: &[f64; 2], hi: &[f64; 2]| {
+        let (w, h) = ((hi[0] - lo[0]) / su * 12.0, (hi[1] - lo[1]) / su * 12.0);
+        let (short, long) = (w.min(h), w.max(h));
+        short.is_finite()
+            && short >= rule.depth_in[0]
+            && short <= rule.depth_in[1]
+            && long >= rule.length_in[0]
+            && long <= rule.length_in[1]
+            && long >= short * rule.min_ratio
+    };
+    let outlines: Vec<(usize, &([f64; 2], [f64; 2]))> =
+        sheet.outlines.iter().take(MAX_SHEET_ITEMS).enumerate().filter(|(_, (lo, hi))| fits(lo, hi)).collect();
+    let mut cands: Vec<(f64, usize, usize)> = Vec::new();
+    for (li, (_, t)) in labels.iter().enumerate() {
+        let reach = rule.reach_h * t.height + rule.reach_ft * su;
+        for (oi, (lo, hi)) in &outlines {
+            let d = box_dist(t.at, *lo, *hi);
+            if d <= reach && cands.len() < MAX_SHEET_ITEMS {
+                cands.push((d / reach.max(1e-9), li, *oi));
+            }
+        }
+    }
+    cands.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let overlaps = |a: usize, b: usize| match (sheet.outlines.get(a), sheet.outlines.get(b)) {
+        (Some((alo, ahi)), Some((blo, bhi))) => alo[0] < bhi[0] - 1e-9 && blo[0] < ahi[0] - 1e-9 && alo[1] < bhi[1] - 1e-9 && blo[1] < ahi[1] - 1e-9,
+        _ => false,
+    };
+    let (mut label_done, mut taken, mut tag_done): (BTreeSet<usize>, Vec<usize>, BTreeMap<usize, DrawnGear>) = Default::default();
+    for (_, li, oi) in cands {
+        let Some((ti, t)) = labels.get(li) else { continue };
+        if label_done.contains(&li) || tag_done.contains_key(ti) || taken.iter().any(|o| *o == oi || overlaps(*o, oi)) {
+            continue;
+        }
+        let (Some(tag), Some((lo, hi))) = (tags.get(*ti), sheet.outlines.get(oi)) else { continue };
+        label_done.insert(li);
+        taken.push(oi);
+        tag_done.insert(
+            *ti,
+            DrawnGear { tag: (*tag).clone(), sheet: sheet.number.clone(), label: t.value.chars().take(60).collect(), min: *lo, max: *hi },
+        );
+    }
+    tag_done.into_values().collect()
+}
+
+/// The side of a plan box its back is against: of its long sides (either for a square), the one
+/// nearest an edge of `outline` (its room) that runs along it, within `reach`. `x-`, `x+`, `y-`,
+/// `y+`: the side at the box's least or most x or y.
+pub(crate) fn back_against(min: [f64; 2], max: [f64; 2], outline: &[Vec2], reach: f64) -> Option<&'static str> {
+    let (w, h) = (max[0] - min[0], max[1] - min[1]);
+    let n = outline.len();
+    let mut best: Option<(f64, &'static str)> = None;
+    for i in 0..n.min(MAX_SHEET_ITEMS) {
+        let (Some(a), Some(b)) = (outline.get(i), outline.get((i + 1) % n)) else { continue };
+        let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+        let mut try_side = |d: f64, side: &'static str| {
+            if d.is_finite() && d <= reach && best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, side));
+            }
+        };
+        // An edge along x (a north or south wall) backs a box wide in x.
+        if dy <= 0.05 * dx && w >= h && a.x.min(b.x) < max[0] && a.x.max(b.x) > min[0] {
+            let y = (a.y + b.y) / 2.0;
+            try_side((y - min[1]).abs(), "y-");
+            try_side((y - max[1]).abs(), "y+");
+        }
+        if dx <= 0.05 * dy && h >= w && a.y.min(b.y) < max[1] && a.y.max(b.y) > min[1] {
+            let x = (a.x + b.x) / 2.0;
+            try_side((x - min[0]).abs(), "x-");
+            try_side((x - max[0]).abs(), "x+");
+        }
+    }
+    best.map(|(_, s)| s)
+}
+
+/// The compass word of a box side ([`back_against`]) on a plan with north up.
+fn side_word(side: &str) -> &'static str {
+    match side {
+        "x-" => "west",
+        "x+" => "east",
+        "y-" => "south",
+        _ => "north",
+    }
+}
+
+/// A drawn piece of gear ([`drawn_gear`]) as equipment on `level`, its footprint `min..max` (the
+/// plan's, onto its level's plan), its back against the wall `back` it touches: its schedule's
+/// header, its kind (its submittal's, else a switchboard where its label or schedule says so,
+/// else a panelboard), its height (its submittal's box, else the rule's), marked drawn.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drawn_equipment(
+    dg: &DrawnGear,
+    level: &str,
+    min: [f64; 2],
+    max: [f64; 2],
+    back: Option<&str>,
+    schedule: Option<&cadaddy_walk3d::PanelSchedule>,
+    g: Option<&SubmittedGear>,
+    rule: &DrawnRule,
+    mount_top_in: f64,
+) -> cadaddy_walk3d::MepEquipment {
+    let mut properties: BTreeMap<String, String> =
+        schedule.map(|p| p.header.iter().map(|(k, v)| (k.to_ascii_uppercase(), v.clone())).collect()).unwrap_or_default();
+    let says = |words: &str| {
+        let u = words.to_ascii_uppercase();
+        cadaddy_mepfix::wordrules::words("equipment.switchboard_words").iter().any(|w| u.split(|c: char| !c.is_ascii_alphanumeric()).any(|x| x == *w))
+    };
+    let kind = match g.map(|g| g.kind.as_str()).filter(|k| !k.is_empty()) {
+        Some(k) => k.to_string(),
+        None if says(&dg.label) || properties.values().any(|v| says(v)) => "switchboard".to_string(),
+        None => "panel".to_string(),
+    };
+    let floor = kind == "switchboard";
+    let h = g.map(|g| g.size_in[0]).filter(|h| h.is_finite() && *h > 0.0).unwrap_or(if floor {
+        rule.switchboard_height_in
+    } else {
+        rule.panel_height_in
+    });
+    let bottom = if floor { 0.0 } else { (mount_top_in - h).max(0.0) / 12.0 };
+    let wall = back.map_or_else(|| "no wall of its room by it".to_string(), |s| format!("its room's {} wall", side_word(s)));
+    properties.insert("PLACEMENT".into(), format!("drawn: at its symbol on {} (label {}), its back on {wall}", dg.sheet, dg.label));
+    properties.insert("STATUS".into(), "drawn".into());
+    let mut sources = BTreeMap::new();
+    sources.insert("sheet".to_string(), dg.sheet.clone());
+    sources.insert("position".to_string(), format!("drawn: its symbol by its label {} on {}", dg.label, dg.sheet));
+    sources.insert("footprint".to_string(), format!("{DRAWN_FOOTPRINT} ({})", rule.basis));
+    sources.insert("status".to_string(), "drawn".to_string());
+    if let Some(s) = back {
+        sources.insert("back".to_string(), s.to_string());
+    }
+    sources.insert(
+        "height".to_string(),
+        match g.filter(|g| g.size_in[0] > 0.0) {
+            Some(g) => g.source.clone(),
+            None => format!("rule: the usual {} height ({DRAWN_RULE})", if floor { "switchboard" } else { "panelboard" }),
+        },
+    );
+    cadaddy_walk3d::MepEquipment {
+        tag: dg.tag.clone(),
+        kind: kind.clone(),
+        level: level.to_string(),
+        min,
+        max,
+        bottom_ft: bottom,
+        height_ft: h / 12.0,
+        title: format!("{} {}", if floor { "SWITCHBOARD" } else { "PANELBOARD" }, dg.tag),
+        properties,
+        sources,
+        confidence: 0.8,
+        ..cadaddy_walk3d::MepEquipment::default()
+    }
 }
 
 /// The gear (panels the schedules list, sized by the submittal, in the rooms their schedules
@@ -1311,6 +1583,101 @@ mod tests {
         assert!(w.properties["CORRECTION_RULE"].contains("376"));
         assert_eq!(w.sources["status"], "proposed");
         assert!(wireway_for(&g, 1e6, 68.0, 12.0, &rule).is_none());
+    }
+
+    #[test]
+    fn a_gear_label_is_its_tag_or_a_gear_word_and_its_tag() {
+        for (text, tag) in
+            [("MDP", "MDP"), ("PNLBD'DP4'", "DP4"), ("PNLBD 'A'", "A"), ("PANEL B", "B"), ("SWBD MDP", "MDP"), ("'DP-2'\\P480V", "DP-2")]
+        {
+            assert!(names_gear(text, tag), "{text} names {tag}");
+        }
+        // A lone letter is a fixture's or a circuit's mark; another tag's label is not this one.
+        for (text, tag) in [("A", "A"), ("A1", "A"), ("PNLBD 'AB'", "A"), ("MDP-2", "MDP"), ("", "A"), ("MDP", "")] {
+            assert!(!names_gear(text, tag), "{text} doesn't name {tag}");
+        }
+    }
+
+    fn txt(v: &str, x: f64, y: f64, h: f64) -> TextItem {
+        TextItem { value: v.into(), at: Vec2::new(x, y), height: h, rotation: 0.0 }
+    }
+
+    /// The general layout family: gear along a north wall (wide in x), labels inside their
+    /// rectangles or beside them, a sheet left at paper size (1/4" = 1'-0"), a fixture rectangle
+    /// of a gear's proportions by its mark, the room outline and a square tag bubble near.
+    #[test]
+    fn drawn_gear_is_its_labels_rectangle_whatever_the_layout() {
+        let rule = DrawnRule::from_data();
+        assert_eq!(rule.depth_in, [3.0, 54.0], "the rule's data is read");
+        for k in [12.0, 0.25] {
+            // Inches of the building at `k` sheet units per foot.
+            let at = |x: f64, y: f64| [x * k / 12.0, y * k / 12.0];
+            let b = |lo: [f64; 2], hi: [f64; 2]| (at(lo[0], lo[1]), at(hi[0], hi[1]));
+            let t = |v: &str, x: f64, y: f64| {
+                let p = at(x, y);
+                txt(v, p[0], p[1], 4.0 * k / 12.0)
+            };
+            let sheet = GearSheet {
+                number: "QE-2".into(),
+                texts: vec![
+                    t("SWBD MDP", 30.0, 290.0),
+                    t("PNLBD 'A'", 104.0, 304.0),
+                    t("PANEL B", 150.0, 290.0),
+                    t("A", 30.0, 40.0),
+                    t("C", 200.0, 200.0),
+                ],
+                outlines: vec![
+                    b([0.0, 0.0], [312.0, 312.0]),
+                    b([20.0, 282.0], [80.0, 312.0]),
+                    b([100.0, 306.0], [120.0, 312.0]),
+                    b([140.0, 306.0], [160.0, 312.0]),
+                    b([20.0, 20.0], [68.0, 44.0]),
+                    b([196.0, 196.0], [208.0, 208.0]),
+                ],
+                upf: k,
+            };
+            let tags: Vec<String> = ["C", "B", "A", "MDP"].iter().map(|s| (*s).to_string()).collect();
+            let got = drawn_gear(&tags, &sheet, &rule);
+            let by = |tag: &str| got.iter().find(|g| g.tag == tag).map(|g| (g.min, g.max));
+            assert_eq!(by("MDP"), Some(b([20.0, 282.0], [80.0, 312.0])), "inside its rectangle, at {k}: {got:?}");
+            assert_eq!(by("A"), Some(b([100.0, 306.0], [120.0, 312.0])), "under its label, at {k}: {got:?}");
+            assert_eq!(by("B"), Some(b([140.0, 306.0], [160.0, 312.0])), "beside its label, not A's, at {k}: {got:?}");
+            assert_eq!(by("C"), None, "a square tag bubble is no gear: {got:?}");
+            assert_eq!(got.len(), 3, "{got:?}");
+            // The order of `tags`, not the sheet's.
+            assert_eq!(got.iter().map(|g| g.tag.as_str()).collect::<Vec<_>>(), ["B", "A", "MDP"]);
+        }
+    }
+
+    /// Drawn gear's back is the long side on its room's wall; its submittal's box keeps it there.
+    #[test]
+    fn drawn_gear_keeps_its_back_on_the_wall_it_touches() {
+        let room = vec![Vec2::new(0.0, 0.0), Vec2::new(144.0, 0.0), Vec2::new(144.0, 312.0), Vec2::new(0.0, 312.0)];
+        assert_eq!(back_against([138.0, 200.0], [144.0, 220.0], &room, 20.0), Some("x+"));
+        assert_eq!(back_against([0.0, 100.0], [6.0, 120.0], &room, 20.0), Some("x-"));
+        assert_eq!(back_against([20.0, 306.0], [40.0, 312.0], &room, 20.0), Some("y+"));
+        assert_eq!(back_against([60.0, 150.0], [66.0, 170.0], &room, 20.0), None, "free-standing in the room");
+        let rule = DrawnRule::from_data();
+        let dg = DrawnGear { tag: "DP4".into(), sheet: "QE-1".into(), label: "PNLBD'DP4'".into(), min: [0.0; 2], max: [0.0; 2] };
+        let sched = cadaddy_walk3d::PanelSchedule {
+            panel: "DP4".into(),
+            header: [("location".to_string(), "ELEC".to_string())].into_iter().collect(),
+            ..Default::default()
+        };
+        let mut e = drawn_equipment(&dg, "L1", [138.0, 200.0], [144.0, 220.0], Some("x+"), Some(&sched), None, &rule, 78.0);
+        assert_eq!((e.kind.as_str(), e.height_ft, e.bottom_ft), ("panel", 4.0, 2.5), "the rule's panelboard: {e:?}");
+        assert_eq!(e.properties.get("LOCATION").map(String::as_str), Some("ELEC"));
+        assert_eq!(e.sources.get("status").map(String::as_str), Some("drawn"), "never proposed: never moved as lettering");
+        assert!(e.sources["footprint"].starts_with(DRAWN_FOOTPRINT) && e.sources["footprint"].contains(DRAWN_RULE));
+        // The submittal's can is 8 in deep: its back stays on the east wall, its front comes out.
+        let g = SubmittedGear { size_in: [72.0, 20.0, 8.0], source: "sub".into(), ..SubmittedGear::default() };
+        let work = crate::cmd::coderules::rules().into_iter().find(|r| r.id == "E-WORKSPACE").unwrap_or_default();
+        assert!(take_submitted_size(&mut e, &g, &work, 12.0));
+        assert_eq!((e.min, e.max), ([136.0, 200.0], [144.0, 220.0]), "{e:?}");
+        // A switchboard its label names stands on the floor, the rule's height without a submittal.
+        let swbd = DrawnGear { tag: "MDP".into(), label: "SWBD MDP".into(), ..dg };
+        let s = drawn_equipment(&swbd, "L1", [114.0, 250.0], [144.0, 298.0], Some("x+"), None, None, &rule, 78.0);
+        assert_eq!((s.kind.as_str(), s.bottom_ft, s.height_ft), ("switchboard", 0.0, 7.5), "{s:?}");
     }
 
     #[test]
