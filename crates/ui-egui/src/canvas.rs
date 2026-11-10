@@ -199,6 +199,8 @@ pub struct CanvasState {
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,
+    /// Where frames and regenerations spend their time (the `--debug` overlay, `ui.draw2d`).
+    pub stats: drawstats::DrawStats,
 }
 
 impl CanvasState {
@@ -218,7 +220,9 @@ impl CanvasState {
     /// Put a finished background build in place, with its GPU vertex data when it has some.
     fn install(&mut self, key: ListKey, window: Option<Bounds2>, built: rebuild::Built) {
         self.list_gen = self.list_gen.wrapping_add(1);
+        self.stats.built(&built.list, built.objects, built.build_ms, true, built.profile);
         if let Some(m) = built.mesh {
+            self.stats.meshed_counts(m.counts, m.ms - m.upload_ms, m.upload_ms);
             if let Ok(mut slot) = self.mesh_slot.lock() {
                 *slot = Some(m.data);
             }
@@ -405,6 +409,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         // Drywall layer boundary lines.
         layer_lines: app.session.drywall_layer_lines.clone(),
         skip_hatches: false,
+        profile: app.canvas.stats.profile_for_build(),
     };
     if view_only {
         let t = Tokens::get();
@@ -432,6 +437,10 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
     app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
     app.canvas.build_ms = crate::now_ms() - t0;
+    if let Some(list) = &app.canvas.list {
+        let objects = st.doc.space(&space).map_or(0, |s| s.len());
+        app.canvas.stats.built(list, objects, app.canvas.build_ms, false, None);
+    }
 }
 
 /// The active MSPACE viewport when its contents are drawn apart from the layout's list (see
@@ -572,6 +581,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             color_overrides: app.session.drywall_color_overrides.iter().map(|(&h, &c)| (h, c)).collect(),
             layer_lines: app.session.drywall_layer_lines.clone(),
             skip_hatches: false,
+            profile: None,
         };
         c.list = cadaddy_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);
@@ -860,8 +870,8 @@ fn clip_infinite(xf: &Xf, base: Vec2, dir: Vec2, ray: bool) -> Option<[Pos2; 2]>
     Some([xf.to_screen(a), xf.to_screen(b)])
 }
 
-/// Draw a display list.
-pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay: bool) {
+/// Draw a display list; returns the shapes made for it (what is in view).
+pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay: bool) -> usize {
     let vis = xf.world_bounds();
     let mut shapes: Vec<Shape> = Vec::with_capacity(list.prims.len());
     let px = 1.0 / xf.scale;
@@ -940,7 +950,9 @@ pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb,
             }
         }
     }
+    let n = shapes.len();
     p.extend(shapes);
+    n
 }
 
 /// Textures of the images drawn by the CPU canvas, by their pixels (each entry keeps its pixels
@@ -1101,6 +1113,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
     if c.mesh_key != Some(key) {
         let t0 = crate::now_ms();
         let mesh = crate::gpu::build_mesh(list, origin, bg, lwdisplay);
+        c.stats.meshed(&mesh, crate::now_ms() - t0, 0.0);
         if let Ok(mut slot) = c.mesh_slot.lock() {
             *slot = Some(mesh);
         }
@@ -1134,6 +1147,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
         }
     }
     p.extend(shapes);
+    c.stats.drew(list, c.list_gen, &xf.world_bounds(), None);
 }
 
 /// How a highlight is drawn: lines `width` points wide, and either solid with fills filled or
@@ -2031,7 +2045,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     } else if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {
-        draw_list(&painter, &xf_paper, list, bg, app.session.settings.lwdisplay);
+        let sent = draw_list(&painter, &xf_paper, list, bg, app.session.settings.lwdisplay);
+        app.canvas.stats.drew(list, app.canvas.list_gen, &xf_paper.world_bounds(), Some(sent));
     }
     if let Some(vp) = &active_vp {
         // The active viewport: a heavy border, highlights in model units clipped to it.
@@ -3468,6 +3483,7 @@ mod lasso;
 mod refedit;
 
 /// Background rebuilds of the display list for a new view.
+pub mod drawstats;
 mod rebuild;
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 //! `--debug` overlay: a semi-transparent panel in the top-right corner showing the frame time,
-//! approximate memory use, open drawings and the running command. Visible when
+//! approximate memory use, open drawings, the running command and where the 2D canvas's frames
+//! and regenerations spend their time. Visible when
 //! [`CadApp::debug_overlay`] is set (the `--debug` flag).
 
 use crate::CadApp;
@@ -26,11 +27,25 @@ pub fn show(app: &CadApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new(format!("command: {cmd}")).text_style(mono.clone()).color(egui::Color32::WHITE));
             if let Ok(doc) = app.session.doc() {
                 let n = doc.model.iter().count();
-                ui.label(egui::RichText::new(format!("objects: {n}")).text_style(mono).color(egui::Color32::WHITE));
+                ui.label(egui::RichText::new(format!("objects: {n}")).text_style(mono.clone()).color(egui::Color32::WHITE));
+            }
+            // Where the 2D canvas's time goes (`canvas::drawstats`).
+            for line in app.canvas.stats.lines(&adapter_name(app)) {
+                ui.label(egui::RichText::new(line).text_style(mono.clone()).color(egui::Color32::LIGHT_GRAY));
             }
         });
     });
     ctx.request_repaint();
+}
+
+/// The GPU drawing the canvas, or that there is none.
+pub fn adapter_name(app: &CadApp) -> String {
+    if app.canvas.gpu.is_some() { app.gpu_caps.adapter.clone() } else { "CPU canvas".into() }
+}
+
+/// The 2D draw statistics (`ui.draw2d`, see `canvas::drawstats`).
+pub fn draw2d_json(app: &CadApp) -> serde_json::Value {
+    app.canvas.stats.json(&adapter_name(app), app.canvas.gpu.is_some(), crate::gpu::gpu_bytes(), process_rss_mb())
 }
 
 /// Approximate resident set size of this process in megabytes (safe, no FFI).

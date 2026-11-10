@@ -169,6 +169,7 @@ fn build_chunk(d: &Drawing, chunk: &ChunkRef, opts: &Options) -> DisplayList {
         shared_budget: None,
         transparency: 0,
         paper: false,
+        prof: profile::Local::new(opts),
     };
     for e in chunk.items() {
         top_entity(&mut b, d, e);
