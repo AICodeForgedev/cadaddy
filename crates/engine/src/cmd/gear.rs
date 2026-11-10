@@ -747,13 +747,21 @@ fn spec(cmd: &str, s: &Session) -> Result<BuildingSpec> {
 
 fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
     let sp = spec("gear.list", s)?;
+    // A typical panel's copy (`U-<room>`): the feeder its stack's chain takes, through its lugs.
+    let typical_in = super::gearbuild::typical_feeder_in(&sp);
     let gear: Vec<Value> = sp
         .mep
         .equipment
         .iter()
-        .filter(|e| is_gear(e))
-        .map(|e| {
-            let feeders_in: Vec<&str> = sp.mep.feeders.iter().filter(|f| f.to.eq_ignore_ascii_case(&e.tag)).map(|f| f.tag.as_str()).collect();
+        .enumerate()
+        .filter(|(_, e)| is_gear(e))
+        .map(|(i, e)| {
+            let mut feeders_in: Vec<&str> = sp.mep.feeders.iter().filter(|f| f.to.eq_ignore_ascii_case(&e.tag)).map(|f| f.tag.as_str()).collect();
+            if let Some(f) = typical_in.get(&i).and_then(|&k| sp.mep.feeders.get(k))
+                && feeders_in.is_empty()
+            {
+                feeders_in.push(f.tag.as_str());
+            }
             let feeders_out: Vec<&str> = sp.mep.feeders.iter().filter(|f| f.from.eq_ignore_ascii_case(&e.tag)).map(|f| f.tag.as_str()).collect();
             json!({
                 "tag": e.tag, "kind": e.kind, "level": e.level, "properties": e.properties, "terminations": e.terminations.len(),
