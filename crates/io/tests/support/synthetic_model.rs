@@ -27,7 +27,7 @@ fn element_data(i: usize) -> Vec<RawTag> {
         "height": 9.0 + (i % 3) as f64,
         "level": format!("Level {}", i % 4 + 1),
         "source": {"kind": "derived", "basis": "a synthetic rule", "confidence": 0.9},
-        "id": format!("E-{i:07}"),
+        "id": format!("ID{i:07}"),
     });
     vec![RawTag { code: 1001, value: "SYNTH_ELEMENT".into() }, RawTag { code: 1000, value: props.to_string() }]
 }
