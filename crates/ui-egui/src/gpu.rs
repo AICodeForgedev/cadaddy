@@ -538,6 +538,54 @@ struct Layer {
     quads: Vec<Batch>,
     breaks: Vec<[usize; 3]>,
     images: Vec<LayerImage>,
+    /// The layer's last frame as a picture (large layers only, see [`FRAME_CACHE_MIN`]), and
+    /// whether this frame shows it instead of drawing the layer again.
+    cache: Option<FrameCache>,
+    cached: bool,
+}
+
+/// A layer's drawing as it was last drawn, in a texture the size of the window: while the mesh
+/// and the view stay as they were, the frame shows the texture instead of running every vertex
+/// of the drawing again (the pointer moving, a rubber band, a hover, a blinking caret).
+struct FrameCache {
+    view: TrackedView,
+    /// The pass's stencil buffer, when the canvas pipelines name one.
+    stencil: Option<TrackedView>,
+    group: wgpu::BindGroup,
+    size: [u32; 2],
+    /// What the texture shows: the mesh and the view uniform's bytes.
+    shows: Option<(u64, Vec<u8>)>,
+    used: web_time::Instant,
+}
+
+/// Vertices and instances a layer holds before its frame is kept: below this a frame costs less
+/// to draw than the texture costs to keep, and small drawings draw exactly as before.
+const FRAME_CACHE_MIN: u64 = 200_000;
+/// A kept frame nothing has shown for this long is freed (a closed or hidden drawing's).
+const FRAME_CACHE_IDLE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Frames a kept layer was drawn again for, and frames shown from the kept picture.
+static FRAMES_DRAWN: AtomicU64 = AtomicU64::new(0);
+static FRAMES_KEPT: AtomicU64 = AtomicU64::new(0);
+
+/// `(drawn, kept)`: frames of large layers drawn into their kept picture, and frames shown from
+/// it unchanged (`ui.inspect`'s `perf.frameCache`).
+pub fn frame_cache_counts() -> (u64, u64) {
+    (FRAMES_DRAWN.load(Ordering::Relaxed), FRAMES_KEPT.load(Ordering::Relaxed))
+}
+
+/// Free the kept frames of layers that are no longer drawn (a closed drawing, a view switched to
+/// 3D): called once a frame by the app, since a layer that isn't drawn has no callback to do it.
+pub fn free_idle_frames(rs: &egui_wgpu::RenderState) {
+    if let Some(res) = rs.renderer.write().callback_resources.get_mut::<Resources>() {
+        res.free_idle_frames(web_time::Instant::now());
+    }
+}
+
+/// `CADADDY_FRAME_CACHE=0` draws every frame directly, as before the cache.
+fn frame_cache_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| !std::env::var("CADADDY_FRAME_CACHE").is_ok_and(|v| matches!(v.trim(), "0" | "off" | "false" | "no")))
 }
 
 struct Resources {
@@ -553,6 +601,12 @@ struct Resources {
     textures: std::collections::HashMap<usize, (Arc<cadaddy_render::images::Raster>, wgpu::BindGroup, Tracked<wgpu::Texture>)>,
     /// With a stencil buffer: the pipelines of [`Stencil::Mask`] and [`Stencil::Inside`].
     clipped: Option<ClipPipelines>,
+    /// Shows a layer's kept frame ([`FrameCache`]) in the window's pass.
+    blit_pipeline: wgpu::RenderPipeline,
+    blit_layout: wgpu::BindGroupLayout,
+    target: GpuTarget,
+    /// Vertices a layer holds before its frame is kept ([`FRAME_CACHE_MIN`]; tests lower it).
+    frame_cache_min: u64,
     linear_out: bool,
     layers: Vec<Layer>,
     /// For the layers of more drawing windows, made when one first draws.
@@ -572,7 +626,18 @@ fn new_layer(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> Layer {
         layout: bgl,
         entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
     });
-    Layer { uniform, bind_group, key: None, lines: Vec::new(), tris: Vec::new(), quads: Vec::new(), breaks: Vec::new(), images: Vec::new() }
+    Layer {
+        uniform,
+        bind_group,
+        key: None,
+        lines: Vec::new(),
+        tris: Vec::new(),
+        quads: Vec::new(),
+        breaks: Vec::new(),
+        images: Vec::new(),
+        cache: None,
+        cached: false,
+    }
 }
 
 struct ClipPipelines {
@@ -701,6 +766,24 @@ fn fs_main(v: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Shows a kept frame: one triangle over the window, each pixel the texture's own (the scissor
+/// keeps it to the canvas). The texture has the window's format, so the values pass unchanged.
+const BLIT_SHADER: &str = r#"
+@group(0) @binding(0) var frame: texture_2d<f32>;
+
+@vertex
+fn vs_blit(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let x = f32((i << 1u) & 2u);
+    let y = f32(i & 2u);
+    return vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_blit(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    return textureLoad(frame, vec2<i32>(pos.xy), 0);
+}
+"#;
+
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     const ATTRS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Unorm8x4];
     wgpu::VertexBufferLayout { array_stride: VERTEX_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &ATTRS }
@@ -811,6 +894,48 @@ impl Resources {
                 cache: None,
             })
         };
+        let blit_module = device
+            .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("cad_frame"), source: wgpu::ShaderSource::Wgsl(BLIT_SHADER.into()) });
+        let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("cad_frame"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let blit_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cad_frame"),
+            bind_group_layouts: &[Some(&blit_layout)],
+            immediate_size: 0,
+        });
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cad_frame"),
+            layout: Some(&blit_pl),
+            vertex: wgpu::VertexState { module: &blit_module, entry_point: Some("vs_blit"), buffers: &[], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: stencil_state(Stencil::Off),
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_module,
+                entry_point: Some("fs_blit"),
+                // The kept frame is premultiplied, as the layer's own fragments are: laid over
+                // what is under the canvas it gives what drawing the layer there gives.
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target.format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         use wgpu::PrimitiveTopology::{LineList, TriangleList};
         Resources {
             line_pipeline: pipeline("cad_lines", "vs_line", LineList, vertex_layout(), Stencil::Off),
@@ -834,6 +959,10 @@ impl Resources {
             }),
             image_layout,
             textures: std::collections::HashMap::new(),
+            blit_pipeline,
+            blit_layout,
+            target,
+            frame_cache_min: FRAME_CACHE_MIN,
             linear_out: target.format.is_srgb(),
             layers: (0..=LAYER_MASK).map(|_| layer()).collect(),
             layer_layout: bgl,
@@ -1045,7 +1174,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         screen: &egui_wgpu::ScreenDescriptor,
-        _encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let t0 = web_time::Instant::now();
@@ -1085,6 +1214,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         let e = [tx, ty, 0.0, 0.0];
         let bytes: Vec<u8> = a.iter().chain(&b).chain(&c).chain(&d).chain(&e).flat_map(|v| v.to_le_bytes()).collect();
         queue.write_buffer(&res.uniform, 0, &bytes);
+        shared.keep_frame(device, encoder, self, [w.max(1), h.max(1)], bytes);
         Vec::new()
     }
 
@@ -1100,8 +1230,24 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         }
         // Whole-screen device pixels; egui already set the scissor to the canvas clip rect.
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
+        // The frame kept for this mesh and view (see `keep_frame`): its picture, not the layer.
+        if let Some(c) = res.cache.as_ref().filter(|c| res.cached && c.size == [sw, sh]) {
+            pass.set_pipeline(&shared.blit_pipeline);
+            pass.set_bind_group(0, &c.group, &[]);
+            pass.draw(0..3, 0..1);
+            return;
+        }
+        shared.draw(res, self.stencil, pass);
+    }
+}
+
+impl Resources {
+    /// Draw a layer's batches and images in draw order into `pass` (the window's, or a kept
+    /// frame's).
+    fn draw(&self, res: &Layer, stencil: Stencil, pass: &mut wgpu::RenderPass<'_>) {
+        let shared = self;
         pass.set_bind_group(0, &res.bind_group, &[]);
-        let (tri, line, quad, image) = match (self.stencil, &shared.clipped) {
+        let (tri, line, quad, image) = match (stencil, &shared.clipped) {
             (Stencil::Off, _) => (&shared.tri_pipeline, &shared.line_pipeline, &shared.quad_pipeline, &shared.image_pipeline),
             // The outline is all triangles.
             (Stencil::Mask, Some(c)) => (&c.mask, &c.mask, &c.mask, &c.mask),
@@ -1109,10 +1255,10 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
             // No stencil buffer: the canvas never asks for these.
             (_, None) => return,
         };
-        if self.stencil != Stencil::Off {
+        if stencil != Stencil::Off {
             pass.set_stencil_reference(1);
         }
-        let mask = self.stencil == Stencil::Mask;
+        let mask = stencil == Stencil::Mask;
         // Draw-order groups split at each wipeout; without wipeouts there is one group.
         let total = |bs: &[Batch]| bs.iter().map(|b| b.count as usize).sum::<usize>();
         let all = [total(&res.tris), if mask { 0 } else { total(&res.lines) }, if mask { 0 } else { total(&res.quads) }];
@@ -1140,6 +1286,102 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
                 pass.draw(0..b.count, 0..1);
             }
             from = to;
+        }
+    }
+
+    /// Keep the frame of a large layer drawn without the stencil: draw it into the layer's
+    /// texture when the mesh, the view or the window's size changed, and leave the texture as it
+    /// is otherwise. `paint` then shows the texture. Kept frames nothing shows any more are freed.
+    fn keep_frame(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, cb: &CanvasCallback, size: [u32; 2], uniform: Vec<u8>) {
+        let now = web_time::Instant::now();
+        self.free_idle_frames(now);
+        let Some(res) = self.layers.get_mut(cb.layer) else { return };
+        res.cached = false;
+        let held: u64 = res.lines.iter().chain(&res.tris).chain(&res.quads).map(|b| u64::from(b.count)).sum();
+        let max = device.limits().max_texture_dimension_2d;
+        if !frame_cache_on() || cb.stencil != Stencil::Off || res.key != Some(cb.key) || held < self.frame_cache_min || size[0] > max || size[1] > max
+        {
+            res.cache = None;
+            return;
+        }
+        let mut cache = match res.cache.take() {
+            Some(c) if c.size == size => c,
+            _ => self.new_frame_cache(device, size),
+        };
+        cache.used = now;
+        let shows = (cb.key, uniform);
+        if cache.shows.as_ref() == Some(&shows) {
+            FRAMES_KEPT.fetch_add(1, Ordering::Relaxed);
+        } else {
+            FRAMES_DRAWN.fetch_add(1, Ordering::Relaxed);
+            let stencil = cache.stencil.as_ref().zip(self.target.stencil).map(|(view, format)| wgpu::RenderPassDepthStencilAttachment {
+                view,
+                depth_ops: format.has_depth_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                stencil_ops: format.has_stencil_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Discard }),
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("cad_frame"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &cache.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: stencil,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let Some(res) = self.layers.get(cb.layer) {
+                self.draw(res, Stencil::Off, &mut pass);
+            }
+            drop(pass);
+            cache.shows = Some(shows);
+        }
+        if let Some(res) = self.layers.get_mut(cb.layer) {
+            res.cache = Some(cache);
+            res.cached = true;
+        }
+    }
+
+    /// Free the kept frames nothing has shown lately.
+    fn free_idle_frames(&mut self, now: web_time::Instant) {
+        for l in &mut self.layers {
+            if l.cache.as_ref().is_some_and(|c| now.duration_since(c.used) > FRAME_CACHE_IDLE) {
+                l.cache = None;
+                l.cached = false;
+            }
+        }
+    }
+
+    fn new_frame_cache(&self, device: &wgpu::Device, size: [u32; 2]) -> FrameCache {
+        let extent = wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 };
+        let texture = |label: &str, format: wgpu::TextureFormat, usage: wgpu::TextureUsages| {
+            Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: extent,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            }))
+            .into_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let view = texture("cad_frame", self.target.format, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("cad_frame"),
+            layout: &self.blit_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }],
+        });
+        FrameCache {
+            view,
+            stencil: self.target.stencil.map(|f| texture("cad_frame_stencil", f, wgpu::TextureUsages::RENDER_ATTACHMENT)),
+            group,
+            size,
+            shows: None,
+            used: web_time::Instant::now(),
         }
     }
 }
@@ -1383,6 +1625,178 @@ mod tests {
         for (stage, entry) in
             [(naga::ShaderStage::Vertex, "vs_line"), (naga::ShaderStage::Vertex, "vs_quad"), (naga::ShaderStage::Fragment, "fs_main")]
         {
+            let options = naga::back::glsl::Options { version: naga::back::glsl::Version::new_gles(300), ..Default::default() };
+            let pipeline = naga::back::glsl::PipelineOptions { shader_stage: stage, entry_point: entry.into(), multiview: None };
+            let mut out = String::new();
+            let mut w =
+                naga::back::glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default()).unwrap();
+            w.write().unwrap();
+            assert!(out.contains("#version 300 es"), "{entry}");
+        }
+    }
+
+    /// A large layer's kept frame is the picture drawing the layer gives, over whatever is under
+    /// the canvas; a frame with the same mesh and view is shown from it without drawing again;
+    /// a zoom or a new mesh draws again.
+    #[test]
+    fn a_kept_frame_shows_what_drawing_the_layer_shows() {
+        use egui_wgpu::CallbackTrait;
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let (device, queue) = (&rs.device, &rs.queue);
+        let (w, h) = (64u32, 64u32);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        // A red fill, a half-transparent green fill over part of it, and a white polyline.
+        let mesh = || {
+            let mut l = DisplayList {
+                verts: vec![Vec2::new(2.0, 2.0), Vec2::new(60.0, 50.0), Vec2::new(10.0, 60.0)],
+                tris: vec![
+                    Vec2::new(5.0, 5.0),
+                    Vec2::new(45.0, 5.0),
+                    Vec2::new(5.0, 45.0),
+                    Vec2::new(20.0, 10.0),
+                    Vec2::new(60.0, 10.0),
+                    Vec2::new(60.0, 40.0),
+                ],
+                ..Default::default()
+            };
+            let p = |kind, color, start, len, transparency| DPrim { handle: Handle(1), color, aci7: false, lw: 0.0, transparency, kind, start, len };
+            l.prims =
+                vec![p(Kind::Tris, Rgb(255, 0, 0), 0, 3, 0), p(Kind::Tris, Rgb(0, 255, 0), 3, 3, 50), p(Kind::Polyline, Rgb(255, 255, 255), 0, 3, 0)];
+            for v in l.verts.iter().chain(&l.tris).copied().collect::<Vec<_>>() {
+                l.bounds.add(v);
+            }
+            build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false)
+        };
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        // A window: its resources, and one frame of it at a mesh key and zoom, read back.
+        let window = |min: u64| {
+            let mut r = egui_wgpu::CallbackResources::default();
+            let mut res = Resources::new(device, GpuTarget { format, stencil: None });
+            res.frame_cache_min = min;
+            r.insert(res);
+            r
+        };
+        let frame = |r: &mut egui_wgpu::CallbackResources, key: u64, scale: f32| -> Vec<u8> {
+            let slot: MeshSlot = Arc::new(Mutex::new(Some(mesh())));
+            let cb = CanvasCallback {
+                key,
+                slot,
+                offset: [-32.0, -32.0],
+                scale,
+                center: [32.0, 32.0],
+                layer: LAYER_DRAWING,
+                xform: IDENTITY_XFORM,
+                dash: 0.0,
+                stencil: Stencil::Off,
+            };
+            let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: 1.0 };
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            cb.prepare(device, queue, &screen, &mut enc, r);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w as f32, h as f32));
+            {
+                let mut pass = enc
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &target_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            // What is under the canvas: not black, not the mesh's colours.
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.2, g: 0.3, b: 0.4, a: 1.0 }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    })
+                    .forget_lifetime();
+                cb.paint(egui::PaintCallbackInfo { viewport: rect, clip_rect: rect, pixels_per_point: 1.0, screen_size_px: [w, h] }, &mut pass, r);
+            }
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: u64::from(w * 4 * h),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            enc.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+                },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            queue.submit([enc.finish()]);
+            buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(10)) }).unwrap();
+            buffer.slice(..).get_mapped_range().unwrap().to_vec()
+        };
+        // Largest channel difference, and pixels that differ at all.
+        let differ = |a: &[u8], b: &[u8]| {
+            let worst = a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+            (worst, a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count())
+        };
+        let at = |img: &[u8], x: u32, y: u32| {
+            let i = (y * w + x) as usize * 4;
+            [img[i], img[i + 1], img[i + 2]]
+        };
+        // Drawn directly, as before: nothing kept.
+        let mut direct = window(u64::MAX);
+        let (d0, k0) = frame_cache_counts();
+        let plain = frame(&mut direct, 7, 1.0);
+        assert_eq!(frame_cache_counts(), (d0, k0), "a layer under the size to keep draws directly");
+        assert_eq!(at(&plain, 8, 40), [255, 0, 0], "the red fill");
+        let under = at(&plain, 1, 1);
+        assert!(under != [0, 0, 0] && under != [255, 0, 0], "what is under the canvas shows where nothing is drawn");
+        // Kept: the first frame draws the layer into its picture.
+        let mut kept = window(0);
+        let first = frame(&mut kept, 7, 1.0);
+        assert_eq!(frame_cache_counts(), (d0 + 1, k0));
+        let (worst, n) = differ(&first, &plain);
+        // Opaque pixels are the same values; a half-transparent one is blended in two steps
+        // instead of one, which can round the other way by one.
+        assert!(worst <= 1, "a kept frame differs from the drawn one by {worst} in {n} pixels");
+        assert_eq!(at(&first, 8, 40), [255, 0, 0]);
+        assert_eq!(at(&first, 1, 1), under, "the kept frame is laid over what is under it");
+        // The same frame again (the pointer moved): shown from the picture, not drawn.
+        for i in 1..=3 {
+            let again = frame(&mut kept, 7, 1.0);
+            assert_eq!(frame_cache_counts(), (d0 + 1, k0 + i));
+            assert_eq!(differ(&again, &first), (0, 0));
+        }
+        // A zoom draws again, and shows what drawing at that zoom shows.
+        let zoomed = frame(&mut kept, 7, 2.0);
+        assert_eq!(frame_cache_counts(), (d0 + 2, k0 + 3));
+        assert!(differ(&zoomed, &first).1 > 100, "the zoomed picture is another picture");
+        assert!(differ(&zoomed, &frame(&mut direct, 7, 2.0)).0 <= 1);
+        // A new mesh (an edit) draws again.
+        let _ = frame(&mut kept, 8, 2.0);
+        assert_eq!(frame_cache_counts(), (d0 + 3, k0 + 3));
+        // A layer no longer drawn (its drawing closed, the view gone to 3D) gives its picture up.
+        let res = kept.get_mut::<Resources>().unwrap();
+        assert!(res.layers[LAYER_DRAWING].cache.is_some());
+        res.free_idle_frames(web_time::Instant::now() + FRAME_CACHE_IDLE + std::time::Duration::from_secs(1));
+        assert!(res.layers[LAYER_DRAWING].cache.is_none());
+    }
+
+    #[test]
+    fn frame_shader_is_valid_for_webgpu_and_webgl2() {
+        let module = naga::front::wgsl::parse_str(BLIT_SHADER).unwrap();
+        let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
+        for (stage, entry) in [(naga::ShaderStage::Vertex, "vs_blit"), (naga::ShaderStage::Fragment, "fs_blit")] {
             let options = naga::back::glsl::Options { version: naga::back::glsl::Version::new_gles(300), ..Default::default() };
             let pipeline = naga::back::glsl::PipelineOptions { shader_stage: stage, entry_point: entry.into(), multiview: None };
             let mut out = String::new();
