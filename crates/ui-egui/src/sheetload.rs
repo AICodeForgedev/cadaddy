@@ -103,6 +103,34 @@ pub fn open_first_sheet(app: &mut CadApp) {
     );
 }
 
+/// Each frame: after a command that read the whole set loaded every sheet, put them out of
+/// memory again once the window is idle (no command running or prompting, no work in the
+/// background): the open sheet and the recent ones stay. Off the UI thread when there is much
+/// to put out.
+pub fn park_when_idle(app: &mut CadApp) {
+    let s = &app.session;
+    if !s.whole_set_in_memory() || s.running.is_some() || s.prompting() || app.busy.is_some() {
+        return;
+    }
+    let heavy = s.doc().is_ok_and(|d| d.model.len() > PARK_ON_UI_THREAD);
+    if !heavy || !busy::backgrounds_anything() {
+        if let Err(e) = app.session.park_idle_sheets() {
+            app.session.echo(e.user_message());
+        }
+        return;
+    }
+    busy::start(
+        app,
+        "sheet.open",
+        Box::new(|s| s.park_idle_sheets().map(|done| json!({ "parked": done })).map_err(|e| e.user_message())),
+        Box::new(|app, r| {
+            if let Err(e) = r {
+                app.session.echo(e);
+            }
+        }),
+    );
+}
+
 /// Objects in memory above which putting a print set's other sheets out of memory runs off the
 /// UI thread.
 const PARK_ON_UI_THREAD: usize = 200_000;

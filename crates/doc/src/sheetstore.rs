@@ -81,6 +81,8 @@ pub struct SheetStore {
     /// Object chunks of model space decoded from a stored chunk, by [`ChunkRef::key`]: while one
     /// is still the same chunk, it is written back as it was stored.
     pub origins: Arc<HashMap<usize, (ChunkRef, Arc<StoredChunk>)>>,
+    /// The sheet each of those chunks was parked under (by the same key).
+    pub origin_sheets: Arc<HashMap<usize, SheetRect>>,
 }
 
 impl std::fmt::Debug for SheetStore {
@@ -139,7 +141,10 @@ impl SheetStore {
         if self.origins.iter().all(|(k, (c, _))| held(k, c)) {
             return;
         }
-        let kept = self.origins.iter().filter(|(k, (c, _))| held(k, c)).map(|(k, v)| (*k, v.clone())).collect();
+        let kept: HashMap<usize, (ChunkRef, Arc<StoredChunk>)> =
+            self.origins.iter().filter(|(k, (c, _))| held(k, c)).map(|(k, v)| (*k, v.clone())).collect();
+        let sheets = self.origin_sheets.iter().filter(|(k, _)| kept.contains_key(k)).map(|(k, v)| (*k, v.clone())).collect();
         self.origins = Arc::new(kept);
+        self.origin_sheets = Arc::new(sheets);
     }
 }

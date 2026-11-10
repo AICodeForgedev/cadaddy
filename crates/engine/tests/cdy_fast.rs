@@ -383,3 +383,44 @@ fn a_print_set_saved_before_sheet_sections_opens_whole_and_gets_them_on_its_next
     assert_eq!(cadaddy_io::read(&bytes, &p).unwrap().model.len(), total);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_building_models_reads_need_no_sheet_and_answer_the_same() {
+    let dir = folder("ondemand-model");
+    hooks();
+    // A print set with a few model elements (they carry their build's extended data) on its sheets.
+    let mut set = cadaddy_engine::sample::print_set(4, 1200);
+    for i in 0..30 {
+        let x = 100.0 + f64::from(i) * 40.0;
+        let h = set
+            .add(
+                &cadaddy_engine::doc::Space::Model,
+                Default::default(),
+                cadaddy_engine::doc::EntityKind::Line(cadaddy_engine::doc::Line {
+                    a: cadaddy_engine::doc::geom::Vec3::new(x, 100.0, 0.0),
+                    b: cadaddy_engine::doc::geom::Vec3::new(x + 30.0, 100.0, 0.0),
+                }),
+            )
+            .unwrap();
+        let app = cadaddy_engine::cmd::wallgen::APP;
+        set.model.modify(h, |e| {
+            e.common.xdata = vec![
+                cadaddy_engine::doc::RawTag { code: 1001, value: app.into() },
+                cadaddy_engine::doc::RawTag { code: 1000, value: "wall".into() },
+                cadaddy_engine::doc::RawTag { code: 1000, value: "LEVEL 1".into() },
+            ]
+            .into()
+        });
+    }
+    let mut s = Session::new();
+    s.open_drawing(set, "Sample Set", None);
+    let p = dir.join("set.cdy").to_string_lossy().into_owned();
+    s.execute("saveas", &json!({ "path": p })).unwrap();
+    let ask = |s: &mut Session| vec![s.execute("bim.tree", &json!({})).unwrap(), s.execute("bim.trades", &json!({})).unwrap()];
+    let want = ask(&mut s);
+    let mut o = opened_on_demand(&p);
+    assert!(!o.needs_whole_set("bim.tree") && !o.needs_whole_set("mep.list"));
+    assert_eq!(ask(&mut o), want, "the same model tree with the sheets out of memory");
+    assert!(o.has_parked_sheets(), "and nothing was loaded for it");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -124,5 +124,9 @@ fn a_print_set_opened_from_a_file_holds_its_open_sheet_not_the_whole_set() {
     // A command that counts the whole set loads it first, and counts it all.
     let r = h.state_mut().run("entities", json!({"limit": 1})).unwrap();
     assert_eq!(r["count"], json!(total));
+    // Once the window is idle again, the other sheets go back out of memory.
+    frames_until(&mut h, |app| app.session.doc().is_ok_and(|d| d.model.len() < total / 2) && app.work_running().is_none());
+    assert!(h.state().session.doc().unwrap().model.len() < total / 2, "the set went out of memory again");
+    assert!(!h.state().session.state().unwrap().is_dirty(), "none of that is a change to save");
     let _ = std::fs::remove_dir_all(&dir);
 }

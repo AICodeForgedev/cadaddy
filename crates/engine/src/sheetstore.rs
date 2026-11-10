@@ -28,8 +28,10 @@ pub const CACHE: usize = 3;
 
 /// Commands that work on the open sheet alone (or on what is in memory) and so never need the
 /// sheets out of memory: moving around the set and the view, drawing and editing what is
-/// picked, undo, and saving (a .cdy save keeps the parked sheets as stored). Any other command
-/// loads the whole set before it runs.
+/// picked, undo, saving (a .cdy save keeps the parked sheets as stored), and the reads of the
+/// building model that only look at its elements or the building spec (the model tree, trade
+/// colours, the MEP list: an element always carries extended data, so it is never out of
+/// memory). Any other command loads the whole set before it runs.
 pub const SHEET_LOCAL: &[&str] = &[
     "sheet.list",
     "sheet.open",
@@ -79,6 +81,9 @@ pub const SHEET_LOCAL: &[&str] = &[
     "id",
     "properties",
     "close",
+    "bim.tree",
+    "bim.trades",
+    "mep.list",
 ];
 
 /// Whether command `id` (a name or alias) works without the sheets out of memory.
@@ -159,10 +164,12 @@ pub fn apply(d: &mut Drawing, dec: Decoded) -> usize {
     }
     let mut parked = (*d.sheet_store.parked).clone();
     let mut origins = (*d.sheet_store.origins).clone();
+    let mut origin_sheets = (*d.sheet_store.origin_sheets).clone();
     let mut put = 0usize;
     for (c, items) in dec.chunks {
         let Some(p) = parked.iter_mut().find(|p| p.chunks.iter().any(|x| Arc::ptr_eq(x, &c))) else { continue };
         p.chunks.retain(|x| !Arc::ptr_eq(x, &c));
+        let sheet = SheetRect { number: p.number.clone(), rect: p.rect };
         put = put.saturating_add(items.len());
         if items.is_empty() {
             continue;
@@ -173,12 +180,14 @@ pub fn apply(d: &mut Drawing, dec: Decoded) -> usize {
             Err(items) => d.model.push_one_chunk(items),
         };
         if let Some(r) = r {
+            origin_sheets.insert(r.key(), sheet);
             origins.insert(r.key(), (r, c));
         }
     }
     parked.retain(|p| !p.chunks.is_empty());
     d.sheet_store.parked = Arc::new(parked);
     d.sheet_store.origins = Arc::new(origins);
+    d.sheet_store.origin_sheets = Arc::new(origin_sheets);
     put
 }
 
@@ -213,7 +222,16 @@ pub fn combined(d: &Arc<Drawing>) -> Arc<Drawing> {
 fn to_park(d: &Drawing, sheets: &[SheetRect], keep: &[SheetRect]) -> Vec<(ChunkRef, Vec<(usize, usize, usize, u32)>, bool)> {
     let slack = cadaddy_io::cdy::sheet_slack(sheets);
     let refs = d.model.chunk_refs();
-    let one = |c: &ChunkRef| cadaddy_io::cdy::sheet_pieces(d, &slack, c.items());
+    // A chunk decoded from a sheet's and unchanged since is that sheet's, whole: no need to
+    // measure its objects again (after a whole-set command, that is nearly all of them).
+    let one = |c: &ChunkRef| match d.sheet_store.origin_of(c).and(d.sheet_store.origin_sheets.get(&c.key())) {
+        Some(s) => match sheets.iter().position(|x| x.number.eq_ignore_ascii_case(&s.number) && cadaddy_doc::sheetstore::same_rect(&x.rect, &s.rect))
+        {
+            Some(k) => vec![(u32::try_from(k).ok(), 0, c.items().len())],
+            None => cadaddy_io::cdy::sheet_pieces(d, &slack, c.items()),
+        },
+        None => cadaddy_io::cdy::sheet_pieces(d, &slack, c.items()),
+    };
     #[cfg(not(target_arch = "wasm32"))]
     let filed: Vec<Vec<(Option<u32>, usize, usize)>> = {
         use rayon::prelude::*;
@@ -344,6 +362,8 @@ impl Session {
         }
         let before = self.state()?.doc.model.len();
         let notes = self.change_sheets(|d| load(d, |_| true))?.unwrap_or_default();
+        // The interface puts them out again once it is idle ([`Session::whole_set_in_memory`]).
+        self.whole_set_loaded = self.sheets_on_demand;
         for n in notes {
             self.echo(n);
         }
@@ -376,12 +396,34 @@ impl Session {
         Ok(n)
     }
 
+    /// With sheets on demand: whether a command that read the whole set loaded every sheet and
+    /// they haven't gone out of memory since ([`Session::park_idle_sheets`] puts them out).
+    pub fn whole_set_in_memory(&self) -> bool {
+        self.whole_set_loaded && self.sheets_on_demand
+    }
+
+    /// With sheets on demand and nothing running: every sheet but the open one and the [`CACHE`]
+    /// most recent ones out of memory again (after a command that read the whole set). True
+    /// when it did that.
+    pub fn park_idle_sheets(&mut self) -> Result<bool> {
+        if !self.whole_set_in_memory() || self.running.is_some() || self.suspended.is_some() {
+            return Ok(false);
+        }
+        let Some((i, _)) = self.active_sheet() else {
+            self.whole_set_loaded = false;
+            return Ok(false);
+        };
+        self.keep_open_sheets(i)?;
+        Ok(true)
+    }
+
     /// With sheets on demand: the open sheet in memory (loaded now when it is out), and every
     /// sheet but it and the [`CACHE`] most recent ones out. Nothing otherwise.
     pub(crate) fn keep_open_sheets(&mut self, opened: usize) -> Result<()> {
         if !self.sheets_on_demand {
             return Ok(());
         }
+        self.whole_set_loaded = false;
         let sheets = self.print_sheets();
         let rects = rects_of(&sheets);
         let recent = {

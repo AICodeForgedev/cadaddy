@@ -1527,6 +1527,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // whole set (`cadaddy_engine::sheetnav`). The list takes room from the canvas, so the sheet
     // is fitted again next frame.
     crate::sheetload::open_first_sheet(app);
+    crate::sheetload::park_when_idle(app);
     let Ok(st) = app.session.state() else { return };
     let view = st.view();
     let scale = f64::from(rect.height()) / view.height.max(1e-12);

@@ -2178,6 +2178,9 @@ pub struct Session {
     /// recent ones are held, the others stay as stored ([`sheetstore`]). Off in headless sessions,
     /// whose drawings hold everything.
     pub sheets_on_demand: bool,
+    /// A command read the whole print set: every sheet is in memory until the interface is idle
+    /// ([`Session::park_idle_sheets`]).
+    pub(crate) whole_set_loaded: bool,
     pub clipboard: Vec<Entity>,
     pub clipboard_base: Vec2,
     pub pending_window: Option<PendingWindow>,
@@ -2364,6 +2367,7 @@ impl Session {
             viewport_px: (1200.0, 800.0),
             viewport_inset_px: (0.0, 0.0),
             sheets_on_demand: false,
+            whole_set_loaded: false,
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
             pending_window: None,
