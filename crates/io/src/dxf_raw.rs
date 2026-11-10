@@ -585,7 +585,11 @@ impl<'d> DataStore<'d> {
         if !modern || ds.is_empty() {
             return None;
         }
-        let owners = cadaddy_doc::foreign::data_store_records(ds).into_iter().filter_map(cadaddy_doc::foreign::data_store_owner).map(|t| norm(&t.value)).collect();
+        let owners = cadaddy_doc::foreign::data_store_records(ds)
+            .into_iter()
+            .filter_map(cadaddy_doc::foreign::data_store_owner)
+            .map(|t| norm(&t.value))
+            .collect();
         Some(DataStore { ds, owners, written: HashSet::new() })
     }
 

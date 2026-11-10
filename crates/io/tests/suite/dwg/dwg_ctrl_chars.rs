@@ -269,7 +269,8 @@ fn typed_carets_in_another_writers_dwg_stay_text() {
             doc.add_entity(acadrust::EntityType::Text(acadrust::Text::with_value(value, at))).unwrap();
         }
         let bytes = acadrust::DwgWriter::write_to_vec(&doc).unwrap();
-        for (label, back) in [("native", cadaddy_io::dwg_read::read(&bytes).unwrap().0), ("bridge", cadaddy_io::read_dwg(&bytes, DwgEngine::Bridge).unwrap())]
+        for (label, back) in
+            [("native", cadaddy_io::dwg_read::read(&bytes).unwrap().0), ("bridge", cadaddy_io::read_dwg(&bytes, DwgEngine::Bridge).unwrap())]
         {
             let mut got: Vec<String> = back
                 .model
