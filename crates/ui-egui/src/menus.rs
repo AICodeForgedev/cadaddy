@@ -1534,7 +1534,10 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         }
         // Toggles run transparently (they don't cancel the active command).
         let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle", "sheet.next", "sheet.previous"].contains(&id);
-        if transparent || id.starts_with("ui.") {
+        if id == "sheet.next" || id == "sheet.previous" {
+            // Off the UI thread when the sheet is out of memory (Q6418).
+            crate::sheetload::run_sheet(app, id, json!({}));
+        } else if transparent || id.starts_with("ui.") {
             run_transparent(app, id);
         } else {
             activate(app, id);

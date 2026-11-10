@@ -108,12 +108,52 @@ object.
 | `PRUL` | the project rules (values with source tier, precedence and provenance); absent without rules | JSON text, validated on read like the DXF reader |
 | `EMBD` | one embedded file: name length u32 · name · bytes | raw |
 | `THMB` | a PNG preview of model space (256 × 192) | raw PNG, stored uncompressed |
+| `SHTI` | a print set's sheet index (see [Print sets](#print-sets-sheet-sections)); absent for any other drawing | JSON text |
 
 Each record's fields are those of the model type it mirrors, named in camelCase. Objects carry their handle, common
 properties (layer, colour, linetype, xdata, …) and their kind with its data.
 
 What isn't saved, by design: session state, i.e. why an xref couldn't load, an ARRAYEDIT in progress, a REFEDIT in
 progress, the notes from reading the file and the records the reader skipped.
+
+## Print sets: sheet sections
+
+A job imports a whole print set into one model space, every sheet beside the next: on a large
+building over a million objects, of which a person works on one sheet. Such a file stores each
+sheet as sections of its own, so that a reader can open the sheet index, the building model and
+one sheet, and leave the other sheets unread until they are wanted.
+
+- The sections are ordinary `ENTS` chunks. A chunk holds objects of one sheet only, or none of any
+  sheet. A writer splits a run of objects where one sheet's end and the next one's begin (in draw
+  order, so the order is kept exactly), at most 8 pieces a store chunk; a chunk that would need
+  more is written whole and belongs to no sheet.
+- An object belongs to a sheet when its extents lie inside the sheet's rectangle (with a slack of
+  a thousandth of the sheet's width plus height) and it carries no extended data. The building
+  model's elements always carry their properties as extended data, so they never belong to a
+  sheet.
+- The `SHTI` chunk (schema 1, JSON) lists the sheets and the chunks filed under each:
+
+  ```json
+  {"ents": 1104,
+   "sheets": [{"number": "Q-101", "rect": [x0, y0, x1, y1],
+               "chunks": [[place, objects, largestHandle], ...]}, ...]}
+  ```
+
+  `place` is the chunk's position among the `ENTS` entries of the file's index (from 0). `ents`
+  is how many `ENTS` entries the index had when the sheet index was written: a reader uses the
+  sheet index only when it matches the index it read (same count, every place in range and filed
+  once, at most 1024 objects a chunk, at most 10 000 sheets). Otherwise it reads every chunk.
+- A reader that doesn't know `SHTI` skips it (rule 1) and reads every `ENTS` chunk: the whole set,
+  as before. So these files open in every earlier version 1 reader, with nothing left out.
+- A reader that opens one sheet at a time keeps the other sheets' chunks as stored (checked
+  against their CRC), and a chunk whose CRC doesn't check out is read at once with the usual
+  salvage (rule 4). The largest handles keep new handles clear of the unread objects, and the
+  manifest's `objects` counts them.
+- Saving writes a chunk that was never read, or was read and not changed since, back byte for
+  byte (an incremental save lists it where it already is). A changed one is written anew.
+- A drawing that isn't a print set has no `SHTI` chunk, and its `ENTS` chunks are written as
+  before. A print set saved by an earlier writer has none either: it opens whole and gets its
+  sections at its next save.
 
 ## Incremental saves
 
@@ -146,3 +186,4 @@ present, i.e. the previous complete save.
 | 2026-10-18 | Version 1. |
 | 2026-10-18 | Incremental saves (append, last complete index wins); one block per `BLKS` chunk, one store chunk per `ENTS` chunk. Readers of version 1 read these files unchanged. |
 | 2026-10-30 | New text chunks `BIMT` and `PRUL` (BIM types, project rules) and an `activeLayout` key in `TABL`. Older readers skip the chunks and ignore the key. The text chunk types are one table in the code shared by the writer, the incremental save and the reader. |
+| 2026-11-10 | Print sets: sheet sections and the `SHTI` sheet index (Q6418). Older readers skip the index and read every object. |

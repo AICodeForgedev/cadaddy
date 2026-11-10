@@ -3340,6 +3340,7 @@ fn device_census(
                         drawn_at: None,
                         moved: String::new(),
                         connection: String::new(),
+                        fire_alarm: None,
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -7095,6 +7096,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             let n = kinds_from_pages(job, &mut devices);
             progress_line(&format!("  device marks resolved off the legend, schedule and panel schedule pages: {n}"));
         }
+        // The approved fire alarm shop drawings among the submittals supersede the design
+        // plans' notification appliances on the levels they lay onto (Q6495).
+        if !job.submittals.is_empty() {
+            fa_shop_step(s, job, &mut devices);
+        }
         let report = designation_report(&devices);
         if !report.is_empty() {
             progress_line(&format!("  device designations (mark: kind from source, count): {}", report.join("; ")));
@@ -8245,6 +8251,90 @@ fn fate(job: &mut GuidedJob, handle: &str, f: MarkFate) {
     let h = handle.trim();
     if !h.is_empty() && job.mark_fates.len() < MAX_FATES {
         job.mark_fates.insert(h.to_ascii_uppercase(), f);
+    }
+}
+
+/// The fire alarm shop drawings among the job's submittals onto its devices ([`super::fashop`]):
+/// each plan laid onto its level by its room numbers, its appliances in the place of the design
+/// plans' notification devices there; the design devices it shows nothing near left out as
+/// review items; the legend's quantities checked. Said in the job's log and findings.
+fn fa_shop_step(s: &Session, job: &mut GuidedJob, devices: &mut Vec<super::readers::ReadDevice>) {
+    let clock = web_time::Instant::now();
+    let (shops, unread) = super::fashop::read_files(&job.submittals);
+    for (f, e) in &unread {
+        progress_line(&format!("  fire alarm shop drawings: {f} not read: {e}"));
+    }
+    if shops.is_empty() {
+        return;
+    }
+    let upf = super::bspec::current(s, "bim_build").ok().map(|(sp, _)| sp.units_per_foot).filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0);
+    let rooms: Vec<super::fashop::ModelRoom> = job_rooms(job)
+        .into_iter()
+        .filter(|(_, _, o, n)| !n.trim().is_empty() && !o.is_empty())
+        .map(|(_, level, outline, number)| {
+            let n = outline.len() as f64;
+            let sum = outline.iter().fold(cadaddy_geom::Vec2::new(0.0, 0.0), |a, q| a + *q);
+            super::fashop::ModelRoom { number, level, at: cadaddy_geom::Vec2::new(sum.x / n, sum.y / n) }
+        })
+        .collect();
+    let done = super::fashop::apply(&shops, &rooms, devices, upf);
+    for (h, why) in &done.left_out {
+        fate(job, h, MarkFate::left_out("fire alarm device", super::inventory::NOT_BUILT, why));
+    }
+    progress_line(&format!(
+        "  fire alarm shop drawings {:?}: {} appliances read; plans laid on {:?}; not laid {:?}; {} design devices superseded, {} added, {} design devices left out for review; by kind {:?}; initiating devices given their loop address {} ({} loop-labelled symbols with no design device near); legend quantities off {:?} ({:.1} s)",
+        done.docs,
+        shops.iter().map(super::fashop::FaShop::appliances).sum::<usize>(),
+        done.plans,
+        done.not_fit,
+        done.superseded,
+        done.added,
+        done.left_out.len(),
+        done.by_kind,
+        done.addressed,
+        done.initiating_unmatched,
+        done.quantities,
+        clock.elapsed().as_secs_f64()
+    ));
+    if !done.left_out.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Design notification devices the shop drawings don't show",
+            &format!(
+                "{} notification devices on the design plans have no appliance near them on the approved fire alarm shop drawings, which supersede the design symbols on their levels: left out of the model, to be reviewed ({})",
+                done.left_out.len(),
+                done.left_out.iter().take(12).map(|(_, w)| w.as_str()).collect::<Vec<_>>().join("; ")
+            ),
+            2,
+            vec!["Confirm with the fire alarm contractor that the shop drawings cover these places".into()],
+            None,
+            false,
+        );
+    }
+    if !done.not_fit.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Fire alarm shop drawing plans not laid onto the model",
+            &format!(
+                "these shop drawing plans couldn't be laid onto their levels by their room numbers, so their levels keep the design's devices: {}",
+                done.not_fit.join("; ")
+            ),
+            2,
+            vec!["Check the plans' titles name their floors and their room numbers match the architecture's".into()],
+            None,
+            false,
+        );
+    }
+    if !done.quantities.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Fire alarm legend quantities differ",
+            &format!("the shop drawings' device legend against what the plans show: {}", done.quantities.join("; ")),
+            1,
+            vec!["Ask the fire alarm contractor which count is right".into()],
+            None,
+            false,
+        );
     }
 }
 
@@ -12947,6 +13037,16 @@ const WALL_CAP_CIRCLES: usize = 3;
 /// A PTAC's height and an exhaust fan's housing (feet) when no schedule gives them.
 const PTAC_HEIGHT_FT: f64 = 16.0 / 12.0;
 const EF_HEIGHT_FT: f64 = 10.0 / 12.0;
+
+/// Where a typical room's unit (not its exhaust fan) laid into a room sits: where its kind is
+/// mounted ([`super::schedequip::mounting`]: a PTAC on its sub-base), else on the floor; with
+/// what its height is from (Q6494).
+fn stamped_unit_mount(kind: &str, ceiling_ft: f64) -> (f64, String) {
+    match super::schedequip::mounting(kind, kind, ceiling_ft, Some(PTAC_HEIGHT_FT)) {
+        Some(m) => (m.bottom_ft, m.basis),
+        None => (0.0, "rule: on the floor, 16\" high".to_string()),
+    }
+}
 /// A PTAC's face grille read as a return grille: a return grille this close (feet) to a PTAC.
 const PTAC_GRILLE_FT: f64 = 3.0;
 
@@ -13326,14 +13426,12 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                         placed.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max),
                     ];
                     let fan = it.kind == "exhaust_fan";
+                    let (unit_bottom, unit_height) = stamped_unit_mount(it.kind, ceiling);
                     let mut sources = BTreeMap::new();
                     sources.insert("sheet".to_string(), sh.number.clone());
                     sources.insert("position".to_string(), format!("typical room view {title} laid into room {room}"));
                     sources.insert("outline".to_string(), it.how.clone());
-                    sources.insert(
-                        "height".to_string(),
-                        if fan { format!("in the room's ceiling ({ceiling:.2} ft)") } else { "rule: on the floor, 16\" high".into() },
-                    );
+                    sources.insert("height".to_string(), if fan { format!("in the room's ceiling ({ceiling:.2} ft)") } else { unit_height });
                     let mut properties = BTreeMap::new();
                     properties.insert("room".to_string(), room.clone());
                     // No plan draws it in this room: the typical room's, laid in (Q6216).
@@ -13345,7 +13443,7 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                         level: lv.name.clone(),
                         min: lo,
                         max: hi,
-                        bottom_ft: if fan { ceiling } else { 0.0 },
+                        bottom_ft: if fan { ceiling } else { unit_bottom },
                         height_ft: if fan { EF_HEIGHT_FT } else { PTAC_HEIGHT_FT },
                         systems: vec![if fan { "EA".into() } else { "M-DUCT".into() }],
                         title: title.clone(),
@@ -13570,8 +13668,11 @@ fn seat_on_sub_bases<'a>(equipment: &mut [cadaddy_walk3d::MepEquipment], devices
         else {
             continue;
         };
+        // Seated already, or raised higher by something else: left. At its sub-base by the
+        // mounting rule only (M-EQUIP-MOUNT): the keynote is the documents' word for it.
         let bottom_in = if e.bottom_ft.is_finite() { e.bottom_ft * 12.0 } else { 0.0 };
-        if bottom_in >= base_in {
+        let by_rule = e.sources.get("height").is_some_and(|h| h.starts_with(super::schedequip::MOUNT_RULE));
+        if bottom_in >= base_in && !(by_rule && bottom_in <= base_in + 1e-6) {
             continue;
         }
         e.bottom_ft = base_in / 12.0;
@@ -14225,6 +14326,11 @@ fn apply_symbol_list(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[SymbolRow]) 
     for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "fire_alarm_device").take(MAX_STAMPED * 4) {
         let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
         let Some(row) = rows.iter().find(|r| r.mark == mark) else { continue };
+        // An appliance the approved fire alarm shop drawing gives is its legend's (Q6495); an
+        // initiating device that took only its loop address keeps the design's row.
+        if t.fields.contains_key("nac_circuit") {
+            continue;
+        }
         t.set("device_type", format!("{} {mark}", row.description.to_ascii_lowercase()), "legend");
         t.set("legend", row.description.clone(), "legend");
         let has = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).is_some_and(|f| !f.value.trim().is_empty());
@@ -31644,6 +31750,11 @@ mod tests {
         let (h, why) = under_unit_height_in(&super::super::keynotes::equipment_receptacle(note).unwrap(), &equipment[0]);
         assert_eq!(h, 2.0, "{why}");
         assert_eq!(seat_on_sub_bases(&mut equipment, devs.iter()), 0);
+        // Seated by the mounting rule (Q6494): the keynote becomes its source, the unit unmoved.
+        equipment[0].sources.insert("height".into(), stamped_unit_mount("ptac", 9.0).1);
+        assert_eq!(seat_on_sub_bases(&mut equipment, devs.iter()), 1);
+        assert!((equipment[0].bottom_ft * 12.0 - 4.0).abs() < 1e-9);
+        assert!(equipment[0].sources.get("height").is_some_and(|h| h.contains("keynote 4")), "{:?}", equipment[0].sources);
         // Under a unit standing high enough already, with no sub-base said: half way under it.
         let high = cadaddy_walk3d::MepEquipment { bottom_ft: 1.0, ..unit("205", 0.0) };
         let under = super::super::keynotes::equipment_receptacle("15A/2P RECEPTACLE FOR PTAC, BELOW THE UNIT").unwrap();
@@ -32377,6 +32488,20 @@ mod tests {
         assert_eq!(f("device:r", "mount").as_deref(), Some("ceiling"));
         assert_eq!(f("device:r", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
         assert!(f("device:h", "device_type").is_none());
+        // A shop drawing's appliance keeps its own legend's row; a detector that took only its
+        // loop address from the shop drawing still takes the design's row (Q6495).
+        let mut appliance = tag("device:ws", "WS");
+        appliance.set("nac_circuit", "N9", "submittal");
+        appliance.set("shop_drawing", "a shop drawing", "submittal");
+        appliance.set("device_type", "ceiling mount strobe", "submittal");
+        let mut detector = tag("device:r2", "SR");
+        detector.set("slc_circuit", "L9", "submittal");
+        detector.set("shop_drawing", "a shop drawing", "submittal");
+        sp.tags = vec![appliance, detector];
+        assert_eq!(apply_symbol_list(&mut sp, &rows), 1);
+        let f = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
+        assert_eq!(f("device:ws", "device_type").as_deref(), Some("ceiling mount strobe"));
+        assert_eq!(f("device:r2", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
     }
 
     /// A unit's trace that leaked through the wall into its neighbour (two units wide) is cut back
@@ -33938,6 +34063,15 @@ mod tests {
         let laid = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0]], cadaddy_walk3d::Made::Inferred)];
         let mut runs = vec![run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn)];
         assert_eq!(drop_fan_duct_repeats(&mut runs, &systems, &laid, 12.0).0, 0);
+    }
+
+    #[test]
+    fn a_typical_rooms_ptac_is_laid_in_on_its_sub_base_not_on_the_floor() {
+        let (bottom, said) = stamped_unit_mount("ptac", 9.0);
+        assert!((bottom - 4.0 / 12.0).abs() < 1e-9, "{bottom}");
+        assert!(said.starts_with("M-EQUIP-MOUNT"), "{said}");
+        // A kind no mounting names stays on the floor, said so.
+        assert_eq!(stamped_unit_mount("water_heater", 9.0), (0.0, "rule: on the floor, 16\" high".to_string()));
     }
 
     #[test]

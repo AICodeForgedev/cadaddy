@@ -153,7 +153,8 @@ fn every_kind_of_element_holds_one_store_with_its_standard_keys() {
     s.execute("bim.props.set", &json!({"handle": dev.hex(), "key": "circuit", "value": "G-12"})).unwrap();
     let g = get(&mut s, dev);
     let order: Vec<&str> = g["order"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    assert_eq!(order, ["circuit", "mount_height", "room", "type", "panel", "level"]);
+    // (`fed_from` follows the circuit and panel set, Q6501.)
+    assert_eq!(order, ["circuit", "mount_height", "room", "type", "panel", "fed_from", "level"]);
     let st = stored(&s, dev);
     assert_eq!(st.get("circuit").map(|p| p.source.kind), Some(SourceKind::User));
     // A unit and a note ride along; null clears (the user says it has none).
@@ -205,7 +206,9 @@ fn find_and_summary_count_values_and_sources_per_kind() {
     let dv = &sum["kinds"]["device"];
     assert_eq!(dv["count"], 3);
     assert_eq!(dv["filled"]["circuit"], 3);
-    assert_eq!(dv["filled"]["panel"], 0, "standard keys are listed even with no value");
+    // A circuit set names its panel (Q6501): the two set, not the one written by hand.
+    assert_eq!(dv["filled"]["panel"], 2, "{dv:#}");
+    assert_eq!(dv["sources"]["panel"], json!({"computed": 2}), "{dv:#}");
     assert_eq!(dv["filled"]["level"], 3);
     assert_eq!(dv["sources"]["circuit"], json!({"user": 2, "print": 1}));
     assert_eq!(dv["sources"]["mount_height"], json!({"default": 1}));

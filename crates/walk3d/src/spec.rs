@@ -1387,6 +1387,76 @@ pub struct Mep {
     /// finished floor the slab level's buried drains are sloped between.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inverts: Vec<MepInvert>,
+    /// The changes people and agents made to single elements (a duct or pipe added, a register
+    /// moved, a pipe deleted, a unit's type mark changed), oldest first: kept apart from the
+    /// lists the readers write and applied to them on every build, so reading the prints again
+    /// never loses one ([`MepEdit`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<MepEdit>,
+}
+
+/// One change to one MEP element (a run, an air terminal or sprinkler head, a piece of
+/// equipment), made by a person or an agent. The element is found again on every build by what
+/// the edit recorded of it (its level, system, tag and where it stood, or the edit that added
+/// it); what the edit changes goes on it as a correction (the documents' value kept beside it,
+/// with the reason), and an element an edit adds carries its provenance and basis.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MepEdit {
+    /// `ME-1`, in the order the edits were made.
+    pub id: String,
+    /// `add`, `move`, `resize`, `delete` or `set`.
+    pub op: String,
+    /// `run` (a duct or pipe), `terminal` (an air terminal or a sprinkler head) or `equipment`.
+    pub element: String,
+    /// The element changed: its level, system (runs and terminals), tag (equipment), and its plan
+    /// points when the edit was made (a run's path; a terminal's spot; equipment's box centre),
+    /// sheet units. An element an earlier edit added is known by that edit's id (`added_by`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub level: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub system: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<[f64; 2]>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub added_by: String,
+    /// `move`: by how much in plan (sheet units), and a new bottom (feet above the floor).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bottom_ft: Option<f64>,
+    /// `resize`: a run's or terminal's size (inches), equipment's plan size (sheet units, along x
+    /// and y) and height (feet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_in: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub footprint: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_ft: Option<f64>,
+    /// `set`: a type mark, a system, a kind (terminal or equipment), and properties (an empty
+    /// value removes one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_mark: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_system: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
+    /// `add`: the element added (exactly one of them).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<MepRun>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<MepTerminal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub equipment: Option<MepEquipment>,
+    /// Why, and who: `user` or `agent`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub by: String,
 }
 
 /// An invert a plan prints by a drain: where (drawing units, as the runs), its level, and the
@@ -1911,6 +1981,13 @@ pub struct MepEquipment {
     /// A panel's schedule: its circuits, what each feeds and where (its directory).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub circuits: Vec<PanelCircuit>,
+    /// Its BIM type mark, when one was given to it (an edit: [`MepEdit`]); empty: none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub type_mark: String,
+    /// What was changed on it against the documents (an edit), each value as installed beside
+    /// the design value, with the reason and the rule.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
 }
 
 /// One circuit in a panel schedule.
@@ -2116,6 +2193,10 @@ pub struct MepTerminal {
     /// rule it was inferred by. Empty for a drawn one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub basis: String,
+    /// What was changed on it against the documents (an edit: [`MepEdit`]), each value as
+    /// installed beside the design value, with the reason and the rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
 }
 
 /// One change a revision of the prints made to a run: the revision log.

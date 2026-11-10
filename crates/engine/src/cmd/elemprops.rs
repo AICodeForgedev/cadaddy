@@ -459,6 +459,11 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             touched.push(*h);
         }
     }
+    // A circuit or panel set: the links derived from them follow (Q6501; a generated element's
+    // when its override is applied).
+    if entries.iter().any(|en| super::circuitlinks::is_input(&en.key)) {
+        super::circuitlinks::relink(d, &touched);
+    }
     let label = |h: Handle| labels.iter().find(|(x, _)| *x == h).map(|(_, l)| l.clone());
     let done: Vec<Value> = hs
         .iter()

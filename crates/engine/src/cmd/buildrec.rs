@@ -377,6 +377,10 @@ impl Inputs {
                 levels.insert(below.name.to_ascii_lowercase());
             }
         }
+        // A riser's pieces on the levels round a changed one are cut at its floor (Q6493): they
+        // are laid out again with it.
+        let sharing = super::risercut::levels_sharing_risers(sp, &levels);
+        levels.extend(sharing);
         // Every level: the whole model is rebuilt anyway.
         let all: BTreeSet<String> = sp.levels.iter().map(|l| l.name.to_ascii_lowercase()).collect();
         if levels.is_empty() || all.is_subset(&levels) {

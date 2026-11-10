@@ -19,6 +19,7 @@
 //! | IMCK | the import accuracy check results | JSON text |
 //! | EMBD | one embedded file (a texture image, the baked lightmap): `name length u32, name, bytes` | raw |
 //! | THMB | a PNG preview | raw |
+//! | SHTI | a print set's sheet index: which ENTS chunks hold only one sheet's objects ([`super::sheets`]) | JSON |
 //!
 //! ENTS is schema v2 when it holds a mesh large enough for binary buffers ([`super::meshbuf`]).
 
@@ -44,7 +45,7 @@ const V1: u16 = 1;
 /// Longest building spec or tours text kept (hostile files).
 const MAX_TEXT: usize = 64 << 20;
 /// The chunk types that are not text: structure, the embedded files and the preview.
-const BINARY_PARTS: [&[u8; 4]; 9] = [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"EMBD", b"THMB"];
+const BINARY_PARTS: [&[u8; 4]; 10] = [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"EMBD", b"THMB", b"SHTI"];
 /// The text parts (JSON or plain text, one chunk each, rewritten when their bytes change) and what
 /// each holds. The writer, the incremental save's `seed` and the reader all go through this one
 /// table, so a new tag cannot be added to one and missed in another.
@@ -172,7 +173,7 @@ pub struct OpenProfile {
 
 /// [`OpenProfile`]'s counters, shared by the cores reading chunks.
 #[derive(Default)]
-struct Meter {
+pub(super) struct Meter {
     inflate: AtomicU64,
     decode: AtomicU64,
     construct: AtomicU64,
@@ -411,14 +412,15 @@ fn take<T: DeserializeOwned>(v: Value, what: &str, notes: &mut Vec<String>) -> O
 
 /// The manifest chunk's JSON: format and writer, units, extents, counts, the preview's chunk.
 pub(super) fn manifest(d: &Drawing, thumbnail: bool) -> Vec<u8> {
-    let ext = d.extents(&cadaddy_doc::Space::Model);
+    // The sheets out of memory are where the set says they are.
+    let ext = d.sheet_store.parked.iter().filter(|p| !p.chunks.is_empty()).fold(d.extents(&cadaddy_doc::Space::Model), |b, p| b.union(&p.rect));
     let manifest = json!({
         "format": container::FORMAT_VERSION,
         "writer": format!("CADaddy {}", env!("CARGO_PKG_VERSION")),
         "insunits": d.header.i64("INSUNITS", 0),
         "measurement": d.header.i64("MEASUREMENT", 0),
         "extents": if ext.is_empty() { Value::Null } else { json!([ext.min.x, ext.min.y, ext.max.x, ext.max.y]) },
-        "objects": d.model.len(),
+        "objects": d.model.len().saturating_add(d.sheet_store.parked_objects()),
         "blocks": d.blocks.len(),
         "layouts": d.layouts.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
         "thumbnail": thumbnail.then_some("THMB"),
@@ -520,6 +522,8 @@ fn field_guard(d: &Drawing) {
         properties: _,
         kept_handles: _,
         field_values: _,
+        // ENTS (the parked sheets' chunks as stored) and SHTI (the sheets they are filed under)
+        sheet_store: _,
         // BLKS, ENTS, LAYO
         blocks: _,
         model: _,
@@ -641,7 +645,7 @@ fn tag_name(tag: &[u8; 4]) -> String {
 
 /// A model space chunk's objects, with notes about the ones that couldn't be read; `None` when
 /// the chunk doesn't decode to a list.
-fn entity_list(data: &[u8], version: u16, m: &Meter) -> Option<(Vec<Entity>, Vec<String>)> {
+pub(super) fn entity_list(data: &[u8], version: u16, m: &Meter) -> Option<(Vec<Entity>, Vec<String>)> {
     // Version 2 keeps mesh geometry in binary buffers after the objects (`meshbuf`).
     let (list, mut meshes) = Meter::time(&m.decode, || {
         if version == 2 {
@@ -667,17 +671,73 @@ fn entity_list(data: &[u8], version: u16, m: &Meter) -> Option<(Vec<Entity>, Vec
     }))
 }
 
+/// The draw-order place (a chunk id, [`cadaddy_doc::ChunkRef::order`]) of the model space chunk at
+/// `place` among a file's ENTS chunks.
+fn order_of(place: usize) -> u32 {
+    u32::try_from(place).unwrap_or(u32::MAX / cadaddy_doc::CHUNK_STEP).saturating_mul(cadaddy_doc::CHUNK_STEP)
+}
+
+/// A model space chunk read: at its place in the draw order when it has one, else on top.
+fn put_chunk(model: &mut EntityStore, order: Option<u32>, items: Vec<Entity>) {
+    match order {
+        Some(o) => {
+            if let Err(items) = model.insert_chunk_at(o, items) {
+                model.push_chunk(items);
+            }
+        }
+        None => model.push_chunk(items),
+    }
+}
+
 /// The drawing in a .cdy file, with notes about anything damaged that was left out. Errors only
 /// when the file isn't a .cdy file this version can read.
 pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
+    read_with(bytes, false)
+}
+
+/// [`read`], with a print set's sheets left out of memory when `park` (the file's sheet index
+/// says which chunks hold only one sheet's objects): those chunks are kept as stored, unread, in
+/// the drawing's [`cadaddy_doc::sheetstore::SheetStore::parked`]. Anything else reads as [`read`].
+pub fn read_with(bytes: &[u8], park: bool) -> Result<(Drawing, ReadReport), String> {
     let started = Instant::now();
     let meter = Meter::default();
     // Chunk by chunk on all cores (in order): each one checked and inflated, and a model space
     // chunk decoded into its objects and its bytes let go there and then. Inflating every chunk
     // first held the whole file inflated beside the objects built from it: opening a large model
     // peaked at twice the drawing's memory (Q6398).
+    let mut parked: Vec<cadaddy_doc::sheetstore::ParkedSheet> = Vec::new();
+    // With sheets parked: the place of each model space chunk read (among the file's ENTS
+    // chunks), so it and the parked ones keep the file's draw order when loaded.
+    let mut places: Option<std::vec::IntoIter<usize>> = None;
     let (prepared, indexed) = match container::plan(bytes)? {
-        container::Plan::Indexed(entries) => {
+        container::Plan::Indexed(mut entries) => {
+            if park && let Some(f) = super::sheets::filing(bytes, &entries) {
+                parked = f
+                    .sheets
+                    .iter()
+                    .map(|(number, rect)| cadaddy_doc::sheetstore::ParkedSheet { number: number.clone(), rect: *rect, chunks: Vec::new() })
+                    .collect();
+                let mut place = 0usize;
+                let mut kept = Vec::new();
+                entries.retain(|e| {
+                    if &e.tag != b"ENTS" {
+                        return true;
+                    }
+                    let at = place;
+                    place += 1;
+                    let order = order_of(at);
+                    let parked_here = f.by_place.get(&at).copied().and_then(|(k, objects, max)| {
+                        let c = super::sheets::stored_at(bytes, e, objects, max, order)?;
+                        parked.get_mut(k).map(|p| p.chunks.push(Arc::new(c)))
+                    });
+                    // A damaged chunk is read now, salvaging what it can.
+                    if parked_here.is_none() {
+                        kept.push(at);
+                    }
+                    parked_here.is_none()
+                });
+                places = Some(kept.into_iter());
+            }
             let one = |e: &container::IndexEntry| {
                 let r = Meter::time(&meter.inflate, || container::read_entry(bytes, e));
                 meter.hold(raw_len(&r));
@@ -705,10 +765,11 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
             Prepared::Objects(objects) => {
                 // One chunk of the store per chunk of the file, as it was saved (an incremental
                 // save then finds them unchanged).
+                let order = places.as_mut().and_then(Iterator::next).map(order_of);
                 match objects {
                     Some((items, notes)) => {
                         rep.notes.extend(notes);
-                        model.push_chunk(items);
+                        put_chunk(&mut model, order, items);
                     }
                     None => rep.notes.push("a model space part was damaged".into()),
                 }
@@ -723,6 +784,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
             Read::Damaged { tag, why, salvage } => {
                 // Model space objects before the damage are kept (one bad spot cost every object in
                 // its part: 2 of 14 survived, UI review 0.7.7c).
+                let order = if &tag == b"ENTS" { places.as_mut().and_then(Iterator::next).map(order_of) } else { None };
                 if &tag == b"ENTS"
                     && let Some(list) = tokens::salvage_list(&salvage)
                 {
@@ -738,7 +800,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                         items.len()
                     ));
                     if !items.is_empty() {
-                        model.push_chunk(items);
+                        put_chunk(&mut model, order, items);
                     }
                     continue;
                 }
@@ -765,6 +827,10 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
         }
         if &c.tag == b"MANI" {
             rep.manifest = serde_json::from_slice(&c.data).ok();
+            continue;
+        }
+        if c.tag == super::sheets::TAG {
+            // Used before the chunks were read (`read_with`).
             continue;
         }
         if is_text(&c.tag) {
@@ -893,11 +959,15 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
         rep.notes.push("the tables were missing; the standard ones are used".into());
     }
     d.model = model;
+    if parked.iter().any(|p| !p.chunks.is_empty()) {
+        d.sheet_store.parked = Arc::new(parked);
+    }
+    let held = d.model.len().saturating_add(d.sheet_store.parked_objects()) as u64;
     // How much of model space the damage cost, by the count the file's manifest kept at the save.
     let saved = rep.manifest.as_ref().and_then(|m| m.get("objects")).and_then(Value::as_u64);
     match saved {
-        Some(n) if n > d.model.len() as u64 => {
-            let lost = n - d.model.len() as u64;
+        Some(n) if n > held => {
+            let lost = n - held;
             rep.notes.push(if d.model.is_empty() {
                 format!("all {n} model space objects could not be read")
             } else {
@@ -913,6 +983,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
     let blocks = d.blocks.values().flat_map(|b| b.entities.iter());
     let papers = d.layouts.iter().flat_map(|l| l.entities.iter());
     let top = d.model.iter().chain(blocks).chain(papers).map(|e| e.handle.0).max().unwrap_or(0);
+    let top = top.max(d.sheet_store.parked_max_handle());
     d.handseed = d.handseed.max(top.saturating_add(1));
     rep.profile = OpenProfile {
         total: started.elapsed(),

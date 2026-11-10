@@ -261,6 +261,24 @@
       "default_size_in": 0.875
     },
     {
+      "id": "M-EQUIP-MOUNT",
+      "trade": "mechanical",
+      "fills": "where a piece of mechanical equipment sits and how tall it is when its schedule, submittal and plans give no height (mountings: by the equipment's kind and its schedule's words, the first row that fits; at above_ceiling = its bottom gap_in over the room's ceiling, the body in the plenum; at floor = its bottom bottom_in over the floor, kept under the ceiling; height_in when the schedule prints none; a kind no row names stands on the floor at the usual size of its kind; a roof unit is on its curb or stand, M-ROOF-CURB / M-ROOF-STAND; a schedule's mounting height or AFF governs over every row)",
+      "basis": "trade practice: mechanical equipment is set where its kind is made to go, not stood on the floor: a ceiling exhaust fan's housing is above the ceiling with its grille in it, a damper is in its duct above the ceiling, a packaged terminal unit is through the exterior wall in its sleeve on its electrical sub-base, a unit heater hangs high clear of heads; alternative: a mounting the schedule, a submittal or a plan note gives",
+      "mountings": [
+        {"kinds": ["exhaust_fan", "fan"], "words": ["ROOF", "UPBLAST", "DOWNBLAST", "CURB"], "at": "floor", "basis": "a roof fan stands on its roof or curb"},
+        {"kinds": ["exhaust_fan", "fan"], "words": ["WALL", "SIDEWALL", "SIDE WALL", "THRU-WALL", "THROUGH-WALL"], "at": "floor", "bottom_in": 84.0, "height_in": 14.0, "basis": "a wall exhaust fan is high in its wall, its top at the ceiling at most"},
+        {"kinds": ["exhaust_fan", "fan"], "words": ["CEILING", "CABINET", "BATH"], "at": "above_ceiling", "height_in": 10.0, "basis": "a ceiling exhaust fan's housing is above the ceiling, its grille in it"},
+        {"kinds": ["exhaust_fan"], "at": "above_ceiling", "height_in": 10.0, "basis": "an exhaust fan inside the building is the ceiling cabinet kind: its housing above the ceiling, its grille in it"},
+        {"kinds": ["fire_damper", "smoke_damper", "fire_smoke_damper", "motorized_damper", "rated_damper", "damper", "volume_damper", "backdraft_damper"], "at": "above_ceiling", "gap_in": 2.0, "height_in": 12.0, "basis": "a damper is in its duct above the ceiling, reached through an access panel"},
+        {"kinds": ["vav"], "at": "above_ceiling", "gap_in": 6.0, "basis": "a terminal unit hangs in its duct above the ceiling"},
+        {"kinds": ["fan_coil_unit", "ahu"], "words": ["HORIZONTAL", "CEILING", "ABOVE CEILING", "SUSPENDED"], "at": "above_ceiling", "gap_in": 6.0, "basis": "a horizontal unit hangs above the ceiling"},
+        {"kinds": ["ptac", "through_wall_unit", "packaged_terminal"], "at": "floor", "bottom_in": 4.0, "height_in": 16.0, "basis": "a packaged terminal unit is through the exterior wall in its sleeve, set on its electrical sub-base (makers' sub-bases are about 3-1/2 to 4 in), about 16 in high"},
+        {"kinds": ["unit_heater"], "words": ["CABINET", "RECESSED", "FLOOR"], "at": "floor", "basis": "a cabinet unit heater stands at the floor or is recessed low in the wall"},
+        {"kinds": ["unit_heater"], "at": "floor", "bottom_in": 84.0, "basis": "a unit heater hangs high, its bottom about 7 ft over the floor clear of heads and its top at the ceiling at most"}
+      ]
+    },
+    {
       "id": "E-CONN-AT-UNIT",
       "trade": "electrical",
       "fills": "where an equipment connection goes when its plan's mark names a piece of equipment built on another level or elsewhere (a roof unit's circuit tagged on a plan under it)",

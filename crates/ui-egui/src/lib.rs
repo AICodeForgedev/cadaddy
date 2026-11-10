@@ -70,6 +70,7 @@ pub mod hyperlinks;
 pub mod materials;
 mod mtext_editor;
 mod shaded;
+mod sheetload;
 pub mod snap3ui;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.
@@ -591,7 +592,9 @@ pub struct CadApp {
 }
 
 impl CadApp {
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(mut session: Session, services: Services) -> Self {
+        // The interface holds a print set's open sheet and a few recent ones (Q6418).
+        session.sheets_on_demand = true;
         CadApp {
             system_languages: Vec::new(),
             system_animations: None,
@@ -822,6 +825,11 @@ impl CadApp {
             self.set_status(msg);
             return;
         }
+        // A command that may read the whole print set gets its sheets first, off the UI thread.
+        let n = name.to_string();
+        if sheetload::whole_set_first(self, name, move |app| app.start(&n)) {
+            return;
+        }
         // A long command without prompts runs at once: off the UI thread.
         if let Some(spec) = cadaddy_engine::find_by_id_or_alias(name).filter(|c| c.interactive.is_none() && busy::backgrounds(c.id)) {
             let n = name.to_string();
@@ -881,6 +889,15 @@ impl CadApp {
                 exchangeloss::take(self, true);
                 secureloaddlg::take(self, true);
                 return None;
+            }
+            // A command that may read the whole print set gets its sheets first, off the UI thread.
+            if cadaddy_engine::find_by_id_or_alias(&word).is_some() {
+                let line = text.to_string();
+                if sheetload::whole_set_first(self, &word, move |app| {
+                    app.cmdline(&line);
+                }) {
+                    return None;
+                }
             }
             // A long command (`job.start {...}`, or alone when it has no prompts) runs off the UI
             // thread; the window shows its progress with a Cancel (Q6269).

@@ -1639,7 +1639,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 // In its wall, its front on the wall's face (where the device's is: on the face,
                 // or flush in it); with no face found, behind the device.
                 let depth_plan = (plan.max - plan.min).dot(Vec2::new(o.x.abs(), o.y.abs()));
-                let found = super::super::propfill::wall_face(&walls, level, c, super::super::propfill::HOST_SNAP_FT * upf, None)
+                // Only a wall standing at the box's height hosts it (Q6500): a device above or
+                // below a wall (on the roof over it) whose plan point is on it is not in it.
+                let found = super::super::propfill::wall_face(&walls, level, c, super::super::propfill::HOST_SNAP_FT * upf, Some(zmid))
                     .filter(|f| f.out.dot(o) > 0.5);
                 wall_of_box = found.as_ref().map(|f| f.wall);
                 let face = found.map_or_else(|| c - o * (depth_plan / 2.0), |f| c + o * ((f.at - c).dot(o)));
