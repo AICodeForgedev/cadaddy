@@ -444,13 +444,16 @@ fn zoom_detail_frame_times() {
     // ZOOMDETAIL_MODE: full (as before), detail (with detail levels) or both. One per process
     // gives each its own memory peak.
     let mode = std::env::var("ZOOMDETAIL_MODE").unwrap_or_else(|_| "both".into());
-    println!("\n{sheets} sheets x {per} objects, 1600x1000, {adapter}");
-    println!("| run | view | prims | verts | list GPU MB | vertices drawn | build ms | ready ms | frame ms | drawn as |");
-    println!("|---|---|---|---|---|---|---|---|---|---|");
     // ZOOMDETAIL_WHOLE=1: the same objects as an ordinary drawing (no sheet records), seen whole.
     let whole = std::env::var("ZOOMDETAIL_WHOLE").is_ok_and(|v| v == "1");
     // ZOOMDETAIL_FILE: a drawing file to measure instead of the synthetic set.
     let file = std::env::var("ZOOMDETAIL_FILE").ok().filter(|f| !f.is_empty());
+    match &file {
+        Some(_) => println!("\na drawing file, 1600x1000, {adapter}"),
+        None => println!("\n{sheets} sheets x {per} objects, 1600x1000, {adapter}"),
+    }
+    println!("| run | view | prims | verts | list GPU MB | vertices drawn | build ms | ready ms | frame ms | drawn as |");
+    println!("|---|---|---|---|---|---|---|---|---|---|");
     let set = || {
         let mut d = match &file {
             Some(f) => {

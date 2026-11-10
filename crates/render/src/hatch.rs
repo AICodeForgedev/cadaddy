@@ -4,7 +4,7 @@
 //!
 //! On-screen builds get a level of detail (`Options::min_dash` > 0 is two pixels, `Options::view`
 //! the area being looked at): a pattern whose lines run together on screen is drawn as a solid
-//! fill of its boundary ([`reads_solid`]), a dash or dot repeat under two pixels as a continuous
+//! fill of its boundary (`reads_solid`), a dash or dot repeat under two pixels as a continuous
 //! line (as linetypes already are), and nothing is generated outside the view. Plots, exports and
 //! picks pass `min_dash = 0` and `view = None` and get every line.
 
@@ -356,6 +356,7 @@ fn scale_of(h: &Hatch) -> f64 {
 ///   (dense dot or dash patterns made of several families).
 ///
 /// A sparse dot or dash pattern keeps its look. `px <= 0` (full detail) is never solid.
+#[cfg(test)]
 pub fn reads_solid(d: &Drawing, h: &Hatch, px: f64) -> bool {
     if !(px.is_finite() && px > 0.0) {
         return false;
@@ -363,7 +364,8 @@ pub fn reads_solid(d: &Drawing, h: &Hatch, px: f64) -> bool {
     reads_solid_lines(&lines_of(d, h), scale_of(h), px)
 }
 
-/// [`reads_solid`] of a pattern's line `families` at `scale`.
+/// Whether a pattern of line `families` at `scale` reads as solid at a pixel of `px` (see
+/// `reads_solid`).
 fn reads_solid_lines(families: &[PatternLine], scale: f64, px: f64) -> bool {
     if !(px.is_finite() && px > 0.0) {
         return false;
