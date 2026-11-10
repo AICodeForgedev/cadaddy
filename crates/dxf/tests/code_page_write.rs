@@ -1,7 +1,7 @@
 //! Pre-R2007 DXF text is written in the `$DWGCODEPAGE` code page: characters it has as their
 //! bytes, the others as `\U+XXXX` escapes; every form reads back to the same text.
 
-use cadaddy_dxf::{Tag, parse, write_ascii, write_ascii_in, write_binary_in};
+use cadaddy_dxf::{Encoder, Tag, parse, write_ascii, write_ascii_in, write_binary_in};
 
 fn file(code_page: &str, text: &str) -> Vec<Tag> {
     vec![
@@ -113,4 +113,29 @@ fn a_trail_byte_backslash_never_starts_an_escape() {
             assert_eq!(parse(&bytes).unwrap()[10].str(), text, "{cp} {what}");
         }
     }
+}
+
+/// The escape for code page bytes that would read as UTF-8 is chosen string by string: every
+/// string sits between line breaks, so one that isn't valid UTF-8 keeps the file from being taken
+/// for UTF-8, and the others keep their code page bytes. That is what lets a DXF be written group
+/// by group ([`Encoder`]): the streamed bytes are the whole-list writers' bytes.
+#[test]
+fn utf8_looking_strings_are_escaped_one_by_one_and_streamed_alike() {
+    let mut tags = file("ANSI_1251", "СІ");
+    let end = tags.len() - 2;
+    tags.splice(end..end, [Tag::s(0, "TEXT"), Tag::s(1, "Слой")]);
+    let ascii = write_ascii_in(&tags, "ANSI_1251");
+    assert!(contains(&ascii, b"\\U+0421\\U+0406"), "{:?}", String::from_utf8_lossy(&ascii));
+    assert!(contains(&ascii, b"\xD1\xEB\xEE\xE9"), "{:?}", String::from_utf8_lossy(&ascii));
+    let back = parse(&ascii).unwrap();
+    assert_eq!(back[10].str(), "СІ");
+    assert_eq!(back[12].str(), "Слой");
+    let streamed = |mut enc: Encoder| {
+        let mut out = Vec::new();
+        enc.start(&mut out);
+        tags.iter().for_each(|t| enc.put(t, &mut out));
+        out
+    };
+    assert_eq!(streamed(Encoder::ascii_in("ANSI_1251")), ascii);
+    assert_eq!(streamed(Encoder::binary_in("ANSI_1251")), write_binary_in(&tags, "ANSI_1251"));
 }
