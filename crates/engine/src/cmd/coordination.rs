@@ -69,9 +69,10 @@ pub fn specs() -> Vec<CommandSpec> {
 
 // ─── Coordination data in building spec ───────────────────────────────────────
 
-/// Read a coordination-specific key from the building spec JSON.
+/// Read a coordination-specific key (`coord_*`) from the building spec JSON: read once per spec
+/// text ([`crate::specread`]), as the renderer asks for it every frame.
 fn coord_get(d: &Drawing, key: &str) -> Value {
-    d.building_spec.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok()).and_then(|v| v.get(key).cloned()).unwrap_or(Value::Null)
+    crate::specread::get(d, key)
 }
 
 /// Write a coordination-specific key into the building spec JSON (nothing when it already holds

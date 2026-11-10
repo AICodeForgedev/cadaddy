@@ -25,6 +25,17 @@ impl<T> Shared<T> {
     pub fn same(&self, other: &Shared<T>) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
+    /// A handle that doesn't keep the value alive, to recognise this copy later
+    /// ([`Shared::is`]): a cache of something worked out from the value keys on it. While the
+    /// handle lives, no other value can take this copy's place, and a change made through any
+    /// drawing moves the value to a new copy, so the key never matches a changed value.
+    pub fn downgrade(&self) -> std::sync::Weak<T> {
+        Arc::downgrade(&self.0)
+    }
+    /// Whether `w` (from [`Shared::downgrade`]) is this very copy.
+    pub fn is(&self, w: &std::sync::Weak<T>) -> bool {
+        std::ptr::eq(Arc::as_ptr(&self.0), w.as_ptr())
+    }
     /// The value, taken out (copied only if another drawing still shares it).
     pub fn into_inner(self) -> T
     where
@@ -135,5 +146,23 @@ mod tests {
         let c = a.clone();
         let _ = c.len();
         assert!(a.same(&c), "reading doesn't copy");
+    }
+
+    #[test]
+    fn a_weak_key_matches_only_its_own_unchanged_copy() {
+        let mut a: Shared<Option<String>> = Shared::new(Some("x".into()));
+        let w = a.downgrade();
+        assert!(a.is(&w));
+        let b = a.clone();
+        assert!(b.is(&w), "a clone is the same copy");
+        drop(b);
+        // The only drawing left changes it in place: the value still moves, so the key is stale.
+        if let Some(t) = a.as_mut() {
+            t.push('y');
+        }
+        assert!(!a.is(&w));
+        assert_eq!(a.as_deref(), Some("xy"));
+        let c: Shared<Option<String>> = Shared::new(Some("xy".into()));
+        assert!(!c.is(&w), "an equal text elsewhere isn't the same copy");
     }
 }

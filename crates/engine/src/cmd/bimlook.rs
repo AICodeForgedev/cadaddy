@@ -31,7 +31,7 @@ use super::*;
 use crate::{Result, Session};
 
 /// The key of the view's settings in the building spec.
-const KEY: &str = "bim_view";
+pub(crate) const KEY: &str = "bim_view";
 /// The see-through material the ghosted trades get in the view.
 pub const GHOST_MATERIAL: &str = "BIM Ghost";
 /// Default ghost opacity (architecture at a fifth).
@@ -163,12 +163,8 @@ pub const INFERRED_RGB: [u8; 3] = [226, 48, 196];
 impl Look {
     /// The settings kept in `d`'s building spec (the defaults when none are).
     pub fn of(d: &Drawing) -> Look {
-        d.building_spec
-            .as_deref()
-            .and_then(|t| serde_json::from_str::<Value>(t).ok())
-            .and_then(|v| v.get(KEY).cloned())
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default()
+        // Read once per spec text: the screen asks for it every frame.
+        Some(crate::specread::get(d, KEY)).filter(|v| !v.is_null()).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
     }
 
     /// The colour of trade `key` (its own, else the default).
