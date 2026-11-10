@@ -26,6 +26,11 @@ fn device(id: &str, kind: &str, x: f64, circuit: &str) -> Value {
 /// room panels U-101 and U-102 on a schedule `TYPICAL OF 3`, panel LP2 whose circuits are on
 /// its equipment record only, and a schedule for a panel P9 the model doesn't have.
 fn building() -> Session {
+    building_routed(false)
+}
+
+/// [`building`], its circuits routed when `route`.
+fn building_routed(route: bool) -> Session {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
     let spec = json!({
@@ -94,7 +99,7 @@ fn building() -> Session {
         }
     });
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
-    s.execute("model.build", &json!({"route": false})).expect("build");
+    s.execute("model.build", &json!({"route": route})).expect("build");
     s
 }
 
@@ -405,4 +410,106 @@ fn a_breaker_corrected_on_its_schedule_row_is_built_as_installed_the_printed_one
     s.execute("model.build", &json!({"route": false})).expect("build");
     let rtu = breakers_of(&mut s, "LP1").into_iter().find(|b| val(b, "circuit") == "LP1-3,5").unwrap_or(Value::Null);
     assert_eq!(val(&rtu, "design:trip_a"), "40", "{rtu}");
+}
+
+/// The circuit, panel and links of an element, compactly: `key=value` for each.
+fn links(s: &mut Session, h: &str) -> Value {
+    let p = props_of(s, h);
+    let keys = ["circuit", "panel", "fed_from", "fed_from_handle", "breaker_handle", "breaker", "circuit_description", "box", "connects", "fed_by"];
+    Value::Object(keys.iter().map(|k| (k.to_string(), p[*k]["value"].clone())).collect())
+}
+
+fn breaker_circuit(s: &mut Session, h: &str) -> Value {
+    let b = links(s, h)["breaker_handle"].as_str().unwrap_or_default().to_string();
+    if b.is_empty() { Value::Null } else { val(&props_of(s, &b), "circuit").clone() }
+}
+
+/// Q6501: a device copied from another and given a new circuit and panel by property keeps none
+/// of its source's derived links: its panel element, its breaker, its row and the feed walk all
+/// follow the new values (LP2's row 1, where the source's links named LP1, whose row 1 is
+/// lighting), at once and after a re-route; taking the edit off puts the source's links back.
+#[test]
+fn a_copied_device_given_a_new_circuit_and_panel_takes_its_new_panels_links() {
+    let mut s = building_routed(true);
+    s.execute("bim.props.fill", &json!({})).expect("fill");
+    s.execute("bim.breakers", &json!({})).expect("breakers");
+    let src = device_handles(&mut s, "LP1-2").into_iter().next().expect("a device on LP1-2");
+    let (lp1, lp2) = (panel_handle(&mut s, "LP1"), panel_handle(&mut s, "LP2"));
+    let before = links(&mut s, &src);
+    assert_eq!(before["fed_from_handle"], json!(lp1), "the source's link: {before:#}");
+    assert!(before["box"].is_string() && before["fed_by"].is_string(), "the source is routed: {before:#}");
+    // A copy: none of its source's place (its box, what it connects to, what feeds it); its
+    // circuit links its own, from its own circuit (the same panel and breaker here).
+    let copy =
+        s.execute("copy", &json!({"handles": [src], "delta": [0.0, 96.0]})).expect("copy")["handles"][0].as_str().expect("the copy").to_string();
+    let c = links(&mut s, &copy);
+    assert!(c["box"].is_null() && c["connects"].is_null() && c["fed_by"].is_null(), "a copy keeps its source's place: {c:#}");
+    assert_eq!(c["fed_from_handle"], json!(lp1), "{c:#}");
+    assert_eq!(breaker_circuit(&mut s, &copy), "LP1-2");
+    // A new circuit and panel: every derived link from them, at once.
+    s.execute("bim.props.set", &json!({"handles": [copy], "props": {"circuit": "LP2-1", "panel": "LP2"}})).expect("set");
+    let c = links(&mut s, &copy);
+    assert_eq!(c["fed_from_handle"], json!(lp2), "{c:#}");
+    assert_eq!(c["fed_from"], "panel LP2, circuit LP2-1", "{c:#}");
+    assert_eq!(c["circuit_description"], "OFFICE RCPT", "LP2's row 1, not LP1's row 2: {c:#}");
+    assert_eq!(breaker_circuit(&mut s, &copy), "LP2-1", "{c:#}");
+    // Routed again and the breakers built again: on LP2's circuit 1, reached through its raceway.
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    s.execute("bim.breakers", &json!({})).expect("breakers");
+    assert_eq!(breaker_circuit(&mut s, &copy), "LP2-1");
+    let chain = s.execute("bim.chain", &json!({"handle": copy})).expect("chain");
+    assert_eq!(chain["source"]["handle"], json!(lp2), "{chain:#}");
+    let b = chain["breaker"]["handle"].as_str().unwrap_or_default().to_string();
+    assert_eq!(val(&props_of(&mut s, &b), "circuit"), "LP2-1", "{chain:#}");
+    // The source is as it was.
+    assert_eq!(links(&mut s, &src)["fed_from_handle"], json!(lp1));
+    assert_eq!(breaker_circuit(&mut s, &src), "LP1-2");
+    // The edit taken off (an override on a generated element): the copy's links are LP1's again.
+    let list = s.execute("override.list", &json!({})).expect("list");
+    let id = list["overrides"]
+        .as_array()
+        .and_then(|a| a.iter().find(|o| o["element"] == json!(copy)))
+        .map(|o| o["id"].clone())
+        .unwrap_or_else(|| panic!("the copy's override: {list:#}"));
+    s.execute("override.revert", &json!({"id": id})).expect("revert");
+    let c = links(&mut s, &copy);
+    assert_eq!((&c["circuit"], &c["fed_from_handle"]), (&json!("LP1-2"), &json!(lp1)), "{c:#}");
+    assert_eq!(breaker_circuit(&mut s, &copy), "LP1-2");
+}
+
+/// Q6501: a circuit set without its panel takes the panel its label names, and the links follow.
+#[test]
+fn a_circuit_set_alone_takes_the_panel_its_label_names() {
+    let mut s = building();
+    s.execute("bim.props.fill", &json!({})).expect("fill");
+    let h = device_handles(&mut s, "LP1-9").into_iter().next().expect("a device on LP1-9");
+    s.execute("bim.props.set", &json!({"handles": [h], "key": "circuit", "value": "LP2-3"})).expect("set");
+    let c = links(&mut s, &h);
+    assert_eq!(c["panel"], "LP2", "{c:#}");
+    assert_eq!(c["fed_from_handle"], json!(panel_handle(&mut s, "LP2")), "{c:#}");
+    assert_eq!(c["circuit_description"], "WATER HEATER", "{c:#}");
+    assert_eq!(breaker_circuit(&mut s, &h), "LP2-3");
+}
+
+/// Q6501: a model saved with a panel link left from another panel (before links followed their
+/// circuit) is linked by its own panel when the breakers are built: never to the other panel's
+/// breaker of the same number.
+#[test]
+fn a_stale_panel_link_never_puts_a_device_on_another_panels_breaker() {
+    let mut s = building();
+    s.execute("bim.props.fill", &json!({})).expect("fill");
+    let h = device_handles(&mut s, "LP2-1").into_iter().next().expect("a device on LP2-1");
+    let lp1 = panel_handle(&mut s, "LP1");
+    {
+        let d = s.doc_mut().expect("doc");
+        let eh = cadaddy_engine::doc::Handle::parse_hex(&h).expect("handle");
+        d.modify_entity(eh, |e| {
+            let mut ps = cadaddy_engine::doc::props::read(&e.common.xdata);
+            ps.set("fed_from_handle", cadaddy_engine::doc::props::Prop::new(lp1.clone(), cadaddy_engine::doc::props::Source::computed()));
+            e.common.xdata = cadaddy_engine::doc::props::write(&e.common.xdata, &ps).into();
+        })
+        .expect("stale link");
+    }
+    s.execute("bim.breakers", &json!({})).expect("breakers");
+    assert_eq!(breaker_circuit(&mut s, &h), "LP2-1", "{:#}", links(&mut s, &h));
 }

@@ -2308,6 +2308,84 @@ pub(crate) struct AsBuiltBreakers {
 
 const AS_BUILT_RULE: &str = "breaker_protection.";
 
+/// A device's circuit links from its own `panel` and `circuit`: the panel element it is fed from
+/// (`fed_from_handle`; the room's own panel of that letter first, the room it stands in, else the
+/// one it was stamped into) and its schedule row's breaker (`breaker_type`, `gfci_breaker`,
+/// `breaker`, `poles`, `circuit_description`). The fill's, and a set's or a copy's again when its
+/// circuit or panel changes (Q6501, [`super::circuitlinks`]). `gear`: the equipment elements by tag
+/// (upper case); `equipment`, `schedules`: the spec's, by tag and by panel (upper case).
+pub(crate) fn circuit_links(
+    d: &Drawing,
+    store: &mut Props,
+    stamped: Option<&str>,
+    gear: &HashMap<String, Handle>,
+    equipment: &HashMap<String, &cadaddy_walk3d::MepEquipment>,
+    schedules: &HashMap<String, &cadaddy_walk3d::PanelSchedule>,
+    tally: &mut BTreeMap<String, usize>,
+) {
+    let panel = store.get("panel").filter(|p| p.has_value()).map(Prop::text);
+    let circuit = store.get("circuit").filter(|p| p.has_value()).map(Prop::text);
+    if let Some(p) = &panel {
+        // The room's own panel of that letter (a guest room's G) before one elsewhere: the
+        // room it stands in, else the unit it was stamped into (an entry's receptacle on
+        // the corridor's wall line is the unit's, on the unit's panel).
+        let rooms = [store.get("room").filter(|r| r.has_value()).map(|r| r.text().trim().to_string()), stamped.map(str::to_string)];
+        let own = rooms.iter().flatten().map(|r| format!("{}-{}", p.trim(), r).to_ascii_uppercase()).find(|k| gear.contains_key(k));
+        let key = own.unwrap_or_else(|| p.trim().to_ascii_uppercase());
+        if let Some(gh) = gear.get(&key) {
+            put(store, "fed_from_handle", Prop::new(gh.hex(), Source::computed()).with_note("the panel the circuit tag names"), tally);
+        }
+        // (`G-13,15`: a two-pole's first.)
+        let number =
+            circuit.as_deref().and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.split(',').next().unwrap_or(n).trim().to_string()));
+        let on = |c: &&cadaddy_walk3d::PanelCircuit| number.as_deref().is_some_and(|n| c.number.trim() == n);
+        let printed = schedules.get(&p.trim().to_ascii_uppercase()).copied();
+        let row = equipment.get(&key).and_then(|q| q.circuits.iter().find(on)).or_else(|| printed.and_then(|q| q.circuits.iter().find(on)));
+        if let Some(c) = row {
+            let src = Source::from_doc(SourceKind::Schedule, if c.source.is_empty() { "panel schedule" } else { &c.source });
+            // Its breaker's type, the schedule's row the source: a schedule that marks
+            // types and none on this row says a standard breaker; one that marks none
+            // says nothing.
+            if let Some(ps) = printed.filter(|ps| ps.circuits.iter().any(|x| !x.protection.is_empty()))
+                && let Some(pc) = ps.circuits.iter().find(on)
+            {
+                // What was built, where the project says so, over what was printed.
+                let built = as_built_breakers(d, p, &pc.description);
+                let codes_of = built.as_ref().map_or(&pc.protection, |b| &b.codes);
+                let (gf, af) = super::panelsched::protection_of(codes_of, &ps.legend);
+                let kind = match (gf, af) {
+                    (true, true) => "GFCI + AFCI (dual function)",
+                    (true, false) => "GFCI",
+                    (false, true) => "AFCI",
+                    (false, false) => "standard",
+                };
+                let printed_as = format!("{} panel {} circuit {}", ps.source, ps.panel, pc.number);
+                let codes = if pc.protection.is_empty() { "none".to_string() } else { pc.protection.join("/") };
+                if let Some(b) = &built {
+                    // A person's word on what was built: over any reading, the print's kept in the note.
+                    let src = Source::from_doc(SourceKind::User, &b.source);
+                    let note = format!("as built {}; {printed_as} prints {codes}", b.codes.join("/"));
+                    store.set("breaker_type", Prop::new(kind.to_string(), src.clone()).with_note(&note));
+                    store.set("gfci_breaker", Prop::new(if gf { "yes" } else { "no" }.to_string(), src));
+                } else {
+                    let row_src = Source::from_doc(SourceKind::Schedule, &printed_as);
+                    put(store, "breaker_type", Prop::new(kind.to_string(), row_src.clone()).with_note(&format!("codes {codes}")), tally);
+                    put(store, "gfci_breaker", Prop::new(if gf { "yes" } else { "no" }.to_string(), row_src), tally);
+                }
+            }
+            if !c.breaker.trim().is_empty() {
+                put(store, "breaker", Prop::new(c.breaker.trim().to_string(), src.clone()), tally);
+            }
+            if c.poles > 0 {
+                put(store, "poles", Prop::new(c.poles, src.clone()), tally);
+            }
+            if !c.description.trim().is_empty() {
+                put(store, "circuit_description", Prop::new(c.description.trim().to_string(), src), tally);
+            }
+        }
+    }
+}
+
 pub(crate) fn as_built_breakers(d: &Drawing, panel: &str, description: &str) -> Option<AsBuiltBreakers> {
     let upper = description.to_ascii_uppercase();
     if upper.trim().is_empty() {
@@ -2909,79 +2987,7 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                     }
                 }
                 // The panel it is fed from, as an element, and its breaker on the panel's schedule.
-                let panel = store.get("panel").filter(|p| p.has_value()).map(Prop::text);
-                let circuit = store.get("circuit").filter(|p| p.has_value()).map(Prop::text);
-                if let Some(p) = &panel {
-                    // The room's own panel of that letter (a guest room's G) before one elsewhere: the
-                    // room it stands in, else the unit it was stamped into (an entry's receptacle on
-                    // the corridor's wall line is the unit's, on the unit's panel).
-                    let rooms = [store.get("room").filter(|r| r.has_value()).map(|r| r.text().trim().to_string()), stamped.clone()];
-                    let own = rooms.iter().flatten().map(|r| format!("{}-{}", p.trim(), r).to_ascii_uppercase()).find(|k| gear.contains_key(k));
-                    let key = own.unwrap_or_else(|| p.trim().to_ascii_uppercase());
-                    if let Some(gh) = gear.get(&key) {
-                        put(
-                            &mut store,
-                            "fed_from_handle",
-                            Prop::new(gh.hex(), Source::computed()).with_note("the panel the circuit tag names"),
-                            tally,
-                        );
-                    }
-                    // (`G-13,15`: a two-pole's first.)
-                    let number = circuit
-                        .as_deref()
-                        .and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.split(',').next().unwrap_or(n).trim().to_string()));
-                    let on = |c: &&cadaddy_walk3d::PanelCircuit| number.as_deref().is_some_and(|n| c.number.trim() == n);
-                    let printed = schedules.get(&p.trim().to_ascii_uppercase()).copied();
-                    let row =
-                        equipment.get(&key).and_then(|q| q.circuits.iter().find(on)).or_else(|| printed.and_then(|q| q.circuits.iter().find(on)));
-                    if let Some(c) = row {
-                        let src = Source::from_doc(SourceKind::Schedule, if c.source.is_empty() { "panel schedule" } else { &c.source });
-                        // Its breaker's type, the schedule's row the source: a schedule that marks
-                        // types and none on this row says a standard breaker; one that marks none
-                        // says nothing.
-                        if let Some(ps) = printed.filter(|ps| ps.circuits.iter().any(|x| !x.protection.is_empty()))
-                            && let Some(pc) = ps.circuits.iter().find(on)
-                        {
-                            // What was built, where the project says so, over what was printed.
-                            let built = as_built_breakers(d, p, &pc.description);
-                            let codes_of = built.as_ref().map_or(&pc.protection, |b| &b.codes);
-                            let (gf, af) = super::panelsched::protection_of(codes_of, &ps.legend);
-                            let kind = match (gf, af) {
-                                (true, true) => "GFCI + AFCI (dual function)",
-                                (true, false) => "GFCI",
-                                (false, true) => "AFCI",
-                                (false, false) => "standard",
-                            };
-                            let printed_as = format!("{} panel {} circuit {}", ps.source, ps.panel, pc.number);
-                            let codes = if pc.protection.is_empty() { "none".to_string() } else { pc.protection.join("/") };
-                            if let Some(b) = &built {
-                                // A person's word on what was built: over any reading, the print's kept in the note.
-                                let src = Source::from_doc(SourceKind::User, &b.source);
-                                let note = format!("as built {}; {printed_as} prints {codes}", b.codes.join("/"));
-                                store.set("breaker_type", Prop::new(kind.to_string(), src.clone()).with_note(&note));
-                                store.set("gfci_breaker", Prop::new(if gf { "yes" } else { "no" }.to_string(), src));
-                            } else {
-                                let row_src = Source::from_doc(SourceKind::Schedule, &printed_as);
-                                put(
-                                    &mut store,
-                                    "breaker_type",
-                                    Prop::new(kind.to_string(), row_src.clone()).with_note(&format!("codes {codes}")),
-                                    tally,
-                                );
-                                put(&mut store, "gfci_breaker", Prop::new(if gf { "yes" } else { "no" }.to_string(), row_src), tally);
-                            }
-                        }
-                        if !c.breaker.trim().is_empty() {
-                            put(&mut store, "breaker", Prop::new(c.breaker.trim().to_string(), src.clone()), tally);
-                        }
-                        if c.poles > 0 {
-                            put(&mut store, "poles", Prop::new(c.poles, src.clone()), tally);
-                        }
-                        if !c.description.trim().is_empty() {
-                            put(&mut store, "circuit_description", Prop::new(c.description.trim().to_string(), src), tally);
-                        }
-                    }
-                }
+                circuit_links(d, &mut store, stamped.as_deref(), &gear, &equipment, &schedules, tally);
                 if store.get("location").is_none_or(|p| !p.has_value()) {
                     put(&mut store, "location", location_prop(c.x, c.y, (z0 + z1) / 2.0, upf), tally);
                 }
