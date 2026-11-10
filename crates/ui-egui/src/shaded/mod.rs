@@ -161,6 +161,8 @@ pub struct State {
     auto_tier: Option<Tier>,
     stream: Stream,
     auto_for: Option<((usize, u64), model3::AutoTiers, f64)>,
+    /// The section box and coordination mode of the drawing (for the state they were read from).
+    sbox_for: Option<((usize, u64), cadaddy_engine::cmd::coordination::CoordRenderState)>,
 }
 
 impl State {
@@ -502,7 +504,17 @@ const BOX_EDGES: [(usize, usize); 12] = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2),
 pub fn section_box_handles(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf) {
     use cadaddy_engine::cmd::coordination::{self as coord, BoxFace};
     let Ok(st) = app.session.state() else { return };
-    let crs = coord::coord_render_state(&st.doc);
+    // The section box is read out of the building spec, which is parsed whole to find it: on a
+    // hotel-size model that is most of a frame, so it is read once per state of the drawing.
+    let doc_key = (Arc::as_ptr(&st.doc) as usize, st.revision);
+    let crs = match &app.canvas.shade.sbox_for {
+        Some((k, crs)) if *k == doc_key => crs.clone(),
+        _ => {
+            let crs = coord::coord_render_state(&st.doc);
+            app.canvas.shade.sbox_for = Some((doc_key, crs.clone()));
+            crs
+        }
+    };
     if !crs.sbox_on {
         app.canvas.shade.sbox_drag = None;
         return;
