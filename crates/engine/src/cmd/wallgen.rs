@@ -1089,6 +1089,12 @@ impl Behind {
     fn forget(&mut self, d: &Arc<Drawing>) {
         self.states.retain(|(w, _)| !same_state(w, d));
     }
+    /// `to` is `from` with a change that is no edit of the model or its plan: behind as `from` is.
+    fn carry(&mut self, from: &Arc<Drawing>, to: &Arc<Drawing>) {
+        let Some(built) = self.find(from).cloned() else { return };
+        let built = built.and_then(|w| w.upgrade());
+        self.add(to, built.as_ref());
+    }
     /// Whether `d` (a drawing state) is one the plan has moved past the model in.
     pub fn holds_doc(&self, d: &Arc<Drawing>) -> bool {
         self.holds(d)
@@ -1112,6 +1118,18 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     // Then the drawing state now follows the build it comes from (and a build this command
     // made takes the model as the command left it).
     super::revise3d::after_command(s, before);
+    // Last, the saved model's record (Q6403): the spec it is written into is no edit of the
+    // model or its plan, so the state it makes is the one the command left, behind or built.
+    let left = s.state().ok().map(|st| Arc::clone(&st.doc));
+    super::buildrec::after_command(s, before);
+    if let Some(left) = left
+        && let Ok(st) = s.state_mut()
+        && !Arc::ptr_eq(&left, &st.doc)
+    {
+        let now = Arc::clone(&st.doc);
+        st.model_behind.carry(&left, &now);
+        super::revise3d::carry(st, &left, &now);
+    }
 }
 
 fn behind_after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {

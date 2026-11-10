@@ -1271,7 +1271,15 @@ fn surface(r: &Roof) -> impl Fn(Vec2) -> f64 + '_ {
     }
 }
 
-/// A slab over `poly` whose top follows `top` and whose underside is `t` below its lowest point.
+/// How much deeper, measured plumb, a sheet on a roof's slope is than its thickness normal to
+/// the slope: 1 for a flat roof.
+fn plumb_factor(r: &Roof) -> f64 {
+    r.slope.map_or(1.0, |s| if s.rise_per_ft.is_finite() { (1.0 + s.rise_per_ft * s.rise_per_ft).sqrt() } else { 1.0 })
+}
+
+/// A slab over `poly` whose top follows `top` and whose underside runs `t` (plumb) under it
+/// everywhere: a sloped roof's deck is a sheet of one thickness laid on its framing, its
+/// underside parallel to its top, never a wedge with a flat underside ([`DECK_RULE`]).
 fn slab(poly: &[Vec2], top: &dyn Fn(Vec2) -> f64, t: f64) -> Option<Mesh> {
     let tris = super::bspec::ear_clip(poly);
     if tris.is_empty() {
@@ -1281,8 +1289,7 @@ fn slab(poly: &[Vec2], top: &dyn Fn(Vec2) -> f64, t: f64) -> Option<Mesh> {
     let ring: Vec<Vec2> = if ccw { poly.to_vec() } else { poly.iter().rev().copied().collect() };
     let tris = super::bspec::ear_clip(&ring);
     let n = u32::try_from(ring.len()).ok()?;
-    let low = ring.iter().map(|p| top(*p)).fold(f64::INFINITY, f64::min) - t;
-    let mut vertices: Vec<Vec3> = ring.iter().map(|q| Vec3::new(q.x, q.y, low)).collect();
+    let mut vertices: Vec<Vec3> = ring.iter().map(|q| Vec3::new(q.x, q.y, top(*q) - t)).collect();
     vertices.extend(ring.iter().map(|q| Vec3::new(q.x, q.y, top(*q))));
     let id = |i: usize| u32::try_from(i).unwrap_or(0);
     let mut faces = Vec::new();
@@ -1342,11 +1349,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // elevation is the deck's top (the roof's surface).
         let framing = sp.exterior.level_framing(&level.name);
         let depth = framing.map_or(0.0, |f| f.depth_in / 12.0 * upf);
-        let deck = if framing.is_some() { rule.deck_in / 12.0 * upf } else { 0.0 };
+        // The deck's (or an unframed roof's slab's) thickness plumb: its thickness normal to the
+        // slope, deeper by the slope's secant.
+        let plumb = plumb_factor(r);
+        let deck = if framing.is_some() { rule.deck_in / 12.0 * upf * plumb } else { 0.0 };
+        let thick = if framing.is_some() { deck } else { upf * plumb };
         let bear = framing.map_or(z0, |f| bearing_ft(f, level.elevation_ft) * upf);
         let top = |p: Vec2| z0 + rise(p);
         let plan_area = cadaddy_geom::shoelace(&poly).abs() / (upf * upf);
-        if let Some(m) = slab(&poly, &top, if framing.is_some() { deck } else { upf })
+        if let Some(m) = slab(&poly, &top, thick)
             && !m.faces.is_empty()
             && let Ok(h) = d.add(
                 &Space::Model,
@@ -1364,8 +1375,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
         if let Some(f) = framing {
-            // As deep as the members are, up to the deck's underside wherever the roof rises.
-            let under_deck = |p: Vec2| (z0 - deck + rise(p) - bear).max(depth) - depth;
+            // As deep as the members are, up to the deck's underside wherever the roof rises: their
+            // top chords follow the slope along them as well as across them. Where they bear, the
+            // level (the surface) is the members and the deck over the bearing, the deck taken
+            // plumb; on a slope the deck is that thickness normal to it, a hair deeper plumb, and
+            // the members stop under it rather than cut into it.
+            let plumb_excess = (deck - rule.deck_in / 12.0 * upf).max(0.0);
+            let under_deck = |p: Vec2| (z0 - deck + rise(p) - bear).max(depth - plumb_excess) - depth;
             framed += frame_roof(d, &FrameJob { level: &level.name, roof: &r.name, poly: &poly, z0: bear, depth, upf, rise: &under_deck }, f, &rule);
         }
         let parapet = r.parapet_ft.or_else(|| sp.exterior.level_parapet(&r.level));
@@ -1380,6 +1396,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             None => deck_high + h * upf,
         };
         let high = high_at(parapet.unwrap_or(0.0));
+        // An unframed sloped roof whose underside rises over the walls under it: they carry up
+        // to it as a framed roof's do, so nothing under its high side is open.
+        let open_under = framing.is_none() && parapet.is_none() && deck_high - thick > z0 + 1e-9;
+        // A parapet's top is level (its elevation); a roof wall stops at the deck, up its slope.
+        let wall_top = |p: Vec2| if parapet.is_some() { high } else { top(p) };
         // Each edge's own top (a parapet that steps along its facades), one element per top.
         let pieces = if parapet.is_some() { parapet_pieces(r, &poly, sp, roof_frame(&ext, &r.level), upf) } else { Vec::new() };
         if !pieces.is_empty() {
@@ -1438,7 +1459,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     "basis": pc.basis,
                 }));
             }
-        } else if parapet.is_some() || framing.is_some() {
+        } else if parapet.is_some() || framing.is_some() || open_under {
             let t = 8.0 / 12.0 * upf;
             let ccw = cadaddy_geom::shoelace(&poly) > 0.0;
             let mut m = super::wallgen::empty_mesh();
@@ -1450,7 +1471,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let u = (*b - *a) * (1.0 / len);
                 let inward = if ccw { Vec2::new(-u.y, u.x) } else { Vec2::new(u.y, -u.x) };
                 let (pa, pb) = (*a + inward * (t / 2.0), *b + inward * (t / 2.0));
-                super::wallgen::add_box(&mut m, pa, pb, t, bear, high);
+                add_box_under(&mut m, pa, pb, t, bear, &wall_top);
             }
             let part = if parapet.is_some() { "parapet" } else { ROOF_WALL };
             let mut x = measured(tag(part, &level.name, &r.name), "lf", perimeter(&poly));
@@ -1460,6 +1481,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 x.extend(super::provenance::tags(
                     cadaddy_walk3d::Made::Inferred,
                     &rule_basis(&rule, f, "the outside walls up round the framing to the deck"),
+                ));
+            }
+            if open_under {
+                x.extend(super::provenance::tags(
+                    cadaddy_walk3d::Made::Inferred,
+                    &super::provenance::rule(DECK_RULE).basis_for("the outside walls up to the sloped roof"),
                 ));
             }
             if add(d, "3D-Parapets", x, m) {
@@ -1782,6 +1809,34 @@ fn parapet_pieces(r: &Roof, poly: &[Vec2], sp: &BuildingSpec, frame: Bounds2, up
 
 /// The build part of a framed roof's outside walls carried up round its framing (no parapet).
 pub(crate) const ROOF_WALL: &str = "roof-wall";
+
+/// The trade-practice rule a sloped roof's deck follows (`tradepractice.json`).
+pub(crate) const DECK_RULE: &str = "A-ROOF-SLOPED-DECK";
+
+/// A box `t` wide along `a`–`b` from `z0` up to `top` at each of its corners: its top follows a
+/// sloped deck along it and across it (a truss's top chord, a roof wall under the deck). Nothing
+/// when it has no height anywhere.
+fn add_box_under(m: &mut Mesh, a: Vec2, b: Vec2, t: f64, z0: f64, top: &dyn Fn(Vec2) -> f64) {
+    let len = a.dist(b);
+    if !(len > 1e-9 && t > 1e-9 && z0.is_finite()) {
+        return;
+    }
+    let u = (b - a) * (1.0 / len);
+    let n = u.perp() * (t / 2.0);
+    let corners = [a - n, b - n, b + n, a + n];
+    let tops = corners.map(|p| {
+        let z = top(p);
+        if z.is_finite() { z.max(z0) } else { z0 }
+    });
+    if tops.iter().all(|z| *z <= z0 + 1e-9) {
+        return;
+    }
+    let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+    m.vertices.extend(corners.iter().map(|p| Vec3::new(p.x, p.y, z0)));
+    m.vertices.extend(corners.iter().zip(tops).map(|(p, z)| Vec3::new(p.x, p.y, z)));
+    let f = |v: [u32; 4]| MeshFace { v: v.iter().map(|i| base + i).collect(), hidden: 0 };
+    m.faces.extend([f([3, 2, 1, 0]), f([4, 5, 6, 7]), f([0, 1, 5, 4]), f([1, 2, 6, 5]), f([2, 3, 7, 6]), f([3, 0, 4, 7])]);
+}
 /// The build part of a roof framing member.
 pub(crate) const ROOF_MEMBER: &str = "roof-framing";
 
@@ -1826,9 +1881,8 @@ fn frame_roof(d: &mut Drawing, j: &FrameJob, f: &RoofFraming, rule: &FramingRule
     let basis = rule_basis(rule, f, &format!("{} across the roof's short way", f.member));
     let mut n = 0usize;
     for (i, (a, b)) in members(j.poly, spacing, rule.min_span_ft * j.upf).into_iter().enumerate() {
-        let mid = (a + b) * 0.5;
         let mut m = super::wallgen::empty_mesh();
-        super::wallgen::add_box(&mut m, a, b, chord, j.z0, j.z0 + j.depth + (j.rise)(mid));
+        add_box_under(&mut m, a, b, chord, j.z0, &|p: Vec2| j.z0 + j.depth + (j.rise)(p));
         let t = |code: i32, v: String| RawTag { code, value: v };
         let mut x = vec![
             t(1001, super::wallgen::APP.into()),

@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).long().params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer), echo?: bool (default true: the counts on the command line; a caller that changes the model after the build says its own), route?: bool (default true, kept with the drawing: route the circuits through the model, Q6152; conduit.route reports it)} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, parapetTops: [{roof, level, facade, from_ft, to_ft, lf, height_ft, top_ft, status: read|default, basis}] (each outline edge's top of parapet, a stepped parapet's every top), crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, conduitRoute: {circuits, runs, homeruns, routed_ft, clashes, conflicts, penetrations}, levels, stacked?: levels moved, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer), echo?: bool (default true: the counts on the command line; a caller that changes the model after the build says its own), route?: bool (default true, kept with the drawing: route the circuits through the model, Q6152; conduit.route reports it), force?: bool (lay the model out again even when nothing it reads changed since its build)} → {kept?: true (nothing the build reads changed since the model was built: kept as it is, with the steps after its build), partial?: {rebuilt_levels, elements_rebuilt, elements_kept} (only some levels' entries or roof parts changed: only those levels were laid out again), rebuild: {categories, changed_categories, changed: [{level, part, before, after}], why: [string], steps_not_repeated: [{step, by, touched, changed}]} (called from outside: what this build changed against the model it replaced and why; the drawing's spec keeps a `build_record`: the engine, switches, spec and plan the model was built with and every step after its build), walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, parapetTops: [{roof, level, facade, from_ft, to_ft, lf, height_ft, top_ft, status: read|default, basis}] (each outline edge's top of parapet, a stepped parapet's every top), crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, conduitRoute: {circuits, runs, homeruns, routed_ft, clashes, conflicts, penetrations}, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
         CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).long().params(
             "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (save the model even when the run failed)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the plan sheets the job built from), pages_note, spec_guesses, check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {wall, door, window, ...} (elements built), built: {level: {part: n}}, levels, job: {job_id, status, done, findings} (the guided job that ran: job.status / job.report say more), ok, failed: [why the run failed: the job didn't finish, a hard import-check fail, a storey that came out empty], warnings: [string], next_steps: [string (exact calls to make next)]}",
@@ -522,7 +522,7 @@ fn run_validate(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     // Its switches are true or false and its budget whole seconds: a wrong one is refused, not
     // read as the default.
-    for key in ["replace", "auto", "stack", "clear", "echo", "route"] {
+    for key in ["replace", "auto", "stack", "clear", "echo", "route", "force"] {
         bool_param("model.build", p, key)?;
     }
     // Routing the circuits (Q6152) is on unless switched off; the switch stays with the drawing.
@@ -552,8 +552,41 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             .ok_or_else(|| bad("model.build", "`slabThickness` must be from 0 to 10 feet"))?,
     };
     let budget_s = budget.unwrap_or(BUILD_BUDGET_S);
+    // What the saved model was built with (Q6403): called from outside, a model nothing the
+    // build reads has changed for is kept as it is (a rebuild would only drop the steps after
+    // its build); a change to some levels or their roofs replaces those levels' elements only.
+    let force = bool_or(p, "force", false);
+    let switches = super::buildrec::switches(slab_ft, sp.stack, super::conduitroute::enabled(s.doc()?));
+    let top = s.journal.at_top();
+    let old_rec = if top { super::buildrec::read(s.doc()?) } else { None };
+    let before_counts = if top { super::buildrec::counts(s.doc()?) } else { Default::default() };
+    let inputs = if old_rec.is_some() { Some(super::buildrec::Inputs::of(s.doc()?, &sp, switches.clone())) } else { None };
+    let mut why = match (&old_rec, &inputs) {
+        (Some(rec), Some(i)) => i.differences(rec),
+        _ => Vec::new(),
+    };
+    let echo = super::bool_param("model.build", p, "echo")?.unwrap_or(true);
     let g = WallGen { rules: sp.to_rules(), auto: bool_or(p, "auto", true), slab_ft, layers: None, spec: Some(sp) };
+    if let Some(rec) = old_rec.as_ref().filter(|_| top && !force && why.is_empty()) {
+        return kept_model(s, g, rec, echo);
+    }
+    if force {
+        why.push("force: true".into());
+    }
+    let partial = match (&old_rec, &inputs, &g.spec) {
+        (Some(rec), Some(i), Some(sp)) if !force => i.partial(rec, sp),
+        _ => None,
+    };
+    let old_doc = s.state().map(|st| Arc::clone(&st.doc)).ok().filter(|_| partial.is_some());
     let mut r = build_spec_with_budget(s, &g, budget_s)?;
+    if let (Some(levels), Some(old)) = (&partial, &old_doc) {
+        let (rebuilt, kept) = super::buildrec::keep_unaffected(s.doc_mut()?, old, levels);
+        r["partial"] = json!({ "rebuilt_levels": levels, "elements_rebuilt": rebuilt, "elements_kept": kept });
+        r["notes"] = json!(r["notes"].as_array().cloned().unwrap_or_default().into_iter().chain([json!(format!(
+            "Only the levels the spec change touches were laid out again ({}); every other level kept its {kept} elements as they were, with the steps after the last build.",
+            levels.iter().cloned().collect::<Vec<_>>().join(", ")
+        ))]).collect::<Vec<_>>());
+    }
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
     // The counts are of what the model holds when the build is done (steps after the walls
     // took some away again: the summary said 2,977 walls of 2,794 built).
@@ -569,8 +602,22 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let recording = web_time::Instant::now();
     super::revise3d::record(s, &g);
     super::guided::progress_line(&format!("  model.build: plan recorded in {:.1} s", recording.elapsed().as_secs_f64()));
+    // What the rebuild changed against the model it replaced, and why.
+    if top {
+        let after = super::buildrec::counts(s.doc()?);
+        r["rebuild"] = super::buildrec::report(old_rec.as_ref(), why, &before_counts, &after);
+    }
+    if let Some(sp) = &g.spec {
+        let mut rec = super::buildrec::BuildRecord::new(s.doc()?, sp, switches);
+        // A partial rebuild: the other levels still hold what the steps after the last build did.
+        if let (Some(old), Some(_)) = (&old_rec, &partial) {
+            rec.steps = old.steps.clone();
+            rec.steps_dropped = old.steps_dropped;
+        }
+        super::buildrec::pending(s, rec);
+    }
     s.state_mut()?.wallgen = Some(g);
-    if super::bool_param("model.build", p, "echo")?.unwrap_or(true) {
+    if echo {
         s.echo(format!(
             "3D building from the spec: {} walls, {} doors, {} windows, {} columns, {} curtain walls, {} floors, {} ceilings ({} rooms) on {} level(s).",
             r["walls"], r["doors"], r["windows"], r["columns"], r["curtainWalls"], r["floors"], r["ceilings"], r["rooms"], r["levels"]
@@ -581,6 +628,35 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let _ = s.execute("view.swiso", &json!({}));
     let _ = s.execute("vscurrent", &json!({ "style": "realistic" }));
     super::guided::progress_line(&format!("  model.build: 3D view set in {:.1} s", viewing.elapsed().as_secs_f64()));
+    Ok(r)
+}
+
+/// `model.build` on a model nothing the build reads changed for since it was built: kept as it
+/// is, with the steps after its build (Q6403).
+fn kept_model(s: &mut Session, g: WallGen, rec: &super::buildrec::BuildRecord, echo: bool) -> Result<Value> {
+    let levels = g.spec.as_ref().map_or(0, |sp| sp.levels.len());
+    let mut r = json!({ "kept": true, "levels": levels, "removed": 0 });
+    recount_built(s.doc()?, &mut r);
+    let steps = super::buildrec::steps_json(rec);
+    let note = format!(
+        "Nothing the build reads changed since this model was built (the same engine, switches, spec and plan): the model is kept as it is, with the {} step(s) after its build. force: true lays it out again.",
+        steps.len() as u64 + rec.steps_dropped
+    );
+    r["notes"] = json!([note]);
+    r["rebuild"] = json!({ "categories": rec.now.len(), "changed_categories": 0, "changed": [], "why": [], "steps_kept": steps });
+    // The model is the build's as much as one just made: an associative model follows the plan
+    // from here as after a build.
+    super::revise3d::record(s, &g);
+    s.state_mut()?.wallgen = Some(g);
+    if echo {
+        s.echo(format!(
+            "3D building from the spec: unchanged since it was built, kept ({} walls, {} doors, {} windows).",
+            r["walls"], r["doors"], r["windows"]
+        ));
+    }
+    // It opens in the 3D shaded view, as a build does.
+    let _ = s.execute("view.swiso", &json!({}));
+    let _ = s.execute("vscurrent", &json!({ "style": "realistic" }));
     Ok(r)
 }
 
