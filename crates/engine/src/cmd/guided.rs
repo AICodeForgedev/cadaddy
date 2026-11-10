@@ -4378,6 +4378,26 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // A name whose trace stopped at its reach was not searched farther: its room may be bigger.
+    if let Some(n) = rooms_result.get("beyondReachCount").and_then(Value::as_u64).filter(|n| *n > 0) {
+        let names: Vec<&str> =
+            rooms_result.get("beyondReach").and_then(Value::as_array).into_iter().flatten().filter_map(|r| r["name"].as_str()).take(5).collect();
+        job.add_finding(
+            StageName::Rooms,
+            &format!("{n} room names closed no room within the plan they are on"),
+            &format!(
+                "The room trace looked across the whole plan each name is on and found no closed outline round {} ({}{}); it searched no farther. Their rooms are not built.",
+                if n == 1 { "it" } else { "them" },
+                names.join(", "),
+                if n as usize > names.len() { ", ..." } else { "" }
+            ),
+            2,
+            vec!["Check the plan's walls round these names (a gap, a wall on another layer), or the sheet's plan area".into()],
+            None,
+            false,
+        );
+    }
+
     job.audit("stage_run", "pipeline", None, Some(StageName::Rooms), Some(json!({"rooms_found": room_count})));
     Ok(rooms_result)
 }
