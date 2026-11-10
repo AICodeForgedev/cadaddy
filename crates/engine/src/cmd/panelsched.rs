@@ -356,6 +356,8 @@ fn read_sheet(texts: &[TextItem], sheet: &str, page: usize) -> (Vec<PanelSchedul
             .iter()
             .filter(|t| (t.at.y - l.at.y).abs() <= 0.6 * l.height && t.at.x > l.at.x + 0.5 * l.height && t.at.x < l.at.x + 30.0 * l.height)
             .min_by(|a, b| a.at.x.total_cmp(&b.at.x))
+            // Another label (`LOCATION:`, `VOLTAGE:`) right of it is the next fact's, not its tag.
+            .filter(|t| !t.value.trim().ends_with(':'))
             .map(|t| TextItem { value: format!("{} {}", l.value.trim(), t.value.trim()), ..l.clone() })
             .filter(|j| title_panel(&j.value).is_some());
         match tagged {
@@ -2285,12 +2287,14 @@ mod tests {
     #[test]
     fn a_name_left_for_no_schedule_is_a_placeholder_and_a_printed_name_still_wins() {
         // No notes: each unnamed schedule a placeholder of its own, never merged with another.
+        // (The next label, whatever its word, is no tag: `LOCATION:` names no panel.)
         let mut sheet = nameless(0.0, &[], [("LIGHTING", "RECEPTACLES"), ("SIGN", "SPARE")]);
         sheet.extend(nameless(500.0, &["VOLTAGE:"], [("HOOD", "COOLER"), ("FRYER", "SPACE")]));
+        sheet.extend(nameless(1000.0, &["LOCATION:", "STORAGE 104"], [("OVEN", "MIXER"), ("SPARE", "SPACE")]));
         let set = read_set(&[("X-1", &sheet)]);
         let mut names: Vec<&str> = set.iter().map(|p| p.panel.as_str()).collect();
         names.sort_unstable();
-        assert_eq!(names, ["UNNAMED-1", "UNNAMED-2"], "{set:#?}");
+        assert_eq!(names, ["UNNAMED-1", "UNNAMED-2", "UNNAMED-3"], "{set:#?}");
         assert!(set.iter().all(|p| made(p).0 == "unresolved" && made(p).1.contains("X-1")));
         // A printed title over the same table: one schedule, by its printed name, nothing inferred.
         let mut titled = nameless(0.0, &[], [("LIGHTING", "RECEPTACLES"), ("SIGN", "SPARE")]);
