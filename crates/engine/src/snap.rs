@@ -9,6 +9,7 @@ pub use viewport::ViewportPoint;
 
 use cadaddy_doc::{Drawing, EntityKind, Insert, MAX_BLOCK_DEPTH, Prim, Space};
 use cadaddy_geom::{Bounds2, Circle, EPS, Ellipse, Mat3, PI, Segment, Vec2, intersect_ext};
+use cadaddy_render::detail::{Detail, Look};
 use serde::Serialize;
 
 /// OSMODE bits.
@@ -154,22 +155,44 @@ fn prim_segments(p: &Prim) -> Vec<Segment> {
 /// they snap as *deferred*: the hit carries the curve and is resolved once the other end is
 /// known. Deferred hits only win where no other snap does (they are as unspecific as Nearest).
 pub fn osnap(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32, base: Option<Vec2>, deferred: bool) -> Option<SnapHit> {
+    osnap_drawn(d, space, cursor, aperture, osmode, base, deferred, None)
+}
+
+/// [`osnap`] for the screen as it is drawn at `detail` ([`cadaddy_render::detail`]): an object
+/// drawn as less (a dot, a bar, a symbol's box) offers only its insertion point, never a point
+/// of geometry the screen doesn't show. `None`: everything in full.
+#[allow(clippy::too_many_arguments)]
+pub fn osnap_drawn(
+    d: &Drawing,
+    space: &Space,
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+    base: Option<Vec2>,
+    deferred: bool,
+    detail: Option<&Detail>,
+) -> Option<SnapHit> {
     if osmode == 0 || osmode & mode::OFF != 0 {
         return None;
     }
     let ix = crate::spatial::index(d, space);
-    osnap_with(d, space, &ix, cursor, aperture, osmode, base, deferred)
+    osnap_with_neighborhood(d, space, &ix, cursor, aperture, osmode, base, deferred, detail).0
 }
 
 /// A typed snap override (`cen`, `mid` then a point): the snap points of the objects under the
 /// aperture, however far the snap point itself is (a point on a circle's edge finds its centre,
 /// as in AutoCAD). The nearest one wins; `None` when no object is there.
 pub fn osnap_object(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32) -> Option<SnapHit> {
+    osnap_object_drawn(d, space, cursor, aperture, osmode, None)
+}
+
+/// [`osnap_object`] for the screen as it is drawn at `detail` (see [`osnap_drawn`]).
+pub fn osnap_object_drawn(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32, detail: Option<&Detail>) -> Option<SnapHit> {
     if osmode == 0 || !cursor.is_finite() || !(aperture.is_finite() && aperture > 0.0) {
         return None;
     }
     let ix = crate::spatial::index(d, space);
-    let (cands, _) = gather_in(d, space, &ix, cursor, aperture, osmode, &[])?;
+    let (cands, _) = gather_in(d, space, &ix, cursor, aperture, osmode, &[], detail)?;
     cands
         .into_iter()
         .filter(|(m, p)| p.is_finite() && osmode & m != 0)
@@ -180,12 +203,17 @@ pub fn osnap_object(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osm
 /// Every object snap point under the aperture — each mode's every hit, not only the closest of
 /// each — best first (as [`osnap`] ranks them), each point and mode once. Tab cycles them.
 pub fn osnap_all(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32) -> Vec<SnapHit> {
+    osnap_all_drawn(d, space, cursor, aperture, osmode, None)
+}
+
+/// [`osnap_all`] for the screen as it is drawn at `detail` (see [`osnap_drawn`]).
+pub fn osnap_all_drawn(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32, detail: Option<&Detail>) -> Vec<SnapHit> {
     const MAX: usize = 64;
     if osmode == 0 || osmode & mode::OFF != 0 || !cursor.is_finite() || !(aperture.is_finite() && aperture > 0.0) {
         return Vec::new();
     }
     let ix = crate::spatial::index(d, space);
-    let Some((cands, _)) = gather_in(d, space, &ix, cursor, aperture, osmode, &[]) else { return Vec::new() };
+    let Some((cands, _)) = gather_in(d, space, &ix, cursor, aperture, osmode, &[], detail) else { return Vec::new() };
     let mut hits: Vec<(u32, Vec2)> = cands.into_iter().filter(|(m, p)| p.is_finite() && osmode & m != 0 && p.dist(cursor) <= aperture).collect();
     hits.sort_by(|a, b| snap_score(a.0, a.1, cursor, aperture).total_cmp(&snap_score(b.0, b.1, cursor, aperture)));
     let mut out: Vec<SnapHit> = Vec::new();
@@ -200,6 +228,8 @@ pub fn osnap_all(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode
     out
 }
 
+/// [`osnap`] with an index already found (the spatial index's tests compare it with a scan).
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn osnap_with(
     d: &Drawing,
@@ -211,7 +241,7 @@ pub(crate) fn osnap_with(
     base: Option<Vec2>,
     deferred: bool,
 ) -> Option<SnapHit> {
-    osnap_with_neighborhood(d, space, ix, cursor, aperture, osmode, base, deferred).0
+    osnap_with_neighborhood(d, space, ix, cursor, aperture, osmode, base, deferred, None).0
 }
 
 /// Find the best object snap and retain the local-space primitives gathered for that query.
@@ -225,11 +255,12 @@ pub(crate) fn osnap_with_neighborhood(
     osmode: u32,
     base: Option<Vec2>,
     deferred: bool,
+    detail: Option<&Detail>,
 ) -> (Option<SnapHit>, Option<Vec<Prim>>) {
     if osmode == 0 || osmode & mode::OFF != 0 || !cursor.is_finite() || !(aperture.is_finite() && aperture > 0.0) {
         return (None, None);
     }
-    let (mut best, near_prims) = match osnap_in_with_prims(d, space, ix, cursor, aperture, osmode, base, deferred, &[], None) {
+    let (mut best, near_prims) = match osnap_in_with_prims(d, space, ix, cursor, aperture, osmode, base, deferred, &[], None, detail) {
         Some((hit, prims)) => (hit, Some(prims)),
         None => (None, None),
     };
@@ -243,7 +274,7 @@ pub(crate) fn osnap_with_neighborhood(
         }
         let model = Space::Model;
         let pix = crate::spatial::index(&page, &model);
-        let hit = osnap_in(&page, &model, &pix, pc, pa, osmode, base.map(|b| inv.apply(b)), false, &[], None).map(|h| SnapHit {
+        let hit = osnap_in(&page, &model, &pix, pc, pa, osmode, base.map(|b| inv.apply(b)), false, &[], None, None).map(|h| SnapHit {
             point: m.apply(h.point),
             deferred: None,
             ..h
@@ -278,6 +309,7 @@ pub(crate) fn osnap_with_neighborhood(
             deferred,
             &view.viewport.frozen_layers,
             Some(view.model_clip),
+            None,
         )
         .and_then(|h| view.hit(h));
         if let Some(hit) = hit
@@ -301,8 +333,9 @@ fn osnap_in(
     deferred: bool,
     frozen: &[String],
     clip: Option<Bounds2>,
+    detail: Option<&Detail>,
 ) -> Option<SnapHit> {
-    osnap_in_with_prims(d, space, ix, cursor, aperture, osmode, base, deferred, frozen, clip).and_then(|(hit, _)| hit)
+    osnap_in_with_prims(d, space, ix, cursor, aperture, osmode, base, deferred, frozen, clip, detail).and_then(|(hit, _)| hit)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -317,8 +350,9 @@ fn osnap_in_with_prims(
     deferred: bool,
     frozen: &[String],
     clip: Option<Bounds2>,
+    detail: Option<&Detail>,
 ) -> Option<(Option<SnapHit>, Vec<Prim>)> {
-    let (mut cands, near_prims) = gather_in(d, space, ix, cursor, aperture, osmode, frozen)?;
+    let (mut cands, near_prims) = gather_in(d, space, ix, cursor, aperture, osmode, frozen, detail)?;
     // Intersections between nearby primitives; Apparent Intersection also where their extensions
     // meet (lines extended, arcs as full circles: in 2D, the "apparent" crossing of objects
     // that don't reach each other).
@@ -435,9 +469,10 @@ pub(crate) fn gather(
     aperture: f64,
     osmode: u32,
 ) -> Option<(Vec<(u32, Vec2)>, Vec<Prim>)> {
-    gather_in(d, space, ix, cursor, aperture, osmode, &[])
+    gather_in(d, space, ix, cursor, aperture, osmode, &[], None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gather_in(
     d: &Drawing,
     space: &Space,
@@ -446,6 +481,7 @@ fn gather_in(
     aperture: f64,
     osmode: u32,
     frozen: &[String],
+    detail: Option<&Detail>,
 ) -> Option<(Vec<(u32, Vec2)>, Vec<Prim>)> {
     let probe = Bounds2::new(cursor, cursor).expand(aperture);
     let mut cands: Vec<(u32, Vec2)> = Vec::new();
@@ -481,6 +517,10 @@ fn gather_in(
                 }
                 _ => {}
             }
+        }
+        // Drawn as less at the screen's detail level: no point of its geometry is on screen.
+        if detail.is_some_and(|det| det.look(d, e, &Mat3::IDENTITY) != Look::Full) {
+            continue;
         }
         let mut sink = Sink { osmode, aperture, probe, cands: &mut cands, near: &mut near_prims };
         sink.object(&e.kind, None);

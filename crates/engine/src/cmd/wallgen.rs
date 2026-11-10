@@ -19,7 +19,10 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Result, Session};
 
+mod heads;
 mod outline;
+
+pub(crate) use heads::RoomCeiling;
 pub(crate) use outline::Floors;
 
 /// The extended data application that marks what WALLGEN made (part, level, source object).
@@ -400,11 +403,12 @@ pub fn builds_so_far() -> usize {
 
 /// Build the drawing's 3D building from `g`; the counts.
 pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
-    build_with_progress(s, g, &(web_time::Instant::now() + std::time::Duration::from_secs(3600)))
+    build_with_progress(s, g, &(web_time::Instant::now() + std::time::Duration::from_secs(3600)), &[])
 }
 
-/// [`build`] with per-level progress events and a deadline (Q6029 MUST 2/3).
-pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_time::Instant) -> Result<Value> {
+/// [`build`] with per-level progress events and a deadline (Q6029 MUST 2/3), and the traced
+/// rooms' ceilings the walls built to the ceiling stop at.
+pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_time::Instant, ceilings: &[RoomCeiling]) -> Result<Value> {
     BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let scene = cadaddy_walk3d::derive(s.doc()?, &g.rules);
     let upf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { 12.0 };
@@ -466,7 +470,7 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             build_start.elapsed().as_secs_f64()
         ));
         let level_start = web_time::Instant::now();
-        let pl = plan_level(s.doc()?, g, level, upf, &mut notes);
+        let pl = plan_level_with(s.doc()?, g, level, upf, &mut notes, ceilings);
         let level_ms = level_start.elapsed().as_millis();
         if !pl.walls.is_empty() {
             let walls = pl.walls.len();
@@ -1374,6 +1378,11 @@ struct PlanWall {
     extra: Vec<(Vec2, Vec2, f64, f64)>,
     /// Its wall type's name: from the spec's wall marks (the tags on the plans), else its layer's.
     wall_type: Option<String>,
+    /// Its top is a number the spec gives (its mark's height, else its type's): no head rule
+    /// moves it.
+    fixed_top: bool,
+    /// How its type's head rule set its top, and from what ceiling (the build tag `head:`).
+    head: Option<String>,
 }
 
 /// A door leaf (hinge to its open end) or a window pane, with what it came from.
@@ -1579,7 +1588,12 @@ impl PlanLevel {
                 add_box(&mut m, *a, *b, w.thickness, *lo, *hi);
             }
             if !m.faces.is_empty() {
-                let extra = w.wall_type.iter().map(|n| format!("type:{}", n.chars().take(250).collect::<String>())).collect();
+                let extra = w
+                    .wall_type
+                    .iter()
+                    .map(|n| format!("type:{}", n.chars().take(250).collect::<String>()))
+                    .chain(w.head.iter().map(|h| format!("{}{}", heads::HEAD_TAG, h.chars().take(240).collect::<String>())))
+                    .collect();
                 out.push((Part::Wall, m, w.source, extra));
             }
         }
@@ -1812,6 +1826,7 @@ fn mark_walls(sp: &cadaddy_walk3d::BuildingSpec, level: &str, z0: f64, upf: f64,
         w.wall_type = Some(t.name.clone());
         if let Some(h) = m.height_ft.or(t.height_ft).filter(|h| h.is_finite() && *h > 0.0) {
             w.top = z0 + h * upf;
+            w.fixed_top = true;
         }
     }
 }
@@ -1980,6 +1995,18 @@ fn inside_shell<'a>(
 }
 
 fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64, notes: &mut Vec<String>) -> PlanLevel {
+    plan_level_with(d, g, level, upf, notes, &[])
+}
+
+/// [`plan_level`] with the traced rooms' ceilings (a wall built to the ceiling stops at theirs).
+fn plan_level_with(
+    d: &Drawing,
+    g: &WallGen,
+    level: &cadaddy_walk3d::Level,
+    upf: f64,
+    notes: &mut Vec<String>,
+    ceilings: &[RoomCeiling],
+) -> PlanLevel {
     use super::perceive::geometry::{Limits, openings, pairs, segments};
     let k = upf / 12.0;
     let oz = &g.rules.openings;
@@ -2175,6 +2202,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let source = wall_ents.first().map_or(Handle(0), |e| e.handle);
     let level_top = pl.top;
     let top_of = |layer: &str| wall_type(g, layer).and_then(|t| t.height_ft).map_or(level_top, |h| z0 + h * upf);
+    let fixed_of = |layer: &str| wall_type(g, layer).and_then(|t| t.height_ft).is_some();
     for p in &found {
         let w = PlanWall {
             a: p.c0,
@@ -2185,6 +2213,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             cuts: Vec::new(),
             extra: Vec::new(),
             wall_type: wall_type(g, &p.layer).map(|t| t.name.clone()),
+            fixed_top: fixed_of(&p.layer),
+            head: None,
         };
         if !pl.walls.iter().any(|x| same_wall(x, &w)) {
             pl.walls.push(w);
@@ -2230,6 +2260,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     cuts: Vec::new(),
                     extra: Vec::new(),
                     wall_type: wall_type(g, &sg.layer).map(|t| t.name.clone()),
+                    fixed_top: fixed_of(&sg.layer),
+                    head: None,
                 });
             }
         }
@@ -2237,6 +2269,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // Walls the plans tag: their type, and the height its rule gives there.
     if let Some(sp) = &g.spec {
         mark_walls(sp, &level.name, z0, upf, &mut pl.walls);
+        // Then each typed wall's top by its type's head rule (to the ceiling beside it).
+        heads::head_walls(sp, level, ceilings, z0, level_top, upf, &mut pl.walls, notes);
     }
     // Ends that meet another wall run on into it by its thickness (closing corners and tees).
     // Uses a spatial grid (cell = max wall thickness) so each endpoint only checks nearby walls.
@@ -4664,6 +4698,8 @@ mod tests {
             cuts: Vec::new(),
             extra: Vec::new(),
             wall_type: None,
+            fixed_top: false,
+            head: None,
         }
     }
 
@@ -5181,6 +5217,8 @@ mod tests {
             cuts: Vec::new(),
             extra: Vec::new(),
             wall_type: None,
+            fixed_top: false,
+            head: None,
         };
         let (p, nrm) = (Vec2::new(50.0, 10.0), Vec2::new(0.0, 1.0));
         // Alone: outside both ways.
@@ -5209,6 +5247,8 @@ mod tests {
             cuts: Vec::new(),
             extra: Vec::new(),
             wall_type: None,
+            fixed_top: false,
+            head: None,
         };
         // Pieces 0 and 1 on x = 0 (y -100..-3 and 63..160); corridor walls on y = 0 and y = 60.
         let corridor =

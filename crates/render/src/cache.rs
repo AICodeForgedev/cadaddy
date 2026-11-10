@@ -70,10 +70,10 @@ impl Context {
 }
 
 /// The build options that change what a list holds (not the cancel flag, nor the view's detail:
-/// see [`Detail`]).
+/// see [`ViewDetail`]).
 fn options_key(o: &Options) -> String {
     format!(
-        "{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{:?}",
         o.text,
         o.fill,
         o.lineweights,
@@ -84,23 +84,28 @@ fn options_key(o: &Options) -> String {
         o.plot_style_table.is_some(),
         o.color_overrides.len(),
         o.layer_lines.len(),
+        // The detail levels' rules (their pixel size follows the view: see `ViewDetail`).
+        o.detail.as_ref().map(detail::Detail::rules_key),
     )
 }
 
 /// The options that follow the view: how finely curves are tessellated and dashes drawn, the
-/// height relative point sizes follow, and the area hatch patterns (and point clouds) are made
-/// for. A part out of the view keeps those it was built with (see [`Part::serves`]).
+/// pixel size the detail levels draw for (0: every object in full), the height relative point
+/// sizes follow, and the area hatch patterns (and point clouds) are made for. A part out of the
+/// view keeps those it was built with (see [`Part::serves`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Detail {
+struct ViewDetail {
     tolerance: f64,
     min_dash: f64,
+    detail_px: f64,
     view_height: f64,
     view: Option<Bounds2>,
 }
 
-impl Detail {
-    fn of(o: &Options) -> Detail {
-        Detail { tolerance: o.tolerance, min_dash: o.min_dash, view_height: o.view_height, view: o.view }
+impl ViewDetail {
+    fn of(o: &Options) -> ViewDetail {
+        let detail_px = o.detail.as_ref().map_or(0.0, |d| d.px);
+        ViewDetail { tolerance: o.tolerance, min_dash: o.min_dash, detail_px, view_height: o.view_height, view: o.view }
     }
 }
 
@@ -110,20 +115,25 @@ impl Detail {
 struct Part {
     chunk: ChunkRef,
     list: Arc<DisplayList>,
-    detail: Detail,
+    detail: ViewDetail,
     extent: Bounds2,
 }
 
 impl Part {
     /// Whether this part can stand in a list built at `want`: built at it, or wholly outside the
     /// area `want` is for (nothing of it is on screen) and no finer than it.
-    fn serves(&self, want: &Detail) -> bool {
+    fn serves(&self, want: &ViewDetail) -> bool {
         if self.detail == *want {
             return true;
         }
         let Some(area) = want.view else { return false };
         let (have, e) = (&self.detail, &self.extent);
-        let coarse = have.tolerance.is_finite() && have.min_dash.is_finite() && have.tolerance >= want.tolerance && have.min_dash >= want.min_dash;
+        let coarse = have.tolerance.is_finite()
+            && have.min_dash.is_finite()
+            && have.detail_px.is_finite()
+            && have.tolerance >= want.tolerance
+            && have.min_dash >= want.min_dash
+            && have.detail_px >= want.detail_px;
         let outside = e.is_empty() || e.min.is_finite() && e.max.is_finite() && !e.intersects(&area);
         coarse && outside
     }
@@ -150,7 +160,7 @@ pub struct ChunkCache {
     /// The last build patched the list handed back in place.
     pub patched: bool,
     /// Chunks built again by the last [`build_cached`] (for measuring), the ones used as they
-    /// were, and of those the ones kept at another detail (out of the view, see [`Detail`]).
+    /// were, and of those the ones kept at another detail (out of the view, see [`ViewDetail`]).
     pub rebuilt: usize,
     pub reused: usize,
     pub kept: usize,
@@ -268,7 +278,7 @@ pub fn build_cached_into(d: &Drawing, space: &Space, opts: &Options, cache: &mut
         cache.parts.clear();
         cache.ctx = Some(ctx);
     }
-    let detail = Detail::of(opts);
+    let detail = ViewDetail::of(opts);
     let chunks = d.model.chunk_refs();
     let before: Vec<(usize, Arc<DisplayList>)> = cache.parts.iter().map(|p| (p.chunk.key(), Arc::clone(&p.list))).collect();
     let mut old: HashMap<usize, Part> = cache.parts.drain(..).map(|p| (p.chunk.key(), p)).collect();

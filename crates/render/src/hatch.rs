@@ -4,7 +4,7 @@
 //!
 //! On-screen builds get a level of detail (`Options::min_dash` > 0 is two pixels, `Options::view`
 //! the area being looked at): a pattern whose lines run together on screen is drawn as a solid
-//! fill of its boundary ([`reads_solid`]), a dash or dot repeat under two pixels as a continuous
+//! fill of its boundary (`reads_solid`), a dash or dot repeat under two pixels as a continuous
 //! line (as linetypes already are), and nothing is generated outside the view. Plots, exports and
 //! picks pass `min_dash = 0` and `view = None` and get every line.
 
@@ -30,7 +30,33 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
     // that show apart in any direction are never merged); 0 = full detail.
     let stretch = max_scale(&ctx.xf);
     let px = if stretch > 1e-12 { b.opts.min_dash / 2.0 / stretch } else { 0.0 };
-    let dense = b.opts.fill && reads_solid(ctx.d, h, px);
+    // The pattern's line families, read once for the level of detail (a pattern only).
+    let patterned = !(h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some());
+    let families = if patterned && b.opts.fill && px > 0.0 { lines_of(ctx.d, h) } else { Vec::new() };
+    let dense = b.opts.fill && reads_solid_lines(&families, scale_of(h), px);
+    // The screen's detail level (`detail`; never in a plot): a hatch under a pixel is a dot, and
+    // a pattern whose lines are a few pixels apart is a light tint of its area instead of lines.
+    let detail = b.opts.detail.as_ref().filter(|_| !b.plotting && stretch > 1e-12);
+    if let Some(det) = detail {
+        let mut area = Bounds2::EMPTY;
+        for p in loops.iter().flatten() {
+            area.add(*p);
+        }
+        if !area.is_empty() && area.width().max(area.height()) * stretch < det.rules.dot_px * det.px {
+            b.point(ctx, rgb, area.center());
+            return;
+        }
+    }
+    let tint = detail
+        .filter(|det| !dense && b.opts.fill && finest_spacing(&families, scale_of(h)).is_some_and(|s| s < det.rules.hatch_tint_px * det.px / stretch))
+        .map(|det| det.rules.tint_transparency);
+    if let Some(t) = tint {
+        let saved = b.transparency;
+        b.transparency = b.transparency.max(t);
+        b.tris(ctx, rgb, &fill::triangulate_evenodd(&loops));
+        b.transparency = saved;
+        return;
+    }
     let fill_on = ctx.d.header.i64("FILLMODE", 1) != 0;
     if (h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some()) && b.opts.fill && !fill_on {
         // FILL off (FILLMODE 0): a solid fill shows as its outline.
@@ -330,13 +356,22 @@ fn scale_of(h: &Hatch) -> f64 {
 ///   (dense dot or dash patterns made of several families).
 ///
 /// A sparse dot or dash pattern keeps its look. `px <= 0` (full detail) is never solid.
+#[cfg(test)]
 pub fn reads_solid(d: &Drawing, h: &Hatch, px: f64) -> bool {
     if !(px.is_finite() && px > 0.0) {
         return false;
     }
-    let scale = scale_of(h);
+    reads_solid_lines(&lines_of(d, h), scale_of(h), px)
+}
+
+/// Whether a pattern of line `families` at `scale` reads as solid at a pixel of `px` (see
+/// `reads_solid`).
+fn reads_solid_lines(families: &[PatternLine], scale: f64, px: f64) -> bool {
+    if !(px.is_finite() && px > 0.0) {
+        return false;
+    }
     let mut coverage = 0.0;
-    for f in lines_of(d, h) {
+    for f in families {
         let spacing = (f.delta.1 * scale).abs();
         if !(spacing.is_finite() && spacing > 0.0) {
             continue;
@@ -359,6 +394,12 @@ pub fn reads_solid(d: &Drawing, h: &Hatch, px: f64) -> bool {
         coverage += inked * px / spacing;
     }
     coverage.is_finite() && coverage >= SOLID_COVERAGE
+}
+
+/// The smallest distance between a pattern's parallel lines (`families` at `scale`), in the
+/// hatch's units (`None`: no pattern lines).
+fn finest_spacing(families: &[PatternLine], scale: f64) -> Option<f64> {
+    families.iter().map(|f| (f.delta.1 * scale).abs()).filter(|s| s.is_finite() && *s > 0.0).min_by(f64::total_cmp)
 }
 
 /// Hatch line runs in world coordinates (single-point runs are dots) for the fill `loops`.

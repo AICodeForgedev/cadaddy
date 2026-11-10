@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1271,
-    "count": 1271,
+    "callableAsJson": 1272,
+    "count": 1272,
     "ids": [
       "-attedit",
       "-block",
@@ -932,6 +932,7 @@
       "rcp.colour",
       "rcp.read",
       "rcp.takeoff",
+      "rcp.type",
       "recover",
       "recoverall",
       "rectang",

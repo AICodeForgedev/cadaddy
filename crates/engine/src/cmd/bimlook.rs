@@ -53,7 +53,7 @@ pub struct Trade {
     pub key: &'static str,
     pub label: &'static str,
     /// The tree's trade: Architecture, Structure, Mechanical, Plumbing, Fire Protection,
-    /// Electrical, Site.
+    /// Electrical, Site, Cabinets, Furniture.
     pub group: &'static str,
     pub rgb: [u8; 3],
     /// Drawn see-through when the view ghosts the shell.
@@ -67,8 +67,8 @@ const fn t(key: &'static str, label: &'static str, group: &'static str, rgb: [u8
 /// The trades and their default colours: architecture neutral, structure tan, supply duct
 /// blue, return and exhaust green, sanitary magenta, vent purple, cold water blue, hot water
 /// orange-red, gas yellow, fire protection red, conduit and tray orange-yellow, equipment light
-/// grey.
-pub const TRADES: [Trade; 24] = [
+/// grey; cabinets and furniture (Q6422) wood browns, each a switch of its own.
+pub const TRADES: [Trade; 26] = [
     t("architecture", "Architecture", "Architecture", [214, 212, 206], true),
     t("openings", "Doors and Windows", "Architecture", [176, 198, 212], true),
     t("structure", "Structure", "Structure", [198, 168, 124], true),
@@ -93,6 +93,8 @@ pub const TRADES: [Trade; 24] = [
     t("tray", "Cable Tray", "Electrical", [236, 128, 20], false),
     t("devices", "Electrical Devices", "Electrical", [250, 212, 40], false),
     t("lights", "Light Fixtures", "Electrical", [255, 244, 196], false),
+    t("cabinets", "Cabinets", "Cabinets", [168, 124, 84], true),
+    t("furniture", "Furniture", "Furniture", [196, 164, 120], true),
 ];
 
 /// The trade row of `key`.
@@ -444,6 +446,8 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         "door" => mk("openings", "Doors", typed("Door")),
         "window" | "glass" => mk("openings", "Windows", typed("Window")),
         "curtainwall" => mk("openings", "Curtain Walls", typed("Curtain Wall")),
+        "casework" => mk("cabinets", "Casework", typed("Casework")),
+        "furniture" => mk("furniture", "Furniture", typed("Furniture")),
         "column" | "beam" | "footing" | "brace" => mk("structure", &format!("{}s", title(&p)), typed(&title(&p))),
         "ground" | "site" => mk("site", "Site", typed("Ground")),
         "light" => mk("lights", "Light Fixtures", source_block(d, e).unwrap_or_else(|| typed("Light"))),

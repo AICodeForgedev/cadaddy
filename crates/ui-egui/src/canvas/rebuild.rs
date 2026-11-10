@@ -84,6 +84,8 @@ pub(super) struct BuiltMesh {
 pub(super) struct Job {
     pub key: super::ListKey,
     pub window: Option<Bounds2>,
+    /// The detail level the list is built at.
+    pub detail: Option<cadaddy_render::detail::Detail>,
     rx: Receiver<Built>,
     cancel: Arc<AtomicBool>,
 }
@@ -164,6 +166,7 @@ pub(super) fn spawn(mut req: Request, key: super::ListKey, window: Option<Bounds
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     req.opts.cancel = Some(cancel.clone());
+    let detail = req.opts.detail.clone();
     let ctx = ctx.clone();
     let spawned = std::thread::Builder::new().name("cadaddy-regen".into()).spawn(move || {
         // A panic drops `tx` unsent: the canvas sees the job as lost and builds on its own. A
@@ -181,7 +184,7 @@ pub(super) fn spawn(mut req: Request, key: super::ListKey, window: Option<Bounds
         }
     });
     match spawned {
-        Ok(_) => Some(Job { key, window, rx, cancel }),
+        Ok(_) => Some(Job { key, window, detail, rx, cancel }),
         Err(e) => {
             log::warn!("canvas: could not start a regen thread ({e}); rebuilding on the UI thread");
             None
@@ -251,7 +254,7 @@ mod tests {
     fn dropping_a_job_cancels_its_build() {
         let (_tx, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        drop(Job { key: Default::default(), window: None, rx, cancel: cancel.clone() });
+        drop(Job { key: Default::default(), window: None, detail: None, rx, cancel: cancel.clone() });
         assert!(cancel.load(Ordering::Relaxed));
     }
 }

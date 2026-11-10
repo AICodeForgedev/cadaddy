@@ -759,7 +759,7 @@ fn a_drop_blocked_over_its_box_rises_along_the_wall_and_one_that_cant_is_a_clash
 }
 
 /// A line on `layer` from `a` to `b` (feet).
-fn wall_line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
+pub(crate) fn wall_line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
     let p = |(x, y): (f64, f64)| cadaddy_engine::geom::Vec3 { x: x * 12.0, y: y * 12.0, z: 0.0 };
     let h = d.new_handle();
     let mut e = cadaddy_engine::doc::Entity::new(h, cadaddy_engine::doc::EntityKind::Line(cadaddy_engine::doc::Line { a: p(a), b: p(b) }));
@@ -968,7 +968,7 @@ fn a_rooms_own_circuit_goes_to_its_rooms_panel_however_near_a_neighbours_stands(
 }
 
 /// A 40' x 24' storey's exterior walls (a pair of rectangles 7.25" apart) at `ox` feet.
-fn storey_walls(d: &mut Drawing, ox: f64) {
+pub(crate) fn storey_walls(d: &mut Drawing, ox: f64) {
     let t = 7.25 / 12.0;
     for (x0, y0, x1, y1) in [(ox, 0.0, ox + 40.0, 24.0), (ox + t, t, ox + 40.0 - t, 24.0 - t)] {
         for (a, b) in [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))] {

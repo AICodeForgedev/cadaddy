@@ -431,6 +431,7 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
     }
     let mut untyped = 0usize;
     let mut no_layers: BTreeSet<String> = BTreeSet::new();
+    let mut framed_twice: BTreeMap<String, usize> = BTreeMap::new();
     for (i, w) in walls.iter().enumerate() {
         let Some(wt) = sp.wall_types.iter().find(|t| !w.wall_type.is_empty() && t.name.eq_ignore_ascii_case(&w.wall_type)) else {
             untyped += 1;
@@ -440,6 +441,9 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
             no_layers.insert(wt.name.clone());
             continue;
         };
+        if asm.duplicate_framing().is_some() {
+            *framed_twice.entry(wt.name.clone()).or_default() += 1;
+        }
         let jn = end_joins.get(i).copied().unwrap_or_default();
         // A corner's bead and tape go with the first of its two walls.
         let corner_mine = |end: usize| -> bool {
@@ -450,6 +454,16 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
     }
     if untyped > 0 {
         batch.missing.insert("walls with no wall type".into(), format!("{untyped} walls: no type mark or legend type, so no layers to lay out"));
+    }
+    if !framed_twice.is_empty() {
+        let n: usize = framed_twice.values().sum();
+        batch.missing.insert(
+            "wall types framed twice".into(),
+            format!(
+                "{n} walls of {}: two framing layers of the same depth on the same side, each laid out (likely a duplicate build-up; check the partition legend)",
+                framed_twice.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        );
     }
     if !no_layers.is_empty() {
         let n = walls.iter().filter(|w| no_layers.iter().any(|t| t.eq_ignore_ascii_case(&w.wall_type))).count();
