@@ -1496,9 +1496,13 @@ pub struct ReadDevice {
 /// What a fire alarm shop drawing says of one notification appliance ([`super::fashop`]).
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FireAlarmFacts {
-    /// `P2.N3.07`, and its notification circuit `P2.N3`.
+    /// `P2.N3.07`, and its notification circuit `P2.N3`; an initiating device's loop address
+    /// (`L7.42`) and its loop (`L7`).
     pub address: String,
     pub circuit: String,
+    /// An initiating device on a signalling line circuit (its circuit is a loop), not an appliance.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loop_device: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candela: Option<u32>,
     /// `ceiling` or `wall` as its legend row says (empty: it doesn't).
@@ -1801,7 +1805,7 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // the place of kept beside (Q6495).
         if let Some(fa) = &dv.fire_alarm {
             e.set("address", fa.address.clone(), "submittal");
-            e.set("nac_circuit", fa.circuit.clone(), "submittal");
+            e.set(if fa.loop_device { "slc_circuit" } else { "nac_circuit" }, fa.circuit.clone(), "submittal");
             if let Some(cd) = fa.candela {
                 e.set("candela", format!("{cd} cd"), "submittal");
             }

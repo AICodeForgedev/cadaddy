@@ -8160,7 +8160,7 @@ fn fa_shop_step(s: &Session, job: &mut GuidedJob, devices: &mut Vec<super::reade
         fate(job, h, MarkFate::left_out("fire alarm device", super::inventory::NOT_BUILT, why));
     }
     progress_line(&format!(
-        "  fire alarm shop drawings {:?}: {} appliances read; plans laid on {:?}; not laid {:?}; {} design devices superseded, {} added, {} design devices left out for review; by kind {:?}; legend quantities off {:?} ({:.1} s)",
+        "  fire alarm shop drawings {:?}: {} appliances read; plans laid on {:?}; not laid {:?}; {} design devices superseded, {} added, {} design devices left out for review; by kind {:?}; initiating devices given their loop address {} ({} loop-labelled symbols with no design device near); legend quantities off {:?} ({:.1} s)",
         done.docs,
         shops.iter().map(super::fashop::FaShop::appliances).sum::<usize>(),
         done.plans,
@@ -8169,6 +8169,8 @@ fn fa_shop_step(s: &Session, job: &mut GuidedJob, devices: &mut Vec<super::reade
         done.added,
         done.left_out.len(),
         done.by_kind,
+        done.addressed,
+        done.initiating_unmatched,
         done.quantities,
         clock.elapsed().as_secs_f64()
     ));
@@ -14068,8 +14070,9 @@ fn apply_symbol_list(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[SymbolRow]) 
     for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "fire_alarm_device").take(MAX_STAMPED * 4) {
         let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
         let Some(row) = rows.iter().find(|r| r.mark == mark) else { continue };
-        // An appliance the approved fire alarm shop drawing gives is its legend's (Q6495).
-        if t.fields.contains_key("shop_drawing") {
+        // An appliance the approved fire alarm shop drawing gives is its legend's (Q6495); an
+        // initiating device that took only its loop address keeps the design's row.
+        if t.fields.contains_key("nac_circuit") {
             continue;
         }
         t.set("device_type", format!("{} {mark}", row.description.to_ascii_lowercase()), "legend");
@@ -31810,6 +31813,20 @@ mod tests {
         assert_eq!(f("device:r", "mount").as_deref(), Some("ceiling"));
         assert_eq!(f("device:r", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
         assert!(f("device:h", "device_type").is_none());
+        // A shop drawing's appliance keeps its own legend's row; a detector that took only its
+        // loop address from the shop drawing still takes the design's row (Q6495).
+        let mut appliance = tag("device:ws", "WS");
+        appliance.set("nac_circuit", "N9", "submittal");
+        appliance.set("shop_drawing", "a shop drawing", "submittal");
+        appliance.set("device_type", "ceiling mount strobe", "submittal");
+        let mut detector = tag("device:r2", "SR");
+        detector.set("slc_circuit", "L9", "submittal");
+        detector.set("shop_drawing", "a shop drawing", "submittal");
+        sp.tags = vec![appliance, detector];
+        assert_eq!(apply_symbol_list(&mut sp, &rows), 1);
+        let f = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
+        assert_eq!(f("device:ws", "device_type").as_deref(), Some("ceiling mount strobe"));
+        assert_eq!(f("device:r2", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
     }
 
     /// A unit's trace that leaked through the wall into its neighbour (two units wide) is cut back

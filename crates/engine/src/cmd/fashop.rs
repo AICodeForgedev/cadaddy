@@ -54,6 +54,8 @@ const WP_REACH_H: f64 = 4.0;
 const SYMBOL_MAX_H: f64 = 5.0;
 /// How far apart (feet) a shop appliance and a design device may be and still be one device.
 pub(crate) const PAIR_FT: f64 = 12.0;
+/// The same for an initiating device (a detector is one to a room or a few feet of corridor).
+const INIT_PAIR_FT: f64 = 6.0;
 /// A room number's pair dropped from the plan's fit when farther than this (feet) off it.
 const FIT_TOL_FT: f64 = 8.0;
 /// Pairs the fit needs, and the most it may be off on average (feet).
@@ -122,6 +124,9 @@ pub(crate) struct ShopPlan {
     pub appliances: Vec<Appliance>,
     /// The room numbers printed on it and where.
     pub rooms: Vec<(String, Vec2)>,
+    /// The initiating devices its loop addresses label (`L7.42`: a detector, a pull station, a
+    /// module), each at the symbol its label takes: address, loop, where.
+    pub initiating: Vec<(String, String, Vec2)>,
 }
 
 /// A fire alarm shop drawing submittal as read.
@@ -422,12 +427,13 @@ pub(crate) fn read_pages(doc: &str, pages: &[(u32, Drawing)]) -> Option<FaShop> 
         // by the nearest device label, one each: an appliance's label doesn't take the detector
         // beside it, whose loop address is nearer it.
         let rings = rings(d, SYMBOL_MAX_H * h);
-        let device_labels: Vec<Vec2> = found
+        let appliance_labels = found.iter().filter(|l| l.2.is_some()).count();
+        let loop_labels: Vec<(String, Vec2)> = texts
             .iter()
-            .filter(|l| l.2.is_some())
-            .map(|l| l.3)
-            .chain(texts.iter().filter(|t| t.value.split_whitespace().any(loop_address)).map(text_centre))
+            .filter_map(|t| t.value.split_whitespace().find(|w| loop_address(w)).map(|w| (w.trim().to_ascii_uppercase(), text_centre(t))))
+            .take(MAX_APPLIANCES)
             .collect();
+        let device_labels: Vec<Vec2> = found.iter().filter(|l| l.2.is_some()).map(|l| l.3).chain(loop_labels.iter().map(|l| l.1)).collect();
         let taken: BTreeMap<usize, Vec2> = super::archauthority::pair(&device_labels, &rings, SYMBOL_REACH_H * h, |_, _| true)
             .into_iter()
             .filter_map(|(i, j)| rings.get(j).map(|r| (i, *r)))
@@ -483,6 +489,7 @@ pub(crate) fn read_pages(doc: &str, pages: &[(u32, Drawing)]) -> Option<FaShop> 
                 || v.contains(' ')
                 || address_of(v).is_some()
                 || candela_of(v).is_some()
+                || loop_address(v)
             {
                 continue;
             }
@@ -490,6 +497,16 @@ pub(crate) fn read_pages(doc: &str, pages: &[(u32, Drawing)]) -> Option<FaShop> 
                 && p.rooms.len() < MAX_ROOMS
             {
                 p.rooms.push((v.to_string(), text_centre(t)));
+            }
+        }
+        // The initiating devices, each at the symbol its loop label took.
+        for (k, (address, at)) in loop_labels.iter().enumerate() {
+            let Some(spot) = taken.get(&(appliance_labels + k)).copied() else { continue };
+            let loop_name = address.split('.').next().unwrap_or("").to_string();
+            if let Some(p) = view_of(*at).and_then(|vi| plans.get_mut(vi))
+                && !p.initiating.iter().any(|i| i.0 == *address)
+            {
+                p.initiating.push((address.clone(), loop_name, spot));
             }
         }
         shop.plans.extend(plans.into_iter().filter(|p| !p.appliances.is_empty()));
@@ -790,6 +807,10 @@ pub(crate) struct Applied {
     /// The legend's quantity against what was placed or read, where they differ.
     pub quantities: Vec<String>,
     pub by_kind: BTreeMap<String, usize>,
+    /// The design's initiating devices that took a shop drawing's loop address (and its spot),
+    /// and the loop-labelled symbols no design device was near.
+    pub addressed: usize,
+    pub initiating_unmatched: usize,
 }
 
 /// Whether a read device is a notification appliance (`devices.legend_kind`): its mark, kind
@@ -873,6 +894,7 @@ pub(crate) fn apply(shops: &[FaShop], rooms: &[ModelRoom], devices: &mut Vec<Rea
                     row: row.map(|r| r.description.clone()).unwrap_or_default(),
                     row_basis: a.row_basis.clone(),
                     design: String::new(),
+                    loop_device: false,
                 };
                 let kind_source = format!(
                     "{} device legend: {}",
@@ -948,6 +970,42 @@ pub(crate) fn apply(shops: &[FaShop], rooms: &[ModelRoom], devices: &mut Vec<Rea
                 keep
             });
             devices.extend(added);
+            // The design's initiating devices (detectors, pull stations) take the loop address
+            // and spot of the labelled symbol near them.
+            let init: Vec<usize> = devices
+                .iter()
+                .enumerate()
+                .filter(|(_, dv)| dv.level == level && dv.fire_alarm.is_none() && dv.kind == "fire alarm device" && !notification(dv))
+                .map(|(i, _)| i)
+                .collect();
+            let init_at: Vec<Vec2> = init.iter().filter_map(|i| devices.get(*i)).map(|dv| Vec2::new(dv.at[0], dv.at[1])).collect();
+            let shop_init: Vec<Vec2> = plan.initiating.iter().map(|(_, _, p)| fit.apply(*p)).collect();
+            let pairs = super::archauthority::pair(&shop_init, &init_at, INIT_PAIR_FT * upf, |_, _| true);
+            out.initiating_unmatched += plan.initiating.len().saturating_sub(pairs.len());
+            for (i, j) in pairs {
+                let (Some((address, lp, _)), Some(at), Some(dv)) =
+                    (plan.initiating.get(i), shop_init.get(i), init.get(j).and_then(|d| devices.get_mut(*d)))
+                else {
+                    continue;
+                };
+                let was = Vec2::new(dv.at[0], dv.at[1]);
+                let moved = was.dist(*at) / upf;
+                let source = format!("{} ({})", shop.source(plan.page), plan.title);
+                if moved > 0.05 {
+                    dv.drawn_at = Some([was.x, was.y]);
+                    dv.moved = format!("at its symbol {address} on the approved fire alarm shop drawing ({source})");
+                }
+                dv.at = [at.x, at.y];
+                dv.fire_alarm = Some(FireAlarmFacts {
+                    address: address.clone(),
+                    circuit: lp.clone(),
+                    loop_device: true,
+                    source,
+                    design: format!("the design plan's {} at [{:.1}, {:.1}] ft, {moved:.1} ft away", dv.tag, was.x / upf, was.y / upf),
+                    ..Default::default()
+                });
+                out.addressed += 1;
+            }
         }
         if covered.is_empty() {
             continue;
@@ -1088,6 +1146,9 @@ mod tests {
             ([22.5, 12.0], "BP7.N2.01", "177cd", 0),
             ([28.5, 12.0], "BP7.N2.02", "30cd", 2),
         ];
+        // A detector in room R-12 with its loop address.
+        circle(&mut d, [8.0, 14.0], 0.12);
+        text(&mut d, [8.2, 14.0], 0.1, "L7.42");
         for (c, addr, cd, kind) in appliances {
             match kind {
                 1 => horn_strobe(&mut d, c, 0.12),
@@ -1169,13 +1230,16 @@ mod tests {
             // Near the first appliance (3 ft off), and one in a corridor the shop drawing has nothing near.
             design("HORN/STROBE", to_model(Vec2::new(4.5, 12.0)) + Vec2::new(36.0, 0.0), "A1"),
             design("HORN/STROBE", to_model(Vec2::new(16.0, 18.0)), "A2"),
+            // A detector 2 ft from the shop drawing's, and one the shop drawing has nothing near.
+            ReadDevice { kind_source: String::new(), ..design("SR", to_model(Vec2::new(8.0, 14.0)) + Vec2::new(0.0, 24.0), "D1") },
+            ReadDevice { kind_source: String::new(), ..design("SR", to_model(Vec2::new(26.0, 6.0)), "D2") },
             // A receptacle is no appliance: untouched.
             ReadDevice { tag: "R".into(), at: [10.0, 10.0], level: "Level 1".into(), kind: "receptacle".into(), ..Default::default() },
         ];
         let done = apply(std::slice::from_ref(&shop), &rooms, &mut devices, 12.0);
         assert_eq!((done.superseded, done.added, done.left_out.len()), (1, 4, 1), "{done:#?}");
         assert_eq!(done.left_out.first().map(|l| l.0.as_str()), Some("A2"));
-        let fa: Vec<&ReadDevice> = devices.iter().filter(|d| d.fire_alarm.is_some()).collect();
+        let fa: Vec<&ReadDevice> = devices.iter().filter(|d| d.fire_alarm.as_ref().is_some_and(|f| !f.loop_device)).collect();
         assert_eq!(fa.len(), 5);
         assert!(devices.iter().any(|d| d.tag == "R"), "the receptacle stays");
         let get =
@@ -1194,6 +1258,17 @@ mod tests {
         assert_eq!(get("BP7.N2.01").fire_alarm.as_ref().and_then(|f| f.candela), Some(177));
         let wp = get("BP7.N2.02").fire_alarm.as_ref().unwrap_or_else(|| panic!("facts"));
         assert!(wp.weatherproof && wp.mount == "wall", "{wp:?}");
+        // The detector took its loop address and spot; the other kept its own.
+        assert_eq!((done.addressed, done.initiating_unmatched), (1, 0), "{done:#?}");
+        let d1 = devices.iter().find(|d| d.handle == "D1").and_then(|d| d.fire_alarm.as_ref()).unwrap_or_else(|| panic!("D1 addressed"));
+        assert_eq!((d1.address.as_str(), d1.circuit.as_str(), d1.loop_device, d1.candela), ("L7.42", "L7", true, None));
+        assert!(d1.design.contains("SR") && d1.design.contains("ft away"), "{d1:?}");
+        let moved = devices
+            .iter()
+            .find(|d| d.handle == "D1")
+            .and_then(|d| d.drawn_at.map(|w| Vec2::new(w[0], w[1]).dist(Vec2::new(d.at[0], d.at[1])) / 12.0));
+        assert!(moved.is_some_and(|m| (m - 2.0).abs() < 0.5), "{moved:?}");
+        assert!(devices.iter().find(|d| d.handle == "D2").is_some_and(|d| d.fire_alarm.is_none()));
         // The legend's quantities checked: 4 ceiling strobes listed, 3 on the plan.
         assert!(
             done.quantities.iter().any(|q| q.contains("CEILING MOUNT STROBE") && q.contains("lists 4") && q.contains("show 3")),
