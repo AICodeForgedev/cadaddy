@@ -262,6 +262,16 @@
       ]
     },
     {
+      "id": "M-EXHAUST-RISER",
+      "trade": "mechanical",
+      "fills": "the exhaust risers a typical riser detail draws: each fan's duct from where its room's view ends it in the chase, up the chase to just under the roof deck, across to the roof terminal the roof plan places over that chase and up into it (numbers: reach_ft, how far in plan the terminal may be from the chase it serves once the roof plan is lined up with the chases; clear_ft, how far under the roof deck the ducts turn to the terminal; default_size_in, a fan duct's size where none is read; duct_gap_in, the gap between side-by-side ducts in one chase)",
+      "basis": "trade practice: a typical riser detail is built at every chase its roof terminal stands over (the plans key one instance); where the notes require each exhaust duct to be continuous to the outside, every fan keeps its own duct to the terminal (side by side in the chase), else the chase carries one riser of the fans' combined duct area",
+      "reach_ft": 15.0,
+      "clear_ft": 1.0,
+      "default_size_in": 4.0,
+      "duct_gap_in": 1.0
+    },
+    {
       "id": "E-CONN-AT-UNIT",
       "trade": "electrical",
       "fills": "where an equipment connection goes when its plan's mark names a piece of equipment built on another level or elsewhere (a roof unit's circuit tagged on a plan under it)",

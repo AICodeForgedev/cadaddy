@@ -6320,7 +6320,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // level's plan by its sheet's registration as the rest of the sheet was (Q6313).
                 // Each tag's best place that lines up with its level's plan (a place whose sheet
                 // doesn't is passed over for the next, else the tag is said not placeable).
-                let mut found = scheduled_equipment(s, job, &sp)?;
+                // The mechanical sheets that aren't plans (schedules, details), when the set has
+                // mechanical plans to place anything on.
+                let m_pages = if job_sheet_refs(job).iter().any(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds()) {
+                    non_plan_pages(job, "M")
+                } else {
+                    Vec::new()
+                };
+                let mut found = scheduled_equipment(s, job, &sp, &m_pages)?;
                 let read_n = found.candidates.len();
                 found.choose(|e| match sim(e.min, &e.level) {
                     Some(m) => {
@@ -6365,6 +6372,28 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                 }
                 sp.mep.equipment.extend(found.equipment);
+                // The typical exhaust risers: each typical room's fan duct up its chase to the roof
+                // terminal the roof plan places over it, as the riser details draw (Q6496).
+                {
+                    let hoods: BTreeSet<String> =
+                        sp.mep.equipment.iter().filter(|e| e.kind == "relief_hood").map(|e| e.tag.trim().to_ascii_uppercase()).collect();
+                    let hoods: Vec<String> = hoods.into_iter().collect();
+                    let details = super::exhaustrisers::riser_details(&m_pages, &hoods);
+                    if !details.is_empty() {
+                        let d = s.doc()?;
+                        // Each mechanical plan's whole sheet (its notes stand beside its views).
+                        let mut seen: BTreeSet<String> = BTreeSet::new();
+                        let plans: Vec<cadaddy_doc::Drawing> = job_sheet_refs(job)
+                            .into_iter()
+                            .filter(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds() && seen.insert(r.number.clone()))
+                            .take(MAX_STAMP_SHEETS)
+                            .map(|r| super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..r }))
+                            .collect();
+                        let note = super::exhaustrisers::continuous_required(plans.iter().chain(m_pages.iter().map(|(_, p)| p)));
+                        let stacked = super::exhaustrisers::stack_fan_ducts(&mut sp, &details, note.as_deref());
+                        progress_line(&format!("  typical exhaust risers: {stacked}"));
+                    }
+                }
                 // Each roof unit's line set to the indoor unit its schedule row pairs it with.
                 let sets = super::schedequip::line_sets(&mut sp);
                 if sets > 0 {
@@ -13368,13 +13397,17 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
 
 /// The equipment the set's mechanical schedules list and its mechanical plans of the levels tag,
 /// not built yet ([`super::schedequip::read`]), on its sheets' places in the drawing.
-fn scheduled_equipment(s: &Session, job: &GuidedJob, sp: &cadaddy_walk3d::BuildingSpec) -> Result<super::schedequip::Read> {
+fn scheduled_equipment(
+    s: &Session,
+    job: &GuidedJob,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    schedules: &[(String, cadaddy_doc::Drawing)],
+) -> Result<super::schedequip::Read> {
     let refs: Vec<super::printmep::SheetRef> =
         job_sheet_refs(job).into_iter().filter(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds()).take(MAX_STAMP_SHEETS).collect();
     if refs.is_empty() {
         return Ok(super::schedequip::Read::default());
     }
-    let schedules = non_plan_pages(job, "M");
     if schedules.is_empty() {
         return Ok(super::schedequip::Read::default());
     }
@@ -13390,7 +13423,7 @@ fn scheduled_equipment(s: &Session, job: &GuidedJob, sp: &cadaddy_walk3d::Buildi
         .collect();
     let plans: Vec<super::schedequip::PlanIn> =
         refs.iter().zip(&subs).map(|(sheet, (drawing, su))| super::schedequip::PlanIn { sheet, drawing, sheet_upf: *su, upf }).collect();
-    Ok(super::schedequip::read(&schedules, &plans, &sp.mep.equipment, &sp.levels))
+    Ok(super::schedequip::read(schedules, &plans, &sp.mep.equipment, &sp.levels))
 }
 
 /// The devices read off a mechanical plan whose mark names its equipment (a fan's `EF`): that

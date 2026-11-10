@@ -49,6 +49,7 @@ pub mod equipsub;
 pub mod estimate;
 mod exact_ends;
 mod exchange;
+pub mod exhaustrisers;
 mod express;
 mod express4;
 pub mod exterior;
