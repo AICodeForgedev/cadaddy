@@ -22436,7 +22436,7 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
             need_in,
             width_in: code.width_in.unwrap_or(30.0),
             height_in: code.height_in.unwrap_or(78.0).max((e.bottom_ft + e.height_ft) * 12.0),
-            recessed: e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess")),
+            recessed: super::mep::mounted_in_wall(e),
             overhead: overhead(&lv, (e.bottom_ft + e.height_ft) * 12.0),
         };
         let found = clear_face(e, &pieces, &others, doors.get(&lv).map_or(&[][..], Vec::as_slice), room.as_deref(), elevation * upf, &need, upf);
@@ -29976,6 +29976,44 @@ mod tests {
     /// one-line's pieces stand beside it with the FDR-A feeders between them; the takeoff carries
     /// every one; the unsized feeder is built by code for the contactor's rating (inferred) and a
     /// review finding, never a silent zero.
+    /// Q6513: a riser or one-line label and a sheet's note on the electrical sheets call the
+    /// rooms of the panels the plans don't draw; a drawn or typical panel is not looked for.
+    #[test]
+    fn electrical_sheets_call_the_rooms_of_undrawn_panels() {
+        use crate::cmd::gearbuild::CalledAt;
+        use cadaddy_walk3d::{BuildingSpec, MepEquipment, PanelSchedule};
+        let mut sp = BuildingSpec::default();
+        for t in ["LP3", "LP9", "SB1"] {
+            sp.mep.panel_schedules.push(PanelSchedule { panel: t.into(), ..Default::default() });
+        }
+        sp.mep.panel_schedules.push(PanelSchedule { panel: "LPT".into(), typical_of: Some(4), ..Default::default() });
+        sp.mep.equipment.push(MepEquipment { tag: "SB1".into(), kind: "switchboard".into(), ..Default::default() });
+        let page = |texts: &[(&str, f64, f64)]| {
+            let mut d = cadaddy_doc::Drawing::default();
+            for (v, x, y) in texts {
+                d.add(&Space::Model, Common::default(), EntityKind::Text(text(v, *x, *y, 1.0))).ok();
+            }
+            d
+        };
+        let riser = page(&[
+            ("SINGLE LINE DIAGRAM", 10.0, 90.0),
+            ("PANEL 'LP3' LOCATED IN STORAGE 1104", 10.0, 50.0),
+            ("PANEL 'SB1' LOCATED IN ELEC 1120", 10.0, 40.0),
+            ("PANEL 'LPT' LOCATED IN UNIT", 10.0, 30.0),
+        ]);
+        let notes = page(&[("PNLBD 'LP9'", 5.0, 20.0), ("MOUNTED IN CORRIDOR 1110", 5.0, 18.8), ("PANEL 'LP3' LOCATED IN ELEC 1120", 60.0, 5.0)]);
+        let called = called_gear_locations(&sp, &[("EX-6".to_string(), riser), ("EX-2".to_string(), notes)]);
+        let at = |place: &str, source: &str| CalledAt { place: place.into(), source: source.into() };
+        // In page order: the riser's first, the note's after it (plan picks the first naming a room).
+        assert_eq!(
+            called.get("LP3"),
+            Some(&vec![at("STORAGE 1104", "EX-6 riser or one-line label"), at("ELEC 1120", "EX-2 sheet note")]),
+            "{called:?}"
+        );
+        assert_eq!(called.get("LP9"), Some(&vec![at("CORRIDOR 1110", "EX-2 sheet note")]), "{called:?}");
+        assert!(!called.contains_key("SB1") && !called.contains_key("LPT"), "{called:?}");
+    }
+
     #[test]
     fn a_one_lines_gear_and_a_schedule_only_panel_are_built_and_taken_off_without_a_submittal() {
         use cadaddy_walk3d::{BuildingSpec, PanelCircuit, PanelSchedule};

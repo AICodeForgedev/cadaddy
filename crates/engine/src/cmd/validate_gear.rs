@@ -854,7 +854,7 @@ pub(crate) fn as_the_build_sets_it(e: &MepEquipment, pieces: &[super::propfill::
         return (e.min, e.max);
     };
     let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
-    let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
+    let recessed = super::mep::mounted_in_wall(e);
     let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
     let half = Vec2::new((f.along.x * w).abs() + (f.out.x * dp).abs(), (f.along.y * w).abs() + (f.out.y * dp).abs()) * 0.5;
     ([mid.x - half.x, mid.y - half.y], [mid.x + half.x, mid.y + half.y])

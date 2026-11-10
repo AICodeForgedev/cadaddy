@@ -1952,7 +1952,7 @@ mod tests {
         assert!(((e.max[0] - e.min[0]).max(e.max[1] - e.min[1]) - 20.0).abs() < 1e-6, "{e:?}");
         assert_eq!(e.enclosure.as_ref().map(|x| x.top_entry_in), Some([16.0, 4.25]));
         assert!((e.bottom_ft - 28.0 / 12.0).abs() < 1e-9);
-        // Its schedule names room 101 (ELEC 101): located there, not proposed (Q6513).
+        // Its schedule names the room: located there, not proposed (Q6513).
         assert_eq!(e.sources.get("status").map(String::as_str), Some(LOCATED));
         assert!(e.properties.get("WORKING SPACE").is_some_and(|w| w.contains("36 D")), "{:?}", e.properties);
         assert!(
@@ -2396,6 +2396,20 @@ mod tests {
         assert!(mid <= 96.0 && mid > 60.0, "under the floor above, toward the feed: {lp1:?}");
         let basis = &lp1.properties["BASIS"];
         assert!(basis.contains("under the floors above") && basis.contains("nearest its feed from SB1"), "{basis}");
+    }
+
+    /// Q6513: surface or flush per the schedule: its MOUNTING sets a panel into its wall or on it.
+    #[test]
+    fn a_schedules_flush_or_recessed_mounting_sets_the_panel_into_its_wall() {
+        let with = |m: Option<&str>| {
+            let mut e = cadaddy_walk3d::MepEquipment::default();
+            if let Some(m) = m {
+                e.properties.insert("MOUNTING".into(), m.into());
+            }
+            crate::cmd::mep::mounted_in_wall(&e)
+        };
+        assert!(with(Some("FLUSH")) && with(Some("Recessed")) && with(Some("recessed, front flush with the wall")));
+        assert!(!with(Some("SURFACE")) && !with(Some("surface, on the wall")) && !with(None));
     }
 
     /// Q6513: a riser or one-line label, or a note, calls a panel's room: on its own line after a

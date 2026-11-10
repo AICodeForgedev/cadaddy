@@ -1263,6 +1263,13 @@
     "SWITCHBOARD"
    ]
   },
+  "equipment.in_wall_mounting_words": {
+   "source": "drafting convention: the words a schedule's MOUNTING says a panel is set into its wall by (`RECESSED`, `FLUSH`); anything else hangs on the wall's face (Q6513)",
+   "words": [
+    "RECESS",
+    "FLUSH"
+   ]
+  },
   "equipment.gear_location_phrases": {
    "source": "drafting convention: the words a riser or one-line label, or a plan note, puts between a panel's name and the room it is in (`PANEL 'A' LOCATED IN ELEC 1120`, a label's next line `MOUNTED IN STORAGE 1104`); the longest first (Q6513)",
    "words": [
