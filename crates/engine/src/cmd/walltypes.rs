@@ -15,6 +15,7 @@ use cadaddy_mepfix::sheet_facts::TextItem;
 use cadaddy_walk3d::{Assembly, AssemblyLayer, HeightRule, LayerSide, WallFrom, WallType};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use super::{CommandSpec, bad};
 use crate::{Result, Session};
@@ -22,7 +23,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("walls.legend", "Read Partition Type Legend", run_legend)
-            .params("{region?: [x0, y0, x1, y1] (the legend sheet; default the whole drawing), sheet?: its number (for the source), apply?: bool (the wall types into the building spec, replacing those of the same names)} → {types: [{name, description, layers: [{side, material, thickness_in}], height, fire_rating, acoustic_rating, faces_in: [side 1, side 2] (board and channels each face, inches), mud_rings_in: [side 1, side 2] (the stocked plaster ring a box on the studs needs to reach that face), notes}], report: [line per family], applied}")
+            .params("{region?: [x0, y0, x1, y1] (the legend sheet; default the whole drawing), sheet?: its number (for the source), framing_notes?: [[x0, y0, x1, y1], …] (the structural sheets whose framing notes name the stud material when a detail does not), apply?: bool (the wall types into the building spec, replacing those of the same names)} → {types: [{name, description, layers: [{side, material, thickness_in}], height, fire_rating, acoustic_rating, faces_in: [side 1, side 2] (board and channels each face, inches), mud_rings_in: [side 1, side 2] (the stocked plaster ring a box on the studs needs to reach that face), notes}], report: [line per family], applied}")
             .noundo(),
     ]
 }
@@ -49,7 +50,29 @@ fn run_legend(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("apply").is_some_and(|a| !a.is_null() && !a.is_boolean()) {
         return Err(bad("walls.legend", "`apply` is true or false"));
     }
-    let lg = read_legend(s.doc()?, region, &sheet);
+    let mut notes: Vec<([f64; 4], String)> = Vec::new();
+    match p.get("framing_notes") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(list)) => {
+            for v in list.iter().take(64) {
+                let r: Vec<f64> = v.as_array().map(|a| a.iter().filter_map(Value::as_f64).filter(|x| x.is_finite()).collect()).unwrap_or_default();
+                match r.as_slice() {
+                    [x0, y0, x1, y1] if v.as_array().map_or(0, Vec::len) == 4 && x0 < x1 && y0 < y1 => {
+                        notes.push(([*x0, *y0, *x1, *y1], "structural notes".into()));
+                    }
+                    _ => {
+                        return Err(bad(
+                            "walls.legend",
+                            format!("each `framing_notes` region is [x0, y0, x1, y1] with x0 < x1 and y0 < y1, not {v}"),
+                        ));
+                    }
+                }
+            }
+        }
+        Some(v) => return Err(bad("walls.legend", format!("`framing_notes` is a list of regions [x0, y0, x1, y1], not {v}"))),
+    }
+    let framing = framing_note(s.doc()?, &notes);
+    let lg = read_legend(s.doc()?, region, &sheet, framing.as_ref());
     let types: Vec<Value> = lg
         .types
         .iter()
@@ -253,7 +276,7 @@ fn says(text: &str) -> Option<Says> {
         let mut layers: Vec<AssemblyLayer> = (0..count).map(|_| layer(format!("{} {kind}", frac(th)), th, "board")).collect();
         // Board on channels (`… ON 7/8" FURRING CHANNELS`, `… ON 1/2" RESILIENT CHANNELS`): the
         // channel is between the board and the studs.
-        if u.contains("CHANNEL") {
+        if u.contains("CHANNEL") || u.contains("FURRING") {
             let ch = inches_in(&u).get(1).copied().unwrap_or(if u.contains("RESILIENT") { 0.5 } else { 0.875 });
             let what = if u.contains("RESILIENT") { "resilient channel" } else { "furring channel" };
             layers.push(layer(format!("{} {what}", frac(ch)), ch, "furring"));
@@ -285,13 +308,19 @@ fn says(text: &str) -> Option<Says> {
     }
     if u.contains("STUD") {
         let lumber = nominal_lumber(&u);
-        let mut l =
-            layer(if u.contains("WOOD") || lumber.is_some() { "wood studs".into() } else { "metal studs".into() }, lumber.unwrap_or(0.0), "framing");
+        // The material the callout names (`WOOD STUDS`, `2X6`, `METAL STUDS`, `20 GA`); none:
+        // plain `studs`, which the structural framing notes (else the trade default) decide.
+        let material = match material_named(&u) {
+            Some(true) => "wood studs",
+            Some(false) => "metal studs",
+            None => UNNAMED_STUDS,
+        };
+        let mut l = layer(material.into(), lumber.unwrap_or(0.0), "framing");
         l.spacing_in = u.find('@').and_then(|a| inches_in(&u[a..]).first().copied());
         return Some(Says::Core(l));
     }
     if u.contains("MASONRY") || u.contains("CMU") {
-        return Some(Says::Core(layer("concrete masonry units".into(), 0.0, "masonry")));
+        return Some(Says::Core(layer("concrete masonry units".into(), first_in.unwrap_or(0.0), "masonry")));
     }
     if u.contains("BATT") || u.contains("INSULATION") || u.contains("GLASS FIBER") {
         let mut l = layer("sound batt insulation".into(), 0.0, "insulation");
@@ -307,6 +336,137 @@ fn says(text: &str) -> Option<Says> {
         return Some(Says::Name(u));
     }
     None
+}
+
+/// A stud callout's material when it names none (`STUDS PER STRUCTURAL`).
+const UNNAMED_STUDS: &str = "studs";
+
+/// The trade rules' words for framing material (`framing.wood_words`, `framing.steel_words`),
+/// the words a framing note about walls carries, and the material assumed when nothing names it.
+struct FramingWords {
+    wood: Vec<String>,
+    steel: Vec<String>,
+    note: Vec<String>,
+    default_wood: bool,
+    default_source: String,
+}
+
+static FRAMING_WORDS: LazyLock<FramingWords> = LazyLock::new(|| {
+    let r = super::tradeatoms::Rules::default();
+    FramingWords {
+        wood: r.words("framing.wood_words"),
+        steel: r.words("framing.steel_words"),
+        note: r.words("framing.stud_note_words"),
+        default_wood: r.text("framing.default_stud_material").eq_ignore_ascii_case("wood"),
+        default_source: r.source_text("framing.default_stud_material"),
+    }
+});
+
+/// Whether words name wood framing (true) or steel (false); None: neither, or both.
+fn material_named(u: &str) -> Option<bool> {
+    let w = &*FRAMING_WORDS;
+    let up = format!(" {} ", u.to_ascii_uppercase());
+    let wood = w.wood.iter().any(|x| up.contains(x.as_str())) || nominal_lumber(&up).is_some();
+    let steel = w.steel.iter().any(|x| up.contains(x.as_str()));
+    match (wood, steel) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    }
+}
+
+/// What the structural framing notes say the walls' studs are.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct FramingNote {
+    pub wood: bool,
+    /// The lumber's depth when the note sizes it (`2X6` → 5 1/2").
+    pub lumber_in: Option<f64>,
+    /// The sheet and the note's words.
+    pub source: String,
+}
+
+/// The stud material the framing notes in `regions` (each with its sheet number) name: a line
+/// about walls or studs (with the line above it, a note's heading) naming wood or steel. The
+/// material more notes name; None when none does or as many name each.
+pub(crate) fn framing_note(d: &Drawing, regions: &[([f64; 4], String)]) -> Option<FramingNote> {
+    if regions.is_empty() {
+        return None;
+    }
+    let w = &*FRAMING_WORDS;
+    let texts = cadaddy_mepfix::sheet_facts::texts(d);
+    let mut votes: Vec<(bool, Option<f64>, String)> = Vec::new();
+    for ([x0, y0, x1, y1], sheet) in regions {
+        let lines: Vec<&TextItem> =
+            texts.iter().filter(|t| t.at.is_finite() && t.at.x >= *x0 && t.at.x <= *x1 && t.at.y >= *y0 && t.at.y <= *y1).take(MAX_TEXTS).collect();
+        for t in &lines {
+            let h = t.height.max(1e-9);
+            let above = lines
+                .iter()
+                .filter(|n| n.at.y > t.at.y && n.at.y - t.at.y <= 2.0 * h && (n.at.x - t.at.x).abs() <= 2.0 * h)
+                .min_by(|a, b| a.at.y.total_cmp(&b.at.y));
+            let u = t.value.to_ascii_uppercase();
+            let ctx = format!("{} {u}", above.map(|a| a.value.to_ascii_uppercase()).unwrap_or_default());
+            if !w.note.iter().any(|k| ctx.contains(k.as_str())) {
+                continue;
+            }
+            if let Some(wood) = material_named(&u) {
+                let quote: String = t.value.trim().chars().take(80).collect();
+                votes.push((wood, nominal_lumber(&u), format!("{sheet} framing notes: \"{quote}\"")));
+            }
+        }
+        if votes.len() > 1000 {
+            break;
+        }
+    }
+    let wood = votes.iter().filter(|v| v.0).count();
+    let steel = votes.len() - wood;
+    if wood == steel {
+        return None;
+    }
+    let pick = wood > steel;
+    votes.into_iter().find(|v| v.0 == pick).map(|(wood, lumber_in, source)| FramingNote { wood, lumber_in, source })
+}
+
+/// Whether `next`, the line under a callout, starts a callout of its own (callouts stacked one
+/// under another, each on its own leader): the callout so far reads as a layer and `next` alone
+/// reads as another (not the channel the board is on: `ON 7/8" FURRING CHANNELS`).
+fn starts_callout(so_far: &str, next: &str) -> bool {
+    let (a, b) = (says(so_far), says(next));
+    let layer = |s: &Option<Says>| matches!(s, Some(Says::Face { .. } | Says::Core(_)));
+    if !layer(&a) || !layer(&b) {
+        return false;
+    }
+    let board = matches!(&a, Some(Says::Face { layers, .. }) if layers.iter().any(|l| l.category == "board"));
+    let channel_only = matches!(&b, Some(Says::Face { layers, .. }) if layers.iter().all(|l| l.category == "furring"));
+    !(board && channel_only)
+}
+
+/// A detail's frame: the rectangle of drawn lines nearest round its title (left and right sides
+/// past the title's line, the bottom and top spanning them, the sides reaching both), `[x0, y0,
+/// x1, y1]`.
+fn frame_around(at: Vec2, h: f64, segs: &[(Vec2, Vec2)]) -> Option<[f64; 4]> {
+    let tol = 0.25 * h.max(1e-9);
+    let vertical = |(a, b): &&(Vec2, Vec2)| (a.x - b.x).abs() <= tol && (a.y - b.y).abs() > tol;
+    let horizontal = |(a, b): &&(Vec2, Vec2)| (a.y - b.y).abs() <= tol && (a.x - b.x).abs() > tol;
+    let spans = |lo: f64, hi: f64, v: f64| v >= lo.min(hi) - tol && v <= lo.max(hi) + tol;
+    let side = |left: bool| {
+        segs.iter()
+            .filter(vertical)
+            .filter(|(a, b)| spans(a.y, b.y, at.y) && if left { a.x < at.x } else { a.x > at.x })
+            .map(|(a, _)| a.x)
+            .min_by(|p, q| (p - at.x).abs().total_cmp(&(q - at.x).abs()))
+    };
+    let (x0, x1) = (side(true)?, side(false)?);
+    let edge = |below: bool| {
+        segs.iter()
+            .filter(horizontal)
+            .filter(|(a, b)| spans(a.x, b.x, x0) && spans(a.x, b.x, x1) && if below { a.y < at.y } else { a.y > at.y })
+            .map(|(a, _)| a.y)
+            .min_by(|p, q| (p - at.y).abs().total_cmp(&(q - at.y).abs()))
+    };
+    let (y0, y1) = (edge(true)?, edge(false)?);
+    let reaches = |x: f64| segs.iter().filter(vertical).any(|(a, b)| (a.x - x).abs() <= tol && spans(a.y, b.y, y0) && spans(a.y, b.y, y1));
+    (reaches(x0) && reaches(x1)).then_some([x0, y0, x1, y1])
 }
 
 /// Sawn lumber's depth from its nominal size (`2X4` → 3 1/2", `2X6` → 5 1/2").
@@ -410,6 +570,37 @@ fn segments(d: &Drawing, inside: &dyn Fn(Vec2) -> bool) -> Vec<(Vec2, Vec2)> {
     out
 }
 
+/// The straight edges of the drawing in `region` that a detail frame is drawn with: lines and
+/// every polyline's edges (a closed one's closing edge too).
+fn frame_segments(d: &Drawing, inside: &dyn Fn(Vec2) -> bool) -> Vec<(Vec2, Vec2)> {
+    let mut out = Vec::new();
+    let push = |a: Vec2, b: Vec2, out: &mut Vec<(Vec2, Vec2)>| {
+        if a.is_finite() && b.is_finite() && a.dist(b) > 1e-9 && (inside(a) || inside(b)) {
+            out.push((a, b));
+        }
+    };
+    for e in d.model.iter() {
+        match &e.kind {
+            EntityKind::Line(l) => push(l.a.xy(), l.b.xy(), &mut out),
+            EntityKind::LwPolyline(p) => {
+                for w in p.vertices.windows(2) {
+                    push(w[0].p, w[1].p, &mut out);
+                }
+                if p.closed
+                    && let (Some(a), Some(b)) = (p.vertices.last(), p.vertices.first())
+                {
+                    push(a.p, b.p, &mut out);
+                }
+            }
+            _ => {}
+        }
+        if out.len() >= MAX_SEGS {
+            break;
+        }
+    }
+    out
+}
+
 /// Where a callout's leader points: from a segment end at the callout's left (its first line's
 /// middle), along the segments joined end to end, to the last end.
 fn leader_tip(c: &Callout, segs: &[(Vec2, Vec2)]) -> Option<Vec2> {
@@ -452,7 +643,9 @@ fn leader_tip(c: &Callout, segs: &[(Vec2, Vec2)]) -> Option<Vec2> {
 
 /// Read the partition type legend(s) of the drawing (within `region`, `[x0, y0, x1, y1]`, when
 /// given): each family's marks as wall types with their layers per side, ratings and head rule.
-pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) -> Legend {
+/// A stud callout that names no material takes the one `framing` (the structural framing notes)
+/// names, else the trade default, and says so.
+pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str, framing: Option<&FramingNote>) -> Legend {
     let inside = |p: Vec2| region.is_none_or(|[x0, y0, x1, y1]| p.x >= x0.min(x1) && p.x <= x0.max(x1) && p.y >= y0.min(y1) && p.y <= y0.max(y1));
     let texts: Vec<TextItem> = cadaddy_mepfix::sheet_facts::texts(d);
     let lines: Vec<Line> = texts
@@ -504,15 +697,15 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
             continue;
         };
         let Some(fh) = families.get(fi).map(|f| f.1.h) else { continue };
+        // A row ends where the next mark on its line starts (schedules side by side).
+        let row_y = |c: &Line| (c.at.y - l.at.y).abs() <= 0.5 * l.h.max(1e-9);
+        let next_mark =
+            lines.iter().filter(|c| row_y(c) && c.at.x > l.at.x && mark_parts(&c.s).is_some()).map(|c| c.at.x).fold(f64::INFINITY, f64::min);
         let mut cells: Vec<(usize, &Line)> = lines
             .iter()
             .enumerate()
             .filter(|(j, c)| {
-                *j != k
-                    && (c.at.y - l.at.y).abs() <= 0.5 * l.h.max(1e-9)
-                    && c.at.x > l.at.x
-                    && c.at.x - l.at.x <= 60.0 * fh
-                    && mark_parts(&c.s).is_none()
+                *j != k && row_y(c) && c.at.x > l.at.x && c.at.x < next_mark && c.at.x - l.at.x <= 60.0 * fh && mark_parts(&c.s).is_none()
             })
             .collect();
         cells.sort_by(|a, b| a.1.at.x.total_cmp(&b.1.at.x));
@@ -528,29 +721,52 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
         }
     }
     let segs = segments(d, &inside);
-    for (fi, (letter, title)) in families.iter().enumerate() {
+    // Each detail's frame, when it is drawn in one (a frame round two titles is the sheet's or a
+    // group's, no one detail's).
+    let edges = frame_segments(d, &inside);
+    let contains = |r: &[f64; 4], p: Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+    let frames: Vec<Option<[f64; 4]>> = families
+        .iter()
+        .map(|(_, t)| frame_around(t.at, t.h, &edges).filter(|r| families.iter().filter(|(_, o)| contains(r, o.at)).count() == 1))
+        .collect();
+    // The family a line is a callout of: the one whose frame it is in; else, of the titles below
+    // it within reach that have no frame, the nearest, and of titles side by side (one row), the
+    // one whose reach starts last before the line: details side by side split their row.
+    let owner = |l: &Line| -> Option<usize> {
+        let framed = frames
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| f.filter(|r| contains(r, l.at)).map(|r| (i, (r[2] - r[0]) * (r[3] - r[1]))))
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((i, _)) = framed {
+            return families.get(i).filter(|(_, t)| l.at.y > t.at.y).map(|_| i);
+        }
+        let cands: Vec<(usize, f64, f64)> = families
+            .iter()
+            .enumerate()
+            .filter(|(i, (_, f))| {
+                frames.get(*i).is_some_and(Option::is_none)
+                    && f.at.y < l.at.y
+                    && l.at.y - f.at.y <= 70.0 * f.h
+                    && l.at.x >= f.at.x - 12.0 * f.h
+                    && l.at.x <= f.at.x + 50.0 * f.h
+            })
+            .map(|(i, (_, f))| (i, l.at.y - f.at.y, f.at.x - 12.0 * f.h))
+            .collect();
+        let near = cands.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+        let row = cands.iter().filter(|c| families.get(c.0).is_some_and(|(_, f)| c.1 <= near + 3.0 * f.h));
+        row.max_by(|a, b| a.2.total_cmp(&b.2)).map(|c| c.0)
+    };
+    for (fi, (letter, _)) in families.iter().enumerate() {
         let Some(marks) = rows.get(&fi) else {
             out.report.push(format!("TYPE {letter} PARTITION: no marks in its schedule"));
             continue;
         };
-        // Its callouts: lines above its title (the nearest title under them is its), beside it.
+        // Its callouts: the lines above its title that are its (above).
         let mut own: Vec<&Line> = lines
             .iter()
             .enumerate()
-            .filter(|(k, l)| {
-                !used.get(*k).copied().unwrap_or(true)
-                    && family_title(&l.s).is_none()
-                    && l.at.y > title.at.y
-                    && l.at.x >= title.at.x - 12.0 * title.h
-                    && l.at.x <= title.at.x + 50.0 * title.h
-            })
-            .filter(|(_, l)| {
-                let below = families
-                    .iter()
-                    .filter(|(_, f)| f.at.y < l.at.y && l.at.x >= f.at.x - 12.0 * f.h && l.at.x <= f.at.x + 50.0 * f.h)
-                    .min_by(|a, b| (l.at.y - a.1.at.y).total_cmp(&(l.at.y - b.1.at.y)));
-                below.is_some_and(|(_, f)| std::ptr::eq(*f, *title)) && l.at.y - title.at.y <= 70.0 * title.h
-            })
+            .filter(|(k, l)| !used.get(*k).copied().unwrap_or(true) && family_title(&l.s).is_none() && owner(l) == Some(fi))
             .map(|(_, l)| l)
             .collect();
         own.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
@@ -566,6 +782,9 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
             for (j, next) in own.iter().enumerate().skip(i + 1) {
                 let Some(t) = taken.get_mut(j) else { break };
                 if !*t && (next.at.x - c.at.x).abs() <= 0.8 * c.h && y - next.at.y > 0.0 && y - next.at.y <= 1.9 * c.h {
+                    if starts_callout(&c.s, &next.s) {
+                        break;
+                    }
                     *t = true;
                     c.s.push(' ');
                     c.s.push_str(&next.s);
@@ -624,6 +843,27 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
                 },
             }
         }
+        // Studs whose callout names no material: the framing notes', else the trade default.
+        let unnamed = core.iter().any(|c| c.category == "framing" && c.material == UNNAMED_STUDS);
+        let from_notes = unnamed && framing.is_some();
+        let stud_material = |c: &AssemblyLayer| -> AssemblyLayer {
+            let mut c = c.clone();
+            if c.category == "framing" && c.material == UNNAMED_STUDS {
+                c.material = match framing {
+                    Some(f) => if f.wood { "wood studs" } else { "metal studs" }.into(),
+                    None => format!("{} studs (material not given)", if FRAMING_WORDS.default_wood { "wood" } else { "metal" }),
+                };
+            }
+            c
+        };
+        let material_note = unnamed.then(|| match framing {
+            Some(f) => format!("stud material from the structural framing notes ({}): the detail names none", f.source),
+            None => format!(
+                "stud material not given by the detail or the structural framing notes: {} studs assumed ({})",
+                if FRAMING_WORDS.default_wood { "wood" } else { "metal" },
+                FRAMING_WORDS.default_source
+            ),
+        });
         let mut made = Vec::new();
         for r in marks {
             let prefix: String = r.mark.chars().take(r.mark.len().saturating_sub(1)).collect();
@@ -665,6 +905,7 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
                     // The core between the faces, at the schedule's depth(s) (else the callout's
                     // lumber size).
                     for c in &core {
+                        let c = &stud_material(c);
                         // (Cavity insulation fills the deepest stud row: a layer is never 0"
                         // thick. A stud row the schedule and callout give no depth: 3 1/2".)
                         let stud = r.depths.iter().copied().filter(|d| *d > 0.0).fold(0.0, f64::max);
@@ -672,6 +913,8 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
                             vec![if stud > 0.0 { stud } else { DEFAULT_STUD_IN }]
                         } else if !r.depths.is_empty() {
                             r.depths.clone()
+                        } else if c.thickness_in <= 0.0 && c.category == "framing" && from_notes {
+                            vec![framing.and_then(|f| f.lumber_in).unwrap_or(0.0)]
                         } else {
                             vec![c.thickness_in]
                         };
@@ -700,6 +943,7 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
             for u in &unsided {
                 notes.push(format!("one face, which not read: {u}"));
             }
+            notes.extend(material_note.iter().cloned());
             let head = r.mark.chars().last().and_then(|c| heads.get(&c).copied());
             let layers_external = layers.iter().any(|l| l.category == "finish");
             let thickness: f64 = layers.iter().filter(|l| !l.in_cavity).map(|l| l.thickness_in).sum();
@@ -1059,7 +1303,7 @@ mod tests {
 
     #[test]
     fn each_mark_of_a_legend_family_is_a_wall_type_with_its_layers_on_the_faces_its_leaders_point_at() {
-        let lg = read_legend(&legend(), None, "X000");
+        let lg = read_legend(&legend(), None, "X000", None);
         let names: Vec<&str> = lg.types.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["Q4B", "W4A", "W6A"], "{:?}", lg.report);
         let q = &lg.types[0];
@@ -1142,7 +1386,7 @@ mod tests {
 
     #[test]
     fn a_box_takes_the_finish_of_the_face_it_is_on() {
-        let lg = read_legend(&legend(), None, "X000");
+        let lg = read_legend(&legend(), None, "X000", None);
         let (q, w4) = (&lg.types[0], &lg.types[1]);
         // Q's faces differ; side 1 is the HALL SIDE: a box in the hall is on the plain face, one
         // in the suite on the channel face.
@@ -1160,6 +1404,142 @@ mod tests {
         let f = box_face(&unnamed, "Suite 214").expect("face");
         assert_eq!(f.0, 1.125);
         assert!(f.2.is_some_and(|n| n.contains("check which face")));
+    }
+
+    /// Two made-up partition details side by side (the second's callouts inside the first's
+    /// reach), their callouts stacked one under another each on its own leader, and their
+    /// schedule rows on one line: P (board each side, wood studs, batt) and M (masonry, board on
+    /// furring on one face). `framed`: each detail in its frame, the second written first.
+    fn side_by_side(framed: bool) -> Drawing {
+        let mut d = Drawing::default();
+        let h = 2.0;
+        let p = |d: &mut Drawing| {
+            text(d, "5/8\" TYPE-X GYP. BD. EACH SIDE", 130.0, 200.0, h);
+            line(d, (129.0, 201.0), (99.0, 190.0));
+            line(d, (129.0, 201.0), (108.0, 190.0));
+            text(d, "WOOD STUDS PER STRUCTURAL", 130.0, 197.0, h);
+            line(d, (129.0, 198.0), (103.0, 185.0));
+            text(d, "SOUND BATT", 130.0, 194.0, h);
+            line(d, (129.0, 195.0), (104.0, 180.0));
+            text(d, "TYPE P PARTITION", 90.0, 128.0, 3.0);
+            text(d, "P6A", 92.0, 118.0, h);
+            text(d, "5 1/2\"", 102.0, 118.0, h);
+            text(d, "1 HOUR", 115.0, 118.0, h);
+        };
+        let m = |d: &mut Drawing| {
+            text(d, "CMU 7 5/8\"", 240.0, 200.0, h);
+            line(d, (239.0, 201.0), (205.0, 190.0));
+            text(d, "5/8\" GYP ON 7/8\" FURRING", 240.0, 197.0, h);
+            line(d, (239.0, 198.0), (214.0, 185.0));
+            text(d, "TYPE M PARTITION", 200.0, 128.0, 3.0);
+            text(d, "M8A", 202.0, 118.0, h);
+            text(d, "7 5/8\"", 212.0, 118.0, h);
+            text(d, "2 HOUR", 225.0, 118.0, h);
+        };
+        if framed {
+            m(&mut d);
+            p(&mut d);
+            for (x0, x1) in [(80.0, 185.0), (190.0, 300.0)] {
+                for (p, q) in [((x0, 110.0), (x1, 110.0)), ((x1, 110.0), (x1, 215.0)), ((x1, 215.0), (x0, 215.0)), ((x0, 215.0), (x0, 110.0))] {
+                    line(&mut d, p, q);
+                }
+            }
+        } else {
+            p(&mut d);
+            m(&mut d);
+        }
+        d
+    }
+
+    #[test]
+    fn side_by_side_details_each_give_their_own_layers_studs_and_rating() {
+        for framed in [false, true] {
+            let lg = read_legend(&side_by_side(framed), None, "X000", None);
+            let get = |n: &str| lg.types.iter().find(|t| t.name == n).unwrap_or_else(|| panic!("{n}: {:?}", lg.report));
+            let (p6, m8) = (get("P6A"), get("M8A"));
+            let (aa, la) = (p6.assembly.as_ref().unwrap(), m8.assembly.as_ref().unwrap());
+            assert_eq!(side(p6, LayerSide::Core), vec!["5 1/2\" wood studs", "sound batt insulation"], "framed {framed}");
+            assert_eq!(side(p6, LayerSide::Side1), vec!["5/8\" Type X gypsum board"], "framed {framed}");
+            assert_eq!(side(p6, LayerSide::Side2), vec!["5/8\" Type X gypsum board"], "framed {framed}");
+            assert_eq!(aa.fire_rating.as_deref(), Some("1 HR"), "P's rating is its own row's (framed {framed})");
+            assert_eq!(p6.thickness_in, 6.75, "framed {framed}");
+            assert_eq!(side(m8, LayerSide::Core), vec!["7 5/8\" concrete masonry units"], "no studs in a masonry type (framed {framed})");
+            assert!(side(m8, LayerSide::Side1).is_empty(), "framed {framed}: {:?}", side(m8, LayerSide::Side1));
+            assert_eq!(side(m8, LayerSide::Side2), vec!["7/8\" furring channel", "5/8\" gypsum board"], "framed {framed}");
+            assert_eq!(la.fire_rating.as_deref(), Some("2 HR"), "framed {framed}");
+            assert_eq!(m8.thickness_in, 9.125, "framed {framed}");
+        }
+    }
+
+    /// A made-up detail whose stud callout names no material, and a structural notes sheet off to
+    /// the side that names the walls' studs.
+    fn unnamed_studs(note: &str) -> Drawing {
+        let mut d = Drawing::default();
+        let h = 2.0;
+        text(&mut d, "5/8\" GYP. BD. EACH SIDE", 130.0, 200.0, h);
+        line(&mut d, (129.0, 201.0), (99.0, 190.0));
+        line(&mut d, (129.0, 201.0), (108.0, 190.0));
+        text(&mut d, "STUDS PER STRUCTURAL", 130.0, 197.0, h);
+        line(&mut d, (129.0, 198.0), (103.0, 185.0));
+        text(&mut d, "TYPE K PARTITION", 90.0, 128.0, 3.0);
+        text(&mut d, "K6A", 92.0, 118.0, h);
+        text(&mut d, "-", 102.0, 118.0, h);
+        text(&mut d, "1 HOUR", 115.0, 118.0, h);
+        // The structural sheet: a heading and its note under it, and a joist note (no walls).
+        text(&mut d, "FRAMING NOTES", 1000.0, 200.0, h);
+        text(&mut d, "2X10 FLOOR JOISTS @ 16\" O.C.", 1000.0, 190.0, h);
+        text(&mut d, "STUD WALLS:", 1000.0, 180.0, h);
+        text(&mut d, note, 1000.0, 177.0, h);
+        d
+    }
+
+    #[test]
+    fn studs_the_detail_names_no_material_for_take_the_framing_notes_else_a_marked_default() {
+        let notes = [([900.0, 100.0, 1200.0, 300.0], "S000".to_string())];
+        let d = unnamed_studs("2X6 @ 16\" O.C. U.N.O.");
+        let f = framing_note(&d, &notes).expect("the stud wall note");
+        assert!(f.wood && f.lumber_in == Some(5.5) && f.source.contains("S000"), "{f:?}");
+        let lg = read_legend(&d, Some([0.0, 0.0, 500.0, 300.0]), "X000", Some(&f));
+        let k = &lg.types[0];
+        assert_eq!(side(k, LayerSide::Core), vec!["5 1/2\" wood studs"], "the note's 2X6 (the schedule gives no depth)");
+        assert!(k.assembly.as_ref().unwrap().notes.iter().any(|n| n.contains("structural framing notes") && n.contains("S000")));
+        // Steel in the notes: metal studs; nothing names it: the default, marked a default.
+        let steel = unnamed_studs("3 5/8\" 20 GA METAL STUDS @ 16\" O.C.");
+        let f = framing_note(&steel, &notes).expect("the steel note");
+        assert!(!f.wood);
+        assert_eq!(framing_note(&steel, &[]), None);
+        let lg = read_legend(&steel, Some([0.0, 0.0, 500.0, 300.0]), "X000", None);
+        let k = &lg.types[0];
+        assert_eq!(side(k, LayerSide::Core), vec!["3 1/2\" metal studs (material not given) (depth not given)"]);
+        assert!(
+            k.assembly.as_ref().unwrap().notes.iter().any(|n| n.contains("metal studs assumed") && n.contains("company default")),
+            "{:?}",
+            k.assembly
+        );
+        // The command reads the notes regions it is given.
+        let mut s = Session::new();
+        s.execute("new", &json!({})).expect("new");
+        *s.doc_mut().unwrap() = unnamed_studs("WOOD STUDS SPF NO. 2");
+        let out =
+            s.execute("walls.legend", &json!({"region": [0, 0, 500, 300], "framing_notes": [[900, 100, 1200, 300]], "apply": true})).expect("legend");
+        let mat = out["types"][0]["layers"].as_array().unwrap().iter().find(|l| l["side"] == "core").unwrap()["material"].clone();
+        assert_eq!(mat, json!("3 1/2\" wood studs (depth not given)"), "{out}");
+        assert!(s.execute("walls.legend", &json!({"framing_notes": [[0, 0, 5]]})).is_err());
+        assert!(s.execute("walls.legend", &json!({"framing_notes": "S"})).is_err());
+    }
+
+    #[test]
+    fn a_line_under_a_callout_runs_on_unless_it_is_a_layer_of_its_own() {
+        assert!(starts_callout("5/8\" TYPE-X GYP. BD. EACH SIDE", "WOOD STUDS PER STRUCTURAL"));
+        assert!(starts_callout("CMU 7 5/8\"", "5/8\" GYP ON 7/8\" FURRING"));
+        assert!(starts_callout("2X6 WOOD STUDS", "SOUND BATT"));
+        // Run-on words, and the channels a board is on.
+        assert!(!starts_callout("(2) LAYERS 5/8\" TYPE-X", "GYP. BD. EACH SIDE"));
+        assert!(!starts_callout("5/8\" TYPE-X GYP. BD.", "ON 7/8\" FURRING CHANNELS"));
+        assert!(!starts_callout("WOOD STUDS", "@ 16\" O.C."));
+        assert_eq!(material_named("STUDS PER STRUCTURAL"), None);
+        assert_eq!(material_named("3 5/8\" 20 GA STUDS"), Some(false));
+        assert_eq!(material_named("2X4 STUDS"), Some(true));
     }
 
     #[test]
