@@ -49,7 +49,8 @@ impl Panel {
             Self::Job => "job",
         }
     }
-    fn label(self) -> &'static str {
+    /// The palette's name: its tab title and its rail button's tooltip (English; translated where shown).
+    pub fn label(self) -> &'static str {
         match self {
             Self::Canvas => "Drawing",
             Self::ToolSets => "Tool Sets",
@@ -81,6 +82,31 @@ impl Panel {
             Self::Job => Zone::Right,
         }
     }
+    /// The palettes on the icon rail down the window's edge, top to bottom: the ones used most
+    /// first. Every palette but the drawing itself.
+    pub const RAIL: &[Self] = &[
+        Self::Properties,
+        Self::Layers,
+        Self::ToolSets,
+        Self::Symbols,
+        Self::ExternalRefs,
+        Self::Coordination,
+        Self::SheetSets,
+        Self::PlansToModel,
+        Self::Validate,
+        Self::Job,
+        Self::QuickCalc,
+    ];
+    /// The width a palette opened from the rail takes beside it, points (the user's own width is
+    /// kept once they drag it).
+    fn rail_width(self) -> f32 {
+        match self {
+            Self::ToolSets => 220.0,
+            Self::Coordination | Self::PlansToModel => 340.0,
+            Self::Validate | Self::Job => 420.0,
+            _ => 300.0,
+        }
+    }
     /// Palettes outside the default arrangement, opened on request (QUICKCALC).
     pub const ON_DEMAND: &[Self] = &[Self::QuickCalc, Self::PlansToModel, Self::SheetSets, Self::Coordination, Self::Validate, Self::Job];
     pub fn parse(id: &str) -> Result<Self, String> {
@@ -104,12 +130,7 @@ fn split(axis: SplitAxis, size: SplitSize, first: Node<Panel>, second: Node<Pane
 fn mirror(n: Node<Panel>) -> Node<Panel> {
     match n {
         Node::Split { axis: SplitAxis::Horizontal, size, first, second } => {
-            let size = match size {
-                SplitSize::Ratio(r) => SplitSize::Ratio(1.0 - r),
-                SplitSize::FixedFirst(v) => SplitSize::FixedSecond(v),
-                SplitSize::FixedSecond(v) => SplitSize::FixedFirst(v),
-            };
-            Node::Split { axis: SplitAxis::Horizontal, size, first: Box::new(mirror(*second)), second: Box::new(mirror(*first)) }
+            Node::Split { axis: SplitAxis::Horizontal, size: mirror_size(size), first: Box::new(mirror(*second)), second: Box::new(mirror(*first)) }
         }
         Node::Split { axis, size, first, second } => Node::Split { axis, size, first: Box::new(mirror(*first)), second: Box::new(mirror(*second)) },
         other => other,
@@ -125,6 +146,72 @@ pub struct Workspace {
     /// Palettes in windows of their own (another screen, say), outside the main window.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub detached: Vec<Detached>,
+    /// Palettes the user pinned: they stay docked where they are when another palette opens
+    /// from the rail. One that isn't pinned closes when another one opens.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pinned: Vec<Panel>,
+    /// The arrangement the layout was saved with: [`RAIL_LAYOUT`] since the icon rail; missing
+    /// (0) in settings written before it, when every palette stood docked ([`upgrade`]).
+    #[serde(default = "before_rail")]
+    pub rail: u32,
+    /// The layout is mirrored for a right-to-left interface: the rail and the palettes it opens
+    /// are on the right.
+    #[serde(skip_serializing_if = "is_false")]
+    pub mirrored: bool,
+}
+
+/// [`Workspace::rail`] of a layout made for the icon rail.
+pub const RAIL_LAYOUT: u32 = 1;
+
+/// A saved layout without [`Workspace::rail`] dates from before the icon rail.
+fn before_rail() -> u32 {
+    0
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Where a palette opened from the rail goes: beside the rail, at the drawing's edge, at its own
+/// width (on the right in a right-to-left interface, where the rail is).
+fn rail_location(panel: Panel, mirrored: bool) -> Location<Panel> {
+    let w = panel.rail_width();
+    let (zone, size) = if mirrored { (Zone::Right, SplitSize::FixedSecond(w)) } else { (Zone::Left, SplitSize::FixedFirst(w)) };
+    Location { floating: None, anchor: Some(Panel::Canvas), placement: Placement::Split(zone), size: Some(size), stack: None, sibling: Vec::new() }
+}
+
+fn mirror_size(size: SplitSize) -> SplitSize {
+    match size {
+        SplitSize::Ratio(r) => SplitSize::Ratio(1.0 - r),
+        SplitSize::FixedFirst(v) => SplitSize::FixedSecond(v),
+        SplitSize::FixedSecond(v) => SplitSize::FixedFirst(v),
+    }
+}
+
+/// A closed palette's place mirrored left to right: beside something on its left goes to its right.
+fn mirror_location(location: &mut Location<Panel>) {
+    if let Placement::Split(zone @ (Zone::Left | Zone::Right)) = location.placement {
+        location.placement = Placement::Split(if zone == Zone::Left { Zone::Right } else { Zone::Left });
+        location.size = location.size.map(mirror_size);
+    }
+}
+
+/// Stack entries' heights and open states cleared: two layouts that differ only in those have
+/// the same arrangement.
+fn clear_stacks(node: &mut Node<Panel>) {
+    match node {
+        Node::Split { first, second, .. } => {
+            clear_stacks(first);
+            clear_stacks(second);
+        }
+        Node::Stack { entries } => {
+            for e in entries {
+                e.height = None;
+                e.open = true;
+            }
+        }
+        Node::Tabs { .. } => {}
+    }
 }
 
 /// A palette in its own OS window: where that window is (screen points: left, top, width,
@@ -146,8 +233,25 @@ fn usable(rect: &[f32; 4]) -> bool {
     rect.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD) && rect[2] >= 120.0 && rect[3] >= 80.0
 }
 
+/// The default: the drawing fills the window, every palette is closed and waits on the rail
+/// beside it.
 impl Default for Workspace {
     fn default() -> Self {
+        Self {
+            layout: Layout { root: Some(tabs(Panel::Canvas)), floating: Vec::new() },
+            hidden: Panel::RAIL.iter().map(|p| (*p, rail_location(*p, false))).collect(),
+            detached: Vec::new(),
+            pinned: Vec::new(),
+            rail: RAIL_LAYOUT,
+            mirrored: false,
+        }
+    }
+}
+
+impl Workspace {
+    /// The default before the icon rail: Tool Sets on the left, the Layers, Properties and
+    /// Symbols column standing open on the right. Only to recognise a saved layout nobody changed.
+    fn classic() -> Self {
         Self {
             layout: Layout {
                 root: Some(split(
@@ -160,8 +264,6 @@ impl Default for Workspace {
                         tabs(Panel::Canvas),
                         Node::Stack {
                             entries: vec![
-                                // Properties takes the room left: Layers and Symbols get modest fixed
-                                // heights (users resize them; a saved layout keeps their sizes).
                                 craft_ui::docking::StackEntry { panel: Panel::Layers, open: true, height: Some(LAYERS_HEIGHT) },
                                 craft_ui::docking::StackEntry { panel: Panel::Properties, open: true, height: Some(PROPERTIES_HEIGHT) },
                                 craft_ui::docking::StackEntry { panel: Panel::Symbols, open: false, height: Some(240.0) },
@@ -173,7 +275,107 @@ impl Default for Workspace {
             },
             hidden: Vec::new(),
             detached: Vec::new(),
+            pinned: Vec::new(),
+            rail: before_rail(),
+            mirrored: false,
         }
+    }
+
+    /// The arrangement from before the icon rail, made with the rail: Tool Sets on the left, the
+    /// Layers, Properties and Symbols column on the right, all pinned so they stay; the other
+    /// palettes wait on the rail. For users (and tests) who work with docked palettes.
+    pub fn docked() -> Self {
+        let mut w = Self::classic();
+        w.rail = RAIL_LAYOUT;
+        w.pinned = vec![Panel::ToolSets, Panel::Layers, Panel::Properties, Panel::Symbols];
+        w.hidden = Panel::RAIL.iter().filter(|p| !w.layout.contains(p)).map(|p| (*p, rail_location(*p, false))).collect();
+        w
+    }
+
+    /// The layout is the pre-rail default as it came (Tool Sets shown or not, sizes the app set
+    /// itself): nothing the user arranged would be lost by the rail's default.
+    fn is_classic(&self) -> bool {
+        if !self.layout.floating.is_empty() || !self.detached.is_empty() {
+            return false;
+        }
+        let arrangement = |layout: &Layout<Panel>| -> Option<Node<Panel>> {
+            let mut layout = layout.clone();
+            if layout.contains(&Panel::ToolSets) {
+                layout.apply(Action::Close { panel: Panel::ToolSets }).ok()?;
+            }
+            let mut root = layout.root?;
+            clear_stacks(&mut root);
+            Some(root)
+        };
+        let Some(mine) = arrangement(&self.layout) else { return false };
+        let classic = Self::classic().layout;
+        let mirrored = Layout { root: classic.root.clone().map(mirror), floating: Vec::new() };
+        arrangement(&classic).is_some_and(|c| c == mine) || arrangement(&mirrored).is_some_and(|c| c == mine)
+    }
+
+    /// Whether `panel` can be seen now: docked as the selected tab or an expanded entry, floating
+    /// as its group's selected tab, or in a window of its own.
+    pub fn showing(&self, panel: Panel) -> bool {
+        fn shown(node: &Node<Panel>, panel: Panel) -> bool {
+            match node {
+                Node::Split { first, second, .. } => shown(first, panel) || shown(second, panel),
+                Node::Tabs { panels, active } => panels.get(*active) == Some(&panel),
+                Node::Stack { entries } => entries.iter().any(|e| e.panel == panel && e.open),
+            }
+        }
+        self.is_detached(panel)
+            || self.layout.root.as_ref().is_some_and(|root| shown(root, panel))
+            || self.layout.floating.iter().any(|g| g.panels.get(g.active) == Some(&panel))
+    }
+
+    /// Show `panel` the rail's way: where it was last (beside the rail the first time), selected;
+    /// every other palette that isn't pinned closes, so one stands open unless the user pinned
+    /// more. Palettes in windows of their own stay.
+    pub fn open_one(&mut self, panel: Panel) -> Result<(), String> {
+        if panel == Panel::Canvas {
+            return Err("The drawing is not a palette".into());
+        }
+        let mut next = self.clone();
+        next.reveal_panel(panel)?;
+        let loose: Vec<Panel> =
+            next.layout.panels().into_iter().copied().filter(|p| *p != panel && *p != Panel::Canvas && !next.pinned.contains(p)).collect();
+        for p in loose {
+            next.apply(Action::Close { panel: p })?;
+        }
+        *self = next;
+        Ok(())
+    }
+
+    /// A rail button: a palette that shows closes (its window, if it has one of its own); one
+    /// that doesn't opens the rail's way ([`Self::open_one`]); one behind another tab or folded
+    /// in its stack comes to the front.
+    pub fn toggle(&mut self, panel: Panel) -> Result<(), String> {
+        if panel == Panel::Canvas {
+            return Err("The drawing is not a palette".into());
+        }
+        if self.is_detached(panel) {
+            self.detached.retain(|d| d.panel != panel);
+            return Ok(());
+        }
+        if self.showing(panel) {
+            self.apply(Action::Close { panel })
+        } else if self.layout.contains(&panel) {
+            self.reveal_panel(panel)
+        } else {
+            self.open_one(panel)
+        }
+    }
+
+    /// Pin `panel` (it stays docked when another palette opens) or unpin it.
+    pub fn pin(&mut self, panel: Panel, pinned: bool) -> Result<(), String> {
+        if panel == Panel::Canvas {
+            return Err("The drawing is not a palette".into());
+        }
+        self.pinned.retain(|p| *p != panel);
+        if pinned {
+            self.pinned.push(panel);
+        }
+        Ok(())
     }
 }
 
@@ -183,6 +385,10 @@ impl Workspace {
     pub fn mirrored(&self) -> Workspace {
         let mut w = self.clone();
         w.layout.root = w.layout.root.take().map(mirror);
+        for (_, location) in &mut w.hidden {
+            mirror_location(location);
+        }
+        w.mirrored = !w.mirrored;
         w
     }
 
@@ -193,6 +399,10 @@ impl Workspace {
             if d.panel == Panel::Canvas || self.layout.contains(&d.panel) || !own.insert(d.panel) || !usable(&d.rect) {
                 return Err("A palette window has an invalid panel or rectangle".into());
             }
+        }
+        let mut pins = std::collections::HashSet::new();
+        if self.pinned.iter().any(|p| *p == Panel::Canvas || !pins.insert(*p)) {
+            return Err("A pinned palette has an invalid or duplicate identity".into());
         }
         if !self.layout.contains(&Panel::Canvas) || self.hidden.len() > Panel::ALL.len() + Panel::ON_DEMAND.len() {
             return Err("The panel layout must contain its document view and bounded hidden panels".into());
@@ -280,7 +490,9 @@ impl Workspace {
         {
             next.set_visible(anchor, true)?;
         }
-        let restored = location.as_ref().is_some_and(|location| next.layout.restore(panel, location).is_ok());
+        // Never placed before (a layout saved before the palette existed): beside the rail.
+        let restored = location.as_ref().is_some_and(|location| next.layout.restore(panel, location).is_ok())
+            || next.layout.restore(panel, &rail_location(panel, next.mirrored)).is_ok();
         if !restored {
             next.layout
                 .apply_with_permissions(
@@ -323,6 +535,17 @@ impl Workspace {
             return self.apply(Action::ResizeSplit { path, size });
         }
         let panel = Panel::parse(params.get("panel").and_then(Value::as_str).ok_or("panel is required")?)?;
+        match operation {
+            "toggle" => return self.toggle(panel),
+            "pin" => {
+                let pinned = match params.get("pinned") {
+                    None | Some(Value::Null) => !self.pinned.contains(&panel),
+                    Some(v) => v.as_bool().ok_or("pinned must be a boolean")?,
+                };
+                return self.pin(panel, pinned);
+            }
+            _ => {}
+        }
         if self.is_detached(panel) {
             // Its window is already open; closing it keeps its place in the layout for later.
             return match operation {
@@ -335,7 +558,7 @@ impl Workspace {
             };
         }
         let action = match operation {
-            "open" => return self.reveal_panel(panel),
+            "open" => return self.open_one(panel),
             "close" => Action::Close { panel },
             "activate" => Action::Activate { panel },
             "setStackOpen" => Action::SetStackOpen { panel, open: params.get("open").and_then(Value::as_bool).ok_or("open must be a boolean")? },
@@ -390,7 +613,7 @@ impl Workspace {
                 };
                 Action::Move { panel, anchor, placement }
             }
-            _ => return Err("operation must be open, close, activate, float, move, moveFloating, resizeSplit, setStackOpen, resizeStack, detach, dock or moveDetached".into()),
+            _ => return Err("operation must be open, close, toggle, pin, activate, float, move, moveFloating, resizeSplit, setStackOpen, resizeStack, detach, dock or moveDetached".into()),
         };
         self.apply(action)
     }
@@ -459,44 +682,98 @@ fn rect_param(v: &Value) -> Result<[f32; 4], String> {
     Ok(out)
 }
 
-fn sync(workspace: &mut Workspace, app: &crate::CadApp) -> Result<(), String> {
+/// Follow the Tool Sets and palettes switches (View ▸ Tool Sets, View ▸ Palettes, workspaces),
+/// then report what shows back to them.
+fn sync(workspace: &mut Workspace, ui: &mut crate::UiState) -> Result<(), String> {
     // A palette in its own window stays there while its switch is on; turned off, its window closes.
+    // A switch turned on opens its palette the rail's way, so other palettes that aren't pinned
+    // close and only one switch's palette opens at a time (the other switch then reads off).
+    let mut opened = false;
     if !workspace.is_detached(Panel::ToolSets) {
-        workspace.set_visible(Panel::ToolSets, app.ui.show_toolsets)?;
-    } else if !app.ui.show_toolsets {
+        if ui.show_toolsets && !workspace.layout.contains(&Panel::ToolSets) {
+            workspace.open_one(Panel::ToolSets)?;
+            opened = true;
+        } else if !ui.show_toolsets {
+            workspace.set_visible(Panel::ToolSets, false)?;
+        }
+    } else if !ui.show_toolsets {
         workspace.detached.retain(|d| d.panel != Panel::ToolSets);
     }
     if workspace.is_detached(Panel::Layers) || workspace.is_detached(Panel::Properties) {
-        if !app.ui.show_palettes {
+        if !ui.show_palettes {
             workspace.detached.retain(|d| !matches!(d.panel, Panel::Layers | Panel::Properties));
             workspace.set_visible(Panel::Layers, false)?;
             workspace.set_visible(Panel::Properties, false)?;
         }
-        return Ok(());
-    }
-    if !app.ui.show_palettes {
+    } else if !ui.show_palettes {
         workspace.set_visible(Panel::Layers, false)?;
         workspace.set_visible(Panel::Properties, false)?;
-    } else if !workspace.layout.contains(&Panel::Layers) && !workspace.layout.contains(&Panel::Properties) {
-        // Reopen the last surviving accordion entry before restoring its earlier sibling.
-        workspace.set_visible(Panel::Properties, true)?;
-        workspace.set_visible(Panel::Layers, true)?;
+    } else if !opened && !workspace.layout.contains(&Panel::Layers) && !workspace.layout.contains(&Panel::Properties) {
+        if workspace.pinned.iter().any(|p| matches!(p, Panel::Layers | Panel::Properties)) {
+            // Pinned ones come back where they were, beside whatever else shows. Reopen the last
+            // surviving accordion entry before restoring its earlier sibling.
+            for p in [Panel::Properties, Panel::Layers] {
+                if workspace.pinned.contains(&p) {
+                    workspace.set_visible(p, true)?;
+                }
+            }
+        } else {
+            workspace.open_one(Panel::Properties)?;
+        }
     }
+    publish(ui, workspace);
     Ok(())
 }
 
-fn publish_visibility(app: &mut crate::CadApp, workspace: &Workspace) {
+/// The Tool Sets and palettes switches say what shows.
+fn publish(ui: &mut crate::UiState, workspace: &Workspace) {
     let shown = |p: Panel| workspace.layout.contains(&p) || workspace.is_detached(p);
-    app.ui.show_toolsets = shown(Panel::ToolSets);
-    app.ui.show_palettes = shown(Panel::Layers) || shown(Panel::Properties);
+    ui.show_toolsets = shown(Panel::ToolSets);
+    ui.show_palettes = shown(Panel::Layers) || shown(Panel::Properties);
+}
+
+fn publish_visibility(app: &mut crate::CadApp, workspace: &Workspace) {
+    publish(&mut app.ui, workspace);
+}
+
+/// A layout saved before the icon rail moves to it. The default arrangement as it came becomes
+/// the rail's default: the palettes close and the drawing gets the window. A layout the user
+/// arranged keeps every palette where it is, pinned, so it stays as it was; the palettes it
+/// doesn't show wait on the rail.
+pub fn upgrade(ui: &mut crate::UiState) {
+    if ui.docking.rail >= RAIL_LAYOUT {
+        return;
+    }
+    if ui.docking.is_classic() {
+        ui.docking = if ui.layout_rtl { Workspace::default().mirrored() } else { Workspace::default() };
+        ui.show_palettes = false;
+        ui.show_toolsets = false;
+        return;
+    }
+    let mut w = ui.docking.clone();
+    w.rail = RAIL_LAYOUT;
+    w.mirrored = ui.layout_rtl;
+    w.pinned = w.layout.panels().into_iter().copied().filter(|p| *p != Panel::Canvas).collect();
+    for p in Panel::RAIL {
+        if !w.layout.contains(p) && !w.is_detached(*p) && !w.hidden.iter().any(|(h, _)| h == p) {
+            w.hidden.push((*p, rail_location(*p, w.mirrored)));
+        }
+    }
+    if w.validate().is_ok() {
+        ui.docking = w;
+    } else {
+        // Not usable as saved (it would be replaced by the default anyway): don't look again.
+        ui.docking.rail = RAIL_LAYOUT;
+    }
 }
 
 pub fn command(app: &mut crate::CadApp, reset: bool, params: &Value) -> Result<Value, String> {
+    upgrade(&mut app.ui);
     let mut workspace = app.ui.docking.clone();
     if reset {
-        workspace = Workspace::default();
+        workspace = if app.ui.layout_rtl { Workspace::default().mirrored() } else { Workspace::default() };
     } else {
-        sync(&mut workspace, app)?;
+        sync(&mut workspace, &mut app.ui)?;
         workspace.command(params)?;
     }
     publish_visibility(app, &workspace);
@@ -506,11 +783,12 @@ pub fn command(app: &mut crate::CadApp, reset: bool, params: &Value) -> Result<V
 
 pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get();
+    upgrade(&mut app.ui);
     let mut workspace = app.ui.docking.clone();
-    if let Err(error) = workspace.validate().and_then(|()| sync(&mut workspace, app)) {
+    if let Err(error) = workspace.validate().and_then(|()| sync(&mut workspace, &mut app.ui)) {
         app.set_status(format!("Panel layout could not be restored: {error}"));
-        workspace = Workspace::default();
-        let _ = sync(&mut workspace, app);
+        workspace = if app.ui.layout_rtl { Workspace::default().mirrored() } else { Workspace::default() };
+        let _ = sync(&mut workspace, &mut app.ui);
     }
     if let Some(root) = workspace.layout.root.as_mut() {
         let column = ui.available_height();
@@ -536,13 +814,45 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
         |panel| crate::i18n::t(panel.label()).into(),
         permissions,
         panel_limits,
-        |ui, panel| panel_body(app, ui, *panel),
+        |ui, panel| {
+            if *panel != Panel::Canvas {
+                pane_bar(app, ui, *panel);
+            }
+            panel_body(app, ui, *panel)
+        },
     );
     // Palettes in windows of their own.
     show_detached(app, ui.ctx(), &workspace);
     // Existing panel close buttons and commands still own their visibility switches.
     finish(app, ui, workspace, output.actions);
 }
+
+/// A docked palette's own buttons, at its top edge on the rail's side's far end: pin it (it
+/// stays when another palette opens from the rail) and hide it (back onto the rail).
+fn pane_bar(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
+    let pinned = app.ui.docking.pinned.contains(&panel);
+    let rtl = app.ui.docking.mirrored;
+    let mut operation = None;
+    let layout = if rtl { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), PANE_BAR), layout, |ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let hide = if rtl { crate::icons::Icon::ChevronRight } else { crate::icons::Icon::ChevronLeft };
+        if crate::icons::button(ui, hide, PANE_BAR - 2.0, "Hide", false).clicked() {
+            operation = Some(json!({ "operation": "close", "panel": panel.id() }));
+        }
+        if crate::icons::button(ui, crate::icons::Icon::Pin, PANE_BAR - 2.0, if pinned { "Unpin" } else { "Pin" }, pinned).clicked() {
+            operation = Some(json!({ "operation": "pin", "panel": panel.id(), "pinned": !pinned }));
+        }
+    });
+    if let Some(params) = operation
+        && let Err(e) = command(app, false, &params)
+    {
+        app.set_status(format!("Palette: {e}"));
+    }
+}
+
+/// Height of a docked palette's pin and hide buttons' row, points.
+const PANE_BAR: f32 = 20.0;
 
 /// A panel's contents, in the dock area or a palette window.
 fn panel_body(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
@@ -654,7 +964,7 @@ fn show_detached(app: &mut crate::CadApp, ctx: &egui::Context, workspace: &Works
 fn finish(app: &mut crate::CadApp, ui: &mut egui::Ui, workspace: Workspace, actions: Vec<Action<Panel>>) {
     let rendered = workspace;
     let mut workspace = app.ui.docking.clone();
-    let _ = sync(&mut workspace, app);
+    let _ = sync(&mut workspace, &mut app.ui);
     let stale = workspace.layout != rendered.layout || workspace.hidden != rendered.hidden;
     if stale {
         craft_ui::docking::cancel_drag::<Panel>(ui.ctx(), egui::Id::new("cadaddy-docking"));
@@ -778,6 +1088,183 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
         Panel::Job => (egui::vec2(320.0, 260.0), 1200.0),
     };
     PanelLimits { min, max: egui::vec2(max_width, 1_000_000.0) }
+}
+
+#[cfg(test)]
+mod rail_tests {
+    use super::*;
+
+    fn shown(w: &Workspace) -> Vec<Panel> {
+        w.layout.panels().into_iter().copied().filter(|p| *p != Panel::Canvas).collect()
+    }
+
+    /// The default leaves the drawing alone in the window; every palette has its place beside
+    /// the rail ready.
+    #[test]
+    fn default_shows_only_the_drawing_and_every_palette_waits_on_the_rail() {
+        let w = Workspace::default();
+        w.validate().unwrap();
+        assert!(shown(&w).is_empty());
+        assert_eq!(w.layout.root, Some(tabs(Panel::Canvas)));
+        for p in Panel::RAIL {
+            assert!(w.hidden.iter().any(|(h, _)| h == p), "{p:?} has a place");
+        }
+        assert_eq!(Panel::RAIL.len(), Panel::ALL.len() + Panel::ON_DEMAND.len() - 1, "every palette but the drawing is on the rail");
+    }
+
+    /// One palette at a time unless pinned; the button again closes it.
+    #[test]
+    fn rail_opens_one_palette_unless_pinned() {
+        let mut w = Workspace::default();
+        w.toggle(Panel::Layers).unwrap();
+        assert_eq!(shown(&w), [Panel::Layers]);
+        // Beside the rail, at its own width.
+        assert_eq!(w.layout.location(&Panel::Layers).unwrap().placement, Placement::Split(Zone::Left));
+        w.toggle(Panel::Coordination).unwrap();
+        assert_eq!(shown(&w), [Panel::Coordination]);
+        w.pin(Panel::Coordination, true).unwrap();
+        w.toggle(Panel::Properties).unwrap();
+        let mut both = shown(&w);
+        both.sort_by_key(|p| p.id());
+        assert_eq!(both, [Panel::Coordination, Panel::Properties]);
+        w.toggle(Panel::Layers).unwrap();
+        assert!(w.layout.contains(&Panel::Coordination) && w.layout.contains(&Panel::Layers) && !w.layout.contains(&Panel::Properties));
+        w.toggle(Panel::Layers).unwrap();
+        assert_eq!(shown(&w), [Panel::Coordination]);
+        w.pin(Panel::Coordination, false).unwrap();
+        w.toggle(Panel::Coordination).unwrap();
+        assert!(shown(&w).is_empty());
+        assert!(w.toggle(Panel::Canvas).is_err() && w.pin(Panel::Canvas, true).is_err());
+        w.validate().unwrap();
+    }
+
+    /// A palette dragged to another width comes back at it.
+    #[test]
+    fn closed_palette_comes_back_at_the_width_it_had() {
+        let mut w = Workspace::default();
+        w.toggle(Panel::Properties).unwrap();
+        w.apply(Action::ResizeSplit { path: Vec::new(), size: SplitSize::FixedFirst(410.0) }).unwrap();
+        w.toggle(Panel::Properties).unwrap();
+        w.toggle(Panel::Properties).unwrap();
+        assert!(
+            matches!(&w.layout.root, Some(Node::Split { size: SplitSize::FixedFirst(v), .. }) if (*v - 410.0).abs() < 0.01),
+            "{:?}",
+            w.layout.root
+        );
+    }
+
+    /// A palette behind another tab comes to the front instead of closing.
+    #[test]
+    fn rail_brings_a_palette_behind_a_tab_to_the_front() {
+        let mut w = Workspace::default();
+        w.pin(Panel::Properties, true).unwrap();
+        w.pin(Panel::Layers, true).unwrap();
+        w.toggle(Panel::Properties).unwrap();
+        w.toggle(Panel::Layers).unwrap();
+        w.apply(Action::Move { panel: Panel::Layers, anchor: Panel::Properties, placement: Placement::Tab { before: None } }).unwrap();
+        w.apply(Action::Activate { panel: Panel::Properties }).unwrap();
+        assert!(!w.showing(Panel::Layers));
+        w.toggle(Panel::Layers).unwrap();
+        assert!(w.showing(Panel::Layers) && w.layout.contains(&Panel::Properties));
+    }
+
+    /// Mirroring moves the rail's places to the other side too, and twice is the original.
+    #[test]
+    fn mirroring_moves_the_closed_palettes_places_too() {
+        let w = Workspace::default();
+        let m = w.mirrored();
+        assert!(m.mirrored);
+        for (_, l) in &m.hidden {
+            assert_eq!(l.placement, Placement::Split(Zone::Right));
+            assert!(matches!(l.size, Some(SplitSize::FixedSecond(_))));
+        }
+        let back = m.mirrored();
+        assert_eq!(back.hidden, w.hidden);
+        assert!(!back.mirrored);
+        let mut m = m;
+        m.toggle(Panel::Layers).unwrap();
+        assert_eq!(m.layout.location(&Panel::Layers).unwrap().placement, Placement::Split(Zone::Right));
+    }
+
+    /// Hostile saved settings: a pinned drawing or a duplicate pin is refused.
+    #[test]
+    fn invalid_pins_are_refused() {
+        let mut w = Workspace { pinned: vec![Panel::Canvas], ..Workspace::default() };
+        assert!(w.validate().is_err());
+        w.pinned = vec![Panel::Layers, Panel::Layers];
+        assert!(w.validate().is_err());
+    }
+
+    fn old_settings(docking: &Workspace) -> crate::UiState {
+        let mut v = serde_json::to_value(docking).unwrap();
+        let o = v.as_object_mut().unwrap();
+        o.remove("rail");
+        o.remove("pinned");
+        o.remove("mirrored");
+        let mut ui = crate::UiState { docking: serde_json::from_value(v).unwrap(), ..crate::UiState::default() };
+        ui.show_palettes = true;
+        ui
+    }
+
+    /// Settings saved before the rail with the default as it came move to the rail's default;
+    /// a layout the user arranged stays exactly as it was, its palettes pinned.
+    #[test]
+    fn saved_layouts_from_before_the_rail() {
+        let mut ui = old_settings(&Workspace::classic());
+        assert_eq!(ui.docking.rail, 0, "missing means before the rail");
+        upgrade(&mut ui);
+        assert_eq!(ui.docking.layout, Workspace::default().layout);
+        assert!(!ui.show_palettes);
+        // Tool Sets closed, the app's own Properties height: still the default as it came.
+        let mut w = Workspace::classic();
+        w.apply(Action::Close { panel: Panel::ToolSets }).unwrap();
+        w.apply(Action::ResizeStack { panel: Panel::Properties, height: Some(377.0) }).unwrap();
+        let mut ui = old_settings(&w);
+        upgrade(&mut ui);
+        assert_eq!(ui.docking.layout, Workspace::default().layout);
+        // Arranged by the user: Symbols floated, Layers moved left of the drawing.
+        let mut w = Workspace::classic();
+        w.apply(Action::Float { panel: Panel::Symbols, rect: [400.0, 200.0, 260.0, 300.0] }).unwrap();
+        w.apply(Action::Move { panel: Panel::Layers, anchor: Panel::Canvas, placement: Placement::Split(Zone::Left) }).unwrap();
+        let mut ui = old_settings(&w);
+        let before = ui.docking.layout.clone();
+        upgrade(&mut ui);
+        assert_eq!(ui.docking.layout, before, "the user's layout is kept");
+        assert_eq!(ui.docking.rail, RAIL_LAYOUT);
+        for p in [Panel::ToolSets, Panel::Layers, Panel::Properties, Panel::Symbols] {
+            assert!(ui.docking.pinned.contains(&p), "{p:?} pinned");
+        }
+        ui.docking.validate().unwrap();
+        // It stays: opening another palette from the rail leaves them.
+        ui.docking.toggle(Panel::Coordination).unwrap();
+        for p in [Panel::ToolSets, Panel::Layers, Panel::Properties, Panel::Symbols, Panel::Coordination] {
+            assert!(ui.docking.layout.contains(&p), "{p:?}");
+        }
+        // Upgraded once: a second look changes nothing.
+        let again = ui.docking.clone();
+        upgrade(&mut ui);
+        assert_eq!(ui.docking.layout, again.layout);
+        // A mirrored (right-to-left) default as it came is recognised too.
+        let mut ui = old_settings(&Workspace::classic().mirrored());
+        ui.layout_rtl = true;
+        upgrade(&mut ui);
+        assert_eq!(ui.docking.layout, Workspace::default().layout);
+        assert!(ui.docking.mirrored);
+    }
+
+    /// Workspaces made before the rail (saved user workspaces) load as they were saved.
+    #[test]
+    fn rail_fields_round_trip_and_default_when_missing() {
+        let mut w = Workspace::docked();
+        w.toggle(Panel::Coordination).unwrap();
+        w.pin(Panel::Coordination, true).unwrap();
+        let text = serde_json::to_string(&w).unwrap();
+        let back: Workspace = serde_json::from_str(&text).unwrap();
+        assert_eq!(serde_json::to_value(&back).unwrap(), serde_json::to_value(&w).unwrap());
+        assert_eq!(back.rail, RAIL_LAYOUT);
+        let empty: Workspace = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty.rail, 0);
+    }
 }
 
 #[cfg(test)]
