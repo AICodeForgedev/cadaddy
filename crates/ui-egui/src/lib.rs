@@ -51,7 +51,6 @@ pub mod aliasdlg;
 pub mod animation;
 pub mod annomon;
 pub mod autosave;
-mod sheetload;
 pub mod bedit;
 pub mod blockspalette;
 pub mod canvas;
@@ -71,6 +70,7 @@ pub mod hyperlinks;
 pub mod materials;
 mod mtext_editor;
 mod shaded;
+mod sheetload;
 pub mod snap3ui;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.

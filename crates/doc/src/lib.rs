@@ -46,7 +46,7 @@ pub use rare::{Rare, RareEmpty};
 pub use refedit::{RefEdit, WorkItem};
 pub use section::*;
 pub use solid::*;
-pub use store::{ChunkRef, EntityStore, KIND_DIMENSION, KIND_HATCH, KIND_INSERT, KIND_OTHER, KIND_TABLE, kind_bit};
+pub use store::{CHUNK_STEP, ChunkRef, EntityStore, KIND_DIMENSION, KIND_HATCH, KIND_INSERT, KIND_OTHER, KIND_TABLE, kind_bit};
 pub use surface::*;
 pub use tables::*;
 pub use transform3::*;

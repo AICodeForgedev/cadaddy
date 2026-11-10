@@ -168,7 +168,7 @@ pub(super) fn filing(bytes: &[u8], entries: &[IndexEntry]) -> Option<Filing> {
 
 /// The `ENTS` chunk at `e` as stored, when it is sound (its checksum holds); `None` when it
 /// isn't (it is read the ordinary way then, which salvages what it can).
-pub(super) fn stored_at(bytes: &[u8], e: &IndexEntry, objects: usize, max_handle: u64) -> Option<StoredChunk> {
+pub(super) fn stored_at(bytes: &[u8], e: &IndexEntry, objects: usize, max_handle: u64, order: u32) -> Option<StoredChunk> {
     let at = usize::try_from(e.offset).ok()?;
     let head = bytes.get(at..at.checked_add(CHUNK_HEADER_LEN)?)?;
     let u16_at = |i: usize| Some(u16::from_le_bytes(head.get(i..i + 2)?.try_into().ok()?));
@@ -190,7 +190,7 @@ pub(super) fn stored_at(bytes: &[u8], e: &IndexEntry, objects: usize, max_handle
     if !deflated && len != raw_len {
         return None;
     }
-    Some(StoredChunk { version, raw_len, deflated, stored: stored.to_vec(), objects, max_handle })
+    Some(StoredChunk { version, raw_len, deflated, stored: stored.to_vec(), objects, max_handle, order })
 }
 
 /// The objects of a stored chunk, with notes about the ones that couldn't be read. An error
@@ -208,10 +208,11 @@ pub fn decode(c: &StoredChunk) -> Result<(Vec<Entity>, Vec<String>), String> {
     model::entity_list(&data, c.version, &model::Meter::default()).ok_or_else(|| "a sheet's part couldn't be decoded".to_string())
 }
 
-/// `items` stored as an `ENTS` chunk stores them.
-pub fn encode(items: &[Arc<Entity>]) -> Result<StoredChunk, String> {
+/// `items` stored as an `ENTS` chunk stores them, to go back in the draw order at `order` (a
+/// [`cadaddy_doc::ChunkRef::order`]).
+pub fn encode(items: &[Arc<Entity>], order: u32) -> Result<StoredChunk, String> {
     let (version, raw) = model::entities(items)?;
     let p = container::pack(&raw, true);
     let max_handle = items.iter().map(|e| e.handle.0).max().unwrap_or(0);
-    Ok(StoredChunk { version, raw_len: raw.len() as u64, deflated: p.deflated, stored: p.stored, objects: items.len(), max_handle })
+    Ok(StoredChunk { version, raw_len: raw.len() as u64, deflated: p.deflated, stored: p.stored, objects: items.len(), max_handle, order })
 }

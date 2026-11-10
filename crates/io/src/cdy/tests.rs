@@ -1160,7 +1160,9 @@ mod sheet_sections {
             }
         }
         let el = line(&mut d, (100.0, 100.0), (300.0, 100.0));
-        d.model.modify(el, |e| e.common.xdata = vec![RawTag { code: 1001, value: "CADADDY_PROPS".into() }, RawTag { code: 1000, value: "{}".into() }].into());
+        d.model.modify(el, |e| {
+            e.common.xdata = vec![RawTag { code: 1001, value: "CADADDY_PROPS".into() }, RawTag { code: 1000, value: "{}".into() }].into()
+        });
         if sheets > 1 {
             line(&mut d, (W - 5.0, 50.0), (W * 1.05 + 5.0, 50.0));
         }
@@ -1324,7 +1326,12 @@ mod sheet_sections {
             assert!(contains(&full, &c.stored));
         }
         // An edit to the loaded sheet is saved; the chunk it touched is written anew.
-        let h = opened.model.iter().find(|e| e.common.xdata.is_empty() && opened.sheet_store.origins.values().any(|(c, _)| c.items().iter().any(|x| x.handle == e.handle))).map(|e| e.handle).unwrap();
+        let h = opened
+            .model
+            .iter()
+            .find(|e| e.common.xdata.is_empty() && opened.sheet_store.origins.values().any(|(c, _)| c.items().iter().any(|x| x.handle == e.handle)))
+            .map(|e| e.handle)
+            .unwrap();
         opened.model.modify(h, |e| e.common.layer = "Edited".into());
         let (out, _) = save(&opened, Some(&state), &no_thumb).unwrap();
         let file = stored(&file, &out);

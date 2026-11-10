@@ -124,11 +124,26 @@ fn sheet_list(d: &Drawing) -> Vec<SheetRect> {
 fn parts<'a>(d: &'a Drawing, sheets: &[SheetRect]) -> Vec<Part<'a>> {
     let mut out = vec![Part::Manifest, Part::Header, Part::Tables];
     out.extend(d.blocks.iter().map(|(n, b)| Part::Block(n, b)));
-    out.extend(d.model.chunk_refs().into_iter().map(Part::Objects));
-    for p in d.sheet_store.parked.iter() {
-        let k = sheets.iter().position(|s| p.is(&s.number, &s.rect)).and_then(|k| u32::try_from(k).ok());
-        out.extend(p.chunks.iter().map(|c| Part::Parked(c.clone(), k)));
+    // Model space in draw order: the parked sheets' chunks where they go back (their order among
+    // the store's chunks), so a file read back has the order the drawing had with every sheet in.
+    let mut parked: Vec<(u32, Arc<StoredChunk>, Option<u32>)> = d
+        .sheet_store
+        .parked
+        .iter()
+        .flat_map(|p| {
+            let k = sheets.iter().position(|s| p.is(&s.number, &s.rect)).and_then(|k| u32::try_from(k).ok());
+            p.chunks.iter().map(move |c| (c.order, c.clone(), k))
+        })
+        .collect();
+    parked.sort_by_key(|(order, _, _)| *order);
+    let mut parked = parked.into_iter().peekable();
+    for c in d.model.chunk_refs() {
+        while let Some((_, sc, k)) = parked.next_if(|(order, _, _)| *order < c.order()) {
+            out.push(Part::Parked(sc, k));
+        }
+        out.push(Part::Objects(c));
     }
+    out.extend(parked.map(|(_, sc, k)| Part::Parked(sc, k)));
     out.extend(d.layouts.iter().map(Part::Layout));
     if !d.foreign.is_empty() {
         out.push(Part::Foreign(&d.foreign));
@@ -364,8 +379,11 @@ fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bo
                         let items = c.items().get(from..to).unwrap_or_default();
                         let max = items.iter().map(|e| e.handle.0).max().unwrap_or(0);
                         ents.push((k, items.len(), max));
-                        let (source, reused) =
-                            if whole { (Source::Objects(c.clone()), reused_objects(&c)) } else { (Source::Piece(c.clone(), from, to), reused_piece(&c, from, to)) };
+                        let (source, reused) = if whole {
+                            (Source::Objects(c.clone()), reused_objects(&c))
+                        } else {
+                            (Source::Piece(c.clone(), from, to), reused_piece(&c, from, to))
+                        };
                         let pre = std::cell::RefCell::new(packed.remove(&(c.key(), from)));
                         put(w, source, reused, *b"ENTS", true, &|| match pre.borrow_mut().take() {
                             Some((version, raw_len, p)) => Ok(Payload::Packed(version, raw_len, p)),
@@ -425,7 +443,10 @@ pub fn save(d: &Drawing, prev: Option<&SaveState>, thumbnail: &dyn Fn() -> Optio
         let len = prev.len.saturating_add(bytes.len() as u64);
         let waste = len.saturating_sub(live(&saved));
         if waste <= MIN_WASTE || waste as f64 <= MAX_WASTE * len as f64 {
-            return Ok((Output::Append { from: prev.len, bytes, index_at }, SaveState { len, saved, filed: Arc::new(filed), filed_against: Arc::new(sheets) }));
+            return Ok((
+                Output::Append { from: prev.len, bytes, index_at },
+                SaveState { len, saved, filed: Arc::new(filed), filed_against: Arc::new(sheets) },
+            ));
         }
     }
     let (bytes, state) = write_full(d, thumbnail())?;
@@ -440,7 +461,8 @@ pub fn seed(d: &Drawing, bytes: &[u8]) -> Option<SaveState> {
     let objects = d.model.chunk_refs();
     // The chunks a parked read left out of memory, by their place among the ENTS entries.
     let filing = if d.sheet_store.has_parked() { Some(sheets::filing(bytes, &entries)?) } else { None };
-    let mut parked: Vec<std::collections::VecDeque<Arc<StoredChunk>>> = d.sheet_store.parked.iter().map(|p| p.chunks.iter().cloned().collect()).collect();
+    let mut parked: Vec<std::collections::VecDeque<Arc<StoredChunk>>> =
+        d.sheet_store.parked.iter().map(|p| p.chunks.iter().cloned().collect()).collect();
     let parked_count: usize = parked.iter().map(std::collections::VecDeque::len).sum();
     let blocks: Vec<(&String, &Arc<Block>)> = d.blocks.iter().collect();
     let count = |tag: &[u8; 4]| entries.iter().filter(|e| &e.tag == tag).count();
@@ -467,9 +489,17 @@ pub fn seed(d: &Drawing, bytes: &[u8]) -> Option<SaveState> {
                 let is_it = |c: &StoredChunk| {
                     c.version == e.version
                         && c.stored.len() as u64 == e.len
-                        && usize::try_from(e.offset).ok().and_then(|o| o.checked_add(CHUNK_HEADER_LEN)).and_then(|o| bytes.get(o..o.checked_add(c.stored.len())?)) == Some(c.stored.as_slice())
+                        && usize::try_from(e.offset)
+                            .ok()
+                            .and_then(|o| o.checked_add(CHUNK_HEADER_LEN))
+                            .and_then(|o| bytes.get(o..o.checked_add(c.stored.len())?))
+                            == Some(c.stored.as_slice())
                 };
-                match sheet.and_then(|k| parked.get_mut(k)).filter(|q| q.front().is_some_and(|c| is_it(c))).and_then(std::collections::VecDeque::pop_front) {
+                match sheet
+                    .and_then(|k| parked.get_mut(k))
+                    .filter(|q| q.front().is_some_and(|c| is_it(c)))
+                    .and_then(std::collections::VecDeque::pop_front)
+                {
                     Some(c) => Source::Stored(c),
                     None => Source::Objects(objects.next()?),
                 }

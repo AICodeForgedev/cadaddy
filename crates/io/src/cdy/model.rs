@@ -671,6 +671,24 @@ pub(super) fn entity_list(data: &[u8], version: u16, m: &Meter) -> Option<(Vec<E
     }))
 }
 
+/// The draw-order place (a chunk id, [`cadaddy_doc::ChunkRef::order`]) of the model space chunk at
+/// `place` among a file's ENTS chunks.
+fn order_of(place: usize) -> u32 {
+    u32::try_from(place).unwrap_or(u32::MAX / cadaddy_doc::CHUNK_STEP).saturating_mul(cadaddy_doc::CHUNK_STEP)
+}
+
+/// A model space chunk read: at its place in the draw order when it has one, else on top.
+fn put_chunk(model: &mut EntityStore, order: Option<u32>, items: Vec<Entity>) {
+    match order {
+        Some(o) => {
+            if let Err(items) = model.insert_chunk_at(o, items) {
+                model.push_chunk(items);
+            }
+        }
+        None => model.push_chunk(items),
+    }
+}
+
 /// The drawing in a .cdy file, with notes about anything damaged that was left out. Errors only
 /// when the file isn't a .cdy file this version can read.
 pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
@@ -688,27 +706,37 @@ pub fn read_with(bytes: &[u8], park: bool) -> Result<(Drawing, ReadReport), Stri
     // first held the whole file inflated beside the objects built from it: opening a large model
     // peaked at twice the drawing's memory (Q6398).
     let mut parked: Vec<cadaddy_doc::sheetstore::ParkedSheet> = Vec::new();
+    // With sheets parked: the place of each model space chunk read (among the file's ENTS
+    // chunks), so it and the parked ones keep the file's draw order when loaded.
+    let mut places: Option<std::vec::IntoIter<usize>> = None;
     let (prepared, indexed) = match container::plan(bytes)? {
         container::Plan::Indexed(mut entries) => {
             if park && let Some(f) = super::sheets::filing(bytes, &entries) {
-                parked = f.sheets.iter().map(|(number, rect)| cadaddy_doc::sheetstore::ParkedSheet { number: number.clone(), rect: *rect, chunks: Vec::new() }).collect();
+                parked = f
+                    .sheets
+                    .iter()
+                    .map(|(number, rect)| cadaddy_doc::sheetstore::ParkedSheet { number: number.clone(), rect: *rect, chunks: Vec::new() })
+                    .collect();
                 let mut place = 0usize;
+                let mut kept = Vec::new();
                 entries.retain(|e| {
                     if &e.tag != b"ENTS" {
                         return true;
                     }
                     let at = place;
                     place += 1;
-                    let Some((k, objects, max)) = f.by_place.get(&at).copied() else { return true };
-                    match (super::sheets::stored_at(bytes, e, objects, max), parked.get_mut(k)) {
-                        (Some(c), Some(p)) => {
-                            p.chunks.push(Arc::new(c));
-                            false
-                        }
-                        // A damaged chunk is read now, salvaging what it can.
-                        _ => true,
+                    let order = order_of(at);
+                    let parked_here = f.by_place.get(&at).copied().and_then(|(k, objects, max)| {
+                        let c = super::sheets::stored_at(bytes, e, objects, max, order)?;
+                        parked.get_mut(k).map(|p| p.chunks.push(Arc::new(c)))
+                    });
+                    // A damaged chunk is read now, salvaging what it can.
+                    if parked_here.is_none() {
+                        kept.push(at);
                     }
+                    parked_here.is_none()
                 });
+                places = Some(kept.into_iter());
             }
             let one = |e: &container::IndexEntry| {
                 let r = Meter::time(&meter.inflate, || container::read_entry(bytes, e));
@@ -737,10 +765,11 @@ pub fn read_with(bytes: &[u8], park: bool) -> Result<(Drawing, ReadReport), Stri
             Prepared::Objects(objects) => {
                 // One chunk of the store per chunk of the file, as it was saved (an incremental
                 // save then finds them unchanged).
+                let order = places.as_mut().and_then(Iterator::next).map(order_of);
                 match objects {
                     Some((items, notes)) => {
                         rep.notes.extend(notes);
-                        model.push_chunk(items);
+                        put_chunk(&mut model, order, items);
                     }
                     None => rep.notes.push("a model space part was damaged".into()),
                 }
@@ -755,6 +784,7 @@ pub fn read_with(bytes: &[u8], park: bool) -> Result<(Drawing, ReadReport), Stri
             Read::Damaged { tag, why, salvage } => {
                 // Model space objects before the damage are kept (one bad spot cost every object in
                 // its part: 2 of 14 survived, UI review 0.7.7c).
+                let order = if &tag == b"ENTS" { places.as_mut().and_then(Iterator::next).map(order_of) } else { None };
                 if &tag == b"ENTS"
                     && let Some(list) = tokens::salvage_list(&salvage)
                 {
@@ -770,7 +800,7 @@ pub fn read_with(bytes: &[u8], park: bool) -> Result<(Drawing, ReadReport), Stri
                         items.len()
                     ));
                     if !items.is_empty() {
-                        model.push_chunk(items);
+                        put_chunk(&mut model, order, items);
                     }
                     continue;
                 }

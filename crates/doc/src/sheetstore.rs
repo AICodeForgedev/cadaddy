@@ -34,6 +34,8 @@ pub struct StoredChunk {
     pub objects: usize,
     /// Its largest object handle (new handles must stay above it).
     pub max_handle: u64,
+    /// Where its objects go back in model space's draw order (a [`ChunkRef::order`]).
+    pub order: u32,
 }
 
 /// One sheet of a print set: its number and where it lies in model space.
@@ -98,7 +100,10 @@ impl PartialEq for SheetStore {
         self.sheets == other.sheets
             && self.parked.len() == other.parked.len()
             && self.parked.iter().zip(other.parked.iter()).all(|(a, b)| {
-                a.number == b.number && a.rect == b.rect && a.chunks.len() == b.chunks.len() && a.chunks.iter().zip(&b.chunks).all(|(x, y)| Arc::ptr_eq(x, y))
+                a.number == b.number
+                    && a.rect == b.rect
+                    && a.chunks.len() == b.chunks.len()
+                    && a.chunks.iter().zip(&b.chunks).all(|(x, y)| Arc::ptr_eq(x, y))
             })
     }
 }

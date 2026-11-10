@@ -267,6 +267,8 @@ fn counts_takeoff_and_queries_are_the_same_with_the_sheets_out_of_memory() {
     assert!(s.needs_whole_set("entities") && s.needs_whole_set("takeoff") && s.needs_whole_set("job.start"));
     assert_eq!(readings(&mut s), want, "the same counts, takeoff and model tree");
     assert_eq!(held(&s), total, "a command reading the whole set had it loaded first");
+    let order = |s: &Session| s.doc().unwrap().model.iter().map(|e| e.handle).collect::<Vec<_>>();
+    assert_eq!(order(&s), order(&whole), "in the same draw order");
     assert!(!s.has_parked_sheets());
     // Loading is no change to save (what the commands themselves record is the same both ways).
     assert_eq!(s.state().unwrap().is_dirty(), whole.state().unwrap().is_dirty());
@@ -295,6 +297,15 @@ fn stepping_through_the_sheets_keeps_the_open_one_and_a_few_recent_in_memory() {
     // The open sheet and the recent ones (and the straddling chunks), never the set.
     let per = total / 8;
     assert!(most <= (cadaddy_engine::sheetstore::CACHE + 2) * per, "{most} held at most, {per} a sheet");
+    // Every sheet loaded again: the draw order is the set's.
+    let mut all = opened_on_demand(&p);
+    for _ in 0..7 {
+        all.execute("sheet.next", &json!({})).unwrap();
+    }
+    all.load_all_sheets().unwrap();
+    let whole = cadaddy_io::read(&std::fs::read(&p).unwrap(), &p).unwrap();
+    let order: Vec<_> = all.doc().unwrap().model.iter().map(|e| e.handle).collect();
+    assert_eq!(order, whole.model.iter().map(|e| e.handle).collect::<Vec<_>>(), "loaded back in the set's draw order");
     // Going back to a sheet out of memory loads it again.
     s.execute("sheet.open", &json!({ "sheet": 1 })).unwrap();
     assert!(s.doc().unwrap().sheet_store.parked_sheet(&s.print_sheets()[0].number, &s.print_sheets()[0].rect).is_none());

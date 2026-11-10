@@ -167,7 +167,12 @@ pub fn apply(d: &mut Drawing, dec: Decoded) -> usize {
         if items.is_empty() {
             continue;
         }
-        if let Some(r) = d.model.push_one_chunk(items) {
+        // Back where it was in the draw order (else on top).
+        let r = match d.model.insert_chunk_at(c.order, items) {
+            Ok(r) => Some(r),
+            Err(items) => d.model.push_one_chunk(items),
+        };
+        if let Some(r) = r {
             origins.insert(r.key(), (r, c));
         }
     }
@@ -205,7 +210,7 @@ pub fn combined(d: &Arc<Drawing>) -> Arc<Drawing> {
 /// What to put out of memory: per chunk of model space, the runs of its objects on one sheet
 /// that isn't kept (`(sheet, from, to)`, [`cadaddy_io::cdy::chunk_sheet`]'s runs), with whether
 /// they are the whole chunk.
-fn to_park(d: &Drawing, sheets: &[SheetRect], keep: &[SheetRect]) -> Vec<(ChunkRef, Vec<(usize, usize, usize)>, bool)> {
+fn to_park(d: &Drawing, sheets: &[SheetRect], keep: &[SheetRect]) -> Vec<(ChunkRef, Vec<(usize, usize, usize, u32)>, bool)> {
     let slack = cadaddy_io::cdy::sheet_slack(sheets);
     let refs = d.model.chunk_refs();
     let one = |c: &ChunkRef| cadaddy_io::cdy::sheet_pieces(d, &slack, c.items());
@@ -216,12 +221,26 @@ fn to_park(d: &Drawing, sheets: &[SheetRect], keep: &[SheetRect]) -> Vec<(ChunkR
     };
     #[cfg(target_arch = "wasm32")]
     let filed: Vec<Vec<(Option<u32>, usize, usize)>> = refs.iter().map(one).collect();
-    let kept = |k: usize| sheets.get(k).is_none_or(|s| keep.iter().any(|x| x.number.eq_ignore_ascii_case(&s.number) && cadaddy_doc::sheetstore::same_rect(&x.rect, &s.rect)));
+    let kept = |k: usize| {
+        sheets
+            .get(k)
+            .is_none_or(|s| keep.iter().any(|x| x.number.eq_ignore_ascii_case(&s.number) && cadaddy_doc::sheetstore::same_rect(&x.rect, &s.rect)))
+    };
     refs.into_iter()
         .zip(filed)
         .filter_map(|(c, runs)| {
             let whole = runs.len() == 1;
-            let out: Vec<(usize, usize, usize)> = runs.into_iter().filter_map(|(k, from, to)| Some((k? as usize, from, to))).filter(|(k, _, _)| !kept(*k)).collect();
+            // Each run goes back after what is left of its chunk: at the chunk's place, plus one
+            // and its own place among the runs (fewer than a chunk step).
+            let out: Vec<(usize, usize, usize, u32)> = runs
+                .into_iter()
+                .enumerate()
+                .filter_map(|(j, (k, from, to))| {
+                    let order = if whole { c.order() } else { c.order().saturating_add(1).saturating_add(u32::try_from(j).ok()?) };
+                    Some((k? as usize, from, to, order))
+                })
+                .filter(|(k, _, _, _)| !kept(*k))
+                .collect();
             (!out.is_empty()).then_some((c, out, whole))
         })
         .collect()
@@ -243,12 +262,12 @@ pub fn park(d: &mut Drawing, sheets: &[SheetRect], keep: &[SheetRect]) -> Result
         return Ok(0);
     }
     // Encoded first (on all cores), so a failure leaves the drawing as it was.
-    let jobs: Vec<(usize, ChunkRef, usize, usize, bool)> =
-        picked.iter().flat_map(|(c, runs, whole)| runs.iter().map(move |(k, from, to)| (*k, c.clone(), *from, *to, *whole))).collect();
-    let one = |(_, c, from, to, whole): &(usize, ChunkRef, usize, usize, bool)| -> std::result::Result<Arc<StoredChunk>, String> {
-        match d.sheet_store.origin_of(c).filter(|_| *whole) {
+    let jobs: Vec<(usize, ChunkRef, usize, usize, bool, u32)> =
+        picked.iter().flat_map(|(c, runs, whole)| runs.iter().map(move |(k, from, to, order)| (*k, c.clone(), *from, *to, *whole, *order))).collect();
+    let one = |(_, c, from, to, whole, order): &(usize, ChunkRef, usize, usize, bool, u32)| -> std::result::Result<Arc<StoredChunk>, String> {
+        match d.sheet_store.origin_of(c).filter(|s| *whole && s.order == *order) {
             Some(s) => Ok(s.clone()),
-            None => cadaddy_io::cdy::encode_stored(c.items().get(*from..*to).unwrap_or_default()).map(Arc::new),
+            None => cadaddy_io::cdy::encode_stored(c.items().get(*from..*to).unwrap_or_default(), *order).map(Arc::new),
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -264,7 +283,7 @@ pub fn park(d: &mut Drawing, sheets: &[SheetRect], keep: &[SheetRect]) -> Result
     let taken = d.model.take_chunks(|c| whole.contains(&c.key()));
     let mut parked = (*d.sheet_store.parked).clone();
     let mut n = 0usize;
-    for ((k, c, from, to, is_whole), s) in jobs.into_iter().zip(stored) {
+    for ((k, c, from, to, is_whole, _), s) in jobs.into_iter().zip(stored) {
         if is_whole && !taken.iter().any(|t| t.same(&c)) {
             continue;
         }
@@ -373,7 +392,8 @@ impl Session {
             r.truncate(CACHE);
             r.clone()
         };
-        let keep: Vec<SheetRect> = recent.iter().filter_map(|i| sheets.get(*i)).map(|s| SheetRect { number: s.number.clone(), rect: s.rect }).collect();
+        let keep: Vec<SheetRect> =
+            recent.iter().filter_map(|i| sheets.get(*i)).map(|s| SheetRect { number: s.number.clone(), rect: s.rect }).collect();
         let notes = match self.change_sheets(|d| {
             let notes = load(d, |p| keep.iter().any(|k| p.is(&k.number, &k.rect)));
             park(d, &rects, &keep).map(|_| notes)

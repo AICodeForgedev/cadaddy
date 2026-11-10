@@ -11,6 +11,10 @@ use std::sync::{Arc, OnceLock};
 use crate::{Entity, EntityKind, Handle};
 
 const CHUNK_MAX: usize = 1024;
+/// Chunk ids rise along the draw order in steps of this many, so that a chunk taken out of the
+/// store whole, or split into a few (a print set's sheet out of memory), can come back where it
+/// was ([`EntityStore::insert_chunk_at`]) with the ids still in order.
+pub const CHUNK_STEP: u32 = 16;
 /// Shards of a store's handle index: at least this many (a power of two)…
 const SHARDS: usize = 64;
 /// …and more as the store grows, about this many handles a shard: an edit copies the shard of
@@ -81,6 +85,10 @@ impl ChunkRef {
     }
     pub fn same(&self, other: &ChunkRef) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+    /// Where the chunk is in its store's draw order: ids rise along it (in [`CHUNK_STEP`]s).
+    pub fn order(&self) -> u32 {
+        self.0.id
     }
     /// A number naming this chunk while it is held (two held chunks never share one): for
     /// looking a chunk up among many.
@@ -265,7 +273,7 @@ impl EntityStore {
     }
     fn new_chunk(&mut self) -> Arc<Chunk> {
         let id = self.next_chunk;
-        self.next_chunk = self.next_chunk.wrapping_add(1);
+        self.next_chunk = self.next_chunk.wrapping_add(CHUNK_STEP);
         Arc::new(Chunk { id, items: Vec::with_capacity(64), kinds: OnceLock::new() })
     }
     /// Append on top of the draw order. Replaces an entity with the same handle in place.
@@ -563,6 +571,32 @@ impl EntityStore {
             return None;
         }
         self.chunks.last().cloned().map(ChunkRef)
+    }
+    /// Put `items` (new objects, at most a chunk's worth) into the draw order as a chunk of their
+    /// own at the place `order` names (a [`ChunkRef::order`] the store doesn't use): where a chunk
+    /// with that id was, or would be. The chunk made; the objects back, and nothing done, when that
+    /// place is taken or they don't fit or are already here (put them on top instead).
+    pub fn insert_chunk_at(&mut self, order: u32, items: Vec<Entity>) -> Result<ChunkRef, Vec<Entity>> {
+        if items.is_empty() || items.len() > CHUNK_MAX || items.iter().any(|e| self.contains(e.handle)) {
+            return Err(items);
+        }
+        let at = self.chunks.partition_point(|c| c.id < order);
+        if self.chunks.iter().any(|c| c.id == order) {
+            return Err(items);
+        }
+        let chunk = Chunk { id: order, items: items.into_iter().map(Arc::new).collect(), kinds: OnceLock::new() };
+        for e in &chunk.items {
+            self.set_index(e.handle, Some(order));
+        }
+        self.len += chunk.items.len();
+        let chunk = Arc::new(chunk);
+        self.chunks.insert(at, chunk.clone());
+        // New chunks go on top of it.
+        if order >= self.next_chunk {
+            self.next_chunk = order.saturating_add(CHUNK_STEP);
+        }
+        self.split_index();
+        Ok(ChunkRef(chunk))
     }
     /// Take the chunks `take` picks out of the store whole (out of the draw order and the handle
     /// index), in draw order.
