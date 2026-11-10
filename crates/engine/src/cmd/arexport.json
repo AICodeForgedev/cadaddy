@@ -70,6 +70,55 @@
     {"kind": "sprinkler", "trade": "fire_protection", "system": "fire", "source": "sprinkler heads are fire protection"},
     {"kind": "fire_alarm", "trade": "fire_alarm", "system": "fire_alarm", "source": "fire alarm devices are their own trade and system (NFPA 72), shown apart from power"}
   ],
+  "set": {
+    "_comment": "bim.export.ar {set: true, dir} (Q6420): the whole building as the field app's four views, never one package with everything. Words match whole words of an element's part, kind, tag, category, type and layer, in order. A job overrides any key under `ar_export.set`.",
+    "max_triangles": 150000,
+    "max_bytes": 50000000,
+    "architectural_parts": ["wall", "floor", "roof", "cricket", "parapet", "curtainwall", "glass", "window", "door", "railing", "stair"],
+    "box_parts": ["window", "door"],
+    "mep_context_parts": ["floor"],
+    "level_cut_ft": 4.0,
+    "cut_parts": ["wall", "door", "window", "glass", "curtainwall", "railing", "column"],
+    "overhead_parts": ["ceiling", "soffit", "grid", "roof", "cricket", "parapet", "roof-drain"],
+    "groups": [
+      {"group": "furniture", "classes": ["architecture", "equipment"], "words": ["furniture", "furnishing", "furnishings", "bed", "chair", "sofa", "desk", "table", "dresser", "nightstand", "wardrobe", "armoire", "bench", "ottoman"], "default_on": false},
+      {"group": "cabinets", "classes": ["architecture", "equipment"], "words": ["casework", "cabinet", "cabinets", "millwork", "countertop", "vanity"]},
+      {"group": "electrical", "classes": ["equipment"], "words": ["panel", "panelboard", "switchboard", "switchgear", "transformer", "xfmr", "disconnect", "safety switch", "generator", "transfer switch", "meter", "meter center", "ups", "inverter", "lighting control"]},
+      {"group": "plumbing", "classes": ["equipment"], "words": ["water heater", "booster pump", "domestic water", "grease interceptor", "sump pump", "sewage ejector"]},
+      {"group": "mechanical", "trades": ["mechanical", "fire_protection"]},
+      {"group": "electrical", "trades": ["electrical", "fire_alarm"]},
+      {"group": "plumbing", "trades": ["plumbing"]},
+      {"group": "base", "trades": ["architecture", "structure", "site"]}
+    ],
+    "equipment": {
+      "gear_words": ["switchboard", "switchgear", "transformer", "xfmr", "generator", "transfer switch", "ats", "substation", "main distribution", "distribution board", "meter center", "unit substation", "bus duct", "busway"],
+      "panel_words": ["panel", "panelboard", "load center", "loadcenter"],
+      "disconnect_words": ["disconnect", "safety switch"],
+      "big_words": ["air handling unit", "air handler", "ahu", "rtu", "rooftop unit", "roof top unit", "dedicated outdoor air", "doas", "erv", "energy recovery", "makeup air", "make up air", "chiller", "boiler", "cooling tower", "condensing unit", "pump", "fire pump", "booster pump", "jockey pump"],
+      "min_extent_ft": 4,
+      "fan_words": ["fan", "exhaust fan", "ef"],
+      "device_words": ["junction", "junction box", "contactor", "starter", "relay", "time clock", "pull box"]
+    },
+    "sizes": {
+      "main_duct_in": 18,
+      "main_pipe_in": 3,
+      "plumbing_min_in": 2,
+      "fire_main_in": 2.5,
+      "feeder_min_in": 1
+    },
+    "elevator": {
+      "words": ["elevator", "elev", "lift", "hoistway"],
+      "machine_words": ["machine", "controller", "control panel"],
+      "branch_words": ["elevator", "elev", "cab", "hoistway", "pit", "traveling cable", "machine room"],
+      "reach_ft": 15
+    },
+    "crossing": {
+      "kinds": ["duct", "pipe", "conduit", "cable", "tray"],
+      "tolerance_ft": 0.25
+    },
+    "outline_bar_in": 2,
+    "source": "the owner's four views (11-09): Architectural (rooms, walls, windows, doors, floors, roof, stairs); MEP, mains and big gear by default, Full MEP on top (every duct, air terminal and exhaust fan; plumbing 2 in and up; fire mains and risers; every panel with its feeder; anything through a floor; never branch circuits, devices, fixtures, sprinkler heads or branch lines, nor an elevator's own branches); Floor (one level, its panels, lights, heads and branch lines); Room (everything in the room, furniture off by default). Sizes are the BIM view's main/branch limits: main ducts 18 in and mains 3 in (fidelity.json), plumbing to 2 in, sprinkler mains 2-1/2 in (branch lines commonly run to 2 in), a raceway of unknown connection 1 in and up is a feeder"
+  },
   "scope": {
     "room_margin_ft": 1.0,
     "entry_probe_ft": [0.5, 1.5, 3.0],

@@ -13,6 +13,7 @@ mod agentready_hotel;
 mod arch_read;
 mod archbuild;
 mod arexport;
+mod arexport_set;
 mod asbuilt;
 mod autospec;
 mod bimux_rw1;
