@@ -1504,6 +1504,17 @@ pub fn take_slowest_upload() -> f64 {
 /// bytes changed are made again ([`upload`]).
 const PIECE: usize = 65_536;
 
+/// Pieces uploads made and pieces they used again (see [`upload_pieces`]).
+static PIECES_MADE: AtomicU64 = AtomicU64::new(0);
+static PIECES_REUSED: AtomicU64 = AtomicU64::new(0);
+
+/// `(made, reused)`: the GPU buffer pieces vertex uploads have made, and the ones they found
+/// unchanged from the upload before and used again, since the app started (measurements take
+/// the difference across an edit).
+pub fn upload_pieces() -> (u64, u64) {
+    (PIECES_MADE.load(Ordering::Relaxed), PIECES_REUSED.load(Ordering::Relaxed))
+}
+
 /// The pieces the last upload made, by kind and content: an unchanged piece is used again
 /// instead of re-created. Every edit used to upload the whole drawing into new buffers; freeing
 /// tens of megabytes of them each time stalled the window about 0.35 s every few edits on a
@@ -1543,7 +1554,9 @@ fn upload_parts<'a>(
         .filter(|c| c.len() >= stride)
         .map(|c| {
             let key = piece_key(label, c);
-            let batch = previous.as_mut().and_then(|p| p.remove(&key)).unwrap_or_else(|| Batch {
+            let old = previous.as_mut().and_then(|p| p.remove(&key));
+            (if old.is_some() { &PIECES_REUSED } else { &PIECES_MADE }).fetch_add(1, Ordering::Relaxed);
+            let batch = old.unwrap_or_else(|| Batch {
                 buffer: Arc::new(Tracked::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(label),
                     contents: c,
@@ -2633,8 +2646,9 @@ mod tests {
     }
 
     /// Wipeouts and draw order across a tile edge: a red line drawn first, then a wipeout over
-    /// it in the next cell, then a green line over both, then a blue line under nothing. Each
-    /// pixel shows what came last, as the whole list draws it.
+    /// it in the next cell, then a green line over both, then a blue line of the first cell
+    /// crossing the green one in the second. Each pixel shows what came last, as the whole list
+    /// draws it (drawn tile by tile, the green line would cover the blue one).
     #[test]
     fn draw_order_and_wipeouts_hold_across_a_tile_edge() {
         let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
@@ -2653,7 +2667,7 @@ mod tests {
         add(Kind::Polyline, Rgb(255, 0, 0), vec![Vec2::new(3.0, 4.5), Vec2::new(10.5, 4.5)]);
         add(Kind::Mask, Rgb(0, 0, 0), vec![Vec2::new(7.0, 2.0), Vec2::new(14.0, 2.0), Vec2::new(14.0, 7.0), Vec2::new(7.0, 2.0), Vec2::new(14.0, 7.0), Vec2::new(7.0, 7.0)]);
         add(Kind::Polyline, Rgb(0, 255, 0), vec![Vec2::new(9.5, 1.0), Vec2::new(9.5, 7.0)]);
-        add(Kind::Polyline, Rgb(0, 0, 255), vec![Vec2::new(4.5, 0.5), Vec2::new(4.5, 7.5)]);
+        add(Kind::Polyline, Rgb(0, 0, 255), vec![Vec2::new(5.5, 6.0), Vec2::new(9.9, 6.0)]);
         add(Kind::Tris, Rgb(255, 255, 255), vec![Vec2::new(6.0, 5.0), Vec2::new(10.0, 5.0), Vec2::new(10.0, 6.0)]);
         let tiling = Tiling { min: Vec2::ZERO, cell: 8.0, cols: 2, rows: 1, margin: 0.5 };
         let tiled = build_mesh_tiled(&l, Vec2::ZERO, Rgb(9, 9, 9), false, Some(&tiling));
@@ -2683,6 +2697,71 @@ mod tests {
             assert_eq!(Tiling::for_bounds(&b, 10_000_000, bad), None);
         }
         assert_eq!(Tiling::for_bounds(&Bounds2::EMPTY, 10_000_000, 1.0), None);
+    }
+
+    /// A drawing's own draw order (DRAWORDER: an object brought to the front, one sent to the
+    /// back) across tile edges, through the renderer: the tiled frame is the whole one.
+    #[test]
+    fn draworder_across_tile_edges_draws_as_the_whole_list() {
+        use cadaddy_doc::{Common, Drawing, EntityKind, Line, Space};
+        use cadaddy_geom::Vec3;
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let mut d = Drawing::new_imperial();
+        let mut handles = Vec::new();
+        for i in 0..24 {
+            let (a, b) = if i % 2 == 0 {
+                (Vec3::new(2.0, 1.0 + f64::from(i) * 2.5, 0.0), Vec3::new(13.0, 1.5 + f64::from(i) * 2.5, 0.0))
+            } else {
+                (Vec3::new(1.0 + f64::from(i) * 2.5, 2.0, 0.0), Vec3::new(1.5 + f64::from(i) * 2.5, 13.0, 0.0))
+            };
+            let common = Common { color: cadaddy_color::Color::Index(1 + (i % 6) as u8), ..Common::default() };
+            let Ok(h) = d.add(&Space::Model, common, EntityKind::Line(Line { a, b })) else { panic!("add") };
+            handles.push(h);
+        }
+        for (k, h) in handles.iter().enumerate() {
+            if k % 5 == 0 {
+                d.model.bring_to_front(*h);
+            } else if k % 7 == 0 {
+                d.model.send_to_back(*h);
+            }
+        }
+        let l = cadaddy_render::build(&d, &Space::Model, &cadaddy_render::Options { tolerance: 0.1, min_dash: 0.4, ..Default::default() });
+        let tiling = Tiling { min: Vec2::ZERO, cell: 8.0, cols: 8, rows: 8, margin: 1.5 };
+        let center = Vec2::new(32.0, 32.0);
+        let whole = read_frame(&rs, build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false), false, center, 1.0, None);
+        let tiled = read_frame(&rs, build_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(&tiling)), false, center, 1.0, None);
+        assert_eq!(differing(&tiled, &whole), 0);
+    }
+
+    /// An edit changes the bytes of the tiles of the objects it changed, and no other tile's:
+    /// the upload cuts each tile into pieces of its own, so the others' pieces are used again.
+    #[test]
+    fn an_edit_changes_only_its_tiles_bytes() {
+        let l = busy_list(9);
+        let before = build_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(&small_tiles()));
+        // A short hairline moved a little, inside its cell.
+        let mut moved = l.clone();
+        let Some((i, p)) = moved.prims.iter().enumerate().find(|(_, p)| {
+            let b = Bounds2::from_points(l.points(p).iter().copied());
+            let inside = (b.center().x % 8.0) > 1.0 && (b.center().x % 8.0) < 7.0;
+            p.kind == Kind::Polyline && p.lw == 0.0 && b.width() < 2.0 && b.height() < 2.0 && b.min.x > 10.0 && b.max.x < 54.0 && inside
+        }) else {
+            panic!("no short line")
+        };
+        let (start, len) = (p.start as usize, p.len as usize);
+        for v in moved.verts.iter_mut().skip(start).take(len) {
+            v.x += 0.25;
+        }
+        let after = build_mesh_tiled(&moved, Vec2::ZERO, Rgb(0, 0, 0), true, Some(&small_tiles()));
+        let (tb, ta) = (before.tiles.unwrap(), after.tiles.unwrap());
+        let changed: Vec<usize> = (0..tb.bounds.len())
+            .filter(|&t| {
+                let (a, b): (Vec<&[u8]>, Vec<&[u8]>) = (tb.parts(&before.lines, 1, VERTEX_SIZE).collect(), ta.parts(&after.lines, 1, VERTEX_SIZE).collect());
+                a.get(t) != b.get(t)
+            })
+            .collect();
+        assert_eq!(changed.len(), 1, "prim {i}: tiles changed {changed:?}");
+        assert_eq!(tb.parts(&before.tris, 0, VERTEX_SIZE).collect::<Vec<_>>(), ta.parts(&after.tris, 0, VERTEX_SIZE).collect::<Vec<_>>());
     }
 
     /// The highest layer of the tiles other than one.

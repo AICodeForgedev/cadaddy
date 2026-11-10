@@ -141,6 +141,40 @@ fn measure(harness: &mut Harness<'_, CadApp>, name: &'static str, view: View, fr
     Row { view: name, report, frame_ms: median(frame), render_ms: median(render), pan_frame_ms: median(pan_frame), pan_render_ms: median(pan_render) }
 }
 
+/// An edit at the room view: one object in view moved a little. Its regeneration (the changed
+/// chunk built again, the vertex data made again on the UI thread and uploaded) and the GPU
+/// buffer pieces the upload made again and reused.
+struct Edit {
+    report: Value,
+    made: u64,
+    reused: u64,
+    ms: f64,
+}
+
+fn edit(harness: &mut Harness<'_, CadApp>, room: Bounds2) -> Edit {
+    let doc = harness.state().session.state().unwrap().doc.clone();
+    let handle = doc
+        .model
+        .iter()
+        .find(|e| matches!(e.kind, cadaddy_engine::doc::EntityKind::Line(_)) && room.contains_box(&cadaddy_engine::doc::entity_bounds(&doc, e, 0)))
+        .map(|e| e.handle)
+        .expect("a line in the room");
+    let before = harness.state().canvas.stats.regen.build_ms.to_bits();
+    let pieces = cadaddy_ui_egui::gpu::upload_pieces();
+    let t = std::time::Instant::now();
+    harness.state_mut().session.execute("move", &serde_json::json!({ "handles": [handle.hex()], "from": [0, 0], "to": [1, 0] })).unwrap();
+    // The edit's frame builds the list and its vertex data; the next uploads them.
+    for _ in 0..3 {
+        harness.step();
+        let _ = harness.render();
+    }
+    let ms = ms(t);
+    assert_ne!(harness.state().canvas.stats.regen.build_ms.to_bits(), before, "the edit rebuilt the list");
+    harness.step();
+    let after = cadaddy_ui_egui::gpu::upload_pieces();
+    Edit { report: cadaddy_ui_egui::debug_overlay::draw2d_json(harness.state()), made: after.0 - pieces.0, reused: after.1 - pieces.1, ms }
+}
+
 fn f(v: &Value) -> f64 {
     v.as_f64().unwrap_or(0.0)
 }
@@ -259,6 +293,19 @@ fn a_print_set_reports_where_2d_time_goes() {
         measure(&mut harness, "one room", view(room, 1.1), frames),
     ];
     print(&rows, sheets, objects);
+    let e = edit(&mut harness, room);
+    let g = &e.report["regen"];
+    println!(
+        "\nedit at the room (one line moved): {:.0} ms over 3 frames; build {:.1} ms, chunks rebuilt {} / kept {}; vertex data {:.0} ms, upload {:.0} ms; GPU pieces made {} / reused {}",
+        e.ms,
+        f(&g["buildMs"]),
+        g["chunksRebuilt"],
+        g["chunksKept"],
+        f(&g["meshMs"]),
+        f(&g["uploadMs"]),
+        e.made,
+        e.reused
+    );
     // What counting costs: the whole set's list at the zoomed-out detail, without and with it.
     let doc = harness.state().session.state().unwrap().doc.clone();
     let px = ext.height() / f64::from(SIZE.1);
@@ -309,4 +356,8 @@ fn a_print_set_reports_where_2d_time_goes() {
         assert!(n(&fr["primsSent"]) * 3 < n(&g["prims"]), "{room_row}");
     }
     assert!(n(&room_row["regen"]["chunksKept"]) > 0, "{room_row}");
+    // An edit uploads again only the pieces of the tiles it changed.
+    if room_row["renderer"] == "gpu" {
+        assert!(e.made * 4 < e.reused, "pieces made {} reused {}", e.made, e.reused);
+    }
 }
