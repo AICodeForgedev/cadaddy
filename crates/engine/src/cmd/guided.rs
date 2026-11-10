@@ -6291,16 +6291,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // The typical exhaust risers: each typical room's fan duct up its chase to the roof
                 // terminal the roof plan places over it, as the riser details draw (Q6496).
                 {
-                    let hoods: BTreeSet<String> = sp.mep.equipment.iter().filter(|e| e.kind == "relief_hood").map(|e| e.tag.trim().to_ascii_uppercase()).collect();
+                    let hoods: BTreeSet<String> =
+                        sp.mep.equipment.iter().filter(|e| e.kind == "relief_hood").map(|e| e.tag.trim().to_ascii_uppercase()).collect();
                     let hoods: Vec<String> = hoods.into_iter().collect();
                     let details = super::exhaustrisers::riser_details(&m_pages, &hoods);
                     if !details.is_empty() {
                         let d = s.doc()?;
+                        // Each mechanical plan's whole sheet (its notes stand beside its views).
+                        let mut seen: BTreeSet<String> = BTreeSet::new();
                         let plans: Vec<cadaddy_doc::Drawing> = job_sheet_refs(job)
-                            .iter()
-                            .filter(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds())
+                            .into_iter()
+                            .filter(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds() && seen.insert(r.number.clone()))
                             .take(MAX_STAMP_SHEETS)
-                            .map(|r| super::printmep::sheet_drawing(d, r))
+                            .map(|r| super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..r }))
                             .collect();
                         let note = super::exhaustrisers::continuous_required(plans.iter().chain(m_pages.iter().map(|(_, p)| p)));
                         let stacked = super::exhaustrisers::stack_fan_ducts(&mut sp, &details, note.as_deref());
