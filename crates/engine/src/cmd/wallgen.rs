@@ -3918,7 +3918,7 @@ fn frames_in_gaps(
         for hi in by {
             let Some(h) = hosts.get(hi) else { continue };
             let hl = h.c0.dist(h.c1);
-            if !(hl > 1e-9) || u.cross((h.c1 - h.c0) * (1.0 / hl)).abs() > 0.02 || h.thickness + tol < c.thickness {
+            if hl.is_nan() || hl <= 1e-9 || u.cross((h.c1 - h.c0) * (1.0 / hl)).abs() > 0.02 || h.thickness + tol < c.thickness {
                 continue;
             }
             let off = n.dot(h.c0 - c.c0);
@@ -4419,7 +4419,7 @@ mod tests {
     }
 
     #[test]
-    fn grey_glazing_in_line_with_a_wall_fills_its_gap_but_a_grey_headboard_is_no_wall() {
+    fn grey_glazing_in_line_with_a_wall_is_its_window_but_a_grey_headboard_is_no_wall() {
         let mut d = Drawing::new_imperial();
         let grey = cadaddy_color::Color::True(cadaddy_color::Rgb(170, 170, 170));
         let mut add = |a: (f64, f64), b: (f64, f64), screened: bool| {
@@ -4460,10 +4460,15 @@ mod tests {
         .unwrap();
         let level = rules.levels[0].clone();
         let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
-        let walls = plan_level(&d, &g, &level, 12.0, &mut Vec::new()).walls;
-        // The two pieces of the south wall, the glazing between them, and the other three walls.
-        assert_eq!(walls.len(), 6, "{:?}", walls.iter().map(|w| (w.a / 12.0, w.b / 12.0)).collect::<Vec<_>>());
+        let pl = plan_level(&d, &g, &level, 12.0, &mut Vec::new());
+        let walls = &pl.walls;
+        // The two pieces of the south wall and the other three walls: the grey glazing across the
+        // gap is the window there, not a wall bridging it (Q6424), nor furniture.
+        assert_eq!(walls.len(), 5, "{:?}", walls.iter().map(|w| (w.a / 12.0, w.b / 12.0)).collect::<Vec<_>>());
         assert!(walls.iter().all(|w| w.a.y.min(w.b.y) / 12.0 < 0.5 || w.a.y.max(w.b.y) / 12.0 > 9.0 || (w.a.x - w.b.x).abs() < 1.0));
+        let windows: Vec<(Vec2, Vec2)> = pl.leaves.iter().filter(|l| l.window).map(|l| (l.a / 12.0, l.b / 12.0)).collect();
+        assert_eq!(windows.len(), 1, "{windows:?}");
+        assert!(windows.iter().all(|(a, b)| a.x.min(b.x) >= 7.9 && a.x.max(b.x) <= 12.1), "the window in the gap: {windows:?}");
     }
 
     #[test]
