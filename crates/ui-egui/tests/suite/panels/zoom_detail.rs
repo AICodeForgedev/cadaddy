@@ -13,7 +13,9 @@
 //! `ZOOMDETAIL_GPU=integrated` (or `discrete`, or part of an adapter's name) measures the GPU
 //! canvas on that adapter, `ZOOMDETAIL_BACKEND` picks its backend, and `ZOOMDETAIL_MODE=full` or
 //! `detail` runs one of the two (each in its own process has its own memory peak).
-//! `ZOOMDETAIL_WHOLE=1` measures the same objects as an ordinary drawing seen whole.
+//! `ZOOMDETAIL_WHOLE=1` measures the same objects as an ordinary drawing seen whole,
+//! `ZOOMDETAIL_FILE=<drawing>` a drawing file instead of the synthetic set, and
+//! `ZOOMDETAIL_BUILD=1` only the list build at a room's zoom, with and without detail levels.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -447,13 +449,84 @@ fn zoom_detail_frame_times() {
     println!("|---|---|---|---|---|---|---|---|---|---|");
     // ZOOMDETAIL_WHOLE=1: the same objects as an ordinary drawing (no sheet records), seen whole.
     let whole = std::env::var("ZOOMDETAIL_WHOLE").is_ok_and(|v| v == "1");
+    // ZOOMDETAIL_FILE: a drawing file to measure instead of the synthetic set.
+    let file = std::env::var("ZOOMDETAIL_FILE").ok().filter(|f| !f.is_empty());
     let set = || {
-        let mut d = sample::print_set(sheets, per);
+        let mut d = match &file {
+            Some(f) => {
+                let bytes = std::fs::read(f).unwrap_or_else(|e| panic!("{f}: {e}"));
+                cadaddy_io::read(&bytes, f).unwrap_or_else(|e| panic!("{f}: {e}"))
+            }
+            None => sample::print_set(sheets, per),
+        };
         if whole {
             d.agent = None.into();
         }
         d
     };
+    // ZOOMDETAIL_BUILD=1: only the list build itself, the whole drawing at a room's zoom, with
+    // and without detail levels (nothing of the app in between).
+    if std::env::var("ZOOMDETAIL_BUILD").is_ok_and(|v| v == "1") {
+        let d = set();
+        let px = 0.125;
+        // The area a room's view builds for, as the canvas does (the view and half its side round).
+        let at = d.model.iter().find_map(|e| match &e.kind {
+            EntityKind::Insert(i) => Some(i.insert.xy()),
+            _ => None,
+        });
+        let view = at.map(|c| {
+            let half = Vec2::new(240.0 * 1.6 / 2.0, 240.0 / 2.0);
+            let b = cadaddy_engine::geom::Bounds2::new(c - half, c + half);
+            b.expand(b.width().max(b.height()) * 0.5)
+        });
+        let base = cadaddy_render::Options { tolerance: px * 0.5, min_dash: px * 2.0, view, ..Default::default() };
+        let rules = std::sync::Arc::new(cadaddy_engine::cmd::fidelity::plan_rules(&d));
+        let with = || cadaddy_render::Options { detail: cadaddy_render::detail::Detail::new(px, rules.clone()), ..base.clone() };
+        let time = |o: &dyn Fn() -> cadaddy_render::Options| {
+            let mut t: Vec<f64> = (0..5)
+                .map(|_| {
+                    let o = o();
+                    let t0 = Instant::now();
+                    let l = cadaddy_render::build(&d, &Space::Model, &o);
+                    std::hint::black_box(l.prims.len());
+                    t0.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            t.sort_by(f64::total_cmp);
+            t
+        };
+        // ZOOMDETAIL_KINDS=1: each kind of object on its own.
+        if std::env::var("ZOOMDETAIL_KINDS").is_ok_and(|v| v == "1") {
+            let mut kinds: std::collections::BTreeMap<String, Vec<std::sync::Arc<cadaddy_engine::doc::Entity>>> = Default::default();
+            for e in d.model.iter() {
+                let k = format!("{:?}", e.kind);
+                let k = k.split(['(', ' ', '{']).next().unwrap_or("?").to_string();
+                kinds.entry(k).or_default().push(e.clone());
+            }
+            for (k, ents) in kinds {
+                let mut sub = d.clone();
+                sub.model = cadaddy_engine::doc::EntityStore::new();
+                for e in ents {
+                    sub.model.push_shared(e);
+                }
+                let best = |o: &cadaddy_render::Options| {
+                    (0..5)
+                        .map(|_| {
+                            let t0 = Instant::now();
+                            std::hint::black_box(cadaddy_render::build(&sub, &Space::Model, o).prims.len());
+                            t0.elapsed().as_secs_f64() * 1000.0
+                        })
+                        .fold(f64::MAX, f64::min)
+                };
+                println!("{k:<12} {:>8} objects: without {:>7.1} ms, with {:>7.1} ms", sub.model.len(), best(&base), best(&with()));
+            }
+            return;
+        }
+        println!("build at a room's zoom, ms (5 runs, sorted): without {:?}", time(&|| base.clone()));
+        println!("build at a room's zoom, ms (5 runs, sorted): with    {:?}", time(&with));
+        println!("build at a room's zoom, ms (5 runs, sorted): without {:?}", time(&|| base.clone()));
+        return;
+    }
     // Each made on its own: nothing carries from one to the other.
     if mode != "detail" {
         measure("before: in full", set(), true, rs.as_ref());

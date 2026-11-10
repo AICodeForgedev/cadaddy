@@ -106,13 +106,24 @@ impl PlanRules {
             *v = px(*v, dv);
         }
         self.symbols.truncate(MAX_SYMBOL_RULES);
+        // Words compared as the names are: trimmed, lower case (once, not per symbol drawn).
+        let norm = |v: &mut Vec<String>| {
+            for w in v.iter_mut() {
+                *w = w.trim().to_ascii_lowercase();
+            }
+            v.retain(|w| !w.is_empty());
+        };
+        for r in &mut self.symbols {
+            norm(&mut r.words);
+            norm(&mut r.layers);
+        }
         self.bar_transparency = self.bar_transparency.min(90);
         self.tint_transparency = self.tint_transparency.min(90);
         self.image_px = self.image_px.clamp(256, 4096);
         self
     }
 
-    /// The tier of a reference to `block` on `layer`.
+    /// The tier of a reference to `block` on `layer` (rules made safe by [`PlanRules::sane`]).
     pub fn tier_of(&self, block: &str, layer: &str) -> Tier {
         let (block, layer) = (block.to_ascii_lowercase(), layer.to_ascii_lowercase());
         self.symbols.iter().find(|r| r.matches(&block, &layer)).map_or(self.default_tier, |r| r.tier)
@@ -122,19 +133,25 @@ impl PlanRules {
     pub fn full_px(&self, tier: Tier) -> f64 {
         self.tier_px.get(tier.index()).copied().unwrap_or(0.0).max(self.box_px)
     }
+
+    /// How big (pixels) a symbol of any tier must be for its contents to be drawn: past it no
+    /// symbol's tier needs looking up.
+    fn any_full_px(&self) -> f64 {
+        self.tier_px.iter().copied().fold(self.box_px, f64::max)
+    }
 }
 
-/// Whether `word` is in `text` (both lower case): a phrase (with a space or dash) as text, a
-/// short word as a whole word, a word of five letters or more as a word's start (plurals).
-fn has_word(text: &str, word: &str) -> bool {
-    let w = word.trim().to_ascii_lowercase();
+/// Whether `w` is in `text` (both trimmed and lower case, see [`PlanRules::sane`]): a phrase
+/// (with a space or dash) as text, a short word as a whole word, a word of five letters or more
+/// as a word's start (plurals).
+fn has_word(text: &str, w: &str) -> bool {
     if w.is_empty() {
         return false;
     }
     if w.contains(' ') || w.contains('-') {
-        return text.contains(&w);
+        return text.contains(w);
     }
-    text.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| t == w || (w.len() >= 5 && t.starts_with(&w)))
+    text.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| t == w || (w.len() >= 5 && t.starts_with(w)))
 }
 
 /// How an object is drawn at a [`Detail`].
@@ -301,6 +318,9 @@ impl Detail {
         }
         let size = self.pixels(&xf.then_before(m), local.width().max(local.height()));
         let r = &self.rules;
+        if size >= r.any_full_px() {
+            return Look::Full;
+        }
         if size < r.dot_px {
             let [a, _, c, _] = corners;
             return Look::Dot((a + c) * 0.5);
@@ -360,11 +380,12 @@ mod tests {
     fn first_rule_wins_and_the_default_takes_the_rest() {
         let rules = PlanRules {
             symbols: vec![
-                SymbolRule { words: vec!["outlet".into()], layers: vec![], tier: Tier::Room },
+                SymbolRule { words: vec![" Outlet".into()], layers: vec![], tier: Tier::Room },
                 SymbolRule { words: vec![], layers: vec!["equip".into()], tier: Tier::Building },
             ],
             ..PlanRules::default()
-        };
+        }
+        .sane();
         assert_eq!(rules.tier_of("SYM-OUTLET", "E-EQUIP"), Tier::Room);
         assert_eq!(rules.tier_of("SYM-PANEL", "E-EQUIP"), Tier::Building);
         assert_eq!(rules.tier_of("SYM-PANEL", "A-WALL"), Tier::Floor);
@@ -473,7 +494,9 @@ mod tests {
     }
 
     fn rules() -> Arc<PlanRules> {
-        Arc::new(PlanRules { symbols: vec![SymbolRule { words: vec!["outlet".into()], layers: vec![], tier: Tier::Room }], ..PlanRules::default() })
+        Arc::new(
+            PlanRules { symbols: vec![SymbolRule { words: vec!["outlet".into()], layers: vec![], tier: Tier::Room }], ..PlanRules::default() }.sane(),
+        )
     }
 
     fn at(px: f64) -> Options {
