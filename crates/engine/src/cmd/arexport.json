@@ -97,7 +97,13 @@
       "big_words": ["air handling unit", "air handler", "ahu", "rtu", "rooftop unit", "roof top unit", "dedicated outdoor air", "doas", "erv", "energy recovery", "makeup air", "make up air", "chiller", "boiler", "cooling tower", "condensing unit", "pump", "fire pump", "booster pump", "jockey pump"],
       "min_extent_ft": 4,
       "fan_words": ["fan", "exhaust fan", "ef"],
-      "device_words": ["junction", "junction box", "contactor", "starter", "relay", "time clock", "pull box"]
+      "device_words": ["junction", "junction box", "contactor", "starter", "relay", "time clock", "pull box", "power box", "exit sign", "door holder", "control module", "monitor module", "antenna", "charging station", "receptacle", "drain", "hydrant", "pole"],
+      "full_words": ["damper", "fan coil", "fcu", "vav", "terminal unit", "unit heater", "cabinet heater", "split system", "heat pump", "air conditioner", "condenser", "humidifier", "unit ventilator", "coil", "fan powered box", "water heater", "expansion tank", "backflow"],
+      "support_words": ["curb", "roof curb", "stand", "equipment stand", "pad", "housekeeping pad", "rack", "support"]
+    },
+    "runs": {
+      "feeder_words": ["feeder", "feeders", "service", "service entrance"],
+      "branch_words": ["bda", "data", "telecom", "tel", "tv", "catv", "security", "access control", "av", "nurse call", "low voltage", "lv", "signal", "communications"]
     },
     "sizes": {
       "main_duct_in": 18,

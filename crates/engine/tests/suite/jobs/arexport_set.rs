@@ -154,7 +154,9 @@ fn spec() -> Value {
                 {"name": "CW", "layer": "P-DOMW-CW", "kind": "pipe", "size_in": [3, 0], "bottom_ft": 9},
                 {"name": "EA", "layer": "M-EXHAUST", "kind": "duct", "size_in": [6, 0], "bottom_ft": 8.5, "duct_type": "exhaust"},
                 {"name": "FP", "layer": "F-SPRK", "kind": "pipe", "size_in": [4, 0], "bottom_ft": 9.2},
-                {"name": "PWR", "layer": "E-POWER", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 9.4}
+                {"name": "PWR", "layer": "E-POWER", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 9.4},
+                {"name": "E-FEEDER", "layer": "E-FDR", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 9.6},
+                {"name": "DATA", "layer": "T-DATA", "kind": "conduit", "size_in": [1.25, 0], "bottom_ft": 9.6}
             ],
             "runs": [
                 {"system": "SA", "level": "L1", "points": [[24, 288], [696, 288]], "size_in": [24, 12], "bottoms_ft": [8]},
@@ -169,7 +171,9 @@ fn spec() -> Value {
                 {"system": "PWR", "level": "L1", "points": [[600, 200], [600, 120]], "size_in": [0.75, 0], "bottoms_ft": [9.4]},
                 {"system": "PWR", "level": "L1", "points": [[690, 200]], "size_in": [0.75, 0], "bottoms_ft": [9.4], "top_ft": 19.4},
                 {"system": "PWR", "level": "L1", "points": [[500, 200]], "size_in": [0.75, 0], "bottoms_ft": [9.4], "top_ft": 19.4},
-                {"system": "PWR", "level": "L1", "points": [[400, 200], [400, 150]], "size_in": [1.25, 0], "bottoms_ft": [9.4]}
+                {"system": "PWR", "level": "L1", "points": [[400, 200], [400, 150]], "size_in": [1.25, 0], "bottoms_ft": [9.4]},
+                {"system": "E-FEEDER", "level": "L1", "points": [[420, 200], [420, 150]], "size_in": [0.75, 0], "bottoms_ft": [9.6]},
+                {"system": "DATA", "level": "L1", "points": [[440, 200], [440, 150]], "size_in": [1.25, 0], "bottoms_ft": [9.6]}
             ],
             "terminals": [
                 {"system": "SA", "level": "L1", "at": [120, 108], "size_in": [12, 12], "bottom_ft": 9, "terminal_kind": "diffuser"},
@@ -323,6 +327,8 @@ fn census(s: &Session) -> BTreeMap<&'static str, BTreeSet<String>> {
                 "PWR" if mepid.starts_with("@500.00") => put("branch_through_floor"),
                 "PWR" if mepid.starts_with("@400.00") => put("unknown_1_25"),
                 "PWR" => put("branch"),
+                "E-FEEDER" => put("feeder_by_name"),
+                "DATA" => put("low_voltage"),
                 _ => {}
             }
         }
@@ -394,6 +400,8 @@ fn the_set_follows_the_four_views_and_never_holds_everything() {
         "cw_branch",
         "cw_riser",
         "unsized_pipe",
+        "feeder_by_name",
+        "low_voltage",
     ] {
         assert!(c.get(k).is_some_and(|v| !v.is_empty()), "the synthetic building has {k}: {:?}", c.keys().collect::<Vec<_>>());
     }
@@ -453,8 +461,18 @@ fn the_set_follows_the_four_views_and_never_holds_everything() {
     }
     // Full on top: every other duct, terminal and the bathroom fan with its duct, every panel
     // with its feeder, anything through a floor, a run of unknown connection by its size.
-    for k in ["unit_panel", "unit_feeder", "branch_duct", "diffuser", "bath_fan", "bath_fan_duct", "cw_riser", "branch_through_floor", "unknown_1_25"]
-    {
+    for k in [
+        "unit_panel",
+        "unit_feeder",
+        "branch_duct",
+        "diffuser",
+        "bath_fan",
+        "bath_fan_duct",
+        "cw_riser",
+        "branch_through_floor",
+        "unknown_1_25",
+        "feeder_by_name",
+    ] {
         has_all(&full, k, "building-mep-full");
     }
     let mep: BTreeSet<String> = mains.union(&full).cloned().collect();
@@ -473,6 +491,7 @@ fn the_set_follows_the_four_views_and_never_holds_everything() {
         "sprinkler_head",
         "sprinkler_branch",
         "unsized_pipe",
+        "low_voltage",
     ] {
         has_none(&mep, k, "the building MEP packages");
     }

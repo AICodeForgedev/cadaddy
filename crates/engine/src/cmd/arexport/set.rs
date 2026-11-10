@@ -81,6 +81,7 @@ pub struct SetRules {
     pub sizes: SizeRules,
     pub elevator: ElevatorRules,
     pub crossing: CrossingRules,
+    pub runs: RunRules,
     /// The MEP views' outline: its bar, inches across and high.
     pub outline_bar_in: f64,
 }
@@ -111,6 +112,20 @@ pub struct EquipmentRules {
     pub fan_words: Vec<String>,
     /// Equipment that is a device to the views (a junction box, a contactor).
     pub device_words: Vec<String>,
+    /// Smaller equipment the full view shows (fan coils, dampers, unit heaters); other small
+    /// equipment is the floor view's.
+    pub full_words: Vec<String>,
+    /// What only holds equipment up (a curb, a stand): never a building package's.
+    pub support_words: Vec<String>,
+}
+
+/// Runs by their system's name: a feeder (`E-FEEDER`), or a low-voltage branch (data, a
+/// signal booster's cabling), whatever its size.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct RunRules {
+    pub feeder_words: Vec<String>,
+    pub branch_words: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -240,6 +255,8 @@ enum Kit {
     Big,
     Fan,
     Device,
+    Support,
+    Full,
     Other,
 }
 
@@ -261,6 +278,8 @@ struct Cx<'a> {
     circuits: HashMap<(String, String), String>,
     /// Tags that are in the mains view (gear, house panels, big equipment, elevator gear).
     mains_tags: BTreeSet<String>,
+    /// Electrical gear's tags.
+    gear_tags: BTreeSet<String>,
 }
 
 fn up(s: &str) -> String {
@@ -282,8 +301,18 @@ impl<'a> Cx<'a> {
                 circuits.entry((up(&e.tag), up(&c.number))).or_insert_with(|| up(&c.description));
             }
         }
-        let mut cx =
-            Cx { rules, sp, floors, kinds, panels: HashMap::new(), hoistways: Vec::new(), big: Vec::new(), circuits, mains_tags: BTreeSet::new() };
+        let mut cx = Cx {
+            rules,
+            sp,
+            floors,
+            kinds,
+            panels: HashMap::new(),
+            hoistways: Vec::new(),
+            big: Vec::new(),
+            circuits,
+            mains_tags: BTreeSet::new(),
+            gear_tags: BTreeSet::new(),
+        };
         cx.panels = cx.panel_scopes();
         cx
     }
@@ -376,6 +405,9 @@ fn equipment_class(cx: &Cx, it: &Item, toks: &[String]) -> Kit {
     if says(toks, &r.panel_words) {
         return Kit::Panel;
     }
+    if says(toks, &r.support_words) {
+        return Kit::Support;
+    }
     let extent = (it.hi[0] - it.lo[0]).max(it.hi[1] - it.lo[1]);
     if says(toks, &r.big_words) || (r.min_extent_ft > 0.0 && extent >= r.min_extent_ft) {
         return Kit::Big;
@@ -385,6 +417,9 @@ fn equipment_class(cx: &Cx, it: &Item, toks: &[String]) -> Kit {
     }
     if says(toks, &r.device_words) {
         return Kit::Device;
+    }
+    if says(toks, &r.full_words) {
+        return Kit::Full;
     }
     Kit::Other
 }
@@ -554,14 +589,12 @@ fn equipment_role(cx: &Cx, it: &Item, toks: &[String], tag: &str, r: &mut Role) 
             r.role = Some("equipment".into());
         }
         Kit::Device => r.left_out = Some("small electrical equipment"),
-        Kit::Other => {
-            if r.group == "electrical" {
-                r.left_out = Some("small electrical equipment");
-            } else {
-                r.full = Some("equipment".into());
-                r.role = Some("equipment".into());
-            }
+        Kit::Support => r.left_out = Some("equipment support"),
+        Kit::Full => {
+            r.full = Some("equipment".into());
+            r.role = Some("equipment".into());
         }
+        Kit::Other => r.left_out = Some("small equipment (the floor view's)"),
     }
 }
 
@@ -614,6 +647,31 @@ fn run_role(d: &Drawing, cx: &Cx, it: &Item, store: &cadaddy_doc::props::Props, 
         return;
     }
     let circuit = circuit_of(d, it.e, store);
+    let system = tokens(made_tag(it.e, "system").unwrap_or_default());
+    let panel = store.get("panel").filter(|p| p.has_value()).map(|p| up(&p.text())).unwrap_or_default();
+    if says(&system, &cx.rules.runs.branch_words) {
+        r.role = Some("branch".into());
+        if crosses {
+            r.full = Some("crosses a floor".into());
+        } else {
+            r.room_tier = true;
+            r.left_out = Some("low-voltage or branch run");
+        }
+        return;
+    }
+    if says(&system, &cx.rules.runs.feeder_words) || (circuit.is_empty() && !panel.is_empty()) {
+        // A feeder out of the gear or panel it names: gear's are the mains.
+        let kind = cx.kinds.get(&panel).map(String::as_str).unwrap_or_default();
+        let from_gear = !panel.is_empty() && (cx.gear_tags.contains(&panel) || cx.is_gear(&format!("{kind} {panel}")));
+        let why = if panel.is_empty() { "feeder (its system)".to_string() } else { format!("feeder from {panel}") };
+        r.role = Some("feeder".into());
+        if from_gear {
+            r.mains = Some(why);
+        } else {
+            r.full = Some(why);
+        }
+        return;
+    }
     if circuit.is_empty()
         && let Some(z) = size.filter(|z| *z >= cx.rules.sizes.feeder_min_in)
     {
@@ -622,7 +680,6 @@ fn run_role(d: &Drawing, cx: &Cx, it: &Item, store: &cadaddy_doc::props::Props, 
         return;
     }
     r.role = Some("branch".into());
-    let panel = store.get("panel").filter(|p| p.has_value()).map(|p| up(&p.text())).unwrap_or_default();
     let number = up(&circuit_number(&panel, &circuit));
     let desc = cx.circuits.get(&(panel, number)).map(|t| tokens(t)).unwrap_or_default();
     let mid = [(it.lo[0] + it.hi[0]) / 2.0, (it.lo[1] + it.hi[1]) / 2.0];
@@ -887,6 +944,9 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
             Kit::Disconnect => says(toks, &set.elevator.words) || Cx::near(&cx.hoistways, it.lo, it.hi, set.reach_ft()),
             _ => false,
         };
+        if *class == Kit::Distribution && !tag.is_empty() {
+            cx.gear_tags.insert(tag.clone());
+        }
         if mains && !tag.is_empty() {
             cx.mains_tags.insert(tag);
         }
@@ -1242,16 +1302,23 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if !pk.left_out.is_empty() {
             fitted.sidecar["left_out"] = json!(pk.left_out);
         }
-        let mut groups: BTreeMap<String, (usize, bool)> = BTreeMap::new();
+        // Each group's nodes, whether the group shows when the package opens (its rule), and
+        // its nodes off by default of their own (a floor plan's ceilings).
+        let mut groups: BTreeMap<String, (usize, usize)> = BTreeMap::new();
         for n in &fitted.built.scene.nodes {
             let g = n.meta.get("group").and_then(Value::as_str).unwrap_or("base").to_string();
-            let on = n.meta.get("default_on").and_then(Value::as_bool).unwrap_or(true);
-            let e = groups.entry(g).or_insert((0, on));
+            let off = n.meta.get("default_on").and_then(Value::as_bool) == Some(false);
+            let e = groups.entry(g).or_insert((0, 0));
             e.0 += 1;
-            e.1 = e.1 && on;
+            e.1 += usize::from(off);
         }
-        fitted.sidecar["groups"] =
-            json!(groups.iter().map(|(g, (n, on))| (g.clone(), json!({"nodes": n, "default_on": on}))).collect::<Map<String, Value>>());
+        let group_on = |g: &str| set.groups.iter().find(|r| slug(&r.group) == g).and_then(|r| r.default_on).unwrap_or(true);
+        fitted.sidecar["groups"] = json!(
+            groups
+                .iter()
+                .map(|(g, (n, off))| (g.clone(), json!({"nodes": n, "default_on": group_on(g), "nodes_off": off})))
+                .collect::<Map<String, Value>>()
+        );
         let (_, bytes) = write_files(&stem, &fitted)?;
         let side_text = serde_json::to_string_pretty(&fitted.sidecar).map_err(|e| bad(CMD, e.to_string()))?;
         let mut files = Map::new();

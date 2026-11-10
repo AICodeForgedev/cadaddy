@@ -199,6 +199,69 @@ packages, files, bytes, names, skipped: [{name, why}]}`.
   - When the anchor moved, the old anchor is kept (shown as a grey cross on the plan and in AR) and
     the app asks the user to align again.
 
+## The building's package set (`set: true`, Q6420)
+
+The field app works the way the BIM view does: one view at a time, never every object at once.
+One call writes the whole building as the four views' packages, and an index the app reads:
+
+```
+bim.export.ar {set: true, dir: "exports"}       then serve `exports` (its manifest.json is written too)
+```
+
+| Package | View | Holds | Generic |
+|---|---|---|---|
+| `building-architectural` | Architectural | rooms (a floor tile each), walls, windows and doors (as boxes), floors, roof, parapets, stairs, solid; each level's exterior (its floor plates raised to its storey) for the opening reveal | yes |
+| `building-mep-mains` | MEP, the default | the floors and one outline (the outside edge of the largest floor plate, at the lowest floor) as the only context; electrical gear, house panels and their feeders, cable tray, main ducts, large pipe and risers, fire mains and risers, pumps, large mechanical equipment; each elevator as one hoistway volume with its machine or controller, its disconnect and its feeder | yes |
+| `building-mep-full` | Full MEP, on top of the mains | every other duct, air terminal and fan (a bathroom fan however small), plumbing main lines from the rules' size, every panel with its feeder, disconnects of large equipment, runs of unknown connection at the feeder size, and anything that passes through a floor | yes |
+| `levels/LEVEL` | Floor | the level's architecture as see-through context, walls and doors cut at `level_cut_ft`, ceilings and roof off by default (`overhead`), a tile per room (own node, number, name), cabinets, room and unit panels, lights, sprinkler heads and branch lines, the level's MEP | no |
+| `rooms/LEVEL-ROOM` | Room | everything in the room, true position from its anchor, ready for field alignment (the single-room export); furniture only here, its own group, off by default | no |
+
+- **Never everything.** No package holds every object of the model, and a single export that would
+  (`level: "all"`, or rooms that cover every level and every object) is refused with a plain
+  message. Every element the export keeps is in some level or room package, and in the graph.
+- **The MEP views never hold** walls, doors, windows, stairs, devices, boxes, wire, fixtures,
+  sprinkler heads, furniture, branch circuits, sprinkler branch lines or pipe under the size limit,
+  unless the run passes through a floor. Passing through a floor is decided from the element's
+  geometry against the level elevations (`crossing.tolerance_ft`), not its level. The one
+  exception is an elevator's own branches (a branch inside a hoistway's plan, or a circuit the
+  schedule describes with `elevator.branch_words`): they are never in a building package.
+- **Main or branch.** Ducts at `sizes.main_duct_in` and up are mains. For plumbing pipe,
+  `main_pipe_in` and up are mains, and the full view adds pipe from `plumbing_min_in` up. Fire
+  protection pipe is a main when it is a riser or at `fire_main_in` and up. A pipe the documents
+  give no size is left out and counted (`left_out` in the sidecars and the index).
+- **Feeder or branch.** A raceway is a feeder when it belongs to a feeder of the feeder schedule
+  (to a house panel, gear, large equipment or an elevator's disconnect: the mains; to any other
+  panel: full). With a circuit it is a branch. With neither, it is a feeder from `feeder_min_in` up.
+- **House or unit panel**, from the distribution data: a panel whose schedule's circuits serve one
+  room is the room's or the unit's (full view); one fed straight from gear, or serving more than one
+  room or area, is a house panel (mains); when the data don't say, full view, and the graph says so.
+- **Groups.** Every node carries `group`: `mechanical` (with fire protection), `electrical` (with
+  fire alarm), `plumbing`, `cabinets`, `furniture` or `base` (always on). Furniture's nodes say
+  `default_on: false`. Cabinets are only in level and room packages.
+- **Generic.** The building packages' sidecars say `generic: true` and `field_alignment: false`:
+  simplified on purpose (over 150,000 triangles: the context as boxes, then every element as its
+  box, then the far elements), never for layout. Level and room packages keep true geometry.
+
+**The index** (`building.json`, schema `cadaddy.ar.building/1`):
+- `frame`: the building and level packages share one frame: plan feet from `origin_plan_ft`, with
+  the lowest floor's elevation (`datum_elevation_ft`) at y = 0. A room package's origin is its anchor.
+- `views`: `default` (`mep`, `mains`); `architectural`; `mep.densities` (`mains`, and `full` = mains
+  plus full); `floor.by_level`; `room.by_room` (room id). The app loads exactly these.
+- `levels` (name, elevation, height, outline loops in plan feet, package, rooms), `rooms` (id,
+  number, name, level, bounds, area, anchor, package), `equipment` (kind, tag, level, position,
+  group, view, house/unit), `systems` by group (each system's elements in the mains and full).
+- `packages` and `room_packages`: each package's files (path, bytes, SHA-256), its triangles and
+  nodes, and `content_hash` over its models only, so Update pulls just the packages whose models
+  changed.
+- `graph.elements`: every element: id, kind, tag, group, level, system, role (`main`, `branch`,
+  `riser`, `feeder`, `panel`, `hoistway`…), the packages it is in, and for MEP `fed_by` and `serves`
+  (by tag and element id, `via` the feeder or system, with the circuit), each `known` (the feeder
+  schedule, the panel schedule, the plan's circuit tags), `inferred` (a rule or default gave it) or
+  left `unknown`, never guessed.
+
+Every list, word and limit is rules data (`set` in `arexport.json`; a job's own under
+`ar_export.set`, through `bim.export.ar.rules`).
+
 ## Not in phase 1
 
 LiDAR fitting, writing field status back. The phone app is Q6208 `arapp`; its Update button is
