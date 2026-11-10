@@ -24,6 +24,8 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use cadaddy_doc::foreign::{Foreign, ForeignExtra, ForeignObject};
 use cadaddy_doc::{Block, Drawing, Entity, EntityStore, Handle, Layout, RawTag};
@@ -137,6 +139,96 @@ pub struct ReadReport {
     pub notes: Vec<String>,
     pub manifest: Option<Value>,
     pub thumbnail: Option<Vec<u8>>,
+    /// Where the read's time went, and how much inflated data it held at once.
+    pub profile: OpenProfile,
+}
+
+/// Where reading a .cdy file spends its time, and the inflated bytes it holds. The parts done
+/// chunk by chunk on all cores are CPU time summed over the cores (`parallel` is their wall
+/// time); `assemble` runs on one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OpenProfile {
+    /// Wall time of the whole read.
+    pub total: Duration,
+    /// Wall time of the chunk-by-chunk part: checksums, inflating, decoding, building objects.
+    pub parallel: Duration,
+    /// Checking and inflating the chunks (summed over the cores).
+    pub inflate: Duration,
+    /// Model space chunks' bytes decoded into value trees (summed over the cores).
+    pub decode: Duration,
+    /// Model space objects built from their value trees (summed over the cores).
+    pub construct: Duration,
+    /// The rest, in file order on one core: header, tables, blocks, layouts, the other parts, and
+    /// the objects put into the drawing's store and its handle index.
+    pub assemble: Duration,
+    /// The chunks read and the bytes they inflate to.
+    pub chunks: usize,
+    pub raw_bytes: u64,
+    /// The most inflated bytes held at once. A model space chunk's bytes are let go as soon as its
+    /// objects are built, so this stays a few chunks however large the file is.
+    pub raw_peak: u64,
+}
+
+/// [`OpenProfile`]'s counters, shared by the cores reading chunks.
+#[derive(Default)]
+struct Meter {
+    inflate: AtomicU64,
+    decode: AtomicU64,
+    construct: AtomicU64,
+    raw: AtomicU64,
+    held: AtomicU64,
+    peak: AtomicU64,
+}
+
+impl Meter {
+    fn time<T>(counter: &AtomicU64, f: impl FnOnce() -> T) -> T {
+        let t = Instant::now();
+        let r = f();
+        counter.fetch_add(u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX), Ordering::Relaxed);
+        r
+    }
+    /// `n` inflated bytes now held.
+    fn hold(&self, n: usize) {
+        let n = n as u64;
+        self.raw.fetch_add(n, Ordering::Relaxed);
+        let now = self.held.fetch_add(n, Ordering::Relaxed).saturating_add(n);
+        self.peak.fetch_max(now, Ordering::Relaxed);
+    }
+    /// `n` inflated bytes let go.
+    fn release(&self, n: usize) {
+        let _ = self.held.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |h| Some(h.saturating_sub(n as u64)));
+    }
+    fn nanos(counter: &AtomicU64) -> Duration {
+        Duration::from_nanos(counter.load(Ordering::Relaxed))
+    }
+}
+
+/// The inflated bytes a chunk read holds.
+fn raw_len(r: &Read) -> usize {
+    match r {
+        Read::Ok(c) => c.data.len(),
+        Read::Damaged { salvage, .. } => salvage.len(),
+    }
+}
+
+/// A chunk as the chunk-by-chunk part leaves it: a model space chunk already turned into its
+/// objects (its bytes let go), any other chunk as read.
+enum Prepared {
+    /// The objects and the notes about ones that couldn't be read; `None` when the chunk doesn't
+    /// decode to a list.
+    Objects(Option<(Vec<Entity>, Vec<String>)>),
+    Chunk(Read),
+}
+
+fn prepare(r: Read, m: &Meter) -> Prepared {
+    match r {
+        Read::Ok(c) if &c.tag == b"ENTS" && c.version <= max_version(b"ENTS") => {
+            let objects = entity_list(&c.data, c.version, m);
+            m.release(c.data.len());
+            Prepared::Objects(objects)
+        }
+        r => Prepared::Chunk(r),
+    }
 }
 
 /// The tables chunk.
@@ -548,46 +640,83 @@ fn tag_name(tag: &[u8; 4]) -> String {
 
 /// A model space chunk's objects, with notes about the ones that couldn't be read; `None` when
 /// the chunk doesn't decode to a list.
-fn entity_list(data: &[u8], version: u16) -> Option<(Vec<Entity>, Vec<String>)> {
+fn entity_list(data: &[u8], version: u16, m: &Meter) -> Option<(Vec<Entity>, Vec<String>)> {
     // Version 2 keeps mesh geometry in binary buffers after the objects (`meshbuf`).
-    let (list, mut meshes) = if version == 2 {
-        let (v, meshes) = super::meshbuf::decode(data)?;
-        (v, meshes)
-    } else {
-        (tokens::decode(data)?, Default::default())
-    };
-    let Value::Array(list) = list else { return None };
-    let mut notes = Vec::new();
-    let mut items = Vec::with_capacity(list.len());
-    for (i, item) in list.into_iter().enumerate() {
-        if let Some(mut e) = take::<Entity>(item, "an object", &mut notes) {
-            if let Some(m) = meshes.remove(&i) {
-                super::meshbuf::fill(&mut e, m);
-            }
-            items.push(e);
+    let (list, mut meshes) = Meter::time(&m.decode, || {
+        if version == 2 {
+            let (v, meshes) = super::meshbuf::decode(data)?;
+            Some((v, meshes))
+        } else {
+            Some((tokens::decode(data)?, Default::default()))
         }
-    }
-    Some((items, notes))
+    })?;
+    let Value::Array(list) = list else { return None };
+    Some(Meter::time(&m.construct, || {
+        let mut notes = Vec::new();
+        let mut items = Vec::with_capacity(list.len());
+        for (i, item) in list.into_iter().enumerate() {
+            if let Some(mut e) = take::<Entity>(item, "an object", &mut notes) {
+                if let Some(m) = meshes.remove(&i) {
+                    super::meshbuf::fill(&mut e, m);
+                }
+                items.push(e);
+            }
+        }
+        (items, notes)
+    }))
 }
 
 /// The drawing in a .cdy file, with notes about anything damaged that was left out. Errors only
 /// when the file isn't a .cdy file this version can read.
 pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
-    let (chunks, indexed) = container::chunks(bytes)?;
+    let started = Instant::now();
+    let meter = Meter::default();
+    // Chunk by chunk on all cores (in order): each one checked and inflated, and a model space
+    // chunk decoded into its objects and its bytes let go there and then. Inflating every chunk
+    // first held the whole file inflated beside the objects built from it: opening a large model
+    // peaked at twice the drawing's memory (Q6398).
+    let (prepared, indexed) = match container::plan(bytes)? {
+        container::Plan::Indexed(entries) => {
+            let one = |e: &container::IndexEntry| {
+                let r = Meter::time(&meter.inflate, || container::read_entry(bytes, e));
+                meter.hold(raw_len(&r));
+                prepare(r, &meter)
+            };
+            (crate::par_map(&entries, one), true)
+        }
+        container::Plan::Walked(list) => {
+            list.iter().for_each(|r| meter.hold(raw_len(r)));
+            (crate::par_map_owned(list, |r| prepare(r, &meter)), false)
+        }
+    };
+    let parallel = started.elapsed();
     let mut rep = ReadReport::default();
     if !indexed {
         rep.notes.push("the file's index was damaged; its parts were found one by one".into());
     }
+    let chunks = prepared.len();
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     let mut model = EntityStore::new();
     let mut have_tables = false;
-    // The model space parts decoded into objects on all cores first (in order).
-    let decoded = crate::par_map(&chunks, |c| match c {
-        Read::Ok(c) if &c.tag == b"ENTS" && c.version <= max_version(b"ENTS") => Some(entity_list(&c.data, c.version)),
-        _ => None,
-    });
-    for (c, pre) in chunks.into_iter().zip(decoded) {
+    for c in prepared {
+        let c = match c {
+            Prepared::Objects(objects) => {
+                // One chunk of the store per chunk of the file, as it was saved (an incremental
+                // save then finds them unchanged).
+                match objects {
+                    Some((items, notes)) => {
+                        rep.notes.extend(notes);
+                        model.push_chunk(items);
+                    }
+                    None => rep.notes.push("a model space part was damaged".into()),
+                }
+                continue;
+            }
+            Prepared::Chunk(c) => c,
+        };
+        // Its bytes are let go at the end of this pass.
+        meter.release(raw_len(&c));
         let c = match c {
             Read::Ok(c) => c,
             Read::Damaged { tag, why, salvage } => {
@@ -648,18 +777,6 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                     d.embedded.insert(name, Arc::new(bytes.to_vec()));
                 }
                 None => rep.notes.push("an embedded file was damaged and left out".into()),
-            }
-            continue;
-        }
-        if let Some(pre) = pre {
-            // One chunk of the store per chunk of the file, as it was saved (an incremental save
-            // then finds them unchanged).
-            match pre {
-                Some((items, notes)) => {
-                    rep.notes.extend(notes);
-                    model.push_chunk(items);
-                }
-                None => rep.notes.push("a model space part was damaged".into()),
             }
             continue;
         }
@@ -796,5 +913,16 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
     let papers = d.layouts.iter().flat_map(|l| l.entities.iter());
     let top = d.model.iter().chain(blocks).chain(papers).map(|e| e.handle.0).max().unwrap_or(0);
     d.handseed = d.handseed.max(top.saturating_add(1));
+    rep.profile = OpenProfile {
+        total: started.elapsed(),
+        parallel,
+        inflate: Meter::nanos(&meter.inflate),
+        decode: Meter::nanos(&meter.decode),
+        construct: Meter::nanos(&meter.construct),
+        assemble: started.elapsed().saturating_sub(parallel),
+        chunks,
+        raw_bytes: meter.raw.load(Ordering::Relaxed),
+        raw_peak: meter.peak.load(Ordering::Relaxed),
+    };
     Ok((d, rep))
 }
