@@ -2236,6 +2236,11 @@ pub struct Session {
     /// Inside [`Session::as_one_undo_step`]: the undoable commands run record no step of their
     /// own (the calling command's one step holds them all).
     pub(crate) one_undo_step: u32,
+    /// The command called from outside that is running (or ran last): the steps a saved model
+    /// records after its build are named by it (Q6403).
+    pub(crate) outer_command: String,
+    /// A model build of the command called from outside, recorded when that command ends.
+    pub(crate) pending_build: Option<(u64, cmd::buildrec::BuildRecord)>,
     /// `model.issues`' findings for one revision of one drawing: its pages and kinds are read
     /// from them, not found again (a print set's checks took two minutes a call).
     pub(crate) issues_cache: Option<Box<cmd::verify::IssuesCache>>,
@@ -2382,6 +2387,8 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             plugin_depth: 0,
             one_undo_step: 0,
+            outer_command: String::new(),
+            pending_build: None,
             issues_cache: None,
             model_updating: false,
         }
@@ -2651,6 +2658,7 @@ impl Session {
         // A call from outside starts outside any one-step group (one a failed command left).
         if outer {
             self.one_undo_step = 0;
+            self.outer_command = cmd::resolve_alias(id).chars().take(64).collect();
         }
         if outer && find_command(&cmd::resolve_alias(id)).is_some_and(|c| c.undoable) {
             self.note_selection_gap();

@@ -19,6 +19,7 @@ pub(crate) mod blocks;
 pub mod bom;
 pub mod bspec;
 pub mod buildings;
+pub(crate) mod buildrec;
 pub mod calibrate;
 mod cam;
 pub mod ceilings;

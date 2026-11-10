@@ -25,6 +25,7 @@ mod new_drawing_viewports;
 mod region;
 mod region_booleans;
 mod render;
+mod saved_build;
 mod sections;
 mod sequence4d;
 mod solids;
