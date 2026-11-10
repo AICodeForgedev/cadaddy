@@ -299,3 +299,85 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     assert!(!lines.iter().any(|l| l["item"].as_str().is_some_and(|i| i.starts_with("device type"))), "{lines:#?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ─── Q6514: a sheet title that lists parts is filed by the plan it lists ─────
+
+/// A plotted sheet as DXF: some linework and a title block (the title lines under "DRAWING
+/// TITLE:", the number in large lettering below).
+fn titled_sheet(number: &str, title: &str) -> Vec<u8> {
+    use cadaddy_doc::{Common, Drawing, EntityKind, HAlign, Line, Space, Text, VAlign};
+    use cadaddy_geom::Vec3;
+    let mut d = Drawing::default();
+    let mut add = |kind: EntityKind| {
+        let _ = d.add(&Space::Model, Common { layer: "0".into(), ..Common::default() }, kind);
+    };
+    for i in 0..6 {
+        let x = 100.0 + 150.0 * f64::from(i);
+        add(EntityKind::Line(Line { a: Vec3::new(x, 100.0, 0.0), b: Vec3::new(x + 120.0, 100.0, 0.0) }));
+        add(EntityKind::Line(Line { a: Vec3::new(x, 100.0, 0.0), b: Vec3::new(x, 600.0, 0.0) }));
+    }
+    let text = |value: &str, y: f64, height: f64| {
+        EntityKind::Text(Text {
+            insert: Vec3::new(1500.0, y, 0.0),
+            align_pt: None,
+            height,
+            value: value.into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: HAlign::Left,
+            valign: VAlign::Baseline,
+        })
+    };
+    add(text("DRAWING TITLE:", 300.0, 8.0));
+    add(text(title, 285.0, 8.0));
+    add(text(number, 200.0, 30.0));
+    cadaddy_io::write(&d, "sheet.dxf").expect("dxf")
+}
+
+fn titled_set(tag: &str, sheets: &[(&str, &str)]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("cadaddy_ps_titles_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("folder");
+    for (number, title) in sheets {
+        std::fs::write(dir.join(format!("{number}.dxf")), titled_sheet(number, title)).expect("write sheet");
+    }
+    dir
+}
+
+#[test]
+fn classify_files_a_listed_title_by_its_plan_and_asks_about_a_floor_plan_filed_otherwise() {
+    // The floor's only floor plan shares its sheet with details and schedules: it is the plan,
+    // not the tile plan, and nothing is left to ask.
+    let dir = titled_set(
+        "listed",
+        &[
+            ("A1.1", "FLOOR PLAN/ DETAILS/ SCHEDULES"),
+            ("A1.2", "FLOOR TILE PLAN"),
+            ("A2.1", "REFLECTED CEILING PLAN/ CEILING DETAILS"),
+            ("A3.1", "ROOF PLAN/ ROOF DETAILS"),
+        ],
+    );
+    let mut s = Session::new();
+    s.execute("printset.open", &json!({"path": dir.display().to_string()})).expect("open");
+    let r = s.execute("printset.classify", &json!({})).expect("classify");
+    let sheets = r["sheets"].as_array().expect("index");
+    let of = |n: &str| sheets.iter().find(|e| e["number"] == n).unwrap_or_else(|| panic!("{n}: {r}"));
+    let filed: Vec<(String, String)> = sheets.iter().map(|e| (e["number"].to_string(), e["type"].to_string())).collect();
+    for (n, want) in [("A1.1", "plan"), ("A1.2", "plan"), ("A2.1", "rcp"), ("A3.1", "plan")] {
+        assert_eq!(of(n)["type"], want, "{n}: {filed:?}");
+    }
+    assert_eq!(of("A1.1")["views"], json!(["detail", "schedule"]));
+    assert_eq!(of("A1.1")["level"], "1");
+    assert_eq!(r["floor_plans_filed_otherwise"], json!([]), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // A sheet titled as a floor plan still filed otherwise, on a floor with no floor plan: listed.
+    let dir = titled_set("otherwise", &[("A1.1", "FLOOR PLAN NOTES"), ("A1.2", "FLOOR TILE PLAN")]);
+    let mut s = Session::new();
+    s.execute("printset.open", &json!({"path": dir.display().to_string()})).expect("open");
+    let r = s.execute("printset.classify", &json!({})).expect("classify");
+    assert_eq!(r["floor_plans_filed_otherwise"], json!([{"sheet": "A1.1", "title": "FLOOR PLAN NOTES", "type": "schedule", "level": "1"}]), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
