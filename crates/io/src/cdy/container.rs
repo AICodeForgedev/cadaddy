@@ -263,10 +263,31 @@ pub fn header(b: &[u8]) -> Result<u16, String> {
 /// through it: a save cut short (the app or machine stopped while appending) leaves the file as
 /// the save before it.
 pub fn chunks(b: &[u8]) -> Result<(Vec<Read>, bool), String> {
+    Ok(match plan(b)? {
+        Plan::Indexed(entries) => (crate::par_map(&entries, |e| read_entry(b, e)), true),
+        Plan::Walked(list) => (list, false),
+    })
+}
+
+/// How a file's chunks are read: through the index when trailer and index are sound (each chunk
+/// read later by its entry, [`read_entry`], so a reader can inflate one, use it and let it go
+/// before the next), else the chunks already read walking the file (see [`chunks`]).
+pub enum Plan {
+    Indexed(Vec<IndexEntry>),
+    Walked(Vec<Read>),
+}
+
+/// The file's [`Plan`], or why it isn't a .cdy file this reader can open.
+pub fn plan(b: &[u8]) -> Result<Plan, String> {
     header(b)?;
-    if let Some(list) = by_index(b) {
-        return Ok((list, true));
+    if let Some(entries) = index(b) {
+        return Ok(Plan::Indexed(entries));
     }
+    walked(b).map(Plan::Walked)
+}
+
+/// Every chunk walking the file from its header (a damaged or cut-short file; see [`chunks`]).
+fn walked(b: &[u8]) -> Result<Vec<Read>, String> {
     let mut at = HEADER_LEN;
     let mut out = Vec::new();
     let mut last_index: Option<Vec<IndexEntry>> = None;
@@ -308,10 +329,9 @@ pub fn chunks(b: &[u8]) -> Result<(Vec<Read>, bool), String> {
         at = next;
     }
     if let Some(entries) = last_index {
-        let list = entries.iter().filter_map(|e| Some(chunk_at(b, usize::try_from(e.offset).ok()?)?.0)).collect();
-        return Ok((list, false));
+        return Ok(entries.iter().filter_map(|e| Some(chunk_at(b, usize::try_from(e.offset).ok()?)?.0)).collect());
     }
-    Ok((out, false))
+    Ok(out)
 }
 
 /// A chunk as found walking a file from its header, for checking it (`verify`).
@@ -433,19 +453,16 @@ fn resync(b: &[u8], from: usize) -> Option<usize> {
         .find(|&at| b.get(at..at + 4).is_some_and(|t| t.iter().all(u8::is_ascii_alphanumeric)) && matches!(chunk_at(b, at), Some((Read::Ok(_), _))))
 }
 
-fn by_index(b: &[u8]) -> Option<Vec<Read>> {
-    let entries = index(b)?;
-    // Checksums and inflating, chunk by chunk on all cores (most of opening a large file).
-    Some(crate::par_map(&entries, |e| {
-        // A chunk whose header disagrees with the index (or can't be read) was damaged there:
-        // the index still says what and where it is, so it is salvaged as that. One bad header
-        // used to drop the index and, walking, every chunk after it (UI review 0.7.7d).
-        match usize::try_from(e.offset).ok().and_then(|o| chunk_at(b, o)) {
-            Some((Read::Ok(c), _)) if c.tag == e.tag => Read::Ok(c),
-            Some((r @ Read::Damaged { tag, .. }, _)) if tag == e.tag => r,
-            _ => from_entry(b, e),
-        }
-    }))
+/// The chunk index entry `e` points at, checked and inflated.
+pub fn read_entry(b: &[u8], e: &IndexEntry) -> Read {
+    // A chunk whose header disagrees with the index (or can't be read) was damaged there: the
+    // index still says what and where it is, so it is salvaged as that. One bad header used to
+    // drop the index and, walking, every chunk after it (UI review 0.7.7d).
+    match usize::try_from(e.offset).ok().and_then(|o| chunk_at(b, o)) {
+        Some((Read::Ok(c), _)) if c.tag == e.tag => Read::Ok(c),
+        Some((r @ Read::Damaged { tag, .. }, _)) if tag == e.tag => r,
+        _ => from_entry(b, e),
+    }
 }
 
 /// A chunk read by its index entry alone (its own header is damaged): damaged, with what its

@@ -31,6 +31,8 @@ crc32fast = "1"
 # PDF reading for PDFIMPORT (MIT); no optional extras (parallelism, dates, images).
 lopdf = { version = "0.45", default-features = false }
 quick-xml = { workspace = true }
+# A clock that works in the browser too (std::time::Instant panics on wasm32): the .cdy open profile.
+web-time = "1.1"
 
 [dev-dependencies]
 # The bytes a save holds at most (a counting global allocator; tests/big_save_memory.rs).
