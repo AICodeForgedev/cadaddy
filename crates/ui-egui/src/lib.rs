@@ -138,6 +138,7 @@ pub mod plotstyles;
 pub mod projrulespalette;
 pub mod quick;
 pub mod quickview;
+pub mod rail;
 pub mod renderwin;
 pub mod rfipalette;
 pub mod ribbon;
@@ -342,7 +343,8 @@ impl Default for UiState {
             ribbon: true,
             ribbon_tab: "Home".into(),
             ribbon_recent: Vec::new(),
-            show_palettes: true,
+            // The palettes wait on the rail: the drawing gets the window.
+            show_palettes: false,
             show_toolbar: true,
             show_file_tabs: true,
             show_status_bar: true,
@@ -1493,8 +1495,9 @@ impl CadApp {
             chrome::file_tabs(self, ui);
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
-        if has_doc && !self.ui.show_toolsets {
-            palettes::toolsets_strip(self, ui);
+        // The palette rail down the window's edge (Tool Sets is one of its buttons).
+        if has_doc {
+            rail::show(self, ui);
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             // Walk mode shows in the drawing's own tab (docking), the palettes beside it.
