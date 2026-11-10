@@ -8490,6 +8490,8 @@ fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Do
     let (placed, not) = super::scope::place_panels(&mut sp, &places, &rooms);
     let Ok(d) = s.doc_mut() else { return };
     d.building_spec = Some(sp.to_json()).into();
+    // A panel the fire alarm wiring placed by rule at the build goes for the documents' (Q6503).
+    super::conduitroute::fa::remove_placed(d, &placed);
     let built = super::scope::build_panels(d, &sp, &placed, &rooms);
     s.touch();
     progress_line(&format!("  fire alarm panels: {} placed ({}), {built} built; not placed {:?}", placed.len(), placed.join(", "), not));

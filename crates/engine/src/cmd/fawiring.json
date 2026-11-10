@@ -1,0 +1,69 @@
+{
+  "_doc": "Fire alarm wiring (Q6503): how the model finishes a fire alarm system the drawings show as devices only: the control panel and the NAC power supplies where the documents don't place them, each notification appliance circuit (NAC) chained appliance to appliance from its power supply, each signaling line circuit (SLC) loop from the control panel through the initiating devices and modules, the annunciator's bus, and each power supply's start circuit from the panel; all as power-limited fire alarm cable. The documents (the shop drawings' addresses, circuits and wire legend, the specifications) govern; these are code limits and trade practice where they are silent, each with its source.",
+  "notification_kinds": ["horn/strobe", "strobe", "horn", "speaker", "speaker/strobe", "chime", "bell", "sounder"],
+  "notification_source": "NFPA 72 ch. 18: notification appliances (audible and visible) are on notification appliance circuits; initiating devices, modules and addressable appliances on the signaling line circuit (NFPA 72 3.3.249)",
+  "equipment_words": ["FIRE ALARM", "FIRE-ALARM", "F.A.", "FA", "FACP", "FACU", "NAC", "SLC", "FAAP"],
+  "candela_amps": [[15, 0.09], [30, 0.13], [75, 0.21], [95, 0.25], [110, 0.28], [135, 0.32], [150, 0.34], [177, 0.39], [185, 0.4]],
+  "candela_default": 75,
+  "horn_amps": 0.05,
+  "amps_source": "company default: a listed horn/strobe's current at the low end of its operating range (16 V on a 24 V system, UL 1971), rounded up, by its candela; a horn alone 0.05 A; an appliance of no candela read is taken at 75 cd (the usual room and corridor setting); the approved product data and the shop drawings' battery and voltage drop calculations govern",
+  "nac": {
+    "circuit_amps": 2.5,
+    "use_fraction": 0.8,
+    "supply_volts": 20.4,
+    "end_volts_min": 16.0,
+    "max_devices": 60,
+    "class": "B",
+    "source": "trade practice: a NAC output of a listed panel or power supply is rated about 2.5 A; circuits are loaded to 80% of it (the usual specification's 20% spare); the voltage drop is worked from the supply's end-of-battery 20.4 V (85% of 24 V, UL 864) to the last appliance's 16 V (UL 1971), the load lumped at the far end; Class B with the end-of-line device at the last appliance unless the documents call for Class A (NFPA 72 12.3)"
+  },
+  "slc": {
+    "devices_per_loop": 159,
+    "max_ft": 10000,
+    "class": "B",
+    "source": "trade practice: an analog addressable loop takes about 159 detectors and 159 modules; the loop is filled to the smaller count with every device on it, and kept under the usual 10,000 ft of wire; Class B (T-taps allowed) unless the documents call for Class A (NFPA 72 12.3, 23.6)"
+  },
+  "cables": {
+    "nac": {"type": "FPLR", "size": "14/2", "awg": 14, "item": "Fire alarm cable"},
+    "nac_upsized": {"type": "FPLR", "size": "12/2", "awg": 12, "item": "Fire alarm cable"},
+    "slc": {"type": "FPLR", "size": "18/2 twisted", "awg": 18, "item": "Fire alarm cable"},
+    "annunciator": {"type": "FPLR", "size": "18/4 twisted", "awg": 18, "item": "Fire alarm cable"},
+    "trigger": {"type": "FPLR", "size": "14/2", "awg": 14, "item": "Fire alarm cable"},
+    "body_in": 0.3,
+    "source": "NEC 760.154 and Table 760.154: power-limited fire alarm cable, riser rated (FPLR) where the documents name no type (FPLP where the ceiling space is a plenum); #14 for a NAC (#12 where its voltage drop needs it), #18 twisted pair for the SLC and the annunciator bus (the usual panel installation instructions); a wire legend on the drawings governs"
+  },
+  "ohms_per_kft": {"18": 7.77, "16": 4.89, "14": 3.07, "12": 1.93, "10": 1.21},
+  "ohms_source": "NEC Chapter 9 Table 8: DC resistance of uncoated solid copper at 75 °C, ohms per 1000 ft per conductor",
+  "power_supply": {
+    "nac_circuits": 4,
+    "kind": "fire alarm power supply",
+    "tag": "NAC-PS",
+    "title": "NAC POWER SUPPLY",
+    "size_in": [16.0, 4.0, 18.0],
+    "top_in": 72.0,
+    "room_words": [["ELECTRICAL", "ELEC", "ELEC."], ["FIRE COMMAND", "FIRE", "RISER"], ["IDF", "MDF", "TELECOM", "DATA", "COMM"], ["JANITOR", "JAN", "JANITOR'S", "CUSTODIAN"], ["MECHANICAL", "MECH", "MECH."], ["STORAGE", "STOR", "STOR.", "CLOSET", "CLO."]],
+    "source": "trade practice: a NAC power supply (booster) serves the appliances of its storey where the control panel's own NACs don't reach them or can't carry their load, one per storey and more as the load needs (4 NAC outputs each), set in a service room (electrical, fire riser, telecom, janitor, mechanical, storage) nearest the riser over the control panel, its top at 72 in; it is started by the control panel (a NAC or control output to its input), needs a dedicated 120 V branch circuit (NFPA 72 10.6.5), and the shop drawings place it"
+  },
+  "control_panel": {
+    "nac_circuits": 2,
+    "tag": "FACP",
+    "kind": "fire alarm panel",
+    "title": "CONTROL PANEL",
+    "size_in": [24.0, 6.0, 30.0],
+    "top_in": 72.0,
+    "room_words": [["FIRE COMMAND", "FIRE CONTROL", "FIRE ALARM"], ["ELECTRICAL", "ELEC", "ELEC."], ["MECHANICAL", "MECH", "MECH."], ["IDF", "MDF", "TELECOM"], ["STORAGE", "STOR", "STOR."]],
+    "source": "trade practice: a fire alarm system has one control panel (NFPA 72 10.4); with no document placing it, it goes in the fire command, electrical or mechanical room of the lowest storey with fire alarm devices, its top at 72 in so its display reads; its own NAC outputs (2) serve its storey when they can carry its appliances"
+  },
+  "documents": {
+    "raceway_words": ["CONDUIT", "RACEWAY", "RACEWAYS", "EMT"],
+    "wiring_words": ["WIRING", "WIRE", "CABLE", "CABLING", "CONDUCTORS", "CIRCUITS"],
+    "subject_words": ["FIRE ALARM", "FIRE-ALARM", "F.A.", "NOTIFICATION", "INITIATING", "SLC", "NAC"],
+    "below_words": ["BELOW", "UNDER", "LOWER THAN"],
+    "not_words": ["NOT REQUIRED", "NOT BE REQUIRED", "MAY BE INSTALLED WITHOUT", "WITHOUT CONDUIT", "EXCEPT"],
+    "plenum_words": ["PLENUM", "FPLP"],
+    "class_a_words": ["CLASS A", "CLASS \"A\"", "STYLE 6", "STYLE 7", "STYLE Z"],
+    "raceway": "EMT",
+    "raceway_in": 0.75,
+    "source": "a document statement of the fire alarm wiring method: a note or specification paragraph naming conduit or raceway for the fire alarm wiring (all of it, or below a height: NEC 760.130(B)(1) protection from physical damage), a plenum cable, or Class A circuits; read from the drawing's own notes"
+  },
+  "riser_source": "trade practice: the circuits between storeys run in one riser over the control panel (its place carried up and down the stacked plans), through the floors in a sleeve, firestopped (NEC 760.3(A), 300.21)"
+}

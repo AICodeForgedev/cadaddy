@@ -34,6 +34,7 @@ mod duct3d_truth;
 mod elemprops;
 mod emtsize;
 mod exterior;
+mod fawiring;
 mod feederwire;
 mod fixturekinds;
 mod floorjoists;

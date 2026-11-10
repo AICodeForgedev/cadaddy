@@ -1691,6 +1691,8 @@ pub(crate) fn place_panels(
     let mut placed = Vec::new();
     let mut not = Vec::new();
     for p in places {
+        // One the fire alarm wiring placed by rule gives way to where the documents put it (Q6503).
+        sp.mep.equipment.retain(|e| !(e.tag.eq_ignore_ascii_case(&p.tag) && super::conduitroute::fa::placed_by_rule(e)));
         if sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&p.tag)) {
             continue;
         }

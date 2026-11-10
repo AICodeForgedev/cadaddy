@@ -2142,8 +2142,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut out = Routed::default();
     let circuit_tags: Vec<(usize, &ElementTag)> =
         sp.tags.iter().enumerate().filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART)).take(MAX_CIRCUITS).collect();
-    // Nothing to route: no circuits, and no low-voltage outlet for a pathway (Q6203).
-    if circuit_tags.is_empty() && !lv::any_outlet(d) {
+    // Nothing to route: no circuits, no low-voltage outlet for a pathway (Q6203), no fire alarm
+    // device to wire (Q6503).
+    if circuit_tags.is_empty() && !lv::any_outlet(d) && !fa::any_device(d) {
         // The feeders' risers still pass their floors (Q6347).
         let moves = level_moves(d, sp);
         let move_of = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
@@ -4354,7 +4355,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         .collect();
 
     // -- The low-voltage outlets' pathways (Q6203), over the same model. --
-    let lv_out = lv::route(&lv::Ctx {
+    let lv_cx = lv::Ctx {
         d,
         sp,
         upf,
@@ -4368,7 +4369,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         ceiling_at: &ceiling_at,
         corridors: &corridors,
         carry: &carry,
-    });
+    };
+    let lv_out = lv::route(&lv_cx);
+    // -- The fire alarm circuits (Q6503): NACs from their power supplies, SLC loops, the
+    // annunciator's bus and the power supplies' start circuits from the control panel. --
+    let fa_out = fa::route(&fa::Ctx { base: &lv_cx, gear: &gear });
 
     // -- The runs and tags out; the report. --
     let mut by_pair: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
@@ -4599,11 +4604,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     out.report["lv_outlets"] = json!(lv_outlets.len());
     out.report["lv_pathways"] = lv_out.report;
+    out.report["fire_alarm"] = fa_out.report;
     out.cable = cable_paths;
     out.runs = runs;
     out.runs.extend(lv_out.runs);
+    out.runs.extend(fa_out.runs);
     out.tags = tags;
     out.tags.extend(lv_out.tags);
+    out.tags.extend(fa_out.tags);
     out
 }
 
@@ -5017,11 +5025,18 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
         let c = super::printcond::circuit_of_run(r);
         r.system == BRANCH_SYSTEM
             || r.system == lv::LV_SYSTEM
+            || fa::is_system(&r.system)
             || (r.system == super::printcond::CIRCUIT_SYSTEM
                 && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c) || elsewhere.contains(c)))
     };
-    replaced.runs =
-        sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && r.system != lv::LV_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
+    replaced.runs = sp
+        .mep
+        .runs
+        .iter()
+        .filter(|r| r.system != BRANCH_SYSTEM && r.system != lv::LV_SYSTEM && !fa::is_system(&r.system) && gone(r))
+        .take(MAX_RUNS)
+        .cloned()
+        .collect();
     sp.mep.runs.retain(|r| !gone(r));
     // An estimated route left (its circuit not routed) is the raceway its conductors fill, at
     // the routing's minimum, not the reader's default size (Q6235).
@@ -5055,8 +5070,8 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
             }
         }
     }
-    // An earlier routing's pathway tags give way to this one's.
-    sp.tags.retain(|t| t.kind != lv::TAG_KIND);
+    // An earlier routing's pathway and fire alarm circuit tags give way to this one's.
+    sp.tags.retain(|t| t.kind != lv::TAG_KIND && t.kind != fa::TAG_KIND);
     // A routed path is the router's, by trade practice: the drawings show its circuit's devices
     // and a homerun arrow, not the path (Q6216: inferred, with its basis).
     let inferred_circuits: HashMap<&str, &str> =
@@ -5115,6 +5130,21 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
             color_index: 0,
         });
     }
+    // The fire alarm circuits' cable (Q6503).
+    for name in [fa::NAC_SYSTEM, fa::SLC_SYSTEM] {
+        if routed.runs.iter().any(|r| r.system == name) && !sp.mep.systems.iter().any(|s| s.name == name) {
+            sp.mep.systems.push(MepSystem {
+                name: name.into(),
+                layer: name.into(),
+                kind: MepKind::Cable,
+                size_in: [fa::rules().cables.body_in, 0.0],
+                bottom_ft: 9.0,
+                show: true,
+                duct_type: None,
+                color_index: 1,
+            });
+        }
+    }
     if !sp.mep.systems.iter().any(|s| s.name == BRANCH_SYSTEM) {
         sp.mep.systems.push(MepSystem {
             name: BRANCH_SYSTEM.into(),
@@ -5135,9 +5165,9 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
 /// runs gone and the estimated ones back. A spec no routing went into is as it is.
 pub(crate) fn unrouted(d: &Drawing, sp: &BuildingSpec) -> BuildingSpec {
     let mut out = sp.clone();
-    // The low-voltage pathways are the routing's own (none read).
-    out.mep.runs.retain(|r| r.system != lv::LV_SYSTEM);
-    out.tags.retain(|t| t.kind != lv::TAG_KIND);
+    // The low-voltage pathways and the fire alarm circuits are the routing's own (none read).
+    out.mep.runs.retain(|r| r.system != lv::LV_SYSTEM && !fa::is_system(&r.system));
+    out.tags.retain(|t| t.kind != lv::TAG_KIND && t.kind != fa::TAG_KIND);
     if !sp.mep.runs.iter().any(|r| r.system == BRANCH_SYSTEM) {
         return out;
     }
@@ -5248,6 +5278,10 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         return Ok(json!({"routed": false, "note": "routing switched off (model.build {route: true} turns it on)"}));
     }
     let t0 = web_time::Instant::now();
+    // The fire alarm system's panel and power supplies as the gear stands now (Q6503): the
+    // documents' placed since the build, those the rule placed placed again.
+    let mut sp = sp;
+    let fa_equipment = fa::place_equipment(s.doc_mut()?, &mut sp);
     // From the circuits as read, not from the last routing's parts and sizes.
     let mut sp = unrouted(s.doc()?, &sp);
     let routed = route(s.doc()?, &sp);
@@ -5263,7 +5297,8 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     let off_of = |level: &str| offsets.get(&level.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
     // The pieces there are now, and their systems: only those are cut again (runs the job built
     // as whole runs stay whole).
-    let mut systems: BTreeSet<String> = BTreeSet::from([BRANCH_SYSTEM.to_string(), lv::LV_SYSTEM.to_string()]);
+    let mut systems: BTreeSet<String> =
+        BTreeSet::from([BRANCH_SYSTEM.to_string(), lv::LV_SYSTEM.to_string(), fa::NAC_SYSTEM.to_string(), fa::SLC_SYSTEM.to_string()]);
     // A feeder's pieces don't make their system's other runs pieces: feeder runs are cut on
     // their own. The buried work (the underground plan's runs) is cut with the rest once the
     // model has pieces: a takeoff counts it like any raceway.
@@ -5345,6 +5380,8 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
             "ganged_devices": atoms["gangedDevices"], "ends_at_equipment": atoms["endsAtEquipment"], "open_ends": atoms["openEnds"]},
         "circuits": routed.report["routed_circuits"], "homeruns": routed.report["homeruns"], "routed_ft": routed.report["routed_ft"],
         "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len), "unrouted": routed.report["unrouted"].as_array().map_or(0, Vec::len),
+        "fire_alarm": {"equipment": fa_equipment, "circuits": routed.report["fire_alarm"]["circuits"], "routed_devices": routed.report["fire_alarm"]["routed_devices"],
+            "unrouted": routed.report["fire_alarm"]["unrouted"], "ft_by_system": routed.report["fire_alarm"]["ft_by_system"]},
     }))
 }
 
@@ -5414,7 +5451,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("conduit.route", "Conduit Routing Report", run_report)
             .menu(&["Draw", "BIM", "Conduit Routing Report"])
-            .params("{section?: \"clashes\"|\"conflicts\"|\"penetrations\"|\"bored_holes\"|\"box_fill\"|\"fill\"|\"derated\"|\"conductors_upsized\"|\"unrouted\"|\"methods\"|\"lv_pathways\", max?: n (items listed, default 200)} → the last model.build's routing: {circuits, routed_circuits, runs, homeruns, routed_ft, estimated_ft_before, ft_by_method_size, methods, wire_size_table, clashes, clashes_by_pair_level, conflicts, entry_unknown, penetrations, framing (the joists and trusses over each level: holes bored, passes, holes too close, the hole rules), bored_holes, box_fill, terminals (the devices whose circuit conductors are larger than their terminals take, each spliced to a pigtail in its box: {devices_pigtailed, by_landing_size, max_size, source}), conductors_upsized, fill, derated, unrouted, lv_pathways (each low-voltage outlet's pathway: {outlets, built, by_others, ft, by_method_size, ends, levels, unit_types, typical_rooms, common_areas, fittings, brackets, sleeves, penetrations, firestop, jhooks, raceway_scope, unrouted, conflicts, documents, outlet_list: [{outlet, level, room, area, method, size_in, to, ends, ft, bracket, each with its source}]})}")
+            .params("{section?: \"clashes\"|\"conflicts\"|\"penetrations\"|\"bored_holes\"|\"box_fill\"|\"fill\"|\"derated\"|\"conductors_upsized\"|\"unrouted\"|\"methods\"|\"lv_pathways\"|\"fire_alarm\", max?: n (items listed, default 200)} → the last model.build's routing: {circuits, routed_circuits, runs, homeruns, routed_ft, estimated_ft_before, ft_by_method_size, methods, wire_size_table, clashes, clashes_by_pair_level, conflicts, entry_unknown, penetrations, framing (the joists and trusses over each level: holes bored, passes, holes too close, the hole rules), bored_holes, box_fill, terminals (the devices whose circuit conductors are larger than their terminals take, each spliced to a pigtail in its box: {devices_pigtailed, by_landing_size, max_size, source}), conductors_upsized, fill, derated, unrouted, lv_pathways (each low-voltage outlet's pathway: {outlets, built, by_others, ft, by_method_size, ends, levels, unit_types, typical_rooms, common_areas, fittings, brackets, sleeves, penetrations, firestop, jhooks, raceway_scope, unrouted, conflicts, documents, outlet_list: [{outlet, level, room, area, method, size_in, to, ends, ft, bracket, each with its source}]}), fire_alarm (each fire alarm circuit routed: {devices, notification, initiating, control_panel, power_supplies, circuits, nacs, slcs, routed_devices, unrouted, ft_by_system, by_source, upsized, penetrations, documents, circuit_list: [{circuit, system, role, source, level, devices, legs, ft, amps, drop_v, cable, class, order, upsized}]})}")
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])
@@ -5451,8 +5488,11 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         if sec == "lv_pathways" {
             return Ok(r.get("lv_pathways").cloned().unwrap_or_else(|| json!({"outlets": 0, "note": "no routing stored"})));
         }
+        if sec == "fire_alarm" {
+            return Ok(r.get("fire_alarm").cloned().unwrap_or_else(|| json!({"devices": 0, "note": "no routing stored"})));
+        }
         if !lists.contains(&sec) && sec != "methods" {
-            return Err(bad("conduit.route", format!("`section` must be one of {lists:?}, box_fill, methods or lv_pathways")));
+            return Err(bad("conduit.route", format!("`section` must be one of {lists:?}, box_fill, methods, lv_pathways or fire_alarm")));
         }
         let v = r.get(sec).cloned().unwrap_or(Value::Null);
         return Ok(match v {
@@ -5796,6 +5836,8 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
 #[path = "conduitroute_gap.rs"]
 pub(crate) mod gap;
 pub(crate) use gap::panel_end_makeup_ft;
+#[path = "conduitroute_fa.rs"]
+pub(crate) mod fa;
 #[path = "conduitroute_lv.rs"]
 pub(crate) mod lv;
 #[path = "conduitroute_size.rs"]
