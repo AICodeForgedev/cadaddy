@@ -62,7 +62,7 @@ struct LibraryView: View {
         .sheet(isPresented: $app.askAddress) { ServerAddressSheet().environmentObject(app) }
         .fullScreenCover(isPresented: Binding(get: { app.showBuilding && Self.buildingAvailable }, set: { app.showBuilding = $0 })) {
             if #available(iOS 18.0, *) {
-                BuildingView(onClose: { app.showBuilding = false }, onStandInRoom: { app.standInSampleRoom() })
+                BuildingView(onClose: { app.showBuilding = false })
             }
         }
         .sheet(item: Binding(get: { app.updateReport.map(ReportItem.init) }, set: { if $0 == nil { app.updateReport = nil } })) { item in

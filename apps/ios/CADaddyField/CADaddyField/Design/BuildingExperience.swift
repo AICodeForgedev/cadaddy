@@ -12,13 +12,38 @@ final class LayerStore: ObservableObject {
     @Published var prefs = LayerPrefs.load() { didSet { if prefs != oldValue { prefs.save() } } }
 }
 
+/// A real building opened from its package set: the set, what is loaded, and the memory rule.
+@MainActor
+final class SetSession {
+    let model: PackageSetModel
+    var cache: PackageCache
+    /// Packages that failed, with the plain message said for each.
+    var failures: [String: String] = [:]
+    init(model: PackageSetModel, opening: [LoadedPackage], budget: Int = PackageCache.defaultBudget) {
+        self.model = model
+        cache = PackageCache(budgetBytes: budget)
+        let pin = Set(opening.map(\.name))
+        for p in opening { cache.insert(p, inView: pin) }
+    }
+    var index: PackageSetIndex { model.index }
+
+    nonisolated static func open(root: URL) async throws -> (PackageSetModel, [LoadedPackage], [String: String]) {
+        try await PackageSetModel.open(root: root)
+    }
+}
+
 @available(iOS 18.0, *)
 @MainActor
 final class BuildingExperience: ObservableObject {
-    let building: SampleBuilding
-    /// The four views' rules over this building (tiers computed once).
-    let filter: ViewFilter
+    @Published private(set) var building: SampleBuilding
+    /// The four views' rules over this building (the sample: tiers computed once; a package set: its packages).
+    private(set) var filter: ViewFilter
     let renderer = BuildingRenderer()
+    /// A real building's package set (nil = the design preview's invented sample).
+    let session: SetSession?
+    /// A package being read ("Loading Level 2…"), and the last plain message about one that failed.
+    @Published private(set) var loading: String?
+    @Published var notice: String?
 
     @Published private(set) var scope: DesignScope = .building
     /// At whole-building scope: Architectural or MEP. A model opens in MEP, mains and big gear.
@@ -66,16 +91,43 @@ final class BuildingExperience: ObservableObject {
         building = b
         let t1 = CFAbsoluteTimeGetCurrent()
         filter = ViewFilter(b)
+        session = nil
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-fpslog") {
             print(String(format: "FIELD-INIT sample %.1f ms filter %.1f ms", (t1 - t0) * 1000, (CFAbsoluteTimeGetCurrent() - t1) * 1000))
         }
         #endif
+        style = Self.savedStyle()
+        layers = LayerStore.shared.prefs
+        subscribe()
+    }
+
+    /// A real building: the set and its opening packages (read by `SetSession.open`).
+    init(set model: PackageSetModel, opening: [LoadedPackage], failures: [String: String] = [:]) {
+        let session = SetSession(model: model, opening: opening)
+        session.failures = failures
+        self.session = session
+        let b = model.building(with: opening)
+        building = b
+        filter = ViewFilter(packageSet: b, index: model.index)
+        style = Self.savedStyle()
+        layers = LayerStore.shared.prefs
+        // The index's default view: a model opens in MEP, mains and big gear unless the export says otherwise.
+        wholeView = model.index.views.defaultView == .architectural ? .architectural : .mep
+        density = model.index.views.defaultDensity
+        lastLevel = model.rooms.first.map(\.level) ?? 0
+        if let n = failures.values.first { notice = n }
+        subscribe()
+    }
+
+    private static func savedStyle() -> DesignStyle {
         var s = DesignStyle()
         if let raw = UserDefaults.standard.string(forKey: Self.backgroundKey), let bg = DesignBackground(rawValue: raw) { s.background = bg }
         s.highContrast = UserDefaults.standard.bool(forKey: Self.contrastKey) || UIAccessibility.isDarkerSystemColorsEnabled
-        style = s
-        layers = LayerStore.shared.prefs
+        return s
+    }
+
+    private func subscribe() {
         store.$prefs.dropFirst().sink { [weak self] p in
             guard let self else { return }
             self.layers = p
@@ -99,7 +151,7 @@ final class BuildingExperience: ObservableObject {
     /// state); until it arrives the header keeps the last number, so a view change never waits on it.
     var drawnCount: Int {
         let st = viewState, prefs = layers
-        let key = "\(st.view)|\(st.density)|\(st.level ?? -1)|\(st.room ?? "")|\(prefs.off.map(\.rawValue).sorted())"
+        let key = "\(st.view)|\(st.density)|\(st.level ?? -1)|\(st.room ?? "")|\(prefs.off.map(\.rawValue).sorted())|\(building.elements.count)"
         if let n = countCache[key] { lastCount = n; return n }
         if !counting.contains(key) {
             counting.insert(key)
@@ -120,8 +172,83 @@ final class BuildingExperience: ObservableObject {
     private var counting: Set<String> = []
     private var lastCount = 0
 
-    /// Pipes MEP leaves out because the model gives no size (the visible note in Full MEP).
-    var unknownSizePipes: Int { filter.classifier.unknownSizeCount(building) }
+    /// Objects Full MEP shows only as inferred because the model gives them no role and no size (the visible note).
+    var inferredInFullMEP: Int {
+        if session != nil { return building.elements.filter { $0.inferredNote != nil && tier($0) == .fullMEP }.count }
+        return filter.classifier.inferredCount(building)
+    }
+    private func tier(_ e: BuildingElement) -> ViewTier? { filter.classifier.tier(e.id) }
+
+    /// The level package a floor loads (a package set), for the renderer's release.
+    func levelPackage(_ i: Int) -> String? {
+        guard let session, session.index.levels.indices.contains(i) else { return nil }
+        return session.index.views.floorByLevel[session.index.levels[i].name]?.first
+    }
+
+    /// Only a real room package offers field alignment ("Stand in this room").
+    var canStandInRoom: Bool { session != nil && currentRoom.flatMap { building.room($0)?.hasPackage } == true }
+
+    // MARK: packages on demand
+
+    /// The view state a scope would show, with the current whole-building view and density.
+    func state(for s: DesignScope, view: FieldView? = nil, density d: MEPDensity? = nil) -> ViewState {
+        switch s {
+        case .building: return ViewState(view: view ?? wholeView, density: d ?? density)
+        case let .floor(i): return ViewState(view: .floor, level: i)
+        case let .room(n): return ViewState(view: .room, level: building.room(n)?.level, room: n)
+        }
+    }
+
+    /// Loads what `st` needs (a package set; the sample has everything), then runs `then`. A package that fails
+    /// says so plainly and `then` does not run: the view stays where it is and the rest keeps working.
+    func prepare(_ st: ViewState, then: @escaping () -> Void) {
+        guard let session else { then(); return }
+        let needed = session.index.packages(for: st)
+        let missing = needed.filter { !session.cache.has($0) }
+        session.cache.touch(needed)
+        guard !missing.isEmpty else { then(); return }
+        if let bad = missing.first(where: { session.failures[$0] != nil }), let msg = session.failures[bad] {
+            notice = msg
+            return
+        }
+        guard loading == nil else { return }
+        loading = missing.count == 1 ? "Loading \(session.model.title(of: missing[0]).replacingOccurrences(of: "The ", with: "the "))…" : "Loading…"
+        let model = session.model
+        let token = UUID()
+        loadToken = token
+        Task.detached(priority: .userInitiated) {
+            var loaded: [LoadedPackage] = [], errors: [String: String] = [:]
+            for n in missing {
+                do { loaded.append(try model.load(n)) } catch { errors[n] = (error as? FieldError)?.message ?? "\(model.title(of: n)) can't be read." }
+            }
+            let got = loaded, failed = errors
+            await MainActor.run { [weak self] in
+                guard let self, self.loadToken == token else { return }
+                self.loading = nil
+                self.finishLoad(got, failed: failed, inView: Set(needed), then: failed.isEmpty ? then : nil)
+            }
+        }
+    }
+    private var loadToken: UUID?
+
+    private func finishLoad(_ got: [LoadedPackage], failed: [String: String], inView: Set<String>, then: (() -> Void)?) {
+        guard let session else { return }
+        var released = Set<String>()
+        // What the current view draws stays as well as what the next one needs.
+        let keep = inView.union(session.index.packages(for: viewState)).union(session.index.views.mains)
+        for p in got { released.formUnion(session.cache.insert(p, inView: keep)) }
+        for (n, m) in failed { session.failures[n] = m }
+        if let m = failed.values.first { notice = m }
+        let b = session.model.building(with: Array(session.cache.loaded.values))
+        building = b
+        filter = ViewFilter(packageSet: b, index: session.index)
+        countCache.removeAll()
+        renderer.packagesChanged(released: released)
+        then?()
+    }
+
+    /// Memory now held by package geometry, and the budget (for the scale report).
+    var packageBytes: (used: Int, budget: Int)? { session.map { ($0.cache.bytes, $0.cache.budgetBytes) } }
 
     /// The view control: Architectural and MEP show the whole building; Floor and Room open the last ones visited.
     func setView(_ v: FieldView) {
@@ -129,14 +256,17 @@ final class BuildingExperience: ObservableObject {
         selection.selectionChanged()
         switch v {
         case .architectural, .mep:
-            wholeView = v
-            if scope == .building { clearFocus(); renderer.apply(scope: .building, liftFocus: liftFocus) } else { go(.building) }
+            prepare(state(for: .building, view: v)) { [weak self] in
+                guard let self else { return }
+                self.wholeView = v
+                if self.scope == .building { self.clearFocus(); self.renderer.apply(scope: .building, liftFocus: self.liftFocus) } else { self.go(.building) }
+            }
         case .floor:
             go(.floor(currentLevel ?? lastLevel))
         case .room:
             let level = currentLevel ?? lastLevel
             let room = lastRoom.flatMap { n in building.room(n).map { $0.level == level ? n : nil } ?? nil }
-                ?? building.rooms(on: level).first { $0.name == "Guest Room" }?.number
+                ?? building.rooms(on: level).first { session != nil ? $0.hasPackage : $0.name == "Guest Room" }?.number
                 ?? lastRoom
             if let room { go(.room(room)) }
         }
@@ -144,9 +274,12 @@ final class BuildingExperience: ObservableObject {
 
     func setDensity(_ d: MEPDensity) {
         guard d != density else { return }
-        density = d
         selection.selectionChanged()
-        if scope == .building { renderer.apply(scope: .building, liftFocus: liftFocus) }
+        prepare(state(for: .building, density: d)) { [weak self] in
+            guard let self else { return }
+            self.density = d
+            if self.scope == .building { self.renderer.apply(scope: .building, liftFocus: self.liftFocus) }
+        }
     }
 
     var currentRoom: String? { if case let .room(n) = scope { return n } else { return nil } }
@@ -242,8 +375,15 @@ final class BuildingExperience: ObservableObject {
 
     // MARK: navigation
 
-    func go(_ s: DesignScope, keepFocus: Bool = false) {
+    func go(_ s: DesignScope, keepFocus: Bool = false, then: (() -> Void)? = nil) {
         if !revealDone { finishReveal() }
+        prepare(state(for: s)) { [weak self] in
+            self?.enter(s, keepFocus: keepFocus)
+            then?()
+        }
+    }
+
+    private func enter(_ s: DesignScope, keepFocus: Bool) {
         if !keepFocus { clearFocus() }
         if case .building = s {} else { liftFocus = nil; railDetent = nil }
         scope = s
@@ -281,8 +421,10 @@ final class BuildingExperience: ObservableObject {
     // MARK: follow the system
 
     func tapElement(_ id: String) {
-        if focus?.tapped == id { clearFocus(); return }
-        let f = building.focus(id)
+        // The export's element id: the graph (a package set) and marks use it, whichever copy was tapped.
+        let source = building.element(id)?.sourceID ?? id
+        if focus?.tapped == source { clearFocus(); return }
+        let f = session.map { $0.index.focus(source) } ?? building.focus(id)
         focus = f
         selected = id
         renderer.clearFocusVisuals()
@@ -300,12 +442,36 @@ final class BuildingExperience: ObservableObject {
 
     /// A step in the path strip: fly there, crossing floors in the same camera.
     func flyTo(_ step: TraceStep) {
+        guard !step.id.isEmpty else { return }
+        if let session {
+            // By element id from the graph: its floor (loading that level), or the building when it is only there.
+            guard let g = session.index.element(step.id) else { return }
+            let names = g.packages.compactMap { session.index.allPackages.indices.contains(Int($0)) ? session.index.allPackages[Int($0)] : nil }
+            let target: DesignScope
+            if case let .room(n) = scope, let rp = session.index.views.roomByRoom[n], names.contains(where: { rp.contains($0.name) }) {
+                target = scope
+            } else if let lv = session.index.levelIndex(g.level), names.contains(where: { $0.kind == .level }) {
+                target = .floor(lv)
+            } else {
+                target = .building
+            }
+            let land = { [weak self] in
+                guard let self else { return }
+                let key = self.renderer.shown(step.id)?.id
+                self.selected = key ?? step.id
+                if let key { self.renderer.frame(element: key) }
+                self.selection.selectionChanged()
+            }
+            if target != scope { go(target, keepFocus: true, then: land) } else { land() }
+            return
+        }
         guard let e = building.element(step.id) else { return }
         let target: DesignScope
+        let top = building.levels.count - 1
         switch e.level {
-        case 1...4:
+        case 1..<max(top, 1):
             if let r = e.room, e.detail == .room, building.room(r) != nil { target = .room(r) } else { target = .floor(e.level) }
-        case 5: target = .floor(5)
+        case top where top > 0: target = .floor(top)
         default: target = .building
         }
         if target != scope { go(target, keepFocus: true) }
@@ -362,7 +528,10 @@ final class BuildingExperience: ObservableObject {
         switch scope {
         case .building: return building.name
         case let .floor(i): return building.level(i)?.name ?? "Level"
-        case let .room(n): return building.room(n).map { $0.name == "Guest Room" ? "Room \($0.number)" : $0.name } ?? n
+        case let .room(n):
+            guard let r = building.room(n) else { return n }
+            if session != nil { return [r.shownNumber.map { "Room \($0)" }, r.name.isEmpty ? nil : r.name.capitalized].compactMap { $0 }.joined(separator: " · ") }
+            return r.name == "Guest Room" ? "Room \(r.number)" : r.name
         }
     }
 
@@ -375,17 +544,19 @@ final class BuildingExperience: ObservableObject {
             case .architectural:
                 return "Architectural · \(floors) floors · \(building.occupiedRoomCount) rooms · \(n.formatted()) objects"
             default:
-                return "\(density == .full ? "Full MEP" : "Mains and big gear") · \(n.formatted()) of \(building.elements.count.formatted()) objects"
+                let total = session?.index.graph.count ?? building.elements.count
+                return "\(density == .full ? "Full MEP" : "Mains and big gear") · \(n.formatted()) of \(total.formatted()) objects"
             }
         case let .floor(i):
-            let rooms = building.rooms(on: i).filter { $0.name != "Corridor" }
+            let rooms = building.rooms(on: i).filter { session != nil || $0.name != "Corridor" }
             let n = drawnCount
             return rooms.isEmpty ? "\(n) objects" : "\(rooms.count) rooms · \(n.formatted()) objects"
         case let .room(num):
             guard let r = building.room(num) else { return "" }
             // Whole inches: the stat line is one quiet line, the card carries the exact sizes.
             let w = Units.feetInches(Double(r.max.x - r.min.x), denominator: 1), d = Units.feetInches(Double(r.max.y - r.min.y), denominator: 1)
-            return "\(r.name) · \(w) × \(d) · \(building.elements(in: num).count) objects"
+            let count = session != nil ? building.elements(in: num).filter { !$0.isBaseGroup }.count : building.elements(in: num).count
+            return "\(session != nil ? r.name.capitalized : r.name) · \(w) × \(d) · \(count) objects"
         }
     }
 }

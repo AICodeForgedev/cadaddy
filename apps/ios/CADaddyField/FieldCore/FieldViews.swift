@@ -133,6 +133,23 @@ public struct ViewClassifier: Sendable {
     /// Runs that pass through a floor.
     public private(set) var crossing: Set<String> = []
 
+    /// A package set: each copy's tier is its package's view (the export decided it; nothing is re-derived here).
+    public init(packageSet b: SampleBuilding, index: PackageSetIndex) {
+        rules = .standard
+        var t: [String: ViewTier] = [:]
+        for e in b.elements {
+            switch e.package.flatMap({ index.package($0)?.kind }) {
+            case .architectural?: t[e.id] = .architecture
+            case .mepMains?: t[e.id] = .mains
+            case .mepFull?: t[e.id] = .fullMEP
+            case .level?: t[e.id] = .floor
+            case .room?: t[e.id] = .room
+            default: break
+            }
+        }
+        tiers = t
+    }
+
     public init(_ b: SampleBuilding, rules: ViewRules = .standard) {
         self.rules = rules
         let hoistways = b.elements.filter { $0.part == .hoistway }.map { $0.shape.bounds }
@@ -168,6 +185,7 @@ public struct ViewClassifier: Sendable {
         switch e.shape {
         case let .box(c, _): if inside(c) { return true }
         case let .run(points, _): if let last = points.last, inside(last) { return true }
+        case let .mesh(m): if inside((m.min + m.max) / 2) { return true }
         }
         // A branch is the elevator's when what it ends at is.
         for k in b.downstream(of: e.id) {
@@ -266,10 +284,19 @@ public struct ViewClassifier: Sendable {
         case .plumbing:
             switch e.part {
             case .pipe:
-                guard let n = e.nominal else { return local }   // unknown size: never guessed (counted in the note)
-                if e.role == .main, n >= rules.largePipeMinInches { return .mains }
-                if e.role != .branch, n >= rules.plumbingMainMinInches { return .fullMEP }
-                return crosses ? .fullMEP : local
+                // Role decides first (a main, or a run through a floor, shows); size only when the role is
+                // unknown. With neither a role nor a size it still shows in Full MEP, marked inferred.
+                switch e.role {
+                case .main:
+                    if let n = e.nominal, n >= rules.largePipeMinInches { return .mains }
+                    return .fullMEP
+                case .branch:
+                    return crosses ? .fullMEP : local
+                default:
+                    if crosses { return .fullMEP }
+                    guard let n = e.nominal else { return .fullMEP }
+                    return n >= rules.plumbingMainMinInches ? .fullMEP : local
+                }
             default:
                 if e.role == .equipment { return .mains }
                 return local
@@ -281,7 +308,10 @@ public struct ViewClassifier: Sendable {
                 switch e.role {
                 case .main: isMain = true
                 case .branch: isMain = false
-                default: isMain = (e.nominal ?? 0) >= rules.fireMainMinInches
+                default:
+                    // Neither a role nor a size: shown in Full MEP, marked inferred (never dropped).
+                    guard let n = e.nominal else { return .fullMEP }
+                    isMain = n >= rules.fireMainMinInches
                 }
                 if isMain { return .mains }
                 return crosses ? .fullMEP : local
@@ -297,10 +327,19 @@ public struct ViewClassifier: Sendable {
 }
 
 extension ViewClassifier {
-    /// Runs and pipes with no size that MEP leaves out (for the visible note).
+    /// Pipes the model gives no size.
     public func unknownSizeCount(_ b: SampleBuilding) -> Int {
         b.elements.filter { ($0.system == .plumbing || $0.system == .fire) && $0.part == .pipe && $0.nominal == nil }.count
     }
+
+    /// True when Full MEP shows `e` only as inferred: a pipe with neither a role (main or branch) nor a size.
+    public func isInferred(_ e: BuildingElement) -> Bool {
+        (e.system == .plumbing || e.system == .fire) && e.part == .pipe && e.nominal == nil && e.role != .main && e.role != .branch
+            && !crossing.contains(e.id) && tier(e.id) == .fullMEP
+    }
+
+    /// How many objects Full MEP shows as inferred (the visible note).
+    public func inferredCount(_ b: SampleBuilding) -> Int { b.elements.filter(isInferred).count }
 }
 
 // MARK: - What a view may draw, and what it does draw
@@ -309,11 +348,23 @@ extension ViewClassifier {
 public struct ViewFilter: Sendable {
     public let building: SampleBuilding
     public let classifier: ViewClassifier
+    /// A real building's index: each view draws exactly the packages it names (nil = the sample's own rules).
+    public let index: PackageSetIndex?
 
     private let servingByRoom: [String: Set<String>]
 
+    /// A package set's filter: the view's packages from `building.json`, then the switches, then the same
+    /// package limit last.
+    public init(packageSet b: SampleBuilding, index: PackageSetIndex) {
+        building = b
+        classifier = ViewClassifier(packageSet: b, index: index)
+        self.index = index
+        servingByRoom = [:]
+    }
+
     public init(_ b: SampleBuilding, rules: ViewRules = .standard) {
         building = b
+        index = nil
         classifier = ViewClassifier(b, rules: rules)
         var serving: [String: Set<String>] = [:]
         for e in b.elements {
@@ -329,6 +380,13 @@ public struct ViewFilter: Sendable {
 
     /// The view's limit: nothing outside this set is ever drawn, whatever the switches say.
     public func allows(_ e: BuildingElement, _ s: ViewState, prefs: LayerPrefs) -> Bool {
+        if let index {
+            // The view's own packages, never any other. Furniture only in a room, and only when switched on.
+            guard let p = e.package, index.packages(for: s).contains(p) else { return false }
+            if e.layer == .furniture { return s.view == .room && prefs.isOn(.furniture) }
+            if e.layer == .cabinets { return s.view == .floor || s.view == .room }
+            return true
+        }
         guard let t = classifier.tier(e.id) else { return false }
         switch s.view {
         case .architectural:
@@ -350,6 +408,18 @@ public struct ViewFilter: Sendable {
     public func drawn(_ s: ViewState, prefs: LayerPrefs) -> Set<String> {
         var out = Set<String>()
         let offered = Set(s.view.layers)
+        if let index {
+            let wanted = Set(index.packages(for: s))
+            for e in building.elements {
+                guard let p = e.package, wanted.contains(p) else { continue }
+                if let layer = e.layer {
+                    if offered.contains(layer) { if !prefs.isOn(layer) { continue } } else if layer == .furniture || layer == .cabinets { continue }
+                }
+                guard allows(e, s, prefs: prefs) else { continue }
+                out.insert(e.id)
+            }
+            return out
+        }
         for e in building.elements {
             guard let t = classifier.tier(e.id) else { continue }
             // 1. The view's own contents.
@@ -366,7 +436,7 @@ public struct ViewFilter: Sendable {
             guard wanted else { continue }
             // 2. The trade switches the view offers (a switch the view does not offer is off for its trade
             //    when that trade defaults off, e.g. furniture).
-            if let layer = FieldLayer.of(e.system) {
+            if let layer = e.layer {
                 if offered.contains(layer) { if !prefs.isOn(layer) { continue } } else if layer == .furniture || layer == .cabinets { continue }
             }
             // 3. The limit, last.

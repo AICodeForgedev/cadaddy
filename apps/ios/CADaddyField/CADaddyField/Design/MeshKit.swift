@@ -20,6 +20,35 @@ struct MeshKit {
         oriented(center: c, axes: (SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, 0, 1)), half: h)
     }
 
+    /// Appends exported triangles as they are (already in the building frame), optionally moved by `offset`.
+    mutating func append(_ m: ElementMesh, offset: SIMD3<Float> = .zero) {
+        guard positions.count + m.positions.count < Int(UInt32.max) else { return }
+        let base = UInt32(positions.count)
+        if offset == .zero { positions += m.positions } else { positions += m.positions.map { $0 + offset } }
+        normals += m.normals.count == m.positions.count ? m.normals : Array(repeating: SIMD3(0, 1, 0), count: m.positions.count)
+        indices += m.indices.map { $0 + base }
+    }
+
+    /// Appends the triangles of `m` whose centre lies in x ∈ [x0, x1) (the reveal's bays).
+    mutating func append(_ m: ElementMesh, xFrom x0: Float, to x1: Float) {
+        var remap: [UInt32: UInt32] = [:]
+        var i = 0
+        while i + 2 < m.indices.count {
+            let t = (m.indices[i], m.indices[i + 1], m.indices[i + 2])
+            i += 3
+            let c = (m.positions[Int(t.0)].x + m.positions[Int(t.1)].x + m.positions[Int(t.2)].x) / 3
+            guard c >= x0, c < x1 else { continue }
+            for v in [t.0, t.1, t.2] {
+                if let n = remap[v] { indices.append(n); continue }
+                let n = UInt32(positions.count)
+                positions.append(m.positions[Int(v)])
+                normals.append(m.normals.indices.contains(Int(v)) ? m.normals[Int(v)] : SIMD3(0, 1, 0))
+                remap[v] = n
+                indices.append(n)
+            }
+        }
+    }
+
     /// A box with min/max corners.
     mutating func box(min a: SIMD3<Float>, max b: SIMD3<Float>) { box(center: (a + b) / 2, size: b - a) }
 

@@ -70,6 +70,9 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     private var ground = Entity()
     private var roomDetail: Entity?
     private var roomDetailNumber: String?
+    /// A package set: the room package the open room was built from, and each entity's package.
+    fileprivate var roomDetailPackage: String?
+    fileprivate var packageOf: [String: String] = [:]
 
     private var elementEntities: [String: Entity] = [:]
     private var edgeEntities: [String: ModelEntity] = [:]
@@ -211,6 +214,13 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     func stop() { sub?.cancel(); sub = nil }
 
     private func tier(_ e: BuildingElement) -> ViewTier { exp?.filter.classifier.tier(e.id) ?? .room }
+    /// A real building from its package set (the sample's generated shell is not used for it).
+    private var isSet: Bool { b.isPackageSet }
+    /// The package set's architecture parts (merged into the shell, cut and room views, not drawn one by one).
+    static let shellParts: Set<ElementPart> = [.wall, .slab, .door, .window, .stair, .roomTile, .exterior, .outline]
+    private func isShell(_ e: BuildingElement) -> Bool { e.isBaseGroup || Self.shellParts.contains(e.part) || e.system == .architecture }
+    private func isPanel(_ e: BuildingElement) -> Bool { e.part == .panel }
+    private func isLuminaire(_ e: BuildingElement) -> Bool { e.kind == "Luminaire" || (e.package != nil && e.part == .light) }
 
     static func ui(_ c: SIMD3<Float>) -> UIColor { UIColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1) }
 
@@ -293,17 +303,17 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         case .equipment where e.part == .hoistway:
             // The one shaft MEP shows: a quiet see-through volume (one shared material, like the ghost).
             return hoistMat
-        case .equipment where e.kind == "Panelboard":
+        case .equipment where isPanel(e):
             // Panels read as small solid orange objects (the spec's floor view), not neutral gear.
             return pbr("panel-\(lit)", style.color(.electrical), rough: 0.45, emissive: lit ? 0.6 : 0.15, fog: f)
         case .equipment:
             return pbr("eq-\(e.system)-\(lit)", lit ? style.color(e.system) : style.equipment(e.system), rough: 0.55, emissive: lit ? 0.5 : 0.04, fog: f)
         case .main:
             return pbr("main-\(e.system)-\(lit)", style.color(e.system), rough: 0.42, emissive: boost, fog: f)
-        case .branch:
+        case .branch, .unknown:
             return pbr("br-\(e.system)-\(lit)", lit ? style.color(e.system) : style.branch(e.system), rough: 0.5, emissive: lit ? 0.9 : 0.08, fog: f)
         case .terminal:
-            if e.kind == "Luminaire" { return unlit("lum", style.lightWarm, fog: f) }
+            if isLuminaire(e) { return unlit("lum", style.lightWarm, fog: f) }
             return pbr("tm-\(e.system)-\(lit)", style.color(e.system), rough: 0.45, emissive: lit ? 0.9 : boost, fog: f)
         case .fixture:
             return pbr("fx-\(lit)", lit ? style.color(.plumbing) : UIColor(hex: 0xF3F5F4).mixed(with: style.color(.plumbing), 0.08), rough: 0.25, emissive: lit ? 0.6 : 0, fog: f)
@@ -325,8 +335,8 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
 
     /// The outline colour of an element with edges.
     private func edgeMaterial(for e: BuildingElement, fog: Int) -> RealityKit.Material {
-        let base = e.role == .equipment && e.kind != "Panelboard" ? style.equipment(e.system) : style.color(e.system)
-        return unlit("edge-\(e.role)-\(e.kind == "Panelboard")-\(e.system)", style.outline(base), fog: fog)
+        let base = e.role == .equipment && !isPanel(e) ? style.equipment(e.system) : style.color(e.system)
+        return unlit("edge-\(e.role)-\(isPanel(e))-\(e.system)", style.outline(base), fog: fog)
     }
 
     // MARK: static scene (shell, mains, exterior)
@@ -366,16 +376,16 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         let s0 = CACurrentMediaTime()
         buildGround()
         let s1 = CACurrentMediaTime()
-        buildExterior()
+        if isSet { buildSetExterior() } else { buildExterior() }
         let s2 = CACurrentMediaTime()
-        buildOutline()
+        if isSet { buildSetOutline() } else { buildOutline() }
         buildPulse()
         #if DEBUG
         if logPerf { print(String(format: "FIELD-STATIC ground %.1f exterior %.1f outline+pulse %.1f", (s1 - s0) * 1000, (s2 - s1) * 1000, (CACurrentMediaTime() - s2) * 1000)) }
         #endif
         for i in 0..<n { enqueue { [weak self] in self?.buildShell(i) } }
         // One element per work item: the frame budget is checked between items, so no item is long.
-        for e in b.elements where tier(e) == .mains {
+        for e in b.elements where tier(e) == .mains && !(isSet && isShell(e)) {
             enqueue { [weak self] in
                 guard let self, self.mains.indices.contains(e.level) else { return }
                 self.addElement(e, home: self.mains[e.level])
@@ -406,6 +416,19 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
 
     private func buildShell(_ i: Int) {
         guard let lv = b.level(i), ghost.indices.contains(i) else { return }
+        if isSet {
+            // MEP's context, as the mains package has it: the floors (its base nodes on this level), as the ghost.
+            var faces = MeshKit(), edges = MeshKit()
+            let w: Float = style.highContrast ? 0.07 : 0.05
+            for e in b.elements where e.level == i && tier(e) == .mains && isShell(e) && e.part != .outline {
+                guard case let .mesh(m) = e.shape else { continue }
+                faces.append(m)
+                edges.edges(center: (m.min + m.max) / 2, size: m.max - m.min, width: w)
+            }
+            if let m = faces.resource("ghost-\(i)") { ghost[i].addChild(ModelEntity(mesh: m, materials: [ghostMat])) }
+            if let m = edges.resource("edges-\(i)") { ghost[i].addChild(ModelEntity(mesh: m, materials: [edgeMat])) }
+            return
+        }
         let lo = b.footprintMin, hi = b.footprintMax
         var faces = MeshKit(), edges = MeshKit()
         let w: Float = style.highContrast ? 0.07 : 0.05
@@ -424,6 +447,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// The floor's cut view (walls at 4 ft, plate, room tiles): built when a floor is first opened, or after the
     /// opening when the app is idle, in small work items.
     private func ensureCut(_ i: Int) {
+        if isSet { ensureSetCut(i); return }
         guard cut.indices.contains(i), !cutBuilt[i], let lv = b.level(i) else { return }
         cutBuilt[i] = true
         let lo = b.footprintMin, hi = b.footprintMax
@@ -548,6 +572,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// doors and stairs (the roof level: the roof and parapet). A few merged meshes per level.
     private func ensureArch(_ i: Int) {
         guard arch.indices.contains(i), !archBuilt[i] else { return }
+        if isSet, !b.elements.contains(where: { $0.level == i && tier($0) == .architecture }) { return }
         archBuilt[i] = true
         enqueue { [weak self] in
             guard let self, self.arch.indices.contains(i) else { return }
@@ -559,6 +584,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
 
     private func buildArch(_ i: Int) {
         guard let lv = b.level(i) else { return }
+        if isSet { buildSetArch(i); return }
         let lo = b.footprintMin, hi = b.footprintMax
         var slab = MeshKit(), wall = MeshKit(), dark = MeshKit(), pane = MeshKit(), door = MeshKit(), stair = MeshKit()
         let top = b.levels.count - 1
@@ -616,8 +642,9 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// Full MEP's additions on one level, a chunk per frame.
     private func ensureFull(_ level: Int) {
         guard full.indices.contains(level), !fullBuilt[level] else { return }
+        let items = b.elements.filter { $0.level == level && tier($0) == .fullMEP && !(isSet && isShell($0)) }
+        if isSet && items.isEmpty { return }   // its package is not loaded yet
         fullBuilt[level] = true
-        let items = b.elements.filter { $0.level == level && tier($0) == .fullMEP }
         enqueueElements(items, into: { [weak self] in self.flatMap { $0.full.indices.contains(level) ? $0.full[level] : nil } }, name: "full-\(level)")
     }
 
@@ -663,7 +690,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// The group entity for `e`'s layer inside `parent` (made on first use). Elements with no layer (the shell)
     /// go straight into the parent.
     private func container(_ parent: Entity, for e: BuildingElement) -> Entity {
-        guard let layer = FieldLayer.of(e.system) else { return parent }
+        guard let layer = e.layer else { return parent }
         let k = ObjectIdentifier(parent)
         if let g = groups[k]?[layer] { return g }
         let g = Entity()
@@ -705,6 +732,10 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             var k = MeshKit()
             k.run(points, profile: profile)
             mesh = k.resource(e.id)
+        case let .mesh(em):
+            var k = MeshKit()
+            k.append(em)
+            mesh = k.resource(e.id)
         }
         guard let mesh else { return nil }
         let m = ModelEntity(mesh: mesh, materials: [material(for: e)])
@@ -736,6 +767,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             switch e.shape {
             case let .box(_, s) where e.role == .equipment: k.edges(center: .zero, size: s, width: w)
             case let .run(points, profile) where e.role == .main: k.runEdges(points, profile: profile, width: w)
+            case let .mesh(em) where e.role == .equipment && e.part != .hoistway: k.edges(center: (em.min + em.max) / 2, size: em.max - em.min, width: w)
             default: break
             }
             if let em = k.resource("edge-\(e.id)") {
@@ -750,7 +782,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             parent = container(serving[e.level], for: e)
         }
         parent.addChild(m)
-        if e.kind == "Luminaire", let t = glowTexture, let q = MeshKit.quad(center: SIMD3(0, -0.04, 0), size: SIMD2(1.3, 1.3)) {
+        if isLuminaire(e), let t = glowTexture, let q = MeshKit.quad(center: (isSet ? e.shape.anchor : .zero) + SIMD3(0, -0.04, 0), size: SIMD2(1.3, 1.3)) {
             var gm = UnlitMaterial()
             gm.color = .init(tint: .white, texture: .init(t))
             gm.blending = .transparent(opacity: .init(floatLiteral: 1))
@@ -758,7 +790,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             let glow = ModelEntity(mesh: q, materials: [gm])
             m.addChild(glow)
             // And a pool of light on the floor, very soft.
-            if let h = e.mountingHeight, let pool = MeshKit.quad(center: SIMD3(0, -h + 0.05, 0), size: SIMD2(2.6, 2.6)) {
+            if let h = e.mountingHeight, let pool = MeshKit.quad(center: (isSet ? e.shape.anchor : .zero) + SIMD3(0, -h + 0.05, 0), size: SIMD2(2.6, 2.6)) {
                 var pm = UnlitMaterial()
                 pm.color = .init(tint: UIColor.white.withAlphaComponent(0.55), texture: .init(t))
                 pm.blending = .transparent(opacity: .init(floatLiteral: 0.5))
@@ -768,6 +800,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         }
         elementEntities[e.id] = m
         fogStep[e.id] = 0
+        if let pk = e.package { packageOf[e.id] = pk }
         #if DEBUG
         lastBuilt = "\(e.kind) \(e.tag)"
         #endif
@@ -782,14 +815,16 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// frame. Each chunk's layer groups fade in as a whole (a few fades, not one per element).
     private func ensureDetail(_ level: Int) {
         guard detail.indices.contains(level), !detailBuilt[level] else { return }
+        let items = b.elements.filter { $0.level == level && tier($0) == .floor && !(isSet && isShell($0)) }
+        if isSet && items.isEmpty && !b.elements.contains(where: { $0.level == level && tier($0) == .floor }) { return }
         detailBuilt[level] = true
-        let items = b.elements.filter { $0.level == level && tier($0) == .floor }
         enqueueElements(items, into: { [weak self] in self.flatMap { $0.detail.indices.contains(level) ? $0.detail[level] : nil } }, name: "chunk-\(level)")
     }
 
     private func buildRoom(_ number: String) {
         if roomDetailNumber == number { return }
         removeRoomDetail()
+        if isSet { buildSetRoom(number); return }
         guard let r = b.room(number), let lv = b.level(r.level) else { return }
         let root = Entity()
         root.name = "room-\(number)"
@@ -840,10 +875,15 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
 
     private func removeRoomDetail() {
         guard let r = roomDetail else { return }
-        for el in b.elements(in: roomDetailNumber ?? "") where tier(el) == .room {
+        for el in b.elements(in: roomDetailNumber ?? "") where tier(el) == .room || isSet {
             elementEntities[el.id] = nil
             edgeEntities[el.id] = nil
             fogStep[el.id] = nil
+        }
+        if let pk = roomDetailPackage {
+            // The package may already be released from the building: sweep by the entities' own package.
+            for (id, p) in packageOf where p == pk { elementEntities[id] = nil; edgeEntities[id] = nil; fogStep[id] = nil; packageOf[id] = nil }
+            roomDetailPackage = nil
         }
         forgetGroups(under: r)
         r.removeFromParent()
@@ -918,14 +958,15 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             for (number, _) in raise { raise[number]?.goal = 0 }
         case let .room(number):
             guard let r = b.room(number) else { break }
-            let south = r.max.y <= b.footprintMax.y / 2
+            let south = r.center.y <= (b.footprintMin.y + b.footprintMax.y) / 2
             // Look in from the outside of the room's long open side.
             let yaw: Float = south ? -2.55 : -0.62
             orbitGoal.x = nearestAngle(yaw, to: orbit.x)
             orbitGoal.y = 0.92
-            // What serves this room stays; the rest of the floor steps back as a whole.
+            // What serves this room stays; the rest of the floor steps back as a whole. A package set's room
+            // package has its own copy of everything in and through the room, so nothing moves.
             var serves = Set<String>()
-            for el in b.elements(in: number) { if let u = el.upstream { serves.insert(u) } }
+            if !isSet { for el in b.elements(in: number) { if let u = el.upstream { serves.insert(u) } } }
             if roomDetailNumber != number { removeRoomDetail() }
             roomServing = serves
             showFloor(r.level)
@@ -933,7 +974,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             setVisible(full[r.level], false)
             setVisible(detail[r.level], false)
             // The room's own lights, cabinets, fans and heads live on the floor; they come along with what serves it.
-            for el in b.elements(in: number) where tier(el) != .room && tier(el) != .architecture { serves.insert(el.id) }
+            for el in b.elements(in: number) where !isSet && tier(el) != .room && tier(el) != .architecture { serves.insert(el.id) }
             roomServing = serves
             moveServing(level: r.level, ids: serves)
             buildRoom(number)
@@ -957,7 +998,11 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     }
 
     /// After the opening: build every floor's cut view in the idle frames, so opening a floor later is light.
-    func prewarmFloors() { for i in b.levels.indices { ensureCut(i) } }
+    func prewarmFloors() {
+        // A package set loads a level only when it is opened (never every level up front).
+        guard !isSet else { return }
+        for i in b.levels.indices { ensureCut(i) }
+    }
 
     private func showFloor(_ i: Int) {
         let n = b.levels.count
@@ -986,8 +1031,9 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
                 liftGoal[j] = 0
                 liftingAway.remove(j); setVisible(levelRoots[j], true)
                 setVisible(ghost[j], false)
-                setVisible(mains[j], true)
-                setVisible(full[j], true)
+                // A package set's floor is its level package (its own copies); the building copies step aside.
+                setVisible(mains[j], !isSet)
+                setVisible(full[j], !isSet)
                 setVisible(detail[j], true)
                 setVisible(cut[j], true)
                 setVisible(tiles[j], true)
@@ -1098,7 +1144,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: layers
 
-    private func layersShow(_ e: BuildingElement) -> Bool { exp?.layers.shows(e.system) ?? true }
+    private func layersShow(_ e: BuildingElement) -> Bool { e.layer.map { exp?.layers.isOn($0) ?? true } ?? true }
 
     /// Fades each layer group, a handful of entities however big the building is.
     func applyLayers() {
@@ -1120,13 +1166,16 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         guard let m = ent as? ModelEntity else { return }
         let key = ObjectIdentifier(m)
         // Furniture and casework are context in a room, not part of any system: they stay as they are.
-        if !focus.lit.contains(e.id), e.role == .furniture || e.role == .casework { return }
+        let lit = focus.lit.contains(e.sourceID)
+        if !lit, e.role == .furniture || e.role == .casework { return }
+        // A package set's shell copies stay as they are (they are context, merged or not).
+        if isSet, isShell(e) { return }
         originals[key] = m.model?.materials
         entityByObject[key] = m
-        m.model?.materials = focus.lit.contains(e.id) ? [material(for: e, lit: true)] : [fadedMat]
-        if focus.lit.contains(e.id), focus.lit.count < 400, e.role != .equipment || e.id == focus.tapped { addHalo(e, to: m) }
-        if let edge = edgeEntities[e.id], !focus.lit.contains(e.id) { edge.isEnabled = false; hiddenGlows.append(edge) }
-        for case let child as ModelEntity in m.children where e.kind == "Luminaire" && !focus.lit.contains(e.id) {
+        m.model?.materials = lit ? [material(for: e, lit: true)] : [fadedMat]
+        if lit, focus.lit.count < 400, e.role != .equipment || e.sourceID == focus.tapped { addHalo(e, to: m) }
+        if let edge = edgeEntities[e.id], !lit { edge.isEnabled = false; hiddenGlows.append(edge) }
+        for case let child as ModelEntity in m.children where isLuminaire(e) && !focus.lit.contains(e.sourceID) {
             child.isEnabled = false
             hiddenGlows.append(child)
         }
@@ -1154,21 +1203,30 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         // The route the pulse runs: from the tapped element up to the source.
         var path: [(SIMD3<Float>, Int)] = []
         for s in focus.steps {
-            guard let e = b.element(s.id) else { continue }
+            guard let e = shown(s.id) else { continue }
             switch e.shape {
             case let .box(c, _): path.append((c, e.level))
             case let .run(points, _): path += points.reversed().map { ($0, e.level) }
+            case .mesh: path.append((e.shape.anchor, e.level))
             }
         }
-        if focus.showsDownstream, focus.steps.count <= 1, let e = b.element(focus.tapped) { path = [(e.shape.anchor, e.level)] }
+        if focus.showsDownstream, focus.steps.count <= 1, let e = shown(focus.tapped) { path = [(e.shape.anchor, e.level)] }
         pulsePath = path
         pulseT = 0
-        let c = b.element(focus.tapped).map { style.color($0.system).mixed(with: .white, 0.45) } ?? .white
+        let c = shown(focus.tapped).map { style.color($0.system).mixed(with: .white, 0.45) } ?? .white
         for (i, p) in pulse.enumerated() {
             var m = UnlitMaterial(color: c)
             if i > 0 { m.blending = .transparent(opacity: .init(floatLiteral: 0.8 - Float(i) * 0.15)) }
             p.model?.materials = [m]
         }
+    }
+
+    /// The copy of the export's element `source` the active view draws (the sample: the element itself).
+    func shown(_ source: String) -> BuildingElement? {
+        guard isSet else { return b.element(source) }
+        let copies = b.copies(of: source)
+        if let exp { let st = exp.viewState; if let c = copies.first(where: { exp.filter.allows($0, st, prefs: exp.layers) }) { return c } }
+        return copies.first
     }
 
     private var entityByObject: [ObjectIdentifier: Entity] = [:]
@@ -1179,6 +1237,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     private func addHalo(_ e: BuildingElement, to ent: Entity) {
         var k = MeshKit()
         switch e.shape {
+        case let .mesh(em): k.box(center: (em.min + em.max) / 2, size: em.max - em.min + SIMD3(repeating: 0.12))
         case let .box(_, size): k.box(center: .zero, size: size + SIMD3(repeating: 0.12))
         case let .run(points, profile):
             switch profile {
@@ -1257,7 +1316,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         work.removeAll(); workHead = 0
         elementEntities.removeAll(); edgeEntities.removeAll(); roomTileEntities.removeAll(); raise.removeAll(); fades.removeAll()
         groups.removeAll(); groupList.removeAll(); fogStep.removeAll(); fogQueue.removeAll(); risers.removeAll(); levelBounds.removeAll(); limitKey = ""
-        roomDetail = nil; roomDetailNumber = nil
+        roomDetail = nil; roomDetailNumber = nil; roomDetailPackage = nil; packageOf.removeAll()
         makeMaterials()
         buildStatic()
         setReveal(exp?.revealProgress ?? 1)
@@ -1472,20 +1531,20 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         var want: [String: (String, SIMD3<Float>, Int, Bool, Int)] = [:]   // key → text, point, level, mono, priority
         switch scope {
         case .building:
-            for e in b.elements where exp?.wholeView != .architectural && e.role == .equipment && tier(e) == .mains && e.part != .panel && e.part != .disconnect && layersShow(e) {
+            for e in b.elements where exp?.wholeView != .architectural && e.role == .equipment && tier(e) == .mains && e.part != .panel && e.part != .disconnect && e.part != .hoistway && layersShow(e) && labelAllowed(e) {
                 want["e-\(e.id)"] = (e.tag, e.shape.bounds.max * SIMD3(0, 1, 0) + e.shape.anchor * SIMD3(1, 0, 1) + SIMD3(0, 0.6, 0), e.level, true, Self.labelPriority(e))
             }
         case let .floor(i):
-            for r in b.rooms(on: i) where r.name != "Corridor" {
-                let text = r.name == "Guest Room" ? r.number : r.name
+            for r in b.rooms(on: i) where isSet || r.name != "Corridor" {
+                let text = isSet ? r.displayNumber : (r.name == "Guest Room" ? r.number : r.name)
                 let area = Int((r.max.x - r.min.x) * (r.max.y - r.min.y))
-                want["r-\(r.number)"] = (text, SIMD3(r.center.x, (b.level(i)?.elevation ?? 0) + 0.1, r.center.y), i, r.name == "Guest Room", 2000 + min(area, 999))
+                want["r-\(r.number)"] = (text, SIMD3(r.center.x, (b.level(i)?.elevation ?? 0) + 0.1, r.center.y), i, isSet ? r.shownNumber != nil : r.name == "Guest Room", 2000 + min(area, 999))
             }
-            for e in b.elements where e.level == i && e.role == .equipment && layersShow(e) {
+            for e in b.elements where e.level == i && e.role == .equipment && e.part != .hoistway && layersShow(e) && labelAllowed(e) {
                 want["e-\(e.id)"] = (e.tag, e.shape.anchor + SIMD3(0, 1.1, 0), e.level, true, Self.labelPriority(e))
             }
         case let .room(n):
-            for e in b.elements(in: n) where (e.role == .terminal || e.role == .fixture) && layersShow(e) {
+            for e in b.elements(in: n) where (e.role == .terminal || e.role == .fixture) && !e.tag.isEmpty && layersShow(e) && labelAllowed(e) {
                 want["d-\(e.id)"] = (e.tag, e.shape.bounds.max * SIMD3(0, 1, 0) + e.shape.anchor * SIMD3(1, 0, 1) + SIMD3(0, 0.12, 0), e.level, true, Self.labelPriority(e))
             }
         }
@@ -1514,6 +1573,12 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             }
         }
         leaderLayer.strokeColor = (style.isDark ? UIColor.white : UIColor(hex: 0x0E1A24)).withAlphaComponent(style.highContrast ? 0.8 : 0.5).cgColor
+    }
+
+    /// A package set labels only the copies the active view draws (one label per object, never two).
+    private func labelAllowed(_ e: BuildingElement) -> Bool {
+        guard isSet, let exp else { return true }
+        return exp.filter.allows(e, exp.viewState, prefs: exp.layers)
     }
 
     private func makeLabel(_ k: String, text: String, mono: Bool) {
@@ -1654,6 +1719,170 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             }
         }
         return best?.0
+    }
+}
+
+// MARK: - A real building's package set
+
+@available(iOS 18.0, *)
+extension BuildingRenderer {
+    /// The opening's solid exterior from the architectural package's `exterior` nodes (each level's floor plates
+    /// raised to its storey), cut into bays along x so the sweep runs across it as it does on the sample.
+    fileprivate func buildSetExterior() {
+        let lo = b.footprintMin.x, hi = b.footprintMax.x
+        let parts = b.elements.filter { $0.part == .exterior }
+        guard !parts.isEmpty else { return }
+        let bays = max(Int(((hi - lo) / b.bay).rounded(.up)), 1)
+        let wall = pbr("facade", style.facade, rough: 0.82)
+        for k in 0..<bays {
+            let x0 = lo + Float(k) * b.bay, x1 = k == bays - 1 ? Float.greatestFiniteMagnitude : x0 + b.bay
+            var solid = MeshKit()
+            for e in parts { if case let .mesh(m) = e.shape { solid.append(m, xFrom: k == 0 ? -Float.greatestFiniteMagnitude : x0, to: x1) } }
+            guard let r = solid.resource("bay-\(k)") else { continue }
+            let bay = Entity()
+            bay.addChild(ModelEntity(mesh: r, materials: [wall]))
+            anchor.addChild(bay)
+            exterior.append((bay, x0 + b.bay / 2))
+        }
+    }
+
+    /// MEP's one outline, as the mains package draws it.
+    fileprivate func buildSetOutline() {
+        var k = MeshKit()
+        for e in b.elements where e.part == .outline { if case let .mesh(m) = e.shape { k.append(m) } }
+        outline = Entity()
+        if let m = k.resource("outline") { outline.addChild(ModelEntity(mesh: m, materials: [edgeMat])) }
+        anchor.addChild(outline)
+    }
+
+    /// The level package's own architecture (walls and doors cut at 4 ft, its floor plate) as the floor's pale
+    /// context, and its room tiles as the tap targets. Built once the level's package is loaded.
+    fileprivate func ensureSetCut(_ i: Int) {
+        guard cut.indices.contains(i), !cutBuilt[i] else { return }
+        let shell = b.elements.filter { $0.level == i && tier($0) == .floor && isShell($0) }
+        guard !shell.isEmpty else { return }
+        cutBuilt[i] = true
+        enqueue { [weak self] in
+            guard let self, self.cut.indices.contains(i) else { return }
+            var faces = MeshKit(), plate = MeshKit(), edges = MeshKit()
+            for e in shell {
+                guard case let .mesh(m) = e.shape else { continue }
+                switch e.part {
+                case .roomTile: continue
+                case .slab: plate.append(m)
+                default:
+                    faces.append(m)
+                    if e.part == .wall { edges.edges(center: (m.min + m.max) / 2, size: m.max - m.min, width: 0.03) }
+                }
+            }
+            var cutMat = UnlitMaterial(color: self.style.ghost)
+            cutMat.blending = .transparent(opacity: .init(floatLiteral: min(self.style.ghostOpacity * 2.2, 0.32)))
+            cutMat.writesDepth = false
+            if let m = faces.resource("cut-\(i)") { self.cut[i].addChild(ModelEntity(mesh: m, materials: [cutMat])) }
+            if let m = edges.resource("cutedge-\(i)") { self.cut[i].addChild(ModelEntity(mesh: m, materials: [self.edgeMat])) }
+            if let m = plate.resource("plate-\(i)") { self.cut[i].addChild(ModelEntity(mesh: m, materials: [self.pbr("plate", self.style.floorPlate, rough: 0.95)])) }
+        }
+        for e in shell where e.part == .roomTile {
+            enqueue { [weak self] in self?.buildSetTile(e) }
+        }
+    }
+
+    /// A room's floor tile from its level package: lifted a hair, tappable, rising when tapped.
+    fileprivate func buildSetTile(_ e: BuildingElement) {
+        guard tiles.indices.contains(e.level), case let .mesh(m) = e.shape, b.room(e.sourceID) != nil, let lv = b.level(e.level) else { return }
+        var k = MeshKit()
+        k.append(m, offset: SIMD3(-(m.min.x + m.max.x) / 2, -lv.elevation - 0.03, -(m.min.z + m.max.z) / 2))
+        guard let res = k.resource("tile-\(e.sourceID)") else { return }
+        let tile = ModelEntity(mesh: res, materials: [pbr("tile", style.roomTile, rough: 0.9)])
+        tile.position = SIMD3((m.min.x + m.max.x) / 2, lv.elevation + 0.03, (m.min.z + m.max.z) / 2)
+        tile.components.set(RoomTagComponent(number: e.sourceID))
+        let size = m.max - m.min
+        tile.components.set(CollisionComponent(shapes: [.generateBox(size: SIMD3(max(size.x, 0.2), 0.3, max(size.z, 0.2)))]))
+        tiles[e.level].addChild(tile)
+        roomTileEntities[e.sourceID] = tile
+        if raise[e.sourceID] == nil { raise[e.sourceID] = (0, 0, 0) }
+    }
+
+    /// The Architectural view of one level from the architectural package: a few merged meshes by what they are.
+    fileprivate func buildSetArch(_ i: Int) {
+        var slab = MeshKit(), wall = MeshKit(), pane = MeshKit(), door = MeshKit(), stair = MeshKit()
+        for e in b.elements where e.level == i && tier(e) == .architecture {
+            guard case let .mesh(m) = e.shape else { continue }
+            switch e.part {
+            case .exterior, .roomTile, .outline: continue
+            case .slab: slab.append(m)
+            case .window: pane.append(m)
+            case .door: door.append(m)
+            case .stair: stair.append(m)
+            default: wall.append(m)
+            }
+        }
+        let mats: [(MeshKit, RealityKit.Material, String)] = [
+            (slab, pbr("arch-slab", style.isDark ? UIColor(hex: 0xC9CDCB) : UIColor(hex: 0xD9DDE1), rough: 0.9), "slab"),
+            (wall, pbr("facade", style.facade, rough: 0.82), "wall"),
+            (pane, pbr("glass", style.glass, rough: 0.12, metal: 0.4), "glass"),
+            (door, pbr("arch-door", UIColor(hex: 0x8A6A4E), rough: 0.7), "door"),
+            (stair, pbr("arch-stair", UIColor(hex: 0xB7BBBE), rough: 0.85), "stair"),
+        ]
+        for (mk, m, name) in mats { if let r = mk.resource("arch-\(name)-\(i)") { arch[i].addChild(ModelEntity(mesh: r, materials: [m])) } }
+    }
+
+    /// A room from its own package: its floor solid, its walls (clipped to the room by the export) see-through so
+    /// the camera reads the inside, and every object of the package, one per work item with a short fade.
+    fileprivate func buildSetRoom(_ number: String) {
+        guard let r = b.room(number), levelRoots.indices.contains(r.level) else { return }
+        let root = Entity()
+        root.name = "room-\(number)"
+        levelRoots[r.level].addChild(root)
+        let items = b.elements(in: number)
+        var walls = MeshKit(), fl = MeshKit()
+        for e in items where isShell(e) {
+            guard case let .mesh(m) = e.shape else { continue }
+            if e.part == .slab { fl.append(m) } else if e.part != .roomTile { walls.append(m) }
+        }
+        var wallM = UnlitMaterial(color: style.isDark ? UIColor(hex: 0xE9E6DF) : UIColor(hex: 0xC9CCCF))
+        wallM.blending = .transparent(opacity: .init(floatLiteral: style.highContrast ? 0.5 : 0.34))
+        wallM.writesDepth = false
+        if let res = walls.resource("room-walls-\(number)") { root.addChild(ModelEntity(mesh: res, materials: [wallM])) }
+        if let res = fl.resource("room-floor-\(number)") { root.addChild(ModelEntity(mesh: res, materials: [pbr("roomfloor", UIColor(hex: 0xC8B9A3), rough: 0.8)])) }
+        for (k, el) in items.filter({ !isShell($0) }).enumerated() {
+            enqueue { [weak self, weak root] in
+                guard let self, let root, root.parent != nil, let ent = self.addElement(el, home: root) else { return }
+                if !self.reduceMotion { self.fade(ent, from: 0, to: 1, delay: 0.05 + Double(min(k, 40)) * 0.012) }
+            }
+        }
+        if !reduceMotion { fade(root, from: 0, to: 1, delay: 0) }
+        roomDetail = root
+        roomDetailNumber = number
+        roomDetailPackage = items.first?.package
+    }
+
+    /// The experience loaded or released packages: drop what was released (its entities and the containers
+    /// built from it); what arrived is built by the next scope change.
+    func packagesChanged(released: Set<String>) {
+        guard isSet else { return }
+        levelBounds.removeAll()
+        limitKey = ""
+        guard !released.isEmpty else { return }
+        apply(focus: nil)
+        if let pk = roomDetailPackage, released.contains(pk) { removeRoomDetail() }
+        var gone: [String] = []
+        for (id, ent) in elementEntities {
+            guard let pk = packageOf[id], released.contains(pk) else { continue }
+            ent.removeFromParent()
+            gone.append(id)
+        }
+        for id in gone { elementEntities[id] = nil; edgeEntities[id] = nil; fogStep[id] = nil; packageOf[id] = nil }
+        for i in levelRoots.indices {
+            guard let lv = exp?.levelPackage(i), released.contains(lv) else { continue }
+            for c in [cut[i], tiles[i], detail[i]] {
+                for ch in Array(c.children) { forgetGroups(under: ch); ch.removeFromParent() }
+                forgetGroups(under: c)
+            }
+            cutBuilt[i] = false
+            detailBuilt[i] = false
+            for (k, _) in roomTileEntities where b.room(k)?.level == i { roomTileEntities[k] = nil }
+        }
     }
 }
 
