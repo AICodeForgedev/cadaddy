@@ -2874,12 +2874,13 @@
    ]
   },
   "schedules.not_luminaire_title_words": {
-   "source": "drafting convention: a schedule title naming another trade's or another table's fixtures is no luminaire schedule (fix-lum-fixture-schedule-not-read)",
+   "source": "drafting convention: a schedule title naming another trade's or another table's fixtures is no luminaire schedule, nor is the table of a schedule's notes (LIGHTING FIXTURE SCHEDULE NOTES) (fix-lum-fixture-schedule-not-read, fix-fixture-schedule-type-column-unread)",
    "words": [
     "PLUMBING",
     "CASEWORK",
     "PANEL",
-    "CONTROL"
+    "CONTROL",
+    "NOTES"
    ]
   },
   "schedules.title_reference_words": {
