@@ -201,6 +201,7 @@ pub mod relevel;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub mod rooms3d;
+pub(crate) mod risercut;
 pub(crate) mod runtidy;
 pub mod sheetfacts;
 pub mod sheetsout;

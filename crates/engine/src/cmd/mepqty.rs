@@ -442,8 +442,13 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
 fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTypes) -> Takeoff {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let mut t = Takeoff::default();
+    // A riser through several storeys is counted a piece per storey, each on its own level
+    // (Q6493); its pieces keep the run's index.
+    let given = sp.mep.runs.get(..sp.mep.runs.len().min(MAX_ITEMS)).unwrap_or_default();
+    let storeys = super::risercut::all_storey_runs(sp, given, MAX_ITEMS);
     let mut counted: Vec<(usize, &MepRun, &MepSystem)> = Vec::new();
-    for (id, r) in sp.mep.runs.iter().enumerate().take(MAX_ITEMS) {
+    for (id, piece) in &storeys {
+        let (id, r): (usize, &MepRun) = (*id, &piece.run);
         let Some(sy) = sp.mep.systems.iter().find(|s| s.name == r.system) else { continue };
         if !st.wants(&r.level, &r.system) || !r.size_in.iter().all(|v| v.is_finite()) || r.size_in[0] <= 0.0 {
             continue;
@@ -454,7 +459,12 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
         let plan_ft: Vec<f64> = pts.windows(2).map(|w| w[0].dist(w[1]) / upf).collect();
         let cs = corners(&pts, &bottoms);
         let rise_ft: f64 = cs.iter().map(|c| if let Corner::Drop(d) = c { *d } else { 0.0 }).sum();
-        let length = plan_ft.iter().sum::<f64>() + rise_ft;
+        // A riser's length is its height, bottom to top.
+        let riser_ft = match (r.top_ft, bottoms.first()) {
+            (Some(top), Some(bot)) if pts.len() == 1 && top.is_finite() && top > *bot => top - bot,
+            _ => 0.0,
+        };
+        let length = plan_ft.iter().sum::<f64>() + rise_ft + riser_ft;
         let (lk, mut sk) = (st.key_level(&r.level), st.key_system(&r.system));
         // A run no plan draws (derived from another floor's, or inferred from a rule: a fill-in,
         // a routed path) is counted apart from the drawn (Q6216: every total shows drawn,
