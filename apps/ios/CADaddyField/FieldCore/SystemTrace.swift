@@ -101,7 +101,7 @@ public enum FieldLayer: String, CaseIterable, Codable, Sendable, Identifiable {
         case .plumbing, .fire: return .plumbing
         case .cabinets: return .cabinets
         case .furniture: return .furniture
-        case .architecture: return nil
+        case .architecture, .conveying: return nil
         }
     }
 
@@ -146,8 +146,12 @@ public struct LayerPrefs: Equatable, Codable, Sendable {
     /// Shown unless its layer is off. Elements with no layer (the shell) always show.
     public func shows(_ s: BuildingSystem) -> Bool { FieldLayer.of(s).map(isOn) ?? true }
 
+    /// A device that never saved its switches: everything on except furniture (off by default; it only exists
+    /// in the Room view).
+    public static let standard = LayerPrefs(off: [.furniture])
+
     public static func load(_ d: UserDefaults = .standard) -> LayerPrefs {
-        let raw = d.stringArray(forKey: defaultsKey) ?? []
+        guard let raw = d.stringArray(forKey: defaultsKey) else { return standard }
         return LayerPrefs(off: Set(raw.compactMap(FieldLayer.init(rawValue:))))
     }
 
