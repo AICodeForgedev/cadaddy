@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1271,
-    "count": 1271,
+    "callableAsJson": 1272,
+    "count": 1272,
     "ids": [
       "-attedit",
       "-block",
@@ -14,6 +14,7 @@
       "-plottermanager",
       "-style",
       "-vports",
+      "-wblock",
       "-xref",
       "3dalign",
       "3darray",
@@ -1276,7 +1277,7 @@
       "zoom.window"
     ],
     "inMenus": 547,
-    "typed": 564
+    "typed": 565
   },
   "features": {
     "ifcExport": true,
