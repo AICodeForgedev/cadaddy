@@ -1532,11 +1532,18 @@ pub(crate) fn flat_swings(pts: &[Vec2]) -> Vec<(Vec2, f64, f64, [Vec2; 2])> {
 /// Names traced between two progress lines of the room trace.
 const TRACE_PROGRESS_EVERY: usize = 100;
 
-/// How far round a room's name its trace looks (feet, each way): a room up to twice as wide
-/// round its name. A name in an area that doesn't close (a gap in its walls, an open plan)
-/// stops there instead of searching ever larger windows: a whole sheet's border (a 36" sheet
-/// at 1/8" = 1'-0" is 288 ft wide) and every sheet of a set side by side.
+/// How far round a room's name its first trace looks (feet, each way): the rooms nearly every
+/// name is in (a long corridor's far ends too). A name that finds none so near is traced again across the whole plan it is on
+/// ([`REACH_PLAN_SHARE`]), however wide (a warehouse, a gym, an open floor), once every other
+/// name took its room; a name in an area that doesn't close (a gap in its walls, an open plan)
+/// stops at its own sheet then, instead of searching every sheet of a set side by side.
 const ROOM_REACH_FT: f64 = 150.0;
+/// A room trace's reach as a share of the larger side of the plan its name is on: from anywhere
+/// on the plan, the whole plan lies inside the last window (a boundary counts only strictly
+/// inside a window).
+const REACH_PLAN_SHARE: f64 = 1.02;
+/// The seeds a widened room trace searches from: the name's point and its middle.
+const WIDENED_SEEDS: usize = 2;
 
 /// A turn sharper than this (degrees) between two pieces of a polyline is a corner: a flattened
 /// arc turns a few degrees a piece (a quarter circle drawn in 8 chords, 11¼°), a swing meets its
@@ -1908,6 +1915,15 @@ pub(crate) struct FoundRoom {
     pub confidence: f64,
 }
 
+/// A plan's room trace: the rooms found, and each name whose search stopped at its reach with no
+/// room found (what lies farther was never searched: reported, never taken for "no room here").
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RoomTrace {
+    pub rooms: Vec<FoundRoom>,
+    /// Each such name, where it is, and the reach (drawing units, each way) its search stopped at.
+    pub beyond_reach: Vec<(String, Vec2, f64)>,
+}
+
 /// A room tag block's attribute: `Some(true)` for the room's name (`NAME`, `ROOM_NAME`, `RM NAME`),
 /// `Some(false)` for its number (`NUMBER`, `ROOM_NO`, `RM#`), else `None`.
 pub(crate) fn tag_attribute(tag: &str) -> Option<bool> {
@@ -1998,7 +2014,7 @@ pub struct TraceCache {
     /// the model a rebuild regenerated) reads the rooms again instead of tracing them. Every
     /// update of an associative model traced its plan's rooms again (8 s on a 13-room plan),
     /// also when the edit bounded no room and nothing was rebuilt.
-    by_inputs: Vec<(cadaddy_doc::Space, Option<Vec<[f64; 4]>>, std::sync::Arc<TraceInputs>, std::sync::Arc<Vec<FoundRoom>>)>,
+    by_inputs: Vec<(cadaddy_doc::Space, Option<Vec<[f64; 4]>>, std::sync::Arc<TraceInputs>, std::sync::Arc<RoomTrace>)>,
     /// How many times the labels' outlines were searched (the trace's costly part) in this drawing.
     traced: usize,
 }
@@ -2044,7 +2060,7 @@ struct Trace {
     state: std::sync::Weak<Drawing>,
     space: cadaddy_doc::Space,
     regions: Option<Vec<[f64; 4]>>,
-    rooms: std::sync::Arc<Vec<FoundRoom>>,
+    rooms: std::sync::Arc<RoomTrace>,
 }
 
 /// Whether a trace of `old` holds for `now`: the same model objects (their chunks still shared:
@@ -2062,7 +2078,7 @@ fn trace_holds(old: &Drawing, now: &Drawing) -> bool {
 }
 
 impl TraceCache {
-    fn get(&self, d: &std::sync::Arc<Drawing>, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>) -> Option<std::sync::Arc<Vec<FoundRoom>>> {
+    fn get(&self, d: &std::sync::Arc<Drawing>, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>) -> Option<std::sync::Arc<RoomTrace>> {
         let same_ask = |t: &&Trace| t.space == *space && t.regions.as_deref() == regions;
         let exact = self.traces.iter().filter(same_ask).find(|t| std::ptr::eq(t.state.as_ptr(), std::sync::Arc::as_ptr(d)));
         // In paper space only the very same state: its objects are a layout's, not compared here.
@@ -2070,7 +2086,7 @@ impl TraceCache {
             || self.traces.iter().filter(same_ask).filter(|_| !space.is_paper()).find(|t| t.state.upgrade().is_some_and(|old| trace_holds(&old, d)));
         exact.or_else(holds).map(|t| std::sync::Arc::clone(&t.rooms))
     }
-    fn put(&mut self, d: &std::sync::Arc<Drawing>, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, rooms: std::sync::Arc<Vec<FoundRoom>>) {
+    fn put(&mut self, d: &std::sync::Arc<Drawing>, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, rooms: std::sync::Arc<RoomTrace>) {
         // States nothing holds any more can't be asked about again.
         self.traces.retain(|t| t.state.strong_count() > 0);
         if self.traces.len() >= TRACES_KEPT {
@@ -2079,14 +2095,14 @@ impl TraceCache {
         self.traces.push(Trace { state: std::sync::Arc::downgrade(d), space, regions: regions.map(<[_]>::to_vec), rooms });
     }
     /// The rooms last traced from these inputs (in this space and regions).
-    fn by_inputs(&self, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: &TraceInputs) -> Option<std::sync::Arc<Vec<FoundRoom>>> {
+    fn by_inputs(&self, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: &TraceInputs) -> Option<std::sync::Arc<RoomTrace>> {
         self.by_inputs
             .iter()
             .rev()
             .find(|(sp, rs, i, _)| sp == space && rs.as_deref() == regions && i.same_as(inputs))
             .map(|(.., rooms)| std::sync::Arc::clone(rooms))
     }
-    fn put_inputs(&mut self, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: TraceInputs, rooms: std::sync::Arc<Vec<FoundRoom>>) {
+    fn put_inputs(&mut self, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: TraceInputs, rooms: std::sync::Arc<RoomTrace>) {
         self.traced += 1;
         // An edit and its undo (a wall moved and moved back) each find their plan's trace.
         if self.by_inputs.len() >= INPUT_TRACES_KEPT {
@@ -2109,31 +2125,36 @@ impl TraceCache {
 /// [`trace_rooms_in`], read from the drawing state's remembered trace when there is one
 /// ([`TraceCache`]).
 pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
+    Ok(room_trace_in(s, regions)?.rooms.clone())
+}
+
+/// [`rooms_found_in`] with the names whose search stopped at its reach ([`RoomTrace`]).
+pub(crate) fn room_trace_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<std::sync::Arc<RoomTrace>> {
     let space = s.space();
     let state = std::sync::Arc::clone(&s.state()?.doc);
-    if let Some(rooms) = s.state()?.room_trace.get(&state, &space, regions) {
-        return Ok(rooms.as_ref().clone());
+    if let Some(trace) = s.state()?.room_trace.get(&state, &space, regions) {
+        return Ok(trace);
     }
-    let rooms = trace_rooms_in(s, regions)?;
+    let trace = std::sync::Arc::new(trace_rooms_in(s, regions)?);
     // Traced in the state it was asked in (the trace changes nothing): remembered for it.
     if let Ok(st) = s.state_mut()
         && std::sync::Arc::ptr_eq(&st.doc, &state)
     {
-        st.room_trace.put(&state, space, regions, std::sync::Arc::new(rooms.clone()));
+        st.room_trace.put(&state, space, regions, std::sync::Arc::clone(&trace));
     }
-    Ok(rooms)
+    Ok(trace)
 }
 
 /// The rooms around the plan's name labels, traced.
-fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
+fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomTrace> {
     // Several sheets: each traced on its own objects. A room left open on one (a doorway the
     // print draws no leaf across) widens its search window to the plan's extents: those of the
     // one sheet, not of every sheet side by side (where one open room searched them all).
     if let Some(rs) = regions.filter(|r| r.len() > 1) {
         let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
-        let mut out: Vec<FoundRoom> = Vec::new();
+        let mut out = RoomTrace::default();
         for (i, r) in rs.iter().enumerate() {
-            if out.len() >= MAX_ROOMS_ALL_REGIONS {
+            if out.rooms.len() >= MAX_ROOMS_ALL_REGIONS {
                 break;
             }
             // A label is its first region's (as one trace of them all took it).
@@ -2142,9 +2163,10 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
                 continue;
             }
             let found = trace_rooms_in(s, Some(std::slice::from_ref(r)))?;
-            out.extend(found.into_iter().filter(|f| !earlier.iter().any(|e| inside(e, f.at))));
+            out.rooms.extend(found.rooms.into_iter().filter(|f| !earlier.iter().any(|e| inside(e, f.at))));
+            out.beyond_reach.extend(found.beyond_reach.into_iter().filter(|(_, at, _)| !earlier.iter().any(|e| inside(e, *at))));
         }
-        out.truncate(MAX_ROOMS_ALL_REGIONS);
+        out.rooms.truncate(MAX_ROOMS_ALL_REGIONS);
         return Ok(out);
     }
     // A slow phase (over 2 s) goes to the job's progress lines: which one held a long trace up.
@@ -2276,9 +2298,15 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     // of the set's sheet numbers is no room's.
     let mut sheet_numbers: std::collections::BTreeSet<String> =
         spec.as_ref().map(|sp| sp.sheets.iter().map(|x| x.number.trim().to_ascii_uppercase()).collect()).unwrap_or_default();
+    // The plans a name may be on (its trace looks across the largest holding it): the trace's
+    // regions, the job's sheets, the spec's level plans.
+    let mut footprints: Vec<[f64; 4]> = regions.map(<[_]>::to_vec).unwrap_or_default();
     if let Ok(Some(job)) = crate::cmd::guided::load_job(s) {
         sheet_numbers.extend(job.sheet_regions.iter().map(|r| r.number.split('/').next().unwrap_or(&r.number).trim().to_ascii_uppercase()));
+        footprints.extend(job.sheet_regions.iter().map(crate::cmd::guided::SheetRegion::plan_rect));
     }
+    footprints.extend(spec.iter().flat_map(|sp| sp.levels.iter().filter_map(|l| l.region)));
+    footprints.retain(|r| r.iter().all(|v| v.is_finite()));
     let mut numbers: Vec<Label> =
         all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase())).cloned().collect();
     numbers.extend(tag_numbers);
@@ -2359,6 +2387,21 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         Some(t)
     };
     let plan = plan.as_ref().unwrap_or(s);
+    // How far each name's trace looks: across the largest plan holding it, else the whole plan
+    // traced; at least [`ROOM_REACH_FT`].
+    let plan_ext = plan.doc()?.extents(&plan.space());
+    let least_reach = ROOM_REACH_FT * 12.0 * k;
+    let reach_at = |p: Vec2| {
+        let span = footprints
+            .iter()
+            .filter(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]))
+            .map(|r| (r[2] - r[0]).abs().max((r[3] - r[1]).abs()))
+            .max_by(f64::total_cmp)
+            .unwrap_or_else(|| plan_ext.width().max(plan_ext.height()));
+        let reach = span * REACH_PLAN_SHARE;
+        if reach.is_finite() && reach > least_reach { reach } else { least_reach }
+    };
+    let mut beyond_reach: Vec<(String, Vec2, f64)> = Vec::new();
     let mut out: Vec<FoundRoom> = Vec::new();
     // Rooms whose only number inside is another size than their name (taken when no tag is near).
     let mut any_size: Vec<(usize, String)> = Vec::new();
@@ -2371,8 +2414,16 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     // A storey of a full set has thousands of names: say how far the trace is.
     let (total, trace_started) = (names.len(), web_time::Instant::now());
     let mut searching = std::time::Duration::ZERO;
-    for (traced, (h, name, at, height, _)) in names.into_iter().enumerate() {
-        if traced > 0 && traced % TRACE_PROGRESS_EVERY == 0 {
+    // Where each name is: a widened search's outline holding another name no room took is no
+    // one room (the floor left over round rooms that don't close, shared by their names).
+    let spots: Vec<(cadaddy_doc::Handle, Vec2)> = names.iter().map(|l| (l.0, l.2)).collect();
+    // Each name is traced within the least reach first; one whose search stopped there with no
+    // room is traced again across its whole plan after every other name took its room (a wider
+    // window finds the floor left over round rooms that don't close: no name takes it first).
+    let mut queue: std::collections::VecDeque<(Label, bool)> = names.into_iter().map(|l| (l, false)).collect();
+    let mut traced = 0usize;
+    while let Some(((h, name, at, height, tag), widened)) = queue.pop_front() {
+        if traced > 0 && traced.is_multiple_of(TRACE_PROGRESS_EVERY) {
             crate::cmd::guided::progress_line(&format!(
                 "  room trace: {traced} of {total} names, {} rooms, {:.0} s ({:.0} s finding boundaries)",
                 out.len(),
@@ -2380,6 +2431,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
                 searching.as_secs_f64()
             ));
         }
+        traced += 1;
         // The room around the label: the first outline, traced from the label's point, its middle,
         // just above or below it or just outside its box, that holds the whole label (a piece of furniture drawn under
         // the label - a mirrored unit's desk - traces a loop the label overhangs); else, as
@@ -2408,11 +2460,23 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         // Whether a loop holding its whole box took it for a note (below): no room is traced
         // round it then either.
         let mut note = false;
-        for (i, seed) in seeds.into_iter().enumerate() {
+        let reach = if widened { reach_at(at) } else { least_reach };
+        // Whether a search stopped at its reach (what lies farther was never searched).
+        let mut capped = false;
+        // Widened, from the name's point and middle only: the seeds round it found what is near
+        // it (the furniture it is printed on) within the least reach already.
+        let seeds = if widened { seeds.get(..WIDENED_SEEDS).unwrap_or(&seeds) } else { seeds.as_slice() };
+        for (i, seed) in seeds.iter().copied().enumerate() {
             let search = web_time::Instant::now();
-            let found = crate::cmd::hatch::loops_at_lazy_within(plan, seed, &mut outline_cache, Some(ROOM_REACH_FT * 12.0 * k));
+            let found = crate::cmd::hatch::loops_at_lazy_within(plan, seed, &mut outline_cache, Some(reach));
             searching += search.elapsed();
-            let Ok(loops) = found else { continue };
+            let loops = match found {
+                Ok(loops) => loops,
+                Err(e) => {
+                    capped |= crate::cmd::hatch::beyond_reach(&e);
+                    continue;
+                }
+            };
             let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
             let poly = polygon(outer);
             if poly.len() < 3 {
@@ -2459,18 +2523,31 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         let (poly, area, probed) = match holds.or(first) {
             Some((poly, area)) if area >= least => (poly, area, false),
             _ if note => continue,
+            _ if widened => {
+                if capped {
+                    beyond_reach.push((name, at, reach));
+                }
+                continue;
+            }
             _ => {
                 let search = web_time::Instant::now();
-                let found = crate::cmd::bspec::outline_round_label_within(plan, at, &mut outline_cache, least, Some(ROOM_REACH_FT * 12.0 * k));
+                let found = crate::cmd::bspec::outline_round_label_within(plan, at, &mut outline_cache, least, Some(reach), &mut capped);
                 searching += search.elapsed();
-                let Some(p) = found else { continue };
-                if p.len() < 3 {
+                let Some((p, area)) = found
+                    .filter(|p| p.len() >= 3)
+                    .map(|p| {
+                        let area = cadaddy_geom::shoelace(&p).abs();
+                        (p, area)
+                    })
+                    .filter(|(_, area)| *area >= min_area)
+                else {
+                    if capped && !widened && reach_at(at) > least_reach {
+                        queue.push_back(((h, name, at, height, tag), true));
+                    } else if capped {
+                        beyond_reach.push((name, at, reach));
+                    }
                     continue;
-                }
-                let area = cadaddy_geom::shoelace(&p).abs();
-                if area < min_area {
-                    continue;
-                }
+                };
                 (p, area, true)
             }
         };
@@ -2478,6 +2555,14 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         // outline. A loop beside the tag (cut along a line through the tags, under the tag's
         // box) is another space's.
         if !holds_label(&poly, at, &corners, th) {
+            continue;
+        }
+        if widened
+            && spots.iter().any(|(sh, q)| {
+                *sh != h && cadaddy_geom::point_in_polygon(&poly, *q) && !out.iter().any(|r| cadaddy_geom::point_in_polygon(&r.outline, *q))
+            })
+        {
+            beyond_reach.push((name, at, reach));
             continue;
         }
         // One room per outline: a second label in the same room is its number or a note.
@@ -2548,11 +2633,22 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         }
     }
     phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name, {frames} sheet borders or view frames left out)", out.len()));
+    if !beyond_reach.is_empty() {
+        let shown: Vec<&str> = beyond_reach.iter().take(5).map(|(n, ..)| n.as_str()).collect();
+        let most = beyond_reach.iter().map(|(.., r)| *r).fold(0.0, f64::max) / (12.0 * k);
+        crate::cmd::guided::progress_line(&format!(
+            "  room trace: {} names closed no room within their reach (up to {most:.0} ft each way), not searched farther: {}{}",
+            beyond_reach.len(),
+            shown.join(", "),
+            if beyond_reach.len() > shown.len() { ", ..." } else { "" }
+        ));
+    }
+    let trace = RoomTrace { rooms: out, beyond_reach };
     let space = s.space();
     if let Ok(st) = s.state_mut() {
-        st.room_trace.put_inputs(space, regions, inputs, std::sync::Arc::new(out.clone()));
+        st.room_trace.put_inputs(space, regions, inputs, std::sync::Arc::new(trace.clone()));
     }
-    Ok(out)
+    Ok(trace)
 }
 
 /// Each room traced without a number takes the number tag nearest its name that no room has (in
@@ -2609,8 +2705,10 @@ fn number_from_nearest_tag(rooms: &mut [FoundRoom], numbers: &[Label], regions: 
 
 pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
     let with_outline = bool_or(p, "outline", true);
-    let items: Vec<Value> = rooms_found(s)?
-        .into_iter()
+    let trace = room_trace_in(s, None)?;
+    let items: Vec<Value> = trace
+        .rooms
+        .iter()
         .map(|r| {
             let mut v = json!({
                 "name": r.name, "number": r.number, "at": pt(r.at), "area": round(r.area), "perimeter": round(r.perimeter),
@@ -2623,8 +2721,22 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
             v
         })
         .collect();
-    Ok(page(items, p))
+    let mut out = page(items, p);
+    if !trace.beyond_reach.is_empty() {
+        out["beyondReach"] = beyond_reach_json(&trace.beyond_reach, units_per_inch(s.doc()?));
+    }
+    Ok(out)
 }
+
+/// The names a room trace stopped at its reach for ([`RoomTrace::beyond_reach`]): name, where,
+/// and the reach in feet. At most [`BEYOND_REACH_LISTED`].
+pub(crate) fn beyond_reach_json(beyond: &[(String, Vec2, f64)], k: f64) -> Value {
+    let ft = 12.0 * k;
+    json!(beyond.iter().take(BEYOND_REACH_LISTED).map(|(n, at, r)| json!({"name": n, "at": pt(*at), "reachFt": round(*r / ft)})).collect::<Vec<_>>())
+}
+
+/// Names listed at most in an answer's `beyondReach`.
+const BEYOND_REACH_LISTED: usize = 200;
 
 #[cfg(test)]
 mod tests {
@@ -3312,5 +3424,112 @@ mod tests {
         };
         assert_eq!(key(&again), key(&traced_afresh));
         assert_eq!(key(&again), key(&first));
+    }
+
+    /// A room `w` × `h` inches from the origin with its name at the centre, inside a sheet's
+    /// border 100 ft off each side, in a new imperial drawing.
+    fn bordered_room(w: f64, h: f64, name: &str) -> Session {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        s.execute("pline", &json!({"vertices": [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]], "closed": true})).unwrap();
+        s.execute(
+            "pline",
+            &json!({"vertices": [[-1200.0, -1200.0], [w + 1200.0, -1200.0], [w + 1200.0, h + 1200.0], [-1200.0, h + 1200.0]], "closed": true}),
+        )
+        .unwrap();
+        s.execute("text", &json!({"at": [w / 2.0, h / 2.0], "text": name, "height": 12})).unwrap();
+        s
+    }
+
+    /// A room wider than any fixed reach (a 400 × 250 ft open floor, its far walls 200 ft from its
+    /// name) is still traced: the reach is the plan's own size, and the last window searched is
+    /// the reach itself, not the last doubling short of it. A 100 × 80 ft room is traced too.
+    #[test]
+    fn a_room_wider_than_a_fixed_reach_is_still_traced() {
+        for (w, h) in [(4800.0, 3000.0), (1200.0, 960.0), (9600.0, 1200.0)] {
+            let mut s = bordered_room(w, h, "WAREHOUSE");
+            let rooms = rooms_found(&mut s).unwrap();
+            assert_eq!(rooms.len(), 1, "{w} x {h}: {rooms:?}");
+            let r = &rooms[0];
+            assert!((r.area - w * h).abs() < 1e-3 * w * h, "{w} x {h}: the room, not the border: {}", r.area);
+        }
+    }
+
+    /// A plan whose extents are vast (a stray object far off, 300,000 ft away) still traces its
+    /// rooms: the first window is never wider than the reach, so it is searched.
+    #[test]
+    fn rooms_are_traced_on_a_plan_with_vast_extents() {
+        let mut s = one_room(true);
+        s.execute("line", &json!({"points": [[3.6e6, 3.6e6], [3.6e6 + 12.0, 3.6e6]]})).unwrap();
+        let rooms = rooms_found(&mut s).unwrap();
+        assert_eq!(rooms.len(), 1, "{rooms:?}");
+        assert!((rooms[0].area - 14400.0).abs() < 1.0, "{}", rooms[0].area);
+    }
+
+    /// Two level plans side by side, 10,000 ft apart (a set's sheets): a name in a 400 × 250 ft
+    /// area left open on the first looks across its own plan, no farther, and is reported as not
+    /// searched farther (in the trace, `plan.rooms` and `rooms.list`); the closed room on the
+    /// second plan is traced.
+    #[test]
+    fn a_name_whose_trace_stops_at_its_plan_is_reported() {
+        let mut s = Session::new();
+        let layer = |s: &mut Session, name: &str| s.execute("layer.new", &json!({"name": name, "current": true})).unwrap();
+        layer(&mut s, "A-WALL");
+        // its walls' two faces, open on the south between x = 2600 and 4000
+        s.execute("pline", &json!({"vertices": [[2600.0, 0.0], [0.0, 0.0], [0.0, 3000.0], [4800.0, 3000.0], [4800.0, 0.0], [4000.0, 0.0]]})).unwrap();
+        s.execute("pline", &json!({"vertices": [[2600.0, 6.0], [6.0, 6.0], [6.0, 2994.0], [4794.0, 2994.0], [4794.0, 6.0], [4000.0, 6.0]]})).unwrap();
+        let x = 120_000.0;
+        s.execute("pline", &json!({"vertices": [[x, 0.0], [x + 1200.0, 0.0], [x + 1200.0, 960.0], [x, 960.0]], "closed": true})).unwrap();
+        s.execute("pline", &json!({"vertices": [[x + 6.0, 6.0], [x + 1194.0, 6.0], [x + 1194.0, 954.0], [x + 6.0, 954.0]], "closed": true})).unwrap();
+        layer(&mut s, "A-ROOM-TAG");
+        s.execute("text", &json!({"at": [2400, 1500], "text": "WAREHOUSE", "height": 12})).unwrap();
+        s.execute("text", &json!({"at": [x + 500.0, 480.0], "text": "OFFICE", "height": 12})).unwrap();
+        let spec = json!({
+            "version": 1,
+            "units_per_foot": 12,
+            "levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 20, "ceiling_ft": 18, "region": [-1200, -1200, 6000, 4200], "base": [0, 0]},
+                {"name": "L2", "elevation_ft": 20, "height_ft": 12, "ceiling_ft": 9, "region": [x - 1200.0, -1200, x + 2400.0, 2200], "base": [x, 0]}
+            ],
+            "layers": [
+                {"layer": "A-WALL", "role": "wall", "wall_type": "Wall"},
+                {"layer": "A-ROOM-TAG", "role": "room_tag"}
+            ],
+            "wall_types": [{"name": "Wall", "thickness_in": 6, "from": "pairs"}]
+        });
+        s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap();
+        let trace = room_trace_in(&mut s, None).unwrap();
+        let names: Vec<&str> = trace.rooms.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["OFFICE"], "{trace:?}");
+        let [(name, at, reach)] = trace.beyond_reach.as_slice() else { panic!("{trace:?}") };
+        assert_eq!(name, "WAREHOUSE");
+        assert!(at.dist(Vec2::new(2400.0, 1500.0)) < 1.0, "{at:?}");
+        // across its own plan (7,200" by 5,400"), short of the other one
+        assert!(*reach >= 7200.0 && *reach < 8000.0, "{reach}");
+        let answer = s.execute("plan.rooms", &json!({"outline": false})).unwrap();
+        assert_eq!(answer["beyondReach"][0]["name"], "WAREHOUSE", "{answer}");
+        assert_eq!(answer["beyondReach"][0]["reachFt"].as_f64().map(f64::round), Some(612.0), "{answer}");
+        let listed = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+        assert_eq!(listed["count"], 1, "{listed}");
+        assert_eq!(listed["beyondReachCount"], 1, "{listed}");
+        assert_eq!(listed["beyondReach"][0]["name"], "WAREHOUSE", "{listed}");
+    }
+
+    /// The floor left over round rooms (a 400 × 250 ft outline, a closed office in it, two names
+    /// whose rooms don't close) is no one room: the office is traced, and the two names, each
+    /// seeing the other in the outline a widened search finds, are reported instead of either
+    /// taking the whole floor.
+    #[test]
+    fn the_floor_left_over_round_rooms_is_no_one_room() {
+        let mut s = bordered_room(4800.0, 3000.0, "LOBBY");
+        s.execute("pline", &json!({"vertices": [[600, 600], [840, 600], [840, 840], [600, 840]], "closed": true})).unwrap();
+        s.execute("text", &json!({"at": [660, 720], "text": "OFFICE", "height": 12})).unwrap();
+        s.execute("text", &json!({"at": [3600, 600], "text": "CORRIDOR", "height": 12})).unwrap();
+        let trace = room_trace_in(&mut s, None).unwrap();
+        let names: Vec<&str> = trace.rooms.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["OFFICE"], "{trace:?}");
+        let mut reported: Vec<&str> = trace.beyond_reach.iter().map(|(n, ..)| n.as_str()).collect();
+        reported.sort_unstable();
+        assert_eq!(reported, ["CORRIDOR", "LOBBY"], "{trace:?}");
     }
 }
