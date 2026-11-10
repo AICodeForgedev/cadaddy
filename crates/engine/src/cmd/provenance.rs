@@ -206,12 +206,17 @@ pub(crate) fn set_run(r: &mut MepRun, made: Made, basis: impl Into<String>) {
 /// A run's corrections ([`MepRun::corrections`]) into the properties of the piece built from it
 /// (its build tags `x`): each value as installed, the design value beside it ([`correct`]).
 pub(crate) fn with_run_corrections(x: Vec<RawTag>, r: &MepRun) -> Vec<RawTag> {
-    if r.corrections.is_empty() {
+    with_corrections(x, &r.corrections)
+}
+
+/// [`with_run_corrections`] for any spec element's corrections (a terminal's, equipment's).
+pub(crate) fn with_corrections(x: Vec<RawTag>, list: &[cadaddy_walk3d::RunCorrection]) -> Vec<RawTag> {
+    if list.is_empty() {
         return x;
     }
     let mut ps = props::read(&x);
     let mut changed = false;
-    for c in r.corrections.iter().take(MAX_RUN_CORRECTIONS) {
+    for c in list.iter().take(MAX_RUN_CORRECTIONS) {
         let c = Correction {
             key: c.key.clone(),
             design: c.design.clone(),
