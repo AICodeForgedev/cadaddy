@@ -560,7 +560,7 @@ fn read_ckt(
         .iter()
         .filter(|t| {
             let u = t.value.trim().to_ascii_uppercase();
-            (headings.contains(&u.as_str()) || cut_short_circuit_heading(t, &headings, flat))
+            (headings.contains(&u.as_str()) || cut_short_circuit_heading(t, headings, flat))
                 && t.at.y < title.at.y
                 && t.at.y > title.at.y - HEADER_REACH * h
                 && (t.at.x - title.at.x).abs() < 80.0 * h
