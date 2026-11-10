@@ -755,6 +755,7 @@ pub fn rule_size(kind: &str) -> [f64; 3] {
         "ptac" => [3.5, 1.25, 1.33],
         "vav" => [2.5, 1.5, 1.25],
         "exhaust_fan" | "fan" => [2.0, 2.0, 2.5],
+        "relief_hood" => [2.5, 3.0, 1.5],
         "pump" => [1.0, 0.5, 0.5],
         "water_heater" => [2.0, 2.0, 5.0],
         "condensing_unit" => [3.0, 3.0, 3.0],

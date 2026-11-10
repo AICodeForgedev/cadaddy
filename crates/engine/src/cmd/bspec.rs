@@ -33,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {spec, stored: bool (false: drafted from the walk rules — <drawing>.walk.json, the last WALLGEN, else the defaults), parts: [{section, key, text (plain language), approved, guess?: why it was guessed}], built: bool}")
             .noundo(),
         CommandSpec::new("bspec.set", "Set Building Spec", run_set).params(
-            "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layers by layer, {\"remove\": true} removes one), replace?: bool} → {spec, errors, warnings}",
+            "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layer roles by layer, {\"remove\": true} removes one; a build-up list (an assembly's or a ceiling type's layers) is replaced whole, never appended to), replace?: bool} → {spec, errors, warnings}",
         ),
         CommandSpec::new("bspec.validate", "Validate Building Spec", run_validate)
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
@@ -2348,7 +2348,18 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         ));
     }
     s.event("build.progress", json!({"step": "walls", "detail": "building walls per level"}));
-    let mut r = wallgen::build_with_progress(s, g, &deadline)?;
+    // The ceilings the spec gives the traced rooms: a wall built to the ceiling stops at them.
+    let ceilings: Vec<wallgen::RoomCeiling> = rooms
+        .iter()
+        .filter_map(|t| {
+            let room = t.room.and_then(|i| sp.rooms.get(i))?;
+            let ceiling_ft = room.ceiling_ft.filter(|c| c.is_finite() && *c > 0.0)?;
+            let name = room.number.as_deref().filter(|n| !n.trim().is_empty()).unwrap_or(&room.name);
+            let source = room.ceiling_source.clone().unwrap_or_else(|| format!("room {name}'s ceiling"));
+            Some(wallgen::RoomCeiling { level: t.level.clone(), outline: t.outline.clone(), area: t.cached_area, ceiling_ft, source })
+        })
+        .collect();
+    let mut r = wallgen::build_with_progress(s, g, &deadline, &ceilings)?;
     build_step(s, "walls built", build_start);
     let wall_ms = build_start.elapsed().as_millis();
     s.event("build.progress", json!({"step": "walls_done", "ms": wall_ms, "walls": r["walls"]}));

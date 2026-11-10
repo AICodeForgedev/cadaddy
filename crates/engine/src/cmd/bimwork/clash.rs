@@ -6,6 +6,11 @@
 //! whose box, grown by the clearance, reaches the other's faces is a clearance clash. Touching
 //! faces are not clashes. Parts of one MEP system don't clash with each other (they join), nor do
 //! hosted elements with their hosts (devices, doors and windows in walls).
+//!
+//! The framing trade's members (studs, joists, I-joists, trusses, rim boards, headers; Q6504) are
+//! tested against the MEP that crosses them, each hit judged by the member's hole rules
+//! ([`super::framing`]): an allowed bored hole is listed in `bores`, a conflict is a clash with
+//! its `framing` verdict (why, the rule and its source).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,15 +18,29 @@ use cadaddy_doc::{Drawing, EntityKind, Handle};
 use cadaddy_geom::{Mat4, Vec3};
 use serde_json::{Value, json};
 
+use super::framing;
 use super::{El, elements, frame, picks, r3, selector, set_state, state, units_per_foot, viewpoint};
 use crate::cmd::{CommandSpec, bad, bool_or, str_param};
 use crate::{Result, Session};
 
 /// The model's elements that take up room: not its rooms (spaces, Q5291), which every element
-/// inside them would clash with, nor the trades' pieces (Q6162: studs, sheets, bars), which are
-/// the inside of the walls and slabs that clash for them.
+/// inside them would clash with, nor the trades' pieces (Q6162: sheets, bars, plates), which are
+/// the inside of the walls and slabs that clash for them; but the framing's members (Q6504:
+/// studs, joists, trusses), named by their kind (`joist`), the MEP is tested against.
 fn solid_elements(d: &Drawing) -> Vec<El> {
-    elements(d).into_iter().filter(|e| e.category != "room" && !e.category.starts_with("piece:")).collect()
+    elements(d)
+        .into_iter()
+        .filter_map(|mut e| {
+            if e.category == "room" {
+                return None;
+            }
+            if let Some(kind) = e.category.strip_prefix("piece:") {
+                e.category = kind.to_string();
+                return framing::is_member(&e).then_some(e);
+            }
+            Some(e)
+        })
+        .collect()
 }
 
 const CMD: &str = "bim.clash";
@@ -39,7 +58,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Clash Check", run)
             .alias(&["clash"])
-            .params("{a?: trade|category|system (or a list; e.g. electrical, duct, \"M-*\"; default every trade against the others), b?: same (default everything else), tolerance?: inches (overlaps up to it ignored, default 0.5), clearance?: inches (also report elements closer than it), group_by?: pair|area|level (default pair), hosted?: bool (devices/doors/windows in walls too; default false)} → {clashes: [{id, kind: hard|clearance, status: new|active|resolved, a, b, level, area, at, depth_in, viewpoint: {eye, target}}], groups: [{key, count, ids}], total, new, active, resolved: [ids gone since the last run], tested, run}")
+            .params("{a?: trade|category|system (or a list; e.g. electrical, duct, \"M-*\"; default every trade against the others), b?: same (default everything else), tolerance?: inches (overlaps up to it ignored, default 0.5), clearance?: inches (also report elements closer than it), group_by?: pair|area|level (default pair), hosted?: bool (devices/doors/windows in walls too; default false)} → {clashes: [{id, kind: hard|clearance, status: new|active|resolved, a, b, level, area, at, depth_in, viewpoint: {eye, target}, framing?: {verdict: conflict, why, rule, source, hole_in, max_hole_in, from_end_ft, member}}], groups: [{key, count, ids}], total, new, active, resolved: [ids gone since the last run], tested, run, framing: {members, tested, hits, allowed, conflicts, note?}, bores: [the MEP through framing members (studs, joists, I-joists, trusses: `framing`, `joists`, `structure`) by the member's hole rules: {verdict: allowed, why, rule, source, hole_in, max_hole_in, a, b, member, level, at}]}")
             .noundo(),
         CommandSpec::new(CMD_STATUS, "Clash Status", run_status).params("{id, status: new|active|resolved, note?} → {id, status}").noundo(),
         CommandSpec::new(CMD_FIX, "Fix Clash", run_fix)
@@ -222,6 +241,14 @@ fn exempt(a: &El, b: &El, hosted: bool) -> bool {
     if mep(a) && mep(b) && !a.system.is_empty() && a.system == b.system {
         return true;
     }
+    // A framing member meets only the MEP that crosses it: the building's own parts meet it at
+    // their joints (studs in their walls, joists under their floors), and a device or a box set
+    // in a wall is fixed to the stud beside it.
+    let (fa, fb) = (framing::is_member(a), framing::is_member(b));
+    if fa || fb {
+        let other = if fa { b } else { a };
+        return (fa && fb) || !framing::crosses(other, hosted);
+    }
     if hosted {
         return false;
     }
@@ -249,8 +276,9 @@ struct Found {
     depth: f64,
 }
 
-/// Every clash between the elements `a` picks and those `b` picks.
-fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f64, clearance: f64, hosted: bool) -> (Vec<Found>, usize) {
+/// Every clash between the elements `a` picks and those `b` picks; the pairs tested, and of them
+/// those with a framing member.
+fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f64, clearance: f64, hosted: bool) -> (Vec<Found>, usize, usize) {
     // Everything with nothing named against it: each trade against the others.
     let cross = sb.is_none() && sa.iter().any(|x| matches!(x.trim(), "*" | "all" | "any"));
     let in_a: Vec<bool> = els.iter().map(|e| picks(sa, e)).collect();
@@ -267,6 +295,7 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
     let mut run_pairs: BTreeMap<String, usize> = BTreeMap::new();
     let mut cache: BTreeMap<Handle, (Vec<Tri>, bool)> = BTreeMap::new();
     let mut tested = 0usize;
+    let mut tested_framing = 0usize;
     let mut active: Vec<usize> = Vec::new();
     for &i in &order {
         let Some(e) = els.get(i) else { continue };
@@ -281,6 +310,9 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
             tested += 1;
             if tested > MAX_PAIRS || out.len() >= MAX_CLASHES {
                 break;
+            }
+            if framing::is_member(e) || framing::is_member(o) {
+                tested_framing += 1;
             }
             let id = clash_id(e.handle, o.handle);
             if seen.contains(&id) {
@@ -319,7 +351,48 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
         }
         active.push(i);
     }
-    (out, tested)
+    (out, tested, tested_framing)
+}
+
+/// What the framing check needs: the members' hole rules, the router's I-joist and truss rules,
+/// the wall types' bearing, and inches in drawing units.
+struct FramingCtx {
+    bearing: BTreeMap<String, Option<bool>>,
+    inch: f64,
+}
+
+impl FramingCtx {
+    fn of(s: &Session, inch: f64) -> FramingCtx {
+        let bearing = crate::cmd::bspec::current(s, CMD).map(|(sp, _)| framing::wall_bearing(&sp)).unwrap_or_default();
+        FramingCtx { bearing, inch }
+    }
+
+    /// The member and the element crossing it, when the pair is a framing hit to judge: a framing
+    /// member (or a header, beam or column) and the MEP through it.
+    fn pair<'a>(&self, a: &'a El, b: &'a El) -> Option<(&'a El, &'a El)> {
+        let judged = |m: &El, r: &El| (framing::is_member(m) || framing::no_holes(m)) && framing::crosses(r, true);
+        if judged(a, b) {
+            Some((a, b))
+        } else if judged(b, a) {
+            Some((b, a))
+        } else {
+            None
+        }
+    }
+
+    /// The verdict on `r` (moved by `shift`) through member `m`.
+    fn judge(&self, d: &Drawing, m: &El, r: &El, shift: Vec3) -> (framing::Member, framing::Verdict) {
+        let mem = framing::member(d, m, &self.bearing);
+        let v = framing::judge(
+            &mem,
+            &framing::axes(d, m),
+            &r.category,
+            &framing::axes(d, r).shifted(shift),
+            self.inch,
+            &crate::cmd::conduitroute::rules().framing,
+        );
+        (mem, v)
+    }
 }
 
 /// `a` and `b`; no `a`: every trade against the others.
@@ -357,6 +430,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "`group_by` is pair, area or level"));
     }
     let hosted = bool_or(p, "hosted", false);
+    let fctx = FramingCtx::of(s, inch);
     let d = s.doc()?;
     let els = solid_elements(d);
     if els.is_empty() {
@@ -364,7 +438,37 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             "bim.clash: the drawing has no built model to check: build it first (model.build or bim.build)".into(),
         ));
     }
-    let (found, tested) = detect(d, &els, &sa, sb.as_deref(), tol, clearance, hosted);
+    let (found, tested, tested_framing) = detect(d, &els, &sa, sb.as_deref(), tol, clearance, hosted);
+    // The framing hits, judged by the member's hole rules: an allowed bore is not a clash; a
+    // member a run only comes near (hung from it, strapped to it) is no clash either.
+    let members = els.iter().filter(|e| framing::is_member(e)).count();
+    let (mut bores, mut n_allowed) = (Vec::new(), 0usize);
+    let mut verdicts: BTreeMap<String, Value> = BTreeMap::new();
+    let found: Vec<Found> = found
+        .into_iter()
+        .filter_map(|f| {
+            let Some((m, r)) = fctx.pair(&f.a, &f.b) else { return Some(f) };
+            if !f.hard {
+                return if framing::is_member(m) { None } else { Some(f) };
+            }
+            let (mem, v) = fctx.judge(d, m, r, Vec3::ZERO);
+            let mut j = v.json();
+            j["member"] = mem.json();
+            if !v.allowed {
+                verdicts.insert(f.id.clone(), j);
+                return Some(f);
+            }
+            n_allowed += 1;
+            if bores.len() < MAX_CLASHES {
+                j["a"] = r.json();
+                j["b"] = m.json();
+                j["level"] = json!(if m.level.is_empty() { r.level.clone() } else { m.level.clone() });
+                j["at"] = json!([r3(v.at.x), r3(v.at.y), r3(v.at.z)]);
+                bores.push(j);
+            }
+            None
+        })
+        .collect();
     // Against the last run of the same check.
     let key = run_key(&sa, sb.as_deref());
     let st = state(d);
@@ -402,6 +506,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if !note.is_empty() {
             c["note"] = json!(note);
         }
+        if let Some(v) = verdicts.get(&f.id) {
+            c["message"] = json!(format!("{} {} {}: {}", f.a.category, "runs into", f.b.category, v["why"].as_str().unwrap_or_default()));
+            c["framing"] = v.clone();
+        }
         items.insert(
             f.id.clone(),
             json!({"status": status, "first_run": first, "seen_run": run_no, "note": note, "a": f.a.handle.hex(), "b": f.b.handle.hex(), "hard": f.hard, "level": level}),
@@ -435,9 +543,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut runs = st["clash"]["runs"].as_object().cloned().unwrap_or_default();
     runs.insert(key.clone(), json!({"run": run_no, "a": sa, "b": sb, "items": items}));
     set_state(s, "clash", json!({"runs": runs, "last": key}))?;
+    let mut fr = json!({
+        "members": members, "tested": tested_framing, "hits": n_allowed + verdicts.len(), "allowed": n_allowed, "conflicts": verdicts.len(),
+        "rules": "framing.json (sawn joists, rim boards, studs, headers and beams) and conduitroute.json framing (I-joist webs, truss chords)",
+    });
+    if members == 0 {
+        fr["note"] = json!(
+            "the model has no framing members to test: no framing pieces are built (model.build and bim.atoms.build lay the studs, joists and trusses out from the wall types and the framing documents)"
+        );
+    }
     Ok(json!({
         "clashes": clashes, "groups": groups, "total": found.len(), "new": n_new, "active": n_active, "resolved": resolved,
         "tested": tested, "elements": els.len(), "run": run_no, "a": sa, "b": sb.unwrap_or_else(|| vec!["everything else".into()]),
+        "framing": fr, "bores": bores,
     }))
 }
 
@@ -506,6 +624,7 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let upf = units_per_foot(s);
     let inch = upf / 12.0;
+    let fctx = FramingCtx::of(s, inch);
     let clr = p.get("clearance_in").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(1.0).min(120.0) * inch;
     let max_move = p.get("max_move_in").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(24.0).min(1_200.0) * inch;
     let d = s.doc()?;
@@ -551,7 +670,22 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
         "offset" => vec![("offset", side(side_pos)), ("offset", side(side_neg))],
         _ => vec![("raise", Vec3::new(0.0, 0.0, up)), ("drop", Vec3::new(0.0, 0.0, down)), ("offset", side(side_pos)), ("offset", side(side_neg))],
     };
-    cands.sort_by(|x, y| x.1.len().total_cmp(&y.1.len()));
+    // Through a framing member: into the hole zone the member's rules allow (an I-joist's web
+    // middle, between a truss's chords, the middle of a stud), where that clears it.
+    if strategy != "offset"
+        && let Some((m, r)) = fctx.pair(&stays, &mover)
+        && framing::is_member(m)
+    {
+        let ma = framing::axes(d, m);
+        let (_, v) = fctx.judge(d, m, r, Vec3::ZERO);
+        let mv = ma.d * (ma.c - v.at).dot(ma.d);
+        if mv.is_finite() && mv.len() > 1e-9 && fctx.judge(d, m, r, mv).1.allowed {
+            cands.push((HOLE_ZONE, mv));
+        }
+    }
+    // The member's own hole zone first (the move the field makes: over or under a joist is into
+    // the floor above or out of the ceiling space), then the shortest move.
+    cands.sort_by(|x, y| (x.0 != HOLE_ZONE).cmp(&(y.0 != HOLE_ZONE)).then(x.1.len().total_cmp(&y.1.len())));
     let others: Vec<&El> =
         els.iter().filter(|e| e.handle != mover.handle && !(e.system == mover.system && !e.system.is_empty() && e.trade == mover.trade)).collect();
     let mut cache: BTreeMap<Handle, (Vec<Tri>, bool)> = BTreeMap::new();
@@ -572,6 +706,7 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
             .iter()
             .filter(|o| boxes_meet((moved.lo, moved.hi), (o.lo, o.hi), 0.0) && !exempt(&moved, o, false))
             .filter(|o| meet(d, &moved, o, 0.5 * inch, 0.0, &mut cache) == Some(true))
+            .filter(|o| framing_conflict(&fctx, d, o, &mover, *mv))
             .count();
         cache.remove(&mover.handle);
         if new_clashes == 0 || strategy != "reroute" {
@@ -614,12 +749,13 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(CMD_FIX, "the moved element is gone"));
         };
         let mut cache = BTreeMap::new();
-        let clear = meet(d, &moved, &st2, 0.5 * inch, 0.0, &mut cache).is_none();
+        let clear = meet(d, &moved, &st2, 0.5 * inch, 0.0, &mut cache).is_none() || !framing_conflict(&fctx, d, &st2, &moved, Vec3::ZERO);
         let new_clashes = els
             .iter()
             .filter(|o| o.handle != moved.handle && !(o.system == moved.system && !o.system.is_empty() && o.trade == moved.trade))
             .filter(|o| boxes_meet((moved.lo, moved.hi), (o.lo, o.hi), 0.0) && !exempt(&moved, o, false))
             .filter(|o| meet(d, &moved, o, 0.5 * inch, 0.0, &mut cache) == Some(true))
+            .filter(|o| framing_conflict(&fctx, d, o, &moved, Vec3::ZERO))
             .map(|o| o.handle.hex())
             .collect::<Vec<_>>();
         if clear {
@@ -633,6 +769,18 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
         out["check"] = json!({"clear": clear, "new_clashes": new_clashes.len(), "with": new_clashes});
     }
     Ok(out)
+}
+
+/// The fix that moves a run through a framing member into the hole zone its rules allow.
+const HOLE_ZONE: &str = "into the hole zone";
+
+/// Is `r` (moved by `shift`) meeting `o` a clash: anything but an allowed hole through a
+/// framing member.
+fn framing_conflict(fctx: &FramingCtx, d: &Drawing, o: &El, r: &El, shift: Vec3) -> bool {
+    match fctx.pair(o, r) {
+        Some((m, x)) if framing::is_member(m) => !fctx.judge(d, m, x, shift).1.allowed,
+        _ => true,
+    }
 }
 
 fn feet_in(inches: f64) -> String {
