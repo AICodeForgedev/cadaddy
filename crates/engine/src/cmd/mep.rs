@@ -30,7 +30,7 @@ mod homerun;
 mod twinline;
 
 /// Runs and segments handled, at most (hostile drawings).
-const MAX_RUNS: usize = 20_000;
+pub(crate) const MAX_RUNS: usize = 20_000;
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).
 const SLAB_FT: f64 = 0.5;
@@ -2765,6 +2765,29 @@ pub(crate) fn feeder_stubs(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimT
     out
 }
 
+/// WALLGEN's tag on each storey's piece of a riser through several (Q6493): the riser's name,
+/// the same on every piece.
+pub(crate) const RISER_TAG: &str = "riser";
+
+/// The tags of a riser's piece in one storey (Q6493): the riser it is a piece of (`riser:`), and
+/// as properties which piece it is, the level the riser is given on and the floors it passes
+/// (each a penetration with its firestop).
+fn riser_tags(c: &super::risercut::StoreyCut) -> Vec<RawTag> {
+    let t = |v: String| RawTag { code: 1000, value: v };
+    let mut x = vec![
+        t(format!("{RISER_TAG}:{}", c.riser.chars().take(200).collect::<String>())),
+        t(format!("prop:RISER_PIECE={} of {}", c.index + 1, c.count)),
+        t(format!("prop:RISER_LEVEL={}", c.given_level.chars().take(64).collect::<String>())),
+    ];
+    if !c.floors.is_empty() {
+        x.push(t(format!("prop:{FLOOR_PENETRATION}={}", c.floors.join(", ").chars().take(200).collect::<String>())));
+    }
+    x
+}
+
+/// The property naming the floors a riser's piece passes (Q6493): each a floor penetration.
+pub(crate) const FLOOR_PENETRATION: &str = "FLOOR_PENETRATION";
+
 /// Build the layer name for a system on a level: `3D-MEP-<system>-<level>`.
 pub(crate) fn mep_layer_name(system: &str, level: &str) -> String {
     let sys = sanitise(system, 40);
@@ -2797,19 +2820,22 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         sy: &'a MepSystem,
         level: String,
         base_z: f64,
+        /// A riser's piece in one storey of those it passes (Q6493).
+        cut: Option<&'a super::risercut::StoreyCut>,
     }
-    let shown: Vec<Shown> = sp
-        .mep
-        .runs
+    // A riser through several storeys is built a piece per storey, each on its own level (Q6493).
+    let given = sp.mep.runs.get(..sp.mep.runs.len().min(MAX_RUNS)).unwrap_or_default();
+    let storeys = super::risercut::all_storey_runs(sp, given, MAX_RUNS);
+    let shown: Vec<Shown> = storeys
         .iter()
-        .take(MAX_RUNS)
-        .filter_map(|r| {
+        .filter_map(|(_, st)| {
+            let r: &MepRun = &st.run;
             let sy = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show)?;
             if atoms && matches!(sy.kind, MepKind::Conduit | MepKind::Cable) {
                 return None;
             }
             let level = sp.level(&r.level)?;
-            Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf })
+            Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf, cut: st.cut.as_ref() })
         })
         .collect();
     let mut groups: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
@@ -2910,7 +2936,17 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let mut seg_mesh = super::wallgen::empty_mesh();
             add_upright_cylinder(&mut seg_mesh, Vec2::new(pt[0], pt[1]), radius, z0, z1);
             if !seg_mesh.faces.is_empty() {
-                let x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment")));
+                // A riser's piece (Q6493): the riser's name on every piece, which piece it is and
+                // the floor it passes; the lowest keeps the id the whole riser had.
+                let id = match s.cut {
+                    Some(c) if c.index > 0 => format!("{}/segment:{}", c.riser, s.level),
+                    Some(c) => format!("{}/segment", c.riser),
+                    None => format!("{base}/segment"),
+                };
+                let mut x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], id));
+                if let Some(c) = s.cut {
+                    x.extend(riser_tags(c));
+                }
                 if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
                     .is_ok()
                 {
@@ -3159,8 +3195,12 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         run: &'a MepRun,
         piece: Piece,
         w: f64,
-        /// A conduit or cable dropping down a wall to its device: below the ceiling by design.
+        /// A conduit or cable dropping down a wall to its device, or a riser's piece through
+        /// its storey (Q6493): below the ceiling by design.
         drop: bool,
+        /// A riser's piece that runs on through the floor over it into the next storey's piece
+        /// (Q6493): in the floor structure by design (its penetration).
+        through_up: bool,
     }
     let wiring = |sys: &str| {
         sp.mep
@@ -3170,7 +3210,11 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             .is_some_and(|x| matches!(x.kind, cadaddy_walk3d::MepKind::Conduit | cadaddy_walk3d::MepKind::Cable))
     };
     let mut items: Vec<Item> = Vec::new();
-    for r in sp.mep.runs.iter().take(MAX_RUNS) {
+    // A riser through several storeys is a piece per storey, each in its own level's scope (Q6493).
+    let given = sp.mep.runs.get(..sp.mep.runs.len().min(MAX_RUNS)).unwrap_or_default();
+    let storeys = super::risercut::all_storey_runs(&sp, given, MAX_RUNS);
+    for (_, st) in &storeys {
+        let r: &MepRun = &st.run;
         let Some(level) = sp.level(&r.level) else { continue };
         let w = r.size_in[0] / 12.0 * upf;
         // Vertical runs (risers): a single-point piece spanning bottom to top.
@@ -3181,13 +3225,14 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 let z1 = (level.elevation_ft + top) * upf;
                 let at = Vec2::new(pt[0], pt[1]);
                 // Ending at a device's height above its floor (an outlet, a switch), not on it.
-                let drop = wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft;
-                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop });
+                let drop = st.cut.is_some() || (wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft);
+                let through_up = st.cut.as_ref().is_some_and(|c| c.index + 1 < c.count);
+                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop, through_up });
             }
             continue;
         }
         let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
-        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w, drop: false }));
+        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w, drop: false, through_up: false }));
     }
     let handles = |r: &MepRun| r.objects.iter().take(5).cloned().collect::<Vec<_>>();
     // Below the ceiling of the room it passes through (else the level's), into the slab above.
@@ -3219,7 +3264,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             }));
         }
         let above = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| *e > level.elevation_ft + 1e-6).fold(f64::INFINITY, f64::min);
-        if above.is_finite() {
+        if above.is_finite() && !it.through_up {
             let structure = (above - SLAB_FT) * upf;
             if it.piece.z1 > structure + tol {
                 out.push(json!({

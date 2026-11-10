@@ -66,6 +66,7 @@ mod planview;
 mod progress_hotel;
 mod propuse;
 mod racewaygeom;
+mod riser_storeys;
 mod readerwire;
 mod roofframing;
 mod rooms3d;
