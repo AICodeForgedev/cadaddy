@@ -457,6 +457,7 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
         color_overrides: std::collections::BTreeMap::new(),
         layer_lines: Vec::new(),
         skip_hatches: false,
+        detail: None,
         profile: None,
     };
     let k = unit_mm * PT_PER_MM;

@@ -285,7 +285,14 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     let units: f64 = lines.iter().filter_map(|l| l["net"].as_f64()).sum();
     // Another trade's devices (thermostats, fire alarm, low voltage: bim.scope) leave the device
     // lines for `by_others`, one entry each (Q6167).
-    let others = bom["by_others"].as_array().into_iter().flatten().filter(|x| x["trade"] != "concrete").count();
+    // The fire alarm circuits' cable rows and the control panel its wiring places by rule
+    // (Q6503) are by others too, but not the model's devices.
+    let others = bom["by_others"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|x| x["trade"] != "concrete" && x["element"].as_str().is_some_and(|e| e.starts_with("device:")))
+        .count();
     assert_eq!(units + others as f64, (inserted + site) as f64, "the BOM counts the model's devices: {lines:#?} by others {others}");
     assert!(lines.iter().all(|l| l["level"].as_str().is_some_and(|v| !v.is_empty())));
     assert!(lines.iter().all(|l| (l["category"] == "devices") == (l["trade"] == "electrical")), "{lines:#?}");

@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.atoms.edit", "Edit Model Piece", run_edit)
             .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {size, type, length_ft}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
         CommandSpec::new("bim.chain", "Walk the Feed", run_chain)
-            .params("{handle, limit?: elements (2000)} → {from, breaker?: {handle, type, trip_a, poles, load, panel, source_row} (its circuit's breaker in the panel), path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders")
+            .params("{handle, limit?: elements (2000)} → {from, breaker?: {handle, type, trip_a, poles, load, panel, source_row} (its circuit's breaker in the panel), path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), circuit?: {system, name, source} (a fire alarm element's circuit), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders; a fire alarm device along its own circuit's cable to the power supply or control panel that circuit leaves, then up to the panel")
             .noundo(),
     ]
 }
@@ -1946,6 +1946,20 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
     let limit = p.get("limit").and_then(Value::as_u64).map_or(2000, |n| n.clamp(1, MAX_WALK as u64) as usize);
     let d = s.doc()?;
     let start = d.model.get(h).cloned().ok_or_else(|| bad(CMD, format!("there is no object {} in the model", h.hex())))?;
+    // A fire alarm element (Q6503) walks its own circuit's cable to the panel or power supply its
+    // circuit leaves (passing the modules and power supplies on the way), not any gear it meets.
+    let sps = props::read(&start.common.xdata);
+    let fa_system = sps.get("fa_system").map(Prop::text).filter(|v| !v.trim().is_empty());
+    let fa_source = sps.get("fa_source").map(Prop::text).filter(|v| !v.trim().is_empty());
+    let other_system = |e: &Entity| {
+        fa_system.as_ref().is_some_and(|sy| {
+            let ps = props::read(&e.common.xdata);
+            ps.get(ATOM_KEY).is_some() && ps.get("system").map(Prop::text).is_some_and(|s| !s.eq_ignore_ascii_case(sy))
+        })
+    };
+    let source_gear = |e: &Entity| {
+        is_gear(e) && fa_source.as_ref().is_none_or(|t| super::bimlook::made_tag(e, "tag").is_some_and(|g| g.eq_ignore_ascii_case(t.trim())))
+    };
     // Breadth first over `connects` to the nearest gear (a panel): the shortest feed.
     let mut prev: HashMap<Handle, Handle> = HashMap::new();
     let mut seen: BTreeSet<Handle> = BTreeSet::from([h]);
@@ -1956,11 +1970,14 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
             break;
         }
         let Some(e) = d.model.get(x) else { continue };
-        if x != h && is_gear(e) {
+        if x != h && source_gear(e) {
             found = Some(x);
             break;
         }
         for n in connects_of(e) {
+            if d.model.get(n).is_some_and(|ne| other_system(ne)) {
+                continue;
+            }
             if seen.insert(n) {
                 prev.insert(n, x);
                 queue.push_back(n);
@@ -2026,6 +2043,7 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
         "path": path.iter().filter_map(|x| d.model.get(*x)).map(|e| node_json(e)).collect::<Vec<_>>(),
         "source": found.and_then(|x| d.model.get(x)).map(|e| node_json(e)),
         "upstream": upstream,
+        "circuit": fa_system.as_ref().map(|sy| json!({"system": sy, "name": sps.get("fa_circuit").map(Prop::text), "source": fa_source})),
         "length_ft": (length_ft * 100.0).round() / 100.0,
         "note": if found.is_none() { json!("no panel reached through what it connects to (an open end, or a run of no circuit)") } else { Value::Null },
     }))

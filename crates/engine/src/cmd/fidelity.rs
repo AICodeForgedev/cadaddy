@@ -20,7 +20,12 @@
 //! drawing, never the drawn subset.
 //!
 //! - `view.fidelity {level?, show?, of?}`: the view's fidelity, an element's tier.
-//! - `view.fidelity.rules {rules?, auto?, default_tier?, reset?}`: the project's rules.
+//! - `view.fidelity.rules {rules?, auto?, default_tier?, plan?, reset?}`: the project's rules.
+//!
+//! The same rules data holds the 2D screen's detail levels (`plan`, [`Plan`]): how small on
+//! screen an object is drawn as a dot, text as a bar, a hatch as a tint, and how big a symbol
+//! of each tier must be before its contents are drawn (its tier from words of its block's and
+//! layer's names). See [`cadaddy_render::detail`].
 //! - `view.fidelity.report {width?, height?, room?}`: what each tier holds and draws, measured.
 
 use std::collections::BTreeMap;
@@ -29,6 +34,7 @@ use std::sync::atomic::AtomicUsize;
 
 use cadaddy_doc::{Drawing, Entity, EntityKind, Handle, Space};
 use cadaddy_geom::Vec3;
+use cadaddy_render::detail::{PlanRules, SymbolRule};
 use cadaddy_render::model3::{self, AutoTiers, ElemClass, Force, Held, Model3, Stream, Tier};
 use cadaddy_render::shade::ShadeView;
 use serde::{Deserialize, Serialize};
@@ -63,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: auto|building|floor|room|detail (what the 3D view draws: auto follows the zoom), show?: {kind, level?} | kind | null (mark every element of a kind, on one level, at any zoom; null clears), of?: handle | [handle] (the tier of these elements)} → {level, shown (the tier the 3D view drew last), show, auto: {building_ft, floor_ft, room_ft, margin}, rules: {source, count}, elements?: [{handle, tier, kind, level, run, line_from, rule}]}: the 3D view's fidelity layers; counts and the takeoff never depend on it")
             .noundo(),
         CommandSpec::new(RULES_CMD, "Model Fidelity Rules", run_rules).params(
-            "{rules?: [{kinds?, trades?, categories?, parts?, words?, atoms?: bool, min_size_in?, max_size_in?, min_extent_ft?, max_extent_ft?, tier: building|floor|room|detail, line_from?: tier (below its tier its run draws as a line from this one), why?}] (first match wins; replaces the project's), auto?: {building_ft?, floor_ft?, room_ft?, margin?} (view heights at which Auto changes tier, and the hysteresis), default_tier?, reset?: bool (back to the built-in rules)} → {source: project|default, auto, default_tier, rules}: which tier each element draws at, kept in the drawing",
+            "{rules?: [{kinds?, trades?, categories?, parts?, words?, atoms?: bool, min_size_in?, max_size_in?, min_extent_ft?, max_extent_ft?, tier: building|floor|room|detail, line_from?: tier (below its tier its run draws as a line from this one), why?}] (first match wins; replaces the project's), auto?: {building_ft?, floor_ft?, room_ft?, margin?} (view heights at which Auto changes tier, and the hysteresis), default_tier?, plan?: {dot_px?, text_bar_px?, hatch_tint_px?, box_px?, tier_px?: {building?, floor?, room?, detail?}, default_tier?, bar_transparency?, tint_transparency?, image_px?, symbols?: [{words?, layers?, tier, why?}]} (the 2D screen's detail levels: pixels under which an object is a dot, text a bar, a hatch a tint, a symbol its box by its tier; merged over the project's), reset?: bool (back to the built-in rules)} → {source: project|default, auto, default_tier, plan, rules}: which tier each element draws at, kept in the drawing",
         ),
         CommandSpec::new(REPORT, "Model Fidelity Report", run_report)
             .params("{width?: px (1600), height?: px (1000), room?: name or number (the room to zoom into, by its devices' room; default the most typical room: the commonest receptacle count), dir?: [x, y, z] (view direction; default from the south-west, above), compare?: bool (also build the model without fidelity and measure it)} → {elements, tiers: {tier: {elements, tris, base, instanced, streamed, streamed_tris}}, build_ms, model_mb, instances, prototypes, whole: {height_ft, auto, at: {tier: {tris_drawn, chunks, instances, stream_cells, stream_tris, held_mb, visible_ms, stream_ms, raster_ms}}}, room: {height_ft, auto, receptacles, receptacles_drawn_first_frame, receptacles_drawn, first_frame_ms, all_streamed_ms, frames_to_stream, stream_cells}, everything_tris, without?: {build_ms, model_mb, tris_drawn, visible_ms, raster_ms, gpu_mb_est}}: what each fidelity tier holds and draws on this model, measured")
@@ -143,7 +149,108 @@ pub struct Rules {
     pub source: String,
     pub auto: Auto,
     pub default_tier: String,
+    pub plan: Plan,
     pub rules: Vec<Rule>,
+}
+
+/// The 2D screen's detail levels (`plan` in the rules data): see [`cadaddy_render::detail`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Plan {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub why: String,
+    pub dot_px: f64,
+    pub text_bar_px: f64,
+    pub hatch_tint_px: f64,
+    pub box_px: f64,
+    /// By tier name: how big (pixels) a symbol of that tier must be for its contents to show.
+    pub tier_px: BTreeMap<String, f64>,
+    pub default_tier: String,
+    pub bar_transparency: u8,
+    pub tint_transparency: u8,
+    pub image_px: u32,
+    pub symbols: Vec<PlanSymbol>,
+}
+
+/// Which tier symbols are: words of the block's name, of the layer's name.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlanSymbol {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<String>,
+    pub tier: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub why: String,
+}
+
+impl Default for Plan {
+    fn default() -> Self {
+        let r = PlanRules::default();
+        Plan {
+            why: String::new(),
+            dot_px: r.dot_px,
+            text_bar_px: r.text_bar_px,
+            hatch_tint_px: r.hatch_tint_px,
+            box_px: r.box_px,
+            tier_px: Tier::ALL.iter().map(|t| (t.name().to_string(), r.tier_px.get(t.index()).copied().unwrap_or(0.0))).collect(),
+            default_tier: r.default_tier.name().into(),
+            bar_transparency: r.bar_transparency,
+            tint_transparency: r.tint_transparency,
+            image_px: r.image_px,
+            symbols: Vec::new(),
+        }
+    }
+}
+
+impl Plan {
+    /// As the renderer takes them (unreadable values replaced, symbol rules with an unknown tier
+    /// left out).
+    pub fn rules(&self) -> PlanRules {
+        let d = PlanRules::default();
+        let mut tier_px = d.tier_px;
+        for (k, v) in &self.tier_px {
+            if let Some(slot) = Tier::parse(k).and_then(|t| tier_px.get_mut(t.index())) {
+                *slot = *v;
+            }
+        }
+        let symbols = self
+            .symbols
+            .iter()
+            .filter_map(|s| Some(SymbolRule { words: s.words.clone(), layers: s.layers.clone(), tier: Tier::parse(&s.tier)? }))
+            .collect();
+        PlanRules {
+            dot_px: self.dot_px,
+            text_bar_px: self.text_bar_px,
+            hatch_tint_px: self.hatch_tint_px,
+            box_px: self.box_px,
+            tier_px,
+            default_tier: Tier::parse(&self.default_tier).unwrap_or(d.default_tier),
+            symbols,
+            bar_transparency: self.bar_transparency,
+            tint_transparency: self.tint_transparency,
+            image_px: self.image_px,
+        }
+        .sane()
+    }
+}
+
+/// The 2D screen's detail rules of `d` (the project's `plan` over the built-in one).
+pub fn plan_rules(d: &Drawing) -> PlanRules {
+    Rules::of(d).0.plan.rules()
+}
+
+/// `over`'s keys over `base`'s (objects only; anything else replaces).
+fn overlay(base: &mut Value, over: &Value) {
+    match (base.as_object_mut(), over.as_object()) {
+        (Some(b), Some(o)) => {
+            for (k, v) in o {
+                b.insert(k.clone(), v.clone());
+            }
+        }
+        _ => *base = over.clone(),
+    }
 }
 
 impl Rules {
@@ -165,6 +272,13 @@ impl Rules {
         }
         if let Some(t) = own.get("default_tier").and_then(Value::as_str).filter(|t| Tier::parse(t).is_some()) {
             r.default_tier = t.to_string();
+        }
+        if let Some(p) = own.get("plan").filter(|p| p.is_object()) {
+            let mut plan = serde_json::to_value(&r.plan).unwrap_or(Value::Null);
+            overlay(&mut plan, p);
+            if let Ok(p) = serde_json::from_value::<Plan>(plan) {
+                r.plan = p;
+            }
         }
         r.source = "project".into();
         (r, true)
@@ -490,7 +604,7 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn rules_json(d: &Drawing) -> Value {
     let (r, own) = Rules::of(d);
-    json!({"source": if own { "project" } else { "default" }, "auto": r.auto.tiers().as_json(), "default_tier": r.default_tier().name(), "rules": r.rules})
+    json!({"source": if own { "project" } else { "default" }, "auto": r.auto.tiers().as_json(), "default_tier": r.default_tier().name(), "plan": r.plan, "rules": r.rules})
 }
 
 fn run_rules(s: &mut Session, p: &Value) -> Result<Value> {
@@ -537,6 +651,28 @@ fn run_rules(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = p.get("default_tier").filter(|v| !v.is_null()) {
         let t = v.as_str().and_then(Tier::parse).ok_or_else(|| bad(RULES_CMD, "`default_tier` must be building, floor, room or detail"))?;
         own.get_or_insert_with(|| json!({}))["default_tier"] = json!(t.name());
+        changed = true;
+    }
+    if let Some(v) = p.get("plan").filter(|v| !v.is_null()) {
+        if !v.is_object() {
+            return Err(bad(
+                RULES_CMD,
+                "`plan` must be an object: {dot_px?, text_bar_px?, hatch_tint_px?, box_px?, tier_px?, default_tier?, symbols?, …}",
+            ));
+        }
+        let o = own.get_or_insert_with(|| json!({}));
+        let mut plan = o.get("plan").cloned().unwrap_or_else(|| json!({}));
+        overlay(&mut plan, v);
+        let mut whole = serde_json::to_value(Rules::defaults().plan).unwrap_or(Value::Null);
+        overlay(&mut whole, &plan);
+        let parsed: Plan = serde_json::from_value(whole).map_err(|e| bad(RULES_CMD, format!("`plan`: {e}")))?;
+        if let Some(s) = parsed.symbols.iter().position(|s| Tier::parse(&s.tier).is_none()) {
+            return Err(bad(RULES_CMD, format!("plan symbol rule {}: `tier` must be building, floor, room or detail", s + 1)));
+        }
+        if parsed.symbols.len() > cadaddy_render::detail::MAX_SYMBOL_RULES {
+            return Err(bad(RULES_CMD, format!("at most {} plan symbol rules", cadaddy_render::detail::MAX_SYMBOL_RULES)));
+        }
+        o["plan"] = plan;
         changed = true;
     }
     if changed {

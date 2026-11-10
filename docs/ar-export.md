@@ -239,7 +239,9 @@ bim.export.ar {set: true, dir: "exports"}       then serve `exports` (its manife
   room or area, is a house panel (mains); when the data don't say, full view, and the graph says so.
 - **Groups.** Every node carries `group`: `mechanical` (with fire protection), `electrical` (with
   fire alarm), `plumbing`, `cabinets`, `furniture` or `base` (always on). Furniture's nodes say
-  `default_on: false`. Cabinets are only in level and room packages.
+  `default_on: false`. Cabinets are only in level and room packages. `model.build` makes both
+  (the build parts `casework` and `furniture`, the trades `cabinets` and `furniture`): a group
+  takes its elements by their trade as well as by their words.
 - **Generic.** The building packages' sidecars say `generic: true` and `field_alignment: false`:
   simplified on purpose (over 150,000 triangles: the context as boxes, then every element as its
   box, then the far elements), never for layout. Level and room packages keep true geometry.
