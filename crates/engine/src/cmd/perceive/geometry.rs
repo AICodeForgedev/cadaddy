@@ -298,7 +298,7 @@ const FACET_MAX_IN: f64 = 24.0;
 /// The share of a rounded outline's length a wall's other face must run beside for it to be a
 /// wall's face ("its whole length", less a little for where its walls meet others).
 const PARTNER_SHARE: f64 = 0.95;
-/// The share of its arcs' length a rounded wall face's other face runs beside (concentric).
+/// The share of its arcs' length a rounded wall face's other face runs beside, curved too (concentric).
 const ARC_PARTNER_SHARE: f64 = 0.5;
 /// How far a partner face may turn from the outline, degrees (a concentric arc's chords meet the
 /// outline's at up to half a facet's turn).
@@ -322,6 +322,27 @@ fn path_points(p: &cadaddy_doc::LwPolyline, k: f64) -> Vec<Vec2> {
     }
     pts.retain(|v| v.is_finite());
     pts
+}
+
+/// Whether each chord of a path is an arc's: both its ends turn a little
+/// ([`ARC_PIECE_TURN_DEG`]..[`FACET_TURN_DEG`], a flattened curve) and it is short
+/// ([`FACET_MAX_IN`]), not a side between corners. A loop's first and last points are one.
+fn arc_chords(pts: &[Vec2], k: f64) -> Vec<bool> {
+    let m = pts.len();
+    let closed = m > 3 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9);
+    let turns = |i: usize| -> bool {
+        let ends = closed && (i == 0 || i + 1 == m);
+        let prev = if ends { m.checked_sub(2) } else { i.checked_sub(1) }.and_then(|j| pts.get(j));
+        let next = if ends { pts.get(1) } else { pts.get(i + 1) };
+        let (Some(&a), Some(&b), Some(&c)) = (prev, pts.get(i), next) else { return false };
+        let (u, v) = (b - a, c - b);
+        let t = u.cross(v).atan2(u.dot(v)).to_degrees().abs();
+        (ARC_PIECE_TURN_DEG..=FACET_TURN_DEG.1).contains(&t)
+    };
+    pts.windows(2)
+        .enumerate()
+        .map(|(i, w)| w.first().zip(w.get(1)).is_some_and(|(a, b)| a.dist(*b) <= FACET_MAX_IN * k) && turns(i) && turns(i + 1))
+        .collect()
 }
 
 /// Whether a polyline has a rounded corner: an arc (a bulge), or a faceted one — at least
@@ -423,34 +444,19 @@ pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, l
     if rounded.is_empty() {
         return out;
     }
-    // The probes along each outline: (point, direction, length it stands for, on an arc). A chord
-    // is an arc's when both its ends turn a little (a flattened curve), not a side between corners.
+    // The probes along each outline: (point, direction, length it stands for, on an arc).
     let step = (PARTNER_STEP_IN * k).max(1e-9);
     let mut budget = MAX_PROBES;
     let probes: Vec<Vec<(Vec2, Vec2, f64, bool)>> = rounded
         .iter()
         .map(|(_, pts)| {
-            let closed = pts.len() > 3 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9);
-            let m = pts.len();
-            let turns = |i: usize| -> bool {
-                // The turn at vertex `i` (a loop's first and last vertex are one: from its last
-                // chord to its first).
-                let ends = closed && (i == 0 || i + 1 == m);
-                let prev = if ends { m.checked_sub(2) } else { i.checked_sub(1) }.and_then(|j| pts.get(j));
-                let next = if ends { pts.get(1) } else { pts.get(i + 1) };
-                let (Some(&a), Some(&b), Some(&c)) = (prev, pts.get(i), next) else { return false };
-                let (u, v) = (b - a, c - b);
-                let t = u.cross(v).atan2(u.dot(v)).to_degrees().abs();
-                (ARC_PIECE_TURN_DEG..=FACET_TURN_DEG.1).contains(&t)
-            };
             let mut v = Vec::new();
-            for (i, w) in pts.windows(2).enumerate() {
+            for (w, arc) in pts.windows(2).zip(arc_chords(pts, k)) {
                 let (Some(&a), Some(&b)) = (w.first(), w.get(1)) else { continue };
                 let len = a.dist(b);
                 if len <= 1e-9 || budget == 0 {
                     continue;
                 }
-                let arc = len <= FACET_MAX_IN * k && turns(i) && turns(i + 1);
                 let n = ((len / step).ceil() as usize).clamp(1, budget);
                 budget -= n;
                 let u = (b - a) * (1.0 / len);
@@ -459,10 +465,11 @@ pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, l
             v
         })
         .collect();
-    // The other objects' straight pieces near the probes, by grid cell.
+    // The other objects' straight pieces near the probes (and whether each is an arc's chord), by
+    // grid cell.
     let cell = lim.max_thick.max(1e-9);
     let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
-    let mut grid: HashMap<(i64, i64), Vec<(Vec2, Vec2, usize)>> = HashMap::new();
+    let mut grid: HashMap<(i64, i64), Vec<(Vec2, Vec2, bool, usize)>> = HashMap::new();
     for p in probes.iter().flatten() {
         let (cx, cy) = key(p.0);
         for dx in -1..=1 {
@@ -473,12 +480,15 @@ pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, l
     }
     let mut cells_left = MAX_PARTNER_CELLS;
     'ents: for (i, e) in ents.iter().enumerate() {
-        let pieces: Vec<(Vec2, Vec2)> = match &e.kind {
-            EntityKind::Line(l) => vec![(l.a.xy(), l.b.xy())],
-            EntityKind::LwPolyline(p) => path_points(p, k).windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).collect(),
+        let pieces: Vec<(Vec2, Vec2, bool)> = match &e.kind {
+            EntityKind::Line(l) => vec![(l.a.xy(), l.b.xy(), false)],
+            EntityKind::LwPolyline(p) => {
+                let pts = path_points(p, k);
+                pts.windows(2).zip(arc_chords(&pts, k)).filter_map(|(w, arc)| Some((*w.first()?, *w.get(1)?, arc))).collect()
+            }
             _ => continue,
         };
-        for (a, b) in pieces {
+        for (a, b, arc) in pieces {
             if !(a.is_finite() && b.is_finite()) || a.dist(b) <= 1e-9 {
                 continue;
             }
@@ -496,7 +506,7 @@ pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, l
                 }
                 last = Some(c);
                 if let Some(list) = grid.get_mut(&c) {
-                    list.push((a, b, i));
+                    list.push((a, b, arc, i));
                 }
             }
         }
@@ -504,7 +514,8 @@ pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, l
     let max_turn = PARTNER_TURN_DEG.to_radians().sin();
     for ((own, _), probes) in rounded.iter().zip(&probes) {
         // The length (all, and on its arcs) with a partner on each side: a wall's other face is on
-        // one side all along (a leader or a wall's face across the corner is no partner).
+        // one side all along (a leader or a wall's face across the corner is no partner), and
+        // round an arc it is an arc too (a square corner of a wall the outline runs round is none).
         let (mut all, mut arcs) = (0.0f64, 0.0f64);
         let mut beside = [[0.0f64; 2]; 2];
         for &(p, u, w, arc) in probes {
@@ -513,10 +524,10 @@ pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, l
                 arcs += w;
             }
             let (cx, cy) = key(p);
-            let mut sides = [false; 2];
+            let mut sides = [(false, false); 2];
             for dx in -1..=1 {
                 for dy in -1..=1 {
-                    for &(a, b, i) in grid.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    for &(a, b, curved, i) in grid.get(&(cx + dx, cy + dy)).into_iter().flatten() {
                         if i == *own {
                             continue;
                         }
@@ -529,18 +540,19 @@ pub(crate) fn rounded_outlines_alone(ents: &[&std::sync::Arc<Entity>], k: f64, l
                         let t = ((p - a).dot(d) / (len * len)).clamp(0.0, 1.0);
                         let off = a + d * t - p;
                         let gap = off.len();
-                        if (lim.min_thick..=lim.max_thick).contains(&gap) && off.dot(u).abs() <= 0.5 * gap {
-                            if let Some(s) = sides.get_mut(usize::from(u.cross(off) < 0.0)) {
-                                *s = true;
-                            }
+                        if (lim.min_thick..=lim.max_thick).contains(&gap)
+                            && off.dot(u).abs() <= 0.5 * gap
+                            && let Some(s) = sides.get_mut(usize::from(u.cross(off) < 0.0))
+                        {
+                            *s = (true, s.1 || curved);
                         }
                     }
                 }
             }
-            for (side, found) in sides.iter().enumerate() {
-                if *found && let Some(b) = beside.get_mut(side) {
+            for (side, &(found, curved)) in sides.iter().enumerate() {
+                if found && let Some(b) = beside.get_mut(side) {
                     b[0] += w;
-                    if arc {
+                    if arc && curved {
                         b[1] += w;
                     }
                 }
@@ -2170,7 +2182,8 @@ mod tests {
         let jitter: Vec<(f64, f64, f64)> = (0..40).map(|i| (f64::from(i) * 0.1, 0.01 * f64::from(i % 3), 0.0)).collect();
         assert!(!has_rounded_corner(&lwpoly(&jitter, false), 1.0));
         // A circle in chords is all arc.
-        let circle: Vec<(f64, f64, f64)> = (0..24).map(|i| (f64::from(i) * 15.0).to_radians()).map(|a| (10.0 * a.cos(), 10.0 * a.sin(), 0.0)).collect();
+        let circle: Vec<(f64, f64, f64)> =
+            (0..24).map(|i| (f64::from(i) * 15.0).to_radians()).map(|a| (10.0 * a.cos(), 10.0 * a.sin(), 0.0)).collect();
         assert!(has_rounded_corner(&lwpoly(&circle, true), 1.0));
         // No units: nothing to probe.
         let e = std::sync::Arc::new(Entity::new(cadaddy_doc::Handle(1), EntityKind::LwPolyline(lwpoly(&circle, true))));

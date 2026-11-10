@@ -70,10 +70,7 @@ fn room() -> Drawing {
 
 /// The points of a quarter circle round `c` from angle `a0` (degrees) turning +90°, in `n` facets.
 fn quarter(c: (f64, f64), r: f64, a0: f64, n: usize) -> Vec<(f64, f64)> {
-    (0..=n)
-        .map(|i| (a0 + 90.0 * i as f64 / n as f64).to_radians())
-        .map(|a| (c.0 + r * a.cos(), c.1 + r * a.sin()))
-        .collect()
+    (0..=n).map(|i| (a0 + 90.0 * i as f64 / n as f64).to_radians()).map(|a| (c.0 + r * a.cos(), c.1 + r * a.sin())).collect()
 }
 
 /// The callout's box: x0, y0, x1, y1 in inches, corner radius 10". South 4" outside the south
@@ -114,7 +111,12 @@ fn dash_dot_callout(d: &mut Drawing, (x0, y0, x1, y1): (f64, f64, f64, f64), r: 
     }
     // The sides between the corner pieces: a space, then dot, space, dash, space, ... up to the
     // next corner piece's space.
-    let sides = [((x0 + r + 8.0, y0), (x1 - r - 10.0, y0)), ((x1, y0 + r + 8.0), (x1, y1 - r - 10.0)), ((x1 - r - 8.0, y1), (x0 + r + 10.0, y1)), ((x0, y1 - r - 8.0), (x0, y0 + r + 10.0))];
+    let sides = [
+        ((x0 + r + 8.0, y0), (x1 - r - 10.0, y0)),
+        ((x1, y0 + r + 8.0), (x1, y1 - r - 10.0)),
+        ((x1 - r - 8.0, y1), (x0 + r + 10.0, y1)),
+        ((x0, y1 - r - 8.0), (x0, y0 + r + 10.0)),
+    ];
     for (a, b) in sides {
         let len = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
         let u = ((b.0 - a.0) / len, (b.1 - a.1) / len);
@@ -148,7 +150,10 @@ fn boxes(s: &Session, part: &str) -> Vec<(f64, f64, f64, f64)> {
         .flat_map(|m| {
             m.vertices
                 .chunks(8)
-                .map(|b| b.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(x0, y0, x1, y1), v| (x0.min(v.x), y0.min(v.y), x1.max(v.x), y1.max(v.y))))
+                .map(|b| {
+                    b.iter()
+                        .fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(x0, y0, x1, y1), v| (x0.min(v.x), y0.min(v.y), x1.max(v.x), y1.max(v.y)))
+                })
                 .collect::<Vec<_>>()
         })
         .collect()
