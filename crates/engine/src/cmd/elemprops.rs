@@ -174,12 +174,8 @@ pub(crate) fn up_area(e: &Entity) -> Option<f64> {
 
 /// Drawing units per foot (the building spec's, else inches).
 pub(crate) fn units_per_foot(d: &Drawing) -> f64 {
-    d.building_spec
-        .as_deref()
-        .and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok())
-        .map(|sp| sp.units_per_foot)
-        .filter(|u| u.is_finite() && *u > 0.0)
-        .unwrap_or(12.0)
+    // Read once per spec text: the Properties palette asks for it every frame.
+    crate::specread::units_per_foot(d)
 }
 
 /// An element's properties: its store, and what the model gives (marked `computed`, or `print`

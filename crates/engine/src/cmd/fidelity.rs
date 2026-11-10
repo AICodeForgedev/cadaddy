@@ -46,7 +46,7 @@ use crate::{Result, Session};
 /// The built-in rules.
 const RULES: &str = include_str!("fidelity.json");
 /// The key of the project's rules in the building spec.
-const KEY: &str = "fidelity";
+pub(crate) const KEY: &str = "fidelity";
 /// Most objects looked at, rules kept, elements a click picks.
 const MAX_SCAN: usize = 2_000_000;
 const MAX_RULES: usize = 500;
@@ -302,9 +302,10 @@ impl Rules {
     }
 }
 
-/// The project's rules object in the building spec.
+/// The project's rules object in the building spec (read once per spec text: the 2D and 3D views
+/// ask for the rules when they draw).
 fn project(d: &Drawing) -> Option<Value> {
-    d.building_spec.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok()).and_then(|v| v.get(KEY).cloned()).filter(Value::is_object)
+    Some(crate::specread::get(d, KEY)).filter(Value::is_object)
 }
 
 /// What the rules see of an element.

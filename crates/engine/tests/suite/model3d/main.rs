@@ -31,6 +31,7 @@ mod sequence4d;
 mod solids;
 mod solids2;
 mod solview;
+mod spec_reads;
 mod surfaces;
 mod tours;
 mod ucs;
