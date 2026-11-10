@@ -769,6 +769,13 @@ pub struct Room {
     /// Where `ceiling_ft` was read (`9'-0" on A-501 ENLARGED UNIT RCP`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ceiling_source: Option<String>,
+    /// Its ceiling's build-up ([`CeilingType::name`]) where no RCP area types it: given by room,
+    /// unit type or height basis (`rcp.type`); its built ceiling takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_type: Option<String>,
+    /// Who or what gave `ceiling_type` (`rcp.type: rooms 101`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_type_source: Option<String>,
     #[serde(default)]
     pub materials: Surfaces,
     /// Base finish from the room finish schedule (`RB-1 4" RUBBER BASE`).

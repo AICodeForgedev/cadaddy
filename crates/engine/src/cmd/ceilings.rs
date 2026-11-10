@@ -45,6 +45,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 "{level?: name} → {rows: [{level, part (ceiling, ceiling framing, soffit bottom, soffit sides, soffit framing, top track, bottom track), assembly, material, layer (board layer from the room face, 1 first; 0 framing and track), quantity, unit (sf|lf)}], totals: {part: quantity}, csv}: board area by type and layer, framing and track lengths, from the spec's ceiling and soffit types and the wall types' heads",
             )
             .noundo(),
+        CommandSpec::new("rcp.type", "Ceiling Types", run_type).params(
+            "{type: ceiling type (the ceiling legend's) | clear: true, rooms?: [room name or number], unit_type?: unit type, basis?: text (rooms whose ceiling height source says it), level?: name, force?: bool (also over a type already given or the reflected ceiling plan's), relayout?: bool (default true: the ceilings' trade pieces laid out again), preview?: bool} → {type, rooms: [{name, number, level, was?}], kept: [{name?, number?, level, type, why}], ceilings (built ceilings retagged), relaid?, preview}: gives the rooms the selectors name (all of them) a ceiling type: the spec's rooms keep it (a rebuild's ceilings take it) and their built ceilings take it now",
+        ),
         CommandSpec::new("rcp.colour", "Colour by Assembly", run_colour).params(
             "{by: type|layers|soffit|head|none} → {legend: [{key, color (ACI)}], coloured}: colours the built ceilings, soffits and walls — by ceiling, soffit and wall type; by number of board layers; soffits built under a ceiling or hung from the structure; walls by head of wall condition — `none` puts them back to their layers' colours",
         ),
@@ -189,6 +192,247 @@ fn colour_key(e: &Entity, sp: &BuildingSpec, by: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+// ---------------- ceiling types by room ----------------
+
+/// Most rooms one `rcp.type` names, and the longest text it takes.
+const MAX_SELECT: usize = 10_000;
+const MAX_TEXT: usize = 200;
+
+/// The build tags of the ceiling type given a room (`type:<name>`, `type_source:<who>`).
+pub(crate) fn room_type_tags(r: &cadaddy_walk3d::SpecRoom) -> Vec<RawTag> {
+    let Some(t) = r.ceiling_type.as_deref().map(str::trim).filter(|t| !t.is_empty()) else { return Vec::new() };
+    let clip = |v: &str| v.chars().take(240).collect::<String>();
+    let who = r.ceiling_type_source.as_deref().map(str::trim).filter(|w| !w.is_empty()).unwrap_or("the room's ceiling type");
+    vec![RawTag { code: 1000, value: format!("type:{}", clip(t)) }, RawTag { code: 1000, value: format!("type_source:{}", clip(who)) }]
+}
+
+/// Whether a built element's room tag (`OFFICE or 101`, `101`, `OFFICE`) is the spec room's.
+pub(crate) fn tag_is_room(tag: &str, r: &cadaddy_walk3d::SpecRoom) -> bool {
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return false;
+    }
+    let num = r.number.as_deref().map(str::trim).filter(|n| !n.is_empty());
+    tag.eq_ignore_ascii_case(super::bspec::room_label(r).trim())
+        || num.is_some_and(|n| tag.eq_ignore_ascii_case(n) || tag.eq_ignore_ascii_case(&format!("{} {n}", r.name.trim())))
+        // A name alone names the room only when it has no number (names repeat: OFFICE, STORAGE).
+        || (num.is_none() && !r.name.trim().is_empty() && tag.eq_ignore_ascii_case(r.name.trim()))
+}
+
+/// The spec room a built ceiling on `level` tagged `room` is, when one is.
+pub(crate) fn spec_room_of<'a>(sp: &'a BuildingSpec, level: &str, room: &str) -> Option<&'a cadaddy_walk3d::SpecRoom> {
+    sp.rooms
+        .iter()
+        .take(MAX_SELECT * 10)
+        .find(|r| r.level.as_deref().is_none_or(|l| l.trim().eq_ignore_ascii_case(level.trim())) && tag_is_room(room, r))
+}
+
+/// A list of room names or numbers.
+fn text_list(cmd: &str, p: &Value, key: &str) -> Result<Vec<String>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(a)) => a
+            .iter()
+            .take(MAX_SELECT)
+            .map(|v| match v {
+                Value::String(t) => Ok(t.trim().chars().take(MAX_TEXT).collect::<String>()),
+                Value::Number(n) => Ok(n.to_string()),
+                _ => Err(bad(cmd, format!("`{key}` is a list of room names or numbers"))),
+            })
+            .filter(|t| t.as_ref().map_or(true, |t| !t.is_empty()))
+            .collect(),
+        Some(_) => Err(bad(cmd, format!("`{key}` is a list of room names or numbers"))),
+    }
+}
+
+/// An optional text parameter, trimmed and capped; empty is none, not text is refused.
+fn opt_text(cmd: &str, p: &Value, key: &str) -> Result<Option<String>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(t)) => Ok(Some(t.trim().chars().take(MAX_TEXT).collect::<String>()).filter(|t| !t.is_empty())),
+        Some(_) => Err(bad(cmd, format!("`{key}` must be text"))),
+    }
+}
+
+/// The (level, number) of each unit instance of unit type `ty` (its id, or its name in the unit
+/// types).
+fn unit_rooms(sp: &BuildingSpec, ty: &str) -> Vec<(String, String)> {
+    let t = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let mut ids: Vec<String> = vec![ty.to_string()];
+    for u in sp.unit_types.as_array().into_iter().flatten().take(MAX_SELECT) {
+        if t(u, "name").eq_ignore_ascii_case(ty) || t(u, "tag").eq_ignore_ascii_case(ty) {
+            ids.extend([t(u, "id"), t(u, "tag")].into_iter().filter(|x| !x.is_empty()));
+        }
+    }
+    sp.unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_SELECT * 10)
+        .filter(|u| {
+            let it = if t(u, "type").is_empty() { t(u, "unit_type") } else { t(u, "type") };
+            ids.iter().any(|i| i.eq_ignore_ascii_case(&it))
+        })
+        .map(|u| (t(u, "level"), if t(u, "number").is_empty() { t(u, "room") } else { t(u, "number") }))
+        .filter(|(_, n)| !n.is_empty())
+        .collect()
+}
+
+fn run_type(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "rcp.type";
+    let clear = super::bool_param(CMD, p, "clear")?.unwrap_or(false);
+    let force = super::bool_param(CMD, p, "force")?.unwrap_or(false);
+    let preview = super::bool_param(CMD, p, "preview")?.unwrap_or(false);
+    let relayout = super::bool_param(CMD, p, "relayout")?.unwrap_or(true);
+    let (mut sp, _) = current(s, CMD)?;
+    let ty = match (opt_text(CMD, p, "type").map_err(|_| bad(CMD, "`type` is a ceiling type's name (the ceiling legend's)"))?, clear) {
+        (Some(_), true) => return Err(bad(CMD, "give `type` or `clear: true`, not both")),
+        (None, false) => return Err(bad(CMD, "`type` (a ceiling type of the ceiling legend) is required, or `clear: true`")),
+        (None, true) => None,
+        (Some(t), false) => match sp.ceiling_types.iter().find(|c| c.name.trim().eq_ignore_ascii_case(&t)) {
+            Some(c) => Some(c.name.trim().to_string()),
+            None => {
+                let known: Vec<&str> = sp.ceiling_types.iter().take(40).map(|c| c.name.as_str()).collect();
+                return Err(bad(CMD, format!("no ceiling type `{t}` in the building spec (its ceiling types: {known:?})")));
+            }
+        },
+    };
+    let rooms = text_list(CMD, p, "rooms")?;
+    let unit = opt_text(CMD, p, "unit_type")?;
+    let basis = opt_text(CMD, p, "basis")?;
+    let level = opt_text(CMD, p, "level")?;
+    if rooms.is_empty() && unit.is_none() && basis.is_none() {
+        return Err(bad(CMD, "say which rooms: `rooms` (names or numbers), `unit_type` or `basis` (with `level` to keep to one level)"));
+    }
+    let units = unit.as_deref().map(|u| unit_rooms(&sp, u));
+    let mut said: Vec<String> = Vec::new();
+    if !rooms.is_empty() {
+        said.push(format!("rooms {}", rooms.iter().take(8).cloned().collect::<Vec<_>>().join(", ")));
+    }
+    if let Some(u) = &unit {
+        said.push(format!("unit type {u}"));
+    }
+    if let Some(b) = &basis {
+        said.push(format!("ceiling height basis \"{b}\""));
+    }
+    if let Some(l) = &level {
+        said.push(format!("level {l}"));
+    }
+    let who: String = format!("rcp.type ({})", said.join("; ")).chars().take(MAX_TEXT * 2).collect();
+    let eq = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+    let mut changed: Vec<Value> = Vec::new();
+    let mut kept: Vec<Value> = Vec::new();
+    let mut set: Vec<usize> = Vec::new();
+    for (i, r) in sp.rooms.iter().enumerate().take(MAX_SELECT * 10) {
+        let lv = r.level.as_deref().unwrap_or_default();
+        if level.as_deref().is_some_and(|l| !eq(l, lv)) {
+            continue;
+        }
+        let num = r.number.as_deref().unwrap_or_default();
+        if !rooms.is_empty()
+            && !rooms.iter().any(|x| {
+                eq(x, &r.name)
+                    || (!num.trim().is_empty() && eq(x, num))
+                    || r.label.as_deref().is_some_and(|l| eq(x, l))
+                    || eq(x, &super::bspec::room_label(r))
+            })
+        {
+            continue;
+        }
+        if let Some(us) = &units
+            && !us.iter().any(|(ul, un)| !num.trim().is_empty() && eq(un, num) && (ul.is_empty() || lv.is_empty() || eq(ul, lv)))
+        {
+            continue;
+        }
+        if let Some(b) = &basis
+            && !r.ceiling_source.as_deref().is_some_and(|src| src.to_ascii_lowercase().contains(&b.to_ascii_lowercase()))
+        {
+            continue;
+        }
+        let was = r.ceiling_type.clone().filter(|w| !w.trim().is_empty());
+        let row = json!({"name": r.name, "number": r.number, "level": r.level, "was": was});
+        match (&was, &ty) {
+            (Some(w), Some(t)) if !force && !eq(w, t) => {
+                kept.push(json!({"name": r.name, "number": r.number, "level": r.level, "type": w,
+                    "why": format!("given before ({}); force: true replaces it", r.ceiling_type_source.as_deref().unwrap_or("a type of its own"))}));
+            }
+            _ => {
+                changed.push(row);
+                set.push(i);
+            }
+        }
+    }
+    for i in &set {
+        if let Some(r) = sp.rooms.get_mut(*i) {
+            r.ceiling_type.clone_from(&ty);
+            r.ceiling_type_source = ty.as_ref().map(|_| who.clone());
+        }
+    }
+    // The built ceilings of those rooms take it now. One the reflected ceiling plan typed keeps
+    // its type (the drawn type outranks a room's) unless `force`.
+    let mut retag: Vec<(Handle, Vec<RawTag>)> = Vec::new();
+    {
+        let d = s.doc()?;
+        for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("ceiling")).take(MAX_ITEMS * 10) {
+            let lv = super::bspec::made_level(e).unwrap_or_default();
+            let Some(room_tag) = super::bimlook::made_tag(e, "room").map(str::to_string) else { continue };
+            let Some(r) =
+                set.iter().filter_map(|i| sp.rooms.get(*i)).find(|r| r.level.as_deref().is_none_or(|l| eq(l, &lv)) && tag_is_room(&room_tag, r))
+            else {
+                continue;
+            };
+            let had = super::bimlook::made_tag(e, "type").map(str::to_string);
+            let by_room = super::bimlook::made_tag(e, "type_source").is_some();
+            if let Some(h) = had.as_deref().filter(|_| !by_room && !force)
+                && ty.as_deref().is_none_or(|t| !eq(t, h))
+            {
+                kept.push(json!({"number": r.number, "name": r.name, "level": lv, "type": h,
+                    "why": "the reflected ceiling plan types this ceiling; force: true replaces it"}));
+                continue;
+            }
+            let x: Vec<RawTag> = e.common.xdata.iter().cloned().collect();
+            let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP)) else { continue };
+            let end = x.iter().skip(at + 1).position(|t| t.code == 1001).map_or(x.len(), |k| at + 1 + k);
+            let mut out: Vec<RawTag> = Vec::with_capacity(x.len() + 2);
+            for (k, t) in x.iter().enumerate() {
+                let ours = k > at + 3 && k < end && (t.value.starts_with("type:") || t.value.starts_with("type_source:"));
+                if !ours {
+                    out.push(t.clone());
+                }
+                if k + 1 == end {
+                    out.extend(room_type_tags(r));
+                }
+            }
+            retag.push((e.handle, out));
+        }
+    }
+    let ceilings = retag.len();
+    let mut out = json!({"type": ty, "cleared": clear, "rooms": changed, "kept": kept, "ceilings": ceilings, "preview": preview});
+    if preview {
+        return Ok(out);
+    }
+    {
+        let d = s.doc_mut()?;
+        for (h, x) in retag {
+            d.modify_entity(h, |e| e.common.xdata = x.into())?;
+        }
+        if !set.is_empty() {
+            d.building_spec = Some(sp.to_json()).into();
+        }
+    }
+    // The ceilings' boards, tiles and paint laid out again when the model has its trade pieces.
+    let has_pieces = s.doc()?.model.iter().any(|e| super::tradeatoms::is_trade_piece(e));
+    if relayout && ceilings > 0 && has_pieces {
+        let only: std::collections::BTreeSet<String> = ["drywall", "finishes"].iter().map(|t| t.to_string()).collect();
+        let d = s.doc_mut()?;
+        super::tradeatoms::remove(d, Some(&only));
+        let r = super::tradeatoms::build(d, &sp, Some(&only));
+        out["relaid"] = r["tradePieces"].clone();
+    }
+    s.touch();
+    Ok(out)
 }
 
 fn run_colour(s: &mut Session, p: &Value) -> Result<Value> {
@@ -579,6 +823,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let poly: Vec<Vec2> = c.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect();
         let mut extra: Vec<String> = c.room.iter().map(|r| format!("room:{r}")).collect();
         extra.extend(c.ceiling_type.iter().map(|t| format!("type:{t}")));
+        // An area the plan doesn't type takes its room's (`rcp.type`).
+        if c.ceiling_type.as_deref().is_none_or(|t| t.trim().is_empty())
+            && let Some(r) = c.room.as_deref().and_then(|room| spec_room_of(sp, &level.name, room))
+        {
+            extra.extend(room_type_tags(r).into_iter().map(|t| t.value));
+        }
         if let Some(m) = panel(&poly, z)
             && add(d, "3D-Ceilings", tag("ceiling", &level.name, extra), m)
         {
