@@ -280,6 +280,8 @@ const MAX_FIXTURE_DEFAULT_TYPES: usize = 200;
 
 /// The WALLGEN tag key linking a built device to its spec tag.
 pub(super) const DEVID: &str = "devid";
+/// A device id's characters its element keeps under [`DEVID`], at most.
+const MAX_DEVID: usize = 240;
 
 fn round2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
@@ -1349,6 +1351,15 @@ const CIRCUIT_NEAR_FT: f64 = 25.0;
 /// else its circuit's other devices', else the wall's left. One outside its level's footprint is
 /// flagged `misplaced`.
 pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
+    build_devices_where(d, sp, None)
+}
+
+/// A device tag [`build_devices_where`] and [`rebuild_devices_where`] build (`None`: every one).
+pub(crate) type DevicePick<'a> = Option<&'a dyn Fn(&cadaddy_walk3d::tags::ElementTag) -> bool>;
+
+/// [`build_devices`] for the read devices `only` picks; the others still count as context (their
+/// circuits say which side of a wall a device serves) but are not built.
+pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: DevicePick<'_>) -> DeviceBuild {
     use super::mountlist::Datum;
     use super::validate_height as vh;
     let mut report = DeviceBuild::default();
@@ -1394,6 +1405,9 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
     let stack = super::bspec::stack_offsets(d, sp);
     let by_circuit = circuit_points(sp, &devices);
     for t in devices {
+        if only.is_some_and(|f| !f(t)) {
+            continue;
+        }
         let Some(level) = sp.level(&t.level).filter(|l| l.sheet.is_none()) else { continue };
         let mark = field(t, "type").unwrap_or_default();
         // What its sheet made it (a fire alarm plan's `S`), else what its mark says.
@@ -1764,7 +1778,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         }
         let symbol = Handle::parse_hex(&symbol_hex).unwrap_or(Handle(0));
         let mut xdata = super::wallgen::tag(cadaddy_walk3d::Part::Device, &level.name, symbol);
-        xdata.push(RawTag { code: 1000, value: format!("{DEVID}:{}", t.id.chars().take(240).collect::<String>()) });
+        xdata.push(RawTag { code: 1000, value: format!("{DEVID}:{}", t.id.chars().take(MAX_DEVID).collect::<String>()) });
         // Its element kind, set when it is made (`elemprops::element_kind` reads it).
         let element = class.map_or("device", super::fixturebody::Class::element_kind);
         xdata.push(RawTag { code: 1000, value: format!("{}:{element}", super::elemprops::ELEMENT_TAG) });
@@ -2140,8 +2154,23 @@ pub struct DeviceRebuild {
 /// elements built before go, every other element stays as it is. A device on a level that
 /// `model.build` stacked moves as that level's built objects did, and the people's overrides go
 /// back on.
+///
+/// Every device comes back as the spec says, so what a step corrected on the elements only (a
+/// light moved to its RCP spot, a box raised to its ceiling, a keynote's properties) is lost: a
+/// step running after such corrections builds its own new devices with
+/// [`rebuild_devices_where`] instead (Q6439).
 pub(crate) fn rebuild_devices(s: &mut Session, cmd: &str) -> Result<DeviceRebuild> {
+    rebuild_devices_where(s, cmd, None)
+}
+
+/// [`rebuild_devices`] for the read devices `only` picks (a step's own new ones): only their
+/// earlier elements go and only they are built; every other device element stays as it stands,
+/// with whatever was corrected on it since the build.
+pub(crate) fn rebuild_devices_where(s: &mut Session, cmd: &str, only: DevicePick<'_>) -> Result<DeviceRebuild> {
     let (sp, _) = super::bspec::current(s, cmd)?;
+    // The picked devices' ids, as their elements carry them.
+    let picked: Option<BTreeSet<String>> =
+        only.map(|f| sp.tags.iter().filter(|t| read_device(t) && f(t)).map(|t| t.id.chars().take(MAX_DEVID).collect::<String>()).collect());
     let d = s.doc_mut()?;
     // Each level's stacking move, as its built objects (not devices) carry it.
     let mut moved: HashMap<String, Vec2> = HashMap::new();
@@ -2152,16 +2181,23 @@ pub(crate) fn rebuild_devices(s: &mut Session, cmd: &str) -> Result<DeviceRebuil
             moved.entry(level.to_ascii_lowercase()).or_insert(off);
         }
     }
-    let old: Vec<Handle> = d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle).collect();
+    let old: Vec<Handle> = d
+        .model
+        .iter()
+        .filter(|e| super::wallgen::made_as(e).as_deref() == Some("device"))
+        .filter(|e| picked.as_ref().is_none_or(|ids| made(e, DEVID).is_some_and(|id| ids.contains(&id))))
+        .map(|e| e.handle)
+        .collect();
     for h in &old {
         d.model.remove(*h);
     }
-    let built = build_devices(d, &sp).built;
+    let kept: BTreeSet<Handle> = d.model.handles().into_iter().collect();
+    let built = build_devices_where(d, &sp, only).built;
     if !moved.is_empty() {
         let new: Vec<(Handle, Vec2)> = d
             .model
             .iter()
-            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("device"))
+            .filter(|e| !kept.contains(&e.handle) && super::wallgen::made_as(e).as_deref() == Some("device"))
             .filter_map(|e| super::bspec::made_level(e).and_then(|l| moved.get(&l.to_ascii_lowercase()).map(|off| (e.handle, *off))))
             .collect();
         for (h, off) in new {

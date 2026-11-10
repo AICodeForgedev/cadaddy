@@ -22010,9 +22010,13 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
         sitework::site_loads(&sp, &carried).iter().take(MAX_SITE_RFIS).map(|l| format!("{}-{} {}", l.panel, l.number, l.description)).collect();
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     // Built: the luminaires, then the concrete and the gear and runs, moved as the build moved
-    // the slab level to stack it; each element marked as site work.
+    // the slab level to stack it; each element marked as site work. Only this step's own
+    // devices (Q6439): the building's were corrected on the model just before (lights at their
+    // RCP spots, boxes at their ceilings, keynotes' boxes raised), not in the spec, and a whole
+    // rebuild would put them back where the plans read them while the report kept the moves.
     if !all.tags.is_empty() || forgot > 0 {
-        super::propfill::rebuild_devices(s, "bim_build")?;
+        let mine = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.contains_key(sitework::MARK);
+        super::propfill::rebuild_devices_where(s, "bim_build", Some(&mine))?;
     }
     let before: BTreeSet<cadaddy_doc::Handle> = s.doc()?.model.handles().into_iter().collect();
     {
