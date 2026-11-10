@@ -718,6 +718,39 @@ mod tests {
         panic!("the loaded images kept changing");
     }
 
+    /// With detail levels on, their pixel size follows the zoom like the tolerance: a band
+    /// builds again only the part in view, and a part out of view keeps its coarser detail.
+    #[test]
+    fn detail_levels_follow_the_zoom_band_out_of_view_too() {
+        let d = three_areas_and_a_hatch();
+        let rules = Arc::new(detail::PlanRules::default());
+        let at = |px: f64, view: Bounds2| Options {
+            tolerance: px * 0.5,
+            min_dash: px * 2.0,
+            detail: detail::Detail::new(px, rules.clone()),
+            view: Some(view),
+            ..Options::default()
+        };
+        let everywhere = Bounds2::new(Vec2::new(-1000.0, -1000.0), Vec2::new(41_000.0, 2000.0));
+        for _ in 0..50 {
+            let generation = images::generation();
+            let mut cache = ChunkCache::default();
+            build_cached(&d, &Space::Model, &at(2.0, everywhere), &mut cache);
+            build_cached(&d, &Space::Model, &at(0.02, area(10_000.0)), &mut cache);
+            let zoomed = (cache.rebuilt, cache.kept);
+            // Zoomed out past the kept parts' detail: those finer than asked are built again.
+            build_cached(&d, &Space::Model, &at(4.0, area(0.0)), &mut cache);
+            let out = cache.rebuilt;
+            if images::generation() != generation {
+                continue;
+            }
+            assert_eq!(zoomed, (1, 3), "{cache:?}");
+            assert_eq!(out, 4, "{cache:?}");
+            return;
+        }
+        panic!("the loaded images kept changing");
+    }
+
     /// A part whose only object is a hatch the build area left without pattern lines draws
     /// nothing, but its object is there: a view coming to it builds its pattern.
     #[test]
