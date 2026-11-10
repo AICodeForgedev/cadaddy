@@ -22,6 +22,7 @@ pub mod buildings;
 pub(crate) mod buildrec;
 pub mod calibrate;
 mod cam;
+pub(crate) mod ceilheight;
 pub mod ceilings;
 pub mod classic;
 pub(crate) mod clip_partners;

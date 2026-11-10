@@ -142,6 +142,23 @@
       "basis": "trade practice: a return grille the drawings leave unducted returns through the ceiling plenum to its unit (IMC 602 plenum); alternative: a ducted return the engineer may call for"
     },
     {
+      "id": "A-CEILING-HEIGHT",
+      "trade": "architecture",
+      "fills": "each room's ceiling height, from the first source in `order` that gives one (numbers: clear_ft, the least ceiling height a derived one is set to; default_size_in, the depth of the floor/ceiling or roof/ceiling assembly over a room when its framing is not read; deck_in, the deck or topping over the members; membrane_in, the ceiling's channel and board under them)",
+      "basis": "trade practice: the reflected ceiling plans set ceiling heights; a room takes its own RCP tag or note first, then the enlarged plan or unit RCP of its room type, then its ceiling type's legend, then a section or interior elevation that dimensions it; only where none gives one is it derived, at the underside of the assembly over the room (the floor to floor less the members, deck and ceiling membrane), never under the least ceiling height the code allows (IBC 1208.2: 7'-6\" in habitable spaces and corridors); a derived height is inferred, marked as such with its basis, and asked of the architect; alternative: the height the architect gives",
+      "order": [
+        {"key": "room_rcp", "label": "room RCP"},
+        {"key": "unit_rcp", "label": "unit RCP"},
+        {"key": "legend", "label": "ceiling type legend"},
+        {"key": "section", "label": "section"},
+        {"key": "derived", "label": "derived"}
+      ],
+      "clear_ft": 7.5,
+      "default_size_in": 24.0,
+      "deck_in": 1.5,
+      "membrane_in": 1.5
+    },
+    {
       "id": "A-MEZZANINE",
       "trade": "architecture",
       "fills": "a mezzanine's elevation where the sections and elevations mark none, and the floor to floor of the storey it is in where none is read (numbers: clear_ft, the clear height kept under and over a mezzanine; default_size_in, the depth of its floor's structure)",
