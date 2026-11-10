@@ -7,6 +7,7 @@ mod container;
 mod meshbuf;
 mod model;
 mod save;
+mod sheets;
 mod tokens;
 
 use cadaddy_doc::{Drawing, Space};
@@ -14,6 +15,7 @@ use cadaddy_doc::{Drawing, Space};
 pub use container::{FORMAT_VERSION, is_cdy};
 pub use model::{ENTITY_CHUNK, OpenProfile, ReadReport};
 pub use save::{MAX_WASTE, Output, SaveState, save, seed};
+pub use sheets::{chunk_sheet, decode as decode_stored, encode as encode_stored, pieces as sheet_pieces, slack as sheet_slack};
 
 use crate::{IoError, Result};
 
@@ -56,6 +58,16 @@ pub fn write_cdy_checkpoint(d: &Drawing) -> Result<Vec<u8>> {
 /// `read_notes`; an error means the file isn't a .cdy file this version can read.
 pub fn read_cdy(bytes: &[u8]) -> Result<Drawing> {
     let (mut d, rep) = model::read(bytes).map_err(IoError::Format)?;
+    d.read_notes.extend(rep.notes);
+    Ok(d)
+}
+
+/// [`read_cdy`] for the interface (Q6418): a print set's sheets (the chunks its sheet index files
+/// under one sheet) are left out of memory, as stored, in the drawing's
+/// [`cadaddy_doc::sheetstore::SheetStore::parked`]; [`decode_stored`] reads one when it is wanted.
+/// A file without a sheet index reads whole, as [`read_cdy`] reads it.
+pub fn read_cdy_parked(bytes: &[u8]) -> Result<Drawing> {
+    let (mut d, rep) = model::read_with(bytes, true).map_err(IoError::Format)?;
     d.read_notes.extend(rep.notes);
     Ok(d)
 }

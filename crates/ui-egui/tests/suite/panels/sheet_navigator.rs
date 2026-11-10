@@ -156,11 +156,27 @@ fn median_ms(n: usize, mut f: impl FnMut()) -> f64 {
     t.get(n / 2).copied().unwrap_or(0.0)
 }
 
-/// What the screen does with `d` open: objects drawn, display list and CPU frame times.
+/// What the screen does with `d` open: objects drawn, display list and CPU frame times. The
+/// whole drawing stays in memory (as before sheets loaded on demand, Q6418).
 fn measure(label: &str, d: cadaddy_engine::doc::Drawing) {
     let mut s = Session::new();
     s.open_drawing(d, "Sample Set", None);
     let mut app = CadApp::new(s, Services::default());
+    app.session.sheets_on_demand = false;
+    measure_app(label, app);
+}
+
+/// [`measure`] of the .cdy file at `path` opened as the interface opens it: sheets on demand.
+fn measure_file(label: &str, path: &str) {
+    let mut s = Session::new();
+    s.sheets_on_demand = true;
+    let t = Instant::now();
+    s.finish_open(cadaddy_engine::cmd::file::read_file_on_demand(path).unwrap()).unwrap();
+    println!("{label}: read on demand in {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+    measure_app(label, CadApp::new(s, Services::default()));
+}
+
+fn measure_app(label: &str, mut app: CadApp) {
     app.canvas.zoom_pending = true;
     let ctx = egui::Context::default();
     let size = vec2(1600.0, 1000.0);
@@ -216,7 +232,8 @@ fn measure(label: &str, d: cadaddy_engine::doc::Drawing) {
             let _ = app.session.execute("sheet.next", &json!({}));
             frame(&mut app, None);
         });
-        format!("   next sheet {ms:.1} ms")
+        let total = app.session.doc().map_or(0, |d| d.model.len());
+        format!("   next sheet {ms:.1} ms (then {total} objects in memory)")
     };
     let mid = |v: &mut Vec<f64>| {
         v.sort_by(f64::total_cmp);
@@ -240,4 +257,14 @@ fn sheet_navigator_frame_times() {
     whole.agent = None.into();
     measure("before: the whole set (no sheets)", whole);
     measure("after: one sheet open", sample::job_print_set(sheets, per));
+    // Sheets on demand (Q6418): the set saved to .cdy and opened from it.
+    let dir = std::env::temp_dir().join(format!("cadaddy-sheetnav-bench-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("Sample Set.cdy").to_string_lossy().into_owned();
+    let mut set = sample::job_print_set(sheets, per);
+    set.sheet_store.sheets = std::sync::Arc::new(cadaddy_engine::sheetstore::rects_of(&cadaddy_engine::sheetnav::print_sheets(&set)));
+    std::fs::write(&path, cadaddy_io::cdy::write_cdy_checkpoint(&set).unwrap()).unwrap();
+    drop(set);
+    measure_file("after Q6418: sheets on demand", &path);
+    let _ = std::fs::remove_dir_all(&dir);
 }

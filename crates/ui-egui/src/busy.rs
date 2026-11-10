@@ -41,6 +41,11 @@ pub struct Busy {
     cancel: Option<bool>,
 }
 
+/// Whether work can run off the UI thread at all (not on the web, which has no threads).
+pub fn backgrounds_anything() -> bool {
+    cfg!(not(target_arch = "wasm32"))
+}
+
 /// Whether `command` (an id or alias) runs off the UI thread when an interface starts it.
 pub fn backgrounds(command: &str) -> bool {
     cfg!(not(target_arch = "wasm32")) && cadaddy_engine::cmd::is_long(command)
