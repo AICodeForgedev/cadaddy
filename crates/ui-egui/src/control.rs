@@ -348,6 +348,11 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("ui.focus", "", "Activate the native window."),
     ("ui.screenshot", "{path?}", "PNG of the window (needs a presented frame)."),
     ("ui.render", "{path?, width?, height?, fit?}", "Headless render of the drawing; replies pngBase64."),
+    (
+        "ui.draw2d",
+        "{on?: bool}",
+        "Where the 2D canvas spends its time: the last regeneration (objects considered and drawn, build time by kind of object, vertex data and upload) and the last frame (primitives sent and in view, cull, canvas and frame times), GPU and system memory and the adapter. `on` starts or stops counting (the --debug overlay counts while shown); `on: true` rebuilds the list once so the next regeneration is counted.",
+    ),
     ("app.open", "{path}", "Open a drawing."),
     (
         "app.save",
@@ -594,6 +599,17 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             // `perf.slowest` covers the frames since the last report.
             app.slowest.clear();
             ok(v)
+        }
+        "ui.draw2d" => {
+            if let Some(on) = p.get("on").and_then(Value::as_bool) {
+                app.canvas.stats.set_on(on || app.debug_overlay);
+                if on {
+                    // Rebuild so the next regeneration is counted.
+                    app.canvas.list = None;
+                }
+                ctx.request_repaint();
+            }
+            ok(crate::debug_overlay::draw2d_json(app))
         }
         "ui.elements" => ok(elements(ctx, p)),
         "ui.startup" => ok(crate::startup::report()),
