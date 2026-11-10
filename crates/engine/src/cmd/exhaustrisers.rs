@@ -1,7 +1,7 @@
 //! Typical exhaust risers (Q6496): a set often draws a guest bathroom's exhaust only on its
 //! typical room view (the fan and its small duct to the wall chase) and on a riser detail
-//! (`TYPICAL RISER OF 8 EXHAUST FANS`: the fans of the rooms stacked over each other, their ducts
-//! up the chase to the roof terminal it tags, `RH-1`). The floor plans only key one instance; the
+//! (`TYPICAL EXHAUST RISER, 12 FANS`: the fans of the rooms stacked over each other, their ducts
+//! up the chase to the roof terminal it tags, `GRH-7`). The floor plans only key one instance; the
 //! roof plan places a terminal over every chase. Nothing on a floor plan draws the risers, so a
 //! build that reads plans gets fans with a stub of duct and roof hoods connected to nothing.
 //!
@@ -54,13 +54,13 @@ const NOTE_LINE_H: f64 = 80.0;
 /// One typical exhaust riser detail.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RiserDetail {
-    /// The sheet it is on and its number there (`M-6`, `3`).
+    /// The sheet it is on and its number there (`M-9`, `3`).
     pub sheet: String,
     pub number: Option<String>,
     pub title: String,
-    /// How many fans its title says it carries (`OF 8 EXHAUST FANS`).
+    /// How many fans its title says it carries (`12 FANS`).
     pub fans: Option<usize>,
-    /// The roof terminals it tags (of the terminals the job has: `RH-1`).
+    /// The roof terminals it tags (of the terminals the job has: `GRH-7`).
     pub terminals: Vec<String>,
 }
 
@@ -660,38 +660,38 @@ mod tests {
     #[test]
     fn a_riser_detail_says_how_many_fans_it_carries_and_the_roof_terminal_it_tags() {
         for k in [1.0, 72.0] {
-            let page = details_page(k, "TYPICAL RISER OF 8 EXHAUST FANS", "RH", "1");
-            let tags = vec!["RH-1".to_string(), "RH-2".to_string()];
+            let page = details_page(k, "TYPICAL EXHAUST RISER, 12 FANS", "GRH", "7");
+            let tags = vec!["GRH-7".to_string(), "GRH-9".to_string()];
             let found = riser_details(&[("M-9".to_string(), page)], &tags);
             assert_eq!(found.len(), 1, "only the riser detail, at {k}: {found:?}");
             let r = found.first().unwrap_or_else(|| panic!("detail"));
-            assert_eq!(r.fans, Some(8));
-            assert_eq!(r.terminals, vec!["RH-1".to_string()]);
+            assert_eq!(r.fans, Some(12));
+            assert_eq!(r.terminals, vec!["GRH-7".to_string()]);
             assert_eq!(r.number.as_deref(), Some("3"));
         }
         // A supply riser or an exhaust plan is no exhaust riser.
         for title in ["TYPICAL SUPPLY RISER", "EXHAUST PLAN"] {
-            let page = details_page(1.0, title, "RH", "1");
-            assert!(riser_details(&[("M-9".to_string(), page)], &["RH-1".to_string()]).is_empty(), "{title}");
+            let page = details_page(1.0, title, "GRH", "7");
+            assert!(riser_details(&[("M-9".to_string(), page)], &["GRH-7".to_string()]).is_empty(), "{title}");
         }
     }
 
     #[test]
     fn a_note_requiring_continuous_exhaust_ducts_is_found() {
         let mut d = Drawing::default();
-        text(&mut d, "GALVANIZED STEEL. EXHAUST DUCT SHALL BE CONTINUOUS FROM", 0.0, 0.0, 3.0);
+        text(&mut d, "ALL TOILET EXHAUST DUCTWORK TO BE CONTINUOUS TO OUTDOORS", 0.0, 0.0, 3.0);
         assert!(continuous_required([&d]).is_some_and(|n| n.contains("CONTINUOUS")));
         // Its lines separate texts, a space lost after a word.
         let mut lines = Drawing::default();
-        text(&mut lines, "RESTROOM EXHAUST DUCTS SHALL BE IN WALLS. THE EXHAUST", 0.0, 10.0, 3.0);
-        text(&mut lines, "DUCT SHALL BE CONTINUOUSFROM THE FAN TO THE OUTSIDE", 0.0, 5.0, 3.0);
+        text(&mut lines, "BATH FANS ARE IN THE CEILINGS. EACH EXHAUST", 0.0, 10.0, 3.0);
+        text(&mut lines, "DUCT TO RUN CONTINUOUSTO THE FAN'S ROOF HOOD", 0.0, 5.0, 3.0);
         assert!(continuous_required([&lines]).is_some());
         // Only the note's own lines: not the title block beside it.
         let mut boxed = Drawing::default();
-        text(&mut boxed, "GALVANIZED STEEL. EXHAUST DUCT SHALL BE CONTINUOUSFROM", 0.0, 10.0, 3.0);
+        text(&mut boxed, "SEAL ALL JOINTS. EACH EXHAUST DUCT TO RUN CONTINUOUSTO", 0.0, 10.0, 3.0);
         text(&mut boxed, "1 SAMPLE STREET", 120.0, 9.0, 2.0);
-        text(&mut boxed, "THE FAN TO THE OUTSIDE. EXHAUST DUCT", 0.0, 5.0, 3.0);
-        assert_eq!(continuous_required([&boxed]).as_deref(), Some("EXHAUST DUCT SHALL BE CONTINUOUSFROM THE FAN TO THE OUTSIDE"));
+        text(&mut boxed, "ITS ROOF HOOD. SUPPORT EVERY 8 FT", 0.0, 5.0, 3.0);
+        assert_eq!(continuous_required([&boxed]).as_deref(), Some("EACH EXHAUST DUCT TO RUN CONTINUOUSTO ITS ROOF HOOD"));
         let mut other = Drawing::default();
         text(&mut other, "PROVIDE CONTINUOUS INSULATION ON SUPPLY DUCT", 0.0, 0.0, 3.0);
         assert!(continuous_required([&other]).is_none());
@@ -760,7 +760,7 @@ mod tests {
         RiserDetail {
             sheet: "M-9".into(),
             number: Some("3".into()),
-            title: format!("TYPICAL RISER OF {fans} EXHAUST FANS"),
+            title: format!("TYPICAL EXHAUST RISER, {fans} FANS"),
             fans: Some(fans),
             terminals: vec![tag.into()],
         }
@@ -773,9 +773,9 @@ mod tests {
     #[test]
     fn each_fans_duct_goes_on_up_the_chase_into_the_hood_over_it_when_the_notes_require_it_continuous() {
         // The hood over the chase (20" off it in plan), and one over another chase no fan here reaches.
-        let mut sp = building(&[("RH-1", [40_130.0, 260.0]), ("RH-1", [40_800.0, 900.0])]);
+        let mut sp = building(&[("GRH-7", [40_130.0, 260.0]), ("GRH-7", [40_800.0, 900.0])]);
         let before = sp.mep.runs.len();
-        let report = stack_fan_ducts(&mut sp, &[detail(8, "RH-1")], Some("EXHAUST DUCT SHALL BE CONTINUOUS"));
+        let report = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], Some("EACH EXHAUST DUCT CONTINUOUS TO ITS HOOD"));
         assert_eq!(report["fans_stacked"], 8, "{report}");
         assert_eq!(report["risers"], 8, "{report}");
         assert_eq!(report["terminals_no_chase_reaches"].as_array().map(Vec::len), Some(1), "{report}");
@@ -798,7 +798,7 @@ mod tests {
             assert!((x.top_ft.unwrap_or_default() + el - 39.0).abs() < 1e-9, "{:?} on {}", x.top_ft, x.level);
             assert!((x.bottoms_ft.first().copied().unwrap_or_default() - 8.25).abs() < 1e-9);
             assert_eq!(x.made, Made::Derived);
-            assert!(x.basis.contains("TYPICAL RISER OF 8 EXHAUST FANS") && x.basis.contains("CONTINUOUS"), "{}", x.basis);
+            assert!(x.basis.contains("TYPICAL EXHAUST RISER, 8 FANS") && x.basis.contains("CONTINUOUS"), "{}", x.basis);
         }
         let mut spots: Vec<[f64; 2]> = risers.iter().filter_map(|r| r.points.first()).map(|p| [p[0] % 10_000.0, p[1]]).collect();
         spots.sort_by(|a, b| a[0].total_cmp(&b[0]));
@@ -815,16 +815,16 @@ mod tests {
         }
         // Built again (a rebuild): the same, not twice.
         let n = sp.mep.runs.len();
-        let again = stack_fan_ducts(&mut sp, &[detail(8, "RH-1")], Some("EXHAUST DUCT SHALL BE CONTINUOUS"));
+        let again = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], Some("EACH EXHAUST DUCT CONTINUOUS TO ITS HOOD"));
         assert_eq!(again["risers"], 8);
         assert_eq!(sp.mep.runs.len(), n);
     }
 
     #[test]
     fn without_the_note_the_chase_carries_one_riser_of_the_fans_combined_area_and_says_it_was_inferred() {
-        let mut sp = building(&[("RH-1", [40_130.0, 240.0])]);
+        let mut sp = building(&[("GRH-7", [40_130.0, 240.0])]);
         let before = sp.mep.runs.len();
-        let report = stack_fan_ducts(&mut sp, &[detail(8, "RH-1")], None);
+        let report = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], None);
         assert_eq!(report["risers"], 1, "{report}");
         let riser = sp.mep.runs.iter().find(|r| r.top_ft.is_some() && r.level != "Roof").unwrap_or_else(|| panic!("riser"));
         assert_eq!(riser.level, "Level 1", "from the lowest storey");
@@ -849,9 +849,9 @@ mod tests {
         let chases = [0.0, 300.0, 600.0];
         let off = [[0.0, 0.0], [72.0, 10.0], [-48.0, 0.0], [0.0, 0.0]];
         let hoods: Vec<(&str, [f64; 2])> =
-            [0.0, 300.0, 600.0, 900.0].iter().map(|c| ("RH-1", [40_000.0 + 130.0 + c + 240.0, 240.0 + 144.0])).collect();
+            [0.0, 300.0, 600.0, 900.0].iter().map(|c| ("GRH-7", [40_000.0 + 130.0 + c + 240.0, 240.0 + 144.0])).collect();
         let mut sp = building_with(&chases, off, &hoods);
-        let report = stack_fan_ducts(&mut sp, &[detail(8, "RH-1")], Some("CONTINUOUS"));
+        let report = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], Some("CONTINUOUS"));
         assert_eq!(report["chases"], 3, "each chase once, its storeys lined up: {report}");
         assert_eq!(report["fans_stacked"], 24, "{report}");
         assert_eq!(report["chases_by_fan_count"]["8"], 3, "{report}");
@@ -881,16 +881,16 @@ mod tests {
     #[test]
     fn fans_far_from_any_hood_and_a_riser_off_its_details_count_are_said() {
         // A hood of another type over the chase: not the detail's terminal.
-        let mut sp = building(&[("RH-2", [40_130.0, 240.0])]);
-        let report = stack_fan_ducts(&mut sp, &[detail(8, "RH-1")], Some("CONTINUOUS"));
+        let mut sp = building(&[("GRH-9", [40_130.0, 240.0])]);
+        let report = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], Some("CONTINUOUS"));
         assert_eq!(report["risers"], 0, "{report}");
         // Its own hood over the chase, but the detail says 6 fans.
-        let mut sp = building(&[("RH-1", [40_130.0, 240.0])]);
-        let report = stack_fan_ducts(&mut sp, &[detail(6, "RH-1")], Some("CONTINUOUS"));
+        let mut sp = building(&[("GRH-7", [40_130.0, 240.0])]);
+        let report = stack_fan_ducts(&mut sp, &[detail(6, "GRH-7")], Some("CONTINUOUS"));
         assert_eq!(report["risers"], 8);
         assert_eq!(report["fan_count_not_the_details"].as_array().map(Vec::len), Some(1), "{report}");
         // No detail: nothing is stacked.
-        let mut sp = building(&[("RH-1", [40_130.0, 240.0])]);
+        let mut sp = building(&[("GRH-7", [40_130.0, 240.0])]);
         assert_eq!(stack_fan_ducts(&mut sp, &[], Some("CONTINUOUS"))["details"], 0);
         assert!(sp.mep.runs.iter().all(|r| r.top_ft.is_none()));
     }
@@ -902,25 +902,25 @@ mod tests {
     #[test]
     fn a_typical_riser_detail_stacks_the_typical_rooms_fan_ducts_up_to_the_hoods_the_roof_plan_places() {
         let mut row = BTreeMap::new();
-        row.insert("MARK".to_string(), "RH-1".to_string());
-        row.insert("CFM".to_string(), "440".to_string());
+        row.insert("MARK".to_string(), "GRH-7".to_string());
+        row.insert("CFM".to_string(), "600".to_string());
         let table = cadaddy_mepfix::equip_reader::Table {
-            sheet: "M-1".into(),
+            sheet: "M-8".into(),
             title: "RELIEF HOOD SCHEDULE".into(),
             columns: vec!["MARK".into(), "CFM".into()],
             rows: vec![row],
         };
         let sched = cadaddy_mepfix::equip_reader::scheduled(&[table]);
         assert_eq!(sched.first().map(|x| x.kind.as_str()), Some("relief_hood"), "{sched:?}");
-        // The roof plan (its own sheet, inches): RH over 1 by each of two hoods, 30" x 36".
+        // The roof plan (its own sheet, inches): GRH over 7 by each of two hoods, 30" x 36".
         let mut roof = Drawing::default();
         for (x, y) in [(130.0, 260.0), (800.0, 900.0)] {
             rect(&mut roof, [x - 15.0, y - 18.0], [x + 15.0, y + 18.0]);
-            text(&mut roof, "RH", x + 20.0, y + 22.0, 6.0);
-            text(&mut roof, "1", x + 22.0, y + 12.0, 6.0);
+            text(&mut roof, "GRH", x + 20.0, y + 22.0, 6.0);
+            text(&mut roof, "7", x + 22.0, y + 12.0, 6.0);
         }
         let sheet = super::super::printmep::SheetRef {
-            number: "M-4".into(),
+            number: "M-7".into(),
             level: "R".into(),
             discipline: "M".into(),
             kind: "plan".into(),
@@ -940,9 +940,9 @@ mod tests {
         let hoods: Vec<&MepEquipment> = read.equipment.iter().filter(|e| e.kind == "relief_hood").collect();
         assert_eq!(hoods.len(), 2, "a hood at every tag: {:?}", read.equipment.iter().map(|e| (&e.tag, &e.kind)).collect::<Vec<_>>());
         sp.mep.equipment.extend(read.equipment);
-        let page = details_page(1.0, "TYPICAL RISER OF 8 EXHAUST FANS", "RH", "1");
-        let details = riser_details(&[("M-6".to_string(), page)], &["RH-1".to_string()]);
-        let report = stack_fan_ducts(&mut sp, &details, Some("EXHAUST DUCT SHALL BE CONTINUOUS"));
+        let page = details_page(1.0, "TYPICAL EXHAUST RISER, 8 FANS", "GRH", "7");
+        let details = riser_details(&[("M-9".to_string(), page)], &["GRH-7".to_string()]);
+        let report = stack_fan_ducts(&mut sp, &details, Some("EACH EXHAUST DUCT CONTINUOUS TO ITS HOOD"));
         assert_eq!(report["fans_stacked"], 8, "{report}");
         assert_eq!(sp.mep.runs.iter().filter(|r| r.level == "Roof" && r.top_ft.is_some()).count(), 8);
     }
