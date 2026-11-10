@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1259,
-    "count": 1259,
+    "callableAsJson": 1263,
+    "count": 1263,
     "ids": [
       "-attedit",
       "-block",
@@ -1020,6 +1020,10 @@
       "shapes",
       "share",
       "sheet.facts",
+      "sheet.list",
+      "sheet.next",
+      "sheet.open",
+      "sheet.previous",
       "sheetset",
       "sheetset.from_model",
       "showurls",
