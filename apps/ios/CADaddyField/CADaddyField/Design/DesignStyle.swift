@@ -67,6 +67,7 @@ struct DesignStyle: Equatable {
         case .cabinets: return UIColor(hex: 0xC4A27A)
         case .furniture: return UIColor(hex: 0xBDB6AC)
         case .architecture: return ghost
+        case .conveying: return UIColor(hex: 0xA9B4C2)
         }
     }
 
@@ -156,6 +157,7 @@ extension BuildingSystem {
         case .fire: return "Fire protection"
         case .cabinets: return "Cabinets"
         case .furniture: return "Furniture"
+        case .conveying: return "Elevators"
         }
     }
     var symbol: String {
@@ -168,6 +170,7 @@ extension BuildingSystem {
         case .fire: return "flame.fill"
         case .cabinets: return "cabinet.fill"
         case .furniture: return "bed.double.fill"
+        case .conveying: return "arrow.up.arrow.down.square"
         }
     }
 }

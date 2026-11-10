@@ -55,7 +55,8 @@ struct BuildingView: View {
 
                 VStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    bottom
+                    bottom(cap: layout.maxBottom)
+                        .frame(maxHeight: layout.maxBottom, alignment: .bottom)
                         .background(GeometryReader { g in Color.clear.preference(key: BottomHeightKey.self, value: g.size.height) })
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -160,20 +161,46 @@ struct BuildingView: View {
 
     // MARK: bottom
 
-    @ViewBuilder private var bottom: some View {
+    /// The view control's height in the bottom stack (56 pt target plus its padding).
+    static let switcherHeight: CGFloat = ChromeLayout.target + 6
+
+    /// The bottom stack: what the scope needs, then the always-visible view control. `cap` is the layout's
+    /// limit for the whole stack; the sheets fit inside what the view control leaves.
+    private func bottom(cap: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            scopeBottom(cap: max(cap - Self.switcherHeight, 120))
+            ViewSwitcher(exp: exp).padding(.horizontal, 10).padding(.bottom, 6)
+        }
+    }
+
+    @ViewBuilder private func scopeBottom(cap: CGFloat) -> some View {
         switch exp.scope {
         case .building:
             if exp.focus != nil { TraceStrip(exp: exp).padding(.horizontal, 12).padding(.bottom, 8).transition(.move(edge: .bottom).combined(with: .opacity)) } else {
-                Text(exp.revealDone ? "Tap a floor, or drag the rail to lift floors apart" : "Drag across the building to reveal its systems")
-                    .fieldFont(13, .medium).foregroundStyle(s.inkSecondary)
-                    .lineLimit(2)
-                    .padding(.horizontal, 20).padding(.top, 6).padding(.bottom, 14).frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .center, spacing: 10) {
+                    if exp.wholeView == .mep && exp.revealDone { FullMEPToggle(exp: exp) }
+                    Text(hint)
+                        .fieldFont(13, .medium).foregroundStyle(s.inkSecondary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 14).padding(.top, 4).padding(.bottom, 8)
             }
         case let .floor(i):
             FloorSheet(exp: exp, level: i).transition(.move(edge: .bottom).combined(with: .opacity))
         case let .room(n):
-            RoomSheet(exp: exp, number: n, onStandInRoom: onStandInRoom).transition(.move(edge: .bottom).combined(with: .opacity))
+            RoomSheet(exp: exp, number: n, onStandInRoom: onStandInRoom, cap: cap).transition(.move(edge: .bottom).combined(with: .opacity))
         }
+    }
+
+    private var hint: String {
+        guard exp.revealDone else { return "Drag across the building to reveal its systems" }
+        if exp.wholeView == .mep && exp.density == .full && exp.unknownSizePipes > 0 {
+            let n = exp.unknownSizePipes
+            return "\(n) \(n == 1 ? "pipe has" : "pipes have") no size in the model and \(n == 1 ? "is" : "are") left out"
+        }
+        return "Tap a floor, or drag the rail to lift floors apart"
     }
 }
 
@@ -388,31 +415,83 @@ struct LayersButton: View {
     }
 }
 
-/// The compact layer switches, shared by the building screens and AR.
+/// The view control: Architectural | MEP | Floor | Room, always visible at the bottom, one view active.
+@available(iOS 18.0, *)
+struct ViewSwitcher: View {
+    @ObservedObject var exp: BuildingExperience
+    var body: some View {
+        let s = exp.style
+        HStack(spacing: 4) {
+            ForEach(FieldView.allCases) { v in
+                let on = exp.activeView == v
+                Button { withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { exp.setView(v) } } label: {
+                    Text(v.title)
+                        .fieldFont(13, on ? .bold : .semibold)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .foregroundStyle(on ? (s.isDark ? Color.black : Color.white) : s.ink.opacity(0.85))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background { if on { Capsule().fill(s.isDark ? Color.white : Color(uiColor: UIColor(hex: 0x0E1A24))) } }
+                        .frame(minHeight: ChromeLayout.target)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(v.title) view")
+                .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+            }
+        }
+        .padding(.horizontal, 6)
+        .glass(s, radius: 28)
+    }
+}
+
+/// MEP's one density control: mains and big gear, or Full MEP.
+@available(iOS 18.0, *)
+struct FullMEPToggle: View {
+    @ObservedObject var exp: BuildingExperience
+    var body: some View {
+        let s = exp.style
+        let on = exp.density == .full
+        Button { withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { exp.setDensity(on ? .mains : .full) } } label: {
+            HStack(spacing: 6) {
+                Image(systemName: on ? "checkmark.circle.fill" : "plus.circle").fieldFont(14, .semibold)
+                Text("Full MEP").fieldFont(14, .semibold).lineLimit(1)
+            }
+            .foregroundStyle(on ? (s.isDark ? Color.black : Color.white) : s.ink)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 40)
+            .background(Capsule().fill(on ? (s.isDark ? Color.white : Color(uiColor: UIColor(hex: 0x0E1A24))) : s.hairline.opacity(0.6)))
+            .overlay(Capsule().strokeBorder(s.hairline, lineWidth: 0.75))
+            .frame(minHeight: ChromeLayout.target)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityLabel("Full MEP")
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// The compact layer switches, shared by the building screens and AR. Each view offers only its own switches.
 struct LayerSwitches: View {
     @ObservedObject var store: LayerStore
     let style: DesignStyle
-    let scope: DetailScope
+    let layers: [FieldLayer]
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(FieldLayer.allCases) { l in
-                let dim = l.isDimmed(at: scope)
+            ForEach(layers) { l in
                 HStack(spacing: 12) {
                     badge(l)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(l.title).fieldFont(16, .semibold).foregroundStyle(style.ink)
-                        if dim { Text("Shown on floors and rooms").font(.system(size: 11)).foregroundStyle(style.inkSecondary) }
-                    }
+                    Text(l.title).fieldFont(16, .semibold).foregroundStyle(style.ink)
                     Spacer()
                     Toggle(l.title, isOn: Binding(get: { store.prefs.isOn(l) }, set: { on in withAnimation { store.prefs.set(l, on: on) } }))
                         .labelsHidden()
                         .tint(color(l))
                 }
                 .frame(minHeight: 56)
-                .opacity(dim ? 0.45 : 1)
                 .contentShape(Rectangle())
-                if l != FieldLayer.allCases.last { Rectangle().fill(style.hairline).frame(height: 0.5) }
+                if l != layers.last { Rectangle().fill(style.hairline).frame(height: 0.5) }
             }
         }
     }
@@ -455,7 +534,12 @@ struct LayersPanel: View {
         let s = exp.style
         return VStack(alignment: .leading, spacing: 10) {
             Text("SHOW").fieldFont(11, .semibold).tracking(1.2).foregroundStyle(s.inkSecondary)
-            LayerSwitches(store: LayerStore.shared, style: s, scope: exp.scope.detail)
+            if exp.activeView.layers.isEmpty {
+                Text("The architectural view shows the architecture only.").fieldFont(14, .medium).foregroundStyle(s.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                LayerSwitches(store: LayerStore.shared, style: s, layers: exp.activeView.layers)
+            }
             Rectangle().fill(s.hairline).frame(height: 0.5).padding(.vertical, 4)
             Text("LOOK").fieldFont(11, .semibold).tracking(1.2).foregroundStyle(s.inkSecondary)
             Picker("Background", selection: Binding(get: { exp.style.background }, set: { exp.setBackground($0) })) {
@@ -597,6 +681,11 @@ struct RoomSheet: View {
     @ObservedObject var exp: BuildingExperience
     let number: String
     let onStandInRoom: () -> Void
+    /// The most the sheet may take (from the layout rule); its card or list scrolls inside.
+    var cap: CGFloat = 420
+
+    /// Handle (28) and the primary button with its padding (78).
+    private var contentCap: CGFloat { max(min(cap, 420) - 28 - 78 - 4, 60) }
 
     private let order: [BuildingSystem] = [.electrical, .lowVoltage, .mechanical, .plumbing, .fire, .cabinets, .furniture]
 
@@ -615,7 +704,10 @@ struct RoomSheet: View {
                 .accessibilityAddTraits(.isButton)
             if !exp.sheetCollapsed {
                 if let id = exp.selected, let e = exp.building.element(id) {
-                    ElementCard(exp: exp, element: e)
+                    ScrollView(.vertical, showsIndicators: false) { ElementCard(exp: exp, element: e) }
+                        .scrollBounceBehavior(.basedOnSize)
+                        .frame(maxHeight: contentCap)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     list
                 }
@@ -634,7 +726,7 @@ struct RoomSheet: View {
         .glass(s, radius: 28)
         .padding(.horizontal, 8)
         .padding(.bottom, 4)
-        .frame(maxHeight: min(420, UIScreen.main.bounds.height * 0.5))
+        .frame(maxHeight: min(cap, 420))
     }
 
     private var groups: [(BuildingSystem, [BuildingElement])] {
@@ -683,7 +775,7 @@ struct RoomSheet: View {
                 }
                 .padding(.horizontal, 16)
             }
-            .frame(maxHeight: 230)
+            .frame(maxHeight: max(min(230, contentCap - 66), 40))
         }
     }
 

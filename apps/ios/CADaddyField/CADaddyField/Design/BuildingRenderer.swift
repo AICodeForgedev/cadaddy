@@ -52,6 +52,15 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     private var ghost: [Entity] = []
     private var cut: [Entity] = []
     private var mains: [Entity] = []
+    /// Full MEP's additions per level (built the first time Full MEP or the floor is shown).
+    private var full: [Entity] = []
+    private var fullBuilt: [Bool] = []
+    /// The Architectural view per level: solid slabs, walls with their windows, doors and stairs.
+    private var arch: [Entity] = []
+    private var archBuilt: [Bool] = []
+    private var cutBuilt: [Bool] = []
+    /// MEP's one outline around the outside of the building.
+    private var outline = Entity()
     private var detail: [Entity] = []
     private var serving: [Entity] = []
     private var detailBuilt: [Bool] = []
@@ -89,6 +98,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     private var ghostMat: RealityKit.Material = UnlitMaterial()
     private var edgeMat: RealityKit.Material = UnlitMaterial()
     private var fadedMat: RealityKit.Material = UnlitMaterial()
+    private var hoistMat: RealityKit.Material = UnlitMaterial()
     private var matCache: [String: RealityKit.Material] = [:]
     private var originals: [ObjectIdentifier: [RealityKit.Material]] = [:]
     private var glowTexture: TextureResource?
@@ -98,6 +108,8 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     private var fogStep: [String: Int] = [:]
     private var fogEye = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
     private var fogDirty = true
+    private var fogQueue: [String] = []
+    static let fogBudget: Double = 0.0015
     private var frameCount = 0
 
     // Camera: target and (yaw, pitch, distance), each on the design spring.
@@ -134,6 +146,10 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     // MARK: setup
 
     func attach(_ v: ARView, experience: BuildingExperience) {
+        #if DEBUG
+        let attachStart = CACurrentMediaTime()
+        defer { if logPerf { print(String(format: "FIELD-ATTACH %.1f ms (renderer age %.0f ms)", (CACurrentMediaTime() - attachStart) * 1000, Date().timeIntervalSince(fpsStart) * 1000)) } }
+        #endif
         view = v
         exp = experience
         style = experience.style
@@ -179,7 +195,12 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         logPerf = ProcessInfo.processInfo.arguments.contains("-fpslog")
         #endif
 
+        let m0 = CACurrentMediaTime()
         makeMaterials()
+        #if DEBUG
+        if logPerf { print(String(format: "FIELD-MATS %.1f ms", (CACurrentMediaTime() - m0) * 1000)) }
+        #endif
+        _ = m0
         buildStatic()
         sub = v.scene.subscribe(to: SceneEvents.Update.self) { [weak self] e in
             MainActor.assumeIsolated { self?.tick(e.deltaTime) }
@@ -188,6 +209,8 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     }
 
     func stop() { sub?.cancel(); sub = nil }
+
+    private func tier(_ e: BuildingElement) -> ViewTier { exp?.filter.classifier.tier(e.id) ?? .room }
 
     static func ui(_ c: SIMD3<Float>) -> UIColor { UIColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1) }
 
@@ -201,7 +224,13 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         while workHead < work.count {
             let f = work[workHead]
             workHead += 1
+            #if DEBUG
+            let itemStart = CACurrentMediaTime()
             f()
+            if logPerf, CACurrentMediaTime() - itemStart > 0.008 { print(String(format: "FIELD-ITEM %.1f ms %@", (CACurrentMediaTime() - itemStart) * 1000, lastBuilt)) }
+            #else
+            f()
+            #endif
             if CACurrentMediaTime() - start > budget { break }
         }
         if workHead >= work.count { work.removeAll(keepingCapacity: true); workHead = 0 }
@@ -223,6 +252,10 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         f.blending = .transparent(opacity: .init(floatLiteral: style.highContrast ? 0.16 : 0.1))
         f.writesDepth = false
         fadedMat = f
+        var h = UnlitMaterial(color: style.color(.conveying))
+        h.blending = .transparent(opacity: .init(floatLiteral: style.highContrast ? 0.24 : 0.16))
+        h.writesDepth = false
+        hoistMat = h
         matCache.removeAll()
         glowTexture = MeshKit.radialTexture(inner: style.lightWarm.withAlphaComponent(0.85), outer: style.lightWarm.withAlphaComponent(0))
     }
@@ -257,6 +290,9 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         let boost: Float = lit ? 0.9 : (style.highContrast ? 0.35 : 0.12)
         let f = lit ? 0 : fog
         switch e.role {
+        case .equipment where e.part == .hoistway:
+            // The one shaft MEP shows: a quiet see-through volume (one shared material, like the ghost).
+            return hoistMat
         case .equipment where e.kind == "Panelboard":
             // Panels read as small solid orange objects (the spec's floor view), not neutral gear.
             return pbr("panel-\(lit)", style.color(.electrical), rough: 0.45, emissive: lit ? 0.6 : 0.15, fog: f)
@@ -301,6 +337,11 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         ghost = (0..<n).map { _ in Entity() }
         cut = (0..<n).map { _ in Entity() }
         mains = (0..<n).map { _ in Entity() }
+        full = (0..<n).map { _ in Entity() }
+        arch = (0..<n).map { _ in Entity() }
+        fullBuilt = Array(repeating: false, count: n)
+        archBuilt = Array(repeating: false, count: n)
+        cutBuilt = Array(repeating: false, count: n)
         detail = (0..<n).map { _ in Entity() }
         serving = (0..<n).map { _ in Entity() }
         tiles = (0..<n).map { _ in Entity() }
@@ -310,26 +351,55 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             let root = levelRoots[i]
             root.name = "level-\(i)"
             anchor.addChild(root)
-            for c in [ghost[i], cut[i], tiles[i], mains[i], detail[i], serving[i]] { root.addChild(c) }
+            for c in [ghost[i], cut[i], tiles[i], mains[i], full[i], detail[i], serving[i], arch[i]] { root.addChild(c) }
             cut[i].isEnabled = false
             tiles[i].isEnabled = false
+            full[i].isEnabled = false
+            arch[i].isEnabled = false
         }
-        for e in b.elements where e.detail == .building {
+        for e in b.elements where tier(e) == .mains || tier(e) == .fullMEP {
             let bb = e.shape.bounds
             if bb.max.y - bb.min.y > 5 { risers.insert(e.id) }
         }
         // What the opening needs right away: the solid exterior and the ground. The ghost shell and the mains
         // are behind the solid until the sweep starts, so they build over the next frames.
+        let s0 = CACurrentMediaTime()
         buildGround()
+        let s1 = CACurrentMediaTime()
         buildExterior()
+        let s2 = CACurrentMediaTime()
+        buildOutline()
         buildPulse()
+        #if DEBUG
+        if logPerf { print(String(format: "FIELD-STATIC ground %.1f exterior %.1f outline+pulse %.1f", (s1 - s0) * 1000, (s2 - s1) * 1000, (CACurrentMediaTime() - s2) * 1000)) }
+        #endif
         for i in 0..<n { enqueue { [weak self] in self?.buildShell(i) } }
-        let mainsList = b.elements.filter { $0.detail == .building }
-        for start in stride(from: 0, to: mainsList.count, by: 6) {
-            let slice = Array(mainsList[start..<min(start + 6, mainsList.count)])
+        // One element per work item: the frame budget is checked between items, so no item is long.
+        for e in b.elements where tier(e) == .mains {
             enqueue { [weak self] in
-                guard let self else { return }
-                for e in slice { self.addElement(e, home: self.mains[e.level]) }
+                guard let self, self.mains.indices.contains(e.level) else { return }
+                self.addElement(e, home: self.mains[e.level])
+            }
+        }
+    }
+
+    /// Queues `items` into `parent` in chunks: each chunk gets a holder that starts fading in at once, then one
+    /// work item per element, so the frame budget holds and a chunk arrives as one soft fade.
+    private func enqueueElements(_ items: [BuildingElement], into parent: @escaping () -> Entity?, name: String, chunk: Int = 24) {
+        for (n, start) in stride(from: 0, to: items.count, by: chunk).enumerated() {
+            let slice = Array(items[start..<min(start + chunk, items.count)])
+            let holder = Entity()
+            holder.name = "\(name)-\(n)"
+            enqueue { [weak self] in
+                guard let self, let p = parent() else { return }
+                p.addChild(holder)
+                if !self.reduceMotion { self.fade(holder, from: 0, to: 1, delay: min(Double(n) * 0.02, 0.2)) }
+            }
+            for e in slice {
+                enqueue { [weak self, weak holder] in
+                    guard let self, let holder, holder.parent != nil else { return }
+                    self.addElement(e, home: holder)
+                }
             }
         }
     }
@@ -345,45 +415,60 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             faces.box(center: c, size: s)
             edges.edges(center: c, size: s, width: w)
         }
-        // Building scale: the envelope and slabs only. Interior walls appear in the floor's cut view.
-        for (c, s) in b.walls(level: i).prefix(4) {
-            faces.box(center: c, size: s)
-            edges.edges(center: c, size: s, width: w)
-        }
-        if i == b.levels.count - 1 {
-            // Parapet as a ghost too.
-            for z in [lo.y + 0.15, hi.y - 0.15] {
-                let c = SIMD3<Float>((lo.x + hi.x) / 2, lv.elevation + 0.45, z), s = SIMD3<Float>(hi.x - lo.x, 0.9, 0.3)
-                faces.box(center: c, size: s); edges.edges(center: c, size: s, width: w)
-            }
-        }
+        // MEP's context is the floors only (and one outline around the whole building, built once): no walls,
+        // windows, doors, stairs or shafts. Interior walls appear in the floor's cut view.
         if let m = faces.resource("ghost-\(i)") { ghost[i].addChild(ModelEntity(mesh: m, materials: [ghostMat])) }
         if let m = edges.resource("edges-\(i)") { ghost[i].addChild(ModelEntity(mesh: m, materials: [edgeMat])) }
-        // The cut view: walls at 4 ft, every wall gets its hairlines, a soft floor plate.
+    }
+
+    /// The floor's cut view (walls at 4 ft, plate, room tiles): built when a floor is first opened, or after the
+    /// opening when the app is idle, in small work items.
+    private func ensureCut(_ i: Int) {
+        guard cut.indices.contains(i), !cutBuilt[i], let lv = b.level(i) else { return }
+        cutBuilt[i] = true
+        let lo = b.footprintMin, hi = b.footprintMax
         guard lv.height > 0 || i == b.levels.count - 1 else { return }
-        var cf = MeshKit(), ce = MeshKit(), plate = MeshKit()
-        for (c, s) in b.walls(level: i, cut: 1.22) { cf.box(center: c, size: s); ce.edges(center: c, size: s, width: 0.035) }
-        plate.box(center: SIMD3((lo.x + hi.x) / 2, lv.elevation - 0.13, (lo.y + hi.y) / 2), size: SIMD3(hi.x - lo.x, 0.26, hi.y - lo.y))
-        if let m = cf.resource("cut-\(i)") {
-            var cutMat = UnlitMaterial(color: style.ghost)
-            cutMat.blending = .transparent(opacity: .init(floatLiteral: min(style.ghostOpacity * 2.2, 0.32)))
-            cutMat.writesDepth = false
-            cut[i].addChild(ModelEntity(mesh: m, materials: [cutMat]))
+        // The cut view in separate work items (faces, edges, plate, then one item per room tile).
+        let walls = b.walls(level: i, cut: 1.22)
+        enqueue { [weak self] in
+            guard let self, self.cut.indices.contains(i) else { return }
+            var cf = MeshKit()
+            for (c, s) in walls { cf.box(center: c, size: s) }
+            if let m = cf.resource("cut-\(i)") {
+                var cutMat = UnlitMaterial(color: self.style.ghost)
+                cutMat.blending = .transparent(opacity: .init(floatLiteral: min(self.style.ghostOpacity * 2.2, 0.32)))
+                cutMat.writesDepth = false
+                self.cut[i].addChild(ModelEntity(mesh: m, materials: [cutMat]))
+            }
         }
-        if let m = ce.resource("cutedge-\(i)") { cut[i].addChild(ModelEntity(mesh: m, materials: [edgeMat])) }
-        if let m = plate.resource("plate-\(i)") { cut[i].addChild(ModelEntity(mesh: m, materials: [pbr("plate", style.floorPlate, rough: 0.95)])) }
+        enqueue { [weak self] in
+            guard let self, self.cut.indices.contains(i) else { return }
+            var ce = MeshKit()
+            for (c, s) in walls { ce.edges(center: c, size: s, width: 0.035) }
+            if let m = ce.resource("cutedge-\(i)") { self.cut[i].addChild(ModelEntity(mesh: m, materials: [self.edgeMat])) }
+        }
+        enqueue { [weak self] in
+            guard let self, self.cut.indices.contains(i) else { return }
+            var plate = MeshKit()
+            plate.box(center: SIMD3((lo.x + hi.x) / 2, lv.elevation - 0.13, (lo.y + hi.y) / 2), size: SIMD3(hi.x - lo.x, 0.26, hi.y - lo.y))
+            if let m = plate.resource("plate-\(i)") { self.cut[i].addChild(ModelEntity(mesh: m, materials: [self.pbr("plate", self.style.floorPlate, rough: 0.95)])) }
+        }
         // Room tiles (tap targets on the floor view).
-        for r in b.rooms(on: i) where r.name != "Corridor" {
-            let inset: Float = 0.12
-            let size = SIMD3<Float>(r.max.x - r.min.x - 2 * inset, 0.04, r.max.y - r.min.y - 2 * inset)
-            let tile = ModelEntity(mesh: .generateBox(size: size, cornerRadius: 0.06), materials: [pbr("tile", style.roomTile, rough: 0.9)])
-            tile.position = SIMD3(r.center.x, lv.elevation + 0.03, r.center.y)
-            tile.components.set(RoomTagComponent(number: r.number))
-            tile.components.set(CollisionComponent(shapes: [.generateBox(size: SIMD3(size.x, 0.3, size.z))]))
-            tiles[i].addChild(tile)
-            roomTileEntities[r.number] = tile
-            if raise[r.number] == nil { raise[r.number] = (0, 0, 0) }
-        }
+        for r in b.rooms(on: i) where r.name != "Corridor" { enqueue { [weak self] in self?.buildTile(r, level: lv) } }
+    }
+
+    private func buildTile(_ r: BuildingRoom, level lv: BuildingLevel) {
+        let i = lv.index
+        guard tiles.indices.contains(i) else { return }
+        let inset: Float = 0.12
+        let size = SIMD3<Float>(r.max.x - r.min.x - 2 * inset, 0.04, r.max.y - r.min.y - 2 * inset)
+        let tile = ModelEntity(mesh: .generateBox(size: size, cornerRadius: 0.06), materials: [pbr("tile", style.roomTile, rough: 0.9)])
+        tile.position = SIMD3(r.center.x, lv.elevation + 0.03, r.center.y)
+        tile.components.set(RoomTagComponent(number: r.number))
+        tile.components.set(CollisionComponent(shapes: [.generateBox(size: SIMD3(size.x, 0.3, size.z))]))
+        tiles[i].addChild(tile)
+        roomTileEntities[r.number] = tile
+        if raise[r.number] == nil { raise[r.number] = (0, 0, 0) }
     }
 
     /// One quad, one texture: a pool of light (dark looks) and the soft contact shadow of the footprint.
@@ -446,6 +531,122 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             anchor.addChild(bay)
             exterior.append((bay, (x0 + x1) / 2))
         }
+    }
+
+    /// One hairline outline around the outside of the building, ground to roof (MEP's only context besides the floors).
+    private func buildOutline() {
+        let lo = b.footprintMin, hi = b.footprintMax
+        let top = b.level(b.levels.count - 1)?.elevation ?? b.height
+        var k = MeshKit()
+        k.edges(center: SIMD3((lo.x + hi.x) / 2, top / 2, (lo.y + hi.y) / 2), size: SIMD3(hi.x - lo.x, top, hi.y - lo.y), width: style.highContrast ? 0.08 : 0.06)
+        outline = Entity()
+        if let m = k.resource("outline") { outline.addChild(ModelEntity(mesh: m, materials: [edgeMat])) }
+        anchor.addChild(outline)
+    }
+
+    /// The Architectural view of one level, solid: its slab, exterior walls with their windows, interior walls,
+    /// doors and stairs (the roof level: the roof and parapet). A few merged meshes per level.
+    private func ensureArch(_ i: Int) {
+        guard arch.indices.contains(i), !archBuilt[i] else { return }
+        archBuilt[i] = true
+        enqueue { [weak self] in
+            guard let self, self.arch.indices.contains(i) else { return }
+            self.buildArch(i)
+            // Arrives with a soft fade if the Architectural view is still showing.
+            if self.exp?.wholeView == .architectural, self.exp?.scope == .building, !self.reduceMotion { self.fade(self.arch[i], from: 0, to: 1, delay: 0) }
+        }
+    }
+
+    private func buildArch(_ i: Int) {
+        guard let lv = b.level(i) else { return }
+        let lo = b.footprintMin, hi = b.footprintMax
+        var slab = MeshKit(), wall = MeshKit(), dark = MeshKit(), pane = MeshKit(), door = MeshKit(), stair = MeshKit()
+        let top = b.levels.count - 1
+        if i == top {
+            slab.box(min: SIMD3(lo.x, lv.elevation - 0.3, lo.y), max: SIMD3(hi.x, lv.elevation, hi.y))
+            for z in [lo.y, hi.y - 0.3] { wall.box(min: SIMD3(lo.x, lv.elevation, z), max: SIMD3(hi.x, lv.elevation + 0.9, z + 0.3)) }
+            for x in [lo.x, hi.x - 0.3] { wall.box(min: SIMD3(x, lv.elevation, lo.y), max: SIMD3(x + 0.3, lv.elevation + 0.9, hi.y)) }
+        } else if lv.height > 0 {
+            let e = lv.elevation, h = lv.height, t: Float = 0.3
+            slab.box(min: SIMD3(lo.x, e - 0.3, lo.y), max: SIMD3(hi.x, e, hi.y))
+            // Long faces: wall around each window (sill, head, piers); the window itself is the glass.
+            for w in b.elements where w.level == i && w.part == .window {
+                guard case let .box(c, sz) = w.shape else { continue }
+                let south = c.z < (lo.y + hi.y) / 2
+                let z0 = south ? lo.y : hi.y - t, z1 = z0 + t
+                let bayX0 = (c.x / b.bay).rounded(.down) * b.bay, bayX1 = bayX0 + b.bay
+                let sill = c.y - sz.y / 2, head = c.y + sz.y / 2
+                if i == 1 { dark.box(min: SIMD3(bayX0, e, z0), max: SIMD3(bayX1, sill, z1)) } else { wall.box(min: SIMD3(bayX0, e, z0), max: SIMD3(bayX1, sill, z1)) }
+                wall.box(min: SIMD3(bayX0, head, z0), max: SIMD3(bayX1, e + h, z1))
+                wall.box(min: SIMD3(bayX0, sill, z0), max: SIMD3(c.x - sz.x / 2, head, z1))
+                wall.box(min: SIMD3(c.x + sz.x / 2, sill, z0), max: SIMD3(bayX1, head, z1))
+                pane.box(center: c, size: SIMD3(sz.x, sz.y, 0.04))
+            }
+            // End walls, full height.
+            for x in [lo.x, hi.x - t] { wall.box(min: SIMD3(x, e, lo.y), max: SIMD3(x + t, e + h, hi.y)) }
+            // Interior walls, full height (their door gaps stay open; the doors fill them).
+            for (c, sz) in b.walls(level: i).dropFirst(4) { wall.box(center: SIMD3(c.x, e + h / 2, c.z), size: SIMD3(sz.x, h, sz.z)) }
+            for d in b.elements where d.level == i && d.part == .door { if case let .box(c, sz) = d.shape { door.box(center: c, size: sz) } }
+            // Stairs: two flights and a landing inside each stair's volume.
+            for st in b.elements where st.level == i && st.part == .stair {
+                guard case let .box(c, sz) = st.shape else { continue }
+                let steps = 10
+                let x0 = c.x - sz.x / 2, x1 = c.x + sz.x / 2, z0 = c.z - sz.z / 2, z1 = c.z + sz.z / 2
+                let run = (z1 - z0 - 1.2) / Float(steps), rise = h / Float(2 * steps)
+                for k in 0..<steps {
+                    let ya = e + Float(k + 1) * rise
+                    stair.box(min: SIMD3(x0, e, z0 + Float(k) * run), max: SIMD3(c.x - 0.05, ya, z0 + Float(k + 1) * run))
+                    let yb = e + h / 2 + Float(k + 1) * rise
+                    stair.box(min: SIMD3(c.x + 0.05, e + h / 2, z1 - 1.2 - Float(k + 1) * run), max: SIMD3(x1, yb, z1 - 1.2 - Float(k) * run))
+                }
+                stair.box(min: SIMD3(x0, e + h / 2 - 0.15, z1 - 1.2), max: SIMD3(x1, e + h / 2, z1))
+            }
+        }
+        let mats: [(MeshKit, RealityKit.Material, String)] = [
+            (slab, pbr("arch-slab", style.isDark ? UIColor(hex: 0xC9CDCB) : UIColor(hex: 0xD9DDE1), rough: 0.9), "slab"),
+            (wall, pbr("facade", style.facade, rough: 0.82), "wall"),
+            (dark, pbr("facade-dark", style.facadeDark, rough: 0.9), "base"),
+            (pane, pbr("glass", style.glass, rough: 0.12, metal: 0.4), "glass"),
+            (door, pbr("arch-door", UIColor(hex: 0x8A6A4E), rough: 0.7), "door"),
+            (stair, pbr("arch-stair", UIColor(hex: 0xB7BBBE), rough: 0.85), "stair"),
+        ]
+        for (mk, m, name) in mats { if let r = mk.resource("arch-\(name)-\(i)") { arch[i].addChild(ModelEntity(mesh: r, materials: [m])) } }
+    }
+
+    /// Full MEP's additions on one level, a chunk per frame.
+    private func ensureFull(_ level: Int) {
+        guard full.indices.contains(level), !fullBuilt[level] else { return }
+        fullBuilt[level] = true
+        let items = b.elements.filter { $0.level == level && tier($0) == .fullMEP }
+        enqueueElements(items, into: { [weak self] in self.flatMap { $0.full.indices.contains(level) ? $0.full[level] : nil } }, name: "full-\(level)")
+    }
+
+    /// The hard rule, applied last: an element the active view does not allow is never drawn, whatever its
+    /// container, layer switch or fade says.
+    private func enforceLimit() {
+        guard let exp else { return }
+        let state = exp.viewState, prefs = exp.layers
+        // Only when the view or the switches changed (elements made later clamp themselves in addElement).
+        let key = "\(state.view)|\(state.density)|\(state.level ?? -1)|\(state.room ?? "")|\(prefs.off.map(\.rawValue).sorted())|\(elementEntities.count)"
+        guard key != limitKey else { return }
+        limitKey = key
+        for (id, ent) in elementEntities {
+            guard let e = b.element(id) else { continue }
+            let ok = exp.filter.allows(e, state, prefs: prefs)
+            if ok != limitOK(ent) { setLimit(ent, ok) }
+        }
+    }
+
+    private var limitKey = ""
+    #if DEBUG
+    private var lastBuilt = ""
+    #endif
+    private struct LimitTag: Component { var blocked: Bool }
+    private func limitOK(_ e: Entity) -> Bool { !(e.components[LimitTag.self]?.blocked ?? false) }
+    private func setLimit(_ e: Entity, _ ok: Bool) {
+        e.components.set(LimitTag(blocked: !ok))
+        // Blocked: hide the model and its outline (children) without fighting the fades on the containers.
+        e.isEnabled = ok
     }
 
     private func buildPulse() {
@@ -511,7 +712,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         m.name = e.id
         m.components.set(ElementTagComponent(id: e.id))
         let bb = e.shape.bounds
-        let minTap: Float = e.detail == .room ? 0.14 : 0.45
+        let minTap: Float = tier(e) == .room ? 0.14 : 0.45
         let size = simd_max(bb.max - bb.min, SIMD3(repeating: minTap))
         let center = (bb.min + bb.max) / 2 - position
         if case let .run(points, _) = e.shape {
@@ -529,9 +730,9 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             m.components.set(CollisionComponent(shapes: [.generateBox(size: size).offsetBy(translation: center)]))
         }
         // Outline edges on the solids that carry the building: mains with a rectangular profile and equipment.
-        if e.detail != .room {
+        if tier(e) != .room {
             var k = MeshKit()
-            let w: Float = e.detail == .building ? 0.045 : 0.03
+            let w: Float = tier(e) == .mains ? 0.045 : 0.03
             switch e.shape {
             case let .box(_, s) where e.role == .equipment: k.edges(center: .zero, size: s, width: w)
             case let .run(points, profile) where e.role == .main: k.runEdges(points, profile: profile, width: w)
@@ -567,6 +768,11 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         }
         elementEntities[e.id] = m
         fogStep[e.id] = 0
+        #if DEBUG
+        lastBuilt = "\(e.kind) \(e.tag)"
+        #endif
+        // Made later than the view change: take the active view's limit straight away.
+        if let exp, !exp.filter.allows(e, exp.viewState, prefs: exp.layers) { setLimit(m, false) }
         // Made while following the system: take the follow look straight away.
         if let f = currentFocus { styleForFocus(e, m, f) }
         return m
@@ -577,19 +783,8 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     private func ensureDetail(_ level: Int) {
         guard detail.indices.contains(level), !detailBuilt[level] else { return }
         detailBuilt[level] = true
-        let items = b.elements.filter { $0.level == level && $0.detail == .floor }
-        let chunk = 24
-        for (n, start) in stride(from: 0, to: items.count, by: chunk).enumerated() {
-            let slice = Array(items[start..<min(start + chunk, items.count)])
-            enqueue { [weak self] in
-                guard let self, self.detail.indices.contains(level) else { return }
-                let holder = Entity()
-                holder.name = "chunk-\(level)-\(n)"
-                self.detail[level].addChild(holder)
-                for e in slice { self.addElement(e, home: holder) }
-                if !self.reduceMotion { self.fade(holder, from: 0, to: 1, delay: min(Double(n) * 0.02, 0.2)) }
-            }
-        }
+        let items = b.elements.filter { $0.level == level && tier($0) == .floor }
+        enqueueElements(items, into: { [weak self] in self.flatMap { $0.detail.indices.contains(level) ? $0.detail[level] : nil } }, name: "chunk-\(level)")
     }
 
     private func buildRoom(_ number: String) {
@@ -630,10 +825,13 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         for (mk, m) in [(walls, wallM), (fl, floorM), (bath, bathM)] {
             if let res = mk.resource("room-\(number)") { root.addChild(ModelEntity(mesh: res, materials: [m])) }
         }
-        let items = b.elements(in: number).filter { $0.detail == .room }
+        // The room's things arrive one per work item, each with its own short staggered fade.
+        let items = b.elements(in: number).filter { tier($0) == .room }
         for (k, el) in items.enumerated() {
-            guard let ent = addElement(el, home: root) else { continue }
-            if !reduceMotion { fade(ent, from: 0, to: 1, delay: 0.12 + Double(k) * 0.012) }
+            enqueue { [weak self, weak root] in
+                guard let self, let root, root.parent != nil, let ent = self.addElement(el, home: root) else { return }
+                if !self.reduceMotion { self.fade(ent, from: 0, to: 1, delay: 0.05 + Double(k) * 0.012) }
+            }
         }
         if !reduceMotion { fade(root, from: 0, to: 1, delay: 0) }
         roomDetail = root
@@ -642,7 +840,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
 
     private func removeRoomDetail() {
         guard let r = roomDetail else { return }
-        for el in b.elements(in: roomDetailNumber ?? "") where el.detail == .room {
+        for el in b.elements(in: roomDetailNumber ?? "") where tier(el) == .room {
             elementEntities[el.id] = nil
             edgeEntities[el.id] = nil
             fogStep[el.id] = nil
@@ -679,6 +877,10 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     var reduceMotion: Bool { UIAccessibility.isReduceMotionEnabled }
 
     func apply(scope: DesignScope, liftFocus: Float?) {
+        #if DEBUG
+        let applyStart = CACurrentMediaTime()
+        defer { if logPerf { print(String(format: "FIELD-APPLY %.1f ms %@", (CACurrentMediaTime() - applyStart) * 1000, String(describing: scope))) } }
+        #endif
         guard exp != nil else { return }
         let n = b.levels.count
         userMoved = false
@@ -687,18 +889,25 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             dropRoom()
             roomServing = []
             let offs = FloorLift.offsets(levels: n, focus: liftFocus, gap: 10, spread: 1.4)
+            let architectural = exp?.wholeView == .architectural
+            let fullOn = !architectural && exp?.density == .full
             for i in 0..<n {
                 liftGoal[i] = offs[i]
-                setVisible(ghost[i], true)
-                setVisible(mains[i], true)
+                if architectural { ensureArch(i) }
+                if fullOn { ensureFull(i) }
+                setVisible(arch[i], architectural)
+                setVisible(ghost[i], !architectural)
+                setVisible(mains[i], !architectural)
+                setVisible(full[i], fullOn)
                 setVisible(cut[i], false)
                 setVisible(tiles[i], false)
                 setVisible(detail[i], false)
-                setVisible(levelRoots[i], true)
+                liftingAway.remove(i); setVisible(levelRoots[i], true)
             }
+            setVisible(outline, !architectural && liftFocus == nil)
             for id in risers { if let e = elementEntities[id] { setOpacity(e, liftFocus == nil ? 1 : 0.18) } }
             orbitGoal.y = liftFocus == nil ? 0.56 : 0.38
-            fit(buildingPoints(lift: offs), yaw: orbitGoal.x, pitch: orbitGoal.y)
+            fit(buildingPoints(lift: offs, architectural: architectural, full: fullOn), yaw: orbitGoal.x, pitch: orbitGoal.y)
             for (number, _) in raise { raise[number]?.goal = 0 }
         case let .floor(i):
             dropRoom()
@@ -721,7 +930,11 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             roomServing = serves
             showFloor(r.level)
             setVisible(mains[r.level], false)
+            setVisible(full[r.level], false)
             setVisible(detail[r.level], false)
+            // The room's own lights, cabinets, fans and heads live on the floor; they come along with what serves it.
+            for el in b.elements(in: number) where tier(el) != .room && tier(el) != .architecture { serves.insert(el.id) }
+            roomServing = serves
             moveServing(level: r.level, ids: serves)
             buildRoom(number)
             fit(roomPoints(r), yaw: orbitGoal.x, pitch: orbitGoal.y)
@@ -729,31 +942,52 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             for (k, t) in roomTileEntities where b.room(k)?.level == r.level { setOpacity(t, k == number ? 1 : 0.35) }
         }
         if reduceMotion { snapCamera() }
+        #if DEBUG
+        let tA = CACurrentMediaTime()
+        #endif
         applyLayers()
+        #if DEBUG
+        let tB = CACurrentMediaTime()
+        #endif
         refreshLabels(scope)
+        #if DEBUG
+        if logPerf { print(String(format: "FIELD-APPLY-PARTS body %.1f layers+limit %.1f labels %.1f", (tA - applyStart) * 1000, (tB - tA) * 1000, (CACurrentMediaTime() - tB) * 1000)) }
+        #endif
         fogDirty = true
     }
 
+    /// After the opening: build every floor's cut view in the idle frames, so opening a floor later is light.
+    func prewarmFloors() { for i in b.levels.indices { ensureCut(i) } }
+
     private func showFloor(_ i: Int) {
         let n = b.levels.count
+        ensureCut(i)
         ensureDetail(i)
+        ensureFull(i)
+        setVisible(outline, false)
+        for a in arch { setVisible(a, false) }
         for j in 0..<n {
             if j > i {
                 liftGoal[j] = 16 + Float(j - i) * 2.5
-                setVisible(levelRoots[j], false)
+                // No opacity fade (that touches every entity on the level each frame): the floors above lift out
+                // of the frame and switch off when they get there.
+                fades[ObjectIdentifier(levelRoots[j])] = nil
+                liftingAway.insert(j)
             } else if j < i {
                 liftGoal[j] = 0
-                setVisible(levelRoots[j], true)
+                liftingAway.remove(j); setVisible(levelRoots[j], true)
                 setVisible(ghost[j], true)
                 setVisible(mains[j], false)
+                setVisible(full[j], false)
                 setVisible(detail[j], false)
                 setVisible(cut[j], false)
                 setVisible(tiles[j], false)
             } else {
                 liftGoal[j] = 0
-                setVisible(levelRoots[j], true)
+                liftingAway.remove(j); setVisible(levelRoots[j], true)
                 setVisible(ghost[j], false)
                 setVisible(mains[j], true)
+                setVisible(full[j], true)
                 setVisible(detail[j], true)
                 setVisible(cut[j], true)
                 setVisible(tiles[j], true)
@@ -779,20 +1013,30 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     // MARK: framing
 
     /// Each level's box (lifted) and its building-scale systems, as corner points.
-    private func buildingPoints(lift offs: [Float]) -> [SIMD3<Float>] {
-        let lo = b.footprintMin, hi = b.footprintMax
-        var pts: [SIMD3<Float>] = []
-        for lv in b.levels {
-            let up = offs.indices.contains(lv.index) ? offs[lv.index] : 0
-            var mn = SIMD3<Float>(lo.x, lv.elevation - 0.3, lo.y), mx = SIMD3<Float>(hi.x, lv.elevation + max(lv.height, 1.0), hi.y)
-            for e in b.elements where e.level == lv.index && e.detail == .building && !risers.contains(e.id) {
-                let bb = e.shape.bounds
-                mn = simd_min(mn, bb.min); mx = simd_max(mx, bb.max)
+    private func buildingPoints(lift offs: [Float], architectural: Bool = false, full: Bool = false) -> [SIMD3<Float>] {
+        let key = architectural ? 0 : (full ? 2 : 1)
+        if levelBounds[key] == nil {
+            // Each level's box with what the view draws on it (risers excluded), worked out once per view.
+            let lo = b.footprintMin, hi = b.footprintMax
+            var boxes = b.levels.map { lv in (SIMD3<Float>(lo.x, lv.elevation - 0.3, lo.y), SIMD3<Float>(hi.x, lv.elevation + max(lv.height, 1.0), hi.y)) }
+            if !architectural {
+                for e in b.elements where boxes.indices.contains(e.level) && !risers.contains(e.id) && (tier(e) == .mains || (full && tier(e) == .fullMEP)) {
+                    let bb = e.shape.bounds
+                    boxes[e.level].0 = simd_min(boxes[e.level].0, bb.min); boxes[e.level].1 = simd_max(boxes[e.level].1, bb.max)
+                }
             }
-            pts += SceneFraming.corners(min: mn + SIMD3(0, up, 0), max: mx + SIMD3(0, up, 0))
+            levelBounds[key] = boxes
+        }
+        var pts: [SIMD3<Float>] = []
+        for (i, box) in (levelBounds[key] ?? []).enumerated() {
+            let up = SIMD3<Float>(0, offs.indices.contains(i) ? offs[i] : 0, 0)
+            pts += SceneFraming.corners(min: box.0 + up, max: box.1 + up)
         }
         return pts
     }
+    private var levelBounds: [Int: [(SIMD3<Float>, SIMD3<Float>)]] = [:]
+    /// Levels lifting out of the frame (switched off when they are out of it).
+    private var liftingAway: Set<Int> = []
 
     /// The floor's plate, its cut walls and what sits on it (not the risers that run through it).
     private func floorPoints(_ i: Int) -> [SIMD3<Float>] {
@@ -800,7 +1044,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         let e = b.level(i)?.elevation ?? 0
         var mn = SIMD3<Float>(lo.x, e - 0.3, lo.y), mx = SIMD3<Float>(hi.x, e + 1.3, hi.y)
         var any = false
-        for el in b.elements where el.level == i && el.detail != .room && !risers.contains(el.id) {
+        for el in b.elements where el.level == i && tier(el) != .room && tier(el) != .architecture && !risers.contains(el.id) {
             let bb = el.shape.bounds
             if i == 0 && !any { mn = bb.min; mx = bb.max; any = true; continue }
             mn = simd_min(mn, bb.min); mx = simd_max(mx, bb.max)
@@ -857,7 +1101,14 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     func applyLayers() {
         guard let exp else { return }
         groupList.removeAll { $0.entity == nil }
-        for g in groupList { if let e = g.entity { setOpacity(e, exp.layers.isOn(g.layer) ? 1 : 0) } }
+        let offered = Set(exp.activeView.layers)
+        for g in groupList {
+            guard let e = g.entity else { continue }
+            // A switch the view does not offer: on for M/E/P, off for cabinets and furniture (the limit decides the rest).
+            let on = offered.contains(g.layer) ? exp.layers.isOn(g.layer) : !(g.layer == .cabinets || g.layer == .furniture)
+            setOpacity(e, on ? 1 : 0)
+        }
+        enforceLimit()
     }
 
     // MARK: follow the system
@@ -996,12 +1247,13 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         for r in levelRoots { r.removeFromParent() }
         for e in exterior { e.entity.removeFromParent() }
         exterior = []
+        outline.removeFromParent()
         ground.removeFromParent()
         pulse.forEach { $0.removeFromParent() }
         pulse = []
         work.removeAll(); workHead = 0
         elementEntities.removeAll(); edgeEntities.removeAll(); roomTileEntities.removeAll(); raise.removeAll(); fades.removeAll()
-        groups.removeAll(); groupList.removeAll(); fogStep.removeAll(); risers.removeAll()
+        groups.removeAll(); groupList.removeAll(); fogStep.removeAll(); fogQueue.removeAll(); risers.removeAll(); levelBounds.removeAll(); limitKey = ""
         roomDetail = nil; roomDetailNumber = nil
         makeMaterials()
         buildStatic()
@@ -1046,6 +1298,9 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
 
     private func tick(_ dt: TimeInterval) {
         let frameStart = CACurrentMediaTime()
+        #if DEBUG
+        if logPerf, frameCount < 3 { print(String(format: "FIELD-FRAME %d at %.0f ms", frameCount, Date().timeIntervalSince(fpsStart) * 1000)) }
+        #endif
         let dt = min(max(dt, 0), 0.1)
         frameCount += 1
         if autoOrbitSpeed != 0 {
@@ -1061,6 +1316,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         for i in lift.indices {
             spring.step(&lift[i], &liftVel[i], toward: liftGoal[i], dt: dt)
             levelRoots[i].position.y = lift[i]
+            if liftingAway.contains(i), lift[i] > liftGoal[i] - 4 { levelRoots[i].isEnabled = false; liftingAway.remove(i) }
         }
         for (k, var r) in raise {
             guard abs(r.y - r.goal) > 0.0005 || abs(r.v) > 0.0005 else { continue }
@@ -1083,11 +1339,23 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         for k in done { fades[k] = nil }
         placeCamera()
         tickPulse(dt)
+        let t0 = CACurrentMediaTime()
         positionLabels()
-        if frameCount % 3 == 0 { updateFog() }
+        let t1 = CACurrentMediaTime()
+        if frameCount % 3 == 0 || !fogQueue.isEmpty { updateFog() }
+        let t2 = CACurrentMediaTime()
         exp?.tick(dt)
         // Whatever is left of this frame's few milliseconds goes to building.
+        let t3 = CACurrentMediaTime()
         runWork(budget: max(Self.workBudget - (CACurrentMediaTime() - frameStart), 0.001))
+        #if DEBUG
+        if logPerf {
+            let t4 = CACurrentMediaTime()
+            if t4 - frameStart > 0.012 || dt > 0.03 {
+                print(String(format: "FIELD-SLOW dt %.0f ms tick %.1f labels %.1f fog %.1f exp %.1f work %.1f", dt * 1000, (t4 - frameStart) * 1000, (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000))
+            }
+        }
+        #endif
         measure(dt)
     }
 
@@ -1107,9 +1375,13 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     private func updateFog() {
         guard currentFocus == nil, !framePoints.isEmpty else { return }
         let eye = camera.position(relativeTo: nil)
-        guard fogDirty || simd_distance(eye, fogEye) > 0.25 else { return }
-        fogDirty = false
-        fogEye = eye
+        // A pass in progress continues (a slice per call, so swapping materials never costs a long frame).
+        if fogQueue.isEmpty {
+            guard fogDirty || simd_distance(eye, fogEye) > 0.25 else { return }
+            fogDirty = false
+            fogEye = eye
+            fogQueue = Array(elementEntities.keys)
+        }
         var near = Float.greatestFiniteMagnitude, far: Float = 0
         for p in framePoints { let d = simd_distance(p, eye); near = min(near, d); far = max(far, d) }
         let scale: Float
@@ -1118,8 +1390,10 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         case .floor: scale = 0.85
         case .room: scale = 0.3
         }
-        for (id, ent) in elementEntities {
-            guard let e = b.element(id), let m = ent as? ModelEntity, e.role != .shell else { continue }
+        let start = CACurrentMediaTime()
+        while !fogQueue.isEmpty, CACurrentMediaTime() - start < Self.fogBudget {
+            let id = fogQueue.removeLast()
+            guard let ent = elementEntities[id], let e = b.element(id), let m = ent as? ModelEntity, e.role != .shell else { continue }
             let up = lift.indices.contains(e.level) ? lift[e.level] : 0
             let d = simd_distance(e.shape.anchor + SIMD3(0, up, 0), eye)
             let step = Int((Float(DepthFog.step(distance: d, near: near, far: far)) * scale).rounded())
@@ -1193,7 +1467,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         var want: [String: (String, SIMD3<Float>, Int, Bool, Int)] = [:]   // key → text, point, level, mono, priority
         switch scope {
         case .building:
-            for e in b.elements where e.role == .equipment && e.detail == .building && e.kind != "Panelboard" && layersShow(e) {
+            for e in b.elements where exp?.wholeView != .architectural && e.role == .equipment && tier(e) == .mains && e.part != .panel && e.part != .disconnect && layersShow(e) {
                 want["e-\(e.id)"] = (e.tag, e.shape.bounds.max * SIMD3(0, 1, 0) + e.shape.anchor * SIMD3(1, 0, 1) + SIMD3(0, 0.6, 0), e.level, true, Self.labelPriority(e))
             }
         case let .floor(i):
@@ -1218,10 +1492,24 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             labelPriority[k] = nil
             labelSlots[k] = nil
         }
-        for (k, (text, p, lv, mono, prio)) in want {
+        var made = 0
+        for (k, (text, p, lv, mono, prio)) in want.sorted(by: { $0.value.4 > $1.value.4 }) {
             labelAnchors[k] = (p, lv)
             labelPriority[k] = prio
             guard labels[k] == nil else { continue }
+            // The most important few now; the rest over the next frames (making a label costs a little).
+            if made < 8 { makeLabel(k, text: text, mono: mono); made += 1 } else {
+                enqueue { [weak self] in
+                    guard let self, self.labelAnchors[k] != nil, self.labels[k] == nil else { return }
+                    self.makeLabel(k, text: text, mono: mono)
+                }
+            }
+        }
+        leaderLayer.strokeColor = (style.isDark ? UIColor.white : UIColor(hex: 0x0E1A24)).withAlphaComponent(style.highContrast ? 0.8 : 0.5).cgColor
+    }
+
+    private func makeLabel(_ k: String, text: String, mono: Bool) {
+        do {
             let l = PaddedLabel()
             l.text = text
             l.font = mono ? .monospacedSystemFont(ofSize: k.hasPrefix("d-") ? 11 : 12, weight: .semibold) : .systemFont(ofSize: 12, weight: .semibold)
@@ -1237,7 +1525,6 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             labelLayer.addSubview(l)
             labels[k] = l
         }
-        leaderLayer.strokeColor = (style.isDark ? UIColor.white : UIColor(hex: 0x0E1A24)).withAlphaComponent(style.highContrast ? 0.8 : 0.5).cgColor
     }
 
     /// Screen-space layout every frame: on screen, off the chrome, no two overlapping; moved aside with a short

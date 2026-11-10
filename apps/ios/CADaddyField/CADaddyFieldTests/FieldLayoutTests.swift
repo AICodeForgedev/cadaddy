@@ -36,6 +36,9 @@ final class FieldLayoutTests: XCTestCase {
                             XCTAssertFalse(l.free.intersects(r), "\(tag): the scene's free area runs under \(r)")
                         }
                         XCTAssertGreaterThanOrEqual(l.layers.height, 56, tag)
+                        // The view holds the bottom stack to the cap (the room sheet plus the view control can be taller).
+                        XCTAssertLessThanOrEqual(l.bottom.height, l.maxBottom + 0.5, tag)
+                        XCTAssertLessThanOrEqual(l.layers.maxY + ChromeLayout.gap, l.bottom.maxY - min(sheet, l.maxBottom) + 0.5, tag)
                         switch l.railMode {
                         case let .rail(pitch): XCTAssertGreaterThanOrEqual(pitch, ChromeLayout.minPitch, tag); XCTAssertGreaterThan(rail, 0, tag)
                         case .menu: XCTAssertGreaterThan(rail, 0, tag)

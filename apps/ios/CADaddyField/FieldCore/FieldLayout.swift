@@ -35,6 +35,8 @@ public struct ChromeLayout: Equatable, Sendable {
     public var bottom: CGRect
     /// The area the 3D scene's subject is framed into: clear of every piece of chrome.
     public var free: CGRect
+    /// The tallest the bottom stack may be: the view holds its content to this (it scrolls or compresses).
+    public var maxBottom: CGFloat = .greatestFiniteMagnitude
 
     /// The rule's constants (points).
     public static let target: CGFloat = 56          // the glove touch target
@@ -130,7 +132,7 @@ public struct ChromeLayout: Equatable, Sendable {
         let beside = CGRect(x: left, y: freeTop, width: max(right - t - g - left, 1), height: max(bottom.minY - g - freeTop, 1))
         let above = CGRect(x: left, y: freeTop, width: max(right - left, 1), height: max(layers.minY - g - freeTop, 1))
         let free = rail != nil || beside.width * beside.height >= above.width * above.height ? beside : above
-        return ChromeLayout(header: header, close: close, rail: rail, railMode: mode, layers: layers, bottom: bottom, free: free)
+        return ChromeLayout(header: header, close: close, rail: rail, railMode: mode, layers: layers, bottom: bottom, free: free, maxBottom: maxBottom)
     }
 
     /// Every pair of chrome rectangles that touch (closer than `gap` minus a hair). Empty when the rule holds.
