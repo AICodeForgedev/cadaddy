@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1263,
-    "count": 1263,
+    "callableAsJson": 1264,
+    "count": 1264,
     "ids": [
       "-attedit",
       "-block",
@@ -161,6 +161,7 @@
       "bim.layout.object",
       "bim.layout.rehost",
       "bim.layout.tie",
+      "bim.level.move",
       "bim.loadcalc",
       "bim.look",
       "bim.prints",
