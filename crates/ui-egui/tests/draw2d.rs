@@ -286,7 +286,10 @@ fn a_print_set_reports_where_2d_time_goes() {
             full.coverage * 100.0
         );
         assert!(verts(lod) * 10 < verts(full) * 9, "zoomed out, sub-pixel objects are still drawn in full: {} vs {}", lod.report, full.report);
-        assert!(lod.report["regen"]["simplified"]["dots"].as_u64().unwrap_or(0) > 0, "{}", lod.report);
+        // The detail levels (`cadaddy_render::detail`) already thin the zoomed-out list, so what
+        // is left under a pixel may come out as boxes only.
+        let simplified = |k: &str| lod.report["regen"]["simplified"][k].as_u64().unwrap_or(0);
+        assert!(simplified("dots") + simplified("boxes") > 0, "{}", lod.report);
         assert!(
             full.coverage > 0.0 && lod.coverage > full.coverage * 0.9,
             "zoomed out, the drawing thins out: {} vs {}",
