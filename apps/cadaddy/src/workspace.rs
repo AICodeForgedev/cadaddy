@@ -242,6 +242,9 @@ mod tests {
         let (mut store, _, _) = Workspace::at(Some(path.clone()));
         let mut ui = UiState::default();
         let mut app = cadaddy_ui_egui::CadApp::new(cadaddy_engine::Session::default(), Default::default());
+        // The palettes docked (pinned) as they stood before the rail.
+        app.ui.docking = cadaddy_ui_egui::docking::Workspace::docked();
+        app.ui.show_palettes = true;
         app.run("ui.dock", json!({"operation":"float", "panel":"layers", "rect":[120,90,340,410]})).unwrap();
         ui.docking = app.ui.docking;
         ui.docking.set_visible(Panel::ToolSets, false).unwrap();
@@ -308,7 +311,8 @@ mod tests {
         let directory = temp_dir();
         let path = directory.join("workspace.json");
         let (mut store, _, _) = Workspace::at(Some(path.clone()));
-        let mut ui = UiState { show_palettes: false, ..Default::default() };
+        // Not the default, so there is something to save.
+        let mut ui = UiState { show_toolbar: false, ..Default::default() };
         store.save_if_changed(&ui).unwrap();
         let good = fs::read(&path).unwrap();
         ui.collapsed_groups = vec!["x".repeat(257)];
@@ -324,13 +328,13 @@ mod tests {
         let (mut store, _, _) = Workspace::at(Some(path.clone()));
         // Simulate a destination becoming unavailable after startup.
         fs::create_dir(&path).unwrap();
-        let ui = UiState { show_palettes: false, ..Default::default() };
+        let ui = UiState { show_toolbar: false, ..Default::default() };
         let first_error = store.save_if_changed(&ui).unwrap_err();
         fs::remove_dir(&path).unwrap();
         assert_eq!(store.save_if_changed(&ui).unwrap_err(), first_error);
         assert!(!path.exists(), "ordinary frames must not retry disk writes");
         store.save_on_exit(&ui).unwrap();
-        assert!(!read(&path).unwrap().unwrap().show_palettes);
+        assert!(!read(&path).unwrap().unwrap().show_toolbar);
         fs::remove_dir_all(directory).unwrap();
     }
 }

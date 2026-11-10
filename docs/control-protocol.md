@@ -145,7 +145,9 @@ Tool Sets, Layers, and Properties can be regrouped, split, floated within the ap
 
 Panel IDs: `toolSets`, `layers`, `properties`, `externalReferences`. The protected center is `canvas`.
 
-`ui.dock` accepts `operation`; basic per-panel operations also require `panel`. The advanced `resizeSplit` operation below uses a split `path` instead of a panel. Basic operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|left|right|top|bottom`). Center groups with the target; side zones split beside it. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
+`ui.dock` accepts `operation`; basic per-panel operations also require `panel`. The advanced `resizeSplit` operation below uses a split `path` instead of a panel. Basic operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|left|right|top|bottom`). Center groups with the target; side zones split beside it. `ui.dock.reset` restores the default arrangement: the drawing alone, every palette closed on the palette rail. Invalid moves return an error without changing the layout.
+
+The palette rail (the strip of icon buttons at the window's left edge, the right in a right-to-left interface) uses two more operations. `toggle` is a rail button: a palette that shows closes; one that doesn't opens where it was last (beside the rail the first time) and every other palette that isn't pinned closes; one behind another tab comes to the front. `pin` (with `pinned: true|false`, or no `pinned` to flip it) keeps a palette docked when another opens. `open` (and the commands that open a palette, such as PROPERTIES) opens the rail's way too. The response's `docking.pinned` lists the pinned palettes; open, closed and pinned states are saved with the workspace.
 
 The QuickCalc palette (`quickCalc`) is not part of the default arrangement: QUICKCALC (`ui.panel.quickcalc`, Cmd+8) opens it, floating the first time.
 

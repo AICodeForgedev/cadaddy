@@ -3443,3 +3443,6 @@ menu	Modify	수정
 	Previous Sheet	이전 시트
 	Page {n}	페이지 {n}
 	Page Up and Page Down step through the sheets.	Page Up과 Page Down으로 시트를 넘깁니다.
+	Pin	고정
+	Unpin	고정 해제
+	Coordination	조정
