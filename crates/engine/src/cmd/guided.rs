@@ -29463,6 +29463,7 @@ mod tests {
             ],
             offset: cadaddy_geom::Vec2::ZERO,
             doors: Vec::new(),
+            building: false,
         };
         let mid = |lo: [f64; 2], hi: [f64; 2]| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
         let far = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) / 12.0;
@@ -29890,7 +29891,7 @@ mod tests {
         }
         let pages = vec![("EX-5".to_string(), page)];
         let mut result = json!({});
-        gear_step(&mut s, &mut job, &pages, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        gear_step(&mut s, &mut job, &pages, None, &mut result).unwrap_or_else(|e| panic!("{e}"));
         let g = &result["gear"];
         // The panel: built, its box inferred from its rating and circuits.
         assert_eq!(g["inferred_boxes"], json!(["PX"]), "{g:#}");
