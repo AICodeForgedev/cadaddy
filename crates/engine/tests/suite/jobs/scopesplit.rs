@@ -100,8 +100,14 @@ fn notes() -> Value {
     ])
 }
 
+/// Another trade's elements (not the concrete's, nor the fire alarm circuits' cable rows).
 fn others(bom: &Value) -> Vec<&Value> {
-    bom["by_others"].as_array().expect("by_others").iter().filter(|x| x["trade"] != "concrete").collect()
+    bom["by_others"].as_array().expect("by_others").iter().filter(|x| x["trade"] != "concrete" && !is_fa_cable(x)).collect()
+}
+
+/// A row of the fire alarm circuits' cable (Q6503): by system and level.
+fn is_fa_cable(x: &Value) -> bool {
+    x["element"].as_str().is_some_and(|e| e.starts_with("FA-"))
 }
 
 fn lines_of<'a>(bom: &'a Value, id: &str) -> Vec<&'a Value> {
@@ -118,7 +124,14 @@ fn other_trades_devices_are_listed_by_others_and_the_documents_decide_our_part()
     // Nothing read yet: each class by its default, said so.
     let bom = s.execute("bim.bom", &json!({})).expect("bom");
     let by = others(&bom);
-    assert_eq!(by.len(), 6, "the thermostat, four fire alarm devices and the TV outlet: {by:#?}");
+    // With the fire alarm control panel the wiring places by rule while no document places it
+    // (Q6503).
+    assert_eq!(by.len(), 7, "the thermostat, four fire alarm devices, the TV outlet and the rule's panel: {by:#?}");
+    assert!(by.iter().any(|x| x["element"] == "FACP"), "{by:#?}");
+    // Its cable the fire alarm contractor's too: listed by others, none on our lines.
+    let all = bom["by_others"].as_array().expect("by_others");
+    assert!(all.iter().any(|x| is_fa_cable(x) && x["kind"].as_str().is_some_and(|k| k.starts_with("Fire alarm cable"))), "{all:#?}");
+    assert!(!bom["lines"].as_array().unwrap().iter().any(|l| l["item"].as_str().is_some_and(|i| i.starts_with("Fire alarm cable"))));
     assert!(
         by.iter().all(|x| x["decided"] == "default" && x["cost_to_us"] == 0.0 && x["reason"].as_str().unwrap().starts_with("no document says")),
         "{by:#?}"

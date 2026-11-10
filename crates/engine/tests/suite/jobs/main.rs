@@ -38,6 +38,7 @@ mod elemprops;
 mod emtsize;
 mod equip_mounting;
 mod exterior;
+mod fawiring;
 mod feederwire;
 mod fixturekinds;
 mod floorjoists;

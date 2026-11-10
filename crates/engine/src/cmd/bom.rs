@@ -871,9 +871,11 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
             );
         }
     }
-    // The model's pieces, from its count index.
+    // The model's pieces, from its count index; the fire alarm circuits' cable (Q6503) is
+    // another trade's where the scope gives the fire alarm system to one.
     if let Some(ix) = atoms {
-        atom_lines(lines, &ix);
+        let fa = scope.iter().find(|d| d.class == "fire alarm").filter(|d| d.by_others());
+        atom_lines(lines, &ix, fa, others);
     }
     // The panels' breakers (Q6166), whether or not the runs were built as pieces.
     if let Some(ix) = s.doc().ok().and_then(super::mepatoms::stored) {
@@ -974,8 +976,18 @@ fn lv_pathway_lines(s: &Session, lines: &mut Vec<Line>) {
 
 /// The BOM lines of a model built with its pieces (Q6157): each counted piece of its index by
 /// what it is bought as, size, level and circuit; lengths for conduit, cable and wire.
-fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
+fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index, fa_theirs: Option<&super::scope::Decision>, others: &mut Vec<Value>) {
+    // Another trade's fire alarm cable (and raceway, unless the documents make it ours): by
+    // system, level and type in `by_others`.
+    let fa_conduit_ours = fa_theirs.is_none_or(|d| d.ours_for("fire alarm device", "").iter().any(|i| i.item == "conduit"));
+    let mut theirs: BTreeMap<(String, String, String), f64> = BTreeMap::new();
     for (k, t) in ix.rows.iter().take(MAX_LINES * 4) {
+        let fire_alarm = super::conduitroute::fa::is_system(&k.system);
+        if fire_alarm && fa_theirs.is_some() && (matches!(k.kind.as_str(), "cable" | "wire") || !fa_conduit_ours) {
+            let what = if k.item.is_empty() { k.kind.clone() } else { k.item.clone() };
+            *theirs.entry((k.system.clone(), k.level.clone(), what)).or_default() += if t.length_ft > 0.0 { t.length_ft } else { t.count as f64 };
+            continue;
+        }
         let (category, unit) = match k.kind.as_str() {
             "conduit" => ("conduit", "ft"),
             "coupling" | "connector" | "elbow" | "offset" | "strap" | "locknut" | "bushing" => ("conduit fittings", "each"),
@@ -1001,7 +1013,7 @@ fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
         add(
             lines,
             Line {
-                trade: "electrical",
+                trade: if fire_alarm { "fire alarm" } else { "electrical" },
                 category: category.into(),
                 item: if k.item.is_empty() { k.kind.clone() } else { k.item.clone() },
                 size,
@@ -1017,6 +1029,11 @@ fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
                 made: made_of(&k.made),
             },
         );
+    }
+    if let Some(dec) = fa_theirs {
+        for ((system, level, what), qty) in theirs {
+            others_entry(others, dec, &format!("{system} {level}"), &format!("{what}: {qty:.0}"), &level, &[]);
+        }
     }
 }
 

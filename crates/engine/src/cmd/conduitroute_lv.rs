@@ -338,7 +338,7 @@ fn parse_size(t: &str) -> Option<f64> {
 }
 
 /// The sentences of a paragraph (a full stop, semicolon or colon followed by a space ends one).
-fn sentences(text: &str) -> Vec<String> {
+pub(super) fn sentences(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let cs: Vec<char> = text.chars().take(20_000).collect();

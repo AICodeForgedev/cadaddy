@@ -8692,6 +8692,8 @@ fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Do
     let (placed, not) = super::scope::place_panels(&mut sp, &places, &rooms);
     let Ok(d) = s.doc_mut() else { return };
     d.building_spec = Some(sp.to_json()).into();
+    // A panel the fire alarm wiring placed by rule at the build goes for the documents' (Q6503).
+    super::conduitroute::fa::remove_placed(d, &placed);
     let built = super::scope::build_panels(d, &sp, &placed, &rooms);
     s.touch();
     progress_line(&format!("  fire alarm panels: {} placed ({}), {built} built; not placed {:?}", placed.len(), placed.join(", "), not));
@@ -21295,8 +21297,22 @@ fn lv_pathways_step(s: &mut Session, job: &GuidedJob, docs: &[super::scope::Doc]
         if lv.firestop_by.is_empty() { "not said" } else { lv.firestop_by.as_str() },
         t0.elapsed().as_secs_f64()
     ));
+    // The fire alarm wiring method the same documents state (Q6503: a raceway below a height,
+    // plenum cable, Class A), for the router.
+    let fa = super::conduitroute::fa::read_documents(&all);
+    if fa != super::conduitroute::fa::WiringDocs::default() {
+        progress_line(&format!(
+            "  fire alarm wiring: raceway {}, plenum cable {}, Class A {}",
+            fa.raceway
+                .as_ref()
+                .map_or_else(|| "not said".to_string(), |(m, b, _)| b.map_or_else(|| format!("{m} throughout"), |b| format!("{m} below {b} ft"))),
+            if fa.plenum.is_some() { "said" } else { "not said" },
+            if fa.class_a.is_some() { "said" } else { "not said" },
+        ));
+    }
     if let Ok(d) = s.doc_mut() {
         lv.store(d);
+        fa.store(d);
     }
 }
 

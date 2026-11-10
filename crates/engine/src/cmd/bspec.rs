@@ -2554,6 +2554,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // The devices the readers found, each an element with what was read about it.
     let devices = super::propfill::build_devices(d, &sp);
     mark("device elements");
+    // The fire alarm system's control panel and NAC power supplies the documents don't place
+    // (Q6503), built now its devices stand, before its circuits are routed.
+    let fa_equipment = super::conduitroute::fa::place_equipment(d, &mut sp);
+    mark("fire alarm equipment");
     // The circuits routed through the model now its devices stand (Q6152): around the ducts,
     // pipes and structure, by the corridors, into each box and the panel's entry window; the
     // drawn conduit as it is. The estimated routes give way to them for the pieces.
@@ -2668,6 +2672,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         "penetrations": routed.report["penetrations"].as_array().map_or(0, Vec::len),
     });
     r["deviceElements"] = json!(devices.built);
+    if fa_equipment["devices"].as_u64().unwrap_or(0) > 0 {
+        r["fireAlarmEquipment"] = fa_equipment;
+    }
     r["gearSpace"] = gear_space.json();
     r["deviceBuild"] = devices.to_json();
     r["qtyTables"] = json!(qty_tables);
