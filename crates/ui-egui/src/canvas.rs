@@ -1505,14 +1505,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // is left alone: it may not reach down there).
     let covered = if tiles.len() > 1 { 0.0 } else { crate::cmdline::covered_bottom(app, full) };
     app.session.viewport_inset_px = (0.0, f64::from(covered));
-    // A print set opens on its first sheet, its sheet list beside it: there is no view of the
-    // whole set (`cadaddy_engine::sheetnav`).
-    if app.session.open_first_sheet() {
-        let _ = crate::sheetsets::open(app);
-    }
     if app.canvas.zoom_pending {
         app.canvas.zoom_pending = false;
         let _ = app.session.zoom_extents();
+    }
+    // A print set opens on its first sheet, its sheet list beside it: there is no view of the
+    // whole set (`cadaddy_engine::sheetnav`). The list takes room from the canvas, so the sheet
+    // is fitted again next frame.
+    if app.session.open_first_sheet() {
+        crate::sheetsets::open_sheet_list(app);
     }
     let Ok(st) = app.session.state() else { return };
     let view = st.view();

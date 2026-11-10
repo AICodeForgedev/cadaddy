@@ -164,6 +164,50 @@ pub fn open(app: &mut CadApp) -> Result<Value, String> {
     crate::docking::command(app, false, &json!({ "operation": "float", "panel": panel.id(), "rect": rect }))
 }
 
+/// Open the palette for a print set's sheet list: the first time docked on the left of the
+/// drawing, as a reader lists a document's pages, so the sheet stays in full view; afterwards
+/// where it was closed. The canvas fits the open sheet again once it has its new width.
+pub fn open_sheet_list(app: &mut CadApp) {
+    let panel = Panel::SheetSets;
+    if app.ui.docking.layout.contains(&panel) || app.ui.docking.is_detached(panel) {
+        return;
+    }
+    let first = !app.ui.docking.hidden.iter().any(|(p, _)| *p == panel);
+    if crate::docking::command(app, false, &json!({ "operation": "open", "panel": panel.id() })).is_err() {
+        return;
+    }
+    if first {
+        let _ =
+            crate::docking::command(app, false, &json!({ "operation": "move", "panel": panel.id(), "target": Panel::Canvas.id(), "zone": "left" }));
+        // A list column, not half the window.
+        if let Some(path) = app.ui.docking.layout.root.as_ref().and_then(|root| list_split(root, Vec::new())) {
+            let _ = crate::docking::command(app, false, &json!({ "operation": "resizeSplit", "path": path, "size": { "FixedFirst": LIST_WIDTH } }));
+        }
+    }
+    app.canvas.zoom_pending = true;
+}
+
+/// The docked sheet list's width, in points.
+const LIST_WIDTH: f32 = 300.0;
+
+/// The path (second child or not, from the root) to the split whose first side is the sheet
+/// list alone.
+fn list_split(node: &craft_ui::docking::Node<Panel>, path: Vec<bool>) -> Option<Vec<bool>> {
+    use craft_ui::docking::Node;
+    let Node::Split { first, second, .. } = node else { return None };
+    if matches!(first.as_ref(), Node::Tabs { panels, .. } if panels.as_slice() == [Panel::SheetSets]) {
+        return Some(path);
+    }
+    if path.len() >= 32 {
+        return None;
+    }
+    let mut left = path.clone();
+    left.push(false);
+    let mut right = path;
+    right.push(true);
+    list_split(first, left).or_else(|| list_split(second, right))
+}
+
 /// Run a SHEETSET action on the current set; a failure is echoed and returned.
 fn act(app: &mut CadApp, mut p: Value) -> Option<Value> {
     let set = app.ui.sheet_set.clone()?;

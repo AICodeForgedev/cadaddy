@@ -88,7 +88,20 @@ fn a_print_set_opens_on_its_first_sheet_and_draws_only_it() {
     assert!(sheets[0].rect.contains(v.center) && v.height < sheets[0].rect.height() * 2.0, "{v:?}");
     // The sheet list is open beside it: a row per sheet, with its number and title.
     assert!(h.state().ui.docking.layout.contains(&cadaddy_ui_egui::docking::Panel::SheetSets));
+    // Docked on the left of the drawing, a column wide, and the sheet fitted to what is left.
+    let canvas = h.state().canvas.rect.unwrap();
+    assert!(canvas.left() > 250.0 && canvas.left() < 400.0, "{canvas:?}");
+    let xf = h.state().canvas.xf.unwrap();
+    let (lo, hi) = (xf.to_screen(sheets[0].rect.min), xf.to_screen(sheets[0].rect.max));
+    assert!(canvas.contains(lo) && canvas.contains(hi), "the whole sheet is in view: {lo:?} {hi:?} in {canvas:?}");
     h.get_by_label("Sample Sheet 2");
+    // A look at it, when asked for (`CADADDY_SHEETNAV_SHOTS=<folder>`).
+    if let Some(dir) = std::env::var_os("CADADDY_SHEETNAV_SHOTS") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        h.run_steps(8);
+        h.render().unwrap().save(dir.join("sheet-navigator.png")).unwrap();
+    }
     // A click on a row opens that sheet.
     h.get_by_label("Q-002").click();
     h.run_steps(4);
