@@ -2468,6 +2468,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         let name = room.map_or(String::new(), room_label);
         let mut xdata = wallgen::tag(Part::Ceiling, &level.name, t.tag);
         xdata.push(RawTag { code: 1000, value: format!("room:{}", name.chars().take(240).collect::<String>()) });
+        // The ceiling type given the room (`rcp.type`), with who gave it.
+        if let Some(r) = room {
+            xdata.extend(super::ceilings::room_type_tags(r));
+        }
         let common = Common { layer: wallgen::layer_of(Part::Ceiling).into(), xdata: xdata.into(), ..Common::default() };
         if let Ok(h) = d.add(&Space::Model, common, EntityKind::Mesh(m)) {
             ceilings += 1;
@@ -2529,6 +2533,22 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // The outside: roofs, parapets, crickets, rooftop equipment, facade glass and materials.
     let outside = super::exterior::build(d, &sp);
     mark("exterior");
+    // Casework and furniture (Q6422): read from the plans (the casework reader, the furniture
+    // drawn), each in its room; a room the plans leave unfurnished takes its type's furniture.
+    let room_refs: Vec<super::furniture::RoomRef> = rooms
+        .iter()
+        .map(|t| {
+            let spec = t.room.and_then(|i| sp.rooms.get(i));
+            let name = spec.map(|r| r.name.clone()).filter(|n| !n.trim().is_empty()).or_else(|| t.name.clone()).unwrap_or_default();
+            let label =
+                spec.map(room_label).unwrap_or_else(|| [t.number.as_deref(), t.name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" "));
+            super::furniture::RoomRef { level: t.level.clone(), outline: t.outline.clone(), label, type_key: super::furniture::room_type(&name) }
+        })
+        .collect();
+    let (casework, furniture) = super::furniture::build(d, &sp, &room_refs);
+    r["casework"] = casework;
+    r["furniture"] = furniture;
+    mark("casework and furniture");
     // The reflected ceiling plans' ceilings (replacing the level's and rooms'), grids, soffits,
     // lights and diffusers.
     let rcp = super::ceilings::build(d, &sp);
@@ -2550,6 +2570,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // The devices the readers found, each an element with what was read about it.
     let devices = super::propfill::build_devices(d, &sp);
     mark("device elements");
+    // The fire alarm system's control panel and NAC power supplies the documents don't place
+    // (Q6503), built now its devices stand, before its circuits are routed.
+    let fa_equipment = super::conduitroute::fa::place_equipment(d, &mut sp);
+    mark("fire alarm equipment");
     // The circuits routed through the model now its devices stand (Q6152): around the ducts,
     // pipes and structure, by the corridors, into each box and the panel's entry window; the
     // drawn conduit as it is. The estimated routes give way to them for the pieces.
@@ -2664,6 +2688,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         "penetrations": routed.report["penetrations"].as_array().map_or(0, Vec::len),
     });
     r["deviceElements"] = json!(devices.built);
+    if fa_equipment["devices"].as_u64().unwrap_or(0) > 0 {
+        r["fireAlarmEquipment"] = fa_equipment;
+    }
     r["gearSpace"] = gear_space.json();
     r["deviceBuild"] = devices.to_json();
     r["qtyTables"] = json!(qty_tables);

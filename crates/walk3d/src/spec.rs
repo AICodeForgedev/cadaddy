@@ -570,6 +570,10 @@ pub struct CeilingType {
     pub grid_in: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire_rating: Option<String>,
+    /// Its height above the floor, feet, when the legend gives one (`C1 … @ 9'-0" AFF`): a room
+    /// of this type whose own RCP and unit RCP print none takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_ft: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -769,6 +773,13 @@ pub struct Room {
     /// Where `ceiling_ft` was read (`9'-0" on A-501 ENLARGED UNIT RCP`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ceiling_source: Option<String>,
+    /// Its ceiling's build-up ([`CeilingType::name`]) where no RCP area types it: given by room,
+    /// unit type or height basis (`rcp.type`); its built ceiling takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_type: Option<String>,
+    /// Who or what gave `ceiling_type` (`rcp.type: rooms 101`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_type_source: Option<String>,
     #[serde(default)]
     pub materials: Surfaces,
     /// Base finish from the room finish schedule (`RB-1 4" RUBBER BASE`).
@@ -2970,6 +2981,9 @@ impl BuildingSpec {
             if let Some(r) = &c.fire_rating {
                 let _ = write!(text, "; {r}");
             }
+            if let Some(h) = c.height_ft.filter(|h| h.is_finite() && *h > 0.0) {
+                let _ = write!(text, "; at {}", feet(h));
+            }
             put("ceiling_types", format!("ceiling_types/{}", c.name), text, named(&["ceiling_types"], "name", &c.name));
         }
         for t in &self.soffit_types {
@@ -3736,6 +3750,9 @@ impl BuildingSpec {
             layers_ok(format!("ceiling_types[{i}].layers"), &c.layers, &mut out);
             if c.grid_in.is_some_and(|g| !g.iter().all(|v| fin(*v) && (6.0..=120.0).contains(v))) {
                 out.push(Issue::error(format!("ceiling_types[{i}].grid_in"), "a grid's tiles are 6\" to 120\""));
+            }
+            if c.height_ft.is_some_and(|h| !(fin(h) && (6.0..=60.0).contains(&h))) {
+                out.push(Issue::error(format!("ceiling_types[{i}].height_ft"), "a ceiling is 6' to 60' above the floor"));
             }
         }
         for (i, t) in self.soffit_types.iter().enumerate().take(MAX_ITEMS) {

@@ -1691,6 +1691,8 @@ pub(crate) fn place_panels(
     let mut placed = Vec::new();
     let mut not = Vec::new();
     for p in places {
+        // One the fire alarm wiring placed by rule gives way to where the documents put it (Q6503).
+        sp.mep.equipment.retain(|e| !(e.tag.eq_ignore_ascii_case(&p.tag) && super::conduitroute::fa::placed_by_rule(e)));
         if sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&p.tag)) {
             continue;
         }
@@ -2012,10 +2014,16 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let (n, open) = fa_kinds(s.doc()?, &mut sp);
             out["fire_alarm"] = json!({"resolved": n, "unresolved": open});
         }
+        // The fire alarm wiring method the documents state (Q6503), for the router: what this
+        // reading says, else what an earlier one did.
+        let fa = super::conduitroute::fa::read_documents(&docs).or(super::conduitroute::fa::WiringDocs::stored(s.doc()?));
+        fa.store(s.doc_mut()?);
         if flag("panels") {
             let rooms = room_boxes(s.doc()?);
             let (placed, not) = place_panels(&mut sp, &panel_places(&docs), &rooms);
             s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+            // A panel the fire alarm wiring placed by rule goes for the documents' (Q6503).
+            super::conduitroute::fa::remove_placed(s.doc_mut()?, &placed);
             let built = build_panels(s.doc_mut()?, &sp, &placed, &rooms);
             out["panels"] =
                 json!({"placed": placed, "built": built, "not_placed": not.iter().map(|(t, w)| json!({"tag": t, "why": w})).collect::<Vec<_>>()});

@@ -170,13 +170,24 @@ fn ceilings(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Ba
         if area < 1.0 {
             continue;
         }
-        let ty_name = super::super::bimlook::made_tag(e, "type").unwrap_or_default().to_string();
-        let ct = sp.ceiling_types.iter().find(|t| !ty_name.is_empty() && t.name.eq_ignore_ascii_case(&ty_name));
         let room = super::super::bimlook::made_tag(e, "room").map(str::to_string).filter(|x| !x.is_empty()).or_else(|| {
             let c = polys.first().map(|p| centroid(p))?;
             ctx.room_at(&level, c).map(Ctx::room_label)
         });
         let room = room.unwrap_or_default();
+        let room_spec = super::super::ceilings::spec_room_of(sp, &level, &room);
+        // Its type: the built ceiling's (the reflected ceiling plan's, or the one given its room),
+        // else the one given its room since it was built.
+        let tagged = super::super::bimlook::made_tag(e, "type").unwrap_or_default().to_string();
+        let (ty_name, given_by) = if tagged.is_empty() {
+            match room_spec.and_then(|r| Some((r.ceiling_type.clone()?, r.ceiling_type_source.clone()))) {
+                Some((t, by)) => (t, Some(by.unwrap_or_else(|| "the room's ceiling type".into()))),
+                None => (String::new(), None),
+            }
+        } else {
+            (tagged, super::super::bimlook::made_tag(e, "type_source").map(str::to_string))
+        };
+        let ct = sp.ceiling_types.iter().find(|t| !ty_name.is_empty() && t.name.trim().eq_ignore_ascii_case(ty_name.trim()));
         let grid = matches!(ct.map(|t| t.kind), Some(cadaddy_walk3d::CeilingKind::Grid));
         if matches!(ct.map(|t| t.kind), Some(cadaddy_walk3d::CeilingKind::Open)) {
             continue;
@@ -224,21 +235,24 @@ fn ceilings(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Ba
             }
             continue;
         }
-        // Gypsum: its board layers (the ceiling type's, else one layer by rule).
-        let layers: Vec<(String, f64, Source)> = match ct
-            .filter(|t| t.layers.iter().any(|l| l.category == "board" || l.material.to_ascii_uppercase().contains("GYP")))
-        {
-            Some(t) => t
-                .layers
-                .iter()
-                .filter(|l| l.category == "board" || l.material.to_ascii_uppercase().contains("GYP"))
-                .map(|l| (l.material.clone(), l.thickness_in.max(0.25), Source::from_doc(SourceKind::Legend, &format!("ceiling type {}", t.name))))
-                .collect(),
-            None => vec![(
-                "5/8\" gypsum board ceiling".into(),
-                0.625,
-                Source::from_doc(SourceKind::Default, "company default: one layer of 5/8\" gypsum board where the ceiling has no type"),
-            )],
+        // Gypsum: its board layers: the ceiling type's; with no type, the membrane of the rated
+        // assembly over the level (an assumption, with its basis); else the rules' default.
+        let typed = ct.filter(|t| t.layers.iter().any(is_board)).map(|t| {
+            let src = match &given_by {
+                Some(by) => Source::from_doc(SourceKind::User, &format!("ceiling type {} given for the room ({by})", t.name)),
+                None => Source::from_doc(SourceKind::Legend, &format!("ceiling type {}", t.name)),
+            };
+            (t, src)
+        });
+        let membrane = if ct.is_none() { rated_membrane(sp, r, &level, room_spec) } else { None };
+        let layers: Vec<(String, f64, Source)> = match typed.or_else(|| membrane.map(|(t, why)| (t, Source::from_doc(SourceKind::Rule, &why)))) {
+            Some((t, src)) => {
+                t.layers.iter().filter(|l| is_board(l)).take(12).map(|l| (l.material.clone(), l.thickness_in.max(0.25), src.clone())).collect()
+            }
+            None => {
+                let (board, th, n) = default_ceiling(r);
+                (0..n).map(|_| (board.clone(), th, r.source("drywall.ceiling_board"))).collect()
+            }
         };
         if want("drywall") {
             let lengths = r.nums("drywall.sheet_lengths_ft");
@@ -291,6 +305,99 @@ fn ceilings(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Ba
             }
         }
     }
+}
+
+/// A board layer of a ceiling build-up.
+fn is_board(l: &cadaddy_walk3d::AssemblyLayer) -> bool {
+    l.category == "board" || l.material.to_ascii_uppercase().contains("GYP")
+}
+
+/// The rules' ceiling with no type: its board, thickness (inches) and number of layers.
+fn default_ceiling(r: &Rules) -> (String, f64, usize) {
+    let board = Some(r.text("drywall.ceiling_board")).filter(|b| !b.trim().is_empty()).unwrap_or_else(|| "gypsum board ceiling".into());
+    let th = r.num("drywall.ceiling_board_in", 0.625).clamp(0.25, 2.0);
+    let n = r.num("drywall.ceiling_layers", 1.0).round().clamp(1.0, 6.0) as usize;
+    (board, th, n)
+}
+
+/// A rated ceiling type's fire rating, when it has one (`1 HR`; not `NR`, `0 HR`).
+fn rating_of(t: &cadaddy_walk3d::CeilingType) -> Option<&str> {
+    t.fire_rating.as_deref().map(str::trim).filter(|f| f.chars().any(|c| ('1'..='9').contains(&c)))
+}
+
+/// What an untyped ceiling of `level` is when the documents rate the assembly over the level:
+/// over the top storey the roof/ceiling assembly, over any other the floor/ceiling assembly; its
+/// membrane is a rated gypsum ceiling type of the ceiling legend: the one the room's ceiling
+/// height comes from, else the one named for that assembly (rule words), else one named for
+/// neither. The type and why (an assumption, the alternative said).
+pub(super) fn rated_membrane<'a>(
+    sp: &'a BuildingSpec,
+    r: &Rules,
+    level: &str,
+    room: Option<&cadaddy_walk3d::SpecRoom>,
+) -> Option<(&'a cadaddy_walk3d::CeilingType, String)> {
+    let lv = sp.level(level)?;
+    let rated: Vec<&cadaddy_walk3d::CeilingType> = sp
+        .ceiling_types
+        .iter()
+        .take(500)
+        .filter(|t| t.kind == cadaddy_walk3d::CeilingKind::Gypsum && rating_of(t).is_some() && t.layers.iter().any(is_board))
+        .collect();
+    if rated.is_empty() {
+        return None;
+    }
+    let storey = |name: &str| !super::super::wallgen::roof_level(&sp.levels, name);
+    let roof_over = !sp
+        .levels
+        .iter()
+        .any(|o| storey(&o.name) && o.elevation_ft.is_finite() && lv.elevation_ft.is_finite() && o.elevation_ft > lv.elevation_ft + 1e-6);
+    let (kind, words, other) = if roof_over {
+        ("roof", r.words("drywall.roof_ceiling_words"), r.words("drywall.floor_ceiling_words"))
+    } else {
+        ("floor", r.words("drywall.floor_ceiling_words"), r.words("drywall.roof_ceiling_words"))
+    };
+    let words_of = |t: &str| -> Vec<String> {
+        t.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric() && c != '-').filter(|w| !w.is_empty()).map(str::to_string).collect()
+    };
+    let says = |t: &cadaddy_walk3d::CeilingType, ws: &[String]| {
+        let have = words_of(&format!("{} {}", t.name, t.description));
+        let have: Vec<String> = have.iter().flat_map(|w| w.split('-').map(str::to_string).collect::<Vec<_>>()).collect();
+        ws.iter().any(|w| have.iter().any(|h| h == w))
+    };
+    let basis_words = room.and_then(|x| x.ceiling_source.as_deref()).map(words_of).unwrap_or_default();
+    let from_basis: Vec<_> = rated.iter().copied().filter(|t| basis_words.iter().any(|w| w.eq_ignore_ascii_case(t.name.trim()))).collect();
+    let named: Vec<_> = rated.iter().copied().filter(|t| says(t, &words)).collect();
+    let neither: Vec<_> = rated.iter().copied().filter(|t| !says(t, &words) && !says(t, &other)).collect();
+    let (tier, why) = if !from_basis.is_empty() {
+        (from_basis, "the room's ceiling height is worked out from it".to_string())
+    } else if !named.is_empty() {
+        (named, format!("the type the legend names for the {kind}/ceiling assembly"))
+    } else if !neither.is_empty() {
+        let n = neither.len();
+        (neither, if n == 1 { "the legend's only rated gypsum ceiling".into() } else { "the legend's first rated gypsum ceiling".into() })
+    } else {
+        return None;
+    };
+    let t = tier.first().copied()?;
+    let others: Vec<&str> = tier.iter().skip(1).take(6).map(|x| x.name.as_str()).collect();
+    let boards = t.layers.iter().filter(|l| is_board(l)).count();
+    let desc = if t.description.trim().is_empty() { String::new() } else { format!(" ({})", t.description.trim()) };
+    let (board, _, n) = default_ceiling(r);
+    let mut text = format!(
+        "assumed: no ceiling type given; the {kind}/ceiling assembly over level {} is rated ({}), so this ceiling is its membrane: ceiling type {}{desc} of the ceiling legend, {boards} board layer{} ({why})",
+        lv.name,
+        rating_of(t).unwrap_or_default(),
+        t.name,
+        if boards == 1 { "" } else { "s" },
+    );
+    if !others.is_empty() {
+        text.push_str(&format!("; other rated types: {}", others.join(", ")));
+    }
+    text.push_str(&format!(
+        "; alternative: {n} layer{} of {board} where this ceiling is not that assembly's membrane",
+        if n == 1 { "" } else { "s" }
+    ));
+    Some((t, text))
 }
 
 /// A ceiling polygon's sheets (each where it lands); how many.

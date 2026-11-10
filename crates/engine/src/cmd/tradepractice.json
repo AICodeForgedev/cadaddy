@@ -103,6 +103,30 @@
       "basis": "trade practice: a circuit's devices are joined device to device in a square tree above the ceiling, the homerun takes the corridor to its panel's top entry (rules: conduitroute.json; fill and box fill per NEC Ch. 9 and 314.16)"
     },
     {
+      "id": "FA-NAC-CHAIN",
+      "trade": "fire alarm",
+      "fills": "a notification appliance circuit's cable: the drawings show the appliances (and the shop drawings their circuit and address), not the wiring between them",
+      "basis": "trade practice: each NAC is one power-limited cable chained appliance to appliance from its power supply or the control panel, in address order where the shop drawings give it, else nearest neighbour; a circuit is closed where its load passes the output's rating at 80% or its voltage drop leaves the last appliance under 16 V (Class B, the end-of-line device at the last appliance; NFPA 72 12.3, 18.3; NEC 760.154; rules: fawiring.json)"
+    },
+    {
+      "id": "FA-SLC-LOOP",
+      "trade": "fire alarm",
+      "fills": "a signaling line circuit's cable (and the annunciator's bus): the drawings show the initiating devices and modules, not the loop through them",
+      "basis": "trade practice: the control panel's addressable loop runs device to device storey by storey up the riser over the panel, in address order where the shop drawings give it, else nearest neighbour, a new loop past the loop's device capacity; Class B with T-taps allowed unless the documents call for Class A (NFPA 72 12.3, 23.6; NEC 760.154; rules: fawiring.json)"
+    },
+    {
+      "id": "FA-POWER-SUPPLY",
+      "trade": "fire alarm",
+      "fills": "a NAC power supply where a storey's notification load needs one and no document places it, and its start circuit from the control panel",
+      "basis": "trade practice: a NAC power supply (booster) serves its storey's appliances where the control panel's own outputs can't carry them, as many as the load needs at 4 outputs each, in a service room nearest the riser, started by the control panel and on its own dedicated 120 V branch circuit (NFPA 72 10.6.5); the shop drawings place them (rules: fawiring.json)"
+    },
+    {
+      "id": "FA-CONTROL-PANEL",
+      "trade": "fire alarm",
+      "fills": "the fire alarm control panel where the model has fire alarm devices and no document places the panel",
+      "basis": "trade practice: every fire alarm system has a control panel (NFPA 72 10.4), set in the fire command, electrical or mechanical room of the lowest storey it serves, its top at 72 in (rules: fawiring.json)"
+    },
+    {
       "id": "E-ESTIMATED",
       "trade": "electrical",
       "fills": "a circuit's route estimated from its homerun tag where the model could not route it",
@@ -140,6 +164,23 @@
       "trade": "mechanical",
       "fills": "a return grille no return duct of its floor reaches",
       "basis": "trade practice: a return grille the drawings leave unducted returns through the ceiling plenum to its unit (IMC 602 plenum); alternative: a ducted return the engineer may call for"
+    },
+    {
+      "id": "A-CEILING-HEIGHT",
+      "trade": "architecture",
+      "fills": "each room's ceiling height, from the first source in `order` that gives one (numbers: clear_ft, the least ceiling height a derived one is set to; default_size_in, the depth of the floor/ceiling or roof/ceiling assembly over a room when its framing is not read; deck_in, the deck or topping over the members; membrane_in, the ceiling's channel and board under them)",
+      "basis": "trade practice: the reflected ceiling plans set ceiling heights; a room takes its own RCP tag or note first, then the enlarged plan or unit RCP of its room type, then its ceiling type's legend, then a section or interior elevation that dimensions it; only where none gives one is it derived, at the underside of the assembly over the room (the floor to floor less the members, deck and ceiling membrane), never under the least ceiling height the code allows (IBC 1208.2: 7'-6\" in habitable spaces and corridors); a derived height is inferred, marked as such with its basis, and asked of the architect; alternative: the height the architect gives",
+      "order": [
+        {"key": "room_rcp", "label": "room RCP"},
+        {"key": "unit_rcp", "label": "unit RCP"},
+        {"key": "legend", "label": "ceiling type legend"},
+        {"key": "section", "label": "section"},
+        {"key": "derived", "label": "derived"}
+      ],
+      "clear_ft": 7.5,
+      "default_size_in": 24.0,
+      "deck_in": 1.5,
+      "membrane_in": 1.5
     },
     {
       "id": "A-MEZZANINE",

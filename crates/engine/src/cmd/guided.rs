@@ -6217,57 +6217,63 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if tags > 0 {
                     progress_line(&format!("  RCP typical rooms: {tags} height tags read, {} areas set", typical.len()));
                 }
-                areas.extend(typical);
-                if !areas.is_empty() {
-                    // Each area's room takes its height (its ceiling is built there; the RCP's areas
-                    // are not the level's whole ceiling, so the rooms' ceilings stay): the spec
-                    // room of its number, or of its circulation space's name.
-                    let mut rooms_set = 0usize;
-                    for a in &areas {
-                        let Some(label) = a.room.as_deref().map(str::trim).filter(|l| !l.is_empty()) else { continue };
-                        for r in sp.rooms.iter_mut().filter(|r| {
-                            r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(label)) || r.name.trim().eq_ignore_ascii_case(label)
-                        }) {
-                            r.ceiling_ft = Some(a.height_ft);
-                            r.ceiling_source.clone_from(&a.source);
-                            rooms_set += 1;
-                        }
-                    }
-                    let seated = super::mep::seat_in_plenum_under(&mut sp, &areas);
-                    let levels: BTreeSet<&str> = areas.iter().map(|a| a.level.as_str()).collect();
-                    progress_line(&format!(
-                        "  ceilings set per area from the RCPs: {} areas on {levels:?}, {rooms_set} rooms at their height; {seated} MEP runs and terminals reseated under them",
-                        areas.len()
-                    ));
-                }
-                // A typical room whose ceiling plan prints no height: its elevations' (measured).
+                // A typical room's elevations and sections (measured), by room type.
                 let measured = typical_elevation_heights(s.doc()?, job);
                 if !measured.is_empty() {
-                    let mut set = 0usize;
-                    // A room's type: the rooms stage's room of its number, else its own name.
-                    let by_number: BTreeMap<String, BTreeSet<String>> = job_rooms(job)
-                        .iter()
-                        .filter(|(_, _, _, n)| !n.trim().is_empty())
-                        .map(|(name, _, _, n)| (n.trim().to_ascii_uppercase(), type_words(name, None)))
-                        .collect();
-                    for r in sp.rooms.iter_mut().filter(|r| r.ceiling_ft.is_none()) {
-                        let words = r
-                            .number
-                            .as_deref()
-                            .and_then(|n| by_number.get(&n.trim().to_ascii_uppercase()))
-                            .cloned()
-                            .unwrap_or_else(|| type_words(&r.name, None));
-                        if let Some((_, ft, source)) = measured.iter().find(|(w, _, _)| *w == words) {
-                            r.ceiling_ft = Some(*ft);
-                            r.ceiling_source = Some(source.clone());
-                            set += 1;
-                        }
-                    }
                     let said: Vec<String> = measured
                         .iter()
                         .map(|(w, ft, _)| format!("{} {}", w.iter().cloned().collect::<Vec<_>>().join(" "), ft_in_label(*ft)))
                         .collect();
-                    progress_line(&format!("  ceilings measured on the typical rooms' elevations: {said:?}; {set} rooms take theirs"));
+                    progress_line(&format!("  ceilings measured on the typical rooms' elevations and sections: {said:?}"));
+                }
+                // Each room's height by the rule (A-CEILING-HEIGHT, Q6512): its own RCP tag, the
+                // unit RCP of its type, its ceiling type's legend, a section or elevation, only
+                // then derived (inferred, asked).
+                let rule = super::ceilheight::Rule::load();
+                let (cands, other_level) = room_ceiling_candidates(&sp, &areas, &typical, &measured, job);
+                let room_levels = spec_room_levels(&sp, job);
+                let settled = super::ceilheight::settle(&mut sp, &cands, &rule, &room_levels);
+                progress_line(&format!(
+                    "  room ceiling heights by rule {} ({} rooms): {:?}; {} left at the level's ceiling (no level); {} where a lower source disagrees; {} rooms of an RCP area's name on another level not given its height",
+                    super::ceilheight::RULE,
+                    sp.rooms.len(),
+                    settled.by_source,
+                    settled.unset,
+                    settled.disagree.len(),
+                    other_level
+                ));
+                job.audit("ceiling_heights", "pipeline", None, Some(StageName::BimBuild), Some(settled.to_json()));
+                if !settled.derived.is_empty() {
+                    let mut by: BTreeMap<String, (usize, f64)> = BTreeMap::new();
+                    for (level, _, ft, _) in &settled.derived {
+                        let e = by.entry(level.clone()).or_insert((0, *ft));
+                        e.0 += 1;
+                    }
+                    let list: Vec<String> = by.iter().map(|(l, (n, ft))| format!("{l}: {n} rooms at {}", ft_in_label(*ft))).collect();
+                    let first = settled.derived.iter().take(12).map(|(_, r, _, _)| r.clone()).collect::<Vec<_>>().join(", ");
+                    job.add_finding(
+                        StageName::BimBuild,
+                        &format!("Ceiling heights derived for {} rooms: no RCP, unit RCP, legend or section gives one", settled.derived.len()),
+                        &format!(
+                            "The reflected ceiling plans, the typical rooms' ceiling plans, the ceiling legend and the sections and elevations give no ceiling height for these rooms ({first}{}). Each is built at the underside of the assembly over it ({}) and marked inferred: {}. Every ceiling device, sprinkler head, diffuser, duct and pipe in the ceiling hangs off it, so the architect should confirm it (optional; alternative: the height the architect gives)",
+                            if settled.derived.len() > 12 { ", …" } else { "" },
+                            list.join("; "),
+                            rule.basis
+                        ),
+                        2,
+                        vec!["Confirm the ceiling heights with the architect".into(), "Give the heights (rcp.read or bspec.set rooms ceiling_ft)".into()],
+                        None,
+                        false,
+                    );
+                }
+                areas.extend(typical);
+                if !areas.is_empty() {
+                    let seated = super::mep::seat_in_plenum_under(&mut sp, &areas);
+                    let levels: BTreeSet<&str> = areas.iter().map(|a| a.level.as_str()).collect();
+                    progress_line(&format!(
+                        "  ceilings set per area from the RCPs: {} areas on {levels:?}; {seated} MEP runs and terminals reseated under them",
+                        areas.len()
+                    ));
                 }
                 // The typical rooms' mechanical views: each room's PTAC and exhaust fan (with its
                 // duct), in their rooms' ceilings now those are known. A PTAC's face grille read as
@@ -8692,6 +8698,8 @@ fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Do
     let (placed, not) = super::scope::place_panels(&mut sp, &places, &rooms);
     let Ok(d) = s.doc_mut() else { return };
     d.building_spec = Some(sp.to_json()).into();
+    // A panel the fire alarm wiring placed by rule at the build goes for the documents' (Q6503).
+    super::conduitroute::fa::remove_placed(d, &placed);
     let built = super::scope::build_panels(d, &sp, &placed, &rooms);
     s.touch();
     progress_line(&format!("  fire alarm panels: {} placed ({}), {built} built; not placed {:?}", placed.len(), placed.join(", "), not));
@@ -12091,6 +12099,119 @@ const NOTE_CHAR_W: f64 = 0.8;
 /// Straight pieces of a sheet looked at for height notes' leaders, at most.
 const MAX_LEADER_PIECES: usize = 400_000;
 
+/// Each spec room's level (spec name) when its record names none: the level of the rooms stage's
+/// room of its number, else of its name when only one level has a room of that name.
+fn spec_room_levels(sp: &cadaddy_walk3d::BuildingSpec, job: &GuidedJob) -> Vec<Option<String>> {
+    let rooms = job_rooms(job);
+    let spec_level = |l: &str| sp.level(l).map(|x| x.name.clone());
+    sp.rooms
+        .iter()
+        .map(|r| {
+            if r.level.is_some() {
+                return None;
+            }
+            let by_number = r
+                .number
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .and_then(|n| rooms.iter().find(|(_, _, _, m)| m.trim().eq_ignore_ascii_case(n)).and_then(|(_, l, _, _)| spec_level(l)));
+            by_number.or_else(|| {
+                let named: BTreeSet<String> = rooms
+                    .iter()
+                    .filter(|(name, _, _, _)| name.trim().eq_ignore_ascii_case(r.name.trim()))
+                    .filter_map(|(_, l, _, _)| spec_level(l))
+                    .collect();
+                (named.len() == 1).then(|| named.into_iter().next()).flatten()
+            })
+        })
+        .collect()
+}
+
+/// Every source's ceiling height for each spec room (Q6512, [`super::ceilheight`]): its own area
+/// of the reflected ceiling plans (`room_rcp`), its area of its type's unit RCP (`unit_rcp`), its
+/// ceiling type's legend height (`legend`; the type its RCP area or finish schedule names) and
+/// its type's elevations or sections (`section`). An area's room is the spec room of its number,
+/// or of its circulation space's name, on the area's level.
+fn room_ceiling_candidates(
+    sp: &cadaddy_walk3d::BuildingSpec,
+    overall: &[cadaddy_walk3d::CeilingArea],
+    typical: &[cadaddy_walk3d::CeilingArea],
+    measured: &[(BTreeSet<String>, f64, String)],
+    job: &GuidedJob,
+) -> (Vec<super::ceilheight::Candidate>, usize) {
+    use super::ceilheight::{Candidate, Src};
+    let mut out = Vec::new();
+    let levels = spec_room_levels(sp, job);
+    let level_of = |i: usize, r: &cadaddy_walk3d::SpecRoom| r.level.clone().or_else(|| levels.get(i).cloned().flatten());
+    // Rooms of an area's label on another level (a corridor's name on every floor): not its.
+    let mut other_level = 0usize;
+    let mut of_area = |a: &cadaddy_walk3d::CeilingArea| -> Vec<usize> {
+        let Some(label) = a.room.as_deref().map(str::trim).filter(|l| !l.is_empty()) else { return Vec::new() };
+        let named: Vec<(usize, bool)> = sp
+            .rooms
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(label)) || r.name.trim().eq_ignore_ascii_case(label))
+            .map(|(i, r)| (i, level_of(i, r).is_none_or(|l| l.eq_ignore_ascii_case(&a.level))))
+            .collect();
+        other_level += named.iter().filter(|(_, same)| !same).count();
+        named.into_iter().filter(|(_, same)| *same).map(|(i, _)| i).collect()
+    };
+    // Each room's ceiling type: its RCP area's, else the one its finish schedule names.
+    let mut types: BTreeMap<usize, String> = BTreeMap::new();
+    for (from, list) in [(Src::RoomRcp, overall), (Src::UnitRcp, typical)] {
+        for a in list {
+            for i in of_area(a) {
+                out.push(Candidate {
+                    room: i,
+                    from,
+                    ft: a.height_ft,
+                    said: a.source.clone().unwrap_or_else(|| format!("{} ceiling tag", ft_in_label(a.height_ft))),
+                });
+                if let Some(t) = a.ceiling_type.as_ref().filter(|t| !t.trim().is_empty()) {
+                    types.entry(i).or_insert_with(|| t.clone());
+                }
+            }
+        }
+    }
+    if !sp.ceiling_types.is_empty() {
+        for (i, r) in sp.rooms.iter().enumerate() {
+            if types.contains_key(&i) {
+                continue;
+            }
+            // `C1`, `C1 GYP BD`, `GYP BD (C1)`: a word of the schedule's ceiling entry that is a type.
+            let Some(c) = r.materials.ceiling.as_deref() else { continue };
+            let words: Vec<&str> = c.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').filter(|w| !w.is_empty()).take(12).collect();
+            if let Some(t) = sp.ceiling_types.iter().find(|t| words.iter().any(|w| w.eq_ignore_ascii_case(t.name.trim()))) {
+                types.insert(i, t.name.clone());
+            }
+        }
+        for (i, t) in &types {
+            let Some(ct) = sp.ceiling_types.iter().find(|c| c.name.eq_ignore_ascii_case(t)) else { continue };
+            if let Some((ft, said)) = super::ceilheight::legend_height(ct) {
+                out.push(Candidate { room: *i, from: Src::Legend, ft, said });
+            }
+        }
+    }
+    if !measured.is_empty() {
+        // A room's type: the rooms stage's room of its number, else its own name.
+        let by_number: BTreeMap<String, BTreeSet<String>> = job_rooms(job)
+            .iter()
+            .filter(|(_, _, _, n)| !n.trim().is_empty())
+            .map(|(name, _, _, n)| (n.trim().to_ascii_uppercase(), type_words(name, None)))
+            .collect();
+        for (i, r) in sp.rooms.iter().enumerate() {
+            let words =
+                r.number.as_deref().and_then(|n| by_number.get(&n.trim().to_ascii_uppercase())).cloned().unwrap_or_else(|| type_words(&r.name, None));
+            if let Some((_, ft, source)) = measured.iter().find(|(w, _, _)| *w == words) {
+                out.push(Candidate { room: i, from: Src::Section, ft: *ft, said: source.clone() });
+            }
+        }
+    }
+    (out, other_level)
+}
+
 /// The ceilings the typical rooms' reflected ceiling plans print ("UNIT RCP - SINGLE QUEEN": a
 /// height tag in each area, the bath lower than the room): each view laid into every room of its
 /// type by its linework, each tag's area of the floor there (the floor's traced space round it)
@@ -12131,24 +12252,32 @@ fn typical_rcp_areas_on(
     for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
         let sub = super::printmep::sheet_drawing(d, sh);
         let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
-        // A height in a ceiling tag: its type letter just over it (a dimension string has none).
-        let typed = |t: &cadaddy_mepfix::sheet_facts::TextItem| {
+        // A height in a ceiling tag: its type letter just over it (a dimension string has none),
+        // or a note that says it is a ceiling's (`CLG HT 8'-6"`). The type: the letter, when the
+        // ceiling legend has that type.
+        let type_over = |t: &cadaddy_mepfix::sheet_facts::TextItem| {
             let h = t.height.max(1e-6);
-            texts.iter().take(MAX_TAG_TEXTS).any(|o| {
-                let v = o.value.trim();
-                (1..=3).contains(&v.len())
-                    && v.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-                    && v.chars().all(|c| c.is_ascii_alphanumeric())
-                    && (o.at.x - t.at.x).abs() <= CEILING_TAG_REACH * h
-                    && o.at.y > t.at.y
-                    && o.at.y - t.at.y <= CEILING_TAG_REACH * h
-            })
+            texts
+                .iter()
+                .take(MAX_TAG_TEXTS)
+                .find(|o| {
+                    let v = o.value.trim();
+                    (1..=3).contains(&v.len())
+                        && v.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                        && v.chars().all(|c| c.is_ascii_alphanumeric())
+                        && (o.at.x - t.at.x).abs() <= CEILING_TAG_REACH * h
+                        && o.at.y > t.at.y
+                        && o.at.y - t.at.y <= CEILING_TAG_REACH * h
+                })
+                .map(|o| o.value.trim().to_string())
         };
-        let tags: Vec<(cadaddy_geom::Vec2, f64)> = texts
+        let tags: Vec<(cadaddy_geom::Vec2, f64, Option<String>)> = texts
             .iter()
-            .filter_map(|t| Some((t, ceiling_height_tag(&t.value)?)))
-            .filter(|(t, _)| typed(t))
-            .map(|(t, ft)| (t.at, ft))
+            .filter_map(|t| Some((t, super::ceilheight::height_note(&t.value)?)))
+            .filter_map(|(t, (ft, worded))| match type_over(t) {
+                Some(ty) => Some((t.at, ft, sp.ceiling_types.iter().find(|c| c.name.eq_ignore_ascii_case(&ty)).map(|c| c.name.clone()))),
+                None => worded.then_some((t.at, ft, None)),
+            })
             .take(MAX_STAMPED)
             .collect();
         if tags.is_empty() {
@@ -12169,7 +12298,7 @@ fn typical_rcp_areas_on(
         }
         let objects = super::bspec::plan_objects(&sub);
         for (view, words, title) in &views {
-            let mine: Vec<(cadaddy_geom::Vec2, f64)> = tags.iter().filter(|(p, _)| inside(view, *p)).copied().collect();
+            let mine: Vec<(cadaddy_geom::Vec2, f64, Option<String>)> = tags.iter().filter(|(p, _, _)| inside(view, *p)).cloned().collect();
             if mine.is_empty() {
                 continue;
             }
@@ -12181,7 +12310,7 @@ fn typical_rcp_areas_on(
                 let Some(lv) = sp.level(level) else { continue };
                 let b = bbox(outline);
                 let Some((fit, _)) = rigid_room_fit(&lines, *view, b, &floor_lines, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 6.0 * k_in) else { continue };
-                for (p, ft) in &mine {
+                for (p, ft, ty) in &mine {
                     if lv.height_ft.is_finite() && lv.height_ft > 0.0 && *ft > lv.height_ft - CEILING_UNDER_FLOOR_FT {
                         continue;
                     }
@@ -12199,7 +12328,7 @@ fn typical_rcp_areas_on(
                         outline: area,
                         height_ft: *ft,
                         grid: None,
-                        ceiling_type: None,
+                        ceiling_type: ty.clone(),
                         guess: None,
                         source: Some(format!("{} ceiling tag on {} {title}", ft_in_label(*ft), sh.number)),
                     });
@@ -12598,7 +12727,9 @@ fn typical_elevation_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(
                 _ => 1.0,
             };
             let up = v.title.to_ascii_uppercase();
-            let elevation = up.contains(" WALL") || up.contains("ELEVATION");
+            // An interior elevation, or a section through the room type (Q6512: a section that
+            // dimensions the ceiling is a source of its height too).
+            let elevation = up.contains(" WALL") || up.contains("ELEVATION") || up.contains("SECTION");
             let words = type_words(&v.title, Some(&vocabulary));
             let Some(r) = v.region.filter(|_| elevation && !up.contains("RCP") && types.contains(&words)) else { continue };
             // Its level markers' labels stand over (and under) their lines, past the linework.
@@ -21325,8 +21456,22 @@ fn lv_pathways_step(s: &mut Session, job: &GuidedJob, docs: &[super::scope::Doc]
         if lv.firestop_by.is_empty() { "not said" } else { lv.firestop_by.as_str() },
         t0.elapsed().as_secs_f64()
     ));
+    // The fire alarm wiring method the same documents state (Q6503: a raceway below a height,
+    // plenum cable, Class A), for the router.
+    let fa = super::conduitroute::fa::read_documents(&all);
+    if fa != super::conduitroute::fa::WiringDocs::default() {
+        progress_line(&format!(
+            "  fire alarm wiring: raceway {}, plenum cable {}, Class A {}",
+            fa.raceway
+                .as_ref()
+                .map_or_else(|| "not said".to_string(), |(m, b, _)| b.map_or_else(|| format!("{m} throughout"), |b| format!("{m} below {b} ft"))),
+            if fa.plenum.is_some() { "said" } else { "not said" },
+            if fa.class_a.is_some() { "said" } else { "not said" },
+        ));
+    }
     if let Ok(d) = s.doc_mut() {
         lv.store(d);
+        fa.store(d);
     }
 }
 
@@ -25815,19 +25960,11 @@ fn drop_rooms_outside_shell(s: &mut Session, shells: &[(String, Vec<[cadaddy_geo
 }
 
 /// A ceiling height tag of a reflected ceiling plan, feet: `8' - 0"`, `7'-6" A.F.F.`, `8'-6" AFF`,
-/// between 6'-6" and 20' and nothing else in the text. Not a stair's `7'-6" ABOVE LANDING` (its
-/// height is from the landing) or a dimension's note.
+/// `CLG HT 8'-6"`, `8'-6" CLG` ([`super::ceilheight::height_note`]), between 6'-6" and 20' and
+/// nothing else in the text. Not a stair's `7'-6" ABOVE LANDING` (its height is from the landing)
+/// or a dimension's note.
 fn ceiling_height_tag(t: &str) -> Option<f64> {
-    let u = t.trim().to_ascii_uppercase();
-    if u.contains("ABOVE") {
-        return None;
-    }
-    let core = u.trim_end_matches("A.F.F.").trim_end_matches("AFF").trim();
-    if core.chars().any(|c| !(c.is_ascii_digit() || " '\"-/.".contains(c))) || !core.contains('\'') {
-        return None;
-    }
-    let ft = super::perceive::feet_inches(core)? / 12.0;
-    (6.5..=20.0).contains(&ft).then_some(ft)
+    super::ceilheight::height_note(t).map(|(ft, _)| ft)
 }
 
 /// A shell strip narrower than this is a sliver (a wall's thickness), feet.
@@ -39327,5 +39464,97 @@ mod tests {
         bare.mep.equipment.retain(|e| !crate::cmd::utilityxfmr::is_site(e));
         let none: Vec<(String, cadaddy_doc::Drawing)> = vec![("E-009".into(), cadaddy_doc::Drawing::default())];
         assert!(matches!(utility_service(&mut bare, &none, &types), Err(None)));
+    }
+
+    /// fix-ceiling-heights-from-rcp-rule (Q6512): each room's ceiling height by the rule's order
+    /// (A-CEILING-HEIGHT). A made-up floor: R-11's own RCP tag says 9'-0" but its type's unit RCP
+    /// says 8'-6" (before the fix the unit RCP, read last, won); R-12 has only the unit RCP and a
+    /// section (both 8'-6"), its ceiling type C1 has no height in the legend; R-14's finish
+    /// schedule names type C2, whose legend gives 8'-0"; R-13 and R-15 have nothing, so they are
+    /// derived at the assembly's underside, marked inferred.
+    #[test]
+    fn room_ceiling_heights_follow_the_rule_order() {
+        use super::*;
+        use cadaddy_walk3d::CeilingArea;
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            r#"{"version":1,"units_per_foot":12,
+                "levels":[{"name":"L1","elevation_ft":0,"height_ft":10,"ceiling_ft":8},{"name":"L2","elevation_ft":10,"height_ft":10,"ceiling_ft":8}],
+                "ceiling_types":[{"name":"C1","description":"5/8 GYP BD"},{"name":"C2","height_ft":8.0}],
+                "rooms":[
+                    {"name":"Suite A","number":"R-11","level":"L1"},
+                    {"name":"Suite A","number":"R-12","level":"L1"},
+                    {"name":"Store","number":"R-13","level":"L1"},
+                    {"name":"Office","number":"R-14","level":"L1","materials":{"ceiling":"C2 GYP BD"}},
+                    {"name":"Lounge","number":"R-15","level":"L1","materials":{"ceiling":"C1"}},
+                    {"name":"Corridor","level":"L2"},
+                    {"name":"Lobby","number":"R-16"}
+                ]}"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let area = |room: &str, ft: f64, ty: Option<&str>, src: &str| CeilingArea {
+            level: "L1".into(),
+            room: Some(room.into()),
+            outline: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]],
+            height_ft: ft,
+            ceiling_type: ty.map(str::to_string),
+            source: Some(src.into()),
+            grid: None,
+            guess: None,
+        };
+        let overall = vec![
+            area("R-11", 9.0, None, "9'-0\" ceiling tag on SAMPLE FLOOR RCP"),
+            area("Corridor", 8.0, None, "8'-0\" ceiling tag on SAMPLE FLOOR RCP"),
+        ];
+        let typical = vec![
+            area("R-11", 8.5, Some("C1"), "8'-6\" ceiling tag on Q-5 SUITE A RCP"),
+            area("R-12", 8.5, Some("C1"), "8'-6\" ceiling tag on Q-5 SUITE A RCP"),
+        ];
+        let measured = vec![(type_words("Suite A", None), 8.5, "8'-6\" measured on Q-6 SUITE A SECTION".to_string())];
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        // R-16's spec record names no level: the rooms stage found it on L1.
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result =
+                Some(json!({"rooms": [{"name": "Lobby", "number": "R-16", "level": "L1", "outline": [[0, 0], [100, 0], [100, 100], [0, 100]]}]}));
+        }
+        assert_eq!(spec_room_levels(&sp, &job).last().cloned().flatten().as_deref(), Some("L1"));
+        let (cands, other_level) = room_ceiling_candidates(&sp, &overall, &typical, &measured, &job);
+        // The corridor on L2 is not the L1 RCP's corridor.
+        assert_eq!(other_level, 1);
+        let rule = crate::cmd::ceilheight::Rule::load();
+        let room_levels = spec_room_levels(&sp, &job);
+        let settled = crate::cmd::ceilheight::settle(&mut sp, &cands, &rule, &room_levels);
+        let get = |n: &str| {
+            let r = sp.rooms.iter().find(|r| r.number.as_deref() == Some(n)).unwrap_or_else(|| panic!("{n}"));
+            (r.ceiling_ft.unwrap_or_default(), r.ceiling_source.clone().unwrap_or_default())
+        };
+        let (h101, s101) = get("R-11");
+        assert_eq!(h101, 9.0, "{s101}");
+        assert!(s101.starts_with("room RCP: "), "{s101}");
+        let (h102, s102) = get("R-12");
+        assert_eq!(h102, 8.5);
+        assert!(s102.starts_with("unit RCP: "), "{s102}");
+        let (h104, s104) = get("R-14");
+        assert_eq!(h104, 8.0);
+        assert!(s104.starts_with("ceiling type legend: C2"), "{s104}");
+        for n in ["R-13", "R-15"] {
+            let (h, src) = get(n);
+            // 10' floor to floor less the usual 24" assembly (L2's framing is not read).
+            assert!((h - 8.0).abs() < 1e-9, "{n} {h}");
+            assert!(src.starts_with("derived: ") && src.contains("inferred") && src.contains("A-CEILING-HEIGHT"), "{src}");
+        }
+        // L2's corridor: under the roof (no level over it: the usual assembly), not L1's 8'-0" tag.
+        let corridor = sp.rooms.iter().find(|r| r.name == "Corridor").and_then(|r| r.ceiling_source.clone()).unwrap_or_default();
+        assert!(corridor.starts_with("derived: "), "{corridor}");
+        let lobby = sp.rooms.iter().find(|r| r.name == "Lobby").map(|r| (r.ceiling_ft, r.ceiling_source.clone().unwrap_or_default()));
+        assert!(lobby.as_ref().is_some_and(|(h, src)| *h == Some(8.0) && src.starts_with("derived: ")), "{lobby:?}");
+        assert_eq!(settled.derived.len(), 4);
+        assert_eq!(settled.unset, 0);
+        // R-11's unit RCP and section disagree with its own tag: reported beside it.
+        assert!(settled.disagree.iter().all(|d| d.0 == "R-11") && settled.disagree.len() == 2, "{:?}", settled.disagree);
+        let j = settled.to_json();
+        assert_eq!(j["by_source"]["room_rcp"], json!(1));
+        assert_eq!(j["by_source"]["unit_rcp"], json!(1));
+        assert_eq!(j["by_source"]["legend"], json!(1));
+        assert_eq!(j["by_source"]["derived"], json!(4));
     }
 }
