@@ -121,7 +121,7 @@ fn spec() -> Value {
 }
 
 /// The plan with casework (a schedule naming the vanity, an upper cabinet's AFF note, a base
-/// cabinet by its tag alone) and room 101's furniture: a queen bed block, a nightstand and an odd
+/// cabinet by its tag alone) and room 101's furniture: a bed block, a nightstand and an odd
 /// piece on a furniture layer, a desk outline labelled DESK, a pillow inside the bed.
 fn session(furnished: bool) -> Session {
     let mut s = Session::empty();
@@ -160,14 +160,14 @@ fn session(furnished: bool) -> Session {
         text_on(&mut s, "A-ANNO", [30.0, 110.0], "DESK", 3.0);
         // A label with no outline round it, and one round a room-sized outline: nothing is built.
         text_on(&mut s, "A-ANNO", [300.0, -40.0], "BED", 3.0);
-        // A queen bed block.
+        // A bed block.
         s.execute("layer.new", &json!({"name": "I-FURN-BLK", "current": true})).expect("layer");
         let h = s.execute("pline", &json!({"vertices": [[0, 0], [60, 0], [60, 80], [0, 80]], "closed": true})).unwrap()["handle"]
             .as_str()
             .unwrap()
             .to_string();
-        s.execute("block", &json!({"name": "BED-QUEEN", "base": [0, 0], "handles": [h], "keep": "delete"})).expect("block");
-        s.execute("insert", &json!({"name": "BED-QUEEN", "at": [60.0, 70.0]})).expect("bed");
+        s.execute("block", &json!({"name": "BED-60X80", "base": [0, 0], "handles": [h], "keep": "delete"})).expect("block");
+        s.execute("insert", &json!({"name": "BED-60X80", "at": [60.0, 70.0]})).expect("bed");
     }
     s
 }
@@ -406,8 +406,8 @@ fn an_enlarged_plan_registered_onto_its_level_furnishes_its_room_and_its_type() 
         .as_str()
         .unwrap()
         .to_string();
-    s.execute("block", &json!({"name": "BED-QUEEN", "base": [0, 0], "handles": [h], "keep": "delete"})).expect("block");
-    s.execute("insert", &json!({"name": "BED-QUEEN", "at": e(60.0, 70.0), "scale": 2.0})).expect("bed");
+    s.execute("block", &json!({"name": "BED-60X80", "base": [0, 0], "handles": [h], "keep": "delete"})).expect("block");
+    s.execute("insert", &json!({"name": "BED-60X80", "at": e(60.0, 70.0), "scale": 2.0})).expect("bed");
     let mut sp = spec();
     sp["sheets"] = json!([{
         "number": "A-501", "title": "ENLARGED GUEST ROOM PLAN", "level": "L1", "rect": [1900, -100, 2600, 600],

@@ -22,9 +22,9 @@
     ]
   },
   "furniture": {
-    "source": "common furniture sizes (mattresses: twin 38 x 75 in, full 54 x 75, queen 60 x 80, king 76 x 80, the bed's top about 24 in; desk and table tops 29 to 30 in; seats 17 to 19 in, chair backs about 32 in, sofa backs about 34 in; dressers about 36 in, nightstands about 26 in, armoires about 72 in)",
+    "source": "common furniture sizes (the standard mattresses 38 x 75, 54 x 75, 60 x 80 and 76 x 80 in, a bed's top about 24 in; desk and table tops 29 to 30 in; seats 17 to 19 in, chair backs about 32 in, sofa backs about 34 in; dressers about 36 in, nightstands about 26 in, armoires about 72 in)",
     "kinds": [
-      {"kind": "bed", "words": ["BED", "BEDS", "QUEEN", "KING", "TWIN", "DOUBLE BED", "SOFA BED", "CRIB"], "long_in": [70, 100], "short_in": [36, 90], "sizes_in": [[75, 38], [75, 54], [80, 60], [80, 76]], "height_in": 24},
+      {"kind": "bed", "words": ["BED", "BEDS", "DOUBLE BED", "SOFA BED", "CRIB"], "long_in": [70, 100], "short_in": [36, 90], "sizes_in": [[75, 38], [75, 54], [80, 60], [80, 76]], "height_in": 24},
       {"kind": "nightstand", "words": ["NIGHTSTAND", "NIGHT STAND", "NIGHT TABLE", "BEDSIDE TABLE"], "long_in": [12, 36], "short_in": [12, 30], "sizes_in": [[24, 18]], "height_in": 26},
       {"kind": "desk", "words": ["DESK", "WRITING DESK", "WORK DESK", "WORKSTATION"], "long_in": [30, 96], "short_in": [18, 42], "sizes_in": [[48, 24], [60, 30]], "height_in": 30},
       {"kind": "sofa", "words": ["SOFA", "COUCH", "SETTEE", "LOVESEAT", "SLEEPER"], "long_in": [48, 120], "short_in": [26, 44], "sizes_in": [[84, 36], [60, 34]], "height_in": 34},

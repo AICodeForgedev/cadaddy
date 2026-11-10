@@ -1045,7 +1045,7 @@ mod tests {
     #[test]
     fn kinds_by_their_whole_words() {
         let r = rules();
-        assert_eq!(kind_named(r, "QUEEN BED").map(|k| k.kind.as_str()), Some("bed"));
+        assert_eq!(kind_named(r, "DOUBLE BED 60X80").map(|k| k.kind.as_str()), Some("bed"));
         assert_eq!(kind_named(r, "FURN_CHAIR01").map(|k| k.kind.as_str()), Some("chair"));
         assert_eq!(kind_named(r, "COFFEE TABLE").map(|k| k.kind.as_str()), Some("coffee_table"));
         assert!(kind_named(r, "BEDROOM").is_none());
