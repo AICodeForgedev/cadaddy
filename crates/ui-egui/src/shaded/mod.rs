@@ -16,6 +16,7 @@ use egui_wgpu::wgpu::util::DeviceExt;
 use crate::CadApp;
 use crate::canvas::Xf;
 use crate::gpu::{Tracked, TrackedView};
+use crate::gpucaps::Quality;
 
 /// What a model was built from: the drawing (its allocation and revision) and the detail band.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -45,6 +46,7 @@ struct FrameKey {
     force: Option<Force>,
     stream: u64,
     lighting: Option<cadaddy_render::light::Lighting>,
+    quality: Quality,
 }
 
 impl FrameKey {
@@ -59,10 +61,11 @@ impl FrameKey {
         force: Option<Force>,
         stream: u64,
         lighting: Option<cadaddy_render::light::Lighting>,
+        quality: Quality,
     ) -> FrameKey {
         let view =
             [v.dir.x, v.dir.y, v.dir.z, v.right.x, v.right.y, v.right.z, v.up.x, v.up.y, v.up.z, v.center.x, v.center.y, v.height].map(f64::to_bits);
-        FrameKey { scene, style, bg: [bg.0, bg.1, bg.2], view, size: (v.width_px, v.height_px), samples, tier, force, stream, lighting }
+        FrameKey { scene, style, bg: [bg.0, bg.1, bg.2], view, size: (v.width_px, v.height_px), samples, tier, force, stream, lighting, quality }
     }
 }
 
@@ -120,6 +123,12 @@ pub struct Stats {
     /// was drawn from had changed.
     pub frames_rendered: u64,
     pub frames_reused: u64,
+    /// The lighting quality drawn ([`crate::gpucaps::Quality`]); the times the last drawn frame
+    /// drew the scene (the main pass, the shadow map, the ambient occlusion's depth), and frames
+    /// whose shadow map was kept from an earlier one.
+    pub quality: Option<&'static str>,
+    pub scene_passes: u32,
+    pub shadows_kept: u64,
 }
 
 /// An orbit benchmark under way: frames left, the azimuth reached, when it started.
@@ -161,6 +170,10 @@ pub struct State {
     auto_tier: Option<Tier>,
     stream: Stream,
     auto_for: Option<((usize, u64), model3::AutoTiers, f64)>,
+    /// When the GPU last drew a frame, and while frames follow one another (a moving view): how
+    /// many have, and their running average interval in milliseconds.
+    drawn_at: Option<web_time::Instant>,
+    moving: Option<(u32, f64)>,
     /// The section box and coordination mode of the drawing (for the state they were read from).
     sbox_for: Option<((usize, u64), cadaddy_engine::cmd::coordination::CoordRenderState)>,
 }
@@ -235,6 +248,7 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
     // fog, exposure, white balance, the environment map's sky. A file gone since leaves the rest.
     let lit = environment_lighting(app, &model);
     let mut drawn = false;
+    let mut step_down: Option<f64> = None;
     let mut markers: Vec<u32> = Vec::new();
     // On the GPU unless it can't (see `gpucaps`): at most the size its limits and memory allow
     // (shown scaled up), with its multisampling.
@@ -251,8 +265,10 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         let g = st.gpu.get_or_insert_with(|| Gpu::new(&rs.device, caps.msaa));
         // The last frame's picture stands while nothing it was drawn from has changed (the
         // pointer moving over a still view, overlays, a hover): no upload, cull or pass.
-        let frame = FrameKey::new(key, style, bg, &view, caps.msaa, tier, force.clone(), st.stream.generation, lit.clone());
+        let frame = FrameKey::new(key, style, bg, &view, caps.msaa, tier, force.clone(), st.stream.generation, lit.clone(), caps.quality);
+        g.quality = caps.quality;
         let reused = g.shows(&frame);
+        st.stats.quality = Some(caps.quality.name());
         if reused {
             st.stats.frames_reused += 1;
         } else {
@@ -269,6 +285,15 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             let vis = g.render(&rs.device, &rs.queue, &view, style, bg, tier, force.as_ref(), &st.stream);
             st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
             st.stats.frames_rendered += 1;
+            // Frames drawn one after another (a moving view): how long each takes, lately.
+            let now = web_time::Instant::now();
+            match st.drawn_at.map(|at| now.duration_since(at).as_secs_f64() * 1000.0) {
+                Some(dt) if dt < MOVING_GAP_MS => st.moving = Some(st.moving.map_or((1, dt), |(n, avg)| (n + 1, avg * 0.8 + dt * 0.2))),
+                _ => st.moving = None,
+            }
+            st.drawn_at = Some(now);
+            st.stats.scene_passes = g.scene_passes;
+            st.stats.shadows_kept = g.shadows_kept;
             g.last = Some((frame, vis));
         }
         if let Some((_, vis)) = &g.last {
@@ -286,6 +311,9 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             + g.stream_bytes
             + (tw * th * (u64::from(g.samples) * 8 + 8)) as usize
             + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
+        // A view that stays slow while it moves draws less lighting from then on (never a level
+        // someone asked for, never during a benchmark).
+        step_down = st.moving.filter(|(n, avg)| *n >= SLOW_FRAMES && *avg > SLOW_MS && st.bench.is_none()).map(|(_, avg)| avg);
         if let Some(tv) = g.view().filter(|_| !reused || st.texture.is_none()) {
             let mut r = rs.renderer.write();
             match st.texture {
@@ -297,6 +325,17 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             painter.image(id, xf.rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             drawn = true;
         }
+    }
+    if let Some(avg) = step_down
+        && !app.gpu_caps.quality_forced
+        && !app.gpu_caps.software
+        && let Some(lower) = app.gpu_caps.quality.lower()
+    {
+        app.gpu_caps.quality = lower;
+        app.canvas.shade.moving = None;
+        let note = format!("the 3D view was slow ({avg:.0} ms a frame): lighting stepped down to {}", lower.name());
+        app.set_status(format!("3D graphics: {note}."));
+        app.gpu_caps.notes.push(note);
     }
     if !drawn {
         // The CPU rasterizer, redrawn when the view, model or style changes.
@@ -380,6 +419,11 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
 
 /// Milliseconds a frame spends bringing streamed cells in (the rest come in the next frames).
 const STREAM_MS: f64 = 12.0;
+/// Frames drawn closer together than this follow one another (the view is moving); this many of
+/// them averaging longer than this each is a slow view: its lighting steps down a level.
+const MOVING_GAP_MS: f64 = 400.0;
+const SLOW_FRAMES: u32 = 30;
+const SLOW_MS: f64 = 50.0;
 
 /// The fidelity tier the view draws `model` at, `height` drawing units tall, and the elements a
 /// search marks: the session's fixed tier, else Auto's for the zoom (the last one held until the
@@ -785,6 +829,14 @@ struct Gpu {
     bg_image: usize,
     /// What the target shows: the frame drawn last and what it drew.
     last: Option<(FrameKey, model3::Visible)>,
+    /// The lighting quality frames are drawn at.
+    quality: Quality,
+    /// What the shadow map holds (a hash of the sun's view and of everything drawn into it):
+    /// a frame that would draw the same into it keeps it. The times the last frame drew the
+    /// scene, and frames that kept the shadow map.
+    shadow_shows: Option<u64>,
+    scene_passes: u32,
+    shadows_kept: u64,
     target: Option<Target>,
     /// Samples per pixel (see [`crate::gpucaps`]).
     samples: u32,
@@ -1043,6 +1095,10 @@ impl Gpu {
             }),
             bg_image: 0,
             last: None,
+            quality: Quality::Full,
+            shadow_shows: None,
+            scene_passes: 0,
+            shadows_kept: 0,
             target: None,
             samples,
         }
@@ -1053,6 +1109,8 @@ impl Gpu {
     /// aren't drawn), then each prototype at each level of detail, with the ranges each takes.
     fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, model: &Arc<Model3>, style: VisualStyle, bg: Rgb) {
         let b = model.bounds;
+        // Another model (or style): the shadow map's picture is of the old one.
+        self.shadow_shows = None;
         self.origin = if b.is_empty() { Vec3::ZERO } else { b.center() };
         self.radius = if b.is_empty() { 1.0 } else { (b.diag() * 0.5).max(1e-9) };
         let physical = style == VisualStyle::Realistic && model.base.lighting.is_some();
@@ -1345,7 +1403,8 @@ impl Gpu {
         (out, ranges)
     }
 
-    /// The frame's uniform block, and the sun's view for the shadow map (when it shines).
+    /// The frame's uniform block, and whether the sun's shadow map is drawn and read (the sun
+    /// shines and the quality has shadows).
     fn uniforms(&self, v: &ShadeView, style: VisualStyle, bg: Rgb) -> (Vec<u8>, bool) {
         // Orthographic: the view plane's right/up through the view centre across the image;
         // depth from the nearest to the farthest the scene can reach.
@@ -1391,7 +1450,10 @@ impl Gpu {
         ] {
             put(x);
         }
-        let lights = lit.map_or(&[][..], |l| &l.lights[..]);
+        // The lighting quality: point lights, the shadow map, soft shadows and ambient occlusion
+        // each only at the levels that draw them.
+        let q = self.quality;
+        let lights = lit.filter(|_| q.lights()).map_or(&[][..], |l| &l.lights[..]);
         for x in [hidden, if lit.is_some() { 1.0 } else { 0.0 }, lit.map_or(1.0, |l| l.exposure), lights.len().min(16) as f32] {
             put(x);
         }
@@ -1426,11 +1488,12 @@ impl Gpu {
         mat(&mut put, &srows);
         let texel_world = 2.0 * rr / f64::from(SHADOW_PX);
         let bias = (2e-3 + texel_world * 1.5 / (2.0 * rr)) as f32;
-        for x in [bias, if sun.is_some() { 1.0 } else { 0.0 }, (texel_world * 1.5) as f32, 0.0] {
+        let shadows = sun.is_some() && q.shadows();
+        for x in [bias, if shadows { 1.0 } else { 0.0 }, (texel_world * 1.5) as f32, 0.0] {
             put(x);
         }
         // Soft shadows, ambient occlusion and the tone curve (cadaddy_render::ao).
-        let tan_half = lit.map_or(0.0, |l| shade::sun_tan_half(l.sun_size));
+        let tan_half = lit.filter(|_| q.soft()).map_or(0.0, |l| shade::sun_tan_half(l.sun_size));
         let texels = f64::from(SHADOW_PX) / (2.0 * rr);
         let search = (tan_half * 2.0 * self.radius * texels).clamp(1.0, cadaddy_render::ao::SOFT_MAX_TEXELS);
         for x in [tan_half as f32, texels as f32, (2.0 * rr) as f32, search as f32] {
@@ -1438,7 +1501,7 @@ impl Gpu {
         }
         let px = v.height / f64::from(v.height_px.max(1));
         let reach = lit.map_or(1.0, |l| cadaddy_render::light::ao_reach(l.ao_radius, 2.0 * self.radius));
-        let strength = lit.map_or(0.0, |l| l.ao);
+        let strength = lit.filter(|_| q.soft()).map_or(0.0, |l| l.ao);
         let r_px = cadaddy_render::ao::ao_pixels(reach, px);
         let tone = lit.map_or(0.0, |l| cadaddy_doc::lighting::ToneMap::ALL.iter().position(|t| *t == l.tone).unwrap_or(0) as f32);
         for x in [
@@ -1530,7 +1593,7 @@ impl Gpu {
         ] {
             put(x);
         }
-        (u, sun.is_some())
+        (u, shadows)
     }
 
     /// Draw into the offscreen target sized like the view: what it shows, nearest first.
@@ -1606,8 +1669,10 @@ impl Gpu {
             d
         };
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shaded") });
+        let mut passes = 1;
         // The opaque surfaces' depth, for the ambient occlusion.
-        if physical && self.lighting.as_ref().is_some_and(|l| l.ao > 0.0) {
+        if physical && self.quality.soft() && self.lighting.as_ref().is_some_and(|l| l.ao > 0.0) {
+            passes += 1;
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shaded_depth"),
                 color_attachments: &[],
@@ -1640,8 +1705,30 @@ impl Gpu {
                 }
             }
         }
-        // The sun's shadow map first (from what the view shows).
-        if physical && sun {
+        // The sun's shadow map first (from what the view shows): kept when the sun's view and
+        // everything this frame would draw into it are what it was drawn from. The map is fitted
+        // to the scene, not the view, so an orbit that shows the same things keeps it.
+        let shadow_of = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            let bits = |v: Vec3| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()];
+            self.lighting.as_ref().and_then(|l| l.sun).map(|(d, _)| bits(d)).hash(&mut h);
+            (bits(self.origin), self.radius.to_bits(), self.stream_gen, self.tier_bytes, self.bytes).hash(&mut h);
+            for slot in 0..4 {
+                for (r, i) in draws(0, slot) {
+                    (slot, r.start, r.end).hash(&mut h);
+                    // Which placements, not where they sit in this frame's buffer.
+                    inst.get(i.start as usize * INSTANCE_SIZE as usize..i.end as usize * INSTANCE_SIZE as usize).hash(&mut h);
+                }
+            }
+            for r in stream_draws(0) {
+                (r.start, r.end).hash(&mut h);
+            }
+            h.finish()
+        };
+        let shadow_kept = physical && sun && self.shadow_shows == Some(shadow_of);
+        if physical && sun && !shadow_kept {
+            passes += 1;
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shaded_shadow"),
                 color_attachments: &[],
@@ -1723,6 +1810,13 @@ impl Gpu {
             }
         }
         queue.submit([enc.finish()]);
+        if physical && sun {
+            self.shadow_shows = Some(shadow_of);
+        }
+        if shadow_kept {
+            self.shadows_kept += 1;
+        }
+        self.scene_passes = passes;
         vis
     }
 
@@ -1920,7 +2014,8 @@ mod tests {
         let view = ShadeView::new(None, Vec2::new(50.0, 50.0), 100.0, 640, 480);
         let lit = cadaddy_render::light::Lighting::of(&cadaddy_doc::Drawing::new_metric(), &cadaddy_doc::Space::Model);
         let key = |f: &dyn Fn(&mut FrameKey)| {
-            let mut k = FrameKey::new(scene, VisualStyle::Shaded, Rgb(255, 255, 255), &view, 4, Tier::Floor, None, 3, Some(lit.clone()));
+            let mut k =
+                FrameKey::new(scene, VisualStyle::Shaded, Rgb(255, 255, 255), &view, 4, Tier::Floor, None, 3, Some(lit.clone()), Quality::Full);
             f(&mut k);
             k
         };
@@ -1936,6 +2031,7 @@ mod tests {
             None,
             3,
             Some(lit.clone()),
+            Quality::Full,
         );
         let zoomed = FrameKey::new(
             scene,
@@ -1947,6 +2043,7 @@ mod tests {
             None,
             3,
             Some(lit.clone()),
+            Quality::Full,
         );
         let resized = FrameKey::new(
             scene,
@@ -1958,6 +2055,7 @@ mod tests {
             None,
             3,
             Some(lit.clone()),
+            Quality::Full,
         );
         let mut dimmer = lit.clone();
         dimmer.exposure += 0.5;
@@ -1976,6 +2074,7 @@ mod tests {
             ("marks", key(&|k| k.force = Some(Force { kind: "receptacle".into(), level: None }))),
             ("streamed cells", key(&|k| k.stream += 1)),
             ("lighting", key(&|k| k.lighting = Some(dimmer.clone()))),
+            ("lighting quality", key(&|k| k.quality = Quality::Balanced)),
             ("no lighting", key(&|k| k.lighting = None)),
         ];
         for (what, k) in &changed {
@@ -2003,7 +2102,7 @@ mod tests {
         let stream = Stream::default();
         let style = VisualStyle::Shaded;
         let scene = SceneKey { doc: 1, revision: 1, band: 0, lightmap: 0, fourd: None };
-        let key = |v: &ShadeView| FrameKey::new(scene, style, bg, v, 1, Tier::Detail, None, stream.generation, None);
+        let key = |v: &ShadeView| FrameKey::new(scene, style, bg, v, 1, Tier::Detail, None, stream.generation, None, Quality::Full);
         // What the canvas does each frame; true when the frame was drawn.
         let frame = |g: &mut Gpu, v: &ShadeView| {
             let k = key(v);
@@ -2032,6 +2131,48 @@ mod tests {
         // A render the canvas didn't ask for leaves the target showing no known frame.
         let _ = g.render(device, queue, &turned, style, bg, Tier::Detail, None, &stream);
         assert!(!g.shows(&key(&view)) && !g.shows(&key(&turned)));
+    }
+
+    /// Each lighting quality draws the scene as many times as it says: the main pass alone at
+    /// Performance, the shadow map too at Balanced, and at Full the ambient occlusion's depth
+    /// when the lighting has any. A second frame that draws the same things from another side
+    /// keeps the shadow map instead of drawing it again.
+    #[test]
+    fn lighting_quality_sets_the_passes_and_the_shadow_map_is_kept() {
+        use super::*;
+        use serde_json::json;
+        let mut s = cadaddy_engine::Session::new();
+        s.execute("box", &json!({ "corner": [0, 0, 0], "length": 10, "width": 10, "height": 10 })).unwrap();
+        s.execute("box", &json!({ "corner": [20, 0, 0], "length": 10, "width": 10, "height": 1 })).unwrap();
+        s.doc_mut().unwrap().sun.on = true;
+        let d = s.doc().unwrap().clone();
+        let bg = Rgb(255, 255, 255);
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
+        let model = Arc::new(model3::build_clipped(&d, &cadaddy_doc::Space::Model, 0.05, bg, &p, &t, &[]));
+        let lit = model.base.lighting.clone().expect("a model has lighting");
+        assert!(lit.sun.is_some(), "the sun is on");
+        let (w, h) = (64u32, 64u32);
+        let view = shade::fit(&model.flatten(), None, w, h).unwrap();
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let (device, queue) = (&rs.device, &rs.queue);
+        let style = VisualStyle::Realistic;
+        let stream = Stream::default();
+        let passes = |q: Quality| {
+            let mut g = Gpu::new(device, 1);
+            g.quality = q;
+            g.upload(device, queue, &model, style, bg);
+            g.render(device, queue, &view, style, bg, Tier::Detail, None, &stream);
+            let first = g.scene_passes;
+            // The same things from a little to the side: the shadow map is the same picture.
+            let mut aside = view;
+            aside.center.x += 0.5;
+            g.render(device, queue, &aside, style, bg, Tier::Detail, None, &stream);
+            (first, g.scene_passes, g.shadows_kept)
+        };
+        let occluded = u32::from(lit.ao > 0.0);
+        assert_eq!(passes(Quality::Performance), (1, 1, 0), "the main pass alone, and no shadow map to keep");
+        assert_eq!(passes(Quality::Balanced), (2, 1, 1), "the shadow map once, then kept");
+        assert_eq!(passes(Quality::Full), (2 + occluded, 1 + occluded, 1));
     }
 
     /// The live view on the GPU and on the CPU show the same render environment: the same
