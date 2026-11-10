@@ -1530,6 +1530,9 @@ impl CadApp {
             }
             self.last_dialog = self.ui.dialog.clone();
         }
+        if let Some(rs) = &self.wgpu_rs {
+            gpu::free_idle_frames(rs);
+        }
         control::observe_drawn(ui.ctx());
         self.frame_ms = now_ms() - t0;
         if self.debug_overlay {

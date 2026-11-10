@@ -562,7 +562,7 @@ struct FrameCache {
 /// to draw than the texture costs to keep, and small drawings draw exactly as before.
 const FRAME_CACHE_MIN: u64 = 200_000;
 /// A kept frame nothing has shown for this long is freed (a closed or hidden drawing's).
-const FRAME_CACHE_IDLE: std::time::Duration = std::time::Duration::from_secs(10);
+const FRAME_CACHE_IDLE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Frames a kept layer was drawn again for, and frames shown from the kept picture.
 static FRAMES_DRAWN: AtomicU64 = AtomicU64::new(0);
@@ -572,6 +572,14 @@ static FRAMES_KEPT: AtomicU64 = AtomicU64::new(0);
 /// it unchanged (`ui.inspect`'s `perf.frameCache`).
 pub fn frame_cache_counts() -> (u64, u64) {
     (FRAMES_DRAWN.load(Ordering::Relaxed), FRAMES_KEPT.load(Ordering::Relaxed))
+}
+
+/// Free the kept frames of layers that are no longer drawn (a closed drawing, a view switched to
+/// 3D): called once a frame by the app, since a layer that isn't drawn has no callback to do it.
+pub fn free_idle_frames(rs: &egui_wgpu::RenderState) {
+    if let Some(res) = rs.renderer.write().callback_resources.get_mut::<Resources>() {
+        res.free_idle_frames(web_time::Instant::now());
+    }
 }
 
 /// `CADADDY_FRAME_CACHE=0` draws every frame directly, as before the cache.
@@ -1286,12 +1294,7 @@ impl Resources {
     /// is otherwise. `paint` then shows the texture. Kept frames nothing shows any more are freed.
     fn keep_frame(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, cb: &CanvasCallback, size: [u32; 2], uniform: Vec<u8>) {
         let now = web_time::Instant::now();
-        for (i, l) in self.layers.iter_mut().enumerate() {
-            if i != cb.layer && l.cache.as_ref().is_some_and(|c| now.duration_since(c.used) > FRAME_CACHE_IDLE) {
-                l.cache = None;
-                l.cached = false;
-            }
-        }
+        self.free_idle_frames(now);
         let Some(res) = self.layers.get_mut(cb.layer) else { return };
         res.cached = false;
         let held: u64 = res.lines.iter().chain(&res.tris).chain(&res.quads).map(|b| u64::from(b.count)).sum();
@@ -1338,6 +1341,16 @@ impl Resources {
         if let Some(res) = self.layers.get_mut(cb.layer) {
             res.cache = Some(cache);
             res.cached = true;
+        }
+    }
+
+    /// Free the kept frames nothing has shown lately.
+    fn free_idle_frames(&mut self, now: web_time::Instant) {
+        for l in &mut self.layers {
+            if l.cache.as_ref().is_some_and(|c| now.duration_since(c.used) > FRAME_CACHE_IDLE) {
+                l.cache = None;
+                l.cached = false;
+            }
         }
     }
 
@@ -1772,6 +1785,11 @@ mod tests {
         // A new mesh (an edit) draws again.
         let _ = frame(&mut kept, 8, 2.0);
         assert_eq!(frame_cache_counts(), (d0 + 3, k0 + 3));
+        // A layer no longer drawn (its drawing closed, the view gone to 3D) gives its picture up.
+        let res = kept.get_mut::<Resources>().unwrap();
+        assert!(res.layers[LAYER_DRAWING].cache.is_some());
+        res.free_idle_frames(web_time::Instant::now() + FRAME_CACHE_IDLE + std::time::Duration::from_secs(1));
+        assert!(res.layers[LAYER_DRAWING].cache.is_none());
     }
 
     #[test]
