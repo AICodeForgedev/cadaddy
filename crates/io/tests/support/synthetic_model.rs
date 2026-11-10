@@ -64,7 +64,7 @@ fn object(i: usize, side: usize) -> (Common, EntityKind) {
         0..8 => (layer("Plan"), EntityKind::Line(Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + 2.5, y + (i % 5) as f64 * 0.5, 0.0) })),
         8..12 => {
             let pts: Vec<_> = (0..5 + i % 4).map(|k| json!({"p": {"x": x + k as f64 * 0.4, "y": y + (k % 2) as f64 * 0.3}})).collect();
-            (layer("Plan"), kind(json!({"type": "lwPolyline", "vertices": pts, "closed": i % 3 == 0})))
+            (layer("Plan"), kind(json!({"type": "lwPolyline", "vertices": pts, "closed": i.is_multiple_of(3)})))
         }
         12..14 => {
             let mut t = text_fields(x, y, &format!("NOTE {i}"));
