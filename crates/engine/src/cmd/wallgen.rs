@@ -2084,6 +2084,16 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if strings > 0 {
         notes.push(format!("{}: {strings} line pairs of dimension strings and their extension lines not taken for walls.", level.name));
     }
+    // Equipment and fixtures drawn on the plan (a through-wall unit, a tub, a counter, a tag's
+    // frame) pair up like walls: a pair in an outline holding lettering, a fill or an inner
+    // outline, joining no wall, is the symbol's (Q6423), left to the equipment and plumbing readers.
+    let symbols = super::perceive::geometry::drop_symbol_pairs(&segs, &mut found, &super::perceive::geometry::symbol_marks(d, &ents, k), k);
+    if symbols > 0 {
+        notes.push(format!(
+            "{}: {symbols} line pairs inside equipment and fixture symbols (outlines holding lettering, a fill or an inner outline, joining no wall) not taken for walls.",
+            level.name
+        ));
+    }
     // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
     // window's glazing drawn lighter): it is wall too.
     if !screened_ents.is_empty() && !found.is_empty() {
