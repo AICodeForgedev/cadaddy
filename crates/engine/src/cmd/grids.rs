@@ -6,13 +6,20 @@
 //!   a text, as the parts library's `G_GRID_BUBBLE_050/075/HEX` are) and the grid line touching
 //!   each (the longest line, or straight run of a polyline, with an end at the bubble), per
 //!   level; bubbles at both ends of one line are one grid. And their intersections, labelled
-//!   `A-1` (letters first). A level on its own sheet (`sheet`) is read from that drawing.
-//! - `levels.align {reference?, apply?}`: each level's intersections matched by label with the
-//!   reference level's give its scale and offset (least squares: `q ≈ s·p + t`). Applied, every
-//!   level's base point becomes its point of the same grid intersection, so the levels stack
-//!   exactly (a level on its own sheet gets its base in that sheet's coordinates); a level drawn
-//!   at another scale is reported and left (levels share one drawing scale), and so is one whose
-//!   fit can't be trusted (fewer than 2 intersections in common, or one missing by over 1").
+//!   `A-1` (letters first). A level on its own sheet (`sheet`) is read from that drawing. A
+//!   level whose region holds several sheets of the set (its plan and the other trades' copies
+//!   of it, each repeating the grid) is read from its own architectural plan only: the set's
+//!   sheet link of discipline `discipline` (default `A`) for that level, its view when it has
+//!   one; without such a link, the other disciplines' sheets in its region are left out.
+//! - `levels.align {reference?, discipline?, apply?}`: each level's intersections matched by
+//!   label with the reference level's give its scale and offset (`q ≈ s·p + t`): the fit most of
+//!   them agree with within 1", each two seeding one, so a tag read as a bubble or a label read
+//!   off the neighbouring line is left out of it and named. Applied, every level's base point
+//!   becomes its point of the same grid intersection, so the levels stack exactly (a level on its
+//!   own sheet gets its base in that sheet's coordinates); a level drawn at another scale is
+//!   reported and left (levels share one drawing scale), and so is one whose fit can't be
+//!   trusted (fewer than 2 intersections in common that agree within 1", or two fits that
+//!   agree equally well).
 //! - `grids.columns {level, apply?}`: the column outlines (closed outlines and circles up to 4'
 //!   across, on structural or column layers) centred on the level's grid intersections, into
 //!   the spec's `columns` with the outline they came from and status `rule`; `model.build`
@@ -35,10 +42,10 @@ const MAX_ITEMS: usize = 10_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("grids.detect", "Detect Grids", run_detect)
-            .params("{level?: name} → {levels: [{level, sheet?: the level's own drawing, note?, grids: [{label, from, to, bubble}], intersections: [{label, at}]}]}")
+            .params("{level?: name, discipline?: the plan read on a level of several sheets (default A)} → {levels: [{level, sheet?: the level's own drawing, plan?: [the sheet numbers read], note?, grids: [{label, from, to, bubble}], intersections: [{label, at}]}]}")
             .noundo(),
         CommandSpec::new("levels.align", "Align Levels by Grids", run_align).params(
-            "{reference?: level (default the first with grids), apply?: bool (set each level's base point to its point of a common grid intersection; levels on their own sheet are read from it and get their base in its coordinates; a level with fewer than 2 intersections in common or one missing by over 1\" is left, with a note)} → {reference, levels: [{level, sheet?, matched, scale, offset, residual, base?, note?}]}",
+            "{reference?: level (default the first with grids), discipline?: the plan each level is read from when its region holds several sheets (default A), apply?: bool (set each level's base point to its point of a common grid intersection; levels on their own sheet are read from it and get their base in its coordinates; the fit is the one most intersections agree with within 1\", the others left out and named; a level with fewer than 2 that agree, or two fits that agree equally, is left, with a note)} → {reference, levels: [{level, sheet?, plan?, matched, agreeing?, scale, offset: to the reference, residual, base?, left_out?, note?}]}",
         ),
         CommandSpec::new("grids.columns", "Columns at Grids", run_columns).params(
             "{level: name (drawn in this drawing), to_level?: name, apply?: bool (into the spec's columns, replacing the level's)} → {columns: [{grid, at, size_in, round, source: the outline's handle, status: rule}]}",
@@ -405,6 +412,8 @@ struct LevelGrids {
     xs: Vec<(String, Vec2)>,
     /// Why its sheet gave nothing.
     note: Option<String>,
+    /// The set's sheets it was read from (its own plan's), when its region holds several.
+    plan: Vec<String>,
 }
 
 /// Most bytes read of a level's own sheet.
@@ -434,11 +443,91 @@ fn read_sheet(path: &str, host: Option<&str>) -> std::result::Result<Drawing, St
     }
 }
 
-/// Each level's grids and intersections: levels drawn here from their part of this drawing,
+/// The default discipline of the plan a level's grids are read from: the architectural plan.
+const PLAN_DISCIPLINE: &str = "A";
+
+/// A rectangle `[x0, y0, x1, y1]` holds `c` (either corner order).
+fn holds(r: &[f64; 4], c: Vec2) -> bool {
+    c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3])
+}
+
+/// Where a level's own plan is, by the set's sheet links: the rectangles (a link's view, else its
+/// sheet) of the links of `discipline` that show `level`, each cut to the level's region where it
+/// overlaps it, and their sheet numbers; and the rectangles of the other disciplines' sheets (a
+/// trade's copy of the plan, repeating its grid). None of the first when no link names it.
+fn plan_rects(sp: &BuildingSpec, level: &str, region: Option<[f64; 4]>, discipline: &str) -> (Vec<([f64; 4], String)>, Vec<[f64; 4]>) {
+    let shows = |x: &cadaddy_walk3d::levels::SheetLink| {
+        x.level.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(level)) || x.levels.iter().any(|l| l.eq_ignore_ascii_case(level))
+    };
+    let mut own = Vec::new();
+    let mut others = Vec::new();
+    for x in sp.sheets.iter().take(MAX_ITEMS) {
+        let Some(r) = x.view.as_ref().map(|v| v.rect).or(x.rect).filter(|r| r.iter().all(|v| v.is_finite())) else { continue };
+        let mine = x.discipline.as_deref().is_some_and(|d| d.trim().eq_ignore_ascii_case(discipline));
+        if mine && shows(x) {
+            // Its part in the level's region (a sheet of several views: the region is its plan's).
+            let cut = region.map(|g| {
+                [
+                    r[0].min(r[2]).max(g[0].min(g[2])),
+                    r[1].min(r[3]).max(g[1].min(g[3])),
+                    r[0].max(r[2]).min(g[0].max(g[2])),
+                    r[1].max(r[3]).min(g[1].max(g[3])),
+                ]
+            });
+            let r = cut.filter(|c| c[0] < c[2] && c[1] < c[3]).unwrap_or(r);
+            own.push((r, x.number.clone()));
+        } else if !mine && x.discipline.is_some() {
+            others.push(r);
+        }
+    }
+    (own, others)
+}
+
+/// The objects of a level drawn in `d` (not on its own sheet), from its own plan: its
+/// architectural plan's when the set's links say where that is, else its region's without the
+/// other trades' sheets in it. And the sheet numbers read.
+fn level_objects<'a>(
+    d: &Drawing,
+    sp: &BuildingSpec,
+    l: &cadaddy_walk3d::Level,
+    all: &[&'a Arc<Entity>],
+    discipline: &str,
+) -> (Vec<&'a Arc<Entity>>, Vec<String>) {
+    let centre = |e: &Entity| {
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        (!b.is_empty()).then(|| b.center())
+    };
+    let (own, others) = plan_rects(sp, &l.name, l.region, discipline);
+    if !own.is_empty() {
+        let mine = all.iter().copied().filter(|e| centre(e).is_some_and(|c| own.iter().any(|(r, _)| holds(r, c)))).collect();
+        let mut names: Vec<String> = own.into_iter().map(|(_, n)| n).collect();
+        names.dedup();
+        return (mine, names);
+    }
+    // Another trade's sheet is left out, unless the level's whole region lies in it (its plan is
+    // drawn on that sheet).
+    let within = |r: &[f64; 4]| l.region.is_some_and(|g| holds(r, Vec2::new(g[0], g[1])) && holds(r, Vec2::new(g[2], g[3])));
+    let others: Vec<[f64; 4]> = others.into_iter().filter(|r| !within(r)).collect();
+    let mine = all
+        .iter()
+        .copied()
+        .filter(|e| {
+            centre(e).is_some_and(|c| level_at(&sp.levels, c.x, c.y).is_some_and(|x| x.name == l.name) && !others.iter().any(|r| holds(r, c)))
+        })
+        .collect();
+    (mine, Vec::new())
+}
+
+/// Each level's grids and intersections: levels drawn here from their own plan in this drawing,
 /// levels on their own sheet from that drawing (within their `region`, when set).
-fn by_level(s: &Session, sp: &BuildingSpec) -> Result<Vec<LevelGrids>> {
+fn by_level(s: &Session, sp: &BuildingSpec, discipline: &str) -> Result<Vec<LevelGrids>> {
     let d = s.doc()?;
     let host = s.state().ok().and_then(|st| st.path.clone());
+    Ok(levels_grids(d, host.as_deref(), sp, discipline))
+}
+
+/// [`by_level`] in `d` (its file at `host`, for the levels on sheets of their own).
+fn levels_grids(d: &Drawing, host: Option<&str>, sp: &BuildingSpec, discipline: &str) -> Vec<LevelGrids> {
     let k = units_per_inch(d);
     let all = plan_objects(d);
     let centre = |d: &Drawing, e: &Entity| {
@@ -447,22 +536,18 @@ fn by_level(s: &Session, sp: &BuildingSpec) -> Result<Vec<LevelGrids>> {
     };
     let mut out = Vec::new();
     for l in &sp.levels {
-        let mut row = LevelGrids { level: l.name.clone(), sheet: l.sheet.clone(), k, grids: Vec::new(), xs: Vec::new(), note: None };
+        let mut row =
+            LevelGrids { level: l.name.clone(), sheet: l.sheet.clone(), k, grids: Vec::new(), xs: Vec::new(), note: None, plan: Vec::new() };
         match &l.sheet {
             None => {
-                let mine: Vec<&Arc<Entity>> = all
-                    .iter()
-                    .copied()
-                    .filter(|e| centre(d, e).and_then(|c| level_at(&sp.levels, c.x, c.y)).is_some_and(|x| x.name == l.name))
-                    .collect();
+                let (mine, plan) = level_objects(d, sp, l, &all, discipline);
                 row.grids = grids(d, &mine, k);
+                row.plan = plan;
             }
-            Some(f) => match read_sheet(f, host.as_deref()) {
+            Some(f) => match read_sheet(f, host) {
                 Ok(sd) => {
                     row.k = units_per_inch(&sd);
-                    let inside = |c: Vec2| {
-                        l.region.is_none_or(|[x0, y0, x1, y1]| c.x >= x0.min(x1) && c.x <= x0.max(x1) && c.y >= y0.min(y1) && c.y <= y0.max(y1))
-                    };
+                    let inside = |c: Vec2| l.region.is_none_or(|r| holds(&r, c));
                     let mine: Vec<&Arc<Entity>> = plan_objects(&sd).into_iter().filter(|e| centre(&sd, e).is_some_and(inside)).collect();
                     row.grids = grids(&sd, &mine, row.k);
                 }
@@ -472,7 +557,7 @@ fn by_level(s: &Session, sp: &BuildingSpec) -> Result<Vec<LevelGrids>> {
         row.xs = intersections(&row.grids, row.k);
         out.push(row);
     }
-    Ok(out)
+    out
 }
 
 fn pt(p: Vec2) -> Value {
@@ -485,7 +570,8 @@ fn run_detect(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(l) = only.filter(|l| sp.level(l).is_none()) {
         return Err(bad("grids.detect", format!("there is no level named {l}")));
     }
-    let levels: Vec<Value> = by_level(s, &sp)?
+    let discipline = str_param(p, "discipline").unwrap_or(PLAN_DISCIPLINE).to_string();
+    let levels: Vec<Value> = by_level(s, &sp, &discipline)?
         .into_iter()
         .filter(|l| only.is_none_or(|o| o.eq_ignore_ascii_case(&l.level)))
         .map(|l| {
@@ -496,6 +582,9 @@ fn run_detect(s: &mut Session, p: &Value) -> Result<Value> {
             });
             if let Some(f) = l.sheet {
                 row["sheet"] = json!(f);
+            }
+            if !l.plan.is_empty() {
+                row["plan"] = json!(l.plan);
             }
             if let Some(n) = l.note {
                 row["note"] = json!(n);
@@ -522,9 +611,99 @@ fn fit(pairs: &[(Vec2, Vec2)]) -> Option<(f64, Vec2, f64)> {
     (s.is_finite() && t.is_finite()).then_some((s, t, miss))
 }
 
+/// Most matched intersections looked at for a level's fit, and most of them seeding one.
+const MAX_PAIRS: usize = 4096;
+const MAX_SEEDS: usize = 40;
+
+/// The fit most of a level's matched intersections agree with.
+#[derive(Debug, PartialEq)]
+enum Consensus {
+    /// Scale, offset, largest miss of those agreeing, the labels agreeing, the labels left out.
+    Found { s: f64, t: Vec2, miss: f64, agree: Vec<String>, left_out: Vec<String> },
+    /// Two fits differing by over the tolerance agree equally well (a label on two grids).
+    Ambiguous,
+    /// Fewer than 2 agree on any fit.
+    None,
+}
+
+/// The fit of `xs` onto `ref_xs` (matched by label) that the most labels agree with within
+/// `tol`, each two matches of different labels seeding one (a tag read as a bubble, or a label
+/// read off the neighbouring grid line, agrees with none and is left out).
+fn consensus(xs: &[(String, Vec2)], ref_xs: &[(String, Vec2)], tol: f64) -> Consensus {
+    let cands: Vec<(&str, Vec2, Vec2)> =
+        xs.iter().flat_map(|(n, p)| ref_xs.iter().filter(move |(m, _)| m == n).map(move |(_, q)| (n.as_str(), *p, *q))).take(MAX_PAIRS).collect();
+    // Per label, its best match within `tol` of the fit.
+    let support = |s: f64, t: Vec2| {
+        let mut best: std::collections::BTreeMap<&str, (f64, Vec2, Vec2)> = std::collections::BTreeMap::new();
+        for &(n, p, q) in &cands {
+            let miss = (p * s + t).dist(q);
+            if miss <= tol && best.get(n).is_none_or(|b| miss < b.0) {
+                best.insert(n, (miss, p, q));
+            }
+        }
+        best
+    };
+    let step = cands.len().div_ceil(MAX_SEEDS).max(1);
+    let seeds: Vec<(&str, Vec2, Vec2)> = cands.iter().copied().step_by(step).collect();
+    let mut best: Option<(usize, f64, Vec2)> = None;
+    let mut tie = false;
+    let mid = cands.iter().fold(Vec2::new(0.0, 0.0), |a, c| a + c.1) * (1.0 / cands.len().max(1) as f64);
+    for (i, a) in seeds.iter().enumerate() {
+        for b in seeds.iter().skip(i + 1) {
+            if a.0 == b.0 || a.1.dist(b.1) <= 2.0 * tol || a.2.dist(b.2) <= 2.0 * tol {
+                continue;
+            }
+            let Some((s, t, _)) = fit(&[(a.1, a.2), (b.1, b.2)]) else { continue };
+            if !(0.1..=10.0).contains(&s) {
+                continue;
+            }
+            let n = support(s, t).len();
+            match best {
+                Some((m, ..)) if n < m => {}
+                // The same count by another fit: the same one, or a rival.
+                Some((m, bs, bt)) if n == m => tie |= (mid * bs + bt).dist(mid * s + t) > tol,
+                _ => {
+                    best = Some((n, s, t));
+                    tie = false;
+                }
+            }
+        }
+    }
+    let Some((n, mut s, mut t)) = best.filter(|b| b.0 >= 2) else { return Consensus::None };
+    if tie {
+        return Consensus::Ambiguous;
+    }
+    // The fit of all that agree, kept while it holds as many.
+    let mut agree = support(s, t);
+    for _ in 0..2 {
+        let pairs: Vec<(Vec2, Vec2)> = agree.values().map(|(_, p, q)| (*p, *q)).collect();
+        let Some((s2, t2, _)) = fit(&pairs) else { break };
+        let again = support(s2, t2);
+        if again.len() < n.max(agree.len()) {
+            break;
+        }
+        (s, t, agree) = (s2, t2, again);
+    }
+    let miss = agree.values().map(|(_, p, q)| (*p * s + t).dist(*q)).fold(0.0, f64::max);
+    let mut left_out: Vec<String> = cands.iter().map(|c| c.0).filter(|n| !agree.contains_key(n)).map(str::to_string).collect();
+    left_out.sort();
+    left_out.dedup();
+    Consensus::Found { s, t, miss, agree: agree.keys().map(|k| k.to_string()).collect(), left_out }
+}
+
+/// The labels of `v`, at most 12 of them and how many more.
+fn some_labels(v: &[String]) -> String {
+    let mut out = v.iter().take(12).cloned().collect::<Vec<_>>().join(", ");
+    if v.len() > 12 {
+        out.push_str(&format!(" and {} more", v.len() - 12));
+    }
+    out
+}
+
 fn run_align(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut sp, _) = current(s, "levels.align")?;
-    let found = by_level(s, &sp)?;
+    let discipline = str_param(p, "discipline").unwrap_or(PLAN_DISCIPLINE).to_string();
+    let found = by_level(s, &sp, &discipline)?;
     let reference = match str_param(p, "reference") {
         Some(r) => sp.level(r).map(|l| l.name.clone()).ok_or_else(|| bad("levels.align", format!("there is no level named {r}")))?,
         None => {
@@ -544,31 +723,54 @@ fn run_align(s: &mut Session, p: &Value) -> Result<Value> {
         ref_level.as_ref().and_then(|l| l.base).map(|b| Vec2::new(b[0], b[1])).or_else(|| ref_xs.first().map(|x| x.1)).unwrap_or(Vec2::new(0.0, 0.0));
     let mut rows = Vec::new();
     let mut bases: Vec<(String, [f64; 2])> = Vec::new();
-    for LevelGrids { level: l, sheet, xs, note, .. } in &found {
+    for LevelGrids { level: l, sheet, xs, note, plan, .. } in &found {
         let pairs: Vec<(Vec2, Vec2)> = xs.iter().filter_map(|(n, pp)| ref_xs.iter().find(|(m, _)| m == n).map(|(_, q)| (*pp, *q))).collect();
         let mut row = json!({ "level": l, "matched": pairs.len() });
         if let Some(f) = sheet {
             row["sheet"] = json!(f);
+        }
+        if !plan.is_empty() {
+            row["plan"] = json!(plan);
         }
         let Some((scale, t, miss)) = fit(&pairs).filter(|_| !pairs.is_empty()) else {
             row["note"] = json!(note.clone().unwrap_or_else(|| "no grid intersections in common with the reference".into()));
             rows.push(row);
             continue;
         };
-        row["scale"] = json!((scale * 1e9).round() / 1e9);
-        row["offset"] = pt(t);
-        row["residual"] = json!((miss * 1e6).round() / 1e6);
+        let put = |row: &mut Value, scale: f64, t: Vec2, miss: f64| {
+            row["scale"] = json!((scale * 1e9).round() / 1e9);
+            row["offset"] = pt(t);
+            row["residual"] = json!((miss * 1e6).round() / 1e6);
+        };
+        put(&mut row, scale, t, miss);
         if pairs.len() < 2 {
             row["note"] = json!(format!(
                 "only grid intersection {} is in common with {reference}: not aligned (two or more are needed to check the fit); check its grid labels with grids.detect, or set its base by hand",
                 xs.iter().find(|(n, _)| ref_xs.iter().any(|(m, _)| m == n)).map_or("", |(n, _)| n.as_str())
             ));
-        } else if miss > *ref_k {
-            row["note"] = json!(format!(
-                "its grids don't line up with {reference}'s: an intersection misses by {:.2}\" after the fit (over 1\"), so a grid label may not match; not aligned: check its grid labels with grids.detect, or set its base by hand",
-                miss / ref_k
-            ));
-        } else if (scale - 1.0).abs() > 1e-3 {
+            rows.push(row);
+            continue;
+        }
+        let (scale, t, left_out) = match consensus(xs, ref_xs, *ref_k) {
+            Consensus::Found { s: scale, t, miss, agree, left_out } => {
+                put(&mut row, scale, t, miss);
+                row["agreeing"] = json!(agree.len());
+                if !left_out.is_empty() {
+                    row["left_out"] = json!(left_out);
+                }
+                (scale, t, left_out)
+            }
+            c => {
+                let why = if c == Consensus::Ambiguous { " (two fits agree equally well: one label is on two grids)" } else { "" };
+                row["note"] = json!(format!(
+                    "its grids don't line up with {reference}'s: an intersection misses by {:.2}\" after the fit (over 1\"), so a grid label may not match; not aligned: check its grid labels with grids.detect, or set its base by hand{why}",
+                    miss / ref_k
+                ));
+                rows.push(row);
+                continue;
+            }
+        };
+        if (scale - 1.0).abs() > 1e-3 {
             row["note"] = json!(format!("drawn at {:.4}× the reference's scale: not aligned (levels share one drawing scale)", scale));
         } else {
             // The point of this level that lands on the reference's base: base = (B_ref − t) / s.
@@ -576,6 +778,13 @@ fn run_align(s: &mut Session, p: &Value) -> Result<Value> {
             let b = [(base.x * 1e6).round() / 1e6, (base.y * 1e6).round() / 1e6];
             row["base"] = json!(b);
             bases.push((l.clone(), b));
+            if !left_out.is_empty() {
+                row["note"] = json!(format!(
+                    "{} grid intersections left out of the fit (they miss it by over 1\": a grid label read off another line, or a tag read as a grid bubble): {}; check them with grids.detect",
+                    left_out.len(),
+                    some_labels(&left_out)
+                ));
+            }
         }
         rows.push(row);
     }
@@ -590,6 +799,77 @@ fn run_align(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "reference": reference, "levels": rows, "applied": apply }))
 }
 
+/// Fewest grid intersections agreeing for a job to move a storey by them.
+const MIN_STOREY_GRID_PAIRS: usize = 4;
+
+/// The job build's storeys onto each other by their architectural plans' grids: each storey
+/// drawn in `d` with a base (from its shell's corner, or its rooms) gets the base its grid
+/// intersections give onto the lowest storey with grids, where at least
+/// [`MIN_STOREY_GRID_PAIRS`] agree within 1" on a fit at the same scale, spread across both
+/// ways, moving it at most `max_move` (drawing units). The storeys moved (and by how much, in
+/// inches) and why the others weren't.
+pub(crate) fn align_storeys(d: &Drawing, sp: &mut BuildingSpec, max_move: f64) -> (Vec<String>, Vec<String>) {
+    let found = levels_grids(d, None, sp, PLAN_DISCIPLINE);
+    // The storeys drawn here with a base and grids: name, elevation, base.
+    let usable: Vec<(&LevelGrids, f64, Vec2)> = found
+        .iter()
+        .filter(|l| l.xs.len() >= MIN_STOREY_GRID_PAIRS)
+        .filter_map(|l| {
+            let x = sp.level(&l.level).filter(|x| x.sheet.is_none() && x.region.is_some())?;
+            let b = x.base?;
+            Some((l, x.elevation_ft, Vec2::new(b[0], b[1])))
+        })
+        .collect();
+    let Some(&(reference, _, ref_base)) = usable.iter().min_by(|a, b| a.1.total_cmp(&b.1)) else { return (Vec::new(), Vec::new()) };
+    let k = reference.k;
+    let (mut moved, mut not) = (Vec::new(), Vec::new());
+    for &(l, _, old) in usable.iter().filter(|u| u.0.level != reference.level) {
+        let (s, t, agree) = match consensus(&l.xs, &reference.xs, k) {
+            Consensus::Found { s, t, agree, .. } => (s, t, agree),
+            Consensus::Ambiguous => {
+                not.push(format!("{}: two grid fits agree equally", l.level));
+                continue;
+            }
+            Consensus::None => {
+                not.push(format!("{}: no grid fit onto {}", l.level, reference.level));
+                continue;
+            }
+        };
+        // Agreeing crossings along one grid line fix it along that line only.
+        let at: Vec<Vec2> = l.xs.iter().filter(|(n, _)| agree.contains(n)).map(|(_, p)| *p).collect();
+        let spread = cadaddy_geom::Bounds2::from_points(at.iter().copied());
+        if agree.len() < MIN_STOREY_GRID_PAIRS || spread.is_empty() || spread.width() <= 2.0 * k || spread.height() <= 2.0 * k {
+            not.push(format!("{}: only {} grid intersections agree with {}'s", l.level, agree.len(), reference.level));
+            continue;
+        }
+        if (s - 1.0).abs() > 1e-3 {
+            not.push(format!("{}: its grids are at {s:.4}× {}'s scale", l.level, reference.level));
+            continue;
+        }
+        let base = (ref_base - t) * (1.0 / s);
+        let by = base.dist(old);
+        if by > max_move {
+            not.push(format!("{}: its grids put it {:.1}\" off its base, more than {:.1}\"", l.level, by / k, max_move / k));
+            continue;
+        }
+        if by <= 1e-6 * k.max(1e-9) {
+            continue;
+        }
+        if let Some(x) = sp.levels.iter_mut().find(|x| x.name == l.level) {
+            x.base = Some([(base.x * 1e6).round() / 1e6, (base.y * 1e6).round() / 1e6]);
+            moved.push(format!(
+                "{} by ({:.2}\", {:.2}\") onto {} ({} grid intersections)",
+                l.level,
+                (base.x - old.x) / k,
+                (base.y - old.y) / k,
+                reference.level,
+                agree.len()
+            ));
+        }
+    }
+    (moved, not)
+}
+
 fn run_columns(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut sp, _) = current(s, "grids.columns")?;
     let level = str_param(p, "level").ok_or_else(|| bad("grids.columns", "`level` is required"))?;
@@ -601,7 +881,7 @@ fn run_columns(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(f) = sp.level(&level).and_then(|l| l.sheet.as_ref()) {
         return Err(bad("grids.columns", format!("{level} is drawn on its own sheet ({f}): open that drawing and run grids.columns there")));
     }
-    let found = by_level(s, &sp)?;
+    let found = by_level(s, &sp, PLAN_DISCIPLINE)?;
     let d = s.doc()?;
     let k = units_per_inch(d);
     let Some(LevelGrids { xs, .. }) = found.iter().find(|l| l.level == level) else { return Err(bad("grids.columns", "no grids on that level")) };
@@ -1245,6 +1525,77 @@ mod tests {
             s.execute("pline", &json!({"points": ring(p(-96.0, y), 26.0 * k)})).unwrap();
             s.execute("text", &json!({"at": p(-100.0, y - 4.0), "text": label, "height": 18.0 * k})).unwrap();
         }
+    }
+
+    /// Two storeys, each its architectural plan (a 3 × 3 grid) and an electrical copy of the grid
+    /// drawn elsewhere in its region; the bases at the shells' corners, 1½" more skin on the
+    /// second. With `arch_links`, the set's links name the architectural plans too.
+    fn two_storeys(arch_links: bool) -> (crate::Session, BuildingSpec) {
+        let mut s = crate::Session::new();
+        let (gx, gy) = ([(0.0, "1"), (300.0, "2"), (600.0, "3")], [(0.0, "A"), (300.0, "B"), (600.0, "C")]);
+        for o in [[0.0, 0.0], [2000.0, 40.0], [5013.0, 7.0], [7000.0, 0.0]] {
+            grid_view(&mut s, o, 1.0, &gx, &gy);
+        }
+        let mut sheets = vec![
+            json!({"number": "SE-1", "discipline": "E", "level": "L1", "rect": [1500, -500, 4000, 1500]}),
+            json!({"number": "SE-2", "discipline": "E", "level": "L2", "rect": [6500, -500, 9000, 1500]}),
+        ];
+        if arch_links {
+            sheets.push(json!({"number": "SA-1", "discipline": "A", "level": "L1", "rect": [-500, -500, 1500, 1500]}));
+            sheets.push(json!({"number": "SA-2", "discipline": "A", "level": "L2", "rect": [4500, -500, 6500, 1500]}));
+        }
+        let sp = BuildingSpec::from_json(
+            &json!({"levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 12, "region": [-500, -500, 4000, 1500], "base": [-8.0, -8.0]},
+                {"name": "L2", "elevation_ft": 12, "height_ft": 12, "region": [4500, -500, 9000, 1500], "base": [5003.5, -2.5]}
+            ], "sheets": sheets})
+            .to_string(),
+        )
+        .unwrap();
+        (s, sp)
+    }
+
+    #[test]
+    fn a_job_stacks_its_storeys_by_their_architectural_plans_grids() {
+        for arch_links in [true, false] {
+            let (s, mut sp) = two_storeys(arch_links);
+            let d = s.doc().unwrap();
+            let (moved, not) = align_storeys(d, &mut sp, 36.0);
+            assert_eq!(moved, vec!["L2 by (1.50\", 1.50\") onto L1 (9 grid intersections)".to_string()], "{arch_links}: {not:?}");
+            assert_eq!(sp.level("L2").and_then(|l| l.base), Some([5005.0, -1.0]), "the grids' place, not the shell's corner");
+            assert_eq!(sp.level("L1").and_then(|l| l.base), Some([-8.0, -8.0]), "the lowest storey stays");
+            // A storey the grids would move further than a sheet is drawn off stays.
+            let (_, mut sp) = two_storeys(arch_links);
+            let (moved, not) = align_storeys(d, &mut sp, 1.0);
+            assert!(moved.is_empty() && not.len() == 1 && not[0].contains("more than"), "{not:?}");
+            assert_eq!(sp.level("L2").and_then(|l| l.base), Some([5003.5, -2.5]));
+        }
+    }
+
+    #[test]
+    fn the_fit_most_intersections_agree_with_wins_and_a_tie_is_none() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        let r: Vec<(String, Vec2)> = [("A-1", v(0.0, 0.0)), ("A-2", v(300.0, 0.0)), ("B-1", v(0.0, 300.0)), ("B-2", v(300.0, 300.0))]
+            .iter()
+            .map(|(n, p)| (n.to_string(), *p))
+            .collect();
+        // Shifted by (10, 20), B-2 read 24 off.
+        let mut xs: Vec<(String, Vec2)> = r.iter().map(|(n, p)| (n.clone(), *p + v(10.0, 20.0))).collect();
+        xs[3].1 += v(24.0, 0.0);
+        match consensus(&xs, &r, 1.0) {
+            Consensus::Found { s, t, miss, agree, left_out } => {
+                assert!((s - 1.0).abs() < 1e-9 && t.dist(v(-10.0, -20.0)) < 1e-9 && miss < 1e-9, "{s} {t:?} {miss}");
+                assert_eq!((agree.len(), left_out), (3, vec!["B-2".to_string()]));
+            }
+            c => panic!("{c:?}"),
+        }
+        // Grid 1 labelled on two lines: two fits agree with two each.
+        let two: Vec<(String, Vec2)> = [("A-1", v(0.0, 0.0)), ("A-1", v(300.0, 0.0)), ("B-1", v(0.0, 300.0)), ("B-1", v(300.0, 300.0))]
+            .iter()
+            .map(|(n, p)| (n.to_string(), *p))
+            .collect();
+        assert_eq!(consensus(&two, &r, 1.0), Consensus::Ambiguous);
+        assert_eq!(consensus(&xs[..1], &r, 1.0), Consensus::None);
     }
 
     #[test]

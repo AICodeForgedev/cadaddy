@@ -5684,6 +5684,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 Ok(_) => {}
                 Err(e) => progress_line(&format!("  roof framing and parapets not read: {e}")),
             }
+            // Each framed floor as its framing plans' notes give it: the joists' depth and
+            // spacing by level (Q6400).
+            match floor_documents(s, job) {
+                Ok(v) if !v.is_null() => job.audit("floor_documents", "pipeline", None, Some(StageName::BimBuild), Some(v)),
+                Ok(_) => {}
+                Err(e) => progress_line(&format!("  floor framing not read: {e}")),
+            }
             // The drafted spec is the plans' alone: the M and P plans' runs go back in, each on
             // its level, so the build makes them.
             if let Some(mep) = job.mep.clone().filter(|m| !m.runs.is_empty() || !m.terminals.is_empty() || !m.equipment.is_empty())
@@ -7259,6 +7266,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
         if !not.is_empty() {
             progress_line(&format!("  storeys not lined up by their rooms: {}", not.join("; ")));
+        }
+        // Then by the grids of their architectural plans, where those agree: a shell's corner
+        // differs by the wall build-up from floor to floor, the grid lines don't (Q6404).
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        let (moved, not) = super::grids::align_storeys(s.doc()?, &mut sp, MAX_REGISTER_FT * upf);
+        if !moved.is_empty() {
+            progress_line(&format!("  storeys lined up on their grids: {}", moved.join("; ")));
+        }
+        if !not.is_empty() {
+            progress_line(&format!("  storeys not lined up by their grids: {}", not.join("; ")));
         }
         // The shells go to the build: a wall line well past its storey's is none of its walls.
         // Without their slivers (a strip a wall thick: a stray wall line traced into the shell,
@@ -25818,6 +25835,56 @@ fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
     Ok(json!({"roofs": out}))
 }
 
+/// Each framed floor's framing into the drafted spec (Q6400): the joists or floor trusses, their
+/// depth and spacing as the notes on the floor's framing plans give them, by level (a building's
+/// floors can be framed differently). The level's structural sheets are read first, else its
+/// architectural ones; never another trade's (their notes name the joists they run between).
+/// The lowest storey (on grade) and the roofs are not floors framed here. What was put in (null:
+/// nothing).
+fn floor_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
+    let (mut sp, true) = super::bspec::current(s, "bim_build")? else { return Ok(Value::Null) };
+    let mut storeys: Vec<(String, f64)> = sp
+        .levels
+        .iter()
+        .filter(|l| l.sheet.is_none() && !super::wallgen::roof_level(&sp.levels, &l.name))
+        .map(|l| (l.name.clone(), l.elevation_ft))
+        .collect();
+    storeys.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let rect = |r: [f64; 4]| {
+        cadaddy_geom::Bounds2::new(cadaddy_geom::Vec2::new(r[0].min(r[2]), r[1].min(r[3])), cadaddy_geom::Vec2::new(r[0].max(r[2]), r[1].max(r[3])))
+    };
+    let mut out = Vec::new();
+    for (floor, _) in storeys.iter().skip(1).take(200) {
+        let of_level =
+            |r: &SheetRegion| std::iter::once(&r.level).chain(r.levels.iter()).any(|l| !l.is_empty() && level_name(l).eq_ignore_ascii_case(floor));
+        let mut found = None;
+        for discipline in ["S", "A"] {
+            let mut regions: Vec<(String, cadaddy_geom::Bounds2)> = Vec::new();
+            for r in job.sheet_regions.iter().filter(|r| r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case(discipline) && of_level(r)) {
+                // The whole sheet inside its border: the framing notes stand beside the plan.
+                let b = rect(r.area.unwrap_or(r.rect));
+                if !regions.iter().any(|(n, x)| *n == r.number && *x == b) {
+                    regions.push((r.number.clone(), b));
+                }
+            }
+            found = super::exterior::read_floor_framing(s.doc()?, &regions, floor);
+            if found.is_some() {
+                break;
+            }
+        }
+        if let Some(f) = found {
+            sp.floor_framing.retain(|x| !x.level.eq_ignore_ascii_case(floor));
+            out.push(json!({"level": floor, "framing": f}));
+            sp.floor_framing.push(f);
+        }
+    }
+    if out.is_empty() {
+        return Ok(Value::Null);
+    }
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    Ok(json!({"floors": out}))
+}
+
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
     // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
@@ -35947,6 +36014,59 @@ mod tests {
         let (sp2, _) = super::super::bspec::current(&s2, "test").unwrap();
         assert_eq!(sp2.exterior.level_parapets("Roof").count(), 1);
         assert!(out2["roofs"][0]["parapet"]["note"].as_str().unwrap().contains("7'-0\""), "{out2}");
+    }
+
+    /// Q6400: each framed floor's framing comes from the notes on its own framing plans (its
+    /// structural sheets; a sheet of two floors frames both), never another trade's sheet; the
+    /// lowest storey and a floor no note frames get none.
+    #[test]
+    fn floor_documents_frame_each_floor_from_its_own_framing_plan() {
+        let mut s = Session::new();
+        let t = |s: &mut Session, at: [f64; 2], text: &str| {
+            s.execute("text", &json!({"at": at, "text": text, "height": 2})).unwrap();
+        };
+        // S-2 (level 2, x 1000–1100): the typical note and a local doubled member.
+        t(&mut s, [1010.0, 20.0], "FLOOR DECK ON 16\" DEEP PREFABRICATED WOOD JOISTS @ 24\" OC, U.N.O.");
+        t(&mut s, [1010.0, 40.0], "DBL. 16\" LVL @ 24\" OC.");
+        t(&mut s, [1010.0, 50.0], "2X8 JOISTS");
+        // S-3 (levels 3 and 4, x 2000–2100).
+        t(&mut s, [2010.0, 20.0], "11 7/8\" I-JOISTS @ 19.2\" OC TYP.");
+        // A mechanical sheet of level 2 (x 3000–3100) names other joists: not the floor's.
+        t(&mut s, [3010.0, 20.0], "RUN DUCT BETWEEN 9 1/2\" DEEP JOISTS @ 12\" OC TYP.");
+        // A foundation plan's note (level 1, on grade).
+        t(&mut s, [10.0, 20.0], "14\" I-JOISTS @ 16\" OC TYP.");
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Level 2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Level 3", "elevation_ft": 20, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Level 4", "elevation_ft": 30, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Level 5", "elevation_ft": 40, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Roof", "elevation_ft": 50, "height_ft": 4, "ceiling_ft": 4}
+            ]}}),
+        )
+        .unwrap();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let mut s3 = region("S-3", "3", "S", "plan", 2000.0);
+        s3.levels = vec!["4".into()];
+        job.sheet_regions =
+            vec![region("S-1", "1", "S", "plan", 0.0), region("S-2", "2", "S", "plan", 1000.0), s3, region("M-2", "2", "M", "plan", 3000.0)];
+        let out = floor_documents(&mut s, &job).unwrap();
+        let (sp, _) = super::super::bspec::current(&s, "test").unwrap();
+        let f2 = sp.floor_framing_of("Level 2").expect("level 2 framed");
+        assert_eq!((f2.member.as_str(), f2.depth_in, f2.spacing_in), ("joist", 16.0, 24.0), "{out}");
+        assert!(f2.source.starts_with("S-2: FLOOR DECK"), "{}", f2.source);
+        for l in ["Level 3", "Level 4"] {
+            let f = sp.floor_framing_of(l).expect("framed");
+            assert_eq!((f.depth_in, f.spacing_in), (11.875, 19.2), "{l}");
+            assert_eq!(f.depth_status, Some(cadaddy_walk3d::ValueStatus::Read));
+        }
+        assert!(sp.floor_framing_of("Level 1").is_none() && sp.floor_framing_of("Level 5").is_none() && sp.floor_framing_of("Roof").is_none());
+        assert_eq!(out["floors"].as_array().map(Vec::len), Some(3), "{out}");
+        // The spec keeps them through a save.
+        let back = cadaddy_walk3d::BuildingSpec::from_json(&sp.to_json()).unwrap();
+        assert_eq!(back.floor_framing, sp.floor_framing);
     }
 
     #[test]

@@ -96,9 +96,20 @@ struct PackageDetailView: View {
         .task {
             await session.load()
             runDemo()
+            takeARRequest()
         }
+        .onChange(of: app.openARRequest) { _, _ in takeARRequest() }
         .fullScreenCover(isPresented: $showAR, onDismiss: { app.reload() }) {
             ARFieldScreen(session: session)
+        }
+    }
+
+    /// "Stand in this room" from the building view lands here: go straight to AR alignment.
+    private func takeARRequest() {
+        guard app.openARRequest, app.selection == session.record.id else { return }
+        app.openARRequest = false
+        if ARWorldTrackingConfiguration.isSupported, session.loadError == nil { showAR = true } else {
+            app.alert = "AR needs an iPhone or iPad with ARKit world tracking. The sample room is open here: its plan, objects and 3D preview."
         }
     }
 

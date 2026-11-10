@@ -121,6 +121,12 @@ pub struct BuildingSpec {
     /// Facades, roofs and what stands on them, from the elevations and the roof plan.
     #[serde(default, skip_serializing_if = "Exterior::is_empty")]
     pub exterior: Exterior,
+    /// How each framed floor is framed (joists or floor trusses at a spacing, as deep as they
+    /// are), as the notes on its framing plans say: by level, read or the usual value
+    /// (`*_status`). A joist submittal's own level headings come before these (the trades'
+    /// documents).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub floor_framing: Vec<RoofFraming>,
     /// Ceilings, soffits and what is set in them, from the reflected ceiling plans.
     #[serde(default, skip_serializing_if = "Rcp::is_empty")]
     pub rcp: Rcp,
@@ -3040,6 +3046,7 @@ impl BuildingSpec {
             shells: BTreeMap::new(),
             buildings: Buildings::default(),
             exterior: Exterior::default(),
+            floor_framing: Vec::new(),
             rcp: Rcp::default(),
             mep: Mep::default(),
             concrete: crate::concrete::Concrete::default(),
@@ -3196,6 +3203,16 @@ impl BuildingSpec {
 
     pub fn level(&self, name: &str) -> Option<&Level> {
         self.level_matching(name).and_then(|i| self.levels.get(i))
+    }
+
+    /// How a floor is framed, as its framing plans' notes say ([`BuildingSpec::floor_framing`]):
+    /// the entry of the level, by its name or the spec level it matches.
+    pub fn floor_framing_of(&self, level: &str) -> Option<&RoofFraming> {
+        let want = self.level_matching(level);
+        self.floor_framing
+            .iter()
+            .find(|f| f.level.eq_ignore_ascii_case(level))
+            .or_else(|| want.and_then(|w| self.floor_framing.iter().find(|f| self.level_matching(&f.level) == Some(w))))
     }
 
     /// Problems found in the spec alone (see `bspec.validate` for those against the drawing).
