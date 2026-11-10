@@ -183,3 +183,192 @@ fn autosave_writes_cdy_without_blocking() {
     assert_eq!(back.model, big.model);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ─── A print set's sheets on demand (Q6418) ──────────────────────────────────────────────────
+
+/// A made-up print set of `sheets` sheets of about `per` objects saved to `<dir>/set.cdy` by a
+/// headless session (as the job leaves one), with its object count.
+fn saved_set(dir: &std::path::Path, sheets: usize, per: usize) -> (String, usize) {
+    hooks();
+    let mut s = Session::new();
+    s.open_drawing(cadaddy_engine::sample::print_set(sheets, per), "Sample Set", None);
+    let n = s.doc().unwrap().model.len();
+    let p = dir.join("set.cdy").to_string_lossy().into_owned();
+    s.execute("saveas", &json!({ "path": p })).unwrap();
+    (p, n)
+}
+
+/// `path` opened as the interface opens it: sheets on demand, read on a worker thread, then on
+/// its first sheet.
+fn opened_on_demand(path: &str) -> Session {
+    hooks();
+    let mut s = Session::new();
+    s.viewport_px = (1200.0, 800.0);
+    s.sheets_on_demand = true;
+    let f = cadaddy_engine::cmd::file::read_file_on_demand(path).unwrap();
+    s.finish_open(f).unwrap();
+    assert!(s.open_first_sheet());
+    s
+}
+
+fn held(s: &Session) -> usize {
+    s.doc().unwrap().model.len()
+}
+
+fn readings(s: &mut Session) -> Vec<serde_json::Value> {
+    let mut run = |c: &str, p: serde_json::Value| s.execute(c, &p).unwrap_or_else(|e| panic!("{c}: {e}"));
+    vec![
+        run("entities", json!({"limit": 1}))["count"].clone(),
+        run("takeoff", json!({})),
+        run("takeoff", json!({"mode": "area"})),
+        run("bim.tree", json!({}))["total"].clone(),
+        run("count", json!({"block": "SYM-OUTLET", "space": "model"})),
+    ]
+}
+
+#[test]
+fn a_print_set_opens_in_the_interface_with_its_first_sheet_and_the_rest_out_of_memory() {
+    let dir = folder("ondemand-open");
+    let (p, total) = saved_set(&dir, 6, 3000);
+    let s = opened_on_demand(&p);
+    let d = s.doc().unwrap();
+    assert!(d.sheet_store.has_parked());
+    assert_eq!(held(&s) + d.sheet_store.parked_objects(), total, "every object is held or parked, once");
+    // The first sheet and the chunks that straddle two sheets: well under two sheets of six.
+    assert!(held(&s) < total / 3, "{} of {total} held", held(&s));
+    // The open sheet is all there.
+    let first = s.print_sheets()[0].rect;
+    let whole = cadaddy_io::read(&std::fs::read(&p).unwrap(), &p).unwrap();
+    let on_first = whole.model.iter().filter(|e| cadaddy_engine::doc::entity_bounds(&whole, e, 0).intersects(&first)).count();
+    assert_eq!(s.view_doc().unwrap().model.len(), on_first);
+    // Opening it is no change to save.
+    assert!(!s.state().unwrap().is_dirty());
+    // A headless session reads it whole, and never parks a sheet.
+    let mut h = Session::new();
+    h.execute("open", &json!({ "path": p })).unwrap();
+    assert_eq!(held(&h), total);
+    h.open_first_sheet();
+    h.execute("sheet.next", &json!({})).unwrap();
+    assert_eq!(held(&h), total);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn counts_takeoff_and_queries_are_the_same_with_the_sheets_out_of_memory() {
+    let dir = folder("ondemand-readings");
+    let (p, total) = saved_set(&dir, 5, 400);
+    let mut whole = Session::new();
+    whole.execute("open", &json!({ "path": p })).unwrap();
+    let want = readings(&mut whole);
+    let mut s = opened_on_demand(&p);
+    assert!(s.has_parked_sheets());
+    // Moving between sheets loads nothing else.
+    assert!(!s.needs_whole_set("sheet.next") && !s.needs_whole_set("zoom") && !s.needs_whole_set("line"));
+    assert!(s.needs_whole_set("entities") && s.needs_whole_set("takeoff") && s.needs_whole_set("job.start"));
+    assert_eq!(readings(&mut s), want, "the same counts, takeoff and model tree");
+    assert_eq!(held(&s), total, "a command reading the whole set had it loaded first");
+    assert!(!s.has_parked_sheets());
+    // Loading is no change to save (what the commands themselves record is the same both ways).
+    assert_eq!(s.state().unwrap().is_dirty(), whole.state().unwrap().is_dirty());
+    let mut t = opened_on_demand(&p);
+    t.load_all_sheets().unwrap();
+    assert!(!t.has_parked_sheets() && !t.state().unwrap().is_dirty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stepping_through_the_sheets_keeps_the_open_one_and_a_few_recent_in_memory() {
+    let dir = folder("ondemand-step");
+    let (p, total) = saved_set(&dir, 8, 2000);
+    let mut s = opened_on_demand(&p);
+    let mut most = 0;
+    for i in 1..8 {
+        s.execute("sheet.next", &json!({})).unwrap();
+        assert_eq!(s.active_sheet().map(|(k, _)| k), Some(i));
+        // The open sheet is in memory: its view holds what the whole set has on it.
+        let rect = s.print_sheets()[i].rect;
+        let d = s.doc().unwrap();
+        assert!(d.sheet_store.parked_sheet(&s.print_sheets()[i].number, &rect).is_none(), "sheet {} is in memory", i + 1);
+        assert_eq!(held(&s) + d.sheet_store.parked_objects(), total);
+        most = most.max(held(&s));
+    }
+    // The open sheet and the recent ones (and the straddling chunks), never the set.
+    let per = total / 8;
+    assert!(most <= (cadaddy_engine::sheetstore::CACHE + 2) * per, "{most} held at most, {per} a sheet");
+    // Going back to a sheet out of memory loads it again.
+    s.execute("sheet.open", &json!({ "sheet": 1 })).unwrap();
+    assert!(s.doc().unwrap().sheet_store.parked_sheet(&s.print_sheets()[0].number, &s.print_sheets()[0].rect).is_none());
+    assert!(!s.state().unwrap().is_dirty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_edit_on_the_open_sheet_saves_and_the_other_sheets_are_kept_byte_for_byte() {
+    let dir = folder("ondemand-save");
+    let (p, total) = saved_set(&dir, 5, 2500);
+    let before = std::fs::read(&p).unwrap();
+    let mut s = opened_on_demand(&p);
+    let parked: Vec<Vec<u8>> = s.doc().unwrap().sheet_store.parked.iter().flat_map(|x| x.chunks.iter()).map(|c| c.stored.clone()).collect();
+    assert!(!parked.is_empty());
+    let c = s.print_sheets()[0].rect.center();
+    s.execute("line", &json!({ "points": [[c.x, c.y], [c.x + 40.0, c.y]] })).unwrap();
+    assert!(s.has_parked_sheets(), "drawing a line loads nothing");
+    let r = s.execute("qsave", &json!({})).unwrap();
+    let after = std::fs::read(&p).unwrap();
+    assert!(r["incremental"] == json!(true) || after.len() < before.len() * 2, "{r}");
+    assert!(after.len() < before.len() + before.len() / 4, "{} bytes after a one-line edit, {} before", after.len(), before.len());
+    for k in &parked {
+        assert!(after.windows(k.len()).any(|w| w == k.as_slice()), "a sheet out of memory is saved as it was stored");
+    }
+    let back = cadaddy_io::read(&after, &p).unwrap();
+    assert!(back.read_notes.is_empty(), "{:?}", back.read_notes);
+    assert_eq!(back.model.len(), total + 1, "every sheet and the new line");
+    // Saved as DWG/DXF it is the whole set, from a copy: the drawing keeps its sheets out.
+    let dxf = dir.join("set.dxf").to_string_lossy().into_owned();
+    s.execute("saveas", &json!({ "path": dxf })).unwrap();
+    let back = cadaddy_io::read(&std::fs::read(&dxf).unwrap(), &dxf).unwrap();
+    assert_eq!(back.model.len(), total + 1);
+    assert!(s.has_parked_sheets(), "the export didn't load the set into the drawing");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn undo_and_reopening_after_sheets_moved_in_and_out_are_consistent() {
+    let dir = folder("ondemand-undo");
+    let (p, total) = saved_set(&dir, 6, 1500);
+    let mut s = opened_on_demand(&p);
+    let c = s.print_sheets()[0].rect.center();
+    s.execute("line", &json!({ "points": [[c.x, c.y], [c.x + 40.0, c.y]] })).unwrap();
+    for _ in 0..5 {
+        s.execute("sheet.next", &json!({})).unwrap();
+    }
+    // Sheet 1 (with the line) is out of memory now; undo takes the line away all the same.
+    s.execute("undo", &json!({})).unwrap();
+    s.load_all_sheets().unwrap();
+    assert_eq!(held(&s), total, "the line is undone, every object is there once");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_print_set_saved_before_sheet_sections_opens_whole_and_gets_them_on_its_next_save() {
+    let dir = folder("ondemand-old");
+    hooks();
+    // As an earlier CADaddy wrote it: no sheet index.
+    let set = cadaddy_engine::sample::print_set(4, 1500);
+    let total = set.model.len();
+    let p = dir.join("old.cdy").to_string_lossy().into_owned();
+    std::fs::write(&p, cadaddy_io::cdy::write_cdy_checkpoint(&set).unwrap()).unwrap();
+    let bytes = std::fs::read(&p).unwrap();
+    assert!(cadaddy_io::cdy::verify(&bytes).unwrap()["sizes"].get("SHTI").is_none());
+    let mut s = opened_on_demand(&p);
+    // Read whole, then the sheets it isn't showing go out of memory.
+    assert!(s.has_parked_sheets());
+    assert_eq!(held(&s) + s.doc().unwrap().sheet_store.parked_objects(), total);
+    s.execute("qsave", &json!({})).unwrap();
+    let bytes = std::fs::read(&p).unwrap();
+    assert!(cadaddy_io::cdy::verify(&bytes).unwrap()["sizes"].get("SHTI").is_some(), "migrated on save");
+    let o = opened_on_demand(&p);
+    assert!(o.has_parked_sheets());
+    assert_eq!(cadaddy_io::read(&bytes, &p).unwrap().model.len(), total);
+    let _ = std::fs::remove_dir_all(&dir);
+}

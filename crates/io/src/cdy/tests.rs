@@ -1123,3 +1123,264 @@ fn a_header_with_one_unreadable_variable_keeps_the_others() {
     assert_eq!(said.len(), 1, "{:?}", rep.notes);
     assert!(said[0].contains("THICKNESS") && said[0].contains("PDSIZE"), "{}", said[0]);
 }
+
+// ─── A print set's sheets as sections of their own (Q6418) ────────────────────────────────────
+
+mod sheet_sections {
+    use std::sync::Arc;
+
+    use cadaddy_doc::sheetstore::{SheetRect, StoredChunk};
+    use cadaddy_doc::*;
+    use cadaddy_geom::{Bounds2, Vec2, Vec3};
+
+    use super::super::container;
+    use super::super::*;
+    use super::{no_thumb, stored};
+
+    const W: f64 = 1000.0;
+    const H: f64 = 600.0;
+
+    fn line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) -> Handle {
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) })).unwrap()
+    }
+
+    /// A made-up print set: `sheets` sheets side by side (a twentieth of a sheet apart), each with
+    /// `per` lines inside it; a model element (it carries extended data) on the first sheet; a
+    /// line across the gap between the first two. Its sheet list says where the sheets are.
+    fn set(sheets: usize, per: usize) -> Drawing {
+        let mut d = Drawing::new_imperial();
+        let mut list = Vec::new();
+        for k in 0..sheets {
+            let x0 = k as f64 * W * 1.05;
+            list.push(SheetRect { number: format!("Q-{:03}", k + 1), rect: Bounds2::new(Vec2::new(x0, 0.0), Vec2::new(x0 + W, H)) });
+            for i in 0..per {
+                let y = 10.0 + (i % 500) as f64;
+                let x = x0 + 10.0 + (i / 500) as f64 * 3.0;
+                line(&mut d, (x, y), (x + 2.0, y));
+            }
+        }
+        let el = line(&mut d, (100.0, 100.0), (300.0, 100.0));
+        d.model.modify(el, |e| e.common.xdata = vec![RawTag { code: 1001, value: "CADADDY_PROPS".into() }, RawTag { code: 1000, value: "{}".into() }].into());
+        if sheets > 1 {
+            line(&mut d, (W - 5.0, 50.0), (W * 1.05 + 5.0, 50.0));
+        }
+        d.sheet_store.sheets = Arc::new(list);
+        d
+    }
+
+    fn handles(d: &Drawing) -> Vec<Handle> {
+        let mut h: Vec<Handle> = d.model.iter().map(|e| e.handle).collect();
+        h.sort();
+        h
+    }
+
+    /// `d` read back whole, with its sheet list (which the file doesn't keep as a field) cleared
+    /// on both sides for comparing.
+    fn same_objects(a: &Drawing, b: &Drawing) {
+        assert_eq!(a.model.len(), b.model.len());
+        for e in a.model.iter() {
+            assert_eq!(b.model.get(e.handle).map(|x| &**x), Some(&**e), "object {:?}", e.handle);
+        }
+    }
+
+    fn chunk_tags(file: &[u8]) -> Vec<[u8; 4]> {
+        container::index(file).unwrap().iter().map(|e| e.tag).collect()
+    }
+
+    /// The bytes every parked chunk stores.
+    fn parked_bytes(d: &Drawing) -> Vec<Vec<u8>> {
+        d.sheet_store.parked.iter().flat_map(|p| p.chunks.iter()).map(|c| c.stored.clone()).collect()
+    }
+
+    fn contains(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[test]
+    fn a_print_set_is_written_with_a_sheet_index_an_ordinary_read_ignores() {
+        let d = set(4, 3000);
+        let file = write_cdy_checkpoint(&d).unwrap();
+        assert!(chunk_tags(&file).contains(&sheets::TAG), "the file has a sheet index");
+        // Read as before (and as a CADaddy that doesn't know the index reads it): every object.
+        let back = read_cdy(&file).unwrap();
+        assert!(back.read_notes.is_empty(), "{:?}", back.read_notes);
+        assert!(!back.sheet_store.has_parked());
+        same_objects(&d, &back);
+        // The index files each sheet's chunks under it, and nothing of the element's.
+        let e = container::index(&file).unwrap().into_iter().find(|e| e.tag == sheets::TAG).unwrap();
+        let container::Read::Ok(c) = container::read_entry(&file, &e) else { panic!("index chunk") };
+        let ix: sheets::SheetIndex = serde_json::from_slice(&c.data).unwrap();
+        assert_eq!(ix.sheets.len(), 4);
+        let filed: u64 = ix.sheets.iter().flat_map(|s| s.chunks.iter()).map(|c| c[1]).sum();
+        // A chunk holding the end of one sheet and the start of the next is written as two.
+        assert_eq!(filed, 4 * 3000, "every sheet object is filed under its sheet");
+        // An ordinary drawing has no index.
+        let plain = write_cdy_checkpoint(&super::lines(100)).unwrap();
+        assert!(!chunk_tags(&plain).contains(&sheets::TAG));
+    }
+
+    #[test]
+    fn a_parked_read_keeps_the_sheets_out_of_memory_and_the_building_model_in() {
+        let d = set(4, 3000);
+        let file = write_cdy_checkpoint(&d).unwrap();
+        let parked = read_cdy_parked(&file).unwrap();
+        assert!(parked.read_notes.is_empty(), "{:?}", parked.read_notes);
+        assert!(parked.sheet_store.has_parked());
+        assert_eq!(parked.sheet_store.parked.len(), 4);
+        // Everything is either in memory or parked, once.
+        assert_eq!(parked.model.len() + parked.sheet_store.parked_objects(), d.model.len());
+        assert_eq!(parked.model.len(), 2, "only the element and the line across two sheets are held");
+        // The element (extended data) and the line across two sheets are held.
+        let el = d.model.iter().find(|e| !e.common.xdata.is_empty()).unwrap();
+        assert!(parked.model.contains(el.handle));
+        let across = d.model.iter().last().unwrap();
+        assert!(parked.model.contains(across.handle));
+        // New handles stay clear of the parked objects'.
+        let top = d.model.iter().map(|e| e.handle.0).max().unwrap();
+        assert!(parked.handseed > top);
+        // A parked chunk decodes to the very objects saved.
+        let mut all = parked.model.clone();
+        for c in parked.sheet_store.parked.iter().flat_map(|p| p.chunks.iter()) {
+            let (items, notes) = decode_stored(c).unwrap();
+            assert!(notes.is_empty());
+            assert_eq!(items.len(), c.objects);
+            assert!(items.iter().all(|e| e.handle.0 <= c.max_handle));
+            all.push_chunk(items);
+        }
+        let mut whole = parked.clone();
+        whole.model = all;
+        whole.sheet_store = Default::default();
+        same_objects(&d, &whole);
+        assert_eq!(handles(&d), handles(&whole));
+    }
+
+    #[test]
+    fn saving_a_parked_drawing_keeps_the_sheets_byte_for_byte() {
+        let d = set(3, 2500);
+        let file = write_cdy_checkpoint(&d).unwrap();
+        let mut parked = read_cdy_parked(&file).unwrap();
+        let state = seed(&parked, &file).expect("a parked read matches its file");
+        let kept = parked_bytes(&parked);
+        assert!(!kept.is_empty());
+        // An edit to what is in memory, saved incrementally then in full.
+        let added = line(&mut parked, (5.0, 5.0), (6.0, 6.0));
+        let (out, _) = save(&parked, Some(&state), &no_thumb).unwrap();
+        let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
+        assert!(bytes.len() < file.len() / 4, "{} bytes appended of {}", bytes.len(), file.len());
+        let appended = stored(&file, &out);
+        let full = write_cdy_checkpoint(&parked).unwrap();
+        for f in [&appended, &full] {
+            for k in &kept {
+                assert!(contains(f, k), "a parked chunk is in the file as it was stored");
+            }
+            let back = read_cdy(f).unwrap();
+            assert!(back.read_notes.is_empty(), "{:?}", back.read_notes);
+            assert_eq!(back.model.len(), d.model.len() + 1);
+            assert!(back.model.contains(added));
+            for e in d.model.iter() {
+                assert_eq!(back.model.get(e.handle).map(|x| &**x), Some(&**e));
+            }
+            // Reopened parked, the sheets are parked again, the new line (on the first sheet) with them.
+            let again = read_cdy_parked(f).unwrap();
+            assert_eq!(again.sheet_store.parked_objects(), parked.sheet_store.parked_objects() + 1);
+            assert!(!again.model.contains(added));
+        }
+    }
+
+    /// Put a parked sheet's chunks back in the store as the engine does: each chunk a store chunk,
+    /// remembered as decoded from its stored one.
+    fn load(d: &mut Drawing, sheet: usize) {
+        let p = d.sheet_store.parked.get(sheet).cloned().unwrap();
+        let mut origins = (*d.sheet_store.origins).clone();
+        for c in &p.chunks {
+            let (items, _) = decode_stored(c).unwrap();
+            let r = d.model.push_one_chunk(items).unwrap();
+            origins.insert(r.key(), (r, c.clone()));
+        }
+        d.sheet_store.origins = Arc::new(origins);
+        let mut parked = (*d.sheet_store.parked).clone();
+        if let Some(p) = parked.get_mut(sheet) {
+            p.chunks.clear();
+        }
+        d.sheet_store.parked = Arc::new(parked);
+    }
+
+    #[test]
+    fn a_loaded_sheet_unchanged_is_written_as_stored_and_an_edit_to_it_is_saved() {
+        let d = set(3, 2500);
+        let file = write_cdy_checkpoint(&d).unwrap();
+        let mut opened = read_cdy_parked(&file).unwrap();
+        let state = seed(&opened, &file).unwrap();
+        let first: Vec<Arc<StoredChunk>> = opened.sheet_store.parked.first().unwrap().chunks.clone();
+        load(&mut opened, 0);
+        // Loaded and unchanged: nothing to write but the index.
+        let (out, state) = save(&opened, Some(&state), &no_thumb).unwrap();
+        let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
+        assert!(bytes.len() < 4096, "{} bytes appended for a sheet only loaded", bytes.len());
+        let file = stored(&file, &out);
+        // A full save writes it as stored too.
+        let full = write_cdy_checkpoint(&opened).unwrap();
+        for c in &first {
+            assert!(contains(&full, &c.stored));
+        }
+        // An edit to the loaded sheet is saved; the chunk it touched is written anew.
+        let h = opened.model.iter().find(|e| e.common.xdata.is_empty() && opened.sheet_store.origins.values().any(|(c, _)| c.items().iter().any(|x| x.handle == e.handle))).map(|e| e.handle).unwrap();
+        opened.model.modify(h, |e| e.common.layer = "Edited".into());
+        let (out, _) = save(&opened, Some(&state), &no_thumb).unwrap();
+        let file = stored(&file, &out);
+        let back = read_cdy(&file).unwrap();
+        assert!(back.read_notes.is_empty(), "{:?}", back.read_notes);
+        assert_eq!(back.model.get(h).map(|e| e.common.layer.as_str()), Some("Edited"));
+        assert_eq!(back.model.len(), d.model.len());
+        // Read parked again: the edited chunk is still that sheet's.
+        let again = read_cdy_parked(&file).unwrap();
+        assert_eq!(again.model.len() + again.sheet_store.parked_objects(), d.model.len());
+        assert!(again.sheet_store.parked_objects() >= opened.sheet_store.parked_objects());
+    }
+
+    #[test]
+    fn a_damaged_sheet_part_is_read_as_far_as_it_goes_and_reported() {
+        let d = set(2, 2000);
+        let mut file = write_cdy_checkpoint(&d).unwrap();
+        // Damage the second ENTS chunk's payload (a sheet's).
+        let e = container::index(&file).unwrap().into_iter().filter(|e| &e.tag == b"ENTS").nth(1).unwrap();
+        let at = e.offset as usize + container::CHUNK_HEADER_LEN + (e.len as usize) / 2;
+        file[at] ^= 0xFF;
+        let parked = read_cdy_parked(&file).unwrap();
+        assert!(parked.read_notes.iter().any(|n| n.contains("damaged")), "{:?}", parked.read_notes);
+        assert!(parked.model.len() + parked.sheet_store.parked_objects() < d.model.len());
+        // The rest of that sheet and the other sheet are parked; no panic, nothing else lost.
+        assert!(parked.sheet_store.parked_objects() > 0);
+    }
+
+    #[test]
+    fn an_index_that_does_not_match_its_file_is_not_used() {
+        let d = set(2, 1500);
+        let file = write_cdy_checkpoint(&d).unwrap();
+        let entries = container::index(&file).unwrap();
+        // The same file with one ENTS entry fewer in its index: the sheet index counts more.
+        let mut w = container::Writer::new();
+        let mut dropped = false;
+        for e in &entries {
+            if &e.tag == b"ENTS" && !dropped {
+                dropped = true;
+                continue;
+            }
+            let container::Read::Ok(c) = container::read_entry(&file, e) else { panic!() };
+            w.chunk(e.tag, e.version, &c.data, true);
+        }
+        let other = w.finish();
+        let parked = read_cdy_parked(&other).unwrap();
+        assert!(!parked.sheet_store.has_parked(), "read whole");
+        // Hostile index text never panics.
+        assert!(sheets::filing(b"", &[]).is_none());
+    }
+
+    #[test]
+    fn the_frozen_v1_sample_reads_whole_through_the_parked_reader() {
+        let bytes = include_bytes!("v1_sample.cdy");
+        let a = read_cdy(bytes).unwrap();
+        let b = read_cdy_parked(bytes).unwrap();
+        assert_eq!(a, b);
+    }
+}

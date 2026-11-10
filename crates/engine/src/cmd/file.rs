@@ -505,7 +505,14 @@ fn is_dxf(path: &str) -> bool {
 /// else through the [`write_as`] hook.
 fn write_bytes(s: &Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<u8>> {
     // A drawing file is the drawing outside the Block Editor; an image is what is shown.
-    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
+    // A print set open one sheet at a time is written whole, from a combined copy (Q6418).
+    let whole;
+    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) {
+        whole = crate::sheetstore::combined(s.state()?.drawing());
+        &whole
+    } else {
+        s.doc()?
+    };
     write_drawing(d, cmd, path, opts)
 }
 
@@ -836,6 +843,49 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
     }
 }
 
+/// [`read_file`] for the interface (Q6418): a .cdy print set is read with its sheets out of
+/// memory but the first, as stored ([`crate::sheetstore`]); anything else as [`read_file`] reads
+/// it. Needs no session; runs anywhere.
+pub fn read_file_on_demand(path: &str) -> std::result::Result<ReadFile, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let r = std::panic::catch_unwind(|| {
+            let bytes = crate::readfile::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
+            if !cadaddy_io::cdy::is_cdy(&bytes) {
+                return read_bytes(&bytes, path, Some(path.to_string()));
+            }
+            let drawing = cadaddy_io::cdy::read_cdy_parked(&bytes).map_err(|e| bad("open", e.to_string()))?;
+            let mut f = read_drawing(drawing, &bytes, path, Some(path.to_string()));
+            first_sheet_only(&mut f.drawing);
+            Ok(f)
+        });
+        match r {
+            Ok(r) => r.map_err(|e| e.to_string()),
+            Err(_) => Err(bad("open", format!("{path}: the file could not be read")).to_string()),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        Err(bad("open", "paths are not available on the web; pass `data`").to_string())
+    }
+}
+
+/// A print set read with its sheets out of memory gets its first sheet in (it opens on it), and
+/// its sheet list. One whose records name no sheet (they changed) gets everything in.
+fn first_sheet_only(d: &mut Drawing) {
+    if !d.sheet_store.has_parked() {
+        return;
+    }
+    let sheets = crate::sheetnav::print_sheets(d);
+    let notes = match sheets.first() {
+        Some(first) => crate::sheetstore::load(d, |p| p.is(&first.number, &first.rect)),
+        None => crate::sheetstore::load(d, |_| true),
+    };
+    d.read_notes.extend(notes);
+    d.sheet_store.sheets = std::sync::Arc::new(crate::sheetstore::rects_of(&sheets));
+}
+
 /// Add a [`read_file`] result to the session as the active drawing: the fast half of OPEN.
 pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     let ReadFile { drawing, binary_dxf, name, path, cdy, disk, walkthrough } = f;
@@ -865,13 +915,18 @@ pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
 fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile> {
     let hooks = io().ok_or_else(|| bad("open", "file formats are not available in this build"))?;
     let drawing = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
+    Ok(read_drawing(drawing, bytes, name, path))
+}
+
+/// A [`ReadFile`] of `drawing`, read from `bytes`.
+fn read_drawing(drawing: Drawing, bytes: &[u8], name: &str, path: Option<String>) -> ReadFile {
     // A file that isn't a drawing (an imported SVG) gives the drawing no file name: QSAVE then
     // asks where to save instead of exporting over the original.
     let path = path.filter(|p| is_drawing_file(p));
     let cdy = path.as_ref().filter(|p| is_cdy(p)).and_then(|_| cdy_hooks()).and_then(|h| (h.seed)(&drawing, bytes));
     let walkthrough = cadaddy_walk3d::package::is_package(bytes).then(|| package_lightmap(bytes));
     let disk = path.as_deref().and_then(|p| DiskId::of(p, Some(bytes)));
-    Ok(ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path, cdy, disk, walkthrough })
+    ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path, cdy, disk, walkthrough }
 }
 
 /// The baked lightmap in a walkthrough package, when it has a whole one.
@@ -1219,7 +1274,9 @@ fn save_streamed(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Resul
     #[cfg(not(target_arch = "wasm32"))]
     {
         let Some(hook) = write_streamed().filter(|_| is_dxf(path) && opts.version != Some(Version::R12)) else { return Ok(None) };
-        let Some(n) = stream_to(cmd, s.state()?.drawing(), path, opts, true, hook)? else { return Ok(None) };
+        // A print set open one sheet at a time is written whole, from a combined copy (Q6418).
+        let whole = crate::sheetstore::combined(s.state()?.drawing());
+        let Some(n) = stream_to(cmd, &whole, path, opts, true, hook)? else { return Ok(None) };
         saved_to(s, path, n, None).map(Some)
     }
     #[cfg(target_arch = "wasm32")]
@@ -1269,9 +1326,11 @@ pub(crate) fn stream_to(cmd: &str, d: &Drawing, path: &str, opts: &SaveAs, save:
 /// written and whether they were appended.
 fn save_cdy(s: &mut Session, path: &str, opts: &SaveAs) -> Result<Option<(usize, bool)>> {
     let Some(h) = cdy_hooks().filter(|_| is_cdy(path) && *opts == SaveAs::default()) else { return Ok(None) };
+    // A print set files each sheet's objects under it (Q6418).
+    let sheets = s.print_sheets();
     let st = s.state()?;
     let prev = st.cdy_saved.as_ref().filter(|c| c.holds(path)).map(|c| c.state.clone());
-    let d = st.drawing().clone();
+    let d = crate::sheetstore::with_sheet_list(st.drawing(), &sheets);
     let (out, mut state) = (h.save)(&d, prev.as_ref()).map_err(|e| bad("save", e))?;
     let (n, incremental) = match out {
         CdyWrite::Append { from, bytes, index_at } => match commit_save(s, path, &bytes, |p, b| append_cdy(p, from, b, index_at)) {

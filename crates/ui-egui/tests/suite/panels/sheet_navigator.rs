@@ -144,6 +144,70 @@ fn an_ordinary_drawing_is_drawn_whole() {
 }
 
 /// The median of `f`'s times over `n` runs, ms.
+/// An app with nothing open, as it starts.
+fn empty_app() -> Harness<'static, CadApp> {
+    let app = CadApp::new(Session::new(), Services::default());
+    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
+        |ui, app: &mut CadApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h
+}
+
+/// Frames until `done` holds (a background read or load finishing), at most a minute.
+fn frames_until(h: &mut Harness<'_, CadApp>, done: impl Fn(&CadApp) -> bool) {
+    let t = Instant::now();
+    while !done(h.state()) && t.elapsed().as_secs() < 60 {
+        h.state_mut().wait_for_work(std::time::Duration::from_millis(20));
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(3);
+}
+
+/// The test that failed before sheets loaded on demand (Q6418): a print set opened from a .cdy
+/// file held every sheet's objects to show one. Only what the app had then is used: the file is
+/// written as any drawing is, and opened as a person opens it.
+#[test]
+fn a_print_set_opened_from_a_file_holds_its_open_sheet_not_the_whole_set() {
+    let set = sample::print_set(6, 1500);
+    let total = set.model.len();
+    let dir = std::env::temp_dir().join(format!("cadaddy-sheetload-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Sample Set.cdy").to_string_lossy().into_owned();
+    std::fs::write(&path, cadaddy_io::write(&set, &path).unwrap()).unwrap();
+    let mut h = empty_app();
+    let before = h.state().session.docs.len();
+    h.state_mut().open_path(&path);
+    frames_until(&mut h, |app| app.session.docs.len() > before && app.session.active_sheet().is_some() && app.work_running().is_none());
+    let app = h.state();
+    let held = app.session.doc().unwrap().model.len();
+    assert!(held < total / 2, "{held} of the set's {total} objects held to show one sheet of six");
+    // What is drawn is the open sheet, all of it.
+    let first = region(&set, 0);
+    let want: BTreeSet<Handle> = set.model.iter().filter(|e| entity_bounds(&set, e, 0).intersects(&first)).map(|e| e.handle).collect();
+    let shown: BTreeSet<Handle> = app.session.view_doc().unwrap().model.iter().map(|e| e.handle).collect();
+    assert_eq!(shown, want);
+    // Page Down opens the next sheet: it comes into memory, the set never does.
+    key(&mut h, Key::PageDown);
+    frames_until(&mut h, |app| app.session.active_sheet().map(|(i, _)| i) == Some(1) && app.work_running().is_none());
+    let app = h.state();
+    let second = region(&set, 1);
+    let want: BTreeSet<Handle> = set.model.iter().filter(|e| entity_bounds(&set, e, 0).intersects(&second)).map(|e| e.handle).collect();
+    let shown: BTreeSet<Handle> = app.session.view_doc().unwrap().model.iter().map(|e| e.handle).collect();
+    assert_eq!(shown, want, "the second sheet is drawn whole");
+    assert!(app.session.doc().unwrap().model.len() < total / 2);
+    // A command that counts the whole set loads it first, and counts it all.
+    let r = h.state_mut().run("entities", json!({"limit": 1})).unwrap();
+    assert_eq!(r["count"], json!(total));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn median_ms(n: usize, mut f: impl FnMut()) -> f64 {
     let mut t: Vec<f64> = (0..n)
         .map(|_| {

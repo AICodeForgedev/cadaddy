@@ -552,6 +552,36 @@ impl EntityStore {
         }
         self.split_index();
     }
+    /// [`EntityStore::push_chunk`] of one chunk's worth of new objects (at most the chunk size,
+    /// none already here): the chunk made, to tell later whether it is still the same. `None`
+    /// when the objects didn't make exactly one new chunk.
+    pub fn push_one_chunk(&mut self, items: Vec<Entity>) -> Option<ChunkRef> {
+        let fits = !items.is_empty() && items.len() <= CHUNK_MAX && !items.iter().any(|e| self.contains(e.handle));
+        let before = self.chunks.len();
+        self.push_chunk(items);
+        if !fits || self.chunks.len() != before.saturating_add(1) {
+            return None;
+        }
+        self.chunks.last().cloned().map(ChunkRef)
+    }
+    /// Take the chunks `take` picks out of the store whole (out of the draw order and the handle
+    /// index), in draw order.
+    pub fn take_chunks(&mut self, take: impl Fn(&ChunkRef) -> bool) -> Vec<ChunkRef> {
+        let mut out = Vec::new();
+        let mut keep = Vec::with_capacity(self.chunks.len());
+        for c in std::mem::take(&mut self.chunks) {
+            let r = ChunkRef(c);
+            if take(&r) { out.push(r) } else { keep.push(r.0) }
+        }
+        self.chunks = keep;
+        for r in &out {
+            for e in r.items() {
+                self.set_index(e.handle, None);
+            }
+            self.len = self.len.saturating_sub(r.items().len());
+        }
+        out
+    }
     /// True when `other` shares every chunk with `self` (same draw order, same entities). Holding
     /// a clone of a store makes this exact: any edit to the original copies the touched chunk.
     pub fn same_as(&self, other: &EntityStore) -> bool {
