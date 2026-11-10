@@ -157,7 +157,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "report", "status", "plant"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and stops with a question at each checkpoint: confirm a scale, name a room, identify an unknown symbol, spot-check a count. The job waits until the question is answered; an answer that changes what a stage read runs that stage (and the ones after it) again and says what changed. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\", auto?: true} — create a job; auto: true takes every default and runs to the end (a stage that found nothing is still asked).\n- next {} — the next question (or done/progress).\n- answer {id: \"Q-rooms-23\", answer: \"Correct\"} — answer a question (ids come from next: Q-<stage>-<n>); the pipeline resumes (reply: effect, rerun, changed). Many at once: {answers: [{id, answer}, …]} — each stands alone (an unknown or merged id is a warning, the rest are kept) and the stages they change run again once. A level question takes an elevation (\"12'-6\\\"\" or {elevation_ft: 12.5, name: \"Mezzanine\"}). Each question's if_changed says what an answer other than the default runs again and about how long.\n- set_mode {auto: true} — run the job on unattended from here (answers given are kept); auto: false makes it stop at checkpoints again.\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "set_mode", "status", "explain", "rules", "report", "worklist", "undo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\"), \"casework\" reads the open architectural floor plan's casework and plumbing fixtures with their schedule: each item's tag, kind, 3D family, position, height, source (sheet, schedule) and status (schedule / note / pattern / tag), paged by cursor and limit; place: true makes each item with a family that model.",
+        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\"); one element at a time, kept through the documents being read again and every rebuild (each change a correction with the documents' value beside it): \"add\" (mep.add: a duct or pipe run, joined from an existing run's end or a unit with from: {run: \"R1\"}; an air terminal or sprinkler head; a piece of equipment with tag, kind, at, size_ft, height_ft), \"move\" (delta_ft: [dx, dy] or to, bottom_ft), \"resize\" (size_in; equipment size_ft, height_ft), \"delete\", \"set\" (type_mark, new_system, kind, properties), each naming its element by handle, run, tag, edit or element + level + at; \"edits\" lists them (applied or orphaned) and revert: \"ME-3\" takes one back; \"casework\" reads the open architectural floor plan's casework and plumbing fixtures with their schedule: each item's tag, kind, 3D family, position, height, source (sheet, schedule) and status (schedule / note / pattern / tag), paged by cursor and limit; place: true makes each item with a family that model.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
             "level": {"type": "string"}, "system": {"type": "string"}, "guessed_only": {"type": "boolean"},
@@ -169,7 +169,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "edited_by": {"type": "string", "description": "who made this edit (default \"agent\")"},
             "rebuild": {"type": "boolean"},
             "place": {"type": "boolean", "description": "casework action: place the 3D family of each read item"},
-            "kind": {"type": "string", "description": "casework action: only this kind (e.g. \"vanity\", \"water_closet\")"},
+            "kind": {"type": "string", "description": "casework action: only this kind (e.g. \"vanity\", \"water_closet\"); add/set: the terminal's or unit's kind"},
             "sheet": {"type": "string", "description": "casework action: the sheet number to record as the source"}
         }}}),
         json!({"name": "import_check", "description": "Check the quality of a PDF-imported drawing: scale, layers, text recovery, fills, symbols, grid. Returns pass/fail, a score (0-100), per-check results with evidence for zoom-to, and hard-fail IDs (SCALE, FILLS, SYMBOLS each fail on their own). Optionally check a file by path without opening it.",
@@ -201,6 +201,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         json!({"name": "job_status", "description": "Check on background operations. Returns whether CADaddy is busy and what it is doing (opening files, building models, rendering). Long commands like bim.from_pdf and model.build report progress here. Use wait_until_idle to block until done.",
             "inputSchema": {"type": "object", "properties": {"id": {"type": "string", "description": "job id (omit to see all)"}}}}),
     ];
+    mep_edit_properties(&mut tools);
     if has_ui {
         tools.push(json!({"name": "screenshot", "description": "Screenshot the CADaddy window (PNG).", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}));
         tools.push(json!({"name": "ui_inspect", "description": "UI state: panels, canvas rect, view, cursor and snap, performance.", "inputSchema": {"type": "object", "properties": {}}}));
@@ -213,6 +214,45 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         tools.push(json!({"name": "ui_click", "description": "Click in the drawing area at world coordinates (or screen with space:\"screen\"). Right button = Enter.", "inputSchema": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "space": {"type": "string"}, "button": {"type": "string"}}, "required": ["x", "y"]}}));
     }
     json!({ "tools": tools })
+}
+
+/// The `mep` tool's parameters for one element at a time (mep.add, mep.move, mep.resize,
+/// mep.delete, mep.set, mep.edits), apart from its literal (one `json!` that large overflows the
+/// macro's recursion).
+fn mep_edit_properties(tools: &mut [Value]) {
+    let Some(props) = tools.iter_mut().find(|t| t["name"] == "mep").and_then(|t| t["inputSchema"]["properties"].as_object_mut()) else { return };
+    let text = |d: &str| json!({"type": "string", "description": d});
+    let pair = |d: &str| json!({"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": d});
+    let more = [
+        ("handle", text("add/move/resize/delete/set: the built element (hex handle)")),
+        ("run", text("add/move/resize/delete/set: a run by its stable id")),
+        ("tag", text("equipment by its tag (add: the new unit's tag)")),
+        ("edit", text("an element an earlier add put in, by that edit's id (\"ME-2\")")),
+        ("element", text("add: run|duct|pipe|terminal|diffuser|register|grille|sprinkler|equipment; with level and at, the element nearest there")),
+        ("at", pair("drawing units: a terminal's or unit's place, or where to find an element")),
+        (
+            "points",
+            json!({"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "add run: its path, drawing units"}),
+        ),
+        ("from", json!({"type": "object", "description": "add: what the new run starts on ({run}, {tag}, {handle}, {edit}; end: start|end)"})),
+        ("to", json!({"description": "add: what the new run ends on (as from); move: [x, y] where it goes"})),
+        ("delta_ft", pair("move: by how much, feet")),
+        ("size_ft", pair("equipment plan size, feet")),
+        ("height_ft", json!({"type": "number"})),
+        ("type_mark", text("set: equipment's type mark")),
+        ("new_system", text("set: a run's or terminal's new system")),
+        ("properties", json!({"type": "object", "description": "set: name → value (null removes one of equipment's)"})),
+        ("systems", json!({"type": "array", "items": {"type": "string"}})),
+        ("made", text("add: drawn|derived|inferred (default inferred)")),
+        ("basis", text("add: why it is there")),
+        ("reason", text("why: kept with the correction")),
+        ("by", text("user or agent")),
+        ("revert", text("edits action: the edit to take back")),
+        ("status", text("edits action: applied|orphaned")),
+    ];
+    for (k, v) in more {
+        props.insert(k.to_string(), v);
+    }
 }
 
 /// A new session picks up the job kept last (Q5276): when no print set is open and the drawing
@@ -921,6 +961,12 @@ fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> 
             } else {
                 let command = match a.get("action").and_then(Value::as_str) {
                     Some("edit") => "mep.edit",
+                    Some("add") => "mep.add",
+                    Some("move") => "mep.move",
+                    Some("resize") => "mep.resize",
+                    Some("delete") => "mep.delete",
+                    Some("set") => "mep.set",
+                    Some("edits") => "mep.edits",
                     _ => "mep.list",
                 };
                 let mut params = a.clone();

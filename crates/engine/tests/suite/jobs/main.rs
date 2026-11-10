@@ -55,6 +55,7 @@ mod liverecord;
 mod mep3d;
 mod mepatoms;
 mod mepduct_build;
+mod mepedit;
 mod mepfix_wholejob;
 mod meppipe_build;
 mod mepreview;
