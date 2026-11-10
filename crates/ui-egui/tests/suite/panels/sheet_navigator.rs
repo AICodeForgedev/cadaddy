@@ -55,6 +55,26 @@ fn key(h: &mut Harness<'_, CadApp>, k: Key) {
     h.run_steps(3);
 }
 
+/// Where the job's records put sheet `i` (read from them, as a reader of the file would).
+fn region(d: &cadaddy_engine::doc::Drawing, i: usize) -> Bounds2 {
+    let v: serde_json::Value = serde_json::from_str(d.agent.as_deref().unwrap()).unwrap();
+    let r: Vec<f64> = v["guided_job"]["sheet_regions"][i]["rect"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+    Bounds2::new(Vec2::new(r[0], r[1]), Vec2::new(r[2], r[3]))
+}
+
+/// The test that failed before the sheet navigator: opening a print set drew every sheet, and
+/// Page Down did nothing. Only what the app had then is used.
+#[test]
+fn opening_a_print_set_draws_its_first_sheet_and_page_down_the_next() {
+    let set = sample::print_set(3, 120);
+    let (first, second) = (region(&set, 0), region(&set, 1));
+    let mut h = harness(set);
+    assert_eq!(drawn(h.state()), on(h.state(), &first), "only the first sheet's objects are drawn");
+    key(&mut h, Key::PageDown);
+    assert_eq!(drawn(h.state()), on(h.state(), &second), "Page Down: only the second sheet's");
+    assert!(second.contains(h.state().session.state().unwrap().view().center));
+}
+
 #[test]
 fn a_print_set_opens_on_its_first_sheet_and_draws_only_it() {
     let mut h = harness(sample::print_set(3, 120));
