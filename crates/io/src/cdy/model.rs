@@ -25,13 +25,14 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use cadaddy_doc::foreign::{Foreign, ForeignExtra, ForeignObject};
 use cadaddy_doc::{Block, Drawing, Entity, EntityStore, Handle, Layout, RawTag};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use web_time::Instant;
 
 use super::container::{self, Read};
 use super::tokens;
