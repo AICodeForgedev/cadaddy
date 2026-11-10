@@ -3,7 +3,8 @@
 //!
 //! `get_temp` clones what it reads: a palette holding a command's answer about the whole model
 //! (the Model Tree, a job's findings, a sheet list) copied it and dropped the old copy on every
-//! frame, ~7 ms a frame on a hotel-size model in the Coordination palette, more on a slow laptop.
+//! frame, ~7 ms a frame with a model of about a million objects in the Coordination palette,
+//! more on a slow laptop.
 //! [`take`] removes the value from egui's memory and [`put`] puts it back, both moves.
 //!
 //! Between the two nothing else may read the value: a palette takes its own state once at the top
