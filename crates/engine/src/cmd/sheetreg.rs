@@ -350,7 +350,13 @@ impl SheetLines {
         let (s, t, score, margin) =
             super::grids::linework_fit_part(src, tgt, self.k_in, drawn, drawn).ok_or_else(|| format!("drawn off its scale: no fit at {:.3}", off))?;
         if score < OFF_SCALE_F1 || margin < OFF_SCALE_MARGIN {
-            return Err(format!("drawn off its scale: at {:.3} {:.0}% on the plan, {:.0} points over the next ({})", off, score * 100.0, margin * 100.0, weighed()));
+            return Err(format!(
+                "drawn off its scale: at {:.3} {:.0}% on the plan, {:.0} points over the next ({})",
+                off,
+                score * 100.0,
+                margin * 100.0,
+                weighed()
+            ));
         }
         let sim = Sim::scale_offset(s, [t.x, t.y]);
         if !sim.is_finite() {
