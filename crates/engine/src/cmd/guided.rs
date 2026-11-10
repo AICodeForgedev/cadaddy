@@ -4050,6 +4050,8 @@ fn finish_tag(r: &Value) -> bool {
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
+    // A roof plan makes no rooms: its labels are roof areas, canopies and notes (Q6285).
+    let roof = roof_plan_test(job);
     // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
     // one reading traces: the last floors were left out).
     // (A level's floor plan, not its finish or furniture plan: those print the floor again with
@@ -4058,10 +4060,28 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         let of: Vec<&SheetRegion> = job
             .sheet_regions
             .iter()
-            .filter(|r| r.kind == "plan" && r.not_built.is_empty() && (!arch_only || r.discipline.eq_ignore_ascii_case("A")))
+            .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !roof(r) && (!arch_only || r.discipline.eq_ignore_ascii_case("A")))
             .collect();
         floor_plans_first(job, of).into_iter().map(SheetRegion::plan_rect).collect()
     };
+    // The plans no room is read on, and why: a floor plan with no level reads none (its rooms
+    // would be on no floor), a roof plan none.
+    let not_read: Vec<Value> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.kind == "plan")
+        .filter_map(|r| {
+            let why = if !r.not_built.is_empty() {
+                format!("the sheet is not built ({})", r.not_built)
+            } else if roof(r) {
+                "a roof plan makes no rooms".to_string()
+            } else {
+                return None;
+            };
+            Some(json!({"sheet": r.number, "level": r.level, "discipline": r.discipline, "why": why}))
+        })
+        .take(MAX_QUESTIONS_PER_STAGE)
+        .collect();
     // Rooms come from the architectural floor plans: other trades' plans show the same rooms
     // again (and phantom ones). Any plan when the set has no architectural ones.
     let regions = Some(plans(true)).filter(|r| !r.is_empty()).unwrap_or_else(|| plans(false));
@@ -4084,7 +4104,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let others: Vec<[f64; 4]> = job
         .sheet_regions
         .iter()
-        .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !r.discipline.eq_ignore_ascii_case("A"))
+        .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !roof(r) && !r.discipline.eq_ignore_ascii_case("A"))
         .filter(|r| !non_building.contains(&r.discipline.to_ascii_uppercase().as_str()))
         .map(SheetRegion::plan_rect)
         .collect();
@@ -4148,7 +4168,13 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
     let dropped = rooms_off_the_building(job, &mut rooms_result);
+    if !not_read.is_empty() {
+        progress_line(&format!("  plans no room is read on: {}", not_read.len()));
+    }
     if let Some(o) = rooms_result.as_object_mut() {
+        if !not_read.is_empty() {
+            o.insert("plans_not_read".into(), json!(not_read));
+        }
         o.insert("not_rooms".into(), dropped);
         if let Some(n) = o.get("rooms").and_then(Value::as_array).map(Vec::len) {
             o.insert("count".into(), json!(n));
@@ -4380,6 +4406,26 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Rooms), Some(json!({"rooms_found": room_count})));
     Ok(rooms_result)
+}
+
+/// Whether a sheet region is a roof plan of a building with storeys under it: every level it
+/// covers is a roof ([`cadaddy_walk3d::levels::DatumKind::Roof`]: `R`, `ROOF`, `LOW ROOF`) and
+/// the job's plans give more than one level. A set of one level named so is still a storey
+/// (as the build has it, [`super::wallgen::roof_level`]).
+fn roof_plan_test(job: &GuidedJob) -> impl Fn(&SheetRegion) -> bool + use<> {
+    let is_roof = |l: &str| cadaddy_walk3d::levels::canonical_level(l).is_some_and(|(_, k)| k == cadaddy_walk3d::levels::DatumKind::Roof);
+    let levels: BTreeSet<String> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.kind == "plan" && r.not_built.is_empty())
+        .flat_map(SheetRegion::all_levels)
+        .map(|l| level_name(&l).to_ascii_uppercase())
+        .collect();
+    let storeys = levels.len() > 1;
+    move |r: &SheetRegion| {
+        let all = r.all_levels();
+        storeys && !all.is_empty() && all.iter().all(|l| is_roof(l))
+    }
 }
 
 /// Statements of the key count read at most (every text of a print set is looked at).
@@ -7674,6 +7720,35 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let stacked = number_stacked_rooms(s)?;
     if stacked > 0 {
         progress_line(&format!("  rooms numbered from the same room on another floor: {stacked}"));
+    }
+    // Every room the rooms stage kept with an outline is in the model: the build's own trace
+    // missed some (Q6285: 16 of 167 built); those are built from the stage's trace, and one that
+    // can't be is reported with why.
+    let (from_trace, not_built) = build_kept_rooms(s, job, shells.as_deref())?;
+    if from_trace > 0 || !not_built.is_empty() {
+        progress_line(&format!(
+            "  rooms read but missed by the build's trace: {from_trace} built from the rooms stage's trace, {} not built",
+            not_built.len()
+        ));
+    }
+    if from_trace > 0 {
+        result["rooms_built_from_trace"] = json!(from_trace);
+    }
+    if !not_built.is_empty() {
+        let mut why: BTreeMap<String, usize> = BTreeMap::new();
+        for r in &not_built {
+            *why.entry(r.get("why").and_then(Value::as_str).unwrap_or("").to_string()).or_default() += 1;
+        }
+        job.add_finding(
+            StageName::BimBuild,
+            "Rooms read but not built",
+            &format!("{} rooms the rooms stage kept with an outline are not in the model: {why:?}", not_built.len()),
+            2,
+            vec!["See bim_build rooms_not_built for each room and why".into()],
+            None,
+            false,
+        );
+        result["rooms_not_built"] = json!(not_built);
     }
     let t = web_time::Instant::now();
     if let Some(v) = placed {
@@ -25944,6 +26019,105 @@ fn building_shells(
     (shells, circulation)
 }
 
+/// The most rooms the rooms stage kept that are checked against the model (and reported).
+const MAX_KEPT_ROOMS: usize = 5_000;
+/// The share of the smaller box two rooms' boxes must overlap to be one room.
+const SAME_ROOM_OVERLAP: f64 = 0.5;
+
+/// Each room the rooms stage kept with an outline (not another trade's, not one taken from the
+/// model) that no room element of its level is: none with its number, none holding its label's
+/// point or the middle of its outline, none overlapping it by [`SAME_ROOM_OVERLAP`]. Each is built
+/// from the stage's trace on its level (stacked as the level is), its basis in its tags; one that
+/// can't be is listed with why: its plan has no level, its level is not the model's, it lies
+/// outside its level's exterior walls, or its outline makes no floor. How many were built, and
+/// the ones not built (`name`, `number`, `level`, `sheet`, `why`).
+fn build_kept_rooms(s: &mut Session, job: &GuidedJob, shells: Option<&[(String, Vec<[cadaddy_geom::Vec2; 2]>)]>) -> Result<(usize, Vec<Value>)> {
+    let read: Vec<Value> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok((0, Vec::new())) };
+    let pt = |v: &Value| Some(cadaddy_geom::Vec2::new(v.get(0)?.as_f64()?, v.get(1)?.as_f64()?)).filter(|p| p.is_finite());
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let bounds = |o: &[cadaddy_geom::Vec2]| cadaddy_geom::Bounds2::from_points(o.iter().copied());
+    let overlap = |a: &cadaddy_geom::Bounds2, b: &cadaddy_geom::Bounds2| {
+        let w = (a.max.x.min(b.max.x) - a.min.x.max(b.min.x)).max(0.0);
+        let h = (a.max.y.min(b.max.y) - a.min.y.max(b.min.y)).max(0.0);
+        let least = (a.width() * a.height()).min(b.width() * b.height());
+        least > 0.0 && w * h >= SAME_ROOM_OVERLAP * least
+    };
+    // The model's rooms of each level, back on their level's plan (the levels stacked).
+    let offsets = super::bimlook::stack_offsets(s.doc()?);
+    let offset = |level: &str| offsets.iter().find(|(l, _)| l.eq_ignore_ascii_case(level)).map_or(cadaddy_geom::Vec2::new(0.0, 0.0), |o| o.1);
+    let mut model: Vec<(String, Option<String>, Vec<cadaddy_geom::Vec2>)> = super::bspec::room_elements(s.doc()?)
+        .into_iter()
+        .map(|m| {
+            let off = offset(&m.level);
+            (m.level, m.number, m.outline.iter().map(|p| *p - off).collect())
+        })
+        .collect();
+    let (mut built, mut not_built) = (0, Vec::new());
+    for r in read
+        .iter()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true) && r.get("from_model").and_then(Value::as_bool) != Some(true))
+        .take(MAX_KEPT_ROOMS)
+    {
+        let outline: Vec<cadaddy_geom::Vec2> = r.get("outline").and_then(Value::as_array).into_iter().flatten().filter_map(pt).collect();
+        if outline.len() < 3 {
+            continue;
+        }
+        let (name, number, level, sheet) = (text(r, "name"), text(r, "number"), text(r, "level"), text(r, "sheet"));
+        let at = r.get("at").and_then(pt).unwrap_or_else(|| bounds(&outline).center());
+        let mut report = |why: String| not_built.push(json!({"name": name, "number": number, "level": level, "sheet": sheet, "why": why}));
+        if level.is_empty() {
+            report("its plan has no level".into());
+            continue;
+        }
+        let Some(spec_level) = sp.level(&level).map(|l| l.name.clone()) else {
+            report(format!("level {level} is not a level of the model"));
+            continue;
+        };
+        let off = offset(&spec_level);
+        let b = bounds(&outline);
+        let middle = b.center();
+        let have = model.iter().filter(|(l, _, _)| l.eq_ignore_ascii_case(&spec_level)).any(|(_, n, o)| {
+            (!number.is_empty() && n.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(&number)))
+                || cadaddy_geom::point_in_polygon(o, at)
+                || cadaddy_geom::point_in_polygon(o, middle)
+                || overlap(&bounds(o), &b)
+        });
+        if have {
+            continue;
+        }
+        let outside = shells
+            .and_then(|sh| sh.iter().find(|(l, _)| l.eq_ignore_ascii_case(&spec_level)))
+            .is_some_and(|(_, rects)| !rects.iter().any(|[a, z]| middle.x >= a.x && middle.x <= z.x && middle.y >= a.y && middle.y <= z.y));
+        if outside {
+            report(format!("outside the exterior walls of {spec_level}"));
+            continue;
+        }
+        let shown = if name.is_empty() { format!("Room {number}") } else { name.clone() };
+        let mut extra = vec![
+            format!("name_source:the rooms stage's trace round its label on {sheet}"),
+            format!("basis:drawn: the closed outline round the room's label on {sheet}; the build's own trace did not find it"),
+        ];
+        if !number.is_empty() {
+            extra.insert(0, format!("number:{number}"));
+        }
+        match super::bspec::add_room_element(s.doc_mut()?, &sp, &spec_level, &outline, &shown, off, &extra) {
+            Some(_) => {
+                built += 1;
+                model.push((spec_level, (!number.is_empty()).then(|| number.clone()), outline));
+            }
+            None => report("its outline makes no floor of the level".into()),
+        }
+    }
+    Ok((built, not_built))
+}
+
 /// Removes the room elements whose middle is outside their level's shell (the levels stacked:
 /// back to the level's own plan first); how many.
 fn drop_rooms_outside_shell(s: &mut Session, shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)]) -> Result<usize> {
@@ -33371,6 +33545,94 @@ mod tests {
         assert_eq!(shell_holds_rooms(&half, &rooms), (false, 5));
         assert_eq!(shell_holds_rooms(&whole, &rooms), (true, 10));
         assert_eq!(shell_holds_rooms(&half, &[]), (true, 0));
+    }
+
+    /// Q6285: every room the rooms stage kept with an outline is in the model after the build:
+    /// one the build's trace missed is built from the stage's trace; one that can't be is
+    /// reported with why.
+    #[test]
+    fn a_kept_room_the_build_missed_is_built_or_reported_with_why() {
+        let mut s = Session::empty();
+        s.execute("new", &json!({})).unwrap();
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(
+            &json!({
+                "units_per_foot": 12.0,
+                "levels": [
+                    {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "attr": "1"},
+                    {"name": "Level 2", "elevation_ft": 10, "height_ft": 10, "attr": "2"},
+                ],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
+        let v = cadaddy_geom::Vec2::new;
+        let square = |x: f64, y: f64| vec![v(x, y), v(x + 144.0, y), v(x + 144.0, y + 144.0), v(x, y + 144.0)];
+        // The build made room 101 (traced from its own label, a little off the stage's trace).
+        let built = super::super::bspec::add_room_element(
+            s.doc_mut().unwrap(),
+            &sp,
+            "Level 1",
+            &square(2.0, 2.0),
+            "OFFICE",
+            v(0.0, 0.0),
+            &["number:101".to_string()],
+        );
+        assert!(built.is_some());
+        let room = |name: &str, number: &str, level: &str, x: f64| {
+            let o: Vec<[f64; 2]> = square(x, 0.0).iter().map(|p| [p.x, p.y]).collect();
+            json!({"name": name, "number": number, "level": level, "sheet": "A-1", "at": [x + 20.0, 70.0], "outline": o})
+        };
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let mut trade = room("JANITOR", "105", "1", 600.0);
+        trade["other_trade"] = json!(true);
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [
+                room("OFFICE", "101", "1", 0.0),
+                room("STORAGE", "102", "1", 200.0),
+                room("LOBBY", "", "", 400.0),
+                room("SUITE", "701", "7", 400.0),
+                room("LAUNDRY", "", "1", 2000.0),
+                trade,
+            ]}));
+        }
+        let shells = vec![("Level 1".to_string(), vec![[v(0.0, 0.0), v(1000.0, 1000.0)]])];
+        let (n, not_built) = build_kept_rooms(&mut s, &job, Some(&shells)).unwrap();
+        assert_eq!(n, 1, "STORAGE built from its trace");
+        let rooms = super::super::bspec::room_elements(s.doc().unwrap());
+        let mut got: Vec<(String, Option<String>)> = rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+        got.sort();
+        assert_eq!(got, vec![("OFFICE".to_string(), Some("101".to_string())), ("STORAGE".to_string(), Some("102".to_string()))]);
+        let why: Vec<(String, String)> =
+            not_built.iter().map(|r| (r["name"].as_str().unwrap_or("").to_string(), r["why"].as_str().unwrap_or("").to_string())).collect();
+        assert_eq!(
+            why,
+            vec![
+                ("LOBBY".to_string(), "its plan has no level".to_string()),
+                ("SUITE".to_string(), "level 7 is not a level of the model".to_string()),
+                ("LAUNDRY".to_string(), "outside the exterior walls of Level 1".to_string()),
+            ]
+        );
+        // Asked again: nothing more to build (the rooms are in the model now).
+        let (again, _) = build_kept_rooms(&mut s, &job, Some(&shells)).unwrap();
+        assert_eq!(again, 0);
+    }
+
+    #[test]
+    fn a_roof_plan_reads_no_rooms_but_a_one_level_set_named_roof_does() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions.push(region("A-101", "1", "A", "plan", 0.0));
+        job.sheet_regions.push(region("A-102", "2", "A", "plan", 200.0));
+        job.sheet_regions.push(region("A-103", "R", "A", "plan", 400.0));
+        job.sheet_regions.push(region("A-104", "LOW ROOF", "A", "plan", 600.0));
+        let roof = roof_plan_test(&job);
+        let roofs: Vec<&str> = job.sheet_regions.iter().filter(|r| roof(r)).map(|r| r.number.as_str()).collect();
+        assert_eq!(roofs, ["A-103", "A-104"]);
+        // One level, named so: still the building's storey.
+        let mut one = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        one.sheet_regions.push(region("A-1", "ROOF", "A", "plan", 0.0));
+        let roof = roof_plan_test(&one);
+        assert!(one.sheet_regions.iter().all(|r| !roof(r)));
     }
 
     #[test]
