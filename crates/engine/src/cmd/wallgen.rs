@@ -3845,9 +3845,10 @@ const MAX_FRAME_CANDIDATES: usize = 200_000;
 /// within the gap's extent and its centreline within the walls' depth, and a line of the level's
 /// (`lines`) is drawn strictly between the walls' faces across the gap ([`glazed`]: the frame's
 /// glazing or sill line, or two glazing lines from jamb to jamb paired up themselves). Every pair
-/// of `cands` in line lying wholly within such a gap's extent, its faces in the wall's depth or a
-/// sill's projection past it ([`FRAME_SILL_IN`]), is the window's (its frame's outline, an inner
-/// frame inset from the jambs, the frame paired with a sill, a sill's or stool's outline). The walls either
+/// of `cands` in line lying wholly within such a gap's extent, a face of it in the wall's depth or
+/// both within a sill's projection past it ([`FRAME_SILL_IN`]), is the window's (its frame's
+/// outline, an inner frame inset from the jambs, the frame paired with a sill, a sill's or a
+/// stool's outline). The walls either
 /// side must be walls: not themselves such a piece between two others (`hosts_are_cands`: the
 /// same list), so a facade of short piers drawn with lines inside them between windows keeps its
 /// piers. A wall piece in line with nothing inside it, and the pairs of a line running on past
@@ -4011,9 +4012,12 @@ fn frames_in_gaps(
                     p0.min(p1) >= -reach && p0.max(p1) <= len + reach
                 })
             });
-            // Its faces in the wall's depth or a sill's projection past its face: the frame's
-            // lines, and a sill's, a stool's or trim's.
-            let framed = c.faces.iter().all(|&f| faces.get(f).is_some_and(|s| n.dot(s.a.mid(s.b) - a).abs() <= t / 2.0 + sill));
+            // A face of it in the wall's depth (a frame line, paired with another of the window's
+            // lines however far out), or both within a sill's projection past its face (a sill's,
+            // a stool's or trim's outline).
+            let off = |f: usize| faces.get(f).map(|s| n.dot(s.a.mid(s.b) - a).abs());
+            let framed = c.faces.iter().any(|&f| off(f).is_some_and(|o| o <= t / 2.0 + tol))
+                || c.faces.iter().all(|&f| off(f).is_some_and(|o| o <= t / 2.0 + sill));
             if inside
                 && framed
                 && let Some(x) = out.get_mut(ci)
