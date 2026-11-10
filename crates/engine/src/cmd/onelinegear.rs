@@ -1232,7 +1232,7 @@ pub(crate) fn build_into(sp: &mut BuildingSpec, pages: &[(String, cadaddy_doc::D
     let tags = tags_for(&gear, sp);
     let all_links = connections(&gear, &tags, &page_of);
     // A piece printing no rating takes the rating of the gear it feeds, down its line (the CT
-    // cabinet and the service disconnect of a 2000 A service are its rating).
+    // cabinet and the disconnect of a service carry the service's rating).
     for i in 0..gear.len() {
         let Some(g) = gear.get(i) else { continue };
         if g.rated || g.kind == "electrode" || g.amps.is_some() || g.kva.is_some() {
