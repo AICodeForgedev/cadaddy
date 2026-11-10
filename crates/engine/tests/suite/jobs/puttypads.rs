@@ -207,8 +207,21 @@ fn switching_the_choice_replaces_only_the_affected_boxes() {
         &json!({"domain": "clearance", "key": "rated_wall_boxes", "value": "putty pads", "tier": "rfi", "source": "RFI 12", "reason": "answered"}),
     )
     .expect("rule");
-    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let r = s.execute("conduit.reroute", &json!({})).expect("reroute");
+    assert_eq!(r["box_clearance"]["ratedWallRemedy"], json!("putty pads"), "{r}");
+    assert_eq!(r["box_clearance"]["devicesPutBack"], json!(1), "{r}");
+    assert!(r["box_clearance"]["ratedWallRemedySource"].as_str().is_some_and(|s| s.contains("RFI 12")), "{r}");
     let after = receptacles(&s);
+    // The one that never moved is where it was.
+    for (h, c, ps) in before.iter().filter(|d| d.2.get("design:location").is_none()) {
+        let now = after.iter().find(|a| a.0 == *h).map(|a| a.1).unwrap_or([f64::NAN; 2]);
+        assert!(
+            (now[0] - c[0]).hypot(now[1] - c[1]) < 1e-6,
+            "device {} moved {c:?} -> {now:?} ({:?})",
+            h.hex(),
+            ps.get("location").map(|p| p.text())
+        );
+    }
     for (h, c, ps) in &after {
         assert!(ps.get("design:location").is_none(), "device {} still moved: {:?}", h.hex(), ps.get("correction:location").map(|p| p.text()));
         assert!((c[1] - 60.0).abs() < 1.0, "device {} at y {}", h.hex(), c[1]);
