@@ -75,6 +75,8 @@ struct Row {
     /// nothing is rebuilt, but every frame is drawn again; a still view shows its kept frame).
     pan_frame_ms: f64,
     pan_render_ms: f64,
+    /// GPU buffer pieces the view's upload made and used again ([`cadaddy_ui_egui::gpu::upload_pieces`]).
+    pieces: (u64, u64),
 }
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -90,6 +92,7 @@ fn ms(t: std::time::Instant) -> f64 {
 fn measure(harness: &mut Harness<'_, CadApp>, name: &'static str, view: View, frames: usize) -> Row {
     let frames = frames.max(1);
     let before = harness.state().canvas.stats.regen.build_ms.to_bits() ^ harness.state().canvas.stats.regen.prims as u64;
+    let pieces = cadaddy_ui_egui::gpu::upload_pieces();
     assert!(harness.state_mut().session.state_mut().unwrap().set_view(view), "{name}: view refused");
     // A view past a zoom band rebuilds the list (in the background), then draws it; a view the
     // list already serves (the first: the drawing opens zoomed to its extents) doesn't.
@@ -121,6 +124,8 @@ fn measure(harness: &mut Harness<'_, CadApp>, name: &'static str, view: View, fr
     }
     harness.step();
     let report = cadaddy_ui_egui::debug_overlay::draw2d_json(harness.state());
+    let after = cadaddy_ui_egui::gpu::upload_pieces();
+    let pieces = (after.0 - pieces.0, after.1 - pieces.1);
     // Pan right three points a frame.
     let (mut pan_frame, mut pan_render) = (Vec::new(), Vec::new());
     let step = view.height / f64::from(SIZE.1) * 3.0;
@@ -138,7 +143,15 @@ fn measure(harness: &mut Harness<'_, CadApp>, name: &'static str, view: View, fr
     assert!(harness.state_mut().session.state_mut().unwrap().set_view(view));
     harness.step();
     let _ = harness.render();
-    Row { view: name, report, frame_ms: median(frame), render_ms: median(render), pan_frame_ms: median(pan_frame), pan_render_ms: median(pan_render) }
+    Row {
+        view: name,
+        report,
+        frame_ms: median(frame),
+        render_ms: median(render),
+        pan_frame_ms: median(pan_frame),
+        pan_render_ms: median(pan_render),
+        pieces,
+    }
 }
 
 /// An edit at the room view: one object in view moved a little. Its regeneration (the changed
@@ -191,6 +204,7 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
         "prims",
         "mesh ms",
         "upload ms",
+        "GPU pieces made / reused",
         "GPU vertices drawn / held",
         "tiles drawn / all",
         "chunks rebuilt / kept",
@@ -210,7 +224,7 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
         let part = |k: &str| format!("{:.0}", f(&g["parts"][k]["ms"]));
         let n = |v: &Value| v.as_u64().unwrap_or(0);
         println!(
-            "| {} | {} / {} | {:.0} | {} / {} / {} / {} / {} / {} | {} | {:.0} | {:.0} | {} / {} | {} / {} | {} / {} | {} / {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} / {:.1} | {:.0} | {} |",
+            "| {} | {} / {} | {:.0} | {} / {} / {} / {} / {} / {} | {} | {:.0} | {:.0} | {} / {} | {} / {} | {} / {} | {} / {} | {} / {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} / {:.1} | {:.0} | {} |",
             r.view,
             g["considered"],
             g["drawn"],
@@ -224,6 +238,8 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
             g["prims"],
             f(&g["meshMs"]),
             f(&g["uploadMs"]).max(f(&fr["uploadMs"])),
+            r.pieces.0,
+            r.pieces.1,
             fr["gpuVertices"],
             n(&g["lineVertices"]) + n(&g["triVertices"]) + 6 * n(&g["quadInstances"]),
             fr["tilesDrawn"],
@@ -291,6 +307,8 @@ fn a_print_set_reports_where_2d_time_goes() {
         measure(&mut harness, "zoomed out (whole set)", view(ext, 1.05), frames),
         measure(&mut harness, "one sheet", view(sheet, 1.05), frames),
         measure(&mut harness, "one room", view(room, 1.1), frames),
+        // One zoom band further in: the tiles out of view keep their buffers.
+        measure(&mut harness, "one room, zoomed in once more", view(room, 0.5), frames),
     ];
     print(&rows, sheets, objects);
     let e = edit(&mut harness, room);

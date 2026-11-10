@@ -442,6 +442,10 @@ impl Tiling {
             let count = |span: f64| ((span / cell) as usize).saturating_add(1);
             (min, count(b.max.x - min.x), count(b.max.y - min.y))
         };
+        // Not worth cutting a drawing that fills less than two tiles.
+        if (w / cell).ceil() * (h / cell).ceil() < 2.0 {
+            return None;
+        }
         let (mut min, mut cols, mut rows) = grid(cell);
         // A long, thin drawing: never more cells than the most.
         for _ in 0..64 {
