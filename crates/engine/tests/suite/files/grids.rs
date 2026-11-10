@@ -445,3 +445,139 @@ fn a_level_on_its_own_sheet_is_aligned_from_its_grids() {
     assert!(e.contains("own sheet"), "{e}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Grid labels of a 19 × 8 grid: numbers across, letters (no I) up.
+const NUMBERS: usize = 19;
+const LETTERS: [&str; 8] = ["A", "B", "C", "D", "E", "F", "G", "H"];
+/// The bay, inches.
+const BAY: f64 = 240.0;
+
+/// One copy of the 19 × 8 grid at `o`, bubbled below and at the left; the grid numbered `shift.0`
+/// drawn `shift.1` off its place (a label read off the neighbouring line).
+fn big_grid(s: &mut Session, o: [f64; 2], shift: (usize, f64)) {
+    let p = |x: f64, y: f64| [o[0] + x, o[1] + y];
+    layer(s, "S-GRID");
+    let (w, h) = ((NUMBERS - 1) as f64 * BAY, (LETTERS.len() - 1) as f64 * BAY);
+    for n in 1..=NUMBERS {
+        let x = (n - 1) as f64 * BAY + if n == shift.0 { shift.1 } else { 0.0 };
+        line(s, p(x, -78.0), p(x, h + 120.0));
+        circle(s, p(x, -96.0), 18.0);
+        text(s, p(x - 4.0, -100.0), &n.to_string());
+    }
+    for (i, l) in LETTERS.iter().enumerate() {
+        let y = i as f64 * BAY;
+        line(s, p(-78.0, y), p(w + 120.0, y));
+        circle(s, p(-96.0, y), 18.0);
+        text(s, p(-100.0, y - 4.0), l);
+    }
+}
+
+/// Hexagon window marks (the parts library's hexagon bubble, labelled like a mark) at `at`.
+fn window_tags(s: &mut Session, o: [f64; 2], at: &[(f64, f64, &str)]) {
+    layer(s, "A-TAGS");
+    for &(x, y, label) in at {
+        s.execute(
+            "part",
+            &json!({"name": "G_GRID_BUBBLE_HEX", "at": [o[0] + x, o[1] + y], "scale": 72.0, "attribs": {"GRID": label}, "layer": "current"}),
+        )
+        .unwrap();
+    }
+}
+
+/// Four floors, each with its architectural plan (the grid, a few window marks and its
+/// exterior walls: the inner face on the outer grid lines, the outer face 6" out plus `skin`,
+/// different per floor) and its electrical plan (its own copy of the grid, drawn elsewhere on
+/// that sheet, and window marks) side by side in one level region, the set's sheet links naming
+/// which is which. Floor 4's grid 7 is read 24" off its line. The architectural plans' grid
+/// origins.
+fn trade_floors() -> (Session, Vec<[f64; 2]>) {
+    let mut s = Session::new();
+    let arch = [[0.0, 0.0], [37.0, 13.0], [11.0, 52.0], [80.0, 5.0]];
+    let elec = [[0.0, 0.0], [15.0, 22.0], [40.0, 3.0], [7.0, 60.0]];
+    let skin = [0.0, 1.0, 2.0, 1.5];
+    let (w, h) = ((NUMBERS - 1) as f64 * BAY, (LETTERS.len() - 1) as f64 * BAY);
+    let mut levels = Vec::new();
+    let mut sheets = Vec::new();
+    let mut origins = Vec::new();
+    for i in 0..4 {
+        let x0 = i as f64 * 20000.0;
+        let a = [x0 + arch[i][0], arch[i][1]];
+        let e = [x0 + 9000.0 + elec[i][0], elec[i][1]];
+        big_grid(&mut s, a, if i == 3 { (7, 24.0) } else { (0, 0.0) });
+        window_tags(&mut s, a, &[(130.0 + 40.0 * i as f64, 600.0, "W1"), (1450.0, 130.0 + 50.0 * i as f64, "W2")]);
+        layer(&mut s, "A-WALL");
+        let face = |s: &mut Session, d: f64| {
+            let (lo, hx, hy) = ([a[0] - d, a[1] - d], a[0] + w + d, a[1] + h + d);
+            s.execute("pline", &json!({"vertices": [lo, [hx, lo[1]], [hx, hy], [lo[0], hy]], "closed": true})).unwrap();
+        };
+        face(&mut s, 0.0);
+        face(&mut s, 6.0 + skin[i]);
+        big_grid(&mut s, e, (0, 0.0));
+        window_tags(&mut s, e, &[(370.0 + 30.0 * i as f64, 370.0, "W1"), (2050.0, 610.0, "W3"), (3130.0 - 20.0 * i as f64, 1330.0, "W2")]);
+        let name = format!("L{}", i + 1);
+        levels.push(json!({"name": name, "elevation_ft": 12 * i, "height_ft": 12, "region": [x0 - 1000.0, -1000.0, x0 + 15000.0, 3000.0]}));
+        sheets.push(json!({"number": format!("SA-{}", i + 1), "discipline": "A", "level": name, "rect": [x0 - 500.0, -500.0, x0 + 5500.0, 2500.0]}));
+        sheets
+            .push(json!({"number": format!("SE-{}", i + 1), "discipline": "E", "level": name, "rect": [x0 + 8500.0, -500.0, x0 + 14500.0, 2500.0]}));
+        origins.push(a);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": {"levels": levels, "sheets": sheets, "layers": [{"layer": "A-WALL", "role": "wall"}]}}))
+        .unwrap();
+    (s, origins)
+}
+
+#[test]
+fn levels_align_by_their_architectural_plans_grids_only() {
+    let (mut s, origins) = trade_floors();
+    // Each level's grids come from its architectural plan alone: each grid once, from that plan.
+    let d = s.execute("grids.detect", &json!({"level": "L2"})).unwrap();
+    let l2 = level(&d, "L2");
+    let real: Vec<String> = (1..=NUMBERS).map(|n| n.to_string()).chain(LETTERS.iter().map(|l| l.to_string())).collect();
+    for g in &real {
+        let n = l2["grids"].as_array().unwrap().iter().filter(|x| x["label"] == g.as_str()).count();
+        assert_eq!(n, 1, "grid {g} once: {l2}");
+    }
+    assert!(l2["grids"].as_array().unwrap().iter().all(|g| g["from"][0].as_f64().unwrap() < 20000.0 + 5500.0), "none of the electrical plan's: {l2}");
+    assert_eq!(l2["plan"], json!(["SA-2"]), "{l2}");
+    let r = s.execute("levels.align", &json!({"apply": true})).unwrap();
+    assert_eq!(r["reference"], json!("L1"));
+    for (i, o) in origins.iter().enumerate().skip(1) {
+        let l = level(&r, &format!("L{}", i + 1));
+        assert_eq!(l["base"], json!(o), "aligned on its own grid: {l}");
+        assert_eq!(l["scale"], json!(1.0), "{l}");
+        assert!(l["residual"].as_f64().unwrap() <= 1e-6, "{l}");
+        assert_eq!(l["offset"], json!([origins[0][0] - o[0], origins[0][1] - o[1]]), "its offset to the reference: {l}");
+    }
+    // Floor 4's grid 7 is read 24" off: its 8 crossings are left out of the fit, and said so.
+    let l4 = level(&r, "L4");
+    let left_out: Vec<&str> = l4["left_out"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+    let real = |x: &str| x.split_once('-').is_some_and(|(a, n)| LETTERS.contains(&a) && n.parse::<usize>().is_ok());
+    let off: Vec<String> = LETTERS.iter().map(|l| format!("{l}-7")).collect();
+    assert_eq!(left_out.iter().filter(|x| real(x)).copied().collect::<Vec<_>>(), off, "{l4}");
+    assert!(l4["agreeing"].as_u64().unwrap() >= (NUMBERS * LETTERS.len() - LETTERS.len()) as u64, "{l4}");
+    let note = l4["note"].as_str().unwrap_or_default();
+    assert!(note.contains("left out of the fit") && note.contains("A-7"), "{l4}");
+    // Built, the floors stack by the fit: the inner face on grid A is in one place on every floor
+    // (by the walls' corners they were up to 2" apart).
+    let sp = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+    let spec = cadaddy_engine::walk3d::BuildingSpec::from_json(&sp.to_string()).unwrap();
+    let scene = cadaddy_engine::walk3d::derive(s.doc().unwrap(), &spec.to_rules());
+    // The inner face is the shorter of a floor's two long horizontal faces.
+    let inner = |lv: usize| {
+        let long: Vec<(f64, f64, f64)> = scene
+            .walls
+            .iter()
+            .filter(|x| x.level == lv && (x.a.y - x.b.y).abs() < 1e-9)
+            .map(|x| ((x.a.x - x.b.x).abs(), x.a.x.min(x.b.x), x.a.y))
+            .collect();
+        let longest = long.iter().map(|x| x.0).fold(0.0, f64::max);
+        let faces: Vec<&(f64, f64, f64)> = long.iter().filter(|x| x.0 > 0.9 * longest && x.0 < longest - 1e-9).collect();
+        faces.iter().fold((f64::INFINITY, f64::INFINITY), |m, p| (m.0.min(p.1), m.1.min(p.2)))
+    };
+    let first = inner(0);
+    assert!(first.0.is_finite(), "the inner face is built");
+    for lv in 1..4 {
+        let at = inner(lv);
+        assert!((at.0 - first.0).abs() < 1e-6 && (at.1 - first.1).abs() < 1e-6, "L{} at {at:?}, L1 at {first:?}", lv + 1);
+    }
+}

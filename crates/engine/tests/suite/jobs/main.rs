@@ -36,6 +36,7 @@ mod emtsize;
 mod exterior;
 mod feederwire;
 mod fixturekinds;
+mod floorjoists;
 mod followups_626;
 mod furnish;
 mod gear;
