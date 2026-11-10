@@ -1,0 +1,1269 @@
+{
+  "anchor": {
+    "entry": null,
+    "floor_elevation_ft": 0.0,
+    "how": "the low corner of the building's plan, the lowest floor's elevation",
+    "kind": "building_origin",
+    "level": "L1",
+    "model": [
+      0,
+      0,
+      0
+    ],
+    "name": "building origin",
+    "plan_units": "ft",
+    "plan_x": 0.0,
+    "plan_y": -1.0,
+    "room": null
+  },
+  "axes": "x = plan x (east), y = up from the anchor level's finished floor, z = minus plan y",
+  "counts": {
+    "meshes": 22,
+    "nodes": 58,
+    "triangles": 1092
+  },
+  "cut_to_scope": 0,
+  "dropped": {
+    "context_off": 0,
+    "filtered": 0,
+    "not_meshes": 0,
+    "over_caps": {},
+    "over_element_cap": 0,
+    "small_parts": {}
+  },
+  "elements": [
+    {
+      "area_sf": 358.7104,
+      "group": "base",
+      "id": "1A4",
+      "kind": "room",
+      "level": "L1",
+      "name": "GUEST",
+      "node": "room_101_GUEST",
+      "number": "101",
+      "position": [
+        0.1524,
+        0.0091,
+        -6.2484
+      ],
+      "role": "room_tile",
+      "tag": "101 GUEST",
+      "trade": "architecture"
+    },
+    {
+      "area_sf": 363.4604,
+      "group": "base",
+      "id": "1A5",
+      "kind": "room",
+      "level": "L1",
+      "name": "GUEST",
+      "node": "room_102_GUEST",
+      "number": "102",
+      "position": [
+        6.1722,
+        0.0091,
+        -6.2484
+      ],
+      "role": "room_tile",
+      "tag": "102 GUEST",
+      "trade": "architecture"
+    },
+    {
+      "area_sf": 358.7104,
+      "group": "base",
+      "id": "1A6",
+      "kind": "room",
+      "level": "L1",
+      "name": "ELEC",
+      "node": "room_104_ELEC",
+      "number": "104",
+      "position": [
+        12.2682,
+        0.0091,
+        -6.2484
+      ],
+      "role": "room_tile",
+      "tag": "104 ELEC",
+      "trade": "architecture"
+    },
+    {
+      "area_sf": 586.1187,
+      "group": "base",
+      "id": "1A7",
+      "kind": "room",
+      "level": "L1",
+      "name": "CORRIDOR",
+      "node": "room_103_CORRIDOR",
+      "number": "103",
+      "position": [
+        0.1524,
+        0.0091,
+        -9.2964
+      ],
+      "role": "room_tile",
+      "tag": "103 CORRIDOR",
+      "trade": "architecture"
+    },
+    {
+      "area_sf": 358.7104,
+      "group": "base",
+      "id": "1A8",
+      "kind": "room",
+      "level": "L2",
+      "name": "GUEST",
+      "node": "room_201_GUEST",
+      "number": "201",
+      "position": [
+        0.1524,
+        3.0571,
+        -6.2484
+      ],
+      "role": "room_tile",
+      "tag": "201 GUEST",
+      "trade": "architecture"
+    },
+    {
+      "area_sf": 363.4604,
+      "group": "base",
+      "id": "1A9",
+      "kind": "room",
+      "level": "L2",
+      "name": "GUEST",
+      "node": "room_202_GUEST",
+      "number": "202",
+      "position": [
+        6.1722,
+        3.0571,
+        -6.2484
+      ],
+      "role": "room_tile",
+      "tag": "202 GUEST",
+      "trade": "architecture"
+    },
+    {
+      "area_sf": 358.7104,
+      "group": "base",
+      "id": "1AA",
+      "kind": "room",
+      "level": "L2",
+      "name": "ELEC",
+      "node": "room_204_ELEC",
+      "number": "204",
+      "position": [
+        12.2682,
+        3.0571,
+        -6.2484
+      ],
+      "role": "room_tile",
+      "tag": "204 ELEC",
+      "trade": "architecture"
+    },
+    {
+      "area_sf": 586.1187,
+      "group": "base",
+      "id": "1AB",
+      "kind": "room",
+      "level": "L2",
+      "name": "CORRIDOR",
+      "node": "room_203_CORRIDOR",
+      "number": "203",
+      "position": [
+        0.1524,
+        3.0571,
+        -9.2964
+      ],
+      "role": "room_tile",
+      "tag": "203 CORRIDOR",
+      "trade": "architecture"
+    },
+    {
+      "basis": "the level's floor plates raised to its floor-to-floor height (generated, for the opening reveal)",
+      "group": "base",
+      "id": "exterior:L1",
+      "kind": "exterior",
+      "level": "L1",
+      "node": "exterior_L1",
+      "position": [
+        0.0,
+        -0.1524,
+        -9.4488
+      ],
+      "reveal": true,
+      "role": "exterior"
+    },
+    {
+      "basis": "the level's floor plates raised to its floor-to-floor height (generated, for the opening reveal)",
+      "group": "base",
+      "id": "exterior:L2",
+      "kind": "exterior",
+      "level": "L2",
+      "node": "exterior_L2",
+      "position": [
+        0.0,
+        2.8956,
+        -9.4488
+      ],
+      "reveal": true,
+      "role": "exterior"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "17A",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall",
+      "part": "wall",
+      "position": [
+        0.0,
+        0.0,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 106 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "191",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_2",
+      "part": "wall",
+      "position": [
+        0.0,
+        3.048,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 130 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 36.0,
+      "category": "Windows",
+      "context": true,
+      "group": "base",
+      "id": "17F",
+      "kind": "window",
+      "level": "L1",
+      "node": "window",
+      "part": "window",
+      "position": [
+        2.4384,
+        0.9144,
+        -0.4763
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Block Reference 156 (layer A-GLAZ)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Window"
+    },
+    {
+      "bottom_aff_in": 156.0,
+      "category": "Windows",
+      "context": true,
+      "group": "base",
+      "id": "196",
+      "kind": "window",
+      "level": "L2",
+      "node": "window_2",
+      "part": "window",
+      "position": [
+        2.4384,
+        3.9624,
+        -0.4763
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Block Reference 158 (layer A-GLAZ)",
+      "system": "openings",
+      "top_aff_in": 204.0,
+      "trade": "architecture",
+      "type": "Window"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16F",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_3",
+      "part": "wall",
+      "position": [
+        0.0,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 10A (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "186",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_4",
+      "part": "wall",
+      "position": [
+        0.0,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 134 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "177",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_5",
+      "part": "wall",
+      "position": [
+        2.4384,
+        0.0,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 107 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "18E",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_6",
+      "part": "wall",
+      "position": [
+        2.4384,
+        3.048,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 131 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "17B",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_7",
+      "part": "wall",
+      "position": [
+        0.0,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 108 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "192",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_8",
+      "part": "wall",
+      "position": [
+        0.0,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 132 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "17C",
+      "kind": "door",
+      "level": "L1",
+      "node": "door",
+      "part": "door",
+      "position": [
+        2.4384,
+        0.0,
+        -6.4199
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Arc 121 (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "193",
+      "kind": "door",
+      "level": "L2",
+      "node": "door_2",
+      "part": "door",
+      "position": [
+        2.4384,
+        3.048,
+        -6.4199
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Arc 14B (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 204.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16E",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_9",
+      "part": "wall",
+      "position": [
+        6.0198,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 10B (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "185",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_10",
+      "part": "wall",
+      "position": [
+        6.0198,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 135 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "176",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_11",
+      "part": "wall",
+      "position": [
+        6.0198,
+        0.0,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 10C (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "18D",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_12",
+      "part": "wall",
+      "position": [
+        6.0198,
+        3.048,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 136 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "173",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_13",
+      "part": "wall",
+      "position": [
+        2.4384,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 109 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "18A",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_14",
+      "part": "wall",
+      "position": [
+        2.4384,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 133 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "171",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_15",
+      "part": "wall",
+      "position": [
+        0.0,
+        0.0,
+        -9.4488
+      ],
+      "source": "model.build from the plan's Line 11C (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "188",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_16",
+      "part": "wall",
+      "position": [
+        0.0,
+        3.048,
+        -9.4488
+      ],
+      "source": "model.build from the plan's Line 146 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 36.0,
+      "category": "Windows",
+      "context": true,
+      "group": "base",
+      "id": "180",
+      "kind": "window",
+      "level": "L1",
+      "node": "window_3",
+      "part": "window",
+      "position": [
+        8.5344,
+        0.9144,
+        -0.4763
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Block Reference 157 (layer A-GLAZ)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Window"
+    },
+    {
+      "bottom_aff_in": 156.0,
+      "category": "Windows",
+      "context": true,
+      "group": "base",
+      "id": "197",
+      "kind": "window",
+      "level": "L2",
+      "node": "window_4",
+      "part": "window",
+      "position": [
+        8.5344,
+        3.9624,
+        -0.4763
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Block Reference 159 (layer A-GLAZ)",
+      "system": "openings",
+      "top_aff_in": 204.0,
+      "trade": "architecture",
+      "type": "Window"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "179",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_17",
+      "part": "wall",
+      "position": [
+        6.0198,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 10E (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "190",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_18",
+      "part": "wall",
+      "position": [
+        6.0198,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 138 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": -6.0,
+      "category": "Floors",
+      "context": true,
+      "group": "base",
+      "id": "198",
+      "kind": "floor",
+      "level": "L1",
+      "node": "floor",
+      "part": "floor",
+      "position": [
+        0.0,
+        -0.1524,
+        -9.4488
+      ],
+      "source": "model.build (floor, layer 3D-Floors)",
+      "system": "architecture",
+      "top_aff_in": 0.0,
+      "trade": "architecture",
+      "type": "Floor"
+    },
+    {
+      "bottom_aff_in": 114.0,
+      "category": "Floors",
+      "context": true,
+      "group": "base",
+      "id": "19A",
+      "kind": "floor",
+      "level": "L2",
+      "node": "floor_2",
+      "part": "floor",
+      "position": [
+        0.0,
+        2.8956,
+        -9.4488
+      ],
+      "source": "model.build (floor, layer 3D-Floors)",
+      "system": "architecture",
+      "top_aff_in": 120.0,
+      "trade": "architecture",
+      "type": "Floor"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "175",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_19",
+      "part": "wall",
+      "position": [
+        8.5344,
+        0.0,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 10D (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "18C",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_20",
+      "part": "wall",
+      "position": [
+        8.5344,
+        3.048,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 137 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "17D",
+      "kind": "door",
+      "level": "L1",
+      "node": "door_3",
+      "part": "door",
+      "position": [
+        8.5344,
+        0.0,
+        -6.4199
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Arc 125 (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "194",
+      "kind": "door",
+      "level": "L2",
+      "node": "door_4",
+      "part": "door",
+      "position": [
+        8.5344,
+        3.048,
+        -6.4199
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Arc 14F (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 204.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "172",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_21",
+      "part": "wall",
+      "position": [
+        8.5344,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 10F (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "189",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_22",
+      "part": "wall",
+      "position": [
+        8.5344,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 139 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16D",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_23",
+      "part": "wall",
+      "position": [
+        12.1158,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 111 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "184",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_24",
+      "part": "wall",
+      "position": [
+        12.1158,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 13B (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16A",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_25",
+      "part": "wall",
+      "position": [
+        0.0,
+        0.0,
+        -9.4488
+      ],
+      "source": "model.build from the plan's Line 100 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "181",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_26",
+      "part": "wall",
+      "position": [
+        0.0,
+        3.048,
+        -9.4488
+      ],
+      "source": "model.build from the plan's Line 12A (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "178",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_27",
+      "part": "wall",
+      "position": [
+        12.1158,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 113 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "18F",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_28",
+      "part": "wall",
+      "position": [
+        12.1158,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 13D (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16B",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_29",
+      "part": "wall",
+      "position": [
+        12.1158,
+        0.0,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 112 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "182",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_30",
+      "part": "wall",
+      "position": [
+        12.1158,
+        3.048,
+        -0.4572
+      ],
+      "source": "model.build from the plan's Line 13C (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "17E",
+      "kind": "door",
+      "level": "L1",
+      "node": "door_5",
+      "part": "door",
+      "position": [
+        14.6304,
+        0.0,
+        -6.4199
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Arc 129 (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 84.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Doors",
+      "context": true,
+      "group": "base",
+      "id": "195",
+      "kind": "door",
+      "level": "L2",
+      "node": "door_6",
+      "part": "door",
+      "position": [
+        14.6304,
+        3.048,
+        -6.4199
+      ],
+      "simplified": "box",
+      "source": "model.build from the plan's Arc 153 (layer A-DOOR)",
+      "system": "openings",
+      "top_aff_in": 204.0,
+      "trade": "architecture",
+      "type": "Door"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "174",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_31",
+      "part": "wall",
+      "position": [
+        14.6304,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 114 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "18B",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_32",
+      "part": "wall",
+      "position": [
+        14.6304,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 13E (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "16C",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_33",
+      "part": "wall",
+      "position": [
+        18.1356,
+        0.0,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 116 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "183",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_34",
+      "part": "wall",
+      "position": [
+        18.1356,
+        3.048,
+        -6.4008
+      ],
+      "source": "model.build from the plan's Line 140 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 0.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "170",
+      "kind": "wall",
+      "level": "L1",
+      "node": "wall_35",
+      "part": "wall",
+      "position": [
+        18.1356,
+        0.0,
+        -9.4488
+      ],
+      "source": "model.build from the plan's Line 11D (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 118.8,
+      "trade": "architecture",
+      "type": "Partition"
+    },
+    {
+      "bottom_aff_in": 120.0,
+      "category": "Walls",
+      "context": true,
+      "group": "base",
+      "id": "187",
+      "kind": "wall",
+      "level": "L2",
+      "node": "wall_36",
+      "part": "wall",
+      "position": [
+        18.1356,
+        3.048,
+        -9.4488
+      ],
+      "source": "model.build from the plan's Line 147 (layer A-WALL)",
+      "system": "architecture",
+      "top_aff_in": 238.8,
+      "trade": "architecture",
+      "type": "Partition"
+    }
+  ],
+  "exported": "2026-11-10T05:06:18Z",
+  "field_alignment": false,
+  "generator": "CADaddy bim.export.ar",
+  "generic": true,
+  "generic_note": "simplified on purpose for looking, not for layout: never align it to the field",
+  "glb": "building-architectural.glb",
+  "groups": {
+    "base": {
+      "default_on": true,
+      "nodes": 58,
+      "nodes_off": 0
+    }
+  },
+  "meters_per_unit": 1,
+  "model": "building-architectural.usdz",
+  "package": {
+    "level": null,
+    "name": "building-architectural",
+    "view": "architectural"
+  },
+  "points": [],
+  "rules": {
+    "source": "shipped rules (arexport.json)",
+    "version": 1
+  },
+  "schema": "cadaddy.ar/1",
+  "scope": {
+    "box": null,
+    "context": "solid",
+    "default_room": false,
+    "kinds": [],
+    "level": null,
+    "rooms": [],
+    "small_parts": false,
+    "trades": []
+  },
+  "simplified": "nothing",
+  "units": "m",
+  "up_axis": "Y",
+  "usdz": "building-architectural.usdz",
+  "version": 1
+}

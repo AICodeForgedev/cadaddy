@@ -1,0 +1,346 @@
+{
+  "format": "cadaddy-ar-manifest",
+  "generated": "2026-11-10T05:06:19Z",
+  "generator": "CADaddy bim.export.ar.manifest",
+  "packages": [
+    {
+      "exported": "2026-11-10T05:06:18Z",
+      "files": [
+        {
+          "bytes": 60024,
+          "name": "building-architectural.glb",
+          "role": "glb",
+          "sha256": "521f84524419eb62be35b6b433b8436e76b03549c56b1bea4d838928c6d5eb49"
+        },
+        {
+          "bytes": 103530,
+          "name": "building-architectural.usdz",
+          "role": "usdz",
+          "sha256": "538a2f3f4a76ff5529d7f88de48b94323e2d172c1cdbf4438daba3dfac37dc2b"
+        },
+        {
+          "bytes": 28876,
+          "name": "building-architectural.json",
+          "role": "sidecar",
+          "sha256": "3e43714b11e3441dd27c3c818f5ec124ae6141280f1dc07c73032db6f8f126e5"
+        }
+      ],
+      "label": "L1",
+      "level": "L1",
+      "name": "building-architectural"
+    },
+    {
+      "exported": "2026-11-10T05:06:18Z",
+      "files": [
+        {
+          "bytes": 34460,
+          "name": "building-mep-full.glb",
+          "role": "glb",
+          "sha256": "d6cddea5eedc93635763a15b2746fae579b4d86f986e3d7e157a48e6ca0bae85"
+        },
+        {
+          "bytes": 58290,
+          "name": "building-mep-full.usdz",
+          "role": "usdz",
+          "sha256": "79eda88cffd81f379b57846804e5a67bc97692bfc1597a9332c97d696764931d"
+        },
+        {
+          "bytes": 12133,
+          "name": "building-mep-full.json",
+          "role": "sidecar",
+          "sha256": "9efccdeb4b6d61f6f58482a12567cd41ac0161e95fa7b88baa0f2b561cf3b0c2"
+        }
+      ],
+      "label": "L1",
+      "level": "L1",
+      "name": "building-mep-full"
+    },
+    {
+      "exported": "2026-11-10T05:06:18Z",
+      "files": [
+        {
+          "bytes": 66900,
+          "name": "building-mep-mains.glb",
+          "role": "glb",
+          "sha256": "fdde05a99507b4c0ba9e1ff13678a86652daea7f30a035a4891cd701970ee87f"
+        },
+        {
+          "bytes": 109768,
+          "name": "building-mep-mains.usdz",
+          "role": "usdz",
+          "sha256": "5408215b479f86bc4579a9ee19f704fd7310de38ee0b419db8f2342d3a2d4ba1"
+        },
+        {
+          "bytes": 14823,
+          "name": "building-mep-mains.json",
+          "role": "sidecar",
+          "sha256": "265b1b016c5bdabff960cf00825795ad385431ca15b44839d1faf4b4013af267"
+        }
+      ],
+      "label": "L1",
+      "level": "L1",
+      "name": "building-mep-mains"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 151464,
+          "name": "levels/L1.glb",
+          "role": "glb",
+          "sha256": "5aee1f2187d8b5fe733bb2ebb5e35e340f67ae3ad4c493471a1e34fbb1ff037a"
+        },
+        {
+          "bytes": 254774,
+          "name": "levels/L1.usdz",
+          "role": "usdz",
+          "sha256": "090e2c6dadc8dd2ac0c3be570f316fe68eaf32a7a5857b6cf4d6b0ab03b54b37"
+        },
+        {
+          "bytes": 43059,
+          "name": "levels/L1.json",
+          "role": "sidecar",
+          "sha256": "0398e7815823e48a42383cf65a91d5ae9cc2bce2a5ea7f77d24a28bd671c2226"
+        }
+      ],
+      "label": "L1",
+      "level": "L1",
+      "name": "levels/L1"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 51128,
+          "name": "levels/L2.glb",
+          "role": "glb",
+          "sha256": "875ec66613e76ce4f62591f50f6624649773a40f0073edaa68101b76bcefd1b5"
+        },
+        {
+          "bytes": 82296,
+          "name": "levels/L2.usdz",
+          "role": "usdz",
+          "sha256": "ccebc78060505842ed0a5d143ca260e038020864c4b33db90af4049f4bc354b4"
+        },
+        {
+          "bytes": 18382,
+          "name": "levels/L2.json",
+          "role": "sidecar",
+          "sha256": "f95ff7802556d207f902ad517154715625be948f95df213ef6dea805c793e29e"
+        }
+      ],
+      "label": "L2",
+      "level": "L1",
+      "name": "levels/L2"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 69216,
+          "name": "rooms/L1-101-GUEST.glb",
+          "role": "glb",
+          "sha256": "debdf235878aeac1a774b35ac4eb24ad5a7e4b165c220637a12e597d4fa87a0f"
+        },
+        {
+          "bytes": 113424,
+          "name": "rooms/L1-101-GUEST.usdz",
+          "role": "usdz",
+          "sha256": "38a103d5534de72e2d5cd6b72c05d4f3277d4ac24e1dda8ddf665ed09da22c54"
+        },
+        {
+          "bytes": 22714,
+          "name": "rooms/L1-101-GUEST.json",
+          "role": "sidecar",
+          "sha256": "ca6c7a133aa7d6ffe84ff3d0d8e535fc2e0ee21e07a4c278b8ab701a3156c416"
+        }
+      ],
+      "label": "101 GUEST",
+      "level": "L1",
+      "name": "rooms/L1-101-GUEST"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 70340,
+          "name": "rooms/L1-102-GUEST.glb",
+          "role": "glb",
+          "sha256": "0f15db9257e3efdd8f2016b265f2468d058c4da8373a8f88e4c3af13ed336383"
+        },
+        {
+          "bytes": 114435,
+          "name": "rooms/L1-102-GUEST.usdz",
+          "role": "usdz",
+          "sha256": "c70eec0fd2cf2ba0f57276e96a0f07effc445a4ec8bd3e8bf5e0939d3d51e10f"
+        },
+        {
+          "bytes": 20997,
+          "name": "rooms/L1-102-GUEST.json",
+          "role": "sidecar",
+          "sha256": "07acf56d198d2b4c65e763a605c5835f155af478aeb1a3feae4297b7c9985b16"
+        }
+      ],
+      "label": "102 GUEST",
+      "level": "L1",
+      "name": "rooms/L1-102-GUEST"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 92456,
+          "name": "rooms/L1-103-CORRIDOR.glb",
+          "role": "glb",
+          "sha256": "13f11f61a574491be3c2cb6b342e14cb09ae1ef7176bf5c5496b4ecffbb3ce1b"
+        },
+        {
+          "bytes": 153732,
+          "name": "rooms/L1-103-CORRIDOR.usdz",
+          "role": "usdz",
+          "sha256": "0ced824ba12fc6296ed48c179eca0b0a5300dd2f864ff2623405a16c0daeab4e"
+        },
+        {
+          "bytes": 26193,
+          "name": "rooms/L1-103-CORRIDOR.json",
+          "role": "sidecar",
+          "sha256": "10ef8577dbd73da93c20cea64f2b6ba39dee0ad87e11afdc4865006c113d8e0e"
+        }
+      ],
+      "label": "103 CORRIDOR",
+      "level": "L1",
+      "name": "rooms/L1-103-CORRIDOR"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 54888,
+          "name": "rooms/L1-104-ELEC.glb",
+          "role": "glb",
+          "sha256": "1b78ed028fa8cc703be974402374b1325432ba07b1453d82f2f8a14cc1c32577"
+        },
+        {
+          "bytes": 87879,
+          "name": "rooms/L1-104-ELEC.usdz",
+          "role": "usdz",
+          "sha256": "88927c2761c05beab955f0d7c248de7143807f107e4b3b038eb017f84b720acb"
+        },
+        {
+          "bytes": 20046,
+          "name": "rooms/L1-104-ELEC.json",
+          "role": "sidecar",
+          "sha256": "c32cb43f4cc5d645530a88a2088e5b47b2c236fab7b006055b283c97012f7cb8"
+        }
+      ],
+      "label": "104 ELEC",
+      "level": "L1",
+      "name": "rooms/L1-104-ELEC"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 34868,
+          "name": "rooms/L2-201-GUEST.glb",
+          "role": "glb",
+          "sha256": "4396b11f681e1edd302b65af673a32f7c733f866666e9b315014a587397193de"
+        },
+        {
+          "bytes": 53644,
+          "name": "rooms/L2-201-GUEST.usdz",
+          "role": "usdz",
+          "sha256": "7846dcd6f59a6ecf084912aca5eac895d306b832801eb8cedf2be47a376dc300"
+        },
+        {
+          "bytes": 12609,
+          "name": "rooms/L2-201-GUEST.json",
+          "role": "sidecar",
+          "sha256": "aec02db893f569fc3ad960df600012f666debb639562bf1bffdf19f432c40609"
+        }
+      ],
+      "label": "201 GUEST",
+      "level": "L2",
+      "name": "rooms/L2-201-GUEST"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 35740,
+          "name": "rooms/L2-202-GUEST.glb",
+          "role": "glb",
+          "sha256": "a56e9450dc921e06ec6959e1bafbad6f7dbe0c6195a8a58760e89cb63723ac3a"
+        },
+        {
+          "bytes": 53923,
+          "name": "rooms/L2-202-GUEST.usdz",
+          "role": "usdz",
+          "sha256": "0bf81836dab07a6ca5b8f6c5dc77d88fe6d7e9f44333d3e80d5a4f31eafb8e36"
+        },
+        {
+          "bytes": 12200,
+          "name": "rooms/L2-202-GUEST.json",
+          "role": "sidecar",
+          "sha256": "a733e99c46868bf3dafc4db45a41b85051526ab1943179421b6269714c4d43e7"
+        }
+      ],
+      "label": "202 GUEST",
+      "level": "L2",
+      "name": "rooms/L2-202-GUEST"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 35428,
+          "name": "rooms/L2-203-CORRIDOR.glb",
+          "role": "glb",
+          "sha256": "547e8b40029e6457dbc9d4c50a233ba60209721b2f91483dc929edd3caa19b33"
+        },
+        {
+          "bytes": 55745,
+          "name": "rooms/L2-203-CORRIDOR.usdz",
+          "role": "usdz",
+          "sha256": "8639b40b574cb478473f3c18c8721ee14a0cf70c4d8d7033e2e2bd9f75e1adbd"
+        },
+        {
+          "bytes": 15718,
+          "name": "rooms/L2-203-CORRIDOR.json",
+          "role": "sidecar",
+          "sha256": "bd6c5c2e1351465f6025ef625d1058768d946de1f61634c4deea9ac824d4cbe3"
+        }
+      ],
+      "label": "203 CORRIDOR",
+      "level": "L2",
+      "name": "rooms/L2-203-CORRIDOR"
+    },
+    {
+      "exported": "2026-11-10T05:06:19Z",
+      "files": [
+        {
+          "bytes": 29348,
+          "name": "rooms/L2-204-ELEC.glb",
+          "role": "glb",
+          "sha256": "da9723f9c3d398c72bc78352242cae87fb2152eb725097742b8b9c75735a6fe5"
+        },
+        {
+          "bytes": 44438,
+          "name": "rooms/L2-204-ELEC.usdz",
+          "role": "usdz",
+          "sha256": "648ad31cb8471bcf03d375a9b20fe7f476965c8078b2573a8dcb1676949108ff"
+        },
+        {
+          "bytes": 10788,
+          "name": "rooms/L2-204-ELEC.json",
+          "role": "sidecar",
+          "sha256": "349031e4d9b8a60e82d67341bcfd4293000b6470cdb5f81a65f9e5e207fafb89"
+        }
+      ],
+      "label": "204 ELEC",
+      "level": "L2",
+      "name": "rooms/L2-204-ELEC"
+    }
+  ],
+  "version": 1
+}
