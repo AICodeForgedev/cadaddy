@@ -7393,7 +7393,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // the model ends with (= bim.tree), the build's would be a second, earlier set.
     // The specification's wiring methods by area, minimum raceway and circuits per homerun: what
     // the build routes the circuits by (Q6152).
-    route_methods_step(s, job);
+    route_methods_step(s, job, &scope_docs);
     // The documents' low-voltage pathways (Q6203): what the build routes each outlet's by.
     lv_pathways_step(s, job, &scope_docs);
     // The slab level's drains its plans give no height (Q6148): under its floor to the building
@@ -20641,10 +20641,24 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
 
 /// The specification's wiring-methods tables (26 05 19), its minimum raceway size and the
 /// circuits a homerun may share, stored in the drawing for the router (Q6152).
-fn route_methods_step(s: &mut Session, job: &GuidedJob) {
+fn route_methods_step(s: &mut Session, job: &GuidedJob, docs: &[super::scope::Doc]) {
     let specs = job_specs(job);
     let mut m = super::conduitroute::Methods::default();
+    let b2b = &super::mepatoms::rules().box_clear.back_to_back;
+    // The remedy for boxes back to back in a rated wall (Q6488): the pads wherever a document
+    // names them, else a separation one names.
+    let mut remedy: Option<(super::mepatoms::boxclear::Remedy, String)> = None;
+    let mut take = |found: Option<(super::mepatoms::boxclear::Remedy, String)>, at: &str| {
+        if let Some((r, line)) = found
+            && remedy
+                .as_ref()
+                .is_none_or(|(have, _)| *have != super::mepatoms::boxclear::Remedy::Putty && r == super::mepatoms::boxclear::Remedy::Putty)
+        {
+            remedy = Some((r, format!("{at}: {line}")));
+        }
+    };
     for (section, text) in super::valueeng::spec_texts(&specs) {
+        take(b2b.remedy_in(&text), &format!("spec {}", section.trim()));
         m.applications.extend(super::valueeng::wiring_applications(&text, &section).into_iter().map(|a| super::conduitroute::MethodApp {
             section: a.section,
             item: a.item,
@@ -20653,6 +20667,23 @@ fn route_methods_step(s: &mut Session, job: &GuidedJob) {
         }));
         super::conduitroute::spec_limits(&text, &section, &mut m);
     }
+    for doc in docs.iter().take(10_000) {
+        for p in doc.paras.iter().take(10_000) {
+            take(b2b.remedy_in(&p.text), &format!("{} {}", doc.name.trim(), p.at.trim()));
+        }
+    }
+    if let Some((r, src)) = remedy {
+        m.rated_box_remedy = r.as_str().to_string();
+        m.rated_box_remedy_source = src;
+    }
+    progress_line(&format!(
+        "  rated-wall boxes back to back: {}",
+        if m.rated_box_remedy.is_empty() {
+            "no document names the remedy (the rules' default)".to_string()
+        } else {
+            format!("{} ({})", m.rated_box_remedy, m.rated_box_remedy_source)
+        }
+    ));
     progress_line(&format!(
         "  wiring methods for routing: {} application(s) from {} spec file(s); minimum raceway {}; circuits per homerun {}",
         m.applications.len(),

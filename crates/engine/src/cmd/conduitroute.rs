@@ -361,6 +361,10 @@ pub(crate) struct Methods {
     /// The circuits a homerun may share, and where it says so.
     pub max_circuits: Option<usize>,
     pub max_circuits_source: String,
+    /// The remedy the documents name for boxes back to back in a rated wall (`putty pads`,
+    /// `separate`; empty: none named), and where (Q6488).
+    pub rated_box_remedy: String,
+    pub rated_box_remedy_source: String,
 }
 
 impl Methods {
