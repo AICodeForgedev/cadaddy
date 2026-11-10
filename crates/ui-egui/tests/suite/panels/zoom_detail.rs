@@ -9,6 +9,11 @@
 //! ZOOMDETAIL_SHEETS=100 ZOOMDETAIL_PER=10000 cargo test --release -p cadaddy-ui-egui --test suite_panels \
 //!     zoom_detail_frame_times -- --ignored --nocapture
 //! ```
+//!
+//! `ZOOMDETAIL_GPU=integrated` (or `discrete`, or part of an adapter's name) measures the GPU
+//! canvas on that adapter, `ZOOMDETAIL_BACKEND` picks its backend, and `ZOOMDETAIL_MODE=full` or
+//! `detail` runs one of the two (each in its own process has its own memory peak).
+//! `ZOOMDETAIL_WHOLE=1` measures the same objects as an ordinary drawing seen whole.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -265,6 +270,14 @@ fn gpu(want: &str) -> Option<egui_wgpu::RenderState> {
     }
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     setup.instance_descriptor.backends.remove(wgpu::Backends::BROWSER_WEBGPU);
+    // ZOOMDETAIL_BACKEND: vulkan, dx12, metal or gl only (a driver may work on one, not another).
+    match std::env::var("ZOOMDETAIL_BACKEND").unwrap_or_default().to_ascii_lowercase().as_str() {
+        "vulkan" => setup.instance_descriptor.backends = wgpu::Backends::VULKAN,
+        "dx12" => setup.instance_descriptor.backends = wgpu::Backends::DX12,
+        "metal" => setup.instance_descriptor.backends = wgpu::Backends::METAL,
+        "gl" => setup.instance_descriptor.backends = wgpu::Backends::GL,
+        _ => {}
+    }
     setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters: &[wgpu::Adapter], _| {
         let pick = |a: &&wgpu::Adapter| {
             let i = a.get_info();
@@ -371,7 +384,8 @@ fn measure(label: &str, d: cadaddy_engine::doc::Drawing, full: bool, rs: Option<
     frame(&mut h, None);
     let open_ms = t0.elapsed().as_secs_f64() * 1000.0;
     // Zoomed out: the sheet fitted; the sheet list's thumbnails and the picture finish.
-    let picture_ms = if full { 0.0 } else { settle(&mut h, &|a| a.canvas.sheet_images.shown) };
+    let sheets = !h.state().session.print_sheets().is_empty();
+    let picture_ms = if full || !sheets { settle(&mut h, &|a| !a.canvas.building()) } else { settle(&mut h, &|a| a.canvas.sheet_images.shown) };
     for _ in 0..12 {
         frame(&mut h, None);
     }
@@ -406,9 +420,10 @@ fn measure(label: &str, d: cadaddy_engine::doc::Drawing, full: bool, rs: Option<
             if v.picture { "picture" } else { "linework" }
         );
     };
-    row("sheet (zoomed out)", &out);
+    let whole = h.state().session.print_sheets().is_empty();
+    row(if whole { "whole drawing (extents)" } else { "sheet (zoomed out)" }, &out);
     row("one room", &room);
-    row("sheet again", &back);
+    row(if whole { "extents again" } else { "sheet again" }, &back);
     println!(
         "| {label} | totals | opening {open_ms:.0} ms | first frame back out {back_ms:.1} ms | pictures {:.1} MB | memory now {rss:.0} MB | peak {peak:.0} MB | | | |",
         pictures as f64 / 1e6
@@ -430,11 +445,20 @@ fn zoom_detail_frame_times() {
     println!("\n{sheets} sheets x {per} objects, 1600x1000, {adapter}");
     println!("| run | view | prims | verts | list GPU MB | vertices drawn | build ms | ready ms | frame ms | drawn as |");
     println!("|---|---|---|---|---|---|---|---|---|---|");
+    // ZOOMDETAIL_WHOLE=1: the same objects as an ordinary drawing (no sheet records), seen whole.
+    let whole = std::env::var("ZOOMDETAIL_WHOLE").is_ok_and(|v| v == "1");
+    let set = || {
+        let mut d = sample::print_set(sheets, per);
+        if whole {
+            d.agent = None.into();
+        }
+        d
+    };
     // Each made on its own: nothing carries from one to the other.
     if mode != "detail" {
-        measure("before: in full", sample::print_set(sheets, per), true, rs.as_ref());
+        measure("before: in full", set(), true, rs.as_ref());
     }
     if mode != "full" {
-        measure("after: detail levels", sample::print_set(sheets, per), false, rs.as_ref());
+        measure("after: detail levels", set(), false, rs.as_ref());
     }
 }

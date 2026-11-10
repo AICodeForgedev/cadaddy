@@ -15,7 +15,7 @@
 //! too, so they never offer a point of something drawn as less.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock};
 
 use cadaddy_doc::{Drawing, Entity, EntityKind, Insert};
 use cadaddy_geom::{Bounds2, Mat3, Vec2};
@@ -156,8 +156,9 @@ pub enum Look {
 pub struct Detail {
     pub px: f64,
     pub rules: Arc<PlanRules>,
-    /// Block contents' extents (block coordinates) by name, measured once per detail.
-    blocks: Arc<RwLock<HashMap<String, Bounds2>>>,
+    /// Block contents' extents (block coordinates) by name, measured once per detail (on first
+    /// use, by one thread; then read without a lock by every thread of a parallel build).
+    blocks: Arc<OnceLock<HashMap<String, Bounds2>>>,
 }
 
 impl std::fmt::Debug for Detail {
@@ -178,7 +179,8 @@ impl Detail {
         (px.is_finite() && px > 0.0).then(|| Detail { px, rules, blocks: Arc::default() })
     }
 
-    /// The same rules at another pixel size (block extents carried over: they don't depend on it).
+    /// The same rules at another pixel size, for the same drawing (block extents carried over:
+    /// they don't depend on it).
     pub fn at(&self, px: f64) -> Option<Detail> {
         (px.is_finite() && px > 0.0).then(|| Detail { px, rules: self.rules.clone(), blocks: self.blocks.clone() })
     }
@@ -193,21 +195,16 @@ impl Detail {
 
     /// The extents of `blk`'s contents in block coordinates (empty: draws nothing).
     fn block_box(&self, d: &Drawing, blk: &cadaddy_doc::Block) -> Bounds2 {
-        if let Ok(m) = self.blocks.read()
-            && let Some(b) = m.get(&blk.name)
-        {
-            return *b;
+        let all = self.blocks.get_or_init(|| {
+            if d.blocks.len() > MAX_BLOCKS {
+                return HashMap::new();
+            }
+            d.blocks.iter().map(|(name, b)| (name.clone(), contents_box(d, b))).collect()
+        });
+        match all.get(&blk.name) {
+            Some(b) => *b,
+            None => contents_box(d, blk),
         }
-        let mut b = Bounds2::EMPTY;
-        for be in blk.entities.iter().filter(|be| !matches!(be.kind, EntityKind::AttDef(_)) && be.common.visible) {
-            b = b.union(&cadaddy_doc::entity_bounds(d, be, 1));
-        }
-        if let Ok(mut m) = self.blocks.write()
-            && m.len() < MAX_BLOCKS
-        {
-            m.insert(blk.name.clone(), b);
-        }
-        b
     }
 
     /// Pixels a length `l` in coordinates mapped by `xf` covers on screen (along the most
@@ -315,8 +312,19 @@ impl Detail {
     }
 }
 
+/// The extents of a block's contents in block coordinates (what a reference to it draws, less its
+/// attributes).
+fn contents_box(d: &Drawing, blk: &cadaddy_doc::Block) -> Bounds2 {
+    let mut b = Bounds2::EMPTY;
+    for be in blk.entities.iter().filter(|be| !matches!(be.kind, EntityKind::AttDef(_)) && be.common.visible) {
+        b = b.union(&cadaddy_doc::entity_bounds(d, be, 1));
+    }
+    b
+}
+
 /// The box of a piece of linework in its own coordinates, when it is quick to find (`None`: not
 /// linework, or an object that is never drawn as less, such as a wipeout, image or viewport).
+/// A hatch is measured where it is drawn, from the boundary it flattens anyway.
 fn linework_box(d: &Drawing, e: &Entity) -> Option<Bounds2> {
     let b = match &e.kind {
         EntityKind::Line(l) => Bounds2::from_points([l.a.xy(), l.b.xy()]),
@@ -328,7 +336,7 @@ fn linework_box(d: &Drawing, e: &Entity) -> Option<Bounds2> {
             if p.vertices.iter().any(|v| v.bulge != 0.0) { b.expand(b.width().max(b.height()) * 0.5) } else { b }
         }
         EntityKind::Ellipse(el) => Bounds2::new(el.center.xy(), el.center.xy()).expand(el.major.len()),
-        EntityKind::Hatch(_) | EntityKind::Spline(_) | EntityKind::Polyline3d(_) | EntityKind::Solid(_) => cadaddy_doc::entity_bounds(d, e, 1),
+        EntityKind::Spline(_) | EntityKind::Polyline3d(_) | EntityKind::Solid(_) => cadaddy_doc::entity_bounds(d, e, 1),
         _ => return None,
     };
     let finite = b.min.is_finite() && b.max.is_finite();

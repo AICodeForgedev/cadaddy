@@ -30,13 +30,25 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
     // that show apart in any direction are never merged); 0 = full detail.
     let stretch = max_scale(&ctx.xf);
     let px = if stretch > 1e-12 { b.opts.min_dash / 2.0 / stretch } else { 0.0 };
-    let dense = b.opts.fill && reads_solid(ctx.d, h, px);
-    // The screen's detail level: a pattern whose lines are a few pixels apart is a light tint of
-    // its area instead of lines (`detail`; never in a plot).
-    let tint = (!dense && b.opts.fill && !b.plotting && !h.solid && h.gradient.is_none())
-        .then_some(b.opts.detail.as_ref())
-        .flatten()
-        .filter(|det| stretch > 1e-12 && finest_spacing(ctx.d, h).is_some_and(|s| s < det.rules.hatch_tint_px * det.px / stretch))
+    // The pattern's line families, read once for the level of detail (a pattern only).
+    let patterned = !(h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some());
+    let families = if patterned && b.opts.fill && px > 0.0 { lines_of(ctx.d, h) } else { Vec::new() };
+    let dense = b.opts.fill && reads_solid_lines(&families, scale_of(h), px);
+    // The screen's detail level (`detail`; never in a plot): a hatch under a pixel is a dot, and
+    // a pattern whose lines are a few pixels apart is a light tint of its area instead of lines.
+    let detail = b.opts.detail.as_ref().filter(|_| !b.plotting && stretch > 1e-12);
+    if let Some(det) = detail {
+        let mut area = Bounds2::EMPTY;
+        for p in loops.iter().flatten() {
+            area.add(*p);
+        }
+        if !area.is_empty() && area.width().max(area.height()) * stretch < det.rules.dot_px * det.px {
+            b.point(ctx, rgb, area.center());
+            return;
+        }
+    }
+    let tint = detail
+        .filter(|det| !dense && b.opts.fill && finest_spacing(&families, scale_of(h)).is_some_and(|s| s < det.rules.hatch_tint_px * det.px / stretch))
         .map(|det| det.rules.tint_transparency);
     if let Some(t) = tint {
         let saved = b.transparency;
@@ -348,9 +360,16 @@ pub fn reads_solid(d: &Drawing, h: &Hatch, px: f64) -> bool {
     if !(px.is_finite() && px > 0.0) {
         return false;
     }
-    let scale = scale_of(h);
+    reads_solid_lines(&lines_of(d, h), scale_of(h), px)
+}
+
+/// [`reads_solid`] of a pattern's line `families` at `scale`.
+fn reads_solid_lines(families: &[PatternLine], scale: f64, px: f64) -> bool {
+    if !(px.is_finite() && px > 0.0) {
+        return false;
+    }
     let mut coverage = 0.0;
-    for f in lines_of(d, h) {
+    for f in families {
         let spacing = (f.delta.1 * scale).abs();
         if !(spacing.is_finite() && spacing > 0.0) {
             continue;
@@ -375,11 +394,10 @@ pub fn reads_solid(d: &Drawing, h: &Hatch, px: f64) -> bool {
     coverage.is_finite() && coverage >= SOLID_COVERAGE
 }
 
-/// The smallest distance between a pattern's parallel lines, in the hatch's units (`None`: no
-/// pattern lines).
-fn finest_spacing(d: &Drawing, h: &Hatch) -> Option<f64> {
-    let scale = scale_of(h);
-    lines_of(d, h).iter().map(|f| (f.delta.1 * scale).abs()).filter(|s| s.is_finite() && *s > 0.0).min_by(f64::total_cmp)
+/// The smallest distance between a pattern's parallel lines (`families` at `scale`), in the
+/// hatch's units (`None`: no pattern lines).
+fn finest_spacing(families: &[PatternLine], scale: f64) -> Option<f64> {
+    families.iter().map(|f| (f.delta.1 * scale).abs()).filter(|s| s.is_finite() && *s > 0.0).min_by(f64::total_cmp)
 }
 
 /// Hatch line runs in world coordinates (single-point runs are dots) for the fill `loops`.
