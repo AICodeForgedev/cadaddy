@@ -1532,15 +1532,18 @@ pub(crate) fn flat_swings(pts: &[Vec2]) -> Vec<(Vec2, f64, f64, [Vec2; 2])> {
 /// Names traced between two progress lines of the room trace.
 const TRACE_PROGRESS_EVERY: usize = 100;
 
-/// How far round a room's name its trace looks at least (feet, each way). It looks across the
-/// whole plan the name is on ([`REACH_PLAN_SHARE`]), however wide (a warehouse, a gym, an open
-/// floor): a name in an area that doesn't close (a gap in its walls, an open plan) stops there,
-/// at its own sheet, instead of searching every sheet of a set side by side.
+/// How far round a room's name its first trace looks (feet, each way): the rooms nearly every
+/// name is in (a long corridor's far ends too). A name that finds none so near is traced again across the whole plan it is on
+/// ([`REACH_PLAN_SHARE`]), however wide (a warehouse, a gym, an open floor), once every other
+/// name took its room; a name in an area that doesn't close (a gap in its walls, an open plan)
+/// stops at its own sheet then, instead of searching every sheet of a set side by side.
 const ROOM_REACH_FT: f64 = 150.0;
 /// A room trace's reach as a share of the larger side of the plan its name is on: from anywhere
 /// on the plan, the whole plan lies inside the last window (a boundary counts only strictly
 /// inside a window).
 const REACH_PLAN_SHARE: f64 = 1.02;
+/// The seeds a widened room trace searches from: the name's point and its middle.
+const WIDENED_SEEDS: usize = 2;
 
 /// A turn sharper than this (degrees) between two pieces of a polyline is a corner: a flattened
 /// arc turns a few degrees a piece (a quarter circle drawn in 8 chords, 11¼°), a swing meets its
@@ -2292,8 +2295,16 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
     // A storey of a full set has thousands of names: say how far the trace is.
     let (total, trace_started) = (names.len(), web_time::Instant::now());
     let mut searching = std::time::Duration::ZERO;
-    for (traced, (h, name, at, height, _)) in names.into_iter().enumerate() {
-        if traced > 0 && traced % TRACE_PROGRESS_EVERY == 0 {
+    // Where each name is: a widened search's outline holding another name no room took is no
+    // one room (the floor left over round rooms that don't close, shared by their names).
+    let spots: Vec<(cadaddy_doc::Handle, Vec2)> = names.iter().map(|l| (l.0, l.2)).collect();
+    // Each name is traced within the least reach first; one whose search stopped there with no
+    // room is traced again across its whole plan after every other name took its room (a wider
+    // window finds the floor left over round rooms that don't close: no name takes it first).
+    let mut queue: std::collections::VecDeque<(Label, bool)> = names.into_iter().map(|l| (l, false)).collect();
+    let mut traced = 0usize;
+    while let Some(((h, name, at, height, tag), widened)) = queue.pop_front() {
+        if traced > 0 && traced.is_multiple_of(TRACE_PROGRESS_EVERY) {
             crate::cmd::guided::progress_line(&format!(
                 "  room trace: {traced} of {total} names, {} rooms, {:.0} s ({:.0} s finding boundaries)",
                 out.len(),
@@ -2301,6 +2312,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
                 searching.as_secs_f64()
             ));
         }
+        traced += 1;
         // The room around the label: the first outline, traced from the label's point, its middle,
         // just above or below it or just outside its box, that holds the whole label (a piece of furniture drawn under
         // the label - a mirrored unit's desk - traces a loop the label overhangs); else, as
@@ -2329,10 +2341,13 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
         // Whether a loop holding its whole box took it for a note (below): no room is traced
         // round it then either.
         let mut note = false;
-        let reach = reach_at(at);
+        let reach = if widened { reach_at(at) } else { least_reach };
         // Whether a search stopped at its reach (what lies farther was never searched).
         let mut capped = false;
-        for (i, seed) in seeds.into_iter().enumerate() {
+        // Widened, from the name's point and middle only: the seeds round it found what is near
+        // it (the furniture it is printed on) within the least reach already.
+        let seeds = if widened { seeds.get(..WIDENED_SEEDS).unwrap_or(&seeds) } else { seeds.as_slice() };
+        for (i, seed) in seeds.iter().copied().enumerate() {
             let search = web_time::Instant::now();
             let found = crate::cmd::hatch::loops_at_lazy_within(plan, seed, &mut outline_cache, Some(reach));
             searching += search.elapsed();
@@ -2389,6 +2404,12 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
         let (poly, area, probed) = match holds.or(first) {
             Some((poly, area)) if area >= least => (poly, area, false),
             _ if note => continue,
+            _ if widened => {
+                if capped {
+                    beyond_reach.push((name, at, reach));
+                }
+                continue;
+            }
             _ => {
                 let search = web_time::Instant::now();
                 let found = crate::cmd::bspec::outline_round_label_within(plan, at, &mut outline_cache, least, Some(reach), &mut capped);
@@ -2401,7 +2422,9 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
                     })
                     .filter(|(_, area)| *area >= min_area)
                 else {
-                    if capped {
+                    if capped && !widened && reach_at(at) > least_reach {
+                        queue.push_back(((h, name, at, height, tag), true));
+                    } else if capped {
                         beyond_reach.push((name, at, reach));
                     }
                     continue;
@@ -2409,6 +2432,14 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
                 (p, area, true)
             }
         };
+        if widened
+            && spots.iter().any(|(sh, q)| {
+                *sh != h && cadaddy_geom::point_in_polygon(&poly, *q) && !out.iter().any(|r| cadaddy_geom::point_in_polygon(&r.outline, *q))
+            })
+        {
+            beyond_reach.push((name, at, reach));
+            continue;
+        }
         // One room per outline: a second label in the same room is its number or a note.
         // (The same loop traced from another seed, or again from round the furniture its name is
         // on, may start at another corner.)
@@ -3204,5 +3235,23 @@ mod tests {
         assert_eq!(listed["count"], 1, "{listed}");
         assert_eq!(listed["beyondReachCount"], 1, "{listed}");
         assert_eq!(listed["beyondReach"][0]["name"], "WAREHOUSE", "{listed}");
+    }
+
+    /// The floor left over round rooms (a 400 × 250 ft outline, a closed office in it, two names
+    /// whose rooms don't close) is no one room: the office is traced, and the two names, each
+    /// seeing the other in the outline a widened search finds, are reported instead of either
+    /// taking the whole floor.
+    #[test]
+    fn the_floor_left_over_round_rooms_is_no_one_room() {
+        let mut s = bordered_room(4800.0, 3000.0, "LOBBY");
+        s.execute("pline", &json!({"vertices": [[600, 600], [840, 600], [840, 840], [600, 840]], "closed": true})).unwrap();
+        s.execute("text", &json!({"at": [660, 720], "text": "OFFICE", "height": 12})).unwrap();
+        s.execute("text", &json!({"at": [3600, 600], "text": "CORRIDOR", "height": 12})).unwrap();
+        let trace = room_trace_in(&mut s, None).unwrap();
+        let names: Vec<&str> = trace.rooms.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["OFFICE"], "{trace:?}");
+        let mut reported: Vec<&str> = trace.beyond_reach.iter().map(|(n, ..)| n.as_str()).collect();
+        reported.sort_unstable();
+        assert_eq!(reported, ["CORRIDOR", "LOBBY"], "{trace:?}");
     }
 }
