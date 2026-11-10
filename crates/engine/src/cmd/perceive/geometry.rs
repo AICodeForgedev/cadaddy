@@ -1713,7 +1713,94 @@ pub(crate) fn note_like(t: &str) -> bool {
         super::sheet_number(w)
             && (w.contains('-') || w.contains('.') || (i > 0 && (has("SEE") || has("REFER") || has("REF") || has("SHEET") || has("DWG"))))
     });
-    !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref
+    // A design-load or rating string (`ROOF LIVE LOAD 20 PSF`, `WIND 115 MPH`) and a roof or
+    // canopy area's label (`LOW ROOF`, `CANOPY ABOVE`): an area of the plan, never a room (rule
+    // data: `rooms.load_note_words`, `rooms.area_label_words`).
+    let plain: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let load = plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.load_note_words").contains(w));
+    let area = plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.area_label_words").contains(w));
+    // A storey's name alone (`FIRST FLOOR`, `2ND FLR`, `MEZZANINE`): a view's title or a level
+    // marker, no room's name (one with a room's word, `GROUND FLOOR LOBBY`, is a room's).
+    let storey = plain.len() <= 3
+        && cadaddy_walk3d::levels::canonical_level(&up).is_some_and(|(_, k)| k != cadaddy_walk3d::levels::DatumKind::Penthouse)
+        && !plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(w));
+    !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref || load || area || storey
+}
+
+/// Whether a traced outline holds its label: the label's point or a corner of its box inside it,
+/// or its point within half the text height `th` of the outline (a tag's point on a storefront's
+/// line).
+fn holds_label(poly: &[Vec2], at: Vec2, corners: &[Vec2], th: f64) -> bool {
+    cadaddy_geom::point_in_polygon(poly, at)
+        || corners.iter().any(|c| cadaddy_geom::point_in_polygon(poly, *c))
+        || crate::cmd::guided::edge_distance(poly, at) <= 0.5 * th
+}
+
+/// Most lines of a room's name stacked one over the other (`DOUBLE Q ADA` over `(TUB)`): a
+/// stack of more is a note block's lines.
+const MAX_ROOM_NAME_LINES: usize = 2;
+/// The most a note block's next line is below the last, in its text height (line spacing).
+const NOTE_LINE_SPACING: f64 = 2.5;
+/// How far a note block's lines' left ends may differ, in their text height.
+const NOTE_LINE_ALIGN: f64 = 0.75;
+
+/// The texts (indices into `items`: handle, text, insertion point, height) that are lines of a
+/// note block: more than [`MAX_ROOM_NAME_LINES`] lines of about one height, their left ends
+/// lined up, each within [`NOTE_LINE_SPACING`] heights under the one before (a general note's
+/// lines, a legend's, a schedule column's). A room's tag is a name of a line or two, its number,
+/// and nothing lined up under it; room numbers and parenthesised qualifiers don't count as lines.
+pub(crate) fn note_block_lines(items: &[(cadaddy_doc::Handle, String, Vec2, f64)]) -> std::collections::HashSet<usize> {
+    let line = |i: usize| {
+        items.get(i).is_some_and(|(_, t, at, h)| {
+            let t = t.trim();
+            at.is_finite()
+                && h.is_finite()
+                && *h > 0.0
+                && t.chars().filter(|c| c.is_alphabetic()).count() >= 2
+                && !room_number(t)
+                && !(t.starts_with('(') && t.ends_with(')'))
+        })
+    };
+    let mut by_y: Vec<usize> = (0..items.len()).filter(|&i| line(i)).collect();
+    by_y.sort_by(|&a, &b| items[a].2.y.total_cmp(&items[b].2.y));
+    // Each line's next line under it: the nearest below, of about its height, left ends lined up.
+    let mut below: Vec<Option<usize>> = vec![None; items.len()];
+    let mut has_above = vec![false; items.len()];
+    for &i in &by_y {
+        let Some((_, _, at, h)) = items.get(i) else { continue };
+        let from = by_y.partition_point(|&j| items[j].2.y < at.y - NOTE_LINE_SPACING * h);
+        let to = by_y.partition_point(|&j| items[j].2.y < at.y - 0.5 * h);
+        let next = by_y.get(from..to).into_iter().flatten().copied().filter(|&j| {
+            let (_, _, q, qh) = &items[j];
+            *qh >= 0.8 * h && *qh <= 1.25 * h && (q.x - at.x).abs() <= NOTE_LINE_ALIGN * h
+        });
+        // The nearest one under it (the largest y below it).
+        if let Some(j) = next.max_by(|&a, &b| items[a].2.y.total_cmp(&items[b].2.y)) {
+            if let Some(b) = below.get_mut(i) {
+                *b = Some(j);
+            }
+            if let Some(a) = has_above.get_mut(j) {
+                *a = true;
+            }
+        }
+    }
+    // Each stack from its top line down: more lines than a room's name has, a note block.
+    let mut out = std::collections::HashSet::new();
+    for &top in by_y.iter().filter(|&&i| !has_above.get(i).copied().unwrap_or(true)) {
+        let mut stack = vec![top];
+        let mut at = top;
+        while let Some(Some(next)) = below.get(at).copied() {
+            if stack.contains(&next) || stack.len() > items.len() {
+                break;
+            }
+            stack.push(next);
+            at = next;
+        }
+        if stack.len() > MAX_ROOM_NAME_LINES {
+            out.extend(stack);
+        }
+    }
+    out
 }
 
 /// A room label's line wholly in parentheses (`(TUB)` under `DOUBLE Q ADA`) is the name above it
@@ -1771,7 +1858,9 @@ pub(crate) fn area_figure(t: &str) -> bool {
 }
 
 pub(crate) fn room_name_score(t: &str) -> u8 {
-    if equipment_tag(t) || note_like(t) || room_number(t) || area_figure(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 {
+    // Letters one by one (`L J`): a fragment of vertical or spaced text, no name.
+    let letters_only = tag_words(t).iter().all(|w| w.chars().count() <= 1);
+    if equipment_tag(t) || note_like(t) || room_number(t) || area_figure(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 || letters_only {
         0
     } else if tag_words(t).iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(&w.as_str())) {
         3
@@ -2059,7 +2148,11 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         ents.iter().copied().filter(|e| !tagged || spec.as_ref().is_some_and(|sp| crate::cmd::bspec::room_tag_layer(sp, &e.common.layer))).collect();
     let mut read = texts(&on_tags);
     lift_qualifiers(&mut read);
+    // A note block's lines name no room (a general note's lines inside a roof area or the
+    // sheet's border traced as rooms); their numbers stay numbers.
+    let block = note_block_lines(&read);
     let mut all: Vec<Label> = read.into_iter().map(|(h, t, at, ht)| (h, t, at, ht, false)).collect();
+    let in_block: std::collections::HashSet<cadaddy_doc::Handle> = block.iter().filter_map(|&i| all.get(i).map(|l| l.0)).collect();
     // Room tag blocks: their name and number attributes. The blocks themselves (a box or a bubble
     // around the tag) bound no room.
     let mut tag_blocks = std::collections::HashSet::new();
@@ -2130,7 +2223,11 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     };
     let mut names: Vec<Label> = all
         .iter()
-        .filter(|(_, t, _, _, tag)| t.chars().count() <= 40 && (*tag || !note_like(t)))
+        // A plain text names a room in a room tag's words: not a note's line or sentence, a
+        // title block's or a stamp's words ([`crate::cmd::autospec::room_like_name`]).
+        .filter(|(h, t, _, _, tag)| {
+            t.chars().count() <= 40 && (*tag || (!note_like(t) && !in_block.contains(h) && crate::cmd::autospec::room_like_name(t)))
+        })
         .filter(|l| match spec_rooms {
             Some(rs) => {
                 let t = &l.1;
@@ -2355,6 +2452,12 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
                 (p, area, true)
             }
         };
+        // A room's trace holds its own tag: its point, a corner of its box, or its point on the
+        // outline. A loop beside the tag (cut along a line through the tags, under the tag's
+        // box) is another space's.
+        if !holds_label(&poly, at, &corners, th) {
+            continue;
+        }
         // One room per outline: a second label in the same room is its number or a note.
         // (The same loop traced from another seed, or again from round the furniture its name is
         // on, may start at another corner.)
@@ -2895,6 +2998,114 @@ mod tests {
         s.execute("undo", &json!({})).unwrap();
         assert_eq!(rooms_found(&mut s).unwrap().len(), 1);
         assert_eq!(s.state().unwrap().room_trace.len(), 2);
+    }
+
+    /// A plan's closed areas (inches): `(corners, labels at (x, y))`, each label 6" high.
+    fn plan_of(areas: &[([f64; 4], &[(&str, f64, f64)])]) -> Session {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        for ([x0, y0, x1, y1], labels) in areas {
+            s.execute("pline", &json!({"vertices": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "closed": true})).unwrap();
+            for (t, x, y) in *labels {
+                s.execute("text", &json!({"at": [x, y], "text": t, "height": 6})).unwrap();
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn note_lines_load_strings_and_roof_labels_are_no_rooms() {
+        // Q6285: a plan's general-note lines, a design-load string and a roof area's label were
+        // kept as rooms. Rooms: a name over its number, a name alone, a name of two lines.
+        let mut s = plan_of(&[
+            ([0.0, 0.0, 240.0, 180.0], &[("OFFICE", 80.0, 90.0), ("101", 90.0, 80.0)]),
+            ([300.0, 0.0, 540.0, 180.0], &[("STORAGE", 380.0, 90.0)]),
+            ([600.0, 0.0, 840.0, 180.0], &[("GUEST", 680.0, 95.0), ("LAUNDRY", 680.0, 85.0)]),
+            // A general note's lines, each a few words a room's name could be.
+            (
+                [0.0, 300.0, 400.0, 600.0],
+                &[
+                    ("ALL WORK SHALL", 40.0, 500.0),
+                    ("COMPLY WITH THE", 40.0, 490.0),
+                    ("GOVERNING CODES", 40.0, 480.0),
+                    ("AND ORDINANCES", 40.0, 470.0),
+                ],
+            ),
+            ([500.0, 300.0, 800.0, 600.0], &[("DESIGN WIND 115 MPH", 560.0, 450.0)]),
+            ([900.0, 300.0, 1200.0, 600.0], &[("LOW ROOF", 1000.0, 450.0)]),
+        ]);
+        let rooms = rooms_found(&mut s).unwrap();
+        let mut names: Vec<(String, Option<String>)> = rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![("GUEST".to_string(), None), ("OFFICE".to_string(), Some("101".to_string())), ("STORAGE".to_string(), None)],
+            "only the rooms' tags name rooms"
+        );
+    }
+
+    #[test]
+    fn a_note_block_is_more_lines_than_a_rooms_name() {
+        let item = |t: &str, x: f64, y: f64| (cadaddy_doc::Handle(0), t.to_string(), Vec2::new(x, y), 6.0);
+        // Three lined-up lines: a block. A name over its number and a qualifier, a name of two
+        // lines, a line far under another, and lines not lined up: none.
+        let items = vec![
+            item("ALL WORK SHALL", 0.0, 100.0),
+            item("COMPLY WITH", 2.0, 90.0),
+            item("THE CODES", 0.0, 80.0),
+            item("DOUBLE Q ADA", 200.0, 100.0),
+            item("(TUB)", 200.0, 90.0),
+            item("128", 200.0, 80.0),
+            item("GUEST", 400.0, 100.0),
+            item("LAUNDRY", 400.0, 90.0),
+            item("LOBBY", 400.0, 20.0),
+            item("MECH", 600.0, 100.0),
+            item("ELEC", 640.0, 90.0),
+            item("STOR", 600.0, 80.0),
+        ];
+        let block = note_block_lines(&items);
+        let mut got: Vec<usize> = block.into_iter().collect();
+        got.sort_unstable();
+        assert_eq!(got, vec![0, 1, 2]);
+        assert!(note_block_lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn load_strings_and_roof_or_canopy_labels_are_notes() {
+        for t in [
+            "ROOF LIVE LOAD 20 PSF",
+            "WIND 115 MPH",
+            "3000 PSI",
+            "LOW ROOF",
+            "CANOPY ABOVE",
+            "ROOF BELOW",
+            "OVERHANG",
+            "ABOVE",
+            "LINE OF SOFFIT",
+            "FIRST FLOOR",
+            "2ND FLR",
+            "MEZZANINE",
+        ] {
+            assert!(note_like(t) && room_name_score(t) == 0, "{t}");
+        }
+        // Letters one by one, and a rated wall's label (a title block's or a legend's word).
+        assert_eq!(room_name_score("L J"), 0);
+        assert!(!crate::cmd::autospec::room_like_name("1 HOUR FIRE RATED BARRIER"));
+        for t in ["OFFICE", "LOADING DOCK", "GUEST LAUNDRY", "DOUBLE Q", "ROOFTOP LOUNGE", "GROUND FLOOR LOBBY", "BOH"] {
+            assert!(!note_like(t) && room_name_score(t) > 0, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_trace_holds_its_own_tag() {
+        let sq = [Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(100.0, 100.0), Vec2::new(0.0, 100.0)];
+        let corners = |at: Vec2| [at + Vec2::new(1.0, 1.0), at + Vec2::new(20.0, 1.0), at + Vec2::new(1.0, 5.0), at + Vec2::new(20.0, 5.0)];
+        assert!(holds_label(&sq, Vec2::new(40.0, 50.0), &corners(Vec2::new(40.0, 50.0)), 6.0));
+        // Its point on the outline (a storefront's line), or its box reaching in.
+        assert!(holds_label(&sq, Vec2::new(40.0, 102.0), &corners(Vec2::new(40.0, 102.0)), 6.0));
+        assert!(holds_label(&sq, Vec2::new(-10.0, 50.0), &corners(Vec2::new(-10.0, 50.0)), 6.0));
+        // A loop under the tag's box: another space's.
+        assert!(!holds_label(&sq, Vec2::new(40.0, 120.0), &corners(Vec2::new(40.0, 120.0)), 6.0));
     }
 
     #[test]

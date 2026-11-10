@@ -2597,6 +2597,47 @@
     "SQM"
    ]
   },
+  "rooms.area_label_words": {
+   "source": "drafting convention: words of a plan's label for an area that is not a room: a roof or canopy area (LOW ROOF, CANOPY ABOVE, ROOF BELOW), an awning, an overhang, a skylight, a soffit, or what is above or below the plan (OPEN TO BELOW) (perceive/geometry.rs `note_like`). Such a label names no room.",
+   "words": [
+    "ROOF",
+    "ROOFS",
+    "ROOFING",
+    "CANOPY",
+    "CANOPIES",
+    "AWNING",
+    "AWNINGS",
+    "OVERHANG",
+    "OVERHANGS",
+    "PARAPET",
+    "PARAPETS",
+    "SKYLIGHT",
+    "SKYLIGHTS",
+    "COCHERE",
+    "SOFFIT",
+    "ABOVE",
+    "BELOW",
+    "ABV",
+    "BLW"
+   ]
+  },
+  "rooms.load_note_words": {
+   "source": "structural drafting convention: the units and words of a design-load, wind or rating note (ROOF LIVE LOAD 20 PSF, WIND 115 MPH, 3000 PSI): a note's string, never a room's name (perceive/geometry.rs `note_like`).",
+   "words": [
+    "PSF",
+    "PSI",
+    "PLF",
+    "KSF",
+    "KSI",
+    "PCF",
+    "MPH",
+    "KIP",
+    "KIPS",
+    "LBS",
+    "LOAD",
+    "LOADS"
+   ]
+  },
   "rooms.corridor_words": {
    "source": "trade practice: a route named with one of these runs along any corridor of the level (moved from guided.rs)",
    "words": [
@@ -2750,6 +2791,7 @@
    "words": [
     "1 HOUR FIRE RATED PARTITION",
     "PARTITION",
+    "BARRIER",
     "SCALE",
     "SHEET",
     "DRAWN",
