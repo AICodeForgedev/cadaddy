@@ -2518,6 +2518,22 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // The outside: roofs, parapets, crickets, rooftop equipment, facade glass and materials.
     let outside = super::exterior::build(d, &sp);
     mark("exterior");
+    // Casework and furniture (Q6422): read from the plans (the casework reader, the furniture
+    // drawn), each in its room; a room the plans leave unfurnished takes its type's furniture.
+    let room_refs: Vec<super::furniture::RoomRef> = rooms
+        .iter()
+        .map(|t| {
+            let spec = t.room.and_then(|i| sp.rooms.get(i));
+            let name = spec.map(|r| r.name.clone()).filter(|n| !n.trim().is_empty()).or_else(|| t.name.clone()).unwrap_or_default();
+            let label =
+                spec.map(room_label).unwrap_or_else(|| [t.number.as_deref(), t.name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" "));
+            super::furniture::RoomRef { level: t.level.clone(), outline: t.outline.clone(), label, type_key: super::furniture::room_type(&name) }
+        })
+        .collect();
+    let (casework, furniture) = super::furniture::build(d, &sp, &room_refs);
+    r["casework"] = casework;
+    r["furniture"] = furniture;
+    mark("casework and furniture");
     // The reflected ceiling plans' ceilings (replacing the level's and rooms'), grids, soffits,
     // lights and diffusers.
     let rcp = super::ceilings::build(d, &sp);

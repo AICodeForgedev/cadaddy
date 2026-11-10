@@ -1,0 +1,45 @@
+{
+  "source": "Casework and furniture as model elements (Q6422). Casework is read from the plan and its schedule (casework.read); furniture from furniture plans and the furniture drawn in rooms (a block named for it, an outline on a furniture layer, an outline labelled with its name) and repeated into the rooms of the same type the plans leave empty. A size the documents give wins; the heights below are generic trade sizes, used only where no document gives one, and every element that takes one is marked generic with this source.",
+  "furniture_layers": ["*FURN*", "*FF-E*", "*FFE*", "*FIXTURES-LOOSE*"],
+  "skip_layers": ["*CASE*", "*MILLWORK*", "*FIXT*", "*PLUMB*", "*WALL*", "*DOOR*", "*GLAZ*", "*WIND*", "*TITLE*", "*BORDER*", "*DEFPOINTS*"],
+  "label_reach_in": 6,
+  "label_max_words": 4,
+  "size_tolerance": 0.15,
+  "min_side_in": 8,
+  "max_side_in": 180,
+  "same_place_in": 6,
+  "casework": {
+    "source": "kitchen and bath cabinet industry sizes (base cabinet 34-1/2 in with a 1-1/2 in top: counter at 36 in; wall cabinet bottom 54 in, 30 in tall; vanity rim at 34 in, the most ADA 2010 606.3 allows for an accessible lavatory; tall cabinet and wardrobe 84 in). An AFF height on the plan or in the schedule is the top of a floor-standing item and the bottom of a wall-hung one (the usual reading; the other reading is noted on the element).",
+    "kinds": [
+      {"kind": "base_cabinet", "mount": "floor", "top_in": 34.5},
+      {"kind": "counter", "mount": "floor", "top_in": 36, "slab_in": 1.5},
+      {"kind": "vanity", "mount": "floor", "top_in": 34},
+      {"kind": "appliance", "mount": "floor", "top_in": 36},
+      {"kind": "wardrobe", "mount": "floor", "top_in": 84},
+      {"kind": "upper_cabinet", "mount": "wall", "bottom_in": 54, "tall_in": 30},
+      {"kind": "backsplash", "mount": "wall", "bottom_in": 36, "tall_in": 4},
+      {"kind": "casework", "mount": "floor", "top_in": 36}
+    ]
+  },
+  "furniture": {
+    "source": "common furniture sizes (mattresses: twin 38 x 75 in, full 54 x 75, queen 60 x 80, king 76 x 80, the bed's top about 24 in; desk and table tops 29 to 30 in; seats 17 to 19 in, chair backs about 32 in, sofa backs about 34 in; dressers about 36 in, nightstands about 26 in, armoires about 72 in)",
+    "kinds": [
+      {"kind": "bed", "words": ["BED", "BEDS", "QUEEN", "KING", "TWIN", "DOUBLE BED", "SOFA BED", "CRIB"], "long_in": [70, 100], "short_in": [36, 90], "sizes_in": [[75, 38], [75, 54], [80, 60], [80, 76]], "height_in": 24},
+      {"kind": "nightstand", "words": ["NIGHTSTAND", "NIGHT STAND", "NIGHT TABLE", "BEDSIDE TABLE"], "long_in": [12, 36], "short_in": [12, 30], "sizes_in": [[24, 18]], "height_in": 26},
+      {"kind": "desk", "words": ["DESK", "WRITING DESK", "WORK DESK", "WORKSTATION"], "long_in": [30, 96], "short_in": [18, 42], "sizes_in": [[48, 24], [60, 30]], "height_in": 30},
+      {"kind": "sofa", "words": ["SOFA", "COUCH", "SETTEE", "LOVESEAT", "SLEEPER"], "long_in": [48, 120], "short_in": [26, 44], "sizes_in": [[84, 36], [60, 34]], "height_in": 34},
+      {"kind": "chair", "words": ["CHAIR", "CHAIRS", "ARMCHAIR", "LOUNGE CHAIR", "DESK CHAIR", "RECLINER", "STOOL"], "long_in": [14, 40], "short_in": [14, 40], "sizes_in": [[24, 24], [32, 32]], "height_in": 32},
+      {"kind": "coffee_table", "words": ["COFFEE TABLE", "COCKTAIL TABLE"], "long_in": [24, 60], "short_in": [16, 36], "sizes_in": [[42, 24]], "height_in": 18},
+      {"kind": "table", "words": ["TABLE", "TABLES", "DINING TABLE", "END TABLE", "SIDE TABLE", "CONFERENCE TABLE"], "long_in": [18, 144], "short_in": [18, 60], "sizes_in": [[36, 36], [48, 30], [60, 36]], "height_in": 29},
+      {"kind": "dresser", "words": ["DRESSER", "CHEST", "BUREAU", "CREDENZA", "TV CONSOLE", "MEDIA CONSOLE"], "long_in": [24, 96], "short_in": [14, 26], "sizes_in": [[60, 20], [36, 20]], "height_in": 36},
+      {"kind": "armoire", "words": ["ARMOIRE"], "long_in": [24, 72], "short_in": [18, 30], "sizes_in": [[40, 24]], "height_in": 72},
+      {"kind": "bench", "words": ["BENCH", "OTTOMAN", "LUGGAGE RACK", "LUGGAGE BENCH"], "long_in": [14, 96], "short_in": [12, 30], "sizes_in": [[48, 18]], "height_in": 18},
+      {"kind": "furniture", "words": ["FURNITURE"], "long_in": [8, 180], "short_in": [8, 180], "sizes_in": [], "height_in": 30}
+    ]
+  },
+  "repeat": {
+    "on": true,
+    "match_tolerance_in": 12,
+    "basis": "repeated from a room of the same type that draws its furniture (the plans furnish one typical room): its outline matches this room's"
+  }
+}
