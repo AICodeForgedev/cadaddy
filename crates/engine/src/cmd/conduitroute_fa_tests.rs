@@ -45,7 +45,7 @@ fn equipment(tag: &str, kind: &str, fa_kind: &str, level: &str, min: [f64; 2], m
            "properties": {"FA_KIND": fa_kind}})
 }
 
-/// A made-up one-storey building `w` ft long and 30 ft deep: an ELECTRICAL room (101) at its
+/// A made-up one-storey building `w` ft long and 30 ft deep: an ELECTRICAL room (901) at its
 /// west end and an OFFICE (102); `levels` more storeys over it (devices only); the notes as
 /// text on the sheet; built.
 fn building(w: f64, levels: &[(&str, f64)], tags: Vec<Value>, equipment: Vec<Value>, notes: &[&str]) -> crate::Session {
@@ -59,7 +59,7 @@ fn building(w: f64, levels: &[(&str, f64)], tags: Vec<Value>, equipment: Vec<Val
     }
     let mut s = crate::Session::empty();
     s.open_drawing(d, "Sample Building", None);
-    for (at, t) in [([40.0, 190.0], "ELECTRICAL"), ([46.0, 176.0], "101"), ([300.0, 190.0], "OFFICE"), ([306.0, 176.0], "102")] {
+    for (at, t) in [([40.0, 190.0], "ELECTRICAL"), ([46.0, 176.0], "901"), ([300.0, 190.0], "OFFICE"), ([306.0, 176.0], "902")] {
         text(&mut s, "A-ROOM-TAG", at, t);
     }
     for (i, n) in notes.iter().enumerate() {
@@ -189,7 +189,7 @@ fn a_storeys_load_past_the_panels_outputs_gets_a_power_supply_in_its_service_roo
         let e = d.model.iter().find(|e| e.handle.hex() == ps).expect("element");
         let (made, basis) = super::super::super::provenance::of_element(e).expect("provenance");
         assert_eq!(made, Made::Inferred);
-        assert!(basis.starts_with(RULE_SUPPLY) && basis.contains("101 (ELECTRICAL)"), "{basis}");
+        assert!(basis.starts_with(RULE_SUPPLY) && basis.contains("901 (ELECTRICAL)"), "{basis}");
         let sp = BuildingSpec::from_json(d.building_spec.as_deref().unwrap_or_default()).expect("spec");
         assert_eq!(sp.mep.equipment.iter().filter(|e| placed_by_rule(e)).count(), 1, "stored with the spec");
     }
@@ -407,7 +407,7 @@ fn currents_drops_addresses_and_orders_by_the_rules() {
     assert_eq!(fr.amps_of("strobe", None).0, 0.21, "taken at 75 cd");
     assert_eq!(fr.amps_of("horn", Some(177.0)).0, 0.05);
     assert!((fr.drop(2.0, 100.0, 14) - 2.0 * 2.0 * 100.0 * 0.00307).abs() < 1e-9);
-    assert_eq!((address_number("BP7.N1.01"), address_number("L7.42"), address_number("X")), (Some(1), Some(42), None));
+    assert_eq!((address_number("X1.N1.01"), address_number("L3.42"), address_number("X")), (Some(1), Some(42), None));
     assert_eq!(numbers("15/75cd"), vec![15.0, 75.0]);
     let pts = [(0, Vec2::new(30.0, 0.0)), (1, Vec2::new(10.0, 0.0)), (2, Vec2::new(20.0, 0.0))];
     assert_eq!(nn_order(Vec2::new(0.0, 0.0), &pts), vec![1, 2, 0]);

@@ -236,7 +236,7 @@ fn numbers(t: &str) -> Vec<f64> {
     out
 }
 
-/// A device address's number on its circuit (`BP7.N1.01`: 1, `L7.42`: 42).
+/// A device address's number on its circuit (`X1.N1.01`: 1, `L3.42`: 42).
 fn address_number(addr: &str) -> Option<u32> {
     let last = addr.trim().rsplit(['.', '-', ':', ' ']).find(|p| !p.is_empty())?;
     let digits: String = last.chars().filter(char::is_ascii_digit).collect();

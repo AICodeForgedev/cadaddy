@@ -56,7 +56,7 @@ fn building() -> Session {
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Building", None);
     s.execute("layer.new", &json!({"name": "A-ROOM-TAG", "current": true})).expect("layer");
-    for (at, t) in [([40.0, 190.0], "ELECTRICAL"), ([46.0, 176.0], "101"), ([300.0, 190.0], "OFFICE"), ([306.0, 176.0], "102")] {
+    for (at, t) in [([40.0, 190.0], "ELECTRICAL"), ([46.0, 176.0], "901"), ([300.0, 190.0], "OFFICE"), ([306.0, 176.0], "902")] {
         s.execute("text", &json!({"at": at, "text": t, "height": 6})).expect("text");
     }
     let mut tags: Vec<Value> =
