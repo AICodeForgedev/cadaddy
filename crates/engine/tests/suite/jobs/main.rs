@@ -70,6 +70,7 @@ mod readerwire;
 mod roofframing;
 mod rooms3d;
 mod roomsmodel;
+mod routeunbuilt;
 mod rulemodel;
 mod scopesplit;
 mod shapes;
