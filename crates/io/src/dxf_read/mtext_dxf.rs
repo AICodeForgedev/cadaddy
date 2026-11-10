@@ -115,6 +115,59 @@ pub(crate) fn map_text_groups(kind: &str, tags: &mut [Tag], f: fn(&str) -> Strin
     }
 }
 
+/// Which text a group of a `kind` record holds, the groups [`decode_contents`] and
+/// [`decode_line`] read: MTEXT's own contents (1 and 3, before an embedded object), the line of
+/// TEXT, ATTRIB, ATTDEF and DIMENSION (1, and an ATTDEF's prompt 3), and a multiline attribute's
+/// embedded contents (1 and 3 after its group 101). `embedded`: the group comes after a 101.
+fn text_group(kind: &str, code: i32, embedded: bool) -> Option<TextGroup> {
+    match (kind, code, embedded) {
+        ("MTEXT", 1 | 3, false) | ("ATTRIB" | "ATTDEF", 1 | 3, true) => Some(TextGroup::Contents),
+        ("TEXT" | "ATTRIB" | "ATTDEF" | "DIMENSION", 1, false) | ("ATTDEF", 3, false) => Some(TextGroup::Line),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TextGroup {
+    Contents,
+    Line,
+}
+
+/// The text groups of DXF records as a DWG holds them (`to_dwg`), or back. A DWG stores a text
+/// value as its characters (the Open Design Specification's TV strings; an AutoCAD DWG's MTEXT
+/// has a tab character where its DXF has `^I`); the caret codes are DXF's way of writing control
+/// characters and a caret in a group (DXF Reference, MTEXT). So CADaddy's own DWG codec, which
+/// encodes the DXF writer's groups and decodes into groups for the DXF reader, turns them into
+/// characters before writing ([`decode_contents`], [`decode_line`]) and back after reading
+/// ([`encode_contents`], [`encode_line`]), as the DWG bridge does: a tab stays a tab and a typed
+/// `^I` stays the two characters, whichever of them wrote or reads the file.
+pub(crate) fn dwg_text(tags: &mut [Tag], to_dwg: bool) {
+    let mut kind = String::new();
+    let mut embedded = false;
+    for t in tags.iter_mut() {
+        if t.code == 0 {
+            kind = t.str().trim().to_ascii_uppercase();
+            embedded = false;
+            continue;
+        }
+        if t.code == 101 {
+            embedded = true;
+            continue;
+        }
+        let Some(group) = text_group(&kind, t.code, embedded) else { continue };
+        let s = t.str();
+        let text = match (group, to_dwg) {
+            (TextGroup::Contents, true) => decode_contents(&s),
+            (TextGroup::Line, true) => decode_line(&s),
+            (TextGroup::Contents, false) => encode_contents(&s),
+            (TextGroup::Line, false) => encode_line(&s),
+        };
+        if text != s.as_str() {
+            *t = Tag::s(t.code, text);
+        }
+    }
+}
+
 /// Encode the contents for a DXF string: a tab as `^I`, a line feed as `^J`, a caret as `^ `;
 /// other control characters (which draw nothing) are dropped.
 pub(crate) fn encode_contents(s: &str) -> String {
