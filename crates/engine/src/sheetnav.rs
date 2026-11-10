@@ -80,7 +80,7 @@ fn rect_of(v: &Value) -> Option<Bounds2> {
     (b.min.is_finite() && b.max.is_finite() && b.width() > 0.0 && b.height() > 0.0).then_some(b)
 }
 
-/// A sheet number without the view a several-view sheet's links add (`E-2/3` is `E-2`).
+/// A sheet number without the view a several-view sheet's links add (`Q-201/3` is `Q-201`).
 fn base(number: &str) -> &str {
     number.split('/').next().unwrap_or(number).trim()
 }
@@ -455,7 +455,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
             };
             s.step_sheet(by)?.ok_or_else(|| bad("sheet.open", "this drawing has no sheets: it isn't a print set"))?
         }
-        (None, None) => return Err(bad("sheet.open", "`sheet` (a number such as \"E-101\", or its place in the list from 1) or `step` is required")),
+        (None, None) => return Err(bad("sheet.open", "`sheet` (a number such as \"Q-101\", or its place in the list from 1) or `step` is required")),
     };
     let mut out = listing(s);
     out["message"] = json!(format!("Sheet {} {}", sheet.number, sheet.title).trim().to_string());
@@ -484,7 +484,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .transparent(),
         CommandSpec::new("sheet.open", "Open Sheet", run_open)
-            .params("{sheet?: number (\"E-101\") | index from 1, step?: next|previous|first|last} → the sheet.list reply and a message (the view fits the sheet; only its objects are drawn, picked and snapped to; commands still read the whole drawing)")
+            .params("{sheet?: number (\"Q-101\") | index from 1, step?: next|previous|first|last} → the sheet.list reply and a message (the view fits the sheet; only its objects are drawn, picked and snapped to; commands still read the whole drawing)")
             .noundo()
             .transparent(),
         CommandSpec::new("sheet.next", "Next Sheet", |s, _| run_step(s, 1)).params("{} → the sheet.list reply (Page Down)").noundo().transparent(),
