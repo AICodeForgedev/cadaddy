@@ -871,7 +871,7 @@ mod tests {
         assert_eq!(r.class(&eq("cabinet", 6.0)).0, Tier::Building);
         let dev = |kind: &str, trade: &str| Facts { kind: kind.into(), trade: trade.into(), ..Facts::default() };
         assert_eq!(r.class(&dev("receptacle", "devices")).0, Tier::Room);
-        assert_eq!(r.class(&dev("light_fixture", "lights")).0, Tier::Room);
+        assert_eq!(r.class(&dev("light_fixture", "lights")).0, Tier::Floor);
         assert_eq!(r.class(&dev("air_terminal", "terminals")).0, Tier::Floor);
         let part =
             |p: &str, text: &str| Facts { kind: p.into(), part: p.into(), trade: "architecture".into(), text: text.into(), ..Facts::default() };

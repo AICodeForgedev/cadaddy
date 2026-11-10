@@ -347,7 +347,9 @@ fn counts_are_the_same_in_every_view() {
         fn walk(v: &mut Value) {
             match v {
                 Value::Object(o) => {
-                    o.retain(|k, _| !(k.ends_with("_ms") || k == "ms" || k.contains("path") || k.contains("file") || k == "written"));
+                    o.retain(|k, _| {
+                        !(k.ends_with("_ms") || k == "ms" || k == "seconds" || k.contains("path") || k.contains("file") || k == "written")
+                    });
                     o.values_mut().for_each(walk);
                 }
                 Value::Array(a) => a.iter_mut().for_each(walk),
@@ -385,7 +387,29 @@ fn counts_are_the_same_in_every_view() {
         json!({"view": "mep", "full": false}),
     ] {
         view(&mut s, p.clone());
-        assert_eq!(counts(&mut s), before, "{p}");
+        let now = counts(&mut s);
+        let mut d = Vec::new();
+        differ(&now, &before, "", &mut d);
+        assert!(d.is_empty(), "{p}: {:?}", d.iter().take(10).collect::<Vec<_>>());
+    }
+}
+
+/// Where two JSON values differ: `.a.b[2]: x / y`.
+fn differ(a: &Value, b: &Value, at: &str, out: &mut Vec<String>) {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            let keys: BTreeSet<&String> = x.keys().chain(y.keys()).collect();
+            for k in keys {
+                differ(x.get(k).unwrap_or(&Value::Null), y.get(k).unwrap_or(&Value::Null), &format!("{at}.{k}"), out);
+            }
+        }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
+            for (i, (p, q)) in x.iter().zip(y).enumerate() {
+                differ(p, q, &format!("{at}[{i}]"), out);
+            }
+        }
+        _ if a != b => out.push(format!("{at}: {a} / {b}")),
+        _ => {}
     }
 }
 
@@ -417,4 +441,42 @@ fn report_measures_each_view() {
     }
     let n = |v: &str| r["views"][v]["drawn"].as_u64().unwrap();
     assert!(n("mep") < n("mep_full") && n("room") < n("floor"), "{r}");
+}
+
+/// Clicks in the shaded BIM view pick only what its view draws: a wall picked in the
+/// Architectural view is not picked at the same spot in the MEP view, which doesn't draw it.
+#[test]
+fn a_click_picks_only_what_the_view_draws() {
+    let mut s = building(2, 2);
+    s.execute("bim.look", &json!({"on": true})).unwrap();
+    s.execute("view.dir", &json!({"dir": [-1, -1.5, 1], "fit": true})).unwrap();
+    view(&mut s, json!({"view": "architectural"}));
+    // The floors and ceilings out of the way (the MEP view draws floors too, as context).
+    s.execute("bim.tree", &json!({"path": ["*", "Architecture", "Floors"], "visible": false})).unwrap();
+    s.execute("bim.tree", &json!({"path": ["*", "Architecture", "Ceilings"], "visible": false})).unwrap();
+    let d = s.doc().unwrap();
+    // A partition between two rooms, in the open: its middle, half way up.
+    let wall = d
+        .model
+        .iter()
+        .find(|e| bimlook::made_tag(e, "type") == Some("WALL TYPE 3") && cadaddy_engine::cmd::bspec::made_level(e).as_deref() == Some("L2"))
+        .unwrap();
+    let cadaddy_engine::doc::EntityKind::Mesh(m) = &wall.kind else { panic!("a mesh") };
+    let n = m.vertices.len() as f64;
+    let mid = m.vertices.iter().fold(cadaddy_engine::geom::Vec3::new(0.0, 0.0, 0.0), |a, v| a + *v) * (1.0 / n);
+    assert!(s.state().unwrap().projection().is_some(), "a 3D view");
+    // Picks are found on plan (`select::pick`).
+    let at = cadaddy_engine::geom::Vec2::new(mid.x, mid.y);
+    s.idle_click(at, false).unwrap();
+    let picked = s.selection();
+    assert!(!picked.is_empty(), "the Architectural view picks what is drawn there");
+    s.set_selection(Vec::new());
+    view(&mut s, json!({"view": "mep"}));
+    let mep = shown(&s);
+    // What was picked there that the MEP view doesn't draw (the architecture).
+    let gone: Vec<Handle> = picked.into_iter().filter(|h| !mep.model.contains(*h)).collect();
+    assert!(!gone.is_empty(), "the spot held architecture");
+    s.idle_click(at, false).unwrap();
+    assert!(s.selection().iter().all(|h| mep.model.contains(*h)), "only what the MEP view draws");
+    assert!(!s.selection().iter().any(|h| gone.contains(h)));
 }
