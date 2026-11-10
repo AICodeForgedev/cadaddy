@@ -423,6 +423,51 @@ fn project_rules_and_penetrations_change_the_pieces() {
     assert_eq!(fs["rows"][0]["type"], json!("1 HR"));
 }
 
+/// A wall type set again with a corrected build-up (Q6506: steel studs read from a legend,
+/// then wood studs): the walls are laid out with the new layers only, never both; the drywall and
+/// insulation stay one layer each. An assembly given two framing layers of the same depth on the
+/// same side is laid out as given and flagged.
+#[test]
+fn a_wall_type_set_again_is_framed_once() {
+    let mut s = building();
+    let sheets_sf = |s: &mut Session| n(&count(s, json!({"trade": "drywall", "kind": "sheet", "type": "Type C", "level": "2"})), "area_sf");
+    let batt_sf = |s: &mut Session| n(&count(s, json!({"trade": "insulation", "level": "2"})), "area_sf");
+    let (board0, batt0) = (sheets_sf(&mut s), batt_sf(&mut s));
+    assert!(board0 > 0.0 && batt0 > 0.0);
+    let steel0 = n(&count(&mut s, json!({"trade": "framing", "kind": "stud", "type": "steel", "level": "2"})), "count");
+    assert!(steel0 > 0.0);
+    let wood = json!({"tag": "P1", "description": "RATED PARTITION", "fire_rating": "1 HR", "layers": layers(
+        json!([{"material": "5/8\" Type C gypsum board", "thickness_in": 0.625, "category": "board"}]),
+        json!([{"material": "2x4 wood studs @ 16\" o.c.", "thickness_in": 3.625, "category": "framing"},
+               {"material": "sound batt insulation", "thickness_in": 3.5, "category": "insulation", "in_cavity": true}]),
+        json!([{"material": "5/8\" Type C gypsum board", "thickness_in": 0.625, "category": "board"}]))});
+    let set = s.execute("bspec.set", &json!({"spec": {"wall_types": [{"name": "P1", "assembly": wood}]}})).unwrap();
+    let p1 = set["spec"]["wall_types"].as_array().and_then(|t| t.iter().find(|t| t["name"] == json!("P1"))).cloned().unwrap();
+    assert_eq!(p1["assembly"]["layers"].as_array().map(Vec::len), Some(4), "the new build-up only: {p1}");
+    let r = s.execute("model.build", &json!({"force": true})).unwrap();
+    assert!(r["tradesMissing"].get("wall types framed twice").is_none(), "{}", r["tradesMissing"]);
+    let steel = n(&count(&mut s, json!({"trade": "framing", "kind": "stud", "type": "steel", "level": "2"})), "count");
+    let wood_studs = n(&count(&mut s, json!({"trade": "framing", "kind": "stud", "type": "wood", "level": "2"})), "count");
+    assert_eq!(steel, 0.0, "no steel studs left beside the wood ones");
+    assert!(wood_studs > 0.0, "the wall is framed in wood");
+    assert!((sheets_sf(&mut s) - board0).abs() < 0.05, "one board layer per face: {} vs {board0}", sheets_sf(&mut s));
+    // One batt per bay (wood studs are wider than steel, so the bays are a little narrower; a
+    // second framing layer would double it).
+    let batt = batt_sf(&mut s);
+    assert!(batt > 0.95 * batt0 && batt <= batt0 + 0.05, "one batt per bay: {batt} vs {batt0}");
+
+    // A legend that really gives two framing layers of the same depth on the core: laid out as
+    // given, flagged as a likely duplicate.
+    let twice = json!({"tag": "P1", "layers": layers(json!([]),
+        json!([{"material": "3 5/8\" 20 ga metal studs", "thickness_in": 3.625, "category": "framing"},
+               {"material": "2x4 wood studs", "thickness_in": 3.625, "category": "framing"}]), json!([]))});
+    let set = s.execute("bspec.set", &json!({"spec": {"wall_types": [{"name": "P1", "assembly": twice}]}})).unwrap();
+    assert!(set["warnings"].to_string().contains("framed twice"), "{}", set["warnings"]);
+    let r = s.execute("model.build", &json!({"force": true})).unwrap();
+    let flag = r["tradesMissing"]["wall types framed twice"].as_str().unwrap_or_default().to_string();
+    assert!(flag.contains("P1"), "{}", r["tradesMissing"]);
+}
+
 #[test]
 fn hostile_params_never_panic() {
     let mut s = Session::new();
