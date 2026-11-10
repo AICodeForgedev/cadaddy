@@ -38,7 +38,7 @@ enum InGap {
 }
 
 /// A 40' × 20' building of 14" outside walls (inches). Its south wall stops either side of a 6'
-/// gap (x 120–192), its jambs drawn, and the gap holds `in_gap`; a window tag W1 stands outside
+/// gap (x 120–192), its jambs drawn, and the gap holds `in_gap`; a window tag W7 stands outside
 /// it. The others run through.
 fn building(in_gap: InGap) -> Session {
     let mut d = Drawing::new_imperial();
@@ -81,13 +81,13 @@ fn building(in_gap: InGap) -> Session {
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Floor Plan", None);
     s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).expect("layer");
-    s.execute("text", &json!({"at": [150.0, -30.0], "text": "W1", "height": 6})).expect("tag");
+    s.execute("text", &json!({"at": [150.0, -30.0], "text": "W7", "height": 6})).expect("tag");
     let spec = json!({
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
         "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Exterior"}],
         "wall_types": [{"name": "Exterior", "thickness_in": 14}],
-        "schedule": {"rows": [{"kind": "window", "mark": "W1", "width_in": 72, "height_in": 48, "sill_ft": 3}]},
+        "schedule": {"rows": [{"kind": "window", "mark": "W7", "width_in": 72, "height_in": 48, "sill_ft": 3}]},
     });
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
     s
