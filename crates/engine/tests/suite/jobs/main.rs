@@ -77,6 +77,7 @@ mod site_services;
 mod sitework;
 mod slabarea;
 mod soak5speed;
+mod specrooms;
 mod spectag;
 mod stair_treads_walls;
 mod stairs;
