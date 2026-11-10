@@ -626,6 +626,23 @@ impl Assembly {
     pub fn thickness_in(&self) -> f64 {
         self.layers.iter().filter(|l| !l.in_cavity).map(|l| l.thickness_in).sum()
     }
+
+    /// Two framing layers of the same depth on the same side (`(first, second)` layer indexes):
+    /// one wall framed twice at the same place, most likely a build-up given again on top of the
+    /// old one (a steel stud layer beside a wood one). A wall really built with two rows of studs
+    /// (a chase wall, a staggered stud wall) has them, so it is a flag, never a fix.
+    pub fn duplicate_framing(&self) -> Option<(usize, usize)> {
+        let framing: Vec<(usize, &AssemblyLayer)> = self
+            .layers
+            .iter()
+            .enumerate()
+            .take(MAX_ASSEMBLY_LAYERS)
+            .filter(|(_, l)| l.category.trim().eq_ignore_ascii_case("framing") && !l.in_cavity && l.thickness_in.is_finite())
+            .collect();
+        framing.iter().enumerate().find_map(|(n, (i, a))| {
+            framing.iter().skip(n + 1).find(|(_, b)| b.side == a.side && (b.thickness_in - a.thickness_in).abs() < 1.0 / 32.0).map(|(j, _)| (*i, *j))
+        })
+    }
 }
 
 /// One layer of a wall assembly.
@@ -3344,6 +3361,12 @@ impl BuildingSpec {
                 if !(fin(a.above_ceiling_in) && (0.0..=120.0).contains(&a.above_ceiling_in)) {
                     out.push(Issue::error(format!("{at}.assembly.above_ceiling_in"), "from 0 to 120 inches above the ceiling"));
                 }
+                if let Some((x, y)) = a.duplicate_framing() {
+                    out.push(Issue::warning(
+                        format!("{at}.assembly.layers[{y}]"),
+                        format!("framed twice: layers[{x}] and layers[{y}] are framing of the same depth on the same side (likely a duplicate)"),
+                    ));
+                }
                 let sum = a.thickness_in();
                 if !a.layers.is_empty() && fin(sum) && (sum - t.thickness_in).abs() > 0.125 {
                     out.push(Issue::warning(
@@ -3830,10 +3853,25 @@ fn room_at(items: &[serde_json::Value], c: &serde_json::Value) -> Option<usize> 
         .or_else(|| (named.len() == 1).then(|| named.first().copied()).flatten())
 }
 
+/// Whether a list under a keyed name is a list of named items `key` picks out (so it merges
+/// item by item), not an ordered list that only shares the name: an assembly's build-up
+/// `layers` (no `layer` names), an elevator's `levels` (plain names). Every change must be an
+/// object and some item, old or new, must carry the key (rooms: a number, label or name). An
+/// ordered list is replaced whole: merging it would append the new build-up to the old one.
+fn keyed_items(items: &[serde_json::Value], changes: &[serde_json::Value], key: &str, rooms: bool) -> bool {
+    let names = |x: &serde_json::Value| {
+        let has = |k: &str| x.get(k).and_then(serde_json::Value::as_str).is_some();
+        if rooms { has("number") || has("label") || has("name") } else { has(key) }
+    };
+    changes.iter().all(serde_json::Value::is_object) && items.iter().chain(changes).any(names)
+}
+
 /// Merge `patch` into `base` (both spec JSON): objects merge key by key, `null` removes a key; a
 /// list of named items (levels, wall, ceiling and soffit types, families, stairs, elevators,
-/// MEP systems by `name`; layers by `layer`; rooms by level and number, else name: [`room_at`])
-/// merges item by item, an item with `"remove": true` removing it; other lists are replaced.
+/// MEP systems by `name`; layer roles by `layer`; rooms by level and number, else name:
+/// [`room_at`]) merges item by item, an item with `"remove": true` removing it; other lists,
+/// and ordered lists under those names (an assembly's build-up `layers`: [`keyed_items`]), are
+/// replaced.
 pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
     use serde_json::Value;
     match (base, patch) {
@@ -3851,7 +3889,7 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                     _ => None,
                 };
                 match (b.get_mut(k), key, v) {
-                    (Some(Value::Array(items)), Some(key), Value::Array(changes)) => {
+                    (Some(Value::Array(items)), Some(key), Value::Array(changes)) if keyed_items(items, changes, key, k == "rooms") => {
                         let rooms = k == "rooms";
                         for c in changes.iter().take(MAX_ITEMS) {
                             let at = if rooms {
@@ -4096,6 +4134,100 @@ mod tests {
             &serde_json::json!({"levels": [{"name": "l2", "height_ft": 12}, {"name": "L1", "remove": true}, {"name": "L3", "height_ft": 9}], "site": null}),
         );
         assert_eq!(base, serde_json::json!({"levels": [{"name": "L2", "height_ft": 12}, {"name": "L3", "height_ft": 9}]}));
+    }
+
+    /// A wall type set again with a new build-up (Q6506): its `layers` are the new ones, never
+    /// the old ones with the new appended; the same holds for a ceiling type's layers, a roof's
+    /// assembly and an elevator's level list. The spec's layer roles still merge by layer.
+    #[test]
+    fn a_build_up_set_again_replaces_the_old_one() {
+        let wt = |material: &str| {
+            serde_json::json!({"wall_types": [{"name": "T1", "thickness_in": 5, "assembly": {"tag": "T1", "layers": [
+                {"material": material, "thickness_in": 3.5, "side": "core", "category": "framing"}]}}]})
+        };
+        let mut base = wt("metal studs");
+        merge(&mut base, &wt("2x4 wood studs"));
+        let layers = &base["wall_types"][0]["assembly"]["layers"];
+        assert_eq!(layers.as_array().map(Vec::len), Some(1), "{layers}");
+        assert_eq!(layers[0]["material"], "2x4 wood studs");
+        assert_eq!(base["wall_types"][0]["assembly"]["tag"], "T1", "the rest of the type still merges key by key");
+        // Set a third time with two layers, then one: always what was given last.
+        merge(
+            &mut base,
+            &serde_json::json!({"wall_types": [{"name": "t1", "assembly": {"layers": [
+                {"material": "5/8 gyp", "thickness_in": 0.625, "side": "side1", "category": "board"},
+                {"material": "2x4 wood studs", "thickness_in": 3.5, "side": "core", "category": "framing"}]}}]}),
+        );
+        assert_eq!(base["wall_types"][0]["assembly"]["layers"].as_array().map(Vec::len), Some(2));
+        assert_eq!(base["wall_types"][0]["name"], "T1");
+        let sp: BuildingSpec = serde_json::from_value(base).unwrap_or_default();
+        assert_eq!(sp.wall_types.len(), 1);
+        assert!(sp.wall_types[0].assembly.as_ref().is_some_and(|a| a.duplicate_framing().is_none()));
+
+        // A ceiling type's layers and a roof assembly's layers: replaced too.
+        let mut base = serde_json::json!({"ceiling_types": [{"name": "C1", "layers": [{"material": "a", "thickness_in": 0.5}]}],
+            "exterior": {"roofs": [{"level": "R", "assembly": {"layers": [{"material": "x", "thickness_in": 1}]}}]}});
+        merge(&mut base, &serde_json::json!({"ceiling_types": [{"name": "C1", "layers": [{"material": "b", "thickness_in": 0.625}]}]}));
+        assert_eq!(base["ceiling_types"][0]["layers"], serde_json::json!([{"material": "b", "thickness_in": 0.625}]));
+        // An empty build-up clears it.
+        merge(&mut base, &serde_json::json!({"ceiling_types": [{"name": "C1", "layers": []}]}));
+        assert_eq!(base["ceiling_types"][0]["layers"], serde_json::json!([]));
+
+        // An elevator read again with fewer levels: its level list is the new one.
+        let mut base = serde_json::json!({"elevators": [{"name": "E1", "levels": ["L1", "L2", "L3"]}]});
+        merge(&mut base, &serde_json::json!({"elevators": [{"name": "E1", "levels": ["L1", "L2"]}]}));
+        assert_eq!(base["elevators"][0]["levels"], serde_json::json!(["L1", "L2"]));
+
+        // The spec's layer roles still merge by layer: one changed, one removed, one added; an
+        // empty change list leaves named items alone.
+        let mut base =
+            serde_json::json!({"layers": [{"layer": "A-WALL", "role": "wall"}, {"layer": "A-DOOR", "role": "door"}], "wall_types": [{"name": "T1"}]});
+        merge(
+            &mut base,
+            &serde_json::json!({"layers": [{"layer": "a-wall", "role": "curtain_wall"}, {"layer": "A-DOOR", "remove": true}, {"layer": "A-GLAZ", "role": "window"}], "wall_types": []}),
+        );
+        assert_eq!(
+            base,
+            serde_json::json!({"layers": [{"layer": "A-WALL", "role": "curtain_wall"}, {"layer": "A-GLAZ", "role": "window"}], "wall_types": [{"name": "T1"}]})
+        );
+    }
+
+    /// Two framing layers of the same depth on the same side are flagged (a warning, the spec
+    /// stays valid); framing on different sides or of different depths is not.
+    #[test]
+    fn an_assembly_framed_twice_is_flagged() {
+        let l = |m: &str, t: f64, side: LayerSide, cat: &str| AssemblyLayer {
+            material: m.into(),
+            thickness_in: t,
+            side,
+            category: cat.into(),
+            ..Default::default()
+        };
+        let twice = Assembly {
+            layers: vec![
+                l("gyp", 0.625, LayerSide::Side1, "board"),
+                l("metal studs", 3.5, LayerSide::Core, "framing"),
+                l("wood studs", 3.5, LayerSide::Core, "Framing"),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(twice.duplicate_framing(), Some((1, 2)));
+        let chase = Assembly {
+            layers: vec![l("studs", 3.5, LayerSide::Side1, "framing"), l("studs", 3.5, LayerSide::Side2, "framing")],
+            ..Default::default()
+        };
+        assert_eq!(chase.duplicate_framing(), None);
+        let mixed = Assembly {
+            layers: vec![l("studs", 3.5, LayerSide::Core, "framing"), l("furring", 0.875, LayerSide::Core, "framing")],
+            ..Default::default()
+        };
+        assert_eq!(mixed.duplicate_framing(), None);
+
+        let mut sp = BuildingSpec::default();
+        sp.wall_types.push(WallType { name: "T1".into(), height_ft: None, thickness_in: 7.625, from: WallFrom::Pairs, assembly: Some(twice) });
+        let issues = sp.check();
+        let flag = issues.iter().find(|i| i.path == "wall_types[0].assembly.layers[2]");
+        assert!(flag.is_some_and(|i| i.message.contains("framed twice")), "{issues:?}");
     }
 
     /// Rooms merge by level and number when they have one, else by plan label, else by name

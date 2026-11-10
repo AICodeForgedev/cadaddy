@@ -33,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {spec, stored: bool (false: drafted from the walk rules — <drawing>.walk.json, the last WALLGEN, else the defaults), parts: [{section, key, text (plain language), approved, guess?: why it was guessed}], built: bool}")
             .noundo(),
         CommandSpec::new("bspec.set", "Set Building Spec", run_set).params(
-            "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layers by layer, {\"remove\": true} removes one), replace?: bool} → {spec, errors, warnings}",
+            "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layer roles by layer, {\"remove\": true} removes one; a build-up list (an assembly's or a ceiling type's layers) is replaced whole, never appended to), replace?: bool} → {spec, errors, warnings}",
         ),
         CommandSpec::new("bspec.validate", "Validate Building Spec", run_validate)
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
