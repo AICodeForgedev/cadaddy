@@ -2073,6 +2073,17 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // Layers whose wall type draws the centreline aren't paired: each line is a wall.
     let (centre_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) =
         wall_ents.iter().copied().partition(|e| wall_type(g, &e.common.layer).is_some_and(|t| t.from == cadaddy_walk3d::WallFrom::Centerline));
+    // A rounded outline with no wall's other face beside it all along (a callout's boundary, a
+    // door swing) is no wall's face.
+    let alone = super::perceive::geometry::rounded_outlines_alone(&pair_ents, k, &lim);
+    if !alone.is_empty() {
+        notes.push(format!(
+            "{}: {} rounded outlines (callout boundaries, swings) with no wall's other face along them not taken for wall faces.",
+            level.name,
+            alone.len()
+        ));
+    }
+    let (alone_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) = pair_ents.into_iter().partition(|e| alone.contains(&e.handle));
     let mut segs = segments(&pair_ents);
     // A dashed line (an overhead or hidden line drawn in pieces) is no wall's face.
     let dashes = super::perceive::geometry::drop_dashes(&mut segs, k);
@@ -2084,6 +2095,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if joined > 0 {
         notes.push(format!("{}: {joined} block-long pieces of wall faces joined.", level.name));
     }
+    // The rounded outlines left out stay in sight until the symbols are read: a tub's or a basin's
+    // rounded inner outline is the symbol's, and its pairs with the symbol's outline show the
+    // outline is one (left out, the outline's edge paired with the wall face beside it as a wall).
+    // Their pairs go after that.
+    let own_segs = segs.len();
+    segs.extend(segments(&alone_ents));
     let mut found = pairs(d, &segs, &lim);
     // A thin outline's side paired with another wall's face is the air beside that wall.
     let slivers = super::perceive::geometry::drop_sliver_pairs(&segs, &mut found, &lim);
@@ -2112,6 +2129,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             level.name
         ));
     }
+    found.retain(|p| p.faces.iter().all(|&f| f < own_segs));
+    segs.truncate(own_segs);
     // A stair drawn as linework (no stair block): its tread lines a tread apart pair up like a
     // wall's faces. They are the stair's, read by the stair reader (Q6429).
     let treads = drop_stair_treads(&segs, &mut found, k);
