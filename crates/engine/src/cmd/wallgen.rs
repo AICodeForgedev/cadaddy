@@ -2083,7 +2083,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             alone.len()
         ));
     }
-    let pair_ents: Vec<&Arc<Entity>> = pair_ents.into_iter().filter(|e| !alone.contains(&e.handle)).collect();
+    let (alone_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) = pair_ents.into_iter().partition(|e| alone.contains(&e.handle));
     let mut segs = segments(&pair_ents);
     // A dashed line (an overhead or hidden line drawn in pieces) is no wall's face.
     let dashes = super::perceive::geometry::drop_dashes(&mut segs, k);
@@ -2095,6 +2095,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if joined > 0 {
         notes.push(format!("{}: {joined} block-long pieces of wall faces joined.", level.name));
     }
+    // The rounded outlines left out stay in sight until the symbols are read: a tub's or a basin's
+    // rounded inner outline is the symbol's, and its pairs with the symbol's outline show the
+    // outline is one (left out, the outline's edge paired with the wall face beside it as a wall).
+    // Their pairs go after that.
+    let own_segs = segs.len();
+    segs.extend(segments(&alone_ents));
     let mut found = pairs(d, &segs, &lim);
     // A thin outline's side paired with another wall's face is the air beside that wall.
     let slivers = super::perceive::geometry::drop_sliver_pairs(&segs, &mut found, &lim);
@@ -2123,6 +2129,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             level.name
         ));
     }
+    found.retain(|p| p.faces.iter().all(|&f| f < own_segs));
+    segs.truncate(own_segs);
     // A stair drawn as linework (no stair block): its tread lines a tread apart pair up like a
     // wall's faces. They are the stair's, read by the stair reader (Q6429).
     let treads = drop_stair_treads(&segs, &mut found, k);

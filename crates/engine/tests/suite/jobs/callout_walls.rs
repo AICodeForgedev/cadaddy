@@ -241,3 +241,38 @@ fn a_wall_with_rounded_corners_on_both_faces_is_still_built() {
         assert!(b.iter().any(|w| x > w.0 && x < w.2 && y > w.1 && y < w.3), "no wall at ({x}, {y}): {b:?}");
     }
 }
+
+#[test]
+fn a_rounded_basin_in_a_tub_by_a_wall_is_the_tubs_with_a_callout_round_the_room() {
+    // A 5' × 2'-6" tub against the north wall, 18" short of the east wall's face (its outline four
+    // lines, as a print's come in), its basin a closed outline 3" in with 4" arc corners, a drain;
+    // the callout's faceted outline 4" out all round. The basin is the tub's (no wall's other face
+    // along it, like the callout), and the tub's edge is no wall's face with the east wall's.
+    let mut d = room();
+    for (a, b) in [((276., 108.), (336., 108.)), ((336., 108.), (336., 138.)), ((336., 138.), (276., 138.)), ((276., 138.), (276., 108.))] {
+        line_in(&mut d, "A-WALL", a, b);
+    }
+    let (x0, y0, x1, y1, r) = (279.0, 111.0, 333.0, 135.0, 4.0);
+    let q = (std::f64::consts::FRAC_PI_8).tan();
+    let basin = [
+        (x0 + r, y0, 0.0),
+        (x1 - r, y0, q),
+        (x1, y0 + r, 0.0),
+        (x1, y1 - r, q),
+        (x1 - r, y1, 0.0),
+        (x0 + r, y1, q),
+        (x0, y1 - r, 0.0),
+        (x0, y0 + r, q),
+    ];
+    poly(&mut d, &basin, true);
+    let h = next_handle(&mut d);
+    let mut drain = Entity::new(h, EntityKind::Circle(cadaddy_engine::doc::Circle { center: Vec3 { x: 285.0, y: 123.0, z: 0.0 }, radius: 1.5 }));
+    drain.common.layer = "A-WALL".into();
+    d.model.push(drain);
+    let callout: Vec<(f64, f64, f64)> = faceted_outline(callout_box(4.0), 10.0).into_iter().map(|(x, y)| (x, y, 0.0)).collect();
+    poly(&mut d, &callout, true);
+    let (s, r) = build(d);
+    assert_room_alone(&s, &r, "tub with a rounded basin, callout 4\" out");
+    let walls = boxes(&s, "wall");
+    assert!(!walls.iter().any(|b| b.0 > 270.0 && b.2 < 354.0 && b.1 > 100.0), "a wall in the tub or beside it: {walls:?}");
+}
