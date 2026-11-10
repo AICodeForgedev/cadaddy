@@ -7595,7 +7595,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The electrical gear the plans don't place, from the schedules, the one-line and the gear
     // submittals, in its rooms; the feeders between; the gear checked (entry, lugs) and reviewed.
     let t = web_time::Instant::now();
-    if let Err(e) = gear_step(s, job, &pages, &mut result) {
+    if let Err(e) = gear_step(s, job, &pages, placer.as_deref(), &mut result) {
         result["gear_error"] = json!(e.to_string());
     }
     bim_step(s, job, "electrical gear", t);
@@ -15848,7 +15848,133 @@ fn utility_service(
     Ok(p)
 }
 
-fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
+/// What [`drawn_gear_onto_plans`] did: the gear it placed (tag, where it was read), the tags whose
+/// lettered or proposed place it replaced (built again), and the tags a plan draws but whose sheet
+/// lines up with no level's plan.
+#[derive(Default)]
+struct DrawnGearPlaced {
+    placed: Vec<String>,
+    tags: BTreeSet<String>,
+    replaced: BTreeSet<String>,
+    not_placeable: Vec<String>,
+}
+
+/// Gear the electrical plans draw (Q6437): each scheduled panel or switchboard whose label sits on
+/// or beside a rectangle of a gear's proportions ([`super::gearbuild::drawn_gear`]) goes there,
+/// the rectangle its footprint and the wall it touches the one its back is on, put onto its
+/// level's plan by its sheet's registration as the rest of the sheet's reading was. It replaces
+/// the place its lettering or its schedule's location gave (and this step's own of a run
+/// before); gear placed any other way stays. A schedule's LOCATION then places only the gear no
+/// plan draws.
+fn drawn_gear_onto_plans(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    sp: &mut cadaddy_walk3d::BuildingSpec,
+    place: Option<&dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>,
+    rooms: &[super::gearbuild::RoomBox],
+    gear: &BTreeMap<String, super::gearbuild::SubmittedGear>,
+) -> DrawnGearPlaced {
+    let mut out = DrawnGearPlaced::default();
+    let Some(place) = place else { return out };
+    // A place this step may replace: lettering, a proposal, its own of a run before.
+    let replaceable = |e: &cadaddy_walk3d::MepEquipment| {
+        e.sources.get("position").map(String::as_str) == Some(super::printcond::ROOM_PANEL_POSITION)
+            || e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed"))
+            || e.sources.get("footprint").is_some_and(|f| f.starts_with(super::gearbuild::DRAWN_FOOTPRINT))
+    };
+    let mut todo: Vec<String> = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .filter(|p| p.typical_of.is_none())
+        .map(|p| p.panel.trim().to_string())
+        .filter(|t| !t.is_empty() && !sp.mep.equipment.iter().any(|e| e.tag.trim().eq_ignore_ascii_case(t) && !replaceable(e)))
+        .collect();
+    todo.dedup();
+    if todo.is_empty() {
+        return out;
+    }
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let rule = super::gearbuild::DrawnRule::from_data();
+    let mount_top = super::coderules::rules().into_iter().find(|r| r.id == "E-WORKSPACE").and_then(|r| r.mount_top_in).unwrap_or(78.0);
+    let refs: Vec<super::printmep::SheetRef> =
+        job_sheet_refs(job).into_iter().filter(|r| r.discipline.eq_ignore_ascii_case("E") && r.builds()).take(MAX_STAMP_SHEETS).collect();
+    let mut made: Vec<cadaddy_walk3d::MepEquipment> = Vec::new();
+    for r in &refs {
+        if todo.is_empty() {
+            break;
+        }
+        let sub = super::printmep::sheet_drawing(d, r);
+        let su = super::printmep::paper_units_per_foot(&sub, r).unwrap_or(upf);
+        let [x0, y0, x1, y1] = r.view.unwrap_or(r.rect);
+        let inside = |p: cadaddy_geom::Vec2| p.x >= x0.min(x1) && p.x <= x0.max(x1) && p.y >= y0.min(y1) && p.y <= y0.max(y1);
+        let sheet = super::gearbuild::GearSheet {
+            number: r.number.clone(),
+            texts: cadaddy_mepfix::sheet_facts::texts_with_tags(&sub).into_iter().filter(|t| inside(t.at)).collect(),
+            outlines: super::schedequip::plan_outlines(&sub),
+            upf: su,
+        };
+        // A sheet left at paper size: its reading scaled to the job's units about its corner.
+        let k = upf / su;
+        let to_drawing = |p: [f64; 2]| [x0 + (p[0] - x0) * k, y0 + (p[1] - y0) * k];
+        let mut levels = vec![r.level.clone()];
+        for l in &r.levels {
+            if !levels.iter().any(|x| x.eq_ignore_ascii_case(l)) {
+                levels.push(l.clone());
+            }
+        }
+        for dg in super::gearbuild::drawn_gear(&todo, &sheet, &rule) {
+            let (a, b) = (to_drawing(dg.min), to_drawing(dg.max));
+            let onto = levels.iter().find_map(|code| {
+                let level = super::printmep::level_name(code);
+                let sim = place(a, &level)?;
+                let (p, q) = (sim.apply(a), sim.apply(b));
+                let (min, max) = ([p[0].min(q[0]), p[1].min(q[1])], [p[0].max(q[0]), p[1].max(q[1])]);
+                let mid = [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0];
+                // The level whose plan it lands on, else the sheet's.
+                let by_region = sp.levels.iter().find(|l| {
+                    l.region
+                        .is_some_and(|g| mid[0] >= g[0].min(g[2]) && mid[0] <= g[0].max(g[2]) && mid[1] >= g[1].min(g[3]) && mid[1] <= g[1].max(g[3]))
+                });
+                let name =
+                    by_region.or_else(|| sp.levels.iter().find(|l| same_level_name(&l.name, &level))).map_or(level.clone(), |l| l.name.clone());
+                Some((name, min, max))
+            });
+            let Some((level, min, max)) = onto else {
+                out.not_placeable.push(format!("{} ({})", dg.tag, dg.sheet));
+                continue;
+            };
+            let mid = cadaddy_geom::Vec2::new((min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0);
+            let back = super::gearbuild::room_outline_on_plan(rooms, &level, None, mid)
+                .and_then(|o| super::gearbuild::back_against(min, max, &o, (max[0] - min[0]).max(max[1] - min[1]).max(upf)));
+            let schedule = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(&dg.tag));
+            let g = gear.get(&dg.tag).or_else(|| gear.iter().find(|(k, _)| k.eq_ignore_ascii_case(&dg.tag)).map(|(_, v)| v));
+            let e = super::gearbuild::drawn_equipment(&dg, &level, min, max, back, schedule, g, &rule, mount_top);
+            out.placed.push(format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default()));
+            todo.retain(|t| !t.eq_ignore_ascii_case(&dg.tag));
+            out.not_placeable.retain(|t| !t.starts_with(&format!("{} (", dg.tag)));
+            made.push(e);
+        }
+    }
+    out.tags = made.iter().map(|e| e.tag.trim().to_ascii_uppercase()).collect();
+    sp.mep.equipment.retain(|e| {
+        let gone = out.tags.contains(&e.tag.trim().to_ascii_uppercase()) && replaceable(e);
+        if gone {
+            out.replaced.insert(e.tag.trim().to_ascii_uppercase());
+        }
+        !gone
+    });
+    sp.mep.equipment.extend(made);
+    out
+}
+
+fn gear_step(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    pages: &[(String, cadaddy_doc::Drawing)],
+    place: Option<&dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>,
+    result: &mut Value,
+) -> crate::Result<()> {
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
     if sp.mep.panel_schedules.is_empty() {
         return Ok(());
@@ -16001,6 +16127,11 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         }
     }
     let from_oneline = super::panelsched::fill_from_oneline(&mut sp, &feeds, &types);
+    // Gear the plans draw goes where they draw it (its lettering's or schedule's place replaced).
+    let drawn = drawn_gear_onto_plans(s.doc()?, job, &mut sp, place, &rooms, &gear);
+    if !drawn.placed.is_empty() || !drawn.not_placeable.is_empty() {
+        result["gear_drawn"] = json!({"placed": drawn.placed, "replaced": drawn.replaced, "not_placeable": drawn.not_placeable});
+    }
     // Gear the plans already locate takes its box from its submittal.
     let mut resized: BTreeSet<String> = BTreeSet::new();
     {
@@ -16015,7 +16146,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         }
     }
     // A panel its lettering put in a crossing wall stands clear of it.
-    let mut slid: BTreeSet<String> = BTreeSet::new();
+    let mut slid: BTreeSet<String> = drawn.replaced.clone();
     {
         let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
         let (walls, wall_types) = (sp.walls.clone(), sp.wall_types.clone());
@@ -16027,6 +16158,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     }
     let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
     let mut new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    new_tags.extend(drawn.tags.iter().cloned());
     new_tags.extend(resized.iter().cloned());
     new_tags.extend(slid.iter().cloned());
     let zones = planned.zones.clone();
@@ -16117,11 +16249,13 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
     let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
     let line = format!(
-        "  electrical gear: feeder types {} ({}); one-line feeds {}; schedule circuits given the one-line's breaker/feeder {from_oneline}; gear submittals give {} panels; laid out {}: {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
+        "  electrical gear: feeder types {} ({}); one-line feeds {}; schedule circuits given the one-line's breaker/feeder {from_oneline}; gear submittals give {} panels; at their plan symbols {}: {}; laid out {}: {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
         types.len(),
         type_tags.join(", "),
         incoming.len(),
         gear.len(),
+        drawn.placed.len(),
+        drawn.placed.join("; "),
         placed.len(),
         placed.join("; "),
         planned.unplaced,
@@ -28980,6 +29114,143 @@ mod ckpt_tests {
 
 #[cfg(test)]
 mod tests {
+    /// fix-drawn-gear-placed-by-schedule-text (Q6437): a made-up 12 x 26 ft electrical room whose
+    /// electrical plan draws four pieces of gear against its east wall, north to south, each
+    /// labelled beside its rectangle (`SWBD MDP`, `PNLBD'DP4'`, `PNLBD 'A'`, `PANEL B`); every
+    /// schedule says only LOCATION: ELECTRICAL ROOM, and B was lettered onto the south wall
+    /// before. A 2x4 fixture tagged `A` and a fifth panel the plans don't draw are by. Each
+    /// drawn piece goes at its rectangle (onto the level's plan by the sheet's registration), its
+    /// back on the east wall, marked drawn; B's lettered place is replaced; only the undrawn
+    /// panel is left to its schedule's location (proposed). Before the fix all five were laid out
+    /// from the schedules' location: measured here as the drawn-to-placed distances.
+    #[test]
+    fn gear_a_plan_draws_goes_at_its_symbol_not_its_schedules_location() {
+        use super::*;
+        use crate::cmd::gearbuild::{RoomBox, SubmittedGear, plan};
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "QE-1", "discipline": "E", "sheet_type": "plan", "level": "1"}]}));
+        job.sheets_loaded = true;
+        // The sheet sits 3000 units right of the architectural plan the registration maps it onto.
+        let dx = 3000.0;
+        job.sheet_regions.push(SheetRegion { rect: [dx, -50.0, dx + 400.0, 400.0], ..region("QE-1", "1", "E", "plan", dx) });
+        let pline = |s: &mut crate::Session, lo: [f64; 2], hi: [f64; 2]| {
+            let v = json!([[lo[0] + dx, lo[1]], [hi[0] + dx, lo[1]], [hi[0] + dx, hi[1]], [lo[0] + dx, hi[1]]]);
+            s.execute("pline", &json!({"vertices": v, "closed": true})).unwrap();
+        };
+        let text = |s: &mut crate::Session, at: [f64; 2], t: &str| {
+            s.execute("text", &json!({"at": [at[0] + dx, at[1]], "text": t, "height": 4})).unwrap();
+        };
+        // The room (inside faces of its walls), its gear, labels, a fixture.
+        pline(&mut s, [0.0, 0.0], [144.0, 312.0]);
+        let drawn: [(&str, &str, [f64; 2], [f64; 2], [f64; 2]); 4] = [
+            ("MDP", "SWBD MDP", [114.0, 250.0], [144.0, 298.0], [96.0, 272.0]),
+            ("DP4", "PNLBD'DP4'", [138.0, 200.0], [144.0, 220.0], [120.0, 208.0]),
+            ("A", "PNLBD 'A'", [138.0, 160.0], [144.0, 180.0], [120.0, 168.0]),
+            ("B", "PANEL B", [138.0, 120.0], [144.0, 140.0], [120.0, 128.0]),
+        ];
+        for (_, label, lo, hi, at) in &drawn {
+            pline(&mut s, *lo, *hi);
+            text(&mut s, *at, label);
+        }
+        pline(&mut s, [20.0, 20.0], [44.0, 68.0]);
+        text(&mut s, [30.0, 40.0], "A");
+        let hdr = |loc: &str| [("location".to_string(), loc.to_string()), ("volts/phase".to_string(), "208Y/120V, 3PH, 4W".to_string())];
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.levels = vec![cadaddy_walk3d::Level {
+            name: "Level 1".into(),
+            elevation_ft: 0.0,
+            height_ft: 10.0,
+            ceiling_ft: 9.0,
+            region: Some([-100.0, -100.0, 500.0, 500.0]),
+            base: None,
+            attr: None,
+            sheet: None,
+        }];
+        sp.mep.panel_schedules = ["MDP", "DP4", "A", "B", "C"]
+            .iter()
+            .map(|t| cadaddy_walk3d::PanelSchedule { panel: (*t).into(), header: hdr("ELECTRICAL ROOM").into_iter().collect(), ..Default::default() })
+            .collect();
+        let size =
+            |h: f64, w: f64, d: f64, kind: &str| SubmittedGear { size_in: [h, w, d], kind: kind.into(), source: "sub".into(), ..Default::default() };
+        let gear: BTreeMap<String, SubmittedGear> = [
+            ("MDP", size(90.0, 48.0, 30.0, "switchboard")),
+            ("DP4", size(72.0, 20.0, 6.0, "")),
+            ("A", size(60.0, 20.0, 6.0, "")),
+            ("B", size(60.0, 20.0, 6.0, "")),
+            ("C", size(48.0, 20.0, 6.0, "")),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let room = RoomBox {
+            level: "Level 1".into(),
+            number: "101".into(),
+            name: "ELECTRICAL ROOM".into(),
+            outline: vec![
+                cadaddy_geom::Vec2::new(0.0, 0.0),
+                cadaddy_geom::Vec2::new(144.0, 0.0),
+                cadaddy_geom::Vec2::new(144.0, 312.0),
+                cadaddy_geom::Vec2::new(0.0, 312.0),
+            ],
+            offset: cadaddy_geom::Vec2::ZERO,
+            doors: Vec::new(),
+        };
+        let mid = |lo: [f64; 2], hi: [f64; 2]| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+        let far = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) / 12.0;
+        // Before: every piece from its schedule's location, nothing at its drawing.
+        let before = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room));
+        let off: Vec<(String, f64)> = drawn
+            .iter()
+            .map(|(t, _, lo, hi, _)| {
+                let e = before.equipment.iter().find(|e| e.tag == *t).unwrap_or_else(|| panic!("{t} proposed: {:?}", before.unplaced));
+                ((*t).to_string(), far(mid(e.min, e.max), mid(*lo, *hi)))
+            })
+            .collect();
+        eprintln!("from the schedules' location, ft from the drawn symbol: {off:?}");
+        assert!(off.iter().any(|(_, d)| *d > 2.0), "the reported misplacement: {off:?}");
+        // The lettered B of an earlier step, on the south wall.
+        let mut b = cadaddy_walk3d::MepEquipment { tag: "B".into(), kind: "panel".into(), level: "Level 1".into(), ..Default::default() };
+        b.min = [60.0, 0.0];
+        b.max = [80.0, 6.0];
+        b.sources.insert("position".into(), crate::cmd::printcond::ROOM_PANEL_POSITION.into());
+        sp.mep.equipment.push(b);
+        let place = |p: [f64; 2], level: &str| {
+            (level == "Level 1" && p[0] >= dx && p[0] <= dx + 400.0).then_some(cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [-dx, 0.0]))
+        };
+        let got = drawn_gear_onto_plans(s.doc().unwrap(), &job, &mut sp, Some(&place), std::slice::from_ref(&room), &gear);
+        assert_eq!(got.placed.len(), 4, "{:?} not placeable {:?}", got.placed, got.not_placeable);
+        assert_eq!(got.replaced, ["B".to_string()].into_iter().collect::<BTreeSet<_>>());
+        for (t, _, lo, hi, _) in &drawn {
+            let es: Vec<_> = sp.mep.equipment.iter().filter(|e| e.tag == *t).collect();
+            assert_eq!(es.len(), 1, "{t} once: {es:?}");
+            let e = es[0];
+            assert_eq!((e.min, e.max, e.level.as_str()), (*lo, *hi, "Level 1"), "{t} at its rectangle");
+            assert_eq!(e.sources.get("back").map(String::as_str), Some("x+"), "{t} backs on the east wall");
+            assert_eq!(e.sources.get("status").map(String::as_str), Some("drawn"));
+            assert!(e.properties["PLACEMENT"].contains("east wall"), "{:?}", e.properties);
+        }
+        let mdp = sp.mep.equipment.iter().find(|e| e.tag == "MDP").unwrap();
+        assert_eq!((mdp.kind.as_str(), mdp.bottom_ft), ("switchboard", 0.0));
+        // North to south as drawn.
+        let ys: Vec<f64> = ["MDP", "DP4", "A", "B"].iter().map(|t| sp.mep.equipment.iter().find(|e| e.tag == *t).map_or(0.0, |e| e.min[1])).collect();
+        assert!(ys.windows(2).all(|w| w[0] > w[1]), "{ys:?}");
+        // Only the undrawn panel is left to its schedule's location.
+        let after = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room));
+        assert_eq!(after.equipment.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>(), ["C"]);
+        assert_eq!(after.equipment[0].sources.get("status").map(String::as_str), Some("proposed"));
+        // A rerun replaces its own and adds nothing.
+        let again = drawn_gear_onto_plans(s.doc().unwrap(), &job, &mut sp, Some(&place), std::slice::from_ref(&room), &gear);
+        assert_eq!(again.placed.len(), 4);
+        assert_eq!(sp.mep.equipment.len(), 4, "{:?}", sp.mep.equipment.iter().map(|e| &e.tag).collect::<Vec<_>>());
+        // No registration: nothing placed off the building.
+        let mut sp2 = sp.clone();
+        sp2.mep.equipment.clear();
+        let none = |_: [f64; 2], _: &str| -> Option<cadaddy_mepfix::tagid::Sim> { None };
+        let lost = drawn_gear_onto_plans(s.doc().unwrap(), &job, &mut sp2, Some(&none), std::slice::from_ref(&room), &gear);
+        assert!(lost.placed.is_empty() && lost.not_placeable.len() == 4 && sp2.mep.equipment.is_empty(), "{:?}", lost.not_placeable);
+    }
+
     /// The sheets the project manual points a division to are typed specification in the
     /// job's sheet lists (Q6295): their level goes, and they are no plans to load.
     #[test]
