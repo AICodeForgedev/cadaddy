@@ -2089,7 +2089,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // gap, which stays the window's opening (Q6424).
     let all_segs = segments(&ents);
     let range = (oz.min_ft * upf, oz.max_ft * upf);
-    let frames = frames_in_gaps(&found, &segs, &found, &all_segs, range, k);
+    let frames = frames_in_gaps(&found, &segs, &found, true, &all_segs, range, k);
     let mut it = frames.iter();
     found.retain(|_| !it.next().copied().unwrap_or(false));
     let mut frame_pairs = frames.iter().filter(|x| **x).count();
@@ -2098,7 +2098,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if !screened_ents.is_empty() && !found.is_empty() {
         let screened_segs = segments(&screened_ents);
         let mut fills: Vec<_> = pairs(d, &screened_segs, &lim).into_iter().filter(|p| fills_a_wall(p.c0, p.c1, p.thickness, &found, k)).collect();
-        let frames = frames_in_gaps(&fills, &screened_segs, &found, &all_segs, range, k);
+        let frames = frames_in_gaps(&fills, &screened_segs, &found, false, &all_segs, range, k);
         let mut it = frames.iter();
         fills.retain(|_| !it.next().copied().unwrap_or(false));
         frame_pairs += frames.iter().filter(|x| **x).count();
@@ -3836,17 +3836,23 @@ const FRAME_REACH_IN: f64 = 2.0;
 const MAX_FRAME_CANDIDATES: usize = 200_000;
 
 /// Which of the pairs `cands` (faces in `faces`) are a window drawn across a gap in a wall, not a
-/// wall bridging it (Q6424): both faces lie wholly within the gap's extent (between the ends of
-/// two of the walls `hosts` in line, an opening's width apart: `range`, sheet units) and within
-/// those walls' depth, and a line of the level's (`lines`) is drawn strictly between the walls'
-/// faces across the gap ([`glazed`]: the frame's glazing or sill line, or two glazing lines from
-/// jamb to jamb paired up themselves). A wall piece in line with nothing inside it, and the
-/// pairs of a line running on past the gap (a wall drawn with a line between its faces), stay
-/// walls. `k`: sheet units per inch.
+/// wall bridging it (Q6424). A window's gap: a pair of `cands` lies between the ends of two of the
+/// walls `hosts` in line (an opening's width apart: `range`, sheet units), its faces wholly
+/// within the gap's extent and its centreline within the walls' depth, and a line of the level's
+/// (`lines`) is drawn strictly between the walls' faces across the gap ([`glazed`]: the frame's
+/// glazing or sill line, or two glazing lines from jamb to jamb paired up themselves). Every pair
+/// of `cands` in line lying wholly within such a gap's extent, a face of it in the wall's depth,
+/// is the window's (its frame's outline, an inner frame inset from the jambs, the frame paired
+/// with a sill or stool past the wall's face). The walls either
+/// side must be walls: not themselves such a piece between two others (`hosts_are_cands`: the
+/// same list), so a facade of short piers drawn with lines inside them between windows keeps its
+/// piers. A wall piece in line with nothing inside it, and the pairs of a line running on past
+/// the gap (a wall drawn with a line between its faces), stay walls. `k`: sheet units per inch.
 fn frames_in_gaps(
     cands: &[super::perceive::geometry::Pair],
     faces: &[super::perceive::geometry::Seg],
     hosts: &[super::perceive::geometry::Pair],
+    hosts_are_cands: bool,
     lines: &[super::perceive::geometry::Seg],
     (min_gap, max_gap): (f64, f64),
     k: f64,
@@ -3858,14 +3864,15 @@ fn frames_in_gaps(
     let (reach, tol) = (FRAME_REACH_IN * k, 0.5 * k);
     let longest = max_gap + 2.0 * reach;
     let seg_len = |i: usize| faces.get(i).map(|s| s.a.dist(s.b));
-    // A candidate is no longer than an opening, nor are its faces.
+    // A pair no longer than an opening, nor are its faces.
     let short = |p: &super::perceive::geometry::Pair| {
         p.c0.dist(p.c1) <= longest && p.faces.iter().all(|&f| seg_len(f).is_some_and(|l| l.is_finite() && l <= longest))
     };
     if !cands.iter().any(short) {
         return out;
     }
-    // The hosts by the cells of their ends, the lines by their middles' (2' cells).
+    // The hosts by the cells of their ends, the lines and the short pairs by their middles' (2'
+    // cells).
     let cell = 24.0 * k;
     let at = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
     let mut host_cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -3881,6 +3888,13 @@ fn frames_in_gaps(
         let m = s.a.mid(s.b);
         if m.is_finite() && s.a.dist(s.b) <= longest + 2.0 * max_gap.max(cell) {
             line_cells.entry(at(m)).or_default().push(i);
+        }
+    }
+    let mut cand_cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, c) in cands.iter().enumerate().take(MAX_FRAME_CANDIDATES) {
+        let m = c.c0.mid(c.c1);
+        if m.is_finite() && short(c) {
+            cand_cells.entry(at(m)).or_default().push(i);
         }
     }
     let near = |cells: &HashMap<(i64, i64), Vec<usize>>, lo: Vec2, hi: Vec2| -> Vec<usize> {
@@ -3899,8 +3913,12 @@ fn frames_in_gaps(
         v.dedup();
         v
     };
+    // The window gaps: (start, direction, length, host thickness, the hosts either side).
+    let mut gaps: Vec<(Vec2, Vec2, f64, f64, [usize; 2])> = Vec::new();
+    // The pairs that are such a window's piece between two others (whatever those are).
+    let mut pieces = vec![false; cands.len()];
     for (ci, c) in cands.iter().enumerate().take(MAX_FRAME_CANDIDATES) {
-        if !short(c) {
+        if !short(c) || gaps.len() >= MAX_FRAME_CANDIDATES {
             continue;
         }
         let len = c.c0.dist(c.c1);
@@ -3910,26 +3928,28 @@ fn frames_in_gaps(
         let u = (c.c1 - c.c0) * (1.0 / len);
         let n = u.perp();
         // The walls in line ending at either end of it: (end along it, centreline offset,
-        // thickness) — before its start, and past its end.
-        let (mut before, mut after): (Option<(f64, f64, f64)>, Option<(f64, f64, f64)>) = (None, None);
+        // thickness, host) — before its start, and past its end.
+        type Side = Option<(f64, f64, f64, usize)>;
+        let (mut before, mut after): (Side, Side) = (None, None);
         let r = Vec2::new(reach + cell, reach + cell);
         let mut by: Vec<usize> = near(&host_cells, c.c0 - r, c.c0 + r);
         by.extend(near(&host_cells, c.c1 - r, c.c1 + r));
         for hi in by {
             let Some(h) = hosts.get(hi) else { continue };
             let hl = h.c0.dist(h.c1);
-            if hl.is_nan() || hl <= 1e-9 || u.cross((h.c1 - h.c0) * (1.0 / hl)).abs() > 0.02 || h.thickness + tol < c.thickness {
+            if hl.is_nan() || hl <= 1e-9 || u.cross((h.c1 - h.c0) * (1.0 / hl)).abs() > 0.02 {
                 continue;
             }
+            // Its centreline within the wall's depth.
             let off = n.dot(h.c0 - c.c0);
-            if off.abs() + c.thickness / 2.0 > h.thickness / 2.0 + tol {
+            if off.abs() > h.thickness / 2.0 + tol {
                 continue;
             }
             let (s0, s1) = (u.dot(h.c0 - c.c0).min(u.dot(h.c1 - c.c0)), u.dot(h.c0 - c.c0).max(u.dot(h.c1 - c.c0)));
             // The thickest wall of each side: the wall, not a lining of it.
-            let pick = |cur: Option<(f64, f64, f64)>, end: f64| match cur {
+            let pick = |cur: Side, end: f64| match cur {
                 Some(x) if x.2 >= h.thickness => Some(x),
-                _ => Some((end, off, h.thickness)),
+                _ => Some((end, off, h.thickness, hi)),
             };
             if s1.abs() <= reach && s0 < -reach {
                 before = pick(before, s1);
@@ -3937,7 +3957,7 @@ fn frames_in_gaps(
                 after = pick(after, s0);
             }
         }
-        let (Some((g0, off0, t0)), Some((g1, off1, t1))) = (before, after) else { continue };
+        let (Some((g0, off0, t0, h0)), Some((g1, off1, t1, h1))) = (before, after) else { continue };
         let gap = g1 - g0;
         if gap < min_gap || gap > max_gap {
             continue;
@@ -3958,10 +3978,44 @@ fn frames_in_gaps(
         let pad = Vec2::new(t + reach, t + reach);
         let (lo, hi) = (Vec2::new(a.x.min(b.x), a.y.min(b.y)) - pad, Vec2::new(a.x.max(b.x), a.y.max(b.y)) + pad);
         let here: Vec<super::perceive::geometry::Seg> = near(&line_cells, lo, hi).into_iter().filter_map(|i| lines.get(i).cloned()).collect();
-        if glazed(&here, a, b, t, k)
-            && let Some(x) = out.get_mut(ci)
-        {
-            *x = true;
+        if glazed(&here, a, b, t, k) {
+            if let Some(x) = pieces.get_mut(ci) {
+                *x = true;
+            }
+            gaps.push((a, u, gap, t, [h0, h1]));
+        }
+    }
+    // Each gap whose walls either side are walls (not pieces between two others themselves):
+    // every pair wholly within it, in line, is the window's.
+    for (a, u, len, t, hs) in gaps {
+        if hosts_are_cands && hs.iter().any(|&h| pieces.get(h).copied().unwrap_or(false)) {
+            continue;
+        }
+        let n = u.perp();
+        let b = a + u * len;
+        let pad = Vec2::new(t + reach, t + reach);
+        let (lo, hi) = (Vec2::new(a.x.min(b.x), a.y.min(b.y)) - pad, Vec2::new(a.x.max(b.x), a.y.max(b.y)) + pad);
+        for ci in near(&cand_cells, lo, hi) {
+            let Some(c) = cands.get(ci) else { continue };
+            let cl = c.c0.dist(c.c1);
+            if cl.is_nan() || cl <= 1e-9 || u.cross((c.c1 - c.c0) * (1.0 / cl)).abs() > 0.02 {
+                continue;
+            }
+            let inside = c.faces.iter().all(|&f| {
+                faces.get(f).is_some_and(|s| {
+                    let (p0, p1) = (u.dot(s.a - a), u.dot(s.b - a));
+                    p0.min(p1) >= -reach && p0.max(p1) <= len + reach
+                })
+            });
+            // A face of it in the wall's depth: the frame's (paired with another of its lines, or
+            // with a sill or stool drawn past the wall's face).
+            let framed = c.faces.iter().any(|&f| faces.get(f).is_some_and(|s| n.dot(s.a.mid(s.b) - a).abs() <= t / 2.0 + tol));
+            if inside
+                && framed
+                && let Some(x) = out.get_mut(ci)
+            {
+                *x = true;
+            }
         }
     }
     out

@@ -35,6 +35,9 @@ enum InGap {
     /// A frame rectangle as in `Frame`, but the line along its centre runs on the whole wall's
     /// length (a wall drawn with a line between its faces): the wall runs through.
     LineThrough,
+    /// The frame's outline as in `Frame`, an inner frame (the sash) 6" deep inset 2 1/2" from
+    /// each jamb inside it, and a sill line 4" outside the wall's face along the opening.
+    InsetFrame,
 }
 
 /// A 40' × 20' building of 14" outside walls (inches). Its south wall stops either side of a 6'
@@ -64,6 +67,17 @@ fn building(in_gap: InGap) -> Session {
         InGap::Glazing => {
             line(&mut d, (120.0, t / 2.0 - 1.5), (192.0, t / 2.0 - 1.5));
             line(&mut d, (120.0, t / 2.0 + 1.5), (192.0, t / 2.0 + 1.5));
+        }
+        InGap::InsetFrame => {
+            line(&mut d, (120.0, 0.0), (192.0, 0.0));
+            line(&mut d, (120.0, t), (192.0, t));
+            for y in [t / 2.0 - 3.0, t / 2.0 + 3.0] {
+                line(&mut d, (122.5, y), (189.5, y));
+            }
+            line(&mut d, (122.5, t / 2.0 - 3.0), (122.5, t / 2.0 + 3.0));
+            line(&mut d, (189.5, t / 2.0 - 3.0), (189.5, t / 2.0 + 3.0));
+            line(&mut d, (122.5, t / 2.0), (189.5, t / 2.0));
+            line(&mut d, (120.0, -4.0), (192.0, -4.0));
         }
         InGap::LineThrough => {
             line(&mut d, (120.0, 0.0), (192.0, 0.0));
@@ -167,6 +181,84 @@ fn glazing_lines_between_two_wall_ends_are_no_wall() {
     assert_eq!(windows, 1, "the window in the gap: {r}");
     assert!(!solid, "the window has its hole: {r}");
     assert_eq!(r["window_tags"][0]["by_basis"], json!({"tag": 1}), "{r}");
+}
+
+#[test]
+fn an_inner_frame_inset_from_the_jambs_and_a_sill_are_no_wall_either() {
+    let mut s = building(InGap::InsetFrame);
+    let bridged = walls_in_gap(&mut s);
+    assert!(bridged.is_empty(), "no pair of the frame, the sash or the sill bridges the gap: {bridged:?}");
+    let (r, windows, solid) = built(&mut s);
+    assert_eq!(windows, 1, "{r}");
+    assert!(!solid, "{r}");
+}
+
+/// A 40' × 20' building of 14" outside walls whose south wall is a row of 72" windows (each a
+/// frame rectangle with glazing along its centre) between 6' piers, each pier drawn with its two
+/// faces, its ends and a line between its faces (a veneer's back): x 0–48 wall, 48–120 window,
+/// 120–192 pier, 192–264 window, 264–336 pier, 336–408 window, 408–480 wall.
+fn facade() -> Session {
+    let mut d = Drawing::new_imperial();
+    let t = 14.0;
+    let (w, h) = (480.0, 240.0);
+    let windows = [(48.0, 120.0), (192.0, 264.0), (336.0, 408.0)];
+    let mut ends = vec![0.0];
+    for (a, b) in windows {
+        ends.extend([a, b]);
+    }
+    ends.push(w);
+    for piece in ends.chunks(2) {
+        let (x0, x1) = (piece[0], piece[1]);
+        line(&mut d, (x0, 0.0), (x1, 0.0));
+        let (i0, i1) = (if x0 == 0.0 { t } else { x0 }, if x1 == w { w - t } else { x1 });
+        line(&mut d, (i0, t), (i1, t));
+        if x0 > 0.0 && x1 < w {
+            line(&mut d, (x0, 4.0), (x1, 4.0));
+        }
+    }
+    for (a, b) in windows {
+        for x in [a, b] {
+            line(&mut d, (x, 0.0), (x, t));
+        }
+        line(&mut d, (a, 0.0), (b, 0.0));
+        line(&mut d, (a, t), (b, t));
+        line(&mut d, (a, t / 2.0), (b, t / 2.0));
+    }
+    for (a, b) in [((w, 0.0), (w, h)), ((w, h), (0.0, h)), ((0.0, h), (0.0, 0.0))] {
+        line(&mut d, a, b);
+    }
+    for (a, b) in [((w - t, t), (w - t, h - t)), ((w - t, h - t), (t, h - t)), ((t, h - t), (t, t))] {
+        line(&mut d, a, b);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Exterior"}],
+        "wall_types": [{"name": "Exterior", "thickness_in": 14}],
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s
+}
+
+#[test]
+fn piers_drawn_with_a_line_inside_them_between_windows_stay_walls() {
+    let mut s = facade();
+    let plan = s.execute("wallgen.plan", &json!({"level": "L1"})).expect("plan");
+    let south: Vec<(f64, f64)> = plan["walls"]
+        .as_array()
+        .expect("walls")
+        .iter()
+        .filter_map(|w| {
+            let (ax, ay, bx, by) = (w["a"][0].as_f64()?, w["a"][1].as_f64()?, w["b"][0].as_f64()?, w["b"][1].as_f64()?);
+            (ay.max(by) <= 14.0 && ay.min(by) >= 0.0 && (ay - by).abs() < 1.0).then_some((ax.min(bx), ax.max(bx)))
+        })
+        .collect();
+    // Each pier is wall (whatever the windows beside it are read as).
+    for (x0, x1) in [(130.0, 182.0), (274.0, 326.0)] {
+        assert!(south.iter().any(|(a, b)| *a <= x0 && *b >= x1), "the pier at {x0}–{x1} is wall: {south:?}");
+    }
 }
 
 #[test]
