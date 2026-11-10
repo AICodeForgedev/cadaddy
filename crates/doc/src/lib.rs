@@ -37,7 +37,7 @@ pub use cadaddy_color as color;
 pub use cadaddy_geom as geom;
 pub use constraint::*;
 pub use entity::*;
-pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
+pub use extents::{MAX_BLOCK_DEPTH, entities_bounds, entity_bounds};
 pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;

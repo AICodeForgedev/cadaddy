@@ -28,6 +28,10 @@ pub(super) struct Request {
     pub opts: Options,
     /// Also convert the list to GPU vertex data (GPU canvas only).
     pub mesh: Option<MeshRequest>,
+    /// A copy of the canvas's model-space parts: the build reuses the ones the new view doesn't
+    /// reach (`cadaddy_render::build_cached_into`) and hands the cache it leaves back in
+    /// [`Built::cache`]. `None`: a full build.
+    pub cache: Option<cadaddy_render::ChunkCache>,
 }
 
 /// How to convert the list for the GPU: the view the vertex origin is chosen for and the
@@ -41,6 +45,9 @@ pub(super) struct MeshRequest {
     /// Create the GPU buffers on the worker too, so the frame that swaps the list in only swaps
     /// buffers (`None`: the paint callback uploads them).
     pub device: Option<egui_wgpu::wgpu::Device>,
+    /// The most drawing units per pixel the list is drawn at while it serves (its zoom band's
+    /// coarsest): how its vertex data is cut into area tiles ([`crate::gpu::Tiling`]).
+    pub coarse_px: f64,
 }
 
 /// A finished build.
@@ -52,6 +59,8 @@ pub(super) struct Built {
     /// ([`super::drawstats`]).
     pub objects: usize,
     pub profile: Option<cadaddy_render::profile::ProfileReport>,
+    /// The parts cache after the build (when it was given one).
+    pub cache: Option<cadaddy_render::ChunkCache>,
 }
 
 pub(super) struct BuiltMesh {
@@ -66,6 +75,8 @@ pub(super) struct BuiltMesh {
     /// the upload lets the CPU copy go), and the upload's milliseconds.
     pub counts: [usize; 4],
     pub upload_ms: f64,
+    /// The drawing units a pixel its tiles were cut for ([`MeshRequest::coarse_px`]).
+    pub coarse_px: f64,
 }
 
 /// A build in flight: the list key and area it is for, and where its result arrives. Dropping
@@ -110,7 +121,11 @@ impl Job {
 /// thrown away, and no vertex data is made for it).
 fn run(req: Request) -> Option<Built> {
     let t0 = crate::now_ms();
-    let list = cadaddy_render::build(&req.doc, &req.space, &req.opts);
+    let mut cache = req.cache;
+    let list = match cache.as_mut() {
+        Some(c) => cadaddy_render::build_cached_into(&req.doc, &req.space, &req.opts, c, None),
+        None => cadaddy_render::build(&req.doc, &req.space, &req.opts),
+    };
     if req.opts.cancelled() {
         return None;
     }
@@ -121,7 +136,8 @@ fn run(req: Request) -> Option<Built> {
             let t1 = crate::now_ms();
             let origin = crate::gpu::choose_origin(&list.bounds, m.view_center, m.view_height);
             let bg = if list.sheet.is_some() { m.paper_bg } else { m.model_bg };
-            let mut data = crate::gpu::build_mesh(&list, origin, bg, m.lwdisplay);
+            let tiling = crate::gpu::Tiling::choose(&list, m.coarse_px);
+            let mut data = crate::gpu::build_mesh_tiled(&list, origin, bg, m.lwdisplay, tiling.as_ref());
             if req.opts.cancelled() {
                 return None;
             }
@@ -132,12 +148,12 @@ fn run(req: Request) -> Option<Built> {
             }
             let t3 = crate::now_ms();
             let infinite = list.prims.iter().enumerate().filter(|(_, p)| matches!(p.kind, Kind::Infinite { .. })).map(|(i, _)| i).collect();
-            Some(BuiltMesh { data, origin, bg, lwdisplay: m.lwdisplay, infinite, ms: t3 - t1, counts, upload_ms: t3 - t2 })
+            Some(BuiltMesh { data, origin, bg, lwdisplay: m.lwdisplay, infinite, ms: t3 - t1, counts, upload_ms: t3 - t2, coarse_px: m.coarse_px })
         }
     };
     let objects = req.doc.space(&req.space).map_or(0, |s| s.len());
     let profile = req.opts.profile.as_ref().map(|p| p.report());
-    Some(Built { list, build_ms, mesh, objects, profile })
+    Some(Built { list, build_ms, mesh, objects, profile, cache })
 }
 
 /// Start building `req` on a worker thread for `key` / `window`; the worker asks `ctx` for a
@@ -202,7 +218,9 @@ mod tests {
                 paper_bg: Rgb(255, 255, 255),
                 lwdisplay: false,
                 device: None,
+                coarse_px: 1.0,
             }),
+            cache: Some(cadaddy_render::ChunkCache::default()),
         };
         let ctx = egui::Context::default();
         let Some(job) = spawn(req, Default::default(), None, &ctx) else { panic!("no worker") };
@@ -218,12 +236,14 @@ mod tests {
         let Some(mesh) = built.mesh else { panic!("no mesh") };
         assert_eq!(mesh.bg, Rgb(0, 0, 0));
         assert!(mesh.data.line_vertices() >= 2);
+        // It hands back the parts cache it built with (the canvas keeps it for the next build).
+        assert!(built.cache.is_some_and(|c| c.rebuilt == 1));
     }
 
     #[test]
     fn cancelled_run_makes_nothing() {
         let opts = Options { cancel: Some(Arc::new(AtomicBool::new(true))), ..Default::default() };
-        let req = Request { doc: Arc::new(Drawing::new_imperial()), space: Space::Model, opts, mesh: None };
+        let req = Request { doc: Arc::new(Drawing::new_imperial()), space: Space::Model, opts, mesh: None, cache: None };
         assert!(run(req).is_none());
     }
 
