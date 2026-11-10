@@ -7,7 +7,6 @@
 
 #[allow(dead_code)]
 #[path = "../helper.rs"]
-mod attribute_value_baseline;
 mod helper;
 
 mod annomon;
@@ -18,6 +17,7 @@ mod attedit_prompts;
 mod attrib_modes;
 mod attrib_props;
 mod attribute_tools;
+mod attribute_value_baseline;
 mod block_actionbars;
 mod block_description;
 mod block_detect;
