@@ -62,7 +62,7 @@ fn a_frame_parses_the_building_spec_once_per_spec_text() {
     // An edit that changes the spec is seen on the next frame.
     let mut s = s;
     s.execute("coordination.sectionbox", &json!({"on": false})).unwrap();
-    assert_eq!(frame(&s).0, false, "the section box is off after the edit");
+    assert!(!frame(&s).0, "the section box is off after the edit");
     // An edit that leaves the spec alone doesn't read it again.
     s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
     let before = cadaddy_engine::specread::whole_parses();

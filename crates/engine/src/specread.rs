@@ -177,7 +177,7 @@ mod tests {
     use serde_json::json;
 
     fn with_spec(text: &str) -> Drawing {
-        let mut d = Drawing::new();
+        let mut d = Drawing::new_imperial();
         d.building_spec = Some(text.to_string()).into();
         d
     }
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(get(&d, "rooms"), Value::Null, "the building itself isn't kept");
         assert_eq!(units_per_foot(&d), 304.8, "the typed spec's units");
         assert_eq!(units_per_foot(&with_spec("{\"units_per_foot\": \"x\"}")), 12.0, "a spec that doesn't read: inches");
-        assert_eq!(settings(&Drawing::new()).get("coord_mode"), &Value::Null);
+        assert_eq!(settings(&Drawing::new_imperial()).get("coord_mode"), &Value::Null);
         for bad in ["", "not json", "[1, 2]", "7", "{\"coord_mode\": ", "{\"coord_mode\": 1} x"] {
             assert_eq!(get(&with_spec(bad), "coord_mode"), Value::Null, "{bad:?}");
         }
