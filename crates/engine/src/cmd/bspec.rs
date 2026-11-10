@@ -2455,6 +2455,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         let name = room.map_or(String::new(), room_label);
         let mut xdata = wallgen::tag(Part::Ceiling, &level.name, t.tag);
         xdata.push(RawTag { code: 1000, value: format!("room:{}", name.chars().take(240).collect::<String>()) });
+        // The ceiling type given the room (`rcp.type`), with who gave it.
+        if let Some(r) = room {
+            xdata.extend(super::ceilings::room_type_tags(r));
+        }
         let common = Common { layer: wallgen::layer_of(Part::Ceiling).into(), xdata: xdata.into(), ..Common::default() };
         if let Ok(h) = d.add(&Space::Model, common, EntityKind::Mesh(m)) {
             ceilings += 1;

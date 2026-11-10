@@ -23,6 +23,7 @@ mod branchgap;
 mod breakers;
 mod casework_read;
 mod ceil_assemblies;
+mod ceiling_room_type;
 mod ceilings;
 mod completebuilding;
 mod concrete;
