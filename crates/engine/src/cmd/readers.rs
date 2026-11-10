@@ -212,6 +212,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 drawn_at: None,
                 moved: String::new(),
                 connection: f("connection"),
+                fire_alarm: None,
             }
         })
         .collect();
@@ -1486,6 +1487,42 @@ pub struct ReadDevice {
     /// it this luminaire. Empty: its plan draws the luminaire itself.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub connection: String,
+    /// A notification appliance the approved fire alarm shop drawings give (Q6495): its
+    /// address, circuit, candela, mounting and source, and the design device it superseded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_alarm: Option<FireAlarmFacts>,
+}
+
+/// What a fire alarm shop drawing says of one notification appliance ([`super::fashop`]).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FireAlarmFacts {
+    /// `P2.N3.07`, and its notification circuit `P2.N3`; an initiating device's loop address
+    /// (`L7.42`) and its loop (`L7`).
+    pub address: String,
+    pub circuit: String,
+    /// An initiating device on a signalling line circuit (its circuit is a loop), not an appliance.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loop_device: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candela: Option<u32>,
+    /// `ceiling` or `wall` as its legend row says (empty: it doesn't).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mount: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    #[serde(default)]
+    pub weatherproof: bool,
+    /// The shop drawing and page, and its plan's title.
+    pub source: String,
+    /// Its legend row's description, and how its row was told (its symbol, or inferred).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub row: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub row_basis: String,
+    /// The design plan's device it took the place of (its mark, sheet, spot, how far), empty
+    /// when the design shows none there.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub design: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1761,6 +1798,38 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
                     "at the junction box its electrical plan draws (no casework detail dimensions it: the plan's spot is diagrammatic)",
                     "plan",
                 );
+            }
+        }
+        // A notification appliance the approved fire alarm shop drawing gives: its address,
+        // circuit, candela and mounting, the shop drawing its source; the design device it took
+        // the place of kept beside (Q6495).
+        if let Some(fa) = &dv.fire_alarm {
+            e.set("address", fa.address.clone(), "submittal");
+            e.set(if fa.loop_device { "slc_circuit" } else { "nac_circuit" }, fa.circuit.clone(), "submittal");
+            if let Some(cd) = fa.candela {
+                e.set("candela", format!("{cd} cd"), "submittal");
+            }
+            if !fa.mount.is_empty() {
+                e.set("mount", fa.mount.clone(), "submittal");
+            }
+            if !fa.model.is_empty() {
+                e.set("model", fa.model.clone(), "submittal");
+            }
+            if fa.weatherproof {
+                e.set("weatherproof", "yes", "submittal");
+            }
+            if !fa.row.is_empty() {
+                e.set("legend", fa.row.clone(), "submittal");
+                e.set("device_type", fa.row.to_ascii_lowercase(), "submittal");
+            }
+            e.set("shop_drawing", fa.source.clone(), "submittal");
+            e.set("position_provenance", "drawn", "submittal");
+            e.set("position_basis", format!("the approved fire alarm shop drawing {} supersedes the design symbols", fa.source), "submittal");
+            if !fa.row_basis.is_empty() {
+                e.set("kind_basis", fa.row_basis.clone(), "submittal");
+            }
+            if !fa.design.is_empty() {
+                e.set("design_device", fa.design.clone(), "plan");
             }
         }
         // Its height as printed by it on its typical room's plan.

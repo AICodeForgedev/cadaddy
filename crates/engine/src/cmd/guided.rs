@@ -3340,6 +3340,7 @@ fn device_census(
                         drawn_at: None,
                         moved: String::new(),
                         connection: String::new(),
+                        fire_alarm: None,
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -7089,6 +7090,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             let n = kinds_from_pages(job, &mut devices);
             progress_line(&format!("  device marks resolved off the legend, schedule and panel schedule pages: {n}"));
         }
+        // The approved fire alarm shop drawings among the submittals supersede the design
+        // plans' notification appliances on the levels they lay onto (Q6495).
+        if !job.submittals.is_empty() {
+            fa_shop_step(s, job, &mut devices);
+        }
         let report = designation_report(&devices);
         if !report.is_empty() {
             progress_line(&format!("  device designations (mark: kind from source, count): {}", report.join("; ")));
@@ -8239,6 +8245,90 @@ fn fate(job: &mut GuidedJob, handle: &str, f: MarkFate) {
     let h = handle.trim();
     if !h.is_empty() && job.mark_fates.len() < MAX_FATES {
         job.mark_fates.insert(h.to_ascii_uppercase(), f);
+    }
+}
+
+/// The fire alarm shop drawings among the job's submittals onto its devices ([`super::fashop`]):
+/// each plan laid onto its level by its room numbers, its appliances in the place of the design
+/// plans' notification devices there; the design devices it shows nothing near left out as
+/// review items; the legend's quantities checked. Said in the job's log and findings.
+fn fa_shop_step(s: &Session, job: &mut GuidedJob, devices: &mut Vec<super::readers::ReadDevice>) {
+    let clock = web_time::Instant::now();
+    let (shops, unread) = super::fashop::read_files(&job.submittals);
+    for (f, e) in &unread {
+        progress_line(&format!("  fire alarm shop drawings: {f} not read: {e}"));
+    }
+    if shops.is_empty() {
+        return;
+    }
+    let upf = super::bspec::current(s, "bim_build").ok().map(|(sp, _)| sp.units_per_foot).filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0);
+    let rooms: Vec<super::fashop::ModelRoom> = job_rooms(job)
+        .into_iter()
+        .filter(|(_, _, o, n)| !n.trim().is_empty() && !o.is_empty())
+        .map(|(_, level, outline, number)| {
+            let n = outline.len() as f64;
+            let sum = outline.iter().fold(cadaddy_geom::Vec2::new(0.0, 0.0), |a, q| a + *q);
+            super::fashop::ModelRoom { number, level, at: cadaddy_geom::Vec2::new(sum.x / n, sum.y / n) }
+        })
+        .collect();
+    let done = super::fashop::apply(&shops, &rooms, devices, upf);
+    for (h, why) in &done.left_out {
+        fate(job, h, MarkFate::left_out("fire alarm device", super::inventory::NOT_BUILT, why));
+    }
+    progress_line(&format!(
+        "  fire alarm shop drawings {:?}: {} appliances read; plans laid on {:?}; not laid {:?}; {} design devices superseded, {} added, {} design devices left out for review; by kind {:?}; initiating devices given their loop address {} ({} loop-labelled symbols with no design device near); legend quantities off {:?} ({:.1} s)",
+        done.docs,
+        shops.iter().map(super::fashop::FaShop::appliances).sum::<usize>(),
+        done.plans,
+        done.not_fit,
+        done.superseded,
+        done.added,
+        done.left_out.len(),
+        done.by_kind,
+        done.addressed,
+        done.initiating_unmatched,
+        done.quantities,
+        clock.elapsed().as_secs_f64()
+    ));
+    if !done.left_out.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Design notification devices the shop drawings don't show",
+            &format!(
+                "{} notification devices on the design plans have no appliance near them on the approved fire alarm shop drawings, which supersede the design symbols on their levels: left out of the model, to be reviewed ({})",
+                done.left_out.len(),
+                done.left_out.iter().take(12).map(|(_, w)| w.as_str()).collect::<Vec<_>>().join("; ")
+            ),
+            2,
+            vec!["Confirm with the fire alarm contractor that the shop drawings cover these places".into()],
+            None,
+            false,
+        );
+    }
+    if !done.not_fit.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Fire alarm shop drawing plans not laid onto the model",
+            &format!(
+                "these shop drawing plans couldn't be laid onto their levels by their room numbers, so their levels keep the design's devices: {}",
+                done.not_fit.join("; ")
+            ),
+            2,
+            vec!["Check the plans' titles name their floors and their room numbers match the architecture's".into()],
+            None,
+            false,
+        );
+    }
+    if !done.quantities.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Fire alarm legend quantities differ",
+            &format!("the shop drawings' device legend against what the plans show: {}", done.quantities.join("; ")),
+            1,
+            vec!["Ask the fire alarm contractor which count is right".into()],
+            None,
+            false,
+        );
     }
 }
 
@@ -14096,6 +14186,11 @@ fn apply_symbol_list(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[SymbolRow]) 
     for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "fire_alarm_device").take(MAX_STAMPED * 4) {
         let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
         let Some(row) = rows.iter().find(|r| r.mark == mark) else { continue };
+        // An appliance the approved fire alarm shop drawing gives is its legend's (Q6495); an
+        // initiating device that took only its loop address keeps the design's row.
+        if t.fields.contains_key("nac_circuit") {
+            continue;
+        }
         t.set("device_type", format!("{} {mark}", row.description.to_ascii_lowercase()), "legend");
         t.set("legend", row.description.clone(), "legend");
         let has = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).is_some_and(|f| !f.value.trim().is_empty());
@@ -32256,6 +32351,20 @@ mod tests {
         assert_eq!(f("device:r", "mount").as_deref(), Some("ceiling"));
         assert_eq!(f("device:r", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
         assert!(f("device:h", "device_type").is_none());
+        // A shop drawing's appliance keeps its own legend's row; a detector that took only its
+        // loop address from the shop drawing still takes the design's row (Q6495).
+        let mut appliance = tag("device:ws", "WS");
+        appliance.set("nac_circuit", "N9", "submittal");
+        appliance.set("shop_drawing", "a shop drawing", "submittal");
+        appliance.set("device_type", "ceiling mount strobe", "submittal");
+        let mut detector = tag("device:r2", "SR");
+        detector.set("slc_circuit", "L9", "submittal");
+        detector.set("shop_drawing", "a shop drawing", "submittal");
+        sp.tags = vec![appliance, detector];
+        assert_eq!(apply_symbol_list(&mut sp, &rows), 1);
+        let f = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
+        assert_eq!(f("device:ws", "device_type").as_deref(), Some("ceiling mount strobe"));
+        assert_eq!(f("device:r2", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
     }
 
     /// A unit's trace that leaked through the wall into its neighbour (two units wide) is cut back

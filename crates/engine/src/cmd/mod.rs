@@ -51,6 +51,7 @@ mod exchange;
 mod express;
 mod express4;
 pub mod exterior;
+pub(crate) mod fashop;
 pub mod fidelity;
 mod field;
 pub mod file;
@@ -956,6 +957,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(codebook::specs());
         v.extend(spec_import::specs());
         v.extend(submittals::specs());
+        v.extend(fashop::specs());
         v.extend(products::specs());
         v.extend(scope::specs());
     v.extend(coderules::specs());
