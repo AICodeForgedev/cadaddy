@@ -765,7 +765,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     let dev_panel: Vec<Option<usize>> = devices
         .iter()
         .map(|dv| {
-            if let Some(i) = dv.fed_from.and_then(|h| by_handle.get(&h)) {
+            // The fill's panel element, while it is the device's panel (its tag, or a room panel
+            // of its letter): a link left from another panel (a copy's source's, a circuit set
+            // since) is no link (Q6501).
+            let agrees = |i: &&usize| {
+                panels
+                    .get(**i)
+                    .is_some_and(|p| p.tag.eq_ignore_ascii_case(&dv.panel) || p.typical.as_ref().is_some_and(|t| t.eq_ignore_ascii_case(&dv.panel)))
+            };
+            if let Some(i) = dv.fed_from.and_then(|h| by_handle.get(&h)).filter(agrees) {
                 return Some(*i);
             }
             let room = by_room.get(&(dv.panel.clone(), dv.room.trim().to_ascii_uppercase())).copied();

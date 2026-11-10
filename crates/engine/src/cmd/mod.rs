@@ -119,6 +119,7 @@ pub mod breakers;
 pub mod callouts;
 pub mod casework;
 pub(crate) mod caseworklights;
+pub(crate) mod circuitlinks;
 pub mod clashreport;
 pub mod cobie;
 pub mod concrete;

@@ -48,7 +48,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The drawing's stored spec, if it has one.
-fn stored(d: &Drawing) -> std::result::Result<Option<BuildingSpec>, String> {
+pub(crate) fn stored(d: &Drawing) -> std::result::Result<Option<BuildingSpec>, String> {
     d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).map(BuildingSpec::from_json).transpose()
 }
 
