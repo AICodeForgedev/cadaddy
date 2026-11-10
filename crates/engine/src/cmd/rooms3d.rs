@@ -118,10 +118,11 @@ pub fn rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<Roo
         let inside: Vec<&String> =
             notes.iter().filter(|(_, _, at, _)| cadaddy_geom::point_in_polygon(&r.outline, *at)).map(|(_, t, _, _)| t).collect();
         let spec_room = spec.as_ref().and_then(|sp| {
-            sp.rooms.iter().find(|x| {
-                x.name.eq_ignore_ascii_case(&r.name)
-                    || (x.number.is_some() && x.number.as_deref().map(str::trim) == r.number.as_deref().map(str::trim))
-            })
+            // Its number first (a name a unit type's rooms share, or none, names no one room).
+            let number = r.number.as_deref().map(str::trim).filter(|n| !n.is_empty());
+            number
+                .and_then(|n| sp.rooms.iter().find(|x| x.number.as_deref().is_some_and(|m| m.trim().eq_ignore_ascii_case(n))))
+                .or_else(|| sp.rooms.iter().find(|x| super::bspec::names_room(x, &r.name)))
         });
         let level = spec.as_ref().and_then(|sp| {
             let by_name = spec_room.and_then(|x| x.level.as_deref()).and_then(|n| sp.level(n));

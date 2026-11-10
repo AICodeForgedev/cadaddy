@@ -208,11 +208,20 @@ pub(crate) fn room_label(r: &cadaddy_walk3d::SpecRoom) -> String {
     }
 }
 
-/// Whether a tag text names the room (its name or number, case and spacing aside).
+/// Whether a tag text names the room (its name, number or the plan label it corrects, case and
+/// spacing aside).
 pub(crate) fn names_room(r: &cadaddy_walk3d::SpecRoom, text: &str) -> bool {
     let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
     let t = norm(text);
-    (!r.name.trim().is_empty() && norm(&r.name) == t) || r.number.as_deref().is_some_and(|n| !n.trim().is_empty() && norm(n) == t)
+    let is = |v: Option<&str>| v.is_some_and(|v| !v.trim().is_empty() && norm(v) == t);
+    is(Some(&r.name)) || is(r.number.as_deref()) || is(r.label.as_deref())
+}
+
+/// Whether a room number tag on the plan is the room's: its number, or the plan label (a wrong
+/// number) its entry corrects.
+fn numbers_room(r: &cadaddy_walk3d::SpecRoom, text: &str) -> bool {
+    let t = text.trim();
+    [r.number.as_deref(), r.label.as_deref()].into_iter().flatten().any(|n| !n.trim().is_empty() && n.trim().eq_ignore_ascii_case(t))
 }
 
 /// The texts that tag rooms: those on room tag layers, else every text.
@@ -919,7 +928,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
     }
     texts.sort_by_key(|(_, t, _, _)| super::perceive::geometry::room_number(t));
-    let spec_number = |t: &str| sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(t.trim())));
+    let spec_number = |t: &str| sp.rooms.iter().any(|r| numbers_room(r, t));
     // The plans' room numbers, for a room left without one after the trace.
     let number_tags: Vec<(String, Vec2)> = texts
         .iter()
@@ -1019,10 +1028,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                         o.room = sp
                             .rooms
                             .iter()
-                            .position(|r| {
-                                r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))
-                                    && r.level.as_ref().is_none_or(|l| l.eq_ignore_ascii_case(&level))
-                            })
+                            .position(|r| numbers_room(r, &text) && r.level.as_ref().is_none_or(|l| l.eq_ignore_ascii_case(&level)))
                             .filter(|i| claimed.insert(*i));
                     }
                 }
