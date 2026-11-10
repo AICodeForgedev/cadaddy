@@ -172,6 +172,7 @@ fn a_moving_3d_view_is_drawn_smaller_and_sharp_once_still() {
     };
     still(&mut h);
     let (fw, fh) = h.state().canvas.shade.gpu_size().expect("drawn on the GPU");
+    let tris_still = h.state().canvas.shade.stats.tris_drawn;
     assert_eq!(h.state().canvas.shade.stats.scale, Some(1.0), "at rest: full resolution");
     assert_eq!(h.state().canvas.shade.stats.msaa, msaa, "drawn with the adapter's samples");
     assert!(h.state().gpu_notice.is_none(), "no GPU error");
@@ -186,10 +187,13 @@ fn a_moving_3d_view_is_drawn_smaller_and_sharp_once_still() {
     let (mw, mh) = h.state().canvas.shade.gpu_size().unwrap();
     assert_eq!((mw, mh), (fw.div_ceil(2), fh.div_ceil(2)), "orbiting: half each way (full {fw}x{fh})");
     assert_eq!(h.state().canvas.shade.stats.scale, Some(0.5));
+    // Fewer pixels, the same things: levels of detail are chosen at full resolution.
+    let tris_moving = h.state().canvas.shade.stats.tris_drawn;
     let img = h.render().expect("a frame");
     assert!(colours(&img) >= 3, "the smaller picture is drawn, scaled up ({} colours)", colours(&img));
     still(&mut h);
     assert_eq!(h.state().canvas.shade.gpu_size(), Some((fw, fh)), "still again: sharp");
+    assert!(tris_still > 0 && tris_moving == h.state().canvas.shade.stats.tris_drawn, "{tris_still} {tris_moving}");
     // Off: a moving view is drawn at full resolution.
     h.state_mut().session.execute("setvar", &json!({"name": "DYNRESMODE", "value": 0})).unwrap();
     h.run_steps(1);

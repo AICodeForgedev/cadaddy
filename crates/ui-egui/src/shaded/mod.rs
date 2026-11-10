@@ -267,7 +267,8 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         let v = &view;
         let camera = [v.dir.x, v.dir.y, v.dir.z, v.right.x, v.right.y, v.right.z, v.up.x, v.up.y, v.up.z, v.center.x, v.center.y, v.height];
         let since = st.motion.track(&camera, crate::now_ms());
-        let ((gw, gh), scale) = crate::dynres::size_3d(ui.ctx(), (gw, gh), since);
+        let full = (gw, gh);
+        let ((gw, gh), scale) = crate::dynres::size_3d(ui.ctx(), full, since);
         let view = ShadeView::new(xf.proj, xf.center, height, gw, gh);
         let (w, h) = (gw, gh);
         if st.gpu.as_ref().is_some_and(|g| g.samples != caps.msaa) {
@@ -301,6 +302,7 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             g.set_lighting(&rs.device, &rs.queue, lit.as_ref());
             let t0 = web_time::Instant::now();
             g.time_scale = Some(scale);
+            g.detail_px = Some(full);
             let vis = g.render(&rs.device, &rs.queue, &view, style, bg, tier, force.as_ref(), &st.stream);
             st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
             st.stats.frames_rendered += 1;
@@ -861,6 +863,9 @@ struct Gpu {
     /// drawn at, when it is to be timed (the live view's frames, not tests' or exports').
     timer: Option<crate::gpu::PassTimer>,
     time_scale: Option<f32>,
+    /// The size the next frame's levels of detail are chosen for, when it is drawn smaller than
+    /// its view (a moving view, [`crate::dynres`]): fewer pixels, the same things drawn.
+    detail_px: Option<(u32, u32)>,
     /// What the shadow map holds (a hash of the sun's view and of everything drawn into it):
     /// a frame that would draw the same into it keeps it. The times the last frame drew the
     /// scene, and frames that kept the shadow map.
@@ -1128,6 +1133,7 @@ impl Gpu {
             quality: Quality::Full,
             timer: crate::gpu::PassTimer::on(device),
             time_scale: None,
+            detail_px: None,
             shadow_shows: None,
             scene_passes: 0,
             shadows_kept: 0,
@@ -1653,7 +1659,9 @@ impl Gpu {
             self.bind_group = self.target.as_ref().and_then(|t| self.group(device, t));
         }
         let Some(model) = self.model.clone() else { return model3::Visible::default() };
-        let vis = model.visible_at(v, tier, force);
+        // What is drawn is chosen at the view's full resolution, however many pixels it gets.
+        let detail = self.detail_px.take().map_or(*v, |(width_px, height_px)| ShadeView { width_px, height_px, ..*v });
+        let vis = model.visible_at(&detail, tier, force);
         // The streamed cells in view: their ranges in the stream buffers (opaque, see-through,
         // lines).
         let cells: Vec<[std::ops::Range<u32>; 3]> = stream.visible(v).iter().filter_map(|k| self.stream_ranges.get(k).cloned()).collect();
@@ -2424,6 +2432,17 @@ mod tests {
         g.upload_stream(device, &stream, VisualStyle::Shaded, bg);
         let vis = g.render(device, queue, &view, VisualStyle::Shaded, bg, Tier::Room, None, &stream);
         assert_eq!(vis.instances.iter().map(|x| x.2.len()).sum::<usize>(), 5);
+        // Drawn smaller (a moving view, `dynres`), the same things are drawn: levels of detail
+        // are chosen for the view's full size. (Chosen for 16 pixels, the devices would be boxes.)
+        let lods = |v: &model3::Visible| v.instances.iter().map(|x| (x.0, x.1, x.2.len())).collect::<Vec<_>>();
+        let small = ShadeView::new(None, Vec2::new(50.0, 50.0), 100.0, 16, 16);
+        assert_ne!(lods(&model.visible_at(&small, Tier::Room, None)), lods(&vis), "the test needs a size that changes the detail");
+        g.detail_px = Some((w, h));
+        let vis_small = g.render(device, queue, &small, VisualStyle::Shaded, bg, Tier::Room, None, &stream);
+        assert_eq!(lods(&vis_small), lods(&vis));
+        assert_eq!(g.detail_px, None, "for one frame");
+        // (The full-size picture again, for the colours below.)
+        g.render(device, queue, &view, VisualStyle::Shaded, bg, Tier::Room, None, &stream);
         let near = read_frame(&g, device, queue, w, h);
         let c = at(&near, dev);
         assert!(c[0] > c[1].saturating_add(60), "a device at the room tier: {c:?}");
