@@ -94,4 +94,5 @@ mod wall_assemblies;
 mod wallgen;
 mod walllayout;
 mod wholejob;
+mod window_frame_gap;
 mod windows_typed;
