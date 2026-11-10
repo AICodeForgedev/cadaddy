@@ -521,8 +521,9 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
         p
     };
     for t in sp.tags.iter().take(MAX_LINES) {
-        // A pathway's tag is its outlet's run, not a device: its pieces are the model's.
-        if t.kind == lv {
+        // A pathway's tag is its outlet's run, not a device: its pieces are the model's (and a
+        // fire alarm circuit's tag, Q6503, is its circuit, its cable the model's pieces).
+        if t.kind == lv || t.kind == super::conduitroute::fa::TAG_KIND {
             continue;
         }
         let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
