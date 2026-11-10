@@ -3095,6 +3095,38 @@
     "NOTES"
    ]
   },
+  "schedules.photometric_table_words": {
+   "source": "format vocabulary of lighting calculation programs: a luminaire table whose title or a heading has one of these is the calculation's list of the luminaires it calculated with (its labels are the calculation's names), never the designer's fixture schedule, so it adds no types when the set has a schedule (fix-fixture-schedule-wrong-table)",
+   "words": [
+    "LLF",
+    "LIGHT LOSS FACTOR",
+    "LOSS FACTOR",
+    "ARRANGEMENT",
+    "FILENAME",
+    "IES FILE",
+    "PHOTOMETRIC",
+    "CALCULATION",
+    "LUM LUMENS",
+    "LUM WATTS"
+   ]
+  },
+  "schedules.photometric_sheet_words": {
+   "source": "format vocabulary of lighting calculation programs: a sheet printing one of these (spaces aside) shows a calculation's results (a statistics table's ratios, its summary), so its luminaire table titled without fixtures is the calculation's (fix-fixture-schedule-wrong-table)",
+   "words": [
+    "AVG/MIN",
+    "MAX/MIN",
+    "AVG:MIN",
+    "MAX:MIN",
+    "CALCULATION SUMMARY"
+   ]
+  },
+  "schedules.designed_schedule_title_words": {
+   "source": "drafting convention: a luminaire schedule title naming fixtures (LIGHT FIXTURE SCHEDULE) is the designer's, even on a sheet of calculation results (fix-fixture-schedule-wrong-table)",
+   "words": [
+    "FIXTURE",
+    "FIXTURES"
+   ]
+  },
   "schedules.title_reference_words": {
    "source": "grammar of drawing notes: words that make a line naming a schedule a note sending the reader to it (`... ON LIGHT FIXTURE SCHEDULE.`, `SEE ... FIXTURE SCHEDULE`), not the schedule's title (fix-lum-fixture-schedule-not-read)",
    "words": [
