@@ -25,6 +25,7 @@ mod callout_walls;
 mod casework_read;
 mod ceil_assemblies;
 mod ceilings;
+mod clash_framing;
 mod completebuilding;
 mod concrete;
 mod conduitjob;
