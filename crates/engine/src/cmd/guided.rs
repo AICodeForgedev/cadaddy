@@ -39137,10 +39137,10 @@ mod tests {
     }
 
     /// fix-ceiling-heights-from-rcp-rule (Q6512): each room's ceiling height by the rule's order
-    /// (A-CEILING-HEIGHT). A made-up floor: 101's own RCP tag says 9'-0" but its type's unit RCP
-    /// says 8'-6" (before the fix the unit RCP, read last, won); 102 has only the unit RCP and a
-    /// section (both 8'-6"), its ceiling type C1 has no height in the legend; 104's finish
-    /// schedule names type C2, whose legend gives 8'-0"; 103 and 105 have nothing, so they are
+    /// (A-CEILING-HEIGHT). A made-up floor: R-11's own RCP tag says 9'-0" but its type's unit RCP
+    /// says 8'-6" (before the fix the unit RCP, read last, won); R-12 has only the unit RCP and a
+    /// section (both 8'-6"), its ceiling type C1 has no height in the legend; R-14's finish
+    /// schedule names type C2, whose legend gives 8'-0"; R-13 and R-15 have nothing, so they are
     /// derived at the assembly's underside, marked inferred.
     #[test]
     fn room_ceiling_heights_follow_the_rule_order() {
@@ -39151,11 +39151,11 @@ mod tests {
                 "levels":[{"name":"L1","elevation_ft":0,"height_ft":10,"ceiling_ft":8},{"name":"L2","elevation_ft":10,"height_ft":10,"ceiling_ft":8}],
                 "ceiling_types":[{"name":"C1","description":"5/8 GYP BD"},{"name":"C2","height_ft":8.0}],
                 "rooms":[
-                    {"name":"Suite A","number":"101","level":"L1"},
-                    {"name":"Suite A","number":"102","level":"L1"},
-                    {"name":"Store","number":"103","level":"L1"},
-                    {"name":"Office","number":"104","level":"L1","materials":{"ceiling":"C2 GYP BD"}},
-                    {"name":"Lounge","number":"105","level":"L1","materials":{"ceiling":"C1"}}
+                    {"name":"Suite A","number":"R-11","level":"L1"},
+                    {"name":"Suite A","number":"R-12","level":"L1"},
+                    {"name":"Store","number":"R-13","level":"L1"},
+                    {"name":"Office","number":"R-14","level":"L1","materials":{"ceiling":"C2 GYP BD"}},
+                    {"name":"Lounge","number":"R-15","level":"L1","materials":{"ceiling":"C1"}}
                 ]}"#,
         )
         .unwrap_or_else(|e| panic!("{e}"));
@@ -39169,10 +39169,10 @@ mod tests {
             grid: None,
             guess: None,
         };
-        let overall = vec![area("101", 9.0, None, "9'-0\" ceiling tag on SAMPLE FLOOR RCP")];
+        let overall = vec![area("R-11", 9.0, None, "9'-0\" ceiling tag on SAMPLE FLOOR RCP")];
         let typical = vec![
-            area("101", 8.5, Some("C1"), "8'-6\" ceiling tag on Q-5 SUITE A RCP"),
-            area("102", 8.5, Some("C1"), "8'-6\" ceiling tag on Q-5 SUITE A RCP"),
+            area("R-11", 8.5, Some("C1"), "8'-6\" ceiling tag on Q-5 SUITE A RCP"),
+            area("R-12", 8.5, Some("C1"), "8'-6\" ceiling tag on Q-5 SUITE A RCP"),
         ];
         let measured = vec![(type_words("Suite A", None), 8.5, "8'-6\" measured on Q-6 SUITE A SECTION".to_string())];
         let job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
@@ -39183,24 +39183,24 @@ mod tests {
             let r = sp.rooms.iter().find(|r| r.number.as_deref() == Some(n)).unwrap_or_else(|| panic!("{n}"));
             (r.ceiling_ft.unwrap_or_default(), r.ceiling_source.clone().unwrap_or_default())
         };
-        let (h101, s101) = get("101");
+        let (h101, s101) = get("R-11");
         assert_eq!(h101, 9.0, "{s101}");
         assert!(s101.starts_with("room RCP: "), "{s101}");
-        let (h102, s102) = get("102");
+        let (h102, s102) = get("R-12");
         assert_eq!(h102, 8.5);
         assert!(s102.starts_with("unit RCP: "), "{s102}");
-        let (h104, s104) = get("104");
+        let (h104, s104) = get("R-14");
         assert_eq!(h104, 8.0);
         assert!(s104.starts_with("ceiling type legend: C2"), "{s104}");
-        for n in ["103", "105"] {
+        for n in ["R-13", "R-15"] {
             let (h, src) = get(n);
             // 10' floor to floor less the usual 24" assembly (L2's framing is not read).
             assert!((h - 8.0).abs() < 1e-9, "{n} {h}");
             assert!(src.starts_with("derived: ") && src.contains("inferred") && src.contains("A-CEILING-HEIGHT"), "{src}");
         }
         assert_eq!(settled.derived.len(), 2);
-        // 101's unit RCP and section disagree with its own tag: reported beside it.
-        assert!(settled.disagree.iter().all(|d| d.0 == "101") && settled.disagree.len() == 2, "{:?}", settled.disagree);
+        // R-11's unit RCP and section disagree with its own tag: reported beside it.
+        assert!(settled.disagree.iter().all(|d| d.0 == "R-11") && settled.disagree.len() == 2, "{:?}", settled.disagree);
         let j = settled.to_json();
         assert_eq!(j["by_source"]["room_rcp"], json!(1));
         assert_eq!(j["by_source"]["unit_rcp"], json!(1));

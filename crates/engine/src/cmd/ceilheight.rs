@@ -395,7 +395,7 @@ mod tests {
         BuildingSpec::from_json(
             r#"{"version":1,"units_per_foot":12,
                 "levels":[{"name":"L1","elevation_ft":0,"height_ft":10,"ceiling_ft":8},{"name":"L2","elevation_ft":10,"height_ft":10,"ceiling_ft":8}],
-                "rooms":[{"name":"Suite A","number":"101","level":"L1"},{"name":"Suite A","number":"102","level":"L1"},{"name":"Store","number":"103","level":"L1"},{"name":"Office","number":"104","level":"L1","ceiling_ft":9}],
+                "rooms":[{"name":"Suite A","number":"R-11","level":"L1"},{"name":"Suite A","number":"R-12","level":"L1"},{"name":"Store","number":"R-13","level":"L1"},{"name":"Office","number":"R-14","level":"L1","ceiling_ft":9}],
                 "floor_framing":[{"level":"L2","member":"joist","spacing_in":16,"depth_in":14}]}"#,
         )
         .unwrap_or_else(|e| panic!("{e}"))
@@ -420,7 +420,7 @@ mod tests {
         let rule = Rule::load();
         let mut sp = spec();
         // Unit RCP and section agree at 8'-6"; the legend has none for the type; the room's own
-        // tag beats the unit RCP on 102.
+        // tag beats the unit RCP on R-12.
         let c = vec![
             cand(0, Src::Section, 8.5, "8'-6\" measured on S-1 SECTION"),
             cand(0, Src::UnitRcp, 8.5, "8'-6\" ceiling tag on A-5 UNIT RCP"),
@@ -432,10 +432,10 @@ mod tests {
         assert!(sp.rooms[0].ceiling_source.as_deref().is_some_and(|s| s.starts_with("unit RCP: ")), "{:?}", sp.rooms[0].ceiling_source);
         assert_eq!(sp.rooms[1].ceiling_ft, Some(9.0));
         assert!(sp.rooms[1].ceiling_source.as_deref().is_some_and(|s| s.starts_with("room RCP: ")));
-        // 102's unit RCP disagrees with its own tag: reported, not dropped.
+        // R-12's unit RCP disagrees with its own tag: reported, not dropped.
         assert_eq!(s.disagree.len(), 1);
-        assert_eq!(s.disagree[0].0, "102");
-        // 104 keeps the height its record carries from the documents.
+        assert_eq!(s.disagree[0].0, "R-12");
+        // R-14 keeps the height its record carries from the documents.
         assert_eq!(sp.rooms[3].ceiling_ft, Some(9.0));
         assert_eq!(s.by_source.get("unit_rcp"), Some(&1));
         assert_eq!(s.by_source.get("room_rcp"), Some(&2));
