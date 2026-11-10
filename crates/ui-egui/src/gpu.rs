@@ -164,12 +164,12 @@ impl MeshData {
             })
             .collect();
         // A tiled mesh's buffers start at its tiles' starts, so an edit makes again only the
-        // pieces of the tiles it changed; its pieces are kept apart from the other layers'.
+        // pieces of the tiles it changed.
         let uploaded = match &self.tiles {
             Some(t) => Uploaded {
-                tris: upload_parts(device, "cad_tile_fills", t.parts(&self.tris, 0, VERTEX_SIZE), VERTEX_SIZE, usage),
-                lines: upload_parts(device, "cad_tile_lines", t.parts(&self.lines, 1, VERTEX_SIZE), VERTEX_SIZE, usage),
-                quads: upload_parts(device, "cad_tile_quads", t.parts(&self.quads, 2, INSTANCE_SIZE), INSTANCE_SIZE, usage),
+                tris: upload_parts(device, "cad_fills", t.parts(&self.tris, 0, VERTEX_SIZE), VERTEX_SIZE, usage),
+                lines: upload_parts(device, "cad_lines", t.parts(&self.lines, 1, VERTEX_SIZE), VERTEX_SIZE, usage),
+                quads: upload_parts(device, "cad_quads", t.parts(&self.quads, 2, INSTANCE_SIZE), INSTANCE_SIZE, usage),
                 images,
                 tiles: Some(Arc::clone(t)),
             },
@@ -206,19 +206,51 @@ fn rel(p: Vec2, origin: Vec2) -> [f32; 2] {
     [(p.x - origin.x) as f32, (p.y - origin.y) as f32]
 }
 
-fn push_vertex(out: &mut Vec<u8>, p: [f32; 2], c: [u8; 4]) {
-    out.extend_from_slice(&p[0].to_le_bytes());
-    out.extend_from_slice(&p[1].to_le_bytes());
-    out.extend_from_slice(&c);
+/// Where vertex data is written: a growing buffer, or (a tiled mesh written on several
+/// threads) a part of one made to size.
+trait Sink {
+    fn put(&mut self, bytes: &[u8]);
 }
 
-fn push_instance(out: &mut Vec<u8>, a: [f32; 2], b: [f32; 2], c: [u8; 4], width: f32, start: f32) {
-    for v in [a[0], a[1], b[0], b[1]] {
-        out.extend_from_slice(&v.to_le_bytes());
+impl Sink for Vec<u8> {
+    fn put(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
     }
-    out.extend_from_slice(&c);
-    out.extend_from_slice(&width.to_le_bytes());
-    out.extend_from_slice(&start.to_le_bytes());
+}
+
+/// A part of a buffer made to size, written from its start.
+struct Cursor<'a> {
+    buf: &'a mut [u8],
+    at: usize,
+}
+
+impl Sink for Cursor<'_> {
+    fn put(&mut self, bytes: &[u8]) {
+        let end = self.at.saturating_add(bytes.len());
+        if let Some(d) = self.buf.get_mut(self.at..end) {
+            d.copy_from_slice(bytes);
+        }
+        self.at = end;
+    }
+}
+
+fn push_vertex(out: &mut impl Sink, p: [f32; 2], c: [u8; 4]) {
+    let mut v = [0u8; VERTEX_SIZE];
+    v[0..4].copy_from_slice(&p[0].to_le_bytes());
+    v[4..8].copy_from_slice(&p[1].to_le_bytes());
+    v[8..12].copy_from_slice(&c);
+    out.put(&v);
+}
+
+fn push_instance(out: &mut impl Sink, a: [f32; 2], b: [f32; 2], c: [u8; 4], width: f32, start: f32) {
+    let mut v = [0u8; INSTANCE_SIZE];
+    for (k, f) in [a[0], a[1], b[0], b[1]].into_iter().enumerate() {
+        v[k * 4..k * 4 + 4].copy_from_slice(&f.to_le_bytes());
+    }
+    v[16..20].copy_from_slice(&c);
+    v[20..24].copy_from_slice(&width.to_le_bytes());
+    v[24..28].copy_from_slice(&start.to_le_bytes());
+    out.put(&v);
 }
 
 /// Lineweight in screen points for a primitive (as on the CPU path), or `None` for a hairline.
@@ -239,7 +271,16 @@ fn premultiplied(c: Rgb, a: u8) -> [u8; 4] {
 /// The vertex data of one primitive (not an image, not an infinite line) appended to the
 /// stream it belongs in: fills to `tris`, hairlines to `lines`, wide lines and points to `quads`.
 #[allow(clippy::too_many_arguments)]
-fn push_prim(list: &DisplayList, prim: &cadaddy_render::DPrim, origin: Vec2, bg: Rgb, lwdisplay: bool, lines: &mut Vec<u8>, tris: &mut Vec<u8>, quads: &mut Vec<u8>) {
+fn push_prim<S: Sink>(
+    list: &DisplayList,
+    prim: &cadaddy_render::DPrim,
+    origin: Vec2,
+    bg: Rgb,
+    lwdisplay: bool,
+    lines: &mut S,
+    tris: &mut S,
+    quads: &mut S,
+) {
     let col = premultiplied(prim.display_rgb(bg), prim.alpha());
     let pts = list.points(prim);
     match prim.kind {
@@ -335,11 +376,17 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
 //
 // The picture must not change, and it depends on draw order wherever two primitives light the
 // same pixel. Within one stream of one draw-order group (see `MeshData::breaks`) each primitive
-// gets a layer: at least its tile's last one, and above every bucket (a tile's run of primitives
-// in one layer) of another tile it comes within `Tiling::margin` of. The buckets are drawn by
-// layer, then tile, each in list order: every pair of primitives that may share a pixel is drawn
-// in the order of the list, and the rest don't affect each other. A primitive of a cell reaches
-// at most half a cell past it, so only the neighbouring cells (and the large tile) are looked at.
+// gets a layer: at least its tile's last, and above whatever another tile lit where it may light
+// pixels (its points' box grown by its reach: half its width where the list is drawn at its
+// coarsest, at up to `MAX_PPP` pixels a point, and a pixel; see `reach_px`). What was lit is kept
+// per cell in an 8 × 8 grid of sub-cells (`Marks`): a primitive inside its cell marks its box
+// there, one reaching out of its cell (or in the large tile) the boxes of its segments or
+// triangles in every cell they reach, so a sheet's border lights its lines and not the sheet.
+// The buckets (a tile's run of primitives in one layer) are drawn by layer, then tile, each in
+// list order: every pair of primitives that may share a pixel is drawn in the order of the list,
+// and the others don't affect each other's pixels. Consecutive primitives of one tile inside
+// their cell are placed together (`Run`), and what each primitive is and where it lies is found
+// on several threads (`Fact`): the layers cost a few array reads a primitive.
 
 /// How [`build_mesh_tiled`] cuts a list into area tiles: square cells of side `cell` from
 /// `min`, `cols` × `rows` of them (world units).
@@ -349,9 +396,9 @@ pub struct Tiling {
     pub cell: f64,
     pub cols: usize,
     pub rows: usize,
-    /// Primitives closer than this (world units) may light the same pixel where the list is
-    /// drawn: their draw order is kept, whatever tiles they are in.
-    pub margin: f64,
+    /// The most drawing units a pixel the list is drawn at: primitives that may light the same
+    /// pixel there keep their draw order, whatever tiles they are in (see [`reach_px`]).
+    pub px: f64,
 }
 
 /// Vertices a tile holds on average: fewer, larger tiles below that (each is a draw call).
@@ -361,9 +408,8 @@ const MAX_TILES: usize = 4096;
 /// A tile is at least this many pixels across at the coarsest zoom its list is drawn at, so a
 /// view meets a few tiles, and two tiles' primitives seldom come within the margin of each other.
 const TILE_MIN_PX: f64 = 1024.0;
-/// Pixels within which two primitives may light the same pixel: half the widest line (12
-/// points, at up to 4 pixels a point) and the rounding of a pixel on each side.
-const ORDER_MARGIN_PX: f64 = 28.0;
+/// The most pixels a point the screen may have (a primitive's reach is counted at it).
+const MAX_PPP: f64 = 4.0;
 /// A primitive whose neighbourhood covers more cells than this is placed above everything of the
 /// other tiles in its group (looking at every cell would cost more than it saves).
 const MAX_NEIGHBOUR_CELLS: usize = 64;
@@ -398,20 +444,36 @@ impl Tiling {
             (cols, rows) = (count(cell), ((h / cell) as usize).saturating_add(1));
         }
         let cells = cols.saturating_mul(rows);
-        (cell.is_finite() && cell > 0.0 && (2..=MAX_TILES).contains(&cells)).then_some(Tiling { min: b.min, cell, cols, rows, margin: ORDER_MARGIN_PX * px })
+        (cell.is_finite() && cell > 0.0 && (2..=MAX_TILES).contains(&cells)).then_some(Tiling { min: b.min, cell, cols, rows, px })
     }
 
     fn cells(&self) -> usize {
         self.cols * self.rows
     }
 
-    /// The column and row of the cell holding `p` (the nearest one, outside the grid).
-    fn cell_xy(&self, p: Vec2) -> (usize, usize) {
+    /// The sub-cells (of [`SUB`] × [`SUB`] a cell) that `b` touches, over the whole grid; beyond
+    /// its edges the nearest ones (so a place there is always the same sub-cell).
+    fn area(&self, b: &Bounds2) -> Area {
+        self.area_at(b, SUB as f64 / self.cell)
+    }
+
+    /// [`Tiling::area`] with the sub-cells a unit (`per`, `SUB / cell`) worked out already.
+    fn area_at(&self, b: &Bounds2, per: f64) -> Area {
         let at = |v: f64, n: usize| {
-            let i = (v / self.cell).floor();
-            if i.is_nan() || i < 0.0 { 0 } else { (i as usize).min(n.saturating_sub(1)) }
+            let i = (v * per).floor();
+            if i.is_nan() || i < 0.0 { 0 } else { (i as usize).min(n * SUB - 1) }
         };
-        (at(p.x - self.min.x, self.cols), at(p.y - self.min.y, self.rows))
+        Area {
+            x0: at(b.min.x - self.min.x, self.cols),
+            x1: at(b.max.x - self.min.x, self.cols),
+            y0: at(b.min.y - self.min.y, self.rows),
+            y1: at(b.max.y - self.min.y, self.rows),
+        }
+    }
+
+    fn cell_bounds(&self, x: usize, y: usize) -> Bounds2 {
+        let at = |x: usize, y: usize| self.min + Vec2::new(x as f64, y as f64) * self.cell;
+        Bounds2::new(at(x, y), at(x + 1, y + 1))
     }
 }
 
@@ -476,6 +538,323 @@ impl Tiles {
     }
 }
 
+/// Sub-cells a side of a cell is cut into ([`Marks`]).
+const SUB: usize = 8;
+
+/// The highest layer some tile lit a place with in the current draw-order group (with that
+/// tile), and the highest any other tile did: together, the highest of every tile but a given
+/// one. `NO` where none did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Mark {
+    first: u32,
+    tile: u32,
+    second: u32,
+}
+
+const NO: u32 = u32::MAX;
+
+impl Mark {
+    const NONE: Mark = Mark { first: NO, tile: NO, second: NO };
+
+    /// The highest layer of a tile other than `tile`.
+    fn other_than(&self, tile: u32) -> Option<u32> {
+        let l = if self.tile != tile { self.first } else { self.second };
+        (l != NO).then_some(l)
+    }
+
+    fn raise(&mut self, tile: u32, layer: u32) {
+        if self.first == NO {
+            (self.first, self.tile) = (layer, tile);
+        } else if self.tile == tile {
+            self.first = self.first.max(layer);
+        } else if layer > self.first {
+            (self.second, self.first, self.tile) = (self.first, layer, tile);
+        } else {
+            self.second = if self.second == NO { layer } else { self.second.max(layer) };
+        }
+    }
+}
+
+/// Per cell and stream, what the current draw-order group's primitives lit of the cell's
+/// [`SUB`] × [`SUB`] sub-cells, and with which layer ([`Mark`]): a primitive is placed above
+/// whatever another tile lit where it lights. A primitive's own probe marks the cell it lies
+/// inside; one reaching out of its cell marks each of its segments' (or triangles') boxes in
+/// every cell they reach (a sheet's border lights its lines, not the sheet). A box over more
+/// than [`MAX_NEIGHBOUR_CELLS`] cells marks those cells whole, and past a budget of such marks
+/// the drawing whole (`floor`).
+struct Marks {
+    stamps: Vec<u32>,
+    sub: Vec<Mark>,
+    /// Per cell and stream: what lit it whole, and the highest of everything that lit any of it.
+    whole: Vec<Mark>,
+    any: Vec<Mark>,
+    floor: [Mark; 3],
+    floor_group: [u32; 3],
+    /// Cells left to mark whole before `floor` stands in.
+    budget: usize,
+}
+
+/// Cells a mesh build may mark whole for large boxes (then they mark the drawing whole).
+const WHOLE_CELL_BUDGET: usize = 16_000_000;
+
+impl Marks {
+    fn new(cells: usize) -> Marks {
+        Marks {
+            stamps: vec![NO; cells * 3],
+            sub: vec![Mark::NONE; cells * 3 * SUB * SUB],
+            whole: vec![Mark::NONE; cells * 3],
+            any: vec![Mark::NONE; cells * 3],
+            floor: [Mark::NONE; 3],
+            floor_group: [NO; 3],
+            budget: WHOLE_CELL_BUDGET,
+        }
+    }
+
+    /// The highest layer other tiles than `tile` lit in area `a`, in stream `class` of group
+    /// `group`.
+    fn highest(&self, t: &Tiling, class: usize, group: u32, a: &Area, tile: u32) -> Option<u32> {
+        let mut best: Option<u32> = None;
+        let mut take = |l: Option<u32>| {
+            if let Some(l) = l {
+                best = Some(best.map_or(l, |b| b.max(l)));
+            }
+        };
+        if self.floor_group.get(class).copied() == Some(group) {
+            take(self.floor.get(class).and_then(|f| f.other_than(tile)));
+        }
+        let wide = a.cells() > MAX_NEIGHBOUR_CELLS;
+        for cy in a.y0 / SUB..=a.y1 / SUB {
+            for cx in a.x0 / SUB..=a.x1 / SUB {
+                let k = (cy * t.cols + cx) * 3 + class;
+                if self.stamps.get(k).copied() != Some(group) {
+                    continue;
+                }
+                if wide {
+                    take(self.any.get(k).and_then(|m| m.other_than(tile)));
+                    continue;
+                }
+                take(self.whole.get(k).and_then(|m| m.other_than(tile)));
+                let ((sx0, sx1), (sy0, sy1)) = (a.subs_x(cx), a.subs_y(cy));
+                for sy in sy0..=sy1 {
+                    let row = k * SUB * SUB + sy * SUB;
+                    for m in self.sub.get(row + sx0..=row + sx1).unwrap_or(&[]) {
+                        take(m.other_than(tile));
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// `tile` lit area `a` with `layer`.
+    fn mark(&mut self, t: &Tiling, class: usize, group: u32, a: &Area, tile: u32, layer: u32) {
+        let n = a.cells();
+        let wide = n > MAX_NEIGHBOUR_CELLS;
+        if wide && n > self.budget {
+            if let (Some(f), Some(g)) = (self.floor.get_mut(class), self.floor_group.get_mut(class)) {
+                if *g != group {
+                    (*f, *g) = (Mark::NONE, group);
+                }
+                f.raise(tile, layer);
+            }
+            return;
+        }
+        if wide {
+            self.budget -= n;
+        }
+        for cy in a.y0 / SUB..=a.y1 / SUB {
+            for cx in a.x0 / SUB..=a.x1 / SUB {
+                let k = (cy * t.cols + cx) * 3 + class;
+                let Some(stamp) = self.stamps.get_mut(k) else { continue };
+                let base = k * SUB * SUB;
+                if *stamp != group {
+                    *stamp = group;
+                    if let Some(ms) = self.sub.get_mut(base..base + SUB * SUB) {
+                        ms.fill(Mark::NONE);
+                    }
+                    for m in [self.whole.get_mut(k), self.any.get_mut(k)].into_iter().flatten() {
+                        *m = Mark::NONE;
+                    }
+                }
+                if let Some(m) = self.any.get_mut(k) {
+                    m.raise(tile, layer);
+                }
+                if wide {
+                    if let Some(m) = self.whole.get_mut(k) {
+                        m.raise(tile, layer);
+                    }
+                    continue;
+                }
+                let ((sx0, sx1), (sy0, sy1)) = (a.subs_x(cx), a.subs_y(cy));
+                for sy in sy0..=sy1 {
+                    let row = base + sy * SUB;
+                    for m in self.sub.get_mut(row + sx0..=row + sx1).unwrap_or(&mut []) {
+                        m.raise(tile, layer);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A box in sub-cells of the whole grid ([`Tiling::area`]): columns `x0..=x1`, rows `y0..=y1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Area {
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+}
+
+impl Area {
+    fn union(&self, o: &Area) -> Area {
+        Area { x0: self.x0.min(o.x0), x1: self.x1.max(o.x1), y0: self.y0.min(o.y0), y1: self.y1.max(o.y1) }
+    }
+    fn cells(&self) -> usize {
+        (self.x1 / SUB - self.x0 / SUB + 1) * (self.y1 / SUB - self.y0 / SUB + 1)
+    }
+    /// The columns of cell column `cx` the area covers, within the cell.
+    fn subs_x(&self, cx: usize) -> (usize, usize) {
+        (self.x0.max(cx * SUB) - cx * SUB, self.x1.min(cx * SUB + SUB - 1) - cx * SUB)
+    }
+    fn subs_y(&self, cy: usize) -> (usize, usize) {
+        (self.y0.max(cy * SUB) - cy * SUB, self.y1.min(cy * SUB + SUB - 1) - cy * SUB)
+    }
+}
+
+/// What placing a primitive needs to know of it, found for many at once on several threads.
+#[derive(Clone, Copy)]
+struct Fact {
+    /// The stream (0 fills, 1 lines, 2 quads), or [`SKIP`] or [`IMAGE`].
+    class: u8,
+    /// A wipeout or a coloured mask: it starts a draw-order group.
+    breaks: bool,
+    /// Where it may light pixels (its points' bounds grown by its reach) lies inside its cell.
+    inside: bool,
+    /// Vertices (or instances) in its stream.
+    n: u32,
+    tile: u32,
+    /// Where it may light pixels, in sub-cells ([`Area`]: x0, x1, y0, y1).
+    area: [u16; 4],
+}
+
+const SKIP: u8 = 255;
+const IMAGE: u8 = 254;
+
+impl Fact {
+    const NONE: Fact = Fact { class: SKIP, breaks: false, inside: false, n: 0, tile: 0, area: [0; 4] };
+
+    /// Its facts, and where it may light pixels (empty: it is not placed).
+    fn of(list: &DisplayList, prim: &cadaddy_render::DPrim, t: &Tiling, per: f64, lwdisplay: bool) -> (Fact, Bounds2) {
+        let pts = list.points(prim);
+        let (class, n) = match prim.kind {
+            Kind::Infinite { .. } => return (Fact::NONE, Bounds2::EMPTY),
+            Kind::Image(_) => return (Fact { class: IMAGE, ..Fact::NONE }, Bounds2::EMPTY),
+            Kind::Tris | Kind::InkMask | Kind::Mask => (0u8, pts.as_chunks::<3>().0.len() * 3),
+            Kind::Polyline => match wide_width(prim.lw, lwdisplay) {
+                Some(_) => (2, pts.len().saturating_sub(1)),
+                None => (1, 2 * pts.len().saturating_sub(1)),
+            },
+            Kind::Point => (2, usize::from(!pts.is_empty())),
+        };
+        let breaks = matches!(prim.kind, Kind::InkMask | Kind::Mask);
+        let n = u32::try_from(n).unwrap_or(u32::MAX);
+        let bb = Bounds2::from_points(pts.iter().copied());
+        // Nothing to draw, or nowhere (no point that is a number).
+        if n == 0 || bb.is_empty() {
+            return (Fact { breaks, ..Fact::NONE }, Bounds2::EMPTY);
+        }
+        let probe = bb.expand(reach_px(prim, usize::from(class), lwdisplay) * t.px);
+        // A primitive's cell holds its centre, and it reaches at most half a cell past the cell;
+        // any other goes in the large tile.
+        let c = t.area_at(&Bounds2::new(bb.center(), bb.center()), per);
+        let (x, y) = (c.x0 / SUB, c.y0 / SUB);
+        let home = t.cell_bounds(x, y);
+        let large = t.cells();
+        let tile = if home.expand(t.cell * 0.5).contains_box(&probe) { y * t.cols + x } else { large };
+        let inside = tile != large && home.contains_box(&probe);
+        let a = t.area_at(&probe, per);
+        let area = [a.x0, a.x1, a.y0, a.y1].map(|v| u16::try_from(v).unwrap_or(u16::MAX));
+        (Fact { class, breaks, inside, n, tile: tile as u32, area }, probe)
+    }
+}
+
+/// Primitives whose facts are found together (a block's facts are held at once).
+const FACT_BLOCK: usize = 1 << 18;
+
+/// The facts of `prims`, on several threads when there are many; each tile's placed primitives
+/// counted into `prims_in` and where they may light pixels into `bounds`.
+#[allow(clippy::too_many_arguments)]
+fn facts_of(
+    list: &DisplayList,
+    prims: &[cadaddy_render::DPrim],
+    t: &Tiling,
+    lwdisplay: bool,
+    threads: usize,
+    out: &mut Vec<Fact>,
+    bounds: &mut [Bounds2],
+    prims_in: &mut [usize],
+) {
+    out.clear();
+    out.resize(prims.len(), Fact::NONE);
+    let threads = threads.clamp(1, MAX_WRITERS);
+    let per = prims.len().div_ceil(threads).max(1);
+    let n_tiles = bounds.len();
+    let sub_per = SUB as f64 / t.cell;
+    let work = |fs: &mut [Fact], ps: &[cadaddy_render::DPrim], bounds: &mut [Bounds2], prims_in: &mut [usize]| {
+        for (f, p) in fs.iter_mut().zip(ps) {
+            let (fact, probe) = Fact::of(list, p, t, sub_per, lwdisplay);
+            *f = fact;
+            if fact.class <= 2
+                && let (Some(b), Some(n)) = (bounds.get_mut(fact.tile as usize), prims_in.get_mut(fact.tile as usize))
+            {
+                *b = b.union(&probe);
+                *n += 1;
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if threads > 1 {
+        let parts: Vec<(Vec<Bounds2>, Vec<usize>)> = std::thread::scope(|s| {
+            let handles: Vec<_> = out
+                .chunks_mut(per)
+                .zip(prims.chunks(per))
+                .map(|(fs, ps)| {
+                    s.spawn(move || {
+                        let (mut b, mut n) = (vec![Bounds2::EMPTY; n_tiles], vec![0usize; n_tiles]);
+                        work(fs, ps, &mut b, &mut n);
+                        (b, n)
+                    })
+                })
+                .collect();
+            // A thread that failed leaves its facts as nothing to place.
+            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        });
+        for (b, n) in parts {
+            for (g, l) in bounds.iter_mut().zip(&b) {
+                *g = g.union(l);
+            }
+            for (g, l) in prims_in.iter_mut().zip(&n) {
+                *g += l;
+            }
+        }
+        return;
+    }
+    work(out, prims, bounds, prims_in);
+}
+
+/// How far (in pixels where the list is drawn at its coarsest) a primitive of stream `class`
+/// may light pixels beyond its points: a hairline or a fill a pixel, a wide line or a point half
+/// its width at up to [`MAX_PPP`] pixels a point and a pixel.
+fn reach_px(prim: &cadaddy_render::DPrim, class: usize, lwdisplay: bool) -> f64 {
+    let half_points = match prim.kind {
+        Kind::Point => POINT_SIZE / 2.0,
+        _ if class == 2 => wide_width(prim.lw, lwdisplay).unwrap_or(1.0) / 2.0,
+        _ => 0.0,
+    };
+    f64::from(half_points) * MAX_PPP + 1.0
+}
+
 /// One tile's run of one stream in one layer while the mesh is built.
 struct Bucket {
     group: u32,
@@ -485,61 +864,79 @@ struct Bucket {
     /// Vertices within the tile's stream.
     from: usize,
     to: usize,
-    bounds: Bounds2,
 }
 
-/// A tile's buckets in one stream of the current draw-order group, layers rising.
-#[derive(Default)]
+/// A tile's last layer and bucket in one stream of the current draw-order group.
+#[derive(Clone, Copy, Default)]
 struct Lane {
     group: Option<u32>,
     top: u32,
-    open: Vec<usize>,
+    last: Option<usize>,
 }
 
 impl Lane {
     fn top(&self, group: u32) -> u32 {
         if self.group == Some(group) { self.top } else { 0 }
     }
-
-    /// The lowest layer from `layer` up that draws after every bucket of this lane (in `group`)
-    /// coming near `probe`.
-    fn above(&self, buckets: &[Bucket], group: u32, probe: &Bounds2, layer: u32) -> u32 {
-        if self.group != Some(group) {
-            return layer;
-        }
-        for b in self.open.iter().rev().filter_map(|&i| buckets.get(i)) {
-            if b.layer < layer {
-                break;
-            }
-            if b.bounds.intersects(probe) {
-                return b.layer + 1;
-            }
-        }
-        layer
-    }
 }
 
-/// The highest layer of the current group's lanes in one stream with its tile, and the highest
-/// of the other tiles: together, the highest layer of any tile but a given one.
-#[derive(Clone, Copy, Default)]
-struct Tops {
-    first: Option<(u32, usize)>,
-    second: Option<u32>,
+/// Primitives placed together ([`Placing::place`]): consecutive ones of one tile and stream
+/// inside their cell, or one reaching out of its cell.
+struct Run {
+    tile: u32,
+    class: u8,
+    n: usize,
+    area: Area,
 }
 
-impl Tops {
-    fn other_than(&self, tile: usize) -> Option<u32> {
-        match self.first {
-            Some((f, t)) if t != tile => Some(f),
-            _ => self.second,
+/// Sub-cells across (and up) a run of primitives may spread.
+const RUN_SUBS: usize = 3;
+
+/// The state of placing a list's primitives in layers ([`build_mesh_tiled`]).
+struct Placing {
+    marks: Marks,
+    buckets: Vec<Bucket>,
+    lanes: Vec<[Lane; 3]>,
+    /// Vertices so far of each tile's streams, and of each stream.
+    counts: Vec<[usize; 3]>,
+    totals: [usize; 3],
+    group: u32,
+}
+
+impl Placing {
+    /// Place `r`, lighting `areas`: in a layer at least its tile's last, and above whatever
+    /// another tile lit there.
+    fn place(&mut self, t: &Tiling, r: &Run, areas: &[Area]) {
+        let (class, tile, group) = (usize::from(r.class), r.tile as usize, self.group);
+        let mut layer = self.lanes.get(tile).and_then(|l| l.get(class)).map_or(0, |l| l.top(group));
+        for a in areas {
+            if let Some(l) = self.marks.highest(t, class, group, a, r.tile) {
+                layer = layer.max(l.saturating_add(1));
+            }
         }
-    }
-    fn raise(&mut self, tile: usize, layer: u32) {
-        match self.first {
-            None => self.first = Some((layer, tile)),
-            Some((f, t)) if t == tile => self.first = Some((f.max(layer), t)),
-            Some((f, _)) if layer > f => (self.first, self.second) = (Some((layer, tile)), Some(f)),
-            Some(_) => self.second = Some(self.second.map_or(layer, |s| s.max(layer))),
+        for a in areas {
+            self.marks.mark(t, class, group, a, r.tile, layer);
+        }
+        let (Some(lane), Some(count)) =
+            (self.lanes.get_mut(tile).and_then(|l| l.get_mut(class)), self.counts.get_mut(tile).and_then(|c| c.get_mut(class)))
+        else {
+            return;
+        };
+        if lane.group != Some(group) {
+            *lane = Lane { group: Some(group), top: 0, last: None };
+        }
+        let from = *count;
+        match lane.last.and_then(|b| self.buckets.get_mut(b)).filter(|b| b.layer == layer) {
+            Some(b) => b.to = from + r.n,
+            None => {
+                lane.last = Some(self.buckets.len());
+                self.buckets.push(Bucket { group, class: r.class, layer, tile: r.tile, from, to: from + r.n });
+            }
+        }
+        lane.top = layer;
+        *count += r.n;
+        if let Some(total) = self.totals.get_mut(class) {
+            *total += r.n;
         }
     }
 }
@@ -548,106 +945,112 @@ impl Tops {
 /// Drawing every tile draws exactly what [`build_mesh`]'s data draws, and leaving out tiles
 /// that don't reach into the view changes nothing in it.
 pub fn build_mesh_tiled(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool, tiling: Option<&Tiling>) -> MeshData {
+    build_mesh_tiled_by(list, origin, bg, lwdisplay, tiling, MAX_WRITERS)
+}
+
+/// [`build_mesh_tiled`] written on at most `writers` threads.
+fn build_mesh_tiled_by(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool, tiling: Option<&Tiling>, writers: usize) -> MeshData {
     let Some(t) = tiling else { return build_mesh(list, origin, bg, lwdisplay) };
     let large = t.cells();
     let n_tiles = large + 1;
     let mut m = MeshData::default();
     // Each primitive's tile (`u32::MAX`: none).
     let mut placed: Vec<u32> = vec![u32::MAX; list.prims.len()];
-    let mut counts = vec![[0usize; 3]; n_tiles];
+    let mut at = Placing {
+        marks: Marks::new(large),
+        buckets: Vec::new(),
+        lanes: vec![[Lane::default(); 3]; n_tiles],
+        counts: vec![[0usize; 3]; n_tiles],
+        totals: [0; 3],
+        group: 0,
+    };
+    let mut run: Option<Run> = None;
+    // Each tile's primitives, and where they may light pixels (a tile is drawn where they do).
     let mut prims_in = vec![0usize; n_tiles];
     let mut bounds = vec![Bounds2::EMPTY; n_tiles];
-    let mut buckets: Vec<Bucket> = Vec::new();
-    let mut lanes: Vec<[Lane; 3]> = (0..n_tiles).map(|_| Default::default()).collect();
-    let mut tops = [Tops::default(); 3];
-    let mut group = 0u32;
-    let mut totals = [0usize; 3];
-    for (i, prim) in list.prims.iter().enumerate() {
-        let pts = list.points(prim);
-        let (class, n) = match prim.kind {
-            Kind::Infinite { .. } => continue,
-            Kind::Image(_) => {
-                if list.image(prim).is_none() {
+    #[cfg(not(target_arch = "wasm32"))]
+    let threads =
+        if list.prims.len() < PARALLEL_VERTICES / 4 { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(writers.max(1)) };
+    #[cfg(target_arch = "wasm32")]
+    let threads = 1usize;
+    let mut facts = Vec::new();
+    let mut areas: Vec<Area> = Vec::new();
+    #[cfg(test)]
+    let t0 = web_time::Instant::now();
+    #[cfg(test)]
+    let mut facts_us = 0u64;
+    for (block, prims) in list.prims.chunks(FACT_BLOCK).enumerate() {
+        #[cfg(test)]
+        let tf = web_time::Instant::now();
+        facts_of(list, prims, t, lwdisplay, threads, &mut facts, &mut bounds, &mut prims_in);
+        #[cfg(test)]
+        {
+            facts_us += tf.elapsed().as_micros() as u64;
+        }
+        for (k, (prim, f)) in prims.iter().zip(&facts).enumerate() {
+            let i = block * FACT_BLOCK + k;
+            if f.breaks || f.class == IMAGE {
+                if f.class == IMAGE && list.image(prim).is_none() {
                     continue;
                 }
-                m.breaks.push(totals);
-                (group, tops) = (group + 1, [Tops::default(); 3]);
-                m.images.extend(mesh_image(list, prim, origin, bg, m.breaks.len() - 1));
+                if let Some(r) = run.take() {
+                    at.place(t, &r, &[r.area]);
+                }
+                m.breaks.push(at.totals);
+                at.group += 1;
+                if f.class == IMAGE {
+                    m.images.extend(mesh_image(list, prim, origin, bg, m.breaks.len() - 1));
+                    continue;
+                }
+            }
+            if f.class > 2 {
                 continue;
             }
-            Kind::Tris | Kind::InkMask | Kind::Mask => {
-                if prim.kind != Kind::Tris {
-                    m.breaks.push(totals);
-                    (group, tops) = (group + 1, [Tops::default(); 3]);
-                }
-                (0usize, pts.as_chunks::<3>().0.len() * 3)
+            if let Some(slot) = placed.get_mut(i) {
+                *slot = f.tile;
             }
-            Kind::Polyline => match wide_width(prim.lw, lwdisplay) {
-                Some(_) => (2, pts.len().saturating_sub(1)),
-                None => (1, 2 * pts.len().saturating_sub(1)),
-            },
-            Kind::Point => (2, usize::from(!pts.is_empty())),
-        };
-        if n == 0 {
-            continue;
-        }
-        let bb = Bounds2::from_points(pts.iter().copied());
-        // A primitive's cell holds its centre, and it reaches at most half a cell past the cell
-        // (the neighbours looked at below rely on it); any other goes in the large tile.
-        let (x, y) = t.cell_xy(bb.center());
-        let home = Bounds2::new(t.min + Vec2::new(x as f64, y as f64) * t.cell, t.min + Vec2::new(x as f64 + 1.0, y as f64 + 1.0) * t.cell);
-        let tile = if !bb.is_empty() && home.expand(t.cell * 0.5).contains_box(&bb) { y * t.cols + x } else { large };
-        // Its layer: above whatever of another tile may share a pixel with it.
-        let probe = bb.expand(t.margin);
-        let Some(top) = tops.get(class).copied() else { continue };
-        let mut layer = lanes.get(tile).and_then(|l| l.get(class)).map_or(0, |l| l.top(group));
-        if !probe.is_empty() {
-            let reach = probe.expand(t.cell * 0.5);
-            let ((x0, y0), (x1, y1)) = (t.cell_xy(reach.min), t.cell_xy(reach.max));
-            if (x1 - x0 + 1) * (y1 - y0 + 1) > MAX_NEIGHBOUR_CELLS {
-                if let Some(other) = top.other_than(tile) {
-                    layer = layer.max(other + 1);
-                }
-            } else {
-                for c in (y0..=y1).flat_map(|y| (x0..=x1).map(move |x| y * t.cols + x)).chain(std::iter::once(large)) {
-                    if c == tile || !bounds.get(c).is_some_and(|b| b.intersects(&probe)) {
+            // Inside its cell: with the primitives before it of its tile and stream, while they
+            // stay within a few sub-cells (one text's strokes, one symbol's pieces).
+            let [x0, x1, y0, y1] = f.area.map(usize::from);
+            let a = Area { x0, x1, y0, y1 };
+            if f.inside {
+                if let Some(r) = run.as_mut().filter(|r| r.tile == f.tile && r.class == f.class) {
+                    let u = r.area.union(&a);
+                    if u.x1 - u.x0 < RUN_SUBS && u.y1 - u.y0 < RUN_SUBS {
+                        (r.n, r.area) = (r.n + f.n as usize, u);
                         continue;
                     }
-                    if let Some(lane) = lanes.get(c).and_then(|l| l.get(class)) {
-                        layer = lane.above(&buckets, group, &probe, layer);
-                    }
                 }
+                if let Some(r) = run.replace(Run { tile: f.tile, class: f.class, n: f.n as usize, area: a }) {
+                    at.place(t, &r, &[r.area]);
+                }
+                continue;
             }
-        }
-        let Some(lane) = lanes.get_mut(tile).and_then(|l| l.get_mut(class)) else { continue };
-        if lane.group != Some(group) {
-            (lane.group, lane.top) = (Some(group), 0);
-            lane.open.clear();
-        }
-        let Some(count) = counts.get_mut(tile).and_then(|c| c.get_mut(class)) else { continue };
-        let from = *count;
-        match lane.open.last().and_then(|&b| buckets.get_mut(b)).filter(|b| b.layer == layer) {
-            Some(b) => {
-                b.to = from + n;
-                b.bounds = b.bounds.union(&bb);
+            if let Some(r) = run.take() {
+                at.place(t, &r, &[r.area]);
             }
-            None => {
-                lane.open.push(buckets.len());
-                buckets.push(Bucket { group, class: class as u8, layer, tile: tile as u32, from, to: from + n, bounds: bb });
+            // Out of its cell: it lights by its pieces (segments, triangles), each grown by its
+            // reach.
+            let r = reach_px(prim, usize::from(f.class), lwdisplay) * t.px;
+            let pts = list.points(prim);
+            areas.clear();
+            let area = |b: Bounds2| (!b.is_empty()).then(|| t.area(&b.expand(r)));
+            match prim.kind {
+                Kind::Polyline => areas.extend(pts.windows(2).filter_map(|w| area(Bounds2::from_points(w.iter().copied())))),
+                Kind::Point => areas.push(a),
+                _ => areas.extend(pts.as_chunks::<3>().0.iter().filter_map(|tri| area(Bounds2::from_points(tri.iter().copied())))),
             }
-        }
-        lane.top = layer;
-        if let Some(top) = tops.get_mut(class) {
-            top.raise(tile, layer);
-        }
-        *count += n;
-        if let (Some(p), Some(b), Some(slot), Some(total)) = (prims_in.get_mut(tile), bounds.get_mut(tile), placed.get_mut(i), totals.get_mut(class)) {
-            *p += 1;
-            *b = b.union(&bb);
-            *slot = tile as u32;
-            *total += n;
+            at.place(t, &Run { tile: f.tile, class: f.class, n: f.n as usize, area: a }, &areas);
         }
     }
+    if let Some(r) = run.take() {
+        at.place(t, &r, &[r.area]);
+    }
+    let Placing { counts, mut buckets, .. } = at;
+    #[cfg(test)]
+    phase(0, t0);
+    #[cfg(test)]
+    PHASES[1].store(facts_us, Ordering::Relaxed);
     // Where each tile starts in each stream.
     let mut starts = Vec::with_capacity(n_tiles + 1);
     let mut at = [0usize; 3];
@@ -682,14 +1085,11 @@ pub fn build_mesh_tiled(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bo
             *slot = i as u32;
         }
     }
-    m.tris = Vec::with_capacity(at[0] * VERTEX_SIZE);
-    m.lines = Vec::with_capacity(at[1] * VERTEX_SIZE);
-    m.quads = Vec::with_capacity(at[2] * INSTANCE_SIZE);
-    for &i in &order {
-        if let Some(prim) = list.prims.get(i as usize) {
-            push_prim(list, prim, origin, bg, lwdisplay, &mut m.lines, &mut m.tris, &mut m.quads);
-        }
-    }
+    #[cfg(test)]
+    let t0 = web_time::Instant::now();
+    write_tiles(list, origin, bg, lwdisplay, &order, &first, &starts, &mut m, writers);
+    #[cfg(test)]
+    phase(2, t0);
     // The buckets in draw order: by group, stream, layer, then tile.
     buckets.sort_by_key(|b| (b.group, b.class, b.layer, b.tile));
     let mut groups = vec![[0..0, 0..0, 0..0]; m.breaks.len() + 1];
@@ -707,6 +1107,104 @@ pub fn build_mesh_tiled(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bo
     }
     m.tiles = Some(Arc::new(Tiles { bounds, prims: prims_in, starts, steps, groups }));
     m
+}
+
+/// Microseconds the phases of the last tiled mesh took (placing, sorting, writing): the bench's.
+#[cfg(test)]
+static PHASES: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+#[cfg(test)]
+fn phase(k: usize, t0: web_time::Instant) {
+    if let Some(p) = PHASES.get(k) {
+        p.store(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
+}
+
+/// Tiles' vertices written at once on a single thread below this; above, on several.
+const PARALLEL_VERTICES: usize = 500_000;
+/// Most threads writing a mesh.
+const MAX_WRITERS: usize = 8;
+
+/// Write the primitives of each tile (`order[first[t]..first[t + 1]]`, in list order), tile after
+/// tile, into the mesh's three streams laid out as `starts` says. A large mesh is written on
+/// several threads, each a run of whole tiles: a run is a contiguous part of each stream.
+#[allow(clippy::too_many_arguments)]
+fn write_tiles(
+    list: &DisplayList,
+    origin: Vec2,
+    bg: Rgb,
+    lwdisplay: bool,
+    order: &[u32],
+    first: &[usize],
+    starts: &[[usize; 3]],
+    m: &mut MeshData,
+    max_writers: usize,
+) {
+    let strides = [VERTEX_SIZE, VERTEX_SIZE, INSTANCE_SIZE];
+    let end = starts.last().copied().unwrap_or([0; 3]);
+    let weight = |s: &[usize; 3]| s[0] + s[1] + 6 * s[2];
+    let total = weight(&end);
+    #[cfg(not(target_arch = "wasm32"))]
+    let writers =
+        if total < PARALLEL_VERTICES { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, max_writers.max(1)) };
+    #[cfg(target_arch = "wasm32")]
+    let writers = max_writers.min(1);
+    let n_tiles = starts.len().saturating_sub(1);
+    // Runs of tiles holding about as many vertices each.
+    let mut cuts = vec![0usize];
+    for k in 1..writers {
+        let want = total * k / writers;
+        let at = starts.partition_point(|s| weight(s) < want).min(n_tiles);
+        if at > cuts.last().copied().unwrap_or(0) {
+            cuts.push(at);
+        }
+    }
+    cuts.push(n_tiles);
+    let mut tris = vec![0u8; end[0] * strides[0]];
+    let mut lines = vec![0u8; end[1] * strides[1]];
+    let mut quads = vec![0u8; end[2] * strides[2]];
+    // Each run's part of each stream.
+    let mut parts: Vec<(std::ops::Range<usize>, [&mut [u8]; 3])> = Vec::with_capacity(cuts.len());
+    {
+        let (mut rt, mut rl, mut rq) = (tris.as_mut_slice(), lines.as_mut_slice(), quads.as_mut_slice());
+        for w in cuts.windows(2) {
+            let [a, b] = w else { continue };
+            let (Some(sa), Some(sb)) = (starts.get(*a), starts.get(*b)) else { continue };
+            let len = |c: usize| (sb[c] - sa[c]) * strides[c];
+            // (The lengths before the rests are taken apart.)
+            let (lt, ll, lq) = (len(0).min(rt.len()), len(1).min(rl.len()), len(2).min(rq.len()));
+            let (t, t2) = std::mem::take(&mut rt).split_at_mut(lt);
+            let (l, l2) = std::mem::take(&mut rl).split_at_mut(ll);
+            let (q, q2) = std::mem::take(&mut rq).split_at_mut(lq);
+            (rt, rl, rq) = (t2, l2, q2);
+            let prims = first.get(*a).copied().unwrap_or(0)..first.get(*b).copied().unwrap_or(0);
+            parts.push((prims, [t, l, q]));
+        }
+    }
+    let write = |prims: std::ops::Range<usize>, [t, l, q]: [&mut [u8]; 3]| {
+        let (mut t, mut l, mut q) = (Cursor { buf: t, at: 0 }, Cursor { buf: l, at: 0 }, Cursor { buf: q, at: 0 });
+        for &i in order.get(prims).unwrap_or(&[]) {
+            if let Some(prim) = list.prims.get(i as usize) {
+                push_prim(list, prim, origin, bg, lwdisplay, &mut l, &mut t, &mut q);
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if parts.len() > 1 {
+        std::thread::scope(|s| {
+            let handles: Vec<_> = parts.into_iter().map(|(prims, bufs)| s.spawn(move || write(prims, bufs))).collect();
+            for h in handles {
+                // A writer that failed leaves its part zero: degenerate vertices, nothing drawn.
+                let _ = h.join();
+            }
+        });
+        (m.tris, m.lines, m.quads) = (tris, lines, quads);
+        return;
+    }
+    for (prims, bufs) in parts {
+        write(prims, bufs);
+    }
+    (m.tris, m.lines, m.quads) = (tris, lines, quads);
 }
 
 /// Vertex data drawing primitives `prims` of `list` in `color` (the selection highlight), as on
@@ -1796,7 +2294,15 @@ impl Resources {
     /// Draw a tiled layer: each draw-order group's fills, lines and quads, the runs of the tiles
     /// reaching into `cull` in order (runs that follow each other in a stream drawn as one), then
     /// the images after the group.
-    fn draw_tiles(&self, res: &Layer, tiles: &Tiles, pipelines: [&wgpu::RenderPipeline; 4], mask: bool, cull: Option<&Bounds2>, pass: &mut wgpu::RenderPass<'_>) {
+    fn draw_tiles(
+        &self,
+        res: &Layer,
+        tiles: &Tiles,
+        pipelines: [&wgpu::RenderPipeline; 4],
+        mask: bool,
+        cull: Option<&Bounds2>,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) {
         let visible = cull.map(|c| tiles.visible(c));
         let shown = |t: u32| visible.as_ref().is_none_or(|v| v.get(t as usize).copied().unwrap_or(true));
         let streams = [(&res.tris, &res.offsets[0]), (&res.lines, &res.offsets[1]), (&res.quads, &res.offsets[2])];
@@ -2480,7 +2986,11 @@ mod tests {
                 l.bounds.add(*p);
             }
             let len = pts.len() as u32;
-            if fill { l.tris.extend(pts) } else { l.verts.extend(pts) }
+            if fill {
+                l.tris.extend(pts)
+            } else {
+                l.verts.extend(pts)
+            }
             l.prims.push(DPrim { handle: Handle(1), color, aci7: false, lw, transparency, kind, start, len });
         };
         l.images.push(cadaddy_render::ImageRef {
@@ -2517,10 +3027,9 @@ mod tests {
         l
     }
 
-    /// Cells of 8 units over the busy list: a grid of 8 × 8, order kept within 3 pixels at one
-    /// pixel a unit (more than half the widest line drawn, 1.9 points, and a pixel).
+    /// Cells of 8 units over the busy list: a grid of 8 × 8, drawn at one pixel a unit.
     fn small_tiles() -> Tiling {
-        Tiling { min: Vec2::ZERO, cell: 8.0, cols: 8, rows: 8, margin: 3.0 }
+        Tiling { min: Vec2::ZERO, cell: 8.0, cols: 8, rows: 8, px: 1.0 }
     }
 
     /// One 64 × 64 frame of `mesh` (origin at 0,0) drawn by a window of its own, with its frame
@@ -2570,7 +3079,10 @@ mod tests {
                         view: &target_view,
                         depth_slice: None,
                         resolve_target: None,
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }), store: wgpu::StoreOp::Store },
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
                     })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -2588,7 +3100,10 @@ mod tests {
         });
         enc.copy_texture_to_buffer(
             target.as_image_copy(),
-            wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) } },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
         queue.submit([enc.finish()]);
@@ -2660,16 +3175,24 @@ mod tests {
                 l.bounds.add(*p);
             }
             let len = pts.len() as u32;
-            if fill { l.tris.extend(pts) } else { l.verts.extend(pts) }
+            if fill {
+                l.tris.extend(pts)
+            } else {
+                l.verts.extend(pts)
+            }
             l.prims.push(DPrim { handle: Handle(1), color, aci7: false, lw: 0.0, transparency: 0, kind, start, len });
         };
         // The cell edge is x = 8; each object's centre is in the cell on one side of it.
         add(Kind::Polyline, Rgb(255, 0, 0), vec![Vec2::new(3.0, 4.5), Vec2::new(10.5, 4.5)]);
-        add(Kind::Mask, Rgb(0, 0, 0), vec![Vec2::new(7.0, 2.0), Vec2::new(14.0, 2.0), Vec2::new(14.0, 7.0), Vec2::new(7.0, 2.0), Vec2::new(14.0, 7.0), Vec2::new(7.0, 7.0)]);
+        add(
+            Kind::Mask,
+            Rgb(0, 0, 0),
+            vec![Vec2::new(7.0, 2.0), Vec2::new(14.0, 2.0), Vec2::new(14.0, 7.0), Vec2::new(7.0, 2.0), Vec2::new(14.0, 7.0), Vec2::new(7.0, 7.0)],
+        );
         add(Kind::Polyline, Rgb(0, 255, 0), vec![Vec2::new(9.5, 1.0), Vec2::new(9.5, 7.0)]);
         add(Kind::Polyline, Rgb(0, 0, 255), vec![Vec2::new(5.5, 6.0), Vec2::new(9.9, 6.0)]);
         add(Kind::Tris, Rgb(255, 255, 255), vec![Vec2::new(6.0, 5.0), Vec2::new(10.0, 5.0), Vec2::new(10.0, 6.0)]);
-        let tiling = Tiling { min: Vec2::ZERO, cell: 8.0, cols: 2, rows: 1, margin: 0.5 };
+        let tiling = Tiling { min: Vec2::ZERO, cell: 8.0, cols: 2, rows: 1, px: 0.25 };
         let tiled = build_mesh_tiled(&l, Vec2::ZERO, Rgb(9, 9, 9), false, Some(&tiling));
         assert_eq!(tiled.tiles.as_ref().map(|t| t.groups.len()), Some(2), "the wipeout starts a group");
         let center = Vec2::new(8.0, 4.0);
@@ -2687,7 +3210,7 @@ mod tests {
         assert_eq!(Tiling::for_bounds(&b, TILE_VERTICES, 1.0), None, "a small list stays one tile");
         let t = Tiling::for_bounds(&b, 10_000_000, 0.5).unwrap();
         assert!(t.cell >= TILE_MIN_PX * 0.5 && t.cells() <= MAX_TILES && t.cells() >= 2, "{t:?}");
-        assert_eq!(t.margin, ORDER_MARGIN_PX * 0.5);
+        assert_eq!(t.px, 0.5);
         // Zoomed far out, a tile would be smaller than the screen: one tile.
         assert_eq!(Tiling::for_bounds(&b, 10_000_000, 20.0), None);
         // A long, thin drawing.
@@ -2726,7 +3249,7 @@ mod tests {
             }
         }
         let l = cadaddy_render::build(&d, &Space::Model, &cadaddy_render::Options { tolerance: 0.1, min_dash: 0.4, ..Default::default() });
-        let tiling = Tiling { min: Vec2::ZERO, cell: 8.0, cols: 8, rows: 8, margin: 1.5 };
+        let tiling = Tiling { min: Vec2::ZERO, cell: 8.0, cols: 8, rows: 8, px: 1.0 };
         let center = Vec2::new(32.0, 32.0);
         let whole = read_frame(&rs, build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false), false, center, 1.0, None);
         let tiled = read_frame(&rs, build_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(&tiling)), false, center, 1.0, None);
@@ -2756,7 +3279,8 @@ mod tests {
         let (tb, ta) = (before.tiles.unwrap(), after.tiles.unwrap());
         let changed: Vec<usize> = (0..tb.bounds.len())
             .filter(|&t| {
-                let (a, b): (Vec<&[u8]>, Vec<&[u8]>) = (tb.parts(&before.lines, 1, VERTEX_SIZE).collect(), ta.parts(&after.lines, 1, VERTEX_SIZE).collect());
+                let (a, b): (Vec<&[u8]>, Vec<&[u8]>) =
+                    (tb.parts(&before.lines, 1, VERTEX_SIZE).collect(), ta.parts(&after.lines, 1, VERTEX_SIZE).collect());
                 a.get(t) != b.get(t)
             })
             .collect();
@@ -2764,10 +3288,89 @@ mod tests {
         assert_eq!(tb.parts(&before.tris, 0, VERTEX_SIZE).collect::<Vec<_>>(), ta.parts(&after.tris, 0, VERTEX_SIZE).collect::<Vec<_>>());
     }
 
+    /// Where a tiled mesh's time goes on the synthetic print set, at a room's zoom:
+    /// `cargo test --release -p cadaddy-ui-egui --lib bench_tiled_mesh -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_tiled_mesh() {
+        let d = cadaddy_engine::sample::print_set(100);
+        let px = 0.07;
+        let opts = cadaddy_render::Options { tolerance: px * 0.5, min_dash: px * 2.0, ..Default::default() };
+        let l = cadaddy_render::build(&d, &cadaddy_doc::Space::Model, &opts);
+        let tiling = Tiling::choose(&l, px * 2.0);
+        println!("{} prims, tiling {tiling:?}", l.prims.len());
+        let time = |f: &dyn Fn() -> MeshData| {
+            let mut best = f64::MAX;
+            for _ in 0..3 {
+                let t = web_time::Instant::now();
+                let m = f();
+                best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+                std::hint::black_box(m.lines.len());
+            }
+            best
+        };
+        let whole = time(&|| build_mesh(&l, l.bounds.center(), Rgb(0, 0, 0), true));
+        let one = time(&|| build_mesh_tiled_by(&l, l.bounds.center(), Rgb(0, 0, 0), true, tiling.as_ref(), 1));
+        let many = time(&|| build_mesh_tiled(&l, l.bounds.center(), Rgb(0, 0, 0), true, tiling.as_ref()));
+        let m = build_mesh_tiled(&l, l.bounds.center(), Rgb(0, 0, 0), true, tiling.as_ref());
+        let t = m.tiles.as_ref().map(|t| (t.bounds.len(), t.steps.len(), t.groups.len())).unwrap_or_default();
+        println!("whole {whole:.0} ms; tiled on one thread {one:.0} ms, on {MAX_WRITERS} {many:.0} ms; tiles, steps, groups {t:?}");
+        let ph: Vec<u64> = PHASES.iter().map(|p| p.load(Ordering::Relaxed) / 1000).collect();
+        println!("last build: placing {} ms (of which facts {} ms), writing {} ms", ph[0], ph[1], ph[2]);
+    }
+
+    /// A list large enough to be placed and written on several threads gives byte for byte the
+    /// mesh one thread gives (the one-thread build is the one the read-back tests compare).
+    #[test]
+    fn many_threads_build_the_mesh_one_thread_builds() {
+        let mut r = Rng(5);
+        let mut l = DisplayList::default();
+        for i in 0..160_000u32 {
+            let p = Vec2::new(r.f(4000.0), r.f(4000.0));
+            let q = p + Vec2::new(r.f(30.0) - 15.0, r.f(30.0) - 15.0);
+            let (kind, pts) = match i % 7 {
+                0 => (Kind::Tris, vec![p, q, Vec2::new(p.x, q.y)]),
+                1 => (Kind::Point, vec![p]),
+                2 if i % 1000 == 2 => (Kind::Polyline, vec![Vec2::new(p.x, 0.0), Vec2::new(p.x, 4000.0)]),
+                _ => (Kind::Polyline, vec![p, q, q + Vec2::new(3.0, 1.0)]),
+            };
+            let start = if kind.is_fill() { l.tris.len() } else { l.verts.len() } as u32;
+            for v in &pts {
+                l.bounds.add(*v);
+            }
+            let len = pts.len() as u32;
+            if kind.is_fill() {
+                l.tris.extend(pts)
+            } else {
+                l.verts.extend(pts)
+            }
+            let lw = if i % 5 == 0 { 0.5 } else { 0.0 };
+            l.prims.push(DPrim { handle: Handle(1), color: Rgb((i % 251) as u8, 0, 0), aci7: false, lw, transparency: 0, kind, start, len });
+        }
+        let tiling = Tiling::choose(&l, 1.0).unwrap();
+        let one = build_mesh_tiled_by(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(&tiling), 1);
+        let many = build_mesh_tiled_by(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(&tiling), MAX_WRITERS);
+        assert!(one.line_vertices() + one.tri_vertices() + 6 * one.quad_instances() > PARALLEL_VERTICES, "large enough for several threads");
+        assert!(one.lines.iter().any(|&b| b != 0));
+        assert!(one.lines == many.lines && one.tris == many.tris && one.quads == many.quads, "the vertex data differs");
+        let (a, b) = (one.tiles.unwrap(), many.tiles.unwrap());
+        assert_eq!((&a.steps, &a.starts, &a.prims), (&b.steps, &b.starts, &b.prims));
+        assert_eq!(a.bounds, b.bounds);
+        // The same vertices as the whole list, in another order.
+        let whole = build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), true);
+        assert_eq!((whole.lines.len(), whole.tris.len(), whole.quads.len()), (one.lines.len(), one.tris.len(), one.quads.len()));
+        let sorted = |v: &[u8], k: usize| {
+            let mut c: Vec<&[u8]> = v.chunks(k).collect();
+            c.sort_unstable();
+            c.into_iter().flatten().copied().collect::<Vec<u8>>()
+        };
+        assert!(sorted(&whole.lines, VERTEX_SIZE * 2) == sorted(&one.lines, VERTEX_SIZE * 2), "the same segments");
+    }
+
     /// The highest layer of the tiles other than one.
     #[test]
-    fn tops_know_the_highest_layer_of_the_other_tiles() {
-        let mut t = Tops::default();
+    fn marks_know_the_highest_layer_of_the_other_tiles() {
+        let mut t = Mark::NONE;
         assert_eq!(t.other_than(0), None);
         t.raise(3, 0);
         assert_eq!((t.other_than(3), t.other_than(1)), (None, Some(0)));

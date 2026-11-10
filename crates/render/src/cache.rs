@@ -286,7 +286,8 @@ pub fn build_cached_into(d: &Drawing, space: &Space, opts: &Options, cache: &mut
         stale.par_iter().filter_map(|&i| chunks.get(i).map(|c| (i, build_chunk_part(d, c, opts)))).collect()
     };
     #[cfg(target_arch = "wasm32")]
-    let built: Vec<(usize, (DisplayList, Bounds2))> = stale.iter().filter_map(|&i| chunks.get(i).map(|c| (i, build_chunk_part(d, c, opts)))).collect();
+    let built: Vec<(usize, (DisplayList, Bounds2))> =
+        stale.iter().filter_map(|&i| chunks.get(i).map(|c| (i, build_chunk_part(d, c, opts)))).collect();
     if opts.cancelled() {
         cache.clear();
         return DisplayList::default();

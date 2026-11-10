@@ -246,7 +246,7 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
         "\nregen = the display list built for the view (on the worker); build cpu = summed over threads; mesh = vertex data; upload = GPU buffers;"
     );
     println!(
-        "cull = finding the primitives in view (the CPU canvas does it each frame, the GPU canvas sends everything); render = egui tessellation + GPU draw + read back."
+        "cull = finding the primitives in view (the CPU canvas does it each frame; the GPU canvas draws the area tiles in view, counted in GPU vertices drawn and prims sent); render = egui tessellation + GPU draw + read back."
     );
     println!("pan = the view moved three points each frame, so each frame is drawn again (a still view shows the frame kept from before).");
 }
