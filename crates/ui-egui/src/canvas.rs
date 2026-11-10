@@ -535,7 +535,7 @@ fn stencil_clip(app: &CadApp) -> bool {
 
 /// How long the view inside the active viewport stays still before a zoomed [`VpContent`] is
 /// rebuilt at the exact view (dash lengths and curve detail follow the viewport's scale).
-const VP_SETTLE_MS: f64 = 150.0;
+pub(crate) const VP_SETTLE_MS: f64 = 150.0;
 
 /// Model space seen through the active MSPACE viewport, drawn apart from the layout's list. It is
 /// built for an area around the viewport at one view and drawn clipped to the viewport, moved
@@ -718,7 +718,9 @@ fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame,
             xform: crate::gpu::IDENTITY_XFORM,
             dash: 0.0,
             stencil,
-        },
+            moving: false,
+        }
+        .track_motion(p.ctx()),
     ));
 }
 
@@ -773,6 +775,7 @@ fn draw_vp_mask(c: &mut VpContent, p: &egui::Painter, outline: &[Vec2], xf_paper
             xform: crate::gpu::IDENTITY_XFORM,
             dash: 0.0,
             stencil: crate::gpu::Stencil::Mask,
+            moving: false,
         },
     ));
 }
@@ -1103,6 +1106,7 @@ fn draw_highlight_gpu(
             xform: crate::gpu::IDENTITY_XFORM,
             dash: if look.dashed { 10.0 } else { 0.0 },
             stencil,
+            moving: false,
         },
     ));
 }
@@ -1169,6 +1173,7 @@ fn draw_drag_gpu(
             xform: [m.a as f32, m.b as f32, m.c as f32, m.d as f32, t.x as f32, t.y as f32],
             dash: 0.0,
             stencil: crate::gpu::Stencil::Off,
+            moving: false,
         },
     ));
 }
@@ -1212,7 +1217,9 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
             xform: crate::gpu::IDENTITY_XFORM,
             dash: 0.0,
             stencil: crate::gpu::Stencil::Off,
-        },
+            moving: false,
+        }
+        .track_motion(p.ctx()),
     ));
     let mut shapes = Vec::new();
     for prim in c.infinite.iter().filter_map(|i| list.prims.get(*i)) {

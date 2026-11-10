@@ -3441,3 +3441,6 @@ menu	View	عرض
 	Previous Sheet	الورقة السابقة
 	Page {n}	الصفحة {n}
 	Page Up and Page Down step through the sheets.	يتنقل مفتاحا Page Up وPage Down بين الأوراق.
+	Frame rate to hold while moving	معدل الإطارات المطلوب أثناء التحريك
+	Lower the resolution while panning and zooming when the graphics are slow	خفض الدقة أثناء التحريك والتكبير عندما تكون الرسومات بطيئة
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	يصبح الرسم حادًا بمجرد توقف العرض. الطباعة والتصدير ولقطات الشاشة دائمًا بالدقة الكاملة.

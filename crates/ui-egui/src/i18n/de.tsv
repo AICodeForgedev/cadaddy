@@ -3264,3 +3264,6 @@
 	Previous Sheet	Vorheriger Plan
 	Page {n}	Seite {n}
 	Page Up and Page Down step through the sheets.	Bild auf und Bild ab blättern durch die Pläne.
+	Frame rate to hold while moving	Bildrate beim Bewegen halten
+	Lower the resolution while panning and zooming when the graphics are slow	Auflösung beim Verschieben und Zoomen senken, wenn die Grafik langsam ist
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Die Zeichnung wird scharf, sobald die Ansicht stillsteht. Plots, Exporte und Bildschirmfotos haben immer volle Auflösung.

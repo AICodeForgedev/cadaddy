@@ -3610,3 +3610,6 @@ menu	Modify	Ändra
 	Previous Sheet	Föregående ark
 	Page {n}	Sida {n}
 	Page Up and Page Down step through the sheets.	Page Up och Page Down bläddrar mellan arken.
+	Frame rate to hold while moving	Bildfrekvens att hålla vid rörelse
+	Lower the resolution while panning and zooming when the graphics are slow	Sänk upplösningen vid panorering och zoomning när grafiken är långsam
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Ritningen blir skarp så snart vyn står still. Plottar, exporter och skärmbilder har alltid full upplösning.

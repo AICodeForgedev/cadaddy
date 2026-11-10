@@ -3236,3 +3236,6 @@
 	Previous Sheet	Предыдущий лист
 	Page {n}	Страница {n}
 	Page Up and Page Down step through the sheets.	Page Up и Page Down листают листы.
+	Frame rate to hold while moving	Частота кадров при движении
+	Lower the resolution while panning and zooming when the graphics are slow	Снижать разрешение при панорамировании и масштабировании, если графика медленная
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Чертёж становится чётким, как только вид останавливается. Печать, экспорт и снимки экрана всегда в полном разрешении.

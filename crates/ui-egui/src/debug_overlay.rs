@@ -29,6 +29,14 @@ pub fn show(app: &CadApp, ctx: &egui::Context) {
                 let n = doc.model.iter().count();
                 ui.label(egui::RichText::new(format!("objects: {n}")).text_style(mono.clone()).color(egui::Color32::WHITE));
             }
+            // The 2D canvas's resolution while moving (`dynres`).
+            if let Some(line) = crate::dynres::with(|c| {
+                let draw = c.mean_ms().map_or_else(|| "untimed".to_string(), |m| format!("draw {m:.1} ms"));
+                let on = if c.on { format!("{:.0} fps", 1000.0 / c.target_ms) } else { "off".into() };
+                format!("2D scale: {:.0} % moving, {:.0} % shown ({draw}, {on})", c.moving_scale() * 100.0, crate::gpu::shown_scale() * 100.0)
+            }) {
+                ui.label(egui::RichText::new(line).text_style(mono.clone()).color(egui::Color32::WHITE));
+            }
             // Where the 2D canvas's time goes (`canvas::drawstats`).
             for line in app.canvas.stats.lines(&adapter_name(app)) {
                 ui.label(egui::RichText::new(line).text_style(mono.clone()).color(egui::Color32::LIGHT_GRAY));

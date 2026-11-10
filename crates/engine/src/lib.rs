@@ -765,6 +765,11 @@ pub struct Settings {
     pub lwdisplay: bool,
     /// TRANSPARENCYDISPLAY: draw objects with their transparency on screen (on by default).
     pub transparency_display: bool,
+    /// DYNRESMODE: while the 2D view pans or zooms, a slow GPU draws the drawing at a lower
+    /// resolution and sharpens it when the view stops (on by default; 0 always full resolution).
+    pub dynres: bool,
+    /// DYNRESFPS: the frame rate that lower resolution aims to hold, 10–120 (default 30).
+    pub dynres_fps: u8,
     /// NAVVCUBEDISPLAY: where the ViewCube shows (bits: 1 in 2D views, 2 in 3D views; 0 never).
     pub navvcube_display: u8,
     /// NAVVCUBELOCATION: the ViewCube's corner: 0 top right, 1 top left, 2 bottom left, 3 bottom
@@ -915,6 +920,8 @@ impl Default for Settings {
             dynprompt: true,
             lwdisplay: false,
             transparency_display: true,
+            dynres: true,
+            dynres_fps: 30,
             navvcube_display: 3,
             navvcube_location: 0,
             navvcube_size: 4,
