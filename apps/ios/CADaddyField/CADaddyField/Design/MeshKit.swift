@@ -29,6 +29,20 @@ struct MeshKit {
         indices += m.indices.map { $0 + base }
     }
 
+    /// Appends `m` seen from both sides (an exported plate may face either way; a floor must show from above).
+    mutating func appendBothSides(_ m: ElementMesh) {
+        append(m)
+        guard positions.count + m.positions.count < Int(UInt32.max) else { return }
+        let base = UInt32(positions.count)
+        positions += m.positions
+        normals += (m.normals.count == m.positions.count ? m.normals : Array(repeating: SIMD3(0, 1, 0), count: m.positions.count)).map { -$0 }
+        var i = 0
+        while i + 2 < m.indices.count {
+            indices += [m.indices[i] + base, m.indices[i + 2] + base, m.indices[i + 1] + base]
+            i += 3
+        }
+    }
+
     /// Appends the triangles of `m` whose centre lies in x ∈ [x0, x1) (the reveal's bays).
     mutating func append(_ m: ElementMesh, xFrom x0: Float, to x1: Float) {
         var remap: [UInt32: UInt32] = [:]

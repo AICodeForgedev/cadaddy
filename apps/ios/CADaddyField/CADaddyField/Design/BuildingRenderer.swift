@@ -16,6 +16,7 @@
 // element; entering a room moves the few elements that serve it aside and fades the rest of the floor as a whole.
 
 import Combine
+import Darwin
 import QuartzCore
 import RealityKit
 import simd
@@ -73,6 +74,15 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// A package set: the room package the open room was built from, and each entity's package.
     fileprivate var roomDetailPackage: String?
     fileprivate var packageOf: [String: String] = [:]
+    /// A package set's merged objects: one mesh per chunk of same-looking objects (a dense level or room is a few
+    /// dozen draw calls and meshes, not thousands). Keyed "#chunk-n" in `elementEntities` too, so release and limit
+    /// sweeps treat a chunk like one object. Taps on them are picked against each object's bounds.
+    fileprivate struct Chunk { weak var entity: ModelEntity?; let ids: [String]; let sample: BuildingElement; let center: SIMD3<Float>; let level: Int }
+    fileprivate var chunks: [String: Chunk] = [:]
+    fileprivate var chunkSerial = 0
+    fileprivate var chunkIndex: [String: String] = [:]
+    /// Lit copies of merged objects while following the system (removed when it ends).
+    fileprivate var focusCopies: [Entity] = []
 
     private var elementEntities: [String: Entity] = [:]
     private var edgeEntities: [String: ModelEntity] = [:]
@@ -396,6 +406,12 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     /// Queues `items` into `parent` in chunks: each chunk gets a holder that starts fading in at once, then one
     /// work item per element, so the frame budget holds and a chunk arrives as one soft fade.
     private func enqueueElements(_ items: [BuildingElement], into parent: @escaping () -> Entity?, name: String, chunk: Int = 24) {
+        var items = items
+        if isSet {
+            let merged = items.filter { !drawnAlone($0) }
+            items = items.filter(drawnAlone)
+            enqueueChunks(merged, into: parent, name: name)
+        }
         for (n, start) in stride(from: 0, to: items.count, by: chunk).enumerated() {
             let slice = Array(items[start..<min(start + chunk, items.count)])
             let holder = Entity()
@@ -658,7 +674,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         guard key != limitKey else { return }
         limitKey = key
         for (id, ent) in elementEntities {
-            guard let e = b.element(id) else { continue }
+            guard let e = b.element(id) ?? chunks[id]?.sample else { continue }
             let ok = exp.filter.allows(e, state, prefs: prefs)
             if ok != limitOK(ent) { setLimit(ent, ok) }
         }
@@ -882,7 +898,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         }
         if let pk = roomDetailPackage {
             // The package may already be released from the building: sweep by the entities' own package.
-            for (id, p) in packageOf where p == pk { elementEntities[id] = nil; edgeEntities[id] = nil; fogStep[id] = nil; packageOf[id] = nil }
+            for (id, p) in packageOf where p == pk { elementEntities[id] = nil; edgeEntities[id] = nil; fogStep[id] = nil; packageOf[id] = nil; chunks[id] = nil }
             roomDetailPackage = nil
         }
         forgetGroups(under: r)
@@ -1123,10 +1139,20 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         frameFilling = filling
         if filling { fillPitch = pitch }
         guard let vp = viewport, !pts.isEmpty else { return }
-        // The building views fill the free area (Q6431): they may turn and look down a little to do it.
-        let pose = filling
-            ? SceneFraming.fitFilling(pts, yaw: yaw, pitch: fillPitch, fovYDegrees: Self.fov, viewport: vp, free: freeArea, margin: 14)
-            : SceneFraming.fitTurning(pts, yaw: yaw, spread: turn, pitch: pitch, fovYDegrees: Self.fov, viewport: vp, free: freeArea, margin: 14)
+        // The building views fill the free area (Q6431): they may turn and look down a little to do it. The search
+        // runs once per view, screen and chrome; dragging the rail (the same building lifted) reuses its angles.
+        let pose: OrbitPose
+        if filling {
+            let key = "\(exp?.wholeView.rawValue ?? "")|\(exp?.density.rawValue ?? "")|\(Int(vp.width))x\(Int(vp.height))|\(freeArea.integral)|\(yaw)|\(fillPitch)|\(pts.count)"
+            if let c = fillAngles[key] {
+                pose = SceneFraming.fit(pts, yaw: c.yaw, pitch: c.pitch, fovYDegrees: Self.fov, viewport: vp, free: freeArea, margin: 14)
+            } else {
+                pose = SceneFraming.fitFilling(pts, yaw: yaw, pitch: fillPitch, fovYDegrees: Self.fov, viewport: vp, free: freeArea, margin: 14)
+                fillAngles[key] = (pose.yaw, pose.pitch)
+            }
+        } else {
+            pose = SceneFraming.fitTurning(pts, yaw: yaw, spread: turn, pitch: pitch, fovYDegrees: Self.fov, viewport: vp, free: freeArea, margin: 14)
+        }
         targetGoal = pose.target
         orbitGoal.y = pose.pitch
         orbitGoal.x = pose.yaw
@@ -1138,6 +1164,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
     private var fittedViewport: CGSize = .zero
     private var frameTurn: Float = 0
     private var frameFilling = false
+    private var fillAngles: [String: (yaw: Float, pitch: Float)] = [:]
     /// The design pitch a filling fit started from (it may look down more; a refit starts from the same place).
     private var fillPitch: Float = 0.56
     /// The design angle each scope starts from (turning from the last fitted angle would drift).
@@ -1200,6 +1227,8 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         entityByObject.removeAll()
         halos.forEach { $0.removeFromParent() }
         halos.removeAll()
+        focusCopies.forEach { $0.removeFromParent() }
+        focusCopies.removeAll()
         litIDs = []
         pulsePath = []
         pulse.forEach { $0.isEnabled = false }
@@ -1210,6 +1239,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
             guard let e = b.element(id) else { continue }
             styleForFocus(e, ent, focus)
         }
+        styleChunksForFocus(focus)
         // The route the pulse runs: from the tapped element up to the source.
         var path: [(SIMD3<Float>, Int)] = []
         for s in focus.steps {
@@ -1326,7 +1356,7 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         work.removeAll(); workHead = 0
         elementEntities.removeAll(); edgeEntities.removeAll(); roomTileEntities.removeAll(); raise.removeAll(); fades.removeAll()
         groups.removeAll(); groupList.removeAll(); fogStep.removeAll(); fogQueue.removeAll(); risers.removeAll(); levelBounds.removeAll(); limitKey = ""
-        roomDetail = nil; roomDetailNumber = nil; roomDetailPackage = nil; packageOf.removeAll()
+        roomDetail = nil; roomDetailNumber = nil; roomDetailPackage = nil; packageOf.removeAll(); chunks.removeAll(); focusCopies.removeAll()
         makeMaterials()
         buildStatic()
         setReveal(exp?.revealProgress ?? 1)
@@ -1467,6 +1497,14 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         let start = CACurrentMediaTime()
         while !fogQueue.isEmpty, CACurrentMediaTime() - start < Self.fogBudget {
             let id = fogQueue.removeLast()
+            if let c = chunks[id], let m = c.entity {
+                let up = lift.indices.contains(c.level) ? lift[c.level] : 0
+                let step = Int((Float(DepthFog.step(distance: simd_distance(c.center + SIMD3(0, up, 0), eye), near: near, far: far)) * scale).rounded())
+                guard fogStep[id] != step else { continue }
+                fogStep[id] = step
+                m.model?.materials = [material(for: c.sample, fog: step)]
+                continue
+            }
             guard let ent = elementEntities[id], let e = b.element(id), let m = ent as? ModelEntity, e.role != .shell else { continue }
             let up = lift.indices.contains(e.level) ? lift[e.level] : 0
             let d = simd_distance(e.shape.anchor + SIMD3(0, up, 0), eye)
@@ -1514,12 +1552,24 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
         if logPerf {
             fpsLog.append(fps)
             let ents = elementEntities.count
-            print(String(format: "FIELD-PERF design fps %.1f worst %.0f ms scope %@ elements %d queued %d", fps, worstFrame * 1000, String(describing: exp?.scope ?? .building), ents, work.count - workHead))
+            let pkg = Double(exp?.packageBytes?.used ?? 0) / 1_048_576
+            print(String(format: "FIELD-PERF design fps %.1f worst %.0f ms scope %@ elements %d queued %d mem %.0f MB packages %.0f MB loaded %d", fps, worstFrame * 1000,
+                         String(describing: exp?.scope ?? .building), ents, work.count - workHead, Self.footprintMB(), pkg, exp?.building.elements.count ?? 0))
         }
         #endif
         frames = 0
         worstFrame = 0
         fpsStart = now
+    }
+
+    /// The app's memory footprint (what iOS counts against its limit), in MB.
+    static func footprintMB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) { p in
+            p.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return kr == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : 0
     }
 
     // MARK: labels
@@ -1696,6 +1746,8 @@ final class BuildingRenderer: NSObject, UIGestureRecognizerDelegate {
                 e = x.parent
             }
         }
+        // A package set's merged objects have no entity of their own: picked against their bounds.
+        if element == nil, isSet { element = pickMerged(g.location(in: v)) }
         switch exp.scope {
         case .building:
             if let element { exp.tapElement(element) } else if let level = levelUnder(g.location(in: v)) { exp.go(.floor(level)) } else { exp.clearFocus() }
@@ -1772,7 +1824,7 @@ extension BuildingRenderer {
                 guard case let .mesh(m) = e.shape else { continue }
                 switch e.part {
                 case .roomTile: continue
-                case .slab: plate.append(m)
+                case .slab: plate.appendBothSides(m)
                 default:
                     faces.append(m)
                     if e.part == .wall { edges.edges(center: (m.min + m.max) / 2, size: m.max - m.min, width: 0.03) }
@@ -1813,7 +1865,7 @@ extension BuildingRenderer {
             guard case let .mesh(m) = e.shape else { continue }
             switch e.part {
             case .exterior, .roomTile, .outline: continue
-            case .slab: slab.append(m)
+            case .slab: slab.appendBothSides(m)
             case .window: pane.append(m)
             case .door: door.append(m)
             case .stair: stair.append(m)
@@ -1828,6 +1880,9 @@ extension BuildingRenderer {
             (stair, pbr("arch-stair", UIColor(hex: 0xB7BBBE), rough: 0.85), "stair"),
         ]
         for (mk, m, name) in mats { if let r = mk.resource("arch-\(name)-\(i)") { arch[i].addChild(ModelEntity(mesh: r, materials: [m])) } }
+        #if DEBUG
+        if logPerf { print("FIELD-ARCH level \(i) slab \(slab.indices.count / 3) wall \(wall.indices.count / 3) glass \(pane.indices.count / 3) door \(door.indices.count / 3)") }
+        #endif
     }
 
     /// A room from its own package: its floor solid, its walls (clipped to the room by the export) see-through so
@@ -1841,14 +1896,16 @@ extension BuildingRenderer {
         var walls = MeshKit(), fl = MeshKit()
         for e in items where isShell(e) {
             guard case let .mesh(m) = e.shape else { continue }
-            if e.part == .slab { fl.append(m) } else if e.part != .roomTile { walls.append(m) }
+            if e.part == .slab { fl.appendBothSides(m) } else if e.part != .roomTile { walls.append(m) }
         }
         var wallM = UnlitMaterial(color: style.isDark ? UIColor(hex: 0xE9E6DF) : UIColor(hex: 0xC9CCCF))
         wallM.blending = .transparent(opacity: .init(floatLiteral: style.highContrast ? 0.5 : 0.34))
         wallM.writesDepth = false
         if let res = walls.resource("room-walls-\(number)") { root.addChild(ModelEntity(mesh: res, materials: [wallM])) }
         if let res = fl.resource("room-floor-\(number)") { root.addChild(ModelEntity(mesh: res, materials: [pbr("roomfloor", UIColor(hex: 0xC8B9A3), rough: 0.8)])) }
-        for (k, el) in items.filter({ !isShell($0) }).enumerated() {
+        let things = items.filter { !isShell($0) }
+        enqueueChunks(things.filter { !drawnAlone($0) }, into: { [weak root] in root }, name: "room-\(number)")
+        for (k, el) in things.filter(drawnAlone).enumerated() {
             enqueue { [weak self, weak root] in
                 guard let self, let root, root.parent != nil, let ent = self.addElement(el, home: root) else { return }
                 if !self.reduceMotion { self.fade(ent, from: 0, to: 1, delay: 0.05 + Double(min(k, 40)) * 0.012) }
@@ -1858,6 +1915,127 @@ extension BuildingRenderer {
         roomDetail = root
         roomDetailNumber = number
         roomDetailPackage = items.first?.package
+    }
+
+    /// Drawn as its own entity: equipment (edges, labels, its own halo), risers and anything tall, the hoistway.
+    /// Everything else of a package set is merged into chunks.
+    fileprivate func drawnAlone(_ e: BuildingElement) -> Bool {
+        if e.role == .equipment || e.part == .hoistway || risers.contains(e.id) { return true }
+        let bb = e.shape.bounds
+        return bb.max.y - bb.min.y > 5
+    }
+
+    /// Queues `items` as merged chunks: grouped by how they look (layer, role, system, kind where it colours them)
+    /// and package, each chunk at most 400 objects or 60,000 vertices, one work item per chunk.
+    fileprivate func enqueueChunks(_ items: [BuildingElement], into parent: @escaping () -> Entity?, name: String) {
+        guard !items.isEmpty else { return }
+        func key(_ e: BuildingElement) -> String {
+            "\(e.layer?.rawValue ?? "-")|\(e.role)|\(e.system)|\(isPanel(e))|\(isLuminaire(e))|\(e.role == .casework || e.role == .furniture ? e.kind : "")|\(e.package ?? "")|\(e.level)"
+        }
+        let holder = Entity()
+        holder.name = "\(name)-merged"
+        enqueue { [weak self] in
+            guard let self, let p = parent() else { return }
+            p.addChild(holder)
+            if !self.reduceMotion { self.fade(holder, from: 0, to: 1, delay: 0) }
+        }
+        for (_, list) in Dictionary(grouping: items, by: key).sorted(by: { $0.key < $1.key }) {
+            var slice: [BuildingElement] = [], verts = 0
+            func flush() {
+                let s = slice
+                enqueue { [weak self, weak holder] in
+                    guard let self, let holder, holder.parent != nil else { return }
+                    self.makeChunk(s, home: holder)
+                }
+                slice = []; verts = 0
+            }
+            for e in list {
+                guard case let .mesh(m) = e.shape else { continue }
+                if !slice.isEmpty, verts + m.positions.count > 60_000 || slice.count >= 400 { flush() }
+                slice.append(e); verts += m.positions.count
+            }
+            if !slice.isEmpty { flush() }
+        }
+    }
+
+    fileprivate func makeChunk(_ els: [BuildingElement], home: Entity) {
+        guard let first = els.first else { return }
+        var k = MeshKit()
+        var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
+        var ids: [String] = []
+        for e in els where elementEntities[e.id] == nil && chunkOf(e.id) == nil {
+            guard case let .mesh(m) = e.shape else { continue }
+            k.append(m)
+            lo = simd_min(lo, m.min); hi = simd_max(hi, m.max)
+            ids.append(e.id)
+        }
+        chunkSerial += 1
+        let key = "#chunk-\(chunkSerial)"
+        guard !ids.isEmpty, let res = k.resource(key) else { return }
+        let ent = ModelEntity(mesh: res, materials: [material(for: first)])
+        ent.name = key
+        container(home, for: first).addChild(ent)
+        chunks[key] = Chunk(entity: ent, ids: ids, sample: first, center: (lo + hi) / 2, level: first.level)
+        for id in ids { chunkIndex[id] = key }
+        elementEntities[key] = ent
+        fogStep[key] = 0
+        if let pk = first.package { packageOf[key] = pk }
+        if let exp, !exp.filter.allows(first, exp.viewState, prefs: exp.layers) { setLimit(ent, false) }
+        if let f = currentFocus { styleChunksForFocus(f, only: key) }
+    }
+
+    fileprivate func chunkOf(_ id: String) -> String? { chunkIndex[id].flatMap { chunks[$0] != nil ? $0 : nil } }
+
+    /// Following the system: merged chunks step back with the rest; their lit objects get their own lit copy (and
+    /// halo), so the path still reads object by object.
+    fileprivate func styleChunksForFocus(_ focus: SystemFocus, only: String? = nil) {
+        var copies = 0
+        for (key, c) in chunks where only == nil || only == key {
+            guard let m = c.entity, c.sample.role != .furniture, c.sample.role != .casework else { continue }
+            let oid = ObjectIdentifier(m)
+            if originals[oid] == nil { originals[oid] = m.model?.materials; entityByObject[oid] = m }
+            m.model?.materials = [fadedMat]
+            for id in c.ids {
+                guard let e = b.element(id), focus.lit.contains(e.sourceID), copies < 600, case let .mesh(em) = e.shape else { continue }
+                var kit = MeshKit()
+                kit.append(em)
+                guard let res = kit.resource("lit-\(id)") else { continue }
+                let copy = ModelEntity(mesh: res, materials: [material(for: e, lit: true)])
+                m.parent?.addChild(copy)
+                focusCopies.append(copy)
+                if focus.lit.count < 400 { addHalo(e, to: copy) }
+                copies += 1
+            }
+        }
+    }
+
+    /// The merged object under a screen point: the nearest whose bounds the tap's ray passes through, among the
+    /// chunks the view shows.
+    fileprivate func pickMerged(_ p: CGPoint) -> String? {
+        guard let v = view, let ray = v.ray(through: p) else { return nil }
+        let o = ray.origin, d = ray.direction
+        var best: (String, Float)?
+        for (_, c) in chunks {
+            guard let ent = c.entity, ent.isActive, limitOK(ent) else { continue }
+            let up = SIMD3<Float>(0, lift.indices.contains(c.level) ? lift[c.level] : 0, 0)
+            for id in c.ids {
+                guard let e = b.element(id) else { continue }
+                let bb = e.shape.bounds
+                let pad = simd_max((SIMD3<Float>(repeating: 0.25) - (bb.max - bb.min)) / 2, .zero)
+                let lo = bb.min - pad + up, hi = bb.max + pad + up
+                var t0: Float = 0, t1 = Float.greatestFiniteMagnitude
+                var hit = true
+                for a in 0..<3 {
+                    if abs(d[a]) < 1e-8 { if o[a] < lo[a] || o[a] > hi[a] { hit = false; break }; continue }
+                    var ta = (lo[a] - o[a]) / d[a], tb = (hi[a] - o[a]) / d[a]
+                    if ta > tb { swap(&ta, &tb) }
+                    t0 = max(t0, ta); t1 = min(t1, tb)
+                    if t0 > t1 { hit = false; break }
+                }
+                if hit, t0 < (best?.1 ?? .greatestFiniteMagnitude) { best = (id, t0) }
+            }
+        }
+        return best?.0
     }
 
     /// The experience loaded or released packages: drop what was released (its entities and the containers
@@ -1875,7 +2053,7 @@ extension BuildingRenderer {
             ent.removeFromParent()
             gone.append(id)
         }
-        for id in gone { elementEntities[id] = nil; edgeEntities[id] = nil; fogStep[id] = nil; packageOf[id] = nil }
+        for id in gone { elementEntities[id] = nil; edgeEntities[id] = nil; fogStep[id] = nil; packageOf[id] = nil; chunks[id] = nil }
         for i in levelRoots.indices {
             guard let lv = exp?.levelPackage(i), released.contains(lv) else { continue }
             for c in [cut[i], tiles[i], detail[i]] {

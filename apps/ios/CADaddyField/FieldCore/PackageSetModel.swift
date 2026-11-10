@@ -164,7 +164,14 @@ public struct PackageSetModel: Sendable {
         var els: [BuildingElement] = []
         els.reserveCapacity(packages.reduce(0) { $0 + $1.elements.count })
         for p in packages.sorted(by: { (order.firstIndex(of: $0.kind) ?? 9, $0.name) < (order.firstIndex(of: $1.kind) ?? 9, $1.name) }) {
-            for e in p.elements where seen.insert(e.id).inserted { els.append(e) }
+            for e in p.elements {
+                // Each package's copy is its own object: an element two building packages share (a floor is MEP's
+                // context and Architectural's slab) keeps the id in the first and is keyed by its package in the next.
+                if seen.insert(e.id).inserted { els.append(e); continue }
+                var copy = e
+                copy.id = "\(e.sourceID)|\(p.name)"
+                if seen.insert(copy.id).inserted { els.append(copy) }
+            }
         }
         let len = footprintMax.x - footprintMin.x
         return SampleBuilding(name: index.title, levels: levels, rooms: rooms, elements: els, footprintMin: footprintMin, footprintMax: footprintMax,

@@ -380,7 +380,8 @@ extension PackageSetIndex {
             guard let up else {
                 let isSource = ["gear", "equipment"].contains(cur.role ?? "") || cur.kind == "switchboard" || cur.kind == "transformer"
                 if steps.count == 1 || !isSource {
-                    let what = cur.tag.map { "\(cur.kind.replacingOccurrences(of: "_", with: " ")) \($0)" } ?? cur.kind.replacingOccurrences(of: "_", with: " ")
+                    let kind = cur.kind.replacingOccurrences(of: "_", with: " ")
+                    let what = cur.tag.map { "\(kind) \($0)" } ?? "this \(kind.isEmpty ? "object" : kind)"
                     return (steps, "Unknown: the documents don't say what feeds \(what).")
                 }
                 steps[steps.count - 1].state = nil

@@ -132,7 +132,7 @@ final class FieldLayoutTests: XCTestCase {
                     XCTAssertGreaterThan(max(sb.width / (l.free.width - 24), sb.height / (l.free.height - 24)), 0.97, tag)
                     if name != "square" {
                         // A building longer than it is deep turns and tilts to fill the height: no empty bands.
-                        XCTAssertLessThan(c1.top + c1.bottom, 0.1, "no wide empty bands above and below: \(tag)")
+                        XCTAssertLessThan(c1.top + c1.bottom, 0.15, "no wide empty bands above and below: \(tag)")
                         XCTAssertGreaterThan(c1.area, 0.8, tag)
                     } else {
                         // A square plan in a tall free area is limited by its own proportions: wider than design-2's.

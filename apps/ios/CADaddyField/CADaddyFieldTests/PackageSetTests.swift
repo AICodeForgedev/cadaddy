@@ -133,6 +133,13 @@ final class PackageSetTests: XCTestCase {
         // Level and room copies are separate objects; the building copies keep the element id.
         XCTAssertTrue(l1.elements.allSatisfy { $0.id == "\($0.sourceID)|levels/L1" })
         XCTAssertTrue(try m.load("building-mep-mains").elements.allSatisfy { $0.id == $0.sourceID })
+        // A floor is in MEP mains (its context) and in Architectural (its slab): both copies stay, each in its view.
+        let both = m.building(with: [try m.load("building-mep-mains"), try m.load("building-architectural")])
+        let f = ViewFilter(packageSet: both, index: m.index)
+        let floors = both.elements.filter { $0.part == .slab }
+        XCTAssertTrue(floors.contains { f.allows($0, ViewState(view: .architectural), prefs: .standard) })
+        XCTAssertTrue(floors.contains { f.allows($0, ViewState(view: .mep), prefs: .standard) })
+        XCTAssertEqual(Set(floors.map(\.id)).count, floors.count)
     }
 
     // MARK: follow the system (the graph)
@@ -409,6 +416,70 @@ final class PackageSetTests: XCTestCase {
         XCTAssertNotNil(pkg.anchor, "the room's anchor, for field alignment")
         // The second time, the same package (its marks and saved alignment).
         XCTAssertEqual(try store.roomRecord(r2, room: room.id, library: lib).1.id, pkg.id)
+    }
+
+    // MARK: the generated scale set (format drift, size)
+
+    /// The glTF JSON chunk of a .glb.
+    static func gltf(_ url: URL) throws -> [String: Any] {
+        let d = try Data(contentsOf: url)
+        let len = Int(d[12]) | Int(d[13]) << 8 | Int(d[14]) << 16 | Int(d[15]) << 24
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: d.subdata(in: 20..<(20 + len))) as? [String: Any])
+    }
+
+    func keys(_ root: URL) throws -> (index: Set<String>, graph: Set<String>, link: Set<String>, node: Set<String>) {
+        let j = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("building.json"))) as? [String: Any])
+        let g = ((j["graph"] as? [String: Any])?["elements"] as? [[String: Any]]) ?? []
+        var node = Set<String>()
+        let m = try PackageSetModel(root: root)
+        for p in m.index.allPackages {
+            guard let f = p.glb else { continue }
+            for n in (try Self.gltf(root.appendingPathComponent(f.path))["nodes"] as? [[String: Any]]) ?? [] { node.formUnion((n["extras"] as? [String: Any])?.keys ?? [:].keys) }
+        }
+        let links = g.flatMap { ($0["fed_by"] as? [[String: Any]] ?? []) + ($0["serves"] as? [[String: Any]] ?? []) }
+        return (Set(j.keys), Set(g.flatMap(\.keys)), Set(links.flatMap(\.keys)), node)
+    }
+
+    func testTheGeneratedSetReadsLikeTheExportersOwn() throws {
+        let out = dir.appendingPathComponent("gen")
+        try SyntheticSet.write(to: out, spec: .small)
+        let gen = try keys(out), real = try keys(Self.v1)
+        XCTAssertTrue(gen.index.isSubset(of: real.index), "index keys the exporter never writes: \(gen.index.subtracting(real.index))")
+        XCTAssertTrue(gen.graph.isSubset(of: real.graph), "graph keys: \(gen.graph.subtracting(real.graph))")
+        XCTAssertTrue(gen.link.isSubset(of: real.link), "link keys: \(gen.link.subtracting(real.link))")
+        // Node extras: the exporter's own keys (plus `reveal` and the room tile's, which it writes on those nodes).
+        XCTAssertTrue(gen.node.isSubset(of: real.node), "node keys: \(gen.node.subtracting(real.node))")
+        let m = try PackageSetModel(root: out)
+        for p in m.index.allPackages { XCTAssertNoThrow(try m.load(p.name), p.name) }
+    }
+
+    func testAGeneratedBuildingOfSixtyFourRoomsOpensFastAndStaysInsideItsBudget() async throws {
+        let out = dir.appendingPathComponent("scale")
+        try SyntheticSet.write(to: out, spec: .scale(rooms: 64))
+        let t0 = Date()
+        let (m, opening, _) = try await PackageSetModel.open(root: out)
+        let openSeconds = Date().timeIntervalSince(t0)
+        XCTAssertGreaterThan(m.index.graph.count, 90_000)
+        XCTAssertEqual(m.index.rooms.count, 64)
+        XCTAssertLessThan(openSeconds, 10, "opening reads the index and the default view only")
+        // Visit every level and every room under a budget of a few levels: the cache never goes over it and never
+        // drops what is in view.
+        let levelBytes = try m.load("levels/L1").bytes
+        var c = PackageCache(budgetBytes: opening.reduce(0) { $0 + $1.bytes } + 2 * levelBytes + 8 * 1024 * 1024)
+        for p in opening { c.insert(p, inView: Set(opening.map(\.name))) }
+        for l in m.index.levels {
+            let name = try XCTUnwrap(m.index.views.floorByLevel[l.name]?.first)
+            let inView = Set(opening.map(\.name) + [name])
+            c.insert(try m.load(name), inView: inView)
+            XCTAssertLessThanOrEqual(c.bytes, c.budgetBytes)
+            for r in m.index.rooms where r.level == l.name {
+                let rn = try XCTUnwrap(r.package)
+                c.insert(try m.load(rn), inView: inView.union([rn]))
+                XCTAssertTrue(c.has(rn) && c.has(name))
+                XCTAssertLessThanOrEqual(c.bytes, c.budgetBytes)
+            }
+        }
+        print(String(format: "SCALE 64 rooms: graph %d, open %.2f s, cache %d MB of %d MB", m.index.graph.count, openSeconds, c.bytes >> 20, c.budgetBytes >> 20))
     }
 }
 

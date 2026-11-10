@@ -218,6 +218,10 @@ final class BuildingExperience: ObservableObject {
         loadToken = token
         Task.detached(priority: .userInitiated) {
             var loaded: [LoadedPackage] = [], errors: [String: String] = [:]
+            #if DEBUG
+            let t0 = Date()
+            defer { print(String(format: "FIELD-LOAD %@ %.2f s", missing.joined(separator: ","), Date().timeIntervalSince(t0))) }
+            #endif
             for n in missing {
                 do { loaded.append(try model.load(n)) } catch { errors[n] = (error as? FieldError)?.message ?? "\(model.title(of: n)) can't be read." }
             }
@@ -426,7 +430,8 @@ final class BuildingExperience: ObservableObject {
         if focus?.tapped == source { clearFocus(); return }
         let f = session.map { $0.index.focus(source) } ?? building.focus(id)
         focus = f
-        selected = id
+        // The copy this view draws (a room's own copy in a room), so its card opens whichever id was given.
+        selected = session != nil ? (renderer.shown(source)?.id ?? id) : id
         renderer.clearFocusVisuals()
         renderer.apply(focus: f)
         light.impactOccurred()

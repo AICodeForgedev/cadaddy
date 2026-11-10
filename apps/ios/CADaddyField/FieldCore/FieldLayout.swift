@@ -249,28 +249,29 @@ public enum SceneFraming {
     public static func fitFilling(_ pts: [SIMD3<Float>], yaw: Float, pitch: Float, fovYDegrees: Float, viewport: CGSize, free: CGRect,
                                   margin: CGFloat = 12, yawSpread: Float = 1.1, pitchUp: Float = 0.4, maxPitch: Float = 1.0,
                                   costPerRadian: CGFloat = 0.06) -> OrbitPose {
-        var best = fit(pts, yaw: yaw, pitch: pitch, fovYDegrees: fovYDegrees, viewport: viewport, free: free, margin: margin)
+        // Candidates are compared with a coarse fit (22 halvings); the chosen angle gets the full fit.
+        var best = fit(pts, yaw: yaw, pitch: pitch, fovYDegrees: fovYDegrees, viewport: viewport, free: free, margin: margin, iterations: 22)
         var bestScore = coverage(pts, pose: best, fovYDegrees: fovYDegrees, viewport: viewport, free: free).area
-        let yawSteps = 8, pitchSteps = 4
+        let yawSteps = 8, pitchSteps = 3
         for pk in 0...pitchSteps {
             let dp = pitchUp * Float(pk) / Float(pitchSteps)
             let p = min(pitch + dp, max(maxPitch, pitch))
             for yk in -yawSteps...yawSteps {
                 let dy = yawSpread * Float(yk) / Float(yawSteps)
                 if pk == 0 && yk == 0 { continue }
-                let pose = fit(pts, yaw: yaw + dy, pitch: p, fovYDegrees: fovYDegrees, viewport: viewport, free: free, margin: margin)
+                let pose = fit(pts, yaw: yaw + dy, pitch: p, fovYDegrees: fovYDegrees, viewport: viewport, free: free, margin: margin, iterations: 22)
                 let score = coverage(pts, pose: pose, fovYDegrees: fovYDegrees, viewport: viewport, free: free).area - costPerRadian * CGFloat(abs(dy) + (p - pitch))
                 if score > bestScore + 0.005 { best = pose; bestScore = score }
             }
         }
-        return best
+        return fit(pts, yaw: best.yaw, pitch: best.pitch, fovYDegrees: fovYDegrees, viewport: viewport, free: free, margin: margin)
     }
 
     /// The pose at (`yaw`, `pitch`) whose view puts every point inside `free` (inset by `margin`), as large as
     /// possible and centred in it. The target slides sideways and up/down in the camera plane to centre the
     /// projection; the distance is the smallest that fits.
     public static func fit(_ pts: [SIMD3<Float>], yaw: Float, pitch: Float, fovYDegrees: Float, viewport: CGSize, free: CGRect,
-                           margin: CGFloat = 12) -> OrbitPose {
+                           margin: CGFloat = 12, iterations: Int = 40) -> OrbitPose {
         guard !pts.isEmpty else { return OrbitPose(target: .zero, yaw: yaw, pitch: pitch, distance: 10) }
         var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
         for p in pts where p.x.isFinite && p.y.isFinite && p.z.isFinite { lo = simd_min(lo, p); hi = simd_max(hi, p) }
@@ -300,7 +301,7 @@ public enum SceneFraming {
         var nearD = radius * 0.5, farD = radius * 4
         var tries = 0
         while !solve(farD).1 && tries < 40 { farD *= 1.6; tries += 1 }
-        for _ in 0..<40 {
+        for _ in 0..<max(iterations, 1) {
             let mid = (nearD + farD) / 2
             if solve(mid).1 { farD = mid } else { nearD = mid }
         }

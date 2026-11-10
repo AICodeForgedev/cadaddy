@@ -88,7 +88,7 @@ final class AppModel: ObservableObject {
         // `-updateserver URL` presets the address and `-autoupdate` taps Update once at launch (simulator end-to-end run).
         if let i = args.firstIndex(of: "-updateserver"), args.indices.contains(i + 1) { serverAddress = args[i + 1] }
         if args.contains("-autoupdate") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.tapUpdate() } }
-        if args.contains("-design") { showBuilding = true }
+        if args.contains("-design"), !args.contains("-openset"), !args.contains("-bigset") { showBuilding = true }
         // `-openset FOLDER` imports a package set folder (once) and opens it; `-bigset N` generates a synthetic
         // building of N rooms (scale runs) the same way.
         if let i = args.firstIndex(of: "-openset"), args.indices.contains(i + 1) { debugOpenSet(URL(fileURLWithPath: args[i + 1])) }
@@ -261,7 +261,12 @@ final class AppModel: ObservableObject {
         let root = sets.folder(r.id)
         Task {
             do {
+                let t0 = Date()
                 let (m, opening, failed) = try await PackageSetModel.open(root: root)
+                #if DEBUG
+                print(String(format: "FIELD-OPEN %.2f s graph %d packages %d opening %d elements %.0f MB geometry", Date().timeIntervalSince(t0), m.index.graph.count,
+                             m.index.allPackages.count, opening.reduce(0) { $0 + $1.elements.count }, Double(opening.reduce(0) { $0 + $1.bytes }) / 1_048_576))
+                #endif
                 self.openBuilding = OpenBuilding(record: r, model: m, opening: opening, failures: failed)
             } catch {
                 self.alert = (error as? FieldError)?.message ?? "The building could not be opened."
