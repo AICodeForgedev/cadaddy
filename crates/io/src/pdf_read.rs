@@ -2177,6 +2177,9 @@ fn detect_scale_note_in(texts: &[NoteText], context: &[NoteText], sheet: (f64, f
         text: String,
         count: usize,
         priority: u8, // 0 = best (title block layer), 1 = bottom-right, 2 = anywhere
+        /// read as a paper/real pair with no "=" and no SCALE word: never outranks a note
+        /// that has either (Q6466)
+        inferred: bool,
     }
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
@@ -2198,9 +2201,10 @@ fn detect_scale_note_in(texts: &[NoteText], context: &[NoteText], sheet: (f64, f
         let Some(k) = k else { continue };
         // a pair with no "=": a standard scale, standing as a note (never a lone pair among a
         // plan's dimension strings)
-        let k = if !up.contains('=') && up.contains('\'') && parse_scale_pair(v).is_some() {
+        let inferred = !up.contains('=') && up.contains('\'') && parse_scale_pair(v).is_some();
+        let k = if inferred {
             match standard_pair_scale(v) {
-                Some(k) if stands_as_note(t, own, texts, context, sheet) => k,
+                Some(k) if stands_as_note(t, own, texts, context) => k,
                 _ => continue,
             }
         } else {
@@ -2225,14 +2229,16 @@ fn detect_scale_note_in(texts: &[NoteText], context: &[NoteText], sheet: (f64, f
                 if priority < c.priority {
                     c.priority = priority;
                 }
+                c.inferred &= inferred;
             }
         } else {
             seen.insert(key.clone(), candidates.len());
-            candidates.push(Candidate { scale: k, text: key, count: 1, priority });
+            candidates.push(Candidate { scale: k, text: key, count: 1, priority, inferred });
         }
     }
-    // best = lowest priority, then most occurrences
-    candidates.sort_by(|a, b| a.priority.cmp(&b.priority).then(b.count.cmp(&a.count)));
+    // best = a note with its "=" or SCALE word before any inferred pair, then lowest priority,
+    // then most occurrences
+    candidates.sort_by(|a, b| a.inferred.cmp(&b.inferred).then(a.priority.cmp(&b.priority)).then(b.count.cmp(&a.count)));
     candidates.into_iter().next().map(|c| (c.scale, c.text))
 }
 
@@ -2269,10 +2275,11 @@ const MAX_NOTE_CONTEXT_TEXTS: usize = 20_000;
 
 /// Whether a paper/real pair stands as a scale note (Q6395): after a SCALE word (its own, or a
 /// SCALE label just before or over it), under or beside a view title (lettering of words at
-/// least its size), or in the title block (a title-block layer, the sheet's bottom-right) — and,
-/// but for a SCALE word, not among dimension strings (another one within a few text heights).
+/// least its size), or on a title-block layer — and, but for a SCALE word, not among dimension
+/// strings (another one within a few text heights). Where it stands on the sheet is no
+/// evidence (Q6466): two dimension strings in the bottom-right corner read the same way.
 /// `own` are the indices in `texts` of the pieces the note was read from.
-fn stands_as_note(note: &NoteText, own: [usize; 2], texts: &[NoteText], context: &[NoteText], sheet: (f64, f64)) -> bool {
+fn stands_as_note(note: &NoteText, own: [usize; 2], texts: &[NoteText], context: &[NoteText]) -> bool {
     let h = note.height;
     if !(h.is_finite() && h > 0.0) {
         return false;
@@ -2293,10 +2300,7 @@ fn stands_as_note(note: &NoteText, own: [usize; 2], texts: &[NoteText], context:
         }
     }
     let layer_up = note.layer.as_deref().unwrap_or("").to_ascii_uppercase();
-    let in_title_block = layer_up.contains("TITLE")
-        || layer_up.contains("BORDER")
-        || layer_up.contains("TBLOCK")
-        || (note.at.0 / 72.0 > sheet.0 * 0.6 && note.at.1 / 72.0 < sheet.1 * 0.3);
+    let in_title_block = layer_up.contains("TITLE") || layer_up.contains("BORDER") || layer_up.contains("TBLOCK");
     let mut titled = false;
     let mut scale_label = false;
     let mut dimensions = 0usize;
@@ -8153,9 +8157,11 @@ mod tests {
     #[test]
     fn a_scale_note_in_stroked_lettering_scales_the_sheet() {
         // The note is plotter lettering: the reader reads it without its "=" (no such
-        // character), split at the gap the "=" leaves, a 0 perhaps as an O.
+        // character), split at the gap the "=" leaves, a 0 perhaps as an O. It stands under
+        // its view title (a note with no SCALE word needs one, or a SCALE label: Q6466).
         for (note, k) in [("SCALE 1/8\" = 1'-0\"", 96.0), ("1/4\" = 1'-0\"", 48.0), ("SCALE 3/16\"=1'-0\"", 64.0)] {
-            let content = [stroked(note, (500.0, 60.0), 9.0), stroked("FLOOR PLAN", (100.0, 300.0), 9.0)].concat();
+            let content =
+                [stroked("PARTIAL PLAN", (500.0, 76.0), 9.0), stroked(note, (500.0, 60.0), 9.0), stroked("FLOOR PLAN", (100.0, 300.0), 9.0)].concat();
             let r = read_page(&content);
             assert_eq!(r.scale, k, "{note}: {} {:?}", r.scale_source, r.notes);
             assert!(r.scale_source.starts_with("scale note") && r.scale_source.contains("lettering"), "{}", r.scale_source);
@@ -8166,6 +8172,11 @@ mod tests {
             });
             assert!(plan.is_some_and(|p| (p.y - 300.0 / 72.0 * k).abs() < 0.05 * k), "{plan:?}");
         }
+        // Q6466: the same lettering with no SCALE word, title or SCALE label is a paper/real
+        // pair on its position alone: no scale note, the sheet stays at paper size and says so
+        let r = read_page(&[stroked("1/4\" = 1'-0\"", (500.0, 60.0), 9.0), stroked("FLOOR PLAN", (100.0, 300.0), 9.0)].concat());
+        assert_eq!(r.scale, 1.0, "{} {:?}", r.scale_source, r.notes);
+        assert!(r.notes.iter().any(|n| n.starts_with("scale not read")), "{:?}", r.notes);
         // A DO NOT SCALE sheet keeps sheet size, and says what it read.
         let content = [stroked("SCALE 1/8\" = 1'-0\"", (500.0, 60.0), 9.0), stroked("DO NOT SCALE", (100.0, 60.0), 9.0)].concat();
         let r = read_page(&content);
@@ -8314,12 +8325,65 @@ mod tests {
     }
 
     #[test]
+    fn a_pair_on_position_alone_never_outranks_the_explicit_scale_note() {
+        // Q6466: a sheet's real "SCALE: ... = ..." note under its view title at mid-sheet, and
+        // in the sheet's bottom-right corner an inch string and a feet-inch string on one
+        // baseline (`6"` then `4'-0"`, a standard 1-1/2" scale read as a pair) with no SCALE
+        // word, title or title-block layer. The corner is no evidence: the explicit note wins.
+        let note = |value: &str, at: (f64, f64), height: f64, layer: Option<&str>| NoteText {
+            value: value.into(),
+            at,
+            height,
+            rotation: 0.0,
+            layer: layer.map(String::from),
+        };
+        for (sheet, explicit) in [((36.0, 24.0), "SCALE: 1/8\" = 1'-0\""), ((24.0, 36.0), "1/8\" = 1'-0\""), ((42.0, 30.0), "SCALE 1/8\" 1'-0\"")] {
+            let (w, h) = (sheet.0 * 72.0, sheet.1 * 72.0);
+            let mid = (w * 0.45, h * 0.5);
+            let corner = (w * 0.85, h * 0.1);
+            for (inch, feet) in [("6\"", "4'-0\""), ("1\"", "4'-0\""), ("1/2\"", "4'-0\"")] {
+                let texts = vec![
+                    note("FLOOR PLAN", (mid.0, mid.1 + 14.0), 9.0, None),
+                    note(explicit, mid, 6.0, None),
+                    note(inch, corner, 6.0, None),
+                    note(feet, (corner.0 + 30.0, corner.1), 6.0, None),
+                ];
+                let got = detect_scale_note_in(&texts, &[], sheet);
+                assert_eq!(got.as_ref().map(|g| g.0), Some(96.0), "{sheet:?} {explicit} beside {inch} {feet}: {got:?}");
+                // in either order, and with the pieces as page text around lettering readings
+                let mut rev = texts.clone();
+                rev.reverse();
+                assert_eq!(detect_scale_note_in(&rev, &[], sheet).map(|g| g.0), Some(96.0), "{sheet:?} reversed");
+            }
+        }
+        // the corner pair alone, no SCALE word, title or title-block layer: no scale note at all
+        let sheet = (36.0, 24.0);
+        let corner = (36.0 * 72.0 * 0.85, 24.0 * 72.0 * 0.1);
+        let lone = vec![note("6\"", corner, 6.0, None), note("4'-0\"", (corner.0 + 30.0, corner.1), 6.0, None)];
+        assert_eq!(detect_scale_note_in(&lone, &[], sheet), None);
+        // with positive evidence the pair still reads: a title-block layer, a SCALE label over it
+        let on_layer = vec![note("1/4\"", (100.0, 100.0), 6.0, Some("TITLEBLOCK")), note("1'-0\"", (130.0, 100.0), 6.0, Some("TITLEBLOCK"))];
+        assert_eq!(detect_scale_note_in(&on_layer, &[], sheet).map(|g| g.0), Some(48.0));
+        let labelled = vec![
+            note("SCALE", (corner.0, corner.1 + 10.0), 6.0, None),
+            note("1/4\"", corner, 6.0, None),
+            note("1'-0\"", (corner.0 + 30.0, corner.1), 6.0, None),
+        ];
+        assert_eq!(detect_scale_note_in(&labelled, &[], sheet).map(|g| g.0), Some(48.0));
+        // and on a page: an explicit note mid-sheet beats the corner pair
+        let r = read_page(
+            "BT /F1 9 Tf 300 320 Td (FLOOR PLAN) Tj ET BT /F1 6 Tf 300 306 Td (SCALE: 1/8\" = 1'-0\") Tj ET BT /F1 6 Tf 640 60 Td (6\") Tj ET BT /F1 6 Tf 670 60 Td (4'-0\") Tj ET",
+        );
+        assert_eq!(r.scale, 96.0, "{} {:?}", r.scale_source, r.notes);
+    }
+
+    #[test]
     fn a_slash_between_digits_in_stroked_lettering_reads_as_a_slash() {
         // Q6395: in `1/8"` the 1 and the slash are the row's only straight strokes; the slash
         // leans by design and must not set the row's slant (it read as an oblique I, so `1/8"`
         // came in as `118"` and the note was lost)
         for (note, k) in [("1/8\" = 1'-0\"", 96.0), ("3/16\" = 1'-0\"", 64.0), ("3/32\" = 1'-0\"", 128.0)] {
-            let r = read_page(&stroked(note, (500.0, 60.0), 9.0));
+            let r = read_page(&[stroked("FLOOR PLAN", (500.0, 76.0), 9.0), stroked(note, (500.0, 60.0), 9.0)].concat());
             assert_eq!(r.scale, k, "{note}: {} {:?}", r.scale_source, r.ocr.words.iter().map(|w| &w.value).collect::<Vec<_>>());
         }
     }
