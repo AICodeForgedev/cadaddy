@@ -6890,12 +6890,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             let (mut gear, room_panels) = super::printcond::room_panel_equipment(&room_panels, &panel_rooms, sp.units_per_foot);
             // Each copy of a typical panel takes the breaker label lettered in its room (Q6436).
             if !feeder_marks.is_empty() {
-                let rep = super::gearbuild::label_typical_copies(&mut gear, &feeder_marks, &panel_rooms);
+                let rep = super::gearbuild::label_typical_copies(&mut gear, &feeder_marks, &panel_rooms, sp.units_per_foot);
                 progress_line(&format!(
-                    "  typical panels' feeder labels: {} copies took the label in their room; {} labels in no copy's room; rooms with two labels {:?}",
-                    rep.labelled,
-                    rep.unmatched,
-                    rep.conflicts.iter().take(6).collect::<Vec<_>>()
+                    "  typical panels' feeder labels: {} copies took the label lettered by them; {} labels no copy took {:?}",
+                    rep.labelled, rep.unmatched, rep.misses
                 ));
             }
             let (runs, circuits) = super::printcond::room_circuits(&devices, &room_panels, sp.units_per_foot);
