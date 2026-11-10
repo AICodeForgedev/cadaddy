@@ -24079,7 +24079,7 @@ fn plumbing_stacks(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<super::read
     out
 }
 
-/// The breaker labels the electrical plans letter for the feeders to a typical panel (`DP1-3`
+/// The breaker labels the electrical plans letter for the feeders to a typical panel (`SB2-5`
 /// in a unit: the breaker feeding that unit's stack; `breakers`: [`super::gearbuild::typical_breakers`]),
 /// each where it is lettered on its sheet, as an item of kind `feeder label` (tag: the label),
 /// to be placed as the devices are (Q6436).
