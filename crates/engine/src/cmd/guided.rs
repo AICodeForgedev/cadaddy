@@ -29366,6 +29366,15 @@ mod tests {
             has(&|l: &Value| l["size"].as_str().is_some_and(|z| z.contains("3/0")) && l["length_ft"].as_f64().is_some_and(|f| f > 0.0)),
             "{lines:#?}"
         );
+        // Each coded feeder's own ground from its schedule row (FDR-A's #6), and the unsized one's
+        // ground by code (FDR-B's #10).
+        for g in ["#6", "#10"] {
+            assert!(
+                has(&|l: &Value| item(l) == "Copper ground, green" && l["size"] == g && l["qty"].as_f64().is_some_and(|q| q > 0.0)),
+                "no {g} ground in the takeoff: {:#?}",
+                lines.iter().filter(|l| l["category"] == "wire").collect::<Vec<_>>()
+            );
+        }
     }
 
     /// A made-up two-level job's radio-coverage keynotes (worded unlike any real set): an antenna

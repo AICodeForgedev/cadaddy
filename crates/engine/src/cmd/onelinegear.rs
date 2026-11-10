@@ -1368,8 +1368,8 @@ mod tests {
         assert_eq!(makeup(&f, "EMT"), "3#10 + 1#10G in 0.5\" EMT");
         assert!(f.source.starts_with("inferred (code)") && f.source.contains("LC-1's 30 A"), "{}", f.source);
         // A 200 A three-phase panel: 3/0 at 75 C, a #6 ground, four in 2 in EMT by fill.
-        let f = code_sized("MDP", "P2", "", 200.0, false, "EX-5").unwrap_or_else(|| panic!("sized"));
-        assert_eq!((f.tag.as_str(), f.phases, f.size.as_str(), f.ground_size.as_str(), f.conduit_in), ("MDP-P2", 3, "3/0", "6", 2.0));
+        let f = code_sized("SWX", "PQ", "", 200.0, false, "EX-5").unwrap_or_else(|| panic!("sized"));
+        assert_eq!((f.tag.as_str(), f.phases, f.size.as_str(), f.ground_size.as_str(), f.conduit_in), ("SWX-PQ", 3, "3/0", "6", 2.0));
         assert!(f.source.contains("with no tag"), "{}", f.source);
         // No rating, a hostile one, or over the tables: not built (left for review).
         for a in [0.0, -5.0, f64::NAN, f64::INFINITY, 5000.0] {

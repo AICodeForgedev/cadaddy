@@ -24,6 +24,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use cadaddy_geom::Vec2;
 use cadaddy_mepfix::sheet_facts::TextItem;
 
+/// How far right of a feeder schedule's title its column headers may run (title heights).
+const HEADER_REACH_H: f64 = 160.0;
+
 /// One feeder type of a feeder schedule.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FeederType {
@@ -97,9 +100,20 @@ pub(crate) fn feeder_rows(texts: &[TextItem], sheet: &str) -> (Vec<FeederType>, 
     let mut no_size: Vec<String> = Vec::new();
     for title in texts.iter().filter(|t| t.value.trim().eq_ignore_ascii_case("FEEDER SCHEDULE")) {
         let h = title.height.max(1e-9);
-        // The header: texts under the title naming the columns; its lowest line is the last.
-        let near: Vec<&TextItem> =
-            texts.iter().filter(|t| t.at.y < title.at.y && t.at.y > title.at.y - 12.0 * h && (t.at.x - title.at.x).abs() < 40.0 * h).collect();
+        // The header: texts under the title naming the columns; its lowest line is the last. A
+        // wide table's columns run on past a fixed reach of a small title (a PDF's text layer
+        // keeps the title smaller than printed, Q6359): they go to the next schedule's title on
+        // its band, at most `HEADER_REACH_H` title heights.
+        let next_title = texts
+            .iter()
+            .filter(|t| t.value.to_ascii_uppercase().contains("SCHEDULE") && (t.at.y - title.at.y).abs() < 3.0 * h && t.at.x > title.at.x + 2.0 * h)
+            .map(|t| t.at.x)
+            .fold(f64::INFINITY, f64::min);
+        let right = (title.at.x + HEADER_REACH_H * h).min(next_title - h);
+        let near: Vec<&TextItem> = texts
+            .iter()
+            .filter(|t| t.at.y < title.at.y && t.at.y > title.at.y - 12.0 * h && t.at.x > title.at.x - 40.0 * h && t.at.x < right)
+            .collect();
         let col = |words: &[&str]| -> Option<&TextItem> {
             near.iter()
                 .copied()
@@ -1193,6 +1207,36 @@ mod tests {
         );
         assert_eq!((f[1].conduits, f[1].conduit_in, f[1].conductors, f[1].size.as_str(), f[1].material.as_str()), (1, 2.0, 3, "2/0", "al"));
         assert_eq!((f[2].conduits, f[2].conduit_in, f[2].size.as_str(), f[2].ground_size.as_str()), (2, 4.0, "500 kcmil", "2/0"));
+    }
+
+    /// Test finding (Q6359): a PDF's text layer keeps the title smaller than printed, so a wide
+    /// schedule's ground column stood past the header's fixed reach and every feeder lost its
+    /// ground. The header runs the table's width, up to the next schedule beside it (whose own
+    /// GROUND header is not this one's).
+    #[test]
+    fn a_wide_feeder_schedules_far_columns_are_read_up_to_the_next_schedule() {
+        let mut v = vec![
+            // The title at 0.1 high; the ground column 60 heights to its right.
+            t(0.0, 10.0, "FEEDER SCHEDULE"),
+            t(-0.05, 9.7, "TAG"),
+            t(2.0, 9.7, "CONDUIT SIZE"),
+            t(4.0, 9.7, "CONDUCTORS"),
+            t(6.0, 9.7, "GROUND"),
+            t(-0.05, 9.5, "FX1"),
+            t(2.0, 9.5, "(1) 2\"C"),
+            t(4.0, 9.5, "(3) #3/0 (CU)"),
+            t(6.0, 9.5, "#6G (CU)"),
+            // The next table on the band, its header a little higher.
+            t(9.0, 10.0, "GROUNDING SCHEDULE"),
+            t(9.5, 9.8, "GROUND"),
+            t(9.5, 9.5, "#2"),
+        ];
+        let f = feeder_types(&v, "EX-5");
+        assert_eq!(f.len(), 1, "{f:#?}");
+        assert_eq!((f[0].tag.as_str(), f[0].size.as_str(), f[0].ground_size.as_str(), f[0].conduit_in), ("FX1", "3/0", "6", 2.0));
+        // No schedule beside it: the far column is still its own.
+        v.truncate(9);
+        assert_eq!(feeder_types(&v, "EX-5").first().map(|f| f.ground_size.clone()), Some("6".into()));
     }
 
     #[test]
