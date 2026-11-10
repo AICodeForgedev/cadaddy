@@ -149,12 +149,13 @@ pub(crate) fn riser_details(pages: &[(String, Drawing)], terminal_tags: &[String
 }
 
 /// Whether a note on any of `drawings` requires each exhaust duct to be continuous to the outside
-/// (rules data `mechanical.continuous_exhaust_duct_notes`): the note that says so, if one does.
-/// A note's lines are often separate texts: each text with a rule word is read with what follows
-/// it on its line and the next line under it.
+/// (rules data `mechanical.continuous_exhaust_duct_notes`): the sentence that says so, if one does.
+/// A note's lines are often separate texts: each line with a rule word is read with the rest of
+/// its line and the line under it (lines of one note start one under the other, lettered alike).
 pub(crate) fn continuous_required<'a>(drawings: impl IntoIterator<Item = &'a Drawing>) -> Option<String> {
     let rules = cadaddy_mepfix::wordrules::rules("mechanical.continuous_exhaust_duct_notes");
     let keys: Vec<&str> = rules.iter().flat_map(|r| r.any.iter().chain(r.all.iter()).copied()).collect();
+    let says = |t: &str| cadaddy_mepfix::wordrules::first_rule("mechanical.continuous_exhaust_duct_notes", |w| has_word_start(t, w)).is_some();
     for d in drawings {
         let texts: Vec<(String, [f64; 2], f64)> = cadaddy_mepfix::sheet_facts::texts(d)
             .iter()
@@ -163,15 +164,18 @@ pub(crate) fn continuous_required<'a>(drawings: impl IntoIterator<Item = &'a Dra
             .map(|t| (t.value.to_ascii_uppercase(), [t.at.x, t.at.y], t.height))
             .collect();
         for (v, at, h) in texts.iter().filter(|(v, _, _)| keys.iter().any(|k| has_word_start(v, k))).take(MAX_DETAILS) {
-            let mut near: Vec<&(String, [f64; 2], f64)> = texts
-                .iter()
-                .filter(|(_, p, _)| p[0] >= at[0] - 2.0 * h && p[0] <= at[0] + NOTE_LINE_H * h && p[1] <= at[1] + 0.5 * h && p[1] >= at[1] - 2.5 * h)
-                .collect();
+            let line = |p: [f64; 2]| (p[1] - at[1]).abs() <= 0.5 * h && p[0] >= at[0] && p[0] <= at[0] + NOTE_LINE_H * h;
+            let under = |p: [f64; 2]| (p[0] - at[0]).abs() <= 2.0 * h && p[1] < at[1] - 0.5 * h && p[1] >= at[1] - 2.5 * h;
+            // A note's lines are lettered alike (another block's text beside it is not).
+            let alike = |g: f64| (g - h).abs() <= 0.15 * h;
+            let mut near: Vec<&(String, [f64; 2], f64)> = texts.iter().filter(|(_, p, g)| alike(*g) && (line(*p) || under(*p))).collect();
             near.sort_by(|a, b| b.1[1].total_cmp(&a.1[1]).then(a.1[0].total_cmp(&b.1[0])));
             let joined = near.iter().map(|(t, _, _)| t.as_str()).collect::<Vec<_>>().join(" ");
             let joined = if joined.contains(v.as_str()) { joined } else { format!("{v} {joined}") };
-            if cadaddy_mepfix::wordrules::first_rule("mechanical.continuous_exhaust_duct_notes", |w| has_word_start(&joined, w)).is_some() {
-                return Some(joined.split_whitespace().collect::<Vec<_>>().join(" "));
+            if says(&joined) {
+                // The sentence that says it (the note's others are not this step's).
+                let sentence = joined.split(". ").find(|s| says(s)).unwrap_or(&joined);
+                return Some(sentence.split_whitespace().collect::<Vec<_>>().join(" "));
             }
         }
     }
@@ -244,7 +248,7 @@ fn best_shift(a: &[[f64; 2]], b: &[[f64; 2]], tol: f64, most: f64) -> (usize, [f
         for q in b {
             let t = sub(*q, *p);
             let len = t[0].hypot(t[1]);
-            if !(len <= most) {
+            if !len.is_finite() || len > most {
                 continue;
             }
             let n = count(t);
@@ -682,6 +686,12 @@ mod tests {
         text(&mut lines, "RESTROOM EXHAUST DUCTS SHALL BE IN WALLS. THE EXHAUST", 0.0, 10.0, 3.0);
         text(&mut lines, "DUCT SHALL BE CONTINUOUSFROM THE FAN TO THE OUTSIDE", 0.0, 5.0, 3.0);
         assert!(continuous_required([&lines]).is_some());
+        // Only the note's own lines: not the title block beside it.
+        let mut boxed = Drawing::default();
+        text(&mut boxed, "GALVANIZED STEEL. EXHAUST DUCT SHALL BE CONTINUOUSFROM", 0.0, 10.0, 3.0);
+        text(&mut boxed, "1 SAMPLE STREET", 120.0, 9.0, 2.0);
+        text(&mut boxed, "THE FAN TO THE OUTSIDE. EXHAUST DUCT", 0.0, 5.0, 3.0);
+        assert_eq!(continuous_required([&boxed]).as_deref(), Some("EXHAUST DUCT SHALL BE CONTINUOUSFROM THE FAN TO THE OUTSIDE"));
         let mut other = Drawing::default();
         text(&mut other, "PROVIDE CONTINUOUS INSULATION ON SUPPLY DUCT", 0.0, 0.0, 3.0);
         assert!(continuous_required([&other]).is_none());

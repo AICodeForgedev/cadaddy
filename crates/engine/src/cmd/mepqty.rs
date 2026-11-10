@@ -454,7 +454,9 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
         let plan_ft: Vec<f64> = pts.windows(2).map(|w| w[0].dist(w[1]) / upf).collect();
         let cs = corners(&pts, &bottoms);
         let rise_ft: f64 = cs.iter().map(|c| if let Corner::Drop(d) = c { *d } else { 0.0 }).sum();
-        let length = plan_ft.iter().sum::<f64>() + rise_ft;
+        // A riser (one plan point and a top) is as long as it rises.
+        let riser_ft = r.top_ft.zip(bottoms.first()).map_or(0.0, |(t, b)| if t.is_finite() && t > *b { t - b } else { 0.0 });
+        let length = plan_ft.iter().sum::<f64>() + rise_ft + riser_ft;
         let (lk, mut sk) = (st.key_level(&r.level), st.key_system(&r.system));
         // A run no plan draws (derived from another floor's, or inferred from a rule: a fill-in,
         // a routed path) is counted apart from the drawn (Q6216: every total shows drawn,
@@ -1122,6 +1124,25 @@ mod tests {
         sp.mep.runs = vec![run(9.0)];
         let overhead = takeoff(&sp, &Settings::default(), &types);
         assert!(overhead.hangers.values().map(|r| r.count).sum::<usize>() > 0);
+    }
+
+    #[test]
+    fn a_riser_is_as_long_as_it_rises() {
+        let sp: BuildingSpec = serde_json::from_value(serde_json::json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10}],
+            "mep": {
+                "systems": [{"name": "EA", "layer": "M-EXH", "kind": "duct", "size_in": [4, 0], "bottom_ft": 9, "show": true}],
+                "runs": [
+                    {"system": "EA", "level": "L1", "points": [[0, 0], [120, 0]], "size_in": [4, 0], "bottoms_ft": [9]},
+                    {"system": "EA", "level": "L1", "points": [[120, 0]], "size_in": [4, 0], "bottoms_ft": [9], "top_ft": 29}
+                ]
+            }
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let t = takeoff(&sp, &Settings::default(), &cadaddy_doc::bimspec::BimTypes::default());
+        let ft: f64 = t.ducts.values().map(|r| r.length_ft).sum();
+        assert!((ft - 30.0).abs() < 1e-9, "10 ft across and 20 ft up: {ft}");
     }
 
     #[test]
