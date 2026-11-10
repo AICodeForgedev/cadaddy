@@ -301,6 +301,22 @@ pub(crate) fn pick_all_with(d: &Drawing, space: &Space, ix: &Option<std::sync::A
     hits.into_iter().map(|(_, h)| h).take(MAX_PICK_CANDIDATES).collect()
 }
 
+/// Whether `e` can be the "Last" object: the user's own, visible and selectable. What the
+/// program generates (a model build's output, tagged by [`crate::cmd::wallgen`]) never is,
+/// nor an object that is hidden or on a layer that is off, frozen or locked, whatever its place
+/// in the drawing order: a live rebuild appends its objects after the line the user drew last.
+pub fn can_be_last(d: &Drawing, e: &Entity) -> bool {
+    d.is_visible(e) && !d.layer(&e.common.layer).is_some_and(|l| l.locked) && crate::cmd::wallgen::made_as(e).is_none()
+}
+
+/// The object "Last" selects in `space` (typed `L` at Select objects): the newest one in
+/// drawing order that [`can_be_last`].
+pub fn last_object(d: &Drawing, space: &Space) -> Option<Handle> {
+    let store = d.space(space)?;
+    let chunks: Vec<&[std::sync::Arc<Entity>]> = store.chunk_slices().map(|(_, c)| c).collect();
+    chunks.iter().rev().flat_map(|c| c.iter().rev()).find(|e| can_be_last(d, e)).map(|e| e.handle)
+}
+
 /// Whether PREVIEWFILTER keeps `e` from being highlighted under the cursor: bits 1 objects on
 /// locked layers, 2 xrefs, 4 tables, 8 multiline text, 16 hatches, 32 objects in groups.
 pub fn preview_filtered(d: &Drawing, e: &Entity, filter: u8) -> bool {

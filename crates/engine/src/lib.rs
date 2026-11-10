@@ -3292,7 +3292,7 @@ impl Session {
                 let store = d.space(&space);
                 let picked = match tl.as_str() {
                     "all" => store.map(|s| s.iter().filter(|e| d.is_visible(e)).map(|e| e.handle).collect()),
-                    "l" | "last" => store.and_then(|s| s.last()).map(|e| vec![e.handle]),
+                    "l" | "last" => select::last_object(d, &space).map(|h| vec![h]),
                     "p" | "previous" => Some(self.state()?.previous_selection.clone()),
                     _ => None,
                 };

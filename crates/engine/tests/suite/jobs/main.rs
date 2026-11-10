@@ -95,6 +95,7 @@ mod tagidentity;
 mod takeoff_drywall_pieces;
 mod takeoff_windows;
 mod tradeatoms;
+mod typed_last;
 mod typicalfloors;
 mod ugplan;
 mod unittypes;
