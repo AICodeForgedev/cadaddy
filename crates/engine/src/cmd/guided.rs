@@ -1500,6 +1500,16 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
         }
     }
+    // Q6514: a floor with no sheet titled as its floor plan while a sheet titled so was filed as
+    // something else is asked, not built from another plan of the floor without a word.
+    let filed_otherwise = classified.get("floor_plans_filed_otherwise").and_then(Value::as_array).cloned().unwrap_or_default();
+    for f in filed_otherwise.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let q = floor_plan_filed_question(job, f);
+        job.add_question_to_worklist(&q);
+        if let Some(st) = job.stage_mut(StageName::Classify) {
+            st.questions.push(q);
+        }
+    }
 
     // MUST 3 (typicalfloors): a level with an architectural plan but no plan for a trade
     // gets a finding.
@@ -1545,6 +1555,49 @@ fn plan_level_question(job: &mut GuidedJob, sheet: &Value, level_codes: &[String
             leftovers: Vec::new(),
         }),
         default: Some(default),
+        answer_schema: Some(json!({"type": "string"})),
+        answer: None,
+        answered_by: None,
+        answered_at: None,
+        kind: QuestionKind::Doubt,
+    }
+}
+
+/// The start of the question for a sheet titled as a floor plan but filed as something else.
+const FLOOR_PLAN_FILED_QUESTION: &str = "Sheet titled as a floor plan but filed as";
+
+/// The answer that makes such a sheet its level's floor plan.
+const FLOOR_PLAN_FILED_YES: &str = "It is the floor plan";
+
+/// The question for a sheet whose title names a floor plan that classify filed as something else
+/// while a level has no sheet titled as its floor plan (`{sheet, title, type, level}`, Q6514):
+/// is it that floor plan? Kept as filed by default (it may be the floor's notes or details); the
+/// answer that it is makes it the level's plan.
+fn floor_plan_filed_question(job: &mut GuidedJob, f: &Value) -> Question {
+    let number = f.get("sheet").and_then(Value::as_str).unwrap_or("?");
+    let title = f.get("title").and_then(Value::as_str).unwrap_or("");
+    let kind = f.get("type").and_then(Value::as_str).unwrap_or("other");
+    let level = f.get("level").and_then(Value::as_str).unwrap_or("");
+    let floor = if level.is_empty() { "the building".to_string() } else { level_name(level) };
+    let keep = format!("Keep it as {kind}");
+    Question {
+        id: job.next_qid(StageName::Classify),
+        stage: StageName::Classify,
+        question: format!(
+            "{FLOOR_PLAN_FILED_QUESTION} {kind}: {number} \"{title}\" — {floor} has no sheet titled as its floor plan. Is this sheet its floor plan?"
+        ),
+        why: "The sheet's title names a floor plan, but no part of it was read as one; the floor is otherwise built from another of its plans (a finish, tile or furniture plan)".into(),
+        choices: vec![FLOOR_PLAN_FILED_YES.into(), keep.clone()],
+        evidence: Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: Some(number.to_string()),
+            at: None,
+            values: Some(json!({"number": number, "title": title, "type": kind, "level": level})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some(keep),
         answer_schema: Some(json!({"type": "string"})),
         answer: None,
         answered_by: None,
@@ -27242,7 +27295,11 @@ fn question_value(job: &GuidedJob, q: &Question) -> Value {
 /// kind of question.
 fn rerun_stage_of(q: &Question) -> Option<StageName> {
     match q.stage {
-        StageName::Classify if q.question.contains("discipline") || q.question.contains("names no level") => Some(StageName::Rooms),
+        StageName::Classify
+            if q.question.contains("discipline") || q.question.contains("names no level") || q.question.starts_with(FLOOR_PLAN_FILED_QUESTION) =>
+        {
+            Some(StageName::Rooms)
+        }
         StageName::Levels if q.question.contains("floor-to-floor") || question_level(q).is_some() => Some(StageName::BimBuild),
         StageName::Rooms => Some(StageName::Rooms),
         StageName::Devices if q.question.contains("Unknown symbol") || q.question.starts_with("No device") || q.kind == QuestionKind::Verify => {
@@ -27569,6 +27626,17 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
                     return (Some(StageName::Rooms), format!("sheet {number} is level {level}"));
                 }
                 return (None, "recorded; answer with the level (\"Level 3\") to move the sheet".into());
+            }
+            if q.question.starts_with(FLOOR_PLAN_FILED_QUESTION) {
+                if text != FLOOR_PLAN_FILED_YES {
+                    return (None, format!("recorded; sheet {number} keeps its type"));
+                }
+                set_sheet_fact(job, &number, "type", "plan");
+                let level = value("level");
+                if !level.is_empty() && !cadaddy_walk3d::levels::is_datum_name(&level) {
+                    set_sheet_fact(job, &number, "level", &level);
+                }
+                return (Some(StageName::Rooms), format!("sheet {number} is the floor plan"));
             }
             (None, "recorded".into())
         }
@@ -36981,6 +37049,34 @@ mod tests {
         let typical = SheetRegion { levels: vec!["2".into(), "3".into()], ..region("M-201", "2", "M", "plan", 600.0) };
         let kept = split_view_regions(&cadaddy_doc::Drawing::new_imperial(), vec![typical.clone()], &[true]);
         assert_eq!(kept, vec![typical]);
+    }
+
+    #[test]
+    fn a_floor_plan_title_filed_otherwise_is_asked_and_the_answer_makes_it_the_plan() {
+        // Q6514: classify listed a sheet titled as a floor plan but filed as notes, on a floor with
+        // no floor plan sheet.
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let sheet = json!({"number": "A1.1", "title": "FLOOR PLAN NOTES", "type": "schedule", "level": ""});
+        job.index = Some(json!({"sheets": [sheet.clone()]}));
+        job.sheets = Some(json!({"sheets": [sheet]}));
+        job.sheet_regions = vec![region("A1.1", "", "A", "schedule", 0.0)];
+        let f = json!({"sheet": "A1.1", "title": "FLOOR PLAN NOTES", "type": "schedule", "level": "1"});
+        let mut q = floor_plan_filed_question(&mut job, &f);
+        assert!(q.question.starts_with(FLOOR_PLAN_FILED_QUESTION) && q.question.contains("A1.1") && q.question.contains("Level 1"), "{}", q.question);
+        assert_eq!(q.choices, [FLOOR_PLAN_FILED_YES, "Keep it as schedule"]);
+        // Auto mode keeps it as filed: the question stays in the report, nothing moves.
+        assert_eq!(q.default.as_deref(), Some("Keep it as schedule"));
+        q.answer = Some(json!("Keep it as schedule"));
+        let (rerun, _) = answer_effect(&mut job, &q);
+        assert_eq!(rerun, None);
+        assert_eq!(job.sheet_regions[0].kind, "schedule");
+        // The answer that it is the floor plan files it so, on its floor, and runs the build again.
+        q.answer = Some(json!(FLOOR_PLAN_FILED_YES));
+        let (rerun, said) = answer_effect(&mut job, &q);
+        assert_eq!((rerun, said.as_str()), (Some(StageName::Rooms), "sheet A1.1 is the floor plan"));
+        assert_eq!((job.sheet_regions[0].kind.as_str(), job.sheet_regions[0].level.as_str()), ("plan", "1"));
+        assert_eq!(job.index.as_ref().and_then(|i| i.pointer("/sheets/0/type")).and_then(Value::as_str), Some("plan"));
+        assert_eq!(rerun_stage_of(&q), Some(StageName::Rooms));
     }
 
     #[test]
