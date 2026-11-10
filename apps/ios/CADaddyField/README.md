@@ -63,6 +63,49 @@ To install on a phone, open the project in Xcode and pick a signing team under S
   frames per second over 10 s. Capture them with `xcrun simctl launch --console-pty <device>
   dev.aicodeforge.cadaddyfield -demo preview -fpslog`.
 
+## Building, floor and room (design prototype)
+
+Library ▸ + ▸ **Sample building (design preview)** opens the building experience on a made-up four-storey
+sample (`FieldCore/SampleBuilding.swift`). It is not wired to real exports yet. Needs iOS 18; on iOS 17 the menu
+item is hidden.
+
+- Four views, one active at a time, from the always-visible control at the bottom: **Architectural | MEP | Floor |
+  Room** (`FieldCore/FieldViews.swift`). Architectural is the architecture only (walls with their windows, doors,
+  floors, roof, stairs). MEP is the opening view: floors and one outline as the only context, mains and big gear;
+  **Full MEP** adds every duct, air terminal and fan, plumbing mains at or over 2", every panel with its feeder, and
+  anything that passes through a floor except an elevator's branches. Floor is one level with its panels, lights,
+  cabinets and all its MEP including sprinkler heads and branches. Room is one room; furniture only there, off by
+  default. The view's allowed set is applied last, after every switch: no state draws every object. Main vs branch,
+  feeder vs branch and "crosses a floor" come from the object class, role, size, connections and geometry, never from
+  tags; the size limits are rules data (`ViewRules`, JSON).
+- One RealityKit scene and one camera from building to floor to room (design spring: response 0.55, damping 0.85).
+  Reduce Motion snaps instead.
+- Opening: the solid exterior is swept to X-ray, bay by bay. Drag across it to scrub; tap to skip.
+- The X-ray: every ghost face uses one shared material (one colour, one opacity, reads depth, writes none), so the
+  blend is the same in any draw order and the ghost can't flicker or swap layers. Systems and equipment are opaque.
+  The "fade the rest back" state and the halos use the same idea.
+- Floor rail (right edge): drag to lift floors apart, with a detent haptic per floor. Tap a floor to fly in.
+- Floor: walls cut at 4 ft, room tiles, branches and lights. A floor's detail is built the first time it opens.
+- Room: a dollhouse cutaway, a list by trade, the card, and **Stand in this room** (opens AR alignment on the
+  sample room package).
+- Follow the system (`FieldCore/SystemTrace.swift`): tap equipment and everything it feeds lights up; tap a
+  device and it traces upstream (outlet › circuit › panel › feeder › gear › transformer). Tap a step to fly there.
+  No upstream in the model shows "No known connection".
+- Layers: M / E / P / Cabinets / Furniture (`LayerPrefs`, kept in UserDefaults; furniture starts off). Each view offers
+  only its own switches (Architectural none, MEP M/E/P, Floor adds Cabinets, Room adds Furniture). The same store
+  drives the layers button in AR. Fire protection rides with P; fire alarm and low voltage with E.
+- Look: Deep Teal or Studio White backdrop, and High contrast (also on with the system's Increase Contrast).
+- Layout (`FieldCore/FieldLayout.swift`): the chrome is placed by one rule (nothing touches in any scope, sheet up or
+  down, at any supported text size); the subject is framed into the area the chrome leaves; labels are laid out in
+  screen space (moved aside with a leader or dropped by priority, never overlapping); distant objects fade toward the
+  backdrop by an opaque colour mix per object (no render-pipeline hooks).
+- Smoothness: build work runs a few milliseconds per frame, one element per work item; depth-fade material swaps
+  have their own small budget; floors above the one you open lift out of frame instead of fading.
+
+Debug launch arguments: `-design reveal|building|lifted|floor|room|card|panel|gear|layers|arch|archlifted|mepfull|tour`,
+`-designbg teal|white`, `-designhc`, and `-fpslog` (prints `FIELD-PERF design fps …` once a second, plus
+`FIELD-SLOW` / `FIELD-ITEM` / `FIELD-APPLY` lines for long frames, long work items and view changes).
+
 ## Opening packages
 
 From the Files app (+ › Open from Files…), the share sheet, AirDrop, or "Open in" you can open:

@@ -27,6 +27,7 @@
 
 mod glb;
 mod manifest;
+mod set;
 mod usdz;
 
 use std::collections::{BTreeMap, HashMap};
@@ -62,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Export for AR", run)
             .params(
-                "{room?: number or name, rooms?: [number or name] (default: one room, the first built), level?: name (all of it, or the level of `box`/`room`), box?: {min: [x, y], max: [x, y], z?: [from, to]} (building feet on the level; z feet above its floor), trades?: [trade or system] (electrical, plumbing, lights, conduit), kinds?: [kind] (receptacle, device, duct), anchor?: {corner: n (1-based, the sidecar's points) | grid: \"A-1\" | name: text, at?: [x, y] (building feet; without it the plan text `name`)} (default: the room corner nearest its entry), context?: \"translucent\"|\"solid\"|\"off\", small?: bool (keep the trades' loose pieces), clip?: bool (default true: cut what runs past the rooms or box, as a wall running on down the corridor), formats?: [\"glb\", \"usdz\"] (default both), max_triangles?, max_bytes? (lower the rules' caps), path?: where to write (NAME.glb / NAME.usdz / NAME.json beside each other; default beside the drawing), force?: bool (replace existing files)} → {files: {glb?, usdz?, sidecar}, bytes, nodes, meshes, triangles, kinds, trades, anchor, scope, dropped, simplified, cut_to_scope, seconds, checks}",
+                "{room?: number or name, rooms?: [number or name] (default: one room, the first built), level?: name (all of it, or the level of `box`/`room`), box?: {min: [x, y], max: [x, y], z?: [from, to]} (building feet on the level; z feet above its floor), trades?: [trade or system] (electrical, plumbing, lights, conduit), kinds?: [kind] (receptacle, device, duct), anchor?: {corner: n (1-based, the sidecar's points) | grid: \"A-1\" | name: text, at?: [x, y] (building feet; without it the plan text `name`)} (default: the room corner nearest its entry), context?: \"translucent\"|\"solid\"|\"off\", small?: bool (keep the trades' loose pieces), clip?: bool (default true: cut what runs past the rooms or box, as a wall running on down the corridor), formats?: [\"glb\", \"usdz\"] (default both), max_triangles?, max_bytes? (lower the rules' caps), path?: where to write (NAME.glb / NAME.usdz / NAME.json beside each other; default beside the drawing), force?: bool (replace existing files), set?: bool (the whole building as the field app's package set in `dir`: building-architectural, building-mep-mains, building-mep-full, one package per level and one per room, and building.json, the index with the levels, rooms, equipment, systems, views, package hashes and the connection graph; never one package with every object), dir?: the package set's folder} → {files: {glb?, usdz?, sidecar}, bytes, nodes, meshes, triangles, kinds, trades, anchor, scope, dropped, simplified, cut_to_scope, seconds, checks} | with set: {dir, index, packages: [{name, view, nodes, triangles, generic, simplified, bytes}], rooms: {packages, triangles, max_triangles, model_bytes}, elements, links: {known, inferred, unknown}, left_out, manifest, seconds}",
             )
             .noundo()
             .files(),
@@ -91,6 +92,8 @@ pub struct Rules {
     pub colors: Colors,
     pub scope: ScopeRules,
     pub kind_trades: Vec<KindTrade>,
+    /// What the building's package set puts in which view (`set: true`).
+    pub set: set::SetRules,
 }
 
 /// An element kind's trade and system when the BIM view's classification (by layer) doesn't
@@ -513,6 +516,10 @@ fn scope_of(p: &Value, all: &[Room], sp: &cadaddy_walk3d::BuildingSpec) -> Resul
     let mut sc = Scope { trades: list_param(p, "trades")?, kinds: list_param(p, "kinds")?, ..Scope::default() };
     if let Some(l) = p.get("level").filter(|v| !v.is_null()) {
         let l = l.as_str().map(str::trim).filter(|l| !l.is_empty()).ok_or_else(|| bad(CMD, "`level` must be a level's name"))?;
+        if sp.level(l).is_none() && matches!(l.to_ascii_lowercase().as_str(), "all" | "*" | "building" | "all levels" | "every level" | "everything")
+        {
+            return Err(set::everything());
+        }
         let lv = sp.level(l).ok_or_else(|| {
             let names: Vec<&str> = sp.levels.iter().map(|l| l.name.as_str()).take(20).collect();
             bad(CMD, format!("there is no level `{l}` (levels: {})", names.join(", ")))
@@ -864,6 +871,7 @@ fn r4(v: f64) -> f64 {
 // ─── Elements ────────────────────────────────────────────────────────────────
 
 /// A built element in the scope.
+#[derive(Clone)]
 struct Item<'a> {
     e: &'a Entity,
     class: Class,
@@ -876,6 +884,12 @@ struct Item<'a> {
     room: Option<String>,
     trade: String,
     system: String,
+    /// What a package adds to its metadata (its menu group, why it is in the view).
+    extra: Map<String, Value>,
+    /// Drawn as its box (a building package's simplified windows, an elevator's hoistway).
+    as_box: bool,
+    /// Cut off above this height (metres above the package's floor): a floor plan's walls.
+    cut_m: Option<f64>,
 }
 
 #[derive(Default)]
@@ -993,7 +1007,22 @@ fn collect<'a>(
             dropped.capped_elements += 1;
             continue;
         }
-        out.push(Item { e, class, part, kind, level, lo, hi, context, room: room.map(Room::label), trade, system });
+        out.push(Item {
+            e,
+            class,
+            part,
+            kind,
+            level,
+            lo,
+            hi,
+            context,
+            room: room.map(Room::label),
+            trade,
+            system,
+            extra: Map::new(),
+            as_box: false,
+            cut_m: None,
+        });
     }
     out
 }
@@ -1186,6 +1215,29 @@ fn clip_triangles(tris: Vec<([[f64; 3]; 3], [f64; 3])>, b: [f64; 4]) -> (Vec<([[
     (out, cut)
 }
 
+/// Triangles cut off above height `y` (output metres): a floor plan's walls.
+fn cut_above(tris: Vec<([[f64; 3]; 3], [f64; 3])>, y: f64) -> Vec<([[f64; 3]; 3], [f64; 3])> {
+    let mut out = Vec::with_capacity(tris.len());
+    for (t, n) in tris {
+        if t.iter().all(|p| p[1] <= y) {
+            out.push((t, n));
+            continue;
+        }
+        let poly = clip_poly(&t, 1, y, -1.0);
+        let Some(first) = poly.first().copied() else { continue };
+        for w in poly.get(1..).unwrap_or(&[]).windows(2) {
+            if let [p, q] = w {
+                let (e1, e2) = ([p[0] - first[0], p[1] - first[1], p[2] - first[2]], [q[0] - first[0], q[1] - first[1], q[2] - first[2]]);
+                let c = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+                if (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt() > 2e-7 {
+                    out.push(([first, *p, *q], n));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// A face's triangles: quads and triangles fanned, larger faces ear-clipped in their plane.
 fn face_triangles(pts: &[[f64; 3]]) -> Vec<[usize; 3]> {
     let n = pts.len();
@@ -1340,14 +1392,46 @@ fn shape_key(g: &Geometry) -> Vec<i64> {
 
 // ─── Building the scene ──────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Step {
+/// How the context (the shell) is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ctx {
     Full,
-    ContextBoxes,
-    ContextOff,
-    /// The far elements dropped (nearest the anchor kept).
-    Far,
+    Boxes,
+    Off,
 }
+
+/// How far a scene is simplified to fit the caps: the context as boxes or left out, every
+/// element as its box (a building package, generic on purpose), the elements furthest from the
+/// anchor left out (the triangle cap drops those as the scene is built, nearest first).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Step {
+    context: Ctx,
+    all_boxes: bool,
+    far: bool,
+}
+
+impl Step {
+    const fn of(context: Ctx, all_boxes: bool, far: bool) -> Step {
+        Step { context, all_boxes, far }
+    }
+
+    fn says(self) -> &'static str {
+        match (self.context, self.all_boxes, self.far) {
+            (Ctx::Full, false, false) => "nothing",
+            (Ctx::Boxes, false, false) => "context as boxes",
+            (Ctx::Off, _, false) => "context left out",
+            (Ctx::Off, _, true) => "context left out, the elements furthest from the anchor left out",
+            (_, true, false) => "every element as its box",
+            (_, true, true) => "every element as its box, the elements furthest from the anchor left out",
+            (_, false, true) => "context as boxes, the elements furthest from the anchor left out",
+        }
+    }
+}
+
+/// A room export's simplifications, in order: the context as boxes, then none, then the far
+/// elements.
+const ROOM_STEPS: [Step; 4] =
+    [Step::of(Ctx::Full, false, false), Step::of(Ctx::Boxes, false, false), Step::of(Ctx::Off, false, false), Step::of(Ctx::Off, false, true)];
 
 struct Built {
     scene: Scene,
@@ -1376,11 +1460,42 @@ fn materials_for(items: &[Item], rules: &Rules, mode: &str) -> (Vec<Material>, V
     (mats, of)
 }
 
-fn build_scene(d: &Drawing, items: &[Item], place: &Place, rules: &Rules, mode: &str, step: Step, tri_cap: usize) -> Built {
+/// A node a package makes itself, not an element of the model: a room's floor tile, the
+/// building's outline, its solid exterior (output metres).
+#[derive(Clone, Debug)]
+struct Generated {
+    name: String,
+    tris: Vec<([[f64; 3]; 3], [f64; 3])>,
+    material: Material,
+    meta: Map<String, Value>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_scene(d: &Drawing, items: &[Item], gens: &[Generated], place: &Place, rules: &Rules, mode: &str, step: Step, tri_cap: usize) -> Built {
     let (materials, mat_of) = materials_for(items, rules, mode);
     let mut scene = Scene { materials, ..Scene::default() };
     let mut shapes: HashMap<Vec<i64>, usize> = HashMap::new();
     let mut names: HashMap<String, usize> = HashMap::new();
+    let mut drawn = 0usize;
+    // The package's own nodes first: they are its context and never dropped for the caps.
+    for g in gens {
+        let mat = match scene.materials.iter().position(|m| *m == g.material) {
+            Some(i) => i,
+            None => {
+                scene.materials.push(g.material.clone());
+                scene.materials.len() - 1
+            }
+        };
+        let Some((at, geo)) = to_geometry(&g.tris, mat) else { continue };
+        drawn += geo.triangles();
+        scene.geometries.push(geo);
+        let n = names.entry(g.name.clone()).or_insert(0);
+        *n += 1;
+        let name = if *n == 1 { g.name.clone() } else { format!("{}_{n}", g.name) };
+        let mut meta = g.meta.clone();
+        meta.insert("node".into(), json!(name));
+        scene.nodes.push(Node { name, geometry: scene.geometries.len() - 1, translation: at, meta });
+    }
     // Nearest the anchor first, so a cap drops the far ones.
     let mut order: Vec<usize> = (0..items.len()).collect();
     let dist = |it: &Item| {
@@ -1392,21 +1507,24 @@ fn build_scene(d: &Drawing, items: &[Item], place: &Place, rules: &Rules, mode: 
         let (ia, ib) = (items.get(*a), items.get(*b));
         ia.map(|x| x.context).cmp(&ib.map(|x| x.context)).then_with(|| ia.map_or(0.0, dist).total_cmp(&ib.map_or(0.0, dist)))
     });
-    let mut drawn = 0usize;
     let mut clipped = 0usize;
     let mut dropped_far: BTreeMap<String, usize> = BTreeMap::new();
     for i in order {
         let (Some(it), Some(&mat)) = (items.get(i), mat_of.get(i)) else { continue };
-        if it.context && step >= Step::ContextOff {
+        if it.context && step.context == Ctx::Off {
             *dropped_far.entry("context (over the caps)".into()).or_default() += 1;
             continue;
         }
-        let as_box = it.context && step >= Step::ContextBoxes;
+        let as_box = it.as_box || step.all_boxes || (it.context && step.context == Ctx::Boxes);
         let tris = if as_box {
             let (a, b) = (place.of_ft(it.lo), place.of_ft(it.hi));
             box_triangles([a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])], [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])])
         } else {
             element_triangles(place, &it.level, it.e)
+        };
+        let tris = match it.cut_m {
+            Some(y) => cut_above(tris, y),
+            None => tris,
         };
         let (tris, cut) = match place.clip {
             Some(b) => clip_triangles(tris, b),
@@ -1429,12 +1547,13 @@ fn build_scene(d: &Drawing, items: &[Item], place: &Place, rules: &Rules, mode: 
             }
         };
         let mut meta = meta_of(d, it, place.floor_ft);
+        meta.extend(it.extra.clone());
         let base = node_name(&it.kind, meta.get("tag").and_then(Value::as_str).unwrap_or_default());
         let n = names.entry(base.clone()).or_insert(0);
         *n += 1;
         let name = if *n == 1 { base } else { format!("{base}_{n}") };
         meta.insert("node".into(), json!(name));
-        if as_box {
+        if as_box && !it.as_box {
             meta.insert("simplified".into(), json!("box"));
         }
         if cut {
@@ -1505,6 +1624,12 @@ fn cap_param(p: &Value, key: &str, rule: u64) -> Result<u64> {
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    if bool_param(CMD, p, "set")?.unwrap_or(false) {
+        return set::run(s, p);
+    }
+    if p.get("dir").is_some_and(|v| !v.is_null()) {
+        return Err(bad(CMD, "`dir` is the package set's folder: add set: true (or give `path` for one export)"));
+    }
     let started = web_time::Instant::now();
     let (want_glb, want_usdz) = formats(p)?;
     let mode = match str_param(p, "context").map(str::trim).map(str::to_ascii_lowercase) {
@@ -1556,6 +1681,15 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if items.is_empty() {
         return Err(bad(CMD, format!("nothing built in that scope ({}): check the room, level, box and filters", scope_name)));
     }
+    // Never every object of a building of more than one level in one package (Q6420): the
+    // package set splits it into the views.
+    let levels: std::collections::BTreeSet<&str> = items.iter().map(|i| i.level.as_str()).collect();
+    if levels.len() > 1 {
+        let every = collect(d, &frame, &sp, &rules, &Scope::default(), &mode, small, &mut Dropped::default()).len();
+        if items.len() >= every {
+            return Err(set::everything());
+        }
+    }
     // Cut to the scope's plan box: the rooms (and the margin), else the box; a level is whole.
     let clip_ft = if clip { clip_box(&sc, rules.margin_ft()) } else { None };
     let clip_m = clip_ft.map(|(lo, hi)| {
@@ -1564,56 +1698,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     });
     let place = Place { frame: &frame, anchor: anchor.at, floor_ft: anchor.floor_ft, clip: clip_m };
     let stem_name = std::path::Path::new(&stem).file_name().map_or("model".into(), |n| n.to_string_lossy().into_owned());
-    // Over a cap: the context as boxes, then none, then the elements furthest from the anchor
-    // (the triangle cap drops those as the scene is built, nearest first).
-    let mut step = Step::Full;
-    let mut tri_cap = usize::try_from(max_tris).unwrap_or(usize::MAX);
-    let mut tries = 0;
-    let (built, glb_bytes, usdz_bytes, sidecar) = loop {
-        tries += 1;
-        let cap = if step == Step::Far { tri_cap } else { usize::MAX };
-        let mut built = build_scene(d, &items, &place, &rules, &mode, step, cap);
-        if built.scene.drawn_triangles() > tri_cap && step < Step::Far {
-            step = next_step(step);
-            continue;
-        }
-        if built.scene.nodes.is_empty() {
-            return Err(bad(CMD, format!("nothing in that scope fits the caps ({max_tris} triangles, {max_bytes} bytes)")));
-        }
-        let summary = summary(&anchor, &sc, &rules, own_rules, &mode, small);
-        built.scene.info = summary.clone();
-        let glb_bytes = if want_glb { Some(glb::write(&built.scene)) } else { None };
-        let usdz_bytes = if want_usdz { Some(usdz::write(&built.scene)) } else { None };
-        let size = glb_bytes.as_ref().map_or(0, Vec::len).max(usdz_bytes.as_ref().map_or(0, Vec::len));
-        let size = u64::try_from(size).unwrap_or(u64::MAX);
-        if size > max_bytes {
-            if step < Step::Far {
-                step = next_step(step);
-                continue;
-            }
-            // Fewer triangles in proportion, a few times at most.
-            if tries < 12 {
-                let ratio = max_bytes as f64 / size as f64 * 0.9;
-                tri_cap = ((built.scene.drawn_triangles() as f64) * ratio).floor() as usize;
-                continue;
-            }
-            return Err(bad(CMD, format!("the export is {size} bytes, over the {max_bytes}-byte cap: choose a smaller scope")));
-        }
-        let points = reference_points(&sc, &place);
-        let sidecar = sidecar_json(&built, &summary, &points, &stem_name, want_glb, want_usdz, &dropped, step);
-        break (built, glb_bytes, usdz_bytes, sidecar);
-    };
-    let sidecar_text = serde_json::to_string_pretty(&sidecar).map_err(|e| bad(CMD, e.to_string()))?;
-    let mut files = Map::new();
-    let mut bytes = Map::new();
-    for (ext, data) in [("glb", glb_bytes.as_deref()), ("usdz", usdz_bytes.as_deref()), ("json", Some(sidecar_text.as_bytes()))] {
-        let Some(data) = data else { continue };
-        let path = format!("{stem}.{ext}");
-        crate::writefile::write_atomic(&path, data).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
-        let key = if ext == "json" { "sidecar" } else { ext };
-        files.insert(key.into(), json!(path));
-        bytes.insert(key.into(), json!(data.len()));
-    }
+    let summary = summary(&anchor, &sc, &rules, own_rules, &mode, small);
+    let points = reference_points(&sc, &place);
+    let caps = (max_tris, max_bytes);
+    let fitted = fit(d, &items, &[], &place, &rules, &mode, &summary, &points, &stem_name, (want_glb, want_usdz), &dropped, caps, &ROOM_STEPS)?;
+    let (files, bytes) = write_files(&stem, &fitted)?;
+    let built = &fitted.built;
+    let sidecar = &fitted.sidecar;
     if renamed {
         s.echo("An AR export of that name already exists, so it was kept.".to_string());
     }
@@ -1653,6 +1744,88 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// A scene fitted to the caps, its files' bytes and its sidecar.
+struct Fitted {
+    built: Built,
+    glb: Option<Vec<u8>>,
+    usdz: Option<Vec<u8>>,
+    sidecar: Value,
+}
+
+/// The scene of `items` (and a package's own nodes `gens`), simplified by `steps` in turn until
+/// it fits the caps (`(triangles, bytes)`); at the last step, fewer triangles in proportion, a
+/// few times at most.
+#[allow(clippy::too_many_arguments)]
+fn fit(
+    d: &Drawing,
+    items: &[Item],
+    gens: &[Generated],
+    place: &Place,
+    rules: &Rules,
+    mode: &str,
+    summary: &Value,
+    points: &[Value],
+    stem_name: &str,
+    (want_glb, want_usdz): (bool, bool),
+    dropped: &Dropped,
+    (max_tris, max_bytes): (u64, u64),
+    steps: &[Step],
+) -> Result<Fitted> {
+    let mut at = 0usize;
+    let mut tri_cap = usize::try_from(max_tris).unwrap_or(usize::MAX);
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        let step = steps.get(at).or(steps.last()).copied().unwrap_or(Step::of(Ctx::Off, false, true));
+        let last = at + 1 >= steps.len();
+        let cap = if step.far { tri_cap } else { usize::MAX };
+        let mut built = build_scene(d, items, gens, place, rules, mode, step, cap);
+        if built.scene.drawn_triangles() > tri_cap && !last {
+            at += 1;
+            continue;
+        }
+        if built.scene.nodes.is_empty() {
+            return Err(bad(CMD, format!("nothing in that scope fits the caps ({max_tris} triangles, {max_bytes} bytes)")));
+        }
+        built.scene.info = summary.clone();
+        let glb = if want_glb { Some(glb::write(&built.scene)) } else { None };
+        let usdz = if want_usdz { Some(usdz::write(&built.scene)) } else { None };
+        let size = glb.as_ref().map_or(0, Vec::len).max(usdz.as_ref().map_or(0, Vec::len));
+        let size = u64::try_from(size).unwrap_or(u64::MAX);
+        if size > max_bytes {
+            if !last {
+                at += 1;
+                continue;
+            }
+            if tries < 12 {
+                let ratio = max_bytes as f64 / size as f64 * 0.9;
+                tri_cap = ((built.scene.drawn_triangles() as f64) * ratio).floor() as usize;
+                continue;
+            }
+            return Err(bad(CMD, format!("the export is {size} bytes, over the {max_bytes}-byte cap: choose a smaller scope")));
+        }
+        let sidecar = sidecar_json(&built, summary, points, stem_name, want_glb, want_usdz, dropped, step);
+        return Ok(Fitted { built, glb, usdz, sidecar });
+    }
+}
+
+/// Writes a fitted scene's files beside each other (`STEM.glb`, `STEM.usdz`, `STEM.json`): the
+/// paths and byte counts by role (`glb`, `usdz`, `sidecar`).
+fn write_files(stem: &str, f: &Fitted) -> Result<(Map<String, Value>, Map<String, Value>)> {
+    let sidecar_text = serde_json::to_string_pretty(&f.sidecar).map_err(|e| bad(CMD, e.to_string()))?;
+    let mut files = Map::new();
+    let mut bytes = Map::new();
+    for (ext, data) in [("glb", f.glb.as_deref()), ("usdz", f.usdz.as_deref()), ("json", Some(sidecar_text.as_bytes()))] {
+        let Some(data) = data else { continue };
+        let path = format!("{stem}.{ext}");
+        crate::writefile::write_atomic(&path, data).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
+        let key = if ext == "json" { "sidecar" } else { ext };
+        files.insert(key.into(), json!(path));
+        bytes.insert(key.into(), json!(data.len()));
+    }
+    Ok((files, bytes))
+}
+
 /// The plan box (building feet) a scope cuts to: its rooms' (grown by `margin`), within its box.
 fn clip_box(sc: &Scope, margin: f64) -> Option<([f64; 2], [f64; 2])> {
     let mut b: Option<([f64; 2], [f64; 2])> = None;
@@ -1670,14 +1843,6 @@ fn clip_box(sc: &Scope, margin: f64) -> Option<([f64; 2], [f64; 2])> {
         (Some(b), None) => Some(b),
         (None, Some((rlo, rhi, _))) => Some((*rlo, *rhi)),
         (None, None) => None,
-    }
-}
-
-fn next_step(s: Step) -> Step {
-    match s {
-        Step::Full => Step::ContextBoxes,
-        Step::ContextBoxes => Step::ContextOff,
-        Step::ContextOff | Step::Far => Step::Far,
     }
 }
 
@@ -1751,12 +1916,7 @@ fn sidecar_json(built: &Built, summary: &Value, points: &[Value], stem: &str, gl
         "over_caps": built.dropped_far,
     });
     v["cut_to_scope"] = json!(built.clipped);
-    v["simplified"] = json!(match step {
-        Step::Full => "nothing",
-        Step::ContextBoxes => "context as boxes",
-        Step::ContextOff => "context left out",
-        Step::Far => "context left out, the elements furthest from the anchor left out",
-    });
+    v["simplified"] = json!(step.says());
     v["points"] = json!(points);
     v["elements"] = json!(
         scene

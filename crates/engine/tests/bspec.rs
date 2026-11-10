@@ -305,9 +305,13 @@ fn model_build_follows_the_spec_and_is_deterministic() {
     let (gx0, gx1) = x_range(ground);
     assert!((gx0 + 120.0).abs() < 1e-6 && (gx1 - 480.0).abs() < 1e-6, "{gx0} {gx1}");
     assert!(made(&s, "floor").iter().all(|(_, x)| x.contains(&"material:Concrete".to_string())));
-    // Same spec and drawing → the same model: built again here, and in a fresh session.
+    // Same spec and drawing → the same model: kept as it is when built again (Q6403), laid out
+    // again the same when forced, and in a fresh session.
     let first = model(&s);
-    let again = s.execute("model.build", &json!({})).unwrap();
+    let kept = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!((kept["kept"].clone(), kept["removed"].clone()), (json!(true), json!(0)), "{kept}");
+    assert_eq!(model(&s), first);
+    let again = s.execute("model.build", &json!({"force": true})).unwrap();
     assert_eq!(again["removed"], json!(first.len()));
     assert_eq!(model(&s), first);
     let mut other = plan();

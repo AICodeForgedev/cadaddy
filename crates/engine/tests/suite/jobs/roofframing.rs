@@ -215,3 +215,179 @@ fn a_roof_plans_labels_are_no_leaking_rooms() {
     let levels: Vec<Value> = r["issues"].as_array().unwrap().iter().map(|i| i["level"].clone()).collect();
     assert_eq!(levels, [json!("Level 1")], "{r}");
 }
+
+/// The trade pieces (`trade:framing`, `part:atom:<kind>`) of the built model: each piece's body,
+/// its level and the element it is part of.
+fn pieces(s: &Session, kind: &str) -> Vec<(Mesh, String, String)> {
+    let part = format!("part:atom:{kind}");
+    s.doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter(|e| made_as(e).as_deref() == Some("atom"))
+        .filter(|e| e.common.xdata.iter().any(|t| t.value == "trade:framing") && e.common.xdata.iter().any(|t| t.value == part))
+        .filter_map(|e| {
+            let EntityKind::Mesh(m) = &e.kind else { return None };
+            let tags: Vec<&str> = e.common.xdata.iter().map(|t| t.value.as_str()).collect();
+            let level = tags.get(2).map(|t| t.to_string()).unwrap_or_default();
+            let host = cadaddy_engine::doc::props::read(&e.common.xdata).get("host").map(|p| p.text()).unwrap_or_default();
+            Some((m.clone(), level, host))
+        })
+        .collect()
+}
+
+/// Q6405: one roof framing system per roof. A framed roof sloped ¼"/ft: the framing trade's
+/// trusses are the roof's members (one each, hosted on it, its sloped body, on the roof level),
+/// never a second flat layout over the storey under it; the roof's sheathing lies on them.
+#[test]
+fn a_framed_roofs_trade_trusses_are_its_members_not_a_second_layout() {
+    let mut s = building(18.0, None, trusses(), json!([]));
+    let mut sp = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+    for r in sp["exterior"]["roofs"].as_array_mut().unwrap() {
+        r["slope"] = json!({"down": [1, 0], "rise_per_ft": 0.25 / 12.0});
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let members = made(&s, "roof-framing");
+    assert_eq!(members.len(), 19, "{r}");
+    let handles: Vec<String> =
+        s.doc().unwrap().model.iter().filter(|e| made_as(e).as_deref() == Some("roof-framing")).map(|e| e.handle.hex()).collect();
+    // The members rise with the roof: the high end's are deeper than the low end's.
+    let tops: Vec<f64> = members.iter().map(|(m, _)| z(m).1).collect();
+    assert!(tops.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - tops.iter().cloned().fold(f64::INFINITY, f64::min) > 6.0, "{tops:?}");
+    let trusses = pieces(&s, "truss");
+    assert_eq!(trusses.len(), members.len(), "one truss piece per roof member, not a second set: {r}");
+    let mut hosts: Vec<&str> = trusses.iter().map(|(_, _, h)| h.as_str()).collect();
+    hosts.sort_unstable();
+    hosts.dedup();
+    assert_eq!(hosts.len(), members.len(), "each member is one truss piece's host");
+    for (m, level, host) in &trusses {
+        assert_eq!(level, "Roof", "on the roof level, as its member");
+        assert!(handles.iter().any(|h| h == host), "hosted on a roof member: {host}");
+        let member = &members[handles.iter().position(|h| h == host).unwrap()].0;
+        assert_eq!(z(m), z(member), "the member's sloped body, not a flat 2' box at the bearing");
+        assert_eq!(xy(m), xy(member));
+    }
+    // The roof's sheathing lies on the members under it: none below their tops' lowest, and it
+    // rises with them.
+    let low = tops.iter().cloned().fold(f64::INFINITY, f64::min);
+    let sheathing: Vec<(Mesh, String, String)> = pieces(&s, "sheathing").into_iter().filter(|(_, l, _)| l == "Roof").collect();
+    assert!(!sheathing.is_empty(), "{r}");
+    assert!(sheathing.iter().all(|(m, _, _)| z(m).0 >= low - 1e-6), "{:?}", sheathing.iter().map(|p| z(&p.0)).collect::<Vec<_>>());
+    let bottoms: Vec<f64> = sheathing.iter().map(|(m, _, _)| z(m).0).collect();
+    assert!(bottoms.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - bottoms.iter().cloned().fold(f64::INFINITY, f64::min) > 4.0, "{bottoms:?}");
+    // One system: no truss piece clashes with the member it is (nor two trusses share space).
+    let clash = s.execute("bim.clash", &json!({})).unwrap();
+    let pairs: Vec<(String, String)> = clash["clashes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["a"]["handle"].as_str().unwrap_or_default().to_string(), c["b"]["handle"].as_str().unwrap_or_default().to_string()))
+        .collect();
+    let framing: Vec<&str> = handles.iter().map(String::as_str).chain(trusses.iter().map(|(_, _, h)| h.as_str())).collect();
+    assert!(!pairs.iter().any(|(a, b)| framing.contains(&a.as_str()) && framing.contains(&b.as_str())), "{clash}");
+    // Nothing of the roof's framing is laid on the storey under it.
+    assert!(pieces(&s, "truss").iter().all(|(_, l, _)| l != "Level 2"));
+    assert!(pieces(&s, "sheathing").iter().all(|(m, l, _)| l != "Level 2" || z(m).1 <= 216.0 + 1e-6), "no roof sheathing on Level 2");
+}
+
+/// One storey (60' × 40' of 6" walls, 10' high) under a roof level at 10' whose roof covers it,
+/// sloping `down` (a plan direction) at `rise_per_ft`, framed by `framing` (none: unframed).
+fn sloped(down: [f64; 2], rise_per_ft: f64, framing: Value) -> Session {
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    rect(&mut s, [0.0, 0.0], [720.0, 480.0]);
+    rect(&mut s, [6.0, 6.0], [714.0, 474.0]);
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "units_per_foot": 12,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Roof", "elevation_ft": 10, "height_ft": 4, "ceiling_ft": 4}
+            ],
+            "layers": [{"layer": "A-WALL", "role": "wall"}],
+            "exterior": {
+                "framing": framing,
+                "roofs": [{"name": "Roof", "level": "Roof", "outline": [[0, 0], [720, 0], [720, 480], [0, 480]],
+                           "slope": {"down": down, "rise_per_ft": rise_per_ft}}]
+            }
+        }}),
+    )
+    .unwrap();
+    s
+}
+
+/// The roof's surface at a plan point, inches: 10' at its low edge, rising against `down`.
+fn surface_at(down: [f64; 2], rise_per_ft: f64, x: f64, y: f64) -> f64 {
+    let low = [[0.0, 0.0], [720.0, 0.0], [720.0, 480.0], [0.0, 480.0]]
+        .iter()
+        .map(|p: &[f64; 2]| p[0] * down[0] + p[1] * down[1])
+        .fold(f64::NEG_INFINITY, f64::max);
+    120.0 + (low - (x * down[0] + y * down[1])) * rise_per_ft
+}
+
+/// Q6409: a sloped roof's deck is a constant-thickness sheet on its framing (its underside
+/// parallel to its top, 1.5" normal to the slope), never a wedge with a flat underside, and the
+/// members' top chords follow it up the slope (both across the members and along them) without
+/// cutting into it.
+#[test]
+fn a_sloped_roofs_deck_is_a_constant_sheet_on_the_framing_not_a_wedge() {
+    for down in [[-1.0, 0.0], [0.0, -1.0]] {
+        let s = 0.25 / 12.0;
+        let mut ses = sloped(down, s, trusses());
+        let r = ses.execute("model.build", &json!({})).unwrap();
+        assert_eq!(r["roofs"], json!(1), "{r}");
+        let t = 1.5 * (1.0 + s * s).sqrt();
+        let roof = &made(&ses, "roof")[0].0;
+        // Over every corner of the outline: the top on the slope, the underside 1.5" (normal) under it.
+        let (lo, hi) = z(roof);
+        let rise = if down[0] != 0.0 { 720.0 * s } else { 480.0 * s };
+        assert!(near(lo, 120.0 - t) && near(hi, 120.0 + rise), "{down:?}: {:?}", z(roof));
+        let n = roof.vertices.len() / 2;
+        assert_eq!(n, 4, "{down:?}");
+        for v in &roof.vertices {
+            let top = surface_at(down, s, v.x, v.y);
+            assert!(near(v.z, top) || near(v.z, top - t), "{down:?}: deck vertex {v:?} is neither on the slope nor 1.5\" under it ({top})");
+        }
+        // The members: under the deck everywhere, their top chords on its underside.
+        let members = made(&ses, "roof-framing");
+        assert!(!members.is_empty(), "{r}");
+        let mut worst_cut = 0.0f64;
+        for (m, _) in &members {
+            let under = |x: f64, y: f64| surface_at(down, s, x, y) - t;
+            for v in &m.vertices {
+                worst_cut = worst_cut.max(v.z - under(v.x, v.y));
+            }
+            let top: Vec<_> = m.vertices.iter().filter(|v| v.z > 100.0).collect();
+            assert!(top.iter().all(|v| near(v.z, under(v.x, v.y))), "{down:?}: a top chord off the deck's underside: {top:?}");
+        }
+        assert!(worst_cut < 1e-6, "{down:?}: a member cuts {worst_cut}\" into the deck");
+    }
+}
+
+/// Q6409: an unframed sloped roof is a constant slab too (1' normal to its slope); where its
+/// underside rises over the walls under it, the outside walls carry up to it, inferred by rule.
+#[test]
+fn an_unframed_sloped_roof_is_a_constant_slab_closed_down_to_its_walls() {
+    let (down, s) = ([0.0, -1.0], 4.0 / 12.0);
+    let mut ses = sloped(down, s, json!([]));
+    let r = ses.execute("model.build", &json!({})).unwrap();
+    assert_eq!(r["roofs"], json!(1), "{r}");
+    let t = 12.0 * (1.0 + s * s).sqrt();
+    let roof = &made(&ses, "roof")[0].0;
+    for v in &roof.vertices {
+        let top = surface_at(down, s, v.x, v.y);
+        assert!(near(v.z, top) || near(v.z, top - t), "slab vertex {v:?} is neither on the slope nor 1' under it ({top})");
+    }
+    // 13'-4" of rise over a 1' slab: the outside walls close the space up to the deck.
+    let walls = made(&ses, "roof-wall");
+    assert_eq!(walls.len(), 1, "{r}");
+    let (m, x) = &walls[0];
+    assert!(x.iter().any(|t| t == "status:inferred") && x.iter().any(|t| t.starts_with("basis:A-ROOF-SLOPED-DECK")), "{x:?}");
+    for v in m.vertices.iter().filter(|v| v.z > 120.0 + 1e-6) {
+        assert!(near(v.z, surface_at(down, s, v.x, v.y)), "a roof wall's top off the deck: {v:?}");
+    }
+    assert!(near(z(m).1, 120.0 + 480.0 * s), "{:?}", z(m));
+    assert_eq!(roof_issues(&mut ses), Vec::<String>::new());
+}

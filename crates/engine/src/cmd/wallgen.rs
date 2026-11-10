@@ -1089,6 +1089,12 @@ impl Behind {
     fn forget(&mut self, d: &Arc<Drawing>) {
         self.states.retain(|(w, _)| !same_state(w, d));
     }
+    /// `to` is `from` with a change that is no edit of the model or its plan: behind as `from` is.
+    fn carry(&mut self, from: &Arc<Drawing>, to: &Arc<Drawing>) {
+        let Some(built) = self.find(from).cloned() else { return };
+        let built = built.and_then(|w| w.upgrade());
+        self.add(to, built.as_ref());
+    }
     /// Whether `d` (a drawing state) is one the plan has moved past the model in.
     pub fn holds_doc(&self, d: &Arc<Drawing>) -> bool {
         self.holds(d)
@@ -1112,6 +1118,18 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     // Then the drawing state now follows the build it comes from (and a build this command
     // made takes the model as the command left it).
     super::revise3d::after_command(s, before);
+    // Last, the saved model's record (Q6403): the spec it is written into is no edit of the
+    // model or its plan, so the state it makes is the one the command left, behind or built.
+    let left = s.state().ok().map(|st| Arc::clone(&st.doc));
+    super::buildrec::after_command(s, before);
+    if let Some(left) = left
+        && let Ok(st) = s.state_mut()
+        && !Arc::ptr_eq(&left, &st.doc)
+    {
+        let now = Arc::clone(&st.doc);
+        st.model_behind.carry(&left, &now);
+        super::revise3d::carry(st, &left, &now);
+    }
 }
 
 fn behind_after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
@@ -2083,6 +2101,16 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let strings = drop_dimension_strings(&mut found, &figures, k);
     if strings > 0 {
         notes.push(format!("{}: {strings} line pairs of dimension strings and their extension lines not taken for walls.", level.name));
+    }
+    // Equipment and fixtures drawn on the plan (a through-wall unit, a tub, a counter, a tag's
+    // frame) pair up like walls: a pair in an outline holding lettering, a fill or an inner
+    // outline, joining no wall, is the symbol's (Q6423), left to the equipment and plumbing readers.
+    let symbols = super::perceive::geometry::drop_symbol_pairs(&segs, &mut found, &super::perceive::geometry::symbol_marks(d, &ents, k), k);
+    if symbols > 0 {
+        notes.push(format!(
+            "{}: {symbols} line pairs inside equipment and fixture symbols (outlines holding lettering, a fill or an inner outline, joining no wall) not taken for walls.",
+            level.name
+        ));
     }
     // A window drawn across a gap in a wall (its frame's outline the wall's depth, its sill and
     // glazing lines, or two glazing lines from jamb to jamb): its lines are no wall bridging the

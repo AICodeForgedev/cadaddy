@@ -11,6 +11,8 @@ struct ARFieldScreen: View {
     @State private var showPlanPicker = false
     @State private var showCard = false
     @State private var controller = ARController()
+    @State private var showFieldLayers = false
+    @ObservedObject private var layerStore = LayerStore.shared
 
     var body: some View {
         ZStack {
@@ -20,6 +22,24 @@ struct ARFieldScreen: View {
                 statusBar
                 Spacer()
                 if showNudge, session.alignment != nil { NudgePanel(session: session, controller: controller) }
+                HStack(alignment: .bottom) {
+                    Spacer()
+                    if showFieldLayers {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("SHOW").font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(.secondary)
+                            LayerSwitches(store: layerStore, style: DesignStyle(background: .teal), layers: FieldView.room.layers)
+                        }
+                        .padding(16)
+                        .frame(width: 290)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .transition(.scale(scale: 0.92, anchor: .bottomTrailing).combined(with: .opacity))
+                    }
+                    Button { withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { showFieldLayers.toggle() } } label: {
+                        Image(systemName: "square.3.layers.3d").font(.system(size: 21, weight: .medium)).foregroundStyle(.white)
+                            .frame(width: 56, height: 56).background(.ultraThinMaterial, in: Circle())
+                    }
+                    .accessibilityLabel("Show trades")
+                }
                 bottomBar
             }
             .padding()
@@ -52,9 +72,21 @@ struct ARFieldScreen: View {
         }
         .onChange(of: session.selected) { _, v in showCard = v != nil && session.mode == .aligned }
         .onChange(of: session.mode) { _, m in if case .twoPointModel = m { showPlanPicker = true } }
-        .onAppear { session.isAR = true }
+        .onAppear { session.isAR = true; applyFieldLayers() }
+        .onChange(of: layerStore.prefs) { _, _ in applyFieldLayers() }
+        .onChange(of: session.model?.elements.count) { _, _ in applyFieldLayers() }
         .onDisappear { session.isAR = false; controller.stop() }
         .statusBarHidden()
+    }
+
+    /// The M / E / P / Cabinets / Furniture switches carry into AR as hidden trades.
+    private func applyFieldLayers() {
+        let trades = session.model?.trades ?? []
+        var kinds: [String: [String]] = [:]
+        for e in session.model?.elements ?? [] { kinds[e.info.trade ?? "unassigned", default: []].append(e.info.kind ?? "") }
+        let hide = layerStore.prefs.hiddenTrades(trades, kindsByTrade: kinds)
+        let layerTrades = Set(trades.filter { FieldLayer.of(trade: $0, kind: kinds[$0]?.first) != nil })
+        session.hiddenTrades = session.hiddenTrades.subtracting(layerTrades).union(hide)
     }
 
     private var statusBar: some View {
