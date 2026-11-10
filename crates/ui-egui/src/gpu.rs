@@ -432,19 +432,27 @@ impl Tiling {
         if !(w.is_finite() && h.is_finite() && floor.is_finite()) {
             return None;
         }
-        let mut cell = (w.max(floor) * h.max(floor) / want as f64).sqrt().max(floor);
-        let count = |cell: f64| ((w / cell) as usize).saturating_add(1);
-        let (mut cols, mut rows) = (count(cell), (h / cell) as usize + 1);
+        // The side in steps of a factor of the square root of two, and the grid on whole
+        // multiples of it: the next zoom band (whose list holds about as many vertices) gets the
+        // same tiles, and the tiles it didn't build again keep their GPU buffers.
+        let step = |c: f64| 2f64.powf((c.log2() * 2.0).ceil() / 2.0);
+        let mut cell = step((w.max(floor) * h.max(floor) / want as f64).sqrt().max(floor));
+        let grid = |cell: f64| {
+            let min = Vec2::new((b.min.x / cell).floor() * cell, (b.min.y / cell).floor() * cell);
+            let count = |span: f64| ((span / cell) as usize).saturating_add(1);
+            (min, count(b.max.x - min.x), count(b.max.y - min.y))
+        };
+        let (mut min, mut cols, mut rows) = grid(cell);
         // A long, thin drawing: never more cells than the most.
         for _ in 0..64 {
             if cols.saturating_mul(rows) <= MAX_TILES {
                 break;
             }
-            cell *= 1.5;
-            (cols, rows) = (count(cell), ((h / cell) as usize).saturating_add(1));
+            cell *= std::f64::consts::SQRT_2;
+            (min, cols, rows) = grid(cell);
         }
         let cells = cols.saturating_mul(rows);
-        (cell.is_finite() && cell > 0.0 && (2..=MAX_TILES).contains(&cells)).then_some(Tiling { min: b.min, cell, cols, rows, px })
+        (cell.is_finite() && cell > 0.0 && min.is_finite() && (2..=MAX_TILES).contains(&cells)).then_some(Tiling { min, cell, cols, rows, px })
     }
 
     fn cells(&self) -> usize {
@@ -3210,6 +3218,16 @@ mod tests {
         assert_eq!(Tiling::for_bounds(&b, TILE_VERTICES, 1.0), None, "a small list stays one tile");
         let t = Tiling::for_bounds(&b, 10_000_000, 0.5).unwrap();
         assert!(t.cell >= TILE_MIN_PX * 0.5 && t.cells() <= MAX_TILES && t.cells() >= 2, "{t:?}");
+        // The grid covers the drawing on whole multiples of a side in steps of the square
+        // root of two, so a list of about as many vertices (the next zoom band) gets the same.
+        assert!(
+            t.min.x <= b.min.x && t.min.y <= b.min.y && t.min.x + t.cell * t.cols as f64 >= b.max.x && t.min.y + t.cell * t.rows as f64 >= b.max.y
+        );
+        assert_eq!(((t.cell.log2() * 2.0).round() - t.cell.log2() * 2.0).abs() < 1e-9, true, "{}", t.cell);
+        // (Where the vertex count sets the side, not the pixels: zoomed in.)
+        let z = Tiling::for_bounds(&b, 10_000_000, 0.1).unwrap();
+        assert_eq!(Tiling::for_bounds(&b, 11_000_000, 0.1), Some(z));
+        assert_eq!(Tiling::for_bounds(&b, 10_000_000, 0.12), Some(Tiling { px: 0.12, ..z }));
         assert_eq!(t.px, 0.5);
         // Zoomed far out, a tile would be smaller than the screen: one tile.
         assert_eq!(Tiling::for_bounds(&b, 10_000_000, 20.0), None);
