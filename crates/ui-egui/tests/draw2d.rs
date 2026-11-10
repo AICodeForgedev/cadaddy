@@ -192,6 +192,27 @@ fn a_print_set_reports_where_2d_time_goes() {
         measure(&mut harness, "one room", view(room, 1.1), frames),
     ];
     print(&rows, sheets, objects);
+    // What counting costs: the whole set's list at the zoomed-out detail, without and with it.
+    let doc = harness.state().session.state().unwrap().doc.clone();
+    let px = ext.height() / f64::from(SIZE.1);
+    let build = |counted: bool| {
+        let opts = cadaddy_render::Options {
+            tolerance: px * 0.5,
+            min_dash: px * 2.0,
+            profile: counted.then(cadaddy_render::profile::BuildProfile::new),
+            ..cadaddy_render::Options::default()
+        };
+        median(
+            (0..3)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    let _ = cadaddy_render::build(&doc, &cadaddy_engine::doc::Space::Model, &opts);
+                    ms(t)
+                })
+                .collect(),
+        )
+    };
+    println!("whole-set build, not counted / counted: {:.0} / {:.0} ms", build(false), build(true));
 
     for r in &rows {
         let (g, fr) = (&r.report["regen"], &r.report["frame"]);
