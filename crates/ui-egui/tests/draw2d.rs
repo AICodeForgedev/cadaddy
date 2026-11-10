@@ -7,6 +7,11 @@
 //! view, the canvas's and the app's time, and the headless render: egui's tessellation, the GPU
 //! draw and reading the image back), with the memory and the adapter.
 //!
+//! Zoomed out, the GPU canvas draws objects under a pixel as dots and small ones as boxes
+//! (`gpu::build_screen_mesh`): the whole set is measured again with every object drawn as it is
+//! (`CanvasState::full_detail`), and the two compared for GPU vertices and for the share of the
+//! canvas the drawing lights (it must not thin out).
+//!
 //! CI runs 4 sheets and checks that the report adds up; the full set is run by hand:
 //!
 //! ```text
@@ -38,6 +43,26 @@ struct Row {
     /// Medians over the measured frames: the app's update, the headless render.
     frame_ms: f64,
     render_ms: f64,
+    /// Share of the canvas's pixels the drawing lights (see [`coverage`]).
+    coverage: f64,
+}
+
+/// Share of the canvas's pixels in `img` that are not the canvas background (the most common
+/// colour there).
+fn coverage(harness: &Harness<'_, CadApp>, img: &image::RgbaImage) -> f64 {
+    let Some(rect) = harness.state().canvas.rect else { return 0.0 };
+    let ppp = harness.ctx.pixels_per_point();
+    let (x0, y0) = ((rect.min.x * ppp).max(0.0) as u32, (rect.min.y * ppp).max(0.0) as u32);
+    let (x1, y1) = (((rect.max.x * ppp) as u32).min(img.width()), ((rect.max.y * ppp) as u32).min(img.height()));
+    let mut counts = std::collections::HashMap::<[u8; 4], usize>::new();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            *counts.entry(img.get_pixel(x, y).0).or_default() += 1;
+        }
+    }
+    let total: usize = counts.values().sum();
+    let bg = counts.values().copied().max().unwrap_or(0);
+    if total == 0 { 0.0 } else { (total - bg) as f64 / total as f64 }
 }
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -72,18 +97,21 @@ fn measure(harness: &mut Harness<'_, CadApp>, name: &'static str, view: View, fr
     // One more frame draws the new list (and uploads it).
     harness.step();
     let _ = harness.render();
-    let (mut frame, mut render) = (Vec::new(), Vec::new());
+    let (mut frame, mut render, mut lit) = (Vec::new(), Vec::new(), 0.0);
     for _ in 0..frames {
         let t = std::time::Instant::now();
         harness.step();
         frame.push(ms(t));
         let t = std::time::Instant::now();
-        let _ = harness.render();
+        let img = harness.render();
         render.push(ms(t));
+        if let Ok(img) = &img {
+            lit = coverage(harness, img);
+        }
     }
     harness.step();
     let report = cadaddy_ui_egui::debug_overlay::draw2d_json(harness.state());
-    Row { view: name, report, frame_ms: median(frame), render_ms: median(render) }
+    Row { view: name, report, frame_ms: median(frame), render_ms: median(render), coverage: lit }
 }
 
 fn f(v: &Value) -> f64 {
@@ -110,6 +138,8 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
         "render ms",
         "GPU MB",
         "RSS MB",
+        "sub-pixel objects + prims / dots / boxes",
+        "canvas lit %",
     ];
     println!("| {} |", head.join(" | "));
     println!("|{}", "---|".repeat(head.len()));
@@ -117,7 +147,7 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
         let (g, fr, mem) = (&r.report["regen"], &r.report["frame"], &r.report["memory"]);
         let part = |k: &str| format!("{:.0}", f(&g["parts"][k]["ms"]));
         println!(
-            "| {} | {} / {} | {:.0} | {} / {} / {} / {} / {} / {} | {} | {:.0} | {:.0} | {} | {} / {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.0} | {} |",
+            "| {} | {} / {} | {:.0} | {} / {} / {} / {} / {} / {} | {} | {:.0} | {:.0} | {} | {} / {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.0} | {} | {} + {} / {} / {} | {:.2} |",
             r.view,
             g["considered"],
             g["drawn"],
@@ -140,6 +170,11 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
             r.render_ms,
             f(&mem["gpuBytes"]) / 1e6,
             mem["rssMb"],
+            g["simplified"]["dotObjects"],
+            g["simplified"]["dotPrims"],
+            g["simplified"]["dots"],
+            g["simplified"]["boxes"],
+            r.coverage * 100.0,
         );
     }
     println!(
@@ -186,11 +221,16 @@ fn a_print_set_reports_where_2d_time_goes() {
     let sheet = Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(1728.0, 1152.0));
     let room = Bounds2::new(Vec2::new(72.0, 96.0), Vec2::new(180.4, 260.0));
     let view = |b: Bounds2, margin: f64| View { center: b.center(), height: b.height().max(b.width() * f64::from(SIZE.1 / SIZE.0)) * margin };
-    let rows = vec![
+    let mut rows = vec![
         measure(&mut harness, "zoomed out (whole set)", view(ext, 1.05), frames),
         measure(&mut harness, "one sheet", view(sheet, 1.05), frames),
         measure(&mut harness, "one room", view(room, 1.1), frames),
     ];
+    // The whole set again with every object drawn as it is (what the GPU canvas drew before
+    // sub-pixel objects were simplified).
+    harness.state_mut().canvas.full_detail = true;
+    rows.push(measure(&mut harness, "zoomed out, full detail", view(ext, 1.05), frames));
+    harness.state_mut().canvas.full_detail = false;
     print(&rows, sheets, objects);
     // What counting costs: the whole set's list at the zoomed-out detail, without and with it.
     let doc = harness.state().session.state().unwrap().doc.clone();
@@ -227,6 +267,28 @@ fn a_print_set_reports_where_2d_time_goes() {
         }
         assert!(n(&fr["primsInView"]) <= n(&g["prims"]) && n(&fr["primsSent"]) > 0, "{}: {}", r.view, r.report);
         assert!(r.report["adapter"].as_str().is_some_and(|a| !a.is_empty()));
+    }
+    // Zoomed out, objects under a pixel are dots and small ones boxes: far fewer GPU vertices
+    // than drawing every object as it is, and the drawing lights as much of the canvas.
+    let (lod, full) = (&rows[0], &rows[3]);
+    let verts = |r: &Row| r.report["frame"]["gpuVertices"].as_u64().unwrap_or(0);
+    if rs.is_some() {
+        println!(
+            "zoomed out: GPU vertices {} simplified / {} full detail; canvas lit {:.2}% / {:.2}%",
+            verts(lod),
+            verts(full),
+            lod.coverage * 100.0,
+            full.coverage * 100.0
+        );
+        assert!(verts(lod) * 10 < verts(full) * 9, "zoomed out, sub-pixel objects are still drawn in full: {} vs {}", lod.report, full.report);
+        assert!(lod.report["regen"]["simplified"]["dots"].as_u64().unwrap_or(0) > 0, "{}", lod.report);
+        assert!(
+            full.coverage > 0.0 && lod.coverage > full.coverage * 0.9,
+            "zoomed out, the drawing thins out: {} vs {}",
+            lod.coverage,
+            full.coverage
+        );
+        assert!(lod.coverage < full.coverage * 1.25 + 0.01, "zoomed out, the drawing thickens: {} vs {}", lod.coverage, full.coverage);
     }
     // Zoomed in to a room, most of the list is off screen.
     let room_row = &rows[2].report;

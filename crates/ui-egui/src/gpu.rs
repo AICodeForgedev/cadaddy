@@ -115,6 +115,8 @@ pub struct MeshData {
     pub breaks: Vec<[usize; 3]>,
     /// Raster images, each drawn between two draw-order groups (see [`MeshImage::group`]).
     pub images: Vec<MeshImage>,
+    /// What was drawn simpler than the list ([`build_screen_mesh`]).
+    pub simplified: Simplified,
     /// The vertex buffers already created from this data (see [`MeshData::upload_now`]); the
     /// paint callback then only swaps them in.
     uploaded: Option<Uploaded>,
@@ -218,81 +220,362 @@ fn premultiplied(c: Rgb, a: u8) -> [u8; 4] {
     [k(c.0), k(c.1), k(c.2), a]
 }
 
-/// Convert a display list into vertex data relative to `origin`, colours resolved against `bg`.
+/// Screen detail of the vertex data drawn at one zoom band (see [`build_screen_mesh`]). An object
+/// (a top-level entity: a block reference with all its contents) or a primitive whose box is under
+/// this many pixels each way at the band's finest zoom is drawn as one dot, as the CPU canvas
+/// draws one under a pixel, and the dots falling in one pixel cell as one.
+pub const DOT_BELOW_PX: f64 = 1.0;
+/// An object under this many pixels each way whose lines and fills cost more than its box is
+/// drawn as the box's outline: a block reference's contents, a short text, a small circle.
+pub const BOX_BELOW_PX: f64 = 4.0;
+/// A dot's size in points (the CPU canvas's sub-pixel dot).
+const DOT_POINTS: f32 = 1.0;
+/// GPU vertices a dot costs: one quad instance (two triangles).
+const DOT_COST: usize = 6;
+
+/// What [`build_screen_mesh`] drew simpler than the list: objects and primitives drawn as dots,
+/// the dots drawn for them (one per pixel cell), and objects drawn as their box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Simplified {
+    pub dot_objects: usize,
+    pub dot_prims: usize,
+    pub dots: usize,
+    pub boxes: usize,
+}
+
+/// Convert a display list into vertex data relative to `origin`, colours resolved against `bg`,
+/// with every object and primitive drawn as it is (selection highlights, previews, masks).
 pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) -> MeshData {
+    build_screen_mesh(list, origin, bg, lwdisplay, None)
+}
+
+/// [`build_mesh`] for the screen at a zoom band whose finest zoom shows `pixel` drawing units in
+/// a pixel (`None`: everything as it is). Objects and primitives under [`DOT_BELOW_PX`] pixels
+/// draw as one dot per pixel cell, small objects under [`BOX_BELOW_PX`] as their box, where that
+/// is cheaper than their own lines and fills (see [`Simplified`]). The list itself is untouched:
+/// plots, exports, picks, snaps and counts see every object, and nothing is left undrawn (a
+/// simplified object still lights its pixels). The band is rebuilt every 2x of zoom, so the detail
+/// comes back as the view zooms in.
+pub fn build_screen_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool, pixel: Option<f64>) -> MeshData {
     let mut m = MeshData {
         lines: Vec::with_capacity(list.segment_count().saturating_mul(2 * VERTEX_SIZE)),
         tris: Vec::with_capacity(list.tris.len().saturating_mul(VERTEX_SIZE)),
-        quads: Vec::new(),
-        breaks: Vec::new(),
-        images: Vec::new(),
-        uploaded: None,
+        ..MeshData::default()
     };
-    for prim in &list.prims {
-        let col = premultiplied(prim.display_rgb(bg), prim.alpha());
-        let pts = list.points(prim);
-        match prim.kind {
-            Kind::Polyline => match wide_width(prim.lw, lwdisplay) {
-                Some(w) => {
-                    for s in pts.windows(2) {
-                        if let [a, b] = s {
-                            push_instance(&mut m.quads, rel(*a, origin), rel(*b, origin), col, w, 0.0);
-                        }
-                    }
-                }
-                None => {
-                    for s in pts.windows(2) {
-                        if let [a, b] = s {
-                            push_vertex(&mut m.lines, rel(*a, origin), col);
-                            push_vertex(&mut m.lines, rel(*b, origin), col);
-                        }
-                    }
-                }
-            },
-            Kind::Tris | Kind::InkMask => {
-                if prim.kind == Kind::InkMask {
-                    m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
-                }
-                for t in pts.as_chunks::<3>().0 {
-                    for q in t {
-                        push_vertex(&mut m.tris, rel(*q, origin), col);
-                    }
-                }
-            }
-            Kind::Mask => {
-                m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
-                for t in pts.as_chunks::<3>().0 {
-                    for q in t {
-                        push_vertex(&mut m.tris, rel(*q, origin), [bg.0, bg.1, bg.2, 255]);
-                    }
-                }
-            }
-            Kind::Point => {
-                if let Some(q) = pts.first() {
-                    let p = rel(*q, origin);
-                    push_instance(&mut m.quads, p, p, col, POINT_SIZE, 0.0);
-                }
-            }
-            // Drawn on the CPU each frame (clipped to the view).
-            Kind::Infinite { .. } => {}
-            Kind::Image(_) => {
-                let Some(img) = list.image(prim) else { continue };
-                // drawn between the groups before and after it
-                m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
-                let opacity = f32::from(img.alpha) / 255.0 * f32::from(prim.alpha()) / 255.0;
-                let mut verts = Vec::with_capacity(pts.len() * IMAGE_VERTEX_SIZE);
-                for q in pts.as_chunks::<3>().0.iter().flatten() {
-                    let (u, v) = img.uv(*q);
-                    let [x, y] = rel(*q, origin);
-                    for f in [x, y, u as f32, v as f32, opacity] {
-                        verts.extend_from_slice(&f.to_le_bytes());
-                    }
-                }
-                m.images.push(MeshImage { raster: img.raster_on(bg), verts, group: m.breaks.len() - 1 });
+    let px = pixel.filter(|p| p.is_finite() && *p > 0.0);
+    let mut cells = Cells { pixel: px.unwrap_or(1.0), origin, ..Cells::default() };
+    let Some(px) = px else {
+        (0..list.prims.len()).for_each(|k| emit_prim(&mut m, &mut cells, list, k, origin, bg, lwdisplay));
+        return m;
+    };
+    let (prims, mut i, mut scratch) = (&list.prims, 0, Vec::new());
+    while let Some(first) = prims.get(i) {
+        // One top-level object's primitives come one after another under its handle.
+        let end = prims.get(i + 1..).and_then(|rest| rest.iter().position(|p| p.handle != first.handle)).map_or(prims.len(), |n| i + 1 + n);
+        screen_object(&mut m, &mut cells, &mut scratch, list, i..end, px, bg, lwdisplay);
+        i = end;
+    }
+    cells.flush(&mut m, list, bg, lwdisplay);
+    m
+}
+
+/// Primitives that can be drawn simpler: lines and fills (masks, images and markers stay).
+fn simplifiable(kind: Kind) -> bool {
+    matches!(kind, Kind::Polyline | Kind::Tris)
+}
+
+/// GPU vertices a primitive costs as it is (as `drawstats` counts them).
+fn prim_cost(list: &DisplayList, prim: &cadaddy_render::DPrim, lwdisplay: bool) -> usize {
+    let n = list.points(prim).len();
+    match prim.kind {
+        Kind::Polyline if wide_width(prim.lw, lwdisplay).is_some() => n.saturating_sub(1) * DOT_COST,
+        Kind::Polyline => n.saturating_sub(1) * 2,
+        Kind::Tris => n,
+        _ => DOT_COST,
+    }
+}
+
+/// The dot width (points) of a primitive: its lineweight's, at least [`DOT_POINTS`].
+fn dot_width(prim: &cadaddy_render::DPrim, lwdisplay: bool) -> f32 {
+    wide_width(prim.lw, lwdisplay).unwrap_or(DOT_POINTS)
+}
+
+/// Primitives costing this many GPU vertices or fewer (a single hairline segment, a lone fill
+/// triangle) are drawn as they are even under a pixel: a dot would cost more, so only a crowd of
+/// them in one cell could save anything, and finding the crowds would cost more time than it saves.
+const CHEAP: usize = 3;
+
+/// The box of `pts` while it is under `limit` each way (`None` once it is not, or with no points).
+fn small_box(pts: &[Vec2], limit: f64) -> Option<Bounds2> {
+    let (first, rest) = pts.split_first()?;
+    let mut b = Bounds2 { min: *first, max: *first };
+    for q in rest {
+        b.min = Vec2::new(b.min.x.min(q.x), b.min.y.min(q.y));
+        b.max = Vec2::new(b.max.x.max(q.x), b.max.y.max(q.y));
+        if b.max.x - b.min.x >= limit || b.max.y - b.min.y >= limit {
+            return None;
+        }
+    }
+    (first.x.is_finite() && first.y.is_finite()).then_some(b)
+}
+
+/// Draw object `run` (primitives of one handle) at a band of `px` drawing units a pixel;
+/// `scratch` holds its primitives' boxes under [`BOX_BELOW_PX`] and costs (reused from object to
+/// object).
+#[allow(clippy::too_many_arguments)]
+fn screen_object(
+    m: &mut MeshData,
+    cells: &mut Cells,
+    scratch: &mut Vec<(Option<Bounds2>, usize)>,
+    list: &DisplayList,
+    run: std::ops::Range<usize>,
+    px: f64,
+    bg: Rgb,
+    lwdisplay: bool,
+) {
+    let origin = cells.origin;
+    let prims = list.prims.get(run.clone()).unwrap_or(&[]);
+    let under = |b: &Bounds2, limit: f64| b.width() < px * limit && b.height() < px * limit;
+    let boxed = |p: &cadaddy_render::DPrim| if simplifiable(p.kind) { small_box(list.points(p), px * BOX_BELOW_PX) } else { None };
+    // Most objects are one primitive bigger than the box limit (a wall, a door swing): drawn as
+    // they are with no more work than finding out.
+    if let [p] = prims
+        && boxed(p).is_none()
+    {
+        emit_prim(m, cells, list, run.start, origin, bg, lwdisplay);
+        return;
+    }
+    scratch.clear();
+    // The object's box while it is small, what it costs, and the primitive with the most
+    // geometry, which stands for it (its colour and lineweight). Once the object is too big to
+    // be drawn simpler, its primitives are drawn one by one as they come.
+    let (mut bb, mut cost) = (Some(Bounds2::EMPTY), 0);
+    let mut main: Option<(&cadaddy_render::DPrim, usize)> = None;
+    for (k, p) in run.clone().zip(prims) {
+        let (b, c) = (boxed(p), prim_cost(list, p, lwdisplay));
+        if bb.is_none() {
+            screen_prim(m, cells, list, k, b, c, px, bg, lwdisplay);
+            continue;
+        }
+        bb = bb.zip(b).map(|(a, b)| a.union(&b)).filter(|a| under(a, BOX_BELOW_PX));
+        cost += c;
+        if main.is_none_or(|(_, mc)| c > mc) {
+            main = Some((p, c));
+        }
+        scratch.push((b, c));
+        if bb.is_none() {
+            for (j, (b, c)) in (run.start..).zip(scratch.drain(..)) {
+                screen_prim(m, cells, list, j, b, c, px, bg, lwdisplay);
             }
         }
     }
-    m
+    let (Some(bb), Some((main, _))) = (bb, main) else { return };
+    let col = premultiplied(main.display_rgb(bg), main.alpha());
+    if under(&bb, DOT_BELOW_PX) && cost > CHEAP {
+        let width = prims.iter().map(|p| dot_width(p, lwdisplay)).fold(DOT_POINTS, f32::max);
+        cells.add(bb.center(), run, true, cost, col, width);
+        return;
+    }
+    let wide = wide_width(main.lw, lwdisplay);
+    let box_cost = 4 * if wide.is_some() { DOT_COST } else { 2 };
+    if cost > box_cost {
+        let corners = [bb.min, Vec2::new(bb.max.x, bb.min.y), bb.max, Vec2::new(bb.min.x, bb.max.y), bb.min];
+        for side in corners.windows(2) {
+            let [a, b] = side else { continue };
+            let (a, b) = (rel(*a, origin), rel(*b, origin));
+            match wide {
+                Some(w) => push_instance(&mut m.quads, a, b, col, w, 0.0),
+                None => {
+                    push_vertex(&mut m.lines, a, col);
+                    push_vertex(&mut m.lines, b, col);
+                }
+            }
+        }
+        m.simplified.boxes += 1;
+        return;
+    }
+    for (j, (b, c)) in (run.start..).zip(scratch.drain(..)) {
+        screen_prim(m, cells, list, j, b, c, px, bg, lwdisplay);
+    }
+}
+
+/// Draw primitive `k` (box `b` while under [`BOX_BELOW_PX`], cost `c`) of an object not drawn
+/// simpler as a whole: as a dot when it is under a pixel and costs more than a [`CHEAP`] one, else
+/// as it is.
+#[allow(clippy::too_many_arguments)]
+fn screen_prim(m: &mut MeshData, cells: &mut Cells, list: &DisplayList, k: usize, b: Option<Bounds2>, c: usize, px: f64, bg: Rgb, lwdisplay: bool) {
+    let small = |b: &Bounds2| c > CHEAP && b.width() < px * DOT_BELOW_PX && b.height() < px * DOT_BELOW_PX;
+    if let (Some(b), Some(prim)) = (b.filter(small), list.prims.get(k)) {
+        let col = premultiplied(prim.display_rgb(bg), prim.alpha());
+        cells.add(b.center(), k..k + 1, false, c, col, dot_width(prim, lwdisplay));
+        return;
+    }
+    let origin = cells.origin;
+    emit_prim(m, cells, list, k, origin, bg, lwdisplay);
+}
+
+/// A fast hash for pixel cells (a multiply-rotate over the two coordinates).
+#[derive(Default)]
+struct CellHasher(u64);
+
+impl std::hash::Hasher for CellHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        bytes.iter().for_each(|b| self.write_u64(u64::from(*b)));
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    fn write_i64(&mut self, v: i64) {
+        self.write_u64(v as u64);
+    }
+}
+
+/// Sub-pixel objects and primitives of the current draw-order group by pixel cell (cells of the
+/// band's finest pixel from the vertex origin), drawn as one dot a cell when the group ends.
+#[derive(Default)]
+struct Cells {
+    pixel: f64,
+    origin: Vec2,
+    index: HashMap<(i64, i64), usize, std::hash::BuildHasherDefault<CellHasher>>,
+    /// In the order first reached (the vertex data comes out the same every time).
+    cells: Vec<Cell>,
+}
+
+/// What a cell holds: how many objects and primitives, what drawing them as they are costs,
+/// and while that is no more than a dot, which primitives they are (at most [`DOT_COST`] / 2:
+/// every line or fill costs two vertices or more, and those costing none draw nothing).
+struct Cell {
+    at: (i64, i64),
+    count: usize,
+    objects: usize,
+    cost: usize,
+    parts: [(u32, u32); 3],
+    nparts: usize,
+    /// The last one's colour (drawn on top) and the widest lineweight.
+    color: [u8; 4],
+    width: f32,
+}
+
+impl Cells {
+    fn add(&mut self, p: Vec2, prims: std::ops::Range<usize>, object: bool, cost: usize, color: [u8; 4], width: f32) {
+        // Float to int casts saturate (and NaN is 0): a far point lands in an edge cell.
+        let at = (((p.x - self.origin.x) / self.pixel).floor() as i64, ((p.y - self.origin.y) / self.pixel).floor() as i64);
+        let part = (u32::try_from(prims.start).unwrap_or(u32::MAX), u32::try_from(prims.end).unwrap_or(u32::MAX));
+        let cell = match self.index.get(&at).copied() {
+            Some(i) => self.cells.get_mut(i),
+            None => {
+                self.index.insert(at, self.cells.len());
+                self.cells.push(Cell { at, count: 0, objects: 0, cost: 0, parts: [(0, 0); 3], nparts: 0, color, width });
+                self.cells.last_mut()
+            }
+        };
+        let Some(c) = cell else { return };
+        if let Some(slot) = c.parts.get_mut(c.nparts).filter(|_| cost > 0) {
+            *slot = part;
+            c.nparts += 1;
+        }
+        c.count += 1;
+        c.objects += usize::from(object);
+        c.cost = c.cost.saturating_add(cost);
+        c.color = color;
+        c.width = c.width.max(width);
+    }
+
+    /// Draw the cells: one dot each, or what they hold as it is where that costs no more.
+    fn flush(&mut self, m: &mut MeshData, list: &DisplayList, bg: Rgb, lwdisplay: bool) {
+        self.index.clear();
+        let origin = self.origin;
+        for c in std::mem::take(&mut self.cells) {
+            if c.cost <= DOT_COST {
+                for &(a, b) in c.parts.get(..c.nparts).unwrap_or(&[]) {
+                    for k in a as usize..b as usize {
+                        emit_prim(m, self, list, k, origin, bg, lwdisplay);
+                    }
+                }
+                continue;
+            }
+            let centre = |i: i64| (i as f64 + 0.5) * self.pixel;
+            let p = [centre(c.at.0) as f32, centre(c.at.1) as f32];
+            push_instance(&mut m.quads, p, p, c.color, c.width, 0.0);
+            m.simplified.dots += 1;
+            m.simplified.dot_objects += c.objects;
+            m.simplified.dot_prims += c.count - c.objects;
+        }
+    }
+}
+
+/// Append primitive `k` of `list` as it is. A wipeout mask or an image starts a draw-order group,
+/// so the dots of the group before are drawn first.
+fn emit_prim(m: &mut MeshData, cells: &mut Cells, list: &DisplayList, k: usize, origin: Vec2, bg: Rgb, lwdisplay: bool) {
+    let Some(prim) = list.prims.get(k) else { return };
+    if matches!(prim.kind, Kind::InkMask | Kind::Mask | Kind::Image(_)) && !cells.cells.is_empty() {
+        cells.flush(m, list, bg, lwdisplay);
+    }
+    let col = premultiplied(prim.display_rgb(bg), prim.alpha());
+    let pts = list.points(prim);
+    match prim.kind {
+        Kind::Polyline => match wide_width(prim.lw, lwdisplay) {
+            Some(w) => {
+                for s in pts.windows(2) {
+                    if let [a, b] = s {
+                        push_instance(&mut m.quads, rel(*a, origin), rel(*b, origin), col, w, 0.0);
+                    }
+                }
+            }
+            None => {
+                for s in pts.windows(2) {
+                    if let [a, b] = s {
+                        push_vertex(&mut m.lines, rel(*a, origin), col);
+                        push_vertex(&mut m.lines, rel(*b, origin), col);
+                    }
+                }
+            }
+        },
+        Kind::Tris | Kind::InkMask => {
+            if prim.kind == Kind::InkMask {
+                m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
+            }
+            for t in pts.as_chunks::<3>().0 {
+                for q in t {
+                    push_vertex(&mut m.tris, rel(*q, origin), col);
+                }
+            }
+        }
+        Kind::Mask => {
+            m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
+            for t in pts.as_chunks::<3>().0 {
+                for q in t {
+                    push_vertex(&mut m.tris, rel(*q, origin), [bg.0, bg.1, bg.2, 255]);
+                }
+            }
+        }
+        Kind::Point => {
+            if let Some(q) = pts.first() {
+                let p = rel(*q, origin);
+                push_instance(&mut m.quads, p, p, col, POINT_SIZE, 0.0);
+            }
+        }
+        // Drawn on the CPU each frame (clipped to the view).
+        Kind::Infinite { .. } => {}
+        Kind::Image(_) => {
+            let Some(img) = list.image(prim) else { return };
+            // drawn between the groups before and after it
+            m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
+            let opacity = f32::from(img.alpha) / 255.0 * f32::from(prim.alpha()) / 255.0;
+            let mut verts = Vec::with_capacity(pts.len() * IMAGE_VERTEX_SIZE);
+            for q in pts.as_chunks::<3>().0.iter().flatten() {
+                let (u, v) = img.uv(*q);
+                let [x, y] = rel(*q, origin);
+                for f in [x, y, u as f32, v as f32, opacity] {
+                    verts.extend_from_slice(&f.to_le_bytes());
+                }
+            }
+            m.images.push(MeshImage { raster: img.raster_on(bg), verts, group: m.breaks.len() - 1 });
+        }
+    }
 }
 
 /// Vertex data drawing primitives `prims` of `list` in `color` (the selection highlight), as on
@@ -1582,6 +1865,199 @@ mod tests {
         for _ in 0..64 {
             let rebuilt = build_highlight_mesh(&l, &[1], Vec2::ZERO, [1, 2, 3, 255], 1.5, true);
             assert_eq!(rebuilt.quads, expected.quads, "the same filled triangle must keep its segment positions, directions and dash offsets");
+        }
+    }
+
+    /// A list of `n` objects (own handles), each a polyline of `pts` points around `at(i)`
+    /// spanning `size` drawing units.
+    fn objects(n: usize, pts: usize, size: f64, at: impl Fn(usize) -> Vec2) -> DisplayList {
+        let mut l = DisplayList::default();
+        for i in 0..n {
+            let c = at(i);
+            let start = l.verts.len() as u32;
+            for k in 0..pts {
+                let t = k as f64 / pts.max(2) as f64 * std::f64::consts::TAU;
+                l.verts.push(c + Vec2::new(t.cos(), t.sin()) * (size / 2.0));
+            }
+            l.prims.push(DPrim {
+                handle: Handle(i as u64 + 1),
+                color: Rgb(200, 10, 10),
+                aci7: false,
+                lw: 0.0,
+                transparency: 0,
+                kind: Kind::Polyline,
+                start,
+                len: pts as u32,
+            });
+        }
+        l.bounds = Bounds2::from_points(l.verts.iter().copied());
+        l
+    }
+
+    /// The pixel cells (of `pixel` from `origin`) the dots of `m` light.
+    fn dot_cells(m: &MeshData, pixel: f64) -> std::collections::BTreeSet<(i64, i64)> {
+        m.quads
+            .chunks(INSTANCE_SIZE)
+            .map(|q| {
+                let f = |o: usize| f64::from(f32::from_le_bytes([q[o], q[o + 1], q[o + 2], q[o + 3]]));
+                ((f(0) / pixel).floor() as i64, (f(4) / pixel).floor() as i64)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sub_pixel_objects_draw_as_one_dot_a_pixel_cell() {
+        // 2,000 symbol pieces of a tenth of a pixel, 8 segments each, in a 20 x 20 pixel area.
+        let pixel = 0.5;
+        let at = |i: usize| Vec2::new((i * 37 % 400) as f64 * 0.025 + 0.01, (i * 91 % 400) as f64 * 0.025 + 0.01);
+        let l = objects(2_000, 9, pixel * 0.1, at);
+        let full = build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false);
+        assert_eq!(full.line_vertices(), 2_000 * 16, "the full mesh draws every segment");
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(pixel));
+        assert_eq!(m.line_vertices(), 0, "no segment of a sub-pixel object is drawn");
+        // Every pixel cell holding an object lights, once.
+        let want: std::collections::BTreeSet<_> = (0..2_000).map(at).map(|c| ((c.x / pixel).floor() as i64, (c.y / pixel).floor() as i64)).collect();
+        assert_eq!(m.quad_instances(), want.len(), "one dot a cell");
+        assert_eq!(dot_cells(&m, pixel), want, "the dots light the cells the objects are in");
+        assert_eq!(m.simplified, Simplified { dot_objects: 2_000, dot_prims: 0, dots: want.len(), boxes: 0 });
+        assert!(m.bytes() * 10 < full.bytes(), "{} vs {} bytes", m.bytes(), full.bytes());
+        // The dot is a pixel (a point), in the object's colour; the same every time.
+        let q = &m.quads[..INSTANCE_SIZE];
+        assert_eq!(&q[16..20], &[200, 10, 10, 255]);
+        assert_eq!(f32::from_le_bytes([q[20], q[21], q[22], q[23]]), DOT_POINTS);
+        assert_eq!(build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(pixel)).quads, m.quads);
+        // At full detail (no pixel) or zoomed in far enough, everything is drawn as it is.
+        assert_eq!(build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, None).lines, full.lines);
+        assert_eq!(build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(pixel / 64.0)).lines, full.lines);
+    }
+
+    #[test]
+    fn sub_pixel_lines_cheaper_than_a_dot_stay_lines() {
+        // One segment (2 vertices) under a pixel: drawn as it is, alone or in a crowd.
+        for n in [1, 6] {
+            let l = objects(n, 2, 0.1, |i| Vec2::new(3.1 + i as f64 * 0.1, 3.5));
+            let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+            assert_eq!((m.line_vertices(), m.quad_instances()), (2 * n, 0));
+            assert_eq!(m.lines, build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false).lines);
+        }
+        // Two segments (4 vertices) alone in a cell cost less than a dot: still lines. Two of
+        // them in one cell are one dot.
+        let l = objects(1, 3, 0.1, |_| Vec2::new(3.5, 3.5));
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!((m.line_vertices(), m.quad_instances()), (4, 0));
+        let l = objects(2, 3, 0.1, |i| Vec2::new(3.2 + i as f64 * 0.4, 3.5));
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!((m.line_vertices(), m.quad_instances()), (0, 1));
+        assert_eq!(m.simplified, Simplified { dot_objects: 2, dot_prims: 0, dots: 1, boxes: 0 });
+    }
+
+    #[test]
+    fn a_small_block_reference_draws_as_its_box_and_a_larger_one_as_it_is() {
+        // A symbol: one handle (a block reference and its contents), a circle and a cross.
+        let symbol = |size: f64| {
+            let mut l = objects(1, 33, size, |_| Vec2::new(10.0, 10.0));
+            for (a, b) in [(Vec2::new(-0.5, 0.0), Vec2::new(0.5, 0.0)), (Vec2::new(0.0, -0.5), Vec2::new(0.0, 0.5))] {
+                let start = l.verts.len() as u32;
+                l.verts.extend([Vec2::new(10.0, 10.0) + a * size, Vec2::new(10.0, 10.0) + b * size]);
+                l.prims.push(DPrim {
+                    handle: Handle(1),
+                    color: Rgb(1, 2, 3),
+                    aci7: false,
+                    lw: 0.0,
+                    transparency: 0,
+                    kind: Kind::Polyline,
+                    start,
+                    len: 2,
+                });
+            }
+            l
+        };
+        let l = symbol(3.0);
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!((m.line_vertices(), m.quad_instances()), (8, 0), "four sides of its box");
+        assert_eq!(m.simplified.boxes, 1);
+        // In the colour of its largest part (the circle), around its extents.
+        assert_eq!(&m.lines[8..12], &[200, 10, 10, 255]);
+        let x = |i: usize| f32::from_le_bytes([m.lines[i * 12], m.lines[i * 12 + 1], m.lines[i * 12 + 2], m.lines[i * 12 + 3]]);
+        let xs: Vec<f32> = (0..8).map(x).collect();
+        assert!(xs.iter().all(|&v| (v - 8.5).abs() < 1e-4 || (v - 11.5).abs() < 1e-4), "{xs:?}");
+        // Bigger than the box limit: its own lines.
+        let l = symbol(BOX_BELOW_PX * 2.0);
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!(m.lines, build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false).lines);
+        assert_eq!(m.simplified, Simplified::default());
+    }
+
+    #[test]
+    fn sub_pixel_pieces_of_a_large_object_draw_as_dots() {
+        // A long text line two pixels tall: its strokes are under a pixel, the line is not.
+        let mut l = objects(400, 5, 0.6, |i| Vec2::new(i as f64 * 0.25, 1.2 + (i % 2) as f64));
+        for p in &mut l.prims {
+            p.handle = Handle(7);
+        }
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!(m.simplified.dot_prims, 400);
+        assert_eq!(m.simplified.dot_objects + m.simplified.boxes, 0);
+        assert_eq!(m.line_vertices(), 0);
+        // 100 pixels long, two rows of cells.
+        assert_eq!(m.quad_instances(), 200);
+    }
+
+    #[test]
+    fn dots_stay_in_their_draw_order_group_and_masks_markers_stay() {
+        // Tiny objects, a wipeout over them, tiny objects on top, then a point marker.
+        let mut l = objects(20, 9, 0.1, |i| Vec2::new(i as f64 * 2.0, 0.0));
+        let tail = objects(20, 9, 0.1, |i| Vec2::new(i as f64 * 2.0, 5.0));
+        l.tris = vec![Vec2::new(-1.0, -1.0), Vec2::new(40.0, -1.0), Vec2::new(-1.0, 10.0)];
+        l.prims.push(DPrim { handle: Handle(100), color: Rgb(0, 0, 0), aci7: false, lw: 0.0, transparency: 0, kind: Kind::Mask, start: 0, len: 3 });
+        let base = l.verts.len() as u32;
+        l.verts.extend(tail.verts.iter().copied());
+        l.prims.extend(tail.prims.iter().map(|p| DPrim { handle: Handle(p.handle.0 + 200), start: p.start + base, ..*p }));
+        l.verts.push(Vec2::new(0.05, 0.05));
+        let at = l.verts.len() as u32 - 1;
+        l.prims.push(DPrim { handle: Handle(999), color: Rgb(9, 9, 9), aci7: false, lw: 0.0, transparency: 0, kind: Kind::Point, start: at, len: 1 });
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!(m.breaks, vec![[0, 0, 20]], "the 20 dots under the wipeout come before it");
+        assert_eq!(m.tri_vertices(), 3, "the mask is drawn");
+        assert_eq!(m.quad_instances(), 41, "20 + 20 dots and the point marker");
+    }
+
+    #[test]
+    fn a_screen_mesh_never_costs_more_than_the_full_one() {
+        // Objects of every size and detail, some sharing handles (block contents), at three bands.
+        let mut seed = 7u64;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as f64 / f64::from(1u32 << 31)
+        };
+        let mut l = DisplayList::default();
+        for i in 0..3_000u64 {
+            let (c, size, pts) = (Vec2::new(next() * 200.0, next() * 200.0), 0.02 + next() * next() * 12.0, 2 + (next() * 18.0) as usize);
+            let start = l.verts.len() as u32;
+            for k in 0..pts {
+                let t = k as f64 / pts as f64 * std::f64::consts::TAU;
+                l.verts.push(c + Vec2::new(t.cos(), t.sin()) * size);
+            }
+            let lw = if i % 5 == 0 { 0.7 } else { 0.0 };
+            l.prims.push(DPrim {
+                handle: Handle(i / 3),
+                color: Rgb(5, 6, 7),
+                aci7: false,
+                lw,
+                transparency: 0,
+                kind: Kind::Polyline,
+                start,
+                len: pts as u32,
+            });
+        }
+        let cost = |m: &MeshData| m.line_vertices() + m.tri_vertices() + 6 * m.quad_instances();
+        for lw in [false, true] {
+            let full = build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), lw);
+            for pixel in [0.05, 0.5, 2.0, 20.0] {
+                let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), lw, Some(pixel));
+                assert!(cost(&m) <= cost(&full), "pixel {pixel}: {} > {}", cost(&m), cost(&full));
+                assert!(m.bytes() <= full.bytes(), "pixel {pixel}: {} > {} bytes", m.bytes(), full.bytes());
+            }
         }
     }
 

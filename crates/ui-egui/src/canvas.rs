@@ -144,6 +144,9 @@ pub struct CanvasState {
     infinite: Vec<usize>,
     /// Milliseconds spent converting the display list to vertex data (last rebuild).
     pub mesh_ms: f64,
+    /// Draw every object as it is on the GPU canvas, also those under a pixel (normally drawn as
+    /// dots and boxes: [`crate::gpu::build_screen_mesh`]); for comparing the two.
+    pub full_detail: bool,
     pub rect: Option<Rect>,
     pub xf: Option<Xf>,
     pub hover: Option<Handle>,
@@ -222,11 +225,11 @@ impl CanvasState {
         self.list_gen = self.list_gen.wrapping_add(1);
         self.stats.built(&built.list, built.objects, built.build_ms, true, built.profile);
         if let Some(m) = built.mesh {
-            self.stats.meshed_counts(m.counts, m.ms - m.upload_ms, m.upload_ms);
+            self.stats.meshed_counts(m.counts, m.simplified, m.ms - m.upload_ms, m.upload_ms);
             if let Ok(mut slot) = self.mesh_slot.lock() {
                 *slot = Some(m.data);
             }
-            self.mesh_key = Some(list_mesh_key(&key, self.list_gen, m.origin, m.bg, m.lwdisplay));
+            self.mesh_key = Some(list_mesh_key(&key, self.list_gen, m.origin, m.bg, m.lwdisplay, m.pixel));
             self.mesh_origin = m.origin;
             self.mesh_ms = m.ms;
             self.infinite = m.infinite;
@@ -422,6 +425,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
             model_bg: view_background(app).unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())),
             paper_bg: Rgb(t.paper.r(), t.paper.g(), t.paper.b()),
             lwdisplay,
+            pixel: screen_pixel(&key, app.canvas.full_detail),
             device: app.canvas.gpu_device.clone(),
         });
         let window = opts.view;
@@ -605,7 +609,8 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
 /// Draw the active viewport's contents (see [`VpContent`]) as [`ensure_vp_content`] set out;
 /// `p` clips them to the viewport's rectangle, and a clipped viewport's outline is masked with
 /// the stencil buffer first.
-fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame, xf_paper: &Xf, bg: Rgb, lwdisplay: bool) {
+#[allow(clippy::too_many_arguments)]
+fn draw_vp_content(c: &mut VpContent, gpu: bool, full_detail: bool, p: &egui::Painter, f: &VpFrame, xf_paper: &Xf, bg: Rgb, lwdisplay: bool) {
     let xf = &f.xf;
     if !gpu {
         draw_list(p, xf, &c.list, bg, lwdisplay);
@@ -617,14 +622,17 @@ fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame,
         stencil = crate::gpu::Stencil::Inside;
     }
     let origin = crate::gpu::choose_origin(&c.list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
+    // The list is drawn up to 2x larger than it was built for before it is rebuilt (see
+    // `ensure_vp_content`): its finest pixel is half its band's.
+    let pixel = c.key.filter(|_| !full_detail).map(|k| 2f64.powi(k.4.saturating_sub(1)));
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (c.builds, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+        (c.builds, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay, pixel.map(f64::to_bits)).hash(&mut h);
         h.finish()
     };
     if c.mesh_key != Some(key) {
-        let mesh = crate::gpu::build_mesh(&c.list, origin, bg, lwdisplay);
+        let mesh = crate::gpu::build_screen_mesh(&c.list, origin, bg, lwdisplay, pixel);
         if let Ok(mut slot) = c.mesh_slot.lock() {
             *slot = Some(mesh);
         }
@@ -1099,12 +1107,20 @@ fn draw_drag_gpu(
     ));
 }
 
-/// Identifies the GPU vertex data of list `key` / `list_gen` converted at `origin` against `bg`.
-fn list_mesh_key(key: &ListKey, list_gen: u64, origin: Vec2, bg: Rgb, lwdisplay: bool) -> u64 {
+/// Identifies the GPU vertex data of list `key` / `list_gen` converted at `origin` against `bg`
+/// for screen pixels of `pixel` drawing units.
+fn list_mesh_key(key: &ListKey, list_gen: u64, origin: Vec2, bg: Rgb, lwdisplay: bool, pixel: Option<f64>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (key, list_gen, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+    (key, list_gen, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay, pixel.map(f64::to_bits)).hash(&mut h);
     h.finish()
+}
+
+/// Drawing units in a screen pixel at the finest zoom list `key` is drawn at (its hatch level of
+/// detail band: the finest view showing it), which the GPU vertex data simplifies for (see
+/// [`crate::gpu::build_screen_mesh`]); `None` with `full_detail`.
+fn screen_pixel(key: &ListKey, full_detail: bool) -> Option<f64> {
+    (!full_detail).then(|| 2f64.powi(key.2.min(key.3)))
 }
 
 /// Draw the display list through the GPU paint callback (uploading it when it changed), plus
@@ -1112,10 +1128,11 @@ fn list_mesh_key(key: &ListKey, list_gen: u64, origin: Vec2, bg: Rgb, lwdisplay:
 fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdisplay: bool) {
     let Some(list) = &c.list else { return };
     let origin = crate::gpu::choose_origin(&list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
-    let key = list_mesh_key(&c.key, c.list_gen, origin, bg, lwdisplay);
+    let pixel = screen_pixel(&c.key, c.full_detail);
+    let key = list_mesh_key(&c.key, c.list_gen, origin, bg, lwdisplay, pixel);
     if c.mesh_key != Some(key) {
         let t0 = crate::now_ms();
-        let mesh = crate::gpu::build_mesh(list, origin, bg, lwdisplay);
+        let mesh = crate::gpu::build_screen_mesh(list, origin, bg, lwdisplay, pixel);
         c.stats.meshed(&mesh, crate::now_ms() - t0, 0.0);
         if let Ok(mut slot) = c.mesh_slot.lock() {
             *slot = Some(mesh);
@@ -2044,7 +2061,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(f) = ensure_vp_content(app, &xf_paper, ui.ctx()) {
         let gpu = app.canvas.gpu.is_some();
         let clipped = painter.with_clip_rect(f.on_screen.intersect(rect));
-        draw_vp_content(&mut app.canvas.vp, gpu, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
+        draw_vp_content(&mut app.canvas.vp, gpu, app.canvas.full_detail, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
         masked = gpu && f.outline.is_some();
     }
     if sheet.is_none() && crate::shaded::paint(app, ui, &painter, &xf, bg) {

@@ -37,6 +37,9 @@ pub struct Regen {
     pub tri_vertices: usize,
     pub quad_instances: usize,
     pub mesh_bytes: usize,
+    /// What the vertex data draws simpler than the list (objects under a pixel as dots, small
+    /// ones as their box: [`crate::gpu::build_screen_mesh`]).
+    pub simplified: crate::gpu::Simplified,
     /// Creating its GPU buffers, when done on the worker (else see [`Frame::upload_ms`]).
     pub upload_ms: f64,
 }
@@ -130,17 +133,19 @@ impl DrawStats {
         (r.mesh_ms, r.upload_ms) = (ms, upload_ms);
         (r.line_vertices, r.tri_vertices, r.quad_instances) = (mesh.line_vertices(), mesh.tri_vertices(), mesh.quad_instances());
         r.mesh_bytes = mesh.bytes();
+        r.simplified = mesh.simplified;
         self.upload_pending = 2;
     }
 
     /// The vertex counts of a list already uploaded (the buffers no longer hold a CPU copy).
-    pub(super) fn meshed_counts(&mut self, counts: [usize; 4], ms: f64, upload_ms: f64) {
+    pub(super) fn meshed_counts(&mut self, counts: [usize; 4], simplified: crate::gpu::Simplified, ms: f64, upload_ms: f64) {
         if !self.on {
             return;
         }
         let r = &mut self.regen;
         (r.mesh_ms, r.upload_ms) = (ms, upload_ms);
         [r.line_vertices, r.tri_vertices, r.quad_instances, r.mesh_bytes] = counts;
+        r.simplified = simplified;
     }
 
     /// The canvas drew `list` this frame at `visible`: `sent` primitives (`None`: all of them,
@@ -203,6 +208,12 @@ impl DrawStats {
                 "uploadMs": round(r.upload_ms),
                 "lineVertices": r.line_vertices, "triVertices": r.tri_vertices, "quadInstances": r.quad_instances,
                 "meshBytes": r.mesh_bytes,
+                "simplified": {
+                    "dotObjects": r.simplified.dot_objects,
+                    "dotPrims": r.simplified.dot_prims,
+                    "dots": r.simplified.dots,
+                    "boxes": r.simplified.boxes,
+                },
             },
             "frame": {
                 "appMs": round(f.app_ms),
@@ -231,6 +242,8 @@ impl DrawStats {
         out.push(format!("mesh {:.1} ms  upload {:.1} ms", r.mesh_ms, r.upload_ms.max(f.upload_ms)));
         out.push(format!("list {} prims  {} MB", r.prims, r.list_bytes / 1_000_000));
         out.push(format!("gpu {} verts  {} MB", r.line_vertices + r.tri_vertices + 6 * r.quad_instances, r.mesh_bytes / 1_000_000));
+        let sp = &r.simplified;
+        out.push(format!("sub-pixel {} objects + {} prims as {} dots  {} as boxes", sp.dot_objects, sp.dot_prims, sp.dots, sp.boxes));
         out.push(format!("frame {:.1} ms (canvas {:.1})  every {:.1} ms", f.app_ms, f.canvas_ms, f.interval_ms));
         out.push(format!("sent {}  in view {}  cull {:.1} ms", f.prims_sent, f.prims_in_view, f.cull_ms));
         out
