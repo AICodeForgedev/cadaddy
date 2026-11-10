@@ -2014,6 +2014,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let (n, open) = fa_kinds(s.doc()?, &mut sp);
             out["fire_alarm"] = json!({"resolved": n, "unresolved": open});
         }
+        // The fire alarm wiring method the documents state (Q6503), for the router: what this
+        // reading says, else what an earlier one did.
+        let fa = super::conduitroute::fa::read_documents(&docs).or(super::conduitroute::fa::WiringDocs::stored(s.doc()?));
+        fa.store(s.doc_mut()?);
         if flag("panels") {
             let rooms = room_boxes(s.doc()?);
             let (placed, not) = place_panels(&mut sp, &panel_places(&docs), &rooms);

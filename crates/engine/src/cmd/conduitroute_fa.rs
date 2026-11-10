@@ -29,7 +29,7 @@ use cadaddy_doc::{Drawing, Handle};
 use cadaddy_geom::{Vec2, Vec3};
 use cadaddy_walk3d::tags::ElementTag;
 use cadaddy_walk3d::{BuildingSpec, Made, MepEquipment, MepRun};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{GearEl, ROUTED, from_box, manhattan, mesh_box, penetrate, r1, r2, rise_point, route_leg, run_ft, same_level, to_box};
@@ -42,6 +42,9 @@ pub(crate) const SLC_SYSTEM: &str = "FA-SLC";
 pub(crate) const TAG_KIND: &str = "fa_circuit";
 /// The id prefix of those tags and their runs (`fa:<circuit>#<leg>.<piece>`).
 pub(crate) const TAG_PREFIX: &str = "fa:";
+/// What the job read of the documents' fire alarm wiring statements (specifications,
+/// submittals, sheets), among the drawing's embedded files.
+pub(crate) const DOCS_FILE: &str = "route/fawiring.json";
 /// The property marking equipment this step placed (rebuilt from what stands each time).
 const PLACED_BY: &str = "PLACED_BY";
 /// Its value.
@@ -116,6 +119,8 @@ pub(crate) struct Placement {
     pub top_in: f64,
     /// Rooms it goes in, by their names' words, most wanted first.
     pub room_words: Vec<Vec<String>>,
+    /// Rooms it never goes in, by their names' words.
+    pub never_words: Vec<String>,
     pub source: String,
 }
 
@@ -375,12 +380,13 @@ pub(crate) fn is_system(system: &str) -> bool {
 
 // ─── The documents ───────────────────────────────────────────────────────────
 
-/// What the drawing's notes say of the fire alarm wiring method.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// What the documents say of the fire alarm wiring method.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct WiringDocs {
-    /// The raceway the wiring goes in, and below what height above the floor (feet; infinite:
-    /// all of it), and the words.
-    pub raceway: Option<(String, f64, String)>,
+    /// The raceway the wiring goes in, and below what height above the floor (feet; none: all
+    /// of it), and the words.
+    pub raceway: Option<(String, Option<f64>, String)>,
     /// A plenum cable the documents call for, and the words.
     pub plenum: Option<String>,
     /// Class A circuits, and the words.
@@ -408,7 +414,7 @@ pub(crate) fn read_docs(texts: &[(String, bool)]) -> WiringDocs {
                 let ft = if inches.starts_with('"') || inches.starts_with("IN") { first / 12.0 } else { first };
                 (ft.is_finite() && ft > 0.0 && ft < 40.0).then_some(ft)
             });
-            out.raceway = Some((w.raceway.clone(), below.unwrap_or(f64::INFINITY), quote.clone()));
+            out.raceway = Some((w.raceway.clone(), below, quote.clone()));
         }
         if out.plenum.is_none() && has_any(&s, &w.plenum_words) && (has_any(&s, &w.wiring_words) || s.contains(" FPLP ")) {
             out.plenum = Some(quote.clone());
@@ -418,6 +424,41 @@ pub(crate) fn read_docs(texts: &[(String, bool)]) -> WiringDocs {
         }
     }
     out
+}
+
+impl WiringDocs {
+    pub(crate) fn stored(d: &Drawing) -> Self {
+        d.embedded.get(DOCS_FILE).and_then(|b| serde_json::from_slice(b).ok()).unwrap_or_default()
+    }
+
+    pub(crate) fn store(&self, d: &mut Drawing) {
+        if let Ok(b) = serde_json::to_vec(self) {
+            d.embedded.insert(DOCS_FILE.into(), std::sync::Arc::new(b));
+        }
+    }
+
+    /// Each statement this reading has, else the other's.
+    pub(crate) fn or(self, other: WiringDocs) -> WiringDocs {
+        WiringDocs { raceway: self.raceway.or(other.raceway), plenum: self.plenum.or(other.plenum), class_a: self.class_a.or(other.class_a) }
+    }
+}
+
+/// The fire alarm wiring statements of the job's documents (the sheets' notes, specification
+/// sections, submittals): each paragraph's sentences, a fire alarm document's own on its subject
+/// already; each cited by its document and place.
+pub(crate) fn read_documents(docs: &[scope::Doc]) -> WiringDocs {
+    let mut texts: Vec<(String, bool)> = Vec::new();
+    for doc in docs.iter().take(5_000) {
+        let fa_doc = doc.trade.as_deref() == Some("fire alarm");
+        for p in doc.paras.iter().take(20_000) {
+            for sentence in super::lv::sentences(&p.text).into_iter().take(200) {
+                if texts.len() < 400_000 {
+                    texts.push((format!("{} {}: {sentence}", doc.name, p.at).trim().to_string(), fa_doc));
+                }
+            }
+        }
+    }
+    read_docs(&texts)
 }
 
 /// The drawing's texts, each marked when it lies on a fire alarm sheet (`FA` discipline).
@@ -458,14 +499,19 @@ fn place_in_room(
     n: usize,
     upf: f64,
     taken: &[(String, [f64; 2], [f64; 2])],
+    units: &BTreeSet<(String, String)>,
 ) -> Vec<(super::super::gearbuild::Placed, String)> {
     let [w, dp, _] = rule.size_in;
     let (w, dp) = (w.max(1.0) / 12.0 * upf, dp.max(1.0) / 12.0 * upf);
-    let on: Vec<&super::super::gearbuild::RoomBox> =
-        rooms.iter().filter(|r| same_level(&r.level, level) && r.outline.len() >= 3 && !r.building).collect();
+    // Never a dwelling or guest unit (the spec's unit instances), a stair, a shaft, a toilet room.
+    let unit = |r: &super::super::gearbuild::RoomBox| units.contains(&(r.level.to_ascii_lowercase(), r.number.trim().to_ascii_uppercase()));
+    let on: Vec<&super::super::gearbuild::RoomBox> = rooms
+        .iter()
+        .filter(|r| same_level(&r.level, level) && r.outline.len() >= 3 && !r.building && !unit(r) && !has_any(&spaced(&r.name), &rule.never_words))
+        .collect();
     let mut groups: Vec<Vec<&super::super::gearbuild::RoomBox>> =
         rule.room_words.iter().map(|ws| on.iter().copied().filter(|r| has_any(&spaced(&r.name), ws)).collect()).collect();
-    // No service room: the room nearest the riser.
+    // No room the rules name: the room nearest the riser (never a unit's).
     groups.push(on.clone());
     let mut out = Vec::new();
     let mut seen: BTreeSet<(String, String, i64, i64)> = BTreeSet::new();
@@ -550,6 +596,30 @@ pub(crate) fn place_equipment(d: &mut Drawing, sp: &mut BuildingSpec) -> Value {
         d.model.remove(*h);
     }
     let rooms = scope::room_boxes(d);
+    // The dwelling and guest units by storey and number (a unit instance naming no storey: its
+    // number on every storey).
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
+    let instances: Vec<(String, String)> = sp
+        .unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_DEVICES)
+        .map(|u| (text(u, "level").to_ascii_lowercase(), text(u, "number").to_ascii_uppercase()))
+        .filter(|(_, n)| !n.is_empty())
+        .collect();
+    let any_level: BTreeSet<&str> = instances.iter().filter(|(l, _)| l.is_empty()).map(|(_, n)| n.as_str()).collect();
+    let units: BTreeSet<(String, String)> = instances
+        .iter()
+        .filter(|(l, _)| !l.is_empty())
+        .cloned()
+        .chain(
+            rooms
+                .iter()
+                .filter(|r| any_level.contains(r.number.trim().to_ascii_uppercase().as_str()))
+                .map(|r| (r.level.to_ascii_lowercase(), r.number.trim().to_ascii_uppercase())),
+        )
+        .collect();
     let moves = super::level_moves(d, sp);
     let move_of = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
     let carry = |p: Vec2, from: &str, to: &str| p + move_of(from) - move_of(to);
@@ -604,7 +674,7 @@ pub(crate) fn place_equipment(d: &mut Drawing, sp: &mut BuildingSpec) -> Value {
         && let Some(lowest) = levels.first()
     {
         let near = centre(&devs.iter().filter(|x| same_level(&x.level, lowest)).map(|x| x.at).collect::<Vec<_>>());
-        match place_in_room(&rooms, lowest, near, &fr.control_panel, 1, upf, &taken).into_iter().next() {
+        match place_in_room(&rooms, lowest, near, &fr.control_panel, 1, upf, &taken, &units).into_iter().next() {
             Some((p, room)) => {
                 let tag = new_tag(&fr.control_panel.tag, true, &mut tags);
                 let why = format!(
@@ -639,7 +709,7 @@ pub(crate) fn place_equipment(d: &mut Drawing, sp: &mut BuildingSpec) -> Value {
             .unwrap_or_else(|| centre(&devs.iter().filter(|x| same_level(&x.level, level)).map(|x| x.at).collect::<Vec<_>>()));
         let mut got = 0usize;
         if add > 0 {
-            for (p, room) in place_in_room(&rooms, level, near, &fr.power_supply, add, upf, &taken) {
+            for (p, room) in place_in_room(&rooms, level, near, &fr.power_supply, add, upf, &taken, &units) {
                 if placed.len() >= MAX_PLACED {
                     break;
                 }
@@ -774,7 +844,9 @@ pub(super) fn route(cx: &Ctx) -> Out {
         out.report = json!({"devices": 0, "note": "no fire alarm device in the model"});
         return out;
     }
-    let docs = read_docs(&drawing_texts(d, sp));
+    // The job's documents first (specifications, submittals: stored as read), then the drawing's
+    // own notes.
+    let docs = WiringDocs::stored(d).or(read_docs(&drawing_texts(d, sp)));
     let elev = |l: &str| sp.level(l).map_or(0.0, |x| x.elevation_ft);
     // -- The nodes: the devices where the router has them, the fire alarm gear. --
     let dev_at: HashMap<Handle, &super::Dev> = b.devs.iter().map(|x| (x.handle, x)).collect();
@@ -1082,8 +1154,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
     }
     // -- The signaling line circuits: the documents' loops by address, else storey by storey up
     // the riser, nearest neighbour, a loop closed at its device capacity. --
-    let initiating: Vec<Node> =
-        fa_devs.iter().filter(|x| x.role == Role::Initiating).map(node_of_dev).chain(modules.iter().cloned()).collect();
+    let initiating: Vec<Node> = fa_devs.iter().filter(|x| x.role == Role::Initiating).map(node_of_dev).chain(modules.iter().cloned()).collect();
     let info: HashMap<Handle, &FaDevice> = fa_devs.iter().map(|x| (x.handle, x)).collect();
     let mut loops: BTreeMap<String, Vec<Node>> = BTreeMap::new();
     let mut rest: Vec<Node> = Vec::new();
@@ -1244,7 +1315,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
         }
         if let Some((rw, below, words)) = &raceway {
             t.set("raceway", rw.clone(), "note");
-            t.set("raceway_below_ft", if below.is_finite() { format!("{below}") } else { "all".to_string() }, "note");
+            t.set("raceway_below_ft", below.map_or_else(|| "all".to_string(), |b| format!("{b}")), "note");
             t.set("raceway_source", format!("{words} ({})", fr.documents.source), "note");
         }
         out.tags.push(t);
@@ -1256,6 +1327,14 @@ pub(super) fn route(cx: &Ctx) -> Out {
                 "cable": format!("{} {}", c.cable.ty, c.cable.size), "class": if c.class_a { "A" } else { "B" }, "order": c.order,
                 "upsized": c.upsized, "blocked": c.blocked,
             }));
+        }
+    }
+    // A rated wall's penetration is the cable's (no raceway of its own): its firestop for cable.
+    for p in penetrations.iter_mut().filter(|p| p.get("wall").is_some()) {
+        let rating = p["rating"].as_str().unwrap_or("rated").to_string();
+        p["firestop"] = json!(format!("{} for fire alarm cable through a {rating} wall", rl.firestop.item));
+        if let Some(o) = p.as_object_mut() {
+            o.remove("raceway_in");
         }
     }
     let wired: BTreeSet<Handle> = circuits.iter().flat_map(|c| c.members.iter().copied()).collect();
@@ -1293,7 +1372,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
         "penetrations": penetrations.len(),
         "penetration_list": penetrations.into_iter().take(200).collect::<Vec<_>>(),
         "documents": {
-            "raceway": raceway.as_ref().map(|(m, below, w)| json!({"method": m, "below_ft": if below.is_finite() { json!(below) } else { json!("all") }, "words": w})),
+            "raceway": raceway.as_ref().map(|(m, below, w)| json!({"method": m, "below_ft": below.map_or_else(|| json!("all"), |b| json!(b)), "words": w})),
             "plenum": docs.plenum, "class_a": docs.class_a,
         },
         "circuit_list": rows,

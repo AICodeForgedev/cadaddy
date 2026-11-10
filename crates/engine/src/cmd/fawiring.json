@@ -40,8 +40,9 @@
     "title": "NAC POWER SUPPLY",
     "size_in": [16.0, 4.0, 18.0],
     "top_in": 72.0,
-    "room_words": [["ELECTRICAL", "ELEC", "ELEC."], ["FIRE COMMAND", "FIRE", "RISER"], ["IDF", "MDF", "TELECOM", "DATA", "COMM"], ["JANITOR", "JAN", "JANITOR'S", "CUSTODIAN"], ["MECHANICAL", "MECH", "MECH."], ["STORAGE", "STOR", "STOR.", "CLOSET", "CLO."]],
-    "source": "trade practice: a NAC power supply (booster) serves the appliances of its storey where the control panel's own NACs don't reach them or can't carry their load, one per storey and more as the load needs (4 NAC outputs each), set in a service room (electrical, fire riser, telecom, janitor, mechanical, storage) nearest the riser over the control panel, its top at 72 in; it is started by the control panel (a NAC or control output to its input), needs a dedicated 120 V branch circuit (NFPA 72 10.6.5), and the shop drawings place it"
+    "room_words": [["ELECTRICAL", "ELEC", "ELEC."], ["FIRE COMMAND", "FIRE", "RISER"], ["IDF", "MDF", "TELECOM", "DATA", "COMM"], ["JANITOR", "JAN", "JANITOR'S", "CUSTODIAN"], ["MECHANICAL", "MECH", "MECH."], ["STORAGE", "STOR", "STOR.", "CLOSET", "CLO."], ["BOH", "BACK OF HOUSE", "HOUSEKEEPING", "LINEN", "SERVICE", "UTILITY", "MAINTENANCE", "LAUNDRY", "VENDING"], ["CORRIDOR", "CORR", "CORR.", "HALL", "HALLWAY"]],
+    "never_words": ["STAIR", "STAIRS", "STAIRWELL", "ELEV", "ELEV.", "ELEVATOR", "SHAFT", "CHASE", "RESTROOM", "TOILET", "BATH", "SHOWER"],
+    "source": "trade practice: a NAC power supply (booster) serves the appliances of its storey where the control panel's own NACs don't reach them or can't carry their load, one per storey and more as the load needs (4 NAC outputs each), set in a service room (electrical, fire riser, telecom, janitor, mechanical, storage, back of house) nearest the riser over the control panel, else on a corridor wall, never in a dwelling or guest unit, a stair, an elevator or a toilet room, its top at 72 in; it is started by the control panel (a NAC or control output to its input), needs a dedicated 120 V branch circuit (NFPA 72 10.6.5), and the shop drawings place it"
   },
   "control_panel": {
     "nac_circuits": 2,
@@ -50,7 +51,8 @@
     "title": "CONTROL PANEL",
     "size_in": [24.0, 6.0, 30.0],
     "top_in": 72.0,
-    "room_words": [["FIRE COMMAND", "FIRE CONTROL", "FIRE ALARM"], ["ELECTRICAL", "ELEC", "ELEC."], ["MECHANICAL", "MECH", "MECH."], ["IDF", "MDF", "TELECOM"], ["STORAGE", "STOR", "STOR."]],
+    "room_words": [["FIRE COMMAND", "FIRE CONTROL", "FIRE ALARM"], ["ELECTRICAL", "ELEC", "ELEC."], ["MECHANICAL", "MECH", "MECH."], ["IDF", "MDF", "TELECOM"], ["STORAGE", "STOR", "STOR."], ["BOH", "BACK OF HOUSE", "OFFICE", "SERVICE", "UTILITY", "MAINTENANCE"]],
+    "never_words": ["STAIR", "STAIRS", "STAIRWELL", "ELEV", "ELEV.", "ELEVATOR", "SHAFT", "CHASE", "RESTROOM", "TOILET", "BATH", "SHOWER"],
     "source": "trade practice: a fire alarm system has one control panel (NFPA 72 10.4); with no document placing it, it goes in the fire command, electrical or mechanical room of the lowest storey with fire alarm devices, its top at 72 in so its display reads; its own NAC outputs (2) serve its storey when they can carry its appliances"
   },
   "documents": {

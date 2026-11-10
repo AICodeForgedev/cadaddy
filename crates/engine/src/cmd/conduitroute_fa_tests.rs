@@ -354,11 +354,11 @@ fn with_no_panel_in_the_documents_one_is_placed_by_rule_and_wired() {
 fn the_wiring_statements_are_read_by_their_words() {
     let read = |t: &str, fa_sheet: bool| read_docs(&[(t.to_string(), fa_sheet)]);
     let r = read("ALL WIRING BELOW 7' SHALL BE INSTALLED IN CONDUIT PER NFPA 70 ARTICLE 760.", false);
-    assert_eq!(r.raceway.as_ref().map(|x| (x.0.as_str(), x.1)), Some(("EMT", 7.0)));
+    assert_eq!(r.raceway.as_ref().map(|x| (x.0.as_str(), x.1)), Some(("EMT", Some(7.0))));
     let r = read("FIRE ALARM WIRING BELOW 84\" AFF SHALL BE IN EMT.", false);
-    assert_eq!(r.raceway.as_ref().map(|x| x.1), Some(7.0));
+    assert_eq!(r.raceway.as_ref().map(|x| x.1), Some(Some(7.0)));
     let r = read("ALL FIRE ALARM WIRING SHALL BE INSTALLED IN CONDUIT.", false);
-    assert_eq!(r.raceway.as_ref().map(|x| x.1), Some(f64::INFINITY));
+    assert_eq!(r.raceway.as_ref().map(|x| x.1), Some(None));
     // Not the fire alarm's, or saying it needs none.
     assert_eq!(read("PROVIDE 3/4\" CONDUIT FOR ALL RECEPTACLE WIRING.", false), WiringDocs::default());
     assert!(read("FIRE ALARM CABLE MAY BE INSTALLED WITHOUT CONDUIT ABOVE ACCESSIBLE CEILINGS.", false).raceway.is_none());
@@ -400,4 +400,57 @@ fn hostile_fire_alarm_wiring_never_panics() {
     let mut s = building(60.0, &[], tags, Vec::new(), &[]);
     let _ = report(&mut s);
     s.execute("conduit.reroute", &json!({})).expect("reroute");
+}
+
+#[test]
+fn a_fire_alarm_submittals_notes_are_read_as_its_wiring_method_and_kept_for_the_router() {
+    let doc = |name: &str, trade: Option<&str>, text: &str| scope::Doc {
+        name: name.into(),
+        tier: cadaddy_doc::projrules::SourceTier::Submittal,
+        trade: trade.map(str::to_string),
+        paras: vec![scope::Para { at: "note 7".into(), heading: "GENERAL NOTES".into(), text: text.into(), cells: Vec::new() }],
+    };
+    let docs = [
+        doc(
+            "Sample Submittal 2831",
+            Some("fire alarm"),
+            "Ceiling height is 10' or less. All wiring below 7' shall be installed in conduit. All circuits shall be Class A.",
+        ),
+        doc("Sample Spec 2605", Some("electrical"), "All receptacle wiring shall be in EMT conduit."),
+    ];
+    let r = read_documents(&docs);
+    let (m, below, words) = r.raceway.clone().expect("raceway");
+    assert_eq!((m.as_str(), below), ("EMT", Some(7.0)));
+    assert!(words.starts_with("Sample Submittal 2831 note 7:"), "{words}");
+    assert!(r.class_a.is_some_and(|w| w.contains("Class A")));
+    // Kept with the drawing; a later reading saying nothing keeps it.
+    let mut d = Drawing::new_imperial();
+    read_documents(&docs).store(&mut d);
+    let kept = read_documents(&[]).or(WiringDocs::stored(&d));
+    assert_eq!(kept.raceway.map(|x| x.1), Some(Some(7.0)));
+}
+
+#[test]
+fn a_power_supply_goes_in_a_service_room_else_on_the_corridor_never_in_a_unit_or_stair() {
+    use super::super::super::gearbuild::RoomBox;
+    let room = |number: &str, name: &str, x: f64| RoomBox {
+        level: "L2".into(),
+        number: number.into(),
+        name: name.into(),
+        outline: vec![Vec2::new(x, 0.0), Vec2::new(x + 120.0, 0.0), Vec2::new(x + 120.0, 120.0), Vec2::new(x, 120.0)],
+        offset: Vec2::ZERO,
+        doors: Vec::new(),
+        building: false,
+    };
+    let fr = rules();
+    let units: BTreeSet<(String, String)> = [("l2".to_string(), "201".to_string())].into();
+    let pick =
+        |rooms: &[RoomBox]| place_in_room(rooms, "L2", Vec2::new(0.0, 0.0), &fr.power_supply, 1, 12.0, &[], &units).first().map(|(_, n)| n.clone());
+    // The guest unit and the stair nearest the riser are passed over for the back-of-house room.
+    let rooms = [room("201", "SUITE", 0.0), room("S1", "STAIR 1", 150.0), room("C2", "CORRIDOR", 300.0), room("B2", "BOH", 600.0)];
+    assert_eq!(pick(&rooms).as_deref(), Some("B2 (BOH)"));
+    // No service room: the corridor wall.
+    assert_eq!(pick(&rooms[..3]).as_deref(), Some("C2 (CORRIDOR)"));
+    // Only a unit and a stair: not placed.
+    assert_eq!(pick(&rooms[..2]), None);
 }
