@@ -16853,22 +16853,52 @@ fn building_outlines(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec
 /// each type once, and whether their notes forbid substitutions. `electrical` says which pages
 /// are electrical sheets (where a plain `FIXTURE SCHEDULE` is the luminaire schedule);
 /// `plan_tags` the tags the plans print, that check which column holds the marks.
+/// The designer's schedule is the source of types when the set has one: a lighting calculation's
+/// table of the luminaires it calculated with ([`super::lightsched::is_calculation_table`]; its
+/// labels are the calculation's names) adds none. A set with only a calculation's table takes its
+/// rows, their source saying so.
 fn fixture_schedule(
     pages: &[(String, cadaddy_doc::Drawing)],
     electrical: &dyn Fn(&str) -> bool,
     plan_tags: &BTreeSet<String>,
 ) -> (Vec<cadaddy_walk3d::FixtureType>, bool) {
-    let mut types: Vec<cadaddy_walk3d::FixtureType> = Vec::new();
-    let mut no_subs = false;
+    use super::lightsched as ls;
+    // Each table's rows and whether its notes forbid substitutions: the designer's, the calculations'.
+    let mut designed: Vec<(Vec<cadaddy_walk3d::FixtureType>, bool)> = Vec::new();
+    let mut calculated: Vec<(Vec<cadaddy_walk3d::FixtureType>, bool)> = Vec::new();
     for (number, d) in pages {
         let texts = cadaddy_mepfix::sheet_facts::texts(d);
-        for tb in luminaire_schedules(&texts, || super::gridtable::segments(d), number, electrical(number)) {
-            let (rows, ns) = super::lightsched::fixture_types(&tb, plan_tags);
-            no_subs |= ns;
-            for r in rows {
-                if !types.iter().any(|t| t.tag == r.tag) {
-                    types.push(r);
+        let tables = luminaire_schedules(&texts, || super::gridtable::segments(d), number, electrical(number));
+        let calc_sheet = !tables.is_empty() && ls::prints_calculation(&texts);
+        for tb in tables {
+            let (mut rows, ns) = ls::fixture_types(&tb, plan_tags);
+            if ls::is_calculation_table(&tb, calc_sheet) {
+                for r in &mut rows {
+                    r.source = format!("{} {} (lighting calculation table)", tb.sheet, tb.title.trim());
                 }
+                calculated.push((rows, ns));
+            } else {
+                designed.push((rows, ns));
+            }
+        }
+    }
+    let has_schedule = designed.iter().any(|(rows, _)| !rows.is_empty());
+    let left_out: Vec<String> =
+        if has_schedule { calculated.iter().flat_map(|(rows, _)| rows.iter().map(|r| r.tag.clone())).collect() } else { Vec::new() };
+    if !left_out.is_empty() {
+        progress_line(&format!(
+            "  light fixture schedule: {} mark(s) of lighting calculation tables are no types, the set's schedule lists its types: {}",
+            left_out.len(),
+            left_out.join(", ")
+        ));
+    }
+    let mut types: Vec<cadaddy_walk3d::FixtureType> = Vec::new();
+    let mut no_subs = false;
+    for (rows, ns) in if has_schedule { designed } else { calculated } {
+        no_subs |= ns;
+        for r in rows {
+            if !types.iter().any(|t| t.tag == r.tag) {
+                types.push(r);
             }
         }
     }
@@ -30717,6 +30747,84 @@ mod tests {
         assert_eq!((b.description.as_str(), b.source.as_str()), ("LED DOWNLIGHT", "A-1 LIGHT FIXTURE SCHEDULE"));
         assert!(b.notes.starts_with("WET LOCATION; 1. FIXTURES AE AND BE"), "{b:?}");
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
+    }
+
+    /// A page of a luminaire table drawn with its grid ([`super::super::lightsched::drawn_schedule`])
+    /// under `title`, and `more` texts printed away from it.
+    fn schedule_page(title: &str, cols: &[(&str, &str, &[&str])], more: &[(&str, f64, f64)]) -> cadaddy_doc::Drawing {
+        let (mut texts, segs) = super::super::lightsched::drawn_schedule(0.2, cols);
+        if let Some(t) = texts.first_mut() {
+            t.value = title.into();
+        }
+        let mut page = cadaddy_doc::Drawing::new_imperial();
+        for t in &texts {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(&t.value, t.at.x, t.at.y, t.height))).ok();
+        }
+        for (v, x, y) in more {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, *x, *y, 0.12))).ok();
+        }
+        for (a, b) in &segs {
+            let l = cadaddy_doc::Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) };
+            page.add(&Space::Model, Common::default(), EntityKind::Line(l)).ok();
+        }
+        page
+    }
+
+    /// fix-fixture-schedule-wrong-table: a set's LIGHT FIXTURE SCHEDULE (MARK | MANUFACTURER |
+    /// MODEL | VOLTAGE | REF. NOTE | MOUNTING | WATTS | LAMP TYPE | REMARKS, marks with a trailing
+    /// letter among them) is the source of its types. A lighting calculation's own luminaire table
+    /// (on a photometric plan beside its statistics, or headed with a light loss factor) adds none,
+    /// even when its page comes first and one of its labels is a scheduled type; a calculation
+    /// table on its own still types the set, its source saying what it is; and a designer's LIGHT
+    /// FIXTURE SCHEDULE printed on a calculation's sheet is still the schedule.
+    #[test]
+    fn a_lighting_calculations_luminaire_table_adds_no_types_to_the_sets_schedule() {
+        let schedule: [(&str, &str, &[&str]); 9] = [
+            ("", "MARK", &["A", "AE", "B", "F2", "F2E"]),
+            ("", "MANUFACTURER", &["MAKER ONE", "MAKER ONE", "MAKER TWO", "MAKER TWO", "MAKER TWO"]),
+            ("", "MODEL", &["DL6-LED", "DL6-LED-EM", "WS-20", "PL-40", "PL-40-EM"]),
+            ("", "VOLTAGE", &["120", "120", "MVOLT", "277", "277"]),
+            ("", "REF. NOTE", &["1", "1,2", "", "3", "2,3"]),
+            ("", "MOUNTING", &["RECESSED", "RECESSED", "WALL", "POLE", "POLE"]),
+            ("", "WATTS", &["12", "12", "20", "40", "40"]),
+            ("", "LAMP TYPE", &["LED", "LED", "LED", "LED", "LED"]),
+            ("", "REMARKS", &["", "BATTERY PACK", "", "", "BATTERY PACK"]),
+        ];
+        // The calculation's table on its photometric plan, its headings an ordinary schedule's:
+        // its labels (P1, WP) are the calculation's names, and its `A` is the program's row, not
+        // the schedule's.
+        let calc: [(&str, &str, &[&str]); 4] = [
+            ("", "LABEL", &["P1", "WP", "A"]),
+            ("", "QTY", &["3", "6", "4"]),
+            ("", "DESCRIPTION", &["POLE HEAD TYPE 4", "WALL PACK", "DOWNLIGHT"]),
+            ("", "WATTS", &["40", "20", "12"]),
+        ];
+        let headed_llf: [(&str, &str, &[&str]); 4] = [
+            ("", "SYMBOL", &["Q9", "Q9E"]),
+            ("", "QTY", &["2", "1"]),
+            ("", "LLF", &["0.900", "0.900"]),
+            ("", "DESCRIPTION", &["CANOPY LIGHT", "CANOPY LIGHT EM"]),
+        ];
+        let stats = [("CALCULATION SUMMARY", 30.0, 10.0), ("Avg / Min", 30.0, 9.5), ("Max/Min", 32.0, 9.5)];
+        let photometric = || ("E-3".to_string(), schedule_page("LUMINAIRE SCHEDULE", &calc, &stats));
+        let llf = || ("E-4".to_string(), schedule_page("LUMINAIRE SCHEDULE", &headed_llf, &[]));
+        let designed = || ("E-6".to_string(), schedule_page("LIGHT FIXTURE SCHEDULE", &schedule, &[]));
+        let tags = |types: &[cadaddy_walk3d::FixtureType]| types.iter().map(|t| t.tag.clone()).collect::<Vec<_>>();
+        let none = BTreeSet::new();
+        let (types, _) = fixture_schedule(&[photometric(), llf(), designed()], &|_| true, &none);
+        assert_eq!(tags(&types), ["A", "AE", "B", "F2", "F2E"], "{types:#?}");
+        let a = types.iter().find(|t| t.tag == "A").unwrap_or_else(|| panic!("{types:#?}"));
+        assert_eq!((a.manufacturer.as_str(), a.source.as_str()), ("MAKER ONE", "E-6 LIGHT FIXTURE SCHEDULE"));
+        let f2e = types.iter().find(|t| t.tag == "F2E").unwrap_or_else(|| panic!("{types:#?}"));
+        assert_eq!((f2e.model.as_str(), f2e.notes.as_str()), ("PL-40-EM", "BATTERY PACK"));
+        // A calculation's tables alone: their rows, said to be a calculation's.
+        let (types, _) = fixture_schedule(&[photometric(), llf()], &|_| true, &none);
+        assert_eq!(tags(&types), ["P1", "WP", "A", "Q9", "Q9E"], "{types:#?}");
+        assert!(types.iter().all(|t| t.source.ends_with("LUMINAIRE SCHEDULE (lighting calculation table)")), "{types:#?}");
+        // The designer's schedule printed on the calculation's sheet is still the schedule.
+        let on_calc = ("E-3".to_string(), schedule_page("LIGHT FIXTURE SCHEDULE", &schedule, &stats));
+        let (types, _) = fixture_schedule(&[on_calc, llf()], &|_| true, &none);
+        assert_eq!(tags(&types), ["A", "AE", "B", "F2", "F2E"], "{types:#?}");
     }
 
     /// fix-lum-schedule-type-column-wrong: the set's luminaire schedule is only on a sheet the
