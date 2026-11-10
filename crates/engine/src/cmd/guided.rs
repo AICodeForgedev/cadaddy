@@ -16009,16 +16009,25 @@ fn gear_step(
     result: &mut Value,
 ) -> crate::Result<()> {
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
-    if sp.mep.panel_schedules.is_empty() {
+    // No panel schedule and no one-line: no gear to build (a one-line alone still has its service).
+    if sp.mep.panel_schedules.is_empty() && !pages.iter().any(|(_, d)| super::onelinegear::is_diagram(&cadaddy_mepfix::sheet_facts::texts(d))) {
         return Ok(());
     }
     let tags: Vec<String> = sp.mep.panel_schedules.iter().map(|p| p.panel.clone()).collect();
     let mut types: Vec<super::gearbuild::FeederType> = Vec::new();
+    // Rows the feeder schedule prints unsized (`XX`): a feeder tagged so is a review question.
+    let mut unsized_rows: Vec<String> = Vec::new();
     // A symbol's tag (a feeder tag the PDF import kept as its attribute) is read as printed.
     for (number, d) in pages {
-        for f in super::gearbuild::feeder_types(&cadaddy_mepfix::sheet_facts::texts_with_tags(d), number) {
+        let (rows, no_size) = super::gearbuild::feeder_rows(&cadaddy_mepfix::sheet_facts::texts_with_tags(d), number);
+        for f in rows {
             if !types.iter().any(|t| t.tag.eq_ignore_ascii_case(&f.tag)) {
                 types.push(f);
+            }
+        }
+        for u in no_size {
+            if !unsized_rows.iter().any(|x| x.eq_ignore_ascii_case(&u)) {
+                unsized_rows.push(u);
             }
         }
     }
@@ -16112,7 +16121,28 @@ fn gear_step(
                 continue;
             }
         }
-        gear_question(job, tag, looked.get(tag).cloned().unwrap_or_default(), &read_files.iter().map(|(_, n, _)| n.clone()).collect::<Vec<_>>());
+        // A gear submittal the job has may still hold it: asked (the inferred box stands meanwhile).
+        if !read_files.is_empty() {
+            gear_question(job, tag, looked.get(tag).cloned().unwrap_or_default(), &read_files.iter().map(|(_, n, _)| n.clone()).collect::<Vec<_>>());
+        }
+    }
+    // A panel no submittal sizes is still built (Q6359): its schedule's rating and circuits give
+    // the typical enclosure (rules data, inferred); a submittal replaces it.
+    let mut inferred_boxes: Vec<String> = Vec::new();
+    for tag in &wanted {
+        if gear.get(tag).is_some_and(|g| g.size_in.iter().all(|v| *v > 0.0)) {
+            continue;
+        }
+        let Some(b) = sp.mep.panel_schedules.iter().find(|p| p.panel.eq_ignore_ascii_case(tag)).and_then(super::onelinegear::panel_box) else {
+            continue;
+        };
+        let g = gear.entry(tag.clone()).or_default();
+        g.size_in = b.size_in;
+        if g.kind.is_empty() {
+            g.kind = b.kind;
+        }
+        g.source = b.source;
+        inferred_boxes.push(tag.clone());
     }
     let rooms: Vec<super::gearbuild::RoomBox> = {
         let d = s.doc()?;
@@ -16147,9 +16177,12 @@ fn gear_step(
                 number: r.number.unwrap_or_default(),
                 name: r.name,
                 outline: r.outline,
+                building: false,
             })
-            .collect()
+            .collect::<Vec<_>>()
     };
+    let mut rooms = rooms;
+    rooms.extend(building_outlines(s.doc()?, &sp));
     // The schedules' breakers left to the one-line (`OL`): the one-line's breaker and feeder.
     let mut feeds: Vec<super::equipsub::OnelineLoad> = Vec::new();
     for (_, d) in pages {
@@ -16211,12 +16244,36 @@ fn gear_step(
     sp.mep.feeders.retain(|f| !f.source.contains("one-line tag"));
     let feeders = planned.feeders.len();
     sp.mep.feeders.extend(planned.feeders);
+    // The one-line's own gear (Q6359): meter sockets, disconnects, gutters, transformers,
+    // controls and the grounding electrodes, beside the gear they feed, and the feeders between
+    // them by their tags. A rerun replaces what an earlier one laid out.
+    let old_oneline: BTreeSet<String> =
+        sp.mep.equipment.iter().filter(|e| super::onelinegear::is_oneline(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
+    sp.mep.equipment.retain(|e| !super::onelinegear::is_oneline(e));
+    if let Some(g) = sp.mep.grounding.as_mut() {
+        g.electrodes.retain(|e| !super::onelinegear::is_oneline_electrode(e));
+    }
+    let oneline = super::onelinegear::build_into(&mut sp, pages, &types, &unsized_rows);
+    let oneline_tags: BTreeSet<String> = oneline.gear.iter().map(|t| t.to_ascii_uppercase()).collect();
+    new_tags.extend(oneline_tags.iter().cloned());
+    let feeders = feeders + oneline.feeders;
     // The utility's transformer the one-line names, on its pad outside the building, and its
     // service feeder to the service gear (Q6307); a rerun replaces the earlier one.
     let old_site: BTreeSet<String> = sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
     sp.mep.equipment.retain(|e| !super::utilityxfmr::is_site(e));
     sp.concrete.pads.retain(|p| !old_site.contains(&p.equipment.trim().to_ascii_uppercase()));
     let service = utility_service(&mut sp, pages, &types);
+    // The utility's service conductors land on the first piece of the service the one-line
+    // draws (a CT cabinet, a meter ahead of the service gear), not past it to the gear (Q6359):
+    // from there the one-line's own pieces carry the line on.
+    if let Some(f) = service.as_ref().ok().and_then(|p| p.feeder.as_ref())
+        && let Some((piece, _)) = oneline.entries.iter().find(|(_, t)| t.eq_ignore_ascii_case(&f.tag))
+        && let Some(x) = sp.mep.feeders.iter_mut().rev().find(|x| x.tag == f.tag && x.from == f.from && x.to == f.to)
+    {
+        x.source = format!("{}; lands on {piece}, the first piece of the service the one-line draws (it carries the line on to {})", x.source, x.to);
+        x.to = piece.clone();
+        x.to_point = "line".into();
+    }
     let site_tags: BTreeSet<String> =
         sp.mep.equipment.iter().filter(|e| super::utilityxfmr::is_site(e)).map(|e| e.tag.to_ascii_uppercase()).collect();
     new_tags.extend(site_tags.iter().cloned());
@@ -16232,7 +16289,7 @@ fn gear_step(
         .filter(|e| {
             super::bimlook::made_tag(e, "tag").is_some_and(|t| {
                 let t = t.trim().to_ascii_uppercase();
-                resized.contains(&t) || slid.contains(&t) || old_site.contains(&t) || site_tags.contains(&t)
+                resized.contains(&t) || slid.contains(&t) || old_site.contains(&t) || site_tags.contains(&t) || old_oneline.contains(&t)
             })
         })
         .map(|e| e.handle)
@@ -16296,6 +16353,61 @@ fn gear_step(
     );
     report_progress(s, json!({"step": "electrical gear"}), &line);
     s.echo(line);
+    if !inferred_boxes.is_empty() || !oneline.sheets.is_empty() {
+        let kinds: Vec<String> = oneline.by_kind.iter().map(|(k, n)| format!("{k} {n}")).collect();
+        let l = format!(
+            "  gear without a submittal: {} panels boxed by their rating and circuits (inferred: {}); one-line gear ({}): {} pieces ({}), {} feeders ({} carrying the conductors coming in), {} connections unsized ({} built by code for their gear's rating), {} for review; labels on no line of the one-line, not built: {:?}",
+            inferred_boxes.len(),
+            inferred_boxes.join(", "),
+            oneline.sheets.join(", "),
+            oneline.gear.len() + oneline.electrodes.len(),
+            kinds.join(", "),
+            oneline.feeders,
+            oneline.continued,
+            oneline.no_size.len(),
+            oneline.code_sized.len(),
+            oneline.review.len(),
+            oneline.skipped
+        );
+        report_progress(s, json!({"step": "electrical gear"}), &l);
+        s.echo(l);
+    }
+    if !oneline.no_size.is_empty() {
+        let list: Vec<String> = oneline
+            .no_size
+            .iter()
+            .take(12)
+            .map(|(f, t, tag)| {
+                let printed = if tag.is_empty() { format!("{f} to {t} (no tag)") } else { format!("{f} to {t} (tagged {tag})") };
+                match oneline.code_sized.iter().find(|c| c.0 == *f && c.1 == *t) {
+                    Some(c) => format!("{printed}, built by code as {} (inferred)", c.3),
+                    None => format!("{printed}, not built: no rating to size it by, or more than one set of the code tables carries (the engineer sizes parallel sets)"),
+                }
+            })
+            .collect();
+        let r = super::onelinegear::rules();
+        let basis = if oneline.code_sized.is_empty() { r.unsized_source.clone() } else { format!("{}; {}", r.unsized_source, r.code_size_source) };
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} feeders on the one-line are unsized: {}", oneline.no_size.len(), list.join("; ")),
+            &basis,
+            2,
+            vec!["Confirm each one built by code, or give its conductors, ground and conduit (a feeder schedule row for its tag)".into()],
+            None,
+            false,
+        );
+    }
+    if !oneline.review.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("One-line gear placed for review: {}", oneline.review.iter().take(8).cloned().collect::<Vec<_>>().join("; ")),
+            "the one-line calls for it but the model has no gear to set it beside; it is built at the lowest level's corner so the takeoff carries it",
+            2,
+            vec!["Locate it on the plans, or move it in the model".into()],
+            None,
+            false,
+        );
+    }
     match &service {
         Ok(p) => {
             let e = &p.equipment;
@@ -16456,8 +16568,63 @@ fn gear_step(
         }
     }
     s.touch();
-    result["gear"] = json!({"placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review});
+    // The one-line's electrodes' conductors routed from the service gear.
+    if !oneline.electrodes.is_empty() {
+        match s.execute("grounding.route", &json!({})) {
+            Ok(v) => result["gear_grounding"] = v,
+            Err(e) => result["gear_grounding_error"] = json!(e.to_string()),
+        }
+    }
+    result["gear"] = json!({
+        "placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review,
+        "inferred_boxes": inferred_boxes,
+        "oneline": {
+            "sheets": oneline.sheets, "gear": oneline.gear, "electrodes": oneline.electrodes, "by_kind": oneline.by_kind,
+            "feeders": oneline.feeders, "continued": oneline.continued,
+            "unsized": oneline.no_size.iter().map(|(f, t, tag)| json!({"from": f, "to": t, "tag": tag})).collect::<Vec<_>>(),
+            "sized_by_code": oneline.code_sized.iter().map(|(f, t, tag, m)| json!({"from": f, "to": t, "tag": tag, "makeup": m, "provenance": "inferred"})).collect::<Vec<_>>(),
+            "review": oneline.review, "skipped": oneline.skipped,
+        },
+    });
     equipment_step(s, job, pages, &types, &tags, result)
+}
+
+/// Each level's building outline (its walls' extent, else its plan region), for gear whose
+/// schedule names no room the model has ([`super::gearbuild::RoomBox::building`]).
+fn building_outlines(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> Vec<super::gearbuild::RoomBox> {
+    use cadaddy_geom::Vec2;
+    let mut ext: BTreeMap<String, ([f64; 4], Vec2)> = BTreeMap::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall")) {
+        let (Some(level), Some((lo, hi))) = (super::bspec::made_level(e), super::fieldview::mesh_box(e)) else { continue };
+        if ![lo[0], lo[1], hi[0], hi[1]].iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let x = ext
+            .entry(level.to_ascii_lowercase())
+            .or_insert(([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], super::bspec::stacked_by(e)));
+        x.0 = [x.0[0].min(lo[0]), x.0[1].min(lo[1]), x.0[2].max(hi[0]), x.0[3].max(hi[1])];
+    }
+    let mut out = Vec::new();
+    for l in &sp.levels {
+        let (b, offset) = match ext.get(&l.name.to_ascii_lowercase()) {
+            Some((b, off)) => (*b, *off),
+            None => match l.region {
+                Some(r) => ([r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])], Vec2::ZERO),
+                None => continue,
+            },
+        };
+        if !(b[2] > b[0] && b[3] > b[1]) {
+            continue;
+        }
+        out.push(super::gearbuild::RoomBox {
+            level: l.name.clone(),
+            outline: vec![Vec2::new(b[0], b[1]), Vec2::new(b[2], b[1]), Vec2::new(b[2], b[3]), Vec2::new(b[0], b[3])],
+            offset,
+            building: true,
+            ..super::gearbuild::RoomBox::default()
+        });
+    }
+    out
 }
 
 /// The light fixture schedules on a set's pages, read by their grid ([`super::lightsched`]):
@@ -29639,6 +29806,163 @@ mod tests {
             }
         }
         d
+    }
+
+    /// A made-up schedules sheet (Q6359), no gear submittal: a single-line diagram (a meter socket,
+    /// a fused service-rated disconnect, panel PX, two ground rods, a lighting contactor fed by an
+    /// unsized tag), a feeder schedule (FDR-A sized, FDR-B printed `XX`) and PX's schedule (a 225 A,
+    /// 1-phase panel whose location no room of the model is). The panel is boxed by its rating and
+    /// circuits and set along the building's walls; its rows are breakers, its spare a spare; the
+    /// one-line's pieces stand beside it with the FDR-A feeders between them; the takeoff carries
+    /// every one; the unsized feeder is built by code for the contactor's rating (inferred) and a
+    /// review finding, never a silent zero.
+    #[test]
+    fn a_one_lines_gear_and_a_schedule_only_panel_are_built_and_taken_off_without_a_submittal() {
+        use cadaddy_walk3d::{BuildingSpec, PanelCircuit, PanelSchedule};
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let ckt = |n: &str, what: &str, amps: &str| PanelCircuit {
+            number: n.into(),
+            description: what.into(),
+            breaker: amps.into(),
+            poles: 1,
+            ..Default::default()
+        };
+        let mut px = PanelSchedule {
+            panel: "PX".into(),
+            source: "EX-5".into(),
+            circuits: vec![
+                ckt("1", "LIGHTING", "20"),
+                ckt("2", "RECEPTACLES", "20"),
+                ckt("3", "EXTERIOR LIGHTING PHOTOCELL", "20"),
+                ckt("4", "SPARE", "20"),
+                ckt("5", "SPACE", ""),
+            ],
+            ..Default::default()
+        };
+        for (k, v) in [("bus amps", "225A"), ("volts/phase", "120/240V, 1PH, 3W"), ("location", "SERVICE CLOSET")] {
+            px.header.insert(k.into(), v.into());
+        }
+        let sp = BuildingSpec {
+            units_per_foot: 12.0,
+            levels: serde_json::from_value(json!([
+                {"name": "1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 10.0, "region": [0.0, 0.0, 600.0, 400.0]}
+            ]))
+            .unwrap_or_else(|e| panic!("{e}")),
+            mep: cadaddy_walk3d::Mep { panel_schedules: vec![px], ..Default::default() },
+            ..Default::default()
+        };
+        if let Ok(d) = s.doc_mut() {
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let mut page = cadaddy_doc::Drawing::default();
+        let texts: Vec<(&str, f64, f64)> = vec![
+            ("SINGLE LINE DIAGRAM", 10.0, 20.0),
+            ("FDR-A", 9.0, 61.0),
+            ("200A METER SOCKET", 10.0, 58.0),
+            ("120/240V, 1PH, 3W", 10.0, 56.8),
+            ("FDR-A", 9.0, 51.0),
+            ("200A/2P FUSED DISCONNECT", 10.0, 48.0),
+            ("175A FUSES, NEMA 3R, SE RATED", 10.0, 46.8),
+            ("FDR-A", 9.0, 41.0),
+            ("PX", 10.0, 38.0),
+            ("(2) GROUND RODS, #6 CU", 30.0, 38.0),
+            ("FDR-B", 9.0, 31.0),
+            ("30A LIGHTING CONTACTOR", 10.0, 28.0),
+            ("FEEDER SCHEDULE", 102.0, 70.0),
+            ("TAG", 100.0, 68.5),
+            ("CONDUIT SIZE", 106.0, 68.5),
+            ("CONDUCTORS", 114.0, 68.5),
+            ("GROUND", 124.0, 68.5),
+            ("FDR-A", 100.2, 67.0),
+            ("(1) 2\"C", 106.0, 67.0),
+            ("(3) #3/0 (CU)", 114.0, 67.0),
+            ("#6G (CU)", 124.0, 67.0),
+            ("FDR-B", 100.2, 65.5),
+            ("(1) 3/4\"C", 106.0, 65.5),
+            ("XX", 114.0, 65.5),
+            ("XX", 124.0, 65.5),
+            // The panel schedule's own cell, not one-line gear.
+            ("EXTERIOR LIGHTING PHOTOCELL", 150.0, 20.0),
+        ];
+        for (v, x, y) in texts {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, x, y, 1.0))).ok();
+        }
+        let pages = vec![("EX-5".to_string(), page)];
+        let mut result = json!({});
+        gear_step(&mut s, &mut job, &pages, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        let g = &result["gear"];
+        // The panel: built, its box inferred from its rating and circuits.
+        assert_eq!(g["inferred_boxes"], json!(["PX"]), "{g:#}");
+        let (sp, _) = super::super::bspec::current(&s, "test").unwrap_or_else(|e| panic!("{e}"));
+        let px = sp.mep.equipment.iter().find(|e| e.tag == "PX").unwrap_or_else(|| panic!("PX not built: {g:#}"));
+        assert!(px.sources.get("size").is_some_and(|v| v.starts_with("inferred")), "{:?}", px.sources);
+        assert!(px.properties.get("BOX").is_some_and(|b| b.starts_with("44 H x 20 W x 5.75 D")), "{:?}", px.properties);
+        // The one-line's pieces, beside it.
+        let ol = &g["oneline"];
+        assert_eq!(ol["by_kind"], json!({"meter_socket": 1, "disconnect": 1, "lighting_contactor": 1, "grounding_electrode": 1}), "{ol:#}");
+        let disc = sp.mep.equipment.iter().find(|e| e.kind == "disconnect").unwrap_or_else(|| panic!("{ol:#}"));
+        assert_eq!(disc.properties.get("SERVICE ENTRANCE RATED").map(String::as_str), Some("yes (the one-line's label)"));
+        assert_eq!(disc.level, "1");
+        let rods = sp.mep.grounding.as_ref().map(|g| g.electrodes.clone()).unwrap_or_default();
+        assert_eq!(rods.len(), 1);
+        assert_eq!((rods[0].kind.as_str(), rods[0].count, rods[0].gec_size.as_str()), ("ground_rod", 2, "#6"));
+        // The coded feeders: FDR-A between the meter, the disconnect and the panel, single-phase.
+        let f1: Vec<&cadaddy_walk3d::Feeder> = sp.mep.feeders.iter().filter(|f| f.tag == "FDR-A").collect();
+        let ends: Vec<(&str, &str)> = f1.iter().map(|f| (f.from.as_str(), f.to.as_str())).collect();
+        assert_eq!(ends, [("MTR-1", "DISC-1"), ("DISC-1", "PX")], "{:#?}", sp.mep.feeders);
+        assert!(f1.iter().all(|f| f.size == "3/0" && f.phases == 2 && f.neutrals == 1 && f.ground_size == "6"), "{f1:#?}");
+        // FDR-B is printed unsized: still built, the way the field sizes it for the contactor's
+        // 30 A on PX's single-phase system (inferred), and a finding to confirm it.
+        let fb: Vec<&cadaddy_walk3d::Feeder> = sp.mep.feeders.iter().filter(|f| f.tag == "FDR-B").collect();
+        assert_eq!(fb.len(), 1, "{:#?}", sp.mep.feeders);
+        assert_eq!(
+            (fb[0].from.as_str(), fb[0].to.as_str(), fb[0].size.as_str(), fb[0].phases, fb[0].neutrals, fb[0].ground_size.as_str()),
+            ("PX", "LC-1", "10", 2, 1, "10")
+        );
+        assert!(fb[0].source.starts_with("inferred (code)"), "{}", fb[0].source);
+        assert_eq!(ol["unsized"], json!([{"from": "PX", "to": "LC-1", "tag": "FDR-B"}]), "{ol:#}");
+        assert_eq!(
+            ol["sized_by_code"],
+            json!([{"from": "PX", "to": "LC-1", "tag": "FDR-B", "makeup": "3#10 + 1#10G in 0.5\" EMT", "provenance": "inferred"}]),
+            "{ol:#}"
+        );
+        assert!(
+            job.findings.iter().any(|f| f.description.contains("unsized")
+                && f.description.contains("PX to LC-1 (tagged FDR-B), built by code as 3#10 + 1#10G in 0.5\" EMT (inferred)")),
+            "{:#?}",
+            job.findings
+        );
+        // The schedule's photocell row is not one-line gear.
+        assert!(!sp.mep.equipment.iter().any(|e| e.kind == "photocell"));
+        // Built: the feeders' conduit, the breakers, and all of it in the takeoff.
+        feeder_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        // As the job does next: the circuits routed again with the gear placed (its pieces built).
+        s.execute("conduit.reroute", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        let b = s.execute("bim.breakers", &json!({"limit": 20})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((b["breakers"].as_u64(), b["spares"].as_u64(), b["spaces"].as_u64()), (Some(3), Some(1), Some(1)), "{b:#}");
+        let t = s.execute("bim.takeoff", &json!({"group_by": "type", "keep": false})).unwrap_or_else(|e| panic!("{e}"));
+        let lines = t["lines"].as_array().cloned().unwrap_or_default();
+        let has = |what: &dyn Fn(&Value) -> bool| lines.iter().any(what);
+        let item = |l: &Value| l["item"].as_str().unwrap_or_default().to_string();
+        for want in ["panel PX", "Meter socket MTR-1", "Disconnect switch DISC-1", "Lighting contactor LC-1"] {
+            assert!(has(&|l: &Value| item(l) == want), "{want} not in the takeoff: {:#?}", lines.iter().map(item).collect::<Vec<_>>());
+        }
+        assert!(has(&|l: &Value| l["category"] == "breakers" || item(l).to_ascii_lowercase().contains("breaker")), "{lines:#?}");
+        assert!(has(&|l: &Value| item(l).starts_with("Ground rod")), "{lines:#?}");
+        assert!(
+            has(&|l: &Value| l["size"].as_str().is_some_and(|z| z.contains("3/0")) && l["length_ft"].as_f64().is_some_and(|f| f > 0.0)),
+            "{lines:#?}"
+        );
+        // Each coded feeder's own ground from its schedule row (FDR-A's #6), and the unsized one's
+        // ground by code (FDR-B's #10).
+        for g in ["#6", "#10"] {
+            assert!(
+                has(&|l: &Value| item(l) == "Copper ground, green" && l["size"] == g && l["qty"].as_f64().is_some_and(|q| q > 0.0)),
+                "no {g} ground in the takeoff: {:#?}",
+                lines.iter().filter(|l| l["category"] == "wire").collect::<Vec<_>>()
+            );
+        }
     }
 
     /// A made-up two-level job's radio-coverage keynotes (worded unlike any real set): an antenna

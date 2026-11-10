@@ -1089,7 +1089,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             None => match feeder.and_then(|fi| sp.mep.feeders.get(fi)) {
                 Some(f) => {
                     let doc = if f.source.is_empty() { format!("feeder {}", f.tag) } else { format!("feeder {}: {}", f.tag, f.source) };
-                    (cable, name, source, feeder_makeup(f), Source::from_doc(SourceKind::Print, &doc), ctag)
+                    // A feeder the documents leave unsized and that was sized by code or practice
+                    // (Q6359) is an assumption, never print-read.
+                    let kind = if f.source.trim_start().starts_with("inferred") { SourceKind::Rule } else { SourceKind::Print };
+                    (cable, name, source, feeder_makeup(f), Source::from_doc(kind, &doc), ctag)
                 }
                 None => (cable, name, source, conductors, csrc, ctag),
             },

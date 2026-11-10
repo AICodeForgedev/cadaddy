@@ -1838,6 +1838,7 @@ pub(crate) fn room_boxes(d: &cadaddy_doc::Drawing) -> Vec<super::gearbuild::Room
             number: r.number.unwrap_or_default(),
             name: r.name,
             outline: r.outline,
+            building: false,
         })
         .collect()
 }
@@ -2216,6 +2217,7 @@ mod tests {
             outline: vec![Vec2::new(x, 0.0), Vec2::new(x + 120.0, 0.0), Vec2::new(x + 120.0, 96.0), Vec2::new(x, 96.0)],
             offset: Vec2::ZERO,
             doors: Vec::new(),
+            building: false,
         };
         let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
         let (placed, not) = place_panels(&mut sp, &ps, &[room("610", "Level 6", 0.0), room("510", "Level 5", 500.0)]);

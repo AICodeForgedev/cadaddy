@@ -24,6 +24,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use cadaddy_geom::Vec2;
 use cadaddy_mepfix::sheet_facts::TextItem;
 
+/// How far right of a feeder schedule's title its column headers may run (title heights).
+const HEADER_REACH_H: f64 = 160.0;
+
 /// One feeder type of a feeder schedule.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FeederType {
@@ -80,23 +83,66 @@ fn conductors(v: &str) -> Option<(u32, String, Option<String>)> {
     (!size.is_empty() && size.chars().next().is_some_and(|c| c.is_ascii_digit())).then_some((n, size, material))
 }
 
-/// The feeder types of the `FEEDER SCHEDULE` tables on a sheet's texts.
+/// The feeder types of the `FEEDER SCHEDULE` tables on a sheet's texts (the unsized rows left out).
+#[cfg(test)]
 pub(crate) fn feeder_types(texts: &[TextItem], sheet: &str) -> Vec<FeederType> {
+    feeder_rows(texts, sheet).0
+}
+
+/// The header text naming a column (every one of `words`; not the isolated ground's unless
+/// asked), the highest of `from`.
+fn header_col<'a>(from: &[&'a TextItem], words: &[&str]) -> Option<&'a TextItem> {
+    from.iter()
+        .copied()
+        .filter(|t| {
+            let u = t.value.to_ascii_uppercase();
+            words.iter().all(|w| u.contains(w)) && (words.contains(&"ISOLATED") || !u.contains("ISOLATED"))
+        })
+        .max_by(|a, b| a.at.y.total_cmp(&b.at.y))
+}
+
+/// The feeder types of a sheet's `FEEDER SCHEDULE` tables, and the tags of its rows printed
+/// unsized (`XX`, `TBD` in the conductor or conduit column: the engineer hasn't sized them).
+pub(crate) fn feeder_rows(texts: &[TextItem], sheet: &str) -> (Vec<FeederType>, Vec<String>) {
+    // A text the sheet carries twice in one place (a PDF's hidden text layer) is one cell.
+    let texts = &super::onelinegear::dedup_texts(texts);
+    let unsized_marks = &super::onelinegear::rules().unsized_tags;
+    let unsized_cell = |v: Option<&String>| v.is_some_and(|v| unsized_marks.iter().any(|m| m.eq_ignore_ascii_case(v.trim())));
     let mut out = Vec::new();
+    let mut no_size: Vec<String> = Vec::new();
     for title in texts.iter().filter(|t| t.value.trim().eq_ignore_ascii_case("FEEDER SCHEDULE")) {
         let h = title.height.max(1e-9);
-        // The header: texts under the title naming the columns; its lowest line is the last.
-        let near: Vec<&TextItem> =
-            texts.iter().filter(|t| t.at.y < title.at.y && t.at.y > title.at.y - 12.0 * h && (t.at.x - title.at.x).abs() < 40.0 * h).collect();
-        let col = |words: &[&str]| -> Option<&TextItem> {
-            near.iter()
-                .copied()
-                .filter(|t| {
-                    let u = t.value.to_ascii_uppercase();
-                    words.iter().all(|w| u.contains(w)) && (words.contains(&"ISOLATED") || !u.contains("ISOLATED"))
-                })
-                .max_by(|a, b| a.at.y.total_cmp(&b.at.y))
-        };
+        // The header: texts under the title naming the columns; its lowest line is the last. A
+        // wide table's columns run on past a fixed reach of a small title (a PDF's text layer
+        // keeps the title smaller than printed, Q6359): they go on while they stay together (a
+        // gap far wider than the header's own ends it: a detail beside the table on its band),
+        // to the next schedule's title on its band, at most `HEADER_REACH_H` title heights.
+        let next_title = texts
+            .iter()
+            .filter(|t| t.value.to_ascii_uppercase().contains("SCHEDULE") && (t.at.y - title.at.y).abs() < 3.0 * h && t.at.x > title.at.x + 2.0 * h)
+            .map(|t| t.at.x)
+            .fold(f64::INFINITY, f64::min);
+        let right = (title.at.x + HEADER_REACH_H * h).min(next_title - h);
+        let wide: Vec<&TextItem> = texts
+            .iter()
+            .filter(|t| t.at.y < title.at.y && t.at.y > title.at.y - 12.0 * h && t.at.x > title.at.x - 40.0 * h && t.at.x < right)
+            .collect();
+        let Some(tag_hdr) = header_col(&wide, &["TAG"]) else { continue };
+        // The header's texts from the TAG column right, while they stay together.
+        let mut band: Vec<f64> = wide.iter().filter(|t| t.at.y >= tag_hdr.at.y - 0.5 * h && t.at.x >= tag_hdr.at.x - h).map(|t| t.at.x).collect();
+        band.sort_by(f64::total_cmp);
+        let (mut end, mut widest) = (tag_hdr.at.x, 0.0f64);
+        for x in band {
+            let gap = x - end;
+            let limit = if widest > 0.0 { (2.0 * widest).max(12.0 * h) } else { 40.0 * h };
+            if gap > limit {
+                break;
+            }
+            widest = widest.max(gap);
+            end = end.max(x);
+        }
+        let near: Vec<&TextItem> = wide.iter().copied().filter(|t| t.at.x <= end + 2.0 * h).collect();
+        let col = |words: &[&str]| header_col(&near, words);
         // The column that names the size (a spanning `EACH CONDUIT` above several isn't one).
         let conduit = col(&["CONDUIT", "SIZE"]).or_else(|| col(&["CONDUIT"]).filter(|t| !t.value.to_ascii_uppercase().contains("EACH")));
         let (Some(tag), Some(conduit), Some(cond)) = (col(&["TAG"]), conduit, col(&["CONDUCTOR"])) else { continue };
@@ -147,6 +193,12 @@ pub(crate) fn feeder_types(texts: &[TextItem], sheet: &str) -> Vec<FeederType> {
                 }
                 continue;
             }
+            if unsized_cell(cells.get(&2)) || unsized_cell(cells.get(&1)) {
+                if !no_size.iter().any(|t| t.eq_ignore_ascii_case(&tagv)) {
+                    no_size.push(tagv.clone());
+                }
+                continue;
+            }
             let Some((nc, csize)) = cells.get(&1).and_then(|v| {
                 let u = v.trim();
                 let (n, s) = match u.strip_prefix('(').and_then(|r| r.split_once(')')) {
@@ -171,7 +223,7 @@ pub(crate) fn feeder_types(texts: &[TextItem], sheet: &str) -> Vec<FeederType> {
             });
         }
     }
-    out
+    (out, no_size)
 }
 
 /// On a one-line's texts: each gear label (`tags`) and the feeder-type tag just above it (its
@@ -561,6 +613,9 @@ pub(crate) struct RoomBox {
     pub offset: Vec2,
     /// The doors on its walls: centre and width, in the outline's coordinates.
     pub doors: Vec<(Vec2, f64)>,
+    /// The level's building outline, not a room: where gear goes whose schedule names no room the
+    /// model has (Q6359).
+    pub building: bool,
 }
 
 /// A gear box's conduit entry areas, top and bottom: the submittal's where it draws them, else the
@@ -866,9 +921,19 @@ fn names_panel(description: &str, tag: &str) -> bool {
 fn room_named<'a>(rooms: &'a [RoomBox], location: &str) -> Option<&'a RoomBox> {
     let u = location.to_ascii_uppercase();
     let number = u.split_whitespace().rev().find(|w| w.chars().any(|c| c.is_ascii_digit()));
+    let rooms = || rooms.iter().filter(|r| !r.building);
     number
-        .and_then(|n| rooms.iter().find(|r| r.number.eq_ignore_ascii_case(n)))
-        .or_else(|| rooms.iter().find(|r| !r.name.is_empty() && u.contains(&r.name.to_ascii_uppercase())))
+        .and_then(|n| rooms().find(|r| r.number.eq_ignore_ascii_case(n)))
+        .or_else(|| rooms().find(|r| !r.name.is_empty() && u.contains(&r.name.to_ascii_uppercase())))
+}
+
+/// The building outline gear goes in when its schedule names no room of the model: the lowest
+/// level's (the service comes in at grade), else any.
+fn building_box<'a>(sp: &cadaddy_walk3d::BuildingSpec, rooms: &'a [RoomBox]) -> Option<(usize, &'a RoomBox)> {
+    let slab = super::ugplan::slab_level(sp).unwrap_or_default();
+    let mut b = rooms.iter().enumerate().filter(|(_, r)| r.building && r.outline.len() >= 3);
+    let first = b.clone().next();
+    b.find(|(_, r)| r.level.eq_ignore_ascii_case(&slab)).or(first)
 }
 
 /// The trade practice rule gear the plans draw is placed by (`tradepractice.json`).
@@ -1182,7 +1247,7 @@ pub(crate) fn plan(
         }
     }
     // Gear: the panels the plans don't place, in their schedules' rooms.
-    let mut by_room: BTreeMap<(String, String), Vec<(String, SubmittedGear)>> = BTreeMap::new();
+    let mut by_room: BTreeMap<usize, Vec<(String, SubmittedGear)>> = BTreeMap::new();
     for p in schedules.iter().filter(|p| p.typical_of.is_none()) {
         if sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&p.panel)) {
             continue;
@@ -1192,16 +1257,24 @@ pub(crate) fn plan(
             continue;
         };
         let loc = p.header.get("location").cloned().unwrap_or_default();
-        match room_named(rooms, &loc) {
-            Some(r) => by_room.entry((r.level.clone(), r.number.clone())).or_default().push((p.panel.clone(), g.clone())),
+        let named = room_named(rooms, &loc).and_then(|r| rooms.iter().position(|x| std::ptr::eq(x, r)));
+        // No room of the model is its schedule's location: along the building's walls (Q6359).
+        match named.or_else(|| building_box(sp, rooms).map(|(i, _)| i)) {
+            Some(i) => by_room.entry(i).or_default().push((p.panel.clone(), g.clone())),
             None => out
                 .unplaced
                 .push((p.panel.clone(), format!("its schedule's location ({}) is no room of the model", if loc.is_empty() { "none" } else { &loc }))),
         }
     }
     let inch = upf / 12.0;
-    for ((level, number), list) in by_room {
-        let Some(room) = rooms.iter().find(|r| r.level == level && r.number == number) else { continue };
+    for (index, list) in by_room {
+        let Some(room) = rooms.get(index) else { continue };
+        let level = room.level.clone();
+        let place = if room.building {
+            format!("the building outline on {level} (no room of the model is its schedule's location)")
+        } else {
+            format!("room {}", room.number)
+        };
         let outline: Vec<Vec2> = room.outline.iter().map(|p| *p - room.offset).collect();
         // Working space: the deepest of its gear's voltages (condition 1).
         let depth_for = |tag: &str| {
@@ -1225,23 +1298,38 @@ pub(crate) fn plan(
             let without = place_along_walls(&outline, &sizes, sw, sd, gap);
             if without.iter().filter(|p| p.is_some()).count() > placed.iter().filter(|p| p.is_some()).count() {
                 placed = without;
-                out.room_issues.push(format!("room {number}: its gear only fits inside a door's swing; move the door or the gear"));
+                out.room_issues.push(format!("{place}: its gear only fits inside a door's swing; move the door or the gear"));
             }
         }
         for (tag, g) in &list {
             let bus = header(tag, "bus amps").chars().take_while(char::is_ascii_digit).collect::<String>().parse::<f64>().ok();
             if needs_second_exit(bus, g.size_in[1], room.doors.len(), &rule) {
                 out.room_issues.push(format!(
-                    "room {number}: {tag} needs a second exit, {} door(s) found ({})",
+                    "{place}: {tag} needs a second exit, {} door(s) found ({})",
                     room.doors.len(),
                     rule.large_equipment_cite.as_deref().unwrap_or_default()
                 ));
             }
         }
+        // The building's outline too small for the gear (a model at the wrong scale): at its corner,
+        // for review, so the gear is still built and taken off.
+        let corner = outline.iter().fold([f64::INFINITY, f64::INFINITY], |m, p| [m[0].min(p.x), m[1].min(p.y)]);
+        let mut cursor = corner[0] + 12.0 * inch;
+        let mut review_place = BTreeSet::new();
         for ((tag, g), at) in list.iter().zip(placed) {
-            let Some(at) = at else {
-                out.unplaced.push((tag.clone(), format!("room {number} has no wall run long enough for it and its working space")));
-                continue;
+            let at = match at {
+                Some(at) => at,
+                None if room.building && corner.iter().all(|v| v.is_finite()) => {
+                    let (w, dp) = (g.size_in[1] * inch, g.size_in[2] * inch);
+                    let min = [cursor, corner[1] + 12.0 * inch];
+                    cursor += w + gap;
+                    review_place.insert(tag.clone());
+                    Placed { min, max: [min[0] + w, min[1] + dp], space_min: [min[0], min[1] + dp], space_max: [min[0] + w, min[1] + dp + sd] }
+                }
+                None => {
+                    out.unplaced.push((tag.clone(), format!("{place} has no wall run long enough for it and its working space")));
+                    continue;
+                }
             };
             let [h, w, dp] = g.size_in;
             let (top_plate, bottom_plate) = entry_plates(g, &rule);
@@ -1262,8 +1350,16 @@ pub(crate) fn plan(
                     rule.cite
                 ),
             );
-            properties
-                .insert("PLACEMENT".into(), format!("proposed: along a wall of room {number}, its schedule's location; the plans don't locate it"));
+            properties.insert(
+                "PLACEMENT".into(),
+                if review_place.contains(tag) {
+                    format!("review: {place} has no wall run long enough for it and its working space; set at its corner, its place to confirm")
+                } else if room.building {
+                    format!("proposed: along a wall of {place}; the plans don't locate it")
+                } else {
+                    format!("proposed: along a wall of {place}, its schedule's location; the plans don't locate it")
+                },
+            );
             // Where conduit may come in: each side's area (the submittal's drawn windows, else the
             // box less the rule's margins) and its source; the router lands raceways inside them.
             let drawn = g.top_plate_in.is_some() || g.bottom_plate_in.is_some();
@@ -1286,7 +1382,7 @@ pub(crate) fn plan(
             }
             let mut sources = BTreeMap::new();
             sources.insert("size".into(), g.source.clone());
-            sources.insert("position".into(), format!("proposed in room {number} ({})", header(tag, "location")));
+            sources.insert("position".into(), format!("proposed in {place} ({})", header(tag, "location")));
             sources.insert("status".into(), "proposed".into());
             let mut terminations = Vec::new();
             if let Some((n, range)) = &g.main_lugs {
@@ -1392,6 +1488,9 @@ mod tests {
             v.extend([t(0.25, y, tag), t(1.0, y, c), t(2.2, y, k), t(3.6, y, g), t(4.7, y, "-")]);
         }
         v.push(t(0.2, 8.2, "NOTE 1:"));
+        // Each text twice in one place (a PDF's hidden text layer under it): read once.
+        let twice: Vec<TextItem> = v.iter().chain(v.iter()).cloned().collect();
+        assert_eq!(feeder_types(&twice, "EX-5"), feeder_types(&v, "EX-5"));
         let f = feeder_types(&v, "E-1");
         assert_eq!(f.len(), 3, "{f:#?}");
         assert_eq!(
@@ -1400,6 +1499,39 @@ mod tests {
         );
         assert_eq!((f[1].conduits, f[1].conduit_in, f[1].conductors, f[1].size.as_str(), f[1].material.as_str()), (1, 2.0, 3, "2/0", "al"));
         assert_eq!((f[2].conduits, f[2].conduit_in, f[2].size.as_str(), f[2].ground_size.as_str()), (2, 4.0, "500 kcmil", "2/0"));
+    }
+
+    /// Test finding (Q6359): a PDF's text layer keeps the title smaller than printed, so a wide
+    /// schedule's ground column stood past the header's fixed reach and every feeder lost its
+    /// ground. The header runs the table's width, up to the next schedule beside it (whose own
+    /// GROUND header is not this one's).
+    #[test]
+    fn a_wide_feeder_schedules_far_columns_are_read_up_to_the_next_schedule() {
+        let mut v = vec![
+            // The title at 0.1 high; the ground column 60 heights to its right.
+            t(0.0, 10.0, "FEEDER SCHEDULE"),
+            t(-0.05, 9.7, "TAG"),
+            t(2.0, 9.7, "CONDUIT SIZE"),
+            t(4.0, 9.7, "CONDUCTORS"),
+            t(6.0, 9.7, "GROUND"),
+            t(-0.05, 9.5, "FX1"),
+            t(2.0, 9.5, "(1) 2\"C"),
+            t(4.0, 9.5, "(3) #3/0 (CU)"),
+            t(6.0, 9.5, "#6G (CU)"),
+            // A detail beside it on the band (no title of a schedule), a label higher than the
+            // header's: not one of its columns.
+            t(12.0, 9.9, "GROUND ROD"),
+            // The next table on the band, its header a little higher.
+            t(9.0, 10.0, "GROUNDING SCHEDULE"),
+            t(9.5, 9.8, "GROUND"),
+            t(9.5, 9.5, "#2"),
+        ];
+        let f = feeder_types(&v, "EX-5");
+        assert_eq!(f.len(), 1, "{f:#?}");
+        assert_eq!((f[0].tag.as_str(), f[0].size.as_str(), f[0].ground_size.as_str(), f[0].conduit_in), ("FX1", "3/0", "6", 2.0));
+        // No schedule beside it: the far column is still its own, the detail's label not.
+        v.truncate(10);
+        assert_eq!(feeder_types(&v, "EX-5").first().map(|f| f.ground_size.clone()), Some("6".into()));
     }
 
     #[test]
@@ -1534,6 +1666,7 @@ mod tests {
             outline: vec![Vec2::new(0.0, 0.0), Vec2::new(144.0, 0.0), Vec2::new(144.0, 96.0), Vec2::new(0.0, 96.0)],
             offset: Vec2::new(0.0, 0.0),
             doors: Vec::new(),
+            building: false,
         };
         let p = plan(&sp, &types, &incoming, &gear, &[room]);
         assert_eq!(p.feeders.len(), 2, "{:#?}", p.feeders);

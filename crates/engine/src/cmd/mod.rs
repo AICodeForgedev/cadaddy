@@ -166,6 +166,7 @@ mod modify;
 mod modify2;
 mod mtext_opts;
 pub(crate) mod names;
+pub(crate) mod onelinegear;
 mod overkill;
 pub mod overrides;
 pub mod p2meval;

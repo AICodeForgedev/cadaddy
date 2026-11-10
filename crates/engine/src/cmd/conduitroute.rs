@@ -5799,7 +5799,7 @@ pub(crate) use gap::panel_end_makeup_ft;
 #[path = "conduitroute_lv.rs"]
 pub(crate) mod lv;
 #[path = "conduitroute_size.rs"]
-mod size;
+pub(crate) mod size;
 
 #[cfg(test)]
 #[path = "conduitroute_tests.rs"]
