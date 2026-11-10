@@ -379,6 +379,17 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     st.model_records.follow(&now, id);
 }
 
+/// `to` is `from` with a change that is no edit of the model or its plan (the build record written
+/// into the spec): it comes from the build `from` came from, and a build that left `from` left it.
+pub(crate) fn carry(st: &mut crate::DocState, from: &std::sync::Arc<Drawing>, to: &std::sync::Arc<Drawing>) {
+    st.model_records.followed(from, to);
+    for (_, r) in &mut st.model_records.records {
+        if r.built.as_ref().is_some_and(|b| std::sync::Arc::ptr_eq(&b.0, from)) {
+            r.built = Some(BuiltDrawing(std::sync::Arc::clone(to)));
+        }
+    }
+}
+
 /// A command that made generated objects itself (a routing or placing step run on its own after
 /// the build) and replaced or changed others: what it did to the model is the software's work,
 /// not a hand edit, so the record takes those objects as they are now. (A person's edit makes no
