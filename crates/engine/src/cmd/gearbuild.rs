@@ -549,16 +549,20 @@ pub(crate) fn place_clear_of(
     space_d: f64,
     gap: f64,
 ) -> Vec<Option<Placed>> {
-    place_toward(outline, keep_clear, sizes, &[], space_w, space_d, gap)
+    place_toward(outline, keep_clear, sizes, &[], &|_| 0, space_w, space_d, gap)
 }
 
 /// [`place_clear_of`], each piece with a point its feed comes from (`toward`, by index; none: the
-/// longest walls first): the free spot along the walls nearest that point.
+/// longest walls first), and `under`: how many floors above stand over a point (outline units).
+/// The free spot along the walls under the most floors above (where conduit from them comes down
+/// inside the building), of those the nearest that point.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn place_toward(
     outline: &[Vec2],
     keep_clear: &[([f64; 2], [f64; 2])],
     sizes: &[(f64, f64)],
     toward: &[Option<Vec2>],
+    under: &dyn Fn(Vec2) -> usize,
     space_w: f64,
     space_d: f64,
     gap: f64,
@@ -573,9 +577,9 @@ pub(crate) fn place_toward(
     let mut out = Vec::new();
     for (i, &(w, d)) in sizes.iter().enumerate() {
         let to = toward.get(i).copied().flatten().filter(|p| p.x.is_finite() && p.y.is_finite());
-        // The spot taken and how far its middle is from where its feed comes from.
-        let mut got: Option<(Placed, f64)> = None;
-        'edges: for (a, b) in &edges {
+        // The spot taken, the floors above over it and how far its middle is from its feed.
+        let mut got: Option<(Placed, usize, f64)> = None;
+        for (a, b) in &edges {
             let len = a.dist(*b);
             let dir = Vec2::new((b.x - a.x) / len, (b.y - a.y) / len);
             // Square walls only (axis-aligned boxes).
@@ -607,23 +611,23 @@ pub(crate) fn place_toward(
                 .all(|c| inside(outline, *c));
                 if ok && clear(gmin, gmax, &taken) && clear(smin, smax, &taken) {
                     let spot = Placed { min: gmin, max: gmax, space_min: smin, space_max: smax };
-                    let Some(to) = to else {
-                        got = Some((spot, 0.0));
-                        break 'edges;
-                    };
-                    let far = Vec2::new((gmin[0] + gmax[0]) / 2.0, (gmin[1] + gmax[1]) / 2.0).dist(to);
-                    if got.as_ref().is_none_or(|(_, f)| far < *f - 1e-9) {
-                        got = Some((spot, far));
+                    let mid = Vec2::new((gmin[0] + gmax[0]) / 2.0, (gmin[1] + gmax[1]) / 2.0);
+                    let over = under(mid);
+                    let far = to.map_or(0.0, |t| mid.dist(t));
+                    // More floors over it wins; then, with a feed, the nearer; else the first.
+                    let better = got.as_ref().is_none_or(|(_, o, f)| over > *o || (over == *o && to.is_some() && far < *f - 1e-9));
+                    if better {
+                        got = Some((spot, over, far));
                     }
                 }
                 s += gap.max(1e-3);
             }
         }
-        if let Some((p, _)) = &got {
+        if let Some((p, _, _)) = &got {
             taken.push((p.min, p.max));
             taken.push((p.space_min, p.space_max));
         }
-        out.push(got.map(|(p, _)| p));
+        out.push(got.map(|(p, _, _)| p));
     }
     out
 }
@@ -1502,9 +1506,31 @@ pub(crate) fn plan(
             })
             .collect();
         let (sw, sd, gap) = (rule.width_in.unwrap_or(30.0) * inch, space_d * inch, 6.0 * inch);
-        let mut placed = place_toward(&outline, &swings, &sizes, &toward, sw, sd, gap);
+        // The floors above: their rooms' outlines (as built, stacked), each floor once.
+        let elevation = |name: &str| sp.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name)).map(|l| l.elevation_ft);
+        let above: Vec<Vec<&Vec<Vec2>>> = match elevation(&level) {
+            Some(z) => {
+                let mut names: Vec<&str> = sp.levels.iter().filter(|l| l.elevation_ft > z + 1e-6).map(|l| l.name.as_str()).collect();
+                names.dedup();
+                names
+                    .iter()
+                    .map(|n| {
+                        rooms
+                            .iter()
+                            .filter(|r| !r.building && r.outline.len() >= 3 && r.level.eq_ignore_ascii_case(n))
+                            .map(|r| &r.outline)
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|v| !v.is_empty())
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        let offset = room.offset;
+        let under = |p: Vec2| above.iter().filter(|floor| floor.iter().any(|o| inside(o, p + offset))).count();
+        let mut placed = place_toward(&outline, &swings, &sizes, &toward, &under, sw, sd, gap);
         if placed.iter().any(Option::is_none) && !swings.is_empty() {
-            let without = place_toward(&outline, &[], &sizes, &toward, sw, sd, gap);
+            let without = place_toward(&outline, &[], &sizes, &toward, &under, sw, sd, gap);
             if without.iter().filter(|p| p.is_some()).count() > placed.iter().filter(|p| p.is_some()).count() {
                 placed = without;
                 out.room_issues.push(format!("{place}: its gear only fits inside a door's swing; move the door or the gear"));
@@ -1560,9 +1586,15 @@ pub(crate) fn plan(
                 ),
             );
             // The room the prints call it in (the documents'), its wall by rule; else proposed.
+            let over_it = under(Vec2::new((at.min[0] + at.max[0]) / 2.0, (at.min[1] + at.max[1]) / 2.0));
             let wall_rule = format!(
-                "its wall by rule: {} working space in front, clear of door swings{}",
+                "its wall by rule: {} working space in front, clear of door swings{}{}",
                 rule.cite,
+                if !above.is_empty() && over_it == above.len() {
+                    ", under the floors above (their conduit comes down inside the building)"
+                } else {
+                    ""
+                },
                 feed.as_ref().map_or_else(String::new, |(from, _)| format!(", nearest its feed from {from}"))
             );
             let called_basis = call.as_ref().map(|c| format!("{LOCATION_CALLED}: {} ({})", c.source, c.place));
@@ -2320,6 +2352,50 @@ mod tests {
         assert!(made[0].1.starts_with("location called in prints: EX-4 panel schedule LOCATION (ELEC 1120)"), "{made:?}");
         assert_eq!(made[1].0, cadaddy_walk3d::Made::Inferred, "{made:?}");
         assert!(made[1].1.starts_with("proposed: no print locates it"), "{made:?}");
+    }
+
+    /// Q6513: a panel in a room only partly under the floors above goes on a wall under them
+    /// (conduit from those floors comes down inside the building), the nearest its feed there.
+    #[test]
+    fn a_panel_under_floors_above_takes_a_wall_under_them_nearest_its_feed() {
+        use cadaddy_walk3d::{BuildingSpec, Feeder, MepEquipment, PanelSchedule};
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
+        sp.levels = serde_json::from_value(serde_json::json!([
+            {"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 10.0},
+            {"name": "Level 2", "elevation_ft": 12.0, "height_ft": 12.0, "ceiling_ft": 10.0}
+        ]))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let header: BTreeMap<String, String> =
+            [("volts/phase".to_string(), "208Y/120V, 3PH, 4W".to_string()), ("location".to_string(), "ELEC 1120".to_string())].into_iter().collect();
+        sp.mep.panel_schedules = vec![PanelSchedule { panel: "LP1".into(), source: "EX-4".into(), header, ..PanelSchedule::default() }];
+        sp.mep.equipment.push(MepEquipment {
+            tag: "SB1".into(),
+            kind: "switchboard".into(),
+            level: "Level 1".into(),
+            min: [196.0, 40.0],
+            max: [226.0, 88.0],
+            ..MepEquipment::default()
+        });
+        sp.mep.feeders.push(Feeder { tag: "F1".into(), from: "SB1".into(), to: "LP1".into(), ..Feeder::default() });
+        let gear: BTreeMap<String, SubmittedGear> =
+            [("LP1".to_string(), SubmittedGear { size_in: [48.0, 20.0, 6.0], source: "sub".into(), ..SubmittedGear::default() })]
+                .into_iter()
+                .collect();
+        let elec = located_room("Level 1", "1120", "ELEC", [0.0, 0.0], [192.0, 120.0]);
+        let place = |rooms: &[RoomBox]| {
+            let p = plan(&sp, &[], &BTreeMap::new(), &gear, rooms, &BTreeMap::new());
+            p.equipment.into_iter().find(|e| e.tag == "LP1").unwrap_or_else(|| panic!("{:?}", p.unplaced))
+        };
+        // The floor above over the whole room: the east wall, the feed's side.
+        let open = place(&[elec.clone(), located_room("Level 2", "2201", "OFFICE", [0.0, 0.0], [192.0, 120.0])]);
+        assert!((open.max[0] - 192.0).abs() < 1e-6, "{open:?}");
+        assert!(open.properties["BASIS"].contains("under the floors above"), "{:?}", open.properties);
+        // The floor above over the west half only (x up to 96): under it, as near the feed as it gets.
+        let lp1 = place(&[elec, located_room("Level 2", "2201", "OFFICE", [0.0, 0.0], [96.0, 120.0])]);
+        let mid = (lp1.min[0] + lp1.max[0]) / 2.0;
+        assert!(mid <= 96.0 && mid > 60.0, "under the floor above, toward the feed: {lp1:?}");
+        let basis = &lp1.properties["BASIS"];
+        assert!(basis.contains("under the floors above") && basis.contains("nearest its feed from SB1"), "{basis}");
     }
 
     /// Q6513: a riser or one-line label, or a note, calls a panel's room: on its own line after a
