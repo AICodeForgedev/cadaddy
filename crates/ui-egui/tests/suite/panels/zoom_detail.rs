@@ -165,6 +165,12 @@ fn snaps_offer_only_what_is_drawn() {
     h.run_steps(1);
     let near = snap_at(h.state(), 1.0);
     assert!(near.is_some_and(|s| s.point.dist(end) < 1e-6), "zoomed in, the endpoint snaps: {near:?}");
+    // Zoomed back out, the sheet's picture is drawn (the finer list is kept for highlights): the
+    // snaps follow the picture.
+    let _ = h.state_mut().session.execute("zoom", &json!({"mode": "extents"}));
+    assert!(settle(&mut h, |a| a.canvas.sheet_images.shown));
+    let again = snap_at(h.state(), 1.0);
+    assert!(again.is_none_or(|s| s.point.dist(end) > 1e-6), "drawn as its picture, no endpoint inside a symbol's box: {again:?}");
 }
 
 /// What the commands read never depends on the zoom or on the detail levels.

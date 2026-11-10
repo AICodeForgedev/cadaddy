@@ -2116,7 +2116,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         // the section box's face handles over it.
         crate::shaded::section_box_handles(app, ui, &painter, &xf);
     } else if sheet.is_none() && active_vp.is_none() && draw_sheet_picture(app, &painter, &xf_paper, ui.ctx()) {
-        // Zoomed out on a print set's sheet: its picture stands for the linework.
+        // Zoomed out on a print set's sheet: its picture stands for the linework, and the snaps
+        // follow what it draws.
+        let drawn_at = app.canvas.sheet_images.shown_detail.clone();
+        app.session.set_screen_detail(drawn_at);
     } else if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {

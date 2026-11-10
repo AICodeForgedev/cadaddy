@@ -104,6 +104,8 @@ pub struct SheetImages {
     job: Option<Job>,
     /// The last frame drew a picture instead of the list.
     pub shown: bool,
+    /// The detail level the picture drawn was made at (the snaps follow it while it is shown).
+    pub shown_detail: Option<Detail>,
     /// Pictures made (for measuring).
     pub builds: u64,
     /// Milliseconds the last one took on its worker.
@@ -137,6 +139,7 @@ impl SheetImages {
         self.made.clear();
         self.job = None;
         self.shown = false;
+        self.shown_detail = None;
     }
 
     /// Take a finished picture in.
@@ -190,6 +193,7 @@ impl SheetImages {
     ) -> bool {
         self.poll(ctx);
         self.shown = false;
+        self.shown_detail = None;
         let Some(want) = want.filter(|w| w.covers(px)) else {
             // Zoomed in (or no sheet): the linework; a picture still being made is not needed.
             self.job = None;
@@ -201,6 +205,7 @@ impl SheetImages {
             }
             return false;
         }
+        self.shown_detail = Detail::new(want.texel, rules);
         let Some(pic) = self.made.iter().find(|p| p.key == want.key) else { return false };
         let a = xf.to_screen(Vec2::new(pic.rect.min.x, pic.rect.max.y));
         let b = xf.to_screen(Vec2::new(pic.rect.max.x, pic.rect.min.y));
@@ -212,7 +217,9 @@ impl SheetImages {
 }
 
 /// Make the picture's pixels: the sheet's objects built at the detail level of a texel, drawn
-/// with the CPU rasteriser. `None`: cancelled, or nothing could be drawn.
+/// with the CPU rasteriser. `None`: cancelled, or nothing could be drawn. (The web build makes
+/// none: it has no worker threads.)
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn make(want: &Want, doc: &Drawing, rules: Arc<PlanRules>, cancel: &Arc<AtomicBool>) -> Option<Vec<u8>> {
     use cadaddy_render::raster::{self, RasterOptions};
     let px = want.texel;
