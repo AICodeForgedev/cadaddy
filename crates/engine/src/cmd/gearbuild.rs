@@ -1884,25 +1884,29 @@ pub(crate) struct LabelReport {
 }
 
 /// Each typical panel's copy in a room (its `ROOM` property; `rooms`: by room, its level and
-/// outline) takes the breaker label ([`breaker_label`]) the plan letters by it: the plan's word
-/// for which breaker feeds the copy's stack. A label goes to the nearest copy on its level whose
-/// room holds it or that stands within [`LABEL_REACH_FT`] of it; each copy takes one label (the
+/// traced outline; `units`: by room, its level and the unit's whole footprint, its typical view's
+/// unit box) takes the breaker label ([`breaker_label`]) the plan letters in its unit: the plan's
+/// word for which breaker feeds the copy's stack. A label goes to the nearest copy on its level
+/// whose room or unit holds it or that stands within [`LABEL_REACH_FT`] of it; each copy takes one label (the
 /// nearest), each label one copy. `upf`: drawing units per foot. An earlier label goes first.
 pub(crate) fn label_typical_copies(
     copies: &mut [cadaddy_walk3d::MepEquipment],
     labels: &[PlanLabel],
     rooms: &BTreeMap<String, (String, Vec<Vec2>, bool)>,
+    units: &BTreeMap<String, (String, Vec<Vec2>)>,
     upf: f64,
 ) -> LabelReport {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let reach = LABEL_REACH_FT * upf;
     let mut out = LabelReport::default();
     let mid = |e: &cadaddy_walk3d::MepEquipment| Vec2::new((e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0);
-    // The copies in a typical room: (index, level, outline).
-    let mut placed: Vec<(usize, &str, &[Vec2])> = Vec::new();
+    // The copies in a typical room: (index, level, the room's outline, the unit's footprint).
+    let mut placed: Vec<(usize, &str, &[Vec2], &[Vec2])> = Vec::new();
     for (i, e) in copies.iter().enumerate() {
-        if let Some((level, outline, _)) = e.properties.get("ROOM").and_then(|r| rooms.get(r)) {
-            placed.push((i, level.as_str(), outline.as_slice()));
+        let Some(room) = e.properties.get("ROOM") else { continue };
+        let unit = units.get(room).map_or(&[][..], |u| u.1.as_slice());
+        if let Some((level, outline, _)) = rooms.get(room) {
+            placed.push((i, level.as_str(), outline.as_slice(), unit));
         }
     }
     // Every label and copy that may go together, nearest first.
@@ -1913,7 +1917,7 @@ pub(crate) fn label_typical_copies(
             continue;
         }
         let p = Vec2::new(l.at[0], l.at[1]);
-        for &(ci, _, outline) in placed.iter().filter(|(_, level, _)| same_level(&l.level, level)) {
+        for &(ci, _, outline, unit) in placed.iter().filter(|(_, level, _, _)| same_level(&l.level, level)) {
             let Some(e) = copies.get(ci) else { continue };
             let d = (mid(e) - p).len();
             if nearest.get(li).copied().flatten().is_none_or(|(n, _)| d < n)
@@ -1921,7 +1925,8 @@ pub(crate) fn label_typical_copies(
             {
                 *n = Some((d, ci));
             }
-            if d <= reach || (outline.len() >= 3 && cadaddy_geom::point_in_polygon(outline, p)) {
+            let holds = |poly: &[Vec2]| poly.len() >= 3 && cadaddy_geom::point_in_polygon(poly, p);
+            if d <= reach || holds(outline) || holds(unit) {
                 pairs.push((d, li, ci));
             }
         }
@@ -2749,7 +2754,7 @@ mod feeder_route_tests {
             label("DP2-2", 4),
             PlanLabel { text: "DP2-2".into(), level: "2".into(), at: [2500.0, 300.0], sheet: "E-2".into() },
         ];
-        let rep = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, 12.0);
+        let rep = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, &BTreeMap::new(), 12.0);
         assert_eq!((rep.labelled, rep.unmatched), (4, 1), "{rep:?}");
         assert_eq!(rep.misses, vec!["DP2-2 (2): nearest copy G-202, 48.6 ft".to_string()]);
         assert_eq!(sp.mep.equipment.iter().find(|e| e.tag == "G-201").and_then(|e| e.properties.get(FEEDER_LABEL)), Some(&"DP1-1".to_string()));
@@ -2821,7 +2826,7 @@ mod feeder_route_tests {
         ];
         sp.mep.feeders = schedule_feeders(&sp);
         let labels = vec![PlanLabel { text: "DP1-3".into(), level: "Level 7".into(), at: [1000.0, 700.0], sheet: "E-7".into() }];
-        assert_eq!(label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, 12.0).labelled, 1);
+        assert_eq!(label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, &BTreeMap::new(), 12.0).labelled, 1);
         let (feeds, notes) = typical_feeds(&sp);
         assert!(notes.is_empty(), "{notes:?}");
         let tags = |f: &TypicalFeed| f.chain.iter().map(|&e| sp.mep.equipment[e].tag.clone()).collect::<Vec<_>>();
@@ -2859,7 +2864,7 @@ mod feeder_route_tests {
             PlanLabel { text: "DP1-1".into(), level: "1".into(), at: at(1000.0), sheet: "E-1".into() },
             PlanLabel { text: "DP1-9".into(), level: "1".into(), at: at(2000.0), sheet: "E-1".into() },
         ];
-        let rep = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, 12.0);
+        let rep = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, &BTreeMap::new(), 12.0);
         assert_eq!((rep.labelled, rep.unmatched), (2, 1), "{rep:?}");
         assert_eq!(rep.misses, vec!["DP1-2 (1): nearest copy G-101, 9.0 ft".to_string()]);
         let label = |t: &str| sp.mep.equipment.iter().find(|e| e.tag == t).and_then(|e| e.properties.get(FEEDER_LABEL)).cloned();
@@ -2906,7 +2911,7 @@ mod feeder_route_tests {
             PlanLabel { text: "DP1-3".into(), level: "Level 1".into(), at: [1000.0, 700.0], sheet: "E-1".into() },
             PlanLabel { text: "DP1-3".into(), level: "Level 2".into(), at: [1210.0, 590.0], sheet: "E-2".into() },
         ];
-        let rep = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, 12.0);
+        let rep = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, &BTreeMap::new(), 12.0);
         assert_eq!((rep.labelled, rep.unmatched), (2, 0), "{rep:?}");
         let (feeds, notes) = typical_feeds(&sp);
         assert!(notes.is_empty(), "{notes:?}");
@@ -2923,5 +2928,32 @@ mod feeder_route_tests {
             "{:#?}",
             runs.iter().map(|r| &r.source_sheet).collect::<BTreeSet<_>>()
         );
+    }
+
+    /// A label lettered in the unit but outside the room the plan's label traced (the unit's bath
+    /// or entry), farther than the reach, names the copy whose unit footprint holds it.
+    #[test]
+    fn a_label_anywhere_in_the_units_footprint_names_its_copy() {
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, levels: levels(1), ..Default::default() };
+        let mut rooms = BTreeMap::new();
+        sp.mep.equipment = vec![copy("G", 1, 1, 1000.0, &mut rooms), copy("G", 1, 2, 1400.0, &mut rooms)];
+        // The units: 13 ft wide side by side, 30 ft deep, past the traced rooms (y 480–900).
+        let unit = |x0: f64| vec![Vec2::new(x0, 300.0), Vec2::new(x0 + 156.0, 300.0), Vec2::new(x0 + 156.0, 660.0), Vec2::new(x0, 660.0)];
+        let units: BTreeMap<String, (String, Vec<Vec2>)> =
+            [("101".to_string(), ("Level 1".to_string(), unit(920.0))), ("102".to_string(), ("Level 1".to_string(), unit(1320.0)))]
+                .into_iter()
+                .collect();
+        // 15 ft south of each copy, out of its traced room and past the reach, in its unit.
+        let labels = vec![
+            PlanLabel { text: "DP1-1".into(), level: "1".into(), at: [1060.0, 420.0], sheet: "E-1".into() },
+            PlanLabel { text: "DP1-2".into(), level: "1".into(), at: [1330.0, 420.0], sheet: "E-1".into() },
+        ];
+        let before = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, &BTreeMap::new(), 12.0);
+        assert_eq!((before.labelled, before.unmatched), (0, 2), "{before:?}");
+        let rep = label_typical_copies(&mut sp.mep.equipment, &labels, &rooms, &units, 12.0);
+        assert_eq!((rep.labelled, rep.unmatched), (2, 0), "{rep:?}");
+        let label = |t: &str| sp.mep.equipment.iter().find(|e| e.tag == t).and_then(|e| e.properties.get(FEEDER_LABEL)).cloned();
+        // Each label its own unit's copy.
+        assert_eq!((label("G-101").as_deref(), label("G-102").as_deref()), (Some("DP1-1"), Some("DP1-2")));
     }
 }

@@ -6423,6 +6423,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
         // The plans' breaker labels of the feeders to a typical panel, placed (Q6436).
         let mut feeder_marks: Vec<super::gearbuild::PlanLabel> = Vec::new();
+        // Each stamped unit's footprint (its typical view's unit box in the room), by its room.
+        let mut unit_footprints: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>)> = BTreeMap::new();
         let mut sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) if reference.is_some() => {
@@ -6647,6 +6649,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 room_panels = panels;
                 panel_rooms = rooms;
+                unit_footprints = footprints.iter().map(|(l, r, c, _)| (r.clone(), (l.clone(), c.clone()))).collect();
                 sleeping = guest;
                 // A room an enlarged plan of its own shows: that plan's devices, not the overall
                 // plan's copies of some of them.
@@ -6890,7 +6893,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             let (mut gear, room_panels) = super::printcond::room_panel_equipment(&room_panels, &panel_rooms, sp.units_per_foot);
             // Each copy of a typical panel takes the breaker label lettered in its room (Q6436).
             if !feeder_marks.is_empty() {
-                let rep = super::gearbuild::label_typical_copies(&mut gear, &feeder_marks, &panel_rooms, sp.units_per_foot);
+                let rep = super::gearbuild::label_typical_copies(&mut gear, &feeder_marks, &panel_rooms, &unit_footprints, sp.units_per_foot);
                 progress_line(&format!(
                     "  typical panels' feeder labels: {} copies took the label lettered by them; {} labels no copy took {:?}",
                     rep.labelled, rep.unmatched, rep.misses
