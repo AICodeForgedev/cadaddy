@@ -730,12 +730,19 @@ fn is_six(v: &f64) -> bool {
     (*v - 6.0).abs() < 1e-9
 }
 
-/// A room, found by its tag text (`name`, or `number`) on the plan.
+/// A room, found by its tag text (`name`, or `number`, or `label`) on the plan. In a spec it is
+/// one entry per room: keyed by its level and number when it has a number, else by its name
+/// ([`merge`]).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Room {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number: Option<String>,
+    /// The plan's label for the room when `name` and `number` correct it (a misread name, a room
+    /// labelled with the wrong number or by its number alone): the room is found by this text
+    /// and takes the entry's name and number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// The level it's on; none = whichever level's region holds its tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
@@ -2717,8 +2724,12 @@ impl BuildingSpec {
                 "rooms",
                 format!("rooms/{name}"),
                 format!("{name}{on}: {ceiling}{}", if mats.is_empty() { String::new() } else { format!("; {mats}") }),
-                // Rooms merge by name: one without a name can't be picked out.
-                if r.name.trim().is_empty() { None } else { named(&["rooms"], "name", &r.name) },
+                // Rooms merge by number, else by name ([`room_at`]).
+                match r.number.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                    Some(n) => named(&["rooms"], "number", n),
+                    None if r.name.trim().is_empty() => None,
+                    None => named(&["rooms"], "name", &r.name),
+                },
             );
         }
         for f in &self.families {
@@ -3776,10 +3787,53 @@ fn envelope_assembly_issues(at: &str, a: &Assembly, out: &mut Vec<Issue>) {
     }
 }
 
+/// A spec text as a key: trimmed, spacing collapsed, case ignored; none when blank.
+fn key_text(v: Option<&serde_json::Value>) -> Option<String> {
+    let t = v?.as_str()?.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    (!t.is_empty()).then_some(t)
+}
+
+/// The room of `items` a rooms patch item `c` is: keyed by its level and number when it has a
+/// number, else by its plan label, else by its name. A patch without a level (or an item without
+/// one) is the one item of that number or label when only one has it. A name alone is the
+/// unnumbered room of that name, else the only room of it: a name every room of a unit type
+/// shares picks out none of them.
+fn room_at(items: &[serde_json::Value], c: &serde_json::Value) -> Option<usize> {
+    let level = key_text(c.get("level"));
+    let by = |field: &str, id: &str| {
+        let same: Vec<usize> = items.iter().enumerate().filter(|(_, x)| key_text(x.get(field)).as_deref() == Some(id)).map(|(i, _)| i).collect();
+        let exact = same.iter().copied().find(|i| items.get(*i).is_some_and(|x| key_text(x.get("level")) == level));
+        exact.or_else(|| {
+            let loose: Vec<usize> =
+                same.iter().copied().filter(|i| level.is_none() || items.get(*i).is_some_and(|x| key_text(x.get("level")).is_none())).collect();
+            (loose.len() == 1).then(|| loose.first().copied()).flatten()
+        })
+    };
+    if let Some(n) = key_text(c.get("number")) {
+        return by("number", &n);
+    }
+    if let Some(l) = key_text(c.get("label")) {
+        return by("label", &l);
+    }
+    let name = key_text(c.get("name"))?;
+    let named: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| key_text(x.get("name")).as_deref() == Some(name.as_str()))
+        .filter(|(_, x)| level.is_none() || key_text(x.get("level")).is_none_or(|l| Some(l) == level))
+        .map(|(i, _)| i)
+        .collect();
+    named
+        .iter()
+        .copied()
+        .find(|i| items.get(*i).is_some_and(|x| key_text(x.get("number")).is_none()))
+        .or_else(|| (named.len() == 1).then(|| named.first().copied()).flatten())
+}
+
 /// Merge `patch` into `base` (both spec JSON): objects merge key by key, `null` removes a key; a
-/// list of named items (levels, wall, ceiling and soffit types, rooms, families, stairs,
-/// elevators, MEP systems by `name`; layers by `layer`) merges item by item, an item with
-/// `"remove": true` removing it; other lists are replaced.
+/// list of named items (levels, wall, ceiling and soffit types, families, stairs, elevators,
+/// MEP systems by `name`; layers by `layer`; rooms by level and number, else name: [`room_at`])
+/// merges item by item, an item with `"remove": true` removing it; other lists are replaced.
 pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
     use serde_json::Value;
     match (base, patch) {
@@ -3798,11 +3852,16 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                 };
                 match (b.get_mut(k), key, v) {
                     (Some(Value::Array(items)), Some(key), Value::Array(changes)) => {
+                        let rooms = k == "rooms";
                         for c in changes.iter().take(MAX_ITEMS) {
-                            let id = c.get(key).and_then(Value::as_str).map(str::to_ascii_lowercase);
-                            let at = id.as_ref().and_then(|id| {
-                                items.iter().position(|x| x.get(key).and_then(Value::as_str).map(str::to_ascii_lowercase).as_ref() == Some(id))
-                            });
+                            let at = if rooms {
+                                room_at(items, c)
+                            } else {
+                                let id = c.get(key).and_then(Value::as_str).map(str::to_ascii_lowercase);
+                                id.as_ref().and_then(|id| {
+                                    items.iter().position(|x| x.get(key).and_then(Value::as_str).map(str::to_ascii_lowercase).as_ref() == Some(id))
+                                })
+                            };
                             let remove = c.get("remove").and_then(Value::as_bool) == Some(true);
                             match (at, remove) {
                                 (Some(i), true) => {
@@ -3810,10 +3869,13 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                                 }
                                 (Some(i), false) => {
                                     if let Some(x) = items.get_mut(i) {
-                                        // The item keeps its own spelling of the name.
+                                        // The item keeps its own spelling of the name. A room
+                                        // takes the patch's (an entry may rename its room), but
+                                        // not a blank one: that gives no name.
                                         let id = x.get(key).cloned();
+                                        let blank = c.get(key).and_then(Value::as_str).is_some_and(|n| n.trim().is_empty());
                                         merge(x, c);
-                                        if let (Some(id), Value::Object(o)) = (id, x) {
+                                        if let (true, Some(id), Value::Object(o)) = (!rooms || blank, id, x) {
                                             o.insert(key.to_string(), id);
                                         }
                                     }
@@ -4036,6 +4098,53 @@ mod tests {
         assert_eq!(base, serde_json::json!({"levels": [{"name": "L2", "height_ft": 12}, {"name": "L3", "height_ft": 9}]}));
     }
 
+    /// Rooms merge by level and number when they have one, else by plan label, else by name
+    /// (Q6426): number-only rooms never share a key, an entry renames its room, a level's 101 is
+    /// not another level's.
+    #[test]
+    fn rooms_merge_by_level_and_number() {
+        let mut base = serde_json::json!({"rooms": []});
+        let two = serde_json::json!({"rooms": [{"name": "", "number": "101", "ceiling_ft": 9}, {"name": "", "number": "102", "ceiling_ft": 8}]});
+        merge(&mut base, &two);
+        merge(&mut base, &two);
+        assert_eq!(base, two, "set twice: still one entry each");
+        // A per-room edit touches only its room.
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": " 102 ", "ceiling_ft": 7}]}));
+        assert_eq!(base["rooms"][0]["ceiling_ft"], 9);
+        assert_eq!(base["rooms"][1]["ceiling_ft"], 7);
+        // Named and renamed by number; a blank name in an edit keeps the room's.
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "Storage", "number": "101"}]}));
+        assert_eq!(base["rooms"][0], serde_json::json!({"name": "Storage", "number": "101", "ceiling_ft": 9}));
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "ceiling_ft": 9}]}));
+        assert_eq!(base["rooms"][0]["name"], "Storage");
+        // Another level's 101 is another room; once levels tell them apart, each is its own.
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "level": "L2", "ceiling_ft": 8}]}));
+        assert_eq!(base["rooms"][0]["level"], "L2", "the one 101 without a level takes it");
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "level": "L3", "ceiling_ft": 10}]}));
+        assert_eq!(base["rooms"].as_array().map(Vec::len), Some(3));
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "level": "l3", "ceiling_ft": 11}]}));
+        assert_eq!(base["rooms"][0]["ceiling_ft"], 8);
+        assert_eq!(base["rooms"][2]["ceiling_ft"], 11);
+        // Two 101s and no level: which one is unknown, so it is a new entry, not either room.
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "ceiling_ft": 12}]}));
+        assert_eq!(base["rooms"].as_array().map(Vec::len), Some(4));
+        // A name shared by numbered rooms (a unit type) picks out none of them.
+        let mut units = serde_json::json!({"rooms": [{"name": "UNIT", "number": "201"}, {"name": "UNIT", "number": "202"}]});
+        merge(&mut units, &serde_json::json!({"rooms": [{"name": "unit", "ceiling_ft": 9}]}));
+        assert_eq!(units["rooms"].as_array().map(Vec::len), Some(3));
+        assert!(units["rooms"][0].get("ceiling_ft").is_none() && units["rooms"][1].get("ceiling_ft").is_none());
+        merge(&mut units, &serde_json::json!({"rooms": [{"name": "UNIT", "ceiling_ft": 8.5}]}));
+        assert_eq!(units["rooms"][2]["ceiling_ft"], 8.5, "the unnumbered UNIT entry");
+        // A plan label keys an entry that corrects it; removing by number removes only that room.
+        let mut fix = serde_json::json!({"rooms": [{"name": "STORAGE", "label": "ST0RAGE"}, {"name": "", "number": "104"}]});
+        merge(&mut fix, &serde_json::json!({"rooms": [{"name": "STOR", "label": "st0rage"}, {"number": "104", "remove": true}]}));
+        assert_eq!(fix, serde_json::json!({"rooms": [{"name": "STOR", "label": "st0rage"}]}));
+        // A room with neither a name nor a number is never another room.
+        let mut blank = serde_json::json!({"rooms": [{"name": "", "number": "1"}]});
+        merge(&mut blank, &serde_json::json!({"rooms": [{"name": ""}]}));
+        assert_eq!(blank["rooms"].as_array().map(Vec::len), Some(2));
+    }
+
     #[test]
     fn roof_and_band_assemblies() {
         let mut s = BuildingSpec::from_rules(&Rules::fallback());
@@ -4161,6 +4270,7 @@ mod tests {
             ("wall_types/WT2", at("/wall_types/1")),
             ("walls", at("/walls")),
             ("rooms/Office", at("/rooms/0")),
+            ("rooms/102", at("/rooms/1")),
             ("families/W1", at("/families/1")),
             ("stairs/S1", at("/stairs/0")),
             ("facades/South", at("/exterior/facades/1")),
@@ -4187,11 +4297,8 @@ mod tests {
             assert_eq!(&p.path.as_ref().unwrap().get(&v), want, "{key}");
         }
         for p in &d {
-            // The room with only a number can't be picked out by name: no path.
-            let Some(path) = &p.path else {
-                assert_eq!(p.key, "rooms/102");
-                continue;
-            };
+            // Every part has a path (a room known by its number alone too, Q6426).
+            let path = p.path.as_ref().unwrap_or_else(|| panic!("{} has no path", p.key));
             assert!(!path.get(&v).is_null(), "{}", p.key);
             // Put back unchanged: the spec is identical.
             let mut same = v.clone();

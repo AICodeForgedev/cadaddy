@@ -27,7 +27,7 @@ struct ARFieldScreen: View {
                     if showFieldLayers {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("SHOW").font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(.secondary)
-                            LayerSwitches(store: layerStore, style: DesignStyle(background: .teal), scope: .room)
+                            LayerSwitches(store: layerStore, style: DesignStyle(background: .teal), layers: FieldView.room.layers)
                         }
                         .padding(16)
                         .frame(width: 290)

@@ -172,7 +172,7 @@ fn plan_texts(d: &Drawing) -> Vec<Txt> {
 
 /// The plan's outlines: the boxes of its closed polylines and of open ones of four corners or
 /// more (a PDF's rectangle often comes unclosed).
-fn plan_outlines(d: &Drawing) -> Vec<([f64; 2], [f64; 2])> {
+pub(crate) fn plan_outlines(d: &Drawing) -> Vec<([f64; 2], [f64; 2])> {
     let mut out = Vec::new();
     for e in d.model.iter().take(MAX_ITEMS) {
         let EntityKind::LwPolyline(pl) = &e.kind else { continue };

@@ -15,10 +15,18 @@ final class LayerStore: ObservableObject {
 @available(iOS 18.0, *)
 @MainActor
 final class BuildingExperience: ObservableObject {
-    let building = SampleBuilding.sample()
+    let building: SampleBuilding
+    /// The four views' rules over this building (tiers computed once).
+    let filter: ViewFilter
     let renderer = BuildingRenderer()
 
     @Published private(set) var scope: DesignScope = .building
+    /// At whole-building scope: Architectural or MEP. A model opens in MEP, mains and big gear.
+    @Published private(set) var wholeView: FieldView = .mep
+    @Published private(set) var density: MEPDensity = .mains
+    /// Where Floor and Room go from the view control: the last floor and room visited.
+    private(set) var lastLevel: Int = 2
+    private(set) var lastRoom: String?
     @Published var style: DesignStyle
     @Published private(set) var layers: LayerPrefs
     @Published private(set) var focus: SystemFocus?
@@ -31,7 +39,13 @@ final class BuildingExperience: ObservableObject {
     @Published var fps: Double = 0
     @Published var search = ""
     @Published var hiddenGroups: Set<BuildingSystem> = []
-    @Published var showLayers = false
+    @Published var showLayers = false { didSet { if !showLayers { overlay = nil } } }
+    /// Where the chrome is on this screen (measured by the view, laid out by ChromeLayout).
+    @Published private(set) var chrome: ChromeLayout?
+    /// A floating panel over the scene (the layers panel), kept clear of labels.
+    var overlay: CGRect?
+    /// The room sheet pulled down to its handle and primary button.
+    @Published var sheetCollapsed = false
 
     private var store = LayerStore.shared
     private var subs: Set<AnyCancellable> = []
@@ -47,6 +61,16 @@ final class BuildingExperience: ObservableObject {
     static let contrastKey = "field.design.highContrast"
 
     init() {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let b = SampleBuilding.sample()
+        building = b
+        let t1 = CFAbsoluteTimeGetCurrent()
+        filter = ViewFilter(b)
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-fpslog") {
+            print(String(format: "FIELD-INIT sample %.1f ms filter %.1f ms", (t1 - t0) * 1000, (CFAbsoluteTimeGetCurrent() - t1) * 1000))
+        }
+        #endif
         var s = DesignStyle()
         if let raw = UserDefaults.standard.string(forKey: Self.backgroundKey), let bg = DesignBackground(rawValue: raw) { s.background = bg }
         s.highContrast = UserDefaults.standard.bool(forKey: Self.contrastKey) || UIAccessibility.isDarkerSystemColorsEnabled
@@ -58,6 +82,71 @@ final class BuildingExperience: ObservableObject {
             self.renderer.applyLayers()
             self.renderer.refreshLabels(self.scope)
         }.store(in: &subs)
+    }
+
+    /// The active view (one of the four) with what it looks at.
+    var viewState: ViewState {
+        switch scope {
+        case .building: return ViewState(view: wholeView, density: density)
+        case let .floor(i): return ViewState(view: .floor, level: i)
+        case let .room(n): return ViewState(view: .room, level: building.room(n)?.level, room: n)
+        }
+    }
+
+    var activeView: FieldView { viewState.view }
+
+    /// How many objects the active view draws. Worked out off the main thread (memoised per view and switch
+    /// state); until it arrives the header keeps the last number, so a view change never waits on it.
+    var drawnCount: Int {
+        let st = viewState, prefs = layers
+        let key = "\(st.view)|\(st.density)|\(st.level ?? -1)|\(st.room ?? "")|\(prefs.off.map(\.rawValue).sorted())"
+        if let n = countCache[key] { lastCount = n; return n }
+        if !counting.contains(key) {
+            counting.insert(key)
+            let f = filter
+            Task.detached(priority: .utility) {
+                let n = f.drawn(st, prefs: prefs).count
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.countCache[key] = n
+                    self.counting.remove(key)
+                    self.objectWillChange.send()
+                }
+            }
+        }
+        return lastCount
+    }
+    private var countCache: [String: Int] = [:]
+    private var counting: Set<String> = []
+    private var lastCount = 0
+
+    /// Pipes MEP leaves out because the model gives no size (the visible note in Full MEP).
+    var unknownSizePipes: Int { filter.classifier.unknownSizeCount(building) }
+
+    /// The view control: Architectural and MEP show the whole building; Floor and Room open the last ones visited.
+    func setView(_ v: FieldView) {
+        guard v != activeView else { return }
+        selection.selectionChanged()
+        switch v {
+        case .architectural, .mep:
+            wholeView = v
+            if scope == .building { clearFocus(); renderer.apply(scope: .building, liftFocus: liftFocus) } else { go(.building) }
+        case .floor:
+            go(.floor(currentLevel ?? lastLevel))
+        case .room:
+            let level = currentLevel ?? lastLevel
+            let room = lastRoom.flatMap { n in building.room(n).map { $0.level == level ? n : nil } ?? nil }
+                ?? building.rooms(on: level).first { $0.name == "Guest Room" }?.number
+                ?? lastRoom
+            if let room { go(.room(room)) }
+        }
+    }
+
+    func setDensity(_ d: MEPDensity) {
+        guard d != density else { return }
+        density = d
+        selection.selectionChanged()
+        if scope == .building { renderer.apply(scope: .building, liftFocus: liftFocus) }
     }
 
     var currentRoom: String? { if case let .room(n) = scope { return n } else { return nil } }
@@ -88,6 +177,13 @@ final class BuildingExperience: ObservableObject {
     }
 
     func detach() { renderer.stop() }
+
+    /// The view measured its chrome: frame the scene into what is left.
+    func setChrome(_ c: ChromeLayout) {
+        guard c != chrome else { return }
+        chrome = c
+        renderer.chromeChanged()
+    }
 
     func tick(_ dt: Double) {
         if let c = revealClock {
@@ -127,9 +223,13 @@ final class BuildingExperience: ObservableObject {
         setRevealProgress(1)
         revealDone = true
         revealLine = nil
+        renderer.prewarmFloors()
     }
 
     func replayReveal() {
+        // The opening plays into MEP, mains and big gear.
+        wholeView = .mep
+        density = .mains
         go(.building)
         revealDone = false
         revealDragBase = 0
@@ -147,6 +247,9 @@ final class BuildingExperience: ObservableObject {
         if !keepFocus { clearFocus() }
         if case .building = s {} else { liftFocus = nil; railDetent = nil }
         scope = s
+        if case let .floor(i) = s { lastLevel = i }
+        if case let .room(n) = s { lastRoom = n; lastLevel = building.room(n)?.level ?? lastLevel }
+        if case .room = s {} else { sheetCollapsed = false }
         selected = keepFocus ? selected : nil
         search = ""
         renderer.apply(scope: s, liftFocus: liftFocus)
@@ -267,14 +370,21 @@ final class BuildingExperience: ObservableObject {
         switch scope {
         case .building:
             let floors = building.levels.filter { $0.height > 0 }.count
-            return "\(floors) floors · \(building.occupiedRoomCount) rooms · \(building.elements.count.formatted()) objects"
+            let n = drawnCount
+            switch wholeView {
+            case .architectural:
+                return "Architectural · \(floors) floors · \(building.occupiedRoomCount) rooms · \(n.formatted()) objects"
+            default:
+                return "\(density == .full ? "Full MEP" : "Mains and big gear") · \(n.formatted()) of \(building.elements.count.formatted()) objects"
+            }
         case let .floor(i):
             let rooms = building.rooms(on: i).filter { $0.name != "Corridor" }
-            let n = building.elements.filter { $0.level == i }.count
+            let n = drawnCount
             return rooms.isEmpty ? "\(n) objects" : "\(rooms.count) rooms · \(n.formatted()) objects"
         case let .room(num):
             guard let r = building.room(num) else { return "" }
-            let w = Units.feetInches(Double(r.max.x - r.min.x)), d = Units.feetInches(Double(r.max.y - r.min.y))
+            // Whole inches: the stat line is one quiet line, the card carries the exact sizes.
+            let w = Units.feetInches(Double(r.max.x - r.min.x), denominator: 1), d = Units.feetInches(Double(r.max.y - r.min.y), denominator: 1)
             return "\(r.name) · \(w) × \(d) · \(building.elements(in: num).count) objects"
         }
     }

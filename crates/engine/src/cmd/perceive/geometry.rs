@@ -41,6 +41,8 @@ pub(crate) struct Seg {
     /// The mean width of the closed outline the segment is a side of (see [`outline_width`]),
     /// infinite for an open line.
     pub outline_width: f64,
+    /// A wall's face drawn unit by unit, joined into one ([`join_unit_runs`]): masonry.
+    pub unit_run: bool,
 }
 
 /// The mean width of a closed outline: twice its area over its perimeter (a `w × l` rectangle
@@ -62,7 +64,9 @@ pub(crate) fn segments(ents: &[&std::sync::Arc<Entity>]) -> Vec<Seg> {
             break;
         }
         match &e.kind {
-            EntityKind::Line(l) => out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.to_string(), outline_width: f64::INFINITY }),
+            EntityKind::Line(l) => {
+                out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.to_string(), outline_width: f64::INFINITY, unit_run: false })
+            }
             EntityKind::LwPolyline(p) => {
                 // A closed outline (flagged closed, or ending where it starts): how wide it is.
                 let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
@@ -75,7 +79,7 @@ pub(crate) fn segments(ents: &[&std::sync::Arc<Entity>]) -> Vec<Seg> {
                 };
                 for sg in (Polyline { vertices: p.vertices.clone(), closed: p.closed }).segments() {
                     if let Segment::Line(l) = sg {
-                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.to_string(), outline_width: width });
+                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.to_string(), outline_width: width, unit_run: false });
                     }
                 }
             }
@@ -616,6 +620,7 @@ pub(crate) fn join_unit_runs(segs: &mut Vec<Seg>, k: f64) -> usize {
             h.b = stop;
             // No more one outline's side: the whole face of a wall.
             h.outline_width = f64::INFINITY;
+            h.unit_run = true;
         }
         for &i in units.iter().skip(1).chain(on) {
             if let Some(g) = gone.get_mut(i).filter(|g| !**g) {
@@ -731,26 +736,6 @@ pub(crate) fn drop_sliver_pairs(segs: &[Seg], found: &mut Vec<Pair>, lim: &Limit
             by_face.entry(f).or_default().push(k);
         }
     }
-    // The side of the line `f` a segment's middle is on (+1 / −1, 0 on it).
-    let side = |f: &Seg, s: &Seg| {
-        let d = f.b - f.a;
-        let len = d.len();
-        if len <= 1e-12 {
-            return 0.0;
-        }
-        let v = d.cross(s.a.mid(s.b) - f.a) / len;
-        if v.abs() <= 1e-9 { 0.0 } else { v.signum() }
-    };
-    // How far two pairs run side by side along the first one's centreline.
-    let overlap = |p: &Pair, q: &Pair| {
-        let len = p.c0.dist(p.c1);
-        if len <= 1e-12 {
-            return 0.0;
-        }
-        let u = (p.c1 - p.c0) * (1.0 / len);
-        let (a, b) = minmax(u.dot(q.c0 - p.c0), u.dot(q.c1 - p.c0));
-        (b.min(len) - a.max(0.0)).max(0.0)
-    };
     let mut drop = vec![false; found.len()];
     for (k, p) in found.iter().enumerate() {
         for (t, f) in [(p.faces[0], p.faces[1]), (p.faces[1], p.faces[0])] {
@@ -758,17 +743,489 @@ pub(crate) fn drop_sliver_pairs(segs: &[Seg], found: &mut Vec<Pair>, lim: &Limit
                 continue;
             }
             let (Some(ts), Some(fs)) = (segs.get(t), segs.get(f)) else { continue };
-            let here = side(fs, ts);
+            let here = side_of(fs, ts);
             let far_wall = by_face.get(&f).into_iter().flatten().any(|&q| {
                 q != k
                     && found.get(q).is_some_and(|qp| {
                         let other = if qp.faces[0] == f { qp.faces[1] } else { qp.faces[0] };
-                        !thin(other) && segs.get(other).is_some_and(|os| side(fs, os) * here < 0.0) && overlap(p, qp) > 0.5 * p.length
+                        !thin(other) && segs.get(other).is_some_and(|os| side_of(fs, os) * here < 0.0) && run_overlap(p, qp) > 0.5 * p.length
                     })
             });
             if far_wall {
                 drop[k] = true;
                 break;
+            }
+        }
+    }
+    let before = found.len();
+    let mut it = drop.iter();
+    found.retain(|_| !it.next().copied().unwrap_or(false));
+    before - found.len()
+}
+
+/// The side of the line `f` a segment's middle is on (+1 / −1, 0 on it).
+fn side_of(f: &Seg, s: &Seg) -> f64 {
+    let d = f.b - f.a;
+    let len = d.len();
+    if len <= 1e-12 {
+        return 0.0;
+    }
+    let v = d.cross(s.a.mid(s.b) - f.a) / len;
+    if v.abs() <= 1e-9 { 0.0 } else { v.signum() }
+}
+
+/// How far two pairs run side by side along the first one's centreline.
+fn run_overlap(p: &Pair, q: &Pair) -> f64 {
+    let len = p.c0.dist(p.c1);
+    if len <= 1e-12 {
+        return 0.0;
+    }
+    let u = (p.c1 - p.c0) * (1.0 / len);
+    let (a, b) = minmax(u.dot(q.c0 - p.c0), u.dot(q.c1 - p.c0));
+    (b.min(len) - a.max(0.0)).max(0.0)
+}
+
+/// A symbol's outline is at most this deep across the pair it holds, inches (a tub, a counter, a
+/// through-wall unit with its sleeve): a pair closed off by lines running further is closed off
+/// by other walls' faces.
+const SYMBOL_DEPTH_MAX_IN: f64 = 96.0;
+/// How far past a pair's end the outline holding it may close it off, inches (a tub's rounded
+/// corner and rim beyond the straight of its basin).
+const CAP_REACH_IN: f64 = 12.0;
+/// How far a wall may stop short of the next one on its line, inches: an opening between them.
+const OPENING_REACH_IN: f64 = 72.0;
+/// Marks looked at, at most (hostile drawings).
+const MAX_MARKS: usize = 1_000_000;
+/// Cells one item of a [`CellIndex`] is filed under, at most; a bigger one is looked at always.
+const MAX_ITEM_CELLS: i64 = 400;
+
+/// Something drawn that a symbol's outline holds and a wall's doesn't (Q6423): lettering (its
+/// middle), a fill, a curve (a drain, a basin's rim) or a closed inner outline (a basin, the
+/// openings of a grille). Its extents on the plan.
+pub(crate) struct Mark {
+    pub lo: Vec2,
+    pub hi: Vec2,
+    /// A fill (hatch or solid): it may fill the outline right to its sides.
+    pub fill: bool,
+}
+
+/// The [`Mark`]s among a plan's objects. `k` is drawing units per inch: a closed outline or a
+/// curve under ¼" (a speck of a stipple) is no mark.
+pub(crate) fn symbol_marks(d: &Drawing, ents: &[&std::sync::Arc<Entity>], k: f64) -> Vec<Mark> {
+    let least = 0.25 * k;
+    let mut out = Vec::new();
+    for e in ents {
+        if out.len() >= MAX_MARKS {
+            break;
+        }
+        // (kind: 0 lettering, 1 fill, 2 curve or outline)
+        let kind = match &e.kind {
+            EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) => 0,
+            EntityKind::Hatch(_) | EntityKind::Solid(_) | EntityKind::Trace(_) => 1,
+            EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Ellipse(_) => 2,
+            EntityKind::LwPolyline(p) => {
+                let ends_at_start = p.vertices.len() >= 4 && p.vertices.first().zip(p.vertices.last()).is_some_and(|(a, b)| a.p.dist(b.p) <= 1e-9);
+                if !(p.closed || ends_at_start) || p.vertices.len() < 3 {
+                    continue;
+                }
+                2
+            }
+            _ => continue,
+        };
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        if b.is_empty() || !b.min.is_finite() || !b.max.is_finite() {
+            continue;
+        }
+        let size = b.max - b.min;
+        match kind {
+            0 => {
+                let c = b.center();
+                out.push(Mark { lo: c, hi: c, fill: false });
+            }
+            1 => out.push(Mark { lo: b.min, hi: b.max, fill: true }),
+            _ if size.x.min(size.y) >= least && size.x.max(size.y) >= 4.0 * least => out.push(Mark { lo: b.min, hi: b.max, fill: false }),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Items (by their extents) filed by grid cell, to find the ones near a place.
+struct CellIndex {
+    cell: f64,
+    cells: std::collections::HashMap<(i64, i64), Vec<usize>>,
+    /// Items over [`MAX_ITEM_CELLS`] cells: near everything.
+    wide: Vec<usize>,
+}
+
+impl CellIndex {
+    fn new<I: IntoIterator<Item = (Vec2, Vec2)>>(cell: f64, items: I) -> CellIndex {
+        let mut ix = CellIndex { cell, cells: std::collections::HashMap::new(), wide: Vec::new() };
+        for (i, (lo, hi)) in items.into_iter().enumerate() {
+            let ((x0, y0), (x1, y1)) = (ix.at(lo), ix.at(hi));
+            if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > MAX_ITEM_CELLS {
+                ix.wide.push(i);
+                continue;
+            }
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    ix.cells.entry((x, y)).or_default().push(i);
+                }
+            }
+        }
+        ix
+    }
+
+    fn at(&self, p: Vec2) -> (i64, i64) {
+        let c = |v: f64| (v / self.cell).floor().clamp(-1e15, 1e15) as i64;
+        (c(p.x), c(p.y))
+    }
+
+    /// The items whose cells meet the box `lo`–`hi`, each once, in order.
+    fn near(&self, lo: Vec2, hi: Vec2) -> Vec<usize> {
+        let ((x0, y0), (x1, y1)) = (self.at(lo), self.at(hi));
+        let mut out = self.wide.clone();
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) <= MAX_ITEM_CELLS * 4 {
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    out.extend(self.cells.get(&(x, y)).into_iter().flatten());
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
+/// A pair's frame: along its centreline from `c0` (`s`) and across it (`v`).
+#[derive(Clone, Copy)]
+struct Frame {
+    c0: Vec2,
+    u: Vec2,
+    n: Vec2,
+    len: f64,
+}
+
+impl Frame {
+    fn of(p: &Pair) -> Option<Frame> {
+        let len = p.c0.dist(p.c1);
+        if !(len > 1e-9 && len.is_finite() && p.thickness.is_finite()) {
+            return None;
+        }
+        let u = (p.c1 - p.c0) * (1.0 / len);
+        Some(Frame { c0: p.c0, u, n: u.perp(), len })
+    }
+
+    fn sv(&self, q: Vec2) -> (f64, f64) {
+        (self.u.dot(q - self.c0), self.n.dot(q - self.c0))
+    }
+}
+
+/// The outline a pair lies in: from `s0` to `s1` along it, `v0` to `v1` across it.
+#[derive(Clone, Copy)]
+struct SymbolBox {
+    f: Frame,
+    s0: f64,
+    s1: f64,
+    v0: f64,
+    v1: f64,
+}
+
+impl SymbolBox {
+    /// Whether `q` is in the box grown by `m` (shrunk, when negative).
+    fn holds(&self, q: Vec2, m: f64) -> bool {
+        let (s, v) = self.f.sv(q);
+        s >= self.s0 - m && s <= self.s1 + m && v >= self.v0 - m && v <= self.v1 + m
+    }
+
+    /// Its extents on the plan.
+    fn bounds(&self) -> (Vec2, Vec2) {
+        let f = &self.f;
+        let at = |s: f64, v: f64| f.c0 + f.u * s + f.n * v;
+        let pts = [at(self.s0, self.v0), at(self.s0, self.v1), at(self.s1, self.v0), at(self.s1, self.v1)];
+        let lo = pts.iter().fold(Vec2::new(f64::INFINITY, f64::INFINITY), |a, p| a.min(*p));
+        let hi = pts.iter().fold(Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY), |a, p| a.max(*p));
+        (lo, hi)
+    }
+}
+
+/// The line closing a pair off at one end: a line across both its faces (three quarters of the
+/// way at least) at most [`CAP_REACH_IN`] past the end and an inch short of it, drawn in one or
+/// more pieces; the nearest. Or, with no such line, both faces stopping there (a print may leave
+/// an outline's side out). Where along the pair it stands, and how far across it runs either way
+/// (`v` from, to).
+fn pair_cap(segs: &[Seg], near: &CellIndex, p: &Pair, f: &Frame, at_end: bool, k: f64) -> Option<(f64, f64, f64)> {
+    let h = p.thickness / 2.0;
+    let (inward, outward) = (k, CAP_REACH_IN * k);
+    let s_end = if at_end { f.len } else { 0.0 };
+    let (lo, hi) = if at_end { (s_end - inward, s_end + outward) } else { (s_end - outward, s_end + inward) };
+    let e = f.c0 + f.u * s_end;
+    let r = outward + h + k;
+    // The pieces across the pair there: where each stands along it, and its span across.
+    let mut across: Vec<(f64, f64, f64)> = Vec::new();
+    for i in near.near(e - Vec2::new(r, r), e + Vec2::new(r, r)) {
+        if p.faces.contains(&i) {
+            continue;
+        }
+        let Some(sg) = segs.get(i) else { continue };
+        let d = sg.b - sg.a;
+        let l = d.len();
+        if l <= 1e-9 || (f.u.dot(d) / l).abs() > 0.5 {
+            continue;
+        }
+        let ((sa, va), (sb, vb)) = (f.sv(sg.a), f.sv(sg.b));
+        if sa.min(sb) < lo || sa.max(sb) > hi {
+            continue;
+        }
+        across.push(((sa + sb) / 2.0, va.min(vb), va.max(vb)));
+    }
+    across.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let line_tol = 0.5 * k;
+    let mut best: Option<(f64, f64, f64)> = None;
+    let mut i = 0;
+    while i < across.len() {
+        // The pieces on one line across.
+        let mut j = i + 1;
+        while across.get(j).zip(across.get(j - 1)).is_some_and(|(b, a)| b.0 - a.0 <= line_tol) {
+            j += 1;
+        }
+        let Some(line) = across.get(i..j) else { break };
+        let s = line.iter().map(|x| x.0).sum::<f64>() / line.len() as f64;
+        let mut spans: Vec<(f64, f64)> = line.iter().map(|x| (x.1, x.2)).collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut run: Option<(f64, f64)> = None;
+        for (a, b) in spans.into_iter().chain(std::iter::once((f64::INFINITY, f64::INFINITY))) {
+            match run {
+                Some((r0, r1)) if a <= r1 + line_tol => run = Some((r0, r1.max(b))),
+                Some((r0, r1)) => {
+                    let covers = r1.min(h) - r0.max(-h);
+                    if covers >= 0.75 * p.thickness && best.is_none_or(|bst| (s - s_end).abs() < (bst.0 - s_end).abs()) {
+                        best = Some((s, r0, r1));
+                    }
+                    run = Some((a, b));
+                }
+                None => run = Some((a, b)),
+            }
+        }
+        i = j;
+    }
+    // Both faces stopping there close it all the same.
+    let stops = |i: usize| {
+        segs.get(i).is_some_and(|sg| {
+            let (sa, sb) = (f.u.dot(sg.a - f.c0), f.u.dot(sg.b - f.c0));
+            let s = if at_end { sa.max(sb) } else { sa.min(sb) };
+            (s - s_end).abs() <= inward
+        })
+    };
+    best.or_else(|| (stops(p.faces[0]) && stops(p.faces[1])).then_some((s_end, -h, h)))
+}
+
+/// The outline holding a pair when it is a symbol's (Q6423): closed off at both ends
+/// ([`pair_cap`]), no deeper than [`SYMBOL_DEPTH_MAX_IN`], with a [`Mark`] inside (a fill may fill
+/// it to its sides). A wall's lines hold none of these; a masonry wall's faces drawn unit by unit
+/// hold the units' cores, and are no symbol's.
+fn symbol_box(segs: &[Seg], near: &CellIndex, marks: &[Mark], marks_near: &CellIndex, p: &Pair, k: f64) -> Option<SymbolBox> {
+    // A face drawn unit by unit is masonry's, its cores no symbol's marks.
+    if p.faces.iter().any(|&i| segs.get(i).is_some_and(|s| s.unit_run)) {
+        return None;
+    }
+    let f = Frame::of(p)?;
+    let h = p.thickness / 2.0;
+    let (s0, a0, b0) = pair_cap(segs, near, p, &f, false, k)?;
+    let (s1, a1, b1) = pair_cap(segs, near, p, &f, true, k)?;
+    let (v0, v1) = ((-h).min(a0.max(a1)), h.max(b0.min(b1)));
+    if v1 - v0 > SYMBOL_DEPTH_MAX_IN * k || s1 <= s0 {
+        return None;
+    }
+    let bx = SymbolBox { f, s0, s1, v0, v1 };
+    let m = 0.5 * k;
+    let (lo, hi) = bx.bounds();
+    let corners = |mk: &Mark| [mk.lo, Vec2::new(mk.lo.x, mk.hi.y), Vec2::new(mk.hi.x, mk.lo.y), mk.hi];
+    let held = marks_near.near(lo, hi).into_iter().filter_map(|i| marks.get(i)).any(|mk| {
+        let grow = if mk.fill { m } else { -m };
+        corners(mk).iter().all(|&q| bx.holds(q, grow))
+    });
+    held.then_some(bx)
+}
+
+/// Whether `q` reads the same wall as `p` another way: parallel, on its line within half the
+/// thicker one, over half the shorter.
+fn same_reading(p: &Pair, q: &Pair) -> bool {
+    let (Some(f), Some(g)) = (Frame::of(p), Frame::of(q)) else { return false };
+    if f.u.cross(g.u).abs() > 0.035 || f.n.dot(q.c0.mid(q.c1) - p.c0).abs() > p.thickness.max(q.thickness) / 2.0 {
+        return false;
+    }
+    let (a, b) = (f.u.dot(q.c0 - p.c0), f.u.dot(q.c1 - p.c0));
+    b.max(a).min(f.len) - a.min(b).max(0.0) > 0.5 * f.len.min(g.len)
+}
+
+/// Whether the pair `p` is part of the walls through `q`: an end of it in `q` (a corner or a
+/// tee), or `q` on its line beyond an end, an opening's width at most away, much as thick.
+fn joins(p: &Pair, f: &Frame, q: &Pair, k: f64) -> bool {
+    let Some(g) = Frame::of(q) else { return false };
+    let cross = f.u.cross(g.u).abs();
+    if cross >= 0.34 {
+        let reach = q.thickness / 2.0 + (2.0 * k).max(0.5 * p.thickness);
+        return [p.c0, p.c1].iter().any(|&e| {
+            let t = g.u.dot(e - q.c0).clamp(0.0, g.len);
+            e.dist(q.c0 + g.u * t) <= reach
+        });
+    }
+    if cross > 0.035 || f.n.dot(q.c0.mid(q.c1) - p.c0).abs() > p.thickness.max(q.thickness) / 2.0 {
+        return false;
+    }
+    let (thin, thick) = (p.thickness.min(q.thickness), p.thickness.max(q.thickness));
+    if thick > 1.5 * thin {
+        return false;
+    }
+    let (a, b) = (f.u.dot(q.c0 - p.c0), f.u.dot(q.c1 - p.c0));
+    let gap = (a.min(b) - f.len).max(-a.max(b));
+    (-2.0 * k..=OPENING_REACH_IN * k).contains(&gap)
+}
+
+/// Drops the pairs read off symbols (Q6423): equipment and fixtures drawn on the plan (a
+/// through-wall unit's outline and grille, a tub's front and basin, a counter round its sink, a
+/// tag's frame round its number) pair up like walls' faces. A pair closed off at both ends by an
+/// outline that holds lettering, a fill, a curve or an inner outline ([`symbol_box`]) is a
+/// symbol's when neither it nor any pair inside that outline joins a wall outside it (an end in
+/// another wall, a wall on its line beyond an end): then none of those is a wall, nor the other
+/// readings of them with a face inside that join no wall. Then a symbol's line paired with a
+/// line that is a wall's face on its far side, or with one that joins no wall, is no wall either.
+/// Walls join other walls or the shell; the symbols are left to the equipment and plumbing
+/// readers. `marks` are the plan's
+/// [`symbol_marks`]; `k` is drawing units per inch. Returns how many pairs were dropped.
+pub(crate) fn drop_symbol_pairs(segs: &[Seg], found: &mut Vec<Pair>, marks: &[Mark], k: f64) -> usize {
+    if found.is_empty() || marks.is_empty() || !(k.is_finite() && k > 0.0) {
+        return 0;
+    }
+    let cell = 24.0 * k;
+    let seg_ix = CellIndex::new(cell, segs.iter().map(|s| (s.a.min(s.b), s.a.max(s.b))));
+    let mark_ix = CellIndex::new(cell, marks.iter().map(|m| (m.lo, m.hi)));
+    let pair_ix = CellIndex::new(
+        cell,
+        found.iter().map(|p| {
+            let h = Vec2::new(p.thickness / 2.0, p.thickness / 2.0);
+            (p.c0.min(p.c1) - h, p.c0.max(p.c1) + h)
+        }),
+    );
+    let m = 0.5 * k;
+    let face_in = |bx: &SymbolBox, i: usize| segs.get(i).is_some_and(|s| bx.holds(s.a, m) && bx.holds(s.b, m));
+    let inside = |bx: &SymbolBox, q: &Pair| face_in(bx, q.faces[0]) && face_in(bx, q.faces[1]);
+    let mut drop = vec![false; found.len()];
+    let mut boxes: Vec<SymbolBox> = Vec::new();
+    for (i, p) in found.iter().enumerate() {
+        if drop.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        let Some(bx) = symbol_box(segs, &seg_ix, marks, &mark_ix, p, k) else { continue };
+        // The symbol: the pairs inside its outline, and the other readings of those with a face
+        // inside it.
+        let (lo, hi) = bx.bounds();
+        let near = pair_ix.near(lo - Vec2::new(cell, cell), hi + Vec2::new(cell, cell));
+        let mut members: Vec<usize> = near.iter().copied().filter(|&j| j == i || found.get(j).is_some_and(|q| inside(&bx, q))).collect();
+        if !members.contains(&i) {
+            members.push(i);
+        }
+        let readings: Vec<usize> = near
+            .iter()
+            .copied()
+            .filter(|j| !members.contains(j))
+            .filter(|&j| {
+                found.get(j).is_some_and(|q| {
+                    (face_in(&bx, q.faces[0]) || face_in(&bx, q.faces[1])) && members.iter().filter_map(|&x| found.get(x)).any(|r| same_reading(r, q))
+                })
+            })
+            .collect();
+        // A wall outside the outline that one of them joins: the outline is a wall's. A reading
+        // that joins one is that wall's (its face runs along the symbol), and stays.
+        let joins_out = |a: usize| {
+            let (Some(pa), Some(fa)) = (found.get(a), found.get(a).and_then(Frame::of)) else { return false };
+            let reach = Vec2::new(OPENING_REACH_IN * k + pa.thickness, OPENING_REACH_IN * k + pa.thickness);
+            pair_ix
+                .near(pa.c0.min(pa.c1) - reach, pa.c0.max(pa.c1) + reach)
+                .into_iter()
+                .filter(|j| !members.contains(j) && !readings.contains(j))
+                .filter_map(|j| found.get(j))
+                .any(|q| !inside(&bx, q) && joins(pa, &fa, q, k))
+        };
+        if members.iter().any(|&a| joins_out(a)) {
+            continue;
+        }
+        let kept: Vec<usize> = readings.iter().copied().filter(|&a| joins_out(a)).collect();
+        for j in members.into_iter().chain(readings.into_iter().filter(|j| !kept.contains(j))) {
+            if let Some(d) = drop.get_mut(j) {
+                *d = true;
+            }
+        }
+        boxes.push(bx);
+    }
+    // A symbol's line paired with a line that is a wall's face on its far side (the unit's
+    // outline and the glazing line of the window it stands under): one line can't be a wall's
+    // face on both sides, so the space between is the room's.
+    if !boxes.is_empty() {
+        let box_ix = CellIndex::new(cell, boxes.iter().map(SymbolBox::bounds));
+        let mut by_face: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+        for (j, q) in found.iter().enumerate().filter(|(j, _)| !drop.get(*j).copied().unwrap_or(true)) {
+            for f in q.faces {
+                by_face.entry(f).or_default().push(j);
+            }
+        }
+        let mut beside = Vec::new();
+        for (j, q) in found.iter().enumerate().filter(|(j, _)| !drop.get(*j).copied().unwrap_or(true)) {
+            let h = Vec2::new(q.thickness, q.thickness);
+            let near = box_ix.near(q.c0.min(q.c1) - h, q.c0.max(q.c1) + h);
+            for (sym, wall) in [(q.faces[0], q.faces[1]), (q.faces[1], q.faces[0])] {
+                let symbol_line = near.iter().filter_map(|&b| boxes.get(b)).any(|bx| face_in(bx, sym) && !face_in(bx, wall));
+                let (Some(ss), Some(ws)) = (segs.get(sym), segs.get(wall)) else { continue };
+                if !symbol_line {
+                    continue;
+                }
+                let here = side_of(ws, ss);
+                // The walls on the far side, along this pair (the wall may be found in pieces).
+                let Some(f) = Frame::of(q) else { continue };
+                let mut along: Vec<(f64, f64)> = by_face
+                    .get(&wall)
+                    .into_iter()
+                    .flatten()
+                    .filter(|&&r| r != j)
+                    .filter_map(|&r| found.get(r))
+                    .filter(|rp| {
+                        let other = if rp.faces[0] == wall { rp.faces[1] } else { rp.faces[0] };
+                        segs.get(other).is_some_and(|os| side_of(ws, os) * here < 0.0)
+                    })
+                    .map(|rp| {
+                        let (a, b) = minmax(f.u.dot(rp.c0 - q.c0), f.u.dot(rp.c1 - q.c0));
+                        (a.max(0.0), b.min(f.len))
+                    })
+                    .filter(|(a, b)| b > a)
+                    .collect();
+                along.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let (mut covered, mut reach) = (0.0, f64::NEG_INFINITY);
+                for (a, b) in along {
+                    covered += (b - a.max(reach)).max(0.0);
+                    reach = reach.max(b);
+                }
+                // Or it joins no wall: a symbol's line and a line by it (glazing across the
+                // opening the unit stands in), no wall's piece.
+                let walled = || {
+                    let reach = Vec2::new(OPENING_REACH_IN * k + q.thickness, OPENING_REACH_IN * k + q.thickness);
+                    pair_ix
+                        .near(q.c0.min(q.c1) - reach, q.c0.max(q.c1) + reach)
+                        .into_iter()
+                        .filter(|&r| r != j && !drop.get(r).copied().unwrap_or(true))
+                        .filter_map(|r| found.get(r))
+                        .any(|r| joins(q, &f, r, k))
+                };
+                if covered > 0.5 * f.len || !walled() {
+                    beside.push(j);
+                    break;
+                }
+            }
+        }
+        for j in beside {
+            if let Some(d) = drop.get_mut(j) {
+                *d = true;
             }
         }
     }
@@ -2102,7 +2559,7 @@ mod tests {
     use super::*;
 
     fn seg(a: (f64, f64), b: (f64, f64), w: f64) -> Seg {
-        Seg { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), layer: "A-WALL".into(), outline_width: w }
+        Seg { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), layer: "A-WALL".into(), outline_width: w, unit_run: false }
     }
 
     fn rect_sides(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Seg> {

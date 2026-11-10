@@ -277,13 +277,15 @@ fn edit_and_remove_work_on_one_part_of_every_section() {
     edit_unchanged(&mut h, "Openings in walls: ", &at(&s, "/openings"));
     assert!(button(&h, "Openings in walls: ", "Remove").is_none(), "the openings are never removed");
 
-    // A room with only a number can't be picked out by name: no Edit or Remove for it.
+    // A room known by its number alone is picked out by that number (Q6426): its own Edit and
+    // Remove, which touch only it.
     set(&mut h, json!({"rooms": [{"name": "Office"}, {"name": "", "number": "102"}]}));
     assert!(button(&h, "Office: ", "Edit").is_some());
-    let numbered = row(&h, "102: ");
-    let next = row(&h, "Openings in walls: ");
-    assert!(h.get_all_by_label("Edit").all(|e| e.rect().top() < numbered || e.rect().top() > next), "no Edit under the numbered room");
-    assert!(h.get_all_by_label("Remove").all(|e| e.rect().top() < numbered), "no Remove under the numbered room");
+    let s = spec(&mut h);
+    let rooms = s["rooms"].as_array().cloned().unwrap_or_default();
+    let numbered = rooms.iter().position(|r| r["number"] == "102").unwrap_or_else(|| panic!("no room 102 in {s}"));
+    edit_unchanged(&mut h, "102: ", &at(&s, &format!("/rooms/{numbered}")));
+    remove(&mut h, "102: ", &without(&s, "/rooms", &[numbered]));
 }
 
 /// Type `text` over the open editor's JSON and apply it.

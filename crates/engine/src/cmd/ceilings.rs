@@ -402,7 +402,11 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
                     plan_notes.iter().any(|(_, n, nat, _)| cadaddy_geom::point_in_polygon(&on_plan, *nat) && super::bspec::names_room(r, n))
                 })
             })
-            .map(|r| r.name.clone());
+            // Known by its number alone: by that (every such room's name is blank).
+            .map(|r| match r.number.as_deref().map(str::trim).filter(|n| !n.is_empty() && r.name.trim().is_empty()) {
+                Some(n) => n.to_string(),
+                None => r.name.clone(),
+            });
         ceilings.push((
             CeilingArea { level: level.name.clone(), room, outline: moved(&q), height_ft: h, grid, ceiling_type: None, guess: None, source: None },
             q,
@@ -482,7 +486,10 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
         sp.rcp.soffits.retain(|c| c.level != lv);
         sp.rcp.items.retain(|c| c.level != lv);
         for (c, _) in &ceilings {
-            if let Some(r) = c.room.as_ref().and_then(|n| sp.rooms.iter_mut().find(|r| &r.name == n)) {
+            let named = |r: &cadaddy_walk3d::SpecRoom, n: &str| {
+                if r.name.trim().is_empty() { r.number.as_deref().is_some_and(|m| m.trim() == n) } else { r.name == n }
+            };
+            if let Some(r) = c.room.as_ref().filter(|n| !n.trim().is_empty()).and_then(|n| sp.rooms.iter_mut().find(|r| named(r, n))) {
                 r.ceiling_ft = Some(c.height_ft);
             }
         }

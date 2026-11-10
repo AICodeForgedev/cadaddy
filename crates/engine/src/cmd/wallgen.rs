@@ -2113,6 +2113,22 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if strings > 0 {
         notes.push(format!("{}: {strings} line pairs of dimension strings and their extension lines not taken for walls.", level.name));
     }
+    // Equipment and fixtures drawn on the plan (a through-wall unit, a tub, a counter, a tag's
+    // frame) pair up like walls: a pair in an outline holding lettering, a fill or an inner
+    // outline, joining no wall, is the symbol's (Q6423), left to the equipment and plumbing readers.
+    let symbols = super::perceive::geometry::drop_symbol_pairs(&segs, &mut found, &super::perceive::geometry::symbol_marks(d, &ents, k), k);
+    if symbols > 0 {
+        notes.push(format!(
+            "{}: {symbols} line pairs inside equipment and fixture symbols (outlines holding lettering, a fill or an inner outline, joining no wall) not taken for walls.",
+            level.name
+        ));
+    }
+    // A stair drawn as linework (no stair block): its tread lines a tread apart pair up like a
+    // wall's faces. They are the stair's, read by the stair reader (Q6429).
+    let treads = drop_stair_treads(&segs, &mut found, k);
+    if treads > 0 {
+        notes.push(format!("{}: {treads} line pairs of stair treads (a flight's tread lines) not taken for walls.", level.name));
+    }
     // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
     // window's glazing drawn lighter): it is wall too.
     if !screened_ents.is_empty() && !found.is_empty() {
@@ -3918,6 +3934,24 @@ fn drop_dimension_strings(found: &mut Vec<super::perceive::geometry::Pair>, figu
                 let crosses = side(a, b, p.c0) * side(a, b, p.c1) < 0.0 && side(p.c0, p.c1, a) * side(p.c0, p.c1, b) < 0.0;
                 crosses || seg_dist(p.c0, a, b) <= t / 2.0 || seg_dist(p.c1, a, b) <= t / 2.0
             })
+    });
+    before - found.len()
+}
+
+/// Line pairs that are no wall: both faces tread lines of one stair flight
+/// ([`super::stairs::tread_lines`]: a row of four or more equal lines a tread apart, stopping on
+/// the stringers or the enclosure's walls at both ends). How many were dropped.
+pub(crate) fn drop_stair_treads(segs: &[super::perceive::geometry::Seg], found: &mut Vec<super::perceive::geometry::Pair>, k: f64) -> usize {
+    if found.is_empty() {
+        return 0;
+    }
+    let lines: Vec<(Vec2, Vec2)> = segs.iter().map(|s| (s.a, s.b)).collect();
+    let treads = super::stairs::tread_lines(&lines, k);
+    let tread = |i: usize| treads.get(i).copied().unwrap_or(false);
+    let before = found.len();
+    found.retain(|p| {
+        let [a, b] = p.faces;
+        !(tread(a) && tread(b))
     });
     before - found.len()
 }

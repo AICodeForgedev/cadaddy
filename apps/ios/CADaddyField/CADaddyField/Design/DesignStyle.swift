@@ -15,7 +15,7 @@ struct DesignStyle: Equatable {
 
     var isDark: Bool { background == .teal }
 
-    // MARK: backdrop (painted by the post-process pass)
+    // MARK: backdrop (a SwiftUI gradient behind the transparent 3D view)
 
     var bgTop: SIMD3<Float> {
         switch (background, highContrast) {
@@ -33,9 +33,6 @@ struct DesignStyle: Equatable {
         case (.white, true): return hex3(0xF2F4F6)
         }
     }
-    /// The flat colour RealityKit clears to; the post pass swaps it for the gradient.
-    var clear: SIMD3<Float> { (bgTop + bgBottom) / 2 }
-
     // MARK: architecture
 
     /// The ghost: one colour and one opacity for every shell face, so the blend is the same in any draw order.
@@ -70,6 +67,7 @@ struct DesignStyle: Equatable {
         case .cabinets: return UIColor(hex: 0xC4A27A)
         case .furniture: return UIColor(hex: 0xBDB6AC)
         case .architecture: return ghost
+        case .conveying: return UIColor(hex: 0xA9B4C2)
         }
     }
 
@@ -82,6 +80,43 @@ struct DesignStyle: Equatable {
     }
 
     var lightWarm: UIColor { UIColor(hex: 0xFFD596) }
+
+    /// Outline edges on system solids: the solid's colour, darker (or lighter on equipment in the dark look),
+    /// so the form reads at any distance.
+    func outline(_ base: UIColor) -> UIColor {
+        base.mixed(with: isDark ? UIColor(hex: 0x03100F) : UIColor(hex: 0x0E1A24), highContrast ? 0.6 : 0.42)
+    }
+
+    // MARK: depth and ground
+
+    /// What distant things fade toward: the backdrop where the building stands (an opaque colour mix).
+    var fog: UIColor {
+        switch (background, highContrast) {
+        case (.teal, false): return UIColor(hex: 0x14403C)
+        case (.teal, true): return UIColor(hex: 0x081A18)
+        case (.white, false): return UIColor(hex: 0xEDF1F4)
+        case (.white, true): return UIColor(hex: 0xF4F6F8)
+        }
+    }
+    /// How far the farthest things go toward the fog (high contrast keeps more of the colour).
+    var fogMax: Float { highContrast ? 0.4 : 0.62 }
+
+    /// A pool of light on the ground so the contact shadow has something to darken on a dark backdrop.
+    var groundGlow: UIColor? {
+        switch (background, highContrast) {
+        case (.teal, false): return UIColor(hex: 0x4FA89E, alpha: 0.42)
+        case (.teal, true): return UIColor(hex: 0x3C6E68, alpha: 0.5)
+        case (.white, _): return nil
+        }
+    }
+    var groundShadow: UIColor {
+        switch (background, highContrast) {
+        case (.teal, false): return UIColor(hex: 0x000000, alpha: 0.82)
+        case (.teal, true): return UIColor(hex: 0x000000, alpha: 0.9)
+        case (.white, false): return UIColor(hex: 0x0E1A24, alpha: 0.3)
+        case (.white, true): return UIColor(hex: 0x0E1A24, alpha: 0.42)
+        }
+    }
 
     // MARK: type and chrome (SwiftUI)
 
@@ -122,6 +157,7 @@ extension BuildingSystem {
         case .fire: return "Fire protection"
         case .cabinets: return "Cabinets"
         case .furniture: return "Furniture"
+        case .conveying: return "Elevators"
         }
     }
     var symbol: String {
@@ -134,6 +170,7 @@ extension BuildingSystem {
         case .fire: return "flame.fill"
         case .cabinets: return "cabinet.fill"
         case .furniture: return "bed.double.fill"
+        case .conveying: return "arrow.up.arrow.down.square"
         }
     }
 }
