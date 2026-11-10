@@ -48,11 +48,16 @@ fn walls(s: &mut Session, dy: f64) {
 const R: f64 = 1500.0;
 
 fn drawing() -> Session {
+    drawing_tagged(["OFFICE", "CORRIDOR"], json!([{"name": "Office"}, {"name": "Corridor"}]))
+}
+
+/// [`drawing`] with the rooms tagged `tags` (west, east) and the spec's `rooms`.
+fn drawing_tagged(tags: [&str; 2], rooms: serde_json::Value) -> Session {
     let mut s = Session::new();
     walls(&mut s, 0.0);
     layer(&mut s, "A-AREA-IDEN");
-    text(&mut s, [100.0, 120.0], "OFFICE");
-    text(&mut s, [340.0, 120.0], "CORRIDOR");
+    text(&mut s, [100.0, 120.0], tags[0]);
+    text(&mut s, [340.0, 120.0], tags[1]);
     // The RCP.
     walls(&mut s, R);
     layer(&mut s, "A-CLNG-GRID");
@@ -80,7 +85,7 @@ fn drawing() -> Session {
         &json!({"replace": true, "spec": {
             "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 1000, 1000], "base": [0, 0]}],
             "layers": [{"layer": "A-WALL", "role": "wall"}, {"layer": "A-AREA-IDEN", "role": "room_tag"}, {"layer": "E-LITE", "role": "fixture"}],
-            "rooms": [{"name": "Office"}, {"name": "Corridor"}]
+            "rooms": rooms
         }}),
     )
     .unwrap();
@@ -88,6 +93,19 @@ fn drawing() -> Session {
 }
 
 const REGION: [f64; 4] = [-100.0, R - 100.0, 1000.0, R + 500.0];
+
+/// Rooms the spec knows by number alone each take their own area's height (Q6426: every such
+/// room's name is blank, and the first of them took both).
+#[test]
+fn rooms_known_by_number_take_their_own_rcp_heights() {
+    let mut s = drawing_tagged(["101", "102"], json!([{"name": "", "number": "101"}, {"name": "", "number": "102"}]));
+    s.execute("rcp.read", &json!({"region": REGION, "level": "L1", "apply": true})).unwrap();
+    let sp = s.execute("bspec.get", &json!({})).unwrap();
+    let rooms = sp["spec"]["rooms"].as_array().unwrap();
+    assert_eq!(rooms.len(), 2, "{rooms:?}");
+    let room = |n: &str| rooms.iter().find(|r| r["number"] == n).unwrap()["ceiling_ft"].clone();
+    assert_eq!((room("101"), room("102")), (json!(9.0), json!(8.0)), "{rooms:?}");
+}
 
 #[test]
 fn the_rcp_gives_heights_grids_soffits_and_fixtures() {

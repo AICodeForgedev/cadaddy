@@ -68,6 +68,7 @@ mod racewaygeom;
 mod readerwire;
 mod roofframing;
 mod rooms3d;
+mod specrooms;
 mod roomsmodel;
 mod rulemodel;
 mod scopesplit;
