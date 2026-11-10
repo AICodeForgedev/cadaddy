@@ -61,6 +61,10 @@ pub(crate) struct BackToBack {
     /// The kinds of box (its device's: `switch`) that keep their spot: the other moves.
     pub keep_kinds: Vec<String>,
     pub keep_source: String,
+    /// Most vertical clear distance between the two boxes' bodies at which they still count,
+    /// inches (0: their heights overlap; none: any heights in the wall both are hosted in).
+    pub max_vertical_in: Option<f64>,
+    pub vertical_source: String,
 }
 
 /// A box as the clearance sees it (drawing units): its centre, its face's direction along and
@@ -127,7 +131,8 @@ fn overlaps(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3, gap: f64) -> bool {
 }
 
 /// How far apart along the wall `a` at `ca` and `b` at `cb` are, edge to edge, when they are
-/// on opposite faces of one wall the back-to-back rule applies to.
+/// on opposite faces of one wall the back-to-back rule applies to (each hosted in it at its own
+/// height: the caller gives a box a wall only where that wall stands at the box's height).
 fn apart_back_to_back(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3) -> Option<f64> {
     if !(a.movable && b.movable && a.rated && a.wall.is_some() && a.wall == b.wall && a.out.dot(b.out) < -0.9) {
         return None;
@@ -139,12 +144,19 @@ fn apart_back_to_back(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3) -> Option<
     Some(d.dot(a.along).abs() - (a.w + b.w) / 2.0)
 }
 
-/// The two boxes' conflict, if any.
-fn conflict(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3, gap: f64, apart: f64) -> Option<Why> {
+/// The vertical clear distance between `a` at `ca` and `b` at `cb` (0 where their heights overlap).
+fn vertical_gap(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3) -> f64 {
+    ((ca.z - cb.z).abs() - (a.h + b.h) / 2.0).max(0.0)
+}
+
+/// The two boxes' conflict, if any (`vertical`: the back-to-back rule's vertical reach, drawing
+/// units; none: any heights).
+fn conflict(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3, gap: f64, apart: f64, vertical: Option<f64>) -> Option<Why> {
     if overlaps(a, ca, b, cb, gap) {
         return Some(Why::Overlap);
     }
-    (apart > 0.0 && apart_back_to_back(a, ca, b, cb).is_some_and(|e| e < apart - 1e-9)).then_some(Why::BackToBack)
+    let near_in_height = vertical.is_none_or(|v| vertical_gap(a, ca, b, cb) <= v + 1e-9);
+    (apart > 0.0 && near_in_height && apart_back_to_back(a, ca, b, cb).is_some_and(|e| e < apart - 1e-9)).then_some(Why::BackToBack)
 }
 
 /// The boxes near a point, by level and grid cell.
@@ -209,6 +221,7 @@ pub(crate) fn clear(
     }
     let gap = rule.gap_in.max(0.0) * upi;
     let apart = rule.back_to_back.min_apart_in.max(0.0) * upi;
+    let vertical = rule.back_to_back.max_vertical_in.filter(|v| v.is_finite()).map(|v| v.max(0.0) * upi);
     let step = rule.step_in.max(0.125) * upi;
     let steps = ((rule.max_move_in.max(0.0) * upi / step).floor() as usize).min(1_000);
     let b2b_move =
@@ -237,7 +250,7 @@ pub(crate) fn clear(
     let free = |grid: &Grid, at: &[Vec3], x: usize, p: Vec3| -> bool {
         let Some(bx) = boxes.get(x) else { return false };
         grid.near(&bx.level, p).into_iter().filter(|y| *y != x).all(|y| match (boxes.get(y), at.get(y)) {
-            (Some(by), Some(cy)) => conflict(bx, p, by, *cy, gap, apart).is_none(),
+            (Some(by), Some(cy)) => conflict(bx, p, by, *cy, gap, apart, vertical).is_none(),
             _ => true,
         })
     };
@@ -263,7 +276,7 @@ pub(crate) fn clear(
         others.sort_unstable();
         for j in others {
             let (Some(b), Some(&ci), Some(&cj)) = (boxes.get(j), at.get(i), at.get(j)) else { continue };
-            let Some(why) = conflict(a, ci, b, cj, gap, apart) else { continue };
+            let Some(why) = conflict(a, ci, b, cj, gap, apart, vertical) else { continue };
             let back = why == Why::BackToBack;
             if back && (a.keep || b.keep) {
                 out.kept += 1;
@@ -382,6 +395,30 @@ mod tests {
         assert!(m.shift.y < 0.0 && m.shift.x.abs() < 1e-9);
         let p = boxes[1].centre + Vec3::new(m.shift.x, m.shift.y, 0.0);
         assert!(!overlaps(&boxes[0], boxes[0].centre, &boxes[1], p, 0.25));
+    }
+
+    #[test]
+    fn back_to_back_boxes_count_at_heights_within_the_rules_vertical_reach() {
+        // A switch at 46 in and a receptacle at 18 in on the two faces of one rated wall, 1 in
+        // apart along it: one stud cavity, back to back at any heights (no vertical reach) ...
+        let a = wall_box(50.0, 2.0, 46.0, Vec2::new(0.0, 1.0), 7, true);
+        let b = wall_box(51.0, -2.0, 18.0, Vec2::new(0.0, -1.0), 7, true);
+        let c = clear(&[a.clone(), b.clone()], &rule(), 1.0, &|_, _| true, &|_, _| true);
+        assert_eq!(c.moved.len(), 1, "{c:?}");
+        // ... and not where the rule's reach says their heights must overlap or come close.
+        let mut r = rule();
+        r.back_to_back.max_vertical_in = Some(0.0);
+        let c = clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true);
+        assert!(c.moved.is_empty() && c.putty.is_empty(), "{c:?}");
+        r.back_to_back.max_vertical_in = Some(24.0);
+        assert_eq!(clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true).moved.len(), 1);
+        // A box not hosted in the wall (no wall: above it) never counts.
+        let mut up = b.clone();
+        up.wall = None;
+        up.movable = false;
+        up.centre.z = 150.0;
+        let c = clear(&[a, up], &rule(), 1.0, &|_, _| true, &|_, _| true);
+        assert!(c.moved.is_empty() && c.putty.is_empty(), "{c:?}");
     }
 
     #[test]

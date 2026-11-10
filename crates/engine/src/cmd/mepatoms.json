@@ -225,6 +225,8 @@
       "putty_item": "Putty pad, listed, for an outlet box",
       "putty_source": "IBC 714.4.2 exception 1.4: boxes on opposite sides of a fire-resistance-rated wall closer than 24 in, where neither can move that far on its wall, are both protected by listed putty pads",
       "max_move_in": 32.0,
+      "max_vertical_in": null,
+      "vertical_source": "IBC 714.4.2 exception 1.1 states a horizontal separation only: two boxes hosted in one rated wall on its opposite faces count at any heights in it (one stud cavity runs the wall's height); a box counts only where that wall stands at its height, never a device above or below the wall whose plan point lies on it (a roof device over a top-floor wall). The rule's alternative, a vertical reach in inches (0: their heights overlap), is kept for a job whose documents limit it",
       "keep_kinds": ["switch"],
       "keep_source": "a switch's spot is where its door's latch side, the bed or the counter it serves puts it: the field keeps it and moves the box on the other face, else pads both (trade practice; the designed device location wins over a move)"
     },

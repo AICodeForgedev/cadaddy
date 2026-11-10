@@ -852,3 +852,41 @@ fn ganged_devices_stand_at_one_height_the_one_the_documents_give() {
     let c = mid(&boxes[0]);
     assert!((c[2] - 43.75).abs() < 0.6, "the box at it too: {c:?}");
 }
+
+#[test]
+fn a_box_above_the_rated_wall_is_never_back_to_back_with_the_walls_boxes() {
+    // Test finding (fix-box-rule-ignores-height): the back-to-back rule paired boxes by plan
+    // position only. A weatherproof receptacle 30" above the roof (the storey is 10 ft), set on a
+    // roof element facing east, whose plan point lies on the rated wall between the two rooms, was
+    // taken as back to back with the switch in that wall at 46", and the re-route moved one of them
+    // a stud bay. Boxes are back to back only when both are hosted in that wall at their heights,
+    // on its opposite faces, their heights within the rule's reach.
+    // Whether any box was moved or padded, or any device moved, for the back-to-back rule.
+    let touched = |s: &mut Session| {
+        let boxes = box_bodies(s);
+        assert_eq!(boxes.len(), 2, "{boxes:?}");
+        let d = s.doc().expect("doc");
+        let device_moved = |of: &str| {
+            Handle::parse_hex(of)
+                .and_then(|h| d.model.get(h))
+                .is_some_and(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get("design:location").is_some())
+        };
+        boxes.iter().any(|b| b.4.get("design:location").is_some() || b.4.get("correction:firestop").is_some() || device_moved(&b.1))
+    };
+    // The receptacle set at `height` in, its face east (as its host on the roof gives it); the
+    // build, then the re-route: whether the rule moved or padded anything after each.
+    let rerouted = |height: f64| {
+        let (mut s, built) = two_rooms_with(&[("switch", 19.6, 5.0, 46.0), ("receptacle", 20.4, 5.0, height)], true);
+        let boxes = box_bodies(&mut s);
+        assert_eq!(boxes.len(), 2, "{built}");
+        let rec = boxes.iter().find(|b| b.2[2] > height - 6.0 && b.3[2] < height + 6.0).map(|b| b.1.clone()).expect("the receptacle's box");
+        s.execute("bim.props.set", &json!({"handle": rec, "key": "face_normal", "value": "1.000,0.000"})).expect("face");
+        s.execute("conduit.reroute", &json!({})).expect("reroute");
+        (touched(&mut s), box_bodies(&mut s))
+    };
+    let (moved, above) = rerouted(150.0);
+    assert!(!moved, "a box moved or padded for a box above its wall: {above:?}");
+    // The same receptacle low in the wall at the switch's storey: back to back, one moved or both padded.
+    let (moved, low) = rerouted(18.0);
+    assert!(moved, "two boxes back to back in the rated wall: {low:?}");
+}
