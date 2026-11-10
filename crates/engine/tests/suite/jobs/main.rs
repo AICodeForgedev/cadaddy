@@ -56,6 +56,7 @@ mod mepfix_wholejob;
 mod meppipe_build;
 mod mepreview;
 mod ocrreviewtags;
+mod parapetsteps;
 mod pdfocrjunk;
 mod pdfplans;
 mod perceive;

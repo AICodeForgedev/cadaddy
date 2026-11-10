@@ -131,6 +131,11 @@ pub struct LevelMark {
     /// or a top of parapet marked with no level number.
     pub level: String,
     pub elevation_ft: f64,
+    /// For a top of parapet on an exterior elevation: the facade that elevation shows
+    /// (`north`, `south`, `east`, `west`), from the view title nearest the mark; none when no
+    /// title names one or two are as near.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facade: Option<String>,
 }
 
 /// What one stage found on one sheet.
@@ -1944,6 +1949,10 @@ fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
             .min_by(|a, b| from_name(t, a).total_cmp(&from_name(t, b)))
             .copied()
     };
+    // The exterior elevations' view titles (`NORTH ELEVATION`), for the facade a top of parapet
+    // is marked on.
+    let titles: Vec<(cadaddy_geom::Vec2, &'static str)> =
+        short.iter().filter_map(|t| facade_title(&t.value).map(|f| (t.at, f))).take(MAX_MARK_TEXTS).collect();
     let mut looked = 0usize;
     for t in &short {
         // The marker's name: the text but its elevation.
@@ -1963,7 +1972,7 @@ fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
         if let Some(kind) = datum {
             let el = own.map(|(v, _, _)| v).or_else(|| beside(t).and_then(|u| parse_elevation(&u.value)).map(|(v, _, _)| v));
             if let Some(v) = el.filter(|v| v.is_finite() && (-1000.0..=5000.0).contains(v)) {
-                out.push(LevelMark { level: kind.into(), elevation_ft: v });
+                out.push(LevelMark { level: kind.into(), elevation_ft: v, facade: None });
             }
             continue;
         }
@@ -1972,11 +1981,50 @@ fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
             // A parapet is no storey: its top is kept for the roof it stands round.
             let level = if n.kind == cadaddy_walk3d::levels::DatumKind::Parapet { Some(MARK_PARAPET.to_string()) } else { code_of_level(&n.name) };
             if let Some(level) = level.filter(|_| n.elevation_ft.is_finite() && (-1000.0..=5000.0).contains(&n.elevation_ft)) {
-                out.push(LevelMark { level, elevation_ft: n.elevation_ft });
+                let facade = if level == MARK_PARAPET { facade_near(&titles, t.at) } else { None };
+                out.push(LevelMark { level, elevation_ft: n.elevation_ft, facade });
             }
         }
     }
     out
+}
+
+/// The facade an exterior elevation's view title names (`NORTH ELEVATION`, `EAST EXTERIOR
+/// ELEVATION`): one compass side and the word elevation; none otherwise.
+fn facade_title(t: &str) -> Option<&'static str> {
+    let up = t.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    if !words.iter().any(|w| matches!(*w, "ELEVATION" | "ELEV")) {
+        return None;
+    }
+    let sides: Vec<&'static str> = words
+        .iter()
+        .filter_map(|w| match *w {
+            "NORTH" => Some("north"),
+            "SOUTH" => Some("south"),
+            "EAST" => Some("east"),
+            "WEST" => Some("west"),
+            _ => None,
+        })
+        .collect();
+    match sides.as_slice() {
+        [one] => Some(one),
+        _ => None,
+    }
+}
+
+/// The facade of the elevation a mark at `at` stands on: its view's title is printed under the
+/// view, so the title below the mark nearest it (height first: elevations stacked one over the
+/// other; then sideways: elevations side by side), when it is clearly the nearest (the next
+/// scores at least a quarter more). None when no title is below it or two are as near.
+fn facade_near(titles: &[(cadaddy_geom::Vec2, &'static str)], at: cadaddy_geom::Vec2) -> Option<String> {
+    let mut by: Vec<(f64, &str)> = titles.iter().filter(|(p, _)| p.y < at.y).map(|(p, f)| ((at.y - p.y) + 0.25 * (at.x - p.x).abs(), *f)).collect();
+    by.sort_by(|a, b| a.0.total_cmp(&b.0));
+    match by.as_slice() {
+        [] => None,
+        [(_, f)] => Some((*f).to_string()),
+        [(d0, f0), (d1, f1), ..] => (f0 == f1 || *d1 >= 1.25 * d0).then(|| (*f0).to_string()),
+    }
 }
 
 /// Plan sheets of a numbered series whose titles name no level take it from their number: in a
@@ -2124,6 +2172,19 @@ pub struct IndexLevel {
     /// above the roof's elevation (where it bears), lowest first. Only the roof level has them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub parapets_ft: Vec<f64>,
+    /// Each top of parapet with the facade whose elevation marks it (none: a section's mark, or
+    /// a title that names none), lowest first: a parapet that steps keeps a top per facade.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parapet_tops: Vec<ParapetTop>,
+}
+
+/// A top of parapet the index keeps for the roof: its height above the roof's elevation and
+/// the facade marking it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ParapetTop {
+    pub height_ft: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub facade: Option<String>,
 }
 
 /// The set as sheets: one entry per real sheet, the levels its plans show.
@@ -2301,13 +2362,19 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
     let mut finish: Vec<f64> = Vec::new();
     let mut plate: Vec<f64> = Vec::new();
     let mut parapet: Vec<f64> = Vec::new();
+    let mut parapet_marks: Vec<(f64, Option<String>)> = Vec::new();
     let site = |e: &SheetEntry| e.level.eq_ignore_ascii_case("SITE") || cadaddy_walk3d::levels::site_sheet(&e.discipline, &e.title);
     for e in project.sheets.iter().filter(|e| e.superseded_by.is_empty() && !site(e)) {
         for m in e.level_marks.iter().filter(|m| m.elevation_ft.is_finite()) {
             match m.level.as_str() {
                 MARK_FINISH_FLOOR => finish.push(m.elevation_ft),
                 MARK_PLATE => plate.push(m.elevation_ft),
-                MARK_PARAPET => parapet.push(m.elevation_ft),
+                MARK_PARAPET => {
+                    parapet.push(m.elevation_ft);
+                    if parapet_marks.len() < MAX_PARAPETS * 8 {
+                        parapet_marks.push((m.elevation_ft, m.facade.clone()));
+                    }
+                }
                 _ => marks.entry(m.level.clone()).or_default().push(m.elevation_ft),
             }
         }
@@ -2388,6 +2455,18 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
         parapets.sort_by(f64::total_cmp);
         parapets.truncate(MAX_PARAPETS);
     }
+    // The same tops by the facade marking each one.
+    let mut parapet_tops: Vec<ParapetTop> = Vec::new();
+    if let Some(roof) = elevation.get("R").copied() {
+        for (p, facade) in parapet_marks.iter().filter(|(p, _)| *p > roof + 1e-6 && *p <= roof + MAX_STOREY_FT) {
+            let h = ((p - roof) * 96.0).round() / 96.0;
+            if !parapet_tops.iter().any(|t| same(t.height_ft, h) && t.facade == *facade) {
+                parapet_tops.push(ParapetTop { height_ft: h, facade: facade.clone() });
+            }
+        }
+        parapet_tops.sort_by(|a, b| a.height_ft.total_cmp(&b.height_ft).then(a.facade.cmp(&b.facade)));
+        parapet_tops.truncate(MAX_PARAPETS * 4);
+    }
     // Above the first floor: its own mark is the datum (`100'-0"`, or the true elevation).
     let datum = elevation.get("1").copied().filter(|e| e.is_finite()).unwrap_or(0.0);
     for (i, c) in codes.iter().enumerate() {
@@ -2408,6 +2487,7 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             height_ft: el.zip(next).map(|(a, b)| b - a).filter(|h| *h > 0.0),
             elevation_source: if el.is_some() { source.get(c).map(|s| (*s).to_string()).unwrap_or_default() } else { String::new() },
             parapets_ft: if c == "R" { parapets.clone() } else { Vec::new() },
+            parapet_tops: if c == "R" { parapet_tops.clone() } else { Vec::new() },
         });
     }
     // A plan whose title names no level: in a building of one level it can only be that one
