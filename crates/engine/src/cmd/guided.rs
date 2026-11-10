@@ -16262,10 +16262,11 @@ fn drawn_gear_onto_plans(
 ) -> DrawnGearPlaced {
     let mut out = DrawnGearPlaced::default();
     let Some(place) = place else { return out };
-    // A place this step may replace: lettering, a proposal, its own of a run before.
+    // A place this step may replace: lettering, the layout of an earlier step (in the room the
+    // prints call, or proposed), its own of a run before.
     let replaceable = |e: &cadaddy_walk3d::MepEquipment| {
         e.sources.get("position").map(String::as_str) == Some(super::printcond::ROOM_PANEL_POSITION)
-            || e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed"))
+            || super::gearbuild::laid_out(e)
             || e.sources.get("footprint").is_some_and(|f| f.starts_with(super::gearbuild::DRAWN_FOOTPRINT))
     };
     let mut todo: Vec<String> = sp
@@ -16351,6 +16352,35 @@ fn drawn_gear_onto_plans(
         !gone
     });
     sp.mep.equipment.extend(made);
+    out
+}
+
+/// Where the electrical sheets (`pages`: riser and one-line labels, plan and sheet notes) call
+/// each panel the schedules list and the plans don't draw: upper case tag → the calls, in page
+/// order ([`super::gearbuild::called_in_texts`]).
+fn called_gear_locations(
+    sp: &cadaddy_walk3d::BuildingSpec,
+    pages: &[(String, cadaddy_doc::Drawing)],
+) -> BTreeMap<String, Vec<super::gearbuild::CalledAt>> {
+    let tags: Vec<String> = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .filter(|p| p.typical_of.is_none() && !sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&p.panel)))
+        .map(|p| p.panel.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let mut out: BTreeMap<String, Vec<super::gearbuild::CalledAt>> = BTreeMap::new();
+    if tags.is_empty() {
+        return out;
+    }
+    for (number, page) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(page);
+        let what = if super::onelinegear::is_diagram(&texts) { "riser or one-line label" } else { "sheet note" };
+        for (k, c) in super::gearbuild::called_in_texts(&texts, number, what, &tags) {
+            out.entry(k).or_default().push(c);
+        }
+    }
     out
 }
 
@@ -16575,7 +16605,10 @@ fn gear_step(
             }
         }
     }
-    let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
+    // Where the electrical sheets call the panels the plans don't draw (riser and one-line
+    // labels, notes), after each schedule's own location (Q6513).
+    let called = called_gear_locations(&sp, pages);
+    let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms, &called);
     let mut new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
     new_tags.extend(drawn.tags.iter().cloned());
     new_tags.extend(resized.iter().cloned());
@@ -16583,6 +16616,11 @@ fn gear_step(
     let zones = planned.zones.clone();
     let placed: Vec<String> =
         planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
+    // Laid out in the room the prints call (the documents' room), and proposed (no print locates it).
+    let by_status = |st: &str| -> Vec<String> {
+        planned.equipment.iter().filter(|e| e.sources.get("status").is_some_and(|x| x.eq_ignore_ascii_case(st))).map(|e| e.tag.clone()).collect()
+    };
+    let (located, proposed) = (by_status(super::gearbuild::LOCATED), by_status(super::gearbuild::PROPOSED));
     sp.mep.equipment.extend(planned.equipment);
     // A panel only lettered or proposed, with no working space where that puts it, takes a face
     // in its room that has it.
@@ -16692,7 +16730,7 @@ fn gear_step(
     let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
     let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
     let line = format!(
-        "  electrical gear: feeder types {} ({}); one-line feeds {}; schedule circuits given the one-line's breaker/feeder {from_oneline}; gear submittals give {} panels; at their plan symbols {}: {}; laid out {}: {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
+        "  electrical gear: feeder types {} ({}); one-line feeds {}; schedule circuits given the one-line's breaker/feeder {from_oneline}; gear submittals give {} panels; at their plan symbols {}: {}; laid out {} ({} where the prints call them, {} proposed): {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
         types.len(),
         type_tags.join(", "),
         incoming.len(),
@@ -16700,6 +16738,8 @@ fn gear_step(
         drawn.placed.len(),
         drawn.placed.join("; "),
         placed.len(),
+        located.len(),
+        proposed.len(),
         placed.join("; "),
         planned.unplaced,
         findings.len()
@@ -16929,7 +16969,7 @@ fn gear_step(
         }
     }
     result["gear"] = json!({
-        "placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review,
+        "placed": placed, "located": located, "proposed": proposed, "feeders": feeders, "unplaced": planned.unplaced, "review": review,
         "inferred_boxes": inferred_boxes,
         "oneline": {
             "sheets": oneline.sheets, "gear": oneline.gear, "electrodes": oneline.electrodes, "by_kind": oneline.by_kind,
@@ -22612,8 +22652,8 @@ fn build_runs(
 /// What an equipment question begins with (its tag follows).
 const EQUIP_QUESTION: &str = "Equipment electrical data: ";
 
-/// The panels only lettered or proposed whose place fails its working space (or stands on no
-/// wall, or under a duct), each moved to the nearest face in its room that has it ([`super::validate_gear::clear_face`]). Their tags.
+/// The panels only lettered, or laid out by the build (located or proposed), whose place fails its
+/// working space (or stands on no wall, or under a duct), each moved to the nearest face in its room that has it ([`super::validate_gear::clear_face`]). Their tags.
 fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::BuildingSpec, rooms: &[super::gearbuild::RoomBox]) -> Vec<String> {
     use super::validate_gear::{FaceNeed, Obstacle, built_doors, clear_face, gear_need};
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -22621,8 +22661,7 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
     let movable = |e: &cadaddy_walk3d::MepEquipment| {
         matches!(e.kind.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center")
             && !e.round
-            && (e.sources.get("position").map(String::as_str) == Some(super::printcond::ROOM_PANEL_POSITION)
-                || e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed")))
+            && (e.sources.get("position").map(String::as_str) == Some(super::printcond::ROOM_PANEL_POSITION) || super::gearbuild::laid_out(e))
     };
     if !sp.mep.equipment.iter().any(movable) {
         return Vec::new();
@@ -22681,7 +22720,7 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
             need_in,
             width_in: code.width_in.unwrap_or(30.0),
             height_in: code.height_in.unwrap_or(78.0).max((e.bottom_ft + e.height_ft) * 12.0),
-            recessed: e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess")),
+            recessed: super::mep::mounted_in_wall(e),
             overhead: overhead(&lv, (e.bottom_ft + e.height_ft) * 12.0),
         };
         let found = clear_face(e, &pieces, &others, doors.get(&lv).map_or(&[][..], Vec::as_slice), room.as_deref(), elevation * upf, &need, upf);
@@ -29863,7 +29902,7 @@ mod tests {
         let mid = |lo: [f64; 2], hi: [f64; 2]| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
         let far = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) / 12.0;
         // Before: every piece from its schedule's location, nothing at its drawing.
-        let before = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room));
+        let before = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room), &BTreeMap::new());
         let off: Vec<(String, f64)> = drawn
             .iter()
             .map(|(t, _, lo, hi, _)| {
@@ -29900,9 +29939,10 @@ mod tests {
         let ys: Vec<f64> = ["MDP", "DP4", "A", "B"].iter().map(|t| sp.mep.equipment.iter().find(|e| e.tag == *t).map_or(0.0, |e| e.min[1])).collect();
         assert!(ys.windows(2).all(|w| w[0] > w[1]), "{ys:?}");
         // Only the undrawn panel is left to its schedule's location.
-        let after = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room));
+        let after = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room), &BTreeMap::new());
         assert_eq!(after.equipment.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>(), ["C"]);
-        assert_eq!(after.equipment[0].sources.get("status").map(String::as_str), Some("proposed"));
+        // Its schedule's location names the room: located there by rule, not proposed (Q6513).
+        assert_eq!(after.equipment[0].sources.get("status").map(String::as_str), Some(crate::cmd::gearbuild::LOCATED));
         // A rerun replaces its own and adds nothing.
         let again = drawn_gear_onto_plans(s.doc().unwrap(), &job, &mut sp, Some(&place), std::slice::from_ref(&room), &gear);
         assert_eq!(again.placed.len(), 4);
@@ -30212,6 +30252,44 @@ mod tests {
     /// one-line's pieces stand beside it with the FDR-A feeders between them; the takeoff carries
     /// every one; the unsized feeder is built by code for the contactor's rating (inferred) and a
     /// review finding, never a silent zero.
+    /// Q6513: a riser or one-line label and a sheet's note on the electrical sheets call the
+    /// rooms of the panels the plans don't draw; a drawn or typical panel is not looked for.
+    #[test]
+    fn electrical_sheets_call_the_rooms_of_undrawn_panels() {
+        use crate::cmd::gearbuild::CalledAt;
+        use cadaddy_walk3d::{BuildingSpec, MepEquipment, PanelSchedule};
+        let mut sp = BuildingSpec::default();
+        for t in ["LP3", "LP9", "SB1"] {
+            sp.mep.panel_schedules.push(PanelSchedule { panel: t.into(), ..Default::default() });
+        }
+        sp.mep.panel_schedules.push(PanelSchedule { panel: "LPT".into(), typical_of: Some(4), ..Default::default() });
+        sp.mep.equipment.push(MepEquipment { tag: "SB1".into(), kind: "switchboard".into(), ..Default::default() });
+        let page = |texts: &[(&str, f64, f64)]| {
+            let mut d = cadaddy_doc::Drawing::default();
+            for (v, x, y) in texts {
+                d.add(&Space::Model, Common::default(), EntityKind::Text(text(v, *x, *y, 1.0))).ok();
+            }
+            d
+        };
+        let riser = page(&[
+            ("SINGLE LINE DIAGRAM", 10.0, 90.0),
+            ("PANEL 'LP3' LOCATED IN STORAGE 1104", 10.0, 50.0),
+            ("PANEL 'SB1' LOCATED IN ELEC 1120", 10.0, 40.0),
+            ("PANEL 'LPT' LOCATED IN UNIT", 10.0, 30.0),
+        ]);
+        let notes = page(&[("PNLBD 'LP9'", 5.0, 20.0), ("MOUNTED IN CORRIDOR 1110", 5.0, 18.8), ("PANEL 'LP3' LOCATED IN ELEC 1120", 60.0, 5.0)]);
+        let called = called_gear_locations(&sp, &[("EX-6".to_string(), riser), ("EX-2".to_string(), notes)]);
+        let at = |place: &str, source: &str| CalledAt { place: place.into(), source: source.into() };
+        // In page order: the riser's first, the note's after it (plan picks the first naming a room).
+        assert_eq!(
+            called.get("LP3"),
+            Some(&vec![at("STORAGE 1104", "EX-6 riser or one-line label"), at("ELEC 1120", "EX-2 sheet note")]),
+            "{called:?}"
+        );
+        assert_eq!(called.get("LP9"), Some(&vec![at("CORRIDOR 1110", "EX-2 sheet note")]), "{called:?}");
+        assert!(!called.contains_key("SB1") && !called.contains_key("LPT"), "{called:?}");
+    }
+
     #[test]
     fn a_one_lines_gear_and_a_schedule_only_panel_are_built_and_taken_off_without_a_submittal() {
         use cadaddy_walk3d::{BuildingSpec, PanelCircuit, PanelSchedule};
