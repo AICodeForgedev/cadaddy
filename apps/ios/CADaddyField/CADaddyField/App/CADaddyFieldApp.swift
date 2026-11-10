@@ -93,6 +93,14 @@ final class AppModel: ObservableObject {
         // building of N rooms (scale runs) the same way.
         if let i = args.firstIndex(of: "-openset"), args.indices.contains(i + 1) { debugOpenSet(URL(fileURLWithPath: args[i + 1])) }
         if let i = args.firstIndex(of: "-bigset"), args.indices.contains(i + 1), let n = Int(args[i + 1]) { debugBigSet(rooms: n) }
+        if #available(iOS 18.0, *) {
+            NotificationCenter.default.addObserver(forName: DesignDemo.standIn, object: nil, queue: .main) { [weak self] n in
+                MainActor.assumeIsolated {
+                    guard let self, let room = n.object as? String, let b = self.openBuilding else { return }
+                    self.standIn(room: room, of: b.record)
+                }
+            }
+        }
         #endif
     }
 

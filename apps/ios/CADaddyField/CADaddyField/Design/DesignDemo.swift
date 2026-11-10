@@ -108,11 +108,38 @@ enum DesignDemo {
             after(1.6) { if let e = inferred { exp.tapElement(e.id) } }
         case "unknown": exp.finishReveal(); after(0.4) { if let o = orphan { exp.tapElement(o.id) } }
         case "layers": after(0.1) { exp.go(.floor(upper)) }; after(1.4) { exp.showLayers = true }
-        case "roomfurniture": after(0.1) { exp.go(.room(room)) }; after(1.0) { exp.setLayer(.furniture, on: true) }
+        case "roomfurniture", "furniture":
+            // The room whose package has furniture (its own group, off by default), with the switch on.
+            let fr = i.rooms.first { r in r.package.map { p in i.graph.contains { $0.group == "furniture" && $0.packages.contains { i.allPackages[Int($0)].name == p } } } ?? false }?.id ?? room
+            after(0.1) { exp.setLayer(.furniture, on: false); exp.go(.room(fr)) }
+            after(1.6) { exp.setLayer(.furniture, on: true) }
+        case "nofurniture":
+            let fr = i.rooms.first { r in r.package.map { p in i.graph.contains { $0.group == "furniture" && $0.packages.contains { i.allPackages[Int($0)].name == p } } } ?? false }?.id ?? room
+            after(0.1) { exp.setLayer(.furniture, on: false); exp.go(.room(fr)) }
+        case "standin":
+            after(0.1) { exp.go(.room(room)) }
+            after(1.8) { NotificationCenter.default.post(name: DesignDemo.standIn, object: room) }
         case "tour": tourSet(exp, upper: upper, room: room, light: light?.id)
+        case "scaletour":
+            // Scale run: the building orbiting, then every floor and one room on each (each loads on demand and
+            // what is out of view is released), then Full MEP. FIELD-PERF lines give fps and memory per stretch.
+            after(2.0) { exp.renderer.autoOrbitSpeed = 0.3 }
+            after(8.0) { exp.renderer.autoOrbitSpeed = 0 }
+            var t = 9.0
+            for (li, _) in i.levels.enumerated() {
+                after(t) { exp.go(.floor(li)) }
+                if let r = i.rooms.first(where: { i.levelIndex($0.level) == li }) { after(t + 6) { exp.go(.room(r.id)) } }
+                t += 12
+            }
+            after(t) { exp.go(.building) }
+            after(t + 3) { exp.setDensity(.full) }
+            after(t + 6) { exp.renderer.autoOrbitSpeed = 0.3 }
         default: break
         }
     }
+
+    /// Debug: "Stand in this room" pressed by the automation (the app opens AR on that room's package).
+    static let standIn = Notification.Name("field.demo.standin")
 
     static func tourSet(_ exp: BuildingExperience, upper: Int, room: String, light: String?) {
         func at(_ t: Double, _ f: @escaping @MainActor @Sendable () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: f) }

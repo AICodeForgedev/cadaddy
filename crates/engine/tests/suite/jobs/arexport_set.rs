@@ -721,8 +721,7 @@ fn the_field_apps_fixture_comes_from_this_exporter() {
     // package changes its content hash, so Update pulls that package and nothing else.
     {
         let doc = s.doc_mut().unwrap();
-        let bed: Vec<Handle> =
-            doc.model.iter().filter(|e| tags(e).first().map(String::as_str) == Some("furniture")).map(|e| e.handle).collect();
+        let bed: Vec<Handle> = doc.model.iter().filter(|e| tags(e).first().map(String::as_str) == Some("furniture")).map(|e| e.handle).collect();
         assert_eq!(bed.len(), 1, "one bed");
         for h in bed {
             doc.model.remove(h);
