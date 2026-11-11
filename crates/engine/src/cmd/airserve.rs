@@ -126,8 +126,19 @@ pub(crate) fn serve(d: &Drawing, sp: &BuildingSpec, room_of: &dyn Fn(Option<&str
     let mut adj: HashMap<Handle, Vec<Handle>> = HashMap::new();
     let mut units: Vec<Unit> = Vec::new();
     let mut terms: Vec<Term> = Vec::new();
-    for e in d.model.iter().take(MAX_ELEMENTS) {
-        if super::wallgen::made_as(e).as_deref() != Some("mep") {
+    // The whole drawing: a job's model comes after its imported sheets' objects; what is kept
+    // is bounded instead.
+    for e in d.model.iter() {
+        let Some(made_as) = super::wallgen::made_as(e) else { continue };
+        if adj.len() >= MAX_ELEMENTS || units.len() + terms.len() >= MAX_ELEMENTS {
+            break;
+        }
+        // Every built piece's joins (a run built as its atoms, sticks and fittings, too).
+        for c in super::mepatoms::connects_of(e) {
+            adj.entry(e.handle).or_default().push(c);
+            adj.entry(c).or_default().push(e.handle);
+        }
+        if made_as != "mep" {
             continue;
         }
         let part = made(e, "part").unwrap_or_default();
@@ -142,10 +153,6 @@ pub(crate) fn serve(d: &Drawing, sp: &BuildingSpec, room_of: &dyn Fn(Option<&str
             && let Some(at) = at()
         {
             terms.push(Term { h: e.handle, level, at, system: made(e, "system").unwrap_or_default() });
-        }
-        for c in super::mepatoms::connects_of(e) {
-            adj.entry(e.handle).or_default().push(c);
-            adj.entry(c).or_default().push(e.handle);
         }
     }
     let unit_at: HashMap<Handle, usize> = units.iter().enumerate().map(|(i, u)| (u.h, i)).collect();
