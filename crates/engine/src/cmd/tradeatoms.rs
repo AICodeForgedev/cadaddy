@@ -253,6 +253,11 @@ impl Rules {
         }
     }
 
+    /// What set `path`'s value: `documents` or `project`; None for the data's default.
+    pub(crate) fn origin(&self, path: &str) -> Option<&'static str> {
+        self.from.get(path).copied()
+    }
+
     /// Whether `path`'s value is the data's default (not the documents' or the project's).
     pub(crate) fn is_default(&self, path: &str) -> bool {
         !self.from.contains_key(path)

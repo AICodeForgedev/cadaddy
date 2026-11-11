@@ -10,13 +10,18 @@
     {
       "id": "S-ROOF-FRAMING",
       "trade": "structural",
-      "fills": "a roof level's framing where the roof plans name trusses or joists: the members across the roof's short way at their spacing, as deep as the notes say, bearing on the walls at the level's elevation (its top of plate or truss bearing), the deck on them, the outside walls carried up round them to the deck or the parapet (numbers: spacing_in and depth_in when a note gives none; chord_in, a member's width; deck_in, the deck and roofing over the members; min_span_ft, the shortest piece kept)",
+      "fills": "a roof level's framing where the roof plans name trusses or joists: the members across the roof's short way at their spacing, as deep as the notes say, bearing on the walls at the level's elevation (its top of plate or truss bearing), the deck on them, the outside walls carried up round them to the deck or the parapet (numbers: spacing_in and depth_in when a note gives none; chord_in, a member's width; deck_in, the deck and roofing over the members when no roof sheathing or deck note gives its thickness (deck_words name the deck in a note, deck_not_words mark another deck's note, deck_stop_words start its fastening, deck_min_in..deck_max_in the thicknesses a deck can be); min_span_ft, the shortest piece kept)",
       "basis": "trade practice: pre-engineered wood roof trusses (and open-web joists) are set at 24\" on centre across the building's short way, bearing on the outside walls' top plate, at least 24\" deep for a flat or low-slope roof; the sheathing and roofing go on their top chords, and the outside walls (or a parapet) close the truss space round the edge",
       "member_words": {"truss": ["TRUSS", "TRUSSES"], "joist": ["JOIST", "JOISTS"]},
       "spacing_in": 24.0,
       "depth_in": 24.0,
       "chord_in": 3.5,
       "deck_in": 1.5,
+      "deck_words": ["SHEATHING", "DECK", "DECKING", "PLYWOOD", "OSB"],
+      "deck_not_words": ["FLOOR", "FLOORS", "SUBFLOOR", "WALL", "WALLS", "STAIR", "STAIRS", "BALCONY", "BALCONIES"],
+      "deck_stop_words": ["NAIL", "SCREW", "STAPLE", "FASTEN", "EDGE"],
+      "deck_min_in": 0.25,
+      "deck_max_in": 3.5,
       "min_span_ft": 2.0
     },
     {

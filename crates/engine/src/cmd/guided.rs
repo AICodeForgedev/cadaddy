@@ -26983,6 +26983,7 @@ fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
         cadaddy_geom::Bounds2::new(cadaddy_geom::Vec2::new(r[0].min(r[2]), r[1].min(r[3])), cadaddy_geom::Vec2::new(r[0].max(r[2]), r[1].max(r[3])))
     };
     let mut out = Vec::new();
+    let mut general_deck: Option<Option<(f64, String)>> = None;
     for roof in &roofs {
         let of_level =
             |r: &SheetRegion| std::iter::once(&r.level).chain(r.levels.iter()).any(|l| !l.is_empty() && level_name(l).eq_ignore_ascii_case(roof));
@@ -26995,6 +26996,14 @@ fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
             }
         }
         let mut framing = super::exterior::read_framing(s.doc()?, &regions, roof);
+        if let Some(f) = framing.as_mut() {
+            // No deck on its own sheets: the structural general notes' roof deck, read once.
+            if f.deck_status != Some(cadaddy_walk3d::ValueStatus::Read) {
+                let deck = general_deck.get_or_insert_with(|| structural_notes_deck(job));
+                super::exterior::deck_from_general_notes(f, deck.as_ref());
+            }
+            super::exterior::settle_deck(s.doc()?, &sp, f);
+        }
         // The level's elevation (the sections' top of plate or truss bearing) is where the
         // framing bears; the roof's surface, its level's floor, is on the members and deck.
         let assembly = super::exterior::assembly_ft(framing.as_ref());
@@ -27071,6 +27080,19 @@ fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
     }
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(json!({"roofs": out}))
+}
+
+/// The roof deck the set's structural general notes give (`ROOF SHEATHING: NOMINAL 5/8"…`): the
+/// structural sheets titled or typed as notes, read again from their files (the job's drawing
+/// keeps the plans).
+fn structural_notes_deck(job: &GuidedJob) -> Option<(f64, String)> {
+    let notes = |_: &str, discipline: &str, kind: &str, title: &str| {
+        discipline.eq_ignore_ascii_case("s") && (kind.contains("note") || title.to_ascii_uppercase().contains("NOTES"))
+    };
+    let pages = pages_where(job, &notes);
+    let texts: Vec<(String, String)> =
+        pages.iter().flat_map(|(n, d)| cadaddy_mepfix::sheet_facts::texts(d).into_iter().map(move |t| (n.clone(), t.value))).collect();
+    super::exterior::general_notes_deck(texts.iter().map(|(n, t)| (n.as_str(), t.as_str())))
 }
 
 /// Each framed floor's framing into the drafted spec (Q6400): the joists or floor trusses, their
@@ -37858,6 +37880,66 @@ mod tests {
         assert!(sp2.exterior.level_framing("Roof").is_none());
         assert_eq!(sp2.exterior.level_parapet("Roof"), Some(5.0));
         assert_eq!(sp2.level("Roof").unwrap().elevation_ft, 10.0);
+    }
+
+    /// fix-roof-deck-thickness-fixed: the roof deck is as thick as the roof plans' sheathing or
+    /// deck note says (here 5/8"), so the roof's surface stands the members and that deck over
+    /// the bearing; with no note, a project rule sets it; with neither, the rule's usual deck,
+    /// marked as a default.
+    #[test]
+    fn roof_documents_take_the_deck_from_the_sheathing_note_else_a_project_rule() {
+        let setup = |notes: &[&str]| {
+            let mut s = Session::new();
+            for (i, t) in notes.iter().enumerate() {
+                s.execute("text", &json!({"at": [1010, 20 + 10 * i], "text": t, "height": 2})).unwrap();
+            }
+            s.execute(
+                "bspec.set",
+                &json!({"replace": true, "spec": {"levels": [
+                    {"name": "Level 1", "elevation_ft": 0, "height_ft": 30, "ceiling_ft": 9},
+                    {"name": "Roof", "elevation_ft": 30, "height_ft": 4, "ceiling_ft": 4}
+                ]}}),
+            )
+            .unwrap();
+            s
+        };
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![region("A-1", "1", "A", "plan", 0.0), region("S-4", "R", "S", "plan", 1000.0)];
+        job.index = Some(json!({"levels": [{"name": "1", "elevation_ft": 0.0}, {"name": "R", "elevation_ft": 30.0}]}));
+        let framed = |s: &Session| {
+            let (sp, _) = super::super::bspec::current(s, "test").unwrap();
+            let f = sp.exterior.level_framing("Roof").cloned().expect("framed");
+            (f, sp.level("Roof").unwrap().elevation_ft)
+        };
+        // The note: 24" trusses bearing at 30', a 5/8" deck on them: the surface at 32'-0 5/8".
+        let mut s = setup(&["ROOF TRUSSES @ 24\" OC, 24\" DEEP", "ROOF SHEATHING: NOMINAL 5/8\" APA RATED"]);
+        roof_documents(&mut s, &job).unwrap();
+        let (f, el) = framed(&s);
+        assert_eq!((f.deck_in, f.deck_status), (Some(0.625), Some(cadaddy_walk3d::ValueStatus::Read)), "{}", f.source);
+        assert!(f.source.contains("ROOF SHEATHING"), "{}", f.source);
+        assert!((el - (32.0 + 0.625 / 12.0)).abs() < 1e-9, "{el}");
+        // No note: the usual deck, marked as a default.
+        let mut s = setup(&["ROOF TRUSSES @ 24\" OC, 24\" DEEP"]);
+        roof_documents(&mut s, &job).unwrap();
+        let (f, el) = framed(&s);
+        assert_eq!((f.deck_in, f.deck_status), (Some(1.5), Some(cadaddy_walk3d::ValueStatus::Default)));
+        assert!((el - (32.0 + 1.5 / 12.0)).abs() < 1e-9, "{el}");
+        // A project rule sets it (over the note too: the project's choice).
+        for notes in
+            [&["ROOF TRUSSES @ 24\" OC, 24\" DEEP"][..], &["ROOF TRUSSES @ 24\" OC, 24\" DEEP", "ROOF SHEATHING: NOMINAL 5/8\" APA RATED"][..]]
+        {
+            let mut s = setup(notes);
+            s.execute(
+                "project.rules.set",
+                &json!({"domain": "custom", "key": "trade:framing.roof_sheathing_in", "value": "0.75", "reason": "test setup"}),
+            )
+            .unwrap();
+            roof_documents(&mut s, &job).unwrap();
+            let (f, el) = framed(&s);
+            assert_eq!((f.deck_in, f.deck_status), (Some(0.75), Some(cadaddy_walk3d::ValueStatus::Read)), "{notes:?}");
+            assert!(f.source.contains("project rule"), "{}", f.source);
+            assert!((el - (32.0 + 0.75 / 12.0)).abs() < 1e-9, "{el}");
+        }
     }
 
     /// fix-parapet-one-height-per-roof: an index whose tops of parapet carry the facade of the

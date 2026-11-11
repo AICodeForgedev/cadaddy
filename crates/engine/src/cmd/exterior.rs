@@ -1016,6 +1016,15 @@ pub(crate) struct FramingRule {
     pub depth_in: f64,
     pub chord_in: f64,
     pub deck_in: f64,
+    /// Words naming a roof's deck in a note (`SHEATHING`, `DECK`), words of a note about
+    /// another deck (a floor's, a wall's sheathing), and words after which a note's numbers are
+    /// its fastening (`NAIL`), not the deck's thickness.
+    pub deck_words: Vec<String>,
+    pub deck_not_words: Vec<String>,
+    pub deck_stop_words: Vec<String>,
+    /// The thinnest and thickest deck a note can give, inches.
+    pub deck_min_in: f64,
+    pub deck_max_in: f64,
     pub min_span_ft: f64,
     pub basis: String,
 }
@@ -1034,8 +1043,19 @@ pub(crate) fn framing_rule() -> FramingRule {
                 .collect()
         })
         .unwrap_or_default();
+    let list = |k: &str| -> Vec<String> {
+        v.get(k)
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_ascii_uppercase).take(64).collect())
+            .unwrap_or_default()
+    };
     FramingRule {
         words,
+        deck_words: list("deck_words"),
+        deck_not_words: list("deck_not_words"),
+        deck_stop_words: list("deck_stop_words"),
+        deck_min_in: num("deck_min_in", 0.25),
+        deck_max_in: num("deck_max_in", 3.5),
         spacing_in: num("spacing_in", 24.0),
         depth_in: num("depth_in", 24.0),
         chord_in: num("chord_in", 3.5),
@@ -1057,6 +1077,48 @@ fn framing_note(rule: &FramingRule, t: &str) -> Option<(String, Option<f64>, Opt
     Some((member, spacing, depth))
 }
 
+/// What one note says of a roof's deck: its thickness, inches, where the note names the roof's
+/// sheathing or deck (the rule's `deck_words`) with a thickness (`ROOF SHEATHING: NOMINAL 5/8"`,
+/// `1 1/2" TYPE B METAL ROOF DECK`), the thickness printed nearest the word naming it; and
+/// whether the note says ROOF. None for another deck's note (a floor's or a wall's sheathing), a
+/// spacing (`@ 6" OC`), a fastening (the numbers after `NAIL`), or a number no deck is.
+fn deck_note(rule: &FramingRule, t: &str) -> Option<(f64, bool)> {
+    let up = t.to_ascii_uppercase().replace(['”', '″'], "\"");
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).take(400).collect();
+    let has = |list: &[String]| list.iter().any(|w| words.contains(&w.as_str()));
+    if !has(&rule.deck_words) || has(&rule.deck_not_words) {
+        return None;
+    }
+    let toks: Vec<&str> = up.split_whitespace().take(200).collect();
+    let alnum = |w: &str| w.split(|c: char| !c.is_ascii_alphanumeric()).filter(|x| !x.is_empty()).map(str::to_string).collect::<Vec<_>>();
+    let names_deck = |w: &str| alnum(w).iter().any(|x| rule.deck_words.contains(x));
+    let stops = |w: &str| alnum(w).iter().any(|x| rule.deck_stop_words.iter().any(|s| x.starts_with(s.as_str())));
+    let end = toks.iter().position(|w| stops(w)).unwrap_or(toks.len());
+    let decks: Vec<usize> = (0..end).filter(|i| toks.get(*i).is_some_and(|w| names_deck(w))).collect();
+    let mut best: Option<(usize, f64)> = None;
+    for j in 0..end {
+        let Some(tok) = toks.get(j).map(|w| w.trim_start_matches('(').trim_end_matches([',', ';', ')', ':'])) else { continue };
+        // A spacing's number is no thickness, nor feet-and-inches.
+        if tok.contains('\'') || j.checked_sub(1).and_then(|k| toks.get(k)).is_some_and(|w| *w == "@") {
+            continue;
+        }
+        if toks.get(j + 1).is_some_and(|w| matches!(w.trim_end_matches([',', ';', '.']), "OC" | "O.C")) {
+            continue;
+        }
+        let Some(n) = tok.strip_suffix('"') else { continue };
+        let v = match n.split_once('-') {
+            Some((whole, frac)) => inch_number(Some(whole), frac),
+            None => inch_number(j.checked_sub(1).and_then(|k| toks.get(k)).copied(), n),
+        };
+        let Some(v) = v.filter(|v| (rule.deck_min_in..=rule.deck_max_in).contains(v)) else { continue };
+        let dist = decks.iter().map(|i| i.abs_diff(j)).min().unwrap_or(usize::MAX);
+        if best.is_none_or(|(d, _)| dist < d) {
+            best = Some((dist, v));
+        }
+    }
+    best.map(|(_, v)| (v, words.contains(&"ROOF")))
+}
+
 /// A roof level's framing as the notes in `regions` (its roof plans, `(sheet, area)` each) say:
 /// the member a note names with its spacing (else the member most notes name), the depth a note
 /// gives, the rule's usual values for what none gives. None when no note names a truss or joist.
@@ -1065,6 +1127,8 @@ pub(crate) fn read_framing(d: &Drawing, regions: &[(String, Bounds2)], level: &s
     let mut spaced: Option<(String, f64, String)> = None;
     let mut deep: Option<(f64, String)> = None;
     let mut named: Vec<(String, usize, String)> = Vec::new();
+    // The deck a note gives: one saying ROOF before one that doesn't, else the first.
+    let mut deck: Option<(f64, bool, String)> = None;
     let mut looked = 0usize;
     for (sheet, b) in regions.iter().take(64) {
         let ents = objects_in(d, b);
@@ -1072,6 +1136,11 @@ pub(crate) fn read_framing(d: &Drawing, regions: &[(String, Bounds2)], level: &s
             looked += 1;
             if looked > MAX_FRAMING_NOTES {
                 break;
+            }
+            if let Some((v, roof)) = deck_note(&rule, &t)
+                && deck.as_ref().is_none_or(|(_, r, _)| roof && !*r)
+            {
+                deck = Some((v, roof, format!("{sheet}: {}", t.chars().take(120).collect::<String>())));
             }
             let Some((member, spacing, depth)) = framing_note(&rule, &t) else { continue };
             let src = format!("{sheet}: {}", t.chars().take(120).collect::<String>());
@@ -1101,7 +1170,22 @@ pub(crate) fn read_framing(d: &Drawing, regions: &[(String, Bounds2)], level: &s
     };
     let (spacing_in, spacing_status) = read(spaced.map(|s| s.1), rule.spacing_in);
     let (depth_in, depth_status) = read(deep.map(|d| d.0), rule.depth_in);
-    Some(RoofFraming { level: level.to_string(), member, spacing_in, depth_in, spacing_status, depth_status, bearing_ft: None, source })
+    if let Some((_, _, src)) = deck.as_ref().filter(|(_, _, s)| !source.contains(s.as_str())) {
+        source = format!("{source}; {src}");
+    }
+    let (deck_in, deck_status) = read(deck.map(|d| d.0), rule.deck_in);
+    Some(RoofFraming {
+        level: level.to_string(),
+        member,
+        spacing_in,
+        depth_in,
+        spacing_status,
+        depth_status,
+        bearing_ft: None,
+        deck_in: Some(deck_in),
+        deck_status,
+        source,
+    })
 }
 
 /// A number of inches as printed before its inch mark (`16`, `7/8` after `11`: 11 7/8).
@@ -1197,14 +1281,79 @@ pub(crate) fn read_floor_framing(d: &Drawing, regions: &[(String, Bounds2)], lev
     };
     let (spacing_in, spacing_status) = read(spacing.map(|s| s.0), usual.num("framing.joist_spacing_in", 16.0));
     let (depth_in, depth_status) = read(depth.map(|d| d.0), usual.num("framing.joist_depth_in", 11.875));
-    Some(RoofFraming { level: level.to_string(), member: best.0, spacing_in, depth_in, spacing_status, depth_status, bearing_ft: None, source })
+    Some(RoofFraming {
+        level: level.to_string(),
+        member: best.0,
+        spacing_in,
+        depth_in,
+        spacing_status,
+        depth_status,
+        bearing_ft: None,
+        deck_in: None,
+        deck_status: None,
+        source,
+    })
+}
+
+/// A framed roof's deck on its members, inches: as its framing gives it (the notes, a project
+/// rule), else the framing rule's usual deck.
+pub(crate) fn deck_in(f: &RoofFraming) -> f64 {
+    f.deck_in.filter(|v| v.is_finite() && *v > 0.0 && *v <= 24.0).unwrap_or_else(|| framing_rule().deck_in)
+}
+
+/// The roof deck the set's general notes give (`ROOF SHEATHING: NOMINAL 5/8" THICK…`), `(sheet,
+/// note)` each: the first note naming the roof's deck (general notes give every deck's, the
+/// floors' and walls' too), its thickness and source.
+pub(crate) fn general_notes_deck<'a>(notes: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<(f64, String)> {
+    let rule = framing_rule();
+    notes.into_iter().take(MAX_FRAMING_NOTES).find_map(|(sheet, t)| {
+        deck_note(&rule, t).filter(|(_, roof)| *roof).map(|(v, _)| (v, format!("{sheet}: {}", t.chars().take(120).collect::<String>())))
+    })
+}
+
+/// A framed roof whose own plans gave no deck takes the one the general notes give.
+pub(crate) fn deck_from_general_notes(f: &mut RoofFraming, deck: Option<&(f64, String)>) {
+    if f.deck_status == Some(ValueStatus::Read) {
+        return;
+    }
+    if let Some((v, src)) = deck.filter(|(v, _)| v.is_finite() && *v > 0.0) {
+        f.deck_in = Some(*v);
+        f.deck_status = Some(ValueStatus::Read);
+        f.source = if f.source.is_empty() { src.clone() } else { format!("{}; {src}", f.source) };
+    }
+}
+
+/// A project rule's roof deck over what the roof plans' notes give, else the trades' documents'
+/// (a specification or submittal read into the spec), else the notes' or the rule's usual deck
+/// marked as a default: the project rule and documents as the trade pieces take their roof
+/// sheathing (`framing.roof_sheathing_in`), so the deck and its sheathing panels agree. `sp`
+/// without this roof's framing (a fact from it is no document of its own).
+pub(crate) fn settle_deck(d: &Drawing, sp: &BuildingSpec, f: &mut RoofFraming) {
+    const PATH: &str = "framing.roof_sheathing_in";
+    let mut others = sp.clone();
+    others.exterior.framing.retain(|x| !x.level.eq_ignore_ascii_case(&f.level));
+    let rules = super::tradeatoms::Rules::of(d, &others);
+    let from = rules.origin(PATH);
+    let noted = f.deck_status == Some(ValueStatus::Read);
+    let take = match from {
+        Some("project") => true,
+        Some(_) => !noted,
+        None => false,
+    };
+    let v = rules.num(PATH, 0.0);
+    if take && v.is_finite() && v > 0.0 && v <= 24.0 {
+        f.deck_in = Some(v);
+        f.deck_status = Some(ValueStatus::Read);
+        let why = rules.source_text(PATH);
+        f.source = if f.source.is_empty() { why } else { format!("{}; deck: {why}", f.source) };
+    }
 }
 
 /// How far a framed roof's surface stands over where it bears: its members' depth and the deck,
 /// feet; 0 for none.
 pub(crate) fn assembly_ft(f: Option<&RoofFraming>) -> f64 {
     f.map_or(0.0, |f| {
-        let v = (f.depth_in + framing_rule().deck_in) / 12.0;
+        let v = (f.depth_in + deck_in(f)) / 12.0;
         if v.is_finite() && v > 0.0 { v } else { 0.0 }
     })
 }
@@ -1352,7 +1501,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // The deck's (or an unframed roof's slab's) thickness plumb: its thickness normal to the
         // slope, deeper by the slope's secant.
         let plumb = plumb_factor(r);
-        let deck = if framing.is_some() { rule.deck_in / 12.0 * upf * plumb } else { 0.0 };
+        let deck_t = framing.map_or(rule.deck_in, deck_in);
+        let deck = if framing.is_some() { deck_t / 12.0 * upf * plumb } else { 0.0 };
         let thick = if framing.is_some() { deck } else { upf * plumb };
         let bear = framing.map_or(z0, |f| bearing_ft(f, level.elevation_ft) * upf);
         let top = |p: Vec2| z0 + rise(p);
@@ -1380,7 +1530,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             // level (the surface) is the members and the deck over the bearing, the deck taken
             // plumb; on a slope the deck is that thickness normal to it, a hair deeper plumb, and
             // the members stop under it rather than cut into it.
-            let plumb_excess = (deck - rule.deck_in / 12.0 * upf).max(0.0);
+            let plumb_excess = (deck - deck_t / 12.0 * upf).max(0.0);
             let under_deck = |p: Vec2| (z0 - deck + rise(p) - bear).max(depth - plumb_excess) - depth;
             framed += frame_roof(d, &FrameJob { level: &level.name, roof: &r.name, poly: &poly, z0: bear, depth, upf, rise: &under_deck }, f, &rule);
         }
@@ -1863,6 +2013,9 @@ fn rule_basis(rule: &FramingRule, f: &RoofFraming, what: &str) -> String {
     if given(&f.depth_status) {
         read.push(format!("{}\" deep", f.depth_in));
     }
+    if f.deck_status == Some(ValueStatus::Read) {
+        read.push(format!("{}\" deck", deck_in(f)));
+    }
     let from = if f.source.is_empty() { String::new() } else { format!("; read: {} ({})", read.join(", "), f.source) };
     format!("{FRAMING_RULE}: {what}{from}; {}", rule.basis.trim_start_matches(&format!("{FRAMING_RULE}: ")))
 }
@@ -2287,6 +2440,72 @@ mod tests {
         // Hostile text never panics.
         let _ = note(&"9\" ".repeat(10_000));
         let _ = note("\"\" JOIST 1/0\" JOIST /\" JOIST");
+    }
+
+    /// fix-roof-deck-thickness-fixed: a roof sheathing or deck note gives the deck's thickness,
+    /// whatever its wording or where the number stands; another deck's note, a spacing or a
+    /// fastening's numbers give none.
+    #[test]
+    fn deck_notes_give_the_roof_decks_thickness() {
+        let rule = framing_rule();
+        let note = |t: &str| deck_note(&rule, t);
+        assert_eq!(note("ROOF SHEATHING: NOMINAL 5/8\" APA RATED"), Some((0.625, true)));
+        assert_eq!(note("3/4\" T&G PLYWOOD ROOF SHEATHING"), Some((0.75, true)));
+        assert_eq!(note("1 1/2\" TYPE B METAL ROOF DECK, 20 GA."), Some((1.5, true)));
+        assert_eq!(note("1-1/2” WIDE RIB ROOF DECK"), Some((1.5, true)));
+        assert_eq!(note("15/32\" APA RATED SHEATHING, EXP. 1"), Some((15.0 / 32.0, false)));
+        // The number nearest the deck's word: the concrete over it is no deck.
+        assert_eq!(note("3 1/2\" CONCRETE ON 1 1/2\" METAL ROOF DECK"), Some((1.5, true)));
+        // A spacing, feet and inches and a fastening are no thickness.
+        assert_eq!(note("5/8\" SHEATHING @ 24\" OC"), Some((0.625, false)));
+        assert_eq!(note("ROOF SHEATHING NAILING: 8D @ 6\" O.C. EDGES, 12\" O.C. FIELD"), None);
+        assert_eq!(note("ROOF SHEATHING: 1/2\" CDX, NAIL 1/2\" FROM EDGES"), Some((0.5, true)));
+        assert_eq!(note("ROOF DECK AT 2'-0\" ABOVE BEARING"), None);
+        // Another deck's sheathing, a note naming no deck, a number no deck is.
+        assert_eq!(note("3/4\" T&G FLOOR SHEATHING"), None);
+        assert_eq!(note("7/16\" OSB WALL SHEATHING"), None);
+        assert_eq!(note("ROOF TRUSSES @ 24\" OC, 24\" DEEP"), None);
+        assert_eq!(note("24\" ROOF DECK OVERHANG"), None);
+        // Hostile text never panics.
+        let _ = note(&"5/8\" DECK ".repeat(10_000));
+        let _ = note("DECK -\" /\" 1/0\" --/\" @");
+    }
+
+    /// A general notes sheet gives every deck: the roof's is the note that says ROOF; a roof
+    /// plan's own deck note stays.
+    #[test]
+    fn the_general_notes_give_the_roof_deck_its_own_plans_dont() {
+        let notes = [
+            ("S-0", "6. FLOOR DECK: 23/32\" T&G OSB, GLUED AND NAILED"),
+            ("S-0", "SHEATHING @ 24\" OC."),
+            ("S-0", "7. ROOF SHEATHING SHALL BE 3/4\" PLYWOOD, EXPOSURE 1"),
+            ("S-0", "8. WALL SHEATHING: 7/16\" OSB"),
+        ];
+        let deck = general_notes_deck(notes);
+        assert_eq!(deck.as_ref().map(|d| d.0), Some(0.75));
+        assert!(deck.as_ref().is_some_and(|d| d.1.starts_with("S-0: 7. ROOF SHEATHING")), "{deck:?}");
+        let framing = |status: ValueStatus, v: f64| RoofFraming {
+            level: "Roof".into(),
+            member: "truss".into(),
+            spacing_in: 24.0,
+            depth_in: 24.0,
+            spacing_status: None,
+            depth_status: None,
+            bearing_ft: None,
+            deck_in: Some(v),
+            deck_status: Some(status),
+            source: "S-4: ROOF TRUSSES".into(),
+        };
+        let mut f = framing(ValueStatus::Default, 1.5);
+        deck_from_general_notes(&mut f, deck.as_ref());
+        assert_eq!((f.deck_in, f.deck_status), (Some(0.75), Some(ValueStatus::Read)));
+        assert!(f.source.contains("S-0: 7. ROOF SHEATHING"), "{}", f.source);
+        assert!((assembly_ft(Some(&f)) - 24.75 / 12.0).abs() < 1e-12);
+        let mut own = framing(ValueStatus::Read, 0.625);
+        deck_from_general_notes(&mut own, deck.as_ref());
+        assert_eq!(own.deck_in, Some(0.625));
+        // None that says ROOF: none.
+        assert_eq!(general_notes_deck([("S-0", "3/4\" PLYWOOD SHEATHING")]), None);
     }
 
     #[test]
