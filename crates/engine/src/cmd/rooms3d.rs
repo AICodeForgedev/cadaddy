@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rooms", "Rooms", run_list)
             .menu(&["Tools", "Building", "Rooms"])
-            .params("{level?: name, outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
+            .params("{level?: name, outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...], numbered_only?: bool (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
             .noundo(),
         CommandSpec::new("rooms.list", "List Rooms", run_list)
             .params("{level?: name (only that level's rooms), outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full), numbered_only?: bool (default false: only names printed with their room number, as another trade's plan numbers rooms)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, ceilingSource, elevation, volume, volumeCuFt, volumeM3, finishes, finishDetail, materials, level, label, at, outline}], count, nameCandidates?: {texts, outside_plan_views, numbers, kept, dropped: {reason: count}, examples} (traced, not built)}: a built model's rooms at and outline where the 3D model draws them (the levels stacked), else on the sheet")
