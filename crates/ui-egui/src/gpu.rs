@@ -2680,6 +2680,24 @@ pub fn upload_pieces() -> (u64, u64) {
 #[allow(clippy::type_complexity)]
 static REUSE: Mutex<Option<HashMap<(&'static str, usize, u64), Batch>>> = Mutex::new(None);
 
+/// The pool of pieces [`upload_parts`] uses: the app's one ([`REUSE`]). The unit tests run side
+/// by side, each with a GPU device of its own, so each test thread has a pool of its own (a piece
+/// made on one device can't be drawn on another).
+#[cfg(not(test))]
+fn with_reuse<R>(f: impl FnOnce(Option<&mut Option<HashMap<(&'static str, usize, u64), Batch>>>) -> R) -> R {
+    let mut reuse = REUSE.lock().ok();
+    f(reuse.as_deref_mut())
+}
+
+#[cfg(test)]
+fn with_reuse<R>(f: impl FnOnce(Option<&mut Option<HashMap<(&'static str, usize, u64), Batch>>>) -> R) -> R {
+    thread_local! {
+        #[allow(clippy::type_complexity)]
+        static TEST_REUSE: std::cell::RefCell<Option<HashMap<(&'static str, usize, u64), Batch>>> = const { std::cell::RefCell::new(None) };
+    }
+    TEST_REUSE.with(|r| f(Some(&mut r.borrow_mut())))
+}
+
 /// A piece's content key: its length and two checksums (its halves), so a different piece
 /// matching by chance is out of the question in practice.
 fn piece_key(label: &'static str, c: &[u8]) -> (&'static str, usize, u64) {
@@ -2700,7 +2718,18 @@ fn upload_parts<'a>(
     stride: usize,
     usage: wgpu::BufferUsages,
 ) -> Vec<Batch> {
-    let mut reuse = REUSE.lock().ok();
+    with_reuse(|reuse| upload_parts_in(reuse, device, label, parts, stride, usage))
+}
+
+/// [`upload_parts`] with the pool of pieces `reuse`.
+fn upload_parts_in<'a>(
+    mut reuse: Option<&mut Option<HashMap<(&'static str, usize, u64), Batch>>>,
+    device: &wgpu::Device,
+    label: &'static str,
+    parts: impl IntoIterator<Item = &'a [u8]>,
+    stride: usize,
+    usage: wgpu::BufferUsages,
+) -> Vec<Batch> {
     let mut previous = reuse.as_mut().and_then(|r| r.as_mut()).map(|m| {
         let keys: Vec<_> = m.keys().filter(|k| k.0 == label).copied().collect();
         keys.into_iter().filter_map(|k| m.remove(&k).map(|b| (k, b))).collect::<HashMap<_, _>>()
@@ -4281,6 +4310,174 @@ mod tests {
             assert_eq!(Tiling::for_bounds(&b, 10_000_000, bad), None);
         }
         assert_eq!(Tiling::for_bounds(&Bounds2::EMPTY, 10_000_000, 1.0), None);
+    }
+
+    /// A list of objects, each its own handle, every one a polyline: `specks` of `speck` drawing
+    /// units with 6 points (sub-pixel at the band below: dots), `rings` of `ring` with 12 points
+    /// (a few pixels: boxes) and `lines` long ones crossing the area (drawn as they are), mixed in
+    /// that rotation over `area`, some of them wide.
+    fn crowd(n: usize, area: f64, speck: f64, ring: f64, seed: u64) -> DisplayList {
+        let mut r = Rng(seed);
+        let mut l = DisplayList::default();
+        let colors = [Rgb(255, 0, 0), Rgb(0, 255, 0), Rgb(0, 0, 255), Rgb(255, 255, 0), Rgb(255, 0, 255), Rgb(0, 255, 255)];
+        for i in 0..n {
+            let c = Vec2::new(r.f(area), r.f(area));
+            let start = l.verts.len() as u32;
+            let (pts, size) = match i % 4 {
+                0 | 1 => (6, speck),
+                2 => (12, ring),
+                _ => (2, area * 0.3),
+            };
+            for k in 0..pts {
+                let t = k as f64 / pts as f64 * std::f64::consts::TAU;
+                l.verts.push(c + Vec2::new(t.cos(), t.sin()) * (size / 2.0));
+            }
+            let color = colors[(r.next() % 6) as usize];
+            let lw = if r.next().is_multiple_of(5) { 0.5 } else { 0.0 };
+            l.prims.push(DPrim {
+                handle: Handle(i as u64 + 1),
+                color,
+                aci7: false,
+                lw,
+                transparency: 0,
+                kind: Kind::Polyline,
+                start,
+                len: pts as u32,
+            });
+        }
+        l.bounds = Bounds2::from_points(l.verts.iter().copied());
+        l
+    }
+
+    /// Instances (quads) or vertex pairs (lines) of `bytes`, sorted: what a mesh draws, in any
+    /// order.
+    fn sorted_pieces(bytes: &[u8], size: usize) -> Vec<&[u8]> {
+        let mut v: Vec<&[u8]> = bytes.chunks(size).collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Q6522: a large list at a coarse band is both cut into area tiles and drawn simpler. The
+    /// tiled screen mesh holds exactly the screen mesh's pieces (the same dots, boxes, lines and
+    /// [`Simplified`] counts), each dot in the tile its cell's centre falls in, and a view of a
+    /// corner draws only the tiles reaching into it.
+    #[test]
+    fn a_large_list_at_a_coarse_band_is_tiled_and_simplified() {
+        // 100,000 units across, drawn at up to 20 units a pixel (the band's coarsest) and 10 at
+        // its finest: specks of 3 units are dots, rings of 25 boxes.
+        let (pixel, coarse) = (10.0, 20.0);
+        let l = crowd(60_000, 100_000.0, 3.0, 25.0, 11);
+        let tiling = Tiling::choose(&l, coarse).expect("a large list is tiled");
+        assert!(tiling.cells() >= 4, "{tiling:?}");
+        let origin = Vec2::new(50_000.0, 50_000.0);
+        let whole = build_screen_mesh(&l, origin, Rgb(0, 0, 0), true, Some(pixel));
+        let m = build_screen_mesh_tiled(&l, origin, Rgb(0, 0, 0), true, Some(pixel), Some(&tiling));
+        let tiles = m.tiles.clone().expect("tiled");
+        // Simplified as the untiled screen mesh is: dots counted, boxes drawn.
+        assert_eq!(m.simplified, whole.simplified);
+        let s = m.simplified;
+        assert!(s.dots > 1000 && s.dot_objects >= s.dots && s.boxes > 1000, "{s:?}");
+        let full = build_mesh(&l, origin, Rgb(0, 0, 0), true);
+        assert!(m.line_vertices() + 6 * m.quad_instances() < full.line_vertices() + 6 * full.quad_instances());
+        // The same pieces, cut into tiles.
+        assert_eq!((m.line_vertices(), m.tri_vertices(), m.quad_instances()), (whole.line_vertices(), whole.tri_vertices(), whole.quad_instances()));
+        assert_eq!(sorted_pieces(&m.lines, 2 * VERTEX_SIZE), sorted_pieces(&whole.lines, 2 * VERTEX_SIZE));
+        assert_eq!(sorted_pieces(&m.quads, INSTANCE_SIZE), sorted_pieces(&whole.quads, INSTANCE_SIZE));
+        let held = tiles.drawn(&vec![true; tiles.bounds.len()]);
+        assert_eq!(held.vertices, m.line_vertices() + 6 * m.quad_instances());
+        // Each dot (a quad from a point to itself, a pixel wide) is in the tile its point falls in.
+        let mut dots = 0;
+        for (t, w) in tiles.starts.windows(2).enumerate().take(tiling.cells()) {
+            let [a, b] = w else { continue };
+            let cell = tiling.cell_bounds(t % tiling.cols, t / tiling.cols);
+            for q in m.quads.get(a[2] * INSTANCE_SIZE..b[2] * INSTANCE_SIZE).unwrap_or(&[]).chunks(INSTANCE_SIZE) {
+                let f = |o: usize| f64::from(f32::from_le_bytes([q[o], q[o + 1], q[o + 2], q[o + 3]]));
+                if (f(0), f(4)) == (f(8), f(12)) && f32::from_le_bytes([q[20], q[21], q[22], q[23]]) == DOT_POINTS {
+                    let p = origin + Vec2::new(f(0), f(4));
+                    assert!(cell.expand(1e-6).contains(p), "tile {t}: a dot at {p:?} outside {cell:?}");
+                    dots += 1;
+                }
+            }
+        }
+        assert!(dots * 2 > s.dots, "most dots are thin ones in their cells: {dots} of {}", s.dots);
+        // A view of one corner (the screen 1600 pixels across at the band's finest) draws only
+        // the tiles reaching into it.
+        let view = Bounds2::new(Vec2::ZERO, Vec2::new(16_000.0, 10_000.0)).expand(8.0 * pixel);
+        let part = tiles.drawn(&tiles.visible(&view));
+        assert!(part.tiles < tiles.bounds.len() / 2 && part.vertices * 2 < held.vertices, "{part:?} of {held:?}");
+        assert!(part.tiles > 0);
+        // At full detail (no pixel) the tiles hold every primitive as it is.
+        let all = build_screen_mesh_tiled(&l, origin, Rgb(0, 0, 0), true, None, Some(&tiling));
+        assert_eq!(all.simplified, Simplified::default());
+        assert_eq!(all.lines, build_mesh_tiled(&l, origin, Rgb(0, 0, 0), true, Some(&tiling)).lines);
+    }
+
+    /// Q6522: a list under the tiling limit is not cut, and its screen mesh is exactly what
+    /// [`build_screen_mesh`] makes (dots, boxes and all).
+    #[test]
+    fn a_small_list_draws_its_screen_mesh_as_it_was() {
+        let l = crowd(2_000, 100.0, 0.1, 1.5, 5);
+        let tiling = Tiling::choose(&l, 1.0);
+        assert_eq!(tiling, None, "a small list stays one tile");
+        for lw in [false, true] {
+            let whole = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), lw, Some(0.5));
+            let m = build_screen_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), lw, Some(0.5), tiling.as_ref());
+            assert!(m.tiles.is_none());
+            assert!(whole.simplified.dots > 0 && whole.simplified.boxes > 0, "{:?}", whole.simplified);
+            assert_eq!(
+                (&m.lines, &m.tris, &m.quads, &m.breaks, m.simplified),
+                (&whole.lines, &whole.tris, &whole.quads, &whole.breaks, whole.simplified)
+            );
+        }
+    }
+
+    /// Q6522: the tiled screen mesh draws pixel for pixel what the untiled one draws: the busy
+    /// list's lines, fills, wipeouts, masks and image, with sub-pixel specks (dots) and small rings
+    /// (boxes) of their own handles among them, whole and zoomed in with the tiles out of view
+    /// left out.
+    #[test]
+    fn tiled_screen_mesh_draws_exactly_what_the_screen_mesh_draws() {
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        for seed in [3u64, 77] {
+            let mut l = busy_list(seed);
+            // Specks and rings after every few primitives of the busy list, so dots fall in every
+            // draw-order group; each its own object.
+            let extra = crowd(900, 64.0, 0.2, 1.2, seed + 1);
+            let mut prims = Vec::with_capacity(l.prims.len() + extra.prims.len());
+            let base = l.verts.len() as u32;
+            l.verts.extend_from_slice(&extra.verts);
+            let mut more = extra.prims.iter().filter(|p| p.len != 2);
+            for (k, p) in std::mem::take(&mut l.prims).into_iter().enumerate() {
+                prims.push(p);
+                for e in more.by_ref().take(if k % 2 == 0 { 2 } else { 1 }) {
+                    prims.push(DPrim { handle: Handle(1000 + e.handle.0), start: e.start + base, ..*e });
+                }
+            }
+            l.prims = prims;
+            let pixel = 0.5;
+            let whole = || build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(pixel));
+            let tiled = || build_screen_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(pixel), Some(&small_tiles()));
+            let s = whole().simplified;
+            assert!(s.dots > 50 && s.boxes > 50, "{s:?}");
+            assert_eq!(tiled().simplified, s);
+            let tiles = tiled().tiles.expect("tiled");
+            let center = Vec2::new(32.0, 32.0);
+            for kept in [false, true] {
+                let reference = read_frame(&rs, whole(), kept, center, 1.0, None);
+                let all = read_frame(&rs, tiled(), kept, center, 1.0, Some(Bounds2::new(Vec2::new(-8.0, -8.0), Vec2::new(72.0, 72.0))));
+                assert_eq!(differing(&all, &reference), 0, "seed {seed}, kept {kept}: tiled differs from the screen mesh");
+            }
+            let (center, scale) = (Vec2::new(20.0, 44.0), 3.0f32);
+            let half = 32.0 / f64::from(scale);
+            let cull = Bounds2::new(center - Vec2::new(half, half), center + Vec2::new(half, half)).expand(8.0 / f64::from(scale));
+            let part = tiles.drawn(&tiles.visible(&cull));
+            assert!(part.tiles < 40, "{part:?}");
+            for kept in [false, true] {
+                let reference = read_frame(&rs, whole(), kept, center, scale, None);
+                let near = read_frame(&rs, tiled(), kept, center, scale, Some(cull));
+                assert_eq!(differing(&near, &reference), 0, "seed {seed}, kept {kept}: zoomed in, tiled differs from the screen mesh");
+            }
+        }
     }
 
     /// A drawing's own draw order (DRAWORDER: an object brought to the front, one sent to the
