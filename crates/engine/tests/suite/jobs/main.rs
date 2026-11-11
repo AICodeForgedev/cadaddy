@@ -19,6 +19,7 @@ mod autospec;
 mod bimux_rw1;
 mod bimwork;
 mod bimwork_levels;
+mod bomtrades;
 mod branchgap;
 mod breakers;
 mod callout_walls;

@@ -67,8 +67,10 @@ const fn t(key: &'static str, label: &'static str, group: &'static str, rgb: [u8
 /// The trades and their default colours: architecture neutral, structure tan, supply duct
 /// blue, return and exhaust green, sanitary magenta, vent purple, cold water blue, hot water
 /// orange-red, gas yellow, fire protection red, conduit and tray orange-yellow, equipment light
-/// grey; cabinets and furniture (Q6422) wood browns, each a switch of its own.
-pub const TRADES: [Trade; 26] = [
+/// grey; cabinets and furniture (Q6422) wood browns, each a switch of its own. Equipment is under
+/// the trade that installs it (Q6528, `elemtrade`): electrical gear amber, plumbing equipment
+/// grey-blue, fire protection equipment with its sprinklers.
+pub const TRADES: [Trade; 28] = [
     t("architecture", "Architecture", "Architecture", [214, 212, 206], true),
     t("openings", "Doors and Windows", "Architecture", [176, 198, 212], true),
     t("structure", "Structure", "Structure", [198, 168, 124], true),
@@ -88,9 +90,11 @@ pub const TRADES: [Trade; 26] = [
     t("pipe_gas", "Gas", "Plumbing", [232, 200, 20], false),
     t("pipe", "Piping", "Plumbing", [40, 160, 92], false),
     t("fixtures", "Plumbing Fixtures", "Plumbing", [236, 240, 246], false),
+    t("plumbing_equipment", "Plumbing Equipment", "Plumbing", [150, 176, 198], false),
     t("fire", "Fire Protection", "Fire Protection", [222, 30, 30], false),
     t("conduit", "Conduit", "Electrical", [246, 166, 24], false),
     t("tray", "Cable Tray", "Electrical", [236, 128, 20], false),
+    t("gear", "Electrical Equipment", "Electrical", [214, 170, 96], false),
     t("devices", "Electrical Devices", "Electrical", [250, 212, 40], false),
     t("lights", "Light Fixtures", "Electrical", [255, 244, 196], false),
     t("cabinets", "Cabinets", "Cabinets", [168, 124, 84], true),
@@ -399,6 +403,14 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         let group = trade(key).map_or("Architecture", |t| t.group);
         Some(Class { key, group, category: category.to_string(), ty, level: level.clone() })
     };
+    // Equipment under the trade that installs it (Q6528): the trade the build stamped on it,
+    // else its own TRADE property's or its kind's.
+    let equipment_key = |of_kind: &str| {
+        let trade = made_tag(e, "trade")
+            .and_then(super::elemtrade::named)
+            .unwrap_or_else(|| super::elemtrade::of_equipment(of_kind, made_prop(e, "TRADE").unwrap_or(""), &[]));
+        super::elemtrade::equipment_tree_key(trade)
+    };
     if part.eq_ignore_ascii_case("mep") {
         let system = made_tag(e, "system").unwrap_or("");
         let kind = made_tag(e, "kind").unwrap_or("").to_ascii_lowercase();
@@ -415,8 +427,9 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
             "tray" => ("tray", "Cable Tray"),
             "conduit" | "cable" => ("conduit", if kind == "cable" { "Cable" } else { "Conduit" }),
             "grounding" => ("conduit", "Grounding"),
-            "equipment" => ("equipment", "Equipment"),
-            _ => ("equipment", "Equipment"),
+            "equipment" => (equipment_key(mpart.strip_prefix("equipment:").unwrap_or("")), "Equipment"),
+            // A panel's breaker and any other piece by its kind's trade.
+            _ => (equipment_key(&kind), "Equipment"),
         };
         // A piece of a run (Q6157): its category by what it is, its type what it is bought as.
         if let Some(piece) = mpart.strip_prefix("atom:") {
@@ -444,7 +457,7 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         }
         if let Some(kind_of) = mpart.strip_prefix("equipment:").or((kind == "equipment").then_some("")) {
             let ty = made_tag(e, "tag").map(str::to_string).filter(|t| !t.is_empty()).unwrap_or_else(|| title(kind_of));
-            return mk("equipment", "Equipment", if ty.is_empty() { "Equipment".into() } else { ty });
+            return mk(equipment_key(kind_of), "Equipment", if ty.is_empty() { "Equipment".into() } else { ty });
         }
         let category = if fitting { format!("{noun} Fittings") } else { noun.to_string() };
         return mk(key, &category, sized(&base));
@@ -484,7 +497,10 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         "ground" | "site" => mk("site", "Site", typed("Ground")),
         "light" => mk("lights", "Light Fixtures", source_block(d, e).unwrap_or_else(|| typed("Light"))),
         "diffuser" => mk("terminals", "Air Terminals", source_block(d, e).unwrap_or_else(|| typed("Diffuser"))),
-        "equipment" => mk("equipment", "Equipment", typed(&source_block(d, e).unwrap_or_else(|| "Equipment".into()))),
+        "equipment" => {
+            let ty = typed(&source_block(d, e).unwrap_or_else(|| "Equipment".into()));
+            mk(equipment_key(&ty), "Equipment", ty)
+        }
         "device" => {
             let ty = own_type.clone().or_else(|| source_block(d, e)).unwrap_or_else(|| e.common.layer.to_string());
             // A luminaire or a plumbing fixture the build made (its element kind, Q6315), else its
@@ -1444,5 +1460,36 @@ mod quantity_tests {
         let empty = cadaddy_doc::Mesh { vertices: Vec::new(), faces: Vec::new(), kind: cadaddy_doc::MeshKind::Polyface };
         let q = quantity(&class, &Entity::new(Handle(2), EntityKind::Mesh(empty)), 12.0);
         assert!(q["area_sf"].as_f64().is_some_and(|a| a == 0.0 && a.is_sign_positive()), "{q}");
+    }
+
+    /// A built MEP element with build tags `tags` (after part, level and source).
+    fn mep_element(tags: &[&str]) -> Entity {
+        let mut x = vec![
+            cadaddy_doc::RawTag { code: 1001, value: super::super::wallgen::APP.into() },
+            cadaddy_doc::RawTag { code: 1000, value: "mep".into() },
+            cadaddy_doc::RawTag { code: 1000, value: "L1".into() },
+            cadaddy_doc::RawTag { code: 1000, value: Handle(0).hex() },
+        ];
+        x.extend(tags.iter().map(|t| cadaddy_doc::RawTag { code: 1000, value: (*t).to_string() }));
+        let mut e = Entity::new(
+            Handle(7),
+            EntityKind::Mesh(cadaddy_doc::Mesh { vertices: Vec::new(), faces: Vec::new(), kind: cadaddy_doc::MeshKind::Polyface }),
+        );
+        e.common.xdata = x.into();
+        e
+    }
+
+    #[test]
+    fn breakers_and_equipment_are_under_the_trade_that_installs_them() {
+        // Q6528: a panel's breakers were filed under Mechanical.
+        let d = Drawing::new_imperial();
+        let group = |tags: &[&str]| classify(&d, &mep_element(tags)).map(|c| (c.group, c.category));
+        assert_eq!(group(&["system:PANEL BREAKERS", "kind:breaker", "part:atom:breaker"]), Some(("Electrical", "Breakers".to_string())));
+        // A model built before the trade was stamped: by its kind.
+        assert_eq!(group(&["kind:equipment", "part:equipment:pull_box", "tag:PB-1"]).map(|g| g.0), Some("Electrical"));
+        assert_eq!(group(&["kind:equipment", "part:equipment:ahu", "tag:AHU-1"]).map(|g| g.0), Some("Mechanical"));
+        // The trade the build stamped (from the systems it is on) wins over the kind's words.
+        assert_eq!(group(&["kind:equipment", "part:equipment:unit", "tag:U-1", "trade:plumbing"]).map(|g| g.0), Some("Plumbing"));
+        assert_eq!(group(&["kind:equipment", "part:equipment:fire_pump", "tag:FP-1"]).map(|g| g.0), Some("Fire Protection"));
     }
 }

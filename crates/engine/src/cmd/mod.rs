@@ -187,6 +187,7 @@ pub mod review_impact;
 pub mod wiretable;
 /// The plan's rooms as last traced, by drawing state (kept in each drawing's state).
 pub(crate) use perceive::geometry::TraceCache as RoomTraceCache;
+pub(crate) mod elemtrade;
 pub(crate) mod fillin;
 mod pline_opts;
 pub(crate) mod plotstamp;

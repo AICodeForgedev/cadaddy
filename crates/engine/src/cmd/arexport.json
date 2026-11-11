@@ -37,6 +37,7 @@
       "duct": [92, 160, 212],
       "terminals": [150, 200, 236],
       "equipment": [190, 194, 200],
+      "plumbing_equipment": [150, 176, 198],
       "pipe_cold": [30, 100, 222],
       "pipe_hot": [236, 92, 38],
       "pipe_sanitary": [198, 40, 170],
@@ -48,6 +49,7 @@
       "fire": [222, 30, 30],
       "conduit": [246, 166, 24],
       "tray": [236, 128, 20],
+      "gear": [214, 170, 96],
       "devices": [250, 212, 40],
       "lights": [255, 244, 196],
       "fire_alarm": [204, 0, 51]
@@ -83,8 +85,8 @@
     "groups": [
       {"group": "furniture", "classes": ["architecture", "equipment"], "words": ["furniture", "furnishing", "furnishings", "bed", "chair", "sofa", "desk", "table", "dresser", "nightstand", "wardrobe", "armoire", "bench", "ottoman"], "trades": ["furniture"], "default_on": false},
       {"group": "cabinets", "classes": ["architecture", "equipment"], "words": ["casework", "cabinet", "cabinets", "millwork", "countertop", "vanity"], "trades": ["cabinets"]},
-      {"group": "electrical", "classes": ["equipment"], "words": ["panel", "panelboard", "switchboard", "switchgear", "transformer", "xfmr", "disconnect", "safety switch", "generator", "transfer switch", "meter", "meter center", "ups", "inverter", "lighting control"]},
-      {"group": "plumbing", "classes": ["equipment"], "words": ["water heater", "booster pump", "domestic water", "grease interceptor", "sump pump", "sewage ejector"]},
+      {"group": "electrical", "classes": ["equipment", "gear"], "words": ["panel", "panelboard", "switchboard", "switchgear", "transformer", "xfmr", "disconnect", "safety switch", "generator", "transfer switch", "meter", "meter center", "ups", "inverter", "lighting control"]},
+      {"group": "plumbing", "classes": ["equipment", "plumbing_equipment"], "words": ["water heater", "booster pump", "domestic water", "grease interceptor", "sump pump", "sewage ejector"]},
       {"group": "mechanical", "trades": ["mechanical", "fire_protection"]},
       {"group": "electrical", "trades": ["electrical", "fire_alarm"]},
       {"group": "plumbing", "trades": ["plumbing"]},

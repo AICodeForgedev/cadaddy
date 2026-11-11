@@ -1984,19 +1984,27 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
     // A built piece of equipment's product (Q6164), by the tag the build named it with.
     let (_, equipment_products) = s.doc().map(product_index).unwrap_or_default();
     let sr = super::scope::rules();
-    // Raceway and cable systems are taken off above, with their own fittings and supports.
-    let raceway: Vec<String> = current(s, "bim.bom")
-        .map(|(sp, _)| {
-            sp.mep
-                .systems
-                .iter()
-                .filter(|x| matches!(x.kind, cadaddy_walk3d::MepKind::Conduit | cadaddy_walk3d::MepKind::Cable))
-                .map(|x| x.name.clone())
-                .collect()
-        })
+    // Each system's kind: a row's trade is its system's (Q6528, elemtrade).
+    let kinds: BTreeMap<String, &'static str> = current(s, "bim.bom")
+        .map(|(sp, _)| sp.mep.systems.iter().map(|x| (x.name.clone(), super::mep::kind_str(x.kind))).collect())
         .unwrap_or_default();
     let Ok(q) = s.execute("mep.qty", &json!({ "group_by": "level_system" })) else { return };
-    let ours = |v: &Value| v["system"].as_str().is_some_and(|x| raceway.iter().any(|r| r == x));
+    // The kind of a row's system: its own, else its system's (a drawn, derived or inferred run
+    // of it alike: `E-1 (inferred)` is E-1's).
+    let kind_of = |v: &Value| -> &'static str {
+        match v["kind"].as_str() {
+            Some("duct") => "duct",
+            Some("pipe") => "pipe",
+            Some("conduit") => "conduit",
+            Some("tray") => "tray",
+            Some("cable") => "cable",
+            _ => kinds.get(super::elemtrade::base_system(v["system"].as_str().unwrap_or_default())).copied().unwrap_or_default(),
+        }
+    };
+    // Raceway and cable are taken off above, with their own fittings and supports (the
+    // electrical straps): never again here, however their run was made.
+    let ours = |v: &Value| matches!(kind_of(v), "conduit" | "cable");
+    let trade_of = |v: &Value, or: &'static str| super::elemtrade::of_system(kind_of(v), v["system"].as_str().unwrap_or_default()).unwrap_or(or);
     let arr = |k: &str| q[k].as_array().cloned().unwrap_or_default();
     let st = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
     let num = |v: &Value, k: &str| v[k].as_f64().unwrap_or(0.0);
@@ -2040,8 +2048,8 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
             },
         );
     }
-    for p in arr("pipes").into_iter().filter(|p| !matches!(p["kind"].as_str(), Some("conduit" | "cable"))) {
-        let trade = if p["kind"].as_str() == Some("tray") { "electrical" } else { "plumbing" };
+    for p in arr("pipes").into_iter().filter(|p| !ours(p)) {
+        let trade = trade_of(&p, "plumbing");
         add(
             lines,
             Line {
@@ -2062,7 +2070,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         add(
             lines,
             Line {
-                trade: "mechanical",
+                trade: trade_of(&f, "mechanical"),
                 category: "fittings".into(),
                 item: format!("{} {}", st(&f, "system"), st(&f, "type")),
                 size: st(&f, "size"),
@@ -2079,7 +2087,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         add(
             lines,
             Line {
-                trade: "mechanical",
+                trade: trade_of(&t, "mechanical"),
                 category: "terminals".into(),
                 item: st(&t, "kind"),
                 size: st(&t, "size"),
@@ -2156,6 +2164,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 _ if ours => "electrical",
                 "plumbing" => "plumbing",
                 "mechanical" => "mechanical",
+                "fire protection" => "fire protection",
                 _ => "general",
             };
             let category = if connection {
@@ -2265,12 +2274,16 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
             .iter()
             .find(|k| k.kind.eq_ignore_ascii_case(&st(&e, "kind")))
             .filter(|_| e["properties"][super::onelinegear::LABEL_PROPERTY].is_string());
-        let electrical = oneline.is_some()
-            || matches!(
-                st(&e, "kind").to_ascii_lowercase().as_str(),
-                "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
-            )
-            || prop("TRADE").eq_ignore_ascii_case("electrical");
+        // Whose it is (Q6528): its own trade, its kind's, else its systems'.
+        let systems: Vec<Option<&'static str>> = e["systems"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .take(32)
+            .map(|x| kinds.get(x).and_then(|k| super::elemtrade::of_system(k, x)))
+            .collect();
+        let trade = if oneline.is_some() { "electrical" } else { super::elemtrade::of_equipment(&st(&e, "kind"), &prop("TRADE"), &systems) };
         // A room's own panel (each guest room's G, tagged G-<room>): counted together by its
         // letter, each with its flush trim.
         let own = match (e["properties"]["PANEL"].as_str(), e["properties"]["ROOM"].as_str()) {
@@ -2297,7 +2310,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         add(
             lines,
             Line {
-                trade: if electrical { "electrical" } else { "mechanical" },
+                trade,
                 category: "equipment".into(),
                 item: match (&own, oneline) {
                     (Some(p), _) => format!("{} {p}, one per room", st(&e, "kind")),
@@ -2328,7 +2341,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         add(
             lines,
             Line {
-                trade: "mechanical",
+                trade: trade_of(&h, "mechanical"),
                 category: "hangers".into(),
                 item: format!("Hanger, {}", st(&h, "kind")),
                 size: st(&h, "size"),

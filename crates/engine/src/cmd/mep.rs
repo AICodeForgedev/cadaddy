@@ -2572,6 +2572,8 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
         for sy in e.systems.iter().take(32) {
             xdata.push(t(1000, cap(format!("system:{sy}"))));
         }
+        // Whose it is (Q6528): the trade its takeoff line and the model tree go by.
+        xdata.push(t(1000, format!("trade:{}", equipment_trade(sp, e))));
         if !e.title.is_empty() {
             xdata.push(t(1000, cap(format!("title:{}", e.title))));
         }
@@ -2673,7 +2675,19 @@ pub(crate) fn ensure_layer(d: &mut Drawing, layer: &str, color: i16) {
 }
 
 /// The xdata kind string for IFC export.
-fn kind_str(kind: MepKind) -> &'static str {
+/// The trade of a spec's piece of equipment (Q6528, [`super::elemtrade::of_equipment`]): its
+/// own TRADE property, its kind's, else the trade of the systems it is on.
+pub(crate) fn equipment_trade(sp: &BuildingSpec, e: &cadaddy_walk3d::MepEquipment) -> &'static str {
+    let on: Vec<Option<&'static str>> = e
+        .systems
+        .iter()
+        .take(32)
+        .map(|x| sp.mep.systems.iter().find(|y| y.name == *x).and_then(|y| super::elemtrade::of_system(kind_str(y.kind), x)))
+        .collect();
+    super::elemtrade::of_equipment(&e.kind, e.properties.get("TRADE").map_or("", String::as_str), &on)
+}
+
+pub(crate) fn kind_str(kind: MepKind) -> &'static str {
     match kind {
         MepKind::Duct => "duct",
         MepKind::Pipe => "pipe",
