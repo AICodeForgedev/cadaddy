@@ -46,6 +46,7 @@ mod feederfollow;
 mod feederwire;
 mod fixturekinds;
 mod floorassembly;
+mod floorboxfeed;
 mod floorjoists;
 mod followups_626;
 mod furnish;
