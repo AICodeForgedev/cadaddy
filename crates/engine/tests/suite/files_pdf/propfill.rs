@@ -1275,6 +1275,10 @@ fn an_air_terminal_takes_its_tags_type_and_airflow_its_schedule_row_and_its_unit
     let _g = serial();
     let mut s = plan_edited(|sp| {
         sp["mep"]["terminals"][0]["tag"] = json!("SD-2");
+        // A mark the schedule doesn't list (another tag read beside a symbol).
+        sp["mep"]["terminals"].as_array_mut().expect("terminals").push(
+            json!({"system": "SA", "level": "L1", "at": [60, 60], "size_in": [12, 12], "bottom_ft": 8, "terminal_kind": "supply_diffuser", "tag": "X-01"}),
+        );
         sp["mep"]["terminals"][0]["cfm"] = json!(415.0);
         // The air handler at the run's end, on its system.
         sp["mep"]["equipment"][0]["min"] = json!([1800, 520]);
@@ -1287,6 +1291,7 @@ fn an_air_terminal_takes_its_tags_type_and_airflow_its_schedule_row_and_its_unit
     });
     let t = terminal_of(&mut s, "SD-2");
     assert_eq!(t["type_mark"]["source"]["kind"], "print", "{t:#}");
+    assert!(t["type_mark"].get("note").is_none(), "the schedule lists SD-2: {t:#}");
     assert_eq!(t["cfm"]["value"], json!(415.0), "its tag's airflow over the 150 CFM printed by it: {t:#}");
     assert_eq!(t["model"]["value"], "PLAQUE-24", "{t:#}");
     assert_eq!(t["model"]["source"]["kind"], "schedule");
@@ -1296,8 +1301,10 @@ fn an_air_terminal_takes_its_tags_type_and_airflow_its_schedule_row_and_its_unit
     assert_eq!(t["served_by"]["value"], "AHU-1", "{t:#}");
     assert_eq!(t["served_by"]["source"]["kind"], "computed");
     assert!(t["served_by"]["note"].as_str().is_some_and(|n| n.contains("duct network")), "{t:#}");
+    let x = terminal_of(&mut s, "X-01");
+    assert!(x["type_mark"]["note"].as_str().is_some_and(|n| n.contains("not a mark of the air device schedule")), "{x:#}");
     let air = s.execute("bim.schedule", &json!({"kind": "air"})).expect("air schedule");
-    let rows = air["rows"].as_array().cloned().unwrap_or_default();
+    let rows: Vec<Value> = air["rows"].as_array().cloned().unwrap_or_default().into_iter().filter(|r| r["type_mark"] == "SD-2").collect();
     assert_eq!(rows.len(), 1, "{air:#}");
     assert_eq!(rows[0]["unit"], "AHU-1", "{air:#}");
     assert_eq!(rows[0]["type_mark"], "SD-2");
@@ -1335,6 +1342,8 @@ fn a_terminal_no_duct_reaches_is_served_by_its_schedules_unit_or_its_rooms_own()
     assert!(eg["served_by"]["note"].as_str().is_some_and(|n| n.starts_with("M-TERMINAL-ROOM-UNIT")), "{eg:#}");
     let sd7 = terminal_of(&mut s, "SD-7");
     assert!(sd7.get("served_by").is_none(), "no supply unit for office 101: {sd7:#}");
+    // With no air device schedule in the set, a mark is taken as printed.
+    assert!(sd7["type_mark"].get("note").is_none(), "{sd7:#}");
     let r = s.execute("bim.props.check", &json!({"checks": ["terminal_unserved"]})).expect("check");
     let unserved: Vec<String> = r["findings"].as_array().into_iter().flatten().filter_map(|f| f["message"].as_str().map(str::to_string)).collect();
     assert!(unserved.iter().any(|m| m.contains("SD-7")) && !unserved.iter().any(|m| m.contains("SD-1") || m.contains("EG-1")), "{unserved:?}");

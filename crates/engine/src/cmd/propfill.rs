@@ -3303,7 +3303,15 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         // airflow printed by it.
                         let mark = super::bimlook::made_prop(e, super::mep::TERMINAL_MARK).map(str::to_string).filter(|m| !m.is_empty());
                         if let Some(mk) = &mark {
-                            put(&mut store, "type_mark", Prop::new(mk.clone(), Source::print(&sheet, None)), tally);
+                            let mut p = Prop::new(mk.clone(), Source::print(&sheet, None));
+                            // A mark the set's air device schedule doesn't list may be another
+                            // tag read beside the symbol: said so.
+                            let listed =
+                                sp.mep.air_device_schedule.is_empty() || sp.mep.air_device_schedule.iter().any(|t| t.tag.eq_ignore_ascii_case(mk));
+                            if !listed {
+                                p = p.with_note("not a mark of the air device schedule: check the tag (it may be another tag beside the symbol)");
+                            }
+                            put(&mut store, "type_mark", p, tally);
                         }
                         let own_cfm = super::bimlook::made_prop(e, super::mep::TERMINAL_CFM)
                             .and_then(|c| c.parse::<f64>().ok())

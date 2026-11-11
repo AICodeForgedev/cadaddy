@@ -116,10 +116,18 @@ fn name_words(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether `text` names a room called `name` (one of its words, singular or plural).
+/// Whether `text` (a schedule's `SERVES`: `LOBBY/OFFICE`, `CORRIDORS, STAIRS`) names a room
+/// called `name`: one of its items is the room's name, every word of one within the other's
+/// (`STORAGE ROOMS` names `STORAGE`; `STAFF LAUNDRY` doesn't name `STAFF AREA`).
 fn names_room(text: &str, name: &str) -> bool {
-    let said: Vec<String> = name_words(text);
-    name_words(name).iter().any(|w| said.contains(w))
+    let room = name_words(name);
+    if room.is_empty() {
+        return false;
+    }
+    text.to_ascii_uppercase().replace(" AND ", ",").split([',', '/', '&', ';', '+']).any(|item| {
+        let said = name_words(item);
+        !said.is_empty() && (said.iter().all(|w| room.contains(w)) || room.iter().all(|w| said.contains(w)))
+    })
 }
 
 /// The unit serving each air terminal of the built model (see the module doc). `room_of`: the
@@ -317,7 +325,11 @@ mod tests {
     fn a_schedule_names_a_room_by_any_of_its_words() {
         assert!(names_room("CORRIDORS", "201 CORRIDOR"));
         assert!(names_room("CORRIDORS AND LOBBY", "LOBBY"));
+        assert!(names_room("LOBBY/OFFICE", "144 OFFICE"));
+        assert!(names_room("STORAGE ROOMS", "102 STORAGE"));
         assert!(!names_room("GUEST ROOMS", "CORRIDOR"));
+        assert!(!names_room("STAFF LAUNDRY", "143 STAFF AREA"), "one shared word is not the room");
         assert!(!names_room("", "CORRIDOR"));
+        assert!(!names_room("CORRIDORS", "143"));
     }
 }
