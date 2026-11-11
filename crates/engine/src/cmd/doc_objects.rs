@@ -399,8 +399,17 @@ pub(crate) fn schedule_marks(texts: &[TextItem]) -> BTreeMap<String, String> {
 /// than `class` (an `SD-5` the air device schedule lists, though the legend's `SD` is a duct
 /// detector): its title, `a schedule` when it has none. A tag without its number is no mark.
 pub(crate) fn of_another_schedule(code: &str, number: &str, class: &Class, scheduled: &BTreeMap<String, String>) -> Option<String> {
-    let title = mark_key(&format!("{code}-{number}")).and_then(|k| scheduled.get(&k))?;
-    class_of(title).is_none_or(|c| c.kind != class.kind).then(|| if title.is_empty() { "a schedule".to_string() } else { title.clone() })
+    of_another_schedule_by(&format!("{code}-{number}"), scheduled, &|title| class_of(title).is_some_and(|c| c.kind == class.kind))
+}
+
+/// The one rule for a numbered tag (`SD-5`) and a code's kind (readers and Validate's coverage):
+/// the schedule that lists the tag as one of its rows, when that schedule is not of the kind
+/// (`its_kind` says by the schedule's title; an untitled schedule is another's): its title, `a
+/// schedule` when it has none. `None`: no schedule lists it, or the kind's own does; then the
+/// tag is the code's kind's.
+pub(crate) fn of_another_schedule_by(tag: &str, scheduled: &BTreeMap<String, String>, its_kind: &dyn Fn(&str) -> bool) -> Option<String> {
+    let title = mark_key(tag).and_then(|k| scheduled.get(&k))?;
+    (title.is_empty() || !its_kind(title)).then(|| if title.is_empty() { "a schedule".to_string() } else { title.clone() })
 }
 
 /// How many objects a note gives (`(2) EV CHARGING STATIONS`, `TWO SITE CAMERAS`,
