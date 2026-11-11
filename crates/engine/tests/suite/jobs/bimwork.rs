@@ -383,7 +383,8 @@ fn bim_estimate_and_estimate_status_give_the_same_totals() {
     // Route 1: bim.estimate (stores in estimate state).
     let bim = s.execute("bim.estimate", &json!({"cost_table": table.display().to_string(), "labor_rate": 90})).unwrap();
     // Route 2: estimate.status (prices were stored by bim.estimate; scope all as in_contract).
-    for trade in ["electrical", "mechanical", "plumbing", "general", "drywall", "job"] {
+    // The trades' pieces are lines of their own trades (Q6527): every trade the model has.
+    for trade in ["electrical", "mechanical", "plumbing", "general", "drywall", "job", "framing", "insulation", "finishes", "concrete", "openings"] {
         let _ = s.execute("estimate.set_scope", &json!({"trade": trade, "scope": "in_contract", "reason": "all ours"}));
     }
     let est = s.execute("estimate.status", &json!({})).unwrap();

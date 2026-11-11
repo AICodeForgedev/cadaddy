@@ -911,6 +911,23 @@ fn waste_of(r: &Rules, trade: &str) -> Option<(f64, String)> {
     (f > 0.0 && f < 1.0).then(|| (f, r.source_text(path)))
 }
 
+/// Whether a trade's waste factor applies to a kind of piece (the rules' `takeoff.waste_kinds`).
+fn takes_waste(r: &Rules, kind: &str) -> bool {
+    r.words("takeoff.waste_kinds").iter().any(|k| k.eq_ignore_ascii_case(kind))
+}
+
+/// The waste factor on a kind of a trade's pieces, and its source; none where the trade has no
+/// waste factor or the kind takes none (Q6527: the takeoff's waste is the report's).
+pub(crate) fn piece_waste(r: &Rules, trade: &str, kind: &str) -> Option<(f64, String)> {
+    if takes_waste(r, kind) { waste_of(r, trade) } else { None }
+}
+
+/// Whether a kind of piece is bought by the piece: its takeoff line counts it though it carries
+/// a length or area (the rules' `takeoff.by_the_piece`).
+pub(crate) fn by_the_piece(r: &Rules, kind: &str) -> bool {
+    r.words("takeoff.by_the_piece").iter().any(|k| k.eq_ignore_ascii_case(kind))
+}
+
 fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "bim.atoms.report";
     let level = str_param(p, "level").map(str::to_string);
@@ -975,22 +992,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         let mut m = serde_json::Map::new();
         for (kind, tally) in kinds {
             let mut j = super::mepatoms::tally_json(tally);
-            let buys = matches!(
-                kind.as_str(),
-                "sheet"
-                    | "pour"
-                    | "batt"
-                    | "board"
-                    | "cmu"
-                    | "flooring"
-                    | "plaster"
-                    | "lath"
-                    | "weather_barrier"
-                    | "siding"
-                    | "panel"
-                    | "brick"
-                    | "cladding"
-            );
+            let buys = takes_waste(&rules, kind);
             if let Some((f, _)) = waste.as_ref().filter(|_| buys) {
                 let r2 = |v: f64| (v * 100.0).round() / 100.0;
                 let mut w = json!({"pieces": (tally.pieces() * (1.0 + f)).ceil()});

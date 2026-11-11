@@ -366,6 +366,17 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
             x
         });
         entry["qty"] = json!(entry["qty"].as_f64().unwrap_or(0.0) + qty);
+        // A trade piece line's count and measures beside its quantity (Q6527).
+        if let Some(m) = l["measures"].as_object() {
+            for (from, to) in
+                [("pieces", "count"), ("length_ft", "length_ft"), ("area_sf", "area_sf"), ("volume_cy", "volume_cy"), ("weight_lb", "weight_lb")]
+            {
+                if let Some(v) = m.get(from).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0) {
+                    let had = entry["measures"][to].as_f64().unwrap_or(0.0);
+                    entry["measures"][to] = json!(had + v);
+                }
+            }
+        }
         entry["elements_unresolved"] = json!(entry["elements_unresolved"].as_u64().unwrap_or(0) + unresolved as u64);
         if let Some(a) = entry["elements"].as_array_mut() {
             let have: BTreeSet<String> = a.iter().filter_map(Value::as_str).map(str::to_string).collect();
@@ -392,6 +403,14 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
             l["qty"] = json!(r3(q));
             if let Some(m) = measure(l["unit"].as_str().unwrap_or_default()) {
                 l[m] = json!(r3(q));
+            }
+            // The pieces' count and other measures (Q6527), beside the quantity's own.
+            if let Some(Value::Object(ms)) = l.as_object_mut().and_then(|o| o.remove("measures")) {
+                for (k, v) in ms {
+                    if l[k.as_str()].is_null() {
+                        l[k.as_str()] = json!(r3(v.as_f64().unwrap_or(0.0)));
+                    }
+                }
             }
             l["element_count"] = json!(l["elements"].as_array().map_or(0, Vec::len));
             // The named elements the model has none of, counted; none: no field.
