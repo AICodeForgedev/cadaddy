@@ -1473,28 +1473,73 @@ pub fn names_floor_plan(title: &str) -> bool {
     title_names(title, crate::wordrules::words("sheets.floor_plan_title_words"))
 }
 
-/// The floor plan of a sheet of one storey that prints it beside other plans of the same outline
-/// (`DIMENSIONED FLOOR PLAN` beside `REFLECTED CEILING PLAN` and `ROOF PLAN`), with its block of
-/// linework: the building is read from that view alone, since a ceiling's or a roof's lines
-/// would be taken for walls. `None` unless the sheet has exactly one titled floor plan, no
-/// typical one, at least one titled other plan, and blocks that keep them apart.
+/// The floor plan of a sheet of one storey that prints it beside other views, with its block of
+/// linework: the building is read from that view alone. Beside it can stand other plans of the
+/// same outline (`DIMENSIONED FLOOR PLAN` beside `REFLECTED CEILING PLAN` and `ROOF PLAN`: a
+/// ceiling's or a roof's lines would be taken for walls), details, sections and schedules
+/// (`FLOOR PLAN` beside `WALL TYPES`, a door schedule and a finish schedule: a table's rules
+/// would be taken for walls, its words for rooms). `None` unless the sheet has exactly one
+/// titled floor plan, no typical one, a block of linework for it that no other title claims,
+/// and something else on the sheet: another titled view or another block.
 pub fn floor_plan_view(d: &Drawing) -> Option<(PlanView, [f64; 4])> {
+    floor_plan_view_in(d, None)
+}
+
+/// [`floor_plan_view`] on a sheet whose views are drawn in `area` (inside its border, off its
+/// title block; `None`: the whole sheet): titles and blocks outside it are the sheet's
+/// furniture. A plan whose linework comes in pieces (a wing or a canopy set a little apart)
+/// takes the pieces that reach into its block and are no other view's.
+pub fn floor_plan_view_in(d: &Drawing, area: Option<[f64; 4]>) -> Option<(PlanView, [f64; 4])> {
     let names = title_names;
+    let holds = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0].min(r[2]) && p[0] <= r[0].max(r[2]) && p[1] >= r[1].min(r[3]) && p[1] <= r[1].max(r[3]);
+    let in_area = |p: [f64; 2]| area.is_none_or(|a| holds(&a, p));
     let texts = crate::sheet_facts::texts(d);
     let mut titles = crate::sheet_facts::view_titles(d, &texts);
+    titles.retain(|v| in_area(v.at));
     // The same title read twice (hidden text and its lettering): one view.
     titles.sort_by(|a, b| a.title.cmp(&b.title));
     titles.dedup_by(|a, b| a.title == b.title);
     let other = |t: &str| names(t, crate::wordrules::words("sheets.other_plan_title_words"));
-    let mut floors = titles.iter().filter(|v| names(&v.title, crate::wordrules::words("sheets.floor_plan_title_words")) && !other(&v.title));
+    // A title listing the sheet's views (`FLOOR PLAN / DETAILS / SCHEDULES`) is no one view's.
+    let floor_title = |t: &str| names(t, crate::wordrules::words("sheets.floor_plan_title_words")) && !other(t) && !names_no_plan(t);
+    let mut floors = titles.iter().filter(|v| floor_title(&v.title));
     let (floor, None) = (floors.next()?, floors.next()) else { return None };
     let region = floor.region?;
-    let others: Vec<_> = titles.iter().filter(|v| other(&v.title)).collect();
-    if says_typical(&floor.title) || others.is_empty() || others.iter().any(|v| v.region == Some(region)) {
+    let others: Vec<&crate::sheet_facts::ViewTitle> = titles.iter().filter(|v| v.title != floor.title).collect();
+    if says_typical(&floor.title) || others.iter().any(|v| v.region == Some(region)) {
         return None;
     }
-    Some((PlanView { title: floor.title.clone(), levels: Vec::new(), at: floor.at, height: 0.0 }, region))
+    let overlap = |a: &[f64; 4], b: &[f64; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+    let blocks: Vec<[f64; 4]> = crate::sheet_facts::view_regions(d)
+        .into_iter()
+        .map(|(b, _)| b)
+        .filter(|b| in_area([(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0]))
+        .take(MAX_PLAN_BLOCKS)
+        .collect();
+    let claimed: Vec<[f64; 4]> = others.iter().filter_map(|v| v.region).collect();
+    let mut rect = region;
+    for _ in 0..blocks.len() {
+        let mut grew = false;
+        for b in &blocks {
+            let joined = [rect[0].min(b[0]), rect[1].min(b[1]), rect[2].max(b[2]), rect[3].max(b[3])];
+            if joined != rect && overlap(b, &rect) && !claimed.contains(b) && !claimed.iter().any(|c| overlap(c, &joined)) {
+                rect = joined;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    // A sheet of its floor plan alone is read whole.
+    if others.is_empty() && blocks.iter().all(|b| overlap(b, &rect)) {
+        return None;
+    }
+    Some((PlanView { title: floor.title.clone(), levels: Vec::new(), at: floor.at, height: 0.0 }, rect))
 }
+
+/// Most blocks of linework weighed for a floor plan's view (a guard on hostile sheets).
+const MAX_PLAN_BLOCKS: usize = 2_000;
 
 /// The views titled over a `SCALE:` line ([`crate::sheet_facts::view_titles`]) that name a level,
 /// each with its block of linework; several titles under one block (two floor plans whose
@@ -2139,12 +2184,78 @@ mod tests {
         assert!(r[2] < 600.0, "only the floor plan's block: {r:?}");
     }
 
+    /// A ruled table of `rows` x `cols` cells at (x, y), its title over it and words in its cells.
+    fn table(d: &mut Drawing, x: f64, y: f64, rows: usize, cols: usize, title: &str, words: &[&str]) {
+        let (cw, ch) = (60.0, 14.0);
+        let (w, h) = (cw * cols as f64, ch * rows as f64);
+        for r in 0..=rows {
+            sheet_line(d, [x, y + r as f64 * ch], [x + w, y + r as f64 * ch]);
+        }
+        for c in 0..=cols {
+            sheet_line(d, [x + c as f64 * cw, y], [x + c as f64 * cw, y + h]);
+        }
+        for (i, word) in words.iter().enumerate() {
+            let (r, c) = (i / cols % rows.max(1), i % cols);
+            sheet_text(d, [x + c as f64 * cw + 3.0, y + r as f64 * ch + 4.0], word, 4.0);
+        }
+        sheet_text(d, [x, y + h + 6.0], title, 8.0);
+    }
+
+    /// A sheet of one storey's floor plan, two wall-section details, a door schedule, a finish
+    /// schedule and a column of general notes, its title block listing them all.
+    fn mixed_sheet() -> Drawing {
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 100.0, "FLOOR PLAN");
+        titled_block(&mut d, 700.0, 100.0, "WALL SECTION");
+        titled_block(&mut d, 1100.0, 100.0, "WALL SECTION AT STOREFRONT");
+        table(&mut d, 100.0, 900.0, 8, 6, "DOOR SCHEDULE", &["MARK", "WIDTH", "HEIGHT", "TYPE", "FRAME", "HARDWARE"]);
+        table(&mut d, 700.0, 900.0, 10, 5, "FINISH SCHEDULE", &["TAG", "DESCRIPTION", "EPOXY GROUT", "FLOOR SINK", "JOB PACK"]);
+        for (i, line) in ["GENERAL NOTES:", "1. PROVIDE PLYWOOD BACKING", "2. VERIFY ALL DIMENSIONS"].iter().enumerate() {
+            sheet_text(&mut d, [1500.0, 1100.0 - i as f64 * 12.0], line, 4.0);
+        }
+        // The title block's strip: the sheet's title lists its views, over a scale line.
+        sheet_line(&mut d, [1850.0, 0.0], [1850.0, 1440.0]);
+        sheet_text(&mut d, [1860.0, 140.0], "FLOOR PLAN/ DETAILS/ SCHEDULES", 9.0);
+        sheet_text(&mut d, [1860.0, 120.0], "SCALE: AS NOTED", 4.0);
+        d
+    }
+
     #[test]
-    fn a_sheet_not_mixing_a_floor_plan_with_other_plans_is_read_whole() {
-        // Only a floor plan and a detail.
+    fn a_floor_plan_beside_details_and_schedules_is_its_own_view() {
+        let d = mixed_sheet();
+        let (v, r) = floor_plan_view(&d).expect("the floor plan's view");
+        assert_eq!(v.title, "FLOOR PLAN");
+        assert!(r[0] >= 90.0 && r[1] >= 90.0 && r[2] <= 420.0 && r[3] <= 420.0, "only the floor plan's block, no table or detail: {r:?}");
+        // Its rectangle holds none of the schedules' words and none of the details.
+        let texts = crate::sheet_facts::texts(&d);
+        let inside: Vec<&str> =
+            texts.iter().filter(|t| t.at.x >= r[0] && t.at.x <= r[2] && t.at.y >= r[1] && t.at.y <= r[3]).map(|t| t.value.as_str()).collect();
+        assert!(!inside.iter().any(|t| ["EPOXY GROUT", "FLOOR SINK", "JOB PACK", "MARK"].contains(t)), "{inside:?}");
+        // Read on the sheet's drawing area (off the title block), the same view.
+        let (_, r2) = floor_plan_view_in(&d, Some([0.0, 0.0, 1850.0, 1440.0])).expect("in the drawing area");
+        assert_eq!(r, r2);
+    }
+
+    #[test]
+    fn a_floor_plan_in_pieces_keeps_the_pieces_reaching_into_its_block() {
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 100.0, "FLOOR PLAN");
+        // A canopy's outline set apart from the walls, its box reaching over the plan's.
+        for (a, b) in [([380.0, 300.0], [700.0, 300.0]), ([700.0, 300.0], [700.0, 460.0]), ([700.0, 460.0], [380.0, 460.0])] {
+            sheet_line(&mut d, a, b);
+        }
+        sheet_line(&mut d, [380.0, 460.0], [380.0, 300.0]);
+        table(&mut d, 1000.0, 900.0, 8, 6, "DOOR SCHEDULE", &["MARK"]);
+        let (_, r) = floor_plan_view(&d).expect("the floor plan's view");
+        assert!(r[2] >= 700.0 && r[3] >= 460.0, "the canopy is the plan's: {r:?}");
+        assert!(r[2] < 1000.0 && r[3] < 900.0, "the schedule is not: {r:?}");
+    }
+
+    #[test]
+    fn a_sheet_not_mixing_a_floor_plan_with_other_views_is_read_whole() {
+        // Only a floor plan.
         let mut d = bordered();
         titled_block(&mut d, 100.0, 600.0, "FLOOR PLAN");
-        titled_block(&mut d, 700.0, 600.0, "WALL DETAIL");
         assert!(floor_plan_view(&d).is_none());
         // Two floor plans: which one the storey's is isn't for this reader to say.
         let mut d = bordered();

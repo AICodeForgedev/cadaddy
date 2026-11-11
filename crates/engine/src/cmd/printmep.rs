@@ -834,7 +834,7 @@ pub(crate) fn sheet_views(d: &Drawing, sheets: &[Option<([f64; 4], [f64; 4], Vec
         sub.model.push_many(ents);
         let mut found = cadaddy_mepfix::sheet_reader::level_views(&sub);
         if found.is_empty()
-            && let Some((v, cell)) = cadaddy_mepfix::sheet_reader::floor_plan_view(&sub)
+            && let Some((v, cell)) = cadaddy_mepfix::sheet_reader::floor_plan_view_in(&sub, Some(a))
         {
             // One storey's floor plan beside its other plans: the sheet keeps its level, and is
             // read in that view (no level of the view's own: the caller keeps the sheet's).
