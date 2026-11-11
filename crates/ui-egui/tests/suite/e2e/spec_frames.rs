@@ -53,6 +53,9 @@ fn frames(rooms: usize, frames: u32) -> (f64, u64, f64) {
     let mb = e.app.session.doc().unwrap().building_spec.as_deref().map_or(0, str::len) as f64 / 1e6;
     e.exec("view.dir", json!({ "dir": [-1, -1.5, 1], "fit": true }));
     e.exec("vscurrent", json!({ "style": "shaded" }));
+    // The architectural view draws the walls (the default MEP view hides them, and what the
+    // view hides leaves the selection, Q6419).
+    e.exec("bim.view", json!({ "view": "architectural" }));
     e.app.session.set_selection(vec![w]);
     e.app.run("ui.dock", json!({ "operation": "detach", "panel": "properties", "rect": [40, 80, 380, 560] })).unwrap();
     e.app.run("ui.dock", json!({ "operation": "detach", "panel": "coordination", "rect": [440, 80, 380, 560] })).unwrap();
