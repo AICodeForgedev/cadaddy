@@ -2031,8 +2031,8 @@ fn prompt_md(
     if counts.get("raceways").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `raceways`: the routed raceway runs of this area (circuit, panel, raceway, sticks, length, the conductors pulled in it with each wire's handle); each raceway piece among the elements carries its `raceway` facts: a stick's `ends_ft` and `ends_aff_in`, what each end `touches` (boxes, the next stick or fitting) and its `links`, the `wires` in it; a box's `cubic_in`, `box_of` and the sticks `entering` it; a wire's `in_raceway`; a fitting's `touches`. The conduit rules in `prescreen` (E-CONDUIT-CONTINUITY, E-CONDUIT-FILL, E-BOX-FILL, E-DERATE, E-VDROP, E-METHOD, G-CLASH, E-TAKEOFF) were measured on these pieces; each finding's `handles` lists every piece of this area it covers: report it once with those `handles`, and overturn it only with evidence from the pieces or the prints.\n");
     }
-    if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 {
-        s.push_str("- `objects.json` `keynotes`: the keynote lists of the sheets that mark this area (number → note, and what each note calls for: a box of a size, a device, conduit of a size and route, a sleeve, a fire rating) and each keynote marker in or by it, with its crop (`keynote_marker` crops; the `keynotes` crops are the lists). G-KEYNOTE in `prescreen` matched each call to the model at its marker; check what it could not measure on the crops.\n");
+    if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 || counts.get("keynote_lists").and_then(Value::as_u64).unwrap_or(0) > 0 {
+        s.push_str("- `objects.json` `keynotes`: the keynote lists of the sheets that mark this area and of every other sheet the packet shows (number → note, and what each note calls for: a box of a size, a device, conduit of a size and route, a sleeve, a fire rating) and each keynote marker in or by it, with its crop (`keynote_marker` crops; the `keynotes` crops are the lists). G-KEYNOTE in `prescreen` matched each call to the model at its marker; check what it could not measure on the crops.\n");
     }
     if counts.get("underground_callouts").and_then(Value::as_u64).unwrap_or(0) > 0
         || counts.get("underground_sheets").and_then(Value::as_u64).unwrap_or(0) > 0
@@ -2327,6 +2327,8 @@ fn render_drawing(od: &Drawing, rect: [f64; 4], px: [u32; 2]) -> Option<Vec<u8>>
 /// reaches this one only through the read hook, so a test checks the names agree).
 const SHX_SOURCE_LAYER: &str = "PDF-SHX-SOURCE";
 const OCR_TEXT_STYLE: &str = "PDF-SHX-OCR";
+/// The layer the PDF import draws a page's markups (annotations) on.
+const MARKUP_LAYER: &str = "PDF-MARKUP";
 /// The import names a style after the PDF font its text was set in (`PDF-Arial`).
 const PDF_STYLE_PREFIX: &str = "PDF-";
 /// Under this, a crop is flagged as not looking like its PDF page.
@@ -2363,7 +2365,8 @@ fn print_tables(d: &Drawing) -> Drawing {
 fn as_printed<'a>(d: &Drawing, ents: &[&'a Entity]) -> Vec<&'a Entity> {
     let strokes = ents.iter().any(|e| on_layer(e, SHX_SOURCE_LAYER));
     let shown = |e: &Entity| on_layer(e, SHX_SOURCE_LAYER) || d.layer(&e.common.layer).is_none_or(|l| l.visible());
-    ents.iter()
+    let mut out: Vec<&Entity> = ents
+        .iter()
         .copied()
         .filter(|e| shown(e))
         .filter(|e| match &e.kind {
@@ -2374,7 +2377,12 @@ fn as_printed<'a>(d: &Drawing, ents: &[&'a Entity]) -> Vec<&'a Entity> {
             }
             _ => true,
         })
-        .collect()
+        .collect();
+    // A reviewer's highlight (a solid fill on the markups' layer) is drawn under the print: the
+    // lettering it marks stays legible, as a highlight shows on paper (prints imported before
+    // the import kept highlights under the page drew it over the page).
+    out.sort_by_key(|e| !(on_layer(e, MARKUP_LAYER) && matches!(&e.kind, EntityKind::Hatch(h) if h.solid)));
+    out
 }
 
 /// A picture's ink: one bit per pixel, row by row.
@@ -2600,6 +2608,28 @@ fn sheet_views(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, String, [f64; 4])
     out
 }
 
+/// How many unit types list each view (sheet upper case, view title) among their own views:
+/// a view the job gives several types (a typical guest room's plumbing plan) is the set's
+/// typical one, not drawn for any of them alone.
+fn type_view_counts(d: &Drawing) -> BTreeMap<(String, String), usize> {
+    let mut out: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let spec = d.building_spec.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok());
+    for t in spec.as_ref().and_then(|s| s.get("unit_types")).and_then(Value::as_array).into_iter().flatten().take(1_000) {
+        let mine: BTreeSet<(String, String)> = t
+            .get("views")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(MAX_TYPE_VIEWS)
+            .filter_map(|v| Some((v.get("sheet")?.as_str()?.trim().to_ascii_uppercase(), v.get("title")?.as_str()?.trim().to_string())))
+            .collect();
+        for k in mine {
+            *out.entry(k).or_default() += 1;
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------- planning the crops
 
 /// Whether a link shows `level`.
@@ -2797,6 +2827,9 @@ struct DocInput<'a> {
     cites: &'a BTreeMap<String, super::validate_docs::Cites>,
     /// The job's imported sheets that are no plan link: number, kind, rectangle.
     regions: &'a [(String, String, [f64; 4])],
+    /// Every keynote list of the set (G-KEYNOTE's reading): the ones of the sheets the packet
+    /// shows come in whole.
+    lists: &'a [super::validate_keynote::CropAsk],
 }
 
 /// A sheet as a crop names it when the building spec has no link for it: the job's rectangle.
@@ -2828,6 +2861,7 @@ fn plan_crops(
     fit: Option<&Value>,
     keynotes: &[super::validate_keynote::CropAsk],
     docs: &DocInput,
+    type_views: &BTreeMap<(String, String), usize>,
     register: &dyn Fn(&Place, [f64; 4]) -> vreg::Registered,
     measure: &dyn Fn([f64; 4]) -> std::result::Result<vreg::Turned, String>,
 ) -> Planned {
@@ -3040,7 +3074,25 @@ fn plan_crops(
                     ))
                 })
                 .collect();
+        // A view the job gives several unit types is the set's typical one: where the type has a
+        // view of its own of that trade (its enlarged power plan), the typical one is left out;
+        // otherwise it is shown, said to be the typical one (it may not be this type's layout).
+        let shared = |sheet: &str, title: &str| type_views.get(&(sheet.trim().to_ascii_uppercase(), title.trim().to_string())).copied().unwrap_or(0);
+        let trade_of_sheet = |sheet: &str| {
+            let l = links.iter().find(|l| l.number.eq_ignore_ascii_case(sheet));
+            trade_of_discipline(&l.and_then(|l| l.discipline.clone()).unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(sheet)))
+        };
+        let own_trades: BTreeSet<&'static str> =
+            listed.iter().filter(|(sh, t, ..)| shared(sh, t) <= 1).map(|(sh, ..)| trade_of_sheet(sh)).collect();
         for (sheet, title, vr, sheet_rect) in &listed {
+            let types = shared(sheet, title);
+            if types > 1 && own_trades.contains(trade_of_sheet(sheet)) {
+                left_out.push((
+                    format!("sheet {sheet} view {title}"),
+                    format!("a view {types} unit types share; unit type {} has its own {} view", u.name, trade_of_sheet(sheet)),
+                ));
+                continue;
+            }
             // Its sheet as the set links it, else (a unit sheet of no level: A821) as the job
             // read it.
             let found = links
@@ -3083,7 +3135,15 @@ fn plan_crops(
                 (None, None) => json!({"rotation_deg": null, "mirrored": u.hand == "mirrored", "by": "unit hand"}),
             };
             let o = measured_turn(fallback, kind == "enlarged_plan", rect, u, measure);
-            push(&mut crops, l, kind, trade, rect, "unit_type", None, Some(format!("unit type {}: {title}", u.name)), Some(o));
+            let shows = if types > 1 {
+                format!(
+                    "unit type {}: {title} (a view {types} unit types share: the set's typical one, not drawn for this type alone; where they differ the type's own views decide)",
+                    u.name
+                )
+            } else {
+                format!("unit type {}: {title}", u.name)
+            };
+            push(&mut crops, l, kind, trade, rect, "unit_type", None, Some(shows), Some(o));
         }
         for l in links.iter().filter(|l| !listed.iter().any(|(sh, ..)| l.number.eq_ignore_ascii_case(sh))) {
             if n_unit >= MAX_UNIT_VIEWS {
@@ -3512,9 +3572,47 @@ fn plan_crops(
             x.deciding = Some(why.clone());
         }
     }
+    // 5. The keynote lists of the packet's other sheets (a unit type's enlarged plans, a cited
+    //    sheet), which no marker carried onto the plan brings in: whole, as deciding.
+    let shown: BTreeSet<String> = crops.iter().filter(|c| !c.kind.starts_with("keynote")).map(|c| c.sheet.to_ascii_uppercase()).collect();
+    let mut more = 0usize;
+    for k in docs.lists {
+        if more >= MAX_SHOWN_LISTS {
+            break;
+        }
+        if !shown.contains(&k.sheet.to_ascii_uppercase())
+            || crops.iter().any(|c| c.kind == "keynotes" && c.sheet.eq_ignore_ascii_case(&k.sheet) && intersect(c.whole, k.rect).is_some())
+        {
+            continue;
+        }
+        let Some(l) = links
+            .iter()
+            .copied()
+            .find(|l| l.number.eq_ignore_ascii_case(&k.sheet) && l.view.is_none())
+            .or_else(|| links.iter().copied().find(|l| l.number.eq_ignore_ascii_case(&k.sheet)))
+        else {
+            continue;
+        };
+        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+        let Some(sr) = l.rect.map(norm_rect) else { continue };
+        let Some(rect) = intersect(norm_rect(k.rect), sr) else { continue };
+        if !want(trade) {
+            continue;
+        }
+        let before = crops.len();
+        push(&mut crops, l, "keynotes", trade, texts.block(rect, sr), "keynote", None, Some(k.shows.clone()), None);
+        for c in crops.iter_mut().skip(before) {
+            c.deciding = Some("the keynote list of a sheet this packet shows, whole".into());
+        }
+        more += 1;
+    }
     left_out.extend(same);
     Planned { crops, left_out, not_shown }
 }
+
+/// Keynote lists of the packet's sheets (beyond the ones of the sheets marking the area) one
+/// packet crops, at most.
+const MAX_SHOWN_LISTS: usize = 6;
 
 /// A sheet and its view, as `left_out` names it.
 fn view_label(l: &SheetLink) -> String {
@@ -3815,7 +3913,10 @@ fn pdf_pages(
             not_shown.push((what, format!("{why}: {page} can't be read (or is over 200 MB)")));
             continue;
         };
-        let pd = match hook(bytes, &json!({"page": p.page})) {
+        // Read as the page prints (as `read_page` does): no masks (the import merges white fills
+        // into one mask at the latest of their places, over the lettering painted between) and no
+        // text recovery (lettering stays the strokes it was printed with, every symbol drawn).
+        let pd = match hook(bytes, &json!({"page": p.page, "masks": false, "recoverText": false})) {
             Ok((pd, _)) => pd,
             Err(e) => {
                 not_shown.push((what, format!("{why}: {page}: {e}")));
@@ -4264,6 +4365,15 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // The documents that decide (Q6261): the sheets the area's prescreen cites, the schedule,
     // legend and notes sheets of its trades, and its ceiling height.
     let job_pages = super::validate_gear::job_pages(job.as_ref().and_then(|j| j.sheets.as_ref()));
+    // A sheet the spec links with no title takes the title the job's index gives it: an
+    // enlarged plan the spec knows only by its number is cropped as an enlarged plan (offered
+    // only where it names the room), not shown whole as its level's plan.
+    let mut sp = sp;
+    for l in sp.sheets.iter_mut().filter(|l| l.title.trim().is_empty()) {
+        if let Some(p) = job_pages.iter().find(|p| p.number.trim().eq_ignore_ascii_case(l.number.trim()) && !p.title.trim().is_empty()) {
+            l.title = p.title.clone();
+        }
+    }
     let numbers = super::validate_docs::numbers(
         sp.sheets.iter().map(|l| l.number.as_str()).chain(regions.iter().map(|r| r.0.as_str())).chain(job_pages.iter().map(|p| p.number.as_str())),
     );
@@ -4395,10 +4505,19 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let unit_views = UnitViews::of(d, &view_rects, upf);
     let measure = |r: [f64; 4]| unit_views.turn(r, &model, &area.level, area.bbox);
     let in_drawing: Vec<super::validate_docs::DocSheet> = doc_sheets.0.iter().filter(|x| x.rect.is_some()).cloned().collect();
-    let docs = DocInput { sheets: &in_drawing, cites: &cites, regions: &regions };
+    let all_lists = super::validate_keynote::list_asks(&keynotes);
+    let docs = DocInput { sheets: &in_drawing, cites: &cites, regions: &regions, lists: &all_lists };
+    let type_views = type_view_counts(d);
     let Planned { mut crops, mut left_out, mut not_shown } =
-        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops, &docs, &register, &measure);
+        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops, &docs, &type_views, &register, &measure);
     left_out.extend(doc_sheets.1.iter().cloned());
+    // The keynote lists of every sheet the packet shows, in `objects.json` too.
+    let packet_sheets: BTreeSet<String> = crops.iter().map(|c| c.sheet.trim().to_ascii_uppercase()).collect();
+    let lists_added = super::validate_keynote::add_packet_lists(&mut here.objects, &keynotes, &packet_sheets);
+    let n_lists = here.objects["keynotes"]["lists"].as_array().map_or(0, Vec::len);
+    here.objects["counts"]["keynote_lists"] = json!(n_lists);
+    here.counts["keynote_lists"] = json!(n_lists);
+    here.counts["keynote_lists_of_shown_sheets"] = json!(lists_added);
     // The deciding sheets the drawing doesn't hold (cited, or a schedule, legend or notes sheet
     // only the job's index has): their PDF pages, whole, at the packet's dpi.
     let mut pdf_asks: Vec<(String, &'static str, &'static str, String)> = Vec::new();
@@ -5351,6 +5470,7 @@ mod tests {
     fn the_print_layer_and_style_names_are_the_pdf_readers() {
         assert_eq!(SHX_SOURCE_LAYER, cadaddy_io::pdf_read::SHX_SOURCE_LAYER);
         assert_eq!(OCR_TEXT_STYLE, cadaddy_io::pdf_read::OCR_TEXT_STYLE);
+        assert_eq!(MARKUP_LAYER, cadaddy_io::pdf_read::MARKUP_LAYER);
     }
 
     /// A `w` × `h` white picture with black pixels at `dots`.

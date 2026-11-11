@@ -1117,3 +1117,160 @@ fn a_sheet_the_prescreen_cites_is_in_the_packet_round_what_it_read() {
     assert!(cited["files"].as_array().unwrap().iter().any(|x| x == &c["file"]), "{cited}");
     let _ = std::fs::remove_dir_all(out);
 }
+
+// ---------------------------------------------------------------- pictures the judge can read (Q6346)
+
+#[test]
+fn a_highlight_over_the_notes_is_drawn_under_their_lettering() {
+    use cadaddy_engine::doc::{Hatch, HatchLoop};
+    use cadaddy_engine::geom::{PolyVertex, Vec2};
+    let j = job();
+    // A reviewer's highlight over the first general note, imported (before the import kept
+    // highlights under the page) as a solid yellow fill on the markups' layer, after the note.
+    let note = [E101 + 2800.0, 1980.0];
+    let mut s = edited(&j.s, |d| {
+        let (x, y) = (note[0] - 10.0, note[1] - 4.0);
+        let v = |x: f64, y: f64| PolyVertex { p: Vec2::new(x, y), bulge: 0.0, start_width: 0.0, end_width: 0.0 };
+        let outline = HatchLoop { curves: Vec::new(), vertices: vec![v(x, y), v(x + 300.0, y), v(x + 300.0, y + 14.0), v(x, y + 14.0)], outer: true, sources: Vec::new() };
+        let hatch = Hatch {
+            pattern: "SOLID".into(),
+            solid: true,
+            loops: vec![outline],
+            scale: 1.0,
+            angle: 0.0,
+            associative: false,
+            style: 0,
+            elevation: 0.0,
+            gradient: None,
+            origin: Vec2::ZERO,
+            background: None,
+            pattern_lines: Vec::new(),
+        };
+        let h = d.new_handle();
+        let mut e = Entity::new(h, EntityKind::Hatch(Box::new(hatch)));
+        e.common.layer = "PDF-MARKUP".into();
+        e.common.color = cadaddy_engine::doc::color::Color::Index(2);
+        d.model.push(e);
+    });
+    let id = office(&mut s);
+    let out = dir("highlight");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let n = crop(&m, "E-101", "general_notes");
+    let img = image::open(out.join(n["file"].as_str().unwrap())).unwrap().to_rgba8();
+    let (x, y) = pixel_of(n, [note[0] + 20.0, note[1] + 2.0]);
+    assert!(darkest(&img, x, y, 4) < 400, "the highlighted note's lettering shows at ({x:.0},{y:.0})");
+    // The highlight still shows beside the lettering.
+    let (hx, hy) = pixel_of(n, [note[0] + 280.0, note[1] + 8.0]);
+    let p = img.get_pixel(hx.round() as u32, hy.round() as u32);
+    assert!(p[2] < 128 && p[0] > 200, "the highlight is drawn: {p:?}");
+    let _ = std::fs::remove_dir_all(out);
+}
+
+/// Where an enlarged plan of another room (the spec links it with no title) sits.
+const LOBBY: f64 = 44000.0;
+
+#[test]
+fn a_sheet_linked_without_a_title_is_known_by_the_job_index_title() {
+    let j = job();
+    let mut sp = spec();
+    // The spec knows the lobby's enlarged plan only by number and level; the job's index has its
+    // title. Old: a whole "plan" of the level, offered whole for every room on it.
+    sp["sheets"].as_array_mut().unwrap().push(json!({"number": "A-402", "discipline": "A", "level": "L1", "source": "model", "rect": sheet_rect(LOBBY, 0.0)}));
+    let mut s = edited(&j.s, |d| {
+        let agent = json!({"guided_job": {
+            "id": "J-1", "goal": "bim", "created": "2026-01-01T00:00:00Z", "pdfs_path": "",
+            "stages": [], "rules": [], "audit": [], "question_seq": 0,
+            "sheets": {"sheets": [{"number": "A-402", "title": "ENLARGED FLOOR PLAN - LOBBY", "file": "Sample Set.pdf", "page": 3, "type": "enlarged_plan"}]},
+            "sheet_regions": []
+        }});
+        d.agent = Some(agent.to_string()).into();
+    });
+    s.execute("bspec.set", &json!({"spec": sp, "replace": true})).unwrap();
+    let id = office(&mut s);
+    let out = dir("untitled-link");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    assert!(m["prints"].as_array().unwrap().iter().all(|c| c["sheet"] != "A-402"), "another room's enlarged plan: {:#}", m["prints"]);
+    let left = m["left_out"].as_array().unwrap();
+    let why = left.iter().find(|x| x["what"].as_str().is_some_and(|w| w.contains("A-402"))).unwrap_or_else(|| panic!("{left:?}"));
+    assert!(why["what"].as_str().unwrap().contains("LOBBY") && why["why"].as_str().unwrap().contains("enlarged plan"), "{why}");
+    let _ = std::fs::remove_dir_all(out);
+}
+
+/// The office's unit-type spec of [`each_view_is_labelled_by_the_view_it_shows_on_its_own_sheet`],
+/// with another type, the views each type lists (titles on A-401), and a keynote list on A-401.
+fn typed_office(ofc: &[&str], other: &[&str]) -> (Session, String) {
+    let j = job();
+    let san = [A401 + 200.0, 200.0, A401 + 1600.0, 1400.0];
+    let wat = [A401 + 1800.0, 200.0, A401 + 3200.0, 1400.0];
+    let view_rect = |t: &str| if t.ends_with("WATER") { wat } else { san };
+    let mut sp = spec();
+    let sheets: Vec<Value> = sp["sheets"].as_array().unwrap().iter().filter(|l| l["number"] != "A-401").cloned().collect();
+    sp["sheets"] = json!(sheets);
+    sp["sheets"].as_array_mut().unwrap().push(json!({"number": "A-401", "title": "ENLARGED PLANS", "discipline": "A", "source": "model",
+        "rect": [A401, 0.0, A401 + SW, SH], "view": {"title": "OFFICE PLAN - SANITARY", "rect": san}}));
+    let views = |ts: &[&str]| ts.iter().map(|t| json!({"sheet": "A-401", "title": t, "rect": view_rect(t)})).collect::<Vec<_>>();
+    sp["unit_types"] = json!([{"id": "OFC", "name": "OFFICE TYPE", "views": views(ofc)}, {"id": "OTH", "name": "OTHER TYPE", "views": views(other)}]);
+    sp["unit_instances"] = json!([{"number": "101", "level": "L1", "type": "OFC"}]);
+    let mut s = j.s;
+    layer(&mut s, "A-NOTE");
+    text(&mut s, [A401 + 2600.0, 2000.0], "KEYNOTES:");
+    text(&mut s, [A401 + 2600.0, 1980.0], "1. PROVIDE BLOCKING FOR THE WALL CABINET.");
+    s.execute("bspec.set", &json!({"spec": sp, "replace": true})).unwrap();
+    let id = office(&mut s);
+    (s, id)
+}
+
+#[test]
+fn a_view_unit_types_share_gives_way_to_the_types_own_and_is_said_to_be_typical() {
+    let unit = |m: &Value| -> Vec<Value> {
+        m["prints"].as_array().unwrap().iter().filter(|c| c["sheet"] == "A-401" && c["placed_by"] == "unit_type").cloned().collect()
+    };
+    // The sanitary view is both types'; the water view is the office type's own (the same trade):
+    // the shared one stays out, said why.
+    let (mut s, id) = typed_office(&["OFFICE PLAN - SANITARY", "OFFICE PLAN - WATER"], &["OFFICE PLAN - SANITARY"]);
+    let out = dir("shared-views");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let got = unit(&m);
+    assert!(got.iter().all(|c| !c["shows"].as_str().unwrap().contains("SANITARY")), "{got:#?}");
+    assert!(got.iter().any(|c| c["shows"].as_str().unwrap().ends_with("OFFICE PLAN - WATER")), "{got:#?}");
+    let left = m["left_out"].as_array().unwrap();
+    assert!(
+        left.iter().any(|x| x["what"] == "sheet A-401 view OFFICE PLAN - SANITARY" && x["why"].as_str().unwrap().contains("2 unit types share")),
+        "{left:?}"
+    );
+    // Only the shared view: it is shown, said to be the set's typical one.
+    let (mut s, id) = typed_office(&["OFFICE PLAN - SANITARY"], &["OFFICE PLAN - SANITARY"]);
+    let out2 = dir("shared-only");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out2.to_string_lossy()})).unwrap();
+    let m = read_json(&out2.join("manifest.json"));
+    let got = unit(&m);
+    assert!(!got.is_empty() && got.iter().all(|c| c["shows"].as_str().unwrap().contains("a view 2 unit types share")), "{got:#?}");
+    let _ = std::fs::remove_dir_all(out);
+    let _ = std::fs::remove_dir_all(out2);
+}
+
+#[test]
+fn the_keynote_list_of_every_sheet_the_packet_shows_is_in_it() {
+    // A-401 (the unit type's enlarged plans) keys its notes with no marker on the level's plan.
+    let (mut s, id) = typed_office(&["OFFICE PLAN - SANITARY"], &[]);
+    let out = dir("shown-lists");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let o = read_json(&out.join("objects.json"));
+    let lists = o["keynotes"]["lists"].as_array().unwrap_or_else(|| panic!("no keynote lists: {:#}", o["keynotes"]));
+    let l = lists.iter().find(|l| l["sheet"] == "A-401").unwrap_or_else(|| panic!("{lists:?}"));
+    assert_eq!(l["notes"][0]["number"], "1", "{l}");
+    assert!(l["notes"][0]["text"].as_str().unwrap().contains("BLOCKING"), "{l}");
+    assert_eq!(o["counts"]["keynote_lists"], json!(lists.len()));
+    // The list's picture, whole, as a deciding one.
+    let c = crop(&m, "A-401", "keynotes");
+    assert!(c["deciding"].as_str().unwrap().contains("a sheet this packet shows"), "{c}");
+    let r = rect_of(c);
+    assert!(r[0] <= A401 + 2600.0 && r[2] >= A401 + 2700.0 && r[1] <= 1980.0 && r[3] >= 2000.0, "{r:?}");
+    let prompt = std::fs::read_to_string(out.join("prompt.md")).unwrap();
+    assert!(prompt.contains("`objects.json` `keynotes`"), "{prompt}");
+    let _ = std::fs::remove_dir_all(out);
+}

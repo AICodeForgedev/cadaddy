@@ -1829,9 +1829,72 @@ pub(crate) fn for_packet(kn: &Keynotes, area: &Area, margin: f64, sheets: &BTree
     (v, asks)
 }
 
+/// Every keynote list of the set as a crop to ask for (the list whole).
+pub(crate) fn list_asks(kn: &Keynotes) -> Vec<CropAsk> {
+    kn.lists.iter().map(|l| CropAsk { sheet: l.sheet.clone(), kind: "keynotes", rect: l.rect, shows: format!("{} {}", l.sheet, l.title) }).collect()
+}
+
+/// Lists a packet's `objects.json` carries, at most.
+const MAX_JSON_LISTS: usize = 24;
+
+/// Adds to a packet's objects (`keynotes.lists`, made when missing) the keynote lists of
+/// `sheets` (upper case: every sheet the packet shows) it doesn't carry yet: a sheet's notes are
+/// read off the sheet whatever marks the area (a unit type's enlarged plan keys its notes by
+/// numbers no marker on the level's plan carries). Returns how many it added.
+pub(crate) fn add_packet_lists(objects: &mut Value, kn: &Keynotes, sheets: &BTreeSet<String>) -> usize {
+    if !objects["keynotes"].is_object() {
+        objects["keynotes"] = json!({
+            "about": "the keynote lists of the sheets this packet shows (number → note, and what each note calls for); no keynote marker of them was carried onto the plan in or by this area",
+            "lists": [],
+            "markers": [],
+        });
+    }
+    let has = |v: &Value, l: &List| {
+        v.as_array().is_some_and(|a| a.iter().any(|x| x["sheet"].as_str() == Some(l.sheet.as_str()) && x["title"].as_str() == Some(l.title.as_str())))
+    };
+    let mut added = 0usize;
+    for l in kn.lists.iter().filter(|l| sheets.contains(&l.sheet.to_ascii_uppercase())) {
+        let lists = &mut objects["keynotes"]["lists"];
+        if lists.as_array().map_or(0, Vec::len) >= MAX_JSON_LISTS {
+            break;
+        }
+        if has(lists, l) {
+            continue;
+        }
+        if let Some(a) = lists.as_array_mut() {
+            a.push(l.to_json());
+            added += 1;
+        }
+    }
+    added
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_packet_carries_the_lists_of_every_sheet_it_shows() {
+        let list = |sheet: &str, title: &str, n: &str| List {
+            sheet: sheet.into(),
+            title: title.into(),
+            rect: [0.0, 0.0, 10.0, 10.0],
+            body_h: 1.0,
+            notes: vec![Note { number: n.into(), text: format!("NOTE {n}"), calls: Calls::of("") }],
+        };
+        let kn = Keynotes { lists: vec![list("E-201", "KEYNOTES", "1"), list("E-501", "KEYNOTES", "2"), list("M-501", "KEYNOTES", "3")], ..Keynotes::default() };
+        // The level's plan marks the area: its list is in already.
+        let mut objects = json!({"keynotes": {"lists": [kn.lists[0].to_json()], "markers": []}});
+        let shown: BTreeSet<String> = ["E-201", "E-501", "A-101"].into_iter().map(str::to_string).collect();
+        assert_eq!(add_packet_lists(&mut objects, &kn, &shown), 1);
+        let sheets: Vec<&str> = objects["keynotes"]["lists"].as_array().unwrap().iter().filter_map(|l| l["sheet"].as_str()).collect();
+        assert_eq!(sheets, vec!["E-201", "E-501"], "the enlarged plan's list joins; a sheet the packet doesn't show stays out");
+        // No marker at all: the lists still come.
+        let mut objects = json!({});
+        assert_eq!(add_packet_lists(&mut objects, &kn, &["M-501".to_string()].into_iter().collect()), 1);
+        assert_eq!(objects["keynotes"]["lists"][0]["notes"][0]["text"], "NOTE 3", "{objects}");
+        assert_eq!(list_asks(&kn).len(), 3);
+    }
 
     #[test]
     fn a_bda_antenna_note_calls_for_its_box_conduit_and_rating() {
