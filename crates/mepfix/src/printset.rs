@@ -421,8 +421,24 @@ fn floor_plan_words() -> &'static [&'static str] {
 }
 
 /// Classify a sheet's type from its title and number.
+///
+/// A title that lists parts (`FLOOR PLAN/ DETAILS/ SCHEDULES`, `ROOF PLAN & DETAILS`) names
+/// everything on the sheet: when a part names a plan the sheet is that plan, and the other parts
+/// are other views on it ([`title_views`]). The part that gives the kind is the one naming the
+/// floor plan, else the first plan part (Q6514).
 fn classify_sheet_type(number: &str, title: &str) -> String {
     let up = title.to_ascii_uppercase();
+    if up.contains("COVER") || up.contains("INDEX") {
+        return "cover".into();
+    }
+    if let Some(lead) = title_lead(number, title) {
+        return lead.kind;
+    }
+    classify_one_part(number, &up)
+}
+
+/// The type a title of one part names (upper case).
+fn classify_one_part(number: &str, up: &str) -> String {
     if up.contains("COVER") || up.contains("INDEX") {
         return "cover".into();
     }
@@ -435,18 +451,14 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
     if up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| spec_words.contains(&w)) {
         return "specification".into();
     }
-    // A sheet that prints a plan beside its details, sections or elevations (`ROOF PLAN &
-    // DETAILS`, `FLOOR PLAN AND SECTIONS`) is that plan first: its plan view is read as one.
-    if !plan_with_others(&up) {
-        if up.contains("DETAIL") {
-            return "detail".into();
-        }
-        if up.contains("SECTION") {
-            return "section".into();
-        }
-        if up.contains("ELEVATION") {
-            return "elevation".into();
-        }
+    if up.contains("DETAIL") {
+        return "detail".into();
+    }
+    if up.contains("SECTION") {
+        return "section".into();
+    }
+    if up.contains("ELEVATION") {
+        return "elevation".into();
     }
     if up.contains("DIAGRAM") || up.contains("RISER") {
         return "diagram".into();
@@ -455,7 +467,7 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
         return "enlarged_plan".into();
     }
     // A sheet that also prints the floor plan is that floor's plan first.
-    if (up.contains("REFLECTED CEILING") || up.contains("RCP")) && !sheet_reader::title_names(title, floor_plan_words()) {
+    if (up.contains("REFLECTED CEILING") || up.contains("RCP")) && !sheet_reader::title_names(up, floor_plan_words()) {
         return "rcp".into();
     }
     // Number-based: 1xx, 2xx, 3xx, 4xx are plan sheets for levels.
@@ -473,22 +485,117 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
     "unknown".into()
 }
 
-/// Whether an upper-case title joins a plan to other drawings (`OVERALL ROOF PLAN & DETAILS`,
-/// `FLOOR PLAN AND SECTIONS`): one of its parts, split at `&`, `AND`, `+` or a comma, names a
-/// plan (the word PLAN or PLANS) and no detail, section or elevation, and another part names
-/// those. A title of one part (`PLAN DETAILS`, `ENLARGED PLAN SECTIONS`) is no such sheet.
-fn plan_with_others(up: &str) -> bool {
-    let spaced = up.replace(['&', '+', ','], " & ");
-    let parts: Vec<Vec<&str>> = spaced
-        .split(" & ")
-        .flat_map(|p| p.split(" AND "))
-        .map(|p| p.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<&str>>())
-        .filter(|w| !w.is_empty())
-        .take(16)
-        .collect();
-    let other = |w: &&str| w.starts_with("DETAIL") || w.starts_with("SECTION") || w.starts_with("ELEVATION");
-    let plan = |p: &Vec<&str>| p.iter().any(|w| *w == "PLAN" || *w == "PLANS") && !p.iter().any(other);
-    parts.len() >= 2 && parts.iter().any(plan) && parts.iter().any(|p| !plan(p) && p.iter().any(other))
+/// Most parts a listed title is split into.
+const MAX_TITLE_PARTS: usize = 16;
+
+/// The parts a sheet title lists (upper case, trimmed), split at `/`, `,`, `&`, `+`, `;` and the
+/// word `AND`. A slash beside a digit (`1/2`, a scale or a date; `1/E-6`, a callout) splits
+/// nothing. One part: the title names one thing.
+fn title_parts(title: &str) -> Vec<String> {
+    let up = title.to_ascii_uppercase();
+    let chars: Vec<char> = up.chars().collect();
+    let mut spaced = String::with_capacity(up.len() + 8);
+    for (i, c) in chars.iter().enumerate() {
+        let digit = |j: Option<usize>| j.and_then(|j| chars.get(j)).is_some_and(char::is_ascii_digit);
+        if matches!(c, '&' | '+' | ',' | ';') || (*c == '/' && !digit(i.checked_sub(1)) && !digit(i.checked_add(1))) {
+            spaced.push_str(" & ");
+        } else {
+            spaced.push(*c);
+        }
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for piece in spaced.split(" & ") {
+        let words: Vec<&str> = piece.split_whitespace().collect();
+        let mut part: Vec<&str> = Vec::new();
+        for w in words.iter().chain(std::iter::once(&"AND")) {
+            if *w == "AND" {
+                if !part.is_empty() && parts.len() < MAX_TITLE_PARTS {
+                    parts.push(part.join(" "));
+                }
+                part.clear();
+            } else {
+                part.push(w);
+            }
+        }
+    }
+    parts.retain(|p| p.chars().any(|c| c.is_ascii_alphanumeric()));
+    parts
+}
+
+/// The part of a listed title that names the sheet's plan, with the kind it gives.
+struct TitleLead {
+    /// `plan`, `rcp` or `enlarged_plan`.
+    kind: String,
+    /// The part's index among [`title_parts`].
+    index: usize,
+}
+
+/// Each part's own type (a part naming no kind of drawing is `unknown`).
+fn part_kinds(number: &str, parts: &[String]) -> Vec<String> {
+    parts.iter().map(|p| if is_key_plan(p) { "key_plan".to_string() } else { classify_one_part(number, p) }).collect()
+}
+
+/// The plan a title that lists parts names (`None` for a title of one part, or one that lists no
+/// plan): the part naming the floor plan, else the first part naming a plan (a key plan names
+/// none). An enlarged plan beside a part that names no kind of drawing (`EQUIPMENT/ ENLARGED
+/// STORAGE`) is a detail of the floor that part draws whole: the sheet is the floor's plan.
+fn title_lead(number: &str, title: &str) -> Option<TitleLead> {
+    let parts = title_parts(title);
+    if parts.len() < 2 {
+        return None;
+    }
+    let kinds = part_kinds(number, &parts);
+    let plan_part = |k: &str| is_plan_type(k);
+    let floor = parts.iter().zip(&kinds).position(|(p, k)| plan_part(k) && sheet_reader::title_names(p, floor_plan_words()));
+    let index = floor.or_else(|| kinds.iter().position(|k| plan_part(k)))?;
+    let mut kind = kinds.get(index).cloned().unwrap_or_default();
+    if kind == "enlarged_plan"
+        && let Some(bare) = parts.iter().zip(&kinds).position(|(p, k)| k == "unknown" && names_a_subject(p))
+    {
+        return Some(TitleLead { kind: "plan".into(), index: bare });
+    }
+    if kind.is_empty() {
+        kind = "plan".into();
+    }
+    Some(TitleLead { kind, index })
+}
+
+/// Fewest letters of a word that names what a part of a title draws (`EQUIPMENT`, `SAFETY`; not
+/// `TYP.` or a callout's `E-6`).
+const SUBJECT_WORD_LETTERS: usize = 5;
+
+/// Whether a part of a title that names no kind of drawing names what one draws: words only (a
+/// part with digits is a callout or a mark), one of them a whole word of
+/// [`SUBJECT_WORD_LETTERS`] letters or more.
+fn names_a_subject(part: &str) -> bool {
+    !part.chars().any(|c| c.is_ascii_digit()) && part.split(|c: char| !c.is_ascii_alphabetic()).any(|w| w.len() >= SUBJECT_WORD_LETTERS)
+}
+
+/// The other views a sheet's title lists beside the one that types it (`FLOOR PLAN/ DETAILS/
+/// SCHEDULES`: `detail`, `schedule`): each other part's kind, once, in the title's order (a part
+/// naming no kind of drawing, `FIRST` of `FIRST AND SECOND FLOOR PLANS`, adds none). Empty for a
+/// title of one part.
+pub fn title_views(number: &str, title: &str) -> Vec<String> {
+    let Some(lead) = title_lead(number, title) else { return Vec::new() };
+    let parts = title_parts(title);
+    let mut out: Vec<String> = Vec::new();
+    for (i, k) in part_kinds(number, &parts).into_iter().enumerate() {
+        if i != lead.index && k != "unknown" && !out.contains(&k) {
+            out.push(k);
+        }
+    }
+    out
+}
+
+/// Whether a sheet is a reference one (life safety, occupancy load, code analysis: no plan of a
+/// level, [`sheet_facts::is_reference_sheet`]). A title listing parts is one by the part that
+/// types it: `EQUIPMENT/ LIFE SAFETY` is the floor's equipment plan, which also prints its
+/// life safety.
+fn reference_title(number: &str, title: &str) -> bool {
+    match title_lead(number, title) {
+        Some(lead) => title_parts(title).get(lead.index).is_some_and(|p| sheet_facts::is_reference_sheet(p)),
+        None => sheet_facts::is_reference_sheet(title),
+    }
 }
 
 /// Infer the discipline from the sheet number prefix.
@@ -851,7 +958,7 @@ pub fn run_classify(
                         // Reference sheets (life safety, occupancy load, etc.) mention a
                         // floor in their title but are not architectural floor plans — strip
                         // the building level so they don't drive the BIM model.
-                        if sheet_facts::is_reference_sheet(&e.title) {
+                        if reference_title(&e.number, &e.title) {
                             e.level = String::new();
                         }
                         e.scale_text = rec.scale_text.clone();
@@ -899,7 +1006,7 @@ pub fn run_classify(
             if e.level.is_empty() && !e.title.is_empty() {
                 e.level = infer_level(&e.title);
             }
-            if sheet_facts::is_reference_sheet(&e.title) {
+            if reference_title(&e.number, &e.title) {
                 e.level = String::new();
             }
             e.stage_results.insert(
@@ -1122,7 +1229,7 @@ pub fn run_classify_prints(
             }
             // Reference sheets (life safety, occupancy load, code analysis) mention a floor
             // in their title but should not be on a building level.
-            if sheet_facts::is_reference_sheet(&e.title) {
+            if reference_title(&e.number, &e.title) {
                 e.level = String::new();
                 e.levels = Vec::new();
             }
@@ -2174,6 +2281,24 @@ pub struct IndexSheet {
     pub superseded: Vec<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub issued: String,
+    /// The other views a title listing parts names beside the one that types the sheet
+    /// (`FLOOR PLAN/ DETAILS/ SCHEDULES`, a plan: `detail`, `schedule`; [`title_views`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<String>,
+}
+
+/// A sheet whose title names a floor plan that is filed as something else, while a level has no
+/// sheet titled as its floor plan (Q6514): to ask, never to build on silently.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct FloorPlanFiledOtherwise {
+    /// The sheet's index entry.
+    pub sheet: String,
+    pub title: String,
+    /// What it is filed as (`schedule`, `detail`, …).
+    #[serde(rename = "type")]
+    pub sheet_type: String,
+    /// The level with no titled floor plan (empty: the set has no level at all).
+    pub level: String,
 }
 
 /// A building level the plans show.
@@ -2233,7 +2358,14 @@ pub struct SheetIndex {
     /// copies): each sheet has its own entry (`<number>~2`, …) and the clash is to be resolved.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub number_conflicts: Vec<NumberConflict>,
+    /// Sheets titled as a floor plan but filed as something else while a level has no sheet
+    /// titled as its floor plan ([`FloorPlanFiledOtherwise`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub floor_plans_filed_otherwise: Vec<FloorPlanFiledOtherwise>,
 }
+
+/// Most [`FloorPlanFiledOtherwise`] entries an index lists.
+const MAX_FILED_OTHERWISE: usize = 20;
 
 /// One sheet number printed on different sheets.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -2321,6 +2453,7 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             sources,
             superseded,
             issued: first.issued.clone(),
+            views: title_views(&first.number, &first.title),
         });
     }
     // A civil, landscape or site plan is on the site (a datum, no storey of the building), even
@@ -2554,7 +2687,43 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             sources: v.into_iter().map(|(_, s)| s).collect(),
         })
         .collect();
+    out.floor_plans_filed_otherwise = floor_plans_filed_otherwise(&out);
     out
+}
+
+/// The sheets of `index` titled as a floor plan but filed as something else (`FLOOR PLAN NOTES`, a
+/// schedule) while a storey has no plan sheet titled as its floor plan, each with the first such
+/// storey (Q6514). Architecture's sheets when the set has any, else every discipline's; the site
+/// and the roof need no floor plan. Empty when every storey has its floor plan.
+fn floor_plans_filed_otherwise(index: &SheetIndex) -> Vec<FloorPlanFiledOtherwise> {
+    let arch = index.sheets.iter().any(|s| s.discipline.eq_ignore_ascii_case("A"));
+    let ours = |s: &&IndexSheet| !arch || s.discipline.eq_ignore_ascii_case("A");
+    let site = |s: &IndexSheet| s.level == "SITE" || crate::sheet_facts::is_site_sheet(&s.discipline, &s.title);
+    let misfiled: Vec<&IndexSheet> = index
+        .sheets
+        .iter()
+        .filter(ours)
+        .filter(|s| !is_plan_type(&s.sheet_type) && !site(s) && sheet_reader::names_floor_plan(&s.title))
+        .take(MAX_FILED_OTHERWISE)
+        .collect();
+    if misfiled.is_empty() {
+        return Vec::new();
+    }
+    let titled_floor = |s: &&IndexSheet| s.sheet_type == "plan" && sheet_reader::names_floor_plan(&s.title);
+    let has_floor_plan = |l: &str| index.sheets.iter().filter(ours).filter(titled_floor).any(|s| s.level == l || s.levels.iter().any(|x| x == l));
+    let storeys: Vec<&str> =
+        index.levels.iter().map(|l| l.name.as_str()).filter(|l| *l != "R" && !cadaddy_walk3d::levels::is_datum_name(l)).collect();
+    let without = if storeys.is_empty() {
+        // No storey read at all: one with no floor plan, unless a sheet is titled as one.
+        (!index.sheets.iter().filter(ours).any(|s| titled_floor(&s))).then(String::new)
+    } else {
+        storeys.into_iter().find(|l| !has_floor_plan(l)).map(str::to_string)
+    };
+    let Some(level) = without else { return Vec::new() };
+    misfiled
+        .into_iter()
+        .map(|s| FloorPlanFiledOtherwise { sheet: s.number.clone(), title: s.title.clone(), sheet_type: s.sheet_type.clone(), level: level.clone() })
+        .collect()
 }
 
 // ─── Run stages (production API — no Truth) ──────────────────────────────────
@@ -3269,5 +3438,48 @@ mod classify_tests {
         assert_eq!(classify_sheet_type("Q702", "PLUMBING SPECIFICATION"), "specification");
         assert_eq!(classify_sheet_type("Q703", "GENERAL NOTES AND SPECIFICATIONS"), "schedule", "notes stay notes");
         assert_eq!(classify_sheet_type("Q201", "FLOOR PLAN"), "plan");
+    }
+
+    #[test]
+    fn a_title_listing_parts_is_filed_by_the_plan_it_lists() {
+        // Q6514: a part naming a plan makes the sheet that plan, whatever comes after it.
+        for (title, want) in [
+            ("FLOOR PLAN/ DETAILS/ SCHEDULES", "plan"),
+            ("REFLECTED CEILING PLAN/ CEILING DETAILS", "rcp"),
+            ("ROOF PLAN/ ROOF DETAILS", "plan"),
+            ("CANOPY PLAN/ ELEVATIONS", "plan"),
+            ("DETAILS, SCHEDULES & FLOOR PLAN", "plan"),
+            ("CEILING DETAILS AND REFLECTED CEILING PLAN", "rcp"),
+            ("ENLARGED PLANS / DETAILS", "enlarged_plan"),
+            ("POWER PLAN / RISER DIAGRAM", "plan"),
+            ("LIFE SAFETY PLAN / CODE ANALYSIS", "plan"),
+            ("OVERALL ROOF PLAN & DETAILS", "plan"),
+            ("FLOOR PLAN AND SECTIONS", "plan"),
+            ("FIRST AND SECOND FLOOR PLANS", "plan"),
+            // a floor plan part outranks the ceiling plan listed first
+            ("REFLECTED CEILING PLAN / FLOOR PLAN", "plan"),
+            // an enlarged plan beside a part that names no kind of drawing: that part is the floor's plan
+            ("EQUIPMENT/ ENLARGED STORAGE/ LIFE SAFETY", "plan"),
+        ] {
+            assert_eq!(classify_sheet_type("A1", title), want, "{title}");
+        }
+        // No part names a plan: as before.
+        for (title, want) in [
+            ("DOOR/ WINDOW SCHEDULES", "schedule"),
+            ("WALL SECTIONS & PLAN DETAILS", "detail"),
+            ("LEGEND, NOTES & KEY PLAN", "schedule"),
+            ("GENERAL NOTES AND SPECIFICATIONS", "schedule"),
+            ("COVER SHEET / SITE PLAN", "cover"),
+            ("BUILDING SECTIONS", "section"),
+            ("EXTERIOR ELEVATIONS", "elevation"),
+            ("ENLARGED PLAN SECTIONS", "section"),
+            ("FLOOR PLAN NOTES", "schedule"),
+            ("SECTION 1/2", "section"),
+            // a callout or an abbreviation beside an enlarged plan names no floor plan
+            ("SEE ENLARGED PLAN 1/E-6", "enlarged_plan"),
+            ("ENLARGED PLAN, TYP.", "enlarged_plan"),
+        ] {
+            assert_eq!(classify_sheet_type("A1", title), want, "{title}");
+        }
     }
 }

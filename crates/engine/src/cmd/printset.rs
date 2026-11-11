@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("printset.classify", "Classify Print Set", run_classify).long()
             .files()
-            .params("{look?: {pictures?: folder, dpi?: pixels a sheet inch (default 40)} (also keep each page's facts — paper, the scale the import draws it at and why, its views with their rectangles in sheet inches, the rows its schedules and legends read — and, with a folder, its picture as a PNG: page_facts)} → {classified: pages read, total: sheets in the index, pages, elapsed_ms, page_facts?: [{source, paper, scale, scale_source, read_scale, views: [{title, scale_text, scale, not_to_scale, at, rect}], tables?: {panel_schedules, circuits, fixture_types, legend_rows}, picture?, px_per_inch?}], sheets: [{number, title, discipline, type, level, levels, level_source, sources: [file#page], superseded?, issued?}], levels: [{name, sheets, elevation_ft?, height_ft?}], unidentified, plans_without_level, number_conflicts?: [{number, sheets, sources}]}: one entry per real sheet (copies merged when their number and title or contents match, the newer revision date current; different sheets printing one number each keep an entry, `<number>~2`, and are listed in number_conflicts), from each page's title block (a number the set prints at its title block's number spot wins over lettering elsewhere)")
+            .params("{look?: {pictures?: folder, dpi?: pixels a sheet inch (default 40)} (also keep each page's facts — paper, the scale the import draws it at and why, its views with their rectangles in sheet inches, the rows its schedules and legends read — and, with a folder, its picture as a PNG: page_facts)} → {classified: pages read, total: sheets in the index, pages, elapsed_ms, page_facts?: [{source, paper, scale, scale_source, read_scale, views: [{title, scale_text, scale, not_to_scale, at, rect}], tables?: {panel_schedules, circuits, fixture_types, legend_rows}, picture?, px_per_inch?}], sheets: [{number, title, discipline, type, level, levels, level_source, sources: [file#page], superseded?, issued?}], levels: [{name, sheets, elevation_ft?, height_ft?}], unidentified, plans_without_level, number_conflicts?: [{number, sheets, sources}], floor_plans_filed_otherwise?: [{sheet, title, type, level}]}: one entry per real sheet (copies merged when their number and title or contents match, the newer revision date current; different sheets printing one number each keep an entry, `<number>~2`, and are listed in number_conflicts), from each page's title block (a number the set prints at its title block's number spot wins over lettering elsewhere)")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.run", "Run Print Set Stages", run_stages).long()
@@ -196,6 +196,7 @@ fn run_classify(s: &mut Session, p: &Value) -> Result<Value> {
         "plans_without_level": index.plans_without_level,
         "level_warnings": index.level_warnings,
         "number_conflicts": index.number_conflicts,
+        "floor_plans_filed_otherwise": index.floor_plans_filed_otherwise,
         "unreadable": unreadable,
     }))
 }

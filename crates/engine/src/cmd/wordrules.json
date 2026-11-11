@@ -2632,6 +2632,47 @@
     "SQM"
    ]
   },
+  "rooms.area_label_words": {
+   "source": "drafting convention: words of a plan's label for an area that is not a room: a roof or canopy area (LOW ROOF, CANOPY ABOVE, ROOF BELOW), an awning, an overhang, a skylight, a soffit, or what is above or below the plan (OPEN TO BELOW) (perceive/geometry.rs `note_like`). Such a label names no room.",
+   "words": [
+    "ROOF",
+    "ROOFS",
+    "ROOFING",
+    "CANOPY",
+    "CANOPIES",
+    "AWNING",
+    "AWNINGS",
+    "OVERHANG",
+    "OVERHANGS",
+    "PARAPET",
+    "PARAPETS",
+    "SKYLIGHT",
+    "SKYLIGHTS",
+    "COCHERE",
+    "SOFFIT",
+    "ABOVE",
+    "BELOW",
+    "ABV",
+    "BLW"
+   ]
+  },
+  "rooms.load_note_words": {
+   "source": "structural drafting convention: the units and words of a design-load, wind or rating note (ROOF LIVE LOAD 20 PSF, WIND 115 MPH, 3000 PSI): a note's string, never a room's name (perceive/geometry.rs `note_like`).",
+   "words": [
+    "PSF",
+    "PSI",
+    "PLF",
+    "KSF",
+    "KSI",
+    "PCF",
+    "MPH",
+    "KIP",
+    "KIPS",
+    "LBS",
+    "LOAD",
+    "LOADS"
+   ]
+  },
   "rooms.corridor_words": {
    "source": "trade practice: a route named with one of these runs along any corridor of the level (moved from guided.rs)",
    "words": [
@@ -2785,6 +2826,7 @@
    "words": [
     "1 HOUR FIRE RATED PARTITION",
     "PARTITION",
+    "BARRIER",
     "SCALE",
     "SHEET",
     "DRAWN",
@@ -3051,6 +3093,38 @@
     "PANEL",
     "CONTROL",
     "NOTES"
+   ]
+  },
+  "schedules.photometric_table_words": {
+   "source": "format vocabulary of lighting calculation programs: a luminaire table whose title or a heading has one of these is the calculation's list of the luminaires it calculated with (its labels are the calculation's names), never the designer's fixture schedule, so it adds no types when the set has a schedule (fix-fixture-schedule-wrong-table)",
+   "words": [
+    "LLF",
+    "LIGHT LOSS FACTOR",
+    "LOSS FACTOR",
+    "ARRANGEMENT",
+    "FILENAME",
+    "IES FILE",
+    "PHOTOMETRIC",
+    "CALCULATION",
+    "LUM LUMENS",
+    "LUM WATTS"
+   ]
+  },
+  "schedules.photometric_sheet_words": {
+   "source": "format vocabulary of lighting calculation programs: a sheet printing one of these (spaces aside) shows a calculation's results (a statistics table's ratios, its summary), so its luminaire table titled without fixtures is the calculation's (fix-fixture-schedule-wrong-table)",
+   "words": [
+    "AVG/MIN",
+    "MAX/MIN",
+    "AVG:MIN",
+    "MAX:MIN",
+    "CALCULATION SUMMARY"
+   ]
+  },
+  "schedules.designed_schedule_title_words": {
+   "source": "drafting convention: a luminaire schedule title naming fixtures (LIGHT FIXTURE SCHEDULE) is the designer's, even on a sheet of calculation results (fix-fixture-schedule-wrong-table)",
+   "words": [
+    "FIXTURE",
+    "FIXTURES"
    ]
   },
   "schedules.title_reference_words": {

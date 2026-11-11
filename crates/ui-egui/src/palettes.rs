@@ -1380,7 +1380,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         // user's (bim.props.set) and survives a rebuild.
         if let Some(kind) = cadaddy_engine::cmd::elemprops::element_kind(&e) {
             group(ui, "BIM Properties");
-            let upf = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok()).map_or(12.0, |sp| sp.units_per_foot);
+            // Read once per spec text, not parsed out of the whole building spec every frame.
+            let upf = cadaddy_engine::cmd::fidelity::units_per_foot(d);
             let eff = cadaddy_engine::cmd::elemprops::effective(&e, &kind, upf);
             prop_row(ui, "Kind", |ui| read_only(ui, &kind));
             let mut keys: Vec<String> = eff.iter().map(|(k, _, _)| k.clone()).collect();
