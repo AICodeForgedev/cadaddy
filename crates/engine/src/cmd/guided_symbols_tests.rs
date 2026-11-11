@@ -560,3 +560,25 @@ fn only_the_legends_own_trade_plans_are_searched_whole_and_wrapped_notes_are_no_
     let t = symtable::stored(set.s.doc().unwrap());
     assert!(t.entries.iter().all(|e| !e.name.contains("SWITCH LEG")), "{:?}", t.entries.iter().map(|e| &e.name).collect::<Vec<_>>());
 }
+
+/// A small set's electrical legend on a combined MEP sheet speaks for its combined MEP plans.
+#[test]
+fn a_combined_mep_sheets_legend_and_plans_are_read() {
+    let mut set = Set::new();
+    set.sheet("MEP0.01", "legend", true, |set, x0| set.legend(x0, &[("SPECIAL PURPOSE RECEPTACLE", special())]));
+    set.retag("MEP", &[]);
+    set.sheet("MEP1.01", "plan", true, |set, x0| {
+        let (lo, hi) = set.room([x0 + 2.0, 2.0], [x0 + 30.0, 20.0]);
+        set.draw(&special(), [lo[0] + 0.06, 6.0], 0);
+        set.draw(&special(), [hi[0] - 0.06, 9.0], 2);
+    });
+    set.retag("MEP", &[]);
+    let found = set.search(&shipped(), None);
+    let got: Vec<String> = found.added.iter().map(|dv| format!("{} {} {}", dv.sheet, dv.kind, dv.kind_source)).collect();
+    assert_eq!(
+        got,
+        ["MEP1.01 receptacle MEP0.01 legend: SPECIAL PURPOSE RECEPTACLE", "MEP1.01 receptacle MEP0.01 legend: SPECIAL PURPOSE RECEPTACLE"],
+        "{:#?}",
+        found.added
+    );
+}

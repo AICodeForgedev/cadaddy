@@ -194,6 +194,8 @@ struct LibraryFile {
     plan_disciplines: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     not_plan_views: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    legend_disciplines: Vec<String>,
     #[serde(default)]
     symbols: Vec<LibSymbol>,
 }
@@ -207,6 +209,14 @@ pub(crate) fn not_a_plan_view(title: &str) -> bool {
     serde_json::from_str::<LibraryFile>(SHIPPED)
         .map(|f| f.not_plan_views.iter().any(|w| joined.contains(&format!(" {} ", w.trim().to_ascii_uppercase()))))
         .unwrap_or(false)
+}
+
+/// The sheet disciplines an electrical legend is printed on (the shipped library's
+/// `legend_disciplines`): `E`, and a small set's combined `MEP` sheets.
+pub(crate) fn legend_disciplines() -> Vec<String> {
+    serde_json::from_str::<LibraryFile>(SHIPPED)
+        .map(|f| f.legend_disciplines.iter().map(|d| d.trim().to_ascii_uppercase()).filter(|d| !d.is_empty()).take(32).collect())
+        .unwrap_or_default()
 }
 
 /// The sheet disciplines whose plans the set's electrical legends and the library speak for
@@ -1368,6 +1378,7 @@ pub(crate) fn promote(dir: &std::path::Path, e: &Entry) -> std::result::Result<(
         source: "symbols promoted from print sets (bim.symbol.promote, or an answer to a symbol question)".into(),
         plan_disciplines: Vec::new(),
         not_plan_views: Vec::new(),
+        legend_disciplines: Vec::new(),
         symbols: Vec::new(),
     });
     let sig = signature(&strokes);

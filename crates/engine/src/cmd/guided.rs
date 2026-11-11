@@ -16725,12 +16725,17 @@ fn legend_symbols_on(pages: &[(String, cadaddy_doc::Drawing)]) -> BTreeMap<Shape
 }
 
 /// The job's electrical sheets a legend may be on: each imported E sheet (by its number) and the
-/// E pages the set wasn't imported for (re-read from their PDF pages).
+/// E pages the set wasn't imported for (re-read from their PDF pages); a small set's combined MEP
+/// sheets too (Q6484: [`super::symtable::legend_disciplines`]).
 fn legend_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
+    let disciplines = super::symtable::legend_disciplines();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut pages: Vec<(String, cadaddy_doc::Drawing)> = job_sheet_refs(job)
         .iter()
-        .filter(|r| r.discipline.eq_ignore_ascii_case("E") && seen.insert(r.number.split('/').next().unwrap_or("").to_string()))
+        .filter(|r| {
+            (r.discipline.eq_ignore_ascii_case("E") || disciplines.iter().any(|x| x.eq_ignore_ascii_case(r.discipline.trim())))
+                && seen.insert(r.number.split('/').next().unwrap_or("").to_string())
+        })
         .take(MAX_LEGEND_SHEETS)
         .map(|sh| {
             (
@@ -16739,7 +16744,13 @@ fn legend_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadad
             )
         })
         .collect();
-    pages.extend(non_plan_pages(job, "E").into_iter().filter(|(n, _)| !seen.contains(n)));
+    for x in std::iter::once("E".to_string()).chain(disciplines.into_iter().filter(|x| x != "E")) {
+        for (n, page) in non_plan_pages(job, &x) {
+            if seen.insert(n.clone()) {
+                pages.push((n, page));
+            }
+        }
+    }
     pages
 }
 
