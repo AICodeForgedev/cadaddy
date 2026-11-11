@@ -38,6 +38,27 @@
       "non_bearing_words": ["NON-BEARING", "NONBEARING", "NON BEARING", "NON-LOAD", "NON LOAD"]
     },
     {
+      "id": "A-FLOOR-ASSEMBLY",
+      "trade": "architectural",
+      "fills": "what each level's floor element is built of and how thick: a slab its slab notes' (or the design's) thickness; a framed floor its topping and deck, the joists under it their own members (words: slab_marks, a slab's thickness written before one of them, slab_lead, one written after it; separators, the words between a layered note's layers, top to bottom; lead_words, words a layer's thickness may follow (`NOMINAL 3/4\"`); name_skip and name_stop, the words a layer's name drops before it and ends at; topping_words, deck_words, member_words, what a layer is; skip_words, a layer naming a spacing or fastening, not a thickness; numbers: the inches a layer of each kind may be; a framed floor's deck its notes don't give is the trade rules' subfloor, framing.subfloor_in)",
+      "basis": "trade practice: a floor is built as its documents describe it, per level: a slab on grade or a structural slab is its noted thickness; a wood-framed floor is a topping (gypsum concrete or another poured underlayment) on a sheathing deck on joists or floor trusses, the deck the floor's surface under the topping and the joists their own members under it; a 3/4\" (23/32\") rated sheathing is the usual deck where the notes give none; where nothing gives the floor its build-up the build's default slab is used and marked a default",
+      "slab_marks": ["\" SLAB", "\" THICK SLAB", "\" THK SLAB", "\" THK. SLAB", "\" CONCRETE SLAB", "\" CONC. SLAB", "\" CONC SLAB", "\" PT SLAB", "\" P.T. SLAB", "\" POST-TENSIONED SLAB", "\" POST TENSIONED SLAB", "\" STRUCTURAL SLAB", "\" SLAB ON GRADE", "\" S.O.G."],
+      "slab_lead": ["SLAB THICKNESS", "SLAB THK"],
+      "separators": [" ON ", " OVER "],
+      "lead_words": ["NOMINAL", "NOM.", "MIN.", "MINIMUM", "APPROX.", "TYP.", "(", "NEW", "+/-"],
+      "name_skip": ["THICK", "THK.", "THK", "DEEP", "NOMINAL", "NOM.", "MIN."],
+      "name_stop": [",", ";", "(", "@", " SPACED", " AT ", " O.C.", " OC", " U.N.O", " UNO", " TYP"],
+      "topping_words": ["GYPSUM CONCRETE", "GYP CONCRETE", "GYP. CONCRETE", "GYPCRETE", "GYP-CRETE", "GYPSUM CEMENT", "GYPSUM UNDERLAYMENT", "UNDERLAYMENT", "TOPPING", "LIGHTWEIGHT CONCRETE", "LT. WT. CONCRETE", "LEVELING COMPOUND"],
+      "deck_words": ["SHEATHING", "SUBFLOOR", "SUB-FLOOR", "PLYWOOD", "OSB", "FLOOR DECK", "DECKING", "T&G"],
+      "member_words": ["JOIST", "TRUSS", "TRUSSES"],
+      "skip_words": ["@", "O.C.", " OC", "NAIL", "SPACING", "SCREW", "EDGE", "GLUE"],
+      "slab_in": [3.0, 16.0],
+      "topping_in": [0.25, 4.0],
+      "deck_in": [0.375, 2.0],
+      "member_in": [5.0, 48.0],
+      "max_notes": 400
+    },
+    {
       "id": "A-ROOF-SLOPED-DECK",
       "trade": "architectural",
       "fills": "a sloped roof's deck (or an unframed roof's slab): one thickness normal to its slope, its underside parallel to its top, on the framing's top chords, which follow the slope along and across the members; an unframed sloped roof whose underside rises over the walls under it has the outside walls carried up to it",
@@ -333,6 +354,15 @@
       "trade": "electrical",
       "fills": "where an equipment connection goes when its plan's mark names a piece of equipment built on another level or elsewhere (a roof unit's circuit tagged on a plan under it)",
       "basis": "trade practice: an equipment connection is made at its equipment (its disconnect or junction box on the unit, at the unit's side half way up); a mark naming the unit follows the unit, never the room under it"
+    },
+    {
+      "id": "E-CONN-CEILING-EQUIP",
+      "trade": "electrical",
+      "fills": "where the connection of a piece of ceiling equipment is built (a ceiling exhaust fan's, an above-ceiling unit's), every time the model is built: at the housing of the equipment it serves, as the equipment and the ceiling over it stand then, never at a height fixed earlier (numbers: reach_ft, how far from where its plan puts the connection its equipment may be; tolerance_in, how far from its housing a connection may be and still be at it; clear_in, how far above the ceiling's underside the box's bottom is at least, over the ceiling board)",
+      "basis": "trade practice: the connection of ceiling equipment is made at the equipment's wiring compartment on its housing, above the ceiling in the plenum (NEC 314.29: the box stays accessible, through the equipment or the ceiling; NEC 300.11: wiring above a ceiling is supported there, not by the ceiling), never hung exposed under the finished ceiling nor standing off the housing it serves",
+      "reach_ft": 15.0,
+      "tolerance_in": 12.0,
+      "clear_in": 1.0
     }
   ]
 }

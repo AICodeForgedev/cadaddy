@@ -432,12 +432,26 @@ struct Contribution {
     fallback: f64,
 }
 
+/// Whether a built pipe is the mechanical trade's: what its build said it carries, else its
+/// system's name.
+fn pipe_is_mechanical(e: &El) -> bool {
+    let carries = e.tag("carries");
+    let trade = if carries.is_empty() {
+        cadaddy_walk3d::pipeservice::pipe_trade(e.system(), "")
+    } else {
+        cadaddy_walk3d::pipeservice::service_trade(carries)
+    };
+    trade == "mechanical"
+}
+
 /// The trade an element belongs to in the ceiling space (for overlap and order checks).
 fn el_trade(e: &El) -> Option<&'static str> {
     match e.part.as_str() {
         "mep" => Some(match e.kind() {
             "duct" => "Mechanical",
             "pipe" if is_fire(e.system()) => "Fire Protection",
+            // Refrigerant, condensate and hydronic piping (Q6492) by what its build said it carries.
+            "pipe" if pipe_is_mechanical(e) => "Mechanical",
             "pipe" => "Plumbing",
             "conduit" | "tray" | "cable" | "light_fixture" | "outlet" | "receptacle" | "switch" | "junction_box" | "panel" | "transformer" => {
                 "Electrical"

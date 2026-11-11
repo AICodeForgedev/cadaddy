@@ -3512,6 +3512,7 @@ menu	Modify	Edita
 	Place Buildings	Posiziona edifici
 	Pin	Fissa
 	Unpin	Sblocca
+	Minimize to the rail	Riduci nella barra
 	Coordination	Coordinamento
 	List Sheets	Elenca fogli
 	Open Sheet	Apri foglio
@@ -3550,3 +3551,10 @@ menu	Modify	Edita
 	= (block=output file)	= (blocco=file di output)
 	* (whole drawing)	* (intero disegno)
 	Requires an integer between 0 and 16.	È richiesto un intero tra 0 e 16.
+	Correct Job Sheet Index	Correggi l'indice delle tavole del lavoro
+	Refrigerant Piping	Tubazioni del refrigerante
+	Hydronic Piping	Tubazioni idroniche
+	Condensate Drain	Scarico condensa
+	Mechanical Piping	Tubazioni meccaniche
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Correggi elementi per proprietà (BIM)

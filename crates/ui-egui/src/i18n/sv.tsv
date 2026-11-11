@@ -3603,6 +3603,7 @@ menu	Modify	Ändra
 	Place Buildings	Placera byggnader
 	Pin	Fäst
 	Unpin	Lossa
+	Minimize to the rail	Minimera till listen
 	Coordination	Samordning
 	List Sheets	Lista ark
 	Open Sheet	Öppna ark
@@ -3641,3 +3642,10 @@ menu	Modify	Ändra
 	= (block=output file)	= (block=utdatafil)
 	* (whole drawing)	* (hela ritningen)
 	Requires an integer between 0 and 16.	Ett heltal mellan 0 och 16 krävs.
+	Correct Job Sheet Index	Rätta jobbets ritningsförteckning
+	Refrigerant Piping	Köldmedieledningar
+	Hydronic Piping	Värme- och kylvattenrör
+	Condensate Drain	Kondensavlopp
+	Mechanical Piping	Installationsrör
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Korrigera element efter egenskap (BIM)

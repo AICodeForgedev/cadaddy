@@ -3448,6 +3448,7 @@
 	Place Buildings	Posicionar edifícios
 	Pin	Fixar
 	Unpin	Desafixar
+	Minimize to the rail	Minimizar para a barra
 	Coordination	Coordenação
 	List Sheets	Listar folhas
 	Open Sheet	Abrir folha
@@ -3486,3 +3487,10 @@
 	= (block=output file)	= (bloco=arquivo de saída)
 	* (whole drawing)	* (desenho inteiro)
 	Requires an integer between 0 and 16.	É necessário um inteiro entre 0 e 16.
+	Correct Job Sheet Index	Corrigir o índice de folhas do trabalho
+	Refrigerant Piping	Tubulação de refrigerante
+	Hydronic Piping	Tubulação hidrônica
+	Condensate Drain	Dreno de condensado
+	Mechanical Piping	Tubulação mecânica
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Corrigir elementos por propriedade (BIM)

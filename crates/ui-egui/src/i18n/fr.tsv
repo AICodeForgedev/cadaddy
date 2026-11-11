@@ -3227,6 +3227,7 @@
 	Place Buildings	Placer les bâtiments
 	Pin	Épingler
 	Unpin	Désépingler
+	Minimize to the rail	Réduire dans la barre
 	Coordination	Coordination
 	External References	Références externes
 	List Sheets	Lister les feuilles
@@ -3266,3 +3267,10 @@
 	= (block=output file)	= (bloc=fichier de sortie)
 	* (whole drawing)	* (dessin entier)
 	Requires an integer between 0 and 16.	Un entier entre 0 et 16 est requis.
+	Correct Job Sheet Index	Corriger l'index des feuilles de la tâche
+	Refrigerant Piping	Tuyauterie de fluide frigorigène
+	Hydronic Piping	Tuyauterie hydronique
+	Condensate Drain	Évacuation des condensats
+	Mechanical Piping	Tuyauterie mécanique
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Corriger des éléments par propriété (BIM)

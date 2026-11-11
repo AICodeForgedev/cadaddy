@@ -2926,6 +2926,14 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         if let Some(dt) = duct_type_str(sy) {
             x.push(t(1000, format!("duct_type:{dt}")));
         }
+        // What a pipe carries, by its system's name and layer (Q6492): its trade in the model
+        // tree, the clash trades and the takeoff.
+        if sy.kind == MepKind::Pipe {
+            let service = cadaddy_walk3d::pipeservice::pipe_service(&sy.name, &sy.layer);
+            if !service.is_empty() {
+                x.push(t(1000, format!("carries:{service}")));
+            }
+        }
         for (k, s) in sizes.iter().enumerate().take(2) {
             if s[0] > 0.0 && s[0].is_finite() {
                 x.push(t(1000, format!("{}:{}", if k == 0 { "size" } else { "size2" }, size_text(*s))));

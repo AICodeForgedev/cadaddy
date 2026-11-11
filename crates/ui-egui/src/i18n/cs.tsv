@@ -3420,6 +3420,7 @@ menu	Modify	Modifikace
 	Place Buildings	Umístit budovy
 	Pin	Připnout
 	Unpin	Odepnout
+	Minimize to the rail	Minimalizovat na lištu
 	Coordination	Koordinace
 	List Sheets	Vypsat listy
 	Open Sheet	Otevřít list
@@ -3458,3 +3459,10 @@ menu	Modify	Modifikace
 	= (block=output file)	= (blok=výstupní soubor)
 	* (whole drawing)	* (celý výkres)
 	Requires an integer between 0 and 16.	Je třeba celé číslo od 0 do 16.
+	Correct Job Sheet Index	Opravit rejstřík výkresů úlohy
+	Refrigerant Piping	Potrubí chladiva
+	Hydronic Piping	Otopné a chladicí potrubí
+	Condensate Drain	Odvod kondenzátu
+	Mechanical Piping	Strojní potrubí
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Opravit prvky podle vlastnosti (BIM)

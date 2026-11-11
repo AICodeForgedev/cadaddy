@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1276,
-    "count": 1276,
+    "callableAsJson": 1278,
+    "count": 1278,
     "ids": [
       "-attedit",
       "-block",
@@ -168,6 +168,7 @@
       "bim.look",
       "bim.prints",
       "bim.products",
+      "bim.props.batch",
       "bim.props.check",
       "bim.props.fill",
       "bim.props.find",
@@ -579,6 +580,7 @@
       "job.report",
       "job.rules",
       "job.set_mode",
+      "job.sheets.set",
       "job.start",
       "job.status",
       "job.undo",

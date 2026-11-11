@@ -3514,6 +3514,7 @@
 	Place Buildings	放置建筑
 	Pin	固定
 	Unpin	取消固定
+	Minimize to the rail	最小化到边栏
 	Coordination	协调
 	List Sheets	列出图纸
 	Open Sheet	打开图纸
@@ -3552,3 +3553,10 @@
 	= (block=output file)	= (块=输出文件)
 	* (whole drawing)	* (整个图形)
 	Requires an integer between 0 and 16.	需要 0 到 16 之间的整数。
+	Correct Job Sheet Index	更正作业图纸索引
+	Refrigerant Piping	制冷剂管道
+	Hydronic Piping	水系统管道
+	Condensate Drain	冷凝水排放
+	Mechanical Piping	机械管道
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	按属性更正元素 (BIM)

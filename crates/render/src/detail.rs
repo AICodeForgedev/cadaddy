@@ -204,10 +204,16 @@ impl Detail {
 
     /// What tells two details apart in a cache key.
     pub fn key(&self) -> String {
+        format!("{:x}/{}", self.px.to_bits(), self.rules_key())
+    }
+
+    /// [`Detail::key`] without the pixel size: the rules alone (the chunk cache keeps a part
+    /// built at another pixel size out of view, `cache::ViewDetail`).
+    pub fn rules_key(&self) -> String {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         format!("{:?}", self.rules).hash(&mut h);
-        format!("{:x}/{:x}", self.px.to_bits(), h.finish())
+        format!("{:x}", h.finish())
     }
 
     /// The extents of `blk`'s contents in block coordinates (empty: draws nothing).

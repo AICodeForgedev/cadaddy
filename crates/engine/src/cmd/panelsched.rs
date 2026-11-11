@@ -675,8 +675,16 @@ fn read_ckt(
         |x: f64| hash.iter().copied().filter(|h| (h - x).abs() < 3.0 * row_h).min_by(|a, b| (a - x).abs().total_cmp(&(b - x).abs())).unwrap_or(x);
     // The breaker's amps: its `AMPS` / `TRIP` heading; a schedule that prints none heads the
     // column `BRKR` / `BREAKER` (its poles then under a `#` of their own).
+    // (A schedule that heads its amps `BKR` and nothing else, its types under a `TYPE` heading.)
     let rated = [named("AMPS"), named("AMP"), named("TRIP")].concat();
-    let amps = if rated.is_empty() { [named("BRKR"), named("BREAKER"), named("A")].concat() } else { [rated, named("A")].concat() };
+    let bkr_amps = rated.is_empty() && named("BRKR").is_empty() && named("BREAKER").is_empty() && !named("BKR").is_empty();
+    let amps = if !rated.is_empty() {
+        [rated, named("A")].concat()
+    } else if bkr_amps {
+        [named("BKR"), named("A")].concat()
+    } else {
+        [named("BRKR"), named("BREAKER"), named("A")].concat()
+    };
     // The poles: `P` / `POLES`; with none, a `#` that is not over the circuit numbers (`BRKR | #`).
     let pole_heads = [named("P"), named("POLE"), named("POLES")].concat();
     let poles = if pole_heads.is_empty() {
@@ -684,8 +692,9 @@ fn read_ckt(
     } else {
         pole_heads
     };
-    // The breaker's type column (`BKR` over `GF`), and the description's.
-    let kinds = named("BKR");
+    // The breaker's type column (`BKR` over `GF`; `TYPE` where `BKR` holds the amps), and the
+    // description's.
+    let kinds = if bkr_amps { named("TYPE") } else { named("BKR") };
     let desc_heads: Vec<f64> = head.iter().filter(|t| t.value.to_ascii_uppercase().contains("DESCRIPTION")).map(|t| t.at.x).collect();
     let lnum = near_num(l.at.x);
     let rnum = near_num(r.at.x);
@@ -1666,6 +1675,34 @@ mod tests {
 
     fn t(x: f64, y: f64, v: &str, h: f64) -> TextItem {
         TextItem { value: v.to_string(), at: Vec2::new(x, y), height: h, rotation: 0.0 }
+    }
+
+    /// A one-sided schedule whose breaker column is headed `BKR` (no `AMPS` heading: its
+    /// amps are under `BKR`) and whose breaker types are under `TYPE`, each row a ruled cell
+    /// line (Q6516: as a sheet lettered in strokes reads, cell by cell).
+    #[test]
+    fn a_bkr_column_with_no_amps_heading_is_the_breakers_amps() {
+        let (h, row) = (0.09, 0.24);
+        let mut v = vec![t(1.8, 10.1, "PANEL L1 SCHEDULE", 0.13)];
+        let rows = [
+            ["CKT", "DESCRIPTION", "BKR", "POLES", "TYPE"],
+            ["1", "LIGHTING - CORRIDOR", "20", "1", "-"],
+            ["2", "LIGHTING - MECH", "20", "1", "AF"],
+            ["3", "RECEP/DATA - BREAK ROOM", "30", "2", "GF"],
+        ];
+        let xs = [1.9, 2.75, 4.53, 5.39, 6.2];
+        for (i, r) in rows.iter().enumerate() {
+            let y = 10.0 - (i + 1) as f64 * row + 0.075;
+            for (x, cell) in xs.iter().zip(r) {
+                v.push(t(*x, y, cell, h));
+            }
+        }
+        let read = read(&v, "E-9");
+        assert_eq!(read.len(), 1, "{read:#?}");
+        let got: Vec<(&str, &str, &str, u32)> =
+            read[0].circuits.iter().map(|c| (c.number.as_str(), c.description.as_str(), c.breaker.as_str(), c.poles)).collect();
+        assert_eq!(got, [("1", "LIGHTING - CORRIDOR", "20", 1), ("2", "LIGHTING - MECH", "20", 1), ("3", "RECEP/DATA - BREAK ROOM", "30", 2)]);
+        assert_eq!(read[0].circuits[1].protection, ["AF"]);
     }
 
     /// E-2's typical guest-room panel as the PDF holds it (span by span, its points).

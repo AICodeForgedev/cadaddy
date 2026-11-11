@@ -192,6 +192,10 @@ pub(crate) fn classify(e: &Entity) -> Option<(&'static str, String, String, Stri
                     "tray" | "cable" | "grounding" => "electrical",
                     _ if piece.is_some() => "electrical",
                     "equipment" if gear => "electrical",
+                    // A pipe by what its build said it carries (Q6492: its system's name and layer).
+                    "pipe" if super::fieldview::tag_value(&tags, "carries").is_some_and(|v| !v.is_empty()) => {
+                        cadaddy_walk3d::pipeservice::service_trade(super::fieldview::tag_value(&tags, "carries").unwrap_or_default())
+                    }
                     _ => long_trade(cadaddy_walk3d::field::trade_of(kind, &system)),
                 };
                 (t, cat.to_string(), system, level)
