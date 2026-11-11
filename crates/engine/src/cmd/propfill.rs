@@ -431,7 +431,7 @@ fn wall_face_gap(pieces: &[HostPiece], level: &str, p: Vec2, min_top: f64) -> Op
 /// A built ceiling (a room's, a reflected ceiling plan's area): its level, plan extent, underside,
 /// and the plan triangles of its faces (what it covers: a room's outline, not its extent's box,
 /// which takes in a corner of the next room).
-struct BuiltCeiling {
+pub(crate) struct BuiltCeiling {
     level: Option<String>,
     bounds: Bounds2,
     z: f64,
@@ -453,7 +453,7 @@ impl BuiltCeiling {
 /// The underside of the smallest built ceiling of `level` over `p` (sheet units), inches over
 /// the floor at `floor` (drawing units): one that low is a soffit's or a cabinet's, not a room's
 /// ceiling, so it is passed over below 6'.
-fn ceiling_over(ceilings: &[BuiltCeiling], level: &str, p: Vec2, floor: f64, upf: f64) -> Option<f64> {
+pub(crate) fn ceiling_over(ceilings: &[BuiltCeiling], level: &str, p: Vec2, floor: f64, upf: f64) -> Option<f64> {
     ceilings
         .iter()
         .filter(|c| c.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)) && c.covers(p))
@@ -466,7 +466,7 @@ fn ceiling_over(ceilings: &[BuiltCeiling], level: &str, p: Vec2, floor: f64, upf
 const MAX_CEILING_FACES: usize = 20_000;
 
 /// The built ceilings (rooms', the reflected ceiling plans').
-fn built_ceilings(d: &Drawing) -> Vec<BuiltCeiling> {
+pub(crate) fn built_ceilings(d: &Drawing) -> Vec<BuiltCeiling> {
     d.model
         .iter()
         .filter(|e| super::elemprops::element_kind(e).as_deref() == Some("ceiling"))
@@ -1395,6 +1395,8 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
     // luminaire, a smoke detector. Their level, plan extent and underside.
     let ceilings = built_ceilings(d);
     let clear_rule = ClearOfWalls::read();
+    // A wall device's clearance under its room's ceiling (Q6520).
+    let under_rule = super::underceiling::Rule::load();
     // The built walls' pieces, for setting a wall device in its wall's face; the floors, for what
     // lies outside the building.
     let pieces = host_pieces(d, upf);
@@ -1637,8 +1639,12 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
                 // measure it for the luminaire itself: an elevation's sconce.)
                 let lowest = if wall_light.is_some() { 72.0 } else { 0.0 };
                 let its_own = |c: &Chosen| wall_light.is_some() && c.doc.to_ascii_lowercase().contains("luminaire");
+                // Its legend row's words count for which usual height it takes (a wall-switch
+                // sensor's switch box, Q6520); a plumbing fixture's go by its own name only.
+                let default_words =
+                    if kind == "plumbing fixture" { fixture_words.clone() } else { format!("{fixture_words} {legend_words} {described}") };
                 documented().filter(|c| c.inches >= lowest || its_own(c)).or(wall_light).unwrap_or_else(|| {
-                    let (inches, datum, why) = rules_default(if in_casework { CASEWORK_LUMINAIRE } else { kind }, &fixture_words);
+                    let (inches, datum, why) = rules_default(if in_casework { CASEWORK_LUMINAIRE } else { kind }, &default_words);
                     Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
                 })
             }
@@ -1867,6 +1873,22 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
                 "own_note, elevation, enlarged_plan_note, fixture_schedule, legend, general_notes, project_rule (the documents, in order), ceiling, floor, equipment, wall_luminaire_rule or default",
             ),
         );
+        // How far under its room's ceiling its top must stay, where its documents say (an exit
+        // sign's legend `4" BELOW CEILING`, Q6520): its legend row, else its schedule row.
+        if mount == Mount::Wall {
+            let said = under_rule
+                .clearance_in_words(&legend_words)
+                .map(|c| (c, SourceKind::Legend))
+                .or_else(|| under_rule.clearance_in_words(&format!("{installation}, {described}")).map(|c| (c, SourceKind::Schedule)));
+            if let Some(((inches, words), said_in)) = said {
+                store.set(
+                    super::underceiling::CLEARANCE_KEY,
+                    Prop::new(round2(inches), Source::from_doc(said_in, &words))
+                        .with_unit("in")
+                        .with_note("its top's least clearance under its room's finished ceiling, as its documents give it"),
+                );
+            }
+        }
         store.set(
             "mounting",
             Prop::new(
@@ -2207,6 +2229,13 @@ pub(crate) fn rebuild_devices_where(s: &mut Session, cmd: &str, only: DevicePick
                 e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
             });
         }
+    }
+    // The new ones where they stand now (stacked with their level's ceilings): none left above
+    // its room's ceiling (Q6520).
+    let new: BTreeSet<Handle> =
+        d.model.iter().filter(|e| !kept.contains(&e.handle) && super::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle).collect();
+    if !new.is_empty() {
+        super::underceiling::keep_under(d, &sp, Some(&new));
     }
     // An automatic rebuild (the plan changed) builds from the spec it keeps: the same devices.
     if let Some(kept) = s.state_mut()?.wallgen.as_mut().and_then(|g| g.spec.as_mut()) {

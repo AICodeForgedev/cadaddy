@@ -286,8 +286,9 @@ pub(crate) fn derived_height(sp: &BuildingSpec, level: &str, rule: &Rule) -> Opt
                     (b - m, format!("the {} of {a} bearing at {}", f.member, ft_in(b - lv.elevation_ft)))
                 }
                 Some(f) if f.depth_in.is_finite() && f.depth_in > 0.0 => {
-                    let d = (f.depth_in + rule.deck_in) / 12.0;
-                    (top - d - m, format!("{a}'s {} {}\" deep and {}\" deck", f.member, f.depth_in, rule.deck_in))
+                    let deck = super::exterior::deck_in(&f);
+                    let d = (f.depth_in + deck) / 12.0;
+                    (top - d - m, format!("{a}'s {} {}\" deep and {}\" deck", f.member, f.depth_in, deck))
                 }
                 _ => (top - rule.default_depth_in / 12.0, format!("{a}'s framing depth not read: the usual {}\"", rule.default_depth_in)),
             }

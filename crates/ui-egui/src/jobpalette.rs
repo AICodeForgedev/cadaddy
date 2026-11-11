@@ -109,12 +109,14 @@ fn id() -> egui::Id {
     egui::Id::new("job_palette_state")
 }
 
+/// The palette's state (the job's worklist, findings and report), moved out of egui's memory
+/// for the frame, not copied (Q6482).
 fn state(ctx: &egui::Context) -> State {
-    ctx.data_mut(|d| d.get_temp::<State>(id()).unwrap_or_default())
+    crate::kept::take::<State>(ctx, id()).unwrap_or_default()
 }
 
 fn set_state(ctx: &egui::Context, s: State) {
-    ctx.data_mut(|d| d.insert_temp(id(), s));
+    crate::kept::put(ctx, id(), s);
 }
 
 fn doc_key(app: &CadApp) -> (u64, u64) {

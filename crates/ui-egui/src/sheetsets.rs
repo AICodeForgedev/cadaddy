@@ -21,7 +21,7 @@ use crate::theme::Tokens;
 #[derive(Clone, Default)]
 struct State {
     /// The listing of the current set (SHEETSET list), or why it couldn't be read.
-    listing: Option<Result<Value, String>>,
+    listing: Option<Result<std::sync::Arc<Value>, String>>,
     selected: Option<usize>,
     number: String,
     title: String,
@@ -81,7 +81,9 @@ fn sheet_list(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     let active = app.session.active_sheet().map(|(i, _)| i);
     let (uid, revision) = app.session.state().map_or((0, 0), |st| (st.uid, st.revision));
-    let mut thumbs: Thumbs = ctx.data(|d| d.get_temp(thumbs_id())).unwrap_or_default();
+    // Moved out for the frame and back: a copy per frame took and dropped every sheet's texture
+    // handle (Q6482).
+    let mut thumbs: Thumbs = crate::kept::take(&ctx, thumbs_id()).unwrap_or_default();
     let key = (uid, std::sync::Arc::as_ptr(&sheets) as usize);
     if thumbs.key != key {
         thumbs = Thumbs { key, ..Default::default() };
@@ -140,7 +142,7 @@ fn sheet_list(app: &mut CadApp, ui: &mut egui::Ui) {
         thumbs.made.insert(i, (revision, tex));
         ctx.request_repaint();
     }
-    ctx.data_mut(|d| d.insert_temp(thumbs_id(), thumbs));
+    crate::kept::put(&ctx, thumbs_id(), thumbs);
     if let Some(i) = open
         && active != Some(i)
     {
@@ -253,11 +255,12 @@ fn properties(ui: &mut egui::Ui, salt: &str, props: &Value, key: &mut String, va
 
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
-    let mut st: State = ctx.data(|d| d.get_temp(id())).unwrap_or_else(|| State { start: "1".into(), scale: "1".into(), ..Default::default() });
+    // Moved out for the frame and back, not copied with the set's listing (Q6482).
+    let mut st: State = crate::kept::take(&ctx, id()).unwrap_or_else(|| State { start: "1".into(), scale: "1".into(), ..Default::default() });
     if st.listing.is_none()
         && let Some(set) = app.ui.sheet_set.clone()
     {
-        st.listing = Some(app.session.execute("sheetset", &json!({ "set": set })).map_err(|e| e.user_message()));
+        st.listing = Some(app.session.execute("sheetset", &json!({ "set": set })).map(std::sync::Arc::new).map_err(|e| e.user_message()));
     }
     let mut todo: Option<Value> = None;
     let mut pick: Option<&'static str> = None;
@@ -287,9 +290,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             return;
         };
-        let v = v.clone();
+        let v = std::sync::Arc::clone(v);
         ui.label(RichText::new(str_of(&v["name"])).strong()).on_hover_text(str_of(&v["description"]));
-        let sheets = v["sheets"].as_array().cloned().unwrap_or_default();
+        let sheets: &[Value] = v["sheets"].as_array().map_or(&[], Vec::as_slice);
         let mut subsets: Vec<String> = vec![String::new()];
         subsets.extend(v["subsets"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string));
         egui::ScrollArea::vertical().id_salt("sheetset-sheets").max_height(240.0).show(ui, |ui| {
@@ -524,9 +527,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(p) = todo
         && let Some(r) = act(app, p)
     {
-        st.listing = Some(Ok(r));
+        st.listing = Some(Ok(std::sync::Arc::new(r)));
     }
-    ctx.data_mut(|d| d.insert_temp(id(), st));
+    crate::kept::put(&ctx, id(), st);
 }
 
 /// The PDF a sheet set is published to by default: named after the set, in the set's own folder.
