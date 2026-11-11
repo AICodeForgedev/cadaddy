@@ -27,7 +27,7 @@
 //! runs carry (`<tag id>#<n>`), so the takeoff counts conduit, wire, boxes and fittings by level
 //! and circuit ([`super::bom`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cadaddy_doc::{Drawing, EntityKind};
 use cadaddy_mepfix::conduit_reader::{DEFAULT_SIZE_IN, parse_boc, parse_conduit_tag};
@@ -744,15 +744,33 @@ pub(crate) fn seat_heights(sp: &mut BuildingSpec) {
                 .then(|| (l.name.to_ascii_lowercase(), l.ceiling_ft + ABOVE_CEILING_FT))
         })
         .collect();
-    for r in sp.mep.runs.iter_mut().filter(|r| r.system == CIRCUIT_SYSTEM) {
+    // A drop runs between the device and the legs' height either way: down from a ceiling to a
+    // wall device, up from a roof deck's supports to a device mounted over it. Where the two
+    // meet there is no vertical piece (a riser no taller than this is none).
+    const NO_RISE_FT: f64 = 0.01;
+    let mut flat: BTreeSet<usize> = BTreeSet::new();
+    for (i, r) in sp.mep.runs.iter_mut().enumerate().filter(|(_, r)| r.system == CIRCUIT_SYSTEM) {
         let Some(&h) = ceilings.get(&r.level.to_ascii_lowercase()) else { continue };
         match r.top_ft {
             Some(_) => {
                 let mount = r.bottoms_ft.first().copied().unwrap_or(0.0);
-                r.top_ft = Some(h.max(mount));
+                let (low, high) = if mount <= h { (mount, h) } else { (h, mount) };
+                if high - low <= NO_RISE_FT {
+                    flat.insert(i);
+                }
+                r.bottoms_ft = vec![low];
+                r.top_ft = Some(high);
             }
             None => r.bottoms_ft.iter_mut().for_each(|b| *b = h),
         }
+    }
+    if !flat.is_empty() {
+        let mut i = 0usize;
+        sp.mep.runs.retain(|_| {
+            let keep = !flat.contains(&i);
+            i += 1;
+            keep
+        });
     }
 }
 
@@ -1389,5 +1407,50 @@ mod tests {
         assert!(roof.bottoms_ft.iter().all(|b| (deck.0..=deck.1).contains(b) && *b < 2.0), "{:?}", roof.bottoms_ft);
         let storey = sp.mep.runs.iter().find(|r| r.level == "Level 1").expect("storey leg");
         assert_eq!(storey.bottoms_ft, vec![8.25], "a storey's stays over its ceiling");
+    }
+
+    /// A roof's legs lie on the deck, under a device mounted over it: its drop is a rise from
+    /// the deck up to the device (bottom under top, a valid riser), never a riser with its top
+    /// at its own bottom that fails the spec check and stops the whole build; where the device
+    /// sits at the legs' own height there is no vertical piece.
+    #[test]
+    fn a_roof_devices_drop_rises_from_the_deck_and_the_spec_stays_valid() {
+        let level = |name: &str, elevation_ft: f64, height_ft: f64| cadaddy_walk3d::Level {
+            name: name.into(),
+            elevation_ft,
+            height_ft,
+            ceiling_ft: 8.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let mut sp = BuildingSpec { levels: vec![level("Level 1", 0.0, 12.0), level("Roof", 12.0, 4.0)], ..BuildingSpec::default() };
+        sp.mep.systems.push(system(CIRCUIT_SYSTEM, 8.25));
+        let bottom = DEFAULT_CEILING_FT + ABOVE_CEILING_FT;
+        let deck = super::super::conduitroute::rules().route.roof_band_ft().0;
+        let drop = |lvl: &str, mount: f64, id: &str| {
+            let mut r = run(CIRCUIT_SYSTEM, lvl, "E-9", vec![[10.0, 10.0]], DEFAULT_SIZE_IN, bottom);
+            r.bottoms_ft = vec![mount];
+            r.top_ft = Some(bottom);
+            r.id = id.into();
+            r
+        };
+        sp.mep.runs = vec![
+            run(CIRCUIT_SYSTEM, "Roof", "E-9", vec![[0.0, 0.0], [816.0, 0.0]], DEFAULT_SIZE_IN, bottom),
+            drop("Roof", 1.5, "roof-high"),
+            drop("Roof", deck, "roof-flush"),
+            drop("Level 1", 1.5, "storey"),
+        ];
+        seat_heights(&mut sp);
+        let get = |id: &str| sp.mep.runs.iter().find(|r| r.id == id);
+        let high = get("roof-high").expect("the roof device's rise is kept");
+        assert_eq!(high.bottoms_ft, vec![deck], "it starts on the deck");
+        assert_eq!(high.top_ft, Some(1.5), "and rises to the device");
+        assert!(get("roof-flush").is_none(), "a device at the legs' height takes no vertical piece");
+        let storey = get("storey").expect("storey drop");
+        assert_eq!((storey.bottoms_ft.clone(), storey.top_ft), (vec![1.5], Some(8.25)), "a storey's drop still hangs from over its ceiling");
+        let bad: Vec<String> = sp.check().into_iter().filter(|i| i.path.starts_with("mep.runs")).map(|i| format!("{}: {}", i.path, i.message)).collect();
+        assert!(bad.is_empty(), "{bad:?}");
     }
 }
