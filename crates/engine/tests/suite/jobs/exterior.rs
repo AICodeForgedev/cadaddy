@@ -516,3 +516,59 @@ fn north_east_and_west_glass_lands_on_its_own_face() {
     assert_eq!(z(&w), (0.0, 120.0));
     assert!(w.vertices.iter().all(|v| v.x <= 0.0) && w.vertices.iter().any(|v| v.x < 0.0), "west glass outside the west face");
 }
+
+/// Q6410: a roof over an irregular outline (a rectangle with small notches, 48 corners), sloped,
+/// draws its outline and its sides, not the fan of triangles its top is ear-clipped into: the
+/// seams inside its flat top and underside are invisible edges. No element the build makes keeps
+/// a visible seam between two faces of one flat surface.
+#[test]
+fn a_notched_roof_draws_its_outline_not_its_triangulation() {
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    rect(&mut s, [0.0, 0.0], [480.0, 360.0]);
+    rect(&mut s, [6.0, 6.0], [474.0, 354.0]);
+    // Ten 6" notches along the south edge and one along the north, 12" wide.
+    let mut outline: Vec<[f64; 2]> = vec![[0.0, 0.0]];
+    for k in 0..10 {
+        let x = 30.0 + 42.0 * f64::from(k);
+        outline.extend([[x, 0.0], [x, 6.0], [x + 12.0, 6.0], [x + 12.0, 0.0]]);
+    }
+    outline.extend([[480.0, 0.0], [480.0, 360.0], [252.0, 360.0], [252.0, 354.0], [228.0, 354.0], [228.0, 360.0], [0.0, 360.0]]);
+    let n = outline.len();
+    assert_eq!(n, 48);
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "version": 1,
+            "units_per_foot": 12,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 700, 500], "base": [0, 0]},
+                {"name": "Roof", "elevation_ft": 12, "height_ft": 4, "ceiling_ft": 3, "region": [-100, -100, 700, 500], "base": [0, 0]}
+            ],
+            "layers": [{"layer": "A-WALL", "role": "wall"}],
+            "exterior": {"roofs": [{"name": "Roof 1", "level": "Roof", "outline": outline, "slope": {"down": [1.0, 0.0], "rise_per_ft": 0.25 / 12.0}}]}
+        }}),
+    )
+    .unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!(r["roofs"], json!(1), "{r}");
+    let roof = &made(&s, "roof")[0];
+    // The top surface: each plan corner's highest point.
+    let top =
+        |v: &cadaddy_engine::geom::Vec3| !roof.vertices.iter().any(|w| (w.x - v.x).abs() < 1e-6 && (w.y - v.y).abs() < 1e-6 && w.z > v.z + 1e-6);
+    let on_top = |m: &Mesh| m.edges().iter().filter(|(a, b)| [a, b].iter().all(|i| m.vertices.get(**i as usize).is_some_and(top))).count();
+    // Before: every edge visible, every triangle's edges drawn (2n - 3 = 93); now its outline's n.
+    let mut before = roof.clone();
+    before.faces.iter_mut().for_each(|f| f.hidden = 0);
+    assert_eq!(on_top(&before), 2 * n - 3, "the ear-clipped top: n outline edges and n - 3 seams");
+    assert_eq!(on_top(roof), n, "the roof top draws its {n} outline edges");
+    // Top and underside outlines plus a vertical at each corner.
+    assert_eq!(roof.edges().len(), 3 * n);
+    let d = s.doc().unwrap();
+    for e in d.model.iter().filter(|e| made_as(e).is_some()) {
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let mut again = m.clone();
+        again.hide_flat_seams();
+        assert_eq!(again.edges(), m.edges(), "{:?} on {} keeps a visible seam inside a flat surface", made_as(e), e.common.layer);
+    }
+}
