@@ -95,3 +95,24 @@ fn bom_elements_are_object_handles() {
         assert!(l.get("elements_unresolved").is_none(), "{l}");
     }
 }
+
+/// A wall mark's lines (length and area) list the built walls of its type on its level, not
+/// the job's first walls.
+#[test]
+fn a_wall_marks_lines_list_the_walls_of_its_type() {
+    let mut s = super::drywall_views::building();
+    let bom = s.execute("bim.bom", &json!({})).expect("bom");
+    let type_of = |s: &mut Session, h: &str| -> String {
+        let d = s.doc().expect("doc");
+        let e = Handle::parse_hex(h).and_then(|x| d.entity(x)).unwrap_or_else(|| panic!("{h}"));
+        e.common.xdata.iter().find_map(|t| t.value.strip_prefix("type:")).unwrap_or_default().to_string()
+    };
+    for item in ["Wall P1", "Wall area P1"] {
+        let l = bom["lines"].as_array().expect("lines").iter().find(|l| l["item"] == item).unwrap_or_else(|| panic!("no {item}: {bom}")).clone();
+        let hs = ids(&l);
+        assert!(!hs.is_empty(), "{item} lists no walls: {l}");
+        for h in &hs {
+            assert_eq!(type_of(&mut s, h), "P1", "{h} on {l}");
+        }
+    }
+}

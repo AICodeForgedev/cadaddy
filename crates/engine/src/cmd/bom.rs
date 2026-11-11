@@ -1182,9 +1182,21 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     // ── Walls: LF and area from the spec's wall marks, falling back to 3D mesh data ──
     let mut wall_lf_total = 0.0f64;
     let mut wall_area_total = 0.0f64;
-    let wall_handles: Vec<String> = built.iter().filter(|((p, _), _)| p == "wall").flat_map(|(_, (_, h))| h.clone()).collect();
 
+    // The built walls by level and wall type (their `type:` tag; none: untyped), Q6529: a wall
+    // mark's lines list the walls of its type on its level.
+    let mut walls_of: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall")).take(MAX_LINES) {
+        let ty = super::bimlook::made_tag(e, "type").unwrap_or_default();
+        let key = (super::bspec::made_level(e).unwrap_or_default().trim().to_ascii_lowercase(), ty.trim().to_ascii_uppercase());
+        let v = walls_of.entry(key).or_default();
+        if v.len() < MAX_LINE_ELEMENTS {
+            v.push(e.handle.hex());
+        }
+    }
     if !sp.walls.is_empty() {
+        let first = lines.len();
+        let mut marked: BTreeSet<(String, String)> = BTreeSet::new();
         for w in sp.walls.iter().take(MAX_LINES) {
             let len_ft = (w.b[0] - w.a[0]).hypot(w.b[1] - w.a[1]) / upf;
             if !(len_ft.is_finite() && len_ft > 0.01) {
@@ -1199,6 +1211,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
             let thick_in = wt.map_or(6.0, |t| t.thickness_in);
             wall_area_total += len_ft * height_ft;
             let type_label = if w.wall_type.is_empty() { "untyped" } else { &w.wall_type };
+            marked.insert((w.level.clone(), w.wall_type.trim().to_string()));
             add(
                 lines,
                 Line {
@@ -1210,7 +1223,6 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
                     net: len_ft,
                     status: "model",
                     level: w.level.clone(),
-                    elements: wall_handles.iter().take(10).cloned().collect(),
                     ..Line::default()
                 },
             );
@@ -1225,10 +1237,18 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
                     net: len_ft * height_ft,
                     status: "model",
                     level: w.level.clone(),
-                    elements: Vec::new(),
                     ..Line::default()
                 },
             );
+        }
+        // Each mark's lines: the built walls of its type on its level (once, after merging).
+        for (level, ty) in &marked {
+            let label = if ty.is_empty() { "untyped" } else { ty.as_str() };
+            let (lf, area) = (format!("Wall {label}"), format!("Wall area {label}"));
+            let hs = walls_of.get(&(level.trim().to_ascii_lowercase(), ty.to_ascii_uppercase())).cloned().unwrap_or_default();
+            for l in lines.iter_mut().skip(first).filter(|l| l.category == "walls" && l.level == *level && (l.item == lf || l.item == area)) {
+                l.elements.clone_from(&hs);
+            }
         }
     } else if has_any_built {
         // Derive wall LF and area from 3D mesh entities when the spec has no wall marks.
