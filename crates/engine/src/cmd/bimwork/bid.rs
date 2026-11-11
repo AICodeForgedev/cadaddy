@@ -102,7 +102,7 @@ pub fn specs() -> Vec<crate::cmd::CommandSpec> {
     vec![
         crate::cmd::CommandSpec::new(CMD, "Bid Package", run)
             .menu(&["Tools", "Building", "Bid Package"])
-            .params("{price_book?: .xlsx (the Web Prices workbook: Price List + Item Map; default this machine's price book), labor_units?: .csv|.xlsx (item|kind, category?, size?, unit, hours, per? (1), source: hours per unit with their source; else the estimating baseline, else the starter book's placeholder hours), labor_rate?: $/h (else the estimate's crew rate), markups?: {tax_pct? (on material), overhead_pct?, profit_pct?, contingency_pct?, bond_pct?} (else the estimate's settings), allowances?: [{name, amount, system?, note?}], trades?: [trade] (default the rules': electrical), alternates?: bool (default true: ve.study's options with their add/deduct), ve?: {ve.study params}, underground?: bool (default true), project?, client?, bidder?: text the user entered (the letter names no one else), today?: YYYY-MM-DD, stale_days?, keep?: bool (keep the inputs for the next run; default true), show_lines?: bool, file?: .xlsx, letter?: .pdf, force?: bool} → {base_bid: {material, tax, labor_hours, labor_rate, labor, allowances, direct, overhead, profit, contingency, bond, total}, markups, by_system: [{system, name, lines, line_ids, material, labor_hours, labor, allowances, direct, share}], by_floor: [{level, lines, material, labor_hours, labor, direct, share}], quotes: [{key, description, vendor, source_type, date, unit, unit_price, lines, extended, stale}], allowances, alternates: [{id, name, tier, rfi, decision, material, labor_hours, labor, add_deduct, basis}], proposed: {lines, material, labor_hours, total}, inclusions, exclusions, clarifications, assumptions, counts, unpriced, no_labor, warnings, lines?, text, path?, letter?}: the bid package, every amount traced to its takeoff lines")
+            .params("{price_book?: .xlsx (the Web Prices workbook: Price List + Item Map; default this machine's price book), labor_units?: .csv|.xlsx (item|kind, category?, size?, unit, hours, per? (1), source: hours per unit with their source; else the estimating baseline, else the starter book's placeholder hours), labor_rate?: $/h (else the estimate's crew rate), markups?: {tax_pct? (on material), overhead_pct?, profit_pct?, contingency_pct?, bond_pct?} (else the estimate's settings), allowances?: [{name, amount, system?, note?}], trades?: [trade] (default the rules': electrical), alternates?: bool (default true: ve.study's options with their add/deduct), ve?: {ve.study params}, underground?: bool (default true), project?, client?, bidder?: text the user entered (the letter names no one else), today?: YYYY-MM-DD, stale_days?, keep?: bool (keep the inputs for the next run, the bid's own: the estimate's settings never change; default true; `kept` names each kept input this run changed, before and after), show_lines?: bool, file?: .xlsx, letter?: .pdf, force?: bool} → {base_bid: {material, tax, labor_hours, labor_rate, labor, allowances, direct, overhead, profit, contingency, bond, total}, markups, by_system: [{system, name, lines, line_ids, material, labor_hours, labor, allowances, direct, share}], by_floor: [{level, lines, material, labor_hours, labor, direct, share}], quotes: [{key, description, vendor, source_type, date, unit, unit_price, lines, extended, stale}], allowances, alternates: [{id, name, tier, rfi, decision, material, labor_hours, labor, add_deduct, basis}], proposed: {lines, material, labor_hours, total}, inclusions, exclusions, clarifications, assumptions, counts, unpriced, no_labor, warnings, kept?, lines?, text, path?, letter?}: the bid package, every amount traced to its takeoff lines")
             .noundo(),
     ]
 }
@@ -488,7 +488,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             v.as_f64()
                 .filter(|x| x.is_finite() && (0.0..=10_000.0).contains(x))
                 .ok_or_else(|| bad(CMD, "`labor_rate` is dollars per hour, 0 to 10000"))?,
-            "entered".to_string(),
+            // Q6530: a rate this call didn't enter is the one an earlier bim.bid kept.
+            if p.get("labor_rate").is_some_and(|v| !v.is_null()) { "entered" } else { "kept from an earlier bim.bid (keep)" }.to_string(),
         ),
     };
     let allow = allowances(&r, &given("allowances"))?;
@@ -1062,18 +1063,25 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "show_lines", false) {
         out["lines"] = json!(lines.iter().map(|l| l.json(rate)).collect::<Vec<_>>());
     }
-    // Keep the inputs for the next run.
+    // Keep the inputs for the next run (the bid's own; the estimate's settings are never
+    // changed here). Q6530: the result names each kept input this run changed, before and after.
     if bool_or(p, "keep", true) {
         let mut st = Map::new();
+        let mut changed = Map::new();
         for k in ["markups", "labor_rate", "allowances", "project", "client", "bidder"] {
             let v = given(k);
             if !v.is_null() {
+                let before = kept.get(k).cloned().unwrap_or(Value::Null);
+                if before != v {
+                    changed.insert(k.into(), json!({"before": before, "after": v}));
+                }
                 st.insert(k.into(), v);
             }
         }
         if !st.is_empty() {
             super::set_state(s, STATE_KEY, Value::Object(st))?;
         }
+        out["kept"] = Value::Object(changed);
     }
     let file = str_param(p, "file").map(str::trim).filter(|x| !x.is_empty()).map(String::from);
     let letter_path = str_param(p, "letter").map(str::trim).filter(|x| !x.is_empty()).map(String::from);

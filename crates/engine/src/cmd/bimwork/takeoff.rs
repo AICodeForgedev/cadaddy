@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
             .noundo(),
         CommandSpec::new(CMD_EST, "Model Estimate", run_estimate)
-            .params("{force?: bool (replace an existing file; otherwise it is refused), price_book?: .xlsx path (sheets \"Price List\": key, description, catalog, unit, unit price $, source type, vendor, URL, price date; \"Item Map\": CADaddy item, size, action price|exclude, price key 1, price key 2, note): material priced by each line's catalog number in the Price List, else its Item Map row (keys added), else listed unpriced, stale_days?: n (90: an older price is flagged STALE), tax_pct?: percent (0), today?: YYYY-MM-DD, by_level?, filter?, file?: .xlsx (live INDEX/MATCH formulas into the book's Price List) | .csv → {lines: [{item, size, unit, qty, qty_total, type_mark?, manufacturer?, catalog?, dimming?, product_source?, matched_by: catalog|item_map, price_keys, unit_price, extended, price_date, age_days, source_type, vendor, price, flag?: STALE}], unpriced: [{…, reason}], excluded: [{…, reason}], counts, by_category, totals: {by_group: [{trade, category, lines, extended}], subtotal, tax: {rate_pct, amount}, total}, warnings, csv, path?} | cost_table: .csv|.xlsx path | csv: text | rows: [{item, unit, material, labor_hrs, waste?}], labor_rate?: $/h (75, or the table's labor_rate column), waste?: percent | {category: percent} (default the BOM's), by_level?: bool, filter?: as bim.takeoff, revision?: name (keep it), compare_to?: revision name | {lines}, file?: .csv|.xlsx} → {lines: [{item, size, unit, qty, waste_pct, qty_total, cost_item, material_unit, labor_hrs_unit, material, labor_hrs, labor, total, elements}], unmatched: [{item, size, unit, qty, reason}], unused_rows, material_total, labor_hours, labor_total, total, labor_rate, change_order?: {lines: [{item, size, unit, before_qty, after_qty, delta_qty, delta_cost}], total}, csv, path?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), price_book?: .xlsx path (sheets \"Price List\": key, description, catalog, unit, unit price $, source type, vendor, URL, price date; \"Item Map\": CADaddy item, size, action price|exclude, price key 1, price key 2, note): material priced by each line's catalog number in the Price List, else its Item Map row (keys added), else listed unpriced, stale_days?: n (90: an older price is flagged STALE), tax_pct?: percent (0), today?: YYYY-MM-DD, by_level?, filter?, file?: .xlsx (live INDEX/MATCH formulas into the book's Price List) | .csv → {lines: [{item, size, unit, qty, qty_total, type_mark?, manufacturer?, catalog?, dimming?, product_source?, matched_by: catalog|item_map, price_keys, unit_price, extended, price_date, age_days, source_type, vendor, price, flag?: STALE}], unpriced: [{…, reason}], excluded: [{…, reason}], counts, by_category, totals: {by_group: [{trade, category, lines, extended}], subtotal, tax: {rate_pct, amount}, total}, warnings, csv, path?} | cost_table: .csv|.xlsx path | csv: text | rows: [{item, unit, material, labor_hrs, waste?}], labor_rate?: $/h for this call only (else the table's labor_rate column, else the estimate's crew rate, else 75), keep?: bool (false: the cost table and rate price this call only; true: the cost table becomes the estimate's prices and the rate given its crew rate, each change in `kept` with before and after), waste?: percent | {category: percent} (default the BOM's), by_level?: bool, filter?: as bim.takeoff, revision?: name (keep it), compare_to?: revision name | {lines}, file?: .csv|.xlsx} → {lines: [{item, size, unit, qty, waste_pct, qty_total, cost_item, material_unit, labor_hrs_unit, material, labor_hrs, labor, total, elements}], unmatched: [{item, size, unit, qty, reason}], unused_rows, material_total, labor_hours, labor_total, total, labor_rate, labor_rate_from, kept?: {prices?: {before, after}, crew_rate?: {before, after}}, change_order?: {lines: [{item, size, unit, before_qty, after_qty, delta_qty, delta_cost}], total}, csv, path?}")
             .noundo(),
     ]
 }
@@ -816,6 +816,52 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
     best.map(|(i, _, _)| (i, "family"))
 }
 
+/// `bim.estimate {keep: true}` (Q6530): the cost table becomes the estimate's prices (when
+/// the call gave one) and `rate` its crew rate (when the call or its table gave one). Returns
+/// what changed, `{prices?: {before, after}, crew_rate?: {before, after}}`; nothing else is touched.
+fn keep_estimate_inputs(s: &mut Session, rows: &[Cost], rate: Option<f64>) -> Result<Value> {
+    let mut kept = serde_json::Map::new();
+    let Ok((mut sp, _)) = crate::cmd::bspec::current(s, CMD_EST) else { return Ok(Value::Object(kept)) };
+    let mut est: serde_json::Map<String, Value> = sp.estimate.as_object().cloned().unwrap_or_default();
+    if !rows.is_empty() {
+        let prices: Vec<Value> = rows
+            .iter()
+            .map(|r| {
+                let mut pv = json!({
+                    "item": r.item, "unit": if r.unit.is_empty() { "each" } else { &r.unit },
+                    "material": r.material, "source": "bim.estimate cost table", "date": "",
+                });
+                if r.labor_hrs > 0.0 {
+                    pv["labor_hours"] = json!(r.labor_hrs);
+                }
+                pv
+            })
+            .collect();
+        // Starter-book prices are NOT stored in the baseline: estimate.status falls back to
+        // starter_prices() independently. The two routes match differently (grouped takeoff
+        // lines vs individual BOM lines), so storing them would cause price-shadowing.
+        if let Some(b) = crate::cmd::estimate::obj(&mut est, "baseline") {
+            let before = b.get("prices").and_then(Value::as_array).map_or(0, Vec::len);
+            kept.insert("prices".into(), json!({"before": before, "after": prices.len()}));
+            b.insert("prices".into(), json!(prices));
+        }
+    }
+    if let Some(r) = rate
+        && let Some(set) = crate::cmd::estimate::obj(&mut est, "settings")
+    {
+        let before = set.get("crew_rate").cloned().unwrap_or(Value::Null);
+        if before.as_f64() != Some(r) {
+            kept.insert("crew_rate".into(), json!({"before": before, "after": r}));
+            set.insert("crew_rate".into(), json!(r));
+        }
+    }
+    if !kept.is_empty() {
+        sp.estimate = Value::Object(est);
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    }
+    Ok(Value::Object(kept))
+}
+
 fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     super::super::exchange::guard_params(s, "bim.estimate", p, &["file"])?;
     // Q6164: material from a price-book workbook, by catalog number, then the Item Map.
@@ -843,14 +889,17 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     let by_level = bool_or(p, "by_level", false);
     let filter = p.get("filter").cloned().unwrap_or(Value::Null);
     let lines = lines(s, if by_level { "level" } else { "type" }, &filter)?;
-    let explicit_rate =
-        p.get("labor_rate").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).is_some() || rows.iter().any(|r| r.labor_rate.is_some());
-    let rate = p
-        .get("labor_rate")
-        .and_then(Value::as_f64)
-        .filter(|v| v.is_finite() && *v >= 0.0)
-        .or_else(|| rows.iter().find_map(|r| r.labor_rate))
-        .unwrap_or(DEFAULT_LABOR_RATE);
+    // Q6530: the call's rate, else its cost table's, else the project's crew rate, else the
+    // default. The call's own rate prices this call only (see `keep` below).
+    let call_rate = p.get("labor_rate").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0);
+    let table_rate = rows.iter().find_map(|r| r.labor_rate);
+    let (rate, rate_from) = match (call_rate, table_rate, crate::cmd::estimate::crew_rate(s)) {
+        (Some(r), _, _) => (r, "entered"),
+        (None, Some(r), _) => (r, "the cost table's labor_rate column"),
+        (None, None, Some(r)) => (r, "the estimate's crew rate (estimate.settings)"),
+        (None, None, None) => (DEFAULT_LABOR_RATE, "the default rate"),
+    };
+    let explicit_rate = rate_from != "the default rate";
     let waste_for = |l: &Value, r: &Cost| -> f64 {
         let cat = l["category"].as_str().unwrap_or_default();
         r.waste
@@ -924,8 +973,8 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     if !explicit_rate {
         warnings.push(json!({
             "kind": "default_labor_rate",
-            "message": format!("using default labor rate ${DEFAULT_LABOR_RATE}/h; neither the call nor the cost table set one"),
-            "fix": "pass labor_rate ($/h for your crew) or add a labor_rate column to the cost table",
+            "message": format!("using default labor rate ${DEFAULT_LABOR_RATE}/h; neither the call, the cost table nor the estimate's settings set one"),
+            "fix": "set the project's crew rate (estimate.settings {crew_rate}), pass labor_rate ($/h for this call) or add a labor_rate column to the cost table",
         }));
     }
     if rate == 0.0 && hrs_total > 0.0 {
@@ -952,39 +1001,13 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({
         "lines": out_lines, "unmatched": unmatched, "unused_rows": unused,
         "material_total": r3(mat_total), "labor_hours": r3(hrs_total), "labor_total": r3(hrs_total * rate), "total": r3(total), "labor_rate": rate,
-        "warnings": warnings,
+        "labor_rate_from": rate_from, "warnings": warnings,
     });
-    // Store the cost table in the estimate state so estimate.status uses the same prices.
-    if let Ok(est_sp) = crate::cmd::bspec::current(s, CMD_EST) {
-        let (mut sp, _) = est_sp;
-        let mut est: serde_json::Map<String, Value> = sp.estimate.as_object().cloned().unwrap_or_default();
-        let base = est.entry(String::from("baseline")).or_insert_with(|| json!({}));
-        if let Some(b) = base.as_object_mut() {
-            let prices: Vec<Value> = rows
-                .iter()
-                .map(|r| {
-                    let mut pv = json!({
-                        "item": r.item, "unit": if r.unit.is_empty() { "each" } else { &r.unit },
-                        "material": r.material, "source": "bim.estimate cost table", "date": "",
-                    });
-                    if r.labor_hrs > 0.0 {
-                        pv["labor_hours"] = json!(r.labor_hrs);
-                    }
-                    pv
-                })
-                .collect();
-            // Starter-book prices are NOT stored in the baseline: estimate.status
-            // falls back to starter_prices() independently. The two routes match
-            // differently (grouped takeoff lines vs individual BOM lines), so
-            // storing them would cause price-shadowing.
-            b.insert("prices".into(), json!(prices));
-        }
-        let settings = est.entry(String::from("settings")).or_insert_with(|| json!({}));
-        if let Some(s_obj) = settings.as_object_mut() {
-            s_obj.insert("crew_rate".into(), json!(rate));
-        }
-        sp.estimate = Value::Object(est);
-        s.doc_mut().map(|d| d.building_spec = Some(sp.to_json()).into()).ok();
+    // Q6530: a call's cost table and rate price this call only. With `keep: true` the cost
+    // table becomes the estimate's prices and the rate given (the call's or the table's) the
+    // project's crew rate, so estimate.status prices the same; the result says what changed.
+    if bool_or(p, "keep", false) {
+        out["kept"] = keep_estimate_inputs(s, &rows, call_rate.or(table_rate))?;
     }
     // Change order against an earlier revision.
     let st = state(s.doc()?);

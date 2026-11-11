@@ -86,7 +86,7 @@ pub(crate) fn starter_prices() -> Vec<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("estimate.import", "Import Estimating Baseline", run_import)
-            .params("{folder: path (item_labor_units.csv, assemblies.csv, assembly_parts.csv, prices.csv, rates.json, benchmarks.json, pack.json, factors.csv, production_model.json, field_observations.csv, indexes.csv, tool_rules.json, price_history.csv), label?: \"public data\"|\"baseline\" (default: the folder's pack.json label, else baseline)} → {items, assemblies, prices, rates, benchmarks, label, notes}"),
+            .params("{folder: path (item_labor_units.csv, assemblies.csv, assembly_parts.csv, prices.csv, rates.json, benchmarks.json, pack.json, factors.csv, production_model.json, field_observations.csv, indexes.csv, tool_rules.json, price_history.csv), label?: \"public data\"|\"baseline\" (default: the folder's pack.json label, else baseline)} → {items, assemblies, prices, rates, benchmarks, label, notes, settings_changed?: {crew_rate: {before, after}} (rates.json crew_rate becomes the project crew rate)}"),
         CommandSpec::new("estimate.import_p405", "Import P-405 Labor Tables", run_import_p405)
             .params("{file: path to p405_labor_units.csv (all 735 rows), private_folder?: path for the private pack (required when any row is electrical or of no known trade: those go here)} → {public_rows, private_rows, skipped, notes}"),
         CommandSpec::new("estimate.import_costs", "Import Cost Table", run_import_costs).params(
@@ -168,6 +168,14 @@ pub(super) fn key_of(l: &Value) -> String {
 
 pub(super) fn setting(st: &Map<String, Value>, k: &str, default: f64) -> f64 {
     st.get("settings").and_then(|s| s.get(k)).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(default)
+}
+
+/// The project's crew rate ($/h, `estimate.settings crew_rate`) when one is set, read without
+/// changing anything (Q6530): the rate every pricing command falls back to when its call
+/// gives none. Only `estimate.settings` (or a documented `keep`) changes it.
+pub(crate) fn crew_rate(s: &Session) -> Option<f64> {
+    let (_, st) = state(s, "estimate.settings").ok()?;
+    Some(setting(&st, "crew_rate", 0.0)).filter(|v| v.is_finite() && *v > 0.0)
 }
 
 // ---------- Word matching (shared with bim.estimate, Q5294) ----------
@@ -425,7 +433,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     // The label: given, else the pack's own (`pack.json`: the public pack says "public data").
     let pack: Value = read("pack.json").and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
     let label = str_param(p, "label").or_else(|| pack["label"].as_str()).unwrap_or("baseline").to_string();
-    let counts = json!({ "items": items.len(), "assemblies": assemblies.len(), "prices": prices.len(), "rates": rates.as_object().map_or(0, Map::len), "benchmarks": benchmarks.as_object().map_or(0, Map::len), "factors": factors.len(), "drivers": production.len(), "observations": observations.len(), "indexes": indexes.len(), "tool_rules": tool_rules.len(), "history": history.len(), "label": label, "notes": notes });
+    let mut counts = json!({ "items": items.len(), "assemblies": assemblies.len(), "prices": prices.len(), "rates": rates.as_object().map_or(0, Map::len), "benchmarks": benchmarks.as_object().map_or(0, Map::len), "factors": factors.len(), "drivers": production.len(), "observations": observations.len(), "indexes": indexes.len(), "tool_rules": tool_rules.len(), "history": history.len(), "label": label, "notes": notes });
     baseline.insert("label".into(), json!(label));
     baseline.insert("items".into(), Value::Object(items));
     baseline.insert("assemblies".into(), Value::Object(assemblies));
@@ -442,6 +450,11 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     st.insert("baseline".into(), Value::Object(baseline));
     if let (Some(c), Some(set)) = (crew, obj(&mut st, "settings")) {
+        // Q6530: the pack's crew rate becomes the project's; the result says so.
+        let before = set.get("crew_rate").cloned().unwrap_or(Value::Null);
+        if before.as_f64() != Some(c) {
+            counts["settings_changed"] = json!({"crew_rate": {"before": before, "after": c}});
+        }
         set.insert("crew_rate".into(), json!(c));
     }
     store(s, sp, st)?;
@@ -1707,6 +1720,10 @@ mod tests {
         let dir = baseline();
         let r = s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
         assert_eq!((r["assemblies"].clone(), r["prices"].clone()), (json!(2), json!(5)), "{r}");
+        // Q6530: the pack's crew rate becomes the project's, and the import says so.
+        assert_eq!(r["settings_changed"], json!({"crew_rate": {"before": null, "after": 85.0}}), "{r}");
+        let again = s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
+        assert!(again.get("settings_changed").is_none(), "the same rate again changes nothing: {again}");
         s.execute("estimate.settings", &json!({ "tax_pct": 8, "overhead_pct": 10, "profit_pct": 10, "today": "2026-10-21" })).unwrap();
         // Before scope and mapping: nothing reaches a total, and the validator says why.
         let st = s.execute("estimate.status", &json!({})).unwrap();

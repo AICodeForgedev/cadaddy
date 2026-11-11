@@ -363,7 +363,7 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     assert!(s.execute("bim.estimate", &json!({"rows": [{"item": "X"}], "compare_to": "nope"})).is_err());
     // Q5294 MUST 2: warnings for missing inputs (the default rate is reported).
     assert!(inline["warnings"].as_array().unwrap().iter().any(|w| w["kind"] == "default_labor_rate"), "{}", inline["warnings"]);
-    // bim.estimate stores its cost table in the estimate state: estimate.status sees it.
+    // estimate.status prices the model's BOM lines after bim.estimate runs.
     let st = s.execute("estimate.status", &json!({})).unwrap();
     assert!(st["summary"]["lines"].as_u64().unwrap() > 0, "estimate.status sees BOM lines after bim.estimate: {st}");
 }
@@ -380,9 +380,11 @@ fn bim_estimate_and_estimate_status_give_the_same_totals() {
     let table = tmp("same-costs.csv");
     std::fs::write(&table, "item,unit,material,labor_hrs\nEMT conduit,ft,1.10,0.05\nRectangular duct,ft,12.50,0.20\nCopper pipe,ft,8.00,0.15\n")
         .unwrap();
-    // Route 1: bim.estimate (stores in estimate state).
-    let bim = s.execute("bim.estimate", &json!({"cost_table": table.display().to_string(), "labor_rate": 90})).unwrap();
-    // Route 2: estimate.status (prices were stored by bim.estimate; scope all as in_contract).
+    // Route 1: bim.estimate, keeping its cost table and rate as the estimate's (Q6530: only
+    // with keep: true; a call's own inputs otherwise price that call only).
+    let bim = s.execute("bim.estimate", &json!({"cost_table": table.display().to_string(), "labor_rate": 90, "keep": true})).unwrap();
+    assert_eq!(bim["kept"]["crew_rate"], json!({"before": null, "after": 90.0}), "{}", bim["kept"]);
+    // Route 2: estimate.status (prices kept by bim.estimate; scope all as in_contract).
     for trade in ["electrical", "mechanical", "plumbing", "general", "drywall", "job"] {
         let _ = s.execute("estimate.set_scope", &json!({"trade": trade, "scope": "in_contract", "reason": "all ours"}));
     }
@@ -619,4 +621,75 @@ fn hostile_params_never_panic() {
     let mut empty = Session::new();
     let e = empty.execute("bim.clash", &json!({"a": "electrical"})).unwrap_err().to_string();
     assert!(e.contains("build"), "{e}");
+}
+
+/// Q6530: a call's own labor rate prices that call only. The project's crew rate
+/// (estimate.settings) changes only through estimate.settings, or through `keep: true`,
+/// which says in its result what it changed, before and after.
+#[test]
+fn a_calls_labor_rate_never_replaces_the_projects_crew_rate() {
+    let mut s = building();
+    for trade in ["electrical", "mechanical", "plumbing", "general", "drywall", "job"] {
+        let _ = s.execute("estimate.set_scope", &json!({"trade": trade, "scope": "in_contract", "reason": "all ours"}));
+    }
+    s.execute("estimate.settings", &json!({"crew_rate": 50})).unwrap();
+    let crew = |s: &mut Session| s.execute("estimate.settings", &json!({})).unwrap()["settings"]["crew_rate"].as_f64();
+    let status = |s: &mut Session| s.execute("estimate.status", &json!({})).unwrap()["totals"].clone();
+    s.execute("wholejob.settings", &json!({"electrical_from_estimate": true})).unwrap();
+    let whole = |s: &mut Session| s.execute("wholejob.estimate", &json!({})).unwrap()["total"].as_f64();
+    let (before, whole_before) = (status(&mut s), whole(&mut s));
+    assert!(before["labor_hours"].as_f64().unwrap() > 0.0 && before["labor"].as_f64().unwrap() > 0.0, "{before}");
+    let prices_before = s.execute("estimate.status", &json!({})).unwrap()["summary"].clone();
+
+    // Hours only, labor at $0 for this call: the project's rate stays 50.
+    let e = s.execute("bim.estimate", &json!({"labor_rate": 0})).unwrap();
+    assert_eq!(crew(&mut s), Some(50.0), "bim.estimate's labor_rate replaced the project's crew rate");
+    assert_eq!(status(&mut s), before, "estimate.status changed after bim.estimate");
+    assert_eq!(whole(&mut s), whole_before, "wholejob.estimate changed after bim.estimate");
+    assert_eq!(e["labor_rate"], 0.0);
+    assert_eq!(e["labor_rate_from"], "entered");
+    assert!(e["labor_hours"].as_f64().unwrap() > 0.0 && e["labor_total"] == 0.0, "{e}");
+    assert!(e.get("kept").is_none(), "nothing kept without keep: {e}");
+    // A cost table priced in one call is not left behind as the estimate's prices.
+    let rows = json!([{"item": "EMT conduit", "unit": "ft", "material": 99.0, "labor_hrs": 3.0}]);
+    s.execute("bim.estimate", &json!({"rows": rows, "labor_rate": 120})).unwrap();
+    assert_eq!(crew(&mut s), Some(50.0));
+    assert_eq!(status(&mut s), before, "a call's cost table changed estimate.status");
+    assert_eq!(s.execute("estimate.status", &json!({})).unwrap()["summary"], prices_before);
+
+    // With no rate given, the call prices labor at the project's crew rate, not a default.
+    let d = s.execute("bim.estimate", &json!({})).unwrap();
+    assert_eq!(d["labor_rate"], 50.0, "{d}");
+    assert!(d["labor_rate_from"].as_str().unwrap().contains("estimate.settings"), "{d}");
+    assert!(!d["warnings"].as_array().unwrap().iter().any(|w| w["kind"] == "default_labor_rate"), "{}", d["warnings"]);
+
+    // keep: true changes the project's rate and prices, and says so, before and after.
+    let k = s.execute("bim.estimate", &json!({"rows": rows, "labor_rate": 60, "keep": true})).unwrap();
+    assert_eq!(k["kept"]["crew_rate"], json!({"before": 50.0, "after": 60.0}), "{}", k["kept"]);
+    assert_eq!(k["kept"]["prices"]["after"], 1, "{}", k["kept"]);
+    assert_eq!(crew(&mut s), Some(60.0));
+    assert_ne!(status(&mut s), before, "keep: the estimate uses the kept rate and prices");
+    // keep with nothing new to keep (no rate, no table) changes nothing and keeps the prices.
+    let n = s.execute("bim.estimate", &json!({"keep": true})).unwrap();
+    assert_eq!(n["kept"], json!({}), "{n}");
+    assert_eq!(crew(&mut s), Some(60.0));
+    let st = s.execute("estimate.status", &json!({})).unwrap();
+    assert!(st["summary"]["lines"].as_u64().unwrap() > 0, "{st}");
+
+    // bim.bid's kept inputs are its own and its result names what it kept; the crew rate stays.
+    s.execute("estimate.settings", &json!({"crew_rate": 50})).unwrap();
+    {
+        let b = s.execute("bim.bid", &json!({"labor_rate": 0})).unwrap();
+        assert_eq!(b["kept"]["labor_rate"], json!({"before": null, "after": 0}), "{}", b["kept"]);
+        assert_eq!(crew(&mut s), Some(50.0));
+        let b = s.execute("bim.bid", &json!({"labor_rate": 65})).unwrap();
+        assert_eq!(b["kept"]["labor_rate"], json!({"before": 0, "after": 65}), "{}", b["kept"]);
+        let again = s.execute("bim.bid", &json!({})).unwrap();
+        assert_eq!(again["base_bid"]["labor_rate"], 65.0, "the bid's kept rate, named as such");
+        assert_eq!(again["kept"], json!({}), "nothing new kept: {}", again["kept"]);
+        let said = again["assumptions"].to_string();
+        assert!(said.contains("kept from an earlier bim.bid"), "a kept rate says where it came from: {said}");
+        s.execute("bim.bid", &json!({"labor_rate": 0, "keep": false})).unwrap();
+        assert_eq!(crew(&mut s), Some(50.0));
+    }
 }

@@ -5797,9 +5797,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     if price {
         match &cost_db {
             Some(db) => {
-                let rate = rate
-                    .or(db.manpower_rate)
-                    .or_else(|| s.execute("estimate.settings", &json!({})).ok().and_then(|v| v["labor_rate"].as_f64()).filter(|v| *v > 0.0));
+                let rate = rate.or(db.manpower_rate).or_else(|| crate::cmd::estimate::crew_rate(s));
                 for l in &mut lines {
                     let (item, size) = (l["item"].as_str().unwrap_or_default().to_string(), l["size"].as_str().unwrap_or_default().to_string());
                     let qty = l["qty"].as_f64().unwrap_or(0.0);

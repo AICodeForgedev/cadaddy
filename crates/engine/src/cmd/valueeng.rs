@@ -448,7 +448,7 @@ fn r1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
-/// The manpower basis: the caller's rate, the cost DB's, else the estimate's labor rate.
+/// The manpower basis: the caller's rate, the cost DB's, else the estimate's crew rate.
 fn manpower(s: &mut Session, rules: &Rules, inp: &Inputs) -> price::Manpower {
     let (rate, rate_source) = match (inp.manpower_rate, inp.cost_db.as_ref().and_then(|d| d.manpower_rate)) {
         (Some(r), _) => (Some(r), "given".to_string()),
@@ -459,8 +459,8 @@ fn manpower(s: &mut Session, rules: &Rules, inp: &Inputs) -> price::Manpower {
                 .map(|d| if d.manpower_rate_source.is_empty() { format!("cost DB {}", d.path) } else { d.manpower_rate_source.clone() })
                 .unwrap_or_default(),
         ),
-        _ => match s.execute("estimate.settings", &json!({})).ok().and_then(|v| v["labor_rate"].as_f64()).filter(|v| v.is_finite() && *v > 0.0) {
-            Some(r) => (Some(r), "the estimate's labor rate (no cost DB manpower rate)".to_string()),
+        _ => match crate::cmd::estimate::crew_rate(s) {
+            Some(r) => (Some(r), "the estimate's crew rate (estimate.settings; no cost DB manpower rate)".to_string()),
             None => (None, "none: man-hours not computed".to_string()),
         },
     };
