@@ -28,6 +28,7 @@ pub(crate) const DROP_CIRCUIT: &str = "voltage drop: whole circuit";
 pub(crate) const LEGEND: &str = "the drawing's length table";
 pub(crate) const DERATE: &str = "derating (310.15(C)(1))";
 pub(crate) const SCHEDULE: &str = "the panel schedule's wire size";
+pub(crate) const SCHEDULE_OVER_PLAN: &str = "the panel schedule's wire size over the plan's";
 
 /// Most devices one circuit's load moment walks (hostile models).
 const MAX_NODES: usize = 4096;

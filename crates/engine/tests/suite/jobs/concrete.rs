@@ -380,13 +380,14 @@ fn hostile_concrete_never_panics() {
     }
 }
 
-/// The job's line for one element: its trade, category and size, traced to that element only.
+/// The job's line for one element: its trade, category and size, traced to that element only
+/// (the spec id it was counted by, its `sources`: Q6529).
 fn bom_line<'a>(bom: &'a Value, category: &str, size: &str, id: &str) -> &'a Value {
     bom["lines"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|l| l["trade"] == "concrete" && l["category"] == category && l["size"] == size && l["elements"] == json!([id]))
+        .find(|l| l["trade"] == "concrete" && l["category"] == category && l["size"] == size && l["sources"] == json!([id]))
         .unwrap_or_else(|| panic!("no {category} {size} line for {id} in {bom:#}"))
 }
 
@@ -406,7 +407,7 @@ fn the_job_bom_takes_our_concrete_and_lists_the_rest_by_others() {
     // service's four 4" stub-ups.
     assert!(near(&bom_line(&bom, "forms", "", "PAD-MSB")["total"], 6.89));
     let finish: Vec<&Value> =
-        bom["lines"].as_array().unwrap().iter().filter(|l| l["category"] == "finish" && l["elements"] == json!(["PAD-MSB"])).collect();
+        bom["lines"].as_array().unwrap().iter().filter(|l| l["category"] == "finish" && l["sources"] == json!(["PAD-MSB"])).collect();
     assert_eq!(finish.len(), 2, "finish and curing: {finish:?}");
     assert!(finish.iter().all(|l| near(&l["total"], 24.44) && l["unit"] == "sq ft"), "{finish:?}");
     let bolts = bom_line(&bom, "embeds", "0.5\" dia", "PAD-MSB");
@@ -418,7 +419,7 @@ fn the_job_bom_takes_our_concrete_and_lists_the_rest_by_others() {
     assert!(cy["rule"].as_str().unwrap().contains("footprint"), "{cy}");
     // Only our concrete is on the BOM.
     let ours: Vec<&Value> = bom["lines"].as_array().unwrap().iter().filter(|l| l["trade"] == "concrete").collect();
-    assert!(ours.iter().all(|l| l["elements"] == json!(["PAD-MSB"])), "{ours:?}");
+    assert!(ours.iter().all(|l| l["sources"] == json!(["PAD-MSB"])), "{ours:?}");
     // The rest is listed by whose it is, at no cost to us.
     let by = bom["by_others"].as_array().unwrap();
     let of = |id: &str| by.iter().find(|x| x["element"] == id).unwrap_or_else(|| panic!("{id} not listed: {by:?}"));
@@ -464,7 +465,7 @@ fn the_utilitys_transformer_is_by_others_and_its_pad_is_ours() {
     assert_eq!((tx["scope"].as_str(), tx["cost_to_us"].as_f64()), (Some("by others (utility)"), Some(0.0)));
     let pad =
         bom["lines"].as_array().unwrap().iter().any(|l| {
-            l["trade"] == "concrete" && l["category"] == "concrete" && l["elements"].as_array().is_some_and(|e| e.contains(&json!("PAD-TX-1")))
+            l["trade"] == "concrete" && l["category"] == "concrete" && l["sources"].as_array().is_some_and(|e| e.contains(&json!("PAD-TX-1")))
         });
     assert!(pad, "its pad is ours: {bom:#}");
 }

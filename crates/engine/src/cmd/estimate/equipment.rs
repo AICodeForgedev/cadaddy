@@ -115,12 +115,22 @@ pub(super) fn facts(sp: &cadaddy_walk3d::BuildingSpec, st: &Map<String, Value>, 
             }
         }
     }
-    let els = |p: &Priced| p.line["elements"].as_array().into_iter().flatten().filter_map(|e| e.as_str().map(String::from)).collect::<Vec<_>>();
+    // A line's objects, then the ids it was counted by that are not objects (Q6529).
+    let ids = |p: &Priced| {
+        p.line["elements"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .chain(p.line["sources"].as_array().into_iter().flatten())
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect::<Vec<_>>()
+    };
     for p in priced.iter().filter(|p| p.line["category"].as_str() == Some("wire")) {
-        push("wire_ft", p.net, els(p));
+        push("wire_ft", p.net, ids(p));
         let ground = p.line["item"].as_str().is_some_and(|i| i.to_ascii_lowercase().contains("ground"));
         if !ground && large(p.line["size"].as_str().unwrap_or_default()) {
-            push("large_pull_ft", p.net, els(p));
+            push("large_pull_ft", p.net, ids(p));
         }
     }
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -133,7 +143,7 @@ pub(super) fn facts(sp: &cadaddy_walk3d::BuildingSpec, st: &Map<String, Value>, 
             }
         }
     }
-    let all: Vec<String> = priced.iter().filter_map(|p| p.line["elements"].get(0).and_then(Value::as_str).map(String::from)).collect();
+    let all: Vec<String> = priced.iter().filter_map(|p| ids(p).into_iter().next()).collect();
     if !priced.is_empty() {
         push("floors", sp.levels.len().max(1) as f64, all.clone());
         push("always", 1.0, all.clone());

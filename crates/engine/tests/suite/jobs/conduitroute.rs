@@ -203,12 +203,16 @@ fn a_long_homerun_is_upsized_for_voltage_drop_and_fill_sizes_the_raceway() {
     assert!(five["drop_pct"].as_f64().is_some_and(|p| p <= 3.0) && five["drop_pct_before"].as_f64().is_some_and(|p| p > 3.0), "{five}");
     let wires = count(&mut s, json!({"kind": "wire", "circuit": "LP1-5", "group_by": "size"}));
     assert!(wires["rows"].as_array().is_some_and(|rows| rows.iter().any(|x| x["size"] == json!("#8"))), "{wires}");
-    // LP1-1: a #10 homerun alone holds its drop; its legs between its boxes stay #12.
-    let one = up.iter().find(|u| u["circuit"] == json!("LP1-1")).cloned().unwrap_or_default();
-    assert_eq!((one["to"].clone(), one["homerun"].clone()), (json!("2#12 + 1#12G"), json!("2#10 + 1#10G")), "{one}");
+    // LP1-1: chained box to box its farthest box is past what #12 reaches at 3%; its boxes
+    // branch instead (Q6340: the field's way, rather than a #10 homerun), and #12 holds the drop.
+    assert!(!up.iter().any(|u| u["circuit"] == json!("LP1-1")), "{up:#?}");
+    let all = s.execute("conduit.route", &json!({})).expect("report");
+    let branched = all["branched_trees"]["items"].as_array().cloned().unwrap_or_default();
+    let one = branched.iter().find(|b| b["circuit"] == json!("LP1-1")).cloned().unwrap_or_default();
+    assert!(one["branched_ft"].as_f64() < one["chained_ft"].as_f64() && one["by"].as_str().is_some_and(|b| b.contains("210.19")), "{one}");
     let legs = count(&mut s, json!({"kind": "wire", "circuit": "LP1-1", "group_by": "size"}));
     assert!(legs["rows"].as_array().is_some_and(|rows| !rows.is_empty() && rows.iter().all(|x| x["size"] == json!("#12"))), "{legs}");
-    // Fill: the shared homerun's four conductors and a ground (upsized for their lengths) in 3/4"
+    // Fill: the shared homerun's four conductors and a ground in 3/4"
     // EMT, the minimum (a company default).
     let f = s.execute("conduit.route", &json!({"section": "fill"})).expect("fill");
     let shared = f["fill"].as_array().and_then(|a| a.iter().find(|x| x["circuits"] == json!(["LP1-1", "LP1-3"])).cloned()).unwrap_or_default();

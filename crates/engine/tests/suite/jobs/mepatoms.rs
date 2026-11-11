@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 /// A made-up one-storey building: panel LP1 (fed from MDP), a drawn 37' run of 1" conduit, and
 /// circuit LP1-3's estimated route from LP1 to a receptacle: 20'-8" along the ceiling and a
 /// drop to the box (25' in all).
-fn building(wiring: Option<&str>) -> Session {
+pub(crate) fn building(wiring: Option<&str>) -> Session {
     building_with(wiring, "receptacle").0
 }
 

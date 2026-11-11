@@ -629,6 +629,24 @@ fn items_of(texts: &[Txt]) -> Vec<TextItem> {
 
 // ---------------------------------------------------------------- the kinds
 
+/// Whether a schedule titled so lists the kind's objects: the title names the kind's class (the
+/// readers' classes), else its head noun is the kind's (`WALL HEATER SCHEDULE` for an `ELECTRIC
+/// WALL HEATER`). A title naming no object lists another kind, as the readers take it.
+fn schedule_of(def: &Def, title: &str) -> bool {
+    let class = |t: &str| super::doc_objects::class_of(t).map(|c| c.kind.as_str());
+    if let (Some(a), Some(b)) = (class(title), class(&def.name)) {
+        return a == b;
+    }
+    head(&def.key).is_some_and(|h| head(&key_of(title)) == Some(h))
+}
+
+/// Whether a numbered tag (`SD-3`) counts for a kind by its code (`SD`): not when a schedule
+/// lists it as a row of another kind (an air device schedule's diffuser, though the legend's `SD`
+/// is a duct detector). The readers' rule: [`super::doc_objects::of_another_schedule_by`].
+fn numbered_counts(def: &Def, tag: &str, scheduled: &BTreeMap<String, String>) -> bool {
+    super::doc_objects::of_another_schedule_by(tag, scheduled, &|title| schedule_of(def, title)).is_none()
+}
+
 /// Where a kind's definition came from.
 #[derive(Clone, Debug)]
 struct Source {
@@ -659,6 +677,9 @@ struct Def {
 struct Defs {
     list: Vec<Def>,
     by_key: HashMap<String, usize>,
+    /// The marks the set's schedules list (`SD-5` in an air device schedule's MARK column), with
+    /// their schedule's title, by [`super::doc_objects::mark_key`].
+    scheduled: BTreeMap<String, String>,
 }
 
 impl Defs {
@@ -847,6 +868,9 @@ fn read_defs(sheets: &mut [Sheet], keynotes: &super::validate_keynote::Keynotes,
     let d = data();
     for s in sheets.iter_mut() {
         let items = items_of(&s.texts);
+        for (k, title) in super::doc_objects::schedule_marks(&items) {
+            defs.scheduled.entry(k).or_insert(title);
+        }
         // Legends and device schedules.
         let legend = device_types::read_legend(&items);
         s.tables.extend(legend.regions.iter().copied());
@@ -1197,13 +1221,16 @@ fn read_marks(
                 continue;
             }
             let mut hit: BTreeSet<usize> = BTreeSet::new();
-            for c in tag_codes(&t.text) {
+            let codes = tag_codes(&t.text);
+            let full = codes.first().map_or("", String::as_str);
+            for (k, c) in codes.iter().enumerate() {
                 // A lone letter is as often a stroke, a grid or a note's letter as a tag.
                 if c.chars().count() < 2 {
                     continue;
                 }
+                // Its code without its number only when no schedule lists it as another kind's.
                 for i in by_code.get(c.as_str()).into_iter().flatten() {
-                    if defs.list.get(*i).is_some_and(|d| shows(d, s.trade)) {
+                    if defs.list.get(*i).is_some_and(|d| shows(d, s.trade) && (k == 0 || numbered_counts(d, full, &defs.scheduled))) {
                         hit.insert(*i);
                     }
                 }
@@ -1295,9 +1322,10 @@ pub(crate) struct Census {
 }
 
 /// How well an element matches a kind: 5 its mark is one of the kind's codes, 4 its mark is a
-/// code numbered (`FSD-3`) or its kind's words are the kind's, 3 its type's words are, 2 it holds
-/// the kind's words with the same head noun, 1 its kind's words are among the kind's; 0 no match.
-fn score(def: &Def, el: &Census, el_key: &str, name_key: &str, el_trade: Option<&str>) -> u8 {
+/// code numbered (`FSD-3`, unless a schedule lists it as another kind's) or its kind's words are
+/// the kind's, 3 its type's words are, 2 it holds the kind's words with the same head noun, 1 its
+/// kind's words are among the kind's; 0 no match.
+fn score(def: &Def, el: &Census, el_key: &str, name_key: &str, el_trade: Option<&str>, scheduled: &BTreeMap<String, String>) -> u8 {
     // A tag is the kind's only on its own trade's sheets (`SD` a duct detector on the mechanical
     // plans, a smoke detector on the electrical ones).
     let own = def.trades.is_empty() || el_trade.is_none_or(|t| t == "general" || def.trades.contains(t));
@@ -1305,7 +1333,8 @@ fn score(def: &Def, el: &Census, el_key: &str, name_key: &str, el_trade: Option<
         if def.codes.contains(&m) {
             return 5;
         }
-        if tag_codes(&m).iter().skip(1).any(|c| def.codes.contains(c)) {
+        let codes = tag_codes(&m);
+        if codes.iter().skip(1).any(|c| def.codes.contains(c)) && numbered_counts(def, codes.first().map_or("", String::as_str), scheduled) {
             return 4;
         }
     }
@@ -1332,10 +1361,14 @@ fn score(def: &Def, el: &Census, el_key: &str, name_key: &str, el_trade: Option<
     0
 }
 
-/// Whether an element carries one of the kind's tags as its mark (`FSD`, `FSD-3`).
-fn by_mark(def: &Def, el: &Census, el_trade: Option<&str>) -> bool {
+/// Whether an element carries one of the kind's tags as its mark (`FSD`, `FSD-3` unless a
+/// schedule lists it as another kind's).
+fn by_mark(def: &Def, el: &Census, el_trade: Option<&str>, scheduled: &BTreeMap<String, String>) -> bool {
     let own = def.trades.is_empty() || el_trade.is_none_or(|t| t == "general" || def.trades.contains(t));
-    own && el.mark.as_deref().map(|m| m.trim().to_ascii_uppercase()).is_some_and(|m| tag_codes(&m).iter().any(|c| def.codes.contains(c)))
+    let Some(m) = el.mark.as_deref().map(|m| m.trim().to_ascii_uppercase()).filter(|_| own) else { return false };
+    let codes = tag_codes(&m);
+    let full = codes.first().map_or("", String::as_str);
+    codes.iter().enumerate().any(|(k, c)| def.codes.contains(c) && (k == 0 || numbered_counts(def, full, scheduled)))
 }
 
 // ---------------------------------------------------------------- checking
@@ -1457,7 +1490,7 @@ fn assign<'c>(inp: &Input<'c>, rd: &Reading, on_scope: &dyn Fn(&str) -> bool) ->
     for el in inp.census.iter().filter(|e| on_scope(&e.level)) {
         let ek = key_of(&el.kind);
         let nk = el.name.as_deref().map(key_of).unwrap_or_default();
-        let scores: Vec<u8> = defs.list.iter().map(|d| score(d, el, &ek, &nk, rd.trade_of(el, d))).collect();
+        let scores: Vec<u8> = defs.list.iter().map(|d| score(d, el, &ek, &nk, rd.trade_of(el, d), &defs.scheduled)).collect();
         for (i, s) in scores.iter().enumerate() {
             if *s >= 2
                 && let Some(v) = any.get_mut(i)
@@ -1637,7 +1670,7 @@ pub(crate) fn check(inp: &Input, r: &Effective, rd: &Reading, asg: &Assigned) ->
             // own tag (an element matched by its kind's words may be one the plans mark otherwise,
             // and a keynote marks only the ones it calls for).
             let slack = abs.max((share * expected as f64).round());
-            let marked = elements.iter().filter(|e| by_mark(def, e, trade_of_el(e, def))).count();
+            let marked = elements.iter().filter(|e| by_mark(def, e, trade_of_el(e, def), &defs.scheduled)).count();
             let under = expected as f64 - m_n as f64 > slack;
             let over = !def.codes.is_empty() && marked as f64 - expected as f64 > slack;
             if expected > 0 && (under || over) { ("fail", 2, "medium") } else { ("pass", 4, "low") }
@@ -1680,7 +1713,7 @@ pub(crate) fn check(inp: &Input, r: &Effective, rd: &Reading, asg: &Assigned) ->
             "typical": typical_json,
             "unplaced": c.unplaced,
             "model": m_n,
-            "model_by_tag": elements.iter().filter(|e| by_mark(def, e, trade_of_el(e, def))).count(),
+            "model_by_tag": elements.iter().filter(|e| by_mark(def, e, trade_of_el(e, def), &defs.scheduled)).count(),
             "model_shared": shared,
             "model_elements": elements.iter().take(MAX_LISTED).map(|e| e.handle.clone()).collect::<Vec<_>>(),
             "model_kinds": elements.iter().map(|e| e.kind.as_str()).collect::<BTreeSet<_>>().into_iter().take(6).collect::<Vec<_>>(),
@@ -1858,6 +1891,38 @@ mod tests {
         assert_eq!(tag_codes("(MD)"), vec!["MD".to_string()]);
         assert_eq!(tag_codes("S3"), vec!["S3".to_string()]);
         assert!(tag_codes("PROVIDE A NEW DAMPER HERE").is_empty());
+    }
+
+    #[test]
+    fn a_numbered_tag_is_its_codes_kind_unless_another_kinds_schedule_lists_it() {
+        let def =
+            |name: &str, code: &str| Def { key: key_of(name), name: name.into(), codes: [code.to_string()].into_iter().collect(), ..Def::default() };
+        let detector = def("DUCT MOUNTED SMOKE DETECTOR", "SD");
+        let heater = def("ELECTRIC WALL HEATER", "EWH");
+        let scheduled: BTreeMap<String, String> = [
+            ("SD-1", "GRILLE, REGISTER AND DIFFUSER SCHEDULE"),
+            ("SD-7", "DUCT SMOKE DETECTOR SCHEDULE"),
+            ("SD-8", ""),
+            ("EWH-2", "WALL HEATER SCHEDULE"),
+            ("EWH-3", "FAN SCHEDULE"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        // By the readers' classes (a detector's schedule), else by the kind's words.
+        assert!(!numbered_counts(&detector, "SD-1", &scheduled));
+        assert!(numbered_counts(&detector, "SD-7", &scheduled));
+        assert!(!numbered_counts(&detector, "SD-8", &scheduled), "an untitled schedule's row is another's");
+        assert!(numbered_counts(&detector, "SD-4", &scheduled), "no schedule lists it");
+        assert!(numbered_counts(&heater, "EWH-2", &scheduled));
+        assert!(!numbered_counts(&heater, "EWH-3", &scheduled));
+        // A model element's mark follows the same rule; its full code always counts.
+        let el = |m: &str| Census { handle: "1".into(), kind: "device".into(), mark: Some(m.into()), name: None, level: "L1".into(), source: None };
+        assert!(!by_mark(&detector, &el("SD-1"), None, &scheduled));
+        assert!(by_mark(&detector, &el("SD-7"), None, &scheduled));
+        assert!(by_mark(&detector, &el("SD"), None, &scheduled));
+        assert_eq!(score(&detector, &el("SD-1"), "device", "", None, &scheduled), 0);
+        assert_eq!(score(&detector, &el("SD-4"), "device", "", None, &scheduled), 4);
     }
 
     #[test]
