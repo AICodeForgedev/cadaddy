@@ -2154,7 +2154,9 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         // The system kind's trade (Q6528); a plumbing pipe that carries refrigerant, condensate
         // or hydronic water is the mechanical trade's (Q6492).
         let trade = match trade_of(&p, "plumbing") {
-            "plumbing" if pipe_trade(&p).unwrap_or_else(|| cadaddy_walk3d::pipeservice::pipe_trade(&st(&p, "system"), "")) == "mechanical" => "mechanical",
+            "plumbing" if pipe_trade(&p).unwrap_or_else(|| cadaddy_walk3d::pipeservice::pipe_trade(&st(&p, "system"), "")) == "mechanical" => {
+                "mechanical"
+            }
             t => t,
         };
         add(
