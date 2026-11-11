@@ -2,8 +2,9 @@
 //! Read without unsafe code: the peak from `getrusage` on Linux and macOS (its maximum resident
 //! size), Windows through PowerShell (`PeakWorkingSet64`); the memory now from Linux's
 //! `/proc/self/status`, macOS's `ps`, the same PowerShell call. On Windows that call takes about
-//! 0.3 s, so it runs in the background and a stage's line says the latest reading (Q6329: seven
-//! stages waited 2 s on it in a job that built nothing).
+//! 0.3 s: a stage line within `FRESH_S` (2 s) of the last reading says the one taken in the
+//! background since (Q6329: seven stages of a job that built nothing waited 2 s on it); after a
+//! longer stage it is read then, so the peak is the stage's own.
 
 /// The resident memory now and the peak so far, MB; None where it can't be read.
 pub(crate) fn process_mb() -> Option<(u64, u64)> {
@@ -28,23 +29,41 @@ fn read() -> Option<(u64, u64)> {
     Some((now, peak_mb().or_else(|| kb("VmHWM:").map(|k| k / 1024)).unwrap_or(now)))
 }
 
-/// The latest reading taken in the background, and whether one is being taken.
+/// A reading this recent (seconds) is said again for a stage line, and a new one taken in the
+/// background; an older one is read again before the line (a long stage's peak is its own).
 #[cfg(target_os = "windows")]
-static LATEST: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
+const FRESH_S: f64 = 2.0;
+
+/// The latest reading and when it was taken, and whether one is being taken in the background.
+#[cfg(target_os = "windows")]
+static LATEST: std::sync::Mutex<Option<((u64, u64), web_time::Instant)>> = std::sync::Mutex::new(None);
 #[cfg(target_os = "windows")]
 static READING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The latest reading (none before the first is in), and a new one started in the background
-/// unless one is being taken: never waits for PowerShell.
+#[cfg(target_os = "windows")]
+fn keep(v: (u64, u64)) {
+    if let Ok(mut l) = LATEST.lock() {
+        *l = Some((v, web_time::Instant::now()));
+    }
+}
+
+/// None before the first reading is in (it is taken in the background), the latest when it is
+/// `FRESH_S` old or less (a new one started in the background), else a reading taken now.
 #[cfg(target_os = "windows")]
 fn read() -> Option<(u64, u64)> {
     use std::sync::atomic::Ordering;
+    let latest = LATEST.lock().ok().and_then(|l| *l);
+    if let Some((_, at)) = latest
+        && at.elapsed().as_secs_f64() > FRESH_S
+    {
+        let v = read_now()?;
+        keep(v);
+        return Some(v);
+    }
     if !READING.swap(true, Ordering::AcqRel) {
         let started = std::thread::Builder::new().name("memstat".into()).spawn(|| {
-            if let Some(v) = read_now()
-                && let Ok(mut l) = LATEST.lock()
-            {
-                *l = Some(v);
+            if let Some(v) = read_now() {
+                keep(v);
             }
             READING.store(false, Ordering::Release);
         });
@@ -52,7 +71,7 @@ fn read() -> Option<(u64, u64)> {
             READING.store(false, Ordering::Release);
         }
     }
-    LATEST.lock().ok().and_then(|l| *l)
+    latest.map(|(v, _)| v)
 }
 
 #[cfg(target_os = "windows")]
