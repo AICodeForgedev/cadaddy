@@ -360,6 +360,7 @@ fn leak_what(what: &str) -> &'static str {
         "floor_box" => "floor_box",
         "ev_charger" => "ev_charger",
         "site_power" => "site_power",
+        "branch_below" => "branch_below",
         "water" => "water",
         "sanitary" => "sanitary",
         "vent" => "vent",
@@ -964,6 +965,13 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                     format!("out of panel {} to the site; the site end by rule outside the nearest slab edge (locate from the site plan)", pn.tag),
                 ));
             }
+            // The slab level's branch homeruns the documents route below the slab (Q6348): the
+            // routing carries each under the floor, stubbed up into its panel (every routing).
+            "branch_below" if c.said_buried => fates.push(fate(
+                "placed_elsewhere",
+                0,
+                format!("the routing carries the {slab} branch homeruns below the slab, as the note says (every routing)"),
+            )),
             "floor_box" => fates.push(unplaced(
                 "no keynote tag locates the floor box".into(),
                 format!("{} calls for {}; no plan tag locates the box. Where is it?", c.cite(), c.text.trim()),
@@ -2032,6 +2040,25 @@ mod tests {
         let cw = c.iter().find(|c| c.text.contains("COLD WATER PIPING (BELOW")).expect("cw");
         assert_eq!((cw.mark.as_deref(), cw.what.as_str()), (Some("CWUS"), "water"));
         assert_eq!(lg.cite(), "E-101 legend SANBF");
+    }
+
+    /// Q6348: a note routing the slab level's branch homeruns below the slab is work the routing
+    /// carries (none of its own here); one keeping them overhead is no buried work.
+    #[test]
+    fn a_note_routing_the_homeruns_below_the_slab_is_the_routings() {
+        let texts = vec![
+            t(100.0, 500.0, "ALL BRANCH CIRCUIT HOMERUNS ON THE GROUND FLOOR SHALL BE ROUTED BELOW SLAB IN SCH. 40 PVC.", 6.0),
+            t(100.0, 400.0, "ROUTE ALL HOMERUNS IN THE CEILING SPACE ABOVE.", 6.0),
+        ];
+        let c = callouts("E-101", &texts);
+        let home = c.iter().find(|c| c.what == "branch_below").expect("the homeruns' note");
+        assert!(home.said_buried && home.trade == "E", "{home:?}");
+        assert!(!c.iter().any(|c| c.text.contains("CEILING SPACE")), "{c:?}");
+        let (runs, fates) = place(&spec(), &[], &c, &|_| false);
+        assert!(runs.is_empty());
+        let f = fates.iter().find(|f| c.get(f.callout).is_some_and(|x| x.what == "branch_below")).expect("its fate");
+        assert_eq!(f.status, "placed_elsewhere", "{f:?}");
+        assert!(f.how.contains("routing"), "{f:?}");
     }
 
     fn spec() -> BuildingSpec {

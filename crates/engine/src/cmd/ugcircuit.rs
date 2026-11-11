@@ -419,6 +419,66 @@ pub(crate) fn assign(sp: &mut BuildingSpec, runs: &mut [MepRun], min: Option<(f6
     out
 }
 
+/// The slab level's routed branch homeruns carried below the slab where the documents route them
+/// so (Q6348; `why`: the note): each of its stretches under the floor at the conduit's depth, down
+/// from its box and up into its panel's bottom; derived, its basis the note. How many.
+pub(crate) fn bury_homeruns(sp: &BuildingSpec, runs: &mut [MepRun], why: &str) -> usize {
+    let Some(slab) = super::ugplan::slab_level(sp) else { return 0 };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let depth = super::ugplan::rules().depths.conduit_under_slab_ft;
+    let tol = upf / 96.0;
+    let len = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let mut n = 0;
+    for r in runs.iter_mut().take(MAX_RUNS) {
+        let home = r.system == conduitroute::BRANCH_SYSTEM && r.id.contains(":home:") && r.top_ft.is_none();
+        if !home || !r.level.eq_ignore_ascii_case(&slab) || r.points.len() < 2 || r.bottoms_ft.iter().any(|b| *b < 0.0) {
+            continue;
+        }
+        let size = r.size_in.first().copied().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.5);
+        let under = -(depth + size / 12.0);
+        let segs = r.points.len() - 1;
+        let last_b = r.bottoms_ft.last().copied().unwrap_or(0.0);
+        r.bottoms_ft.resize(segs, last_b);
+        let mut flat = false;
+        for i in 0..segs {
+            if let (Some(a), Some(b)) = (r.points.get(i), r.points.get(i + 1))
+                && len(*a, *b) > tol
+                && let Some(z) = r.bottoms_ft.get_mut(i)
+            {
+                *z = under;
+                flat = true;
+            }
+        }
+        if !flat {
+            continue;
+        }
+        // Up into its panel's bottom (a riser into a top entry rises to the bottom instead).
+        if let Some(end) = r.points.last().copied() {
+            let reach = upf;
+            let gear = sp.mep.equipment.iter().filter(|e| e.level.eq_ignore_ascii_case(&slab)).find(|e| {
+                end[0] >= e.min[0].min(e.max[0]) - reach
+                    && end[0] <= e.min[0].max(e.max[0]) + reach
+                    && end[1] >= e.min[1].min(e.max[1]) - reach
+                    && end[1] <= e.min[1].max(e.max[1]) + reach
+            });
+            if let Some(g) = gear {
+                let rise = if g.bottom_ft.is_finite() { g.bottom_ft.max(0.0) } else { 0.0 };
+                let last_flat = r.points.get(segs - 1).zip(r.points.get(segs)).is_some_and(|(a, b)| len(*a, *b) > tol);
+                if last_flat {
+                    r.points.push(end);
+                    r.bottoms_ft.push(rise);
+                } else if let Some(z) = r.bottoms_ft.get_mut(segs - 1) {
+                    *z = rise;
+                }
+            }
+        }
+        let basis = format!("routed below the slab as the documents route the {slab} homeruns ({why})");
+        super::provenance::set_run(r, cadaddy_walk3d::Made::Derived, basis);
+        n += 1;
+    }
+    n
+}
+
 /// Whether site work's buried runs already carry circuit `label` (`A-78`: a breaker of it).
 pub(crate) fn site_carries(sp: &BuildingSpec, label: &str) -> bool {
     let want = breakers(sp, label);
@@ -589,6 +649,50 @@ mod tests {
         // Again: one tag each, not two.
         let _ = assign(&mut sp, &mut runs, None);
         assert_eq!(sp.tags.iter().filter(|t| is_buried(&t.id)).count(), 3);
+    }
+
+    #[test]
+    fn a_slab_homerun_the_documents_bury_runs_under_the_floor_into_its_panels_bottom() {
+        let mut sp = spec();
+        sp.levels = serde_json::from_value(serde_json::json!([
+            {"name": "L1", "elevation_ft": 0.0, "height_ft": 12.0},
+            {"name": "L2", "elevation_ft": 12.0, "height_ft": 10.0}
+        ]))
+        .unwrap_or_default();
+        sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+            tag: "LP2".into(),
+            level: "L1".into(),
+            min: [-24.0, -6.0],
+            max: [-4.0, 6.0],
+            bottom_ft: 2.5,
+            height_ft: 4.0,
+            ..Default::default()
+        });
+        // As the router lays it: up from the box (a zero-length riser), across the ceiling, into
+        // the panel's side.
+        let home = |level: &str| {
+            let mut r = super::super::printcond::run(conduitroute::BRANCH_SYSTEM, level, "E-9", vec![[240.0, 120.0], [240.0, 120.0], [240.0, 0.0], [-4.0, 0.0]], 0.75, 0.0);
+            r.id = format!("circuit:{level}:home:LP2-5:0#home");
+            r.bottoms_ft = vec![1.75, 9.25, 6.5];
+            r.height_source = "routed".into();
+            r
+        };
+        let mut other = home("L1");
+        other.system = "SA".into();
+        let mut runs = vec![home("L1"), home("L2"), other];
+        assert_eq!(bury_homeruns(&sp, &mut runs, "E-9 note: ALL HOMERUNS BELOW SLAB"), 1);
+        let r = &runs[0];
+        let under = -(super::super::ugplan::rules().depths.conduit_under_slab_ft + 0.75 / 12.0);
+        assert_eq!(r.bottoms_ft.first(), Some(&1.75), "down from its box: {r:?}");
+        assert!(r.bottoms_ft.get(1..3).is_some_and(|b| b.iter().all(|z| (z - under).abs() < 1e-9)), "{r:?}");
+        assert_eq!((r.points.last(), r.bottoms_ft.last()), (Some(&[-4.0, 0.0]), Some(&2.5)), "up into the panel's bottom: {r:?}");
+        assert_eq!(r.made, cadaddy_walk3d::Made::Derived);
+        assert!(r.basis.contains("ALL HOMERUNS BELOW SLAB"), "{}", r.basis);
+        assert!(super::super::ugplan::below_slab(&sp, r));
+        // Upstairs and other systems as they were; a second pass changes nothing.
+        assert_eq!(runs[1].bottoms_ft, vec![1.75, 9.25, 6.5]);
+        assert_eq!(runs[2].bottoms_ft, vec![1.75, 9.25, 6.5]);
+        assert_eq!(bury_homeruns(&sp, &mut runs, "again"), 0);
     }
 
     #[test]
