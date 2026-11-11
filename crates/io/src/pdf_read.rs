@@ -122,6 +122,15 @@ pub const HIDDEN_TEXT_LAYER: &str = "PDF-HIDDEN-TEXT";
 /// corner and a dash as `EL`.  Readers that take text as evidence (duct sizes and heights) skip
 /// this style.
 pub const OCR_TEXT_STYLE: &str = "PDF-SHX-OCR";
+/// The text style of an OCR reading no hidden text confirms that reads unsure (its weakest
+/// character under [`OCR_CELL_LOW_CONFIDENCE`]): marked so a reader (or a person) can find the
+/// readings to check. It starts with [`OCR_TEXT_STYLE`]'s name.
+pub const OCR_UNSURE_STYLE: &str = "PDF-SHX-OCR-UNSURE";
+
+/// Whether a text style is one of the OCR's ([`OCR_TEXT_STYLE`], [`OCR_UNSURE_STYLE`]).
+pub fn is_ocr_style(style: &str) -> bool {
+    style.get(..OCR_TEXT_STYLE.len()).is_some_and(|s| s.eq_ignore_ascii_case(OCR_TEXT_STYLE))
+}
 
 /// The layer (off) that keeps the strokes recovered text was read from: the TEXT replaces them
 /// on the sheet, and the plotted lettering is still there to check a reading against.
@@ -2699,9 +2708,38 @@ fn ocr_candidate(s: &Stroke, max_seg: f64) -> Option<[f64; 4]> {
     ((b[2] - b[0]) <= max_seg * 2.0 && (b[3] - b[1]) <= max_seg * 2.0).then_some(b)
 }
 
+/// The style a recovered text is written in: the OCR's when no hidden text confirms it, unsure
+/// under [`OCR_CELL_LOW_CONFIDENCE`].
+fn ocr_style(rt: &RecoveredText) -> &'static str {
+    match (rt.unconfirmed, rt.confidence) {
+        (false, _) => "Standard",
+        (true, Some(c)) if c < OCR_CELL_LOW_CONFIDENCE => OCR_UNSURE_STYLE,
+        (true, _) => OCR_TEXT_STYLE,
+    }
+}
+
 /// The confidence (0..1, its weakest character's) under which an OCR reading isn't inserted: at
 /// the template threshold it is as likely a tick, a corner or a symbol's bars as a letter.
 const OCR_MIN_CONFIDENCE: f64 = 0.2;
+
+/// An OCR reading this sure (or surer) on a page lettered in strokes alone anchors a symbol
+/// search as a real text tag does.
+const OCR_TAG_CONFIDENCE: f64 = 0.8;
+
+/// A page with at least this many characters of real (visible) text is lettered in text: its
+/// tables aren't read off strokes cell by cell, nor its tags.
+const OCR_CELLS_REAL_CHARS: usize = 500;
+
+/// Cells holding two letters or digits or more a grid of lines has at least, to be a table whose
+/// cells are read entry by entry.
+const OCR_TABLE_WORDS: usize = 3;
+
+/// A table cell's reading under this confidence is no entry (its strokes are a mark, not a
+/// letter); over it, a lone glyph in a cell is the cell's value.
+const OCR_CELL_MIN_CONFIDENCE: f64 = 0.3;
+/// A table cell's reading under this confidence is counted as unsure ([`OcrReport::cells_low`]):
+/// a table with many is asked about rather than trusted.
+pub const OCR_CELL_LOW_CONFIDENCE: f64 = 0.6;
 
 /// The OCR's readings settled against the page's hidden text. A reading inside a hidden
 /// string's box (where the PDF says that string is written: its start to its end, a letter
@@ -2775,6 +2813,7 @@ fn settle_ocr(ocr: Vec<RecoveredText>, texts: &[TextOut], strokes: &[Stroke], re
                             review: false,
                             strokes_stay: false,
                             rotation: h.rotation,
+                            in_cell: false,
                         })
                     }
                 }
@@ -3331,7 +3370,7 @@ fn recover_outlined_lettering(
     if shapes.is_empty() {
         return read;
     }
-    let (readings, _) = recover_shx_ocr(&shapes, sheet, &HashSet::new(), &outline_of);
+    let (readings, _) = recover_shx_ocr(&shapes, sheet, &HashSet::new(), &outline_of, false);
     // each hidden string's box, a third of a letter round (as `settle_ocr`)
     let hidden: Vec<(&TextOut, [f64; 4])> = texts
         .iter()
@@ -3382,6 +3421,7 @@ fn recover_outlined_lettering(
                         review: false,
                         strokes_stay: false,
                         rotation: h.rotation,
+                        in_cell: false,
                     });
                 }
             }
@@ -3430,6 +3470,9 @@ struct RecoveredText {
     strokes_stay: bool,
     /// The lettering's direction in degrees, counter-clockwise (90: reading up the sheet).
     rotation: f64,
+    /// Read inside a ruled table cell ([`crate::pdf_cells`]): one cell's entry, kept however
+    /// short (a `1`, a `-`).
+    in_cell: bool,
 }
 
 /// Recover SHX-stroked text by matching invisible (hidden) text entities to nearby stroke
@@ -3524,6 +3567,7 @@ fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f
             review: false,
             strokes_stay: false,
             rotation: 0.0,
+            in_cell: false,
         });
     }
     result
@@ -3654,6 +3698,7 @@ fn recover_shx_fallback(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)
             review: false,
             strokes_stay: false,
             rotation: 0.0,
+            in_cell: false,
         });
     }
     result
@@ -4000,11 +4045,26 @@ pub struct OcrReport {
     pub noise_dropped: usize,
     /// Texts read in lettering that runs up or down the sheet.
     pub turned: usize,
+    /// Entries read in ruled table cells, and how many of them read under
+    /// [`OCR_CELL_LOW_CONFIDENCE`].
+    pub cells: usize,
+    pub cells_low: usize,
+    /// Characters of the page's lettering: printed as text (the page's visible text), and drawn
+    /// as strokes and read back (from hidden text or by the OCR), of them read by the OCR alone.
+    pub text_chars: usize,
+    pub stroke_chars: usize,
+    pub unconfirmed_chars: usize,
     /// The texts it recovered, with their confidence.
     pub words: Vec<OcrWord>,
 }
 
 impl OcrReport {
+    /// The share of the page's lettering drawn as strokes (0 when it has none).
+    pub fn stroke_share(&self) -> f64 {
+        let all = self.text_chars + self.stroke_chars;
+        if all == 0 { 0.0 } else { self.stroke_chars as f64 / all as f64 }
+    }
+
     /// The mean confidence of the recovered texts (0 when there are none).
     pub fn mean_confidence(&self) -> f64 {
         if self.words.is_empty() { 0.0 } else { self.words.iter().map(|w| w.confidence).sum::<f64>() / self.words.len() as f64 }
@@ -4073,6 +4133,39 @@ fn drop_stacked_specks(run: &mut Vec<&MatchedGlyph>) {
     }
 }
 
+/// The character of a mark [`join_stacked_marks`] joined into the one over it: no character.
+const STACKED: char = '\u{0}';
+
+/// Marks drawn one over the other are one character: two dashes an equals sign
+/// (`LEVEL 2 = EL 14'-0"`), two specks a colon (`SCALE:`). The lower mark keeps the character,
+/// the upper one becomes [`STACKED`] (its strokes stay the text's).
+fn join_stacked_marks(word: &mut [(&MatchedGlyph, char)]) {
+    let speck = |c: char| matches!(c, '.' | ',' | '\'');
+    for i in 1..word.len() {
+        let (Some(&(a, ca)), Some(&(b, cb))) = (word.get(i - 1), word.get(i)) else { continue };
+        // one over the other: a gap between them, their middles in line (a dot is a tick as
+        // wide as nothing: in line within a quarter of the pair's height)
+        let apart = a.bb[1].max(b.bb[1]) - a.bb[3].min(b.bb[3]);
+        let span = a.bb[3].max(b.bb[3]) - a.bb[1].min(b.bb[1]);
+        let wide = (a.bb[2] - a.bb[0]).max(b.bb[2] - b.bb[0]);
+        let dx = ((a.bb[0] + a.bb[2]) - (b.bb[0] + b.bb[2])).abs() / 2.0;
+        if apart <= 0.0 || dx > (0.25 * span).max(0.25 * wide) {
+            continue;
+        }
+        let joined = match (ca, cb) {
+            ('-', '-') => '=',
+            (x, y) if speck(x) && speck(y) => ':',
+            _ => continue,
+        };
+        if let Some(first) = word.get_mut(i - 1) {
+            first.1 = joined;
+        }
+        if let Some(second) = word.get_mut(i) {
+            second.1 = STACKED;
+        }
+    }
+}
+
 /// Settle the look-alikes of a word (O/0, B/8, I/1, ...): each takes the kind (letter or
 /// digit) most of the sure characters of its part of the word are (the parts split at
 /// punctuation: "LP" and "1A" in "LP-1A"); a part that doesn't say takes its nearest
@@ -4122,7 +4215,27 @@ fn settle_look_alikes(word: &mut [(&MatchedGlyph, char)]) {
         }
         if let Some(part) = word.get_mut(a..b) {
             digit_tail(part);
+            number_lead(part);
         }
+    }
+}
+
+/// A part that starts with a sure digit is a number with its unit after it (`40W`, `2000A`,
+/// `60A`): the rings that follow its digits, up to its first sure letter, are zeros. (Only the
+/// ring: a number's ordinal or unit can start with an S or an I, `1ST`.)
+fn number_lead(part: &mut [(&MatchedGlyph, char)]) {
+    if !part.first().is_some_and(|(g, c)| g.alt.is_none() && c.is_ascii_digit()) {
+        return;
+    }
+    for (g, ch) in part.iter_mut().skip(1) {
+        if ch.is_ascii_digit() {
+            continue;
+        }
+        if *ch == 'O' && g.alt == Some('0') {
+            *ch = '0';
+            continue;
+        }
+        break;
     }
 }
 
@@ -4156,16 +4269,18 @@ fn digit_tail(part: &mut [(&MatchedGlyph, char)]) {
 /// strokes (a word read upside down too), the reading with more letters wins, then the surer.
 ///
 /// `shapes`: for strokes that are a filled glyph's centre lines, (which glyph, its holes) — the
-/// holes narrow the characters it can be.
+/// holes narrow the characters it can be. `cells`: read the lettering in the page's ruled table
+/// cells cell by cell ([`crate::pdf_cells`]); a cell's entry stands like a word, however short.
 fn recover_shx_ocr(
     strokes: &[Stroke],
     sheet: (f64, f64),
     excluded: &HashSet<usize>,
     shapes: &HashMap<usize, (usize, usize)>,
+    cells: bool,
 ) -> (Vec<RecoveredText>, OcrReport) {
-    let (upright, mut report) = recover_shx_ocr_upright(strokes, sheet, excluded, shapes);
+    let (upright, mut report) = recover_shx_ocr_upright(strokes, sheet, excluded, shapes, cells);
     let alnum = |rt: &RecoveredText| rt.value.chars().filter(char::is_ascii_alphanumeric).count();
-    let (mut result, stray): (Vec<RecoveredText>, Vec<RecoveredText>) = upright.into_iter().partition(|rt| alnum(rt) >= 2);
+    let (mut result, stray): (Vec<RecoveredText>, Vec<RecoveredText>) = upright.into_iter().partition(|rt| alnum(rt) >= 2 || rt.in_cell);
     let mut taken: HashSet<usize> = excluded.clone();
     for rt in &result {
         taken.extend(&rt.stroke_indices);
@@ -4187,7 +4302,7 @@ fn recover_shx_ocr(
                 order: s.order,
             })
             .collect();
-        let (texts, _) = recover_shx_ocr_upright(&turned, (sheet.1, sheet.0), &taken, shapes);
+        let (texts, _) = recover_shx_ocr_upright(&turned, (sheet.1, sheet.0), &taken, shapes, false);
         for mut rt in texts.into_iter().filter(|rt| alnum(rt) >= 2) {
             rt.at = back(rt.at);
             rt.rotation = rotation;
@@ -4208,12 +4323,14 @@ fn recover_shx_ocr(
     (result, report)
 }
 
-/// Read the lettering that runs across the sheet (left to right, upright or slanted).
+/// Read the lettering that runs across the sheet (left to right, upright or slanted); with
+/// `cells`, the lettering in ruled table cells cell by cell.
 fn recover_shx_ocr_upright(
     strokes: &[Stroke],
     sheet: (f64, f64),
     excluded: &HashSet<usize>,
     shapes: &HashMap<usize, (usize, usize)>,
+    cells: bool,
 ) -> (Vec<RecoveredText>, OcrReport) {
     let mut report = OcrReport::default();
     let templates = shx_templates();
@@ -4222,6 +4339,10 @@ fn recover_shx_ocr_upright(
     }
 
     let max_seg = ocr_max_seg(sheet);
+    // The page's table rules: never letters themselves (a column drawn a piece per row reads
+    // like an `I`), and the cells they close are read entry by entry.
+    let rules =
+        if cells { crate::pdf_cells::Cells::of(strokes.iter().map(|s| (s.pts.as_slice(), s.closed))) } else { crate::pdf_cells::Cells::default() };
 
     // ---- phase 1: find candidate SHX strokes ----
     struct Cand {
@@ -4231,7 +4352,7 @@ fn recover_shx_ocr_upright(
     }
     let mut cands: Vec<Cand> = Vec::new();
     for (i, s) in strokes.iter().enumerate() {
-        if excluded.contains(&i) {
+        if excluded.contains(&i) || rules.rule_strokes.contains(&i) {
             continue;
         }
         if let Some(b) = ocr_candidate(s, max_seg) {
@@ -4490,10 +4611,47 @@ fn recover_shx_ocr_upright(
     }
 
     // ---- phase 4: lines by baseline and height, then texts by spacing ----
+    // the page's letter height: its letters' median (a lone dash's line has none)
+    let letter_h = {
+        let mut hs: Vec<f64> = matched.iter().filter(|g| !small_glyph(g.ch)).map(|g| g.bb[3] - g.bb[1]).filter(|h| h.is_finite()).collect();
+        hs.sort_by(f64::total_cmp);
+        hs.get(hs.len() / 2).copied().unwrap_or(0.0)
+    };
     let lines = ocr_lines(&mut matched);
+    // Each glyph's ruled table cell, by the height of its line (a dash alone on its line by the
+    // page's letter height). A grid of lines is a table when its cells hold words, more of them
+    // than cells holding straight strokes only: plan linework ruled like one (a roof's trusses,
+    // a dashed line across them, a label between) holds dashes and ticks mostly.
+    let cell_h =
+        |line: &TextLine| if line.members.iter().filter_map(|&m| matched.get(m)).all(|g| small_glyph(g.ch)) { letter_h } else { line.height };
+    // per cell: its table, its letters and digits, its glyphs, whether they are all straight
+    let mut in_cells: HashMap<[i64; 4], ((i64, i64), usize, usize, bool)> = HashMap::new();
+    for line in &lines {
+        let h = cell_h(line);
+        for g in line.members.iter().filter_map(|&m| matched.get(m)) {
+            if let Some((c, table)) = rules.cell_of(g.bb, h) {
+                let e = in_cells.entry(c.map(|v| (v * 8.0).round() as i64)).or_insert((table, 0, 0, true));
+                e.1 += usize::from(g.ch.is_ascii_alphanumeric());
+                e.2 += 1;
+                e.3 &= g.straight;
+            }
+        }
+    }
+    // per table: (cells holding words, cells holding straight strokes only)
+    let mut table_cells: HashMap<(i64, i64), (usize, usize)> = HashMap::new();
+    for (table, letters, glyphs, straight) in in_cells.values() {
+        let e = table_cells.entry(*table).or_default();
+        // (two dashes of two dashed lines side by side are no word)
+        e.0 += usize::from(*letters >= 2 && !*straight);
+        e.1 += usize::from(*glyphs >= 1 && *straight);
+    }
+    let worded: HashMap<(i64, i64), usize> =
+        table_cells.into_iter().filter(|(_, (words, sticks))| words >= sticks).map(|(t, (words, _))| (t, words)).collect();
 
     let mut result: Vec<RecoveredText> = Vec::new();
     let mut marks: Vec<RecoveredText> = Vec::new();
+    // the texts read in each table cell so far: (cell, index in `result`)
+    let mut cell_texts: Vec<([i64; 4], usize)> = Vec::new();
     for mut line in lines {
         line.members.sort_by(|&a, &b| {
             let (ax, bx) = (matched.get(a).map_or(0.0, |g| g.bb[0]), matched.get(b).map_or(0.0, |g| g.bb[0]));
@@ -4512,18 +4670,29 @@ fn recover_shx_ocr_upright(
             let (cx, w) = ((g.bb[0] + g.bb[2]) / 2.0, (g.bb[2] - g.bb[0]).max(nominal));
             (cx - w / 2.0, cx + w / 2.0)
         };
-        // split the line into texts at wide gaps (about two spaces); a narrower gap is a space
-        let mut runs: Vec<Vec<&MatchedGlyph>> = Vec::new();
+        // each glyph's ruled table cell (its corners in eighths of a point; none off the tables)
+        let line_h = cell_h(&line);
+        let cell_of = |g: &MatchedGlyph| {
+            rules
+                .cell_of(g.bb, line_h)
+                .filter(|(_, table)| worded.get(table).is_some_and(|n| *n >= OCR_TABLE_WORDS))
+                .map(|(c, _)| c.map(|v| (v * 8.0).round() as i64))
+        };
+        // split the line into texts at wide gaps (about two spaces); a narrower gap is a space.
+        // A cell's lettering is one text whatever its gaps, and no text runs on past its cell.
+        let mut runs: Vec<(Option<[i64; 4]>, Vec<&MatchedGlyph>)> = Vec::new();
         let mut prev_end = f64::MIN;
         for g in line.members.iter().filter_map(|&m| matched.get(m)) {
             let (x0, x1) = span(g);
+            let cell = cell_of(g);
             match runs.last_mut() {
-                Some(run) if x0 - prev_end <= cw * 1.8 => run.push(g),
-                _ => runs.push(vec![g]),
+                Some((in_cell, run)) if *in_cell == cell && (cell.is_some() || x0 - prev_end <= cw * 1.8) => run.push(g),
+                _ => runs.push((cell, vec![g])),
             }
             prev_end = prev_end.max(x1);
         }
-        for mut run in runs {
+        for (cell, mut run) in runs {
+            let in_cell = cell.is_some();
             drop_stacked_specks(&mut run);
             // words (split at spaces), each glyph with the character it reads as
             let mut words: Vec<Vec<(&MatchedGlyph, char)>> = Vec::new();
@@ -4555,11 +4724,12 @@ fn recover_shx_ocr_upright(
             let run: Vec<&MatchedGlyph> = words.iter().flatten().map(|(g, _)| *g).collect();
             let mut value = String::new();
             for word in &mut words {
+                join_stacked_marks(word);
                 settle_look_alikes(word);
                 if !value.is_empty() {
                     value.push(' ');
                 }
-                value.extend(word.iter().map(|(_, c)| *c));
+                value.extend(word.iter().map(|(_, c)| *c).filter(|c| *c != STACKED));
             }
             // two ticks side by side are a double quote
             let value = value.replace("''", "\"");
@@ -4569,11 +4739,16 @@ fn recover_shx_ocr_upright(
             // linework reads as lone glyphs and runs of straight strokes (hatching: "////"); a
             // lone loop is a small circle or box as often as an O, and a row of nothing but
             // loops is a row of circles or boxes ("OOO", or "DDD" for boxes read turned)
-            let noise =
-                alnum == 0 || run.iter().all(|g| g.straight) || run.iter().all(|g| g.ring) || (lone && run.iter().any(|g| g.confidence < 0.7));
+            // In a table cell the entry is all there is: a lone `1`, a `-` for none, an `O` are
+            // its values (only specks and a reading under the cell floor are not).
+            let noise = if in_cell {
+                value.chars().all(|c| matches!(c, '.' | ',' | '\'' | ' ')) || confidence < OCR_CELL_MIN_CONFIDENCE
+            } else {
+                alnum == 0 || run.iter().all(|g| g.straight) || run.iter().all(|g| g.ring) || (lone && run.iter().any(|g| g.confidence < 0.7))
+            };
             // a lone letter or digit can still be a mark (a circuit number, a fixture type):
             // it is judged once the page's words give its letter heights
-            let mark = noise && lone && alnum == 1 && run.first().is_some_and(|g| lone_mark_shape(g, strokes));
+            let mark = !in_cell && noise && lone && alnum == 1 && run.first().is_some_and(|g| lone_mark_shape(g, strokes));
             if noise && !mark {
                 report.noise_dropped += 1;
                 continue;
@@ -4581,12 +4756,18 @@ fn recover_shx_ocr_upright(
             let Some(first) = run.first() else { continue };
             let x0 = run.iter().map(|g| g.bb[0]).fold(f64::MAX, f64::min);
             let y0 = run.iter().filter(|g| !small_glyph(g.ch)).map(|g| g.bb[1]).fold(f64::MAX, f64::min);
-            let y0 = if y0 == f64::MAX { first.bb[1] } else { y0 };
+            // A cell's lone dash stands as its row's lettering does: on the baseline (half a
+            // letter under it), a letter high.
+            let (y0, height) = match y0 {
+                y if y < f64::MAX => (y, h),
+                _ if in_cell && letter_h > 0.0 => (first.bb[1] - 0.5 * letter_h, letter_h),
+                _ => (first.bb[1], h),
+            };
             let stroke_indices: HashSet<usize> = run.iter().flat_map(|g| g.indices.iter().copied()).collect();
             let layer = first.indices.first().and_then(|&i| strokes.get(i)).and_then(|s| s.layer.clone());
             let text = RecoveredText {
                 at: (x0, y0),
-                height: h,
+                height,
                 value,
                 stroke_indices,
                 pen: line.pen,
@@ -4596,10 +4777,31 @@ fn recover_shx_ocr_upright(
                 review: false,
                 strokes_stay: false,
                 rotation: 0.0,
+                in_cell,
             };
-            if mark { marks.push(text) } else { result.push(text) }
+            if mark {
+                marks.push(text);
+                continue;
+            }
+            // A cell's pieces on one baseline (a line the spacing split) are one entry.
+            if let Some(key) = cell {
+                let near = |t: &RecoveredText| (t.at.1 - text.at.1).abs() <= t.height.max(text.height) * 0.3 && t.pen == text.pen;
+                let same = cell_texts.iter().find(|(k, _)| *k == key).map(|(_, i)| *i).filter(|&i| result.get(i).is_some_and(near));
+                if let Some(t) = same.and_then(|i| result.get_mut(i)) {
+                    let (first, second) = if t.at.0 <= text.at.0 { (t.value.clone(), text.value) } else { (text.value, t.value.clone()) };
+                    t.value = format!("{first} {second}");
+                    t.at = (t.at.0.min(text.at.0), t.at.1.min(text.at.1));
+                    t.stroke_indices.extend(text.stroke_indices);
+                    t.confidence = t.confidence.zip(text.confidence).map(|(a, b)| a.min(b));
+                    continue;
+                }
+                cell_texts.push((key, result.len()));
+            }
+            result.push(text);
         }
     }
+    report.cells = result.iter().filter(|t| t.in_cell).count();
+    report.cells_low = result.iter().filter(|t| t.in_cell && t.confidence.unwrap_or(1.0) < OCR_CELL_LOW_CONFIDENCE).count();
     let kept = keep_lone_marks(marks, &result, strokes, max_seg);
     report.noise_dropped += kept.1;
     result.extend(kept.0);
@@ -5781,7 +5983,14 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
         let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
         if has_shx_evidence || lettering_is_strokes {
-            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded, &HashMap::new());
+            // A page lettered in strokes: no real text on it beyond a few labels. Its tables are
+            // read cell by cell, and its sure readings are its tags. A page lettered in real text
+            // has its tables and tags in that text: the strokes left in its cells are symbols (a
+            // legend's), and what the OCR reads off its linework is no tag.
+            let visible_chars: usize =
+                texts.iter().filter(|t| t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)).map(|t| t.value.trim().chars().count()).sum();
+            let stroke_lettered = visible_chars < OCR_CELLS_REAL_CHARS;
+            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded, &HashMap::new(), stroke_lettered);
             // What the PDF's hidden text says is written where the OCR read takes that string;
             // a circle and a reading under the confidence floor aren't inserted (their strokes
             // stay linework).
@@ -5802,6 +6011,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 stats.insert("SHX OCR glyph clusters".into(), report.clusters);
                 stats.insert("SHX OCR glyphs matched".into(), report.glyphs);
                 stats.insert("SHX OCR lone glyphs dropped".into(), report.noise_dropped);
+                if report.cells > 0 {
+                    stats.insert("SHX OCR table cell entries".into(), report.cells);
+                    stats.insert("SHX OCR table cell entries unsure".into(), report.cells_low);
+                }
                 if report.turned > 0 {
                     stats.insert("SHX OCR turned texts".into(), report.turned);
                 }
@@ -5831,10 +6044,17 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     boxes.push(bbox(&own).unwrap_or([f64::NAN; 4]));
                 }
                 let first_ocr = texts.len() + base;
+                // On a page lettered in strokes alone (no hidden text, little real text) the OCR's
+                // sure readings are the page's tags, as real text's are: a circuit beside its
+                // receptacle (`P1-2`) stands among the device's other notes.
+                let stroke_page = !has_hidden_text && stroke_lettered;
                 let anchors: Vec<TagAnchor> = ocr_texts
                     .iter()
                     .enumerate()
-                    .filter(|(i, rt)| is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
+                    .filter(|(i, rt)| {
+                        (is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
+                            || (stroke_page && !rt.in_cell && rt.confidence.unwrap_or(0.0) >= OCR_TAG_CONFIDENCE && is_device_tag(&rt.value))
+                    })
                     .filter(|(_, rt)| !instances.iter().any(|inst| (inst.center.0 - rt.at.0).hypot(inst.center.1 - rt.at.1) < max_size))
                     .map(|(i, rt)| TagAnchor { value: &rt.value, at: rt.at, height: rt.height, text_idx: None, ocr_idx: Some(base + i) })
                     .collect();
@@ -6526,6 +6746,8 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Fix 3: emit recovered SHX text entities (replacing the strokes that formed them)
     // using glyph-matched characters instead of '?' placeholders
     let mut recovered_count = 0usize;
+    ocr_report.text_chars =
+        texts.iter().filter(|t| t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)).map(|t| t.value.chars().filter(|c| !c.is_whitespace()).count()).sum();
     for (i, rt) in recovered_texts.iter().enumerate() {
         // skip empty or all-unrecognised clusters (they stay as linework), and device marks
         // that became a symbol's TAG
@@ -6546,15 +6768,20 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             rotation: rt.rotation.to_radians(),
             width_factor: 1.0,
             oblique: 0.0,
-            style: if rt.unconfirmed { OCR_TEXT_STYLE.into() } else { "Standard".into() },
+            style: ocr_style(rt).into(),
             halign: HAlign::default(),
             valign: VAlign::default(),
         };
-        if rt.unconfirmed && !d.text_styles.iter().any(|st| st.name.eq_ignore_ascii_case(OCR_TEXT_STYLE)) {
-            d.text_styles.push(TextStyle { name: OCR_TEXT_STYLE.into(), ..TextStyle::default() });
+        if rt.unconfirmed && !d.text_styles.iter().any(|st| st.name.eq_ignore_ascii_case(&text.style)) {
+            d.text_styles.push(TextStyle { name: text.style.clone(), ..TextStyle::default() });
         }
         add(&mut d, layer, color, lw, rt.pen.transp, EntityKind::Text(text));
         recovered_count += 1;
+        let chars = rt.value.chars().filter(|c| !c.is_whitespace()).count();
+        ocr_report.stroke_chars += chars;
+        if rt.unconfirmed {
+            ocr_report.unconfirmed_chars += chars;
+        }
         if let Some(confidence) = rt.confidence {
             ocr_report.words.push(OcrWord { value: rt.value.clone(), at: (p.x, p.y), confidence });
         }
@@ -7282,6 +7509,12 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
             "noise_dropped": r.ocr.noise_dropped,
             "mean_confidence": (r.ocr.mean_confidence() * 1000.0).round() / 1000.0,
             "low_confidence": r.ocr.words.iter().filter(|w| w.confidence < 0.5).count(),
+            "cells": r.ocr.cells,
+            "cells_low": r.ocr.cells_low,
+            "text_chars": r.ocr.text_chars,
+            "stroke_chars": r.ocr.stroke_chars,
+            "unconfirmed_chars": r.ocr.unconfirmed_chars,
+            "stroke_share": (r.ocr.stroke_share() * 1000.0).round() / 1000.0,
             "words": r.ocr.words.iter().take(500).map(|w| json!({"value": w.value, "at": [w.at.0, w.at.1], "confidence": (w.confidence * 1000.0).round() / 1000.0})).collect::<Vec<_>>(),
         },
         "notes": r.notes,
@@ -7410,6 +7643,7 @@ mod tests {
             review: false,
             strokes_stay: false,
             rotation: 0.0,
+            in_cell: false,
         };
         let ocr = vec![read("U", (300.0, 300.0)), read("M L#.'", (320.0, 300.0)), read("151", (400.0, 300.0)), read("A-1", (420.0, 300.0))];
         let kept = settle_ocr(ocr, &[hidden], &[], &mut []).kept;
@@ -7509,6 +7743,7 @@ mod tests {
             review: false,
             strokes_stay: false,
             rotation: 0.0,
+            in_cell: false,
         };
         let readings = vec![read("268", 5.0), read("--.'", 5.0), read("Q7K", 30.0), read("--.'", 30.0), read("905Z", 49.0), read("-L-", 60.0)];
         let s = settle_ocr(readings, &texts, &[], &mut []);
@@ -8095,6 +8330,7 @@ mod tests {
                 review: false,
                 strokes_stay: false,
                 rotation: 0.0,
+                in_cell: false,
             };
             let words = [RecoveredText { value: "AB".into(), stroke_indices: HashSet::new(), ..mark(1e12) }];
             keep_lone_marks(vec![mark(1e12)], &words, &strokes, 2.0).1

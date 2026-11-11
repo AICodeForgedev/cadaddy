@@ -499,7 +499,8 @@ fn lettering(
     let p = Vec2::new(at[0], at[1]);
     // The import's guesses at stroked lettering that read like no word (a tick, a corner or a
     // hatch's strokes misread as letters).
-    let ocr = style.eq_ignore_ascii_case(OCR_TEXT_STYLE);
+    // (an unsure reading's style starts with the OCR's: `PDF-SHX-OCR-UNSURE`)
+    let ocr = style.to_ascii_uppercase().starts_with(OCR_TEXT_STYLE);
     if layer.eq_ignore_ascii_case(OCR_REVIEW_LAYER) || (ocr && !legible(value)) {
         return ("text", Some("an OCR reading of strokes that reads as no word".into()));
     }
