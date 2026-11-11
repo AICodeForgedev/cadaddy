@@ -7,6 +7,7 @@ use cadaddy_render::dimension_geometry;
 
 fn linear(len: f64) -> Dimension {
     Dimension {
+        insertion_point: Default::default(),
         kind: DimKind::Linear { rotation: 0.0 },
         defpt: Vec3::new(0.0, 5.0, 0.0),
         text_mid: Vec3::ZERO,

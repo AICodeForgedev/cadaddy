@@ -100,6 +100,7 @@ fn multileaders_and_dimensions_move_their_content() {
     let mut e = Entity::new(
         Handle(0x50),
         EntityKind::Dimension(Box::new(cadaddy_engine::doc::Dimension {
+            insertion_point: Default::default(),
             kind: cadaddy_engine::doc::DimKind::Linear { rotation: 0.0 },
             defpt: cadaddy_engine::doc::geom::Vec3::new(0.0, 2.0, 0.0),
             text_mid: cadaddy_engine::doc::geom::Vec3::ZERO,

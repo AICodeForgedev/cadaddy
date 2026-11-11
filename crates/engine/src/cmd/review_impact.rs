@@ -16,7 +16,9 @@
 //!   several items touch counts once, at its widest swing.
 //! - **Resolving** (`accept`, `change`, `rfi_sent`; `reopen` undoes) is kept on the item in the
 //!   drawing with its author and note; the list re-ranks on the next call and every decision stays
-//!   in the audit trail (`review.impact.trail`). An RFI marked sent is set sent on the RFI list too.
+//!   in the audit trail (`review.impact.trail`). An RFI marked sent is set sent on the RFI list too;
+//!   a reopen sets it back, and an RFI sent there some other way stays sent while the item is held
+//!   open here, so the list always shows the status the reply gave.
 //! - **Opening**: each item says where it is on its sheet and which elements it names;
 //!   `review.impact.open {id, what: sheet|element}` zooms there (and selects the elements).
 //!
@@ -70,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{status?: open|resolved|all (open), source?: finding|question|rfi|validate|coverage|judged|proposed, level?, cursor?: n, limit?: 1-50 (20), prescreen?: bool (true: Validate's rows; false leaves them out, faster)} → {total, open, resolved, by_source, estimate: {base, low, high, labor_hours: {base, low, high}, unresolved, unknown_impact, rate, how}, effects: {effect: {low, high, why}}, items: [{rank, id, source, rule, verdict, effect, title, level, count, status, impact: {dollars, material, labor_hours, labor_dollars, known, basis, lines, unpriced?}, range: {low, high}, open: {sheet?: {sheet, at} | {rfi}, element?: {handles, count}}, resolution?}], next_cursor?, how}: every review item ranked by how far it can move the estimate, unknown impacts after the priced ones")
             .noundo(),
         CommandSpec::new(RESOLVE, "Resolve Review Item by Impact", run_resolve).params(
-            "{id, action: accept|change|rfi_sent|reopen, note?: text, author?: agent|user (agent)} → {id, action, status, title, impact, range, changed, estimate_moves: bool}: the decision is kept on the item and in the audit trail; the list re-ranks on its next call (an RFI marked sent is set sent on the RFI list too)",
+            "{id, action: accept|change|rfi_sent|reopen, note?: text, author?: agent|user (agent)} → {id, action, status, title, impact, range, changed, estimate_moves: bool}: the decision is kept on the item and in the audit trail; the list re-ranks on its next call (an RFI marked sent is set sent on the RFI list too; reopen returns any item to open and sets back what its rfi_sent set on the RFI list)",
         ),
         CommandSpec::new(OPEN, "Open Review Item", run_open)
             .params("{id, what?: sheet|element (sheet), member?: n (one of the item's elements, from 0)} → {id, what, sheet?, at?, window?, handles?}: zooms to the item's source on its sheet, or to its elements and selects them")
@@ -1105,12 +1107,19 @@ fn fmt_qty(q: f64) -> String {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Decision {
+    /// `accept`, `change`, `rfi_sent`, or `open`: reopened while its source still says it is
+    /// settled (an RFI sent on the RFI list by someone else), so the list shows what the reopen
+    /// said.
     action: String,
     note: String,
     author: String,
     seq: u64,
     title: String,
     source: String,
+    /// The RFI's status on the RFI list before this item's `rfi_sent` set it sent: a reopen puts
+    /// it back. Kept through later decisions until the reopen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rfi_was: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1475,28 +1484,51 @@ fn run_resolve(s: &mut Session, p: &Value) -> Result<Value> {
         low,
         high,
     });
-    if action == "reopen" {
-        st.decisions.remove(&ranked.item.id);
-    } else {
-        st.decisions.insert(
-            ranked.item.id.clone(),
-            Decision {
-                action: action.clone(),
-                note: note.clone(),
-                author: who,
-                seq: st.seq,
-                title: ranked.item.title.clone(),
-                source: ranked.item.source.to_string(),
-            },
-        );
-    }
-    // An RFI marked sent is sent on the RFI list too.
+    let earlier = st.decisions.remove(&ranked.item.id);
+    let seq = st.seq;
+    let decision = |action: &str, note: &str, rfi_was: Option<String>| Decision {
+        action: action.to_string(),
+        note: note.to_string(),
+        author: who.clone(),
+        seq,
+        title: ranked.item.title.clone(),
+        source: ranked.item.source.to_string(),
+        rfi_was,
+    };
     let mut rfi = Value::Null;
-    if let Some(id) = &ranked.item.rfi
-        && action == "rfi_sent"
-        && ranked.item.source_status.is_none()
-    {
-        rfi = s.execute("rfi.set", &json!({"id": id, "status": "sent"})).map(|_| json!({"id": id, "status": "sent"})).unwrap_or(Value::Null);
+    if action == "reopen" {
+        // Undo what this item's rfi_sent did on the RFI list; an RFI sent there some other way
+        // stays sent, and the item is held open here so the list says what this reply says.
+        let mut settled = ranked.item.source_status.is_some();
+        if let (Some(id), Some(was)) = (&ranked.item.rfi, earlier.as_ref().and_then(|d| d.rfi_was.as_deref()))
+            && settled
+            && s.execute("rfi.set", &json!({"id": id, "status": was})).is_ok()
+        {
+            rfi = json!({"id": id, "status": was, "undid": "rfi_sent"});
+            settled = false;
+        }
+        if settled {
+            let kept = "reopened here; its RFI stays sent on the RFI list (rfi.set changes it there)";
+            if let Some(id) = &ranked.item.rfi {
+                rfi = json!({"id": id, "status": "sent", "kept": kept});
+            }
+            let why = if note.is_empty() { kept.to_string() } else { cut(&format!("{note} ({kept})"), NOTE_MAX) };
+            let d = decision("open", &why, None);
+            st.decisions.insert(ranked.item.id.clone(), d);
+        }
+    } else {
+        // An RFI marked sent is sent on the RFI list too (and a reopen takes that back).
+        let mut rfi_was = earlier.and_then(|d| d.rfi_was);
+        if let Some(id) = &ranked.item.rfi
+            && action == "rfi_sent"
+            && ranked.item.source_status.is_none()
+            && s.execute("rfi.set", &json!({"id": id, "status": "sent"})).is_ok()
+        {
+            rfi = json!({"id": id, "status": "sent"});
+            rfi_was = Some("open".to_string());
+        }
+        let d = decision(&action, &note, rfi_was);
+        st.decisions.insert(ranked.item.id.clone(), d);
     }
     save(s, &mut st)?;
     let r = rules();

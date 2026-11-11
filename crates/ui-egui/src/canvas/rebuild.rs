@@ -38,6 +38,10 @@ pub(super) struct MeshRequest {
     pub model_bg: Rgb,
     pub paper_bg: Rgb,
     pub lwdisplay: bool,
+    /// Drawing units in a screen pixel at the finest zoom the list is drawn at: the vertex data
+    /// draws what is smaller as dots and boxes (`None`: everything as it is; see
+    /// [`crate::gpu::build_screen_mesh`]).
+    pub pixel: Option<f64>,
     /// Create the GPU buffers on the worker too, so the frame that swaps the list in only swaps
     /// buffers (`None`: the paint callback uploads them).
     pub device: Option<egui_wgpu::wgpu::Device>,
@@ -59,12 +63,14 @@ pub(super) struct BuiltMesh {
     pub origin: Vec2,
     pub bg: Rgb,
     pub lwdisplay: bool,
+    pub pixel: Option<f64>,
     /// Indices of the infinite lines (drawn on the CPU in GPU mode).
     pub infinite: Vec<usize>,
     pub ms: f64,
     /// Line vertices, fill vertices, quad instances and bytes of the vertex data (counted before
     /// the upload lets the CPU copy go), and the upload's milliseconds.
     pub counts: [usize; 4],
+    pub simplified: crate::gpu::Simplified,
     pub upload_ms: f64,
 }
 
@@ -123,7 +129,7 @@ fn run(req: Request) -> Option<Built> {
             let t1 = crate::now_ms();
             let origin = crate::gpu::choose_origin(&list.bounds, m.view_center, m.view_height);
             let bg = if list.sheet.is_some() { m.paper_bg } else { m.model_bg };
-            let mut data = crate::gpu::build_mesh(&list, origin, bg, m.lwdisplay);
+            let mut data = crate::gpu::build_screen_mesh(&list, origin, bg, m.lwdisplay, m.pixel);
             if req.opts.cancelled() {
                 return None;
             }
@@ -134,7 +140,19 @@ fn run(req: Request) -> Option<Built> {
             }
             let t3 = crate::now_ms();
             let infinite = list.prims.iter().enumerate().filter(|(_, p)| matches!(p.kind, Kind::Infinite { .. })).map(|(i, _)| i).collect();
-            Some(BuiltMesh { data, origin, bg, lwdisplay: m.lwdisplay, infinite, ms: t3 - t1, counts, upload_ms: t3 - t2 })
+            let simplified = data.simplified;
+            Some(BuiltMesh {
+                data,
+                origin,
+                bg,
+                lwdisplay: m.lwdisplay,
+                pixel: m.pixel,
+                infinite,
+                ms: t3 - t1,
+                counts,
+                simplified,
+                upload_ms: t3 - t2,
+            })
         }
     };
     let objects = req.doc.space(&req.space).map_or(0, |s| s.len());
@@ -204,6 +222,7 @@ mod tests {
                 model_bg: Rgb(0, 0, 0),
                 paper_bg: Rgb(255, 255, 255),
                 lwdisplay: false,
+                pixel: None,
                 device: None,
             }),
         };

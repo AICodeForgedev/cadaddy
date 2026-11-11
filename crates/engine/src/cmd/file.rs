@@ -1784,7 +1784,11 @@ fn run_saveas(s: &mut Session, p: &Value) -> Result<Value> {
 /// The version a drawing is saved in at `path` when none is asked for: its `$ACADVER` (2018 by
 /// default), and for DWG at least 2004 (the io layer's rule: R2000 DWG has no true colours).
 fn drawing_version(s: &Session, path: &str) -> Version {
-    let v = s.doc().ok().and_then(|d| d.header.get("ACADVER").and_then(cadaddy_doc::HVal::as_str).and_then(Version::for_acadver)).unwrap_or_default();
+    let v = s
+        .state()
+        .ok()
+        .and_then(|st| st.drawing().header.get("ACADVER").and_then(cadaddy_doc::HVal::as_str).and_then(Version::for_acadver))
+        .unwrap_or_default();
     if is_dxf(path) { v } else { v.max(Version::R2004) }
 }
 
@@ -1908,6 +1912,8 @@ fn run_bytes(s: &mut Session, p: &Value) -> Result<Value> {
     let mut r = json!({ "data": base64_encode(&bytes), "bytes": bytes.len() });
     if drops_unknown(&format!("drawing.{fmt}")) {
         report_not_saved(s, &mut r, &lost);
+    } else if version >= Version::R2013 && is_dxf_file(format!("drawing.{fmt}")) {
+        report_sat_text_dropped(s, &mut r);
     }
     Ok(r)
 }
@@ -1939,7 +1945,11 @@ pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap
     let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
     for e in stores.flat_map(|s| s.iter()) {
         if let cadaddy_doc::EntityKind::Unknown(u) = &e.kind {
-            if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) && stored.contains(&e.handle) {
+            // A DWG before 2013 writes a solid's SAT text as it is; from 2013 the geometry has to be
+            // in the data store, and SAT text alone is lost (#2334).
+            if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t))
+                && (stored.contains(&e.handle) || (version < Version::R2013 && cadaddy_doc::foreign::has_sat_text(&u.tags)))
+            {
                 continue;
             }
             if !cadaddy_dxf::is_entity_type(&u.dxf_type) || WRITTEN_UNKNOWN_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) {
@@ -1958,7 +1968,10 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
         return None;
     }
     let list: Vec<String> = lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
-    Some(format!("Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them): {}", list.join(", ")))
+    Some(format!(
+        "Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them, solids only when saved as 2010 or earlier): {}",
+        list.join(", ")
+    ))
 }
 
 /// What saving the active drawing to `path` would leave out, before anything is written: empty
@@ -1985,8 +1998,31 @@ fn is_drawing_file(path: &str) -> bool {
     matches!(ext.as_str(), "cdy" | "dxf" | "dwg" | "dwt" | "")
 }
 
+/// Whether `path` is a DXF file.
+fn is_dxf_file(path: impl AsRef<std::path::Path>) -> bool {
+    path.as_ref().extension().is_some_and(|e| e.eq_ignore_ascii_case("dxf"))
+}
+
+/// Say on the command line which solid modeler entities a DXF of 2013 or later left out because
+/// they hold SAT-text ACIS data, which such files keep in a data store instead (#2334).
+fn report_sat_text_dropped(s: &mut Session, r: &mut Value) {
+    // The drawing a file holds: the host while the Block Editor is open.
+    let lost = s.state().map(|st| cadaddy_doc::foreign::sat_text_dropped(st.drawing())).unwrap_or_default();
+    if lost.is_empty() {
+        return;
+    }
+    let list: Vec<String> = lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
+    s.echo(format!(
+        "Not saved in the DXF file (2013 and later keep ACIS geometry in a data store these entities have no record in; save as 2010 or earlier to keep them): {}",
+        list.join(", ")
+    ));
+    if let Some(o) = r.as_object_mut() {
+        o.insert("notSaved".into(), json!(lost));
+    }
+}
+
 /// Say on the command line what the file couldn't keep, and list it in the result's `notSaved`.
-fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTreeMap<String, usize>) {
+pub(super) fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTreeMap<String, usize>) {
     let Some(msg) = not_saved_message(lost) else { return };
     s.echo(msg);
     if let Some(o) = r.as_object_mut() {
@@ -2027,6 +2063,8 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     }
     if r.get("path").and_then(Value::as_str).is_some_and(drops_unknown) {
         report_not_saved(s, &mut r, &lost);
+    } else if version >= Version::R2013 && r.get("path").and_then(Value::as_str).is_some_and(is_dxf_file) {
+        report_sat_text_dropped(s, &mut r);
     }
     if let Some(path) = r.get("path").and_then(Value::as_str).filter(|p| is_exchange_file(p)).map(str::to_string) {
         let opts = save_options("save", p).unwrap_or_default();

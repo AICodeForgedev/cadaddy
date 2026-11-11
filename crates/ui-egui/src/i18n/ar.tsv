@@ -3441,3 +3441,34 @@ menu	View	عرض
 	Previous Sheet	الورقة السابقة
 	Page {n}	الصفحة {n}
 	Page Up and Page Down step through the sheets.	يتنقل مفتاحا Page Up وPage Down بين الأوراق.
+	Frame rate to hold while moving	معدل الإطارات المطلوب أثناء التحريك
+	Lower the resolution while panning and zooming when the graphics are slow	خفض الدقة أثناء التحريك والتكبير عندما تكون الرسومات بطيئة
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	يصبح الرسم حادًا بمجرد توقف العرض. الطباعة والتصدير ولقطات الشاشة دائمًا بالدقة الكاملة.
+# BIM views (Q6419).
+	MEP	MEP
+	Full MEP	MEP كامل
+	Cabinets	الخزائن
+	Following the system	تتبع النظام
+	Stop following	إيقاف التتبع
+	Follow System	تتبع النظام
+	Pipes with no size, not drawn	أنابيب بلا قطر، غير مرسومة
+	BIM Views	عروض BIM
+	BIM View Rules	قواعد عروض BIM
+	BIM View Report	تقرير عروض BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	يفعل عرض النموذج ثلاثي الأبعاد والتجول الشيء نفسه أثناء الدوران والمشي؛ تبقى الإضاءة والتفاصيل كما هي.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	أدخل اسم ملف الإخراج
+	Enter decimal places of accuracy (0 to 16)	أدخل عدد المنازل العشرية للدقة (من 0 إلى 16)
+	Enter name of existing block	أدخل اسم كتلة موجودة
+	Choose mode for selected object conversion	اختر وضع تحويل الكائنات المحددة
+	Current settings: Object conversion=Delete	الإعدادات الحالية: تحويل الكائنات=حذف
+	Enter attribute values	أدخل قيم السمات
+	Verify attribute values	تحقق من قيم السمات
+	Convert to block	تحويل إلى كتلة
+	Retain	الاحتفاظ
+	Binary	ثنائي
+	mOde	الوضع
+	define new drawing	تعريف رسم جديد
+	= (block=output file)	= (الكتلة=ملف الإخراج)
+	* (whole drawing)	* (الرسم بالكامل)
+	Requires an integer between 0 and 16.	يلزم عدد صحيح بين 0 و16.

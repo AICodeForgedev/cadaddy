@@ -13,6 +13,7 @@ pub mod automation;
 pub mod autospec;
 pub mod bimlook;
 pub mod bimprops;
+pub mod bimviews;
 pub mod bimwork;
 pub mod blockdetect;
 pub(crate) mod blocks;
@@ -957,6 +958,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(identity::specs());
         v.extend(inventory::specs());
         v.extend(bimlook::specs());
+        v.extend(bimviews::specs());
         v.extend(relevel::specs());
         v.extend(fidelity::specs());
         v.extend(projrules::specs());

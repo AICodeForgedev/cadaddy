@@ -10,6 +10,7 @@
 mod helper;
 
 mod accuracytrend;
+mod bimviews;
 mod clash_rerun;
 mod compare_export;
 mod covercheck;

@@ -332,7 +332,7 @@ fn any_eq(list: &[String], v: &str) -> bool {
 
 /// Whether `word` is in `text`: a phrase as text; a short word as a whole word, a long one as a
 /// word's start.
-fn has_word(text: &str, word: &str) -> bool {
+pub(crate) fn has_word(text: &str, word: &str) -> bool {
     let w = word.trim().to_ascii_lowercase();
     if w.is_empty() {
         return false;
@@ -423,7 +423,7 @@ pub fn facts(d: &Drawing, e: &Entity, upf: f64) -> Option<Facts> {
 
 /// A size tag's larger side in inches: `24x12`, `3/4"`, `1 1/2"`, `4" square`, or a bare number
 /// or fraction (the build writes a round run's size as `2`, `0.75`).
-fn size_inches(t: &str) -> Option<f64> {
+pub(crate) fn size_inches(t: &str) -> Option<f64> {
     let v = super::mep::size_tag(t).map(|[a, b]| a.max(b)).or_else(|| {
         let s = t.trim().trim_end_matches('"').trim();
         match s.split_once('/') {
@@ -751,8 +751,14 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         None => Vec3::new(-1.0, -1.0, 1.0),
     };
     let proj = cadaddy_geom::view3::Projection::new(dir);
-    // As the 3D view builds it: the BIM view's drawing (else the drawing itself).
-    let md = Arc::new(super::bimlook::display(doc).unwrap_or_else(|| doc.clone()));
+    // The whole built model in the BIM view's look, every view's elements (else the drawing
+    // itself): a measure of the tiers, not a view (Q6419: no view draws all of it).
+    let look = super::bimlook::Look::of(doc);
+    let md = Arc::new(if !look.off && super::bimlook::has_model(doc) {
+        super::bimlook::compose(doc, &look, super::bimlook::ghosting(doc, &look), true, &|_, _| true)
+    } else {
+        doc.clone()
+    });
     let upf = units_per_foot(&md);
     let ext = md.extents(&Space::Model);
     let size = ext.width().max(ext.height());
@@ -1001,7 +1007,7 @@ mod tests {
         assert_eq!(r.class(&eq("cabinet", 6.0)).0, Tier::Building);
         let dev = |kind: &str, trade: &str| Facts { kind: kind.into(), trade: trade.into(), ..Facts::default() };
         assert_eq!(r.class(&dev("receptacle", "devices")).0, Tier::Room);
-        assert_eq!(r.class(&dev("light_fixture", "lights")).0, Tier::Room);
+        assert_eq!(r.class(&dev("light_fixture", "lights")).0, Tier::Floor);
         assert_eq!(r.class(&dev("air_terminal", "terminals")).0, Tier::Floor);
         let part =
             |p: &str, text: &str| Facts { kind: p.into(), part: p.into(), trade: "architecture".into(), text: text.into(), ..Facts::default() };

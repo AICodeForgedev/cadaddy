@@ -54,32 +54,57 @@ fn transparency_440(v: i64) -> Transparency {
     }
 }
 
+/// The tags outside application-defined groups (`102 {` to `102 }`, whose codes are the
+/// application's), with their positions in `tags`.
+pub(crate) fn outside_app(tags: &[Tag]) -> impl Iterator<Item = (usize, &Tag)> {
+    let mut in_app = false;
+    tags.iter().enumerate().filter(move |(_, t)| {
+        if t.code == 102 {
+            in_app = t.str().starts_with('{');
+        }
+        !in_app && t.code != 102
+    })
+}
+
+/// The groups of the AcDbEntity subclass: the record up to the entity's own subclass marker (all
+/// of it in files without markers, and in lists with no AcDbEntity marker, whose layer and colour
+/// may follow the entity's marker), or up to an embedded object (101). Later groups reuse the
+/// codes: an MTEXT's column width is 48. Markers inside an application-defined group (`102 {`
+/// to `102 }`, whose codes are the application's) do not count.
+fn entity_subclass(tags: &[Tag]) -> &[Tag] {
+    let outside = || outside_app(tags);
+    let marked = outside().any(|(_, t)| t.code == 100 && t.str() == "AcDbEntity");
+    let end = outside().find(|(_, t)| (marked && t.code == 100 && t.str() != "AcDbEntity") || t.code == 101).map_or(tags.len(), |(i, _)| i);
+    tags.get(..end).unwrap_or(tags)
+}
+
 fn common(t: &T) -> Common {
+    let e = T(entity_subclass(t.0));
     let mut c = Common {
-        layer: t.s(8).unwrap_or_else(|| "0".into()).into(),
-        linetype: t.s(6).unwrap_or_else(|| "ByLayer".into()).into(),
+        layer: e.s(8).unwrap_or_else(|| "0".into()).into(),
+        linetype: e.s(6).unwrap_or_else(|| "ByLayer".into()).into(),
         ..Common::default()
     };
-    if let Some(v) = t.i(62) {
+    if let Some(v) = e.i(62) {
         c.color = Color::from_aci(v as i16);
         if v < 0 {
             c.color = Color::ByLayer;
             c.visible = true;
         }
     }
-    if let Some(tc) = t.i(420) {
+    if let Some(tc) = e.i(420) {
         c.color = Color::True(Rgb::from_u32(tc as u32));
     }
-    if let Some(lw) = t.i(370) {
+    if let Some(lw) = e.i(370) {
         c.lineweight = Lineweight::from_dxf(lw as i16);
     }
-    if let Some(s) = t.f(48) {
+    if let Some(s) = e.f(48) {
         c.ltscale = if s > 0.0 { s } else { 1.0 };
     }
-    if t.i(60) == Some(1) {
+    if e.i(60) == Some(1) {
         c.visible = false;
     }
-    if let Some(v) = t.i(440) {
+    if let Some(v) = e.i(440) {
         c.transparency = transparency_440(v);
     }
     c.thickness = t.fd(39, 0.0);
@@ -91,6 +116,15 @@ fn common(t: &T) -> Common {
 /// A VIEWPORT's view twist (51, degrees) in radians; 0 when absent or not finite.
 fn viewport_twist(t: &T) -> f64 {
     t.f(51).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()))
+}
+
+/// A view's centre in the drawing. The DXF stores it in display coordinates (`center`), whose
+/// origin is the view target (`target`), so the point in the middle of a view is their sum: a
+/// file whose view centre is 0,0 keeps the location in the target (as ArchiCAD's exports do). A
+/// sum that isn't finite or passes the coordinate limit leaves the stored centre.
+fn view_center(center: Vec2, target: Vec2) -> Vec2 {
+    let sum = center + target;
+    if sum.is_finite() && sum.x.abs() <= LIMIT && sum.y.abs() <= LIMIT { sum } else { center }
 }
 
 /// An object whose points were turned into the world system on reading: its extrusion is plain
@@ -155,6 +189,10 @@ fn multiline_attrib(embedded: Option<&[Tag]>, c: &Common) -> Option<MultilineAtt
 
 /// Multiline text from MTEXT groups (an MTEXT entity's, or a multiline attribute's embedded ones).
 fn mtext_from(tags: &[Tag], c: &Common) -> MText {
+    // The MTEXT's own groups: an embedded object (group 101) reuses their codes (44 is its
+    // column width, not the line spacing factor).
+    let columns = mtext_dxf::read_columns(tags);
+    let tags = mtext_dxf::own(tags);
     let t = T(tags);
     // Contents: code 3 chunks followed by code 1.
     let mut contents = String::new();
@@ -163,7 +201,6 @@ fn mtext_from(tags: &[Tag], c: &Common) -> MText {
     }
     contents.push_str(&t.s(1).unwrap_or_default());
     let contents = mtext_dxf::decode_contents(&contents);
-    let columns = mtext_dxf::read_columns(tags);
     // The direction comes from the MTEXT's own groups only: in an R2018+ embedded object
     // (group 101), 11 is the insertion point, not the X-axis direction (#667, as in #834).
     let own = T(mtext_dxf::before_columns(tags));
@@ -203,8 +240,10 @@ fn mtext_from(tags: &[Tag], c: &Common) -> MText {
         background: background.map(Box::new),
         insert: t.p(10),
         height: t.fd(40, 0.2).max(1e-9),
+        // An MTEXT's width is one column's: with columns, the column width (48, or 44 of the
+        // embedded object) rather than 41, which ZWCAD and AutoCAD write as the total width.
         width: match &columns {
-            Some((_, w)) if t.fd(41, 0.0) <= 0.0 => *w,
+            Some((_, w)) if *w > 0.0 => *w,
             _ => t.fd(41, 0.0).max(0.0),
         },
         attach,
@@ -237,7 +276,7 @@ fn text_from(t: &T) -> Text {
         insert: t.p(10),
         align_pt: if h == HAlign::Left && v == VAlign::Baseline { None } else { align },
         height: t.fd(40, 0.2).max(1e-9),
-        value: t.s(1).unwrap_or_default(),
+        value: mtext_dxf::decode_line(&t.s(1).unwrap_or_default()),
         rotation: t.fd(50, 0.0).to_radians(),
         width_factor: t.fd(41, 1.0),
         oblique: t.fd(51, 0.0).to_radians(),
@@ -438,7 +477,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 text,
                 invisible: own.i(70).unwrap_or(0) & 1 != 0,
                 constant: own.i(70).unwrap_or(0) & 2 != 0,
-                prompt: own.s(3).unwrap_or_default(),
+                prompt: mtext_dxf::decode_line(&own.s(3).unwrap_or_default()),
                 props: Default::default(),
                 multiline,
                 modes: attrib_modes(own.0),
@@ -503,7 +542,9 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 p14: t.p(14),
                 p15: t.p(15),
                 p16: t.p(16),
-                text: t.s(1).unwrap_or_default(),
+                // Group 12: where a dimension moved by an older AutoCAD draws its block from.
+                insertion_point: t.p(12),
+                text: mtext_dxf::decode_line(&t.s(1).unwrap_or_default()),
                 style: t.s(3).unwrap_or_else(|| "Standard".into()),
                 // Missing or negative (a file that doesn't keep it): worked out once the drawing
                 // is read (`fill_measurements`).
@@ -517,7 +558,18 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             }))
         }
         "LEADER" => EntityKind::Leader(Leader {
-            vertices: t.pts(10).into_iter().map(|p| p.to3(0.0)).collect(),
+            // Each group 10 starts a vertex. Scope Y/Z to it so an omitted Z cannot
+            // shift a later vertex's elevation onto this one.
+            vertices: tags
+                .iter()
+                .filter(|tag| tag.code == 10)
+                .map(|tag| tag.f64())
+                .zip(tags.split(|tag| tag.code == 10).skip(1))
+                .map(|(x, vertex)| {
+                    let v = T(vertex);
+                    Vec3::new(x, v.fd(20, 0.0), v.fd(30, 0.0))
+                })
+                .collect(),
             arrow: t.i(71).unwrap_or(1) != 0,
             spline: t.i(72).unwrap_or(0) != 0,
             style: t.s(3).unwrap_or_else(|| "Standard".into()),
@@ -567,12 +619,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             // The view centre (12/22) is in display coordinates, measured from the view target
             // (17/27): AutoCAD moves the target when it pans (tablet_overlay.dwg). In a plan view
             // that is an offset along the display axes, which the view twist (51) turns.
-            view_center: {
-                let c = Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0)).rotate(-viewport_twist(&t));
-                let dir = t.p(16);
-                let target = Vec2::new(t.fd(17, 0.0), t.fd(27, 0.0));
-                if dir.x.abs() < 1e-9 && dir.y.abs() < 1e-9 && target.is_finite() { c + target } else { c }
-            },
+            view_center: view_center(Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0)).rotate(-viewport_twist(&t)), Vec2::new(t.fd(17, 0.0), t.fd(27, 0.0))),
             view_height: t.fd(45, 1.0),
             id: t.i(69).unwrap_or(0) as u32,
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
@@ -664,7 +711,9 @@ fn acad_table(tags: &[Tag]) -> Table {
     // Large declared sizes must be backed by cell records (no allocation from a bare count).
     let n_cells = tail.iter().filter(|x| x.code == 171).count();
     let declared = rows.saturating_mul(cols);
-    if declared > MAX_CELLS || (declared > 10_000 && n_cells < declared) {
+    // A table with no rows or no columns has no cells: keep neither dimension, so its row heights
+    // and column widths (allocated per dimension, outside the cell budget) are not allocated.
+    if declared == 0 || declared > MAX_CELLS || (declared > 10_000 && n_cells < declared) {
         rows = 0;
         cols = 0;
     }
@@ -1150,7 +1199,7 @@ struct Rx {
     pstyles: HashMap<String, String>,
     /// Upper-case block name → associative array parameters from its BLOCK_RECORD.
     block_arrays: HashMap<String, cadaddy_doc::ArrayParams>,
-    /// LAYER record handle (upper case) → layer name (VIEWPORT group 341 frozen layers).
+    /// LAYER record handle (upper case) → layer name (VIEWPORT group 331/341 frozen layers).
     layers: HashMap<String, String>,
 }
 
@@ -1209,20 +1258,26 @@ fn entity_material(tags: &[Tag], rx: &Rx) -> Option<String> {
     None
 }
 
-/// The named plot style an entity record points at (group 390 among its AcDbEntity groups).
+/// The plot style an entity record names among its AcDbEntity groups: a named style (group 390,
+/// its placeholder's handle) or ByBlock (group 380 = 1, AcDb::PlotStyleNameType).
 fn entity_plot_style(tags: &[Tag], rx: &Rx) -> Option<String> {
     let mut in_entity = false;
+    let mut by_block = false;
     for t in tags {
         if t.code == 100 {
             if in_entity {
-                return None;
+                break;
             }
             in_entity = t.str() == "AcDbEntity";
-        } else if t.code == 390 && in_entity {
-            return rx.pstyles.get(&t.str().trim().to_ascii_uppercase()).cloned();
+        } else if in_entity {
+            match t.code {
+                390 => return rx.pstyles.get(&t.str().trim().to_ascii_uppercase()).cloned(),
+                380 => by_block = t.i64() == 1,
+                _ => {}
+            }
         }
     }
-    None
+    by_block.then(|| "ByBlock".to_string())
 }
 
 /// Dimension overrides and associativity, table references: data of an entity record that
@@ -1288,15 +1343,20 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
             }
             rx.mleader_fix.push((h, pending));
         }
-        // CADaddy's VPFROZEN xdata wins; otherwise the group 331 layer handles (DXF Reference).
-        ("VIEWPORT", EntityKind::Viewport(v)) if v.frozen_layers.is_empty() => {
-            v.frozen_layers = tags
-                .iter()
-                .take_while(|t| t.code < 1000)
-                // 331 per the DXF Reference; 341 is what CADaddy wrote before 0.7.4.
-                .filter(|t| t.code == 331 || t.code == 341)
-                .filter_map(|t| rx.layers.get(&t.str().trim().to_ascii_uppercase()).cloned())
-                .collect();
+        // The frozen layers: the LAYER handles of group 331 (341 in DXF 2000, and what CADaddy
+        // wrote before 0.7.4), outside `102 {…}` application groups, then the names in CADaddy's
+        // VPFROZEN xdata, which holds those without one; each layer once.
+        ("VIEWPORT", EntityKind::Viewport(v)) => {
+            let mut app_group = false;
+            let handles = tags.iter().take_while(|t| t.code < 1000).filter(|t| {
+                if t.code == 102 {
+                    app_group = t.str().starts_with('{');
+                }
+                !app_group && (t.code == 331 || t.code == 341)
+            });
+            let named = handles.filter_map(|t| rx.layers.get(&t.str().trim().to_ascii_uppercase()));
+            let mut seen = std::collections::HashSet::new();
+            v.frozen_layers = named.chain(&v.frozen_layers).filter(|n| seen.insert(n.to_ascii_uppercase())).cloned().collect();
         }
         _ => {}
     }
@@ -1434,8 +1494,9 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
         }
         if let Some((mut c, mut k)) = kindent {
             // Circles, arcs, solids and traces keep their extrusion (the writer puts them in it
-            // again); every other kind is in the world coordinate system by now.
-            if !matches!(k, EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Solid(_) | EntityKind::Trace(_)) {
+            // again), and so do lines, whose world points it doesn't move (the writer writes it,
+            // #2241); every other kind is in the world coordinate system by now.
+            if !matches!(k, EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Solid(_) | EntityKind::Trace(_) | EntityKind::Line(_)) {
                 world_extrusion(&mut c);
             }
             let h = match handle {
@@ -1774,6 +1835,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 let camera = field("CAMERA")
                     .map(|_| cadaddy_doc::ViewCamera { position: t.p(12) + t.p(11), target: t.p(12), lens: t.fd(42, 50.0) })
                     .filter(|c| c.position.is_finite() && c.target.is_finite() && c.distance() > 1e-9 && c.lens.is_finite() && c.lens > 0.0);
+                // The view centre 10/20 is in display coordinates, whose origin is the target
+                // 12/22/32; CADaddy's camera views keep their target there and the centre as is.
+                let center = if camera.is_some() { center } else { view_center(center, t.p(12).xy()) };
                 let v = NamedView {
                     name: name.clone(),
                     center,
@@ -1841,7 +1905,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
         }
     }
     // One *Active viewport is no tiling: the view is the editor's (it zooms to the extents).
-    d.vports.retain(|c| c.tiles.len() > usize::from(c.is_active()));
+    // One *Active viewport is no tiling: the view is the editor's (it zooms to the extents),
+    // kept only for its view twist (the model view's VIEWTWIST, see `cadaddy_engine`).
+    d.vports.retain(|c| c.tiles.len() > usize::from(c.is_active()) || c.tiles.first().is_some_and(|t| t.twist != 0.0));
     // Linetype shapes are numbers in DXF: their names come from the shape file when it is found
     // (so a linetype can be written to a .lin file again).
     let mut names = Vec::new();
@@ -1869,7 +1935,8 @@ const MAX_VPORT_TILES: usize = 64;
 /// are fractions of the drawing area; unusable tiles are skipped.
 fn vport_record(d: &mut Drawing, t: &T) {
     let name = t.s(2).map(|n| n.trim().to_string()).unwrap_or_default();
-    let (min, max, center) = (t.p(10).xy(), t.p(11).xy(), t.p(12).xy());
+    // The view centre 12/22 is in display coordinates, whose origin is the view target 17/27/37.
+    let (min, max, center) = (t.p(10).xy(), t.p(11).xy(), view_center(t.p(12).xy(), t.p(17).xy()));
     let height = t.fd(40, 0.0);
     let unit = |v: f64| v.is_finite() && (-1e-9..=1.0 + 1e-9).contains(&v);
     let ok = [min.x, min.y, max.x, max.y].into_iter().all(unit)
@@ -1883,7 +1950,9 @@ fn vport_record(d: &mut Drawing, t: &T) {
     }
     let aspect = t.f(41).filter(|a| a.is_finite() && *a > 0.0).unwrap_or(0.0);
     let clamp = |p: Vec2| Vec2::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
-    let tile = VportTile { min: clamp(min), max: clamp(max), center, height, aspect };
+    // View twist (group 51, degrees), within one turn.
+    let twist = t.f(51).filter(|a| a.is_finite()).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()));
+    let tile = VportTile { min: clamp(min), max: clamp(max), center, height, aspect, twist };
     let name = if name.eq_ignore_ascii_case(VportConfig::ACTIVE) { VportConfig::ACTIVE.to_string() } else { name };
     let room = d.vports.len() < MAX_OBJECTS;
     match d.vports.iter_mut().find(|c| c.name.eq_ignore_ascii_case(&name)) {
@@ -2489,10 +2558,24 @@ fn apply_sortents(
     paper_for: &HashMap<String, String>,
     first_layout: &str,
 ) {
-    for (owner, map) in tables {
+    // Each sort rebuilds its whole space, so a space named by many tables is sorted once, by the
+    // last of them (which decided its order anyway); repeated tables made import quadratic.
+    let target = |owner: &String| {
+        let up = brs.get(owner)?.to_ascii_uppercase();
+        Some(if up.starts_with("*PAPER_SPACE") { paper_for.get(&up).cloned().unwrap_or_else(|| first_layout.to_string()) + "\0paper" } else { up })
+    };
+    let last: HashMap<String, usize> = tables.iter().enumerate().filter_map(|(i, (owner, _))| Some((target(owner)?, i))).collect();
+    for (i, (owner, map)) in tables.iter().enumerate() {
+        if target(owner).and_then(|t| last.get(&t)) != Some(&i) {
+            continue;
+        }
         let Some(name) = brs.get(owner) else { continue };
         let up = name.to_ascii_uppercase();
-        let key = |e: &Entity| map.get(&e.handle).copied().unwrap_or(e.handle.0);
+        // A sort handle of 0 draws last (ezdxf `reorder`, which notes AutoCAD defines it, undocumented).
+        let key = |e: &Entity| {
+            let k = map.get(&e.handle).copied().unwrap_or(e.handle.0);
+            (k == 0, k)
+        };
         if up == "*MODEL_SPACE" {
             d.model.sort_by_key(key);
         } else if up.starts_with("*PAPER_SPACE") {
@@ -3126,8 +3209,6 @@ fn helix(tags: &[Tag]) -> Helix {
     .sanitized()
 }
 
-/// An entity from the groups of a DXF record of type `kind` (without its `0` group), as the
-/// reader makes it. AutoLISP's `entmake` and `entmod` are built on it.
 /// An ATTRIB record's attribute, for a block reference on layer `ins_layer`.
 pub fn attrib_from_groups(tags: &[Tag], ins_layer: &str) -> Attrib {
     let tt = T(tags);
@@ -3143,7 +3224,7 @@ pub fn attrib_from_groups(tags: &[Tag], ins_layer: &str) -> Attrib {
         tag: own.s(2).unwrap_or_default(),
         text,
         invisible: own.i(70).unwrap_or(0) & 1 != 0,
-        constant: false,
+        constant: own.i(70).unwrap_or(0) & 2 != 0,
         prompt: String::new(),
         props: attrib_props(&tt, ins_layer),
         multiline,
@@ -3151,6 +3232,12 @@ pub fn attrib_from_groups(tags: &[Tag], ins_layer: &str) -> Attrib {
     }
 }
 
+/// An entity from the groups of a DXF record of type `kind` (without its `0` group), as the
+/// reader makes it, with plain strings as [`crate::entity_groups`] gives them (not the file's
+/// `^ ` escapes). AutoLISP's `entmake` and `entmod` are built on it.
 pub fn entity_from_groups(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
-    entity(&kind.to_ascii_uppercase(), tags)
+    // AutoLISP's strings are plain: escape them as the file has them (see `entity_groups`).
+    let mut tags = tags.to_vec();
+    mtext_dxf::map_text_groups(kind, &mut tags, mtext_dxf::encode_line);
+    entity(&kind.to_ascii_uppercase(), &tags)
 }

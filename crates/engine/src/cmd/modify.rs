@@ -632,7 +632,7 @@ impl StretchM {
                         None
                     }
                     "all" => Some(store.map(|st| st.iter().filter(|e| d.is_visible(e)).map(|e| e.handle).collect()).unwrap_or_default()),
-                    "l" | "last" => Some(store.and_then(|st| st.last()).map(|e| vec![e.handle]).unwrap_or_default()),
+                    "l" | "last" => Some(crate::select::last_object(d, &s.space()).into_iter().collect()),
                     "p" | "previous" => Some(s.state()?.previous_selection.clone()),
                     _ => {
                         s.echo("*Invalid selection*");

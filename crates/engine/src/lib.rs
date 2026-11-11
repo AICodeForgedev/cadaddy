@@ -396,6 +396,9 @@ pub struct DocState {
     /// ([`cadaddy_render::detail`]): the snaps offer no point of what it drew as less. View
     /// state, never saved; `None` draws (and snaps to) everything.
     pub screen_detail: Option<cadaddy_render::detail::Detail>,
+    /// What the 3D BIM view draws of the drawing as it stands ([`cmd::bimviews::ShownCache`]):
+    /// what 3D object snaps find.
+    pub bim_shown: cmd::bimviews::ShownCache,
 }
 
 /// The view that shows `ext` with `margin` (1.05 = 5% more) in a viewport `px` wide and high,
@@ -476,6 +479,7 @@ impl DocState {
             ifc_view: cmd::ifcmodel::ViewState::default(),
             sheet_nav: sheetnav::SheetNav::default(),
             screen_detail: None,
+            bim_shown: cmd::bimviews::ShownCache::default(),
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet
@@ -569,9 +573,47 @@ impl DocState {
         // The model point at the centre of the screen stays there.
         let m = self.projection().and_then(|p| p.unproject(v.center, 0.0)).unwrap_or(v.center);
         self.view_twist = t;
+        self.keep_model_twist();
         let center = Projection::plan_twist(t).map_or(m, |p| p.project(m.to3(0.0)));
         self.put_paper_view(View { center, height: v.height });
         true
+    }
+    /// A model space box as the current view sees it: the centre and width/height of its four
+    /// corners on the view plane (the box itself when the view isn't turned).
+    pub fn seen_box(&self, ext: Bounds2) -> (Vec2, f64, f64) {
+        let Some(p) = self.projection() else { return (ext.center(), ext.width(), ext.height()) };
+        let corners = [ext.min, Vec2::new(ext.max.x, ext.min.y), ext.max, Vec2::new(ext.min.x, ext.max.y)];
+        let seen = Bounds2::from_points(corners.iter().map(|c| p.project(c.to3(0.0))));
+        if seen.is_empty() { (ext.center(), ext.width(), ext.height()) } else { (seen.center(), seen.width(), seen.height()) }
+    }
+    /// Keep model space's view twist in the drawing, where files carry it: the twist of the
+    /// lone `*Active` VPORT tile when the model view isn't tiled (DXF VPORT group 51), the
+    /// current tile's when it is. Changes nothing when the drawing already says so.
+    pub fn keep_model_twist(&mut self) {
+        use cadaddy_doc::{VportConfig, VportTile};
+        let t = if self.view_twist.is_finite() { cadaddy_geom::norm_angle(self.view_twist) } else { 0.0 };
+        let active = self.doc.vports.iter().position(|c| c.is_active());
+        let current = active.and_then(|i| self.doc.vports.get(i)).and_then(|c| c.tiles.first()).map(|x| x.twist);
+        if current.unwrap_or(0.0) == t {
+            return;
+        }
+        let v = self.views.iter().find(|(s, _)| *s == Space::Model).map(|(_, v)| *v).unwrap_or_default();
+        let doc = Arc::make_mut(&mut self.doc);
+        match active.and_then(|i| doc.vports.get_mut(i)) {
+            Some(c) if c.tiles.len() > 1 => {
+                if let Some(x) = c.tiles.first_mut() {
+                    x.twist = t;
+                }
+            }
+            Some(_) if t == 0.0 => doc.vports.retain(|c| !c.is_active()),
+            Some(c) => {
+                c.tiles = vec![VportTile { min: Vec2::ZERO, max: Vec2::new(1.0, 1.0), center: v.center, height: v.height, aspect: 0.0, twist: t }];
+            }
+            None => doc.vports.push(VportConfig {
+                name: VportConfig::ACTIVE.to_string(),
+                tiles: vec![VportTile { min: Vec2::ZERO, max: Vec2::new(1.0, 1.0), center: v.center, height: v.height, aspect: 0.0, twist: t }],
+            }),
+        }
     }
     /// The projection the current space's display list is built with: [`Self::projection`],
     /// except in a layout, whose sheet is drawn flat (an MSPACE viewport's model space is drawn
@@ -765,6 +807,11 @@ pub struct Settings {
     pub lwdisplay: bool,
     /// TRANSPARENCYDISPLAY: draw objects with their transparency on screen (on by default).
     pub transparency_display: bool,
+    /// DYNRESMODE: while the 2D view pans or zooms, a slow GPU draws the drawing at a lower
+    /// resolution and sharpens it when the view stops (on by default; 0 always full resolution).
+    pub dynres: bool,
+    /// DYNRESFPS: the frame rate that lower resolution aims to hold, 10–120 (default 30).
+    pub dynres_fps: u8,
     /// NAVVCUBEDISPLAY: where the ViewCube shows (bits: 1 in 2D views, 2 in 3D views; 0 never).
     pub navvcube_display: u8,
     /// NAVVCUBELOCATION: the ViewCube's corner: 0 top right, 1 top left, 2 bottom left, 3 bottom
@@ -915,6 +962,8 @@ impl Default for Settings {
             dynprompt: true,
             lwdisplay: false,
             transparency_display: true,
+            dynres: true,
+            dynres_fps: 30,
             navvcube_display: 3,
             navvcube_location: 0,
             navvcube_size: 4,
@@ -2480,6 +2529,14 @@ impl Session {
         if !ext.is_empty() {
             st.set_view_quiet(framed(ext, self.viewport_px, self.viewport_inset_px, |a| a, 1.1));
         }
+        // The model view's twist the file saved (VPORT group 51 of its `*Active` viewport), the
+        // extents fitted as the turned view sees them.
+        let twist = st.doc.vports.iter().find(|c| c.is_active()).and_then(|c| c.tiles.first()).map_or(0.0, |t| t.twist);
+        if twist != 0.0 && st.space == Space::Model && st.set_twist(twist) && !ext.is_empty() {
+            let (c, w, h) = st.seen_box(ext);
+            let seen = Bounds2::new(c - Vec2::new(w / 2.0, h / 2.0), c + Vec2::new(w / 2.0, h / 2.0));
+            st.set_view_quiet(framed(seen, self.viewport_px, self.viewport_inset_px, |a| a, 1.1));
+        }
         self.end_running();
         self.docs.push(st);
         self.active = self.docs.len() - 1;
@@ -3157,7 +3214,10 @@ impl Session {
         let ap = self.pixel_size() * self.settings.aperture.max(1.0);
         let base = prompt.base.map(|_| self.last_point3);
         let on_face = self.settings.ducs && prompt.point3 && proj.is_some();
-        snap3::osnap3(&st.doc, &st.edit_space(), proj, cursor, ap, self.settings.osmode3, base, on_face)
+        // In the shaded BIM view, what its active view draws (Q6419): no snap to what isn't there.
+        let shown = self.bim_shown_3d();
+        let d = shown.as_deref().unwrap_or(&st.doc);
+        snap3::osnap3(d, &st.edit_space(), proj, cursor, ap, self.settings.osmode3, base, on_face)
     }
 
     pub fn input(&mut self, input: Input) -> Result<()> {
@@ -3297,7 +3357,7 @@ impl Session {
                 let store = d.space(&space);
                 let picked = match tl.as_str() {
                     "all" => store.map(|s| s.iter().filter(|e| d.is_visible(e)).map(|e| e.handle).collect()),
-                    "l" | "last" => store.and_then(|s| s.last()).map(|e| vec![e.handle]),
+                    "l" | "last" => select::last_object(d, &space).map(|h| vec![h]),
                     "p" | "previous" => Some(self.state()?.previous_selection.clone()),
                     _ => None,
                 };
@@ -4009,6 +4069,9 @@ impl Session {
         }
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
+        // Views aren't all part of the drawing's undo: the untiled twist record follows the
+        // live model view again.
+        st.keep_model_twist();
         st.selection = Vec::new();
         st.redo.push(cur);
         st.revision += 1;
@@ -4024,6 +4087,9 @@ impl Session {
         }
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
+        // Views aren't all part of the drawing's undo: the untiled twist record follows the
+        // live model view again.
+        st.keep_model_twist();
         st.selection = Vec::new();
         st.undo.push(cur);
         st.revision += 1;
@@ -4049,15 +4115,35 @@ impl Session {
     ///
     /// PICKADD on (the default): picks add to the selection and Shift removes. PICKADD off: each pick
     /// replaces the selection and Shift adds (Shift+pick on a selected object removes it).
+    /// What the shaded 3D BIM view draws of the drawing (its active view, Q6419), when the view
+    /// is a shaded 3D one showing the built model: what clicks, windows and snaps there find.
+    pub fn bim_shown_3d(&self) -> Option<Arc<Drawing>> {
+        let st = self.state().ok()?;
+        if st.projection().is_none() || st.visual_style == cadaddy_render::shade::VisualStyle::Wireframe2d || st.space != Space::Model {
+            return None;
+        }
+        st.bim_shown.of(st)
+    }
+
     pub fn idle_click(&mut self, p: Vec2, shift: bool) -> Result<()> {
         let space = self.space();
+        // In the shaded BIM view only what its view draws is picked.
+        let shown = self.bim_shown_3d();
         if let Some(pw) = self.pending_window.take() {
-            let hs = self.window_selection(&space, pw.corner, p)?;
+            let mut hs = self.window_selection(&space, pw.corner, p)?;
+            if let Some(sh) = &shown {
+                hs.retain(|h| sh.model.contains(*h));
+            }
             self.idle_select_area(hs, shift);
             return Ok(());
         }
         let ap = self.pick_aperture();
-        match select::pick(&*self.view_doc()?, &space, p, ap) {
+        let doc = self.doc()?;
+        let hit = match &shown {
+            Some(sh) => select::pick(sh, &space, p, ap).filter(|h| doc.model.contains(*h)),
+            None => select::pick(&*self.view_doc()?, &space, p, ap),
+        };
+        match hit {
             // A piece the 3D view draws only as part of its run (a coarse fidelity tier): the run.
             Some(h) => match cmd::fidelity::pick(self, h) {
                 run if run.len() > 1 => self.idle_select_area(run, shift),

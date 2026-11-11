@@ -200,7 +200,7 @@ impl CadApp {
             self.gpu_caps.notes.push("after a GPU error, 3D views are drawn by the CPU".into());
             self.canvas.shade.reset_gpu();
             if let Some(w) = self.walk.as_mut() {
-                w.gpu = None;
+                w.reset_gpu();
             }
         }
         #[cfg(not(target_arch = "wasm32"))]

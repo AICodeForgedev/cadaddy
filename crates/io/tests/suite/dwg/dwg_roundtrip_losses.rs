@@ -204,8 +204,8 @@ fn a_viewport_view_target_offsets_its_view_centre() {
 
 #[test]
 fn viewport_frozen_layers_use_group_331() {
-    // The DXF Reference keeps a viewport's frozen layers in group 331; other programs read only
-    // that (CADaddy wrote 341 before 0.7.4, which nothing else understood).
+    // The DXF Reference keeps a viewport's frozen layers in group 331 from 2004 on (341 in a
+    // DXF 2000, the DXF 2000 Reference's group); other programs read only that.
     let mut d = Drawing::new_metric();
     d.ensure_layer("HIDE");
     let first = Space::Paper(d.layouts[0].name.clone());
@@ -214,7 +214,12 @@ fn viewport_frozen_layers_use_group_331() {
         v.frozen_layers = vec!["HIDE".into()];
     }
     d.add(&first, Common::default(), vp).unwrap();
-    let text = cadaddy_io::write_dxf(&d);
+    let r2000 = cadaddy_io::write_dxf(&d);
+    let vps = records(&r2000, "VIEWPORT");
+    let ours = vps.iter().find(|r| group(r, "69") == Some("2")).expect("viewport 2");
+    assert!(group(ours, "341").is_some() && group(ours, "331").is_none(), "{ours:?}");
+    let opts = cadaddy_io::SaveOptions { version: Some(cadaddy_io::Version::R2018), binary: false };
+    let text = String::from_utf8(cadaddy_io::write_with(&d, "t.dxf", &opts).unwrap()).unwrap();
     let vps = records(&text, "VIEWPORT");
     let ours = vps.iter().find(|r| group(r, "69") == Some("2")).expect("viewport 2");
     assert!(group(ours, "331").is_some(), "{ours:?}");
@@ -305,4 +310,79 @@ fn mtext_background_masks_survive_dxf_and_dwg() {
     assert_eq!(find(&dwg, 0.0).map(|b| (b.color, (b.scale * 100.0).round())), Some((Some(Color::Index(1)), 125.0)));
     assert_eq!(find(&dwg, 10.0).map(|b| b.color), Some(None));
     assert_eq!(find(&dwg, 20.0), None);
+}
+
+/// The paper-space viewport a save adds is the sheet as large as it plots: a layout with a custom
+/// plot scale (here 49.6 mm of paper per unit, as in #2108's file) has an A3 sheet of 8.47 × 5.99
+/// units in paper space, not 420 × 297. A layout at 1:1 or scaled to fit keeps the page size.
+#[test]
+fn the_added_paper_viewport_follows_the_plot_scale() {
+    let sheet_width = |scale: f64, fit: bool| {
+        let mut d = Drawing::new_metric();
+        let page = &mut d.layouts[0].page;
+        (page.width_mm, page.height_mm, page.landscape, page.mm_units) = (297.0, 420.0, true, Some(true));
+        (page.scale, page.scale_to_fit) = (scale, fit);
+        let first = Space::Paper(d.layouts[0].name.clone());
+        d.add(&first, Common::default(), viewport(2)).unwrap();
+        let text = cadaddy_io::write_dxf(&d);
+        let vps = records(&text, "VIEWPORT");
+        assert_eq!(group(&vps[0], "1000"), Some("PAPERVIEW"), "{text}");
+        group(&vps[0], "40").unwrap().parse::<f64>().unwrap()
+    };
+    assert!((sheet_width(49.6, false) - 420.0 / 49.6).abs() < 1e-9, "{}", sheet_width(49.6, false));
+    assert!((sheet_width(1.0, false) - 420.0).abs() < 1e-9);
+    assert!((sheet_width(49.6, true) - 420.0).abs() < 1e-9, "scaled to fit: the scale means nothing");
+    assert!((sheet_width(f64::NAN, false) - 420.0).abs() < 1e-9, "an unusable scale is 1");
+}
+
+/// A layout viewport's view twist (group 51, #1316) is read and written, so DXF and DWG keep it;
+/// a hostile angle reads as no twist and never panics.
+#[test]
+fn viewport_twist_survives_dxf_and_dwg() {
+    let mut d = Drawing::new_metric();
+    let name = d.layouts[0].name.clone();
+    let space = Space::Paper(name.clone());
+    let twist = 30f64.to_radians();
+    let EntityKind::Viewport(mut vp) = viewport(2) else { panic!("a viewport") };
+    vp.twist = twist;
+    let h = d.add(&space, Common::default(), EntityKind::Viewport(vp)).unwrap();
+    let twist_of = |d: &Drawing| {
+        let l = d.layouts.iter().find(|l| l.name == name).unwrap();
+        l.entities
+            .iter()
+            .find_map(|e| {
+                if let EntityKind::Viewport(v) = &e.kind
+                    && v.id == 2
+                {
+                    Some(v.twist)
+                } else {
+                    None
+                }
+            })
+            .unwrap()
+    };
+
+    let dxf = cadaddy_io::write(&d, "x.dxf").unwrap();
+    let text = String::from_utf8_lossy(&dxf).to_string();
+    let rec = records(&text, "VIEWPORT").into_iter().find(|r| group(r, "5") == Some(h.hex().as_str())).unwrap();
+    assert_eq!(group(&rec, "51").and_then(|v| v.parse::<f64>().ok()).map(f64::round), Some(30.0), "{rec:?}");
+    assert!((twist_of(&cadaddy_io::read(&dxf, "x.dxf").unwrap()) - twist).abs() < 1e-9);
+    assert!((twist_of(&through_dwg(&d)) - twist).abs() < 1e-9);
+
+    // An untwisted viewport writes no group 51.
+    let plain = records(&String::from_utf8_lossy(&cadaddy_io::write(&Drawing::new_metric(), "x.dxf").unwrap()), "VIEWPORT");
+    assert!(plain.iter().all(|r| group(r, "51").is_none()));
+
+    // Hostile angles: not a number reads as 0, a huge one is brought into one turn.
+    for (value, want) in [("nan", Some(0.0)), ("1e400", Some(0.0)), ("-330", Some(30f64.to_radians())), ("7200000000000000000030", None)] {
+        let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+        let at = lines.windows(2).position(|w| w[0].trim() == "51" && Some(w[1].trim()) == group(&rec, "51")).unwrap();
+        lines[at + 1] = value.to_string();
+        let bad = lines.join("\n");
+        let back = twist_of(&cadaddy_io::read(bad.as_bytes(), "x.dxf").unwrap());
+        assert!(back.is_finite() && (0.0..std::f64::consts::TAU).contains(&back), "{value}: {back}");
+        if let Some(w) = want {
+            assert!((back - w).abs() < 1e-9, "{value}: {back}");
+        }
+    }
 }

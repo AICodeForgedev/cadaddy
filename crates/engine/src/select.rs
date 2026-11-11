@@ -168,11 +168,15 @@ fn in_text(d: &Drawing, e: &Entity, p: Vec2) -> bool {
         // A dimension with a block (as AutoCAD saves them) is drawn from that block: its text is
         // the text there, not the text the dimension's own geometry would place.
         EntityKind::Dimension(dm) => match dm.block.as_ref().and_then(|n| d.block(n)) {
-            Some(blk) => blk.entities.iter().any(|be| match &be.kind {
-                EntityKind::MText(t) => in_box(cadaddy_render::layout_mtext_entity(d, t).strokes.into_iter().flatten(), t.rotation, p),
-                EntityKind::Text(_) => entity_bounds(d, be, 0).contains(p),
-                _ => false,
-            }),
+            // The block draws translated by the insertion point (group 12): test there.
+            Some(blk) => {
+                let p = p - if dm.insertion_point.is_finite() { dm.insertion_point.xy() } else { Vec2::ZERO };
+                blk.entities.iter().any(|be| match &be.kind {
+                    EntityKind::MText(t) => in_box(cadaddy_render::layout_mtext_entity(d, t).strokes.into_iter().flatten(), t.rotation, p),
+                    EntityKind::Text(_) => entity_bounds(d, be, 0).contains(p),
+                    _ => false,
+                })
+            }
             None => {
                 let g = cadaddy_render::dimension_in(d, dm);
                 in_box(g.text.iter().flatten().chain(g.text_glyphs.iter().flatten().flatten()).copied(), g.text_angle, p)
@@ -299,6 +303,22 @@ pub(crate) fn pick_all_with(d: &Drawing, space: &Space, ix: &Option<std::sync::A
     // A stable sort keeps the draw order (topmost first) among equal distances.
     hits.sort_by(|a, b| a.0.total_cmp(&b.0));
     hits.into_iter().map(|(_, h)| h).take(MAX_PICK_CANDIDATES).collect()
+}
+
+/// Whether `e` can be the "Last" object: the user's own, visible and selectable. What the
+/// program generates (a model build's output, tagged by [`crate::cmd::wallgen`]) never is,
+/// nor an object that is hidden or on a layer that is off, frozen or locked, whatever its place
+/// in the drawing order: a live rebuild appends its objects after the line the user drew last.
+pub fn can_be_last(d: &Drawing, e: &Entity) -> bool {
+    d.is_visible(e) && !d.layer(&e.common.layer).is_some_and(|l| l.locked) && crate::cmd::wallgen::made_as(e).is_none()
+}
+
+/// The object "Last" selects in `space` (typed `L` at Select objects): the newest one in
+/// drawing order that [`can_be_last`].
+pub fn last_object(d: &Drawing, space: &Space) -> Option<Handle> {
+    let store = d.space(space)?;
+    let chunks: Vec<&[std::sync::Arc<Entity>]> = store.chunk_slices().map(|(_, c)| c).collect();
+    chunks.iter().rev().flat_map(|c| c.iter().rev()).find(|e| can_be_last(d, e)).map(|e| e.handle)
 }
 
 /// Whether PREVIEWFILTER keeps `e` from being highlighted under the cursor: bits 1 objects on

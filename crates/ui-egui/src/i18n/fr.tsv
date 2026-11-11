@@ -3235,3 +3235,34 @@
 	Previous Sheet	Feuille précédente
 	Page {n}	Page {n}
 	Page Up and Page Down step through the sheets.	Page préc. et Page suiv. parcourent les feuilles.
+	Frame rate to hold while moving	Fréquence d'images à tenir en mouvement
+	Lower the resolution while panning and zooming when the graphics are slow	Baisser la résolution pendant le panoramique et le zoom quand les graphismes sont lents
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Le dessin redevient net dès que la vue s'arrête. Les tracés, exports et captures d'écran sont toujours en pleine résolution.
+# BIM views (Q6419).
+	MEP	CVC-Plomberie-Électricité
+	Full MEP	Réseaux complets
+	Cabinets	Meubles fixes
+	Following the system	Suivi du réseau
+	Stop following	Arrêter le suivi
+	Follow System	Suivre le réseau
+	Pipes with no size, not drawn	Tuyaux sans diamètre, non dessinés
+	BIM Views	Vues BIM
+	BIM View Rules	Règles des vues BIM
+	BIM View Report	Rapport des vues BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	La vue 3D du modèle et la visite font de même pendant l'orbite et la marche ; leur éclairage et leur niveau de détail restent inchangés.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Entrez le nom du fichier de sortie
+	Enter decimal places of accuracy (0 to 16)	Entrez le nombre de décimales de précision (0 à 16)
+	Enter name of existing block	Entrez le nom d'un bloc existant
+	Choose mode for selected object conversion	Choisissez le mode de conversion des objets sélectionnés
+	Current settings: Object conversion=Delete	Paramètres courants : Conversion des objets=Supprimer
+	Enter attribute values	Entrez les valeurs d'attribut
+	Verify attribute values	Vérifiez les valeurs d'attribut
+	Convert to block	Convertir en bloc
+	Retain	Conserver
+	Binary	Binaire
+	mOde	Mode
+	define new drawing	définir un nouveau dessin
+	= (block=output file)	= (bloc=fichier de sortie)
+	* (whole drawing)	* (dessin entier)
+	Requires an integer between 0 and 16.	Un entier entre 0 et 16 est requis.
