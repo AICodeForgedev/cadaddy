@@ -235,7 +235,8 @@ fn pointing(lines: &[(Vec2, Vec2)], b: &Bubble) -> Option<(Vec2, Vec2)> {
 /// through it runs to a grid bubble of the same label (a grid bubbled at both ends, the row at
 /// this end cut off).
 fn other_end_of_a_grid(b: &Bubble, (_, far): (Vec2, Vec2), sure: &[(&Bubble, Vec2, Vec2)]) -> bool {
-    sure.iter().any(|(s, ..)| !std::ptr::eq(*s, b) && s.label.eq_ignore_ascii_case(&b.label) && far.dist(s.at) <= 1.3 * s.r && s.at.dist(b.at) > 2.0 * s.r)
+    sure.iter()
+        .any(|(s, ..)| !std::ptr::eq(*s, b) && s.label.eq_ignore_ascii_case(&b.label) && far.dist(s.at) <= 1.3 * s.r && s.at.dist(b.at) > 2.0 * s.r)
 }
 
 /// Grid bubbles of one sheet differ in size by at most this share.
