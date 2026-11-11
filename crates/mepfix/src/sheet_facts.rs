@@ -757,39 +757,84 @@ pub fn names_a_plan(title: &str) -> bool {
 const MAX_SCALE_VIEWS: usize = 500;
 
 /// The scale a sheet's plans print at (sheet inches per foot: 0.125 for `1/8" = 1'-0"`) and the
-/// biggest plan view printing it: the scale most of its plan views ([`names_a_plan`]) print, and
-/// between scales printed as often, the one whose views cover more of the sheet. A view not to
-/// scale or whose note doesn't read has no say. `None` without a plan view at a scale.
+/// biggest plan view printing it. Where every plan view's region was found: the scale of the plan
+/// views ([`names_a_plan`]) that draw the most of the building, each view's area on the sheet
+/// over its scale squared (a 1/4" power plan draws the whole floor, the two 1/2" enlarged plans
+/// beside it a room each, however many there are and however much of the sheet they take,
+/// Q6498). Else, and between scales that draw as much, the scale more of its plan views print,
+/// then the one whose views cover more of the sheet. A view not to scale or whose note doesn't
+/// read has no say. `None` without a plan view at a scale.
 pub fn plan_print_scale(views: &[ViewTitle]) -> Option<(f64, &ViewTitle)> {
-    // (scale, views, their area, the biggest of them and its area)
-    let mut by: Vec<(f64, usize, f64, &ViewTitle, f64)> = Vec::new();
+    // (scale, views, their area, the biggest of them and its area, the building they draw)
+    let mut by: Vec<(f64, usize, f64, &ViewTitle, f64, f64)> = Vec::new();
+    let mut all_regions = true;
     for v in views.iter().take(MAX_SCALE_VIEWS) {
-        if v.not_to_scale || !names_a_plan(&v.title) {
-            continue;
-        }
-        let Some(k) = v.scale_text.as_deref().and_then(crate::sheet_reader::parse_scale).filter(|k| k.is_finite() && *k > 0.0) else {
-            continue;
-        };
+        let Some(k) = plan_view_scale(v) else { continue };
+        all_regions &= v.region.is_some();
         let a = v.region.map_or(0.0, |r| ((r[2] - r[0]) * (r[3] - r[1])).abs()).max(0.0);
         let a = if a.is_finite() { a } else { 0.0 };
+        // the building the view draws (square feet, in the sheet's units)
+        let drawn = a / (k * k);
+        let drawn = if drawn.is_finite() { drawn } else { 0.0 };
         match by.iter_mut().find(|e| (e.0 - k).abs() <= 1e-6 * k) {
             Some(e) => {
                 e.1 += 1;
                 e.2 += a;
+                e.5 += drawn;
                 if a > e.4 {
                     e.3 = v;
                     e.4 = a;
                 }
             }
-            None => by.push((k, 1, a, v, a)),
+            None => by.push((k, 1, a, v, a, drawn)),
         }
     }
-    by.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(a.2.total_cmp(&b.2))).map(|e| (e.0, e.3))
+    let drawn = |e: &(f64, usize, f64, &ViewTitle, f64, f64)| if all_regions { e.5 } else { 0.0 };
+    by.into_iter().max_by(|a, b| drawn(a).total_cmp(&drawn(b)).then(a.1.cmp(&b.1)).then(a.2.total_cmp(&b.2))).map(|e| (e.0, e.3))
+}
+
+/// The scale a view prints (sheet inches per foot), when it is to scale and its note reads.
+fn view_scale(v: &ViewTitle) -> Option<f64> {
+    if v.not_to_scale {
+        return None;
+    }
+    v.scale_text.as_deref().and_then(crate::sheet_reader::parse_scale).filter(|k| k.is_finite() && *k > 0.0)
+}
+
+/// [`view_scale`] of a plan view ([`names_a_plan`]).
+fn plan_view_scale(v: &ViewTitle) -> Option<f64> {
+    if names_a_plan(&v.title) { view_scale(v) } else { None }
+}
+
+/// The scales a sheet of several scale notes prints (sheet inches per foot): its plans'
+/// ([`plan_print_scale`]) and the view that gave it, and every scale its plan views print and its
+/// other views (elevations, sections, details, key plans) print, each once.
+#[derive(Clone, Debug)]
+pub struct SheetScales {
+    pub plans: f64,
+    pub view: ViewTitle,
+    pub plan_views: Vec<f64>,
+    pub other_views: Vec<f64>,
+}
+
+impl SheetScales {
+    /// Whether one of the sheet's plan views (`plans: true`) or its other views prints `k` sheet
+    /// inches per foot, within `tolerance` (relative).
+    pub fn prints(&self, k: f64, plans: bool, tolerance: f64) -> bool {
+        let list = if plans { &self.plan_views } else { &self.other_views };
+        k.is_finite() && k > 0.0 && list.iter().any(|s| (s / k - 1.0).abs() <= tolerance)
+    }
 }
 
 /// [`plan_print_scale`] of a drawing of one sheet, read only when the sheet prints more than one
 /// scale note (with one, the sheet's note is its plans'): the scale and the view (cloned).
 pub fn sheet_plan_print_scale(d: &Drawing) -> Option<(f64, ViewTitle)> {
+    sheet_scales(d).map(|s| (s.plans, s.view))
+}
+
+/// [`SheetScales`] of a drawing of one sheet, read only when the sheet prints more than one scale
+/// note (with one, the sheet's note is its plans'), and only with a plan view at a scale.
+pub fn sheet_scales(d: &Drawing) -> Option<SheetScales> {
     let t = texts(d);
     // By the notes' lettering (a note the scale reader can't read is another scale all the same).
     let mut seen: Vec<String> = Vec::new();
@@ -805,7 +850,15 @@ pub fn sheet_plan_print_scale(d: &Drawing) -> Option<(f64, ViewTitle)> {
         return None;
     }
     let views = view_titles(d, &t);
-    plan_print_scale(&views).map(|(k, v)| (k, v.clone()))
+    let (plans, view) = plan_print_scale(&views).map(|(k, v)| (k, v.clone()))?;
+    let (mut plan_views, mut other_views): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
+    for v in views.iter().take(MAX_SCALE_VIEWS) {
+        let (Some(k), list) = (view_scale(v), if names_a_plan(&v.title) { &mut plan_views } else { &mut other_views }) else { continue };
+        if !list.iter().any(|x| (x - k).abs() <= 1e-6 * k) {
+            list.push(k);
+        }
+    }
+    Some(SheetScales { plans, view, plan_views, other_views })
 }
 
 /// The sheet and its views.
@@ -831,9 +884,9 @@ mod tests {
         }
     }
 
-    /// Q6396: a sheet's plans print the scale most of its plan views do (a detail's or an
-    /// elevation's note is none of theirs, nor a key plan's), the bigger between scales printed as
-    /// often.
+    /// Q6396: a sheet's plans print the scale of its plan views (a detail's or an elevation's note
+    /// is none of theirs, nor a key plan's) that draw the most of the building (Q6498), the bigger
+    /// between scales that draw as much.
     #[test]
     fn a_sheets_plans_print_the_scale_of_its_plan_views() {
         let roof = [
@@ -844,14 +897,31 @@ mod tests {
         ];
         let (k, v) = plan_print_scale(&roof).expect("a plan at a scale");
         assert_eq!((k, v.title.as_str()), (0.125, "ROOF PLAN"));
-        // Two enlarged plans at 1/2" over one at 1/4", whatever their sizes.
+        // Q6498: a floor's plan at 1/4" with two enlarged plans at 1/2" beside it prints 1/4", the
+        // scale of the plan that draws the floor, even where the two take more of the sheet.
         let enlarged = [
             view("ENLARGED PLAN - ROOM A", Some("1/2\" = 1'-0\""), 50.0),
             view("ENLARGED PLAN - ROOM B", Some("1/2\" = 1'-0\""), 60.0),
             view("PARTIAL FLOOR PLAN", Some("1/4\" = 1'-0\""), 500.0),
             view("SECTION", Some("3/4\" = 1'-0\""), 80.0),
         ];
-        assert_eq!(plan_print_scale(&enlarged).map(|(k, v)| (k, v.title.clone())), Some((0.5, "ENLARGED PLAN - ROOM B".to_string())));
+        assert_eq!(plan_print_scale(&enlarged).map(|(k, v)| (k, v.title.clone())), Some((0.25, "PARTIAL FLOOR PLAN".to_string())));
+        let big_enlarged = [
+            view("POWER PLAN", Some("1/4\" = 1'-0\""), 400.0),
+            view("ENLARGED KITCHEN PLAN", Some("1/2\" = 1'-0\""), 300.0),
+            view("ENLARGED RESTROOM PLAN", Some("1/2\" = 1'-0\""), 250.0),
+        ];
+        assert_eq!(plan_print_scale(&big_enlarged).map(|(k, v)| (k, v.title.clone())), Some((0.25, "POWER PLAN".to_string())));
+        // A sheet of enlarged plans only (each a room) prints theirs; with no view's region found,
+        // the scale more of them print.
+        let rooms = [view("ENLARGED PLAN - ROOM A", Some("1/2\" = 1'-0\""), 50.0), view("ENLARGED PLAN - ROOM B", Some("1/2\" = 1'-0\""), 60.0)];
+        assert_eq!(plan_print_scale(&rooms).map(|(k, _)| k), Some(0.5));
+        let no_regions = [
+            view("ENLARGED PLAN - ROOM A", Some("1/2\" = 1'-0\""), 0.0),
+            view("ENLARGED PLAN - ROOM B", Some("1/2\" = 1'-0\""), 0.0),
+            view("PARTIAL FLOOR PLAN", Some("1/4\" = 1'-0\""), 0.0),
+        ];
+        assert_eq!(plan_print_scale(&no_regions).map(|(k, _)| k), Some(0.5));
         // As often: the bigger.
         let tie = [view("FLOOR PLAN", Some("1/4\" = 1'-0\""), 500.0), view("ENLARGED PLAN", Some("1/2\" = 1'-0\""), 300.0)];
         assert_eq!(plan_print_scale(&tie).map(|(k, _)| k), Some(0.25));
@@ -872,6 +942,12 @@ mod tests {
         text(&mut d, "ELEVATION", 10.0, 2.0, 0.25);
         text(&mut d, "1/2\" = 1'-0\"", 10.0, 1.6, 0.12);
         assert_eq!(sheet_plan_print_scale(&d).map(|(k, v)| (k, v.title)), Some((0.125, "ROOF PLAN".to_string())));
+        // What its plan views and its other views print (Q6498: a reading at the elevation's
+        // scale is no plan's; one at the roof plan's is).
+        let sc = sheet_scales(&d).expect("two scales");
+        assert_eq!((sc.plan_views.clone(), sc.other_views.clone()), (vec![0.125], vec![0.5]));
+        assert!(sc.prints(0.5, false, 0.02) && !sc.prints(0.5, true, 0.02) && sc.prints(0.126, true, 0.02));
+        assert!(!sc.prints(f64::NAN, true, 0.02) && !sc.prints(0.0, false, 0.02));
     }
 
     #[test]
