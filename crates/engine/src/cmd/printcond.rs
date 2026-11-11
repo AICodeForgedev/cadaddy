@@ -1450,7 +1450,8 @@ mod tests {
         assert!(get("roof-flush").is_none(), "a device at the legs' height takes no vertical piece");
         let storey = get("storey").expect("storey drop");
         assert_eq!((storey.bottoms_ft.clone(), storey.top_ft), (vec![1.5], Some(8.25)), "a storey's drop still hangs from over its ceiling");
-        let bad: Vec<String> = sp.check().into_iter().filter(|i| i.path.starts_with("mep.runs")).map(|i| format!("{}: {}", i.path, i.message)).collect();
+        let bad: Vec<String> =
+            sp.check().into_iter().filter(|i| i.path.starts_with("mep.runs")).map(|i| format!("{}: {}", i.path, i.message)).collect();
         assert!(bad.is_empty(), "{bad:?}");
     }
 }

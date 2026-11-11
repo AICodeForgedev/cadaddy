@@ -78,6 +78,12 @@ pub(crate) struct Read {
     pub already: usize,
     /// Scheduled tags no plan places, with why.
     pub unplaced: Vec<(String, String)>,
+    /// The schedules' rows (for [`type_built`]: the equipment built some other way that a row
+    /// names).
+    pub rows: Vec<Scheduled>,
+    /// Equipment tags the plans print that no schedule row lists (letters a schedule uses, a
+    /// number it doesn't), with the sheets.
+    pub unscheduled: Vec<(String, String)>,
 }
 
 impl Read {
@@ -419,6 +425,208 @@ pub(crate) fn read(schedules: &[(String, Drawing)], plans: &[PlanIn], have: &[Me
     let sched: Vec<Scheduled> = equip_reader::scheduled(&tables).into_iter().take(MAX_SCHEDULED).collect();
     let mut out = place(&sched, plans, have, levels);
     out.tables = tables.len();
+    out.unscheduled = unscheduled_tags(&sched, plans);
+    out.rows = sched;
+    out
+}
+
+/// Most unscheduled tags listed.
+const MAX_UNSCHEDULED: usize = 200;
+
+/// The equipment tags the plans print (`EF-9`: letters a schedule's tags use, then a number)
+/// that no schedule row lists, each with the sheets printing it: drawn equipment with no row
+/// to say what it is.
+fn unscheduled_tags(sched: &[Scheduled], plans: &[PlanIn]) -> Vec<(String, String)> {
+    let head = |t: &str| -> Option<(String, String)> {
+        let t = t.trim().to_ascii_uppercase();
+        let i = t.char_indices().rev().take_while(|(_, c)| c.is_ascii_digit()).last().map(|(i, _)| i)?;
+        let (h, n) = t.split_at(i);
+        let letters = h.trim_end_matches('-');
+        (letters.len() >= 2 && letters.len() <= 5 && letters.chars().all(|c| c.is_ascii_alphabetic()) && n.len() <= 3)
+            .then(|| (letters.to_string(), t.clone()))
+    };
+    let listed: BTreeSet<String> = sched.iter().flat_map(|x| tag_variants(&x.tag)).collect();
+    // The letters the schedules' tags use, and how (`EF-1`, `EF1`).
+    let letters: BTreeSet<String> = listed.iter().filter_map(|t| head(t).map(|(l, _)| l)).collect();
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for plan in plans {
+        for t in plan_texts(plan.drawing) {
+            let Some((l, tag)) = head(&t.value) else { continue };
+            if !letters.contains(&l) || listed.contains(&tag) || t.value.trim().len() != tag.len() {
+                continue;
+            }
+            // Written as the schedules write theirs (`EF-9` beside `EF-1`).
+            if !listed.iter().any(|x| head(x).is_some_and(|(xl, _)| xl == l) && x.contains('-') == tag.contains('-')) {
+                continue;
+            }
+            if out.len() < MAX_UNSCHEDULED || out.contains_key(&tag) {
+                out.entry(tag).or_default().insert(plan.sheet.number.clone());
+            }
+        }
+    }
+    out.into_iter().map(|(t, s)| (t, s.into_iter().collect::<Vec<_>>().join(", "))).collect()
+}
+
+/// How far past a unit's footprint a drawn run's end may stop and still be joined to it, feet.
+const JOIN_REACH_FT: f64 = 1.5;
+
+/// Each unit built from a schedule (`equipment[from..]`) joined to the drawn runs on its level
+/// that end at it (a water heater's hot and cold water and gas, within [`JOIN_REACH_FT`] of its
+/// footprint): their systems on it, said so. How many units got one.
+pub(crate) fn join_runs(sp: &mut BuildingSpec, from: usize) -> usize {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let reach = JOIN_REACH_FT * upf;
+    let runs = &sp.mep.runs;
+    let mut joined = 0usize;
+    for e in sp.mep.equipment.iter_mut().skip(from) {
+        if !e.sources.contains_key("schedule") || e.kind == "roof_curb" || e.kind == "equipment_stand" {
+            continue;
+        }
+        let near = |p: &[f64; 2]| p[0] >= e.min[0] - reach && p[0] <= e.max[0] + reach && p[1] >= e.min[1] - reach && p[1] <= e.max[1] + reach;
+        let mut systems: BTreeSet<String> = BTreeSet::new();
+        for r in runs.iter().filter(|r| r.level == e.level).take(MAX_ITEMS) {
+            let ends = [r.points.first(), r.points.last()];
+            if ends.iter().flatten().any(|p| near(p)) && !r.system.trim().is_empty() {
+                systems.insert(r.system.clone());
+            }
+        }
+        if systems.is_empty() {
+            continue;
+        }
+        let new: Vec<String> = systems.into_iter().filter(|s| !e.systems.contains(s)).collect();
+        if new.is_empty() {
+            continue;
+        }
+        e.sources.insert("systems".to_string(), format!("the drawn runs ending at it ({})", new.join(", ")));
+        e.systems.extend(new);
+        joined += 1;
+    }
+    joined
+}
+
+/// What [`type_built`] did.
+#[derive(Default, Debug, Clone, PartialEq)]
+pub(crate) struct Typed {
+    /// Equipment whose own tag a row lists, its row's data put on it.
+    pub by_tag: usize,
+    /// Equipment tagged only with its kind's letters (a typical room's `EF`) given the one row
+    /// of that kind that serves its room (or the only row of its kind).
+    pub by_room: usize,
+    /// Equipment tagged only with its kind's letters that no one row could be told for, with
+    /// the rows it could be.
+    pub untold: Vec<(String, String)>,
+}
+
+/// A row's own data put on equipment already built some other way (a typical room's stamped
+/// fan): every column it doesn't have yet, sourced to the schedule.
+fn put_row(e: &mut MepEquipment, x: &Scheduled) {
+    for (k, v) in &x.properties {
+        e.properties.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    e.sources.entry("schedule".to_string()).or_insert_with(|| format!("{} {}", x.sheet, x.title).trim().to_string());
+}
+
+/// The words of a text, upper case, a plural's `S` off (`BATHROOMS` → `BATHROOM`).
+fn stem_words(t: &str) -> BTreeSet<String> {
+    t.to_ascii_uppercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 3 && !w.chars().all(|c| c.is_ascii_digit()))
+        .map(|w| if w.len() > 3 && w.ends_with('S') && !w.ends_with("SS") { w.trim_end_matches('S').to_string() } else { w.to_string() })
+        .collect()
+}
+
+/// A row that serves many rooms: its `SERVES` in the plural (`GUEST TOILET ROOMS`) or said typical.
+fn serves_many(serves: &str) -> bool {
+    let u = serves.to_ascii_uppercase();
+    let last = u.split(|c: char| !c.is_ascii_alphanumeric()).rfind(|w| !w.is_empty()).unwrap_or("");
+    u.contains("TYP") || (last.len() > 3 && last.ends_with('S') && !last.ends_with("SS"))
+}
+
+/// The schedules' rows put on the equipment built some other way (a typical room's stamped
+/// unit, an exhaust fan the plans draw): equipment whose tag a row lists takes that row's data;
+/// equipment tagged only with its kind's letters (a typical room's `EF`) takes the one row of
+/// its kind that serves its room: the row whose `SERVES` shares the most words with the room's
+/// name and the view it came from, a row serving many rooms (plural, typical) before one that
+/// serves one; the only row of its kind; else none, listed. Its tag becomes that row's, its
+/// type said derived with the reason. `room_name` gives a room's name from its level and number.
+pub(crate) fn type_built(rows: &[Scheduled], equipment: &mut [MepEquipment], room_name: &dyn Fn(&str, &str) -> String) -> Typed {
+    let mut out = Typed::default();
+    let by_tag: BTreeMap<String, &Scheduled> = rows.iter().flat_map(|x| tag_variants(&x.tag).into_iter().map(move |t| (t, x))).collect();
+    for e in equipment.iter_mut() {
+        // Built from its row already.
+        if e.sources.contains_key("schedule") {
+            continue;
+        }
+        let tag = e.tag.trim().to_ascii_uppercase();
+        if tag.is_empty() {
+            continue;
+        }
+        if let Some(x) = by_tag.get(&tag) {
+            put_row(e, x);
+            out.by_tag += 1;
+            continue;
+        }
+        // Only letters: the kind's mark, no type.
+        if !tag.chars().all(|c| c.is_ascii_alphabetic()) {
+            continue;
+        }
+        let letters = |t: &str| -> String { t.chars().take_while(|c| c.is_ascii_alphabetic()).collect() };
+        let same: Vec<&Scheduled> = rows.iter().filter(|x| x.kind == e.kind && letters(&x.tag) == tag).collect();
+        if same.is_empty() {
+            continue;
+        }
+        let room = e.properties.get("room").cloned().unwrap_or_default();
+        // The room's name and its view's title (less the words naming the drawing), less the
+        // words that say nothing about the room.
+        let stem = |w: &str| stem_words(w).into_iter().next().unwrap_or_default();
+        let generic: BTreeSet<String> = cadaddy_mepfix::wordrules::words("equipment.serves_generic_words").iter().map(|w| stem(w)).collect();
+        let drafting: BTreeSet<String> = cadaddy_mepfix::wordrules::words("equipment.view_title_drafting_words").iter().map(|w| stem(w)).collect();
+        let mut words = stem_words(&room_name(&e.level, &room));
+        words.extend(stem_words(&e.title).into_iter().filter(|w| !drafting.contains(w)));
+        words.retain(|w| !generic.contains(w));
+        // What a row serves: its `SERVES` / `AREA SERVED` column, else its `SERVICE`.
+        let serves = |x: &Scheduled| {
+            let col = |w: &str| x.properties.iter().find(|(k, _)| k.to_ascii_uppercase().contains(w)).map(|(_, v)| v.clone());
+            col("SERVE").or_else(|| col("SERVICE"))
+        };
+        let score = |x: &Scheduled| {
+            let s = serves(x).unwrap_or_default();
+            let shared = stem_words(&s).intersection(&words).count();
+            (shared, usize::from(serves_many(&s)))
+        };
+        let mut ranked: Vec<((usize, usize), &Scheduled)> = same.iter().map(|x| (score(x), *x)).collect();
+        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        let pick = match ranked.as_slice() {
+            [only] => Some((only.1, "the only row of its kind".to_string())),
+            [first, second, ..] if first.0 > second.0 && (first.0.0 > 0 || first.0.1 > 0) => {
+                let s = serves(first.1).unwrap_or_default();
+                let why = if first.0.0 > 0 && first.0.0 > second.0.0 {
+                    format!("its row serves {s}, the room's use")
+                } else {
+                    format!("its row serves {s}, the one row of its kind for many rooms")
+                };
+                Some((first.1, why))
+            }
+            _ => None,
+        };
+        match pick {
+            Some((x, why)) => {
+                let new_tag = tag_variants(&x.tag).into_iter().next().unwrap_or_else(|| x.tag.clone());
+                put_row(e, x);
+                e.properties.insert("TYPE".to_string(), new_tag.clone());
+                let basis = format!("drawn tagged {tag} with no number; {} {} lists {new_tag}: {why}", x.sheet, x.title);
+                e.sources.insert("type".to_string(), basis.trim().to_string());
+                e.tag = new_tag;
+                out.by_room += 1;
+            }
+            None => {
+                if out.untold.len() < MAX_UNSCHEDULED {
+                    let can: Vec<String> = same.iter().map(|x| x.tag.clone()).collect();
+                    out.untold.push((format!("{tag} ({} {room})", e.level), can.join(", ")));
+                }
+            }
+        }
+    }
     out
 }
 
@@ -642,7 +850,7 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
         .enumerate()
         .filter(|(i, (t, _))| !placed.contains(t) && !typed_found.contains(i))
         .map(|(_, tx)| tx)
-        .map(|(t, x)| (t.clone(), format!("{} {} lists it; no mechanical plan of a level tags it", x.sheet, x.title).trim().to_string()))
+        .map(|(t, x)| (t.clone(), format!("{} {} lists it; no mechanical or plumbing plan of a level tags it", x.sheet, x.title).trim().to_string()))
         .collect();
     out
 }
@@ -1179,5 +1387,159 @@ mod tests {
         assert_eq!(schedule_bottom_ft(&row(&[("MOUNTING", "CEILING")])), None);
         assert_eq!(schedule_bottom_ft(&row(&[("REMARKS", "THERMOSTAT AT 48\" AFF")])), None);
         assert_eq!(schedule_bottom_ft(&row(&[("MTG HT", "")])), None);
+    }
+
+    fn plumbing_plan() -> SheetRef {
+        SheetRef {
+            number: "P-9".into(),
+            level: "1".into(),
+            discipline: "P".into(),
+            kind: "plan".into(),
+            rect: [0.0, -500.0, 2000.0, 500.0],
+            ..Default::default()
+        }
+    }
+
+    fn table(title: &str, columns: &[&str], rows: &[&[&str]]) -> equip_reader::Table {
+        equip_reader::Table {
+            sheet: "P-0".into(),
+            title: title.into(),
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+            rows: rows.iter().map(|r| columns.iter().zip(r.iter()).map(|(c, v)| (c.to_string(), v.to_string())).collect()).collect(),
+        }
+    }
+
+    /// Q6316: a plumbing fixture schedule lists the water heaters (one row for three) and the
+    /// expansion tank among its fixtures; the plumbing plan tags each: each one is built, of its
+    /// kind, with its row's data; the fixtures stay fixtures.
+    #[test]
+    fn a_plumbing_schedules_equipment_rows_are_built_where_the_plumbing_plan_tags_them() {
+        let t = table(
+            "PLUMBING FIXTURE SCHEDULE",
+            &["TAG", "FIXTURE", "MANUFACTURER", "MODEL NO."],
+            &[
+                &["P-1", "WATER CLOSET", "MAKER A", "WC-10"],
+                &["WH-4,5,6", "GAS WATER HEATER", "MAKER B", "TANK-100"],
+                &["ET-2", "EXPANSION TANK", "MAKER C", "XT-20"],
+            ],
+        );
+        let sched = equip_reader::scheduled(std::slice::from_ref(&t));
+        let tags: Vec<(&str, &str)> = sched.iter().map(|x| (x.tag.as_str(), x.kind.as_str())).collect();
+        assert_eq!(tags, vec![("WH-4", "water_heater"), ("WH-5", "water_heater"), ("WH-6", "water_heater"), ("ET-2", "expansion_tank")]);
+        let mut d = Drawing::default();
+        for (i, tag) in ["WH-4", "WH-5", "WH-6", "ET-2", "P-1"].iter().enumerate() {
+            text(&mut d, tag, 100.0 + 200.0 * i as f64, 100.0);
+        }
+        let sheet = plumbing_plan();
+        let plan = PlanIn { sheet: &sheet, drawing: &d, sheet_upf: 12.0, upf: 12.0 };
+        let r = chosen(place(&sched, std::slice::from_ref(&plan), &[], &[]));
+        let built: Vec<(&str, &str, &str)> =
+            r.equipment.iter().map(|e| (e.tag.as_str(), e.kind.as_str(), e.properties.get("MODEL NO.").map_or("", String::as_str))).collect();
+        assert_eq!(
+            built,
+            vec![
+                ("WH-4", "water_heater", "TANK-100"),
+                ("WH-5", "water_heater", "TANK-100"),
+                ("WH-6", "water_heater", "TANK-100"),
+                ("ET-2", "expansion_tank", "XT-20")
+            ]
+        );
+        assert!(r.unplaced.is_empty(), "{:?}", r.unplaced);
+        assert!(r.equipment.iter().all(|e| e.level == "Level 1"));
+    }
+
+    fn row(tag: &str, kind: &str, serves: &str) -> Scheduled {
+        let mut properties = BTreeMap::new();
+        properties.insert("MARK".to_string(), tag.to_string());
+        properties.insert(if tag.ends_with('8') { "AREA SERVED" } else { "SERVES" }.to_string(), serves.to_string());
+        properties.insert("MODEL".to_string(), format!("M-{tag}"));
+        Scheduled { tag: tag.into(), kind: kind.into(), sheet: "M-0".into(), title: "FAN SCHEDULE".into(), properties, ..Default::default() }
+    }
+
+    fn fan(tag: &str, room: &str, title: &str) -> MepEquipment {
+        let mut properties = BTreeMap::new();
+        properties.insert("room".to_string(), room.to_string());
+        MepEquipment { tag: tag.into(), kind: "exhaust_fan".into(), level: "Level 2".into(), title: title.into(), properties, ..Default::default() }
+    }
+
+    /// Q6316: exhaust fans built from the plans (a typical room's stamped fan marked only `EF`, a
+    /// fan tagged with its number) take their schedule row: by their tag, else the one row of
+    /// their kind that serves their room (its use named, else the row for many rooms); a fan
+    /// two rows could equally be is left untyped and listed.
+    #[test]
+    fn built_fans_take_their_schedule_rows_type_by_tag_or_by_the_room_they_serve() {
+        let rows = vec![
+            row("EF-1", "exhaust_fan", "GUEST TOILET ROOMS"),
+            row("EF-2", "exhaust_fan", "PUBLIC RESTROOM"),
+            row("EF-3", "exhaust_fan", "MECH ROOM"),
+            row("EF-8", "exhaust_fan", "CORRIDOR"),
+        ];
+        let mut built =
+            vec![fan("EF", "201", "ENLARGED GUEST ROOM PLAN"), fan("EF", "202", "MECH ENLARGED TYPE B"), fan("EF", "210", ""), fan("EF-3", "", "")];
+        let names = |_: &str, room: &str| match room {
+            "210" => "CORRIDOR".to_string(),
+            // A room named with ROOM, a view title with MECH: neither makes it the mechanical
+            // room's fan.
+            _ => "SUITE ROOM".to_string(),
+        };
+        let typed = type_built(&rows, &mut built, &names);
+        assert_eq!((typed.by_tag, typed.by_room), (1, 3), "{typed:?}");
+        let tags: Vec<&str> = built.iter().map(|e| e.tag.as_str()).collect();
+        assert_eq!(tags, vec!["EF-1", "EF-1", "EF-8", "EF-3"]);
+        assert_eq!(built.first().and_then(|e| e.properties.get("MODEL")).map(String::as_str), Some("M-EF-1"));
+        assert!(built.first().and_then(|e| e.sources.get("type")).is_some_and(|b| b.contains("GUEST TOILET ROOMS")), "{:?}", built.first());
+        assert_eq!(built.get(3).and_then(|e| e.properties.get("MODEL")).map(String::as_str), Some("M-EF-3"));
+        assert_eq!(built.get(3).and_then(|e| e.properties.get("room")).map(String::as_str), Some(""), "its own data kept");
+
+        // Two rows for one room each, neither its use: no type, listed.
+        let rows = vec![row("EF-5", "exhaust_fan", "FITNESS"), row("EF-6", "exhaust_fan", "STAFF LAUNDRY")];
+        let mut built = vec![fan("EF", "105", "")];
+        let typed = type_built(&rows, &mut built, &|_: &str, _: &str| "OFFICE".to_string());
+        assert_eq!((typed.by_tag, typed.by_room, typed.untold.len()), (0, 0, 1), "{typed:?}");
+        assert_eq!(built.first().map(|e| e.tag.as_str()), Some("EF"));
+    }
+
+    /// Q6316: a plan's equipment tag no schedule row lists (letters the schedule uses, a number
+    /// it doesn't) is listed; other plan text is not.
+    #[test]
+    fn a_plan_tag_no_schedule_row_lists_is_found() {
+        let sched = vec![row("EF-1", "exhaust_fan", "GUEST TOILET ROOMS"), row("WH-2", "water_heater", "")];
+        let mut d = Drawing::default();
+        for (i, tag) in ["EF-1", "EF-9", "WH-7", "P-3", "AB-2", "EF-9 ABOVE", "12"].iter().enumerate() {
+            text(&mut d, tag, 100.0 + 200.0 * i as f64, 100.0);
+        }
+        let sheet = plumbing_plan();
+        let plan = PlanIn { sheet: &sheet, drawing: &d, sheet_upf: 12.0, upf: 12.0 };
+        let found = unscheduled_tags(&sched, std::slice::from_ref(&plan));
+        assert_eq!(found, vec![("EF-9".to_string(), "P-9".to_string()), ("WH-7".to_string(), "P-9".to_string())]);
+    }
+
+    /// Q6316: a unit built from its schedule is joined to the drawn runs that end at it on its
+    /// level; a run elsewhere, or on another level, is not its.
+    #[test]
+    fn a_scheduled_unit_takes_the_systems_of_the_runs_ending_at_it() {
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
+        let mut sources = BTreeMap::new();
+        sources.insert("schedule".to_string(), "P-0 PLUMBING FIXTURE SCHEDULE".to_string());
+        sp.mep.equipment.push(MepEquipment {
+            tag: "WH-4".into(),
+            kind: "water_heater".into(),
+            level: "Level 1".into(),
+            min: [0.0, 0.0],
+            max: [24.0, 24.0],
+            sources,
+            ..Default::default()
+        });
+        let pipe = |system: &str, level: &str, a: [f64; 2], b: [f64; 2]| super::super::printcond::run(system, level, "P-9", vec![a, b], 0.75, 8.0);
+        sp.mep.runs = vec![
+            pipe("HW", "Level 1", [30.0, 12.0], [300.0, 12.0]),
+            pipe("CW", "Level 1", [300.0, 0.0], [10.0, -8.0]),
+            pipe("G", "Level 1", [500.0, 0.0], [900.0, 0.0]),
+            pipe("SAN", "Level 2", [12.0, 12.0], [200.0, 12.0]),
+        ];
+        assert_eq!(join_runs(&mut sp, 0), 1);
+        let wh = sp.mep.equipment.first().unwrap_or_else(|| panic!("no unit"));
+        assert_eq!(wh.systems, vec!["CW".to_string(), "HW".to_string()]);
+        assert!(wh.sources.get("systems").is_some_and(|s| s.contains("drawn runs")));
     }
 }
