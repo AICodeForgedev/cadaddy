@@ -11670,13 +11670,24 @@ fn typical_heights(
                                 mine.get(j).and_then(|k| devices.get(*k)).is_some_and(feeds_appliance)
                                     && appliance_fits(&n.4, fed.get(j).map_or("", String::as_str), &fed)
                             };
+                            // An appliance's note and the room's receptacle on that appliance's
+                            // circuit are one device wherever the two plans draw it: the
+                            // architecture's spot is where it goes, on whichever wall.
+                            let by_circuit = |i: usize, j: usize| {
+                                spots
+                                    .get(i)
+                                    .and_then(|(ni, _)| v.notes.get(*ni))
+                                    .is_some_and(|n| n.3 && !n.4.is_empty() && fed.get(j).is_some_and(|f| *f == n.4))
+                            };
+                            let near =
+                                |i: usize, j: usize| note_points.get(i).zip(points.get(j)).is_some_and(|(p, q)| p.dist(*q) <= reach) && wall(i, j);
                             let free = |i: usize, j: usize| {
                                 spot_free.get(i).copied().unwrap_or(false)
                                     && mine.get(j).is_some_and(|k| !done.contains(k))
-                                    && wall(i, j)
+                                    && (near(i, j) || by_circuit(i, j))
                                     && fits_kind(i, j)
                             };
-                            let pairs = super::archauthority::pair(&note_points, &points, reach, free);
+                            let pairs = super::archauthority::pair(&note_points, &points, f64::MAX, free);
                             if pairs.is_empty() {
                                 break;
                             }
@@ -36741,7 +36752,11 @@ mod tests {
             kind: "receptacle".into(),
             ..Default::default()
         };
-        let read = [device("U-5", 128.0), device("U-2", 160.0), device("U-6", 200.0)];
+        // (The range's is drawn on the west wall, 11 ft from the cooktop's spot: its circuit
+        // says it is the cooktop's receptacle all the same.)
+        let mut range = device("U-6", 200.0);
+        range.at = [v[0] + 8.0, v[1] + 200.0];
+        let read = [device("U-5", 128.0), device("U-2", 160.0), range];
         let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
         let row = |n: &str, what: &str| cadaddy_walk3d::PanelCircuit { number: n.into(), description: what.into(), ..Default::default() };
         let schedules = [cadaddy_walk3d::PanelSchedule {
@@ -36763,10 +36778,12 @@ mod tests {
         assert_eq!(aff(&stamped, "U-5"), None, "the dishwasher's takes neither: {stamped:?}");
         let mw = stamped.iter().find(|d| d.circuit == "U-2").unwrap();
         assert!((mw.at[1] - 125.0).abs() < 4.0, "at the microwave's symbol: {mw:?}");
-        // With no schedule to tell them apart, the nearest pairs as before.
+        let rg = stamped.iter().find(|d| d.circuit == "U-6").unwrap();
+        assert!((rg.at[0] - 10_136.0).abs() < 4.0 && (rg.at[1] - 163.0).abs() < 4.0, "at the cooktop's symbol: {rg:?}");
+        // With no schedule to tell them apart, the nearest on its wall pairs as before.
         let mut stamped = fresh();
         typical_heights(s.doc().unwrap(), &job, &mut stamped, &[]);
-        assert_eq!((aff(&stamped, "U-5"), aff(&stamped, "U-2")), (Some(65.0), Some(30.0)), "{stamped:?}");
+        assert_eq!((aff(&stamped, "U-5"), aff(&stamped, "U-2"), aff(&stamped, "U-6")), (Some(65.0), Some(30.0), None), "{stamped:?}");
     }
 
     #[test]
