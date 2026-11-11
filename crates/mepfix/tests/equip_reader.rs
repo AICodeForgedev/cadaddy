@@ -527,3 +527,55 @@ fn table_cells_are_every_grid_cell() {
     line(&mut blank, "0", [0.0, 0.0], [10.0, 0.0]);
     assert!(equip_reader::table_cells(&blank).is_empty());
 }
+
+/// Q6316: a row's tag cell may name several units: a list (its numbers alone take the first
+/// tag's letters) or a range; anything else is one tag as printed.
+#[test]
+fn a_rows_tag_cell_names_each_unit_of_a_list_or_range() {
+    use cadaddy_mepfix::equip_reader::row_tags;
+    let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(row_tags("WH-4,5,6"), v(&["WH-4", "WH-5", "WH-6"]));
+    assert_eq!(row_tags("wh-4, WH-5 & WH-6"), v(&["WH-4", "WH-5", "WH-6"]));
+    assert_eq!(row_tags("P-01 THRU 04"), v(&["P-01", "P-02", "P-03", "P-04"]));
+    assert_eq!(row_tags("EF-2 THROUGH EF-4"), v(&["EF-2", "EF-3", "EF-4"]));
+    assert_eq!(row_tags("EF-1"), v(&["EF-1"]));
+    assert_eq!(row_tags("SEE NOTE 3, TYP"), v(&["SEE NOTE 3, TYP"]));
+    assert_eq!(row_tags("EF-1 TO ROOF"), v(&["EF-1 TO ROOF"]));
+}
+
+/// Q6316: equipment rows in a fixture schedule (by the words of the row's name or, with no name
+/// column, its description) are equipment; its fixtures, and a light fixture schedule's rows,
+/// are not.
+#[test]
+fn a_fixture_schedules_equipment_rows_are_equipment() {
+    use cadaddy_mepfix::equip_reader::{Table, scheduled};
+    let table = |title: &str, columns: &[&str], rows: &[&[&str]]| Table {
+        sheet: "P-0".into(),
+        title: title.into(),
+        columns: columns.iter().map(|c| c.to_string()).collect(),
+        rows: rows.iter().map(|r| columns.iter().zip(r.iter()).map(|(c, v)| (c.to_string(), v.to_string())).collect()).collect(),
+    };
+    let tables = vec![
+        table(
+            "PLUMBING FIXTURE SCHEDULE",
+            &["MARK", "DESCRIPTION", "MANUFACTURER"],
+            &[
+                &["L-1", "LAVATORY, VITREOUS CHINA", "MAKER A"],
+                &["BP-3", "DUPLEX BOOSTER PUMP SYSTEM", "MAKER B"],
+                &["WH-8 & 9", "100 GALLON GAS WATER HEATER", "MAKER C"],
+            ],
+        ),
+        table("LIGHT FIXTURE SCHEDULE", &["TYPE", "DESCRIPTION"], &[&["A", "WATER HEATER ROOM STRIP"]]),
+        table(
+            "FIXTURE SCHEDULE",
+            &["TAG", "FIXTURE", "DESCRIPTION"],
+            &[&["ET-2", "EXPANSION TANK", "20 GALLON, FOR THE WATER HEATER"], &["S-1", "SINK", "FOR THE WATER HEATER ROOM"]],
+        ),
+    ];
+    let got: Vec<(String, String, String)> = scheduled(&tables).into_iter().map(|x| (x.tag, x.kind, x.kind_from)).collect();
+    let want: Vec<(String, String, String)> = [("BP-3", "pump"), ("WH-8", "water_heater"), ("WH-9", "water_heater"), ("ET-2", "expansion_tank")]
+        .iter()
+        .map(|(t, k)| (t.to_string(), k.to_string(), "row".to_string()))
+        .collect();
+    assert_eq!(got, want);
+}

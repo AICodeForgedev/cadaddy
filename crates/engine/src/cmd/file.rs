@@ -1058,11 +1058,17 @@ fn opened(s: &Session, i: usize, entities: bool) -> Value {
             warnings.push(format!("Xref \"{}\" {}: {}", b.name, b.xref_status.label().to_ascii_lowercase(), b.xref_reason));
         }
     }
-    if entities {
+    let mut r = if entities {
         json!({ "index": i, "entities": d.map(|d| d.entity_count()), "warnings": warnings })
     } else {
         json!({ "index": i, "warnings": warnings })
+    };
+    // A drawing holding a built model offers its 3D BIM view (Q6310): it opens on the plan.
+    if d.is_some_and(|d| super::bimlook::has_model(d)) {
+        r["builtModel"] = json!(true);
+        r["offer"] = json!("view.bim3d");
     }
+    r
 }
 
 fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
