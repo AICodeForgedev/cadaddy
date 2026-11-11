@@ -917,11 +917,21 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
             "ev_charger" | "site_power" => {
                 // The panel whose schedule feeds it (a circuit described as it is).
                 let words: Vec<&String> = r.kinds.iter().filter(|k| k.what == c.what).flat_map(|k| &k.words).collect();
-                let panel = sp
-                    .mep
-                    .panel_schedules
-                    .iter()
-                    .find(|p| p.circuits.iter().any(|ci| words.iter().any(|w| ci.description.to_ascii_uppercase().contains(w.as_str()))))
+                let row = sp.mep.panel_schedules.iter().find_map(|p| {
+                    p.circuits
+                        .iter()
+                        .find(|ci| words.iter().any(|w| ci.description.to_ascii_uppercase().contains(w.as_str())))
+                        .map(|ci| (p, ci))
+                });
+                let label = row.map(|(p, ci)| format!("{}-{}", p.panel.trim(), ci.number.trim()));
+                // Its circuit built already from the site plan (its luminaires', its equipment's
+                // home run): the same circuit is never buried twice.
+                if let Some(l) = label.as_deref().filter(|l| super::ugcircuit::site_carries(sp, l)) {
+                    fates.push(fate("placed_elsewhere", 0, format!("its circuit {l} is built by the site work from the site plan")));
+                    continue;
+                }
+                let panel = row
+                    .map(|(p, _)| p)
                     .and_then(|p| sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&p.panel) && e.level.eq_ignore_ascii_case(&slab)));
                 let Some(pn) = panel else {
                     fates.push(unplaced(
@@ -942,6 +952,12 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                 }
                 pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6);
                 add(pts, bottom, &[(pc, r.stubup.conduit_top_ft.max(pn.bottom_ft))]);
+                // Its runs carry its circuit (Q6348): its conductors pulled, its raceway sized by them.
+                if let Some(l) = &label {
+                    for (k, run) in runs.iter_mut().enumerate().skip(n_before) {
+                        run.id = super::ugcircuit::run_id(&slab, l, format!("{}.{k}", c.sheet));
+                    }
+                }
                 fates.push(fate(
                     "placed",
                     runs.len() - n_before,
