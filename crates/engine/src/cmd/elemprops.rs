@@ -130,6 +130,7 @@ fn kind_of_part<'a>(e: &Entity, part: &'a str) -> &'a str {
         "roof" | "cricket" => "roof",
         "light" => "light_fixture",
         "diffuser" => "fixture",
+        super::grids::GRID_PART => "structural_grid",
         "device" => device_kind(e, &layer),
         "mep" => {
             let kind = super::bimlook::made_tag(e, "kind").unwrap_or("").to_ascii_lowercase();

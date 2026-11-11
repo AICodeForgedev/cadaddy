@@ -22,6 +22,7 @@ mod etransmit;
 mod exchange3d;
 mod extract_depth;
 mod framing;
+mod grid_elements;
 mod grids;
 mod ifc;
 mod ifc_import;
