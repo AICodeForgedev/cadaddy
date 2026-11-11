@@ -1,7 +1,7 @@
 //! The objects a bill-of-materials or takeoff line names (Q6529): a line names what it counted
 //! by an object handle, by the spec device it was built from (`device:<level>:x,y`), by a spec
-//! run (`run:<index>`), or by the name or tag its build gave an element (`EXIT_SIGN-1`,
-//! `FCU-3`). [`Refs`] turns each into the model's objects, so every line resolves to handles
+//! run (`run:<index>`), or by the name or tag its build gave an element (`SIGN-1`,
+//! `UNIT-7`). [`Refs`] turns each into the model's objects, so every line resolves to handles
 //! (`bim.takeoff.show`, `bim.props.get`) and the ids the documents gave stay beside them.
 
 use std::collections::HashMap;
