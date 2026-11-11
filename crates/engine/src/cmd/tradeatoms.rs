@@ -472,7 +472,9 @@ fn trade_color(trade: &str) -> u8 {
 /// A piece's body (sheet units).
 fn body(p: &Piece) -> Mesh {
     if let Some(m) = p.custom.as_ref().filter(|m| !m.faces.is_empty() && m.vertices.iter().all(|v| v.is_finite())) {
-        return m.clone();
+        // A body shaped by its builder (a floor finish over its room): the seams inside its flat
+        // surfaces (a straight run of its outline in pieces, a triangulated top) don't draw.
+        return super::bspec::seamless(m.clone());
     }
     let mut m = super::wallgen::empty_mesh();
     for b in p.blocks.iter().filter(|b| b.ok()).take(MAX_BLOCKS) {
@@ -1235,6 +1237,24 @@ pub(crate) fn lead_num(v: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6410: a piece whose builder shapes its body (a floor finish over its room) draws its
+    /// outline, not the seams inside its flat surfaces.
+    #[test]
+    fn a_shaped_body_draws_no_seam_inside_a_flat_surface() {
+        use cadaddy_doc::{MeshFace, MeshKind};
+        let v = |x: f64, y: f64| Vec3::new(x, y, 0.0);
+        // A flat square split into two triangles along its diagonal.
+        let m = Mesh {
+            vertices: vec![v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)],
+            faces: vec![MeshFace { v: vec![0, 1, 2], hidden: 0 }, MeshFace { v: vec![0, 2, 3], hidden: 0 }],
+            kind: MeshKind::Polyface,
+        };
+        assert_eq!(m.edges().len(), 5);
+        let mut p = Piece::new("finishes", "flooring", "carpet", "Level 1", Source::computed());
+        p.custom = Some(m);
+        assert_eq!(body(&p).edges().len(), 4, "the square's outline only");
+    }
 
     #[test]
     fn rules_read_and_cite_their_sources() {

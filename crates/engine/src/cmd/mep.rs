@@ -2272,10 +2272,20 @@ fn add_round_segment(m: &mut Mesh, a: Vec2, b: Vec2, radius: f64, z0: f64, z1: f
         let j = (k + 1) % sides;
         m.faces.push(MeshFace { v: vec![base + k, base + j, base + sides + j, base + sides + k], hidden: 0 });
     }
-    // End caps.
+    cap_ends(m, base, base + sides, sides);
+}
+
+/// The flat end caps of a tube of `sides`-cornered rings starting at `first` and `last`: each
+/// a fan of triangles from its ring's first corner, facing out of the tube's ends. Only a cap's
+/// rim draws: the fan's diagonals are seams inside the one flat cap (the first triangle's edge
+/// to corner 1 and the last one's to corner `sides - 1` are rim).
+fn cap_ends(m: &mut Mesh, first: u32, last: u32, sides: u32) {
+    let end = sides.saturating_sub(2);
+    // Hidden bits: `to_next` the edge from the fan's corner to k + 1, `to_k` the edge with k.
+    let fan = |k: u32, to_next: u32, to_k: u32| (if k == end { 0 } else { 1u64 << to_next }) | (if k == 1 { 0 } else { 1u64 << to_k });
     for k in 1..sides.saturating_sub(1) {
-        m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
-        m.faces.push(MeshFace { v: vec![base + sides, base + sides + k, base + sides + k + 1], hidden: 0 });
+        m.faces.push(MeshFace { v: vec![first, first + k + 1, first + k], hidden: fan(k, 0, 2) });
+        m.faces.push(MeshFace { v: vec![last, last + k, last + k + 1], hidden: fan(k, 2, 0) });
     }
 }
 
@@ -2349,11 +2359,7 @@ fn add_elbow_round(m: &mut Mesh, arc: &[(Vec2, Vec2)], radius: f64, z0: f64, z1:
             m.faces.push(MeshFace { v: vec![r0 + k, r0 + j, r1 + j, r1 + k], hidden: 0 });
         }
     }
-    let last = base + (rings - 1) * sides;
-    for k in 1..sides.saturating_sub(1) {
-        m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
-        m.faces.push(MeshFace { v: vec![last, last + k, last + k + 1], hidden: 0 });
-    }
+    cap_ends(m, base, base + (rings - 1) * sides, sides);
 }
 
 /// A drop (riser) fitting: vertical from z0 to z1. Round: an upright tube of the duct's
@@ -2415,10 +2421,7 @@ fn add_loft(m: &mut Mesh, a: Vec2, b: Vec2, (sa, za): ([f64; 2], f64), (sb, zb):
         let j = (k + 1) % s;
         m.faces.push(MeshFace { v: vec![base + k, base + j, base + s + j, base + s + k], hidden: 0 });
     }
-    for k in 1..s.saturating_sub(1) {
-        m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
-        m.faces.push(MeshFace { v: vec![base + s, base + s + k, base + s + k + 1], hidden: 0 });
-    }
+    cap_ends(m, base, base + s, s);
 }
 
 /// A joint's mesh. A tee or cross: a stub of each run from the point, each as long as the widest
@@ -3644,6 +3647,38 @@ mod outline_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6410: a round pipe or duct segment draws its two rims and its sides, not the fan of
+    /// triangles its flat end caps are made of.
+    #[test]
+    fn a_round_segment_draws_its_rims_not_its_cap_fans() {
+        let mut m = super::super::wallgen::empty_mesh();
+        add_round_segment(&mut m, Vec2::new(10.0, 5.0), Vec2::new(70.0, 25.0), 3.0, 100.0, 106.0);
+        let n = ROUND_SIDES as usize;
+        // Before: every triangle's edges, each cap's n - 3 diagonals with them.
+        let mut before = m.clone();
+        before.faces.iter_mut().for_each(|f| f.hidden = 0);
+        assert_eq!(before.edges().len(), 3 * n + 2 * (n - 3));
+        // Now: the two rims and a line along the side at each corner.
+        assert_eq!(m.edges().len(), 3 * n, "{:?}", m.edges());
+        let mut again = m.clone();
+        again.hide_flat_seams();
+        assert_eq!(again.edges(), m.edges(), "no seam left inside a flat cap");
+        // A round elbow and a round-to-round reducer cap their ends the same way.
+        let mut m = super::super::wallgen::empty_mesh();
+        add_elbow(&mut m, Vec2::new(0.0, 0.0), 6.0, 100.0, 106.0, Vec2::X, Vec2::Y, true);
+        let mut l = super::super::wallgen::empty_mesh();
+        add_loft(&mut l, Vec2::new(0.0, 0.0), Vec2::new(12.0, 0.0), ([8.0, 0.0], 100.0), ([6.0, 0.0], 101.0), 12.0);
+        for (what, m) in [("elbow", m), ("reducer", l)] {
+            assert!(!m.faces.is_empty(), "{what}");
+            let mut before = m.clone();
+            before.faces.iter_mut().for_each(|f| f.hidden = 0);
+            assert_eq!(before.edges().len() - m.edges().len(), 2 * (n - 3), "{what}: each cap's n - 3 diagonals hidden");
+            let mut again = m.clone();
+            again.hide_flat_seams();
+            assert_eq!(again.edges(), m.edges(), "{what}: no seam left inside a flat cap");
+        }
+    }
 
     #[test]
     fn a_label_lettered_on_a_pipe_names_that_pipe_not_the_one_beside_it() {

@@ -554,14 +554,14 @@ fn a_notched_roof_draws_its_outline_not_its_triangulation() {
     assert_eq!(r["roofs"], json!(1), "{r}");
     let roof = &made(&s, "roof")[0];
     // The top surface: each plan corner's highest point.
-    let top = |v: &cadaddy_engine::geom::Vec3| !roof.vertices.iter().any(|w| (w.x - v.x).abs() < 1e-6 && (w.y - v.y).abs() < 1e-6 && w.z > v.z + 1e-6);
-    let on_top = roof
-        .edges()
-        .iter()
-        .filter(|(a, b)| [a, b].iter().all(|i| roof.vertices.get(**i as usize).is_some_and(top)))
-        .count();
-    // Before: every triangle's edges (2n - 3 = 93); now its outline's n.
-    assert_eq!(on_top, n, "the roof top draws its {n} outline edges");
+    let top =
+        |v: &cadaddy_engine::geom::Vec3| !roof.vertices.iter().any(|w| (w.x - v.x).abs() < 1e-6 && (w.y - v.y).abs() < 1e-6 && w.z > v.z + 1e-6);
+    let on_top = |m: &Mesh| m.edges().iter().filter(|(a, b)| [a, b].iter().all(|i| m.vertices.get(**i as usize).is_some_and(top))).count();
+    // Before: every edge visible, every triangle's edges drawn (2n - 3 = 93); now its outline's n.
+    let mut before = roof.clone();
+    before.faces.iter_mut().for_each(|f| f.hidden = 0);
+    assert_eq!(on_top(&before), 2 * n - 3, "the ear-clipped top: n outline edges and n - 3 seams");
+    assert_eq!(on_top(roof), n, "the roof top draws its {n} outline edges");
     // Top and underside outlines plus a vertical at each corner.
     assert_eq!(roof.edges().len(), 3 * n);
     let d = s.doc().unwrap();

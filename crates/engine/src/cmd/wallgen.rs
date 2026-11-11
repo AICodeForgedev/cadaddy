@@ -389,7 +389,12 @@ fn plate_faces(o: &outline::Outline, z: f64, down: bool) -> Mesh {
         let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
         m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, b.y, z)]);
         // Its sides in corner order: bottom, right, top, left.
-        let outline = [on_boundary(true, a.y, a.x, b.x), on_boundary(false, b.x, a.y, b.y), on_boundary(true, b.y, a.x, b.x), on_boundary(false, a.x, a.y, b.y)];
+        let outline = [
+            on_boundary(true, a.y, a.x, b.x),
+            on_boundary(false, b.x, a.y, b.y),
+            on_boundary(true, b.y, a.x, b.x),
+            on_boundary(false, a.x, a.y, b.y),
+        ];
         let mut v = vec![base, base + 1, base + 2, base + 3];
         // Reversed (facing down), its edge k is side (6 - k) % 4.
         let side = |k: usize| if down { (6 - k) % 4 } else { k };
