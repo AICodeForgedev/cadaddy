@@ -66,5 +66,7 @@
   "pole_step_source": "panelboard circuit numbering: odd numbers on the left bus side, even on the right, so a multi-pole breaker numbered n also takes n+2 (and n+4)",
   "total_header_words": ["SPACES", "CIRCUITS", "POLES", "NO. OF CKTS", "CKTS"],
   "aic_header_words": ["AIC", "KAIC", "INTERRUPTING"],
-  "frame_header_words": ["FRAME"]
+  "frame_header_words": ["FRAME"],
+  "panel_rule": "a panel is one the documents establish: its panel schedule, the one-line or the riser (a feeder to or from it), or gear the documents place; a circuit label naming any other panel is a finding for review, never a new panel",
+  "unknown_panel_reason": "the circuit label names no panel of the documents: it is no panel's circuit until they settle it (a misread mark beside the device, or a panel the documents leave out)"
 }

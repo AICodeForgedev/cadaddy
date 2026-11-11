@@ -52,7 +52,7 @@ const CMD: &str = "bim.breakers";
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Panel Breakers", run)
-            .params("{panel?: tag (report one panel or panel type), rebuild?: bool (default true: the breakers built again from the schedules and linked to the devices as they are now), limit?: mismatches listed (50)} → {breakers, spares, spaces, panels: [{panel, panel_type, level, schedule, breakers, spares, spaces, poles_used, poles_total, poles_source}], by_type: [{panel_type, level, type, trip_a, poles, count}], devices_linked, devices_unlinked, mismatches_total, mismatches: [{kind: plan_no_row|row_no_plan|no_schedule|no_panel, panel, circuit, level, devices, rooms, description, sheet}], schedules_without_panel, typical: [{panel_type, typical_of, panels_built, rooms_without_panel}]}: each panel-schedule row as a breaker inside its panel (trip, poles, type, frame/AIC, circuit, load, source row), connected to its circuit and devices; spares and spaces counted; plan circuits and schedule rows that don't meet are review items")
+            .params("{panel?: tag (report one panel or panel type), rebuild?: bool (default true: the breakers built again from the schedules and linked to the devices as they are now), limit?: mismatches listed (50)} → {breakers, spares, spaces, panels: [{panel, panel_type, level, schedule, breakers, spares, spaces, poles_used, poles_total, poles_source}], by_type: [{panel_type, level, type, trip_a, poles, count}], devices_linked, devices_unlinked, mismatches_total, mismatches: [{kind: plan_no_row|row_no_plan|no_schedule|no_panel|unknown_panel, panel, circuit, level, devices, rooms, description, sheet}], schedules_without_panel, unknown_panels (named only by circuit labels: no panel schedule, one-line or riser has them; never built as panels), typical: [{panel_type, typical_of, panels_built, rooms_without_panel}]}: each panel-schedule row as a breaker inside its panel (trip, poles, type, frame/AIC, circuit, load, source row), connected to its circuit and devices; spares and spaces counted; plan circuits and schedule rows that don't meet are review items")
             .noundo(),
     ]
 }
@@ -92,6 +92,10 @@ pub(crate) struct Rules {
     pub total_header_words: Vec<String>,
     pub aic_header_words: Vec<String>,
     pub frame_header_words: Vec<String>,
+    /// What makes a panel (Q6319): the documents' schedule, one-line, riser or placed gear.
+    pub panel_rule: String,
+    /// Why a circuit label naming no such panel is no panel's circuit.
+    pub unknown_panel_reason: String,
 }
 
 pub(crate) fn rules() -> &'static Rules {
@@ -501,6 +505,33 @@ fn devices_of(d: &Drawing) -> Vec<Dev> {
         .collect()
 }
 
+/// The panels the documents establish (upper case, Q6319): each panel schedule's (a typical
+/// schedule's letter with it), each feeder's ends (the one-line, the riser), and the gear among
+/// the equipment (its tag, and the typical letter a room's own panel carries). Empty when they
+/// name none: then nothing says which panel a circuit label may name.
+pub(crate) fn documented_panels(sp: &BuildingSpec) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = schedules(sp).into_keys().collect();
+    for f in sp.mep.feeders.iter().take(MAX_PANELS) {
+        out.extend([&f.from, &f.to].into_iter().map(|t| t.trim().to_ascii_uppercase()));
+    }
+    for e in sp.mep.equipment.iter().filter(|e| GEAR_KINDS.iter().any(|g| e.kind.trim().eq_ignore_ascii_case(g))).take(MAX_PANELS) {
+        out.insert(e.tag.trim().to_ascii_uppercase());
+        if let Some(letter) = e.properties.get("PANEL") {
+            out.insert(letter.trim().to_ascii_uppercase());
+        }
+    }
+    out.retain(|t| !t.is_empty());
+    out
+}
+
+/// Whether a circuit's panel (`panel`, as its label names it) is none of the documents' panels
+/// (`known`, [`documented_panels`]): a label for review, no panel. Never when the documents name
+/// no panel at all.
+pub(crate) fn names_no_panel(known: &BTreeSet<String>, panel: &str) -> bool {
+    let p = panel.trim().to_ascii_uppercase();
+    !known.is_empty() && !p.is_empty() && !known.contains(&p)
+}
+
 /// The schedules by panel tag (upper case): the job's printed ones, then the equipment's own
 /// circuit lists for a panel none is printed for.
 fn schedules(sp: &BuildingSpec) -> BTreeMap<String, PanelSchedule> {
@@ -559,7 +590,7 @@ struct Made {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Mismatch {
-    /// `plan_no_row`, `row_no_plan`, `no_schedule`, `no_panel`.
+    /// `plan_no_row`, `row_no_plan`, `no_schedule`, `no_panel`, `unknown_panel`.
     pub kind: String,
     pub panel: String,
     pub circuit: String,
@@ -605,6 +636,10 @@ impl Mismatch {
                 if self.sheet.is_empty() { "its schedule" } else { &self.sheet }
             ),
             "no_panel" => format!("Panel {}'s schedule ({}) has no panel in the model to hold its breakers", self.panel, self.sheet),
+            "unknown_panel" => format!(
+                "Circuit label {} names panel {}, which no panel schedule, one-line or riser has: no panel is made for it ({} device(s) carry the label); a mark beside the device misread as a circuit, or a panel the documents leave out",
+                self.circuit, self.panel, self.devices
+            ),
             _ => format!("Panel {}: {} device(s) on its circuits but no schedule for it was read", self.panel, self.devices),
         }
     }
@@ -660,6 +695,8 @@ pub(crate) struct Report {
     pub mismatches: Vec<Mismatch>,
     pub mismatches_total: usize,
     pub schedules_without_panel: Vec<String>,
+    /// The panels only circuit labels name (none of the documents' panels, Q6319): for review.
+    pub unknown_panels: Vec<String>,
     pub typical: Vec<Typical>,
     /// Breakers installed other than the schedule draws them (Q6216: equipment protection over
     /// its submittal's limit), the drawn one kept as each one's design.
@@ -714,7 +751,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         }
     }
     let panels = panels;
-    let devices = devices_of(d);
+    // A circuit label naming no panel of the documents (Q6319: an air handler's or a grille's
+    // mark beside a thermostat read as `QX-1`) is no panel's circuit: set aside for review.
+    let mut known = documented_panels(sp);
+    if !known.is_empty() {
+        known.extend(panels.iter().filter(|p| p.panel_kind).map(|p| p.tag.to_ascii_uppercase()));
+    }
+    let (devices, strays): (Vec<Dev>, Vec<Dev>) = devices_of(d).into_iter().partition(|dv| !names_no_panel(&known, &dv.panel));
     // Whether each schedule numbers its breakers rather than their poles.
     // The multi-pole circuits the plans name (`LP-37,39,41`), per panel letter or tag.
     let mut hints: BTreeMap<String, BTreeSet<Vec<u32>>> = BTreeMap::new();
@@ -724,6 +767,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     for t in sp.tags.iter().filter(|t| t.kind == "circuit").take(MAX_DEVICES) {
         let f = |k: &str| t.fields.get(k).map(|v| v.value.trim().to_string()).unwrap_or_default();
         let panel = f("panel").to_ascii_uppercase();
+        if names_no_panel(&known, &panel) {
+            continue;
+        }
         let nums = circuit_numbers(&f("circuit"), &panel);
         if nums.len() > 1 {
             hints.entry(panel).or_default().insert(nums);
@@ -812,9 +858,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     }
     // The plan's circuit tags (homeruns): panel letter or tag → numbers.
     let mut tagged: BTreeMap<String, BTreeMap<u32, (String, String)>> = BTreeMap::new();
+    // The plan's circuit tags naming no panel of the documents: label and level, by panel.
+    let mut stray_tags: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for t in sp.tags.iter().filter(|t| t.kind == "circuit").take(MAX_DEVICES) {
         let f = |k: &str| t.fields.get(k).map(|v| v.value.trim().to_string()).unwrap_or_default();
         let (panel, label) = (f("panel").to_ascii_uppercase(), f("circuit"));
+        if names_no_panel(&known, &panel) {
+            stray_tags.entry(panel).or_default().push((label, t.level.clone()));
+            continue;
+        }
         for n in circuit_numbers(&label, &panel) {
             tagged.entry(panel.clone()).or_default().entry(n).or_insert_with(|| (label.clone(), t.level.clone()));
         }
@@ -1114,6 +1166,27 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             e.common.xdata = x.into();
         });
     }
+    // A device whose circuit label names no panel of the documents: fed from no panel (the
+    // design value, as its label read, kept beside), the label itself as printed, for review.
+    let br = rules();
+    for dv in &strays {
+        let _ = d.modify_entity(dv.handle, |e| {
+            let mut ps = props::read(&e.common.xdata);
+            let old = ps.get("fed_from").filter(|p| p.has_value());
+            let source = old.map_or_else(|| Source::of(SourceKind::Print), |p| p.source.clone());
+            let c = super::provenance::Correction {
+                key: "fed_from".into(),
+                design: old.map_or_else(|| format!("panel {}, circuit {}", dv.panel, dv.label), Prop::text),
+                corrected: format!("no panel of the documents: circuit label {} as printed, for review", dv.label),
+                reason: br.unknown_panel_reason.clone(),
+                rule: br.panel_rule.clone(),
+            };
+            if super::provenance::correct(&mut ps, &c, source) {
+                let x = props::write(&e.common.xdata, &ps);
+                e.common.xdata = x.into();
+            }
+        });
+    }
     for (h, b) in &run_breaker {
         let _ = d.modify_entity(*h, |e| {
             let mut ps = props::read(&e.common.xdata);
@@ -1201,6 +1274,46 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         // Only a panel the model has or the plans name with a schedule elsewhere: a stray letter
         // is the reader's (its devices say which).
         mism.push(Mismatch { kind: "no_schedule".into(), panel: panel.clone(), level: level.clone(), devices: *count, ..Mismatch::default() });
+    }
+    // The labels naming no panel of the documents: one review item per panel they name, never a
+    // panel; each device keeps the label as printed, what feeds it corrected (for review).
+    let mut unknown: BTreeMap<String, Mismatch> = BTreeMap::new();
+    let mut labels: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut rooms_of: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for dv in &strays {
+        let m = unknown.entry(dv.panel.clone()).or_insert_with(|| Mismatch {
+            kind: "unknown_panel".into(),
+            panel: dv.panel.clone(),
+            level: dv.level.clone(),
+            ..Mismatch::default()
+        });
+        m.devices += 1;
+        if m.elements.len() < 8 {
+            m.elements.push(dv.handle.hex());
+        }
+        labels.entry(dv.panel.clone()).or_default().insert(dv.label.clone());
+        if !dv.room.is_empty() {
+            rooms_of.entry(dv.panel.clone()).or_default().insert(dv.room.clone());
+        }
+    }
+    for (panel, tags) in &stray_tags {
+        let m = unknown.entry(panel.clone()).or_insert_with(|| Mismatch {
+            kind: "unknown_panel".into(),
+            panel: panel.clone(),
+            level: tags.first().map(|t| t.1.clone()).unwrap_or_default(),
+            ..Mismatch::default()
+        });
+        if m.level.is_empty() {
+            m.level = tags.first().map(|t| t.1.clone()).unwrap_or_default();
+        }
+        labels.entry(panel.clone()).or_default().extend(tags.iter().map(|t| t.0.clone()));
+    }
+    for (panel, mut m) in unknown {
+        let ls: Vec<String> = labels.get(&panel).map(|l| l.iter().take(6).cloned().collect()).unwrap_or_default();
+        m.circuit = ls.join(", ");
+        m.rooms = rooms_of.get(&panel).map_or(0, BTreeSet::len);
+        report.unknown_panels.push(panel);
+        mism.push(m);
     }
     for (key, s) in &scheds {
         for (ri, c) in s.circuits.iter().enumerate().take(MAX_ROWS) {
@@ -1310,6 +1423,7 @@ fn report_json(r: &Report, panel: Option<&str>, limit: usize) -> Value {
         "mismatches_by_kind": mism.iter().fold(BTreeMap::<String, usize>::new(), |mut m, x| { *m.entry(x.kind.clone()).or_default() += 1; m }),
         "mismatches": mism.iter().take(limit).map(|m| json!({"kind": m.kind, "panel": m.panel, "circuit": m.circuit, "level": m.level, "devices": m.devices, "rooms": m.rooms, "description": m.description, "sheet": m.sheet, "title": m.title()})).collect::<Vec<_>>(),
         "schedules_without_panel": r.schedules_without_panel,
+        "unknown_panels": r.unknown_panels,
         "typical": r.typical.iter().map(|t| json!({"panel_type": t.panel_type, "typical_of": t.typical_of, "panels_built": t.panels_built, "rooms_without_panel": t.rooms_without_panel.len(), "rooms": t.rooms_without_panel.iter().take(50).collect::<Vec<_>>()})).collect::<Vec<_>>(),
     })
 }
@@ -1399,6 +1513,26 @@ mod tests {
         assert_eq!(circuit_numbers("LP1-3", "LP1"), vec![3]);
         assert_eq!(circuit_numbers("LP1-3", ""), vec![3]);
         assert_eq!(circuit_numbers("7", "A"), vec![7]);
+    }
+
+    /// Q6319: the documents' panels are the schedules', the one-line's feeder ends and the
+    /// placed gear's (a room panel's typical letter too); a panel only labels name is none.
+    #[test]
+    fn the_documents_panels_are_schedules_feeder_ends_and_gear() {
+        let mut sp = BuildingSpec::default();
+        assert!(documented_panels(&sp).is_empty());
+        assert!(!names_no_panel(&documented_panels(&sp), "QX"), "nothing documented: nothing to check against");
+        sp.mep.panel_schedules.push(PanelSchedule { panel: "lp1 ".into(), ..PanelSchedule::default() });
+        sp.mep.feeders.push(cadaddy_walk3d::Feeder { tag: "F1".into(), from: "SB".into(), to: "DPX".into(), ..Default::default() });
+        let gear = |tag: &str, kind: &str| cadaddy_walk3d::MepEquipment { tag: tag.into(), kind: kind.into(), ..Default::default() };
+        let mut room = gear("K-12", "panel");
+        room.properties.insert("PANEL".into(), "K".into());
+        sp.mep.equipment.extend([gear("TX", "transformer"), room, gear("EF-1", "exhaust_fan")]);
+        let known = documented_panels(&sp);
+        assert_eq!(known.iter().map(String::as_str).collect::<Vec<_>>(), ["DPX", "K", "K-12", "LP1", "SB", "TX"]);
+        assert!(!names_no_panel(&known, "lp1") && !names_no_panel(&known, "K"));
+        assert!(names_no_panel(&known, "QX") && names_no_panel(&known, "EF"));
+        assert!(!names_no_panel(&known, " "), "no panel named: not a label for review");
     }
 
     #[test]

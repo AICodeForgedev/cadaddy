@@ -8536,6 +8536,23 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     false,
                 );
             }
+            // Circuit labels naming a panel the documents don't have (Q6319): never panels.
+            let unknown: Vec<&str> = v["unknown_panels"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            if !unknown.is_empty() {
+                let shown: Vec<&str> = unknown.iter().copied().take(12).collect();
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("Circuit labels name {} panel(s) no panel schedule, one-line or riser has: {}", unknown.len(), shown.join(", ")),
+                    &format!(
+                        "no panel is made for them; their devices are fed from no panel (each label kept as printed, the design value beside) and each is a review item ({})",
+                        super::breakers::rules().panel_rule
+                    ),
+                    2,
+                    vec!["review.list {kind: \"conflict\"} lists them: a mark misread as a circuit, or a panel the documents leave out (RFI)".into()],
+                    None,
+                    false,
+                );
+            }
             let mut compact = v.clone();
             if let Some(o) = compact.as_object_mut() {
                 o.remove("panels");

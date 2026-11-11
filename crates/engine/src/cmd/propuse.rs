@@ -51,7 +51,7 @@ const MAX_VERTS: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(SCHEDULE, "Schedule from Element Properties", run_schedule)
-            .params("{kind: device|door|window|room_finish|light_fixture|equipment|plumbing_fixture|air_distribution|panel|wire|duct|pipe, by?: room|circuit (device schedule; default room), level?, limits?: {drop_ft? (10), makeup_pct? (10)}, file?: .csv|.xlsx} → {schedule, columns, rows: [{column: value}], count, notes, csv, path?}: a schedule made from the elements' properties; panels: circuits, breakers, wire, connected load per phase")
+            .params("{kind: device|door|window|room_finish|light_fixture|equipment|plumbing_fixture|air_distribution|panel|wire|duct|pipe, by?: room|circuit (device schedule; default room), level?, limits?: {drop_ft? (10), makeup_pct? (10)}, file?: .csv|.xlsx} → {schedule, columns, rows: [{column: value}], count, notes, csv, path?}: a schedule made from the elements' properties; panels: circuits, breakers, wire, connected load per phase; review?: [{panel, circuits, devices, elements, why}] (circuit labels naming a panel no panel schedule, one-line or riser has: never listed as panels)")
             .noundo(),
         CommandSpec::new(checks::CHECK, "Check Element Properties", checks::run)
             .params("{checks?: [name] (default all: no_circuit, no_fed_from, default_height, rated_door, door_schedule, room_number, gfci_wet, circuit_load, wire_breaker, conduit_fill, voltage_drop, equipment_mocp, terminal_cfm, duct_velocity, fire_damper, terminal_unserved, equipment_power, drain_dfu, pipe_slope, fixture_waste_vent, water_heater, gas_size), level?, limits?: {cfm_tolerance_pct? (10), duct_velocity_fpm? (2000), voltage_drop_pct? (3), load_pct? (80), hw_demand_factor? (0.25), gas_btu_per_cf? (1000)}} → {findings: [{check, severity: error|warning|info, message, handle?, kind?, level?, values?}], counts: {check: n}, checked: {check: n}, totals: {dfu, gas}, limits}")
@@ -1018,18 +1018,48 @@ pub(crate) fn circuits<'m>(m: &'m Model, level: Option<&str>) -> BTreeMap<String
     out
 }
 
-fn sched_panel(m: &Model, level: Option<&str>) -> (Sched, Value) {
+/// The panel schedule: each panel's circuits (`known`: the documents' panels,
+/// [`super::breakers::documented_panels`]; empty when the model has no spec that names any).
+/// Where the documents name panels, only theirs are panels (Q6319): an element that reads like
+/// one (a heat pump tagged `HP-1`, a wireway by a panel) is not, and a circuit whose label names
+/// another panel is no panel's: it is listed for review (the third value), never as a panel.
+fn sched_panel(m: &Model, level: Option<&str>, known: &BTreeSet<String>) -> (Sched, Value, Value) {
     let mut s = Sched::new(&["panel", "circuit", "description", "breaker", "poles", "wire", "devices", "load_va", "phase"]);
     let cs = circuits(m, level);
-    // Panels: the ones the circuits name, and the panel elements.
+    // Panels: the panel elements (the documents' where they name any), and the ones the circuits
+    // name that the documents have.
     let mut panels: BTreeMap<String, Vec<&Circuit>> = BTreeMap::new();
     for el in m.els.iter().filter(|e| is_panel(e)) {
-        if let Some(t) = el.tag() {
-            panels.entry(t.to_ascii_uppercase()).or_default();
+        if let Some(t) = el.tag().map(|t| t.to_ascii_uppercase()).filter(|t| known.is_empty() || known.contains(t)) {
+            panels.entry(t).or_default();
         }
     }
+    let mut review: BTreeMap<String, Vec<&Circuit>> = BTreeMap::new();
     for c in cs.values() {
+        if super::breakers::names_no_panel(known, &c.id.panel) {
+            review.entry(c.id.panel.clone()).or_default().push(c);
+            continue;
+        }
         panels.entry(if c.id.panel.is_empty() { "(no panel)".into() } else { c.id.panel.clone() }).or_default().push(c);
+    }
+    let reviewed: Vec<Value> = review
+        .iter()
+        .map(|(panel, list)| {
+            let devices: usize = list.iter().map(|c| c.devices.len()).sum();
+            let labels: Vec<String> = list.iter().take(20).map(|c| c.id.key.clone()).collect();
+            let handles: Vec<String> = list.iter().flat_map(|c| c.devices.iter().chain(&c.conduit)).take(20).map(|e| e.handle().hex()).collect();
+            json!({
+                "panel": panel, "circuits": labels, "devices": devices, "elements": handles,
+                "why": format!("panel {panel} is in no panel schedule, one-line or riser: not a panel ({})", super::breakers::rules().panel_rule),
+            })
+        })
+        .collect();
+    if !review.is_empty() {
+        s.notes.push(format!(
+            "{} circuit label(s) name panels the documents don't have ({}): not panels, listed under review",
+            review.values().map(Vec::len).sum::<usize>(),
+            review.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
     }
     let mut summary = Vec::new();
     let mut assumed = 0usize;
@@ -1088,7 +1118,7 @@ fn sched_panel(m: &Model, level: Option<&str>) -> (Sched, Value) {
         s.notes.push(format!("{unknown} device(s) carry no load and are counted at 0 VA: set load_va on them"));
     }
     s.notes.push("phases: circuits 1-2 on A, 3-4 on B, 5-6 on C (single-phase panels A/B), as panelboards number them".into());
-    (s, json!(summary))
+    (s, json!(summary), json!(reviewed))
 }
 
 /// A circuit's route length, feet: its conduit, else a chain from the panel through its devices
@@ -1165,6 +1195,7 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let m = Model::new(d);
     let mut extra = Value::Null;
+    let mut review = Value::Null;
     let sched = match kind.as_str() {
         "device" | "devices" => {
             let by = str_param(p, "by").unwrap_or("room").to_ascii_lowercase();
@@ -1225,8 +1256,14 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
         "plumbing_fixture" | "plumbing" | "fixture" => sched_plumbing(&m, lv),
         "air_distribution" | "air" => sched_air(&m, lv),
         "panel" | "panels" => {
-            let (sc, sum) = sched_panel(&m, lv);
+            // The documents' panels: a circuit label naming another is for review (Q6319).
+            let known = match super::bspec::current(s, SCHEDULE) {
+                Ok((sp, true)) => super::breakers::documented_panels(&sp),
+                _ => BTreeSet::new(),
+            };
+            let (sc, sum, rev) = sched_panel(&m, lv, &known);
             extra = sum;
+            review = rev;
             sc
         }
         "wire" | "wire_conduit" | "conduit" => sched_wire(&m, lv, &limits),
@@ -1270,6 +1307,9 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
         json!({"schedule": kind, "columns": sched.columns, "rows": rows, "count": sched.rows.len(), "notes": sched.notes, "csv": csv_text(&table)});
     if !extra.is_null() {
         out["panels"] = extra;
+    }
+    if review.as_array().is_some_and(|r| !r.is_empty()) {
+        out["review"] = review;
     }
     if m.els.is_empty() {
         out["next_step"] = json!("the model has no elements yet: build it with model.build or bim.build");

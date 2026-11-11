@@ -31,9 +31,21 @@ fn building() -> Session {
 
 /// [`building`], its circuits routed when `route`.
 fn building_routed(route: bool) -> Session {
+    built(spec(), route)
+}
+
+/// A session with `spec` stored and built.
+fn built(spec: Value, route: bool) -> Session {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
-    let spec = json!({
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({"route": route})).expect("build");
+    s
+}
+
+/// [`building`]'s spec.
+fn spec() -> Value {
+    json!({
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
         "tags": [
@@ -97,10 +109,7 @@ fn building_routed(route: bool) -> Session {
                 {"panel": "P9", "source": "X-4", "circuits": [ckt("1", "PUMP", "15", 1, &[])]}
             ]
         }
-    });
-    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
-    s.execute("model.build", &json!({"route": route})).expect("build");
-    s
+    })
 }
 
 fn device_handles(s: &mut Session, circuit: &str) -> Vec<String> {
@@ -512,4 +521,95 @@ fn a_stale_panel_link_never_puts_a_device_on_another_panels_breaker() {
     }
     s.execute("bim.breakers", &json!({})).expect("breakers");
     assert_eq!(breaker_circuit(&mut s, &h), "LP2-1", "{:#}", links(&mut s, &h));
+}
+
+/// Q6319: a circuit label naming a panel no panel schedule, one-line or riser has (another
+/// trade's mark printed beside a thermostat, read as `QX-1`) is never a panel: no panel schedule
+/// lists it, its devices are fed from no panel (the label kept as printed, the design value
+/// beside), and each such panel is one review item. A panel only the one-line names is still a
+/// panel (its devices are on it, its missing schedule the review item it always was); equipment
+/// whose tag reads like a panel's is not one.
+#[test]
+fn a_circuit_label_naming_no_panel_of_the_documents_is_for_review_never_a_panel() {
+    let mut sp = spec();
+    let tags = sp["tags"].as_array_mut().expect("tags");
+    tags.push(device("device:L1:11", "thermostat", 110.0, "QX-1"));
+    tags.push(device("device:L1:12", "thermostat", 111.0, "ZT-2"));
+    tags.push(device("device:L1:13", "equipment_connection", 112.0, "ZT-2"));
+    tags.push(device("device:L1:14", "receptacle", 113.0, "DPX-3"));
+    tags.push(json!({"id": "circuit:L1:X-101:ZT-5", "kind": "circuit", "level": "L1", "at_ft": [114.0, 10.0], "fields": {
+        "circuit": {"value": "ZT-5", "source": "plan"}, "panel": {"value": "ZT", "source": "plan"}
+    }}));
+    // A heat pump whose tag reads like a panel's (`HP-`): equipment, never a panel.
+    sp["mep"]["equipment"]
+        .as_array_mut()
+        .expect("equipment")
+        .push(json!({"tag": "HP-7", "kind": "heat_pump", "level": "L1", "min": [1200, 300], "max": [1236, 336], "height_ft": 3, "bottom_ft": 0}));
+    // DPX: a panel the one-line feeds (no schedule printed for it).
+    sp["mep"]["feeders"].as_array_mut().expect("feeders").push(json!({"tag": "F2", "from": "MDP", "to": "DPX", "sets": 1, "phases": 3, "size": "#4", "material": "cu", "neutrals": 1, "grounds": 1, "ground_size": "#8", "conduits": 1, "conduit_in": 1.25, "entry": "top"}));
+    let mut s = built(sp, false);
+    // Built: the label as printed, what feeds it corrected, the design value beside.
+    let qx = device_handles(&mut s, "QX-1").into_iter().next().expect("the QX-1 device");
+    let p = props_of(&mut s, &qx);
+    assert_eq!(val(&p, "circuit"), "QX-1", "{p:#}");
+    assert!(val(&p, "fed_from").as_str().is_some_and(|f| f.contains("no panel of the documents")), "{p:#}");
+    assert_eq!(val(&p, "design:fed_from"), "panel QX, circuit QX-1", "{p:#}");
+    assert!(val(&p, "correction:fed_from").as_str().is_some_and(|c| c.contains("one-line")), "{p:#}");
+    let dpx = device_handles(&mut s, "DPX-3").into_iter().next().expect("the DPX-3 device");
+    assert_eq!(val(&props_of(&mut s, &dpx), "fed_from"), "panel DPX, circuit DPX-3");
+
+    // The breakers: one review item per panel only labels name, the circuit tag's too.
+    let r = s.execute("bim.breakers", &json!({"limit": 100})).expect("breakers");
+    assert_eq!(r["unknown_panels"], json!(["QX", "ZT"]), "{r:#}");
+    let ms = r["mismatches"].as_array().expect("mismatches");
+    let of = |panel: &str| ms.iter().filter(|m| m["panel"] == panel).cloned().collect::<Vec<_>>();
+    let zt = of("ZT");
+    assert_eq!(zt.len(), 1, "{zt:?}");
+    assert_eq!(
+        (zt[0]["kind"].clone(), zt[0]["devices"].clone(), zt[0]["circuit"].clone()),
+        (json!("unknown_panel"), json!(2), json!("ZT-2, ZT-5")),
+        "{zt:?}"
+    );
+    assert!(zt[0]["title"].as_str().is_some_and(|t| t.contains("no panel is made")), "{zt:?}");
+    assert_eq!(of("QX").first().map(|m| m["kind"].clone()), Some(json!("unknown_panel")));
+    // The one-line's panel: its schedule is what is missing, not the panel.
+    assert!(of("DPX").iter().all(|m| m["kind"] == "no_schedule") && !of("DPX").is_empty(), "{:?}", of("DPX"));
+    // Again: the same items, the design value never overwritten.
+    let again = s.execute("bim.breakers", &json!({"limit": 100})).expect("breakers again");
+    assert_eq!(again["unknown_panels"], json!(["QX", "ZT"]));
+    assert_eq!(val(&props_of(&mut s, &qx), "design:fed_from"), "panel QX, circuit QX-1");
+
+    // The panel schedule: no QX or ZT panel; their circuits under review.
+    let sc = s.execute("bim.schedule", &json!({"kind": "panel"})).expect("schedule");
+    let panels: Vec<&str> = sc["panels"].as_array().expect("panels").iter().filter_map(|p| p["panel"].as_str()).collect();
+    assert!(!panels.contains(&"QX") && !panels.contains(&"ZT") && !panels.contains(&"HP-7"), "{panels:?}");
+    assert!(panels.contains(&"LP1") && panels.contains(&"DPX"), "{panels:?}");
+    assert!(sc["rows"].as_array().expect("rows").iter().all(|r| r["panel"] != "QX" && r["panel"] != "ZT"), "{:#}", sc["rows"]);
+    let review: Vec<&str> = sc["review"].as_array().expect("review").iter().filter_map(|p| p["panel"].as_str()).collect();
+    assert_eq!(review, ["QX", "ZT"], "{:#}", sc["review"]);
+    assert!(sc["notes"].as_array().expect("notes").iter().any(|n| n.as_str().is_some_and(|n| n.contains("listed under review"))));
+
+    // In the review queue as conflicts.
+    let list = s.execute("review.list", &json!({"kind": "conflict", "limit": 50})).expect("list");
+    let item =
+        list["items"].as_array().expect("items").iter().find(|i| i["title"].as_str().is_some_and(|t| t.contains("QX-1"))).cloned().expect("QX item");
+    let next = s.execute("review.next", &json!({"id": item["id"]})).expect("next");
+    assert_eq!(next["item"]["detail"]["breakers"], "unknown_panel", "{next}");
+}
+
+/// Q6319: with no panel schedule, one-line, riser or gear in the documents, nothing says which
+/// panels exist: the panel schedule groups the circuits by the panel their labels name, as before.
+#[test]
+fn with_no_panel_documented_the_panel_schedule_groups_by_the_labels() {
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "tags": [device("device:L1:1", "receptacle", 5.0, "PQ-1"), device("device:L1:2", "receptacle", 6.0, "PQ-1")]
+    });
+    let mut s = built(spec, false);
+    let h = device_handles(&mut s, "PQ-1").into_iter().next().expect("a PQ-1 device");
+    assert_eq!(val(&props_of(&mut s, &h), "fed_from"), "panel PQ, circuit PQ-1");
+    let sc = s.execute("bim.schedule", &json!({"kind": "panel"})).expect("schedule");
+    assert!(sc["panels"].as_array().expect("panels").iter().any(|p| p["panel"] == "PQ"), "{sc:#}");
+    assert!(sc.get("review").is_none(), "{sc:#}");
 }
