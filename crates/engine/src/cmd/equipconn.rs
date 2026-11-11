@@ -98,7 +98,7 @@ pub(crate) fn named(t: &ElementTag) -> Vec<String> {
 }
 
 /// Whether `name` names the equipment tagged `tag`: the tag itself, or (a name with no number,
-/// a fan's `EF`) any of its kind's numbered tags (`EF-2`, `EF2`), never another mark (`EFX`).
+/// a fan's `EF`) any of its kind's numbered tags (`EF-37`, `EF37`), never another mark (`EFX`).
 fn names(tag: &str, name: &str) -> bool {
     let (a, b) = (tag.trim().to_ascii_uppercase(), name.trim().to_ascii_uppercase());
     if a.is_empty() || b.is_empty() {
@@ -281,11 +281,11 @@ mod tests {
 
     #[test]
     fn a_marks_name_reaches_its_numbered_tags_and_no_other_mark() {
-        assert!(names("EF-2", "EF") && names("EF2", "ef") && names("EF", "EF"));
-        assert!(!names("EFX", "EF") && !names("EF-2", "EF-1") && !names("", "EF"));
+        assert!(names("EF-37", "EF") && names("EF37", "ef") && names("EF", "EF"));
+        assert!(!names("EFX", "EF") && !names("EF-37", "EF-38") && !names("", "EF"));
         assert!(same_level("3", "Level 3") && same_level("Level 2", "level 2") && !same_level("Level 2", "Level 3"));
-        let t = conn("J", [0.0, 0.0], "connection to EF-4 in the room's ceiling (M-5)");
-        assert_eq!(named(&t), vec!["EF-4".to_string(), "J".to_string()]);
+        let t = conn("J", [0.0, 0.0], "connection to EF-31 in the room's ceiling (M-101)");
+        assert_eq!(named(&t), vec!["EF-31".to_string(), "J".to_string()]);
     }
 
     #[test]
@@ -294,7 +294,7 @@ mod tests {
         // Ceilings of 7'-11" and 9'-0": each fan at its ceiling, the connection read at its middle.
         for ceiling in [95.0, 108.0] {
             let f = fan("EF", [100.0, 50.0], ceiling / 12.0);
-            let t = conn("EF", [106.0 / 12.0, 56.0 / 12.0], "connection to EF in the room's ceiling (M-5)");
+            let t = conn("EF", [106.0 / 12.0, 56.0 / 12.0], "connection to EF in the room's ceiling (M-101)");
             let at = Vec2::new(106.0, 56.0);
             let got = place(&t, std::slice::from_ref(&f), &level(8.0), at, at, 12.0, BOX, &|_| Some(ceiling), &n)
                 .unwrap_or_else(|| panic!("no place at {ceiling}"));
