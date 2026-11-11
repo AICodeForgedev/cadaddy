@@ -669,6 +669,30 @@ pub(crate) fn made_here(r: &MepRun) -> bool {
         || r.system.to_ascii_uppercase().starts_with(&format!("{P_UG}-"))
 }
 
+/// The feeder out of the site transformer `from` that reaches the service gear `to`, straight or
+/// through the gear between them (`CT cabinet → disconnect → meter`), and the gear it passes.
+fn service_chain<'a>(sp: &'a BuildingSpec, from: &str, to: &str) -> Option<(&'a cadaddy_walk3d::Feeder, Vec<String>)> {
+    const MAX_HOPS: usize = 6;
+    for first in sp.mep.feeders.iter().take(MAX_ITEMS).filter(|f| f.from.eq_ignore_ascii_case(from)) {
+        let mut via: Vec<String> = Vec::new();
+        let mut at = first;
+        for _ in 0..MAX_HOPS {
+            if at.to.eq_ignore_ascii_case(to) {
+                return Some((first, via));
+            }
+            if via.iter().any(|v| v.eq_ignore_ascii_case(&at.to)) || at.to.eq_ignore_ascii_case(from) {
+                break;
+            }
+            via.push(at.to.clone());
+            match sp.mep.feeders.iter().take(MAX_ITEMS).find(|f| f.from.eq_ignore_ascii_case(&at.to)) {
+                Some(next) => at = next,
+                None => break,
+            }
+        }
+    }
+    None
+}
+
 /// What [`place`] did with one callout.
 #[derive(Clone, Debug)]
 pub(crate) struct Fate {
@@ -702,9 +726,9 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                 && e.properties.get("FEEDS").is_some_and(|t| t.eq_ignore_ascii_case(&g.tag))
         })
     });
-    let service_feeder = site_xfmr
-        .zip(gear)
-        .and_then(|(x, g)| sp.mep.feeders.iter().find(|f| f.from.eq_ignore_ascii_case(&x.tag) && f.to.eq_ignore_ascii_case(&g.tag)));
+    // The service feeder: from the transformer to the gear, straight or through the gear between
+    // them (a CT cabinet, a disconnect, a meter: Q6348, the chain the one-line draws).
+    let service_feeder = site_xfmr.zip(gear).and_then(|(x, g)| service_chain(sp, &x.tag, &g.tag));
     let stub = r.site.stub_ft.max(1.0) * u;
     let site_point = |p: [f64; 2]| {
         slab_b.map(|b| {
@@ -814,14 +838,20 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                     continue;
                 };
                 if c.what == "service_secondary"
-                    && let (Some(f), Some(x)) = (service_feeder, site_xfmr)
+                    && let (Some((f, via)), Some(x)) = (&service_feeder, site_xfmr)
                 {
                     fates.push(fate(
                         "placed_elsewhere",
                         0,
                         format!(
-                            "built as the service feeder {} {}→{} ({} x {}\" conduits, its conductors; {}) by the feeder routes",
-                            f.tag, x.tag, g.tag, f.conduits, f.conduit_in, f.source
+                            "built as the service feeder {} {}→{}{} ({} x {}\" conduits, its conductors; {}) by the feeder routes",
+                            f.tag,
+                            x.tag,
+                            via.iter().map(|v| format!("{v}→")).collect::<String>(),
+                            g.tag,
+                            f.conduits,
+                            f.conduit_in,
+                            f.source
                         ),
                     ));
                     continue;
@@ -2148,6 +2178,44 @@ mod tests {
         assert!(prim.iter().filter(|r| r.top_ft.is_some()).all(|r| r.points.first() == Some(&[1355.0, 320.0])), "{prim:?}");
         // The proposals leave the service alone (it is in the ground already).
         assert!(!weigh(&sp, None, None).iter().any(|p| p.subject.contains("SV1")));
+    }
+
+    /// Q6348: a service the one-line runs through a CT cabinet and a meter on its way to the service
+    /// gear is still that service: a secondary's note (its depth) is no second, smallest conduit.
+    #[test]
+    fn a_secondary_through_a_ct_cabinet_and_meter_is_the_service_feeder_not_a_new_conduit() {
+        let mut sp = with_site_transformer();
+        sp.mep.feeders.retain(|f| f.tag != "SV1");
+        for (from, to) in [("UTILITY-XFMR", "CT-1"), ("CT-1", "M-1"), ("M-1", "SB1")] {
+            sp.mep.feeders.push(cadaddy_walk3d::Feeder {
+                tag: "SV2".into(),
+                from: from.into(),
+                to: to.into(),
+                conduits: 3,
+                sets: 3,
+                conduit_in: 4.0,
+                source: "ONE-LINE E-002".into(),
+                ..cadaddy_walk3d::Feeder::default()
+            });
+        }
+        let c = Callout {
+            trade: "E".into(),
+            sheet: "E-100".into(),
+            from: "note",
+            what: "service_secondary".into(),
+            text: "SECONDARY CONDUITS SHALL BE BURIED 24\" MINIMUM".into(),
+            count: 1,
+            ..Callout::default()
+        };
+        let (runs, fates) = place(&sp, &[], &[c], &|_| false);
+        assert!(runs.is_empty(), "{runs:?}");
+        let f = fates.first().expect("fate");
+        assert_eq!(f.status, "placed_elsewhere", "{}", f.how);
+        assert!(f.how.contains("UTILITY-XFMR→CT-1→M-1→SB1"), "{}", f.how);
+        // A chain that never reaches the gear (or loops) is no service.
+        sp.mep.feeders.retain(|f| f.to != "SB1");
+        sp.mep.feeders.push(cadaddy_walk3d::Feeder { tag: "X".into(), from: "M-1".into(), to: "CT-1".into(), ..Default::default() });
+        assert!(service_chain(&sp, "UTILITY-XFMR", "SB1").is_none());
     }
 
     #[test]
