@@ -11,12 +11,13 @@
 //!
 //! A unit serves a terminal of its air only: an exhaust terminal an exhaust unit (its kind or
 //! schedule says exhaust, or it recovers energy), a supply or return one any other air unit.
-//! A unit moves air when it is on a duct system or its schedule gives an airflow. A terminal
+//! A unit moves air when its kind is an air unit's (rule data `equipment.air_unit_kinds`) or its
+//! schedule gives an airflow; other equipment on a duct (a damper) is a piece of the duct. A terminal
 //! none of these settles is left unserved (`props.check` `terminal_unserved` lists it).
 
 use cadaddy_doc::{Drawing, Entity, Handle};
 use cadaddy_geom::Vec2;
-use cadaddy_walk3d::{BuildingSpec, Made, MepEquipment, MepKind};
+use cadaddy_walk3d::{BuildingSpec, Made, MepEquipment};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 /// The trade practice rule a room's own unit serving its terminals is inferred by.
@@ -59,12 +60,14 @@ impl Unit<'_> {
         k.contains("recovery") || k.contains("erv") || self.spec.is_some_and(|e| e.title.to_ascii_uppercase().contains("RECOVERY"))
     }
 
-    /// Whether it moves air: on a duct system, or its schedule gives an airflow.
-    fn moves_air(&self, sp: &BuildingSpec) -> bool {
-        self.spec.is_some_and(|e| {
-            e.systems.iter().any(|s| sp.mep.systems.iter().any(|x| x.kind == MepKind::Duct && x.name.eq_ignore_ascii_case(s)))
-                || e.properties.iter().any(|(k, v)| k.to_ascii_uppercase().contains("CFM") && v.chars().any(|c| c.is_ascii_digit()))
-        })
+    /// Whether it moves air: its kind is an air unit's (`equipment.air_unit_kinds`), or its
+    /// schedule gives an airflow. A damper on a duct moves none.
+    fn moves_air(&self) -> bool {
+        let k = self.kind();
+        (!k.is_empty() && cadaddy_mepfix::wordrules::words("equipment.air_unit_kinds").iter().any(|w| k.contains(w)))
+            || self
+                .spec
+                .is_some_and(|e| e.properties.iter().any(|(k, v)| k.to_ascii_uppercase().contains("CFM") && v.chars().any(|c| c.is_ascii_digit())))
     }
 
     /// Whether it serves a terminal of air system `system` (`EA`: exhaust).
@@ -157,7 +160,7 @@ pub(crate) fn serve(d: &Drawing, sp: &BuildingSpec, room_of: &dyn Fn(Option<&str
     }
     // The units the network starts from: those that move air. Other equipment on a duct (a
     // damper) is a piece of the duct, passed through.
-    let unit_at: HashMap<Handle, usize> = units.iter().enumerate().filter(|(_, u)| u.moves_air(sp)).map(|(i, u)| (u.h, i)).collect();
+    let unit_at: HashMap<Handle, usize> = units.iter().enumerate().filter(|(_, u)| u.moves_air()).map(|(i, u)| (u.h, i)).collect();
     let term_at: HashMap<Handle, usize> = terms.iter().enumerate().map(|(i, t)| (t.h, i)).collect();
     // 1. The network: out from every unit at once, each piece reached keeps the nearest unit (by
     // pieces); a terminal ends a path, another unit too.
@@ -194,8 +197,7 @@ pub(crate) fn serve(d: &Drawing, sp: &BuildingSpec, room_of: &dyn Fn(Option<&str
         let room = room_of(level, t.at);
         // 2. A unit whose schedule row names the terminal's room as what it serves.
         if let Some(name) = room.as_deref() {
-            let named: Vec<&Unit> =
-                units.iter().filter(|u| u.serves_air(&t.system) && u.moves_air(sp) && names_room(&u.serves_text(), name)).collect();
+            let named: Vec<&Unit> = units.iter().filter(|u| u.serves_air(&t.system) && u.moves_air() && names_room(&u.serves_text(), name)).collect();
             // One schedule row per unit (a row's tag built more than once is one unit's tag).
             let tags: BTreeMap<&str, &Unit> = named.iter().map(|u| (u.tag.as_str(), *u)).collect();
             if tags.len() == 1
@@ -217,7 +219,7 @@ pub(crate) fn serve(d: &Drawing, sp: &BuildingSpec, room_of: &dyn Fn(Option<&str
         if let Some(name) = room.as_deref() {
             let own = units
                 .iter()
-                .filter(|u| u.level.eq_ignore_ascii_case(&t.level) && u.serves_air(&t.system) && u.moves_air(sp))
+                .filter(|u| u.level.eq_ignore_ascii_case(&t.level) && u.serves_air(&t.system) && u.moves_air())
                 .filter(|u| room_of(level, u.at).as_deref() == Some(name))
                 .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)));
             if let Some(u) = own {
@@ -284,7 +286,8 @@ mod tests {
     #[test]
     fn the_network_passes_a_damper_to_the_unit_past_it() {
         let mut d = Drawing::new_imperial();
-        let sp = spec(&[("AHU-1", "ahu", &["SA"]), ("FD-1", "fire_damper", &[])]);
+        // The damper on the duct's system, as a keynote's damper is built.
+        let sp = spec(&[("AHU-1", "ahu", &["SA"]), ("FD-1", "fire_damper", &["SA"])]);
         let term = piece(&mut d, 0.0, &["system:SA", "part:terminal:supply_diffuser"], &[]);
         let duct_a = piece(&mut d, 100.0, &["system:SA", "part:segment"], &[term]);
         let damper = piece(&mut d, 200.0, &["part:equipment", "tag:FD-1"], &[duct_a]);

@@ -1226,6 +1226,30 @@
     ]
    ]
   },
+  "equipment.air_unit_kinds": {
+   "source": "trade practice: the kinds of equipment that move air through ducts to air terminals (a unit's kind contains one: `fan_coil_unit`, `outdoor_air_unit`, `exhaust_fan`); a damper, a curb or a hood on the duct moves none (fix-air-terminals-unconnected)",
+   "words": [
+    "ahu",
+    "air_handl",
+    "rtu",
+    "rooftop",
+    "ptac",
+    "pthp",
+    "fan",
+    "split",
+    "outdoor_air",
+    "doas",
+    "make_up_air",
+    "energy_recovery",
+    "erv",
+    "hrv",
+    "unit_ventilator",
+    "furnace",
+    "vav",
+    "mixing_box",
+    "heat_pump"
+   ]
+  },
   "equipment.control_marks": {
    "source": "drafting practice: the marks of the controls and sensors a unit's tag labels when printed beside them (a thermostat, a humidistat, a sensor, a switch: `FCU-1 T` is the thermostat of FCU-1, not the unit) (fix-symbol-misread)",
    "words": [
