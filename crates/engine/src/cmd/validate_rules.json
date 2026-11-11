@@ -199,7 +199,7 @@
     {
       "id": "G-CEILING-CLEAR",
       "trade": "general",
-      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "applies_to": {"kinds": ["occupancy_sensor", "vacancy_sensor", "wall_luminaire", "sconce", "exit_sign", "emergency_light", "switch", "thermostat", "fire_alarm_device", "speaker"], "categories": [], "marks": []},
       "check": "A wall-mounted item is on its wall below its room's finished ceiling: its top at least its own clearance under the ceiling (a legend's or schedule's \"x in below ceiling\", else 2 in), never above the ceiling in the plenum.",
       "how": [
         "The prescreen's G-CEILING-CLEAR reading gives each wall item's top and the underside of the ceiling over the room side of its wall face (else its room's, else its level's ceiling), with its clearance and where that came from.",

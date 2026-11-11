@@ -128,7 +128,8 @@ fn wall_devices_stay_below_their_rooms_ceiling() {
     let (_, top, p) = device(&all, 2);
     assert!((top - 88.0).abs() < 1e-6, "the wall sensor's top set 2 in under the 7'-6\" ceiling, not {top}: {p:#}");
     assert_eq!(p["design:mount_height"]["value"].as_f64(), Some(108.0), "its design height kept: {p:#}");
-    assert!(p["correction:mount_height"]["value"].as_str().is_some_and(|c| c.starts_with("E-WALL-UNDER-CEILING")), "{p:#}");
+    let why = p["correction:mount_height"]["value"].as_str().unwrap_or_default();
+    assert!(why.starts_with("E-WALL-UNDER-CEILING") && why.contains("above its room's finished ceiling (7'-6\","), "{p:#}");
     assert!(p["mount_height"]["value"].as_f64().is_some_and(|v| v < 108.0), "{p:#}");
     let (_, top, p) = device(&all, 3);
     assert!((top - 86.0).abs() < 1e-6, "the emergency light's top 4 in under the ceiling as its legend says, not {top}: {p:#}");
@@ -143,22 +144,29 @@ fn wall_devices_stay_below_their_rooms_ceiling() {
     }
 }
 
-/// The prescreen's count of wall devices over their place under the ceiling.
-fn screened(s: &mut Session) -> (u64, u64, Vec<Value>) {
+/// The prescreen's counts of wall devices under and over their place under the ceiling, its
+/// failures, and the handles it measured.
+fn screened(s: &mut Session) -> (u64, u64, Vec<Value>, Vec<String>) {
     let r = s.execute("validate.prescreen", &json!({"rules": ["G-CEILING-CLEAR"], "all": true, "limit": 50})).unwrap();
     let c = &r["checked"]["G-CEILING-CLEAR"];
-    let fails = r["findings"].as_array().unwrap().iter().filter(|f| f["rule"] == "G-CEILING-CLEAR" && f["verdict"] == "fail").cloned().collect();
-    (c["pass"].as_u64().unwrap_or(0), c["fail"].as_u64().unwrap_or(0), fails)
+    let mine: Vec<&Value> = r["findings"].as_array().unwrap().iter().filter(|f| f["rule"] == "G-CEILING-CLEAR").collect();
+    let fails = mine.iter().filter(|f| f["verdict"] == "fail").map(|f| (*f).clone()).collect();
+    let handles = mine.iter().filter_map(|f| f["handle"].as_str()).map(str::to_string).collect();
+    (c["pass"].as_u64().unwrap_or(0), c["fail"].as_u64().unwrap_or(0), fails, handles)
 }
 
 #[test]
 fn validate_counts_no_wall_device_above_its_ceiling_and_finds_one_put_back() {
     let mut s = built();
-    let (pass, fail, fails) = screened(&mut s);
+    let (pass, fail, fails, measured) = screened(&mut s);
     assert_eq!(fail, 0, "after the build no wall device is over its place: {fails:#?}");
-    assert!(pass >= 4, "the sensors and the emergency light are measured: {pass}");
-    // The wall sensor put back at its design height (its top at 110 in under the 90 in ceiling).
     let all = devices(&mut s);
+    for n in 1..=4 {
+        let (h, _, _) = device(&all, n);
+        assert!(measured.contains(&h.hex()), "device {n} ({}) is measured: {measured:?}", h.hex());
+    }
+    assert_eq!(pass, 4, "the sensors and the emergency light: {measured:?}");
+    // The wall sensor put back at its design height (its top at 110 in under the 90 in ceiling).
     let (h, top, _) = device(&all, 2);
     let up = 110.0 - top;
     s.doc_mut()
@@ -171,7 +179,7 @@ fn validate_counts_no_wall_device_above_its_ceiling_and_finds_one_put_back() {
             }
         })
         .unwrap();
-    let (_, fail, fails) = screened(&mut s);
+    let (_, fail, fails, _) = screened(&mut s);
     assert_eq!(fail, 1, "{fails:#?}");
     let f = &fails[0];
     assert_eq!(f["handle"], h.hex());

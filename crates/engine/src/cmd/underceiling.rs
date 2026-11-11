@@ -13,7 +13,8 @@
 //! The ceiling over a device is the underside of the smallest built ceiling over the room side
 //! of its wall face (its box's middle when it has no face). Failing that, it is its room
 //! element's ceiling, then its level's. [`measure`] reads every wall device against it. The
-//! build runs [`keep_under`], and the prescreen's [`RULE`] uses [`measure`].
+//! build runs [`keep_under`], and the prescreen's [`CHECK`] uses [`measure`]. A device at or over
+//! its storey's height (on the roof, on the floor over it) is in no room under this ceiling.
 //! Nothing here panics; every scan is capped.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -223,13 +224,18 @@ fn measure_with(d: &Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<Handle>>,
             continue;
         }
         let Some(level) = super::bspec::made_level(e).and_then(|l| sp.level(&l)) else { continue };
-        let Some((b, _, z1)) = super::propfill::extent(d, e) else { continue };
+        let Some((b, z0, z1)) = super::propfill::extent(d, e) else { continue };
         if !matches!(e.kind, EntityKind::Mesh(_)) || b.is_empty() {
             continue;
         }
         let floor = level.elevation_ft * upf;
-        let top_in = (z1 - floor) / upf * 12.0;
-        if !top_in.is_finite() {
+        let (bottom_in, top_in) = ((z0 - floor) / upf * 12.0, (z1 - floor) / upf * 12.0);
+        if !top_in.is_finite() || !bottom_in.is_finite() {
+            continue;
+        }
+        // At or over its storey's height it stands on the roof or the floor over it (a roof
+        // device on its curb or parapet), in no room under this ceiling.
+        if level.height_ft.is_finite() && level.height_ft > 0.0 && bottom_in >= level.height_ft * 12.0 - SLACK_IN {
             continue;
         }
         // The room side of its wall face, else its middle; else round it (no face known).
@@ -393,10 +399,10 @@ pub(crate) fn keep_under(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTree
 fn ft_in(inches: f64) -> String {
     let i = (inches * 4.0).round() / 4.0;
     if i.abs() < 12.0 {
-        return format!("{}\"", super::walltypes::frac(i));
+        return super::walltypes::frac(i);
     }
     let ft = (i / 12.0).floor();
-    format!("{ft:.0}'-{}\"", super::walltypes::frac(i - ft * 12.0))
+    format!("{ft:.0}'-{}", super::walltypes::frac(i - ft * 12.0))
 }
 
 #[cfg(test)]
