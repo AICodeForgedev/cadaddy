@@ -403,7 +403,10 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
             }
         }
     }
-    let tags = crate::dwg_keep::unstash_tags(&tags).unwrap_or(tags);
+    let mut tags = crate::dwg_keep::unstash_tags(&tags).unwrap_or(tags);
+    // The DWG's text (characters) as DXF writes it, caret codes for control characters and
+    // carets, which the DXF reader decodes; kept records too, stored as the codec's are.
+    crate::dxf_read::mtext_dxf::dwg_text(&mut tags, false);
     let mut d = crate::dxf_read::read_tags(tags)?;
     d.read_notes.extend(store_note);
     let kept = kept_entities(&d);

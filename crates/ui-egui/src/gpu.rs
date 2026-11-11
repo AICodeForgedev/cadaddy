@@ -16,7 +16,7 @@
 //! canvas falls back to the CPU path when no wgpu render state was handed to the app.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cadaddy_color::Rgb;
@@ -115,6 +115,12 @@ pub struct MeshData {
     pub breaks: Vec<[usize; 3]>,
     /// Raster images, each drawn between two draw-order groups (see [`MeshImage::group`]).
     pub images: Vec<MeshImage>,
+    /// The streams cut into area tiles ([`build_mesh_tiled`]): each stream holds its tiles one
+    /// after the other, and a frame draws only the tiles in view. `None`: drawn whole, in the
+    /// order of `breaks`.
+    pub tiles: Option<Arc<Tiles>>,
+    /// What was drawn simpler than the list ([`build_screen_mesh`]).
+    pub simplified: Simplified,
     /// The vertex buffers already created from this data (see [`MeshData::upload_now`]); the
     /// paint callback then only swaps them in.
     uploaded: Option<Uploaded>,
@@ -135,6 +141,7 @@ struct Uploaded {
     tris: Vec<Batch>,
     quads: Vec<Batch>,
     images: Vec<LayerImage>,
+    tiles: Option<Arc<Tiles>>,
 }
 
 /// An uploaded [`MeshImage`].
@@ -158,12 +165,25 @@ impl MeshData {
                 group: im.group,
             })
             .collect();
-        self.uploaded = Some(Uploaded {
-            lines: upload(device, "cad_lines", &self.lines, VERTEX_SIZE, usage),
-            tris: upload(device, "cad_fills", &self.tris, VERTEX_SIZE, usage),
-            quads: upload(device, "cad_quads", &self.quads, INSTANCE_SIZE, usage),
-            images,
-        });
+        // A tiled mesh's buffers start at its tiles' starts, so an edit makes again only the
+        // pieces of the tiles it changed.
+        let uploaded = match &self.tiles {
+            Some(t) => Uploaded {
+                tris: upload_parts(device, "cad_fills", t.parts(&self.tris, 0, VERTEX_SIZE), VERTEX_SIZE, usage),
+                lines: upload_parts(device, "cad_lines", t.parts(&self.lines, 1, VERTEX_SIZE), VERTEX_SIZE, usage),
+                quads: upload_parts(device, "cad_quads", t.parts(&self.quads, 2, INSTANCE_SIZE), INSTANCE_SIZE, usage),
+                images,
+                tiles: Some(Arc::clone(t)),
+            },
+            None => Uploaded {
+                lines: upload(device, "cad_lines", &self.lines, VERTEX_SIZE, usage),
+                tris: upload(device, "cad_fills", &self.tris, VERTEX_SIZE, usage),
+                quads: upload(device, "cad_quads", &self.quads, INSTANCE_SIZE, usage),
+                images,
+                tiles: None,
+            },
+        };
+        self.uploaded = Some(uploaded);
         self.lines = Vec::new();
         self.tris = Vec::new();
         self.quads = Vec::new();
@@ -188,19 +208,51 @@ fn rel(p: Vec2, origin: Vec2) -> [f32; 2] {
     [(p.x - origin.x) as f32, (p.y - origin.y) as f32]
 }
 
-fn push_vertex(out: &mut Vec<u8>, p: [f32; 2], c: [u8; 4]) {
-    out.extend_from_slice(&p[0].to_le_bytes());
-    out.extend_from_slice(&p[1].to_le_bytes());
-    out.extend_from_slice(&c);
+/// Where vertex data is written: a growing buffer, or (a tiled mesh written on several
+/// threads) a part of one made to size.
+trait Sink {
+    fn put(&mut self, bytes: &[u8]);
 }
 
-fn push_instance(out: &mut Vec<u8>, a: [f32; 2], b: [f32; 2], c: [u8; 4], width: f32, start: f32) {
-    for v in [a[0], a[1], b[0], b[1]] {
-        out.extend_from_slice(&v.to_le_bytes());
+impl Sink for Vec<u8> {
+    fn put(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
     }
-    out.extend_from_slice(&c);
-    out.extend_from_slice(&width.to_le_bytes());
-    out.extend_from_slice(&start.to_le_bytes());
+}
+
+/// A part of a buffer made to size, written from its start.
+struct Cursor<'a> {
+    buf: &'a mut [u8],
+    at: usize,
+}
+
+impl Sink for Cursor<'_> {
+    fn put(&mut self, bytes: &[u8]) {
+        let end = self.at.saturating_add(bytes.len());
+        if let Some(d) = self.buf.get_mut(self.at..end) {
+            d.copy_from_slice(bytes);
+        }
+        self.at = end;
+    }
+}
+
+fn push_vertex(out: &mut impl Sink, p: [f32; 2], c: [u8; 4]) {
+    let mut v = [0u8; VERTEX_SIZE];
+    v[0..4].copy_from_slice(&p[0].to_le_bytes());
+    v[4..8].copy_from_slice(&p[1].to_le_bytes());
+    v[8..12].copy_from_slice(&c);
+    out.put(&v);
+}
+
+fn push_instance(out: &mut impl Sink, a: [f32; 2], b: [f32; 2], c: [u8; 4], width: f32, start: f32) {
+    let mut v = [0u8; INSTANCE_SIZE];
+    for (k, f) in [a[0], a[1], b[0], b[1]].into_iter().enumerate() {
+        v[k * 4..k * 4 + 4].copy_from_slice(&f.to_le_bytes());
+    }
+    v[16..20].copy_from_slice(&c);
+    v[20..24].copy_from_slice(&width.to_le_bytes());
+    v[24..28].copy_from_slice(&start.to_le_bytes());
+    out.put(&v);
 }
 
 /// Lineweight in screen points for a primitive (as on the CPU path), or `None` for a hairline.
@@ -218,81 +270,1426 @@ fn premultiplied(c: Rgb, a: u8) -> [u8; 4] {
     [k(c.0), k(c.1), k(c.2), a]
 }
 
-/// Convert a display list into vertex data relative to `origin`, colours resolved against `bg`.
+/// The vertex data of one primitive (not an image, not an infinite line) appended to the
+/// stream it belongs in: fills to `tris`, hairlines to `lines`, wide lines and points to `quads`.
+#[allow(clippy::too_many_arguments)]
+fn push_prim<S: Sink>(
+    list: &DisplayList,
+    prim: &cadaddy_render::DPrim,
+    origin: Vec2,
+    bg: Rgb,
+    lwdisplay: bool,
+    lines: &mut S,
+    tris: &mut S,
+    quads: &mut S,
+) {
+    let col = premultiplied(prim.display_rgb(bg), prim.alpha());
+    let pts = list.points(prim);
+    match prim.kind {
+        Kind::Polyline => match wide_width(prim.lw, lwdisplay) {
+            Some(w) => {
+                for s in pts.windows(2) {
+                    if let [a, b] = s {
+                        push_instance(quads, rel(*a, origin), rel(*b, origin), col, w, 0.0);
+                    }
+                }
+            }
+            None => {
+                for s in pts.windows(2) {
+                    if let [a, b] = s {
+                        push_vertex(lines, rel(*a, origin), col);
+                        push_vertex(lines, rel(*b, origin), col);
+                    }
+                }
+            }
+        },
+        Kind::Tris | Kind::InkMask | Kind::Mask => {
+            // A wipeout's mask takes the background colour.
+            let col = if prim.kind == Kind::Mask { [bg.0, bg.1, bg.2, 255] } else { col };
+            for t in pts.as_chunks::<3>().0 {
+                for q in t {
+                    push_vertex(tris, rel(*q, origin), col);
+                }
+            }
+        }
+        Kind::Point => {
+            if let Some(q) = pts.first() {
+                let p = rel(*q, origin);
+                push_instance(quads, p, p, col, POINT_SIZE, 0.0);
+            }
+        }
+        Kind::Infinite { .. } | Kind::Image(_) => {}
+    }
+}
+
+/// An image primitive's textured triangles, painted after draw-order group `group`.
+fn mesh_image(list: &DisplayList, prim: &cadaddy_render::DPrim, origin: Vec2, bg: Rgb, group: usize) -> Option<MeshImage> {
+    let img = list.image(prim)?;
+    let pts = list.points(prim);
+    let opacity = f32::from(img.alpha) / 255.0 * f32::from(prim.alpha()) / 255.0;
+    let mut verts = Vec::with_capacity(pts.len() * IMAGE_VERTEX_SIZE);
+    for q in pts.as_chunks::<3>().0.iter().flatten() {
+        let (u, v) = img.uv(*q);
+        let [x, y] = rel(*q, origin);
+        for f in [x, y, u as f32, v as f32, opacity] {
+            verts.extend_from_slice(&f.to_le_bytes());
+        }
+    }
+    Some(MeshImage { raster: img.raster_on(bg), verts, group })
+}
+
+/// Screen detail of the vertex data drawn at one zoom band (see [`build_screen_mesh`]). An object
+/// (a top-level entity: a block reference with all its contents) or a primitive whose box is under
+/// this many pixels each way at the band's finest zoom is drawn as one dot, as the CPU canvas
+/// draws one under a pixel, and the dots falling in one pixel cell as one.
+pub const DOT_BELOW_PX: f64 = 1.0;
+/// An object under this many pixels each way whose lines and fills cost more than its box is
+/// drawn as the box's outline: a block reference's contents, a short text, a small circle.
+pub const BOX_BELOW_PX: f64 = 4.0;
+/// A dot's size in points (the CPU canvas's sub-pixel dot).
+const DOT_POINTS: f32 = 1.0;
+/// GPU vertices a dot costs: one quad instance (two triangles).
+const DOT_COST: usize = 6;
+
+/// What [`build_screen_mesh`] drew simpler than the list: objects and primitives drawn as dots,
+/// the dots drawn for them (one per pixel cell), and objects drawn as their box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Simplified {
+    pub dot_objects: usize,
+    pub dot_prims: usize,
+    pub dots: usize,
+    pub boxes: usize,
+}
+
+/// Convert a display list into vertex data relative to `origin`, colours resolved against `bg`,
+/// with every object and primitive drawn as it is (selection highlights, previews, masks).
 pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) -> MeshData {
+    build_screen_mesh(list, origin, bg, lwdisplay, None)
+}
+
+/// [`build_mesh`] for the screen at a zoom band whose finest zoom shows `pixel` drawing units in
+/// a pixel (`None`: everything as it is). Objects and primitives under [`DOT_BELOW_PX`] pixels
+/// draw as one dot per pixel cell, small objects under [`BOX_BELOW_PX`] as their box, where that
+/// is cheaper than their own lines and fills (see [`Simplified`]). The list itself is untouched:
+/// plots, exports, picks, snaps and counts see every object, and nothing is left undrawn (a
+/// simplified object still lights its pixels). The band is rebuilt every 2x of zoom, so the detail
+/// comes back as the view zooms in.
+pub fn build_screen_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool, pixel: Option<f64>) -> MeshData {
     let mut m = MeshData {
         lines: Vec::with_capacity(list.segment_count().saturating_mul(2 * VERTEX_SIZE)),
         tris: Vec::with_capacity(list.tris.len().saturating_mul(VERTEX_SIZE)),
-        quads: Vec::new(),
-        breaks: Vec::new(),
-        images: Vec::new(),
-        uploaded: None,
+        ..MeshData::default()
     };
-    for prim in &list.prims {
-        let col = premultiplied(prim.display_rgb(bg), prim.alpha());
-        let pts = list.points(prim);
+    screen_pieces(&mut m, list, origin, bg, lwdisplay, pixel);
+    m
+}
+
+/// [`build_screen_mesh`] cut into the area tiles of `tiling` ([`build_mesh_tiled`]): the same
+/// pieces (primitives as they are, dots and boxes, with the same [`Simplified`] counts) in the
+/// same order, each placed in the tile its points fall in (a dot by its cell's centre). `None`
+/// for either is [`build_mesh_tiled`] of every primitive as it is, or [`build_screen_mesh`] whole.
+pub fn build_screen_mesh_tiled(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool, pixel: Option<f64>, tiling: Option<&Tiling>) -> MeshData {
+    let Some(t) = tiling else { return build_screen_mesh(list, origin, bg, lwdisplay, pixel) };
+    if !pixel.is_some_and(|p| p.is_finite() && p > 0.0) {
+        return build_mesh_tiled(list, origin, bg, lwdisplay, Some(t));
+    }
+    let mut pieces = ScreenPieces { codes: Vec::with_capacity(list.prims.len()), ..ScreenPieces::default() };
+    screen_pieces(&mut pieces, list, origin, bg, lwdisplay, pixel);
+    let mut m = tile_pieces(list, Pieces::Screen(&pieces), origin, bg, lwdisplay, t, MAX_WRITERS);
+    m.simplified = pieces.simplified;
+    m
+}
+
+/// Where the screen mesh's pieces go, in draw order: straight into vertex data ([`MeshData`]), or
+/// listed ([`ScreenPieces`]) for the area tiles to place.
+trait ScreenOut {
+    /// Primitive `k` of the list as it is.
+    fn prim(&mut self, list: &DisplayList, k: usize, origin: Vec2, bg: Rgb, lwdisplay: bool);
+    /// A dot at `at` (relative to the origin; `world` in drawing units), `width` points wide.
+    fn dot(&mut self, world: Vec2, at: [f32; 2], color: [u8; 4], width: f32);
+    /// Box `bb`'s outline in `color`, `wide` points wide (`None`: hairlines).
+    fn outline(&mut self, bb: Bounds2, origin: Vec2, color: [u8; 4], wide: Option<f32>);
+    fn simplified(&mut self) -> &mut Simplified;
+}
+
+impl ScreenOut for MeshData {
+    fn prim(&mut self, list: &DisplayList, k: usize, origin: Vec2, bg: Rgb, lwdisplay: bool) {
+        let Some(prim) = list.prims.get(k) else { return };
         match prim.kind {
-            Kind::Polyline => match wide_width(prim.lw, lwdisplay) {
-                Some(w) => {
-                    for s in pts.windows(2) {
-                        if let [a, b] = s {
-                            push_instance(&mut m.quads, rel(*a, origin), rel(*b, origin), col, w, 0.0);
-                        }
-                    }
-                }
-                None => {
-                    for s in pts.windows(2) {
-                        if let [a, b] = s {
-                            push_vertex(&mut m.lines, rel(*a, origin), col);
-                            push_vertex(&mut m.lines, rel(*b, origin), col);
-                        }
-                    }
-                }
-            },
-            Kind::Tris | Kind::InkMask => {
-                if prim.kind == Kind::InkMask {
-                    m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
-                }
-                for t in pts.as_chunks::<3>().0 {
-                    for q in t {
-                        push_vertex(&mut m.tris, rel(*q, origin), col);
-                    }
-                }
-            }
-            Kind::Mask => {
-                m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
-                for t in pts.as_chunks::<3>().0 {
-                    for q in t {
-                        push_vertex(&mut m.tris, rel(*q, origin), [bg.0, bg.1, bg.2, 255]);
-                    }
-                }
-            }
-            Kind::Point => {
-                if let Some(q) = pts.first() {
-                    let p = rel(*q, origin);
-                    push_instance(&mut m.quads, p, p, col, POINT_SIZE, 0.0);
-                }
-            }
             // Drawn on the CPU each frame (clipped to the view).
             Kind::Infinite { .. } => {}
             Kind::Image(_) => {
-                let Some(img) = list.image(prim) else { continue };
-                // drawn between the groups before and after it
-                m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
-                let opacity = f32::from(img.alpha) / 255.0 * f32::from(prim.alpha()) / 255.0;
-                let mut verts = Vec::with_capacity(pts.len() * IMAGE_VERTEX_SIZE);
-                for q in pts.as_chunks::<3>().0.iter().flatten() {
-                    let (u, v) = img.uv(*q);
-                    let [x, y] = rel(*q, origin);
-                    for f in [x, y, u as f32, v as f32, opacity] {
-                        verts.extend_from_slice(&f.to_le_bytes());
-                    }
+                if list.image(prim).is_none() {
+                    return;
                 }
-                m.images.push(MeshImage { raster: img.raster_on(bg), verts, group: m.breaks.len() - 1 });
+                // drawn between the groups before and after it
+                self.breaks.push([self.tri_vertices(), self.line_vertices(), self.quad_instances()]);
+                let group = self.breaks.len() - 1;
+                self.images.extend(mesh_image(list, prim, origin, bg, group));
+            }
+            _ => {
+                if matches!(prim.kind, Kind::InkMask | Kind::Mask) {
+                    self.breaks.push([self.tri_vertices(), self.line_vertices(), self.quad_instances()]);
+                }
+                push_prim(list, prim, origin, bg, lwdisplay, &mut self.lines, &mut self.tris, &mut self.quads);
             }
         }
     }
+    fn dot(&mut self, _world: Vec2, at: [f32; 2], color: [u8; 4], width: f32) {
+        push_instance(&mut self.quads, at, at, color, width, 0.0);
+    }
+    fn outline(&mut self, bb: Bounds2, origin: Vec2, color: [u8; 4], wide: Option<f32>) {
+        push_outline(&mut self.lines, &mut self.quads, &bb, origin, color, wide);
+    }
+    fn simplified(&mut self) -> &mut Simplified {
+        &mut self.simplified
+    }
+}
+
+/// A box's outline: four wide lines (quads) or four hairlines.
+fn push_outline<S: Sink>(lines: &mut S, quads: &mut S, bb: &Bounds2, origin: Vec2, col: [u8; 4], wide: Option<f32>) {
+    let corners = [bb.min, Vec2::new(bb.max.x, bb.min.y), bb.max, Vec2::new(bb.min.x, bb.max.y), bb.min];
+    for side in corners.windows(2) {
+        let [a, b] = side else { continue };
+        let (a, b) = (rel(*a, origin), rel(*b, origin));
+        match wide {
+            Some(w) => push_instance(quads, a, b, col, w, 0.0),
+            None => {
+                push_vertex(lines, a, col);
+                push_vertex(lines, b, col);
+            }
+        }
+    }
+}
+
+/// A screen mesh's pieces in draw order, for the area tiles to place: each code is a primitive
+/// of the list, or (with [`EXTRA`] set) a dot or a box in `extras`.
+#[derive(Default)]
+struct ScreenPieces {
+    codes: Vec<u32>,
+    extras: Vec<Extra>,
+    simplified: Simplified,
+}
+
+/// The bit of a [`ScreenPieces`] code that marks a dot or a box.
+const EXTRA: u32 = 1 << 31;
+
+/// A piece of a screen mesh that is not a primitive of the list.
+#[derive(Clone, Copy, Debug)]
+enum Extra {
+    /// A dot: where it is (drawing units, and relative to the origin), its colour and width.
+    Dot { world: Vec2, at: [f32; 2], color: [u8; 4], width: f32 },
+    /// A box's outline.
+    Outline { bb: Bounds2, color: [u8; 4], wide: Option<f32> },
+}
+
+impl ScreenPieces {
+    fn extra(&mut self, e: Extra) {
+        // (Over 2^31 pieces the rest are left out: no list is that large.)
+        if let Some(code) = u32::try_from(self.extras.len()).ok().filter(|k| *k < EXTRA) {
+            self.extras.push(e);
+            self.codes.push(code | EXTRA);
+        }
+    }
+}
+
+impl ScreenOut for ScreenPieces {
+    fn prim(&mut self, _list: &DisplayList, k: usize, _origin: Vec2, _bg: Rgb, _lwdisplay: bool) {
+        if let Some(code) = u32::try_from(k).ok().filter(|k| *k < EXTRA) {
+            self.codes.push(code);
+        }
+    }
+    fn dot(&mut self, world: Vec2, at: [f32; 2], color: [u8; 4], width: f32) {
+        self.extra(Extra::Dot { world, at, color, width });
+    }
+    fn outline(&mut self, bb: Bounds2, _origin: Vec2, color: [u8; 4], wide: Option<f32>) {
+        self.extra(Extra::Outline { bb, color, wide });
+    }
+    fn simplified(&mut self) -> &mut Simplified {
+        &mut self.simplified
+    }
+}
+
+/// The pieces of the screen mesh of `list` at a band of `pixel` drawing units a pixel, in draw
+/// order, into `out` (see [`build_screen_mesh`]).
+fn screen_pieces<O: ScreenOut>(out: &mut O, list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool, pixel: Option<f64>) {
+    let px = pixel.filter(|p| p.is_finite() && *p > 0.0);
+    let mut cells = Cells { pixel: px.unwrap_or(1.0), origin, ..Cells::default() };
+    let Some(px) = px else {
+        (0..list.prims.len()).for_each(|k| emit_prim(out, &mut cells, list, k, origin, bg, lwdisplay));
+        return;
+    };
+    let (prims, mut i, mut scratch) = (&list.prims, 0, Vec::new());
+    while let Some(first) = prims.get(i) {
+        // One top-level object's primitives come one after another under its handle.
+        let end = prims.get(i + 1..).and_then(|rest| rest.iter().position(|p| p.handle != first.handle)).map_or(prims.len(), |n| i + 1 + n);
+        screen_object(out, &mut cells, &mut scratch, list, i..end, px, bg, lwdisplay);
+        i = end;
+    }
+    cells.flush(out, list, bg, lwdisplay);
+}
+
+/// Primitives that can be drawn simpler: lines and fills (masks, images and markers stay).
+fn simplifiable(kind: Kind) -> bool {
+    matches!(kind, Kind::Polyline | Kind::Tris)
+}
+
+/// GPU vertices a primitive costs as it is (as `drawstats` counts them).
+fn prim_cost(list: &DisplayList, prim: &cadaddy_render::DPrim, lwdisplay: bool) -> usize {
+    let n = list.points(prim).len();
+    match prim.kind {
+        Kind::Polyline if wide_width(prim.lw, lwdisplay).is_some() => n.saturating_sub(1) * DOT_COST,
+        Kind::Polyline => n.saturating_sub(1) * 2,
+        Kind::Tris => n,
+        _ => DOT_COST,
+    }
+}
+
+/// The dot width (points) of a primitive: its lineweight's, at least [`DOT_POINTS`].
+fn dot_width(prim: &cadaddy_render::DPrim, lwdisplay: bool) -> f32 {
+    wide_width(prim.lw, lwdisplay).unwrap_or(DOT_POINTS)
+}
+
+/// Primitives costing this many GPU vertices or fewer (a single hairline segment, a lone fill
+/// triangle) are drawn as they are even under a pixel: a dot would cost more, so only a crowd of
+/// them in one cell could save anything, and finding the crowds would cost more time than it saves.
+const CHEAP: usize = 3;
+
+/// The box of `pts` while it is under `limit` each way (`None` once it is not, or with no points).
+fn small_box(pts: &[Vec2], limit: f64) -> Option<Bounds2> {
+    let (first, rest) = pts.split_first()?;
+    let mut b = Bounds2 { min: *first, max: *first };
+    for q in rest {
+        b.min = Vec2::new(b.min.x.min(q.x), b.min.y.min(q.y));
+        b.max = Vec2::new(b.max.x.max(q.x), b.max.y.max(q.y));
+        if b.max.x - b.min.x >= limit || b.max.y - b.min.y >= limit {
+            return None;
+        }
+    }
+    (first.x.is_finite() && first.y.is_finite()).then_some(b)
+}
+
+/// Draw object `run` (primitives of one handle) at a band of `px` drawing units a pixel;
+/// `scratch` holds its primitives' boxes under [`BOX_BELOW_PX`] and costs (reused from object to
+/// object).
+#[allow(clippy::too_many_arguments)]
+fn screen_object<O: ScreenOut>(
+    out: &mut O,
+    cells: &mut Cells,
+    scratch: &mut Vec<(Option<Bounds2>, usize)>,
+    list: &DisplayList,
+    run: std::ops::Range<usize>,
+    px: f64,
+    bg: Rgb,
+    lwdisplay: bool,
+) {
+    let origin = cells.origin;
+    let prims = list.prims.get(run.clone()).unwrap_or(&[]);
+    let under = |b: &Bounds2, limit: f64| b.width() < px * limit && b.height() < px * limit;
+    let boxed = |p: &cadaddy_render::DPrim| if simplifiable(p.kind) { small_box(list.points(p), px * BOX_BELOW_PX) } else { None };
+    // Most objects are one primitive bigger than the box limit (a wall, a door swing): drawn as
+    // they are with no more work than finding out.
+    if let [p] = prims
+        && boxed(p).is_none()
+    {
+        emit_prim(out, cells, list, run.start, origin, bg, lwdisplay);
+        return;
+    }
+    scratch.clear();
+    // The object's box while it is small, what it costs, and the primitive with the most
+    // geometry, which stands for it (its colour and lineweight). Once the object is too big to
+    // be drawn simpler, its primitives are drawn one by one as they come.
+    let (mut bb, mut cost) = (Some(Bounds2::EMPTY), 0);
+    let mut main: Option<(&cadaddy_render::DPrim, usize)> = None;
+    for (k, p) in run.clone().zip(prims) {
+        let (b, c) = (boxed(p), prim_cost(list, p, lwdisplay));
+        if bb.is_none() {
+            screen_prim(out, cells, list, k, b, c, px, bg, lwdisplay);
+            continue;
+        }
+        bb = bb.zip(b).map(|(a, b)| a.union(&b)).filter(|a| under(a, BOX_BELOW_PX));
+        cost += c;
+        if main.is_none_or(|(_, mc)| c > mc) {
+            main = Some((p, c));
+        }
+        scratch.push((b, c));
+        if bb.is_none() {
+            for (j, (b, c)) in (run.start..).zip(scratch.drain(..)) {
+                screen_prim(out, cells, list, j, b, c, px, bg, lwdisplay);
+            }
+        }
+    }
+    let (Some(bb), Some((main, _))) = (bb, main) else { return };
+    let col = premultiplied(main.display_rgb(bg), main.alpha());
+    if under(&bb, DOT_BELOW_PX) && cost > CHEAP {
+        let width = prims.iter().map(|p| dot_width(p, lwdisplay)).fold(DOT_POINTS, f32::max);
+        cells.add(bb.center(), run, true, cost, col, width);
+        return;
+    }
+    let wide = wide_width(main.lw, lwdisplay);
+    let box_cost = 4 * if wide.is_some() { DOT_COST } else { 2 };
+    if cost > box_cost {
+        out.outline(bb, origin, col, wide);
+        out.simplified().boxes += 1;
+        return;
+    }
+    for (j, (b, c)) in (run.start..).zip(scratch.drain(..)) {
+        screen_prim(out, cells, list, j, b, c, px, bg, lwdisplay);
+    }
+}
+
+/// Draw primitive `k` (box `b` while under [`BOX_BELOW_PX`], cost `c`) of an object not drawn
+/// simpler as a whole: as a dot when it is under a pixel and costs more than a [`CHEAP`] one, else
+/// as it is.
+#[allow(clippy::too_many_arguments)]
+fn screen_prim<O: ScreenOut>(
+    out: &mut O,
+    cells: &mut Cells,
+    list: &DisplayList,
+    k: usize,
+    b: Option<Bounds2>,
+    c: usize,
+    px: f64,
+    bg: Rgb,
+    lwdisplay: bool,
+) {
+    let small = |b: &Bounds2| c > CHEAP && b.width() < px * DOT_BELOW_PX && b.height() < px * DOT_BELOW_PX;
+    if let (Some(b), Some(prim)) = (b.filter(small), list.prims.get(k)) {
+        let col = premultiplied(prim.display_rgb(bg), prim.alpha());
+        cells.add(b.center(), k..k + 1, false, c, col, dot_width(prim, lwdisplay));
+        return;
+    }
+    let origin = cells.origin;
+    emit_prim(out, cells, list, k, origin, bg, lwdisplay);
+}
+
+/// A fast hash for pixel cells (a multiply-rotate over the two coordinates).
+#[derive(Default)]
+struct CellHasher(u64);
+
+impl std::hash::Hasher for CellHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        bytes.iter().for_each(|b| self.write_u64(u64::from(*b)));
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    fn write_i64(&mut self, v: i64) {
+        self.write_u64(v as u64);
+    }
+}
+
+/// Sub-pixel objects and primitives of the current draw-order group by pixel cell (cells of the
+/// band's finest pixel from the vertex origin), drawn as one dot a cell when the group ends.
+#[derive(Default)]
+struct Cells {
+    pixel: f64,
+    origin: Vec2,
+    index: HashMap<(i64, i64), usize, std::hash::BuildHasherDefault<CellHasher>>,
+    /// In the order first reached (the vertex data comes out the same every time).
+    cells: Vec<Cell>,
+}
+
+/// What a cell holds: how many objects and primitives, what drawing them as they are costs,
+/// and while that is no more than a dot, which primitives they are (at most [`DOT_COST`] / 2:
+/// every line or fill costs two vertices or more, and those costing none draw nothing).
+struct Cell {
+    at: (i64, i64),
+    count: usize,
+    objects: usize,
+    cost: usize,
+    parts: [(u32, u32); 3],
+    nparts: usize,
+    /// The last one's colour (drawn on top) and the widest lineweight.
+    color: [u8; 4],
+    width: f32,
+}
+
+impl Cells {
+    fn add(&mut self, p: Vec2, prims: std::ops::Range<usize>, object: bool, cost: usize, color: [u8; 4], width: f32) {
+        // Float to int casts saturate (and NaN is 0): a far point lands in an edge cell.
+        let at = (((p.x - self.origin.x) / self.pixel).floor() as i64, ((p.y - self.origin.y) / self.pixel).floor() as i64);
+        let part = (u32::try_from(prims.start).unwrap_or(u32::MAX), u32::try_from(prims.end).unwrap_or(u32::MAX));
+        let cell = match self.index.get(&at).copied() {
+            Some(i) => self.cells.get_mut(i),
+            None => {
+                self.index.insert(at, self.cells.len());
+                self.cells.push(Cell { at, count: 0, objects: 0, cost: 0, parts: [(0, 0); 3], nparts: 0, color, width });
+                self.cells.last_mut()
+            }
+        };
+        let Some(c) = cell else { return };
+        if let Some(slot) = c.parts.get_mut(c.nparts).filter(|_| cost > 0) {
+            *slot = part;
+            c.nparts += 1;
+        }
+        c.count += 1;
+        c.objects += usize::from(object);
+        c.cost = c.cost.saturating_add(cost);
+        c.color = color;
+        c.width = c.width.max(width);
+    }
+
+    /// Draw the cells: one dot each, or what they hold as it is where that costs no more.
+    fn flush<O: ScreenOut>(&mut self, out: &mut O, list: &DisplayList, bg: Rgb, lwdisplay: bool) {
+        self.index.clear();
+        let origin = self.origin;
+        for c in std::mem::take(&mut self.cells) {
+            if c.cost <= DOT_COST {
+                for &(a, b) in c.parts.get(..c.nparts).unwrap_or(&[]) {
+                    for k in a as usize..b as usize {
+                        emit_prim(out, self, list, k, origin, bg, lwdisplay);
+                    }
+                }
+                continue;
+            }
+            let centre = |i: i64| (i as f64 + 0.5) * self.pixel;
+            let (x, y) = (centre(c.at.0), centre(c.at.1));
+            out.dot(origin + Vec2::new(x, y), [x as f32, y as f32], c.color, c.width);
+            let s = out.simplified();
+            s.dots += 1;
+            s.dot_objects += c.objects;
+            s.dot_prims += c.count - c.objects;
+        }
+    }
+}
+
+/// Append primitive `k` of `list` as it is. A wipeout mask or an image starts a draw-order group,
+/// so the dots of the group before are drawn first.
+fn emit_prim<O: ScreenOut>(out: &mut O, cells: &mut Cells, list: &DisplayList, k: usize, origin: Vec2, bg: Rgb, lwdisplay: bool) {
+    let Some(prim) = list.prims.get(k) else { return };
+    if matches!(prim.kind, Kind::InkMask | Kind::Mask | Kind::Image(_)) && !cells.cells.is_empty() {
+        cells.flush(out, list, bg, lwdisplay);
+    }
+    out.prim(list, k, origin, bg, lwdisplay);
+}
+
+// ---------- area tiles (Q6472) ----------
+//
+// A large drawing's vertex data is cut by place: a grid of square cells over the list, each cell
+// a tile, and one tile more for primitives larger than a cell. Each stream (fills, lines, quads)
+// holds the tiles one after the other, and a frame draws only the tiles whose primitives reach
+// into the view: zoomed in on one room of a print set, the GPU runs the vertices around the room,
+// not every vertex of the set.
+//
+// The picture must not change, and it depends on draw order wherever two primitives light the
+// same pixel. Within one stream of one draw-order group (see `MeshData::breaks`) each primitive
+// gets a layer: at least its tile's last, and above whatever another tile lit where it may light
+// pixels (its points' box grown by its reach: half its width where the list is drawn at its
+// coarsest, at up to `MAX_PPP` pixels a point, and a pixel; see `reach_px`). What was lit is kept
+// per cell in an 8 × 8 grid of sub-cells (`Marks`): a primitive inside its cell marks its box
+// there, one reaching out of its cell (or in the large tile) the boxes of its segments or
+// triangles in every cell they reach, so a sheet's border lights its lines and not the sheet.
+// The buckets (a tile's run of primitives in one layer) are drawn by layer, then tile, each in
+// list order: every pair of primitives that may share a pixel is drawn in the order of the list,
+// and the others don't affect each other's pixels. Consecutive primitives of one tile inside
+// their cell are placed together (`Run`), and what each primitive is and where it lies is found
+// on several threads (`Fact`): the layers cost a few array reads a primitive.
+
+/// How [`build_mesh_tiled`] cuts a list into area tiles: square cells of side `cell` from
+/// `min`, `cols` × `rows` of them (world units).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tiling {
+    pub min: Vec2,
+    pub cell: f64,
+    pub cols: usize,
+    pub rows: usize,
+    /// The most drawing units a pixel the list is drawn at: primitives that may light the same
+    /// pixel there keep their draw order, whatever tiles they are in (see [`reach_px`]).
+    pub px: f64,
+}
+
+/// Vertices a tile holds on average: fewer, larger tiles below that (each is a draw call).
+const TILE_VERTICES: usize = 32_768;
+/// Most cells.
+const MAX_TILES: usize = 4096;
+/// A tile is at least this many pixels across at the coarsest zoom its list is drawn at, so a
+/// view meets a few tiles, and two tiles' primitives seldom come within the margin of each other.
+const TILE_MIN_PX: f64 = 1024.0;
+/// The most pixels a point the screen may have (a primitive's reach is counted at it).
+const MAX_PPP: f64 = 4.0;
+/// A box over more cells than this is marked and looked up a whole cell at a time, not sub-cell
+/// by sub-cell ([`Marks`]).
+const MAX_NEIGHBOUR_CELLS: usize = 64;
+
+impl Tiling {
+    /// The tiling for `list` drawn at up to `px` drawing units per pixel; `None` (one tile,
+    /// drawn as before) for a list too small to be worth cutting, or with nothing to cut.
+    pub fn choose(list: &DisplayList, px: f64) -> Option<Tiling> {
+        let vertices = list.segment_count().saturating_mul(2).saturating_add(list.tris.len());
+        Tiling::for_bounds(&list.bounds, vertices, px)
+    }
+
+    fn for_bounds(b: &Bounds2, vertices: usize, px: f64) -> Option<Tiling> {
+        let want = (vertices / TILE_VERTICES).min(MAX_TILES);
+        if want < 2 || b.is_empty() || !b.min.is_finite() || !b.max.is_finite() || !(px.is_finite() && px > 0.0) {
+            return None;
+        }
+        let (w, h) = (b.width(), b.height());
+        let floor = TILE_MIN_PX * px;
+        if !(w.is_finite() && h.is_finite() && floor.is_finite()) {
+            return None;
+        }
+        // The side in steps of a factor of the square root of two, and the grid on whole
+        // multiples of it: the next zoom band (whose list holds about as many vertices) gets the
+        // same tiles, and the tiles it didn't build again keep their GPU buffers.
+        let step = |c: f64| 2f64.powf((c.log2() * 2.0).ceil() / 2.0);
+        let mut cell = step((w.max(floor) * h.max(floor) / want as f64).sqrt().max(floor));
+        let grid = |cell: f64| {
+            let min = Vec2::new((b.min.x / cell).floor() * cell, (b.min.y / cell).floor() * cell);
+            let count = |span: f64| ((span / cell) as usize).saturating_add(1);
+            (min, count(b.max.x - min.x), count(b.max.y - min.y))
+        };
+        // Not worth cutting a drawing that fills less than two tiles.
+        if (w / cell).ceil() * (h / cell).ceil() < 2.0 {
+            return None;
+        }
+        let (mut min, mut cols, mut rows) = grid(cell);
+        // A long, thin drawing: never more cells than the most.
+        for _ in 0..64 {
+            if cols.saturating_mul(rows) <= MAX_TILES {
+                break;
+            }
+            cell *= std::f64::consts::SQRT_2;
+            (min, cols, rows) = grid(cell);
+        }
+        let cells = cols.saturating_mul(rows);
+        (cell.is_finite() && cell > 0.0 && min.is_finite() && (2..=MAX_TILES).contains(&cells)).then_some(Tiling { min, cell, cols, rows, px })
+    }
+
+    fn cells(&self) -> usize {
+        self.cols * self.rows
+    }
+
+    /// The sub-cells (of [`SUB`] × [`SUB`] a cell) that `b` touches, over the whole grid; beyond
+    /// its edges the nearest ones (so a place there is always the same sub-cell).
+    fn area(&self, b: &Bounds2) -> Area {
+        self.area_at(b, SUB as f64 / self.cell)
+    }
+
+    /// [`Tiling::area`] with the sub-cells a unit (`per`, `SUB / cell`) worked out already.
+    fn area_at(&self, b: &Bounds2, per: f64) -> Area {
+        let at = |v: f64, n: usize| {
+            let i = (v * per).floor();
+            if i.is_nan() || i < 0.0 { 0 } else { (i as usize).min(n * SUB - 1) }
+        };
+        Area {
+            x0: at(b.min.x - self.min.x, self.cols),
+            x1: at(b.max.x - self.min.x, self.cols),
+            y0: at(b.min.y - self.min.y, self.rows),
+            y1: at(b.max.y - self.min.y, self.rows),
+        }
+    }
+
+    fn cell_bounds(&self, x: usize, y: usize) -> Bounds2 {
+        let at = |x: usize, y: usize| self.min + Vec2::new(x as f64, y as f64) * self.cell;
+        Bounds2::new(at(x, y), at(x + 1, y + 1))
+    }
+}
+
+/// The area tiles of a mesh ([`build_mesh_tiled`]): where each is, and the order its parts are
+/// drawn in. The last tile holds the primitives larger than a cell.
+#[derive(Debug, Default)]
+pub struct Tiles {
+    /// The bounds of each tile's primitives (world units).
+    pub bounds: Vec<Bounds2>,
+    /// Primitives in each tile.
+    pub prims: Vec<usize>,
+    /// Where each tile starts in each stream (fills, lines, quads: vertices or instances), and
+    /// one entry more where the last ends.
+    pub starts: Vec<[usize; 3]>,
+    /// What is drawn, in order: runs of a stream, each of one tile.
+    pub steps: Vec<Step>,
+    /// The steps of each draw-order group, per stream (fills, lines, quads).
+    pub groups: Vec<[std::ops::Range<usize>; 3]>,
+}
+
+/// A run of a stream (vertices or instances `from..to`) of one tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Step {
+    pub tile: u32,
+    pub from: usize,
+    pub to: usize,
+}
+
+/// What a frame draws of a tiled mesh: tiles, primitives and GPU vertices (six a quad).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TilesDrawn {
+    pub tiles: usize,
+    pub prims: usize,
+    pub vertices: usize,
+}
+
+impl Tiles {
+    /// Which tiles reach into `view` (world units, grown by the half width of the widest line).
+    pub fn visible(&self, view: &Bounds2) -> Vec<bool> {
+        self.bounds.iter().map(|b| b.intersects(view)).collect()
+    }
+
+    /// What drawing the tiles `visible` says draws.
+    pub fn drawn(&self, visible: &[bool]) -> TilesDrawn {
+        let mut d = TilesDrawn::default();
+        for (t, w) in self.starts.windows(2).enumerate() {
+            if let ([a, b], true, Some(&p)) = (w, visible.get(t).copied().unwrap_or(true), self.prims.get(t)) {
+                d.tiles += 1;
+                d.prims += p;
+                d.vertices += (b[0] - a[0]) + (b[1] - a[1]) + 6 * (b[2] - a[2]);
+            }
+        }
+        d
+    }
+
+    /// Stream `class`'s bytes (`stride` a vertex), cut where each tile starts.
+    fn parts<'a>(&'a self, bytes: &'a [u8], class: usize, stride: usize) -> impl Iterator<Item = &'a [u8]> + 'a {
+        self.starts.windows(2).filter_map(move |w| match w {
+            [a, b] => bytes.get(a.get(class)? * stride..b.get(class)? * stride),
+            _ => None,
+        })
+    }
+}
+
+/// Sub-cells a side of a cell is cut into ([`Marks`]).
+const SUB: usize = 8;
+
+/// The highest layer some tile lit a place with in the current draw-order group (with that
+/// tile), and the highest any other tile did: together, the highest of every tile but a given
+/// one. `NO` where none did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Mark {
+    first: u32,
+    tile: u32,
+    second: u32,
+}
+
+const NO: u32 = u32::MAX;
+
+impl Mark {
+    const NONE: Mark = Mark { first: NO, tile: NO, second: NO };
+
+    /// The highest layer of a tile other than `tile`.
+    fn other_than(&self, tile: u32) -> Option<u32> {
+        let l = if self.tile != tile { self.first } else { self.second };
+        (l != NO).then_some(l)
+    }
+
+    fn raise(&mut self, tile: u32, layer: u32) {
+        if self.first == NO {
+            (self.first, self.tile) = (layer, tile);
+        } else if self.tile == tile {
+            self.first = self.first.max(layer);
+        } else if layer > self.first {
+            (self.second, self.first, self.tile) = (self.first, layer, tile);
+        } else {
+            self.second = if self.second == NO { layer } else { self.second.max(layer) };
+        }
+    }
+}
+
+/// Per cell and stream, what the current draw-order group's primitives lit of the cell's
+/// [`SUB`] × [`SUB`] sub-cells, and with which layer ([`Mark`]): a primitive is placed above
+/// whatever another tile lit where it lights. A primitive's own probe marks the cell it lies
+/// inside; one reaching out of its cell marks each of its segments' (or triangles') boxes in
+/// every cell they reach (a sheet's border lights its lines, not the sheet). A box over more
+/// than [`MAX_NEIGHBOUR_CELLS`] cells marks those cells whole, and past a budget of such marks
+/// the drawing whole (`floor`).
+struct Marks {
+    stamps: Vec<u32>,
+    sub: Vec<Mark>,
+    /// Per cell and stream: what lit it whole, and the highest of everything that lit any of it.
+    whole: Vec<Mark>,
+    any: Vec<Mark>,
+    floor: [Mark; 3],
+    floor_group: [u32; 3],
+    /// Cells left to mark whole before `floor` stands in.
+    budget: usize,
+}
+
+/// Cells a mesh build may mark whole for large boxes (then they mark the drawing whole).
+const WHOLE_CELL_BUDGET: usize = 16_000_000;
+
+impl Marks {
+    fn new(cells: usize) -> Marks {
+        Marks {
+            stamps: vec![NO; cells * 3],
+            sub: vec![Mark::NONE; cells * 3 * SUB * SUB],
+            whole: vec![Mark::NONE; cells * 3],
+            any: vec![Mark::NONE; cells * 3],
+            floor: [Mark::NONE; 3],
+            floor_group: [NO; 3],
+            budget: WHOLE_CELL_BUDGET,
+        }
+    }
+
+    /// The highest layer other tiles than `tile` lit in area `a`, in stream `class` of group
+    /// `group`.
+    fn highest(&self, t: &Tiling, class: usize, group: u32, a: &Area, tile: u32) -> Option<u32> {
+        let mut best: Option<u32> = None;
+        let mut take = |l: Option<u32>| {
+            if let Some(l) = l {
+                best = Some(best.map_or(l, |b| b.max(l)));
+            }
+        };
+        if self.floor_group.get(class).copied() == Some(group) {
+            take(self.floor.get(class).and_then(|f| f.other_than(tile)));
+        }
+        let wide = a.cells() > MAX_NEIGHBOUR_CELLS;
+        for cy in a.y0 / SUB..=a.y1 / SUB {
+            for cx in a.x0 / SUB..=a.x1 / SUB {
+                let k = (cy * t.cols + cx) * 3 + class;
+                if self.stamps.get(k).copied() != Some(group) {
+                    continue;
+                }
+                if wide {
+                    take(self.any.get(k).and_then(|m| m.other_than(tile)));
+                    continue;
+                }
+                take(self.whole.get(k).and_then(|m| m.other_than(tile)));
+                let ((sx0, sx1), (sy0, sy1)) = (a.subs_x(cx), a.subs_y(cy));
+                for sy in sy0..=sy1 {
+                    let row = k * SUB * SUB + sy * SUB;
+                    for m in self.sub.get(row + sx0..=row + sx1).unwrap_or(&[]) {
+                        take(m.other_than(tile));
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// `tile` lit area `a` with `layer`.
+    fn mark(&mut self, t: &Tiling, class: usize, group: u32, a: &Area, tile: u32, layer: u32) {
+        let n = a.cells();
+        let wide = n > MAX_NEIGHBOUR_CELLS;
+        if wide && n > self.budget {
+            if let (Some(f), Some(g)) = (self.floor.get_mut(class), self.floor_group.get_mut(class)) {
+                if *g != group {
+                    (*f, *g) = (Mark::NONE, group);
+                }
+                f.raise(tile, layer);
+            }
+            return;
+        }
+        if wide {
+            self.budget -= n;
+        }
+        for cy in a.y0 / SUB..=a.y1 / SUB {
+            for cx in a.x0 / SUB..=a.x1 / SUB {
+                let k = (cy * t.cols + cx) * 3 + class;
+                let Some(stamp) = self.stamps.get_mut(k) else { continue };
+                let base = k * SUB * SUB;
+                if *stamp != group {
+                    *stamp = group;
+                    if let Some(ms) = self.sub.get_mut(base..base + SUB * SUB) {
+                        ms.fill(Mark::NONE);
+                    }
+                    for m in [self.whole.get_mut(k), self.any.get_mut(k)].into_iter().flatten() {
+                        *m = Mark::NONE;
+                    }
+                }
+                if let Some(m) = self.any.get_mut(k) {
+                    m.raise(tile, layer);
+                }
+                if wide {
+                    if let Some(m) = self.whole.get_mut(k) {
+                        m.raise(tile, layer);
+                    }
+                    continue;
+                }
+                let ((sx0, sx1), (sy0, sy1)) = (a.subs_x(cx), a.subs_y(cy));
+                for sy in sy0..=sy1 {
+                    let row = base + sy * SUB;
+                    for m in self.sub.get_mut(row + sx0..=row + sx1).unwrap_or(&mut []) {
+                        m.raise(tile, layer);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A box in sub-cells of the whole grid ([`Tiling::area`]): columns `x0..=x1`, rows `y0..=y1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Area {
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+}
+
+impl Area {
+    fn union(&self, o: &Area) -> Area {
+        Area { x0: self.x0.min(o.x0), x1: self.x1.max(o.x1), y0: self.y0.min(o.y0), y1: self.y1.max(o.y1) }
+    }
+    fn cells(&self) -> usize {
+        (self.x1 / SUB - self.x0 / SUB + 1) * (self.y1 / SUB - self.y0 / SUB + 1)
+    }
+    /// The columns of cell column `cx` the area covers, within the cell.
+    fn subs_x(&self, cx: usize) -> (usize, usize) {
+        (self.x0.max(cx * SUB) - cx * SUB, self.x1.min(cx * SUB + SUB - 1) - cx * SUB)
+    }
+    fn subs_y(&self, cy: usize) -> (usize, usize) {
+        (self.y0.max(cy * SUB) - cy * SUB, self.y1.min(cy * SUB + SUB - 1) - cy * SUB)
+    }
+}
+
+/// What placing a primitive needs to know of it, found for many at once on several threads.
+#[derive(Clone, Copy)]
+struct Fact {
+    /// The stream (0 fills, 1 lines, 2 quads), or [`SKIP`] or [`IMAGE`].
+    class: u8,
+    /// A wipeout or a coloured mask: it starts a draw-order group.
+    breaks: bool,
+    /// Where it may light pixels (its points' bounds grown by its reach) lies inside its cell.
+    inside: bool,
+    /// Vertices (or instances) in its stream.
+    n: u32,
+    tile: u32,
+    /// Where it may light pixels, in sub-cells ([`Area`]: x0, x1, y0, y1).
+    area: [u16; 4],
+}
+
+const SKIP: u8 = 255;
+const IMAGE: u8 = 254;
+
+impl Fact {
+    const NONE: Fact = Fact { class: SKIP, breaks: false, inside: false, n: 0, tile: 0, area: [0; 4] };
+
+    /// Its facts, and where it may light pixels (empty: it is not placed).
+    fn of(list: &DisplayList, piece: &Piece, t: &Tiling, per: f64, lwdisplay: bool) -> (Fact, Bounds2) {
+        let (class, n, breaks, bb, reach) = match piece {
+            Piece::Gone => return (Fact::NONE, Bounds2::EMPTY),
+            Piece::Prim(prim) => {
+                let pts = list.points(prim);
+                let (class, n) = match prim.kind {
+                    Kind::Infinite { .. } => return (Fact::NONE, Bounds2::EMPTY),
+                    Kind::Image(_) => return (Fact { class: IMAGE, ..Fact::NONE }, Bounds2::EMPTY),
+                    Kind::Tris | Kind::InkMask | Kind::Mask => (0u8, pts.as_chunks::<3>().0.len() * 3),
+                    Kind::Polyline => match wide_width(prim.lw, lwdisplay) {
+                        Some(_) => (2, pts.len().saturating_sub(1)),
+                        None => (1, 2 * pts.len().saturating_sub(1)),
+                    },
+                    Kind::Point => (2, usize::from(!pts.is_empty())),
+                };
+                let breaks = matches!(prim.kind, Kind::InkMask | Kind::Mask);
+                (class, n, breaks, Bounds2::from_points(pts.iter().copied()), reach_px(prim, usize::from(class), lwdisplay))
+            }
+            // A dot is one quad, placed where its cell's centre is.
+            Piece::Extra(Extra::Dot { world, width, .. }) => (2, 1, false, Bounds2::from_points([*world]), f64::from(*width / 2.0) * MAX_PPP + 1.0),
+            // A box's outline: four wide lines or four hairlines.
+            Piece::Extra(Extra::Outline { bb, wide, .. }) => match wide {
+                Some(w) => (2, 4, false, *bb, f64::from(*w / 2.0) * MAX_PPP + 1.0),
+                None => (1, 8, false, *bb, 1.0),
+            },
+        };
+        let n = u32::try_from(n).unwrap_or(u32::MAX);
+        // Nothing to draw, or nowhere (no point that is a number).
+        if n == 0 || bb.is_empty() {
+            return (Fact { breaks, ..Fact::NONE }, Bounds2::EMPTY);
+        }
+        let probe = bb.expand(reach * t.px);
+        // A primitive's cell holds its centre, and it reaches at most half a cell past the cell;
+        // any other goes in the large tile.
+        let c = t.area_at(&Bounds2::new(bb.center(), bb.center()), per);
+        let (x, y) = (c.x0 / SUB, c.y0 / SUB);
+        let home = t.cell_bounds(x, y);
+        let large = t.cells();
+        let tile = if home.expand(t.cell * 0.5).contains_box(&probe) { y * t.cols + x } else { large };
+        let inside = tile != large && home.contains_box(&probe);
+        let a = t.area_at(&probe, per);
+        let area = [a.x0, a.x1, a.y0, a.y1].map(|v| u16::try_from(v).unwrap_or(u16::MAX));
+        (Fact { class, breaks, inside, n, tile: tile as u32, area }, probe)
+    }
+}
+
+/// What the area tiles place, in draw order ([`build_mesh_tiled`]).
+#[derive(Clone, Copy)]
+enum Pieces<'a> {
+    /// Every primitive of the list as it is.
+    All,
+    /// The pieces of a screen mesh ([`build_screen_mesh_tiled`]).
+    Screen(&'a ScreenPieces),
+}
+
+/// One of [`Pieces`].
+#[derive(Clone, Copy)]
+enum Piece<'a> {
+    Prim(&'a cadaddy_render::DPrim),
+    Extra(&'a Extra),
+    Gone,
+}
+
+impl<'a> Pieces<'a> {
+    fn len(&self, list: &DisplayList) -> usize {
+        match self {
+            Pieces::All => list.prims.len(),
+            Pieces::Screen(p) => p.codes.len(),
+        }
+    }
+
+    fn get(&self, list: &'a DisplayList, i: usize) -> Piece<'a> {
+        let prim = |k: usize| list.prims.get(k).map_or(Piece::Gone, Piece::Prim);
+        match self {
+            Pieces::All => prim(i),
+            Pieces::Screen(p) => match p.codes.get(i) {
+                Some(&c) if c & EXTRA != 0 => p.extras.get((c & !EXTRA) as usize).map_or(Piece::Gone, Piece::Extra),
+                Some(&c) => prim(c as usize),
+                None => Piece::Gone,
+            },
+        }
+    }
+}
+
+/// Pieces whose facts are found together (a block's facts are held at once).
+const FACT_BLOCK: usize = 1 << 18;
+
+/// The facts of pieces `range`, on several threads when there are many; each tile's placed
+/// pieces counted into `prims_in` and where they may light pixels into `bounds`.
+#[allow(clippy::too_many_arguments)]
+fn facts_of(
+    list: &DisplayList,
+    pieces: Pieces,
+    range: std::ops::Range<usize>,
+    t: &Tiling,
+    lwdisplay: bool,
+    threads: usize,
+    out: &mut Vec<Fact>,
+    bounds: &mut [Bounds2],
+    prims_in: &mut [usize],
+) {
+    out.clear();
+    out.resize(range.len(), Fact::NONE);
+    let sub_per = SUB as f64 / t.cell;
+    let work = |fs: &mut [Fact], from: usize, bounds: &mut [Bounds2], prims_in: &mut [usize]| {
+        for (f, i) in fs.iter_mut().zip(from..) {
+            let (fact, probe) = Fact::of(list, &pieces.get(list, i), t, sub_per, lwdisplay);
+            *f = fact;
+            if fact.class <= 2
+                && let (Some(b), Some(n)) = (bounds.get_mut(fact.tile as usize), prims_in.get_mut(fact.tile as usize))
+            {
+                *b = b.union(&probe);
+                *n += 1;
+            }
+        }
+    };
+    // (The web build has no threads.)
+    #[cfg(target_arch = "wasm32")]
+    let _ = threads;
+    #[cfg(not(target_arch = "wasm32"))]
+    if threads > 1 {
+        let per = range.len().div_ceil(threads.min(MAX_WRITERS)).max(1);
+        let n_tiles = bounds.len();
+        let parts: Vec<(Vec<Bounds2>, Vec<usize>)> = std::thread::scope(|s| {
+            let handles: Vec<_> = out
+                .chunks_mut(per)
+                .enumerate()
+                .map(|(j, fs)| {
+                    let from = range.start + j * per;
+                    s.spawn(move || {
+                        let (mut b, mut n) = (vec![Bounds2::EMPTY; n_tiles], vec![0usize; n_tiles]);
+                        work(fs, from, &mut b, &mut n);
+                        (b, n)
+                    })
+                })
+                .collect();
+            // A thread that failed leaves its facts as nothing to place.
+            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        });
+        for (b, n) in parts {
+            for (g, l) in bounds.iter_mut().zip(&b) {
+                *g = g.union(l);
+            }
+            for (g, l) in prims_in.iter_mut().zip(&n) {
+                *g += l;
+            }
+        }
+        return;
+    }
+    work(out, range.start, bounds, prims_in);
+}
+
+/// How far (in pixels where the list is drawn at its coarsest) a primitive of stream `class`
+/// may light pixels beyond its points: a hairline or a fill a pixel, a wide line or a point half
+/// its width at up to [`MAX_PPP`] pixels a point and a pixel.
+fn reach_px(prim: &cadaddy_render::DPrim, class: usize, lwdisplay: bool) -> f64 {
+    let half_points = match prim.kind {
+        Kind::Point => POINT_SIZE / 2.0,
+        _ if class == 2 => wide_width(prim.lw, lwdisplay).unwrap_or(1.0) / 2.0,
+        _ => 0.0,
+    };
+    f64::from(half_points) * MAX_PPP + 1.0
+}
+
+/// One tile's run of one stream in one layer while the mesh is built.
+struct Bucket {
+    group: u32,
+    class: u8,
+    layer: u32,
+    tile: u32,
+    /// Vertices within the tile's stream.
+    from: usize,
+    to: usize,
+}
+
+/// A tile's last layer and bucket in one stream of the current draw-order group.
+#[derive(Clone, Copy, Default)]
+struct Lane {
+    group: Option<u32>,
+    top: u32,
+    last: Option<usize>,
+}
+
+impl Lane {
+    fn top(&self, group: u32) -> u32 {
+        if self.group == Some(group) { self.top } else { 0 }
+    }
+}
+
+/// Primitives placed together ([`Placing::place`]): consecutive ones of one tile and stream
+/// inside their cell, or one reaching out of its cell.
+struct Run {
+    tile: u32,
+    class: u8,
+    n: usize,
+    area: Area,
+}
+
+/// Sub-cells across (and up) a run of primitives may spread.
+const RUN_SUBS: usize = 3;
+
+/// The state of placing a list's primitives in layers ([`build_mesh_tiled`]).
+struct Placing {
+    marks: Marks,
+    buckets: Vec<Bucket>,
+    lanes: Vec<[Lane; 3]>,
+    /// Vertices so far of each tile's streams, and of each stream.
+    counts: Vec<[usize; 3]>,
+    totals: [usize; 3],
+    group: u32,
+}
+
+impl Placing {
+    /// Place `r`, lighting `areas`: in a layer at least its tile's last, and above whatever
+    /// another tile lit there.
+    fn place(&mut self, t: &Tiling, r: &Run, areas: &[Area]) {
+        let (class, tile, group) = (usize::from(r.class), r.tile as usize, self.group);
+        let mut layer = self.lanes.get(tile).and_then(|l| l.get(class)).map_or(0, |l| l.top(group));
+        for a in areas {
+            if let Some(l) = self.marks.highest(t, class, group, a, r.tile) {
+                layer = layer.max(l.saturating_add(1));
+            }
+        }
+        for a in areas {
+            self.marks.mark(t, class, group, a, r.tile, layer);
+        }
+        let (Some(lane), Some(count)) =
+            (self.lanes.get_mut(tile).and_then(|l| l.get_mut(class)), self.counts.get_mut(tile).and_then(|c| c.get_mut(class)))
+        else {
+            return;
+        };
+        if lane.group != Some(group) {
+            *lane = Lane { group: Some(group), top: 0, last: None };
+        }
+        let from = *count;
+        match lane.last.and_then(|b| self.buckets.get_mut(b)).filter(|b| b.layer == layer) {
+            Some(b) => b.to = from + r.n,
+            None => {
+                lane.last = Some(self.buckets.len());
+                self.buckets.push(Bucket { group, class: r.class, layer, tile: r.tile, from, to: from + r.n });
+            }
+        }
+        lane.top = layer;
+        *count += r.n;
+        if let Some(total) = self.totals.get_mut(class) {
+            *total += r.n;
+        }
+    }
+}
+
+/// [`build_mesh`] cut into the area tiles of `tiling` (`None`: one tile, as [`build_mesh`]).
+/// Drawing every tile draws exactly what [`build_mesh`]'s data draws, and leaving out tiles
+/// that don't reach into the view changes nothing in it.
+pub fn build_mesh_tiled(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool, tiling: Option<&Tiling>) -> MeshData {
+    build_mesh_tiled_by(list, origin, bg, lwdisplay, tiling, MAX_WRITERS)
+}
+
+/// [`build_mesh_tiled`] written on at most `writers` threads.
+fn build_mesh_tiled_by(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool, tiling: Option<&Tiling>, writers: usize) -> MeshData {
+    let Some(t) = tiling else { return build_mesh(list, origin, bg, lwdisplay) };
+    tile_pieces(list, Pieces::All, origin, bg, lwdisplay, t, writers)
+}
+
+/// `pieces` of `list` cut into the area tiles of `t`, written on at most `writers` threads: each
+/// piece in the tile its points fall in, every pair that may light one pixel drawn in order.
+fn tile_pieces(list: &DisplayList, pieces: Pieces, origin: Vec2, bg: Rgb, lwdisplay: bool, t: &Tiling, writers: usize) -> MeshData {
+    let large = t.cells();
+    let n_tiles = large + 1;
+    let n_pieces = pieces.len(list);
+    let mut m = MeshData::default();
+    // Each piece's tile (`u32::MAX`: none).
+    let mut placed: Vec<u32> = vec![u32::MAX; n_pieces];
+    let mut at = Placing {
+        marks: Marks::new(large),
+        buckets: Vec::new(),
+        lanes: vec![[Lane::default(); 3]; n_tiles],
+        counts: vec![[0usize; 3]; n_tiles],
+        totals: [0; 3],
+        group: 0,
+    };
+    let mut run: Option<Run> = None;
+    // Each tile's primitives, and where they may light pixels (a tile is drawn where they do).
+    let mut prims_in = vec![0usize; n_tiles];
+    let mut bounds = vec![Bounds2::EMPTY; n_tiles];
+    #[cfg(not(target_arch = "wasm32"))]
+    let threads = if n_pieces < PARALLEL_VERTICES / 4 { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(writers.max(1)) };
+    #[cfg(target_arch = "wasm32")]
+    let threads = 1usize;
+    let mut facts = Vec::new();
+    let mut areas: Vec<Area> = Vec::new();
+    #[cfg(test)]
+    let t0 = web_time::Instant::now();
+    #[cfg(test)]
+    let mut facts_us = 0u64;
+    for block in (0..n_pieces).step_by(FACT_BLOCK) {
+        #[cfg(test)]
+        let tf = web_time::Instant::now();
+        let range = block..n_pieces.min(block + FACT_BLOCK);
+        facts_of(list, pieces, range, t, lwdisplay, threads, &mut facts, &mut bounds, &mut prims_in);
+        #[cfg(test)]
+        {
+            facts_us += tf.elapsed().as_micros() as u64;
+        }
+        for (k, f) in facts.iter().enumerate() {
+            let i = block + k;
+            let piece = pieces.get(list, i);
+            if f.breaks || f.class == IMAGE {
+                let prim = match piece {
+                    Piece::Prim(prim) if f.class != IMAGE || list.image(prim).is_some() => prim,
+                    _ => continue,
+                };
+                if let Some(r) = run.take() {
+                    at.place(t, &r, &[r.area]);
+                }
+                m.breaks.push(at.totals);
+                at.group += 1;
+                if f.class == IMAGE {
+                    m.images.extend(mesh_image(list, prim, origin, bg, m.breaks.len() - 1));
+                    continue;
+                }
+            }
+            if f.class > 2 {
+                continue;
+            }
+            if let Some(slot) = placed.get_mut(i) {
+                *slot = f.tile;
+            }
+            // Inside its cell: with the primitives before it of its tile and stream, while they
+            // stay within a few sub-cells (one text's strokes, one symbol's pieces).
+            let [x0, x1, y0, y1] = f.area.map(usize::from);
+            let a = Area { x0, x1, y0, y1 };
+            if f.inside {
+                if let Some(r) = run.as_mut().filter(|r| r.tile == f.tile && r.class == f.class) {
+                    let u = r.area.union(&a);
+                    if u.x1 - u.x0 < RUN_SUBS && u.y1 - u.y0 < RUN_SUBS {
+                        (r.n, r.area) = (r.n + f.n as usize, u);
+                        continue;
+                    }
+                }
+                if let Some(r) = run.replace(Run { tile: f.tile, class: f.class, n: f.n as usize, area: a }) {
+                    at.place(t, &r, &[r.area]);
+                }
+                continue;
+            }
+            if let Some(r) = run.take() {
+                at.place(t, &r, &[r.area]);
+            }
+            // Out of its cell: a primitive lights by its pieces (segments, triangles), each grown
+            // by its reach; a dot or a box by its whole box.
+            let Piece::Prim(prim) = piece else {
+                at.place(t, &Run { tile: f.tile, class: f.class, n: f.n as usize, area: a }, &[a]);
+                continue;
+            };
+            let r = reach_px(prim, usize::from(f.class), lwdisplay) * t.px;
+            let pts = list.points(prim);
+            areas.clear();
+            let area = |b: Bounds2| (!b.is_empty()).then(|| t.area(&b.expand(r)));
+            match prim.kind {
+                Kind::Polyline => areas.extend(pts.windows(2).filter_map(|w| area(Bounds2::from_points(w.iter().copied())))),
+                Kind::Point => areas.push(a),
+                _ => areas.extend(pts.as_chunks::<3>().0.iter().filter_map(|tri| area(Bounds2::from_points(tri.iter().copied())))),
+            }
+            at.place(t, &Run { tile: f.tile, class: f.class, n: f.n as usize, area: a }, &areas);
+        }
+    }
+    if let Some(r) = run.take() {
+        at.place(t, &r, &[r.area]);
+    }
+    let Placing { counts, mut buckets, .. } = at;
+    #[cfg(test)]
+    phase(0, t0);
+    #[cfg(test)]
+    PHASES[1].store(facts_us, Ordering::Relaxed);
+    // Where each tile starts in each stream.
+    let mut starts = Vec::with_capacity(n_tiles + 1);
+    let mut at = [0usize; 3];
+    for c in &counts {
+        starts.push(at);
+        for (a, n) in at.iter_mut().zip(c) {
+            *a += n;
+        }
+    }
+    starts.push(at);
+    // Each tile's primitives in list order (a counting sort), written tile after tile.
+    let mut first = vec![0usize; n_tiles + 1];
+    for &tile in &placed {
+        if let Some(f) = (tile as usize).checked_add(1).and_then(|k| first.get_mut(k)) {
+            *f += 1;
+        }
+    }
+    for k in 1..first.len() {
+        let before = first.get(k - 1).copied().unwrap_or(0);
+        if let Some(f) = first.get_mut(k) {
+            *f += before;
+        }
+    }
+    let mut order = vec![0u32; first.last().copied().unwrap_or(0)];
+    let mut next = first.clone();
+    for (i, &tile) in placed.iter().enumerate() {
+        if let Some(slot) = next.get_mut(tile as usize).and_then(|n| {
+            let k = *n;
+            *n += 1;
+            order.get_mut(k)
+        }) {
+            *slot = i as u32;
+        }
+    }
+    #[cfg(test)]
+    let t0 = web_time::Instant::now();
+    write_tiles(list, pieces, origin, bg, lwdisplay, &order, &first, &starts, &mut m, writers);
+    #[cfg(test)]
+    phase(2, t0);
+    // The buckets in draw order: by group, stream, layer, then tile.
+    buckets.sort_by_key(|b| (b.group, b.class, b.layer, b.tile));
+    let mut groups = vec![[0..0, 0..0, 0..0]; m.breaks.len() + 1];
+    let mut steps = Vec::with_capacity(buckets.len());
+    for (k, b) in buckets.iter().enumerate() {
+        let base = starts.get(b.tile as usize).and_then(|s| s.get(usize::from(b.class))).copied().unwrap_or(0);
+        steps.push(Step { tile: b.tile, from: base + b.from, to: base + b.to });
+        if let Some(r) = groups.get_mut(b.group as usize).and_then(|g| g.get_mut(usize::from(b.class))) {
+            if r.start == r.end {
+                *r = k..k + 1;
+            } else {
+                r.end = k + 1;
+            }
+        }
+    }
+    m.tiles = Some(Arc::new(Tiles { bounds, prims: prims_in, starts, steps, groups }));
     m
+}
+
+/// Microseconds the phases of the last tiled mesh took (placing, sorting, writing): the bench's.
+#[cfg(test)]
+static PHASES: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+#[cfg(test)]
+fn phase(k: usize, t0: web_time::Instant) {
+    if let Some(p) = PHASES.get(k) {
+        p.store(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
+}
+
+/// Tiles' vertices written at once on a single thread below this; above, on several.
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_VERTICES: usize = 500_000;
+/// Most threads writing a mesh.
+const MAX_WRITERS: usize = 8;
+
+/// Write the pieces of each tile (`order[first[t]..first[t + 1]]`, in list order), tile after
+/// tile, into the mesh's three streams laid out as `starts` says. A large mesh is written on
+/// several threads, each a run of whole tiles: a run is a contiguous part of each stream.
+#[allow(clippy::too_many_arguments)]
+fn write_tiles(
+    list: &DisplayList,
+    pieces: Pieces,
+    origin: Vec2,
+    bg: Rgb,
+    lwdisplay: bool,
+    order: &[u32],
+    first: &[usize],
+    starts: &[[usize; 3]],
+    m: &mut MeshData,
+    max_writers: usize,
+) {
+    let strides = [VERTEX_SIZE, VERTEX_SIZE, INSTANCE_SIZE];
+    let end = starts.last().copied().unwrap_or([0; 3]);
+    let weight = |s: &[usize; 3]| s[0] + s[1] + 6 * s[2];
+    let total = weight(&end);
+    #[cfg(not(target_arch = "wasm32"))]
+    let writers =
+        if total < PARALLEL_VERTICES { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, max_writers.max(1)) };
+    #[cfg(target_arch = "wasm32")]
+    let writers = max_writers.min(1);
+    let n_tiles = starts.len().saturating_sub(1);
+    // Runs of tiles holding about as many vertices each.
+    let mut cuts = vec![0usize];
+    for k in 1..writers {
+        let want = total * k / writers;
+        let at = starts.partition_point(|s| weight(s) < want).min(n_tiles);
+        if at > cuts.last().copied().unwrap_or(0) {
+            cuts.push(at);
+        }
+    }
+    cuts.push(n_tiles);
+    let mut tris = vec![0u8; end[0] * strides[0]];
+    let mut lines = vec![0u8; end[1] * strides[1]];
+    let mut quads = vec![0u8; end[2] * strides[2]];
+    // Each run's part of each stream.
+    let mut parts: Vec<(std::ops::Range<usize>, [&mut [u8]; 3])> = Vec::with_capacity(cuts.len());
+    {
+        let (mut rt, mut rl, mut rq) = (tris.as_mut_slice(), lines.as_mut_slice(), quads.as_mut_slice());
+        for w in cuts.windows(2) {
+            let [a, b] = w else { continue };
+            let (Some(sa), Some(sb)) = (starts.get(*a), starts.get(*b)) else { continue };
+            let len = |c: usize| (sb[c] - sa[c]) * strides[c];
+            // (The lengths before the rests are taken apart.)
+            let (lt, ll, lq) = (len(0).min(rt.len()), len(1).min(rl.len()), len(2).min(rq.len()));
+            let (t, t2) = std::mem::take(&mut rt).split_at_mut(lt);
+            let (l, l2) = std::mem::take(&mut rl).split_at_mut(ll);
+            let (q, q2) = std::mem::take(&mut rq).split_at_mut(lq);
+            (rt, rl, rq) = (t2, l2, q2);
+            let prims = first.get(*a).copied().unwrap_or(0)..first.get(*b).copied().unwrap_or(0);
+            parts.push((prims, [t, l, q]));
+        }
+    }
+    let write = |prims: std::ops::Range<usize>, [t, l, q]: [&mut [u8]; 3]| {
+        let (mut t, mut l, mut q) = (Cursor { buf: t, at: 0 }, Cursor { buf: l, at: 0 }, Cursor { buf: q, at: 0 });
+        for &i in order.get(prims).unwrap_or(&[]) {
+            match pieces.get(list, i as usize) {
+                Piece::Prim(prim) => push_prim(list, prim, origin, bg, lwdisplay, &mut l, &mut t, &mut q),
+                Piece::Extra(Extra::Dot { at, color, width, .. }) => push_instance(&mut q, *at, *at, *color, *width, 0.0),
+                Piece::Extra(Extra::Outline { bb, color, wide }) => push_outline(&mut l, &mut q, bb, origin, *color, *wide),
+                Piece::Gone => {}
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if parts.len() > 1 {
+        std::thread::scope(|s| {
+            let handles: Vec<_> = parts.into_iter().map(|(prims, bufs)| s.spawn(move || write(prims, bufs))).collect();
+            for h in handles {
+                // A writer that failed leaves its part zero: degenerate vertices, nothing drawn.
+                let _ = h.join();
+            }
+        });
+        (m.tris, m.lines, m.quads) = (tris, lines, quads);
+        return;
+    }
+    for (prims, bufs) in parts {
+        write(prims, bufs);
+    }
+    (m.tris, m.lines, m.quads) = (tris, lines, quads);
 }
 
 /// Vertex data drawing primitives `prims` of `list` in `color` (the selection highlight), as on
@@ -384,6 +1781,54 @@ pub struct CanvasCallback {
     pub dash: f32,
     /// How the draw uses the stencil buffer.
     pub stencil: Stencil,
+    /// The part of the drawing on screen (world units, grown by the half width of the widest
+    /// line): a tiled mesh draws only the tiles reaching into it. `None`: all of it.
+    pub cull: Option<Bounds2>,
+    /// The view is moving (a pan or a zoom in the last [`crate::dynres::SETTLE_MS`]): the
+    /// drawing may be drawn at a lower resolution ([`crate::dynres`]). Set by
+    /// [`CanvasCallback::track_motion`].
+    pub moving: bool,
+}
+
+thread_local! {
+    /// Per drawing layer: the view it was last drawn at and when that changed (ms).
+    static VIEWS: std::cell::RefCell<std::collections::HashMap<usize, (Vec<u32>, f64)>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+impl CanvasCallback {
+    /// Whether this is a drawing's own layer (the drawing, or model space through the active
+    /// viewport): the layers drawn at a lower resolution while the view moves. Highlight, drag
+    /// previews, the crosshair and every overlay stay at full resolution.
+    pub fn reducible(&self) -> bool {
+        matches!(self.layer % LAYERS_PER_CANVAS, LAYER_DRAWING | LAYER_VIEWPORT) && self.stencil == Stencil::Off
+    }
+
+    /// Note this frame's view of the layer: [`Self::moving`] is set while it changed in the last
+    /// settle time, and a frame is asked for when the settle time is over, so the still view is
+    /// drawn at full resolution even when nothing else repaints.
+    pub fn track_motion(mut self, ctx: &egui::Context) -> Self {
+        let now = crate::now_ms();
+        let view: Vec<u32> = self.offset.iter().chain(&[self.scale]).chain(&self.center).chain(&self.xform).map(|v| v.to_bits()).collect();
+        let since = VIEWS.with(|m| {
+            let mut m = m.borrow_mut();
+            let e = m.entry(self.layer).or_insert_with(|| (view.clone(), f64::NEG_INFINITY));
+            // (A layer's first frame is not a move: its entry starts at this view.)
+            if e.0 != view {
+                e.1 = now;
+                e.0 = view;
+            }
+            now - e.1
+        });
+        let settle = crate::dynres::SETTLE_MS;
+        self.moving = since < settle;
+        if self.moving {
+            ctx.request_repaint_after(std::time::Duration::from_millis((settle - since).max(1.0) as u64 + 5));
+        } else if self.reducible() && since < settle * 4.0 {
+            // The pan is over: what it learnt about steps that didn't pay is forgotten.
+            crate::dynres::with(crate::dynres::Controller::still);
+        }
+        self
+    }
 }
 
 /// How a [`CanvasCallback`] uses the stencil buffer ([`GpuTarget::stencil`]): a clipped
@@ -542,6 +1987,10 @@ struct Layer {
     quads: Vec<Batch>,
     breaks: Vec<[usize; 3]>,
     images: Vec<LayerImage>,
+    /// The mesh's area tiles, and where each batch of the fills, lines and quads starts in its
+    /// stream (one entry more for the end), when the mesh is tiled.
+    tiles: Option<Arc<Tiles>>,
+    offsets: [Vec<usize>; 3],
     /// The layer's last frame as a picture (large layers only, see [`FRAME_CACHE_MIN`]), and
     /// whether this frame shows it instead of drawing the layer again.
     cache: Option<FrameCache>,
@@ -556,9 +2005,12 @@ struct FrameCache {
     /// The pass's stencil buffer, when the canvas pipelines name one.
     stencil: Option<TrackedView>,
     group: wgpu::BindGroup,
+    /// The texture's size: the window's, or less while the view moves ([`crate::dynres`]).
     size: [u32; 2],
-    /// What the texture shows: the mesh and the view uniform's bytes.
-    shows: Option<(u64, Vec<u8>)>,
+    /// The window's size the picture covers.
+    window: [u32; 2],
+    /// What the texture shows: the mesh, the view uniform's bytes and the texture's size.
+    shows: Option<(u64, Vec<u8>, [u32; 2])>,
     used: web_time::Instant,
 }
 
@@ -576,6 +2028,41 @@ static FRAMES_KEPT: AtomicU64 = AtomicU64::new(0);
 /// it unchanged (`ui.inspect`'s `perf.frameCache`).
 pub fn frame_cache_counts() -> (u64, u64) {
     (FRAMES_DRAWN.load(Ordering::Relaxed), FRAMES_KEPT.load(Ordering::Relaxed))
+}
+
+/// The scale the drawing was last drawn at (f32 bits): 1 at rest ([`crate::dynres`]).
+static SHOWN_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000);
+/// The GPU times the drawing's pass (timestamp queries).
+static PASS_TIMER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The scale the drawing was last drawn at each way: 1 is full resolution.
+pub fn shown_scale() -> f32 {
+    f32::from_bits(SHOWN_SCALE.load(Ordering::Relaxed))
+}
+
+/// Whether the GPU times the drawing's pass, so the moving scale can follow it.
+pub fn pass_timer_on() -> bool {
+    PASS_TIMER.load(Ordering::Relaxed)
+}
+
+/// Device features the canvas and the 3D views use when the adapter has them: timestamp queries
+/// time the drawing's pass and the 3D frames for [`crate::dynres`]; the adapter's own format
+/// features allow the 3D views' 2× multisampling on integrated graphics (without them only 1×
+/// and 4× may be asked for, see [`crate::gpucaps`]). Ask for them when the device is made.
+pub fn wanted_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+}
+
+/// Once per app frame, after the last frame went to the GPU: read the drawing passes' timings
+/// that have arrived, and ask for the ones written last frame.
+pub fn read_pass_times(rs: &egui_wgpu::RenderState) {
+    if let Some(res) = rs.renderer.read().callback_resources.get::<Resources>()
+        && let Some(t) = &res.timer
+    {
+        t.read(&rs.device, &rs.queue, |ms, scale| {
+            crate::dynres::with(|c| c.sample(ms, scale));
+        });
+    }
 }
 
 /// Free the kept frames of layers that are no longer drawn (a closed drawing, a view switched to
@@ -608,6 +2095,11 @@ struct Resources {
     /// Shows a layer's kept frame ([`FrameCache`]) in the window's pass.
     blit_pipeline: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
+    /// Shows a smaller kept frame (drawn while the view moved) scaled up, filtered.
+    scaled_pipeline: wgpu::RenderPipeline,
+    scaled_layout: wgpu::BindGroupLayout,
+    /// Times the passes that draw kept frames, when the device has timestamp queries.
+    timer: Option<PassTimer>,
     target: GpuTarget,
     /// Vertices a layer holds before its frame is kept ([`FRAME_CACHE_MIN`]; tests lower it).
     frame_cache_min: u64,
@@ -639,8 +2131,39 @@ fn new_layer(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> Layer {
         quads: Vec::new(),
         breaks: Vec::new(),
         images: Vec::new(),
+        tiles: None,
+        offsets: Default::default(),
         cache: None,
         cached: false,
+    }
+}
+
+/// Where each of `batches` starts when they are laid end to end, and where the last ends.
+fn batch_offsets(batches: &[Batch]) -> Vec<usize> {
+    let mut at = 0usize;
+    let mut out = Vec::with_capacity(batches.len() + 1);
+    out.push(0);
+    for b in batches {
+        at += b.count as usize;
+        out.push(at);
+    }
+    out
+}
+
+/// [`batch_ranges`] from the batches' starts (`offsets`, see [`batch_offsets`]), found by
+/// bisection: a tiled layer draws many short runs.
+fn batch_ranges_at(offsets: &[usize], range: std::ops::Range<usize>, out: &mut Vec<(usize, std::ops::Range<u32>)>) {
+    out.clear();
+    let mut j = offsets.partition_point(|&o| o <= range.start).saturating_sub(1);
+    while let (Some(&lo), Some(&hi)) = (offsets.get(j), offsets.get(j + 1)) {
+        if lo >= range.end {
+            break;
+        }
+        let (a, b) = (range.start.max(lo), range.end.min(hi));
+        if a < b {
+            out.push((j, (a - lo) as u32..(b - lo) as u32));
+        }
+        j += 1;
     }
 }
 
@@ -785,6 +2308,33 @@ fn vs_blit(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
 @fragment
 fn fs_blit(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     return textureLoad(frame, vec2<i32>(pos.xy), 0);
+}
+"#;
+
+/// Shows a kept frame drawn smaller than the window (the view was moving): one triangle over the
+/// window, the texture stretched over it and filtered. Premultiplied values filter correctly.
+const SCALED_SHADER: &str = r#"
+@group(0) @binding(0) var frame: texture_2d<f32>;
+@group(0) @binding(1) var smp: sampler;
+
+struct VOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_scaled(@builtin(vertex_index) i: u32) -> VOut {
+    let x = f32((i << 1u) & 2u);
+    let y = f32(i & 2u);
+    var o: VOut;
+    o.pos = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    o.uv = vec2<f32>(x, y);
+    return o;
+}
+
+@fragment
+fn fs_scaled(v: VOut) -> @location(0) vec4<f32> {
+    return textureSampleLevel(frame, smp, v.uv, 0.0);
 }
 "#;
 
@@ -940,6 +2490,63 @@ impl Resources {
             multiview_mask: None,
             cache: None,
         });
+        let scaled_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cad_frame_scaled"),
+            source: wgpu::ShaderSource::Wgsl(SCALED_SHADER.into()),
+        });
+        let scaled_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("cad_frame_scaled"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let scaled_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cad_frame_scaled"),
+            bind_group_layouts: &[Some(&scaled_layout)],
+            immediate_size: 0,
+        });
+        let scaled_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cad_frame_scaled"),
+            layout: Some(&scaled_pl),
+            vertex: wgpu::VertexState {
+                module: &scaled_module,
+                entry_point: Some("vs_scaled"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: stencil_state(Stencil::Off),
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            fragment: Some(wgpu::FragmentState {
+                module: &scaled_module,
+                entry_point: Some("fs_scaled"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target.format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let timer = device.features().contains(wgpu::Features::TIMESTAMP_QUERY).then(|| PassTimer::new(device));
+        PASS_TIMER.store(timer.is_some(), Ordering::Relaxed);
         use wgpu::PrimitiveTopology::{LineList, TriangleList};
         Resources {
             line_pipeline: pipeline("cad_lines", "vs_line", LineList, vertex_layout(), Stencil::Off),
@@ -965,6 +2572,9 @@ impl Resources {
             textures: std::collections::HashMap::new(),
             blit_pipeline,
             blit_layout,
+            scaled_pipeline,
+            scaled_layout,
+            timer,
             target,
             frame_cache_min: FRAME_CACHE_MIN,
             linear_out: target.format.is_srgb(),
@@ -1052,12 +2662,41 @@ pub fn take_slowest_upload() -> f64 {
 /// bytes changed are made again ([`upload`]).
 const PIECE: usize = 65_536;
 
+/// Pieces uploads made and pieces they used again (see [`upload_pieces`]).
+static PIECES_MADE: AtomicU64 = AtomicU64::new(0);
+static PIECES_REUSED: AtomicU64 = AtomicU64::new(0);
+
+/// `(made, reused)`: the GPU buffer pieces vertex uploads have made, and the ones they found
+/// unchanged from the upload before and used again, since the app started (measurements take
+/// the difference across an edit).
+pub fn upload_pieces() -> (u64, u64) {
+    (PIECES_MADE.load(Ordering::Relaxed), PIECES_REUSED.load(Ordering::Relaxed))
+}
+
 /// The pieces the last upload made, by kind and content: an unchanged piece is used again
 /// instead of re-created. Every edit used to upload the whole drawing into new buffers; freeing
 /// tens of megabytes of them each time stalled the window about 0.35 s every few edits on a
 /// 167k-object drawing (UI review 0.7.7c). Cleared when the GPU is set up ([`install`]).
 #[allow(clippy::type_complexity)]
 static REUSE: Mutex<Option<HashMap<(&'static str, usize, u64), Batch>>> = Mutex::new(None);
+
+/// The pool of pieces [`upload_parts`] uses: the app's one ([`REUSE`]). The unit tests run side
+/// by side, each with a GPU device of its own, so each test thread has a pool of its own (a piece
+/// made on one device can't be drawn on another).
+#[cfg(not(test))]
+fn with_reuse<R>(f: impl FnOnce(Option<&mut Option<HashMap<(&'static str, usize, u64), Batch>>>) -> R) -> R {
+    let mut reuse = REUSE.lock().ok();
+    f(reuse.as_deref_mut())
+}
+
+#[cfg(test)]
+fn with_reuse<R>(f: impl FnOnce(Option<&mut Option<HashMap<(&'static str, usize, u64), Batch>>>) -> R) -> R {
+    thread_local! {
+        #[allow(clippy::type_complexity)]
+        static TEST_REUSE: std::cell::RefCell<Option<HashMap<(&'static str, usize, u64), Batch>>> = const { std::cell::RefCell::new(None) };
+    }
+    TEST_REUSE.with(|r| f(Some(&mut r.borrow_mut())))
+}
 
 /// A piece's content key: its length and two checksums (its halves), so a different piece
 /// matching by chance is out of the question in practice.
@@ -1067,18 +2706,44 @@ fn piece_key(label: &'static str, c: &[u8]) -> (&'static str, usize, u64) {
 }
 
 fn upload(device: &wgpu::Device, label: &'static str, bytes: &[u8], stride: usize, usage: wgpu::BufferUsages) -> Vec<Batch> {
-    let mut reuse = REUSE.lock().ok();
+    upload_parts(device, label, std::iter::once(bytes), stride, usage)
+}
+
+/// [`upload`] of a stream in parts (a tiled mesh's tiles): each part is cut into pieces of its
+/// own, so a part's pieces are the same whatever the parts before it hold.
+fn upload_parts<'a>(
+    device: &wgpu::Device,
+    label: &'static str,
+    parts: impl IntoIterator<Item = &'a [u8]>,
+    stride: usize,
+    usage: wgpu::BufferUsages,
+) -> Vec<Batch> {
+    with_reuse(|reuse| upload_parts_in(reuse, device, label, parts, stride, usage))
+}
+
+/// [`upload_parts`] with the pool of pieces `reuse`.
+fn upload_parts_in<'a>(
+    mut reuse: Option<&mut Option<HashMap<(&'static str, usize, u64), Batch>>>,
+    device: &wgpu::Device,
+    label: &'static str,
+    parts: impl IntoIterator<Item = &'a [u8]>,
+    stride: usize,
+    usage: wgpu::BufferUsages,
+) -> Vec<Batch> {
     let mut previous = reuse.as_mut().and_then(|r| r.as_mut()).map(|m| {
         let keys: Vec<_> = m.keys().filter(|k| k.0 == label).copied().collect();
         keys.into_iter().filter_map(|k| m.remove(&k).map(|b| (k, b))).collect::<HashMap<_, _>>()
     });
     let mut made = Vec::new();
-    let batches = bytes
-        .chunks(PIECE.min(CHUNK) * stride)
+    let batches = parts
+        .into_iter()
+        .flat_map(|part| part.chunks(PIECE.min(CHUNK) * stride))
         .filter(|c| c.len() >= stride)
         .map(|c| {
             let key = piece_key(label, c);
-            let batch = previous.as_mut().and_then(|p| p.remove(&key)).unwrap_or_else(|| Batch {
+            let old = previous.as_mut().and_then(|p| p.remove(&key));
+            (if old.is_some() { &PIECES_REUSED } else { &PIECES_MADE }).fetch_add(1, Ordering::Relaxed);
+            let batch = old.unwrap_or_else(|| Batch {
                 buffer: Arc::new(Tracked::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(label),
                     contents: c,
@@ -1212,7 +2877,8 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
                     SLOWEST_UPLOAD.fetch_max((t.elapsed().as_secs_f64() * 100_000.0) as u64, std::sync::atomic::Ordering::Relaxed);
                 }
                 if let Some(u) = m.uploaded {
-                    (res.lines, res.tris, res.quads, res.images) = (u.lines, u.tris, u.quads, u.images);
+                    (res.lines, res.tris, res.quads, res.images, res.tiles) = (u.lines, u.tris, u.quads, u.images, u.tiles);
+                    res.offsets = [batch_offsets(&res.tris), batch_offsets(&res.lines), batch_offsets(&res.quads)];
                 }
                 res.breaks = m.breaks;
                 res.key = Some(self.key);
@@ -1230,7 +2896,12 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         let e = [tx, ty, 0.0, 0.0];
         let bytes: Vec<u8> = a.iter().chain(&b).chain(&c).chain(&d).chain(&e).flat_map(|v| v.to_le_bytes()).collect();
         queue.write_buffer(&res.uniform, 0, &bytes);
-        shared.keep_frame(device, encoder, self, [w.max(1), h.max(1)], bytes);
+        // What a kept frame shows: the view, and the tiles drawn in it.
+        let mut shows = bytes;
+        for v in self.cull.iter().flat_map(|c| [c.min.x, c.min.y, c.max.x, c.max.y]) {
+            shows.extend_from_slice(&v.to_le_bytes());
+        }
+        shared.keep_frame(device, encoder, self, [w.max(1), h.max(1)], shows);
         Vec::new()
     }
 
@@ -1247,20 +2918,20 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         // Whole-screen device pixels; egui already set the scissor to the canvas clip rect.
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
         // The frame kept for this mesh and view (see `keep_frame`): its picture, not the layer.
-        if let Some(c) = res.cache.as_ref().filter(|c| res.cached && c.size == [sw, sh]) {
-            pass.set_pipeline(&shared.blit_pipeline);
+        if let Some(c) = res.cache.as_ref().filter(|c| res.cached && c.window == [sw, sh]) {
+            pass.set_pipeline(if c.size == c.window { &shared.blit_pipeline } else { &shared.scaled_pipeline });
             pass.set_bind_group(0, &c.group, &[]);
             pass.draw(0..3, 0..1);
             return;
         }
-        shared.draw(res, self.stencil, pass);
+        shared.draw(res, self.stencil, self.cull.as_ref(), pass);
     }
 }
 
 impl Resources {
     /// Draw a layer's batches and images in draw order into `pass` (the window's, or a kept
-    /// frame's).
-    fn draw(&self, res: &Layer, stencil: Stencil, pass: &mut wgpu::RenderPass<'_>) {
+    /// frame's); of a tiled layer, only the tiles reaching into `cull`.
+    fn draw(&self, res: &Layer, stencil: Stencil, cull: Option<&Bounds2>, pass: &mut wgpu::RenderPass<'_>) {
         let shared = self;
         pass.set_bind_group(0, &res.bind_group, &[]);
         let (tri, line, quad, image) = match (stencil, &shared.clipped) {
@@ -1275,6 +2946,10 @@ impl Resources {
             pass.set_stencil_reference(1);
         }
         let mask = stencil == Stencil::Mask;
+        if let Some(tiles) = &res.tiles {
+            self.draw_tiles(res, tiles, [tri, line, quad, image], mask, cull, pass);
+            return;
+        }
         // Draw-order groups split at each wipeout; without wipeouts there is one group.
         let total = |bs: &[Batch]| bs.iter().map(|b| b.count as usize).sum::<usize>();
         let all = [total(&res.tris), if mask { 0 } else { total(&res.lines) }, if mask { 0 } else { total(&res.quads) }];
@@ -1305,6 +2980,68 @@ impl Resources {
         }
     }
 
+    /// Draw a tiled layer: each draw-order group's fills, lines and quads, the runs of the tiles
+    /// reaching into `cull` in order (runs that follow each other in a stream drawn as one), then
+    /// the images after the group.
+    fn draw_tiles(
+        &self,
+        res: &Layer,
+        tiles: &Tiles,
+        pipelines: [&wgpu::RenderPipeline; 4],
+        mask: bool,
+        cull: Option<&Bounds2>,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) {
+        let visible = cull.map(|c| tiles.visible(c));
+        let shown = |t: u32| visible.as_ref().is_none_or(|v| v.get(t as usize).copied().unwrap_or(true));
+        let streams = [(&res.tris, &res.offsets[0]), (&res.lines, &res.offsets[1]), (&res.quads, &res.offsets[2])];
+        let mut parts = Vec::new();
+        for (group, ranges) in tiles.groups.iter().enumerate() {
+            for (class, ((batches, offsets), range)) in streams.iter().zip(ranges).enumerate() {
+                if mask && class != 0 {
+                    continue;
+                }
+                let Some(&pipeline) = pipelines.get(class) else { continue };
+                let mut set = false;
+                let mut draw = |run: std::ops::Range<usize>, pass: &mut wgpu::RenderPass<'_>| {
+                    batch_ranges_at(offsets, run, &mut parts);
+                    for (j, r) in parts.drain(..) {
+                        let Some(b) = batches.get(j) else { continue };
+                        if !set {
+                            pass.set_pipeline(pipeline);
+                            set = true;
+                        }
+                        pass.set_vertex_buffer(0, b.buffer.slice(..));
+                        // Quads are instanced: six vertices per instance.
+                        if class == 2 { pass.draw(0..6, r) } else { pass.draw(r, 0..1) }
+                    }
+                };
+                let mut run: Option<std::ops::Range<usize>> = None;
+                for s in tiles.steps.get(range.clone()).unwrap_or(&[]).iter().filter(|s| shown(s.tile)) {
+                    match &mut run {
+                        Some(r) if r.end == s.from => r.end = s.to,
+                        _ => {
+                            if let Some(r) = run.replace(s.from..s.to) {
+                                draw(r, pass);
+                            }
+                        }
+                    }
+                }
+                if let Some(r) = run {
+                    draw(r, pass);
+                }
+            }
+            // the images between this group and the next (never into the stencil)
+            for im in res.images.iter().filter(|im| im.group == group && !mask) {
+                let (Some(b), Some((_, tex, _))) = (&im.vertices, self.textures.get(&(Arc::as_ptr(&im.raster) as usize))) else { continue };
+                pass.set_pipeline(pipelines[3]);
+                pass.set_bind_group(1, tex, &[]);
+                pass.set_vertex_buffer(0, b.buffer.slice(..));
+                pass.draw(0..b.count, 0..1);
+            }
+        }
+    }
+
     /// Keep the frame of a large layer drawn without the stencil: draw it into the layer's
     /// texture when the mesh, the view or the window's size changed, and leave the texture as it
     /// is otherwise. `paint` then shows the texture. Kept frames nothing shows any more are freed.
@@ -1320,12 +3057,19 @@ impl Resources {
             res.cache = None;
             return;
         }
+        // While the view moves a slow drawing is drawn smaller and shown scaled up.
+        let scale = if cb.reducible() { crate::dynres::with(|c| c.scale(cb.moving)).unwrap_or(1.0) } else { 1.0 };
+        let tex = crate::dynres::scaled_size(size, scale);
+        let scale = if tex == size { 1.0 } else { scale };
+        if cb.reducible() {
+            SHOWN_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+        }
         let mut cache = match res.cache.take() {
-            Some(c) if c.size == size => c,
-            _ => self.new_frame_cache(device, size),
+            Some(c) if c.size == tex && c.window == size => c,
+            _ => self.new_frame_cache(device, tex, size),
         };
         cache.used = now;
-        let shows = (cb.key, uniform);
+        let shows = (cb.key, uniform, tex);
         if cache.shows.as_ref() == Some(&shows) {
             FRAMES_KEPT.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -1335,6 +3079,7 @@ impl Resources {
                 depth_ops: format.has_depth_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
                 stencil_ops: format.has_stencil_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Discard }),
             });
+            let timed = self.timer.as_ref().and_then(|t| Some((t, t.free_slot()?)));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("cad_frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1344,14 +3089,22 @@ impl Resources {
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: stencil,
-                timestamp_writes: None,
+                timestamp_writes: timed.map(|(t, i)| wgpu::RenderPassTimestampWrites {
+                    query_set: &t.set,
+                    beginning_of_pass_write_index: Some(2 * i as u32),
+                    end_of_pass_write_index: Some(2 * i as u32 + 1),
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             if let Some(res) = self.layers.get(cb.layer) {
-                self.draw(res, Stencil::Off, &mut pass);
+                self.draw(res, Stencil::Off, cb.cull.as_ref(), &mut pass);
             }
             drop(pass);
+            if let Some((t, i)) = timed {
+                // Timed only when it is the drawing's own picture: the scale is the controller's.
+                t.written(encoder, i, if cb.reducible() { Some(scale) } else { None });
+            }
             cache.shows = Some(shows);
         }
         if let Some(res) = self.layers.get_mut(cb.layer) {
@@ -1370,7 +3123,8 @@ impl Resources {
         }
     }
 
-    fn new_frame_cache(&self, device: &wgpu::Device, size: [u32; 2]) -> FrameCache {
+    /// A kept frame `size` big covering a `window`-size window (smaller while the view moves).
+    fn new_frame_cache(&self, device: &wgpu::Device, size: [u32; 2], window: [u32; 2]) -> FrameCache {
         let extent = wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 };
         let texture = |label: &str, format: wgpu::TextureFormat, usage: wgpu::TextureUsages| {
             Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
@@ -1386,18 +3140,153 @@ impl Resources {
             .into_view(&wgpu::TextureViewDescriptor::default())
         };
         let view = texture("cad_frame", self.target.format, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("cad_frame"),
-            layout: &self.blit_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }],
-        });
+        // The window's size: shown pixel for pixel; smaller: shown stretched and filtered.
+        let group = if size == window {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cad_frame"),
+                layout: &self.blit_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }],
+            })
+        } else {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cad_frame_scaled"),
+                layout: &self.scaled_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                ],
+            })
+        };
         FrameCache {
             view,
             stencil: self.target.stencil.map(|f| texture("cad_frame_stencil", f, wgpu::TextureUsages::RENDER_ATTACHMENT)),
             group,
             size,
+            window,
             shows: None,
             used: web_time::Instant::now(),
+        }
+    }
+}
+
+/// Times the passes that draw kept frames with GPU timestamps, for [`crate::dynres`]: each pass
+/// writes its start and end into a slot's two queries, resolved and copied into the slot's
+/// readback buffer in the same encoder; the next app frame (the commands have gone to the GPU)
+/// maps it, and a later one reads it. A slot is reused once read, so at most [`TIMER_SLOTS`]
+/// passes are in flight; a pass with no free slot isn't timed.
+pub(crate) struct PassTimer {
+    set: wgpu::QuerySet,
+    resolve: Tracked,
+    slots: Vec<TimerSlot>,
+}
+
+struct TimerSlot {
+    read: Tracked,
+    state: Arc<AtomicU8>,
+    /// The scale the timed picture was drawn at (f32 bits); NaN: not the drawing's own.
+    scale: AtomicU32,
+}
+
+const TIMER_SLOTS: usize = 4;
+/// Where each slot's queries are resolved in [`PassTimer::resolve`] (the resolve alignment).
+const TIMER_STRIDE: u64 = wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT;
+const SLOT_FREE: u8 = 0;
+const SLOT_WRITTEN: u8 = 1;
+const SLOT_MAPPING: u8 = 2;
+const SLOT_MAPPED: u8 = 3;
+const SLOT_FAILED: u8 = 4;
+
+impl PassTimer {
+    /// A timer on a device with timestamp queries (none without them).
+    pub(crate) fn on(device: &wgpu::Device) -> Option<PassTimer> {
+        device.features().contains(wgpu::Features::TIMESTAMP_QUERY).then(|| PassTimer::new(device))
+    }
+
+    fn new(device: &wgpu::Device) -> PassTimer {
+        let set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("cad_frame_time"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2 * TIMER_SLOTS as u32,
+        });
+        let resolve = Tracked::new(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cad_frame_time"),
+            size: TIMER_STRIDE * TIMER_SLOTS as u64,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+        let slots = (0..TIMER_SLOTS)
+            .map(|_| TimerSlot {
+                read: Tracked::new(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("cad_frame_time_read"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })),
+                state: Arc::new(AtomicU8::new(SLOT_FREE)),
+                scale: AtomicU32::new(f32::NAN.to_bits()),
+            })
+            .collect();
+        PassTimer { set, resolve, slots }
+    }
+
+    /// The timestamp writes of a pass in slot `i`'s span: at its beginning, its end, or both
+    /// (the span may run over several passes: the first's beginning to the last's end).
+    pub(crate) fn writes(&self, i: usize, begin: bool, end: bool) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        let at = 2 * u32::try_from(i).ok()?;
+        (begin || end).then(|| wgpu::RenderPassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: begin.then_some(at),
+            end_of_pass_write_index: end.then_some(at + 1),
+        })
+    }
+
+    pub(crate) fn free_slot(&self) -> Option<usize> {
+        self.slots.iter().position(|s| s.state.load(Ordering::Acquire) == SLOT_FREE)
+    }
+
+    /// Slot `i`'s pass was recorded: resolve its queries and copy them out.
+    pub(crate) fn written(&self, encoder: &mut wgpu::CommandEncoder, i: usize, scale: Option<f32>) {
+        let Some(slot) = self.slots.get(i) else { return };
+        let at = TIMER_STRIDE * i as u64;
+        encoder.resolve_query_set(&self.set, 2 * i as u32..2 * i as u32 + 2, &self.resolve, at);
+        encoder.copy_buffer_to_buffer(&self.resolve, at, &slot.read, 0, 16);
+        slot.scale.store(scale.unwrap_or(f32::NAN).to_bits(), Ordering::Relaxed);
+        slot.state.store(SLOT_WRITTEN, Ordering::Release);
+    }
+
+    /// Map the slots written last frame; hand the mapped ones to `sink` (GPU milliseconds, the
+    /// scale the picture was drawn at).
+    pub(crate) fn read(&self, device: &wgpu::Device, queue: &wgpu::Queue, mut sink: impl FnMut(f64, f32)) {
+        let _ = device.poll(wgpu::PollType::Poll);
+        let period = f64::from(queue.get_timestamp_period());
+        for slot in &self.slots {
+            match slot.state.load(Ordering::Acquire) {
+                SLOT_WRITTEN => {
+                    slot.state.store(SLOT_MAPPING, Ordering::Release);
+                    let state = Arc::clone(&slot.state);
+                    slot.read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                        state.store(if r.is_ok() { SLOT_MAPPED } else { SLOT_FAILED }, Ordering::Release);
+                    });
+                }
+                SLOT_MAPPED => {
+                    let ticks = slot.read.slice(..).get_mapped_range().ok().and_then(|r| {
+                        let t = |b: Option<&[u8]>| b.and_then(|b| <[u8; 8]>::try_from(b).ok()).map(u64::from_le_bytes);
+                        Some((t(r.get(0..8))?, t(r.get(8..16))?))
+                    });
+                    slot.read.unmap();
+                    slot.state.store(SLOT_FREE, Ordering::Release);
+                    let scale = f32::from_bits(slot.scale.load(Ordering::Relaxed));
+                    if let (Some((start, end)), false) = (ticks, scale.is_nan()) {
+                        // A pass ends after it starts; anything else is a reset counter.
+                        if end > start {
+                            let ms = (end - start) as f64 * period / 1e6;
+                            sink(ms, scale);
+                        }
+                    }
+                }
+                SLOT_FAILED => slot.state.store(SLOT_FREE, Ordering::Release),
+                _ => {}
+            }
         }
     }
 }
@@ -1585,6 +3474,199 @@ mod tests {
         }
     }
 
+    /// A list of `n` objects (own handles), each a polyline of `pts` points around `at(i)`
+    /// spanning `size` drawing units.
+    fn objects(n: usize, pts: usize, size: f64, at: impl Fn(usize) -> Vec2) -> DisplayList {
+        let mut l = DisplayList::default();
+        for i in 0..n {
+            let c = at(i);
+            let start = l.verts.len() as u32;
+            for k in 0..pts {
+                let t = k as f64 / pts.max(2) as f64 * std::f64::consts::TAU;
+                l.verts.push(c + Vec2::new(t.cos(), t.sin()) * (size / 2.0));
+            }
+            l.prims.push(DPrim {
+                handle: Handle(i as u64 + 1),
+                color: Rgb(200, 10, 10),
+                aci7: false,
+                lw: 0.0,
+                transparency: 0,
+                kind: Kind::Polyline,
+                start,
+                len: pts as u32,
+            });
+        }
+        l.bounds = Bounds2::from_points(l.verts.iter().copied());
+        l
+    }
+
+    /// The pixel cells (of `pixel` from `origin`) the dots of `m` light.
+    fn dot_cells(m: &MeshData, pixel: f64) -> std::collections::BTreeSet<(i64, i64)> {
+        m.quads
+            .chunks(INSTANCE_SIZE)
+            .map(|q| {
+                let f = |o: usize| f64::from(f32::from_le_bytes([q[o], q[o + 1], q[o + 2], q[o + 3]]));
+                ((f(0) / pixel).floor() as i64, (f(4) / pixel).floor() as i64)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sub_pixel_objects_draw_as_one_dot_a_pixel_cell() {
+        // 2,000 symbol pieces of a tenth of a pixel, 8 segments each, in a 20 x 20 pixel area.
+        let pixel = 0.5;
+        let at = |i: usize| Vec2::new((i * 37 % 400) as f64 * 0.025 + 0.01, (i * 91 % 400) as f64 * 0.025 + 0.01);
+        let l = objects(2_000, 9, pixel * 0.1, at);
+        let full = build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false);
+        assert_eq!(full.line_vertices(), 2_000 * 16, "the full mesh draws every segment");
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(pixel));
+        assert_eq!(m.line_vertices(), 0, "no segment of a sub-pixel object is drawn");
+        // Every pixel cell holding an object lights, once.
+        let want: std::collections::BTreeSet<_> = (0..2_000).map(at).map(|c| ((c.x / pixel).floor() as i64, (c.y / pixel).floor() as i64)).collect();
+        assert_eq!(m.quad_instances(), want.len(), "one dot a cell");
+        assert_eq!(dot_cells(&m, pixel), want, "the dots light the cells the objects are in");
+        assert_eq!(m.simplified, Simplified { dot_objects: 2_000, dot_prims: 0, dots: want.len(), boxes: 0 });
+        assert!(m.bytes() * 10 < full.bytes(), "{} vs {} bytes", m.bytes(), full.bytes());
+        // The dot is a pixel (a point), in the object's colour; the same every time.
+        let q = &m.quads[..INSTANCE_SIZE];
+        assert_eq!(&q[16..20], &[200, 10, 10, 255]);
+        assert_eq!(f32::from_le_bytes([q[20], q[21], q[22], q[23]]), DOT_POINTS);
+        assert_eq!(build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(pixel)).quads, m.quads);
+        // At full detail (no pixel) or zoomed in far enough, everything is drawn as it is.
+        assert_eq!(build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, None).lines, full.lines);
+        assert_eq!(build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(pixel / 64.0)).lines, full.lines);
+    }
+
+    #[test]
+    fn sub_pixel_lines_cheaper_than_a_dot_stay_lines() {
+        // One segment (2 vertices) under a pixel: drawn as it is, alone or in a crowd.
+        for n in [1, 6] {
+            let l = objects(n, 2, 0.1, |i| Vec2::new(3.1 + i as f64 * 0.1, 3.5));
+            let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+            assert_eq!((m.line_vertices(), m.quad_instances()), (2 * n, 0));
+            assert_eq!(m.lines, build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false).lines);
+        }
+        // Two segments (4 vertices) alone in a cell cost less than a dot: still lines. Two of
+        // them in one cell are one dot.
+        let l = objects(1, 3, 0.1, |_| Vec2::new(3.5, 3.5));
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!((m.line_vertices(), m.quad_instances()), (4, 0));
+        let l = objects(2, 3, 0.1, |i| Vec2::new(3.2 + i as f64 * 0.4, 3.5));
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!((m.line_vertices(), m.quad_instances()), (0, 1));
+        assert_eq!(m.simplified, Simplified { dot_objects: 2, dot_prims: 0, dots: 1, boxes: 0 });
+    }
+
+    #[test]
+    fn a_small_block_reference_draws_as_its_box_and_a_larger_one_as_it_is() {
+        // A symbol: one handle (a block reference and its contents), a circle and a cross.
+        let symbol = |size: f64| {
+            let mut l = objects(1, 33, size, |_| Vec2::new(10.0, 10.0));
+            for (a, b) in [(Vec2::new(-0.5, 0.0), Vec2::new(0.5, 0.0)), (Vec2::new(0.0, -0.5), Vec2::new(0.0, 0.5))] {
+                let start = l.verts.len() as u32;
+                l.verts.extend([Vec2::new(10.0, 10.0) + a * size, Vec2::new(10.0, 10.0) + b * size]);
+                l.prims.push(DPrim {
+                    handle: Handle(1),
+                    color: Rgb(1, 2, 3),
+                    aci7: false,
+                    lw: 0.0,
+                    transparency: 0,
+                    kind: Kind::Polyline,
+                    start,
+                    len: 2,
+                });
+            }
+            l
+        };
+        let l = symbol(3.0);
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!((m.line_vertices(), m.quad_instances()), (8, 0), "four sides of its box");
+        assert_eq!(m.simplified.boxes, 1);
+        // In the colour of its largest part (the circle), around its extents.
+        assert_eq!(&m.lines[8..12], &[200, 10, 10, 255]);
+        let x = |i: usize| f32::from_le_bytes([m.lines[i * 12], m.lines[i * 12 + 1], m.lines[i * 12 + 2], m.lines[i * 12 + 3]]);
+        let xs: Vec<f32> = (0..8).map(x).collect();
+        assert!(xs.iter().all(|&v| (v - 8.5).abs() < 1e-4 || (v - 11.5).abs() < 1e-4), "{xs:?}");
+        // Bigger than the box limit: its own lines.
+        let l = symbol(BOX_BELOW_PX * 2.0);
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!(m.lines, build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false).lines);
+        assert_eq!(m.simplified, Simplified::default());
+    }
+
+    #[test]
+    fn sub_pixel_pieces_of_a_large_object_draw_as_dots() {
+        // A long text line two pixels tall: its strokes are under a pixel, the line is not.
+        let mut l = objects(400, 5, 0.6, |i| Vec2::new(i as f64 * 0.25, 1.2 + (i % 2) as f64));
+        for p in &mut l.prims {
+            p.handle = Handle(7);
+        }
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!(m.simplified.dot_prims, 400);
+        assert_eq!(m.simplified.dot_objects + m.simplified.boxes, 0);
+        assert_eq!(m.line_vertices(), 0);
+        // 100 pixels long, two rows of cells.
+        assert_eq!(m.quad_instances(), 200);
+    }
+
+    #[test]
+    fn dots_stay_in_their_draw_order_group_and_masks_markers_stay() {
+        // Tiny objects, a wipeout over them, tiny objects on top, then a point marker.
+        let mut l = objects(20, 9, 0.1, |i| Vec2::new(i as f64 * 2.0, 0.0));
+        let tail = objects(20, 9, 0.1, |i| Vec2::new(i as f64 * 2.0, 5.0));
+        l.tris = vec![Vec2::new(-1.0, -1.0), Vec2::new(40.0, -1.0), Vec2::new(-1.0, 10.0)];
+        l.prims.push(DPrim { handle: Handle(100), color: Rgb(0, 0, 0), aci7: false, lw: 0.0, transparency: 0, kind: Kind::Mask, start: 0, len: 3 });
+        let base = l.verts.len() as u32;
+        l.verts.extend(tail.verts.iter().copied());
+        l.prims.extend(tail.prims.iter().map(|p| DPrim { handle: Handle(p.handle.0 + 200), start: p.start + base, ..*p }));
+        l.verts.push(Vec2::new(0.05, 0.05));
+        let at = l.verts.len() as u32 - 1;
+        l.prims.push(DPrim { handle: Handle(999), color: Rgb(9, 9, 9), aci7: false, lw: 0.0, transparency: 0, kind: Kind::Point, start: at, len: 1 });
+        let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(1.0));
+        assert_eq!(m.breaks, vec![[0, 0, 20]], "the 20 dots under the wipeout come before it");
+        assert_eq!(m.tri_vertices(), 3, "the mask is drawn");
+        assert_eq!(m.quad_instances(), 41, "20 + 20 dots and the point marker");
+    }
+
+    #[test]
+    fn a_screen_mesh_never_costs_more_than_the_full_one() {
+        // Objects of every size and detail, some sharing handles (block contents), at three bands.
+        let mut seed = 7u64;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as f64 / f64::from(1u32 << 31)
+        };
+        let mut l = DisplayList::default();
+        for i in 0..3_000u64 {
+            let (c, size, pts) = (Vec2::new(next() * 200.0, next() * 200.0), 0.02 + next() * next() * 12.0, 2 + (next() * 18.0) as usize);
+            let start = l.verts.len() as u32;
+            for k in 0..pts {
+                let t = k as f64 / pts as f64 * std::f64::consts::TAU;
+                l.verts.push(c + Vec2::new(t.cos(), t.sin()) * size);
+            }
+            let lw = if i % 5 == 0 { 0.7 } else { 0.0 };
+            l.prims.push(DPrim {
+                handle: Handle(i / 3),
+                color: Rgb(5, 6, 7),
+                aci7: false,
+                lw,
+                transparency: 0,
+                kind: Kind::Polyline,
+                start,
+                len: pts as u32,
+            });
+        }
+        let cost = |m: &MeshData| m.line_vertices() + m.tri_vertices() + 6 * m.quad_instances();
+        for lw in [false, true] {
+            let full = build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), lw);
+            for pixel in [0.05, 0.5, 2.0, 20.0] {
+                let m = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), lw, Some(pixel));
+                assert!(cost(&m) <= cost(&full), "pixel {pixel}: {} > {}", cost(&m), cost(&full));
+                assert!(m.bytes() <= full.bytes(), "pixel {pixel}: {} > {} bytes", m.bytes(), full.bytes());
+            }
+        }
+    }
+
     #[test]
     fn mesh_counts_and_precision() {
         let l = list();
@@ -1702,6 +3784,8 @@ mod tests {
             r.insert(res);
             r
         };
+        // Whether the frames below are of a moving view (dynamic resolution).
+        let moving = std::cell::Cell::new(false);
         let frame = |r: &mut egui_wgpu::CallbackResources, key: u64, scale: f32| -> Vec<u8> {
             let slot: MeshSlot = Arc::new(Mutex::new(Some(mesh())));
             let cb = CanvasCallback {
@@ -1714,6 +3798,8 @@ mod tests {
                 xform: IDENTITY_XFORM,
                 dash: 0.0,
                 stencil: Stencil::Off,
+                cull: None,
+                moving: moving.get(),
             };
             let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: 1.0 };
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -1806,13 +3892,55 @@ mod tests {
         assert!(res.layers[LAYER_DRAWING].cache.is_some());
         res.free_idle_frames(web_time::Instant::now() + FRAME_CACHE_IDLE + std::time::Duration::from_secs(1));
         assert!(res.layers[LAYER_DRAWING].cache.is_none());
+
+        // Dynamic resolution. A moving view at half scale: the drawing is drawn into a picture a
+        // quarter the pixels and stretched over the window.
+        let kept_size = |r: &egui_wgpu::CallbackResources| {
+            r.get::<Resources>().and_then(|res| res.layers[LAYER_DRAWING].cache.as_ref().map(|c| (c.size, c.window)))
+        };
+        crate::dynres::with(|c| c.configure(true, 30, Some(0.5)));
+        moving.set(true);
+        let small = frame(&mut kept, 9, 1.0);
+        assert_eq!(kept_size(&kept), Some(([32, 32], [64, 64])), "drawn at half resolution each way");
+        assert_eq!(shown_scale(), 0.5);
+        assert_eq!(at(&small, 12, 44), [255, 0, 0], "inside the red fill it is still red");
+        assert!(differ(&small, &first).1 > 0, "the edges are the smaller picture's");
+        // The view stops: drawn once at full resolution, exactly today's picture.
+        moving.set(false);
+        let rest = frame(&mut kept, 9, 1.0);
+        assert_eq!(kept_size(&kept), Some(([64, 64], [64, 64])));
+        assert_eq!(shown_scale(), 1.0);
+        assert_eq!(differ(&rest, &first), (0, 0), "at rest the picture is the full-resolution one");
+        // Off (DYNRESMODE 0): a moving view is drawn at full resolution.
+        crate::dynres::with(|c| c.configure(false, 30, Some(0.5)));
+        moving.set(true);
+        let off = frame(&mut kept, 10, 1.0);
+        assert_eq!(kept_size(&kept), Some(([64, 64], [64, 64])));
+        assert_eq!(differ(&off, &first), (0, 0));
+        // A screenshot waiting: full resolution too.
+        crate::dynres::with(|c| {
+            c.configure(true, 30, Some(0.5));
+            c.full = true;
+        });
+        let _ = frame(&mut kept, 11, 1.0);
+        assert_eq!(kept_size(&kept), Some(([64, 64], [64, 64])));
+        crate::dynres::with(|c| {
+            c.full = false;
+            c.configure(true, 30, None);
+        });
     }
 
     #[test]
     fn frame_shader_is_valid_for_webgpu_and_webgl2() {
-        let module = naga::front::wgsl::parse_str(BLIT_SHADER).unwrap();
+        for (source, vs, fs) in [(BLIT_SHADER, "vs_blit", "fs_blit"), (SCALED_SHADER, "vs_scaled", "fs_scaled")] {
+            frame_shader_valid(source, vs, fs);
+        }
+    }
+
+    fn frame_shader_valid(source: &str, vs: &str, fs: &str) {
+        let module = naga::front::wgsl::parse_str(source).unwrap();
         let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
-        for (stage, entry) in [(naga::ShaderStage::Vertex, "vs_blit"), (naga::ShaderStage::Fragment, "fs_blit")] {
+        for (stage, entry) in [(naga::ShaderStage::Vertex, vs), (naga::ShaderStage::Fragment, fs)] {
             let options = naga::back::glsl::Options { version: naga::back::glsl::Version::new_gles(300), ..Default::default() };
             let pipeline = naga::back::glsl::PipelineOptions { shader_stage: stage, entry_point: entry.into(), multiview: None };
             let mut out = String::new();
@@ -1883,5 +4011,631 @@ mod tests {
         assert_eq!(batch_ranges([4, 4], 4..8), vec![(1, 0..4)]);
         assert!(batch_ranges([4, 4], 3..3).is_empty());
         assert!(batch_ranges([], 0..5).is_empty());
+    }
+
+    #[test]
+    fn bisected_batch_ranges_are_the_scanned_ones() {
+        let counts = [4u32, 0, 7, 1, 9, 3];
+        let offsets = {
+            let mut at = 0;
+            let mut v = vec![0];
+            for c in counts {
+                at += c as usize;
+                v.push(at);
+            }
+            v
+        };
+        let mut out = Vec::new();
+        for a in 0..26 {
+            for b in a..26 {
+                batch_ranges_at(&offsets, a..b, &mut out);
+                assert_eq!(out, batch_ranges(counts, a..b), "{a}..{b}");
+            }
+        }
+    }
+
+    // ---------- area tiles (Q6472) ----------
+
+    /// A small deterministic random source (xorshift).
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn f(&mut self, span: f64) -> f64 {
+            (self.next() % 10_000) as f64 / 10_000.0 * span
+        }
+    }
+
+    /// A busy 64 × 64 drawing in which order shows everywhere: short hairlines, wide lines and
+    /// points in six colours crossing each other (and cell edges), opaque and see-through fills
+    /// over them, long lines across the whole area, wipeouts and coloured masks starting
+    /// draw-order groups, and an image between two groups.
+    fn busy_list(seed: u64) -> DisplayList {
+        let mut r = Rng(seed);
+        let mut l = DisplayList::default();
+        let colors = [Rgb(255, 0, 0), Rgb(0, 255, 0), Rgb(0, 0, 255), Rgb(255, 255, 0), Rgb(255, 0, 255), Rgb(0, 255, 255)];
+        let add = |l: &mut DisplayList, kind: Kind, color: Rgb, lw: f32, transparency: u8, pts: Vec<Vec2>| {
+            let fill = kind.is_fill();
+            let start = if fill { l.tris.len() } else { l.verts.len() } as u32;
+            for p in &pts {
+                l.bounds.add(*p);
+            }
+            let len = pts.len() as u32;
+            if fill {
+                l.tris.extend(pts)
+            } else {
+                l.verts.extend(pts)
+            }
+            l.prims.push(DPrim { handle: Handle(1), color, aci7: false, lw, transparency, kind, start, len });
+        };
+        l.images.push(cadaddy_render::ImageRef {
+            path: "x".into(),
+            raster: Arc::new(cadaddy_render::images::Raster::new(2, 1, vec![200, 100, 50, 255, 20, 40, 60, 255]).unwrap()),
+            origin: Vec2::new(30.0, 40.0),
+            ex: Vec2::new(12.0, 0.0),
+            ey: Vec2::new(0.0, -12.0),
+            alpha: 255,
+            dark_stencil: false,
+        });
+        for i in 0..600 {
+            let color = colors[(r.next() % 6) as usize];
+            let p = Vec2::new(r.f(64.0), r.f(64.0));
+            let q = p + Vec2::new(r.f(14.0) - 7.0, r.f(14.0) - 7.0);
+            match (i, r.next() % 20) {
+                (300, _) => {
+                    let s = [Vec2::new(30.0, 28.0), Vec2::new(42.0, 28.0), Vec2::new(42.0, 40.0), Vec2::new(30.0, 40.0)];
+                    add(&mut l, Kind::Image(0), Rgb(255, 255, 255), 0.0, 0, vec![s[0], s[1], s[2], s[0], s[2], s[3]]);
+                }
+                (_, 0..=8) => add(&mut l, Kind::Polyline, color, 0.0, 0, vec![p, q, q + Vec2::new(r.f(6.0), -r.f(6.0))]),
+                (_, 9 | 10) => add(&mut l, Kind::Polyline, color, 0.5, 0, vec![p, q]),
+                (_, 11 | 12) => {
+                    let t = if r.next().is_multiple_of(2) { 0 } else { 50 };
+                    add(&mut l, Kind::Tris, color, 0.0, t, vec![p, q, Vec2::new(p.x, q.y)]);
+                }
+                (_, 13 | 14) => add(&mut l, Kind::Point, color, 0.0, 0, vec![p]),
+                (_, 15 | 16) => add(&mut l, Kind::Polyline, color, 0.0, 0, vec![Vec2::new(r.f(64.0), 0.0), Vec2::new(r.f(64.0), 64.0)]),
+                (_, 17) if i % 3 == 0 => add(&mut l, Kind::Mask, color, 0.0, 0, vec![p, q, Vec2::new(q.x, p.y)]),
+                (_, 17) => add(&mut l, Kind::InkMask, color, 0.0, 0, vec![p, q, Vec2::new(q.x, p.y)]),
+                _ => add(&mut l, Kind::Polyline, color, 0.0, 30, vec![p, q]),
+            }
+        }
+        l
+    }
+
+    /// Cells of 8 units over the busy list: a grid of 8 × 8, drawn at one pixel a unit.
+    fn small_tiles() -> Tiling {
+        Tiling { min: Vec2::ZERO, cell: 8.0, cols: 8, rows: 8, px: 1.0 }
+    }
+
+    /// One 64 × 64 frame of `mesh` (origin at 0,0) drawn by a window of its own, with its frame
+    /// kept from the first frame on (`kept`) or drawn directly, looking at `center` at `scale`
+    /// pixels a unit, read back.
+    fn read_frame(rs: &egui_wgpu::RenderState, mesh: MeshData, kept: bool, center: Vec2, scale: f32, cull: Option<Bounds2>) -> Vec<u8> {
+        use egui_wgpu::CallbackTrait;
+        let (device, queue) = (&rs.device, &rs.queue);
+        let (w, h) = (64u32, 64u32);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = egui_wgpu::CallbackResources::default();
+        let mut res = Resources::new(device, GpuTarget { format, stencil: None });
+        res.frame_cache_min = if kept { 0 } else { u64::MAX };
+        r.insert(res);
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let cb = CanvasCallback {
+            key: 1,
+            slot: Arc::new(Mutex::new(Some(mesh))),
+            offset: [-center.x as f32, -center.y as f32],
+            scale,
+            center: [32.0, 32.0],
+            layer: LAYER_DRAWING,
+            xform: IDENTITY_XFORM,
+            dash: 0.0,
+            stencil: Stencil::Off,
+            cull,
+            moving: false,
+        };
+        let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: 1.0 };
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        cb.prepare(device, queue, &screen, &mut enc, &mut r);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w as f32, h as f32));
+        {
+            let mut pass = enc
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &target_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            cb.paint(egui::PaintCallbackInfo { viewport: rect, clip_rect: rect, pixels_per_point: 1.0, screen_size_px: [w, h] }, &mut pass, &r);
+        }
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(w * 4 * h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(10)) }).unwrap();
+        buffer.slice(..).get_mapped_range().unwrap().to_vec()
+    }
+
+    /// Pixels that differ between two read backs.
+    fn differing(a: &[u8], b: &[u8]) -> usize {
+        a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
+    }
+
+    /// Q6472: the vertex data cut into area tiles draws pixel for pixel what the whole list
+    /// draws: hairlines, wide lines, points and fills of different colours crossing each other
+    /// and the tiles' edges, see-through ones, wipeouts and coloured masks across tile edges, an
+    /// image between draw-order groups. Seen whole, and zoomed in with the tiles out of view left
+    /// out, drawn directly and into a kept frame.
+    #[test]
+    fn tiles_draw_exactly_what_the_whole_list_draws() {
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        for seed in [3u64, 77, 4242] {
+            let l = busy_list(seed);
+            let whole = || build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), true);
+            let tiled = || build_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(&small_tiles()));
+            let tiles = tiled().tiles.unwrap();
+            assert_eq!(tiles.bounds.len(), 65, "8 × 8 cells and the large tile");
+            assert!(tiles.groups.len() > 5, "wipeouts and masks start groups: {}", tiles.groups.len());
+            let held = tiles.drawn(&[true; 65]);
+            assert_eq!(held.vertices, whole().line_vertices() + whole().tri_vertices() + 6 * whole().quad_instances());
+            // Whole: every tile drawn. (A kept frame blends a see-through pixel in two steps,
+            // which may round it apart from drawing it directly: each is compared with its own.)
+            let center = Vec2::new(32.0, 32.0);
+            let empty = read_frame(&rs, MeshData::default(), false, center, 1.0, None);
+            for kept in [false, true] {
+                let reference = read_frame(&rs, whole(), kept, center, 1.0, None);
+                let drawn = differing(&reference, &empty);
+                assert!(drawn > 2000, "the frame is busy: {drawn} pixels drawn");
+                let all = read_frame(&rs, tiled(), kept, center, 1.0, Some(Bounds2::new(Vec2::new(-8.0, -8.0), Vec2::new(72.0, 72.0))));
+                assert_eq!(differing(&all, &reference), 0, "seed {seed}, kept {kept}: tiled differs from whole");
+            }
+            // Zoomed in three times on a corner: only the tiles reaching into it are drawn.
+            let (center, scale) = (Vec2::new(20.0, 44.0), 3.0f32);
+            let half = 32.0 / f64::from(scale);
+            let cull = Bounds2::new(center - Vec2::new(half, half), center + Vec2::new(half, half)).expand(8.0 / f64::from(scale));
+            let shown = tiles.visible(&cull);
+            let part = tiles.drawn(&shown);
+            assert!(part.tiles < 40 && part.vertices < held.vertices, "{part:?} of {held:?}");
+            for kept in [false, true] {
+                let reference = read_frame(&rs, whole(), kept, center, scale, None);
+                let near = read_frame(&rs, tiled(), kept, center, scale, Some(cull));
+                assert_eq!(differing(&near, &reference), 0, "seed {seed}, kept {kept}: zoomed in, tiled differs from whole");
+            }
+        }
+    }
+
+    /// Wipeouts and draw order across a tile edge: a red line drawn first, then a wipeout over
+    /// it in the next cell, then a green line over both, then a blue line of the first cell
+    /// crossing the green one in the second. Each pixel shows what came last, as the whole list
+    /// draws it (drawn tile by tile, the green line would cover the blue one).
+    #[test]
+    fn draw_order_and_wipeouts_hold_across_a_tile_edge() {
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let mut l = DisplayList::default();
+        let mut add = |kind: Kind, color: Rgb, pts: Vec<Vec2>| {
+            let fill = kind.is_fill();
+            let start = if fill { l.tris.len() } else { l.verts.len() } as u32;
+            for p in &pts {
+                l.bounds.add(*p);
+            }
+            let len = pts.len() as u32;
+            if fill {
+                l.tris.extend(pts)
+            } else {
+                l.verts.extend(pts)
+            }
+            l.prims.push(DPrim { handle: Handle(1), color, aci7: false, lw: 0.0, transparency: 0, kind, start, len });
+        };
+        // The cell edge is x = 8; each object's centre is in the cell on one side of it.
+        add(Kind::Polyline, Rgb(255, 0, 0), vec![Vec2::new(3.0, 4.5), Vec2::new(10.5, 4.5)]);
+        add(
+            Kind::Mask,
+            Rgb(0, 0, 0),
+            vec![Vec2::new(7.0, 2.0), Vec2::new(14.0, 2.0), Vec2::new(14.0, 7.0), Vec2::new(7.0, 2.0), Vec2::new(14.0, 7.0), Vec2::new(7.0, 7.0)],
+        );
+        add(Kind::Polyline, Rgb(0, 255, 0), vec![Vec2::new(9.5, 1.0), Vec2::new(9.5, 7.0)]);
+        add(Kind::Polyline, Rgb(0, 0, 255), vec![Vec2::new(5.5, 6.0), Vec2::new(9.9, 6.0)]);
+        add(Kind::Tris, Rgb(255, 255, 255), vec![Vec2::new(6.0, 5.0), Vec2::new(10.0, 5.0), Vec2::new(10.0, 6.0)]);
+        let tiling = Tiling { min: Vec2::ZERO, cell: 8.0, cols: 2, rows: 1, px: 0.25 };
+        let tiled = build_mesh_tiled(&l, Vec2::ZERO, Rgb(9, 9, 9), false, Some(&tiling));
+        assert_eq!(tiled.tiles.as_ref().map(|t| t.groups.len()), Some(2), "the wipeout starts a group");
+        let center = Vec2::new(8.0, 4.0);
+        let reference = read_frame(&rs, build_mesh(&l, Vec2::ZERO, Rgb(9, 9, 9), false), false, center, 4.0, None);
+        let got = read_frame(&rs, tiled, false, center, 4.0, Some(Bounds2::new(Vec2::new(-1.0, -1.0), Vec2::new(17.0, 9.0))));
+        assert_eq!(differing(&got, &reference), 0);
+    }
+
+    /// A small drawing is drawn whole, as before; a large one gets tiles at least 1024 pixels
+    /// across where its zoom band is drawn, never more cells than the most, and a margin to keep
+    /// the order of primitives within the widest line of each other.
+    #[test]
+    fn tiles_follow_the_drawing_and_the_zoom() {
+        let b = Bounds2::new(Vec2::ZERO, Vec2::new(10_000.0, 5_000.0));
+        assert_eq!(Tiling::for_bounds(&b, TILE_VERTICES, 1.0), None, "a small list stays one tile");
+        let t = Tiling::for_bounds(&b, 10_000_000, 0.5).unwrap();
+        assert!(t.cell >= TILE_MIN_PX * 0.5 && t.cells() <= MAX_TILES && t.cells() >= 2, "{t:?}");
+        // The grid covers the drawing on whole multiples of a side in steps of the square
+        // root of two, so a list of about as many vertices (the next zoom band) gets the same.
+        assert!(
+            t.min.x <= b.min.x && t.min.y <= b.min.y && t.min.x + t.cell * t.cols as f64 >= b.max.x && t.min.y + t.cell * t.rows as f64 >= b.max.y
+        );
+        assert!(((t.cell.log2() * 2.0).round() - t.cell.log2() * 2.0).abs() < 1e-9, "{}", t.cell);
+        // (Where the vertex count sets the side, not the pixels: zoomed in.)
+        let z = Tiling::for_bounds(&b, 10_000_000, 0.1).unwrap();
+        assert_eq!(Tiling::for_bounds(&b, 11_000_000, 0.1), Some(z));
+        assert_eq!(Tiling::for_bounds(&b, 10_000_000, 0.12), Some(Tiling { px: 0.12, ..z }));
+        assert_eq!(t.px, 0.5);
+        // Zoomed far out, a tile would be smaller than the screen: one tile.
+        assert_eq!(Tiling::for_bounds(&b, 10_000_000, 20.0), None);
+        // A long, thin drawing.
+        let thin = Tiling::for_bounds(&Bounds2::new(Vec2::ZERO, Vec2::new(1e7, 1.0)), 100_000_000, 1e-3).unwrap();
+        assert!(thin.cells() <= MAX_TILES, "{thin:?}");
+        for bad in [f64::NAN, 0.0, -1.0, f64::INFINITY] {
+            assert_eq!(Tiling::for_bounds(&b, 10_000_000, bad), None);
+        }
+        assert_eq!(Tiling::for_bounds(&Bounds2::EMPTY, 10_000_000, 1.0), None);
+    }
+
+    /// A list of objects, each its own handle, every one a polyline: `specks` of `speck` drawing
+    /// units with 6 points (sub-pixel at the band below: dots), `rings` of `ring` with 12 points
+    /// (a few pixels: boxes) and `lines` long ones crossing the area (drawn as they are), mixed in
+    /// that rotation over `area`, some of them wide.
+    fn crowd(n: usize, area: f64, speck: f64, ring: f64, seed: u64) -> DisplayList {
+        let mut r = Rng(seed);
+        let mut l = DisplayList::default();
+        let colors = [Rgb(255, 0, 0), Rgb(0, 255, 0), Rgb(0, 0, 255), Rgb(255, 255, 0), Rgb(255, 0, 255), Rgb(0, 255, 255)];
+        for i in 0..n {
+            let c = Vec2::new(r.f(area), r.f(area));
+            let start = l.verts.len() as u32;
+            let (pts, size) = match i % 4 {
+                0 | 1 => (6, speck),
+                2 => (12, ring),
+                _ => (2, area * 0.3),
+            };
+            for k in 0..pts {
+                let t = k as f64 / pts as f64 * std::f64::consts::TAU;
+                l.verts.push(c + Vec2::new(t.cos(), t.sin()) * (size / 2.0));
+            }
+            let color = colors[(r.next() % 6) as usize];
+            let lw = if r.next().is_multiple_of(5) { 0.5 } else { 0.0 };
+            l.prims.push(DPrim {
+                handle: Handle(i as u64 + 1),
+                color,
+                aci7: false,
+                lw,
+                transparency: 0,
+                kind: Kind::Polyline,
+                start,
+                len: pts as u32,
+            });
+        }
+        l.bounds = Bounds2::from_points(l.verts.iter().copied());
+        l
+    }
+
+    /// Instances (quads) or vertex pairs (lines) of `bytes`, sorted: what a mesh draws, in any
+    /// order.
+    fn sorted_pieces(bytes: &[u8], size: usize) -> Vec<&[u8]> {
+        let mut v: Vec<&[u8]> = bytes.chunks(size).collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Q6522: a large list at a coarse band is both cut into area tiles and drawn simpler. The
+    /// tiled screen mesh holds exactly the screen mesh's pieces (the same dots, boxes, lines and
+    /// [`Simplified`] counts), each dot in the tile its cell's centre falls in, and a view of a
+    /// corner draws only the tiles reaching into it.
+    #[test]
+    fn a_large_list_at_a_coarse_band_is_tiled_and_simplified() {
+        // 100,000 units across, drawn at up to 20 units a pixel (the band's coarsest) and 10 at
+        // its finest: specks of 3 units are dots, rings of 25 boxes.
+        let (pixel, coarse) = (10.0, 20.0);
+        let l = crowd(60_000, 100_000.0, 3.0, 25.0, 11);
+        let tiling = Tiling::choose(&l, coarse).expect("a large list is tiled");
+        assert!(tiling.cells() >= 4, "{tiling:?}");
+        let origin = Vec2::new(50_000.0, 50_000.0);
+        let whole = build_screen_mesh(&l, origin, Rgb(0, 0, 0), true, Some(pixel));
+        let m = build_screen_mesh_tiled(&l, origin, Rgb(0, 0, 0), true, Some(pixel), Some(&tiling));
+        let tiles = m.tiles.clone().expect("tiled");
+        // Simplified as the untiled screen mesh is: dots counted, boxes drawn.
+        assert_eq!(m.simplified, whole.simplified);
+        let s = m.simplified;
+        assert!(s.dots > 1000 && s.dot_objects >= s.dots && s.boxes > 1000, "{s:?}");
+        let full = build_mesh(&l, origin, Rgb(0, 0, 0), true);
+        assert!(m.line_vertices() + 6 * m.quad_instances() < full.line_vertices() + 6 * full.quad_instances());
+        // The same pieces, cut into tiles.
+        assert_eq!((m.line_vertices(), m.tri_vertices(), m.quad_instances()), (whole.line_vertices(), whole.tri_vertices(), whole.quad_instances()));
+        assert_eq!(sorted_pieces(&m.lines, 2 * VERTEX_SIZE), sorted_pieces(&whole.lines, 2 * VERTEX_SIZE));
+        assert_eq!(sorted_pieces(&m.quads, INSTANCE_SIZE), sorted_pieces(&whole.quads, INSTANCE_SIZE));
+        let held = tiles.drawn(&vec![true; tiles.bounds.len()]);
+        assert_eq!(held.vertices, m.line_vertices() + 6 * m.quad_instances());
+        // Each dot (a quad from a point to itself, a pixel wide) is in the tile its point falls in.
+        let mut dots = 0;
+        for (t, w) in tiles.starts.windows(2).enumerate().take(tiling.cells()) {
+            let [a, b] = w else { continue };
+            let cell = tiling.cell_bounds(t % tiling.cols, t / tiling.cols);
+            for q in m.quads.get(a[2] * INSTANCE_SIZE..b[2] * INSTANCE_SIZE).unwrap_or(&[]).chunks(INSTANCE_SIZE) {
+                let f = |o: usize| f64::from(f32::from_le_bytes([q[o], q[o + 1], q[o + 2], q[o + 3]]));
+                if (f(0), f(4)) == (f(8), f(12)) && f32::from_le_bytes([q[20], q[21], q[22], q[23]]) == DOT_POINTS {
+                    let p = origin + Vec2::new(f(0), f(4));
+                    assert!(cell.expand(1e-6).contains(p), "tile {t}: a dot at {p:?} outside {cell:?}");
+                    dots += 1;
+                }
+            }
+        }
+        assert!(dots * 2 > s.dots, "most dots are thin ones in their cells: {dots} of {}", s.dots);
+        // A view of one corner (the screen 1600 pixels across at the band's finest) draws only
+        // the tiles reaching into it.
+        let view = Bounds2::new(Vec2::ZERO, Vec2::new(16_000.0, 10_000.0)).expand(8.0 * pixel);
+        let part = tiles.drawn(&tiles.visible(&view));
+        assert!(part.tiles < tiles.bounds.len() / 2 && part.vertices * 2 < held.vertices, "{part:?} of {held:?}");
+        assert!(part.tiles > 0);
+        // At full detail (no pixel) the tiles hold every primitive as it is.
+        let all = build_screen_mesh_tiled(&l, origin, Rgb(0, 0, 0), true, None, Some(&tiling));
+        assert_eq!(all.simplified, Simplified::default());
+        assert_eq!(all.lines, build_mesh_tiled(&l, origin, Rgb(0, 0, 0), true, Some(&tiling)).lines);
+    }
+
+    /// Q6522: a list under the tiling limit is not cut, and its screen mesh is exactly what
+    /// [`build_screen_mesh`] makes (dots, boxes and all).
+    #[test]
+    fn a_small_list_draws_its_screen_mesh_as_it_was() {
+        let l = crowd(2_000, 100.0, 0.1, 1.5, 5);
+        let tiling = Tiling::choose(&l, 1.0);
+        assert_eq!(tiling, None, "a small list stays one tile");
+        for lw in [false, true] {
+            let whole = build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), lw, Some(0.5));
+            let m = build_screen_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), lw, Some(0.5), tiling.as_ref());
+            assert!(m.tiles.is_none());
+            assert!(whole.simplified.dots > 0 && whole.simplified.boxes > 0, "{:?}", whole.simplified);
+            assert_eq!(
+                (&m.lines, &m.tris, &m.quads, &m.breaks, m.simplified),
+                (&whole.lines, &whole.tris, &whole.quads, &whole.breaks, whole.simplified)
+            );
+        }
+    }
+
+    /// Q6522: the tiled screen mesh draws pixel for pixel what the untiled one draws: the busy
+    /// list's lines, fills, wipeouts, masks and image, with sub-pixel specks (dots) and small rings
+    /// (boxes) of their own handles among them, whole and zoomed in with the tiles out of view
+    /// left out.
+    #[test]
+    fn tiled_screen_mesh_draws_exactly_what_the_screen_mesh_draws() {
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        for seed in [3u64, 77] {
+            let mut l = busy_list(seed);
+            // Specks and rings after every few primitives of the busy list, so dots fall in every
+            // draw-order group; each its own object.
+            let extra = crowd(900, 64.0, 0.2, 1.2, seed + 1);
+            let mut prims = Vec::with_capacity(l.prims.len() + extra.prims.len());
+            let base = l.verts.len() as u32;
+            l.verts.extend_from_slice(&extra.verts);
+            let mut more = extra.prims.iter().filter(|p| p.len != 2);
+            for (k, p) in std::mem::take(&mut l.prims).into_iter().enumerate() {
+                prims.push(p);
+                for e in more.by_ref().take(if k % 2 == 0 { 2 } else { 1 }) {
+                    prims.push(DPrim { handle: Handle(1000 + e.handle.0), start: e.start + base, ..*e });
+                }
+            }
+            l.prims = prims;
+            let pixel = 0.5;
+            let whole = || build_screen_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(pixel));
+            let tiled = || build_screen_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(pixel), Some(&small_tiles()));
+            let s = whole().simplified;
+            assert!(s.dots > 50 && s.boxes > 50, "{s:?}");
+            assert_eq!(tiled().simplified, s);
+            let tiles = tiled().tiles.expect("tiled");
+            let center = Vec2::new(32.0, 32.0);
+            for kept in [false, true] {
+                let reference = read_frame(&rs, whole(), kept, center, 1.0, None);
+                let all = read_frame(&rs, tiled(), kept, center, 1.0, Some(Bounds2::new(Vec2::new(-8.0, -8.0), Vec2::new(72.0, 72.0))));
+                assert_eq!(differing(&all, &reference), 0, "seed {seed}, kept {kept}: tiled differs from the screen mesh");
+            }
+            let (center, scale) = (Vec2::new(20.0, 44.0), 3.0f32);
+            let half = 32.0 / f64::from(scale);
+            let cull = Bounds2::new(center - Vec2::new(half, half), center + Vec2::new(half, half)).expand(8.0 / f64::from(scale));
+            let part = tiles.drawn(&tiles.visible(&cull));
+            assert!(part.tiles < 40, "{part:?}");
+            for kept in [false, true] {
+                let reference = read_frame(&rs, whole(), kept, center, scale, None);
+                let near = read_frame(&rs, tiled(), kept, center, scale, Some(cull));
+                assert_eq!(differing(&near, &reference), 0, "seed {seed}, kept {kept}: zoomed in, tiled differs from the screen mesh");
+            }
+        }
+    }
+
+    /// A drawing's own draw order (DRAWORDER: an object brought to the front, one sent to the
+    /// back) across tile edges, through the renderer: the tiled frame is the whole one.
+    #[test]
+    fn draworder_across_tile_edges_draws_as_the_whole_list() {
+        use cadaddy_doc::{Common, Drawing, EntityKind, Line, Space};
+        use cadaddy_geom::Vec3;
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let mut d = Drawing::new_imperial();
+        let mut handles = Vec::new();
+        for i in 0..24 {
+            let (a, b) = if i % 2 == 0 {
+                (Vec3::new(2.0, 1.0 + f64::from(i) * 2.5, 0.0), Vec3::new(13.0, 1.5 + f64::from(i) * 2.5, 0.0))
+            } else {
+                (Vec3::new(1.0 + f64::from(i) * 2.5, 2.0, 0.0), Vec3::new(1.5 + f64::from(i) * 2.5, 13.0, 0.0))
+            };
+            let common = Common { color: cadaddy_color::Color::Index(1 + (i % 6) as u8), ..Common::default() };
+            let Ok(h) = d.add(&Space::Model, common, EntityKind::Line(Line { a, b })) else { panic!("add") };
+            handles.push(h);
+        }
+        for (k, h) in handles.iter().enumerate() {
+            if k % 5 == 0 {
+                d.model.bring_to_front(*h);
+            } else if k % 7 == 0 {
+                d.model.send_to_back(*h);
+            }
+        }
+        let l = cadaddy_render::build(&d, &Space::Model, &cadaddy_render::Options { tolerance: 0.1, min_dash: 0.4, ..Default::default() });
+        let tiling = Tiling { min: Vec2::ZERO, cell: 8.0, cols: 8, rows: 8, px: 1.0 };
+        let center = Vec2::new(32.0, 32.0);
+        let whole = read_frame(&rs, build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), false), false, center, 1.0, None);
+        let tiled = read_frame(&rs, build_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), false, Some(&tiling)), false, center, 1.0, None);
+        assert_eq!(differing(&tiled, &whole), 0);
+    }
+
+    /// An edit changes the bytes of the tiles of the objects it changed, and no other tile's:
+    /// the upload cuts each tile into pieces of its own, so the others' pieces are used again.
+    #[test]
+    fn an_edit_changes_only_its_tiles_bytes() {
+        let l = busy_list(9);
+        let before = build_mesh_tiled(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(&small_tiles()));
+        // A short hairline moved a little, inside its cell.
+        let mut moved = l.clone();
+        let Some((i, p)) = moved.prims.iter().enumerate().find(|(_, p)| {
+            let b = Bounds2::from_points(l.points(p).iter().copied());
+            let inside = (b.center().x % 8.0) > 1.0 && (b.center().x % 8.0) < 7.0;
+            p.kind == Kind::Polyline && p.lw == 0.0 && b.width() < 2.0 && b.height() < 2.0 && b.min.x > 10.0 && b.max.x < 54.0 && inside
+        }) else {
+            panic!("no short line")
+        };
+        let (start, len) = (p.start as usize, p.len as usize);
+        for v in moved.verts.iter_mut().skip(start).take(len) {
+            v.x += 0.25;
+        }
+        let after = build_mesh_tiled(&moved, Vec2::ZERO, Rgb(0, 0, 0), true, Some(&small_tiles()));
+        let (tb, ta) = (before.tiles.unwrap(), after.tiles.unwrap());
+        let changed: Vec<usize> = (0..tb.bounds.len())
+            .filter(|&t| {
+                let (a, b): (Vec<&[u8]>, Vec<&[u8]>) =
+                    (tb.parts(&before.lines, 1, VERTEX_SIZE).collect(), ta.parts(&after.lines, 1, VERTEX_SIZE).collect());
+                a.get(t) != b.get(t)
+            })
+            .collect();
+        assert_eq!(changed.len(), 1, "prim {i}: tiles changed {changed:?}");
+        assert_eq!(tb.parts(&before.tris, 0, VERTEX_SIZE).collect::<Vec<_>>(), ta.parts(&after.tris, 0, VERTEX_SIZE).collect::<Vec<_>>());
+    }
+
+    /// Where a tiled mesh's time goes on the synthetic print set, at a room's zoom:
+    /// `cargo test --release -p cadaddy-ui-egui --lib bench_tiled_mesh -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_tiled_mesh() {
+        let d = cadaddy_engine::sample::print_set(100);
+        let px = 0.07;
+        let opts = cadaddy_render::Options { tolerance: px * 0.5, min_dash: px * 2.0, ..Default::default() };
+        let l = cadaddy_render::build(&d, &cadaddy_doc::Space::Model, &opts);
+        let tiling = Tiling::choose(&l, px * 2.0);
+        println!("{} prims, tiling {tiling:?}", l.prims.len());
+        let time = |f: &dyn Fn() -> MeshData| {
+            let mut best = f64::MAX;
+            for _ in 0..3 {
+                let t = web_time::Instant::now();
+                let m = f();
+                best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+                std::hint::black_box(m.lines.len());
+            }
+            best
+        };
+        let whole = time(&|| build_mesh(&l, l.bounds.center(), Rgb(0, 0, 0), true));
+        let one = time(&|| build_mesh_tiled_by(&l, l.bounds.center(), Rgb(0, 0, 0), true, tiling.as_ref(), 1));
+        let many = time(&|| build_mesh_tiled(&l, l.bounds.center(), Rgb(0, 0, 0), true, tiling.as_ref()));
+        let m = build_mesh_tiled(&l, l.bounds.center(), Rgb(0, 0, 0), true, tiling.as_ref());
+        let t = m.tiles.as_ref().map(|t| (t.bounds.len(), t.steps.len(), t.groups.len())).unwrap_or_default();
+        println!("whole {whole:.0} ms; tiled on one thread {one:.0} ms, on {MAX_WRITERS} {many:.0} ms; tiles, steps, groups {t:?}");
+        let ph: Vec<u64> = PHASES.iter().map(|p| p.load(Ordering::Relaxed) / 1000).collect();
+        println!("last build: placing {} ms (of which facts {} ms), writing {} ms", ph[0], ph[1], ph[2]);
+    }
+
+    /// A list large enough to be placed and written on several threads gives byte for byte the
+    /// mesh one thread gives (the one-thread build is the one the read-back tests compare).
+    #[test]
+    fn many_threads_build_the_mesh_one_thread_builds() {
+        let mut r = Rng(5);
+        let mut l = DisplayList::default();
+        for i in 0..160_000u32 {
+            let p = Vec2::new(r.f(4000.0), r.f(4000.0));
+            let q = p + Vec2::new(r.f(30.0) - 15.0, r.f(30.0) - 15.0);
+            let (kind, pts) = match i % 7 {
+                0 => (Kind::Tris, vec![p, q, Vec2::new(p.x, q.y)]),
+                1 => (Kind::Point, vec![p]),
+                2 if i % 1000 == 2 => (Kind::Polyline, vec![Vec2::new(p.x, 0.0), Vec2::new(p.x, 4000.0)]),
+                _ => (Kind::Polyline, vec![p, q, q + Vec2::new(3.0, 1.0)]),
+            };
+            let start = if kind.is_fill() { l.tris.len() } else { l.verts.len() } as u32;
+            for v in &pts {
+                l.bounds.add(*v);
+            }
+            let len = pts.len() as u32;
+            if kind.is_fill() {
+                l.tris.extend(pts)
+            } else {
+                l.verts.extend(pts)
+            }
+            let lw = if i % 5 == 0 { 0.5 } else { 0.0 };
+            l.prims.push(DPrim { handle: Handle(1), color: Rgb((i % 251) as u8, 0, 0), aci7: false, lw, transparency: 0, kind, start, len });
+        }
+        let tiling = Tiling::choose(&l, 1.0).unwrap();
+        let one = build_mesh_tiled_by(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(&tiling), 1);
+        let many = build_mesh_tiled_by(&l, Vec2::ZERO, Rgb(0, 0, 0), true, Some(&tiling), MAX_WRITERS);
+        assert!(one.line_vertices() + one.tri_vertices() + 6 * one.quad_instances() > PARALLEL_VERTICES, "large enough for several threads");
+        assert!(one.lines.iter().any(|&b| b != 0));
+        assert!(one.lines == many.lines && one.tris == many.tris && one.quads == many.quads, "the vertex data differs");
+        let (a, b) = (one.tiles.unwrap(), many.tiles.unwrap());
+        assert_eq!((&a.steps, &a.starts, &a.prims), (&b.steps, &b.starts, &b.prims));
+        assert_eq!(a.bounds, b.bounds);
+        // The same vertices as the whole list, in another order.
+        let whole = build_mesh(&l, Vec2::ZERO, Rgb(0, 0, 0), true);
+        assert_eq!((whole.lines.len(), whole.tris.len(), whole.quads.len()), (one.lines.len(), one.tris.len(), one.quads.len()));
+        let sorted = |v: &[u8], k: usize| {
+            let mut c: Vec<&[u8]> = v.chunks(k).collect();
+            c.sort_unstable();
+            c.into_iter().flatten().copied().collect::<Vec<u8>>()
+        };
+        assert!(sorted(&whole.lines, VERTEX_SIZE * 2) == sorted(&one.lines, VERTEX_SIZE * 2), "the same segments");
+    }
+
+    /// The highest layer of the tiles other than one.
+    #[test]
+    fn marks_know_the_highest_layer_of_the_other_tiles() {
+        let mut t = Mark::NONE;
+        assert_eq!(t.other_than(0), None);
+        t.raise(3, 0);
+        assert_eq!((t.other_than(3), t.other_than(1)), (None, Some(0)));
+        t.raise(3, 2);
+        t.raise(5, 1);
+        assert_eq!((t.other_than(3), t.other_than(5), t.other_than(7)), (Some(1), Some(2), Some(2)));
+        t.raise(5, 4);
+        assert_eq!((t.other_than(3), t.other_than(5)), (Some(4), Some(2)));
     }
 }

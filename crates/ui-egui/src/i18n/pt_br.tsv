@@ -3448,6 +3448,7 @@
 	Place Buildings	Posicionar edifícios
 	Pin	Fixar
 	Unpin	Desafixar
+	Minimize to the rail	Minimizar para a barra
 	Coordination	Coordenação
 	List Sheets	Listar folhas
 	Open Sheet	Abrir folha
@@ -3460,3 +3461,41 @@
 	Symbol Table Log	Registro da tabela de símbolos
 	Revert Symbol Table Change	Reverter alteração da tabela de símbolos
 	Promote Symbol to Library	Promover símbolo para a biblioteca
+	Frame rate to hold while moving	Taxa de quadros a manter ao mover
+	Lower the resolution while panning and zooming when the graphics are slow	Reduzir a resolução ao mover e ampliar quando os gráficos estiverem lentos
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	O desenho fica nítido assim que a vista para. Plotagens, exportações e capturas de tela são sempre em resolução total.
+# BIM views (Q6419).
+	MEP	MEP
+	Full MEP	MEP completo
+	Cabinets	Armários
+	Following the system	Seguindo o sistema
+	Stop following	Parar de seguir
+	Follow System	Seguir o sistema
+	Pipes with no size, not drawn	Tubos sem bitola, não desenhados
+	BIM Views	Vistas BIM
+	BIM View Rules	Regras das vistas BIM
+	BIM View Report	Relatório das vistas BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	A vista 3D do modelo e a caminhada fazem o mesmo ao orbitar e caminhar; a iluminação e o detalhe permanecem como estão.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Digite o nome do arquivo de saída
+	Enter decimal places of accuracy (0 to 16)	Digite as casas decimais de precisão (0 a 16)
+	Enter name of existing block	Digite o nome de um bloco existente
+	Choose mode for selected object conversion	Escolha o modo de conversão dos objetos selecionados
+	Current settings: Object conversion=Delete	Configurações atuais: Conversão de objetos=Excluir
+	Enter attribute values	Digite os valores dos atributos
+	Verify attribute values	Verifique os valores dos atributos
+	Convert to block	Converter em bloco
+	Retain	Manter
+	Binary	Binário
+	mOde	Modo
+	define new drawing	definir novo desenho
+	= (block=output file)	= (bloco=arquivo de saída)
+	* (whole drawing)	* (desenho inteiro)
+	Requires an integer between 0 and 16.	É necessário um inteiro entre 0 e 16.
+	Correct Job Sheet Index	Corrigir o índice de folhas do trabalho
+	Refrigerant Piping	Tubulação de refrigerante
+	Hydronic Piping	Tubulação hidrônica
+	Condensate Drain	Dreno de condensado
+	Mechanical Piping	Tubulação mecânica
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Corrigir elementos por propriedade (BIM)

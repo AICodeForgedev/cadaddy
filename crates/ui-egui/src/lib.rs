@@ -65,8 +65,10 @@ pub mod credits;
 pub mod dialogs;
 pub mod docking;
 pub mod fault;
+pub mod framecost;
 pub mod hatchdlg;
 pub mod hyperlinks;
+pub mod kept;
 pub mod materials;
 mod mtext_editor;
 mod shaded;
@@ -96,6 +98,7 @@ pub mod drywallpalette;
 pub mod dwgpropsdlg;
 pub mod dyngrips;
 pub mod dyninput;
+pub mod dynres;
 pub mod exchangeloss;
 pub mod extractdlg;
 pub mod fieldview;
@@ -1240,6 +1243,11 @@ impl CadApp {
     /// Per-frame logic before layout.
     /// Record `ms` for the frame part `name` if it is its slowest yet ([`CadApp::slowest`]).
     fn note_time(&mut self, name: &'static str, ms: f64) {
+        // The logic's parts are parts of the frame too (`perf.sections`); the frame as a whole
+        // and the time between frames are not.
+        if !matches!(name, "betweenFrames" | "draw") {
+            framecost::add(name, ms);
+        }
         let e = self.slowest.entry(name).or_insert(0.0);
         if ms > *e {
             *e = ms;
@@ -1275,6 +1283,7 @@ impl CadApp {
 
     pub fn logic(&mut self, ctx: &egui::Context) {
         let _busy = diag::busy("logic");
+        let t_start = now_ms();
         // Checks a save left running (what a DWG or DXF file didn't keep) report when done.
         exchangeloss::poll_background(self);
         // A Script Editor script on its worker thread: its calls into the drawing run here.
@@ -1290,6 +1299,7 @@ impl CadApp {
         FILE_DIALOGS_OFF
             .store(cadaddy_engine::sysvars::get(&self.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0), std::sync::atomic::Ordering::Relaxed);
         let t0 = now_ms();
+        framecost::add("logicStart", t0 - t_start);
         if let Some(last) = self.last_frame_start {
             self.note_time("betweenFrames", t0 - last);
         }
@@ -1494,52 +1504,60 @@ impl CadApp {
     }
 
     fn draw(&mut self, ui: &mut egui::Ui) {
+        use framecost::time;
         let t0 = now_ms();
-        control::begin_frame(ui.ctx());
+        time("controlBegin", || control::begin_frame(ui.ctx()));
         let t = theme::Tokens::get();
         // With the ribbon, a menu bar sits above it (AutoCAD's MENUBAR 1); otherwise under the tool bar.
         if self.ui.ribbon && self.ui.in_window_menu {
-            menus::menu_bar(self, ui);
+            time("menuBar", || menus::menu_bar(self, ui));
         }
-        chrome::title_and_toolbar(self, ui);
+        time("titleAndToolbar", || chrome::title_and_toolbar(self, ui));
         if !self.ui.ribbon && self.ui.in_window_menu {
-            menus::menu_bar(self, ui);
+            time("menuBar", || menus::menu_bar(self, ui));
         }
         if self.ui.show_status_bar {
-            chrome::status_bar(self, ui);
+            time("statusBar", || chrome::status_bar(self, ui));
         }
         if self.ui.show_file_tabs {
-            chrome::file_tabs(self, ui);
+            time("fileTabs", || chrome::file_tabs(self, ui));
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
         // The palette rail down the window's edge (Tool Sets is one of its buttons).
         if has_doc {
-            rail::show(self, ui);
+            time("rail", || rail::show(self, ui));
         }
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-            // Walk mode shows in the drawing's own tab (docking), the palettes beside it.
-            if has_doc {
-                docking::show(self, ui);
-            } else {
-                chrome::start_page(self, ui);
-            }
+        time("docking", || {
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+                // Walk mode shows in the drawing's own tab (docking), the palettes beside it.
+                if has_doc {
+                    docking::show(self, ui);
+                } else {
+                    chrome::start_page(self, ui);
+                }
+            })
         });
-        tearoff::show_windows(self, ui.ctx());
-        dialogs::show(self, ui.ctx());
-        authorpalette::show(self, ui.ctx());
-        layers::off_prompt(self, ui.ctx());
-        palettes::patterns::prompt_picker(self, ui.ctx());
-        layouttabs::move_copy_dialog(self, ui.ctx());
-        matchpropdlg::show(self, ui.ctx());
-        renderwin::show(self, ui.ctx());
-        closing::prompt(self, ui.ctx());
-        busy::show(self, ui.ctx());
-        save_loss::prompt(self, ui.ctx());
-        autosave::show(self, ui.ctx());
-        autosave::gpu_notice(self, ui.ctx());
-        autosave::failure_notice(self, ui.ctx());
-        update::tick(self);
-        update::corner(self, ui.ctx());
+        let ctx = ui.ctx().clone();
+        time("dialogs", || {
+            tearoff::show_windows(self, &ctx);
+            dialogs::show(self, &ctx);
+            authorpalette::show(self, &ctx);
+            layers::off_prompt(self, &ctx);
+            palettes::patterns::prompt_picker(self, &ctx);
+            layouttabs::move_copy_dialog(self, &ctx);
+            matchpropdlg::show(self, &ctx);
+            renderwin::show(self, &ctx);
+        });
+        time("notices", || {
+            closing::prompt(self, &ctx);
+            busy::show(self, &ctx);
+            save_loss::prompt(self, &ctx);
+            autosave::show(self, &ctx);
+            autosave::gpu_notice(self, &ctx);
+            autosave::failure_notice(self, &ctx);
+            update::tick(self);
+            update::corner(self, &ctx);
+        });
         if let Some(url) = self.pending_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }
@@ -1550,19 +1568,32 @@ impl CadApp {
             }
             self.last_dialog = self.ui.dialog.clone();
         }
+        // The 2D canvas's moving scale: the settings, a forced one, full while a screenshot waits.
+        let full = !self.queued_shots.is_empty() || !self.pending_shots.is_empty();
+        let (on, fps, forced) = (self.session.settings.dynres, self.session.settings.dynres_fps, self.gpu_caps.dynamic_scale);
+        // The 3D views' (the shaded Model view and Walk): the same settings.
+        let set = |c: &mut dynres::Controller| {
+            c.configure(on, fps, forced);
+            c.full = full;
+        };
+        dynres::with(set);
+        dynres::with_3d(set);
         if let Some(rs) = &self.wgpu_rs {
-            gpu::free_idle_frames(rs);
+            time("gpuFreeIdle", || gpu::free_idle_frames(rs));
+            time("gpuPassTimes", || gpu::read_pass_times(rs));
         }
-        control::observe_drawn(ui.ctx());
+        time("controlObserve", || control::observe_drawn(ui.ctx()));
         self.frame_ms = now_ms() - t0;
+        framecost::add("frame", self.frame_ms);
         // The overlay shows the 2D draw statistics, so they are counted while it is up.
         if self.debug_overlay && !self.canvas.stats.is_on() {
             self.canvas.stats.set_on(true);
         }
         self.canvas.stats.frame_done(t0, self.frame_ms, self.canvas.draw_ms, gpu::take_slowest_upload());
         if self.debug_overlay {
-            debug_overlay::show(self, ui.ctx());
+            time("debugOverlay", || debug_overlay::show(self, ui.ctx()));
         }
+        framecost::end_frame();
         self.note_time("draw", self.frame_ms);
         if startup::frame(self.frame_ms) {
             let report = startup::report();

@@ -10,13 +10,18 @@
     {
       "id": "S-ROOF-FRAMING",
       "trade": "structural",
-      "fills": "a roof level's framing where the roof plans name trusses or joists: the members across the roof's short way at their spacing, as deep as the notes say, bearing on the walls at the level's elevation (its top of plate or truss bearing), the deck on them, the outside walls carried up round them to the deck or the parapet (numbers: spacing_in and depth_in when a note gives none; chord_in, a member's width; deck_in, the deck and roofing over the members; min_span_ft, the shortest piece kept)",
+      "fills": "a roof level's framing where the roof plans name trusses or joists: the members across the roof's short way at their spacing, as deep as the notes say, bearing on the walls at the level's elevation (its top of plate or truss bearing), the deck on them, the outside walls carried up round them to the deck or the parapet (numbers: spacing_in and depth_in when a note gives none; chord_in, a member's width; deck_in, the deck and roofing over the members when no roof sheathing or deck note gives its thickness (deck_words name the deck in a note, deck_not_words mark another deck's note, deck_stop_words start its fastening, deck_min_in..deck_max_in the thicknesses a deck can be); min_span_ft, the shortest piece kept)",
       "basis": "trade practice: pre-engineered wood roof trusses (and open-web joists) are set at 24\" on centre across the building's short way, bearing on the outside walls' top plate, at least 24\" deep for a flat or low-slope roof; the sheathing and roofing go on their top chords, and the outside walls (or a parapet) close the truss space round the edge",
       "member_words": {"truss": ["TRUSS", "TRUSSES"], "joist": ["JOIST", "JOISTS"]},
       "spacing_in": 24.0,
       "depth_in": 24.0,
       "chord_in": 3.5,
       "deck_in": 1.5,
+      "deck_words": ["SHEATHING", "DECK", "DECKING", "PLYWOOD", "OSB"],
+      "deck_not_words": ["FLOOR", "FLOORS", "SUBFLOOR", "WALL", "WALLS", "STAIR", "STAIRS", "BALCONY", "BALCONIES"],
+      "deck_stop_words": ["NAIL", "SCREW", "STAPLE", "FASTEN", "EDGE"],
+      "deck_min_in": 0.25,
+      "deck_max_in": 3.5,
       "min_span_ft": 2.0
     },
     {
@@ -31,6 +36,27 @@
       "end_bearing_ft": 4.0,
       "bearing_words": ["BEARING"],
       "non_bearing_words": ["NON-BEARING", "NONBEARING", "NON BEARING", "NON-LOAD", "NON LOAD"]
+    },
+    {
+      "id": "A-FLOOR-ASSEMBLY",
+      "trade": "architectural",
+      "fills": "what each level's floor element is built of and how thick: a slab its slab notes' (or the design's) thickness; a framed floor its topping and deck, the joists under it their own members (words: slab_marks, a slab's thickness written before one of them, slab_lead, one written after it; separators, the words between a layered note's layers, top to bottom; lead_words, words a layer's thickness may follow (`NOMINAL 3/4\"`); name_skip and name_stop, the words a layer's name drops before it and ends at; topping_words, deck_words, member_words, what a layer is; skip_words, a layer naming a spacing or fastening, not a thickness; numbers: the inches a layer of each kind may be; a framed floor's deck its notes don't give is the trade rules' subfloor, framing.subfloor_in)",
+      "basis": "trade practice: a floor is built as its documents describe it, per level: a slab on grade or a structural slab is its noted thickness; a wood-framed floor is a topping (gypsum concrete or another poured underlayment) on a sheathing deck on joists or floor trusses, the deck the floor's surface under the topping and the joists their own members under it; a 3/4\" (23/32\") rated sheathing is the usual deck where the notes give none; where nothing gives the floor its build-up the build's default slab is used and marked a default",
+      "slab_marks": ["\" SLAB", "\" THICK SLAB", "\" THK SLAB", "\" THK. SLAB", "\" CONCRETE SLAB", "\" CONC. SLAB", "\" CONC SLAB", "\" PT SLAB", "\" P.T. SLAB", "\" POST-TENSIONED SLAB", "\" POST TENSIONED SLAB", "\" STRUCTURAL SLAB", "\" SLAB ON GRADE", "\" S.O.G."],
+      "slab_lead": ["SLAB THICKNESS", "SLAB THK"],
+      "separators": [" ON ", " OVER "],
+      "lead_words": ["NOMINAL", "NOM.", "MIN.", "MINIMUM", "APPROX.", "TYP.", "(", "NEW", "+/-"],
+      "name_skip": ["THICK", "THK.", "THK", "DEEP", "NOMINAL", "NOM.", "MIN."],
+      "name_stop": [",", ";", "(", "@", " SPACED", " AT ", " O.C.", " OC", " U.N.O", " UNO", " TYP"],
+      "topping_words": ["GYPSUM CONCRETE", "GYP CONCRETE", "GYP. CONCRETE", "GYPCRETE", "GYP-CRETE", "GYPSUM CEMENT", "GYPSUM UNDERLAYMENT", "UNDERLAYMENT", "TOPPING", "LIGHTWEIGHT CONCRETE", "LT. WT. CONCRETE", "LEVELING COMPOUND"],
+      "deck_words": ["SHEATHING", "SUBFLOOR", "SUB-FLOOR", "PLYWOOD", "OSB", "FLOOR DECK", "DECKING", "T&G"],
+      "member_words": ["JOIST", "TRUSS", "TRUSSES"],
+      "skip_words": ["@", "O.C.", " OC", "NAIL", "SPACING", "SCREW", "EDGE", "GLUE"],
+      "slab_in": [3.0, 16.0],
+      "topping_in": [0.25, 4.0],
+      "deck_in": [0.375, 2.0],
+      "member_in": [5.0, 48.0],
+      "max_notes": 400
     },
     {
       "id": "A-ROOF-SLOPED-DECK",
@@ -313,10 +339,30 @@
       "duct_gap_in": 1.0
     },
     {
+      "id": "E-WALL-UNDER-CEILING",
+      "trade": "electrical",
+      "fills": "where a wall-mounted device goes when its height would put any part of it above its room's finished ceiling (numbers: min_below_in, the least clearance from its top to the ceiling; below, a kind's own clearance by its kinds or words; legend_words, the words after a legend's or schedule's height that make it the device's clearance under the ceiling; skip_kinds, kinds whose place above a ceiling is their own; skip_from, the height sources that put a device somewhere other than on a wall)",
+      "basis": "trade practice: a wall-mounted device is installed on the wall below the finished ceiling of the room it serves, where it can be seen, reached and serviced, never in the plenum over it; its top is at least its own clearance under the ceiling (an exit sign or emergency light the legend's or schedule's \"x in below ceiling\", else 2 in); a device whose height (a default, a rule, or a document that does not fit the room) puts any part above the ceiling is set at the highest allowed place and reported, its design height kept beside; alternative: a ceiling-mounted version of the device, which the engineer may call for instead",
+      "min_below_in": 2.0,
+      "below": [],
+      "legend_words": ["BELOW FINISHED CEILING", "BELOW FIN. CEILING", "BELOW FIN CEILING", "BELOW FIN. CLG", "BELOW FIN CLG", "BELOW THE CEILING", "BELOW CEILING", "BELOW CLG", "BELOW CEIL", "BELOW CLNG"],
+      "skip_kinds": ["equipment connection", "junction box", "plumbing fixture", "plumbing stack", "damper", "disconnect"],
+      "skip_from": ["equipment", "site_work", "ceiling", "floor"]
+    },
+    {
       "id": "E-CONN-AT-UNIT",
       "trade": "electrical",
       "fills": "where an equipment connection goes when its plan's mark names a piece of equipment built on another level or elsewhere (a roof unit's circuit tagged on a plan under it)",
       "basis": "trade practice: an equipment connection is made at its equipment (its disconnect or junction box on the unit, at the unit's side half way up); a mark naming the unit follows the unit, never the room under it"
+    },
+    {
+      "id": "E-CONN-CEILING-EQUIP",
+      "trade": "electrical",
+      "fills": "where the connection of a piece of ceiling equipment is built (a ceiling exhaust fan's, an above-ceiling unit's), every time the model is built: at the housing of the equipment it serves, as the equipment and the ceiling over it stand then, never at a height fixed earlier (numbers: reach_ft, how far from where its plan puts the connection its equipment may be; tolerance_in, how far from its housing a connection may be and still be at it; clear_in, how far above the ceiling's underside the box's bottom is at least, over the ceiling board)",
+      "basis": "trade practice: the connection of ceiling equipment is made at the equipment's wiring compartment on its housing, above the ceiling in the plenum (NEC 314.29: the box stays accessible, through the equipment or the ceiling; NEC 300.11: wiring above a ceiling is supported there, not by the ceiling), never hung exposed under the finished ceiling nor standing off the housing it serves",
+      "reach_ft": 15.0,
+      "tolerance_in": 12.0,
+      "clear_in": 1.0
     }
   ]
 }

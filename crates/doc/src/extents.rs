@@ -65,7 +65,9 @@ fn mtext_box(t: &crate::MText) -> Bounds2 {
 pub fn mtext_quad(t: &crate::MText) -> [Vec2; 4] {
     let lines = t.contents.split("\\P").count().max(1);
     let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
-    let mut w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
+    let estimate = t.height * 0.8 * longest as f64;
+    // The wrap width only narrows the box: a garbage width must not stretch the drawing extents (#2465).
+    let mut w = if t.width > 0.0 { t.width.min(estimate) } else { estimate };
     let mut h = t.height * 1.66 * lines as f64;
     if let Some(c) = t.columns.as_ref().filter(|_| t.width > 0.0) {
         // Columns side by side, the text flowing down each in turn.
@@ -99,6 +101,22 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
     bounds_in(d, e, depth, &mut HashMap::new())
 }
 
+/// The union of [`entity_bounds`] of top-level objects `es`, each block's contents measured once
+/// for all of them (a run of references to the same symbol costs one pass over its definition).
+pub fn entities_bounds<'a>(d: &'a Drawing, es: impl IntoIterator<Item = &'a Entity>) -> Bounds2 {
+    let mut blocks = HashMap::new();
+    let mut out = Bounds2::EMPTY;
+    for e in es {
+        let b = match d.anno_draw(e) {
+            crate::AnnoDraw::Plain => bounds_in(d, e, 0, &mut blocks),
+            crate::AnnoDraw::Hidden => Bounds2::EMPTY,
+            crate::AnnoDraw::Scaled(f) => bounds_in(d, &crate::anno_scaled(e, f), 0, &mut HashMap::new()),
+        };
+        out = out.union(&b);
+    }
+    out
+}
+
 /// [`entity_bounds`] with the bounds of block contents (in block coordinates) already computed,
 /// by block name and depth: every further reference to a block at that depth reuses them instead of
 /// expanding the block again, so nested or self-referencing blocks cost at most one pass over each
@@ -110,6 +128,11 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
         EntityKind::Table(t) if t.is_broken() => t.bounds(),
         EntityKind::Text(t) if blank(&t.value) => Bounds2::EMPTY,
         EntityKind::MText(t) if blank(&t.contents) => Bounds2::EMPTY,
+        // Text that matches the layout's orientation is drawn upright (#2498).
+        EntityKind::Text(t) if e.common.matches_layout_orientation() => {
+            text_box(&crate::Text { rotation: 0.0, ..t.clone() }, t.value.chars().count())
+        }
+        EntityKind::MText(t) if e.common.matches_layout_orientation() => mtext_box(&crate::MText { rotation: 0.0, ..t.clone() }),
         EntityKind::Text(t) => text_box(t, t.value.chars().count()),
         EntityKind::AttDef(a) => text_box(&a.text, a.tag.chars().count()),
         EntityKind::MText(t) => mtext_box(t),
@@ -197,6 +220,10 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
                         inner
                     }
                 };
+                // The block draws translated by the insertion point (group 12), so its bounds
+                // move with it; the cache above keeps the block's own bounds.
+                let off = if dm.insertion_point.is_finite() { dm.insertion_point.xy() } else { Vec2::ZERO };
+                let inner = if off == Vec2::ZERO || inner.is_empty() { inner } else { Bounds2 { min: inner.min + off, max: inner.max + off } };
                 b = b.union(&inner);
             }
             b
@@ -398,6 +425,38 @@ mod tests {
         entity_bounds(&Drawing::default(), &Entity::new(crate::Handle(1), kind), 0)
     }
 
+    fn mtext(contents: &str, width: f64) -> crate::MText {
+        crate::MText {
+            background: None,
+            insert: Vec3::new(10.0, 10.0, 0.0),
+            height: 2.5,
+            width,
+            attach: 1,
+            rotation: 0.0,
+            style: "Standard".into(),
+            contents: contents.into(),
+            line_spacing: 1.0,
+            line_spacing_exact: false,
+            columns: None,
+        }
+    }
+
+    /// A garbage wrap width only narrows an MTEXT's box, never widens it: a huge group 41 must not
+    /// stretch the drawing extents (#2465).
+    #[test]
+    fn a_huge_mtext_wrap_width_does_not_inflate_the_extents() {
+        let b = bounds(EntityKind::MText(mtext("AB", 300_000_009_519_104.0)));
+        // "AB" at height 2.5 is 2 chars * 0.8 * 2.5 = 4 wide.
+        assert!(b.max.x <= 10.0 + 4.0 + 1e-9, "box ends at x = {}", b.max.x);
+        assert!(b.min.x >= 10.0 - 1e-9);
+    }
+
+    /// A wrap width narrower than the text still bounds the box to that width.
+    #[test]
+    fn a_narrow_mtext_wrap_width_still_sets_the_box_width() {
+        let b = bounds(EntityKind::MText(mtext("A LONG LINE OF WRAPPING TEXT", 5.0)));
+        assert!((b.max.x - b.min.x - 5.0).abs() < 1e-9, "width {}", b.max.x - b.min.x);
+    }
     #[test]
     fn right_justified_text_is_left_of_alignment_point() {
         let b = bounds(EntityKind::Text(text(HAlign::Right, VAlign::Baseline)));

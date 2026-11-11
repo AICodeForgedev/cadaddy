@@ -31,7 +31,7 @@ use super::*;
 use crate::{Result, Session};
 
 /// The key of the view's settings in the building spec.
-const KEY: &str = "bim_view";
+pub(crate) const KEY: &str = "bim_view";
 /// The see-through material the ghosted trades get in the view.
 pub const GHOST_MATERIAL: &str = "BIM Ghost";
 /// Default ghost opacity (architecture at a fifth).
@@ -67,8 +67,9 @@ const fn t(key: &'static str, label: &'static str, group: &'static str, rgb: [u8
 /// The trades and their default colours: architecture neutral, structure tan, supply duct
 /// blue, return and exhaust green, sanitary magenta, vent purple, cold water blue, hot water
 /// orange-red, gas yellow, fire protection red, conduit and tray orange-yellow, equipment light
-/// grey; cabinets and furniture (Q6422) wood browns, each a switch of its own.
-pub const TRADES: [Trade; 26] = [
+/// grey; refrigerant, hydronic and condensate piping (Q6492) the mechanical trade's own rows;
+/// cabinets and furniture (Q6422) wood browns, each a switch of its own.
+pub const TRADES: [Trade; 30] = [
     t("architecture", "Architecture", "Architecture", [214, 212, 206], true),
     t("openings", "Doors and Windows", "Architecture", [176, 198, 212], true),
     t("structure", "Structure", "Structure", [198, 168, 124], true),
@@ -80,6 +81,10 @@ pub const TRADES: [Trade; 26] = [
     t("duct", "Duct", "Mechanical", [92, 160, 212], false),
     t("terminals", "Air Terminals", "Mechanical", [150, 200, 236], false),
     t("equipment", "Equipment", "Mechanical", [190, 194, 200], false),
+    t("pipe_refrigerant", "Refrigerant Piping", "Mechanical", [0, 170, 140], false),
+    t("pipe_hydronic", "Hydronic Piping", "Mechanical", [196, 64, 120], false),
+    t("pipe_condensate", "Condensate Drain", "Mechanical", [130, 160, 176], false),
+    t("pipe_mechanical", "Mechanical Piping", "Mechanical", [110, 140, 180], false),
     t("pipe_cold", "Domestic Cold Water", "Plumbing", [30, 100, 222], false),
     t("pipe_hot", "Domestic Hot Water", "Plumbing", [236, 92, 38], false),
     t("pipe_sanitary", "Sanitary", "Plumbing", [198, 40, 170], false),
@@ -131,6 +136,29 @@ pub struct Look {
     /// what a rule inferred, each in its own colour ([`DERIVED_RGB`], [`INFERRED_RGB`]).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub apart: bool,
+    /// The view drawn (Q6419, [`super::bimviews::View`]): architectural, mep, floor or room;
+    /// none saved: MEP, mains and big gear.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// The whole-building view to go back up to from a level (architectural or mep).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub whole: Option<String>,
+    /// MEP at full density, not mains and big gear.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub full_mep: bool,
+    /// The Room view's room (its number, else its name) on `level`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+    /// The views' switches turned off: `m`, `e`, `p`, `cabinets`.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub switched_off: BTreeSet<String>,
+    /// Furniture in the Room view (off unless turned on).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub furniture: bool,
+    /// The element whose system the view follows (hex handle): what it feeds and what feeds it
+    /// drawn, the rest faded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow: Option<String>,
 }
 
 /// The colours of derived and inferred work when the view shows it apart from drawn.
@@ -140,12 +168,8 @@ pub const INFERRED_RGB: [u8; 3] = [226, 48, 196];
 impl Look {
     /// The settings kept in `d`'s building spec (the defaults when none are).
     pub fn of(d: &Drawing) -> Look {
-        d.building_spec
-            .as_deref()
-            .and_then(|t| serde_json::from_str::<Value>(t).ok())
-            .and_then(|v| v.get(KEY).cloned())
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default()
+        // Read once per spec text: the screen asks for it every frame.
+        Some(crate::specread::get(d, KEY)).filter(|v| !v.is_null()).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
     }
 
     /// The colour of trade `key` (its own, else the default).
@@ -166,6 +190,11 @@ impl Look {
     pub fn shows(&self, c: &Class) -> bool {
         !self.hidden.contains(c.key) && self.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&c.level)) && !self.path_hidden(c)
     }
+}
+
+/// Keeps `look` in the building spec ([`save`]).
+pub(crate) fn save_look(s: &mut Session, look: &Look) -> Result<usize> {
+    save(s, look)
 }
 
 /// Keeps `look` in the building spec; what it hides leaves the selection. Returns how many
@@ -189,9 +218,15 @@ fn save(s: &mut Session, look: &Look) -> Result<usize> {
 }
 
 /// Whether the BIM view in `look` draws the built element `e` of `d` (true for an object the
-/// build didn't make, and for everything while the view is off).
+/// build didn't make, and for everything while the view is off): its switches and branches,
+/// then the active view (Q6419).
 pub fn draws(d: &Drawing, look: &Look, e: &Entity) -> bool {
-    look.off || classify(d, e).is_none_or(|c| look.shows(&c))
+    look.off || draws_in(d, look, &super::bimviews::Scope::of(d, look), e)
+}
+
+/// [`draws`] with the view worked out once.
+pub fn draws_in(d: &Drawing, look: &Look, scope: &super::bimviews::Scope, e: &Entity) -> bool {
+    look.off || classify(d, e).is_none_or(|c| look.shows(&c) && scope.shows(d, e, &c) != super::bimviews::Shown::No)
 }
 
 /// Drops from the selection the elements the view in `look` hides: a level, trade or branch
@@ -203,7 +238,8 @@ fn deselect_hidden(s: &mut Session, look: &Look) -> Result<usize> {
         return Ok(0);
     }
     let d = s.doc()?;
-    let keep: Vec<Handle> = sel.iter().copied().filter(|h| d.model.get(*h).is_none_or(|e| draws(d, look, e))).collect();
+    let scope = super::bimviews::Scope::of(d, look);
+    let keep: Vec<Handle> = sel.iter().copied().filter(|h| d.model.get(*h).is_none_or(|e| draws_in(d, look, &scope, e))).collect();
     let dropped = sel.len() - keep.len();
     if dropped > 0 {
         s.set_selection(keep);
@@ -285,26 +321,34 @@ fn words(s: &str) -> Vec<String> {
 
 /// The trade of a pipe system, by its name.
 pub fn pipe_trade(system: &str) -> &'static str {
-    let low = system.to_ascii_lowercase();
-    let w = words(system);
-    let has = |xs: &[&str]| xs.iter().any(|x| low.contains(x));
-    let word = |xs: &[&str]| w.iter().any(|t| xs.contains(&t.as_str()));
-    if has(&["fire", "sprink", "standpipe"]) || word(&["fp", "fs", "sp"]) {
-        "fire"
-    } else if has(&["sanitary", "sewer", "waste", "soil", "grease"]) || word(&["san", "ss", "sw", "w", "gw"]) {
-        "pipe_sanitary"
-    } else if has(&["vent"]) || word(&["v", "vtr"]) {
-        "pipe_vent"
-    } else if has(&["storm", "rain", "drain"]) || word(&["st", "rd", "sd", "od"]) {
-        "pipe_storm"
-    } else if has(&["gas", "propane"]) || word(&["g", "ng", "lp"]) {
-        "pipe_gas"
-    } else if has(&["hot", "recirc"]) || word(&["hw", "dhw", "hwr", "hwc", "hhw", "dhwr"]) {
-        "pipe_hot"
-    } else if has(&["cold", "domestic", "potable", "water"]) || word(&["cw", "dcw", "dw"]) {
-        "pipe_cold"
-    } else {
-        "pipe"
+    service_key(cadaddy_walk3d::pipeservice::pipe_service(system, ""))
+}
+
+/// The trade row of a pipe service ([`cadaddy_walk3d::pipeservice::pipe_service`]: by the
+/// system's name and layer, Q6492).
+pub fn service_key(service: &str) -> &'static str {
+    match service {
+        "fire" => "fire",
+        "refrigerant" => "pipe_refrigerant",
+        "hydronic" => "pipe_hydronic",
+        "condensate" => "pipe_condensate",
+        "mechanical" => "pipe_mechanical",
+        "sanitary" => "pipe_sanitary",
+        "vent" => "pipe_vent",
+        "storm" => "pipe_storm",
+        "gas" => "pipe_gas",
+        "hot" => "pipe_hot",
+        "cold" => "pipe_cold",
+        _ => "pipe",
+    }
+}
+
+/// The trade row of a built pipe: the service its build stamped on it (the system's name and
+/// layer), else its system's name.
+fn built_pipe_trade(e: &Entity, system: &str) -> &'static str {
+    match made_tag(e, "carries") {
+        Some(sv) if !sv.is_empty() => service_key(sv),
+        _ => pipe_trade(system),
     }
 }
 
@@ -380,7 +424,7 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         let fitting = mpart.starts_with("fitting");
         let (key, noun) = match kind.as_str() {
             "duct" => (duct_trade(made_tag(e, "duct_type"), system), "Duct"),
-            "pipe" => (pipe_trade(system), "Pipe"),
+            "pipe" => (built_pipe_trade(e, system), "Pipe"),
             "tray" => ("tray", "Cable Tray"),
             "conduit" | "cable" => ("conduit", if kind == "cable" { "Cable" } else { "Conduit" }),
             "grounding" => ("conduit", "Grounding"),
@@ -442,6 +486,7 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         "stair" => mk("architecture", "Stairs", typed("Stair")),
         "railing" => mk("architecture", "Railings", typed("Railing")),
         "grid" => mk("architecture", "Ceiling Grid", typed("Ceiling Grid")),
+        super::grids::GRID_PART => mk("structure", "Grids", typed("Grid")),
         "room" => mk("architecture", "Rooms", typed("Room")),
         "door" => mk("openings", "Doors", typed("Door")),
         "window" | "glass" => mk("openings", "Windows", typed("Window")),
@@ -526,14 +571,39 @@ pub fn ghosting(d: &Drawing, look: &Look) -> bool {
     look.ghost.unwrap_or_else(|| d.model.iter().take(MAX_SCAN).any(|e| super::wallgen::made_as(e).is_some_and(|p| p.eq_ignore_ascii_case("mep"))))
 }
 
-/// What the 3D view draws: the built model in the BIM view's look, or `None` when the view is
-/// off or nothing is built (then the drawing is drawn as it is).
+/// What the 3D view draws: the built model in the BIM view's look and its active view, or
+/// `None` when the view is off or nothing is built (then the drawing is drawn as it is).
 pub fn display(d: &Drawing) -> Option<Drawing> {
-    let look = Look::of(d);
+    display_of(d, &Look::of(d))
+}
+
+/// [`display`] in `look`. The active view's allowed set (Q6419, [`super::bimviews`]) is
+/// applied last, after every switch and tree branch: nothing a setting turns on gets past it,
+/// and what the view leaves out is not in the drawing the 3D view builds.
+pub fn display_of(d: &Drawing, look: &Look) -> Option<Drawing> {
+    use super::bimviews::{self, Shown, View};
     if look.off || !has_model(d) {
         return None;
     }
-    Some(compose(d, &look, ghosting(d, &look), true, &|_, _| true))
+    let scope = bimviews::Scope::of(d, look);
+    let mut shown = look.clone();
+    if !scope.view.per_level() {
+        shown.level = None;
+    }
+    // The Architectural view is solid; the others show the architecture pale.
+    let ghost = scope.view != View::Architectural && ghosting(d, look);
+    let faded = std::cell::RefCell::new(std::collections::HashSet::new());
+    let mut out = compose(d, &shown, ghost, true, &|e, c| match scope.shows(d, e, c) {
+        Shown::No => false,
+        Shown::Solid => true,
+        Shown::Ghost => {
+            faded.borrow_mut().insert(e.handle);
+            true
+        }
+    });
+    bimviews::ghost_these(&mut out, &faded.into_inner());
+    bimviews::add_context(&mut out, &scope);
+    Some(out)
 }
 
 /// How far each level's built elements move so the storeys stack: each level is built over its
@@ -713,6 +783,15 @@ fn level_name(s: &Session, cmd: &str, want: &str) -> Result<String> {
     Err(bad(cmd, format!("there is no level named {want} in the built model — levels: {shown:?}")))
 }
 
+/// No level shown: from a level's view back to the whole building's.
+fn clear_level(look: &mut Look) {
+    look.level = None;
+    look.room = None;
+    if super::bimviews::active(look).per_level() {
+        look.view = Some(look.whole.clone().unwrap_or_else(|| super::bimviews::View::Mep.name().into()));
+    }
+}
+
 fn look_json(d: &Drawing, look: &Look, style: &str) -> Value {
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut built = 0usize;
@@ -733,6 +812,7 @@ fn look_json(d: &Drawing, look: &Look, style: &str) -> Value {
         "ghost_opacity": look.opacity(),
         "sheet": look.sheet,
         "level": look.level,
+        "view": super::bimviews::active(look).name(),
         "apart": look.apart,
         "made": made,
         "style": style,
@@ -759,10 +839,14 @@ fn run_look(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(b) = p.get("apart").and_then(Value::as_bool) {
         look.apart = b;
     }
+    // One level shown is the Floor view of it (Q6419); none, back to the whole building.
     match p.get("level") {
-        Some(Value::Null) => look.level = None,
-        Some(Value::String(l)) if l.trim().is_empty() => look.level = None,
-        Some(Value::String(l)) => look.level = Some(level_name(s, "bim.look", l)?),
+        Some(Value::Null) => clear_level(&mut look),
+        Some(Value::String(l)) if l.trim().is_empty() => clear_level(&mut look),
+        Some(Value::String(l)) => {
+            look.level = Some(level_name(s, "bim.look", l)?);
+            super::bimviews::set_view(&mut look, super::bimviews::View::Floor);
+        }
         Some(v) => return Err(bad("bim.look", format!("`level` must be a level name or null, got {v}"))),
         None => {}
     }
@@ -943,12 +1027,20 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
         if bool_or(p, "select", false) || bool_or(p, "zoom", false) {
             let d = s.doc()?;
             let look = Look::of(d);
+            let scope = super::bimviews::Scope::of(d, &look);
             // What the view shows of the branch: a hidden element selected would leave its grips
-            // standing in the view with nothing drawn under them.
-            let (shown, hidden): (Vec<_>, Vec<_>) = model_elements(d).filter(|(_, c)| under(path, c)).partition(|(_, c)| look.off || look.shows(c));
+            // standing in the view with nothing drawn under them. The active view first.
+            let (shown, hidden): (Vec<_>, Vec<_>) = model_elements(d)
+                .filter(|(_, c)| under(path, c))
+                .partition(|(e, c)| look.off || (look.shows(c) && scope.shows(d, e, c) != super::bimviews::Shown::No));
             let hs: Vec<Handle> = shown.into_iter().map(|(e, _)| e.handle).collect();
             if hs.is_empty() && !hidden.is_empty() {
-                return Err(bad(CMD, format!("everything under {path:?} is hidden in the BIM view: tick it (visible: true) to show it first")));
+                return Err(bad(
+                    CMD,
+                    format!(
+                        "everything under {path:?} is hidden in the BIM view: tick it (visible: true), or pick the view that shows it (bim.view), to show it first"
+                    ),
+                ));
             }
             if hs.is_empty() {
                 return Err(bad(CMD, format!("nothing in the model is under {path:?}")));

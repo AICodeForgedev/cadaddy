@@ -397,7 +397,13 @@ pub fn trade_of(kind: &str, system: &str) -> &'static str {
     }
     match k.as_str() {
         "duct" | "terminal" | "air_terminal" | "fitting" if !s.starts_with('P') && !s.starts_with('E') => "mech",
-        "pipe" | "fixture" | "plumbing" | "rough_in" => "plumb",
+        // A pipe by what it carries (Q6492): refrigerant, condensate and hydronic are mechanical.
+        "pipe" => match crate::pipeservice::pipe_trade(system, system) {
+            "mechanical" => "mech",
+            "fire" => "fire",
+            _ => "plumb",
+        },
+        "fixture" | "plumbing" | "rough_in" => "plumb",
         "conduit" | "device" | "panel" | "luminaire" | "receptacle" | "switch" => "elec",
         "column" | "beam" | "joist" | "slab" | "footing" | "stud" => "struct",
         "equipment" if s.starts_with('E') => "elec",
@@ -1096,6 +1102,9 @@ mod tests {
         assert_eq!(trade_of("pipe", "P-DOMW-CW"), "plumb");
         assert_eq!(trade_of("conduit", "E-COND"), "elec");
         assert_eq!(trade_of("pipe", "F-SPRK"), "fire");
+        assert_eq!(trade_of("pipe", "RS-HP-1"), "mech");
+        assert_eq!(trade_of("pipe", "M-REFR"), "mech");
+        assert_eq!(trade_of("pipe", "CHW"), "mech");
         assert_eq!(trade_of("wall", "3D-Walls"), "arch");
         assert_eq!(trade_of("equipment", "E-PANEL"), "elec");
         assert_eq!(trade_of("column", ""), "struct");

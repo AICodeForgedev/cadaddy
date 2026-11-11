@@ -49,12 +49,28 @@ pub struct Gpu {
     edges: Option<Mesh>,
     target: Option<Target>,
     samples: u32,
+    /// Times the walk pass on the GPU for the 3D views' dynamic resolution ([`crate::dynres`])
+    /// when the device has timestamp queries, and the scale the next frame is drawn at when it
+    /// is to be timed (the live view's frames, not a tour export's).
+    timer: Option<crate::gpu::PassTimer>,
+    time_scale: Option<f32>,
 }
 
 impl Gpu {
     /// Samples per pixel the pipelines draw with.
     pub fn samples(&self) -> u32 {
         self.samples
+    }
+
+    /// Time the next frame on the GPU (drawn at `scale` each way), and hand the times that have
+    /// arrived to the 3D views' dynamic resolution.
+    pub(crate) fn time_next(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scale: f32) {
+        if let Some(t) = &self.timer {
+            t.read(device, queue, |ms, s| {
+                crate::dynres::with_3d(|c| c.sample(ms, s));
+            });
+            self.time_scale = Some(scale);
+        }
     }
 
     pub fn new(device: &wgpu::Device, samples: u32) -> Gpu {
@@ -130,6 +146,8 @@ impl Gpu {
             edges: None,
             target: None,
             samples,
+            timer: crate::gpu::PassTimer::on(device),
+            time_scale: None,
         }
     }
 
@@ -156,6 +174,8 @@ impl Gpu {
         }
         queue.write_buffer(&self.uniform, 0, &u);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("walk") });
+        let time_scale = self.time_scale.take();
+        let timed = time_scale.and_then(|_| self.timer.as_ref().and_then(|t| Some((t, t.free_slot()?))));
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("walk"),
@@ -173,7 +193,7 @@ impl Gpu {
                     depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: timed.and_then(|(t, i)| t.writes(i, true, true)),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -185,6 +205,9 @@ impl Gpu {
                     pass.draw(0..m.count, 0..1);
                 }
             }
+        }
+        if let (Some((t, i)), Some(scale)) = (timed, time_scale) {
+            t.written(&mut enc, i, Some(scale));
         }
         queue.submit([enc.finish()]);
     }

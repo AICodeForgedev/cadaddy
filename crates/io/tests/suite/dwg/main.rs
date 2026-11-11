@@ -6,6 +6,8 @@
 
 mod acad_interop;
 mod acis_data_store;
+mod attdef_insert_dwg;
+mod conformance;
 mod dwg_acds;
 mod dwg_active_layout;
 mod dwg_anonymous_block_names;
@@ -29,9 +31,11 @@ mod dwg_roundtrip_losses;
 mod dwg_save_keeps_geometry;
 mod dwg_save_keeps_ole;
 mod dwg_switch;
+mod dwg_table_cell_height;
 mod dwg_write_native;
 mod dwt_template;
 mod embedded_project_data;
 mod low_handseed;
+mod ole2frame_roundtrip;
 mod q249_native_objects;
 mod savefuzz_repros;

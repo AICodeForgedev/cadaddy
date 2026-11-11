@@ -1532,11 +1532,18 @@ pub(crate) fn flat_swings(pts: &[Vec2]) -> Vec<(Vec2, f64, f64, [Vec2; 2])> {
 /// Names traced between two progress lines of the room trace.
 const TRACE_PROGRESS_EVERY: usize = 100;
 
-/// How far round a room's name its trace looks (feet, each way): a room up to twice as wide
-/// round its name. A name in an area that doesn't close (a gap in its walls, an open plan)
-/// stops there instead of searching ever larger windows: a whole sheet's border (a 36" sheet
-/// at 1/8" = 1'-0" is 288 ft wide) and every sheet of a set side by side.
+/// How far round a room's name its first trace looks (feet, each way): the rooms nearly every
+/// name is in (a long corridor's far ends too). A name that finds none so near is traced again across the whole plan it is on
+/// ([`REACH_PLAN_SHARE`]), however wide (a warehouse, a gym, an open floor), once every other
+/// name took its room; a name in an area that doesn't close (a gap in its walls, an open plan)
+/// stops at its own sheet then, instead of searching every sheet of a set side by side.
 const ROOM_REACH_FT: f64 = 150.0;
+/// A room trace's reach as a share of the larger side of the plan its name is on: from anywhere
+/// on the plan, the whole plan lies inside the last window (a boundary counts only strictly
+/// inside a window).
+const REACH_PLAN_SHARE: f64 = 1.02;
+/// The seeds a widened room trace searches from: the name's point and its middle.
+const WIDENED_SEEDS: usize = 2;
 
 /// A turn sharper than this (degrees) between two pieces of a polyline is a corner: a flattened
 /// arc turns a few degrees a piece (a quarter circle drawn in 8 chords, 11¼°), a swing meets its
@@ -1713,7 +1720,114 @@ pub(crate) fn note_like(t: &str) -> bool {
         super::sheet_number(w)
             && (w.contains('-') || w.contains('.') || (i > 0 && (has("SEE") || has("REFER") || has("REF") || has("SHEET") || has("DWG"))))
     });
-    !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref
+    // A design-load or rating string (`ROOF LIVE LOAD 20 PSF`, `WIND 115 MPH`) and a roof or
+    // canopy area's label (`LOW ROOF`, `CANOPY ABOVE`): an area of the plan, never a room (rule
+    // data: `rooms.load_note_words`, `rooms.area_label_words`).
+    let plain: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let load = plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.load_note_words").contains(w));
+    let area = plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.area_label_words").contains(w));
+    // A storey's name alone (`FIRST FLOOR`, `2ND FLR`, `MEZZANINE`): a view's title or a level
+    // marker, no room's name (one with a room's word, `GROUND FLOOR LOBBY`, is a room's).
+    let storey = plain.len() <= 3
+        && cadaddy_walk3d::levels::canonical_level(&up).is_some_and(|(_, k)| k != cadaddy_walk3d::levels::DatumKind::Penthouse)
+        && !plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(w));
+    !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref || load || area || storey
+}
+
+/// How near a side of the area it is traced in an outline's side may stop and still be the
+/// area's border, as a share of the area's width or height.
+const FRAME_SHARE: f64 = 0.01;
+
+/// Whether a traced outline (its bounds `b`) is the border of the area `r` (`[x0, y0, x1, y1]`)
+/// it is traced in, or a frame round it: it reaches every side of the area, within
+/// [`FRAME_SHARE`]. A sheet's border, the box round its drawing area or a view's frame, never a
+/// room: a building's rooms stand inside the view that draws them, with the view's title, notes
+/// and schedules round them.
+fn frames_area(b: &cadaddy_geom::Bounds2, r: &[f64; 4]) -> bool {
+    let (x0, x1) = minmax(r[0], r[2]);
+    let (y0, y1) = minmax(r[1], r[3]);
+    let (w, h) = (x1 - x0, y1 - y0);
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && b.min.x.is_finite() && b.max.y.is_finite()) {
+        return false;
+    }
+    let (tx, ty) = (FRAME_SHARE * w, FRAME_SHARE * h);
+    b.min.x <= x0 + tx && b.min.y <= y0 + ty && b.max.x >= x1 - tx && b.max.y >= y1 - ty
+}
+
+/// Whether a traced outline holds its label: the label's point or a corner of its box inside it,
+/// or its point within half the text height `th` of the outline (a tag's point on a storefront's
+/// line).
+fn holds_label(poly: &[Vec2], at: Vec2, corners: &[Vec2], th: f64) -> bool {
+    cadaddy_geom::point_in_polygon(poly, at)
+        || corners.iter().any(|c| cadaddy_geom::point_in_polygon(poly, *c))
+        || crate::cmd::guided::edge_distance(poly, at) <= 0.5 * th
+}
+
+/// Most lines of a room's name stacked one over the other (`DOUBLE Q ADA` over `(TUB)`): a
+/// stack of more is a note block's lines.
+const MAX_ROOM_NAME_LINES: usize = 2;
+/// The most a note block's next line is below the last, in its text height (line spacing).
+const NOTE_LINE_SPACING: f64 = 2.5;
+/// How far a note block's lines' left ends may differ, in their text height.
+const NOTE_LINE_ALIGN: f64 = 0.75;
+
+/// The texts (indices into `items`: handle, text, insertion point, height) that are lines of a
+/// note block: more than [`MAX_ROOM_NAME_LINES`] lines of about one height, their left ends
+/// lined up, each within [`NOTE_LINE_SPACING`] heights under the one before (a general note's
+/// lines, a legend's, a schedule column's). A room's tag is a name of a line or two, its number,
+/// and nothing lined up under it; room numbers and parenthesised qualifiers don't count as lines.
+pub(crate) fn note_block_lines(items: &[(cadaddy_doc::Handle, String, Vec2, f64)]) -> std::collections::HashSet<usize> {
+    let line = |i: usize| {
+        items.get(i).is_some_and(|(_, t, at, h)| {
+            let t = t.trim();
+            at.is_finite()
+                && h.is_finite()
+                && *h > 0.0
+                && t.chars().filter(|c| c.is_alphabetic()).count() >= 2
+                && !room_number(t)
+                && !(t.starts_with('(') && t.ends_with(')'))
+        })
+    };
+    let mut by_y: Vec<usize> = (0..items.len()).filter(|&i| line(i)).collect();
+    by_y.sort_by(|&a, &b| items[a].2.y.total_cmp(&items[b].2.y));
+    // Each line's next line under it: the nearest below, of about its height, left ends lined up.
+    let mut below: Vec<Option<usize>> = vec![None; items.len()];
+    let mut has_above = vec![false; items.len()];
+    for &i in &by_y {
+        let Some((_, _, at, h)) = items.get(i) else { continue };
+        let from = by_y.partition_point(|&j| items[j].2.y < at.y - NOTE_LINE_SPACING * h);
+        let to = by_y.partition_point(|&j| items[j].2.y < at.y - 0.5 * h);
+        let next = by_y.get(from..to).into_iter().flatten().copied().filter(|&j| {
+            let (_, _, q, qh) = &items[j];
+            *qh >= 0.8 * h && *qh <= 1.25 * h && (q.x - at.x).abs() <= NOTE_LINE_ALIGN * h
+        });
+        // The nearest one under it (the largest y below it).
+        if let Some(j) = next.max_by(|&a, &b| items[a].2.y.total_cmp(&items[b].2.y)) {
+            if let Some(b) = below.get_mut(i) {
+                *b = Some(j);
+            }
+            if let Some(a) = has_above.get_mut(j) {
+                *a = true;
+            }
+        }
+    }
+    // Each stack from its top line down: more lines than a room's name has, a note block.
+    let mut out = std::collections::HashSet::new();
+    for &top in by_y.iter().filter(|&&i| !has_above.get(i).copied().unwrap_or(true)) {
+        let mut stack = vec![top];
+        let mut at = top;
+        while let Some(Some(next)) = below.get(at).copied() {
+            if stack.contains(&next) || stack.len() > items.len() {
+                break;
+            }
+            stack.push(next);
+            at = next;
+        }
+        if stack.len() > MAX_ROOM_NAME_LINES {
+            out.extend(stack);
+        }
+    }
+    out
 }
 
 /// A room label's line wholly in parentheses (`(TUB)` under `DOUBLE Q ADA`) is the name above it
@@ -1771,7 +1885,9 @@ pub(crate) fn area_figure(t: &str) -> bool {
 }
 
 pub(crate) fn room_name_score(t: &str) -> u8 {
-    if equipment_tag(t) || note_like(t) || room_number(t) || area_figure(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 {
+    // Letters one by one (`L J`): a fragment of vertical or spaced text, no name.
+    let letters_only = tag_words(t).iter().all(|w| w.chars().count() <= 1);
+    if equipment_tag(t) || note_like(t) || room_number(t) || area_figure(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 || letters_only {
         0
     } else if tag_words(t).iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(&w.as_str())) {
         3
@@ -1797,6 +1913,15 @@ pub(crate) struct FoundRoom {
     pub area: f64,
     pub perimeter: f64,
     pub confidence: f64,
+}
+
+/// A plan's room trace: the rooms found, and each name whose search stopped at its reach with no
+/// room found (what lies farther was never searched: reported, never taken for "no room here").
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RoomTrace {
+    pub rooms: Vec<FoundRoom>,
+    /// Each such name, where it is, and the reach (drawing units, each way) its search stopped at.
+    pub beyond_reach: Vec<(String, Vec2, f64)>,
 }
 
 /// A room tag block's attribute: `Some(true)` for the room's name (`NAME`, `ROOM_NAME`, `RM NAME`),
@@ -1889,7 +2014,7 @@ pub struct TraceCache {
     /// the model a rebuild regenerated) reads the rooms again instead of tracing them. Every
     /// update of an associative model traced its plan's rooms again (8 s on a 13-room plan),
     /// also when the edit bounded no room and nothing was rebuilt.
-    by_inputs: Vec<(cadaddy_doc::Space, Option<Vec<[f64; 4]>>, std::sync::Arc<TraceInputs>, std::sync::Arc<Vec<FoundRoom>>)>,
+    by_inputs: Vec<(cadaddy_doc::Space, Option<Vec<[f64; 4]>>, std::sync::Arc<TraceInputs>, std::sync::Arc<RoomTrace>)>,
     /// How many times the labels' outlines were searched (the trace's costly part) in this drawing.
     traced: usize,
 }
@@ -1935,7 +2060,7 @@ struct Trace {
     state: std::sync::Weak<Drawing>,
     space: cadaddy_doc::Space,
     regions: Option<Vec<[f64; 4]>>,
-    rooms: std::sync::Arc<Vec<FoundRoom>>,
+    rooms: std::sync::Arc<RoomTrace>,
 }
 
 /// Whether a trace of `old` holds for `now`: the same model objects (their chunks still shared:
@@ -1953,7 +2078,7 @@ fn trace_holds(old: &Drawing, now: &Drawing) -> bool {
 }
 
 impl TraceCache {
-    fn get(&self, d: &std::sync::Arc<Drawing>, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>) -> Option<std::sync::Arc<Vec<FoundRoom>>> {
+    fn get(&self, d: &std::sync::Arc<Drawing>, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>) -> Option<std::sync::Arc<RoomTrace>> {
         let same_ask = |t: &&Trace| t.space == *space && t.regions.as_deref() == regions;
         let exact = self.traces.iter().filter(same_ask).find(|t| std::ptr::eq(t.state.as_ptr(), std::sync::Arc::as_ptr(d)));
         // In paper space only the very same state: its objects are a layout's, not compared here.
@@ -1961,7 +2086,7 @@ impl TraceCache {
             || self.traces.iter().filter(same_ask).filter(|_| !space.is_paper()).find(|t| t.state.upgrade().is_some_and(|old| trace_holds(&old, d)));
         exact.or_else(holds).map(|t| std::sync::Arc::clone(&t.rooms))
     }
-    fn put(&mut self, d: &std::sync::Arc<Drawing>, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, rooms: std::sync::Arc<Vec<FoundRoom>>) {
+    fn put(&mut self, d: &std::sync::Arc<Drawing>, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, rooms: std::sync::Arc<RoomTrace>) {
         // States nothing holds any more can't be asked about again.
         self.traces.retain(|t| t.state.strong_count() > 0);
         if self.traces.len() >= TRACES_KEPT {
@@ -1970,14 +2095,14 @@ impl TraceCache {
         self.traces.push(Trace { state: std::sync::Arc::downgrade(d), space, regions: regions.map(<[_]>::to_vec), rooms });
     }
     /// The rooms last traced from these inputs (in this space and regions).
-    fn by_inputs(&self, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: &TraceInputs) -> Option<std::sync::Arc<Vec<FoundRoom>>> {
+    fn by_inputs(&self, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: &TraceInputs) -> Option<std::sync::Arc<RoomTrace>> {
         self.by_inputs
             .iter()
             .rev()
             .find(|(sp, rs, i, _)| sp == space && rs.as_deref() == regions && i.same_as(inputs))
             .map(|(.., rooms)| std::sync::Arc::clone(rooms))
     }
-    fn put_inputs(&mut self, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: TraceInputs, rooms: std::sync::Arc<Vec<FoundRoom>>) {
+    fn put_inputs(&mut self, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: TraceInputs, rooms: std::sync::Arc<RoomTrace>) {
         self.traced += 1;
         // An edit and its undo (a wall moved and moved back) each find their plan's trace.
         if self.by_inputs.len() >= INPUT_TRACES_KEPT {
@@ -2000,31 +2125,36 @@ impl TraceCache {
 /// [`trace_rooms_in`], read from the drawing state's remembered trace when there is one
 /// ([`TraceCache`]).
 pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
+    Ok(room_trace_in(s, regions)?.rooms.clone())
+}
+
+/// [`rooms_found_in`] with the names whose search stopped at its reach ([`RoomTrace`]).
+pub(crate) fn room_trace_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<std::sync::Arc<RoomTrace>> {
     let space = s.space();
     let state = std::sync::Arc::clone(&s.state()?.doc);
-    if let Some(rooms) = s.state()?.room_trace.get(&state, &space, regions) {
-        return Ok(rooms.as_ref().clone());
+    if let Some(trace) = s.state()?.room_trace.get(&state, &space, regions) {
+        return Ok(trace);
     }
-    let rooms = trace_rooms_in(s, regions)?;
+    let trace = std::sync::Arc::new(trace_rooms_in(s, regions)?);
     // Traced in the state it was asked in (the trace changes nothing): remembered for it.
     if let Ok(st) = s.state_mut()
         && std::sync::Arc::ptr_eq(&st.doc, &state)
     {
-        st.room_trace.put(&state, space, regions, std::sync::Arc::new(rooms.clone()));
+        st.room_trace.put(&state, space, regions, std::sync::Arc::clone(&trace));
     }
-    Ok(rooms)
+    Ok(trace)
 }
 
 /// The rooms around the plan's name labels, traced.
-fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
+fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomTrace> {
     // Several sheets: each traced on its own objects. A room left open on one (a doorway the
     // print draws no leaf across) widens its search window to the plan's extents: those of the
     // one sheet, not of every sheet side by side (where one open room searched them all).
     if let Some(rs) = regions.filter(|r| r.len() > 1) {
         let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
-        let mut out: Vec<FoundRoom> = Vec::new();
+        let mut out = RoomTrace::default();
         for (i, r) in rs.iter().enumerate() {
-            if out.len() >= MAX_ROOMS_ALL_REGIONS {
+            if out.rooms.len() >= MAX_ROOMS_ALL_REGIONS {
                 break;
             }
             // A label is its first region's (as one trace of them all took it).
@@ -2033,9 +2163,10 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
                 continue;
             }
             let found = trace_rooms_in(s, Some(std::slice::from_ref(r)))?;
-            out.extend(found.into_iter().filter(|f| !earlier.iter().any(|e| inside(e, f.at))));
+            out.rooms.extend(found.rooms.into_iter().filter(|f| !earlier.iter().any(|e| inside(e, f.at))));
+            out.beyond_reach.extend(found.beyond_reach.into_iter().filter(|(_, at, _)| !earlier.iter().any(|e| inside(e, *at))));
         }
-        out.truncate(MAX_ROOMS_ALL_REGIONS);
+        out.rooms.truncate(MAX_ROOMS_ALL_REGIONS);
         return Ok(out);
     }
     // A slow phase (over 2 s) goes to the job's progress lines: which one held a long trace up.
@@ -2059,7 +2190,11 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         ents.iter().copied().filter(|e| !tagged || spec.as_ref().is_some_and(|sp| crate::cmd::bspec::room_tag_layer(sp, &e.common.layer))).collect();
     let mut read = texts(&on_tags);
     lift_qualifiers(&mut read);
+    // A note block's lines name no room (a general note's lines inside a roof area or the
+    // sheet's border traced as rooms); their numbers stay numbers.
+    let block = note_block_lines(&read);
     let mut all: Vec<Label> = read.into_iter().map(|(h, t, at, ht)| (h, t, at, ht, false)).collect();
+    let in_block: std::collections::HashSet<cadaddy_doc::Handle> = block.iter().filter_map(|&i| all.get(i).map(|l| l.0)).collect();
     // Room tag blocks: their name and number attributes. The blocks themselves (a box or a bubble
     // around the tag) bound no room.
     let mut tag_blocks = std::collections::HashSet::new();
@@ -2130,7 +2265,11 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     };
     let mut names: Vec<Label> = all
         .iter()
-        .filter(|(_, t, _, _, tag)| t.chars().count() <= 40 && (*tag || !note_like(t)))
+        // A plain text names a room in a room tag's words: not a note's line or sentence, a
+        // title block's or a stamp's words ([`crate::cmd::autospec::room_like_name`]).
+        .filter(|(h, t, _, _, tag)| {
+            t.chars().count() <= 40 && (*tag || (!note_like(t) && !in_block.contains(h) && crate::cmd::autospec::room_like_name(t)))
+        })
         .filter(|l| match spec_rooms {
             Some(rs) => {
                 let t = &l.1;
@@ -2159,9 +2298,15 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     // of the set's sheet numbers is no room's.
     let mut sheet_numbers: std::collections::BTreeSet<String> =
         spec.as_ref().map(|sp| sp.sheets.iter().map(|x| x.number.trim().to_ascii_uppercase()).collect()).unwrap_or_default();
+    // The plans a name may be on (its trace looks across the largest holding it): the trace's
+    // regions, the job's sheets, the spec's level plans.
+    let mut footprints: Vec<[f64; 4]> = regions.map(<[_]>::to_vec).unwrap_or_default();
     if let Ok(Some(job)) = crate::cmd::guided::load_job(s) {
         sheet_numbers.extend(job.sheet_regions.iter().map(|r| r.number.split('/').next().unwrap_or(&r.number).trim().to_ascii_uppercase()));
+        footprints.extend(job.sheet_regions.iter().map(crate::cmd::guided::SheetRegion::plan_rect));
     }
+    footprints.extend(spec.iter().flat_map(|sp| sp.levels.iter().filter_map(|l| l.region)));
+    footprints.retain(|r| r.iter().all(|v| v.is_finite()));
     let mut numbers: Vec<Label> =
         all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase())).cloned().collect();
     numbers.extend(tag_numbers);
@@ -2242,18 +2387,43 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         Some(t)
     };
     let plan = plan.as_ref().unwrap_or(s);
+    // How far each name's trace looks: across the largest plan holding it, else the whole plan
+    // traced; at least [`ROOM_REACH_FT`].
+    let plan_ext = plan.doc()?.extents(&plan.space());
+    let least_reach = ROOM_REACH_FT * 12.0 * k;
+    let reach_at = |p: Vec2| {
+        let span = footprints
+            .iter()
+            .filter(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]))
+            .map(|r| (r[2] - r[0]).abs().max((r[3] - r[1]).abs()))
+            .max_by(f64::total_cmp)
+            .unwrap_or_else(|| plan_ext.width().max(plan_ext.height()));
+        let reach = span * REACH_PLAN_SHARE;
+        if reach.is_finite() && reach > least_reach { reach } else { least_reach }
+    };
+    let mut beyond_reach: Vec<(String, Vec2, f64)> = Vec::new();
     let mut out: Vec<FoundRoom> = Vec::new();
     // Rooms whose only number inside is another size than their name (taken when no tag is near).
     let mut any_size: Vec<(usize, String)> = Vec::new();
     // Whether each room in `out` was traced from round what its name is printed on.
     let mut out_probed: Vec<bool> = Vec::new();
+    // Outlines that were a sheet's border or a view's frame ([`frames_area`]).
+    let mut frames = 0usize;
     let mut outline_cache = None;
     let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
     // A storey of a full set has thousands of names: say how far the trace is.
     let (total, trace_started) = (names.len(), web_time::Instant::now());
     let mut searching = std::time::Duration::ZERO;
-    for (traced, (h, name, at, height, _)) in names.into_iter().enumerate() {
-        if traced > 0 && traced % TRACE_PROGRESS_EVERY == 0 {
+    // Where each name is: a widened search's outline holding another name no room took is no
+    // one room (the floor left over round rooms that don't close, shared by their names).
+    let spots: Vec<(cadaddy_doc::Handle, Vec2)> = names.iter().map(|l| (l.0, l.2)).collect();
+    // Each name is traced within the least reach first; one whose search stopped there with no
+    // room is traced again across its whole plan after every other name took its room (a wider
+    // window finds the floor left over round rooms that don't close: no name takes it first).
+    let mut queue: std::collections::VecDeque<(Label, bool)> = names.into_iter().map(|l| (l, false)).collect();
+    let mut traced = 0usize;
+    while let Some(((h, name, at, height, tag), widened)) = queue.pop_front() {
+        if traced > 0 && traced.is_multiple_of(TRACE_PROGRESS_EVERY) {
             crate::cmd::guided::progress_line(&format!(
                 "  room trace: {traced} of {total} names, {} rooms, {:.0} s ({:.0} s finding boundaries)",
                 out.len(),
@@ -2261,6 +2431,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
                 searching.as_secs_f64()
             ));
         }
+        traced += 1;
         // The room around the label: the first outline, traced from the label's point, its middle,
         // just above or below it or just outside its box, that holds the whole label (a piece of furniture drawn under
         // the label - a mirrored unit's desk - traces a loop the label overhangs); else, as
@@ -2289,11 +2460,23 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         // Whether a loop holding its whole box took it for a note (below): no room is traced
         // round it then either.
         let mut note = false;
-        for (i, seed) in seeds.into_iter().enumerate() {
+        let reach = if widened { reach_at(at) } else { least_reach };
+        // Whether a search stopped at its reach (what lies farther was never searched).
+        let mut capped = false;
+        // Widened, from the name's point and middle only: the seeds round it found what is near
+        // it (the furniture it is printed on) within the least reach already.
+        let seeds = if widened { seeds.get(..WIDENED_SEEDS).unwrap_or(&seeds) } else { seeds.as_slice() };
+        for (i, seed) in seeds.iter().copied().enumerate() {
             let search = web_time::Instant::now();
-            let found = crate::cmd::hatch::loops_at_lazy_within(plan, seed, &mut outline_cache, Some(ROOM_REACH_FT * 12.0 * k));
+            let found = crate::cmd::hatch::loops_at_lazy_within(plan, seed, &mut outline_cache, Some(reach));
             searching += search.elapsed();
-            let Ok(loops) = found else { continue };
+            let loops = match found {
+                Ok(loops) => loops,
+                Err(e) => {
+                    capped |= crate::cmd::hatch::beyond_reach(&e);
+                    continue;
+                }
+            };
             let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
             let poly = polygon(outer);
             if poly.len() < 3 {
@@ -2340,25 +2523,58 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         let (poly, area, probed) = match holds.or(first) {
             Some((poly, area)) if area >= least => (poly, area, false),
             _ if note => continue,
+            _ if widened => {
+                if capped {
+                    beyond_reach.push((name, at, reach));
+                }
+                continue;
+            }
             _ => {
                 let search = web_time::Instant::now();
-                let found = crate::cmd::bspec::outline_round_label_within(plan, at, &mut outline_cache, least, Some(ROOM_REACH_FT * 12.0 * k));
+                let found = crate::cmd::bspec::outline_round_label_within(plan, at, &mut outline_cache, least, Some(reach), &mut capped);
                 searching += search.elapsed();
-                let Some(p) = found else { continue };
-                if p.len() < 3 {
+                let Some((p, area)) = found
+                    .filter(|p| p.len() >= 3)
+                    .map(|p| {
+                        let area = cadaddy_geom::shoelace(&p).abs();
+                        (p, area)
+                    })
+                    .filter(|(_, area)| *area >= min_area)
+                else {
+                    if capped && !widened && reach_at(at) > least_reach {
+                        queue.push_back(((h, name, at, height, tag), true));
+                    } else if capped {
+                        beyond_reach.push((name, at, reach));
+                    }
                     continue;
-                }
-                let area = cadaddy_geom::shoelace(&p).abs();
-                if area < min_area {
-                    continue;
-                }
+                };
                 (p, area, true)
             }
         };
+        // A room's trace holds its own tag: its point, a corner of its box, or its point on the
+        // outline. A loop beside the tag (cut along a line through the tags, under the tag's
+        // box) is another space's.
+        if !holds_label(&poly, at, &corners, th) {
+            continue;
+        }
+        if widened
+            && spots.iter().any(|(sh, q)| {
+                *sh != h && cadaddy_geom::point_in_polygon(&poly, *q) && !out.iter().any(|r| cadaddy_geom::point_in_polygon(&r.outline, *q))
+            })
+        {
+            beyond_reach.push((name, at, reach));
+            continue;
+        }
         // One room per outline: a second label in the same room is its number or a note.
         // (The same loop traced from another seed, or again from round the furniture its name is
         // on, may start at another corner.)
         let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
+        // A sheet's border or a view's frame is no room, whichever label sits in it (a
+        // schedule's header, a note's line): every room is drawn inside the area it is read in.
+        if regions.into_iter().flatten().any(|r| frames_area(&b, r)) {
+            frames += 1;
+            continue;
+        }
         let tol = SAME_OUTLINE_SHARE * (b.width() + b.height());
         if out.iter().zip(&out_probed).any(|(q, q_probed)| {
             let qb = cadaddy_geom::Bounds2::from_points(q.outline.iter().copied());
@@ -2416,12 +2632,23 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
             r.number = Some(t);
         }
     }
-    phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name)", out.len()));
+    phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name, {frames} sheet borders or view frames left out)", out.len()));
+    if !beyond_reach.is_empty() {
+        let shown: Vec<&str> = beyond_reach.iter().take(5).map(|(n, ..)| n.as_str()).collect();
+        let most = beyond_reach.iter().map(|(.., r)| *r).fold(0.0, f64::max) / (12.0 * k);
+        crate::cmd::guided::progress_line(&format!(
+            "  room trace: {} names closed no room within their reach (up to {most:.0} ft each way), not searched farther: {}{}",
+            beyond_reach.len(),
+            shown.join(", "),
+            if beyond_reach.len() > shown.len() { ", ..." } else { "" }
+        ));
+    }
+    let trace = RoomTrace { rooms: out, beyond_reach };
     let space = s.space();
     if let Ok(st) = s.state_mut() {
-        st.room_trace.put_inputs(space, regions, inputs, std::sync::Arc::new(out.clone()));
+        st.room_trace.put_inputs(space, regions, inputs, std::sync::Arc::new(trace.clone()));
     }
-    Ok(out)
+    Ok(trace)
 }
 
 /// Each room traced without a number takes the number tag nearest its name that no room has (in
@@ -2478,8 +2705,10 @@ fn number_from_nearest_tag(rooms: &mut [FoundRoom], numbers: &[Label], regions: 
 
 pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
     let with_outline = bool_or(p, "outline", true);
-    let items: Vec<Value> = rooms_found(s)?
-        .into_iter()
+    let trace = room_trace_in(s, None)?;
+    let items: Vec<Value> = trace
+        .rooms
+        .iter()
         .map(|r| {
             let mut v = json!({
                 "name": r.name, "number": r.number, "at": pt(r.at), "area": round(r.area), "perimeter": round(r.perimeter),
@@ -2492,8 +2721,22 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
             v
         })
         .collect();
-    Ok(page(items, p))
+    let mut out = page(items, p);
+    if !trace.beyond_reach.is_empty() {
+        out["beyondReach"] = beyond_reach_json(&trace.beyond_reach, units_per_inch(s.doc()?));
+    }
+    Ok(out)
 }
+
+/// The names a room trace stopped at its reach for ([`RoomTrace::beyond_reach`]): name, where,
+/// and the reach in feet. At most [`BEYOND_REACH_LISTED`].
+pub(crate) fn beyond_reach_json(beyond: &[(String, Vec2, f64)], k: f64) -> Value {
+    let ft = 12.0 * k;
+    json!(beyond.iter().take(BEYOND_REACH_LISTED).map(|(n, at, r)| json!({"name": n, "at": pt(*at), "reachFt": round(*r / ft)})).collect::<Vec<_>>())
+}
+
+/// Names listed at most in an answer's `beyondReach`.
+const BEYOND_REACH_LISTED: usize = 200;
 
 #[cfg(test)]
 mod tests {
@@ -2897,6 +3140,153 @@ mod tests {
         assert_eq!(s.state().unwrap().room_trace.len(), 2);
     }
 
+    /// A plan's closed areas (inches): `(corners, labels at (x, y))`, each label 6" high.
+    fn plan_of(areas: &[([f64; 4], &[(&str, f64, f64)])]) -> Session {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        for ([x0, y0, x1, y1], labels) in areas {
+            s.execute("pline", &json!({"vertices": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "closed": true})).unwrap();
+            for (t, x, y) in *labels {
+                s.execute("text", &json!({"at": [x, y], "text": t, "height": 6})).unwrap();
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn note_lines_load_strings_and_roof_labels_are_no_rooms() {
+        // Q6285: a plan's general-note lines, a design-load string and a roof area's label were
+        // kept as rooms. Rooms: a name over its number, a name alone, a name of two lines.
+        let mut s = plan_of(&[
+            ([0.0, 0.0, 240.0, 180.0], &[("OFFICE", 80.0, 90.0), ("101", 90.0, 80.0)]),
+            ([300.0, 0.0, 540.0, 180.0], &[("STORAGE", 380.0, 90.0)]),
+            ([600.0, 0.0, 840.0, 180.0], &[("GUEST", 680.0, 95.0), ("LAUNDRY", 680.0, 85.0)]),
+            // A general note's lines, each a few words a room's name could be.
+            (
+                [0.0, 300.0, 400.0, 600.0],
+                &[
+                    ("ALL WORK SHALL", 40.0, 500.0),
+                    ("COMPLY WITH THE", 40.0, 490.0),
+                    ("GOVERNING CODES", 40.0, 480.0),
+                    ("AND ORDINANCES", 40.0, 470.0),
+                ],
+            ),
+            ([500.0, 300.0, 800.0, 600.0], &[("DESIGN WIND 115 MPH", 560.0, 450.0)]),
+            ([900.0, 300.0, 1200.0, 600.0], &[("LOW ROOF", 1000.0, 450.0)]),
+        ]);
+        let rooms = rooms_found(&mut s).unwrap();
+        let mut names: Vec<(String, Option<String>)> = rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![("GUEST".to_string(), None), ("OFFICE".to_string(), Some("101".to_string())), ("STORAGE".to_string(), None)],
+            "only the rooms' tags name rooms"
+        );
+    }
+
+    #[test]
+    fn a_note_block_is_more_lines_than_a_rooms_name() {
+        let item = |t: &str, x: f64, y: f64| (cadaddy_doc::Handle(0), t.to_string(), Vec2::new(x, y), 6.0);
+        // Three lined-up lines: a block. A name over its number and a qualifier, a name of two
+        // lines, a line far under another, and lines not lined up: none.
+        let items = vec![
+            item("ALL WORK SHALL", 0.0, 100.0),
+            item("COMPLY WITH", 2.0, 90.0),
+            item("THE CODES", 0.0, 80.0),
+            item("DOUBLE Q ADA", 200.0, 100.0),
+            item("(TUB)", 200.0, 90.0),
+            item("128", 200.0, 80.0),
+            item("GUEST", 400.0, 100.0),
+            item("LAUNDRY", 400.0, 90.0),
+            item("LOBBY", 400.0, 20.0),
+            item("MECH", 600.0, 100.0),
+            item("ELEC", 640.0, 90.0),
+            item("STOR", 600.0, 80.0),
+        ];
+        let block = note_block_lines(&items);
+        let mut got: Vec<usize> = block.into_iter().collect();
+        got.sort_unstable();
+        assert_eq!(got, vec![0, 1, 2]);
+        assert!(note_block_lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn load_strings_and_roof_or_canopy_labels_are_notes() {
+        for t in [
+            "ROOF LIVE LOAD 20 PSF",
+            "WIND 115 MPH",
+            "3000 PSI",
+            "LOW ROOF",
+            "CANOPY ABOVE",
+            "ROOF BELOW",
+            "OVERHANG",
+            "ABOVE",
+            "LINE OF SOFFIT",
+            "FIRST FLOOR",
+            "2ND FLR",
+            "MEZZANINE",
+        ] {
+            assert!(note_like(t) && room_name_score(t) == 0, "{t}");
+        }
+        // Letters one by one, and a rated wall's label (a title block's or a legend's word).
+        assert_eq!(room_name_score("L J"), 0);
+        assert!(!crate::cmd::autospec::room_like_name("1 HOUR FIRE RATED BARRIER"));
+        for t in ["OFFICE", "LOADING DOCK", "GUEST LAUNDRY", "DOUBLE Q", "ROOFTOP LOUNGE", "GROUND FLOOR LOBBY", "BOH"] {
+            assert!(!note_like(t) && room_name_score(t) > 0, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_trace_holds_its_own_tag() {
+        let sq = [Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(100.0, 100.0), Vec2::new(0.0, 100.0)];
+        let corners = |at: Vec2| [at + Vec2::new(1.0, 1.0), at + Vec2::new(20.0, 1.0), at + Vec2::new(1.0, 5.0), at + Vec2::new(20.0, 5.0)];
+        assert!(holds_label(&sq, Vec2::new(40.0, 50.0), &corners(Vec2::new(40.0, 50.0)), 6.0));
+        // Its point on the outline (a storefront's line), or its box reaching in.
+        assert!(holds_label(&sq, Vec2::new(40.0, 102.0), &corners(Vec2::new(40.0, 102.0)), 6.0));
+        assert!(holds_label(&sq, Vec2::new(-10.0, 50.0), &corners(Vec2::new(-10.0, 50.0)), 6.0));
+        // A loop under the tag's box: another space's.
+        assert!(!holds_label(&sq, Vec2::new(40.0, 120.0), &corners(Vec2::new(40.0, 120.0)), 6.0));
+    }
+
+    #[test]
+    fn a_sheet_border_is_no_room_whatever_label_sits_in_it() {
+        // Q6432: once a note line no longer claimed the sheet's border, the next label inside it
+        // (a schedule's header, its cell's number beside it) took the whole border for its room.
+        // A 36" x 24" sheet's border at 1/2" = 1'-0" (inches: 72 x 48 ft, inside a room trace's
+        // reach): a room drawn inside it, a schedule's header and a cell's number in the
+        // border's corner, the schedule's rows ruled across with no cell closed.
+        let mut s = plan_of(&[
+            ([0.0, 0.0, 864.0, 576.0], &[("DESCRIPTION", 40.0, 530.0), ("204", 40.0, 512.0)]),
+            ([400.0, 150.0, 700.0, 450.0], &[("OFFICE", 500.0, 300.0), ("101", 510.0, 282.0)]),
+        ]);
+        for y in [525.0, 507.0, 489.0] {
+            s.execute("line", &json!({"points": [[20.0, y], [300.0, y]]})).unwrap();
+        }
+        // Traced in the sheet's drawing area (inside its border), in its whole rect, and in one
+        // view of it: the border is never a room, the room in it is.
+        for region in [[10.0, 10.0, 854.0, 566.0], [0.0, 0.0, 864.0, 576.0], [0.0, 0.0, 720.0, 576.0]] {
+            let rooms = rooms_found_in(&mut s, Some(&[region])).unwrap();
+            let names: Vec<(String, Option<String>)> = rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+            assert_eq!(names, vec![("OFFICE".to_string(), Some("101".to_string()))], "{region:?}");
+        }
+    }
+
+    #[test]
+    fn an_outline_reaching_every_side_of_its_area_is_its_frame() {
+        let b = |x0: f64, y0: f64, x1: f64, y1: f64| cadaddy_geom::Bounds2::new(Vec2::new(x0, y0), Vec2::new(x1, y1));
+        let area = [10.0, 10.0, 1010.0, 710.0];
+        // The border outside the area, the area's own box, a frame stopping just short of it.
+        assert!(frames_area(&b(0.0, 0.0, 1020.0, 720.0), &area));
+        assert!(frames_area(&b(10.0, 10.0, 1010.0, 710.0), &area));
+        assert!(frames_area(&b(15.0, 14.0, 1005.0, 706.0), &[1010.0, 710.0, 10.0, 10.0]));
+        // A building or a room: short of a side, however big.
+        assert!(!frames_area(&b(10.0, 10.0, 1010.0, 600.0), &area));
+        assert!(!frames_area(&b(100.0, 100.0, 900.0, 600.0), &area));
+        // No area to frame.
+        assert!(!frames_area(&b(0.0, 0.0, 1.0, 1.0), &[0.0, 0.0, 0.0, 0.0]));
+        assert!(!frames_area(&b(0.0, 0.0, 1.0, 1.0), &[0.0, 0.0, f64::NAN, 1.0]));
+    }
+
     #[test]
     fn no_rooms_is_remembered_too() {
         // An outline with no label: the trace finds nothing, and that is kept for the state.
@@ -3034,5 +3424,112 @@ mod tests {
         };
         assert_eq!(key(&again), key(&traced_afresh));
         assert_eq!(key(&again), key(&first));
+    }
+
+    /// A room `w` × `h` inches from the origin with its name at the centre, inside a sheet's
+    /// border 100 ft off each side, in a new imperial drawing.
+    fn bordered_room(w: f64, h: f64, name: &str) -> Session {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        s.execute("pline", &json!({"vertices": [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]], "closed": true})).unwrap();
+        s.execute(
+            "pline",
+            &json!({"vertices": [[-1200.0, -1200.0], [w + 1200.0, -1200.0], [w + 1200.0, h + 1200.0], [-1200.0, h + 1200.0]], "closed": true}),
+        )
+        .unwrap();
+        s.execute("text", &json!({"at": [w / 2.0, h / 2.0], "text": name, "height": 12})).unwrap();
+        s
+    }
+
+    /// A room wider than any fixed reach (a 400 × 250 ft open floor, its far walls 200 ft from its
+    /// name) is still traced: the reach is the plan's own size, and the last window searched is
+    /// the reach itself, not the last doubling short of it. A 100 × 80 ft room is traced too.
+    #[test]
+    fn a_room_wider_than_a_fixed_reach_is_still_traced() {
+        for (w, h) in [(4800.0, 3000.0), (1200.0, 960.0), (9600.0, 1200.0)] {
+            let mut s = bordered_room(w, h, "WAREHOUSE");
+            let rooms = rooms_found(&mut s).unwrap();
+            assert_eq!(rooms.len(), 1, "{w} x {h}: {rooms:?}");
+            let r = &rooms[0];
+            assert!((r.area - w * h).abs() < 1e-3 * w * h, "{w} x {h}: the room, not the border: {}", r.area);
+        }
+    }
+
+    /// A plan whose extents are vast (a stray object far off, 300,000 ft away) still traces its
+    /// rooms: the first window is never wider than the reach, so it is searched.
+    #[test]
+    fn rooms_are_traced_on_a_plan_with_vast_extents() {
+        let mut s = one_room(true);
+        s.execute("line", &json!({"points": [[3.6e6, 3.6e6], [3.6e6 + 12.0, 3.6e6]]})).unwrap();
+        let rooms = rooms_found(&mut s).unwrap();
+        assert_eq!(rooms.len(), 1, "{rooms:?}");
+        assert!((rooms[0].area - 14400.0).abs() < 1.0, "{}", rooms[0].area);
+    }
+
+    /// Two level plans side by side, 10,000 ft apart (a set's sheets): a name in a 400 × 250 ft
+    /// area left open on the first looks across its own plan, no farther, and is reported as not
+    /// searched farther (in the trace, `plan.rooms` and `rooms.list`); the closed room on the
+    /// second plan is traced.
+    #[test]
+    fn a_name_whose_trace_stops_at_its_plan_is_reported() {
+        let mut s = Session::new();
+        let layer = |s: &mut Session, name: &str| s.execute("layer.new", &json!({"name": name, "current": true})).unwrap();
+        layer(&mut s, "A-WALL");
+        // its walls' two faces, open on the south between x = 2600 and 4000
+        s.execute("pline", &json!({"vertices": [[2600.0, 0.0], [0.0, 0.0], [0.0, 3000.0], [4800.0, 3000.0], [4800.0, 0.0], [4000.0, 0.0]]})).unwrap();
+        s.execute("pline", &json!({"vertices": [[2600.0, 6.0], [6.0, 6.0], [6.0, 2994.0], [4794.0, 2994.0], [4794.0, 6.0], [4000.0, 6.0]]})).unwrap();
+        let x = 120_000.0;
+        s.execute("pline", &json!({"vertices": [[x, 0.0], [x + 1200.0, 0.0], [x + 1200.0, 960.0], [x, 960.0]], "closed": true})).unwrap();
+        s.execute("pline", &json!({"vertices": [[x + 6.0, 6.0], [x + 1194.0, 6.0], [x + 1194.0, 954.0], [x + 6.0, 954.0]], "closed": true})).unwrap();
+        layer(&mut s, "A-ROOM-TAG");
+        s.execute("text", &json!({"at": [2400, 1500], "text": "WAREHOUSE", "height": 12})).unwrap();
+        s.execute("text", &json!({"at": [x + 500.0, 480.0], "text": "OFFICE", "height": 12})).unwrap();
+        let spec = json!({
+            "version": 1,
+            "units_per_foot": 12,
+            "levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 20, "ceiling_ft": 18, "region": [-1200, -1200, 6000, 4200], "base": [0, 0]},
+                {"name": "L2", "elevation_ft": 20, "height_ft": 12, "ceiling_ft": 9, "region": [x - 1200.0, -1200, x + 2400.0, 2200], "base": [x, 0]}
+            ],
+            "layers": [
+                {"layer": "A-WALL", "role": "wall", "wall_type": "Wall"},
+                {"layer": "A-ROOM-TAG", "role": "room_tag"}
+            ],
+            "wall_types": [{"name": "Wall", "thickness_in": 6, "from": "pairs"}]
+        });
+        s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap();
+        let trace = room_trace_in(&mut s, None).unwrap();
+        let names: Vec<&str> = trace.rooms.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["OFFICE"], "{trace:?}");
+        let [(name, at, reach)] = trace.beyond_reach.as_slice() else { panic!("{trace:?}") };
+        assert_eq!(name, "WAREHOUSE");
+        assert!(at.dist(Vec2::new(2400.0, 1500.0)) < 1.0, "{at:?}");
+        // across its own plan (7,200" by 5,400"), short of the other one
+        assert!(*reach >= 7200.0 && *reach < 8000.0, "{reach}");
+        let answer = s.execute("plan.rooms", &json!({"outline": false})).unwrap();
+        assert_eq!(answer["beyondReach"][0]["name"], "WAREHOUSE", "{answer}");
+        assert_eq!(answer["beyondReach"][0]["reachFt"].as_f64().map(f64::round), Some(612.0), "{answer}");
+        let listed = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+        assert_eq!(listed["count"], 1, "{listed}");
+        assert_eq!(listed["beyondReachCount"], 1, "{listed}");
+        assert_eq!(listed["beyondReach"][0]["name"], "WAREHOUSE", "{listed}");
+    }
+
+    /// The floor left over round rooms (a 400 × 250 ft outline, a closed office in it, two names
+    /// whose rooms don't close) is no one room: the office is traced, and the two names, each
+    /// seeing the other in the outline a widened search finds, are reported instead of either
+    /// taking the whole floor.
+    #[test]
+    fn the_floor_left_over_round_rooms_is_no_one_room() {
+        let mut s = bordered_room(4800.0, 3000.0, "LOBBY");
+        s.execute("pline", &json!({"vertices": [[600, 600], [840, 600], [840, 840], [600, 840]], "closed": true})).unwrap();
+        s.execute("text", &json!({"at": [660, 720], "text": "OFFICE", "height": 12})).unwrap();
+        s.execute("text", &json!({"at": [3600, 600], "text": "CORRIDOR", "height": 12})).unwrap();
+        let trace = room_trace_in(&mut s, None).unwrap();
+        let names: Vec<&str> = trace.rooms.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["OFFICE"], "{trace:?}");
+        let mut reported: Vec<&str> = trace.beyond_reach.iter().map(|(n, ..)| n.as_str()).collect();
+        reported.sort_unstable();
+        assert_eq!(reported, ["CORRIDOR", "LOBBY"], "{trace:?}");
     }
 }

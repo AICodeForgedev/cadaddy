@@ -2605,6 +2605,16 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
     built
 }
 
+/// Whether a panel's mounting (its schedule's `MOUNTING`) sets it into its wall: recessed or
+/// flush (the words as data), its front at the wall's face; else it hangs on the face.
+pub(crate) fn mounted_in_wall(e: &cadaddy_walk3d::MepEquipment) -> bool {
+    let words = cadaddy_mepfix::wordrules::words("equipment.in_wall_mounting_words");
+    e.properties.get("MOUNTING").is_some_and(|m| {
+        let u = m.to_ascii_uppercase();
+        words.iter().any(|w| u.contains(&w.to_ascii_uppercase()))
+    })
+}
+
 /// Where a piece of equipment stands in plan as [`build_equipment`] builds it: its box's middle
 /// line (`a` to `b`), its depth across that line, and the wall face it is set on.
 pub(crate) struct EquipmentPlan {
@@ -2635,7 +2645,7 @@ pub(crate) fn equipment_plan(
     };
     match face {
         Some(f) => {
-            let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
+            let recessed = mounted_in_wall(e);
             let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
             let along = f.along * (w / 2.0);
             // The box's middle line, half its depth from the face (into the wall when recessed).
@@ -2915,6 +2925,14 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         ];
         if let Some(dt) = duct_type_str(sy) {
             x.push(t(1000, format!("duct_type:{dt}")));
+        }
+        // What a pipe carries, by its system's name and layer (Q6492): its trade in the model
+        // tree, the clash trades and the takeoff.
+        if sy.kind == MepKind::Pipe {
+            let service = cadaddy_walk3d::pipeservice::pipe_service(&sy.name, &sy.layer);
+            if !service.is_empty() {
+                x.push(t(1000, format!("carries:{service}")));
+            }
         }
         for (k, s) in sizes.iter().enumerate().take(2) {
             if s[0] > 0.0 && s[0].is_finite() {

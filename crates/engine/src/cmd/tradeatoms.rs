@@ -19,6 +19,12 @@
 //!   openings taken out; corner bead at outside corners and free ends, tape by the joints the
 //!   layout makes, joint compound and screws by their rules; ceilings the same.
 //! - **Insulation**: a batt in each stud bay (its R-value by the cavity), boards by the sheet.
+//! - **Cladding** (`walls::cladding`): each exterior finish layer of a wall type over its face's
+//!   net area: stucco by the panel between its control joints with its lath, weather barrier,
+//!   screed, casing beads and corner aids; siding by the course; panels and EIFS boards by the
+//!   sheet; masonry veneer by the course with its ties (the masonry trade's); any other finish
+//!   layer by area. What a layer implies (the lath and barrier stucco needs) is laid in by rule
+//!   and marked inferred unless the assembly lists it itself.
 //! - **Firestopping** (`openings`): one system at each place a pipe, duct, conduit or cable
 //!   piece passes through a fire-rated wall.
 //! - **Finishes** (`rooms`): paint per surface and coat, flooring per room by its finish (pieces
@@ -60,7 +66,7 @@ pub(crate) use docs::Fact;
 const RULES: &str = include_str!("tradeatoms.json");
 /// The trades, in the order a report lists them.
 pub(crate) const TRADES: &[&str] =
-    &["concrete", "framing", "masonry", "drywall", "insulation", "firestopping", "finishes", "openings", "specialties"];
+    &["concrete", "framing", "masonry", "drywall", "insulation", "cladding", "firestopping", "finishes", "openings", "specialties"];
 /// Most pieces one build makes, elements looked at (hostile models).
 const MAX_PIECES: usize = 1_500_000;
 const MAX_ELEMENTS: usize = 2_000_000;
@@ -72,12 +78,12 @@ const LAYER_PREFIX: &str = "3D-Atoms-";
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.atoms.build", "Lay Out Trade Pieces", run_build).long()
-            .params("{trades?: [concrete|framing|masonry|drywall|insulation|firestopping|finishes|openings|specialties] (default all)} → {pieces, byTrade: {trade: {kind: n}}, ms, notes, indexRows}: the built model's walls, floors, ceilings, rooms, doors and windows laid out again as their trades' pieces (model.build does this itself); the pieces of the trades named are replaced, the count index rebuilt"),
+            .params("{trades?: [concrete|framing|masonry|drywall|insulation|cladding|firestopping|finishes|openings|specialties] (default all)} → {pieces, byTrade: {trade: {kind: n}}, ms, notes, indexRows}: the built model's walls, floors, ceilings, rooms, doors and windows laid out again as their trades' pieces (model.build does this itself); the pieces of the trades named are replaced, the count index rebuilt"),
         CommandSpec::new("bim.atoms.report", "Trade Pieces Report", run_report)
             .params("{level?, trade?, group_by?: kind|item (default kind)} → {levels: [{level, trades: [{trade, rows: [{kind, item?, count, pieces?, length_ft, area_sf?, volume_cf?, volume_cy?, weight_lb?}], waste_factor?}]}], totals: {trade: {kind: {count, pieces?, length_ft, area_sf?, volume_cy?, weight_lb?, with_waste?: {pieces, area_sf?, volume_cy?}}}}, compare: [{what, documents, source, model, model_query, difference_pct?}], answer_ms: {query: ms}, rules_from: {documents, defaults, project}}: per level and trade the pieces and their totals from the count index, beside the quantities the documents give")
             .noundo(),
         CommandSpec::new("bim.atoms.rules", "Trade Piece Rules", run_rules)
-            .params("{section?: framing|drywall|insulation|masonry|concrete|finishes|firestopping|openings|specialties} → {rules: {section: {key: {value, source}}}, facts: [{trade, key, value, source}], how_to_override}: the trade rules the layouts use, each value with where it came from (the documents, a project rule, the defaults)")
+            .params("{section?: framing|drywall|insulation|cladding|masonry|concrete|finishes|firestopping|openings|specialties} → {rules: {section: {key: {value, source}}}, facts: [{trade, key, value, source}], how_to_override}: the trade rules the layouts use, each value with where it came from (the documents, a project rule, the defaults)")
             .noundo(),
         CommandSpec::new("bim.atoms.docs", "Read Trade Documents", run_docs).params(
             "{paths: [file or folder] or one path (submittals, specification sections; PDF or text), store?: bool (default true: keep the facts in the building spec for the layouts), show_text?: characters (each file's text as it was read, up to this many: to check a document that gave nothing)} → {files: [{file, facts, trades, text?}], facts: [{trade, key, value, number?, source, quote}], by_trade: {trade: n}, unread: [{file, why}]}: what the trades' documents say that the pieces are laid out from: concrete mixes and strengths, slab thickness, post-tensioning strand, tendon and chair spacing, vapor barrier, joist and truss spacing, depth and listed quantities, insulation R-values, paint coats, flooring sizes, finish level, door hardware sets and their doors, toilet accessories and their quantities",
@@ -247,6 +253,11 @@ impl Rules {
         }
     }
 
+    /// What set `path`'s value: `documents` or `project`; None for the data's default.
+    pub(crate) fn origin(&self, path: &str) -> Option<&'static str> {
+        self.from.get(path).copied()
+    }
+
     /// Whether `path`'s value is the data's default (not the documents' or the project's).
     pub(crate) fn is_default(&self, path: &str) -> bool {
         !self.from.contains_key(path)
@@ -281,7 +292,8 @@ pub(crate) fn trade_eq(want: &str, have: &str) -> bool {
         "structure" | "structural" | "reinforcement" | "rebar" | "pt" => "concrete",
         "gypsum" | "gyp" | "board" | "sheetrock" => "drywall",
         "studs" | "carpentry" | "rough carpentry" | "wood" => "framing",
-        "cmu" | "block" => "masonry",
+        "cmu" | "block" | "brick" | "veneer" => "masonry",
+        "stucco" | "plaster" | "lath" | "siding" | "eifs" | "exterior finish" | "weather barrier" | "wrb" => "cladding",
         "firestop" => "firestopping",
         "paint" | "flooring" | "finish" => "finishes",
         "doors" | "windows" | "hardware" => "openings",
@@ -348,6 +360,8 @@ pub(crate) struct Piece {
     pub links: Vec<usize>,
     /// Elements it connects to (a host's neighbours, a penetrating pipe).
     pub touches: Vec<Handle>,
+    /// Laid in by a rule where no document lists it: the rule (its provenance is inferred).
+    pub inferred: Option<String>,
     /// A body that is not boxes (a slab's outline, a room's floor).
     pub custom: Option<Mesh>,
 }
@@ -447,6 +461,7 @@ fn trade_color(trade: &str) -> u8 {
         "masonry" => 22,
         "drywall" => 254,
         "insulation" => 50,
+        "cladding" => 32,
         "firestopping" => 1,
         "finishes" => 151,
         "openings" => 130,
@@ -507,6 +522,10 @@ pub(crate) fn emit(d: &mut Drawing, batch: &Batch) -> Emitted {
             t(1000, format!("type:{}", p.item)),
             t(1000, format!("size:{}", p.size)),
         ];
+        let mut tags = tags;
+        if let Some(basis) = &p.inferred {
+            tags.extend(super::provenance::tags(cadaddy_walk3d::Made::Inferred, basis));
+        }
         let ps = piece_props(p);
         let xdata = props::write(&tags, &ps);
         match d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(mesh)) {
@@ -673,7 +692,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<S
     let want = |t: &str| only.is_none_or(|o| o.contains(t));
     let mut batch = Batch::default();
     let ctx = Ctx::new(d, sp);
-    if want("framing") || want("drywall") || want("insulation") || want("masonry") || want("finishes") {
+    if want("framing") || want("drywall") || want("insulation") || want("masonry") || want("cladding") || want("finishes") {
         walls::lay_out(d, sp, &rules, &ctx, &mut batch, &want);
     }
     if want("concrete") || want("framing") {
@@ -883,6 +902,7 @@ fn waste_of(r: &Rules, trade: &str) -> Option<(f64, String)> {
         "drywall" => "drywall.waste_factor",
         "insulation" => "insulation.waste_factor",
         "masonry" => "masonry.waste_factor",
+        "cladding" => "cladding.waste_factor",
         "concrete" => "concrete.waste_factor",
         "finishes" => "finishes.flooring_waste_factor",
         _ => return None,
@@ -955,7 +975,22 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         let mut m = serde_json::Map::new();
         for (kind, tally) in kinds {
             let mut j = super::mepatoms::tally_json(tally);
-            let buys = matches!(kind.as_str(), "sheet" | "pour" | "batt" | "board" | "cmu" | "flooring");
+            let buys = matches!(
+                kind.as_str(),
+                "sheet"
+                    | "pour"
+                    | "batt"
+                    | "board"
+                    | "cmu"
+                    | "flooring"
+                    | "plaster"
+                    | "lath"
+                    | "weather_barrier"
+                    | "siding"
+                    | "panel"
+                    | "brick"
+                    | "cladding"
+            );
             if let Some((f, _)) = waste.as_ref().filter(|_| buys) {
                 let r2 = |v: f64| (v * 100.0).round() / 100.0;
                 let mut w = json!({"pieces": (tally.pieces() * (1.0 + f)).ceil()});

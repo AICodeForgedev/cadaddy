@@ -442,6 +442,8 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         Some(rs) => (rs, true),
         None => (rooms_in(s, regions.as_deref())?, false),
     };
+    // Traced (not built): the names whose search stopped at its reach (read again, not traced).
+    let beyond = if built { Vec::new() } else { super::perceive::geometry::room_trace_in(s, regions.as_deref())?.beyond_reach.clone() };
     if let Some(l) = &level {
         rs.retain(|r| r.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(l)));
     }
@@ -460,7 +462,12 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let list: Vec<Value> = rs.iter().map(|r| room_json(d, r, outline)).collect();
-    Ok(json!({ "rooms": list, "count": rs.len() }))
+    let mut out = json!({ "rooms": list, "count": rs.len() });
+    if !beyond.is_empty() {
+        out["beyondReach"] = super::perceive::geometry::beyond_reach_json(&beyond, units_per_inch(d));
+        out["beyondReachCount"] = json!(beyond.len());
+    }
+    Ok(out)
 }
 
 /// How far the 3D model (`model.render`, the BIM view) draws each level's built objects from

@@ -813,7 +813,7 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str, fr
         let mut core: Vec<AssemblyLayer> = Vec::new();
         // Each face's layers (outer first), with the marks a layer is only for.
         let mut faces: Vec<(LayerSide, AssemblyLayer, Vec<String>)> = Vec::new();
-        let mut unsided: Vec<String> = Vec::new();
+        let mut unsided: Vec<(String, Vec<AssemblyLayer>, Vec<String>)> = Vec::new();
         for (c, s, tip) in &read {
             let side_of = |x: f64| match middle {
                 Some(m) if x < m => Some(LayerSide::Side1),
@@ -839,10 +839,30 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str, fr
                 }
                 Says::Face { layers, both: false, only } => match tip.and_then(|t| side_of(t.x)) {
                     Some(side) => faces.extend(layers.iter().map(|l| (side, l.clone(), only.clone()))),
-                    None => unsided.push(c.s.clone()),
+                    None => unsided.push((c.s.clone(), layers.clone(), only.clone())),
                 },
             }
         }
+        // A one-face callout with no leader that names an exterior finish (stucco) is on the
+        // wall's outside: the sheathed face, else side 1 (an exterior wall's outside). Rigid
+        // insulation and sheathing with no leader on such a wall go there too, as the continuous
+        // insulation and the sheathing under the finish. Trade practice; the note says so.
+        let exterior_finish = |ls: &[AssemblyLayer]| !ls.is_empty() && ls.iter().all(|l| l.category == "finish");
+        let under_finish =
+            |ls: &[AssemblyLayer]| !ls.is_empty() && ls.iter().all(|l| (l.category == "insulation" && !l.in_cavity) || l.category == "sheathing");
+        let has_finish = faces.iter().any(|(_, l, _)| l.category == "finish") || unsided.iter().any(|(_, ls, _)| exterior_finish(ls));
+        let outside = faces.iter().find(|(_, l, _)| l.category == "sheathing").map_or(LayerSide::Side1, |(side, _, _)| *side);
+        let mut placed_outside: Vec<String> = Vec::new();
+        unsided.retain(|(text, ls, only)| {
+            if exterior_finish(ls) || (has_finish && under_finish(ls)) {
+                faces.extend(ls.iter().map(|l| (outside, l.clone(), only.clone())));
+                placed_outside.push(text.clone());
+                false
+            } else {
+                true
+            }
+        });
+        let unsided: Vec<String> = unsided.into_iter().map(|(t, _, _)| t).collect();
         // Studs whose callout names no material: the framing notes', else the trade default.
         let unnamed = core.iter().any(|c| c.category == "framing" && c.material == UNNAMED_STUDS);
         let from_notes = unnamed && framing.is_some();
@@ -942,6 +962,12 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str, fr
             }
             for u in &unsided {
                 notes.push(format!("one face, which not read: {u}"));
+            }
+            for u in &placed_outside {
+                notes.push(format!(
+                    "on the {} face, the wall's outside (no leader read; trade practice puts an exterior finish outside): {u}",
+                    if outside == LayerSide::Side1 { "side 1" } else { "side 2" }
+                ));
             }
             notes.extend(material_note.iter().cloned());
             let head = r.mark.chars().last().and_then(|c| heads.get(&c).copied());
@@ -1299,6 +1325,51 @@ mod tests {
 
     fn side(t: &WallType, s: LayerSide) -> Vec<String> {
         t.assembly.as_ref().unwrap().layers.iter().filter(|l| l.side == s).map(|l| l.material.clone()).collect()
+    }
+
+    /// A made-up exterior wall family: sheathing (left face) and board (right face) with leaders,
+    /// studs, and callouts with no leader read: an exterior finish and rigid insulation.
+    fn exterior_legend(finish: bool) -> Drawing {
+        let mut d = Drawing::default();
+        let h = 2.0;
+        text(&mut d, "1/2\" WOOD STRUCTURAL PANEL SHEATHING", 130.0, 200.0, h);
+        line(&mut d, (129.0, 201.0), (99.0, 190.0));
+        text(&mut d, "5/8\" TYPE-X GYP. BD.", 130.0, 190.0, h);
+        line(&mut d, (129.0, 191.0), (111.0, 180.0));
+        text(&mut d, "2X6 WOOD STUDS @ 16\" O.C.", 130.0, 175.0, h);
+        line(&mut d, (129.0, 176.0), (105.0, 165.0));
+        if finish {
+            text(&mut d, "PORTLAND CEMENT STUCCO", 60.0, 200.0, h);
+        }
+        text(&mut d, "R-3.8 RIGID INSULATION", 60.0, 185.0, h);
+        text(&mut d, "TYPE E PARTITION", 90.0, 128.0, 3.0);
+        text(&mut d, "E6A", 92.0, 118.0, h);
+        text(&mut d, "5 1/2\"", 102.0, 118.0, h);
+        text(&mut d, "1 HOUR", 115.0, 118.0, h);
+        d
+    }
+
+    #[test]
+    fn an_exterior_finish_with_no_leader_read_goes_on_the_walls_outside() {
+        let lg = read_legend(&exterior_legend(true), None, "X000", None);
+        let e = lg.types.iter().find(|t| t.name == "E6A").unwrap_or_else(|| panic!("{:?}", lg.report));
+        // The stucco and the rigid insulation under it go on the sheathed face (side 1), outer
+        // first; the board stays inside.
+        let one = side(e, LayerSide::Side1);
+        assert_eq!(one.len(), 3, "{one:?} {:?} {:?}", e.assembly.as_ref().map(|a| &a.notes), lg.report);
+        assert!(one[0].contains("stucco") && one[1].contains("rigid insulation") && one[2].contains("sheathing"), "{one:?}");
+        assert_eq!(side(e, LayerSide::Side2), vec!["5/8\" Type X gypsum board"]);
+        let a = e.assembly.as_ref().unwrap();
+        assert!(a.external, "an exterior finish: an exterior wall");
+        assert_eq!(a.notes.iter().filter(|n| n.contains("trade practice puts an exterior finish outside")).count(), 2, "{:?}", a.notes);
+        assert!(!a.notes.iter().any(|n| n.starts_with("one face, which not read")), "{:?}", a.notes);
+        // With no exterior finish, rigid insulation with no leader stays unread (it may be either
+        // face).
+        let lg = read_legend(&exterior_legend(false), None, "X000", None);
+        let e = lg.types.iter().find(|t| t.name == "E6A").unwrap_or_else(|| panic!("{:?}", lg.report));
+        let one = side(e, LayerSide::Side1);
+        assert!(one.len() == 1 && one[0].contains("sheathing"), "{one:?}");
+        assert!(e.assembly.as_ref().unwrap().notes.iter().any(|n| n.starts_with("one face, which not read") && n.contains("RIGID")));
     }
 
     #[test]

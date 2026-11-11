@@ -3439,6 +3439,7 @@ menu	Modify	수정
 	Place Buildings	건물 배치
 	Pin	고정
 	Unpin	고정 해제
+	Minimize to the rail	레일로 최소화
 	Coordination	조정
 	List Sheets	시트 목록
 	Open Sheet	시트 열기
@@ -3451,3 +3452,41 @@ menu	Modify	수정
 	Symbol Table Log	기호 표 기록
 	Revert Symbol Table Change	기호 표 변경 되돌리기
 	Promote Symbol to Library	기호를 라이브러리로 승격
+	Frame rate to hold while moving	이동 중 유지할 프레임 속도
+	Lower the resolution while panning and zooming when the graphics are slow	그래픽이 느릴 때 이동 및 확대/축소 중 해상도 낮추기
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	보기가 멈추면 바로 도면이 선명해집니다. 플롯, 내보내기, 스크린샷은 항상 전체 해상도입니다.
+# BIM views (Q6419).
+	MEP	MEP
+	Full MEP	전체 MEP
+	Cabinets	캐비닛
+	Following the system	시스템 따라가기
+	Stop following	따라가기 중지
+	Follow System	시스템 따라가기
+	Pipes with no size, not drawn	크기 없는 배관, 그리지 않음
+	BIM Views	BIM 보기
+	BIM View Rules	BIM 보기 규칙
+	BIM View Report	BIM 보기 보고서
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D 모델 뷰와 걷기도 궤도 회전과 걷기 중에 같은 방식으로 동작하며, 조명과 상세 수준은 그대로 유지됩니다.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	출력 파일 이름 입력
+	Enter decimal places of accuracy (0 to 16)	정밀도 소수 자릿수 입력(0~16)
+	Enter name of existing block	기존 블록 이름 입력
+	Choose mode for selected object conversion	선택한 객체의 변환 모드 선택
+	Current settings: Object conversion=Delete	현재 설정: 객체 변환=삭제
+	Enter attribute values	속성 값 입력
+	Verify attribute values	속성 값 확인
+	Convert to block	블록으로 변환
+	Retain	유지
+	Binary	이진
+	mOde	모드
+	define new drawing	새 도면 정의
+	= (block=output file)	= (블록=출력 파일)
+	* (whole drawing)	* (전체 도면)
+	Requires an integer between 0 and 16.	0에서 16 사이의 정수가 필요합니다.
+	Correct Job Sheet Index	작업 도면 목록 수정
+	Refrigerant Piping	냉매 배관
+	Hydronic Piping	냉온수 배관
+	Condensate Drain	응축수 배수
+	Mechanical Piping	기계 배관
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	속성으로 요소 수정(BIM)

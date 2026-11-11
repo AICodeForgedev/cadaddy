@@ -2,6 +2,7 @@
 //! Block Editor.
 
 pub(crate) mod bedit;
+mod dash_wblock;
 pub(in crate::cmd) mod purge;
 mod wblock;
 
@@ -51,9 +52,10 @@ pub fn specs() -> Vec<CommandSpec> {
         attedit::attedit_spec(),
         attedit::dash_attedit_spec(),
         CommandSpec::new("wblock", "Write Block", run_wblock)
-            .alias(&["w", "-wblock"])
-            .params("{force?: bool (replace an existing file; otherwise it is refused), path (no extension: .dwg), name? | handles?, base?}")
+            .alias(&["w"])
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path (no extension: .dwg), name? | handles?, base?, whole?: bool (the whole drawing: nothing unused is purged)}")
             .interactive(|_| Ok(Box::new(wblock::WblockM::default()))),
+        dash_wblock::dash_wblock_spec(),
         CommandSpec::new("base", "Base", run_base).menu(&["Draw", "Block", "Base"]).params("{at: [x,y]}").interactive(|_| {
             Ok(super::ask::machine("base", "BASE", [super::ask::ask("at", "Enter base point", super::ask::Kind::Point)]))
         }),
@@ -401,10 +403,20 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let src = s.doc()?;
     let mut d = cadaddy_doc::Drawing::new_imperial();
+    // The written drawing keeps the source's settings and styles, as AutoCAD's -WBLOCK does: its
+    // units ($INSUNITS, $MEASUREMENT), so a block from a metric drawing is not declared in inches
+    // and scaled on insert, and its defaults (text size, current styles, annotation scales). It is
+    // a drawing of its own: a fresh fingerprint.
+    d.header = src.header.clone();
+    crate::fresh_fingerprint(&mut d);
     d.layers = src.layers.clone();
     d.linetypes = src.linetypes.clone();
     d.text_styles = src.text_styles.clone();
     d.dim_styles = src.dim_styles.clone();
+    d.mleader_styles = src.mleader_styles.clone();
+    d.table_styles = src.table_styles.clone();
+    d.mline_styles = src.mline_styles.clone();
+    d.scales = src.scales.clone();
     d.blocks = src.blocks.clone();
     // The base point becomes the written drawing's origin, its insertion base: by default 0,0 for
     // objects and the block's base point for a block (`base` is then in block coordinates).
@@ -433,6 +445,11 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
             })
             .collect()
     };
+    // The copied blocks keep their objects' handles, so the new ones start above them.
+    let kept: Vec<Handle> = d.blocks.values().flat_map(|b| b.entities.iter().map(|e| e.handle)).collect();
+    for h in kept {
+        d.bump_handseed(h);
+    }
     let mut copies = std::collections::HashMap::new();
     let mut made = Vec::new();
     for mut e in ents {
@@ -447,11 +464,21 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
         }
         d.model.push(e);
     }
+    // A block or selected objects bring only the layers, linetypes, styles and blocks they use,
+    // as AutoCAD's WBLOCK writes them (the defaults and the current ones stay); the whole drawing
+    // (`whole`, WBLOCK's `*`) keeps everything.
+    if !p.get("whole").and_then(Value::as_bool).unwrap_or(false) {
+        purge::purge_unused(&mut d);
+    }
     let hooks = super::file::io().ok_or_else(|| bad("wblock", "file formats are not available in this build"))?;
     let bytes = (hooks.write)(&d, &path).map_err(|e| bad("wblock", e))?;
     #[cfg(not(target_arch = "wasm32"))]
     crate::writefile::write(&path, &bytes).map_err(|e| bad("wblock", format!("{path}: {e}")))?;
-    Ok(json!({ "path": path, "entities": d.model.len(), "bytes": bytes.len() }))
+    // A DWG says what it leaves out, as a save does.
+    let lost = if super::file::drops_unknown(&path) { super::file::not_saved(&d) } else { Default::default() };
+    let mut r = json!({ "path": path, "entities": d.model.len(), "bytes": bytes.len() });
+    super::file::report_not_saved(s, &mut r, &lost);
+    Ok(r)
 }
 
 fn run_base(s: &mut Session, p: &Value) -> Result<Value> {
@@ -639,6 +666,8 @@ enum InsStage {
     YScale,
     Rotation,
     Attribs,
+    /// A Verify attribute asked again.
+    Verify,
 }
 
 #[derive(Default)]
@@ -650,13 +679,15 @@ struct InsertM {
     x_scale: Option<f64>,
     scale: Option<Vec2>,
     rotation: Option<f64>,
-    /// The attributes to ask for: tag, prompt, default.
-    attdefs: Vec<(String, String, String)>,
+    /// The attributes to ask for: tag, prompt, default, and Verify (asked again).
+    attdefs: Vec<(String, String, String, bool)>,
     /// How many of `attdefs` have been answered.
     asked: usize,
     values: serde_json::Map<String, Value>,
     /// A library symbol: answers are remembered for its next placement.
     symbol: bool,
+    /// Verify attributes asked again so far.
+    verified: usize,
     /// `*name`: insert the block's objects (one uniform scale factor, no attribute values).
     explode: bool,
     /// The file waiting for the Redefine answer.
@@ -686,6 +717,17 @@ impl InsertM {
         } else {
             InsStage::Attribs
         };
+        if self.stage == InsStage::Attribs && self.asked == 0 && !self.attdefs.is_empty() {
+            s.echo("Enter attribute values");
+        }
+        // Then the Verify attributes are asked again, with the values typed.
+        if self.stage == InsStage::Attribs && self.asked >= self.attdefs.len() && self.verified < self.verifying().len() {
+            if self.verified == 0 {
+                s.echo("Verify attribute values");
+            }
+            self.stage = InsStage::Verify;
+            return Ok(Step::Continue);
+        }
         if self.stage == InsStage::Attribs
             && self.asked >= self.attdefs.len()
             && let (Some(n), Some(a), Some(sc), Some(r)) = (self.name.clone(), self.at, self.scale, self.rotation)
@@ -703,7 +745,13 @@ impl InsertM {
         Ok(Step::Continue)
     }
 
-    /// Block `name` chosen: collect its attribute prompts and ask for the insertion point.
+    /// The Verify attributes asked for.
+    fn verifying(&self) -> Vec<&(String, String, String, bool)> {
+        self.attdefs.iter().filter(|a| a.3).collect()
+    }
+
+    /// Block `name` chosen: collect its attribute prompts and ask for the insertion point. Constant
+    /// and Preset attributes take their values without asking, and so do all of them with ATTREQ 0.
     fn choose(&mut self, s: &mut Session, name: &str) -> Result<()> {
         // Not found: asked again for a typed name; Enter (INSNAME gone) ends the command.
         let Some(b) = s.doc()?.block(name).cloned() else {
@@ -715,19 +763,21 @@ impl InsertM {
         // values entered; its hidden fields (PANEL, MOUNT_HT) take the last values without asking.
         self.symbol = cadaddy_doc::library::symbols::symbol(&b.name).is_some();
         self.asked = 0;
+        self.verified = 0;
         self.values.clear();
         self.attdefs = Vec::new();
         if !self.explode {
             for e in b.entities.iter() {
                 let EntityKind::AttDef(a) = &e.kind else { continue };
-                if a.constant {
+                // Constant and Preset attributes take their values without asking.
+                if a.constant || a.modes.preset {
                     continue;
                 }
                 let remembered =
                     self.symbol.then(|| s.last_used.symbol_attribs.get(&format!("{}|{}", b.name.to_ascii_uppercase(), a.tag)).cloned()).flatten();
                 let default = remembered.clone().unwrap_or_else(|| a.text.value.clone());
                 if attreq && !(self.symbol && a.invisible) {
-                    self.attdefs.push((a.tag.clone(), a.prompt.clone(), default));
+                    self.attdefs.push((a.tag.clone(), a.prompt.clone(), default, a.modes.verify));
                 } else if remembered.is_some() {
                     self.values.insert(a.tag.clone(), Value::String(default));
                 }
@@ -794,8 +844,13 @@ impl Interactive for InsertM {
             InsStage::YScale => Prompt::new("Enter Y scale factor", Accept::NUMBER).default("use X scale factor"),
             InsStage::Rotation => Prompt::new("Specify rotation angle", Accept::POINT_OR_NUMBER).default("0").base(at),
             InsStage::Attribs => {
-                let (_, prompt, default) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
+                let (_, prompt, default, _) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
                 Prompt::new(if prompt.is_empty() { "Enter attribute value".into() } else { prompt }, Accept::TEXT).default(default)
+            }
+            InsStage::Verify => {
+                let (tag, prompt) = self.verifying().get(self.verified).map(|a| (a.0.clone(), a.1.clone())).unwrap_or_default();
+                let typed = self.values.get(&tag).and_then(Value::as_str).unwrap_or_default().to_string();
+                Prompt::new(if prompt.is_empty() { "Enter attribute value".into() } else { prompt }, Accept::TEXT).default(typed)
             }
         }
     }
@@ -917,7 +972,7 @@ impl Interactive for InsertM {
                 return self.advance(s);
             }
             InsStage::Attribs => {
-                let (tag, _, default) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
+                let (tag, _, default, _) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
                 let v = match i {
                     Input::Text(t) => t,
                     _ => default,
@@ -929,6 +984,20 @@ impl Interactive for InsertM {
                 }
                 self.values.insert(tag, Value::String(v));
                 self.asked += 1;
+                return self.advance(s);
+            }
+            // Enter keeps the value typed.
+            InsStage::Verify => {
+                let tag = self.verifying().get(self.verified).map(|a| a.0.clone()).unwrap_or_default();
+                match i {
+                    Input::Text(t) => {
+                        self.values.insert(tag, Value::String(t));
+                    }
+                    Input::Enter => {}
+                    // A click or anything else is no answer: the value is asked for again.
+                    _ => return Ok(Step::Continue),
+                }
+                self.verified += 1;
                 return self.advance(s);
             }
         }

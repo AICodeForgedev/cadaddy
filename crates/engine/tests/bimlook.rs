@@ -171,6 +171,13 @@ fn shown_rgb(d: &Drawing, e: &Entity) -> Option<[u8; 3]> {
     }
 }
 
+/// Every built element in the BIM view's look: no one view draws them all (Q6419), so the trade
+/// colours, ghosting and switches are checked on this.
+fn whole(d: &Drawing) -> Drawing {
+    let look = Look::of(d);
+    bimlook::compose(d, &look, bimlook::ghosting(d, &look), true, &|_, _| true)
+}
+
 fn ghosted(d: &Drawing, e: &Entity) -> bool {
     d.material_of(e, None).is_some_and(|m| m.name == GHOST_MATERIAL && m.opacity < 0.5)
 }
@@ -183,7 +190,10 @@ fn the_bim_view_draws_only_the_built_model_in_trade_colours() {
     assert!(sheet_lines > 20, "the sheet has its own linework: {sheet_lines}");
     let v = bimlook::display(&d).expect("a built model: the BIM view is on by default");
     assert!(v.model.iter().all(|e| made_as(e).is_some()), "no sheet linework (title block, plan lines) in 3D");
-    assert_eq!(v.model.len(), d.model.iter().filter(|e| made_as(e).is_some()).count(), "every built element");
+    let built = d.model.iter().filter(|e| made_as(e).is_some()).count();
+    assert!(!v.model.is_empty() && v.model.len() < built, "one view, never every built element (Q6419)");
+    let v = whole(&d);
+    assert_eq!(v.model.len(), built, "every built element in the look");
     // Every trade the building has, in its table colour; the shell ghosted (there is MEP).
     for key in [
         "architecture",
@@ -214,7 +224,7 @@ fn the_bim_view_draws_only_the_built_model_in_trade_colours() {
     // The sheet's lines on request; ghosting off; the view off.
     let r = s.execute("bim.look", &json!({"sheet": true, "ghost": false})).unwrap();
     assert_eq!((r["sheet"].clone(), r["ghost"].clone()), (json!(true), json!(false)), "{r}");
-    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    let v = whole(s.doc().unwrap());
     assert_eq!(v.model.len(), s.doc().unwrap().model.len());
     assert!(v.model.iter().all(|e| !ghosted(&v, e)));
     s.execute("bim.look", &json!({"on": false})).unwrap();
@@ -246,7 +256,7 @@ fn the_trade_table_is_one_editable_list() {
     assert_eq!(row(&r, "pipe_hot")["color"], json!([250, 0, 0]));
     assert_eq!(row(&r, "conduit")["color"], json!([0, 255, 127]));
     assert_eq!(row(&r, "fire")["visible"], json!(false));
-    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    let v = whole(s.doc().unwrap());
     assert!(of_trade(&v, "fire").is_empty(), "a hidden trade leaves the view");
     assert!(of_trade(&v, "pipe_hot").iter().all(|e| shown_rgb(&v, e) == Some([250, 0, 0])));
     assert!(!of_trade(s.doc().unwrap(), "fire").is_empty(), "…not the drawing");
@@ -266,6 +276,114 @@ fn the_trade_table_is_one_editable_list() {
     assert!(s.execute("bim.trades", &json!({"visible": {"duct": "yes"}})).is_err());
 }
 
+/// Refrigerant, condensate and hydronic piping (Q6492) are the mechanical trade's: their own
+/// rows under Mechanical, by the system's name or its mechanical (`M-`) layer, in the model tree,
+/// the trade table, the takeoff and the clash trades; domestic water stays Plumbing.
+#[test]
+fn refrigerant_condensate_and_hydronic_pipe_are_mechanical() {
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    rect(&mut s, [0.0, 0.0], [40.0, 30.0]);
+    rect(&mut s, [0.5, 0.5], [39.5, 29.5]);
+    // (system, its layer, its trade row): by the name, by the name on a plumbing layer, by the
+    // mechanical layer when the name says nothing.
+    let pipes = [
+        ("RS-HP-1", "M-REFR", "pipe_refrigerant"),
+        ("REFRIGERANT SUCTION", "P-PIPE", "pipe_refrigerant"),
+        ("CD", "P-PIPE", "pipe_condensate"),
+        ("HHW", "P-PIPE", "pipe_hydronic"),
+        ("CHWS", "P-PIPE", "pipe_hydronic"),
+        ("PIPE-7", "M-HYDR", "pipe_hydronic"),
+        ("PIPE-9", "M-PIPE", "pipe_mechanical"),
+        ("CW", "P-DOMW-CW", "pipe_cold"),
+    ];
+    let mut systems: Vec<Value> =
+        pipes.iter().map(|(n, l, _)| json!({"name": n, "layer": l, "kind": "pipe", "size_in": [1.0, 0.0], "bottom_ft": 9.0})).collect();
+    systems.push(system("SA", "duct", [12.0, 8.0], 8.6, Some("supply")));
+    let mut runs: Vec<Value> = pipes
+        .iter()
+        .enumerate()
+        .map(|(i, (n, ..))| {
+            let y = 3.0 + 3.0 * i as f64;
+            json!({"system": n, "level": "Level 1", "points": [ft([4.0, y]), ft([36.0, y])], "size_in": [1.0, 0.0], "bottoms_ft": [9.0]})
+        })
+        .collect();
+    // A supply duct across the refrigerant line at its height.
+    runs.push(json!({"system": "SA", "level": "Level 1", "points": [ft([20.0, 1.0]), ft([20.0, 5.0])], "size_in": [12.0, 8.0], "bottoms_ft": [8.6]}));
+    let spec = json!({
+        "version": 1,
+        "units_per_foot": 12,
+        "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 10}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Exterior"}],
+        "wall_types": [{"name": "Exterior", "thickness_in": 6, "from": "pairs"}],
+        "mep": {"systems": systems, "runs": runs}
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+
+    // Every built piece of each pipe in its row and group.
+    let d = s.doc().unwrap();
+    for (name, _, want) in pipes {
+        let classes: Vec<bimlook::Class> = d
+            .model
+            .iter()
+            .filter(|e| bimlook::made_tag(e, "kind") == Some("pipe") && bimlook::made_tag(e, "system") == Some(name))
+            .filter_map(|e| bimlook::classify(d, e))
+            .collect();
+        assert!(!classes.is_empty(), "{name} is built");
+        let group = if want == "pipe_cold" { "Plumbing" } else { "Mechanical" };
+        assert!(classes.iter().all(|c| c.key == want && c.group == group), "{name}: {:?}", classes.first());
+    }
+    // The model tree: under Mechanical, not Plumbing.
+    let tree = s.execute("bim.tree", &json!({"limit": 1000})).unwrap();
+    let lv = tree["levels"].as_array().unwrap().iter().find(|l| l["name"] == "Level 1").unwrap();
+    let types_of = |group: &str| -> Vec<String> {
+        lv["trades"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["name"] == group)
+            .flat_map(|t| t["categories"].as_array().unwrap().iter())
+            .filter(|c| c["name"] == "Pipe")
+            .flat_map(|c| c["types"].as_array().unwrap().iter())
+            .filter_map(|t| t["name"].as_str().map(str::to_string))
+            .collect()
+    };
+    let (mech, plumb) = (types_of("Mechanical"), types_of("Plumbing"));
+    for (name, _, want) in pipes {
+        let (here, there) = if want == "pipe_cold" { (&plumb, &mech) } else { (&mech, &plumb) };
+        assert!(here.iter().any(|t| t.starts_with(&format!("{name} "))), "{name} in {here:?}");
+        assert!(!there.iter().any(|t| t.starts_with(&format!("{name} "))), "{name} not in {there:?}");
+    }
+    // The trade table: the mechanical trade's own rows, each with its pipe.
+    let trades = s.execute("bim.trades", &json!({})).unwrap();
+    for key in ["pipe_refrigerant", "pipe_condensate", "pipe_hydronic", "pipe_mechanical"] {
+        let row = trades["trades"].as_array().unwrap().iter().find(|t| t["trade"] == key).unwrap_or_else(|| panic!("{key}: {trades}"));
+        assert!(row["count"].as_u64().unwrap() > 0, "{row}");
+        assert_eq!(bimlook::trade(key).unwrap().group, "Mechanical");
+    }
+    // The takeoff: mechanical lines, not plumbing ones.
+    let t = s.execute("bim.takeoff", &json!({"group_by": "trade", "keep": false})).unwrap();
+    let pipe_lines: Vec<&Value> = t["lines"].as_array().unwrap().iter().filter(|l| l["category"] == "pipe").collect();
+    for (name, _, want) in pipes {
+        let trade = if want == "pipe_cold" { "plumbing" } else { "mechanical" };
+        let lines: Vec<&&Value> = pipe_lines.iter().filter(|l| l["item"].as_str().is_some_and(|i| i.starts_with(&format!("{name} ")))).collect();
+        assert!(!lines.is_empty() && lines.iter().all(|l| l["trade"] == trade), "{name}: {lines:?}");
+    }
+    // The clash trades: the refrigerant line across the duct is a mechanical pipe, and still a
+    // clash when every trade is checked against the others (a pipe and a duct never meet).
+    for p in [json!({"a": "pipe", "b": "duct"}), json!({})] {
+        let c = s.execute("bim.clash", &p).unwrap();
+        let clashes = c["clashes"].as_array().unwrap();
+        assert_eq!(clashes.len(), 1, "{p}: {c}");
+        for k in clashes {
+            let pipe = if k["a"]["category"] == "pipe" { &k["a"] } else { &k["b"] };
+            assert_eq!(pipe["system"], "RS-HP-1", "{k}");
+            assert_eq!(pipe["trade"], "mechanical", "{k}");
+        }
+    }
+}
+
 #[test]
 fn system_names_find_their_trade() {
     for (name, want) in [
@@ -280,7 +398,10 @@ fn system_names_find_their_trade() {
         ("NG", "pipe_gas"),
         ("Fire Sprinkler Main", "fire"),
         ("FP", "fire"),
-        ("Chilled Glycol", "pipe"),
+        ("Chilled Glycol", "pipe_hydronic"),
+        ("RS-HP-1", "pipe_refrigerant"),
+        ("Condensate Drain", "pipe_condensate"),
+        ("Process Line 4", "pipe"),
     ] {
         assert_eq!(bimlook::pipe_trade(name), want, "{name}");
     }
@@ -323,13 +444,13 @@ fn the_model_tree_is_level_trade_category_type_element() {
     // Hide a branch: it leaves the view and shows unticked; show it again.
     let r = s.execute("bim.tree", &json!({"path": ["Level 2", "Mechanical"], "visible": false})).unwrap();
     assert_eq!(child(child(&r, "levels", "Level 2"), "trades", "Mechanical")["visible"], json!(false));
-    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    let v = whole(s.doc().unwrap());
     let hidden =
         |v: &Drawing| v.model.iter().filter(|e| bimlook::classify(v, e).is_some_and(|c| c.level == "Level 2" && c.group == "Mechanical")).count();
     assert_eq!(hidden(&v), 0);
     assert!(v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.level == "Level 1" && c.group == "Mechanical")));
     s.execute("bim.tree", &json!({"path": ["level 2"], "visible": true})).unwrap();
-    assert!(hidden(&bimlook::display(s.doc().unwrap()).unwrap()) > 0, "showing the level shows what is under it");
+    assert!(hidden(&whole(s.doc().unwrap())) > 0, "showing the level shows what is under it");
     // One call hides a trade on every level, and one shows it again.
     let r = s.execute("bim.tree", &json!({"group": "Mechanical", "visible": false})).unwrap();
     for lv in r["levels"].as_array().unwrap() {
@@ -337,12 +458,14 @@ fn the_model_tree_is_level_trade_category_type_element() {
             assert_eq!(t["visible"], json!(false), "{lv}");
         }
     }
-    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    let v = whole(s.doc().unwrap());
     assert!(!v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.group == "Mechanical")));
     assert!(v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.group == "Plumbing")));
     s.execute("bim.tree", &json!({"group": "mechanical", "visible": true})).unwrap();
-    assert!(hidden(&bimlook::display(s.doc().unwrap()).unwrap()) > 0, "showing the trade shows it on every level");
-    // Select and zoom: the branch's elements are selected.
+    assert!(hidden(&whole(s.doc().unwrap())) > 0, "showing the trade shows it on every level");
+    // Select and zoom: the branch's elements the view draws are selected (Level 1's Floor view
+    // draws all its pipe).
+    s.execute("bim.view", &json!({"level": "Level 1"})).unwrap();
     let r = s.execute("bim.tree", &json!({"path": ["Level 1", "Plumbing", "Pipe"], "select": true, "zoom": true})).unwrap();
     let n = r["selected"].as_u64().unwrap() as usize;
     assert!(n >= 5, "cold, hot, sanitary, vent and gas (sprinkler pipe is fire protection): {n}");
@@ -377,6 +500,8 @@ fn a_hidden_level_leaves_nothing_of_it_drawn_or_selected() {
         let at = e.common.xdata.iter().position(|t| t.code == 1001 && t.value.eq_ignore_ascii_case(cadaddy_engine::cmd::wallgen::APP)).unwrap();
         e.common.xdata[at + 2].value = String::new();
     });
+    // The Architectural view draws something of every level (walls, the roof).
+    s.execute("bim.view", &json!({"view": "architectural"})).unwrap();
     let r = s.execute("bim.tree", &json!({})).unwrap();
     let levels: Vec<String> = r["levels"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap().to_string()).collect();
     assert!(levels.iter().any(|l| l == bimlook::NO_LEVEL), "{levels:?}");
@@ -406,7 +531,9 @@ fn a_hidden_level_leaves_nothing_of_it_drawn_or_selected() {
         let d = s.doc().unwrap();
         assert!(bimlook::display(d).unwrap().model.iter().any(|e| of(d, e)), "{lv} shows again");
     }
-    // A trade switched off in the colour table drops its selected elements, and only those.
+    // A trade switched off in the colour table drops its selected elements, and only those (in
+    // Level 2's Floor view: its walls and its MEP).
+    s.execute("bim.view", &json!({"level": "Level 2"})).unwrap();
     let r = s.execute("bim.tree", &json!({"path": ["Level 2"], "select": true})).unwrap();
     let n = r["selected"].as_u64().unwrap() as usize;
     let r = s.execute("bim.trades", &json!({"visible": {"duct_supply": false}})).unwrap();
@@ -675,7 +802,8 @@ fn a_60k_element_model_composes_quickly() {
     let t = std::time::Instant::now();
     let v = bimlook::display(&d).unwrap();
     let took = t.elapsed();
-    assert!(v.model.len() >= 60_000);
+    assert!(!v.model.is_empty() && v.model.len() < 60_000, "the opening view, not all of it: {}", v.model.len());
+    assert!(whole(&d).model.len() >= 60_000);
     assert!(took.as_millis() < 3_000, "the BIM view of 60k elements in {took:?}");
     let t = std::time::Instant::now();
     let r = s.execute("bim.tree", &json!({"limit": 5})).unwrap();

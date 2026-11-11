@@ -910,9 +910,15 @@ fn handles_in_order(ctx: &mut Ctx<'_>) -> Arc<Vec<Handle>> {
     v
 }
 
+/// `(entlast)`: the newest main entity in the drawing, hidden ones too (as in AutoCAD), but never
+/// one the program generated (a live model rebuild appends its objects after what a routine
+/// drew; `select::can_be_last`).
 pub fn entlast(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 0, 0)?;
-    Ok(Flow::Value(handles_in_order(ctx).last().map(|h| Value::Ename(*h)).unwrap_or_default()))
+    let order = handles_in_order(ctx);
+    let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
+    let last = order.iter().rev().find(|h| d.entity(**h).is_some_and(|e| crate::cmd::wallgen::made_as(e).is_none()));
+    Ok(Flow::Value(last.map(|h| Value::Ename(*h)).unwrap_or_default()))
 }
 
 /// The number of attributes a block reference has (0 for anything else).
@@ -1024,8 +1030,10 @@ pub fn ssget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     let mut found: Vec<Handle> = match mode.as_deref() {
         Some("X") => all(s, true),
         Some("L") => {
+            // The newest object the user can select ("Last", `select::can_be_last`).
             let order = handles_in_order(ctx);
-            order.last().copied().into_iter().collect()
+            let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
+            order.iter().rev().find(|h| d.entity(**h).is_some_and(|e| crate::select::can_be_last(d, e))).copied().into_iter().collect()
         }
         Some("P") => ctx.s.state().map(|st| st.previous_selection.clone()).unwrap_or_default(),
         Some("I") => ctx.s.selection(),

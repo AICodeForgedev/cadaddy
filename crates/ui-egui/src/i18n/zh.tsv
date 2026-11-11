@@ -3514,6 +3514,7 @@
 	Place Buildings	放置建筑
 	Pin	固定
 	Unpin	取消固定
+	Minimize to the rail	最小化到边栏
 	Coordination	协调
 	List Sheets	列出图纸
 	Open Sheet	打开图纸
@@ -3526,3 +3527,41 @@
 	Symbol Table Log	符号表日志
 	Revert Symbol Table Change	撤销符号表更改
 	Promote Symbol to Library	将符号提升到库
+	Frame rate to hold while moving	移动时保持的帧率
+	Lower the resolution while panning and zooming when the graphics are slow	图形较慢时，平移和缩放期间降低分辨率
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	视图一停止，图形即变清晰。打印、导出和屏幕截图始终为全分辨率。
+# BIM views (Q6419).
+	MEP	机电
+	Full MEP	完整机电
+	Cabinets	橱柜
+	Following the system	正在跟随系统
+	Stop following	停止跟随
+	Follow System	跟随系统
+	Pipes with no size, not drawn	无尺寸的管道，未绘制
+	BIM Views	BIM 视图
+	BIM View Rules	BIM 视图规则
+	BIM View Report	BIM 视图报告
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	三维模型视图和漫游在环绕和行走时也是如此；其照明和细节保持不变。
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	输入输出文件名
+	Enter decimal places of accuracy (0 to 16)	输入精度的小数位数 (0 到 16)
+	Enter name of existing block	输入现有块名
+	Choose mode for selected object conversion	选择所选对象的转换模式
+	Current settings: Object conversion=Delete	当前设置: 对象转换=删除
+	Enter attribute values	输入属性值
+	Verify attribute values	验证属性值
+	Convert to block	转换为块
+	Retain	保留
+	Binary	二进制
+	mOde	模式
+	define new drawing	定义新图形
+	= (block=output file)	= (块=输出文件)
+	* (whole drawing)	* (整个图形)
+	Requires an integer between 0 and 16.	需要 0 到 16 之间的整数。
+	Correct Job Sheet Index	更正作业图纸索引
+	Refrigerant Piping	制冷剂管道
+	Hydronic Piping	水系统管道
+	Condensate Drain	冷凝水排放
+	Mechanical Piping	机械管道
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	按属性更正元素 (BIM)

@@ -2370,7 +2370,7 @@ fn as_printed<'a>(d: &Drawing, ents: &[&'a Entity]) -> Vec<&'a Entity> {
             EntityKind::Wipeout(_) => false,
             EntityKind::Text(t) => {
                 let style = t.style.to_ascii_uppercase();
-                style != OCR_TEXT_STYLE && (!strokes || style.starts_with(PDF_STYLE_PREFIX))
+                !style.starts_with(OCR_TEXT_STYLE) && (!strokes || style.starts_with(PDF_STYLE_PREFIX))
             }
             _ => true,
         })

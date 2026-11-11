@@ -3229,6 +3229,7 @@
 	Accuracy Score	Оцінка точності
 	Answer Job Question	Відповісти на запитання завдання
 	Set Job Mode	Змінити режим завдання
+	Correct Job Sheet Index	Виправити покажчик аркушів завдання
 	Check Import Accuracy	Перевірити точність імпорту
 	Clash Resolution Loop	Цикл усунення колізій
 	Evaluate Rules	Оцінити правила
@@ -3590,6 +3591,7 @@
 	That element is hidden in the BIM view: tick its branch to show it first.	Цей елемент приховано у вигляді BIM: спершу позначте його гілку, щоб показати його.
 	Pin	Закріпити
 	Unpin	Відкріпити
+	Minimize to the rail	Згорнути на панель
 	Coordination	Координація
 	List Sheets	Список аркушів
 	Open Sheet	Відкрити аркуш
@@ -3609,3 +3611,40 @@
 	Symbol Table Log	Журнал таблиці символів
 	Revert Symbol Table Change	Скасувати зміну таблиці символів
 	Promote Symbol to Library	Додати символ до бібліотеки
+	Frame rate to hold while moving	Частота кадрів під час руху
+	Lower the resolution while panning and zooming when the graphics are slow	Знижувати роздільність під час панорамування й масштабування, коли графіка повільна
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Креслення стає чітким, щойно вигляд зупиняється. Друк, експорт і знімки екрана завжди мають повну роздільність.
+# BIM views (Q6419).
+	MEP	Інженерні системи
+	Full MEP	Усі інженерні системи
+	Cabinets	Шафи
+	Following the system	Відстеження системи
+	Stop following	Припинити відстеження
+	Follow System	Відстежити систему
+	Pipes with no size, not drawn	Труби без розміру, не показано
+	BIM Views	Види BIM
+	BIM View Rules	Правила видів BIM
+	BIM View Report	Звіт про види BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D-вигляд моделі та прогулянка роблять те саме під час обертання й ходьби; освітлення та деталізація не змінюються.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Введіть ім'я вихідного файлу
+	Enter decimal places of accuracy (0 to 16)	Введіть кількість десяткових знаків точності (від 0 до 16)
+	Enter name of existing block	Введіть ім'я наявного блока
+	Choose mode for selected object conversion	Виберіть режим перетворення вибраних об'єктів
+	Current settings: Object conversion=Delete	Поточні параметри: Перетворення об'єктів=Видалити
+	Enter attribute values	Введіть значення атрибутів
+	Verify attribute values	Перевірте значення атрибутів
+	Convert to block	Перетворити на блок
+	Retain	Зберегти
+	Binary	Двійковий
+	mOde	Режим
+	define new drawing	визначити нове креслення
+	= (block=output file)	= (блок=вихідний файл)
+	* (whole drawing)	* (усе креслення)
+	Requires an integer between 0 and 16.	Потрібне ціле число від 0 до 16.
+	Refrigerant Piping	Трубопроводи холодоагенту
+	Hydronic Piping	Трубопроводи тепло- і холодопостачання
+	Condensate Drain	Відведення конденсату
+	Mechanical Piping	Механічні трубопроводи
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Виправити елементи за властивістю (BIM)

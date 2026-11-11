@@ -5,8 +5,9 @@
 //! `ui.draw2d` control method; counting is on only while one of them asks (the build profile and
 //! the in-view count cost time of their own).
 //!
-//! A large print set sits side by side in one model space: every view builds and sends the whole
-//! set, so the counts here make the cost of what is off screen visible.
+//! A large print set sits side by side in one model space: the counts here make the cost of what
+//! is off screen visible. A large drawing's GPU data is cut into area tiles and a frame draws only
+//! the tiles in view (Q6472); a zoom band builds again only the store chunks the view reaches.
 
 use cadaddy_render::DisplayList;
 use cadaddy_render::profile::{BuildProfile, Part, ProfileReport};
@@ -37,8 +38,17 @@ pub struct Regen {
     pub tri_vertices: usize,
     pub quad_instances: usize,
     pub mesh_bytes: usize,
+    /// What the vertex data draws simpler than the list (objects under a pixel as dots, small
+    /// ones as their box: [`crate::gpu::build_screen_mesh`]).
+    pub simplified: crate::gpu::Simplified,
     /// Creating its GPU buffers, when done on the worker (else see [`Frame::upload_ms`]).
     pub upload_ms: f64,
+    /// The area tiles the vertex data is cut into (0: not cut, drawn whole).
+    pub tiles: usize,
+    /// Model-space store chunks built again, and kept from an earlier build at another zoom
+    /// band (out of the view).
+    pub chunks_rebuilt: usize,
+    pub chunks_kept: usize,
 }
 
 /// The last frame.
@@ -50,11 +60,12 @@ pub struct Frame {
     /// Since the frame before: with the overlay repainting all the time, the frame rate's
     /// inverse, which includes presenting and waiting on the GPU.
     pub interval_ms: f64,
-    /// Primitives sent to be drawn: all of the list on the GPU canvas (the GPU runs every vertex
-    /// and drops what is off screen only after), the ones in view on the CPU canvas.
+    /// Primitives sent to be drawn: on the GPU canvas those of the tiles in view (all of the
+    /// list when it isn't cut into tiles), on the CPU canvas the ones in view.
     pub prims_sent: usize,
-    /// Vertices and instances the GPU runs.
+    /// Vertices the GPU runs (six an instance), and the tiles drawn.
     pub gpu_vertices: usize,
+    pub tiles_drawn: usize,
     /// Primitives at least partly in view, and the time to find them (the CPU canvas does this
     /// every frame; the GPU canvas does not cull, it is counted for the report only).
     pub prims_in_view: usize,
@@ -130,17 +141,41 @@ impl DrawStats {
         (r.mesh_ms, r.upload_ms) = (ms, upload_ms);
         (r.line_vertices, r.tri_vertices, r.quad_instances) = (mesh.line_vertices(), mesh.tri_vertices(), mesh.quad_instances());
         r.mesh_bytes = mesh.bytes();
+        r.simplified = mesh.simplified;
         self.upload_pending = 2;
     }
 
+    /// The vertex data was cut into `tiles` (`None`: drawn whole).
+    pub(super) fn tiled(&mut self, tiles: Option<&crate::gpu::Tiles>) {
+        if self.on {
+            self.regen.tiles = tiles.map_or(0, |t| t.bounds.len());
+        }
+    }
+
+    /// The model-space build made `rebuilt` chunks again and kept `kept` at another zoom band.
+    pub(super) fn chunks(&mut self, rebuilt: usize, kept: usize) {
+        if self.on {
+            (self.regen.chunks_rebuilt, self.regen.chunks_kept) = (rebuilt, kept);
+        }
+    }
+
+    /// A tiled mesh drew `d` this frame (after [`DrawStats::drew`]).
+    pub(super) fn drew_tiles(&mut self, d: crate::gpu::TilesDrawn) {
+        if self.on {
+            let f = &mut self.frame;
+            (f.prims_sent, f.gpu_vertices, f.tiles_drawn) = (d.prims, d.vertices, d.tiles);
+        }
+    }
+
     /// The vertex counts of a list already uploaded (the buffers no longer hold a CPU copy).
-    pub(super) fn meshed_counts(&mut self, counts: [usize; 4], ms: f64, upload_ms: f64) {
+    pub(super) fn meshed_counts(&mut self, counts: [usize; 4], simplified: crate::gpu::Simplified, ms: f64, upload_ms: f64) {
         if !self.on {
             return;
         }
         let r = &mut self.regen;
         (r.mesh_ms, r.upload_ms) = (ms, upload_ms);
         [r.line_vertices, r.tri_vertices, r.quad_instances, r.mesh_bytes] = counts;
+        r.simplified = simplified;
     }
 
     /// The canvas drew `list` this frame at `visible`: `sent` primitives (`None`: all of them,
@@ -152,6 +187,7 @@ impl DrawStats {
         let f = &mut self.frame;
         f.prims_sent = sent.unwrap_or(list.prims.len());
         f.gpu_vertices = if sent.is_none() { self.regen.line_vertices + self.regen.tri_vertices + 6 * self.regen.quad_instances } else { 0 };
+        f.tiles_drawn = 0;
         let key = (list_gen, [visible.min.x.to_bits(), visible.min.y.to_bits(), visible.max.x.to_bits(), visible.max.y.to_bits()]);
         if self.in_view_key != Some(key) {
             let t0 = crate::now_ms();
@@ -203,6 +239,15 @@ impl DrawStats {
                 "uploadMs": round(r.upload_ms),
                 "lineVertices": r.line_vertices, "triVertices": r.tri_vertices, "quadInstances": r.quad_instances,
                 "meshBytes": r.mesh_bytes,
+                "tiles": r.tiles,
+                "chunksRebuilt": r.chunks_rebuilt,
+                "chunksKept": r.chunks_kept,
+                "simplified": {
+                    "dotObjects": r.simplified.dot_objects,
+                    "dotPrims": r.simplified.dot_prims,
+                    "dots": r.simplified.dots,
+                    "boxes": r.simplified.boxes,
+                },
             },
             "frame": {
                 "appMs": round(f.app_ms),
@@ -210,6 +255,7 @@ impl DrawStats {
                 "intervalMs": round(f.interval_ms),
                 "primsSent": f.prims_sent,
                 "gpuVertices": f.gpu_vertices,
+                "tilesDrawn": f.tiles_drawn,
                 "primsInView": f.prims_in_view,
                 "cullMs": round(f.cull_ms),
                 "uploadMs": round(f.upload_ms),
@@ -231,8 +277,14 @@ impl DrawStats {
         out.push(format!("mesh {:.1} ms  upload {:.1} ms", r.mesh_ms, r.upload_ms.max(f.upload_ms)));
         out.push(format!("list {} prims  {} MB", r.prims, r.list_bytes / 1_000_000));
         out.push(format!("gpu {} verts  {} MB", r.line_vertices + r.tri_vertices + 6 * r.quad_instances, r.mesh_bytes / 1_000_000));
+        let sp = &r.simplified;
+        out.push(format!("sub-pixel {} objects + {} prims as {} dots  {} as boxes", sp.dot_objects, sp.dot_prims, sp.dots, sp.boxes));
         out.push(format!("frame {:.1} ms (canvas {:.1})  every {:.1} ms", f.app_ms, f.canvas_ms, f.interval_ms));
         out.push(format!("sent {}  in view {}  cull {:.1} ms", f.prims_sent, f.prims_in_view, f.cull_ms));
+        if r.tiles > 0 {
+            out.push(format!("tiles {} of {}  {} verts drawn", f.tiles_drawn, r.tiles, f.gpu_vertices));
+        }
+        out.push(format!("chunks rebuilt {}  kept {}", r.chunks_rebuilt, r.chunks_kept));
         out
     }
 }

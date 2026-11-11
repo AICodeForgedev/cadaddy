@@ -3420,6 +3420,7 @@ menu	Modify	Modifikace
 	Place Buildings	Umístit budovy
 	Pin	Připnout
 	Unpin	Odepnout
+	Minimize to the rail	Minimalizovat na lištu
 	Coordination	Koordinace
 	List Sheets	Vypsat listy
 	Open Sheet	Otevřít list
@@ -3432,3 +3433,41 @@ menu	Modify	Modifikace
 	Symbol Table Log	Protokol tabulky symbolů
 	Revert Symbol Table Change	Vrátit změnu tabulky symbolů
 	Promote Symbol to Library	Povýšit symbol do knihovny
+	Frame rate to hold while moving	Snímková frekvence při pohybu
+	Lower the resolution while panning and zooming when the graphics are slow	Snížit rozlišení při posunu a zvětšování, když je grafika pomalá
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Výkres se zaostří, jakmile se pohled zastaví. Tisk, export a snímky obrazovky jsou vždy v plném rozlišení.
+# BIM views (Q6419).
+	MEP	TZB
+	Full MEP	Celé TZB
+	Cabinets	Skříňky
+	Following the system	Sledování soustavy
+	Stop following	Ukončit sledování
+	Follow System	Sledovat soustavu
+	Pipes with no size, not drawn	Potrubí bez dimenze, nezobrazeno
+	BIM Views	Pohledy BIM
+	BIM View Rules	Pravidla pohledů BIM
+	BIM View Report	Zpráva o pohledech BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	3D zobrazení modelu a procházka dělají totéž při otáčení a chůzi; jejich osvětlení a podrobnosti zůstávají stejné.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Zadejte název výstupního souboru
+	Enter decimal places of accuracy (0 to 16)	Zadejte počet desetinných míst přesnosti (0 až 16)
+	Enter name of existing block	Zadejte název existujícího bloku
+	Choose mode for selected object conversion	Zvolte režim převodu vybraných objektů
+	Current settings: Object conversion=Delete	Aktuální nastavení: Převod objektů=Odstranit
+	Enter attribute values	Zadejte hodnoty atributů
+	Verify attribute values	Ověřte hodnoty atributů
+	Convert to block	Převést na blok
+	Retain	Zachovat
+	Binary	Binární
+	mOde	Režim
+	define new drawing	definovat nový výkres
+	= (block=output file)	= (blok=výstupní soubor)
+	* (whole drawing)	* (celý výkres)
+	Requires an integer between 0 and 16.	Je třeba celé číslo od 0 do 16.
+	Correct Job Sheet Index	Opravit rejstřík výkresů úlohy
+	Refrigerant Piping	Potrubí chladiva
+	Hydronic Piping	Otopné a chladicí potrubí
+	Condensate Drain	Odvod kondenzátu
+	Mechanical Piping	Strojní potrubí
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Opravit prvky podle vlastnosti (BIM)

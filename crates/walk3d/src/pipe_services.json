@@ -1,0 +1,30 @@
+{
+  "_comment": "What a pipe system carries and whose trade it is, by the system's name and the layer its runs are drawn on (Q6492). Services are tried in order, the first that matches wins: `contains` are pieces of the lower-cased name, `words` whole words of it (split at anything not a letter or digit). Refrigerant, condensate and hydronic piping are installed by the mechanical trade; domestic water, waste, vent, storm and gas by the plumber; sprinkler and standpipe by fire protection.",
+  "services": [
+    {"key": "fire", "trade": "fire", "contains": ["fire", "sprink", "standpipe"], "words": ["fp", "fs", "sp"]},
+    {"key": "refrigerant", "trade": "mechanical",
+     "contains": ["refrig", "suction line", "liquid line", "hot gas", "line set", "lineset"],
+     "words": ["rs", "rl", "hg", "r410a", "410a", "r454b", "454b", "r407c", "407c", "r32"]},
+    {"key": "hydronic", "trade": "mechanical",
+     "contains": ["chilled", "hydronic", "heating water", "heating hot", "glycol", "condenser water", "steam", "dual temp"],
+     "words": ["chw", "chws", "chwr", "hhw", "hhws", "hhwr"]},
+    {"key": "condensate", "trade": "mechanical", "contains": ["condensate"], "words": ["cd", "cnd"]},
+    {"key": "sanitary", "trade": "plumbing", "contains": ["sanitary", "sewer", "waste", "soil", "grease"], "words": ["san", "ss", "sw", "w", "gw"]},
+    {"key": "vent", "trade": "plumbing", "contains": ["vent"], "words": ["v", "vtr"]},
+    {"key": "storm", "trade": "plumbing", "contains": ["storm", "rain", "drain"], "words": ["st", "rd", "sd", "od"]},
+    {"key": "gas", "trade": "plumbing", "contains": ["gas", "propane"], "words": ["g", "ng", "lp"]},
+    {"key": "hot", "trade": "plumbing", "contains": ["hot", "recirc"], "words": ["hw", "dhw", "hwr", "hwc", "dhwr"]},
+    {"key": "cold", "trade": "plumbing", "contains": ["cold", "domestic", "potable", "water"], "words": ["cw", "dcw", "dw"]}
+  ],
+  "unnamed_trade": "plumbing",
+  "mechanical_layer": {
+    "_comment": "A run drawn on a mechanical discipline's layer (the layer's first part, `M-…`) whose name says nothing it carries: the layer's words (upper-cased pieces of the layer), else it is mechanical piping. A name that says what it carries keeps it, whatever the layer (`CW` on an `M-` layer is still cold water).",
+    "disciplines": ["M", "H"],
+    "by_layer": [
+      {"service": "refrigerant", "contains": ["REFR", "REFG", "RFG"]},
+      {"service": "hydronic", "contains": ["HYDR", "CHW", "HHW", "HOTW", "CHIL", "CWTR", "CNDW", "STEM", "STM", "GLYC"]},
+      {"service": "condensate", "contains": ["COND", "CNDS"]}
+    ],
+    "otherwise": {"key": "mechanical", "trade": "mechanical"}
+  }
+}

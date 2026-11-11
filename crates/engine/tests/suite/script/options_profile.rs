@@ -186,3 +186,27 @@ fn preview_filter_excludes_each_kind_it_names() {
     assert!(preview_filtered(d, line, 1) && !preview_filtered(d, line, 62));
     assert!(preview_filtered(d, &mtext, 32));
 }
+
+/// DYNRESMODE and DYNRESFPS: the 2D canvas's lower resolution while moving, a profile setting.
+#[test]
+fn dynamic_resolution_settings() {
+    let mut s = Session::new();
+    assert_eq!((getvar(&mut s, "DYNRESMODE"), getvar(&mut s, "DYNRESFPS")), (json!(1), json!(30)), "on, aiming at 30 fps");
+    s.execute("options", &json!({"DYNRESMODE": 0, "DYNRESFPS": 60})).unwrap();
+    assert!(!s.settings.dynres);
+    assert_eq!(s.settings.dynres_fps, 60);
+    s.cmdline("setvar dynresfps 24").unwrap();
+    assert_eq!(getvar(&mut s, "DYNRESFPS"), json!(24));
+    for bad in [json!(5), json!(121), json!(30.5), json!("fast")] {
+        assert!(s.execute("setvar", &json!({"name": "DYNRESFPS", "value": bad})).is_err(), "{bad}");
+    }
+    assert!(s.execute("setvar", &json!({"name": "DYNRESMODE", "value": 2})).is_err());
+    assert_eq!(getvar(&mut s, "DYNRESFPS"), json!(24), "a refused value changes nothing");
+    // Kept with the profile.
+    let saved = profile(&s);
+    let mut b = Session::new();
+    restore(&mut b, &saved);
+    assert_eq!((b.settings.dynres, b.settings.dynres_fps), (false, 24));
+    s.execute("options", &json!({"reset": true})).unwrap();
+    assert!(s.settings.dynres && s.settings.dynres_fps == 30);
+}

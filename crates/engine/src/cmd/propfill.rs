@@ -280,6 +280,8 @@ const MAX_FIXTURE_DEFAULT_TYPES: usize = 200;
 
 /// The WALLGEN tag key linking a built device to its spec tag.
 pub(super) const DEVID: &str = "devid";
+/// A device id's characters its element keeps under [`DEVID`], at most.
+const MAX_DEVID: usize = 240;
 
 fn round2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
@@ -310,6 +312,12 @@ pub(crate) struct DeviceBuild {
     pub misplaced: Vec<Value>,
     /// Devices drawn clear of every wall hung from the ceiling over them (Q6250).
     pub hung: usize,
+    /// Connections of ceiling equipment built at their equipment's housing above the ceiling,
+    /// those of them the job had given another height, and those whose housing is still more
+    /// than the rule's tolerance off the box (Q6521).
+    pub at_equipment: usize,
+    pub moved_to_equipment: usize,
+    pub off_equipment: Vec<Value>,
 }
 
 impl DeviceBuild {
@@ -327,6 +335,9 @@ impl DeviceBuild {
             "misplaced": self.misplaced.len(),
             "misplaced_first": self.misplaced.iter().take(50).collect::<Vec<_>>(),
             "hung_from_ceiling": self.hung,
+            "connections_at_equipment": self.at_equipment,
+            "connections_moved_to_equipment": self.moved_to_equipment,
+            "connections_off_equipment": self.off_equipment,
         })
     }
 }
@@ -429,7 +440,7 @@ fn wall_face_gap(pieces: &[HostPiece], level: &str, p: Vec2, min_top: f64) -> Op
 /// A built ceiling (a room's, a reflected ceiling plan's area): its level, plan extent, underside,
 /// and the plan triangles of its faces (what it covers: a room's outline, not its extent's box,
 /// which takes in a corner of the next room).
-struct BuiltCeiling {
+pub(crate) struct BuiltCeiling {
     level: Option<String>,
     bounds: Bounds2,
     z: f64,
@@ -451,7 +462,7 @@ impl BuiltCeiling {
 /// The underside of the smallest built ceiling of `level` over `p` (sheet units), inches over
 /// the floor at `floor` (drawing units): one that low is a soffit's or a cabinet's, not a room's
 /// ceiling, so it is passed over below 6'.
-fn ceiling_over(ceilings: &[BuiltCeiling], level: &str, p: Vec2, floor: f64, upf: f64) -> Option<f64> {
+pub(crate) fn ceiling_over(ceilings: &[BuiltCeiling], level: &str, p: Vec2, floor: f64, upf: f64) -> Option<f64> {
     ceilings
         .iter()
         .filter(|c| c.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)) && c.covers(p))
@@ -464,7 +475,7 @@ fn ceiling_over(ceilings: &[BuiltCeiling], level: &str, p: Vec2, floor: f64, upf
 const MAX_CEILING_FACES: usize = 20_000;
 
 /// The built ceilings (rooms', the reflected ceiling plans').
-fn built_ceilings(d: &Drawing) -> Vec<BuiltCeiling> {
+pub(crate) fn built_ceilings(d: &Drawing) -> Vec<BuiltCeiling> {
     d.model
         .iter()
         .filter(|e| super::elemprops::element_kind(e).as_deref() == Some("ceiling"))
@@ -1349,6 +1360,15 @@ const CIRCUIT_NEAR_FT: f64 = 25.0;
 /// else its circuit's other devices', else the wall's left. One outside its level's footprint is
 /// flagged `misplaced`.
 pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
+    build_devices_where(d, sp, None)
+}
+
+/// A device tag [`build_devices_where`] and [`rebuild_devices_where`] build (`None`: every one).
+pub(crate) type DevicePick<'a> = Option<&'a dyn Fn(&cadaddy_walk3d::tags::ElementTag) -> bool>;
+
+/// [`build_devices`] for the read devices `only` picks; the others still count as context (their
+/// circuits say which side of a wall a device serves) but are not built.
+pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: DevicePick<'_>) -> DeviceBuild {
     use super::mountlist::Datum;
     use super::validate_height as vh;
     let mut report = DeviceBuild::default();
@@ -1384,6 +1404,9 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
     // luminaire, a smoke detector. Their level, plan extent and underside.
     let ceilings = built_ceilings(d);
     let clear_rule = ClearOfWalls::read();
+    // A wall device's clearance under its room's ceiling (Q6520).
+    let under_rule = super::underceiling::Rule::load();
+    let conn_rule = super::equipconn::Numbers::read();
     // The built walls' pieces, for setting a wall device in its wall's face; the floors, for what
     // lies outside the building.
     let pieces = host_pieces(d, upf);
@@ -1394,6 +1417,9 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
     let stack = super::bspec::stack_offsets(d, sp);
     let by_circuit = circuit_points(sp, &devices);
     for t in devices {
+        if only.is_some_and(|f| !f(t)) {
+            continue;
+        }
         let Some(level) = sp.level(&t.level).filter(|l| l.sheet.is_none()) else { continue };
         let mark = field(t, "type").unwrap_or_default();
         // What its sheet made it (a fire alarm plan's `S`), else what its mark says.
@@ -1555,6 +1581,17 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         } else {
             mount
         };
+        // The connection of a piece of ceiling equipment (a ceiling exhaust fan's): at its
+        // housing, above the ceiling over it, as the equipment and the ceiling stand on this
+        // build, never at a height fixed earlier (Q6521).
+        let at_equipment = (kind == "equipment connection" || t.kind == "equipment_connection")
+            .then(|| {
+                let floor = level.elevation_ft * upf;
+                let over = |q: Vec2| ceiling_over(&ceilings, &level.name, q, floor, upf);
+                super::equipconn::place(t, &sp.mep.equipment, level, read_at, placed, upf, BOX_IN, &over, &conn_rule)
+            })
+            .flatten();
+        let mount = if at_equipment.is_some() { Mount::Ceiling } else { mount };
         let floor = level.elevation_ft * upf;
         let height: Chosen = match mount {
             Mount::Ceiling => {
@@ -1623,8 +1660,12 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 // measure it for the luminaire itself: an elevation's sconce.)
                 let lowest = if wall_light.is_some() { 72.0 } else { 0.0 };
                 let its_own = |c: &Chosen| wall_light.is_some() && c.doc.to_ascii_lowercase().contains("luminaire");
+                // Its legend row's words count for which usual height it takes (a wall-switch
+                // sensor's switch box, Q6520); a plumbing fixture's go by its own name only.
+                let default_words =
+                    if kind == "plumbing fixture" { fixture_words.clone() } else { format!("{fixture_words} {legend_words} {described}") };
                 documented().filter(|c| c.inches >= lowest || its_own(c)).or(wall_light).unwrap_or_else(|| {
-                    let (inches, datum, why) = rules_default(if in_casework { CASEWORK_LUMINAIRE } else { kind }, &fixture_words);
+                    let (inches, datum, why) = rules_default(if in_casework { CASEWORK_LUMINAIRE } else { kind }, &default_words);
                     Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
                 })
             }
@@ -1639,6 +1680,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             Some(Chosen { inches, from: "site_work", source, doc, datum: if mount == Mount::Floor { Datum::Bottom } else { Datum::Top } })
         }) {
             Some(c) => c,
+            None => height,
+        };
+        let height = match &at_equipment {
+            Some(a) => Chosen { inches: a.middle_in(), from: "equipment", source: SourceKind::Rule, doc: a.basis.clone(), datum: Datum::Centre },
             None => height,
         };
         *report.heights.entry(height.from).or_default() += 1;
@@ -1681,9 +1726,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let placed_on = on_wall
             .then(|| seat(&pieces, &level.name, p, zc, &others, upf, vkind != "device", documented_room.as_deref().map(|r| (&sides, r))))
             .flatten();
-        let (centre, along) = match &placed_on {
-            Some(st) => (st.centre, st.along),
-            None => (p, Vec2::new(1.0, 0.0)),
+        let (centre, along) = match (&at_equipment, &placed_on) {
+            (Some(a), _) => (a.centre, a.along),
+            (None, Some(st)) => (st.centre, st.along),
+            (None, None) => (p, Vec2::new(1.0, 0.0)),
         };
         let (x, y) = (centre.x, centre.y);
         // What it is (Q6315): its element's kind as read (its legend row's, its sheet's), else its
@@ -1764,7 +1810,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         }
         let symbol = Handle::parse_hex(&symbol_hex).unwrap_or(Handle(0));
         let mut xdata = super::wallgen::tag(cadaddy_walk3d::Part::Device, &level.name, symbol);
-        xdata.push(RawTag { code: 1000, value: format!("{DEVID}:{}", t.id.chars().take(240).collect::<String>()) });
+        xdata.push(RawTag { code: 1000, value: format!("{DEVID}:{}", t.id.chars().take(MAX_DEVID).collect::<String>()) });
         // Its element kind, set when it is made (`elemprops::element_kind` reads it).
         let element = class.map_or("device", super::fixturebody::Class::element_kind);
         xdata.push(RawTag { code: 1000, value: format!("{}:{element}", super::elemprops::ELEMENT_TAG) });
@@ -1844,6 +1890,32 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             hp.note = Some(format!("measured {}", height.datum.words()));
         }
         store.set("mount_height", hp.clone());
+        if let Some(a) = &at_equipment {
+            report.at_equipment += 1;
+            store.set("serves", Prop::new(a.tag.clone(), Source::from_doc(SourceKind::Rule, super::equipconn::RULE)));
+            // The height the job gave it earlier (its equipment's then): the design value, kept
+            // beside the one built, with why.
+            let given = field(t, "mount_height_in").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
+            if let Some(g) = given.filter(|g| (g - height.inches).abs() > 0.5) {
+                report.moved_to_equipment += 1;
+                let note = field(t, "mount_height_note").unwrap_or_else(|| "the height the job read for it".into());
+                let c = super::provenance::Correction {
+                    key: "mount_height".into(),
+                    design: format!("{}", round2(g)),
+                    corrected: format!("{}", round2(height.inches)),
+                    reason: format!(
+                        "a connection is at its equipment: {}'s housing above the ceiling over it as built, not the {} in fixed when it was read ({note})",
+                        a.tag,
+                        round2(g)
+                    ),
+                    rule: super::equipconn::RULE.into(),
+                };
+                super::provenance::correct_with(&mut store, &c, Source::from_doc(SourceKind::Note, &note), hp.source.clone());
+            }
+            if a.gap_in > conn_rule.tolerance_in && report.off_equipment.len() < MAX_LISTED {
+                report.off_equipment.push(json!({"level": level.name, "mark": mark, "equipment": a.tag, "gap_in": round2(a.gap_in), "ceiling_in": a.ceiling_in.map(round2)}));
+            }
+        }
         if height.datum != Datum::Centre || mount == Mount::Floor {
             store.set("mount_datum", Prop::new(height.datum.name(), hp.source.clone()).with_note("what its height is measured to on it"));
         }
@@ -1853,6 +1925,22 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 "own_note, elevation, enlarged_plan_note, fixture_schedule, legend, general_notes, project_rule (the documents, in order), ceiling, floor, equipment, wall_luminaire_rule or default",
             ),
         );
+        // How far under its room's ceiling its top must stay, where its documents say (an exit
+        // sign's legend `4" BELOW CEILING`, Q6520): its legend row, else its schedule row.
+        if mount == Mount::Wall {
+            let said = under_rule
+                .clearance_in_words(&legend_words)
+                .map(|c| (c, SourceKind::Legend))
+                .or_else(|| under_rule.clearance_in_words(&format!("{installation}, {described}")).map(|c| (c, SourceKind::Schedule)));
+            if let Some(((inches, words), said_in)) = said {
+                store.set(
+                    super::underceiling::CLEARANCE_KEY,
+                    Prop::new(round2(inches), Source::from_doc(said_in, &words))
+                        .with_unit("in")
+                        .with_note("its top's least clearance under its room's finished ceiling, as its documents give it"),
+                );
+            }
+        }
         store.set(
             "mounting",
             Prop::new(
@@ -2140,8 +2228,23 @@ pub struct DeviceRebuild {
 /// elements built before go, every other element stays as it is. A device on a level that
 /// `model.build` stacked moves as that level's built objects did, and the people's overrides go
 /// back on.
+///
+/// Every device comes back as the spec says, so what a step corrected on the elements only (a
+/// light moved to its RCP spot, a box raised to its ceiling, a keynote's properties) is lost: a
+/// step running after such corrections builds its own new devices with
+/// [`rebuild_devices_where`] instead (Q6439).
 pub(crate) fn rebuild_devices(s: &mut Session, cmd: &str) -> Result<DeviceRebuild> {
+    rebuild_devices_where(s, cmd, None)
+}
+
+/// [`rebuild_devices`] for the read devices `only` picks (a step's own new ones): only their
+/// earlier elements go and only they are built; every other device element stays as it stands,
+/// with whatever was corrected on it since the build.
+pub(crate) fn rebuild_devices_where(s: &mut Session, cmd: &str, only: DevicePick<'_>) -> Result<DeviceRebuild> {
     let (sp, _) = super::bspec::current(s, cmd)?;
+    // The picked devices' ids, as their elements carry them.
+    let picked: Option<BTreeSet<String>> =
+        only.map(|f| sp.tags.iter().filter(|t| read_device(t) && f(t)).map(|t| t.id.chars().take(MAX_DEVID).collect::<String>()).collect());
     let d = s.doc_mut()?;
     // Each level's stacking move, as its built objects (not devices) carry it.
     let mut moved: HashMap<String, Vec2> = HashMap::new();
@@ -2152,16 +2255,23 @@ pub(crate) fn rebuild_devices(s: &mut Session, cmd: &str) -> Result<DeviceRebuil
             moved.entry(level.to_ascii_lowercase()).or_insert(off);
         }
     }
-    let old: Vec<Handle> = d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle).collect();
+    let old: Vec<Handle> = d
+        .model
+        .iter()
+        .filter(|e| super::wallgen::made_as(e).as_deref() == Some("device"))
+        .filter(|e| picked.as_ref().is_none_or(|ids| made(e, DEVID).is_some_and(|id| ids.contains(&id))))
+        .map(|e| e.handle)
+        .collect();
     for h in &old {
         d.model.remove(*h);
     }
-    let built = build_devices(d, &sp).built;
+    let kept: BTreeSet<Handle> = d.model.handles().into_iter().collect();
+    let built = build_devices_where(d, &sp, only).built;
     if !moved.is_empty() {
         let new: Vec<(Handle, Vec2)> = d
             .model
             .iter()
-            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("device"))
+            .filter(|e| !kept.contains(&e.handle) && super::wallgen::made_as(e).as_deref() == Some("device"))
             .filter_map(|e| super::bspec::made_level(e).and_then(|l| moved.get(&l.to_ascii_lowercase()).map(|off| (e.handle, *off))))
             .collect();
         for (h, off) in new {
@@ -2171,6 +2281,13 @@ pub(crate) fn rebuild_devices(s: &mut Session, cmd: &str) -> Result<DeviceRebuil
                 e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
             });
         }
+    }
+    // The new ones where they stand now (stacked with their level's ceilings): none left above
+    // its room's ceiling (Q6520).
+    let new: BTreeSet<Handle> =
+        d.model.iter().filter(|e| !kept.contains(&e.handle) && super::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle).collect();
+    if !new.is_empty() {
+        super::underceiling::keep_under(d, &sp, Some(&new));
     }
     // An automatic rebuild (the plan changed) builds from the spec it keeps: the same devices.
     if let Some(kept) = s.state_mut()?.wallgen.as_mut().and_then(|g| g.spec.as_mut()) {
