@@ -573,6 +573,10 @@ fn main() -> eframe::Result {
             create.device_descriptor = std::sync::Arc::new(move |adapter| {
                 let mut d = base(adapter);
                 d.required_limits.max_buffer_size = d.required_limits.max_buffer_size.max(adapter.limits().max_buffer_size);
+                // Timestamp queries where the adapter has them: the 2D canvas and the 3D views time
+                // their drawing to choose the resolution of a moving view (dynamic resolution); and
+                // the adapter's own format features, for 2× multisampling on integrated graphics.
+                d.required_features |= cadaddy_ui_egui::gpu::wanted_features(adapter);
                 d
             });
         }

@@ -327,6 +327,7 @@ fn the_commands_with_open_parameters_are_these() {
         "fourd.link",
         "array",
         "arrayclassic",
+        "bim.view.rules",
         "-group",
         "-plot",
         "attach",

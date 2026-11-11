@@ -1500,6 +1500,16 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
         }
     }
+    // Q6514: a floor with no sheet titled as its floor plan while a sheet titled so was filed as
+    // something else is asked, not built from another plan of the floor without a word.
+    let filed_otherwise = classified.get("floor_plans_filed_otherwise").and_then(Value::as_array).cloned().unwrap_or_default();
+    for f in filed_otherwise.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let q = floor_plan_filed_question(job, f);
+        job.add_question_to_worklist(&q);
+        if let Some(st) = job.stage_mut(StageName::Classify) {
+            st.questions.push(q);
+        }
+    }
 
     // MUST 3 (typicalfloors): a level with an architectural plan but no plan for a trade
     // gets a finding.
@@ -1545,6 +1555,49 @@ fn plan_level_question(job: &mut GuidedJob, sheet: &Value, level_codes: &[String
             leftovers: Vec::new(),
         }),
         default: Some(default),
+        answer_schema: Some(json!({"type": "string"})),
+        answer: None,
+        answered_by: None,
+        answered_at: None,
+        kind: QuestionKind::Doubt,
+    }
+}
+
+/// The start of the question for a sheet titled as a floor plan but filed as something else.
+const FLOOR_PLAN_FILED_QUESTION: &str = "Sheet titled as a floor plan but filed as";
+
+/// The answer that makes such a sheet its level's floor plan.
+const FLOOR_PLAN_FILED_YES: &str = "It is the floor plan";
+
+/// The question for a sheet whose title names a floor plan that classify filed as something else
+/// while a level has no sheet titled as its floor plan (`{sheet, title, type, level}`, Q6514):
+/// is it that floor plan? Kept as filed by default (it may be the floor's notes or details); the
+/// answer that it is makes it the level's plan.
+fn floor_plan_filed_question(job: &mut GuidedJob, f: &Value) -> Question {
+    let number = f.get("sheet").and_then(Value::as_str).unwrap_or("?");
+    let title = f.get("title").and_then(Value::as_str).unwrap_or("");
+    let kind = f.get("type").and_then(Value::as_str).unwrap_or("other");
+    let level = f.get("level").and_then(Value::as_str).unwrap_or("");
+    let floor = if level.is_empty() { "the building".to_string() } else { level_name(level) };
+    let keep = format!("Keep it as {kind}");
+    Question {
+        id: job.next_qid(StageName::Classify),
+        stage: StageName::Classify,
+        question: format!(
+            "{FLOOR_PLAN_FILED_QUESTION} {kind}: {number} \"{title}\" — {floor} has no sheet titled as its floor plan. Is this sheet its floor plan?"
+        ),
+        why: "The sheet's title names a floor plan, but no part of it was read as one; the floor is otherwise built from another of its plans (a finish, tile or furniture plan)".into(),
+        choices: vec![FLOOR_PLAN_FILED_YES.into(), keep.clone()],
+        evidence: Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: Some(number.to_string()),
+            at: None,
+            values: Some(json!({"number": number, "title": title, "type": kind, "level": level})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some(keep),
         answer_schema: Some(json!({"type": "string"})),
         answer: None,
         answered_by: None,
@@ -4050,6 +4103,8 @@ fn finish_tag(r: &Value) -> bool {
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
+    // A roof plan makes no rooms: its labels are roof areas, canopies and notes (Q6285).
+    let roof = roof_plan_test(job);
     // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
     // one reading traces: the last floors were left out).
     // (A level's floor plan, not its finish or furniture plan: those print the floor again with
@@ -4058,10 +4113,28 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         let of: Vec<&SheetRegion> = job
             .sheet_regions
             .iter()
-            .filter(|r| r.kind == "plan" && r.not_built.is_empty() && (!arch_only || r.discipline.eq_ignore_ascii_case("A")))
+            .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !roof(r) && (!arch_only || r.discipline.eq_ignore_ascii_case("A")))
             .collect();
         floor_plans_first(job, of).into_iter().map(SheetRegion::plan_rect).collect()
     };
+    // The plans no room is read on, and why: a floor plan with no level reads none (its rooms
+    // would be on no floor), a roof plan none.
+    let not_read: Vec<Value> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.kind == "plan")
+        .filter_map(|r| {
+            let why = if !r.not_built.is_empty() {
+                format!("the sheet is not built ({})", r.not_built)
+            } else if roof(r) {
+                "a roof plan makes no rooms".to_string()
+            } else {
+                return None;
+            };
+            Some(json!({"sheet": r.number, "level": r.level, "discipline": r.discipline, "why": why}))
+        })
+        .take(MAX_QUESTIONS_PER_STAGE)
+        .collect();
     // Rooms come from the architectural floor plans: other trades' plans show the same rooms
     // again (and phantom ones). Any plan when the set has no architectural ones.
     let regions = Some(plans(true)).filter(|r| !r.is_empty()).unwrap_or_else(|| plans(false));
@@ -4084,7 +4157,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let others: Vec<[f64; 4]> = job
         .sheet_regions
         .iter()
-        .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !r.discipline.eq_ignore_ascii_case("A"))
+        .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !roof(r) && !r.discipline.eq_ignore_ascii_case("A"))
         .filter(|r| !non_building.contains(&r.discipline.to_ascii_uppercase().as_str()))
         .map(SheetRegion::plan_rect)
         .collect();
@@ -4148,7 +4221,13 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
     let dropped = rooms_off_the_building(job, &mut rooms_result);
+    if !not_read.is_empty() {
+        progress_line(&format!("  plans no room is read on: {}", not_read.len()));
+    }
     if let Some(o) = rooms_result.as_object_mut() {
+        if !not_read.is_empty() {
+            o.insert("plans_not_read".into(), json!(not_read));
+        }
         o.insert("not_rooms".into(), dropped);
         if let Some(n) = o.get("rooms").and_then(Value::as_array).map(Vec::len) {
             o.insert("count".into(), json!(n));
@@ -4378,8 +4457,48 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // A name whose trace stopped at its reach was not searched farther: its room may be bigger.
+    if let Some(n) = rooms_result.get("beyondReachCount").and_then(Value::as_u64).filter(|n| *n > 0) {
+        let names: Vec<&str> =
+            rooms_result.get("beyondReach").and_then(Value::as_array).into_iter().flatten().filter_map(|r| r["name"].as_str()).take(5).collect();
+        job.add_finding(
+            StageName::Rooms,
+            &format!("{n} room names closed no room within the plan they are on"),
+            &format!(
+                "The room trace looked across the whole plan each name is on and found no closed outline round {} ({}{}); it searched no farther. Their rooms are not built.",
+                if n == 1 { "it" } else { "them" },
+                names.join(", "),
+                if n as usize > names.len() { ", ..." } else { "" }
+            ),
+            2,
+            vec!["Check the plan's walls round these names (a gap, a wall on another layer), or the sheet's plan area".into()],
+            None,
+            false,
+        );
+    }
+
     job.audit("stage_run", "pipeline", None, Some(StageName::Rooms), Some(json!({"rooms_found": room_count})));
     Ok(rooms_result)
+}
+
+/// Whether a sheet region is a roof plan of a building with storeys under it: every level it
+/// covers is a roof ([`cadaddy_walk3d::levels::DatumKind::Roof`]: `R`, `ROOF`, `LOW ROOF`) and
+/// the job's plans give more than one level. A set of one level named so is still a storey
+/// (as the build has it, [`super::wallgen::roof_level`]).
+fn roof_plan_test(job: &GuidedJob) -> impl Fn(&SheetRegion) -> bool + use<> {
+    let is_roof = |l: &str| cadaddy_walk3d::levels::canonical_level(l).is_some_and(|(_, k)| k == cadaddy_walk3d::levels::DatumKind::Roof);
+    let levels: BTreeSet<String> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.kind == "plan" && r.not_built.is_empty())
+        .flat_map(SheetRegion::all_levels)
+        .map(|l| level_name(&l).to_ascii_uppercase())
+        .collect();
+    let storeys = levels.len() > 1;
+    move |r: &SheetRegion| {
+        let all = r.all_levels();
+        storeys && !all.is_empty() && all.iter().all(|l| is_roof(l))
+    }
 }
 
 /// Statements of the key count read at most (every text of a print set is looked at).
@@ -7674,6 +7793,35 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let stacked = number_stacked_rooms(s)?;
     if stacked > 0 {
         progress_line(&format!("  rooms numbered from the same room on another floor: {stacked}"));
+    }
+    // Every room the rooms stage kept with an outline is in the model: the build's own trace
+    // missed some (Q6285: 16 of 167 built); those are built from the stage's trace, and one that
+    // can't be is reported with why.
+    let (from_trace, not_built) = build_kept_rooms(s, job, shells.as_deref())?;
+    if from_trace > 0 || !not_built.is_empty() {
+        progress_line(&format!(
+            "  rooms read but missed by the build's trace: {from_trace} built from the rooms stage's trace, {} not built",
+            not_built.len()
+        ));
+    }
+    if from_trace > 0 {
+        result["rooms_built_from_trace"] = json!(from_trace);
+    }
+    if !not_built.is_empty() {
+        let mut why: BTreeMap<String, usize> = BTreeMap::new();
+        for r in &not_built {
+            *why.entry(r.get("why").and_then(Value::as_str).unwrap_or("").to_string()).or_default() += 1;
+        }
+        job.add_finding(
+            StageName::BimBuild,
+            "Rooms read but not built",
+            &format!("{} rooms the rooms stage kept with an outline are not in the model: {why:?}", not_built.len()),
+            2,
+            vec!["See bim_build rooms_not_built for each room and why".into()],
+            None,
+            false,
+        );
+        result["rooms_not_built"] = json!(not_built);
     }
     let t = web_time::Instant::now();
     if let Some(v) = placed {
@@ -16262,10 +16410,11 @@ fn drawn_gear_onto_plans(
 ) -> DrawnGearPlaced {
     let mut out = DrawnGearPlaced::default();
     let Some(place) = place else { return out };
-    // A place this step may replace: lettering, a proposal, its own of a run before.
+    // A place this step may replace: lettering, the layout of an earlier step (in the room the
+    // prints call, or proposed), its own of a run before.
     let replaceable = |e: &cadaddy_walk3d::MepEquipment| {
         e.sources.get("position").map(String::as_str) == Some(super::printcond::ROOM_PANEL_POSITION)
-            || e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed"))
+            || super::gearbuild::laid_out(e)
             || e.sources.get("footprint").is_some_and(|f| f.starts_with(super::gearbuild::DRAWN_FOOTPRINT))
     };
     let mut todo: Vec<String> = sp
@@ -16351,6 +16500,35 @@ fn drawn_gear_onto_plans(
         !gone
     });
     sp.mep.equipment.extend(made);
+    out
+}
+
+/// Where the electrical sheets (`pages`: riser and one-line labels, plan and sheet notes) call
+/// each panel the schedules list and the plans don't draw: upper case tag → the calls, in page
+/// order ([`super::gearbuild::called_in_texts`]).
+fn called_gear_locations(
+    sp: &cadaddy_walk3d::BuildingSpec,
+    pages: &[(String, cadaddy_doc::Drawing)],
+) -> BTreeMap<String, Vec<super::gearbuild::CalledAt>> {
+    let tags: Vec<String> = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .filter(|p| p.typical_of.is_none() && !sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&p.panel)))
+        .map(|p| p.panel.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let mut out: BTreeMap<String, Vec<super::gearbuild::CalledAt>> = BTreeMap::new();
+    if tags.is_empty() {
+        return out;
+    }
+    for (number, page) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(page);
+        let what = if super::onelinegear::is_diagram(&texts) { "riser or one-line label" } else { "sheet note" };
+        for (k, c) in super::gearbuild::called_in_texts(&texts, number, what, &tags) {
+            out.entry(k).or_default().push(c);
+        }
+    }
     out
 }
 
@@ -16575,7 +16753,10 @@ fn gear_step(
             }
         }
     }
-    let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
+    // Where the electrical sheets call the panels the plans don't draw (riser and one-line
+    // labels, notes), after each schedule's own location (Q6513).
+    let called = called_gear_locations(&sp, pages);
+    let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms, &called);
     let mut new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
     new_tags.extend(drawn.tags.iter().cloned());
     new_tags.extend(resized.iter().cloned());
@@ -16583,6 +16764,11 @@ fn gear_step(
     let zones = planned.zones.clone();
     let placed: Vec<String> =
         planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
+    // Laid out in the room the prints call (the documents' room), and proposed (no print locates it).
+    let by_status = |st: &str| -> Vec<String> {
+        planned.equipment.iter().filter(|e| e.sources.get("status").is_some_and(|x| x.eq_ignore_ascii_case(st))).map(|e| e.tag.clone()).collect()
+    };
+    let (located, proposed) = (by_status(super::gearbuild::LOCATED), by_status(super::gearbuild::PROPOSED));
     sp.mep.equipment.extend(planned.equipment);
     // A panel only lettered or proposed, with no working space where that puts it, takes a face
     // in its room that has it.
@@ -16692,7 +16878,7 @@ fn gear_step(
     let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
     let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
     let line = format!(
-        "  electrical gear: feeder types {} ({}); one-line feeds {}; schedule circuits given the one-line's breaker/feeder {from_oneline}; gear submittals give {} panels; at their plan symbols {}: {}; laid out {}: {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
+        "  electrical gear: feeder types {} ({}); one-line feeds {}; schedule circuits given the one-line's breaker/feeder {from_oneline}; gear submittals give {} panels; at their plan symbols {}: {}; laid out {} ({} where the prints call them, {} proposed): {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
         types.len(),
         type_tags.join(", "),
         incoming.len(),
@@ -16700,6 +16886,8 @@ fn gear_step(
         drawn.placed.len(),
         drawn.placed.join("; "),
         placed.len(),
+        located.len(),
+        proposed.len(),
         placed.join("; "),
         planned.unplaced,
         findings.len()
@@ -16929,7 +17117,7 @@ fn gear_step(
         }
     }
     result["gear"] = json!({
-        "placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review,
+        "placed": placed, "located": located, "proposed": proposed, "feeders": feeders, "unplaced": planned.unplaced, "review": review,
         "inferred_boxes": inferred_boxes,
         "oneline": {
             "sheets": oneline.sheets, "gear": oneline.gear, "electrodes": oneline.electrodes, "by_kind": oneline.by_kind,
@@ -16984,22 +17172,52 @@ fn building_outlines(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec
 /// each type once, and whether their notes forbid substitutions. `electrical` says which pages
 /// are electrical sheets (where a plain `FIXTURE SCHEDULE` is the luminaire schedule);
 /// `plan_tags` the tags the plans print, that check which column holds the marks.
+/// The designer's schedule is the source of types when the set has one: a lighting calculation's
+/// table of the luminaires it calculated with ([`super::lightsched::is_calculation_table`]; its
+/// labels are the calculation's names) adds none. A set with only a calculation's table takes its
+/// rows, their source saying so.
 fn fixture_schedule(
     pages: &[(String, cadaddy_doc::Drawing)],
     electrical: &dyn Fn(&str) -> bool,
     plan_tags: &BTreeSet<String>,
 ) -> (Vec<cadaddy_walk3d::FixtureType>, bool) {
-    let mut types: Vec<cadaddy_walk3d::FixtureType> = Vec::new();
-    let mut no_subs = false;
+    use super::lightsched as ls;
+    // Each table's rows and whether its notes forbid substitutions: the designer's, the calculations'.
+    let mut designed: Vec<(Vec<cadaddy_walk3d::FixtureType>, bool)> = Vec::new();
+    let mut calculated: Vec<(Vec<cadaddy_walk3d::FixtureType>, bool)> = Vec::new();
     for (number, d) in pages {
         let texts = cadaddy_mepfix::sheet_facts::texts(d);
-        for tb in luminaire_schedules(&texts, || super::gridtable::segments(d), number, electrical(number)) {
-            let (rows, ns) = super::lightsched::fixture_types(&tb, plan_tags);
-            no_subs |= ns;
-            for r in rows {
-                if !types.iter().any(|t| t.tag == r.tag) {
-                    types.push(r);
+        let tables = luminaire_schedules(&texts, || super::gridtable::segments(d), number, electrical(number));
+        let calc_sheet = !tables.is_empty() && ls::prints_calculation(&texts);
+        for tb in tables {
+            let (mut rows, ns) = ls::fixture_types(&tb, plan_tags);
+            if ls::is_calculation_table(&tb, calc_sheet) {
+                for r in &mut rows {
+                    r.source = format!("{} {} (lighting calculation table)", tb.sheet, tb.title.trim());
                 }
+                calculated.push((rows, ns));
+            } else {
+                designed.push((rows, ns));
+            }
+        }
+    }
+    let has_schedule = designed.iter().any(|(rows, _)| !rows.is_empty());
+    let left_out: Vec<String> =
+        if has_schedule { calculated.iter().flat_map(|(rows, _)| rows.iter().map(|r| r.tag.clone())).collect() } else { Vec::new() };
+    if !left_out.is_empty() {
+        progress_line(&format!(
+            "  light fixture schedule: {} mark(s) of lighting calculation tables are no types, the set's schedule lists its types: {}",
+            left_out.len(),
+            left_out.join(", ")
+        ));
+    }
+    let mut types: Vec<cadaddy_walk3d::FixtureType> = Vec::new();
+    let mut no_subs = false;
+    for (rows, ns) in if has_schedule { designed } else { calculated } {
+        no_subs |= ns;
+        for r in rows {
+            if !types.iter().any(|t| t.tag == r.tag) {
+                types.push(r);
             }
         }
     }
@@ -21970,9 +22188,13 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
         sitework::site_loads(&sp, &carried).iter().take(MAX_SITE_RFIS).map(|l| format!("{}-{} {}", l.panel, l.number, l.description)).collect();
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     // Built: the luminaires, then the concrete and the gear and runs, moved as the build moved
-    // the slab level to stack it; each element marked as site work.
+    // the slab level to stack it; each element marked as site work. Only this step's own
+    // devices (Q6439): the building's were corrected on the model just before (lights at their
+    // RCP spots, boxes at their ceilings, keynotes' boxes raised), not in the spec, and a whole
+    // rebuild would put them back where the plans read them while the report kept the moves.
     if !all.tags.is_empty() || forgot > 0 {
-        super::propfill::rebuild_devices(s, "bim_build")?;
+        let mine = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.contains_key(sitework::MARK);
+        super::propfill::rebuild_devices_where(s, "bim_build", Some(&mine))?;
     }
     let before: BTreeSet<cadaddy_doc::Handle> = s.doc()?.model.handles().into_iter().collect();
     {
@@ -22612,8 +22834,8 @@ fn build_runs(
 /// What an equipment question begins with (its tag follows).
 const EQUIP_QUESTION: &str = "Equipment electrical data: ";
 
-/// The panels only lettered or proposed whose place fails its working space (or stands on no
-/// wall, or under a duct), each moved to the nearest face in its room that has it ([`super::validate_gear::clear_face`]). Their tags.
+/// The panels only lettered, or laid out by the build (located or proposed), whose place fails its
+/// working space (or stands on no wall, or under a duct), each moved to the nearest face in its room that has it ([`super::validate_gear::clear_face`]). Their tags.
 fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::BuildingSpec, rooms: &[super::gearbuild::RoomBox]) -> Vec<String> {
     use super::validate_gear::{FaceNeed, Obstacle, built_doors, clear_face, gear_need};
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -22621,8 +22843,7 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
     let movable = |e: &cadaddy_walk3d::MepEquipment| {
         matches!(e.kind.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center")
             && !e.round
-            && (e.sources.get("position").map(String::as_str) == Some(super::printcond::ROOM_PANEL_POSITION)
-                || e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed")))
+            && (e.sources.get("position").map(String::as_str) == Some(super::printcond::ROOM_PANEL_POSITION) || super::gearbuild::laid_out(e))
     };
     if !sp.mep.equipment.iter().any(movable) {
         return Vec::new();
@@ -22681,7 +22902,7 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
             need_in,
             width_in: code.width_in.unwrap_or(30.0),
             height_in: code.height_in.unwrap_or(78.0).max((e.bottom_ft + e.height_ft) * 12.0),
-            recessed: e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess")),
+            recessed: super::mep::mounted_in_wall(e),
             overhead: overhead(&lv, (e.bottom_ft + e.height_ft) * 12.0),
         };
         let found = clear_face(e, &pieces, &others, doors.get(&lv).map_or(&[][..], Vec::as_slice), room.as_deref(), elevation * upf, &need, upf);
@@ -25901,6 +26122,105 @@ fn building_shells(
     (shells, circulation)
 }
 
+/// The most rooms the rooms stage kept that are checked against the model (and reported).
+const MAX_KEPT_ROOMS: usize = 5_000;
+/// The share of the smaller box two rooms' boxes must overlap to be one room.
+const SAME_ROOM_OVERLAP: f64 = 0.5;
+
+/// Each room the rooms stage kept with an outline (not another trade's, not one taken from the
+/// model) that no room element of its level is: none with its number, none holding its label's
+/// point or the middle of its outline, none overlapping it by [`SAME_ROOM_OVERLAP`]. Each is built
+/// from the stage's trace on its level (stacked as the level is), its basis in its tags; one that
+/// can't be is listed with why: its plan has no level, its level is not the model's, it lies
+/// outside its level's exterior walls, or its outline makes no floor. How many were built, and
+/// the ones not built (`name`, `number`, `level`, `sheet`, `why`).
+fn build_kept_rooms(s: &mut Session, job: &GuidedJob, shells: Option<&[(String, Vec<[cadaddy_geom::Vec2; 2]>)]>) -> Result<(usize, Vec<Value>)> {
+    let read: Vec<Value> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok((0, Vec::new())) };
+    let pt = |v: &Value| Some(cadaddy_geom::Vec2::new(v.get(0)?.as_f64()?, v.get(1)?.as_f64()?)).filter(|p| p.is_finite());
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let bounds = |o: &[cadaddy_geom::Vec2]| cadaddy_geom::Bounds2::from_points(o.iter().copied());
+    let overlap = |a: &cadaddy_geom::Bounds2, b: &cadaddy_geom::Bounds2| {
+        let w = (a.max.x.min(b.max.x) - a.min.x.max(b.min.x)).max(0.0);
+        let h = (a.max.y.min(b.max.y) - a.min.y.max(b.min.y)).max(0.0);
+        let least = (a.width() * a.height()).min(b.width() * b.height());
+        least > 0.0 && w * h >= SAME_ROOM_OVERLAP * least
+    };
+    // The model's rooms of each level, back on their level's plan (the levels stacked).
+    let offsets = super::bimlook::stack_offsets(s.doc()?);
+    let offset = |level: &str| offsets.iter().find(|(l, _)| l.eq_ignore_ascii_case(level)).map_or(cadaddy_geom::Vec2::new(0.0, 0.0), |o| o.1);
+    let mut model: Vec<(String, Option<String>, Vec<cadaddy_geom::Vec2>)> = super::bspec::room_elements(s.doc()?)
+        .into_iter()
+        .map(|m| {
+            let off = offset(&m.level);
+            (m.level, m.number, m.outline.iter().map(|p| *p - off).collect())
+        })
+        .collect();
+    let (mut built, mut not_built) = (0, Vec::new());
+    for r in read
+        .iter()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true) && r.get("from_model").and_then(Value::as_bool) != Some(true))
+        .take(MAX_KEPT_ROOMS)
+    {
+        let outline: Vec<cadaddy_geom::Vec2> = r.get("outline").and_then(Value::as_array).into_iter().flatten().filter_map(pt).collect();
+        if outline.len() < 3 {
+            continue;
+        }
+        let (name, number, level, sheet) = (text(r, "name"), text(r, "number"), text(r, "level"), text(r, "sheet"));
+        let at = r.get("at").and_then(pt).unwrap_or_else(|| bounds(&outline).center());
+        let mut report = |why: String| not_built.push(json!({"name": name, "number": number, "level": level, "sheet": sheet, "why": why}));
+        if level.is_empty() {
+            report("its plan has no level".into());
+            continue;
+        }
+        let Some(spec_level) = sp.level(&level).map(|l| l.name.clone()) else {
+            report(format!("level {level} is not a level of the model"));
+            continue;
+        };
+        let off = offset(&spec_level);
+        let b = bounds(&outline);
+        let middle = b.center();
+        let have = model.iter().filter(|(l, _, _)| l.eq_ignore_ascii_case(&spec_level)).any(|(_, n, o)| {
+            (!number.is_empty() && n.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(&number)))
+                || cadaddy_geom::point_in_polygon(o, at)
+                || cadaddy_geom::point_in_polygon(o, middle)
+                || overlap(&bounds(o), &b)
+        });
+        if have {
+            continue;
+        }
+        let outside = shells
+            .and_then(|sh| sh.iter().find(|(l, _)| l.eq_ignore_ascii_case(&spec_level)))
+            .is_some_and(|(_, rects)| !rects.iter().any(|[a, z]| middle.x >= a.x && middle.x <= z.x && middle.y >= a.y && middle.y <= z.y));
+        if outside {
+            report(format!("outside the exterior walls of {spec_level}"));
+            continue;
+        }
+        let shown = if name.is_empty() { format!("Room {number}") } else { name.clone() };
+        let mut extra = vec![
+            format!("name_source:the rooms stage's trace round its label on {sheet}"),
+            format!("basis:drawn: the closed outline round the room's label on {sheet}; the build's own trace did not find it"),
+        ];
+        if !number.is_empty() {
+            extra.insert(0, format!("number:{number}"));
+        }
+        match super::bspec::add_room_element(s.doc_mut()?, &sp, &spec_level, &outline, &shown, off, &extra) {
+            Some(_) => {
+                built += 1;
+                model.push((spec_level, (!number.is_empty()).then(|| number.clone()), outline));
+            }
+            None => report("its outline makes no floor of the level".into()),
+        }
+    }
+    Ok((built, not_built))
+}
+
 /// Removes the room elements whose middle is outside their level's shell (the levels stacked:
 /// back to the level's own plan first); how many.
 fn drop_rooms_outside_shell(s: &mut Session, shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)]) -> Result<usize> {
@@ -27242,7 +27562,11 @@ fn question_value(job: &GuidedJob, q: &Question) -> Value {
 /// kind of question.
 fn rerun_stage_of(q: &Question) -> Option<StageName> {
     match q.stage {
-        StageName::Classify if q.question.contains("discipline") || q.question.contains("names no level") => Some(StageName::Rooms),
+        StageName::Classify
+            if q.question.contains("discipline") || q.question.contains("names no level") || q.question.starts_with(FLOOR_PLAN_FILED_QUESTION) =>
+        {
+            Some(StageName::Rooms)
+        }
         StageName::Levels if q.question.contains("floor-to-floor") || question_level(q).is_some() => Some(StageName::BimBuild),
         StageName::Rooms => Some(StageName::Rooms),
         StageName::Devices if q.question.contains("Unknown symbol") || q.question.starts_with("No device") || q.kind == QuestionKind::Verify => {
@@ -27569,6 +27893,17 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
                     return (Some(StageName::Rooms), format!("sheet {number} is level {level}"));
                 }
                 return (None, "recorded; answer with the level (\"Level 3\") to move the sheet".into());
+            }
+            if q.question.starts_with(FLOOR_PLAN_FILED_QUESTION) {
+                if text != FLOOR_PLAN_FILED_YES {
+                    return (None, format!("recorded; sheet {number} keeps its type"));
+                }
+                set_sheet_fact(job, &number, "type", "plan");
+                let level = value("level");
+                if !level.is_empty() && !cadaddy_walk3d::levels::is_datum_name(&level) {
+                    set_sheet_fact(job, &number, "level", &level);
+                }
+                return (Some(StageName::Rooms), format!("sheet {number} is the floor plan"));
             }
             (None, "recorded".into())
         }
@@ -29863,7 +30198,7 @@ mod tests {
         let mid = |lo: [f64; 2], hi: [f64; 2]| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
         let far = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) / 12.0;
         // Before: every piece from its schedule's location, nothing at its drawing.
-        let before = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room));
+        let before = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room), &BTreeMap::new());
         let off: Vec<(String, f64)> = drawn
             .iter()
             .map(|(t, _, lo, hi, _)| {
@@ -29900,9 +30235,10 @@ mod tests {
         let ys: Vec<f64> = ["MDP", "DP4", "A", "B"].iter().map(|t| sp.mep.equipment.iter().find(|e| e.tag == *t).map_or(0.0, |e| e.min[1])).collect();
         assert!(ys.windows(2).all(|w| w[0] > w[1]), "{ys:?}");
         // Only the undrawn panel is left to its schedule's location.
-        let after = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room));
+        let after = plan(&sp, &[], &BTreeMap::new(), &gear, std::slice::from_ref(&room), &BTreeMap::new());
         assert_eq!(after.equipment.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>(), ["C"]);
-        assert_eq!(after.equipment[0].sources.get("status").map(String::as_str), Some("proposed"));
+        // Its schedule's location names the room: located there by rule, not proposed (Q6513).
+        assert_eq!(after.equipment[0].sources.get("status").map(String::as_str), Some(crate::cmd::gearbuild::LOCATED));
         // A rerun replaces its own and adds nothing.
         let again = drawn_gear_onto_plans(s.doc().unwrap(), &job, &mut sp, Some(&place), std::slice::from_ref(&room), &gear);
         assert_eq!(again.placed.len(), 4);
@@ -30212,6 +30548,44 @@ mod tests {
     /// one-line's pieces stand beside it with the FDR-A feeders between them; the takeoff carries
     /// every one; the unsized feeder is built by code for the contactor's rating (inferred) and a
     /// review finding, never a silent zero.
+    /// Q6513: a riser or one-line label and a sheet's note on the electrical sheets call the
+    /// rooms of the panels the plans don't draw; a drawn or typical panel is not looked for.
+    #[test]
+    fn electrical_sheets_call_the_rooms_of_undrawn_panels() {
+        use crate::cmd::gearbuild::CalledAt;
+        use cadaddy_walk3d::{BuildingSpec, MepEquipment, PanelSchedule};
+        let mut sp = BuildingSpec::default();
+        for t in ["LP3", "LP9", "SB1"] {
+            sp.mep.panel_schedules.push(PanelSchedule { panel: t.into(), ..Default::default() });
+        }
+        sp.mep.panel_schedules.push(PanelSchedule { panel: "LPT".into(), typical_of: Some(4), ..Default::default() });
+        sp.mep.equipment.push(MepEquipment { tag: "SB1".into(), kind: "switchboard".into(), ..Default::default() });
+        let page = |texts: &[(&str, f64, f64)]| {
+            let mut d = cadaddy_doc::Drawing::default();
+            for (v, x, y) in texts {
+                d.add(&Space::Model, Common::default(), EntityKind::Text(text(v, *x, *y, 1.0))).ok();
+            }
+            d
+        };
+        let riser = page(&[
+            ("SINGLE LINE DIAGRAM", 10.0, 90.0),
+            ("PANEL 'LP3' LOCATED IN STORAGE 1104", 10.0, 50.0),
+            ("PANEL 'SB1' LOCATED IN ELEC 1120", 10.0, 40.0),
+            ("PANEL 'LPT' LOCATED IN UNIT", 10.0, 30.0),
+        ]);
+        let notes = page(&[("PNLBD 'LP9'", 5.0, 20.0), ("MOUNTED IN CORRIDOR 1110", 5.0, 18.8), ("PANEL 'LP3' LOCATED IN ELEC 1120", 60.0, 5.0)]);
+        let called = called_gear_locations(&sp, &[("EX-6".to_string(), riser), ("EX-2".to_string(), notes)]);
+        let at = |place: &str, source: &str| CalledAt { place: place.into(), source: source.into() };
+        // In page order: the riser's first, the note's after it (plan picks the first naming a room).
+        assert_eq!(
+            called.get("LP3"),
+            Some(&vec![at("STORAGE 1104", "EX-6 riser or one-line label"), at("ELEC 1120", "EX-2 sheet note")]),
+            "{called:?}"
+        );
+        assert_eq!(called.get("LP9"), Some(&vec![at("CORRIDOR 1110", "EX-2 sheet note")]), "{called:?}");
+        assert!(!called.contains_key("SB1") && !called.contains_key("LPT"), "{called:?}");
+    }
+
     #[test]
     fn a_one_lines_gear_and_a_schedule_only_panel_are_built_and_taken_off_without_a_submittal() {
         use cadaddy_walk3d::{BuildingSpec, PanelCircuit, PanelSchedule};
@@ -30854,6 +31228,84 @@ mod tests {
         assert_eq!((b.description.as_str(), b.source.as_str()), ("LED DOWNLIGHT", "A-1 LIGHT FIXTURE SCHEDULE"));
         assert!(b.notes.starts_with("WET LOCATION; 1. FIXTURES AE AND BE"), "{b:?}");
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
+    }
+
+    /// A page of a luminaire table drawn with its grid ([`super::super::lightsched::drawn_schedule`])
+    /// under `title`, and `more` texts printed away from it.
+    fn schedule_page(title: &str, cols: &[(&str, &str, &[&str])], more: &[(&str, f64, f64)]) -> cadaddy_doc::Drawing {
+        let (mut texts, segs) = super::super::lightsched::drawn_schedule(0.2, cols);
+        if let Some(t) = texts.first_mut() {
+            t.value = title.into();
+        }
+        let mut page = cadaddy_doc::Drawing::new_imperial();
+        for t in &texts {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(&t.value, t.at.x, t.at.y, t.height))).ok();
+        }
+        for (v, x, y) in more {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, *x, *y, 0.12))).ok();
+        }
+        for (a, b) in &segs {
+            let l = cadaddy_doc::Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) };
+            page.add(&Space::Model, Common::default(), EntityKind::Line(l)).ok();
+        }
+        page
+    }
+
+    /// fix-fixture-schedule-wrong-table: a set's LIGHT FIXTURE SCHEDULE (MARK | MANUFACTURER |
+    /// MODEL | VOLTAGE | REF. NOTE | MOUNTING | WATTS | LAMP TYPE | REMARKS, marks with a trailing
+    /// letter among them) is the source of its types. A lighting calculation's own luminaire table
+    /// (on a photometric plan beside its statistics, or headed with a light loss factor) adds none,
+    /// even when its page comes first and one of its labels is a scheduled type; a calculation
+    /// table on its own still types the set, its source saying what it is; and a designer's LIGHT
+    /// FIXTURE SCHEDULE printed on a calculation's sheet is still the schedule.
+    #[test]
+    fn a_lighting_calculations_luminaire_table_adds_no_types_to_the_sets_schedule() {
+        let schedule: [(&str, &str, &[&str]); 9] = [
+            ("", "MARK", &["A", "AE", "B", "F2", "F2E"]),
+            ("", "MANUFACTURER", &["MAKER ONE", "MAKER ONE", "MAKER TWO", "MAKER TWO", "MAKER TWO"]),
+            ("", "MODEL", &["DL6-LED", "DL6-LED-EM", "SC-20", "PL-40", "PL-40-EM"]),
+            ("", "VOLTAGE", &["120", "120", "MVOLT", "277", "277"]),
+            ("", "REF. NOTE", &["1", "1,2", "", "3", "2,3"]),
+            ("", "MOUNTING", &["RECESSED", "RECESSED", "WALL", "POLE", "POLE"]),
+            ("", "WATTS", &["12", "12", "20", "40", "40"]),
+            ("", "LAMP TYPE", &["LED", "LED", "LED", "LED", "LED"]),
+            ("", "REMARKS", &["", "BATTERY PACK", "", "", "BATTERY PACK"]),
+        ];
+        // The calculation's table on its photometric plan, its headings an ordinary schedule's:
+        // its labels (P1, WP) are the calculation's names, and its `A` is the program's row, not
+        // the schedule's.
+        let calc: [(&str, &str, &[&str]); 4] = [
+            ("", "LABEL", &["P1", "WP", "A"]),
+            ("", "QTY", &["3", "6", "4"]),
+            ("", "DESCRIPTION", &["POLE HEAD TYPE 4", "WALL PACK", "DOWNLIGHT"]),
+            ("", "WATTS", &["40", "20", "12"]),
+        ];
+        let headed_llf: [(&str, &str, &[&str]); 4] = [
+            ("", "SYMBOL", &["Q9", "Q9E"]),
+            ("", "QTY", &["2", "1"]),
+            ("", "LLF", &["0.900", "0.900"]),
+            ("", "DESCRIPTION", &["CANOPY LIGHT", "CANOPY LIGHT EM"]),
+        ];
+        let stats = [("CALCULATION SUMMARY", 30.0, 10.0), ("Avg / Min", 30.0, 9.5), ("Max/Min", 32.0, 9.5)];
+        let photometric = || ("E-3".to_string(), schedule_page("LUMINAIRE SCHEDULE", &calc, &stats));
+        let llf = || ("E-4".to_string(), schedule_page("LUMINAIRE SCHEDULE", &headed_llf, &[]));
+        let designed = || ("E-6".to_string(), schedule_page("LIGHT FIXTURE SCHEDULE", &schedule, &[]));
+        let tags = |types: &[cadaddy_walk3d::FixtureType]| types.iter().map(|t| t.tag.clone()).collect::<Vec<_>>();
+        let none = BTreeSet::new();
+        let (types, _) = fixture_schedule(&[photometric(), llf(), designed()], &|_| true, &none);
+        assert_eq!(tags(&types), ["A", "AE", "B", "F2", "F2E"], "{types:#?}");
+        let a = types.iter().find(|t| t.tag == "A").unwrap_or_else(|| panic!("{types:#?}"));
+        assert_eq!((a.manufacturer.as_str(), a.source.as_str()), ("MAKER ONE", "E-6 LIGHT FIXTURE SCHEDULE"));
+        let f2e = types.iter().find(|t| t.tag == "F2E").unwrap_or_else(|| panic!("{types:#?}"));
+        assert_eq!((f2e.model.as_str(), f2e.notes.as_str()), ("PL-40-EM", "BATTERY PACK"));
+        // A calculation's tables alone: their rows, said to be a calculation's.
+        let (types, _) = fixture_schedule(&[photometric(), llf()], &|_| true, &none);
+        assert_eq!(tags(&types), ["P1", "WP", "A", "Q9", "Q9E"], "{types:#?}");
+        assert!(types.iter().all(|t| t.source.ends_with("LUMINAIRE SCHEDULE (lighting calculation table)")), "{types:#?}");
+        // The designer's schedule printed on the calculation's sheet is still the schedule.
+        let on_calc = ("E-3".to_string(), schedule_page("LIGHT FIXTURE SCHEDULE", &schedule, &stats));
+        let (types, _) = fixture_schedule(&[on_calc, llf()], &|_| true, &none);
+        assert_eq!(tags(&types), ["A", "AE", "B", "F2", "F2E"], "{types:#?}");
     }
 
     /// fix-lum-schedule-type-column-wrong: the set's luminaire schedule is only on a sheet the
@@ -33289,6 +33741,94 @@ mod tests {
         assert_eq!(shell_holds_rooms(&half, &rooms), (false, 5));
         assert_eq!(shell_holds_rooms(&whole, &rooms), (true, 10));
         assert_eq!(shell_holds_rooms(&half, &[]), (true, 0));
+    }
+
+    /// Q6285: every room the rooms stage kept with an outline is in the model after the build:
+    /// one the build's trace missed is built from the stage's trace; one that can't be is
+    /// reported with why.
+    #[test]
+    fn a_kept_room_the_build_missed_is_built_or_reported_with_why() {
+        let mut s = Session::empty();
+        s.execute("new", &json!({})).unwrap();
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(
+            &json!({
+                "units_per_foot": 12.0,
+                "levels": [
+                    {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "attr": "1"},
+                    {"name": "Level 2", "elevation_ft": 10, "height_ft": 10, "attr": "2"},
+                ],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
+        let v = cadaddy_geom::Vec2::new;
+        let square = |x: f64, y: f64| vec![v(x, y), v(x + 144.0, y), v(x + 144.0, y + 144.0), v(x, y + 144.0)];
+        // The build made room 101 (traced from its own label, a little off the stage's trace).
+        let built = super::super::bspec::add_room_element(
+            s.doc_mut().unwrap(),
+            &sp,
+            "Level 1",
+            &square(2.0, 2.0),
+            "OFFICE",
+            v(0.0, 0.0),
+            &["number:101".to_string()],
+        );
+        assert!(built.is_some());
+        let room = |name: &str, number: &str, level: &str, x: f64| {
+            let o: Vec<[f64; 2]> = square(x, 0.0).iter().map(|p| [p.x, p.y]).collect();
+            json!({"name": name, "number": number, "level": level, "sheet": "A-1", "at": [x + 20.0, 70.0], "outline": o})
+        };
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let mut trade = room("JANITOR", "105", "1", 600.0);
+        trade["other_trade"] = json!(true);
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [
+                room("OFFICE", "101", "1", 0.0),
+                room("STORAGE", "102", "1", 200.0),
+                room("LOBBY", "", "", 400.0),
+                room("SUITE", "701", "7", 400.0),
+                room("LAUNDRY", "", "1", 2000.0),
+                trade,
+            ]}));
+        }
+        let shells = vec![("Level 1".to_string(), vec![[v(0.0, 0.0), v(1000.0, 1000.0)]])];
+        let (n, not_built) = build_kept_rooms(&mut s, &job, Some(&shells)).unwrap();
+        assert_eq!(n, 1, "STORAGE built from its trace");
+        let rooms = super::super::bspec::room_elements(s.doc().unwrap());
+        let mut got: Vec<(String, Option<String>)> = rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+        got.sort();
+        assert_eq!(got, vec![("OFFICE".to_string(), Some("101".to_string())), ("STORAGE".to_string(), Some("102".to_string()))]);
+        let why: Vec<(String, String)> =
+            not_built.iter().map(|r| (r["name"].as_str().unwrap_or("").to_string(), r["why"].as_str().unwrap_or("").to_string())).collect();
+        assert_eq!(
+            why,
+            vec![
+                ("LOBBY".to_string(), "its plan has no level".to_string()),
+                ("SUITE".to_string(), "level 7 is not a level of the model".to_string()),
+                ("LAUNDRY".to_string(), "outside the exterior walls of Level 1".to_string()),
+            ]
+        );
+        // Asked again: nothing more to build (the rooms are in the model now).
+        let (again, _) = build_kept_rooms(&mut s, &job, Some(&shells)).unwrap();
+        assert_eq!(again, 0);
+    }
+
+    #[test]
+    fn a_roof_plan_reads_no_rooms_but_a_one_level_set_named_roof_does() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions.push(region("A-101", "1", "A", "plan", 0.0));
+        job.sheet_regions.push(region("A-102", "2", "A", "plan", 200.0));
+        job.sheet_regions.push(region("A-103", "R", "A", "plan", 400.0));
+        job.sheet_regions.push(region("A-104", "LOW ROOF", "A", "plan", 600.0));
+        let roof = roof_plan_test(&job);
+        let roofs: Vec<&str> = job.sheet_regions.iter().filter(|r| roof(r)).map(|r| r.number.as_str()).collect();
+        assert_eq!(roofs, ["A-103", "A-104"]);
+        // One level, named so: still the building's storey.
+        let mut one = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        one.sheet_regions.push(region("A-1", "ROOF", "A", "plan", 0.0));
+        let roof = roof_plan_test(&one);
+        assert!(one.sheet_regions.iter().all(|r| !roof(r)));
     }
 
     #[test]
@@ -36981,6 +37521,34 @@ mod tests {
         let typical = SheetRegion { levels: vec!["2".into(), "3".into()], ..region("M-201", "2", "M", "plan", 600.0) };
         let kept = split_view_regions(&cadaddy_doc::Drawing::new_imperial(), vec![typical.clone()], &[true]);
         assert_eq!(kept, vec![typical]);
+    }
+
+    #[test]
+    fn a_floor_plan_title_filed_otherwise_is_asked_and_the_answer_makes_it_the_plan() {
+        // Q6514: classify listed a sheet titled as a floor plan but filed as notes, on a floor with
+        // no floor plan sheet.
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let sheet = json!({"number": "A1.1", "title": "FLOOR PLAN NOTES", "type": "schedule", "level": ""});
+        job.index = Some(json!({"sheets": [sheet.clone()]}));
+        job.sheets = Some(json!({"sheets": [sheet]}));
+        job.sheet_regions = vec![region("A1.1", "", "A", "schedule", 0.0)];
+        let f = json!({"sheet": "A1.1", "title": "FLOOR PLAN NOTES", "type": "schedule", "level": "1"});
+        let mut q = floor_plan_filed_question(&mut job, &f);
+        assert!(q.question.starts_with(FLOOR_PLAN_FILED_QUESTION) && q.question.contains("A1.1") && q.question.contains("Level 1"), "{}", q.question);
+        assert_eq!(q.choices, [FLOOR_PLAN_FILED_YES, "Keep it as schedule"]);
+        // Auto mode keeps it as filed: the question stays in the report, nothing moves.
+        assert_eq!(q.default.as_deref(), Some("Keep it as schedule"));
+        q.answer = Some(json!("Keep it as schedule"));
+        let (rerun, _) = answer_effect(&mut job, &q);
+        assert_eq!(rerun, None);
+        assert_eq!(job.sheet_regions[0].kind, "schedule");
+        // The answer that it is the floor plan files it so, on its floor, and runs the build again.
+        q.answer = Some(json!(FLOOR_PLAN_FILED_YES));
+        let (rerun, said) = answer_effect(&mut job, &q);
+        assert_eq!((rerun, said.as_str()), (Some(StageName::Rooms), "sheet A1.1 is the floor plan"));
+        assert_eq!((job.sheet_regions[0].kind.as_str(), job.sheet_regions[0].level.as_str()), ("plan", "1"));
+        assert_eq!(job.index.as_ref().and_then(|i| i.pointer("/sheets/0/type")).and_then(Value::as_str), Some("plan"));
+        assert_eq!(rerun_stage_of(&q), Some(StageName::Rooms));
     }
 
     #[test]

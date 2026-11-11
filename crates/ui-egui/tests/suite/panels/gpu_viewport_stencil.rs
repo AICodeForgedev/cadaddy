@@ -48,6 +48,7 @@ fn callback(list: &DisplayList, layer: usize, key: u64, stencil: Stencil) -> Can
         dash: 0.0,
         stencil,
         cull: None,
+        moving: false,
     }
 }
 

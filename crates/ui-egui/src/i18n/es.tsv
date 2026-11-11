@@ -3453,3 +3453,34 @@
 	Previous Sheet	Plano anterior
 	Page {n}	Página {n}
 	Page Up and Page Down step through the sheets.	Re Pág y Av Pág recorren los planos.
+	Frame rate to hold while moving	Fotogramas por segundo a mantener al moverse
+	Lower the resolution while panning and zooming when the graphics are slow	Bajar la resolución al desplazar y hacer zoom cuando los gráficos son lentos
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	El dibujo se vuelve nítido en cuanto la vista se detiene. Los trazados, las exportaciones y las capturas de pantalla siempre tienen resolución completa.
+# BIM views (Q6419).
+	MEP	MEP
+	Full MEP	MEP completo
+	Cabinets	Gabinetes
+	Following the system	Siguiendo el sistema
+	Stop following	Dejar de seguir
+	Follow System	Seguir el sistema
+	Pipes with no size, not drawn	Tuberías sin tamaño, no dibujadas
+	BIM Views	Vistas BIM
+	BIM View Rules	Reglas de vistas BIM
+	BIM View Report	Informe de vistas BIM
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	La vista 3D del modelo y el recorrido hacen lo mismo al orbitar y al caminar; su iluminación y su detalle no cambian.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Escriba el nombre del archivo de salida
+	Enter decimal places of accuracy (0 to 16)	Escriba los decimales de precisión (de 0 a 16)
+	Enter name of existing block	Escriba el nombre de un bloque existente
+	Choose mode for selected object conversion	Elija el modo de conversión de los objetos seleccionados
+	Current settings: Object conversion=Delete	Parámetros actuales: Conversión de objetos=Suprimir
+	Enter attribute values	Escriba los valores de atributo
+	Verify attribute values	Verifique los valores de atributo
+	Convert to block	Convertir en bloque
+	Retain	Conservar
+	Binary	Binario
+	mOde	Modo
+	define new drawing	definir dibujo nuevo
+	= (block=output file)	= (bloque=archivo de salida)
+	* (whole drawing)	* (todo el dibujo)
+	Requires an integer between 0 and 16.	Se requiere un entero entre 0 y 16.

@@ -96,6 +96,7 @@ pub mod drywallpalette;
 pub mod dwgpropsdlg;
 pub mod dyngrips;
 pub mod dyninput;
+pub mod dynres;
 pub mod exchangeloss;
 pub mod extractdlg;
 pub mod fieldview;
@@ -1550,8 +1551,19 @@ impl CadApp {
             }
             self.last_dialog = self.ui.dialog.clone();
         }
+        // The 2D canvas's moving scale: the settings, a forced one, full while a screenshot waits.
+        let full = !self.queued_shots.is_empty() || !self.pending_shots.is_empty();
+        let (on, fps, forced) = (self.session.settings.dynres, self.session.settings.dynres_fps, self.gpu_caps.dynamic_scale);
+        // The 3D views' (the shaded Model view and Walk): the same settings.
+        let set = |c: &mut dynres::Controller| {
+            c.configure(on, fps, forced);
+            c.full = full;
+        };
+        dynres::with(set);
+        dynres::with_3d(set);
         if let Some(rs) = &self.wgpu_rs {
             gpu::free_idle_frames(rs);
+            gpu::read_pass_times(rs);
         }
         control::observe_drawn(ui.ctx());
         self.frame_ms = now_ms() - t0;

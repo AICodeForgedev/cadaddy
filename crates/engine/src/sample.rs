@@ -6,6 +6,9 @@ use cadaddy_geom::{PolyVertex, Vec2, Vec3, arc_to_bulge};
 
 use crate::cmd::helpers::{arc, circle, line, lwpoly, rect_vertices, v3};
 
+mod bim;
+pub use bim::bim_building;
+
 fn layer(name: &str, color: u8, lt: &str, lw: u16) -> Layer {
     Layer { name: name.into(), color: Color::Index(color), linetype: lt.into(), lineweight: Lineweight::Mm100(lw), ..Layer::default() }
 }
@@ -16,6 +19,7 @@ fn on(layer: &str) -> Common {
 
 fn dim(kind: DimKind, p13: Vec2, p14: Vec2, defpt: Vec2) -> EntityKind {
     EntityKind::Dimension(Box::new(Dimension {
+        insertion_point: Default::default(),
         kind,
         defpt: v3(defpt),
         text_mid: Vec3::ZERO,
@@ -166,6 +170,7 @@ pub fn bracket() -> Drawing {
     add(
         on("Dimensions"),
         EntityKind::Dimension(Box::new(Dimension {
+            insertion_point: Default::default(),
             kind: DimKind::Diameter,
             defpt: v3(c + Vec2::from_angle(0.8) * 1.5),
             text_mid: Vec3::ZERO,
@@ -187,6 +192,7 @@ pub fn bracket() -> Drawing {
     add(
         on("Dimensions"),
         EntityKind::Dimension(Box::new(Dimension {
+            insertion_point: Default::default(),
             kind: DimKind::Radius,
             defpt: v3(Vec2::new(8.0, 2.0)),
             text_mid: Vec3::ZERO,

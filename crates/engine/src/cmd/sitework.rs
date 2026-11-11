@@ -2664,6 +2664,87 @@ mod tests {
         assert!(counts.first().is_some_and(|c| c.0 == 2 && c.1 == 3 && c.2 == 2 && c.3 > 4 && c.4 == 0), "{counts:?}");
     }
 
+    /// Q6439: the site step builds its own luminaires only. A building's device corrected on the
+    /// model just before it (moved to its reflected ceiling plan spot, raised, a keynote's
+    /// property: the RCP, ceiling and keynote steps) stays as corrected, on every rerun.
+    #[test]
+    fn the_site_step_keeps_the_building_devices_corrected_before_it() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = site_sheet();
+        let mut sp = spec_with_slab();
+        let symbol = {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            // A downlight on the building's electrical plan, inside its walls.
+            pline(d, "E-LGHT", &square([500.0, 400.0], 6.0), true)
+        };
+        let mut t = ElementTag {
+            id: "device:Level 1:41.7,33.3".into(),
+            kind: "device".into(),
+            level: "Level 1".into(),
+            at_ft: [500.0 / 12.0, 400.0 / 12.0],
+            ..Default::default()
+        };
+        t.set("symbol", symbol.hex(), "plan");
+        t.set("type", "A", "plan");
+        t.set("device_kind", "luminaire", "schedule");
+        t.set("mount", "ceiling", "plan");
+        sp.tags.push(t);
+        s.doc_mut().unwrap_or_else(|e| panic!("{e}")).building_spec = Some(sp.to_json()).into();
+        super::super::propfill::rebuild_devices(&mut s, "test").unwrap_or_else(|e| panic!("{e}"));
+        let devices = |s: &crate::Session| -> Vec<(cadaddy_doc::Handle, bool)> {
+            let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+            d.model
+                .iter()
+                .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("device"))
+                .map(|e| (e.handle, cadaddy_doc::props::read(&e.common.xdata).get(MARK).is_some()))
+                .collect()
+        };
+        let built = devices(&s);
+        assert_eq!(built.len(), 1, "{built:?}");
+        let Some(&(light, _)) = built.first() else { panic!("no device built") };
+        // Corrected on the model only: 2 ft over to where the RCP dimensions it, a keynote's word.
+        let snapshot = {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            d.modify_entity(light, |e| {
+                e.kind.transform(&cadaddy_geom::Mat3::translate(Vec2::new(24.0, 0.0)));
+                let mut store = cadaddy_doc::props::read(&e.common.xdata);
+                store.set("keynote", cadaddy_doc::props::Prop::new("CEILING-MOUNTED JUNCTION BOX", cadaddy_doc::props::Source::computed()));
+                e.common.xdata = cadaddy_doc::props::write(&e.common.xdata, &store).into();
+            })
+            .unwrap_or_else(|e| panic!("{e}"));
+            d.model.get(light).map(|e| format!("{:?} {:?}", e.kind, e.common.xdata))
+        };
+        assert!(snapshot.is_some());
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        for pass in 0..2 {
+            let mut result = serde_json::json!({});
+            site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(result["site_work"]["luminaires"], serde_json::json!(2), "{:#}", result["site_work"]);
+            let now = devices(&s);
+            // The two pole lights built, once; the corrected downlight the same element as before.
+            assert_eq!(now.iter().filter(|(_, site)| *site).count(), 2, "pass {pass}: {now:?}");
+            assert_eq!(now.iter().filter(|(_, site)| !*site).map(|(h, _)| *h).collect::<Vec<_>>(), vec![light], "pass {pass}: {now:?}");
+            let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(d.model.get(light).map(|e| format!("{:?} {:?}", e.kind, e.common.xdata)), snapshot, "pass {pass}: the correction kept");
+        }
+    }
+
     /// A site plan tagging its pole lights by their circuit only (no type mark), a monument sign
     /// its label names, a box in grade its mark names; a transformer label a note runs on from.
     #[test]

@@ -186,6 +186,10 @@ pub struct Walk {
     /// The open drawing's revision the scene was derived from; edits rebuild it.
     revision: u64,
     fps: f32,
+    /// Whether the camera is moving ([`crate::dynres`]: a moving view may be drawn smaller), and
+    /// the scale the GPU drew the last frame at each way.
+    motion: crate::dynres::Motion,
+    pub scale: f32,
     /// Device types hidden in the Layers list, and whether walls show.
     pub hidden_types: BTreeSet<String>,
     pub walls_on: bool,
@@ -240,6 +244,12 @@ fn speed_of(b: &Building) -> f64 {
 
 impl Walk {
     /// The last frame was drawn by the CPU (no usable GPU).
+    /// Drop the GPU renderer (the limits changed): the next frame makes it and uploads again.
+    pub(crate) fn reset_gpu(&mut self) {
+        self.gpu = None;
+        self.uploaded = false;
+    }
+
     pub fn on_cpu(&self) -> bool {
         self.cpu_texture.is_some() && self.gpu.is_none()
     }
@@ -259,6 +269,8 @@ impl Walk {
             view_level: None,
             revision,
             fps: 0.0,
+            motion: crate::dynres::Motion::default(),
+            scale: 1.0,
             hidden_types: BTreeSet::new(),
             walls_on: true,
             view: Scene::default(),
@@ -593,6 +605,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             close_now |= esc;
             select = sel;
         });
+    }
+    if let Some(note) = crate::dynres::note_3d() {
+        app.set_status(format!("3D graphics: {note}."));
+        app.gpu_caps.notes.push(note);
     }
     // What the panel asked for: saved in the drawing (the scene is derived again next frame).
     if let Some((id, params)) = app.walk.as_mut().and_then(|w| w.pending.take()) {
@@ -1004,7 +1020,15 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
             g.upload(&rs.device, &walk.view);
             walk.uploaded = true;
         }
-        g.render(&rs.device, &rs.queue, size, &frame_for(s, &walk.walker, size, walk.cut));
+        // While the walker moves or looks around on a GPU that can't hold the frame rate: a
+        // smaller picture, scaled up; sharp once the view has been still for the settle time.
+        let f = frame_for(s, &walk.walker, size, walk.cut);
+        let camera: Vec<f64> = f.view_proj.iter().flatten().chain(&f.eye).chain(&[f.cut_z]).map(|v| f64::from(*v)).collect();
+        let since = walk.motion.track(&camera, crate::now_ms());
+        let (drawn, scale) = crate::dynres::size_3d(&ctx, size, since);
+        walk.scale = scale;
+        g.time_next(&rs.device, &rs.queue, scale);
+        g.render(&rs.device, &rs.queue, drawn, &f);
         if let Some(view) = g.view() {
             let mut r = rs.renderer.write();
             match walk.texture {

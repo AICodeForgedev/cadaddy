@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1272,
-    "count": 1272,
+    "callableAsJson": 1276,
+    "count": 1276,
     "ids": [
       "-attedit",
       "-block",
@@ -14,6 +14,7 @@
       "-plottermanager",
       "-style",
       "-vports",
+      "-wblock",
       "-xref",
       "3dalign",
       "3darray",
@@ -191,6 +192,9 @@
       "bim.unset_spec",
       "bim.validate",
       "bim.validate.overlay",
+      "bim.view",
+      "bim.view.report",
+      "bim.view.rules",
       "blend",
       "block",
       "blockify",
@@ -1276,8 +1280,8 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 547,
-    "typed": 564
+    "inMenus": 548,
+    "typed": 565
   },
   "features": {
     "ifcExport": true,

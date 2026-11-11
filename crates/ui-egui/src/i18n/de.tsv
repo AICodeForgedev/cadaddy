@@ -3264,3 +3264,34 @@
 	Previous Sheet	Vorheriger Plan
 	Page {n}	Seite {n}
 	Page Up and Page Down step through the sheets.	Bild auf und Bild ab blättern durch die Pläne.
+	Frame rate to hold while moving	Bildrate beim Bewegen halten
+	Lower the resolution while panning and zooming when the graphics are slow	Auflösung beim Verschieben und Zoomen senken, wenn die Grafik langsam ist
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Die Zeichnung wird scharf, sobald die Ansicht stillsteht. Plots, Exporte und Bildschirmfotos haben immer volle Auflösung.
+# BIM views (Q6419).
+	MEP	TGA
+	Full MEP	TGA vollständig
+	Cabinets	Schränke
+	Following the system	System wird verfolgt
+	Stop following	Verfolgung beenden
+	Follow System	System verfolgen
+	Pipes with no size, not drawn	Rohre ohne Größe, nicht gezeichnet
+	BIM Views	BIM-Ansichten
+	BIM View Rules	Regeln der BIM-Ansichten
+	BIM View Report	Bericht der BIM-Ansichten
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	Die 3D-Modellansicht und der Rundgang tun dasselbe beim Orbit und beim Gehen; Beleuchtung und Detail bleiben unverändert.
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	Namen der Ausgabedatei eingeben
+	Enter decimal places of accuracy (0 to 16)	Anzahl der Dezimalstellen für die Genauigkeit eingeben (0 bis 16)
+	Enter name of existing block	Namen eines vorhandenen Blocks eingeben
+	Choose mode for selected object conversion	Modus für die Umwandlung der gewählten Objekte wählen
+	Current settings: Object conversion=Delete	Aktuelle Einstellungen: Objektumwandlung=Löschen
+	Enter attribute values	Attributwerte eingeben
+	Verify attribute values	Attributwerte prüfen
+	Convert to block	In Block umwandeln
+	Retain	Beibehalten
+	Binary	Binär
+	mOde	Modus
+	define new drawing	neue Zeichnung definieren
+	= (block=output file)	= (Block=Ausgabedatei)
+	* (whole drawing)	* (ganze Zeichnung)
+	Requires an integer between 0 and 16.	Eine ganze Zahl zwischen 0 und 16 ist erforderlich.

@@ -206,8 +206,9 @@ pub struct CanvasState {
     pub snap_cycle: Option<SnapCycle>,
     /// The open sheet's pictures, drawn instead of its linework zoomed out ([`sheetimage`]).
     pub sheet_images: sheetimage::SheetImages,
-    /// Draw everything in full on screen: no detail levels and no sheet pictures, the screen as
-    /// it was before them (for measuring them).
+    /// Draw everything in full on screen: no detail levels, no sheet pictures, and every object
+    /// as it is on the GPU canvas, also those under a pixel (normally drawn as dots and boxes:
+    /// [`crate::gpu::build_screen_mesh`]); the screen as it was before them (for measuring them).
     pub full_detail: bool,
     /// The detail level `list` was built at (`None`: in full), see [`cadaddy_render::detail`].
     pub list_detail: Option<cadaddy_render::detail::Detail>,
@@ -243,14 +244,14 @@ impl CanvasState {
             self.stats.chunks(self.chunk_cache.rebuilt, self.chunk_cache.kept);
         }
         if let Some(m) = built.mesh {
-            self.stats.meshed_counts(m.counts, m.ms - m.upload_ms, m.upload_ms);
+            self.stats.meshed_counts(m.counts, m.simplified, m.ms - m.upload_ms, m.upload_ms);
             self.stats.tiled(m.data.tiles.as_deref());
             self.mesh_tiles = m.data.tiles.clone();
             self.coarse_px = m.coarse_px;
             if let Ok(mut slot) = self.mesh_slot.lock() {
                 *slot = Some(m.data);
             }
-            self.mesh_key = Some(list_mesh_key(&key, self.list_gen, m.origin, m.bg, m.lwdisplay, m.coarse_px));
+            self.mesh_key = Some(list_mesh_key(&key, self.list_gen, m.origin, m.bg, m.lwdisplay, m.pixel, m.coarse_px));
             self.mesh_origin = m.origin;
             self.mesh_ms = m.ms;
             self.infinite = m.infinite;
@@ -463,6 +464,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
             model_bg: view_background(app).unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())),
             paper_bg: Rgb(t.paper.r(), t.paper.g(), t.paper.b()),
             lwdisplay,
+            pixel: screen_pixel(&key, app.canvas.full_detail),
             device: app.canvas.gpu_device.clone(),
             coarse_px,
         });
@@ -556,7 +558,7 @@ fn stencil_clip(app: &CadApp) -> bool {
 
 /// How long the view inside the active viewport stays still before a zoomed [`VpContent`] is
 /// rebuilt at the exact view (dash lengths and curve detail follow the viewport's scale).
-const VP_SETTLE_MS: f64 = 150.0;
+pub(crate) const VP_SETTLE_MS: f64 = 150.0;
 
 /// Model space seen through the active MSPACE viewport, drawn apart from the layout's list. It is
 /// built for an area around the viewport at one view and drawn clipped to the viewport, moved
@@ -700,7 +702,8 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
 /// Draw the active viewport's contents (see [`VpContent`]) as [`ensure_vp_content`] set out;
 /// `p` clips them to the viewport's rectangle, and a clipped viewport's outline is masked with
 /// the stencil buffer first.
-fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame, xf_paper: &Xf, bg: Rgb, lwdisplay: bool) {
+#[allow(clippy::too_many_arguments)]
+fn draw_vp_content(c: &mut VpContent, gpu: bool, full_detail: bool, p: &egui::Painter, f: &VpFrame, xf_paper: &Xf, bg: Rgb, lwdisplay: bool) {
     let xf = &f.xf;
     if !gpu {
         draw_list(p, xf, &c.list, bg, lwdisplay);
@@ -712,14 +715,17 @@ fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame,
         stencil = crate::gpu::Stencil::Inside;
     }
     let origin = crate::gpu::choose_origin(&c.list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
+    // The list is drawn up to 2x larger than it was built for before it is rebuilt (see
+    // `ensure_vp_content`): its finest pixel is half its band's.
+    let pixel = c.key.filter(|_| !full_detail).map(|k| 2f64.powi(k.4.saturating_sub(1)));
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (c.builds, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+        (c.builds, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay, pixel.map(f64::to_bits)).hash(&mut h);
         h.finish()
     };
     if c.mesh_key != Some(key) {
-        let mesh = crate::gpu::build_mesh(&c.list, origin, bg, lwdisplay);
+        let mesh = crate::gpu::build_screen_mesh(&c.list, origin, bg, lwdisplay, pixel);
         if let Ok(mut slot) = c.mesh_slot.lock() {
             *slot = Some(mesh);
         }
@@ -740,7 +746,9 @@ fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame,
             dash: 0.0,
             stencil,
             cull: None,
-        },
+            moving: false,
+        }
+        .track_motion(p.ctx()),
     ));
 }
 
@@ -796,6 +804,7 @@ fn draw_vp_mask(c: &mut VpContent, p: &egui::Painter, outline: &[Vec2], xf_paper
             dash: 0.0,
             stencil: crate::gpu::Stencil::Mask,
             cull: None,
+            moving: false,
         },
     ));
 }
@@ -1127,6 +1136,7 @@ fn draw_highlight_gpu(
             dash: if look.dashed { 10.0 } else { 0.0 },
             stencil,
             cull: None,
+            moving: false,
         },
     ));
 }
@@ -1194,16 +1204,18 @@ fn draw_drag_gpu(
             dash: 0.0,
             stencil: crate::gpu::Stencil::Off,
             cull: None,
+            moving: false,
         },
     ));
 }
 
-/// Identifies the GPU vertex data of list `key` / `list_gen` converted at `origin` against `bg`,
-/// tiled for `coarse_px` drawing units a pixel.
-fn list_mesh_key(key: &ListKey, list_gen: u64, origin: Vec2, bg: Rgb, lwdisplay: bool, coarse_px: f64) -> u64 {
+/// Identifies the GPU vertex data of list `key` / `list_gen` converted at `origin` against `bg`
+/// for screen pixels of `pixel` drawing units, tiled for `coarse_px` drawing units a pixel.
+#[allow(clippy::too_many_arguments)]
+fn list_mesh_key(key: &ListKey, list_gen: u64, origin: Vec2, bg: Rgb, lwdisplay: bool, pixel: Option<f64>, coarse_px: f64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (key, list_gen, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay, coarse_px.to_bits()).hash(&mut h);
+    (key, list_gen, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay, pixel.map(f64::to_bits), coarse_px.to_bits()).hash(&mut h);
     h.finish()
 }
 
@@ -1213,16 +1225,24 @@ fn cull_area(xf: &Xf) -> Bounds2 {
     xf.world_bounds().expand(8.0 / xf.scale.max(1e-300))
 }
 
+/// Drawing units in a screen pixel at the finest zoom list `key` is drawn at (its hatch level of
+/// detail band: the finest view showing it), which the GPU vertex data simplifies for (see
+/// [`crate::gpu::build_screen_mesh`]); `None` with `full_detail`.
+fn screen_pixel(key: &ListKey, full_detail: bool) -> Option<f64> {
+    (!full_detail).then(|| 2f64.powi(key.2.min(key.3)))
+}
+
 /// Draw the display list through the GPU paint callback (uploading it when it changed), plus
 /// the infinite lines, which are clipped to the view on the CPU every frame.
 fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdisplay: bool) {
     let Some(list) = &c.list else { return };
     let origin = crate::gpu::choose_origin(&list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
-    let key = list_mesh_key(&c.key, c.list_gen, origin, bg, lwdisplay, c.coarse_px);
+    let pixel = screen_pixel(&c.key, c.full_detail);
+    let key = list_mesh_key(&c.key, c.list_gen, origin, bg, lwdisplay, pixel, c.coarse_px);
     if c.mesh_key != Some(key) {
         let t0 = crate::now_ms();
         let tiling = crate::gpu::Tiling::choose(list, c.coarse_px);
-        let mesh = crate::gpu::build_mesh_tiled(list, origin, bg, lwdisplay, tiling.as_ref());
+        let mesh = crate::gpu::build_screen_mesh_tiled(list, origin, bg, lwdisplay, pixel, tiling.as_ref());
         c.stats.meshed(&mesh, crate::now_ms() - t0, 0.0);
         c.stats.tiled(mesh.tiles.as_deref());
         c.mesh_tiles = mesh.tiles.clone();
@@ -1249,7 +1269,9 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
             dash: 0.0,
             stencil: crate::gpu::Stencil::Off,
             cull: Some(cull),
-        },
+            moving: false,
+        }
+        .track_motion(p.ctx()),
     ));
     let mut shapes = Vec::new();
     for prim in c.infinite.iter().filter_map(|i| list.prims.get(*i)) {
@@ -1938,6 +1960,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if idle_dbl {
         app.session.pending_window = None;
         app.canvas.drag_window = false;
+        // In the 3D BIM view: the next view down at the element (its level, then its room).
+        if inside {
+            crate::shaded::enter_at_selection(app);
+        }
     }
     // Hyperlinks: the tooltip over a linked object; Ctrl+click (⌘-click) follows its link.
     let link_pick = if inside && pressed_primary && mods.command {
@@ -2161,7 +2187,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(f) = ensure_vp_content(app, &xf_paper, ui.ctx()) {
         let gpu = app.canvas.gpu.is_some();
         let clipped = painter.with_clip_rect(f.on_screen.intersect(rect));
-        draw_vp_content(&mut app.canvas.vp, gpu, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
+        draw_vp_content(&mut app.canvas.vp, gpu, app.canvas.full_detail, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
         masked = gpu && f.outline.is_some();
     }
     if sheet.is_none() && crate::shaded::paint(app, ui, &painter, &xf, bg) {

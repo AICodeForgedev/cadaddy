@@ -3521,3 +3521,34 @@
 	Previous Sheet	上一张图纸
 	Page {n}	第 {n} 页
 	Page Up and Page Down step through the sheets.	用 Page Up 和 Page Down 逐张浏览图纸。
+	Frame rate to hold while moving	移动时保持的帧率
+	Lower the resolution while panning and zooming when the graphics are slow	图形较慢时，平移和缩放期间降低分辨率
+	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	视图一停止，图形即变清晰。打印、导出和屏幕截图始终为全分辨率。
+# BIM views (Q6419).
+	MEP	机电
+	Full MEP	完整机电
+	Cabinets	橱柜
+	Following the system	正在跟随系统
+	Stop following	停止跟随
+	Follow System	跟随系统
+	Pipes with no size, not drawn	无尺寸的管道，未绘制
+	BIM Views	BIM 视图
+	BIM View Rules	BIM 视图规则
+	BIM View Report	BIM 视图报告
+	The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are.	三维模型视图和漫游在环绕和行走时也是如此；其照明和细节保持不变。
+# -WBLOCK and -INSERT attribute prompts (Q6428).
+	Enter name of output file	输入输出文件名
+	Enter decimal places of accuracy (0 to 16)	输入精度的小数位数 (0 到 16)
+	Enter name of existing block	输入现有块名
+	Choose mode for selected object conversion	选择所选对象的转换模式
+	Current settings: Object conversion=Delete	当前设置: 对象转换=删除
+	Enter attribute values	输入属性值
+	Verify attribute values	验证属性值
+	Convert to block	转换为块
+	Retain	保留
+	Binary	二进制
+	mOde	模式
+	define new drawing	定义新图形
+	= (block=output file)	= (块=输出文件)
+	* (whole drawing)	* (整个图形)
+	Requires an integer between 0 and 16.	需要 0 到 16 之间的整数。
