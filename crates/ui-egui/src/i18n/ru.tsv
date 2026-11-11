@@ -3269,3 +3269,7 @@
 	* (whole drawing)	* (весь чертеж)
 	Requires an integer between 0 and 16.	Требуется целое число от 0 до 16.
 	Correct Job Sheet Index	Исправить указатель листов задания
+	Refrigerant Piping	Трубопроводы хладагента
+	Hydronic Piping	Трубопроводы тепло- и холодоснабжения
+	Condensate Drain	Отвод конденсата
+	Mechanical Piping	Механические трубопроводы

@@ -3460,3 +3460,7 @@ menu	Modify	Modifikace
 	* (whole drawing)	* (celý výkres)
 	Requires an integer between 0 and 16.	Je třeba celé číslo od 0 do 16.
 	Correct Job Sheet Index	Opravit rejstřík výkresů úlohy
+	Refrigerant Piping	Potrubí chladiva
+	Hydronic Piping	Otopné a chladicí potrubí
+	Condensate Drain	Odvod kondenzátu
+	Mechanical Piping	Strojní potrubí

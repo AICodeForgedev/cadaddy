@@ -23,6 +23,7 @@ mod measure;
 mod openings;
 pub mod package;
 mod pick;
+pub mod pipeservice;
 pub mod rfi;
 mod rules;
 mod sbox;

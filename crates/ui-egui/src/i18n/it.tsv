@@ -3552,3 +3552,7 @@ menu	Modify	Edita
 	* (whole drawing)	* (intero disegno)
 	Requires an integer between 0 and 16.	È richiesto un intero tra 0 e 16.
 	Correct Job Sheet Index	Correggi l'indice delle tavole del lavoro
+	Refrigerant Piping	Tubazioni del refrigerante
+	Hydronic Piping	Tubazioni idroniche
+	Condensate Drain	Scarico condensa
+	Mechanical Piping	Tubazioni meccaniche

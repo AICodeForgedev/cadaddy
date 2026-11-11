@@ -3554,3 +3554,7 @@
 	* (whole drawing)	* (整个图形)
 	Requires an integer between 0 and 16.	需要 0 到 16 之间的整数。
 	Correct Job Sheet Index	更正作业图纸索引
+	Refrigerant Piping	制冷剂管道
+	Hydronic Piping	水系统管道
+	Condensate Drain	冷凝水排放
+	Mechanical Piping	机械管道

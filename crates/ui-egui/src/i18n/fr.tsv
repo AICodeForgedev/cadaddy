@@ -3268,3 +3268,7 @@
 	* (whole drawing)	* (dessin entier)
 	Requires an integer between 0 and 16.	Un entier entre 0 et 16 est requis.
 	Correct Job Sheet Index	Corriger l'index des feuilles de la tâche
+	Refrigerant Piping	Tuyauterie de fluide frigorigène
+	Hydronic Piping	Tuyauterie hydronique
+	Condensate Drain	Évacuation des condensats
+	Mechanical Piping	Tuyauterie mécanique

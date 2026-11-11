@@ -3643,3 +3643,7 @@ menu	Modify	Ändra
 	* (whole drawing)	* (hela ritningen)
 	Requires an integer between 0 and 16.	Ett heltal mellan 0 och 16 krävs.
 	Correct Job Sheet Index	Rätta jobbets ritningsförteckning
+	Refrigerant Piping	Köldmedieledningar
+	Hydronic Piping	Värme- och kylvattenrör
+	Condensate Drain	Kondensavlopp
+	Mechanical Piping	Installationsrör

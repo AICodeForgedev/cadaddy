@@ -3637,3 +3637,7 @@
 	= (block=output file)	= (блок=вихідний файл)
 	* (whole drawing)	* (усе креслення)
 	Requires an integer between 0 and 16.	Потрібне ціле число від 0 до 16.
+	Refrigerant Piping	Трубопроводи холодоагенту
+	Hydronic Piping	Трубопроводи тепло- і холодопостачання
+	Condensate Drain	Відведення конденсату
+	Mechanical Piping	Механічні трубопроводи

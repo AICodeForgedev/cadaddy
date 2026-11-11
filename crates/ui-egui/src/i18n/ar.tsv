@@ -3474,3 +3474,7 @@ menu	View	عرض
 	* (whole drawing)	* (الرسم بالكامل)
 	Requires an integer between 0 and 16.	يلزم عدد صحيح بين 0 و16.
 	Correct Job Sheet Index	تصحيح فهرس لوحات المهمة
+	Refrigerant Piping	أنابيب التبريد
+	Hydronic Piping	أنابيب المياه الحرارية
+	Condensate Drain	تصريف المكثفات
+	Mechanical Piping	أنابيب ميكانيكية

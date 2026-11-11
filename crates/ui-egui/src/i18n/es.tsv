@@ -3486,3 +3486,7 @@
 	* (whole drawing)	* (todo el dibujo)
 	Requires an integer between 0 and 16.	Se requiere un entero entre 0 y 16.
 	Correct Job Sheet Index	Corregir el índice de planos del trabajo
+	Refrigerant Piping	Tubería de refrigerante
+	Hydronic Piping	Tubería hidrónica
+	Condensate Drain	Drenaje de condensados
+	Mechanical Piping	Tubería mecánica
