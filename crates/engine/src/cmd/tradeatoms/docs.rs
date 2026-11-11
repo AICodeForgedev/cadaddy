@@ -117,6 +117,16 @@ pub(crate) fn roof_plan_facts(sp: &BuildingSpec, have: &[Fact]) -> Vec<Fact> {
             out.push(Fact::new("framing.truss_spacing_in", format!("{}\" o.c.", num_text(f.spacing_in)), Some(f.spacing_in), &src, &src));
         }
     }
+    // The roof deck a roof plan's note (or a project rule) gives any framed roof: the sheathing
+    // panels laid on its members are that thick.
+    for f in sp.exterior.framing.iter().filter(|f| f.deck_status == Some(cadaddy_walk3d::ValueStatus::Read)).take(1) {
+        let src = if f.source.is_empty() { format!("{} roof plan", f.level) } else { f.source.clone() };
+        if let Some(v) = f.deck_in.filter(|v| v.is_finite() && *v > 0.0)
+            && !has("framing.roof_sheathing_in")
+        {
+            out.push(Fact::new("framing.roof_sheathing_in", format!("{}\"", num_text(v)), Some(v), &src, &src));
+        }
+    }
     out
 }
 
@@ -171,6 +181,7 @@ pub(crate) fn rule_path(key: &str) -> Option<&'static str> {
         "framing.joist_spacing_in" => "framing.joist_spacing_in",
         "framing.joist_depth_in" => "framing.joist_depth_in",
         "framing.truss_spacing_in" => "framing.truss_spacing_in",
+        "framing.roof_sheathing_in" => "framing.roof_sheathing_in",
         "finishes.paint_coats" => "finishes.paint_coats",
         _ => return None,
     })

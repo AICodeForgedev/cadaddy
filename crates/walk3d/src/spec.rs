@@ -938,6 +938,13 @@ pub struct RoofFraming {
     /// Where the members bear, feet (the level's elevation less the members and deck when none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bearing_ft: Option<f64>,
+    /// The deck on the members, inches: the roof sheathing or deck the notes give (`5/8"`,
+    /// `1 1/2" METAL DECK`), a project rule, else the framing rule's usual one (`deck_status`
+    /// default). None: the rule's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deck_in: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deck_status: Option<ValueStatus>,
     /// The note that names the framing, and its sheet (`S-1: ROOF TRUSSES @ 24" OC`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,

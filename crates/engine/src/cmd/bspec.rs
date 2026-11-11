@@ -2576,6 +2576,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     mark("MEP runs");
     // The devices the readers found, each an element with what was read about it.
     let devices = super::propfill::build_devices(d, &sp);
+    // No wall device left in the plenum (Q6520): one whose height puts it above its room's
+    // ceiling is set at its clearance under it, its design height kept beside.
+    let under_ceiling = super::underceiling::keep_under(d, &sp, None);
     mark("device elements");
     // The fire alarm system's control panel and NAC power supplies the documents don't place
     // (Q6503), built now its devices stand, before its circuits are routed.
@@ -2700,6 +2703,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     }
     r["gearSpace"] = gear_space.json();
     r["deviceBuild"] = devices.to_json();
+    r["deviceBuild"]["under_ceiling"] = under_ceiling.to_json();
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
     // Every built element says what it is by the documents (Q6216): drawn, derived or inferred,
