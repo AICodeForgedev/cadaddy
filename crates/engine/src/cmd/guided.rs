@@ -4498,7 +4498,8 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         .collect();
     if !others.is_empty()
         && plans(true).len() == regions.len()
-        && let Ok(more) = s.execute("rooms.list", &json!({"outline": false, "regions": others}))
+        // Numbered tags only: another trade's plan numbers a room, its notes name none (Q6324).
+        && let Ok(more) = s.execute("rooms.list", &json!({"outline": false, "regions": others, "numbered_only": true}))
     {
         let extra: Vec<Value> = more
             .get("rooms")

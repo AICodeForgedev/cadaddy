@@ -2158,11 +2158,14 @@ pub(crate) struct TraceInputs {
     header: cadaddy_doc::Header,
     layers: Vec<cadaddy_doc::Layer>,
     blocks: cadaddy_doc::shared::Shared<std::collections::BTreeMap<String, std::sync::Arc<cadaddy_doc::Block>>>,
+    /// Traced from numbered tags only ([`room_trace_numbered_in`]).
+    numbered: bool,
 }
 
 impl TraceInputs {
     fn same_as(&self, o: &TraceInputs) -> bool {
-        self.k.to_bits() == o.k.to_bits()
+        self.numbered == o.numbered
+            && self.k.to_bits() == o.k.to_bits()
             && self.sheet.to_bits() == o.sheet.to_bits()
             && self.names == o.names
             && self.numbers == o.numbers
@@ -2181,6 +2184,8 @@ struct Trace {
     state: std::sync::Weak<Drawing>,
     space: cadaddy_doc::Space,
     regions: Option<Vec<[f64; 4]>>,
+    /// Traced from numbered tags only ([`room_trace_numbered_in`]).
+    numbered: bool,
     rooms: std::sync::Arc<RoomTrace>,
 }
 
@@ -2199,21 +2204,34 @@ fn trace_holds(old: &Drawing, now: &Drawing) -> bool {
 }
 
 impl TraceCache {
-    fn get(&self, d: &std::sync::Arc<Drawing>, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>) -> Option<std::sync::Arc<RoomTrace>> {
-        let same_ask = |t: &&Trace| t.space == *space && t.regions.as_deref() == regions;
+    fn get(
+        &self,
+        d: &std::sync::Arc<Drawing>,
+        space: &cadaddy_doc::Space,
+        regions: Option<&[[f64; 4]]>,
+        numbered: bool,
+    ) -> Option<std::sync::Arc<RoomTrace>> {
+        let same_ask = |t: &&Trace| t.space == *space && t.regions.as_deref() == regions && t.numbered == numbered;
         let exact = self.traces.iter().filter(same_ask).find(|t| std::ptr::eq(t.state.as_ptr(), std::sync::Arc::as_ptr(d)));
         // In paper space only the very same state: its objects are a layout's, not compared here.
         let holds =
             || self.traces.iter().filter(same_ask).filter(|_| !space.is_paper()).find(|t| t.state.upgrade().is_some_and(|old| trace_holds(&old, d)));
         exact.or_else(holds).map(|t| std::sync::Arc::clone(&t.rooms))
     }
-    fn put(&mut self, d: &std::sync::Arc<Drawing>, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, rooms: std::sync::Arc<RoomTrace>) {
+    fn put(
+        &mut self,
+        d: &std::sync::Arc<Drawing>,
+        space: cadaddy_doc::Space,
+        regions: Option<&[[f64; 4]]>,
+        numbered: bool,
+        rooms: std::sync::Arc<RoomTrace>,
+    ) {
         // States nothing holds any more can't be asked about again.
         self.traces.retain(|t| t.state.strong_count() > 0);
         if self.traces.len() >= TRACES_KEPT {
             self.traces.remove(0);
         }
-        self.traces.push(Trace { state: std::sync::Arc::downgrade(d), space, regions: regions.map(<[_]>::to_vec), rooms });
+        self.traces.push(Trace { state: std::sync::Arc::downgrade(d), space, regions: regions.map(<[_]>::to_vec), numbered, rooms });
     }
     /// The rooms last traced from these inputs (in this space and regions).
     fn by_inputs(&self, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, inputs: &TraceInputs) -> Option<std::sync::Arc<RoomTrace>> {
@@ -2251,23 +2269,34 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
 
 /// [`rooms_found_in`] with the names whose search stopped at its reach ([`RoomTrace`]).
 pub(crate) fn room_trace_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<std::sync::Arc<RoomTrace>> {
+    room_trace_of(s, regions, false)
+}
+
+/// [`room_trace_in`] from numbered room tags only: a plain name is traced only printed with its
+/// room number (another trade's plan of a floor, which may number the rooms the architectural
+/// plan names, never name them from its notes and legends: Q6324).
+pub(crate) fn room_trace_numbered_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<std::sync::Arc<RoomTrace>> {
+    room_trace_of(s, regions, true)
+}
+
+fn room_trace_of(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool) -> Result<std::sync::Arc<RoomTrace>> {
     let space = s.space();
     let state = std::sync::Arc::clone(&s.state()?.doc);
-    if let Some(trace) = s.state()?.room_trace.get(&state, &space, regions) {
+    if let Some(trace) = s.state()?.room_trace.get(&state, &space, regions, numbered) {
         return Ok(trace);
     }
-    let trace = std::sync::Arc::new(trace_rooms_in(s, regions)?);
+    let trace = std::sync::Arc::new(trace_rooms_in(s, regions, numbered)?);
     // Traced in the state it was asked in (the trace changes nothing): remembered for it.
     if let Ok(st) = s.state_mut()
         && std::sync::Arc::ptr_eq(&st.doc, &state)
     {
-        st.room_trace.put(&state, space, regions, std::sync::Arc::clone(&trace));
+        st.room_trace.put(&state, space, regions, numbered, std::sync::Arc::clone(&trace));
     }
     Ok(trace)
 }
 
 /// The rooms around the plan's name labels, traced.
-fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomTrace> {
+fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool) -> Result<RoomTrace> {
     // Several sheets: each traced on its own objects. A room left open on one (a doorway the
     // print draws no leaf across) widens its search window to the plan's extents: those of the
     // one sheet, not of every sheet side by side (where one open room searched them all).
@@ -2283,7 +2312,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
             if earlier.contains(r) {
                 continue;
             }
-            let found = trace_rooms_in(s, Some(std::slice::from_ref(r)))?;
+            let found = trace_rooms_in(s, Some(std::slice::from_ref(r)), numbered)?;
             out.candidates.add_region(&found.candidates);
             out.rooms.extend(found.rooms.into_iter().filter(|f| !earlier.iter().any(|e| inside(e, f.at))));
             out.beyond_reach.extend(found.beyond_reach.into_iter().filter(|(_, at, _)| !earlier.iter().any(|e| inside(e, *at))));
@@ -2441,6 +2470,8 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
                 // Equipment and device tags (a panelboard label beside a room) never name it.
                 None => match score(l) {
                     0 => Some("equipment_or_device_tag"),
+                    // Numbered tags only: a name printed with its number.
+                    _ if numbered && !numbers_by_y.printed_with(*at, *height, t.chars().count()) => Some("not_printed_with_a_number"),
                     // No room word and no number printed by it: a room's name only if the room it
                     // traces holds a room number of its size (a tag's name drawn from its left end,
                     // its number in the room's middle), checked once it is traced.
@@ -2534,6 +2565,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
             header: pd.header.clone(),
             layers: pd.layers.clone(),
             blocks: pd.blocks.clone(),
+            numbered,
         }
     };
     if let Some(rooms) = s.state()?.room_trace.by_inputs(&s.space(), regions, &inputs) {
@@ -3390,6 +3422,25 @@ mod tests {
         let c = &trace.candidates;
         assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (6, 2, 2, 2), "{c:?}");
         assert!(c.dropped.is_empty(), "{c:?}");
+    }
+
+    #[test]
+    fn another_trades_plan_is_read_for_its_numbered_tags_only() {
+        // Q6324: another trade's plan of a floor numbers rooms; its notes and its rooms' names
+        // alone name none (only the architectural plan names them).
+        let mut s = plan_of(&[
+            ([0.0, 0.0, 240.0, 180.0], &[("OFFICE", 80.0, 90.0), ("101", 90.0, 80.0)]),
+            ([300.0, 0.0, 540.0, 180.0], &[("STORAGE", 380.0, 90.0)]),
+            ([600.0, 0.0, 840.0, 180.0], &[("ELECTRICAL CONTRACTOR", 620.0, 90.0)]),
+        ]);
+        let all = room_trace_in(&mut s, None).unwrap();
+        assert_eq!(all.rooms.len(), 3, "read as a floor plan, every room word names: {:?}", all.rooms);
+        let numbered = room_trace_numbered_in(&mut s, None).unwrap();
+        let names: Vec<(&str, Option<&str>)> = numbered.rooms.iter().map(|r| (r.name.as_str(), r.number.as_deref())).collect();
+        assert_eq!(names, [("OFFICE", Some("101"))]);
+        assert_eq!(numbered.candidates.dropped.get("not_printed_with_a_number"), Some(&2), "{:?}", numbered.candidates);
+        // Each read remembered as its own.
+        assert_eq!(room_trace_in(&mut s, None).unwrap().rooms.len(), 3);
     }
 
     #[test]
