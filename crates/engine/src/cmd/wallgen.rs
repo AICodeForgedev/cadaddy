@@ -521,9 +521,25 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             }
         }
     }
+    // Each level's floor as its documents build it (Q6408): a slab its notes' thickness, a framed
+    // floor its topping and deck (the joists under it are their own pieces); the build's slab
+    // only where nothing gives the floor, marked a default.
+    let assemblies: HashMap<String, super::floorasm::Assembly> = {
+        let d = s.doc()?;
+        let trade_rules = g.spec.as_ref().map_or_else(super::tradeatoms::Rules::default, |sp| super::tradeatoms::Rules::of(d, sp));
+        let cx = super::floorasm::Context { spec: g.spec.as_ref(), rules: &trade_rules, default_in: g.slab_ft.max(0.0) * 12.0 };
+        super::floorasm::by_level(d, &g.rules.levels, &cx).into_iter().map(|a| (a.level.clone(), a)).collect()
+    };
+    let slab_of = |level: &str| assemblies.get(level).map_or(g.slab_ft.max(0.0) * upf, |a| a.thickness_in() / 12.0 * upf);
+    for l in g.rules.levels.iter().filter(|l| l.sheet.is_none()) {
+        if let Some(a) = assemblies.get(&l.name) {
+            notes.push(format!("{}: its floor is {} ({}, {}).", a.level, a.describe(), cadaddy_walk3d::inches(a.thickness_in()), a.status().word()));
+            notes.extend(a.notes.iter().map(|n| format!("{}: {n}.", a.level)));
+        }
+    }
     // A mezzanine in a storey (Q6322): built once, the storey's walls under its slab stop there.
     let bases = cadaddy_walk3d::level_bases(s.doc()?, &g.rules);
-    fit_mezzanines(&mut planned, &plates, &scene, &bases, g.slab_ft.max(0.0) * upf, upf, &mut notes);
+    fit_mezzanines(&mut planned, &plates, &scene, &bases, &slab_of, upf, &mut notes);
     let d = s.doc_mut()?;
     let removed = remove_made(d);
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
@@ -575,15 +591,20 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         }
         let plate = plates.get(&grp.level).filter(|_| matches!(grp.part, Part::Floor | Part::Ceiling));
         let z = m.vertices.first().map_or(0.0, |v| v.z);
+        let mut xdata = tag(grp.part, &level.name, grp.source);
         if grp.part == Part::Floor {
+            let t = slab_of(&level.name);
             m = match plate {
-                Some(o) => plate_slab(o, z, g.slab_ft.max(0.0) * upf),
-                None => slab(&m, g.slab_ft.max(0.0) * upf),
+                Some(o) => plate_slab(o, z, t),
+                None => slab(&m, t),
             };
+            if let Some(a) = assemblies.get(&level.name) {
+                xdata.extend(a.tags().into_iter().map(|value| RawTag { code: 1000, value }));
+            }
         } else if let Some(o) = plate {
             m = plate_faces(o, z, true);
         }
-        let common = Common { layer: layer_of(grp.part).into(), xdata: tag(grp.part, &level.name, grp.source).into(), ..Common::default() };
+        let common = Common { layer: layer_of(grp.part).into(), xdata: xdata.into(), ..Common::default() };
         if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
             *counts.entry(part_name(grp.part)).or_insert(0) += 1;
         }
@@ -605,6 +626,9 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         "walls": c("wall"), "doors": c("door"), "windows": c("window"), "floors": c("floor"), "ceilings": c("ceiling"),
         "levels": scene.levels.len(), "removed": removed, "notes": notes, "window_tags": window_tags, "openings_by_level": by_level,
     });
+    let mut floor_assemblies: Vec<&super::floorasm::Assembly> = assemblies.values().collect();
+    floor_assemblies.sort_by(|a, b| a.level.cmp(&b.level));
+    r["floor_assemblies"] = Value::Array(floor_assemblies.iter().map(|a| a.to_json()).collect());
     if budget_exceeded {
         r["budget_exceeded"] = json!(true);
         r["levels_built"] = json!(levels_done);
@@ -854,7 +878,7 @@ fn fit_mezzanines(
     plates: &HashMap<usize, outline::Outline>,
     scene: &Scene,
     bases: &[(String, Vec2)],
-    slab: f64,
+    slab: &dyn Fn(&str) -> f64,
     upf: f64,
     notes: &mut Vec<String>,
 ) {
@@ -905,7 +929,7 @@ fn fit_mezzanines(
                 let mid = (w.a + w.b) * 0.5 - st_base + m_base;
                 let r = w.thickness / 2.0 + REPEAT_REACH_FT * upf;
                 let inside = [Vec2::new(r, 0.0), Vec2::new(-r, 0.0), Vec2::new(0.0, r), Vec2::new(0.0, -r)].iter().all(|d| under(mid + *d));
-                let top = z0 - slab;
+                let top = z0 - slab(&m_name);
                 if inside && w.top > top + 1e-6 && top > pl.z0 {
                     w.top = top;
                     capped += 1;

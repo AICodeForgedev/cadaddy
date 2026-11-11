@@ -137,6 +137,7 @@ pub mod fieldview;
 pub mod finishes;
 pub(crate) mod fixturebody;
 pub(crate) mod fixturefit;
+pub(crate) mod floorasm;
 pub mod fourd;
 pub mod framing;
 pub mod furnish;

@@ -27315,8 +27315,9 @@ fn structural_notes_deck(job: &GuidedJob) -> Option<(f64, String)> {
 /// depth and spacing as the notes on the floor's framing plans give them, by level (a building's
 /// floors can be framed differently). The level's structural sheets are read first, else its
 /// architectural ones; never another trade's (their notes name the joists they run between).
-/// The lowest storey (on grade) and the roofs are not floors framed here. What was put in (null:
-/// nothing).
+/// The lowest storey (on grade) and the roofs are not floors framed here. And each storey's
+/// notes that say what its floor is built of (Q6408: its slab, its topping and deck), from the
+/// same sheets, into the spec's floor notes. What was put in (null: nothing).
 fn floor_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
     let (mut sp, true) = super::bspec::current(s, "bim_build")? else { return Ok(Value::Null) };
     let mut storeys: Vec<(String, f64)> = sp
@@ -27352,6 +27353,43 @@ fn floor_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
             sp.floor_framing.retain(|x| !x.level.eq_ignore_ascii_case(floor));
             out.push(json!({"level": floor, "framing": f}));
             sp.floor_framing.push(f);
+        }
+    }
+    // What each storey's floor is built of (Q6408), the lowest's slab among them: the notes on
+    // its structural sheets, else its architectural ones, that give a slab or a floor's layers.
+    // The lowest storey's slab, where its own sheets say none, from the structural sheets that
+    // name no level (the general notes, a foundation plan).
+    let notes = super::floorasm::plan_notes(s.doc()?);
+    let lowest = storeys.first().map(|l| l.0.clone());
+    let no_level = |r: &SheetRegion| r.level.trim().is_empty() && r.levels.iter().all(|l| l.trim().is_empty());
+    for (floor, _) in storeys.iter().take(200) {
+        let of_level =
+            |r: &SheetRegion| std::iter::once(&r.level).chain(r.levels.iter()).any(|l| !l.is_empty() && level_name(l).eq_ignore_ascii_case(floor));
+        let general = lowest.as_deref() == Some(floor.as_str());
+        for (discipline, unlevelled) in [("S", false), ("A", false), ("S", true)] {
+            if unlevelled && !general {
+                continue;
+            }
+            let mut found: Vec<cadaddy_walk3d::FloorNote> = Vec::new();
+            for r in job.sheet_regions.iter().filter(|r| {
+                r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case(discipline) && if unlevelled { no_level(r) } else { of_level(r) }
+            }) {
+                let b = rect(r.area.unwrap_or(r.rect));
+                for (t, _) in notes.iter().filter(|(_, at)| b.contains(*at)).filter(|(t, _)| !unlevelled || super::floorasm::is_slab_note(t)) {
+                    let text: String = t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(240).collect();
+                    if found.len() < 16 && !found.iter().any(|n| n.text == text) {
+                        found.push(cadaddy_walk3d::FloorNote { level: floor.clone(), text, source: r.number.clone() });
+                    }
+                }
+            }
+            if !found.is_empty() {
+                sp.floor_notes.retain(|x| !x.level.eq_ignore_ascii_case(floor));
+                out.push(
+                    json!({"level": floor, "floor_notes": found.iter().map(|n| json!({"text": n.text, "sheet": n.source})).collect::<Vec<_>>()}),
+                );
+                sp.floor_notes.extend(found);
+                break;
+            }
         }
     }
     if out.is_empty() {
@@ -38384,6 +38422,76 @@ mod tests {
         // The spec keeps them through a save.
         let back = cadaddy_walk3d::BuildingSpec::from_json(&sp.to_json()).unwrap();
         assert_eq!(back.floor_framing, sp.floor_framing);
+    }
+
+    /// Q6408: each storey's notes that say what its floor is built of (the lowest's slab among
+    /// them) come from its structural sheets, else its architectural ones, never another trade's.
+    #[test]
+    fn floor_documents_read_each_storeys_floor_notes_from_its_own_sheets() {
+        let mut s = Session::new();
+        let t = |s: &mut Session, at: [f64; 2], text: &str| {
+            s.execute("text", &json!({"at": at, "text": text, "height": 2})).unwrap();
+        };
+        t(&mut s, [10.0, 20.0], "4\" POST-TENSIONED SLAB ON GRADE");
+        t(&mut s, [10.0, 40.0], "SEE ARCHITECTURAL FOR FINISHES");
+        // A structural general notes sheet (no level): only for a lowest storey its own sheets
+        // say nothing of; here they do.
+        t(&mut s, [7010.0, 20.0], "5\" CONCRETE SLAB ON GRADE");
+        t(&mut s, [7010.0, 40.0], "3/4\" GYPSUM CONCRETE TOPPING AT CORRIDORS");
+        t(&mut s, [1010.0, 20.0], "3/4\" GYPSUM CONCRETE ON 3/4\" SHEATHING ON 11 7/8\" I-JOISTS");
+        // Level 2's architectural sheet: its structural sheet said it first.
+        t(&mut s, [4010.0, 20.0], "1 1/2\" GYPCRETE TOPPING");
+        // Level 3: only its architectural sheet says it.
+        t(&mut s, [5010.0, 20.0], "3/4\" GYPSUM CONCRETE TOPPING");
+        // A plumbing sheet of level 3: not the floor's.
+        t(&mut s, [6010.0, 20.0], "6\" CONCRETE SLAB AT EQUIPMENT");
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Level 2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Level 3", "elevation_ft": 20, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Roof", "elevation_ft": 30, "height_ft": 4, "ceiling_ft": 4}
+            ]}}),
+        )
+        .unwrap();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![
+            region("S-1", "1", "S", "plan", 0.0),
+            region("S-2", "2", "S", "plan", 1000.0),
+            region("A-2", "2", "A", "plan", 4000.0),
+            region("A-3", "3", "A", "plan", 5000.0),
+            region("P-3", "3", "P", "plan", 6000.0),
+            region("S-0", "", "S", "notes", 7000.0),
+        ];
+        let out = floor_documents(&mut s, &job).unwrap();
+        let (sp, _) = super::super::bspec::current(&s, "test").unwrap();
+        let notes = |l: &str| sp.floor_notes_of(l).iter().map(|n| (n.source.clone(), n.text.clone())).collect::<Vec<_>>();
+        assert_eq!(notes("Level 1"), vec![("S-1".to_string(), "4\" POST-TENSIONED SLAB ON GRADE".to_string())], "{out}");
+        assert_eq!(notes("Level 2"), vec![("S-2".to_string(), "3/4\" GYPSUM CONCRETE ON 3/4\" SHEATHING ON 11 7/8\" I-JOISTS".to_string())]);
+        assert_eq!(notes("Level 3"), vec![("A-3".to_string(), "3/4\" GYPSUM CONCRETE TOPPING".to_string())]);
+        assert!(notes("Roof").is_empty());
+        let back = cadaddy_walk3d::BuildingSpec::from_json(&sp.to_json()).unwrap();
+        assert_eq!(back.floor_notes, sp.floor_notes);
+        // Without level 1's own sheet, its slab is the general notes' (their slab notes only).
+        job.sheet_regions.retain(|r| r.number != "S-1");
+        let mut s2 = Session::new();
+        for (at, text) in [([7010.0, 20.0], "5\" CONCRETE SLAB ON GRADE"), ([7010.0, 40.0], "3/4\" GYPSUM CONCRETE TOPPING AT CORRIDORS")] {
+            t(&mut s2, at, text);
+        }
+        s2.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9},
+                {"name": "Level 2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9}
+            ]}}),
+        )
+        .unwrap();
+        floor_documents(&mut s2, &job).unwrap();
+        let (sp2, _) = super::super::bspec::current(&s2, "test").unwrap();
+        let n1: Vec<String> = sp2.floor_notes_of("Level 1").iter().map(|n| format!("{}: {}", n.source, n.text)).collect();
+        assert_eq!(n1, vec!["S-0: 5\" CONCRETE SLAB ON GRADE".to_string()]);
+        assert!(sp2.floor_notes_of("Level 2").is_empty());
     }
 
     #[test]

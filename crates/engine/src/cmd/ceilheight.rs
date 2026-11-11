@@ -259,6 +259,16 @@ pub(crate) fn height_note(t: &str) -> Option<(f64, bool)> {
     (6.5..=20.0).contains(&ft).then_some((ft, worded))
 }
 
+/// A framed floor's deck and topping over its joists, inches, where its notes give them.
+fn deck_over(sp: &BuildingSpec, level: &str) -> Option<f64> {
+    let lv = sp.level(level)?;
+    let rules = super::tradeatoms::Rules::default();
+    let cx = super::floorasm::Context { spec: Some(sp), rules: &rules, default_in: 0.0 };
+    let a = super::floorasm::resolve(lv, false, &[], &cx);
+    let read = a.layers.iter().any(|l| l.status == super::floorasm::Status::Documented);
+    (a.framed && read).then(|| a.thickness_in()).filter(|t| t.is_finite() && *t > 0.0)
+}
+
 /// The height under the assembly over a level's rooms, feet above its floor, and why: the next
 /// storey's floor (its framing's members, deck and the ceiling membrane under them) or roof (its
 /// members' bearing, else their depth and deck) over the floor to floor, else the rule's usual
@@ -275,8 +285,10 @@ pub(crate) fn derived_height(sp: &BuildingSpec, level: &str, rule: &Rule) -> Opt
     let (underside, why) = match above.as_deref() {
         Some(a) if sp.floor_framing_of(a).is_some_and(|f| f.depth_in.is_finite() && f.depth_in > 0.0) => {
             let f = sp.floor_framing_of(a).map_or(0.0, |f| f.depth_in);
-            let d = (f + rule.deck_in) / 12.0;
-            (top - d - m, format!("{a}'s floor framing {}\" deep and {}\" deck over it", f, rule.deck_in))
+            // The deck over the joists as the floor's notes give it, with its topping (Q6408).
+            let deck = deck_over(sp, a).unwrap_or(rule.deck_in);
+            let d = (f + deck) / 12.0;
+            (top - d - m, format!("{a}'s floor framing {}\" deep and {}\" deck over it", f, deck))
         }
         Some(a) if sp.exterior.level_framing(a).is_some() => {
             let f = sp.exterior.level_framing(a).cloned();
@@ -460,6 +472,22 @@ mod tests {
         // Settled again: the derived rooms are derived again, not kept as documented.
         let again = settle(&mut sp, &[], &rule, &[]);
         assert_eq!(again.derived.len(), 3);
+    }
+
+    /// Q6408: the floor over the room as its notes build it: its topping and deck over the joists.
+    #[test]
+    fn a_derived_height_allows_for_the_floor_overs_topping_and_deck() {
+        let rule = Rule::load();
+        let mut sp = spec();
+        sp.floor_notes.push(cadaddy_walk3d::FloorNote {
+            level: "L2".into(),
+            text: "1 1/2\" GYPCRETE ON 3/4\" SHEATHING".into(),
+            source: "S-2".into(),
+        });
+        settle(&mut sp, &[], &rule, &[]);
+        // 10' less 14" joists, 2 1/4" topping and deck and 1.5" membrane.
+        let ft = sp.rooms[2].ceiling_ft.unwrap_or_default();
+        assert!((ft - (10.0 - 17.75 / 12.0)).abs() < 1e-9, "{ft}");
     }
 
     #[test]
