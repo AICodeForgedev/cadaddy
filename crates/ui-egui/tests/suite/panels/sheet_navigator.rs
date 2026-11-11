@@ -1,6 +1,7 @@
-//! A print set one sheet at a time (Q6416): the app opens a print set on its first sheet with its
-//! sheet list beside it, draws only that sheet's objects, and steps through the sheets with the
-//! list and with Page Up / Page Down. An ordinary drawing is drawn whole, as before.
+//! A print set one sheet at a time (Q6416): the app opens a print set on its first sheet (its
+//! sheet list waits on the rail, Q6524), draws only that sheet's objects, and steps through the
+//! sheets with the list and with Page Up / Page Down. An ordinary drawing is drawn whole, as
+//! before.
 //!
 //! `sheet_navigator_frame_times` (ignored) measures what the screen does with a whole set before
 //! and after; run it by hand, in release, on the 100-sheet set:
@@ -86,14 +87,19 @@ fn a_print_set_opens_on_its_first_sheet_and_draws_only_it() {
     // The view is the sheet, not the set.
     let v = h.state().session.state().unwrap().view();
     assert!(sheets[0].rect.contains(v.center) && v.height < sheets[0].rect.height() * 2.0, "{v:?}");
-    // The sheet list is open beside it: a row per sheet, with its number and title.
-    assert!(h.state().ui.docking.layout.contains(&cadaddy_ui_egui::docking::Panel::SheetSets));
-    // Docked on the left of the drawing, a column wide, and the sheet fitted to what is left.
+    // Its sheet list waits on the rail: opening a file opens no palette by itself (Q6524). The
+    // sheet is fitted to the drawing area.
+    assert!(!h.state().ui.docking.layout.contains(&cadaddy_ui_egui::docking::Panel::SheetSets));
     let canvas = h.state().canvas.rect.unwrap();
-    assert!(canvas.left() > 250.0 && canvas.left() < 400.0, "{canvas:?}");
     let xf = h.state().canvas.xf.unwrap();
     let (lo, hi) = (xf.to_screen(sheets[0].rect.min), xf.to_screen(sheets[0].rect.max));
     assert!(canvas.contains(lo) && canvas.contains(hi), "the whole sheet is in view: {lo:?} {hi:?} in {canvas:?}");
+    // From the rail: a row per sheet, with its number and title, docked on the left of the
+    // drawing a column wide.
+    h.state_mut().run("ui.dock", json!({"operation": "toggle", "panel": "sheetSets"})).unwrap();
+    h.run_steps(4);
+    let canvas = h.state().canvas.rect.unwrap();
+    assert!(canvas.left() > 250.0 && canvas.left() < 400.0, "{canvas:?}");
     h.get_by_label("Sample Sheet 2");
     // A look at it, when asked for (`CADADDY_SHEETNAV_SHOTS=<folder>`).
     if let Some(dir) = std::env::var_os("CADADDY_SHEETNAV_SHOTS") {
