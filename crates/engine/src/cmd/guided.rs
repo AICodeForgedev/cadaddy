@@ -39373,14 +39373,18 @@ mod tests {
         // Without the frame (the whole sheet a level), the title block's boxes are traced around
         // its texts, but no room is built from them: they run along no built wall (Q5291).
         let mut s = furnished_sheet();
+        // A title block's line with a room's word in it: the draft takes it for a room's name
+        // (its words alone - the firm, the project, the stamp - name none: Q6324).
+        s.execute("text", &json!({"at": [895.0, 350.0], "text": "ACME OFFICE PARK", "height": 6.0})).unwrap();
         let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
         job.sheet_regions = vec![a_plan(None, None)];
         let r = build_job(&mut s, &job);
         let spec: cadaddy_walk3d::BuildingSpec = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
-        assert!(
-            spec.rooms.iter().any(|r| !["OFFICE", "LOBBY"].contains(&r.name.to_ascii_uppercase().as_str())),
-            "the test sheet's title block must name rooms: {r}"
-        );
+        let spec_names: Vec<String> = spec.rooms.iter().map(|r| r.name.to_ascii_uppercase()).collect();
+        assert!(spec_names.iter().any(|n| n == "ACME OFFICE PARK"), "the test sheet's title block must name a room: {spec_names:?}");
+        for plain in ["ACME DESIGN GROUP", "SAMPLE INN", "OWNER COPY"] {
+            assert!(!spec_names.iter().any(|n| n == plain), "no room word, no number: no room's name: {spec_names:?}");
+        }
         assert!(r["notes"].to_string().contains("not inside built walls"), "the title block's boxes trace: {r}");
         assert_eq!(r["rooms"].as_u64(), Some(1), "the floor's room only: {r}");
 

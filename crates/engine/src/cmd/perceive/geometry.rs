@@ -1939,10 +1939,11 @@ pub(crate) struct NumbersByY {
 
 impl NumbersByY {
     fn new(numbers: &[Label]) -> Self {
-        Self::of(numbers.iter().map(|n| (n.2, n.3)))
+        Self::of(numbers.iter().filter(|n| !equipment_mark_number(&n.1)).map(|n| (n.2, n.3)))
     }
 
-    /// From the room numbers' (where, text height).
+    /// From the room numbers' (where, text height); an equipment mark's ([`equipment_mark_number`])
+    /// left out by the caller.
     pub(crate) fn of(numbers: impl Iterator<Item = (Vec2, f64)>) -> Self {
         let mut at: Vec<(Vec2, f64)> = numbers.filter(|(p, _)| p.x.is_finite() && p.y.is_finite()).collect();
         at.sort_by(|a, b| a.0.y.total_cmp(&b.0.y));
@@ -1974,6 +1975,17 @@ impl NumbersByY {
         let reach = TAG_NUMBER_REACH * h;
         self.band(at.y - reach, at.y + reach).any(|(q, nh)| *nh >= TAG_SIZE_BAND.0 * h && *nh <= TAG_SIZE_BAND.1 * h && (q.x - at.x).abs() <= side)
     }
+}
+
+/// Whether a number-shaped text is an equipment or fixture mark (`EQ15`, `EF12`: its letters an
+/// equipment mark's by the rule data, `equipment.marks` and `rooms.equipment_number_prefixes`),
+/// printed under the item's name: it numbers no room.
+pub(crate) fn equipment_mark_number(t: &str) -> bool {
+    let up = t.trim().to_ascii_uppercase();
+    let letters: String = up.chars().take_while(char::is_ascii_alphabetic).collect();
+    !letters.is_empty()
+        && (cadaddy_mepfix::wordrules::words("equipment.marks").contains(&letters.as_str())
+            || cadaddy_mepfix::wordrules::words("rooms.equipment_number_prefixes").contains(&letters.as_str()))
 }
 
 /// Whether a plain text (not a tag block's attribute) at `at`, height `h`, reads as a room's
@@ -2817,7 +2829,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
         let number = inside_numbers(true).or_else(beside);
         // A name with no room word whose room holds no number of its size: a callout or a
         // note's words (`FLOOR SINK`), no room (Q6324).
-        if number.is_none() && needs_number.contains(&h) {
+        if number.as_deref().is_none_or(equipment_mark_number) && needs_number.contains(&h) {
             candidates.kept = candidates.kept.saturating_sub(1);
             candidates.drop("no_room_word_or_number", &name);
             continue;
@@ -3401,6 +3413,8 @@ mod tests {
             ([300.0, 0.0, 540.0, 180.0], &[("FLOOR SINK", 380.0, 90.0)]),
             ([600.0, 0.0, 840.0, 180.0], &[("PROVIDE PLYWOOD", 650.0, 90.0)]),
             ([900.0, 0.0, 1140.0, 180.0], &[("CHECK IN", 980.0, 90.0), ("105", 990.0, 80.0)]),
+            // An equipment item's tag: its name over its mark, which numbers no room.
+            ([1200.0, 0.0, 1440.0, 180.0], &[("COOLER", 1280.0, 90.0), ("EQ15", 1285.0, 80.0)]),
         ]);
         let trace = room_trace_in(&mut s, None).unwrap();
         let mut names: Vec<(String, Option<String>)> = trace.rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
@@ -3411,16 +3425,16 @@ mod tests {
             "a callout names no room; a name printed with its number does"
         );
         let c = &trace.candidates;
-        assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (6, 2, 2, 0), "{c:?}");
-        assert_eq!(c.dropped.get("no_room_word_or_number"), Some(&2), "{c:?}");
-        assert_eq!(c.examples.get("no_room_word_or_number").map(Vec::len), Some(2), "{c:?}");
+        assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (8, 3, 2, 0), "{c:?}");
+        assert_eq!(c.dropped.get("no_room_word_or_number"), Some(&3), "{c:?}");
+        assert_eq!(c.examples.get("no_room_word_or_number").map(Vec::len), Some(3), "{c:?}");
         // Read in a plan view: the texts outside it are counted, never traced (sheet by sheet,
         // the texts no view holds once).
         let views = [[0.0, 0.0, 250.0, 200.0], [890.0, 0.0, 1150.0, 200.0]];
         let trace = room_trace_in(&mut s, Some(&views)).unwrap();
         assert_eq!(trace.rooms.len(), 2, "{:?}", trace.rooms);
         let c = &trace.candidates;
-        assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (6, 2, 2, 2), "{c:?}");
+        assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (8, 2, 2, 4), "{c:?}");
         assert!(c.dropped.is_empty(), "{c:?}");
     }
 
