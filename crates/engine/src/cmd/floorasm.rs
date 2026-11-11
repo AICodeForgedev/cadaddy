@@ -43,6 +43,9 @@ struct Words {
     slab_marks: Vec<String>,
     slab_lead: Vec<String>,
     separators: Vec<String>,
+    lead_words: Vec<String>,
+    name_skip: Vec<String>,
+    name_stop: Vec<String>,
     topping_words: Vec<String>,
     deck_words: Vec<String>,
     member_words: Vec<String>,
@@ -191,10 +194,29 @@ fn has(u: &str, words: &[String]) -> bool {
     words.iter().any(|w| !w.is_empty() && u.contains(&w.to_ascii_uppercase()))
 }
 
-/// What a layer is called: its words, in lower case, to the first comma or full stop.
-fn name_of(material: &str) -> String {
-    let m = material.split([',', ';', '(']).next().unwrap_or_default().trim().trim_end_matches(['.', ':']).trim();
-    m.to_ascii_lowercase().chars().take(48).collect()
+/// What a layer is called: its words in lower case, without the rule's filler words before them
+/// (`THICK`, `DEEP`), to the first of its stop words (a spacing, `TYP.`).
+fn name_of(w: &Words, material: &str) -> String {
+    let up = material.to_ascii_uppercase();
+    let end = w.name_stop.iter().filter(|s| !s.is_empty()).filter_map(|s| up.find(&s.to_ascii_uppercase())).min().unwrap_or(up.len());
+    let mut m = up.get(..end).unwrap_or_default().trim();
+    for _ in 0..4 {
+        let next = w
+            .name_skip
+            .iter()
+            .filter(|k| !k.is_empty())
+            .find_map(|k| m.strip_prefix(k.to_ascii_uppercase().as_str()).filter(|rest| rest.is_empty() || rest.starts_with(' ')));
+        match next {
+            Some(rest) => m = rest.trim_start(),
+            None => break,
+        }
+    }
+    m.trim_end_matches(['.', ':']).trim().to_ascii_lowercase().chars().take(48).collect()
+}
+
+/// Whether a note gives a slab's thickness.
+pub(crate) fn is_slab_note(text: &str) -> bool {
+    read_with(&words(), text).slab.is_some()
 }
 
 /// What a note says a floor is built of.
@@ -218,8 +240,16 @@ fn read_with(w: &Words, text: &str) -> NoteRead {
         parts = parts.iter().flat_map(|p| p.split(sep.as_str()).map(str::to_string).collect::<Vec<_>>()).take(MAX_LAYERS * 2).collect();
     }
     for part in parts.iter().take(MAX_LAYERS) {
-        let Some((v, material)) = lead_inches(part.trim()) else { continue };
-        let said = |v: f64| (v, name_of(material), note.clone());
+        // A thickness after a qualifier (`NOMINAL 3/4"`) is the layer's.
+        let mut p = part.trim();
+        for _ in 0..4 {
+            match w.lead_words.iter().filter(|l| !l.is_empty()).find_map(|l| p.strip_prefix(l.to_ascii_uppercase().as_str())) {
+                Some(rest) => p = rest.trim_start(),
+                None => break,
+            }
+        }
+        let Some((v, material)) = lead_inches(p) else { continue };
+        let said = |v: f64| (v, name_of(w, material), note.clone());
         if has(material, &w.member_words) {
             if out.member.is_none() && within(&w.member_in, v) {
                 out.member = Some(said(v));
@@ -655,6 +685,11 @@ mod tests {
         assert_eq!(r.member.as_ref().map(|t| t.0), Some(11.875));
         assert!(r.slab.is_none());
         // Other ways of writing it.
+        let r = read_note("3/4\" GYPCRETE ON NOMINAL 3/4\" THICK APA RATED SHEATHING");
+        assert_eq!(r.deck.as_ref().map(|t| t.1.as_str()), Some("apa rated sheathing"));
+        assert_eq!((r.topping.map(|t| t.0), r.deck.map(|t| t.0), r.member), (Some(0.75), Some(0.75), None));
+        let r = read_note("SUPPORTED ON 16\" DEEP WOOD I-JOISTS SPACED @ 24\" OC. U.N.O.");
+        assert_eq!(r.member.map(|t| (t.0, t.1)), Some((16.0, "wood i-joists".to_string())));
         let r = read_note("1-1/2\" gypcrete over 23/32\" T&G OSB subfloor over 16\" floor trusses");
         assert_eq!((r.topping.map(|t| t.0), r.deck.map(|t| t.0), r.member.map(|t| t.0)), (Some(1.5), Some(23.0 / 32.0), Some(16.0)));
     }

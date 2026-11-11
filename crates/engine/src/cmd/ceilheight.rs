@@ -473,6 +473,22 @@ mod tests {
         assert_eq!(again.derived.len(), 3);
     }
 
+    /// Q6408: the floor over the room as its notes build it: its topping and deck over the joists.
+    #[test]
+    fn a_derived_height_allows_for_the_floor_overs_topping_and_deck() {
+        let rule = Rule::load();
+        let mut sp = spec();
+        sp.floor_notes.push(cadaddy_walk3d::FloorNote {
+            level: "L2".into(),
+            text: "1 1/2\" GYPCRETE ON 3/4\" SHEATHING".into(),
+            source: "S-2".into(),
+        });
+        settle(&mut sp, &[], &rule, &[]);
+        // 10' less 14" joists, 2 1/4" topping and deck and 1.5" membrane.
+        let ft = sp.rooms[2].ceiling_ft.unwrap_or_default();
+        assert!((ft - (10.0 - 17.75 / 12.0)).abs() < 1e-9, "{ft}");
+    }
+
     #[test]
     fn a_room_with_no_level_of_its_own_is_derived_on_the_level_given() {
         let rule = Rule::load();
