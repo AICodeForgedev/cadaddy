@@ -2136,7 +2136,10 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         run_wires.get(run).is_some_and(|ws| ws.first().and_then(|w| circuit_of(&w.circuit)).is_some_and(|(_, n)| n.len() == 1))
                     })
                     .collect();
-                let phase = number.parse::<u32>().ok().map(|n| format!("phase {}", super::mepatoms::phase_of(n)));
+                let phase = number
+                    .parse::<u32>()
+                    .ok()
+                    .map(|n| format!("phase {}", super::mepatoms::phase_on(n, super::mepatoms::build::panel_phases(cx.sp, panel))));
                 let pick: Vec<String> = if own.is_empty() {
                     runs.iter()
                         .flat_map(|run| run_wires.get(run).into_iter().flatten())

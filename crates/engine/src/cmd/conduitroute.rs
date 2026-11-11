@@ -1997,6 +1997,22 @@ pub(crate) fn level_moves(d: &Drawing, sp: &BuildingSpec) -> HashMap<String, Vec
 /// A homerun's circuit numbers from its members' labels (`LP1-1`, `LP1-3,5`): each once, in
 /// order (two rooms' circuits of one label share no raceway, but a repeat must not make the list
 /// unreadable).
+/// A circuit label's identity: its panel and numbers (`d-1` and `D-1` the same), else the label.
+fn breaker_key(label: &str) -> String {
+    super::printcond::parse_circuit_list(label).map_or_else(|| label.trim().to_ascii_uppercase(), |(p, n)| format!("{p}-{n}"))
+}
+
+/// A circuit's set reached again (`more`): each of its conductors at the larger of the sizes
+/// (`order`: a size's place in the table, larger later), its count the set's own.
+fn merge_set(set: &mut [Part], more: &[Part], order: &dyn Fn(&str) -> usize) {
+    let Some(big) = more.iter().map(|p| p.1.clone()).max_by_key(|s| order(s)) else { return };
+    for p in set.iter_mut() {
+        if order(&p.1) < order(&big) {
+            p.1 = big.clone();
+        }
+    }
+}
+
 fn homerun_numbers(labels: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for (_, nums) in labels.iter().filter_map(|l| super::printcond::parse_circuit_list(l)) {
@@ -3453,6 +3469,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         }
     }
     let mut grouped_circuits = 0usize;
+    // Homerun members that are a circuit already in their group or shared stretch (the same
+    // panel and number reached by another of its tags): one set of its conductors, not two.
+    let mut same_circuit_members = 0usize;
     let mut home_segs: Vec<gap::HomeSeg> = Vec::new();
     let mut fill_rows: Vec<Value> = Vec::new();
     let mut derated: Vec<Value> = Vec::new();
@@ -3483,6 +3502,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // Each member's own way to the panel: its tap and its conductors (Q6206).
         let mut member_ways: Vec<(usize, f64, Vec<Part>)> = Vec::new();
         let mut group_parts: Vec<Part> = Vec::new();
+        // Each circuit's ungrounded conductors in the homerun, by its panel and number: one set
+        // per circuit (one breaker, one set of conductors).
+        let mut group_sets: Vec<(String, Vec<Part>)> = Vec::new();
         let mut longest = 0.0_f64;
         let mut trips: Vec<f64> = Vec::new();
         let mut path_len_ft = 0.0;
@@ -3554,7 +3576,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             let Some(h) = homes.get(*i) else { continue };
             let Some(c) = circs.get(h.circ) else { continue };
             let Some(tag) = tags.get(*i) else { continue };
-            labels.push(c.label.clone());
+            if !labels.iter().any(|l| breaker_key(l) == breaker_key(&c.label)) {
+                labels.push(c.label.clone());
+            }
             let mk = field_of(tag, "conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS).to_string();
             let trip = trip_of(&c.panel, &c.label);
             trips.push(trip.unwrap_or(rl.vdrop.breaker_a));
@@ -3686,8 +3710,19 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 t.set("homerun_group", format!("{}:{gn}", gear_el.tag), "computed");
             }
             member_ways.push((h.circ, tap_run_ft, parts.clone()));
-            group_parts.extend(parts.into_iter().filter(|p| !p.2));
+            let hots: Vec<Part> = parts.into_iter().filter(|p| !p.2).collect();
+            let key = breaker_key(&c.label);
+            match group_sets.iter_mut().find(|s| s.0 == key) {
+                // Another tag of a circuit already here: its devices tap into this homerun, which
+                // carries the circuit's one set, at the larger of the two sizes.
+                Some(set) => {
+                    same_circuit_members += 1;
+                    merge_set(&mut set.1, &hots, &order_sz);
+                }
+                None => group_sets.push((key, hots)),
+            }
         }
+        group_parts.extend(group_sets.iter().flat_map(|s| s.1.iter().cloned()));
         if g.len() > 1 {
             grouped_circuits += g.len();
         }
@@ -3972,7 +4007,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 key: format!("{}|{}", lead_h.level.to_ascii_lowercase(), gear_el.handle.hex()),
                 pts: r.points.clone(),
                 bot: r.bottoms_ft.clone(),
-                parts: combined.clone(),
+                sets: group_sets.clone(),
                 ccc: combined.iter().filter(|p| !p.2).fold(0u32, |n, p| n.saturating_add(p.0)),
                 trip_a: trips.iter().copied().fold(0.0, f64::max),
                 labels: labels.clone(),
@@ -4081,13 +4116,28 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut parts: Vec<Part> = Vec::new();
         let mut labels: Vec<String> = Vec::new();
         let mut trip = 0.0_f64;
+        // One set per circuit (panel and number) over the homeruns sharing the stretch.
+        let mut st_sets: Vec<(String, Vec<Part>)> = Vec::new();
         for m in st.members.iter().filter_map(|i| home_segs.get(*i)) {
-            parts.extend(m.parts.iter().filter(|p| !p.2).cloned());
-            labels.extend(m.labels.iter().cloned());
+            for (key, hots) in &m.sets {
+                match st_sets.iter_mut().find(|s| s.0 == *key) {
+                    Some(set) => {
+                        same_circuit_members += 1;
+                        merge_set(&mut set.1, hots, &order_of);
+                    }
+                    None => st_sets.push((key.clone(), hots.clone())),
+                }
+            }
+            for l in &m.labels {
+                if !labels.iter().any(|x| breaker_key(x) == breaker_key(l)) {
+                    labels.push(l.clone());
+                }
+            }
             trip = trip.max(m.trip_a);
             let size = runs.get(m.run).map_or(min_in, |r| r.size_in[0]);
             *shared_before.entry(super::mepatoms::trade_size(size)).or_default() += ft;
         }
+        parts.extend(st_sets.into_iter().flat_map(|s| s.1));
         let ccc: u32 = parts.iter().fold(0u32, |n, p| n.saturating_add(p.0));
         let ground = parts.iter().map(|p| p.1.clone()).max_by_key(|s| order_of(s)).unwrap_or_else(|| "12".into());
         // The 310.15(C)(1) adjustment over all of them: conductors up a size where it needs.
@@ -4621,6 +4671,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }); // What the build filled in and corrected for the field (Q6216).
     out.report["inferred_circuits"] = json!({"total": inferred_rows.len(), "devices": inferred_devs.len(), "items": inferred_rows});
     out.report["clashes_corrected"] = json!(clash_offsets.len());
+    out.report["same_circuit_members"] = json!(same_circuit_members);
     out.report["clash_offsets"] = json!(clash_offsets);
     if let Some(o) = out.report.as_object_mut() {
         o.insert("conductor_sizing".into(), conductor_sizing);
