@@ -964,3 +964,56 @@ fn a_mezzanine_is_a_level_inside_its_storey() {
     let m = index.levels.iter().find(|l| l.name == "M").expect("mezzanine");
     assert_eq!(m.sheets.len(), 3, "{:?}", m.sheets);
 }
+
+/// A sheet title that lists parts (Q6514: `FLOOR PLAN/ DETAILS/ SCHEDULES`) names everything on
+/// the sheet: a part naming a plan makes the sheet that plan, so the set's only floor plan is the
+/// floor's plan and a finish or tile plan doesn't stand in for it.
+#[test]
+fn a_title_listing_a_plan_and_other_drawings_is_that_plan() {
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A1.1", &["FLOOR PLAN/ DETAILS/ SCHEDULES"], "")),
+        ("Set.pdf", 2, sheet("A1.2", &["FLOOR TILE PLAN"], "")),
+        ("Set.pdf", 3, sheet("A2.1", &["REFLECTED CEILING PLAN/ CEILING DETAILS"], "")),
+        ("Set.pdf", 4, sheet("A3.1", &["ROOF PLAN/ ROOF DETAILS"], "")),
+        ("Set.pdf", 5, sheet("A4.1", &["CANOPY PLAN/ ELEVATIONS"], "")),
+        ("Set.pdf", 6, sheet("A5.1", &["EQUIPMENT/ ENLARGED STORAGE/ LIFE SAFETY"], "")),
+        ("Set.pdf", 7, sheet("A6.1", &["DOOR/ WINDOW SCHEDULES"], "")),
+    ]);
+    let index = printset::sheet_index(&project);
+    let of = |n: &str| index.sheets.iter().find(|s| s.number == n).unwrap_or_else(|| panic!("{n}: {:?}", index.sheets));
+    let filed: Vec<(&str, &str, &str)> = index.sheets.iter().map(|s| (s.number.as_str(), s.sheet_type.as_str(), s.level.as_str())).collect();
+    for (n, want) in [("A1.1", "plan"), ("A1.2", "plan"), ("A2.1", "rcp"), ("A3.1", "plan"), ("A4.1", "plan"), ("A5.1", "plan"), ("A6.1", "schedule")]
+    {
+        assert_eq!(of(n).sheet_type, want, "{n} {:?}: {filed:?}", of(n).title);
+    }
+    // The floor plan sheet is on the building's one floor, beside the tile plan.
+    let floor = index.levels.iter().find(|l| l.name == "1").unwrap_or_else(|| panic!("no level 1: {:?}", index.levels));
+    let on: Vec<&str> = floor.sheets.iter().filter_map(|s| s["sheet"].as_str()).collect();
+    assert!(on.contains(&"A1.1"), "{on:?}");
+    assert_eq!(of("A1.1").level, "1");
+    // The whole-floor equipment plan is on that floor too (its life-safety part doesn't make it a
+    // reference sheet of no level).
+    assert_eq!(of("A5.1").level, "1");
+}
+
+/// Q6514: a sheet titled as a floor plan that is still filed as something else (a title of one
+/// part, `FLOOR PLAN NOTES`) while the floor has no sheet titled as its floor plan is listed, to
+/// ask; a set whose floor has its floor plan lists nothing.
+#[test]
+fn a_floor_plan_title_filed_otherwise_on_a_floor_without_one_is_listed() {
+    let project = classify(vec![("Set.pdf", 1, sheet("A1.1", &["FLOOR PLAN NOTES"], "")), ("Set.pdf", 2, sheet("A1.2", &["FLOOR TILE PLAN"], ""))]);
+    let index = printset::sheet_index(&project);
+    let listed: Vec<(&str, &str, &str)> =
+        index.floor_plans_filed_otherwise.iter().map(|f| (f.sheet.as_str(), f.sheet_type.as_str(), f.level.as_str())).collect();
+    assert_eq!(listed, [("A1.1", "schedule", "1")], "{:?}", index.sheets);
+
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A1.1", &["FLOOR PLAN NOTES"], "")),
+        ("Set.pdf", 2, sheet("A1.2", &["FLOOR TILE PLAN"], "")),
+        ("Set.pdf", 3, sheet("A1.3", &["FLOOR PLAN/ DETAILS/ SCHEDULES"], "")),
+    ]);
+    let index = printset::sheet_index(&project);
+    assert!(index.floor_plans_filed_otherwise.is_empty(), "{:?}", index.floor_plans_filed_otherwise);
+    let plan = index.sheets.iter().find(|s| s.number == "A1.3").expect("A1.3");
+    assert_eq!((plan.sheet_type.as_str(), plan.views.clone()), ("plan", vec!["detail".to_string(), "schedule".to_string()]));
+}

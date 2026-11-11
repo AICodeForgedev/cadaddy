@@ -529,6 +529,16 @@ pub(crate) fn loops_at_lazy_within(s: &Session, p: Vec2, cache: &mut Option<Outl
     Ok(loops)
 }
 
+/// The error of a boundary search that stopped at its reach ([`loops_at_lazy_within`]): what lies
+/// farther was never searched, so the area may still close out there.
+const BEYOND_REACH: &str = "Valid hatch boundary not found within reach.";
+
+/// Whether a boundary search ended at its reach, not at the drawing's edge: "not searched
+/// farther", never "not there".
+pub(crate) fn beyond_reach(e: &EngineError) -> bool {
+    matches!(e, EngineError::Other(m) if m == BEYOND_REACH)
+}
+
 /// The error of a boundary search too dense to finish.
 fn too_dense() -> EngineError {
     EngineError::Other(
@@ -560,6 +570,10 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
         return Err(EngineError::Other("Valid hatch boundary not found.".into()));
     }
     let mut r = (span / 4096.0).max(gap * 4.0).max(tol * 1e6);
+    // The last window searched is the reach itself (not the last doubling short of it), and no
+    // window is wider: a first window past the reach (vast extents) is the reach.
+    let reach = reach.filter(|m| m.is_finite() && *m > 0.0);
+    let mut at_reach = false;
     let inside = |w: &Bounds2, b: &cadaddy_geom::region::Boundary| {
         let bb = Bounds2::from_points(b.outer.iter().copied());
         bb.min.x > w.min.x && bb.min.y > w.min.y && bb.max.x < w.max.x && bb.max.y < w.max.y
@@ -569,8 +583,12 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
     // held), so it finds the same: not searched again.
     let mut last: Option<(usize, std::rc::Rc<WindowSearch>, Option<cadaddy_geom::region::Boundary>)> = None;
     let (owners, found) = loop {
-        if reach.is_some_and(|m| r > m) {
-            return Err(EngineError::Other("Valid hatch boundary not found within reach.".into()));
+        if let Some(m) = reach.filter(|m| r >= *m) {
+            if at_reach {
+                return Err(EngineError::Other(BEYOND_REACH.into()));
+            }
+            r = m;
+            at_reach = true;
         }
         let near = Bounds2::new(p - Vec2::new(r, r), p + Vec2::new(r, r));
         // A window holding every outline searches what the whole drawing would.
@@ -1555,6 +1573,33 @@ mod tests {
         let mut cache = None;
         assert!(loops_at_lazy_within(&s, open, &mut cache, Some(2000.0)).is_err());
         let room = loops_at_lazy_within(&s, Vec2::new(560.0, 72.0), &mut cache, Some(2000.0)).expect("the closed room");
+        let b = Bounds2::from_points(room.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
+        assert!((b.width() - 120.0).abs() < 1e-6, "{b:?}");
+    }
+
+    /// The last window searched is the reach itself, not the last doubling short of it: a room
+    /// whose walls lie 1,500" from the point is found with a reach of 1,600" (the doublings go
+    /// 1,250" then 2,500"), and stopping short says so (beyond reach, not "not there").
+    #[test]
+    fn the_last_window_searched_is_the_reach_itself() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [-20000, -20000], "p2": [20000, 20000] })).unwrap();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [3000, 3000] })).unwrap();
+        let mut cache = None;
+        let at = Vec2::new(1500.0, 1500.0);
+        let room = loops_at_lazy_within(&s, at, &mut cache, Some(1600.0)).expect("the room, within reach");
+        let b = Bounds2::from_points(room.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
+        assert!((b.width() - 3000.0).abs() < 1e-6, "{b:?}");
+        let mut cache = None;
+        let short = loops_at_lazy_within(&s, at, &mut cache, Some(1400.0));
+        let Err(e) = short else { panic!("walls beyond the reach: {short:?}") };
+        assert!(beyond_reach(&e), "{e}");
+        // A reach narrower than the first window (vast extents) is searched, not skipped.
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [120, 120] })).unwrap();
+        s.execute("line", &json!({ "points": [[4.0e7, 0], [4.0e7 + 12.0, 0]] })).unwrap();
+        let mut cache = None;
+        let room = loops_at_lazy_within(&s, Vec2::new(60.0, 60.0), &mut cache, Some(1800.0)).expect("the room");
         let b = Bounds2::from_points(room.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
         assert!((b.width() - 120.0).abs() < 1e-6, "{b:?}");
     }
