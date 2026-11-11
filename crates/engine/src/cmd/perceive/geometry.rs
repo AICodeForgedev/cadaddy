@@ -2407,7 +2407,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     }
     // Untagged, a spec with rooms names them.
     let spec_rooms = spec.as_ref().filter(|sp| !tagged && !sp.rooms.is_empty()).map(|sp| sp.rooms.as_slice());
-    // A detail or section callout's sheet (`A131`, `A411`) reads like a lettered room number: one
+    // A detail or section callout's sheet (`A931`, `A952`) reads like a lettered room number: one
     // of the set's sheet numbers is no room's.
     let mut sheet_numbers: std::collections::BTreeSet<String> =
         spec.as_ref().map(|sp| sp.sheets.iter().map(|x| x.number.trim().to_ascii_uppercase()).collect()).unwrap_or_default();
