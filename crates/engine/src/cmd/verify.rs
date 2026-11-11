@@ -608,10 +608,24 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
     // Built objects off their level's building (a legend's equipment, a ceiling traced round a
     // grid bubble): each listed with what it was read from.
     let (shells, _) = shell_boxes(d);
+    let site: std::collections::BTreeSet<String> = sp
+        .mep
+        .equipment
+        .iter()
+        .filter(|e| super::utilityxfmr::is_site(e) || e.sources.contains_key(super::sitework::MARK))
+        .flat_map(|e| [e.tag.trim().to_ascii_uppercase(), format!("PAD-{}", e.tag.trim().to_ascii_uppercase())])
+        .collect();
     let mut off: Vec<((String, String, String), Vec<Handle>, Vec2, f64)> = Vec::new();
     for e in d.model.iter() {
         let Some(part) = made_as(e) else { continue };
         if part.eq_ignore_ascii_case("ground") || SHELL.iter().any(|p| part.eq_ignore_ascii_case(p)) {
+            continue;
+        }
+        // Site work stands on the site, outside the walls by design (a pole light, an EV charger,
+        // the utility's transformer and their pads).
+        if cadaddy_doc::props::read(&e.common.xdata).get(super::sitework::MARK).is_some()
+            || super::bimlook::made_tag(e, "tag").is_some_and(|t| site.contains(&t.trim().to_ascii_uppercase()))
+        {
             continue;
         }
         let level = made_level(e).unwrap_or_default();

@@ -8076,6 +8076,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 false,
             );
         }
+        // A view that did not register onto its level's plan: its devices not built, the view named.
+        if let Some(views) = db.get("unregistered_views").and_then(Value::as_array).filter(|v| !v.is_empty()) {
+            unregistered_views_finding(job, "devices", views);
+        }
         // A plumbing fixture type whose rough-in height no schedule, detail or note gives: one
         // review item a type, not a silent default.
         if let Some(types) = db.get("fixture_defaults_by_type").and_then(Value::as_object) {
@@ -9524,12 +9528,91 @@ const MAX_LEFT_OUT: usize = 200;
 /// Elements outside their level's footprint listed one by one in the job's summary, at most.
 const MAX_MISPLACED_LISTED: usize = 200;
 
+/// One finding for the views that did not register onto their level's plan (`views`: `{sheet,
+/// level, devices|elements, nearest_ft, farthest_ft}`): what of each was left out, naming the view.
+fn unregistered_views_finding(job: &mut GuidedJob, what: &str, views: &[Value]) {
+    let n: u64 = views.iter().filter_map(|v| v[what].as_u64()).sum();
+    let named: Vec<String> = views
+        .iter()
+        .take(20)
+        .map(|v| {
+            let sheet = v["sheet"].as_str().filter(|x| !x.is_empty()).unwrap_or("a sheet with no number");
+            format!("{sheet} for {}: {} {what}, {}-{} ft out", v["level"].as_str().unwrap_or("?"), v[what], v["nearest_ft"], v["farthest_ft"])
+        })
+        .collect();
+    progress_line(&format!("  views that did not register onto their level's plan, their {what} not built: {n} ({})", named.join("; ")));
+    job.add_finding(
+        StageName::BimBuild,
+        &format!("{} view(s) did not register onto their level's plan: their {what} are not built", views.len()),
+        &format!(
+            "{n} {what} were read on views laid outside their level's footprint as a whole (most of the view's outside it, or farther off than the building is wide): the view kept its own page position, so nothing of it is built there: {}",
+            named.join("; ")
+        ),
+        3,
+        vec!["Register each view onto its level's plan (its sheet frame, grids or outline), then build again".into()],
+        None,
+        false,
+    );
+}
+
+/// What a built element was read from: its `sheet` property, else the sheet its build's
+/// properties name (`TAG_SHEET`, `SHEET`, its source's `sheet`); empty when nothing says.
+fn element_sheet(e: &cadaddy_doc::Entity) -> String {
+    use super::bimlook::made_prop;
+    cadaddy_doc::props::read(&e.common.xdata)
+        .get("sheet")
+        .map(|p| p.text())
+        .or_else(|| ["TAG_SHEET", "SHEET", "SOURCE sheet"].iter().find_map(|k| made_prop(e, k)).map(str::to_string))
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default()
+}
+
 /// Every built element outside its level's footprint (its floor and exterior walls) gets a `misplaced` property saying how far and
-/// why, and the job's result lists them (by part, the farthest first). Never stops the job.
+/// why, and the job's result lists them (by part, the farthest first). One farther off than the
+/// building is wide is from a view that did not register onto its level's plan: it is taken out of
+/// the model (and its equipment out of the building spec), the view named in a finding
+/// (fix-objects-far-outside-building). Never stops the job.
 fn misplaced_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
-    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return };
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return };
     let Ok(d) = s.doc() else { return };
-    let found = super::propfill::outside_floors(d, &sp);
+    let (far, found): (Vec<_>, Vec<_>) = super::propfill::outside_floors(d, &sp).into_iter().partition(|o| o.far);
+    // The far ones by the view (sheet) and level they were read on.
+    let mut views: BTreeMap<(String, String), (usize, f64, f64, BTreeSet<String>)> = BTreeMap::new();
+    let mut gone_tags: BTreeSet<(String, String)> = BTreeSet::new();
+    for o in &far {
+        let Some(e) = d.model.get(o.handle) else { continue };
+        let v = views.entry((element_sheet(e), o.level.clone())).or_insert((0, f64::INFINITY, 0.0, BTreeSet::new()));
+        v.0 += 1;
+        v.1 = v.1.min(o.outside_ft);
+        v.2 = v.2.max(o.outside_ft);
+        v.3.insert(o.part.clone());
+        if let Some(t) = super::bimlook::made_tag(e, "tag").map(|t| t.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()) {
+            gone_tags.insert((t, o.level.to_ascii_lowercase()));
+        }
+    }
+    if !far.is_empty()
+        && let Ok(d) = s.doc_mut()
+    {
+        for o in &far {
+            d.model.remove(o.handle);
+        }
+        // Their equipment out of the spec too, so a rebuild doesn't put it back there.
+        let before = sp.mep.equipment.len();
+        sp.mep.equipment.retain(|e| !gone_tags.contains(&(e.tag.trim().to_ascii_uppercase(), e.level.to_ascii_lowercase())));
+        if sp.mep.equipment.len() != before {
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        s.touch();
+    }
+    let dropped: Vec<Value> = views
+        .into_iter()
+        .map(|((sheet, level), (n, near, far_ft, parts))| {
+            json!({"sheet": sheet, "level": level, "elements": n, "parts": parts, "nearest_ft": (near * 10.0).round() / 10.0, "farthest_ft": (far_ft * 10.0).round() / 10.0})
+        })
+        .collect();
+    if !dropped.is_empty() {
+        unregistered_views_finding(job, "elements", &dropped);
+    }
     let mut by_part: BTreeMap<String, usize> = BTreeMap::new();
     for o in &found {
         *by_part.entry(o.part.clone()).or_default() += 1;
@@ -9565,6 +9648,8 @@ fn misplaced_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     }
     result["misplaced"] = json!({
         "count": found.len(),
+        "unregistered_views": dropped,
+        "unregistered_dropped": far.len(),
         "by_part": by_part,
         "first": found.iter().take(MAX_MISPLACED_LISTED).map(super::propfill::Outlier::to_json).collect::<Vec<_>>(),
     });
@@ -21128,9 +21213,10 @@ fn doc_objects_step(
             e.4 = format!("{} ({n} marks on {sheet}: {src})", e.4);
         }
     }
-    // A class nothing marks (or only a note names): the note's count, proposed, at its sheet's
-    // level (else the lowest a plan gives), where its circuit's panel stands, else in the level's
-    // middle; with no real place on the level, listed for review and not built (Q6290).
+    // A class nothing marks (or only a note names): the note's count, proposed, on its sheet's
+    // level (any level for a general note), each in a room of the class's own by trade practice;
+    // with no such room, listed for review and not built (Q6290; never beside a panel or at the
+    // plan's middle: fix-objects-far-outside-building).
     let marked: BTreeSet<String> = found.iter().map(|f| f.kind.clone()).collect();
     let lowest = sp
         .levels
@@ -21142,14 +21228,6 @@ fn doc_objects_step(
         })
         .map(|l| l.name.clone())
         .unwrap_or_else(|| "Level 1".into());
-    let building_extent = sp.levels.iter().filter_map(|l| plan_region_of(l.region)).reduce(|a, b| {
-        [
-            a[0].min(a[2]).min(b[0].min(b[2])),
-            a[1].min(a[3]).min(b[1].min(b[3])),
-            a[0].max(a[2]).max(b[0].max(b[2])),
-            a[1].max(a[3]).max(b[1].max(b[3])),
-        ]
-    });
     let mut proposed: Vec<String> = Vec::new();
     let mut proposed_not_placed: Vec<Value> = Vec::new();
     // A class the plans draw is counted from the plans: a note naming it proposes none of it
@@ -21187,37 +21265,59 @@ fn doc_objects_step(
         if via.is_empty() {
             continue;
         }
-        let level = if level.is_empty() { lowest.clone() } else { level.clone() };
-        let pc = circuit_of(cite, &panels);
-        let beside_panel = pc
-            .as_ref()
-            .and_then(|(p, _)| sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(p) && same_level_name(&e.level, &level)))
-            .map(|e| Vec2::new(e.max[0] + upf, (e.min[1] + e.max[1]) / 2.0));
-        let level_region = sp.levels.iter().find(|l| same_level_name(&l.name, &level)).and_then(|l| l.region);
-        let Some(at) = note_object_at(beside_panel, level_region, building_extent) else {
-            if proposed_not_placed.len() < 200 {
-                proposed_not_placed.push(json!({
-                    "kind": kind, "name": class.name, "count": n, "level": level, "sheet": number, "note": cite,
-                    "why": "no place on its level: the level has no plan region and no panel the note names stands inside the building",
-                }));
+        // No plan draws where they go: each in a room of the kind's own by trade practice (a
+        // range in a kitchen), one a room, never at a stand-in place (beside a panel, the plan's
+        // middle: fix-objects-far-outside-building). The rest asked about.
+        let fits = dob::place_rooms(class, &rooms, (!level.is_empty()).then_some(level.as_str()));
+        let mut placed = 0u32;
+        for i in fits {
+            if placed >= *n {
+                break;
             }
-            continue;
-        };
-        for i in 0..*n {
+            let Some((room_level, name, outline)) = rooms.get(i) else { continue };
+            if outline.len() < 3 {
+                continue;
+            }
+            let held = |p: Vec2| cadaddy_geom::point_in_polygon(outline, p);
+            if found.iter().any(|f| f.kind == *kind && same_level_name(&f.level, room_level) && held(f.at)) {
+                continue;
+            }
+            let Some(mid) = cadaddy_geom::polygon_centroid(outline).filter(|c| held(*c)) else { continue };
             found.push(Found {
                 kind: kind.clone(),
                 how: How::Note,
                 sheet: number.clone(),
-                level: level.clone(),
+                level: room_level.clone(),
                 meaning: class.name.clone(),
-                source: cite.clone(),
-                at: at + Vec2::new(0.0, f64::from(i) * 2.0 * upf),
+                source: format!("{cite} (set in {name}: {})", class.place_source),
+                at: mid,
                 via: via.clone(),
                 via_source: cite.clone(),
                 ..Found::default()
             });
+            placed += 1;
         }
-        proposed.push(format!("{n} {} ({cite})", class.name));
+        if placed > 0 {
+            proposed.push(format!("{placed} {} ({cite})", class.name));
+        }
+        if placed < *n && proposed_not_placed.len() < 200 {
+            let why = if class.place_words.is_empty() {
+                format!(
+                    "no plan draws where a {} goes and no room is its own by trade practice: its place is asked, never a stand-in one",
+                    class.name
+                )
+            } else {
+                format!(
+                    "no plan draws where a {} goes and no room of its kind ({}) is free for it: its place is asked",
+                    class.name,
+                    class.place_words.join(", ")
+                )
+            };
+            proposed_not_placed.push(json!({
+                "kind": kind, "name": class.name, "count": *n - placed, "level": if level.is_empty() { lowest.clone() } else { level.clone() }, "sheet": number, "note": cite,
+                "why": why,
+            }));
+        }
     }
     // Each note whose count isn't the drawn count: one review item, the plan's count built.
     let mut count_rfis: Vec<String> = Vec::new();
@@ -21305,6 +21405,15 @@ fn doc_objects_step(
         }
     }
     found.truncate(r.max_elements.max(1));
+    // A class mounted on the site (an EV charger, a site camera) is site work: on the slab level,
+    // where its plan draws it, marked so, never a storey's equipment outside its walls
+    // (fix-objects-far-outside-building).
+    let slab = super::ugplan::slab_level(&sp).unwrap_or_else(|| lowest.clone());
+    let on_site = |kind: &str| dob::class_by_kind(kind).is_some_and(|c| c.mount == "site");
+    for f in found.iter_mut().filter(|f| on_site(&f.kind)) {
+        f.level = slab.clone();
+    }
+    let mut site_tags: BTreeSet<String> = BTreeSet::new();
     // The ducts (a duct-mounted class sits in the nearest one).
     let duct_systems: BTreeSet<String> = sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
     let ducts: Vec<(String, Vec<Vec2>, [f64; 2], Vec<f64>, String)> = sp
@@ -21398,7 +21507,7 @@ fn doc_objects_step(
         let mut position = match f.how {
             How::Tag => format!("{} tag {}{}", f.sheet, f.code, if f.number.is_empty() { String::new() } else { format!("-{}", f.number) }),
             How::Keynote => format!("{}, at its marker", f.source),
-            How::Note => format!("proposed: {} names it but no plan draws where", f.source),
+            How::Note => format!("proposed: {} names it but no plan draws where (the room by trade practice)", f.source),
             How::Rooms => format!("{}; its place in the room not drawn", f.source),
         };
         let mut systems: Vec<String> = Vec::new();
@@ -21467,7 +21576,14 @@ fn doc_objects_step(
             props.insert("STATUS".into(), "derived".into());
             props.insert("BASIS".into(), format!("derived: {position}"));
         }
+        let site_work = class.mount == "site";
         let mut sources = BTreeMap::new();
+        if site_work {
+            let why = format!("site work: a {} stands on the site, where its plan draws it ({})", class.name, class.source);
+            sources.insert(super::sitework::MARK.to_string(), why.clone());
+            props.insert("SITE_WORK".into(), why);
+            site_tags.insert(tag.to_ascii_uppercase());
+        }
         sources.insert("kind".to_string(), format!("{} ({})", f.source, class.source));
         sources.insert("position".to_string(), position.clone());
         sources.insert("size".to_string(), format!("rules data: {}", class.source));
@@ -21500,6 +21616,10 @@ fn doc_objects_step(
             let mut bs = BTreeMap::new();
             bs.insert("position".to_string(), format!("beside {tag} (rules data)"));
             bs.insert("why".to_string(), why);
+            if site_work {
+                bs.insert(super::sitework::MARK.to_string(), format!("site work: the connection of {tag}, on the site"));
+                site_tags.insert(btag.to_ascii_uppercase());
+            }
             let b_bottom = if b.height_in > 0.0 { (b.height_in / 12.0 - b.box_in[2] / 24.0).max(0.0) } else { bottom };
             sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
                 tag: btag.clone(),
@@ -21621,7 +21741,27 @@ fn doc_objects_step(
         }
     }
     let made = build_new_mep(s, sp, Vec::new(), &new_equipment)?;
-    let _ = made;
+    // The site work's elements marked as the site work step marks its own.
+    if !site_tags.is_empty() {
+        let d = s.doc_mut()?;
+        let mine: Vec<cadaddy_doc::Handle> = made
+            .iter()
+            .filter(|h| {
+                d.model.get(**h).and_then(|e| super::bimlook::made_tag(e, "tag")).is_some_and(|t| site_tags.contains(&t.trim().to_ascii_uppercase()))
+            })
+            .copied()
+            .collect();
+        for h in mine {
+            let _ = d.modify_entity(h, |e| {
+                let mut store = cadaddy_doc::props::read(&e.common.xdata);
+                store.set(
+                    super::sitework::MARK,
+                    cadaddy_doc::props::Prop::new("site work (documented object)", cadaddy_doc::props::Source::computed()),
+                );
+                e.common.xdata = cadaddy_doc::props::write(&e.common.xdata, &store).into();
+            });
+        }
+    }
     if !proposed.is_empty() {
         job.add_finding(
             StageName::BimBuild,
@@ -21655,11 +21795,11 @@ fn doc_objects_step(
             StageName::BimBuild,
             &format!("{} object(s) only a note names have no place on their level: listed for review, not built", proposed_not_placed.len()),
             &format!(
-                "the level has no plan region (no plan draws it) and no panel the note names stands inside the building, so there is no position to build them at (a placeholder extent is never one): {}",
+                "no plan draws where they go and no room of their kind (by trade practice) is on the level, so there is no position to build them at (beside a panel or the plan's middle is never one): {}",
                 proposed_not_placed.iter().take(12).map(|v| format!("{} {} ({})", v["count"], v["name"].as_str().unwrap_or(""), v["note"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("; ")
             ),
             2,
-            vec!["Place each from the plans of its level, or name the panel it is beside".into()],
+            vec!["Place each from the plans of its level (where the field sets it), then build again".into()],
             None,
             false,
         );
@@ -21726,25 +21866,6 @@ const MAX_NOTE_COUNT_RFIS: usize = 50;
 /// empty extent) (Q6290).
 fn plan_region_of(g: Option<[f64; 4]>) -> Option<[f64; 4]> {
     g.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8) && r[0] != r[2] && r[1] != r[3])
-}
-
-/// Where an object only a note names goes: beside its circuit's panel when that is a place on
-/// the level (inside the level's plan region; on a level with none, inside the building's
-/// extent), else the middle of the level's plan region. `None` when the level gives no place:
-/// a placeholder or empty extent is never a position, and the origin is no fallback (Q6290).
-fn note_object_at(
-    beside_panel: Option<cadaddy_geom::Vec2>,
-    level_region: Option<[f64; 4]>,
-    building: Option<[f64; 4]>,
-) -> Option<cadaddy_geom::Vec2> {
-    let holds = |g: [f64; 4], p: cadaddy_geom::Vec2| {
-        p.x.is_finite() && p.y.is_finite() && p.x >= g[0].min(g[2]) && p.x <= g[0].max(g[2]) && p.y >= g[1].min(g[3]) && p.y <= g[1].max(g[3])
-    };
-    let level = plan_region_of(level_region);
-    let footprint = level.or_else(|| plan_region_of(building));
-    beside_panel
-        .filter(|p| footprint.is_some_and(|g| holds(g, *p)))
-        .or_else(|| level.map(|g| cadaddy_geom::Vec2::new((g[0] + g[2]) / 2.0, (g[1] + g[3]) / 2.0)))
 }
 
 /// The panel and circuit a note names (`… CIRCUIT LA-12`, `PANEL LA CKT 9`), by the panel
@@ -34135,35 +34256,95 @@ mod tests {
         assert_eq!(place([4500.0, 450.0], "Level 3"), None);
     }
 
+    /// fix-objects-far-outside-building: after the build, an element farther off its level's
+    /// footprint than the building is wide (a view laid at its page position, ~2,000 ft away) is
+    /// taken out of the model and the spec, its view named in a finding; one just outside is
+    /// flagged `misplaced` as before; site work (an EV charger on the site) is neither. Before the
+    /// fix the far one stayed in the model, only flagged.
     #[test]
-    fn an_object_only_a_note_names_is_never_built_at_a_placeholder_region() {
-        use cadaddy_geom::Vec2;
+    fn elements_far_off_the_building_are_taken_out_and_their_view_named() {
+        let eq = |tag: &str, at: [f64; 2], sheet: &str, site: bool| {
+            let mut sources = json!({"position": "made up"});
+            if site {
+                sources[super::super::sitework::MARK] = json!("site work: made up");
+            }
+            json!({
+                "tag": tag, "kind": "fan", "level": "Level 1", "min": at, "max": [at[0] + 24.0, at[1] + 24.0],
+                "bottom_ft": 0.0, "height_ft": 2.0, "properties": {"TAG_SHEET": sheet}, "sources": sources,
+            })
+        };
+        // An 80 x 60 ft storey.
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0}],
+            "shells": {"Level 1": [[0.0, 0.0, 960.0, 720.0]]},
+            "mep": {"equipment": [
+                eq("EQ-1", [100.0, 100.0], "Z-1", false),
+                eq("EQ-2", [1_000.0, 100.0], "Z-1", false),
+                eq("EQ-3", [24_000.0, 20_000.0], "Z-9", false),
+                eq("EVC-1", [1_200.0, 100.0], "Z-1", true),
+            ]},
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut s = crate::Session::new();
+        s.doc_mut().unwrap_or_else(|e| panic!("{e}")).building_spec = Some(sp.to_json()).into();
+        let tags: BTreeSet<String> = ["EQ-1", "EQ-2", "EQ-3", "EVC-1"].iter().map(|t| t.to_string()).collect();
+        build_new_mep(&mut s, sp, Vec::new(), &tags).unwrap_or_else(|e| panic!("{e}"));
+        let built = |s: &crate::Session| -> BTreeMap<String, bool> {
+            let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+            d.model
+                .iter()
+                .filter_map(|e| {
+                    let t = super::super::bimlook::made_tag(e, "tag")?.to_string();
+                    Some((t, cadaddy_doc::props::read(&e.common.xdata).get("misplaced").is_some()))
+                })
+                .collect()
+        };
+        assert_eq!(built(&s).len(), 4, "{:?}", built(&s));
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let mut result = json!({});
+        misplaced_step(&mut s, &mut job, &mut result);
+        let now = built(&s);
+        let m = &result["misplaced"];
+        assert!(!now.contains_key("EQ-3"), "the far one stays: {now:?} {m:#}");
+        assert_eq!((now.get("EQ-1"), now.get("EQ-2"), now.get("EVC-1")), (Some(&false), Some(&true), Some(&false)), "{now:?} {m:#}");
+        let (sp, _) = super::super::bspec::current(&s, "test").unwrap_or_else(|e| panic!("{e}"));
+        assert!(!sp.mep.equipment.iter().any(|e| e.tag == "EQ-3") && sp.mep.equipment.len() == 3, "out of the spec too");
+        assert_eq!((m["count"].as_u64(), m["unregistered_dropped"].as_u64()), (Some(1), Some(1)), "{m:#}");
+        let v = &m["unregistered_views"][0];
+        assert_eq!((v["sheet"].as_str(), v["level"].as_str(), v["elements"].as_u64()), (Some("Z-9"), Some("Level 1"), Some(1)), "{m:#}");
+        assert!(v["nearest_ft"].as_f64().is_some_and(|f| f > 1_500.0), "{v:#}");
+        let f = job.findings.iter().find(|f| f.description.contains("did not register")).unwrap_or_else(|| panic!("no finding: {:#?}", job.findings));
+        assert!(f.why.contains("Z-9 for Level 1"), "{}", f.why);
+    }
+
+    #[test]
+    fn an_object_only_a_note_names_goes_in_a_room_of_its_own_never_a_stand_in_place() {
         // A level only the MEP plans give takes a unit square far off every sheet; an empty
-        // extent is inverted or infinite. None of them is a place.
+        // extent is inverted or infinite. None of them is a place (Q6290).
         let no_plan = [-1.0e9, -1.0e9, -1.0e9 + 1.0, -1.0e9 + 1.0];
         let empty = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
         let level = [100.0, 200.0, 1300.0, 1000.0];
-        let building = Some([0.0, 0.0, 3000.0, 2000.0]);
-        let sane = |p: Option<Vec2>| p.is_none_or(|p| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= 1.0e8 && p.y.abs() <= 1.0e8);
-        // No panel, a placeholder level: listed for review, not built (before Q6290: -1e9).
-        for g in [no_plan, empty, [5.0, 5.0, 5.0, 9.0], [f64::NAN, 0.0, 10.0, 10.0]] {
-            let at = note_object_at(None, Some(g), building);
-            assert!(sane(at), "{g:?} -> {at:?}");
-            assert_eq!(at, None, "{g:?}");
-        }
-        assert_eq!(note_object_at(None, None, building), None);
-        assert_eq!(note_object_at(None, None, None), None);
-        // A real level: its middle; beside the panel when that is on the level.
-        assert_eq!(note_object_at(None, Some(level), building), Some(Vec2::new(700.0, 600.0)));
-        assert_eq!(note_object_at(Some(Vec2::new(400.0, 500.0)), Some(level), building), Some(Vec2::new(400.0, 500.0)));
-        // A panel off the level's plan (or at a sentinel) is no place: the level's middle.
-        for p in [Vec2::new(-1.0e9 + 12.0, -1.0e9), Vec2::new(2500.0, 500.0), Vec2::new(f64::NAN, 1.0)] {
-            assert_eq!(note_object_at(Some(p), Some(level), building), Some(Vec2::new(700.0, 600.0)), "{p:?}");
-        }
-        // A level with no plan: beside its panel only where that is inside the building.
-        assert_eq!(note_object_at(Some(Vec2::new(2500.0, 500.0)), Some(no_plan), building), Some(Vec2::new(2500.0, 500.0)));
-        assert_eq!(note_object_at(Some(Vec2::new(-1.0e9 + 12.0, -1.0e9)), Some(no_plan), building), None);
-        assert_eq!(note_object_at(Some(Vec2::new(2500.0, 500.0)), Some(no_plan), None), None);
+        // Made-up rooms (level, name, outline): a range goes in a kitchen or a break room of the
+        // note's level, never in another room (fix-objects-far-outside-building: a range stood
+        // at its plan's middle, outside the walls).
+        let rooms: Vec<(String, String, ())> =
+            ["Level 1|OFFICE 101", "Level 1|BREAK ROOM 102", "Level 2|KITCHEN 201", "Level 1|CORRIDOR", "Level 2|STORAGE 202"]
+                .iter()
+                .map(|v| {
+                    let (l, n) = v.split_once('|').unwrap_or_default();
+                    (l.to_string(), n.to_string(), ())
+                })
+                .collect();
+        let class = |k: &str| super::super::doc_objects::class_by_kind(k).unwrap_or_else(|| panic!("no class {k}"));
+        let place = |k: &str, l: Option<&str>| super::super::doc_objects::place_rooms(class(k), &rooms, l);
+        assert_eq!(place("range", Some("Level 1")), vec![1]);
+        assert_eq!(place("range", Some("level 2")), vec![2]);
+        assert_eq!(place("range", None), vec![1, 2], "a general note: any level's");
+        // A class with no room of its own (an exit sign goes at an exit, an EV charger on the
+        // site): no room is its place, whatever the rooms are called.
+        assert!(place("exit_sign", None).is_empty());
+        assert!(place("ev_charging_station", None).is_empty());
         // The region check itself.
         assert_eq!(plan_region_of(Some(no_plan)), None);
         assert_eq!(plan_region_of(Some(empty)), None);
@@ -34176,7 +34357,9 @@ mod tests {
     /// plan's count is built: two chargers where they are drawn, none proposed from the note
     /// (before the fix the note step ran first and proposed its own beside them: 3, and 7 with a
     /// note saying five). A note giving another count is a review item, not more chargers. With
-    /// the symbols gone the note's proposal is built, marked inferred and unsure.
+    /// the symbols gone no plan says where the note's charger goes and none of the building's
+    /// rooms is its place (it goes on the site): asked about, never built at a stand-in place
+    /// (fix-objects-far-outside-building: before it was set at the plan's middle).
     #[test]
     fn a_note_proposes_no_objects_of_a_class_the_plan_draws() {
         use cadaddy_doc::LwPolyline;
@@ -34267,20 +34450,16 @@ mod tests {
         assert!(q.issue.contains("calls for 5") && q.issue.contains("draw 2"), "{}", q.issue);
         assert_eq!(q.sides.len(), 2, "{:?}", q.sides);
         assert_eq!(result["doc_objects"]["note_counts_differ"][0]["drawn"], json!(2), "{:#}", result["doc_objects"]);
-        // Nothing drawn: the note's proposal, one (its count not given), inferred and unsure.
+        // Nothing drawn: the note's one (its count not given) has no place: listed, not built.
         let (site, noted, asked, result) = run(false, "PROVIDE POWER FOR ELECTRIC VEHICLE CHARGERS.");
         eprintln!("note only: {} site, {} from the note", site.len(), noted.len());
         assert!(site.is_empty() && asked.is_empty());
-        assert_eq!(noted.len(), 1, "{:#}", result["doc_objects"]);
-        let p = noted.first().map(|e| e.properties.clone()).unwrap_or_default();
-        let prop = |k: &str| p.get(k).map(String::as_str);
-        assert_eq!(
-            (prop("DOC_OBJECT"), prop("STATUS"), prop("PROVENANCE"), prop("CERTAINTY")),
-            (Some("note"), Some("proposed"), Some("inferred"), Some("unsure")),
-            "{p:?}"
-        );
-        assert!(prop("BASIS").is_some_and(|b| b.contains("E-001 note")), "{p:?}");
-        assert!(result["doc_objects"]["elements"].as_array().is_some_and(|a| a.iter().any(|e| e["unsure"] == json!(true))));
+        assert!(noted.is_empty(), "{noted:#?}");
+        let unplaced = result["doc_objects"]["proposed_not_placed"].as_array().cloned().unwrap_or_default();
+        assert_eq!(unplaced.len(), 1, "{:#}", result["doc_objects"]);
+        let u = &unplaced[0];
+        assert_eq!((u["kind"].as_str(), u["count"].as_u64()), (Some("ev_charging_station"), Some(1)), "{u:#}");
+        assert!(u["note"].as_str().is_some_and(|n| n.contains("E-001 note")) && u["why"].as_str().is_some_and(|w| w.contains("asked")), "{u:#}");
     }
 
     #[test]

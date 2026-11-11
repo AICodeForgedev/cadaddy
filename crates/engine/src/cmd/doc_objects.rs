@@ -64,6 +64,12 @@ pub(crate) struct Class {
     /// a leading `_` matches the end of the kind).
     pub also_kinds: Vec<String>,
     pub source: String,
+    /// The rooms it goes in by trade practice (`KITCHEN` for a range): where an object only a
+    /// note names is set when no plan draws it, one a room, a room whose name holds every word of
+    /// one entry. Empty: no room is its own, and an object no plan places is asked about, never
+    /// set at a stand-in place (fix-objects-far-outside-building).
+    pub place_words: Vec<String>,
+    pub place_source: String,
 }
 
 fn yes() -> bool {
@@ -498,6 +504,26 @@ fn room_type_after(w: &[String], class_at: usize) -> Vec<String> {
         .take_while(|x| !is(&r.room_stop_words, x) && !is(&r.all_words, x))
         .take(r.room_type_words.max(1))
         .cloned()
+        .collect()
+}
+
+/// The rooms `class` goes in by trade practice ([`Class::place_words`]), of `rooms` (level, name,
+/// outline): on `level` when one is given (any level otherwise), in their order. None when the
+/// class names no room of its own.
+pub(crate) fn place_rooms<T>(class: &Class, rooms: &[(String, String, T)], level: Option<&str>) -> Vec<usize> {
+    let places: Vec<Vec<String>> = class.place_words.iter().map(|p| words(p)).filter(|w| !w.is_empty()).collect();
+    if places.is_empty() {
+        return Vec::new();
+    }
+    rooms
+        .iter()
+        .enumerate()
+        .filter(|(_, (l, _, _))| level.is_none_or(|v| l.trim().eq_ignore_ascii_case(v.trim())))
+        .filter(|(_, (_, n, _))| {
+            let have = words(n);
+            places.iter().any(|p| p.iter().all(|w| have.contains(w)))
+        })
+        .map(|(i, _)| i)
         .collect()
 }
 

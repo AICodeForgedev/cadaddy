@@ -316,6 +316,11 @@ pub(crate) struct DeviceBuild {
     /// devices stand in the building: not built, each a review item with why
     /// (fix-grid-bubble-as-fixture).
     pub outside_unbuilt: Vec<Value>,
+    /// The sheets whose devices on a level were read outside its footprint as a whole (most of
+    /// them outside it, or farther off than the building is wide): the sheet's view did not
+    /// register onto the level's plan, so they are not built; one entry a sheet and level, with
+    /// how many and how far (fix-objects-far-outside-building).
+    pub unregistered: Vec<Value>,
     /// Connections of ceiling equipment built at their equipment's housing above the ceiling,
     /// those of them the job had given another height, and those whose housing is still more
     /// than the rule's tolerance off the box (Q6521).
@@ -341,6 +346,8 @@ impl DeviceBuild {
             "hung_from_ceiling": self.hung,
             "outside_unbuilt": self.outside_unbuilt.len(),
             "outside_unbuilt_first": self.outside_unbuilt.iter().take(50).collect::<Vec<_>>(),
+            "unregistered_views": self.unregistered,
+            "unregistered_devices": self.unregistered.iter().filter_map(|v| v["devices"].as_u64()).sum::<u64>(),
             "connections_at_equipment": self.at_equipment,
             "connections_moved_to_equipment": self.moved_to_equipment,
             "connections_off_equipment": self.off_equipment,
@@ -1177,6 +1184,28 @@ impl Footprint {
     fn is_empty(&self) -> bool {
         self.polys.is_empty() && self.boxes.is_empty()
     }
+    /// The larger side of its plan extent (drawing units; 0 when empty): how wide the building is.
+    fn span(&self) -> f64 {
+        let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+        let pts = self.polys.iter().flatten().copied().chain(self.boxes.iter().flat_map(|b| [Vec2::new(b[0], b[1]), Vec2::new(b[2], b[3])]));
+        for p in pts.filter(|p| p.is_finite()) {
+            lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+            hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+        }
+        let span = (hi.x - lo.x).max(hi.y - lo.y);
+        if span.is_finite() { span } else { 0.0 }
+    }
+}
+
+/// An element this many times the building's width (its level's footprint's larger side) outside
+/// it is no part of the building or its grounds as placed: its view was laid in the wrong place
+/// (a sheet that did not register onto the level's plan keeps its own page position).
+pub(crate) const FAR_SPANS: f64 = 2.0;
+
+/// Whether an element `off` (drawing units) outside a footprint `span` wide is far off the
+/// building ([`FAR_SPANS`]).
+pub(crate) fn far_off(off: f64, span: f64) -> bool {
+    off.is_finite() && span.is_finite() && span > 0.0 && off > FAR_SPANS * span
 }
 
 /// Each level's footprint, by its name in lower case.
@@ -1259,6 +1288,9 @@ pub(crate) struct Outlier {
     pub level: String,
     pub at_ft: [f64; 2],
     pub outside_ft: f64,
+    /// Farther outside than the building is wide ([`far_off`]): from a view that did not
+    /// register onto its level's plan.
+    pub far: bool,
 }
 
 impl Outlier {
@@ -1269,6 +1301,7 @@ impl Outlier {
             "level": self.level,
             "at_ft": [round2(self.at_ft[0]), round2(self.at_ft[1])],
             "outside_ft": round2(self.outside_ft),
+            "far": self.far,
         })
     }
 }
@@ -1292,7 +1325,7 @@ pub(crate) fn outside_floors(d: &Drawing, sp: &BuildingSpec) -> Vec<Outlier> {
         .mep
         .equipment
         .iter()
-        .filter(|e| super::utilityxfmr::is_site(e))
+        .filter(|e| super::utilityxfmr::is_site(e) || e.sources.contains_key(super::sitework::MARK))
         .flat_map(|e| [e.tag.to_ascii_uppercase(), format!("PAD-{}", e.tag.to_ascii_uppercase())])
         .collect();
     // The built elements come after the sheets' objects: every object is looked at, the built
@@ -1333,7 +1366,8 @@ pub(crate) fn outside_floors(d: &Drawing, sp: &BuildingSpec) -> Vec<Outlier> {
             / upf;
         if off.is_finite() && off > OUTSIDE_FLOOR_FT {
             let base = sp.level(&level).and_then(|l| l.base).map_or(Vec2::new(0.0, 0.0), |[x, y]| Vec2::new(x, y));
-            out.push(Outlier { handle: e.handle, part, level, at_ft: [(c.x - base.x) / upf, (c.y - base.y) / upf], outside_ft: off });
+            let far = far_off(off, under.iter().map(|(fp, _)| fp.span()).fold(0.0, f64::max) / upf);
+            out.push(Outlier { handle: e.handle, part, level, at_ft: [(c.x - base.x) / upf, (c.y - base.y) / upf], outside_ft: off, far });
         }
     }
     out.sort_by(|a, b| b.outside_ft.total_cmp(&a.outside_ft));
@@ -1422,10 +1456,10 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
     // storey's footprint in the storey's plan.
     let stack = super::bspec::stack_offsets(d, sp);
     let by_circuit = circuit_points(sp, &devices);
-    // Each sheet's devices and how many of them stand outside their level's footprint; the
-    // devices held back (outside it, with no circuit) until every one is seen.
-    let mut sheet_outside: HashMap<String, (usize, usize)> = HashMap::new();
-    let mut held: Vec<(String, Common, cadaddy_doc::Mesh, Value)> = Vec::new();
+    // Each sheet's devices on each level and how many of them stand outside its footprint; the
+    // devices outside it held back until every one is seen (whether their sheet registered).
+    let mut sheet_outside: HashMap<(String, String), (usize, usize)> = HashMap::new();
+    let mut held: Vec<Held> = Vec::new();
     for t in devices {
         if only.is_some_and(|f| !f(t)) {
             continue;
@@ -2041,6 +2075,8 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         // Site work stands outside the building by design.
         let under = if site.is_none() { footprints_of(&fps, sp, &level.name) } else { Vec::new() };
         let mut outside_ft: Option<f64> = None;
+        let mut misplaced: Option<Value> = None;
+        let span_ft = under.iter().map(|(fp, _)| fp.span()).fold(0.0, f64::max) / upf;
         if !under.is_empty() {
             let off = under
                 .iter()
@@ -2059,26 +2095,19 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
                     "misplaced",
                     Prop::new(why.clone(), Source::computed()).with_note("an element outside its level's footprint: check its sheet's registration"),
                 );
-                if report.misplaced.len() < MAX_LISTED {
-                    report
-                        .misplaced
-                        .push(json!({"level": level.name, "mark": mark, "kind": vkind, "sheet": sheet, "outside_ft": round2(off), "why": why}));
-                } else {
-                    report.misplaced.push(Value::Null);
-                }
+                misplaced = Some(json!({"level": level.name, "mark": mark, "kind": vkind, "sheet": sheet, "outside_ft": round2(off), "why": why}));
             }
         }
         let xdata = props::write(&xdata, &store);
         let common = Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() };
-        let seen = sheet_outside.entry(sheet.clone()).or_default();
+        let seen = sheet_outside.entry((sheet.clone(), level.name.clone())).or_default();
         seen.0 += 1;
         if outside_ft.is_some() {
             seen.1 += 1;
         }
-        // Read outside the building with no circuit: nothing ties it to the building (a grid
-        // bubble's letter, a tag or a note read as a device). Held until its sheet is known to be
-        // placed right, then left out as a review item, never built silently.
-        if let Some(off) = outside_ft.filter(|_| circuit.as_deref().is_none_or(|c| c.trim().is_empty())) {
+        // Outside the building: held until its sheet is known to be placed right.
+        if let Some(off) = outside_ft {
+            let unwired = circuit.as_deref().is_none_or(|c| c.trim().is_empty());
             let item = json!({
                 "level": level.name, "mark": mark, "kind": vkind, "sheet": sheet, "symbol": symbol_hex,
                 "at_ft": [round2(x / upf), round2(y / upf)], "outside_ft": round2(off),
@@ -2087,29 +2116,78 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
                     off, level.name
                 ),
             });
-            held.push((sheet.clone(), common, m, item));
+            held.push(Held {
+                sheet: sheet.clone(),
+                level: level.name.clone(),
+                common,
+                mesh: m,
+                item,
+                misplaced,
+                off_ft: off,
+                far: far_off(off, span_ft),
+                unwired,
+            });
             continue;
         }
         if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
             report.built += 1;
         }
     }
-    // The held devices: left out where their sheet's other devices stand in the building; built
-    // and flagged `misplaced` where most of its devices stand outside it (the sheet itself is
-    // placed wrong, its devices are no strays).
-    for (sheet, common, m, item) in held {
-        let (n, out) = sheet_outside.get(&sheet).copied().unwrap_or_default();
-        if out * 2 > n {
-            if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
-                report.built += 1;
+    // The held devices. Where most of a sheet's devices on a level stand outside its footprint,
+    // or one stands farther off than the building is wide, the sheet's view did not register onto
+    // the level's plan (it keeps its own page position): none of them is built, the view named
+    // (fix-objects-far-outside-building). Else one outside with no circuit is left out as a
+    // review item (nothing ties it to the building: a grid bubble's letter, a tag or a note read
+    // as a device), never built silently; one with a circuit (a canopy light) is built and
+    // flagged `misplaced`.
+    let mut views: BTreeMap<(String, String), (usize, f64, f64)> = BTreeMap::new();
+    for h in held {
+        let (n, out) = sheet_outside.get(&(h.sheet.clone(), h.level.clone())).copied().unwrap_or_default();
+        if out * 2 > n || h.far {
+            let v = views.entry((h.sheet, h.level)).or_insert((0, f64::INFINITY, 0.0));
+            v.0 += 1;
+            v.1 = v.1.min(h.off_ft);
+            v.2 = v.2.max(h.off_ft);
+        } else if h.unwired {
+            if report.outside_unbuilt.len() < MAX_LISTED {
+                report.outside_unbuilt.push(h.item);
+            } else {
+                report.outside_unbuilt.push(Value::Null);
             }
-        } else if report.outside_unbuilt.len() < MAX_LISTED {
-            report.outside_unbuilt.push(item);
-        } else {
-            report.outside_unbuilt.push(Value::Null);
+        } else if d.add(&Space::Model, h.common, EntityKind::Mesh(h.mesh)).is_ok() {
+            report.built += 1;
+            report.misplaced.push(if report.misplaced.len() < MAX_LISTED { h.misplaced.unwrap_or(Value::Null) } else { Value::Null });
         }
     }
+    for ((sheet, level), (n, near, far)) in views {
+        let (all, _) = sheet_outside.get(&(sheet.clone(), level.clone())).copied().unwrap_or_default();
+        let view = if sheet.is_empty() { "a sheet with no number".to_string() } else { format!("sheet {sheet}") };
+        report.unregistered.push(json!({
+            "sheet": sheet, "level": level, "devices": n, "of": all, "nearest_ft": round2(near), "farthest_ft": round2(far),
+            "why": format!(
+                "{n} of the {all} devices read on {view} for {level} stand {:.0}-{:.0} ft outside its footprint: the view did not register onto {level}'s plan, so they are not built (place the view, then build again)",
+                near, far
+            ),
+        }));
+    }
     report
+}
+
+/// A device read outside its level's footprint, held back until its sheet's other devices are seen.
+struct Held {
+    sheet: String,
+    level: String,
+    common: Common,
+    mesh: cadaddy_doc::Mesh,
+    /// Its review item, should it be left out as a stray.
+    item: Value,
+    /// Its `misplaced` listing, should it be built.
+    misplaced: Option<Value>,
+    off_ft: f64,
+    /// Farther off than the building is wide ([`far_off`]).
+    far: bool,
+    /// On no circuit.
+    unwired: bool,
 }
 
 /// The note on a host wall the build chose (a later fill keeps it).
@@ -3651,8 +3729,9 @@ mod tests {
 
     /// fix-grid-bubble-as-fixture: a luminaire read far outside its level's footprint with no
     /// circuit, on a sheet whose other devices stand in the building, is not built: it is a review
-    /// item saying why. One outside with its circuit is built (flagged `misplaced`), and so is
-    /// every device of a sheet whose devices mostly stand outside (the sheet is placed wrong).
+    /// item saying why. One outside with its circuit is built (flagged `misplaced`). A sheet whose
+    /// devices mostly stand outside did not register onto the plan: none of them is built, the
+    /// sheet named (fix-objects-far-outside-building; before, they were built and flagged).
     #[test]
     fn a_stray_device_outside_the_building_with_no_circuit_is_a_review_item_not_an_element() {
         let dev = |sheet: &str, at: [f64; 2], circuit: Option<&str>| {
@@ -3687,16 +3766,88 @@ mod tests {
         .unwrap();
         let mut d = Drawing::new_imperial();
         let r = build_devices(&mut d, &sp);
-        assert_eq!(r.built, 6, "{:#}", r.to_json());
+        assert_eq!(r.built, 4, "{:#}", r.to_json());
         assert_eq!(r.outside_unbuilt.len(), 1, "{:#}", r.to_json());
         let item = &r.outside_unbuilt[0];
         assert_eq!((item["mark"].as_str(), item["sheet"].as_str(), item["outside_ft"].as_f64()), (Some("D"), Some("Q-1"), Some(50.0)), "{item:#}");
         assert!(item["why"].as_str().is_some_and(|w| w.contains("no circuit") && w.contains("not built")), "{item:#}");
         assert_eq!(r.to_json()["outside_unbuilt"], json!(1));
-        // The canopy light and the misplaced sheet's two: built, flagged.
-        assert_eq!(r.misplaced.len(), 4, "the stray, the canopy light, the wrong sheet's two: {:#}", r.to_json());
+        // The canopy light: built, flagged.
+        assert_eq!(r.misplaced.len(), 1, "the canopy light: {:#}", r.to_json());
         let flagged = d.model.iter().filter(|e| props::read(&e.common.xdata).get("misplaced").is_some()).count();
-        assert_eq!(flagged, 3, "built and flagged");
+        assert_eq!(flagged, 1, "built and flagged");
+        // The wrong sheet's two: not built, the sheet named.
+        assert_eq!(r.unregistered.len(), 1, "{:#}", r.to_json());
+        assert_eq!((r.unregistered[0]["sheet"].as_str(), r.unregistered[0]["devices"].as_u64()), (Some("Q-2"), Some(2)), "{:#}", r.to_json());
+    }
+
+    /// fix-objects-far-outside-building: a trade sheet whose view did not register onto its
+    /// level's plan keeps its page position, thousands of feet from the building; its devices,
+    /// wired or not, are not built there: the view is named with how many and how far. A device
+    /// farther off than the building is wide is no part of it either, though its sheet's others
+    /// stand in the building. Devices just outside (a canopy light on its circuit) are built as
+    /// before, flagged; inside ones are built.
+    #[test]
+    fn devices_of_a_view_that_did_not_register_are_not_built_and_the_view_is_named() {
+        let dev = |sheet: &str, level: &str, at: [f64; 2], circuit: Option<&str>| {
+            let mut fields = json!({
+                "symbol": {"value": "1", "source": "plan"},
+                "type": {"value": "R1", "source": "plan"},
+                "sheet": {"value": sheet, "source": "plan"},
+            });
+            if let Some(c) = circuit {
+                fields["circuit"] = json!({"value": c, "source": "plan"});
+            }
+            json!({"id": format!("device:{level}:{sheet}:{},{}", at[0], at[1]), "kind": "receptacle", "level": level, "at_ft": at, "fields": fields})
+        };
+        // Two storeys 80 x 60 ft. Upper storey: sheet X-2 registered (three in the building, one
+        // 1,900 ft off with its circuit: an inset view of it laid at its page position); sheet X-3
+        // not registered at all (its four ~2,000 ft off, on circuits).
+        let tags = vec![
+            dev("X-1", "L1", [10.0, 10.0], Some("A-1")),
+            dev("X-1", "L1", [70.0, 50.0], Some("A-1")),
+            // Just outside the ground floor on its circuit: built, flagged.
+            dev("X-1", "L1", [40.0, 66.0], Some("A-3")),
+            dev("X-2", "L2", [10.0, 10.0], Some("B-1")),
+            dev("X-2", "L2", [20.0, 10.0], Some("B-1")),
+            dev("X-2", "L2", [30.0, 10.0], Some("B-1")),
+            dev("X-2", "L2", [1_980.0, 40.0], Some("B-2")),
+            dev("X-3", "L2", [2_010.0, 1_810.0], Some("B-5")),
+            dev("X-3", "L2", [2_020.0, 1_810.0], Some("B-5")),
+            dev("X-3", "L2", [2_030.0, 1_820.0], Some("B-7")),
+            dev("X-3", "L2", [2_040.0, 1_830.0], None),
+        ];
+        let sp: BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [
+                {"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0},
+                {"name": "L2", "elevation_ft": 10.0, "height_ft": 10.0, "ceiling_ft": 9.0}
+            ],
+            "shells": {"L1": [[0.0, 0.0, 960.0, 720.0]], "L2": [[0.0, 0.0, 960.0, 720.0]]},
+            "tags": tags,
+        }))
+        .unwrap();
+        let mut d = Drawing::new_imperial();
+        let r = build_devices(&mut d, &sp);
+        let j = r.to_json();
+        assert_eq!(r.built, 6, "the five inside and the canopy one: {j:#}");
+        // Nothing built stands more than the building's width off it.
+        for e in d.model.iter() {
+            let b = cadaddy_doc::entity_bounds(&d, e, 0);
+            assert!(b.center().x < 1_200.0 && b.center().y < 1_000.0, "built off the building: {:?}", b.center());
+        }
+        assert_eq!(r.misplaced.len(), 1, "{j:#}");
+        assert!(r.outside_unbuilt.is_empty(), "{j:#}");
+        let view = |sheet: &str| r.unregistered.iter().find(|v| v["sheet"] == sheet).cloned().unwrap_or(Value::Null);
+        let x3 = view("X-3");
+        assert_eq!((x3["level"].as_str(), x3["devices"].as_u64(), x3["of"].as_u64()), (Some("L2"), Some(4), Some(4)), "{j:#}");
+        assert!(x3["nearest_ft"].as_f64().is_some_and(|f| f > 1_500.0), "{x3:#}");
+        assert!(x3["why"].as_str().is_some_and(|w| w.contains("sheet X-3") && w.contains("did not register")), "{x3:#}");
+        let x2 = view("X-2");
+        assert_eq!((x2["devices"].as_u64(), x2["of"].as_u64()), (Some(1), Some(4)), "the far one of four: {j:#}");
+        assert_eq!(j["unregistered_devices"], json!(5), "{j:#}");
+        // The far rule itself: more than twice the building's width off.
+        assert!(far_off(1_900.0, 80.0) && !far_off(150.0, 80.0) && !far_off(f64::NAN, 80.0) && !far_off(500.0, 0.0));
     }
 
     /// Q6311: a window lights the room past its wall even where the room's outline keeps off the
