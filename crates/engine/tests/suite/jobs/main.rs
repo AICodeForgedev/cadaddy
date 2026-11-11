@@ -21,6 +21,7 @@ mod bimwork;
 mod bimwork_levels;
 mod bomtrades;
 mod branchgap;
+mod branchlength;
 mod breakers;
 mod callout_walls;
 mod casework_furniture;

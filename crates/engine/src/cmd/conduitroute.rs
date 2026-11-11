@@ -66,6 +66,9 @@ const NO_DEVICE_ISSUE: &str = "no_device_built";
 /// (Q6216: the correction keeps the design value beside the installed one).
 pub(crate) const DESIGN_CONDUCTORS: &str = "design:conductors";
 pub(crate) const CORRECTION_CONDUCTORS: &str = "correction:conductors";
+/// A homerun upsized alone (the trade's first step for the voltage drop): its design size kept.
+pub(crate) const DESIGN_HOMERUN: &str = "design:homerun_conductors";
+pub(crate) const CORRECTION_HOMERUN: &str = "correction:homerun_conductors";
 /// The field of a circuit tag the routing inferred for devices no document circuits (Q6216): its basis.
 pub(crate) const INFERRED_CIRCUIT: &str = "inferred_circuit";
 /// What an in-wall joint's run says it is (it follows its wall, not the plan's axes).
@@ -168,10 +171,26 @@ pub(crate) struct RouteGeom {
     pub roof_support_in: f64,
     pub roof_band_in: f64,
     pub roof_source: String,
+    /// A circuit chained box to box past what its conductor reaches (Q6340): its boxes branch
+    /// instead, the homerun's box taking up to `branch_root_joints` raceways besides the
+    /// homerun and every other box up to `branch_box_joints` (in and out), each next box joined
+    /// where it adds the least `branch_weight` × its way back to the homerun plus the joint.
+    pub branch_root_joints: usize,
+    pub branch_box_joints: usize,
+    pub branch_weight: f64,
+    pub branch_source: String,
     pub source: String,
 }
 
 impl RouteGeom {
+    /// The branching tree's joints (at the homerun's box, at each other box) and its weight.
+    pub(crate) fn branching(&self) -> (usize, usize, f64) {
+        let root = if self.branch_root_joints == 0 { 2 } else { self.branch_root_joints.min(8) };
+        let other = if self.branch_box_joints == 0 { 3 } else { self.branch_box_joints.clamp(2, 8) };
+        let w = if self.branch_weight.is_finite() && (0.0..=1.0).contains(&self.branch_weight) { self.branch_weight } else { 0.5 };
+        (root, other, w)
+    }
+
     /// A roof level's raceway band over its deck, feet: (lowest, highest) (Q6489).
     pub(crate) fn roof_band_ft(&self) -> (f64, f64) {
         let low = if self.roof_support_in.is_finite() && self.roof_support_in > 0.0 { self.roof_support_in } else { 4.0 } / 12.0;
@@ -1033,11 +1052,25 @@ pub(crate) fn route_leg(a: Vec2, b: Vec2, tiers: &[f64], r: f64, field: &Field, 
 /// box in, a box out), so no box collects more raceways than its fill allows. Its joints, from
 /// `root`.
 pub(crate) fn spanning_tree(pts: &[Vec2], root: usize) -> Vec<(usize, usize)> {
+    branch_tree(pts, &[], root, 1, 2, 0.0)
+}
+
+/// A rectilinear tree over `pts` from `root` whose root takes up to `root_joints` joints and
+/// every other box up to `box_joints` (one in, the rest out), each next box joined where it adds
+/// the least `weight` × its way back to the root along the tree plus the joint itself (Prim
+/// to Dijkstra: weight 0 the least raceway, a chain where every box takes two; 1 each box's
+/// shortest way back). `rise`: each box's drop from the ceiling space (sheet units; none: 0),
+/// which every joint at it adds. Its joints, from `root` (Q6340).
+pub(crate) fn branch_tree(pts: &[Vec2], rise: &[f64], root: usize, root_joints: usize, box_joints: usize, weight: f64) -> Vec<(usize, usize)> {
     let n = pts.len();
     if n < 2 || root >= n || n > 20_000 {
         return Vec::new();
     }
-    let cap = |i: usize| if i == root { 1 } else { 2 };
+    let weight = if weight.is_finite() { weight.clamp(0.0, 1.0) } else { 0.0 };
+    let cap = |i: usize| if i == root { root_joints.max(1) } else { box_joints.max(2) };
+    // Each box's way back to the root along the tree.
+    let mut back = vec![0.0_f64; n];
+    let up = |i: usize| rise.get(i).copied().filter(|r| r.is_finite() && *r > 0.0).unwrap_or(0.0);
     let mut inside = vec![false; n];
     let mut degree = vec![0usize; n];
     if let Some(r) = inside.get_mut(root) {
@@ -1057,13 +1090,18 @@ pub(crate) fn spanning_tree(pts: &[Vec2], root: usize) -> Vec<(usize, usize)> {
                 if inside.get(i).copied().unwrap_or(true) {
                     continue;
                 }
-                let d = manhattan(*p, *pf);
+                let d = manhattan(*p, *pf) + up(f) + up(i) + weight * back.get(f).copied().unwrap_or(0.0);
                 if best.is_none_or(|(bd, _, _)| d < bd) {
                     best = Some((d, f, i));
                 }
             }
         }
         let Some((_, from, next)) = best else { break };
+        let way =
+            back.get(from).copied().unwrap_or(0.0) + pts.get(from).zip(pts.get(next)).map_or(0.0, |(a, b)| manhattan(*a, *b)) + up(from) + up(next);
+        if let Some(x) = back.get_mut(next) {
+            *x = way;
+        }
         for x in [from, next] {
             if let Some(dg) = degree.get_mut(x) {
                 *dg += 1;
@@ -1354,6 +1392,86 @@ pub(crate) fn size_for_length(ft: f64, amps: f64, volts: f64, table: &[(f64, Str
             let v = vdrop_pct(s, ft, amps, volts, rl).unwrap_or(0.0);
             (s.clone(), format!("computed: {ft:.0} ft at {amps:.0} A, {volts:.0} V: {v:.1}% on #{s} ({})", rl.vdrop.source))
         })
+}
+
+/// The breaker a wire-length table is read at: the circuit's, else the rules' usual branch
+/// breaker (said in the reason).
+fn table_breaker(trip: Option<f64>, rl: &RouteRules) -> (f64, String) {
+    match trip.filter(|t| t.is_finite() && *t > 0.0) {
+        Some(a) => (a, String::new()),
+        None => (rl.vdrop.breaker_a, format!("; its breaker not read: the usual {} A branch breaker ({})", rl.vdrop.breaker_a, rl.vdrop.source)),
+    }
+}
+
+/// The conductor the documents' wire-length tables ask for a circuit `ft` long (Q6340): the
+/// first table with a row for the circuit (its breaker, at `volts`), the size of its band; past
+/// the table's reach, the larger of its largest size and the voltage drop at `amps` (the
+/// engineer confirms). None: no table has the circuit's row (the voltage drop decides).
+pub(crate) fn table_size(
+    tables: &[super::wiretable::LengthTable],
+    ft: f64,
+    trip: Option<f64>,
+    volts: f64,
+    amps: f64,
+    rl: &RouteRules,
+) -> Option<(String, String)> {
+    let (a, note) = table_breaker(trip, rl);
+    let sizes = &rl.vdrop.sizes;
+    let order = |s: &str| sizes.iter().position(|x| x == s);
+    for t in tables {
+        match t.need(ft, Some(a), Some(volts), sizes) {
+            super::wiretable::Need::Size(n, band) => {
+                return Some((n, format!("{}: {band}, the circuit {ft:.0} ft{note}", t.cite())));
+            }
+            super::wiretable::Need::Beyond(w) => {
+                let big = t.largest(Some(a), Some(volts), sizes);
+                let calc = size_for_length(ft, amps, volts, &[], rl);
+                let pick = match (big, calc) {
+                    (Some(b), Some((c, _))) => {
+                        if order(&c) > order(&b) {
+                            c
+                        } else {
+                            b
+                        }
+                    }
+                    (Some(b), None) => b,
+                    (None, Some((c, _))) => c,
+                    (None, None) => continue,
+                };
+                return Some((
+                    pick.clone(),
+                    format!(
+                        "{}: the circuit {ft:.0} ft is past its reach ({w}): #{pick}, the larger of its largest size and the voltage drop ({}); the engineer confirms{note}",
+                        t.cite(),
+                        rl.vdrop.source
+                    ),
+                ));
+            }
+            super::wiretable::Need::NotCovered(_) => {}
+        }
+    }
+    None
+}
+
+/// How far a circuit may run on `size` before it needs a larger one (feet), and by what: the
+/// first wire-length table with its row, else the voltage drop at `amps` on `sup` (Q6340).
+pub(crate) fn reach_ft(
+    size: &str,
+    tables: &[super::wiretable::LengthTable],
+    trip: Option<f64>,
+    sup: &size::Supply,
+    amps: f64,
+    rl: &RouteRules,
+) -> Option<(f64, String)> {
+    let (a, _) = table_breaker(trip, rl);
+    for t in tables {
+        if !matches!(t.need(0.0, Some(a), Some(sup.volts), &rl.vdrop.sizes), super::wiretable::Need::NotCovered(_)) {
+            return t.reach(size, Some(a), Some(sup.volts), &rl.vdrop.sizes).map(|r| (r, t.cite()));
+        }
+    }
+    let cm = rl.vdrop.cmil.get(size).copied().filter(|c| *c > 0.0)?;
+    let per_ft = sup.factor * rl.vdrop.k_copper * amps / cm / sup.volts.max(1.0) * 100.0;
+    (per_ft.is_finite() && per_ft > 0.0).then(|| (rl.vdrop.max_pct / per_ft, rl.vdrop.source.clone()))
 }
 
 /// Box fill (NEC 314.16(B)): the volume `conductors` (each entering the box) and a device yoke
@@ -2851,8 +2969,29 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     out.minimum = Some((min_in, min_src.clone()));
     let max_group = methods.max_circuits.unwrap_or(rl.grouping.max_circuits).clamp(1, 12);
     let group_src = if methods.max_circuits.is_some() { methods.max_circuits_source.clone() } else { rl.grouping.source.clone() };
-    let texts = drawing_texts(d);
-    let (len_table, len_src) = length_table(&texts);
+    // The documents' wire-length tables (Q6340): drawn as a grid (by breaker and voltage, any
+    // layout) or as single lines (`0-60' = #12`), the drawing's sheets named by their outlines.
+    let sheet_of = |p: Vec2| -> String {
+        sp.sheets
+            .iter()
+            .filter_map(|l| {
+                let r = l.rect?;
+                let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
+                (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).then(|| ((x1 - x0) * (y1 - y0), l.number.clone()))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, n)| n)
+            .unwrap_or_default()
+    };
+    let len_tables: Vec<super::wiretable::LengthTable> = {
+        let mut seen: Vec<super::wiretable::LengthTable> = Vec::new();
+        for t in super::wiretable::read_drawing(d, &sheet_of) {
+            if !t.bands.is_empty() && !seen.iter().any(|o| o.bands == t.bands) {
+                seen.push(t);
+            }
+        }
+        seen
+    };
     let trip_of = |panel: &str, label: &str| -> Option<f64> {
         let num = super::printcond::parse_circuit(label)?.1;
         let first = num.split(',').next()?.trim().to_string();
@@ -2898,7 +3037,37 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut why: Option<(&'static str, String, &'static str)> =
             label_note.map(|l| ("", format!("`{l}` is a label, not a conductor note: no size read from it"), "rule"));
         let mk = match given {
-            Some(v) => v,
+            // The plan's size, never under its schedule row's wire (Q6340: where the documents
+            // give two sizes the field pulls the larger, the plan's kept as the design value).
+            Some(v) => match row_of(panel, label).and_then(|(s, r)| gap::schedule_conductors(&r.wire, r.poles.max(1)).map(|m| (m, s, r))) {
+                Some((m, s, r)) => {
+                    let hot_of = |mk: &str| super::mepatoms::conductor_parts(mk).into_iter().find(|p| !p.2).map(|p| p.1);
+                    match (hot_of(&v), hot_of(&m)) {
+                        (Some(plan), Some(sched)) if order_sz(&sched) > order_sz(&plan) => {
+                            let mut parts = super::mepatoms::conductor_parts(&v);
+                            for p in &mut parts {
+                                if order_sz(&p.1) < order_sz(&sched) {
+                                    p.1 = sched.clone();
+                                }
+                            }
+                            why = Some((
+                                size::SCHEDULE_OVER_PLAN,
+                                format!(
+                                    "{}: the plan's {v} under panel {} circuit {} wire #{sched}{}",
+                                    super::provenance::rule("E-CONDUCTOR-LARGER-DOC").basis_for("the larger of the plan's and the schedule's"),
+                                    s.panel.trim(),
+                                    r.number.trim(),
+                                    if s.source.is_empty() { String::new() } else { format!(" ({})", s.source) }
+                                ),
+                                "schedule",
+                            ));
+                            makeup_text(&parts)
+                        }
+                        _ => v,
+                    }
+                }
+                None => v,
+            },
             None => match row_of(panel, label).and_then(|(s, r)| gap::schedule_conductors(&r.wire, r.poles.max(1)).map(|m| (m, s, r))) {
                 Some((m, s, r)) => {
                     let hot = super::mepatoms::conductor_parts(&m).into_iter().find(|p| !p.2).map(|p| p.1).unwrap_or_default();
@@ -3047,6 +3216,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             },
         }));
     };
+    // The circuits whose boxes branch rather than chain (Q6340).
+    let mut branched_rows: Vec<Value> = Vec::new();
+    let mut branched_n = 0usize;
     for (ci, c) in circs.iter().enumerate() {
         if runs.len() >= MAX_RUNS {
             break;
@@ -3130,10 +3302,67 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // device to device, each switch on a leg of its own from the nearest of what it controls
         // (else the nearest of the rest). All switches, or none: device to device.
         let core: Vec<usize> = (0..members.len()).filter(|i| members.get(*i).is_some_and(|m| !m.switch)).collect();
+        // The circuit's given conductors (the plan's, else its schedule row's; never under what
+        // its breaker allows) and how far they reach: the documents' length table for its
+        // breaker and voltage, else the voltage drop at its load (Q6340).
+        let (makeup, base_why) = base_conductors(tag, &c.panel, &c.label);
+        let given_hot = super::mepatoms::conductor_parts(&makeup).into_iter().find(|p| !p.2).map_or_else(|| "12".to_string(), |p| p.1);
+        let reach = {
+            let sup = size::supply(poles_of(&c.panel, &c.label), volts_of(&c.panel).as_deref(), &c.panel, rl);
+            let trip = trip_of(&c.panel, &c.label);
+            let amps = match load_of(&c.panel, &c.label) {
+                Some(va) => sup.amps(va),
+                None => trip.unwrap_or(rl.vdrop.breaker_a) * rl.vdrop.load_pct / 100.0,
+            };
+            reach_ft(&given_hot, &len_tables, trip, &sup, amps, rl)
+        };
+        // A tree's way from the panel to its farthest box (ft): the panel to the homerun's box,
+        // then along its joints, each up from its boxes to the ceiling space and down.
+        let tier0 = tiers.first().copied().unwrap_or(floor + rl.route.default_ceiling_ft * upf);
+        let tree_ft = |at: &[Vec2], tops: &[f64], root: usize, tree: &[(usize, usize)]| -> f64 {
+            let rise = |i: usize| tops.get(i).map_or(0.0, |t| (tier0 - t).max(0.0));
+            let mut back = vec![f64::NAN; at.len()];
+            if let Some(x) = back.get_mut(root) {
+                *x = 0.0;
+            }
+            for (u, v) in tree {
+                let (Some(a), Some(b)) = (at.get(*u), at.get(*v)) else { continue };
+                let w = back.get(*u).copied().unwrap_or(f64::NAN) + (manhattan(*a, *b) + rise(*u) + rise(*v)) / upf;
+                if let Some(x) = back.get_mut(*v) {
+                    *x = w;
+                }
+            }
+            let home = panel_at.zip(at.get(root)).map_or(0.0, |(p, q)| manhattan(*q, p) / upf);
+            home + back.iter().copied().filter(|x| x.is_finite()).fold(0.0, f64::max)
+        };
+        // Chained box to box, as the trade joins a circuit's boxes; where the chain runs past what
+        // its conductors reach, its boxes branch instead when that brings the farthest nearer
+        // (trade practice, rules `route.branch_*`): the field keeps a unit's circuit near the
+        // unit's size rather than pulling larger wire round the room.
+        let mut branched: Option<(f64, f64, f64, String)> = None;
+        let mut tree_for = |at: &[Vec2], tops: &[f64], root: usize| -> Vec<(usize, usize)> {
+            let chain = spanning_tree(at, root);
+            let Some((reach_ft, by)) = reach.clone() else { return chain };
+            let chain_ft = tree_ft(at, tops, root, &chain);
+            if chain_ft <= reach_ft {
+                return chain;
+            }
+            let (rj, bj, w) = rl.route.branching();
+            let rises: Vec<f64> = tops.iter().map(|t| (tier0 - t).max(0.0)).collect();
+            let br = branch_tree(at, &rises, root, rj, bj, w);
+            let br_ft = tree_ft(at, tops, root, &br);
+            if br.len() == chain.len() && br_ft + 0.5 < chain_ft {
+                branched = Some((chain_ft, br_ft, reach_ft, by));
+                br
+            } else {
+                chain
+            }
+        };
+        let tops: Vec<f64> = members.iter().map(|m| m.top).collect();
         let (root, tree) = if core.is_empty() || core.len() == members.len() {
             let all: Vec<usize> = (0..members.len()).collect();
             let root = nearest_panel(&all).unwrap_or(0);
-            (root, spanning_tree(&pts, root))
+            (root, tree_for(&pts, &tops, root))
         } else {
             let cpts: Vec<Vec2> = core.iter().filter_map(|i| pts.get(*i).copied()).collect();
             let local: Vec<usize> = (0..core.len()).collect();
@@ -3145,8 +3374,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     })
                 })
                 .unwrap_or(0);
+            let ctops: Vec<f64> = core.iter().filter_map(|i| tops.get(*i).copied()).collect();
             let mut t: Vec<(usize, usize)> =
-                spanning_tree(&cpts, croot).into_iter().filter_map(|(a, b)| Some((*core.get(a)?, *core.get(b)?))).collect();
+                tree_for(&cpts, &ctops, croot).into_iter().filter_map(|(a, b)| Some((*core.get(a)?, *core.get(b)?))).collect();
             for (i, m) in members.iter().enumerate().filter(|(_, m)| m.switch) {
                 let ctl: Vec<usize> = core.iter().copied().filter(|j| members.get(*j).is_some_and(|x| m.controls.contains(&x.handle))).collect();
                 let pool = if ctl.is_empty() { &core } else { &ctl };
@@ -3166,10 +3396,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut leg_n = 0usize;
         let mut tree_len = 0.0;
         let mut edge_ft: Vec<(usize, usize, f64)> = Vec::new();
-        // The circuit's own makeup per leg (two conductors and a ground, or what the tag says).
-        // Its given size (the plan's, else the panel schedule's wire column), never under what
-        // its breaker allows (Q6234).
-        let (makeup, base_why) = base_conductors(tag, &c.panel, &c.label);
+        // The circuit's own makeup per leg (two conductors and a ground, or what the tag says):
+        // its given size, above (Q6234).
         let parts = super::mepatoms::conductor_parts(&makeup);
         let hots: Vec<(u32, String)> = parts.iter().filter(|p| !p.2).map(|p| (p.0, p.1.clone())).collect();
         for (u, v) in &tree {
@@ -3314,6 +3542,17 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             }
         }
         let mut t = tag.clone();
+        if let Some((chain_ft, br_ft, reach_ft, by)) = &branched {
+            branched_n += 1;
+            let why = format!(
+                "chained its farthest box is {chain_ft:.0} ft from the panel, past the {reach_ft:.0} ft #{given_hot} reaches ({by}); branched: {br_ft:.0} ft ({})",
+                rl.route.branch_source
+            );
+            t.set("device_tree", why.clone(), "rule");
+            if branched_rows.len() < MAX_ITEMS {
+                branched_rows.push(json!({"circuit": c.label, "level": c.level, "conductor": format!("#{given_hot}"), "reach_ft": r1(*reach_ft), "by": by, "chained_ft": r1(*chain_ft), "branched_ft": r1(*br_ft)}));
+            }
+        }
         if !c.part.is_empty() {
             t.id = cid.clone();
             t.set("split_of", tag.id.clone(), "computed");
@@ -3325,9 +3564,17 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             if !reason.is_empty() {
                 *sizing.entry(*reason).or_default() += 1;
             }
-            if upsized.len() < MAX_ITEMS && *reason == size::BREAKER {
+            if upsized.len() < MAX_ITEMS && (*reason == size::BREAKER || *reason == size::SCHEDULE_OVER_PLAN) {
                 let given = field_of(tag, "conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS);
                 upsized.push(json!({"circuit": c.label, "level": c.level, "from": given, "to": makeup, "reason": reason, "why": why}));
+            }
+            // The plan's size against the schedule's (Q6340): corrected, the plan's kept.
+            if *reason == size::SCHEDULE_OVER_PLAN && !t.fields.contains_key(DESIGN_CONDUCTORS) {
+                let given = tag.fields.get("conductors").map(|f| (f.value.clone(), f.source.clone()));
+                if let Some((v, src)) = given {
+                    t.set(DESIGN_CONDUCTORS, v, &src);
+                }
+                t.set(CORRECTION_CONDUCTORS, why.clone(), "rule");
             }
         }
         t.set("route", ROUTED, "computed");
@@ -3623,10 +3870,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 changed
             };
             let base_hot = parts.iter().find(|p| !p.2).map(|p| p.1.clone()).unwrap_or_else(|| "12".into());
-            if !len_table.is_empty() {
-                if let Some((need, why)) = size_for_length(ft, amps, sup.volts, &len_table, rl).map(|(n, w)| (n, format!("{w}; load {load_src}")))
-                    && up_to(&mut parts, &need)
-                {
+            // The documents' table first, for the circuit's breaker and voltage (Q6340).
+            if let Some((need, why)) = table_size(&len_tables, ft, trip, sup.volts, amps, rl) {
+                let why = format!("{why}; load {load_src}");
+                if up_to(&mut parts, &need) {
                     let now = makeup_text(&parts);
                     *sizing.entry(size::LEGEND).or_default() += 1;
                     if upsized.len() < MAX_ITEMS {
@@ -3664,9 +3911,20 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                         }));
                     }
                     if let Some(t) = tags.get_mut(*i) {
+                        // Corrected for the field (Q6340): the design conductors kept beside
+                        // what is pulled, the homerun's and the legs' where they went up.
+                        let src = t.fields.get("conductors").map_or_else(|| "plan".to_string(), |f| f.source.clone());
                         if ds.legs != base_hot {
+                            if !t.fields.contains_key(DESIGN_CONDUCTORS) {
+                                t.set(DESIGN_CONDUCTORS, mk.clone(), &src);
+                            }
+                            t.set(CORRECTION_CONDUCTORS, format!("E-VOLTAGE-DROP: {why}"), "rule");
                             t.set("conductors", legs_mk, "computed");
                         }
+                        if !t.fields.contains_key(DESIGN_HOMERUN) {
+                            t.set(DESIGN_HOMERUN, mk.clone(), &src);
+                        }
+                        t.set(CORRECTION_HOMERUN, format!("E-VOLTAGE-DROP: {why}"), "rule");
                         t.set("homerun_conductors", home_mk, "computed");
                         t.set("conductor_size", why.clone(), "rule");
                     }
@@ -4576,6 +4834,17 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     });
     // The feeders' risers through the floors (Q6347): their firestop with the branch circuits'.
     feeder_floor_penetrations(sp, &carry, rl, &mut penetrations);
+    // The documents' wire-length table the sizing read (Q6340), and the branched trees.
+    let wire_size_table = match len_tables.first() {
+        None => json!(null),
+        Some(t) => json!({
+            "bands": t.bands.iter().map(|b| json!({"amps": b.amps, "volts": b.volts, "size": b.size, "max_ft": b.max_ft})).collect::<Vec<_>>(),
+            "read": t.cite(),
+            "sheet": t.sheet,
+            "tables": len_tables.len(),
+        }),
+    };
+    let branched_trees = json!({"circuits": branched_n, "items": branched_rows, "source": rl.route.branch_source});
     out.report = json!({
         "circuits": circs.len(),
         "routed_circuits": homes.len(),
@@ -4596,7 +4865,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "estimated_ft_before": r1(estimated_ft),
         "ft_by_method_size": by_method.iter().map(|(k, v)| (k.clone(), json!(r1(*v)))).collect::<serde_json::Map<_, _>>(),
         "methods": methods_used.iter().map(|(k, (n, s))| json!({"area_method": k, "circuits": n, "source": s})).collect::<Vec<_>>(),
-        "wire_size_table": if len_table.is_empty() { json!(null) } else { json!({"bands": len_table.iter().map(|(h, s)| json!([h, s])).collect::<Vec<_>>(), "read": len_src}) },
+        "wire_size_table": wire_size_table,
         "minimum_size_in": min_in,
         "minimum_source": min_src,
         "max_circuits_per_homerun": max_group,
@@ -4620,6 +4889,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "route_source": rl.route.source,
     }); // What the build filled in and corrected for the field (Q6216).
     out.report["inferred_circuits"] = json!({"total": inferred_rows.len(), "devices": inferred_devs.len(), "items": inferred_rows});
+    out.report["branched_trees"] = branched_trees;
     out.report["clashes_corrected"] = json!(clash_offsets.len());
     out.report["clash_offsets"] = json!(clash_offsets);
     if let Some(o) = out.report.as_object_mut() {
