@@ -190,7 +190,7 @@ fn carve_open(fill: &[bool], wall: &[bool], g: Grid, upf: f64, open_at: &[Vec2])
         while let Some(k) = queue.pop_front() {
             let (i, j) = (k % nx, k / nx);
             for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
-                let q = b * nx + a;
+                let q = b.wrapping_mul(nx).wrapping_add(a);
                 if a < nx && b < ny && !grown.get(q).copied().unwrap_or(true) && floor.get(q) == Some(&false) {
                     if let Some(f) = floor.get_mut(q) {
                         *f = true;
@@ -470,6 +470,10 @@ pub(crate) struct Floors {
     /// A wall, outside the shell, or circulation.
     blocked: Vec<bool>,
     grown: Vec<bool>,
+    /// Open floor inside the shell that the outside reaches through a gap wider than a door
+    /// with no door or window in it ([`exterior_of`]): a recessed entry, a canopy, a patio the
+    /// shell's closing took in. No room's.
+    exterior: Vec<bool>,
     /// Which traced room (1-based) a cell is on; 0 none.
     owner: Vec<u32>,
     rooms: Vec<Vec<[Vec2; 2]>>,
@@ -480,6 +484,19 @@ impl Floors {
     /// (rectangles), less what is `taken` (its circulation's rectangles). None for a hostile or
     /// vast plan.
     pub(crate) fn new(walls: &[(Vec2, Vec2, f64)], shell: &[[Vec2; 2]], upf: f64, taken: &[[Vec2; 2]]) -> Option<Floors> {
+        Self::with_openings(walls, shell, upf, taken, &[])
+    }
+
+    /// [`Floors::new`] with the storey's doors and windows (`shut`: each drawn across its
+    /// opening, a door's leaf shut, a window's pane; centreline ends and thickness): the outside
+    /// comes in through no opening they close ([`Floors::exterior`]).
+    pub(crate) fn with_openings(
+        walls: &[(Vec2, Vec2, f64)],
+        shell: &[[Vec2; 2]],
+        upf: f64,
+        taken: &[[Vec2; 2]],
+        shut: &[(Vec2, Vec2, f64)],
+    ) -> Option<Floors> {
         if shell.is_empty() || !(upf.is_finite() && upf > 0.0) {
             return None;
         }
@@ -504,8 +521,25 @@ impl Floors {
                 wall.get(k).copied().unwrap_or(true) || !inside(p, shell) || inside(p, taken)
             })
             .collect();
-        let grown = grow(&blocked, nx, ny, (DOOR_FT * upf / cell).ceil() as usize);
-        Some(Floors { nx, ny, cell, origin, upf, blocked, grown, owner: vec![0; nx * ny], rooms: Vec::new() })
+        let r = (DOOR_FT * upf / cell).ceil() as usize;
+        let grown = grow(&blocked, nx, ny, r);
+        // The outside: off the shell, not a wall. What keeps it out: the walls, the circulation
+        // and the doors and windows drawn shut.
+        let outside: Vec<bool> = (0..nx * ny)
+            .map(|k| {
+                let p = Vec2::new(origin.x + ((k % nx) as f64 + 0.5) * cell, origin.y + ((k / nx) as f64 + 0.5) * cell);
+                !wall.get(k).copied().unwrap_or(true) && !inside(p, shell)
+            })
+            .collect();
+        let shut = raster(shut, origin, cell, nx, ny)?;
+        let keeps_out: Vec<bool> = (0..nx * ny)
+            .map(|k| {
+                let p = Vec2::new(origin.x + ((k % nx) as f64 + 0.5) * cell, origin.y + ((k / nx) as f64 + 0.5) * cell);
+                wall.get(k).copied().unwrap_or(true) || shut.get(k).copied().unwrap_or(false) || inside(p, taken)
+            })
+            .collect();
+        let exterior = exterior_of(&outside, &keeps_out, &blocked, nx, ny, r);
+        Some(Floors { nx, ny, cell, origin, upf, blocked, grown, exterior, owner: vec![0; nx * ny], rooms: Vec::new() })
     }
 
     /// The room whose floor holds `at` (a room label): which one (traced in order) and its
@@ -539,18 +573,26 @@ impl Floors {
         while let Some(k) = queue.pop_front() {
             let (i, j) = (k % nx, k / nx);
             for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
-                let q = b * nx + a;
+                let q = b.wrapping_mul(nx).wrapping_add(a);
                 if a < nx && b < ny && !self.grown[q] && !floor[q] {
                     floor[q] = true;
                     queue.push_back(q);
                 }
             }
         }
-        // Back out to the walls' faces; a cell another room already has stays its.
+        // Back out to the walls' faces; a cell another room already has stays its. The outside
+        // the trace got into (through a door gap wider than it closes, onto a recessed entry or a
+        // canopy the shell took in) is no room's: unless the label stands on it (a patio's own
+        // label, or a room open to the outside wider than a door: nothing tells them apart).
+        let outdoors = self.exterior.get(start).copied().unwrap_or(false);
         let floor: Vec<bool> = grow(&floor, nx, ny, r)
             .into_iter()
             .enumerate()
-            .map(|(k, f)| f && !self.blocked.get(k).copied().unwrap_or(true) && self.owner.get(k) == Some(&0))
+            .map(|(k, f)| {
+                f && !self.blocked.get(k).copied().unwrap_or(true)
+                    && self.owner.get(k) == Some(&0)
+                    && (outdoors || !self.exterior.get(k).copied().unwrap_or(false))
+            })
             .collect();
         let area = floor.iter().filter(|f| **f).count() as f64 * cell * cell / (self.upf * self.upf);
         if !(ROOM_SF.0..=ROOM_SF.1).contains(&area) {
@@ -623,7 +665,9 @@ impl Floors {
                 }
             }
             let [only] = neighbours.into_iter().collect::<Vec<_>>()[..] else { continue };
-            if pocket.len() > max_cells || pocket.iter().any(|k| kept.contains(k)) {
+            // A pocket open to the outside (a recessed entry, a canopy outside a storefront) is
+            // outdoors, not the room's.
+            if pocket.len() > max_cells || pocket.iter().any(|k| kept.contains(k) || self.exterior.get(*k).copied().unwrap_or(false)) {
                 continue;
             }
             // The pocket and the floor along its walls the sliver test left out.
@@ -699,6 +743,31 @@ impl Floors {
         self.rooms.push(rects_new);
         Some(new)
     }
+}
+
+/// The open floor (`blocked` clear) that the `outside` reaches through gaps in `keeps_out`
+/// wider than `r` cells each side: the outside flooded through what the grown `keeps_out` leaves
+/// open, then grown back by `r` to the walls' faces.
+fn exterior_of(outside: &[bool], keeps_out: &[bool], blocked: &[bool], nx: usize, ny: usize, r: usize) -> Vec<bool> {
+    let held = grow(keeps_out, nx, ny, r);
+    let open = |k: usize| outside.get(k).copied().unwrap_or(false) || !held.get(k).copied().unwrap_or(true);
+    let mut reached: Vec<bool> = outside.to_vec();
+    let mut queue: VecDeque<usize> = (0..nx * ny).filter(|&k| outside.get(k).copied().unwrap_or(false)).collect();
+    while let Some(k) = queue.pop_front() {
+        let (i, j) = (k % nx, k / nx);
+        for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+            let q = b.wrapping_mul(nx).wrapping_add(a);
+            if a < nx && b < ny && open(q) && reached.get(q) == Some(&false) {
+                if let Some(c) = reached.get_mut(q) {
+                    *c = true;
+                }
+                queue.push_back(q);
+            }
+        }
+    }
+    // Only the floor inside the shell the flood got onto, grown back to the walls' faces.
+    let inner: Vec<bool> = reached.iter().zip(outside).map(|(r, o)| *r && !*o).collect();
+    grow(&inner, nx, ny, r).into_iter().zip(blocked).map(|(e, b)| e && !*b).collect()
 }
 
 /// Cells a pocket's floor must keep from the walls to reach on ([`Floors::join_pockets`]).
@@ -1148,5 +1217,82 @@ mod tests {
         let after = joined.first().map_or(before, |(_, r)| sf_of(r));
         assert!(after < before + 8.0 * 8.0 + 10.0, "{before} → {after}: the passage went in too");
         assert!(f.room_at(p(13.0, 4.0)).is_err() || f.room_at(p(13.0, 4.0)).is_ok_and(|(m, _)| m != a && m != b));
+    }
+
+    /// A 60' × 30' building (6" walls, feet × 12 units) whose north side steps in round a
+    /// storefront: a notch 18' wide (x 20–38) and 6' deep (y 24–30) open to the north (a canopy
+    /// over the entry), its storefront wall along y 24 with a `door`-wide gap from x 27. The
+    /// shell as the build makes it ([`building_whole`]: the notch's 18' closed, so it is in).
+    fn storefront_notch(door: f64) -> (Vec<(Vec2, Vec2, f64)>, Vec<[Vec2; 2]>) {
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        let w = |a: (f64, f64), b: (f64, f64)| (p(a.0, a.1), p(b.0, b.1), 6.0);
+        let walls = vec![
+            w((0.0, 0.0), (60.0, 0.0)),
+            w((60.0, 0.0), (60.0, 30.0)),
+            w((60.0, 30.0), (38.0, 30.0)),
+            w((38.0, 30.0), (38.0, 24.0)),
+            w((38.0, 24.0), (27.0 + door, 24.0)),
+            w((27.0, 24.0), (20.0, 24.0)),
+            w((20.0, 24.0), (20.0, 30.0)),
+            w((20.0, 30.0), (0.0, 30.0)),
+            w((0.0, 30.0), (0.0, 0.0)),
+        ];
+        let shell = building_whole(&walls, p(-0.25, -0.25), p(60.25, 30.25), 12.0).expect("a shell").rects;
+        (walls, shell)
+    }
+
+    /// The building's floor inside its walls (6"), less the notch: what the lounge is.
+    const LOUNGE_SF: f64 = 59.5 * 23.5 + 19.5 * 6.0 + 21.5 * 6.0;
+
+    #[test]
+    fn a_canopy_notch_outside_a_storefront_is_no_rooms_pocket() {
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        let (walls, shell) = storefront_notch(3.5);
+        let notch = p(29.0, 27.0);
+        // The shell took the notch in (its 18' closed): nothing but the walls tells it outside.
+        assert!(shell.iter().any(|[a, b]| notch.x > a.x && notch.x < b.x && notch.y > a.y && notch.y < b.y), "{shell:?}");
+        let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
+        let (n, rects) = f.room_at(p(10.0, 10.0)).unwrap();
+        let before = sf_of(rects);
+        assert!((before - LOUNGE_SF).abs() < 15.0, "{before} sf, not {LOUNGE_SF}");
+        // The notch behind the 3'-6" door is floor no label traced, 108 sf, touching the lounge
+        // only: a pocket. It is outdoors (open to the north), so the lounge doesn't take it in.
+        let joined = f.join_pockets(&[]);
+        assert!(joined.iter().all(|(m, r)| *m != n || sf_of(r) < LOUNGE_SF + 15.0), "the notch went in: {joined:?}");
+        assert!(sf_of(f.rects(n).unwrap()) < LOUNGE_SF + 15.0);
+        // Its own label (a patio's) traces it: outdoors, not the lounge.
+        assert!(f.room_at(notch).map(|r| r.0) != Ok(n));
+    }
+
+    #[test]
+    fn a_storefront_door_wider_than_the_trace_closes_keeps_the_canopy_out() {
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        // A 6' pair of doors: the trace gets through the gap into the notch.
+        let (walls, shell) = storefront_notch(6.0);
+        let shut = [(p(27.0, 24.0), p(33.0, 24.0), 2.0)];
+        let mut f = Floors::with_openings(&walls, &shell, 12.0, &[], &shut).unwrap();
+        let (n, rects) = f.room_at(p(10.0, 10.0)).unwrap();
+        let area = sf_of(rects);
+        // Shut, the doors keep the outside out: the lounge is its floor, the notch no part of it.
+        assert!((area - LOUNGE_SF).abs() < 20.0, "{area} sf, not {LOUNGE_SF}");
+        assert!(f.room_at(p(29.0, 27.5)).map(|r| r.0) != Ok(n));
+        // Its doors not known, nothing tells the lounge from the outside it opens onto: traced
+        // as before (the notch in).
+        let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
+        let area = sf_of(f.room_at(p(10.0, 10.0)).unwrap().1);
+        assert!(area > LOUNGE_SF + 80.0, "{area} sf");
+    }
+
+    #[test]
+    fn a_room_with_a_window_gap_in_its_outside_wall_keeps_its_floor() {
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        // A room 30' × 20' whose south wall has an 8' gap (a window the plan draws no pane in).
+        let mut walls = ring(&[(0.0, 20.0), (0.0, 0.0), (10.0, 0.0)]);
+        walls.pop();
+        walls.extend([(p(18.0, 0.0), p(30.0, 0.0), 6.0), (p(30.0, 0.0), p(30.0, 20.0), 6.0), (p(30.0, 20.0), p(0.0, 20.0), 6.0)]);
+        let shell = building_whole(&walls, p(-0.25, -0.25), p(30.25, 20.25), 12.0).expect("a shell").rects;
+        let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
+        let area = sf_of(f.room_at(p(15.0, 10.0)).unwrap().1);
+        assert!((area - 29.5 * 19.5).abs() < 10.0, "{area} sf");
     }
 }
