@@ -3428,6 +3428,11 @@ menu	Modify	Modifikace
 	Previous Sheet	Předchozí list
 	Page {n}	Stránka {n}
 	Page Up and Page Down step through the sheets.	Klávesy Page Up a Page Down procházejí listy.
+	Symbol Table	Tabulka symbolů
+	Change Symbol Table	Změnit tabulku symbolů
+	Symbol Table Log	Protokol tabulky symbolů
+	Revert Symbol Table Change	Vrátit změnu tabulky symbolů
+	Promote Symbol to Library	Povýšit symbol do knihovny
 	Frame rate to hold while moving	Snímková frekvence při pohybu
 	Lower the resolution while panning and zooming when the graphics are slow	Snížit rozlišení při posunu a zvětšování, když je grafika pomalá
 	The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution.	Výkres se zaostří, jakmile se pohled zastaví. Tisk, export a snímky obrazovky jsou vždy v plném rozlišení.
