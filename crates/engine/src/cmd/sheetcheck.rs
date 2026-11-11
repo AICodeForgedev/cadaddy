@@ -1015,6 +1015,19 @@ pub fn packet_dir(job: &GuidedJob) -> PathBuf {
     }
 }
 
+/// Removes the job's packet folder (its pictures, contact sheet and `sheet-index.json`), when
+/// it is one the job wrote.
+pub fn remove_packet(job: &GuidedJob) {
+    let dir = packet_dir(job);
+    let ours = dir.file_name().is_some_and(|n| n.to_string_lossy().ends_with(" sheet index"));
+    #[cfg(not(target_arch = "wasm32"))]
+    if ours && dir.join("sheet-index.json").is_file() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = ours;
+}
+
 /// The review packet: every sheet as the job read it (with its corrections), its pictures, the
 /// flags and how to answer. Written as `sheet-index.json` beside the pictures and the contact
 /// sheet; returns its summary for the classify result.

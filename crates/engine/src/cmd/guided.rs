@@ -28329,6 +28329,11 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     {
         let _ = crate::writefile::remove(path);
     }
+    // Its sheet-index packet in the temporary folder goes too (one beside a checkpoint the
+    // caller named stays with it).
+    if job.is_done() && !job.checkpoint_given {
+        super::sheetcheck::remove_packet(job);
+    }
     r
 }
 

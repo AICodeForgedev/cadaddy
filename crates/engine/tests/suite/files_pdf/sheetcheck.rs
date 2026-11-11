@@ -288,6 +288,9 @@ fn auto_runs_through_on_the_unchecked_reading_and_says_so() {
         "{unchecked:?}"
     );
     assert_eq!(si["levels_not_built"], json!(["2"]), "{si}");
+    // A finished job of no checkpoint leaves no packet in the temporary folder.
+    let packet = std::path::PathBuf::from(si["packet"].as_str().expect("packet path"));
+    assert!(packet.parent().is_some_and(|d| !d.exists()), "{}", packet.display());
     let state = job_state(&s);
     let sc = state["guided_job"]["sheet_scales"].as_array().and_then(|a| a.iter().find(|x| x["sheet"] == MISSCALED)).cloned().unwrap_or_default();
     eprintln!(
