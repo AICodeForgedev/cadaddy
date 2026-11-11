@@ -329,25 +329,36 @@ fn mesh(tris: &[[[f32; 3]; 3]], to_sheet: &dyn Fn([f32; 3]) -> Vec3) -> Option<M
         v.dedup();
         v.len() >= 3
     });
-    (!faces.is_empty()).then_some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    (!faces.is_empty()).then(|| super::bspec::seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
-/// A floor slab: the floor quad (its top) and its underside `t` lower, closed round the sides.
+/// A floor slab: the floor quad (its top) and its underside `t` lower, closed round the sides:
+/// round its outline only (an edge two of its faces share is inside it, no side), its flat
+/// surfaces' seams hidden.
 fn slab(top: &Mesh, t: f64) -> Mesh {
     let n = top.vertices.len() as u32;
     let mut vertices = top.vertices.clone();
     vertices.extend(top.vertices.iter().map(|v| Vec3::new(v.x, v.y, v.z - t)));
-    let mut faces = top.faces.clone();
+    let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+    for f in &top.faces {
+        for (k, a) in f.v.iter().enumerate() {
+            let b = f.v.get((k + 1) % f.v.len()).copied().unwrap_or(*a);
+            *uses.entry((*a.min(&b), *a.max(&b))).or_default() += 1;
+        }
+    }
+    let mut faces: Vec<MeshFace> = top.faces.iter().map(|f| MeshFace { v: f.v.clone(), hidden: 0 }).collect();
     for f in &top.faces {
         let mut under: Vec<u32> = f.v.iter().map(|i| i + n).collect();
         under.reverse();
         faces.push(MeshFace { v: under, hidden: 0 });
         for (k, a) in f.v.iter().enumerate() {
             let b = f.v.get((k + 1) % f.v.len()).copied().unwrap_or(*a);
-            faces.push(MeshFace { v: vec![b, *a, a + n, b + n], hidden: 0 });
+            if uses.get(&(*a.min(&b), *a.max(&b))).copied().unwrap_or(0) == 1 {
+                faces.push(MeshFace { v: vec![b, *a, a + n, b + n], hidden: 0 });
+            }
         }
     }
-    Mesh { vertices, faces, kind: MeshKind::Polyface }
+    super::bspec::seamless(Mesh { vertices, faces, kind: MeshKind::Polyface })
 }
 
 /// A floor plate's faces at `z`: its rectangles, facing up (`down` facing down: a ceiling).
@@ -376,6 +387,12 @@ fn plate_slab(o: &outline::Outline, z: f64, t: f64) -> Mesh {
     let n = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
     m.vertices.extend(under.vertices);
     m.faces.extend(under.faces.into_iter().map(|f| MeshFace { v: f.v.iter().map(|i| i.saturating_add(n)).collect(), hidden: 0 }));
+    // The rectangles' edges are seams of one flat top and underside (meeting each other even
+    // where one rectangle's side runs past two others'): the sides round the boundary draw the
+    // outline, so none of the rectangles' own edges draw.
+    for f in &mut m.faces {
+        f.hidden = (1u64 << f.v.len().min(63)) - 1;
+    }
     for (a, b) in &o.edges {
         let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
         m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, a.y, z - t), Vec3::new(b.x, b.y, z - t)]);

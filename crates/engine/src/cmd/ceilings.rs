@@ -780,7 +780,7 @@ fn panel(poly: &[Vec2], z: f64) -> Option<Mesh> {
     let vertices = poly.iter().map(|q| Vec3::new(q.x, q.y, z)).collect();
     let id = |i: usize| u32::try_from(i).unwrap_or(0);
     let faces = tris.iter().map(|t| MeshFace { v: vec![id(t[0]), id(t[2]), id(t[1])], hidden: 0 }).collect();
-    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    Some(super::bspec::seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
 /// The RCP's ceilings, grids, soffits and items into model space (sheet units). On a level with

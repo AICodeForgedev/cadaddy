@@ -2066,7 +2066,7 @@ fn floor_face(poly: &[Vec2], z: f64) -> Option<Mesh> {
     let vertices = ring.iter().map(|q| Vec3::new(q.x, q.y, z)).collect();
     let id = |i: usize| u32::try_from(i).unwrap_or(0);
     let faces = tris.iter().map(|t| MeshFace { v: vec![id(t[0]), id(t[1]), id(t[2])], hidden: 0 }).collect();
-    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    Some(seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
 /// A room element's tag value (`name:`, `number:`, `area_sf:`, `ceiling_ft:`, `finish:`).
@@ -2928,7 +2928,15 @@ fn flat(poly: &[Vec2], z: f64) -> Option<Mesh> {
     }
     let vertices = poly.iter().map(|q| Vec3::new(q.x, q.y, z)).collect();
     let faces = tris.iter().map(|t| MeshFace { v: [t[0], t[2], t[1]].iter().map(|&i| u32::try_from(i).unwrap_or(0)).collect(), hidden: 0 }).collect();
-    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    Some(seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
+}
+
+/// A generated mesh with the seams inside its flat surfaces hidden (the triangles an outline is
+/// ear-clipped into, the quads of a straight run of sides): only outline and crease edges draw,
+/// as a polyface's invisible edges ([`Mesh::hide_flat_seams`]).
+pub(crate) fn seamless(mut m: Mesh) -> Mesh {
+    m.hide_flat_seams();
+    m
 }
 
 /// A prism over a polygon from `z0` up to `z1`: sides and both caps, faces outward.
@@ -2952,7 +2960,7 @@ pub(crate) fn prism(poly: &[Vec2], z0: f64, z1: f64) -> Option<Mesh> {
         let j = (i + 1) % n;
         faces.push(MeshFace { v: vec![i, j, j + n, i + n], hidden: 0 });
     }
-    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    Some(seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
 #[cfg(test)]
