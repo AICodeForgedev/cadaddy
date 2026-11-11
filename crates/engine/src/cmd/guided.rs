@@ -26750,9 +26750,11 @@ fn build_kept_rooms(s: &mut Session, job: &GuidedJob, shells: Option<&[(String, 
         let b = bounds(&outline);
         let middle = b.center();
         let same_number = |m: &ModelRoom| !number.is_empty() && m.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(&number));
-        let over = |m: &ModelRoom| {
-            cadaddy_geom::point_in_polygon(&m.outline, at) || cadaddy_geom::point_in_polygon(&m.outline, middle) || overlap(&bounds(&m.outline), &b)
-        };
+        // Over it: holding its label's point or its middle, or (an unnumbered element: the same
+        // room traced again) overlapping its box; another number's room only by holding it (a
+        // small room inside its box is beside it, not over it).
+        let holds = |m: &ModelRoom| cadaddy_geom::point_in_polygon(&m.outline, at) || cadaddy_geom::point_in_polygon(&m.outline, middle);
+        let over = |m: &ModelRoom| holds(m) || overlap(&bounds(&m.outline), &b);
         let on_level: Vec<usize> = (0..model.len()).filter(|i| model.get(*i).is_some_and(|m| m.level.eq_ignore_ascii_case(&spec_level))).collect();
         let have = on_level
             .iter()
@@ -26764,7 +26766,7 @@ fn build_kept_rooms(s: &mut Session, job: &GuidedJob, shells: Option<&[(String, 
         // Room elements of another number over it: each laid again on its own trace when that
         // trace leaves this room's label out; any left over it, this room is not built.
         let mut blocked: Option<String> = None;
-        let overs: Vec<usize> = on_level.iter().copied().filter(|i| model.get(*i).is_some_and(over)).collect();
+        let overs: Vec<usize> = on_level.iter().copied().filter(|i| model.get(*i).is_some_and(holds)).collect();
         for i in overs {
             let Some(m) = model.get(i) else { continue };
             let (m_name, other) = (m.name.clone(), m.number.clone().unwrap_or_default());
@@ -34810,6 +34812,17 @@ mod tests {
                 &["number:201".to_string(), "finish:CPT-1".to_string()],
             );
             assert!(over.is_some());
+            // A closet inside the study's box, beside its label: no room over it.
+            let closet = super::super::bspec::add_room_element(
+                s.doc_mut().unwrap(),
+                &sp,
+                "Level 1",
+                &rect(250.0, 10.0, 280.0, 40.0),
+                "CLOSET",
+                v(0.0, 0.0),
+                &["number:203".to_string()],
+            );
+            assert!(closet.is_some());
             let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
             let mut rooms = vec![
                 json!({"name": "STUDY", "number": "202", "level": "1", "sheet": "A-1", "at": [360.0, 120.0], "outline": pts(&rect(240.0, 0.0, 480.0, 240.0))}),
@@ -34833,7 +34846,11 @@ mod tests {
         rooms.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(
             rooms,
-            vec![("HALL".to_string(), Some("201".to_string()), 240.0 * 240.0), ("STUDY".to_string(), Some("202".to_string()), 240.0 * 240.0)]
+            vec![
+                ("CLOSET".to_string(), Some("203".to_string()), 30.0 * 30.0),
+                ("HALL".to_string(), Some("201".to_string()), 240.0 * 240.0),
+                ("STUDY".to_string(), Some("202".to_string()), 240.0 * 240.0)
+            ]
         );
         // The hall laid again keeps its tags.
         let hall = s.doc().unwrap().model.iter().find(|e| super::super::bspec::room_tag(e, "number:") == Some("201")).cloned().unwrap();
