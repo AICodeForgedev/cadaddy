@@ -3551,6 +3551,9 @@ menu	Modify	Edita
 	= (block=output file)	= (blocco=file di output)
 	* (whole drawing)	* (intero disegno)
 	Requires an integer between 0 and 16.	È richiesto un intero tra 0 e 16.
+	3D BIM	BIM 3D
+	Show 3D BIM	Mostra BIM 3D
+	This drawing holds a built model.	Questo disegno contiene un modello costruito.
 	Correct Job Sheet Index	Correggi l'indice delle tavole del lavoro
 	Refrigerant Piping	Tubazioni del refrigerante
 	Hydronic Piping	Tubazioni idroniche

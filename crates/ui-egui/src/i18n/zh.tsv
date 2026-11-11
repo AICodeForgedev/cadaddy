@@ -3553,6 +3553,9 @@
 	= (block=output file)	= (块=输出文件)
 	* (whole drawing)	* (整个图形)
 	Requires an integer between 0 and 16.	需要 0 到 16 之间的整数。
+	3D BIM	三维 BIM
+	Show 3D BIM	显示三维 BIM
+	This drawing holds a built model.	此图形包含已生成的模型。
 	Correct Job Sheet Index	更正作业图纸索引
 	Refrigerant Piping	制冷剂管道
 	Hydronic Piping	水系统管道

@@ -12,6 +12,10 @@
 //!   system, circuit, quantity, source sheet and spot, linked issues) and where it is (plan
 //!   point, bottom and top, height above its floor, host wall and face); `open_source` goes to
 //!   it on the sheet.
+//! - `view.bim3d` (View ▸ 3D BIM, Q6310): all of it in one click — the BIM view on in the
+//!   whole-building MEP view, the shell ghosted, trade colours, shaded with edges, the detail
+//!   the view allows (no fixed fidelity tier holding it back), from the south-west, zoomed to
+//!   the building.
 //!
 //! The settings live in the building spec (`bim_view`). [`display`] is what the 3D view and
 //! `model.render` draw: a drawing holding only the built model (the objects shared, not
@@ -872,6 +876,94 @@ fn run_look(s: &mut Session, p: &Value) -> Result<Value> {
         out["deselected"] = json!(deselected);
     }
     Ok(out)
+}
+
+// ─── view.bim3d ──────────────────────────────────────────────────────────────
+
+/// View ▸ 3D BIM: registered with the View menu's 3D commands ([`super::view::view3d`]), so it
+/// stands above 3D Views.
+pub(crate) fn bim3d_spec() -> CommandSpec {
+    CommandSpec::new("view.bim3d", "3D BIM", run_bim3d).menu(&["View", "3D BIM"]).params(
+        "{} → {view, full, level, room, drawn, total, ghost, style, fidelity, dir, label, deselected?}: the built model in 3D in one click: the BIM view on in the whole-building MEP view (Full MEP as it was), the shell ghosted, trade colours, shaded with edges, the detail the view allows (a fixed view.fidelity tier is let go), from the south-west, zoomed to the building",
+    )
+}
+
+fn run_bim3d(s: &mut Session, _p: &Value) -> Result<Value> {
+    const CMD: &str = "view.bim3d";
+    if !has_model(s.doc()?) {
+        return Err(bad(CMD, "nothing has been built yet: model.build or a job builds the 3D model this view shows"));
+    }
+    {
+        let st = s.state()?;
+        if st.block_edit.is_some() {
+            return Err(bad(CMD, "close the Block Editor first"));
+        }
+        if st.space != cadaddy_doc::Space::Model || st.mspace.is_some() {
+            s.execute("layout.set", &json!({ "name": "Model" }))?;
+        }
+    }
+    let mut look = Look::of(s.doc()?);
+    look.off = false;
+    look.ghost = Some(true);
+    look.sheet = false;
+    look.apart = false;
+    look.follow = None;
+    super::bimviews::set_view(&mut look, super::bimviews::View::Mep);
+    let deselected = save(s, &look)?;
+    let style = cadaddy_render::shade::VisualStyle::ShadedEdges;
+    let st = s.state_mut()?;
+    st.visual_style = style;
+    // The view decides what is drawn (Q6419); a tier fixed earlier would hold its MEP back.
+    st.fidelity.mode = None;
+    s.touch();
+    let dir = cadaddy_geom::view3::preset("swiso").unwrap_or(Vec3::new(-1.0, -1.0, 1.0));
+    let turned = super::view::view3d::set_dir(s, dir, false)?;
+    zoom_to_building(s)?;
+    let d = s.doc()?;
+    let mut out = super::bimviews::view_json(d, &look);
+    out["ghost"] = json!(true);
+    out["style"] = json!(style.name());
+    out["fidelity"] = json!("auto");
+    out["dir"] = turned.get("dir").cloned().unwrap_or(Value::Null);
+    out["label"] = turned.get("label").cloned().unwrap_or(Value::Null);
+    if deselected > 0 {
+        out["deselected"] = json!(deselected);
+    }
+    Ok(out)
+}
+
+/// Zooms the 3D view to the building as the BIM view draws it: framed on its shell (floors,
+/// walls, columns, roofs) as `model.render` frames it, so an object a reader left far off the
+/// building doesn't shrink it to a speck. Zoom Extents when there is no shell.
+fn zoom_to_building(s: &mut Session) -> Result<()> {
+    let ext = {
+        let st = s.state()?;
+        match (st.projection(), display(&st.doc)) {
+            (Some(p), Some(shown)) => {
+                let (_, shell) = super::verify::shell_boxes(&shown);
+                if shell.is_empty() {
+                    None
+                } else {
+                    let frame = shell.expand(0.05 * shell.width().max(shell.height()));
+                    let mut near = Drawing::new_imperial();
+                    for e in shown.model.iter() {
+                        let b = cadaddy_doc::entity_bounds(&shown, e, 0);
+                        if !b.is_empty() && b.min.x <= frame.max.x && b.max.x >= frame.min.x && b.min.y <= frame.max.y && b.max.y >= frame.min.y {
+                            near.model.push_shared(Arc::clone(e));
+                        }
+                    }
+                    Some(super::view::view3d::projected_extents(&near, &p)).filter(|b| !b.is_empty())
+                }
+            }
+            _ => None,
+        }
+    };
+    let Some(ext) = ext else { return s.zoom_extents() };
+    let (px, inset) = (s.viewport_px, s.viewport_inset_px);
+    let st = s.state_mut()?;
+    let view = crate::framed(ext, px, inset, |a| st.zoom_aspect(a), 1.05);
+    st.set_zoom_frame(view);
+    Ok(())
 }
 
 // ─── bim.trades ──────────────────────────────────────────────────────────────

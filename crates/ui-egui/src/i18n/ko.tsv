@@ -3478,6 +3478,9 @@ menu	Modify	수정
 	= (block=output file)	= (블록=출력 파일)
 	* (whole drawing)	* (전체 도면)
 	Requires an integer between 0 and 16.	0에서 16 사이의 정수가 필요합니다.
+	3D BIM	3D BIM
+	Show 3D BIM	3D BIM 보기
+	This drawing holds a built model.	이 도면에는 생성된 모델이 있습니다.
 	Correct Job Sheet Index	작업 도면 목록 수정
 	Refrigerant Piping	냉매 배관
 	Hydronic Piping	냉온수 배관

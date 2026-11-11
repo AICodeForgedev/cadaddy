@@ -14,8 +14,9 @@ use cadaddy_render::shade::VisualStyle;
 type CommandFn = fn(&mut Session, &Value) -> Result<Value>;
 
 pub(super) fn specs() -> Vec<CommandSpec> {
-    // View ▸ 3D Views, in AutoCAD's order.
+    // View ▸ 3D BIM (the built model in one click), then View ▸ 3D Views, in AutoCAD's order.
     let mut v = vec![
+        super::super::bimlook::bim3d_spec(),
         CommandSpec::new("view.top", "Top", |s, _| preset_view(s, "top")).menu(&["View", "3D Views", "Top"]).noundo().transparent(),
         CommandSpec::new("view.bottom", "Bottom", |s, _| preset_view(s, "bottom")).menu(&["View", "3D Views", "Bottom"]).noundo().transparent(),
         CommandSpec::new("view.left", "Left", |s, _| preset_view(s, "left")).menu(&["View", "3D Views", "Left"]).noundo().transparent(),

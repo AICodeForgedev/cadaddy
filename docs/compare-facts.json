@@ -1200,6 +1200,7 @@
       "ve.study",
       "view",
       "view.back",
+      "view.bim3d",
       "view.bottom",
       "view.dir",
       "view.fidelity",
@@ -1282,7 +1283,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 548,
+    "inMenus": 549,
     "typed": 565
   },
   "features": {

@@ -2205,6 +2205,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let sent = draw_list(&painter, &xf_paper, list, bg, app.session.settings.lwdisplay);
         app.canvas.stats.drew(list, app.canvas.list_gen, &xf_paper.world_bounds(), Some(sent));
     }
+    // A drawing opened holding a built model offers its 3D BIM view on the plan.
+    crate::shaded::offer_bim3d(app, ui, &xf);
     if let Some(vp) = &active_vp {
         // The active viewport: a heavy border, highlights in model units clipped to it.
         let r = Rect::from_two_pos(
