@@ -303,9 +303,7 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|x| {
-            x["trade"] != "concrete" && x["element"].as_str().is_some_and(|e| e.starts_with("device:") || device_handles.contains(e))
-        })
+        .filter(|x| x["trade"] != "concrete" && x["element"].as_str().is_some_and(|e| e.starts_with("device:") || device_handles.contains(e)))
         .count();
     assert_eq!(units + others as f64, (inserted + site) as f64, "the BOM counts the model's devices: {lines:#?} by others {others}");
     assert!(lines.iter().all(|l| l["level"].as_str().is_some_and(|v| !v.is_empty())));

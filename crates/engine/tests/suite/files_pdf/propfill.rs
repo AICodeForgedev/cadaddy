@@ -409,8 +409,7 @@ fn the_take_off_buys_what_the_code_rules_decided() {
     let id = ha[0].clone();
     let item = |s: &mut Session| -> String {
         let b = s.execute("bim.bom", &json!({})).unwrap();
-        // Its line: counted by the spec device (`sources`, Q6529).
-        let on = |l: &&Value| l["category"] == "devices" && l["sources"].as_array().is_some_and(|e| e.iter().any(|x| x == id.as_str()));
+        let on = |l: &&Value| l["category"] == "devices" && l["elements"].as_array().is_some_and(|e| e.iter().any(|x| x == id.as_str()));
         b["lines"].as_array().unwrap().iter().find(on).unwrap()["item"].as_str().unwrap().to_string()
     };
     assert_eq!(item(&mut s), "duplex receptacle");

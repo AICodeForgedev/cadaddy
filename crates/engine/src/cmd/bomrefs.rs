@@ -26,6 +26,9 @@ pub(crate) struct Refs {
     by_run: HashMap<String, Vec<String>>,
     /// Each spec run's base id, by its index.
     run_bases: Vec<String>,
+    /// Each device element's spec device id (`devid`), by its handle: a line counted by the
+    /// element keeps the documents' id beside its handle.
+    devid_of: HashMap<String, String>,
 }
 
 fn push(map: &mut HashMap<String, Vec<String>>, key: &str, h: &str) {
@@ -50,6 +53,9 @@ impl Refs {
                 && let Some(id) = super::fieldview::tag_value(&tags, "devid")
             {
                 push(&mut r.by_id, id, &h);
+                if !id.trim().is_empty() && r.devid_of.len() < MAX_BUILT {
+                    r.devid_of.insert(h.clone(), id.trim().to_string());
+                }
             }
             if let Some(name) = super::bimlook::made_name(e) {
                 push(&mut r.by_id, name, &h);
@@ -90,19 +96,29 @@ impl Refs {
     }
 }
 
-/// A line's ids as handles: the objects they name (in order, each once), the ids that are not
-/// handles (the documents' ids, as the line gave them), and how many of those name no object.
+/// A line's ids as handles: the objects they name (in order, each once), the documents' ids
+/// (each once: the ids that are not handles, as the line gave them, and the spec device a
+/// device element was built from), and how many of the line's ids name no object.
 pub(crate) fn split(refs: &Refs, d: &Drawing, ids: &[String]) -> (Vec<String>, Vec<String>, usize) {
     let mut handles = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut sources = Vec::new();
+    let mut sources: Vec<String> = Vec::new();
+    let mut named = std::collections::HashSet::new();
     let mut unresolved = 0usize;
     for id in ids {
         let own = Handle::parse_hex(id.trim()).filter(|h| d.entity(*h).is_some() && !refs.by_id.contains_key(&id.trim().to_ascii_uppercase()));
         let hs = if let Some(h) = own {
+            // A device element: the spec device it was built from beside it (once per line).
+            if let Some(dev) = refs.devid_of.get(&h.hex())
+                && named.insert(dev.clone())
+            {
+                sources.push(dev.clone());
+            }
             vec![h.hex()]
         } else {
-            sources.push(id.clone());
+            if named.insert(id.clone()) {
+                sources.push(id.clone());
+            }
             refs.resolve(d, id)
         };
         if hs.is_empty() {
@@ -155,5 +171,33 @@ mod tests {
         let ids = vec![panel[0].clone(), "run:0".into(), "NO-SUCH-TAG".into()];
         let (hs, sources, unresolved) = split(&refs, d, &ids);
         assert_eq!((hs.len(), sources, unresolved), (1 + atoms, vec!["run:0".to_string(), "NO-SUCH-TAG".to_string()], 1));
+    }
+    /// A device element named by its handle keeps the spec device it was built from beside it,
+    /// once however many of the line's ids name it.
+    #[test]
+    fn a_device_elements_handle_keeps_its_spec_device_id() {
+        let mut s = built();
+        let mut tags = crate::cmd::wallgen::tag(cadaddy_walk3d::Part::Device, "1", cadaddy_doc::Handle(0));
+        tags.push(cadaddy_doc::RawTag { code: 1000, value: "devid:device:L1:4.0,2.0".into() });
+        let xdata = cadaddy_doc::props::write(&tags, &cadaddy_doc::props::Props::default());
+        let mut m = crate::cmd::wallgen::empty_mesh();
+        crate::cmd::wallgen::add_box(&mut m, cadaddy_geom::Vec2::new(0.0, 0.0), cadaddy_geom::Vec2::new(4.0, 0.0), 2.0, 16.0, 20.0);
+        let common = cadaddy_doc::Common { layer: "3D-Devices".into(), xdata: xdata.into(), ..Default::default() };
+        let h = s
+            .doc_mut()
+            .unwrap_or_else(|e| panic!("{e}"))
+            .add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Mesh(m))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .hex();
+        let (sp, _) = crate::cmd::bspec::current(&s, "test").unwrap_or_else(|e| panic!("{e}"));
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let refs = Refs::of(d, &sp);
+        // By its handle (twice, as a merged line may) and by its spec id: one element, one id.
+        let (hs, sources, unresolved) = split(&refs, d, &[h.clone(), h.clone(), "device:L1:4.0,2.0".into()]);
+        assert_eq!((hs, sources, unresolved), (vec![h.clone()], vec!["device:L1:4.0,2.0".to_string()], 0));
+        // An object that is no device element names no document id.
+        let panel = refs.resolve(d, "PNL-9");
+        let (_, sources, _) = split(&refs, d, &panel);
+        assert!(sources.is_empty(), "{sources:?}");
     }
 }
