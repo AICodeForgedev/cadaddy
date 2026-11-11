@@ -34794,7 +34794,7 @@ mod tests {
         let v = cadaddy_geom::Vec2::new;
         let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![v(x0, y0), v(x1, y0), v(x1, y1), v(x0, y1)];
         let pts = |o: &[cadaddy_geom::Vec2]| -> Vec<[f64; 2]> { o.iter().map(|p| [p.x, p.y]).collect() };
-        // The floor plan: a hall (0..240) open to a lounge beside it (240..480); the build's trace
+        // The floor plan: a hall (0..240) open to a study beside it (240..480); the build's trace
         // of the hall ran through the opening over both.
         let setup = |hall_traced: bool| {
             let mut s = Session::empty();
@@ -34812,7 +34812,7 @@ mod tests {
             assert!(over.is_some());
             let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
             let mut rooms = vec![
-                json!({"name": "LOUNGE", "number": "202", "level": "1", "sheet": "A-1", "at": [360.0, 120.0], "outline": pts(&rect(240.0, 0.0, 480.0, 240.0))}),
+                json!({"name": "STUDY", "number": "202", "level": "1", "sheet": "A-1", "at": [360.0, 120.0], "outline": pts(&rect(240.0, 0.0, 480.0, 240.0))}),
             ];
             if hall_traced {
                 rooms.push(json!({"name": "HALL", "number": "201", "level": "1", "sheet": "A-1", "at": [120.0, 120.0], "outline": pts(&rect(0.0, 0.0, 240.0, 240.0))}));
@@ -34833,13 +34833,13 @@ mod tests {
         rooms.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(
             rooms,
-            vec![("HALL".to_string(), Some("201".to_string()), 240.0 * 240.0), ("LOUNGE".to_string(), Some("202".to_string()), 240.0 * 240.0)]
+            vec![("HALL".to_string(), Some("201".to_string()), 240.0 * 240.0), ("STUDY".to_string(), Some("202".to_string()), 240.0 * 240.0)]
         );
         // The hall laid again keeps its tags.
         let hall = s.doc().unwrap().model.iter().find(|e| super::super::bspec::room_tag(e, "number:") == Some("201")).cloned().unwrap();
         assert_eq!(super::super::bspec::room_tag(&hall, "finish:"), Some("CPT-1"));
         assert!(super::super::bspec::room_tag(&hall, "basis:").is_some_and(|b| b.contains("ran over room 202")));
-        // No trace of the hall's own: the lounge is reported, the hall left as it is.
+        // No trace of the hall's own: the study is reported, the hall left as it is.
         let (mut s, job) = setup(false);
         let (n, not_built) = build_kept_rooms(&mut s, &job, Some(&shells)).unwrap();
         assert_eq!(n, 0);
