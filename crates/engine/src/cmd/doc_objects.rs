@@ -95,6 +95,8 @@ pub(crate) struct Rules {
     pub classes: Vec<Class>,
     pub connections: Vec<Connection>,
     pub not_new_words: Vec<String>,
+    /// The model's kinds of runs (`conduit`, `pipe`, `duct`): never an object of a class.
+    pub run_kinds: Vec<String>,
     /// `ALL`, `EACH`: a note naming a class after one speaks of every one there is (a rule), not
     /// of new ones.
     pub all_words: Vec<String>,
@@ -177,6 +179,12 @@ pub(crate) fn same_noun(class: &Class, meaning: &str) -> bool {
         .iter()
         .filter_map(|g| g.last())
         .any(|n| w.iter().any(|x| x.eq_ignore_ascii_case(n) || x.strip_suffix('S').is_some_and(|y| y.eq_ignore_ascii_case(n))))
+}
+
+/// Whether an element kind is a run's (a conduit, a pipe, a duct: the rules' `run_kinds`): a run
+/// whose words name a class (a note's stub-up to the chargers) is none of its objects.
+pub(crate) fn is_run_kind(kind: &str) -> bool {
+    rules().run_kinds.iter().any(|k| k.eq_ignore_ascii_case(kind.trim()))
 }
 
 /// A class by its element kind.
@@ -397,7 +405,14 @@ pub(crate) fn of_another_schedule(code: &str, number: &str, class: &Class, sched
 
 /// How many objects a note gives (`(2) EV CHARGING STATIONS`, `TWO SITE CAMERAS`,
 /// `… STATIONS (QTY 2)`), 1 when it doesn't say; capped by the rules.
+#[cfg(test)]
 pub(crate) fn note_count(text: &str, class: &Class) -> u32 {
+    note_count_given(text, class).unwrap_or(1)
+}
+
+/// The count a note gives for its class, `None` when it gives none (`PROVIDE POWER FOR EV
+/// CHARGERS`): a note naming a class without a number says nothing of how many there are.
+pub(crate) fn note_count_given(text: &str, class: &Class) -> Option<u32> {
     let r = rules();
     let cap = r.max_note_count.max(1);
     let w = words(text);
@@ -412,15 +427,14 @@ pub(crate) fn note_count(text: &str, class: &Class) -> u32 {
     if let Some(n) = before {
         // `ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR`: each `AND <count>` after it is more of it.
         let more: u32 = w.windows(2).skip(at).filter(|p| p.first().is_some_and(|x| x == "AND")).filter_map(|p| p.get(1).and_then(count_of)).sum();
-        return n.saturating_add(more).min(cap);
+        return Some(n.saturating_add(more).min(cap));
     }
     // `(QTY 2)` / `QTY: 2` anywhere.
-    if let Some(i) = w.iter().position(|x| x == "QTY" || x == "QUANTITY")
-        && let Some(n) = w.get(i + 1).and_then(|x| x.parse::<u32>().ok()).filter(|n| (1..=cap).contains(n))
-    {
-        return n;
-    }
-    1
+    w.iter()
+        .position(|x| x == "QTY" || x == "QUANTITY")
+        .and_then(|i| w.get(i + 1))
+        .and_then(|x| x.parse::<u32>().ok())
+        .filter(|n| (1..=cap).contains(n))
 }
 
 /// An object a note names.
@@ -428,6 +442,8 @@ pub(crate) fn note_count(text: &str, class: &Class) -> u32 {
 pub(crate) struct Named {
     pub class: &'static Class,
     pub count: u32,
+    /// The count the note gives in so many words, `None` when it gives none (`count` is then 1).
+    pub given: Option<u32>,
     /// What connects it (`power`), empty when the note says nothing of it.
     pub via: &'static str,
     /// The note speaks of every one there is (`ALL ROOFTOP UNITS SHALL SHUT DOWN`): a rule, not a call
@@ -457,7 +473,8 @@ pub(crate) fn note_objects(text: &str) -> Vec<Named> {
         let first = c.words.iter().filter_map(|g| g.first()).filter_map(|f| w.iter().position(|x| x.eq_ignore_ascii_case(f))).min().unwrap_or(0);
         let all = w.get(first.saturating_sub(2)..first).unwrap_or(&[]).iter().any(|x| r.all_words.iter().any(|a| a.eq_ignore_ascii_case(x)));
         let rooms = if all { Vec::new() } else { room_type_after(&w, first) };
-        out.push(Named { class: c, count: note_count(part, c), via: connection_via(part).unwrap_or(via), all, rooms });
+        let given = note_count_given(part, c);
+        out.push(Named { class: c, count: given.unwrap_or(1), given, via: connection_via(part).unwrap_or(via), all, rooms });
     }
     out
 }
@@ -850,6 +867,17 @@ mod tests {
         assert_eq!(one("PROVIDE ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR").map(|n| n.1), Some(2));
         // A bare number far from the words is no count.
         assert_eq!(note_count("CIRCUIT 12 TO PANEL; PROVIDE SUMP PUMP CONNECTION", class_by_kind("sump_pump").unwrap()), 1);
+        // A count said in words or figures is given; none said is none given (counted as 1, the
+        // plans' count governs) (fix-note-proposal-beside-drawn-devices).
+        let given = |t: &str| note_objects(t).into_iter().next().map(|n| (n.class.kind.clone(), n.given));
+        assert_eq!(given("PROVIDE POWER FOR ELECTRIC VEHICLE CHARGERS."), Some(("ev_charging_station".into(), None)));
+        assert_eq!(given("PROVIDE (5) EV CHARGERS"), Some(("ev_charging_station".into(), Some(5))));
+        assert_eq!(given("PROVIDE POWER FOR TWO SITE CAMERAS ON THE POLE"), Some(("site_camera".into(), Some(2))));
+        assert_eq!(given("SUMP PUMP (QTY 3): 120V CONNECTION").and_then(|g| g.1), Some(3));
+        // The site plan's charger is the class's; a stub-up run naming it is no object of it.
+        let ev = class_by_kind("ev_charging_station").unwrap();
+        assert!(is_class(ev, "ev_charger", ""));
+        assert!(is_run_kind("conduit") && is_run_kind("Pipe") && !is_run_kind("equipment"));
     }
 
     #[test]

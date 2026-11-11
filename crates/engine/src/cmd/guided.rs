@@ -8251,21 +8251,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["dampers_error"] = json!(e.to_string());
     }
     bim_step(s, job, "dampers", t);
-    // The other objects the documents define and mark (duct detectors, door holders, keynoted
-    // sensors and signs, objects a connection note names) (Q6192).
-    let t = web_time::Instant::now();
-    if let Err(e) = doc_objects_step(s, job, &pages, placer.as_deref(), &mut result) {
-        result["doc_objects_error"] = json!(e.to_string());
-    }
-    bim_step(s, job, "documented objects", t);
-    // The trades' plans of the site (Q6358): pole lights, site gear where the site plan draws it,
-    // the buried runs between them and the site circuits' home runs; before the feeder routes,
-    // so a site transformer's feeder leaves from where the site plan puts it.
-    let t = web_time::Instant::now();
-    if let Err(e) = site_work_step(s, job, &mut result) {
-        result["site_work_error"] = json!(e.to_string());
-    }
-    bim_step(s, job, "site work", t);
+    site_then_documented_objects(s, job, &pages, placer.as_deref(), &mut result);
     // The feeders' conduit, gear to gear (proposed).
     let t = web_time::Instant::now();
     if let Err(e) = feeder_step(s, job, &mut result) {
@@ -20603,6 +20589,35 @@ fn dampers_step(
 /// for a class nothing marks, one per the count of the note that names it, proposed. Each gets
 /// the connection its notes give (an equipment connection box on the circuit named, a fire alarm
 /// module, a data outlet); one the model already has there is left alone.
+/// The trades' plans of the site, then the objects the documents define and mark.
+///
+/// The site (Q6358): pole lights, site gear where the site plan draws it, the buried runs
+/// between them and the site circuits' home runs; before the feeder routes, so a site
+/// transformer's feeder leaves from where the site plan puts it. Before the documented objects
+/// (fix-note-proposal-beside-drawn-devices): a class the site plan draws (its EV chargers) is in
+/// the model when a note names it, so the note proposes none beside the drawn ones.
+///
+/// The documented objects (Q6192): duct detectors, door holders, keynoted sensors and signs,
+/// objects a connection note names.
+fn site_then_documented_objects(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    pages: &[(String, cadaddy_doc::Drawing)],
+    place: Option<&dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>,
+    result: &mut Value,
+) {
+    let t = web_time::Instant::now();
+    if let Err(e) = site_work_step(s, job, result) {
+        result["site_work_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "site work", t);
+    let t = web_time::Instant::now();
+    if let Err(e) = doc_objects_step(s, job, pages, place, result) {
+        result["doc_objects_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "documented objects", t);
+}
+
 fn doc_objects_step(
     s: &mut Session,
     job: &mut GuidedJob,
@@ -20862,6 +20877,16 @@ fn doc_objects_step(
         .filter(|t| !t.tag.trim().is_empty())
         .map(|t| (t.tag.trim().to_ascii_uppercase(), format!("{} {}", t.description, t.installation)))
         .collect();
+    // The spec's equipment by its tag: its kind and title (a site plan's charger is built as
+    // `equipment`; its spec row says it is an `ev_charger`, `EV CHARGER`).
+    let equipment_words: BTreeMap<String, String> = sp
+        .mep
+        .equipment
+        .iter()
+        .take(200_000)
+        .filter(|e| !e.tag.trim().is_empty())
+        .map(|e| (e.tag.trim().to_ascii_uppercase(), format!("{} {}", e.kind.replace('_', " "), e.title)))
+        .collect();
     let existing: Vec<(String, String, String, Vec2, String)> = {
         let d = s.doc()?;
         let text_of = |e: &cadaddy_doc::Entity, k: &str| cadaddy_doc::props::read(&e.common.xdata).get(k).map(|p| p.text()).unwrap_or_default();
@@ -20884,6 +20909,9 @@ fn doc_objects_step(
                 let mut ty = words_of(e);
                 if let Some(x) = source {
                     ty = format!("{ty} {}", words_of(x));
+                }
+                if let Some(w) = super::bimlook::made_tag(e, "tag").and_then(|t| equipment_words.get(&t.trim().to_ascii_uppercase())) {
+                    ty = format!("{ty} {w}");
                 }
                 // Its type's schedule row.
                 let marks: Vec<String> = [Some(e), source]
@@ -21014,8 +21042,9 @@ fn doc_objects_step(
     }
     notes.truncate(20_000);
     let panels: Vec<String> = sp.mep.panel_schedules.iter().map(|p| p.panel.clone()).collect();
-    // class → (count, via, sheet, level, text): the note giving it the most.
-    let mut named: BTreeMap<String, (u32, String, String, String, String)> = BTreeMap::new();
+    // class → (count, via, sheet, level, text, the count the note gives in words): the note
+    // giving it the most.
+    let mut named: BTreeMap<String, (u32, String, String, String, String, Option<u32>)> = BTreeMap::new();
     // class → (via, the note): what connects it, for the ones the plans mark too.
     let mut connected: BTreeMap<String, (String, String, Option<(String, String)>)> = BTreeMap::new();
     // class → the notes speaking of every one there is (a rule, no new object).
@@ -21043,11 +21072,11 @@ fn doc_objects_step(
                 }
                 continue;
             }
-            let e = named.entry(class.kind.clone()).or_insert((0, via.to_string(), number.clone(), level.clone(), cite.clone()));
+            let e = named.entry(class.kind.clone()).or_insert((0, via.to_string(), number.clone(), level.clone(), cite.clone(), nm.given));
             // The note connecting it first (a note merely naming it says nothing of it), then the
             // larger count.
             if (!via.is_empty() && e.1.is_empty()) || (n > e.0 && via.is_empty() == e.1.is_empty()) {
-                *e = (n, via.to_string(), number.clone(), level.clone(), cite);
+                *e = (n, via.to_string(), number.clone(), level.clone(), cite, nm.given);
             }
         }
     }
@@ -21084,9 +21113,34 @@ fn doc_objects_step(
     });
     let mut proposed: Vec<String> = Vec::new();
     let mut proposed_not_placed: Vec<Value> = Vec::new();
-    for (kind, (n, via, number, level, cite)) in &named {
+    // A class the plans draw is counted from the plans: a note naming it proposes none of it
+    // (fix-note-proposal-beside-drawn-devices). A note giving a count of its own that the
+    // drawn count isn't is a question for review, never more objects.
+    let mut note_counts_differ: Vec<Value> = Vec::new();
+    for (kind, (n, via, number, level, cite, given)) in &named {
         let Some(class) = dob::class_by_kind(kind) else { continue };
-        if marked.contains(kind) || already.contains_key(kind) || existing.iter().any(|(k, ty, _, _, _)| dob::is_class(class, k, ty)) {
+        // (the note's level's when its sheet has one; a general note's, the whole set's)
+        let on_level = |l: &str| level.is_empty() || same_level_name(l, level);
+        // The objects of the class the model has (a run whose words name it, a note's stub-up
+        // to the chargers, is none), an object and its parts in one place counted once; with
+        // the marks read not paired with one of them.
+        let objects: Vec<(&str, Vec2)> = existing
+            .iter()
+            .filter(|(k, ty, _, _, _)| !dob::is_run_kind(k) && dob::is_class(class, k, ty))
+            .map(|(_, _, l, at, _)| (l.as_str(), *at))
+            .collect();
+        let places = dob::places(&objects, r.dedupe_ft * upf);
+        let modelled: BTreeSet<usize> = objects.iter().zip(&places).filter(|((l, _), _)| on_level(l)).map(|(_, p)| *p).collect();
+        let drawn = found.iter().filter(|f| f.kind == *kind && f.how != How::Note && on_level(&f.level)).count() + modelled.len();
+        let any_drawn = marked.contains(kind) || already.contains_key(kind) || !objects.is_empty();
+        if any_drawn {
+            if let Some(g) = given.filter(|g| drawn > 0 && usize::try_from(*g).ok() != Some(drawn))
+                && note_counts_differ.len() < MAX_NOTE_COUNT_RFIS
+            {
+                note_counts_differ.push(json!({
+                    "kind": kind, "name": class.name, "note_count": g, "drawn": drawn, "level": level, "sheet": number, "note": cite,
+                }));
+            }
             continue;
         }
         // Only a connection note makes an object nothing draws (a note merely naming it is no
@@ -21125,6 +21179,47 @@ fn doc_objects_step(
             });
         }
         proposed.push(format!("{n} {} ({cite})", class.name));
+    }
+    // Each note whose count isn't the drawn count: one review item, the plan's count built.
+    let mut count_rfis: Vec<String> = Vec::new();
+    for v in &note_counts_differ {
+        let text = |k: &str| v[k].as_str().unwrap_or("").to_string();
+        let (name, note, sheet) = (text("name"), text("note"), text("sheet"));
+        let (said, drawn) = (v["note_count"].as_u64().unwrap_or(0), v["drawn"].as_u64().unwrap_or(0));
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in format!("{}|{note}", text("kind")).bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let id = format!("RFI-N{:08x}", h as u32);
+        let kind = cadaddy_walk3d::RfiKind::Conflict;
+        let rfi = cadaddy_walk3d::Rfi {
+            id: id.clone(),
+            kind: Some(kind),
+            severity: kind.severity(),
+            level: text("level"),
+            sheets: if sheet.is_empty() { Vec::new() } else { vec![sheet.clone()] },
+            about: format!("{name}: how many"),
+            issue: format!("A note calls for {said} {name}(s); the plans draw {drawn}."),
+            assumed: format!("The model has the {drawn} the plans draw, where they draw them; the note's {said} is kept here until answered."),
+            proposed: Some(format!("Confirm the count: {drawn} as drawn, or show where the others go")),
+            topic: "documented objects: note count against the plans".into(),
+            sides: vec![
+                cadaddy_walk3d::RfiSide { document: note.chars().take(KEYNOTE_TEXT_CHARS).collect(), says: format!("{said} {name}(s)") },
+                cadaddy_walk3d::RfiSide { document: "the plans".into(), says: format!("{drawn} drawn") },
+            ],
+            ..cadaddy_walk3d::Rfi::default()
+        };
+        let room = sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS;
+        match sp.rfis.iter_mut().find(|r| r.id == id) {
+            Some(old) => {
+                old.issue = rfi.issue;
+                old.assumed = rfi.assumed;
+                old.sides = rfi.sides;
+            }
+            None if room => sp.rfis.push(rfi),
+            None => continue,
+        }
+        count_rfis.push(format!("{id}: {name}, the note {said}, the plans {drawn}"));
     }
     // A class a note calls for in every room of a type: in each such room the plans mark none of
     // and the model has none of, its place in the room not drawn.
@@ -21321,7 +21416,11 @@ fn doc_objects_step(
             props.insert("ROOM".into(), room.clone());
         }
         if f.how == How::Note {
+            // No plan draws it: its count and place are the note's, unsure until checked.
             props.insert("STATUS".into(), "proposed".into());
+            props.insert("PROVENANCE".into(), "inferred".into());
+            props.insert("CERTAINTY".into(), "unsure".into());
+            props.insert("BASIS".into(), format!("inferred from a note, no plan draws it: {}", f.source));
         }
         // A note calls for it in every room of a type and no plan draws it there: derived from the
         // note, its place in the room not drawn (Q6216).
@@ -21478,7 +21577,7 @@ fn doc_objects_step(
                 "tag": tag, "kind": class.kind, "read_as": f.how.label(), "sheet": f.sheet, "also_on": f.also, "level": f.level, "room": room,
                 "code": f.code, "documents_call_it": f.meaning.chars().take(120).collect::<String>(), "source": f.source,
                 "at_ft": [(at.x / upf * 10.0).round() / 10.0, (at.y / upf * 10.0).round() / 10.0], "bottom_ft": (bottom * 100.0).round() / 100.0,
-                "scope": scope, "connection": conn, "fa_modules": modules, "remote_test_station": rts, "proposed": f.how == How::Note, "type_mark": f.type_mark,
+                "scope": scope, "connection": conn, "fa_modules": modules, "remote_test_station": rts, "proposed": f.how == How::Note, "unsure": f.how == How::Note, "type_mark": f.type_mark,
             }));
         }
     }
@@ -21494,6 +21593,20 @@ fn doc_objects_step(
             ),
             1,
             vec!["Check each place against the plans; move one the plans put elsewhere".into()],
+            None,
+            false,
+        );
+    }
+    if !count_rfis.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} note(s) give a count of objects the plans draw a different number of: asked, the drawn ones built", count_rfis.len()),
+            &format!(
+                "the plans' count is built (a class a plan draws is counted from the plan), the note's kept on the review item: {}",
+                count_rfis.join("; ")
+            ),
+            2,
+            vec!["review.list {}".into()],
             None,
             false,
         );
@@ -21560,10 +21673,14 @@ fn doc_objects_step(
         "built": total, "by_kind": by_kind, "connection_boxes": boxes, "marks_read": marks_read, "already_in_model": already,
         "proposed": proposed, "proposed_not_placed": proposed_not_placed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
         "sheets": read_by_sheet, "legend_rows": legend_used, "unregistered": unregistered, "tags_of_other_schedules": of_other_schedules,
-        "notes_naming": named.iter().map(|(k, (n, via, sh, _, cite))| json!({"kind": k, "count": n, "via": via, "sheet": sh, "note": cite})).collect::<Vec<_>>(),
+        "notes_naming": named.iter().map(|(k, (n, via, sh, _, cite, given))| json!({"kind": k, "count": n, "count_given": given, "via": via, "sheet": sh, "note": cite})).collect::<Vec<_>>(),
+        "note_counts_differ": note_counts_differ,
     });
     Ok(())
 }
+
+/// The most review items one build asks for notes whose count isn't the plans'.
+const MAX_NOTE_COUNT_RFIS: usize = 50;
 
 /// A level's plan region when it is a place in the building: finite, with area, and not a
 /// placeholder far off every sheet (the no-plan region a level only the MEP plans give takes, an
@@ -33955,6 +34072,118 @@ mod tests {
         assert_eq!(plan_region_of(Some(empty)), None);
         assert_eq!(plan_region_of(None), None);
         assert_eq!(plan_region_of(Some(level)), Some(level));
+    }
+
+    /// fix-note-proposal-beside-drawn-devices: an electrical site plan (made up, 1" = 20') that
+    /// draws and labels two EV chargers, and a general note on it calling for their power. The
+    /// plan's count is built: two chargers where they are drawn, none proposed from the note
+    /// (before the fix the note step ran first and proposed its own beside them: 3, and 7 with a
+    /// note saying five). A note giving another count is a review item, not more chargers. With
+    /// the symbols gone the note's proposal is built, marked inferred and unsure.
+    #[test]
+    fn a_note_proposes_no_objects_of_a_class_the_plan_draws() {
+        use cadaddy_doc::LwPolyline;
+        use cadaddy_geom::PolyVertex;
+        let page = |s: &mut crate::Session, chargers: bool, note: &str| {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let mut add = |layer: &str, kind: EntityKind| {
+                let _ = d.add(&Space::Model, Common { layer: layer.into(), ..Common::default() }, kind);
+            };
+            let rect = |c: [f64; 2], hw: f64, hh: f64| {
+                let v = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+                EntityKind::LwPolyline(LwPolyline {
+                    vertices: v.iter().map(|p| PolyVertex::new(cadaddy_geom::Vec2::new(c[0] + p[0], c[1] + p[1]))).collect(),
+                    closed: true,
+                    const_width: 0.0,
+                    elevation: 0.0,
+                    plinegen: false,
+                })
+            };
+            // The building's outline, as large as the model's walls (80 x 50 ft).
+            add("-BASEC-BUILD", rect([10_480.0, 2_300.0], 480.0, 300.0));
+            if chargers {
+                for x in [10_200.0, 10_500.0] {
+                    add("E-POWR", rect([x, 3_400.0], 24.0, 18.0));
+                    add("E-TEXT", EntityKind::Text(text("EV CHARGER", x + 40.0, 3_395.0, 18.0)));
+                }
+            }
+            add("E-TEXT", EntityKind::Text(text("GENERAL NOTES", 12_600.0, 4_600.0, 24.0)));
+            add("E-TEXT", EntityKind::Text(text(&format!("1. {note}"), 12_600.0, 4_550.0, 18.0)));
+        };
+        let spec = || {
+            let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+            let level: cadaddy_walk3d::Level = serde_json::from_value(
+                json!({"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0, "region": [0.0, 0.0, 2_000.0, 1_500.0]}),
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+            sp.levels = vec![level];
+            sp.shells.insert(
+                "Level 1".into(),
+                vec![[100.0, 100.0, 1_060.0, 106.0], [100.0, 694.0, 1_060.0, 700.0], [100.0, 100.0, 106.0, 700.0], [1_054.0, 100.0, 1_060.0, 700.0]],
+            );
+            sp
+        };
+        // (site chargers, note-proposed chargers, review items, the job's result)
+        let run = |chargers: bool, note: &str| {
+            let mut s = crate::Session::new();
+            page(&mut s, chargers, note);
+            s.doc_mut().unwrap_or_else(|e| panic!("{e}")).building_spec = Some(spec().to_json()).into();
+            let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+            job.sheet_regions = vec![SheetRegion {
+                number: "E-001".into(),
+                level: super::super::sitework::SITE_LEVEL.into(),
+                discipline: "E".into(),
+                kind: "plan".into(),
+                rect: [9_000.0, 1_000.0, 14_000.0, 5_000.0],
+                area: Some([9_000.0, 1_000.0, 14_000.0, 5_000.0]),
+                title_block: None,
+                not_built: "site/civil".into(),
+                levels: Vec::new(),
+                view: None,
+            }];
+            let mut result = json!({});
+            site_then_documented_objects(&mut s, &mut job, &[], None, &mut result);
+            assert!(result.get("site_work_error").is_none() && result.get("doc_objects_error").is_none(), "{result:#}");
+            let (sp, _) = super::super::bspec::current(&s, "test").unwrap_or_else(|e| panic!("{e}"));
+            let site: Vec<cadaddy_walk3d::MepEquipment> = sp.mep.equipment.iter().filter(|e| e.kind == "ev_charger").cloned().collect();
+            let noted: Vec<cadaddy_walk3d::MepEquipment> = sp.mep.equipment.iter().filter(|e| e.kind == "ev_charging_station").cloned().collect();
+            let asked: Vec<cadaddy_walk3d::Rfi> = sp.rfis.iter().filter(|r| r.topic.starts_with("documented objects: note count")).cloned().collect();
+            (site, noted, asked, result)
+        };
+        // The plan draws two; the note gives no count: two, as drawn, none from the note.
+        let (site, noted, asked, result) = run(true, "PROVIDE POWER FOR EV CHARGING STATIONS.");
+        eprintln!("drawn + uncounted note: {} site, {} from the note", site.len(), noted.len());
+        assert_eq!(site.len(), 2, "{:#}", result["site_work"]);
+        assert!(noted.is_empty(), "{noted:#?} {:#}", result["doc_objects"]);
+        assert!(asked.is_empty(), "{asked:?}");
+        assert!(result["doc_objects"]["proposed"].as_array().is_some_and(Vec::is_empty), "{:#}", result["doc_objects"]);
+        // The same in the documents' other words for them.
+        let (site, noted, _, _) = run(true, "PROVIDE POWER FOR ELECTRIC VEHICLE CHARGERS.");
+        assert_eq!((site.len(), noted.len()), (2, 0));
+        // A note saying five: still the two drawn, and one review item with both counts.
+        let (site, noted, asked, result) = run(true, "PROVIDE (5) 50A CIRCUITS FOR EV CHARGING STATIONS.");
+        eprintln!("drawn + note of five: {} site, {} from the note, {} asked", site.len(), noted.len(), asked.len());
+        assert_eq!((site.len(), noted.len()), (2, 0), "{:#}", result["doc_objects"]);
+        assert_eq!(asked.len(), 1, "{:#}", result["doc_objects"]["note_counts_differ"]);
+        let q = asked.first().unwrap_or_else(|| panic!("no review item"));
+        assert_eq!(q.kind, Some(cadaddy_walk3d::RfiKind::Conflict));
+        assert!(q.issue.contains("calls for 5") && q.issue.contains("draw 2"), "{}", q.issue);
+        assert_eq!(q.sides.len(), 2, "{:?}", q.sides);
+        assert_eq!(result["doc_objects"]["note_counts_differ"][0]["drawn"], json!(2), "{:#}", result["doc_objects"]);
+        // Nothing drawn: the note's proposal, one (its count not given), inferred and unsure.
+        let (site, noted, asked, result) = run(false, "PROVIDE POWER FOR ELECTRIC VEHICLE CHARGERS.");
+        eprintln!("note only: {} site, {} from the note", site.len(), noted.len());
+        assert!(site.is_empty() && asked.is_empty());
+        assert_eq!(noted.len(), 1, "{:#}", result["doc_objects"]);
+        let p = noted.first().map(|e| e.properties.clone()).unwrap_or_default();
+        let prop = |k: &str| p.get(k).map(String::as_str);
+        assert_eq!(
+            (prop("DOC_OBJECT"), prop("STATUS"), prop("PROVENANCE"), prop("CERTAINTY")),
+            (Some("note"), Some("proposed"), Some("inferred"), Some("unsure")),
+            "{p:?}"
+        );
+        assert!(prop("BASIS").is_some_and(|b| b.contains("E-001 note")), "{p:?}");
+        assert!(result["doc_objects"]["elements"].as_array().is_some_and(|a| a.iter().any(|e| e["unsure"] == json!(true))));
     }
 
     #[test]
