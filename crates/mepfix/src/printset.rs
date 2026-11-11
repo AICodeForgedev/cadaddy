@@ -153,7 +153,7 @@ fn is_zero(n: &usize) -> bool {
 
 /// A page whose lettering is at least this share strokes the OCR read alone is lettered in
 /// strokes. (A page lettered in text whose OCR also reads its linework (furniture, symbols)
-/// reads well under it: a real hotel set's plans, 0.8 at most.)
+/// reads well under it: a real set's plans lettered in text measured 0.8 at most.)
 pub const STROKE_LETTERED: f64 = 0.9;
 /// A stroke-lettered page read less sure than this (the OCR's mean) reads unsure.
 pub const SURE_READING: f64 = 0.8;

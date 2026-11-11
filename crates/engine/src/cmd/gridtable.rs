@@ -595,7 +595,7 @@ mod tests {
             t(1.1, 9.1, "ML4DM10"),
             t(3.1, 9.1, "PUBLIC SPACES"),
         ];
-        let tables = read_titled(&v, &segs, "light fixture schedule", "E-2");
+        let tables = read_titled(&v, &segs, "light fixture schedule", "E-9");
         assert_eq!(tables.len(), 1);
         assert_eq!(tables[0].headers, ["TAG", "MODEL", "DESCRIPTION"]);
         assert_eq!(tables[0].rows, vec![vec!["A".to_string(), "ML4DM10".into(), "PUBLIC SPACES".into()]]);
