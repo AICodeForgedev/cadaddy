@@ -1274,16 +1274,43 @@ impl PrintLoader {
     }
 
     pub fn load(&self, e: &SheetEntry) -> Result<cadaddy_doc::Drawing, String> {
+        self.load_page(e).map(|p| p.drawing)
+    }
+
+    /// `e`'s page as read, with the sheet's size and the scale the reader drew it at.
+    pub fn load_page(&self, e: &SheetEntry) -> Result<LoadedPage, String> {
         if e.file.split(['/', '\\']).any(|part| part == "..") {
             return Err(format!("{}: outside the project folder", e.file));
         }
         let bytes = self.bytes(e)?;
         if e.file.to_ascii_lowercase().ends_with(".pdf") {
             let opts = cadaddy_io::pdf_read::PdfOptions { page: e.page.max(1), images: false, markups: false, layout: false, ..Default::default() };
-            return cadaddy_io::pdf_read::read(&bytes, &opts).map(|i| i.drawing).map_err(|err| err.to_string());
+            return cadaddy_io::pdf_read::read(&bytes, &opts)
+                .map(|i| LoadedPage {
+                    drawing: i.drawing,
+                    sheet: Some(i.sheet),
+                    scale: i.scale,
+                    scale_source: i.scale_source,
+                    needs_registration: i.needs_registration,
+                })
+                .map_err(|err| err.to_string());
         }
-        cadaddy_io::read(&bytes, &e.file).map_err(|err| err.to_string())
+        cadaddy_io::read(&bytes, &e.file)
+            .map(|d| LoadedPage { drawing: d, sheet: None, scale: 1.0, scale_source: String::new(), needs_registration: false })
+            .map_err(|err| err.to_string())
     }
+}
+
+/// A page as [`PrintLoader::load_page`] read it.
+pub struct LoadedPage {
+    pub drawing: cadaddy_doc::Drawing,
+    /// The sheet in inches (as displayed); `None` for a drawing file (no paper).
+    pub sheet: Option<(f64, f64)>,
+    /// Drawing units per sheet inch the reader drew it at, and where that came from.
+    pub scale: f64,
+    pub scale_source: String,
+    /// A DO NOT SCALE sheet kept at sheet size though it carries a scale note.
+    pub needs_registration: bool,
 }
 
 /// Pages classify reads before taking them in order: enough to keep its threads busy, few enough
@@ -2219,7 +2246,8 @@ pub struct NumberConflict {
     pub sources: Vec<String>,
 }
 
-fn source_of(e: &SheetEntry) -> String {
+/// How the index names a page: `file#page` (the file alone for a one-sheet file).
+pub fn source_of(e: &SheetEntry) -> String {
     if e.page == 0 { e.file.clone() } else { format!("{}#{}", e.file, e.page) }
 }
 

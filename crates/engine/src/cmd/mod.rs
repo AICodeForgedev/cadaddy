@@ -210,6 +210,7 @@ pub(crate) mod rhai_cmd;
 pub(crate) mod risercut;
 pub mod rooms3d;
 pub(crate) mod runtidy;
+pub mod sheetcheck;
 pub mod sheetfacts;
 pub mod sheetsout;
 pub mod sitetakeoff;

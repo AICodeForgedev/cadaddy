@@ -359,6 +359,18 @@ fn default_pending() -> String {
     "pending".into()
 }
 
+fn yes() -> bool {
+    true
+}
+
+fn is_yes(b: &bool) -> bool {
+    *b
+}
+
+fn default_picture_dpi() -> f64 {
+    super::sheetcheck::DEFAULT_DPI
+}
+
 /// An entry in the audit trail.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEntry {
@@ -509,6 +521,17 @@ pub struct GuidedJob {
     /// runs on. Off (the default) the job stops at each checkpoint until it is answered.
     #[serde(default)]
     pub auto: bool,
+    /// The sheet-index checkpoint (Q6517) stops the job for its packet (`job.start {sheet_check:
+    /// false}`: the job goes on, its reading listed as unchecked in the report).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub sheet_check: bool,
+    /// Pixels a sheet inch in the packet's page pictures (0: none).
+    #[serde(default = "default_picture_dpi")]
+    pub sheet_picture_dpi: f64,
+    /// A sheet correction came after the sheets were imported: the next re-run imports them
+    /// again, on a fresh drawing, from the levels stage on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reimport: bool,
     /// Questions asked even in auto mode: a stage that should find things found none.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub always_ask: BTreeSet<String>,
@@ -1055,6 +1078,9 @@ impl GuidedJob {
             mep: None,
             circuits: Vec::new(),
             auto: false,
+            sheet_check: true,
+            sheet_picture_dpi: super::sheetcheck::DEFAULT_DPI,
+            reimport: false,
             always_ask: BTreeSet::new(),
             storey_ft: None,
             levels_given: Vec::new(),
@@ -1287,7 +1313,21 @@ fn run_import(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 /// sheet (number, title, discipline — never the file name); the same sheet in several files is one
 /// entry; plans carry the level their titles name. Asks when a discipline or level is unsure.
 fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
-    let mut classified = s.execute("printset.classify", &json!({}))?;
+    // Each page's facts for the sheet-index packet (Q6517), and its picture.
+    let packet_dir = super::sheetcheck::packet_dir(job);
+    let look = if job.sheet_picture_dpi > 0.0 { json!({"pictures": packet_dir, "dpi": job.sheet_picture_dpi}) } else { json!({}) };
+    let mut classified = s.execute("printset.classify", &json!({"look": look}))?;
+    let page_facts: serde_json::Map<String, Value> = classified
+        .as_object_mut()
+        .and_then(|o| o.remove("page_facts"))
+        .and_then(|v| match v {
+            Value::Array(a) => Some(a),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| Some((p.get("source")?.as_str()?.to_string(), p)))
+        .collect();
 
     // The current copy of every sheet, with its file and page, for the stages that import them.
     let sheets_result = s.execute("printset.sheets", &json!({"current": true}))?;
@@ -1299,12 +1339,22 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         "levels": classified.get("levels"),
         "level_warnings": classified.get("level_warnings"),
         "number_conflicts": classified.get("number_conflicts"),
+        "pages": page_facts,
     }));
 
     // The project manual (Q6168): found, or asked for. The sheets it makes a division's
     // specification are no plans (Q6295).
     look_for_specs(s, job, true);
     mark_spec_sheets(s, job, &mut classified);
+    // The sheet index's corrections the answers gave (Q6517) over the readers' reading.
+    super::sheetcheck::apply(job);
+    if let (Some(index), Some(o)) = (job.index.as_ref(), classified.as_object_mut()) {
+        for k in ["sheets", "levels"] {
+            if let Some(v) = index.get(k) {
+                o.insert(k.into(), v.clone());
+            }
+        }
+    }
 
     // MUST 1: Check for empty results.
     // The index: one entry per real sheet (questions are asked once per sheet, not per copy).
@@ -1507,8 +1557,68 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         check_missing_trade_plans(sheets, job);
     }
 
+    // The sheet-index checkpoint (Q6517): the reading of every sheet as one packet, checked
+    // before the build.
+    if sheet_count > 0 {
+        let summary = super::sheetcheck::write_packet(job, &packet_dir);
+        let q = sheet_index_question(job, &summary);
+        job.add_question_to_worklist(&q);
+        if let Some(st) = job.stage_mut(StageName::Classify) {
+            st.questions.push(q);
+        }
+        classified["sheet_index"] = summary;
+    }
+
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
     Ok(classified)
+}
+
+/// Flags the sheet-index checkpoint's question shows (an agent's answer stays small).
+const SHEET_INDEX_FLAGS_SHOWN: usize = 40;
+
+/// The sheet-index checkpoint's question (Q6517): its packet, contact sheet and flags as the
+/// evidence; "Correct" builds on the reading, an object of corrections (as `job.sheets.set`
+/// takes) corrects it. Told to go on (`sheet_check: false`), it is answered so.
+fn sheet_index_question(job: &mut GuidedJob, summary: &Value) -> Question {
+    let flags = summary.get("flags").and_then(Value::as_array).cloned().unwrap_or_default();
+    let sheets = summary.get("sheets").and_then(Value::as_u64).unwrap_or(0);
+    let said: Vec<String> = flags.iter().take(12).filter_map(|f| f.get("says").and_then(Value::as_str)).map(str::to_string).collect();
+    let go_on = !job.sheet_check && !job.auto;
+    Question {
+        id: job.next_qid(StageName::Classify),
+        stage: StageName::Classify,
+        question: super::sheetcheck::SHEET_INDEX_QUESTION.to_string(),
+        why: format!(
+            "{sheets} sheet(s) read; {} flagged{}{}. Look at the packet and the page pictures; answer \"Correct\", or one object of corrections {{\"<number>\": {{type?, level?, title?, discipline?, scale?, plan_view?, not_built?, tables?}}}} (job.sheets.set takes the same)",
+            flags.len(),
+            if said.is_empty() { String::new() } else { format!(": {}", said.join("; ")) },
+            if flags.len() > said.len() { format!("; and {} more in the packet", flags.len() - said.len()) } else { String::new() }
+        ),
+        choices: vec!["Correct".into()],
+        evidence: Some(QuestionEvidence {
+            crop_png_path: summary.get("contact_sheet").and_then(Value::as_str).map(str::to_string),
+            sheet: None,
+            at: None,
+            values: Some(json!({
+                "packet": summary.get("packet"),
+                "contact_sheet": summary.get("contact_sheet"),
+                "pictures": summary.get("pictures"),
+                "sheets": sheets,
+                // (the packet lists them all)
+                "flags": flags.iter().take(SHEET_INDEX_FLAGS_SHOWN).collect::<Vec<_>>(),
+                "flags_total": flags.len(),
+            })),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some("Correct".into()),
+        answer_schema: Some(json!({"type": "object"})),
+        answer: go_on.then(|| json!("Correct")),
+        answered_by: go_on.then(|| "go_on".to_string()),
+        answered_at: go_on.then(now_iso),
+        kind: QuestionKind::Doubt,
+    }
 }
 
 /// The question for a plan whose title names no level (`level_source` `default` or `ask`): with
@@ -2178,6 +2288,10 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             if let Some(k) = sh.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 1.0) {
                 params["scale"] = json!(k);
             }
+            // The scale an answer gave the sheet (Q6517), over every reading.
+            if let Some(k) = sh.get("scale_given").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0) {
+                params["scale"] = json!(k);
+            }
             super::exchange::PdfPage { path, params, at: None }
         })
         .collect();
@@ -2344,6 +2458,9 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     }
     // A sheet printing two levels' plans: each level takes only its own view.
     let regions = split_view_regions(s.doc()?, regions, &typical);
+    // What answers said of the sheets (Q6517): the plan's own rectangle, a sheet left out; a
+    // level with no floor plan is not built from its finish plans.
+    let regions = answered_regions(job, regions, &all, &job.sheet_scales);
     job.sheet_regions = regions;
     job.sheets_loaded = true;
     job.audit(
@@ -2361,6 +2478,61 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         })),
     );
     Ok(())
+}
+
+/// The sheet regions with what the sheet-index answers say (Q6517): a sheet's `plan_view` (sheet
+/// inches) is its one view on its level, a `not_built` sheet is kept out, and the architectural
+/// plans of a level with no floor plan are not built (never a level built from a finish plan).
+pub(crate) fn answered_regions(job: &GuidedJob, regions: Vec<SheetRegion>, sheets: &[&Value], scales: &[SheetScale]) -> Vec<SheetRegion> {
+    let field = |number: &str, k: &str| -> Option<Value> {
+        sheets
+            .iter()
+            .find(|sh| sh.get("number").and_then(Value::as_str).is_some_and(|n| n.split('/').next().unwrap_or(n).eq_ignore_ascii_case(number)))
+            .and_then(|sh| sh.get(k).cloned())
+    };
+    let no_floor: Vec<String> = super::sheetcheck::levels_without_floor_plan(job).into_iter().map(|(l, _)| l).collect();
+    let mut out: Vec<SheetRegion> = Vec::with_capacity(regions.len());
+    let mut viewed: BTreeSet<String> = BTreeSet::new();
+    for mut r in regions {
+        if field(&r.number, "not_built").and_then(|v| v.as_bool()).unwrap_or(false) {
+            r.not_built = super::sheetcheck::NOT_BUILT_ANSWER.to_string();
+        }
+        if r.not_built.is_empty()
+            && r.discipline.eq_ignore_ascii_case("A")
+            && matches!(r.kind.as_str(), "plan" | "enlarged_plan")
+            && r.all_levels().iter().any(|l| no_floor.iter().any(|n| n.eq_ignore_ascii_case(l)))
+        {
+            r.not_built = super::sheetcheck::NO_FLOOR_PLAN.to_string();
+        }
+        let pv = field(&r.number, "plan_view").and_then(|v| {
+            let a: Vec<f64> = v.as_array()?.iter().filter_map(Value::as_f64).collect();
+            <[f64; 4]>::try_from(a).ok()
+        });
+        if let Some(pv) = pv {
+            // One region of the sheet: its plan's rectangle, on the drawing.
+            if !viewed.insert(r.number.to_ascii_uppercase()) {
+                continue;
+            }
+            let paper =
+                scales.iter().find(|sc| sc.sheet.split('/').next().unwrap_or(&sc.sheet).eq_ignore_ascii_case(&r.number)).and_then(|sc| sc.paper);
+            let k = match paper {
+                Some([w, _]) if w > 0.0 => (r.rect[2] - r.rect[0]).abs() / w,
+                _ => scales.iter().find(|sc| sc.sheet.eq_ignore_ascii_case(&r.number)).map_or(1.0, |sc| sc.scale),
+            };
+            let (x0, y0) = (r.rect[0].min(r.rect[2]), r.rect[1].min(r.rect[3]));
+            let rect = [x0 + pv[0] * k, y0 + pv[1] * k, x0 + pv[2] * k, y0 + pv[3] * k];
+            if r.view.is_some() {
+                // a several-view sheet: the sheet's own level (the answer's) for its one plan
+                if let Some(l) = field(&r.number, "level").and_then(|v| v.as_str().map(str::to_string)).filter(|l| !l.is_empty()) {
+                    r.level = l;
+                    r.levels.clear();
+                }
+            }
+            r.view = Some(SheetView { title: "plan view (answer)".into(), rect });
+        }
+        out.push(r);
+    }
+    out
 }
 
 // ─── Progress and checkpoints ───────────────────────────────────────────────
@@ -3011,8 +3183,22 @@ fn device_census(
         }
     }
     // The luminaire schedules on the set's sheets the drawing doesn't hold (its electrical
-    // schedules sheet) speak for the electrical sheets as every legend of the set does.
-    for (sheet, l) in unloaded {
+    // schedules sheet) speak for the electrical sheets as every legend of the set does; so do
+    // the legend rows the sheet-index answers gave (Q6517) for a legend the readers could not read.
+    let answered: Vec<(String, Legend)> = super::sheetcheck::answered_tables(job)
+        .into_iter()
+        .filter(|(_, t)| !t.legend.is_empty())
+        .map(|(sheet, t)| {
+            let table = format!("{sheet} (answer, from the sheet image)");
+            let rows: BTreeMap<String, device_types::LegendRow> = t
+                .legend
+                .iter()
+                .map(|(k, v)| (k.trim().to_ascii_uppercase(), device_types::LegendRow { table: table.clone(), description: v.clone() }))
+                .collect();
+            (sheet, Legend { types: rows.keys().cloned().collect(), regions: Vec::new(), rows })
+        })
+        .collect();
+    for (sheet, l) in unloaded.iter().chain(answered.iter()) {
         c.legend_tables += 1;
         c.legend_types.extend(l.types.iter().cloned());
         for (k, row) in &l.rows {
@@ -7714,7 +7900,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     let pages = s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default();
     let sched_pages = s.doc().map(|d| panel_pages(d, job)).unwrap_or_default();
-    let schedules = panel_schedules(&sched_pages);
+    let schedules = with_answered_panels(job, panel_schedules(&sched_pages));
     result["panel_schedule_sheets"] = json!(sched_pages.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
     if schedules.is_empty() {
         no_panel_schedules(job, &sched_pages, &mut result);
@@ -8724,6 +8910,11 @@ fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Do
 /// made one by the project manual: [`mark_spec_sheets`]).
 fn is_spec_sheet(sh: &Value) -> bool {
     sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str) == Some(SPEC_SHEET)
+}
+
+/// [`is_spec_sheet`], for the sheet-index checkpoint.
+pub(crate) fn spec_sheet(sh: &Value) -> bool {
+    is_spec_sheet(sh)
 }
 
 /// The sheet type of a specification printed on the drawings.
@@ -17024,7 +17215,31 @@ fn building_outlines(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec
 /// each type once, and whether their notes forbid substitutions. `electrical` says which pages
 /// are electrical sheets (where a plain `FIXTURE SCHEDULE` is the luminaire schedule);
 /// `plan_tags` the tags the plans print, that check which column holds the marks.
-fn fixture_schedule(
+/// The panel schedules read, with those the sheet-index answers gave (Q6517) over the readers'
+/// of the same panel.
+pub(crate) fn with_answered_panels(job: &GuidedJob, mut read: Vec<cadaddy_walk3d::PanelSchedule>) -> Vec<cadaddy_walk3d::PanelSchedule> {
+    for (_, t) in super::sheetcheck::answered_tables(job) {
+        for p in t.panel_schedules {
+            read.retain(|r| !r.panel.trim().eq_ignore_ascii_case(p.panel.trim()));
+            read.push(p);
+        }
+    }
+    read
+}
+
+/// The fixture types read, with those the sheet-index answers gave (Q6517) over the readers' of
+/// the same tag.
+pub(crate) fn with_answered_fixtures(job: &GuidedJob, mut read: Vec<cadaddy_walk3d::FixtureType>) -> Vec<cadaddy_walk3d::FixtureType> {
+    for (_, t) in super::sheetcheck::answered_tables(job) {
+        for f in t.fixture_schedule {
+            read.retain(|r| !r.tag.trim().eq_ignore_ascii_case(f.tag.trim()));
+            read.push(f);
+        }
+    }
+    read
+}
+
+pub(crate) fn fixture_schedule(
     pages: &[(String, cadaddy_doc::Drawing)],
     electrical: &dyn Fn(&str) -> bool,
     plan_tags: &BTreeSet<String>,
@@ -17250,6 +17465,7 @@ fn plan_device_tags(job: &GuidedJob) -> BTreeSet<String> {
 fn fixture_schedule_step(s: &mut Session, job: &GuidedJob) -> crate::Result<bool> {
     let (pages, electrical) = fixture_schedule_pages(s.doc()?, job);
     let (types, no_subs) = fixture_schedule(&pages, &|n| electrical.contains(n), &plan_device_tags(job));
+    let types = with_answered_fixtures(job, types);
     let sheets: BTreeSet<&str> = types.iter().filter_map(|t| t.source.split_whitespace().next()).collect();
     progress_line(&format!(
         "  light fixture schedule: {} types ({}) read from {:?} of {} pages looked at",
@@ -27231,7 +27447,8 @@ fn answer_counts(job: &GuidedJob) -> (usize, usize, usize, usize) {
     for q in job.stages.iter().flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter())) {
         match (&q.answer, q.answered_by.as_deref()) {
             (None, _) => open += 1,
-            (Some(_), Some("default")) => automatic += 1,
+            // (the sheet-index checkpoint a job was told to go on past: `go_on`)
+            (Some(_), Some("default" | "go_on")) => automatic += 1,
             (Some(_), Some("auto_guard")) => rejected += 1,
             _ => by_you += 1,
         }
@@ -27546,6 +27763,20 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
                 (Some(StageName::Levels), format!("levels {said}"))
             }
             None => (None, "recorded; name the levels bottom up, like \"1, 2, 3, R\"".into()),
+        };
+    }
+    // The sheet index's corrections (Q6517): learned as rules over the readers; the levels
+    // stage on runs again (the sheets imported again when they already were).
+    if is_sheet_index_question(q) && answer.is_object() {
+        return match super::sheetcheck::parse_corrections(job, answer) {
+            Ok(c) => {
+                let effect = super::sheetcheck::learn(job, c, &q.id);
+                if job.sheets_loaded {
+                    job.reimport = true;
+                }
+                (Some(StageName::Levels), effect)
+            }
+            Err(e) => (None, format!("recorded; not taken: {e}")),
         };
     }
     // The project manual's path, or "none" (Q6168).
@@ -28123,6 +28354,17 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let mut job = GuidedJob::new(pdfs, goal);
     // Interactive unless asked: the job stops at each checkpoint for an answer.
     job.auto = p.get("auto").and_then(Value::as_bool).unwrap_or(false);
+    // The sheet-index checkpoint (Q6517): stops for its packet unless told to go on; its page
+    // pictures at `sheet_pictures` pixels a sheet inch (false: none).
+    job.sheet_check = p.get("sheet_check").and_then(Value::as_bool).unwrap_or(true);
+    job.sheet_picture_dpi = match p.get("sheet_pictures") {
+        Some(Value::Bool(false)) => 0.0,
+        Some(v) => match v.as_f64() {
+            Some(d) if d.is_finite() && d > 0.0 => d.clamp(4.0, 150.0),
+            _ => return Err(bad("job.start", "sheet_pictures is a number of pixels a sheet inch (4 to 150) or false")),
+        },
+        None => super::sheetcheck::DEFAULT_DPI,
+    };
     job.submittals = match p.get("submittals") {
         Some(Value::String(one)) if !one.trim().is_empty() => vec![one.trim().to_string()],
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
@@ -28475,6 +28717,20 @@ fn find_question(job: &GuidedJob, qid: &str) -> Option<(usize, u8, usize)> {
     None
 }
 
+fn question_at(job: &GuidedJob, (si, list, qi): (usize, u8, usize)) -> Option<&Question> {
+    let stage = job.stages.get(si)?;
+    match list {
+        0 => stage.questions.get(qi),
+        1 => stage.verify.get(qi),
+        _ => stage.completeness.get(qi),
+    }
+}
+
+/// Whether `q` is the sheet-index checkpoint (Q6517).
+fn is_sheet_index_question(q: &Question) -> bool {
+    q.stage == StageName::Classify && q.question == super::sheetcheck::SHEET_INDEX_QUESTION
+}
+
 fn question_mut(job: &mut GuidedJob, (si, list, qi): (usize, u8, usize)) -> Option<&mut Question> {
     let stage = job.stages.get_mut(si)?;
     match list {
@@ -28505,6 +28761,10 @@ fn apply_answer(job: &mut GuidedJob, qid: &str, answer: Value) -> std::result::R
         return Err(format!("question '{}': `answer` is required", qid.chars().take(60).collect::<String>()));
     }
     let loc = find_question(job, qid).ok_or_else(|| unknown_question(job, qid))?;
+    // The sheet index's corrections are checked against the index before they are taken.
+    if answer.is_object() && question_at(job, loc).is_some_and(is_sheet_index_question) {
+        super::sheetcheck::parse_corrections(job, &answer).map_err(|e| format!("question {}: {e}", qid.chars().take(60).collect::<String>()))?;
+    }
     let question = {
         let Some(q) = question_mut(job, loc) else { return Err(unknown_question(job, qid)) };
         check_answer(q, &answer)?;
@@ -28591,6 +28851,12 @@ fn rerun_from_stage(
     reason: &Value,
     qid: Option<&str>,
 ) -> Result<Vec<(StageName, BTreeMap<String, Value>)>> {
+    // A sheet correction after the sheets were imported: they are imported again, on a fresh
+    // drawing, and every stage from the levels on reads them again (Q6517).
+    if job.reimport {
+        job.reimport = false;
+        restart_import(s, job)?;
+    }
     let reset = reset_from(job, from);
     // The built model is in the drawing: stages before the build would read it as more
     // plan. It goes, and the build runs again after them. The stages start from the
@@ -28606,6 +28872,33 @@ fn rerun_from_stage(
         job.audit("stage_rerun", "pipeline", qid, Some(from), Some(json!({"reason": reason, "stages": names})));
     }
     Ok(reset)
+}
+
+/// The drawing as it was before the sheets were imported (its settings, building spec and job
+/// state kept), and the job's imported state cleared: the next stage that needs the sheets
+/// imports them again with the index as it is now.
+fn restart_import(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
+    let old = s.doc()?;
+    let fresh =
+        cadaddy_doc::Drawing { header: old.header.clone(), agent: old.agent.clone(), building_spec: old.building_spec.clone(), ..Default::default() };
+    *s.doc_mut()? = fresh;
+    job.sheets_loaded = false;
+    job.sheet_regions.clear();
+    job.sheet_spans.clear();
+    job.sheet_scales.clear();
+    job.links = None;
+    job.devices.clear();
+    job.mep = None;
+    job.circuits.clear();
+    job.mark_fates.clear();
+    job.audit(
+        "sheets_reimport",
+        "pipeline",
+        None,
+        Some(StageName::Levels),
+        Some(json!({"why": "a sheet-index correction came after the sheets were imported"})),
+    );
+    Ok(())
 }
 
 /// What changed in the stages that ran again.
@@ -29006,7 +29299,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
     for stage in &job.stages {
         for q in stage.questions.iter().chain(stage.verify.iter()).chain(stage.completeness.iter()) {
             if q.answer.is_some() {
-                if q.answered_by.as_deref() == Some("default") {
+                if matches!(q.answered_by.as_deref(), Some("default" | "go_on")) {
                     automatic += 1;
                 } else {
                     confirmed += 1;
@@ -29065,6 +29358,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
         "specifications": specs_report(&job),
         "sheet_scales": sheet_scales_report(&job),
+        "sheet_index": super::sheetcheck::report(&job),
     }))
 }
 
@@ -29519,6 +29813,54 @@ pub fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
+/// `job.sheets.set {"<number>": {type?, level?, title?, discipline?, scale?, plan_view?,
+/// not_built?, tables?}}` (or `{sheets: {...}}`) — correct the job's reading of many sheets in one
+/// call (Q6517): the sheet-index checkpoint's answer. Each correction is a learned rule over the
+/// readers; the levels stage on runs again (the sheets imported again when they already were).
+fn cmd_sheets_set(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| cmd_sheets_set_inner(s, p))
+}
+
+fn cmd_sheets_set_inner(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut job = load_job(s)?.ok_or_else(|| bad("job.sheets.set", "no job running"))?;
+    let given = match p.get("sheets") {
+        Some(v) => v.clone(),
+        None => {
+            let mut o = p.as_object().cloned().unwrap_or_default();
+            o.remove("rerun");
+            Value::Object(o)
+        }
+    };
+    let corrections = super::sheetcheck::parse_corrections(&job, &given).map_err(|e| bad("job.sheets.set", e))?;
+    // The checkpoint's question takes them as its answer (asked again when it was answered).
+    let qid = job.stages.iter().flat_map(|st| st.questions.iter()).find(|q| is_sheet_index_question(q)).map(|q| q.id.clone());
+    if let Some(qid) = qid {
+        let mut params = json!({"id": qid, "answer": given});
+        if let Some(r) = p.get("rerun") {
+            params["rerun"] = r.clone();
+        }
+        return cmd_answer_inner(s, &params);
+    }
+    // A job whose classify ran before the checkpoint: the corrections all the same.
+    if job.index.is_none() {
+        return Err(bad("job.sheets.set", "the job has not read its sheet index yet (classify runs first)"));
+    }
+    let effect = super::sheetcheck::learn(&mut job, corrections, "job.sheets.set");
+    if job.sheets_loaded {
+        job.reimport = true;
+    }
+    let reset = rerun_from_stage(s, &mut job, StageName::Levels, &json!(effect), None)?;
+    advance_pipeline(s, &mut job)?;
+    sync_worklist(&mut job);
+    save_job(s, &job)?;
+    let changed = rerun_changes(&job, &reset);
+    let mut out = cmd_next_value(s, &job);
+    out["effect"] = json!(effect);
+    out["rerun"] = json!(reset.iter().map(|(n, _)| n.label()).collect::<Vec<_>>());
+    out["changed"] = json!(changed);
+    Ok(out)
+}
+
 /// `job.worklist` — the unified worklist of questions, findings, and actions (MUST 5 REFRAME).
 fn cmd_worklist(s: &mut Session, p: &Value) -> Result<Value> {
     let job = load_job(s)?.ok_or_else(|| bad("job.worklist", "no job running"))?;
@@ -29593,10 +29935,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("job.start", "Start Guided Job", cmd_start).long()
             .menu(&["Tools", "Guided Job", "Start Job..."])
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), refresh?: \"stale\" (default) | \"none\" | a stage (what a resumed job does with the stages its checkpoint holds: \"stale\" runs again, from the first of them on, every stage another build read (each stage records the build that ran it; a checkpoint from before that counts as another build), so a rebuild from a checkpoint reads the prints as a whole job of this build does; from the rooms stage or before, the job starts again from the prints, keeping its answers; \"none\" keeps them all, said in resume_note and a finding; a stage name runs again from it on), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (as SECTION 26 05 19), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), cost_db?: path (the company's cost DB as .csv or .json — item, size, unit, material_unit, labor_unit, labor in DOLLARS, `# manpower_rate:` — a private file: value engineering prices both ways from it and writes the rows the job needs beside the drawing), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?, resume_note?, refreshed?: {from, stages?, other_build, started_over, why}}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), refresh?: \"stale\" (default) | \"none\" | a stage (what a resumed job does with the stages its checkpoint holds: \"stale\" runs again, from the first of them on, every stage another build read (each stage records the build that ran it; a checkpoint from before that counts as another build), so a rebuild from a checkpoint reads the prints as a whole job of this build does; from the rooms stage or before, the job starts again from the prints, keeping its answers; \"none\" keeps them all, said in resume_note and a finding; a stage name runs again from it on), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (as SECTION 26 05 19), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), cost_db?: path (the company's cost DB as .csv or .json — item, size, unit, material_unit, labor_unit, labor in DOLLARS, `# manpower_rate:` — a private file: value engineering prices both ways from it and writes the rows the job needs beside the drawing), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over), sheet_check?: bool (default true: right after classify the job writes its reading of every sheet — type, level, discipline, scale and its source, the views with their rectangles, the tables read, a picture of each page and a contact sheet — as one packet, sheet-index.json, with the flags it raises itself, and stops at that checkpoint question for \"Correct\" or one object of corrections as job.sheets.set takes; false: it goes on, and job.report lists every flag as built on an unchecked reading, as auto mode does), sheet_pictures?: pixels a sheet inch (default 40) | false (no page pictures)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?, resume_note?, refreshed?: {from, stages?, other_build, started_over, why}}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next).long()
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
+        CommandSpec::new("job.sheets.set", "Correct Job Sheet Index", cmd_sheets_set).long()
+            .params("{\"<sheet number>\": {type?: plan|enlarged_plan|rcp|schedule|cover|section|elevation|detail|diagram|specification|other, level?: \"2\" | \"Level 2\", title?, discipline?: A|E|M|P…, scale?: a note as printed (1/4\" = 1'-0\") | drawing inches a sheet inch (48), plan_view?: [x0, y0, x1, y1] (sheet inches from the page's lower-left corner: the plan's rectangle on a sheet that also prints details), not_built?: bool, tables?: {panel_schedules?: [{panel, circuits: [...]}], fixture_schedule?: [{tag, description, ...}], legend?: {\"<type>\": \"<description>\"}} (rows the readers could not read, as they produce them: their source is \"answer, from the sheet image\")}, …} | {sheets: {…}}, rerun?: bool → as job.answer: the sheet-index checkpoint's answer (Q6517). Each correction is a learned rule (sheet:<number>, over the readers, kept on resume, shown in job.explain {stage: \"classify\"}); the levels stage on runs again, the sheets imported again when they already were. An unknown sheet, an unknown field, a bad rectangle or a scale of 0 or less is an error"),
         CommandSpec::new("job.answer", "Answer Job Question", cmd_answer).long()
             .params("{id: \"Q-rooms-23\" (the question id job.next gives: Q-stage-number, as Q-levels-3; not needed with answers), answer: \"Correct\" | text | object (a choice, the default, your own value; a level question takes an elevation in feet — 12.5, or feet and inches — and a name: {elevation_ft: 12.5, name: \"Mezzanine\"}; \"Correct\" confirms it as yours), answers?: [{id, answer}] (many at once: each stands alone — an unknown or merged id is a warning and the rest are kept — and the stages they change run again once), rerun?: bool (default true; false holds the re-run until the next job.answer or job.next, to answer several questions of one stage first)} → {answered: id | [ids], effect: what the answer changes | [{id, effect}], rerun: [stages run again], changed: [{stage, what, before, after}], applies_to?: a stage still to run that will read it, rerun_held?: {from, note}, levels_changed?, warnings?: [{id, warning}], next?: question, done?, progress, answers}"),
         CommandSpec::new("job.set_mode", "Set Job Mode", cmd_set_mode).long()

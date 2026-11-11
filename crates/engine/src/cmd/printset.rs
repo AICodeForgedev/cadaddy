@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("printset.classify", "Classify Print Set", run_classify).long()
             .files()
-            .params("{} → {classified: pages read, total: sheets in the index, pages, elapsed_ms, sheets: [{number, title, discipline, type, level, levels, level_source, sources: [file#page], superseded?, issued?}], levels: [{name, sheets, elevation_ft?, height_ft?}], unidentified, plans_without_level, number_conflicts?: [{number, sheets, sources}]}: one entry per real sheet (copies merged when their number and title or contents match, the newer revision date current; different sheets printing one number each keep an entry, `<number>~2`, and are listed in number_conflicts), from each page's title block (a number the set prints at its title block's number spot wins over lettering elsewhere)")
+            .params("{look?: {pictures?: folder, dpi?: pixels a sheet inch (default 40)} (also keep each page's facts — paper, the scale the import draws it at and why, its views with their rectangles in sheet inches, the rows its schedules and legends read — and, with a folder, its picture as a PNG: page_facts)} → {classified: pages read, total: sheets in the index, pages, elapsed_ms, page_facts?: [{source, paper, scale, scale_source, read_scale, views: [{title, scale_text, scale, not_to_scale, at, rect}], tables?: {panel_schedules, circuits, fixture_types, legend_rows}, picture?, px_per_inch?}], sheets: [{number, title, discipline, type, level, levels, level_source, sources: [file#page], superseded?, issued?}], levels: [{name, sheets, elevation_ft?, height_ft?}], unidentified, plans_without_level, number_conflicts?: [{number, sheets, sources}]}: one entry per real sheet (copies merged when their number and title or contents match, the newer revision date current; different sheets printing one number each keep an entry, `<number>~2`, and are listed in number_conflicts), from each page's title block (a number the set prints at its title block's number spot wins over lettering elsewhere)")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.run", "Run Print Set Stages", run_stages).long()
@@ -133,7 +133,10 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Classify reads every sheet's own print (each page of a merged set): the title block's number,
 /// title and discipline, never the file name. The result is the set's sheet index.
-fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
+fn run_classify(s: &mut Session, p: &Value) -> Result<Value> {
+    // Each page's facts (and picture) for a job's sheet-index packet (Q6517).
+    let look = super::sheetcheck::look_param(p);
+    let looked: std::sync::Mutex<Vec<Value>> = std::sync::Mutex::new(Vec::new());
     let project = get_project_mut(s)?;
     // A running job's cancel stops it at the next sheet (the rest stay to classify).
     let cancel = super::guided::cancel_flag();
@@ -155,7 +158,15 @@ fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
     let dir = PathBuf::from(&project.source_dir);
     let rec = if !project.source_dir.is_empty() && dir.is_dir() {
         let loader = mep_printset::PrintLoader::new(&dir);
-        mep_printset::run_classify_prints(project, &|e| loader.load(e), cancel, &mut tell)
+        let load = |e: &mep_printset::SheetEntry| -> std::result::Result<cadaddy_doc::Drawing, String> {
+            let Some(look) = &look else { return loader.load(e) };
+            let (d, facts) = super::sheetcheck::look_at_page(loader.load_page(e)?, &mep_printset::source_of(e), look);
+            if let Ok(mut l) = looked.lock() {
+                l.push(facts);
+            }
+            Ok(d)
+        };
+        mep_printset::run_classify_prints(project, &load, cancel, &mut tell)
     } else {
         // A project made without files (from a saved truth): classify what it already holds.
         mep_printset::run_classify(project, None, cancel, &mut tell)
@@ -171,7 +182,10 @@ fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
         .take(500)
         .collect();
     let index = mep_printset::sheet_index(project);
+    let mut page_facts = looked.into_inner().unwrap_or_default();
+    page_facts.sort_by(|a, b| a.get("source").and_then(Value::as_str).cmp(&b.get("source").and_then(Value::as_str)));
     Ok(json!({
+        "page_facts": if look.is_some() { json!(page_facts) } else { Value::Null },
         "classified": rec.sheets_processed,
         "total": index.sheets.len(),
         "pages": rec.sheets_total,

@@ -628,7 +628,7 @@ pub(crate) enum PageImport {
 }
 
 /// How far (relative) a page's scale may be from its plans' before it is read again at theirs.
-const PLAN_SCALE_TOLERANCE: f64 = 0.02;
+pub(crate) const PLAN_SCALE_TOLERANCE: f64 = 0.02;
 
 /// A page whose plans print at another scale than the one its reading took, read again at its
 /// plans' scale (Q6396: a roof plan at 1/8" = 1'-0" came in at a detail's 1/2" note from the
@@ -672,7 +672,7 @@ fn reread_at_plan_scale(
 }
 
 /// The scale a DO NOT SCALE sheet's report says it detected ("… scale 96x — sheet kept …").
-fn detected_scale(report: &Value) -> Option<f64> {
+pub(crate) fn detected_scale(report: &Value) -> Option<f64> {
     let src = report.get("scaleSource").and_then(Value::as_str)?;
     let rest = src.get(src.find("scale ")? + 6..)?;
     rest.get(..rest.find('x').unwrap_or(rest.len()))?.trim().parse::<f64>().ok().filter(|k| k.is_finite() && *k > 1.5)
