@@ -105,23 +105,105 @@ fn area_around(b: &Bounds2) -> Bounds2 {
     b.expand(if diag.is_finite() { diag * 0.1 + 1e-6 } else { 1e-6 })
 }
 
-/// The plan objects (anything not generated and not added by an override) with their bounds and
-/// a signature of their geometry and layer, independent of handles.
-fn sources(d: &Drawing) -> Vec<(Bounds2, u64)> {
-    d.model
-        .iter()
-        .filter(|e| wallgen::made_as(e).is_none() && overrides::applied_ids(&e.common.xdata).is_empty())
-        .take(MAX_SOURCES)
-        .filter_map(|e| {
-            let b = entity_bounds(d, e, 0);
-            (!b.is_empty()).then(|| (b, fnv(format!("{:?}|{}", e.kind, e.common.layer.to_ascii_uppercase()).as_bytes(), FNV0)))
-        })
-        .collect()
+/// One chunk's plan objects (anything not generated and not added by an override): how many
+/// it holds, and those with bounds, with their place among them, bounds and a signature of
+/// their geometry and layer, independent of handles.
+struct SourceChunk {
+    /// Per object of the chunk: `None` not a plan object, else its bounds and signature (`None`:
+    /// no bounds).
+    each: Vec<Option<Option<(Bounds2, u64)>>>,
+    count: usize,
+    items: Vec<(usize, Bounds2, u64)>,
+    /// The union of the items' bounds.
+    bounds: Bounds2,
+}
+
+impl SourceChunk {
+    /// `before`: the chunk before an edit; the objects it did not touch keep what they had.
+    fn build(d: &Drawing, items: &[std::sync::Arc<Entity>], before: Option<(&[std::sync::Arc<Entity>], &SourceChunk)>) -> SourceChunk {
+        let old: HashMap<usize, usize> =
+            before.map(|(items, _)| items.iter().enumerate().map(|(i, e)| (std::sync::Arc::as_ptr(e) as usize, i)).collect()).unwrap_or_default();
+        let each: Vec<Option<Option<(Bounds2, u64)>>> = items
+            .iter()
+            .map(|e| {
+                if let Some(kept) = before.zip(old.get(&(std::sync::Arc::as_ptr(e) as usize))).and_then(|((_, b), &i)| b.each.get(i)) {
+                    return *kept;
+                }
+                if wallgen::made_as(e).is_some() || !overrides::applied_ids(&e.common.xdata).is_empty() {
+                    return None;
+                }
+                let b = entity_bounds(d, e, 0);
+                Some((!b.is_empty()).then(|| (b, fnv(format!("{:?}|{}", e.kind, e.common.layer.to_ascii_uppercase()).as_bytes(), FNV0))))
+            })
+            .collect();
+        let mut out = SourceChunk { each: Vec::new(), count: 0, items: Vec::new(), bounds: Bounds2::EMPTY };
+        for x in each.iter().flatten() {
+            if let Some((b, sig)) = x {
+                out.bounds = out.bounds.union(b);
+                out.items.push((out.count, *b, *sig));
+            }
+            out.count += 1;
+        }
+        out.each = each;
+        out
+    }
+}
+
+/// What else of the drawing an object's bounds depend on (block definitions, dimension styles,
+/// the annotation scale).
+#[derive(PartialEq)]
+struct SourceContext {
+    blocks: Vec<(String, usize)>,
+    dim_styles: Vec<cadaddy_doc::DimStyle>,
+    dimscale: u64,
+    anno: (u64, bool),
+}
+
+impl SourceContext {
+    fn of(d: &Drawing) -> SourceContext {
+        SourceContext {
+            blocks: d.blocks.iter().map(|(k, b)| (k.clone(), std::sync::Arc::as_ptr(b) as usize)).collect(),
+            dim_styles: d.dim_styles.clone(),
+            dimscale: d.header.f64("DIMSCALE", 1.0).to_bits(),
+            anno: (d.current_anno_scale().factor().to_bits(), d.anno_all_visible()),
+        }
+    }
+}
+
+static SOURCES: crate::chunkpool::ChunkPool<SourceChunk, SourceContext> = crate::chunkpool::ChunkPool::new();
+
+/// Let go of the kept plan objects (a drawing closed).
+pub(crate) fn clear_sources() {
+    SOURCES.clear();
+}
+
+/// The model's plan objects by chunk (the first [`MAX_SOURCES`] of them), kept per chunk while it
+/// is unchanged: a first edit of an element (Q6438) looked at every object of the model.
+struct Sources {
+    parts: Vec<crate::chunkpool::Part<SourceChunk>>,
+}
+
+fn sources(d: &Drawing) -> Sources {
+    let (parts, _r) =
+        SOURCES.parts(&d.model, SourceContext::of(d), |c, before| SourceChunk::build(d, c.items(), before.map(|b| (b.chunk.items(), &*b.data))));
+    #[cfg(test)]
+    tests::LAST.with(|l| l.set(_r));
+    Sources { parts }
 }
 
 /// A signature of what the plan holds in `area`.
-fn area_sig(sources: &[(Bounds2, u64)], area: &Bounds2) -> u64 {
-    let mut sigs: Vec<u64> = sources.iter().filter(|(b, _)| b.intersects(area)).map(|(_, s)| *s).collect();
+fn area_sig(sources: &Sources, area: &Bounds2) -> u64 {
+    let mut sigs: Vec<u64> = Vec::new();
+    let mut first = 0usize;
+    for p in &sources.parts {
+        let c: &SourceChunk = &p.data;
+        let left = MAX_SOURCES.saturating_sub(first);
+        first = first.saturating_add(c.count);
+        if left == 0 || !c.bounds.intersects(area) {
+            continue;
+        }
+        sigs.extend(c.items.iter().filter(|(at, b, _)| *at < left && b.intersects(area)).map(|(_, _, s)| *s));
+    }
     sigs.sort_unstable();
     sigs.iter().fold(FNV0, |h, s| fnv(&s.to_le_bytes(), h))
 }
@@ -445,7 +527,7 @@ pub(crate) fn set_props(
         return Err(bad(cmd, "overrides are hidden: show them (override.show) before editing a generated element's properties"));
     }
     let d = s.doc()?;
-    let mut src: Option<Vec<(Bounds2, u64)>> = None;
+    let mut src: Option<Sources> = None;
     // Per element: its new properties, and the override they go in (an earlier one's id, or a
     // new one).
     let mut plan: Vec<(Handle, &[cadaddy_doc::props::Entry], std::result::Result<u32, Override>)> = Vec::new();
@@ -910,5 +992,72 @@ impl Interactive for RevertM {
         };
         run_revert(s, &json!({ "id": id.trim() }))?;
         Ok(Step::Done)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    thread_local! {
+        /// How many chunks the last [`sources`] on this thread worked out.
+        pub(super) static LAST: std::cell::Cell<crate::chunkpool::Refresh> = std::cell::Cell::new(Default::default());
+    }
+
+    /// The signature as it was worked out before the per-chunk cache (Q6438): every plan object
+    /// of the model on every call. The cache must give the same.
+    fn sig_by_scan(d: &Drawing, area: &Bounds2) -> u64 {
+        let src: Vec<(Bounds2, u64)> = d
+            .model
+            .iter()
+            .filter(|e| wallgen::made_as(e).is_none() && overrides::applied_ids(&e.common.xdata).is_empty())
+            .take(MAX_SOURCES)
+            .filter_map(|e| {
+                let b = entity_bounds(d, e, 0);
+                (!b.is_empty()).then(|| (b, fnv(format!("{:?}|{}", e.kind, e.common.layer.to_ascii_uppercase()).as_bytes(), FNV0)))
+            })
+            .collect();
+        let mut sigs: Vec<u64> = src.iter().filter(|(b, _)| b.intersects(area)).map(|(_, s)| *s).collect();
+        sigs.sort_unstable();
+        sigs.iter().fold(FNV0, |h, s| fnv(&s.to_le_bytes(), h))
+    }
+
+    #[test]
+    fn the_cached_source_signature_is_the_full_scans() {
+        let mut s = super::super::elemprops::tests::model(30_000, 500, 2, 4);
+        let areas = [
+            Bounds2 { min: Vec2::new(0.0, 0.0), max: Vec2::new(100.0, 100.0) },
+            Bounds2 { min: Vec2::new(-5.0, -5.0), max: Vec2::new(4000.0, 300.0) },
+            Bounds2 { min: Vec2::new(1e6, 1e6), max: Vec2::new(1e6 + 1.0, 1e6 + 1.0) },
+            Bounds2 { min: Vec2::new(20_000.0, 0.0), max: Vec2::new(60_000.0, 2_000.0) },
+            Bounds2::EMPTY,
+        ];
+        for a in &areas {
+            let d = s.doc().unwrap();
+            assert_eq!(area_sig(&sources(d), a), sig_by_scan(d, a), "{a:?}");
+        }
+        // An object moved: its chunk again, the same answer as a scan.
+        let h = s.doc().unwrap().model.iter().nth(70).unwrap().handle;
+        s.execute("move", &json!({"handles": [h.hex()], "delta": [3, 0]})).unwrap();
+        for a in &areas {
+            let d = s.doc().unwrap();
+            assert_eq!(area_sig(&sources(d), a), sig_by_scan(d, a), "{a:?}");
+        }
+    }
+
+    #[test]
+    fn a_first_property_edit_of_an_element_does_not_look_at_every_plan_object_again() {
+        let mut s = super::super::elemprops::tests::model(50_000, 2_000, 4, 20);
+        let chunks = s.doc().unwrap().model.chunk_refs().len();
+        let one = |s: &mut Session, loc: &str| {
+            s.execute("bim.props.find", &json!({"kind": "device", "where": {"location": loc}, "select": true})).unwrap();
+            s.execute("bim.props.set", &json!({"props": {"mounting": "18 in AFF"}})).unwrap();
+            LAST.with(|l| l.get())
+        };
+        let first = one(&mut s, "Space 3");
+        assert_eq!(first.built, chunks, "the first edit works the plan out once");
+        let next = one(&mut s, "Space 40");
+        assert!(next.built <= 2 && next.built + next.reused == chunks, "{next:?} of {chunks}");
     }
 }
