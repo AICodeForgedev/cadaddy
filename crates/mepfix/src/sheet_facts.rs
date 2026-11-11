@@ -357,9 +357,16 @@ fn is_number_label(t: &str) -> bool {
     ["SHEET NO", "SHEET NUMBER", "DWG NO", "DRAWING NO", "DRAWING NUMBER"].contains(&u)
 }
 
+/// Whether a line says `NOT TO SCALE` (or holds it, `whole: false`) however its letters are
+/// spaced: lettering read off the page can split a word (`NO T TO SCALE`).
+fn says_not_to_scale(u: &str, whole: bool) -> bool {
+    let letters: String = u.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_uppercase();
+    if whole { letters == "NOTTOSCALE" } else { letters.contains("NOTTOSCALE") }
+}
+
 fn is_scale_line(t: &TextItem) -> bool {
     let u = t.value.trim().to_ascii_uppercase();
-    u.starts_with("SCALE") || u == "NTS" || u == "NOT TO SCALE" || is_bare_scale(&u)
+    u.starts_with("SCALE") || u == "NTS" || says_not_to_scale(&u, true) || is_bare_scale(&u)
 }
 
 /// A scale printed on its own under a view title (`1/8" = 1'-0"`, `1" = 20'`).
@@ -388,11 +395,70 @@ fn is_view_designator(t: &str) -> bool {
     letters <= 2 && (1..=2).contains(&digits) && t.chars().skip(letters).all(|c| c.is_ascii_digit())
 }
 
+/// Most horizontal rules gathered for the title bars of one sheet (a guard against hostile files).
+const MAX_TITLE_RULES: usize = 100_000;
+/// A title bar's rule is at least this many scale-note heights long...
+const MIN_TITLE_RULE: f64 = 8.0;
+/// ...and no thicker than this share of its length.
+const TITLE_RULE_THINNESS: f64 = 0.02;
+
+/// The sheet's horizontal rules `[x0, x1, y]`: straight lines and thin polylines (a title bar is
+/// often a long filled strip).
+fn title_rules(d: &Drawing) -> Vec<[f64; 3]> {
+    let mut out = Vec::new();
+    for e in d.model.iter().take(MAX_OBJECTS) {
+        if !matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
+            continue;
+        }
+        let b = entity_bounds(d, e, 0);
+        if b.is_empty() || !(b.min.is_finite() && b.max.is_finite()) {
+            continue;
+        }
+        let w = b.max.x - b.min.x;
+        if w > 0.0 && b.max.y - b.min.y <= TITLE_RULE_THINNESS * w {
+            out.push([b.min.x, b.max.x, (b.min.y + b.max.y) / 2.0]);
+            if out.len() >= MAX_TITLE_RULES {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// An underlined view title (a title bar): the view's number bubble and title stand on a rule,
+/// the scale note under the rule anywhere along it (often at its far end, beside a graphic
+/// scale). The title is the larger lettering of words nearest above the rule the scale note
+/// hangs under.
+fn bar_title<'a>(texts: &'a [TextItem], s: &TextItem, rules: &[[f64; 3]]) -> Option<&'a TextItem> {
+    let h = s.height;
+    let rule = rules
+        .iter()
+        .filter(|r| r[1] - r[0] >= MIN_TITLE_RULE * h && r[0] - h <= s.at.x && s.at.x <= r[1] && r[2] > s.at.y && r[2] - s.at.y <= 3.0 * h)
+        .min_by(|a, b| (a[2] - s.at.y).total_cmp(&(b[2] - s.at.y)))?;
+    texts
+        .iter()
+        .filter(|t| {
+            horizontal(t)
+                && !is_scale_line(t)
+                && !is_view_designator(&t.value)
+                && t.value.chars().filter(char::is_ascii_alphabetic).count() >= 2
+                && t.height > 1.2 * h
+                && rule[0] - h <= t.at.x
+                && t.at.x <= rule[1]
+                && t.at.y > rule[2]
+                && t.at.y - rule[2] <= 2.0 * t.height
+        })
+        .min_by(|a, b| (a.at.y - rule[2]).total_cmp(&(b.at.y - rule[2])).then(a.at.x.total_cmp(&b.at.x)))
+}
+
 /// The views on the sheet: a title is the larger line right above a "SCALE:" line, or the name
-/// beside the designator that stands above it.
+/// beside the designator that stands above it, or the title standing on the rule the "SCALE:"
+/// line hangs under (a title bar).
 pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
     let regions = view_regions(d);
     let mut out: Vec<ViewTitle> = Vec::new();
+    // The sheet's horizontal rules, gathered the first time a title bar is looked for.
+    let mut rules: Option<Vec<[f64; 3]>> = None;
     for s in texts.iter().filter(|t| horizontal(t) && is_scale_line(t)) {
         let h = s.height;
         let Some(title) = texts
@@ -406,6 +472,7 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
                     && t.height > 1.2 * h
             })
             .min_by(|a, b| (a.at.y - s.at.y).total_cmp(&(b.at.y - s.at.y)))
+            .or_else(|| bar_title(texts, s, rules.get_or_insert_with(|| title_rules(d))))
         else {
             continue;
         };
@@ -441,7 +508,7 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
                 .map(|t| t.value.clone())
         });
         let st = scale_text(&s.value);
-        let nts = st.to_ascii_uppercase().contains("NOT TO SCALE") || st.eq_ignore_ascii_case("NTS");
+        let nts = says_not_to_scale(&st, false) || st.eq_ignore_ascii_case("NTS");
         if out.iter().any(|v| v.title == title.value && v.at == [title.at.x, title.at.y]) {
             continue;
         }
@@ -1143,6 +1210,70 @@ mod tests {
         assert!(det.not_to_scale && det.scale_text.is_none());
         let r2 = det.region.expect("detail region");
         assert!(r2[0] >= 850.0 && r2[2] <= 1110.0 && r2[3] >= 800.0 && r2[1] >= 550.0, "{r2:?}");
+    }
+
+    /// A made-up 42x30 sheet's border (spans the sheet: not a view).
+    fn bordered() -> Drawing {
+        let mut d = Drawing::default();
+        line(&mut d, (0.0, 0.0), (2016.0, 0.0));
+        line(&mut d, (2016.0, 0.0), (2016.0, 1440.0));
+        line(&mut d, (2016.0, 1440.0), (0.0, 1440.0));
+        line(&mut d, (0.0, 1440.0), (0.0, 0.0));
+        d
+    }
+
+    /// A view titled on a title bar: its number bubble and title stand on a long rule (here a
+    /// thin filled strip), the scale note under the rule at its far end beside a graphic scale.
+    fn bar_view(d: &mut Drawing, x: f64, y: f64, number: &str, title: &str, scale: &str) {
+        plan(d, x, y + 40.0, 360.0, 240.0);
+        add(
+            d,
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: [(x, y), (x + 300.0, y), (x + 300.0, y + 1.2), (x, y + 1.2)]
+                    .iter()
+                    .map(|&(a, b)| cadaddy_geom::PolyVertex { p: Vec2::new(a, b), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                    .collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            }),
+        );
+        text(d, number, x + 12.0, y + 3.5, 6.5);
+        text(d, title, x + 30.0, y + 5.0, 6.5);
+        text(d, scale, x + 230.0, y - 10.0, 4.9);
+        for (i, mark) in ["0'", "2'", "4'"].iter().enumerate() {
+            text(d, mark, x + 310.0 + 24.0 * i as f64, y - 13.0, 4.5);
+        }
+    }
+
+    #[test]
+    fn a_title_bar_titles_its_view_with_the_scale_at_its_far_end() {
+        let mut d = bordered();
+        bar_view(&mut d, 100.0, 60.0, "1", "FLOOR PLAN", "SCALE: 1/4\" = 1'-0\"");
+        bar_view(&mut d, 700.0, 60.0, "2", "INTERIOR WALL TYPES", "NO T TO SCALE");
+        let v = view_titles(&d, &texts(&d));
+        let plan = v.iter().find(|x| x.title == "FLOOR PLAN").unwrap_or_else(|| panic!("the floor plan's title: {v:?}"));
+        assert_eq!((plan.number.as_deref(), plan.scale_text.as_deref()), (Some("1"), Some("1/4\" = 1'-0\"")));
+        let r = plan.region.expect("its block");
+        assert!(r[0] <= 100.0 && r[2] >= 460.0 && r[2] < 700.0, "{r:?}");
+        let types = v.iter().find(|x| x.title == "INTERIOR WALL TYPES").expect("the detail's title");
+        assert!(types.not_to_scale && types.region.is_some_and(|r| r[0] >= 690.0), "{types:?}");
+        assert_eq!(v.len(), 2, "{v:?}");
+    }
+
+    #[test]
+    fn a_note_beside_a_rule_is_no_title_bar() {
+        // A scale note under a short rule (a dimension's tick, a table's rule), or under no rule:
+        // no title.
+        let mut d = bordered();
+        plan(&mut d, 100.0, 100.0, 360.0, 240.0);
+        line(&mut d, (90.0, 60.0), (120.0, 60.0));
+        text(&mut d, "GENERAL NOTES APPLY", 125.0, 65.0, 6.5);
+        text(&mut d, "SCALE: 1/4\" = 1'-0\"", 100.0, 50.0, 4.9);
+        text(&mut d, "DOOR NOTES", 400.0, 30.0, 6.5);
+        text(&mut d, "SCALE: 1/8\" = 1'-0\"", 560.0, 20.0, 4.9);
+        assert!(view_titles(&d, &texts(&d)).is_empty());
     }
 
     #[test]
