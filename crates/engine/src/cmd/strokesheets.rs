@@ -49,11 +49,18 @@ fn text<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(Value::as_str).unwrap_or("")
 }
 
-/// Whether a classified sheet carries tables: a schedule or legend sheet, or one its title says
-/// holds schedules.
-fn carries_tables(sheet: &Value) -> bool {
-    matches!(text(sheet, "type"), "schedule" | "legend") || text(sheet, "title").to_ascii_uppercase().contains("SCHEDULE")
+/// Whether a classified sheet carries tables: a schedule or legend sheet, one its title says
+/// holds schedules, or one whose page holds ruled tables with words in them (a plan with its
+/// fixture schedule beside it, a title the OCR misread).
+fn carries_tables(sheet: &Value, lettering: &Lettering) -> bool {
+    matches!(text(sheet, "type"), "schedule" | "legend")
+        || text(sheet, "title").to_ascii_uppercase().contains("SCHEDULE")
+        || lettering.cells >= MIN_TABLE_CELLS
 }
+
+/// Ruled cells read on a page that make it a page with tables (a schedule's rows, not a title
+/// block's few boxes).
+const MIN_TABLE_CELLS: usize = 24;
 
 /// The classify stage's report of the sheets lettered in strokes (`classified["lettering"]`): each
 /// sheet's share of strokes, the words read off them and how sure, and a finding naming the ones
@@ -375,7 +382,7 @@ pub(crate) fn table_questions(
         let title = text(sh, "title");
         let lettering = json!({"stroke_share": l.stroke_share, "ocr_share": l.ocr_share, "words": l.words, "confidence": l.confidence,
                                "cells": l.cells, "cells_unsure": l.cells_unsure});
-        if carries_tables(sh) && (l.unsure() || none_read) {
+        if carries_tables(sh, &l) && (l.unsure() || none_read) {
             let crop = page.and_then(|d| picture(d, None, &dir, &number));
             let read = if none_read {
                 "no table on it was read".to_string()
@@ -448,6 +455,16 @@ mod tests {
             let (p, f) = tables_of(&bad, "E-9");
             assert!(p.is_empty() && f.is_empty(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_sheet_carries_tables_by_its_type_its_title_or_its_ruled_cells() {
+        let l = |cells: usize| Lettering { cells, ..Lettering::default() };
+        assert!(carries_tables(&json!({"type": "schedule", "title": "ELECTRICAL"}), &l(0)));
+        assert!(carries_tables(&json!({"type": "unknown", "title": "PANEL SCHEDULES"}), &l(0)));
+        // a plan whose page holds a ruled table with words (its fixture schedule)
+        assert!(carries_tables(&json!({"type": "plan", "title": "LIGHTING PLAN"}), &l(60)));
+        assert!(!carries_tables(&json!({"type": "plan", "title": "LIGHTING PLAN"}), &l(6)));
     }
 
     #[test]
