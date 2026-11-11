@@ -823,6 +823,85 @@ pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetReg
     out
 }
 
+/// A block of linework is one of a sheet's views when it is at least this share of its largest
+/// block (cells): smaller ones are keys, legends' boxes, stamps.
+const VIEW_BLOCK_SHARE: f64 = 0.4;
+/// Most plan sheets weighed for a plan view the readers could not tell (a guard on hostile sets).
+const MAX_UNCLEAR_SHEETS: usize = 400;
+
+/// The plan sheets read in one view ([`split_view_regions`]): sheet, level, the view's title and
+/// rectangle, and the sheet's scale (the note under its plan's title, when it prints several).
+/// And the plan sheets of one storey read whole that print several big blocks of linework (views)
+/// none of which the readers could tell for the plan: sheet, its middle and the blocks.
+fn plan_view_report(
+    d: &cadaddy_doc::Drawing,
+    regions: &[SheetRegion],
+    typical: &BTreeSet<String>,
+    scales: &[SheetScale],
+) -> (Vec<Value>, Vec<(String, [f64; 2], Vec<[f64; 4]>)>) {
+    use cadaddy_doc::EntityKind;
+    let scale_of = |sheet: &str| {
+        scales.iter().find(|sc| sc.sheet.eq_ignore_ascii_case(sheet)).map_or_else(
+            || Value::Null,
+            |sc| json!({"scale": (sc.scale * 1000.0).round() / 1000.0, "plan_scale": sc.plan_scale, "source": sc.source.chars().take(160).collect::<String>()}),
+        )
+    };
+    let views: Vec<Value> = regions
+        .iter()
+        .filter_map(|r| {
+            let v = r.view.as_ref()?;
+            Some(json!({"sheet": r.number, "level": r.level, "plan_view": v.title, "rect": v.rect.map(|x| x.round()), "scale": scale_of(&r.number)}))
+        })
+        .collect();
+    let looked: Vec<(usize, [f64; 4])> = regions
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.view.is_none() && r.kind == "plan" && r.not_built.is_empty() && r.all_levels().len() <= 1 && !typical.contains(&r.number))
+        .map(|(i, r)| (i, r.area.unwrap_or(r.rect)))
+        .filter(|(_, a)| a.iter().all(|v| v.is_finite()))
+        .take(MAX_UNCLEAR_SHEETS)
+        .collect();
+    let mut unclear = Vec::new();
+    if looked.is_empty() {
+        return (views, unclear);
+    }
+    // The linework of each sheet looked at (the only kinds the blocks are made of), one pass.
+    let mut per: Vec<Vec<cadaddy_doc::Entity>> = vec![Vec::new(); looked.len()];
+    for e in d.model.iter() {
+        if !matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_) | EntityKind::Circle(_) | EntityKind::Arc(_)) {
+            continue;
+        }
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        if b.is_empty() {
+            continue;
+        }
+        let c = b.center();
+        if let Some(k) = looked.iter().position(|(_, a)| in_rect(a, [c.x, c.y]))
+            && let Some(v) = per.get_mut(k)
+        {
+            v.push((**e).clone());
+        }
+    }
+    let mut shell = d.clone();
+    shell.model = cadaddy_doc::EntityStore::new();
+    for ((i, a), ents) in looked.iter().zip(per) {
+        if ents.is_empty() {
+            continue;
+        }
+        let mut sub = shell.clone();
+        sub.model.push_many(ents);
+        let blocks = cadaddy_mepfix::sheet_facts::view_regions(&sub);
+        let largest = blocks.iter().map(|b| b.1).max().unwrap_or(0) as f64;
+        let big: Vec<[f64; 4]> = blocks.iter().filter(|b| b.1 as f64 >= VIEW_BLOCK_SHARE * largest).map(|b| b.0).collect();
+        if big.len() >= 2
+            && let Some(r) = regions.get(*i)
+        {
+            unclear.push((r.number.clone(), [(a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0], big.into_iter().take(16).collect()));
+        }
+    }
+    (views, unclear)
+}
+
 /// A page read on its own (a sheet the job didn't load) as a sheet region: its extents, and the
 /// border and title block its frame lines show. `None` for a page of no extents.
 pub(crate) fn page_region(page: &cadaddy_doc::Drawing, number: &str, discipline: &str) -> Option<SheetRegion> {
@@ -2343,7 +2422,47 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         r.title_block = f.title_block;
     }
     // A sheet printing two levels' plans: each level takes only its own view.
+    let typical_sheets: BTreeSet<String> = regions.iter().zip(&typical).filter(|(_, t)| **t).map(|(r, _)| r.number.clone()).collect();
     let regions = split_view_regions(s.doc()?, regions, &typical);
+    // Each plan sheet's view (Q6515): which one is the plan, its rectangle and scale; a sheet of
+    // several views none of which is titled as its plan is a finding, never taken whole silently.
+    let (views, unclear) = plan_view_report(s.doc()?, &regions, &typical_sheets, &job.sheet_scales);
+    if !views.is_empty() {
+        let list: Vec<String> = views
+            .iter()
+            .take(MAX_QUESTIONS_PER_STAGE)
+            .map(|v| format!("{} \"{}\" {} at {}", v["sheet"].as_str().unwrap_or(""), v["plan_view"].as_str().unwrap_or(""), v["rect"], v["scale"]))
+            .collect();
+        progress_line(&format!("  plan views: {} sheet(s) read in their plan's view only: {}", views.len(), list.join("; ")));
+    }
+    for (sheet, at, blocks) in unclear.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        job.add_finding(
+            stage,
+            &format!("Sheet {sheet} prints {} views and none is titled as its plan: the whole sheet is read as the plan", blocks.len()),
+            "Details, sections, schedules and notes read as the plan put their lines in the walls and their words in the rooms, and the level's footprint takes the whole sheet",
+            3,
+            vec!["Give the plan view's rectangle (one of the blocks listed)".into(), "Keep the whole sheet as the plan".into()],
+            Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: Some(sheet.clone()),
+                at: Some(*at),
+                values: Some(json!({"views": blocks.iter().map(|b| b.map(|v| v.round())).collect::<Vec<_>>()})),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
+            false,
+        );
+    }
+    if !views.is_empty() || !unclear.is_empty() {
+        job.audit(
+            "plan_views",
+            "pipeline",
+            None,
+            None,
+            Some(json!({"views": views, "unclear": unclear.iter().map(|(s, _, b)| json!({"sheet": s, "views": b})).collect::<Vec<_>>()})),
+        );
+    }
     job.sheet_regions = regions;
     job.sheets_loaded = true;
     job.audit(
@@ -37015,6 +37134,83 @@ mod tests {
             levels: Vec::new(),
             view: None,
         }
+    }
+
+    /// A view of crossing lines (300 square) at (x, y), titled under it over its scale (`None`:
+    /// untitled).
+    fn drawn_view(d: &mut cadaddy_doc::Drawing, x: f64, y: f64, title: Option<&str>) {
+        use cadaddy_doc::{Common, EntityKind, HAlign, Line, Space, Text, VAlign, geom::Vec3};
+        let mut line = |a: [f64; 2], b: [f64; 2]| {
+            let l = Line { a: Vec3::new(a[0], a[1], 0.0), b: Vec3::new(b[0], b[1], 0.0) };
+            let _ = d.add(&Space::Model, Common::default(), EntityKind::Line(l));
+        };
+        for i in 0..6 {
+            let at = x + f64::from(i) * 60.0;
+            line([at, y], [at, y + 300.0]);
+            line([x, y + f64::from(i) * 60.0], [x + 300.0, y + f64::from(i) * 60.0]);
+        }
+        let Some(title) = title else { return };
+        for (value, dy, h) in [(title, 20.0, 8.0), ("SCALE: 1/4\" = 1'-0\"", 32.0, 4.0)] {
+            let t = Text {
+                insert: Vec3::new(x, y - dy, 0.0),
+                align_pt: None,
+                height: h,
+                value: value.into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: HAlign::Left,
+                valign: VAlign::Baseline,
+            };
+            let _ = d.add(&Space::Model, Common::default(), EntityKind::Text(t));
+        }
+    }
+
+    #[test]
+    fn each_plan_sheet_reports_its_plan_view_and_an_untold_one_is_a_finding() {
+        let mut d = cadaddy_doc::Drawing::new_imperial();
+        // Each sheet's border.
+        for x in [0.0, 3000.0, 6000.0] {
+            use cadaddy_doc::{Common, EntityKind, Line, Space, geom::Vec3};
+            for w in [[0.0, 0.0], [2016.0, 0.0], [2016.0, 1440.0], [0.0, 1440.0], [0.0, 0.0]].windows(2) {
+                if let [a, b] = w {
+                    let l = Line { a: Vec3::new(x + a[0], a[1], 0.0), b: Vec3::new(x + b[0], b[1], 0.0) };
+                    let _ = d.add(&Space::Model, Common::default(), EntityKind::Line(l));
+                }
+            }
+        }
+        // A-101: its floor plan beside a wall section, both titled.
+        drawn_view(&mut d, 100.0, 100.0, Some("FLOOR PLAN"));
+        drawn_view(&mut d, 700.0, 100.0, Some("WALL SECTION"));
+        // A-102: two views, neither titled.
+        drawn_view(&mut d, 3100.0, 100.0, None);
+        drawn_view(&mut d, 3700.0, 100.0, None);
+        // A-103: one plan alone.
+        drawn_view(&mut d, 6100.0, 100.0, None);
+        let sheet = |n: &str, x: f64| SheetRegion { rect: [x, 0.0, x + 2016.0, 1440.0], ..region(n, "1", "A", "plan", x) };
+        let regions = split_view_regions(&d, vec![sheet("A-101", 0.0), sheet("A-102", 3000.0), sheet("A-103", 6000.0)], &[false, false, false]);
+        let a101 = regions.iter().find(|r| r.number == "A-101").and_then(|r| r.view.clone()).expect("A-101 read in its plan's view");
+        assert_eq!(a101.title, "FLOOR PLAN");
+        assert!(a101.rect[2] <= 420.0, "{:?}", a101.rect);
+        let scales = vec![SheetScale {
+            sheet: "A-101".into(),
+            kind: "plan".into(),
+            scale: 48.0,
+            source: "scale note 1/4\" = 1'-0\"".into(),
+            plan_scale: None,
+            paper: None,
+        }];
+        let (views, unclear) = plan_view_report(&d, &regions, &BTreeSet::new(), &scales);
+        assert_eq!(views.len(), 1, "{views:?}");
+        assert_eq!((views[0]["sheet"].as_str(), views[0]["plan_view"].as_str()), (Some("A-101"), Some("FLOOR PLAN")));
+        assert_eq!(views[0]["scale"]["scale"].as_f64(), Some(48.0));
+        let names: Vec<&str> = unclear.iter().map(|u| u.0.as_str()).collect();
+        assert_eq!(names, ["A-102"], "two untitled views are asked about; a sheet of one view is not");
+        assert_eq!(unclear.first().map(|u| u.2.len()), Some(2));
+        // A typical plan's sheet is one view of several levels: not asked about.
+        let typical: BTreeSet<String> = ["A-102".to_string()].into();
+        assert!(plan_view_report(&d, &regions, &typical, &scales).1.is_empty());
     }
 
     /// Sheet `number` printing level 1's plan under level 2's: one region per view.
