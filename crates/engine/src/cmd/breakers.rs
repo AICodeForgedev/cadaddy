@@ -507,14 +507,24 @@ fn devices_of(d: &Drawing) -> Vec<Dev> {
 
 /// The panels the documents establish (upper case, Q6319): each panel schedule's (a typical
 /// schedule's letter with it), each feeder's ends (the one-line, the riser), and the gear among
-/// the equipment (its tag, and the typical letter a room's own panel carries). Empty when they
-/// name none: then nothing says which panel a circuit label may name.
+/// the equipment (a kind the routing rules' gear words name, `conduitroute.json`: its tag, and
+/// the typical letter a room's own panel carries). Empty when they name none: then nothing says
+/// which panel a circuit label may name.
 pub(crate) fn documented_panels(sp: &BuildingSpec) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = schedules(sp).into_keys().collect();
     for f in sp.mep.feeders.iter().take(MAX_PANELS) {
         out.extend([&f.from, &f.to].into_iter().map(|t| t.trim().to_ascii_uppercase()));
     }
-    for e in sp.mep.equipment.iter().filter(|e| GEAR_KINDS.iter().any(|g| e.kind.trim().eq_ignore_ascii_case(g))).take(MAX_PANELS) {
+    // Whole words: a `fire alarm panel` is gear, a `heat_pump` or a `wireway` is not.
+    let words = |s: &str| {
+        format!(" {} ", s.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" "))
+    };
+    let gear: Vec<String> = super::conduitroute::rules().gear.kinds.iter().map(|k| words(k)).filter(|k| k.trim() != "").collect();
+    let is_gear = |kind: &str| {
+        let k = words(kind);
+        GEAR_KINDS.iter().any(|g| kind.trim().eq_ignore_ascii_case(g)) || gear.iter().any(|g| k.contains(g.as_str()))
+    };
+    for e in sp.mep.equipment.iter().filter(|e| is_gear(&e.kind)).take(MAX_PANELS) {
         out.insert(e.tag.trim().to_ascii_uppercase());
         if let Some(letter) = e.properties.get("PANEL") {
             out.insert(letter.trim().to_ascii_uppercase());
@@ -1527,9 +1537,17 @@ mod tests {
         let gear = |tag: &str, kind: &str| cadaddy_walk3d::MepEquipment { tag: tag.into(), kind: kind.into(), ..Default::default() };
         let mut room = gear("K-12", "panel");
         room.properties.insert("PANEL".into(), "K".into());
-        sp.mep.equipment.extend([gear("TX", "transformer"), room, gear("EF-1", "exhaust_fan")]);
+        sp.mep.equipment.extend([
+            gear("TX", "transformer"),
+            room,
+            gear("EF-1", "exhaust_fan"),
+            gear("FCP", "fire alarm panel"),
+            gear("WW-1", "wireway"),
+            gear("HP-2", "heat_pump"),
+            gear("PB2", "panelboard"),
+        ]);
         let known = documented_panels(&sp);
-        assert_eq!(known.iter().map(String::as_str).collect::<Vec<_>>(), ["DPX", "K", "K-12", "LP1", "SB", "TX"]);
+        assert_eq!(known.iter().map(String::as_str).collect::<Vec<_>>(), ["DPX", "FCP", "K", "K-12", "LP1", "PB2", "SB", "TX"]);
         assert!(!names_no_panel(&known, "lp1") && !names_no_panel(&known, "K"));
         assert!(names_no_panel(&known, "QX") && names_no_panel(&known, "EF"));
         assert!(!names_no_panel(&known, " "), "no panel named: not a label for review");
