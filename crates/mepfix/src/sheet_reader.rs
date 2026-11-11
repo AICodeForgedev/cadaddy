@@ -1480,7 +1480,8 @@ pub fn names_floor_plan(title: &str) -> bool {
 /// (`FLOOR PLAN` beside `WALL TYPES`, a door schedule and a finish schedule: a table's rules
 /// would be taken for walls, its words for rooms). `None` unless the sheet has exactly one
 /// titled floor plan, no typical one, a block of linework for it that no other title claims,
-/// and something else on the sheet: another titled view or another block.
+/// and something else on the sheet: another titled view or another block. A sheet of no floor
+/// plan whose one titled plan is another (`ROOF PLAN` beside the roof's details) gives that one.
 pub fn floor_plan_view(d: &Drawing) -> Option<(PlanView, [f64; 4])> {
     floor_plan_view_in(d, None)
 }
@@ -1502,8 +1503,14 @@ pub fn floor_plan_view_in(d: &Drawing, area: Option<[f64; 4]>) -> Option<(PlanVi
     let other = |t: &str| names(t, crate::wordrules::words("sheets.other_plan_title_words"));
     // A title listing the sheet's views (`FLOOR PLAN / DETAILS / SCHEDULES`) is no one view's.
     let floor_title = |t: &str| names(t, crate::wordrules::words("sheets.floor_plan_title_words")) && !other(t) && !names_no_plan(t);
-    let mut floors = titles.iter().filter(|v| floor_title(&v.title));
-    let (floor, None) = (floors.next()?, floors.next()) else { return None };
+    let floors: Vec<&crate::sheet_facts::ViewTitle> = titles.iter().filter(|v| floor_title(&v.title)).collect();
+    // A sheet of no floor plan whose one plan is its roof's or its ceiling's (beside its details):
+    // that plan is the sheet's view.
+    let plans: Vec<&crate::sheet_facts::ViewTitle> = titles.iter().filter(|v| crate::sheet_facts::names_a_plan(&v.title)).collect();
+    let floor = match (floors.as_slice(), plans.as_slice()) {
+        ([one], _) | ([], [one]) => *one,
+        _ => return None,
+    };
     let region = floor.region?;
     let others: Vec<&crate::sheet_facts::ViewTitle> = titles.iter().filter(|v| v.title != floor.title).collect();
     if says_typical(&floor.title) || others.iter().any(|v| v.region == Some(region)) {
@@ -2234,6 +2241,20 @@ mod tests {
         // Read on the sheet's drawing area (off the title block), the same view.
         let (_, r2) = floor_plan_view_in(&d, Some([0.0, 0.0, 1850.0, 1440.0])).expect("in the drawing area");
         assert_eq!(r, r2);
+    }
+
+    #[test]
+    fn a_roof_plan_beside_its_details_is_its_own_view() {
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 100.0, "ROOF PLAN");
+        titled_block(&mut d, 700.0, 100.0, "TYPICAL ROOF DRAIN");
+        titled_block(&mut d, 1100.0, 100.0, "CURB DETAIL");
+        let (v, r) = floor_plan_view(&d).expect("the roof plan's view");
+        assert_eq!(v.title, "ROOF PLAN");
+        assert!(r[2] <= 420.0, "only the roof plan's block: {r:?}");
+        // Two plans and no floor plan: which is the sheet's isn't for this reader to say.
+        titled_block(&mut d, 100.0, 600.0, "ENLARGED ROOF PLAN");
+        assert!(floor_plan_view(&d).is_none());
     }
 
     #[test]
