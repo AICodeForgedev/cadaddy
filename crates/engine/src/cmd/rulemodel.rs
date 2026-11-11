@@ -1523,6 +1523,16 @@ pub fn read_model(
             let trade = match kind.as_str() {
                 "duct" => Trade::Mechanical,
                 "pipe" if is_fire(&system) => Trade::FireProtection,
+                // What the pipe carries, as its build said (Q6492): refrigerant, condensate and
+                // hydronic piping are mechanical.
+                "pipe"
+                    if props
+                        .get("carries")
+                        .map_or_else(|| cadaddy_walk3d::pipeservice::pipe_trade(&system, ""), |c| cadaddy_walk3d::pipeservice::service_trade(c))
+                        == "mechanical" =>
+                {
+                    Trade::Mechanical
+                }
                 "pipe" => Trade::Plumbing,
                 "conduit" | "tray" | "cable" => Trade::Electrical,
                 _ if is_fire(&system) => Trade::FireProtection,
@@ -2071,6 +2081,7 @@ fn system_band(rules: &[&RuleDef], sp: &cadaddy_walk3d::BuildingSpec, system: &s
     let trade = match kind {
         "duct" => Trade::Mechanical,
         "pipe" if is_fire(system) => Trade::FireProtection,
+        "pipe" if cadaddy_walk3d::pipeservice::pipe_trade(&sy.name, &sy.layer) == "mechanical" => Trade::Mechanical,
         "pipe" => Trade::Plumbing,
         _ => Trade::Electrical,
     };

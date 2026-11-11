@@ -829,6 +829,33 @@ fn ocr_reads_the_whole_character_set_and_punctuation() {
 }
 
 #[test]
+fn ocr_reads_numbers_with_their_units() {
+    // a ring after a number's digits is a zero (`40W`, `2000A`); its unit's letters, an ordinal
+    // and a word's O stay letters
+    let lines = ["LED 40W", "2000A MLO", "60A NF", "1ST FLOOR", "TOO 100"];
+    let pdf = strokes_page(|c| {
+        for (i, l) in lines.iter().enumerate() {
+            shx_text(l, 80.0, 500.0 - i as f64 * 30.0, 12.0, 1.0, 0.0, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&lines));
+}
+
+#[test]
+fn ocr_reads_marks_drawn_one_over_the_other() {
+    // an equals sign is two dashes, a colon two dots: one character each, never `--` or `.'`
+    let lines = ["L=10'", "SCALE: 1/8\"", "NOTES:"];
+    let pdf = strokes_page(|c| {
+        for (i, l) in lines.iter().enumerate() {
+            shx_text(l, 80.0, 500.0 - i as f64 * 30.0, 12.0, 1.0, 0.0, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&lines));
+}
+
+#[test]
 fn ocr_reads_scaled_stretched_and_slanted_lettering() {
     // (text, height pt, width factor, oblique degrees)
     let cases = [
@@ -1024,6 +1051,121 @@ fn ocr_reads_a_full_sheet_of_dense_lettering() {
     let r = pdf_read::read(&pdf_sized(&content, 2592, 1728), &PdfOptions::default()).expect("PDF read failed");
     assert_eq!(text_values(&r), sorted(&want));
     assert_eq!((r.ocr.clusters, r.ocr.glyphs, r.ocr.noise_dropped), (19_114, 19_114, 0));
+}
+
+/// A schedule drawn as a plotter draws one (Q6516): rules, its columns a piece per row, and
+/// every entry lettered in strokes, no text under it. Returns the entries, header first.
+fn stroked_schedule(x: f64, y_top: f64, rows: &[[&str; 4]], out: &mut Vec<u8>) -> Vec<String> {
+    let cols = [x, x + 30.0, x + 200.0, x + 240.0, x + 270.0];
+    let row_h = 18.0;
+    let n = rows.len();
+    for i in 0..=n {
+        let y = y_top - i as f64 * row_h;
+        out.extend_from_slice(format!("{x:.2} {y:.2} m {:.2} {y:.2} l S ", cols[4]).as_bytes());
+    }
+    let mut entries = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let (y1, y0) = (y_top - i as f64 * row_h, y_top - (i + 1) as f64 * row_h);
+        for cx in cols {
+            out.extend_from_slice(format!("{cx:.2} {y0:.2} m {cx:.2} {y1:.2} l S ").as_bytes());
+        }
+        for (c, v) in row.iter().enumerate() {
+            shx_text(v, cols[c] + 3.0, y0 + 5.5, 7.0, 1.0, 0.0, out);
+            entries.push(v.to_string());
+        }
+    }
+    entries
+}
+
+#[test]
+fn ocr_reads_a_stroked_tables_cells_entry_by_entry() {
+    let rows = [
+        ["CKT", "DESCRIPTION", "BKR", "P"],
+        ["1", "LIGHTING - CORRIDOR", "20", "1"],
+        ["2", "SPARE", "20", "-"],
+        ["3", "RECEP/DATA - BREAK ROOM", "30", "2"],
+        ["4", "A", "-", "1"],
+    ];
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    let entries = stroked_schedule(100.0, 500.0, &rows, &mut content);
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let want: Vec<&str> = entries.iter().map(String::as_str).collect();
+    // every cell's entry, whole: the lone `1`, `2`, `A`, the dashes for none, the description
+    // across its spaced dash; the column rules are no `I`s
+    assert_eq!(text_values(&r), sorted(&want));
+    assert_eq!((r.ocr.cells, r.ocr.cells_low), (entries.len(), 0));
+    assert_eq!(r.stats.get("SHX OCR table cell entries").copied(), Some(entries.len()));
+    // a cell's lone dash stands on its row's baseline, a letter high, as the row's other entries
+    let at = |v: &str| -> Vec<(f64, f64)> {
+        r.drawing
+            .model
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EntityKind::Text(t) if t.value == v => Some((t.insert.y, t.height)),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut dashes = at("-");
+    dashes.sort_by(|a, b| b.0.total_cmp(&a.0));
+    assert_eq!(dashes.len(), 2);
+    for (dash, row) in dashes.into_iter().zip([at("SPARE"), at("A")]) {
+        let (y, h) = row.first().copied().expect("the row's entry");
+        assert!((dash.0 - y).abs() < 0.1 * h && (dash.1 - h).abs() < 0.2 * h, "{dash:?} vs {y} {h}");
+    }
+    // all its lettering is strokes, read by the OCR alone
+    assert_eq!(r.ocr.text_chars, 0);
+    assert!(r.ocr.stroke_chars > 0 && r.ocr.unconfirmed_chars == r.ocr.stroke_chars);
+    assert!((r.ocr.stroke_share() - 1.0).abs() < 1e-9);
+}
+
+#[test]
+fn plan_linework_ruled_like_a_table_holds_no_cells() {
+    // a roof's trusses (parallel lines of one extent) crossed by a dashed line: a grid of lines
+    // whose "cells" hold dashes only, no words; its dashes stay linework, no `1`s, no `-`s
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    for i in 0..8 {
+        let y = 100.0 + 27.0 * f64::from(i);
+        content.extend_from_slice(format!("100 {y:.1} m 500 {y:.1} l S ").as_bytes());
+    }
+    for x in [200.0, 211.0, 300.0] {
+        let mut y = 95.0;
+        while y < 300.0 {
+            content.extend_from_slice(format!("{x:.1} {y:.1} m {x:.1} {:.1} l S ", y + 6.0).as_bytes());
+            y += 9.0;
+        }
+    }
+    shx_text("ROOF FRAMING", 120.0, 330.0, 9.0, 1.0, 0.0, &mut content);
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["ROOF FRAMING"]));
+    assert_eq!(r.ocr.cells, 0);
+}
+
+#[test]
+fn a_page_lettered_in_real_text_reads_no_table_off_strokes() {
+    // a legend table whose cells hold stroked symbols, on a page lettered in real text: its
+    // tables are its real text's, the strokes in its cells are symbols, never entries
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    stroked_schedule(100.0, 500.0, &[["CKT", "DESCRIPTION", "BKR", "P"], ["1", "SPARE", "20", "1"], ["2", "SPARE", "20", "1"]], &mut content);
+    content.extend_from_slice(b"Q ");
+    real_labels(80, 60.0, 100.0, |i| format!("NOTE {i:03}"), &mut content);
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    assert!(r.ocr.text_chars >= 500, "{}", r.ocr.text_chars);
+    assert_eq!(r.ocr.cells, 0);
+}
+
+#[test]
+fn lettering_beside_a_table_is_read_as_before() {
+    // a note right of the schedule stays a word of its own
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    stroked_schedule(100.0, 500.0, &[["CKT", "DESCRIPTION", "BKR", "P"], ["1", "SPARE", "20", "1"]], &mut content);
+    shx_text("NOTE A", 420.0, 480.0, 7.0, 1.0, 0.0, &mut content);
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["1", "1", "20", "BKR", "CKT", "DESCRIPTION", "NOTE A", "P", "SPARE"]));
+    assert_eq!(r.ocr.cells, 8);
 }
 
 /// `n` real (Helvetica) text labels in a grid from (x, y), 6 pt.
@@ -1504,6 +1646,27 @@ fn stroked_device_marks_tag_symbols() {
     // the marks live on as the symbols' TAG, not twice as loose text
     let f_texts = r.drawing.model.iter().filter(|e| matches!(&e.kind, EntityKind::Text(t) if t.value.trim() == "F")).count();
     assert_eq!(f_texts, 0);
+}
+
+#[test]
+fn a_stroke_lettered_plans_circuit_tags_tag_their_symbols() {
+    // Q6516: a plan lettered in strokes alone (no hidden text, no real text): four symbols, each
+    // with its circuit (`P1-2`) under it and its mounting note beside it. The OCR's sure readings
+    // are the page's tags, as real text's would be, though none stands alone.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    for i in 0..4 {
+        let (cx, cy) = (150.0 + 120.0 * f64::from(i), 300.0);
+        square(cx, cy, &mut content);
+        content.extend_from_slice(
+            format!("{:.1} {:.1} m {:.1} {:.1} l {:.1} {:.1} l h S ", cx - 4.0, cy - 4.0, cx + 4.0, cy - 4.0, cx, cy + 4.0).as_bytes(),
+        );
+        shx_text("P1-2", cx - 12.0, cy - 20.0, 7.0, 1.0, 0.0, &mut content);
+        shx_text("18\" AFF", cx + 12.0, cy - 3.0, 7.0, 1.0, 0.0, &mut content);
+    }
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(symbol_tags(&r.drawing), vec!["P1-2"; 4], "stats: {:?}", r.stats);
+    assert_eq!(r.stats.get("symbols tagged by stroked lettering").copied(), Some(4));
 }
 
 // -----------------------------------------------------------------------------------------

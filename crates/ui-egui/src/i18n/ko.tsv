@@ -3439,6 +3439,7 @@ menu	Modify	수정
 	Place Buildings	건물 배치
 	Pin	고정
 	Unpin	고정 해제
+	Minimize to the rail	레일로 최소화
 	Coordination	조정
 	List Sheets	시트 목록
 	Open Sheet	시트 열기
@@ -3478,3 +3479,9 @@ menu	Modify	수정
 	* (whole drawing)	* (전체 도면)
 	Requires an integer between 0 and 16.	0에서 16 사이의 정수가 필요합니다.
 	Correct Job Sheet Index	작업 도면 목록 수정
+	Refrigerant Piping	냉매 배관
+	Hydronic Piping	냉온수 배관
+	Condensate Drain	응축수 배수
+	Mechanical Piping	기계 배관
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	속성으로 요소 수정(BIM)

@@ -3228,6 +3228,7 @@
 	Place Buildings	Разместить здания
 	Pin	Закрепить
 	Unpin	Открепить
+	Minimize to the rail	Свернуть на панель
 	Coordination	Координация
 	External References	Внешние ссылки
 	List Sheets	Список листов
@@ -3268,3 +3269,9 @@
 	* (whole drawing)	* (весь чертеж)
 	Requires an integer between 0 and 16.	Требуется целое число от 0 до 16.
 	Correct Job Sheet Index	Исправить указатель листов задания
+	Refrigerant Piping	Трубопроводы хладагента
+	Hydronic Piping	Трубопроводы тепло- и холодоснабжения
+	Condensate Drain	Отвод конденсата
+	Mechanical Piping	Механические трубопроводы
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Исправить элементы по свойству (BIM)

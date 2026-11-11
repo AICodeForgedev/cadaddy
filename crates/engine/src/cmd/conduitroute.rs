@@ -5365,19 +5365,36 @@ pub(crate) fn cable_paths(d: &Drawing) -> HashMap<String, MepRun> {
 /// feeders, the levels stacked): the routed runs into the stored spec (each level's own plan),
 /// the pieces cut again where the model's are (the stacking move kept on them), the report stored.
 pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
+    reroute_feeders(s, false)
+}
+
+/// [`reroute`]; `all_feeders`: every feeder with placed gear routed (on demand), not only those
+/// whose gear moved since their route was made.
+pub(crate) fn reroute_feeders(s: &mut Session, all_feeders: bool) -> Result<Value> {
     const C: &str = "conduit.reroute";
-    let (sp, stored) = super::bspec::current(s, C)?;
+    let (mut sp, stored) = super::bspec::current(s, C)?;
     if !stored {
         // A state, not a parameter error (the menu starts it with none).
         return Ok(json!({"routed": false, "note": "the drawing has no building spec: model.build first"}));
     }
+    // The feeders follow their gear as it stands now (Q6523): a route that no longer ends at its
+    // gear is routed again; its pieces are cut again below with the rest.
+    let feeders = super::feederfollow::follow(&mut sp, if all_feeders { super::feederfollow::Mode::All } else { super::feederfollow::Mode::Placed });
     if !enabled(s.doc()?) {
-        return Ok(json!({"routed": false, "note": "routing switched off (model.build {route: true} turns it on)"}));
+        if feeders.changed() {
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+            s.touch();
+        }
+        return Ok(
+            json!({"routed": false, "note": "routing switched off (model.build {route: true} turns it on); the feeders' routes are in the spec for model.build", "feeders": feeders.json()}),
+        );
+    }
+    if let Some(line) = feeders.line() {
+        s.echo(line);
     }
     let t0 = web_time::Instant::now();
     // The fire alarm system's panel and power supplies as the gear stands now (Q6503): the
     // documents' placed since the build, those the rule placed placed again.
-    let mut sp = sp;
     let fa_equipment = fa::place_equipment(s.doc_mut()?, &mut sp);
     // From the circuits as read, not from the last routing's parts and sizes.
     let mut sp = unrouted(s.doc()?, &sp);
@@ -5477,6 +5494,7 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
             "ganged_devices": atoms["gangedDevices"], "ends_at_equipment": atoms["endsAtEquipment"], "open_ends": atoms["openEnds"]},
         // What the boxes did to clear each other, and the rated-wall remedy used (Q6488).
         "box_clearance": atoms["boxClearance"],
+        "feeders": feeders.json(),
         "circuits": routed.report["routed_circuits"], "homeruns": routed.report["homeruns"], "routed_ft": routed.report["routed_ft"],
         "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len), "unrouted": routed.report["unrouted"].as_array().map_or(0, Vec::len),
         "fire_alarm": {"equipment": fa_equipment, "circuits": routed.report["fire_alarm"]["circuits"], "routed_devices": routed.report["fire_alarm"]["routed_devices"],
@@ -5521,8 +5539,14 @@ fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec, buried: bool) -> Vec<Handle
         .collect()
 }
 
-fn run_reroute(s: &mut Session, _p: &Value) -> Result<Value> {
-    reroute(s)
+fn run_reroute(s: &mut Session, p: &Value) -> Result<Value> {
+    let all = match p.get("feeders") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(v)) if v == "all" => true,
+        Some(Value::String(v)) if v == "moved" => false,
+        Some(_) => return Err(super::bad("conduit.reroute", "`feeders` is \"moved\" (the default) or \"all\"")),
+    };
+    reroute_feeders(s, all)
 }
 
 /// After `moved` devices were set in their walls again (a merge removed the walls they were in):
@@ -5554,7 +5578,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])
-            .params("{} → {routed, removed, atoms, seconds, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, box_clearance: {movedOffOverlap, movedOffBackToBack, devicesMoved, puttyPads, ratedWallRemedy: separate|putty pads, ratedWallRemedySource, devicesPutBack, ...}, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
+            .params("{feeders?: \"moved\"|\"all\" (default moved: the feeders whose gear moved, went to another floor or was placed since their route was made are routed again; all: every feeder with placed gear, routed on demand)} → {routed, removed, atoms, seconds, feeders: {rerouted, kept, dropped, off_gear_before, off_gear_after, unrouted_before, unrouted_after, rerouted_list: [{feeder, why}], dropped_list}, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, box_clearance: {movedOffOverlap, movedOffBackToBack, devicesMoved, puttyPads, ratedWallRemedy: separate|putty pads, ratedWallRemedySource, devicesPutBack, ...}, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build; each feeder routed again from its source to its gear where it moved), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
             .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the cost DB's manpower rate, else the estimate's rate), price?: bool (default true), scenario?: a value engineering scenario id (ve.scenario: its pieces in place of the design's it replaces)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")

@@ -242,7 +242,7 @@ fn pen_texts(d: &Drawing, bg: bool) -> Vec<(String, Vec2, String, f64)> {
             continue;
         }
         if let EntityKind::Text(t) = &e.kind {
-            if t.style.eq_ignore_ascii_case(cadaddy_io::pdf_read::OCR_TEXT_STYLE) {
+            if cadaddy_io::pdf_read::is_ocr_style(&t.style) {
                 continue;
             }
             let at = t.align_pt.unwrap_or(t.insert).xy();

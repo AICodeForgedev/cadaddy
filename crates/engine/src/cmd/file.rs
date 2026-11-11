@@ -1132,6 +1132,8 @@ pub(super) fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
 /// environments go too.
 fn release_closed(s: &mut Session) {
     crate::spatial::clear_cache();
+    super::elemprops::clear_index();
+    super::overrides::clear_sources();
     s.lisp_forget_closed();
     let used: std::collections::HashSet<&str> = s
         .docs
