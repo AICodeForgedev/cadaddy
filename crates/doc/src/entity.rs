@@ -1230,6 +1230,85 @@ impl Mesh {
         out
     }
 
+    /// Marks invisible every edge shared by exactly two faces that lie in one plane and face the
+    /// same way: the seams a triangulation or a split leaves inside one flat surface (a roof top
+    /// ear-clipped into a fan of triangles). Outline and crease edges stay visible. Corners at the
+    /// same place are one corner even when the mesh repeats them. Returns how many edges it hid.
+    ///
+    /// For meshes CADaddy generates (a polyface's hidden-edge flag); a mesh read from a file keeps
+    /// the edges its author chose.
+    pub fn hide_flat_seams(&mut self) -> usize {
+        if self.faces.len() > MAX_MESH_FACES || self.vertices.len() > MAX_MESH_VERTICES {
+            return 0;
+        }
+        // One id per place: generated meshes may repeat a corner for each face.
+        let mut at: std::collections::HashMap<[i64; 3], u32> = std::collections::HashMap::new();
+        let weld: Vec<u32> = self
+            .vertices
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let own = u32::try_from(i).unwrap_or(u32::MAX);
+                if !(v.is_finite() && v.x.abs() < 1e12 && v.y.abs() < 1e12 && v.z.abs() < 1e12) {
+                    return own;
+                }
+                let key = [(v.x * 1e6).round() as i64, (v.y * 1e6).round() as i64, (v.z * 1e6).round() as i64];
+                *at.entry(key).or_insert(own)
+            })
+            .collect();
+        // Each face's unit normal (Newell's method, so a planar polygon of any size has one).
+        let normals: Vec<Option<Vec3>> = self
+            .faces
+            .iter()
+            .map(|f| {
+                let pts: Option<Vec<Vec3>> = f.v.iter().map(|i| self.vertices.get(*i as usize).copied()).collect();
+                // Taken about the face's first corner, so far from the origin it keeps its precision.
+                let o = *pts?.first()?;
+                let pts: Vec<Vec3> = f.v.iter().filter_map(|i| self.vertices.get(*i as usize)).map(|p| *p - o).collect();
+                let mut n = Vec3::new(0.0, 0.0, 0.0);
+                for (k, a) in pts.iter().enumerate() {
+                    let b = pts.get((k + 1) % pts.len())?;
+                    n = n + Vec3::new((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
+                }
+                let len = n.len();
+                (len.is_finite() && len > 1e-12).then(|| n * (1.0 / len))
+            })
+            .collect();
+        // Every edge by its two places: (low, high, face, edge index in the face).
+        let mut edges: Vec<(u32, u32, usize, usize)> = Vec::new();
+        for (fi, f) in self.faces.iter().enumerate() {
+            let n = f.v.len();
+            for k in 0..n.min(64) {
+                let (Some(a), Some(b)) = (f.v.get(k), f.v.get((k + 1) % n)) else { continue };
+                let (Some(&a), Some(&b)) = (weld.get(*a as usize), weld.get(*b as usize)) else { continue };
+                if a != b {
+                    edges.push((a.min(b), a.max(b), fi, k));
+                }
+            }
+        }
+        edges.sort_unstable();
+        let mut hidden = 0usize;
+        let mut i = 0usize;
+        while let Some(&(a, b, f0, k0)) = edges.get(i) {
+            let run = edges.get(i..).unwrap_or(&[]).iter().take_while(|e| e.0 == a && e.1 == b).count().max(1);
+            if run == 2
+                && let Some(&(_, _, f1, k1)) = edges.get(i + 1)
+                && f0 != f1
+                && let (Some(Some(n0)), Some(Some(n1))) = (normals.get(f0), normals.get(f1))
+                && n0.dot(*n1) > 1.0 - 1e-8
+            {
+                for (f, k) in [(f0, k0), (f1, k1)] {
+                    if let Some(face) = self.faces.get_mut(f) {
+                        face.hidden |= 1 << k;
+                    }
+                }
+                hidden += 1;
+            }
+            i += run;
+        }
+        hidden
+    }
+
     /// The faces as triangles (fans from each face's first vertex), as corner points.
     pub fn triangles(&self) -> Vec<[Vec3; 3]> {
         let mut out = Vec::new();
@@ -2289,5 +2368,55 @@ mod grip_tests {
         // 3 vertices + 2 segment midpoints.
         assert_eq!(g.len(), 5, "{g:?}");
         assert!(g.contains(&Vec2::new(0.0, 0.0)) && g.contains(&Vec2::new(5.0, 0.0)));
+    }
+
+    /// A fan of triangles over a flat outline keeps only the outline; a crease and a fold stay.
+    #[test]
+    fn flat_seams_are_hidden_creases_and_folds_kept() {
+        let face = |v: Vec<u32>| MeshFace { v, hidden: 0 };
+        // A flat pentagon fanned from corner 0, far from the origin and sloped: 5 outline edges,
+        // 2 seams.
+        let o = Vec3::new(1.0e5, -2.0e5, 300.0);
+        let ring = [(0.0, 0.0), (40.0, 0.0), (45.0, 20.0), (20.0, 35.0), (-5.0, 20.0)];
+        let vertices: Vec<Vec3> = ring.iter().map(|(x, y)| o + Vec3::new(*x, *y, x * 0.02 + y * 0.3)).collect();
+        let mut m = Mesh { vertices, faces: vec![face(vec![0, 1, 2]), face(vec![0, 2, 3]), face(vec![0, 3, 4])], kind: MeshKind::Polyface };
+        assert_eq!(m.edges().len(), 7);
+        assert_eq!(m.hide_flat_seams(), 2);
+        assert_eq!(m.edges().len(), 5, "only the outline: {:?}", m.edges());
+        assert_eq!(m.hide_flat_seams(), 2, "idempotent");
+        assert_eq!(m.edges().len(), 5);
+        // A ridge (two slopes meeting) is a crease: kept.
+        let vertices = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0), Vec3::new(10.0, 5.0, 2.0), Vec3::new(0.0, 5.0, 2.0)];
+        let mut ridge = vertices.clone();
+        ridge.extend([Vec3::new(10.0, 10.0, 0.0), Vec3::new(0.0, 10.0, 0.0)]);
+        let mut m = Mesh { vertices: ridge, faces: vec![face(vec![0, 1, 2, 3]), face(vec![3, 2, 4, 5])], kind: MeshKind::Polyface };
+        assert_eq!(m.hide_flat_seams(), 0);
+        assert_eq!(m.edges().len(), 7);
+        // A sheet folded back on itself (same plane, facing opposite ways): its fold is an edge.
+        let mut m = Mesh {
+            vertices: vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 1.0, 0.0)],
+            faces: vec![face(vec![0, 1, 2]), face(vec![1, 2, 3])],
+            kind: MeshKind::Polyface,
+        };
+        assert_eq!(m.hide_flat_seams(), 0);
+        // Corners repeated per face are welded: two coplanar quads sharing an edge by place.
+        let mut m = Mesh {
+            vertices: [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (1.0, 0.0), (2.0, 0.0), (2.0, 1.0), (1.0, 1.0)]
+                .iter()
+                .map(|(x, y)| Vec3::new(*x, *y, 0.0))
+                .collect(),
+            faces: vec![face(vec![0, 1, 2, 3]), face(vec![4, 5, 6, 7])],
+            kind: MeshKind::Polyface,
+        };
+        assert_eq!(m.hide_flat_seams(), 1);
+        assert_eq!(m.edges().len(), 6, "the shared edge is hidden on both faces' sides");
+        // Hostile: missing vertices, NaN corners and an empty mesh hide nothing and never panic.
+        let mut m = Mesh {
+            vertices: vec![Vec3::new(f64::NAN, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)],
+            faces: vec![face(vec![0, 1, 9]), face(vec![1, 0, 9]), face(vec![])],
+            kind: MeshKind::Polyface,
+        };
+        assert_eq!(m.hide_flat_seams(), 0);
+        assert_eq!(Mesh::default().hide_flat_seams(), 0);
     }
 }

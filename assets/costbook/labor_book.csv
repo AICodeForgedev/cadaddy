@@ -1,0 +1,237 @@
+trade,category,words,size,unit,hours,family,basis
+electrical,wire,aluminum,#8..#4,ft,0.02,Aluminum building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,aluminum,#3..#2/0,ft,0.03,Aluminum building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,aluminum,#3/0..#4/0,ft,0.04,Aluminum building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,aluminum,250 kcmil..350 kcmil,ft,0.06,Aluminum building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,aluminum,400 kcmil..600 kcmil,ft,0.08,Aluminum building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,aluminum,700 kcmil..1000 kcmil,ft,0.1,Aluminum building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,aluminum,,ft,0.04,Aluminum building wire,one conductor pulled into raceway (size not read: a mid-size feeder's hours)
+electrical,wire,control,,ft,0.006,Low-voltage control cable,a Class 2 cable pulled or laid in with its circuit; per cable foot
+electrical,wire,cable nm,,ft,0.015,Nonmetallic-sheathed cable,a cable stapled through framing; per cable foot
+electrical,wire,cable mc,,ft,0.03,Metal-clad cable,a cable run and strapped; per cable foot
+electrical,wire,,#18..#12,ft,0.01,Copper building wire,one conductor pulled into raceway with its circuit; per conductor foot
+electrical,wire,,#10..#8,ft,0.02,Copper building wire,one conductor pulled into raceway with its circuit; per conductor foot
+electrical,wire,,#6,ft,0.03,Copper building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,,#4..#3,ft,0.04,Copper building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,,#2..#1,ft,0.05,Copper building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,,#1/0..#2/0,ft,0.06,Copper building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,,#3/0..#4/0,ft,0.08,Copper building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,,250 kcmil..350 kcmil,ft,0.1,Copper building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,,400 kcmil..600 kcmil,ft,0.13,Copper building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,,700 kcmil..1000 kcmil,ft,0.16,Copper building wire,one conductor pulled into raceway; per conductor foot
+electrical,wire,,,ft,0.02,Building wire,one conductor pulled into raceway (size not read: a branch circuit's hours)
+electrical,wire,branch circuit,,each,1.5,Branch circuit allowance,"one short branch circuit run complete: raceway, wire and terminations"
+electrical,wire,,,each,0.5,Wiring item,a wiring item counted per piece
+electrical,grounding,tool,,each,0,Tools,a tool bought for the work: it is not installed
+electrical,grounding,cartridge,,each,0,Weld material,consumed by the weld: the weld carries the labor
+electrical,grounding,weld,,each,0.5,Exothermic connection,one welded grounding connection
+electrical,grounding,ground rod,,each,1,Ground rod,one rod driven and its connection made
+electrical,grounding,well,,each,1,Ground test well,one test well set at a rod
+electrical,grounding,clamp,,each,0.3,Grounding clamp,one clamp and its conductor connection
+electrical,grounding,,#8..#4,ft,0.03,Grounding electrode conductor,one bare or insulated conductor run and fastened; per foot
+electrical,grounding,,#3..#1,ft,0.04,Grounding electrode conductor,one conductor run and fastened; per foot
+electrical,grounding,,#1/0..#4/0,ft,0.06,Grounding electrode conductor,one conductor run and fastened; per foot
+electrical,grounding,,,ft,0.04,Grounding electrode conductor,one conductor run and fastened (size not read); per foot
+electrical,grounding,,,each,0.5,Grounding item,one grounding connection or fitting
+electrical,trench,,,ft,0.05,Trench for buried raceway,"machine trench, bedding and backfill; per trench foot"
+electrical,conduit,stub,,each,0.3,Conduit stub,one stub up from a box into the space above
+electrical,conduit,pvc,"1/2""..3/4""",ft,0.03,PVC conduit,one length set with its glued joints; per foot
+electrical,conduit,pvc,"1""",ft,0.04,PVC conduit,one length set with its glued joints; per foot
+electrical,conduit,pvc,"1-1/4""..1-1/2""",ft,0.05,PVC conduit,one length set with its glued joints; per foot
+electrical,conduit,pvc,"2""",ft,0.06,PVC conduit,one length set with its glued joints; per foot
+electrical,conduit,pvc,"2-1/2""..3""",ft,0.08,PVC conduit,one length set with its glued joints; per foot
+electrical,conduit,pvc,"3-1/2""..4""",ft,0.1,PVC conduit,one length set with its glued joints; per foot
+electrical,conduit,pvc,"5""..6""",ft,0.14,PVC conduit,one length set with its glued joints; per foot
+electrical,conduit,ent,"1/2""..3/4""",ft,0.025,Electrical nonmetallic tubing,tubing run and strapped in framing; per foot
+electrical,conduit,ent,"1""..2""",ft,0.035,Electrical nonmetallic tubing,tubing run and strapped in framing; per foot
+electrical,conduit,rmc,"1/2""..3/4""",ft,0.08,Rigid metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,rmc,"1""",ft,0.1,Rigid metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,rmc,"1-1/4""..1-1/2""",ft,0.13,Rigid metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,rmc,"2""",ft,0.16,Rigid metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,rmc,"2-1/2""..3""",ft,0.22,Rigid metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,rmc,"3-1/2""..4""",ft,0.28,Rigid metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,rmc,"5""..6""",ft,0.4,Rigid metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,imc,"1/2""..1""",ft,0.08,Intermediate metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,imc,"1-1/4""..2""",ft,0.13,Intermediate metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,imc,"2-1/2""..4""",ft,0.22,Intermediate metal conduit,"threaded conduit cut, threaded and set; per foot"
+electrical,conduit,flexible,,ft,0.04,Flexible conduit,a flexible whip run to the equipment; per foot
+electrical,conduit,,"1/2""",ft,0.04,EMT conduit,tubing bent and set with its couplings and straps; per foot
+electrical,conduit,,"3/4""",ft,0.05,EMT conduit,tubing bent and set with its couplings and straps; per foot
+electrical,conduit,,"1""",ft,0.06,EMT conduit,tubing bent and set with its couplings and straps; per foot
+electrical,conduit,,"1-1/4""",ft,0.07,EMT conduit,tubing bent and set with its couplings and straps; per foot
+electrical,conduit,,"1-1/2""",ft,0.08,EMT conduit,tubing bent and set with its couplings and straps; per foot
+electrical,conduit,,"2""",ft,0.1,EMT conduit,tubing bent and set with its couplings and straps; per foot
+electrical,conduit,,"2-1/2""",ft,0.13,EMT conduit,tubing set with its couplings and straps; per foot
+electrical,conduit,,"3""..3-1/2""",ft,0.16,EMT conduit,tubing set with its couplings and straps; per foot
+electrical,conduit,,"4""",ft,0.22,EMT conduit,tubing set with its couplings and straps; per foot
+electrical,conduit,,,ft,0.06,Raceway,a raceway run and supported (size not read: a 1 in run's hours); per foot
+electrical,conduit,,,each,0.3,Raceway item,one raceway piece set
+electrical,conduit fittings,tool,,each,0,Tools,a tool bought for the work: it is not installed
+electrical,conduit fittings,twist,,each,0.01,Wire connector,one splice made up
+electrical,conduit fittings,wire connector,,each,0.01,Wire connector,one splice made up
+electrical,conduit fittings,pull string,,each,0.1,Pull string,one pull line blown or fished through a run
+electrical,conduit fittings,locknut,"1/2""..1""",each,0.01,Locknut,tightened with its connector at a knockout
+electrical,conduit fittings,locknut,"1-1/4""..2""",each,0.02,Locknut,tightened with its connector at a knockout
+electrical,conduit fittings,locknut,,each,0.03,Locknut,tightened with its connector at a knockout
+electrical,conduit fittings,bushing,"1/2""..2""",each,0.05,Bushing,one bushing set on a conduit end
+electrical,conduit fittings,bushing,,each,0.08,Bushing,one bushing set on a large conduit end
+electrical,conduit fittings,strap,"1/2""..1""",each,0.03,Conduit strap,one strap or hanger fastened
+electrical,conduit fittings,strap,"1-1/4""..2""",each,0.05,Conduit strap,one strap or hanger fastened
+electrical,conduit fittings,strap,,each,0.08,Conduit strap,one strap or hanger fastened on a large conduit
+electrical,conduit fittings,hanger,,each,0.15,Raceway hanger,one hanger or support set
+electrical,conduit fittings,support,,each,0.15,Raceway support,one hanger or support set
+electrical,conduit fittings,pvc elbow,"1/2""..1""",each,0.1,PVC elbow,one elbow glued into a run
+electrical,conduit fittings,pvc elbow,"1-1/4""..2""",each,0.15,PVC elbow,one elbow glued into a run
+electrical,conduit fittings,pvc elbow,"2-1/2""..4""",each,0.25,PVC elbow,one elbow glued into a run
+electrical,conduit fittings,pvc elbow,,each,0.35,PVC elbow,one large elbow glued into a run
+electrical,conduit fittings,rmc elbow,"1/2""..1""",each,0.2,Rigid elbow,one threaded elbow set
+electrical,conduit fittings,rmc elbow,"1-1/4""..2""",each,0.35,Rigid elbow,one threaded elbow set
+electrical,conduit fittings,rmc elbow,"2-1/2""..4""",each,0.6,Rigid elbow,one threaded elbow set
+electrical,conduit fittings,rmc elbow,,each,0.9,Rigid elbow,one large threaded elbow set
+electrical,conduit fittings,elbow,"1/2""",each,0.1,EMT elbow,one factory or field bend set into a run
+electrical,conduit fittings,elbow,"3/4""",each,0.12,EMT elbow,one factory or field bend set into a run
+electrical,conduit fittings,elbow,"1""",each,0.15,EMT elbow,one factory or field bend set into a run
+electrical,conduit fittings,elbow,"1-1/4""..1-1/2""",each,0.2,EMT elbow,one factory elbow set into a run
+electrical,conduit fittings,elbow,"2""",each,0.25,EMT elbow,one factory elbow set into a run
+electrical,conduit fittings,elbow,,each,0.4,EMT elbow,one large factory elbow set into a run
+electrical,conduit fittings,offset,"1/2""..1""",each,0.15,Offset,one offset bent or set into a run
+electrical,conduit fittings,offset,"1-1/4""..2""",each,0.25,Offset,one offset set into a run
+electrical,conduit fittings,offset,,each,0.4,Offset,one large offset set into a run
+electrical,conduit fittings,,"1/2""..3/4""",each,0.03,Raceway fitting,"one coupling, connector or adapter made up"
+electrical,conduit fittings,,"1""",each,0.04,Raceway fitting,"one coupling, connector or adapter made up"
+electrical,conduit fittings,,"1-1/4""..2""",each,0.06,Raceway fitting,"one coupling, connector or adapter made up"
+electrical,conduit fittings,,"2-1/2""..4""",each,0.1,Raceway fitting,"one coupling, connector or adapter made up"
+electrical,conduit fittings,,"5""..6""",each,0.15,Raceway fitting,"one coupling, connector or adapter made up"
+electrical,conduit fittings,,,each,0.05,Raceway fitting,one fitting made up (size not read)
+electrical,boxes,plate,1 gang..2 gang,each,0.03,Device plate,one plate set on its device
+electrical,boxes,plate,,each,0.05,Device plate,one multi-gang plate set on its devices
+electrical,boxes,ring,1 gang..2 gang,each,0.05,Plaster ring,one ring set on its box
+electrical,boxes,ring,,each,0.08,Plaster ring,one ring set on its box
+electrical,boxes,device box,1 gang,each,0.2,Device box,one box set and fastened
+electrical,boxes,device box,2 gang,each,0.25,Device box,one box set and fastened
+electrical,boxes,device box,3 gang,each,0.3,Device box,one box set and fastened
+electrical,boxes,device box,,each,0.35,Device box,one multi-gang box set and fastened
+electrical,boxes,square,"4-11/16""..5""",each,0.2,Square box,one box set and fastened
+electrical,boxes,square,,each,0.15,Square box,one box set and fastened
+electrical,boxes,octagon,,each,0.15,Octagon box,one box set and fastened
+electrical,boxes,pull box,,each,0.5,Pull box,one pull or junction box set and fastened
+electrical,boxes,,,each,0.2,Box,one box set and fastened
+electrical,,junction box,,each,0.3,Junction box,one junction box set and its connection made
+electrical,,connection box,,each,0.3,Connection box,one box set at the equipment and its connection made
+electrical,devices,exit sign,,each,0.75,Exit sign,one sign hung and connected
+electrical,devices,occupancy,,each,0.45,Occupancy sensor,"one sensor set, connected and aimed"
+electrical,devices,vacancy,,each,0.45,Occupancy sensor,"one sensor set, connected and aimed"
+electrical,devices,sensor,,each,0.4,Sensor,one sensor set and connected
+electrical,devices,power pack,,each,0.4,Power pack,one power pack set and connected
+electrical,devices,dimmer,,each,0.45,Dimmer,one dimmer connected and set in its box
+electrical,devices,switch motor,,each,0.5,Motor-rated switch,one switch connected and set in its box
+electrical,devices,switch way,,each,0.35,Three- or four-way switch,one switch connected and set in its box
+electrical,devices,switch,,each,0.3,Switch,one switch connected and set in its box
+electrical,devices,gfci,,each,0.5,GFCI receptacle,one GFCI receptacle connected and tested
+electrical,devices,usb,,each,0.45,USB receptacle,one receptacle connected and set in its box
+electrical,devices,receptacle,,each,0.4,Receptacle,one receptacle connected and set in its box
+electrical,devices,light site,,each,1.5,Site luminaire,one luminaire set on its pole or base and connected
+electrical,devices,light,,each,0.75,Luminaire,one luminaire hung or set and connected
+electrical,devices,equipment connection,,each,1,Equipment connection,one piece of equipment connected (whip and termination)
+electrical,devices,charging,,each,4,EV charger,one charger set and connected
+electrical,devices,charger,,each,4,EV charger,one charger set and connected
+electrical,devices,smoke,,each,0.5,Smoke detector,one detector base set and connected
+electrical,devices,data,,each,0.45,Communication outlet,one jack terminated and set in its box
+electrical,devices,telephone,,each,0.45,Communication outlet,one jack terminated and set in its box
+electrical,devices,tv,,each,0.45,Communication outlet,one jack terminated and set in its box
+electrical,fixtures,,,each,0.75,Luminaire,"one luminaire hung or set and connected"
+electrical,devices,,,each,0.4,Wiring device,a wiring device of a kind the book does not name: a receptacle's hours
+electrical,fire alarm,,,each,0.6,Fire alarm device,one device or module set and connected
+electrical,breakers,,401A..4000A,each,4,Circuit breaker,one large frame breaker set and terminated
+electrical,breakers,,101A..400A,each,1.5,Circuit breaker,one breaker set and terminated
+electrical,breakers,,1P,each,0.2,Circuit breaker,one breaker set and terminated
+electrical,breakers,,2P,each,0.25,Circuit breaker,one breaker set and terminated
+electrical,breakers,,3P,each,0.35,Circuit breaker,one breaker set and terminated
+electrical,breakers,,,each,0.25,Circuit breaker,one breaker set and terminated (poles not read)
+electrical,lug kits,,,each,0.5,Lug kit,one lug kit set and terminated
+electrical,equipment,trim,,each,0.5,Panel trim,one trim or cover set
+electrical,equipment,cover,,each,0.5,Panel trim,one trim or cover set
+electrical,equipment,switchboard,,each,24,Switchboard,"one switchboard set, leveled and its sections joined"
+electrical,equipment,disconnect,..60A,each,2,Disconnect switch,one switch set and terminated
+electrical,equipment,disconnect,61A..200A,each,3,Disconnect switch,one switch set and terminated
+electrical,equipment,disconnect,201A..600A,each,6,Disconnect switch,one switch set and terminated
+electrical,equipment,disconnect,601A..6000A,each,12,Disconnect switch,one switch set and terminated
+electrical,equipment,disconnect,,each,3,Disconnect switch,one switch set and terminated
+electrical,equipment,cabinet,,each,4,CT cabinet,one cabinet set and its conductors passed through
+electrical,equipment,meter,,each,2,Meter socket,one socket set and terminated
+electrical,equipment,transformer,,each,8,Transformer,one transformer set and terminated
+electrical,equipment,transfer switch,,each,8,Transfer switch,one switch set and terminated
+electrical,equipment,generator,,each,16,Generator,one generator set and connected
+electrical,equipment,panel,..125A,each,4,Panelboard,one panelboard set and its conductors terminated
+electrical,equipment,panel,126A..225A,each,6,Panelboard,one panelboard set and its conductors terminated
+electrical,equipment,panel,226A..600A,each,10,Panelboard,one panelboard set and its conductors terminated
+electrical,equipment,panel,,each,6,Panelboard,one panelboard set and its conductors terminated
+electrical,equipment,pole,,each,4,Pole,one pole set on its base with its hand hole wired
+electrical,equipment,pull box,,each,4,Site pull box,one in-grade pull box set
+electrical,equipment,sign,,each,1,Sign connection,the sign's power connection
+electrical,equipment,charger,,each,4,EV charger,one charger set and connected
+electrical,equipment,,,each,4,Electrical equipment,one piece of equipment set and connected
+electrical,equipment connections,,,each,1,Equipment connection,one piece of equipment connected (whip and termination)
+electrical,,,,each,0.5,Electrical item,an electrical item of a kind the book does not name: one piece set
+electrical,,,,ft,0.05,Electrical run,an electrical run of a kind the book does not name; per foot
+mechanical,fittings,,"1/2""..1""",each,0.3,Pipe fitting,one fitting made up in a pipe run
+mechanical,fittings,,"1-1/4""..2""",each,0.5,Pipe fitting,one fitting made up in a pipe run
+mechanical,fittings,,"2-1/2""..4""",each,0.8,Pipe fitting,one fitting made up in a pipe run
+mechanical,fittings,,"5""..12""",each,1.2,Pipe fitting,one large fitting made up in a pipe run
+mechanical,fittings,,,each,0.75,Duct fitting,one duct fitting (sized by its width and height) hung and sealed
+mechanical,duct,,,ft,0.25,Duct,duct hung and sealed; per foot of run
+mechanical,duct,,,lb,0,Duct weight,the duct's weight: its labor is on the duct's length
+mechanical,duct,,,sq ft,0,Duct surface,the duct's surface: its labor is on the duct's length
+mechanical,pipe,,"1/2""..1""",ft,0.12,Pipe,pipe run and hung with its joints; per foot
+mechanical,pipe,,"1-1/4""..2""",ft,0.18,Pipe,pipe run and hung with its joints; per foot
+mechanical,pipe,,"2-1/2""..4""",ft,0.3,Pipe,pipe run and hung with its joints; per foot
+mechanical,pipe,,,ft,0.2,Pipe,pipe run and hung with its joints (size not read); per foot
+mechanical,equipment,stand,,each,1.5,Equipment stand,one stand set and anchored
+mechanical,equipment,curb,,each,2,Roof curb,one curb set on the roof deck
+mechanical,equipment,heater,,each,2,Unit heater,one heater hung and connected
+mechanical,equipment,pump,,each,3,Pump,one pump set and connected
+mechanical,equipment,tank,,each,2,Tank,one tank set and connected
+mechanical,equipment,fan,,each,2,Fan,one fan set and connected
+mechanical,equipment,split,,each,8,Split system,one indoor and outdoor section set and connected
+mechanical,equipment,heat pump,,each,6,Heat pump,one unit set and connected
+mechanical,equipment,air unit,,each,16,Air-handling unit,one unit rigged into place and connected
+mechanical,equipment,,,each,4,Mechanical equipment,one piece of equipment set and connected
+mechanical,,,,each,1,Mechanical item,a mechanical item of a kind the book does not name: one piece set
+mechanical,,,,ft,0.2,Mechanical run,a mechanical run of a kind the book does not name; per foot
+mechanical,,,,lb,0,Weight,a weight: the labor is on the item's length or count
+mechanical,,,,sq ft,0,Surface,a surface: the labor is on the item's length or count
+plumbing,pipe,,"1/2""..1""",ft,0.12,Pipe,pipe run and hung with its joints; per foot
+plumbing,pipe,,"1-1/4""..2""",ft,0.18,Pipe,pipe run and hung with its joints; per foot
+plumbing,pipe,,"2-1/2""..4""",ft,0.3,Pipe,pipe run and hung with its joints; per foot
+plumbing,pipe,,"5""..12""",ft,0.5,Pipe,large pipe run and hung with its joints; per foot
+plumbing,pipe,,,ft,0.2,Pipe,pipe run and hung with its joints (size not read); per foot
+plumbing,fittings,,"1/2""..1""",each,0.3,Pipe fitting,one fitting made up in a pipe run
+plumbing,fittings,,"1-1/4""..2""",each,0.5,Pipe fitting,one fitting made up in a pipe run
+plumbing,fittings,,"2-1/2""..4""",each,0.8,Pipe fitting,one fitting made up in a pipe run
+plumbing,fittings,,,each,1.2,Pipe fitting,one large fitting made up in a pipe run
+plumbing,,shower,,each,3,Shower,one shower valve and trim set and connected
+plumbing,,tub,,each,4,Bathtub,one tub set and connected
+plumbing,,eyewash,,each,2,Emergency fixture,one fixture set and connected
+plumbing,,hydrant,,each,1,Wall hydrant,one hydrant set and connected
+plumbing,,washing machine,,each,1,Washer box,one box set in the wall and connected
+plumbing,,cleanout,,each,0.75,Cleanout,one cleanout set to grade or floor
+plumbing,,interceptor,,each,4,Interceptor,one interceptor set and connected
+plumbing,,valve,,each,0.5,Valve,one valve set in its line
+plumbing,,pump,,each,3,Pump,one pump set and connected
+plumbing,,tank,,each,2,Tank,one tank set and connected
+plumbing,,range,,each,1,Appliance connection,one appliance's connection made
+plumbing,,,,each,2.5,Plumbing fixture,a plumbing fixture or item of a kind the book does not name: one set and connected
+plumbing,,,,ft,0.2,Plumbing run,a plumbing run of a kind the book does not name; per foot
+concrete,,,,cu yd,1,Concrete,concrete placed and consolidated; per cubic yard
+concrete,,forms,,sq ft,0.1,Formwork,forms set and stripped; per square foot of contact
+concrete,,,,lb,0.01,Reinforcing,bars set and tied; per pound
+concrete,,curing,,sq ft,0.005,Curing,curing applied; per square foot
+concrete,,,,sq ft,0.02,Concrete finish,slab or pad finished; per square foot
+concrete,,,,each,0.25,Embed,one anchor bolt or embed set
+general,rooms,,,each,0,Room count,a count of rooms: the work is on the trade lines
+general,rooms,finish,,sq ft,0.03,Floor finish,a floor finish laid; per square foot
+general,rooms,,,sq ft,0,Room area,a room's area: the work is on the trade lines
+general,windows,area,,sq ft,0,Window area,the windows' area: their labor is per window
+general,specialties,,,each,1,Specialty,one specialty item set and fastened
+architecture,roofs,parapet,,lf,0.3,Parapet,parapet framed and capped; per foot
+architecture,roofs,equipment,,each,2,Rooftop equipment support,one support or curb flashed into the roof

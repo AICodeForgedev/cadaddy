@@ -1261,6 +1261,8 @@ fn run_add(s: &mut Session, p: &Value) -> Result<Value> {
                 made,
                 basis,
                 corrections: Vec::new(),
+                tag: String::new(),
+                cfm: None,
             });
         }
         El::Equipment => {

@@ -472,7 +472,9 @@ fn trade_color(trade: &str) -> u8 {
 /// A piece's body (sheet units).
 fn body(p: &Piece) -> Mesh {
     if let Some(m) = p.custom.as_ref().filter(|m| !m.faces.is_empty() && m.vertices.iter().all(|v| v.is_finite())) {
-        return m.clone();
+        // A body shaped by its builder (a floor finish over its room): the seams inside its flat
+        // surfaces (a straight run of its outline in pieces, a triangulated top) don't draw.
+        return super::bspec::seamless(m.clone());
     }
     let mut m = super::wallgen::empty_mesh();
     for b in p.blocks.iter().filter(|b| b.ok()).take(MAX_BLOCKS) {
@@ -911,6 +913,23 @@ fn waste_of(r: &Rules, trade: &str) -> Option<(f64, String)> {
     (f > 0.0 && f < 1.0).then(|| (f, r.source_text(path)))
 }
 
+/// Whether a trade's waste factor applies to a kind of piece (the rules' `takeoff.waste_kinds`).
+fn takes_waste(r: &Rules, kind: &str) -> bool {
+    r.words("takeoff.waste_kinds").iter().any(|k| k.eq_ignore_ascii_case(kind))
+}
+
+/// The waste factor on a kind of a trade's pieces, and its source; none where the trade has no
+/// waste factor or the kind takes none (Q6527: the takeoff's waste is the report's).
+pub(crate) fn piece_waste(r: &Rules, trade: &str, kind: &str) -> Option<(f64, String)> {
+    if takes_waste(r, kind) { waste_of(r, trade) } else { None }
+}
+
+/// Whether a kind of piece is bought by the piece: its takeoff line counts it though it carries
+/// a length or area (the rules' `takeoff.by_the_piece`).
+pub(crate) fn by_the_piece(r: &Rules, kind: &str) -> bool {
+    r.words("takeoff.by_the_piece").iter().any(|k| k.eq_ignore_ascii_case(kind))
+}
+
 fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "bim.atoms.report";
     let level = str_param(p, "level").map(str::to_string);
@@ -975,22 +994,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         let mut m = serde_json::Map::new();
         for (kind, tally) in kinds {
             let mut j = super::mepatoms::tally_json(tally);
-            let buys = matches!(
-                kind.as_str(),
-                "sheet"
-                    | "pour"
-                    | "batt"
-                    | "board"
-                    | "cmu"
-                    | "flooring"
-                    | "plaster"
-                    | "lath"
-                    | "weather_barrier"
-                    | "siding"
-                    | "panel"
-                    | "brick"
-                    | "cladding"
-            );
+            let buys = takes_waste(&rules, kind);
             if let Some((f, _)) = waste.as_ref().filter(|_| buys) {
                 let r2 = |v: f64| (v * 100.0).round() / 100.0;
                 let mut w = json!({"pieces": (tally.pieces() * (1.0 + f)).ceil()});
@@ -1235,6 +1239,24 @@ pub(crate) fn lead_num(v: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6410: a piece whose builder shapes its body (a floor finish over its room) draws its
+    /// outline, not the seams inside its flat surfaces.
+    #[test]
+    fn a_shaped_body_draws_no_seam_inside_a_flat_surface() {
+        use cadaddy_doc::{MeshFace, MeshKind};
+        let v = |x: f64, y: f64| Vec3::new(x, y, 0.0);
+        // A flat square split into two triangles along its diagonal.
+        let m = Mesh {
+            vertices: vec![v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)],
+            faces: vec![MeshFace { v: vec![0, 1, 2], hidden: 0 }, MeshFace { v: vec![0, 2, 3], hidden: 0 }],
+            kind: MeshKind::Polyface,
+        };
+        assert_eq!(m.edges().len(), 5);
+        let mut p = Piece::new("finishes", "flooring", "carpet", "Level 1", Source::computed());
+        p.custom = Some(m);
+        assert_eq!(body(&p).edges().len(), 4, "the square's outline only");
+    }
 
     #[test]
     fn rules_read_and_cite_their_sources() {
