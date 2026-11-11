@@ -312,6 +312,12 @@ pub(crate) struct DeviceBuild {
     pub misplaced: Vec<Value>,
     /// Devices drawn clear of every wall hung from the ceiling over them (Q6250).
     pub hung: usize,
+    /// Connections of ceiling equipment built at their equipment's housing above the ceiling,
+    /// those of them the job had given another height, and those whose housing is still more
+    /// than the rule's tolerance off the box (Q6521).
+    pub at_equipment: usize,
+    pub moved_to_equipment: usize,
+    pub off_equipment: Vec<Value>,
 }
 
 impl DeviceBuild {
@@ -329,6 +335,9 @@ impl DeviceBuild {
             "misplaced": self.misplaced.len(),
             "misplaced_first": self.misplaced.iter().take(50).collect::<Vec<_>>(),
             "hung_from_ceiling": self.hung,
+            "connections_at_equipment": self.at_equipment,
+            "connections_moved_to_equipment": self.moved_to_equipment,
+            "connections_off_equipment": self.off_equipment,
         })
     }
 }
@@ -1397,6 +1406,7 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
     let clear_rule = ClearOfWalls::read();
     // A wall device's clearance under its room's ceiling (Q6520).
     let under_rule = super::underceiling::Rule::load();
+    let conn_rule = super::equipconn::Numbers::read();
     // The built walls' pieces, for setting a wall device in its wall's face; the floors, for what
     // lies outside the building.
     let pieces = host_pieces(d, upf);
@@ -1571,6 +1581,17 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         } else {
             mount
         };
+        // The connection of a piece of ceiling equipment (a ceiling exhaust fan's): at its
+        // housing, above the ceiling over it, as the equipment and the ceiling stand on this
+        // build, never at a height fixed earlier (Q6521).
+        let at_equipment = (kind == "equipment connection" || t.kind == "equipment_connection")
+            .then(|| {
+                let floor = level.elevation_ft * upf;
+                let over = |q: Vec2| ceiling_over(&ceilings, &level.name, q, floor, upf);
+                super::equipconn::place(t, &sp.mep.equipment, level, read_at, placed, upf, BOX_IN, &over, &conn_rule)
+            })
+            .flatten();
+        let mount = if at_equipment.is_some() { Mount::Ceiling } else { mount };
         let floor = level.elevation_ft * upf;
         let height: Chosen = match mount {
             Mount::Ceiling => {
@@ -1661,6 +1682,10 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             Some(c) => c,
             None => height,
         };
+        let height = match &at_equipment {
+            Some(a) => Chosen { inches: a.middle_in(), from: "equipment", source: SourceKind::Rule, doc: a.basis.clone(), datum: Datum::Centre },
+            None => height,
+        };
         *report.heights.entry(height.from).or_default() += 1;
         if height.source == SourceKind::Default {
             *report.defaults.entry(vkind.clone()).or_default() += 1;
@@ -1701,9 +1726,10 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         let placed_on = on_wall
             .then(|| seat(&pieces, &level.name, p, zc, &others, upf, vkind != "device", documented_room.as_deref().map(|r| (&sides, r))))
             .flatten();
-        let (centre, along) = match &placed_on {
-            Some(st) => (st.centre, st.along),
-            None => (p, Vec2::new(1.0, 0.0)),
+        let (centre, along) = match (&at_equipment, &placed_on) {
+            (Some(a), _) => (a.centre, a.along),
+            (None, Some(st)) => (st.centre, st.along),
+            (None, None) => (p, Vec2::new(1.0, 0.0)),
         };
         let (x, y) = (centre.x, centre.y);
         // What it is (Q6315): its element's kind as read (its legend row's, its sheet's), else its
@@ -1864,6 +1890,32 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             hp.note = Some(format!("measured {}", height.datum.words()));
         }
         store.set("mount_height", hp.clone());
+        if let Some(a) = &at_equipment {
+            report.at_equipment += 1;
+            store.set("serves", Prop::new(a.tag.clone(), Source::from_doc(SourceKind::Rule, super::equipconn::RULE)));
+            // The height the job gave it earlier (its equipment's then): the design value, kept
+            // beside the one built, with why.
+            let given = field(t, "mount_height_in").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
+            if let Some(g) = given.filter(|g| (g - height.inches).abs() > 0.5) {
+                report.moved_to_equipment += 1;
+                let note = field(t, "mount_height_note").unwrap_or_else(|| "the height the job read for it".into());
+                let c = super::provenance::Correction {
+                    key: "mount_height".into(),
+                    design: format!("{}", round2(g)),
+                    corrected: format!("{}", round2(height.inches)),
+                    reason: format!(
+                        "a connection is at its equipment: {}'s housing above the ceiling over it as built, not the {} in fixed when it was read ({note})",
+                        a.tag,
+                        round2(g)
+                    ),
+                    rule: super::equipconn::RULE.into(),
+                };
+                super::provenance::correct_with(&mut store, &c, Source::from_doc(SourceKind::Note, &note), hp.source.clone());
+            }
+            if a.gap_in > conn_rule.tolerance_in && report.off_equipment.len() < MAX_LISTED {
+                report.off_equipment.push(json!({"level": level.name, "mark": mark, "equipment": a.tag, "gap_in": round2(a.gap_in), "ceiling_in": a.ceiling_in.map(round2)}));
+            }
+        }
         if height.datum != Datum::Centre || mount == Mount::Floor {
             store.set("mount_datum", Prop::new(height.datum.name(), hp.source.clone()).with_note("what its height is measured to on it"));
         }

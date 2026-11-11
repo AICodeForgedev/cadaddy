@@ -5,6 +5,13 @@
 //! shapes how objects look (layers, styles, blocks, header variables, field values, images, the
 //! build options) changing rebuilds every part; layouts, plot styles and lists past the block
 //! expansion budget are always built in full.
+//!
+//! The view's detail is the exception (Q6472): a new zoom band or view area (the tessellation
+//! tolerance, the dash level of detail, the area hatch patterns are made for) rebuilds only the
+//! parts whose objects reach into the new area. A part wholly outside it keeps the detail it was
+//! built at, as long as that is no finer than the new one (so the list never holds more than a
+//! build at the new detail would), until the view comes to it. Zoomed in on one room of a large
+//! drawing, a zoom band then tessellates the objects around the room, not the whole drawing.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -62,17 +69,14 @@ impl Context {
     }
 }
 
-/// The build options that change what a list holds (not the cancel flag).
+/// The build options that change what a list holds (not the cancel flag, nor the view's detail:
+/// see [`ViewDetail`]).
 fn options_key(o: &Options) -> String {
     format!(
-        "{:x}|{:x}|{}|{}|{}|{:x}|{:?}|{}|{:?}|{:?}|{}|{}|{}|{}|{:?}",
-        o.tolerance.to_bits(),
-        o.min_dash.to_bits(),
+        "{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{:?}",
         o.text,
         o.fill,
         o.lineweights,
-        o.view_height.to_bits(),
-        o.view.map(|b| [b.min.x.to_bits(), b.min.y.to_bits(), b.max.x.to_bits(), b.max.y.to_bits()]),
         o.transparency,
         o.skip_viewport,
         o.projection,
@@ -80,14 +84,59 @@ fn options_key(o: &Options) -> String {
         o.plot_style_table.is_some(),
         o.color_overrides.len(),
         o.layer_lines.len(),
-        o.detail.as_ref().map(detail::Detail::key),
+        // The detail levels' rules (their pixel size follows the view: see `ViewDetail`).
+        o.detail.as_ref().map(detail::Detail::rules_key),
     )
 }
 
-/// One chunk's list.
+/// The options that follow the view: how finely curves are tessellated and dashes drawn, the
+/// pixel size the detail levels draw for (0: every object in full), the height relative point
+/// sizes follow, and the area hatch patterns (and point clouds) are made for. A part out of the
+/// view keeps those it was built with (see [`Part::serves`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ViewDetail {
+    tolerance: f64,
+    min_dash: f64,
+    detail_px: f64,
+    view_height: f64,
+    view: Option<Bounds2>,
+}
+
+impl ViewDetail {
+    fn of(o: &Options) -> ViewDetail {
+        let detail_px = o.detail.as_ref().map_or(0.0, |d| d.px);
+        ViewDetail { tolerance: o.tolerance, min_dash: o.min_dash, detail_px, view_height: o.view_height, view: o.view }
+    }
+}
+
+/// One chunk's list, the detail it was built at, and where its objects are: the list's bounds and
+/// the objects' own (a hatch outside the area it was built for has no pattern lines there).
+#[derive(Clone)]
 struct Part {
     chunk: ChunkRef,
     list: Arc<DisplayList>,
+    detail: ViewDetail,
+    extent: Bounds2,
+}
+
+impl Part {
+    /// Whether this part can stand in a list built at `want`: built at it, or wholly outside the
+    /// area `want` is for (nothing of it is on screen) and no finer than it.
+    fn serves(&self, want: &ViewDetail) -> bool {
+        if self.detail == *want {
+            return true;
+        }
+        let Some(area) = want.view else { return false };
+        let (have, e) = (&self.detail, &self.extent);
+        let coarse = have.tolerance.is_finite()
+            && have.min_dash.is_finite()
+            && have.detail_px.is_finite()
+            && have.tolerance >= want.tolerance
+            && have.min_dash >= want.min_dash
+            && have.detail_px >= want.detail_px;
+        let outside = e.is_empty() || e.min.is_finite() && e.max.is_finite() && !e.intersects(&area);
+        coarse && outside
+    }
 }
 
 /// Where one part sits in the joined list.
@@ -98,8 +147,9 @@ struct Span {
     tris: usize,
 }
 
-/// The parts of the model-space list kept between builds (one per canvas).
-#[derive(Default)]
+/// The parts of the model-space list kept between builds (one per canvas). A copy is cheap (the
+/// parts are shared): a background build takes one and hands back the cache it leaves.
+#[derive(Clone, Default)]
 pub struct ChunkCache {
     ctx: Option<Context>,
     parts: Vec<Part>,
@@ -109,9 +159,11 @@ pub struct ChunkCache {
     last: Option<(usize, usize, usize, usize, usize, usize)>,
     /// The last build patched the list handed back in place.
     pub patched: bool,
-    /// Chunks built again by the last [`build_cached`] (for measuring).
+    /// Chunks built again by the last [`build_cached`] (for measuring), the ones used as they
+    /// were, and of those the ones kept at another detail (out of the view, see [`ViewDetail`]).
     pub rebuilt: usize,
     pub reused: usize,
+    pub kept: usize,
 }
 
 impl ChunkCache {
@@ -125,7 +177,12 @@ impl ChunkCache {
 
 impl std::fmt::Debug for ChunkCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChunkCache").field("parts", &self.parts.len()).field("rebuilt", &self.rebuilt).field("reused", &self.reused).finish()
+        f.debug_struct("ChunkCache")
+            .field("parts", &self.parts.len())
+            .field("rebuilt", &self.rebuilt)
+            .field("reused", &self.reused)
+            .field("kept", &self.kept)
+            .finish()
     }
 }
 
@@ -157,6 +214,17 @@ fn append_ref(dst: &mut DisplayList, src: &DisplayList) {
     dst.pens.extend_from_slice(&src.pens);
     dst.bounds = dst.bounds.union(&src.bounds);
     dst.expanded = dst.expanded.saturating_add(src.expanded);
+}
+
+/// The list of one chunk's objects, and where they are (see [`Part`]).
+fn build_chunk_part(d: &Drawing, chunk: &ChunkRef, opts: &Options) -> (DisplayList, Bounds2) {
+    let list = build_chunk(d, chunk, opts);
+    // Only a part a later view could leave out needs its objects measured.
+    let extent = match opts.view {
+        Some(_) => list.bounds.union(&cadaddy_doc::entities_bounds(d, chunk.items().iter().map(|e| &**e))),
+        None => list.bounds,
+    };
+    (list, extent)
 }
 
 /// The list of one chunk's objects.
@@ -210,32 +278,37 @@ pub fn build_cached_into(d: &Drawing, space: &Space, opts: &Options, cache: &mut
         cache.parts.clear();
         cache.ctx = Some(ctx);
     }
+    let detail = ViewDetail::of(opts);
     let chunks = d.model.chunk_refs();
     let before: Vec<(usize, Arc<DisplayList>)> = cache.parts.iter().map(|p| (p.chunk.key(), Arc::clone(&p.list))).collect();
-    let mut old: HashMap<usize, Arc<DisplayList>> = cache.parts.drain(..).map(|p| (p.chunk.key(), p.list)).collect();
-    // Chunks kept as they were reuse their parts; the others are built (side by side).
-    let mut parts: Vec<Option<Arc<DisplayList>>> = chunks.iter().map(|c| old.remove(&c.key())).collect();
+    let mut old: HashMap<usize, Part> = cache.parts.drain(..).map(|p| (p.chunk.key(), p)).collect();
+    // Chunks kept as they were reuse their parts (at the detail asked for, or out of view at
+    // their own); the others are built (side by side).
+    let mut parts: Vec<Option<Part>> = chunks.iter().map(|c| old.remove(&c.key()).filter(|p| p.serves(&detail))).collect();
     drop(old);
     let stale: Vec<usize> = parts.iter().enumerate().filter(|(_, p)| p.is_none()).map(|(i, _)| i).collect();
     cache.rebuilt = stale.len();
     cache.reused = chunks.len() - stale.len();
+    cache.kept = parts.iter().flatten().filter(|p| p.detail != detail).count();
     #[cfg(not(target_arch = "wasm32"))]
-    let built: Vec<(usize, DisplayList)> = {
+    let built: Vec<(usize, (DisplayList, Bounds2))> = {
         use rayon::prelude::*;
-        stale.par_iter().filter_map(|&i| chunks.get(i).map(|c| (i, build_chunk(d, c, opts)))).collect()
+        stale.par_iter().filter_map(|&i| chunks.get(i).map(|c| (i, build_chunk_part(d, c, opts)))).collect()
     };
     #[cfg(target_arch = "wasm32")]
-    let built: Vec<(usize, DisplayList)> = stale.iter().filter_map(|&i| chunks.get(i).map(|c| (i, build_chunk(d, c, opts)))).collect();
+    let built: Vec<(usize, (DisplayList, Bounds2))> =
+        stale.iter().filter_map(|&i| chunks.get(i).map(|c| (i, build_chunk_part(d, c, opts)))).collect();
     if opts.cancelled() {
         cache.clear();
         return DisplayList::default();
     }
-    for (i, list) in built {
-        if let Some(slot) = parts.get_mut(i) {
-            *slot = Some(Arc::new(list));
+    for (i, (list, extent)) in built {
+        if let (Some(slot), Some(chunk)) = (parts.get_mut(i), chunks.get(i)) {
+            *slot = Some(Part { chunk: chunk.clone(), list: Arc::new(list), detail, extent });
         }
     }
-    let lists: Vec<Arc<DisplayList>> = parts.into_iter().flatten().collect();
+    let parts: Vec<Part> = parts.into_iter().flatten().collect();
+    let lists: Vec<Arc<DisplayList>> = parts.iter().map(|p| Arc::clone(&p.list)).collect();
     // Past the block expansion budget the full build cuts later chunks short: build it so.
     let expanded: usize = lists.iter().map(|l| l.expanded).fold(0, usize::saturating_add);
     if expanded >= MAX_BLOCK_EXPANSION || lists.len() != chunks.len() {
@@ -280,7 +353,7 @@ pub fn build_cached_into(d: &Drawing, space: &Space, opts: &Options, cache: &mut
             out.expanded = expanded;
             cache.patched = true;
             cache.last = Some(fingerprint(&out));
-            cache.parts = chunks.into_iter().zip(lists).map(|(chunk, list)| Part { chunk, list }).collect();
+            cache.parts = parts;
             return out;
         }
         // One chunk changed size (an object of another shape): its part spliced in, the
@@ -325,7 +398,7 @@ pub fn build_cached_into(d: &Drawing, space: &Space, opts: &Options, cache: &mut
                 out.expanded = expanded;
                 cache.patched = true;
                 cache.last = Some(fingerprint(&out));
-                cache.parts = chunks.into_iter().zip(lists).map(|(chunk, list)| Part { chunk, list }).collect();
+                cache.parts = parts;
                 return out;
             }
         }
@@ -340,7 +413,7 @@ pub fn build_cached_into(d: &Drawing, space: &Space, opts: &Options, cache: &mut
         append_ref(&mut out, l);
     }
     cache.last = Some(fingerprint(&out));
-    cache.parts = chunks.into_iter().zip(lists).map(|(chunk, list)| Part { chunk, list }).collect();
+    cache.parts = parts;
     out
 }
 
@@ -553,6 +626,147 @@ mod tests {
         let name = d.layouts.first().map(|l| l.name.clone()).unwrap_or_else(|| "Layout1".into());
         build_cached(&d, &Space::Paper(name), &opts(), &mut cache);
         assert!(cache.parts.is_empty());
+    }
+
+    /// Points of the primitives of `l` that reach into `b`, in list order.
+    fn points_in(l: &DisplayList, b: &Bounds2) -> Vec<Vec2> {
+        l.prims.iter().filter(|p| Bounds2::from_points(l.points(p).iter().copied()).intersects(b)).flat_map(|p| l.points(p).to_vec()).collect()
+    }
+
+    /// Q6472: three chunks of circles, each in an area of its own, then a fourth holding one
+    /// pattern hatch far to the right.
+    fn three_areas_and_a_hatch() -> Drawing {
+        let mut d = Drawing::new_imperial();
+        let mut h = 0x100u64;
+        for area in 0..3 {
+            for i in 0..1024 {
+                let center = Vec3::new(f64::from(area) * 10_000.0 + f64::from(i % 32) * 20.0, f64::from(i / 32) * 20.0, 0.0);
+                d.model.push(Entity::new(Handle(h), EntityKind::Circle(Circle { center, radius: 5.0 })));
+                h += 1;
+            }
+        }
+        let sq = [(40_000.0, 0.0), (40_040.0, 0.0), (40_040.0, 40.0), (40_000.0, 40.0)].map(|(x, y)| cadaddy_geom::PolyVertex::new(Vec2::new(x, y)));
+        let hatch = cadaddy_doc::Hatch {
+            pattern: "ANSI31".into(),
+            solid: false,
+            loops: vec![cadaddy_doc::HatchLoop { curves: Vec::new(), vertices: sq.to_vec(), outer: true, sources: Vec::new() }],
+            scale: 10.0,
+            angle: 0.0,
+            associative: false,
+            style: 0,
+            elevation: 0.0,
+            gradient: None,
+            origin: Vec2::ZERO,
+            background: None,
+            pattern_lines: Vec::new(),
+        };
+        d.model.push(Entity::new(Handle(h), EntityKind::Hatch(Box::new(hatch))));
+        assert_eq!(d.model.chunk_refs().len(), 4);
+        d
+    }
+
+    fn area(x: f64) -> Bounds2 {
+        Bounds2::new(Vec2::new(x - 1000.0, -1000.0), Vec2::new(x + 1500.0, 2000.0))
+    }
+
+    /// Q6472: a zoom band (a finer tolerance, another view area) builds again only the parts
+    /// whose objects reach into the area being looked at; the parts outside keep the detail they
+    /// had. The area looked at is exactly what a full build at the new detail gives.
+    #[test]
+    fn a_zoom_band_rebuilds_only_the_parts_in_view() {
+        let d = three_areas_and_a_hatch();
+        let everywhere = Bounds2::new(Vec2::new(-1000.0, -1000.0), Vec2::new(41_000.0, 2000.0));
+        let coarse = Options { tolerance: 1.0, min_dash: 4.0, view: Some(everywhere), ..Options::default() };
+        let fine = Options { tolerance: 0.01, min_dash: 0.04, view: Some(area(10_000.0)), ..Options::default() };
+        // The parts cache starts over when the loaded images change (`images::generation`), which
+        // other tests running beside this one do: the steps are counted again until no image
+        // changed while they ran.
+        for _ in 0..50 {
+            let generation = images::generation();
+            let mut cache = ChunkCache::default();
+            let first = build_cached(&d, &Space::Model, &coarse, &mut cache);
+            // Zoomed in on the middle area: only its part is tessellated again, finer.
+            let zoomed = build_cached(&d, &Space::Model, &fine, &mut cache);
+            let zoom_counts = (cache.rebuilt, cache.reused, cache.kept);
+            // The same zoom panned to the first area: the middle stays fine, the first is built.
+            let panned = build_cached(&d, &Space::Model, &Options { view: Some(area(0.0)), ..fine.clone() }, &mut cache);
+            let pan_counts = (cache.rebuilt, cache.kept);
+            // Zoomed out again: a part finer than asked is built again even out of view (the
+            // list never holds more than a build at the asked detail would): the coarse list.
+            let out = build_cached(&d, &Space::Model, &Options { view: Some(area(20_000.0)), ..coarse.clone() }, &mut cache);
+            let out_rebuilt = cache.rebuilt;
+            if images::generation() != generation {
+                continue;
+            }
+            same(&first, &build(&d, &Space::Model, &coarse));
+            assert_eq!(zoom_counts, (1, 3, 3), "{cache:?}");
+            let full_fine = build(&d, &Space::Model, &fine);
+            assert_eq!(points_in(&zoomed, &area(10_000.0)), points_in(&full_fine, &area(10_000.0)), "in view: the fine build");
+            assert_eq!(points_in(&zoomed, &area(0.0)), points_in(&build(&d, &Space::Model, &coarse), &area(0.0)), "out of view: as before");
+            assert!(
+                zoomed.verts.len() * 2 < full_fine.verts.len(),
+                "{} points, a fine build of everything {}",
+                zoomed.verts.len(),
+                full_fine.verts.len()
+            );
+            assert_eq!(pan_counts, (1, 3), "{cache:?}");
+            assert_eq!(points_in(&panned, &area(0.0)), points_in(&full_fine, &area(0.0)));
+            assert_eq!(out_rebuilt, 3, "{cache:?}");
+            same(&out, &build(&d, &Space::Model, &coarse));
+            return;
+        }
+        panic!("the loaded images kept changing");
+    }
+
+    /// With detail levels on, their pixel size follows the zoom like the tolerance: a band
+    /// builds again only the part in view, and a part out of view keeps its coarser detail.
+    #[test]
+    fn detail_levels_follow_the_zoom_band_out_of_view_too() {
+        let d = three_areas_and_a_hatch();
+        let rules = Arc::new(detail::PlanRules::default());
+        let at = |px: f64, view: Bounds2| Options {
+            tolerance: px * 0.5,
+            min_dash: px * 2.0,
+            detail: detail::Detail::new(px, rules.clone()),
+            view: Some(view),
+            ..Options::default()
+        };
+        let everywhere = Bounds2::new(Vec2::new(-1000.0, -1000.0), Vec2::new(41_000.0, 2000.0));
+        for _ in 0..50 {
+            let generation = images::generation();
+            let mut cache = ChunkCache::default();
+            build_cached(&d, &Space::Model, &at(2.0, everywhere), &mut cache);
+            build_cached(&d, &Space::Model, &at(0.02, area(10_000.0)), &mut cache);
+            let zoomed = (cache.rebuilt, cache.kept);
+            // Zoomed out past the kept parts' detail: those finer than asked are built again.
+            build_cached(&d, &Space::Model, &at(4.0, area(0.0)), &mut cache);
+            let out = cache.rebuilt;
+            if images::generation() != generation {
+                continue;
+            }
+            assert_eq!(zoomed, (1, 3), "{cache:?}");
+            assert_eq!(out, 4, "{cache:?}");
+            return;
+        }
+        panic!("the loaded images kept changing");
+    }
+
+    /// A part whose only object is a hatch the build area left without pattern lines draws
+    /// nothing, but its object is there: a view coming to it builds its pattern.
+    #[test]
+    fn a_hatch_built_out_of_view_gets_its_pattern_when_the_view_comes_to_it() {
+        let d = three_areas_and_a_hatch();
+        let fine = Options { tolerance: 0.01, min_dash: 0.04, view: Some(area(0.0)), ..Options::default() };
+        let mut cache = ChunkCache::default();
+        let list = build_cached(&d, &Space::Model, &fine, &mut cache);
+        let hatch_area = area(40_000.0);
+        assert!(points_in(&list, &hatch_area).is_empty(), "no pattern outside the area built for");
+        let at_hatch = Options { view: Some(hatch_area), ..fine.clone() };
+        let list = build_cached(&d, &Space::Model, &at_hatch, &mut cache);
+        assert!(cache.rebuilt >= 1, "{cache:?}");
+        let pattern = points_in(&list, &hatch_area);
+        assert!(!pattern.is_empty(), "the pattern is built once the view is on it");
+        assert_eq!(pattern, points_in(&build(&d, &Space::Model, &at_hatch), &hatch_area));
     }
 
     /// `cargo test --release -p cadaddy-render bench_one_edit -- --ignored --nocapture`

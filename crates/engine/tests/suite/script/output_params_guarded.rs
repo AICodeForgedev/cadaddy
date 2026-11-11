@@ -88,6 +88,9 @@ const UNCHECKED: &[&str] = &[
     "cmd/props/linfile.rs",
     "cmd/propuse.rs",
     "cmd/rasterout.rs",
+    // the job's sheet-index packet, page pictures and contact sheet: only into the folder beside
+    // the job's own checkpoint (else a temporary folder), named by the job, never by a parameter
+    "cmd/sheetcheck.rs",
     // ve.study RFI sketches: <id>.svg into the sketches folder the call names (made if missing);
     // the caller in valueeng/scenario.rs keeps an existing file unless force: true
     "cmd/valueeng/sketch.rs",
