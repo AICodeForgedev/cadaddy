@@ -8173,7 +8173,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let sched_pages = s.doc().map(|d| panel_pages(d, job)).unwrap_or_default();
     // (the schedules the sheet-index answers gave, Q6517, and those an answer gave off a sheet
     // lettered in strokes, Q6516)
-    let schedules = super::strokesheets::with_answered_panels(with_answered_panels(job, panel_schedules(&sched_pages)), super::strokesheets::answered_tables(job).0);
+    let schedules = super::strokesheets::with_answered_panels(
+        with_answered_panels(job, panel_schedules(&sched_pages)),
+        super::strokesheets::answered_tables(job).0,
+    );
     result["panel_schedule_sheets"] = json!(sched_pages.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
     if schedules.is_empty() {
         no_panel_schedules(job, &sched_pages, &mut result);
