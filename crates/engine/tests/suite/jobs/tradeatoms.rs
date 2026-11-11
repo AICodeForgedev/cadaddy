@@ -468,6 +468,43 @@ fn a_wall_type_set_again_is_framed_once() {
     assert!(flag.contains("P1"), "{}", r["tradesMissing"]);
 }
 
+/// Q6519: an exterior wall type's finish layers (stucco on its lath and barrier) are laid out as
+/// pieces and counted in the takeoff; what the assembly leaves out is laid in by rule, marked
+/// inferred with the rule as its basis.
+#[test]
+fn exterior_finish_layers_are_pieces_in_the_takeoff() {
+    let mut s = building();
+    let stucco = json!({"tag": "X1", "description": "EXTERIOR WALL", "external": true, "source": "sample legend, mark X1", "layers": layers(
+        json!([{"material": "7/8\" portland cement stucco", "thickness_in": 0.875, "category": "finish"},
+               {"material": "3/4\" rigid insulation", "thickness_in": 0.75, "category": "insulation"},
+               {"material": "1/2\" wood structural panel sheathing", "thickness_in": 0.5, "category": "sheathing"}]),
+        json!([{"material": "2x6 wood studs @ 16\" o.c.", "thickness_in": 5.5, "category": "framing"}]),
+        json!([{"material": "5/8\" gypsum board", "thickness_in": 0.625, "category": "board"}]))});
+    s.execute("bspec.set", &json!({"spec": {"wall_types": [{"name": "X1", "assembly": stucco}]}})).unwrap();
+    let r = s.execute("model.build", &json!({"force": true})).unwrap();
+    let by = &r["tradePiecesByTrade"]["cladding"];
+    for kind in ["plaster", "lath", "weather_barrier", "screed", "control_joint"] {
+        assert!(by[kind].as_u64().unwrap_or(0) > 0, "{kind} laid out: {by}");
+    }
+    // The takeoff: the plaster covers the exterior walls' outer faces; the lath the same area,
+    // the barrier twice it (two layers over wood-based sheathing), each with its waste.
+    let rep = s.execute("bim.atoms.report", &json!({"trade": "cladding"})).unwrap();
+    let t = &rep["totals"]["cladding"];
+    let plaster = n(&t["plaster"], "area_sf");
+    assert!(plaster > 1000.0, "{t}");
+    assert!((n(&t["lath"], "area_sf") - plaster).abs() < 0.5, "{t}");
+    assert!((n(&t["weather_barrier"], "area_sf") - 2.0 * plaster).abs() < 1.0, "{t}");
+    assert!((n(&t["plaster"]["with_waste"], "area_sf") - plaster * 1.1).abs() < 0.05, "{t}");
+    assert!(n(&t["plaster"], "volume_cy") > 0.0 && n(&t["screed"], "length_ft") > 0.0, "{t}");
+    assert!(rep["levels"].as_array().is_some_and(|l| l.len() == 2), "both storeys: {rep}");
+    let lath = count(&mut s, json!({"trade": "cladding", "kind": "lath"}));
+    assert_eq!(n(&lath, "count"), n(&t["lath"], "count"), "{lath}");
+    // What it is by the documents: the plaster drawn, the lath and barrier laid in by rule.
+    let pv = s.execute("bim.provenance", &json!({})).unwrap();
+    let bases = pv["bases"].to_string();
+    assert!(bases.contains("ASTM C1063") && bases.contains("2510.6"), "{bases}");
+}
+
 #[test]
 fn hostile_params_never_panic() {
     let mut s = Session::new();

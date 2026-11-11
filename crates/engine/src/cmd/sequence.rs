@@ -523,6 +523,7 @@ fn trade_piece(e: &El) -> Vec<Contribution> {
         ("framing", "joist" | "rim" | "truss") => Kind::Structure,
         ("framing", "sheathing") if e.z[1] - e.z[0] < e.len * 0.1 => Kind::Structure,
         ("framing" | "masonry", _) => Kind::Framing,
+        ("cladding", _) => Kind::ExteriorWalls,
         ("insulation", _) | ("firestopping", _) => Kind::Insulation,
         ("drywall", _) => Kind::Drywall,
         ("finishes", "tile" | "grid_main" | "grid_tee" | "wall_angle") => Kind::Ceilings,
