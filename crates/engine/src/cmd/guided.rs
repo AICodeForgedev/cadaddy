@@ -11307,8 +11307,9 @@ struct UnitPlumbingSet {
 }
 
 /// A room of a unit type whose plumbing is not its type's set (Q6317): what it holds, the set's
-/// kinds it has none of, and the kinds it holds another number of (`2 water closet` where the set
-/// has one, or a kind the set hasn't).
+/// kinds it has none of, and the kinds it holds another number of (`2 water closet (set 1)`, or
+/// `1 shower (set 0)` for a kind the set hasn't), with how many of the type's rooms hold the set
+/// (the set is what most hold, not what the plans must show: a reader sees how sure it is).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 struct UnitPlumbingOff {
     room: String,
@@ -11318,10 +11319,13 @@ struct UnitPlumbingOff {
     type_set: BTreeMap<String, usize>,
     missing: Vec<String>,
     counts_off: Vec<String>,
+    type_rooms: usize,
+    type_holding: usize,
 }
 
 impl UnitPlumbingOff {
-    /// `Level 3 room 517 (SUITE TWIN): no water closet, lavatory; 2 tub (its type's rooms: 1 lavatory, 1 tub, 1 water closet)`.
+    /// `Level 3 room 517 (SUITE TWIN): no lavatory; 2 water closet (set 1) (its type's set, held by
+    /// 40 of 42 rooms: 1 lavatory, 1 tub, 1 water closet)`.
     fn line(&self) -> String {
         let mut said = Vec::new();
         if !self.missing.is_empty() {
@@ -11331,7 +11335,16 @@ impl UnitPlumbingOff {
             said.push(self.counts_off.join(", "));
         }
         let set: Vec<String> = self.type_set.iter().map(|(k, n)| format!("{n} {k}")).collect();
-        format!("{} room {} ({}): {} (its type's rooms: {})", self.level, self.room, self.unit_type, said.join("; "), set.join(", "))
+        format!(
+            "{} room {} ({}): {} (its type's set, held by {} of {} rooms: {})",
+            self.level,
+            self.room,
+            self.unit_type,
+            said.join("; "),
+            self.type_holding,
+            self.type_rooms,
+            set.join(", ")
+        )
     }
 }
 
@@ -11409,8 +11422,13 @@ fn unit_plumbing_check(
                 continue;
             }
             let missing: Vec<String> = set.keys().filter(|k| !by.contains_key(*k)).cloned().collect();
-            let counts_off: Vec<String> =
-                by.iter().filter(|(k, n)| set.get(*k).is_none_or(|m| *n != m) && **n > 0).map(|(k, n)| format!("{n} {k}")).collect();
+            let counts_off: Vec<String> = by
+                .iter()
+                .filter_map(|(k, n)| {
+                    let m = set.get(k).copied().unwrap_or(0);
+                    (*n != m && *n > 0).then(|| format!("{n} {k} (set {m})"))
+                })
+                .collect();
             off.push(UnitPlumbingOff {
                 room: room.clone(),
                 level: level.clone(),
@@ -11419,6 +11437,8 @@ fn unit_plumbing_check(
                 type_set: set.clone(),
                 missing,
                 counts_off,
+                type_rooms: held.len(),
+                type_holding: holding,
             });
         }
         sets.push(UnitPlumbingSet { unit_type: label, rooms: held.len(), set, holding });
@@ -37334,10 +37354,11 @@ mod tests {
     #[test]
     fn units_of_one_type_off_their_plumbing_set_are_named_room_by_room() {
         let (_s, job) = stacked_floors();
-        let names: BTreeMap<String, String> = [("WC-1", "WATER CLOSET"), ("LAV-1", "LAVATORY"), ("TB-1", "BATHTUB"), ("FD-1", "FLOOR DRAIN")]
-            .iter()
-            .map(|(t, n)| (t.to_string(), n.to_string()))
-            .collect();
+        let names: BTreeMap<String, String> =
+            [("WC-1", "WATER CLOSET"), ("LAV-1", "LAVATORY"), ("TB-1", "BATHTUB"), ("SH-1", "SHOWER"), ("FD-1", "FLOOR DRAIN")]
+                .iter()
+                .map(|(t, n)| (t.to_string(), n.to_string()))
+                .collect();
         let fixture = |tag: &str, level: &str, room: &str, at: [f64; 2]| super::super::readers::ReadDevice {
             tag: tag.into(),
             at,
@@ -37363,6 +37384,8 @@ mod tests {
         // Floor 6: 671 lost its water closet (a floor drain is no bath fixture), 672 has none.
         devices.extend(bath("Level 6", "671", 40_000.0).into_iter().filter(|f| f.tag != "WC-1"));
         devices.push(fixture("FD-1", "Level 6", "671", [40_060.0, 100.0]));
+        // ... and holds a shower its type's set has none of.
+        devices.push(fixture("SH-1", "Level 6", "671", [40_100.0, 100.0]));
         // 571, turned, has the set: so does the turned unit.
         devices.extend(bath("Level 5", "571", 40_000.0));
         // A receptacle in 672 is no plumbing.
@@ -37381,15 +37404,33 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                ("472", vec![], vec!["2 water closet".to_string()]),
-                ("671", vec!["water closet".to_string()], vec![]),
+                ("472", vec![], vec!["2 water closet (set 1)".to_string()]),
+                ("671", vec!["water closet".to_string()], vec!["1 shower (set 0)".to_string()]),
                 ("672", vec!["lavatory".to_string(), "tub".to_string(), "water closet".to_string()], vec![]),
             ]
         );
         let line = off.iter().find(|o| o.room == "672").map(UnitPlumbingOff::line).unwrap_or_default();
-        assert_eq!(line, "6 room 672 (SUITE TWIN): no lavatory, tub, water closet (its type's rooms: 1 lavatory, 1 tub, 1 water closet)");
+        assert_eq!(
+            line,
+            "6 room 672 (SUITE TWIN): no lavatory, tub, water closet (its type's set, held by 4 of 7 rooms: 1 lavatory, 1 tub, 1 water closet)"
+        );
+        let line = off.iter().find(|o| o.room == "671").map(UnitPlumbingOff::line).unwrap_or_default();
+        assert!(line.contains(": no water closet; 1 shower (set 0) (its type's set"), "{line}");
         // No schedule naming the tags: nothing to judge.
         assert_eq!(unit_plumbing_check(&job, &devices, &BTreeMap::new()), (Vec::new(), Vec::new()));
+    }
+
+    /// Q6317: job.report carries the build's unit plumbing check (null before the build).
+    #[test]
+    fn the_report_lists_the_units_off_their_plumbing_set() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        assert_eq!(unit_plumbing_summary(&job), Value::Null);
+        let check = json!({"types": [{"unit_type": "SUITE TWIN", "rooms": 7, "set": {"tub": 1}, "holding": 6}],
+            "rooms_off": [{"room": "672", "level": "6", "missing": ["tub"]}]});
+        if let Some(st) = job.stage_mut(StageName::BimBuild) {
+            st.result = Some(json!({"devices": {"unit_plumbing": check.clone()}}));
+        }
+        assert_eq!(unit_plumbing_summary(&job), check);
     }
 
     #[test]
