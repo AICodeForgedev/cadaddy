@@ -49,6 +49,7 @@ pub mod sheetstore;
 pub mod snap;
 pub mod snap3;
 pub mod spatial;
+pub mod specread;
 pub mod sysvars;
 pub mod ucs;
 pub mod undoctl;
