@@ -1450,7 +1450,7 @@ fn slab(poly: &[Vec2], top: &dyn Fn(Vec2) -> f64, t: f64) -> Option<Mesh> {
         let j = (i + 1) % n;
         faces.push(MeshFace { v: vec![i, j, j + n, i + n], hidden: 0 });
     }
-    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    Some(super::bspec::seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
 /// The exterior into model space (sheet units): roofs, parapets, crickets, equipment, facade
