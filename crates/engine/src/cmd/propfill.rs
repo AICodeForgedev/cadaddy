@@ -271,7 +271,7 @@ pub fn split_switch_leg(tag: &str) -> (String, Option<String>) {
 }
 
 /// Whether `e` is a device the readers put in the spec (and so one `model.build` builds).
-fn read_device(t: &cadaddy_walk3d::tags::ElementTag) -> bool {
+pub(super) fn read_device(t: &cadaddy_walk3d::tags::ElementTag) -> bool {
     t.id.starts_with("device:") && t.fields.contains_key("symbol") && t.at_ft.iter().all(|v| v.is_finite())
 }
 

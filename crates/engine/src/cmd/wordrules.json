@@ -1501,6 +1501,86 @@
     ]
    ]
   },
+  "equipment.kind_by_row_words": {
+   "source": "drafting convention: a plumbing fixture schedule also lists the plumbing system's equipment, each row's name saying what it is (GAS WATER HEATER, EXPANSION TANK, BOOSTER PUMP); a row whose name has these words is that kind of equipment, not a fixture, the first pair whose words the name has (equip_reader.rs `scheduled`, Q6316)",
+   "pairs": [
+    [
+     "WATER HEATER",
+     "water_heater"
+    ],
+    [
+     "EXPANSION TANK",
+     "expansion_tank"
+    ],
+    [
+     "BOOSTER PUMP",
+     "pump"
+    ],
+    [
+     "CIRCULATING PUMP",
+     "pump"
+    ],
+    [
+     "CIRCULATION PUMP",
+     "pump"
+    ],
+    [
+     "RECIRCULATION PUMP",
+     "pump"
+    ],
+    [
+     "SUMP PUMP",
+     "pump"
+    ],
+    [
+     "SEWAGE EJECTOR",
+     "pump"
+    ],
+    [
+     "WATER SOFTENER",
+     "water_treatment"
+    ],
+    [
+     "STORAGE TANK",
+     "storage_tank"
+    ]
+   ]
+  },
+  "equipment.serves_generic_words": {
+   "source": "plain English: words of a room's name or a schedule's SERVES column that say nothing about which room (ROOM, AREA), not counted when a schedule row is matched to the room a unit serves (schedequip.rs `type_built`, Q6316)",
+   "words": [
+    "ROOM",
+    "AREA",
+    "SPACE",
+    "TYP",
+    "TYPICAL",
+    "THE",
+    "AND",
+    "FOR",
+    "ALL"
+   ]
+  },
+  "equipment.view_title_drafting_words": {
+   "source": "drafting convention: the words of a view's title that name the drawing, not the room it shows (MECH ENLARGED ... PLAN), not counted when a schedule row is matched to the room a unit serves (schedequip.rs `type_built`, Q6316)",
+   "words": [
+    "PLAN",
+    "PLANS",
+    "ENLARGED",
+    "VIEW",
+    "PART",
+    "PARTIAL",
+    "FLOOR",
+    "LEVEL",
+    "MECH",
+    "MECHANICAL",
+    "PLUMBING",
+    "ELECTRICAL",
+    "DETAIL",
+    "SCALE",
+    "UNIT",
+    "TYPE"
+   ]
+  },
   "equipment.every_tag_kinds": {
    "source": "drafting convention: a kind of equipment a schedule lists once for many units, its tag a type mark printed by every one (a relief hood over each exhaust chase), so it is built at every place a plan prints its tag, not once (schedequip.rs, Q6496)",
    "words": [

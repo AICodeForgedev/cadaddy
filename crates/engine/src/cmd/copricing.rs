@@ -81,7 +81,7 @@ type Tags<'a> = std::collections::HashMap<&'a str, &'a cadaddy_walk3d::tags::Ele
 
 /// Where each of a line's elements is: every one of them (a line's clouds and what came or went
 /// need them all), tags looked up by id.
-fn locate(sp: &cadaddy_walk3d::BuildingSpec, tags: &Tags, ids: &[Value]) -> Where {
+fn locate(sp: &cadaddy_walk3d::BuildingSpec, tags: &Tags, d: Option<&cadaddy_doc::Drawing>, ids: &[Value]) -> Where {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let mut out = Vec::new();
     for id in ids.iter().filter_map(Value::as_str) {
@@ -95,6 +95,13 @@ fn locate(sp: &cadaddy_walk3d::BuildingSpec, tags: &Tags, ids: &[Value]) -> Wher
             let (x, y) = (t.at_ft[0] * upf, t.at_ft[1] * upf);
             if x.is_finite() && y.is_finite() {
                 out.push((id.to_string(), t.level.clone(), [x, y, x, y]));
+            }
+        } else if let Some(e) = d.zip(cadaddy_doc::Handle::parse_hex(id)).and_then(|(d, h)| d.model.get(h).map(|e| (d, e))) {
+            // A built element the line counts (a device by its handle): where it stands.
+            let b = cadaddy_doc::entity_bounds(e.0, e.1, 0);
+            if !b.is_empty() {
+                let level = super::bspec::made_level(e.1).unwrap_or_default();
+                out.push((id.to_string(), level, [b.min.x, b.min.y, b.max.x, b.max.y]));
             }
         }
     }
@@ -127,6 +134,7 @@ fn take(s: &mut Session, st: &Map<String, Value>) -> Result<Vec<Value>> {
     let elements: std::collections::HashMap<String, Value> =
         full["lines"].as_array().into_iter().flatten().map(|l| (key_of(l), l["elements"].clone())).collect();
     let tags: Tags = sp.tags.iter().map(|t| (t.id.as_str(), t)).collect();
+    let d = s.doc().ok();
     let mut out: Vec<Value> = priced
         .iter()
         .map(|p| {
@@ -135,7 +143,7 @@ fn take(s: &mut Session, st: &Map<String, Value>) -> Result<Vec<Value>> {
                 "key": p.key, "kind": "line", "trade": p.line["trade"], "category": p.line["category"], "item": p.line["item"],
                 "size": p.line["size"], "unit": p.unit, "qty": p.qty, "net": p.net,
                 "material_unit": p.material_unit, "labor_unit_hours": p.labor_unit_hours, "scope": p.scope, "via": p.via,
-                "where": where_json(&locate(&sp, &tags, &ids)),
+                "where": where_json(&locate(&sp, &tags, d, &ids)),
             })
         })
         .collect();

@@ -118,6 +118,16 @@ fn id(x: f64, y: f64) -> String {
     format!("device:L1:{x:.1},{y:.1}")
 }
 
+/// The built element of the device read at `(x, y)` feet: its handle, as the bill of materials
+/// lists it (its tag's id when the model has no element of it).
+fn el(s: &Session, x: f64, y: f64) -> String {
+    let want = format!("devid:{}", id(x, y));
+    s.doc()
+        .ok()
+        .and_then(|d| d.model.iter().find(|e| e.common.xdata.iter().any(|t| t.code == 1000 && t.value == want)).map(|e| e.handle.hex()))
+        .unwrap_or_else(|| id(x, y))
+}
+
 #[test]
 fn other_trades_devices_are_listed_by_others_and_the_documents_decide_our_part() {
     let mut s = office();
@@ -136,14 +146,14 @@ fn other_trades_devices_are_listed_by_others_and_the_documents_decide_our_part()
         by.iter().all(|x| x["decided"] == "default" && x["cost_to_us"] == 0.0 && x["reason"].as_str().unwrap().starts_with("no document says")),
         "{by:#?}"
     );
-    let th = by.iter().find(|x| x["element"] == id(10.0, 0.8)).expect("thermostat");
+    let th = by.iter().find(|x| x["element"] == el(&s, 10.0, 0.8)).expect("thermostat");
     assert_eq!((th["trade"].as_str(), th["furnish"].as_str()), (Some("thermostat"), Some("mechanical")));
     // Its device isn't ours; its default rough-in is.
-    let ours: Vec<&str> = lines_of(&bom, &id(10.0, 0.8)).iter().map(|l| l["category"].as_str().unwrap()).collect();
+    let ours: Vec<&str> = lines_of(&bom, &el(&s, 10.0, 0.8)).iter().map(|l| l["category"].as_str().unwrap()).collect();
     assert!(!ours.contains(&"devices"), "{ours:?}");
     assert!(ours.contains(&"conduit"), "the default's empty conduit: {ours:?}");
     // The receptacle stays ours.
-    assert!(lines_of(&bom, &id(5.0, 0.8)).iter().any(|l| l["category"] == "devices"));
+    assert!(lines_of(&bom, &el(&s, 5.0, 0.8)).iter().any(|l| l["category"] == "devices"));
     let devices: Vec<&str> =
         bom["lines"].as_array().unwrap().iter().filter(|l| l["category"] == "devices").map(|l| l["item"].as_str().unwrap()).collect();
     assert!(!devices.iter().any(|d| d.contains("thermostat") || d.contains("fire alarm") || d.contains("low voltage")), "{devices:?}");
@@ -191,22 +201,23 @@ fn other_trades_devices_are_listed_by_others_and_the_documents_decide_our_part()
     assert_eq!(by.len(), 7, "with the panel: {by:#?}");
     assert!(by.iter().all(|x| x["decided"] == "documents"), "{by:#?}");
     let of = |e: &str| by.iter().find(|x| x["element"] == e).copied().unwrap_or_else(|| panic!("{e}: {by:#?}"));
-    assert_eq!(of(&id(5.0, 5.0))["kind"], "smoke detector S");
-    assert!(of(&id(5.0, 5.0))["source"].as_str().unwrap().starts_with("E-312"), "{:#}", of(&id(5.0, 5.0)));
+    assert_eq!(of(&el(&s, 5.0, 5.0))["kind"], "smoke detector S");
+    assert!(of(&el(&s, 5.0, 5.0))["source"].as_str().unwrap().starts_with("E-312"), "{:#}", of(&el(&s, 5.0, 5.0)));
     assert_eq!(of("FACP")["kind"], "control panel FACP");
     // Ours: the thermostat nothing; the TV outlet its box and 3/4" conduit stub; the panel its
     // circuit; a detector nothing.
-    assert!(lines_of(&bom, &id(10.0, 0.8)).is_empty(), "{:#?}", lines_of(&bom, &id(10.0, 0.8)));
-    let tv: Vec<(&str, &str)> = lines_of(&bom, &id(25.0, 0.8)).iter().map(|l| (l["item"].as_str().unwrap(), l["size"].as_str().unwrap())).collect();
+    assert!(lines_of(&bom, &el(&s, 10.0, 0.8)).is_empty(), "{:#?}", lines_of(&bom, &el(&s, 10.0, 0.8)));
+    let tv: Vec<(&str, &str)> =
+        lines_of(&bom, &el(&s, 25.0, 0.8)).iter().map(|l| (l["item"].as_str().unwrap(), l["size"].as_str().unwrap())).collect();
     assert!(tv.contains(&("Conduit stub to the ceiling space", "3/4\"")), "{tv:?}");
     assert!(
-        of(&id(25.0, 0.8))["ours"].as_array().unwrap().iter().any(|o| o == "3/4\" Conduit stub to the ceiling space"),
+        of(&el(&s, 25.0, 0.8))["ours"].as_array().unwrap().iter().any(|o| o == "3/4\" Conduit stub to the ceiling space"),
         "{:#}",
-        of(&id(25.0, 0.8))
+        of(&el(&s, 25.0, 0.8))
     );
     let panel: Vec<&str> = lines_of(&bom, "FACP").iter().map(|l| l["item"].as_str().unwrap()).collect();
     assert_eq!(panel, ["Dedicated 120 V branch circuit"], "{panel:?}");
-    assert!(lines_of(&bom, &id(5.0, 5.0)).is_empty());
+    assert!(lines_of(&bom, &el(&s, 5.0, 5.0)).is_empty());
     // Nothing left to ask.
     let q = s.execute("review.list", &json!({"kind": "question", "limit": 50})).expect("list");
     assert!(!q["items"].as_array().unwrap().iter().any(|i| i["title"].as_str().unwrap().contains("furnishes")), "{q:#}");
@@ -234,7 +245,7 @@ fn an_answer_settles_what_no_document_does_and_the_model_leaves_out_boxes_not_ou
     s.execute("review.resolve", &json!({"id": item["id"], "answer": "ours", "author": "user"})).expect("resolve");
     let bom = s.execute("bim.bom", &json!({})).expect("bom");
     assert!(others(&bom).iter().all(|x| x["trade"] != "low voltage"), "{:#?}", others(&bom));
-    assert!(lines_of(&bom, &id(25.0, 0.8)).iter().any(|l| l["category"] == "devices"), "ours again");
+    assert!(lines_of(&bom, &el(&s, 25.0, 0.8)).iter().any(|l| l["category"] == "devices"), "ours again");
     // The mechanical note read: no box for the thermostat, and the rebuilt model leaves it out.
     s.execute("bim.scope", &json!({"text": [notes()[0].clone()], "panels": false})).expect("scope");
     s.execute("model.build", &json!({})).expect("build");

@@ -2572,6 +2572,8 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
         for sy in e.systems.iter().take(32) {
             xdata.push(t(1000, cap(format!("system:{sy}"))));
         }
+        // Whose it is (Q6528): the trade its takeoff line and the model tree go by.
+        xdata.push(t(1000, format!("trade:{}", equipment_trade(sp, e))));
         if !e.title.is_empty() {
             xdata.push(t(1000, cap(format!("title:{}", e.title))));
         }
@@ -2673,7 +2675,19 @@ pub(crate) fn ensure_layer(d: &mut Drawing, layer: &str, color: i16) {
 }
 
 /// The xdata kind string for IFC export.
-fn kind_str(kind: MepKind) -> &'static str {
+/// The trade of a spec's piece of equipment (Q6528, [`super::elemtrade::of_equipment`]): its
+/// own TRADE property, its kind's, else the trade of the systems it is on.
+pub(crate) fn equipment_trade(sp: &BuildingSpec, e: &cadaddy_walk3d::MepEquipment) -> &'static str {
+    let on: Vec<Option<&'static str>> = e
+        .systems
+        .iter()
+        .take(32)
+        .map(|x| sp.mep.systems.iter().find(|y| y.name == *x).and_then(|y| super::elemtrade::of_system(kind_str(y.kind), x)))
+        .collect();
+    super::elemtrade::of_equipment(&e.kind, e.properties.get("TRADE").map_or("", String::as_str), &on)
+}
+
+pub(crate) fn kind_str(kind: MepKind) -> &'static str {
     match kind {
         MepKind::Duct => "duct",
         MepKind::Pipe => "pipe",
@@ -3264,6 +3278,9 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
 
 // ---------------- clashes ----------------
 
+/// Heights (feet) a riser's foot or top may miss its floor by and still stand on it or reach it.
+const PASS_EPS_FT: f64 = 1.0 / 96.0;
+
 pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
     let (sp, _) = current(s, "model.clashes")?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -3306,8 +3323,20 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 let z1 = (level.elevation_ft + top) * upf;
                 let at = Vec2::new(pt[0], pt[1]);
                 // Ending at a device's height above its floor (an outlet, a switch), not on it.
-                let drop = st.cut.is_some() || (wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft);
-                let through_up = st.cut.as_ref().is_some_and(|c| c.index + 1 < c.count);
+                // A riser drawn a storey at a time (Q6505): standing on its floor (or coming up
+                // through it) and reaching the floor over it (with no floor over it, past its
+                // ceiling: up through the roof) passes through the storey, below the ceiling and
+                // through the floor structure by design.
+                let above = sp
+                    .levels
+                    .iter()
+                    .map(|l| l.elevation_ft)
+                    .filter(|e| e.is_finite() && *e > level.elevation_ft + 1e-6)
+                    .fold(f64::INFINITY, f64::min);
+                let reach = if above.is_finite() { above - level.elevation_ft } else { level.ceiling_ft };
+                let passes = bot <= PASS_EPS_FT && top.is_finite() && reach.is_finite() && top >= reach - PASS_EPS_FT;
+                let drop = st.cut.is_some() || passes || (wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft);
+                let through_up = passes || st.cut.as_ref().is_some_and(|c| c.index + 1 < c.count);
                 items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop, through_up });
             }
             continue;

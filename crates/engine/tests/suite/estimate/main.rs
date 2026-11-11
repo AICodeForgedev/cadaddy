@@ -10,6 +10,7 @@
 mod helper;
 
 mod automation_takeoff;
+mod bom_device_edits;
 mod count_table_scale;
 mod data_extraction;
 mod estimate_hotel;

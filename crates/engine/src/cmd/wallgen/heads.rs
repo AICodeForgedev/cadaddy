@@ -386,6 +386,7 @@ mod tests {
             wall_type: Some("P".into()),
             fixed_top: false,
             head: None,
+            basis: None,
         }];
         let mut notes = Vec::new();
         head_walls(&sp, &level, &[], 0.0, 118.8, 12.0, &mut walls, &mut notes);
