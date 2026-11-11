@@ -2471,9 +2471,10 @@
    ]
   },
   "notes.appliance_kinds": {
-   "source": "trade practice: which appliance a mounting-height note's words or a panel schedule's load description name (value: the appliance; a cooktop, oven or stove is on the range's circuit; a range hood's exhaust is no range); the first row that matches decides, whole words only. A typical room's appliance note goes to the receptacle whose circuit's schedule line names that appliance, never to one whose line names another (Q6344, guided.rs `typical_heights`); a device the plans leave off every circuit and that names an appliance goes on the circuit whose line names it (conduitroute.rs, E-UNCIRCUITED)",
+   "source": "trade practice: which appliance a mounting-height note's words or a panel schedule's load description name (value: the appliance; a cooktop, oven or stove is on the range's circuit; a range hood or its exhaust is its own); the first row that matches decides, whole words only. A typical room's appliance note goes to the receptacle whose circuit's schedule line names that appliance, never to one whose line names another (Q6344, guided.rs `typical_heights`)",
    "rules": [
     {"value": "microwave", "any": ["MICROWAVE", "MICRO WAVE", "MW"]},
+    {"value": "range_hood", "any": ["RANGE EXHAUST", "RANGE HOOD", "EXHAUST HOOD", "HOOD"]},
     {"value": "range", "any": ["RANGE", "COOKTOP", "COOK TOP", "OVEN", "STOVE"], "none": ["EXHAUST", "HOOD", "FAN"]},
     {"value": "refrigerator", "any": ["REFRIGERATOR", "FRIDGE", "REFRIG"]},
     {"value": "dishwasher", "any": ["DISHWASHER", "DISH WASHER", "DW"]},

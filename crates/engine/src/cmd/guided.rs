@@ -36788,7 +36788,9 @@ mod tests {
         assert_eq!(a("U-4"), "range", "a cooktop is on the range's circuit");
         assert_eq!(a("U-5,a"), "dishwasher", "a leg is no circuit");
         assert_eq!(a("U-31-5"), "dishwasher", "a unit's copy of the typical panel");
-        assert_eq!(a("U-7"), "", "a range hood's exhaust is no range");
+        assert_eq!(a("U-7"), "range_hood", "a range hood's exhaust is no range");
+        assert_eq!(appliance_named("RANGE EXHAUST 52\" AFF"), "range_hood");
+        assert_eq!(appliance_named("MICROWAVE BELOW 24\" AFF"), "microwave");
         assert_eq!((a("U-9"), a("U-11"), a("Q-2"), a("")), (String::new(), String::new(), String::new(), String::new()));
         assert_eq!(appliance_named(" MICROWAVE 65\" AFF "), "microwave");
         assert_eq!(appliance_named("DISHWASHER"), "dishwasher");
