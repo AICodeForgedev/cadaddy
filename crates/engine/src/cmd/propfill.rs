@@ -312,6 +312,10 @@ pub(crate) struct DeviceBuild {
     pub misplaced: Vec<Value>,
     /// Devices drawn clear of every wall hung from the ceiling over them (Q6250).
     pub hung: usize,
+    /// Devices read outside their level's footprint with no circuit, on a sheet whose other
+    /// devices stand in the building: not built, each a review item with why
+    /// (fix-grid-bubble-as-fixture).
+    pub outside_unbuilt: Vec<Value>,
     /// Connections of ceiling equipment built at their equipment's housing above the ceiling,
     /// those of them the job had given another height, and those whose housing is still more
     /// than the rule's tolerance off the box (Q6521).
@@ -335,6 +339,8 @@ impl DeviceBuild {
             "misplaced": self.misplaced.len(),
             "misplaced_first": self.misplaced.iter().take(50).collect::<Vec<_>>(),
             "hung_from_ceiling": self.hung,
+            "outside_unbuilt": self.outside_unbuilt.len(),
+            "outside_unbuilt_first": self.outside_unbuilt.iter().take(50).collect::<Vec<_>>(),
             "connections_at_equipment": self.at_equipment,
             "connections_moved_to_equipment": self.moved_to_equipment,
             "connections_off_equipment": self.off_equipment,
@@ -1416,6 +1422,10 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
     // storey's footprint in the storey's plan.
     let stack = super::bspec::stack_offsets(d, sp);
     let by_circuit = circuit_points(sp, &devices);
+    // Each sheet's devices and how many of them stand outside their level's footprint; the
+    // devices held back (outside it, with no circuit) until every one is seen.
+    let mut sheet_outside: HashMap<String, (usize, usize)> = HashMap::new();
+    let mut held: Vec<(String, Common, cadaddy_doc::Mesh, Value)> = Vec::new();
     for t in devices {
         if only.is_some_and(|f| !f(t)) {
             continue;
@@ -2030,6 +2040,7 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         // Outside its level's footprint (else the nearest one below's: a roof's): flagged, listed.
         // Site work stands outside the building by design.
         let under = if site.is_none() { footprints_of(&fps, sp, &level.name) } else { Vec::new() };
+        let mut outside_ft: Option<f64> = None;
         if !under.is_empty() {
             let off = under
                 .iter()
@@ -2037,6 +2048,7 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
                 .fold(f64::INFINITY, f64::min)
                 / upf;
             if off.is_finite() && off > OUTSIDE_FLOOR_FT {
+                outside_ft = Some(off);
                 let why = format!(
                     "{:.1} ft outside {}'s footprint (its floor and exterior walls), where it was read on {} (its sheet may be placed wrong, or it is outside the building)",
                     off,
@@ -2057,8 +2069,44 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             }
         }
         let xdata = props::write(&xdata, &store);
-        if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+        let common = Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() };
+        let seen = sheet_outside.entry(sheet.clone()).or_default();
+        seen.0 += 1;
+        if outside_ft.is_some() {
+            seen.1 += 1;
+        }
+        // Read outside the building with no circuit: nothing ties it to the building (a grid
+        // bubble's letter, a tag or a note read as a device). Held until its sheet is known to be
+        // placed right, then left out as a review item, never built silently.
+        if let Some(off) = outside_ft.filter(|_| circuit.as_deref().is_none_or(|c| c.trim().is_empty())) {
+            let item = json!({
+                "level": level.name, "mark": mark, "kind": vkind, "sheet": sheet, "symbol": symbol_hex,
+                "at_ft": [round2(x / upf), round2(y / upf)], "outside_ft": round2(off),
+                "why": format!(
+                    "read {:.1} ft outside {}'s footprint with no circuit: nothing ties it to the building (a grid bubble's label, a tag or a note read as a device?), so it is not built; confirm it or place it",
+                    off, level.name
+                ),
+            });
+            held.push((sheet.clone(), common, m, item));
+            continue;
+        }
+        if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
             report.built += 1;
+        }
+    }
+    // The held devices: left out where their sheet's other devices stand in the building; built
+    // and flagged `misplaced` where most of its devices stand outside it (the sheet itself is
+    // placed wrong, its devices are no strays).
+    for (sheet, common, m, item) in held {
+        let (n, out) = sheet_outside.get(&sheet).copied().unwrap_or_default();
+        if out * 2 > n {
+            if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
+                report.built += 1;
+            }
+        } else if report.outside_unbuilt.len() < MAX_LISTED {
+            report.outside_unbuilt.push(item);
+        } else {
+            report.outside_unbuilt.push(Value::Null);
         }
     }
     report
@@ -3599,6 +3647,56 @@ mod tests {
         assert!(off.iter().any(|o| *o > 40.0), "{off:?}");
         // A move not known: the point as it is.
         assert_eq!(in_plan_of(&stack, "Roof", "Basement", p), p);
+    }
+
+    /// fix-grid-bubble-as-fixture: a luminaire read far outside its level's footprint with no
+    /// circuit, on a sheet whose other devices stand in the building, is not built: it is a review
+    /// item saying why. One outside with its circuit is built (flagged `misplaced`), and so is
+    /// every device of a sheet whose devices mostly stand outside (the sheet is placed wrong).
+    #[test]
+    fn a_stray_device_outside_the_building_with_no_circuit_is_a_review_item_not_an_element() {
+        let dev = |sheet: &str, at: [f64; 2], circuit: Option<&str>| {
+            let mut fields = json!({
+                "symbol": {"value": "1", "source": "plan"},
+                "type": {"value": "D", "source": "plan"},
+                "sheet": {"value": sheet, "source": "plan"},
+            });
+            if let Some(c) = circuit {
+                fields["circuit"] = json!({"value": c, "source": "plan"});
+            }
+            json!({"id": format!("device:L1:{sheet}:{},{}", at[0], at[1]), "kind": "luminaire", "level": "L1", "at_ft": at, "fields": fields})
+        };
+        let tags = vec![
+            dev("Q-1", [10.0, 10.0], Some("L-1")),
+            dev("Q-1", [20.0, 20.0], Some("L-1")),
+            dev("Q-1", [30.0, 30.0], None),
+            // A grid bubble's D read as a luminaire 50 ft past the building, no circuit.
+            dev("Q-1", [150.0, 50.0], None),
+            // A canopy light outside on its circuit.
+            dev("Q-1", [50.0, 120.0], Some("L-3")),
+            // A sheet placed wrong: both its devices outside.
+            dev("Q-2", [300.0, 300.0], None),
+            dev("Q-2", [310.0, 300.0], None),
+        ];
+        let sp: BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [{"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0}],
+            "shells": {"L1": [[0.0, 0.0, 1200.0, 1200.0]]},
+            "tags": tags,
+        }))
+        .unwrap();
+        let mut d = Drawing::new_imperial();
+        let r = build_devices(&mut d, &sp);
+        assert_eq!(r.built, 6, "{:#}", r.to_json());
+        assert_eq!(r.outside_unbuilt.len(), 1, "{:#}", r.to_json());
+        let item = &r.outside_unbuilt[0];
+        assert_eq!((item["mark"].as_str(), item["sheet"].as_str(), item["outside_ft"].as_f64()), (Some("D"), Some("Q-1"), Some(50.0)), "{item:#}");
+        assert!(item["why"].as_str().is_some_and(|w| w.contains("no circuit") && w.contains("not built")), "{item:#}");
+        assert_eq!(r.to_json()["outside_unbuilt"], json!(1));
+        // The canopy light and the misplaced sheet's two: built, flagged.
+        assert_eq!(r.misplaced.len(), 4, "the stray, the canopy light, the wrong sheet's two: {:#}", r.to_json());
+        let flagged = d.model.iter().filter(|e| props::read(&e.common.xdata).get("misplaced").is_some()).count();
+        assert_eq!(flagged, 3, "built and flagged");
     }
 
     /// Q6311: a window lights the room past its wall even where the room's outline keeps off the
