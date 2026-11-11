@@ -82,6 +82,89 @@ fn a_spanning_tree_joins_every_device_once() {
     assert!(spanning_tree(&pts, 9).is_empty());
 }
 
+/// Each box's way back to the root along `tree` (plan, square), the farthest.
+fn farthest(pts: &[Vec2], root: usize, tree: &[(usize, usize)]) -> f64 {
+    let mut back = vec![f64::NAN; pts.len()];
+    back[root] = 0.0;
+    for (u, v) in tree {
+        back[*v] = back[*u] + manhattan(pts[*u], pts[*v]);
+    }
+    assert!(back.iter().all(|b| b.is_finite()), "every box reached: {tree:?}");
+    back.iter().copied().fold(0.0, f64::max)
+}
+
+#[test]
+fn a_branching_tree_keeps_the_farthest_box_nearer_than_the_chain_within_its_joints() {
+    // Q6340: eight boxes round a 30' x 14' room (sheet inches), the homerun's box at a corner.
+    let ft = [(2.0, 7.0), (10.0, 7.0), (18.0, 7.0), (26.0, 7.0), (28.0, 0.0), (26.0, -7.0), (18.0, -7.0), (10.0, -7.0)];
+    let pts: Vec<Vec2> = ft.iter().map(|(x, y)| Vec2::new(x * UPF, y * UPF)).collect();
+    // The chain: weight 0 with one joint at the root and two at each box is the spanning tree.
+    assert_eq!(branch_tree(&pts, &[], 0, 1, 2, 0.0), spanning_tree(&pts, 0));
+    let chain = spanning_tree(&pts, 0);
+    let (rj, bj, w) = rules().route.branching();
+    assert_eq!((rj, bj), (2, 3), "rules data");
+    let br = branch_tree(&pts, &[], 0, rj, bj, w);
+    assert_eq!(br.len(), pts.len() - 1);
+    let mut joints = vec![0usize; pts.len()];
+    for (a, b) in &br {
+        joints[*a] += 1;
+        joints[*b] += 1;
+    }
+    assert!(joints[0] <= rj && joints.iter().skip(1).all(|j| *j <= bj), "{joints:?}");
+    let (c, b) = (farthest(&pts, 0, &chain) / UPF, farthest(&pts, 0, &br) / UPF);
+    // Chained: 58 ft round the room in plan; branched both ways from the corner: 38 ft.
+    assert!((c - 58.0).abs() < 1e-6, "the chain goes round the room: {c}");
+    assert!((b - 38.0).abs() < 1e-6, "branched {b} vs chained {c}");
+    assert!(branch_tree(&pts, &[], 9, rj, bj, w).is_empty());
+    // Each box's drop counted: a deep branch costs its drops, so the tree is shallower still.
+    let rises = vec![7.75 * UPF; pts.len()];
+    let deep = |t: &[(usize, usize)]| {
+        let mut depth = vec![0usize; pts.len()];
+        for (a, b) in t {
+            depth[*b] = depth[*a] + 1;
+        }
+        depth.into_iter().max().unwrap_or(0)
+    };
+    let low = branch_tree(&pts, &rises, 0, rj, bj, w);
+    assert_eq!(low.len(), pts.len() - 1);
+    assert!(deep(&low) <= deep(&br) && deep(&low) < deep(&chain), "{low:?} / {br:?}");
+    let _ = branch_tree(&[Vec2::new(f64::NAN, 0.0), Vec2::new(0.0, 0.0)], &[f64::NAN, -1.0], 0, 2, 3, f64::NAN);
+}
+
+fn breaker_table() -> super::super::wiretable::LengthTable {
+    use super::super::wiretable::{Band, LengthTable};
+    let b = |size: &str, max_ft: f64| Band { amps: Some(20.0), volts: Some(120.0), size: size.into(), max_ft };
+    LengthTable { sheet: "X-1".into(), title: "VOLTAGE DROP SCHEDULE".into(), bands: vec![b("12", 50.0), b("10", 100.0), b("8", 150.0)] }
+}
+
+#[test]
+fn the_documents_length_table_sizes_by_breaker_and_voltage_else_the_drop_decides() {
+    let rl = rules();
+    let t = vec![breaker_table()];
+    let (s, why) = table_size(&t, 80.0, Some(20.0), 120.0, 4.0, rl).expect("sized");
+    assert_eq!(s, "10");
+    assert!(why.contains("VOLTAGE DROP SCHEDULE on X-1") && why.contains("20 A / 120 V"), "{why}");
+    // No breaker read: the usual 20 A, said.
+    let (s, why) = table_size(&t, 40.0, None, 120.0, 4.0, rl).expect("sized");
+    assert_eq!(s, "12");
+    assert!(why.contains("breaker not read"), "{why}");
+    // A 30 A circuit or a 277 V one: no row, the drop decides.
+    assert!(table_size(&t, 40.0, Some(30.0), 120.0, 4.0, rl).is_none());
+    assert!(table_size(&t, 40.0, Some(20.0), 277.0, 4.0, rl).is_none());
+    // Past its reach: its largest size, or the drop's when that is larger.
+    let (s, why) = table_size(&t, 300.0, Some(20.0), 120.0, 1.0, rl).expect("sized");
+    assert_eq!(s, "8", "{why}");
+    assert!(why.contains("engineer confirms"), "{why}");
+    let (s, _) = table_size(&t, 300.0, Some(20.0), 120.0, 16.0, rl).expect("sized");
+    assert!(rl.vdrop.sizes.iter().position(|x| *x == s) > rl.vdrop.sizes.iter().position(|x| x == "8"), "{s}");
+    // How far a size reaches: the table's, else the drop's (3% at 16 A, 120 V on #12: 56.9 ft).
+    let sup = size::supply(1, None, "P", rl);
+    assert_eq!(reach_ft("10", &t, Some(20.0), &sup, 16.0, rl).map(|r| r.0), Some(100.0));
+    let (r, by) = reach_ft("12", &[], Some(20.0), &sup, 16.0, rl).expect("reach");
+    assert!((r - 56.9).abs() < 0.2 && by.contains("210.19"), "{r} {by}");
+    assert!(reach_ft("12", &[], None, &sup, 0.0, rl).is_none());
+}
+
 #[test]
 fn a_homerun_follows_the_corridor_lanes() {
     // An L corridor: along x (y 480..576) and down along y at its east end (x 1104..1200).

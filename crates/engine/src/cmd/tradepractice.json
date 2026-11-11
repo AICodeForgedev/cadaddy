@@ -273,6 +273,12 @@
       "basis": "code and practice: branch circuit conductors are sized for at most 3 percent voltage drop (NEC 210.19(A) Informational Note 4), the drawings' length table first; the field pulls the next conductor size"
     },
     {
+      "id": "E-CONDUCTOR-LARGER-DOC",
+      "trade": "electrical",
+      "fills": "a branch circuit the documents give two conductor sizes (the plan's note and the panel schedule's wire column)",
+      "basis": "trade practice: where the plan and the panel schedule disagree on a circuit's conductors the field pulls the larger (never under what either document or the length table asks), the smaller kept as the design value and the difference listed for the engineer"
+    },
+    {
       "id": "M-ROOF-CURB",
       "trade": "mechanical",
       "fills": "the roof curb a ducted rooftop unit (an outdoor air unit, a packaged rooftop unit, an air handler, an energy recovery unit, a roof exhaust fan) stands on where the schedule and plans give none (numbers: default_size_in, the curb's height above the roof; sizes: by the unit's kind or schedule words)",

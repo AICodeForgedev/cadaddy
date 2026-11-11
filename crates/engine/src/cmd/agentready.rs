@@ -760,6 +760,14 @@ fn breaker_items(s: &Session) -> Vec<Item> {
                 ],
                 1.6,
             ),
+            // A label naming no panel of the documents (Q6319): no panel is made for it.
+            "unknown_panel" => (
+                vec![
+                    json!({"answer": "the label is no circuit: another mark printed beside the device (its circuit is still to be found)", "from": "the plans"}),
+                    json!({"answer": "the documents leave the panel out: its schedule and feed are asked for (RFI)", "from": "the one-line, the riser and the panel schedules"}),
+                ],
+                1.5,
+            ),
             _ => (vec![json!({"answer": "the schedule is on another sheet", "from": "the electrical sheets"})], 1.4),
         };
         out.push(Item {

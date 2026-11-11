@@ -8,7 +8,7 @@ use cadaddy_engine::doc::EntityKind;
 use cadaddy_engine::{EngineError, Session};
 use serde_json::{Value, json};
 
-fn model() -> Session {
+pub(crate) fn model() -> Session {
     let mut s = Session::new();
     s.execute(
         "bspec.set",
