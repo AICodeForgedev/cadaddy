@@ -287,11 +287,25 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     // lines for `by_others`, one entry each (Q6167).
     // The fire alarm circuits' cable rows and the control panel its wiring places by rule
     // (Q6503) are by others too, but not the model's devices.
+    // A built device is listed by its element's handle (Q6525), an unbuilt one by its tag.
+    let device_handles: std::collections::BTreeSet<String> = s
+        .doc()
+        .ok()
+        .map(|d| {
+            d.model
+                .iter()
+                .filter(|e| e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("devid:device:")))
+                .map(|e| e.handle.hex())
+                .collect()
+        })
+        .unwrap_or_default();
     let others = bom["by_others"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|x| x["trade"] != "concrete" && x["element"].as_str().is_some_and(|e| e.starts_with("device:")))
+        .filter(|x| {
+            x["trade"] != "concrete" && x["element"].as_str().is_some_and(|e| e.starts_with("device:") || device_handles.contains(e))
+        })
         .count();
     assert_eq!(units + others as f64, (inserted + site) as f64, "the BOM counts the model's devices: {lines:#?} by others {others}");
     assert!(lines.iter().all(|l| l["level"].as_str().is_some_and(|v| !v.is_empty())));

@@ -3267,6 +3267,9 @@
 	= (block=output file)	= (bloc=fichier de sortie)
 	* (whole drawing)	* (dessin entier)
 	Requires an integer between 0 and 16.	Un entier entre 0 et 16 est requis.
+	3D BIM	BIM 3D
+	Show 3D BIM	Afficher le BIM 3D
+	This drawing holds a built model.	Ce dessin contient un modèle construit.
 	Correct Job Sheet Index	Corriger l'index des feuilles de la tâche
 	Refrigerant Piping	Tuyauterie de fluide frigorigène
 	Hydronic Piping	Tuyauterie hydronique

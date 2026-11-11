@@ -178,6 +178,9 @@ pub struct State {
     stream: Stream,
     /// The BIM view's state (`bim.view`), for the state of the drawing it was read from.
     view_for: Option<((usize, u64), serde_json::Value)>,
+    /// The drawing (its uid) that was opened holding a built model: the plan offers its 3D BIM
+    /// view (Q6310) until it is taken or closed.
+    pub offer_bim3d: Option<u64>,
     /// When the GPU last drew a frame, and while frames follow one another (a moving view): how
     /// many have, and their running average interval in milliseconds.
     drawn_at: Option<web_time::Instant>,
@@ -632,6 +635,42 @@ fn view_bar(app: &mut CadApp, ui: &egui::Ui, xf: &Xf) {
         && let Err(e) = app.run("bim.view", p)
     {
         app.set_status(format!("{}: {e}", crate::i18n::t("BIM View")));
+    }
+}
+
+/// The offer on the plan of a drawing opened holding a built model (Q6310): a small card in the
+/// view's top left corner, "Show 3D BIM" (View ▸ 3D BIM) or close it. Gone once the Model tab
+/// shows 3D or another drawing is current.
+pub fn offer_bim3d(app: &mut CadApp, ui: &egui::Ui, xf: &Xf) {
+    let Some(uid) = app.canvas.shade.offer_bim3d else { return };
+    let Ok(st) = app.session.state() else { return };
+    if st.uid != uid {
+        return;
+    }
+    if active(app).is_some() {
+        app.canvas.shade.offer_bim3d = None;
+        return;
+    }
+    let (mut show, mut close) = (false, false);
+    egui::Area::new(ui.id().with("bim3d-offer")).order(egui::Order::Middle).fixed_pos(xf.rect.left_top() + egui::vec2(8.0, 8.0)).show(
+        ui.ctx(),
+        |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(crate::i18n::t("This drawing holds a built model."));
+                    show = ui.button(crate::i18n::t("Show 3D BIM")).clicked();
+                    close = ui.add(egui::Button::new("×").frame(false)).on_hover_text(crate::i18n::t("Close")).clicked();
+                });
+            });
+        },
+    );
+    if show {
+        app.canvas.shade.offer_bim3d = None;
+        if let Err(e) = app.run("view.bim3d", serde_json::json!({})) {
+            app.set_status(e);
+        }
+    } else if close {
+        app.canvas.shade.offer_bim3d = None;
     }
 }
 
@@ -2531,6 +2570,9 @@ fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
         frame: resolve,
     }
 }
+
+#[cfg(test)]
+mod bim3d_tests;
 
 #[cfg(test)]
 mod tests {

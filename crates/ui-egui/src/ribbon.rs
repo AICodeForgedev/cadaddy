@@ -443,6 +443,8 @@ pub const TABS: &[Tab] = &[
     Tab {
         name: "View",
         panels: &[
+            // The built model in 3D in one click (Q6310).
+            Panel { name: "BIM", items: &[Item::Large(b(Icon::Coordination, "view.bim3d", "3D BIM"))], more: &[] },
             Panel { name: "Walk", items: &[Item::Large(b(Icon::Walk, "ui.walk", "Walk"))], more: &[] },
             Panel {
                 name: "Viewport Tools",

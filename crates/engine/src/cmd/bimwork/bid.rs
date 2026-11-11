@@ -57,6 +57,8 @@ const SUMMARY: &str = "Bid Summary";
 struct System {
     id: String,
     name: String,
+    /// The trade whose lines it holds when that trade is not one the rules sort (Q6528).
+    trade: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -85,6 +87,9 @@ struct Letter {
 #[serde(default)]
 struct Rules {
     trades: Vec<String>,
+    /// The trades whose lines the rules sort into the systems; another trade's lines are in a
+    /// system of that trade's own (Q6528).
+    rules_trades: Vec<String>,
     systems: Vec<System>,
     default_system: String,
     underground_system: String,
@@ -464,7 +469,7 @@ fn apportion(raw: &[f64], target: i64) -> Vec<i64> {
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     crate::cmd::exchange::guard_params(s, CMD, p, &["file", "letter"])?;
-    let r = rules();
+    let mut r = rules();
     let kept = super::state(s.doc()?)[STATE_KEY].clone();
     let given = |k: &str| p.get(k).filter(|v| !v.is_null()).or_else(|| kept.get(k).filter(|v| !v.is_null())).cloned().unwrap_or(Value::Null);
     // The estimate's settings are the defaults of the rates.
@@ -499,6 +504,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if trades.is_empty() {
         return Err(bad(CMD, "`trades` names at least one trade"));
     }
+    // Each bid trade the rules don't sort is a system of its own (Q6528): a mechanical line is
+    // never put in an electrical system.
+    let sorted_by_rules = |rules_trades: &[String], t: &str| rules_trades.is_empty() || rules_trades.iter().any(|x| norm(x) == t);
+    for t in trades.iter().filter(|t| !sorted_by_rules(&r.rules_trades, t)) {
+        if !r.systems.iter().any(|x| norm(&x.trade) == *t) {
+            let mut name: Vec<char> = t.chars().collect();
+            if let Some(c) = name.first_mut() {
+                *c = c.to_ascii_uppercase();
+            }
+            r.systems.push(System { id: format!("trade_{}", t.replace(' ', "_")), name: name.into_iter().collect(), trade: t.clone() });
+        }
+    }
+    let own_system = |t: &str| r.systems.iter().find(|x| !x.trade.is_empty() && norm(&x.trade) == t).map(|x| x.id.clone());
     let names: BTreeMap<&str, String> = ["project", "client", "bidder"].into_iter().map(|k| (k, text_of(&given(k)))).collect();
     let stale_days = match p.get("stale_days") {
         None | Some(Value::Null) => 90,
@@ -574,26 +592,31 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     for (l, c) in src.into_iter().zip(classified) {
         let category = l["category"].as_str().unwrap_or_default().to_string();
         let circuit = l["circuit"].as_str().unwrap_or_default().to_string();
-        let (system, why) = match c {
-            _ if l["proposed"].is_boolean() => (r.underground_system.clone(), "an underground run (the underground plan)".to_string()),
-            Some((sys, why)) if !inherit(&category) => (sys, why),
-            c => {
-                let mut tally: BTreeMap<String, f64> = BTreeMap::new();
-                for part in circuit_parts(&circuit) {
-                    for (sys, q) in circuit_sys.get(&part).into_iter().flatten() {
-                        *tally.entry(sys.clone()).or_default() += q;
+        let trade = norm(l["trade"].as_str().unwrap_or_default());
+        let own = if sorted_by_rules(&r.rules_trades, &trade) { None } else { own_system(&trade) };
+        let (system, why) = match (own, c) {
+            (Some(sys), _) => (sys, format!("a {trade} line: the {trade} trade's own work")),
+            (None, c) => match c {
+                _ if l["proposed"].is_boolean() => (r.underground_system.clone(), "an underground run (the underground plan)".to_string()),
+                Some((sys, why)) if !inherit(&category) => (sys, why),
+                c => {
+                    let mut tally: BTreeMap<String, f64> = BTreeMap::new();
+                    for part in circuit_parts(&circuit) {
+                        for (sys, q) in circuit_sys.get(&part).into_iter().flatten() {
+                            *tally.entry(sys.clone()).or_default() += q;
+                        }
+                    }
+                    let best = tally.iter().max_by(|a, b| a.1.total_cmp(b.1).then(order(b.0).cmp(&order(a.0)))).map(|(k, _)| k.clone());
+                    match (best, c) {
+                        (Some(sys), _) => {
+                            let name = r.systems.iter().find(|x| x.id == sys).map_or(sys.as_str(), |x| x.name.as_str()).to_lowercase();
+                            (sys.clone(), format!("on circuit {circuit}, whose devices are {name}"))
+                        }
+                        (None, Some((sys, why))) => (sys, why),
+                        (None, None) => (r.default_system.clone(), "no rule names it and no device on its circuit says otherwise".to_string()),
                     }
                 }
-                let best = tally.iter().max_by(|a, b| a.1.total_cmp(b.1).then(order(b.0).cmp(&order(a.0)))).map(|(k, _)| k.clone());
-                match (best, c) {
-                    (Some(sys), _) => {
-                        let name = r.systems.iter().find(|x| x.id == sys).map_or(sys.as_str(), |x| x.name.as_str()).to_lowercase();
-                        (sys.clone(), format!("on circuit {circuit}, whose devices are {name}"))
-                    }
-                    (None, Some((sys, why))) => (sys, why),
-                    (None, None) => (r.default_system.clone(), "no rule names it and no device on its circuit says otherwise".to_string()),
-                }
-            }
+            },
         };
         let (qty, waste_pct, bought) = priced::bought(&l);
         if qty <= 0.0 {

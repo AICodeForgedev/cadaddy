@@ -6756,12 +6756,21 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // doesn't is passed over for the next, else the tag is said not placeable).
                 // The mechanical sheets that aren't plans (schedules, details), when the set has
                 // mechanical plans to place anything on.
-                let m_pages = if job_sheet_refs(job).iter().any(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds()) {
+                let mut m_pages = if job_sheet_refs(job).iter().any(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds()) {
                     non_plan_pages(job, "M")
                 } else {
                     Vec::new()
                 };
-                let mut found = scheduled_equipment(s, job, &sp, &m_pages)?;
+                // The plumbing schedules too (a plumbing fixture schedule's water heaters and
+                // expansion tank), placed by the plumbing plans' tags (Q6316); read with the
+                // mechanical ones, then set aside (what follows reads the mechanical sheets).
+                let m_count = m_pages.len();
+                if job_sheet_refs(job).iter().any(|r| r.discipline.eq_ignore_ascii_case("P") && r.builds()) {
+                    m_pages.extend(non_plan_pages(job, "P"));
+                }
+                let found = scheduled_equipment(s, job, &sp, &m_pages);
+                m_pages.truncate(m_count);
+                let mut found = found?;
                 let read_n = found.candidates.len();
                 found.choose(|e| match sim(e.min, &e.level) {
                     Some(m) => {
@@ -6780,7 +6789,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             StageName::BimBuild,
                             &format!("{} scheduled piece(s) of equipment no plan places", found.unplaced.len()),
                             &format!(
-                                "the mechanical schedules list them but no mechanical plan of a level tags them, so they are not in the model: {}",
+                                "the mechanical or plumbing schedules list them but no plan of a level tags them, so they are not in the model: {}",
                                 tags.join(", ")
                             ),
                             2,
@@ -6795,7 +6804,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             StageName::BimBuild,
                             &format!("{} scheduled piece(s) of equipment a plan tags but could not be placed", found.not_placeable.len()),
                             &format!(
-                                "the mechanical schedules list them and a plan tags them, but no sheet they are tagged on lines up with its level's plan, so they are not in the model (tag, the sheets): {}",
+                                "the mechanical or plumbing schedules list them and a plan tags them, but no sheet they are tagged on lines up with its level's plan, so they are not in the model (tag, the sheets): {}",
                                 tags.join("; ")
                             ),
                             2,
@@ -6805,7 +6814,75 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         );
                     }
                 }
-                sp.mep.equipment.extend(found.equipment);
+                let from = sp.mep.equipment.len();
+                sp.mep.equipment.extend(std::mem::take(&mut found.equipment));
+                let joined = super::schedequip::join_runs(&mut sp, from);
+                if joined > 0 {
+                    progress_line(&format!("  scheduled units joined to the drawn runs ending at them: {joined}"));
+                }
+                // The equipment built some other way (a typical room's stamped fan) that a
+                // schedule row lists or whose kind's row serves its room: that row's type and
+                // data on it (Q6316).
+                {
+                    let names: BTreeMap<(String, String), String> = sp
+                        .rooms
+                        .iter()
+                        .filter_map(|r| {
+                            let n = r.number.clone().filter(|n| !n.trim().is_empty())?;
+                            Some(((r.level.clone().unwrap_or_default().to_ascii_lowercase(), n.trim().to_ascii_uppercase()), r.name.clone()))
+                        })
+                        .collect();
+                    // The room on its level, else a room of that number given no level.
+                    let room_name = |level: &str, room: &str| {
+                        let n = room.trim().to_ascii_uppercase();
+                        names
+                            .get(&(level.to_ascii_lowercase(), n.clone()))
+                            .or_else(|| names.get(&(String::new(), n)))
+                            .cloned()
+                            .unwrap_or_else(|| room.to_string())
+                    };
+                    let typed = super::schedequip::type_built(&found.rows, &mut sp.mep.equipment, &room_name);
+                    if typed.by_tag + typed.by_room > 0 || !typed.untold.is_empty() {
+                        progress_line(&format!(
+                            "  built equipment given its schedule row: {} by its tag, {} by the row serving its room; {} with no one row ({:?})",
+                            typed.by_tag,
+                            typed.by_room,
+                            typed.untold.len(),
+                            typed.untold.iter().take(5).collect::<Vec<_>>()
+                        ));
+                    }
+                    if !typed.untold.is_empty() {
+                        let list: Vec<String> = typed.untold.iter().take(20).map(|(t, can)| format!("{t}: {can}")).collect();
+                        job.add_finding(
+                            StageName::BimBuild,
+                            &format!("{} piece(s) of equipment with no schedule type", typed.untold.len()),
+                            &format!(
+                                "drawn with their kind's mark and no number, and more than one schedule row of that kind could be theirs, so their type, model and electrical data are not set (the equipment, the rows): {}",
+                                list.join("; ")
+                            ),
+                            2,
+                            vec!["Check which schedule row each serves".into()],
+                            None,
+                            false,
+                        );
+                    }
+                }
+                if !found.unscheduled.is_empty() {
+                    let tags: Vec<String> = found.unscheduled.iter().take(20).map(|(t, sh)| format!("{t} ({sh})")).collect();
+                    progress_line(&format!("  equipment tags the plans print that no schedule lists: {}", tags.join(", ")));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        &format!("{} equipment tag(s) the plans print that no schedule lists", found.unscheduled.len()),
+                        &format!(
+                            "a plan tags them like the scheduled equipment, but no mechanical or plumbing schedule row lists them, so what they are (type, size, electrical data) is not known (tag, the sheets): {}",
+                            tags.join("; ")
+                        ),
+                        2,
+                        vec!["Check the schedules for these tags".into()],
+                        None,
+                        false,
+                    );
+                }
                 // The typical exhaust risers: each typical room's fan duct up its chase to the roof
                 // terminal the roof plan places over it, as the riser details draw (Q6496).
                 {
@@ -13984,16 +14061,18 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
     out
 }
 
-/// The equipment the set's mechanical schedules list and its mechanical plans of the levels tag,
-/// not built yet ([`super::schedequip::read`]), on its sheets' places in the drawing.
+/// The equipment the set's mechanical and plumbing schedules list and its mechanical and
+/// plumbing plans of the levels tag, not built yet ([`super::schedequip::read`]), on its sheets' places in the drawing.
 fn scheduled_equipment(
     s: &Session,
     job: &GuidedJob,
     sp: &cadaddy_walk3d::BuildingSpec,
     schedules: &[(String, cadaddy_doc::Drawing)],
 ) -> Result<super::schedequip::Read> {
-    let refs: Vec<super::printmep::SheetRef> =
-        job_sheet_refs(job).into_iter().filter(|r| r.discipline.eq_ignore_ascii_case("M") && r.builds()).take(MAX_STAMP_SHEETS).collect();
+    // Each discipline's plans up to the cap (the plumbing ones never crowd out the mechanical).
+    let all = job_sheet_refs(job);
+    let of = |d: &'static str| all.iter().filter(move |r| r.discipline.eq_ignore_ascii_case(d) && r.builds()).take(MAX_STAMP_SHEETS).cloned();
+    let refs: Vec<super::printmep::SheetRef> = of("M").chain(of("P")).collect();
     if refs.is_empty() {
         return Ok(super::schedequip::Read::default());
     }

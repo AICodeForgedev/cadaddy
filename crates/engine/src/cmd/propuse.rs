@@ -35,6 +35,7 @@ use crate::{Result, Session};
 
 pub mod checks;
 pub mod codes;
+pub(crate) mod conn;
 
 use codes::Section;
 
@@ -274,9 +275,10 @@ fn has_any(w: &str, words: &[&str]) -> bool {
     words.iter().any(|x| w.contains(x))
 }
 
-/// An air terminal: a diffuser, grille, register (an airflow or the build's terminal part).
+/// An air terminal: a diffuser, grille, register (an airflow or the build's terminal part). A
+/// sprinkler head (the build makes it a terminal too) is fire protection, not air (Q6505).
 pub(crate) fn is_terminal(el: &El) -> bool {
-    if !matches!(el.kind.as_str(), "fixture" | "device" | "duct") {
+    if !matches!(el.kind.as_str(), "fixture" | "device" | "duct") || is_sprinkler(el) {
         return false;
     }
     let w = el.words();
@@ -895,23 +897,34 @@ fn sched_plumbing(m: &Model, level: Option<&str>) -> Sched {
     s
 }
 
-/// The air terminals each unit serves, with their airflow.
-pub(crate) fn air_systems<'m>(m: &'m Model, level: Option<&str>) -> (BTreeMap<usize, Vec<&'m El<'m>>>, Vec<&'m El<'m>>) {
-    let mut by_unit: BTreeMap<usize, Vec<&El>> = BTreeMap::new();
-    let mut unserved = Vec::new();
-    for el in m.els.iter().filter(|e| is_terminal(e) && on_level(e, level)) {
+/// The air terminals: those each unit serves by their own links (`served_by`, `fed_from`,
+/// `unit`), with their airflow; those served through their built duct network (`connects`) and
+/// the unit it ends at (Q6505); and those served by none.
+pub(crate) struct AirSystems<'m> {
+    pub by_unit: BTreeMap<usize, Vec<&'m El<'m>>>,
+    pub via_net: Vec<(&'m El<'m>, usize)>,
+    pub unserved: Vec<&'m El<'m>>,
+}
+
+pub(crate) fn air_systems<'m>(m: &'m Model, level: Option<&str>, nets: &conn::Nets) -> AirSystems<'m> {
+    let mut a = AirSystems { by_unit: BTreeMap::new(), via_net: Vec::new(), unserved: Vec::new() };
+    for (i, el) in m.els.iter().enumerate().filter(|(_, e)| is_terminal(e) && on_level(e, level)) {
         match m.link(el, &["served_by", "fed_from", "unit"]) {
-            Some(u) => by_unit.entry(u).or_default().push(el),
-            None => unserved.push(el),
+            Some(u) => a.by_unit.entry(u).or_default().push(el),
+            None => match nets.unit_of(i) {
+                Some(u) => a.via_net.push((el, u)),
+                None => a.unserved.push(el),
+            },
         }
     }
-    (by_unit, unserved)
+    a
 }
 
 fn sched_air(m: &Model, level: Option<&str>) -> Sched {
     let mut s =
         Sched::new(&["unit", "unit_cfm", "terminals", "terminal_cfm", "difference_pct", "terminal", "type_mark", "size", "cfm", "room", "level"]);
-    let (by_unit, unserved) = air_systems(m, level);
+    let nets = conn::Nets::new(m);
+    let AirSystems { by_unit, via_net, unserved } = air_systems(m, level, &nets);
     for (u, terms) in &by_unit {
         let Some(unit) = m.get(*u) else { continue };
         let ucfm = unit.num(&["cfm", "airflow", "capacity"]);
@@ -933,6 +946,22 @@ fn sched_air(m: &Model, level: Option<&str>) -> Sched {
                 t.level(),
             ]);
         }
+    }
+    for (t, u) in &via_net {
+        let name = m.get(*u).map(|unit| unit.tag().unwrap_or_else(|| unit.handle().hex())).unwrap_or_default();
+        s.push(vec![
+            name,
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            t.handle().hex(),
+            t.text("type_mark").unwrap_or_default(),
+            t.text("size").unwrap_or_default(),
+            t.num(&["cfm", "airflow"]).map(n2).unwrap_or_default(),
+            t.text("room").unwrap_or_default(),
+            t.level(),
+        ]);
     }
     for t in &unserved {
         s.push(vec![

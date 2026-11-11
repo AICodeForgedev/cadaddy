@@ -151,3 +151,38 @@ fn the_stack_clashes_in_each_storeys_scope_and_not_with_its_own_floors() {
     // The vent across it on level 3 meets level 3's piece.
     assert!(san.iter().any(|x| x["kind"] == "crossing" && x["level"] == "Level 3"), "the vent through the stack on level 3: {all:#?}");
 }
+
+/// Q6505: a stack drawn a storey at a time (a run per level, each from its floor up to the floor
+/// over it) passes through each storey: not "below the ceiling", not "into the floor structure".
+/// A riser that stops short of the floor over it and a duct hung under the ceiling still are.
+#[test]
+fn a_stack_drawn_a_storey_at_a_time_passes_through_each_storey() {
+    let mut s = Session::new();
+    let level = |name: &str, i: u32| json!({"name": name, "elevation_ft": f64::from(i) * 10.0, "height_ft": 10.0, "ceiling_ft": 8.0});
+    let piece = |lv: &str| json!({"system": "SAN", "level": lv, "points": [[100.0, 100.0]], "size_in": [4, 0], "bottoms_ft": [0.0], "top_ft": 10.0});
+    let spec = json!({
+        "units_per_foot": 12,
+        "stack": false,
+        "levels": [level("Level 1", 0), level("Level 2", 1), level("Level 3", 2), level("Roof", 3)],
+        "mep": {
+            "systems": [
+                {"name": "SAN", "layer": "P-SAN", "kind": "pipe", "size_in": [4, 0], "bottom_ft": 0},
+                {"name": "CW", "layer": "P-CW", "kind": "pipe", "size_in": [1, 0], "bottom_ft": 0},
+                {"name": "SA", "layer": "M-SA", "kind": "duct", "size_in": [12, 8], "bottom_ft": 9}
+            ],
+            "runs": [
+                piece("Level 1"), piece("Level 2"), piece("Level 3"),
+                {"system": "CW", "level": "Level 2", "points": [[400.0, 400.0]], "size_in": [1, 0], "bottoms_ft": [0.0], "top_ft": 5.0},
+                {"system": "SA", "level": "Level 2", "points": [[600.0, 40.0], [900.0, 40.0]], "size_in": [12, 8], "bottoms_ft": [6.0]}
+            ]
+        }
+    });
+    s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap();
+    s.execute("model.build", &json!({"echo": false})).unwrap();
+    let c = s.execute("model.clashes", &json!({})).unwrap();
+    let all: Vec<&Value> = c["clashes"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
+    let of = |sys: &str, kind: &str| all.iter().filter(|x| x["kind"] == kind && x["systems"][0] == sys).count();
+    assert_eq!((of("SAN", "below_ceiling"), of("SAN", "into_structure")), (0, 0), "{all:#?}");
+    assert_eq!(of("CW", "below_ceiling"), 1, "a riser ending 5 ft up, in mid-storey: {all:#?}");
+    assert_eq!(of("SA", "below_ceiling"), 1, "the duct hung 6 ft up: {all:#?}");
+}

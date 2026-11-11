@@ -691,51 +691,124 @@ pub fn parse_size(column: &str, cell: &str) -> Option<([f64; 3], bool)> {
     }
 }
 
-/// The scheduled equipment in the tables (one per tag; the first table naming a tag wins).
+/// Most tags one schedule row may name (`WH-4,5,6`).
+const MAX_ROW_TAGS: usize = 50;
+
+/// The tags one row's tag cell names: itself, else each of a list (`WH-4,5,6`, `WH-4, WH-5 & WH-6`:
+/// a number alone takes the first tag's letters) or a range (`WH-4 THRU 6`, `P-1 THROUGH P-4`).
+pub fn row_tags(cell: &str) -> Vec<String> {
+    let t = cell.trim().to_ascii_uppercase();
+    // `WH-4` → (`WH-`, `4`): its letters and the number after them.
+    let split = |tag: &str| -> Option<(String, String)> {
+        let i = tag.char_indices().rev().take_while(|(_, c)| c.is_ascii_digit()).last().map(|(i, _)| i)?;
+        let (head, num) = tag.split_at(i);
+        (!head.is_empty() && head.chars().next().is_some_and(|c| c.is_ascii_alphabetic())).then(|| (head.to_string(), num.to_string()))
+    };
+    let words: Vec<&str> = t.split_whitespace().collect();
+    if let Some(at) = words.iter().position(|w| *w == "THRU" || *w == "THROUGH" || *w == "TO") {
+        let first = words.get(..at).map(|w| w.concat()).unwrap_or_default();
+        let last = words.get(at + 1..).map(|w| w.concat()).unwrap_or_default();
+        if let (Some((head, a)), Ok(b)) = (split(&first), last.trim_start_matches(|c: char| !c.is_ascii_digit()).parse::<usize>())
+            && let Ok(a) = a.parse::<usize>()
+            && a <= b
+            && b - a < MAX_ROW_TAGS
+            && (last.chars().all(|c| c.is_ascii_digit()) || split(&last).is_some_and(|(h, _)| h == head))
+        {
+            let width = if first.ends_with(&format!("0{a}")) { first.len() - head.len() } else { 0 };
+            return (a..=b).map(|n| format!("{head}{n:0width$}")).collect();
+        }
+        return vec![t];
+    }
+    if !t.contains(',') && !t.contains('&') {
+        return vec![t];
+    }
+    let parts: Vec<String> = t.split([',', '&']).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).take(MAX_ROW_TAGS).collect();
+    let Some(head) = parts.first().and_then(|p| split(p)).map(|(h, _)| h) else { return vec![t] };
+    let mut out: Vec<String> = Vec::new();
+    for p in parts {
+        let tag = if p.chars().all(|c| c.is_ascii_digit()) { format!("{head}{p}") } else { p };
+        if split(&tag).is_none() {
+            // Not a list of tags (a note in the cell).
+            return vec![t];
+        }
+        if !out.contains(&tag) {
+            out.push(tag);
+        }
+    }
+    out
+}
+
+/// What a row of a table whose title names no equipment is, by the words of its name (a
+/// plumbing fixture schedule's `GAS WATER HEATER`; rules data `equipment.kind_by_row_words`):
+/// the columns that name the item, else its description.
+fn kind_from_row(columns: &[String], row: &BTreeMap<String, String>) -> Option<&'static str> {
+    const NAME: [&str; 6] = ["FIXTURE", "EQUIPMENT", "ITEM", "NAME", "TYPE", "DESCRIPTION"];
+    let pairs = crate::wordrules::pairs("equipment.kind_by_row_words");
+    let name_cols: Vec<&String> = columns.iter().filter(|c| NAME.iter().take(5).any(|n| c.trim().eq_ignore_ascii_case(n))).collect();
+    let cols: Vec<&String> =
+        if name_cols.is_empty() { columns.iter().filter(|c| c.trim().eq_ignore_ascii_case("DESCRIPTION")).collect() } else { name_cols };
+    cols.iter().filter_map(|c| row.get(*c)).find_map(|v| {
+        let v = v.to_ascii_uppercase();
+        pairs.iter().find(|(w, _)| v.contains(w)).map(|(_, k)| *k)
+    })
+}
+
+/// The scheduled equipment in the tables (one per tag; the first table naming a tag wins). A
+/// row naming several tags (`WH-4,5,6`) is one piece of equipment per tag.
 pub fn scheduled(tables: &[Table]) -> Vec<Scheduled> {
     let mut out: Vec<Scheduled> = Vec::new();
     for t in tables {
         let by_title = kind_from_title(&t.title);
-        if by_title == Some("") {
+        let title = t.title.to_ascii_uppercase();
+        // A fixture schedule's equipment rows (a plumbing fixture schedule's water heaters);
+        // never a light fixture's.
+        let fixtures = title.contains("FIXTURE") && !title.contains("LIGHT") && !title.contains("LUMINAIRE");
+        if by_title == Some("") && !fixtures {
             continue;
         }
         let Some(tag_col) = t.columns.iter().find(|c| is_tag_column(c)) else { continue };
         for row in &t.rows {
-            let Some(tag) = row.get(tag_col).map(|s| s.trim().to_ascii_uppercase()).filter(|s| !s.is_empty()) else { continue };
-            if out.iter().any(|s| s.tag == tag) {
-                continue;
-            }
-            let (kind, from) = match (by_title, kind_from_tag(&tag)) {
+            let Some(cell) = row.get(tag_col).map(|s| s.trim().to_ascii_uppercase()).filter(|s| !s.is_empty()) else { continue };
+            let by_row = || kind_from_row(&t.columns, row);
+            let Some((kind, from)) = (match (by_title, kind_from_tag(&cell)) {
+                // A fixture schedule: only its rows that name equipment.
+                (Some(""), _) => by_row().map(|k| (k, "row")),
                 // A fan schedule's exhaust fans.
-                (Some("fan"), Some("exhaust_fan")) => ("exhaust_fan", "title"),
-                (Some(k), _) => (k, "title"),
-                (None, Some(k)) => (k, "tag"),
-                (None, None) => continue,
+                (Some("fan"), Some("exhaust_fan")) => Some(("exhaust_fan", "title")),
+                (Some(k), _) => Some((k, "title")),
+                (None, by_tag) => by_row().map(|k| (k, "row")).or(by_tag.map(|k| (k, "tag"))),
+            }) else {
+                continue;
             };
-            let col = |c: &str| row.iter().find(|(k, _)| k.trim().eq_ignore_ascii_case(c)).map(|(_, v)| v);
-            let size = row
-                .iter()
-                .filter(|(c, _)| {
-                    let c = c.to_ascii_uppercase();
-                    c.contains("SIZE") || c.contains("DIMENSION")
-                })
-                .find_map(|(c, v)| parse_size(c, v));
-            let cfm = ["CFM", "MAX CFM", "SUPPLY CFM", "AIRFLOW (CFM)", "CFM (MAX)"]
-                .iter()
-                .find_map(|c| col(c))
-                .and_then(|v| v.replace(',', "").trim().parse::<f64>().ok())
-                .filter(|v| v.is_finite() && *v > 0.0);
-            out.push(Scheduled {
-                tag,
-                kind: kind.to_string(),
-                kind_from: from.to_string(),
-                sheet: t.sheet.clone(),
-                title: t.title.clone(),
-                properties: row.clone(),
-                size_ft: size.map(|s| s.0),
-                round: size.is_some_and(|s| s.1),
-                cfm,
-            });
+            for tag in row_tags(&cell) {
+                if out.iter().any(|s| s.tag == tag) {
+                    continue;
+                }
+                let col = |c: &str| row.iter().find(|(k, _)| k.trim().eq_ignore_ascii_case(c)).map(|(_, v)| v);
+                let size = row
+                    .iter()
+                    .filter(|(c, _)| {
+                        let c = c.to_ascii_uppercase();
+                        c.contains("SIZE") || c.contains("DIMENSION")
+                    })
+                    .find_map(|(c, v)| parse_size(c, v));
+                let cfm = ["CFM", "MAX CFM", "SUPPLY CFM", "AIRFLOW (CFM)", "CFM (MAX)"]
+                    .iter()
+                    .find_map(|c| col(c))
+                    .and_then(|v| v.replace(',', "").trim().parse::<f64>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.0);
+                out.push(Scheduled {
+                    tag,
+                    kind: kind.to_string(),
+                    kind_from: from.to_string(),
+                    sheet: t.sheet.clone(),
+                    title: t.title.clone(),
+                    properties: row.clone(),
+                    size_ft: size.map(|s| s.0),
+                    round: size.is_some_and(|s| s.1),
+                    cfm,
+                });
+            }
         }
     }
     out
