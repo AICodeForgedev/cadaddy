@@ -223,6 +223,7 @@ pub mod tradeatoms;
 pub(crate) mod traderooms;
 pub(crate) mod ugplan;
 pub mod ugsheets;
+pub(crate) mod underceiling;
 pub(crate) mod underlay;
 mod unitmarks;
 mod unittypes;
