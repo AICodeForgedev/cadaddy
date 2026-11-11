@@ -644,6 +644,26 @@ fn checks_take_a_subset_a_level_and_limits() {
     assert_eq!(handles(&findings(&r, "no_fed_from")), vec![h.toilet_dup.hex()]);
 }
 
+/// A floor with corridors and no air terminal is a finding (Q6318): its terminals were not
+/// read or not built. A floor whose corridor has one, or with no corridor, is not.
+#[test]
+fn a_floor_with_corridors_and_no_air_terminal_is_a_finding() {
+    let mut d = Drawing::new_imperial();
+    el(&mut d, "room", "L1", "A-AREA", [0.0, 0.0, 0.0], [40.0, 6.0, 9.0], &[("name", json!("CORRIDOR")), ("number", json!("100"))]);
+    el(&mut d, "diffuser", "L1", "M-DIFF", [10.0, 2.0, 8.8], [11.0, 3.0, 9.0], &[("type_mark", json!("SD-1")), ("cfm", json!(100))]);
+    let bare =
+        el(&mut d, "room", "L2", "A-AREA", [0.0, 0.0, 10.0], [40.0, 6.0, 19.0], &[("name", json!("EAST CORRIDORS")), ("number", json!("200"))]);
+    el(&mut d, "room", "L2", "A-AREA", [0.0, 6.0, 10.0], [20.0, 20.0, 19.0], &[("name", json!("HALL")), ("number", json!("201"))]);
+    el(&mut d, "room", "L3", "A-AREA", [0.0, 0.0, 20.0], [40.0, 6.0, 29.0], &[("name", json!("STORAGE")), ("number", json!("300"))]);
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Building", None);
+    let r = s.execute("bim.props.check", &json!({"checks": ["corridor_no_terminals"]})).unwrap();
+    let f = findings(&r, "corridor_no_terminals");
+    assert_eq!(handles(&f), vec![bare.hex()], "{r}");
+    assert_eq!(f[0]["values"], json!({"level": "L2", "corridors": 2}), "{f:?}");
+    assert_eq!(r["checked"]["corridor_no_terminals"], json!(2), "the two floors with corridors: {r}");
+}
+
 #[test]
 fn an_empty_model_says_to_build_it() {
     let mut s = Session::empty();

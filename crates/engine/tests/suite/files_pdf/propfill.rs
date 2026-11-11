@@ -1246,3 +1246,96 @@ fn a_ceiling_fans_connection_is_above_the_ceiling_at_its_fan_and_follows_it() {
     check(&moved, [95.0, 117.0], [130.0, 460.0]);
     assert!(moved[1].0 > got[1].0 + 8.0 && moved[0].2[0] > got[0].2[0] + 20.0, "{got:?} {moved:?}");
 }
+
+// ─── Air terminals (Q6318) ──────────────────────────────────────────────────
+
+/// [`plan`] with its spec changed by `edit`, built again and filled.
+fn plan_edited(edit: impl FnOnce(&mut Value)) -> Session {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    edit(&mut sp);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    fill(&mut s);
+    s
+}
+
+/// The one air terminal whose type mark is `mark`.
+fn terminal_of(s: &mut Session, mark: &str) -> Value {
+    let hs = find(s, "fixture", json!({"type_mark": mark}));
+    assert_eq!(hs.len(), 1, "one terminal {mark}: {hs:?}");
+    get(s, &hs[0])
+}
+
+/// A diffuser takes what its plan tag says (its type mark and airflow, over an airflow printed
+/// nearby), its type's row of the air device schedule, and the unit its duct leads to; the air
+/// schedule lists it under that unit, not as served by none.
+#[test]
+fn an_air_terminal_takes_its_tags_type_and_airflow_its_schedule_row_and_its_unit() {
+    let _g = serial();
+    let mut s = plan_edited(|sp| {
+        sp["mep"]["terminals"][0]["tag"] = json!("SD-2");
+        sp["mep"]["terminals"][0]["cfm"] = json!(415.0);
+        // The air handler at the run's end, on its system.
+        sp["mep"]["equipment"][0]["min"] = json!([1800, 520]);
+        sp["mep"]["equipment"][0]["max"] = json!([1860, 560]);
+        sp["mep"]["equipment"][0]["systems"] = json!(["SA"]);
+        sp["mep"]["air_device_schedule"] = json!([
+            {"tag": "SD-1", "properties": {"MODEL": "OTHER"}, "source": "M-601"},
+            {"tag": "SD-2", "properties": {"MANUFACTURER": "MAKER A", "MODEL": "PLAQUE-24", "FACE SIZE (IN)": "24\"x24\"", "MOUNTING LOCATION": "CEILING"}, "source": "M-601"}
+        ]);
+    });
+    let t = terminal_of(&mut s, "SD-2");
+    assert_eq!(t["type_mark"]["source"]["kind"], "print", "{t:#}");
+    assert_eq!(t["cfm"]["value"], json!(415.0), "its tag's airflow over the 150 CFM printed by it: {t:#}");
+    assert_eq!(t["model"]["value"], "PLAQUE-24", "{t:#}");
+    assert_eq!(t["model"]["source"]["kind"], "schedule");
+    assert_eq!(t["manufacturer"]["value"], "MAKER A");
+    assert_eq!(t["mounting"]["value"], "CEILING");
+    assert_eq!(t["face_size"]["value"], "24\"x24\"");
+    assert_eq!(t["served_by"]["value"], "AHU-1", "{t:#}");
+    assert_eq!(t["served_by"]["source"]["kind"], "computed");
+    assert!(t["served_by"]["note"].as_str().is_some_and(|n| n.contains("duct network")), "{t:#}");
+    let air = s.execute("bim.schedule", &json!({"kind": "air"})).expect("air schedule");
+    let rows = air["rows"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 1, "{air:#}");
+    assert_eq!(rows[0]["unit"], "AHU-1", "{air:#}");
+    assert_eq!(rows[0]["type_mark"], "SD-2");
+    assert_eq!(rows[0]["cfm"], "415");
+}
+
+/// With no duct to a unit: an outdoor air unit whose schedule row says it serves the room's
+/// kind of room serves its supply diffuser (derived), a room's own exhaust fan its exhaust
+/// grille (inferred, by the trade practice rule); a supply diffuser no unit can be said to
+/// serve stays unserved, and an exhaust fan never serves a supply diffuser.
+#[test]
+fn a_terminal_no_duct_reaches_is_served_by_its_schedules_unit_or_its_rooms_own() {
+    let _g = serial();
+    let mut s = plan_edited(|sp| {
+        let systems = sp["mep"]["systems"].as_array_mut().expect("systems");
+        systems.push(json!({"name": "EA", "layer": "M-EXH", "kind": "duct", "size_in": [6, 6], "bottom_ft": 9}));
+        let terms = sp["mep"]["terminals"].as_array_mut().expect("terminals");
+        // Office 101 (x 0–20'): an exhaust grille and a supply diffuser; storage 102 (x 30–50'):
+        // a supply diffuser.
+        terms.push(json!({"system": "EA", "level": "L1", "at": [60, 60], "size_in": [8, 8], "bottom_ft": 8, "terminal_kind": "exhaust_grille", "tag": "EG-1"}));
+        terms.push(json!({"system": "SA", "level": "L1", "at": [180, 60], "size_in": [8, 8], "bottom_ft": 8, "terminal_kind": "supply_diffuser", "tag": "SD-7"}));
+        terms.push(json!({"system": "SA", "level": "L1", "at": [480, 60], "size_in": [8, 8], "bottom_ft": 8, "terminal_kind": "supply_diffuser", "tag": "SD-1"}));
+        let eq = sp["mep"]["equipment"].as_array_mut().expect("equipment");
+        eq.push(json!({"tag": "EF-1", "kind": "exhaust_fan", "level": "L1", "min": [120, 80], "max": [140, 100], "height_ft": 1, "systems": ["EA"]}));
+        eq.push(json!({"tag": "DOAS-1", "kind": "outdoor_air_unit", "level": "L1", "min": [2400, 400], "max": [2460, 440], "height_ft": 4,
+                       "properties": {"CFM": "900", "AREA SERVED": "STORAGE ROOMS"}, "sources": {"schedule": "M-601"}}));
+    });
+    let sd1 = terminal_of(&mut s, "SD-1");
+    assert_eq!(sd1["served_by"]["value"], "DOAS-1", "{sd1:#}");
+    assert_eq!(sd1["served_by"]["source"]["kind"], "computed");
+    assert!(sd1["served_by"]["note"].as_str().is_some_and(|n| n.contains("schedule row") && n.contains("STORAGE")), "{sd1:#}");
+    let eg = terminal_of(&mut s, "EG-1");
+    assert_eq!(eg["served_by"]["value"], "EF-1", "{eg:#}");
+    assert_eq!(eg["served_by"]["source"]["kind"], "rule");
+    assert!(eg["served_by"]["note"].as_str().is_some_and(|n| n.starts_with("M-TERMINAL-ROOM-UNIT")), "{eg:#}");
+    let sd7 = terminal_of(&mut s, "SD-7");
+    assert!(sd7.get("served_by").is_none(), "no supply unit for office 101: {sd7:#}");
+    let r = s.execute("bim.props.check", &json!({"checks": ["terminal_unserved"]})).expect("check");
+    let unserved: Vec<String> = r["findings"].as_array().into_iter().flatten().filter_map(|f| f["message"].as_str().map(str::to_string)).collect();
+    assert!(unserved.iter().any(|m| m.contains("SD-7")) && !unserved.iter().any(|m| m.contains("SD-1") || m.contains("EG-1")), "{unserved:?}");
+}

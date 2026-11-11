@@ -3067,6 +3067,19 @@
     "FIXTURE SCHEDULE"
    ]
   },
+  "schedules.air_device_titles": {
+   "source": "drafting convention: the words of an air device schedule's title (`GRILLE, REGISTER, AND DIFFUSER SCHEDULE`, `AIR DEVICE SCHEDULE`): each diffuser, register and grille type by its mark (fix-air-terminals-unconnected)",
+   "words": [
+    "AIR DEVICE",
+    "AIR DISTRIBUTION",
+    "AIR TERMINAL",
+    "AIR OUTLET",
+    "AIR INLET",
+    "DIFFUSER",
+    "GRILLE",
+    "REGISTER"
+   ]
+  },
   "schedules.luminaire_titles": {
    "source": "drafting convention: the titles of a luminaire schedule (moved from guided.rs); read on any trade's sheet (fix-lum-fixture-schedule-not-read)",
    "words": [

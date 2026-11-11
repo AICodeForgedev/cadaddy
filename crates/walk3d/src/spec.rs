@@ -1400,6 +1400,9 @@ pub struct Mep {
     /// The light fixture schedule as printed: each type's basis of design and data.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fixture_schedule: Vec<FixtureType>,
+    /// The air device schedule as printed: each diffuser, register and grille type by its mark.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub air_device_schedule: Vec<AirDeviceType>,
     /// The tables gear is checked with (conduit sizes, conductor areas, wire-bending space),
     /// when a project's differ from the defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1763,6 +1766,7 @@ impl Mep {
             && self.occupancy.is_empty()
             && self.equipment_electrical.is_empty()
             && self.fixture_schedule.is_empty()
+            && self.air_device_schedule.is_empty()
             && self.gear_rules.is_none()
             && self.devices.is_empty()
             && self.arc_flash.is_empty()
@@ -2246,6 +2250,25 @@ pub struct MepTerminal {
     /// installed beside the design value, with the reason and the rule.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub corrections: Vec<RunCorrection>,
+    /// Its type mark, as its plan tag gives it (`SD-2`: the air device schedule's row). Empty:
+    /// its tag names none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+    /// Its airflow, CFM, as its plan tag gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cfm: Option<f64>,
+}
+
+/// One type of air device (diffuser, register, grille) as the air device schedule prints it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AirDeviceType {
+    /// Its mark (`SD-1`).
+    pub tag: String,
+    /// The row as printed: column → text (`MANUFACTURER`, `MODEL`, `FACE SIZE (IN)`).
+    pub properties: BTreeMap<String, String>,
+    /// The sheet it was read from.
+    pub source: String,
 }
 
 /// One change a revision of the prints made to a run: the revision log.

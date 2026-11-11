@@ -56,12 +56,86 @@ pub struct DetectedFitting {
 }
 
 /// A detected terminal device.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct DetectedTerminal {
     /// `supply_diffuser`, `return_grille`, `exhaust_grille`.
     pub kind: String,
     pub at: Vec2,
     pub confidence: f64,
+    /// Its plan tag's type mark (`SD-2`, the air device schedule's row), empty when its tag has
+    /// none.
+    pub mark: String,
+    /// Its plan tag's (neck) size, inches: `[w, h]`, or `[d, 0]` round.
+    pub size_in: Option<[f64; 2]>,
+    /// Its plan tag's airflow, CFM.
+    pub cfm: Option<f64>,
+}
+
+/// What an air device's plan tag says: its type mark, size and airflow. The tag is the mark
+/// with the lines stacked on it (`SD-2` over `12"x8"` over `415`, as a mechanical legend shows
+/// the type, size and CFM), or one line (`SD-2 12x8 415 CFM`). A bare number is an airflow
+/// only in a stack under (or over) a mark.
+pub fn tag_block(texts: &[(String, Vec2, String, f64)], i: usize) -> (String, Option<[f64; 2]>, Option<f64>) {
+    let Some((t0, at0, _, h0)) = texts.get(i) else { return (String::new(), None, None) };
+    let h = if h0.is_finite() && *h0 > 0.0 { *h0 } else { 1.0 };
+    let mut mark = t0.split_whitespace().find(|w| is_terminal_tag(w) && !w.to_ascii_uppercase().contains("CFM")).unwrap_or("").to_ascii_uppercase();
+    let mut size = parse_size(t0);
+    let mut cfm = cfm_value(t0);
+    // The lines stacked on it, nearest first: as tall as it, in line with it, a line or two
+    // above or below; a line that is another air device's mark starts another tag.
+    let mut stack: Vec<(f64, &str)> = texts
+        .iter()
+        .enumerate()
+        .filter(|(j, (t, at, _, th))| {
+            *j != i && (at.x - at0.x).abs() <= 3.0 * h && (at.y - at0.y).abs() <= 3.6 * h && (at.y - at0.y).abs() >= 0.5 * h && t.len() <= 24 && {
+                let r = th / h;
+                (0.6..=1.6).contains(&r)
+            }
+        })
+        .map(|(_, (t, at, ..))| ((at.y - at0.y).abs(), t.as_str()))
+        .collect();
+    stack.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (_, t) in stack.into_iter().take(4) {
+        let other_mark = t.split_whitespace().any(|w| is_terminal_tag(w) && !w.to_ascii_uppercase().contains("CFM"));
+        if other_mark {
+            if mark.is_empty() {
+                mark = t.split_whitespace().find(|w| is_terminal_tag(w)).unwrap_or("").to_ascii_uppercase();
+                continue;
+            }
+            break;
+        }
+        if size.is_none() {
+            size = parse_size(t);
+            if size.is_some() {
+                continue;
+            }
+        }
+        if cfm.is_none() {
+            cfm = cfm_value(t).or_else(|| (!mark.is_empty()).then(|| bare_airflow(t)).flatten());
+        }
+    }
+    (mark, size, cfm)
+}
+
+/// An airflow in a text: `150 CFM`, `CFM: 150`, `1,225CFM`.
+pub fn cfm_value(t: &str) -> Option<f64> {
+    let up = t.to_ascii_uppercase();
+    let at = up.find("CFM")?;
+    let before: String = up.get(..at).unwrap_or("").trim_end().chars().rev().take_while(|c| c.is_ascii_digit() || *c == ',').collect();
+    let before: String = before.chars().rev().filter(|c| *c != ',').collect();
+    let after: String = up.get(at + 3..).unwrap_or("").trim_start_matches([':', '=', ' ']).chars().take_while(char::is_ascii_digit).collect();
+    let n: f64 = if before.is_empty() { after.parse().ok()? } else { before.parse().ok()? };
+    (n.is_finite() && (10.0..=100_000.0).contains(&n)).then_some(n)
+}
+
+/// A line that is only a whole number of an air device's airflow (`415`, `1,225`).
+fn bare_airflow(t: &str) -> Option<f64> {
+    let t = t.trim();
+    if t.is_empty() || !t.chars().all(|c| c.is_ascii_digit() || c == ',') || t.starts_with('0') {
+        return None;
+    }
+    let n: f64 = t.replace(',', "").parse().ok()?;
+    (10.0..=20_000.0).contains(&n).then_some(n)
 }
 
 /// A detected equipment box.
@@ -908,8 +982,10 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     // beside it (`CD-1`, `RG-2`, `150 CFM`, as the air device schedule names them).
     // A box drawn in pieces with an equipment mark (`EF` over its number) right by it, nearer
     // than any air device's tag, is that equipment, whatever tag a grille beside it carries.
+    // Every sheet's tags, for what each air device's tag says (its type, size and airflow).
+    let texts = pen_texts(d, bg);
+    let tag_ix: Vec<usize> = texts.iter().enumerate().filter(|(_, (t, ..))| is_terminal_tag(t)).map(|(i, _)| i).take(MAX_TERMINALS * 4).collect();
     let (tags, equipment_marks): (Vec<(Vec2, f64)>, Vec<Vec2>) = if candidates.iter().any(|c| c.3) {
-        let texts = pen_texts(d, bg);
         let marks = crate::wordrules::words("equipment.marks");
         let equipment_mark = |t: &str| {
             let up = t.trim().to_ascii_uppercase();
@@ -950,7 +1026,16 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         if terminals.iter().any(|t: &DetectedTerminal| t.kind == *kind && t.at.dist(at) <= 0.25 * size) {
             continue;
         }
-        terminals.push(DetectedTerminal { kind: (*kind).into(), at, confidence: 0.7 });
+        // Its tag: the nearest air device tag in a tag's reach of it.
+        let reach = |h: f64| size * 1.5 + h.max(0.0) * 6.0;
+        let tag = tag_ix
+            .iter()
+            .filter_map(|j| texts.get(*j).map(|(_, p, _, h)| (*j, box_gap(*p, *min, *max), *h)))
+            .filter(|(_, gap, h)| *gap <= reach(*h))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(j, ..)| j);
+        let (mark, size_in, cfm) = tag.map(|j| tag_block(&texts, j)).unwrap_or_default();
+        terminals.push(DetectedTerminal { kind: (*kind).into(), at, confidence: 0.7, mark, size_in, cfm });
         if terminals.len() >= MAX_TERMINALS {
             break;
         }
@@ -2447,6 +2532,51 @@ mod tests {
         // A CAD sheet's device layer is symbols by layer: no tag needed.
         let d = grille_sheet("DEVICE", &[[0.0, 0.0], [120.0, 0.0]], false, &[]);
         assert_eq!(detect_terminals(&d, false, false).len(), 2);
+    }
+
+    #[test]
+    fn a_grille_keeps_what_its_tag_says_its_type_size_and_airflow() {
+        // Three ways a plan tags an air device: the legend's stack of mark, neck size and a bare
+        // airflow (under it, or over it); one line with the airflow in CFM; a mark alone.
+        let texts = [
+            ("SD-2", [40.0, 4.0]),
+            ("12\"x8\"", [39.0, -1.0]),
+            ("415", [41.0, -6.0]),
+            ("1,225", [436.0, 10.0]),
+            ("RG-1", [440.0, 4.0]),
+            ("10\"Ø", [440.0, -1.0]),
+            ("EG-3 6x6 75 CFM", [840.0, 4.0]),
+            ("CD-4", [1240.0, 4.0]),
+        ];
+        let d = grille_sheet("M-HVAC", &[[0.0, 0.0], [400.0, 0.0], [800.0, 0.0], [1200.0, 0.0]], true, &texts);
+        let mut got: Vec<(String, Option<[f64; 2]>, Option<f64>)> =
+            detect_terminals(&d, true, false).into_iter().map(|t| (t.mark, t.size_in, t.cfm)).collect();
+        got.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            got,
+            vec![
+                ("CD-4".to_string(), None, None),
+                ("EG-3".to_string(), Some([6.0, 6.0]), Some(75.0)),
+                ("RG-1".to_string(), Some([10.0, 0.0]), Some(1225.0)),
+                ("SD-2".to_string(), Some([12.0, 8.0]), Some(415.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bare_number_is_an_airflow_only_in_a_marks_stack() {
+        let t = |v: &[(&str, [f64; 2])]| -> Vec<(String, Vec2, String, f64)> {
+            v.iter().map(|(s, at)| ((*s).to_string(), Vec2::new(at[0], at[1]), String::new(), 4.0)).collect()
+        };
+        // A room number under an airflow line is no airflow of a mark; a number far below the
+        // mark is not its tag's.
+        assert_eq!(tag_block(&t(&[("150 CFM", [0.0, 0.0]), ("236", [0.0, -5.0])]), 0), (String::new(), None, Some(150.0)));
+        assert_eq!(tag_block(&t(&[("SD-1", [0.0, 0.0]), ("300", [0.0, -40.0])]), 0), ("SD-1".to_string(), None, None));
+        assert_eq!(tag_block(&t(&[("SD-1", [0.0, 0.0]), ("0300", [0.0, -5.0])]), 0).2, None);
+        // The next tag's mark ends the stack: its airflow is not this one's.
+        assert_eq!(tag_block(&t(&[("SD-1", [0.0, 0.0]), ("RG-2", [0.0, -5.0]), ("200", [0.0, -10.0])]), 0).2, None);
+        assert_eq!(cfm_value("CFM: 200"), Some(200.0));
+        assert_eq!(cfm_value("1,200 CFM"), Some(1200.0));
     }
 
     #[test]

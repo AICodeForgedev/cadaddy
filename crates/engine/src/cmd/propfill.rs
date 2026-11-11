@@ -2920,6 +2920,16 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         .filter_map(|(h, _)| d.model.get(*h).and_then(|e| made(e, "tag")).map(|t| (t.trim().to_ascii_uppercase(), *h)))
         .collect();
     let room_level = |label: &str| rooms3.iter().find(|r| room_label(r.number.as_deref(), &r.name).eq_ignore_ascii_case(label));
+    // The unit serving each air terminal (Q6318).
+    // A room by its label and name (`102 STORAGE`): a schedule's `SERVES` names rooms by name.
+    let served = super::airserve::serve(d, &sp, &|lvl, p| {
+        room_at(&rooms, lvl, p).map(|r| {
+            match room_level(&r.label).map(|x| x.name.trim()).filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case(&r.label)) {
+                Some(name) => format!("{} {name}", r.label),
+                None => r.label.clone(),
+            }
+        })
+    });
     let mut filled: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut changes: Vec<(Handle, Props)> = Vec::new();
     // Wall boxes on walls of no known build-up (the spec has wall types with build-ups).
@@ -3289,8 +3299,48 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                             put(&mut store, "type", Prop::new(kind_word.to_string(), Source::print(&sheet, None)), tally);
                         }
                         let at_plan = b.center() - shift;
-                        if let Some((cfm, q)) = grid.near(at_plan, CFM_TAG_FT * upf).into_iter().find_map(|(t, q, _)| cfm_in(t).map(|c| (c, q))) {
+                        // What its plan tag says (Q6318): its type mark and airflow, else an
+                        // airflow printed by it.
+                        let mark = super::bimlook::made_prop(e, super::mep::TERMINAL_MARK).map(str::to_string).filter(|m| !m.is_empty());
+                        if let Some(mk) = &mark {
+                            put(&mut store, "type_mark", Prop::new(mk.clone(), Source::print(&sheet, None)), tally);
+                        }
+                        let own_cfm = super::bimlook::made_prop(e, super::mep::TERMINAL_CFM)
+                            .and_then(|c| c.parse::<f64>().ok())
+                            .filter(|c| c.is_finite() && *c > 0.0);
+                        if let Some(cfm) = own_cfm {
+                            put(&mut store, "cfm", Prop::new(cfm, Source::print(&sheet, None)).with_unit("cfm"), tally);
+                        } else if let Some((cfm, q)) =
+                            grid.near(at_plan, CFM_TAG_FT * upf).into_iter().find_map(|(t, q, _)| cfm_in(t).map(|c| (c, q)))
+                        {
                             put(&mut store, "cfm", Prop::new(cfm, Source::print(&sheet, Some([q.x, q.y]))).with_unit("cfm"), tally);
+                        }
+                        // Its type's row of the air device schedule.
+                        if let Some(row) = mark.as_deref().and_then(|mk| sp.mep.air_device_schedule.iter().find(|t| t.tag.eq_ignore_ascii_case(mk))) {
+                            let src = Source::from_doc(SourceKind::Schedule, &format!("air device schedule ({})", row.source));
+                            let col = |want: &dyn Fn(&str) -> bool| {
+                                row.properties.iter().find(|(k, v)| want(&k.to_ascii_uppercase()) && !v.trim().is_empty())
+                            };
+                            for (key, want) in [
+                                ("manufacturer", &(|k: &str| k.contains("MANUF")) as &dyn Fn(&str) -> bool),
+                                ("model", &|k: &str| k.contains("MODEL")),
+                                ("description", &|k: &str| k.contains("TYPE") || k.contains("DESCRIPTION")),
+                                ("mounting", &|k: &str| k.contains("MOUNT")),
+                                ("face_size", &|k: &str| k.contains("SIZE")),
+                            ] {
+                                if let Some((_, v)) = col(want) {
+                                    put(&mut store, key, Prop::new(v.trim().to_string(), src.clone()), tally);
+                                }
+                            }
+                        }
+                        // The unit that serves it ([`super::airserve`]).
+                        if let Some(sv) = served.get(h) {
+                            let src = match sv.made {
+                                cadaddy_walk3d::Made::Inferred => Source::from_doc(SourceKind::Rule, super::airserve::ROOM_UNIT_RULE),
+                                _ => Source::computed(),
+                            };
+                            put(&mut store, "served_by", Prop::new(sv.tag.clone(), src.clone()).with_note(&sv.basis), tally);
+                            put(&mut store, "served_by_handle", Prop::new(sv.unit.hex(), src), tally);
                         }
                         if let Some(r) = room_at(&rooms, lvl, b.center()) {
                             put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()), tally);

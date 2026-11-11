@@ -30,7 +30,7 @@ use crate::{Result, Session};
 pub(crate) const CHECK: &str = "bim.props.check";
 
 /// Every check, in the order they run.
-pub const CHECKS: [&str; 22] = [
+pub const CHECKS: [&str; 23] = [
     "no_circuit",
     "no_fed_from",
     "default_height",
@@ -47,6 +47,7 @@ pub const CHECKS: [&str; 22] = [
     "duct_velocity",
     "fire_damper",
     "terminal_unserved",
+    "corridor_no_terminals",
     "equipment_power",
     "drain_dfu",
     "pipe_slope",
@@ -675,6 +676,37 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         out.checked("terminal_unserved", unserved.len() + by_unit.values().map(Vec::len).sum::<usize>());
         for t in &unserved {
             out.add("terminal_unserved", "warning", Some(t), format!("{} is not served by any unit", t.label()), Value::Null);
+        }
+    }
+    // A floor whose corridors have no air terminal at all (Q6318): a corridor is ventilated
+    // (the outdoor air unit's supply, its return or exhaust), so its floor's terminals were not
+    // read or not built.
+    if wants(&set, "corridor_no_terminals") {
+        let words = cadaddy_mepfix::wordrules::words("rooms.corridor_words");
+        let corridor = |r: &El| {
+            let n = r.text("name").unwrap_or_default().to_ascii_uppercase();
+            n.split(|c: char| !c.is_ascii_alphanumeric()).any(|x| words.iter().any(|w| x == *w || x.strip_suffix('S') == Some(*w)))
+        };
+        let mut floors: BTreeMap<String, Vec<&El>> = BTreeMap::new();
+        for r in els.iter().copied().filter(|e| e.kind == "room" && corridor(e)) {
+            floors.entry(r.level()).or_default().push(r);
+        }
+        let served: BTreeSet<String> = els.iter().filter(|e| super::is_terminal(e)).map(|e| e.level().to_ascii_uppercase()).collect();
+        out.checked("corridor_no_terminals", floors.len());
+        for (lvl, rooms) in &floors {
+            if lvl.is_empty() || served.contains(&lvl.to_ascii_uppercase()) {
+                continue;
+            }
+            out.add(
+                "corridor_no_terminals",
+                "warning",
+                rooms.first().copied(),
+                format!(
+                    "{lvl} has {} corridor room(s) and no air terminal: its supply, return or exhaust terminals were not read or not built",
+                    rooms.len()
+                ),
+                json!({"level": lvl, "corridors": rooms.len()}),
+            );
         }
     }
     if wants(&set, "equipment_power") {

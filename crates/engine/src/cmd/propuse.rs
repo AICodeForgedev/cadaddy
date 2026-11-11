@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{kind: device|door|window|room_finish|light_fixture|equipment|plumbing_fixture|air_distribution|panel|wire|duct|pipe, by?: room|circuit (device schedule; default room), level?, limits?: {drop_ft? (10), makeup_pct? (10)}, file?: .csv|.xlsx} → {schedule, columns, rows: [{column: value}], count, notes, csv, path?}: a schedule made from the elements' properties; panels: circuits, breakers, wire, connected load per phase")
             .noundo(),
         CommandSpec::new(checks::CHECK, "Check Element Properties", checks::run)
-            .params("{checks?: [name] (default all: no_circuit, no_fed_from, default_height, rated_door, door_schedule, room_number, gfci_wet, circuit_load, wire_breaker, conduit_fill, voltage_drop, equipment_mocp, terminal_cfm, duct_velocity, fire_damper, terminal_unserved, equipment_power, drain_dfu, pipe_slope, fixture_waste_vent, water_heater, gas_size), level?, limits?: {cfm_tolerance_pct? (10), duct_velocity_fpm? (2000), voltage_drop_pct? (3), load_pct? (80), hw_demand_factor? (0.25), gas_btu_per_cf? (1000)}} → {findings: [{check, severity: error|warning|info, message, handle?, kind?, level?, values?}], counts: {check: n}, checked: {check: n}, totals: {dfu, gas}, limits}")
+            .params("{checks?: [name] (default all: no_circuit, no_fed_from, default_height, rated_door, door_schedule, room_number, gfci_wet, circuit_load, wire_breaker, conduit_fill, voltage_drop, equipment_mocp, terminal_cfm, duct_velocity, fire_damper, terminal_unserved, corridor_no_terminals, equipment_power, drain_dfu, pipe_slope, fixture_waste_vent, water_heater, gas_size), level?, limits?: {cfm_tolerance_pct? (10), duct_velocity_fpm? (2000), voltage_drop_pct? (3), load_pct? (80), hw_demand_factor? (0.25), gas_btu_per_cf? (1000)}} → {findings: [{check, severity: error|warning|info, message, handle?, kind?, level?, values?}], counts: {check: n}, checked: {check: n}, totals: {dfu, gas}, limits}")
             .noundo(),
     ]
 }
@@ -900,7 +900,7 @@ pub(crate) fn air_systems<'m>(m: &'m Model, level: Option<&str>) -> (BTreeMap<us
     let mut by_unit: BTreeMap<usize, Vec<&El>> = BTreeMap::new();
     let mut unserved = Vec::new();
     for el in m.els.iter().filter(|e| is_terminal(e) && on_level(e, level)) {
-        match m.link(el, &["served_by", "fed_from", "unit"]) {
+        match m.link(el, &["served_by_handle", "served_by", "fed_from", "unit"]) {
             Some(u) => by_unit.entry(u).or_default().push(el),
             None => unserved.push(el),
         }

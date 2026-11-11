@@ -663,24 +663,23 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
     // Geometry noise in the traced centrelines (jogs, hooks, a bend in pieces) is no fitting.
     mep.runs = super::runtidy::tidy_runs(std::mem::take(&mut mep.runs), sp.units_per_foot);
     for dt in &net.terminals {
-        let sys_name = match dt.kind.as_str() {
-            "supply_diffuser" => "SA",
-            "return_grille" => "RA",
-            "exhaust_grille" => "EA",
-            _ => "M-DUCT",
-        };
+        // The type mark's letters say which air it moves (`SD`: supply, `RG`: return), over
+        // what its symbol looks like.
+        let (kind, sys_name) = terminal_kind_of(&dt.kind, &dt.mark);
         mep.terminals.push(MepTerminal {
             system: sys_name.to_string(),
             level: level.to_string(),
             at: [dt.at.x, dt.at.y],
-            size_in: [12.0, 12.0],
+            size_in: dt.size_in.filter(|s| s[0].is_finite() && s[0] > 0.0 && s[1].is_finite()).unwrap_or([12.0, 12.0]),
             bottom_ft: terminal_bottom_ft,
-            terminal_kind: dt.kind.clone(),
+            terminal_kind: kind,
             objects: Vec::new(),
             source_sheet: sheet.to_string(),
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            tag: dt.mark.clone(),
+            cfm: dt.cfm.filter(|c| c.is_finite() && *c > 0.0),
         });
     }
     for de in &net.equipment {
@@ -1924,6 +1923,32 @@ fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// An air terminal's kind and air system: by its type mark's letters
+/// (`equipment.air_device_system`: `SD-1` supply, `RG-1` return, `EG-1` exhaust), else by its
+/// symbol's kind (`supply_diffuser`, `return_grille`, `exhaust_grille`).
+pub(crate) fn terminal_kind_of(symbol_kind: &str, mark: &str) -> (String, &'static str) {
+    let by_symbol = match symbol_kind {
+        "supply_diffuser" => "SA",
+        "return_grille" => "RA",
+        "exhaust_grille" => "EA",
+        _ => "M-DUCT",
+    };
+    let letters: String = mark.trim().to_ascii_uppercase().chars().take_while(char::is_ascii_alphabetic).collect();
+    let by_mark = (!letters.is_empty()).then(|| cadaddy_mepfix::wordrules::pair_value("equipment.air_device_system", &letters)).flatten();
+    match by_mark {
+        Some(sys) if sys != by_symbol => {
+            let kind = match sys {
+                "SA" => "supply_diffuser",
+                "RA" => "return_grille",
+                "EA" => "exhaust_grille",
+                _ => symbol_kind,
+            };
+            (kind.to_string(), sys)
+        }
+        _ => (symbol_kind.to_string(), by_symbol),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// A roof with no plan of its own takes the plan region of the storey under it (Q6313): a
@@ -2081,5 +2106,15 @@ mod tests {
         assert_eq!(d("LP-3,5"), None);
         assert_eq!(d("A"), None);
         assert_eq!(d("ab"), None);
+    }
+
+    #[test]
+    fn an_air_devices_mark_says_which_air_it_moves_over_its_symbol() {
+        assert_eq!(super::terminal_kind_of("return_grille", "SD-2"), ("supply_diffuser".to_string(), "SA"));
+        assert_eq!(super::terminal_kind_of("supply_diffuser", "RG-1"), ("return_grille".to_string(), "RA"));
+        assert_eq!(super::terminal_kind_of("supply_diffuser", "EG-1"), ("exhaust_grille".to_string(), "EA"));
+        // A mark whose letters say nothing (`A1`), or none: the symbol's kind.
+        assert_eq!(super::terminal_kind_of("return_grille", "A1"), ("return_grille".to_string(), "RA"));
+        assert_eq!(super::terminal_kind_of("exhaust_grille", ""), ("exhaust_grille".to_string(), "EA"));
     }
 }

@@ -581,7 +581,8 @@ pub fn read_tables_keyed(d: &Drawing, sheet: &str, is_key: fn(&str) -> bool) -> 
     out
 }
 
-fn is_tag_column(n: &str) -> bool {
+/// A schedule column holding each row's tag (`TAG`, `MARK`, `SYMBOL`).
+pub fn is_tag_column(n: &str) -> bool {
     matches!(n.trim().to_ascii_uppercase().as_str(), "TAG" | "MARK" | "UNIT TAG" | "EQUIPMENT TAG" | "SYMBOL")
 }
 

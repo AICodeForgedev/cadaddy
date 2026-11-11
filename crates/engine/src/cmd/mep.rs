@@ -31,6 +31,10 @@ mod twinline;
 
 /// Runs and segments handled, at most (hostile drawings).
 pub(crate) const MAX_RUNS: usize = 20_000;
+/// The build property a terminal's plan-tag type mark goes in (`prop:TYPE MARK=SD-2`).
+pub(crate) const TERMINAL_MARK: &str = "TYPE MARK";
+/// The build property a terminal's plan-tag airflow goes in (`prop:CFM=415`).
+pub(crate) const TERMINAL_CFM: &str = "CFM";
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).
 const SLAB_FT: f64 = 0.5;
@@ -3110,6 +3114,13 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             // drawn, else derived or inferred with its basis.
             if !term.source_sheet.is_empty() {
                 x.push(t(1000, format!("prop:SOURCE sheet={}", term.source_sheet.chars().take(64).collect::<String>())));
+            }
+            // What its plan tag says it is (Q6318): its type mark and airflow.
+            if !term.tag.trim().is_empty() {
+                x.push(t(1000, format!("prop:{TERMINAL_MARK}={}", sanitise(term.tag.trim(), 24))));
+            }
+            if let Some(c) = term.cfm.filter(|c| c.is_finite() && *c > 0.0) {
+                x.push(t(1000, format!("prop:{TERMINAL_CFM}={c}")));
             }
             x.extend(super::provenance::tags(term.made, &term.basis));
             // What an edit changed on it, the documents' value beside it (Q6502).

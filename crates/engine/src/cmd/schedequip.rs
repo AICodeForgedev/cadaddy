@@ -78,6 +78,8 @@ pub(crate) struct Read {
     pub already: usize,
     /// Scheduled tags no plan places, with why.
     pub unplaced: Vec<(String, String)>,
+    /// The air device schedule's types ([`air_device_types`]).
+    pub air_devices: Vec<cadaddy_walk3d::AirDeviceType>,
 }
 
 impl Read {
@@ -419,7 +421,47 @@ pub(crate) fn read(schedules: &[(String, Drawing)], plans: &[PlanIn], have: &[Me
     let sched: Vec<Scheduled> = equip_reader::scheduled(&tables).into_iter().take(MAX_SCHEDULED).collect();
     let mut out = place(&sched, plans, have, levels);
     out.tables = tables.len();
+    out.air_devices = air_device_types(&tables);
     out
+}
+
+/// The air device schedule's rows (Q6318): each table whose title is an air device schedule's
+/// (`schedules.air_device_titles`), one type per row by its mark column (`MARK`, `TAG`, `TYPE`,
+/// `SYMBOL`), the rest of the row as printed. A mark listed twice keeps its first row.
+pub(crate) fn air_device_types(tables: &[equip_reader::Table]) -> Vec<cadaddy_walk3d::AirDeviceType> {
+    let titles = cadaddy_mepfix::wordrules::words("schedules.air_device_titles");
+    let mut out: Vec<cadaddy_walk3d::AirDeviceType> = Vec::new();
+    for t in tables {
+        let title = t.title.to_ascii_uppercase();
+        if !titles.iter().any(|w| title.contains(w)) {
+            continue;
+        }
+        let Some(key) = t.columns.iter().find(|c| equip_reader::is_tag_column(c)).or_else(|| t.columns.iter().find(|c| is_type_column(c))) else {
+            continue;
+        };
+        for row in &t.rows {
+            let Some(mark) = row.get(key).map(|m| m.trim().to_ascii_uppercase()).filter(|m| looks_like_mark(m)) else { continue };
+            if out.len() >= MAX_SCHEDULED || out.iter().any(|x| x.tag == mark) {
+                continue;
+            }
+            let properties = row.iter().filter(|(k, _)| *k != key).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).collect();
+            out.push(cadaddy_walk3d::AirDeviceType { tag: mark, properties, source: t.sheet.clone() });
+        }
+    }
+    out
+}
+
+/// A schedule column holding each row's type mark (`TYPE MARK`, `TYPE`), where it has no tag
+/// column.
+fn is_type_column(name: &str) -> bool {
+    let n = name.trim().to_ascii_uppercase();
+    n == "TYPE" || n == "TYPE MARK"
+}
+
+/// A mark: letters then a number (`SD-1`, `RG2`, `A1`), short.
+fn looks_like_mark(m: &str) -> bool {
+    let letters = m.chars().take_while(char::is_ascii_alphabetic).count();
+    (1..=4).contains(&letters) && m.len() <= 8 && m.chars().any(|c| c.is_ascii_digit()) && !m.contains(' ')
 }
 
 /// [`read`] for rows already read off their schedules.
@@ -799,6 +841,39 @@ mod tests {
         assert_eq!(tag_variants("FC/CU-2"), vec!["FC-2".to_string(), "CU-2".to_string()]);
         assert_eq!(tag_variants("hp-7"), vec!["HP-7".to_string()]);
         assert_eq!(tag_variants("CU-1/CU-2"), vec!["CU-1".to_string(), "CU-2".to_string()]);
+    }
+
+    #[test]
+    fn the_air_device_schedule_gives_each_type_by_its_mark() {
+        let table = |title: &str, columns: &[&str], rows: &[&[&str]]| equip_reader::Table {
+            sheet: "M-0".into(),
+            title: title.into(),
+            columns: columns.iter().map(|c| (*c).to_string()).collect(),
+            rows: rows
+                .iter()
+                .map(|r| columns.iter().zip(r.iter()).filter(|(_, v)| !v.is_empty()).map(|(c, v)| ((*c).to_string(), (*v).to_string())).collect())
+                .collect(),
+        };
+        let tables = [
+            // A mark column first, its title naming grilles, registers and diffusers.
+            table(
+                "GRILLE, REGISTER, AND DIFFUSER SCHEDULE",
+                &["MARK", "MANUFACTURER", "MODEL", "FACE SIZE (IN)"],
+                &[&["SD-1", "MAKER A", "PLAQUE", "12\"x12\""], &["RG-1", "MAKER A", "LOUVERED", "PER PLAN"], &["NOTES:", "", "", ""]],
+            ),
+            // Another office's: its type column last, another title; a mark already read keeps
+            // its first row.
+            table("AIR DEVICE SCHEDULE", &["DESCRIPTION", "NECK", "TYPE"], &[&["LINEAR SLOT", "8", "LD-2"], &["OTHER", "6", "SD-1"]]),
+            // Not an air device schedule.
+            table("EXHAUST FAN SCHEDULE", &["MARK", "CFM"], &[&["EF-1", "75"]]),
+        ];
+        let got = air_device_types(&tables);
+        let marks: Vec<&str> = got.iter().map(|t| t.tag.as_str()).collect();
+        assert_eq!(marks, ["SD-1", "RG-1", "LD-2"]);
+        assert_eq!(got[0].properties.get("MODEL").map(String::as_str), Some("PLAQUE"));
+        assert!(!got[0].properties.contains_key("MARK"));
+        assert_eq!(got[2].properties.get("DESCRIPTION").map(String::as_str), Some("LINEAR SLOT"));
+        assert_eq!(got[2].source, "M-0");
     }
 
     #[test]

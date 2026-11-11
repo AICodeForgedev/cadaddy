@@ -6762,6 +6762,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     Vec::new()
                 };
                 let mut found = scheduled_equipment(s, job, &sp, &m_pages)?;
+                // The air device schedule (Q6318): each diffuser, register and grille type by
+                // its mark, for the terminals the plans tag with it.
+                if !found.air_devices.is_empty() {
+                    progress_line(&format!(
+                        "  air device schedule: {} types ({})",
+                        found.air_devices.len(),
+                        found.air_devices.iter().take(20).map(|t| t.tag.as_str()).collect::<Vec<_>>().join(", ")
+                    ));
+                    sp.mep.air_device_schedule = std::mem::take(&mut found.air_devices);
+                }
                 let read_n = found.candidates.len();
                 found.choose(|e| match sim(e.min, &e.level) {
                     Some(m) => {
