@@ -30,6 +30,8 @@ struct Bare {
     level: String,
     circuit: String,
     entry: Vec3,
+    /// A luminaire whose type carries its own junction box: its leads are spliced in it (Q6349).
+    leads: bool,
 }
 
 /// The boxless device a run's end at `p` is at: within `touch` of its entry, on its level, of the
@@ -56,6 +58,9 @@ struct DevBox {
     /// Where the documents draw the device when an earlier build moved it for the field (Q6252):
     /// a route read or laid before the move still ends there.
     drawn: Option<Vec3>,
+    /// What kind of box it takes (`receptacle`, `switch`, `luminaire`…, [`box_kind`]): what
+    /// its conductors are spliced to (Q6349).
+    family: &'static str,
 }
 
 /// A device's pigtail (Q6243): its size and count, the circuit conductor it is spliced to, why.
@@ -1451,7 +1456,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 && bare.len() < MAX_DEVICES
             {
                 let c = plan.center();
-                bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1) });
+                bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1), leads: false });
             }
             continue;
         };
@@ -1484,7 +1489,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let circuit = ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty()).unwrap_or_default();
                 let c = plan.center();
                 if bare.len() < MAX_DEVICES {
-                    bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1) });
+                    bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1), leads: true });
                 }
                 continue;
             }
@@ -1529,6 +1534,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 atom: bi,
                 at: Vec3::new(c.x, c.y, *z1),
                 drawn: moved_for_field(ps, upf).map(|m| Vec3::new(c.x - m.x, c.y - m.y, *z1)),
+                family: bk,
             });
             ganged_devices += 1;
             continue;
@@ -1772,6 +1778,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             atom: bi,
             at: Vec3::new(c.x, c.y, *z1),
             drawn: moved_for_field(ps, upf).map(|m| Vec3::new(c.x - m.x, c.y - m.y, *z1)),
+            family: bk,
         });
     }
 
@@ -2018,8 +2025,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         ctx.src = rule_source(&terms.source);
         let ft = terms.pigtail_in.clamp(6.0, 36.0) / 12.0;
         let up = Vec3::new(0.0, 0.0, ft * upf);
-        // Each conductor the device lands, and its ground.
-        for (i, ground) in (0..pg.count.clamp(1, 6)).map(|_| false).chain([true]).enumerate() {
+        // Each conductor the device lands, and its ground (their splices: the box's, below).
+        for ground in (0..pg.count.clamp(1, 6)).map(|_| false).chain([true]) {
             let (item, ty) = if ground {
                 ("Copper ground, green".to_string(), "bare or green".to_string())
             } else {
@@ -2042,19 +2049,6 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             w.extra.push(("pigtail_of", bx.device.hex(), "computed".into()));
             w.source = terms.source.clone();
             atoms.push((w, ctx.clone()));
-            let mut c = Atom::fitting(
-                "connector",
-                terms.connector.clone(),
-                "",
-                &format!("#{} to {}", pg.landing, super::wire_size(&pg.size)),
-                at,
-                Vec3::new(0.0, 0.0, 0.01 * upf * (i as f64 + 1.0)),
-                0.4,
-                &terms.source,
-            );
-            c.connects = vec![bx.atom];
-            c.extra.push(("pigtail_of", bx.device.hex(), "computed".into()));
-            atoms.push((c, ctx.clone()));
         }
     }
 
@@ -2699,6 +2693,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // it reaches. --
     let fa_report = fa_atoms(sp, upf, &boxes, &mut atoms, &mut external);
 
+    // -- The splices in each box (Q6349) and the connectors they take. --
+    let splice_report = splice_atoms(&mut atoms, &boxes, &bare, &external, &box_rule_at, &pigtails, upf);
+
     // -- Into the model: each atom an element; then what it connects to, by handle. --
     let mut handles: Vec<Option<Handle>> = Vec::with_capacity(atoms.len());
     let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -3015,6 +3012,190 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "atomsMs": (started.elapsed().as_secs_f64() * 1000.0).round(),
         "atomNotes": notes,
         "fireAlarm": fa_report,
+        "splices": splice_report,
+    })
+}
+
+/// The splices in every box and every luminaire's own junction box (Q6349): from the
+/// conductors of each run end in it, by circuit and what each conductor is, the devices in it and
+/// its material; each connector one atom in the box. The count by box kind, size and conductor.
+fn splice_atoms(
+    atoms: &mut Vec<(Atom, AtomCtx)>,
+    boxes: &[DevBox],
+    bare: &[Bare],
+    external: &[(usize, Handle)],
+    box_rule_at: &HashMap<usize, BoxRule>,
+    pigtails: &HashMap<Handle, Pigtail>,
+    upf: f64,
+) -> Value {
+    use super::splices::{Conductor, DeviceIn, box_splices, entry_conductors};
+    let rl = rules();
+    let mut sr = rl.splices.clone();
+    if sr.item.trim().is_empty() {
+        sr.item = super::super::conduitroute::rules().terminals.connector.clone();
+    }
+    if sr.item.trim().is_empty() || sr.connectors.is_empty() {
+        return json!({"connectors": 0, "note": "no splice rules"});
+    }
+    // Each run end's wires (a raceway's conductors connect to both its ends).
+    let mut wires_at: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, (a, _)) in atoms.iter().enumerate() {
+        if a.kind == "wire" && !a.extra.iter().any(|x| x.0 == "pigtail_of" || x.0 == "conductors_of_feeder") {
+            for &e in a.connects.iter().take(4) {
+                wires_at.entry(e).or_default().push(i);
+            }
+        }
+    }
+    let extra = |a: &Atom, k: &str| a.extra.iter().find(|x| x.0 == k).map(|x| x.1.clone()).unwrap_or_default();
+    // The conductors a run end brings in, and its wiring method (`raceway`, `NM`…).
+    let entry_of = |e: usize| -> Option<(Vec<Conductor>, String)> {
+        let (ea, _) = atoms.get(e)?;
+        if let Some(ws) = wires_at.get(&e) {
+            let (mut ins, mut gr, mut size, mut gsize, mut circuit) = (0u32, 0u32, String::new(), String::new(), String::new());
+            for (w, wctx) in ws.iter().filter_map(|i| atoms.get(*i)) {
+                if circuit.is_empty() {
+                    circuit = wctx.circuit.clone();
+                }
+                if extra(w, "conductor") == "ground" {
+                    gr += 1;
+                    if gsize.is_empty() {
+                        gsize = w.size.clone();
+                    }
+                } else {
+                    ins += 1;
+                    if size.is_empty() {
+                        size = w.size.clone();
+                    }
+                }
+            }
+            return (ins > 0).then(|| (entry_conductors(&circuit, ins, gr, &size, &gsize), "raceway".to_string()));
+        }
+        let ci = if ea.kind == "cable" { Some(e) } else { ea.connects.iter().copied().find(|c| atoms.get(*c).is_some_and(|x| x.0.kind == "cable")) }?;
+        let (ca, cctx) = atoms.get(ci)?;
+        // `NM 12/2 w/G`: a power cable of the rules (a fire alarm or low-voltage cable is not
+        // spliced in a twist-on).
+        let mut words = ca.ty.split_whitespace();
+        let kind = words.next()?.to_ascii_uppercase();
+        rl.cables.get(&kind)?;
+        let (sz, n) = words.next()?.split_once('/')?;
+        let n: u32 = n.trim().parse().ok()?;
+        let g = u32::from(ca.ty.to_ascii_uppercase().contains("W/G"));
+        Some((entry_conductors(&cctx.circuit, n, g, sz, sz), kind))
+    };
+    let mut made: Vec<(Atom, AtomCtx)> = Vec::new();
+    let mut by_kind: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut by_size: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_role: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let (mut capped, mut split) = (0usize, 0usize);
+    let basis = super::super::provenance::rule("E-SPLICES").basis_for("");
+    let src = rule_source(&format!("{} — {}", sr.source, sr.connectors_source));
+    let mut put =
+        |made: &mut Vec<(Atom, AtomCtx)>, at: Vec3, connect: usize, mut ctx: AtomCtx, list: Vec<super::splices::Connector>, kind: String| {
+            if list.is_empty() {
+                return;
+            }
+            let row = by_kind.entry(kind).or_default();
+            row.0 += 1;
+            row.1 += list.len();
+            ctx.body = None;
+            ctx.src = src.clone();
+            ctx.made = Made::Inferred;
+            ctx.basis = basis.clone();
+            if list.windows(2).any(|w| matches!(w, [a, b] if a.role == b.role && a.circuit == b.circuit && a.why == b.why)) {
+                split += 1;
+            }
+            for (i, c) in list.into_iter().enumerate().take(400) {
+                *by_size.entry(format!("{} {}", c.item, c.size)).or_default() += 1;
+                *by_role.entry(c.role.as_str()).or_default() += 1;
+                capped += usize::from(c.cap);
+                let joins = c.conductors.iter().map(|s| format!("#{s}")).collect::<Vec<_>>().join(", ");
+                let mut a = Atom::fitting(
+                    "connector",
+                    c.item,
+                    "wire connector",
+                    &c.size,
+                    at,
+                    Vec3::new(0.0, 0.0, 0.01 * upf * (i as f64 + 1.0)),
+                    0.4,
+                    &sr.source,
+                );
+                a.connects = vec![connect];
+                a.extra.push(("splice", c.role.as_str().to_string(), "computed".into()));
+                a.extra.push(("splice_circuit", c.circuit.clone(), "computed".into()));
+                a.extra.push(("conductors", c.conductors.len().to_string(), "computed".into()));
+                a.extra.push(("joins", joins, "computed".into()));
+                a.extra.push(("splice_why", c.why, sr.source.clone()));
+                a.extra.push(("connector_rule", sr.connectors_source.clone(), sr.connectors_source.clone()));
+                made.push((a, ctx.clone()));
+            }
+        };
+    // Each box: the run ends it connects to, its devices, its material.
+    let mut devices_of: BTreeMap<usize, Vec<&DevBox>> = BTreeMap::new();
+    for b in boxes {
+        devices_of.entry(b.atom).or_default().push(b);
+    }
+    for j in 0..atoms.len() {
+        let Some((bx, bctx)) = atoms.get(j) else { continue };
+        if bx.kind != "box" {
+            continue;
+        }
+        let mut entries: Vec<Vec<Conductor>> = Vec::new();
+        let mut method = "raceway".to_string();
+        for &e in bx.connects.iter().take(64) {
+            if let Some((c, m)) = entry_of(e) {
+                if m != "raceway" {
+                    method = m;
+                }
+                entries.push(c);
+            }
+        }
+        if entries.is_empty() {
+            continue;
+        }
+        let devs: Vec<DeviceIn> = devices_of
+            .get(&j)
+            .into_iter()
+            .flatten()
+            .map(|b| DeviceIn { family: b.family.to_string(), circuit: b.circuit.clone(), pigtail: pigtails.get(&b.device).map(|p| p.size.clone()) })
+            .collect();
+        let material = box_rule_at.get(&j).map(|r| r.material.clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| extra(bx, "material"));
+        let list = box_splices(&entries, &devs, sr.bonds(&material), &method, &sr);
+        let kind = devices_of.get(&j).and_then(|d| d.first()).map_or_else(|| "junction box".to_string(), |b| b.family.to_string());
+        put(&mut made, bx.a, j, bctx.clone(), list, kind);
+    }
+    // A luminaire whose type carries its own junction box: its leads spliced in it.
+    let lum: HashMap<Handle, &Bare> = bare.iter().filter(|b| b.leads).map(|b| (b.device, b)).collect();
+    let mut ends_of: BTreeMap<Handle, Vec<usize>> = BTreeMap::new();
+    for (e, h) in external.iter().take(MAX_ATOMS) {
+        if lum.contains_key(h) {
+            ends_of.entry(*h).or_default().push(*e);
+        }
+    }
+    for (h, ends) in ends_of {
+        let Some(b) = lum.get(&h) else { continue };
+        let entries: Vec<(Vec<Conductor>, String)> = ends.iter().filter_map(|e| entry_of(*e)).collect();
+        let (Some(first), Some(ctx)) = (ends.first().copied(), ends.first().and_then(|e| atoms.get(*e)).map(|x| x.1.clone())) else { continue };
+        let method = entries.iter().map(|x| x.1.clone()).find(|m| m != "raceway").unwrap_or_else(|| "raceway".into());
+        let entries: Vec<Vec<Conductor>> = entries.into_iter().map(|x| x.0).collect();
+        let devs = [DeviceIn { family: "luminaire".into(), circuit: b.circuit.clone(), pigtail: None }];
+        let list = box_splices(&entries, &devs, false, &method, &sr);
+        put(&mut made, b.entry, first, ctx, list, "luminaire (its own junction box)".into());
+    }
+    let n = made.len();
+    let room = MAX_ATOMS.saturating_sub(atoms.len());
+    atoms.extend(made.into_iter().take(room));
+    json!({
+        "connectors": n.min(room),
+        "boxes": by_kind.values().map(|v| v.0).sum::<usize>(),
+        "byBoxKind": by_kind.iter().map(|(k, (b, c))| (k.clone(), json!({"boxes": b, "connectors": c}))).collect::<serde_json::Map<String, Value>>(),
+        "bySize": by_size,
+        "bySplice": by_role,
+        "capped": capped,
+        "splitBundles": split,
+        "source": sr.source,
+        "connectorSource": sr.connectors_source,
+        "groundSource": sr.bond_source,
+        "methodSource": sr.methods_source,
     })
 }
 
@@ -3674,6 +3855,7 @@ mod tests {
             atom: 0,
             at: drawn + moved,
             drawn: drawn_at,
+            family: "receptacle",
         };
         assert_eq!(touched_box(&[b(Some(drawn))], "L1", drawn, 6.0, None), Some(0));
         assert_eq!(touched_box(&[b(None)], "L1", drawn, 6.0, None), None, "without its drawn spot the route finds nothing");

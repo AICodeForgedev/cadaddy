@@ -33,6 +33,7 @@ use crate::{Result, Session};
 
 pub(crate) mod boxclear;
 pub(crate) mod build;
+pub(crate) mod splices;
 
 /// The rules data.
 const RULES: &str = include_str!("mepatoms.json");
@@ -339,6 +340,8 @@ pub(crate) struct AtomRules {
     pub feeder_conductors: BTreeMap<String, ConductorKind>,
     pub feeder_conductors_source: String,
     pub luminaire_box: LuminaireBox,
+    /// The splices in each box and their connectors (Q6349).
+    pub splices: splices::SpliceRules,
 }
 
 /// The rules data, read once.
