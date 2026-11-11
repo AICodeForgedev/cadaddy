@@ -40,6 +40,7 @@ mod emtsize;
 mod equip_mounting;
 mod exterior;
 mod fawiring;
+mod feederfollow;
 mod feederwire;
 mod fixturekinds;
 mod floorjoists;

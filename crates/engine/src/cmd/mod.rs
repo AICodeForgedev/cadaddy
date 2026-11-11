@@ -132,6 +132,7 @@ pub mod dgn;
 pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
+pub(crate) mod feederfollow;
 pub mod fieldview;
 pub mod finishes;
 pub(crate) mod fixturebody;

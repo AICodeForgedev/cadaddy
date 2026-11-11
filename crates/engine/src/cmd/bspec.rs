@@ -503,10 +503,16 @@ fn run_get(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(patch) = p.get("spec").filter(|v| !v.is_null()) else { return Err(bad("bspec.set", "`spec` is required")) };
-    let sp = merged(s, "bspec.set", Some(patch), bool_or(p, "replace", false))?;
+    let mut sp = merged(s, "bspec.set", Some(patch), bool_or(p, "replace", false))?;
+    // Gear placed, moved or put on another floor: the feeders that land on it are routed again
+    // (Q6523); model.build builds them.
+    let feeders = super::feederfollow::follow(&mut sp, super::feederfollow::Mode::Moved);
     let issues = validate(s.doc()?, &sp);
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let mut r = report(&issues);
+    if feeders.changed() {
+        r["feeders"] = feeders.json();
+    }
     r["spec"] = serde_json::to_value(&sp).unwrap_or(Value::Null);
     if let Some(o) = r.as_object_mut() {
         o.remove("ok");
@@ -2330,6 +2336,18 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     let Some(mut sp) = g.spec.clone() else { return wallgen::build(s, g) };
     // The edits made to single MEP elements (Q6502), on the lists as the documents give them now.
     let mep_edits = super::mepedit::apply(&mut sp);
+    // Feeders follow their gear (Q6523): a route that no longer ends at its gear (the gear moved,
+    // went to another floor, or was set again) is routed again before it is built; the drawing's
+    // spec takes the same routes.
+    let feeders = super::feederfollow::follow(&mut sp, super::feederfollow::Mode::Moved);
+    {
+        let d = s.doc_mut()?;
+        if let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
+            && super::feederfollow::follow(&mut stored, super::feederfollow::Mode::Moved).changed()
+        {
+            d.building_spec = Some(stored.to_json()).into();
+        }
+    }
     let deadline = web_time::Instant::now() + std::time::Duration::from_secs(budget_s);
     let build_start = web_time::Instant::now();
     // What a person set on a room element (bim.props.set) goes on the rebuilt room.
@@ -2708,6 +2726,12 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     mark("provenance");
     if !mep_edits.is_empty() {
         r["mepEdits"] = super::mepedit::report(&mep_edits);
+    }
+    if feeders.changed() {
+        r["feeders"] = feeders.json();
+        if let (Some(line), Some(n)) = (feeders.line(), r["notes"].as_array_mut()) {
+            n.push(Value::from(line));
+        }
     }
     // One building: the levels' 3D moved off their plans onto the lowest level's.
     if sp.stack {
