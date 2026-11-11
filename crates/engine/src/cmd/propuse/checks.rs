@@ -584,7 +584,8 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     // ── Mechanical ──
-    let (by_unit, unserved) = super::air_systems(&m, level.as_deref());
+    let nets = super::conn::Nets::new(&m);
+    let super::AirSystems { by_unit, via_net, unserved } = super::air_systems(&m, level.as_deref(), &nets);
     if wants(&set, "terminal_cfm") {
         out.checked("terminal_cfm", by_unit.len());
         for (u, terms) in &by_unit {
@@ -672,21 +673,53 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         out.checked("fire_damper", n);
     }
     if wants(&set, "terminal_unserved") {
-        out.checked("terminal_unserved", unserved.len() + by_unit.values().map(Vec::len).sum::<usize>());
+        // Air terminals by the air unit their links or duct network reach; sprinkler heads by a
+        // fire protection pipe (Q6505).
+        out.checked("terminal_unserved", unserved.len() + via_net.len() + by_unit.values().map(Vec::len).sum::<usize>());
         for t in &unserved {
             out.add("terminal_unserved", "warning", Some(t), format!("{} is not served by any unit", t.label()), Value::Null);
         }
-    }
-    if wants(&set, "equipment_power") {
-        let eq: Vec<&El> = els.iter().copied().filter(|e| e.kind == "equipment" && !is_panel(e)).collect();
-        out.checked("equipment_power", eq.len());
-        for el in eq {
-            let powered = el.first(&["circuit", "fed_from", "fed_from_handle"]).is_some();
-            let none = el.text("power").is_some_and(|t| matches!(t.to_ascii_lowercase().as_str(), "none" | "gas" | "no"));
-            if !powered && !none {
-                out.add("equipment_power", "warning", Some(el), format!("{} has no power circuit", el.label()), Value::Null);
+        let heads: Vec<(usize, &El)> =
+            m.els.iter().enumerate().filter(|(_, e)| matches!(e.kind.as_str(), "fixture" | "device") && super::is_sprinkler(e) && on(e)).collect();
+        out.checked("terminal_unserved", heads.len());
+        for (i, head) in heads {
+            let linked = m
+                .link(head, &["served_by", "fed_from"])
+                .and_then(|j| m.get(j))
+                .is_some_and(|p| super::conn::system_of(p).is_some_and(|s| super::conn::is_fire_protection(&s)) || super::is_sprinkler(p));
+            if !linked && !nets.on_fire_pipe(&m, i) {
+                out.add(
+                    "terminal_unserved",
+                    "warning",
+                    Some(head),
+                    format!("{} is on no fire protection pipe", head.label()),
+                    json!({"trade": "fire_protection", "basis": super::conn::rules().fire_protection.source}),
+                );
             }
         }
+    }
+    if wants(&set, "equipment_power") {
+        // Only equipment whose type takes power is looked for a circuit (rules data, Q6505).
+        let eq: Vec<&El> = els.iter().copied().filter(|e| e.kind == "equipment" && !is_panel(e)).collect();
+        let (mut none_n, mut unknown_n) = (0usize, 0usize);
+        let mut n = 0;
+        for el in eq {
+            let none = el.text("power").is_some_and(|t| matches!(t.to_ascii_lowercase().as_str(), "none" | "gas" | "no"));
+            match super::conn::needs_power(el) {
+                _ if none => none_n += 1,
+                (Some(false), _) => none_n += 1,
+                (None, _) => unknown_n += 1,
+                (Some(true), why) => {
+                    n += 1;
+                    if el.first(&["circuit", "fed_from", "fed_from_handle"]).is_none() {
+                        out.add("equipment_power", "warning", Some(el), format!("{} has no power circuit", el.label()), json!({"needs_power": why}));
+                    }
+                }
+            }
+        }
+        out.checked("equipment_power", n);
+        totals["equipment_power"] =
+            json!({"needs_power": n, "takes_none": none_n, "type_unknown": unknown_n, "basis": super::conn::rules().power.source});
     }
 
     // ── Plumbing ──
