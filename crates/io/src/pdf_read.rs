@@ -2726,6 +2726,10 @@ const OCR_MIN_CONFIDENCE: f64 = 0.2;
 /// search as a real text tag does.
 const OCR_TAG_CONFIDENCE: f64 = 0.8;
 
+/// A page with at least this many characters of real (visible) text is lettered in text: its
+/// tables aren't read off strokes cell by cell.
+const OCR_CELLS_REAL_CHARS: usize = 500;
+
 /// Cells holding two letters or digits or more a grid of lines has at least, to be a table whose
 /// cells are read entry by entry.
 const OCR_TABLE_WORDS: usize = 3;
@@ -5979,7 +5983,13 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
         let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
         if has_shx_evidence || lettering_is_strokes {
-            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded, &HashMap::new(), true);
+            // Tables are read cell by cell where the lettering is strokes (no real text on the
+            // page beyond a few labels): a page lettered in real text has its tables in it, and
+            // the strokes left in its cells are symbols (a legend's), not entries.
+            let visible_chars: usize =
+                texts.iter().filter(|t| t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)).map(|t| t.value.trim().chars().count()).sum();
+            let cells = visible_chars < OCR_CELLS_REAL_CHARS;
+            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded, &HashMap::new(), cells);
             // What the PDF's hidden text says is written where the OCR read takes that string;
             // a circle and a reading under the confidence floor aren't inserted (their strokes
             // stay linework).

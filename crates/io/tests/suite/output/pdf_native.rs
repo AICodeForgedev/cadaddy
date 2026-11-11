@@ -1144,6 +1144,19 @@ fn plan_linework_ruled_like_a_table_holds_no_cells() {
 }
 
 #[test]
+fn a_page_lettered_in_real_text_reads_no_table_off_strokes() {
+    // a legend table whose cells hold stroked symbols, on a page lettered in real text: its
+    // tables are its real text's, the strokes in its cells are symbols, never entries
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    stroked_schedule(100.0, 500.0, &[["CKT", "DESCRIPTION", "BKR", "P"], ["1", "SPARE", "20", "1"], ["2", "SPARE", "20", "1"]], &mut content);
+    content.extend_from_slice(b"Q ");
+    real_labels(80, 60.0, 100.0, |i| format!("NOTE {i:03}"), &mut content);
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    assert!(r.ocr.text_chars >= 500, "{}", r.ocr.text_chars);
+    assert_eq!(r.ocr.cells, 0);
+}
+
+#[test]
 fn lettering_beside_a_table_is_read_as_before() {
     // a note right of the schedule stays a word of its own
     let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
