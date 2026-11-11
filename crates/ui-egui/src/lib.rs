@@ -1188,6 +1188,12 @@ impl CadApp {
                 // A dynamic block's own drawing: ask whether to open it in the Block Editor.
                 if self.session.state().is_ok_and(|st| cadaddy_engine::blockedit::has_authoring_elements(&st.doc)) {
                     self.ui.dialog = Some("authoring".into());
+                } else if v.get("builtModel").and_then(Value::as_bool) == Some(true)
+                    && v.get("alreadyOpen").and_then(Value::as_bool) != Some(true)
+                    && let Ok(st) = self.session.state()
+                {
+                    // A built model opens on its plan, offering its 3D BIM view (Q6310).
+                    self.canvas.shade.offer_bim3d = Some(st.uid);
                 }
             }
         }

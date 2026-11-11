@@ -3267,3 +3267,6 @@
 	= (block=output file)	= (блок=выходной файл)
 	* (whole drawing)	* (весь чертеж)
 	Requires an integer between 0 and 16.	Требуется целое число от 0 до 16.
+	3D BIM	3D BIM
+	Show 3D BIM	Показать 3D BIM
+	This drawing holds a built model.	Этот чертёж содержит построенную модель.

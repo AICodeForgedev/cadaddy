@@ -3458,3 +3458,6 @@ menu	Modify	Modifikace
 	= (block=output file)	= (blok=výstupní soubor)
 	* (whole drawing)	* (celý výkres)
 	Requires an integer between 0 and 16.	Je třeba celé číslo od 0 do 16.
+	3D BIM	3D BIM
+	Show 3D BIM	Zobrazit 3D BIM
+	This drawing holds a built model.	Tento výkres obsahuje sestavený model.

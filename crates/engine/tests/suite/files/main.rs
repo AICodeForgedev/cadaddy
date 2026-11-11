@@ -14,6 +14,7 @@ mod agentguard;
 mod agentrails3;
 mod agentready;
 mod anno_positions;
+mod bim3d;
 mod cobie;
 mod conduit_reader;
 mod dgn;

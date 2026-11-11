@@ -3484,3 +3484,6 @@
 	= (block=output file)	= (bloque=archivo de salida)
 	* (whole drawing)	* (todo el dibujo)
 	Requires an integer between 0 and 16.	Se requiere un entero entre 0 y 16.
+	3D BIM	BIM 3D
+	Show 3D BIM	Mostrar BIM 3D
+	This drawing holds a built model.	Este dibujo contiene un modelo construido.

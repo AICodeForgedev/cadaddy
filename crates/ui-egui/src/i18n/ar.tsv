@@ -3472,3 +3472,6 @@ menu	View	عرض
 	= (block=output file)	= (الكتلة=ملف الإخراج)
 	* (whole drawing)	* (الرسم بالكامل)
 	Requires an integer between 0 and 16.	يلزم عدد صحيح بين 0 و16.
+	3D BIM	BIM ثلاثي الأبعاد
+	Show 3D BIM	عرض BIM ثلاثي الأبعاد
+	This drawing holds a built model.	يحتوي هذا الرسم على نموذج مبني.
