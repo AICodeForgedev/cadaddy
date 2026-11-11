@@ -483,13 +483,16 @@ impl Floors {
     /// The floor of the storey the walls (centreline ends and thickness) stand on inside its shell
     /// (rectangles), less what is `taken` (its circulation's rectangles). None for a hostile or
     /// vast plan.
+    #[cfg(test)]
     pub(crate) fn new(walls: &[(Vec2, Vec2, f64)], shell: &[[Vec2; 2]], upf: f64, taken: &[[Vec2; 2]]) -> Option<Floors> {
         Self::with_openings(walls, shell, upf, taken, &[])
     }
 
-    /// [`Floors::new`] with the storey's doors and windows (`shut`: each drawn across its
-    /// opening, a door's leaf shut, a window's pane; centreline ends and thickness): the outside
-    /// comes in through no opening they close ([`Floors::exterior`]).
+    /// The floor of the storey the walls (centreline ends and thickness) stand on inside its shell
+    /// (rectangles), less what is `taken` (its circulation's rectangles), with its doors and
+    /// windows (`shut`: each drawn across its opening, a door's leaf shut, a window's pane;
+    /// centreline ends and thickness): the outside comes in through no opening they close (the
+    /// floor it reaches is no room's, [`exterior_of`]). None for a hostile or vast plan.
     pub(crate) fn with_openings(
         walls: &[(Vec2, Vec2, f64)],
         shell: &[[Vec2; 2]],
