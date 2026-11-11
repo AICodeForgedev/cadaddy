@@ -301,7 +301,8 @@ pub(crate) struct HomeSeg {
     pub key: String,
     pub pts: Vec<[f64; 2]>,
     pub bot: Vec<f64>,
-    pub parts: Vec<Part>,
+    /// Its circuits' ungrounded conductors, one set per circuit (by panel and number).
+    pub sets: Vec<(String, Vec<Part>)>,
     pub ccc: u32,
     pub trip_a: f64,
     pub labels: Vec<String>,
@@ -679,7 +680,7 @@ mod tests {
             key: "l1|p".into(),
             pts: vec![[x0, 0.0], [100.0, 0.0]],
             bot: vec![9.0],
-            parts: vec![(ccc, "12".into(), false)],
+            sets: vec![(format!("P-{run}"), vec![(ccc, "12".into(), false)])],
             ccc,
             trip_a: 20.0,
             labels: vec![format!("P-{run}")],

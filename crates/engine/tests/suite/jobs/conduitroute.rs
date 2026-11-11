@@ -1267,3 +1267,119 @@ fn a_switch_with_no_circuit_is_wired_to_the_luminaires_it_controls() {
     let boxes = count(&mut s, json!({"kind": "box", "circuit": "LP1-9"}));
     assert_eq!(boxes["count"], json!(3), "{boxes}");
 }
+
+/// Each wire of `circuit` (its `circuit` property): its `conductor` role (`phase A`, `neutral`,
+/// `ground`).
+fn wire_roles(s: &Session, circuit: &str) -> Vec<String> {
+    let d = s.doc().expect("doc");
+    d.model
+        .iter()
+        .map(|e| cadaddy_engine::doc::props::read(&e.common.xdata))
+        .filter(|p| p.get("atom").map(|x| x.text()).as_deref() == Some("wire"))
+        .filter(|p| p.get("circuit").map(|x| x.text()).as_deref() == Some(circuit))
+        .filter_map(|p| p.get("conductor").map(|x| x.text()))
+        .collect()
+}
+
+#[test]
+fn a_single_phase_panels_circuits_are_on_phases_a_and_b_only() {
+    // Q6343: a 1-phase, 3-wire panel has no phase C. LP1 here is 120/208 V single phase: its
+    // circuits 1-2 land on A, 3-4 on B, 5-6 on A again. Circuit 5's conductors were labelled
+    // phase C (the three-phase bussing) though the panel has no C bus.
+    let (mut s, _) = building(|_| {});
+    with_schedules(
+        &mut s,
+        json!([{"panel": "LP1", "source": "E-101", "header": {"volts/phase": "120/208V, 1PH, 3W"}, "circuits": [
+            {"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 360.0, "source": "E-101"},
+            {"number": "3", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 360.0, "source": "E-101"},
+            {"number": "5", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 180.0, "source": "E-101"}
+        ]}]),
+    );
+    let (one, three, five) = (wire_roles(&s, "LP1-1"), wire_roles(&s, "LP1-3"), wire_roles(&s, "LP1-5"));
+    assert!(!five.is_empty() && !three.is_empty() && !one.is_empty(), "{one:?} {three:?} {five:?}");
+    let all: Vec<&String> = one.iter().chain(&three).chain(&five).collect();
+    assert!(all.iter().all(|r| r.as_str() != "phase C"), "no phase C on a single-phase panel: {all:?}");
+    assert!(five.iter().any(|r| r == "phase A") && !five.iter().any(|r| r == "phase B"), "circuit 5 is on A: {five:?}");
+    assert!(three.iter().any(|r| r == "phase B"), "circuit 3 is on B: {three:?}");
+    // Each one-pole circuit's own run: a hot, its neutral and a ground — never more neutrals than hots.
+    for roles in [&one, &three, &five] {
+        let hots = roles.iter().filter(|r| r.starts_with("phase ")).count();
+        let neutrals = roles.iter().filter(|r| r.as_str() == "neutral").count();
+        assert!(neutrals <= hots, "{roles:?}");
+    }
+    // The same panel three phase: circuit 5 is on C.
+    with_schedules(
+        &mut s,
+        json!([{"panel": "LP1", "source": "E-101", "header": {"volts/phase": "208Y/120V, 3PH, 4W"}, "circuits": [
+            {"number": "5", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 180.0, "source": "E-101"}
+        ]}]),
+    );
+    assert!(wire_roles(&s, "LP1-5").iter().any(|r| r == "phase C"), "{:?}", wire_roles(&s, "LP1-5"));
+}
+
+#[test]
+fn one_circuit_reached_by_two_rooms_tags_is_one_set_of_conductors_in_its_homerun() {
+    // Q6343: two rooms' own tags of the same circuit (RP-1) both go to the one panel RP. The
+    // homerun group took each as a circuit of its own: two hots and two neutrals on one 20 A
+    // breaker (seen as one phase with three neutrals). One breaker is one circuit: its homerun
+    // carries one hot, one neutral and a ground.
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    let mut tags =
+        vec![receptacle(1, 4.0, 5.0, "RP-1"), receptacle(2, 8.0, 5.0, "RP-1"), receptacle(3, 12.0, 5.0, "RP-1"), receptacle(4, 16.0, 5.0, "RP-1")];
+    for room in ["A1", "A2"] {
+        let mut c = circuit("RP-1");
+        c["id"] = json!(format!("circuit:L1:room-{room}:RP-1"));
+        c["fields"]["panel"] = json!({"value": "RP", "source": "plan"});
+        c["fields"]["room"] = json!({"value": room, "source": "computed"});
+        tags.push(c);
+    }
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "tags": tags,
+        "mep": {
+            "systems": [{"name": "E-CIRCUIT-EST", "layer": "E-CIRCUIT-EST", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 9.25}],
+            "runs": [
+                {"id": "circuit:L1:room-A1:RP-1#0", "system": "E-CIRCUIT-EST", "level": "L1", "points": [[48, 60], [96, 60]],
+                 "size_in": [0.75, 0], "bottoms_ft": [9.25], "size_source": "tag", "height_source": "estimated route"},
+                {"id": "circuit:L1:room-A2:RP-1#0", "system": "E-CIRCUIT-EST", "level": "L1", "points": [[144, 60], [192, 60]],
+                 "size_in": [0.75, 0], "bottoms_ft": [9.25], "size_source": "tag", "height_source": "estimated route"}
+            ],
+            "equipment": [
+                {"tag": "RP", "kind": "panel", "level": "L1", "min": [-24, 100], "max": [-4, 104], "height_ft": 2, "bottom_ft": 4.5}
+            ],
+            "panel_schedules": [{"panel": "RP", "source": "E-101", "header": {"volts/phase": "120/208V, 1PH, 3W"}, "circuits": [
+                {"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 360.0, "source": "E-101"}
+            ]}]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s.execute("conduit.route", &json!({"max": 1000})).expect("report");
+    assert_eq!(r["routed_circuits"], json!(2), "two tags routed: {r}");
+    // The homerun (the run to the panel): one set.
+    let fill = r["fill"].as_array().cloned().unwrap_or_default();
+    let home = fill.iter().find(|f| f["panel"] == json!("RP")).cloned().unwrap_or_default();
+    assert_eq!(home["conductors"], json!("2#12 + 1#12G"), "one hot, one neutral, a ground: {r}");
+    assert!(r["same_circuit_members"].as_u64().is_some_and(|n| n >= 1), "{r}");
+    // Its wires: never more neutrals than hots on any run of the circuit.
+    let roles = wire_roles(&s, "RP-1");
+    assert!(!roles.is_empty(), "wires");
+    let d = s.doc().expect("doc");
+    let mut by_run: std::collections::BTreeMap<String, (usize, usize)> = std::collections::BTreeMap::new();
+    for p in d.model.iter().map(|e| cadaddy_engine::doc::props::read(&e.common.xdata)) {
+        if p.get("atom").map(|x| x.text()).as_deref() != Some("wire") {
+            continue;
+        }
+        let run = p.get("run").map(|x| x.text()).unwrap_or_default();
+        let role = p.get("conductor").map(|x| x.text()).unwrap_or_default();
+        let e = by_run.entry(run).or_default();
+        if role.starts_with("phase ") {
+            e.0 += 1;
+        } else if role == "neutral" {
+            e.1 += 1;
+        }
+    }
+    assert!(by_run.values().all(|(h, n)| n <= h), "a run with more neutrals than hots: {by_run:?}");
+}
