@@ -462,6 +462,11 @@ pub(crate) struct BuiltCeiling {
 }
 
 impl BuiltCeiling {
+    /// The level it was built on (none: not known).
+    pub(crate) fn level(&self) -> Option<&str> {
+        self.level.as_deref()
+    }
+
     fn covers(&self, p: Vec2) -> bool {
         let side = |a: Vec2, b: Vec2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
         self.bounds.contains(p)
@@ -489,14 +494,28 @@ const MAX_CEILING_FACES: usize = 20_000;
 
 /// The built ceilings (rooms', the reflected ceiling plans').
 pub(crate) fn built_ceilings(d: &Drawing) -> Vec<BuiltCeiling> {
+    built_ceilings_at(d, false)
+}
+
+/// [`built_ceilings`] where the plans draw them: a stacked level's ceilings moved back onto its
+/// sheet, as the spec's plan points are. A ceiling grid's bars are no ceiling of their own (the
+/// ceiling they hang in is).
+pub(crate) fn built_ceilings_on_plans(d: &Drawing) -> Vec<BuiltCeiling> {
+    built_ceilings_at(d, true)
+}
+
+fn built_ceilings_at(d: &Drawing, on_plans: bool) -> Vec<BuiltCeiling> {
     d.model
         .iter()
         .filter(|e| super::elemprops::element_kind(e).as_deref() == Some("ceiling"))
+        .filter(|e| !on_plans || super::wallgen::made_as(e).as_deref() != Some("grid"))
         .filter_map(|e| {
             let (bounds, z, _) = extent(d, e)?;
             if bounds.is_empty() || !z.is_finite() {
                 return None;
             }
+            let back = if on_plans { super::bspec::stacked_by(e) } else { Vec2::ZERO };
+            let bounds = Bounds2::from_points([bounds.min - back, bounds.max - back]);
             let EntityKind::Mesh(m) = &e.kind else {
                 // Not a mesh: its extent is what it covers.
                 let [a, c] = [bounds.min, bounds.max];
@@ -509,7 +528,7 @@ pub(crate) fn built_ceilings(d: &Drawing) -> Vec<BuiltCeiling> {
                     area: bounds.width() * bounds.height(),
                 });
             };
-            let at = |i: &u32| m.vertices.get(usize::try_from(*i).ok()?).map(|v| Vec2::new(v.x, v.y));
+            let at = |i: &u32| m.vertices.get(usize::try_from(*i).ok()?).map(|v| Vec2::new(v.x, v.y) - back);
             let mut tris = Vec::new();
             for f in m.faces.iter().take(MAX_CEILING_FACES) {
                 let pts: Vec<Vec2> = f.v.iter().filter_map(at).collect();
