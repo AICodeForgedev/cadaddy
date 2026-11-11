@@ -192,8 +192,21 @@ struct LibraryFile {
     source: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     plan_disciplines: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    not_plan_views: Vec<String>,
     #[serde(default)]
     symbols: Vec<LibSymbol>,
+}
+
+/// Whether a view's title says it draws no devices in the building (a detail, a schedule, a
+/// diagram: the shipped library's `not_plan_views` words).
+pub(crate) fn not_a_plan_view(title: &str) -> bool {
+    let up = title.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').filter(|w| !w.is_empty()).collect();
+    let joined = format!(" {} ", words.join(" "));
+    serde_json::from_str::<LibraryFile>(SHIPPED)
+        .map(|f| f.not_plan_views.iter().any(|w| joined.contains(&format!(" {} ", w.trim().to_ascii_uppercase()))))
+        .unwrap_or(false)
 }
 
 /// The sheet disciplines whose plans the set's electrical legends and the library speak for
@@ -1354,6 +1367,7 @@ pub(crate) fn promote(dir: &std::path::Path, e: &Entry) -> std::result::Result<(
     let mut file = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<LibraryFile>(&t).ok()).unwrap_or_else(|| LibraryFile {
         source: "symbols promoted from print sets (bim.symbol.promote, or an answer to a symbol question)".into(),
         plan_disciplines: Vec::new(),
+        not_plan_views: Vec::new(),
         symbols: Vec::new(),
     });
     let sig = signature(&strokes);

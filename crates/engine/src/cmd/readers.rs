@@ -1539,6 +1539,9 @@ pub struct SymbolFacts {
     /// The library symbol it is shown with (its kind's universal drawing); empty: the set's own.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub shown_as: String,
+    /// Where its print draws it: the sheet point of the drawing's middle.
+    #[serde(default)]
+    pub drawn_at: [f64; 2],
     /// Quarter turns from the entry's drawing, and the cue that confirmed it on its plan.
     #[serde(default)]
     pub turn: u8,
@@ -1782,6 +1785,7 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
             e.set("symbol_entry", sym.entry.clone(), src);
             e.set("symbol_status", sym.status.clone(), src);
             e.set("symbol_as_drawn", sym.as_drawn.clone(), "plan");
+            e.set("symbol_drawn_at", format!("{:.2},{:.2} on {}", sym.drawn_at[0], sym.drawn_at[1], dv.sheet), "plan");
             e.set("symbol_turn", sym.turn.to_string(), "plan");
             if !sym.shown_as.is_empty() {
                 e.set("symbol_shown_as", sym.shown_as.clone(), "rule");

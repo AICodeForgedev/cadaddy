@@ -10867,6 +10867,9 @@ const MAX_SYMBOL_QUESTIONS: usize = 8;
 const MIN_SYMBOL_REPEATS: usize = 3;
 /// Pieces of one sheet looked at, at most.
 const MAX_SYMBOL_PIECES: usize = 200_000;
+/// A view a plan sheet's detail or schedule takes up: less than this share of the sheet (more is
+/// the sheet's plan whatever its title says).
+const NOT_PLAN_VIEW_SHARE: f64 = 0.5;
 /// What a question about a drawing nothing explains begins with.
 const SYMBOL_QUESTION: &str = "Unexplained symbol: ";
 /// The answer to one that makes its drawing no device.
@@ -11017,6 +11020,17 @@ fn plan_symbols(
         exclude.extend(symbol_list_rects(&texts));
         exclude.extend(region.and_then(|r| r.title_block));
         exclude.extend(typical.views.get(&key).into_iter().flatten().copied());
+        // Its views that draw no devices in the building (a detail, a schedule, a riser), when
+        // they are a part of the sheet.
+        let sheet_area = ((sh.rect[2] - sh.rect[0]) * (sh.rect[3] - sh.rect[1])).abs();
+        for v in cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts) {
+            if let Some(r) = v.region
+                && super::symtable::not_a_plan_view(&v.title)
+                && ((r[2] - r[0]) * (r[3] - r[1])).abs() < NOT_PLAN_VIEW_SHARE * sheet_area
+            {
+                exclude.push(r);
+            }
+        }
         let mut pieces: Vec<(super::unitmarks::Piece, u64)> = Vec::new();
         for e in sub.model.iter() {
             if pieces.len() >= MAX_SYMBOL_PIECES {
@@ -11112,6 +11126,7 @@ fn plan_symbols(
                     as_drawn: super::symtable::signature(&hit.drawn),
                     drawn_as,
                     shown_as: e.shown_as.clone(),
+                    drawn_at: at,
                     turn: hit.turn,
                     cue: hit.cue.into(),
                 }),

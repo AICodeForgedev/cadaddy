@@ -540,16 +540,23 @@ fn only_the_legends_own_trade_plans_are_searched_whole_and_wrapped_notes_are_no_
     });
     set.retag("M", &[]);
     set.sheet("E-102", "plan", true, |set, x0| {
-        let (lo, hi) = set.room([x0 + 2.0, 2.0], [x0 + 30.0, 20.0]);
+        let (lo, hi) = set.room([x0 + 2.0, 2.0], [x0 + 26.0, 20.0]);
         set.draw(&special(), [lo[0] + 0.06, 6.0], 0);
         set.draw(&special(), [hi[0] - 0.06, 6.0], 2);
         set.draw(&hexagon(), [x0 + 10.0, 10.0], 0);
+        // A mounting detail beside the plan: its box, a wall and a receptacle in it, its title.
+        let (dlo, _) = set.room([x0 + 28.0, 14.0], [x0 + 34.0, 20.0]);
+        set.draw(&special(), [dlo[0] + 0.06, 17.0], 0);
+        set.s.execute("text", &json!({"at": [x0 + 28.5, 13.4], "text": "RECEPTACLE MOUNTING DETAIL", "height": 0.18})).unwrap();
+        set.s.execute("text", &json!({"at": [x0 + 28.5, 13.1], "text": "SCALE: NTS", "height": 0.1})).unwrap();
     });
     let x0 = set.next_x - SHEET_W - 4.0;
     set.retag("E", &[[x0, 0.0, x0 + 18.0, SHEET_H], [x0 + 18.0, 0.0, x0 + SHEET_W, SHEET_H]]);
     let found = set.search(&shipped(), None);
     let got: Vec<String> = found.added.iter().map(|dv| format!("{} {}", dv.sheet, dv.kind)).collect();
     assert_eq!(got, ["E-102 receptacle", "E-102 receptacle"], "{:#?}", found.added);
+    // Each records where its print draws it.
+    assert!(found.added.iter().all(|dv| dv.symbol.as_ref().is_some_and(|y| y.drawn_at == dv.at)));
     let t = symtable::stored(set.s.doc().unwrap());
     assert!(t.entries.iter().all(|e| !e.name.contains("SWITCH LEG")), "{:?}", t.entries.iter().map(|e| &e.name).collect::<Vec<_>>());
 }
