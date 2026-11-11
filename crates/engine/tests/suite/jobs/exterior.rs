@@ -543,7 +543,7 @@ fn a_notched_roof_draws_its_outline_not_its_triangulation() {
             "units_per_foot": 12,
             "levels": [
                 {"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 700, 500], "base": [0, 0]},
-                {"name": "Roof", "elevation_ft": 12, "height_ft": 4, "region": [-100, -100, 700, 500], "base": [0, 0]}
+                {"name": "Roof", "elevation_ft": 12, "height_ft": 4, "ceiling_ft": 3, "region": [-100, -100, 700, 500], "base": [0, 0]}
             ],
             "layers": [{"layer": "A-WALL", "role": "wall"}],
             "exterior": {"roofs": [{"name": "Roof 1", "level": "Roof", "outline": outline, "slope": {"down": [1.0, 0.0], "rise_per_ft": 0.25 / 12.0}}]}
@@ -568,6 +568,7 @@ fn a_notched_roof_draws_its_outline_not_its_triangulation() {
     for e in d.model.iter().filter(|e| made_as(e).is_some()) {
         let EntityKind::Mesh(m) = &e.kind else { continue };
         let mut again = m.clone();
-        assert_eq!(again.hide_flat_seams(), 0, "{:?} on {} keeps a visible seam inside a flat surface", made_as(e), e.common.layer);
+        again.hide_flat_seams();
+        assert_eq!(again.edges(), m.edges(), "{:?} on {} keeps a visible seam inside a flat surface", made_as(e), e.common.layer);
     }
 }
