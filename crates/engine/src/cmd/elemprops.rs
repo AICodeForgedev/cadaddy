@@ -18,8 +18,9 @@
 //!   and where those values came from.
 //!
 //! What an element shows besides its store, marked `computed` and never stored: its level (from
-//! the build's tag), a room's area, and a room volume's name and number (read from its tag on the
-//! plan, so `print`). A stored value always wins.
+//! the build's tag), a room's area, a room volume's name and number (read from its tag on the
+//! plan, so `print`), and a floor's type, assembly and thickness (its build tags, sourced as the
+//! build knew them: a note, a rule, the default). A stored value always wins.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -192,6 +193,12 @@ pub fn effective(e: &Entity, kind: &str, upf: f64) -> Vec<(String, Prop, bool)> 
     };
     if let Some(l) = level_of(e) {
         derive("level", Prop::new(l, Source::computed()));
+    }
+    if kind == "floor" {
+        // A floor element of the model: its build-up as the build read it (Q6408).
+        for (key, p) in super::floorasm::props_of(e) {
+            derive(key, p);
+        }
     }
     if kind == "room" && super::wallgen::made_as(e).as_deref() == Some("room") {
         // A room element of the model (model.build, Q5291): its tag's values.

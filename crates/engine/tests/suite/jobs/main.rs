@@ -42,6 +42,7 @@ mod exterior;
 mod fawiring;
 mod feederwire;
 mod fixturekinds;
+mod floorassembly;
 mod floorjoists;
 mod followups_626;
 mod furnish;

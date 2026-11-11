@@ -127,6 +127,12 @@ pub struct BuildingSpec {
     /// documents).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub floor_framing: Vec<RoofFraming>,
+    /// What each floor is built of, as the notes on its plans say (Q6408: `4" THICK SLAB ON
+    /// GRADE`, `3/4" GYPSUM CONCRETE ON 3/4" SHEATHING ON 11 7/8" I-JOISTS`): the notes as read,
+    /// by level, with their sheet; the build reads the floor's assembly (its slab, or its topping
+    /// and deck) from them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub floor_notes: Vec<FloorNote>,
     /// Ceilings, soffits and what is set in them, from the reflected ceiling plans.
     #[serde(default, skip_serializing_if = "Rcp::is_empty")]
     pub rcp: Rcp,
@@ -917,6 +923,18 @@ impl Exterior {
     pub fn level_parapets<'a>(&'a self, level: &'a str) -> impl Iterator<Item = &'a LevelParapet> + 'a {
         self.parapets.iter().filter(move |p| p.level.eq_ignore_ascii_case(level))
     }
+}
+
+/// A note on a floor's plans that says what the floor is built of (its slab, or its topping and
+/// deck on the framing), as read: the level, the note's words, and where it was read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FloorNote {
+    pub level: String,
+    pub text: String,
+    /// The sheet it is on (`S-2`), or another source.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// A roof level's framing: members (`truss` or `joist`) bearing on the walls under it at
@@ -3170,6 +3188,7 @@ impl BuildingSpec {
             buildings: Buildings::default(),
             exterior: Exterior::default(),
             floor_framing: Vec::new(),
+            floor_notes: Vec::new(),
             rcp: Rcp::default(),
             mep: Mep::default(),
             concrete: crate::concrete::Concrete::default(),
@@ -3326,6 +3345,16 @@ impl BuildingSpec {
 
     pub fn level(&self, name: &str) -> Option<&Level> {
         self.level_matching(name).and_then(|i| self.levels.get(i))
+    }
+
+    /// The notes that say what a floor is built of ([`BuildingSpec::floor_notes`]): the level's,
+    /// by its name or a name for the same level.
+    pub fn floor_notes_of(&self, level: &str) -> Vec<&FloorNote> {
+        let want = self.level_matching(level);
+        self.floor_notes
+            .iter()
+            .filter(|n| n.level.trim().eq_ignore_ascii_case(level.trim()) || (want.is_some() && self.level_matching(&n.level) == want))
+            .collect()
     }
 
     /// How a floor is framed, as its framing plans' notes say ([`BuildingSpec::floor_framing`]):
