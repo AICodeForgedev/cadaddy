@@ -2288,8 +2288,13 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let methods = Methods::stored(d);
     let est = super::printcond::CIRCUIT_SYSTEM;
     let mut out = Routed::default();
-    let circuit_tags: Vec<(usize, &ElementTag)> =
-        sp.tags.iter().enumerate().filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART) && !super::ugcircuit::is_buried(&t.id)).take(MAX_CIRCUITS).collect();
+    let circuit_tags: Vec<(usize, &ElementTag)> = sp
+        .tags
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART) && !super::ugcircuit::is_buried(&t.id))
+        .take(MAX_CIRCUITS)
+        .collect();
     // A buried circuit's runs are the underground's (Q6348): never routed through the building.
     // Nothing to route: no circuits, no low-voltage outlet for a pathway (Q6203), no fire alarm
     // device to wire (Q6503).

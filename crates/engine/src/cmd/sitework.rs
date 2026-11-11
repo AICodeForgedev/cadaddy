@@ -2357,7 +2357,8 @@ pub(crate) fn proposed_site_loads(sp: &BuildingSpec, slab: &str, loads: &[SiteLo
     let mut lines = Vec::new();
     let Some(b) = super::ugplan::slab_box(sp, slab) else { return (runs, lines) };
     for l in loads.iter().take(MAX_ITEMS) {
-        let Some(pn) = sp.mep.equipment.iter().find(|e| e.tag.trim().eq_ignore_ascii_case(l.panel.trim()) && e.level.eq_ignore_ascii_case(slab)) else {
+        let Some(pn) = sp.mep.equipment.iter().find(|e| e.tag.trim().eq_ignore_ascii_case(l.panel.trim()) && e.level.eq_ignore_ascii_case(slab))
+        else {
             continue;
         };
         let pc = [(pn.min[0] + pn.max[0]) / 2.0, (pn.min[1] + pn.max[1]) / 2.0];
@@ -2835,7 +2836,12 @@ mod tests {
             assert_eq!(gate.len(), 3, "a run and two stub-ups: {gate:#?}");
             assert!(gate.iter().all(|r| r.source_sheet.starts_with(SOURCE_PREFIX) && r.made == Made::Inferred), "{gate:#?}");
             assert!(gate.iter().any(|r| r.points.len() >= 2 && r.points.first() == Some(&[1_040.0, 383.0])), "{gate:#?}");
-            assert!(w["site_loads_proposed"].as_array().is_some_and(|a| a.len() == 1 && a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("LP-11")))), "{w:#}");
+            assert!(
+                w["site_loads_proposed"]
+                    .as_array()
+                    .is_some_and(|a| a.len() == 1 && a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("LP-11")))),
+                "{w:#}"
+            );
             assert!(w["site_loads_asked"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("LP-11")))), "{w:#}");
             // One tag per buried circuit, on every rerun.
             assert_eq!(sp.tags.iter().filter(|t| super::super::ugcircuit::is_buried(&t.id)).count(), 2, "pass {pass}");
@@ -2843,7 +2849,8 @@ mod tests {
             let mut d = Drawing::default();
             let _ = super::super::mepatoms::build::build(&mut d, &sp);
             let atoms: Vec<cadaddy_doc::props::Props> = d.model.iter().map(|e| cadaddy_doc::props::read(&e.common.xdata)).collect();
-            let kind = |p: &cadaddy_doc::props::Props| p.get(super::super::mepatoms::ATOM_KEY).map(cadaddy_doc::props::Prop::text).unwrap_or_default();
+            let kind =
+                |p: &cadaddy_doc::props::Props| p.get(super::super::mepatoms::ATOM_KEY).map(cadaddy_doc::props::Prop::text).unwrap_or_default();
             let on = |p: &cadaddy_doc::props::Props, c: &str| p.get("circuit").map(cadaddy_doc::props::Prop::text).as_deref() == Some(c);
             assert!(atoms.iter().any(|p| kind(p) == "wire" && on(p, "LP-7")), "wires of LP-7");
             assert!(atoms.iter().any(|p| kind(p) == "wire" && on(p, "LP-11")), "wires of LP-11");

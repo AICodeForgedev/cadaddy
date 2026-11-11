@@ -919,10 +919,7 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                 // The panel whose schedule feeds it (a circuit described as it is).
                 let words: Vec<&String> = r.kinds.iter().filter(|k| k.what == c.what).flat_map(|k| &k.words).collect();
                 let row = sp.mep.panel_schedules.iter().find_map(|p| {
-                    p.circuits
-                        .iter()
-                        .find(|ci| words.iter().any(|w| ci.description.to_ascii_uppercase().contains(w.as_str())))
-                        .map(|ci| (p, ci))
+                    p.circuits.iter().find(|ci| words.iter().any(|w| ci.description.to_ascii_uppercase().contains(w.as_str()))).map(|ci| (p, ci))
                 });
                 let label = row.map(|(p, ci)| format!("{}-{}", p.panel.trim(), ci.number.trim()));
                 // Its circuit built already from the site plan (its luminaires', its equipment's

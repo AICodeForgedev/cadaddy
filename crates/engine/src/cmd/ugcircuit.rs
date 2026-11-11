@@ -153,7 +153,7 @@ pub(crate) fn breakers(sp: &BuildingSpec, label: &str) -> Vec<Breaker> {
             });
             let wire = row.and_then(|r| {
                 let w: String = r.wire.trim().trim_start_matches('#').chars().take_while(|c| c.is_ascii_digit() || *c == '/').collect();
-                conduitroute::rules().vdrop.sizes.iter().any(|s| *s == w).then_some(w)
+                conduitroute::rules().vdrop.sizes.contains(&w).then_some(w)
             });
             let source = match (row, sched) {
                 (Some(r), Some(s)) => format!(
@@ -258,7 +258,8 @@ pub(crate) fn size(sp: &BuildingSpec, label: &str, length_ft: f64, min: Option<(
         // Its ground: by its breaker (250.122(A)), upsized as its phase conductors were for the
         // drop (250.122(B)), never over them.
         let egc_table = &super::onelinegear::rules().egc_table;
-        let mut g = egc_table.iter().find(|(max, _)| trip <= *max + 1e-9).map(|(_, g)| g.trim_start_matches('#').to_string()).unwrap_or_else(|| hot.clone());
+        let mut g =
+            egc_table.iter().find(|(max, _)| trip <= *max + 1e-9).map(|(_, g)| g.trim_start_matches('#').to_string()).unwrap_or_else(|| hot.clone());
         let cmil = |s: &str| rl.vdrop.cmil.get(s).copied().unwrap_or(0.0);
         if cmil(&least) > 0.0 && cmil(&hot) > cmil(&least) {
             let need = cmil(&g) * cmil(&hot) / cmil(&least);
@@ -273,8 +274,7 @@ pub(crate) fn size(sp: &BuildingSpec, label: &str, length_ft: f64, min: Option<(
             ground = Some(g);
         }
     }
-    let mut list: Vec<(u32, String, bool)> =
-        parts.iter().rev().filter_map(|(o, n)| sizes.get(*o).map(|s| (*n, s.clone(), false))).collect();
+    let mut list: Vec<(u32, String, bool)> = parts.iter().rev().filter_map(|(o, n)| sizes.get(*o).map(|s| (*n, s.clone(), false))).collect();
     if let Some(g) = ground {
         list.push((1, g, true));
     }
@@ -371,7 +371,9 @@ pub(crate) fn assign(sp: &mut BuildingSpec, runs: &mut [MepRun], min: Option<(f6
         let Some(first) = members.first().and_then(|i| runs.get(*i)) else { continue };
         let panels: BTreeSet<&str> = sz.breakers.iter().map(|b| b.panel.as_str()).collect();
         let circuit = match panels.iter().next() {
-            Some(p) if panels.len() == 1 => format!("{p}-{}", sz.breakers.iter().flat_map(|b| b.numbers.iter().cloned()).collect::<Vec<_>>().join(",")),
+            Some(p) if panels.len() == 1 => {
+                format!("{p}-{}", sz.breakers.iter().flat_map(|b| b.numbers.iter().cloned()).collect::<Vec<_>>().join(","))
+            }
             _ => norm(label),
         };
         let mut t = ElementTag { id: id.clone(), kind: "circuit".into(), level: first.level.clone(), ..ElementTag::default() };
@@ -607,7 +609,8 @@ mod tests {
     #[test]
     fn assign_sizes_a_circuits_runs_and_tags_it() {
         let mut sp = spec();
-        let mut home = super::super::printcond::run(super::super::ugplan::E_UG, "L1", "site work E-9", vec![[0.0, 0.0], [600.0, 0.0]], 1.0, -26.0 / 12.0);
+        let mut home =
+            super::super::printcond::run(super::super::ugplan::E_UG, "L1", "site work E-9", vec![[0.0, 0.0], [600.0, 0.0]], 1.0, -26.0 / 12.0);
         home.id = run_id("L1", "LP2-11,13", 0);
         let mut up = super::super::printcond::run(super::super::ugplan::E_UG, "L1", "site work E-9", vec![[600.0, 0.0]], 1.0, -26.0 / 12.0);
         up.top_ft = Some(0.5);
@@ -671,7 +674,14 @@ mod tests {
         // As the router lays it: up from the box (a zero-length riser), across the ceiling, into
         // the panel's side.
         let home = |level: &str| {
-            let mut r = super::super::printcond::run(conduitroute::BRANCH_SYSTEM, level, "E-9", vec![[240.0, 120.0], [240.0, 120.0], [240.0, 0.0], [-4.0, 0.0]], 0.75, 0.0);
+            let mut r = super::super::printcond::run(
+                conduitroute::BRANCH_SYSTEM,
+                level,
+                "E-9",
+                vec![[240.0, 120.0], [240.0, 120.0], [240.0, 0.0], [-4.0, 0.0]],
+                0.75,
+                0.0,
+            );
             r.id = format!("circuit:{level}:home:LP2-5:0#home");
             r.bottoms_ft = vec![1.75, 9.25, 6.5];
             r.height_source = "routed".into();

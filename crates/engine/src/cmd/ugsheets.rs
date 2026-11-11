@@ -1272,10 +1272,8 @@ fn takeoff_json(ug: &Ug) -> Value {
             let size = if r.size_in > 0.0 { trade_size(r.size_in) } else { "?".into() };
             *by_kind.entry(r.circuit_kind).or_default().entry(size).or_default() += r.length_ft * f64::from(r.conduits.max(1));
         }
-        let by_kind: serde_json::Map<String, Value> = by_kind
-            .into_iter()
-            .map(|(k, m)| (k.to_string(), Value::Object(m.into_iter().map(|(s, ft)| (s, json!(r2(ft)))).collect())))
-            .collect();
+        let by_kind: serde_json::Map<String, Value> =
+            by_kind.into_iter().map(|(k, m)| (k.to_string(), Value::Object(m.into_iter().map(|(s, ft)| (s, json!(r2(ft)))).collect()))).collect();
         let stubs: u64 = ug.stubs.iter().filter(|s| s.trade == trade).map(|s| u64::from(s.conduits)).sum();
         let sleeves: Vec<&SleeveAt> = ug.sleeves.iter().filter(|s| s.trade == trade).collect();
         out.insert(
