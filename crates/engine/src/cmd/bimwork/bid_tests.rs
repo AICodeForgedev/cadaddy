@@ -265,7 +265,10 @@ fn the_bid_rolls_the_takeoff_up_by_system_and_floor_every_number_from_its_lines(
             assert!(l["unit_price"].is_null() && money(&l["material"]) == 0.0 && !l["reason"].as_str().unwrap_or_default().is_empty(), "{l}");
         }
     }
-    assert!(v["no_labor"].as_array().unwrap().iter().any(|l| l["item"] == json!("Locknut")));
+    // A kind the company table doesn't name takes CADaddy's labor book's hours, said so.
+    let nut = find(&v, "Locknut", "3/4\"", None);
+    assert!(nut["labor_source"].as_str().is_some_and(|x| x.contains("CADaddy labor book") && x.contains("placeholder")), "{nut}");
+    assert!(nut["labor_basis"].as_str().is_some_and(|x| x.starts_with("Locknut")), "{nut}");
     // The panel the price book excludes is out of the bid, with the Item Map's reason.
     assert_eq!(find(&v, "panel LP1", "1'-8\" x 1'-0\" x 4'-0\" H", None)["bid"], json!("EXCLUDED"));
     assert!(v["exclusions"].as_array().unwrap().iter().any(|e| e["text"].as_str().unwrap_or_default().contains("owner-furnished panelboard")));
@@ -460,5 +463,75 @@ fn hostile_bid_params_are_refused_never_a_panic() {
     let mut e = Session::empty();
     e.open_drawing(Drawing::new_imperial(), "Empty", None);
     assert!(e.execute("bim.bid", &json!({})).is_err());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Q6526: every electrical kind the model's BOM holds has labor in CADaddy's own book, matched by
+/// the same rule in `bim.bid`, `bim.estimate` and `estimate.status`: one model, one labor total.
+#[test]
+fn one_model_gives_one_labor_total_whichever_estimate_route() {
+    let dir = tmp("onelabor");
+    let mut s = building(&dir);
+    let v = s.execute("bim.bid", &json!({"labor_rate": 50, "show_lines": true, "alternates": false, "today": "2026-11-04"})).expect("bid");
+    // The wire, ground, boxes, breakers, panels, luminaires and fittings all carry hours.
+    assert_eq!(v["no_labor"], json!([]), "{}", v["no_labor"]);
+    assert_eq!((v["counts"]["no_labor"].clone(), v["no_labor_by"].clone()), (json!(0), json!([])));
+    for (item, size) in [
+        ("THHN copper", "#12"),
+        ("Copper ground, green", "#8"),
+        ("Circuit breaker, panel LP1", "20A 1P"),
+        ("Luminaire type A", ""),
+        ("Box, 4\" square", "4\" square"),
+    ] {
+        let l = find(&v, item, size, None);
+        assert!(money(&l["labor_unit_hours"]) > 0.0 && !l["labor_basis"].as_str().unwrap_or_default().is_empty(), "{item} {size}: {l}");
+    }
+    let panel = lines(&v).into_iter().find(|l| l["category"] == json!("equipment")).unwrap_or(Value::Null);
+    assert!(money(&panel["labor_unit_hours"]) > 0.0, "{panel}");
+    // Wire by its gauge: #8 takes more hours a foot than #12.
+    assert!(money(&find(&v, "THHN copper", "#8", None)["labor_unit_hours"]) > money(&find(&v, "THHN copper", "#12", None)["labor_unit_hours"]));
+    let bid_hours = money(&v["base_bid"]["labor_hours"]);
+    assert!(bid_hours > 0.0, "{}", v["base_bid"]);
+    // bim.estimate with no cost table: the same hours on the same lines.
+    let e = s.execute("bim.estimate", &json!({"labor_rate": 50})).expect("estimate");
+    assert!((money(&e["labor_by_trade"]["electrical"]) - bid_hours).abs() < 0.01, "estimate {} vs bid {bid_hours}", e["labor_by_trade"]);
+    assert!(e["no_labor"].as_array().unwrap().iter().all(|c| c["trade"] != json!("electrical")), "{}", e["no_labor"]);
+    // Its family match never crosses trades: no other trade's line is timed by an electrical row.
+    for l in e["lines"].as_array().unwrap().iter().filter(|l| l["trade"] != json!("electrical")) {
+        let row = l["via_family_row"].as_str().unwrap_or_default();
+        assert!(!["EMT", "Conduit", "THHN", "Box"].iter().any(|w| row.contains(w)), "{l}");
+    }
+    // estimate.status over the electrical lines in the contract: the same total.
+    s.execute("estimate.set_scope", &json!({"trade": "electrical", "scope": "in_contract", "reason": "the electrical contract"})).expect("scope");
+    let st = s.execute("estimate.status", &json!({})).expect("status");
+    assert!((money(&st["totals"]["labor_hours"]) - bid_hours).abs() < 0.01, "status {} vs bid {bid_hours}", st["totals"]);
+    assert_eq!(st["no_labor"], json!([]), "{}", st["no_labor"]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Q6526: every kind the built model's takeoff holds, in every trade, has labor in CADaddy's book
+/// (the mechanical trade's fittings take pipe-fitting hours, never an electrical row's), and the
+/// whole model's hours agree between bim.estimate and estimate.status.
+#[test]
+fn every_kind_of_every_trade_has_labor_and_the_routes_agree() {
+    let dir = tmp("nolabor");
+    let mut s = building(&dir);
+    let e = s.execute("bim.estimate", &json!({"labor_rate": 50})).expect("estimate");
+    assert_eq!(e["no_labor"], json!([]), "{}", e["no_labor"]);
+    let fit = e["lines"].as_array().unwrap().iter().find(|l| l["trade"] == json!("mechanical") && l["category"] == json!("fittings")).cloned();
+    let fit = fit.unwrap_or(Value::Null);
+    assert!(fit["labor_basis"].as_str().is_some_and(|b| b.starts_with("Pipe fitting")) && money(&fit["labor_hrs"]) > 0.0, "{fit}");
+    // Every trade's lines in the contract: none goes without labor.
+    for trade in ["electrical", "mechanical", "plumbing", "general", "drywall"] {
+        s.execute("estimate.set_scope", &json!({"trade": trade, "scope": "in_contract", "reason": "all ours"})).expect("scope");
+    }
+    let st = s.execute("estimate.status", &json!({})).expect("status");
+    assert_eq!(st["no_labor"], json!([]), "{}", st["no_labor"]);
+    assert!(
+        (money(&st["totals"]["labor_hours"]) - money(&e["labor_hours"])).abs() < 0.01,
+        "status {} vs estimate {}",
+        st["totals"],
+        e["labor_hours"]
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
