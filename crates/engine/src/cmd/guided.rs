@@ -7863,6 +7863,29 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             db["heights_from"], db["defaults_by_kind"], db["in_wall"], db["no_wall"], db["hung_from_ceiling"], db["misplaced"]
         );
         progress_line(&line);
+        // Devices read outside the building with no circuit: not built, each a review item.
+        if let Some(n) = db.get("outside_unbuilt").and_then(Value::as_u64).filter(|n| *n > 0) {
+            let first: Vec<String> = db["outside_unbuilt_first"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(20)
+                .map(|v| format!("{} on {} ({} ft out)", v["mark"].as_str().unwrap_or("?"), v["sheet"].as_str().unwrap_or("?"), v["outside_ft"]))
+                .collect();
+            progress_line(&format!("  read outside the building with no circuit, not built (review): {n}"));
+            job.add_finding(
+                StageName::BimBuild,
+                "Devices read outside the building with no circuit (not built)",
+                &format!(
+                    "{n} devices were read more than 2 ft outside their level's footprint with no circuit, on sheets whose other devices stand in the building: nothing ties them to the building (a grid bubble's label, a tag or a note read as a device), so they are not built: {}",
+                    first.join("; ")
+                ),
+                2,
+                vec!["Confirm each on its sheet: place it (a site or canopy item) or leave it out".into()],
+                None,
+                false,
+            );
+        }
         // A plumbing fixture type whose rough-in height no schedule, detail or note gives: one
         // review item a type, not a silent default.
         if let Some(types) = db.get("fixture_defaults_by_type").and_then(Value::as_object) {
@@ -31284,6 +31307,50 @@ mod tests {
         let hp = on("Q-1").into_iter().find(|d| d.tag == "HP").unwrap_or_else(|| panic!("the heat pump's connection: {:?}", job.devices));
         assert_eq!((hp.kind.as_str(), hp.equipment.as_str()), ("equipment connection", "HP-3"), "{hp:?}");
         assert_eq!(r["device_types"]["unlisted_repeated"]["A"], json!(3), "the mechanical As are a question: {:#}", r["device_types"]);
+    }
+
+    /// fix-grid-bubble-as-fixture: an electrical plan showing one lettered grid, D, past the
+    /// numbered grids it crosses (no row of three letters), its schedule listing a type D
+    /// luminaire: the D bubble is a grid's, never a luminaire; a type D fixture among the grids,
+    /// its wire ending at it, still is one.
+    #[test]
+    fn a_lone_grid_bubble_past_the_sheets_grids_is_no_luminaire() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "Q-1", "sheet_type": "plan", "level": "1"}]}));
+        job.sheets_loaded = true;
+        let texts = [
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("D", 1000.0, 772.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 772.0, 5.0),
+            ("E", 1000.0, 760.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 760.0, 5.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &[]);
+        // The numbered grids' column of bubbles, each its line's end.
+        for (tag, y) in [("1", 200.0), ("2", 300.0), ("3", 400.0)] {
+            add_bubble(&mut s, tag, (100.0, y), Some(0.0));
+        }
+        // Grid D, square to them, bubbled below the first; a type D fixture among them.
+        let line = |s: &mut crate::Session, a: (f64, f64), b: (f64, f64)| {
+            let l = cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) };
+            s.doc_mut().map(|d| d.add(&Space::Model, Common::default(), EntityKind::Line(l)).ok()).ok();
+        };
+        add_bubble(&mut s, "D", (300.0, 100.0), None);
+        line(&mut s, (300.0, 110.0), (300.0, 500.0));
+        add_bubble(&mut s, "D", (450.0, 350.0), None);
+        line(&mut s, (450.0, 360.0), (450.0, 700.0));
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "Q-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [0.0, 0.0, 2000.0, 1000.0], ..region("Q-1", "1", "E", "plan", 0.0) });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let d: Vec<_> = job.devices.iter().filter(|d| d.tag == "D").collect();
+        assert!(!d.iter().any(|d| d.at == [300.0, 100.0]), "the grid bubble: {d:?}");
+        assert_eq!(d.iter().map(|d| (d.at, d.kind.as_str())).collect::<Vec<_>>(), [([450.0, 350.0], "luminaire")], "{:?}", job.devices);
+        assert_eq!(r["device_types"]["not_devices"]["a grid bubble"], json!(1), "{:#}", r["device_types"]);
     }
 
     /// fix-lum-fixture-schedule-not-read: a made-up set whose luminaire types are given only by

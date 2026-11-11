@@ -161,7 +161,8 @@ fn bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Bubble> {
 /// The grid bubbles among some objects: each one's centre, radius and label. A bubble's grid line
 /// (10' or more) ends at it and points through its centre; or it stands in a row of bubbles of
 /// its family, each label once, in sequence (a dashed grid's pieces are too short to be its line). `strict` (an electrical plan, whose circuit and leader lines end
-/// at its devices the same way): both. A device reader must not take a grid's label (`A`, `C`,
+/// at its devices the same way): its line, and its row or the sheet's grids found so (the other
+/// end of one of theirs, or past them on a grid square to theirs). A device reader must not take a grid's label (`A`, `C`,
 /// `F`) for a device's type mark.
 pub(crate) fn grid_bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64, strict: bool) -> Vec<(Vec2, f64, String)> {
     let found = bubbles(d, ents, k);
@@ -169,13 +170,7 @@ pub(crate) fn grid_bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64, strict: b
         return Vec::new();
     }
     let lines = grid_lines(ents, k);
-    let pointed = |b: &Bubble| {
-        lines.iter().any(|(a, c)| {
-            let near = a.dist(b.at).min(c.dist(b.at));
-            let len = a.dist(*c);
-            near <= 1.3 * b.r && len > 1e-9 && ((*c - *a).cross(b.at - *a)).abs() / len <= GRID_THROUGH * b.r
-        })
-    };
+    let pointed = |b: &Bubble| pointing(&lines, b).is_some();
     let family = |l: &str| l.chars().next().is_some_and(|c| c.is_ascii_digit());
     // A grid's row: bubbles of its family on one line across or down, each label once (a
     // corridor's alternating fixture marks, `E G E G`, repeat theirs), three of them in sequence
@@ -204,7 +199,83 @@ pub(crate) fn grid_bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64, strict: b
         row(&|o: &Bubble| (o.at.x - b.at.x).abs() <= 0.5 * b.r, &|p: Vec2| p.y)
             || row(&|o: &Bubble| (o.at.y - b.at.y).abs() <= 0.5 * b.r, &|p: Vec2| p.x)
     };
-    found.iter().filter(|b| if strict { pointed(b) && in_row(b) } else { pointed(b) || in_row(b) }).map(|b| (b.at, b.r, b.label.clone())).collect()
+    if !strict {
+        return found.iter().filter(|b| pointed(b) || in_row(b)).map(|b| (b.at, b.r, b.label.clone())).collect();
+    }
+    // On an electrical plan, the bubbles both tests hold for are the sheet's grids; a bubble its
+    // line points through that isn't in such a row (a partial plan shows one grid of its family,
+    // or a row cut off) is still a grid's when those grids say so (fix-grid-bubble-as-fixture).
+    let sure: Vec<(&Bubble, Vec2, Vec2)> =
+        found.iter().filter(|b| in_row(b)).filter_map(|b| pointing(&lines, b).map(|(a, c)| (b, a, c))).take(MAX_ITEMS).collect();
+    found
+        .iter()
+        .filter(|b| match pointing(&lines, b) {
+            None => false,
+            Some(line) => in_row(b) || other_end_of_a_grid(b, line, &sure) || beyond_the_grids(b, line, &sure),
+        })
+        .map(|b| (b.at, b.r, b.label.clone()))
+        .collect()
+}
+
+/// The longest line (10' or more) with an end at bubble `b` that points through its centre, its
+/// end at the bubble first.
+fn pointing(lines: &[(Vec2, Vec2)], b: &Bubble) -> Option<(Vec2, Vec2)> {
+    lines
+        .iter()
+        .filter(|(a, c)| {
+            let near = a.dist(b.at).min(c.dist(b.at));
+            let len = a.dist(*c);
+            near <= 1.3 * b.r && len > 1e-9 && ((*c - *a).cross(b.at - *a)).abs() / len <= GRID_THROUGH * b.r
+        })
+        .max_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1)))
+        .map(|&(a, c)| if a.dist(b.at) <= c.dist(b.at) { (a, c) } else { (c, a) })
+}
+
+/// A bubble at the other end of a grid line the sheet's grids (`sure`) label: the line pointing
+/// through it runs to a grid bubble of the same label (a grid bubbled at both ends, the row at
+/// this end cut off).
+fn other_end_of_a_grid(b: &Bubble, (_, far): (Vec2, Vec2), sure: &[(&Bubble, Vec2, Vec2)]) -> bool {
+    sure.iter().any(|(s, ..)| !std::ptr::eq(*s, b) && s.label.eq_ignore_ascii_case(&b.label) && far.dist(s.at) <= 1.3 * s.r && s.at.dist(b.at) > 2.0 * s.r)
+}
+
+/// Grid bubbles of one sheet differ in size by at most this share.
+const SAME_SIZE: f64 = 0.15;
+
+/// A bubble beyond the sheet's grids (`sure`) on a grid of the other direction: its size theirs,
+/// its line square to theirs and crossing their span, and the bubble outside the outermost of them
+/// (a grid's bubble stands past the grids it crosses; a device a wire ends at stands among them).
+fn beyond_the_grids(b: &Bubble, (near, far): (Vec2, Vec2), sure: &[(&Bubble, Vec2, Vec2)]) -> bool {
+    let v = far - near;
+    let lv = v.len();
+    if !(lv.is_finite() && lv > 1e-9) {
+        return false;
+    }
+    let v = v * (1.0 / lv);
+    // The grids square to this one, of its size: their direction `u` and lines.
+    let across: Vec<(Vec2, &Bubble, Vec2, Vec2)> = sure
+        .iter()
+        .filter(|(s, ..)| (s.r - b.r).abs() <= SAME_SIZE * s.r)
+        .filter_map(|&(s, a, c)| {
+            let w = c - a;
+            let lw = w.len();
+            (lw > 1e-9 && (w * (1.0 / lw)).dot(v).abs() <= 0.02).then(|| (w * (1.0 / lw), s, a, c))
+        })
+        .collect();
+    let Some(&(u, ..)) = across.first() else { return false };
+    let n = Vec2::new(-u.y, u.x);
+    // Along their direction the grids span from their lines' lowest end to their highest; across
+    // it they stand from the first grid to the last.
+    let (mut lo, mut hi, mut first, mut last) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+    for (_, s, a, c) in across.iter().filter(|(w, ..)| w.dot(u).abs() >= 0.98) {
+        for p in [s.at, *a, *c] {
+            lo = lo.min(p.dot(u));
+            hi = hi.max(p.dot(u));
+        }
+        first = first.min(s.at.dot(n));
+        last = last.max(s.at.dot(n));
+    }
+    let (t, x) = (b.at.dot(u), b.at.dot(n));
+    t >= lo && t <= hi && (x < first - b.r || x > last + b.r)
 }
 
 /// A grid label's place in its sequence: a number's value, a letter's place in the alphabet grids
@@ -1800,5 +1871,47 @@ mod tests {
         let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
         let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 6200.0, 1000.0]], &[]);
         assert!(g.place([5000.0 + 450.0, 150.0], "1false").is_none());
+    }
+
+    /// fix-grid-bubble-as-fixture: on an electrical plan (strict) a grid's bubble that is not in a
+    /// row of three of its family is still a grid's when the sheet's grids say so: the one letter
+    /// grid of a partial plan, past the numbered grids it crosses, and the far end of a lettered
+    /// grid whose row at that end is cut off. A fixture of the same mark, its wire ending at it
+    /// among the grids (or along a grid's line beyond its end), stays a device.
+    #[test]
+    fn a_grid_bubble_out_of_its_row_is_a_grid_by_the_sheets_other_grids() {
+        let found = |s: &crate::Session| -> Vec<(String, [i64; 2])> {
+            let d = s.doc().unwrap();
+            let ents: Vec<&Arc<Entity>> = d.model.iter().collect();
+            let mut v: Vec<(String, [i64; 2])> =
+                grid_bubbles(d, &ents, 1.0, true).into_iter().map(|(at, _, l)| (l, [at.x.round() as i64, at.y.round() as i64])).collect();
+            v.sort();
+            v
+        };
+        let fixture = |s: &mut crate::Session, label: &str, at: [f64; 2], wire_to: [f64; 2]| {
+            s.execute("circle", &json!({"center": at, "radius": 18.0})).unwrap();
+            s.execute("text", &json!({"at": [at[0] - 4.0, at[1] - 4.0], "text": label, "height": 8.0})).unwrap();
+            s.execute("line", &json!({"points": [[at[0] + 18.0, at[1]], wire_to]})).unwrap();
+        };
+        // Numbered grids 1-3 bubbled below; one lettered grid, D, bubbled left. A type D
+        // fixture among the grids, its wire running across.
+        let mut s = crate::Session::new();
+        grid_view(&mut s, [0.0, 0.0], 1.0, &[(0.0, "1"), (300.0, "2"), (600.0, "3")], &[(300.0, "D")]);
+        fixture(&mut s, "D", [300.0, 450.0], [900.0, 450.0]);
+        let v = found(&s);
+        assert!(v.contains(&("D".into(), [-96, 300])), "the lettered grid's bubble: {v:?}");
+        assert!(!v.iter().any(|(_, at)| *at == [300, 450]), "the fixture: {v:?}");
+        assert_eq!(v.len(), 4, "{v:?}");
+        // Lettered grids A-C bubbled left, C bubbled at its right end too (the row there cut
+        // off); an A fixture along grid A's line past its end.
+        let mut s = crate::Session::new();
+        grid_view(&mut s, [0.0, 0.0], 1.0, &[], &[(0.0, "A"), (300.0, "B"), (600.0, "C")]);
+        s.execute("circle", &json!({"center": [1018.0, 600.0], "radius": 18.0})).unwrap();
+        s.execute("text", &json!({"at": [1014.0, 596.0], "text": "C", "height": 8.0})).unwrap();
+        fixture(&mut s, "A", [1600.0, 0.0], [2000.0, 0.0]);
+        let v = found(&s);
+        assert!(v.contains(&("C".into(), [1018, 600])), "the grid's other end: {v:?}");
+        assert!(!v.iter().any(|(_, at)| *at == [1600, 0]), "the fixture: {v:?}");
+        assert_eq!(v.len(), 4, "{v:?}");
     }
 }
