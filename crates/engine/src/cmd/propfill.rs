@@ -1184,16 +1184,28 @@ impl Footprint {
     fn is_empty(&self) -> bool {
         self.polys.is_empty() && self.boxes.is_empty()
     }
-    /// The larger side of its plan extent (drawing units; 0 when empty): how wide the building is.
-    fn span(&self) -> f64 {
+    /// Its plan extent (lower left, upper right); None when empty.
+    fn extent(&self) -> Option<(Vec2, Vec2)> {
         let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
         let pts = self.polys.iter().flatten().copied().chain(self.boxes.iter().flat_map(|b| [Vec2::new(b[0], b[1]), Vec2::new(b[2], b[3])]));
         for p in pts.filter(|p| p.is_finite()) {
             lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
             hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
         }
-        let span = (hi.x - lo.x).max(hi.y - lo.y);
-        if span.is_finite() { span } else { 0.0 }
+        (lo.x <= hi.x && lo.y <= hi.y).then_some((lo, hi))
+    }
+    /// The larger side of its plan extent (drawing units; 0 when empty): how wide the building is.
+    fn span(&self) -> f64 {
+        self.extent().map_or(0.0, |(lo, hi)| (hi.x - lo.x).max(hi.y - lo.y))
+    }
+    /// How far `p` is outside its plan extent (0 within it; infinite when empty): a point between
+    /// its walls is within it, whatever the footprint holds of the floor.
+    fn beyond(&self, p: Vec2) -> f64 {
+        self.extent().map_or(f64::INFINITY, |(lo, hi)| {
+            let dx = (lo.x - p.x).max(p.x - hi.x).max(0.0);
+            let dy = (lo.y - p.y).max(p.y - hi.y).max(0.0);
+            dx.hypot(dy)
+        })
     }
 }
 
@@ -1458,7 +1470,7 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
     let by_circuit = circuit_points(sp, &devices);
     // Each sheet's devices on each level and how many of them stand outside its footprint; the
     // devices outside it held back until every one is seen (whether their sheet registered).
-    let mut sheet_outside: HashMap<(String, String), (usize, usize)> = HashMap::new();
+    let mut sheet_outside: HashMap<(String, String), (usize, usize, usize)> = HashMap::new();
     let mut held: Vec<Held> = Vec::new();
     for t in devices {
         if only.is_some_and(|f| !f(t)) {
@@ -2077,6 +2089,13 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         let mut outside_ft: Option<f64> = None;
         let mut misplaced: Option<Value> = None;
         let span_ft = under.iter().map(|(fp, _)| fp.span()).fold(0.0, f64::max) / upf;
+        // Beyond the building's whole extent, not just off its floor (between its walls).
+        let beyond = under
+            .iter()
+            .map(|(fp, below)| fp.beyond(below.as_deref().map_or(centre, |b| in_plan_of(&stack, &level.name, b, centre))))
+            .fold(f64::INFINITY, f64::min)
+            / upf
+            > OUTSIDE_FLOOR_FT;
         if !under.is_empty() {
             let off = under
                 .iter()
@@ -2104,6 +2123,9 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         seen.0 += 1;
         if outside_ft.is_some() {
             seen.1 += 1;
+            if beyond {
+                seen.2 += 1;
+            }
         }
         // Outside the building: held until its sheet is known to be placed right.
         if let Some(off) = outside_ft {
@@ -2125,6 +2147,7 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
                 misplaced,
                 off_ft: off,
                 far: far_off(off, span_ft),
+                beyond,
                 unwired,
             });
             continue;
@@ -2133,22 +2156,23 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             report.built += 1;
         }
     }
-    // The held devices. Where most of a sheet's devices on a level stand outside its footprint,
-    // or one stands farther off than the building is wide, the sheet's view did not register onto
-    // the level's plan (it keeps its own page position): none of them is built, the view named
-    // (fix-objects-far-outside-building). Else one outside with no circuit is left out as a
-    // review item (nothing ties it to the building: a grid bubble's letter, a tag or a note read
-    // as a device), never built silently; one with a circuit (a canopy light) is built and
-    // flagged `misplaced`.
+    // The held devices. Where most of a sheet's devices on a level stand beyond the building's
+    // whole extent, or one stands farther off than twice the building's width, the sheet's view
+    // did not register onto the level's plan (it keeps its own page position): none of those is
+    // built, the view named (fix-objects-far-outside-building). Else, where most of the sheet's
+    // devices stand off the floor (the sheet a little off, or a footprint short of the building),
+    // they are built and flagged `misplaced`; one outside with no circuit is left out as a review
+    // item (nothing ties it to the building: a grid bubble's letter, a tag or a note read as a
+    // device), never built silently; one with a circuit (a canopy light) is built and flagged.
     let mut views: BTreeMap<(String, String), (usize, f64, f64)> = BTreeMap::new();
     for h in held {
-        let (n, out) = sheet_outside.get(&(h.sheet.clone(), h.level.clone())).copied().unwrap_or_default();
-        if out * 2 > n || h.far {
+        let (n, out, beyond) = sheet_outside.get(&(h.sheet.clone(), h.level.clone())).copied().unwrap_or_default();
+        if (h.beyond && beyond * 2 > n) || h.far {
             let v = views.entry((h.sheet, h.level)).or_insert((0, f64::INFINITY, 0.0));
             v.0 += 1;
             v.1 = v.1.min(h.off_ft);
             v.2 = v.2.max(h.off_ft);
-        } else if h.unwired {
+        } else if h.unwired && out * 2 <= n {
             if report.outside_unbuilt.len() < MAX_LISTED {
                 report.outside_unbuilt.push(h.item);
             } else {
@@ -2160,7 +2184,7 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         }
     }
     for ((sheet, level), (n, near, far)) in views {
-        let (all, _) = sheet_outside.get(&(sheet.clone(), level.clone())).copied().unwrap_or_default();
+        let (all, _, _) = sheet_outside.get(&(sheet.clone(), level.clone())).copied().unwrap_or_default();
         let view = if sheet.is_empty() { "a sheet with no number".to_string() } else { format!("sheet {sheet}") };
         report.unregistered.push(json!({
             "sheet": sheet, "level": level, "devices": n, "of": all, "nearest_ft": round2(near), "farthest_ft": round2(far),
@@ -2186,6 +2210,8 @@ struct Held {
     off_ft: f64,
     /// Farther off than the building is wide ([`far_off`]).
     far: bool,
+    /// Beyond the building's whole extent ([`Footprint::beyond`]).
+    beyond: bool,
     /// On no circuit.
     unwired: bool,
 }
