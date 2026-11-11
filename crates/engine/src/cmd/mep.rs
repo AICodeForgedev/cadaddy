@@ -3264,6 +3264,9 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
 
 // ---------------- clashes ----------------
 
+/// Heights (feet) a riser's foot or top may miss its floor by and still stand on it or reach it.
+const PASS_EPS_FT: f64 = 1.0 / 96.0;
+
 pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
     let (sp, _) = current(s, "model.clashes")?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -3306,8 +3309,20 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 let z1 = (level.elevation_ft + top) * upf;
                 let at = Vec2::new(pt[0], pt[1]);
                 // Ending at a device's height above its floor (an outlet, a switch), not on it.
-                let drop = st.cut.is_some() || (wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft);
-                let through_up = st.cut.as_ref().is_some_and(|c| c.index + 1 < c.count);
+                // A riser drawn a storey at a time (Q6505): standing on its floor (or coming up
+                // through it) and reaching the floor over it (with no floor over it, past its
+                // ceiling: up through the roof) passes through the storey, below the ceiling and
+                // through the floor structure by design.
+                let above = sp
+                    .levels
+                    .iter()
+                    .map(|l| l.elevation_ft)
+                    .filter(|e| e.is_finite() && *e > level.elevation_ft + 1e-6)
+                    .fold(f64::INFINITY, f64::min);
+                let reach = if above.is_finite() { above - level.elevation_ft } else { level.ceiling_ft };
+                let passes = bot <= PASS_EPS_FT && top.is_finite() && reach.is_finite() && top >= reach - PASS_EPS_FT;
+                let drop = st.cut.is_some() || passes || (wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft);
+                let through_up = passes || st.cut.as_ref().is_some_and(|c| c.index + 1 < c.count);
                 items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop, through_up });
             }
             continue;
