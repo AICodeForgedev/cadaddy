@@ -4,6 +4,8 @@
 //! Rebuild and Walk. A thin view over the engine's `bspec.get`, `bspec.set`, `model.build` and
 //! `model.issues`: it reads their results and acts through [`CadApp::run`].
 
+use std::sync::Arc;
+
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -69,10 +71,11 @@ fn key(app: &CadApp) -> (u64, u64) {
     app.session.state().map_or((0, 0), |st| (st.uid, st.revision))
 }
 
-fn view(app: &mut CadApp, ui: &egui::Ui) -> View {
+/// The palette's view, shared: a frame reads the spec and its parts without copying them (Q6482).
+fn view(app: &mut CadApp, ui: &egui::Ui) -> Arc<View> {
     let id = egui::Id::new("p2m-view");
     let k = key(app);
-    if let Some(v) = ui.data(|d| d.get_temp::<View>(id)).filter(|v| v.key == k) {
+    if let Some(v) = ui.data(|d| d.get_temp::<Arc<View>>(id)).filter(|v| v.key == k) {
         return v;
     }
     let v = match app.run("bspec.get", json!({})) {
@@ -107,7 +110,8 @@ fn view(app: &mut CadApp, ui: &egui::Ui) -> View {
         }
         Err(e) => View { key: k, error: Some(e), ..View::default() },
     };
-    ui.data_mut(|d| d.insert_temp(id, v.clone()));
+    let v = Arc::new(v);
+    ui.data_mut(|d| d.insert_temp(id, Arc::clone(&v)));
     v
 }
 
@@ -270,7 +274,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
         // The model's issues, as last checked.
-        let issues: Option<Issues> = ui.data(|d| d.get_temp(issues_id));
+        let issues: Option<Arc<Issues>> = ui.data(|d| d.get_temp(issues_id));
         if let Some(is) = issues {
             ui.add_space(8.0);
             ui.separator();
@@ -309,7 +313,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let check = |app: &mut CadApp, ui: &egui::Ui| match app.run("model.issues", json!({ "limit": 1000 })) {
         Ok(r) => {
             let items = r["issues"].as_array().cloned().unwrap_or_default();
-            ui.data_mut(|d| d.insert_temp(issues_id, Issues { key: key(app), items }));
+            ui.data_mut(|d| d.insert_temp(issues_id, Arc::new(Issues { key: key(app), items })));
         }
         Err(e) => app.set_status(e),
     };
@@ -342,7 +346,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                     Ok(r) => {
                         let items = r["issues"].as_array().cloned().unwrap_or_default();
                         let k = key(app);
-                        c.data_mut(|d| d.insert_temp(issues_id, Issues { key: k, items }));
+                        c.data_mut(|d| d.insert_temp(issues_id, Arc::new(Issues { key: k, items })));
                     }
                     Err(e) => app.set_status(e),
                 },

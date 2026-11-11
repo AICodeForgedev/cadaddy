@@ -856,6 +856,29 @@ const PANE_BAR: f32 = 20.0;
 
 /// A panel's contents, in the dock area or a palette window.
 fn panel_body(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
+    // Each palette's own part of the frame (`perf.sections`: `panel:<id>`).
+    crate::framecost::time(panel_part(panel), || panel_contents(app, ui, panel));
+}
+
+/// A palette's name in `perf.sections`.
+fn panel_part(panel: Panel) -> &'static str {
+    match panel {
+        Panel::Canvas => "panel:canvas",
+        Panel::ToolSets => "panel:toolSets",
+        Panel::QuickCalc => "panel:quickCalc",
+        Panel::Layers => "panel:layers",
+        Panel::Properties => "panel:properties",
+        Panel::ExternalRefs => "panel:externalReferences",
+        Panel::PlansToModel => "panel:plansToModel",
+        Panel::SheetSets => "panel:sheetSets",
+        Panel::Symbols => "panel:symbols",
+        Panel::Coordination => "panel:coordination",
+        Panel::Validate => "panel:validate",
+        Panel::Job => "panel:job",
+    }
+}
+
+fn panel_contents(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
     let t = crate::theme::Tokens::get();
     match panel {
         Panel::Canvas => {

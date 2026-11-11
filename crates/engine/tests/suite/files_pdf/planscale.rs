@@ -98,3 +98,32 @@ fn a_given_scale_is_never_read_again() {
     assert_eq!(r["scale"].as_f64(), Some(24.0), "{r}");
     assert!(r.get("planScaleReread").is_none(), "{r}");
 }
+
+/// Q6498: a power plan whose scale note (1/4") is in the title block's corner, with two enlarged
+/// plans at 1/2" beside it under their titles: its plans print 1/2" more often, but no view that
+/// is no plan prints 1/4", so the reading is the floor's plan's and stands. Read again at 1/2",
+/// the floor's plan came in at half its size and its devices were placed nowhere.
+#[test]
+fn a_sheets_enlarged_plans_dont_set_its_scale() {
+    let mut s = Session::new();
+    rect(&mut s, [0.0, 0.0], [17.0, 11.0]);
+    // The floor's plan, titled, its scale only in the title block.
+    rect(&mut s, [1.0, 3.0], [9.0, 9.0]);
+    rect(&mut s, [2.0, 4.0], [3.5, 5.0]);
+    rect(&mut s, [5.0, 6.5], [6.0, 7.5]);
+    text(&mut s, [1.0, 2.15], "POWER PLAN", 0.25);
+    text(&mut s, [15.0, 0.9], "1/4\" = 1'-0\"", 0.12);
+    // Two enlarged plans at 1/2".
+    for (i, name) in ["ENLARGED PLAN - ROOM A", "ENLARGED PLAN - ROOM B"].iter().enumerate() {
+        let x = 10.5 + 3.2 * i as f64;
+        rect(&mut s, [x, 6.0], [x + 2.4, 8.4]);
+        text(&mut s, [x, 5.6], name, 0.12);
+        text(&mut s, [x, 5.35], "1/2\" = 1'-0\"", 0.1);
+    }
+    text(&mut s, [15.0, 0.6], "E-101", 0.4);
+    let r = import(&s, "enlarged");
+    assert_eq!(r["scale"].as_f64(), Some(48.0), "{}", r["scaleSource"]);
+    assert!(r.get("planScaleReread").is_none(), "{r}");
+    // The reading is no plan view's here: no plans' scale recorded for the placer's ratio.
+    assert!(r.get("planPrintScale").is_none(), "{r}");
+}

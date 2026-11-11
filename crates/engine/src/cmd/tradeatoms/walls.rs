@@ -2,8 +2,8 @@
 //! — studs at their spacing with king, jack and cripple studs at the openings, plates or tracks
 //! cut to stock, headers and sills, fire blocking, backing behind what hangs on the wall,
 //! masonry courses, a batt in each stud bay, sheathing and board sheets per face and layer with
-//! the openings taken out, furring rows, corner bead, tape, joint compound, screws, and paint
-//! per coat on the faces that face a room.
+//! the openings taken out, furring rows, corner bead, tape, joint compound, screws, paint per
+//! coat on the faces that face a room, and the exterior finish layers ([`cladding`]).
 //!
 //! A built wall's mesh is the boxes `wallgen` made of it (its pieces between the openings, the
 //! headers over them, the sills under windows), so its centreline, thickness, height and
@@ -11,6 +11,8 @@
 
 use super::*;
 use cadaddy_walk3d::{Assembly, AssemblyLayer, LayerSide};
+
+mod cladding;
 
 /// Most walls laid out (hostile models).
 const MAX_WALLS: usize = 200_000;
@@ -359,6 +361,9 @@ struct EndJoin {
     corner: bool,
     /// This end stops against another wall's face (a T).
     tee: bool,
+    /// The wall meeting this end turns there (an outside or inside corner, not a straight
+    /// continuation of this wall's line).
+    bent: bool,
 }
 
 /// Each wall's two ends: what meets them (walls of one level).
@@ -389,6 +394,8 @@ fn joins(walls: &[Wall]) -> Vec<[EndJoin; 2]> {
                 let [oa, ob] = ow.ends();
                 if oa.dist(p) < reach || ob.dist(p) < reach {
                     j.corner = true;
+                    // More than 15 degrees off this wall's line.
+                    j.bent |= (w.u.x * ow.u.y - w.u.y * ow.u.x).abs() > 0.26;
                 } else {
                     let s = (p - ow.o).dot(ow.u);
                     let off = (p - ow.o).dot(ow.n).abs();
@@ -429,9 +436,28 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
             }
         }
     }
+    // The building's lowest floor: a wall standing on it has its screed at the foundation plate.
+    let ground_z = walls.iter().map(|w| w.zf).fold(f64::INFINITY, f64::min);
+    // The straight runs of the walls with finish layers (their control joints follow the run).
+    let clad: Vec<bool> = walls
+        .iter()
+        .map(|w| {
+            sp.wall_types
+                .iter()
+                .find(|t| !w.wall_type.is_empty() && t.name.eq_ignore_ascii_case(&w.wall_type))
+                .and_then(|t| t.assembly.as_ref())
+                .is_some_and(|a| {
+                    a.layers
+                        .iter()
+                        .any(|l| l.side != LayerSide::Core && !cladding::LAID_ELSEWHERE.contains(&l.category.trim().to_ascii_lowercase().as_str()))
+                })
+        })
+        .collect();
+    let runs = cladding::runs(&walls, &clad);
     let mut untyped = 0usize;
     let mut no_layers: BTreeSet<String> = BTreeSet::new();
     let mut framed_twice: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut turned, mut both) = (0usize, 0usize);
     for (i, w) in walls.iter().enumerate() {
         let Some(wt) = sp.wall_types.iter().find(|t| !w.wall_type.is_empty() && t.name.eq_ignore_ascii_case(&w.wall_type)) else {
             untyped += 1;
@@ -450,7 +476,24 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
             let p = w.ends().get(end).copied().unwrap_or(w.o);
             !walls.iter().take(i).any(|o| o.level.eq_ignore_ascii_case(&w.level) && o.ends().iter().any(|q| q.dist(p) < (w.t + o.t)))
         };
-        lay_wall(w, wt, asm, r, ctx, k, batch, want, jn, [corner_mine(0), corner_mine(1)]);
+        let ground = w.zf <= ground_z + ctx.upf;
+        let run = runs.get(i).copied().unwrap_or_default();
+        match lay_wall(w, wt, asm, r, ctx, k, batch, want, jn, [corner_mine(0), corner_mine(1)], ground, run) {
+            Facing::Turned => turned += 1,
+            Facing::RoomsBothSides => both += 1,
+            Facing::AsDrawn => {}
+        }
+    }
+    if turned > 0 {
+        batch
+            .notes
+            .push(format!("{turned} exterior walls laid out turned: drawn with side 1 (the exterior layers) towards a room and side 2 towards none"));
+    }
+    if both > 0 {
+        batch.missing.insert(
+            "exterior walls with rooms on both faces".into(),
+            format!("{both} walls of an exterior wall type have a room on each face, so which face is outside is not known: laid out as drawn (side 1 outside)"),
+        );
     }
     if untyped > 0 {
         batch.missing.insert("walls with no wall type".into(), format!("{untyped} walls: no type mark or legend type, so no layers to lay out"));
@@ -492,7 +535,22 @@ fn lay_wall(
     want: &dyn Fn(&str) -> bool,
     jn: [EndJoin; 2],
     corner_mine: [bool; 2],
-) {
+    ground: bool,
+    run: cladding::Run,
+) -> Facing {
+    // An exterior wall's side 1 is its outside: one drawn the other way round (side 1 towards a
+    // room, side 2 towards none) is laid out turned, its exterior layers away from the rooms.
+    let faces_room = |sign: f64| {
+        [0.25, 0.5, 0.75].iter().any(|f| ctx.room_at(&w.level, w.at(w.s0 + (w.s1 - w.s0) * f, sign * (w.t / 2.0 + 1.5 * ctx.upf))).is_some())
+    };
+    let facing = match (asm.external, faces_room(1.0), faces_room(-1.0)) {
+        (true, true, false) => Facing::Turned,
+        (true, true, true) => Facing::RoomsBothSides,
+        _ => Facing::AsDrawn,
+    };
+    let turned = facing == Facing::Turned;
+    let flipped = Wall { n: -w.n, ..w.clone() };
+    let w = if turned { &flipped } else { w };
     let src = type_source(wt, asm);
     let placed = place_layers(asm, w.t, k);
     let upf = ctx.upf;
@@ -567,6 +625,10 @@ fn lay_wall(
             }
         }
     }
+    // ── Exterior finish layers ──
+    if want("cladding") || want("masonry") {
+        cladding::Face { w, r, k, upf, base: &base, src: &src, want, jn, corner_mine, ground, run, rooms: face_room.clone() }.lay(&placed, batch);
+    }
     // ── Corner bead and inside-corner tape ──
     if want("drywall") {
         let height_ft = (w.zt - w.zf) / upf;
@@ -638,6 +700,17 @@ fn lay_wall(
     if want("framing") && flange > 0.0 {
         backing(w, r, ctx, k, upf, batch, &base, &studs, flange);
     }
+    facing
+}
+
+/// Which way an exterior wall's layers were laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Facing {
+    AsDrawn,
+    /// Drawn the other way round: side 1 towards a room, side 2 towards none.
+    Turned,
+    /// A room on each face: which is outside is not known.
+    RoomsBothSides,
 }
 
 /// The studs, plates or tracks, headers, sills and blocking of a framing layer; the studs'
@@ -1403,7 +1476,7 @@ mod tests {
         let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new() };
         let mut batch = Batch::default();
         let all = |_: &str| true;
-        lay_wall(w, &wt, &asm, r, &ctx, 1.0, &mut batch, &all, [EndJoin::default(); 2], [true, true]);
+        lay_wall(w, &wt, &asm, r, &ctx, 1.0, &mut batch, &all, [EndJoin::default(); 2], [true, true], true, cladding::Run::default());
         batch.pieces
     }
 
@@ -1527,6 +1600,285 @@ mod tests {
         let s = p.iter().find(|x| x.kind == "stud").unwrap();
         assert!(s.extra.iter().any(|(k, v, src)| *k == "spacing_in" && v == "24" && src.kind == SourceKind::Rule));
         assert!(s.extra.iter().any(|(k, v, src)| *k == "gauge" && v == "20 ga" && src.kind == SourceKind::Default));
+    }
+
+    /// The exterior wall of the finding: stucco, rigid insulation and wood sheathing outside 2x6
+    /// studs, gypsum board inside; the assembly lists no lath and no barrier.
+    fn stucco_wall() -> Assembly {
+        Assembly {
+            tag: "X7".into(),
+            source: "sample legend, mark X7".into(),
+            layers: vec![
+                layer("7/8\" portland cement stucco", 0.875, LayerSide::Side1, "finish", false, None),
+                layer("3/4\" rigid insulation", 0.75, LayerSide::Side1, "insulation", false, None),
+                layer("1/2\" wood structural panel sheathing", 0.5, LayerSide::Side1, "sheathing", false, None),
+                layer("2x6 wood studs @ 16\" o.c.", 5.5, LayerSide::Core, "framing", false, None),
+                layer("5/8\" gypsum board", 0.625, LayerSide::Side2, "board", false, None),
+            ],
+            ..Assembly::default()
+        }
+    }
+
+    fn sum(p: &[Piece], kind: &str, f: fn(&Piece) -> f64) -> f64 {
+        p.iter().filter(|x| x.kind == kind).map(f).sum()
+    }
+
+    fn has(p: &Piece, key: &str, value: &str) -> bool {
+        p.extra.iter().any(|(k, v, _)| *k == key && v == value)
+    }
+
+    #[test]
+    fn a_stucco_walls_finish_is_laid_out_with_its_lath_barrier_and_accessories() {
+        // 20' x 10' with a 4' window (sill 3', head 7') from 8' to 12'.
+        let window = Hole { s0: 96.0, s1: 144.0, z0: 36.0, z1: 84.0 };
+        let p = lay(&wall(20.0, vec![window]), stucco_wall(), &Rules::default());
+        let net = 200.0 - 16.0;
+        // The plaster in panels no bigger than 144 sf: two 10' x 10' panels, one control joint.
+        let plaster: Vec<&Piece> = p.iter().filter(|x| x.kind == "plaster").collect();
+        assert_eq!(plaster.len(), 2);
+        assert!(plaster.iter().all(|x| x.trade == "cladding" && x.size == "7/8\"" && x.ty == "3 coats" && x.inferred.is_none()));
+        assert!(plaster.iter().all(|x| x.source.doc.as_deref() == Some("sample legend, mark X7")));
+        assert!((sum(&p, "plaster", |x| x.area_sf) - net).abs() < 1e-6);
+        assert!((sum(&p, "plaster", |x| x.volume_cf) - net * 0.875 / 12.0).abs() < 1e-6);
+        // (The joint at 10' crosses the window: 6' of it.)
+        assert_eq!(count(&p, "control_joint"), 1);
+        assert!((sum(&p, "control_joint", |x| x.length_ft) - 6.0).abs() < 1e-6);
+        // The lath under it: 27" x 96" sheets lapped 1/2" and 1", the window cut out.
+        let lath: Vec<&Piece> = p.iter().filter(|x| x.kind == "lath").collect();
+        // Rows of 26.5" up a 120" wall: 5; pieces of 95" along 240": 3 a row.
+        assert_eq!(lath.len(), 15);
+        assert!((sum(&p, "lath", |x| x.area_sf) - net).abs() < 1e-6);
+        assert!(lath.iter().all(|x| x.inferred.as_deref().is_some_and(|b| b.contains("C1063"))));
+        // Two layers of barrier over wood-based sheathing (IBC 2510.6): an 8' 10" course (a 9'
+        // roll less its 2" lap) and the 1' 2" rest, per layer.
+        let wrb: Vec<&Piece> = p.iter().filter(|x| x.kind == "weather_barrier").collect();
+        assert_eq!(wrb.len(), 4);
+        assert!(wrb.iter().all(|x| x.ty == "2 layers" && x.inferred.as_deref().is_some_and(|b| b.contains("2510.6"))));
+        assert!((sum(&p, "weather_barrier", |x| x.area_sf) - 2.0 * net).abs() < 1e-6);
+        assert_eq!(wrb.iter().filter(|x| has(x, "ply", "2")).count(), 2);
+        // The weep screed along its base (on the lowest floor), casing bead round the window and
+        // at the wall's two free ends.
+        let screed: Vec<&Piece> = p.iter().filter(|x| x.kind == "screed").collect();
+        assert_eq!(screed.len(), 1);
+        assert!((screed[0].length_ft - 20.0).abs() < 1e-6 && has(screed[0], "at", "the foundation plate line"));
+        assert!(screed[0].inferred.as_deref().is_some_and(|b| b.contains("2512.1.2")));
+        assert_eq!(count(&p, "casing_bead"), 3);
+        let round_window = p.iter().find(|x| x.kind == "casing_bead" && has(x, "at", "opening")).unwrap();
+        assert!((round_window.length_ft - 16.0).abs() < 1e-6, "{}", round_window.length_ft);
+        // Every piece is the wall's and has a body; the board and framing are still laid out.
+        assert!(p.iter().filter(|x| x.trade == "cladding").all(|x| x.host == Some(Handle(0x42)) && !x.blocks.is_empty()));
+        assert!(count(&p, "sheathing") > 0 && count(&p, "board") > 0 && count(&p, "sheet") > 0 && count(&p, "stud") > 0);
+    }
+
+    #[test]
+    fn listed_lath_and_barrier_are_laid_out_as_themselves_not_twice() {
+        let mut asm = stucco_wall();
+        asm.layers.insert(1, layer("self-furred metal lath", 0.0, LayerSide::Side1, "finish", false, None));
+        asm.layers.insert(2, layer("two layers grade D building paper", 0.0, LayerSide::Side1, "barrier", false, None));
+        let p = lay(&wall(20.0, Vec::new()), asm, &Rules::default());
+        let lath: Vec<&Piece> = p.iter().filter(|x| x.kind == "lath").collect();
+        assert_eq!(lath.len(), 15);
+        assert!(lath.iter().all(|x| x.inferred.is_none() && x.item.starts_with("self-furred metal lath")));
+        let wrb: Vec<&Piece> = p.iter().filter(|x| x.kind == "weather_barrier").collect();
+        assert_eq!(wrb.len(), 4);
+        assert!(wrb.iter().all(|x| x.inferred.is_none() && x.ty == "2 layers"));
+        assert!((sum(&p, "weather_barrier", |x| x.area_sf) - 400.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn siding_veneer_panels_and_unnamed_finishes_are_laid_out() {
+        let door = Hole { s0: 60.0, s1: 96.0, z0: 0.0, z1: 84.0 };
+        let one = |material: &str, category: &str| Assembly {
+            source: "sample legend".into(),
+            layers: vec![
+                layer(material, 0.625, LayerSide::Side1, category, false, None),
+                layer("3 5/8\" metal studs", 3.625, LayerSide::Core, "framing", false, Some(16.0)),
+            ],
+            ..Assembly::default()
+        };
+        let r = Rules::default();
+        // Lap siding: 7" courses (18 up a 10' wall, the last 1"), 12' boards, the door cut out,
+        // over one layer of barrier (not over wood sheathing here).
+        let p = lay(&wall(20.0, vec![door]), one("fiber cement lap siding", "cladding"), &r);
+        assert_eq!(count(&p, "siding"), 18);
+        assert!((sum(&p, "siding", |x| x.area_sf) - (200.0 - 21.0)).abs() < 1e-6);
+        // The 12 courses beside the door: a 5' and a 12' run (2 boards); the rest one 20' run.
+        assert_eq!(sum(&p, "siding", |x| x.qty), 12.0 * 2.0 + 6.0 * 2.0);
+        assert!(p.iter().filter(|x| x.kind == "weather_barrier").all(|x| x.ty == "1 layer"));
+        assert_eq!(count(&p, "lath"), 0);
+        // Brick veneer: the masonry trade's, 6.75 a square foot in 8" bands, ties per 2.67 sf.
+        let p = lay(&wall(20.0, Vec::new()), one("3 5/8\" brick veneer", "cladding"), &r);
+        assert_eq!(count(&p, "brick"), 15);
+        assert!(p.iter().filter(|x| x.kind == "brick").all(|x| x.trade == "masonry"));
+        assert_eq!(sum(&p, "brick", |x| x.qty), 15.0 * (240.0 * 8.0 / 144.0 * 6.75f64).ceil());
+        assert_eq!(sum(&p, "tie", |x| x.qty), (200.0f64 / 2.67).ceil());
+        // Metal panels: 4' x 10' sheets.
+        let p = lay(&wall(20.0, Vec::new()), one("insulated metal panel", "finish"), &r);
+        assert_eq!(count(&p, "panel"), 5);
+        // A finish layer no system names: by area, in 4' x 8' pieces, and said so.
+        let p = lay(&wall(20.0, Vec::new()), one("textured coating", "finish"), &r);
+        assert_eq!(count(&p, "cladding"), 10);
+        assert!((sum(&p, "cladding", |x| x.area_sf) - 200.0).abs() < 1e-6);
+        // Upstairs the screed is at the floor line.
+        let mut w = wall(20.0, Vec::new());
+        w.zf = 120.0;
+        w.zt = 240.0;
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: Some(stucco_wall()),
+        };
+        let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new() };
+        let mut batch = Batch::default();
+        let only = |t: &str| t == "cladding";
+        lay_wall(&w, &wt, &stucco_wall(), &r, &ctx, 1.0, &mut batch, &only, [EndJoin::default(); 2], [true, true], false, cladding::Run::default());
+        assert!(batch.pieces.iter().all(|x| x.trade == "cladding"));
+        assert!(batch.pieces.iter().any(|x| x.kind == "screed" && has(x, "at", "the floor line")));
+    }
+
+    #[test]
+    fn an_exterior_wall_drawn_the_other_way_round_is_laid_out_turned() {
+        let room = |y0: f64, y1: f64| RoomEl {
+            level: "L1".into(),
+            name: "OFFICE".into(),
+            number: "R1".into(),
+            finish: String::new(),
+            outline: vec![Vec2::new(0.0, y0), Vec2::new(240.0, y0), Vec2::new(240.0, y1), Vec2::new(0.0, y1)],
+            z: 0.0,
+            handle: Handle(0x50),
+        };
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: None,
+        };
+        let plaster_y = |rooms: Vec<RoomEl>, external: bool| -> (f64, bool) {
+            let asm = Assembly { external, ..stucco_wall() };
+            let ctx = Ctx { upf: 12.0, rooms, devices: Vec::new() };
+            let mut batch = Batch::default();
+            let all = |_: &str| true;
+            let turned = Facing::Turned
+                == lay_wall(
+                    &wall(20.0, Vec::new()),
+                    &wt,
+                    &asm,
+                    &Rules::default(),
+                    &ctx,
+                    1.0,
+                    &mut batch,
+                    &all,
+                    [EndJoin::default(); 2],
+                    [true, true],
+                    true,
+                    cladding::Run::default(),
+                );
+            let p = batch.pieces.iter().find(|x| x.kind == "plaster").map(|x| x.blocks[0].a.y).unwrap_or(f64::NAN);
+            (p, turned)
+        };
+        // The room on side 2 (below the line): the stucco on side 1, outside.
+        let (y, turned) = plaster_y(vec![room(-120.0, -6.0)], true);
+        assert!(y > 0.0 && !turned, "{y}");
+        // The room on side 1: the wall was drawn the other way round; the stucco goes outside.
+        let (y, turned) = plaster_y(vec![room(6.0, 120.0)], true);
+        assert!(y < 0.0 && turned, "{y}");
+        // Rooms on both faces: laid as drawn.
+        let (y, turned) = plaster_y(vec![room(6.0, 120.0), room(-120.0, -6.0)], true);
+        assert!(y > 0.0 && !turned, "{y}");
+        // Not an exterior wall type: laid as the legend gives it.
+        let (y, turned) = plaster_y(vec![room(6.0, 120.0)], false);
+        assert!(y > 0.0 && !turned, "{y}");
+    }
+
+    #[test]
+    fn a_join_tells_a_corner_from_a_straight_run() {
+        let w = |a: [f64; 2], b: [f64; 2]| {
+            let (a, b) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
+            let u = (b - a) * (1.0 / a.dist(b));
+            Wall { o: a, u, n: u.perp(), s0: 0.0, s1: a.dist(b), ..wall(1.0, Vec::new()) }
+        };
+        let walls = [w([0.0, 0.0], [240.0, 0.0]), w([240.0, 0.0], [480.0, 0.0]), w([480.0, 0.0], [480.0, 240.0])];
+        let j = joins(&walls);
+        assert!(j[0][1].corner && !j[0][1].bent, "a straight run on: no corner aid");
+        assert!(j[1][1].corner && j[1][1].bent && j[2][0].bent, "a turn: a corner");
+        // A stucco wall gets a corner aid at its bent end only.
+        let mut batch = Batch::default();
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: None,
+        };
+        let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new() };
+        let all = |_: &str| true;
+        lay_wall(&walls[1], &wt, &stucco_wall(), &Rules::default(), &ctx, 1.0, &mut batch, &all, j[1], [true, true], true, cladding::Run::default());
+        assert_eq!(count(&batch.pieces, "corner_aid"), 1);
+        assert_eq!(count(&batch.pieces, "casing_bead"), 0, "no free end");
+    }
+
+    #[test]
+    fn a_facade_of_several_walls_takes_its_control_joints_along_the_run() {
+        let w = |a: [f64; 2], b: [f64; 2]| {
+            let (a, b) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
+            let u = (b - a) * (1.0 / a.dist(b));
+            Wall { o: a, u, n: u.perp(), s0: 0.0, s1: a.dist(b), ..wall(1.0, Vec::new()) }
+        };
+        // Three 8' walls on one line (the middle one drawn the other way) and a return.
+        let walls = [w([0.0, 0.0], [96.0, 0.0]), w([192.0, 0.0], [96.0, 0.0]), w([192.0, 0.0], [288.0, 0.0]), w([288.0, 0.0], [288.0, 240.0])];
+        let runs = cladding::runs(&walls, &[true, true, true, true]);
+        assert!(runs[..3].iter().all(|r| (r.len - 288.0).abs() < 1e-6), "{runs:?}");
+        assert!(runs[1].reversed && !runs[0].reversed && runs[3] == cladding::Run::default(), "{runs:?}");
+        // The 24' run in panels no wider than 14.4' (144 sf at 10'): two 12' panels, one joint
+        // in the middle wall, 4' from its end.
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: None,
+        };
+        let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new() };
+        let all = |_: &str| true;
+        let mut joints = Vec::new();
+        let mut panels = Vec::new();
+        for (i, wl) in walls.iter().take(3).enumerate() {
+            let mut batch = Batch::default();
+            lay_wall(wl, &wt, &stucco_wall(), &Rules::default(), &ctx, 1.0, &mut batch, &all, [EndJoin::default(); 2], [true, true], true, runs[i]);
+            joints.push(batch.pieces.iter().filter(|x| x.kind == "control_joint").map(|x| x.blocks[0].a.x).collect::<Vec<f64>>());
+            panels.push(count(&batch.pieces, "plaster"));
+        }
+        assert_eq!(panels, vec![1, 2, 1]);
+        assert!(joints[0].is_empty() && joints[2].is_empty() && joints[1].len() == 1, "{joints:?}");
+        assert!((joints[1][0] - 144.0).abs() < 1.0, "{joints:?}");
+        // Laid alone, each 8' wall is one panel with no joint.
+        let mut batch = Batch::default();
+        lay_wall(
+            &walls[1],
+            &wt,
+            &stucco_wall(),
+            &Rules::default(),
+            &ctx,
+            1.0,
+            &mut batch,
+            &all,
+            [EndJoin::default(); 2],
+            [true, true],
+            true,
+            cladding::Run::default(),
+        );
+        assert_eq!(count(&batch.pieces, "control_joint"), 0);
+    }
+
+    #[test]
+    fn layer_counts_are_read() {
+        assert_eq!(cladding::layers_named("two layers grade D paper"), Some(2.0));
+        assert_eq!(cladding::layers_named("(2) layers of building paper"), Some(2.0));
+        assert_eq!(cladding::layers_named("2-ply WRB"), Some(2.0));
+        assert_eq!(cladding::layers_named("housewrap"), None);
     }
 
     #[test]

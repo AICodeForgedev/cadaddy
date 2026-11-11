@@ -834,7 +834,7 @@ pub(crate) fn sheet_views(d: &Drawing, sheets: &[Option<([f64; 4], [f64; 4], Vec
         sub.model.push_many(ents);
         let mut found = cadaddy_mepfix::sheet_reader::level_views(&sub);
         if found.is_empty()
-            && let Some((v, cell)) = cadaddy_mepfix::sheet_reader::floor_plan_view(&sub)
+            && let Some((v, cell)) = cadaddy_mepfix::sheet_reader::floor_plan_view_in(&sub, Some(a))
         {
             // One storey's floor plan beside its other plans: the sheet keeps its level, and is
             // read in that view (no level of the view's own: the caller keeps the sheet's).
@@ -959,19 +959,33 @@ pub(crate) fn load_project_plans(
     let sheets: Vec<Option<([f64; 4], [f64; 4], Vec<String>)>> =
         out.iter().map(|r| r.is_plan().then(|| (r.rect, r.rect, if typicals.contains(&r.number) { Vec::new() } else { r.levels.clone() }))).collect();
     let views = sheet_views(t.doc()?, &sheets);
-    let mut split = Vec::with_capacity(out.len());
-    for (r, vs) in out.into_iter().zip(views) {
+    let split = split_sheet_refs(out, views);
+    Ok((t, split))
+}
+
+/// Each sheet with the views [`sheet_views`] found on it: a sheet printing several levels'
+/// plans becomes one sheet per view, named as classify names one (`<number>/<level>`), each on
+/// its level; a storey's one plan beside its other views (no level of the view's own) keeps the
+/// sheet's number and level and is read in that view only.
+fn split_sheet_refs(sheets: Vec<SheetRef>, views: Vec<Vec<SheetViewRead>>) -> Vec<SheetRef> {
+    let mut split = Vec::with_capacity(sheets.len());
+    for (r, vs) in sheets.into_iter().zip(views) {
         if vs.is_empty() {
             split.push(r);
             continue;
         }
-        // Each view its own sheet, named as classify names one: `<number>/<level>`.
+        if let [v] = vs.as_slice()
+            && v.level.is_empty()
+        {
+            split.push(SheetRef { view: Some(v.rect), ..r });
+            continue;
+        }
         let base = r.number.split('/').next().unwrap_or(&r.number).to_string();
         for v in vs {
             split.push(SheetRef { number: format!("{base}/{}", v.level), level: v.level, levels: v.levels, view: Some(v.rect), ..r.clone() });
         }
     }
-    Ok((t, split))
+    split
 }
 
 #[cfg(test)]
@@ -1036,6 +1050,28 @@ mod tests {
             duct_type: None,
             color_index: 5,
         }
+    }
+
+    #[test]
+    fn a_storeys_plan_beside_its_details_keeps_its_sheet_and_level() {
+        let view = |title: &str, level: &str, rect: [f64; 4]| SheetViewRead { title: title.into(), level: level.into(), levels: Vec::new(), rect };
+        let refs = split_sheet_refs(
+            vec![sheet("P-201", "P", "1", 0.0), sheet("P-202", "P", "", 200.0)],
+            vec![
+                vec![view("SANITARY FLOOR PLAN", "", [5.0, 5.0, 60.0, 50.0])],
+                vec![view("1ST FLOOR PLAN", "1", [200.0, 0.0, 300.0, 40.0]), view("2ND FLOOR PLAN", "2", [200.0, 40.0, 300.0, 80.0])],
+            ],
+        );
+        let got: Vec<(&str, &str, Option<[f64; 4]>)> = refs.iter().map(|r| (r.number.as_str(), r.level.as_str(), r.view)).collect();
+        assert_eq!(
+            got,
+            [
+                ("P-201", "1", Some([5.0, 5.0, 60.0, 50.0])),
+                ("P-202/1", "1", Some([200.0, 0.0, 300.0, 40.0])),
+                ("P-202/2", "2", Some([200.0, 40.0, 300.0, 80.0]))
+            ],
+            "the storey's plan keeps its sheet's number and level (never `P-201/` on no level)"
+        );
     }
 
     #[test]

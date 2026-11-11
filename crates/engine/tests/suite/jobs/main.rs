@@ -102,6 +102,7 @@ mod tradeatoms;
 mod typed_last;
 mod typicalfloors;
 mod ugplan;
+mod underceiling;
 mod unittypes;
 mod wall_assemblies;
 mod wallgen;
