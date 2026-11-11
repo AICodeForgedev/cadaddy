@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1279,
-    "count": 1279,
+    "callableAsJson": 1284,
+    "count": 1284,
     "ids": [
       "-attedit",
       "-block",
@@ -185,6 +185,11 @@
       "bim.spec_accept",
       "bim.spec_import",
       "bim.submittals",
+      "bim.symbol.log",
+      "bim.symbol.promote",
+      "bim.symbol.revert",
+      "bim.symbol.set",
+      "bim.symbols",
       "bim.takeoff",
       "bim.takeoff.show",
       "bim.trades",

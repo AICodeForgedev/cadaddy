@@ -141,13 +141,7 @@ impl LengthTable {
         if by_volts && volts.is_none() {
             return Need::NotCovered("the table is by voltage and the circuit's voltage isn't known".into());
         }
-        let same_v = |a: f64, b: f64| (a - b).abs() <= 0.06 * b.max(1.0);
-        let rows: Vec<&Band> = self
-            .bands
-            .iter()
-            .filter(|b| b.amps.is_none_or(|a| amps.is_some_and(|x| (a - x).abs() < 0.5)))
-            .filter(|b| b.volts.is_none_or(|v| volts.is_some_and(|x| same_v(v, x))))
-            .collect();
+        let rows = self.rows_for(amps, volts);
         if rows.is_empty() {
             let mut w = Vec::new();
             if let Some(a) = amps.filter(|_| by_amps) {
@@ -167,6 +161,31 @@ impl LengthTable {
                 Need::Beyond(format!("the table reaches {reach} ft"))
             }
         }
+    }
+
+    /// The rows of the table for a circuit on a breaker of `amps` at `volts` (all of them where
+    /// the table is by neither), none where it is by one the circuit doesn't give.
+    fn rows_for(&self, amps: Option<f64>, volts: Option<f64>) -> Vec<&Band> {
+        let same_v = |a: f64, b: f64| (a - b).abs() <= 0.06 * b.max(1.0);
+        self.bands
+            .iter()
+            .filter(|b| b.amps.is_none_or(|a| amps.is_some_and(|x| (a - x).abs() < 0.5)))
+            .filter(|b| b.volts.is_none_or(|v| volts.is_some_and(|x| same_v(v, x))))
+            .collect()
+    }
+
+    /// The largest conductor the table gives such a circuit (where it is past the table's reach).
+    pub fn largest(&self, amps: Option<f64>, volts: Option<f64>, sizes: &[String]) -> Option<String> {
+        let rank = |s: &str| sizes.iter().position(|x| x == s);
+        self.rows_for(amps, volts).into_iter().filter_map(|b| rank(&b.size).map(|k| (k, b.size.clone()))).max_by_key(|x| x.0).map(|x| x.1)
+    }
+
+    /// How far the table lets a circuit run on `size` (feet): its longest row of that size or a
+    /// smaller one. None: the table has no row of the circuit's for it.
+    pub fn reach(&self, size: &str, amps: Option<f64>, volts: Option<f64>, sizes: &[String]) -> Option<f64> {
+        let rank = |s: &str| sizes.iter().position(|x| x == s);
+        let have = rank(size)?;
+        self.rows_for(amps, volts).into_iter().filter(|b| rank(&b.size).is_some_and(|k| k <= have)).map(|b| b.max_ft).reduce(f64::max)
     }
 }
 

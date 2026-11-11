@@ -9,6 +9,7 @@ use cadaddy_doc::{Drawing, Handle, Space};
 use cadaddy_geom::Vec3;
 use cadaddy_render::hlr::{Scene3, View, hidden_lines};
 
+use super::super::symtable::{LibSymbol, Stroke};
 use super::model::{Disc, Item, bounds, ft_in};
 use super::pen::{Align, Pen, TagShape, ok};
 
@@ -469,9 +470,25 @@ fn circuits(pen: &mut Pen, ctx: &PlanCtx, items: &[&Item], layer: &str) {
     }
 }
 
-fn symbol(pen: &mut Pen, ctx: &PlanCtx, it: &Item, label: Option<&str>) {
+fn symbol(pen: &mut Pen, ctx: &PlanCtx, it: &Item, label: Option<&str>, lib: &[(LibSymbol, bool)]) {
     let c = ctx.f.p(it.center());
-    pen.circle(c, 0.06);
+    // A device whose kind the shared symbol library draws (Q6484) is drawn with the library's
+    // symbol, turned as its print drew it; else a plain circle.
+    let shown =
+        it.p("symbol_shown_as").and_then(|name| lib.iter().map(|(s, _)| s).find(|s| s.name.eq_ignore_ascii_case(name) && !s.strokes.is_empty()));
+    match shown {
+        Some(sym) => {
+            let turn = it.p("symbol_turn").and_then(|t| t.trim().parse::<u8>().ok()).unwrap_or(0);
+            for st in sym.strokes.iter().take(64) {
+                match st.turned(turn) {
+                    Stroke::Seg([a, b, x, y]) => pen.line([c[0] + a, c[1] + b], [c[0] + x, c[1] + y]),
+                    Stroke::Round([x, y, r]) => pen.circle([c[0] + x, c[1] + y], r),
+                }
+            }
+            pen.count("library_symbols");
+        }
+        None => pen.circle(c, 0.06),
+    }
     if let Some(t) = label {
         pen.text([c[0] + 0.08, c[1] + 0.02], t, TXT * 0.8);
     }
@@ -559,8 +576,9 @@ pub(super) fn plan(pen: &mut Pen, ctx: &PlanCtx, items: &[&Item], kind: PlanKind
         PlanKind::Power => {
             walls(pen, ctx, items, false);
             pen.layer("E-POWR");
+            let lib = super::super::symtable::library(None);
             for it in mine.iter().filter(|it| it.kind == "device") {
-                symbol(pen, ctx, it, it.first(&["type_mark", "symbol"]));
+                symbol(pen, ctx, it, it.first(&["type_mark", "symbol"]), &lib);
                 pen.count("devices");
             }
             for it in mine.iter().filter(|it| it.kind == "conduit") {

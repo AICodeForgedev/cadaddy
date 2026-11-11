@@ -775,7 +775,17 @@ pub(crate) fn room_floors(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level:
         .filter(|c| c.level.eq_ignore_ascii_case(level))
         .flat_map(|c| c.rects.iter().map(|[a, b]| [Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1])]))
         .collect();
-    Floors::new(&walls, &shell.rects, upf, &taken)
+    // Each door and window shut across its opening (its frame's ends; else a door's leaf turned
+    // shut, a pane where it is): the outside comes in through none of them.
+    let shut: Vec<(Vec2, Vec2, f64)> = pl
+        .leaves
+        .iter()
+        .map(|l| {
+            let (a, b) = l.frame.or_else(|| l.along.map(|u| (l.a, l.a + u * l.a.dist(l.b)))).unwrap_or((l.a, l.b));
+            (a, b, l.thickness)
+        })
+        .collect();
+    Floors::with_openings(&walls, &shell.rects, upf, &taken, &shut)
 }
 
 /// A level's walls as its plan reads them: centreline ends and thickness (sheet units). What a
