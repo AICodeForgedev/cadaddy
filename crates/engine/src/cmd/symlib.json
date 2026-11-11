@@ -1,5 +1,7 @@
 {
   "source": "CADaddy's own drawings of the symbols electrical sets draw the same way (trade drafting practice), in paper inches about the symbol's middle; editable: a file of this shape in the settings folder's symbols/ folder replaces a symbol of the same name or adds one",
+  "plan_disciplines_source": "drafting convention: an electrical set's legends and these symbols speak for the electrical and technology plans; a mechanical or plumbing plan's symbols are its own legend's (the same drawing is a diffuser or a duct detector there)",
+  "plan_disciplines": ["E", "EL", "T", "TC", "LV"],
   "symbols": [
     {
       "name": "duplex receptacle",

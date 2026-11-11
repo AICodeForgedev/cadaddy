@@ -190,8 +190,18 @@ fn is_zero(n: &u32) -> bool {
 struct LibraryFile {
     #[serde(default)]
     source: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    plan_disciplines: Vec<String>,
     #[serde(default)]
     symbols: Vec<LibSymbol>,
+}
+
+/// The sheet disciplines whose plans the set's electrical legends and the library speak for
+/// (the shipped library's `plan_disciplines`).
+pub(crate) fn plan_disciplines() -> Vec<String> {
+    serde_json::from_str::<LibraryFile>(SHIPPED)
+        .map(|f| f.plan_disciplines.iter().map(|d| d.trim().to_ascii_uppercase()).filter(|d| !d.is_empty()).take(32).collect())
+        .unwrap_or_default()
 }
 
 fn parse_library(text: &str, learned: bool) -> Vec<(LibSymbol, bool)> {
@@ -1343,6 +1353,7 @@ pub(crate) fn promote(dir: &std::path::Path, e: &Entry) -> std::result::Result<(
     let path = dir.join(LEARNED_FILE);
     let mut file = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<LibraryFile>(&t).ok()).unwrap_or_else(|| LibraryFile {
         source: "symbols promoted from print sets (bim.symbol.promote, or an answer to a symbol question)".into(),
+        plan_disciplines: Vec::new(),
         symbols: Vec::new(),
     });
     let sig = signature(&strokes);

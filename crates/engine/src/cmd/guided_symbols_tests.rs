@@ -78,6 +78,28 @@ impl Set {
         }
     }
 
+    /// The last sheet made is of `discipline`, and printed as views `views` (a region each).
+    fn retag(&mut self, discipline: &str, views: &[[f64; 4]]) {
+        let Some(last) = self.job.sheet_regions.pop() else { return };
+        let number = last.number.clone();
+        if let Some(list) = self.job.sheets.as_mut().and_then(|v| v.get_mut("sheets")).and_then(Value::as_array_mut)
+            && let Some(e) = list.iter_mut().find(|e| e["number"] == number.as_str())
+        {
+            e["discipline"] = json!(discipline);
+        }
+        if views.is_empty() {
+            self.job.sheet_regions.push(SheetRegion { discipline: discipline.into(), ..last });
+            return;
+        }
+        for v in views {
+            self.job.sheet_regions.push(SheetRegion {
+                discipline: discipline.into(),
+                view: Some(SheetView { title: "PLAN".into(), rect: *v }),
+                ..last.clone()
+            });
+        }
+    }
+
     /// A SYMBOL | DESCRIPTION legend at `x0`: each row's words and drawing.
     fn legend(&mut self, x0: f64, rows: &[(&str, Vec<Stroke>)]) {
         self.text([x0 + 1.0, 20.0], "SYMBOL");
@@ -496,4 +518,38 @@ fn hostile_plans_and_tables_do_not_panic() {
     assert!(set.s.execute("bim.symbol.set", &json!({"action": "off", "id": "nothing"})).is_err());
     assert!(set.s.execute("bim.symbol.set", &json!({"action": "fly"})).is_err());
     assert!(set.s.execute("bim.symbol.revert", &json!({"change": 999_999})).is_err());
+}
+
+/// The hotel's first run (Q6484): an electrical legend speaks for the electrical plans, not a
+/// mechanical plan's look-alikes; a sheet printed as several views is searched whole; the
+/// second line of a wrapped note (`FIXTURE TO SWITCH LEG "A")`) is no legend row of its own.
+#[test]
+fn only_the_legends_own_trade_plans_are_searched_whole_and_wrapped_notes_are_no_rows() {
+    let mut set = Set::new();
+    set.sheet("E-001", "legend", true, |set, x0| {
+        set.legend(x0, &[("SPECIAL PURPOSE RECEPTACLE", special()), ("LOWER CASE LETTERING INDICATES SWITCHING (I.E. CONNECT LIGHT", Vec::new())]);
+        // The note's second line, with a letter drawn as strokes in its symbol cell.
+        let y = 19.7 - 0.3 - 1.4 * TEXT_H;
+        set.text([x0 + 1.6, y], "FIXTURE TO SWITCH LEG \"A\")");
+        set.draw(&hexagon(), [x0 + 1.2, y + 0.04], 0);
+    });
+    set.sheet("M-101", "plan", true, |set, x0| {
+        let (lo, _) = set.room([x0 + 2.0, 2.0], [x0 + 30.0, 20.0]);
+        set.draw(&special(), [lo[0] + 0.06, 6.0], 0);
+        set.draw(&hexagon(), [x0 + 10.0, 10.0], 0);
+    });
+    set.retag("M", &[]);
+    set.sheet("E-102", "plan", true, |set, x0| {
+        let (lo, hi) = set.room([x0 + 2.0, 2.0], [x0 + 30.0, 20.0]);
+        set.draw(&special(), [lo[0] + 0.06, 6.0], 0);
+        set.draw(&special(), [hi[0] - 0.06, 6.0], 2);
+        set.draw(&hexagon(), [x0 + 10.0, 10.0], 0);
+    });
+    let x0 = set.next_x - SHEET_W - 4.0;
+    set.retag("E", &[[x0, 0.0, x0 + 18.0, SHEET_H], [x0 + 18.0, 0.0, x0 + SHEET_W, SHEET_H]]);
+    let found = set.search(&shipped(), None);
+    let got: Vec<String> = found.added.iter().map(|dv| format!("{} {}", dv.sheet, dv.kind)).collect();
+    assert_eq!(got, ["E-102 receptacle", "E-102 receptacle"], "{:#?}", found.added);
+    let t = symtable::stored(set.s.doc().unwrap());
+    assert!(t.entries.iter().all(|e| !e.name.contains("SWITCH LEG")), "{:?}", t.entries.iter().map(|e| &e.name).collect::<Vec<_>>());
 }

@@ -10940,10 +10940,12 @@ fn plan_symbols(
     let mut out = PlanSymbols::default();
     // The table: the library, the legends' rows, the answers.
     let (templates, _) = legend_templates(pages);
+    let wrapped = wrapped_note_lines(pages);
     let legend: Vec<super::symtable::LegendDrawing> = {
         let d = s.doc()?;
         templates
             .iter()
+            .filter(|tp| !wrapped.contains(&(tp.sheet.clone(), tp.row.trim().to_string())))
             .map(|tp| super::symtable::LegendDrawing {
                 sheet: tp.sheet.clone(),
                 row: tp.row.clone(),
@@ -10974,7 +10976,7 @@ fn plan_symbols(
     super::symtable::keep(s.doc_mut()?, &table).map_err(|e| bad("bim_build", format!("symbol table: {e}")))?;
     // The plans.
     let d = s.doc()?;
-    let disciplines = cadaddy_mepfix::wordrules::words("sheets.device_disciplines");
+    let disciplines = super::symtable::plan_disciplines();
     let fire_alarm = fire_alarm_sheets(job);
     let sheet_numbers = job_sheet_numbers(job);
     let read_handles: BTreeSet<String> = job.devices.iter().map(|dv| dv.handle.to_ascii_uppercase()).filter(|h| !h.is_empty()).collect();
@@ -10989,12 +10991,14 @@ fn plan_symbols(
     let mut hits_by_entry: BTreeMap<usize, usize> = BTreeMap::new();
     let mut done: BTreeSet<String> = BTreeSet::new();
     let refs = job_sheet_refs(job);
-    for sh in refs.iter().filter(|r| r.view.is_none()) {
+    // Each sheet once, whole (a sheet of several views is a region per view).
+    for sh in refs.iter().map(|r| super::printmep::SheetRef { view: None, ..r.clone() }) {
+        let sh = &sh;
         let key = sheet_key(&sh.number);
         let number = sh.number.split('/').next().unwrap_or(&sh.number).trim().to_string();
         let discipline = sh.discipline.trim().to_ascii_uppercase();
         if !matches!(sh.kind.as_str(), "plan" | "enlarged_plan")
-            || !disciplines.contains(&discipline.as_str())
+            || !disciplines.contains(&discipline)
             || fire_alarm.contains(&number.to_ascii_uppercase())
             || !done.insert(key.clone())
         {
@@ -11206,6 +11210,35 @@ fn plan_symbols(
     }
     Ok(out)
 }
+
+/// The legends' description lines that carry on a note from the line over them (a note no
+/// device is: `LOWER CASE LETTERING INDICATES ... (I.E. CONNECT LIGHT` over `FIXTURE TO SWITCH
+/// LEG "A")`): by sheet and words. Their words name no device of their own, whatever they say.
+fn wrapped_note_lines(pages: &[(String, cadaddy_doc::Drawing)]) -> BTreeSet<(String, String)> {
+    let mut out = BTreeSet::new();
+    for (number, sub) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+        for tb in legend_tables(&texts) {
+            let mut rows: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = tb.rows.clone();
+            rows.sort_by(|a, b| b.at.y.total_cmp(&a.at.y));
+            // Each line under a note (or under a line of one) within a line's spacing.
+            let mut in_note = false;
+            for w in rows.windows(2) {
+                let [above, line] = w else { continue };
+                let h = above.height.max(line.height).max(1e-9);
+                let note = in_note || legend_kind(&above.value).is_none();
+                in_note = note && (above.at.y - line.at.y) <= WRAPPED_LINE_H * h;
+                if in_note {
+                    out.insert((number.clone(), line.value.trim().to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A description line this many of its heights under the one over it carries that one on.
+const WRAPPED_LINE_H: f64 = 1.7;
 
 /// Learn a symbol question's answer: its drawing is that kind on this set (a `symdraw:` rule).
 fn learn_symbol_answer(job: &mut GuidedJob, q: &Question) {
