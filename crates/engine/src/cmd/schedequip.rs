@@ -595,7 +595,7 @@ pub(crate) fn type_built(rows: &[Scheduled], equipment: &mut [MepEquipment], roo
             (shared, usize::from(serves_many(&s)))
         };
         let mut ranked: Vec<((usize, usize), &Scheduled)> = same.iter().map(|x| (score(x), *x)).collect();
-        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        ranked.sort_by_key(|r| std::cmp::Reverse(r.0));
         let pick = match ranked.as_slice() {
             [only] => Some((only.1, "the only row of its kind".to_string())),
             [first, second, ..] if first.0 > second.0 && (first.0.0 > 0 || first.0.1 > 0) => {
