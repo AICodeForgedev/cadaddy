@@ -75,7 +75,8 @@ pub fn whole_set_first(app: &mut CadApp, name: &str, then: impl FnOnce(&mut CadA
     true
 }
 
-/// Each frame: a print set with no sheet open opens on its first one (its sheet list beside it).
+/// Each frame: a print set with no sheet open opens on its first one, fitted to the drawing area.
+/// Its sheet list waits on the rail: opening a file opens no palette by itself.
 /// With sheets on demand, putting the other sheets out of memory runs on a worker thread when
 /// most of the set is still in memory (a job just finished, a file saved before sheet sections).
 pub fn open_first_sheet(app: &mut CadApp) {
@@ -84,7 +85,7 @@ pub fn open_first_sheet(app: &mut CadApp) {
     let heavy = wants && s.doc().is_ok_and(|d| d.model.len() > PARK_ON_UI_THREAD);
     if !heavy || !busy::backgrounds_anything() {
         if app.session.open_first_sheet() {
-            crate::sheetsets::open_sheet_list(app);
+            app.canvas.zoom_pending = true;
         }
         return;
     }
@@ -97,7 +98,7 @@ pub fn open_first_sheet(app: &mut CadApp) {
         Box::new(|s| Ok(json!({ "opened": s.open_first_sheet() }))),
         Box::new(|app, r| {
             if r.is_ok_and(|v| v["opened"] == json!(true)) {
-                crate::sheetsets::open_sheet_list(app);
+                app.canvas.zoom_pending = true;
             }
         }),
     );

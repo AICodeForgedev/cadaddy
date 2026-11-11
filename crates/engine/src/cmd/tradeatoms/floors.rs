@@ -276,10 +276,15 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
     let upf = ctx.upf;
     // The built floors by level (their top polygons).
     let mut floors: Vec<(String, Handle, Vec<Vec<Vec2>>, f64)> = Vec::new();
+    // Each floor element's build-up as the build made it (Q6408): its topping and deck.
+    let mut built: HashMap<Handle, super::super::floorasm::Built> = HashMap::new();
     for e in d.model.iter().filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("floor")).take(MAX_ELEMENTS) {
         let EntityKind::Mesh(m) = &e.kind else { continue };
         if let Some((polys, z)) = floor_top(m) {
             floors.push((super::super::bspec::made_level(e).unwrap_or_default(), e.handle, polys, z));
+        }
+        if let Some(b) = super::super::floorasm::of_element(e).filter(|b| b.framed) {
+            built.insert(e.handle, b);
         }
     }
     let mut levels: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
@@ -319,7 +324,10 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
         }
     }
     if want("framing") {
-        let joists = r.fact("framing.floor_framing").is_some() || !r.is_default("framing.joist_spacing_in");
+        // Framed by the documents: their floor framing, or a floor whose own notes name the
+        // joists under its deck (Q6408).
+        let joists =
+            r.fact("framing.floor_framing").is_some() || !r.is_default("framing.joist_spacing_in") || built.values().any(|b| b.member.is_some());
         let mut framed = 0;
         // The walls the floors bear on: each floor's joists span between the lines of the
         // storey's walls under it that carry them.
@@ -350,7 +358,7 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
                 if under.is_empty() {
                     under = walls.iter().filter(|w| w.level.eq_ignore_ascii_case(lv)).filter(over).collect();
                 }
-                framed_floor(lv, *h, polys, *z, &under, sp, r, upf, batch);
+                framed_floor(lv, *h, polys, *z, built.get(h), &under, sp, r, upf, batch);
                 framed += 1;
             }
         }
@@ -1101,6 +1109,7 @@ fn framed_floor(
     host: Handle,
     polys: &[Vec<Vec2>],
     top: f64,
+    built: Option<&super::super::floorasm::Built>,
     walls: &[&super::walls::Wall],
     sp: &BuildingSpec,
     r: &Rules,
@@ -1108,12 +1117,43 @@ fn framed_floor(
     batch: &mut Batch,
 ) {
     let Some((lo, hi)) = bounds_of(polys) else { return };
-    let fj = floor_joists(r, level);
+    let mut fj = floor_joists(r, level);
+    // A floor whose own notes give its joists' depth, where the documents' framing gives none
+    // for it (Q6408).
+    if fj.depth_from == "default"
+        && let Some((d, member)) = built.and_then(|b| b.member.clone()).filter(|(d, _)| (4.0..=48.0).contains(d))
+    {
+        let src = Source::from_doc(SourceKind::Note, built.map_or("", |b| b.basis.as_str()));
+        fj.depth = d;
+        fj.depth_src = src.clone();
+        fj.depth_from = "level";
+        fj.member = member;
+        if r.fact("framing.floor_framing").is_none() {
+            fj.src = src;
+        }
+    }
     let (spacing, depth, series) = (fj.spacing, fj.depth, fj.series.clone());
     let j_src = fj.src.clone();
-    let sub_t = r.num("framing.subfloor_in", 0.75) / 12.0 * upf;
+    // The floor element is the floor's topping and deck, its top the finished floor (Q6408): the
+    // underlayment and the subfloor are its layers and the joists stand under them. A floor the
+    // build gave no build-up has the rules' subfloor and the documents' underlayment.
+    let (built_topping, built_deck) = built.map_or((None, None), |b| (b.topping_in, b.deck_in));
+    let underlayment = match (built, built_topping) {
+        (Some(b), Some(t)) => Some((
+            t,
+            r.fact("concrete.underlayment_in")
+                .filter(|f| f.number == Some(t))
+                .map_or_else(|| Source::from_doc(SourceKind::Note, &b.basis), |f| f.source_of()),
+        )),
+        (Some(_), None) => None,
+        (None, _) => r.fact("concrete.underlayment_in").and_then(|f| f.number.map(|n| (n, f.source_of()))),
+    };
+    let sub_in = built_deck.unwrap_or_else(|| r.num("framing.subfloor_in", 0.75));
+    let top_t = underlayment.as_ref().map_or(0.0, |u| u.0) / 12.0 * upf;
+    let sub_t = sub_in / 12.0 * upf;
     let dz = depth / 12.0 * upf;
-    let (z1, z0) = (top - sub_t, top - sub_t - dz);
+    let deck_top = top - top_t;
+    let (z1, z0) = (deck_top - sub_t, deck_top - sub_t - dz);
     // Joists span the shorter way: they run across the long side, spaced along it.
     let along_x = hi.x - lo.x >= hi.y - lo.y;
     let dir = if along_x { Vec2::new(0.0, 1.0) } else { Vec2::new(1.0, 0.0) };
@@ -1204,27 +1244,33 @@ fn framed_floor(
         p.blocks.push(Block::new(a, b, 1.25 / 12.0 * upf, z0, z1));
         batch.push(p);
     }
+    let first = batch.pieces.len();
     panels(
         polys,
         "framing",
         "sheathing",
-        &format!("{} subfloor panel", inches_text(r.num("framing.subfloor_in", 0.75))),
+        &format!("{} subfloor panel", inches_text(sub_in)),
         r,
         "framing.subfloor_in",
         level,
         host,
-        &|_, _| (z1, top),
+        &|_, _| (z1, deck_top),
         upf,
         batch,
     );
-    if let Some(u) = r.fact("concrete.underlayment_in").and_then(|f| f.number.map(|n| (n, f.source_of()))) {
+    if built_deck.is_some_and(|d| (d - r.num("framing.subfloor_in", 0.75)).abs() > 1e-9) {
+        for p in batch.pieces.iter_mut().skip(first) {
+            p.size = inches_text(sub_in);
+        }
+    }
+    if let Some(u) = underlayment {
         let area = area_of(polys) / (upf * upf);
         let mut p = Piece::new("concrete", "underlayment", format!("{} gypsum cement underlayment", inches_text(u.0)), level, u.1);
         p.host = Some(host);
         p.size = inches_text(u.0);
         p.area_sf = area;
         p.volume_cf = area * u.0 / 12.0;
-        p.custom = Some(prism(polys, top, top + u.0 / 12.0 * upf));
+        p.custom = Some(prism(polys, deck_top, top));
         batch.push(p);
     }
 }

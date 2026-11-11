@@ -1995,6 +1995,24 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 .collect()
         })
         .unwrap_or_default();
+    // Each pipe system's trade by what it carries (Q6492): refrigerant, condensate and hydronic
+    // piping are the mechanical trade's, by the system's name or its mechanical layer.
+    let pipe_systems: BTreeMap<String, &'static str> = current(s, "bim.bom")
+        .map(|(sp, _)| {
+            sp.mep
+                .systems
+                .iter()
+                .filter(|x| x.kind == cadaddy_walk3d::MepKind::Pipe)
+                .map(|x| (x.name.clone(), cadaddy_walk3d::pipeservice::pipe_trade(&x.name, &x.layer)))
+                .collect()
+        })
+        .unwrap_or_default();
+    // A row's system as the spec names it (`CW (inferred)` is `CW`, Q6216).
+    let pipe_trade = |v: &Value| -> Option<&'static str> {
+        let sys = v["system"].as_str().unwrap_or_default().trim();
+        let base = sys.rsplit_once(" (").filter(|(_, t)| t.ends_with(')')).map_or(sys, |(b, _)| b.trim_end());
+        pipe_systems.get(base).copied()
+    };
     let Ok(q) = s.execute("mep.qty", &json!({ "group_by": "level_system" })) else { return };
     let ours = |v: &Value| v["system"].as_str().is_some_and(|x| raceway.iter().any(|r| r == x));
     let arr = |k: &str| q[k].as_array().cloned().unwrap_or_default();
@@ -2041,7 +2059,13 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         );
     }
     for p in arr("pipes").into_iter().filter(|p| !matches!(p["kind"].as_str(), Some("conduit" | "cable"))) {
-        let trade = if p["kind"].as_str() == Some("tray") { "electrical" } else { "plumbing" };
+        let trade = match p["kind"].as_str() {
+            Some("tray") => "electrical",
+            _ => match pipe_trade(&p).unwrap_or_else(|| cadaddy_walk3d::pipeservice::pipe_trade(&st(&p, "system"), "")) {
+                "mechanical" => "mechanical",
+                _ => "plumbing",
+            },
+        };
         add(
             lines,
             Line {
@@ -2059,10 +2083,15 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         );
     }
     for f in arr("fittings").into_iter().filter(|f| !ours(f)) {
+        // A pipe's fittings are bought by the trade that installs the pipe.
+        let trade = match pipe_trade(&f) {
+            Some("mechanical") | None => "mechanical",
+            Some(_) => "plumbing",
+        };
         add(
             lines,
             Line {
-                trade: "mechanical",
+                trade,
                 category: "fittings".into(),
                 item: format!("{} {}", st(&f, "system"), st(&f, "type")),
                 size: st(&f, "size"),

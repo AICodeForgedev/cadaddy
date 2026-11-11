@@ -19,6 +19,7 @@ pub mod audit;
 pub mod autosave;
 pub mod batch;
 pub mod blockedit;
+pub(crate) mod chunkpool;
 pub mod cmd;
 pub mod control_auth;
 pub mod crash_report;
