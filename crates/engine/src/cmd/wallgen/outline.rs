@@ -1244,8 +1244,8 @@ mod tests {
         (walls, shell)
     }
 
-    /// The building's floor inside its walls (6"), less the notch: what the lounge is.
-    const LOUNGE_SF: f64 = 59.5 * 23.5 + 19.5 * 6.0 + 21.5 * 6.0;
+    /// The building's floor inside its walls (6"), less the notch: the room's floor.
+    const INSIDE_SF: f64 = 59.5 * 23.5 + 19.5 * 6.0 + 21.5 * 6.0;
 
     #[test]
     fn a_canopy_notch_outside_a_storefront_is_no_rooms_pocket() {
@@ -1257,13 +1257,13 @@ mod tests {
         let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
         let (n, rects) = f.room_at(p(10.0, 10.0)).unwrap();
         let before = sf_of(rects);
-        assert!((before - LOUNGE_SF).abs() < 15.0, "{before} sf, not {LOUNGE_SF}");
-        // The notch behind the 3'-6" door is floor no label traced, 108 sf, touching the lounge
-        // only: a pocket. It is outdoors (open to the north), so the lounge doesn't take it in.
+        assert!((before - INSIDE_SF).abs() < 15.0, "{before} sf, not {INSIDE_SF}");
+        // The notch behind the 3'-6" door is floor no label traced, 108 sf, touching the room
+        // only: a pocket. It is outdoors (open to the north), so the room doesn't take it in.
         let joined = f.join_pockets(&[]);
-        assert!(joined.iter().all(|(m, r)| *m != n || sf_of(r) < LOUNGE_SF + 15.0), "the notch went in: {joined:?}");
-        assert!(sf_of(f.rects(n).unwrap()) < LOUNGE_SF + 15.0);
-        // Its own label (a patio's) traces it: outdoors, not the lounge.
+        assert!(joined.iter().all(|(m, r)| *m != n || sf_of(r) < INSIDE_SF + 15.0), "the notch went in: {joined:?}");
+        assert!(sf_of(f.rects(n).unwrap()) < INSIDE_SF + 15.0);
+        // Its own label (a patio's) traces it: outdoors, not the room.
         assert!(f.room_at(notch).map(|r| r.0) != Ok(n));
     }
 
@@ -1276,14 +1276,14 @@ mod tests {
         let mut f = Floors::with_openings(&walls, &shell, 12.0, &[], &shut).unwrap();
         let (n, rects) = f.room_at(p(10.0, 10.0)).unwrap();
         let area = sf_of(rects);
-        // Shut, the doors keep the outside out: the lounge is its floor, the notch no part of it.
-        assert!((area - LOUNGE_SF).abs() < 20.0, "{area} sf, not {LOUNGE_SF}");
+        // Shut, the doors keep the outside out: the room is its floor, the notch no part of it.
+        assert!((area - INSIDE_SF).abs() < 20.0, "{area} sf, not {INSIDE_SF}");
         assert!(f.room_at(p(29.0, 27.5)).map(|r| r.0) != Ok(n));
-        // Its doors not known, nothing tells the lounge from the outside it opens onto: traced
+        // Its doors not known, nothing tells the room from the outside it opens onto: traced
         // as before (the notch in).
         let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
         let area = sf_of(f.room_at(p(10.0, 10.0)).unwrap().1);
-        assert!(area > LOUNGE_SF + 80.0, "{area} sf");
+        assert!(area > INSIDE_SF + 80.0, "{area} sf");
     }
 
     #[test]

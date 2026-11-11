@@ -481,8 +481,8 @@ fn canopy_notch_floor(s: &mut Session) {
     }
     s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
     text(s, [300.0, 50.0], "CORRIDOR");
-    text(s, [100.0, 200.0], "LOUNGE");
-    text(s, [100.0, 170.0], "110");
+    text(s, [100.0, 200.0], "CAFE");
+    text(s, [100.0, 170.0], "190");
 }
 
 /// Q6342: a room traced on its storey's floor stops at the storefront: the canopy notch outside
@@ -497,25 +497,25 @@ fn a_room_stops_at_its_storefront_not_at_the_canopy_outside_it() {
     let levels = json!([{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0, "region": L1}]);
     s.execute("bspec.draft", &json!({"store": true, "levels": levels, "stack": true})).unwrap();
     let mut spec = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
-    spec["rooms"] = json!([{"name": "LOUNGE", "number": "110"}, {"name": "CORRIDOR", "number": "100"}]);
+    spec["rooms"] = json!([{"name": "CAFE", "number": "190"}, {"name": "CORRIDOR", "number": "100"}]);
     spec["circulation"] =
         json!([{"kind": "corridor", "level": "Level 1", "name": "CORRIDOR", "at": [300.0, 50.0], "rects": [[[6.0, 6.0], [714.0, 96.0]]]}]);
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
     let r = s.execute("model.build", &json!({})).unwrap();
     let list = s.execute("rooms.list", &json!({"outline": true})).unwrap();
     let rooms = list["rooms"].as_array().unwrap();
-    let lounge = rooms.iter().find(|x| x["number"] == json!("110")).unwrap_or_else(|| panic!("{list} {r}"));
+    let room = rooms.iter().find(|x| x["number"] == json!("190")).unwrap_or_else(|| panic!("{list} {r}"));
     // Inside its walls: 59' × 15'-2" north of the corridor, and the 19' and 21' wings each side of
     // the notch, 6' deep; the notch (18' × 6', 108 sf) not.
     let want = (708.0 * 182.0 + 228.0 * 72.0 + 252.0 * 72.0) / 144.0;
-    let area = lounge["areaSqFt"].as_f64().unwrap();
+    let area = room["areaSqFt"].as_f64().unwrap();
     assert!(area > 0.9 * want && area < want + 30.0, "{area} sf, not {want:.0}: {list}");
-    let top = lounge["outline"]
+    let top = room["outline"]
         .as_array()
         .unwrap()
         .iter()
         .filter(|p| p[0].as_f64().is_some_and(|x| x > 250.0 && x < 446.0))
         .filter_map(|p| p[1].as_f64())
         .fold(f64::NEG_INFINITY, f64::max);
-    assert!(top < 290.0, "the lounge reaches y {top} over the canopy: {list}");
+    assert!(top < 290.0, "the room reaches y {top} over the canopy: {list}");
 }
