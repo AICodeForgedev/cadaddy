@@ -398,7 +398,6 @@ fn the_take_off_buys_what_the_code_rules_decided() {
     let a = tags.iter_mut().find(|t| t["fields"]["type"]["value"] == "A").unwrap();
     a["kind"] = json!("receptacle");
     a["fields"]["device_type"] = json!({"value": "GFCI receptacle", "source": "rule"});
-    let id = a["id"].as_str().unwrap().to_string();
     let sched = json!({"tags": tags, "mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
         "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF", "GF"], "source": "E-601"}]}]}});
     s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
@@ -406,6 +405,8 @@ fn the_take_off_buys_what_the_code_rules_decided() {
     let ha = find(&mut s, "device", json!({"type_mark": "A"}));
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
     s.execute("bim.coderules", &json!({})).unwrap();
+    // Its line lists its element (fix-bom-device-lines-ignore-element-edits).
+    let id = ha[0].clone();
     let item = |s: &mut Session| -> String {
         let b = s.execute("bim.bom", &json!({})).unwrap();
         let on = |l: &&Value| l["category"] == "devices" && l["elements"].as_array().is_some_and(|e| e.iter().any(|x| x == id.as_str()));

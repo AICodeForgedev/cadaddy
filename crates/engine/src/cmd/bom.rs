@@ -14,7 +14,10 @@
 //! - **Electrical** from the element tags (Q299): luminaires by schedule type, devices by type,
 //!   a box, plaster ring and plate per wall device, wire from each homerun's conductors over its
 //!   route (plus makeup at each end), and branch conduit by material and size with its couplings,
-//!   connectors, straps and elbows, each by a stated rule.
+//!   connectors, straps and elbows, each by a stated rule. A device the model built is counted
+//!   from its elements as they stand (`devid:`): once per element, by its handle, its level and
+//!   a person's edits to it, so an erase, copy, move or `bim.props.set` is on the line the same
+//!   as `bim.count` sees it; a tag never built is counted as read.
 //! - **Mechanical and plumbing** from `mep.qty` (Q269): duct by size and gauge (ft, sq ft, lb),
 //!   pipe by system and size, fittings, terminals, equipment, hangers.
 //! - **Drywall** from `drywall.takeoff` (Q294) where the walls have assemblies.
@@ -324,6 +327,57 @@ fn product_index(d: &cadaddy_doc::Drawing) -> (BTreeMap<String, Product>, BTreeM
     (by_tag, by_name)
 }
 
+/// A built device element as its BOM line counts it (fix-bom-device-lines-ignore-element-edits):
+/// its handle, its level, its product, and the values a person set on it (`bim.props.set`,
+/// source `user`), which outrank what its spec tag was read as.
+#[derive(Clone, Debug, Default)]
+struct BuiltDevice {
+    handle: String,
+    level: String,
+    product: Product,
+    /// A person's `type_mark`, `type` (its device type words) and `circuit`, when set.
+    type_mark: Option<String>,
+    device_type: Option<String>,
+    circuit: Option<String>,
+}
+
+/// The model's device elements by the spec tag they were built from (`devid:`), as they stand
+/// now: an erased device is none of them, a copied one another of its tag's. `None` when the
+/// model has no device elements (the spec's tags are counted as read).
+fn built_devices(d: &cadaddy_doc::Drawing) -> Option<BTreeMap<String, Vec<BuiltDevice>>> {
+    use cadaddy_doc::props::SourceKind;
+    let mut out: BTreeMap<String, Vec<BuiltDevice>> = BTreeMap::new();
+    let mut any = false;
+    // Built elements only, before the cap (a print set's linework comes first).
+    for e in d.model.iter().filter(|e| super::bimlook::made_tags(e).is_some()).take(MAX_LINES) {
+        if !super::wallgen::made_as(e).is_some_and(|p| p.eq_ignore_ascii_case("device")) {
+            continue;
+        }
+        any = true;
+        let Some(id) = super::bimlook::made_tag(e, super::propfill::DEVID).filter(|i| !i.is_empty()) else { continue };
+        let store = cadaddy_doc::props::read(&e.common.xdata);
+        let by_person = |k: &str| {
+            store
+                .get(k)
+                .filter(|p| p.has_value() && p.source.kind == SourceKind::User)
+                .map(|p| p.text().trim().chars().take(200).collect::<String>())
+                .filter(|v| !v.is_empty())
+        };
+        let v = out.entry(id.to_string()).or_default();
+        if v.len() < MAX_LINE_ELEMENTS {
+            v.push(BuiltDevice {
+                handle: e.handle.hex(),
+                level: super::bspec::made_level(e).map(|l| l.trim().to_string()).unwrap_or_default(),
+                product: element_product(e),
+                type_mark: by_person("type_mark"),
+                device_type: by_person("type"),
+                circuit: by_person("circuit"),
+            });
+        }
+    }
+    any.then_some(out)
+}
+
 /// Add `l` into `lines`, merging with an equal line (same trade, category, item, size, level).
 fn add(lines: &mut Vec<Line>, l: Line) {
     if l.net <= 0.0 || lines.len() >= MAX_LINES {
@@ -509,8 +563,11 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
         .filter(|t| t.kind == lv && t.fields.get("built").is_some_and(|f| f.value == "yes"))
         .filter_map(|t| t.fields.get("devid").map(|f| f.value.clone()).filter(|v| !v.is_empty()))
         .collect();
-    let product_of = |t: &cadaddy_walk3d::tags::ElementTag, mark: Option<&str>| -> Product {
-        let mut p = built_products.get(&t.id).cloned().unwrap_or_default();
+    // The device elements as they stand (fix-bom-device-lines-ignore-element-edits): a built
+    // device's line counts its tag's elements now in the model, never the tag as read.
+    let standing = s.doc().ok().and_then(built_devices);
+    let product_of = |t: &cadaddy_walk3d::tags::ElementTag, el: Option<&BuiltDevice>, mark: Option<&str>| -> Product {
+        let mut p = el.map(|e| e.product.clone()).or_else(|| built_products.get(&t.id).cloned()).unwrap_or_default();
         let mark = if p.type_mark.is_empty() { mark.map(str::to_string).unwrap_or_default() } else { p.type_mark.clone() };
         if let Some(c) = s.doc().ok().and_then(|d| catalog_product(d, &mark)) {
             p.fill(&c);
@@ -526,122 +583,174 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
         if t.kind == lv || t.kind == super::conduitroute::fa::TAG_KIND {
             continue;
         }
-        let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
-        let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user" | "legend") { "firm" } else { "rule" };
-        // Its circuit, when what was read beside it is one (`D-7`, not a sheet number).
-        let on = f("circuit").map(|c| c.0).filter(|c| super::printcond::parse_circuit(c).is_some()).unwrap_or_default();
-        // Another trade's element: listed by others, our part of it on our lines.
-        if let Some(dec) = super::scope::tag_class(sr, t).and_then(|c| scope.iter().find(|d| d.class == c.class)).filter(|d| d.by_others()) {
-            let fa_kind = f("fa_kind").map(|v| v.0).unwrap_or_default();
-            let ours = dec.ours_for(&t.kind, &fa_kind);
-            let what = if fa_kind.is_empty() {
-                f("device_type").map_or_else(|| t.kind.replace('_', " "), |v| v.0)
-            } else {
-                format!("{fa_kind} {}", f("type").map(|v| v.0).unwrap_or_default()).trim().to_string()
-            };
-            others_entry(others, dec, &t.id, &what, &t.level, &ours);
-            let ours: Vec<super::scope::OurItem> =
-                if by_atoms && piped.contains(&t.id) { ours.into_iter().filter(|i| i.item != "conduit").collect() } else { ours };
-            rough_in_lines(lines, dec, &ours, by_atoms, &t.id, &t.level, &on);
-            continue;
-        }
-        match t.kind.as_str() {
-            "luminaire" => {
-                let (ty, src) = f("type").unwrap_or_else(|| ("UNTAGGED".into(), "default".into()));
-                let desc = described.get(&ty).cloned().unwrap_or_default();
-                let product = product_of(t, (src != "default").then_some(ty.as_str()));
-                add(
-                    lines,
-                    Line {
-                        trade: "electrical",
-                        category: "fixtures".into(),
-                        item: format!("Luminaire type {ty}"),
-                        size: desc,
-                        unit: "each",
-                        net: 1.0,
-                        status: firm(&src),
-                        rule: None,
-                        level: t.level.clone(),
-                        elements: vec![t.id.clone()],
-                        waste_qty: None,
-                        circuit: String::new(),
-                        product,
-                        made: "",
-                    },
-                );
+        // A device the model builds: once per element built from it that stands now (none when
+        // erased, two when copied), each by its own handle and level and what a person set on
+        // it; a tag the model has no element of (never built) once, as read.
+        let units: Vec<Option<&BuiltDevice>> = match &standing {
+            Some(b) if super::propfill::read_device(t) || b.contains_key(&t.id) => {
+                b.get(&t.id).map(|v| v.iter().map(Some).collect()).unwrap_or_default()
             }
-            "homerun" | "conduit" | "circuit" => {}
-            kind => {
-                let (ty, src) = f("device_type").unwrap_or_else(|| (kind.replace('_', " "), "plan".into()));
-                let mut product = product_of(t, f("type").map(|m| m.0).as_deref());
-                let ty = match protocols.get(&t.id) {
-                    Some(p) => {
-                        if product.dimming.is_empty() && p.settled() {
-                            product.dimming = dimming_word(&p.protocol);
-                        }
-                        dimmer_item(&ty, p)
-                    }
-                    None => ty,
+            _ => vec![None],
+        };
+        for el in units {
+            let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
+            let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user" | "legend") { "firm" } else { "rule" };
+            // Its circuit, when what was read beside it is one (`D-7`, not a sheet number).
+            let on = el
+                .and_then(|e| e.circuit.clone())
+                .or_else(|| f("circuit").map(|c| c.0))
+                .filter(|c| super::printcond::parse_circuit(c).is_some())
+                .unwrap_or_default();
+            // The element's handle and level (its tag's, unbuilt).
+            let id = el.map_or_else(|| t.id.clone(), |e| e.handle.clone());
+            let level = el.map(|e| e.level.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| t.level.clone());
+            // Another trade's element: listed by others, our part of it on our lines.
+            if let Some(dec) = super::scope::tag_class(sr, t).and_then(|c| scope.iter().find(|d| d.class == c.class)).filter(|d| d.by_others()) {
+                let fa_kind = f("fa_kind").map(|v| v.0).unwrap_or_default();
+                let ours = dec.ours_for(&t.kind, &fa_kind);
+                let what = if fa_kind.is_empty() {
+                    f("device_type").map_or_else(|| t.kind.replace('_', " "), |v| v.0)
+                } else {
+                    format!("{fa_kind} {}", f("type").map(|v| v.0).unwrap_or_default()).trim().to_string()
                 };
-                let plumbing = kind == "plumbing_fixture";
-                add(
-                    lines,
-                    Line {
-                        trade: if plumbing { "plumbing" } else { "electrical" },
-                        category: if plumbing { "plumbing fixtures" } else { "devices" }.into(),
-                        item: ty,
-                        size: String::new(),
-                        unit: "each",
-                        net: 1.0,
-                        status: firm(&src),
-                        rule: None,
-                        level: t.level.clone(),
-                        elements: vec![t.id.clone()],
-                        waste_qty: None,
-                        circuit: on.clone(),
-                        product,
-                        made: "",
-                    },
-                );
-                if matches!(kind, "receptacle" | "switch" | "data_outlet") {
-                    let rule = "one box, plaster ring and plate per wall device (company default)".to_string();
-                    // The ring its wall needs (the built box's mud_ring), else the default.
-                    let ring = rings.get(&t.id).map(|v| format!("1 gang, {} deep", super::walltypes::frac(*v)));
-                    // A device sharing its box with others (the model's gangs): the box's one
-                    // plate, of its gangs, on the first of them.
-                    let gang = if by_atoms { plates.get(&t.id).copied() } else { None };
-                    let plate = gang.filter(|n| *n > 1).map_or_else(|| "1 gang".to_string(), |n| format!("{n} gang"));
-                    for (item, size) in [
-                        ("Box, 4\" square", "2-1/8\" deep".to_string()),
-                        ("Plaster ring", ring.clone().unwrap_or_else(|| "1 gang".into())),
-                        ("Device plate", plate),
-                    ]
-                    .into_iter()
-                    .filter(|(item, _)| !by_atoms || *item == "Device plate" && gang != Some(0))
+                others_entry(others, dec, &id, &what, &level, &ours);
+                let ours: Vec<super::scope::OurItem> =
+                    if by_atoms && piped.contains(&t.id) { ours.into_iter().filter(|i| i.item != "conduit").collect() } else { ours };
+                rough_in_lines(lines, dec, &ours, by_atoms, &id, &level, &on);
+                continue;
+            }
+            match t.kind.as_str() {
+                "luminaire" => {
+                    let (ty, src) = el
+                        .and_then(|e| e.type_mark.clone())
+                        .map(|m| (m, "user".to_string()))
+                        .or_else(|| f("type"))
+                        .unwrap_or_else(|| ("UNTAGGED".into(), "default".into()));
+                    let desc = described.get(&ty).cloned().unwrap_or_default();
+                    let product = product_of(t, el, (src != "default").then_some(ty.as_str()));
+                    add(
+                        lines,
+                        Line {
+                            trade: "electrical",
+                            category: "fixtures".into(),
+                            item: format!("Luminaire type {ty}"),
+                            size: desc,
+                            unit: "each",
+                            net: 1.0,
+                            status: firm(&src),
+                            rule: None,
+                            level: level.clone(),
+                            elements: vec![id.clone()],
+                            waste_qty: None,
+                            circuit: String::new(),
+                            product,
+                            made: "",
+                        },
+                    );
+                }
+                "homerun" | "conduit" | "circuit" => {}
+                kind => {
+                    let (ty, src) = el
+                        .and_then(|e| e.device_type.clone())
+                        .map(|v| (v, "user".to_string()))
+                        .or_else(|| f("device_type"))
+                        .unwrap_or_else(|| (kind.replace('_', " "), "plan".into()));
+                    let mark = el.and_then(|e| e.type_mark.clone()).or_else(|| f("type").map(|m| m.0));
+                    let mut product = product_of(t, el, mark.as_deref());
+                    let ty = match protocols.get(&t.id) {
+                        Some(p) => {
+                            if product.dimming.is_empty() && p.settled() {
+                                product.dimming = dimming_word(&p.protocol);
+                            }
+                            dimmer_item(&ty, p)
+                        }
+                        None => ty,
+                    };
+                    let plumbing = kind == "plumbing_fixture";
+                    add(
+                        lines,
+                        Line {
+                            trade: if plumbing { "plumbing" } else { "electrical" },
+                            category: if plumbing { "plumbing fixtures" } else { "devices" }.into(),
+                            item: ty,
+                            size: String::new(),
+                            unit: "each",
+                            net: 1.0,
+                            status: firm(&src),
+                            rule: None,
+                            level: level.clone(),
+                            elements: vec![id.clone()],
+                            waste_qty: None,
+                            circuit: on.clone(),
+                            product,
+                            made: "",
+                        },
+                    );
+                    if matches!(kind, "receptacle" | "switch" | "data_outlet") {
+                        let rule = "one box, plaster ring and plate per wall device (company default)".to_string();
+                        // The ring its wall needs (the built box's mud_ring), else the default.
+                        let ring = rings.get(&t.id).map(|v| format!("1 gang, {} deep", super::walltypes::frac(*v)));
+                        // A device sharing its box with others (the model's gangs): the box's one
+                        // plate, of its gangs, on the first of them.
+                        let gang = if by_atoms { plates.get(&t.id).copied() } else { None };
+                        let plate = gang.filter(|n| *n > 1).map_or_else(|| "1 gang".to_string(), |n| format!("{n} gang"));
+                        for (item, size) in [
+                            ("Box, 4\" square", "2-1/8\" deep".to_string()),
+                            ("Plaster ring", ring.clone().unwrap_or_else(|| "1 gang".into())),
+                            ("Device plate", plate),
+                        ]
+                        .into_iter()
+                        .filter(|(item, _)| !by_atoms || *item == "Device plate" && gang != Some(0))
+                        {
+                            let by_wall = item == "Plaster ring" && ring.is_some();
+                            let rule = if gang.is_some() && item == "Device plate" {
+                                format!("one plate per box: its {} ganged devices share it (the model's box)", gang.unwrap_or(1))
+                            } else {
+                                rule.clone()
+                            };
+                            add(
+                                lines,
+                                Line {
+                                    trade: "electrical",
+                                    category: "boxes".into(),
+                                    item: item.into(),
+                                    size,
+                                    unit: "each",
+                                    net: 1.0,
+                                    status: if by_wall { "model" } else { "rule" },
+                                    rule: Some(if by_wall {
+                                        "the box's wall type: the board and channels on its face (partition legend)".into()
+                                    } else {
+                                        rule
+                                    }),
+                                    level: level.clone(),
+                                    elements: vec![id.clone()],
+                                    waste_qty: None,
+                                    circuit: on.clone(),
+                                    product: Product::default(),
+                                    made: "",
+                                },
+                            );
+                        }
+                    } else if !on.is_empty()
+                        && !by_atoms
+                        && let Some((b, _)) = super::mepatoms::build::box_kind(kind, "").and_then(|k| super::mepatoms::rules().box_for(k, false))
                     {
-                        let by_wall = item == "Plaster ring" && ring.is_some();
-                        let rule = if gang.is_some() && item == "Device plate" {
-                            format!("one plate per box: its {} ganged devices share it (the model's box)", gang.unwrap_or(1))
-                        } else {
-                            rule.clone()
-                        };
+                        // Any other device wired on a circuit: its outlet box, as the model's pieces
+                        // would give it on raceway (none for equipment fed in its own compartment).
                         add(
                             lines,
                             Line {
                                 trade: "electrical",
                                 category: "boxes".into(),
-                                item: item.into(),
-                                size,
+                                item: b.item.clone(),
+                                size: format!("{} deep", super::walltypes::frac(b.depth_in).replace(' ', "-")),
                                 unit: "each",
                                 net: 1.0,
-                                status: if by_wall { "model" } else { "rule" },
-                                rule: Some(if by_wall {
-                                    "the box's wall type: the board and channels on its face (partition legend)".into()
-                                } else {
-                                    rule
-                                }),
-                                level: t.level.clone(),
-                                elements: vec![t.id.clone()],
+                                status: "rule",
+                                rule: Some(format!("one outlet box per device wired on a circuit: {}", super::mepatoms::rules().box_source)),
+                                level: level.clone(),
+                                elements: vec![id.clone()],
                                 waste_qty: None,
                                 circuit: on.clone(),
                                 product: Product::default(),
@@ -649,31 +758,6 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             },
                         );
                     }
-                } else if !on.is_empty()
-                    && !by_atoms
-                    && let Some((b, _)) = super::mepatoms::build::box_kind(kind, "").and_then(|k| super::mepatoms::rules().box_for(k, false))
-                {
-                    // Any other device wired on a circuit: its outlet box, as the model's pieces
-                    // would give it on raceway (none for equipment fed in its own compartment).
-                    add(
-                        lines,
-                        Line {
-                            trade: "electrical",
-                            category: "boxes".into(),
-                            item: b.item.clone(),
-                            size: format!("{} deep", super::walltypes::frac(b.depth_in).replace(' ', "-")),
-                            unit: "each",
-                            net: 1.0,
-                            status: "rule",
-                            rule: Some(format!("one outlet box per device wired on a circuit: {}", super::mepatoms::rules().box_source)),
-                            level: t.level.clone(),
-                            elements: vec![t.id.clone()],
-                            waste_qty: None,
-                            circuit: on.clone(),
-                            product: Product::default(),
-                            made: "",
-                        },
-                    );
                 }
             }
         }
