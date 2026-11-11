@@ -859,7 +859,7 @@ mod tests {
             table(
                 "GRILLE, REGISTER, AND DIFFUSER SCHEDULE",
                 &["MARK", "MANUFACTURER", "MODEL", "FACE SIZE (IN)"],
-                &[&["SD-1", "MAKER A", "PLAQUE", "12\"x12\""], &["RG-1", "MAKER A", "LOUVERED", "PER PLAN"], &["NOTES:", "", "", ""]],
+                &[&["SD-1", "MAKER A", "SQUARE CONE", "12\"x12\""], &["RG-1", "MAKER A", "BAR GRILLE", "SEE PLAN"], &["NOTES:", "", "", ""]],
             ),
             // Another office's: its type column last, another title; a mark already read keeps
             // its first row.
@@ -870,7 +870,7 @@ mod tests {
         let got = air_device_types(&tables);
         let marks: Vec<&str> = got.iter().map(|t| t.tag.as_str()).collect();
         assert_eq!(marks, ["SD-1", "RG-1", "LD-2"]);
-        assert_eq!(got[0].properties.get("MODEL").map(String::as_str), Some("PLAQUE"));
+        assert_eq!(got[0].properties.get("MODEL").map(String::as_str), Some("SQUARE CONE"));
         assert!(!got[0].properties.contains_key("MARK"));
         assert_eq!(got[2].properties.get("DESCRIPTION").map(String::as_str), Some("LINEAR SLOT"));
         assert_eq!(got[2].source, "M-0");

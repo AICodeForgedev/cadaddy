@@ -31,9 +31,9 @@ mod twinline;
 
 /// Runs and segments handled, at most (hostile drawings).
 pub(crate) const MAX_RUNS: usize = 20_000;
-/// The build property a terminal's plan-tag type mark goes in (`prop:TYPE MARK=SD-2`).
+/// The build property a terminal's plan-tag type mark goes in (`prop:TYPE MARK=SD-4`).
 pub(crate) const TERMINAL_MARK: &str = "TYPE MARK";
-/// The build property a terminal's plan-tag airflow goes in (`prop:CFM=415`).
+/// The build property a terminal's plan-tag airflow goes in (`prop:CFM=260`).
 pub(crate) const TERMINAL_CFM: &str = "CFM";
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).

@@ -62,7 +62,7 @@ pub struct DetectedTerminal {
     pub kind: String,
     pub at: Vec2,
     pub confidence: f64,
-    /// Its plan tag's type mark (`SD-2`, the air device schedule's row), empty when its tag has
+    /// Its plan tag's type mark (`SD-4`, the air device schedule's row), empty when its tag has
     /// none.
     pub mark: String,
     /// Its plan tag's (neck) size, inches: `[w, h]`, or `[d, 0]` round.
@@ -72,8 +72,8 @@ pub struct DetectedTerminal {
 }
 
 /// What an air device's plan tag says: its type mark, size and airflow. The tag is the mark
-/// with the lines stacked on it (`SD-2` over `12"x8"` over `415`, as a mechanical legend shows
-/// the type, size and CFM), or one line (`SD-2 12x8 415 CFM`). A bare number is an airflow
+/// with the lines stacked on it (`SD-4` over `10"x6"` over `260`, as a mechanical legend shows
+/// the type, size and CFM), or one line (`SD-4 10x6 260 CFM`). A bare number is an airflow
 /// only in a stack under (or over) a mark.
 pub fn tag_block(texts: &[(String, Vec2, String, f64)], i: usize) -> (String, Option<[f64; 2]>, Option<f64>) {
     let Some((t0, at0, _, h0)) = texts.get(i) else { return (String::new(), None, None) };
@@ -117,7 +117,7 @@ pub fn tag_block(texts: &[(String, Vec2, String, f64)], i: usize) -> (String, Op
     (mark, size, cfm)
 }
 
-/// An airflow in a text: `150 CFM`, `CFM: 150`, `1,225CFM`.
+/// An airflow in a text: `150 CFM`, `CFM: 150`, `1,480CFM`.
 pub fn cfm_value(t: &str) -> Option<f64> {
     let up = t.to_ascii_uppercase();
     let at = up.find("CFM")?;
@@ -128,7 +128,7 @@ pub fn cfm_value(t: &str) -> Option<f64> {
     (n.is_finite() && (10.0..=100_000.0).contains(&n)).then_some(n)
 }
 
-/// A line that is only a whole number of an air device's airflow (`415`, `1,225`).
+/// A line that is only a whole number of an air device's airflow (`260`, `1,480`).
 fn bare_airflow(t: &str) -> Option<f64> {
     let t = t.trim();
     if t.is_empty() || !t.chars().all(|c| c.is_ascii_digit() || c == ',') || t.starts_with('0') {
@@ -2539,10 +2539,10 @@ mod tests {
         // Three ways a plan tags an air device: the legend's stack of mark, neck size and a bare
         // airflow (under it, or over it); one line with the airflow in CFM; a mark alone.
         let texts = [
-            ("SD-2", [40.0, 4.0]),
-            ("12\"x8\"", [39.0, -1.0]),
-            ("415", [41.0, -6.0]),
-            ("1,225", [436.0, 10.0]),
+            ("SD-4", [40.0, 4.0]),
+            ("10\"x6\"", [39.0, -1.0]),
+            ("260", [41.0, -6.0]),
+            ("1,480", [436.0, 10.0]),
             ("RG-1", [440.0, 4.0]),
             ("10\"Ø", [440.0, -1.0]),
             ("EG-3 6x6 75 CFM", [840.0, 4.0]),
@@ -2557,8 +2557,8 @@ mod tests {
             vec![
                 ("CD-4".to_string(), None, None),
                 ("EG-3".to_string(), Some([6.0, 6.0]), Some(75.0)),
-                ("RG-1".to_string(), Some([10.0, 0.0]), Some(1225.0)),
-                ("SD-2".to_string(), Some([12.0, 8.0]), Some(415.0)),
+                ("RG-1".to_string(), Some([10.0, 0.0]), Some(1480.0)),
+                ("SD-4".to_string(), Some([10.0, 6.0]), Some(260.0)),
             ]
         );
     }
@@ -2570,7 +2570,7 @@ mod tests {
         };
         // A room number under an airflow line is no airflow of a mark; a number far below the
         // mark is not its tag's.
-        assert_eq!(tag_block(&t(&[("150 CFM", [0.0, 0.0]), ("236", [0.0, -5.0])]), 0), (String::new(), None, Some(150.0)));
+        assert_eq!(tag_block(&t(&[("150 CFM", [0.0, 0.0]), ("917", [0.0, -5.0])]), 0), (String::new(), None, Some(150.0)));
         assert_eq!(tag_block(&t(&[("SD-1", [0.0, 0.0]), ("300", [0.0, -40.0])]), 0), ("SD-1".to_string(), None, None));
         assert_eq!(tag_block(&t(&[("SD-1", [0.0, 0.0]), ("0300", [0.0, -5.0])]), 0).2, None);
         // The next tag's mark ends the stack: its airflow is not this one's.

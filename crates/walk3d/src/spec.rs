@@ -2250,7 +2250,7 @@ pub struct MepTerminal {
     /// installed beside the design value, with the reason and the rule.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub corrections: Vec<RunCorrection>,
-    /// Its type mark, as its plan tag gives it (`SD-2`: the air device schedule's row). Empty:
+    /// Its type mark, as its plan tag gives it (`SD-4`: the air device schedule's row). Empty:
     /// its tag names none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tag: String,

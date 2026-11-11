@@ -2110,7 +2110,7 @@ mod tests {
 
     #[test]
     fn an_air_devices_mark_says_which_air_it_moves_over_its_symbol() {
-        assert_eq!(super::terminal_kind_of("return_grille", "SD-2"), ("supply_diffuser".to_string(), "SA"));
+        assert_eq!(super::terminal_kind_of("return_grille", "SD-4"), ("supply_diffuser".to_string(), "SA"));
         assert_eq!(super::terminal_kind_of("supply_diffuser", "RG-1"), ("return_grille".to_string(), "RA"));
         assert_eq!(super::terminal_kind_of("supply_diffuser", "EG-1"), ("exhaust_grille".to_string(), "EA"));
         // A mark whose letters say nothing (`A1`), or none: the symbol's kind.

@@ -29,7 +29,7 @@ const MAX_ELEMENTS: usize = 500_000;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Served {
     pub unit: Handle,
-    /// The unit's tag (`DOAS-1`).
+    /// The unit's tag (`OAU-3`).
     pub tag: String,
     /// Derived (the network, the schedule) or inferred (the room's unit).
     pub made: Made,
@@ -116,9 +116,9 @@ fn name_words(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether `text` (a schedule's `SERVES`: `LOBBY/OFFICE`, `CORRIDORS, STAIRS`) names a room
+/// Whether `text` (a schedule's `SERVES`: `LOUNGE/LIBRARY`, `CORRIDORS, STAIRS`) names a room
 /// called `name`: one of its items is the room's name, every word of one within the other's
-/// (`STORAGE ROOMS` names `STORAGE`; `STAFF LAUNDRY` doesn't name `STAFF AREA`).
+/// (`STORAGE ROOMS` names `STORAGE`; `EAST LAUNDRY` doesn't name `EAST STAIR`).
 fn names_room(text: &str, name: &str) -> bool {
     let room = name_words(name);
     if room.is_empty() {
@@ -290,7 +290,7 @@ mod tests {
     }
 
     /// A damper on the duct is a piece of it: the unit past it serves the terminal, never the
-    /// damper (on the hotel set, terminals were said to be served by their fire dampers).
+    /// damper (a keynote's damper is built on its duct's system).
     #[test]
     fn the_network_passes_a_damper_to_the_unit_past_it() {
         let mut d = Drawing::new_imperial();
@@ -324,12 +324,12 @@ mod tests {
     #[test]
     fn a_schedule_names_a_room_by_any_of_its_words() {
         assert!(names_room("CORRIDORS", "201 CORRIDOR"));
-        assert!(names_room("CORRIDORS AND LOBBY", "LOBBY"));
-        assert!(names_room("LOBBY/OFFICE", "144 OFFICE"));
+        assert!(names_room("CORRIDORS AND LOUNGE", "LOUNGE"));
+        assert!(names_room("LOUNGE/LIBRARY", "905 LIBRARY"));
         assert!(names_room("STORAGE ROOMS", "102 STORAGE"));
         assert!(!names_room("GUEST ROOMS", "CORRIDOR"));
-        assert!(!names_room("STAFF LAUNDRY", "143 STAFF AREA"), "one shared word is not the room");
+        assert!(!names_room("EAST LAUNDRY", "906 EAST STAIR"), "one shared word is not the room");
         assert!(!names_room("", "CORRIDOR"));
-        assert!(!names_room("CORRIDORS", "143"));
+        assert!(!names_room("CORRIDORS", "907"));
     }
 }

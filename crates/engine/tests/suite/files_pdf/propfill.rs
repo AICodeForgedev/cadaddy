@@ -1274,26 +1274,26 @@ fn terminal_of(s: &mut Session, mark: &str) -> Value {
 fn an_air_terminal_takes_its_tags_type_and_airflow_its_schedule_row_and_its_unit() {
     let _g = serial();
     let mut s = plan_edited(|sp| {
-        sp["mep"]["terminals"][0]["tag"] = json!("SD-2");
+        sp["mep"]["terminals"][0]["tag"] = json!("SD-4");
         // A mark the schedule doesn't list (another tag read beside a symbol).
         sp["mep"]["terminals"].as_array_mut().expect("terminals").push(
             json!({"system": "SA", "level": "L1", "at": [60, 60], "size_in": [12, 12], "bottom_ft": 8, "terminal_kind": "supply_diffuser", "tag": "X-01"}),
         );
-        sp["mep"]["terminals"][0]["cfm"] = json!(415.0);
+        sp["mep"]["terminals"][0]["cfm"] = json!(260.0);
         // The air handler at the run's end, on its system.
         sp["mep"]["equipment"][0]["min"] = json!([1800, 520]);
         sp["mep"]["equipment"][0]["max"] = json!([1860, 560]);
         sp["mep"]["equipment"][0]["systems"] = json!(["SA"]);
         sp["mep"]["air_device_schedule"] = json!([
             {"tag": "SD-1", "properties": {"MODEL": "OTHER"}, "source": "M-601"},
-            {"tag": "SD-2", "properties": {"MANUFACTURER": "MAKER A", "MODEL": "PLAQUE-24", "FACE SIZE (IN)": "24\"x24\"", "MOUNTING LOCATION": "CEILING"}, "source": "M-601"}
+            {"tag": "SD-4", "properties": {"MANUFACTURER": "MAKER A", "MODEL": "CONE-9", "FACE SIZE (IN)": "24\"x24\"", "MOUNTING LOCATION": "CEILING"}, "source": "M-601"}
         ]);
     });
-    let t = terminal_of(&mut s, "SD-2");
+    let t = terminal_of(&mut s, "SD-4");
     assert_eq!(t["type_mark"]["source"]["kind"], "print", "{t:#}");
-    assert!(t["type_mark"].get("note").is_none(), "the schedule lists SD-2: {t:#}");
-    assert_eq!(t["cfm"]["value"], json!(415.0), "its tag's airflow over the 150 CFM printed by it: {t:#}");
-    assert_eq!(t["model"]["value"], "PLAQUE-24", "{t:#}");
+    assert!(t["type_mark"].get("note").is_none(), "the schedule lists SD-4: {t:#}");
+    assert_eq!(t["cfm"]["value"], json!(260.0), "its tag's airflow over the 150 CFM printed by it: {t:#}");
+    assert_eq!(t["model"]["value"], "CONE-9", "{t:#}");
     assert_eq!(t["model"]["source"]["kind"], "schedule");
     assert_eq!(t["manufacturer"]["value"], "MAKER A");
     assert_eq!(t["mounting"]["value"], "CEILING");
@@ -1304,11 +1304,11 @@ fn an_air_terminal_takes_its_tags_type_and_airflow_its_schedule_row_and_its_unit
     let x = terminal_of(&mut s, "X-01");
     assert!(x["type_mark"]["note"].as_str().is_some_and(|n| n.contains("not a mark of the air device schedule")), "{x:#}");
     let air = s.execute("bim.schedule", &json!({"kind": "air"})).expect("air schedule");
-    let rows: Vec<Value> = air["rows"].as_array().cloned().unwrap_or_default().into_iter().filter(|r| r["type_mark"] == "SD-2").collect();
+    let rows: Vec<Value> = air["rows"].as_array().cloned().unwrap_or_default().into_iter().filter(|r| r["type_mark"] == "SD-4").collect();
     assert_eq!(rows.len(), 1, "{air:#}");
     assert_eq!(rows[0]["unit"], "AHU-1", "{air:#}");
-    assert_eq!(rows[0]["type_mark"], "SD-2");
-    assert_eq!(rows[0]["cfm"], "415");
+    assert_eq!(rows[0]["type_mark"], "SD-4");
+    assert_eq!(rows[0]["cfm"], "260");
 }
 
 /// With no duct to a unit: an outdoor air unit whose schedule row says it serves the room's
@@ -1329,11 +1329,11 @@ fn a_terminal_no_duct_reaches_is_served_by_its_schedules_unit_or_its_rooms_own()
         terms.push(json!({"system": "SA", "level": "L1", "at": [480, 60], "size_in": [8, 8], "bottom_ft": 8, "terminal_kind": "supply_diffuser", "tag": "SD-1"}));
         let eq = sp["mep"]["equipment"].as_array_mut().expect("equipment");
         eq.push(json!({"tag": "EF-1", "kind": "exhaust_fan", "level": "L1", "min": [120, 80], "max": [140, 100], "height_ft": 1, "systems": ["EA"]}));
-        eq.push(json!({"tag": "DOAS-1", "kind": "outdoor_air_unit", "level": "L1", "min": [2400, 400], "max": [2460, 440], "height_ft": 4,
+        eq.push(json!({"tag": "OAU-3", "kind": "outdoor_air_unit", "level": "L1", "min": [2400, 400], "max": [2460, 440], "height_ft": 4,
                        "properties": {"CFM": "900", "AREA SERVED": "STORAGE ROOMS"}, "sources": {"schedule": "M-601"}}));
     });
     let sd1 = terminal_of(&mut s, "SD-1");
-    assert_eq!(sd1["served_by"]["value"], "DOAS-1", "{sd1:#}");
+    assert_eq!(sd1["served_by"]["value"], "OAU-3", "{sd1:#}");
     assert_eq!(sd1["served_by"]["source"]["kind"], "computed");
     assert!(sd1["served_by"]["note"].as_str().is_some_and(|n| n.contains("schedule row") && n.contains("STORAGE")), "{sd1:#}");
     let eg = terminal_of(&mut s, "EG-1");
