@@ -2470,6 +2470,21 @@
     "COFFEE"
    ]
   },
+  "notes.appliance_kinds": {
+   "source": "trade practice: which appliance a mounting-height note's words or a panel schedule's load description name (value: the appliance; a cooktop, oven or stove is on the range's circuit; a range hood's exhaust is no range); the first row that matches decides, whole words only. A typical room's appliance note goes to the receptacle whose circuit's schedule line names that appliance, never to one whose line names another (Q6344, guided.rs `typical_heights`); a device the plans leave off every circuit and that names an appliance goes on the circuit whose line names it (conduitroute.rs, E-UNCIRCUITED)",
+   "rules": [
+    {"value": "microwave", "any": ["MICROWAVE", "MICRO WAVE", "MW"]},
+    {"value": "range", "any": ["RANGE", "COOKTOP", "COOK TOP", "OVEN", "STOVE"], "none": ["EXHAUST", "HOOD", "FAN"]},
+    {"value": "refrigerator", "any": ["REFRIGERATOR", "FRIDGE", "REFRIG"]},
+    {"value": "dishwasher", "any": ["DISHWASHER", "DISH WASHER", "DW"]},
+    {"value": "disposal", "any": ["DISPOSAL", "DISPOSER", "GARBAGE DISPOSAL"]},
+    {"value": "washer", "any": ["WASHER", "CLOTHES WASHER", "WASHING MACHINE"], "none": ["DISHWASHER", "DISH"]},
+    {"value": "dryer", "any": ["DRYER", "CLOTHES DRYER"], "none": ["HAND DRYER", "HAIR DRYER"]},
+    {"value": "water_heater", "any": ["WATER HEATER"]},
+    {"value": "ice_maker", "any": ["ICE MAKER", "ICEMAKER", "ICE MACHINE"]},
+    {"value": "coffee", "any": ["COFFEE", "COFFEE MAKER", "COFFEE BREWER"]}
+   ]
+  },
   "notes.defer_to_architecture": {
    "source": "drafting convention: an electrical sheet's numbered note that sends its devices' locations or mounting heights to the architecture's drawings (`SEE ARCHITECTURAL PLANS FOR DEVICE LOCATIONS AND HEIGHTS`, `MOUNT AT THE HEIGHT SHOWN ON THE ARCHITECTURAL ELEVATIONS`): value is what it sends there (both, heights, locations); the first row that matches decides, a row matching when the note contains one of `any` and all of `all` (Q6244, archauthority.rs)",
    "rules": [
