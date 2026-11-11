@@ -10948,7 +10948,7 @@ fn plan_symbols(
         let d = s.doc()?;
         templates
             .iter()
-            .filter(|tp| !wrapped.contains(&(tp.sheet.clone(), tp.row.trim().to_string())))
+            .filter(|tp| !wrapped.contains(&(tp.sheet.clone(), tp.row.trim().to_string())) && !super::symtable::line_type_row(&tp.row))
             .map(|tp| super::symtable::LegendDrawing {
                 sheet: tp.sheet.clone(),
                 row: tp.row.clone(),
@@ -11102,12 +11102,14 @@ fn plan_symbols(
                 format!("derived: the shared symbol library's {} drawing found on {number} ({}); no document of this set lists it", e.name, hit.cue)
             });
             let handle = hit.handles.first().map(|h| cadaddy_doc::Handle(*h).hex()).unwrap_or_default();
-            for h in &hit.handles {
-                fate(
-                    job,
-                    &cadaddy_doc::Handle(*h).hex(),
-                    MarkFate::object(&e.kind, &format!("a copy of the symbol table's {} ({})", e.name, e.source)),
-                );
+            // Its first stroke is the object; the others are strokes of that one symbol.
+            for (i, h) in hit.handles.iter().enumerate() {
+                let f = if i == 0 {
+                    MarkFate::object(&e.kind, &format!("a copy of the symbol table's {} ({})", e.name, e.source))
+                } else {
+                    MarkFate::duplicate(&e.kind, &handle, &format!("a stroke of the symbol {handle} draws (the symbol table's {})", e.name))
+                };
+                fate(job, &cadaddy_doc::Handle(*h).hex(), f);
             }
             out.added.push(super::readers::ReadDevice {
                 tag: e.kind.to_ascii_uppercase(),

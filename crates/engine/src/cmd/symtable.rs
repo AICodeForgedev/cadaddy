@@ -196,6 +196,8 @@ struct LibraryFile {
     not_plan_views: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     legend_disciplines: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    line_type_rows: Vec<String>,
     #[serde(default)]
     symbols: Vec<LibSymbol>,
 }
@@ -209,6 +211,15 @@ pub(crate) fn not_a_plan_view(title: &str) -> bool {
     serde_json::from_str::<LibraryFile>(SHIPPED)
         .map(|f| f.not_plan_views.iter().any(|w| joined.contains(&format!(" {} ", w.trim().to_ascii_uppercase()))))
         .unwrap_or(false)
+}
+
+/// Whether a legend row explains a line type, not a symbol (`WIRING - SWITCHLEG`: the shipped
+/// library's `line_type_rows`, the words it begins with).
+pub(crate) fn line_type_row(row: &str) -> bool {
+    let words: Vec<String> = row.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect();
+    let start = words.iter().take(2).cloned().collect::<Vec<_>>().join(" ");
+    serde_json::from_str::<LibraryFile>(SHIPPED)
+        .is_ok_and(|f| f.line_type_rows.iter().map(|w| w.trim().to_ascii_uppercase()).any(|w| words.first() == Some(&w) || start == w))
 }
 
 /// The sheet disciplines an electrical legend is printed on (the shipped library's
@@ -1379,6 +1390,7 @@ pub(crate) fn promote(dir: &std::path::Path, e: &Entry) -> std::result::Result<(
         plan_disciplines: Vec::new(),
         not_plan_views: Vec::new(),
         legend_disciplines: Vec::new(),
+        line_type_rows: Vec::new(),
         symbols: Vec::new(),
     });
     let sig = signature(&strokes);
@@ -1460,6 +1472,14 @@ mod tests {
         }
         assert!(universal_of(&lib, "receptacle").is_some_and(|s| s.name == "duplex receptacle"));
         assert!(universal_of(&lib, "camera").is_none());
+    }
+
+    #[test]
+    fn a_line_types_row_is_no_symbol() {
+        assert!(line_type_row("WIRING - SWITCHLEG"));
+        assert!(line_type_row("HOME RUN TO PANEL"));
+        assert!(!line_type_row("DUPLEX RECEPTACLE"));
+        assert!(!line_type_row("SINGLE POLE WALL SWITCH"));
     }
 
     #[test]

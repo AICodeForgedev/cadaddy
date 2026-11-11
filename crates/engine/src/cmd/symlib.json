@@ -4,6 +4,8 @@
   "plan_disciplines": ["E", "EL", "T", "TC", "LV", "MEP", "ME"],
   "legend_disciplines_source": "drafting convention: the electrical legend is on an electrical sheet, or on a combined MEP sheet in a small set",
   "legend_disciplines": ["E", "EL", "MEP", "ME"],
+  "line_type_rows_source": "drafting convention: a legend row that begins with one of these words explains a line type (wiring, a switch leg, a home run, a conduit), not a device symbol",
+  "line_type_rows": ["WIRING", "CONDUIT", "HOMERUN", "HOME RUN", "SWITCHLEG", "SWITCH LEG", "CIRCUIT"],
   "not_plan_views_source": "drafting convention: a plan sheet's views titled with these words draw a detail, a schedule, a diagram or a legend, not devices in the building",
   "not_plan_views": ["DETAIL", "DETAILS", "SCHEDULE", "DIAGRAM", "RISER", "ELEVATION", "SECTION", "LEGEND", "KEY PLAN", "ONE-LINE", "ONE LINE", "SINGLE LINE"],
   "symbols": [
