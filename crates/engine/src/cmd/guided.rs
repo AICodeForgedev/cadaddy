@@ -11652,7 +11652,7 @@ fn typical_heights(
                             _ => false,
                         };
                         // The appliance each device's circuit feeds, by its schedule line
-                        // (`G-4`: panel G circuit 4, `MICROWAVE`); empty when the line names none.
+                        // (`U-4`: panel U circuit 4, `MICROWAVE`); empty when the line names none.
                         let fed: Vec<String> =
                             mine.iter().map(|k| devices.get(*k).map_or_else(String::new, |dv| circuit_appliance(&dv.circuit, schedules))).collect();
                         // Paired nearest first; when a gang takes a device another pair wanted, the
@@ -12296,14 +12296,14 @@ pub(crate) fn appliance_named(text: &str) -> String {
         .map_or_else(String::new, |r| r.value.to_string())
 }
 
-/// The appliance a circuit label's line in its panel's schedule names (`G-4` → panel `G`
-/// circuit 4 `MICROWAVE` → `microwave`; a leg after it, `G-4,a`, is no circuit); empty when its
+/// The appliance a circuit label's line in its panel's schedule names (`U-4` → panel `U`
+/// circuit 4 `MICROWAVE` → `microwave`; a leg after it, `U-4,a`, is no circuit); empty when its
 /// panel has no schedule, the schedule no such row, or the row names no appliance.
 pub(crate) fn circuit_appliance(label: &str, schedules: &[cadaddy_walk3d::PanelSchedule]) -> String {
     let (circuit, _) = circuit_and_leg(label);
     let Some((panel, _)) = circuit.rsplit_once(['-', '/']) else { return String::new() };
     let panel = panel.trim();
-    // A unit's copy of a typical panel (`G-101`) has the typical panel's schedule (`G`).
+    // A unit's copy of a typical panel (`U-1806`) has the typical panel's schedule (`U`).
     let find = |p: &str| schedules.iter().find(|s| s.panel.trim().eq_ignore_ascii_case(p.trim()));
     let Some(s) = find(panel).or_else(|| panel.split_once('-').and_then(|(p, _)| find(p))) else { return String::new() };
     let Some(n) = super::breakers::circuit_numbers(&circuit, panel).first().copied() else { return String::new() };
@@ -36727,7 +36727,7 @@ mod tests {
         // (A second room of the type, not drawn on the floor: a typical room is one of several.)
         let room = |n: &str, x: f64| json!({"name": "STUDIO SUITE", "number": n, "level": "Level 3", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
         if let Some(st) = job.stage_mut(StageName::Rooms) {
-            st.result = Some(json!({"rooms": [room("301", 10_000.0), room("302", 20_000.0)]}));
+            st.result = Some(json!({"rooms": [room("1801", 10_000.0), room("1802", 20_000.0)]}));
         }
         // The electrical plan's three east-wall receptacles, each with its circuit: the
         // dishwasher's under the microwave's note, the microwave's under the cooktop's, the
@@ -36751,7 +36751,7 @@ mod tests {
         }];
         let fresh = || {
             let mut st = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
-            st.retain(|d| d.room == "301");
+            st.retain(|d| d.room == "1801");
             st
         };
         let mut stamped = fresh();

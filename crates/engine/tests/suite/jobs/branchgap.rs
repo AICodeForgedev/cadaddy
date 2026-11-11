@@ -359,11 +359,11 @@ fn a_receptacle_the_plans_leave_uncircuited_joins_its_rooms_receptacle_circuit()
     // of its kind, the nearest receptacle of the room that the plans circuit; no breaker is taken
     // for it and no circuit is made up. Inferred, with the rule as its basis.
     let tags = vec![
-        in_room(device("R1", "receptacle", "L1", 20.0, 10.0, Some("LP1-1"), Some(18.0)), "120"),
-        in_room(device("R2", "receptacle", "L1", 40.0, 10.0, Some("LP1-5"), Some(18.0)), "120"),
-        in_room(device("R9", "receptacle", "L1", 24.0, 12.0, None, Some(18.0)), "120"),
+        in_room(device("R1", "receptacle", "L1", 20.0, 10.0, Some("LP1-1"), Some(18.0)), "1803"),
+        in_room(device("R2", "receptacle", "L1", 40.0, 10.0, Some("LP1-5"), Some(18.0)), "1803"),
+        in_room(device("R9", "receptacle", "L1", 24.0, 12.0, None, Some(18.0)), "1803"),
         // Another room's uncircuited receptacle, nothing circuited in its room: a spare.
-        in_room(device("R7", "receptacle", "L1", 25.0, -8.0, None, Some(18.0)), "130"),
+        in_room(device("R7", "receptacle", "L1", 25.0, -8.0, None, Some(18.0)), "1804"),
         circuit_tag("L1", "LP1-1", "2#12 + 1#12G"),
         circuit_tag("L1", "LP1-5", "2#12 + 1#12G"),
     ];
@@ -373,34 +373,34 @@ fn a_receptacle_the_plans_leave_uncircuited_joins_its_rooms_receptacle_circuit()
     let i = &r["inferred_circuits"];
     assert_eq!(i["joined"], json!(1), "{i}");
     let j = &i["joined_items"][0];
-    assert_eq!((j["room"].as_str(), j["circuit"].as_str(), j["made"].as_str()), (Some("120"), Some("LP1-1"), Some("inferred")), "{j}");
+    assert_eq!((j["room"].as_str(), j["circuit"].as_str(), j["made"].as_str()), (Some("1803"), Some("LP1-1"), Some("inferred")), "{j}");
     assert!(j["basis"].as_str().is_some_and(|b| b.starts_with("E-UNCIRCUITED")), "{j}");
-    // Only room 130's receptacle takes a spare.
+    // Only room 1804's receptacle takes a spare.
     assert_eq!(i["total"], json!(1), "{i}");
-    assert_eq!((i["items"][0]["room"].as_str(), i["items"][0]["circuit"].as_str()), (Some("130"), Some("LP1-3")), "{i}");
+    assert_eq!((i["items"][0]["room"].as_str(), i["items"][0]["circuit"].as_str()), (Some("1804"), Some("LP1-3")), "{i}");
     assert_eq!(i["devices"], json!(2), "{i}");
     assert_eq!(r["proposed_circuits"]["total"], json!(0), "{r}");
 }
 
 #[test]
 fn a_device_the_plans_leave_uncircuited_stays_on_its_rooms_panel_never_another_units() {
-    // Q6344: a unit's own panel (`U-12`, a copy of the typical unit panel `U`) feeds its unit
+    // Q6344: a unit's own panel (`U-1806`, a copy of the typical unit panel `U`) feeds its unit
     // only. A device left off every circuit in a room fed from the house panel goes on that
     // panel's spare, even where a unit's panel stands nearer; one in a room no circuit reaches
     // goes on the nearest panel that is no other unit's.
-    let unit = json!({"tag": "U-12", "kind": "panel", "level": "L1", "min": [60, -6], "max": [62, 6], "height_ft": 3, "bottom_ft": 3.0,
+    let unit = json!({"tag": "U-1806", "kind": "panel", "level": "L1", "min": [60, -6], "max": [62, 6], "height_ft": 3, "bottom_ft": 3.0,
         "enclosure": {"top_entry_in": [6.0, 4.0], "bottom_entry_in": [6.0, 4.0], "gutter_in": [0.0, 0.0]}});
     let unit_rows = json!({"panel": "U", "source": "E-601", "typical_of": 40, "circuits": [
         {"number": "1", "description": "ROOM RECEPTACLES", "room": "", "breaker": "20A", "poles": 1, "wire": "12", "load_va": 180.0, "source": "E-601"},
         {"number": "3", "description": "SPARE", "room": "", "breaker": "20A", "poles": 1, "wire": "", "load_va": 0.0, "source": "E-601"}
     ]});
     let tags = vec![
-        // Room 140 (a corridor): a receptacle fed from LP1, and an
+        // Room 1805 (a corridor): a receptacle fed from LP1, and an
         // uncircuited equipment connection by the unit's panel.
-        in_room(device("R1", "receptacle", "L1", 20.0, 10.0, Some("LP1-1"), Some(18.0)), "140"),
-        in_room(device("J1", "junction_box", "L1", 55.0, 0.0, None, Some(90.0)), "140"),
-        // Room 150: nothing circuited, an uncircuited junction box by the unit's panel.
-        in_room(device("J2", "junction_box", "L1", 58.0, 2.0, None, Some(90.0)), "150"),
+        in_room(device("R1", "receptacle", "L1", 20.0, 10.0, Some("LP1-1"), Some(18.0)), "1805"),
+        in_room(device("J1", "junction_box", "L1", 55.0, 0.0, None, Some(90.0)), "1805"),
+        // Room 1807: nothing circuited, an uncircuited junction box by the unit's panel.
+        in_room(device("J2", "junction_box", "L1", 58.0, 2.0, None, Some(90.0)), "1807"),
         circuit_tag("L1", "LP1-1", "2#12 + 1#12G"),
     ];
     let mut s = building_with(
@@ -413,9 +413,9 @@ fn a_device_the_plans_leave_uncircuited_stays_on_its_rooms_panel_never_another_u
     let r = report_with_rooms(&mut s);
     let items = r["inferred_circuits"]["items"].as_array().cloned().unwrap_or_default();
     let panel_of = |room: &str| items.iter().find(|x| x["room"] == json!(room)).and_then(|x| x["panel"].as_str()).map(str::to_string);
-    assert_eq!(panel_of("140").as_deref(), Some("LP1"), "its room's panel: {items:?}");
-    assert_eq!(panel_of("150").as_deref(), Some("LP1"), "never another unit's panel: {items:?}");
-    assert!(items.iter().all(|x| x["panel"] != json!("U-12")), "{items:?}");
+    assert_eq!(panel_of("1805").as_deref(), Some("LP1"), "its room's panel: {items:?}");
+    assert_eq!(panel_of("1807").as_deref(), Some("LP1"), "never another unit's panel: {items:?}");
+    assert!(items.iter().all(|x| x["panel"] != json!("U-1806")), "{items:?}");
 }
 
 #[test]

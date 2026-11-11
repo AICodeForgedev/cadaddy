@@ -1489,8 +1489,8 @@ pub(crate) fn floor_path(a: (Vec2, f64), b: (Vec2, f64), floor: f64, upf: f64, r
     (pts, bot)
 }
 
-/// The room a unit's own copy of a typical panel is named for (`G-101`: the schedule is panel
-/// `G`'s, one panel per unit, this one room 101's), else None (a building panel, or a copy with a
+/// The room a unit's own copy of a typical panel is named for (`U-1806`: the schedule is panel
+/// `U`'s, one panel per unit, this one room 1806's), else None (a building panel, or a copy with a
 /// schedule of its own). Such a panel feeds its own unit only.
 fn unit_panel_room(sp: &BuildingSpec, tag: &str) -> Option<String> {
     let t = tag.trim();
