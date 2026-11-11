@@ -168,6 +168,11 @@ pub(crate) struct RouteGeom {
     pub roof_support_in: f64,
     pub roof_band_in: f64,
     pub roof_source: String,
+    /// A floor box on a slab on grade: its buried feed comes up this high in the wall it reaches
+    /// (inches over the floor); the words that make a device a floor box; where that comes from.
+    pub on_grade_stub_up_in: f64,
+    pub floor_box_words: Vec<String>,
+    pub on_grade_source: String,
     pub source: String,
 }
 
@@ -1395,6 +1400,8 @@ struct Dev {
     /// A unit's own connection (`receptacle_for`: a receptacle its keynote puts under the unit):
     /// that unit is no obstacle to its raceway at it.
     unit_connection: bool,
+    /// A box set in the floor (`mounting` floor, a floor box by its kind or type).
+    floor_box: bool,
 }
 
 /// The devices a switch or sensor controls: its `controls` (their handles).
@@ -1789,6 +1796,10 @@ pub(crate) struct Routed {
     /// routed under no other tag of their level (Q6489): not routed, so their estimated routes
     /// connect nothing and go; each is a question for review.
     pub no_device: BTreeSet<String>,
+    /// The keynotes' under-slab runs (their ids, a run's stub-ups `<id>:up<n>` with it) a floor
+    /// box's circuit took on as its own buried raceway: its pieces carry the circuit now, so
+    /// the keynote's empty copy goes.
+    pub keynote_taken: BTreeSet<String>,
 }
 
 /// The feeder a circuit's breaker serves, when it is one: its panel's schedule row for the
@@ -2053,6 +2064,186 @@ pub(crate) fn rise_point(
     (at, zj, Some(first))
 }
 
+/// A device set in the floor: `mounting` (or `mount`) floor, or its kind or type names a floor
+/// box (the rules' words). Never a plumbing fixture (a floor-set water closet has no box).
+fn in_floor(ps: &props::Props, kind: &str, rl: &RouteRules) -> bool {
+    let k = kind.to_ascii_lowercase();
+    if k.contains("plumbing") {
+        return false;
+    }
+    let text = |key: &str| ps.get(key).map(Prop::text).unwrap_or_default();
+    // The element's `mounting` (the tag's `mount`, as the build sets it).
+    if ["mounting", "mount"].iter().any(|key| text(key).trim().eq_ignore_ascii_case("floor")) {
+        return true;
+    }
+    let words = format!("{k} {} {}", text("type"), text("device_type")).to_ascii_lowercase();
+    rl.route.floor_box_words.iter().map(|w| w.trim().to_ascii_lowercase()).any(|w| !w.is_empty() && words.contains(&w))
+}
+
+/// How a floor box on a slab on grade is fed: from below the slab, never by raceway rising
+/// through its room. Its circuit's raceway above the floor ends at `wall` (a stub `stub_top`
+/// high in the nearest wall of its room, facing `face`); `buried` (plan points, each segment's
+/// height over the floor, feet) runs from the box down under the slab to it.
+#[derive(Clone, Debug)]
+struct FloorFeed {
+    dev: usize,
+    /// The box as built (restored after the circuits are routed).
+    box_at: Vec2,
+    box_top: f64,
+    box_face: Option<Vec2>,
+    wall: Vec2,
+    stub_top: f64,
+    face: Option<Vec2>,
+    points: Vec<[f64; 2]>,
+    bottoms_ft: Vec<f64>,
+    size_in: f64,
+    /// Where its path and size came from (the keynote's note, else the rule).
+    called: String,
+    size_source: String,
+    /// The keynote run it takes on (its id), when the keynotes built one from the box.
+    keynote: Option<String>,
+}
+
+/// Most floor boxes fed from below the slab in one routing.
+const MAX_FLOOR_FEEDS: usize = 2_000;
+
+/// The floor boxes on the slab level (the lowest storey) and how each is fed from below the
+/// slab: along the keynotes' under-slab run that starts at it, when there is one, else to the
+/// nearest wall of the room it stands in (else of the nearest room of its level).
+fn floor_feeds(d: &Drawing, sp: &BuildingSpec, devs: &[Dev], upf: f64, rl: &RouteRules) -> Vec<FloorFeed> {
+    let Some(slab) = super::ugplan::slab_level(sp) else { return Vec::new() };
+    let on_slab: Vec<usize> =
+        devs.iter().enumerate().filter(|(_, d)| d.floor_box && same_level(&d.level, &slab) && !d.circuit.is_empty()).map(|(i, _)| i).collect();
+    if on_slab.is_empty() {
+        return Vec::new();
+    }
+    let floor = sp.level(&slab).map_or(0.0, |l| l.elevation_ft * upf);
+    let depth = super::ugplan::rules().depths.conduit_under_slab_ft;
+    let depth = if depth.is_finite() && depth > 0.0 { depth } else { 1.5 };
+    let stub_in = if rl.route.on_grade_stub_up_in.is_finite() && rl.route.on_grade_stub_up_in > 0.0 { rl.route.on_grade_stub_up_in } else { 18.0 };
+    let rooms: Vec<Vec<Vec2>> = {
+        let offsets: HashMap<Handle, Vec2> = d
+            .model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
+            .map(|e| (e.handle, super::bspec::stacked_by(e)))
+            .collect();
+        super::bspec::room_elements(d)
+            .into_iter()
+            .filter(|r| same_level(&r.level, &slab) && r.outline.len() >= 3)
+            .take(MAX_DEVICES)
+            .map(|r| {
+                let off = offsets.get(&r.handle).copied().unwrap_or(Vec2::new(0.0, 0.0));
+                r.outline.iter().take(10_000).map(|p| *p - off).collect()
+            })
+            .collect()
+    };
+    // The keynotes' under-slab runs on the slab level: (id, plan points, size, its note).
+    let keynote_runs: Vec<&MepRun> = sp
+        .mep
+        .runs
+        .iter()
+        .filter(|r| {
+            r.system == super::ugplan::E_UG
+                && r.id.starts_with("keynote:")
+                && !r.id.contains(":up")
+                && r.top_ft.is_none()
+                && r.points.len() >= 2
+                && same_level(&r.level, &slab)
+                && r.bottoms_ft.iter().all(|b| b.is_finite() && *b < 0.0)
+        })
+        .take(MAX_RUNS)
+        .collect();
+    let reach = 3.0 * upf;
+    let mut taken: BTreeSet<&str> = BTreeSet::new();
+    let mut out = Vec::new();
+    for di in on_slab.into_iter().take(MAX_FLOOR_FEEDS) {
+        let Some(dv) = devs.get(di) else { continue };
+        let first = |r: &MepRun| r.points.first().map(|p| Vec2::new(p[0], p[1]));
+        let kn = keynote_runs
+            .iter()
+            .filter(|r| !taken.contains(r.id.as_str()))
+            .filter_map(|r| Some((*r, first(r)?.dist(dv.at))))
+            .filter(|(_, dd)| *dd <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(r, _)| r);
+        let (points, wall, called, size_in, size_source, keynote, stub_top) = match kn {
+            Some(r) => {
+                taken.insert(r.id.as_str());
+                let Some(w) = r.points.last().map(|p| Vec2::new(p[0], p[1])) else { continue };
+                // Its stub-up in the wall: as the keynotes built it, else the rule's.
+                let up = sp.mep.runs.iter().filter(|u| u.id.starts_with(&format!("{}:up", r.id))).find_map(|u| {
+                    let p = u.points.first()?;
+                    (Vec2::new(p[0], p[1]).dist(w) <= upf / 12.0).then_some(u.top_ft?).filter(|t| t.is_finite() && *t > 0.0)
+                });
+                let mut pts: Vec<[f64; 2]> = vec![[dv.at.x, dv.at.y]];
+                pts.extend(r.points.iter().skip(1).copied());
+                (
+                    pts,
+                    w,
+                    format!("{}; the floor box's circuit runs in it", r.height_source),
+                    r.size_in[0],
+                    r.size_source.clone(),
+                    Some(r.id.clone()),
+                    up.unwrap_or(stub_in / 12.0),
+                )
+            }
+            None => {
+                let own: Vec<&Vec<Vec2>> = rooms.iter().filter(|o| cadaddy_geom::point_in_polygon(o, dv.at)).collect();
+                let pool: Vec<&Vec<Vec2>> = if own.is_empty() { rooms.iter().collect() } else { own };
+                let near = pool
+                    .iter()
+                    .flat_map(|o| (0..o.len()).filter_map(move |i| Some((*o.get(i)?, *o.get((i + 1) % o.len())?))))
+                    .map(|(a, c)| {
+                        let ab = c - a;
+                        let t = if ab.len() > 1e-9 { ((dv.at - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0) } else { 0.0 };
+                        a + ab * t
+                    })
+                    .min_by(|p, q| p.dist(dv.at).total_cmp(&q.dist(dv.at)));
+                let Some(w) = near.filter(|w| w.dist(dv.at) > upf / 12.0) else { continue };
+                // Square under the slab: along one axis, then the other.
+                let mut pts = vec![[dv.at.x, dv.at.y]];
+                let corner = Vec2::new(w.x, dv.at.y);
+                if corner.dist(dv.at) > upf / 96.0 && corner.dist(w) > upf / 96.0 {
+                    pts.push([corner.x, corner.y]);
+                }
+                pts.push([w.x, w.y]);
+                (pts, w, format!("rule: {}", rl.route.on_grade_source), 0.0, String::new(), None, stub_in / 12.0)
+            }
+        };
+        // Down out of the box, across under the slab, up in the wall.
+        let top_ft = (dv.top - floor) / upf;
+        let mut plan = vec![[dv.at.x, dv.at.y]];
+        let mut bot = vec![top_ft];
+        for p in &points {
+            plan.push(*p);
+            bot.push(-depth);
+        }
+        plan.push([wall.x, wall.y]);
+        // `bot` holds one height per segment: box drop, the buried legs, the stub-up.
+        bot.truncate(plan.len().saturating_sub(2));
+        bot.push(stub_top);
+        let into = dv.at - wall;
+        let face = (into.len() > 1e-9).then(|| into * (1.0 / into.len()));
+        out.push(FloorFeed {
+            dev: di,
+            box_at: dv.at,
+            box_top: dv.top,
+            box_face: dv.face,
+            wall,
+            stub_top: floor + stub_top * upf,
+            face,
+            points: plan,
+            bottoms_ft: bot,
+            size_in,
+            called,
+            size_source,
+            keynote,
+        });
+    }
+    out
+}
+
 /// The units a device is the connection of and stands under (`unit_connection`: a receptacle
 /// its keynote puts under one): the equipment obstacles over its spot, within their clearance.
 fn units_over(m: &Dev, field: &Field, upf: f64, rl: &RouteRules) -> Vec<Handle> {
@@ -2201,6 +2392,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             let switch = gap::is_switch(&kind) || ps.get("controls").is_some();
             let mates = ps.get("three_way_with").map(Prop::text).unwrap_or_default().split(',').filter(|h| !h.trim().is_empty()).count();
             let ways = gap::switch_ways(&kind, mates);
+            let floor_box = in_floor(&ps, &kind, rl);
             devs.push(Dev {
                 handle: e.handle,
                 level: super::bspec::made_level(e).unwrap_or_default(),
@@ -2215,6 +2407,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 ways,
                 controls: controls_of(&ps),
                 unit_connection: ps.get("receptacle_for").is_some_and(|p| !p.text().trim().is_empty()),
+                floor_box,
             });
         }
         if super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment"))
@@ -2987,6 +3180,22 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // Each circuit's own cable feet by size.
     let mut cable_sizes: HashMap<usize, BTreeMap<String, f64>> = HashMap::new();
     let mut cable_legs: HashMap<usize, BTreeMap<u32, f64>> = HashMap::new();
+    // A floor box on the slab on grade is fed from below the slab (trade practice, rules data):
+    // its circuit's raceway above the floor takes its buried feed on at a stub in the nearest
+    // wall of its room, never rising out of the box through the room. The circuits are routed
+    // from the stub; the boxes stand where they were built again after.
+    let feeds = floor_feeds(d, sp, &devs, upf, rl);
+    let feed_of: HashMap<usize, usize> = feeds.iter().enumerate().map(|(i, f)| (f.dev, i)).collect();
+    for f in &feeds {
+        if let Some(dv) = devs.get_mut(f.dev) {
+            dv.at = f.wall;
+            dv.top = f.stub_top;
+            dv.face = f.face;
+        }
+    }
+    let mut under_slab_rows: Vec<Value> = Vec::new();
+    let mut under_slab_ft = 0.0f64;
+    let mut keynote_taken: BTreeSet<String> = BTreeSet::new();
     let r_of = |size_in: f64| size_in / 24.0 * upf;
     let add_clash = |clashes: &mut Vec<Value>, field: &Field, b: &Blocked, what: &str, circuit: &str, level: &str, size_in: f64| {
         if clashes.len() >= MAX_ITEMS {
@@ -3129,7 +3338,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // A switch's box is the end of its own loop (Q6206): the circuit's other devices joined
         // device to device, each switch on a leg of its own from the nearest of what it controls
         // (else the nearest of the rest). All switches, or none: device to device.
-        let core: Vec<usize> = (0..members.len()).filter(|i| members.get(*i).is_some_and(|m| !m.switch)).collect();
+        // A floor box fed from below the slab is such an end too: its one buried raceway comes up
+        // at one stub, where one raceway takes it on (no box there for a second).
+        let fed = |i: usize| c.devs.get(i).is_some_and(|d| feed_of.contains_key(d));
+        let core: Vec<usize> = (0..members.len()).filter(|i| members.get(*i).is_some_and(|m| !m.switch) && !fed(*i)).collect();
         let (root, tree) = if core.is_empty() || core.len() == members.len() {
             let all: Vec<usize> = (0..members.len()).collect();
             let root = nearest_panel(&all).unwrap_or(0);
@@ -3147,7 +3359,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 .unwrap_or(0);
             let mut t: Vec<(usize, usize)> =
                 spanning_tree(&cpts, croot).into_iter().filter_map(|(a, b)| Some((*core.get(a)?, *core.get(b)?))).collect();
-            for (i, m) in members.iter().enumerate().filter(|(_, m)| m.switch) {
+            for (i, m) in members.iter().enumerate().filter(|(i, m)| m.switch || fed(*i)) {
                 let ctl: Vec<usize> = core.iter().copied().filter(|j| members.get(*j).is_some_and(|x| m.controls.contains(&x.handle))).collect();
                 let pool = if ctl.is_empty() { &core } else { &ctl };
                 let near = pool.iter().copied().min_by(|a, b| {
@@ -3312,6 +3524,45 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     .or_default()
                     .extend(leg_hots.iter().map(|(n, sz)| (*n, sz.clone(), Some(cid.clone()))));
             }
+        }
+        // Each floor box of the circuit on the slab on grade: its buried feed from the box, under
+        // the slab, up in the wall where the legs above the floor take it on (the keynote's
+        // under-slab conduit where the keynotes built one: the circuit's own now).
+        for di in &c.devs {
+            let Some(f) = feed_of.get(di).and_then(|i| feeds.get(*i)) else { continue };
+            if runs.len() >= MAX_RUNS {
+                break;
+            }
+            leg_n += 1;
+            let mut r = super::printcond::run(BRANCH_SYSTEM, &c.level, &tag_sheet(tag), f.points.clone(), size.max(f.size_in), 0.0);
+            r.bottoms_ft = f.bottoms_ft.clone();
+            r.id = format!("{cid}#{leg_n}");
+            r.size_source = if f.size_source.is_empty() {
+                format!("minimum: {min_src}")
+            } else {
+                format!("{} (the floor box's circuit; not under the minimum: {min_src})", f.size_source)
+            };
+            r.height_source = ROUTED.into();
+            r.basis = f.called.clone();
+            let ft = run_ft(&r, upf);
+            under_slab_ft += ft;
+            let l = lens.entry(ci).or_default();
+            l.in_area += ft;
+            l.wire += ft * wires_in(&parts);
+            l.own_wire += ft * wires_in(&parts);
+            l.cable += ft;
+            *cable_legs.entry(ci).or_default().entry(0).or_default() += ft;
+            if let Some(k) = &f.keynote {
+                keynote_taken.insert(k.clone());
+            }
+            if under_slab_rows.len() < MAX_ITEMS {
+                under_slab_rows.push(json!({
+                    "circuit": c.label, "level": c.level, "box": devs.get(*di).map(|d| d.handle.hex()).unwrap_or_default(),
+                    "at": [r2(f.box_at.x), r2(f.box_at.y)], "stub_at": [r2(f.wall.x), r2(f.wall.y)], "length_ft": r1(ft),
+                    "size_in": r.size_in[0], "keynote_run": f.keynote, "basis": f.called,
+                }));
+            }
+            runs.push(r);
         }
         let mut t = tag.clone();
         if !c.part.is_empty() {
@@ -4203,6 +4454,15 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "source": gap::rules().shared.source,
     });
 
+    // The floor boxes fed from below the slab stand where they were built again.
+    for f in &feeds {
+        if let Some(dv) = devs.get_mut(f.dev) {
+            dv.at = f.box_at;
+            dv.top = f.box_top;
+            dv.face = f.box_face;
+        }
+    }
+
     // -- A power device the prints give no circuit (Q6206): proposed on the nearest panel of its
     // level with a spare, not drawn, priced apart, a review item and an RFI line. --
     let mut proposed: Vec<Value> = Vec::new();
@@ -4620,6 +4880,16 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "route_source": rl.route.source,
     }); // What the build filled in and corrected for the field (Q6216).
     out.report["inferred_circuits"] = json!({"total": inferred_rows.len(), "devices": inferred_devs.len(), "items": inferred_rows});
+    out.report["floor_boxes_under_slab"] = json!({
+        "boxes": feeds.len(),
+        "fed": under_slab_rows.len(),
+        "keynote_runs_taken": keynote_taken.len(),
+        "length_ft": r1(under_slab_ft),
+        "items": under_slab_rows,
+        "source": rl.route.on_grade_source,
+        "note": "each floor box on the slab on grade fed from below the slab: buried from the box to the nearest wall of its room and stubbed up there, where its circuit's raceway above the floor takes it on; a keynote's under-slab conduit from the box is that raceway (it carries the circuit, its empty copy goes)",
+    });
+    out.keynote_taken = keynote_taken;
     out.report["clashes_corrected"] = json!(clash_offsets.len());
     out.report["clash_offsets"] = json!(clash_offsets);
     if let Some(o) = out.report.as_object_mut() {
@@ -5133,6 +5403,17 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
             .cloned(),
     );
     sp.mep.runs.retain(|r| !gone(r));
+    // A keynote's under-slab conduit a floor box's circuit took on (its pieces carry the circuit
+    // now): its empty copy and its stub-ups go, kept for the next routing.
+    if !routed.keynote_taken.is_empty() {
+        let taken = |r: &MepRun| {
+            routed.keynote_taken.contains(&r.id)
+                || r.id.rsplit_once(":up").is_some_and(|(base, n)| n.chars().all(|c| c.is_ascii_digit()) && routed.keynote_taken.contains(base))
+        };
+        let room = MAX_RUNS.saturating_sub(replaced.runs.len());
+        replaced.runs.extend(sp.mep.runs.iter().filter(|r| taken(r)).take(room).cloned());
+        sp.mep.runs.retain(|r| !taken(r));
+    }
     // An estimated route left (its circuit not routed) is the raceway its conductors fill, at
     // the routing's minimum, not the reader's default size (Q6235).
     if let Some((min_in, min_src)) = &routed.minimum {
@@ -5294,7 +5575,9 @@ pub(crate) fn unrouted(d: &Drawing, sp: &BuildingSpec) -> BuildingSpec {
     out.mep.runs.retain(|r| r.system != BRANCH_SYSTEM);
     // An estimated run already back in the spec (read again since) is not doubled.
     let key = |r: &MepRun| serde_json::to_string(r).unwrap_or_default();
-    let mut have: BTreeSet<String> = out.mep.runs.iter().filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM).map(key).collect();
+    // Nor a keynote's under-slab run a floor box's circuit took on (read again since).
+    let mut have: BTreeSet<String> =
+        out.mep.runs.iter().filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM || r.system == super::ugplan::E_UG).map(key).collect();
     for r in base.runs.into_iter().take(MAX_RUNS) {
         if have.insert(key(&r)) {
             out.mep.runs.push(r);

@@ -22970,7 +22970,11 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
             || c.from == "keynote"
                 && c.mark.as_ref().is_some_and(|m| {
                     let key = format!("{} keynote {m} ", c.sheet);
-                    sp.mep.runs.iter().any(|r| r.system == ugplan::E_UG && r.height_source.contains(&key))
+                    // Or a floor box's circuit took it on as its own buried raceway (its routing).
+                    sp.mep.runs.iter().any(|r| {
+                        (r.system == ugplan::E_UG && r.height_source.contains(&key))
+                            || (r.system == super::conduitroute::BRANCH_SYSTEM && r.size_source.contains(&key))
+                    })
                 })
     };
     let rooms: Vec<ugplan::Room> = {
