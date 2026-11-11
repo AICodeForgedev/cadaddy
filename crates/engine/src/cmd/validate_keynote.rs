@@ -1882,7 +1882,10 @@ mod tests {
             body_h: 1.0,
             notes: vec![Note { number: n.into(), text: format!("NOTE {n}"), calls: Calls::of("") }],
         };
-        let kn = Keynotes { lists: vec![list("E-201", "KEYNOTES", "1"), list("E-501", "KEYNOTES", "2"), list("M-501", "KEYNOTES", "3")], ..Keynotes::default() };
+        let kn = Keynotes {
+            lists: vec![list("E-201", "KEYNOTES", "1"), list("E-501", "KEYNOTES", "2"), list("M-501", "KEYNOTES", "3")],
+            ..Keynotes::default()
+        };
         // The level's plan marks the area: its list is in already.
         let mut objects = json!({"keynotes": {"lists": [kn.lists[0].to_json()], "markers": []}});
         let shown: BTreeSet<String> = ["E-201", "E-501", "A-101"].into_iter().map(str::to_string).collect();

@@ -225,7 +225,11 @@ fn a_notes_page_shown_as_its_pdf_page_prints_every_line() {
     let mut content = String::new();
     for k in 0..4 {
         let y = 500 - 20 * k;
-        content.push_str(&format!("1 g 68 {} 420 22 re f 0 g BT /F1 12 Tf 72 {y} Td ({}. PROVIDE BLANK COVER PLATES AT UNUSED BOXES) Tj ET\n", y - 5, k + 1));
+        content.push_str(&format!(
+            "1 g 68 {} 420 22 re f 0 g BT /F1 12 Tf 72 {y} Td ({}. PROVIDE BLANK COVER PLATES AT UNUSED BOXES) Tj ET\n",
+            y - 5,
+            k + 1
+        ));
     }
     std::fs::write(set.dir.join("Sample Notes.pdf"), pdf_page(&content)).unwrap();
     let notes = json!({"number": "G-001", "title": "GENERAL NOTES", "file": "Sample Notes.pdf", "page": 1, "type": "general_notes"});

@@ -2031,7 +2031,8 @@ fn prompt_md(
     if counts.get("raceways").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `raceways`: the routed raceway runs of this area (circuit, panel, raceway, sticks, length, the conductors pulled in it with each wire's handle); each raceway piece among the elements carries its `raceway` facts: a stick's `ends_ft` and `ends_aff_in`, what each end `touches` (boxes, the next stick or fitting) and its `links`, the `wires` in it; a box's `cubic_in`, `box_of` and the sticks `entering` it; a wire's `in_raceway`; a fitting's `touches`. The conduit rules in `prescreen` (E-CONDUIT-CONTINUITY, E-CONDUIT-FILL, E-BOX-FILL, E-DERATE, E-VDROP, E-METHOD, G-CLASH, E-TAKEOFF) were measured on these pieces; each finding's `handles` lists every piece of this area it covers: report it once with those `handles`, and overturn it only with evidence from the pieces or the prints.\n");
     }
-    if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 || counts.get("keynote_lists").and_then(Value::as_u64).unwrap_or(0) > 0 {
+    if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 || counts.get("keynote_lists").and_then(Value::as_u64).unwrap_or(0) > 0
+    {
         s.push_str("- `objects.json` `keynotes`: the keynote lists of the sheets that mark this area and of every other sheet the packet shows (number → note, and what each note calls for: a box of a size, a device, conduit of a size and route, a sleeve, a fire rating) and each keynote marker in or by it, with its crop (`keynote_marker` crops; the `keynotes` crops are the lists). G-KEYNOTE in `prescreen` matched each call to the model at its marker; check what it could not measure on the crops.\n");
     }
     if counts.get("underground_callouts").and_then(Value::as_u64).unwrap_or(0) > 0
@@ -3082,8 +3083,7 @@ fn plan_crops(
             let l = links.iter().find(|l| l.number.eq_ignore_ascii_case(sheet));
             trade_of_discipline(&l.and_then(|l| l.discipline.clone()).unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(sheet)))
         };
-        let own_trades: BTreeSet<&'static str> =
-            listed.iter().filter(|(sh, t, ..)| shared(sh, t) <= 1).map(|(sh, ..)| trade_of_sheet(sh)).collect();
+        let own_trades: BTreeSet<&'static str> = listed.iter().filter(|(sh, t, ..)| shared(sh, t) <= 1).map(|(sh, ..)| trade_of_sheet(sh)).collect();
         for (sheet, title, vr, sheet_rect) in &listed {
             let types = shared(sheet, title);
             if types > 1 && own_trades.contains(trade_of_sheet(sheet)) {
@@ -4508,8 +4508,23 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let all_lists = super::validate_keynote::list_asks(&keynotes);
     let docs = DocInput { sheets: &in_drawing, cites: &cites, regions: &regions, lists: &all_lists };
     let type_views = type_view_counts(d);
-    let Planned { mut crops, mut left_out, mut not_shown } =
-        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops, &docs, &type_views, &register, &measure);
+    let Planned { mut crops, mut left_out, mut not_shown } = plan_crops(
+        &sp,
+        &frame,
+        &area,
+        margin,
+        dpi,
+        &trades,
+        &texts,
+        &here,
+        unit.as_ref(),
+        fit.as_ref(),
+        &keynote_crops,
+        &docs,
+        &type_views,
+        &register,
+        &measure,
+    );
     left_out.extend(doc_sheets.1.iter().cloned());
     // The keynote lists of every sheet the packet shows, in `objects.json` too.
     let packet_sheets: BTreeSet<String> = crops.iter().map(|c| c.sheet.trim().to_ascii_uppercase()).collect();

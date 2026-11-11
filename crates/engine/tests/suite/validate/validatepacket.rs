@@ -1131,7 +1131,12 @@ fn a_highlight_over_the_notes_is_drawn_under_their_lettering() {
     let mut s = edited(&j.s, |d| {
         let (x, y) = (note[0] - 10.0, note[1] - 4.0);
         let v = |x: f64, y: f64| PolyVertex { p: Vec2::new(x, y), bulge: 0.0, start_width: 0.0, end_width: 0.0 };
-        let outline = HatchLoop { curves: Vec::new(), vertices: vec![v(x, y), v(x + 300.0, y), v(x + 300.0, y + 14.0), v(x, y + 14.0)], outer: true, sources: Vec::new() };
+        let outline = HatchLoop {
+            curves: Vec::new(),
+            vertices: vec![v(x, y), v(x + 300.0, y), v(x + 300.0, y + 14.0), v(x, y + 14.0)],
+            outer: true,
+            sources: Vec::new(),
+        };
         let hatch = Hatch {
             pattern: "SOLID".into(),
             solid: true,
@@ -1176,7 +1181,10 @@ fn a_sheet_linked_without_a_title_is_known_by_the_job_index_title() {
     let mut sp = spec();
     // The spec knows the lobby's enlarged plan only by number and level; the job's index has its
     // title. Old: a whole "plan" of the level, offered whole for every room on it.
-    sp["sheets"].as_array_mut().unwrap().push(json!({"number": "A-402", "discipline": "A", "level": "L1", "source": "model", "rect": sheet_rect(LOBBY, 0.0)}));
+    sp["sheets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"number": "A-402", "discipline": "A", "level": "L1", "source": "model", "rect": sheet_rect(LOBBY, 0.0)}));
     let mut s = edited(&j.s, |d| {
         let agent = json!({"guided_job": {
             "id": "J-1", "goal": "bim", "created": "2026-01-01T00:00:00Z", "pdfs_path": "",
