@@ -61,8 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Draw", "BIM", "Value Engineering"])
             .params(
                 "{specs?: [path] (spec PDFs or text files, or folders of them: their wiring-methods tables; default the ones the job read), construction_type?: \"V-A\" (else the code sheet's), code_texts?: [string] (the code-analysis sheet's texts in reading order: construction type, sprinklers, occupancies, stories, rated assemblies, electrical code), cost_db?: path (.csv or .json: item, size, unit, material_unit, labor_unit — labor in DOLLARS; `# price_date:`, `# escalation:`, `# manpower_rate:` lines), manpower_rate?: $/h (default the cost DB's), crew_size?: n, hours_per_day?: h, price_book?: path (.csv: the cost DB rows the job needs, a private book beside the drawing), sketches?: folder (an SVG sketch per RFI), model?: bool (default true: each proposed alternative as a hidden model scenario), force?: bool (replace existing files)} → {facts, construction_type, applications, groups: [{kind, area, as_designed, allowed_now, needs_rfi, not_proposed, not_allowed}], scenarios: [{id, name, tier, why?, application, code, conditions, excluded, intent, checks, quantity, as_designed, alternative, saves, unpriced, rfi?, model}], pricing, price_book?}: the wiring-method alternatives, tiered, priced with their manpower and modelled",
-            )
-            .noundo(),
+            ),
         CommandSpec::new("ve.scenario", "Value Engineering Scenario", scenario::run_scenario)
             .menu(&["Draw", "BIM", "Value Engineering Scenario"])
             .params("{id?: scenario id (none: the list), show?: bool} → {scenarios: [{id, name, tier, shown, pieces, replaces, decision, rfi}]} or {id, shown, pieces, replaces}: a scenario shown in the model (its pieces on, the design's pieces it replaces hidden) or hidden again; `conduit.takeoff {scenario}` counts it"),

@@ -518,9 +518,13 @@ fn every_kind_of_every_trade_has_labor_and_the_routes_agree() {
     let mut s = building(&dir);
     let e = s.execute("bim.estimate", &json!({"labor_rate": 50})).expect("estimate");
     assert_eq!(e["no_labor"], json!([]), "{}", e["no_labor"]);
-    let fit = e["lines"].as_array().unwrap().iter().find(|l| l["trade"] == json!("mechanical") && l["category"] == json!("fittings")).cloned();
-    let fit = fit.unwrap_or(Value::Null);
-    assert!(fit["labor_basis"].as_str().is_some_and(|b| b.starts_with("Pipe fitting")) && money(&fit["labor_hrs"]) > 0.0, "{fit}");
+    // A mechanical fitting takes pipe-fitting hours, never an electrical row's. This model's only
+    // runs are feeder conduit, whose fittings are electrical (Q6528: never taken off again as
+    // mechanical), so the book is asked for a mechanical fitting line directly.
+    assert!(e["lines"].as_array().unwrap().iter().all(|l| l["trade"] != json!("mechanical") || l["category"] != json!("fittings")), "{e}");
+    let fit = json!({"trade": "mechanical", "category": "fittings", "item": "CW elbow 90°", "size": "1\"", "unit": "each"});
+    let hit = crate::cmd::estimate::laborbook::labor_for(&fit);
+    assert!(hit.as_ref().is_some_and(|h| h.basis.starts_with("Pipe fitting") && h.hours > 0.0), "{fit}: {hit:?}");
     // Every trade's lines in the contract: none goes without labor.
     for trade in ["electrical", "mechanical", "plumbing", "general", "drywall"] {
         s.execute("estimate.set_scope", &json!({"trade": trade, "scope": "in_contract", "reason": "all ours"})).expect("scope");
