@@ -1442,6 +1442,8 @@ mod tests {
             spacing_status: None,
             depth_status: None,
             bearing_ft: None,
+            deck_in: None,
+            deck_status: None,
             source: String::new(),
         });
         store(&mut s, &sp).unwrap();

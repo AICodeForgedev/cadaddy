@@ -1392,6 +1392,8 @@ mod tests {
             spacing_status: None,
             depth_status: None,
             bearing_ft: bearing,
+            deck_in: None,
+            deck_status: None,
             source: String::new(),
         };
         // Storey 0..8 under a roof at 10.
