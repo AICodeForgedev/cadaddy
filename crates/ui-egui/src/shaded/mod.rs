@@ -883,7 +883,10 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
 /// The drawing a 3D model is built from, whether it is the BIM view's, and the section box's
 /// planes. The BIM view: only the built model, in trade colours, the shell ghosted, drawn in
 /// fidelity tiers; with a 4D day, as built on that day.
-fn shown(doc: &Arc<cadaddy_doc::Drawing>, fourd: Option<crate::fourdpalette::Shown>) -> (Arc<cadaddy_doc::Drawing>, bool, Vec<cadaddy_doc::SectionPlane>) {
+fn shown(
+    doc: &Arc<cadaddy_doc::Drawing>,
+    fourd: Option<crate::fourdpalette::Shown>,
+) -> (Arc<cadaddy_doc::Drawing>, bool, Vec<cadaddy_doc::SectionPlane>) {
     // Read section box planes from coordination state for 3D clipping.
     let sbox_planes = cadaddy_engine::cmd::coordination::coord_render_state(doc).sbox_planes();
     let mut doc = Arc::clone(doc);

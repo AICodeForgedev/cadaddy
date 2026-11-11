@@ -56,7 +56,7 @@ fn frames_of_the_3d_bim_view_load_no_sheet_and_the_model_finishes() {
     for _ in 0..400 {
         h.run_steps(1);
         let st = &h.state().canvas.shade.stats;
-        if st.building.is_none() && st.tris_total > 0 {
+        if st.building.is_none() && st.build_ms > 0.0 {
             ready = true;
             break;
         }
