@@ -1,0 +1,42 @@
+{
+  "_about": "The trade of a built element (Q6528): which trade installs it, the one its takeoff line, its model tree trade and its bid all go by. Rules data, no job's values. An element's own TRADE property (a document said so) wins; else the first rule whose words are whole words of its kind; else the trade of the systems it is on, when they all agree; else `default_equipment`. A run, fitting, terminal or support takes its system's kind's trade (`systems`), a pipe of a fire protection system (sprinkler, standpipe, FP) the fire protection trade.",
+  "trades": ["electrical", "fire protection", "plumbing", "mechanical"],
+  "aliases": {
+    "electric": "electrical",
+    "fire alarm": "electrical",
+    "low voltage": "electrical",
+    "communications": "electrical",
+    "fire": "fire protection",
+    "fire suppression": "fire protection",
+    "sprinkler": "fire protection",
+    "sprinklers": "fire protection",
+    "hvac": "mechanical"
+  },
+  "equipment": [
+    {
+      "trade": "fire protection",
+      "words": ["sprinkler", "fire pump", "jockey pump", "fire department connection", "fdc", "standpipe", "fire riser", "sprinkler riser", "alarm valve", "dry pipe valve", "deluge valve", "preaction valve", "fire hose cabinet", "fire hose valve"],
+      "source": "NFPA 13, 14 and 20; CSI division 21 (fire suppression): installed by the fire protection contractor"
+    },
+    {
+      "trade": "plumbing",
+      "words": ["water heater", "booster pump", "sump pump", "sewage ejector", "ejector pump", "grease interceptor", "grease trap", "expansion tank", "backflow preventer", "water softener", "recirculation pump", "circulation pump", "water meter", "gas meter", "wall hydrant", "floor drain", "roof drain", "trench drain"],
+      "source": "IPC; CSI division 22 (plumbing): installed by the plumbing contractor"
+    },
+    {
+      "trade": "electrical",
+      "words": ["panel", "panelboard", "load center", "switchboard", "switchgear", "transformer", "xfmr", "disconnect", "safety switch", "pull box", "pullbox", "handhole", "hand hole", "splice box", "junction box", "power box", "wireway", "gutter", "pole", "light pole", "ev charger", "ev charging station", "charging station", "evse", "bda", "das", "antenna", "meter", "meter socket", "meter center", "ct cabinet", "generator", "transfer switch", "ats", "ups", "inverter", "busway", "bus duct", "motor control center", "mcc", "contactor", "lighting control", "relay panel", "breaker", "facp", "fire alarm"],
+      "source": "NEC chapters 2-8; CSI divisions 26-28 (electrical, communications, fire alarm): installed by the electrical contractor"
+    }
+  ],
+  "default_equipment": "mechanical",
+  "systems": {
+    "duct": "mechanical",
+    "pipe": "plumbing",
+    "conduit": "electrical",
+    "cable": "electrical",
+    "tray": "electrical",
+    "grounding": "electrical"
+  },
+  "fire_pipe": "fire protection"
+}
