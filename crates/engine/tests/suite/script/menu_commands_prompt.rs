@@ -40,6 +40,8 @@ const DIALOG_OR_STATE: &[&str] = &[
     "dimstyle.dimension",
     // The app's Job panel asks for the prints folder, the goal and the mode (Q6266).
     "job.start",
+    // With nothing built it says so and names model.build (Q6310).
+    "view.bim3d",
 ];
 
 #[test]

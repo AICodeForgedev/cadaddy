@@ -1,0 +1,30 @@
+{
+  "_doc": "How the connection checks of bim.props.check judge an element by its trade (Q6505): which equipment takes a power circuit, and which systems are fire protection. Words are matched at word starts in the element's type, type mark, model, name, description, tag and build part (lower case; '_' ':' '-' '/' read as spaces). When phrases of both lists match, the longest phrase decides.",
+  "power": {
+    "needs_words": [
+      "fan", "exhaust fan", "supply fan", "return fan", "inline fan", "ceiling fan", "ptac", "pthp", "packaged terminal", "fan coil", "fcu",
+      "air handl", "ahu", "rooftop unit", "rtu", "unit heater", "cabinet heater", "wall heater", "baseboard", "electric heat", "duct heater",
+      "heat pump", "condensing unit", "condenser", "chiller", "cooling tower", "boiler", "water heater", "tankless water heater", "heat exchanger pump",
+      "compressor", "vav", "variable air volume", "fan powered", "motor", "pump", "circulator", "recirculation pump", "booster", "sump", "ejector",
+      "grinder", "erv", "hrv", "energy recovery", "make up air", "makeup air", "mau", "doas", "dehumidifier", "humidifier", "split system",
+      "mini split", "evaporator", "kitchen hood", "range hood", "elevator", "door operator", "gate operator", "hand dryer", "dryer", "washer",
+      "range", "oven", "dishwasher", "refrigerator", "freezer", "ice machine", "disposer", "heat trace", "snow melt", "air compressor",
+      "air curtain", "vending", "fire pump", "jockey pump", "control panel", "actuator", "motorized", "motor operated"
+    ],
+    "needs_marks": ["EF", "SF", "RF", "TF", "IF", "CF", "PTAC", "PTHP", "FCU", "FC", "AHU", "RTU", "UH", "CUH", "EUH", "WH", "EWH", "HP", "WSHP", "CU", "ACCU", "CH", "ERV", "HRV", "MAU", "DOAS", "VAV", "FPB", "CP", "RP", "HWP", "CWP", "SP", "DH", "EDH", "EH"],
+    "rating_keys": ["volts", "voltage", "amps", "fla", "mca", "mocp", "hp", "horsepower", "kw", "watts", "va", "phase", "breaker", "load"],
+    "none_words": [
+      "manifold", "water manifold", "relief hood", "relief vent", "intake hood", "exhaust hood", "gravity hood", "gooseneck", "louver",
+      "damper", "fire damper", "backdraft damper", "balancing damper", "volume damper", "manual damper", "backflow", "valve", "meter",
+      "cleanout", "tank", "expansion tank", "storage tank", "separator", "interceptor", "grease trap", "trap", "hydrant", "roof drain",
+      "floor drain", "roof curb", "equipment curb", "sleeve", "hose bibb", "strainer", "air separator", "air vent", "vent cap", "wall cap",
+      "roof cap", "plenum box", "sound attenuator", "silencer", "flex connector", "expansion joint", "access door", "access panel",
+      "fire extinguisher", "extinguisher cabinet", "standpipe", "fire department connection", "fdc"
+    ],
+    "source": "trade practice: equipment with a motor, heater, compressor or controls takes a branch circuit (NEC 422 appliances, 424 space heating, 430 motors, 440 A/C and refrigeration); manifolds, hoods and louvers without fans, gravity relief, tanks, valves, drains and dampers with no actuator (a fire damper closes on its fusible link) take none. An element with an electrical rating (volts, amps, MCA, horsepower, kW, VA) takes power whatever its name."
+  },
+  "fire_protection": {
+    "systems": ["FP", "FPS", "FSP", "SPK", "SPR", "SP", "FS", "WS", "DS", "FIRE", "SPRINKLER", "SPRINKLERS", "STANDPIPE", "FIRE PROTECTION", "FIRE SPRINKLER", "WET", "DRY", "PREACTION", "DELUGE"],
+    "source": "trade practice: sprinkler heads are served by fire protection piping (NFPA 13: a sprinkler system's piping from its water supply), named FP, sprinkler, standpipe or by the system type (wet, dry, preaction, deluge) on fire protection drawings"
+  }
+}

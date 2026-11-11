@@ -745,3 +745,99 @@ fn hostile_property_values_never_panic() {
         assert!(s.execute("bim.takeoff", &bad).is_err(), "{bad}");
     }
 }
+
+/// The build's part tag on an element (`part:terminal:sprinkler_pendent`), as `model.build` writes it.
+fn with_part(d: &mut Drawing, h: Handle, part: &str) {
+    d.modify_entity(h, |e: &mut Entity| {
+        let mut x = e.common.xdata.to_vec();
+        x.insert(4, RawTag { code: 1000, value: format!("part:{part}") });
+        e.common.xdata = x.into();
+    })
+    .unwrap();
+}
+
+/// Q6505: the connection checks judge an element by its trade. A sprinkler branch with its heads,
+/// a water manifold, a relief hood, a louver and a backdraft damper: none flagged; a grille on a
+/// duct to an exhaust fan is served; a fan and a motorized damper with no circuit, a head on no
+/// pipe and a grille on no duct still are.
+#[test]
+fn connection_checks_judge_by_trade() {
+    let mut d = Drawing::new_imperial();
+    let eq = |d: &mut Drawing, x: f64, ps: &[(&str, Value)]| el(d, "equipment", "L1", "M-EQPM", [x, 40.0, 9.0], [x + 2.0, 42.0, 10.0], ps);
+    // A sprinkler main and branch (fire protection), three heads on the branch.
+    let main = el(&mut d, "pipe", "L1", "FP-PIPE", [0.0, 50.0, 9.5], [40.0, 50.2, 9.7], &[("system", json!("FP")), ("size", json!("2\""))]);
+    let branch = el(
+        &mut d,
+        "pipe",
+        "L1",
+        "FP-PIPE",
+        [10.0, 50.0, 9.5],
+        [10.2, 70.0, 9.7],
+        &[("system", json!("FP")), ("size", json!("1\"")), ("connects", json!(main.hex()))],
+    );
+    let mut heads = Vec::new();
+    for i in 0..3 {
+        let y = 55.0 + 5.0 * f64::from(i);
+        let h = el(&mut d, "fixture", "L1", "FP-SPRK", [10.0, y, 9.3], [10.2, y + 0.2, 9.5], &[("connects", json!(branch.hex()))]);
+        with_part(&mut d, h, "terminal:sprinkler_pendent");
+        heads.push(h);
+    }
+    // A head linked to its branch by tag, not by the network.
+    let tagged = el(&mut d, "fixture", "L1", "FP-SPRK", [20.0, 55.0, 9.3], [20.2, 55.2, 9.5], &[("served_by", json!("FP-B1"))]);
+    with_part(&mut d, tagged, "terminal:sprinkler_upright");
+    el(&mut d, "pipe", "L1", "FP-PIPE", [20.0, 50.0, 9.5], [20.2, 70.0, 9.7], &[("system", json!("Sprinkler")), ("tag", json!("FP-B1"))]);
+    // A head on no pipe at all.
+    let lone_head = el(&mut d, "fixture", "L1", "FP-SPRK", [30.0, 80.0, 9.3], [30.2, 80.2, 9.5], &[]);
+    with_part(&mut d, lone_head, "terminal:sprinkler_pendent");
+    // Passive equipment: no power.
+    let manifold = eq(&mut d, 0.0, &[("tag", json!("M-1")), ("type", json!("Water manifold"))]);
+    let hood = eq(&mut d, 4.0, &[("tag", json!("RH-1")), ("type", json!("Relief hood"))]);
+    let louver = eq(&mut d, 8.0, &[("tag", json!("L-1")), ("type", json!("Intake louver"))]);
+    let damper = eq(&mut d, 12.0, &[("type", json!("Backdraft damper"))]);
+    // Powered equipment with no circuit, and one with its circuit.
+    let fan = eq(&mut d, 16.0, &[("tag", json!("EF-1")), ("type", json!("Exhaust fan")), ("cfm", json!(150))]);
+    let motorized = eq(&mut d, 20.0, &[("type", json!("Motorized damper"))]);
+    let rated = eq(&mut d, 24.0, &[("tag", json!("X-1")), ("volts", json!(120))]);
+    let fed = eq(&mut d, 28.0, &[("tag", json!("EF-2")), ("type", json!("Exhaust fan")), ("circuit", json!("LP1-3"))]);
+    // A grille on a duct to EF-2 (the built network's `connects`), and one on no duct.
+    let duct = el(&mut d, "duct", "L1", "M-DUCT", [28.0, 30.0, 9.0], [29.0, 40.0, 9.67], &[("size", json!("8x8")), ("connects", json!(fed.hex()))]);
+    let served = el(
+        &mut d,
+        "diffuser",
+        "L1",
+        "M-DIFF",
+        [28.0, 29.0, 9.0],
+        [29.0, 30.0, 9.2],
+        &[("type", json!("Exhaust grille")), ("connects", json!(duct.hex()))],
+    );
+    let lone_grille = el(&mut d, "diffuser", "L1", "M-DIFF", [40.0, 29.0, 9.0], [41.0, 30.0, 9.2], &[("type", json!("Exhaust grille"))]);
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Building", None);
+    let r = s.execute("bim.props.check", &json!({"checks": ["terminal_unserved", "equipment_power"]})).unwrap();
+    let mut tu = handles(&findings(&r, "terminal_unserved"));
+    tu.sort();
+    let mut want = vec![lone_head.hex(), lone_grille.hex()];
+    want.sort();
+    assert_eq!(tu, want, "heads on the fire protection branch and the grille on the fan's duct are served: {r:#}");
+    for h in heads.iter().chain([&tagged, &served]) {
+        assert!(!tu.contains(&h.hex()), "{h:?}");
+    }
+    let head_f = findings(&r, "terminal_unserved").into_iter().find(|f| f["handle"] == lone_head.hex()).unwrap();
+    assert!(head_f["message"].as_str().unwrap().contains("no fire protection pipe"), "{head_f}");
+    let mut ep = handles(&findings(&r, "equipment_power"));
+    ep.sort();
+    let mut want = vec![fan.hex(), motorized.hex(), rated.hex()];
+    want.sort();
+    assert_eq!(ep, want, "{r:#}");
+    for h in [manifold, hood, louver, damper] {
+        assert!(!ep.contains(&h.hex()), "passive {h:?} takes no power");
+    }
+    assert_eq!(r["totals"]["equipment_power"]["takes_none"], 4, "{r:#}");
+    assert_eq!(r["totals"]["equipment_power"]["needs_power"], 4);
+    // The air schedule names the unit the grille's duct reaches.
+    let sch = s.execute("bim.schedule", &json!({"kind": "air_distribution"})).unwrap();
+    let rows = sch["rows"].as_array().unwrap();
+    assert!(rows.iter().any(|row| row["terminal"] == served.hex() && row["unit"] == "EF-2"), "{sch:#}");
+    assert!(rows.iter().any(|row| row["terminal"] == lone_grille.hex() && row["unit"] == "(not served)"), "{sch:#}");
+    assert!(!rows.iter().any(|row| heads.iter().any(|h| row["terminal"] == h.hex())), "sprinkler heads are no air terminals: {sch:#}");
+}

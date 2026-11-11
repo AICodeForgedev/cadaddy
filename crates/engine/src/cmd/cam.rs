@@ -23,7 +23,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("cam2dprofile", "2D Profile Toolpath", run_cam2dprofile)
-            .menu(&["Manufacture", "2D Profile"])
+            .menu(&["Tools", "Manufacture", "2D Profile"])
             .params(
                 "{handles?, toolDiameter: number, offset: \"inside\"|\"outside\"|\"on\", \
                  feedRate: number, plungeRate: number, spindleSpeed: number, depth: number, \
@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .enabled(has_selection),
         CommandSpec::new("cncdxf", "CNC DXF Export", run_cncdxf)
-            .menu(&["Manufacture", "CNC DXF Export..."])
+            .menu(&["Tools", "Manufacture", "CNC DXF Export..."])
             .params(
                 "{handles? (polylines, circles, arcs, lines and block references, exploded; \
                  pieces whose ends meet are joined; default: selection), \

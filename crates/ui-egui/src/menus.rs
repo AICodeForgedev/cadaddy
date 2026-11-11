@@ -1763,3 +1763,68 @@ mod units_dialog_tests {
         assert_eq!((h.i64("LUNITS", 0), h.i64("LUPREC", 0), h.i64("INSUNITS", 0)), (4, 3, 4));
     }
 }
+
+#[cfg(test)]
+mod menu_path_tests {
+    use cadaddy_engine::Session;
+
+    use super::{Entry, UI_COMMANDS, tree};
+    use crate::{CadApp, Services, ribbon};
+
+    /// Whether the menu tree holds `id` at `path` (its top menu, its submenus, its own label).
+    fn on_menu(menus: &[(String, Vec<Entry>)], path: &[&str], id: &str) -> bool {
+        let Some((top, rest)) = path.split_first() else { return false };
+        let Some(mut entries) = menus.iter().find(|(m, _)| m == top).map(|(_, e)| e.as_slice()) else { return false };
+        let Some((last, subs)) = rest.split_last() else { return false };
+        for seg in subs {
+            let Some(children) = entries.iter().find_map(|e| match e {
+                Entry::Sub { label, children } if label == seg => Some(children.as_slice()),
+                _ => None,
+            }) else {
+                return false;
+            };
+            entries = children;
+        }
+        entries.iter().any(|e| matches!(e, Entry::Item { label, id: i, .. } if i == id && label == last))
+    }
+
+    /// Q6310 (the owner looked for BIM View under View, where its help said it was): every
+    /// command whose help names a menu path is on that menu, under that label.
+    #[test]
+    fn every_menu_path_a_commands_help_names_is_on_that_menu() {
+        let app = CadApp::new(Session::new(), Services::default());
+        let menus = tree(&app);
+        let mut missing = Vec::new();
+        for c in cadaddy_engine::command_specs().iter().filter(|c| !c.menu.is_empty()) {
+            let help = c.help_page().menu_path;
+            assert_eq!(help, c.menu.join(" > "), "{}: its help page's menu path", c.id);
+            if !on_menu(&menus, c.menu, c.id) {
+                missing.push(format!("{}: its help says Menu: {help}, but that menu has no such item", c.id));
+            }
+        }
+        for (id, _, path, _) in UI_COMMANDS.iter().filter(|c| !c.2.is_empty()) {
+            if !on_menu(&menus, path, id) {
+                missing.push(format!("{id}: listed under {}, but that menu has no such item", path.join(" > ")));
+            }
+        }
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
+
+    /// Q6310: View ▸ 3D BIM and the View ribbon tab's 3D BIM button, one click each, the help
+    /// naming the menu item.
+    #[test]
+    fn three_d_bim_is_on_the_view_menu_and_the_view_ribbon_tab() {
+        let app = CadApp::new(Session::new(), Services::default());
+        let menus = tree(&app);
+        assert!(on_menu(&menus, &["View", "3D BIM"], "view.bim3d"), "View ▸ 3D BIM");
+        let c = cadaddy_engine::find_command("view.bim3d").expect("the 3D BIM command");
+        assert_eq!(c.help_page().menu_path, "View > 3D BIM");
+        let view = ribbon::TABS.iter().find(|t| t.name == "View").expect("the View tab");
+        let on_tab = view.panels.iter().flat_map(|p| p.items).any(|i| match i {
+            ribbon::Item::Large(b) => b.cmd == "view.bim3d" && b.label == "3D BIM",
+            ribbon::Item::Smalls(bs) => bs.iter().any(|b| b.cmd == "view.bim3d"),
+            ribbon::Item::Layers => false,
+        });
+        assert!(on_tab, "the View tab has a 3D BIM button");
+    }
+}
