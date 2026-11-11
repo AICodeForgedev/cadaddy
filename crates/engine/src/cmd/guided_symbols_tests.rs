@@ -322,6 +322,42 @@ fn a_set_with_no_legend_gets_its_receptacles_and_switches_from_the_shared_librar
     assert!(t.get("library:duplex-receptacle").is_some_and(|e| e.status() == "derived" && !e.off));
 }
 
+/// A switch the devices stage read by its `S` sits at its symbol, a tag's reach off the lettering
+/// the library finds: that copy is the switch read already, not a new one. Each read switch
+/// answers one copy (the second `S` of a two-gang beside it is a switch of its own).
+#[test]
+fn a_library_copy_by_a_switch_read_by_its_mark_is_read_already() {
+    let mut set = Set::new();
+    let duplex = lib_strokes("duplex receptacle");
+    set.sheet("E-101", "plan", true, |set, x0| {
+        let (lo, hi) = set.room([x0 + 2.0, 2.0], [x0 + 30.0, 20.0]);
+        set.draw(&duplex, [lo[0] + 0.09, 6.0], 1);
+        set.draw(&duplex, [x0 + 10.0, hi[1] - 0.09], 0);
+        set.draw(&duplex, [hi[0] - 0.09, 12.0], 3);
+        set.text([lo[0] + 0.03, 9.0], "S");
+        set.text([lo[0] + 0.03, 9.7], "S");
+        set.text([x0 + 12.0, hi[1] - 0.15], "S3");
+    });
+    let (x0, y) = (2.06 + 0.03, 9.0);
+    let read = |tag: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+        tag: tag.into(),
+        at,
+        sheet: "E-101".into(),
+        level: "1".into(),
+        ..super::super::readers::ReadDevice::default()
+    };
+    // The switch read by its mark, between the two `S`; the three-way switch by its `S3`.
+    set.job.devices = vec![read("S", [x0, y + 0.35]), read("S3", [12.0, SHEET_H - 4.0 - 0.06 - 0.15 - 0.3])];
+    let found = set.search(&shipped(), None);
+    let mut got: Vec<String> = found.added.iter().map(|dv| dv.kind.clone()).collect();
+    got.sort();
+    assert_eq!(got, ["receptacle", "receptacle", "receptacle", "switch"], "{:#?}", found.added);
+    assert_eq!(found.read_already, 2);
+    // The new switch is the second `S`, not the one read.
+    let sw = found.added.iter().find(|dv| dv.kind == "switch").map(|dv| dv.at).unwrap_or_default();
+    assert!(sw[1] > y + 0.5, "{sw:?}");
+}
+
 /// Turning a symbol off for one set removes its devices there (logged, revertible) and leaves
 /// another set as it was.
 #[test]

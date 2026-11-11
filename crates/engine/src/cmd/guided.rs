@@ -11317,6 +11317,28 @@ struct PlanSymbols {
     timed_out: bool,
 }
 
+/// A device read already on a sheet, as [`plan_symbols`] matches its copies to it: where it is,
+/// its mark, its kind, and whether a copy was taken for it.
+struct ReadMark {
+    at: [f64; 2],
+    tag: String,
+    kind: String,
+    taken: bool,
+}
+
+/// The device read already that a copy of `e` found at `at` (`size` big) is: the nearest one no
+/// other copy took, of the entry's kind or marked with its lettering, within a tag's reach.
+fn read_mark_for<'a>(marks: &'a mut [ReadMark], e: &super::symtable::Entry, at: [f64; 2], size: f64) -> Option<&'a mut ReadMark> {
+    let reach = super::symtable::TAG_REACH * size;
+    marks
+        .iter_mut()
+        .filter(|m| !m.taken && (m.kind == e.kind || e.letters.iter().any(|l| l.trim().eq_ignore_ascii_case(&m.tag))))
+        .map(|m| ((m.at[0] - at[0]).hypot(m.at[1] - at[1]), m))
+        .filter(|(d, _)| d.is_finite() && *d <= reach)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, m)| m)
+}
+
 /// Plan sheets searched for the symbol table's drawings, at most, and for how long (the rest are
 /// said); questions about drawings nothing explains, at most, each repeating this often or more.
 const MAX_SYMBOL_SHEETS: usize = 600;
@@ -11442,8 +11464,13 @@ fn plan_symbols(
     let sheet_numbers = job_sheet_numbers(job);
     let read_handles: BTreeSet<String> = job.devices.iter().map(|dv| dv.handle.to_ascii_uppercase()).filter(|h| !h.is_empty()).collect();
     let mut read: BTreeMap<String, Vec<[f64; 2]>> = BTreeMap::new();
+    // The devices read already, by sheet: where each is, its mark and its kind, and whether a
+    // copy found by its drawing was taken for it.
+    let mut read_marks: BTreeMap<String, Vec<ReadMark>> = BTreeMap::new();
     for dv in job.devices.iter().chain(typical.added.iter()) {
         read.entry(sheet_key(&dv.sheet)).or_default().push(dv.at);
+        let kind = if dv.kind.trim().is_empty() { super::readers::device_kind(&dv.tag).to_string() } else { dv.kind.trim().to_string() };
+        read_marks.entry(sheet_key(&dv.sheet)).or_default().push(ReadMark { at: dv.at, tag: dv.tag.trim().to_ascii_uppercase(), kind, taken: false });
     }
     // Each drawing nothing explained: its copies (sheet, middle, size, handles, its pieces and
     // its sheet's units).
@@ -11533,6 +11560,13 @@ fn plan_symbols(
             let at = [hit.at.x, hit.at.y];
             let reach = hit.size.max(1e-9);
             if read.get(&key).is_some_and(|v| v.iter().any(|p| (p[0] - at[0]).hypot(p[1] - at[1]) <= reach)) {
+                out.read_already += 1;
+                continue;
+            }
+            // A device read by its mark printed by this copy (a switch's `S`: the devices stage
+            // puts it at its symbol, a tag's reach off its lettering): that device, once.
+            if let Some(m) = read_marks.get_mut(&key).and_then(|v| read_mark_for(v, e, at, reach)) {
+                m.taken = true;
                 out.read_already += 1;
                 continue;
             }

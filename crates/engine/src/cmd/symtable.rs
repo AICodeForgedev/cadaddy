@@ -74,7 +74,7 @@ const HOST_NEAR: f64 = 0.75;
 /// A wall's two faces: this many symbol sizes apart at most.
 const WALL_PAIR: f64 = 1.5;
 /// A circuit or designation printed this many symbol sizes from it is its.
-const TAG_REACH: f64 = 2.5;
+pub(crate) const TAG_REACH: f64 = 2.5;
 /// Lettering inside a symbol: its middle this share of the symbol's size from the symbol's.
 const LETTER_IN: f64 = 0.45;
 /// An unexplained drawing: at most this big on paper (inches) and of this many pieces.
