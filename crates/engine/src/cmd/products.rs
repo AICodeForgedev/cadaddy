@@ -37,6 +37,9 @@ const MAX_SNIFFED: usize = 40;
 const MAX_SNIFF_BYTES: u64 = 64 * 1024 * 1024;
 /// Folder entries a job's search looks at, at most.
 const MAX_SEARCHED: usize = 5_000;
+/// The biggest page a book is printed on, inches (short side, long side): legal paper with a
+/// margin (letter and A4 fit; a drawing sheet, even a half-size one, doesn't).
+const BOOK_PAGE_MAX_IN: (f64, f64) = (9.5, 14.5);
 /// A folder holding more entries than this is no project's folder (a downloads or temporary
 /// folder): the search beside a folder in it goes by the names beside it only.
 const MAX_BESIDE: usize = 60;
@@ -566,6 +569,12 @@ pub(crate) fn find_project_specs(prints: &str, submittals: &[String], sniff: boo
         opened += 1;
         let Ok(bytes) = crate::readfile::read(&c) else { continue };
         let text = if c.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")) {
+            // A drawing sheet is no page of a book: a PDF whose first page is bigger than one
+            // (another print set beside the prints) is not imported page by page to be read
+            // (Q6329: 40 such sheets took 5 s of a job that built nothing).
+            if !book_sized(&bytes) {
+                continue;
+            }
             super::spec_import::pdf_text_pages(&bytes, &c.to_string_lossy(), SNIFF_PAGES).unwrap_or_default()
         } else {
             String::from_utf8_lossy(bytes.get(..bytes.len().min(256 * 1024)).unwrap_or_default()).to_string()
@@ -576,6 +585,16 @@ pub(crate) fn find_project_specs(prints: &str, submittals: &[String], sniff: boo
         }
     }
     out
+}
+
+/// Whether a PDF's first page is a book's page ([`BOOK_PAGE_MAX_IN`]), not a drawing sheet. Read
+/// from its page box, nothing drawn; a PDF whose box doesn't read is given the benefit of the
+/// doubt (its pages are read as before).
+fn book_sized(bytes: &[u8]) -> bool {
+    let Ok(sizes) = cadaddy_io::pdf_merge::page_sizes(bytes) else { return true };
+    let Some(&(w, h)) = sizes.first() else { return true };
+    let (short, long) = ((w.min(h)) / 72.0, (w.max(h)) / 72.0);
+    !(short.is_finite() && long.is_finite()) || (short <= BOOK_PAGE_MAX_IN.0 && long <= BOOK_PAGE_MAX_IN.1)
 }
 
 /// Every file below `dir` (sorted, four folders down, capped).

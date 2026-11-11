@@ -729,6 +729,34 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     s.echo(format!("bim.from_pdf: running the job on {stem}..."));
     s.new_drawing_with_viewports(false);
     let status = s.execute("job.start", &json!({"pdfs": path, "goal": "bim", "auto": true, "checkpoint": false, "resume": false}))?;
+    // A set with no plan view: the job declined at classify, before importing anything (Q6329).
+    // Said as the failure, with why; nothing to check or save.
+    let stopped = status.get("error").and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("");
+    if status.get("done").and_then(Value::as_bool) != Some(true) && stopped.contains(super::guided::NO_PLAN_VIEWS) {
+        let why = format!("{stem}: {stopped}");
+        s.echo(format!("bim.from_pdf: {why}"));
+        return Ok(json!({
+            "cdy_paths": [],
+            "pages": [],
+            "pages_note": "built from 0 sheet(s): the set has no plan views",
+            "links": status.get("links"),
+            "spec_guesses": [],
+            "check_results": [],
+            "built_counts": {},
+            "levels": [],
+            "built": {},
+            "job": {"job_id": status.get("job_id"), "status": status.get("status"), "done": status.get("done"), "findings": status.get("findings")},
+            "ok": false,
+            "declined": stopped,
+            "failed": [why.clone()],
+            "warnings": [why],
+            "next_steps": [
+                "bim.from_pdf {path: \"...\"} — the folder or PDF of the set's floor plans",
+                "job.status {} — the sheets the job read and what it took each for",
+                "job.sheets.set {\"<number>\": {\"type\": \"plan\"}} — a sheet that is a plan after all; the job goes on from it",
+            ],
+        }));
+    }
     let mut warnings: Vec<String> = Vec::new();
     // What makes the run a failure (the CLI exits non-zero on any).
     let mut failed: Vec<String> = Vec::new();

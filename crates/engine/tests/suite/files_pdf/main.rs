@@ -18,6 +18,7 @@ mod jobmep;
 mod jobunits;
 mod levelregions;
 mod mepnoise;
+mod nonplanset;
 mod pdf_underlay;
 mod planscale;
 mod printlinks;

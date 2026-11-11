@@ -1421,10 +1421,16 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         "pages": page_facts,
     }));
 
-    // The project manual (Q6168): found, or asked for. The sheets it makes a division's
-    // specification are no plans (Q6295).
-    look_for_specs(s, job, true);
-    mark_spec_sheets(s, job, &mut classified);
+    // A set with no plan view builds nothing (Q6329): told now, from the sheet index as the
+    // answers corrected it, before the specification is searched for and any sheet imported.
+    super::sheetcheck::apply(job);
+    let no_plans = if builds_model(job) { no_plan_views(job) } else { None };
+    if no_plans.is_none() {
+        // The project manual (Q6168): found, or asked for. The sheets it makes a division's
+        // specification are no plans (Q6295).
+        look_for_specs(s, job, true);
+        mark_spec_sheets(s, job, &mut classified);
+    }
     // The sheet index's corrections the answers gave (Q6517) over the readers' reading.
     super::sheetcheck::apply(job);
     if let (Some(index), Some(o)) = (job.index.as_ref(), classified.as_object_mut()) {
@@ -1479,6 +1485,22 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             "A classify stage that yields 0 sheets cannot proceed",
             5,
             vec!["Check that the PDF folder is correct".into(), "Re-import with a different path".into()],
+            None,
+            true,
+        );
+    }
+    // No plan view: the job declines here (a blocking finding), saying which sheets it read.
+    if let Some(why) = &no_plans {
+        s.echo(format!("job: {why}"));
+        job.add_finding(
+            StageName::Classify,
+            why,
+            "A building model is built from the set's floor plans (and the trades' plans over them). Every sheet's title block names it as something else, and no view on it is titled as a plan, so no stage after classify would find anything to build",
+            5,
+            vec![
+                "Check that the path holds the floor plans (a folder of the set's PDFs, or the merged set)".into(),
+                "A sheet that is a plan after all: job.sheets.set {\"<number>\": {\"type\": \"plan\"}} and the job goes on from it".into(),
+            ],
             None,
             true,
         );
@@ -2333,6 +2355,101 @@ pub fn extract_levels_from_title(title: &str) -> Vec<String> {
     levels
 }
 
+/// A sheet of the index no later copy supersedes.
+fn current_sheet(sh: &Value) -> bool {
+    sh.get("superseded_by").and_then(Value::as_str).is_none_or(str::is_empty)
+}
+
+/// The type the index gives a sheet (`plan`, `detail`, `unknown`, …).
+fn sheet_kind(sh: &Value) -> &str {
+    sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str).unwrap_or("")
+}
+
+/// Whether a sheet's title names a reflected ceiling plan (and no floor plan: a sheet that also
+/// prints the floor plan is that floor's plan first).
+fn rcp_sheet_title(sh: &Value) -> bool {
+    let t = sh.get("title").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+    let ceiling = t.contains("REFLECTED CEILING") || t.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP");
+    ceiling && !cadaddy_mepfix::wordrules::words("sheets.floor_plan_title_words").iter().any(|w| t.contains(w))
+}
+
+/// Whether the job imports a sheet as one of its plans: the plans, the reflected ceiling plans
+/// (a sheet of enlarged RCPs and details too: the ceilings are set per area from them before the
+/// MEP goes in) and the partition (wall type) legend (how each wall the plans tag is built); never
+/// a sheet of the specification.
+fn loaded_as_plan(sh: &Value) -> bool {
+    !is_spec_sheet(sh)
+        && (matches!(sheet_kind(sh), "plan" | "enlarged_plan" | "rcp")
+            || rcp_sheet_title(sh)
+            || wall_legend_title(sh.get("title").and_then(Value::as_str).unwrap_or("")))
+}
+
+/// The start of the finding of a print set that has no plan view (the job declines at classify).
+pub(crate) const NO_PLAN_VIEWS: &str = "The print set has no plan views";
+
+/// Sheets a no-plan finding names.
+const NO_PLAN_SHEETS_NAMED: usize = 8;
+
+/// Why the print set has no plan view to build a model from (`None`: it has one, or may have).
+/// A sheet is or may be a plan when the index loads it as one ([`loaded_as_plan`]), its title or
+/// one of its page's view titles names a plan, it is on a level, a plan view was marked on it, or
+/// its title couldn't be read (an untitled page is still tried as a plan). A set whose every
+/// sheet says it is something else (a part drawing, schedules, details, a cover) builds nothing:
+/// the job says so at classify, before the specification search and the sheet imports, instead
+/// of running every stage for nothing (Q6329: 7-26 s per such set).
+fn no_plan_views(job: &GuidedJob) -> Option<String> {
+    let sheets: Vec<&Value> = job
+        .sheets
+        .as_ref()
+        .and_then(|v| v.get("sheets"))
+        .and_then(Value::as_array)?
+        .iter()
+        .filter(|sh| current_sheet(sh) && !is_spec_sheet(sh))
+        .collect();
+    if sheets.is_empty() {
+        return None;
+    }
+    let pages = job.index.as_ref().and_then(|i| i.get("pages"));
+    let text = |sh: &Value, k: &str| sh.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let views_name_a_plan = |sh: &Value| {
+        let page = sh.get("page").and_then(Value::as_u64).unwrap_or(0);
+        let file = text(sh, "file");
+        let source = if page == 0 { file } else { format!("{file}#{page}") };
+        pages
+            .and_then(|p| p.get(&source))
+            .and_then(|f| f.get("views"))
+            .and_then(Value::as_array)
+            .is_some_and(|vs| vs.iter().filter_map(|v| v.get("title").and_then(Value::as_str)).any(cadaddy_mepfix::sheet_facts::names_a_plan))
+    };
+    let may_be_plan = |sh: &Value| {
+        let title = text(sh, "title");
+        loaded_as_plan(sh)
+            || title.is_empty()
+            || cadaddy_mepfix::sheet_facts::names_a_plan(&title)
+            || !text(sh, "level").is_empty()
+            || sh.get("plan_view").is_some_and(|v| !v.is_null())
+            || views_name_a_plan(sh)
+    };
+    if sheets.iter().any(|sh| may_be_plan(sh)) {
+        return None;
+    }
+    let named: Vec<String> = sheets
+        .iter()
+        .take(NO_PLAN_SHEETS_NAMED)
+        .map(|sh| {
+            let kind = Some(sheet_kind(sh)).filter(|k| !k.is_empty()).unwrap_or("unknown");
+            format!("{} \"{}\" ({kind})", text(sh, "number"), text(sh, "title"))
+        })
+        .collect();
+    let more = sheets.len().saturating_sub(named.len());
+    Some(format!(
+        "{NO_PLAN_VIEWS}: none of its {} sheet(s) is a floor, ceiling or trade plan, so there is nothing to build a model from: {}{}",
+        sheets.len(),
+        named.join("; "),
+        if more > 0 { format!("; and {more} more") } else { String::new() }
+    ))
+}
+
 /// Import the print set's plan-sheet PDFs into the session's drawing so that
 /// stage commands (`rooms.list`, `bspec.draft`, `bim.build`, …) find entities.
 ///
@@ -2352,24 +2469,11 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         None => return Err(bad("guided", "no sheets cached — classify must run first")),
     };
     let sheet_arr = sheets_val.get("sheets").and_then(Value::as_array).cloned().unwrap_or_default();
-    let current = |sh: &&Value| sh.get("superseded_by").and_then(Value::as_str).is_none_or(str::is_empty);
-    let kind = |sh: &Value| sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str).unwrap_or("").to_string();
-    // The plans, and the reflected ceiling plans (a sheet of enlarged RCPs and details too): the
-    // ceilings are set per area from them before the MEP goes in.
-    let rcp_title = |sh: &Value| {
-        let t = sh.get("title").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
-        let ceiling = t.contains("REFLECTED CEILING") || t.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP");
-        // A sheet that also prints the floor plan is that floor's plan first.
-        ceiling && !cadaddy_mepfix::wordrules::words("sheets.floor_plan_title_words").iter().any(|w| t.contains(w))
-    };
+    let current = |sh: &&Value| current_sheet(sh);
+    let kind = |sh: &Value| sheet_kind(sh).to_string();
+    let rcp_title = |sh: &Value| rcp_sheet_title(sh);
     let legend_title = |sh: &Value| wall_legend_title(sh.get("title").and_then(Value::as_str).unwrap_or(""));
-    // And the partition (wall type) legend: how each wall the plans tag is built.
-    let mut plan_sheets: Vec<&Value> = sheet_arr
-        .iter()
-        .filter(current)
-        .filter(|sh| !is_spec_sheet(sh))
-        .filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan" | "rcp") || rcp_title(sh) || legend_title(sh))
-        .collect();
+    let mut plan_sheets: Vec<&Value> = sheet_arr.iter().filter(current).filter(|sh| loaded_as_plan(sh)).collect();
     // The index's level (a plan whose title names none was given one) over the page's own.
     let level_of = |sh: &Value| -> String {
         let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
@@ -2413,11 +2517,9 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         .iter()
         .map(|sh| {
             let file = sh.get("file").and_then(Value::as_str).unwrap_or_default();
-            // The set's files are named from its folder (a one-PDF set: the PDF's folder).
-            let dir = std::path::Path::new(&job.pdfs_path);
-            let dir =
-                if dir.is_file() { dir.parent().map_or_else(|| ".".to_string(), |p| p.to_string_lossy().to_string()) } else { job.pdfs_path.clone() };
-            let path = if std::path::Path::new(file).is_absolute() { file.to_string() } else { format!("{dir}/{file}") };
+            // The set's files are named from its folder (a one-PDF set: the PDF's folder; a PDF
+            // named without one, `e2e.pdf`, the current folder's, not `/e2e.pdf`).
+            let path = set_file_path(&job.pdfs_path, file).to_string_lossy().to_string();
             // Images (logos, scans) aren't used by the job, and must not land in the user's print
             // folder; pattern-sized fills are merged (they are most of a print set's objects).
             let mut params = json!({"page": page_of(sh), "images": false, "fills": "merge"});
@@ -29467,6 +29569,7 @@ fn rerun_from_stage(
     reason: &Value,
     qid: Option<&str>,
 ) -> Result<Vec<(StageName, BTreeMap<String, Value>)>> {
+    lift_no_plan_decline(s, job);
     // A sheet correction after the sheets were imported: they are imported again, on a fresh
     // drawing, and every stage from the levels on reads them again (Q6517).
     if job.reimport {
@@ -29488,6 +29591,34 @@ fn rerun_from_stage(
         job.audit("stage_rerun", "pipeline", qid, Some(from), Some(json!({"reason": reason, "stages": names})));
     }
     Ok(reset)
+}
+
+/// A job that declined at classify for want of a plan view (Q6329) goes on once the sheet
+/// index's corrections make one of its sheets a plan: the decline goes, classify is done, and the
+/// specification is looked for now (it wasn't then). Another blocking finding keeps it declined.
+fn lift_no_plan_decline(s: &mut Session, job: &mut GuidedJob) {
+    let no_plan = |f: &JobFinding| f.stage == StageName::Classify && f.description.starts_with(NO_PLAN_VIEWS);
+    let declined = job.stage(StageName::Classify).is_some_and(|st| st.status == StageStatus::Error)
+        && job.findings.iter().any(|f| f.blocking && no_plan(f))
+        && !job.findings.iter().any(|f| f.blocking && f.stage == StageName::Classify && !no_plan(f));
+    if !declined {
+        return;
+    }
+    super::sheetcheck::apply(job);
+    if no_plan_views(job).is_some() {
+        return;
+    }
+    let gone: BTreeSet<String> = job.findings.iter().filter(|f| no_plan(f)).map(|f| f.id.clone()).collect();
+    job.findings.retain(|f| !gone.contains(&f.id));
+    job.worklist.retain(|w| !gone.contains(&w.id));
+    if let Some(st) = job.stage_mut(StageName::Classify) {
+        st.status = StageStatus::Done;
+        st.error = None;
+    }
+    look_for_specs(s, job, false);
+    mark_spec_sheets(s, job, &mut json!({}));
+    super::sheetcheck::apply(job);
+    job.audit("no_plan_decline_lifted", "pipeline", None, Some(StageName::Classify), None);
 }
 
 /// The drawing as it was before the sheets were imported (its settings, building spec and job
@@ -30950,6 +31081,58 @@ mod tests {
         assert!(sheets[0].get("level_source").is_none(), "so no level question is asked of it");
         assert_eq!(sheets[2]["type"], "plan");
         assert!(apply_spec_sheets(&pointers, &mut json!({})).is_empty());
+    }
+
+    /// Q6329: a set whose every sheet says it is no plan (a part drawing, schedules, a cover)
+    /// declines at classify; one sheet that is or may be a plan (by its type, its title, a view on
+    /// it, its level, an untitled page, a correction) and the set is built as before.
+    #[test]
+    fn a_set_with_no_plan_view_is_told_from_one_that_may_have_one() {
+        use super::*;
+        let job_of = |sheets: Value, pages: Value| {
+            let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+            job.sheets = Some(json!({ "sheets": sheets }));
+            job.index = Some(json!({ "pages": pages }));
+            job
+        };
+        let part = json!({"number": "part.pdf#1", "title": "SUPPORT PLATE", "type": "unknown", "level": "", "file": "part.pdf", "page": 1});
+        let schedules = json!({"number": "M-601", "title": "MECHANICAL SCHEDULES", "type": "schedule", "level": "", "file": "Set.pdf", "page": 2});
+        let cover = json!({"number": "G-001", "title": "COVER SHEET AND SHEET INDEX", "type": "cover", "level": "", "file": "Set.pdf", "page": 1});
+        let why = no_plan_views(&job_of(json!([part, schedules, cover]), json!({}))).expect("no plan view");
+        assert!(why.starts_with(NO_PLAN_VIEWS), "{why}");
+        for named in ["part.pdf#1 \"SUPPORT PLATE\" (unknown)", "M-601 \"MECHANICAL SCHEDULES\" (schedule)", "G-001"] {
+            assert!(why.contains(named), "{named} in {why}");
+        }
+        // Each way a sheet is or may be a plan.
+        let with = |o: Value| {
+            let mut sh = part.clone();
+            if let (Some(a), Some(b)) = (sh.as_object_mut(), o.as_object()) {
+                a.extend(b.clone());
+            }
+            sh
+        };
+        for (sheet, how) in [
+            (with(json!({"type": "plan"})), "typed a plan"),
+            (with(json!({"type": "rcp"})), "a ceiling plan"),
+            (with(json!({"title": "PARTITION TYPES"})), "the wall legend"),
+            (with(json!({"title": "LOWER LEVEL ROOF PLAN"})), "titled as a plan"),
+            (with(json!({"title": ""})), "untitled: tried as a plan"),
+            (with(json!({"level": "2"})), "on a level"),
+            (with(json!({"plan_view": [1.0, 1.0, 20.0, 15.0]})), "a plan view marked on it"),
+        ] {
+            assert!(no_plan_views(&job_of(json!([sheet, schedules]), json!({}))).is_none(), "{how}");
+        }
+        // A view on its page titled as a plan.
+        let views = json!({"part.pdf#1": {"views": [{"title": "SECTION A"}, {"title": "SECOND FLOOR PLAN"}]}});
+        assert!(no_plan_views(&job_of(json!([part, schedules]), views)).is_none(), "a view titled as a plan");
+        let views = json!({"part.pdf#1": {"views": [{"title": "SECTION A"}, {"title": "KEY PLAN"}]}});
+        assert!(no_plan_views(&job_of(json!([part, schedules]), views)).is_some(), "a key plan is no plan view");
+        // A superseded copy and a sheet of the specification have no say; no sheets, no decline
+        // (classify's own finding says so).
+        let old = with(json!({"type": "plan", "superseded_by": "part.pdf#2"}));
+        let spec = with(json!({"type": SPEC_SHEET, "title": "LEVEL 1 PLAN"}));
+        assert!(no_plan_views(&job_of(json!([old, spec, schedules]), json!({}))).is_some());
+        assert!(no_plan_views(&job_of(json!([]), json!({}))).is_none());
     }
 
     #[test]

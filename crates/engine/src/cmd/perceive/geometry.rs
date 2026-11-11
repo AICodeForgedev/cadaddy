@@ -2294,6 +2294,11 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
     // The drawing's best names, or each sheet's best in turn (the stable sort keeps the order above).
     let names = labels_to_trace(names, |n| n.2, score, regions);
     phase("labels");
+    // Every room is traced round a name: with none, there are no rooms, whatever the plan (its
+    // room plan, door leaves and wall runs made for nothing took up to a minute on a big model).
+    if names.is_empty() {
+        return Ok(RoomTrace::default());
+    }
     // A detail or section callout's sheet (`A131`, `A411`) reads like a lettered room number: one
     // of the set's sheet numbers is no room's.
     let mut sheet_numbers: std::collections::BTreeSet<String> =
