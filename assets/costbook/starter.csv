@@ -14,6 +14,34 @@ Board gypsum board,5/8" fire,sq ft,0.55,0.02,general,starter — replace with yo
 Studs wood,,lf,1.20,0.04,general,starter — replace with your own
 Studs steel,,lf,0.90,0.03,general,starter — replace with your own
 Track,,lf,0.65,0.02,general,starter — replace with your own
+Wood plate,,lf,0.95,0.03,framing,starter — replace with your own
+Header,,each,18.00,0.50,framing,starter — replace with your own
+Fire blocking,,lf,0.95,0.04,framing,starter — replace with your own
+Structural panel sheathing,,sq ft,1.10,0.02,framing,starter — replace with your own
+Joist,,lf,3.20,0.05,framing,starter — replace with your own
+Rim board,,lf,3.00,0.05,framing,starter — replace with your own
+Roof truss,,each,165.00,1.25,framing,starter — replace with your own
+Batt insulation,,sq ft,0.65,0.01,insulation,starter — replace with your own
+Rigid insulation,,sq ft,1.25,0.02,insulation,starter — replace with your own
+Firestop system,,each,28.00,0.35,firestopping,starter — replace with your own
+"Firestop system, rated wall, pipe",,each,32.00,0.40,firestopping,starter — replace with your own
+"Firestop system, rated wall, conduit",,each,30.00,0.40,firestopping,starter — replace with your own
+Joint tape,,ft,0.02,0.002,drywall,starter — replace with your own
+Joint compound,,lb,0.45,0.004,drywall,starter — replace with your own
+Drywall screws,,each,0.02,0.0005,drywall,starter — replace with your own
+Corner bead,,ft,0.35,0.02,drywall,starter — replace with your own
+Paint,,sq ft,0.18,0.006,finishes,starter — replace with your own
+Flooring,,sq ft,3.50,0.03,finishes,starter — replace with your own
+Wall base,,lf,1.40,0.03,finishes,starter — replace with your own
+Acoustical ceiling tile,,sq ft,1.60,0.02,finishes,starter — replace with your own
+Hollow metal frame,,each,210.00,1.25,openings,starter — replace with your own
+Wood door frame,,each,120.00,1.00,openings,starter — replace with your own
+Concrete slab,,cu yd,165.00,0.60,concrete,starter — replace with your own
+Vapor barrier,,sq ft,0.12,0.003,concrete,starter — replace with your own
+Rebar,,ft,0.70,0.01,concrete,starter — replace with your own
+Rebar chair,,each,0.35,0.005,concrete,starter — replace with your own
+Welded wire,,sq ft,0.30,0.004,concrete,starter — replace with your own
+Concrete masonry unit,,sq ft,4.20,0.10,masonry,starter — replace with your own
 Duplex receptacle,,each,2.50,0.40,electrical,starter — replace with your own
 Receptacle,,each,2.50,0.40,electrical,starter — replace with your own
 GFCI receptacle,,each,19.00,0.50,electrical,starter — replace with your own

@@ -251,5 +251,12 @@
     "public_words": ["PUBLIC", "COMMON"],
     "public_room_words": ["TOILET", "RESTROOM", "REST ROOM", "WOMEN", "WOMENS", "MEN", "MENS", "BATH", "LOCKER", "RR", "WC"],
     "scope_source": "the submittal's title names the rooms its accessories go in: guest rooms are the rooms of a unit type, public toilets the rooms named as toilets"
+  },
+  "takeoff": {
+    "_doc": "Q6527: how the trade pieces are takeoff and BOM lines. Each line is the pieces of one trade, kind, item (what they are bought as), size, type, level and provenance; its quantity is in the first measure they carry of volume (cu yd), area (sq ft), length (ft) and weight (lb), else their count (each, by the pieces they stand for); the kinds in `by_the_piece` are counted though they carry a length or area. Every line carries its pieces' count and other measures beside its quantity.",
+    "by_the_piece": ["frame", "truss", "header"],
+    "by_the_piece_source": "trade practice: door frames, roof trusses and built-up or track headers are bought and set by the piece, each to its opening or span (their length beside the count)",
+    "waste_kinds": ["sheet", "pour", "batt", "board", "cmu", "flooring", "plaster", "lath", "weather_barrier", "siding", "panel", "brick", "cladding"],
+    "waste_kinds_source": "the kinds a trade's waste factor applies to: those bought by the piece, area or volume and cut to fit (a factor on the takeoff, never on the piece count)"
   }
 }

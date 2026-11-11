@@ -21,6 +21,16 @@
 //! - **Framing** from `framing.build` (Q303 / Q5103) where the job is framed: members by kind and
 //!   status, rule members at the larger layout; they replace the drywall stud length. Raceways
 //!   running inside framed walls give the bits and hole counts among the required tools.
+//! - **Trade pieces** (Q6527): every piece `bim.atoms.build` laid out (framing, insulation,
+//!   firestopping, finishes, concrete, masonry, cladding, openings, specialties, drywall's tape,
+//!   compound, screws and bead) is a line of its trade by kind, what it is bought as, size, type,
+//!   level and provenance, in the measure its pieces carry (volume, area, length, weight, else
+//!   counted; what is bought by the piece is counted: rules data `tradeatoms.json` `takeoff`),
+//!   its pieces' count and measures beside it, with the trade's waste factor and every piece's
+//!   handle. Where
+//!   the model has them they replace the wall types' formula studs and track (walls with no
+//!   framing pieces keep theirs), the one-set-per-door hardware rule and the rooms' floor
+//!   finish; the concrete takeoff keeps its elements' concrete, rebar and welded wire.
 //! - **Grounding** from `grounding.takeoff` (Q329): conductor by size, clamps, rods, busbars,
 //!   lugs, welds or connectors and their tools, each line naming its rule; a crimper the
 //!   grounding takeoff carries is not required a second time.
@@ -95,7 +105,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run).long()
             .alias(&["bom"])
             .params(
-                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements, measures?: {pieces, length_ft, area_sf, volume_cy, weight_lb} (a trade piece line's count and measures beside its quantity)}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -125,6 +135,46 @@ struct Line {
     /// What its items are by the documents (Q6216): empty for drawn, `derived` or `inferred`;
     /// lines of different provenance never merge.
     made: &'static str,
+    /// A trade piece line's pieces (Q6527): their count and every measure they carry, beside
+    /// the line's quantity.
+    measures: Option<Measures>,
+}
+
+/// What a line's pieces measure: how many pieces, feet, square feet, cubic yards and pounds.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Measures {
+    pieces: f64,
+    length_ft: f64,
+    area_sf: f64,
+    volume_cy: f64,
+    weight_lb: f64,
+}
+
+impl Measures {
+    fn add(&mut self, m: &Measures) {
+        self.pieces += m.pieces;
+        self.length_ft += m.length_ft;
+        self.area_sf += m.area_sf;
+        self.volume_cy += m.volume_cy;
+        self.weight_lb += m.weight_lb;
+    }
+    /// The measures it has, rounded (`pieces`, `length_ft`, `area_sf`, `volume_cy`, `weight_lb`).
+    fn json(&self) -> Value {
+        let r2 = |v: f64| (v * 100.0).round() / 100.0;
+        let mut o = serde_json::Map::new();
+        for (k, v) in [
+            ("pieces", self.pieces),
+            ("length_ft", self.length_ft),
+            ("area_sf", self.area_sf),
+            ("volume_cy", self.volume_cy),
+            ("weight_lb", self.weight_lb),
+        ] {
+            if v.is_finite() && v > 0.0 {
+                o.insert(k.into(), json!(r2(v)));
+            }
+        }
+        Value::Object(o)
+    }
 }
 
 /// A line's provenance by name.
@@ -361,6 +411,13 @@ fn merge(x: &mut Line, l: Line) {
         (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
     };
     x.elements.extend(l.elements);
+    x.measures = match (x.measures, l.measures) {
+        (Some(mut a), Some(b)) => {
+            a.add(&b);
+            Some(a)
+        }
+        (a, b) => a.or(b),
+    };
 }
 
 /// Another trade's element in `by_others`: its party, why, the words that say so, and our part.
@@ -424,6 +481,7 @@ fn rough_in_lines(
                 circuit: circuit.to_string(),
                 product: Product::default(),
                 made: "",
+                measures: None,
             },
         );
     }
@@ -567,6 +625,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         circuit: String::new(),
                         product,
                         made: "",
+                        measures: None,
                     },
                 );
             }
@@ -601,6 +660,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         circuit: on.clone(),
                         product,
                         made: "",
+                        measures: None,
                     },
                 );
                 if matches!(kind, "receptacle" | "switch" | "data_outlet") {
@@ -646,6 +706,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                                 circuit: on.clone(),
                                 product: Product::default(),
                                 made: "",
+                                measures: None,
                             },
                         );
                     }
@@ -672,6 +733,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             circuit: on.clone(),
                             product: Product::default(),
                             made: "",
+                            measures: None,
                         },
                     );
                 }
@@ -699,6 +761,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     circuit: String::new(),
                     product: Product::default(),
                     made: "",
+                    measures: None,
                 },
             );
         }
@@ -754,6 +817,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         circuit: label.clone(),
                         product: Product::default(),
                         made: "",
+                        measures: None,
                     },
                 );
                 let sticks = (len / STICK_FT).ceil();
@@ -783,6 +847,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             circuit: label.clone(),
                             product: Product::default(),
                             made: "",
+                            measures: None,
                         },
                     );
                 }
@@ -817,6 +882,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             circuit: String::new(),
                             product: Product::default(),
                             made: "",
+                            measures: None,
                         },
                     );
                     if large_conductor(&size) && !ground {
@@ -837,6 +903,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                                 circuit: String::new(),
                                 product: Product::default(),
                                 made: "",
+                                measures: None,
                             },
                         );
                     }
@@ -868,6 +935,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     circuit: label_of(t),
                     product: Product::default(),
                     made: "",
+                    measures: None,
                 },
             );
         }
@@ -907,6 +975,7 @@ fn breaker_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
                 circuit: String::new(),
                 product: Product::default(),
                 made: "",
+                measures: None,
             },
         );
     }
@@ -943,6 +1012,7 @@ fn lv_pathway_lines(s: &Session, lines: &mut Vec<Line>) {
                     circuit: String::new(),
                     product: Product::default(),
                     made: "",
+                    measures: None,
                 },
             );
         }
@@ -970,6 +1040,7 @@ fn lv_pathway_lines(s: &Session, lines: &mut Vec<Line>) {
                 circuit: String::new(),
                 product: Product::default(),
                 made: "",
+                measures: None,
             },
         );
     }
@@ -982,7 +1053,8 @@ fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index, fa_theirs: Opt
     // system, level and type in `by_others`.
     let fa_conduit_ours = fa_theirs.is_none_or(|d| d.ours_for("fire alarm device", "").iter().any(|i| i.item == "conduit"));
     let mut theirs: BTreeMap<(String, String, String), f64> = BTreeMap::new();
-    for (k, t) in ix.rows.iter().take(MAX_LINES * 4) {
+    // A building trade's pieces are the trade piece lines (Q6527), never these.
+    for (k, t) in ix.rows.iter().filter(|(k, _)| k.trade.is_empty()).take(MAX_LINES * 4) {
         let fire_alarm = super::conduitroute::fa::is_system(&k.system);
         if fire_alarm && fa_theirs.is_some() && (matches!(k.kind.as_str(), "cable" | "wire") || !fa_conduit_ours) {
             let what = if k.item.is_empty() { k.kind.clone() } else { k.item.clone() };
@@ -1028,6 +1100,7 @@ fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index, fa_theirs: Opt
                 circuit: k.circuit.clone(),
                 product: Product::default(),
                 made: made_of(&k.made),
+                measures: None,
             },
         );
     }
@@ -1062,6 +1135,7 @@ fn zero_ten_pairs(s: &Session, lines: &mut Vec<Line>) {
                 waste_qty: None,
                 product: Product::default(),
                 made: "",
+                measures: None,
             },
         );
     }
@@ -1143,7 +1217,7 @@ fn window_lines(d: &cadaddy_doc::Drawing, upf: f64, lines: &mut Vec<Line>) {
 /// 3D model that `model.build` created. Each built category must have lines; a built element
 /// with no BOM line is a test failure.
 /// Returns (`missing_categories`, `suspects`, `model_has_elements`).
-fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<Value>, bool)> {
+fn built_model(s: &Session, lines: &mut Vec<Line>, pieces: &TradePieces) -> Result<(Vec<String>, Vec<Value>, bool)> {
     let (sp, _) = current(s, "bim.bom")?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let d = s.doc()?;
@@ -1382,6 +1456,10 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
                 ..Line::default()
             },
         );
+        // A door the model laid its hardware set and frame on as pieces (Q6527) is taken off by
+        // them; the rest one set each.
+        let laid = |h: &String| cadaddy_doc::Handle::parse_hex(h).is_some_and(|x| pieces.hardware.contains(&x));
+        let bare: Vec<String> = handles.iter().filter(|h| !laid(h)).cloned().collect();
         add(
             lines,
             Line {
@@ -1390,11 +1468,11 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
                 item: "Door hardware set".into(),
                 size: "frame + hinges + closer".into(),
                 unit: "each",
-                net: *n as f64,
+                net: n.saturating_sub(handles.len() - bare.len()) as f64,
                 status: "rule",
                 rule: Some("one hardware set per door (company default)".into()),
                 level: level.clone(),
-                elements: handles.clone(),
+                elements: bare,
                 ..Line::default()
             },
         );
@@ -1643,7 +1721,10 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         let mut finishes: BTreeMap<String, f64> = BTreeMap::new();
         let mut heights: BTreeMap<i64, f64> = BTreeMap::new();
         for r in rs {
-            *finishes.entry(r.finish.clone().unwrap_or_default()).or_default() += r.area_sf;
+            // A room the model laid its flooring in as pieces (Q6527): the flooring line is theirs.
+            if !pieces.floored.contains(&r.handle) {
+                *finishes.entry(r.finish.clone().unwrap_or_default()).or_default() += r.area_sf;
+            }
             if r.ceiling_ft > 0.0 {
                 *heights.entry((r.ceiling_ft * 12.0).round() as i64).or_default() += r.area_sf;
             }
@@ -1655,7 +1736,10 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
                 (format!("Floor finish {finish}"), finish.clone())
             };
             let f = finish.clone();
-            add(lines, line(item, size, "sq ft", *sf, handles(&|r| r.finish.clone().unwrap_or_default() == f)));
+            add(
+                lines,
+                line(item, size, "sq ft", *sf, handles(&|r| !pieces.floored.contains(&r.handle) && r.finish.clone().unwrap_or_default() == f)),
+            );
         }
         for (inches, sf) in heights.iter().filter(|(_, sf)| **sf > 0.0) {
             let size = format!("{}'-{}\" ceiling", inches / 12, inches % 12);
@@ -2514,14 +2598,50 @@ fn board_piece_lines(pieces: &BoardPieces, typed: &BTreeSet<String>, lines: &mut
     }
 }
 
+/// A `drywall.takeoff` row's studs, track and head-of-wall track as lines on `level` (with
+/// `head_only`, its head-of-wall track alone).
+fn frame_lines(r: &Value, level: &str, elements: Vec<String>, why: Option<&str>, head_only: bool, lines: &mut Vec<Line>) {
+    let line = |item: String, net: f64, rule: Option<String>| Line {
+        trade: "drywall",
+        category: "drywall".into(),
+        item,
+        unit: "ft",
+        net,
+        status: "model",
+        rule,
+        level: level.to_string(),
+        elements: elements.clone(),
+        ..Line::default()
+    };
+    if !head_only {
+        let studs = r["studs"]["lengthFt"].as_f64().unwrap_or(0.0);
+        add(lines, line(format!("Studs {}", r["studs"]["material"].as_str().unwrap_or_default()), studs, why.map(str::to_string)));
+        add(lines, line("Track".into(), r["track"]["lengthFt"].as_f64().unwrap_or(0.0), why.map(str::to_string)));
+    }
+    // Head of wall and bottom track by kind (these walls' track is here, not in "Track").
+    for h in r["headTrack"].as_array().into_iter().flatten() {
+        let at = format!("{} at the head of wall type {}", h["part"].as_str().unwrap_or("track"), h["wallType"].as_str().unwrap_or_default());
+        let rule = match why {
+            Some(w) => format!("{at}; {w}"),
+            None => at,
+        };
+        add(lines, line(capitalised(h["material"].as_str().unwrap_or("track")), h["lengthFt"].as_f64().unwrap_or(0.0), Some(rule)));
+    }
+}
+
 /// Drywall: the board the model's pieces are (Q6370), each level's on its level; the walls the
 /// model has no board pieces on by `drywall.takeoff` (their wall types' layers, both faces);
-/// studs and track by `drywall.takeoff`.
-fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
-    // Each level's walls (a few of each, for element tracking), and those with no board pieces.
+/// studs and track by `drywall.takeoff` where the model has no framing pieces, else (Q6527) only
+/// for the walls with none in them.
+fn drywall(s: &mut Session, lines: &mut Vec<Line>, trade: &TradePieces) {
+    // Each level's walls (a few of each, for element tracking), those with no board pieces and
+    // (where the model is framed as pieces, Q6527) those with no framing pieces.
     let pieces = s.doc().ok().and_then(board_pieces);
+    let framed = !trade.framed.is_empty();
     let mut walls: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut bare: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut unframed: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut headed: BTreeMap<String, Vec<String>> = BTreeMap::new();
     if let Ok(d) = s.doc() {
         // The walls found are capped, not the elements looked at: a job's print linework comes
         // before the walls built from it (Q6370).
@@ -2531,6 +2651,12 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
                 && !p.walls.contains(&e.handle)
             {
                 bare.entry(level.clone()).or_default().push(e.handle.hex());
+            }
+            if framed && !trade.framed.contains(&e.handle) {
+                unframed.entry(level.clone()).or_default().push(e.handle.hex());
+            }
+            if trade.head_walls.contains(&e.handle) {
+                headed.entry(level.clone()).or_default().push(e.handle.hex());
             }
             let v = walls.entry(level).or_default();
             if v.len() < 10 {
@@ -2585,6 +2711,23 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
             }
         }
     }
+    // The walls with no framing pieces: their studs and track by drywall.takeoff, each level's
+    // alone (the framed walls' are the pieces', Q6527).
+    for (level, hs) in unframed.iter().take(MAX_DRYWALL_LEVELS) {
+        let Ok(r) = s.execute("drywall.takeoff", &json!({ "waste": 0, "handles": hs, "levels": [level], "ceilings": false })) else { continue };
+        let rule = format!("walls the model has no framing pieces in ({}): their wall types' studs and track by drywall.takeoff", hs.len());
+        for row in r["rows"].as_array().into_iter().flatten() {
+            frame_lines(row, level, hs.iter().take(PIECE_ELEMENTS).cloned().collect(), Some(&rule), false, lines);
+        }
+    }
+    // The framed walls whose plan mark takes a head of wall: the head's track by drywall.takeoff
+    // (their plain track pieces left out).
+    for (level, hs) in headed.iter().take(MAX_DRYWALL_LEVELS) {
+        let Ok(r) = s.execute("drywall.takeoff", &json!({ "waste": 0, "handles": hs, "levels": [level], "ceilings": false })) else { continue };
+        for row in r["rows"].as_array().into_iter().flatten() {
+            frame_lines(row, level, hs.iter().take(PIECE_ELEMENTS).cloned().collect(), None, true, lines);
+        }
+    }
     // The walls' board, studs and track per level, each level's walls alone (Q6271: one level
     // never carries another's); the whole job's on no level if a level can't be taken off.
     // The levels' totals must come to the whole job's, else nothing is split.
@@ -2633,56 +2776,9 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
                 },
             );
         }
-        let studs = r["studs"]["lengthFt"].as_f64().unwrap_or(0.0);
-        add(
-            lines,
-            Line {
-                trade: "drywall",
-                category: "drywall".into(),
-                item: format!("Studs {}", r["studs"]["material"].as_str().unwrap_or_default()),
-                unit: "ft",
-                net: studs,
-                status: "model",
-                level: wall_level.clone(),
-                elements: group_handles.clone(),
-                ..Line::default()
-            },
-        );
-        add(
-            lines,
-            Line {
-                trade: "drywall",
-                category: "drywall".into(),
-                item: "Track".into(),
-                unit: "ft",
-                net: r["track"]["lengthFt"].as_f64().unwrap_or(0.0),
-                status: "model",
-                level: wall_level.clone(),
-                elements: group_handles.clone(),
-                ..Line::default()
-            },
-        );
-        // Head of wall and bottom track by kind (these walls' track is here, not in "Track").
-        for h in r["headTrack"].as_array().into_iter().flatten() {
-            add(
-                lines,
-                Line {
-                    trade: "drywall",
-                    category: "drywall".into(),
-                    item: capitalised(h["material"].as_str().unwrap_or("track")),
-                    unit: "ft",
-                    net: h["lengthFt"].as_f64().unwrap_or(0.0),
-                    status: "model",
-                    rule: Some(format!(
-                        "{} at the head of wall type {}",
-                        h["part"].as_str().unwrap_or("track"),
-                        h["wallType"].as_str().unwrap_or_default()
-                    )),
-                    level: wall_level.clone(),
-                    elements: group_handles.clone(),
-                    ..Line::default()
-                },
-            );
+        // The studs and track are the framing pieces' where the model has them (above).
+        if !framed {
+            frame_lines(r, wall_level, group_handles, None, false, lines);
         }
     }
     // Ceilings and soffits: board by type and layer, framing by type.
@@ -2791,11 +2887,20 @@ fn capitalised(s: &str) -> String {
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
+/// The concrete elements the concrete takeoff took off (Q6527): ours (its lines carry their
+/// concrete, rebar and welded wire) and another party's (`by_others`).
+#[derive(Default)]
+struct ConcreteTaken {
+    ours: BTreeSet<String>,
+    theirs: BTreeSet<String>,
+}
+
 /// Concrete from the concrete takeoff: the elements in our scope as lines; the rest listed by
 /// whose they are, at no cost to us.
-fn concrete(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
+fn concrete(s: &Session, lines: &mut Vec<Line>) -> (Vec<Value>, ConcreteTaken) {
     use super::concrete as c;
-    let (Ok((sp, _)), Ok(d)) = (current(s, "bim.bom"), s.doc()) else { return Vec::new() };
+    let mut taken = ConcreteTaken::default();
+    let (Ok((sp, _)), Ok(d)) = (current(s, "bim.bom"), s.doc()) else { return (Vec::new(), taken) };
     let r = c::Rules::of(&sp);
     let upf = c::upf(&sp);
     let mut others: Vec<Value> = Vec::new();
@@ -2803,6 +2908,7 @@ fn concrete(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
         let e = &x.e;
         let q = c::quantities(e, upf, &r);
         let scope = c::scope_of(&r, &e.owner);
+        if scope == "ours" { &mut taken.ours } else { &mut taken.theirs }.insert(e.id.clone());
         if scope != "ours" {
             if others.len() < MAX_LINES {
                 others.push(json!({
@@ -2836,6 +2942,7 @@ fn concrete(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
                     circuit: String::new(),
                     product: Product::default(),
                     made: "",
+                    measures: None,
                 },
             );
         };
@@ -2859,7 +2966,193 @@ fn concrete(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
         put("finish", "Finish".into(), String::new(), "sq ft", q.finish_sf, None);
         put("finish", "Curing".into(), String::new(), "sq ft", q.curing_sf, None);
     }
-    others
+    (others, taken)
+}
+
+/// Trade pieces looked at in one BOM, at most (hostile models; a large building has ~100k).
+const MAX_TRADE_PIECES: usize = 1_500_000;
+/// The framing kinds of a wall's members: `framing.build`'s members are these where it framed a
+/// level.
+const WALL_MEMBERS: &[&str] = &["stud", "plate", "track", "header", "blocking", "backing"];
+/// The concrete kinds the concrete takeoff's lines carry for its elements (concrete, rebar,
+/// welded wire).
+const CONCRETE_TAKEN: &[&str] = &["pour", "rebar", "mesh"];
+
+/// The model's trade pieces (Q6527): every piece `bim.atoms.build` laid out (framing,
+/// insulation, firestopping, finishes, concrete, masonry, cladding, openings, specialties and
+/// drywall's tape, compound, screws and bead; the board sheets are the board lines, Q6370), by
+/// the line it counts on, and what the other sections leave to them.
+#[derive(Default)]
+struct TradePieces {
+    /// By the piece's key (without its room) and the concrete element it is part of.
+    lines: BTreeMap<(super::mepatoms::Key, String), PieceLine>,
+    /// The walls with framing pieces in them: their studs and track are the pieces'.
+    framed: BTreeSet<cadaddy_doc::Handle>,
+    /// The framed walls whose plan mark takes a head of wall: their head's track is the head
+    /// detail's (`drywall.takeoff`), not their plain track pieces.
+    head_walls: BTreeSet<cadaddy_doc::Handle>,
+    /// The doors with a hardware set piece: their set is the pieces'.
+    hardware: BTreeSet<cadaddy_doc::Handle>,
+    /// The rooms with flooring pieces: their flooring is the pieces'.
+    floored: BTreeSet<cadaddy_doc::Handle>,
+}
+
+/// One line's pieces: how many, the pieces they stand for, their length, area, volume and
+/// weight, and their handles.
+#[derive(Default)]
+struct PieceLine {
+    count: usize,
+    pieces: f64,
+    length_ft: f64,
+    area_sf: f64,
+    volume_cf: f64,
+    weight_lb: f64,
+    elements: Vec<String>,
+}
+
+impl PieceLine {
+    fn add(&mut self, h: cadaddy_doc::Handle, m: &super::mepatoms::Measure) {
+        let ok = |v: f64| if v.is_finite() && v > 0.0 { v } else { 0.0 };
+        self.count += 1;
+        self.pieces += if m.qty.is_finite() && m.qty > 0.0 { m.qty } else { 1.0 };
+        self.length_ft += ok(m.length_ft);
+        self.area_sf += ok(m.area_sf);
+        self.volume_cf += ok(m.volume_cf);
+        self.weight_lb += ok(m.weight_lb);
+        if self.elements.len() < MAX_LINE_ELEMENTS {
+            self.elements.push(h.hex());
+        }
+    }
+}
+
+/// The model's trade pieces by line. A concrete piece is part of the element its pour was laid
+/// for (its own `element`, else the pour it connects to). On a wall whose plan mark takes a head
+/// of wall, the top track (and the bottom, where the head has one) is the head detail's.
+fn trade_pieces(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> TradePieces {
+    use cadaddy_doc::Handle;
+    use cadaddy_doc::props::Prop;
+    let mut out = TradePieces::default();
+    // The piece, its key and measure, its concrete element, what it connects to, and (plain
+    // track or plates) its wall and whether it is the bottom run.
+    type Found = (Handle, super::mepatoms::Key, super::mepatoms::Measure, String, Vec<Handle>, Option<(Handle, bool)>);
+    let mut found: Vec<Found> = Vec::new();
+    let mut pours: BTreeMap<Handle, String> = BTreeMap::new();
+    for e in d.model.iter().filter(|e| super::tradeatoms::is_trade_piece(e)).take(MAX_TRADE_PIECES) {
+        let Some((k, m)) = super::mepatoms::counted(e) else { continue };
+        let ps = cadaddy_doc::props::read(&e.common.xdata);
+        let text = |key: &str| ps.get(key).map(Prop::text).unwrap_or_default();
+        let host = Handle::parse_hex(&text("host"));
+        let hosts = match (k.trade.as_str(), k.kind.as_str()) {
+            ("framing", "stud" | "plate" | "track") => Some(&mut out.framed),
+            ("openings", "hardware_set") => Some(&mut out.hardware),
+            ("finishes", "flooring") => Some(&mut out.floored),
+            _ => None,
+        };
+        if let (Some(set), Some(h)) = (hosts, host) {
+            set.insert(h);
+        }
+        // The board sheets are the drywall board lines (Q6370).
+        if k.trade == "drywall" && k.kind == "sheet" {
+            continue;
+        }
+        let run = (k.trade == "framing" && matches!(k.kind.as_str(), "track" | "plate"))
+            .then(|| host.map(|h| (h, text("role") == "bottom")))
+            .flatten()
+            .filter(|_| matches!(text("role").as_str(), "top" | "bottom"));
+        let (element, connects) = if k.trade == "concrete" {
+            let element = text("element");
+            if k.kind == "pour" && !element.is_empty() {
+                pours.insert(e.handle, element.clone());
+            }
+            let connects = if element.is_empty() { text("connects").split(',').filter_map(Handle::parse_hex).take(64).collect() } else { Vec::new() };
+            (element, connects)
+        } else {
+            (String::new(), Vec::new())
+        };
+        found.push((e.handle, k, m, element, connects, run));
+    }
+    let heads = if found.iter().any(|f| f.5.is_some()) { super::drywall::head_of_wall_walls(d, sp) } else { BTreeMap::new() };
+    for (h, k, m, element, connects, run) in found {
+        if let Some((wall, bottom)) = run
+            && let Some(head_bottom) = heads.get(&wall)
+        {
+            out.head_walls.insert(wall);
+            if !bottom || *head_bottom {
+                continue;
+            }
+        }
+        let element = if element.is_empty() { connects.iter().find_map(|c| pours.get(c)).cloned().unwrap_or_default() } else { element };
+        let key = super::mepatoms::Key { room: String::new(), circuit: String::new(), ..k };
+        out.lines.entry((key, element)).or_default().add(h, &m);
+    }
+    out
+}
+
+/// The trade pieces' lines (Q6527): each line the pieces of one trade, kind, item, size, type,
+/// level and provenance, in the first measure they carry of volume, area, length and weight, else
+/// (and for what is bought by the piece: the `takeoff` rules) counted; their count and measures
+/// beside it, the trade's waste factor on the kinds it applies to and every piece's handle. The concrete
+/// takeoff's elements keep its concrete, rebar and welded wire (another party's, none of their
+/// pieces); a level `framing.build` framed keeps its members.
+fn trade_piece_lines(
+    tp: &TradePieces,
+    rules: &super::tradeatoms::Rules,
+    taken: &ConcreteTaken,
+    job_framed: &BTreeSet<String>,
+    lines: &mut Vec<Line>,
+) {
+    for ((k, element), pl) in &tp.lines {
+        if k.trade == "concrete"
+            && !element.is_empty()
+            && (taken.theirs.contains(element) || (taken.ours.contains(element) && CONCRETE_TAKEN.contains(&k.kind.as_str())))
+        {
+            continue;
+        }
+        if k.trade == "framing" && job_framed.contains(&k.level) && WALL_MEMBERS.contains(&k.kind.as_str()) {
+            continue;
+        }
+        let trade = super::tradeatoms::TRADES.iter().copied().find(|t| *t == k.trade).unwrap_or("general");
+        let kind = k.kind.replace('_', " ");
+        let item = if k.item.trim().is_empty() { capitalised(&kind) } else { k.item.clone() };
+        let ty = if k.ty.trim().is_empty() || k.ty == k.item { String::new() } else { format!(", type {}", k.ty) };
+        let what = format!("the model's {} pieces (bim.count trade {}, kind {}){ty}", k.trade, k.trade, k.kind);
+        let (unit, net, by) = if super::tradeatoms::by_the_piece(rules, &k.kind) {
+            ("each", pl.pieces, "the piece")
+        } else if pl.volume_cf > 0.0 {
+            ("cu yd", pl.volume_cf / 27.0, "their volume")
+        } else if pl.area_sf > 0.0 {
+            ("sq ft", pl.area_sf, "their area")
+        } else if pl.length_ft > 0.0 {
+            ("ft", pl.length_ft, "their length")
+        } else if pl.weight_lb > 0.0 {
+            ("lb", pl.weight_lb, "their weight")
+        } else {
+            ("each", pl.pieces, "the piece")
+        };
+        let waste = super::tradeatoms::piece_waste(rules, &k.trade, &k.kind).map(|(f, _)| f);
+        let measures =
+            Measures { pieces: pl.pieces, length_ft: pl.length_ft, area_sf: pl.area_sf, volume_cy: pl.volume_cf / 27.0, weight_lb: pl.weight_lb };
+        add(
+            lines,
+            Line {
+                trade,
+                category: kind,
+                item,
+                size: k.size.clone(),
+                unit,
+                net,
+                status: "model",
+                rule: Some(format!("{what}, by {by}")),
+                level: k.level.clone(),
+                elements: pl.elements.clone(),
+                // Whole pieces of waste on a count (the report's `with_waste`), else the factor.
+                waste_qty: waste.map(|f| if unit == "each" { (net * (1.0 + f)).ceil() - net } else { net * f }),
+                made: made_of(&k.made),
+                measures: Some(measures),
+                ..Line::default()
+            },
+        );
+    }
 }
 
 /// The job's required items from the modelled work.
@@ -2937,8 +3230,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("bim.bom", "`group_by` is job, level, trade or circuit"));
     }
     let mut lines: Vec<Line> = Vec::new();
+    // The model's trade pieces (Q6527): their lines, and what the other sections leave to them.
+    let pieces = match (current(s, "bim.bom"), s.doc()) {
+        (Ok((sp, _)), Ok(d)) => trade_pieces(d, &sp),
+        _ => TradePieces::default(),
+    };
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
-    let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines)?;
+    let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines, &pieces)?;
     let mut others: Vec<Value> = Vec::new();
     electrical(s, &mut lines, &mut others)?;
     zero_ten_pairs(s, &mut lines);
@@ -2948,10 +3246,15 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         devices_from_drawing(s, &mut lines)?;
     }
     mechanical(s, &mut lines, &mut others);
-    drywall(s, &mut lines);
+    drywall(s, &mut lines, &pieces);
     let framing_bits = framing(s, &mut lines)?;
     grounding(s, &mut lines);
-    let mut by_others = concrete(s, &mut lines);
+    let (mut by_others, taken) = concrete(s, &mut lines);
+    // The levels framed by `framing.build` (its members are the walls' framing there).
+    let job_framed: BTreeSet<String> = lines.iter().filter(|l| l.category == "framing" && l.trade == "general").map(|l| l.level.clone()).collect();
+    if let (Ok((sp, _)), Ok(d)) = (current(s, "bim.bom"), s.doc()) {
+        trade_piece_lines(&pieces, &super::tradeatoms::Rules::of(d, &sp), &taken, &job_framed, &mut lines);
+    }
     by_others.extend(others);
     by_others.truncate(MAX_LINES);
     // Waivers: recorded in the project rules, with the reason.
@@ -3030,6 +3333,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             });
             if let Some(r) = &l.rule {
                 v["rule"] = json!(r);
+            }
+            if let Some(m) = &l.measures {
+                v["measures"] = m.json();
             }
             // Level always included (Q5243 MUST 5).
             v["level"] = json!(l.level);

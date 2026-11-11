@@ -100,6 +100,22 @@ impl El<'_> {
         self.text("level").unwrap_or_default()
     }
 
+    /// A trade piece's own kind (`stud`, `batt`, Q6527): what a filter or a line names it by;
+    /// none for other elements.
+    pub fn piece_kind(&self) -> Option<String> {
+        (self.kind == "atom").then(|| self.text(super::mepatoms::ATOM_KEY)).flatten().map(|k| k.to_ascii_lowercase())
+    }
+
+    /// The kind a takeoff line counts it as: a trade piece's own, else its element kind.
+    pub fn line_kind(&self) -> String {
+        self.piece_kind().unwrap_or_else(|| self.kind.clone())
+    }
+
+    /// The trade it belongs to: a trade piece's own (`framing`), else its kind's.
+    pub fn trade(&self) -> String {
+        (self.kind == "atom").then(|| self.text("trade")).flatten().unwrap_or_else(|| trade_of(&self.kind).to_string())
+    }
+
     /// What the element is, in words: its type, type mark, model, name and build part.
     pub fn words(&self) -> String {
         let mut w: Vec<String> = ["type", "type_mark", "model", "name", "description", "tag"].iter().filter_map(|k| self.text(k)).collect();
@@ -439,11 +455,11 @@ impl PropFilter {
     }
 
     pub fn matches(&self, el: &El) -> bool {
-        if !self.kinds.is_empty() && !self.kinds.contains(&el.kind) {
+        if !self.kinds.is_empty() && !self.kinds.contains(&el.kind) && !el.piece_kind().is_some_and(|k| self.kinds.contains(&k)) {
             return false;
         }
         if let Some(t) = &self.trade
-            && !trade_of(&el.kind).contains(t.as_str())
+            && !el.trade().to_ascii_lowercase().contains(t.as_str())
         {
             return false;
         }
@@ -536,6 +552,7 @@ pub(crate) fn grouped(s: &Session, cmd: &str, p: &Value) -> Result<Value> {
     struct Acc {
         group: Vec<String>,
         kind: String,
+        trade: String,
         count: usize,
         length_ft: f64,
         area_sf: f64,
@@ -553,12 +570,15 @@ pub(crate) fn grouped(s: &Session, cmd: &str, p: &Value) -> Result<Value> {
                 carried.insert(k.to_ascii_lowercase());
             }
         }
+        // A trade piece is counted as its own kind, in its own trade (Q6527).
+        let kind = el.line_kind();
         let values: Vec<String> =
-            keys.iter().map(|k| if k == "kind" { el.kind.clone() } else { el.text(k).unwrap_or_else(|| "(none)".into()) }).collect();
-        let id = (el.kind.clone(), values.iter().map(|v| v.to_ascii_lowercase()).collect::<Vec<_>>());
+            keys.iter().map(|k| if k == "kind" { kind.clone() } else { el.text(k).unwrap_or_else(|| "(none)".into()) }).collect();
+        let id = (kind.clone(), values.iter().map(|v| v.to_ascii_lowercase()).collect::<Vec<_>>());
         let a = lines.entry(id).or_insert_with(|| Acc {
             group: values.clone(),
-            kind: el.kind.clone(),
+            kind: kind.clone(),
+            trade: el.trade(),
             count: 0,
             length_ft: 0.0,
             area_sf: 0.0,
@@ -632,7 +652,7 @@ pub(crate) fn grouped(s: &Session, cmd: &str, p: &Value) -> Result<Value> {
         let item = a.group.iter().filter(|v| *v != "(none)").cloned().collect::<Vec<_>>().join(" / ");
         let key = format!("{}|{}", a.kind, a.group.join("|"));
         let mut l = json!({
-            "key": key, "kind": a.kind, "trade": trade_of(&a.kind), "group": group, "item": if item.is_empty() { a.kind.clone() } else { item },
+            "key": key, "kind": a.kind, "trade": a.trade, "group": group, "item": if item.is_empty() { a.kind.clone() } else { item },
             "count": a.count, "qty": qty, "unit": unit, "element_count": a.count, "elements": a.elements, "levels": a.levels,
         });
         for (k, v) in keys.iter().zip(&a.group) {

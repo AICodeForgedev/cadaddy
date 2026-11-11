@@ -816,8 +816,10 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
         type Issues = Vec<(&'static str, String, String)>;
         let check_price = |p: &Value, issues: &mut Issues, steps: &mut Vec<String>, what: &str| -> Option<(f64, Option<f64>)> {
             let pu = p["unit"].as_str().unwrap_or_default();
-            // A part's unit is its own; a line's price must be in the line's unit.
-            if what == "line" && !pu.eq_ignore_ascii_case(&unit) {
+            // A part's unit is its own; a line's price must be in the line's unit, or the same
+            // measure by another name (`lf` and `ft`, as bim.estimate's matching takes them).
+            let same_measure = pu.eq_ignore_ascii_case(&unit) || measure_class(pu).is_some_and(|m| Some(m) == measure_class(&unit));
+            if what == "line" && !same_measure {
                 issues.push((
                     "unit_mismatch",
                     format!("priced per {pu}, counted per {unit}"),

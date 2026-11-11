@@ -96,6 +96,7 @@ mod swing_joined;
 mod symbol_walls;
 mod tagidentity;
 mod takeoff_drywall_pieces;
+mod takeoff_trade_pieces;
 mod takeoff_windows;
 mod tradeatoms;
 mod typed_last;

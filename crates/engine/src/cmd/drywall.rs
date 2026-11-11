@@ -502,6 +502,18 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The plan wall mark a WALLGEN wall stands on, when its type has a head of wall: same level and
 /// type, the wall's middle within half its thickness (and 6") of the mark, running along it.
+/// The built walls whose plan mark takes its type's head of wall (Q6527), each with whether
+/// the head has a bottom track: their head's track is the head detail's, never a plain run.
+pub(crate) fn head_of_wall_walls(d: &Drawing, sp: &BuildingSpec) -> BTreeMap<Handle, bool> {
+    collect_walls(d, sp)
+        .iter()
+        .filter_map(|wd| {
+            head_mark(sp, wd)?;
+            Some((wd.handle, wd.assembly.as_ref()?.head.as_ref()?.bottom_track))
+        })
+        .collect()
+}
+
 fn head_mark(sp: &BuildingSpec, wd: &WallData) -> Option<usize> {
     let asm = wd.assembly.as_ref()?;
     asm.head.as_ref()?;
