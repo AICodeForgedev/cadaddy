@@ -13,8 +13,10 @@
 //!   line is listed with why.
 //! - **Labor:** hours per unit from labor-unit rules data with their source (`labor_units`: a
 //!   company's table per item, size or category; else the estimating baseline `estimate.import`
-//!   kept; else the starter book's placeholder hours, marked as such), never dollars divided by a
-//!   rate. A line no table covers has no labor and is listed.
+//!   kept; else CADaddy's labor book, the rule every estimate route shares: the starter book's
+//!   row for the item, else the family rule for its trade, category, words and size, placeholder
+//!   hours marked as such with their basis), never dollars divided by a rate. A line no table
+//!   covers has no labor and is listed, by trade and category.
 //! - **Totals:** by system and by floor (material, labor hours, labor $, allowances, direct, and
 //!   each one's share of the bid to the cent); allowances, tax on material, overhead, profit,
 //!   contingency and bond as their own lines.
@@ -102,7 +104,7 @@ pub fn specs() -> Vec<crate::cmd::CommandSpec> {
     vec![
         crate::cmd::CommandSpec::new(CMD, "Bid Package", run)
             .menu(&["Tools", "Building", "Bid Package"])
-            .params("{price_book?: .xlsx (the Web Prices workbook: Price List + Item Map; default this machine's price book), labor_units?: .csv|.xlsx (item|kind, category?, size?, unit, hours, per? (1), source: hours per unit with their source; else the estimating baseline, else the starter book's placeholder hours), labor_rate?: $/h (else the estimate's crew rate), markups?: {tax_pct? (on material), overhead_pct?, profit_pct?, contingency_pct?, bond_pct?} (else the estimate's settings), allowances?: [{name, amount, system?, note?}], trades?: [trade] (default the rules': electrical), alternates?: bool (default true: ve.study's options with their add/deduct), ve?: {ve.study params}, underground?: bool (default true), project?, client?, bidder?: text the user entered (the letter names no one else), today?: YYYY-MM-DD, stale_days?, keep?: bool (keep the inputs for the next run; default true), show_lines?: bool, file?: .xlsx, letter?: .pdf, force?: bool} → {base_bid: {material, tax, labor_hours, labor_rate, labor, allowances, direct, overhead, profit, contingency, bond, total}, markups, by_system: [{system, name, lines, line_ids, material, labor_hours, labor, allowances, direct, share}], by_floor: [{level, lines, material, labor_hours, labor, direct, share}], quotes: [{key, description, vendor, source_type, date, unit, unit_price, lines, extended, stale}], allowances, alternates: [{id, name, tier, rfi, decision, material, labor_hours, labor, add_deduct, basis}], proposed: {lines, material, labor_hours, total}, inclusions, exclusions, clarifications, assumptions, counts, unpriced, no_labor, warnings, lines?, text, path?, letter?}: the bid package, every amount traced to its takeoff lines")
+            .params("{price_book?: .xlsx (the Web Prices workbook: Price List + Item Map; default this machine's price book), labor_units?: .csv|.xlsx (item|kind, category?, size?, unit, hours, per? (1), source: hours per unit with their source; else the estimating baseline, else CADaddy's labor book: the starter book's row for the item, else its family rule by trade, category, words and size, placeholder hours with their basis), labor_rate?: $/h (else the estimate's crew rate), markups?: {tax_pct? (on material), overhead_pct?, profit_pct?, contingency_pct?, bond_pct?} (else the estimate's settings), allowances?: [{name, amount, system?, note?}], trades?: [trade] (default the rules': electrical), alternates?: bool (default true: ve.study's options with their add/deduct), ve?: {ve.study params}, underground?: bool (default true), project?, client?, bidder?: text the user entered (the letter names no one else), today?: YYYY-MM-DD, stale_days?, keep?: bool (keep the inputs for the next run; default true), show_lines?: bool, file?: .xlsx, letter?: .pdf, force?: bool} → {base_bid: {material, tax, labor_hours, labor_rate, labor, allowances, direct, overhead, profit, contingency, bond, total}, markups, by_system: [{system, name, lines, line_ids, material, labor_hours, labor, allowances, direct, share}], by_floor: [{level, lines, material, labor_hours, labor, direct, share}], quotes: [{key, description, vendor, source_type, date, unit, unit_price, lines, extended, stale}], allowances, alternates: [{id, name, tier, rfi, decision, material, labor_hours, labor, add_deduct, basis}], proposed: {lines, material, labor_hours, total}, inclusions, exclusions, clarifications, assumptions, counts, unpriced, no_labor, no_labor_by: [{trade, category, lines, qty, unit}], warnings, lines?: [{…, labor_source, labor_basis}], text, path?, letter?}: the bid package, every amount traced to its takeoff lines")
             .noundo(),
     ]
 }
@@ -303,8 +305,8 @@ fn labor_table(path: &str) -> Result<(Vec<LaborRow>, usize)> {
     Ok((out, unsourced))
 }
 
-/// The hours per unit of a line, and where they come from.
-fn labor_unit(table: &[LaborRow], baseline: &Value, starter: &[Value], l: &Value) -> Option<(f64, String)> {
+/// The hours per unit of a line, where they come from, and the row's basis.
+fn labor_unit(table: &[LaborRow], baseline: &Value, l: &Value) -> Option<(f64, String, String)> {
     let s = |k: &str| l[k].as_str().unwrap_or_default();
     let (item, size, unit, category) = (norm(s("item")), norm(s("size")), s("unit"), norm(s("category")));
     let ok = |r: &&LaborRow| pricebook::same_unit(&r.unit, unit);
@@ -317,21 +319,15 @@ fn labor_unit(table: &[LaborRow], baseline: &Value, starter: &[Value], l: &Value
             table.iter().filter(ok).find(|r| (r.item.is_empty() || r.item == "*") && r.category == category && (r.size.is_empty() || r.size == size))
         });
     if let Some(r) = row {
-        return Some((r.hours, format!("labor units: {}", r.source)));
+        return Some((r.hours, format!("labor units: {}", r.source), String::new()));
     }
     if let Some(h) =
         baseline["items"].as_object().and_then(|m| m.iter().find(|(k, _)| norm(k) == item)).and_then(|(_, v)| v["labor"]["normal"].as_f64())
     {
-        return Some((h, "estimating baseline (estimate.import)".into()));
+        return Some((h, "estimating baseline (estimate.import)".into(), String::new()));
     }
-    let same = |p: &&Value, sz: &str| norm(p["item"].as_str().unwrap_or_default()) == item && norm(p["size"].as_str().unwrap_or_default()) == sz;
-    starter
-        .iter()
-        .filter(|p| pricebook::same_unit(p["unit"].as_str().unwrap_or_default(), unit))
-        .find(|p| same(p, &size))
-        .or_else(|| starter.iter().filter(|p| pricebook::same_unit(p["unit"].as_str().unwrap_or_default(), unit)).find(|p| same(p, "")))
-        .and_then(|p| p["labor_hours"].as_f64())
-        .map(|h| (h, format!("{} (placeholder hours: replace with your own)", crate::cmd::estimate::STARTER_SOURCE)))
+    // CADaddy's own books, by the rule every estimate route uses (Q6526).
+    crate::cmd::estimate::laborbook::labor_for(l).map(|h| (h.hours, h.source, h.basis))
 }
 
 // ---------------- the lines ----------------
@@ -371,6 +367,8 @@ struct Line {
     reason: String,
     labor_unit: Option<f64>,
     labor_source: String,
+    /// The labor row's basis (CADaddy's labor book says why its hours fit).
+    labor_basis: String,
     labor_hours: f64,
 }
 
@@ -394,7 +392,7 @@ impl Line {
             "matched_by": self.matched_by, "price_keys": self.parts.iter().map(|c| c.quote.key.clone()).collect::<Vec<_>>(),
             "unit_price": self.unit_price.map(|v| (v * 1e4).round() / 1e4), "material": cents(self.material),
             "labor_unit_hours": self.labor_unit.map(|h| (h * 1e5).round() / 1e5), "labor_source": self.labor_source,
-            "labor_hours": r3(self.labor_hours), "labor": cents(self.labor_hours * rate),
+            "labor_basis": self.labor_basis, "labor_hours": r3(self.labor_hours), "labor": cents(self.labor_hours * rate),
             "vendor": self.parts.iter().map(|c| c.quote.vendor.as_str()).filter(|v| !v.is_empty()).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>().join(" + "),
             "price_date": self.parts.iter().map(|c| c.quote.date.clone()).min().unwrap_or_default(),
             "reason": self.reason, "elements": self.src["element_count"], "source": self.src["source"],
@@ -533,7 +531,6 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         warnings.push(json!({"kind": "labor_units_unsourced", "message": format!("{unsourced} labor-unit rows have no source: not used"), "fix": "give each row its source (the labor table, page, edition)"}));
     }
     let baseline = est.get("baseline").cloned().unwrap_or(Value::Null);
-    let starter = crate::cmd::estimate::starter_prices();
 
     // The takeoff, by level and circuit.
     let all = super::takeoff::lines(s, "circuit", &Value::Null)?;
@@ -616,6 +613,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             reason: String::new(),
             labor_unit: None,
             labor_source: String::new(),
+            labor_basis: String::new(),
             labor_hours: 0.0,
         };
         match priced::price(&book, &by_catalog, &line.src) {
@@ -633,10 +631,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             Outcome::Unpriced(why) => line.reason = why,
         }
         if line.bid != Bid::Excluded
-            && let Some((h, from)) = labor_unit(&table, &baseline, &starter, &line.src)
+            && let Some((h, from, basis)) = labor_unit(&table, &baseline, &line.src)
         {
             line.labor_unit = Some(h);
             line.labor_source = from;
+            line.labor_basis = basis;
             // Labor on the net quantity (waste isn't installed).
             line.labor_hours = h * qty;
         }
@@ -944,11 +943,27 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         ));
     }
     let no_labor: Vec<&Line> = lines.iter().filter(|l| l.bid != Bid::Excluded && l.labor_unit.is_none()).collect();
+    // The trades and categories with no labor units, with their line count and quantity.
+    let no_labor_by = crate::cmd::estimate::laborbook::uncovered(no_labor.iter().map(|l| (&l.src, l.qty)));
     if !no_labor.is_empty() {
+        let cats: Vec<String> = no_labor_by
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} {} ({} lines, {} {})",
+                    c["trade"].as_str().unwrap_or_default(),
+                    c["category"].as_str().unwrap_or_default(),
+                    c["lines"],
+                    c["qty"],
+                    c["unit"].as_str().unwrap_or_default()
+                )
+            })
+            .collect();
         clarifications.push(entry(
             format!(
-                "{} takeoff lines have no labor unit and their labor is not in the bid: give them a row in the labor-unit table.",
-                no_labor.len()
+                "{} takeoff lines have no labor unit and their labor is not in the bid: {}. Give them a row in the labor-unit table.",
+                no_labor.len(),
+                cats.join("; ")
             ),
             "labor-unit rules data",
         ));
@@ -981,7 +996,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         assumptions.push(entry(format!("Labor hours on {n} lines from {src_name}."), src_name));
     }
     if lab_sources.keys().any(|k| k.contains("placeholder")) {
-        warnings.push(json!({"kind": "placeholder_labor", "message": "some labor comes from the starter book's placeholder hours", "fix": "give labor_units: your company's labor-unit table with its source"}));
+        warnings.push(json!({"kind": "placeholder_labor", "message": "some labor comes from CADaddy's placeholder hours (the starter book, the labor book)", "fix": "give labor_units: your company's labor-unit table with its source"}));
     }
     if rate > 0.0 {
         assumptions.push(entry(format!("Labor at {}/h ({rate_from}).", money(rate)), &rate_from));
@@ -1057,7 +1072,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "inclusions": inclusions, "exclusions": exclusions, "clarifications": clarifications, "assumptions": assumptions,
         "counts": {"lines": lines.len(), "base": base.len(), "proposed": prop.len(), "excluded": lines.iter().filter(|l| l.bid == Bid::Excluded).count(),
                    "priced": lines.iter().filter(|l| l.unit_price.is_some()).count(), "unpriced": unpriced.len(), "no_labor": no_labor.len(), "stale": stale_n},
-        "unpriced": list(&unpriced), "no_labor": list(&no_labor), "warnings": warnings, "today": today, "text": text,
+        "unpriced": list(&unpriced), "no_labor": list(&no_labor), "no_labor_by": no_labor_by, "warnings": warnings, "today": today, "text": text,
     });
     if bool_or(p, "show_lines", false) {
         out["lines"] = json!(lines.iter().map(|l| l.json(rate)).collect::<Vec<_>>());

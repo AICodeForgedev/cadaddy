@@ -47,6 +47,7 @@ use crate::{Result, Session};
 
 mod equipment;
 mod labor;
+pub(crate) mod laborbook;
 mod outputs;
 
 /// Rows read from one baseline file, at most (hostile files).
@@ -77,6 +78,7 @@ pub(crate) fn starter_prices() -> Vec<Value> {
                 "unit": r.get("unit").map(|u| u.trim()).filter(|u| !u.is_empty()).unwrap_or("each"),
                 "material": material,
                 "labor_hours": hours,
+                "trade": r.get("trade").map(|t| t.trim()).unwrap_or_default(),
                 "source": STARTER_SOURCE,
             }))
         })
@@ -111,7 +113,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{trade?, category?, status?: priced|unpriced|undecided|error, limit?, cursor?} → {summary, lines: [{key, item, size, unit, qty, material, labor_hours, labor_cost, cost, scope, status, issues}], next?}")
             .noundo(),
         CommandSpec::new("estimate.status", "Estimate Status", run_status)
-            .params("{} → {totals: {material, labor, labor_hours, direct, tax, overhead, profit, contingency, bond, total}, labor_by_phase, by_scope, alternates, by_level, by_trade, by_system, findings: [{kind, line?, message, fix}], ok, summary}")
+            .params("{} → {totals: {material, labor, labor_hours, direct, tax, overhead, profit, contingency, bond, total}, labor_by_phase, by_scope, alternates, by_level, by_trade, by_system, findings: [{kind, line?, message, fix}], no_labor: [{trade, category, lines, qty, unit}] (in-contract lines no labor table covers), ok, summary}")
             .noundo(),
         CommandSpec::new("estimate.explain", "Explain Estimate Number", run_explain)
             .params("{line?: key | total?: true} → {value, math: [steps], lines?, elements?}")
@@ -241,13 +243,29 @@ fn find_price_by_words<'a>(prices: &'a [Value], item: &str, unit: &str, category
 }
 
 /// Q5301: family matching — a row whose words name a category prices lines of that category,
-/// unless the row names a system, material or size that the line does not share (NEVER cross).
+/// unless the row names a system, material or size that the line does not share (NEVER cross),
+/// or is of another trade than the line (Q6526: a duct elbow is no conduit elbow).
 /// Returns the pool index of the best family-match row.
-fn find_family_match(pool: &[Value], item: &str, unit: &str, category: &str, system: &str) -> Option<usize> {
+fn find_family_match(pool: &[Value], item: &str, unit: &str, category: &str, system: &str, trade: &str) -> Option<usize> {
     const SYSTEMS: &[&str] =
         &["gas", "vent", "cw", "hw", "dcw", "dhw", "supply", "return", "exhaust", "sanitary", "storm", "fire", "refrigerant", "condensate"];
-    const MATERIALS: &[&str] =
-        &["copper", "pvc", "steel", "galvanized", "aluminum", "cast", "iron", "fiberglass", "stainless", "brass", "emt", "imc", "rigid"];
+    const MATERIALS: &[&str] = &[
+        "copper",
+        "pvc",
+        "steel",
+        "galvanized",
+        "aluminum",
+        "cast",
+        "iron",
+        "fiberglass",
+        "stainless",
+        "brass",
+        "emt",
+        "imc",
+        "rigid",
+        "rmc",
+        "ent",
+    ];
     // Q6371: the building elements a line or row is of; a window's area is no wall's.
     const ELEMENTS: &[&str] = &["wall", "door", "window", "ceiling", "floor", "roof", "stair"];
     let have = price_words(&format!("{item} {category} {system}"));
@@ -262,7 +280,7 @@ fn find_family_match(pool: &[Value], item: &str, unit: &str, category: &str, sys
     let mut best: Option<(usize, f64)> = None;
     for (i, p) in pool.iter().enumerate() {
         let pu = p["unit"].as_str().unwrap_or_default();
-        if !unit_ok(pu) {
+        if !unit_ok(pu) || !laborbook::same_trade(p["trade"].as_str().unwrap_or_default(), trade) {
             continue;
         }
         // Family rows must have no size (a sized row is an exact match or nothing).
@@ -783,7 +801,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
     let settings = st.get("settings").cloned().unwrap_or(json!({}));
     let pbook = (settings["pricebook"].as_bool() != Some(false)).then(|| super::pricebook::load(settings["pricebook_folder"].as_str()));
     // Q5301: exact match → family match (never crossing system/material/size) → None.
-    let find_in = |pool: &[Value], item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<(usize, &'static str)> {
+    let find_in = |pool: &[Value], item: &str, size: &str, unit: &str, category: &str, system: &str, trade: &str| -> Option<(usize, &'static str)> {
         // 1. Exact: item+size match.
         if let Some(i) = pool.iter().position(|p| {
             p["item"].as_str().is_some_and(|pi| pi.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().eq_ignore_ascii_case(size)
@@ -798,10 +816,10 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
             return Some((i, "family"));
         }
         // 3. Word-based family: category words match, never crossing system/material.
-        find_family_match(pool, item, unit, category, system).map(|i| (i, "family"))
+        find_family_match(pool, item, unit, category, system, trade).map(|i| (i, "family"))
     };
-    let find_price = |item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<(&Value, &'static str)> {
-        find_in(&prices, item, size, unit, category, system).map(|(i, kind)| (&prices[i], kind))
+    let find_price = |item: &str, size: &str, unit: &str, category: &str, system: &str, trade: &str| -> Option<(&Value, &'static str)> {
+        find_in(&prices, item, size, unit, category, system, trade).map(|(i, kind)| (&prices[i], kind))
     };
     let mut out = Vec::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
@@ -871,7 +889,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                     for part in asm["parts"].as_array().into_iter().flatten() {
                         let item = part["item"].as_str().unwrap_or_default();
                         let q = part["qty"].as_f64().unwrap_or(1.0);
-                        match find_price(item, "", &unit, "", "")
+                        match find_price(item, "", &unit, "", "", "")
                             .map(|(p, _)| p)
                             .and_then(|p| check_price(p, &mut pr.issues, &mut pr.material_steps, "part"))
                         {
@@ -895,6 +913,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                 let size = l["size"].as_str().unwrap_or_default();
                 let category = l["category"].as_str().unwrap_or_default();
                 let system = l["system"].as_str().unwrap_or_default();
+                let trade = l["trade"].as_str().unwrap_or_default();
                 // Q6020: check user price mapping first.
                 let mapped_price = price_map.get(&key).and_then(|x| {
                     let mi = x["item"].as_str()?;
@@ -914,7 +933,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                     }
                 } else {
                     // Q5301: user exact > user family > starter exact > starter family > unpriced.
-                    match find_price(item, size, &unit, category, system) {
+                    match find_price(item, size, &unit, category, system, trade) {
                         Some((p, kind)) => {
                             let source_label = if kind == "family" {
                                 let ri = p["item"].as_str().unwrap_or_default();
@@ -948,10 +967,9 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                                     ));
                                 }
                                 pr.material_unit = Some(material);
-                                // Its labor: the starter book's for the item (the price book holds material).
-                                book = find_in(&starter, item, size, &unit, category, system)
-                                    .and_then(|(si, _)| starter[si]["labor_hours"].as_f64())
-                                    .or_else(|| base["items"][item]["labor"]["normal"].as_f64());
+                                // Its labor: the baseline's for the item, else CADaddy's labor
+                                // book's (the price book holds material).
+                                book = base["items"][item]["labor"]["normal"].as_f64();
                             }
                             Some(super::pricebook::Found::Excluded(why)) => {
                                 pr.via = format!("excluded in the price book: {why}");
@@ -960,7 +978,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                                     pr.scope = Some("nic".into());
                                 }
                             }
-                            None => match find_in(&starter, item, size, &unit, category, system) {
+                            None => match find_in(&starter, item, size, &unit, category, system, trade) {
                                 Some((si, kind)) => {
                                     let sp = &starter[si];
                                     pr.via = if kind == "family" {
@@ -971,9 +989,9 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                                     };
                                     pr.match_kind = if kind == "family" { "starter_family" } else { "starter_book" };
                                     let m = sp["material"].as_f64().unwrap_or(0.0);
-                                    let h = sp["labor_hours"].as_f64();
                                     pr.material_unit = Some(m);
-                                    book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
+                                    // Its labor by the labor rule every route shares (below).
+                                    book = base["items"][item]["labor"]["normal"].as_f64();
                                 }
                                 None => {
                                     // Q6020: nearest row is a SUGGESTION, never applied silently.
@@ -1005,12 +1023,19 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                 }
             }
         }
-        if pr.material_unit.is_some() {
-            let (h, steps, phases) = labor::line_labor(st, &base, &drivers, &key, l, book);
-            pr.labor_unit_hours = h;
-            pr.labor_steps = steps;
-            pr.phases = phases.into_iter().map(|(ph, u)| (ph, u * net)).collect();
+        // Q6526: no labor in the user's data → CADaddy's labor book, by the rule bim.bid and
+        // bim.estimate use; labor whether or not the material is priced.
+        let mut from_book = None;
+        if book.is_none()
+            && let Some(h) = laborbook::labor_for(l)
+        {
+            book = Some(h.hours);
+            from_book = Some(format!("{}: {}", h.source, h.basis));
         }
+        let (h, steps, phases) = labor::line_labor(st, &base, &drivers, &key, l, book);
+        pr.labor_unit_hours = h;
+        pr.labor_steps = from_book.into_iter().chain(steps).collect();
+        pr.phases = phases.into_iter().map(|(ph, u)| (ph, u * net)).collect();
         if pr.material_unit.is_some() && pr.labor_unit_hours.is_none() {
             pr.issues.push(("missing_labor", "no labor per unit".into(), "add labor hours or dollars to the price or assembly".into()));
         }
@@ -1278,12 +1303,24 @@ fn run_status(s: &mut Session, _p: &Value) -> Result<Value> {
             "fix": "estimate.settings {crew_rate: 75} (your crew's loaded hourly rate)",
         }));
     }
+    // Q6526: the trades and categories in the contract with no labor units, with their lines
+    // and quantity.
+    let no_labor = no_labor(&job.priced);
+    if !no_labor.is_empty() {
+        let n: u64 = no_labor.iter().filter_map(|c| c["lines"].as_u64()).sum();
+        f.push(json!({
+            "kind": "no_labor_units",
+            "message": format!("{n} line(s) in the contract have no labor units: their labor is not in the total"),
+            "fix": "give them labor hours (estimate.set_price labor_hours, or estimate.import a labor table)",
+        }));
+    }
     // Q5278 MUST 3: ok:false when every line is unpriced (not just when findings exist).
     let unpriced = job.priced.iter().filter(|p| p.material_unit.is_none()).count();
     let all_unpriced = !job.priced.is_empty() && unpriced == job.priced.len();
     out["ok"] = json!(f.is_empty() && !all_unpriced);
     out["summary"] = summary(&job.priced);
     out["findings"] = json!(f);
+    out["no_labor"] = json!(no_labor);
     if let Some(n) = load_costs_step(&job.priced) {
         out["next_step"] = json!(n);
     }
@@ -1303,6 +1340,14 @@ fn run_status(s: &mut Session, _p: &Value) -> Result<Value> {
         out["findings"] = json!(f);
     }
     Ok(out)
+}
+
+/// Q6526: the trades and categories in the contract no labor table covers, with their lines and
+/// quantity.
+fn no_labor(priced: &[Priced]) -> Vec<Value> {
+    laborbook::uncovered(
+        priced.iter().filter(|p| p.labor_unit_hours.is_none() && p.scope.as_deref() == Some("in_contract")).map(|p| (&p.line, p.net)),
+    )
 }
 
 /// The next step when lines have no price: load a cost table.
@@ -1648,9 +1693,9 @@ mod tests {
     #[test]
     fn a_family_match_never_crosses_building_elements() {
         let pool = vec![json!({"item": "Wall area untyped", "unit": "sq ft"}), json!({"item": "Window", "unit": "each"})];
-        assert_eq!(find_family_match(&pool, "Window area", "sq ft", "windows", ""), None, "a window's area is no wall's");
-        assert_eq!(find_family_match(&pool, "Wall area", "sq ft", "walls", ""), Some(0));
-        assert_eq!(find_family_match(&pool, "Window unit", "each", "windows", ""), Some(1));
+        assert_eq!(find_family_match(&pool, "Window area", "sq ft", "windows", "", ""), None, "a window's area is no wall's");
+        assert_eq!(find_family_match(&pool, "Wall area", "sq ft", "walls", "", ""), Some(0));
+        assert_eq!(find_family_match(&pool, "Window unit", "each", "windows", "", ""), Some(1));
     }
 
     /// An invented baseline in the open layout.
@@ -2123,6 +2168,32 @@ mod tests {
             assert!((0.0..1e6).contains(&m), "bad material in row: {r}");
             assert!(r["source"].as_str() == Some(STARTER_SOURCE), "wrong source in row: {r}");
         }
+    }
+
+    #[test]
+    fn every_line_takes_the_shared_labor_rule_and_the_uncovered_are_reported() {
+        // Made-up lines: a priced-nowhere breaker, wire the starter book names otherwise, and a
+        // trade no book has.
+        let bom = json!({"lines": [
+            {"trade": "electrical", "category": "breakers", "item": "Circuit breaker, panel Q9", "size": "20A 1P", "unit": "each", "net": 4.0, "total": 4.0},
+            {"trade": "electrical", "category": "wire", "item": "THHN copper", "size": "#10", "unit": "ft", "net": 100.0, "total": 110.0},
+            {"trade": "landscape", "category": "planting", "item": "Shrub", "size": "", "unit": "each", "net": 3.0, "total": 3.0}
+        ]});
+        let mut st = Map::new();
+        st.insert("scope".into(), json!({}));
+        let (mut priced, _) = price_lines(&st, &bom);
+        for p in &mut priced {
+            p.scope = Some("in_contract".into());
+        }
+        let h = |item: &str| priced.iter().find(|p| p.line["item"] == json!(item)).map(|p| (p.labor_unit_hours, p.labor_hours));
+        // Labor whether or not the material is priced, by the rule bim.bid uses.
+        assert_eq!(h("Circuit breaker, panel Q9"), Some((Some(0.2), 0.8)));
+        assert!(h("THHN copper").is_some_and(|(u, t)| u == Some(0.02) && (t - 2.0).abs() < 1e-9), "{:?}", h("THHN copper"));
+        let bid_rule = |l: &Value| laborbook::labor_for(l).map(|x| x.hours);
+        for p in priced.iter().filter(|p| p.line["trade"] == json!("electrical")) {
+            assert_eq!(p.labor_unit_hours, bid_rule(&p.line), "{}", p.line);
+        }
+        assert_eq!(json!(no_labor(&priced)), json!([{"trade": "landscape", "category": "planting", "lines": 1, "qty": 3.0, "unit": "each"}]));
     }
 
     #[test]

@@ -320,7 +320,8 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     // priced lines (duct, pipe, conduit) must match the hand calculation; the total
     // includes additional items priced from the starter book.
     let user_lines = e["lines"].as_array().unwrap();
-    let is_starter = |l: &Value| l["via"].as_str().is_some_and(|v| v.contains("starter cost book"));
+    // Q6526: a line the table doesn't price still carries the labor book's hours (unpriced).
+    let is_starter = |l: &Value| l["via"].as_str().is_some_and(|v| v.contains("starter cost book")) || l["matched_by"] == json!("unpriced");
     let user_mat: f64 = user_lines.iter().filter(|l| !is_starter(l)).map(|l| l["material"].as_f64().unwrap_or(0.0)).sum();
     let user_hrs: f64 = user_lines.iter().filter(|l| !is_starter(l)).map(|l| l["labor_hrs"].as_f64().unwrap_or(0.0)).sum();
     assert!((user_mat - material).abs() < 0.01, "user-table material: {user_mat} vs {material}");
@@ -330,7 +331,8 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     assert_eq!((d["waste_pct"].as_f64(), d["matched_by"].as_str()), (Some(10.0), Some("family")));
     // Q6012: items previously unmatched may now be priced from the starter book.
     // Items with no cost-table row AND no starter-book match are still unmatched.
-    let starter_priced: Vec<&str> = user_lines.iter().filter(|l| is_starter(l)).filter_map(|l| l["item"].as_str()).collect();
+    let starter_priced: Vec<&str> =
+        user_lines.iter().filter(|l| l["via"].as_str().is_some_and(|v| v.contains("starter cost book"))).filter_map(|l| l["item"].as_str()).collect();
     let has_starter_pricing = !starter_priced.is_empty();
     assert!(has_starter_pricing, "starter cost book should price some items");
     assert_eq!(e["unused_rows"], json!(["Fire damper"]));

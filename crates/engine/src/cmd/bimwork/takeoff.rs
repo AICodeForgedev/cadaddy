@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
             .noundo(),
         CommandSpec::new(CMD_EST, "Model Estimate", run_estimate)
-            .params("{force?: bool (replace an existing file; otherwise it is refused), price_book?: .xlsx path (sheets \"Price List\": key, description, catalog, unit, unit price $, source type, vendor, URL, price date; \"Item Map\": CADaddy item, size, action price|exclude, price key 1, price key 2, note): material priced by each line's catalog number in the Price List, else its Item Map row (keys added), else listed unpriced, stale_days?: n (90: an older price is flagged STALE), tax_pct?: percent (0), today?: YYYY-MM-DD, by_level?, filter?, file?: .xlsx (live INDEX/MATCH formulas into the book's Price List) | .csv → {lines: [{item, size, unit, qty, qty_total, type_mark?, manufacturer?, catalog?, dimming?, product_source?, matched_by: catalog|item_map, price_keys, unit_price, extended, price_date, age_days, source_type, vendor, price, flag?: STALE}], unpriced: [{…, reason}], excluded: [{…, reason}], counts, by_category, totals: {by_group: [{trade, category, lines, extended}], subtotal, tax: {rate_pct, amount}, total}, warnings, csv, path?} | cost_table: .csv|.xlsx path | csv: text | rows: [{item, unit, material, labor_hrs, waste?}], labor_rate?: $/h (75, or the table's labor_rate column), waste?: percent | {category: percent} (default the BOM's), by_level?: bool, filter?: as bim.takeoff, revision?: name (keep it), compare_to?: revision name | {lines}, file?: .csv|.xlsx} → {lines: [{item, size, unit, qty, waste_pct, qty_total, cost_item, material_unit, labor_hrs_unit, material, labor_hrs, labor, total, elements}], unmatched: [{item, size, unit, qty, reason}], unused_rows, material_total, labor_hours, labor_total, total, labor_rate, change_order?: {lines: [{item, size, unit, before_qty, after_qty, delta_qty, delta_cost}], total}, csv, path?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), price_book?: .xlsx path (sheets \"Price List\": key, description, catalog, unit, unit price $, source type, vendor, URL, price date; \"Item Map\": CADaddy item, size, action price|exclude, price key 1, price key 2, note): material priced by each line's catalog number in the Price List, else its Item Map row (keys added), else listed unpriced, stale_days?: n (90: an older price is flagged STALE), tax_pct?: percent (0), today?: YYYY-MM-DD, by_level?, filter?, file?: .xlsx (live INDEX/MATCH formulas into the book's Price List) | .csv → {lines: [{item, size, unit, qty, qty_total, type_mark?, manufacturer?, catalog?, dimming?, product_source?, matched_by: catalog|item_map, price_keys, unit_price, extended, price_date, age_days, source_type, vendor, price, flag?: STALE}], unpriced: [{…, reason}], excluded: [{…, reason}], counts, by_category, totals: {by_group: [{trade, category, lines, extended}], subtotal, tax: {rate_pct, amount}, total}, warnings, csv, path?} | cost_table: .csv|.xlsx path | csv: text | rows: [{item, unit, material, labor_hrs?, waste?, trade?}] (a row with no labor_hrs takes CADaddy's labor book's, the rule bim.bid and estimate.status use), labor_rate?: $/h (75, or the table's labor_rate column), waste?: percent | {category: percent} (default the BOM's), by_level?: bool, filter?: as bim.takeoff, revision?: name (keep it), compare_to?: revision name | {lines}, file?: .csv|.xlsx} → {lines: [{item, size, unit, qty, waste_pct, qty_total, cost_item, matched_by (unpriced: no material, its labor counted), material_unit, labor_hrs_unit, labor_source, labor_basis, material, labor_hrs, labor, total, elements}], unmatched: [{item, size, unit, qty, reason}], unused_rows, material_total, labor_hours, labor_total, total, labor_rate, labor_by_trade, no_labor: [{trade, category, lines, qty, unit}], change_order?: {lines: [{item, size, unit, before_qty, after_qty, delta_qty, delta_cost}], total}, csv, path?}")
             .noundo(),
     ]
 }
@@ -676,9 +676,12 @@ struct Cost {
     item: String,
     unit: String,
     material: f64,
-    labor_hrs: f64,
+    /// Hours per unit; none when the row gives none (CADaddy's labor book then does).
+    labor_hrs: Option<f64>,
     waste: Option<f64>,
     labor_rate: Option<f64>,
+    /// The row's trade: a family match never crosses trades (Q6526).
+    trade: String,
 }
 
 fn num(v: Option<&String>) -> Option<f64> {
@@ -718,9 +721,10 @@ fn cost_rows(cmd: &str, p: &Value) -> Result<Vec<Cost>> {
                 item,
                 unit: pick(r, &["unit", "uom", "units"]).unwrap_or_default(),
                 material: num(pick(r, &["material", "material_cost", "material $", "mat", "price", "unit_cost"]).as_ref()).unwrap_or(0.0),
-                labor_hrs: num(pick(r, &["labor_hrs", "labor_hours", "labour_hrs", "labor", "hours", "labor units"]).as_ref()).unwrap_or(0.0),
+                labor_hrs: num(pick(r, &["labor_hrs", "labor_hours", "labour_hrs", "labor", "hours", "labor units"]).as_ref()).filter(|h| *h >= 0.0),
                 waste: num(pick(r, &["waste", "waste_pct", "waste %"]).as_ref()).filter(|w| (0.0..=200.0).contains(w)),
                 labor_rate: num(pick(r, &["labor_rate", "rate"]).as_ref()).filter(|v| *v >= 0.0),
+                trade: pick(r, &["trade"]).unwrap_or_default(),
             })
         })
         .collect();
@@ -752,7 +756,7 @@ fn words(t: &str) -> BTreeSet<String> {
 const SYSTEM_WORDS: &[&str] =
     &["gas", "vent", "cw", "hw", "dcw", "dhw", "supply", "return", "exhaust", "sanitary", "storm", "fire", "refrigerant", "condensate"];
 const MATERIAL_WORDS: &[&str] =
-    &["copper", "pvc", "steel", "galvanized", "aluminum", "cast", "iron", "fiberglass", "stainless", "brass", "emt", "imc", "rigid"];
+    &["copper", "pvc", "steel", "galvanized", "aluminum", "cast", "iron", "fiberglass", "stainless", "brass", "emt", "imc", "rigid", "rmc", "ent"];
 /// Q6371: the building elements a line or row is of; a window's area is no wall's.
 const ELEMENT_WORDS: &[&str] = &["wall", "door", "window", "ceiling", "floor", "roof", "stair"];
 
@@ -761,6 +765,7 @@ const ELEMENT_WORDS: &[&str] = &["wall", "door", "window", "ceiling", "floor", "
 fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
     let item = l["item"].as_str().unwrap_or_default();
     let unit = l["unit"].as_str().unwrap_or_default();
+    let trade = l["trade"].as_str().unwrap_or_default();
     let unit_ok =
         |r: &Cost| r.unit.trim().is_empty() || measure(&r.unit).is_some_and(|m| Some(m) == measure(unit)) || r.unit.trim().eq_ignore_ascii_case(unit);
     if let Some(i) = rows.iter().position(|r| r.item.trim().eq_ignore_ascii_case(item.trim()) && unit_ok(r)) {
@@ -781,7 +786,7 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
     let line_el: BTreeSet<&str> = ELEMENT_WORDS.iter().copied().filter(|m| have.contains(*m)).collect();
     let mut best: Option<(usize, f64, usize)> = None;
     for (i, r) in rows.iter().enumerate() {
-        if !unit_ok(r) {
+        if !unit_ok(r) || !crate::cmd::estimate::laborbook::same_trade(&r.trade, trade) {
             continue;
         }
         let want = words(&r.item);
@@ -834,9 +839,10 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
                 item: v["item"].as_str()?.to_string(),
                 unit: v["unit"].as_str().unwrap_or("each").to_string(),
                 material: v["material"].as_f64()?,
-                labor_hrs: v["labor_hours"].as_f64().unwrap_or(0.0),
+                labor_hrs: v["labor_hours"].as_f64(),
                 waste: None,
                 labor_rate: None,
+                trade: v["trade"].as_str().unwrap_or_default().to_string(),
             })
         })
         .collect();
@@ -862,21 +868,23 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let mut out_lines = Vec::new();
     let mut unmatched = Vec::new();
+    let mut no_labor: Vec<(Value, f64)> = Vec::new();
     let mut used = BTreeSet::new();
     let mut used_starter = BTreeSet::new();
     let (mut mat_total, mut hrs_total) = (0.0f64, 0.0f64);
+    let mut hrs_by_trade: BTreeMap<String, f64> = BTreeMap::new();
     for l in &lines {
         let qty = l["qty"].as_f64().unwrap_or(0.0);
         if qty <= 0.0 {
             continue;
         }
         // Q5301: user exact/family > starter exact/family > unmatched with suggestion.
-        let (r, how, via) = if let Some((i, how)) = match_row(&rows, l) {
+        let found = if let Some((i, how)) = match_row(&rows, l) {
             used.insert(i);
-            (&rows[i], how, None)
+            Some((&rows[i], how, None))
         } else if let Some((i, how)) = match_row(&starter, l) {
             used_starter.insert(i);
-            (&starter[i], how, Some(crate::cmd::estimate::STARTER_SOURCE))
+            Some((&starter[i], how, Some(crate::cmd::estimate::STARTER_SOURCE)))
         } else {
             // Q6020: suggest the nearest row but never apply it.
             let item_name = l["item"].as_str().unwrap_or_default();
@@ -893,19 +901,49 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
                 "no cost-table row names this item in this unit".to_string()
             };
             unmatched.push(json!({"item": l["item"], "size": l["size"], "unit": l["unit"], "qty": qty, "level": l["level"], "reason": reason}));
+            None
+        };
+        // Labor: the user's row's hours, else CADaddy's labor book by the rule every estimate
+        // route uses (Q6526), whether or not the material is priced.
+        let user_hours = found.as_ref().filter(|(_, _, via)| via.is_none()).and_then(|(r, _, _)| r.labor_hrs);
+        let (unit_hrs, labor_source, labor_basis) = match user_hours {
+            Some(h) => (Some(h), "cost table".to_string(), String::new()),
+            None => match crate::cmd::estimate::laborbook::labor_for(l) {
+                Some(b) => (Some(b.hours), b.source, b.basis),
+                None => (None, String::new(), String::new()),
+            },
+        };
+        if unit_hrs.is_none() {
+            no_labor.push((l.clone(), qty));
+        }
+        let Some((r, how, via)) = found else {
+            // No material price: its labor still counts (listed as unpriced).
+            let h = qty * unit_hrs.unwrap_or(0.0);
+            if h > 0.0 {
+                hrs_total += h;
+                *hrs_by_trade.entry(l["trade"].as_str().unwrap_or_default().to_string()).or_default() += h;
+                out_lines.push(json!({
+                    "key": l["key"], "level": l["level"], "trade": l["trade"], "category": l["category"], "item": l["item"], "size": l["size"], "unit": l["unit"],
+                    "qty": r3(qty), "waste_pct": 0.0, "qty_total": r3(qty), "cost_item": "", "matched_by": "unpriced",
+                    "material_unit": Value::Null, "labor_hrs_unit": unit_hrs, "labor_source": labor_source, "labor_basis": labor_basis,
+                    "material": 0.0, "labor_hrs": r3(h), "labor": r3(h * rate), "total": r3(h * rate),
+                    "elements": l["element_count"],
+                }));
+            }
             continue;
         };
         let w = waste_for(l, r);
         let qt = qty * (1.0 + w / 100.0);
         // Material on the quantity with waste; labor on the net (waste isn't installed).
         // This matches the estimate.* engine (estimate.rs price_lines).
-        let (m, h) = (qt * r.material, qty * r.labor_hrs);
+        let (m, h) = (qt * r.material, qty * unit_hrs.unwrap_or(0.0));
         mat_total += m;
         hrs_total += h;
+        *hrs_by_trade.entry(l["trade"].as_str().unwrap_or_default().to_string()).or_default() += h;
         let mut line = json!({
             "key": l["key"], "level": l["level"], "trade": l["trade"], "category": l["category"], "item": l["item"], "size": l["size"], "unit": l["unit"],
             "qty": r3(qty), "waste_pct": r3(w), "qty_total": r3(qt), "cost_item": r.item, "matched_by": how,
-            "material_unit": r.material, "labor_hrs_unit": r.labor_hrs,
+            "material_unit": r.material, "labor_hrs_unit": unit_hrs, "labor_source": labor_source, "labor_basis": labor_basis,
             "material": r3(m), "labor_hrs": r3(h), "labor": r3(h * rate), "total": r3(m + h * rate),
             "elements": l["element_count"],
         });
@@ -938,8 +976,15 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     if !unmatched.is_empty() {
         warnings.push(json!({
             "kind": "unpriced_lines",
-            "message": format!("{} takeoff lines have no cost-table match; their cost is not in the total", unmatched.len()),
+            "message": format!("{} takeoff lines have no cost-table match; their material is not in the total (their labor is, from the labor book)", unmatched.len()),
             "fix": "add rows to the cost table for each unmatched item, or verify they are not in contract",
+        }));
+    }
+    if !no_labor.is_empty() {
+        warnings.push(json!({
+            "kind": "no_labor_units",
+            "message": format!("{} takeoff lines have no labor units: their labor is not in the total (no_labor lists them by trade and category)", no_labor.len()),
+            "fix": "add labor hours for them to the cost table (labor_hrs)",
         }));
     }
     if !used_starter.is_empty() {
@@ -952,6 +997,8 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({
         "lines": out_lines, "unmatched": unmatched, "unused_rows": unused,
         "material_total": r3(mat_total), "labor_hours": r3(hrs_total), "labor_total": r3(hrs_total * rate), "total": r3(total), "labor_rate": rate,
+        "labor_by_trade": hrs_by_trade.iter().map(|(k, v)| (k.clone(), json!(r3(*v)))).collect::<serde_json::Map<String, Value>>(),
+        "no_labor": crate::cmd::estimate::laborbook::uncovered(no_labor.iter().map(|(l, q)| (l, *q))),
         "warnings": warnings,
     });
     // Store the cost table in the estimate state so estimate.status uses the same prices.
@@ -967,8 +1014,8 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
                         "item": r.item, "unit": if r.unit.is_empty() { "each" } else { &r.unit },
                         "material": r.material, "source": "bim.estimate cost table", "date": "",
                     });
-                    if r.labor_hrs > 0.0 {
-                        pv["labor_hours"] = json!(r.labor_hrs);
+                    if let Some(h) = r.labor_hrs.filter(|h| *h > 0.0) {
+                        pv["labor_hours"] = json!(h);
                     }
                     pv
                 })
@@ -1074,7 +1121,20 @@ mod tests {
     use super::*;
 
     fn row(item: &str, unit: &str) -> Cost {
-        Cost { item: item.into(), unit: unit.into(), material: 1.0, labor_hrs: 0.1, waste: None, labor_rate: None }
+        Cost { item: item.into(), unit: unit.into(), material: 1.0, labor_hrs: Some(0.1), waste: None, labor_rate: None, trade: String::new() }
+    }
+
+    #[test]
+    fn a_family_row_never_prices_another_trade_or_raceway_material() {
+        let of = |item: &str, trade: &str| Cost { trade: trade.into(), ..row(item, "each") };
+        let rows = vec![of("EMT 90 elbow", "electrical"), of("Conduit strap", "electrical")];
+        let l = |item: &str, cat: &str, trade: &str| json!({"item": item, "unit": "each", "category": cat, "size": "1\"", "trade": trade});
+        // A duct or pipe elbow is no conduit elbow (Q6526), a rigid elbow no EMT elbow.
+        assert_eq!(match_row(&rows, &l("SA elbow 90°", "fittings", "mechanical")), None);
+        assert_eq!(match_row(&rows, &l("CW elbow 90°", "fittings", "mechanical")), None);
+        assert_eq!(match_row(&rows, &l("RMC 90° elbow", "conduit fittings", "electrical")), None);
+        assert_eq!(match_row(&rows, &l("EMT 90° elbow", "conduit fittings", "electrical")), Some((0, "family")));
+        assert_eq!(match_row(&rows, &l("ENT strap", "conduit fittings", "electrical")), Some((1, "family")));
     }
 
     #[test]
