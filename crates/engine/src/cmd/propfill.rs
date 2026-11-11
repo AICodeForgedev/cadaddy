@@ -1380,6 +1380,8 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
     let field = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).map(|f| f.value.trim().to_string()).filter(|v| !v.is_empty());
     let marks: Vec<String> = devices.iter().filter_map(|t| field(t, "type")).collect();
     let heights = mount_heights(d, &marks);
+    // The documents' panels: a circuit label naming another feeds from none (Q6319).
+    let known_panels = super::breakers::documented_panels(sp);
     // What the validator reads the documents for: the same heights, the same order.
     let ask_kind = |t: &cadaddy_walk3d::tags::ElementTag| -> String {
         let own = t.kind.trim().replace(' ', "_");
@@ -1874,6 +1876,20 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             }
             store.set("circuit", Prop::new(c.clone(), printed()));
             match panel_of(&c) {
+                // A panel no schedule, one-line or riser has: the label as printed, fed from no
+                // panel (the design value kept beside), for review (`bim.breakers`).
+                Some(p) if super::breakers::names_no_panel(&known_panels, &p) => {
+                    store.set("panel", Prop::new(p.clone(), printed()));
+                    let br = super::breakers::rules();
+                    let fix = super::provenance::Correction {
+                        key: "fed_from".into(),
+                        design: format!("panel {p}, circuit {c}"),
+                        corrected: format!("no panel of the documents: circuit label {c} as printed, for review"),
+                        reason: br.unknown_panel_reason.clone(),
+                        rule: br.panel_rule.clone(),
+                    };
+                    super::provenance::correct(&mut store, &fix, printed());
+                }
                 Some(p) => {
                     store.set("panel", Prop::new(p.clone(), printed()));
                     store.set("fed_from", Prop::new(format!("panel {p}, circuit {c}"), printed()));
