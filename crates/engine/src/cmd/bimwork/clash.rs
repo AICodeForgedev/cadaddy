@@ -276,6 +276,14 @@ struct Found {
     depth: f64,
 }
 
+/// Whether each trade against the others leaves the pair alone as one trade's own: a pipe and a
+/// duct are two runs that never meet by design, whoever installs them (Q6492: refrigerant and
+/// hydronic piping are the mechanical trade's, beside its ducts).
+fn same_trade(e: &El, o: &El) -> bool {
+    let run = |x: &El| matches!(x.category.as_str(), "pipe" | "duct");
+    e.trade == o.trade && !(run(e) && run(o) && e.category != o.category)
+}
+
 /// Every clash between the elements `a` picks and those `b` picks; the pairs tested, and of them
 /// those with a framing member.
 fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f64, clearance: f64, hosted: bool) -> (Vec<Found>, usize, usize) {
@@ -304,7 +312,7 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
             let Some(o) = els.get(j) else { continue };
             let ab = in_a.get(i) == Some(&true) && in_b.get(j) == Some(&true);
             let ba = in_b.get(i) == Some(&true) && in_a.get(j) == Some(&true);
-            if !(ab || ba) || (cross && e.trade == o.trade) || !boxes_meet((e.lo, e.hi), (o.lo, o.hi), pad) || exempt(e, o, hosted) {
+            if !(ab || ba) || (cross && same_trade(e, o)) || !boxes_meet((e.lo, e.hi), (o.lo, o.hi), pad) || exempt(e, o, hosted) {
                 continue;
             }
             tested += 1;

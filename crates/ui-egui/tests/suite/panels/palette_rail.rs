@@ -111,12 +111,12 @@ fn rail_button_opens_one_palette_and_again_closes_it() {
 }
 
 #[test]
-fn hide_button_closes_and_pin_keeps_a_palette_open() {
+fn minimize_button_closes_and_pin_keeps_a_palette_open() {
     let mut h = harness();
     click_rail(&mut h, "Layers");
-    h.get_by_label("Hide").click();
+    h.get_by_label(cadaddy_ui_egui::docking::MINIMIZE).click();
     h.run_steps(5);
-    assert!(shown(&h).is_empty(), "the hide button puts it back on the rail");
+    assert!(shown(&h).is_empty(), "the minimize button puts it back on the rail");
     click_rail(&mut h, "Layers");
     h.get_by_label("Pin").click();
     h.run_steps(4);
@@ -208,6 +208,157 @@ fn right_to_left_mirrors_the_rail() {
     assert!(c.right() < W - EDGE - 200.0 && c.left() < 20.0, "the palette opens between the drawing and the rail: {c:?}");
 }
 
+/// The settings file's workspace object as a release before this one wrote it: `docking` as the
+/// palettes stood (`rail` 1: the rail's first release, which kept them pinned open; `None`:
+/// before the rail, no `rail`, `pinned` or `mirrored` field), and both switches on.
+fn old_settings(docking: &Workspace, rail: Option<u32>) -> Value {
+    let mut d = serde_json::to_value(docking).unwrap();
+    let o = d.as_object_mut().unwrap();
+    for k in ["rail", "pinned", "mirrored"] {
+        o.remove(k);
+    }
+    if let Some(rail) = rail {
+        let pins: Vec<Value> = docking.layout.panels().into_iter().filter(|p| **p != Panel::Canvas).map(|p| json!(p.id())).collect();
+        o.insert("rail".into(), json!(rail));
+        o.insert("pinned".into(), json!(pins));
+    }
+    json!({ "docking": d, "showToolsets": true, "showPalettes": true, "toolsetTab": "Drafting" })
+}
+
+/// A settings file's workspace read back the way the app reads it at start: the dock layout
+/// recovered on its own, the rest strictly.
+fn read_settings(workspace: &Value) -> UiState {
+    let mut fields = workspace.clone();
+    let docking = fields.as_object_mut().unwrap().remove("docking").unwrap();
+    let mut ui: UiState = serde_json::from_value(fields).unwrap();
+    let docking: Workspace = serde_json::from_value(docking).unwrap();
+    docking.validate().unwrap();
+    ui.docking = docking;
+    ui
+}
+
+/// Coordination, Layers, Properties and the Sheet Set Manager docked open, as the releases
+/// before this one saved them (made up here: each release's layout shape).
+fn saved_by_older_releases() -> Vec<(&'static str, Value)> {
+    let mut v = Vec::new();
+    // Before the rail: the palette column on the right, Coordination and the Sheet Set Manager
+    // docked beside the drawing.
+    let mut w = Workspace::docked();
+    w.set_visible(Panel::Coordination, true).unwrap();
+    w.set_visible(Panel::SheetSets, true).unwrap();
+    v.push(("0.7.8", old_settings(&w, None)));
+    // Coordination a tab behind Properties, the Sheet Set Manager floating.
+    let mut w = Workspace::docked();
+    w.set_visible(Panel::Coordination, true).unwrap();
+    w.apply(craft_ui::docking::Action::Move {
+        panel: Panel::Coordination,
+        anchor: Panel::Properties,
+        placement: craft_ui::docking::Placement::Tab { before: None },
+    })
+    .unwrap();
+    w.set_visible(Panel::SheetSets, true).unwrap();
+    w.apply(craft_ui::docking::Action::Float { panel: Panel::SheetSets, rect: [700.0, 90.0, 380.0, 520.0] }).unwrap();
+    v.push(("0.7.9", old_settings(&w, None)));
+    // A pre-rail 0.7.10: External References and Symbols out too, Tool Sets closed.
+    let mut w = Workspace::docked();
+    for p in [Panel::Coordination, Panel::SheetSets, Panel::ExternalRefs] {
+        w.set_visible(p, true).unwrap();
+    }
+    w.set_visible(Panel::ToolSets, false).unwrap();
+    v.push(("0.7.10 before the rail", old_settings(&w, None)));
+    // The rail's first release, after its upgrade had pinned that layout open.
+    v.push(("0.7.10 first rail", old_settings(&w, Some(1))));
+    v
+}
+
+/// A made-up building model with print sheets, saved as .cdy.
+fn bim_cdy_with_sheets(dir: &std::path::Path) -> String {
+    let mut d = cadaddy_engine::sample::job_print_set(3, 40);
+    let bim = cadaddy_engine::sample::bim_building(2, 3);
+    for l in &bim.layers {
+        if !d.layers.iter().any(|m| m.name.eq_ignore_ascii_case(&l.name)) {
+            d.layers.push(l.clone());
+        }
+    }
+    for e in bim.model.iter() {
+        let mut e = (**e).clone();
+        e.handle = d.new_handle();
+        d.model.push(e);
+    }
+    let path = dir.join("Sample Building.cdy");
+    std::fs::write(&path, cadaddy_io::cdy::write_cdy(&d).unwrap()).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// Open `path` the way a double-clicked file or File ▸ Open does (read in the background), and
+/// wait for it to open on its first sheet.
+fn open_file(h: &mut Harness<'_, CadApp>, path: &str) {
+    h.state_mut().open_path(path);
+    let t = std::time::Instant::now();
+    while h.state().session.active_sheet().is_none() && t.elapsed() < std::time::Duration::from_secs(60) {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(h.state().session.active_sheet().is_some(), "{path} opened on a sheet: {:?}", h.state().status);
+    h.run_steps(8);
+}
+
+/// The test that failed before the fix (owner, Q6524): settings saved by an older release with
+/// Coordination, Layers, Properties and the Sheet Set Manager docked open came back pinned open
+/// on the right at every start. Now: only the drawing and the rail; opening a building model
+/// with sheets opens no palette; Coordination opened from the rail minimizes back onto it; after
+/// a restart everything is still closed.
+#[test]
+fn every_palette_starts_on_the_rail_whatever_an_older_release_saved() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-rail-upgrade-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = bim_cdy_with_sheets(&dir);
+    for (release, saved) in saved_by_older_releases() {
+        let mut h = harness_with(Some(read_settings(&saved)), false);
+        assert!(shown(&h).is_empty(), "{release}: palettes open at start: {:?}", shown(&h));
+        assert!(h.state().ui.docking.pinned.is_empty(), "{release}: {:?}", h.state().ui.docking.pinned);
+        let c = canvas(&h);
+        assert!(c.left() >= rail::WIDTH && c.left() < EDGE && c.right() > W - 20.0, "{release}: the drawing gets the window: {c:?}");
+        for label in ["Coordination", "Layers", "Properties", "Sheet Set Manager"] {
+            rail_button(&h, label, false);
+        }
+        // A building model with sheets opens on its first sheet; no palette opens with it.
+        open_file(&mut h, &model);
+        assert!(shown(&h).is_empty(), "{release}: opening the model opened {:?}", shown(&h));
+        // Opened from the rail and minimized again: back on the rail.
+        click_rail(&mut h, "Coordination");
+        assert_eq!(shown(&h), [Panel::Coordination], "{release}");
+        h.get_by_label(cadaddy_ui_egui::docking::MINIMIZE).click();
+        h.run_steps(5);
+        assert!(shown(&h).is_empty(), "{release}: minimized onto the rail");
+        // Restart: the rail state was saved, so still nothing open.
+        let saved = serde_json::to_string(&h.state().ui).unwrap();
+        let again = harness_with(Some(serde_json::from_str(&saved).unwrap()), false);
+        assert!(shown(&again).is_empty(), "{release}: after a restart {:?}", shown(&again));
+        assert_eq!(again.state().ui.docking.rail, cadaddy_ui_egui::docking::RAIL_LAYOUT);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// In a right-to-left interface an older layout goes to the rail on the right, and the minimize
+/// arrow points to it.
+#[test]
+fn right_to_left_older_layouts_go_to_the_rail_on_the_right() {
+    let (_, saved) = saved_by_older_releases().remove(0);
+    let mut state = read_settings(&saved);
+    state.layout_rtl = true;
+    let mut h = harness_with(Some(state), true);
+    assert!(shown(&h).is_empty(), "{:?}", shown(&h));
+    click_rail(&mut h, "Layers");
+    let c = canvas(&h);
+    assert!(c.right() < W - EDGE - 200.0, "Layers opens beside the rail on the right: {c:?}");
+    let arrow = h.get_by_label(cadaddy_ui_egui::docking::MINIMIZE).rect();
+    assert!(arrow.left() > c.right(), "the minimize arrow is in the palette by the rail: {arrow:?}");
+    h.get_by_label(cadaddy_ui_egui::docking::MINIMIZE).click();
+    h.run_steps(5);
+    assert!(shown(&h).is_empty());
+}
+
 /// Pictures of the rail for review: `RAIL_SHOTS=<folder>` and `--ignored` (needs a wgpu adapter).
 #[test]
 #[ignore = "writes screenshots on request"]
@@ -252,4 +403,14 @@ fn rail_screenshots() {
     let mut r = build(None, true);
     click_rail(&mut r, "Layers");
     save(&mut r, "4-right-to-left.png");
+    // Settings an older release saved with Coordination, Layers, Properties and the Sheet Set
+    // Manager docked open: the start, then a building model with sheets opened.
+    let older = saved_by_older_releases().pop().map(|(_, v)| read_settings(&v));
+    let mut o = build(older, false);
+    save(&mut o, "5-older-settings-start.png");
+    let scratch = std::env::temp_dir().join(format!("cadaddy-rail-shots-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    open_file(&mut o, &bim_cdy_with_sheets(&scratch));
+    save(&mut o, "6-older-settings-model-opened.png");
+    let _ = std::fs::remove_dir_all(&scratch);
 }

@@ -3591,6 +3591,7 @@
 	That element is hidden in the BIM view: tick its branch to show it first.	Цей елемент приховано у вигляді BIM: спершу позначте його гілку, щоб показати його.
 	Pin	Закріпити
 	Unpin	Відкріпити
+	Minimize to the rail	Згорнути на панель
 	Coordination	Координація
 	List Sheets	Список аркушів
 	Open Sheet	Відкрити аркуш
@@ -3636,3 +3637,9 @@
 	= (block=output file)	= (блок=вихідний файл)
 	* (whole drawing)	* (усе креслення)
 	Requires an integer between 0 and 16.	Потрібне ціле число від 0 до 16.
+	Refrigerant Piping	Трубопроводи холодоагенту
+	Hydronic Piping	Трубопроводи тепло- і холодопостачання
+	Condensate Drain	Відведення конденсату
+	Mechanical Piping	Механічні трубопроводи
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Виправити елементи за властивістю (BIM)
