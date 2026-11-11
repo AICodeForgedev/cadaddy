@@ -1407,6 +1407,9 @@ struct PlanWall {
     fixed_top: bool,
     /// How its type's head rule set its top, and from what ceiling (the build tag `head:`).
     head: Option<String>,
+    /// Why it stands where the plan draws no wall (an inferred wall's basis, its provenance);
+    /// None for a wall the plan draws.
+    basis: Option<&'static str>,
 }
 
 /// A door leaf (hinge to its open end) or a window pane, with what it came from.
@@ -1454,6 +1457,9 @@ enum WindowBasis {
     /// As [`Self::TagJambs`] with no jambs drawn: the level's typical window width (inferred
     /// position and width, Q6369).
     TagTypicalWidth,
+    /// A window tag at an open end of the plan (two walls ending at the outside, no wall drawn
+    /// across them): the end wall built with the tag's window in it (inferred, Q6510).
+    TagOpenEnd,
 }
 
 impl WindowBasis {
@@ -1466,6 +1472,7 @@ impl WindowBasis {
             Self::TagOnWall => "tag_on_wall",
             Self::TagJambs => "tag_jambs",
             Self::TagTypicalWidth => "tag_typical_width",
+            Self::TagOpenEnd => "tag_open_end",
         }
     }
 
@@ -1481,13 +1488,16 @@ impl WindowBasis {
                 "a typical window: the level's plan tags or glazes a window of this opening's width, this opening has no tag or glazing of its own"
             }
             Self::TagOnWall => {
-                "a window tag printed by an outside wall the plan draws through: the tag's window cut there at its type's width, centred at the tag"
+                "a window tag printed by an outside wall the plan draws through: the tag's window cut there at its type's width, centred at the tag (or slid along the wall to stand between its ends)"
             }
             Self::TagJambs => {
                 "a window tag printed by an outside wall the plan draws through, its type with no width given (no schedule row, no opening of its own): the window cut there between the jambs the plan draws across the wall"
             }
             Self::TagTypicalWidth => {
                 "a window tag printed by an outside wall the plan draws through, its type with no width given (no schedule row, no opening of its own, no jambs drawn): the window cut there at the level's typical window width; a window schedule or the elevations would give its own"
+            }
+            Self::TagOpenEnd => {
+                "a window tag printed at an open end of the plan (a corridor's or a space's two walls ending at the outside, no wall drawn across them): the end wall built across where the first of them ends, the tag's window centred in it at its type's width (the opening's when that is narrower)"
             }
             Self::Tag | Self::Glazing | Self::Symbol => "",
         }
@@ -1617,6 +1627,7 @@ impl PlanLevel {
                     .iter()
                     .map(|n| format!("type:{}", n.chars().take(250).collect::<String>()))
                     .chain(w.head.iter().map(|h| format!("{}{}", heads::HEAD_TAG, h.chars().take(240).collect::<String>())))
+                    .chain(w.basis.into_iter().flat_map(|b| super::provenance::tags(cadaddy_walk3d::Made::Inferred, b)).map(|t| t.value))
                     .collect();
                 out.push((Part::Wall, m, w.source, extra));
             }
@@ -1810,6 +1821,18 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     let l2 = d.dot(d);
     let t = if l2 > 1e-18 { ((p - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
     p.dist(a + d * t)
+}
+
+/// Whether a tag at `at` is in the gap `g0`–`g1`: its foot on the gap's line between the gap's
+/// ends, at most `reach` off the line.
+fn tag_in_gap(at: Vec2, g0: Vec2, g1: Vec2, reach: f64) -> bool {
+    let len = g0.dist(g1);
+    if !(len.is_finite() && len > 1e-9 && at.is_finite()) {
+        return false;
+    }
+    let u = (g1 - g0) * (1.0 / len);
+    let s = u.dot(at - g0);
+    s >= 0.0 && s <= len && u.perp().dot(at - g0).abs() <= reach
 }
 
 /// Give each wall the spec's wall mark on its centreline (on this level, along it and within its
@@ -2239,6 +2262,7 @@ fn plan_level_with(
             wall_type: wall_type(g, &p.layer).map(|t| t.name.clone()),
             fixed_top: fixed_of(&p.layer),
             head: None,
+            basis: None,
         };
         if !pl.walls.iter().any(|x| same_wall(x, &w)) {
             pl.walls.push(w);
@@ -2286,6 +2310,7 @@ fn plan_level_with(
                     wall_type: wall_type(g, &sg.layer).map(|t| t.name.clone()),
                     fixed_top: fixed_of(&sg.layer),
                     head: None,
+                    basis: None,
                 });
             }
         }
@@ -2675,8 +2700,21 @@ fn plan_level_with(
         .take(MAX_WINDOW_TAGS)
         .map(|(at, mark)| WindowTag { at, width: row_width(&mark), mark: mark.to_ascii_uppercase() })
         .collect();
+    // Gaps between two walls crossing their line at both ends that face the outside: a window
+    // there when the plan draws one in them (Q6510), whatever crosses their ends.
+    let crossing_out: Vec<usize> = gaps
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, g0, g1, t, _, in_air))| {
+            *in_air
+                && crossing_gaps.iter().any(|c| same_gap(*c, (*g0, *g1), k))
+                && outside((*g0 + *g1) * 0.5, ((*g1 - *g0) * (1.0 / g0.dist(*g1).max(1e-12))).perp(), *t, &pl.walls)
+        })
+        .map(|(n, _)| n)
+        .take(MAX_OBJECTS)
+        .collect();
     // The level's gaps in outside walls, and those a window tag marks.
-    let outside_gaps: Vec<(Vec2, Vec2, f64)> = gaps
+    let mut outside_gaps: Vec<(Vec2, Vec2, f64)> = gaps
         .iter()
         .filter(|(_, g0, g1, t, _, in_air)| {
             !*in_air && outside((*g0 + *g1) * 0.5, ((*g1 - *g0) * (1.0 / g0.dist(*g1).max(1e-12))).perp(), *t, &pl.walls)
@@ -2687,7 +2725,31 @@ fn plan_level_with(
     // The lines glazing may be drawn with: the level's, and those inside the window-sized blocks
     // it inserts in its outside walls' gaps (a print's repeated window symbol arrives as a block,
     // Q6369).
-    let glaze_segs = glazing_segments(d, &ents, &all_segs, &outside_gaps, k);
+    let glaze_segs = {
+        let mut looked: Vec<(Vec2, Vec2, f64)> = outside_gaps.clone();
+        looked.extend(crossing_out.iter().filter_map(|n| gaps.get(*n)).map(|(_, g0, g1, t, ..)| (*g0, *g1, *t)));
+        glazing_segments(d, &ents, &all_segs, &looked, k)
+    };
+    // Glazing lines across one, or a window tag in it, win over the walls crossing its ends: an
+    // outside wall's window opening (a corridor's end window between its two walls, Q6510).
+    let mut crossing_windows = 0usize;
+    for n in &crossing_out {
+        let Some(gap) = gaps.get_mut(*n) else { continue };
+        let (_, g0, g1, t, _, in_air) = gap;
+        let tagged = window_tags.iter().any(|tag| tag_in_gap(tag.at, *g0, *g1, TAG_REACH_IN * k));
+        if tagged || glazed(&glaze_segs, *g0, *g1, *t, k) {
+            *in_air = false;
+            crossing_gaps.retain(|c| !same_gap(*c, (*g0, *g1), k));
+            outside_gaps.push((*g0, *g1, *t));
+            crossing_windows += 1;
+        }
+    }
+    if crossing_windows > 0 {
+        notes.push(format!(
+            "{}: {crossing_windows} gaps in outside walls between two walls that cross their line at both ends have glazing or a window tag drawn in them: window openings (the window drawn wins over the walls crossing its ends).",
+            level.name
+        ));
+    }
     // What each tag marks: the outside gap it is by (filling it, or its type's width centred in a
     // wider one), else nothing yet (the tags left over are placed after the gaps).
     let fits = window_tag_fits(&window_tags, &outside_gaps, k);
@@ -2961,6 +3023,7 @@ fn plan_level_with(
         most_common_width(&ws, MARK_WIDTH_TOL_IN * k)
     };
     let mut no_host: Vec<(String, Vec2, &'static str)> = Vec::new();
+    let mut open_ends = 0usize;
     for (tag, f) in window_tags.iter().zip(&fits.per_tag) {
         if f.is_some() {
             continue;
@@ -3011,6 +3074,49 @@ fn plan_level_with(
             }
         };
         let Some(host) = host_wall(&pl.walls, tag.at, width, reach, k, min_gap, &on_outside) else {
+            // No wall drawn to hold it: at an open end of the plan, the end wall the plan leaves
+            // out is built, the tag's window in it (Q6510).
+            if let Some(end) = open_end(&pl.walls, tag.at, width, reach, k, &on_outside)
+                && let Some(like) = pl.walls.get(end.like)
+                && pl.walls.len() < MAX_OBJECTS
+            {
+                let (head, sill) = mark_heights(&tag.mark);
+                let len = end.a.dist(end.b).max(1e-12);
+                let u = (end.b - end.a) * (1.0 / len);
+                let (a, b) = (end.a + u * end.w0, end.a + u * end.w1);
+                let wall = PlanWall {
+                    a: end.a,
+                    b: end.b,
+                    thickness: end.thickness,
+                    top: like.top,
+                    source: like.source,
+                    cuts: vec![Cut { s0: end.w0, s1: end.w1, window: true, head, sill }],
+                    extra: Vec::new(),
+                    wall_type: like.wall_type.clone(),
+                    fixed_top: like.fixed_top,
+                    head: like.head.clone(),
+                    basis: Some(OPEN_END_WALL_WHY),
+                };
+                let source = wall.source;
+                pl.walls.push(wall);
+                pl.leaves.push(Leaf {
+                    a,
+                    b,
+                    window: true,
+                    thickness: end.thickness,
+                    source,
+                    head,
+                    sill,
+                    along: None,
+                    pair: None,
+                    frame: Some((a, b)),
+                    mark: Some(tag.mark.clone()),
+                    basis: Some(WindowBasis::TagOpenEnd),
+                });
+                windows += 1;
+                open_ends += 1;
+                continue;
+            }
             no_host.push((tag.mark.clone(), tag.at, "no outside wall within its reach to hold it"));
             continue;
         };
@@ -3051,6 +3157,12 @@ fn plan_level_with(
             basis: Some(basis),
         });
         windows += 1;
+    }
+    if open_ends > 0 {
+        notes.push(format!(
+            "{}: {open_ends} open ends of the plan (two walls ending at the outside, no wall drawn across them) with a window tag at them: the end wall built (inferred) with the tag's window in it.",
+            level.name
+        ));
     }
     let mut same = Vec::new();
     let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k, &mut same).unwrap_or((doors, windows));
@@ -3475,8 +3587,9 @@ const JOINT_GAP_IN: f64 = 1.0;
 /// the nearest wall piece within `reach` past its face whose foot point under the tag is on it
 /// (or in a slot at its end),
 /// its line (the piece and the pieces in line with it, end to end, overlapping or a slot narrower
-/// than `slot` apart) holding the window centred at the tag's foot, its ends on pieces, with no
-/// opening cut there yet, outside there (`outside(point, normal, the wall's thickness)`).
+/// than `slot` apart) holding the window centred at the tag's foot (else as near it as the run
+/// allows, clear of the walls meeting its ends), its ends on pieces, with no opening cut there
+/// yet, outside there (`outside(point, normal, the wall's thickness)`).
 #[allow(clippy::too_many_arguments)]
 fn host_wall(
     walls: &[PlanWall],
@@ -3508,19 +3621,49 @@ fn host_wall(
             if off > w.thickness / 2.0 + reach || s < -slot || s > len + slot {
                 return None;
             }
-            let mid = w.a + u * s;
             // The line's pieces: parallel, their centrelines within half the thinner wall of
-            // this one's, each with its stretch along this one and the window's span along it.
+            // this one's, each with its stretch along this one.
+            let line: Vec<(usize, &PlanWall, f64, f64)> = walls
+                .iter()
+                .enumerate()
+                .take(MAX_OBJECTS)
+                .filter_map(|(j, o)| {
+                    let (_, ou) = unit(o)?;
+                    let side = |p: Vec2| u.perp().dot(p - w.a).abs();
+                    if u.perp().dot(ou).abs() > 0.01 || side(o.a).max(side(o.b)) > w.thickness.min(o.thickness) / 2.0 {
+                        return None;
+                    }
+                    let (p0, p1) = (u.dot(o.a - w.a), u.dot(o.b - w.a));
+                    Some((j, o, p0.min(p1), p0.max(p1)))
+                })
+                .collect();
+            // A window centred at the tag that runs past an end of the wall's run (a corridor's end
+            // wall, its tag printed off-centre beside it, Q6510) slides along the run to stand
+            // in it, clear of the walls meeting its ends; a run narrower than the window holds none.
+            // The tag's foot stays over the window (it slides half its width at most), so a tag
+            // by a corner marks the wall it faces, not the one round the corner.
+            let at_tag = s;
+            let s = match wall_run(&line, s, slot) {
+                Some((r0, r1)) if s - half < r0 - joint || s + half > r1 + joint => {
+                    let (r0, r1) = (r0 + end_wall_in(walls, i, w.a, u, r0, 1.0), r1 - end_wall_in(walls, i, w.a, u, r1, -1.0));
+                    if r1 - r0 < width - joint {
+                        return None;
+                    }
+                    let s = s.clamp(r0 + half, (r1 - half).max(r0 + half));
+                    if (s - at_tag).abs() > half {
+                        return None;
+                    }
+                    s
+                }
+                _ => s,
+            };
+            let slid = (s - at_tag).abs();
+            let mid = w.a + u * s;
+            // Each piece's stretch along this one and the window's span along it.
             let mut along: Vec<(f64, f64)> = Vec::new();
             let mut spans: Vec<(usize, f64, f64)> = Vec::new();
-            for (j, o) in walls.iter().enumerate().take(MAX_OBJECTS) {
+            for &(j, o, p0, p1) in &line {
                 let Some((_, ou)) = unit(o) else { continue };
-                let side = |p: Vec2| u.perp().dot(p - w.a).abs();
-                if u.perp().dot(ou).abs() > 0.01 || side(o.a).max(side(o.b)) > w.thickness.min(o.thickness) / 2.0 {
-                    continue;
-                }
-                let (p0, p1) = (u.dot(o.a - w.a), u.dot(o.b - w.a));
-                let (p0, p1) = (p0.min(p1), p0.max(p1));
                 if p1 < s - half - slot || p0 > s + half + slot {
                     continue;
                 }
@@ -3545,10 +3688,223 @@ fn host_wall(
                 }
             }
             (reached >= s + half - joint && !spans.is_empty() && outside(mid, u.perp(), w.thickness))
-                .then_some((off, WindowHost { wall: i, at: s, spans, mid, u }))
+                .then_some(((slid, off), WindowHost { wall: i, at: s, spans, mid, u }))
         })
-        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .min_by(|a, b| a.0.0.total_cmp(&b.0.0).then(a.0.1.total_cmp(&b.0.1)))
         .map(|(_, h)| h)
+}
+
+/// The basis of an end wall built at an open end of the plan ([`open_end`]).
+const OPEN_END_WALL_WHY: &str = "an open end of the plan with a window tag at it (two walls ending at the outside, no wall drawn across them): the end wall built across where the first of them ends, in line with the outside wall there, to hold the tag's window";
+
+/// The window's width may be this much wider (inches) than the open end it is tagged in (the
+/// window then fills the opening), or the opening this much wider than the window.
+const OPEN_END_FIT_IN: f64 = 24.0;
+
+/// The wall a window tag's window needs at an open end of the plan ([`open_end`]): its centreline
+/// `a`–`b` (from the end of the wall that stops first across to the other's line), thickness,
+/// the wall it is like (its height, type and source), and the window's span along it.
+struct OpenEnd {
+    a: Vec2,
+    b: Vec2,
+    thickness: f64,
+    like: usize,
+    w0: f64,
+    w1: f64,
+}
+
+/// An open end of the plan by a window tag at `at` whose window (`width`, drawing units, `k` per
+/// inch) no wall holds: two parallel walls (a corridor's), one ending where the other runs on
+/// (or ends too), nothing drawn across from that end to the other wall's line, the outside
+/// beyond it (`outside(point, normal, thickness)`), the tag within `reach` of that line, the
+/// opening between the two walls' faces about the window's width ([`OPEN_END_FIT_IN`]). The end
+/// wall is in line with the wall turning off the first wall's end away from the other (the
+/// outside wall it meets), its thickness; else across the end itself, the first wall's. The
+/// nearest such end to the tag. None when there is none.
+fn open_end(walls: &[PlanWall], at: Vec2, width: f64, reach: f64, k: f64, outside: &dyn Fn(Vec2, Vec2, f64) -> bool) -> Option<OpenEnd> {
+    if !(width.is_finite() && width > 0.0 && at.is_finite() && reach.is_finite() && k.is_finite() && k > 0.0) {
+        return None;
+    }
+    let unit = |w: &PlanWall| {
+        let len = w.a.dist(w.b);
+        (len.is_finite() && len > 1e-9 && w.thickness.is_finite()).then(|| (len, (w.b - w.a) * (1.0 / len)))
+    };
+    let fit = OPEN_END_FIT_IN * k;
+    let far = reach + width + fit;
+    let mut best: Option<((bool, f64), OpenEnd)> = None;
+    for (i, w) in walls.iter().enumerate().take(MAX_OBJECTS) {
+        let Some((len, u)) = unit(w) else { continue };
+        if len < MIN_WINDOW_IN * k {
+            continue;
+        }
+        for (p, d) in [(w.a, -u), (w.b, u)] {
+            if p.dist(at) > far {
+                continue;
+            }
+            for (j, o) in walls.iter().enumerate().take(MAX_OBJECTS) {
+                let Some((_, ou)) = unit(o) else { continue };
+                if j == i || u.cross(ou).abs() > 0.01 {
+                    continue;
+                }
+                // Across: the other wall's line, `gap` off this one's (signed along `n`).
+                let gap = d.perp().dot(o.a - p);
+                let n = if gap >= 0.0 { d.perp() } else { -d.perp() };
+                let gap = gap.abs();
+                let clear = gap - (w.thickness + o.thickness) / 2.0;
+                if clear < MIN_WINDOW_IN * k || clear > width + fit || width > clear + fit {
+                    continue;
+                }
+                // The end wall's line: the wall turning off this end away from the other wall.
+                let turn = walls
+                    .iter()
+                    .enumerate()
+                    .take(MAX_OBJECTS)
+                    .filter(|(c, _)| *c != i && *c != j)
+                    .filter_map(|(c, t)| {
+                        let (_, tu) = unit(t)?;
+                        if tu.dot(u).abs() > 0.1 {
+                            return None;
+                        }
+                        let (near, other) = if t.a.dist(p) <= t.b.dist(p) { (t.a, t.b) } else { (t.b, t.a) };
+                        let off = near.dist(p);
+                        (off <= w.thickness + t.thickness && n.dot(other - p) < 0.0).then_some((off, c, d.dot(near - p), t.thickness))
+                    })
+                    .min_by(|x, y| x.0.total_cmp(&y.0));
+                let (like, station, thickness) = match turn {
+                    Some((_, c, st, t)) => (c, st, t),
+                    None => (i, -w.thickness / 2.0, w.thickness),
+                };
+                let a = p + d * station;
+                let b = a + n * gap;
+                // The other wall's line runs on to the end wall (it, or a piece in line with it).
+                let reaches = walls.iter().take(MAX_OBJECTS).any(|x| {
+                    unit(x).is_some_and(|(_, xu)| u.cross(xu).abs() <= 0.01)
+                        && (n.dot(x.a - a) - gap).abs() <= o.thickness / 2.0
+                        && (n.dot(x.b - a) - gap).abs() <= o.thickness / 2.0
+                        && {
+                            let (s0, s1) = (d.dot(x.a - a), d.dot(x.b - a));
+                            s0.min(s1) <= thickness && s0.max(s1) >= -thickness
+                        }
+                });
+                if !reaches {
+                    continue;
+                }
+                // The tag by the end, between the two walls.
+                let across = n.dot(at - a);
+                if seg_dist(at, a, b) > reach + thickness / 2.0 || across < 0.0 || across > gap {
+                    continue;
+                }
+                // Nothing drawn across the opening (no wall in it but the pieces of the two walls'
+                // lines), the outside beyond it, and the walls' space behind it (a wall back along
+                // it, or the tag printed outside: a corridor open at both ends).
+                let (c0, c1) = (a + n * (w.thickness / 2.0), b - n * (o.thickness / 2.0));
+                let on_lines = |c: &PlanWall| {
+                    unit(c).is_some_and(|(_, cu)| u.cross(cu).abs() <= 0.01) && {
+                        let off = n.dot((c.a + c.b) * 0.5 - a);
+                        off.abs() <= w.thickness.max(c.thickness) / 2.0 || (off - gap).abs() <= o.thickness.max(c.thickness) / 2.0
+                    }
+                };
+                let blocked = walls.iter().enumerate().take(MAX_OBJECTS).any(|(x, c)| {
+                    x != i
+                        && x != j
+                        && x != like
+                        && !on_lines(c)
+                        && unit(c).is_some()
+                        && segs_apart(c.a, c.b, c0, c1) < (c.thickness + thickness) / 2.0
+                });
+                let m = (c0 + c1) * 0.5;
+                let behind = ray_meets_wall(walls, m, -d, thickness / 2.0) || d.dot(at - a) > thickness / 2.0;
+                if blocked || ray_meets_wall(walls, m, d, thickness / 2.0) || !behind || !outside(m, d, thickness) {
+                    continue;
+                }
+                let ww = width.min(clear);
+                let mid = (w.thickness / 2.0 + gap - o.thickness / 2.0) / 2.0;
+                // The nearest end to the tag, one in line with an outside wall before one without.
+                let rank = (turn.is_none(), seg_dist(at, a, b));
+                if best.as_ref().is_none_or(|(br, _)| rank.0.cmp(&br.0).then(rank.1.total_cmp(&br.1)).is_lt()) {
+                    best = Some((rank, OpenEnd { a, b, thickness, like, w0: mid - ww / 2.0, w1: mid + ww / 2.0 }));
+                }
+            }
+        }
+    }
+    best.map(|(_, e)| e)
+}
+
+/// Whether a ray from `p` along `dir` meets a wall's centreline farther than `face` from `p`.
+fn ray_meets_wall(walls: &[PlanWall], p: Vec2, dir: Vec2, face: f64) -> bool {
+    walls.iter().take(MAX_OBJECTS).any(|w| {
+        let r = w.b - w.a;
+        let den = dir.cross(r);
+        if den.abs() < 1e-12 {
+            return false;
+        }
+        let t = (w.a - p).cross(r) / den;
+        let v = (w.a - p).cross(dir) / den;
+        t > face && (0.0..=1.0).contains(&v)
+    })
+}
+
+/// The least distance between the segments `a`–`b` and `c`–`d` (0 where they cross).
+fn segs_apart(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> f64 {
+    let (r, s) = (b - a, d - c);
+    let den = r.cross(s);
+    if den.abs() > 1e-12 {
+        let t = (c - a).cross(s) / den;
+        let v = (c - a).cross(r) / den;
+        if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&v) {
+            return 0.0;
+        }
+    }
+    seg_dist(a, c, d).min(seg_dist(b, c, d)).min(seg_dist(c, a, b)).min(seg_dist(d, a, b))
+}
+
+/// The run of a wall line's pieces (`line`: each piece's stretch along the line) holding the
+/// point `s` along it: the pieces end to end, overlapping or at most `slot` apart.
+fn wall_run(line: &[(usize, &PlanWall, f64, f64)], s: f64, slot: f64) -> Option<(f64, f64)> {
+    let mut pieces: Vec<(f64, f64)> = line.iter().map(|(_, _, p0, p1)| (*p0, *p1)).filter(|(p0, p1)| p0.is_finite() && p1.is_finite()).collect();
+    pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    for (p0, p1) in pieces {
+        match runs.last_mut() {
+            Some(r) if p0 <= r.1 + slot => r.1 = r.1.max(p1),
+            _ => runs.push((p0, p1)),
+        }
+    }
+    runs.into_iter().find(|(r0, r1)| s >= r0 - slot && s <= r1 + slot)
+}
+
+/// How far into a wall line's run (its end `r` along the line from `origin` in direction `u`, the
+/// run going on `into` it: 1 from its start, -1 from its end) the walls across the line at that
+/// end reach: a wall crossing the line (or ending on it) within its own thickness and the line's
+/// of the end, to its far face. The stretch of the run inside them holds no window.
+fn end_wall_in(walls: &[PlanWall], own: usize, origin: Vec2, u: Vec2, r: f64, into: f64) -> f64 {
+    let t_own = walls.get(own).map_or(0.0, |w| w.thickness);
+    let line_off = walls.get(own).map_or(0.0, |w| u.perp().dot(w.a - origin));
+    walls
+        .iter()
+        .enumerate()
+        .take(MAX_OBJECTS)
+        .filter(|(j, _)| *j != own)
+        .filter_map(|(_, c)| {
+            let d = c.b - c.a;
+            let len = d.len();
+            if !(len > 1e-9 && c.thickness.is_finite()) || u.cross(d * (1.0 / len)).abs() <= 0.5 {
+                return None;
+            }
+            // Where its centreline meets the line (along it), and whether it reaches the line.
+            let den = d.cross(u);
+            let p = origin + u.perp() * line_off;
+            let v = (p - c.a).cross(u) / den;
+            let along = u.dot(c.a + d * v - origin);
+            let reach = (c.thickness + t_own) / 2.0 / len;
+            if !(-reach..=1.0 + reach).contains(&v) {
+                return None;
+            }
+            let into_run = (along - r) * into;
+            (into_run >= -(c.thickness / 2.0 + t_own) && into_run <= c.thickness / 2.0 + t_own).then_some(into_run + c.thickness / 2.0)
+        })
+        .filter(|x| x.is_finite())
+        .fold(0.0, f64::max)
 }
 
 /// The width (drawing units, `k` per inch) between the jambs a plan draws across a wall drawn
@@ -4724,6 +5080,7 @@ mod tests {
             wall_type: None,
             fixed_top: false,
             head: None,
+            basis: None,
         }
     }
 
@@ -5103,6 +5460,12 @@ mod tests {
     /// A level planned from `lines` (feet, layer A-WALL unless given): its window panes' ends
     /// (feet) and the notes.
     fn plan_lines(lines: Vec<(&str, EntityKind)>) -> (Vec<(Vec2, Vec2)>, Vec<String>) {
+        let (pl, notes) = plan_lines_level(lines);
+        (pl.leaves.iter().filter(|l| l.window).map(|l| (l.a * (1.0 / 12.0), l.b * (1.0 / 12.0))).collect(), notes)
+    }
+
+    /// The level planned from `lines` (as [`plan_lines`]) and the notes.
+    fn plan_lines_level(lines: Vec<(&str, EntityKind)>) -> (PlanLevel, Vec<String>) {
         let mut d = Drawing::new_imperial();
         for (layer, kind) in lines {
             let h = Handle(d.handseed);
@@ -5121,7 +5484,7 @@ mod tests {
         let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
         let mut notes = Vec::new();
         let pl = plan_level(&d, &g, &level, 12.0, &mut notes);
-        (pl.leaves.iter().filter(|l| l.window).map(|l| (l.a * (1.0 / 12.0), l.b * (1.0 / 12.0))).collect(), notes)
+        (pl, notes)
     }
 
     /// A wall's two face lines (feet) along x from `x0` to `x1` at `y` (its centreline), `t_in`
@@ -5211,6 +5574,124 @@ mod tests {
     }
 
     #[test]
+    fn glazing_or_a_tag_in_a_corridor_end_wins_over_the_walls_crossing_its_ends() {
+        // A 30' x 20' building of 8" walls; a corridor between two 5" partitions on x = 12 and
+        // x = 18 runs to the south outside wall, the partitions drawn on through it past its
+        // outside face (fins). The outside wall is open between the partitions' faces, a 5' window
+        // drawn there (glazing lines and a W5 tag). Before Q6510 the gap was taken as one
+        // between two walls crossing its line at both ends: no window, no header.
+        let building = |extra: Vec<(&'static str, EntityKind)>| {
+            let mut lines = Vec::new();
+            lines.extend(wall_x(1.0 / 3.0, 8.0, 0.0, 30.0, &[(12.0 - 2.5 / 12.0, 18.0 + 2.5 / 12.0)]));
+            lines.extend(wall_x(20.0 - 1.0 / 3.0, 8.0, 0.0, 30.0, &[]));
+            lines.extend(wall_y(1.0 / 3.0, 8.0, 0.0, 20.0, &[]));
+            lines.extend(wall_y(30.0 - 1.0 / 3.0, 8.0, 0.0, 20.0, &[]));
+            lines.extend(wall_y(12.0, 5.0, -1.5, 15.0, &[]));
+            lines.extend(wall_y(18.0, 5.0, -1.5, 15.0, &[]));
+            lines.extend(extra);
+            plan_lines(lines)
+        };
+        let glass = || vec![("A-GLAZ", line_ft((12.5, 0.28), (17.5, 0.28))), ("A-GLAZ", line_ft((12.5, 0.39), (17.5, 0.39)))];
+        let tag = || ("A-ANNO", text_ft((15.0, -1.0), "W5"));
+        let mut both = glass();
+        both.push(tag());
+        for (what, extra) in [("glazing and a tag", both), ("glazing", glass()), ("a tag", vec![tag()])] {
+            let (windows, notes) = building(extra);
+            assert_eq!(windows.len(), 1, "{what}: {windows:?} {notes:?}");
+            let (a, b) = windows[0];
+            assert!((a.y - 1.0 / 3.0).abs() < 0.1 && (b.y - 1.0 / 3.0).abs() < 0.1, "{what}: off the outside wall: {a:?} {b:?}");
+            assert!(a.x.min(b.x) > 11.9 && a.x.max(b.x) < 18.1, "{what}: not between the partitions: {a:?} {b:?}");
+            assert!(notes.iter().any(|n| n.contains("window drawn wins over the walls crossing")), "{what}: {notes:?}");
+        }
+        // Nothing drawn in it: still no window.
+        let (windows, notes) = building(Vec::new());
+        assert!(windows.is_empty(), "{windows:?} {notes:?}");
+        assert!(notes.iter().any(|n| n.contains("cross their line at both ends")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_tag_printed_off_centre_by_an_end_wall_slides_its_window_into_the_wall() {
+        // A 20' x 7' corridor of 6" walls. A 5' gap in the south wall tagged W5 (the mark's
+        // width); another W5 printed outside the west end wall a foot from its south corner. A
+        // window centred at that tag runs past the end wall's corner: before Q6510 the tag had no
+        // wall to hold it. Its window stands in the end wall, clear of the walls at its ends.
+        let mut lines = Vec::new();
+        lines.extend(wall_x(0.25, 6.0, 0.0, 20.0, &[(8.0, 13.0)]));
+        lines.extend(wall_x(7.25, 6.0, 0.0, 20.0, &[]));
+        lines.extend(wall_y(0.25, 6.0, 0.0, 7.5, &[]));
+        lines.extend(wall_y(19.75, 6.0, 0.0, 7.5, &[]));
+        lines.push(("A-ANNO", text_ft((10.5, -1.0), "W5")));
+        lines.push(("A-ANNO", text_ft((-1.0, 1.0), "W5")));
+        let (windows, notes) = plan_lines(lines);
+        assert_eq!(windows.len(), 2, "{windows:?} {notes:?}");
+        let end = windows.iter().find(|(a, b)| a.x < 1.0 && b.x < 1.0).unwrap_or_else(|| panic!("no window in the end wall: {windows:?} {notes:?}"));
+        let (y0, y1) = (end.0.y.min(end.1.y), end.0.y.max(end.1.y));
+        assert!((y1 - y0 - 5.0).abs() < 0.05, "its type's width: {end:?}");
+        assert!(y0 >= 0.5 - 0.05 && y1 <= 7.0 + 0.05, "in the wall, clear of the corners: {end:?}");
+        assert!((end.0.x - 0.25).abs() < 0.1, "{end:?}");
+    }
+
+    #[test]
+    fn a_window_tag_at_an_open_corridor_end_builds_the_end_wall_and_its_window() {
+        // Two rooms' blocks either side of a 6' corridor (walls on y = 10 and y = 16, 6"); the
+        // south block's outside wall on x = 20, the north block reaching out to x = 24. The plan
+        // draws no wall across the corridor's east end (its window is in a block of its own):
+        // a W5 tag just outside it (out of reach of the north block's wall), the mark's width
+        // from a tagged 5' gap in the west wall. Before
+        // Q6510 the tag had no wall to hold it and the end was left open.
+        let plan_open = |tag_at: (f64, f64), west: &[(f64, f64)]| {
+            let mut lines = Vec::new();
+            lines.extend(wall_x(0.25, 6.0, 0.0, 20.0, &[]));
+            lines.extend(wall_y(0.25, 6.0, 0.0, 26.0, west));
+            lines.extend(wall_y(20.0, 6.0, 0.0, 10.0, &[]));
+            lines.extend(wall_x(10.0, 6.0, 0.0, 20.0, &[]));
+            lines.extend(wall_x(16.0, 6.0, 0.0, 24.0, &[]));
+            lines.extend(wall_y(24.0, 6.0, 16.0, 26.0, &[]));
+            lines.extend(wall_x(25.75, 6.0, 0.0, 24.0, &[]));
+            lines.push(("A-ANNO", text_ft((-1.0, 4.5), "W5")));
+            lines.push(("A-ANNO", text_ft(tag_at, "W5")));
+            plan_lines_level(lines)
+        };
+        let plan_level = |tag_at: (f64, f64)| plan_open(tag_at, &[(2.0, 7.0)]);
+        let plan = |tag_at: (f64, f64)| {
+            let (pl, notes) = plan_level(tag_at);
+            (pl.leaves.iter().filter(|l| l.window).map(|l| (l.a * (1.0 / 12.0), l.b * (1.0 / 12.0))).collect::<Vec<_>>(), notes)
+        };
+        let (windows, notes) = plan((21.0, 11.0));
+        assert_eq!(windows.len(), 2, "{windows:?} {notes:?}");
+        let end =
+            windows.iter().find(|(a, b)| a.x > 19.0 && b.x > 19.0).unwrap_or_else(|| panic!("no window at the open end: {windows:?} {notes:?}"));
+        // In line with the south block's outside wall, centred between the corridor's walls.
+        assert!((end.0.x - 20.0).abs() < 0.1 && (end.1.x - 20.0).abs() < 0.1, "{end:?}");
+        let (y0, y1) = (end.0.y.min(end.1.y), end.0.y.max(end.1.y));
+        assert!((y0 - 10.5).abs() < 0.1 && (y1 - 15.5).abs() < 0.1, "{end:?}");
+        assert!(notes.iter().any(|n| n.contains("1 open ends of the plan")), "{notes:?}");
+        // The end wall and its window say they were inferred, and why; the window keeps its mark.
+        let (pl, _) = plan_level((21.0, 11.0));
+        let parts = pl.meshes();
+        let inferred = |part: Part| {
+            parts.iter().filter(|(p, ..)| *p == part).any(|(.., tags)| {
+                tags.iter().any(|t| t == "status:inferred") && tags.iter().any(|t| t.starts_with("basis:") && t.contains("open end"))
+            })
+        };
+        assert!(inferred(Part::Wall), "no inferred end wall");
+        assert!(inferred(Part::Glass), "no inferred window");
+        assert!(parts.iter().any(|(p, .., tags)| *p == Part::Glass && tags.iter().any(|t| t == "found:tag_open_end")));
+        assert_eq!(
+            parts.iter().filter(|(p, .., tags)| *p == Part::Wall && tags.iter().any(|t| t == "status:inferred")).count(),
+            1,
+            "only the end wall is inferred"
+        );
+        // A tag well inside the corridor (past its reach of the end) builds nothing there.
+        let (windows, notes) = plan((10.0, 13.0));
+        assert_eq!(windows.len(), 1, "{windows:?} {notes:?}");
+        // The corridor open at its west end too (a passage out): the tag printed outside the east
+        // end still marks that end.
+        let (pl, notes) = plan_open((21.0, 11.0), &[(2.0, 7.0), (10.25, 15.75)]);
+        assert!(pl.leaves.iter().any(|l| l.window && (l.a.x / 12.0 - 20.0).abs() < 0.1 && (l.b.x / 12.0 - 20.0).abs() < 0.1), "{notes:?}");
+    }
+
+    #[test]
     fn a_ray_out_through_a_rooms_window_is_still_inside_the_building() {
         // A row of rooms: the south outside wall has a 4' window (glazing drawn) at x 8-12; the
         // room's north wall (on a corridor) has a 4' opening at the same x, nothing drawn in it;
@@ -5243,6 +5724,7 @@ mod tests {
             wall_type: None,
             fixed_top: false,
             head: None,
+            basis: None,
         };
         let (p, nrm) = (Vec2::new(50.0, 10.0), Vec2::new(0.0, 1.0));
         // Alone: outside both ways.
@@ -5273,6 +5755,7 @@ mod tests {
             wall_type: None,
             fixed_top: false,
             head: None,
+            basis: None,
         };
         // Pieces 0 and 1 on x = 0 (y -100..-3 and 63..160); corridor walls on y = 0 and y = 60.
         let corridor =
