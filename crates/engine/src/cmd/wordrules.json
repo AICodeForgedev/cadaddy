@@ -2800,6 +2800,13 @@
     "CDP"
    ]
   },
+  "rooms.equipment_number_prefixes": {
+   "source": "(drafting convention: the letters of an equipment or fixture mark printed under its name, `COOLER` over `EQ15`; such a mark numbers no room, whatever its shape. With equipment.marks.)",
+   "words": [
+    "EQ",
+    "EQUIP"
+   ]
+  },
   "rooms.equipment_room_names": {
    "source": "trade practice: an equipment room's names (the trades' plans call it MEP, the architect MECH); a view title naming one names the same room (moved from guided.rs `room_of_view`)",
    "words": [
@@ -2922,7 +2929,41 @@
     "LIBRARY",
     "CLASSROOM",
     "BOH",
-    "MEP"
+    "MEP",
+    "RR",
+    "WC",
+    "GARAGE",
+    "SALES",
+    "PREP",
+    "CAFE",
+    "CAFETERIA",
+    "GYM",
+    "WAITING",
+    "EXAM",
+    "NURSE",
+    "LABORATORY",
+    "STUDY",
+    "FOYER",
+    "DEN",
+    "FAMILY",
+    "DRESSING",
+    "TELECOM",
+    "COMM",
+    "RECEIVING",
+    "SHIPPING",
+    "WAREHOUSE",
+    "CHAPEL",
+    "CLINIC",
+    "PHARMACY",
+    "NURSERY",
+    "CLASS",
+    "SCULLERY",
+    "ATRIUM",
+    "GALLERY",
+    "AUDITORIUM",
+    "LOADING",
+    "SPA",
+    "SAUNA"
    ]
   },
   "rooms.not_room_words": {
