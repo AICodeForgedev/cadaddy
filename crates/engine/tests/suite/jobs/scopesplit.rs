@@ -110,8 +110,9 @@ fn is_fa_cable(x: &Value) -> bool {
     x["element"].as_str().is_some_and(|e| e.starts_with("FA-"))
 }
 
+/// The BOM lines counted by spec device `id` (a line's `sources`, Q6529).
 fn lines_of<'a>(bom: &'a Value, id: &str) -> Vec<&'a Value> {
-    bom["lines"].as_array().expect("lines").iter().filter(|l| l["elements"].as_array().is_some_and(|e| e.iter().any(|x| x == id))).collect()
+    bom["lines"].as_array().expect("lines").iter().filter(|l| l["sources"].as_array().is_some_and(|e| e.iter().any(|x| x == id))).collect()
 }
 
 fn id(x: f64, y: f64) -> String {

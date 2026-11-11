@@ -18,6 +18,7 @@ pub mod bimwork;
 pub mod blockdetect;
 pub(crate) mod blocks;
 pub mod bom;
+pub(crate) mod bomrefs;
 pub mod bspec;
 pub mod buildings;
 pub(crate) mod buildrec;

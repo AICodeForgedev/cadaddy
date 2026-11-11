@@ -124,13 +124,17 @@ fn take(s: &mut Session, st: &Map<String, Value>) -> Result<Vec<Value>> {
     let (priced, _) = price_all(s, st)?;
     // Every element of every line (the BOM shows the first 500 of a line).
     let full = s.execute("bim.bom", &json!({ "all_elements": true }))?;
-    let elements: std::collections::HashMap<String, Value> =
-        full["lines"].as_array().into_iter().flatten().map(|l| (key_of(l), l["elements"].clone())).collect();
+    // The ids it was counted by (`sources`: spec devices and runs, which have a place in the
+    // spec) and its objects (Q6529).
+    let ids_of = |l: &Value| -> Value {
+        json!(l["sources"].as_array().into_iter().flatten().chain(l["elements"].as_array().into_iter().flatten()).cloned().collect::<Vec<_>>())
+    };
+    let elements: std::collections::HashMap<String, Value> = full["lines"].as_array().into_iter().flatten().map(|l| (key_of(l), ids_of(l))).collect();
     let tags: Tags = sp.tags.iter().map(|t| (t.id.as_str(), t)).collect();
     let mut out: Vec<Value> = priced
         .iter()
         .map(|p| {
-            let ids = elements.get(&p.key).unwrap_or(&p.line["elements"]).as_array().cloned().unwrap_or_default();
+            let ids = elements.get(&p.key).cloned().unwrap_or_else(|| ids_of(&p.line)).as_array().cloned().unwrap_or_default();
             json!({
                 "key": p.key, "kind": "line", "trade": p.line["trade"], "category": p.line["category"], "item": p.line["item"],
                 "size": p.line["size"], "unit": p.unit, "qty": p.qty, "net": p.net,

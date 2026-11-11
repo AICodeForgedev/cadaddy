@@ -160,33 +160,10 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
             v.push(e.handle.hex());
         }
     }
-    // The BOM names a spec run as `run:<index>`: the meshes built from it (their `mepid` starts
-    // with the run's id).
-    let mut by_run: BTreeMap<String, Vec<String>> = BTreeMap::new();
     // The BOM counts rooms from the ceilings built with a room's tag: a level's rooms are those.
     let mut room_ceilings: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    // The device elements by the spec device they were built from: a device line counts those.
-    // The built elements by the name their build gave them (`EXIT_SIGN-1`): a line naming one
-    // counts it.
-    let mut by_device: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    // Built elements only, before the cap (Q6373): a print set's linework comes first, and a
-    // large job has well over the cap of entities, its built devices after them.
     for e in d.model.iter().filter(|e| crate::cmd::bimlook::made_tags(e).is_some()).take(super::MAX_ELEMENTS) {
         let tags = crate::cmd::fieldview::wallgen_tags(e);
-        if tags.first() == Some(&"device")
-            && let Some(id) = crate::cmd::fieldview::tag_value(&tags, "devid")
-        {
-            by_device.entry(id.to_string()).or_default().push(e.handle.hex());
-        } else if let Some(name) = crate::cmd::bimlook::made_name(e).filter(|n| !n.is_empty()) {
-            by_name.entry(name.to_string()).or_default().push(e.handle.hex());
-        }
-        if tags.first() == Some(&"mep")
-            && let Some(id) = crate::cmd::fieldview::tag_value(&tags, "mepid")
-        {
-            let base = id.rsplit_once('/').map_or(id, |(b, _)| b);
-            by_run.entry(base.to_string()).or_default().push(e.handle.hex());
-        }
         if let (Some(&"ceiling"), Some(level)) = (tags.first(), tags.get(1))
             && e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("room:"))
         {
@@ -196,6 +173,9 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
             }
         }
     }
+    // The ids a BOM line names (a spec device, a run `run:<index>`, a build's name or tag, an
+    // object handle) as the model's objects (Q6529).
+    let refs = crate::cmd::bomrefs::Refs::of(d, &sp);
     // The BOM's walls measured from the meshes give way to this takeoff's own (per level, every
     // wall's real length).
     let bom_lines: Vec<Value> = bom["lines"]
@@ -209,18 +189,7 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
     let bom_lines = bom_lines.as_slice();
     let wall_lines = built_wall_lines(d, &els, bom_lines, super::units_per_foot(s));
     let other_lines = if others { by_others_lines(&bom) } else { Vec::new() };
-    let resolve = |h: &str| -> Vec<String> {
-        if let Some(el) = by_device.get(h) {
-            return el.clone();
-        }
-        match h.strip_prefix("run:").and_then(|i| i.parse::<usize>().ok()) {
-            Some(i) => sp.mep.runs.get(i).and_then(|r| by_run.get(&crate::cmd::mep::run_base(r))).cloned().unwrap_or_default(),
-            None => match Handle::parse_hex(h).filter(|x| d.entity(*x).is_some()) {
-                Some(x) => vec![x.hex()],
-                None => by_name.get(h).cloned().unwrap_or_default(),
-            },
-        }
-    };
+    let resolve = |h: &str| -> Vec<String> { refs.resolve(d, h) };
     let on_level = |h: &str, lv: &str| info.get(h).is_some_and(|(x, _, _)| x.eq_ignore_ascii_case(lv));
     let mut grouped: BTreeMap<String, Value> = BTreeMap::new();
     for l in bom_lines.iter().chain(wall_lines.iter()).chain(other_lines.iter()).take(MAX_LINES) {
@@ -234,7 +203,10 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
         // The elements the BOM counted on the line: a line that names its own elements is those
         // (Q6373), never every element of its category on its level when they are not found
         // (those not found are counted on the line).
-        let named_els: Vec<&str> = l["elements"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        // The BOM gives them as handles, with the ids it counted by that are not (`sources`)
+        // and how many of those it found no object for.
+        let ids = |k: &str| -> Vec<&str> { l[k].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default() };
+        let named_els: Vec<&str> = ids("elements").into_iter().chain(ids("sources")).collect();
         let mut unresolved = 0usize;
         let mut elems: Vec<String> = Vec::new();
         for h in &named_els {

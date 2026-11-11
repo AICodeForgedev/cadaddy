@@ -1114,7 +1114,9 @@ fn ratio_findings(sp: &cadaddy_walk3d::BuildingSpec, st: &Map<String, Value>, pr
         }
         let mut n = 0usize;
         for p in priced.iter().filter(|p| p.line["item"].as_str().is_some_and(|i| i.to_ascii_lowercase().contains(&m))) {
-            for id in p.line["elements"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            // The spec devices it counts are its `sources` when built, its elements before.
+            let ids = p.line["sources"].as_array().into_iter().flatten().chain(p.line["elements"].as_array().into_iter().flatten());
+            for id in ids.filter_map(Value::as_str) {
                 if let Some(t) = tags.get(id)
                     && units.iter().any(|u| u.level.eq_ignore_ascii_case(&t.level) && inside(t.at_ft, &u.outline))
                 {
@@ -1436,6 +1438,8 @@ fn run_explain(s: &mut Session, p: &Value) -> Result<Value> {
             "scope": pr.scope,
             "rule": pr.line["rule"],
             "elements": pr.line["elements"],
+            // The ids it was counted by that are not the model's objects (Q6529).
+            "sources": pr.line.get("sources").cloned().unwrap_or_else(|| json!([])),
         }));
     }
     if bool_or(p, "total", false) {

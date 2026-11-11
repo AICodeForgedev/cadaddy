@@ -53,7 +53,7 @@
 
 use cadaddy_doc::projrules::{RuleDomain, RuleValue};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::*;
 use crate::{Result, Session};
@@ -95,7 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run).long()
             .alias(&["bom"])
             .params(
-                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements (the object handles of what it counts), element_count, sources? (the ids it was counted by that are not handles: a spec device, a run, a build name), elements_unresolved? (of those, how many the model has no object for)}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -874,13 +874,19 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     }
     // The model's pieces, from its count index; the fire alarm circuits' cable (Q6503) is
     // another trade's where the scope gives the fire alarm system to one.
+    // Each index row's elements (Q6529): a line counted from the index lists what it counts.
+    let stored = s.doc().ok().and_then(super::mepatoms::stored);
+    let handles = match (&atoms, &stored) {
+        (None, None) => BTreeMap::new(),
+        _ => s.doc().map(|d| super::mepatoms::handles_by_key(d, MAX_LINE_ELEMENTS)).unwrap_or_default(),
+    };
     if let Some(ix) = atoms {
         let fa = scope.iter().find(|d| d.class == "fire alarm").filter(|d| d.by_others());
-        atom_lines(lines, &ix, fa, others);
+        atom_lines(lines, &ix, &handles, fa, others);
     }
     // The panels' breakers (Q6166), whether or not the runs were built as pieces.
-    if let Some(ix) = s.doc().ok().and_then(super::mepatoms::stored) {
-        breaker_lines(lines, &ix);
+    if let Some(ix) = stored {
+        breaker_lines(lines, &ix, &handles);
     }
     lv_pathway_lines(s, lines);
     Ok(())
@@ -888,7 +894,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
 
 /// The breakers in the model's panels (Q6166), from its count index: by what each is bought as
 /// (its type and its panel's type), trip and poles, per level. A spare is bought like the rest.
-fn breaker_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
+fn breaker_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index, handles: &BTreeMap<super::mepatoms::Key, Vec<String>>) {
     for (k, t) in ix.rows.iter().filter(|(k, _)| k.kind == super::breakers::KIND).take(MAX_LINES) {
         add(
             lines,
@@ -902,7 +908,7 @@ fn breaker_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
                 status: "firm",
                 rule: Some("one per panel-schedule row with a breaker (spares included, spaces not), in each panel the schedule is for; counted in the model (bim.count {kind: breaker})".into()),
                 level: k.level.clone(),
-                elements: Vec::new(),
+                elements: handles.get(k).cloned().unwrap_or_default(),
                 waste_qty: None,
                 circuit: String::new(),
                 product: Product::default(),
@@ -977,7 +983,13 @@ fn lv_pathway_lines(s: &Session, lines: &mut Vec<Line>) {
 
 /// The BOM lines of a model built with its pieces (Q6157): each counted piece of its index by
 /// what it is bought as, size, level and circuit; lengths for conduit, cable and wire.
-fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index, fa_theirs: Option<&super::scope::Decision>, others: &mut Vec<Value>) {
+fn atom_lines(
+    lines: &mut Vec<Line>,
+    ix: &super::mepatoms::Index,
+    handles: &BTreeMap<super::mepatoms::Key, Vec<String>>,
+    fa_theirs: Option<&super::scope::Decision>,
+    others: &mut Vec<Value>,
+) {
     // Another trade's fire alarm cable (and raceway, unless the documents make it ours): by
     // system, level and type in `by_others`.
     let fa_conduit_ours = fa_theirs.is_none_or(|d| d.ours_for("fire alarm device", "").iter().any(|i| i.item == "conduit"));
@@ -1023,7 +1035,7 @@ fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index, fa_theirs: Opt
                 status: if estimated { "rule" } else { "model" },
                 rule: Some(rule.to_string()),
                 level: k.level.clone(),
-                elements: Vec::new(),
+                elements: handles.get(k).cloned().unwrap_or_default(),
                 waste_qty: None,
                 circuit: k.circuit.clone(),
                 product: Product::default(),
@@ -1978,6 +1990,60 @@ fn trade_size(v: f64) -> String {
     }
 }
 
+/// The built MEP elements a `mep.qty` row counts (Q6529), by level and system: each one's part
+/// (`segment`, `fitting:elbow`, `terminal:diffuser`), its run's id and its handle.
+#[derive(Default)]
+struct MepEls {
+    by: HashMap<(String, String), Vec<(String, String, String)>>,
+}
+
+impl MepEls {
+    fn of(d: &cadaddy_doc::Drawing) -> MepEls {
+        let mut out = MepEls::default();
+        for e in d.model.iter().filter(|e| super::bimlook::made_tags(e).is_some()).take(super::mepatoms::MAX_ELEMENTS) {
+            let tags = super::fieldview::wallgen_tags(e);
+            let (Some(&"mep"), Some(level)) = (tags.first(), tags.get(1)) else { continue };
+            let tag = |k: &str| super::fieldview::tag_value(&tags, k).unwrap_or_default();
+            // A raceway built as pieces: its sticks are its segments, its elbows and offsets its
+            // fittings; its other pieces are counted from the index.
+            let part = match tag("part").to_ascii_lowercase() {
+                p if p == "atom:conduit" || p == "atom:cable" => "segment".to_string(),
+                p if p == "atom:elbow" || p == "atom:offset" => p.replacen("atom:", "fitting:", 1),
+                p if p.is_empty() || p.starts_with("atom:") => continue,
+                p => p,
+            };
+            let id = tag("mepid");
+            let run = id.rsplit_once('/').map_or(id, |(b, _)| b).to_string();
+            let v = out.by.entry((level.trim().to_ascii_lowercase(), tag("system").trim().to_ascii_uppercase())).or_default();
+            if v.len() < MAX_LINES {
+                v.push((part, run, e.handle.hex()));
+            }
+        }
+        out
+    }
+
+    /// The elements on `level` of `system` (a takeoff row's, `CW (derived)` is `CW`) whose part
+    /// `pick` takes.
+    fn find(&self, level: &str, system: &str, pick: impl Fn(&str, &str) -> bool) -> Vec<String> {
+        let sys = system.trim().rsplit_once(" (").filter(|(_, t)| t.ends_with(')')).map_or(system, |(s, _)| s);
+        self.by
+            .get(&(level.trim().to_ascii_lowercase(), sys.trim().to_ascii_uppercase()))
+            .map(|v| v.iter().filter(|(part, run, _)| pick(part, run)).map(|(_, _, h)| h.clone()).take(MAX_LINE_ELEMENTS).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// The parts the build tags a `mep.qty` fitting type's fittings as (`elbow 45°` → an elbow; a
+/// pipe's `offset`, its drop at a corner, is built as a `drop`; a raceway's as an offset).
+fn fitting_parts(ty: &str) -> Vec<String> {
+    let word = ty.split(|c: char| !c.is_ascii_alphabetic()).find(|w| !w.is_empty()).unwrap_or_default().to_ascii_lowercase();
+    let mut out = vec![format!("fitting:{word}")];
+    if word == "offset" {
+        out.push("fitting:drop".into());
+    }
+    out
+}
+
 /// Mechanical and plumbing from `mep.qty` (conduit is counted above, from the runs).
 fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
     let scope = s.doc().map(super::scope::decisions).unwrap_or_default();
@@ -2006,6 +2072,22 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         let tail = sys.rsplit_once('(').map(|(_, t)| t.trim_end_matches(')')).unwrap_or_default();
         made_of(tail)
     };
+    // What each row counts as the model's elements (Q6529).
+    let els = s.doc().map(MepEls::of).unwrap_or_default();
+    let run_bases: Vec<String> = current(s, "bim.bom").map(|(sp, _)| sp.mep.runs.iter().map(super::mep::run_base).collect()).unwrap_or_default();
+    let runs_of = |v: &Value| -> BTreeSet<String> {
+        v["runs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_u64)
+            .filter_map(|i| run_bases.get(usize::try_from(i).ok()?).cloned())
+            .collect()
+    };
+    let segments = |v: &Value| -> Vec<String> {
+        let runs = runs_of(v);
+        els.find(&st(v, "level"), &st(v, "system"), |part, run| part == "segment" && (runs.is_empty() || runs.contains(run)))
+    };
     for d in arr("ducts") {
         let size = format!("{} {}", st(&d, "size"), st(&d, "shape"));
         let lv = st(&d, "level");
@@ -2021,6 +2103,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 status: "model",
                 level: lv.clone(),
                 made: made(&d),
+                elements: segments(&d),
                 ..Line::default()
             },
         );
@@ -2036,6 +2119,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 status: "model",
                 level: lv,
                 made: made(&d),
+                elements: segments(&d),
                 ..Line::default()
             },
         );
@@ -2054,6 +2138,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 status: "model",
                 level: st(&p, "level"),
                 made: made(&p),
+                elements: segments(&p),
                 ..Line::default()
             },
         );
@@ -2071,6 +2156,15 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 status: "model",
                 level: st(&f, "level"),
                 made: made(&f),
+                // The row's fittings of its kind on its level and system (the build tags a
+                // fitting by kind, not angle or size); none built as that kind (the build may
+                // make a size change at a corner its elbow), the system's fittings there.
+                elements: {
+                    let (lv, sys) = (st(&f, "level"), st(&f, "system"));
+                    let kinds = fitting_parts(&st(&f, "type"));
+                    let mine = els.find(&lv, &sys, |part, _| kinds.iter().any(|k| k == part));
+                    if mine.is_empty() { els.find(&lv, &sys, |part, _| part.starts_with("fitting:")) } else { mine }
+                },
                 ..Line::default()
             },
         );
@@ -2087,6 +2181,10 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&t, "count"),
                 status: "model",
                 level: st(&t, "level"),
+                elements: {
+                    let kind = format!("terminal:{}", st(&t, "kind").to_ascii_lowercase());
+                    els.find(&st(&t, "level"), &st(&t, "system"), |part, _| part == kind)
+                },
                 ..Line::default()
             },
         );
@@ -2337,6 +2435,8 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 status: "rule",
                 rule: Some(rule),
                 level: st(&h, "level"),
+                // Spaced along its level's runs of its system: those.
+                elements: segments(&h),
                 ..Line::default()
             },
         );
@@ -2347,6 +2447,16 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
 /// rule that produced it; conductor feet are as routed (`model`), the rest the takeoff's rules.
 fn grounding(s: &Session, lines: &mut Vec<Line>) {
     let (Ok((sp, _)), Ok(d)) = (current(s, "bim.bom"), s.doc()) else { return };
+    // What the takeoff counts from (Q6529): the grounding system's electrodes, bonds and busbars.
+    let from: Vec<String> = sp
+        .mep
+        .grounding
+        .iter()
+        .flat_map(|g| g.electrodes.iter().map(|e| &e.tag).chain(g.bonds.iter().map(|b| &b.tag)).chain(g.busbars.iter().map(|b| &b.tag)))
+        .filter(|t| !t.trim().is_empty())
+        .take(MAX_LINE_ELEMENTS)
+        .cloned()
+        .collect();
     for i in super::grounding::takeoff(&sp, d) {
         let item = i["item"].as_str().unwrap_or_default().to_string();
         let note = i["note"].as_str().unwrap_or_default();
@@ -2372,6 +2482,7 @@ fn grounding(s: &Session, lines: &mut Vec<Line>) {
                 net: i["qty"].as_f64().unwrap_or(0.0),
                 status: if unit == "ft" { "model" } else { "rule" },
                 rule: Some(if note.is_empty() { source.to_string() } else { format!("{source}; {note}") }),
+                elements: from.clone(),
                 ..Line::default()
             },
         );
@@ -2975,6 +3086,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|v| v.is_finite() && (0.0..=200.0).contains(v))
     };
     let (sp, _) = current(s, "bim.bom")?;
+    // Every line's elements as the model's objects (Q6529); the documents' ids beside them.
+    let refs = super::bomrefs::Refs::of(d, &sp);
     // By circuit: each level's lines per branch circuit (Q6007).
     let by_circuit = group == "circuit";
     let by_level = group == "level" || by_circuit;
@@ -3023,11 +3136,22 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                     (pct, if l.unit == "each" { (l.net * pct / 100.0).round() } else { l.net * pct / 100.0 })
                 }
             };
+            let shown = if all_elements { usize::MAX } else { 500 };
+            let (handles, sources, unresolved) = super::bomrefs::split(&refs, d, &l.elements);
             let mut v = json!({
                 "trade": l.trade, "category": l.category, "item": l.item, "size": l.size, "unit": l.unit,
                 "net": round(l.net), "waste_pct": round(pct), "waste": round(waste), "total": round(l.net + waste),
-                "status": l.status, "made": made_name(l.made), "elements": l.elements.iter().take(if all_elements { usize::MAX } else { 500 }).collect::<Vec<_>>(),
+                "status": l.status, "made": made_name(l.made), "elements": handles.iter().take(shown).collect::<Vec<_>>(),
+                "element_count": handles.len(),
             });
+            // The ids the line was counted by that are not object handles (a spec device, a
+            // run, a build's name), and how many of them the model has no object for.
+            if !sources.is_empty() {
+                v["sources"] = json!(sources.iter().take(shown).collect::<Vec<_>>());
+            }
+            if unresolved > 0 {
+                v["elements_unresolved"] = json!(unresolved);
+            }
             if let Some(r) = &l.rule {
                 v["rule"] = json!(r);
             }

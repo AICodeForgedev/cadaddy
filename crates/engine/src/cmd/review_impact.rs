@@ -819,7 +819,14 @@ fn prices(s: &mut Session, d: &Drawing) -> Result<Prices> {
             unpriced_lines += 1;
         }
         let elements: Vec<String> =
-            p.line["elements"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_ascii_uppercase).collect();
+            // Its objects; a line of nothing built yet, the ids it was counted by (Q6529).
+            match p.line["elements"].as_array().filter(|a| !a.is_empty()) {
+                Some(a) => a.iter(),
+                None => p.line["sources"].as_array().map_or_else(|| [].iter(), |a| a.iter()),
+            }
+            .filter_map(Value::as_str)
+            .map(str::to_ascii_uppercase)
+            .collect();
         let net = if p.net.is_finite() && p.net > 0.0 { p.net } else { p.qty };
         if ok && net.is_finite() && net > 0.0 {
             let mut per = whole.clone();

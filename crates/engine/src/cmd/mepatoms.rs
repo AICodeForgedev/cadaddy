@@ -1423,6 +1423,23 @@ pub(crate) fn is_labor_item(item: &str) -> bool {
     })
 }
 
+/// The counted elements of a drawing by their key, as handles (Q6529): what each row of its
+/// index counts, so a line counted from the index lists its elements. The same elements, in the
+/// same order and under the same cap, as [`Index::of`]; at most `per_key` handles a key.
+pub(crate) fn handles_by_key(d: &Drawing, per_key: usize) -> BTreeMap<Key, Vec<String>> {
+    let mut out: BTreeMap<Key, Vec<String>> = BTreeMap::new();
+    for (k, h) in d.model.iter().filter_map(|e| counted(e).map(|(k, _)| (k, e.handle))).take(MAX_ELEMENTS) {
+        if out.len() >= MAX_ROWS && !out.contains_key(&k) {
+            continue;
+        }
+        let v = out.entry(k).or_default();
+        if v.len() < per_key {
+            v.push(h.hex());
+        }
+    }
+    out
+}
+
 /// The drawing's stored index, if it has one.
 pub(crate) fn stored(d: &Drawing) -> Option<Index> {
     d.embedded.get(INDEX_FILE).and_then(|b| Index::from_bytes(b))
