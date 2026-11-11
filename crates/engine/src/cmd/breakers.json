@@ -49,6 +49,34 @@
     {"type": "shunt", "all": ["shunt_trip"]},
     {"type": "HACR", "all": ["hacr"]}
   ],
+  "by_circuit": {
+    "_about": "A breaker row whose codes name no protection (Q6350): its type decided per circuit by what the circuit serves, never one type for a whole panel. Arc fault where the circuit is a dwelling unit's or a guest room's 120 V single-pole 15/20 A one (a typical unit's rooms, rooms named as one: unit_name_words; a room's own panel's room or every device on the circuit in one); ground fault at the breaker only for a load the code puts on a GFCI with no receptacle on the circuit to carry a GFCI device (a receptacle circuit's GFCI is its first receptacle: coderules.json E-RECEPT-GFCI); both make a dual-function breaker, neither a standard one. A schedule that marks types on other rows prints this one standard: the build installs what the code wants and keeps the printed type as its design.",
+    "protection_features": ["dual", "arc_fault", "ground_fault", "equipment_ground_fault"],
+    "arc_fault": {
+      "cite": "NEC 210.12(A), (C)",
+      "rule": "every 120 V single-phase 15 and 20 A branch circuit supplying outlets or devices in a dwelling unit, or in a hotel or motel guest room or guest suite, is AFCI protected",
+      "poles": 1,
+      "max_amps": 20,
+      "max_volts": 120
+    },
+    "ground_fault_loads": [
+      {"all": ["DISHWASHER"], "cite": "NEC 422.5(A)(7) (dishwasher)"},
+      {"all": ["SUMP", "PUMP"], "cite": "NEC 422.5(A)(6) (sump pump)"},
+      {"all": ["VENDING"], "cite": "NEC 422.5(A)(5) (vending machine)"},
+      {"all": ["DRINKING", "FOUNTAIN"], "cite": "NEC 422.5(A)(2) (drinking water cooler)"},
+      {"all": ["WATER", "COOLER"], "cite": "NEC 422.5(A)(2) (drinking water cooler)"},
+      {"all": ["EWC"], "cite": "NEC 422.5(A)(2) (electric water cooler)"},
+      {"all": ["TIRE", "INFLATION"], "cite": "NEC 422.5(A)(4) (tire inflation machine)"},
+      {"all": ["PRESSURE", "WASHER"], "cite": "NEC 422.5(A)(3) (high-pressure spray washer)"}
+    ],
+    "unit_name_words": ["GUEST ROOM", "GUESTROOM", "GUEST SUITE", "GUEST UNIT", "DWELLING", "APARTMENT", "BEDROOM", "SLEEPING ROOM", "SLEEPING UNIT", "LODGING ROOM", "STUDIO UNIT"],
+    "unit_name_source": "a room is a dwelling unit's or a guest room's when it is a typical unit's room (the spec's unit instances) or its name has one of these phrases (a guest laundry or a guest corridor is neither)",
+    "receptacle_kinds": ["receptacle", "duplex_receptacle", "quad_receptacle", "gfci_receptacle", "weatherproof_receptacle", "ceiling_receptacle", "floor_receptacle", "usb_receptacle"],
+    "device_rule": "a receptacle on the circuit carries its ground-fault protection as a GFCI device (coderules.json E-RECEPT-GFCI, the usual where a schedule leaves the breaker's type out; the alternative, a GFCI breaker and standard receptacles)",
+    "volts_header_words": ["VOLTS", "VOLTAGE", "VOLTS/PHASE", "VOLTAGE/PHASE", "VOLTS/PH", "VOLTS/PHASE/WIRE", "SYSTEM VOLTAGE", "V/PH"],
+    "volts_unread": "the schedule prints no voltage: a single-pole branch breaker taken as 120 V (a dwelling or guest unit's panel is 120/240 or 208Y/120 V)",
+    "nothing_needed": "no code rule wants AFCI or GFCI protection at this circuit's breaker"
+  },
   "default_type": "standard",
   "default_source": "a schedule row whose codes (and their legend) name no protection: a standard thermal-magnetic breaker",
   "items": {
