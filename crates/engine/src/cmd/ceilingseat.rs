@@ -10,12 +10,13 @@
 //! rule's clearance over the highest built ceiling it passes under; it never hangs below a
 //! finished ceiling.
 //!
-//! Where no ceiling is built (a space no room was traced in) the ceiling is its level's, as
-//! model.clashes measures it. What stays: an area the reflected ceiling plans leave open to the
+//! Where no ceiling is built on a level the build laid ceilings out on (a space no room was
+//! traced in), the ceiling is its level's, as model.clashes measures it. What stays: an area the reflected ceiling plans leave open to the
 //! structure is exposed, so what is in it keeps its height. A terminal kind the rule names as not
 //! set in a ceiling (a sidewall register, a floor grille) keeps its height, and so does a height
 //! an edit set (its `bottom_ft` correction). A duct height a document gives stays too
-//! (model.clashes reports one below the ceiling), as do risers and the roof's runs.
+//! (model.clashes reports one below the ceiling), as do risers, the roof's runs and a run with no
+//! height source (a spec written by hand gives its heights).
 //!
 //! model.build runs [`seat`] once the ceilings are built and before the MEP is laid out, so every
 //! build seats them in the ceilings as built. Nothing here panics; every scan is capped.
@@ -118,11 +119,12 @@ impl Seated {
     }
 }
 
-/// Whether a run's height is none the documents give: a default, an estimated route, a branch
-/// inferred by a rule (`inferred (…)` as an older build wrote it).
+/// Whether a run's height is one the build chose, none the documents give: a default, an
+/// estimated route, a branch inferred by a rule (`inferred (…)` as an older build wrote it). A
+/// run with no height source at all keeps its heights (a spec written by hand gives them).
 fn no_document_height(source: &str) -> bool {
     let first = source.split(['(', ';']).next().unwrap_or_default().trim().replace(' ', "-").to_ascii_lowercase();
-    matches!(first.as_str(), "" | "default" | "estimated-route" | super::waterfill::INFERRED)
+    matches!(first.as_str(), "default" | "estimated-route" | super::waterfill::INFERRED)
 }
 
 /// Each ceiling terminal of `sp` set in the ceiling built over it in `d` (where none is, its
@@ -149,9 +151,13 @@ pub(crate) fn seat(d: &Drawing, sp: &mut BuildingSpec) -> Seated {
             open.entry(c.level.to_ascii_lowercase()).or_default().push(c.outline.iter().take(10_000).map(|q| Vec2::new(q[0], q[1])).collect());
         }
     }
+    // A level the build laid ceilings out on: a point none covers is in a space no room was
+    // traced in. (A level with none built has nothing to measure against.)
+    let built_on: std::collections::BTreeSet<String> = ceilings.iter().filter_map(|c| c.level()).map(str::to_ascii_lowercase).collect();
     let level_ceiling: BTreeMap<String, f64> = sp
         .levels
         .iter()
+        .filter(|l| built_on.contains(&l.name.to_ascii_lowercase()))
         .filter(|l| l.ceiling_ft.is_finite() && l.ceiling_ft > 6.0 && (!l.height_ft.is_finite() || l.ceiling_ft < l.height_ft))
         .map(|l| (l.name.to_ascii_lowercase(), l.ceiling_ft))
         .collect();
@@ -246,7 +252,8 @@ mod tests {
         for k in ["sidewall_register", "side wall grille", "floor_register", "door_grille", "vav_box", "sprinkler_pendent", "mixing_box", "grilled"] {
             assert!(!r.in_ceiling(k), "{k}");
         }
-        assert!(no_document_height("") && no_document_height("default") && no_document_height("estimated route") && no_document_height("inferred"));
+        assert!(no_document_height("default") && no_document_height("estimated route") && no_document_height("inferred"));
+        assert!(!no_document_height(""), "a hand-written spec's height");
         assert!(no_document_height("inferred (capped under the floor above)"));
         assert!(!no_document_height("tag") && !no_document_height("derived") && !no_document_height("override") && !no_document_height("proposed"));
     }
@@ -395,7 +402,8 @@ mod tests {
             "units_per_foot": 12.0,
             "levels": [
                 {"name": "Level 1", "elevation_ft": 0.0, "height_ft": 11.0, "ceiling_ft": 8.5},
-                {"name": "Level 2", "elevation_ft": 11.0, "height_ft": 10.0, "ceiling_ft": 8.5}
+                {"name": "Level 2", "elevation_ft": 11.0, "height_ft": 10.0, "ceiling_ft": 8.5},
+                {"name": "Level 3", "elevation_ft": 21.0, "height_ft": 10.0, "ceiling_ft": 8.5}
             ],
             "mep": {
                 "systems": [{"name": "RA", "layer": "M-RETURN", "kind": "duct", "size_in": [12, 10], "bottom_ft": 9.0}],
@@ -404,11 +412,13 @@ mod tests {
                     {"system": "RA", "level": "Level 1", "at": [300, 60], "size_in": [12, 12], "bottom_ft": 8.5, "terminal_kind": "return_grille"},
                     {"system": "RA", "level": "Level 2", "at": [60, 60], "size_in": [12, 12], "bottom_ft": 8.5, "terminal_kind": "return_grille"},
                     {"system": "RA", "level": "Level 1", "at": [600, 60], "size_in": [12, 12], "bottom_ft": 8.0, "terminal_kind": "return_grille"},
-                    {"system": "RA", "level": "Level 1", "at": [800, 60], "size_in": [12, 12], "bottom_ft": 9.5, "terminal_kind": "return_grille"}
+                    {"system": "RA", "level": "Level 1", "at": [800, 60], "size_in": [12, 12], "bottom_ft": 9.5, "terminal_kind": "return_grille"},
+                    {"system": "RA", "level": "Level 3", "at": [60, 60], "size_in": [12, 12], "bottom_ft": 9.5, "terminal_kind": "return_grille"}
                 ],
                 "runs": [
                     {"system": "RA", "level": "Level 1", "points": [[600, 100], [700, 100]], "size_in": [12, 10], "bottoms_ft": [7.0], "height_source": "default"},
-                    {"system": "RA", "level": "Level 1", "points": [[800, 100], [900, 100]], "size_in": [12, 10], "bottoms_ft": [7.0], "height_source": "default"}
+                    {"system": "RA", "level": "Level 1", "points": [[800, 100], [900, 100]], "size_in": [12, 10], "bottoms_ft": [7.0], "height_source": "default"},
+                    {"system": "RA", "level": "Level 3", "points": [[0, 100], [200, 100]], "size_in": [12, 10], "bottoms_ft": [6.0], "height_source": "default"}
                 ]
             },
             // x 750..1000 on level 1 open to the structure.
@@ -419,10 +429,11 @@ mod tests {
         let got = seat(&d, &mut sp);
         let t: Vec<f64> = sp.mep.terminals.iter().map(|t| (t.bottom_ft * 1000.0).round() / 1000.0).collect();
         // In the room's ceiling, the floor's, level 2's room (stacked); where no ceiling is built,
-        // the level's; in the exposed area as it is.
-        assert_eq!(t, vec![7.833, 8.5, 8.0, 8.5, 9.5]);
+        // the level's; in the exposed area as it is; on level 3, where the build laid out no
+        // ceiling at all, as they are.
+        assert_eq!(t, vec![7.833, 8.5, 8.0, 8.5, 9.5, 9.5]);
         let b: Vec<f64> = sp.mep.runs.iter().map(|r| r.bottoms_ft[0]).collect();
-        assert_eq!(b, vec![8.75, 7.0]);
+        assert_eq!(b, vec![8.75, 7.0, 6.0]);
         assert_eq!((got.terminals, got.terminals_checked, got.runs), (3, 4, 1));
     }
 }

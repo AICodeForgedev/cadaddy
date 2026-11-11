@@ -449,6 +449,11 @@ pub(crate) struct BuiltCeiling {
 }
 
 impl BuiltCeiling {
+    /// The level it was built on (none: not known).
+    pub(crate) fn level(&self) -> Option<&str> {
+        self.level.as_deref()
+    }
+
     fn covers(&self, p: Vec2) -> bool {
         let side = |a: Vec2, b: Vec2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
         self.bounds.contains(p)
