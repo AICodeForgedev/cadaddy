@@ -808,6 +808,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/mepfix/src/equip_reader.rs",
+        "const NAME",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
+    ),
+    (
+        "crates/mepfix/src/equip_reader.rs",
         "[CFM MAX CFM]",
         "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks",
     ),
