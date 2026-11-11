@@ -25,6 +25,7 @@ mod propfill;
 mod roofreal;
 mod roomtagtext;
 mod sheetcheck;
+mod strokedlettering;
 mod takeoff_edits;
 mod validatecrops;
 mod validateequip;

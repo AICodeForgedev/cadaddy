@@ -220,6 +220,7 @@ pub mod sitetakeoff;
 pub(crate) mod sitework;
 pub mod spell;
 pub mod stairs;
+pub mod strokesheets;
 pub mod symbol;
 mod takeoff;
 pub mod tours;

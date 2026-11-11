@@ -166,7 +166,9 @@ fn run_classify(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(d)
         };
-        mep_printset::run_classify_prints(project, &load, cancel, &mut tell)
+        let rec = mep_printset::run_classify_prints(project, &load, cancel, &mut tell);
+        loader.note_lettering(project);
+        rec
     } else {
         // A project made without files (from a saved truth): classify what it already holds.
         mep_printset::run_classify(project, None, cancel, &mut tell)
