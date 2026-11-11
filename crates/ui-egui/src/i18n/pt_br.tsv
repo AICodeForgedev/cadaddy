@@ -3486,3 +3486,4 @@
 	= (block=output file)	= (bloco=arquivo de saída)
 	* (whole drawing)	* (desenho inteiro)
 	Requires an integer between 0 and 16.	É necessário um inteiro entre 0 e 16.
+	Correct Job Sheet Index	Corrigir o índice de folhas do trabalho
