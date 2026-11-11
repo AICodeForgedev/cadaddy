@@ -3558,3 +3558,5 @@
 	Hydronic Piping	水系统管道
 	Condensate Drain	冷凝水排放
 	Mechanical Piping	机械管道
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	按属性更正元素 (BIM)

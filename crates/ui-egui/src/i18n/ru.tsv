@@ -3273,3 +3273,5 @@
 	Hydronic Piping	Трубопроводы тепло- и холодоснабжения
 	Condensate Drain	Отвод конденсата
 	Mechanical Piping	Механические трубопроводы
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Исправить элементы по свойству (BIM)

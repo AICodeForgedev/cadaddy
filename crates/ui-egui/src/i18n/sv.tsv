@@ -3647,3 +3647,5 @@ menu	Modify	Ändra
 	Hydronic Piping	Värme- och kylvattenrör
 	Condensate Drain	Kondensavlopp
 	Mechanical Piping	Installationsrör
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Korrigera element efter egenskap (BIM)

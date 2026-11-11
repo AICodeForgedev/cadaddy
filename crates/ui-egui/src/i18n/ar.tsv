@@ -3478,3 +3478,5 @@ menu	View	عرض
 	Hydronic Piping	أنابيب المياه الحرارية
 	Condensate Drain	تصريف المكثفات
 	Mechanical Piping	أنابيب ميكانيكية
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	تصحيح العناصر حسب الخاصية (BIM)

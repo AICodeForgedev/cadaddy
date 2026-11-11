@@ -3464,3 +3464,5 @@ menu	Modify	Modifikace
 	Hydronic Piping	Otopné a chladicí potrubí
 	Condensate Drain	Odvod kondenzátu
 	Mechanical Piping	Strojní potrubí
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Opravit prvky podle vlastnosti (BIM)

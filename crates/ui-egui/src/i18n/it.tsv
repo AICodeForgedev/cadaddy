@@ -3556,3 +3556,5 @@ menu	Modify	Edita
 	Hydronic Piping	Tubazioni idroniche
 	Condensate Drain	Scarico condensa
 	Mechanical Piping	Tubazioni meccaniche
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	Correggi elementi per proprietà (BIM)

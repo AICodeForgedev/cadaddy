@@ -3483,3 +3483,5 @@ menu	Modify	수정
 	Hydronic Piping	냉온수 배관
 	Condensate Drain	응축수 배수
 	Mechanical Piping	기계 배관
+# bim.props.batch (Q6438).
+	Correct Elements by Property (BIM)	속성으로 요소 수정(BIM)
