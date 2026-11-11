@@ -1922,6 +1922,127 @@ pub(crate) struct RoomTrace {
     pub rooms: Vec<FoundRoom>,
     /// Each such name, where it is, and the reach (drawing units, each way) its search stopped at.
     pub beyond_reach: Vec<(String, Vec2, f64)>,
+    /// The texts read as room name candidates: kept or dropped, and why.
+    pub candidates: NameCandidates,
+}
+
+/// A room's number is printed with its name: within this of the name's ends, sideways, in the
+/// name's text height (a centred number under a name drawn from its left end).
+const TAG_NUMBER_SIDE: f64 = 2.0;
+
+/// The room number texts of a trace by their height on the page, to find the number a name is
+/// printed with without looking through every text of a print set.
+pub(crate) struct NumbersByY {
+    /// (where, text height), lowest first.
+    at: Vec<(Vec2, f64)>,
+}
+
+impl NumbersByY {
+    fn new(numbers: &[Label]) -> Self {
+        Self::of(numbers.iter().map(|n| (n.2, n.3)))
+    }
+
+    /// From the room numbers' (where, text height).
+    pub(crate) fn of(numbers: impl Iterator<Item = (Vec2, f64)>) -> Self {
+        let mut at: Vec<(Vec2, f64)> = numbers.filter(|(p, _)| p.x.is_finite() && p.y.is_finite()).collect();
+        at.sort_by(|a, b| a.0.y.total_cmp(&b.0.y));
+        Self { at }
+    }
+
+    /// The numbers from `y0` to `y1`.
+    fn band(&self, y0: f64, y1: f64) -> impl Iterator<Item = &(Vec2, f64)> {
+        let first = self.at.partition_point(|(p, _)| p.y < y0);
+        self.at.get(first..).unwrap_or_default().iter().take_while(move |(p, _)| p.y <= y1)
+    }
+
+    /// A number of about the size `h` just under `at` (an equipment room's `AHU` over its number).
+    fn below(&self, at: Vec2, h: f64) -> bool {
+        h.is_finite()
+            && h > 0.0
+            && self.band(at.y - 3.0 * h, at.y - 0.5 * h).any(|(q, nh)| (*nh - h).abs() <= 0.3 * h && (q.x - at.x).abs() <= 3.0 * h)
+    }
+
+    /// A number printed with a name of `chars` characters at `at` (height `h`), as a room tag
+    /// prints them: the name's size ([`TAG_SIZE_BAND`]), under, over or beside it within
+    /// [`TAG_NUMBER_REACH`] of its height, and no farther sideways than its length (whichever end
+    /// the text is drawn from) and [`TAG_NUMBER_SIDE`].
+    pub(crate) fn printed_with(&self, at: Vec2, h: f64, chars: usize) -> bool {
+        if !(h.is_finite() && h > 0.0) {
+            return false;
+        }
+        let side = chars as f64 * h * LABEL_CHAR_WIDTH + TAG_NUMBER_SIDE * h;
+        let reach = TAG_NUMBER_REACH * h;
+        self.band(at.y - reach, at.y + reach).any(|(q, nh)| *nh >= TAG_SIZE_BAND.0 * h && *nh <= TAG_SIZE_BAND.1 * h && (q.x - at.x).abs() <= side)
+    }
+}
+
+/// Whether a plain text (not a tag block's attribute) at `at`, height `h`, reads as a room's
+/// name by the rule data (Q6324): a room or unit-type word (`rooms.names`), or another name
+/// printed with its room number as a room tag prints them. An equipment or device tag, a note or
+/// a callout with no room word and no number (`FLOOR SINK`) never.
+pub(crate) fn reads_as_room_name(t: &str, at: Vec2, h: f64, numbers: &NumbersByY) -> bool {
+    match room_name_score(t) {
+        0 => false,
+        1 => numbers.printed_with(at, h, t.chars().count()),
+        _ => true,
+    }
+}
+
+/// Examples kept per reason in [`NameCandidates`].
+const CANDIDATE_EXAMPLES: usize = 5;
+
+/// The texts a room trace read and what became of them: outside the plan views it reads, a room
+/// number, a name kept for the trace, or a name dropped for a reason (a note's line, a title
+/// block's words, a device's tag, no room word and no room number printed with it…). Every text
+/// is counted once: `texts = outside_plan_views + numbers + kept + Σ dropped`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NameCandidates {
+    pub texts: usize,
+    pub outside_plan_views: usize,
+    pub numbers: usize,
+    pub kept: usize,
+    pub dropped: std::collections::BTreeMap<&'static str, usize>,
+    /// A few of each reason's texts (the first read).
+    pub examples: std::collections::BTreeMap<&'static str, Vec<String>>,
+}
+
+impl NameCandidates {
+    fn drop(&mut self, why: &'static str, text: &str) {
+        *self.dropped.entry(why).or_default() += 1;
+        let ex = self.examples.entry(why).or_default();
+        if ex.len() < CANDIDATE_EXAMPLES {
+            ex.push(text.chars().take(40).collect());
+        }
+    }
+
+    /// Another region's candidates added to these (a print set read sheet by sheet: every
+    /// region reads the same texts, so the texts outside every region are those none took).
+    fn add_region(&mut self, o: &NameCandidates) {
+        self.texts = self.texts.max(o.texts);
+        self.numbers += o.numbers;
+        self.kept += o.kept;
+        for (k, v) in &o.dropped {
+            *self.dropped.entry(k).or_default() += v;
+        }
+        for (k, v) in &o.examples {
+            let ex = self.examples.entry(k).or_default();
+            ex.extend(v.iter().take(CANDIDATE_EXAMPLES.saturating_sub(ex.len())).cloned());
+        }
+        let inside = self.numbers + self.kept + self.dropped.values().sum::<usize>();
+        self.outside_plan_views = self.texts.saturating_sub(inside);
+    }
+
+    /// As `rooms.list` and the job's report give it.
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "texts": self.texts,
+            "outside_plan_views": self.outside_plan_views,
+            "numbers": self.numbers,
+            "kept": self.kept,
+            "dropped": self.dropped,
+            "examples": self.examples,
+        })
+    }
 }
 
 /// A room tag block's attribute: `Some(true)` for the room's name (`NAME`, `ROOM_NAME`, `RM NAME`),
@@ -2163,6 +2284,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
                 continue;
             }
             let found = trace_rooms_in(s, Some(std::slice::from_ref(r)))?;
+            out.candidates.add_region(&found.candidates);
             out.rooms.extend(found.rooms.into_iter().filter(|f| !earlier.iter().any(|e| inside(e, f.at))));
             out.beyond_reach.extend(found.beyond_reach.into_iter().filter(|(_, at, _)| !earlier.iter().any(|e| inside(e, *at))));
         }
@@ -2244,56 +2366,6 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
     }
     // Untagged, a spec with rooms names them.
     let spec_rooms = spec.as_ref().filter(|sp| !tagged && !sp.rooms.is_empty()).map(|sp| sp.rooms.as_slice());
-    // An equipment room tagged by the unit it houses: the word alone (`AHU`) over a room number,
-    // as a room's tag prints its name over its number. (A plan's equipment tag has its own number:
-    // `AHU-1`.)
-    let numbered_below = |t: &str, at: Vec2, h: f64| {
-        let w = t.trim().to_ascii_uppercase();
-        cadaddy_mepfix::wordrules::words("equipment.names").contains(&w.as_str())
-            && all.iter().any(|(_, n, q, nh, _)| {
-                room_number(n) && (*nh - h).abs() <= 0.3 * h && at.y - q.y >= 0.5 * h && at.y - q.y <= 3.0 * h && (q.x - at.x).abs() <= 3.0 * h
-            })
-    };
-    let score = |(_, t, at, h, tag): &Label| {
-        if *tag {
-            4
-        } else if numbered_below(t, *at, *h) {
-            1
-        } else {
-            room_name_score(t)
-        }
-    };
-    let mut names: Vec<Label> = all
-        .iter()
-        // A plain text names a room in a room tag's words: not a note's line or sentence, a
-        // title block's or a stamp's words ([`crate::cmd::autospec::room_like_name`]).
-        .filter(|(h, t, _, _, tag)| {
-            t.chars().count() <= 40 && (*tag || (!note_like(t) && !in_block.contains(h) && crate::cmd::autospec::room_like_name(t)))
-        })
-        .filter(|l| match spec_rooms {
-            Some(rs) => {
-                let t = &l.1;
-                l.4 || (t.chars().filter(|c| c.is_alphabetic()).count() >= 2
-                    && !room_number(t)
-                    && rs.iter().any(|r| crate::cmd::bspec::names_room(r, t)))
-            }
-            // Equipment and device tags (a panelboard label beside a room) never name it.
-            None => score(l) > 0,
-        })
-        .cloned()
-        .collect();
-    // The best name claims its outline first, whatever the drawing order: a tag block's name, then
-    // a room or unit-type word, then the tallest text, then by text and place. Read sheet by sheet,
-    // the score alone orders them (then drawing order): there a taller label on the plan (a unit
-    // type, a note) would claim a room's outline before the room's own name.
-    if regions.is_none() {
-        names.sort_by(|a, b| {
-            score(b).cmp(&score(a)).then(b.3.total_cmp(&a.3)).then_with(|| a.1.cmp(&b.1)).then(b.2.y.total_cmp(&a.2.y)).then(a.2.x.total_cmp(&b.2.x))
-        });
-    }
-    // The drawing's best names, or each sheet's best in turn (the stable sort keeps the order above).
-    let names = labels_to_trace(names, |n| n.2, score, regions);
-    phase("labels");
     // A detail or section callout's sheet (`A131`, `A411`) reads like a lettered room number: one
     // of the set's sheet numbers is no room's.
     let mut sheet_numbers: std::collections::BTreeSet<String> =
@@ -2310,6 +2382,98 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
     let mut numbers: Vec<Label> =
         all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase())).cloned().collect();
     numbers.extend(tag_numbers);
+    // The room numbers by height on the page: a name's own number is looked for in the band
+    // round it only (a print set's sheets side by side hold tens of thousands of texts).
+    let numbers_by_y = NumbersByY::new(&numbers);
+    // An equipment room tagged by the unit it houses: the word alone (`AHU`) over a room number,
+    // as a room's tag prints its name over its number. (A plan's equipment tag has its own number:
+    // `AHU-1`.)
+    let numbered_below = |t: &str, at: Vec2, h: f64| {
+        let w = t.trim().to_ascii_uppercase();
+        cadaddy_mepfix::wordrules::words("equipment.names").contains(&w.as_str()) && numbers_by_y.below(at, h)
+    };
+    let score = |(_, t, at, h, tag): &Label| {
+        if *tag {
+            4
+        } else if numbered_below(t, *at, *h) {
+            1
+        } else {
+            room_name_score(t)
+        }
+    };
+    // Room names come from inside the plan views read (`regions`; the whole drawing without), and
+    // only texts that read as a room's name by the rule data (Q6324): a room tag block's name, a
+    // room or unit-type word (`rooms.names`), or another name printed with its room number as a
+    // tag prints them. Not a note's line or sentence, a note block's, a title block's or a stamp's
+    // words ([`crate::cmd::autospec::room_like_name`]), an equipment or device tag, nor a callout
+    // with no room word and no number (`FLOOR SINK`, `PROVIDE PLYWOOD`). Each text counted once by
+    // what became of it ([`NameCandidates`]).
+    let in_views = |p: Vec2| {
+        regions.is_none_or(|rs| rs.iter().any(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3])))
+    };
+    let mut candidates = NameCandidates { texts: all.len(), ..NameCandidates::default() };
+    let mut needs_number: std::collections::HashSet<cadaddy_doc::Handle> = std::collections::HashSet::new();
+    let mut names: Vec<Label> = Vec::new();
+    for l in &all {
+        let (h, t, at, height, tag) = l;
+        if !in_views(*at) {
+            candidates.outside_plan_views += 1;
+            continue;
+        }
+        if !tag && room_number(t) {
+            candidates.numbers += 1;
+            continue;
+        }
+        let why = if t.chars().count() > 40 {
+            Some("too_long")
+        } else if *tag {
+            None
+        } else if note_like(t) {
+            Some("note_or_finish_code")
+        } else if in_block.contains(h) {
+            Some("note_block_line")
+        } else if !crate::cmd::autospec::room_like_name(t) {
+            Some("sentence_title_block_or_stamp")
+        } else {
+            match spec_rooms {
+                Some(rs) => (!(t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && rs.iter().any(|r| crate::cmd::bspec::names_room(r, t))))
+                    .then_some("not_a_spec_room"),
+                // Equipment and device tags (a panelboard label beside a room) never name it.
+                None => match score(l) {
+                    0 => Some("equipment_or_device_tag"),
+                    // No room word and no number printed by it: a room's name only if the room it
+                    // traces holds a room number of its size (a tag's name drawn from its left end,
+                    // its number in the room's middle), checked once it is traced.
+                    1 if !numbers_by_y.printed_with(*at, *height, t.chars().count()) => {
+                        needs_number.insert(*h);
+                        None
+                    }
+                    _ => None,
+                },
+            }
+        };
+        match why {
+            Some(w) => candidates.drop(w, t),
+            None => names.push(l.clone()),
+        }
+    }
+    // The best name claims its outline first, whatever the drawing order: a tag block's name, then
+    // a room or unit-type word, then the tallest text, then by text and place. Read sheet by sheet,
+    // the score alone orders them (then drawing order): there a taller label on the plan (a unit
+    // type, a note) would claim a room's outline before the room's own name.
+    if regions.is_none() {
+        names.sort_by(|a, b| {
+            score(b).cmp(&score(a)).then(b.3.total_cmp(&a.3)).then_with(|| a.1.cmp(&b.1)).then(b.2.y.total_cmp(&a.2.y)).then(a.2.x.total_cmp(&b.2.x))
+        });
+    }
+    // The drawing's best names, or each sheet's best in turn (the stable sort keeps the order above).
+    let read_names = names.len();
+    let names = labels_to_trace(names, |n| n.2, score, regions);
+    candidates.kept = names.len();
+    if read_names > names.len() {
+        *candidates.dropped.entry("over_the_trace_cap").or_default() += read_names - names.len();
+    }
+    phase("labels");
     // Read sheet by sheet: trace on the plans' own objects only (a whole print set side by side
     // is so large its trace tolerance - a fraction of the extents - opens every room).
     let plan = match regions.filter(|r| !r.is_empty()) {
@@ -2373,7 +2537,12 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
         }
     };
     if let Some(rooms) = s.state()?.room_trace.by_inputs(&s.space(), regions, &inputs) {
-        return Ok(rooms.as_ref().clone());
+        // The same names and numbers: what became of them as before. (The texts outside what it
+        // reads may have changed: counted as read now.)
+        let mut rooms = rooms.as_ref().clone();
+        rooms.candidates.texts = candidates.texts;
+        rooms.candidates.outside_plan_views = candidates.outside_plan_views;
+        return Ok(rooms);
     }
     let plan = if leaves.is_empty() || s.space().is_paper() {
         plan
@@ -2614,6 +2783,13 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
                 .map(|(_, t, _, _, _)| t.clone())
         };
         let number = inside_numbers(true).or_else(beside);
+        // A name with no room word whose room holds no number of its size: a callout or a
+        // note's words (`FLOOR SINK`), no room (Q6324).
+        if number.is_none() && needs_number.contains(&h) {
+            candidates.kept = candidates.kept.saturating_sub(1);
+            candidates.drop("no_room_word_or_number", &name);
+            continue;
+        }
         if number.is_none()
             && let Some(any) = inside_numbers(false)
         {
@@ -2643,7 +2819,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<RoomT
             if beyond_reach.len() > shown.len() { ", ..." } else { "" }
         ));
     }
-    let trace = RoomTrace { rooms: out, beyond_reach };
+    let trace = RoomTrace { rooms: out, beyond_reach, candidates };
     let space = s.space();
     if let Ok(st) = s.state_mut() {
         st.room_trace.put_inputs(space, regions, inputs, std::sync::Arc::new(trace.clone()));
@@ -3182,6 +3358,38 @@ mod tests {
             vec![("GUEST".to_string(), None), ("OFFICE".to_string(), Some("101".to_string())), ("STORAGE".to_string(), None)],
             "only the rooms' tags name rooms"
         );
+    }
+
+    #[test]
+    fn a_callout_with_no_room_word_and_no_number_names_no_room() {
+        // Q6324: a plan's callouts and notes (a fixture's, a material's) traced as rooms. A
+        // room's name is a room word, or another name printed with its room number.
+        let mut s = plan_of(&[
+            ([0.0, 0.0, 240.0, 180.0], &[("OFFICE", 80.0, 90.0), ("101", 90.0, 80.0)]),
+            ([300.0, 0.0, 540.0, 180.0], &[("FLOOR SINK", 380.0, 90.0)]),
+            ([600.0, 0.0, 840.0, 180.0], &[("PROVIDE PLYWOOD", 650.0, 90.0)]),
+            ([900.0, 0.0, 1140.0, 180.0], &[("CHECK IN", 980.0, 90.0), ("105", 990.0, 80.0)]),
+        ]);
+        let trace = room_trace_in(&mut s, None).unwrap();
+        let mut names: Vec<(String, Option<String>)> = trace.rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![("CHECK IN".to_string(), Some("105".to_string())), ("OFFICE".to_string(), Some("101".to_string()))],
+            "a callout names no room; a name printed with its number does"
+        );
+        let c = &trace.candidates;
+        assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (6, 2, 2, 0), "{c:?}");
+        assert_eq!(c.dropped.get("no_room_word_or_number"), Some(&2), "{c:?}");
+        assert_eq!(c.examples.get("no_room_word_or_number").map(Vec::len), Some(2), "{c:?}");
+        // Read in a plan view: the texts outside it are counted, never traced (sheet by sheet,
+        // the texts no view holds once).
+        let views = [[0.0, 0.0, 250.0, 200.0], [890.0, 0.0, 1150.0, 200.0]];
+        let trace = room_trace_in(&mut s, Some(&views)).unwrap();
+        assert_eq!(trace.rooms.len(), 2, "{:?}", trace.rooms);
+        let c = &trace.candidates;
+        assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (6, 2, 2, 2), "{c:?}");
+        assert!(c.dropped.is_empty(), "{c:?}");
     }
 
     #[test]

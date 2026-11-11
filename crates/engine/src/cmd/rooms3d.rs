@@ -443,7 +443,13 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         None => (rooms_in(s, regions.as_deref())?, false),
     };
     // Traced (not built): the names whose search stopped at its reach (read again, not traced).
-    let beyond = if built { Vec::new() } else { super::perceive::geometry::room_trace_in(s, regions.as_deref())?.beyond_reach.clone() };
+    // Traced (not built): the texts read as names, kept or dropped and why.
+    let (beyond, candidates) = if built {
+        (Vec::new(), None)
+    } else {
+        let t = super::perceive::geometry::room_trace_in(s, regions.as_deref())?;
+        (t.beyond_reach.clone(), Some(t.candidates.to_json()))
+    };
     if let Some(l) = &level {
         rs.retain(|r| r.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(l)));
     }
@@ -466,6 +472,9 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     if !beyond.is_empty() {
         out["beyondReach"] = super::perceive::geometry::beyond_reach_json(&beyond, units_per_inch(d));
         out["beyondReachCount"] = json!(beyond.len());
+    }
+    if let Some(c) = candidates {
+        out["nameCandidates"] = c;
     }
     Ok(out)
 }

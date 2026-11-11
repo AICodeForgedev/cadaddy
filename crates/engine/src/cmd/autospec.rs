@@ -369,11 +369,17 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
         Vec::new()
     };
     let layer_of = |h: cadaddy_doc::Handle| ents.iter().find(|e| e.handle == h).map(|e| e.common.layer.as_str());
+    // A room's name reads as one by the rule data: a room word, or a name printed with its room
+    // number: a callout's or a note's words with neither name no room (Q6324). (Given levels
+    // with regions: their plans' objects only, above.)
+    let room_numbers =
+        super::perceive::geometry::NumbersByY::of(all_texts.iter().filter(|(_, t, _, _)| room_number(t)).map(|(_, _, at, h)| (*at, *h)));
     let candidates: Vec<(cadaddy_doc::Handle, String, Vec2, f64)> = all_texts
         .iter()
-        .filter(|(h, t, _, _)| {
+        .filter(|(h, t, at, ht)| {
             let layer = layer_of(*h).unwrap_or_default();
             room_name(t)
+                && super::perceive::geometry::reads_as_room_name(t, *at, *ht, &room_numbers)
                 && !review_layer(layer)
                 && if tagged.is_empty() {
                     !roles.iter().any(|r| r.layer.eq_ignore_ascii_case(layer))

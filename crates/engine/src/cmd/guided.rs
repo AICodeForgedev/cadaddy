@@ -4446,13 +4446,39 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         .collect();
     // Rooms come from the architectural floor plans: other trades' plans show the same rooms
     // again (and phantom ones). Any plan when the set has no architectural ones.
-    let regions = Some(plans(true)).filter(|r| !r.is_empty()).unwrap_or_else(|| plans(false));
+    let arch = plans(true);
+    let (regions, read_on) = if !arch.is_empty() {
+        (arch, "architectural floor plans")
+    } else {
+        (plans(false), "other trades' floor plans (the set has no architectural floor plan)")
+    };
     // With outlines: the typical-room plans' devices are stamped into each room of the type.
     let mut params = json!({"outline": true});
     if !regions.is_empty() {
         params["regions"] = json!(regions);
     }
-    let mut rooms_result = s.execute("rooms.list", &params)?;
+    // A print set with no floor plan view to read names no room: its other sheets' notes,
+    // schedules and title blocks are no room's (Q6324: all of a set's ~80 sheets' notes were
+    // traced as one storey's names). A drawing that is no print set is its own plan.
+    let no_plan_view = regions.is_empty() && !job.sheet_regions.is_empty();
+    let (mut rooms_result, read_on) = if no_plan_view {
+        (json!({"rooms": [], "count": 0}), "none: the set has no floor plan view to read rooms on")
+    } else if regions.is_empty() {
+        (s.execute("rooms.list", &params)?, "the whole drawing (no print set)")
+    } else {
+        (s.execute("rooms.list", &params)?, read_on)
+    };
+    let name_candidates = rooms_result.as_object_mut().and_then(|o| o.remove("nameCandidates"));
+    if let Some(c) = &name_candidates {
+        let n = |k: &str| c.get(k).and_then(Value::as_u64).unwrap_or(0);
+        progress_line(&format!(
+            "  room names read on {read_on}: {} texts, {} outside the plan views, {} kept, dropped {}",
+            n("texts"),
+            n("outside_plan_views"),
+            n("kept"),
+            c.get("dropped").map(Value::to_string).unwrap_or_default()
+        ));
+    }
     // Architecture gives the rooms; the other disciplines' plans of a floor may give their numbers
     // (an architectural plan can tag guest rooms with the unit type only). From those plans only a
     // numbered room whose number the architectural plans didn't give is taken: a room they'd add
@@ -4538,6 +4564,11 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             o.insert("plans_not_read".into(), json!(not_read));
         }
         o.insert("not_rooms".into(), dropped);
+        let mut names = name_candidates.unwrap_or_else(|| json!({}));
+        if let Some(c) = names.as_object_mut() {
+            c.insert("read_on".into(), json!(read_on));
+        }
+        o.insert("name_candidates".into(), names);
         if let Some(n) = o.get("rooms").and_then(Value::as_array).map(Vec::len) {
             o.insert("count".into(), json!(n));
         }
@@ -29971,6 +30002,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "dampers": dampers_summary(&job),
         "documented_objects": doc_objects_summary(&job),
         "windows": windows_summary(&job),
+        "room_names": room_names_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
         "specifications": specs_report(&job),
         "sheet_scales": sheet_scales_report(&job),
@@ -30223,6 +30255,18 @@ fn dampers_summary(job: &GuidedJob) -> Value {
 /// notes built nothing; null before.
 /// The report's windows (Q6311): per level and type, the window tags on the plans and the windows
 /// built, the untyped windows and the tags with no window, with the totals.
+/// The rooms stage's name candidates (Q6324): where room names were read, the texts kept and
+/// those dropped by reason.
+fn room_names_summary(job: &GuidedJob) -> Value {
+    job.stages
+        .iter()
+        .find(|st| st.name == StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("name_candidates"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 fn windows_summary(job: &GuidedJob) -> Value {
     let Some(rows) =
         job.stages.iter().find(|st| st.name == StageName::BimBuild).and_then(|st| st.result.as_ref()).and_then(|r| r["window_tags"].as_array())
@@ -39569,6 +39613,52 @@ mod tests {
                     assert!(open.is_empty(), "{stage:?}: {open:?}");
                 }
             }
+        }
+    }
+
+    /// Q6324: room names come only from inside the architectural floor plans' views. A print set
+    /// with no floor plan view to read names no room (its notes, schedules and title blocks were
+    /// traced as one storey's names), and the stage reports the texts kept and dropped by reason.
+    #[test]
+    fn room_names_come_only_from_the_floor_plans_views() {
+        let room = |s: &mut crate::Session, x: f64, name: &str| {
+            s.execute("pline", &json!({"vertices": [[x + 10.0, 10.0], [x + 90.0, 10.0], [x + 90.0, 70.0], [x + 10.0, 70.0]], "closed": true}))
+                .unwrap();
+            s.execute("text", &json!({"at": [x + 30.0, 40.0], "text": name, "height": 3})).unwrap();
+        };
+        let names = |r: &Value| -> Vec<String> {
+            r["rooms"].as_array().into_iter().flatten().filter_map(|x| x["name"].as_str().map(str::to_string)).collect()
+        };
+        for with_plan in [true, false] {
+            let mut s = crate::Session::new();
+            room(&mut s, 0.0, "OFFICE");
+            // A notes sheet's and a details sheet's texts, each in a closed box.
+            room(&mut s, 200.0, "STORAGE");
+            room(&mut s, 400.0, "LOBBY");
+            let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+            job.auto = true;
+            job.sheets = Some(json!({"sheets": []}));
+            job.sheets_loaded = true;
+            job.sheet_regions = vec![
+                region("A-101", "1", "A", if with_plan { "plan" } else { "details" }, 0.0),
+                region("G-001", "", "G", "general", 200.0),
+                region("A-501", "", "A", "details", 400.0),
+            ];
+            let r = run_rooms(&mut s, &mut job).expect("rooms");
+            if let Some(st) = job.stage_mut(StageName::Rooms) {
+                st.result = Some(r.clone());
+            }
+            let c = &r["name_candidates"];
+            if with_plan {
+                assert_eq!(names(&r), ["OFFICE"], "{r}");
+                assert_eq!(c["read_on"], "architectural floor plans", "{c}");
+                assert_eq!((c["kept"].as_u64(), c["outside_plan_views"].as_u64()), (Some(1), Some(2)), "{c}");
+            } else {
+                assert!(names(&r).is_empty(), "no floor plan view: no room names, not the whole set's texts: {r}");
+                assert!(c["read_on"].as_str().is_some_and(|w| w.starts_with("none")), "{c}");
+            }
+            let report = room_names_summary(&job);
+            assert_eq!(&report, c, "the job's report gives the rooms stage's candidates");
         }
     }
 
