@@ -107,7 +107,17 @@
     "exposed_rooms": ["MECH", "ELEC", "STORAGE", "PUMP", "RISER", "BOILER", "MAINT", "JANITOR", "TRASH", "FIRE", "SPRINKLER", "UNFINISHED"],
     "minimum_size_in": 0.75,
     "minimum_source": "company default 3/4\" (NEC 358.20(A) allows 1/2\" EMT)",
-    "source": "the specification's wiring-methods table (MasterFormat 26 05 19) by area and use; raceway is EMT (26 05 33) unless the documents name another"
+    "source": "the specification's wiring-methods table (MasterFormat 26 05 19) by area and use; raceway is EMT (26 05 33) unless the documents name another",
+    "limited": {
+      "types": {
+        "FPLP": ["plenum", "riser", "general"], "FPLR": ["riser", "general"], "FPL": ["general"],
+        "CL3P": ["plenum", "riser", "general"], "CL2P": ["plenum", "riser", "general"],
+        "CL3R": ["riser", "general"], "CL2R": ["riser", "general"], "CL3": ["general"], "CL2": ["general"],
+        "CMP": ["plenum", "riser", "general"], "CMR": ["riser", "general"], "CMG": ["general"], "CM": ["general"]
+      },
+      "source": "NEC 760.154 and Table 760.154 (power-limited fire alarm cable), 722.135 (Class 2 and Class 3 cable), 800.113 (communications cable): a cable goes in the spaces its listing allows, a higher listing (plenum, then riser) in place of a lower; these circuits are wired by their own article, not the power wiring-methods table (NEC 760.3, 725.3)",
+      "raceway_source": "NEC 760.154 / 722.135 / 800.113: limited-energy cable is permitted in a raceway of a wiring method of Chapter 3"
+    }
   },
   "firestop": {
     "item": "Firestop system, through-penetration (UL listed)",

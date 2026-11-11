@@ -279,6 +279,20 @@ pub(crate) struct MethodRules {
     pub minimum_size_in: f64,
     pub minimum_source: String,
     pub source: String,
+    /// Limited-energy cable (fire alarm, Class 2/3, communications): outside the power
+    /// wiring-methods table, judged by the spaces its listing allows (Q6535).
+    pub limited: LimitedRules,
+}
+
+/// The limited-energy cable types and the spaces each is listed for (`plenum`, `riser`,
+/// `general`): a higher listing serves in place of a lower one.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct LimitedRules {
+    pub types: BTreeMap<String, Vec<String>>,
+    pub source: String,
+    /// Limited-energy circuits in a raceway: the code's basis.
+    pub raceway_source: String,
 }
 
 impl MethodRules {
