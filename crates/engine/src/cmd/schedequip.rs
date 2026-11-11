@@ -292,15 +292,7 @@ pub(crate) struct Mount {
 /// printed height (feet, when the schedule gives one). None when no row names it: it stands on
 /// the floor.
 pub(crate) fn mounting(kind: &str, words: &str, ceiling_ft: f64, printed_ft: Option<f64>) -> Option<Mount> {
-    let data = super::provenance::rule_data(MOUNT_RULE);
-    let rows: Vec<MountRow> = data.get("mountings").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default();
-    let spaced =
-        |s: &str| format!(" {} ", s.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric() && c != '-').collect::<Vec<_>>().join(" "));
-    let up = spaced(words);
-    let row = rows.iter().take(200).find(|r| {
-        r.kinds.iter().any(|k| k.eq_ignore_ascii_case(kind))
-            && (r.words.is_empty() || r.words.iter().any(|w| !w.trim().is_empty() && up.contains(&spaced(w.trim()))))
-    })?;
+    let row = mount_row(kind, words)?;
     let inches = |v: f64| (v.is_finite() && v > 0.0).then_some(v / 12.0);
     let height_ft = printed_ft.filter(|h| h.is_finite() && *h > 0.0).or_else(|| inches(row.height_in));
     let ceiling = if ceiling_ft.is_finite() && ceiling_ft > 0.0 { ceiling_ft } else { CEILING_FT };
@@ -322,6 +314,26 @@ pub(crate) fn mounting(kind: &str, words: &str, ceiling_ft: f64, printed_ft: Opt
     let rule = super::provenance::rule(MOUNT_RULE);
     let basis = format!("{}: trade practice: {} ({kind}: {said})", rule.id, row.basis);
     Some(Mount { bottom_ft, height_ft, basis })
+}
+
+/// The first row of [`MOUNT_RULE`] naming `kind` whose words (if it has any) `words` has.
+fn mount_row(kind: &str, words: &str) -> Option<MountRow> {
+    let data = super::provenance::rule_data(MOUNT_RULE);
+    let rows: Vec<MountRow> = data.get("mountings").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default();
+    let spaced =
+        |s: &str| format!(" {} ", s.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric() && c != '-').collect::<Vec<_>>().join(" "));
+    let up = spaced(words);
+    rows.into_iter().take(200).find(|r| {
+        r.kinds.iter().any(|k| k.eq_ignore_ascii_case(kind))
+            && (r.words.is_empty() || r.words.iter().any(|w| !w.trim().is_empty() && up.contains(&spaced(w.trim()))))
+    })
+}
+
+/// Whether a unit of `kind` (its schedule's or title's `words`) hangs above the ceiling by
+/// [`MOUNT_RULE`] (a ceiling exhaust fan's housing, a damper in its duct), the same row its
+/// mounting comes from.
+pub(crate) fn hangs_above_ceiling(kind: &str, words: &str) -> bool {
+    mount_row(kind, words).is_some_and(|r| r.at == "above_ceiling")
 }
 
 /// The schedule columns whose words say how a unit is mounted (`TYPE: CEILING`, `MOUNTING: WALL`).

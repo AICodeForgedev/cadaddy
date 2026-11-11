@@ -628,7 +628,7 @@ pub(crate) enum PageImport {
 }
 
 /// How far (relative) a page's scale may be from its plans' before it is read again at theirs.
-const PLAN_SCALE_TOLERANCE: f64 = 0.02;
+pub(crate) const PLAN_SCALE_TOLERANCE: f64 = 0.02;
 
 /// A page read at the scale of one of its views that is no plan (an elevation, a section, a
 /// detail), read again at its plans' scale (Q6396: a roof plan at 1/8" = 1'-0" came in at a
@@ -699,7 +699,7 @@ fn reading_stands(scales: &cadaddy_mepfix::sheet_facts::SheetScales, read_at: f6
 }
 
 /// The scale a DO NOT SCALE sheet's report says it detected ("… scale 96x — sheet kept …").
-fn detected_scale(report: &Value) -> Option<f64> {
+pub(crate) fn detected_scale(report: &Value) -> Option<f64> {
     let src = report.get("scaleSource").and_then(Value::as_str)?;
     let rest = src.get(src.find("scale ")? + 6..)?;
     rest.get(..rest.find('x').unwrap_or(rest.len()))?.trim().parse::<f64>().ok().filter(|k| k.is_finite() && *k > 1.5)

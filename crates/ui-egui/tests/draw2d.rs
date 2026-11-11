@@ -32,12 +32,45 @@ const SIZE: (f32, f32) = (1600.0, 1000.0);
 /// belong to one device (`gpu::install` clears them), so two devices can't draw side by side.
 static ONE_DEVICE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// A headless GPU, or `None` (no adapter: the CPU canvas is measured).
+/// A headless GPU, or `None` (no adapter: the CPU canvas is measured). `DRAW2D_GPU=integrated`
+/// (or `discrete`, or part of an adapter's name; `cpu` for the CPU canvas) picks the adapter,
+/// `DRAW2D_BACKEND` (vulkan, dx12, metal, gl) its backend: a driver may work on one, not another.
 fn render_state() -> Option<egui_wgpu::RenderState> {
-    std::panic::catch_unwind(|| {
-        egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), egui_wgpu::RendererOptions::PREDICTABLE)
-    })
-    .ok()
+    use egui_wgpu::wgpu;
+    let want = std::env::var("DRAW2D_GPU").unwrap_or_default().to_ascii_lowercase();
+    if want == "cpu" || want == "none" {
+        return None;
+    }
+    let backend = std::env::var("DRAW2D_BACKEND").unwrap_or_default().to_ascii_lowercase();
+    if want.is_empty() && backend.is_empty() {
+        return std::panic::catch_unwind(|| {
+            egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), egui_wgpu::RendererOptions::PREDICTABLE)
+        })
+        .ok();
+    }
+    let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    setup.instance_descriptor.backends.remove(wgpu::Backends::BROWSER_WEBGPU);
+    match backend.as_str() {
+        "vulkan" => setup.instance_descriptor.backends = wgpu::Backends::VULKAN,
+        "dx12" => setup.instance_descriptor.backends = wgpu::Backends::DX12,
+        "metal" => setup.instance_descriptor.backends = wgpu::Backends::METAL,
+        "gl" => setup.instance_descriptor.backends = wgpu::Backends::GL,
+        _ => {}
+    }
+    setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters: &[wgpu::Adapter], _| {
+        let pick = |a: &&wgpu::Adapter| {
+            let i = a.get_info();
+            match want.as_str() {
+                "" => true,
+                "integrated" => i.device_type == wgpu::DeviceType::IntegratedGpu,
+                "discrete" => i.device_type == wgpu::DeviceType::DiscreteGpu,
+                name => i.name.to_ascii_lowercase().contains(name),
+            }
+        };
+        adapters.iter().find(pick).cloned().ok_or_else(|| "no such adapter".to_string())
+    }));
+    // A measurement run by hand: no such adapter fails it.
+    Some(egui_kittest::wgpu::create_render_state(egui_wgpu::WgpuSetup::CreateNew(setup), egui_wgpu::RendererOptions::PREDICTABLE))
 }
 
 /// One view's numbers.
@@ -47,6 +80,12 @@ struct Row {
     /// Medians over the measured frames: the app's update, the headless render.
     frame_ms: f64,
     render_ms: f64,
+    /// The same while the view pans a few pixels each frame (inside the list's band and area:
+    /// nothing is rebuilt, but every frame is drawn again; a still view shows its kept frame).
+    pan_frame_ms: f64,
+    pan_render_ms: f64,
+    /// GPU buffer pieces the view's upload made and used again ([`cadaddy_ui_egui::gpu::upload_pieces`]).
+    pieces: (u64, u64),
     /// Share of the canvas's pixels the drawing lights (see [`coverage`]).
     coverage: f64,
 }
@@ -80,7 +119,9 @@ fn ms(t: std::time::Instant) -> f64 {
 
 /// Show `view` and wait for its regeneration, then time `frames` frames.
 fn measure(harness: &mut Harness<'_, CadApp>, name: &'static str, view: View, frames: usize) -> Row {
+    let frames = frames.max(1);
     let before = harness.state().canvas.stats.regen.build_ms.to_bits() ^ harness.state().canvas.stats.regen.prims as u64;
+    let pieces = cadaddy_ui_egui::gpu::upload_pieces();
     assert!(harness.state_mut().session.state_mut().unwrap().set_view(view), "{name}: view refused");
     // A view past a zoom band rebuilds the list (in the background), then draws it; a view the
     // list already serves (the first: the drawing opens zoomed to its extents) doesn't.
@@ -115,7 +156,69 @@ fn measure(harness: &mut Harness<'_, CadApp>, name: &'static str, view: View, fr
     }
     harness.step();
     let report = cadaddy_ui_egui::debug_overlay::draw2d_json(harness.state());
-    Row { view: name, report, frame_ms: median(frame), render_ms: median(render), coverage: lit }
+    let after = cadaddy_ui_egui::gpu::upload_pieces();
+    let pieces = (after.0 - pieces.0, after.1 - pieces.1);
+    // Pan right three points a frame.
+    let (mut pan_frame, mut pan_render) = (Vec::new(), Vec::new());
+    let step = view.height / f64::from(SIZE.1) * 3.0;
+    for i in 1..=frames {
+        let v = View { center: Vec2::new(view.center.x + step * i as f64, view.center.y), height: view.height };
+        assert!(harness.state_mut().session.state_mut().unwrap().set_view(v));
+        let t = std::time::Instant::now();
+        harness.step();
+        pan_frame.push(ms(t));
+        let t = std::time::Instant::now();
+        let _ = harness.render();
+        pan_render.push(ms(t));
+    }
+    assert!(!harness.state().canvas.building(), "{name}: a small pan rebuilt the list");
+    assert!(harness.state_mut().session.state_mut().unwrap().set_view(view));
+    harness.step();
+    let _ = harness.render();
+    Row {
+        view: name,
+        report,
+        frame_ms: median(frame),
+        render_ms: median(render),
+        pan_frame_ms: median(pan_frame),
+        pan_render_ms: median(pan_render),
+        pieces,
+        coverage: lit,
+    }
+}
+
+/// An edit at the room view: one object in view moved a little. Its regeneration (the changed
+/// chunk built again, the vertex data made again on the UI thread and uploaded) and the GPU
+/// buffer pieces the upload made again and reused.
+struct Edit {
+    report: Value,
+    made: u64,
+    reused: u64,
+    ms: f64,
+}
+
+fn edit(harness: &mut Harness<'_, CadApp>, room: Bounds2) -> Edit {
+    let doc = harness.state().session.state().unwrap().doc.clone();
+    let handle = doc
+        .model
+        .iter()
+        .find(|e| matches!(e.kind, cadaddy_engine::doc::EntityKind::Line(_)) && room.contains_box(&cadaddy_engine::doc::entity_bounds(&doc, e, 0)))
+        .map(|e| e.handle)
+        .expect("a line in the room");
+    let before = harness.state().canvas.stats.regen.build_ms.to_bits();
+    let pieces = cadaddy_ui_egui::gpu::upload_pieces();
+    let t = std::time::Instant::now();
+    harness.state_mut().session.execute("move", &serde_json::json!({ "handles": [handle.hex()], "from": [0, 0], "to": [1, 0] })).unwrap();
+    // The edit's frame builds the list and its vertex data; the next uploads them.
+    for _ in 0..3 {
+        harness.step();
+        let _ = harness.render();
+    }
+    let ms = ms(t);
+    assert_ne!(harness.state().canvas.stats.regen.build_ms.to_bits(), before, "the edit rebuilt the list");
+    harness.step();
+    let after = cadaddy_ui_egui::gpu::upload_pieces();
+    Edit { report: cadaddy_ui_egui::debug_overlay::draw2d_json(harness.state()), made: after.0 - pieces.0, reused: after.1 - pieces.1, ms }
 }
 
 fn f(v: &Value) -> f64 {
@@ -134,12 +237,16 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
         "prims",
         "mesh ms",
         "upload ms",
-        "GPU vertices",
+        "GPU pieces made / reused",
+        "GPU vertices drawn / held",
+        "tiles drawn / all",
+        "chunks rebuilt / kept",
         "prims sent / in view",
         "cull ms",
         "canvas ms",
         "app frame ms",
         "render ms",
+        "pan: app frame / render ms",
         "GPU MB",
         "RSS MB",
         "sub-pixel objects + prims / dots / boxes",
@@ -150,8 +257,9 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
     for r in rows {
         let (g, fr, mem) = (&r.report["regen"], &r.report["frame"], &r.report["memory"]);
         let part = |k: &str| format!("{:.0}", f(&g["parts"][k]["ms"]));
+        let n = |v: &Value| v.as_u64().unwrap_or(0);
         println!(
-            "| {} | {} / {} | {:.0} | {} / {} / {} / {} / {} / {} | {} | {:.0} | {:.0} | {} | {} / {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.0} | {} | {} + {} / {} / {} | {:.2} |",
+            "| {} | {} / {} | {:.0} | {} / {} / {} / {} / {} / {} | {} | {:.0} | {:.0} | {} / {} | {} / {} | {} / {} | {} / {} | {} / {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} / {:.1} | {:.0} | {} | {} + {} / {} / {} | {:.2} |",
             r.view,
             g["considered"],
             g["drawn"],
@@ -165,13 +273,22 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
             g["prims"],
             f(&g["meshMs"]),
             f(&g["uploadMs"]).max(f(&fr["uploadMs"])),
+            r.pieces.0,
+            r.pieces.1,
             fr["gpuVertices"],
+            n(&g["lineVertices"]) + n(&g["triVertices"]) + 6 * n(&g["quadInstances"]),
+            fr["tilesDrawn"],
+            g["tiles"],
+            g["chunksRebuilt"],
+            g["chunksKept"],
             fr["primsSent"],
             fr["primsInView"],
             f(&fr["cullMs"]),
             f(&fr["canvasMs"]),
             r.frame_ms,
             r.render_ms,
+            r.pan_frame_ms,
+            r.pan_render_ms,
             f(&mem["gpuBytes"]) / 1e6,
             mem["rssMb"],
             g["simplified"]["dotObjects"],
@@ -185,8 +302,9 @@ fn print(rows: &[Row], sheets: usize, objects: usize) {
         "\nregen = the display list built for the view (on the worker); build cpu = summed over threads; mesh = vertex data; upload = GPU buffers;"
     );
     println!(
-        "cull = finding the primitives in view (the CPU canvas does it each frame, the GPU canvas sends everything); render = egui tessellation + GPU draw + read back."
+        "cull = finding the primitives in view (the CPU canvas does it each frame; the GPU canvas draws the area tiles in view, counted in GPU vertices drawn and prims sent); render = egui tessellation + GPU draw + read back."
     );
+    println!("pan = the view moved three points each frame, so each frame is drawn again (a still view shows the frame kept from before).");
 }
 
 #[test]
@@ -230,13 +348,29 @@ fn a_print_set_reports_where_2d_time_goes() {
         measure(&mut harness, "zoomed out (whole set)", view(ext, 1.05), frames),
         measure(&mut harness, "one sheet", view(sheet, 1.05), frames),
         measure(&mut harness, "one room", view(room, 1.1), frames),
+        // One zoom band further in: the tiles out of view keep their buffers.
+        measure(&mut harness, "one room, zoomed in once more", view(room, 0.5), frames),
     ];
+    let e = edit(&mut harness, room);
     // The whole set again with every object drawn as it is (what the GPU canvas drew before
     // sub-pixel objects were simplified).
     harness.state_mut().canvas.full_detail = true;
     rows.push(measure(&mut harness, "zoomed out, full detail", view(ext, 1.05), frames));
     harness.state_mut().canvas.full_detail = false;
     print(&rows, sheets, objects);
+    let g = &e.report["regen"];
+    println!(
+        "
+edit at the room (one line moved): {:.0} ms over 3 frames; build {:.1} ms, chunks rebuilt {} / kept {}; vertex data {:.0} ms, upload {:.0} ms; GPU pieces made {} / reused {}",
+        e.ms,
+        f(&g["buildMs"]),
+        g["chunksRebuilt"],
+        g["chunksKept"],
+        f(&g["meshMs"]),
+        f(&g["uploadMs"]),
+        e.made,
+        e.reused
+    );
     // What counting costs: the whole set's list at the zoomed-out detail, without and with it.
     let doc = harness.state().session.state().unwrap().doc.clone();
     let px = ext.height() / f64::from(SIZE.1);
@@ -275,7 +409,7 @@ fn a_print_set_reports_where_2d_time_goes() {
     }
     // Zoomed out, objects under a pixel are dots and small ones boxes: far fewer GPU vertices
     // than drawing every object as it is, and the drawing lights as much of the canvas.
-    let (lod, full) = (&rows[0], &rows[3]);
+    let (lod, full) = (&rows[0], &rows[4]);
     let verts = |r: &Row| r.report["frame"]["gpuVertices"].as_u64().unwrap_or(0);
     if rs.is_some() {
         println!(
@@ -300,7 +434,22 @@ fn a_print_set_reports_where_2d_time_goes() {
     }
     // Zoomed in to a room, most of the list is off screen.
     let room_row = &rows[2].report;
-    assert!(room_row["frame"]["primsInView"].as_u64().unwrap_or(0) * 4 < room_row["regen"]["prims"].as_u64().unwrap_or(0), "{room_row}");
+    let n = |v: &Value| v.as_u64().unwrap_or(0);
+    assert!(n(&room_row["frame"]["primsInView"]) * 4 < n(&room_row["regen"]["prims"]), "{room_row}");
+    // On the GPU canvas the frame draws the area tiles around it, not the whole list (Q6472),
+    // and the zoom band that came with it built again only the chunks it reaches.
+    if room_row["renderer"] == "gpu" {
+        let (g, fr) = (&room_row["regen"], &room_row["frame"]);
+        let held = n(&g["lineVertices"]) + n(&g["triVertices"]) + 6 * n(&g["quadInstances"]);
+        assert!(n(&g["tiles"]) > 1 && n(&fr["tilesDrawn"]) < n(&g["tiles"]), "{room_row}");
+        assert!(n(&fr["gpuVertices"]) * 3 < held, "{room_row}");
+        assert!(n(&fr["primsSent"]) * 3 < n(&g["prims"]), "{room_row}");
+    }
+    assert!(n(&room_row["regen"]["chunksKept"]) > 0, "{room_row}");
+    // An edit uploads again only the pieces of the tiles it changed.
+    if room_row["renderer"] == "gpu" {
+        assert!(e.made * 4 < e.reused, "pieces made {} reused {}", e.made, e.reused);
+    }
 }
 
 /// A headless GPU that times the drawing's pass (timestamp queries, where the adapter has them),

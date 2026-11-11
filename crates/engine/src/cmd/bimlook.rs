@@ -473,6 +473,7 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         "stair" => mk("architecture", "Stairs", typed("Stair")),
         "railing" => mk("architecture", "Railings", typed("Railing")),
         "grid" => mk("architecture", "Ceiling Grid", typed("Ceiling Grid")),
+        super::grids::GRID_PART => mk("structure", "Grids", typed("Grid")),
         "room" => mk("architecture", "Rooms", typed("Room")),
         "door" => mk("openings", "Doors", typed("Door")),
         "window" | "glass" => mk("openings", "Windows", typed("Window")),

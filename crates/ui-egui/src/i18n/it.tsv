@@ -3550,3 +3550,4 @@ menu	Modify	Edita
 	= (block=output file)	= (blocco=file di output)
 	* (whole drawing)	* (intero disegno)
 	Requires an integer between 0 and 16.	È richiesto un intero tra 0 e 16.
+	Correct Job Sheet Index	Correggi l'indice delle tavole del lavoro

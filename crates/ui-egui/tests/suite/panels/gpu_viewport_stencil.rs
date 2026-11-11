@@ -47,6 +47,7 @@ fn callback(list: &DisplayList, layer: usize, key: u64, stencil: Stencil) -> Can
         xform: gpu::IDENTITY_XFORM,
         dash: 0.0,
         stencil,
+        cull: None,
         moving: false,
     }
 }
