@@ -1507,6 +1507,10 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         check_missing_trade_plans(sheets, job);
     }
 
+    // Q6516: how each sheet's lettering read (the share drawn as strokes, the words read off
+    // them, how sure).
+    super::strokesheets::lettering_report(job, &mut classified);
+
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
     Ok(classified)
 }
@@ -7714,7 +7718,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     let pages = s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default();
     let sched_pages = s.doc().map(|d| panel_pages(d, job)).unwrap_or_default();
-    let schedules = panel_schedules(&sched_pages);
+    // (and the schedules an answer gave off a sheet lettered in strokes, Q6516)
+    let schedules = super::strokesheets::with_answered_panels(panel_schedules(&sched_pages), super::strokesheets::answered_tables(job).0);
     result["panel_schedule_sheets"] = json!(sched_pages.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
     if schedules.is_empty() {
         no_panel_schedules(job, &sched_pages, &mut result);
@@ -7749,6 +7754,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     bim_step(s, job, "panel schedules", t);
+    // Q6516: the tables of sheets lettered in strokes that read unsure or not at all are asked
+    // for, with their pictures.
+    if let Ok((sp, _)) = super::bspec::current(s, "bim_build") {
+        super::strokesheets::table_questions(job, &sched_pages, &sp.mep.panel_schedules, &sp.mep.fixture_schedule, &mut result);
+    }
     // The electrical gear the plans don't place, from the schedules, the one-line and the gear
     // submittals, in its rooms; the feeders between; the gear checked (entry, lugs) and reviewed.
     let t = web_time::Instant::now();
@@ -17250,6 +17260,8 @@ fn plan_device_tags(job: &GuidedJob) -> BTreeSet<String> {
 fn fixture_schedule_step(s: &mut Session, job: &GuidedJob) -> crate::Result<bool> {
     let (pages, electrical) = fixture_schedule_pages(s.doc()?, job);
     let (types, no_subs) = fixture_schedule(&pages, &|n| electrical.contains(n), &plan_device_tags(job));
+    // (and the types an answer gave off a sheet lettered in strokes, Q6516)
+    let types = super::strokesheets::with_answered_fixtures(types, super::strokesheets::answered_tables(job).1);
     let sheets: BTreeSet<&str> = types.iter().filter_map(|t| t.source.split_whitespace().next()).collect();
     progress_line(&format!(
         "  light fixture schedule: {} types ({}) read from {:?} of {} pages looked at",
@@ -27291,6 +27303,7 @@ fn rerun_stage_of(q: &Question) -> Option<StageName> {
         StageName::Devices if q.question.contains("Unknown symbol") || q.question.starts_with("No device") || q.kind == QuestionKind::Verify => {
             Some(StageName::Devices)
         }
+        StageName::BimBuild if q.question.starts_with(super::strokesheets::TABLE_QUESTION) => Some(StageName::BimBuild),
         _ => None,
     }
 }
@@ -27579,6 +27592,12 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
     }
     if q.stage == StageName::BimBuild && q.question.starts_with(EQUIP_QUESTION) && answer.is_object() {
         return (Some(StageName::BimBuild), "the build checks the drawings against the submittal's data".into());
+    }
+    if q.stage == StageName::BimBuild
+        && let Some(effect) = super::strokesheets::answer_effect(q, answer)
+    {
+        let rerun = super::strokesheets::learned(q, answer).map(|_| StageName::BimBuild);
+        return (rerun, effect);
     }
     if q.stage == StageName::BimBuild && q.question.starts_with(GEAR_QUESTION) && answer.get("height_in").is_some() {
         return (Some(StageName::BimBuild), "the build lays the gear out with its size".into());
@@ -29442,6 +29461,13 @@ pub fn learn_from_answer(job: &mut GuidedJob, q: &Question) {
         && let Some(tag) = q.evidence.as_ref().and_then(|e| e.values.as_ref()).and_then(|v| v.get("equipment")).and_then(Value::as_str)
     {
         job.learn_rule(&format!("equip:{}", tag.to_ascii_uppercase()), &answer.to_string(), &q.id, q.stage);
+    }
+
+    // Tables an agent read off a sheet lettered in strokes (Q6516).
+    if q.stage == StageName::BimBuild
+        && let Some((key, value)) = super::strokesheets::learned(q, answer)
+    {
+        job.learn_rule(&key, &value, &q.id, q.stage);
     }
 
     // Gear sizes an agent read off a drawing.

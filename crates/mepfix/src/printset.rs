@@ -121,6 +121,70 @@ pub struct SheetEntry {
     /// `<number>~2`, `~3` in page order, and the clash is reported. Empty otherwise.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub printed_as: String,
+    /// How the page's lettering read (a PDF page read by [`PrintLoader`]): how much of it is
+    /// drawn as strokes, and how sure the reading of those is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lettering: Option<Lettering>,
+}
+
+/// How a page's lettering read (Q6516): the share of it drawn as strokes (plotted vector text),
+/// the words read off those strokes and how sure that reading is. A page lettered in strokes
+/// with no searchable text under them is read by the stroke OCR alone.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Lettering {
+    /// Share of the page's lettering (characters) drawn as strokes, 0..1.
+    pub stroke_share: f64,
+    /// Share of it read by the OCR alone (no searchable text to confirm it), 0..1.
+    pub ocr_share: f64,
+    /// Words the OCR read off the strokes.
+    pub words: usize,
+    /// The OCR's mean confidence in them, 0..1 (1 when there are none).
+    pub confidence: f64,
+    /// Entries read in ruled table cells, and how many of them read unsure.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cells: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cells_unsure: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// A page whose lettering is at least this share strokes the OCR read alone is lettered in
+/// strokes. (A page lettered in text whose OCR also reads its linework (furniture, symbols)
+/// reads well under it: a real hotel set's plans, 0.8 at most.)
+pub const STROKE_LETTERED: f64 = 0.9;
+/// A stroke-lettered page read less sure than this (the OCR's mean) reads unsure.
+pub const SURE_READING: f64 = 0.8;
+
+impl Lettering {
+    /// The lettering of a page the PDF reader read.
+    pub fn of(ocr: &cadaddy_io::pdf_read::OcrReport) -> Lettering {
+        let all = ocr.text_chars + ocr.stroke_chars;
+        let share = |n: usize| if all == 0 { 0.0 } else { (n as f64 / all as f64 * 1000.0).round() / 1000.0 };
+        let words = ocr.words.iter().map(|w| w.value.split_whitespace().count()).sum();
+        let confidence = if ocr.words.is_empty() { 1.0 } else { (ocr.mean_confidence() * 1000.0).round() / 1000.0 };
+        Lettering {
+            stroke_share: share(ocr.stroke_chars),
+            ocr_share: share(ocr.unconfirmed_chars),
+            words,
+            confidence,
+            cells: ocr.cells,
+            cells_unsure: ocr.cells_low,
+        }
+    }
+
+    /// Whether the page is lettered in strokes the OCR read alone ([`STROKE_LETTERED`]).
+    pub fn in_strokes(&self) -> bool {
+        self.ocr_share >= STROKE_LETTERED
+    }
+
+    /// Whether the page is lettered in strokes and read unsure: its mean confidence under
+    /// [`SURE_READING`], or a tenth of its table cells or more unsure.
+    pub fn unsure(&self) -> bool {
+        self.in_strokes() && (self.confidence < SURE_READING || (self.cells_unsure > 0 && self.cells_unsure * 10 >= self.cells))
+    }
 }
 
 /// A level's elevation as a section or elevation sheet marks it.
@@ -1240,6 +1304,8 @@ pub struct PrintLoader {
     dir: PathBuf,
     /// The files read last, the latest at the end.
     files: std::sync::Mutex<Vec<(String, std::sync::Arc<Vec<u8>>)>>,
+    /// How each PDF page read's lettering read, by (file, page).
+    lettering: std::sync::Mutex<BTreeMap<(String, u32), Lettering>>,
 }
 
 /// Most files [`PrintLoader`] keeps: classify's threads read pages next to each other in the
@@ -1248,7 +1314,7 @@ const MAX_KEPT_FILES: usize = 2 * CLASSIFY_THREADS;
 
 impl PrintLoader {
     pub fn new(dir: &Path) -> PrintLoader {
-        PrintLoader { dir: dir.to_path_buf(), files: std::sync::Mutex::new(Vec::new()) }
+        PrintLoader { dir: dir.to_path_buf(), files: std::sync::Mutex::new(Vec::new()), lettering: std::sync::Mutex::new(BTreeMap::new()) }
     }
 
     /// `e`'s file, read once while it stays among the last ones read (the lock is held while a
@@ -1280,9 +1346,24 @@ impl PrintLoader {
         let bytes = self.bytes(e)?;
         if e.file.to_ascii_lowercase().ends_with(".pdf") {
             let opts = cadaddy_io::pdf_read::PdfOptions { page: e.page.max(1), images: false, markups: false, layout: false, ..Default::default() };
-            return cadaddy_io::pdf_read::read(&bytes, &opts).map(|i| i.drawing).map_err(|err| err.to_string());
+            let read = cadaddy_io::pdf_read::read(&bytes, &opts).map_err(|err| err.to_string())?;
+            if let Ok(mut l) = self.lettering.lock() {
+                l.insert((e.file.clone(), e.page), Lettering::of(&read.ocr));
+            }
+            return Ok(read.drawing);
         }
         cadaddy_io::read(&bytes, &e.file).map_err(|err| err.to_string())
+    }
+
+    /// How the lettering of the PDF pages this loader read did read: each entry of `project`
+    /// read gets its page's.
+    pub fn note_lettering(&self, project: &mut PrintSetProject) {
+        let Ok(l) = self.lettering.lock() else { return };
+        for e in &mut project.sheets {
+            if let Some(read) = l.get(&(e.file.clone(), e.page)) {
+                e.lettering = Some(read.clone());
+            }
+        }
     }
 }
 
@@ -2147,6 +2228,9 @@ pub struct IndexSheet {
     pub superseded: Vec<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub issued: String,
+    /// How its lettering read ([`Lettering`]): a page read off strokes says how sure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lettering: Option<Lettering>,
 }
 
 /// A building level the plans show.
@@ -2293,6 +2377,7 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             sources,
             superseded,
             issued: first.issued.clone(),
+            lettering: first.lettering.clone(),
         });
     }
     // A civil, landscape or site plan is on the site (a datum, no storey of the building), even

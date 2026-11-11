@@ -155,7 +155,9 @@ fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
     let dir = PathBuf::from(&project.source_dir);
     let rec = if !project.source_dir.is_empty() && dir.is_dir() {
         let loader = mep_printset::PrintLoader::new(&dir);
-        mep_printset::run_classify_prints(project, &|e| loader.load(e), cancel, &mut tell)
+        let rec = mep_printset::run_classify_prints(project, &|e| loader.load(e), cancel, &mut tell);
+        loader.note_lettering(project);
+        rec
     } else {
         // A project made without files (from a saved truth): classify what it already holds.
         mep_printset::run_classify(project, None, cancel, &mut tell)

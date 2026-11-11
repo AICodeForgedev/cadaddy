@@ -75,6 +75,10 @@ pub struct PdfOptions {
     /// embedded font subset (like AutoCAD's PDFSHX for its own fonts). Stroke-font text is
     /// always geometry.
     pub text_as_geometry: bool,
+    /// Write stroke-font lettering also as invisible text over its strokes (rendering mode 3),
+    /// so the page can be searched and read (on by default, as PDF plotters do for SHX text).
+    /// Off: the lettering is strokes only, like a plot whose vector text carries no text.
+    pub searchable: bool,
     /// Margins (left, bottom, right, top; mm) of the plot device's paper, bounding the printable
     /// area of a model-space plot. `None` keeps the page setup's (none for model space).
     pub margins: Option<[f64; 4]>,
@@ -115,6 +119,7 @@ impl Default for PdfOptions {
             include_off_layers: false,
             links: Vec::new(),
             text_as_geometry: false,
+            searchable: true,
             margins: None,
             hyperlinks: true,
             plot_transparency: None,
@@ -150,6 +155,8 @@ impl PdfOptions {
             // `layers?` (default on), `offLayers?`, `links?: [{handle, url}]`, `text?: "text" |
             // "geometry"`.
             text_as_geometry: v.get("text").and_then(Value::as_str).is_some_and(|t| t.eq_ignore_ascii_case("geometry")),
+            // `searchable?` (default on): stroke-font lettering also as invisible text.
+            searchable: v.get("searchable").and_then(Value::as_bool).unwrap_or(true),
             layers: v.get("layers").and_then(Value::as_bool).unwrap_or(true),
             include_off_layers: v.get("offLayers").and_then(Value::as_bool).unwrap_or(false),
             links: links_json(v.get("links")),
@@ -1286,7 +1293,7 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         let texts = fonts.texts(&p.list);
         let (mut marks, alphas, images) = content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts);
         // Stroke-font lettering also as invisible text, so the page can be searched and read.
-        let hidden = hidden_words(&p.list, &p.map);
+        let hidden = if o.searchable { hidden_words(&p.list, &p.map) } else { String::new() };
         marks.push_str(&hidden);
         if let Some((stamp, _)) = &p.stamp {
             marks.push_str(stamp);

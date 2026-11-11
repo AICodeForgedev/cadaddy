@@ -23,6 +23,7 @@ mod printlinks;
 mod propfill;
 mod roofreal;
 mod roomtagtext;
+mod strokedlettering;
 mod takeoff_edits;
 mod validatecrops;
 mod validateequip;
