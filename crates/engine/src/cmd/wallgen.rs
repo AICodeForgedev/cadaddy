@@ -329,38 +329,80 @@ fn mesh(tris: &[[[f32; 3]; 3]], to_sheet: &dyn Fn([f32; 3]) -> Vec3) -> Option<M
         v.dedup();
         v.len() >= 3
     });
-    (!faces.is_empty()).then_some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    (!faces.is_empty()).then(|| super::bspec::seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
-/// A floor slab: the floor quad (its top) and its underside `t` lower, closed round the sides.
+/// A floor slab: the floor quad (its top) and its underside `t` lower, closed round the sides:
+/// round its outline only (an edge two of its faces share is inside it, no side), its flat
+/// surfaces' seams hidden.
 fn slab(top: &Mesh, t: f64) -> Mesh {
     let n = top.vertices.len() as u32;
     let mut vertices = top.vertices.clone();
     vertices.extend(top.vertices.iter().map(|v| Vec3::new(v.x, v.y, v.z - t)));
-    let mut faces = top.faces.clone();
+    let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+    for f in &top.faces {
+        for (k, a) in f.v.iter().enumerate() {
+            let b = f.v.get((k + 1) % f.v.len()).copied().unwrap_or(*a);
+            *uses.entry((*a.min(&b), *a.max(&b))).or_default() += 1;
+        }
+    }
+    let mut faces: Vec<MeshFace> = top.faces.iter().map(|f| MeshFace { v: f.v.clone(), hidden: 0 }).collect();
     for f in &top.faces {
         let mut under: Vec<u32> = f.v.iter().map(|i| i + n).collect();
         under.reverse();
         faces.push(MeshFace { v: under, hidden: 0 });
         for (k, a) in f.v.iter().enumerate() {
             let b = f.v.get((k + 1) % f.v.len()).copied().unwrap_or(*a);
-            faces.push(MeshFace { v: vec![b, *a, a + n, b + n], hidden: 0 });
+            if uses.get(&(*a.min(&b), *a.max(&b))).copied().unwrap_or(0) == 1 {
+                faces.push(MeshFace { v: vec![b, *a, a + n, b + n], hidden: 0 });
+            }
         }
     }
-    Mesh { vertices, faces, kind: MeshKind::Polyface }
+    super::bspec::seamless(Mesh { vertices, faces, kind: MeshKind::Polyface })
 }
 
 /// A floor plate's faces at `z`: its rectangles, facing up (`down` facing down: a ceiling).
+/// Only the plate's outline draws: a rectangle's edge that touches no stretch of the boundary is
+/// a seam inside the one flat plate (hidden), even where it meets two other rectangles' edges.
 fn plate_faces(o: &outline::Outline, z: f64, down: bool) -> Mesh {
+    // The boundary's straight runs by line: (runs along x, its y) or (along y, its x).
+    let key = |c: f64| c.is_finite().then(|| (c * 1e3).round() as i64);
+    let mut runs: HashMap<(bool, i64), Vec<(f64, f64)>> = HashMap::new();
+    for (p, q) in &o.edges {
+        let (along_x, at, s0, s1) = if (p.y - q.y).abs() < 1e-9 {
+            (true, p.y, p.x, q.x)
+        } else if (p.x - q.x).abs() < 1e-9 {
+            (false, p.x, p.y, q.y)
+        } else {
+            continue;
+        };
+        if let Some(k) = key(at) {
+            runs.entry((along_x, k)).or_default().push((s0.min(s1), s0.max(s1)));
+        }
+    }
+    let on_boundary = |along_x: bool, at: f64, s0: f64, s1: f64| {
+        let (lo, hi) = (s0.min(s1), s0.max(s1));
+        key(at).and_then(|k| runs.get(&(along_x, k))).is_some_and(|rs| rs.iter().any(|(a, b)| a.max(lo) < b.min(hi) - 1e-6))
+    };
     let mut m = empty_mesh();
     for [a, b] in &o.rects {
         let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
         m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, b.y, z)]);
+        // Its sides in corner order: bottom, right, top, left.
+        let outline = [
+            on_boundary(true, a.y, a.x, b.x),
+            on_boundary(false, b.x, a.y, b.y),
+            on_boundary(true, b.y, a.x, b.x),
+            on_boundary(false, a.x, a.y, b.y),
+        ];
         let mut v = vec![base, base + 1, base + 2, base + 3];
+        // Reversed (facing down), its edge k is side (6 - k) % 4.
+        let side = |k: usize| if down { (6 - k) % 4 } else { k };
         if down {
             v.reverse();
         }
-        m.faces.push(MeshFace { v, hidden: 0 });
+        let hidden = (0..4).filter(|k| !outline.get(side(*k)).copied().unwrap_or(true)).fold(0u64, |h, k| h | 1 << k);
+        m.faces.push(MeshFace { v, hidden });
     }
     m
 }
@@ -370,18 +412,25 @@ fn plate_faces(o: &outline::Outline, z: f64, down: bool) -> Mesh {
 fn plate_slab(o: &outline::Outline, z: f64, t: f64) -> Mesh {
     let mut m = plate_faces(o, z, false);
     if t <= 0.0 {
-        return m;
+        return super::bspec::seamless(m);
     }
     let under = plate_faces(o, z - t, true);
     let n = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
     m.vertices.extend(under.vertices);
     m.faces.extend(under.faces.into_iter().map(|f| MeshFace { v: f.v.iter().map(|i| i.saturating_add(n)).collect(), hidden: 0 }));
+    // The rectangles' edges are seams of one flat top and underside (meeting each other even
+    // where one rectangle's side runs past two others'): the sides round the boundary draw the
+    // outline, so none of the rectangles' own edges draw.
+    for f in &mut m.faces {
+        f.hidden = (1u64 << f.v.len().min(63)) - 1;
+    }
     for (a, b) in &o.edges {
         let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
         m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, a.y, z - t), Vec3::new(b.x, b.y, z - t)]);
         m.faces.push(MeshFace { v: vec![base + 1, base, base + 2, base + 3], hidden: 0 });
     }
-    m
+    // A straight run of the boundary in pieces: the sides' joints along it are seams too.
+    super::bspec::seamless(m)
 }
 
 /// Remove what WALLGEN made from model space; how many objects.
@@ -602,7 +651,7 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
                 xdata.extend(a.tags().into_iter().map(|value| RawTag { code: 1000, value }));
             }
         } else if let Some(o) = plate {
-            m = plate_faces(o, z, true);
+            m = super::bspec::seamless(plate_faces(o, z, true));
         }
         let common = Common { layer: layer_of(grp.part).into(), xdata: xdata.into(), ..Common::default() };
         if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
@@ -4894,6 +4943,49 @@ fn one_door_per_opening(leaves: &mut Vec<Leaf>, tol: f64, same: &mut Vec<(Handle
 
 #[cfg(test)]
 mod tests {
+    /// Q6410: a floor plate tiled in rectangles that meet in a T (one rectangle's side runs past
+    /// two others') draws its outline only, facing up or down, as a sheet or a slab.
+    #[test]
+    fn a_floor_plate_draws_its_outline_not_its_rectangles() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        // A 20 x 20 square: the left half one rectangle, the right half two, meeting in a T at
+        // (10, 10).
+        let rects = vec![[v(0.0, 0.0), v(10.0, 20.0)], [v(10.0, 0.0), v(20.0, 10.0)], [v(10.0, 10.0), v(20.0, 20.0)]];
+        let edges = vec![
+            (v(0.0, 0.0), v(10.0, 0.0)),
+            (v(10.0, 0.0), v(20.0, 0.0)),
+            (v(20.0, 0.0), v(20.0, 10.0)),
+            (v(20.0, 10.0), v(20.0, 20.0)),
+            (v(20.0, 20.0), v(10.0, 20.0)),
+            (v(10.0, 20.0), v(0.0, 20.0)),
+            (v(0.0, 20.0), v(0.0, 0.0)),
+        ];
+        let o = super::outline::Outline { rects, edges };
+        let len = |m: &Mesh| -> f64 {
+            m.edges().iter().filter_map(|(a, b)| Some(m.vertices.get(*a as usize)?.xy().dist(m.vertices.get(*b as usize)?.xy()))).sum()
+        };
+        for down in [false, true] {
+            let m = super::plate_faces(&o, 0.0, down);
+            // The 80 of outline, none of the 40 of seams inside.
+            assert!((len(&m) - 80.0).abs() < 1e-9, "facing down {down}: {} drawn of {:?}", len(&m), m.edges());
+        }
+        // The slab: its top and underside draw nothing of their own; the sides draw the outline
+        // top and bottom and a vertical at each of the 4 corners only.
+        let m = super::plate_slab(&o, 10.0, 1.0);
+        // Where a vertical draws (the two sides meeting at a corner each have one there).
+        let mut verticals: Vec<(i64, i64)> = m
+            .edges()
+            .iter()
+            .filter_map(|(a, b)| Some((m.vertices.get(*a as usize)?.xy(), m.vertices.get(*b as usize)?.xy())))
+            .filter(|(p, q)| p.dist(*q) < 1e-9)
+            .map(|(p, _)| ((p.x * 1e3).round() as i64, (p.y * 1e3).round() as i64))
+            .collect();
+        verticals.sort_unstable();
+        verticals.dedup();
+        let verticals = verticals.len();
+        assert!((len(&m) - 160.0).abs() < 1e-9 && verticals == 4, "{} drawn, {verticals} verticals", len(&m));
+    }
+
     fn line_pair(a: [f64; 2], b: [f64; 2], thickness: f64) -> crate::cmd::perceive::geometry::Pair {
         let (c0, c1) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
         crate::cmd::perceive::geometry::Pair { layer: "0".into(), c0, c1, thickness, length: c0.dist(c1), confidence: 1.0, faces: [0, 1] }

@@ -258,9 +258,17 @@ fn bom_carries_ceilings_soffits_and_head_track_once() {
     assert_eq!(sum(&|i| i == "Slotted deflection track"), 80.0, "{b:#}");
     assert_eq!(sum(&|i| i == "Bottom track"), 80.0, "{b:#}");
     // Every wall's track once: 40' + 40' + 24' + 24' walls, a top and a bottom run each; the unmarked
-    // 24' walls keep the plain track.
-    assert_eq!(sum(&|i| i == "Track"), 2.0 * 48.0, "{b:#}");
-    let track = sum(&|i| i.ends_with("track") || i == "Track");
+    // 24' walls keep the plain track, now the model's track pieces (Q6527: the framing trade's).
+    let plain: f64 = b["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["trade"] == "framing" && l["category"] == "track")
+        .map(|l| l["net"].as_f64().unwrap())
+        .sum();
+    assert_eq!(plain, 2.0 * 48.0, "{b:#}");
+    assert_eq!(sum(&|i| i == "Track"), 0.0, "no wall-type formula track beside the pieces: {b:#}");
+    let track = sum(&|i| i.ends_with("track")) + plain;
     assert_eq!(track, 2.0 * (40.0 + 40.0 + 24.0 + 24.0), "{b:#}");
 
     // drywall.takeoff carries the same: head track by kind in the rows, ceilings beside them.

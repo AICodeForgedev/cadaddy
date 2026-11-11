@@ -1065,6 +1065,8 @@ fn add_source(
                 made: Made::Drawn,
                 basis: String::new(),
                 corrections: Vec::new(),
+                tag: String::new(),
+                cfm: None,
             });
         }
         for p in &page.pipes {

@@ -283,6 +283,15 @@ fn a_cost_db_prices_labor_in_dollars_and_shows_the_hours() {
     assert!((emt["labor_dollars"].as_f64().unwrap_or(0.0) - 2.6 * qty).abs() < 0.02, "{emt}");
     assert!((emt["labor_hours"].as_f64().unwrap_or(0.0) - 2.6 * qty / 65.0).abs() < 0.002, "{emt}");
     assert!(emt["labor_basis"].as_str().is_some_and(|b| b.contains("dollars") && b.contains("65")), "{emt}");
+    // Q6530: no rate in the call or the cost DB: the project's crew rate (estimate.settings).
+    s.execute("estimate.settings", &json!({"crew_rate": 52.0})).expect("crew rate");
+    let t = s.execute("conduit.takeoff", &json!({"cost_db": db.to_string_lossy()})).expect("takeoff");
+    let emt = t["lines"]
+        .as_array()
+        .and_then(|a| a.iter().find(|l| l["kind"] == json!("conduit") && l["size"] == json!("3/4\"")).cloned())
+        .unwrap_or_default();
+    assert!((emt["labor_hours"].as_f64().unwrap_or(0.0) - 2.6 * qty / 52.0).abs() < 0.002, "{emt}");
+    assert!(emt["labor_basis"].as_str().is_some_and(|b| b.contains("52")), "{emt}");
     assert!(s.execute("conduit.takeoff", &json!({"cost_db": dir.join("missing.csv").to_string_lossy()})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
