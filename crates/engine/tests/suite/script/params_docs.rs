@@ -340,6 +340,8 @@ fn the_commands_with_open_parameters_are_these() {
         "options",
         "measuregeom",
         "wedge",
+        // keyed by sheet number: {"<number>": {type?, level?, …}} (Q6517)
+        "job.sheets.set",
     ];
     assert_eq!(open, expected, "open parameter docs changed");
     // A range (`1..255`) or a lone `<` doesn't open a doc: COLOR, UNITS and IMAGEADJUST are strict.

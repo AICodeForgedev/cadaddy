@@ -101,6 +101,22 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
     bounds_in(d, e, depth, &mut HashMap::new())
 }
 
+/// The union of [`entity_bounds`] of top-level objects `es`, each block's contents measured once
+/// for all of them (a run of references to the same symbol costs one pass over its definition).
+pub fn entities_bounds<'a>(d: &'a Drawing, es: impl IntoIterator<Item = &'a Entity>) -> Bounds2 {
+    let mut blocks = HashMap::new();
+    let mut out = Bounds2::EMPTY;
+    for e in es {
+        let b = match d.anno_draw(e) {
+            crate::AnnoDraw::Plain => bounds_in(d, e, 0, &mut blocks),
+            crate::AnnoDraw::Hidden => Bounds2::EMPTY,
+            crate::AnnoDraw::Scaled(f) => bounds_in(d, &crate::anno_scaled(e, f), 0, &mut HashMap::new()),
+        };
+        out = out.union(&b);
+    }
+    out
+}
+
 /// [`entity_bounds`] with the bounds of block contents (in block coordinates) already computed,
 /// by block name and depth: every further reference to a block at that depth reuses them instead of
 /// expanding the block again, so nested or self-referencing blocks cost at most one pass over each

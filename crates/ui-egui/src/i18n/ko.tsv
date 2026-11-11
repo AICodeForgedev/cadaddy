@@ -3477,3 +3477,4 @@ menu	Modify	수정
 	= (block=output file)	= (블록=출력 파일)
 	* (whole drawing)	* (전체 도면)
 	Requires an integer between 0 and 16.	0에서 16 사이의 정수가 필요합니다.
+	Correct Job Sheet Index	작업 도면 목록 수정

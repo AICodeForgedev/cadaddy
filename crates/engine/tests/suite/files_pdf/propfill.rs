@@ -1147,3 +1147,102 @@ fn a_casework_luminaire_takes_its_details_height_and_is_never_hung_from_the_ceil
     assert_eq!(x4["mount_height"]["value"], json!(54.0), "the rules' casework height, not the ceiling: {x4:#}");
     assert_eq!(x4["mount_height"]["source"]["kind"], "default", "never presented as read: {x4:#}");
 }
+
+/// Office 101 under a 7'-11" ceiling and storage 102 under a 9'-0" one, a ceiling exhaust fan in
+/// each at its ceiling, and each fan's connection as the job leaves it: at the fan in plan, at
+/// the one height (`96`) the job fixed when it read it.
+fn fans_and_connections(s: &mut Session, ceilings: [f64; 2], fan_x: [f64; 2]) {
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    spec["rooms"] = json!([
+        {"name": "OFFICE", "number": "101", "level": "L1", "ceiling_ft": ceilings[0] / 12.0, "ceiling_source": "room RCP: test"},
+        {"name": "STORAGE", "number": "102", "level": "L1", "ceiling_ft": ceilings[1] / 12.0, "ceiling_source": "room RCP: test"}
+    ]);
+    let fan = |tag: &str, x: f64, bottom_in: f64| {
+        json!({"tag": tag, "kind": "exhaust_fan", "level": "L1", "min": [x, 50.0], "max": [x + 12.0, 62.0], "bottom_ft": bottom_in / 12.0,
+               "height_ft": 10.0 / 12.0, "title": "EXHAUST FAN", "systems": ["EA"], "sources": {"sheet": "M-101"}})
+    };
+    let eq = spec["mep"]["equipment"].as_array_mut().expect("equipment");
+    eq.retain(|e| e["kind"] != "exhaust_fan");
+    eq.push(fan("EF", fan_x[0], ceilings[0]));
+    eq.push(fan("EF", fan_x[1], ceilings[1]));
+    let tags = spec["tags"].as_array_mut().expect("tags");
+    tags.retain(|t| t["kind"] != "equipment_connection");
+    for (x, sym) in [(fan_x[0] + 6.0, "1E0"), (fan_x[1] + 6.0, "1E1")] {
+        let mut c = device(x / 12.0, 56.0 / 12.0, "EF", "LP1-7", sym);
+        c["kind"] = json!("equipment_connection");
+        c["fields"]["mount_height_in"] = json!({"value": "96", "source": "note"});
+        c["fields"]["mount_height_note"] = json!({"value": "connection to EF in the room's ceiling (M-101)", "source": "note"});
+        tags.push(c);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+}
+
+/// Each fan connection's box (bottom and top inches over the floor) and plan middle (inches), by
+/// its plan x.
+fn connections(s: &mut Session) -> Vec<(f64, f64, [f64; 2], Value)> {
+    let mut out: Vec<(f64, f64, [f64; 2], Value)> = find(s, "device", json!({"type_mark": "EF"}))
+        .iter()
+        .map(|h| {
+            let p = get(s, h);
+            let mid = p["mount_height"]["value"].as_f64().unwrap_or_else(|| panic!("height: {p:#}"));
+            let loc: Vec<f64> = p["location"]["value"].as_str().unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect();
+            let (x, y) = (loc.first().copied().unwrap_or(f64::NAN), loc.get(1).copied().unwrap_or(f64::NAN));
+            (mid - 2.0, mid + 2.0, [x * 12.0, y * 12.0], p)
+        })
+        .collect();
+    out.sort_by(|a, b| a.2[0].total_cmp(&b.2[0]));
+    out
+}
+
+/// The ceiling built over a plan point (inches over the floor): a luminaire hung there.
+fn ceiling_at(s: &mut Session, x_ft: f64, sym: &str) -> f64 {
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    let mut lum = device(x_ft, 3.0, "QX", "", sym);
+    lum["fields"]["mount"] = json!({"value": "ceiling", "source": "submittal"});
+    spec["tags"].as_array_mut().expect("tags").push(lum);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let q = device_of(s, "QX");
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    spec["tags"].as_array_mut().expect("tags").retain(|t| t["fields"]["type"]["value"] != "QX");
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    q["mount_height"]["value"].as_f64().unwrap_or_else(|| panic!("{q:#}"))
+}
+
+#[test]
+fn a_ceiling_fans_connection_is_above_the_ceiling_at_its_fan_and_follows_it() {
+    let _g = serial();
+    let mut s = plan();
+    fans_and_connections(&mut s, [95.0, 108.0], [100.0, 460.0]);
+    // The rooms' ceilings as built (what a connection must be above).
+    let built = [ceiling_at(&mut s, 106.0 / 12.0, "1E8"), ceiling_at(&mut s, 466.0 / 12.0, "1E9")];
+    assert_eq!(built, [95.0, 108.0], "the rooms' own ceilings are built");
+    s.execute("model.build", &json!({})).expect("build");
+    let check = |got: &[(f64, f64, [f64; 2], Value)], ceilings: [f64; 2], fan_x: [f64; 2]| {
+        assert_eq!(got.len(), 2, "{got:?}");
+        for ((bottom, top, at, p), (ceiling, x)) in got.iter().zip(ceilings.iter().zip(fan_x)) {
+            // On the hidden side of the ceiling, at its fan's housing (10" tall from the ceiling).
+            assert!(*bottom >= *ceiling, "above the {ceiling} in ceiling, not exposed under it: {bottom} to {top}: {p:#}");
+            assert!(*bottom <= ceiling + 10.0 && *top >= *ceiling, "beside the housing's height: {bottom} to {top}: {p:#}");
+            let off = Vec2::new(at[0].clamp(x, x + 12.0), at[1].clamp(50.0, 62.0)).dist(Vec2::new(at[0], at[1]));
+            assert!(off <= 12.0, "within 12 in of its fan in plan: {off} in at {at:?}: {p:#}");
+            assert_eq!(p["mount_height_from"]["value"], "equipment", "{p:#}");
+            assert!(
+                p["mount_height"]["source"]["doc"].as_str().is_some_and(|d| d.contains("E-CONN-CEILING-EQUIP"))
+                    || p["mount_height"]["note"].as_str().is_some_and(|n| n.contains("E-CONN-CEILING-EQUIP")),
+                "the rule its basis: {p:#}"
+            );
+            // The job's fixed height kept as the design value beside the built one.
+            assert_eq!(p["design:mount_height"]["value"], json!("96"), "{p:#}");
+            assert!(p["correction:mount_height"]["value"].as_str().is_some_and(|w| w.contains("E-CONN-CEILING-EQUIP")), "{p:#}");
+        }
+    };
+    let got = connections(&mut s);
+    check(&got, [95.0, 108.0], [100.0, 460.0]);
+    // The ceiling of 102 raised and the office's fan moved: each connection follows on the next build.
+    fans_and_connections(&mut s, [95.0, 117.0], [130.0, 460.0]);
+    let moved = connections(&mut s);
+    check(&moved, [95.0, 117.0], [130.0, 460.0]);
+    assert!(moved[1].0 > got[1].0 + 8.0 && moved[0].2[0] > got[0].2[0] + 20.0, "{got:?} {moved:?}");
+}

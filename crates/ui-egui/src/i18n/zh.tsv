@@ -3552,3 +3552,4 @@
 	= (block=output file)	= (块=输出文件)
 	* (whole drawing)	* (整个图形)
 	Requires an integer between 0 and 16.	需要 0 到 16 之间的整数。
+	Correct Job Sheet Index	更正作业图纸索引

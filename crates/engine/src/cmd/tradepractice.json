@@ -333,6 +333,15 @@
       "trade": "electrical",
       "fills": "where an equipment connection goes when its plan's mark names a piece of equipment built on another level or elsewhere (a roof unit's circuit tagged on a plan under it)",
       "basis": "trade practice: an equipment connection is made at its equipment (its disconnect or junction box on the unit, at the unit's side half way up); a mark naming the unit follows the unit, never the room under it"
+    },
+    {
+      "id": "E-CONN-CEILING-EQUIP",
+      "trade": "electrical",
+      "fills": "where the connection of a piece of ceiling equipment is built (a ceiling exhaust fan's, an above-ceiling unit's), every time the model is built: at the housing of the equipment it serves, as the equipment and the ceiling over it stand then, never at a height fixed earlier (numbers: reach_ft, how far from where its plan puts the connection its equipment may be; tolerance_in, how far from its housing a connection may be and still be at it; clear_in, how far above the ceiling's underside the box's bottom is at least, over the ceiling board)",
+      "basis": "trade practice: the connection of ceiling equipment is made at the equipment's wiring compartment on its housing, above the ceiling in the plenum (NEC 314.29: the box stays accessible, through the equipment or the ceiling; NEC 300.11: wiring above a ceiling is supported there, not by the ceiling), never hung exposed under the finished ceiling nor standing off the housing it serves",
+      "reach_ft": 15.0,
+      "tolerance_in": 12.0,
+      "clear_in": 1.0
     }
   ]
 }

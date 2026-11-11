@@ -3515,6 +3515,29 @@
     "MEZZ PLAN"
    ]
   },
+  "sheets.not_floor_plan_title_words": {
+   "source": "An architectural plan title that names another kind of plan than the level's floor plan: a level shown only by these is not built from them (Q6517). (drafting convention: general, no job's title)",
+   "words": [
+    "FINISH",
+    "FINISHES",
+    "FURNITURE",
+    "FURNISHING",
+    "FURNISHINGS",
+    "SIGNAGE",
+    "LIFE SAFETY",
+    "CODE",
+    "EGRESS",
+    "DEMOLITION",
+    "DEMO",
+    "KEY PLAN",
+    "EQUIPMENT PLAN",
+    "REFLECTED CEILING",
+    "CEILING PLAN",
+    "RCP",
+    "ROOF PLAN",
+    "FLOOR PATTERN"
+   ]
+  },
   "sheets.import_discipline_prefix": {
    "source": "Known discipline prefixes: sheet number prefix → discipline code. (drafting convention: the sheet-number letters of a discipline, as the import check reads them; moved from import_check.rs `DISCIPLINE_PREFIX`)",
    "pairs": [

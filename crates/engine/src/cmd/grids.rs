@@ -60,6 +60,9 @@ struct Grid {
     a: Vec2,
     b: Vec2,
     bubble: Vec2,
+    /// Its line is drawn (a line or polyline run from its bubble); else laid across its row of
+    /// bubbles (a dashed grid's pieces too short to be its line).
+    drawn: bool,
 }
 
 /// A grid label: 1–4 letters, digits and dots (`A`, `12`, `C.1`, `AA`).
@@ -414,8 +417,9 @@ fn grids_with(d: &Drawing, ents: &[&Arc<Entity>], k: f64, placing: bool, one_flo
         };
         // The row of bubbles first (a wall or leader passing a bubble is no grid), its own line
         // for a bubble alone.
-        let line = if placing { from_row().or(touching.copied()) } else { touching.copied().or_else(from_row) };
-        let Some((a, b)) = line else { continue };
+        let (row, drawn) = (if placing { from_row() } else { None }, touching.copied());
+        let line = row.map(|l| (l, false)).or(drawn.map(|l| (l, true))).or_else(|| from_row().map(|l| (l, false)));
+        let Some(((a, b), drawn)) = line else { continue };
         // From the bubble end to the far end.
         let (a, b) = if a.dist(o) <= b.dist(o) { (a, b) } else { (b, a) };
         // Placing, a grid runs across the whole plan: a dashed one's first piece is only its direction.
@@ -429,9 +433,10 @@ fn grids_with(d: &Drawing, ents: &[&Arc<Entity>], k: f64, placing: bool, one_flo
             let (lo, hi) = [(a - a0).dot(u), (b - a0).dot(u)].iter().fold((0.0_f64, len), |(lo, hi), t| (lo.min(*t), hi.max(*t)));
             g.a = a0 + u * lo;
             g.b = a0 + u * hi;
+            g.drawn |= drawn;
             continue;
         }
-        out.push(Grid { label, a, b, bubble: o });
+        out.push(Grid { label, a, b, bubble: o, drawn });
         if out.len() >= MAX_ITEMS {
             break;
         }
@@ -1046,6 +1051,286 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     n
 }
 
+/// The build part of a structural grid line (`bim.tree`: Structure ▸ Grids; IFC: an axis of the
+/// storey's `IfcGrid`). Not `grid`: that is a ceiling grid.
+pub const GRID_PART: &str = "structural-grid";
+/// The layer the built grid lines are on.
+const GRID_LAYER: &str = "3D-Grids";
+
+/// The building's structural grid as `model.build` builds it: the level whose plan it was read
+/// from, its lines (label, from, to, plan coordinates) and the sheets read.
+#[derive(Debug, Default)]
+pub(crate) struct BuiltGrid {
+    pub level: String,
+    pub lines: Vec<(String, Vec2, Vec2)>,
+    pub plan: Vec<String>,
+}
+
+impl BuiltGrid {
+    pub(crate) fn to_json(&self) -> Value {
+        if self.lines.is_empty() {
+            return json!({ "lines": 0 });
+        }
+        let mut v = json!({
+            "level": self.level,
+            "lines": self.lines.len(),
+            "labels": self.lines.iter().map(|l| l.0.clone()).collect::<Vec<_>>(),
+        });
+        if !self.plan.is_empty() {
+            v["plan"] = json!(self.plan);
+        }
+        v
+    }
+}
+
+/// The part of the segment `a`–`b` inside the box `lo`–`hi` (Liang–Barsky); none when it misses.
+fn clip(a: Vec2, b: Vec2, lo: Vec2, hi: Vec2) -> Option<(Vec2, Vec2)> {
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (p, q) in [(-d.x, a.x - lo.x), (d.x, hi.x - a.x), (-d.y, a.y - lo.y), (d.y, hi.y - a.y)] {
+        if p.abs() < 1e-12 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            t0 = t0.max(t);
+        } else {
+            t1 = t1.min(t);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some((a + d * t0, a + d * t1))
+}
+
+/// A label a structural grid carries: a number (`1`–`999`), a letter (not `I` or `O`, which
+/// grids skip), a doubled letter (`AA`), or a grid between two of those (`C.8`, `4.5`). A sheet
+/// reference in a callout bubble (`Q901`), a room number with a letter (`250C`) or a tag (`T7`)
+/// is not one.
+fn model_grid_label(label: &str) -> bool {
+    let l = label.trim().to_ascii_uppercase();
+    let (head, tail) = match l.split_once('.') {
+        Some((h, t)) => (h, Some(t)),
+        None => (l.as_str(), None),
+    };
+    let digits = |t: &str, n: usize| !t.is_empty() && t.len() <= n && t.bytes().all(|b| b.is_ascii_digit());
+    let letters = match head.as_bytes() {
+        [c] => c.is_ascii_uppercase() && *c != b'I' && *c != b'O',
+        [a, b] => a.is_ascii_uppercase() && a == b,
+        _ => false,
+    };
+    (letters || digits(head, 3)) && tail.is_none_or(|t| digits(t, 2))
+}
+
+/// Whether bubble `b` stands in a row of grid bubbles of its family (numbers, or letters): on one
+/// line across or down, at least three different grid labels of it in sequence (`A B C`), at
+/// least three quarters of the row's labels different. A label the drawing repeats in the row
+/// (a misread letter) doesn't break it, as it does [`grid_bubbles`]'s row; a corridor's
+/// alternating marks (`E G E G`) are still no row.
+fn in_grid_row(all: &[Bubble], b: &Bubble) -> bool {
+    let family = |l: &str| l.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let row = |same: &dyn Fn(&Bubble) -> bool, along: &dyn Fn(Vec2) -> f64| {
+        let mut row: Vec<(f64, String)> = all
+            .iter()
+            .filter(|o| same(o) && family(&o.label) == family(&b.label) && model_grid_label(&o.label))
+            .map(|o| (along(o.at), o.label.to_ascii_uppercase()))
+            .take(MAX_ITEMS)
+            .collect();
+        let distinct: std::collections::BTreeSet<&str> = row.iter().map(|(_, l)| l.as_str()).collect();
+        if distinct.len() < 3 || (distinct.len() as f64) < 0.75 * row.len() as f64 {
+            return false;
+        }
+        row.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let mut ords: Vec<i64> = row.iter().filter_map(|(_, l)| grid_ordinal(l)).collect();
+        ords.dedup();
+        ords.windows(3).any(|w| {
+            let (d1, d2) = (w[1] - w[0], w[2] - w[1]);
+            d1 == d2 && d1.abs() == 1
+        })
+    };
+    row(&|o: &Bubble| (o.at.x - b.at.x).abs() <= 0.5 * b.r, &|p: Vec2| p.y) || row(&|o: &Bubble| (o.at.y - b.at.y).abs() <= 0.5 * b.r, &|p: Vec2| p.x)
+}
+
+/// The structural grid one plan shows: its grids ([`grids_with`]) that carry a grid's
+/// label and have a grid bubble on their line (a line ends at it through its centre, or it stands
+/// in a row of its family: [`grid_bubbles`], [`in_grid_row`]), each label once (its longest
+/// line), each line laid across a row of bubbles cut to the grid's extent.
+fn plan_grid(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Grid> {
+    let all = bubbles(d, ents, k);
+    let mut ok: Vec<(Vec2, f64, String)> = grid_bubbles(d, ents, k, false).into_iter().filter(|b| model_grid_label(&b.2)).collect();
+    for b in all.iter().filter(|b| model_grid_label(&b.label)) {
+        if ok.len() < MAX_ITEMS && !ok.iter().any(|(at, _, l)| l == &b.label && at.dist(b.at) <= 0.5 * b.r) && in_grid_row(&all, b) {
+            ok.push((b.at, b.r, b.label.clone()));
+        }
+    }
+    // A grid bubble of its label on the grid's line (at either end).
+    let on_line = |g: &Grid| {
+        let (u, len) = (g.b - g.a, g.a.dist(g.b));
+        ok.iter().any(|(at, r, l)| {
+            l.eq_ignore_ascii_case(&g.label) && len > 1e-9 && u.cross(*at - g.a).abs() / len <= *r && {
+                let t = u.dot(*at - g.a) / len;
+                t >= -2.0 * r && t <= len + 2.0 * r
+            }
+        })
+    };
+    let mut one: Vec<Grid> = Vec::new();
+    // Every bubble (a label on more than both ends of a line, as a keynote's or a tag's number
+    // repeats it, is checked by its own bubbles, not dropped): a drawn line first, then the longest.
+    for g in grids_with(d, ents, k, false, false) {
+        if !model_grid_label(&g.label) || !on_line(&g) {
+            continue;
+        }
+        match one.iter_mut().find(|o| o.label.eq_ignore_ascii_case(&g.label)) {
+            Some(o) if (o.drawn, o.a.dist(o.b)) < (g.drawn, g.a.dist(g.b)) => *o = g,
+            Some(_) => {}
+            None => one.push(g),
+        }
+    }
+    if one.len() < 2 {
+        return Vec::new();
+    }
+    // The grid's extent: its bubbles and drawn lines, and a bubble's size round them. A line
+    // laid across a row of bubbles is cut to it; a drawn line is kept as drawn.
+    let extent = cadaddy_geom::Bounds2::from_points(one.iter().flat_map(|g| {
+        let line = g.drawn.then_some([g.a, g.b]);
+        std::iter::once(g.bubble).chain(line.into_iter().flatten())
+    }));
+    let pad = 24.0 * k;
+    let (lo, hi) = (extent.min - Vec2::new(pad, pad), extent.max + Vec2::new(pad, pad));
+    one.into_iter()
+        .filter_map(|g| {
+            let (a, b) = if g.drawn { (g.a, g.b) } else { clip(g.a, g.b, lo, hi)? };
+            (a.dist(b) >= 120.0 * k).then_some(Grid { a, b, ..g })
+        })
+        .collect()
+}
+
+/// How good a plan's grid is as the building's: lines both ways first, then how many.
+fn grid_score(gs: &[Grid]) -> (bool, usize) {
+    let Some(first) = gs.first() else { return (false, 0) };
+    let u = first.b - first.a;
+    let across = gs.iter().any(|g| {
+        let v = g.b - g.a;
+        u.cross(v).abs() > 0.17 * u.len() * v.len()
+    });
+    (across, gs.len())
+}
+
+/// The box of the walls built on each level (before the levels are stacked), by level name.
+fn built_walls(d: &Drawing) -> Vec<(String, cadaddy_geom::Bounds2)> {
+    let mut out: Vec<(String, cadaddy_geom::Bounds2)> = Vec::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall")) {
+        let Some(level) = super::bspec::made_level(e) else { continue };
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        if b.is_empty() {
+            continue;
+        }
+        if let Some(x) = out.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(&level)) {
+            x.1 = x.1.union(&b);
+        } else if out.len() < MAX_ITEMS {
+            out.push((level, b));
+        }
+    }
+    out
+}
+
+/// The building's one structural grid: read from the lowest storey drawn in this drawing whose
+/// architectural plan shows at least two grids, on the plan its walls are built from (the grid
+/// is in the model's coordinates). Each of the storey's architectural plan sheets (as the set's
+/// sheet links place them: its floor plan, its enlarged plans, each repeating part of the grid)
+/// that holds the middle of its built walls is read alone, and the one with the best grid
+/// ([`grid_score`]) is the reference; a sheet elsewhere in the set (an enlarged plan, another
+/// wing's plan) is not, whatever its grid. A storey without links, or with no walls built, is
+/// read from its region (as `levels.align` reads it).
+fn reference_grid(d: &Drawing, sp: &BuildingSpec) -> Option<(String, Vec<Grid>, Vec<String>)> {
+    let k = units_per_inch(d);
+    let all = plan_objects(d);
+    let walls = built_walls(d);
+    let mut centres: Option<Vec<Option<Vec2>>> = None;
+    let mut here: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
+    here.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+    for l in here.into_iter().take(MAX_ITEMS) {
+        let (mut own, _) = plan_rects(sp, &l.name, l.region, PLAN_DISCIPLINE);
+        own.dedup_by(|a, b| a.0 == b.0);
+        // Round its built walls: the walls' box and as much again round it, 40' at least (a grid's
+        // bubbles stand off the building).
+        let near = walls.iter().find(|(n, _)| n.eq_ignore_ascii_case(&l.name)).map(|(_, w)| {
+            let pad = (0.5 * w.width().max(w.height())).max(480.0 * k);
+            own.retain(|(r, _)| holds(r, w.center()));
+            [w.min.x - pad, w.min.y - pad, w.max.x + pad, w.max.y + pad]
+        });
+        let mut best: Option<(Vec<Grid>, Vec<String>)> = None;
+        let mut consider = |gs: Vec<Grid>, plan: Vec<String>| {
+            if gs.len() >= 2 && best.as_ref().is_none_or(|(b, _)| grid_score(&gs) > grid_score(b)) {
+                best = Some((gs, plan));
+            }
+        };
+        if own.is_empty() {
+            let (mut mine, plan) = level_objects(d, sp, l, &all, PLAN_DISCIPLINE);
+            if let Some(r) = &near {
+                mine.retain(|e| {
+                    let b = cadaddy_doc::entity_bounds(d, e, 0);
+                    !b.is_empty() && holds(r, b.center())
+                });
+            }
+            consider(plan_grid(d, &mine, k), plan);
+        } else {
+            let cs = centres.get_or_insert_with(|| {
+                all.iter()
+                    .map(|e| {
+                        let b = cadaddy_doc::entity_bounds(d, e, 0);
+                        (!b.is_empty()).then(|| b.center())
+                    })
+                    .collect()
+            });
+            for (r, number) in own.iter().take(MAX_ITEMS) {
+                let mine: Vec<&Arc<Entity>> = all.iter().zip(cs.iter()).filter(|(_, c)| c.is_some_and(|c| holds(r, c))).map(|(e, _)| *e).collect();
+                consider(plan_grid(d, &mine, k), vec![number.clone()]);
+            }
+        }
+        if let Some((gs, plan)) = best {
+            return Some((l.name.clone(), gs, plan));
+        }
+    }
+    None
+}
+
+/// The building's structural grid into model space (Q6407): each grid line a model element on its
+/// level's floor, labelled, drawn (read from the plan's bubbles and lines), so the model tree,
+/// views and IFC export (`IfcGrid`) hold it. `model.build` stacks it with its level and copies it
+/// to every building the plan stands for.
+pub(crate) fn build_grid(d: &mut Drawing, sp: &BuildingSpec) -> BuiltGrid {
+    let Some((level, lines, plan)) = reference_grid(d, sp) else { return BuiltGrid::default() };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let z = sp.level(&level).map_or(0.0, |l| l.elevation_ft * upf);
+    if d.layer(GRID_LAYER).is_none() {
+        d.layers.push(cadaddy_doc::Layer { name: GRID_LAYER.into(), color: cadaddy_doc::color::Color::Index(8), ..cadaddy_doc::Layer::default() });
+    }
+    let mut out = BuiltGrid { level: level.clone(), lines: Vec::new(), plan };
+    for g in lines.iter().take(MAX_ITEMS) {
+        let t = |code: i32, v: String| RawTag { code, value: v };
+        let label: String = g.label.trim().chars().take(16).collect();
+        let mut xdata = vec![
+            t(1001, super::wallgen::APP.into()),
+            t(1000, GRID_PART.into()),
+            t(1000, level.chars().take(255).collect()),
+            t(1000, String::new()),
+            t(1000, format!("grid:{label}")),
+            t(1000, format!("type:Grid {label}")),
+        ];
+        xdata.extend(super::provenance::tags(cadaddy_walk3d::Made::Drawn, ""));
+        let kind = EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(g.a.x, g.a.y, z), b: cadaddy_geom::Vec3::new(g.b.x, g.b.y, z) });
+        if d.add(&Space::Model, Common { layer: GRID_LAYER.into(), xdata: xdata.into(), ..Common::default() }, kind).is_ok() {
+            out.lines.push((label, g.a, g.b));
+        }
+    }
+    out
+}
+
 /// Grid intersections per level (on its architectural plan) and per sheet, to put a point of an
 /// enlarged or partial plan onto its level's plan by the grid lines its view shows (a view of an
 /// enlarged sheet shares no room number with the floor plan, but shows the same grid bubbles).
@@ -1545,6 +1830,16 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_grid_label_is_a_number_a_letter_or_between_two() {
+        for l in ["1", "12", "100", "A", "H", "J", "Z", "AA", "C.8", "4.5", "f.3"] {
+            assert!(model_grid_label(l), "{l}");
+        }
+        for l in ["", "I", "O", "Q901", "R12X", "250C", "T7", "XY", "1000", "C.", ".5", "C.123", "A-1"] {
+            assert!(!model_grid_label(l), "{l}");
+        }
+    }
+
     use super::*;
 
     #[test]

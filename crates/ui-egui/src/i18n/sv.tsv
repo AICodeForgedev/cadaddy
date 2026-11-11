@@ -3641,3 +3641,4 @@ menu	Modify	Ändra
 	= (block=output file)	= (block=utdatafil)
 	* (whole drawing)	* (hela ritningen)
 	Requires an integer between 0 and 16.	Ett heltal mellan 0 och 16 krävs.
+	Correct Job Sheet Index	Rätta jobbets ritningsförteckning
