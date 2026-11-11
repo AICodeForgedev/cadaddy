@@ -3486,3 +3486,7 @@
 	= (block=output file)	= (bloco=arquivo de saída)
 	* (whole drawing)	* (desenho inteiro)
 	Requires an integer between 0 and 16.	É necessário um inteiro entre 0 e 16.
+	Refrigerant Piping	Tubulação de refrigerante
+	Hydronic Piping	Tubulação hidrônica
+	Condensate Drain	Dreno de condensado
+	Mechanical Piping	Tubulação mecânica

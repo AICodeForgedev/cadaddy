@@ -67,8 +67,9 @@ const fn t(key: &'static str, label: &'static str, group: &'static str, rgb: [u8
 /// The trades and their default colours: architecture neutral, structure tan, supply duct
 /// blue, return and exhaust green, sanitary magenta, vent purple, cold water blue, hot water
 /// orange-red, gas yellow, fire protection red, conduit and tray orange-yellow, equipment light
-/// grey; cabinets and furniture (Q6422) wood browns, each a switch of its own.
-pub const TRADES: [Trade; 26] = [
+/// grey; refrigerant, hydronic and condensate piping (Q6492) the mechanical trade's own rows;
+/// cabinets and furniture (Q6422) wood browns, each a switch of its own.
+pub const TRADES: [Trade; 30] = [
     t("architecture", "Architecture", "Architecture", [214, 212, 206], true),
     t("openings", "Doors and Windows", "Architecture", [176, 198, 212], true),
     t("structure", "Structure", "Structure", [198, 168, 124], true),
@@ -80,6 +81,10 @@ pub const TRADES: [Trade; 26] = [
     t("duct", "Duct", "Mechanical", [92, 160, 212], false),
     t("terminals", "Air Terminals", "Mechanical", [150, 200, 236], false),
     t("equipment", "Equipment", "Mechanical", [190, 194, 200], false),
+    t("pipe_refrigerant", "Refrigerant Piping", "Mechanical", [0, 170, 140], false),
+    t("pipe_hydronic", "Hydronic Piping", "Mechanical", [196, 64, 120], false),
+    t("pipe_condensate", "Condensate Drain", "Mechanical", [130, 160, 176], false),
+    t("pipe_mechanical", "Mechanical Piping", "Mechanical", [110, 140, 180], false),
     t("pipe_cold", "Domestic Cold Water", "Plumbing", [30, 100, 222], false),
     t("pipe_hot", "Domestic Hot Water", "Plumbing", [236, 92, 38], false),
     t("pipe_sanitary", "Sanitary", "Plumbing", [198, 40, 170], false),
@@ -316,26 +321,34 @@ fn words(s: &str) -> Vec<String> {
 
 /// The trade of a pipe system, by its name.
 pub fn pipe_trade(system: &str) -> &'static str {
-    let low = system.to_ascii_lowercase();
-    let w = words(system);
-    let has = |xs: &[&str]| xs.iter().any(|x| low.contains(x));
-    let word = |xs: &[&str]| w.iter().any(|t| xs.contains(&t.as_str()));
-    if has(&["fire", "sprink", "standpipe"]) || word(&["fp", "fs", "sp"]) {
-        "fire"
-    } else if has(&["sanitary", "sewer", "waste", "soil", "grease"]) || word(&["san", "ss", "sw", "w", "gw"]) {
-        "pipe_sanitary"
-    } else if has(&["vent"]) || word(&["v", "vtr"]) {
-        "pipe_vent"
-    } else if has(&["storm", "rain", "drain"]) || word(&["st", "rd", "sd", "od"]) {
-        "pipe_storm"
-    } else if has(&["gas", "propane"]) || word(&["g", "ng", "lp"]) {
-        "pipe_gas"
-    } else if has(&["hot", "recirc"]) || word(&["hw", "dhw", "hwr", "hwc", "hhw", "dhwr"]) {
-        "pipe_hot"
-    } else if has(&["cold", "domestic", "potable", "water"]) || word(&["cw", "dcw", "dw"]) {
-        "pipe_cold"
-    } else {
-        "pipe"
+    service_key(cadaddy_walk3d::pipeservice::pipe_service(system, ""))
+}
+
+/// The trade row of a pipe service ([`cadaddy_walk3d::pipeservice::pipe_service`]: by the
+/// system's name and layer, Q6492).
+pub fn service_key(service: &str) -> &'static str {
+    match service {
+        "fire" => "fire",
+        "refrigerant" => "pipe_refrigerant",
+        "hydronic" => "pipe_hydronic",
+        "condensate" => "pipe_condensate",
+        "mechanical" => "pipe_mechanical",
+        "sanitary" => "pipe_sanitary",
+        "vent" => "pipe_vent",
+        "storm" => "pipe_storm",
+        "gas" => "pipe_gas",
+        "hot" => "pipe_hot",
+        "cold" => "pipe_cold",
+        _ => "pipe",
+    }
+}
+
+/// The trade row of a built pipe: the service its build stamped on it (the system's name and
+/// layer), else its system's name.
+fn built_pipe_trade(e: &Entity, system: &str) -> &'static str {
+    match made_tag(e, "carries") {
+        Some(sv) if !sv.is_empty() => service_key(sv),
+        _ => pipe_trade(system),
     }
 }
 
@@ -411,7 +424,7 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         let fitting = mpart.starts_with("fitting");
         let (key, noun) = match kind.as_str() {
             "duct" => (duct_trade(made_tag(e, "duct_type"), system), "Duct"),
-            "pipe" => (pipe_trade(system), "Pipe"),
+            "pipe" => (built_pipe_trade(e, system), "Pipe"),
             "tray" => ("tray", "Cable Tray"),
             "conduit" | "cable" => ("conduit", if kind == "cable" { "Cable" } else { "Conduit" }),
             "grounding" => ("conduit", "Grounding"),

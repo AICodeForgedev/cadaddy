@@ -3266,3 +3266,7 @@
 	= (block=output file)	= (bloc=fichier de sortie)
 	* (whole drawing)	* (dessin entier)
 	Requires an integer between 0 and 16.	Un entier entre 0 et 16 est requis.
+	Refrigerant Piping	Tuyauterie de fluide frigorigène
+	Hydronic Piping	Tuyauterie hydronique
+	Condensate Drain	Évacuation des condensats
+	Mechanical Piping	Tuyauterie mécanique

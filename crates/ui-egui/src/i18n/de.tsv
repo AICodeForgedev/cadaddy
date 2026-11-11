@@ -3295,3 +3295,7 @@
 	= (block=output file)	= (Block=Ausgabedatei)
 	* (whole drawing)	* (ganze Zeichnung)
 	Requires an integer between 0 and 16.	Eine ganze Zahl zwischen 0 und 16 ist erforderlich.
+	Refrigerant Piping	Kältemittelleitungen
+	Hydronic Piping	Heiz- und Kühlwasserleitungen
+	Condensate Drain	Kondensatablauf
+	Mechanical Piping	Haustechnische Rohrleitungen

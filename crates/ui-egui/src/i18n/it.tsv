@@ -3550,3 +3550,7 @@ menu	Modify	Edita
 	= (block=output file)	= (blocco=file di output)
 	* (whole drawing)	* (intero disegno)
 	Requires an integer between 0 and 16.	È richiesto un intero tra 0 e 16.
+	Refrigerant Piping	Tubazioni del refrigerante
+	Hydronic Piping	Tubazioni idroniche
+	Condensate Drain	Scarico condensa
+	Mechanical Piping	Tubazioni meccaniche
