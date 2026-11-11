@@ -1204,11 +1204,12 @@ fn footprints(d: &Drawing, sp: &BuildingSpec) -> HashMap<String, Footprint> {
         }
     }
     // Its corridors, stairs and lobbies: inside the building, though outside its rooms' walls
-    // (fix-grid-bubble-as-fixture-rw1).
+    // (fix-grid-bubble-as-fixture-rw1). They add to a footprint its floors or shell give; a
+    // level with neither has none (its corridors alone are not its building).
     for c in &sp.circulation {
         let Some(l) = sp.levels.iter().find(|l| l.name.eq_ignore_ascii_case(c.level.trim())) else { continue };
-        let rects = c.rects.iter().map(|[a, b]| [a[0], a[1], b[0], b[1]]).filter(|b| b.iter().all(|v| v.is_finite()));
-        out.entry(l.name.to_ascii_lowercase()).or_default().boxes.extend(rects);
+        let Some(fp) = out.get_mut(&l.name.to_ascii_lowercase()).filter(|f| !f.is_empty()) else { continue };
+        fp.boxes.extend(c.rects.iter().map(|[a, b]| [a[0], a[1], b[0], b[1]]).filter(|b| b.iter().all(|v| v.is_finite())));
     }
     out
 }
@@ -3738,6 +3739,37 @@ mod tests {
         assert_eq!(r.misplaced.len(), 5, "the stray, the canopy light, the unbubbled one, the wrong sheet's two: {:#}", r.to_json());
         let flagged = d.model.iter().filter(|e| props::read(&e.common.xdata).get("misplaced").is_some()).count();
         assert_eq!(flagged, 4, "built and flagged");
+    }
+
+    /// fix-grid-bubble-as-fixture-rw1: a level's corridors, stairs and lobbies are in its
+    /// footprint: a receptacle in a corridor beyond the shell is not outside the building, one
+    /// past the corridor is. A building whose plan gives only its corridors (no floor, no shell)
+    /// has no footprint to judge by: nothing is flagged.
+    #[test]
+    fn a_levels_corridors_are_in_its_footprint() {
+        let dev = |at: [f64; 2]| {
+            json!({"id": format!("device:L1:{},{}", at[0], at[1]), "kind": "receptacle", "level": "L1", "at_ft": at,
+                "fields": {"symbol": {"value": "1", "source": "plan"}, "type": {"value": "R", "source": "plan"}}})
+        };
+        let spec = |shells: Value| -> BuildingSpec {
+            serde_json::from_value(json!({
+                "version": 1, "units_per_foot": 12.0,
+                "levels": [{"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0}],
+                "shells": shells,
+                "circulation": [{"kind": "corridor", "level": "L1", "name": "CORRIDOR", "at": [900, 60], "rects": [[[600, 0], [1200, 120]]]}],
+                "tags": [dev([80.0, 5.0]), dev([80.0, 40.0])],
+            }))
+            .unwrap()
+        };
+        let mut d = Drawing::new_imperial();
+        let r = build_devices(&mut d, &spec(json!({"L1": [[0.0, 0.0, 600.0, 600.0]]})));
+        assert_eq!(r.built, 2, "{:#}", r.to_json());
+        let flagged: Vec<_> = r.misplaced.iter().map(|m| (m["mark"].as_str(), m["outside_ft"].as_f64())).collect();
+        assert_eq!(flagged, [(Some("R"), Some(30.0))], "only the one past the corridor: {:#}", r.to_json());
+        // Only its corridors traced: no footprint, nothing flagged.
+        let mut d = Drawing::new_imperial();
+        let r = build_devices(&mut d, &spec(json!({})));
+        assert_eq!((r.built, r.misplaced.len()), (2, 0), "{:#}", r.to_json());
     }
 
     /// Q6311: a window lights the room past its wall even where the room's outline keeps off the
