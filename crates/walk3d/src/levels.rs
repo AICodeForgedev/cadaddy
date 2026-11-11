@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::spec::BuildingSpec;
+use crate::spec::{BuildingSpec, RoofFraming};
 
 /// Most notes stacked, sheets linked and shaft marks matched (hostile drawings).
 pub const MAX_NOTES: usize = 5_000;
@@ -839,7 +839,11 @@ impl BuildingSpec {
             }
         }
         self.datums.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-        changes.extend(self.restack_heights());
+        // A set floor to floor the new levels disagree with is kept like an approved value.
+        let r = self.restack_report(true);
+        changes.extend(r.changes);
+        changes.extend(r.kept);
+        kept.extend(r.conflicts);
         (changes, kept)
     }
 
@@ -908,33 +912,91 @@ impl BuildingSpec {
         (out, warnings)
     }
 
+    /// Record that a level's floor to floor was set (by a person, `levels.set`, or read from a
+    /// note), `sources["levels/<name>/height"]`: restacking keeps it from then on (Q6406). An
+    /// empty `source` forgets it, so the level follows the levels again.
+    pub fn set_height_source(&mut self, name: &str, source: &str) {
+        let key = height_key(name);
+        self.sources.retain(|k, _| !k.eq_ignore_ascii_case(&key));
+        if !source.is_empty() {
+            self.sources.insert(key, source.chars().take(200).collect());
+        }
+    }
+
+    /// Where a level's floor to floor was set, when it was: restacking keeps it.
+    pub fn height_source(&self, name: &str) -> Option<&str> {
+        let key = height_key(name);
+        self.sources.iter().find(|(k, _)| k.eq_ignore_ascii_case(&key)).map(|(_, v)| v.as_str())
+    }
+
     /// Every level reaches the next level or storey datum above it (floor to floor); the top
-    /// level keeps its height. Returns what changed.
+    /// level keeps its height, and so does every level whose floor to floor was set
+    /// ([`BuildingSpec::height_source`]). Returns what changed, then the set heights kept and
+    /// their conflicts in words ([`BuildingSpec::restack_report`]).
     pub fn restack_heights(&mut self) -> Vec<String> {
-        // Each top and whether it is a mezzanine's: a floor's storey runs past the mezzanine in
-        // it to the next storey; a mezzanine's reaches whatever is next (Q6322).
-        let tops: Vec<(f64, bool)> = self
+        let r = self.restack_report(true);
+        r.changes.into_iter().chain(r.kept).chain(r.conflicts).collect()
+    }
+
+    /// [`BuildingSpec::restack_heights`], with the set floor to floor heights kept apart: one that
+    /// still meets the next storey up, or stops under a roof by the roof's framing (the walls
+    /// stop at the truss bearing, the roof level is the deck surface above the members), is kept
+    /// and said in `kept`; one the levels now disagree with is kept and reported in `conflicts`,
+    /// never rewritten. With `apply` false nothing changes: only the set heights are checked.
+    pub fn restack_report(&mut self, apply: bool) -> Restacked {
+        // Each top: its elevation, whether it is a mezzanine's, its name and whether it is a
+        // roof. A floor's storey runs past the mezzanine in it to the next storey; a mezzanine's
+        // reaches whatever is next (Q6322).
+        let tops: Vec<(f64, bool, String, bool)> = self
             .levels
             .iter()
             .filter(|l| !is_datum_name(&l.name))
-            .map(|l| (l.elevation_ft, is_mezzanine(&l.name)))
-            .chain(self.datums.iter().filter(|d| d.kind.is_storey()).map(|d| (d.elevation_ft, d.kind == DatumKind::Mezzanine)))
+            .map(|l| (l.elevation_ft, is_mezzanine(&l.name), l.name.clone(), level_or_code(&l.name).is_some_and(|(_, k)| k == DatumKind::Roof)))
+            .chain(
+                self.datums
+                    .iter()
+                    .filter(|d| d.kind.is_storey())
+                    .map(|d| (d.elevation_ft, d.kind == DatumKind::Mezzanine, d.name.clone(), d.kind == DatumKind::Roof)),
+            )
             .filter(|e| e.0.is_finite())
             .collect();
-        let mut changes = Vec::new();
-        for l in &mut self.levels {
+        let set: Vec<Option<String>> = self.levels.iter().map(|l| self.height_source(&l.name).map(str::to_string)).collect();
+        let mut out = Restacked::default();
+        for (k, l) in self.levels.iter_mut().enumerate() {
             let mezzanine = is_mezzanine(&l.name);
-            let next = tops.iter().filter(|t| mezzanine || !t.1).map(|t| t.0).filter(|t| *t > l.elevation_ft + 1e-6).fold(f64::INFINITY, f64::min);
-            if next.is_finite() && (next - l.elevation_ft - l.height_ft).abs() > 1e-6 {
-                let h = next - l.elevation_ft;
-                changes.push(format!("{}: floor to floor {} → {}", l.name, crate::spec::feet(l.height_ft), crate::spec::feet(h)));
-                l.height_ft = h;
-                if l.ceiling_ft > h {
-                    l.ceiling_ft = h;
+            let next = tops.iter().filter(|t| (mezzanine || !t.1) && t.0 > l.elevation_ft + 1e-6).min_by(|a, b| a.0.total_cmp(&b.0));
+            let Some((top, _, above, roof)) = next else { continue };
+            let gap = top - l.elevation_ft;
+            if (gap - l.height_ft).abs() <= 1e-6 {
+                continue;
+            }
+            if let Some(src) = set.get(k).cloned().flatten() {
+                let framing = if *roof { self.exterior.level_framing(above) } else { None };
+                let head = format!("{}: floor to floor {} kept (set by {src})", l.name, crate::spec::feet(l.height_ft));
+                match set_height_check(l.elevation_ft, l.height_ft, gap, above, *roof, framing) {
+                    Ok(why) => out.kept.push(format!("{head}; {why}")),
+                    Err(why) => out.conflicts.push(format!(
+                        "{head}, but {above} is {} above it: {why}; set its floor to floor to {} to follow the levels",
+                        crate::spec::feet(gap),
+                        crate::spec::feet(gap)
+                    )),
+                }
+                // Its ceiling still can't hang above the storey over it.
+                if apply && l.ceiling_ft > gap {
+                    out.changes.push(format!("{}: ceiling {} → {} (under {above})", l.name, crate::spec::feet(l.ceiling_ft), crate::spec::feet(gap)));
+                    l.ceiling_ft = gap;
+                }
+                continue;
+            }
+            if apply {
+                out.changes.push(format!("{}: floor to floor {} → {}", l.name, crate::spec::feet(l.height_ft), crate::spec::feet(gap)));
+                l.height_ft = gap;
+                if l.ceiling_ft > gap {
+                    l.ceiling_ft = gap;
                 }
             }
         }
-        changes
+        out
     }
 
     /// The building's storeys, lowest first: its levels and its storey datums (the roof, a
@@ -981,6 +1043,11 @@ impl BuildingSpec {
         {
             m.insert(format!("levels/{new}"), src);
         }
+        if let Some(m) = v.get_mut("sources").and_then(|g| g.as_object_mut())
+            && let Some(src) = m.remove(&height_key(&old))
+        {
+            m.insert(height_key(new), src);
+        }
         if let Some(g) = v.get_mut("guess").and_then(|g| g.as_object_mut())
             && let Some(why) = g.remove(&key)
         {
@@ -993,6 +1060,72 @@ impl BuildingSpec {
         *self = sp;
         Ok(n)
     }
+}
+
+/// The deepest deck (and topping) a framed roof's surface stands over its members, inches: a
+/// space between a storey's top and the roof deeper than the members and this is no roof
+/// framing (the framing rule's own deck is capped the same).
+const MAX_DECK_IN: f64 = 24.0;
+/// How far a set storey top may miss the read bearing of the roof members over it, feet (1/2").
+const BEARING_TOLERANCE_FT: f64 = 0.5 / 12.0;
+
+/// The source key of a level's set floor to floor.
+fn height_key(name: &str) -> String {
+    format!("levels/{name}/height")
+}
+
+/// What restacking did ([`BuildingSpec::restack_report`]): heights rewritten to reach the next
+/// storey, set heights kept (with why they still fit), and set heights the levels disagree with.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Restacked {
+    pub changes: Vec<String>,
+    pub kept: Vec<String>,
+    pub conflicts: Vec<String>,
+}
+
+/// Whether a set floor to floor `height` on a storey at `elevation` still fits the `gap` up to
+/// the next storey `above`: `Ok(why)` when the space left is that roof's framing, `Err(why)`
+/// otherwise. A storey never reaches past the one above it; under a floor the two must meet;
+/// under a roof the space is its members and deck (as deep as they are read, bearing where the
+/// sections mark it), or, with no framing read, taken as the usual framed roof.
+fn set_height_check(elevation: f64, height: f64, gap: f64, above: &str, roof: bool, framing: Option<&RoofFraming>) -> Result<String, String> {
+    let space = gap - height;
+    if space < 0.0 {
+        return Err(format!("the storey would reach {} past it", crate::spec::feet(-space)));
+    }
+    if !roof {
+        return Err(format!("it stops {} under {above}, a storey (not a roof's framing)", crate::spec::feet(space)));
+    }
+    let fits = format!("the {} up to {above} is the roof framing", crate::spec::feet(space));
+    let Some(f) = framing else {
+        return Ok(format!("{fits} (none read: taken as the usual framed roof)"));
+    };
+    let member = if f.member.trim().is_empty() { "member" } else { f.member.trim() };
+    if let Some(b) = f.bearing_ft.filter(|b| b.is_finite()) {
+        let top = elevation + height;
+        return if (top - b).abs() <= BEARING_TOLERANCE_FT {
+            Ok(format!("{fits}: the {member}s bear at {}", crate::spec::feet(b)))
+        } else {
+            Err(format!("the {member}s bear at {}, the storey stops at {}", crate::spec::feet(b), crate::spec::feet(top)))
+        };
+    }
+    let depth = f.depth_in / 12.0;
+    if !depth.is_finite() || depth <= 0.0 {
+        return Ok(fits);
+    }
+    if space + 1e-6 < depth {
+        return Err(format!("{} can't hold its {}\" {member}s", crate::spec::feet(space), fmt_in(f.depth_in)));
+    }
+    if space > depth + MAX_DECK_IN / 12.0 + 1e-6 {
+        return Err(format!("{} is more than its {}\" {member}s and a deck", crate::spec::feet(space), fmt_in(f.depth_in)));
+    }
+    Ok(format!("{fits}: its {}\" {member}s and deck", fmt_in(f.depth_in)))
+}
+
+/// Inches, without a needless `.0`.
+fn fmt_in(v: f64) -> String {
+    let r = (v * 1000.0).round() / 1000.0;
+    if r.fract() == 0.0 { format!("{r:.0}") } else { format!("{r}") }
 }
 
 /// Rename `level` / `to_level` values equal to `old` (any case) in a spec's JSON.
@@ -1208,6 +1341,68 @@ mod tests {
         // is no reading of it.
         assert_eq!(in_order(&[(one, 0.0, 2), (m, 10.0, 1), (two, 14.0, 2)]), [true, true, true]);
         assert_eq!(in_order(&[(one, 0.0, 2), (m, 30.0, 1), (two, 14.0, 2)]), [true, false, true]);
+    }
+
+    #[test]
+    fn a_set_floor_to_floor_is_kept_by_restacking() {
+        // Q6406: the top storey's floor to floor set to the truss bearing, then the roof moved.
+        let mut sp = BuildingSpec::from_json(
+            &serde_json::json!({
+                "levels": [
+                    {"name": "Level 1", "elevation_ft": 0, "height_ft": 10},
+                    {"name": "Level 2", "elevation_ft": 10, "height_ft": 8}
+                ],
+                "datums": [{"name": "ROOF", "elevation_ft": 20, "kind": "roof"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        sp.set_height_source("level 2", "levels.set");
+        assert_eq!(sp.height_source("Level 2"), Some("levels.set"));
+        let r = sp.restack_report(true);
+        assert_eq!(sp.levels.iter().map(|l| l.height_ft).collect::<Vec<_>>(), [10.0, 8.0]);
+        assert!(r.changes.is_empty() && r.conflicts.is_empty(), "{r:?}");
+        assert!(r.kept.first().is_some_and(|k| k.starts_with("Level 2:") && k.contains("roof framing")), "{r:?}");
+        // Not applied: nothing moves even where an unset height is stale.
+        if let Some(l) = sp.levels.first_mut() {
+            l.height_ft = 9.0;
+        }
+        assert!(sp.restack_report(false).changes.is_empty());
+        assert_eq!(sp.levels.first().map(|l| l.height_ft), Some(9.0));
+        // Under a floor, not a roof, the same gap is a conflict; the set height stays.
+        sp.levels.push(crate::rules::Level { name: "Level 3".into(), elevation_ft: 20.0, height_ft: 10.0, ..sp.levels[0].clone() });
+        sp.datums.clear();
+        let r = sp.restack_report(true);
+        assert_eq!(r.changes, ["Level 1: floor to floor 9'-0\" → 10'-0\""]);
+        assert_eq!(sp.levels.get(1).map(|l| l.height_ft), Some(8.0));
+        assert!(r.conflicts.first().is_some_and(|c| c.starts_with("Level 2:") && c.contains("Level 3")), "{r:?}");
+        // Forgotten, it follows the levels again.
+        sp.set_height_source("Level 2", "");
+        sp.restack_heights();
+        assert_eq!(sp.levels.get(1).map(|l| l.height_ft), Some(10.0));
+    }
+
+    #[test]
+    fn roof_framing_bearing_decides_a_set_height() {
+        let f = |bearing: Option<f64>, depth: f64| RoofFraming {
+            level: "ROOF".into(),
+            member: "truss".into(),
+            spacing_in: 24.0,
+            depth_in: depth,
+            spacing_status: None,
+            depth_status: None,
+            bearing_ft: bearing,
+            source: String::new(),
+        };
+        // Storey 0..8 under a roof at 10.
+        assert!(set_height_check(0.0, 8.0, 10.0, "ROOF", true, None).is_ok());
+        assert!(set_height_check(0.0, 8.0, 10.0, "ROOF", true, Some(&f(Some(8.0), 22.0))).is_ok());
+        assert!(set_height_check(0.0, 8.0, 10.0, "ROOF", true, Some(&f(Some(7.0), 22.0))).is_err());
+        assert!(set_height_check(0.0, 8.0, 10.0, "ROOF", true, Some(&f(None, 22.0))).is_ok());
+        assert!(set_height_check(0.0, 8.0, 10.0, "ROOF", true, Some(&f(None, 30.0))).is_err());
+        assert!(set_height_check(0.0, 6.0, 10.0, "ROOF", true, Some(&f(None, 12.0))).is_err());
+        assert!(set_height_check(0.0, 11.0, 10.0, "ROOF", true, None).is_err());
+        assert!(set_height_check(0.0, 8.0, 10.0, "Level 2", false, None).is_err());
     }
 
     #[test]

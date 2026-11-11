@@ -47,10 +47,10 @@ pub fn specs() -> Vec<CommandSpec> {
             "{apply?: bool (elevations into the spec's levels; others become datums), datum_ft?: feet subtracted from every elevation (default 100 when LEVEL 1 is at 100'-0\", else 0)} → {levels: [{name, kind, elevation_ft, source, matches?, approved?}], conflicts (incl. approved values kept), datum_ft, changes?, kept?, applied, warnings (readings rejected: they break the levels' order), ignored (notes on civil and site sheets: spot elevations)}; approved levels (`levels/<name>`) keep their elevation; a guided job's sheet index (its level table) wins over notes read here",
         ),
         CommandSpec::new("levels.list", "List Levels", run_list)
-            .params("{} → {levels: [{name, elevation_ft, height_ft, ceiling_ft, top_ft, plan, sheet?, sheets, typical (sheets of several levels), built, source, approved}], datums: [{name, elevation_ft, kind (datum: site, grade, survey; never a storey), source?}], storeys, unattached, reference_sheets: [{number, title, discipline?, datum?}] (on no level: nothing built from them)}")
+            .params("{} → {levels: [{name, elevation_ft, height_ft, ceiling_ft, top_ft, plan, sheet?, sheets, typical (sheets of several levels), built, source, height_source (where a set floor to floor came from: kept when other levels move), approved}], datums: [{name, elevation_ft, kind (datum: site, grade, survey; never a storey), source?}], storeys, unattached, reference_sheets: [{number, title, discipline?, datum?}] (on no level: nothing built from them)}")
             .noundo(),
         CommandSpec::new("levels.set", "Edit Level", run_set).params(
-            "{name: level or datum, rename?: new name, elevation_ft?: feet, height_ft?: floor to floor, ceiling_ft?: feet, shift_above?: bool (move the levels above by the same change)} → {level, renamed_refs?, changes}",
+            "{name: level or datum, rename?: new name, elevation_ft?: feet, height_ft?: floor to floor (kept from then on when other levels move), ceiling_ft?: feet, shift_above?: bool (move the levels above by the same change)} → {level, renamed_refs?, changes, kept? (set floor to floor heights kept: the roof framing over them), conflicts? (set floor to floor heights the levels now disagree with: kept, not rewritten)}",
         ),
         CommandSpec::new("levels.sheets", "Attach Sheets to Levels", run_sheets).params(
             "{folder?: path (its .dwg/.dxf/.pdf/.cdy file names read as sheets), apply?: bool (into the spec's sheets)} → {sheets: [{number, title, discipline, level, source}], unattached, applied}",
@@ -478,6 +478,7 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
                 "typical": typical,
                 "built": built.get(&l.name.to_ascii_uppercase()).copied().unwrap_or(0),
                 "source": sp.level_source(&l.name),
+                "height_source": sp.height_source(&l.name),
                 "approved": sp.level_approved(&l.name),
             })
         })
@@ -578,9 +579,12 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let shown = dt.name.clone();
         sp.datums.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-        changes.extend(sp.restack_heights());
+        let r = sp.restack_report(true);
+        changes.extend(r.changes);
         store(s, &sp)?;
-        return Ok(json!({ "level": shown, "changes": changes }));
+        let mut out = json!({ "level": shown, "changes": changes });
+        restack_into(&mut out, r.kept, r.conflicts);
+        return Ok(out);
     };
     let mut out = json!({});
     let mut current_name = sp.levels.get(i).map(|l| l.name.clone()).unwrap_or_default();
@@ -589,6 +593,15 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         changes.push(format!("{current_name} renamed {}", r.trim()));
         out["renamed_refs"] = json!(n);
         current_name = r.trim().to_string();
+    }
+    // A floor to floor set here stays when another level moves (Q6406): set it first, so the
+    // restack below keeps it.
+    if let Some(h) = height
+        && let Some(l) = sp.levels.get_mut(i)
+    {
+        changes.push(format!("{}: floor to floor {} → {}", l.name, cadaddy_walk3d::feet(l.height_ft), cadaddy_walk3d::feet(h)));
+        l.height_ft = h;
+        sp.set_height_source(&current_name, "levels.set");
     }
     if let Some(e) = elevation {
         let old = sp.levels.get(i).map(|l| l.elevation_ft).unwrap_or(e);
@@ -607,15 +620,12 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             l.elevation_ft = e;
         }
         sp.set_level_source(&current_name, "levels.set");
-        // The floor below now reaches this one; this one the next up (unless a height is given).
-        changes.extend(sp.restack_heights());
     }
-    if let Some(h) = height
-        && let Some(l) = sp.levels.get_mut(i)
-    {
-        changes.push(format!("{}: floor to floor {} → {}", l.name, cadaddy_walk3d::feet(l.height_ft), cadaddy_walk3d::feet(h)));
-        l.height_ft = h;
-    }
+    // The floor below now reaches this one, this one the next up; a floor to floor that was set
+    // is kept, and reported where the levels disagree with it. With no elevation moved only the
+    // set heights are checked.
+    let r = sp.restack_report(elevation.is_some());
+    changes.extend(r.changes);
     if let Some(c) = ceiling
         && let Some(l) = sp.levels.get_mut(i)
     {
@@ -628,7 +638,19 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     store(s, &sp)?;
     out["level"] = json!(current_name);
     out["changes"] = json!(changes);
+    restack_into(&mut out, r.kept, r.conflicts);
     Ok(out)
+}
+
+/// The set floor to floor heights a restack kept (`kept`) and the ones the levels disagree with
+/// (`conflicts`), into a command's result when there are any.
+fn restack_into(out: &mut Value, kept: Vec<String>, conflicts: Vec<String>) {
+    if !kept.is_empty() {
+        out["kept"] = json!(kept);
+    }
+    if !conflicts.is_empty() {
+        out["conflicts"] = json!(conflicts);
+    }
 }
 
 fn store(s: &mut Session, sp: &BuildingSpec) -> Result<()> {
@@ -1331,5 +1353,120 @@ mod tests {
         // The section note's 50' should win, not an estimate.
         assert!((roof.elevation_ft - 50.0).abs() < 0.1, "roof elevation {}: {r}", roof.elevation_ft);
         assert!(!sp.guess.contains_key("levels/ROOF"), "should not be a guess");
+    }
+
+    /// Four storeys and a roof (a datum, or a level when `roof_level`), the top floor at
+    /// 28'-9 1/2" (Q6406).
+    fn four_storeys_and_roof(s: &mut Session, roof_level: bool) {
+        let mut levels = json!([
+            {"name": "L1", "elevation_ft": 0, "height_ft": 9.59375},
+            {"name": "L2", "elevation_ft": 9.59375, "height_ft": 9.59375},
+            {"name": "L3", "elevation_ft": 19.1875, "height_ft": (9.0 + 7.25 / 12.0)},
+            {"name": "L4", "elevation_ft": (28.0 + 9.5 / 12.0), "height_ft": 9.0}
+        ]);
+        let mut spec = json!({ "version": 1, "units_per_foot": 12 });
+        if roof_level {
+            levels.as_array_mut().unwrap().push(json!({"name": "ROOF", "elevation_ft": (37.0 + 9.5 / 12.0), "height_ft": 4, "ceiling_ft": 3}));
+        } else {
+            spec["datums"] = json!([{"name": "ROOF", "elevation_ft": (37.0 + 9.5 / 12.0), "kind": "roof"}]);
+        }
+        spec["levels"] = levels;
+        s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+    }
+
+    fn height_of(s: &Session, name: &str) -> f64 {
+        stored_spec(s).levels.iter().find(|l| l.name == name).map(|l| l.height_ft).unwrap()
+    }
+
+    #[test]
+    fn a_set_floor_to_floor_stays_when_the_roof_moves() {
+        for roof_level in [false, true] {
+            let mut s = Session::new();
+            four_storeys_and_roof(&mut s, roof_level);
+            // To the truss bearing: the storey's walls stop there, the roof is the deck above.
+            s.execute("levels.set", &json!({ "name": "L4", "height_ft": 8.09375 })).unwrap();
+            let r = s.execute("levels.set", &json!({ "name": "ROOF", "elevation_ft": 39.01 })).unwrap();
+            assert_eq!(height_of(&s, "L4"), 8.09375, "roof as a level: {roof_level}: {r}");
+            // The gap under a roof is its framing: kept, said, not a conflict.
+            assert!(r["conflicts"].as_array().is_none_or(|c| c.is_empty()), "{r}");
+            let kept = r["kept"].as_array().unwrap();
+            assert!(kept.iter().any(|k| k.as_str().unwrap().contains("L4") && k.as_str().unwrap().contains("roof framing")), "{r}");
+            // Either order gives the same storey.
+            let mut s = Session::new();
+            four_storeys_and_roof(&mut s, roof_level);
+            s.execute("levels.set", &json!({ "name": "ROOF", "elevation_ft": 39.01 })).unwrap();
+            s.execute("levels.set", &json!({ "name": "L4", "height_ft": 8.09375 })).unwrap();
+            assert_eq!(height_of(&s, "L4"), 8.09375);
+            // Levels whose floor to floor nobody set still follow the levels.
+            s.execute("levels.set", &json!({ "name": "L3", "elevation_ft": 19.5 })).unwrap();
+            assert_eq!(height_of(&s, "L2"), 19.5 - 9.59375);
+            assert_eq!(height_of(&s, "L4"), 8.09375);
+        }
+    }
+
+    #[test]
+    fn a_set_floor_to_floor_the_levels_disagree_with_is_a_conflict() {
+        let mut s = Session::new();
+        four_storeys_and_roof(&mut s, false);
+        s.execute("levels.set", &json!({ "name": "L2", "height_ft": 9.59375 })).unwrap();
+        // A floor above, not a roof: the new gap is no roof framing.
+        let r = s.execute("levels.set", &json!({ "name": "L3", "elevation_ft": 20.5 })).unwrap();
+        assert_eq!(height_of(&s, "L2"), 9.59375, "{r}");
+        let c = r["conflicts"].as_array().unwrap();
+        assert_eq!(c.len(), 1, "{r}");
+        assert!(c[0].as_str().unwrap().starts_with("L2:"), "{r}");
+        assert!(!r["changes"].as_array().unwrap().iter().any(|x| x.as_str().unwrap().starts_with("L2: floor to floor")), "{r}");
+        // A storey that would reach past the roof is a conflict too.
+        s.execute("levels.set", &json!({ "name": "L4", "height_ft": 8.5 })).unwrap();
+        let r = s.execute("levels.set", &json!({ "name": "ROOF", "elevation_ft": 36.0 })).unwrap();
+        assert_eq!(height_of(&s, "L4"), 8.5);
+        // Its ceiling comes down under the roof, said.
+        assert!(r["changes"].as_array().unwrap().iter().any(|x| x.as_str().unwrap().starts_with("L4: ceiling")), "{r}");
+        assert!(r["conflicts"].as_array().unwrap().iter().any(|x| x.as_str().unwrap().starts_with("L4:")), "{r}");
+        // Setting it to agree with the levels clears it.
+        let r = s.execute("levels.set", &json!({ "name": "L4", "height_ft": 36.0 - (28.0 + 9.5 / 12.0) })).unwrap();
+        assert!(!r["conflicts"].as_array().unwrap().iter().any(|x| x.as_str().unwrap().starts_with("L4:")), "{r}");
+    }
+
+    #[test]
+    fn roof_framing_read_decides_whether_the_gap_is_the_framing() {
+        // 24" trusses bearing at the storey's top: the 2'-1 1/2" gap is them and the deck.
+        let mut s = Session::new();
+        four_storeys_and_roof(&mut s, false);
+        let mut sp = stored_spec(&s);
+        sp.exterior.framing.push(cadaddy_walk3d::RoofFraming {
+            level: "ROOF".into(),
+            member: "truss".into(),
+            spacing_in: 24.0,
+            depth_in: 24.0,
+            spacing_status: None,
+            depth_status: None,
+            bearing_ft: None,
+            source: String::new(),
+        });
+        store(&mut s, &sp).unwrap();
+        s.execute("levels.set", &json!({ "name": "L4", "height_ft": 8.09375 })).unwrap();
+        let r = s.execute("levels.set", &json!({ "name": "ROOF", "elevation_ft": (39.0 + 0.125 / 12.0) })).unwrap();
+        // 2'-1 1/2" over the storey: the 24" trusses and a 1 1/2" deck.
+        assert!(r["conflicts"].as_array().is_none_or(|c| c.is_empty()), "{r}");
+        // The roof lowered to 1'-0" over the bearing: 24" trusses don't fit there.
+        let r = s.execute("levels.set", &json!({ "name": "ROOF", "elevation_ft": (37.0 + 10.625 / 12.0) })).unwrap();
+        assert_eq!(height_of(&s, "L4"), 8.09375);
+        let c = r["conflicts"].as_array().unwrap();
+        assert!(c.iter().any(|x| x.as_str().unwrap().starts_with("L4:") && x.as_str().unwrap().contains("truss")), "{r}");
+    }
+
+    #[test]
+    fn a_rename_keeps_the_set_floor_to_floor() {
+        let mut s = Session::new();
+        four_storeys_and_roof(&mut s, false);
+        s.execute("levels.set", &json!({ "name": "L4", "height_ft": 8.09375, "rename": "Level 4" })).unwrap();
+        s.execute("levels.set", &json!({ "name": "ROOF", "elevation_ft": 39.01 })).unwrap();
+        assert_eq!(height_of(&s, "Level 4"), 8.09375);
+        let l = s.execute("levels.list", &json!({})).unwrap();
+        assert_eq!(l["levels"][3]["height_source"], json!("levels.set"), "{l}");
+        assert_eq!(l["levels"][2]["height_source"], Value::Null);
+        s.execute("levels.set", &json!({ "name": "Level 4", "rename": "L4" })).unwrap();
+        assert_eq!(stored_spec(&s).height_source("L4"), Some("levels.set"));
     }
 }
