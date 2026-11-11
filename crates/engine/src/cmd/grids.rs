@@ -220,6 +220,48 @@ pub(crate) fn grid_bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64, strict: b
         .collect()
 }
 
+/// Which of `points` (a device's read point and mark, drawing units; `k` units an inch) stand at a
+/// grid bubble of that label: a bubble round the point labelled so that a grid line (10' or more)
+/// ends at and points through, or one in a row of its family ([`grid_bubbles`], not strict: the
+/// device stands outside the building with no circuit, so no wire of its ends there). The build
+/// leaves out only such marks, not every device outside the building
+/// (fix-grid-bubble-as-fixture-rw1).
+pub(crate) fn at_grid_bubbles(d: &Drawing, points: &[(Vec2, String)], k: f64) -> Vec<bool> {
+    if points.is_empty() || !(k.is_finite() && k > 0.0) {
+        return vec![false; points.len()];
+    }
+    // A bubble is 96" in radius at most: what stands within that and a little of the point.
+    let reach = 120.0 * k;
+    let near = |e: &Entity, p: Vec2| {
+        let close = |q: Vec2| q.dist(p) <= reach;
+        match &e.kind {
+            EntityKind::Line(l) => close(l.a.xy()) || close(l.b.xy()),
+            EntityKind::LwPolyline(pl) => pl.vertices.iter().take(MAX_ITEMS).any(|v| close(v.p)) || pl.vertices.last().is_some_and(|v| close(v.p)),
+            EntityKind::Circle(c) => close(c.center.xy()),
+            EntityKind::Text(t) => close(t.insert.xy()),
+            EntityKind::MText(t) => close(t.insert.xy()),
+            EntityKind::Insert(i) => close(i.insert.xy()),
+            _ => false,
+        }
+    };
+    let mut around: Vec<Vec<&Arc<Entity>>> = vec![Vec::new(); points.len()];
+    for e in d.model.iter() {
+        for ((p, _), ents) in points.iter().zip(around.iter_mut()) {
+            if ents.len() < MAX_ITEMS && near(e, *p) {
+                ents.push(e);
+            }
+        }
+    }
+    points
+        .iter()
+        .zip(around)
+        .map(|((p, label), ents)| {
+            !label.trim().is_empty()
+                && grid_bubbles(d, &ents, k, false).iter().any(|(o, r, l)| l.eq_ignore_ascii_case(label.trim()) && o.dist(*p) <= 1.3 * r)
+        })
+        .collect()
+}
+
 /// The longest line (10' or more) with an end at bubble `b` that points through its centre, its
 /// end at the bubble first.
 fn pointing(lines: &[(Vec2, Vec2)], b: &Bubble) -> Option<(Vec2, Vec2)> {
