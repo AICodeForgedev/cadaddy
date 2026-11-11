@@ -155,13 +155,16 @@ pub(crate) fn serve(d: &Drawing, sp: &BuildingSpec, room_of: &dyn Fn(Option<&str
             terms.push(Term { h: e.handle, level, at, system: made(e, "system").unwrap_or_default() });
         }
     }
-    let unit_at: HashMap<Handle, usize> = units.iter().enumerate().map(|(i, u)| (u.h, i)).collect();
+    // The units the network starts from: those that move air. Other equipment on a duct (a
+    // damper) is a piece of the duct, passed through.
+    let unit_at: HashMap<Handle, usize> = units.iter().enumerate().filter(|(_, u)| u.moves_air(sp)).map(|(i, u)| (u.h, i)).collect();
     let term_at: HashMap<Handle, usize> = terms.iter().enumerate().map(|(i, t)| (t.h, i)).collect();
     // 1. The network: out from every unit at once, each piece reached keeps the nearest unit (by
     // pieces); a terminal ends a path, another unit too.
     let mut nearest: HashMap<Handle, (usize, usize)> = HashMap::new();
     let mut queue: VecDeque<Handle> = VecDeque::new();
-    for (i, u) in units.iter().enumerate() {
+    // In the units' order, so a piece as near two units goes to the same one every time.
+    for (i, u) in units.iter().enumerate().filter(|(_, u)| unit_at.contains_key(&u.h)) {
         nearest.insert(u.h, (i, 0));
         queue.push_back(u.h);
     }
@@ -236,6 +239,76 @@ pub(crate) fn serve(d: &Drawing, sp: &BuildingSpec, room_of: &dyn Fn(Option<&str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadaddy_doc::{Common, EntityKind, Line, RawTag, Space};
+    use cadaddy_geom::Vec3;
+
+    /// A built MEP piece: a box at `x` (inches) with its build tags (`part:…`, `tag:…`) and
+    /// what it is joined to.
+    fn piece(d: &mut Drawing, x: f64, tags: &[&str], connects: &[Handle]) -> Handle {
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(x, 0.0), Vec2::new(x + 12.0, 0.0), 12.0, 96.0, 108.0);
+        let mut x = vec![
+            RawTag { code: 1001, value: super::super::wallgen::APP.into() },
+            RawTag { code: 1000, value: "mep".into() },
+            RawTag { code: 1000, value: "L1".into() },
+            RawTag { code: 1000, value: "0".into() },
+        ];
+        x.extend(tags.iter().map(|t| RawTag { code: 1000, value: (*t).to_string() }));
+        let mut ps = cadaddy_doc::props::Props::default();
+        if !connects.is_empty() {
+            let v = connects.iter().map(|h| h.hex()).collect::<Vec<_>>().join(",");
+            ps.set("connects", cadaddy_doc::props::Prop::new(v, cadaddy_doc::props::Source::computed()));
+        }
+        let xd = cadaddy_doc::props::write(&x, &ps);
+        d.add(&Space::Model, Common { xdata: xd.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    fn spec(units: &[(&str, &str, &[&str])]) -> BuildingSpec {
+        let mut sp = BuildingSpec::default();
+        sp.mep.systems =
+            serde_json::from_value(serde_json::json!([{"name": "SA", "layer": "M-SA", "kind": "duct", "size_in": [12, 8], "bottom_ft": 9}]))
+                .unwrap_or_else(|e| panic!("{e}"));
+        for (tag, kind, systems) in units {
+            sp.mep.equipment.push(
+                serde_json::from_value(
+                    serde_json::json!({"tag": tag, "kind": kind, "level": "L1", "min": [0, 0], "max": [1, 1], "height_ft": 1, "systems": systems}),
+                )
+                .unwrap_or_else(|e| panic!("{e}")),
+            );
+        }
+        sp
+    }
+
+    /// A damper on the duct is a piece of it: the unit past it serves the terminal, never the
+    /// damper (on the hotel set, terminals were said to be served by their fire dampers).
+    #[test]
+    fn the_network_passes_a_damper_to_the_unit_past_it() {
+        let mut d = Drawing::new_imperial();
+        let sp = spec(&[("AHU-1", "ahu", &["SA"]), ("FD-1", "fire_damper", &[])]);
+        let term = piece(&mut d, 0.0, &["system:SA", "part:terminal:supply_diffuser"], &[]);
+        let duct_a = piece(&mut d, 100.0, &["system:SA", "part:segment"], &[term]);
+        let damper = piece(&mut d, 200.0, &["part:equipment", "tag:FD-1"], &[duct_a]);
+        let duct_b = piece(&mut d, 300.0, &["system:SA", "part:segment"], &[damper]);
+        let ahu = piece(&mut d, 400.0, &["part:equipment", "tag:AHU-1"], &[duct_b]);
+        let got = serve(&d, &sp, &|_, _| None);
+        let s = got.get(&term).unwrap_or_else(|| panic!("served: {got:?}"));
+        assert_eq!((s.unit, s.tag.as_str(), s.made), (ahu, "AHU-1", Made::Derived));
+    }
+
+    /// A job's model comes after its imported sheets' objects, however many there are.
+    #[test]
+    fn a_model_after_many_imported_objects_is_walked() {
+        let mut d = Drawing::new_imperial();
+        let line = EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(1.0, 0.0, 0.0) });
+        for _ in 0..=MAX_ELEMENTS {
+            d.add(&Space::Model, Common::default(), line.clone()).unwrap_or_else(|e| panic!("{e}"));
+        }
+        let sp = spec(&[("AHU-1", "ahu", &["SA"])]);
+        let term = piece(&mut d, 0.0, &["system:SA", "part:terminal:supply_diffuser"], &[]);
+        let duct = piece(&mut d, 100.0, &["system:SA", "part:segment"], &[term]);
+        piece(&mut d, 400.0, &["part:equipment", "tag:AHU-1"], &[duct]);
+        assert_eq!(serve(&d, &sp, &|_, _| None).get(&term).map(|s| s.tag.as_str()), Some("AHU-1"));
+    }
 
     #[test]
     fn a_schedule_names_a_room_by_any_of_its_words() {
