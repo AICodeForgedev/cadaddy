@@ -1423,16 +1423,58 @@ pub(crate) fn is_labor_item(item: &str) -> bool {
     })
 }
 
+thread_local! {
+    /// The counted elements of the last model's chunks that hold any (Q6529), by chunk: a chunk
+    /// no edit has touched since (copy-on-write) is not read again.
+    static KEYED: std::cell::RefCell<Vec<(cadaddy_doc::ChunkRef, std::rc::Rc<Vec<(Key, Handle)>>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// The counted elements of a drawing by their key, as handles (Q6529): what each row of its
 /// index counts, so a line counted from the index lists its elements. The same elements, in the
-/// same order and under the same cap, as [`Index::of`]; at most `per_key` handles a key.
+/// same order and under the same cap, as [`Index::of`]; at most `per_key` handles a key. Each
+/// chunk of the model is read once while it is unchanged.
 pub(crate) fn handles_by_key(d: &Drawing, per_key: usize) -> BTreeMap<Key, Vec<String>> {
+    type Part = std::rc::Rc<Vec<(Key, Handle)>>;
+    let refs = d.model.chunk_refs();
+    let read =
+        |r: &cadaddy_doc::ChunkRef| -> Vec<(Key, Handle)> { r.items().iter().filter_map(|e| counted(e).map(|(k, _)| (k, e.handle))).collect() };
+    let parts: Vec<Part> = KEYED.with(|c| {
+        let old = std::mem::take(&mut *c.borrow_mut());
+        let by_key: HashMap<usize, &(cadaddy_doc::ChunkRef, Part)> = old.iter().map(|x| (x.0.key(), x)).collect();
+        let held: Vec<Option<Part>> = refs.iter().map(|r| by_key.get(&r.key()).filter(|x| x.0.same(r)).map(|x| std::rc::Rc::clone(&x.1))).collect();
+        // The chunks not held, read side by side (each one's elements, in order).
+        let todo: Vec<&cadaddy_doc::ChunkRef> = refs.iter().zip(&held).filter(|(_, h)| h.is_none()).map(|(r, _)| r).collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        let fresh: Vec<Vec<(Key, Handle)>> = {
+            use rayon::prelude::*;
+            todo.par_iter().map(|r| read(r)).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let fresh: Vec<Vec<(Key, Handle)>> = todo.iter().map(|r| read(r)).collect();
+        let mut fresh = fresh.into_iter();
+        let mut keep = Vec::new();
+        let parts: Vec<Part> = refs
+            .iter()
+            .zip(held)
+            .map(|(r, h)| {
+                let part = h.unwrap_or_else(|| std::rc::Rc::new(fresh.next().unwrap_or_default()));
+                if !part.is_empty() {
+                    keep.push((r.clone(), std::rc::Rc::clone(&part)));
+                }
+                part
+            })
+            .collect();
+        drop(by_key);
+        drop(old);
+        *c.borrow_mut() = keep;
+        parts
+    });
     let mut out: BTreeMap<Key, Vec<String>> = BTreeMap::new();
-    for (k, h) in d.model.iter().filter_map(|e| counted(e).map(|(k, _)| (k, e.handle))).take(MAX_ELEMENTS) {
-        if out.len() >= MAX_ROWS && !out.contains_key(&k) {
+    for (k, h) in parts.iter().flat_map(|p| p.iter()).take(MAX_ELEMENTS) {
+        if out.len() >= MAX_ROWS && !out.contains_key(k) {
             continue;
         }
-        let v = out.entry(k).or_default();
+        let v = out.entry(k.clone()).or_default();
         if v.len() < per_key {
             v.push(h.hex());
         }

@@ -116,3 +116,22 @@ fn a_wall_marks_lines_list_the_walls_of_its_type() {
         }
     }
 }
+
+/// The lines follow an edit made between two bills of materials: an erased coupling leaves its
+/// line, and undo puts it back.
+#[test]
+fn piece_lines_follow_an_erase_and_its_undo() {
+    let mut s = building(None);
+    let fittings = |s: &mut Session| -> BTreeSet<String> {
+        let bom = s.execute("bim.bom", &json!({})).expect("bom");
+        bom["lines"].as_array().expect("lines").iter().filter(|l| l["category"] == "conduit fittings").flat_map(ids).collect()
+    };
+    let before = fittings(&mut s);
+    let gone = pieces(&mut s, "coupling").into_iter().next().expect("a coupling");
+    assert!(before.contains(&gone), "{before:?}");
+    s.execute("erase", &json!({"handles": [gone]})).expect("erase");
+    let after = fittings(&mut s);
+    assert!(!after.contains(&gone) && after.len() + 1 == before.len(), "{after:?}");
+    s.execute("u", &json!({})).expect("undo");
+    assert_eq!(fittings(&mut s), before);
+}
