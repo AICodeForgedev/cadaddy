@@ -18,6 +18,16 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// The allocator on Linux with glibc. glibc's malloc gives allocating threads arenas of their own
+/// (up to 8 per core) and keeps what a thread frees in its arena, so a job on a many-core machine
+/// held several GB it had already freed: its peak followed the core count, not what it held (a
+/// 24-thread print-set job peaked at 11.5 GB, 4.8 GB with mimalloc, in the same time). mimalloc
+/// lets any thread reuse freed pages and hands unused ones back to the system. Elsewhere the
+/// system allocator is kept (apps/cadaddy-cli/tests/job_memory.rs).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod control_server;
 mod desktop_theme;
 mod graphics;
