@@ -1240,9 +1240,9 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                             measured["recomputed"] = re.clone();
                             if !missing.is_empty() {
                                 unsure.push(format!("the price book ({}) has no price for {}", b.path, missing.join(", ")));
-                            } else if !claim.is_object() {
+                            } else if !claim.is_object() || claim["complete"].as_bool() == Some(false) {
                                 unsure.push(format!(
-                                    "the study claims no saving (unpriced: {}); priced here it saves ${:.0}",
+                                    "the study claims no full saving (unpriced: {}); priced here it saves ${:.0}",
                                     v["unpriced"]
                                         .as_array()
                                         .map(|u| u.iter().filter_map(Value::as_str).take(6).collect::<Vec<_>>().join(", "))

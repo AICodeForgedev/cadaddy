@@ -124,7 +124,7 @@ fn handles(t: &str) -> Vec<Handle> {
 }
 
 /// A conductor size's order, small to large (`14` … `4/0`, then kcmil).
-fn awg_rank(size: &str) -> Option<i64> {
+pub(super) fn awg_rank(size: &str) -> Option<i64> {
     let s = size.trim().trim_start_matches('#');
     if let Some(n) = s.strip_suffix("/0") {
         return n.parse::<i64>().ok().map(|n| 100 + n);

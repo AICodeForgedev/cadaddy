@@ -61,6 +61,12 @@ const SCOPES: [&str; 4] = ["in_contract", "by_others", "nic", "ofci"];
 const STARTER_CSV: &str = include_str!("../../../../assets/costbook/starter.csv");
 pub(crate) const STARTER_SOURCE: &str = "starter cost book";
 
+/// The starter cost book's rows, parsed once (every priced line looks in it).
+pub(crate) fn starter_book() -> &'static [Value] {
+    static STARTER: std::sync::OnceLock<Vec<Value>> = std::sync::OnceLock::new();
+    STARTER.get_or_init(starter_prices)
+}
+
 /// Parse the embedded starter cost book CSV into price rows (same shape as baseline prices).
 pub(crate) fn starter_prices() -> Vec<Value> {
     let rows = csv_rows(STARTER_CSV);
@@ -808,7 +814,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
     let prices: Vec<Value> = base["prices"].as_array().cloned().unwrap_or_default();
     let price_map: Map<String, Value> = st.get("price_map").and_then(Value::as_object).cloned().unwrap_or_default();
     // Q6012: starter cost book as fallback when no user/baseline price matches.
-    let starter: Vec<Value> = starter_prices();
+    let starter = starter_book();
     // The material price book (recent dated prices: shipped, and this machine's), before the
     // starter book; `settings.pricebook: false` leaves it out.
     let settings = st.get("settings").cloned().unwrap_or(json!({}));
@@ -993,7 +999,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                                     pr.scope = Some("nic".into());
                                 }
                             }
-                            None => match find_in(&starter, item, size, &unit, category, system, trade) {
+                            None => match find_in(starter, item, size, &unit, category, system, trade) {
                                 Some((si, kind)) => {
                                     let sp = &starter[si];
                                     pr.via = if kind == "family" {
@@ -1011,7 +1017,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                                 None => {
                                     // Q6020: nearest row is a SUGGESTION, never applied silently.
                                     if let Some(near) = find_price_by_words(&prices, item, &unit, category, system)
-                                        .or_else(|| find_price_by_words(&starter, item, &unit, category, system))
+                                        .or_else(|| find_price_by_words(starter, item, &unit, category, system))
                                     {
                                         let ni = near["item"].as_str().unwrap_or_default();
                                         let ns = near["size"].as_str().unwrap_or_default();
