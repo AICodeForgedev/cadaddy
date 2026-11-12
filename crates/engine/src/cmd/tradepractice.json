@@ -371,6 +371,12 @@
       "skip_from": ["equipment", "site_work", "ceiling", "floor"]
     },
     {
+      "id": "E-SPLICES",
+      "trade": "electrical",
+      "fills": "the splice connectors in each box: no drawing shows them",
+      "basis": "trade practice: at every box the circuit's conductors are spliced where it continues (a pigtail to each device), each luminaire's leads spliced to its circuit, the grounds bundled with pigtails to the device and a metal box (NEC 250.148), each splice in a connector listed for its conductors (UL 486C)"
+    },
+    {
       "id": "E-CONN-AT-UNIT",
       "trade": "electrical",
       "fills": "where an equipment connection goes when its plan's mark names a piece of equipment built on another level or elsewhere (a roof unit's circuit tagged on a plan under it)",
