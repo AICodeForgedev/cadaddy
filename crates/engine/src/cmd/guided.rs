@@ -4009,6 +4009,8 @@ fn device_census(
                         connection: String::new(),
                         fire_alarm: None,
                         symbol: None,
+                        label_at: None,
+                        spot: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -4192,6 +4194,16 @@ fn device_census(
                 }
             }
         }
+        // Labels set off their symbols on leaders: the sheet's straight pieces (Q6337), read once.
+        let leaders_g = std::cell::OnceCell::new();
+        let leaders_of = |h: f64| {
+            leaders_g.get_or_init(|| {
+                super::labelspot::Leaders::of(
+                    objects.get(g).into_iter().flatten().map(|e| &e.kind),
+                    4.0 * if h > 0.0 { h } else { DEFAULT_MARK_HEIGHT },
+                )
+            })
+        };
         // A luminaire the import made no symbol of: its type mark (one the lighting submittals
         // list) printed alone with a circuit label just under it (`H` over `G-1,a`), no device
         // read beside it: a luminaire there on that circuit. The mark as the schedule prints it:
@@ -4252,18 +4264,44 @@ fn device_census(
                     .filter(|x| junction_lettering(&x.value) && x.at.dist(spot) <= reach && !legend.covers(x.at))
                     .min_by(|a, b| a.at.dist(spot).total_cmp(&b.at.dist(spot)));
                 let connection = jbox.map(|x| junction_connection(&sheet, x.value.trim(), &tag, &circuit)).unwrap_or_default();
-                // Between the mark and its circuit label: where the symbol is drawn (the box,
-                // when lettered).
-                let at = jbox.map_or([spot.x, spot.y], |x| [x.at.x, x.at.y]);
+                // Where the symbol is drawn: the box, when lettered; else where a leader from the
+                // mark or its label ends (Q6337); else between them, where a symbol so lettered is
+                // drawn.
+                let (at, spot) = match jbox {
+                    Some(x) => (
+                        x.at,
+                        format!(
+                            "at the junction box {} lettered by its mark {} and its circuit label {} on {sheet}",
+                            x.value.trim(),
+                            t.value.trim(),
+                            label.value.trim()
+                        ),
+                    ),
+                    None => match super::labelspot::locate(label, &[t], Some(leaders_of(label.height)), &[], 0.0) {
+                        (p, super::labelspot::Spot::Leader) => {
+                            (p, super::labelspot::Spot::Leader.basis(&format!("{} {}", t.value.trim(), label.value.trim()), &sheet))
+                        }
+                        _ => (
+                            spot,
+                            format!(
+                                "between its mark {} and its circuit label {} on {sheet}, where a symbol so lettered is drawn (no leader from them)",
+                                t.value.trim(),
+                                label.value.trim()
+                            ),
+                        ),
+                    },
+                };
                 lone.push(super::readers::ReadDevice {
                     tag: tag.clone(),
-                    at,
+                    at: [at.x, at.y],
                     sheet: sheet.clone(),
                     level: job.level_at([t.at.x, t.at.y]).map_or_else(String::new, |r| r.level.clone()),
                     circuit,
                     kind: lum,
                     kind_source: source,
                     connection,
+                    label_at: Some([label.at.x, label.at.y]),
+                    spot,
                     ..super::readers::ReadDevice::default()
                 });
             }
@@ -4312,15 +4350,22 @@ fn device_census(
                 } else {
                     (String::new(), String::new())
                 };
+                // Where a leader from the designation ends (Q6337), else the switch symbol by it
+                // the import read as a big letter, else (said so) its lettering.
+                let page: Vec<&TextItem> = texts.get(g).into_iter().flatten().collect();
+                let glyphs = super::labelspot::glyph_symbols(t, &page);
+                let (at, spot) = super::labelspot::locate(t, &[], Some(leaders_of(t.height)), &glyphs, super::labelspot::SWITCH_SYMBOL_REACH_H);
                 c.placed.push(super::readers::ReadDevice {
                     tag: tag.clone(),
-                    at: [t.at.x, t.at.y],
+                    at: [at.x, at.y],
                     sheet: sheet.clone(),
                     level: level.map_or_else(String::new, |r| r.level.clone()),
                     leg,
                     handle: if text_handle == 0 { String::new() } else { cadaddy_doc::Handle(text_handle).hex() },
                     kind,
                     kind_source,
+                    label_at: Some([t.at.x, t.at.y]),
+                    spot: spot.basis(&t.value, &sheet),
                     ..super::readers::ReadDevice::default()
                 });
                 *c.by_type.entry(tag).or_default() += 1;
@@ -7433,11 +7478,17 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let typical = typical_view_marks(s.doc()?, job, &legend_pages);
     if !typical.added.is_empty() {
         let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+        // How each made from a label found its spot (Q6337): a leader's end, the symbol by it,
+        // or (to check) the label's point.
+        let mut spots: BTreeMap<&str, usize> = BTreeMap::new();
         for dv in &typical.added {
             *kinds.entry(super::unitmarks::kind_of(dv)).or_default() += 1;
+            if dv.label_at.is_some() {
+                *spots.entry(super::labelspot::Spot::key_of_basis(&dv.spot)).or_default() += 1;
+            }
         }
         progress_line(&format!(
-            "  typical rooms' plans: marks the device reading left, read now: {} ({:?}; by kind {kinds:?}) in {:.1} s",
+            "  typical rooms' plans: marks the device reading left, read now: {} ({:?}; by kind {kinds:?}; made from labels, spot by {spots:?}) in {:.1} s",
             typical.added.len(),
             typical.report,
             devices_clock.elapsed().as_secs_f64()
@@ -12070,6 +12121,8 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
             // read elsewhere is that device here too.
             let mut pieces = Vec::new();
             let mut known: Vec<([f64; 4], super::unitmarks::Symbol)> = Vec::new();
+            // Its loose straight pieces, for the leaders its labels are set on (Q6337).
+            let mut loose: Vec<&cadaddy_doc::EntityKind> = Vec::new();
             for e in sub.model.iter() {
                 let b = cadaddy_doc::entity_bounds(&sub, e, 0);
                 if b.is_empty() || b.max.x < rect[0] || b.min.x > rect[2] || b.max.y < rect[1] || b.min.y > rect[3] {
@@ -12077,6 +12130,9 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
                 }
                 let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else {
                     super::unitmarks::pieces(&e.kind, &mut pieces);
+                    if loose.len() < super::labelspot::MAX_LEADER_SEGS {
+                        loose.push(&e.kind);
+                    }
                     continue;
                 };
                 if read_handles.contains(e.handle.hex().as_str()) {
@@ -12118,7 +12174,8 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
                 .chain(out.added.iter())
                 .filter(|dv| sheet_key(&dv.sheet) == key && inside(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])))
                 .collect();
-            let view = super::unitmarks::View { sheet: &sheet, level: &level, rect: *rect, texts: mine, read };
+            let leaders = super::labelspot::Leaders::of(loose, 4.0 * text_h);
+            let view = super::unitmarks::View { sheet: &sheet, level: &level, rect: *rect, texts: mine, read, leaders: Some(&leaders) };
             let added = super::unitmarks::read_view(&view, &symbols, &marks);
             if !added.is_empty() {
                 *out.report.entry(format!("{sheet} {title}")).or_default() += added.len();
@@ -34558,6 +34615,7 @@ mod tests {
             rect: [0.0, 0.0, 2000.0, 1000.0],
             texts: items.iter().collect(),
             read: job.devices.iter().collect(),
+            leaders: None,
         };
         let marks = super::super::unitmarks::Marks {
             luminaires: ["W3".to_string(), "Y2".to_string()].into(),

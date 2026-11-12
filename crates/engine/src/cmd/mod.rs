@@ -197,6 +197,7 @@ pub mod wiretable;
 pub(crate) use perceive::geometry::TraceCache as RoomTraceCache;
 pub(crate) mod elemtrade;
 pub(crate) mod fillin;
+mod labelspot;
 mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
