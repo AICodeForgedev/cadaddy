@@ -1,7 +1,12 @@
 //! The process's memory, for the job's progress (Q6099: find the stage where the peak jumps).
-//! Read without unsafe code: the peak from `getrusage` on Linux and macOS (its maximum resident
-//! size), Windows through PowerShell (`PeakWorkingSet64`); the memory now from Linux's
-//! `/proc/self/status`, macOS's `ps`, the same PowerShell call. On Windows that call takes about
+//! Read without unsafe code: the peak from `getrusage` on Linux (its maximum resident size),
+//! Windows through PowerShell (`PeakWorkingSet64`); the memory now from Linux's
+//! `/proc/self/status`, the same PowerShell call. macOS: the physical footprint and its peak
+//! (`phys_footprint`, what Activity Monitor and `time -l` count) from the system's `footprint`
+//! tool (about 20 ms); its resident size (`ps`) also counts pages the allocator has already given
+//! back for reuse, so after a stage that freed a lot it said several GB more than the process
+//! held (Q6389: 3.5 GB resident beside a 1.2 GB footprint after reading a print set). `ps` and
+//! `getrusage` only where `footprint` can't be run. On Windows that call takes about
 //! 0.3 s: a stage line within `FRESH_S` (2 s) of the last reading says the one taken in the
 //! background since (Q6329: seven stages of a job that built nothing waited 2 s on it); after a
 //! longer stage it is read then, so the peak is the stage's own.
@@ -93,9 +98,26 @@ fn read_now() -> Option<(u64, u64)> {
 
 #[cfg(target_os = "macos")]
 fn read() -> Option<(u64, u64)> {
-    let out = std::process::Command::new("/bin/ps").args(["-o", "rss=", "-p", &std::process::id().to_string()]).output().ok()?;
+    let pid = std::process::id().to_string();
+    let footprint = std::process::Command::new("/usr/bin/footprint").args(["-p", &pid, "--noCategories", "-f", "bytes"]).output().ok();
+    if let Some(v) = footprint.and_then(|o| footprint_mb(&String::from_utf8_lossy(&o.stdout))) {
+        return Some(v);
+    }
+    let out = std::process::Command::new("/bin/ps").args(["-o", "rss=", "-p", &pid]).output().ok()?;
     let now = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().ok()? / 1024;
     Some((now, peak_mb().unwrap_or(now)))
+}
+
+/// The physical footprint now and its peak, MB, from `footprint --noCategories -f bytes`'s
+/// `phys_footprint: <n> B` and `phys_footprint_peak: <n> B` lines (the peak is the footprint
+/// when that line is missing).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn footprint_mb(text: &str) -> Option<(u64, u64)> {
+    let bytes = |key: &str| -> Option<u64> {
+        text.lines().find_map(|l| l.trim_start().strip_prefix(key)?.strip_prefix(':')?.split_whitespace().next()?.parse().ok())
+    };
+    let now = bytes("phys_footprint")? >> 20;
+    Some((now, bytes("phys_footprint_peak").map_or(now, |p| p >> 20)))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
@@ -105,6 +127,17 @@ fn read() -> Option<(u64, u64)> {
 
 #[cfg(test)]
 mod tests {
+    /// macOS's `footprint` summary: the auxiliary lines give the footprint and its peak.
+    #[test]
+    fn the_footprint_tools_numbers_are_read() {
+        let text = "======\nsample [42]: 64-bit    Footprint: 1918896936 B (16384 bytes per page)\n======\n\nAuxiliary data:\n    phys_footprint: 1918913320 B\n    phys_footprint_peak: 3033140008 B\n";
+        assert_eq!(super::footprint_mb(text), Some((1830, 2892)));
+        assert_eq!(super::footprint_mb("    phys_footprint: 1048576 B\n"), Some((1, 1)));
+        assert_eq!(super::footprint_mb("footprint: no such process\n"), None);
+        // The `Footprint:` headline is not the auxiliary line.
+        assert_eq!(super::footprint_mb("x [1]: 64-bit    Footprint: 5 B\n"), None);
+    }
+
     #[test]
     fn the_peak_is_never_under_the_memory_now() {
         if let Some((now, peak)) = super::process_mb() {

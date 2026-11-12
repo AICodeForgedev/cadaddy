@@ -521,19 +521,45 @@ fn run_state_restore(s: &mut Session, p: &Value) -> Result<Value> {
     let st = d.layer_states.iter().find(|st| st.name == name).cloned().ok_or_else(|| bad("layerstate.restore", "no such layer state"))?;
     let mask = mask.unwrap_or(st.restore);
     let off_others = p.get("offOthers").and_then(Value::as_bool).unwrap_or(st.off_others);
+    // Both lists can come from a file: the drawing's layers are looked up in an index, and the
+    // saved names in a set, rather than scanned per layer.
+    let index = layer_index(d);
     for saved in &st.layers {
-        if let Some(l) = d.layer_mut(&saved.name) {
+        if let Some(l) = index.get(&saved.name.to_ascii_lowercase()).and_then(|&i| d.layers.get_mut(i)) {
             mask.apply(saved, l);
         }
     }
     if off_others {
+        let kept: std::collections::HashSet<String> = st.layers.iter().map(|x| x.name.to_ascii_lowercase()).collect();
         for l in &mut d.layers {
-            if !st.layers.iter().any(|x| x.name.eq_ignore_ascii_case(&l.name)) {
+            if !kept.contains(&l.name.to_ascii_lowercase()) {
                 l.on = false;
             }
         }
     }
     ok()
+}
+
+/// The drawing's layers by lower-cased name: the first of names that differ only in case, as
+/// `Drawing::layer_mut` finds it.
+fn layer_index(d: &cadaddy_doc::Drawing) -> std::collections::HashMap<String, usize> {
+    let mut index = std::collections::HashMap::with_capacity(d.layers.len());
+    for (i, l) in d.layers.iter().enumerate() {
+        index.entry(l.name.to_ascii_lowercase()).or_insert(i);
+    }
+    index
+}
+
+/// Put the saved layers back over the drawing's layers of the same name (without regard to case);
+/// saved layers the drawing no longer has are skipped. Both lists can come from a file, so the
+/// drawing's layers are looked up in an index rather than scanned per saved layer.
+pub(crate) fn restore_layers(d: &mut cadaddy_doc::Drawing, saved: Vec<Layer>) {
+    let index = layer_index(d);
+    for layer in saved {
+        if let Some(l) = index.get(&layer.name.to_ascii_lowercase()).and_then(|&i| d.layers.get_mut(i)) {
+            *l = layer;
+        }
+    }
 }
 
 fn run_state_list(s: &mut Session, _p: &Value) -> Result<Value> {
@@ -578,6 +604,22 @@ mod tests {
     use serde_json::json;
 
     use crate::Session;
+
+    /// Restoring many saved layers, most of them missing, takes one pass and matches without case.
+    #[test]
+    fn restore_layers_matches_by_name_in_linear_time() {
+        let mut d = cadaddy_doc::Drawing::new_imperial();
+        d.layers = (0..20_000).map(|i| cadaddy_doc::Layer::new(&format!("L{i}"))).collect();
+        let mut saved: Vec<cadaddy_doc::Layer> = (0..20_000).map(|i| cadaddy_doc::Layer::new(&format!("missing{i}"))).collect();
+        let mut back = cadaddy_doc::Layer::new("l7");
+        back.frozen = true;
+        saved.push(back);
+        let started = std::time::Instant::now();
+        super::restore_layers(&mut d, saved);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(d.layer("L7").is_some_and(|l| l.frozen));
+        assert_eq!(d.layers.len(), 20_000);
+    }
 
     #[test]
     fn layer_states_save_list_restore_delete() {

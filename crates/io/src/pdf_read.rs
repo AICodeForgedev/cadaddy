@@ -301,6 +301,12 @@ fn load_cached(bytes: &[u8]) -> Result<std::sync::Arc<Document>> {
     }
 }
 
+/// Whether the parsed file of `bytes` is kept for the next pages ([`load_cached`]).
+pub fn is_cached(bytes: &[u8]) -> bool {
+    let key = fingerprint(bytes);
+    DOC_CACHE.lock().is_ok_and(|cache| cache.iter().any(|(k, n, _)| *k == key && *n == bytes.len()))
+}
+
 /// Forget the parsed files kept for the next pages (their memory is freed once no read uses them).
 pub fn clear_cache() {
     if let Ok(mut cache) = DOC_CACHE.lock() {

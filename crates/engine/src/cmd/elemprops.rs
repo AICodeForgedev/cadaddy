@@ -532,6 +532,12 @@ pub(crate) fn clear_index() {
     INDEX.clear();
 }
 
+/// Whether the element index is kept (this thread's, in the unit tests).
+#[cfg(test)]
+pub(crate) fn index_held() -> bool {
+    INDEX.holds()
+}
+
 /// The model's chunks with their elements (draw order), and how many chunks were worked out.
 fn indexed(d: &Drawing) -> (Vec<crate::chunkpool::Part<ChunkElements>>, crate::chunkpool::Refresh) {
     let upf = units_per_foot(d);

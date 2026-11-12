@@ -522,6 +522,16 @@ pub fn snap_ends(polys: &[Vec<Vec2>], snap: f64, tol: f64) -> Vec<Vec<Vec2>> {
     snap_ends_within(polys, snap, tol, MAX_GAP_PAIRS)
 }
 
+/// [`snap_ends`] with every end snapped: the budget counts the (end, segment) pairs actually
+/// compared (the segments near each end), not every segment of every other curve. So an end is
+/// snapped the same way among any curves that hold all those within `snap` of it: a search
+/// window's ends as a larger window's (whose pairwise budget runs out on a dense plan's first few
+/// hundred ends, leaving the rest unsnapped). None when even these pairs run past the budget.
+pub fn snap_ends_local(polys: &[Vec<Vec2>], snap: f64, tol: f64) -> Option<Vec<Vec<Vec2>>> {
+    let (out, complete) = snap_ends_budget(polys, snap, tol, MAX_GAP_PAIRS, true);
+    complete.then_some(out)
+}
+
 /// [`snap_ends`], comparing at most `budget` (end, segment) pairs. Each end is compared with
 /// the segments near it only (a grid of the segments' boxes), in curve and segment order, but
 /// counted against the budget as one pair per segment of every other curve: what comparing it
@@ -529,19 +539,26 @@ pub fn snap_ends(polys: &[Vec<Vec2>], snap: f64, tol: f64) -> Vec<Vec<Vec2>> {
 /// gives. (Comparing every pair took 0.6 ms a search window on a 550-curve plan, and a room trace
 /// searches thousands of windows: 6 s of every trace.)
 fn snap_ends_within(polys: &[Vec<Vec2>], snap: f64, tol: f64, budget: usize) -> Vec<Vec<Vec2>> {
+    snap_ends_budget(polys, snap, tol, budget, false).0
+}
+
+/// [`snap_ends_within`]; `local`: each end costs the pairs it compares ([`snap_ends_local`]).
+/// Whether every end was looked at (the budget held).
+fn snap_ends_budget(polys: &[Vec<Vec2>], snap: f64, tol: f64, budget: usize, local: bool) -> (Vec<Vec<Vec2>>, bool) {
     let mut out: Vec<Vec<Vec2>> = polys.to_vec();
     if !(snap.is_finite() && snap > tol) {
-        return out;
+        return (out, true);
     }
     // build() refuses this input anyway; don't spend ends x segments work on it.
     let total: usize = polys.iter().map(|p| p.len().saturating_sub(1)).sum();
     if total > MAX_SEGMENTS {
-        return out;
+        return (out, false);
     }
     let grid = SegmentGrid::new(polys, snap);
     // (target polyline, segment index, parameter on it, the point) for every vertex to insert.
     let mut inserts: Vec<(usize, usize, f64, Vec2)> = Vec::new();
     let mut budget = budget;
+    let mut complete = true;
     let mut near: Vec<(u32, u32)> = Vec::new();
     'ends: for (i, pl) in polys.iter().enumerate() {
         let (Some(&first), Some(&last)) = (pl.first(), pl.last()) else { continue };
@@ -555,12 +572,22 @@ fn snap_ends_within(polys: &[Vec<Vec2>], snap: f64, tol: f64, budget: usize) -> 
             if !e.is_finite() {
                 continue;
             }
-            // Out of pairs part way through this end: neither it nor any later end is snapped.
-            if cost > budget {
-                break 'ends;
+            if !local {
+                // Out of pairs part way through this end: neither it nor any later end is snapped.
+                if cost > budget {
+                    complete = false;
+                    break 'ends;
+                }
+                budget -= cost;
             }
-            budget -= cost;
             grid.near(e, &mut near);
+            if local {
+                if near.len() > budget {
+                    complete = false;
+                    break 'ends;
+                }
+                budget -= near.len();
+            }
             let mut best: Option<(f64, usize, usize, f64, Vec2)> = None;
             let mut touching = false;
             for &(j, k) in &near {
@@ -608,7 +635,7 @@ fn snap_ends_within(polys: &[Vec<Vec2>], snap: f64, tol: f64, budget: usize) -> 
             v.insert(k + 1, q);
         }
     }
-    out
+    (out, complete)
 }
 
 /// The segments of a set of curves by the cells of a uniform grid, each in every cell its box
@@ -737,6 +764,11 @@ pub struct Searcher(Result<Graph, Fail>);
 impl Searcher {
     pub fn new(polys: &[Vec<Vec2>], tol: f64, gap: f64) -> Searcher {
         Searcher(build_gap_r(polys, tol, gap))
+    }
+
+    /// Whether the curves were too many to search ([`Search::TooComplex`] at every point).
+    pub fn is_complex(&self) -> bool {
+        matches!(self.0, Err(Fail::Complex))
     }
 
     /// What [`search_at_gap`] finds at `p` among these curves.
@@ -1239,6 +1271,40 @@ mod tests {
             }
         }
         assert!(snapped_any > 100, "the cases snap ends ({snapped_any})");
+    }
+
+    /// A dense plan's window: 2,500 strokes each stopping a hair short of one long line. The
+    /// pairwise budget runs out part way (the later strokes stay short); the local one snaps every
+    /// end, each as it snaps among only the curves near it, and agrees with the pairwise one where
+    /// that has budget left.
+    #[test]
+    fn snapping_ends_locally_snaps_every_end_as_any_window_holding_its_neighbours_does() {
+        let n = 2500;
+        let mut polys: Vec<Vec<Vec2>> = vec![vec![Vec2::new(-1.0, 0.0), Vec2::new(n as f64 + 1.0, 0.0)]];
+        for i in 0..n {
+            let x = i as f64 + 0.5;
+            polys.push(vec![Vec2::new(x, 0.02), Vec2::new(x, 0.8)]);
+        }
+        let (snap, tol) = (0.05, 1e-9);
+        let pairwise = snap_ends(&polys, snap, tol);
+        let local = snap_ends_local(&polys, snap, tol).expect("within the budget");
+        let snapped = |v: &[Vec<Vec2>]| v.iter().skip(1).filter(|p| p.first().is_some_and(|q| q.y == 0.0)).count();
+        assert!(snapped(&pairwise) < n / 2, "the pairwise budget runs out: {}", snapped(&pairwise));
+        assert_eq!(snapped(&local), n);
+        // Where the pairwise budget held, the same strokes (the long line gains a vertex at
+        // every end snapped onto it).
+        let held = snapped(&pairwise);
+        assert_eq!(pairwise.get(1..=held), local.get(1..=held));
+        // A window of the long line and 40 of the strokes: those strokes as in the whole.
+        let few: Vec<Vec<Vec2>> = polys.iter().take(1).chain(polys.iter().skip(1001).take(40)).cloned().collect();
+        let few_local = snap_ends_local(&few, snap, tol).expect("within the budget");
+        assert_eq!(few_local.get(1..), local.get(1001..1041));
+        // Small inputs: what the pairwise snap gives.
+        let small: Vec<Vec<Vec2>> = polys.iter().take(30).cloned().collect();
+        assert_eq!(snap_ends_local(&small, snap, tol), Some(snap_ends(&small, snap, tol)));
+        // Over the segment cap: no answer.
+        let many: Vec<Vec<Vec2>> = (0..=MAX_SEGMENTS).map(|i| vec![Vec2::new(i as f64, 0.0), Vec2::new(i as f64, 1.0)]).collect();
+        assert_eq!(snap_ends_local(&many, snap, tol), None);
     }
 
     #[test]

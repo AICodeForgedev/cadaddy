@@ -354,3 +354,61 @@ fn what_it_writes_says_where_it_came_from() {
     );
     assert!(!old.to_json().contains("status") && !old.to_json().contains("source"));
 }
+
+/// A print's floor plan without layer names: `rows` × `cols` walls 6' to 14' long (as a plan's
+/// walls vary), each two faces 6" apart, on a 16' grid, every other one turned across.
+fn print_of_walls(rows: usize, cols: usize) -> cadaddy_doc::Drawing {
+    use cadaddy_doc::{Common, EntityKind, Line, Space};
+    use cadaddy_geom::Vec3;
+    let mut d = cadaddy_doc::Drawing::default();
+    let mut line = |a: [f64; 2], b: [f64; 2]| {
+        let _ = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(a[0], a[1], 0.0), b: Vec3::new(b[0], b[1], 0.0) }));
+    };
+    for r in 0..rows {
+        for c in 0..cols {
+            // Inches, from the corner of its square.
+            let (x, y) = (192.0 * c as f64, 192.0 * r as f64);
+            let len = wall_ft(r, c) * 12.0;
+            if (r + c) % 2 == 0 {
+                line([x, y], [x + len, y]);
+                line([x, y + 6.0], [x + len, y + 6.0]);
+            } else {
+                line([x, y], [x, y + len]);
+                line([x + 6.0, y], [x + 6.0, y + len]);
+            }
+        }
+    }
+    d
+}
+
+fn wall_ft(r: usize, c: usize) -> f64 {
+    6.0 + ((r * 7 + c * 3) % 9) as f64
+}
+
+#[test]
+fn a_big_print_plan_reads_its_walls_in_about_linear_time() {
+    // Each face looked for its other face among every line of the plan, each line for the faces
+    // round it, and each wall piece for the pieces on its line: 12,800 lines took about 330
+    // million tests a pass, so a plan twice the size read four times as slowly. Only the lines
+    // near a face can be its other face.
+    let al = cadaddy_mepfix::sheet_reader::Alignment { rotation_deg: 0.0, offset_in: [0.0, 0.0] };
+    let small = print_of_walls(10, 10);
+    let walls = wall_reader::read_plan_walls(&small, &al, "L1", &[]);
+    assert_eq!(walls.len(), 100);
+    assert!(walls.iter().all(|w| (w.thickness_in - 6.0).abs() < 1e-6 && (6.0 - 1e-6..=14.0 + 1e-6).contains(&wall_len(w))), "{walls:?}");
+    let mut lengths: Vec<f64> = walls.iter().map(wall_len).collect();
+    let mut want: Vec<f64> = (0..10).flat_map(|r| (0..10).map(move |c| wall_ft(r, c))).collect();
+    lengths.sort_by(f64::total_cmp);
+    want.sort_by(f64::total_cmp);
+    assert!(lengths.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-6), "{lengths:?}");
+    let big = print_of_walls(80, 80);
+    let t = std::time::Instant::now();
+    let walls = wall_reader::read_plan_walls(&big, &al, "L1", &[]);
+    let took = t.elapsed();
+    assert_eq!(walls.len(), 6_400);
+    assert!(took < std::time::Duration::from_secs(2), "6,400 walls read in {took:?}");
+}
+
+fn wall_len(w: &cadaddy_mepfix::wall_reader::FoundWall) -> f64 {
+    (w.b_ft[0] - w.a_ft[0]).hypot(w.b_ft[1] - w.a_ft[1])
+}
