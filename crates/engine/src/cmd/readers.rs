@@ -214,6 +214,9 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 connection: f("connection"),
                 fire_alarm: None,
                 symbol: None,
+                template: f("typical_view"),
+                circuit_basis: f("circuit_basis"),
+                circuit_review: String::new(),
             }
         })
         .collect();
@@ -1522,6 +1525,18 @@ pub struct ReadDevice {
     /// how the print draws it and the library symbol it is shown with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<SymbolFacts>,
+    /// The typical room's view (its sheet and title) it was stamped from into a room of the view's
+    /// type. Empty: read for its own room (its floor's plan, or a view of its own room).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub template: String,
+    /// Where its circuit and switch leg came from when its typical view's labels gave way: its
+    /// room's own floor plan tags it (that floor's panel), the view's labels kept in the note.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub circuit_basis: String,
+    /// Why its typical view's circuit label is asked: no schedule row or plan of its room's level
+    /// supports it (the view's panel feeds another floor).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub circuit_review: String,
 }
 
 /// What the symbol table says of a device found by its drawing ([`super::symtable`]).
@@ -1750,6 +1765,14 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         if !dv.circuit.is_empty() {
             e.set("circuit", dv.circuit.clone(), "plan");
         }
+        // A typical view's copy: the view it came from; its circuit from its room's own floor plan
+        // (the view's labels in the note), or its view's label asked about.
+        if !dv.template.is_empty() {
+            e.set("typical_view", dv.template.clone(), "plan");
+        }
+        if !dv.circuit_basis.is_empty() {
+            e.set("circuit_basis", dv.circuit_basis.clone(), "plan");
+        }
         if !dv.leg.is_empty() {
             e.set("switch_leg", dv.leg.clone(), "plan");
         }
@@ -1847,6 +1870,15 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
                     "rule",
                 );
             }
+        }
+        // Its typical view's circuit label no schedule row or plan of its level supports: asked
+        // (beside any other question about it).
+        if !dv.circuit_review.is_empty() {
+            let review = match e.fields.get("review").map(|f| f.value.clone()).filter(|v| !v.is_empty()) {
+                Some(other) => format!("{other}; {}", dv.circuit_review),
+                None => dv.circuit_review.clone(),
+            };
+            e.set("review", review, "rule");
         }
         // Its spot when another document's gives it (the electrical plan's spot kept in the note).
         if !dv.located.is_empty() {

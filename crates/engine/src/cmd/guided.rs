@@ -4009,6 +4009,9 @@ fn device_census(
                         connection: String::new(),
                         fire_alarm: None,
                         symbol: None,
+                        template: String::new(),
+                        circuit_basis: String::new(),
+                        circuit_review: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -7756,6 +7759,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     });
                     progress_line(&format!("  floor plans' devices a typical plan stamped at their spot (left out): {}", duplicates.len()));
                 }
+                // A typical view's copy takes its room's own floor plan's labels where that plan
+                // tags it (above); one whose view's label no schedule row or plan of its level
+                // supports is asked about.
+                let own_labels = stamped.iter().filter(|dv| !dv.circuit_basis.is_empty()).count();
+                let asked = template_label_review(&mut stamped, &out, &schedules);
+                if own_labels + asked > 0 {
+                    progress_line(&format!(
+                        "  typical views' copies on their room's own floor plan's circuit: {own_labels}; view labels no schedule row or plan of the room's level supports (asked): {asked}"
+                    ));
+                }
                 // A floor plan's device found by its drawing (Q6484) in a room a typical view
                 // stamped: that view shows the room's devices (no second count).
                 let level_key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
@@ -11472,9 +11485,9 @@ fn stamp_typical_rooms(
         let sub = super::printmep::sheet_drawing(d, sh);
         let sheet_hinges = plan_hinges(&sub);
         let mut turns: BTreeMap<([u64; 4], usize), RoomFit> = BTreeMap::new();
-        let mut told_fit: BTreeSet<[u64; 4]> = BTreeSet::new();
-        // A one-room plan's room laid round its tag where its trace leaked (by the view).
-        let mut leaked: BTreeMap<[u64; 4], Option<(RoomFit, Vec<cadaddy_geom::Vec2>)>> = BTreeMap::new();
+        let mut told_fit: BTreeSet<([u64; 4], usize)> = BTreeSet::new();
+        // A one-room plan's room laid round its tag where its trace leaked (by the view and room).
+        let mut leaked: BTreeMap<([u64; 4], usize), Option<(RoomFit, Vec<cadaddy_geom::Vec2>)>> = BTreeMap::new();
         // The sheet's devices (where each view draws its own), and each view's linework.
         let drawn: Vec<[f64; 2]> = devices.iter().map(|dv| dv.at).collect();
         let reach = ROOM_WALL_FT * 12.0 * k_in;
@@ -11563,53 +11576,56 @@ fn stamp_typical_rooms(
         for dv in devices {
             let inside = |r: &[f64; 4]| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3];
             // A view of one room (the smallest holding it, unless a typical-room view is smaller):
-            // into that room, and the authority there (the overall plan's copies there go).
+            // into that room, and the authority there (the overall plan's copies there go). A view
+            // whose title lists rooms: into each of them.
             let typical = views.iter().filter(|(_, r, _)| inside(r)).map(|(_, r, _)| area(r)).fold(f64::INFINITY, f64::min);
-            if let Some((title, view, i)) =
-                one_room.iter().filter(|(_, r, _)| inside(r) && area(r) < typical).min_by(|a, b| area(&a.1).total_cmp(&area(&b.1)))
+            if let Some(smallest) =
+                one_room.iter().filter(|(_, r, _)| inside(r) && area(r) < typical).map(|(_, r, _)| *r).min_by(|a, b| area(a).total_cmp(&area(b)))
             {
-                if let Some((name, level, traced, number)) = rooms.get(*i)
-                    && out.len() < MAX_STAMPED
-                    && let fixed = leaked
-                        .entry(view.map(f64::to_bits))
-                        .or_insert_with(|| {
-                            let unit = unit_box(view)?;
-                            let tag = job_room_tag(job, level, number, name)?;
-                            let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = sheet_objects
-                                .iter()
-                                .filter(|e| {
-                                    super::bspec::centre(&sub, e)
-                                        .is_some_and(|c| c.x >= view[0] && c.x <= view[2] && c.y >= view[1] && c.y <= view[3])
-                                })
-                                .copied()
-                                .collect();
-                            let lines = super::grids::line_samples(&mine, 12.0 * k_in);
-                            one_room_round_its_tag(d, &lines, *view, unit, bbox(traced), tag, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 6.0 * k_in)
-                        })
-                        .clone()
-                    && let (outline, turn) = match fixed {
-                        Some((fit, o)) => (o, fit),
-                        None => (traced.clone(), turn_of(view, *i, traced)),
+                for (title, view, i) in one_room.iter().filter(|(_, r, _)| *r == smallest) {
+                    if let Some((name, level, traced, number)) = rooms.get(*i)
+                        && out.len() < MAX_STAMPED
+                        && let fixed = leaked
+                            .entry((view.map(f64::to_bits), *i))
+                            .or_insert_with(|| {
+                                let unit = unit_box(view)?;
+                                let tag = job_room_tag(job, level, number, name)?;
+                                let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = sheet_objects
+                                    .iter()
+                                    .filter(|e| {
+                                        super::bspec::centre(&sub, e)
+                                            .is_some_and(|c| c.x >= view[0] && c.x <= view[2] && c.y >= view[1] && c.y <= view[3])
+                                    })
+                                    .copied()
+                                    .collect();
+                                let lines = super::grids::line_samples(&mine, 12.0 * k_in);
+                                one_room_round_its_tag(d, &lines, *view, unit, bbox(traced), tag, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 6.0 * k_in)
+                            })
+                            .clone()
+                        && let (outline, turn) = match fixed {
+                            Some((fit, o)) => (o, fit),
+                            None => (traced.clone(), turn_of(view, *i, traced)),
+                        }
+                        && let Some(at) = place_in_room(dv.at, *view, bbox(&outline), turn)
+                    {
+                        if told_fit.insert((view.map(f64::to_bits), *i)) {
+                            let how = if &outline == traced { "its box" } else { "its trace leaked past the view, laid round its tag: its box" };
+                            progress_line(&format!(
+                                "  one-room plan {sheet} {title}: room {number} {level}, {how} {:?}, the view {view:?} laid by {turn:?}",
+                                bbox(&outline)
+                            ));
+                        }
+                        if furnished(level, &outline) && !authority.iter().any(|(l, o, _)| l == level && *o == outline) {
+                            authority.push((level.clone(), outline.clone(), stamped_room(name, number, *i)));
+                        }
+                        let mut copy = (*dv).clone();
+                        copy.at = at;
+                        copy.level.clone_from(level);
+                        copy.room = stamped_room(name, number, *i);
+                        panel_into(copy.room.clone(), false, level, view, &outline, turn, &mut panels, &mut panel_rooms);
+                        out.push(copy);
+                        *report.entry(format!("{sheet} {title}")).or_default() += 1;
                     }
-                    && let Some(at) = place_in_room(dv.at, *view, bbox(&outline), turn)
-                {
-                    if told_fit.insert(view.map(f64::to_bits)) {
-                        let how = if &outline == traced { "its box" } else { "its trace leaked past the view, laid round its tag: its box" };
-                        progress_line(&format!(
-                            "  one-room plan {sheet} {title}: room {number} {level}, {how} {:?}, the view {view:?} laid by {turn:?}",
-                            bbox(&outline)
-                        ));
-                    }
-                    if furnished(level, &outline) && !authority.iter().any(|(l, o, _)| l == level && *o == outline) {
-                        authority.push((level.clone(), outline.clone(), stamped_room(name, number, *i)));
-                    }
-                    let mut copy = (*dv).clone();
-                    copy.at = at;
-                    copy.level.clone_from(level);
-                    copy.room = stamped_room(name, number, *i);
-                    panel_into(copy.room.clone(), false, level, view, &outline, turn, &mut panels, &mut panel_rooms);
-                    out.push(copy);
-                    *report.entry(format!("{sheet} {title}")).or_default() += 1;
                 }
                 continue;
             }
@@ -11646,6 +11662,7 @@ fn stamp_typical_rooms(
                 copy.at = at;
                 copy.level.clone_from(level);
                 copy.room = room;
+                copy.template = format!("{sheet} {title}");
                 panel_into(copy.room.clone(), true, level, view, outline, turn, &mut panels, &mut panel_rooms);
                 if sleeping_room(words) {
                     sleeping.entry(ri).or_insert_with(|| (level.clone(), outline.clone()));
@@ -11691,18 +11708,23 @@ fn stamp_typical_rooms(
             let same = |i: &usize| {
                 !taken.contains(i) && out.get(*i).is_some_and(|c| c.tag.eq_ignore_ascii_case(&f.tag) && super::unitmarks::kind_of(c) == fk)
             };
+            // (One in the room is the room's own whatever panel it is on: its floor's plan tags the
+            // room's devices, and the typical view's labels give way to it.)
             let nearest = mine
                 .iter()
                 .filter(|(i, _, _)| same(i) && gap(*i) <= stand_in_reach)
                 .filter(|(i, _, _)| match (out.get(*i).and_then(|c| panel(&c.circuit)), &theirs) {
-                    (Some(a), Some(b)) => a == *b,
+                    (Some(a), Some(b)) => in_room || a == *b,
                     _ => true,
                 })
                 .min_by(|a, b| gap(a.0).total_cmp(&gap(b.0)));
             if let Some((i, _, _)) = nearest {
                 taken.insert(*i);
                 stood.insert(fi);
-                if let Some(c) = out.get(*i) {
+                if let Some(c) = out.get_mut(*i) {
+                    if in_room {
+                        own_floor_labels(c, f);
+                    }
                     duplicates.insert(fi, (c.handle.clone(), c.room.clone()));
                 }
             } else if in_room && !mine.iter().any(|(i, _, _)| same(i)) && super::lighting::lighting_kind(&fk) && differs.len() < MAX_STAMPED {
@@ -11744,6 +11766,101 @@ fn stamp_typical_rooms(
 /// How far a floor plan's fixture or switch may be from the enlarged plan's copy of its kind to be
 /// that copy tagged otherwise, feet.
 const PLAN_DIFF_REACH_FT: f64 = 3.0;
+
+/// A typical view's copy in a room (`copy`) whose floor plan tags the same device there (`floor`):
+/// the circuit and switch leg are the floor plan's (the room's own floor, its own panel), the
+/// view's labels kept in the basis. The view's labels stay where the floor plan prints none.
+/// Whether they changed.
+fn own_floor_labels(copy: &mut super::readers::ReadDevice, floor: &super::readers::ReadDevice) -> bool {
+    let circuit = !floor.circuit.trim().is_empty() && !floor.circuit.trim().eq_ignore_ascii_case(copy.circuit.trim());
+    let leg = !floor.leg.trim().is_empty() && floor.leg.trim() != copy.leg.trim();
+    if !circuit && !leg {
+        return false;
+    }
+    let said = |v: &str| if v.trim().is_empty() { "none".to_string() } else { v.trim().to_string() };
+    let mut basis = format!("its room's own floor plan {} tags it", if floor.sheet.trim().is_empty() { "?" } else { floor.sheet.trim() });
+    if circuit {
+        basis.push_str(&format!(" on circuit {}", floor.circuit.trim()));
+    }
+    if leg {
+        basis.push_str(&format!(" on switch leg {}", floor.leg.trim()));
+    }
+    basis.push_str(&format!(
+        "; the typical view {} letters circuit {}, switch leg {} (a typical view's labels give way to the room's own floor plan)",
+        if copy.template.is_empty() { "?" } else { copy.template.as_str() },
+        said(&copy.circuit),
+        said(&copy.leg)
+    ));
+    if circuit {
+        copy.circuit = floor.circuit.trim().to_string();
+    }
+    if leg {
+        copy.leg = floor.leg.trim().to_string();
+    }
+    copy.circuit_basis = basis;
+    copy.circuit_review.clear();
+    true
+}
+
+/// The typical views' copies whose circuit label (the view's, no floor plan of their room tagged
+/// them: [`own_floor_labels`]) no panel schedule row or plan of their room's level supports: each
+/// asked about ([`super::readers::ReadDevice::circuit_review`]). A label is supported by its
+/// panel's schedule row when that row names the room's level or the room (a row naming another
+/// floor or room is against it); by a typical panel's (one in every room); else by the panel
+/// feeding that level: a row of its schedule naming the level, or the level's own plans' devices
+/// on it. A panel with no schedule read is not judged. `floor`: the plans' own devices. How many.
+fn template_label_review(
+    stamped: &mut [super::readers::ReadDevice],
+    floor: &[super::readers::ReadDevice],
+    schedules: &[cadaddy_walk3d::PanelSchedule],
+) -> usize {
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let names = |text: &str, level: &str, room: &str| -> (bool, bool) {
+        // (names something, names this level or room)
+        let levels: Vec<String> = cadaddy_mepfix::sheet_reader::detect_levels(text).into_iter().filter(|l| l != "T").collect();
+        let up = text.to_ascii_uppercase();
+        let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+        let room_named = !room.trim().is_empty() && words.iter().any(|w| w.eq_ignore_ascii_case(room.trim()));
+        let level_named = !digits(level).is_empty() && levels.iter().any(|l| digits(l) == digits(level));
+        (!levels.is_empty() || room_named, level_named || room_named)
+    };
+    let mut asked = 0usize;
+    for dv in stamped.iter_mut().filter(|dv| !dv.template.is_empty() && dv.circuit_basis.is_empty() && !dv.circuit.trim().is_empty()) {
+        let Some(p) = super::propfill::panel_of(&dv.circuit) else { continue };
+        let Some(schedule) = schedules.iter().find(|s| s.panel.trim().eq_ignore_ascii_case(&p)) else { continue };
+        if schedule.typical_of.is_some() {
+            continue;
+        }
+        let number: String =
+            dv.circuit.rsplit_once(['-', '/', '.']).map(|(_, n)| n.trim().chars().take_while(char::is_ascii_digit).collect()).unwrap_or_default();
+        let row = schedule.circuits.iter().find(|c| !number.is_empty() && c.number.trim() == number);
+        let row_says = row.map(|c| names(&format!("{} {}", c.description, c.room), &dv.level, &dv.room));
+        let supported = match row_says {
+            Some((true, mine)) => mine,
+            _ => {
+                schedule.circuits.iter().any(|c| names(&format!("{} {}", c.description, c.room), &dv.level, &dv.room).1)
+                    || floor.iter().any(|f| {
+                        f.template.is_empty()
+                            && digits(&f.level) == digits(&dv.level)
+                            && super::propfill::panel_of(&f.circuit).is_some_and(|q| q.eq_ignore_ascii_case(&p))
+                    })
+            }
+        };
+        if !supported {
+            let row_text = row.map(|c| format!(" (its row {}: {})", c.number.trim(), c.description.trim())).unwrap_or_default();
+            dv.circuit_review = format!(
+                "the typical view {} letters it {}: panel {p}'s schedule{row_text} names neither level {} nor room {}, and level {}'s own plans put nothing on panel {p}; the room's panel and circuit are asked (the room's floor plan tags its devices on that floor's panel)",
+                dv.template,
+                dv.circuit.trim(),
+                dv.level.trim(),
+                dv.room.trim(),
+                dv.level.trim()
+            );
+            asked += 1;
+        }
+    }
+    asked
+}
 
 /// What reading the typical-room plans' unread marks gave (Q6159): the devices added, each typical
 /// view by its sheet (their devices go into the rooms of their type, never onto the floor by the
@@ -11896,8 +12013,8 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
         }
         let sub = super::printmep::sheet_drawing(d, sh);
         let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
-        let (views, _) = room_views(&sub, &texts, &types, &vocabulary, &rooms);
-        if views.is_empty() {
+        let (views, one_room) = room_views(&sub, &texts, &types, &vocabulary, &rooms);
+        if views.is_empty() && one_room.is_empty() {
             continue;
         }
         for (_, rect, words) in &views {
@@ -11908,11 +12025,20 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
                 .1
                 .push((key.clone(), *rect));
         }
+        // The views of the rooms their titles name (one view, one entry a room): read once each,
+        // their marks stamped into those rooms only.
+        let mut room_plans: Vec<(&String, &[f64; 4])> = Vec::new();
+        for (title, rect, _) in &one_room {
+            if !room_plans.iter().any(|(_, r)| *r == rect) {
+                room_plans.push((title, rect));
+                out.views.entry(key.clone()).or_default().push(*rect);
+            }
+        }
         if !cadaddy_mepfix::sheet_facts::discipline_of(&key).eq_ignore_ascii_case("E") {
             continue;
         }
         let sheet = sh.number.split('/').next().unwrap_or(&sh.number).trim().to_string();
-        for (title, rect, _) in &views {
+        for (title, rect) in views.iter().map(|(t, r, _)| (t, r)).chain(room_plans) {
             let inside = |p: cadaddy_geom::Vec2| p.x >= rect[0] && p.x <= rect[2] && p.y >= rect[1] && p.y <= rect[3];
             let mine: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts.iter().filter(|t| inside(t.at)).collect();
             // The view's lettering height: its circuit labels' (else all its lettering's) middle one.
@@ -13267,7 +13393,7 @@ fn typical_elevations(
                 (up.contains(" WALL") || up.contains("ELEVATION"))
                     && !up.contains("RCP")
                     && v.region.is_some()
-                    && types.contains(&type_words(&v.title, Some(vocabulary)))
+                    && view_room_type(&v.title, types, vocabulary).is_some()
             })
             .collect();
         if elevations.is_empty() {
@@ -14263,8 +14389,8 @@ fn typical_rcp_areas_on(
             .filter_map(|v| {
                 let up = v.title.to_ascii_uppercase();
                 let rcp = up.contains("REFLECTED CEILING") || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP");
-                let words = type_words(&v.title, Some(&vocabulary));
-                (rcp && types.contains(&words)).then_some((v.region?, words, v.title.clone()))
+                let words = view_room_type(&v.title, &types, &vocabulary)?;
+                rcp.then_some((v.region?, words, v.title.clone()))
             })
             .collect();
         if views.is_empty() {
@@ -14391,8 +14517,8 @@ fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> RcpRead {
         let views: Vec<([f64; 4], BTreeSet<String>, String)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
             .into_iter()
             .filter_map(|v| {
-                let words = type_words(&v.title, Some(&vocabulary));
-                (rcp_title(&v.title) && types.contains(&words)).then_some((v.region?, words, v.title.clone()))
+                let words = view_room_type(&v.title, &types, &vocabulary)?;
+                rcp_title(&v.title).then_some((v.region?, words, v.title.clone()))
             })
             .collect();
         if views.is_empty() {
@@ -14704,8 +14830,8 @@ fn typical_elevation_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(
             // An interior elevation, or a section through the room type (Q6512: a section that
             // dimensions the ceiling is a source of its height too).
             let elevation = up.contains(" WALL") || up.contains("ELEVATION") || up.contains("SECTION");
-            let words = type_words(&v.title, Some(&vocabulary));
-            let Some(r) = v.region.filter(|_| elevation && !up.contains("RCP") && types.contains(&words)) else { continue };
+            let Some(words) = view_room_type(&v.title, &types, &vocabulary) else { continue };
+            let Some(r) = v.region.filter(|_| elevation && !up.contains("RCP")) else { continue };
             // Its level markers' labels stand over (and under) their lines, past the linework.
             let m = ELEVATION_MARKER_FT * upf;
             let region = [r[0] - m, r[1] - m, r[2] + m, r[3] + m];
@@ -15321,8 +15447,8 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
             .filter_map(|v| {
                 let up = v.title.to_ascii_uppercase();
                 let mech = mech_sheet || cadaddy_mepfix::wordrules::words("sheets.mechanical_title_words").iter().any(|w| up.contains(w));
-                let words = type_words(&v.title, Some(&vocabulary));
-                (mech && types.contains(&words)).then_some((v.region?, words, v.title.clone()))
+                let words = view_room_type(&v.title, &types, &vocabulary)?;
+                mech.then_some((v.region?, words, v.title.clone()))
             })
             .collect();
         if views.is_empty() {
@@ -16521,8 +16647,8 @@ fn typical_views(
         let titled: Vec<([f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
             .into_iter()
             .filter_map(|v| {
-                let words = type_words(&v.title, Some(vocabulary));
-                (types.contains(&words) && !v.title.to_ascii_uppercase().contains(" WALL")).then_some((v.region?, words))
+                let words = view_room_type(&v.title, types, vocabulary)?;
+                (!v.title.to_ascii_uppercase().contains(" WALL")).then_some((v.region?, words))
             })
             .collect();
         if titled.is_empty() {
@@ -17683,7 +17809,7 @@ fn job_unit_types(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<Value>, Vec
                 );
                 continue;
             }
-            let Some(region) = v.region.filter(|_| types.contains(&words)) else { continue };
+            let Some(region) = v.region.filter(|_| view_room_type(&v.title, &types, &vocabulary).is_some()) else { continue };
             let list = views.entry(words.clone()).or_default();
             if list.len() < MAX_UNIT_VIEWS {
                 list.push(json!({"sheet": sh.number, "title": v.title, "rect": region, "sheet_rect": sh.rect, "scale": v.scale_text}));
@@ -26477,7 +26603,9 @@ fn sheet_key(n: &str) -> String {
 }
 
 /// The plan views on a sheet that show rooms, not a floor: the typical-room views (title, region,
-/// the room type's words) and the views of one room (title, region, the room's index in `rooms`).
+/// the room type's words) and the views of one room or of the rooms its title lists (title,
+/// region, the room's index in `rooms`: one entry a room). A title naming its own rooms is theirs
+/// even where their name is a room type's ([`view_room_type`]).
 #[allow(clippy::type_complexity)]
 fn room_views(
     sub: &cadaddy_doc::Drawing,
@@ -26493,11 +26621,12 @@ fn room_views(
         let upper = v.title.to_ascii_uppercase();
         let plan = !["WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
         let Some(region) = v.region.filter(|_| plan) else { continue };
-        let words = type_words(&v.title, Some(vocabulary));
-        if types.contains(&words) {
+        if let Some(words) = view_room_type(&v.title, types, vocabulary) {
             views.push((v.title, region, words));
-        } else if let Some(i) = room_of_view(&upper, rooms) {
-            one_room.push((v.title, region, i));
+        } else {
+            for i in rooms_of_view(&upper, rooms) {
+                one_room.push((v.title.clone(), region, i));
+            }
         }
     }
     (views, one_room)
@@ -27203,11 +27332,106 @@ fn stamped_room(name: &str, number: &str, i: usize) -> String {
     if number.trim().is_empty() { format!("{} {i}", name.trim()) } else { number.trim().to_string() }
 }
 
+/// Whether a view's title says it is a typical one (`TYPICAL`, `TYP.`): it goes into every room
+/// of the type it names, whatever room numbers it gives.
+fn typical_title(title: &str) -> bool {
+    let words = cadaddy_mepfix::wordrules::words("units.typical_title_words");
+    title.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).any(|w| words.contains(&w))
+}
+
+/// Whether a word is a floor's ordinal (`2ND`, `10TH`).
+fn ordinal_word(w: &str) -> bool {
+    w.len() >= 3 && w.chars().next().is_some_and(|c| c.is_ascii_digit()) && ["ST", "ND", "RD", "TH"].iter().any(|e| w.ends_with(e))
+}
+
+/// The room numbers a view's title gives (`ENLARGED STORAGE ROOM #201`, `ROOMS 201, 301 AND
+/// 401`): a number after `#` or after a word that leads one (ROOM, RM, NO.), and the numbers
+/// listed after it. Upper case, in the title's order.
+fn titled_room_numbers(title: &str) -> Vec<String> {
+    let lead = cadaddy_mepfix::wordrules::words("units.room_number_lead_words");
+    let joiners = cadaddy_mepfix::wordrules::words("units.room_list_joiners");
+    let up = title.to_ascii_uppercase();
+    // Each word with the text between it and the word before.
+    let mut words: Vec<(String, String)> = Vec::new();
+    let mut gap = String::new();
+    let mut word = String::new();
+    for c in up.chars().chain(std::iter::once(' ')) {
+        if c.is_ascii_alphanumeric() {
+            word.push(c);
+        } else {
+            if !word.is_empty() {
+                words.push((std::mem::take(&mut gap), std::mem::take(&mut word)));
+            }
+            gap.push(c);
+        }
+        if words.len() >= MAX_TITLE_WORDS {
+            break;
+        }
+    }
+    let number = |w: &str| (2..=5).contains(&w.len()) && w.chars().next().is_some_and(|c| c.is_ascii_digit()) && !ordinal_word(w);
+    let listed = |g: &str| g.chars().all(|c| matches!(c, ' ' | ',' | '&' | '/'));
+    let mut out: Vec<String> = Vec::new();
+    let mut listing = false;
+    let mut prev = "";
+    for (g, w) in &words {
+        if number(w) && (g.contains('#') || lead.contains(&prev) || (listing && listed(g))) {
+            if !out.contains(w) {
+                out.push(w.clone());
+            }
+            listing = true;
+        } else if !(listing && listed(g) && joiners.contains(&w.as_str())) {
+            listing = false;
+        }
+        prev = w;
+    }
+    out
+}
+
+/// A view title's words looked at, at most.
+const MAX_TITLE_WORDS: usize = 64;
+
+/// Whether a view's title names its own room or rooms, not a type of room: it gives their numbers
+/// ([`titled_room_numbers`]), or a room on a floor (`2ND FLOOR - STORAGE ROOM`), and doesn't say
+/// it is a typical one. Such a view goes into the rooms it names only, never into the other rooms
+/// of a type its name shares (the same room on the floors above is fed and tagged by its own
+/// floor's plans).
+fn names_its_rooms(title: &str) -> bool {
+    if typical_title(title) {
+        return false;
+    }
+    let up = title.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    !titled_room_numbers(&up).is_empty() || (words.contains(&"ROOM") && words.iter().any(|w| ordinal_word(w)))
+}
+
+/// The room type a view's title names (its words, [`type_words`]), when the view is that type's
+/// (a typical room's plan, elevation, ceiling plan): not one naming its own rooms
+/// ([`names_its_rooms`]).
+fn view_room_type(title: &str, types: &BTreeSet<BTreeSet<String>>, vocabulary: &BTreeSet<String>) -> Option<BTreeSet<String>> {
+    let words = type_words(title, Some(vocabulary));
+    (!words.is_empty() && types.contains(&words) && !names_its_rooms(title)).then_some(words)
+}
+
+/// The rooms a view's title (upper case) names: the rooms its numbers are
+/// ([`titled_room_numbers`], each one room's), else [`room_of_view`]'s one.
+fn rooms_of_view(title: &str, rooms: &[JobRoom]) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for n in titled_room_numbers(title) {
+        if let [i] = rooms.iter().enumerate().filter(|(_, r)| r.3.trim().eq_ignore_ascii_case(&n)).map(|(i, _)| i).collect::<Vec<_>>()[..] {
+            out.push(i);
+        }
+    }
+    if out.is_empty() {
+        out.extend(room_of_view(title, rooms));
+    }
+    out
+}
+
 /// The one room a view's title (upper case) names: its number ("ROOM #237", "ROOM 237") when one
 /// room has it, else its name ("1ST FLOOR - MEP ROOM": the room called MEP), on the floor the
 /// title names when several are.
 fn room_of_view(title: &str, rooms: &[JobRoom]) -> Option<usize> {
-    if !title.contains("ROOM") {
+    if !title.contains("ROOM") && !title.contains('#') {
         return None;
     }
     let tokens: Vec<&str> = title.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
@@ -27220,8 +27444,7 @@ fn room_of_view(title: &str, rooms: &[JobRoom]) -> Option<usize> {
         return Some(i);
     }
     // The name: the title's words but the view's own (ENLARGED, PLAN, the trade, the floor).
-    let ordinal =
-        |w: &str| w.len() >= 3 && w.chars().next().is_some_and(|c| c.is_ascii_digit()) && ["ST", "ND", "RD", "TH"].iter().any(|e| w.ends_with(e));
+    let ordinal = ordinal_word;
     // An equipment room by any of its names (the trades' plans call it MEP, the architect MECH).
     let same = |w: &str| -> String {
         if cadaddy_mepfix::wordrules::words("rooms.equipment_room_names").contains(&w) { "MEP".to_string() } else { w.to_string() }
@@ -27310,8 +27533,8 @@ fn typical_wall_tags(
             .filter_map(|v| {
                 let upper = v.title.to_ascii_uppercase();
                 let plan = !["ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
-                let words = type_words(&v.title, Some(&vocabulary));
-                if !plan || !types.contains(&words) {
+                let words = view_room_type(&v.title, &types, &vocabulary)?;
+                if !plan {
                     return None;
                 }
                 Some((v.region?, words, format!("{} {}", sh.number, v.title.trim())))
@@ -34955,6 +35178,200 @@ mod tests {
         // No unit took it: no place under one, a question instead.
         assert_eq!(f("2E0", "placement"), None);
         assert!(f("2E0", "review").is_some_and(|r| r.0.contains("which is right is asked")), "{:?}", f("2E0", "review"));
+    }
+
+    /// fix-room-enlarged-view-copied-up: a view title giving room numbers (or a room on a floor)
+    /// names those rooms, not their type, unless it says it is typical.
+    #[test]
+    fn a_view_titled_for_its_rooms_is_theirs_not_its_types() {
+        assert_eq!(titled_room_numbers("ENLARGED STORAGE ROOM #201"), ["201"]);
+        assert_eq!(titled_room_numbers("Enlarged Storage Rooms 201, 301 and 401"), ["201", "301", "401"]);
+        assert_eq!(titled_room_numbers("POWER PLAN - RM 12A"), ["12A"]);
+        assert_eq!(titled_room_numbers("ENLARGED STORAGE #305 - 1/4\" = 1'-0\""), ["305"]);
+        assert!(titled_room_numbers("ENLARGED STORAGE - LEVEL 02").is_empty(), "a level's number is no room's");
+        assert!(titled_room_numbers("2ND FLOOR STORAGE ROOM").is_empty());
+        assert!(titled_room_numbers("ROOM 201 ELEVATION 3").len() == 1, "only the number after ROOM");
+        for (title, named) in [
+            ("ENLARGED STORAGE ROOM #201", true),
+            ("ELECTRICAL - 2ND FLOOR - STORAGE ROOM", true),
+            ("TYPICAL STORAGE ROOM #201", false),
+            ("STORAGE ROOM 201 (TYP.)", false),
+            ("ENLARGED STORAGE ROOM", false),
+            ("ENLARGED DOUBLE QUEEN", false),
+        ] {
+            assert_eq!(names_its_rooms(title), named, "{title}");
+        }
+        let storage: BTreeSet<String> = BTreeSet::from(["STORAGE".to_string()]);
+        let types = BTreeSet::from([storage.clone()]);
+        let vocabulary = storage.clone();
+        assert_eq!(view_room_type("ENLARGED STORAGE ROOM #201", &types, &vocabulary), None);
+        assert_eq!(view_room_type("TYPICAL STORAGE ROOM", &types, &vocabulary), Some(storage.clone()));
+        assert_eq!(view_room_type("ENLARGED STORAGE", &types, &vocabulary), Some(storage));
+        let sq = vec![cadaddy_geom::Vec2::new(0.0, 0.0), cadaddy_geom::Vec2::new(10.0, 0.0), cadaddy_geom::Vec2::new(10.0, 10.0)];
+        let rooms: Vec<JobRoom> = [("201", "2"), ("301", "3"), ("401", "4")]
+            .iter()
+            .map(|(n, l)| ("STORAGE".to_string(), (*l).to_string(), sq.clone(), (*n).to_string()))
+            .collect();
+        assert_eq!(rooms_of_view("ENLARGED STORAGE ROOM #201", &rooms), [0]);
+        assert_eq!(rooms_of_view("ENLARGED STORAGE ROOMS 201 AND 401", &rooms), [0, 2]);
+        assert_eq!(rooms_of_view("ELECTRICAL - 3RD FLOOR - STORAGE ROOM", &rooms), [1]);
+        assert!(rooms_of_view("ENLARGED STORAGE ROOM #999", &rooms).is_empty());
+    }
+
+    /// A three-storey set with a room of one name on each floor (201, 301, 401) and one enlarged
+    /// view of it on an electrical sheet, titled `title`: the session, the job and the devices
+    /// read off the view (a 2-pole receptacle, a fan's connection and a switch, with the view's
+    /// labels), and where the view's receptacle lands in a room at `x` (all rooms drawn alike).
+    fn one_room_view_set(title: &str) -> (crate::Session, GuidedJob, Vec<super::super::readers::ReadDevice>, impl Fn(f64) -> [f64; 2]) {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        let room_lines = |s: &mut crate::Session, o: [f64; 2]| {
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, [o[0] + ax, o[1] + ay], [o[0] + bx, o[1] + by]);
+            }
+        };
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        room_lines(&mut s, v);
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": title, "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        for x in [10_000.0, 10_400.0, 10_800.0] {
+            room_lines(&mut s, [x, 0.0]);
+        }
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-7".into(),
+            level: "2".into(),
+            discipline: "E".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-7".into(), lo, hi }];
+        let room = |n: &str, level: &str, x: f64| json!({"name": "STORAGE", "number": n, "level": level, "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result =
+                Some(json!({"rooms": [room("201", "Level 2", 10_000.0), room("301", "Level 3", 10_400.0), room("401", "Level 4", 10_800.0)]}));
+        }
+        let device = |tag: &str, kind: &str, circuit: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            kind: kind.into(),
+            circuit: circuit.into(),
+            at: [v[0] + at[0], v[1] + at[1]],
+            sheet: "E-7".into(),
+            level: "Level 2".into(),
+            ..Default::default()
+        };
+        let read = vec![
+            device("6-20R", "receptacle", "P1-15,17", [20.0, 20.0]),
+            device("EF", "equipment connection", "P1-4", [120.0, 270.0]),
+            device("S", "switch", "", [130.0, 120.0]),
+        ];
+        (s, job, read, |x: f64| [x + 20.0, 20.0])
+    }
+
+    /// fix-room-enlarged-view-copied-up: an enlarged view titled for one room (by its number) goes
+    /// into that room only; the rooms of its name on the floors above keep their own floor's
+    /// devices and circuits. A title listing rooms goes into those it lists.
+    #[test]
+    fn a_one_room_enlarged_view_is_not_copied_to_the_rooms_above() {
+        let (s, job, read, _) = one_room_view_set("ENLARGED STORAGE ROOM #201");
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced);
+        let mut rooms: Vec<(&str, &str, &str)> = stamped.devices.iter().map(|d| (d.room.as_str(), d.level.as_str(), d.circuit.as_str())).collect();
+        rooms.sort_unstable();
+        assert_eq!(rooms, [("201", "Level 2", ""), ("201", "Level 2", "P1-15,17"), ("201", "Level 2", "P1-4")], "{:?}", stamped.report);
+        assert!(stamped.devices.iter().all(|d| d.template.is_empty()), "a view of its own room is no template");
+        assert_eq!(stamped.report.keys().collect::<Vec<_>>(), ["E-7 ENLARGED STORAGE ROOM #201"]);
+        // Listed: into each room it names.
+        let (s, job, read, _) = one_room_view_set("ENLARGED STORAGE ROOMS 201 AND 401");
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced);
+        let rooms: BTreeMap<&str, usize> = stamped.devices.iter().fold(BTreeMap::new(), |mut m, d| {
+            *m.entry(d.room.as_str()).or_default() += 1;
+            m
+        });
+        assert_eq!(rooms, BTreeMap::from([("201", 3), ("401", 3)]));
+    }
+
+    /// fix-room-enlarged-view-copied-up: a typical view goes into every room of its type; where a
+    /// room's own floor plan tags the view's device there, the room takes that plan's circuit (its
+    /// floor's panel), the view's label kept in the basis; a view's label no schedule row or plan of
+    /// the room's level supports is asked about; one its own level's schedule row names is not.
+    #[test]
+    fn a_typical_views_labels_give_way_to_the_rooms_own_floor_plan() {
+        let (s, job, read, at) = one_room_view_set("TYPICAL STORAGE ROOM");
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        // Level 3's plan tags room 301's receptacle on its own panel.
+        let floor = vec![super::super::readers::ReadDevice {
+            tag: "6-20R".into(),
+            kind: "receptacle".into(),
+            circuit: "P2-19,21".into(),
+            at: at(10_400.0),
+            sheet: "E-103".into(),
+            level: "Level 3".into(),
+            handle: "F00".into(),
+            ..Default::default()
+        }];
+        let mut stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &floor, &unplaced);
+        let circuit = |st: &[super::super::readers::ReadDevice], room: &str, tag: &str| {
+            st.iter().find(|d| d.room == room && d.tag == tag).map(|d| d.circuit.clone()).unwrap_or_default()
+        };
+        assert_eq!(stamped.devices.len(), 9, "{:?}", stamped.devices);
+        assert!(stamped.devices.iter().all(|d| d.template == "E-7 TYPICAL STORAGE ROOM"));
+        assert_eq!(circuit(&stamped.devices, "301", "6-20R"), "P2-19,21");
+        assert_eq!(circuit(&stamped.devices, "401", "6-20R"), "P1-15,17", "no plan of its floor tags it");
+        assert_eq!(stamped.duplicates.keys().copied().collect::<Vec<_>>(), [0], "the floor plan's own is that copy");
+        let basis = stamped.devices.iter().find(|d| d.room == "301" && d.tag == "6-20R").map(|d| d.circuit_basis.clone()).unwrap_or_default();
+        assert!(basis.contains("E-103") && basis.contains("P2-19,21") && basis.contains("P1-15,17"), "{basis}");
+        let row = |n: &str, what: &str| cadaddy_walk3d::PanelCircuit { number: n.into(), description: what.into(), poles: 1, ..Default::default() };
+        let schedule = |panel: &str, rows: Vec<cadaddy_walk3d::PanelCircuit>| cadaddy_walk3d::PanelSchedule {
+            panel: panel.into(),
+            source: "E-601".into(),
+            circuits: rows,
+            ..Default::default()
+        };
+        let schedules = vec![
+            schedule("P1", vec![row("4", "SECOND FLOOR STORAGE EXHAUST FAN"), row("15", "SECOND FLOOR STORAGE RECEPTACLE")]),
+            schedule("P2", vec![row("19", "THIRD FLOOR STORAGE RECEPTACLE"), row("1", "THIRD FLOOR STORAGE EXHAUST FAN")]),
+        ];
+        let asked = template_label_review(&mut stamped.devices, &floor, &schedules);
+        let review = |room: &str, tag: &str| {
+            stamped.devices.iter().find(|d| d.room == room && d.tag == tag).map(|d| d.circuit_review.clone()).unwrap_or_default()
+        };
+        // 201's labels are its own floor's rows; 301's receptacle took its floor's; 301's fan and
+        // 401's two are on a panel whose rows name another floor.
+        assert_eq!(asked, 3, "{:?}", stamped.devices.iter().map(|d| (&d.room, &d.tag, &d.circuit_review)).collect::<Vec<_>>());
+        assert!(review("201", "6-20R").is_empty() && review("201", "EF").is_empty());
+        assert!(review("301", "6-20R").is_empty());
+        let r = review("401", "6-20R");
+        assert!(r.contains("P1-15,17") && r.contains("level Level 4") && r.contains("SECOND FLOOR STORAGE RECEPTACLE"), "{r}");
+        assert!(!review("301", "EF").is_empty() && !review("401", "EF").is_empty());
+        // A typical panel (one in every room) supports its view's labels anywhere; a panel with no
+        // schedule read is not judged.
+        let mut again = stamp_typical_rooms(s.doc().unwrap(), &job, &floor, &unplaced).devices;
+        let typical = vec![cadaddy_walk3d::PanelSchedule { typical_of: Some(3), ..schedule("P1", vec![row("15", "RECEPTACLE")]) }];
+        assert_eq!(template_label_review(&mut again, &floor, &typical), 0);
+        assert_eq!(template_label_review(&mut again, &floor, &[]), 0);
     }
 
     /// Q6247: a typical room's view puts a keynote by a receptacle (`30A/2P RECEPTACLE FOR PTAC
