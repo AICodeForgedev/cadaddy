@@ -2399,7 +2399,7 @@ CCT   CRI   Delivered Lumens   Input Watts
 Type : P2
 Manufacturer : ACME LIGHTING
 Model Number : SL2
-LED surface luminaire, 3000K, 90 CRI, 1265 lm, 12.4 W
+LED surface luminaire, 3000K, 90 CRI, 1180 lm, 11.9 W
 --- page 3 of 3 ---
 Type : P3
 Manufacturer : ACME LIGHTING
@@ -2421,7 +2421,7 @@ Lumens: 3000, 4000, 5000
         assert!(src.as_str().is_some_and(|x| x.contains("performance table") && x.contains("4000K")), "{src}");
         assert_eq!(
             [field("P2", "cct"), field("P2", "cri"), field("P2", "lumens"), field("P2", "wattage")],
-            [json!("3000K"), json!("90"), json!("1265"), json!("12.4 W")],
+            [json!("3000K"), json!("90"), json!("1180"), json!("11.9 W")],
             "{r}"
         );
         for k in ["cct", "cri", "lumens", "wattage"] {

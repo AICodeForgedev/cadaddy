@@ -106,7 +106,7 @@ const SIDE_FT: f64 = 1.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FILL, "Fill Element Properties", run_fill)
-            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so, rooms?: \"built\" (only the build's rooms: a model whose build traced none has none, never the whole drawing traced again; default: the build's, else the plan's traced)} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}, luminaires: {count, with_schedule_row, changed, no_type_mark, marks_without_schedule_row, conflicts: {type: [field]}, review_items_added}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
+            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so, rooms?: \"built\" (only the build's rooms: a model whose build traced none has none, never the whole drawing traced again; default: the build's, else the plan's traced)} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}, luminaires: {schedule_rows (the fixture schedule's), count, with_schedule_row, changed, no_type_mark, marks_without_schedule_row, conflicts: {type: [field]}, review_items_added}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
             .menu(&["Tools", "Building", "Fill Element Properties"]),
     ]
 }
@@ -3761,7 +3761,7 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         "devices_in_no_room_listed": no_room_listed,
         "device_tags_roomed": tags_roomed,
         "doors": doors_json,
-        "luminaires": lum.to_json(lum_rfis),
+        "luminaires": lum.to_json(lum_rfis, sp.mep.fixture_schedule.len()),
     }))
 }
 
@@ -3845,8 +3845,9 @@ impl LuminaireRows {
         added
     }
 
-    fn to_json(&self, rfis: usize) -> Value {
+    fn to_json(&self, rfis: usize, schedule_rows: usize) -> Value {
         json!({
+            "schedule_rows": schedule_rows,
             "count": self.seen,
             "with_schedule_row": self.with_row,
             "changed": self.changed,
@@ -4079,6 +4080,7 @@ mod tests {
         let lum = &r["luminaires"];
         assert_eq!((lum["count"].as_u64(), lum["with_schedule_row"].as_u64()), (Some(3), Some(2)), "{lum:#}");
         assert_eq!(lum["marks_without_schedule_row"], json!({"Z": 1}), "{lum:#}");
+        assert_eq!(lum["schedule_rows"], json!(2), "{lum:#}");
         let text = |h: Handle, k: &str| prop_of(&s, h, k).map(|p| p.text()).unwrap_or_default();
         for (k, v) in [
             ("schedule_row", "A 4 IN DOWNLIGHT"),

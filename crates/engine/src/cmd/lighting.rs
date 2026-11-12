@@ -267,6 +267,9 @@ enum PerfCol {
     Other,
 }
 
+/// Lines under a product's report title that are still its.
+const REPORT_LINES: usize = 40;
+
 /// A line's cells: its columns as read off the page (wide gaps), else its words.
 fn cells(line: &str) -> Vec<String> {
     let cols: Vec<String> = line.split("   ").map(str::trim).filter(|c| !c.is_empty()).map(str::to_ascii_uppercase).collect();
@@ -310,23 +313,28 @@ fn perf_table_row(line: &str, heading: &[PerfCol]) -> Option<PerfRow> {
     if cs.len() != heading.len() {
         return None;
     }
-    let mut row = PerfRow::default();
+    // Each column's figures (a heading may repeat its columns: two products side by side).
+    let (mut cct, mut cri, mut lumens, mut watts) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (c, col) in cs.iter().zip(heading) {
         let num: String = c.chars().take_while(|ch| ch.is_ascii_digit() || *ch == '.' || *ch == ',').filter(|ch| *ch != ',').collect();
         let unit = c.get(c.chars().take_while(|ch| ch.is_ascii_digit() || *ch == '.' || *ch == ',').count()..).unwrap_or("").trim();
         match col {
             PerfCol::Other => continue,
             _ if num.is_empty() || !matches!(unit, "" | "K" | "LM" | "W" | "VA" | "CRI") => return None,
-            PerfCol::Cct => {
-                let n: u32 = num.parse().ok()?;
-                row.cct = cct_of(&format!("{n}K"));
-            }
-            PerfCol::Cri => row.cri = num.parse().ok().filter(|n| (60..=99).contains(n)),
-            PerfCol::Lumens => row.lumens = num.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0e6).map(|v| v.round() as u32),
-            PerfCol::Watts => row.watts = num.parse::<f64>().ok().filter(|w| w.is_finite() && *w > 0.0 && *w < 5_000.0),
+            PerfCol::Cct => cct.push(num.parse::<u32>().ok().and_then(|n| cct_of(&format!("{n}K")))),
+            PerfCol::Cri => cri.push(num.parse::<u32>().ok().filter(|n| (60..=99).contains(n))),
+            PerfCol::Lumens => lumens.push(num.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0e6).map(|v| v.round() as u32)),
+            PerfCol::Watts => watts.push(num.parse::<f64>().ok().filter(|w| w.is_finite() && *w > 0.0 && *w < 5_000.0)),
         }
     }
-    (row.lumens.is_some() || row.watts.is_some()).then_some(row)
+    // A figure the side-by-side groups give alike is the row's; where they differ it is neither's.
+    fn alike<T: PartialEq + Copy>(v: &[Option<T>]) -> Option<T> {
+        let first = (*v.first()?)?;
+        v.iter().all(|x| *x == Some(first)).then_some(first)
+    }
+    let row = PerfRow { cct: alike(&cct), cri: alike(&cri), lumens: alike(&lumens), watts: alike(&watts) };
+    let numbers = !lumens.is_empty() || !watts.is_empty();
+    numbers.then_some(row).filter(|r| r.cct.is_some() || r.lumens.is_some() || r.watts.is_some())
 }
 
 /// A labelled value (`Lumens: 1056`, `Input Watts: 12.4`, `CRI: 90`): its field and number.
@@ -354,31 +362,129 @@ fn labelled(line: &str) -> PerfRow {
     row
 }
 
+/// A line with its figures' thousands separators taken out (`3,880` → `3880`); a comma between
+/// two figures (`3000K, 90 CRI`) stays.
+fn thousands_joined(line: &str) -> String {
+    let b: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    for (i, c) in b.iter().enumerate() {
+        if *c == ','
+            && i > 0
+            && b.get(i - 1).is_some_and(char::is_ascii_digit)
+            && (1..=3).all(|k| b.get(i + k).is_some_and(char::is_ascii_digit))
+            && !b.get(i + 4).is_some_and(char::is_ascii_digit)
+        {
+            continue;
+        }
+        out.push(*c);
+    }
+    out
+}
+
+/// How many colour temperatures a line names (`2700, 3000, 3500, 4000 or 5000K`, `27/30/35/40/5000K`,
+/// `2700 – 1800K`): two or more are options or a dimming range, not the product's one CCT.
+fn cct_options(line: &str) -> usize {
+    let up = line.to_ascii_uppercase();
+    let mut seen: Vec<u32> = Vec::new();
+    let mut add = |n: u32| {
+        if !seen.contains(&n) {
+            seen.push(n);
+        }
+    };
+    for word in up.split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == '(' || c == ')') {
+        let parts: Vec<&str> = word.split(['/', '-', '–']).filter(|p| !p.is_empty()).collect();
+        for part in &parts {
+            let digits = part.trim_end_matches('K');
+            let Ok(n) = digits.parse::<u32>() else { continue };
+            if digits.len() == 4 && (1800..=6500).contains(&n) && n % 100 == 0 {
+                add(n);
+            } else if digits.len() == 2 && parts.len() >= 2 && CCT_CODES.contains(&n) {
+                // A two-digit code counts only in a list of them (`27/30/35`).
+                add(n * 100);
+            }
+        }
+    }
+    seen.len()
+}
+
+/// An ordering code (`40L`, `LP830`, `EZ1`): two to six letters and digits, both, and not a value
+/// with its unit (`3000K`, `12W`, `90CRI`).
+fn option_code(t: &str) -> bool {
+    let value = ["K", "W", "LM", "CRI", "V", "VA", "A"]
+        .iter()
+        .any(|u| t.strip_suffix(u).is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit() || c == '.')));
+    (2..=6).contains(&t.len())
+        && t.chars().all(|c| c.is_ascii_alphanumeric())
+        && t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().any(|c| c.is_ascii_alphabetic())
+        && !value
+}
+
+/// An ordering legend's entries on a line (`08L 800 lumens`, `LP830 3000 K`): each code and what
+/// it gives (`800 LUMENS`).
+fn legend_entries(line: &str) -> Vec<(String, String)> {
+    let ts = tokens(line);
+    let mut out = Vec::new();
+    for (i, t) in ts.iter().enumerate() {
+        let (Some(n), Some(u)) = (ts.get(i + 1), ts.get(i + 2)) else { continue };
+        let number = !n.is_empty() && n.chars().all(|c| c.is_ascii_digit() || c == '.');
+        if option_code(t) && number && matches!(u.as_str(), "LUMENS" | "LUMEN" | "LM" | "K" | "W" | "WATTS") {
+            out.push((t.clone(), format!("{n} {u}")));
+        }
+    }
+    out
+}
+
+/// Whether a line starts with a product's catalog code (`ABC6R010-1100LM-3000K`, a photometric
+/// report's title): letters and digits, six or more, upper case.
+fn code_title(line: &str) -> bool {
+    let first = line.split_whitespace().next().unwrap_or("");
+    first.len() >= 6
+        && first.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        && first.chars().any(|c| c.is_ascii_digit())
+        && first.chars().any(|c| c.is_ascii_uppercase())
+}
+
 /// A line's performance values, each only where the line names one (a line naming two CCTs or two
 /// lumen packages is a list of options and says none of them).
-fn perf_line(line: &str) -> PerfRow {
+fn perf_line(raw: &str) -> PerfRow {
     let one = |v: Vec<u32>| if v.len() == 1 { v.first().copied() } else { None };
+    let joined = thousands_joined(raw);
+    let line = joined.as_str();
     let watts = all_in(line, watts_of);
-    // A bare three-digit figure on a page (`820` lumens, `277` volts) is no LED colour code: those
-    // are read off the catalog number.
+    // An LED colour code is read off the catalog number, never a page's line: there a three-digit
+    // figure is a quantity (`820` lumens, `277` volts) or a standard's number (`UL924`).
     let words: Vec<&str> = line
         .split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == '/')
         .filter(|w| {
             let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-            !(w.len() == 3 && w.chars().all(|c| c.is_ascii_digit()))
+            let lead = w.chars().take_while(char::is_ascii_alphabetic).count();
+            let rest = w.get(lead..).unwrap_or("");
+            !(lead <= 3 && rest.len() == 3 && rest.chars().all(|c| c.is_ascii_digit()))
         })
         .collect();
     let coded = words.join(" ");
     let mut row = PerfRow {
-        cct: one(all_in(&coded, cct_of)),
+        cct: one(all_in(&coded, cct_of)).filter(|_| cct_options(line) < 2),
         cri: cri_of(&coded),
-        lumens: one(all_in(line, lumens_of)),
+        lumens: one(all_in(
+            &["DELIVERED", "NOMINAL", "INITIAL", "TOTAL", "SOURCE"]
+                .iter()
+                .fold(line.to_ascii_uppercase(), |t, w| t.replace(&format!(" {w} LUMEN"), " LUMEN").replace(&format!(" {w} LM"), " LM")),
+            lumens_of,
+        )),
         watts: if watts.len() == 1 { watts.first().copied() } else { None },
     };
-    // Up-to and range figures are the family's, not the ordered product's; an efficacy (lumens
-    // per watt) is neither.
+    // Up-to and range figures are the family's, not the ordered product's; figures in a list
+    // (`750/900/1200 lm`, `selectable`) are options; an efficacy (lumens per watt) is neither.
     let up = line.to_ascii_uppercase();
-    if up.contains("UP TO") || up.contains(" MAX") || up.contains("RANGE") || up.contains("LM/W") || up.contains("EFFICACY") || up.contains("LPW") {
+    let listed = up.as_bytes().windows(3).any(|w| matches!(w, [a, b'/', c] if a.is_ascii_digit() && c.is_ascii_digit()))
+        || up.as_bytes().windows(4).any(|w| matches!(w, [a, b' ', b'/', b' '] if a.is_ascii_digit()));
+    if listed
+        || ["UP TO", " MAX", "RANGE", "SELECT", "LM/W", "EFFICACY", "LPW", "PER WATT", "PER W ", "EQUIVALENT", "INCANDESCENT", "REPLACES"]
+            .iter()
+            .any(|w| up.contains(w))
+    {
         row.lumens = None;
         row.watts = None;
     }
@@ -391,10 +497,12 @@ fn perf_line(line: &str) -> PerfRow {
 
 /// What a luminaire's cut sheet (`lines`, its pages' lines) says the ordered product
 /// (`catalog`) does (Q6590). The ordered catalog number first: its CCT, CRI and lumen package
-/// (`…40K 80CRI…`, `…1500LM…`). Then its pages: a performance table per CCT (headed `CCT CRI
+/// (`…40K 80CRI…`, `…1500LM…`), and what the ordering legend says its codes give (`40L` ⟹ `40L
+/// 4000 lumens`; the legend's other options are no figures of it). Then its pages: a performance table per CCT (headed `CCT CRI
 /// LUMENS WATTS`), a line giving several together (`3000K, 90 CRI, 1265 lm, 12.4 W`), a labelled
-/// value (`Lumens: 1056`). A row of the ordered CCT speaks first, then rows that name none. A
-/// value is taken only when what speaks agrees on one; options and up-to figures say nothing.
+/// value (`Lumens: 1056`). A line naming the ordered catalog number speaks first, then a row of
+/// the ordered CCT, then rows that name none. A value is taken only when what speaks agrees on
+/// one; options, up-to figures and efficacies say nothing.
 pub(crate) fn performance(catalog: &str, lines: &[String]) -> Performance {
     let ordered = catalog.trim();
     let from_catalog = |what: &str| format!("its catalog number {ordered} ({what})");
@@ -404,6 +512,21 @@ pub(crate) fn performance(catalog: &str, lines: &[String]) -> Performance {
         lumens: lumens_of(ordered).filter(|_| !ordered.is_empty()).map(|l| (l, from_catalog("lumen package"))),
         watts: None,
     };
+    // The ordered product's own line, the one that starts with its catalog number (`WRP 48 840 UNV,
+    // 3,880 delivered lumens`; not a header that names it among other columns): the number
+    // up to its first option separator, its spacing as printed or not.
+    let squash = |t: &str| t.to_ascii_uppercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>();
+    let head = squash(ordered.split('/').next().unwrap_or(""));
+    let family = ordered.split_whitespace().next().map(squash).unwrap_or_default();
+    // Its own lines' and the lines under its report title's figures (whether its own line).
+    let mut ordering: Vec<(PerfRow, bool)> = Vec::new();
+    // Where the ordered product's own title last was (its photometric report's).
+    let mut section: Option<usize> = None;
+    // The ordered number's codes, and what an ordering legend says they give.
+    let codes: Vec<String> = tokens(ordered).into_iter().filter(|t| option_code(t)).collect();
+    let mut legend = Performance::default();
+    // Models named at the start of its lines (`QLU2 …`, `QLU3 …`).
+    let mut models: Vec<String> = Vec::new();
     // Its pages' rows.
     let mut rows: Vec<(PerfRow, &'static str)> = Vec::new();
     let mut heading: Option<(Vec<PerfCol>, usize)> = None;
@@ -412,16 +535,102 @@ pub(crate) fn performance(catalog: &str, lines: &[String]) -> Performance {
             heading = Some((h, i));
             continue;
         }
-        if let Some((h, at)) = &heading
-            && i.saturating_sub(*at) <= 40
-            && let Some(r) = perf_table_row(line, h)
-        {
-            rows.push((r, "its performance table"));
+        // The model a line starts with (`QLU2 holds …`), for sheets covering several.
+        if let Some(t) = tokens(line).into_iter().next().filter(|t| option_code(t)) {
+            let prefix: String = t.chars().take_while(char::is_ascii_alphabetic).collect();
+            if prefix.len() >= 2 && !models.contains(&t) && models.len() < 64 {
+                models.push(t);
+            }
+        }
+        // An ordering legend's line: the codes the ordered number carries give their values; the
+        // line is no row of the product's figures (it lists every option).
+        let entries = legend_entries(line);
+        if !entries.is_empty() {
+            for (code, says) in &entries {
+                if !codes.contains(code) {
+                    continue;
+                }
+                let how = || format!("its ordering legend: {code} {}", says.to_ascii_lowercase());
+                if let Some(l) = lumens_of(says) {
+                    legend.lumens.get_or_insert((l, how()));
+                } else if let Some(k) = cct_of(says) {
+                    legend.cct.get_or_insert((k, how()));
+                } else if let Some(w) = watts_of(says) {
+                    legend.watts.get_or_insert((w, how()));
+                }
+            }
             continue;
         }
-        let r = perf_line(line);
+        // A line under the ordered product's report title, before the next product's, is its.
+        let own = head.len() >= 4 && squash(line).starts_with(&head);
+        if own {
+            section = Some(i);
+        } else if code_title(line) || (!family.is_empty() && line.split_whitespace().next().map(squash).as_deref() == Some(family.as_str())) {
+            // Another product's title, or another size of its family (`WRP 24 …` under `WRP 48 …`).
+            section = None;
+        }
+        let under = section.is_some_and(|at| i > at && i - at <= REPORT_LINES);
+        // A table's row (a labelled value, `Input Watts: 12.4 W`, is not one), else the line.
+        let in_table =
+            heading.as_ref().filter(|(_, at)| i.saturating_sub(*at) <= 40 && !line.contains(':')).and_then(|(h, _)| perf_table_row(line, h));
+        let (r, how, table) = match in_table {
+            Some(r) => (r, "its performance table", true),
+            None => (perf_line(line), "its cut sheet", false),
+        };
+        // (A table's rows are each CCT's, read by the CCT below, not the ordered product's line.)
         if r != PerfRow::default() {
-            rows.push((r, "its cut sheet"));
+            if (own || under) && !table {
+                ordering.push((r, own));
+            } else {
+                rows.push((r, how));
+            }
+        }
+    }
+    // A sheet covering two models of one series (`QLU2`, `QLU3`) that the order doesn't name: its
+    // free lines' figures may be either's, so they say nothing of the ordered one.
+    let series = |t: &str| t.chars().take_while(char::is_ascii_alphabetic).collect::<String>();
+    let named = models.iter().any(|m| head.contains(m.as_str()));
+    let several = models.iter().any(|a| models.iter().any(|b| a != b && series(a) == series(b)));
+    if several && !named {
+        for (r, how) in rows.iter_mut() {
+            if *how == "its cut sheet" {
+                r.lumens = None;
+                r.watts = None;
+            }
+        }
+    }
+    // What the legend decodes of the ordered number, after the number itself.
+    out.cct = out.cct.or(legend.cct);
+    out.lumens = out.lumens.or(legend.lumens);
+    out.watts = out.watts.or(legend.watts);
+    // Its ordering line speaks first: a value it alone gives is the ordered product's.
+    let only = |v: Vec<u32>| {
+        let mut v = v;
+        v.sort_unstable();
+        v.dedup();
+        if let [x] = v[..] { Some(x) } else { None }
+    };
+    if !ordering.is_empty() {
+        let how = || "its ordering line".to_string();
+        // Its CCT as its own line gives it; then only what fits that CCT.
+        if out.cct.is_none() {
+            out.cct = only(ordering.iter().filter(|(_, own)| *own).filter_map(|(r, _)| r.cct).collect()).map(|k| (k, how()));
+        }
+        let k = out.cct.as_ref().map(|(k, _)| *k);
+        let fit: Vec<&PerfRow> = ordering.iter().map(|(r, _)| r).filter(|r| r.cct.is_none() || k.is_none() || r.cct == k).collect();
+        if out.cri.is_none() {
+            out.cri = only(fit.iter().filter_map(|r| r.cri).collect()).map(|k| (k, how()));
+        }
+        if out.lumens.is_none() {
+            out.lumens = only(fit.iter().filter_map(|r| r.lumens).collect()).map(|k| (k, how()));
+        }
+        if out.watts.is_none() {
+            let mut w: Vec<f64> = fit.iter().filter_map(|r| r.watts).collect();
+            w.sort_by(f64::total_cmp);
+            w.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+            if let [x] = w[..] {
+                out.watts = Some((x, how()));
+            }
         }
     }
     // The CCT: the ordered one, else the one CCT its pages give.
@@ -1911,6 +2120,76 @@ mod tests {
         // Options and up-to figures: nothing.
         let p = performance("", &lines(&["2700K / 3000K / 4000K", "80 or 90 CRI", "Up to 2000 lumens", "Efficacy: 110 lm/W"]));
         assert_eq!(p, Performance::default(), "{p:?}");
+        // The ordered product's own line among its family's; an efficacy and a selectable list
+        // say nothing.
+        let p = performance(
+            "WRP 48 840",
+            &lines(&[
+                "Delivers 95/101 lumens per watt (2 ft/4 ft)",
+                "WRP 24 840 UNV, 2,610 delivered lumens",
+                "WRP 48 840 UNV, 3,880 delivered lumens",
+                "WRP 24 840, 1,250 delivered lumens",
+                "Lumen output selectable 650/850/1100 lm",
+            ]),
+        );
+        assert_eq!(p.lumens.as_ref().map(|x| (x.0, x.1.as_str())), Some((3880, "its ordering line")), "{p:?}");
+        // Its photometric report's title, then its figures; the next product's report is not its.
+        let p = performance(
+            "QZD6R010",
+            &lines(&[
+                "Surface downlight   650/850/1100 lm   2700/3000/3500/4000K",
+                "• Choose 2700, 3000, 3500 or 4000K at install",
+                "QZD6R010 (replaces a 75W incandescent lamp)",
+                "QZD6RD2W-1100LM-2700K",
+                "Input Watts: 12.9 W",
+                "QZD6R010-1100LM-3000K",
+                "201   0-40   512   41",
+                "Input Watts: 11.6 W",
+                "QZD6S010-1100LM-3500K",
+                "Input Watts: 11.8 W",
+            ]),
+        );
+        assert_eq!(
+            (p.cct.as_ref().map(|x| x.0), p.lumens.as_ref().map(|x| x.0), p.watts.as_ref().map(|x| x.0)),
+            (Some(3000), Some(1100), Some(11.6)),
+            "{p:?}"
+        );
+        // A table of two products side by side: a figure they give alike is the row's.
+        let p = performance(
+            "",
+            &lines(&["CCT   Watts   Lumens   CRI   CCT   Watts   Lumens   CRI", "3000K   11.6   1190   92   3000K   11.6   1150   92"]),
+        );
+        assert_eq!(
+            (p.cri.as_ref().map(|x| x.0), p.lumens.as_ref().map(|x| x.0), p.watts.as_ref().map(|x| x.0)),
+            (Some(92), None, Some(11.6)),
+            "{p:?}"
+        );
+        // An ordering legend: the ordered codes' values, never the other options'; a standard's
+        // number (`UL924`) is no colour code.
+        let p = performance(
+            "QW4 30L GZ1 LP830",
+            &lines(&[
+                "QW2 2 ft wall unit 06L 650 lumens   UNV   LP830 3000 K",
+                "09L 950 lumens   LP835 3500 K",
+                "30L 3100 lumens",
+                "Emergency units listed to UL924",
+            ]),
+        );
+        assert_eq!(
+            (p.cct.as_ref().map(|x| x.0), p.lumens.as_ref().map(|x| (x.0, x.1.as_str()))),
+            (Some(3000), Some((3100, "its ordering legend: 30L 3100 lumens"))),
+            "{p:?}"
+        );
+        assert_eq!(performance("QX1", &lines(&["Listed to UL924, CRI 90 min"])).cct, None);
+        // A sheet of two models of a series, the order naming neither: its free figures are either's.
+        let two = lines(&["• QLU2 holds two 1.8W heads", "Heads at 5000K give 410lm together", "• QLU3 holds three 1.8W heads"]);
+        let p = performance("", &two);
+        assert_eq!((p.cct.as_ref().map(|x| x.0), &p.lumens), (Some(5000), &None), "{p:?}");
+        assert_eq!(performance("QLU2", &two).lumens.map(|x| x.0), Some(410), "the order names it");
+        assert_eq!(cct_options("27/30/35/40/5000K"), 5);
+        assert_eq!(cct_options("3000K, 40° beam"), 1);
+        let p = performance("", &lines(&["Lumen output selectable 650/850/1100 lm", "Rated 104/109 lumens per watt"]));
+        assert_eq!(p.lumens, None, "{p:?}");
         // Two CCT rows with no CCT ordered: no lumens or wattage chosen.
         let p = performance("", &lines(&["CCT   Lumens   Watts", "3000K   1000   10", "4000K   1100   10"]));
         assert_eq!((&p.cct, &p.lumens, &p.watts), (&None, &None, &None), "{p:?}");
@@ -1941,7 +2220,7 @@ mod tests {
     fn catalog_numbers_and_lines_give_their_values() {
         assert_eq!(cct_of("AB12 L48 4000LM MVOLT 40K 80CRI"), Some(4000));
         assert_eq!(cct_of("QRL 48 840"), Some(4000));
-        assert_eq!(cct_of("QW4 40L GZ1 LP830"), Some(3000));
+        assert_eq!(cct_of("QW4 30L GZ1 LP830"), Some(3000));
         assert_eq!(cct_of("CRI of minimum 80. CCT of 3500 K."), Some(3500));
         assert_eq!(cct_of("PX-1234-08 L2B9D2530K"), None, "a wattage run into a CCT is no CCT");
         assert_eq!(cct_of("QX6RLSFS010"), None);
