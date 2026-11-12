@@ -87,6 +87,7 @@ pub mod markup;
 pub mod mountlist;
 pub mod panelsched;
 pub mod paramconv;
+pub(crate) mod planscale;
 pub mod planview;
 pub mod pointcloud;
 pub mod pricebook;
