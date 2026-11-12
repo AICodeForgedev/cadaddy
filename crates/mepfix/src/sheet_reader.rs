@@ -234,6 +234,12 @@ fn sheet_number_in_title_block(d: &Drawing) -> Option<String> {
         .map(|(v, _, _, _)| v)
 }
 
+/// A sheet's scale note as printed and its paper inches per building foot: the title block's
+/// `SCALE:` line, else the most common scale note on the sheet (what classify reads).
+pub fn scale_note(d: &Drawing) -> Option<(String, f64)> {
+    detect_scale_text(d).filter(|(_, v)| v.is_finite() && *v > 0.0)
+}
+
 fn detect_scale_text(d: &Drawing) -> Option<(String, f64)> {
     for e in d.model.iter() {
         let on_title = e.common.layer.eq_ignore_ascii_case("TITLE") || e.common.layer.eq_ignore_ascii_case("TEXT");
