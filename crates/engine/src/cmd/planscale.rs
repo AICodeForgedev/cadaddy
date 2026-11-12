@@ -170,13 +170,15 @@ fn built_plan(r: &SheetRegion) -> bool {
 /// scale of a plan of the same floor that prints its own when their building outlines agree at
 /// one ratio and their linework lies on each other there. The sheet's objects (`spans`) are
 /// scaled in the drawing and moved clear of the others, its rectangle, frame and scale updated
-/// (its source naming the plan it took the scale from). What was rescaled.
+/// (its source naming the plan it took the scale from). What was rescaled; `fits` says how many
+/// linework fits it ran and which it had to weigh on a sample ([`super::grids::MAX_FIT_VOTES`]).
 pub fn scale_from_same_floor(
     d: &mut Drawing,
     regions: &mut [SheetRegion],
     scales: &mut [SheetScale],
     spans: &[SheetSpan],
     log: &mut Vec<String>,
+    fits: &mut super::grids::FitStats,
 ) -> Vec<Rescaled> {
     let rr = rules();
     let k_in = super::perceive::units_per_inch(d);
@@ -224,6 +226,13 @@ pub fn scale_from_same_floor(
     if pairs.is_empty() {
         return Vec::new();
     }
+    // Said before it starts: the check is a few linework fits per pair.
+    super::guided::progress_line(&format!(
+        "  sheets: weighing {} plan(s) with no printed scale against the plans of their floor that print one ({} pair(s), up to {} print scales each)",
+        targets.len(),
+        pairs.len(),
+        rr.print_scales.len()
+    ));
     // The linework of the sheets weighed (lines and polylines of each sheet's objects).
     let wanted: BTreeSet<usize> = pairs.iter().flat_map(|p| [p.1, p.3]).collect();
     let mut spans_of: Vec<(u64, u64, usize)> = Vec::new();
@@ -282,6 +291,7 @@ pub fn scale_from_same_floor(
     // Per target: every (plan, print scale) weighed, its F1, uniform scale and margin.
     #[allow(clippy::type_complexity)]
     let mut weighed: BTreeMap<usize, Vec<(usize, usize, f64, f64, [f64; 2], bool)>> = BTreeMap::new();
+    let mut stats = super::grids::FitStats::default();
     for &(ti, tr, pi, pr) in &pairs {
         let (Some(src), Some(tgt)) = (plan_pts.get(&pr), all_pts.get(&tr)) else { continue };
         if src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
@@ -301,7 +311,7 @@ pub fn scale_from_same_floor(
             let o = tgt.first().copied().unwrap_or(Vec2::new(0.0, 0.0));
             let scaled: Vec<Vec2> = tgt.iter().map(|p| o + (*p - o) * f).collect();
             let Some((s, _, f1, margin)) =
-                super::grids::linework_fit_part(src, &scaled, k_in, 1.0 - rr.outline_ratio_agree, 1.0 + rr.outline_ratio_agree)
+                super::grids::linework_fit_part_counted(src, &scaled, k_in, 1.0 - rr.outline_ratio_agree, 1.0 + rr.outline_ratio_agree, &mut stats)
             else {
                 continue;
             };
@@ -315,6 +325,7 @@ pub fn scale_from_same_floor(
             }
         }
     }
+    *fits = stats;
     // The print scale whose fit holds (the rules' F1, the fit's margin over another placement)
     // and leads every other print scale's by the rules' lead: a scale off the fit's own few
     // percent is its sampling's, so the print scale itself.
