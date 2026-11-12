@@ -43424,11 +43424,19 @@ mod stage_cache_tests {
         let pdf = big_pdf(30_000);
         let mut s = crate::Session::new();
         lines(s.doc_mut().unwrap(), 400);
-        assert_eq!(cadaddy_io::pdf_read::page_count(&pdf).unwrap(), 1);
-        assert!(crate::spatial::index(s.doc().unwrap(), &Space::Model).is_some());
-        let _ = super::super::elemprops::elements(s.doc().unwrap()).count();
-        assert!(cadaddy_io::pdf_read::is_cached(&pdf), "the parsed sheet is kept after its read");
-        assert!(crate::spatial::is_cached(s.doc().unwrap(), &Space::Model), "the selection index is kept");
+        // The parsed files and the selection indexes are the process's: another test's job stage
+        // may let go of them meanwhile, so they are made again until they hold these.
+        let mut filled = false;
+        for _ in 0..50 {
+            assert_eq!(cadaddy_io::pdf_read::page_count(&pdf).unwrap(), 1);
+            assert!(crate::spatial::index(s.doc().unwrap(), &Space::Model).is_some());
+            let _ = super::super::elemprops::elements(s.doc().unwrap()).count();
+            if cadaddy_io::pdf_read::is_cached(&pdf) && crate::spatial::is_cached(s.doc().unwrap(), &Space::Model) {
+                filled = true;
+                break;
+            }
+        }
+        assert!(filled, "the parsed sheet and the selection index are kept after their reads");
         assert!(super::super::elemprops::index_held(), "the element index is kept");
         let job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
         bim_step(&mut s, &job, "a step", web_time::Instant::now());
