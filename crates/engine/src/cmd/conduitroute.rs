@@ -2688,17 +2688,21 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 inferred_devs.insert(di);
             }
         }
-        let mut next: HashMap<String, (Vec<String>, usize)> = HashMap::new();
+        // Each panel's spares then its spaces, how many of them are spares, and the next one.
+        let mut next: HashMap<String, (Vec<String>, usize, usize)> = HashMap::new();
         for ((level, panel, room), ds) in groups.into_iter().take(MAX_CIRCUITS) {
             let e = next.entry(panel.clone()).or_insert_with(|| {
                 let (a, b) = sched_of(&panel);
-                (a.into_iter().chain(b).collect(), 0)
+                let spares = a.len();
+                (a.into_iter().chain(b).collect(), spares, 0)
             });
-            let (number, breaker) = match e.0.get(e.1) {
-                Some(n) => (n.clone(), format!("spare {n}")),
-                None => (format!("X{}", e.1.saturating_sub(e.0.len()) + 1), "no spare listed: a new breaker".to_string()),
+            // A spare is a breaker the panel has; a space only room for a new one (Q6344).
+            let (number, breaker) = match e.0.get(e.2) {
+                Some(n) if e.2 < e.1 => (n.clone(), format!("spare {n}")),
+                Some(n) => (n.clone(), format!("space {n}: a new breaker in it")),
+                None => (format!("X{}", e.2.saturating_sub(e.0.len()) + 1), "no spare listed: a new breaker".to_string()),
             };
-            e.1 += 1;
+            e.2 += 1;
             let label = format!("{panel}-{number}");
             let at = ds.first().and_then(|i| devs.get(*i)).map_or(Vec2::new(0.0, 0.0), |d| d.at);
             let kinds: BTreeMap<&str, usize> = ds.iter().filter_map(|i| devs.get(*i)).fold(BTreeMap::new(), |mut m, d| {

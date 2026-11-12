@@ -364,6 +364,8 @@ fn a_receptacle_the_plans_leave_uncircuited_joins_its_rooms_receptacle_circuit()
         in_room(device("R9", "receptacle", "L1", 24.0, 12.0, None, Some(18.0)), "1803"),
         // Another room's uncircuited receptacle, nothing circuited in its room: a spare.
         in_room(device("R7", "receptacle", "L1", 25.0, -8.0, None, Some(18.0)), "1804"),
+        // And a third room's: the spare is taken, so a new breaker in the panel's space.
+        in_room(device("R6", "receptacle", "L1", 30.0, -20.0, None, Some(18.0)), "1808"),
         circuit_tag("L1", "LP1-1", "2#12 + 1#12G"),
         circuit_tag("L1", "LP1-5", "2#12 + 1#12G"),
     ];
@@ -375,10 +377,12 @@ fn a_receptacle_the_plans_leave_uncircuited_joins_its_rooms_receptacle_circuit()
     let j = &i["joined_items"][0];
     assert_eq!((j["room"].as_str(), j["circuit"].as_str(), j["made"].as_str()), (Some("1803"), Some("LP1-1"), Some("inferred")), "{j}");
     assert!(j["basis"].as_str().is_some_and(|b| b.starts_with("E-UNCIRCUITED")), "{j}");
-    // Only room 1804's receptacle takes a spare.
-    assert_eq!(i["total"], json!(1), "{i}");
-    assert_eq!((i["items"][0]["room"].as_str(), i["items"][0]["circuit"].as_str()), (Some("1804"), Some("LP1-3")), "{i}");
-    assert_eq!(i["devices"], json!(2), "{i}");
+    // Only room 1804's receptacle takes the spare; room 1808's a new breaker in the space.
+    assert_eq!(i["total"], json!(2), "{i}");
+    let item = |room: &str| i["items"].as_array().and_then(|v| v.iter().find(|x| x["room"] == json!(room))).cloned().unwrap_or_default();
+    assert_eq!((item("1804")["circuit"].as_str(), item("1804")["breaker"].as_str()), (Some("LP1-3"), Some("spare 3")), "{i}");
+    assert_eq!((item("1808")["circuit"].as_str(), item("1808")["breaker"].as_str()), (Some("LP1-7"), Some("space 7: a new breaker in it")), "{i}");
+    assert_eq!(i["devices"], json!(3), "{i}");
     assert_eq!(r["proposed_circuits"]["total"], json!(0), "{r}");
 }
 
