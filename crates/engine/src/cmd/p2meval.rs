@@ -487,7 +487,7 @@ fn run_job(case: &Case, pdf: &[u8]) -> Value {
         return json!({ "name": case.name, "skipped": "no folder for the job's prints in this build" });
     };
     let file = dir.join(format!("{}.pdf", case.name));
-    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&file, pdf)) {
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| crate::writefile::write(&file, pdf)) {
         return json!({ "name": case.name, "error": format!("{}: {e}", file.display()) });
     }
     let mut s = Session::new();
