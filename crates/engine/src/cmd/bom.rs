@@ -108,7 +108,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run).long()
             .alias(&["bom"])
             .params(
-                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements (the object handles of what it counts), element_count, sources? (the ids it was counted by that are not handles: a spec device, a run, a build name), elements_unresolved? (of those, how many the model has no object for), measures?: {pieces, length_ft, area_sf, volume_cy, weight_lb} (a trade piece line's count and measures beside its quantity)}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements (the object handles of what it counts), element_count, sources? (the ids it was counted by that are not handles: a spec device, a run, a build name), elements_unresolved? (of those, how many the model has no object for), measures?: {pieces, length_ft, area_sf, volume_cy, weight_lb} (a trade piece line's count and measures beside its quantity)}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), field_work?: [{trade, category, kind, item, size, unit, net, status: field work, level, circuit, made, elements, rule}] (the model's field bends and offsets: the crew's labor, nothing bought, never on a line), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -179,6 +179,10 @@ impl Measures {
         Value::Object(o)
     }
 }
+
+/// The status of the model's field bends and offsets (Q6376): counted pieces of the crew's
+/// work, nothing bought.
+pub(crate) const FIELD_WORK: &str = "field work";
 
 /// A line's provenance by name.
 fn made_name(m: &str) -> &str {
@@ -580,7 +584,7 @@ fn large_conductor(size: &str) -> bool {
     size.contains('/') || size.parse::<u32>().is_ok_and(|n| n <= 4)
 }
 
-fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Result<()> {
+fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>, field: &mut Vec<Value>) -> Result<()> {
     let (sp, _) = current(s, "bim.bom")?;
     // Whose each class of element is (Q6167): another trade's leave our lines but our part.
     let scope = s.doc().map(super::scope::decisions).unwrap_or_default();
@@ -606,9 +610,11 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     let protocols: BTreeMap<String, super::dimcheck::DimmerProtocol> =
         s.doc().map(super::dimcheck::dimmer_protocols).unwrap_or_default().into_iter().filter_map(|p| Some((p.devid.clone()?, p))).collect();
     // The model's pieces (Q6157): when it was built with them, its boxes, rings, conduit,
-    // fittings, cable and wire are counted from its index, not worked out by rule here.
-    let atoms =
-        s.doc().ok().and_then(super::mepatoms::stored).filter(|ix| ix.rows.keys().any(|k| super::mepatoms::PIECES.contains(&k.kind.as_str())));
+    // fittings, cable and wire are counted from its index, not worked out by rule here. A file
+    // that came without its index is recounted from its elements (Q6376): the pieces are the
+    // model's whatever format kept them, never the rule's estimate of a run built as pieces.
+    let index = s.doc().ok().and_then(super::mepatoms::kept_or_recount);
+    let atoms = index.as_ref().filter(|ix| ix.rows.keys().any(|k| super::mepatoms::PIECES.contains(&k.kind.as_str())));
     let by_atoms = atoms.is_some();
     // What each built device and fixture is as a product (Q6164), else its type's in the catalog.
     let (built_products, _) = s.doc().map(product_index).unwrap_or_default();
@@ -1027,18 +1033,18 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     // The model's pieces, from its count index; the fire alarm circuits' cable (Q6503) is
     // another trade's where the scope gives the fire alarm system to one.
     // Each index row's elements (Q6529): a line counted from the index lists what it counts.
-    let stored = s.doc().ok().and_then(super::mepatoms::stored);
+    let stored = index.as_ref();
     let handles = match (&atoms, &stored) {
         (None, None) => BTreeMap::new(),
         _ => s.doc().map(|d| super::mepatoms::handles_by_key(d, MAX_LINE_ELEMENTS)).unwrap_or_default(),
     };
     if let Some(ix) = atoms {
         let fa = scope.iter().find(|d| d.class == "fire alarm").filter(|d| d.by_others());
-        atom_lines(lines, &ix, &handles, fa, others);
+        atom_lines(lines, ix, &handles, fa, others, field);
     }
     // The panels' breakers (Q6166), whether or not the runs were built as pieces.
     if let Some(ix) = stored {
-        breaker_lines(lines, &ix, &handles);
+        breaker_lines(lines, ix, &handles);
     }
     lv_pathway_lines(s, lines);
     Ok(())
@@ -1144,6 +1150,7 @@ fn atom_lines(
     handles: &BTreeMap<super::mepatoms::Key, Vec<String>>,
     fa_theirs: Option<&super::scope::Decision>,
     others: &mut Vec<Value>,
+    field: &mut Vec<Value>,
 ) {
     // Another trade's fire alarm cable (and raceway, unless the documents make it ours): by
     // system, level and type in `by_others`.
@@ -1159,13 +1166,22 @@ fn atom_lines(
         }
         let (category, unit) = match k.kind.as_str() {
             "conduit" => ("conduit", "ft"),
-            "coupling" | "connector" | "elbow" | "offset" | "strap" | "locknut" | "bushing" => ("conduit fittings", "each"),
+            "coupling" | "connector" | "elbow" | "offset" | "bend" | "strap" | "locknut" | "bushing" => ("conduit fittings", "each"),
             "box" | "ring" => ("boxes", "each"),
             "cable" | "wire" => ("wire", "ft"),
             _ => continue,
         };
-        // A field bend or offset is the trade's work, nothing bought.
+        // A field bend or offset is the trade's work, nothing bought: counted apart (Q6376), so
+        // every piece the model counts is in the takeoff.
         if super::mepatoms::is_labor_item(&k.item) {
+            if field.len() < MAX_LINES {
+                field.push(json!({
+                    "trade": if fire_alarm { "fire alarm" } else { "electrical" }, "category": category, "kind": k.kind, "item": k.item,
+                    "size": k.size, "unit": unit, "net": t.count as f64, "status": FIELD_WORK, "level": k.level, "circuit": k.circuit,
+                    "made": made_name(made_of(&k.made)), "elements": handles.get(k).cloned().unwrap_or_default(),
+                    "rule": "bent into the stick by the crew (the raceway rules' field bends): labor, nothing bought",
+                }));
+            }
             continue;
         }
         let net = if unit == "ft" { t.length_ft } else { t.count as f64 };
@@ -3463,7 +3479,9 @@ fn required(lines: &[Line], levels: usize) -> Vec<(String, f64, &'static str, St
 pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
     let mut lines: Vec<Line> = Vec::new();
     let mut others = Vec::new();
-    electrical(s, &mut lines, &mut others)?;
+    // The crew's field bends are labor: no element of them is bought or marked as delivered.
+    let mut field = Vec::new();
+    electrical(s, &mut lines, &mut others, &mut field)?;
     zero_ten_pairs(s, &mut lines);
     mechanical(s, &mut lines, &mut others);
     Ok(lines
@@ -3496,7 +3514,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
     let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines, &pieces)?;
     let mut others: Vec<Value> = Vec::new();
-    electrical(s, &mut lines, &mut others)?;
+    let mut field_work: Vec<Value> = Vec::new();
+    electrical(s, &mut lines, &mut others, &mut field_work)?;
     zero_ten_pairs(s, &mut lines);
     // Devices from symbol clusters on the drawing (Q5243), when the model has none of its own: a
     // guided job puts the devices its readers found into the model, and counting both doubled them.
@@ -3675,6 +3694,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // complete = every built category has lines, no line is suspect, reqs OK, spec clean (Q5243 MUST 4).
     let is_complete = complete && req_ok && check.is_empty() && no_suspects && no_missing;
     let mut out = json!({ "lines": out_lines, "by_others": by_others, "required": req, "spec_check": check, "complete": is_complete });
+    if !field_work.is_empty() {
+        out["field_work"] = json!(field_work);
+    }
     if !framing_bits.is_empty() {
         out["bits"] =
             json!(framing_bits.iter().map(|b| json!({"kind": bit_words(b.kind), "dia_in": b.dia_in, "holes": b.holes})).collect::<Vec<_>>());

@@ -23,6 +23,7 @@ use cadaddy_doc::Handle;
 use serde_json::{Value, json};
 
 use super::{diff, elements, frame, handles_of, r3, set_state, state};
+use crate::cmd::bom::FIELD_WORK;
 use crate::cmd::{CommandSpec, bad, bool_or, str_param};
 use crate::{Result, Session};
 
@@ -44,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Model Takeoff", run)
             .alias(&["takeoffmodel"])
-            .params("{force?: bool (replace an existing file; otherwise it is refused), group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit) | [property key] (by the elements' properties, e.g. [\"level\", \"circuit\"]), filter?: {trade?, level?, category?, circuit?, text?} | text | {kind?, where?, key: value…} (by the elements' properties: e.g. {kind: \"device\", type: \"duplex\"}), compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level (one of the model's levels, else \"(unassigned level)\"), circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements (exactly the elements counted on it), element_count, elements_unresolved? (named elements the model has none of), status (\"by others\": another trade's devices, never priced), scope?, owner?, made: drawn|derived|inferred}], totals: {count, length_ft, area_sf, volume_cy, by_made: {drawn, derived, inferred} (each the same totals), by_others: {lines, count}} (our lines: another trade's are apart), devices?: {built, on_lines, by_others, not_on_a_line, not_on_a_line_first} (every built device on a line, unfiltered), levels, unassigned_level?: {level, lines, elements} (the lines on no one level of the model), changes?: {added, removed, changed}, revision, csv, path?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit) | [property key] (by the elements' properties, e.g. [\"level\", \"circuit\"]), filter?: {trade?, level?, category?, circuit?, text?} | text | {kind?, where?, key: value…} (by the elements' properties: e.g. {kind: \"device\", type: \"duplex\"}), compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level (one of the model's levels, else \"(unassigned level)\"), circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements (exactly the elements counted on it), element_count, elements_unresolved? (named elements the model has none of), status (\"by others\": another trade's devices, never priced; \"field work\": the model's field bends and offsets, the crew's labor, nothing bought, never priced), scope?, owner?, made: drawn|derived|inferred}], totals: {count, length_ft, area_sf, volume_cy, by_made: {drawn, derived, inferred} (each the same totals), by_others: {lines, count}, field_work: {lines, count}} (our lines: another trade's and the field work are apart), devices?: {built, on_lines, by_others, not_on_a_line, not_on_a_line_first} (every built device on a line, unfiltered), levels, unassigned_level?: {level, lines, elements} (the lines on no one level of the model), changes?: {added, removed, changed}, revision, csv, path?}")
             .noundo(),
         CommandSpec::new(CMD_SHOW, "Show Takeoff Line", run_show)
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
@@ -188,7 +189,12 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
         .collect();
     let bom_lines = bom_lines.as_slice();
     let wall_lines = built_wall_lines(d, &els, bom_lines, super::units_per_foot(s));
-    let other_lines = if others { by_others_lines(&bom) } else { Vec::new() };
+    let mut other_lines = if others { by_others_lines(&bom) } else { Vec::new() };
+    // The model's field bends and offsets (Q6376): the crew's work, on lines of their own, so a
+    // piece counted is a piece taken off; never priced, out of our totals.
+    if others {
+        other_lines.extend(bom["field_work"].as_array().map(Vec::as_slice).unwrap_or_default().iter().take(MAX_LINES).cloned());
+    }
     let resolve = |h: &str| -> Vec<String> { refs.resolve(d, h) };
     let on_level = |h: &str, lv: &str| info.get(h).is_some_and(|(x, _, _)| x.eq_ignore_ascii_case(lv));
     let mut grouped: BTreeMap<String, Value> = BTreeMap::new();
@@ -311,6 +317,10 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
         if by_others {
             filled.push('|');
             filled.push_str(l["scope"].as_str().unwrap_or(BY_OTHERS));
+        }
+        if l["status"] == FIELD_WORK {
+            filled.push('|');
+            filled.push_str(FIELD_WORK);
         }
         let key = match group_by {
             "trade" => format!("{trade}|{category}|{item}|{size}|{unit}{product}{filled}"),
@@ -531,13 +541,15 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let filter = p.get("filter").cloned().unwrap_or(Value::Null);
     // Our lines, and another trade's devices on lines of their own (Q6373).
     let lines = lines_of(s, &group_by, &filter, true)?;
-    let ours: Vec<&Value> = lines.iter().filter(|l| l["status"] != BY_OTHERS).collect();
+    let ours: Vec<&Value> = lines.iter().filter(|l| l["status"] != BY_OTHERS && l["status"] != FIELD_WORK).collect();
     let theirs: Vec<&Value> = lines.iter().filter(|l| l["status"] == BY_OTHERS).collect();
+    let field: Vec<&Value> = lines.iter().filter(|l| l["status"] == FIELD_WORK).collect();
     let mut totals = json!({"lines": ours.len()});
     for m in ["count", "length_ft", "area_sf", "volume_cy"] {
         totals[m] = json!(r3(ours.iter().filter_map(|l| l[m].as_f64()).sum::<f64>()));
     }
     totals["by_others"] = json!({"lines": theirs.len(), "count": r3(theirs.iter().filter_map(|l| l["count"].as_f64()).sum::<f64>())});
+    totals["field_work"] = json!({"lines": field.len(), "count": r3(field.iter().filter_map(|l| l["count"].as_f64()).sum::<f64>())});
     // Every total split by what the work is by the documents (Q6216): inferred work is in the
     // job's totals, and shown apart from the drawn.
     let mut by_made = serde_json::Map::new();
@@ -570,7 +582,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         .chain(lines.iter().map(|l| {
             let f = |k: &str| l[k].as_str().unwrap_or_default().to_string();
             // Another trade's line says so in its trade column.
-            let trade = if l["status"] == BY_OTHERS { format!("{} ({BY_OTHERS})", f("trade")) } else { f("trade") };
+            let trade = if l["status"] == BY_OTHERS || l["status"] == FIELD_WORK { format!("{} ({})", f("trade"), f("status")) } else { f("trade") };
             let mut row = vec![
                 f("level"),
                 trade,
