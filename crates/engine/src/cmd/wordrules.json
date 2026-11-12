@@ -1700,7 +1700,7 @@
    ]
   },
   "equipment.names": {
-   "source": "Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`). (trade practice: words of an equipment label; moved from geometry.rs `EQUIPMENT_WORDS`)",
+   "source": "Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`). (trade practice: words of an equipment label; moved from geometry.rs `EQUIPMENT_WORDS`; COMPRESSOR, CONDENSER: the refrigeration units a note points at, plural too, Q6365)",
    "words": [
     "PNLBD",
     "PNL",
@@ -1741,7 +1741,9 @@
     "PTAC",
     "EWC",
     "WH",
-    "EF"
+    "EF",
+    "COMPRESSOR",
+    "CONDENSER"
    ]
   },
   "equipment.off_floor_mounting_words": {
