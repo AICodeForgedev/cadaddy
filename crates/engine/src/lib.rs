@@ -1623,6 +1623,12 @@ fn annotation_kind(ann: &str) -> Option<ParamKind> {
     if tail.contains(['{', '[']) || tail.contains('|') && !matches!(first, "true" | "false") {
         return None;
     }
+    // A choice spelt out (`number or name`, `number or expression`) takes either: its first word
+    // says nothing of the value's type. `or null` only says it may be left out.
+    let mut words = ann.split_whitespace().skip(1);
+    if words.next() == Some("or") && words.next().is_none_or(|w| !w.trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case("null")) {
+        return None;
+    }
     match first {
         "number" | "n" | "count" | "degrees" | "deg" | "inches" | "feet" | "ft" | "mm" => Some(ParamKind::Number),
         "bool" | "boolean" => Some(ParamKind::Bool),

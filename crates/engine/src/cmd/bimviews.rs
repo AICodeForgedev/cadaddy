@@ -1570,7 +1570,8 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
                 look.view = Some(View::Floor.name().into());
             }
         }
-        Some(Value::String(r)) if !r.trim().is_empty() => {
+        Some(Value::String(_) | Value::Number(_)) if number_or_name_param(p, "room").is_some() => {
+            let r = number_or_name_param(p, "room").unwrap_or_default();
             let level = look.level.clone().or_else(|| first_level(d, None)).ok_or_else(|| bad(CMD, "the Room view needs a level: give `level`"))?;
             let rooms = rooms_on(d, &level);
             let hit =
@@ -1789,7 +1790,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         Some(l) => Some(level_named(d, REPORT, l)?),
         None => first_level(d, None),
     };
-    let room = str_param(p, "room").map(str::to_string).or_else(|| level.as_deref().and_then(|l| rooms_on(d, l).into_iter().next().map(|r| r.0)));
+    let room = number_or_name_param(p, "room").or_else(|| level.as_deref().and_then(|l| rooms_on(d, l).into_iter().next().map(|r| r.0)));
     let total = d.model.iter().take(MAX_SCAN).filter(|e| bimlook::classify(d, e).is_some()).count();
     let mut views = serde_json::Map::new();
     let mut at = |name: &str, view: View, full: bool| {
