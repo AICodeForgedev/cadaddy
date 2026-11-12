@@ -2032,16 +2032,27 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
             tgt.to_vec()
         };
         let mut best = (f1(s0, t0, &mine, &near), s0, t0);
+        // The placements in order, scored side by side; the first best kept, as in turn.
+        let mut tries: Vec<(f64, Vec2)> = Vec::with_capacity(5 * 9 * 9);
         for si in -2..=2 {
             let s = s0 * (1.0 + 0.001 * f64::from(si));
             for dx in -4..=4 {
                 for dy in -4..=4 {
-                    let t = t0 + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k);
-                    let sc = f1(s, t, &mine, &near);
-                    if sc > best.0 {
-                        best = (sc, s, t);
-                    }
+                    tries.push((s, t0 + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k)));
                 }
+            }
+        }
+        let score = |&(s, t): &(f64, Vec2)| (f1(s, t, &mine, &near), s, t);
+        #[cfg(not(target_arch = "wasm32"))]
+        let scored: Vec<(f64, f64, Vec2)> = {
+            use rayon::prelude::*;
+            tries.par_iter().map(score).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let scored: Vec<(f64, f64, Vec2)> = tries.iter().map(score).collect();
+        for x in scored {
+            if x.0 > best.0 {
+                best = x;
             }
         }
         *cand = best;
