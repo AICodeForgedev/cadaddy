@@ -653,6 +653,14 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         } else if let Some(o) = plate {
             m = super::bspec::seamless(plate_faces(o, z, true));
         }
+        if grp.part == Part::Ceiling {
+            // A level's own ceiling: at the level's ceiling height, a default (Q6595).
+            xdata.extend(super::ceilings::height_tags(
+                level.ceiling_ft,
+                cadaddy_doc::props::SourceKind::Default,
+                "the level's ceiling height (no room or reflected ceiling plan height)",
+            ));
+        }
         let common = Common { layer: layer_of(grp.part).into(), xdata: xdata.into(), ..Common::default() };
         if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
             *counts.entry(part_name(grp.part)).or_insert(0) += 1;

@@ -214,6 +214,12 @@ pub fn effective(e: &Entity, kind: &str, upf: f64) -> Vec<(String, Prop, bool)> 
             derive(key, p);
         }
     }
+    if kind == "ceiling" {
+        // A ceiling, soffit or ceiling grid of the model: what its build knew of it (Q6595).
+        for (key, p) in super::ceilings::props_of(e) {
+            derive(key, p);
+        }
+    }
     if kind == "room" && super::wallgen::made_as(e).as_deref() == Some("room") {
         // A room element of the model (model.build, Q5291): its tag's values.
         let tag = |k: &str| super::bspec::room_tag(e, k).filter(|v| !v.is_empty());

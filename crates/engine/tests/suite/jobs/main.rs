@@ -27,6 +27,7 @@ mod callout_walls;
 mod casework_furniture;
 mod casework_read;
 mod ceil_assemblies;
+mod ceiling_props;
 mod ceiling_room_type;
 mod ceilings;
 mod clash_fix_persists;
