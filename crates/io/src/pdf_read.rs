@@ -1859,14 +1859,134 @@ fn key_pts(pts: &[(f64, f64)]) -> Vec<(i64, i64)> {
     pts.iter().map(|(x, y)| ((x * 100.0).round() as i64, (y * 100.0).round() as i64)).collect()
 }
 
-/// Join open strokes of one pen and layer whose ends touch, end to end.
-fn join(strokes: Vec<Stroke>) -> Vec<Stroke> {
+/// A door swing's sweep, degrees: a quarter-ish circle.
+const SWING_DEG: std::ops::RangeInclusive<f64> = 60.0..=100.0;
+/// Points on a door swing's circle lie this close to it (share of the radius).
+const SWING_ROUND: f64 = 0.03;
+/// A door swing's hinge or end meets the other linework this close (share of the radius; at
+/// least [`SWING_MEET_MIN`] points).
+const SWING_MEET: f64 = 0.02;
+const SWING_MEET_MIN: f64 = 0.1;
+/// A door's leaf is the swing's radius long, within this share.
+const LEAF_LEN: f64 = 0.05;
+/// Strokes looked at for door swings, at most (hostile files).
+const MAX_SWING_SCAN: usize = 2_000_000;
+
+/// An open stroke drawn round one circle through a door swing's sweep: its centre, radius and two
+/// ends. Four points at least (a flattened curve, not a line or a corner).
+fn swing_arc(s: &Stroke) -> Option<((f64, f64), f64, [(f64, f64); 2])> {
+    if s.closed || s.pts.len() < 4 {
+        return None;
+    }
+    let (first, last) = (*s.pts.first()?, *s.pts.last()?);
+    let mid = *s.pts.get(s.pts.len() / 2)?;
+    let d = 2.0 * (first.0 * (mid.1 - last.1) + mid.0 * (last.1 - first.1) + last.0 * (first.1 - mid.1));
+    if !d.is_finite() || d.abs() < 1e-9 {
+        return None;
+    }
+    let sq = |p: (f64, f64)| p.0 * p.0 + p.1 * p.1;
+    let (a2, b2, c2) = (sq(first), sq(mid), sq(last));
+    let c = (
+        (a2 * (mid.1 - last.1) + b2 * (last.1 - first.1) + c2 * (first.1 - mid.1)) / d,
+        (a2 * (last.0 - mid.0) + b2 * (first.0 - last.0) + c2 * (mid.0 - first.0)) / d,
+    );
+    let dist = |p: (f64, f64)| (p.0 - c.0).hypot(p.1 - c.1);
+    let r = dist(first);
+    if !(c.0.is_finite() && c.1.is_finite() && r.is_finite() && r > 0.0) || s.pts.iter().any(|p| (dist(*p) - r).abs() > SWING_ROUND * r) {
+        return None;
+    }
+    // The sweep from the first to the last point, the way through the middle one; every point
+    // turns the same way (a circle's arc, not a wiggle on it).
+    let ang = |p: (f64, f64)| (p.1 - c.1).atan2(p.0 - c.0);
+    let turn = |a: (f64, f64), b: (f64, f64)| (ang(b) - ang(a) + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+    let turns: Vec<f64> = s.pts.windows(2).filter_map(|w| Some(turn(*w.first()?, *w.get(1)?))).collect();
+    let sweep: f64 = turns.iter().sum();
+    if turns.iter().any(|t| t.abs() > 1e-12 && t.signum() != sweep.signum()) {
+        return None;
+    }
+    SWING_DEG.contains(&sweep.abs().to_degrees()).then_some((c, r, [first, last]))
+}
+
+/// The door swings (and their leaves) of a page's strokes that are kept out of joining: a swing
+/// is an arc through a quarter-ish circle whose centre — the hinge — is at the end of a straight
+/// stroke (its leaf, or the wall's face or jamb it hangs on), with its leaf drawn from the hinge
+/// to one of its ends or its other end on a straight stroke (the jamb it closes on). Joined
+/// with the wall's lines of the same pen, a swing and its leaf became one outline with the room's
+/// faces: no door read there, and the outline round the swing taken for no wall's face.
+fn door_swings_apart(strokes: &[Stroke]) -> HashSet<usize> {
+    let mut out = HashSet::new();
+    let arcs: Vec<(usize, ((f64, f64), f64, [(f64, f64); 2]))> =
+        strokes.iter().enumerate().take(MAX_SWING_SCAN).filter_map(|(i, s)| swing_arc(s).map(|a| (i, a))).collect();
+    if arcs.is_empty() {
+        return out;
+    }
+    // The ends of the straight strokes (two points), filed by cell.
+    const CELL: f64 = 1.0; // points
+    let key = |p: (f64, f64)| ((p.0 / CELL).floor() as i64, (p.1 / CELL).floor() as i64);
+    let mut ends: HashMap<(i64, i64), Vec<(usize, usize)>> = HashMap::new();
+    for (i, s) in strokes.iter().enumerate().take(MAX_SWING_SCAN) {
+        if s.closed || s.pts.len() != 2 {
+            continue;
+        }
+        for (j, p) in s.pts.iter().enumerate() {
+            if p.0.is_finite() && p.1.is_finite() {
+                ends.entry(key(*p)).or_default().push((i, j));
+            }
+        }
+    }
+    // The straight strokes with an end within `tol` of `p`: (stroke, which end).
+    let near = |p: (f64, f64), tol: f64| -> Vec<(usize, usize)> {
+        let (cx, cy) = key(p);
+        let k = (tol / CELL).ceil() as i64;
+        let mut v = Vec::new();
+        for dx in -k..=k {
+            for dy in -k..=k {
+                for &(i, j) in ends.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    if strokes.get(i).and_then(|s| s.pts.get(j)).is_some_and(|q| (q.0 - p.0).hypot(q.1 - p.1) <= tol) {
+                        v.push((i, j));
+                    }
+                }
+            }
+        }
+        v
+    };
+    for (a, (c, r, arc_ends)) in arcs {
+        let tol = (SWING_MEET * r).max(SWING_MEET_MIN);
+        let at_hinge = near(c, tol);
+        if at_hinge.is_empty() {
+            continue;
+        }
+        // The leaf: from the hinge to an end of the swing, the radius long.
+        let leaf = at_hinge.iter().find_map(|&(i, j)| {
+            let s = strokes.get(i)?;
+            let other = *s.pts.get(1 - j)?;
+            let long = (other.0 - c.0).hypot(other.1 - c.1);
+            ((long - r).abs() <= LEAF_LEN * r && arc_ends.iter().any(|e| (e.0 - other.0).hypot(e.1 - other.1) <= tol)).then_some(i)
+        });
+        let on_jamb = || arc_ends.iter().any(|&e| near(e, tol).iter().any(|&(i, _)| !at_hinge.iter().any(|h| h.0 == i)));
+        match leaf {
+            Some(l) => {
+                out.insert(a);
+                out.insert(l);
+            }
+            None if on_jamb() => {
+                out.insert(a);
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+/// Join open strokes of one pen and layer whose ends touch, end to end. The strokes `apart` (by
+/// index: door swings and their leaves, [`door_swings_apart`]) stay as the drawing drew them.
+fn join(strokes: Vec<Stroke>, apart: &HashSet<usize>) -> Vec<Stroke> {
     const EPS: f64 = 0.05; // points
     let q = |p: (f64, f64)| ((p.0 / EPS).round() as i64, (p.1 / EPS).round() as i64);
     let mut out: Vec<Stroke> = Vec::new();
     let mut open: Vec<Option<Stroke>> = Vec::new();
-    for s in strokes {
-        if s.closed || s.pts.len() < 2 {
+    for (i, s) in strokes.into_iter().enumerate() {
+        if s.closed || s.pts.len() < 2 || apart.contains(&i) {
             out.push(s);
         } else {
             open.push(Some(s));
@@ -5835,7 +5955,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
     }
     let raw_strokes = strokes.len();
-    let strokes = if opts.join { join(strokes) } else { strokes };
+    let strokes = if opts.join {
+        let apart = door_swings_apart(&strokes);
+        if !apart.is_empty() {
+            stats.insert("door swings and leaves not joined to other lines".into(), apart.len());
+        }
+        join(strokes, &apart)
+    } else {
+        strokes
+    };
     if opts.join && strokes.len() < raw_strokes {
         stats.insert("pieces joined".into(), raw_strokes - strokes.len());
     }
@@ -7850,6 +7978,76 @@ mod tests {
         assert_eq!(lineweight(1.2), 40);
     }
 
+    /// The page's strokes joined as the reader joins them.
+    fn joined(strokes: Vec<Stroke>) -> Vec<Stroke> {
+        let apart = door_swings_apart(&strokes);
+        join(strokes, &apart)
+    }
+
+    /// A room's inner face in one pen, with a door in its bottom side's gap (hinge `h`, the gap
+    /// `w` wide): the swing as a flattened curve from the jamb across the gap to the open leaf.
+    fn room_with_door(leaf: bool, w: f64) -> Vec<Stroke> {
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let st = |pts: Vec<(f64, f64)>| Stroke { pts, closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 };
+        let h = (40.0, 10.0);
+        let mut v = vec![
+            st(vec![(10.0, 10.0), h]),
+            st(vec![(h.0 + w, 10.0), (110.0, 10.0)]),
+            st(vec![(110.0, 10.0), (110.0, 90.0)]),
+            st(vec![(110.0, 90.0), (10.0, 90.0)]),
+            st(vec![(10.0, 90.0), (10.0, 10.0)]),
+        ];
+        let swing: Vec<(f64, f64)> =
+            (0..=8).map(|i| (f64::from(i) * 11.25f64).to_radians()).map(|a| (h.0 + w * a.cos(), h.1 + w * a.sin())).collect();
+        v.push(st(swing));
+        if leaf {
+            v.push(st(vec![h, (h.0, h.1 + w)]));
+        }
+        v
+    }
+
+    #[test]
+    fn a_door_swing_and_its_leaf_stay_apart_from_the_walls_they_touch() {
+        for leaf in [true, false] {
+            let joined = joined(room_with_door(leaf, 30.0));
+            // The faces join into one outline open at the door; the swing (and the leaf) stay
+            // their own strokes: no closed outline runs round the swing.
+            assert!(joined.iter().all(|s| !s.closed), "leaf {leaf}: {:?}", joined.iter().map(|s| s.pts.len()).collect::<Vec<_>>());
+            assert_eq!(joined.iter().filter(|s| s.pts.len() == 9).count(), 1, "leaf {leaf}: the swing alone");
+            assert_eq!(joined.len(), if leaf { 3 } else { 2 }, "leaf {leaf}");
+            if leaf {
+                assert!(joined.iter().any(|s| s.pts == vec![(40.0, 10.0), (40.0, 40.0)]), "the leaf alone");
+            }
+        }
+    }
+
+    #[test]
+    fn a_round_corner_or_a_short_curve_still_joins() {
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let st = |pts: Vec<(f64, f64)>| Stroke { pts, closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 };
+        // A rounded corner: a quarter circle whose centre is no end of any line.
+        let corner: Vec<(f64, f64)> =
+            (0..=8).map(|i| (f64::from(i) * 11.25f64).to_radians()).map(|a| (90.0 + 10.0 * a.cos(), 90.0 + 10.0 * a.sin())).collect();
+        let strokes = vec![
+            st(vec![(0.0, 0.0), (100.0, 0.0)]),
+            st(vec![(100.0, 0.0), (100.0, 90.0)]),
+            st(corner),
+            st(vec![(90.0, 100.0), (0.0, 100.0)]),
+            st(vec![(0.0, 100.0), (0.0, 0.0)]),
+        ];
+        let joined = joined(strokes);
+        assert_eq!(joined.len(), 1);
+        assert!(joined.first().is_some_and(|s| s.closed));
+        // Not a swing: a third of a circle, a wiggle, a line.
+        let arc = |deg: f64| -> Vec<(f64, f64)> {
+            (0..=8).map(|i| (f64::from(i) * deg / 8.0).to_radians()).map(|a| (10.0 * a.cos(), 10.0 * a.sin())).collect()
+        };
+        assert!(swing_arc(&st(arc(90.0))).is_some());
+        assert!(swing_arc(&st(arc(120.0))).is_none());
+        assert!(swing_arc(&st(arc(30.0))).is_none());
+        assert!(swing_arc(&st(vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)])).is_none());
+    }
+
     #[test]
     fn touching_pieces_join_and_round_loops_become_circles() {
         let pen = Pen { rgb: [0, 0, 0], lw: 25, transp: 0 };
@@ -7867,7 +8065,7 @@ mod tests {
             .chain((0..=8).map(|i| (f64::from(i) / 8.0 * 1.2 - 0.6 - std::f64::consts::FRAC_PI_2).sin_cos()).map(|(s, c)| (5.0 * c, 5.0 * s)))
             .collect();
         assert!(as_circle(&Stroke { pts: lens, closed: true, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 }).is_none());
-        let joined = join(strokes);
+        let joined = joined(strokes);
         assert_eq!(joined.len(), 1);
         let c = joined.first().and_then(as_circle);
         assert!(c.is_some_and(|((x, y), r)| (x - 10.0).abs() < 0.01 && (y - 10.0).abs() < 0.01 && (r - 5.0).abs() < 0.05), "{c:?}");
