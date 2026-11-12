@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::super::propfill::WithNote;
 use super::{
     Atom, BoxRule, Pieces, WireOpts, X3, bury, cable_pieces, large_conductors, raceway_pieces, raceway_pieces_ending, rule_source, rules, trade_size,
-    wires, wires_with,
+    wires_with,
 };
 
 /// Most runs, devices and atoms the build makes (hostile specs).
@@ -2433,7 +2433,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     .unwrap_or_default();
                 let voltage = gear_voltage(sp, &m.panel).unwrap_or_else(|| rl.default_voltage.clone());
                 let ends: Vec<usize> = pieces.ends.iter().flatten().map(|e| e + base).collect();
-                for mut w in wires(&c.pts, upf, &m.conductors, &nums, &voltage, rl) {
+                // The circuits' phases by their panel's own phase count (a single-phase panel
+                // has no phase C).
+                let mk = rl.makeup_ft.max(0.0);
+                let opts = WireOpts { kind: None, makeup_ft: [mk, mk], makeup_source: &rl.makeup_source, phases: panel_phases(sp, &m.panel) };
+                for mut w in wires_with(&c.pts, upf, &m.conductors, &nums, &voltage, rl, &opts) {
                     w.connects = ends.clone();
                     panel_makeup(&mut w, &at_panel, rl);
                     w.extra.push(("conductors_of_circuit", m.conductors.clone(), m.conductors_source.doc.clone().unwrap_or_default()));
@@ -2475,6 +2479,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     kind: kind.map(|k| (k, rl.feeder_conductors_source.as_str())),
                     makeup_ft: ends_mk,
                     makeup_source: &rl.feeder_makeup_source,
+                    // Its phase conductors are counted (`phases`): 1, 3, 5 give them A, B, C.
+                    phases: 3,
                 };
                 let ends: Vec<usize> = pieces.ends.iter().flatten().map(|e| e + base).collect();
                 let doc = m.conductors_source.doc.clone().unwrap_or_default();
@@ -2645,7 +2651,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let material = f.material.trim().to_ascii_lowercase();
         let kind = rl.feeder_conductors.get(&material).or_else(|| rl.feeder_conductors.get("cu"));
         let m = rl.makeup_ft.max(0.0);
-        let opts = WireOpts { kind: kind.map(|k| (k, rl.feeder_conductors_source.as_str())), makeup_ft: [m, m], makeup_source: &rl.makeup_source };
+        let opts = WireOpts {
+            kind: kind.map(|k| (k, rl.feeder_conductors_source.as_str())),
+            makeup_ft: [m, m],
+            makeup_source: &rl.makeup_source,
+            phases: 3,
+        };
         for mut w in wires_with(&path, upf, &makeup, &phases, &voltage, rl, &opts) {
             w.connects = ends.clone();
             let mut wctx = ctx.clone();
@@ -3629,6 +3640,38 @@ pub(crate) fn feeder_makeup(f: &cadaddy_walk3d::Feeder) -> String {
         parts.push(format!("{}#{}G", f.grounds.min(4), if g.is_empty() { phase } else { g }));
     }
     parts.join(" + ")
+}
+
+/// A panel's phase count (1 or 3) by its schedule header's `volts/phase` (or a `phase` entry),
+/// else its equipment row's properties; 3 when neither says (most panelboards are three phase).
+pub(crate) fn panel_phases(sp: &BuildingSpec, panel: &str) -> u32 {
+    let p = panel.trim();
+    if p.is_empty() {
+        return 3;
+    }
+    let is_volt_or_phase = |k: &str| {
+        let k = k.to_ascii_uppercase();
+        k.contains("VOLT") || k.contains("PHASE")
+    };
+    let from_schedule = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .filter(|s| s.panel.trim().eq_ignore_ascii_case(p))
+        .flat_map(|s| s.header.iter())
+        .filter(|(k, _)| is_volt_or_phase(k))
+        .find_map(|(_, v)| super::phases_in(v));
+    from_schedule
+        .or_else(|| {
+            sp.mep
+                .equipment
+                .iter()
+                .filter(|e| e.tag.trim().eq_ignore_ascii_case(p))
+                .flat_map(|e| e.properties.iter())
+                .filter(|(k, _)| is_volt_or_phase(k))
+                .find_map(|(_, v)| super::phases_in(v))
+        })
+        .unwrap_or(3)
 }
 
 /// A panel's voltage from its schedule row's properties (`VOLTS`, `VOLTAGE`), as the colour
