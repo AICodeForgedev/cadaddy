@@ -28,11 +28,14 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// The block references among `hs` in the current space, with their block's base point.
+/// The block references among `hs` in the current space, with their block's base point, each
+/// once (a selection may name one many times).
 fn references(s: &Session, hs: &[Handle]) -> Result<Vec<(Handle, Insert, Vec2)>> {
     let d = s.doc()?;
+    let mut seen = std::collections::HashSet::new();
     Ok(hs
         .iter()
+        .filter(|h| seen.insert(**h))
         .filter_map(|h| {
             let e = d.entity(*h)?;
             let EntityKind::Insert(i) = &e.kind else { return None };
@@ -83,10 +86,34 @@ fn clip_new(s: &mut Session, hs: &[Handle], world: &[Vec2], invert: bool) -> Res
 fn clip_option(s: &mut Session, hs: &[Handle], option: &str) -> Result<(usize, Vec<Handle>)> {
     let mut n = 0;
     let mut made = Vec::new();
+    if let "on" | "off" = option {
+        // Only the flag changes, once per reference: neither the reference nor its boundary is
+        // copied.
+        let on = option == "on";
+        let mut seen = std::collections::HashSet::new();
+        let clipped: Vec<Handle> = {
+            let d = s.doc()?;
+            hs.iter()
+                .copied()
+                .filter(|h| seen.insert(*h))
+                .filter(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Insert(i)) if i.clip.is_some()))
+                .collect()
+        };
+        for h in clipped {
+            s.doc_mut()?.modify_entity(h, |e| {
+                if let EntityKind::Insert(i) = &mut e.kind
+                    && let Some(c) = &mut i.clip
+                {
+                    c.enabled = on;
+                }
+            })?;
+            n += 1;
+        }
+        return Ok((n, made));
+    }
     for (h, ins, base) in references(s, hs)? {
         let Some(c) = ins.clip.clone() else { continue };
         match option {
-            "on" | "off" => set_clip(s, h, Some(XClip { enabled: option == "on", ..*c }))?,
             "delete" => set_clip(s, h, None)?,
             _ => {
                 let m = ins.transform(base);
@@ -475,6 +502,14 @@ mod tests {
         let c = clip(&s, h).unwrap();
         let b = cadaddy_geom::Bounds2::from_points(c.boundary.iter().copied());
         assert!((b.min.x - 10.0).abs() < 1e-9 && (b.max.y - 30.0).abs() < 1e-9, "{b:?}");
+        s.execute("xclip", &json!({ "handles": [h.hex()], "option": "off" })).unwrap();
+        assert!(!clip(&s, h).unwrap().enabled);
+        // A reference named many times is switched once, its boundary kept.
+        let before = clip(&s, h).unwrap().boundary;
+        let r = s.execute("xclip", &json!({ "handles": vec![h.hex(); 1000], "option": "on" })).unwrap();
+        assert_eq!(r["changed"], 1);
+        let c = clip(&s, h).unwrap();
+        assert!(c.enabled && c.boundary == before, "{c:?}");
         s.execute("xclip", &json!({ "handles": [h.hex()], "option": "off" })).unwrap();
         assert!(!clip(&s, h).unwrap().enabled);
         let r = s.execute("xclip", &json!({ "handles": [h.hex()], "option": "polyline" })).unwrap();
