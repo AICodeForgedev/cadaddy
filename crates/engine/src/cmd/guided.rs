@@ -23131,9 +23131,15 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
         };
         let unpriced: Vec<&str> = sc["unpriced"].as_array().map(|u| u.iter().filter_map(Value::as_str).take(6).collect()).unwrap_or_default();
         let money = match (sc["saves"]["cost"].as_f64(), sc["saves"]["man_hours"].as_f64()) {
-            (Some(c), Some(h)) => {
-                format!("; saves ${c:.0} and {h:.0} man-hours ({:.1} crew-days) over {over}", sc["saves"]["crew_days"].as_f64().unwrap_or(0.0))
-            }
+            (Some(c), Some(h)) => format!(
+                "; saves ${c:.0} and {h:.0} man-hours ({:.1} crew-days) over {over}{}",
+                sc["saves"]["crew_days"].as_f64().unwrap_or(0.0),
+                if sc["saves"]["complete"].as_bool() == Some(false) {
+                    format!(" (of what is priced; no price for {})", unpriced.join(", "))
+                } else {
+                    String::new()
+                }
+            ),
             _ if sc["as_designed"].is_object() => format!(
                 "; over {over}: savings not priced (no price for {}); of what is priced, as designed ${:.0} and {:.0} man-hours, the alternative ${:.0} and {:.0} man-hours",
                 unpriced.join(", "),

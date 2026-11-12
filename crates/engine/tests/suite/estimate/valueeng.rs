@@ -269,12 +269,19 @@ fn both_ways_are_priced_from_the_takeoff_with_labor_dollars_turned_into_man_hour
     let b = std::fs::read_to_string(&book).expect("price book");
     assert!(b.contains("# manpower_rate: 50") && b.contains("SER cable aluminum"), "{b}");
     assert!(v["price_book"]["rows"].as_u64().unwrap_or(0) > 3);
-    // A DB missing a line: no saving claimed, the line named.
+    // A DB missing a line: the saving of what is priced, never blanked; the line named with its
+    // quantity and the saving marked incomplete.
     let short: String = csv.lines().filter(|l| !l.starts_with("\"SER cable")).map(|l| format!("{l}\n")).collect();
     std::fs::write(&db, short).expect("cost db");
     let v = study(&mut s, &dir, json!({"model": false, "cost_db": db.to_string_lossy()}));
     let ser = scenario(&v, "se_unit_feeders");
-    assert!(ser["saves"].is_null(), "{ser}");
+    let sv = &ser["saves"];
+    assert_eq!(sv["complete"], json!(false), "{ser}");
+    assert!(sv["cost"].as_f64().is_some() && sv["man_hours"].as_f64().is_some(), "{sv}");
+    assert_eq!(sv["unpriced_lines"], json!(1), "{sv}");
+    let miss = &sv["unpriced"][0];
+    assert!(miss["side"] == json!("alternative") && miss["item"] == json!("SER cable aluminum") && miss["qty"].as_f64().unwrap_or(0.0) > 0.0, "{sv}");
+    assert!(sv["basis"].as_str().is_some_and(|b| b.contains("1 of") && b.contains("no price")), "{sv}");
     assert!(
         ser["unpriced"].as_array().is_some_and(|u| u.iter().any(|x| x.as_str().is_some_and(|x| x.starts_with("SER cable")))),
         "{}",
@@ -592,5 +599,170 @@ fn the_nm_scenarios_takeoff_has_what_nm_work_uses_and_drops_the_raceway_it_repla
     let shown = s.execute("ve.scenario", &json!({"id": "nm_unit_branch", "show": true})).expect("show");
     let hidden = s.doc().map(|d| d.model.iter().filter(|e| !e.common.visible).count()).unwrap_or(0);
     assert_eq!(hidden as u64, shown["replaces"].as_u64().unwrap_or(0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A trade size as the router writes it (`1/2"`, `1-1/4"`, `2"`).
+fn trade_size(v: f64) -> String {
+    let e = (v * 8.0).round() as i64;
+    let (w, r) = (e / 8, e % 8);
+    let frac = match r {
+        0 => String::new(),
+        x if x % 4 == 0 => format!("{}/2", x / 4),
+        x if x % 2 == 0 => format!("{}/4", x / 2),
+        x => format!("{x}/8"),
+    };
+    format!(
+        "{}\"",
+        if w == 0 {
+            frac
+        } else if frac.is_empty() {
+            w.to_string()
+        } else {
+            format!("{w}-{frac}")
+        }
+    )
+}
+
+#[test]
+fn the_starter_book_prices_every_piece_the_router_and_the_cable_work_name_at_every_size_they_use() {
+    // Q6356: the pieces come from the rules data the router builds from (the atom rules, the
+    // value-engineering cable work) and the sizes from its own fill tables, so a piece or size
+    // added there and missing from the starter book fails here.
+    let atoms: Value = serde_json::from_str(include_str!("../../../src/cmd/mepatoms.json")).expect("atom rules");
+    let ve: Value = serde_json::from_str(include_str!("../../../src/cmd/verules.json")).expect("ve rules");
+    let route: Value = serde_json::from_str(include_str!("../../../src/cmd/conduitroute.json")).expect("route rules");
+    let txt = |v: &Value| v.as_str().unwrap_or_default().to_string();
+    let inches: Vec<f64> = route["fill"]["area_sq_in"]["EMT"].as_array().expect("raceway sizes").iter().filter_map(|r| r[0].as_f64()).collect();
+    assert!(inches.len() >= 10, "{inches:?}");
+    let wires: Vec<String> = route["fill"]["wire_sq_in"].as_object().expect("wire sizes").keys().cloned().collect();
+    let angles = ["90", "45", "30", "22.5", "11.25"];
+    let mut want: Vec<(String, String, &str, &str)> = Vec::new();
+    for rw in atoms["raceways"].as_object().expect("raceways").values() {
+        let fb = rw["field_bend_max_in"].as_f64().unwrap_or(0.0);
+        for &i in &inches {
+            let sz = trade_size(i);
+            want.push((txt(&rw["stick"]), sz.clone(), "ft", "conduit"));
+            for k in ["coupling", "connector", "offset", "strap"] {
+                want.push((txt(&rw[k]), sz.clone(), "each", "conduit fittings"));
+            }
+            for a in angles {
+                want.push((txt(&rw["elbow"]).replace("{angle}", a), sz.clone(), "each", "conduit fittings"));
+                if i <= fb {
+                    want.push((txt(&rw["field_bend"]).replace("{angle}", a), sz.clone(), "each", "conduit fittings"));
+                }
+            }
+            if i <= fb {
+                want.push((txt(&rw["field_offset"]), sz.clone(), "each", "conduit fittings"));
+            }
+            for k in ["locknut_item", "bushing_item", "stub_bushing_item"] {
+                want.push((txt(&atoms[k]), sz.clone(), "each", "conduit fittings"));
+            }
+            want.push((txt(&ve["firestop"]["raceway_item"]), sz.clone(), "each", ""));
+        }
+    }
+    want.push((txt(&ve["firestop"]["cable_item"]), String::new(), "each", ""));
+    for b in atoms["boxes"].as_object().expect("boxes").values() {
+        want.push((txt(&b["item"]), txt(&b["size"]), "each", "boxes"));
+    }
+    want.push((txt(&atoms["ring"]["item"]), txt(&atoms["ring"]["size"]), "each", "boxes"));
+    for m in atoms["feeder_conductors"].as_object().expect("feeder conductors").values() {
+        for w in &wires {
+            // Aluminum building wire starts at #8 (NEC 310.106(B)).
+            if m["insulation"].as_str().is_some_and(|i| i.starts_with("XHHW")) && matches!(w.as_str(), "14" | "12" | "10") {
+                continue;
+            }
+            want.push((txt(&m["item"]), format!("#{w}"), "ft", "wire"));
+            want.push((txt(&m["ground_item"]), format!("#{w}"), "ft", "wire"));
+        }
+    }
+    for cr in atoms["cables"].as_object().expect("cables").values() {
+        for w in &wires {
+            want.push((txt(&cr["strap"]), format!("#{w}"), "each", "conduit fittings"));
+            if !txt(&cr["connector"]).is_empty() {
+                want.push((txt(&cr["connector"]), format!("#{w}"), "each", "conduit fittings"));
+            }
+        }
+        if txt(&cr["item"]) != "SER cable" {
+            for w in ["14", "12", "10"] {
+                for n in [2, 3] {
+                    want.push((txt(&cr["item"]), format!("{w}/{n} w/G"), "ft", "wire"));
+                }
+            }
+        }
+    }
+    for (name, cw) in ve["cable_work"].as_object().expect("cable work") {
+        for e in cw["entry"].as_object().into_iter().flatten().map(|(_, e)| e) {
+            if !txt(&e["item"]).is_empty() {
+                want.push((txt(&e["item"]), txt(&e["size"]), "each", "conduit fittings"));
+            }
+        }
+        for k in ["guards", "lv_bracket"] {
+            if cw[k].is_object() {
+                want.push((txt(&cw[k]["item"]), txt(&cw[k]["size"]), "each", ""));
+            }
+        }
+        for row in cw["connector_size"].as_array().into_iter().flatten() {
+            want.push((txt(&atoms["cables"][name]["connector"]), txt(&row[1]), "each", "conduit fittings"));
+            for f in cw["panel_end"].as_array().into_iter().flatten() {
+                want.push((txt(&f["item"]), txt(&row[1]), "each", "conduit fittings"));
+            }
+        }
+    }
+    want.retain(|w| !w.0.is_empty());
+    want.sort();
+    want.dedup();
+    // The starter book alone: no drawing prices, no price book.
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    s.execute("estimate.settings", &json!({"pricebook": false})).expect("settings");
+    let mut unpriced: Vec<String> = Vec::new();
+    let mut no_hours: Vec<String> = Vec::new();
+    for chunk in want.chunks(200) {
+        // Each with its category as the study sends it (the labor book's rules are by category).
+        let lines: Vec<Value> = chunk.iter().map(|(i, sz, u, c)| json!({"item": i, "size": sz, "unit": u, "qty": 1.0, "category": c})).collect();
+        let v = s.execute("estimate.change", &json!({"lines": lines})).expect("estimate.change");
+        for (l, (i, sz, _, _)) in v["lines"].as_array().expect("lines").iter().zip(chunk) {
+            if l["priced"] != json!(true) {
+                unpriced.push(format!("{i} {sz}"));
+            } else if !(l["via"].as_str().is_some_and(|v| v.contains("starter cost book")) && l["labor_hours"].as_f64().is_some_and(|h| h > 0.0)) {
+                no_hours.push(format!("{i} {sz}: {l}"));
+            }
+        }
+    }
+    assert!(want.len() > 500, "{}", want.len());
+    assert!(unpriced.is_empty(), "{} of {} pieces have no starter price: {unpriced:?}", unpriced.len(), want.len());
+    assert!(no_hours.is_empty(), "priced by the starter book with labor hours: {no_hours:?}");
+}
+
+#[test]
+fn without_a_cost_db_every_proposed_option_carries_its_saving_and_man_hours() {
+    // Q6356: no cost DB and no crew rate. The starter book prices both ways of every allowed or
+    // RFI option in full; man-hours are the summed hours per unit, which need no $/h rate.
+    let dir = tmp("nodb");
+    for pricebook in [false, true] {
+        let mut s = building(&dir);
+        s.execute("estimate.settings", &json!({"pricebook": pricebook})).expect("settings");
+        let v = study(&mut s, &dir, json!({}));
+        let proposed: Vec<&Value> =
+            v["scenarios"].as_array().into_iter().flatten().filter(|sc| matches!(sc["tier"].as_str(), Some("allowed_now" | "needs_rfi"))).collect();
+        assert!(proposed.len() >= 3, "{v}");
+        for sc in proposed {
+            let sv = &sc["saves"];
+            assert_eq!(sv["complete"], json!(true), "pricebook {pricebook}: {} {sc}", sc["id"]);
+            assert!(sc["unpriced"].as_array().is_some_and(Vec::is_empty), "{}: {}", sc["id"], sc["unpriced"]);
+            assert!(sv["cost"].as_f64().is_some_and(f64::is_finite), "{}: {sv}", sc["id"]);
+            let mh = sv["man_hours"].as_f64().unwrap_or(f64::NAN);
+            let (dh, ah) = (sc["as_designed"]["man_hours"].as_f64().unwrap_or(0.0), sc["alternative"]["man_hours"].as_f64().unwrap_or(0.0));
+            assert!(dh > 0.0 && ah > 0.0 && (mh - (dh - ah)).abs() < 0.02, "{}: man-hours both ways {dh} {ah} {sv}", sc["id"]);
+            if sc["tier"] == json!("needs_rfi") {
+                let t = sc["rfi"]["savings"].as_str().unwrap_or_default();
+                assert!(t.starts_with("saves $") && t.contains("man-hours"), "{}: {t}", sc["id"]);
+            }
+        }
+        let mp = &v["pricing"]["manpower"];
+        assert!(mp["man_hours_from"].as_str().is_some_and(|t| t.contains("hours per unit")), "{mp}");
+        assert!(!mp["manpower_rate_source"].as_str().unwrap_or_default().contains("man-hours not computed"), "{mp}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }

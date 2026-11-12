@@ -460,13 +460,22 @@ fn manpower(s: &mut Session, rules: &Rules, inp: &Inputs) -> price::Manpower {
         ),
         _ => match crate::cmd::estimate::crew_rate(s) {
             Some(r) => (Some(r), "the estimate's crew rate (estimate.settings; no cost DB manpower rate)".to_string()),
-            None => (None, "none: man-hours not computed".to_string()),
+            None if inp.cost_db.is_none() => {
+                (None, "none set (estimate.settings crew_rate): labor dollars are not priced; man-hours need no rate".to_string())
+            }
+            None => (None, "none: the cost DB gives labor in dollars and no manpower rate, so man-hours are not computed".to_string()),
         },
+    };
+    let hours_from = match (&inp.cost_db, rate) {
+        (None, _) => "the estimate's labor hours per unit (the drawing's prices, the price book, the starter book), summed".to_string(),
+        (Some(_), Some(r)) => format!("the cost DB's labor dollars ÷ ${r}/h"),
+        (Some(_), None) => "not computed: the cost DB's labor is in dollars and no manpower rate is given".to_string(),
     };
     let given_crew = inp.crew_size.is_some() || inp.hours_per_day.is_some();
     price::Manpower {
         rate,
         rate_source,
+        hours_from,
         crew_size: inp.crew_size.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(rules.crew.size.max(1.0)),
         hours_per_day: inp.hours_per_day.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(if rules.crew.hours_per_day > 0.0 {
             rules.crew.hours_per_day

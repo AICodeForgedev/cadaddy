@@ -19,6 +19,8 @@ const MAX_ROWS: usize = 200_000;
 const MAX_FILE: usize = 64 << 20;
 /// Lines one `estimate.change` call takes.
 const CHANGE_CHUNK: usize = 200;
+/// Unpriced lines a saving names at most.
+const MAX_NAMED_UNPRICED: usize = 200;
 
 /// One cost DB row: material and labor per unit, labor in dollars.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -188,6 +190,8 @@ pub(crate) struct Line {
 pub(crate) struct Manpower {
     pub rate: Option<f64>,
     pub rate_source: String,
+    /// How the man-hours are had: hours per unit summed, or labor dollars over the rate.
+    pub hours_from: String,
     pub crew_size: f64,
     pub hours_per_day: f64,
     pub crew_source: String,
@@ -202,7 +206,7 @@ impl Manpower {
 
     pub(crate) fn json(&self) -> Value {
         json!({
-            "manpower_rate": self.rate, "manpower_rate_source": self.rate_source,
+            "manpower_rate": self.rate, "manpower_rate_source": self.rate_source, "man_hours_from": self.hours_from,
             "crew_size": self.crew_size, "hours_per_day": self.hours_per_day, "crew_source": self.crew_source,
         })
     }
@@ -260,17 +264,33 @@ pub(crate) fn price(s: &mut Session, lines: &[Line], db: Option<&CostDb>, mp: &M
     if !via_estimate.is_empty() {
         // The estimate's prices (the drawing's own, the price book, the starter book): hours per
         // unit there, dollars by the estimate's labor rate.
-        let mut got: Vec<Value> = Vec::new();
-        let want: Vec<Value> = via_estimate
-            .iter()
-            .filter_map(|i| lines.get(*i))
-            .map(|l| json!({"item": l.item, "size": l.size, "unit": if l.unit == "ft" { "ft" } else { "each" }, "qty": l.qty}))
-            .collect();
-        for chunk in want.chunks(CHANGE_CHUNK) {
-            let priced = s.execute("estimate.change", &json!({"lines": chunk})).ok();
-            let mut part: Vec<Value> = priced.as_ref().and_then(|v| v["lines"].as_array().cloned()).unwrap_or_default();
-            part.resize(chunk.len(), Value::Null);
-            got.extend(part);
+        let want: Vec<Line> = via_estimate.iter().filter_map(|i| lines.get(*i)).cloned().collect();
+        let mut got = estimate_lines(s, &want);
+        // A multi-conductor cable the book has at no such make-up: the book's next larger cable
+        // of the item (each conductor at least as large), named as the stand-in.
+        let mut stand_in: Vec<Option<String>> = vec![None; want.len()];
+        let mut retry: Vec<Line> = Vec::new();
+        for (k, l) in want.iter().enumerate() {
+            if got.get(k).is_some_and(|x| x["priced"].as_bool() != Some(true))
+                && let Some(size) = next_larger_cable(&l.item, &l.size)
+                && let Some(slot) = stand_in.get_mut(k)
+            {
+                retry.push(Line { size: size.clone(), ..l.clone() });
+                *slot = Some(size);
+            }
+        }
+        if !retry.is_empty() {
+            let mut again = estimate_lines(s, &retry).into_iter();
+            for (k, slot) in stand_in.iter_mut().enumerate() {
+                if slot.is_none() {
+                    continue;
+                }
+                let x = again.next().unwrap_or(Value::Null);
+                match got.get_mut(k) {
+                    Some(g) if x["priced"].as_bool() == Some(true) => *g = x,
+                    _ => *slot = None,
+                }
+            }
         }
         for (k, i) in via_estimate.iter().enumerate() {
             let (Some(v), Some(l)) = (out.get_mut(*i), lines.get(*i)) else { continue };
@@ -281,7 +301,17 @@ pub(crate) fn price(s: &mut Session, lines: &[Line], db: Option<&CostDb>, mp: &M
                 v["material"] = json!(r2(m));
                 v["labor_dollars"] = json!(r2(ld));
                 v["man_hours"] = json!((h * 1000.0).round() / 1000.0);
-                v["via"] = json!(format!("estimate: {} (labor hours per unit × the estimate's rate)", x["via"].as_str().unwrap_or_default()));
+                let as_size = match stand_in.get(k).and_then(Option::as_ref) {
+                    Some(sz) => {
+                        v["priced_as"] = json!(sz);
+                        format!(" as {sz}, the book's next larger {} (no row for {})", l.item, l.size)
+                    }
+                    None => String::new(),
+                };
+                v["via"] = json!(format!(
+                    "estimate: {}{as_size} (labor hours per unit; dollars at the estimate's rate)",
+                    x["via"].as_str().unwrap_or_default()
+                ));
                 tm += m;
                 tl += ld;
                 th += h;
@@ -306,25 +336,104 @@ pub(crate) fn price(s: &mut Session, lines: &[Line], db: Option<&CostDb>, mp: &M
     })
 }
 
+/// Lines priced as the estimate prices them (`estimate.change`), one answer per line (null
+/// where it gave none).
+fn estimate_lines(s: &mut Session, lines: &[Line]) -> Vec<Value> {
+    let want: Vec<Value> =
+        lines.iter().map(|l| json!({"item": l.item, "size": l.size, "unit": if l.unit == "ft" { "ft" } else { "each" }, "qty": l.qty, "category": category_of(&l.kind)})).collect();
+    let mut got: Vec<Value> = Vec::new();
+    for chunk in want.chunks(CHANGE_CHUNK) {
+        let priced = s.execute("estimate.change", &json!({"lines": chunk})).ok();
+        let mut part: Vec<Value> = priced.as_ref().and_then(|v| v["lines"].as_array().cloned()).unwrap_or_default();
+        part.resize(chunk.len(), Value::Null);
+        got.extend(part);
+    }
+    got
+}
+
+/// The estimate's category of a takeoff line's kind (the BOM's): its labor book family rules
+/// are by category.
+pub(crate) fn category_of(kind: &str) -> &'static str {
+    match kind {
+        "conduit" => "conduit",
+        "coupling" | "connector" | "elbow" | "offset" | "strap" | "locknut" | "bushing" | "bend" => "conduit fittings",
+        "box" | "ring" => "boxes",
+        "cable" | "wire" => "wire",
+        _ => "",
+    }
+}
+
+/// A conductor make-up's sizes (`2/0-2/0-2/0-4`), each as its rank; none unless every part
+/// reads and there are at least two.
+fn makeup_ranks(size: &str) -> Option<Vec<i64>> {
+    let parts: Vec<&str> = size.split('-').map(str::trim).collect();
+    if parts.len() < 2 || parts.len() > 8 {
+        return None;
+    }
+    parts.iter().map(|p| super::cablework::awg_rank(p)).collect()
+}
+
+/// The starter book's next larger cable of the item for a make-up it has no row for: the row
+/// with as many conductors, each at least as large, nearest in size.
+pub(crate) fn next_larger_cable(item: &str, size: &str) -> Option<String> {
+    let want = makeup_ranks(size)?;
+    crate::cmd::estimate::starter_book()
+        .iter()
+        .filter(|r| r["item"].as_str().is_some_and(|i| i.trim().eq_ignore_ascii_case(item.trim())))
+        .filter_map(|r| {
+            let sz = r["size"].as_str()?;
+            let have = makeup_ranks(sz)?;
+            let fits = have.len() == want.len() && have.iter().zip(&want).all(|(h, w)| h >= w);
+            fits.then(|| (have.iter().zip(&want).map(|(h, w)| h - w).sum::<i64>(), sz.to_string()))
+        })
+        .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
+        // The book's own make-up prices as itself: no stand-in.
+        .filter(|(_, sz)| !sz.eq_ignore_ascii_case(size.trim()))
+        .map(|(_, sz)| sz)
+}
+
 fn unit_of(r: &CostRow) -> &str {
     if r.unit.is_empty() { "unit" } else { &r.unit }
 }
 
-/// The difference, design less alternative (what the alternative saves), when both are priced
-/// in full; else none (the gaps say why).
+/// The difference, design less alternative (what the alternative saves), of what is priced:
+/// a line no price matches is listed with its quantity (`unpriced`) and left out of both sides,
+/// never guessed and never blanking the rest. `complete` says whether both ways are priced in
+/// full; none when either side wasn't priced at all.
 pub(crate) fn saves(design: &Value, alt: &Value, mp: &Manpower) -> Value {
-    let full = |v: &Value| v["unpriced"].as_array().is_some_and(Vec::is_empty);
-    if !full(design) || !full(alt) {
+    if !design.is_object() || !alt.is_object() {
         return Value::Null;
     }
     let n = |v: &Value, k: &str| v[k].as_f64().unwrap_or(0.0);
     let mh = n(design, "man_hours") - n(alt, "man_hours");
+    let mut missing: Vec<Value> = Vec::new();
+    let mut total = 0usize;
+    for (side, v) in [("as_designed", design), ("alternative", alt)] {
+        for l in v["lines"].as_array().into_iter().flatten() {
+            total += 1;
+            if !l["material"].is_number() && missing.len() < MAX_NAMED_UNPRICED {
+                missing.push(json!({"side": side, "item": l["item"], "size": l["size"], "qty": l["qty"], "unit": l["unit"]}));
+            }
+        }
+    }
+    let named = |v: &Value| v["unpriced"].as_array().map_or(0, Vec::len);
+    let unpriced_n = missing.len().max(named(design) + named(alt));
+    let complete = unpriced_n == 0;
     json!({
         "material": r2(n(design, "material") - n(alt, "material")),
         "labor_dollars": r2(n(design, "labor_dollars") - n(alt, "labor_dollars")),
         "man_hours": r2(mh),
         "crew_days": r2(mp.crew_days(mh)),
         "cost": r2(n(design, "cost") - n(alt, "cost")),
+        "complete": complete,
+        "lines": total,
+        "unpriced_lines": unpriced_n,
+        "unpriced": missing,
+        "basis": if complete {
+            "both ways priced in full".to_string()
+        } else {
+            format!("of what is priced: {unpriced_n} of {total} lines have no price and are in neither side (listed in unpriced with their quantities)")
+        },
     })
 }
 
@@ -394,7 +503,14 @@ mod tests {
     fn labor_dollars_turn_into_man_hours_by_the_manpower_rate_and_crew_days_by_the_crew() {
         let mut s = Session::new();
         let db = parse_cost_db("# manpower_rate: 50\nitem,size,unit,material_unit,labor_unit\nMC cable,#12,ft,1.00,2.00\n", false, "t").unwrap();
-        let mp = Manpower { rate: db.manpower_rate, rate_source: "cost DB".into(), crew_size: 2.0, hours_per_day: 8.0, crew_source: "test".into() };
+        let mp = Manpower {
+            rate: db.manpower_rate,
+            rate_source: "cost DB".into(),
+            hours_from: String::new(),
+            crew_size: 2.0,
+            hours_per_day: 8.0,
+            crew_source: "test".into(),
+        };
         let lines = vec![
             Line { kind: "cable".into(), item: "MC cable".into(), size: "#12".into(), unit: "ft".into(), qty: 400.0 },
             Line { kind: "strap".into(), item: "Cable strap".into(), size: String::new(), unit: "ea".into(), qty: 10.0 },
@@ -403,12 +519,31 @@ mod tests {
         assert_eq!((v["material"].as_f64(), v["labor_dollars"].as_f64(), v["man_hours"].as_f64()), (Some(400.0), Some(800.0), Some(16.0)));
         assert_eq!(v["crew_days"].as_f64(), Some(1.0), "16 man-hours / (2 × 8 h)");
         assert_eq!(v["unpriced"], json!(["Cable strap"]), "never guessed");
-        // Saves only when both ways are priced in full.
-        assert!(saves(&v, &v, &mp).is_null());
+        // One unpriced line blanks nothing: the difference of what is priced, the line listed.
+        let part = saves(&v, &v, &mp);
+        assert_eq!((part["complete"].as_bool(), part["unpriced_lines"].as_u64(), part["cost"].as_f64()), (Some(false), Some(2), Some(0.0)), "{part}");
+        assert_eq!(part["unpriced"][0], json!({"side": "as_designed", "item": "Cable strap", "size": "", "qty": 10.0, "unit": "ea"}));
+        assert!(saves(&Value::Null, &v, &mp).is_null(), "a side not priced at all: no saving");
         let full = price(&mut s, &lines[..1], Some(&db), &mp);
         let half = price(&mut s, &[Line { qty: 100.0, ..lines[0].clone() }], Some(&db), &mp);
         let sv = saves(&full, &half, &mp);
         assert_eq!((sv["cost"].as_f64(), sv["man_hours"].as_f64(), sv["crew_days"].as_f64()), (Some(900.0), Some(12.0), Some(0.75)));
+        assert_eq!(sv["complete"], json!(true));
+    }
+
+    #[test]
+    fn a_cable_make_up_the_book_lacks_takes_its_next_larger_cable() {
+        // The book's own make-up: no stand-in (it prices as itself).
+        assert_eq!(next_larger_cable("SER cable aluminum", "2/0-2/0-2/0-4"), None);
+        // A smaller ground than any row: the nearest row whose every conductor is as large.
+        assert_eq!(next_larger_cable("SER cable aluminum", "2/0-2/0-2/0-6").as_deref(), Some("2/0-2/0-2/0-4"));
+        assert_eq!(next_larger_cable("ser cable aluminum", "3/0-3/0-3/0-4").as_deref(), Some("3/0-3/0-3/0-1/0"));
+        // Never a smaller one, another item, another conductor count or a size that doesn't read.
+        assert_eq!(next_larger_cable("SER cable aluminum", "750-750-750-500"), None);
+        assert_eq!(next_larger_cable("MC cable", "2/0-2/0-2/0-6"), None);
+        assert_eq!(next_larger_cable("SER cable aluminum", "2/0-2/0"), None);
+        assert_eq!(next_larger_cable("SER cable aluminum", "12/2 w/G"), None);
+        assert_eq!(next_larger_cable("SER cable aluminum", ""), None);
     }
 
     #[test]
