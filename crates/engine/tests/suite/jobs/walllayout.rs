@@ -427,6 +427,42 @@ fn plates_that_would_overlap_are_one_ganged_box() {
     assert!(ph.iter().any(|v| v.starts_with("fail") && v.contains("centre 18 in AFF") && v.contains("centre 21 in AFF")), "{ph:?}");
 }
 
+/// Q6375: a room documented `number or name` is found by its number as a JSON number or as text,
+/// and by its name, wherever an agent gives it.
+#[test]
+fn a_room_is_given_by_its_number_or_its_name_in_any_form() {
+    let _g = serial();
+    let mut s = job(false);
+    let names = |r: &Value| -> Vec<String> {
+        let mut v: Vec<String> = r["faces"].as_array().into_iter().flatten().filter_map(|f| f["name"].as_str().map(str::to_string)).collect();
+        v.sort();
+        v
+    };
+    let by_text = s.execute_agent("bim.faces", &json!({"room": "1001"})).expect("faces by text");
+    let all = by_text["total"].as_u64().unwrap_or(0);
+    assert!(by_text["count"].as_u64().is_some_and(|n| n >= 4 && n < all), "the room's faces only: {by_text:#}");
+    for room in [json!(1001), json!(" office ")] {
+        let r = s.execute_agent("bim.faces", &json!({ "room": room })).unwrap_or_else(|e| panic!("faces {room}: {e}"));
+        assert_eq!(names(&r), names(&by_text), "bim.faces {room}");
+    }
+    let text = s.execute_agent("bim.layout", &json!({"room": "1001"})).expect("layout by text")["text"].clone();
+    for room in [json!(1001), json!("Office")] {
+        let r = s.execute_agent("bim.layout", &json!({ "room": room })).unwrap_or_else(|e| panic!("layout {room}: {e}"));
+        assert_eq!(r["room"], "1001", "{r:#}");
+        assert_eq!(r["text"], text, "bim.layout {room}");
+    }
+    for room in [json!(1001), json!("1001"), json!("OFFICE")] {
+        let r = s.execute_agent("validate.prescreen", &json!({ "room": room })).unwrap_or_else(|e| panic!("prescreen {room}: {e}"));
+        assert_eq!(r["scope"]["scope"], "room", "{room}: {r:#}");
+    }
+    let r = s.execute_agent("bim.view", &json!({"level": "L1", "room": 1002})).expect("room view by number");
+    assert_eq!(r["room"], "1002", "{r:#}");
+    // Still refused: no room, a list, an object, a room nothing is numbered or named.
+    for bad in [json!({}), json!({"room": [1001]}), json!({"room": {"n": 1001}}), json!({"room": 9999})] {
+        assert!(s.execute_agent("bim.layout", &bad).is_err(), "bim.layout {bad}");
+    }
+}
+
 #[test]
 fn hostile_layout_params_are_refused() {
     let _g = serial();

@@ -19,6 +19,16 @@
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// The allocator on Linux with glibc. glibc's malloc gives allocating threads arenas of their own
+/// (up to 8 per core) and keeps what a thread frees in its arena, so a job on a many-core machine
+/// held several GB it had already freed: its peak followed the core count, not what it held (a
+/// 24-thread print-set job peaked at 11.5 GB, 4.8 GB with mimalloc, in the same time). mimalloc
+/// lets any thread reuse freed pages and hands unused ones back to the system. Elsewhere the
+/// system allocator is kept (tests/job_memory.rs).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// `println!` that doesn't panic when stdout is closed (`cadaddy-cli commands | head`) with
 /// "failed printing to stdout: Broken pipe (os error 32)". Once stdout has failed, later output is
 /// dropped and the work goes on: see `stdout_failed`.

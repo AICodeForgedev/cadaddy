@@ -818,7 +818,12 @@ impl Ctx {
                     let z = m.vertices.first().map_or(0.0, |v| v.z);
                     let tag = |k: &str| super::bimlook::made_tag(e, k).unwrap_or_default().to_string();
                     let ps = props::read(&e.common.xdata);
-                    let finish = ps.get("finish").map(Prop::text).filter(|f| !f.is_empty()).unwrap_or_else(|| tag("finish"));
+                    // Its floor finish as its properties say (`floor_finish`: a person's, the
+                    // finish schedule's), else as the build tagged it.
+                    let finish = ["floor_finish", "finish"]
+                        .iter()
+                        .find_map(|k| ps.get(k).map(Prop::text).filter(|f| !f.trim().is_empty()))
+                        .unwrap_or_else(|| tag("finish"));
                     rooms.push(RoomEl { level, name: tag("name"), number: tag("number"), finish, outline, z, handle: e.handle });
                 }
                 "device" | "casework" => {

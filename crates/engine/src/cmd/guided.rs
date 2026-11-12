@@ -4649,14 +4649,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // one reading traces: the last floors were left out).
     // (A level's floor plan, not its finish or furniture plan: those print the floor again with
     // legends and tags no room has.)
-    let plans = |arch_only: bool| -> Vec<[f64; 4]> {
-        let of: Vec<&SheetRegion> = job
-            .sheet_regions
-            .iter()
-            .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !roof(r) && (!arch_only || r.discipline.eq_ignore_ascii_case("A")))
-            .collect();
-        floor_plans_first(job, of).into_iter().map(SheetRegion::plan_rect).collect()
-    };
+    let plans = |arch_only: bool| room_plans(job, arch_only);
     // The plans no room is read on, and why: a floor plan with no level reads none (its rooms
     // would be on no floor), a roof plan none.
     let not_read: Vec<Value> = job
@@ -4675,14 +4668,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         })
         .take(MAX_QUESTIONS_PER_STAGE)
         .collect();
-    // Rooms come from the architectural floor plans: other trades' plans show the same rooms
-    // again (and phantom ones). Any plan when the set has no architectural ones.
-    let arch = plans(true);
-    let (regions, read_on) = if !arch.is_empty() {
-        (arch, "architectural floor plans")
-    } else {
-        (plans(false), "other trades' floor plans (the set has no architectural floor plan)")
-    };
+    let (regions, read_on) = room_regions(job);
     // With outlines: the typical-room plans' devices are stamped into each room of the type.
     let mut params = json!({"outline": true});
     if !regions.is_empty() {
@@ -4796,6 +4782,8 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             o.insert("plans_not_read".into(), json!(not_read));
         }
         o.insert("not_rooms".into(), dropped);
+        // The plan views read (none: the whole drawing): the later stages read the rooms there.
+        o.insert("read_regions".into(), json!(regions));
         let mut names = name_candidates.unwrap_or_else(|| json!({}));
         if let Some(c) = names.as_object_mut() {
             c.insert("read_on".into(), json!(read_on));
@@ -5051,6 +5039,60 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Rooms), Some(json!({"rooms_found": room_count})));
     Ok(rooms_result)
+}
+
+/// The floor plan views of a job's set that rooms are read on (`arch_only`: the architectural
+/// ones), floor plans first: each level's plan, not its finish or furniture plan, nor a roof
+/// plan or a sheet that is not built.
+fn room_plans(job: &GuidedJob, arch_only: bool) -> Vec<[f64; 4]> {
+    let roof = roof_plan_test(job);
+    let of: Vec<&SheetRegion> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !roof(r) && (!arch_only || r.discipline.eq_ignore_ascii_case("A")))
+        .collect();
+    floor_plans_first(job, of).into_iter().map(SheetRegion::plan_rect).collect()
+}
+
+/// The plan views the rooms stage reads the rooms on, and what they are: the architectural floor
+/// plans (other trades' plans show the same rooms again, and phantom ones), any floor plan when
+/// the set has no architectural one.
+fn room_regions(job: &GuidedJob) -> (Vec<[f64; 4]>, &'static str) {
+    let arch = room_plans(job, true);
+    if !arch.is_empty() {
+        (arch, "architectural floor plans")
+    } else {
+        (room_plans(job, false), "other trades' floor plans (the set has no architectural floor plan)")
+    }
+}
+
+/// Most plan views read from a saved rooms stage's result (a hostile job file is capped).
+const MAX_SETTLED_REGIONS: usize = 4096;
+
+/// What the job's rooms stage read, for the stages after it ([`super::perceive::geometry::SettledRooms`]):
+/// none before the stage has read the rooms (or while it reads them again), nor when it failed.
+fn settled_rooms_of(job: &GuidedJob) -> Option<super::perceive::geometry::SettledRooms> {
+    let st = job.stage(StageName::Rooms)?;
+    if !matches!(st.status, StageStatus::Done | StageStatus::Paused) {
+        return None;
+    }
+    let result = st.result.as_ref()?;
+    let rooms = result.get("rooms").and_then(Value::as_array).map(Vec::len)?;
+    // The views it read on (a job saved before it recorded them: as it reads them).
+    let regions = match result.get("read_regions").and_then(Value::as_array) {
+        Some(rs) => rs
+            .iter()
+            .filter_map(|r| {
+                let r = r.as_array()?;
+                let v = |i: usize| r.get(i).and_then(Value::as_f64).filter(|x| x.is_finite());
+                Some([v(0)?, v(1)?, v(2)?, v(3)?])
+            })
+            .take(MAX_SETTLED_REGIONS)
+            .collect(),
+        None if job.sheet_regions.is_empty() => Vec::new(),
+        None => room_regions(job).0,
+    };
+    Some(super::perceive::geometry::SettledRooms { regions, rooms })
 }
 
 /// Whether a sheet region is a roof plan of a building with storeys under it: every level it
@@ -30368,6 +30410,10 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         // What the job held before the stage (a stage a cancel cuts short leaves none of its
         // findings and questions behind).
         let held = (job.findings.len(), job.worklist.len());
+        // After the rooms stage, the plan's rooms are what it read: no stage traces them again
+        // (Q6362). While it runs (again), they are traced.
+        let settled = if stage_name == StageName::Rooms { None } else { settled_rooms_of(job) };
+        super::perceive::geometry::settle_rooms(s, settled);
         let result = match stage_name {
             StageName::Import => run_import(s, job),
             StageName::Classify => run_classify(s, job),
@@ -30380,6 +30426,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             StageName::Estimate => run_estimate(s, job),
             StageName::Clash => run_clash(s, job),
         };
+        super::perceive::geometry::settle_rooms(s, None);
         let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if let Some(st) = job.stage_mut(stage_name) {
             st.elapsed_ms = Some(ms);
@@ -36287,6 +36334,7 @@ mod tests {
             area_sf: 200.0,
             ceiling_ft: 9.0,
             finish: None,
+            finish_source: String::new(),
             source: cadaddy_doc::Handle(0),
             outline: vec![v(x, 0.0), v(x + 120.0, 0.0), v(x + 120.0, 240.0), v(x, 240.0)],
             z: 0.0,
@@ -36332,6 +36380,7 @@ mod tests {
             area_sf: 100.0,
             ceiling_ft: 9.0,
             finish: None,
+            finish_source: String::new(),
             source: cadaddy_doc::Handle(0),
             outline: Vec::new(),
             z: 0.0,
@@ -36566,6 +36615,7 @@ mod tests {
             area_sf,
             ceiling_ft: 9.0,
             finish: None,
+            finish_source: String::new(),
             source: cadaddy_doc::Handle(0),
             outline: Vec::new(),
             z: 0.0,

@@ -2132,6 +2132,9 @@ pub(crate) struct RoomElement {
     pub area_sf: f64,
     pub ceiling_ft: f64,
     pub finish: Option<String>,
+    /// Where its floor finish came from: its property's source (`user`, `schedule`…), else
+    /// `spec` (the build's tag).
+    pub finish_source: String,
     pub source: Handle,
     pub outline: Vec<Vec2>,
     pub z: f64,
@@ -2153,6 +2156,13 @@ pub(crate) fn room_elements(d: &Drawing) -> Vec<RoomElement> {
             .and_then(|at| x.get(at + 3))
             .and_then(|t| u64::from_str_radix(t.value.trim(), 16).ok())
             .map_or(Handle(0), Handle);
+        // Its floor finish as its properties say (a person's, a schedule's: the value the room
+        // finish schedule shows), else as the build tagged it.
+        let store = cadaddy_doc::props::read(x);
+        let (finish, finish_source) = match store.get("floor_finish").filter(|p| p.has_value()) {
+            Some(p) => (Some(p.text().trim().chars().take(200).collect::<String>()).filter(|f| !f.is_empty()), p.source.kind.as_str().to_string()),
+            None => (room_tag(e, "finish:").filter(|n| !n.is_empty()).map(str::to_string), "spec".to_string()),
+        };
         out.push(RoomElement {
             handle: e.handle,
             level: made_level(e).unwrap_or_default(),
@@ -2160,7 +2170,8 @@ pub(crate) fn room_elements(d: &Drawing) -> Vec<RoomElement> {
             number: room_tag(e, "number:").filter(|n| !n.is_empty()).map(str::to_string),
             area_sf: num("area_sf:").unwrap_or(0.0),
             ceiling_ft: num("ceiling_ft:").unwrap_or(0.0),
-            finish: room_tag(e, "finish:").filter(|n| !n.is_empty()).map(str::to_string),
+            finish,
+            finish_source,
             source,
             outline: m.vertices.iter().map(|v| v.xy()).collect(),
             z: m.vertices.first().map_or(0.0, |v| v.z),
