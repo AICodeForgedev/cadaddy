@@ -2807,18 +2807,42 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     }
     job.sheet_spans.extend(spans);
     job.sheet_scales = scales;
+    let mut clock = StepClock::new("sheets");
     // Each sheet's border and title block: what is read there is never building.
     let rects: Vec<[f64; 4]> = regions.iter().map(|r| r.rect).collect();
     for (r, f) in regions.iter_mut().zip(sheet_frames(s.doc()?, &rects)) {
         r.area = Some(f.area);
         r.title_block = f.title_block;
     }
+    clock.done("sheet borders and title blocks");
     // A plan whose scale isn't printed takes it from a plan of its floor that prints its own,
     // when their outlines agree at one ratio (Q6360); before its dimension strings' too.
     let mut why_not = Vec::new();
-    let rescaled = super::planscale::scale_from_same_floor(s.doc_mut()?, &mut regions, &mut job.sheet_scales, &job.sheet_spans, &mut why_not);
+    let mut fits = super::grids::FitStats::default();
+    let rescaled =
+        super::planscale::scale_from_same_floor(s.doc_mut()?, &mut regions, &mut job.sheet_scales, &job.sheet_spans, &mut why_not, &mut fits);
+    clock.done(&format!("plan scales from the plans of the same floor ({} linework fits)", fits.fits));
     for w in why_not.iter().take(MAX_QUESTIONS_PER_STAGE) {
         progress_line(&format!("  sheet {w}"));
+    }
+    // A fit too large to weigh pair by pair (a sheet tried at a site scale) weighed a sample:
+    // said, never silent.
+    if fits.thinned > 0 {
+        let what = format!(
+            "{} of the plan-scale checks' trial scales weighed an even sample of their linework: every pair was more than {} (a sheet tried at a site scale)",
+            fits.thinned,
+            super::grids::MAX_FIT_VOTES
+        );
+        progress_line(&format!("  sheets: {what}"));
+        job.add_finding(
+            stage,
+            &format!("Plan-scale check capped: {what}"),
+            "The check stays within its time and memory; a sampled trial scale reads its fit a little less surely, so a plan it gave no scale to is asked for one as usual",
+            1,
+            vec!["Nothing to do: the plans' scales are read and asked as usual".into()],
+            None,
+            false,
+        );
     }
     for r in &rescaled {
         progress_line(&format!(
@@ -2896,16 +2920,20 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     }
     // A sheet printing two levels' plans: each level takes only its own view.
     let typical_sheets: BTreeSet<String> = regions.iter().zip(&typical).filter(|(_, t)| **t).map(|(r, _)| r.number.clone()).collect();
+    clock.done("plan scale findings");
     let regions = split_view_regions(s.doc()?, regions, &typical);
+    clock.done("several-view sheets split by level");
     // What answers said of the sheets (Q6517): the plan's own rectangle, a sheet left out; a
     // level with no floor plan is not built from its finish plans.
     let regions = answered_regions(job, regions, &all, &job.sheet_scales);
     // A plan nothing scaled is always asked for its scale, and a level too small to be a
     // building is a high finding, always asked (Q6360): never built at the sheet's units.
     scale_questions(job, stage, &regions, &paper, &all, super::perceive::units_per_inch(s.doc()?));
+    clock.done("answers and scale questions");
     // Each plan sheet's view (Q6515): which one is the plan, its rectangle and scale; a sheet of
     // several views none of which is titled as its plan is a finding, never taken whole silently.
     let (views, unclear) = plan_view_report(s.doc()?, &regions, &typical_sheets, &job.sheet_scales);
+    clock.done("each plan sheet's view");
     if !views.is_empty() {
         let list: Vec<String> = views
             .iter()
@@ -3123,6 +3151,32 @@ pub(crate) fn progress_line(line: &str) {
         && let Some(sink) = *g
     {
         sink(line);
+    }
+}
+
+/// A step of a stage taking longer than this says so on the progress lines.
+const SLOW_STEP_S: f64 = 2.0;
+
+/// The steps of a stage, timed: one that took over [`SLOW_STEP_S`] goes to the progress lines by
+/// name, so a long stage says what held it up (a stage used to print nothing for minutes after
+/// its last sheet import).
+pub(crate) struct StepClock {
+    at: web_time::Instant,
+    tag: &'static str,
+}
+
+impl StepClock {
+    pub(crate) fn new(tag: &'static str) -> Self {
+        Self { at: web_time::Instant::now(), tag }
+    }
+
+    /// `what` is done: said when it was slow; the next step is timed from now.
+    pub(crate) fn done(&mut self, what: &str) {
+        let took = self.at.elapsed().as_secs_f64();
+        if took > SLOW_STEP_S {
+            progress_line(&format!("  {}: {what} took {took:.1} s", self.tag));
+        }
+        self.at = web_time::Instant::now();
     }
 }
 
@@ -4811,6 +4865,7 @@ fn finish_tag(r: &Value) -> bool {
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
+    let mut clock = StepClock::new("rooms");
     // A roof plan makes no rooms: its labels are roof areas, canopies and notes (Q6285).
     let roof = roof_plan_test(job);
     // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
@@ -4853,6 +4908,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     } else {
         (s.execute("rooms.list", &params)?, read_on)
     };
+    clock.done("rooms traced on the floor plans");
     let name_candidates = rooms_result.as_object_mut().and_then(|o| o.remove("nameCandidates"));
     if let Some(c) = &name_candidates {
         let n = |k: &str| c.get(k).and_then(Value::as_u64).unwrap_or(0);
@@ -4927,6 +4983,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             })
             .collect();
     }
+    clock.done("other trades' plans read for room numbers");
     // A room carries the level of the sheet it was read on (Q5291 MUST 2): the sheet's level
     // wins over a spec's guess.
     if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
@@ -4978,6 +5035,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
     let (removed, renamed) = apply_room_answers(job, &mut rooms_result);
+    clock.done("rooms checked against the building, numbers and answers");
     if let Some(o) = rooms_result.as_object_mut() {
         if duplicates > 0 {
             o.insert("duplicates_merged".into(), json!(duplicates));

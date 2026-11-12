@@ -1666,28 +1666,79 @@ pub(crate) fn line_samples(ents: &[&Arc<Entity>], step: f64) -> Vec<Vec2> {
     out
 }
 
+/// Cells an occupancy keeps as a bitmap over their box, at most (8 MB); a wider spread is a set.
+const MAX_OCCUPANCY_BITS: usize = 64 << 20;
+
 /// Cells holding linework, for scoring an overlay.
 struct Occupancy {
     cell: f64,
-    cells: std::collections::HashSet<(i64, i64)>,
+    cells: OccupiedCells,
+}
+
+/// An occupancy's cells: a bitmap over their box (a lookup is a few operations; a linework fit
+/// asks millions), or a set when the box is too large for one.
+enum OccupiedCells {
+    Bits { x0: i64, y0: i64, w: usize, h: usize, bits: Vec<u64> },
+    Set(std::collections::HashSet<(i64, i64)>),
 }
 
 impl Occupancy {
     /// `pts` in cells of `cell`, each grown by `grow` cells (a tolerance).
     fn new(pts: &[Vec2], cell: f64, grow: i64) -> Self {
-        let mut cells = std::collections::HashSet::new();
+        let at = |p: &Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+        let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
         for p in pts {
-            let (i, j) = ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
-            for di in -grow..=grow {
-                for dj in -grow..=grow {
-                    cells.insert((i + di, j + dj));
-                }
-            }
+            let (i, j) = at(p);
+            (x0, y0, x1, y1) = (x0.min(i), y0.min(j), x1.max(i), y1.max(j));
         }
+        let (x0, y0, x1, y1) = (x0.saturating_sub(grow), y0.saturating_sub(grow), x1.saturating_add(grow), y1.saturating_add(grow));
+        let size = |a: i64, b: i64| b.checked_sub(a).and_then(|d| d.checked_add(1)).and_then(|d| usize::try_from(d).ok());
+        let cells = match size(x0, x1).zip(size(y0, y1)).and_then(|(w, h)| Some((w, h, w.checked_mul(h)?))) {
+            Some((w, h, n)) if !pts.is_empty() && n <= MAX_OCCUPANCY_BITS => {
+                let mut bits = vec![0u64; n.div_ceil(64)];
+                for p in pts {
+                    let (i, j) = at(p);
+                    for di in -grow..=grow {
+                        for dj in -grow..=grow {
+                            let k = usize::try_from(i.saturating_add(di) - x0).ok().zip(usize::try_from(j.saturating_add(dj) - y0).ok());
+                            if let Some(b) = k.map(|(x, y)| x * h + y)
+                                && let Some(word) = bits.get_mut(b / 64)
+                            {
+                                *word |= 1 << (b % 64);
+                            }
+                        }
+                    }
+                }
+                OccupiedCells::Bits { x0, y0, w, h, bits }
+            }
+            _ => {
+                let mut cells = std::collections::HashSet::new();
+                for p in pts {
+                    let (i, j) = at(p);
+                    for di in -grow..=grow {
+                        for dj in -grow..=grow {
+                            cells.insert((i.saturating_add(di), j.saturating_add(dj)));
+                        }
+                    }
+                }
+                OccupiedCells::Set(cells)
+            }
+        };
         Occupancy { cell, cells }
     }
     fn hit(&self, p: Vec2) -> bool {
-        self.cells.contains(&((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64))
+        let (i, j) = ((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64);
+        match &self.cells {
+            OccupiedCells::Bits { x0, y0, w, h, bits } => {
+                let (Some(x), Some(y)) =
+                    (i.checked_sub(*x0).and_then(|d| usize::try_from(d).ok()), j.checked_sub(*y0).and_then(|d| usize::try_from(d).ok()))
+                else {
+                    return false;
+                };
+                x < *w && y < *h && bits.get((x * h + y) / 64).is_some_and(|word| word >> ((x * h + y) % 64) & 1 == 1)
+            }
+            OccupiedCells::Set(cells) => cells.contains(&(i, j)),
+        }
     }
     /// The share of `pts` under `p ↦ p·s + t` that land on linework.
     fn score(&self, pts: &[Vec2], s: f64, t: Vec2) -> f64 {
@@ -1717,7 +1768,7 @@ pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, V
 
 /// [`linework_fit`] over scales `lo..=hi` only (a view known to be drawn at the plan's scale).
 pub(crate) fn linework_fit_within(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<(f64, Vec2, f64, f64)> {
-    fit_linework(src, tgt, k, lo, hi, true)
+    fit_linework(src, tgt, k, lo, hi, true, &mut FitStats::default())
 }
 
 /// Offsets each scale proposes for a part of a floor (an enlarged view): a repeated room's other
@@ -1731,15 +1782,142 @@ const MAX_FIT_SCALES: usize = 1_000;
 /// it may be any size under the plan's, and each scale proposes its best few offsets, so the
 /// margin says when it fits as well elsewhere (a run of identical rooms).
 pub(crate) fn linework_fit_part(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<(f64, Vec2, f64, f64)> {
-    fit_linework(src, tgt, k, lo, hi, false)
+    fit_linework(src, tgt, k, lo, hi, false, &mut FitStats::default())
 }
 
-fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: bool) -> Option<(f64, Vec2, f64, f64)> {
+/// [`linework_fit_part`], adding what the fit had to leave out to `stats`.
+pub(crate) fn linework_fit_part_counted(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, stats: &mut FitStats) -> Option<(f64, Vec2, f64, f64)> {
+    fit_linework(src, tgt, k, lo, hi, false, stats)
+}
+
+/// Source cell by target cell votes one scale of a linework fit counts, at most. Every pair used
+/// to be voted into a map: a sheet weighed at a site scale (`1" = 100'`) spans a couple of hundred
+/// thousand coarse cells, and its maps, one per scale in flight, held tens of GB (a job's rooms
+/// stage ran a laptop out of memory). Past it the larger side is thinned evenly
+/// ([`FitStats::thinned`]); a floor plan against its own floor's plans stays well under it.
+pub(crate) const MAX_FIT_VOTES: usize = 4_000_000;
+/// Offsets one scale's vote holds in a dense grid, at most (4 bytes each); a wider spread votes
+/// in a map of at most [`MAX_SPARSE_VOTES`] pairs.
+const MAX_DENSE_OFFSETS: usize = 4_000_000;
+/// Pairs one scale votes when its offsets are too spread out for a dense grid (each a map entry).
+const MAX_SPARSE_VOTES: usize = 1_000_000;
+/// A coarse cell's index past this is no linework's (a hostile or broken coordinate).
+const MAX_CELL_INDEX: f64 = 1e12;
+
+/// What linework fits had to leave out to stay bounded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FitStats {
+    /// Fits run.
+    pub fits: usize,
+    /// Scales whose coarse vote weighed an even sample of the cells, not every pair.
+    pub thinned: usize,
+    /// The most pairs one scale voted.
+    pub most_votes: usize,
+}
+
+/// The coarse cell of `p` (cells of `size`), none for a coordinate no linework has.
+fn coarse_cell(p: Vec2, size: f64) -> Option<(i64, i64)> {
+    let (x, y) = ((p.x / size).floor(), (p.y / size).floor());
+    (x.is_finite() && y.is_finite() && x.abs() <= MAX_CELL_INDEX && y.abs() <= MAX_CELL_INDEX).then_some((x as i64, y as i64))
+}
+
+/// At most about `keep` of `cells` (sorted), evenly: every n-th.
+fn thin_cells(cells: &[(i64, i64)], keep: usize) -> Vec<(i64, i64)> {
+    let keep = keep.max(1);
+    if cells.len() <= keep {
+        return cells.to_vec();
+    }
+    cells.iter().step_by(cells.len().div_ceil(keep)).copied().collect()
+}
+
+/// The coarse offsets (a target cell less a source cell) most source cells vote for, best first,
+/// ties to the smallest offset (the same pick every run, whatever the order counted); at most
+/// `top`. Both lists sorted, their indexes within [`MAX_CELL_INDEX`]. Counts every pair: the
+/// caller keeps them within [`MAX_FIT_VOTES`].
+fn top_offsets(scells: &[(i64, i64)], tcells: &[(i64, i64)], top: usize, dense: bool) -> Vec<((i64, i64), u32)> {
+    let mut ranked: Vec<((i64, i64), u32)> = Vec::with_capacity(top.saturating_add(1));
+    let mut offer = |o: (i64, i64), n: u32| {
+        let at = ranked.partition_point(|&(q, m)| m > n || (m == n && q < o));
+        if at < top {
+            ranked.insert(at, (o, n));
+            ranked.truncate(top);
+        }
+    };
+    if scells.is_empty() || tcells.is_empty() || top == 0 {
+        return ranked;
+    }
+    let span = |c: &[(i64, i64)], f: fn(&(i64, i64)) -> i64| c.iter().map(f).fold((i64::MAX, i64::MIN), |(a, b), v| (a.min(v), b.max(v)));
+    let ((sx0, sx1), (sy0, sy1)) = (span(scells, |c| c.0), span(scells, |c| c.1));
+    let ((tx0, tx1), (ty0, ty1)) = (span(tcells, |c| c.0), span(tcells, |c| c.1));
+    let (ox0, oy0) = (tx0 - sx1, ty0 - sy1);
+    let (w, h) = (usize::try_from(tx1 - sx0 - ox0 + 1).unwrap_or(usize::MAX), usize::try_from(ty1 - sy0 - oy0 + 1).unwrap_or(usize::MAX));
+    if let Some(n) = w.checked_mul(h).filter(|n| dense && *n <= MAX_DENSE_OFFSETS) {
+        // Offset (x, y) at (x - ox0) * h + (y - oy0): scanned in order, the smallest offset first.
+        let mut grid = vec![0u32; n];
+        for u in scells {
+            for v in tcells {
+                let i = usize::try_from(v.0 - u.0 - ox0).ok().zip(usize::try_from(v.1 - u.1 - oy0).ok()).map(|(x, y)| x * h + y);
+                if let Some(c) = i.and_then(|i| grid.get_mut(i)) {
+                    *c += 1;
+                }
+            }
+        }
+        for (i, &c) in grid.iter().enumerate() {
+            if c > 0 {
+                offer((ox0 + (i / h) as i64, oy0 + (i % h) as i64), c);
+            }
+        }
+    } else {
+        let mut votes: std::collections::HashMap<(i64, i64), u32> = std::collections::HashMap::new();
+        for u in scells {
+            for v in tcells {
+                *votes.entry((v.0 - u.0, v.1 - u.1)).or_default() += 1;
+            }
+        }
+        for (o, c) in votes {
+            offer(o, c);
+        }
+    }
+    ranked
+}
+
+/// The source and target cells one scale votes with: every pair within [`MAX_FIT_VOTES`] (or
+/// [`MAX_SPARSE_VOTES`] when the offsets are too spread out for a dense grid), else the larger
+/// side thinned evenly to fit; whether it was thinned, and whether to count densely.
+fn vote_cells(scells: Vec<(i64, i64)>, tcells: &[(i64, i64)]) -> (Vec<(i64, i64)>, Vec<(i64, i64)>, bool, bool) {
+    let span = |c: &[(i64, i64)], f: fn(&(i64, i64)) -> i64| c.iter().map(f).fold((i64::MAX, i64::MIN), |(a, b), v| (a.min(v), b.max(v)));
+    let extent = |a: (i64, i64), b: (i64, i64)| usize::try_from((a.1 - a.0).max(0) + (b.1 - b.0).max(0) + 1).unwrap_or(usize::MAX);
+    let dense = !scells.is_empty()
+        && !tcells.is_empty()
+        && extent(span(&scells, |c| c.0), span(tcells, |c| c.0))
+            .checked_mul(extent(span(&scells, |c| c.1), span(tcells, |c| c.1)))
+            .is_some_and(|n| n <= MAX_DENSE_OFFSETS);
+    let cap = if dense { MAX_FIT_VOTES } else { MAX_SPARSE_VOTES };
+    if scells.len().saturating_mul(tcells.len()) <= cap {
+        return (scells, tcells.to_vec(), false, dense);
+    }
+    let (s, t) = if scells.len() >= tcells.len() {
+        (thin_cells(&scells, cap / tcells.len().max(1)), tcells.to_vec())
+    } else {
+        (scells.clone(), thin_cells(tcells, cap / scells.len().max(1)))
+    };
+    // One side alone over the cap (a few hundred thousand cells each): both thinned.
+    let (s, t) = if s.len().saturating_mul(t.len()) > cap {
+        let side = (cap as f64).sqrt() as usize;
+        (thin_cells(&s, side), thin_cells(&t, side))
+    } else {
+        (s, t)
+    };
+    (s, t, true, dense)
+}
+
+fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: bool, stats: &mut FitStats) -> Option<(f64, Vec2, f64, f64)> {
     if src.len() < 50 || tgt.len() < 50 || !(lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo) {
         return None;
     }
+    stats.fits += 1;
     let coarse = 48.0 * k;
-    let tcells: std::collections::HashSet<(i64, i64)> = tgt.iter().map(|p| ((p.x / coarse).floor() as i64, (p.y / coarse).floor() as i64)).collect();
+    let tcells: Vec<(i64, i64)> = tgt.iter().filter_map(|p| coarse_cell(*p, coarse)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     // A few thousand source points are enough to score with.
     let stride = (src.len() / 2000).max(1);
     let few: Vec<Vec2> = src.iter().step_by(stride).copied().collect();
@@ -1755,41 +1933,34 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
         }
         s *= 1.01;
     }
-    // Each scale's proposals on their own (in parallel; kept in scale order).
-    let propose = |&s: &f64| -> Vec<(f64, f64, (i64, i64))> {
-        let mut cands = Vec::new();
-        let scells: std::collections::HashSet<(i64, i64)> =
-            few.iter().map(|p| ((p.x * s / coarse).floor() as i64, (p.y * s / coarse).floor() as i64)).collect();
-        let mut votes: std::collections::HashMap<(i64, i64), u32> = std::collections::HashMap::new();
-        for u in &scells {
-            for v in &tcells {
-                *votes.entry((v.0 - u.0, v.1 - u.1)).or_default() += 1;
-            }
-        }
+    // Each scale's proposals on their own (in parallel; kept in scale order), with whether its
+    // vote was thinned and the pairs it voted.
+    type Proposals = (Vec<(f64, f64, (i64, i64))>, bool, usize);
+    let propose = |&s: &f64| -> Proposals {
+        let scells: Vec<(i64, i64)> =
+            few.iter().filter_map(|p| coarse_cell(*p * s, coarse)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        let (scells, tcells, thinned, dense) = vote_cells(scells, &tcells);
         // The coarse grid only proposes an offset per scale: a dense plan has lines in nearly
         // every coarse cell, so placements are told apart on the fine grid.
         // Ties go to the smallest offset: a hash map's order differs run to run, and with it the
         // fit a tie picked (the same job placed 71 fewer devices one run than the next).
-        if whole {
-            if let Some((o, n)) = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))) {
-                cands.push((f64::from(n) / scells.len() as f64, s, o));
-            }
-        } else {
-            let mut ranked: Vec<((i64, i64), u32)> = votes.into_iter().collect();
-            ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            for (o, n) in ranked.into_iter().take(PART_OFFSETS) {
-                cands.push((f64::from(n) / scells.len() as f64, s, o));
-            }
-        }
-        cands
+        let top = if whole { 1 } else { PART_OFFSETS };
+        let cands = top_offsets(&scells, &tcells, top, dense).into_iter().map(|(o, n)| (f64::from(n) / scells.len().max(1) as f64, s, o)).collect();
+        (cands, thinned, scells.len().saturating_mul(tcells.len()))
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let cands: Vec<(f64, f64, (i64, i64))> = {
+    let proposed: Vec<Proposals> = {
         use rayon::prelude::*;
-        scales.par_iter().flat_map_iter(propose).collect()
+        scales.par_iter().map(propose).collect()
     };
     #[cfg(target_arch = "wasm32")]
-    let cands: Vec<(f64, f64, (i64, i64))> = scales.iter().flat_map(propose).collect();
+    let proposed: Vec<Proposals> = scales.iter().map(propose).collect();
+    let mut cands: Vec<(f64, f64, (i64, i64))> = Vec::new();
+    for (c, thinned, votes) in proposed {
+        cands.extend(c);
+        stats.thinned += usize::from(thinned);
+        stats.most_votes = stats.most_votes.max(votes);
+    }
     let fine = Occupancy::new(tgt, 12.0 * k, 1);
     // Refine every scale's proposal on the 1' grid: scale ±0.5%, offset within two coarse cells.
     let refine = |&(_, s0, o): &(f64, f64, (i64, i64))| -> (f64, f64, Vec2) {
@@ -1832,34 +2003,62 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
     // `mine`: the view's lines on a grid in its own terms, made for scale near `s` (a plan point is
     // mapped back into it rather than the view mapped out for each trial placement).
     let view_grid = |s: f64| Occupancy::new(&dense, 12.0 * k / s, 1);
-    let f1 = |s: f64, t: Vec2, mine: &Occupancy| {
+    // The plan's lines under the placed view, from `near`: the plan's points (in order) that any
+    // placement weighed can hold, so a sheet's other lines aren't looked through for every one
+    // (the sample's stride stays the whole plan's: the same points as from the whole).
+    let stride = (tgt.len() / 20_000).max(1);
+    let f1 = |s: f64, t: Vec2, mine: &Occupancy, near: &[Vec2]| {
         let r = fine.score(&few, s, t);
         let placed = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s + t));
-        let under: Vec<Vec2> = tgt.iter().copied().filter(|p| placed.contains(*p)).step_by((tgt.len() / 20_000).max(1)).collect();
+        let under: Vec<Vec2> = near.iter().copied().filter(|p| placed.contains(*p)).step_by(stride).collect();
         let p = if under.is_empty() { 0.0 } else { under.iter().filter(|q| mine.hit((**q - t) * (1.0 / s))).count() as f64 / under.len() as f64 };
         if r + p > 0.0 { 2.0 * r * p / (r + p) } else { 0.0 }
     };
+    // The farthest a view point is from the origin: how far a 0.2% change of scale moves it.
+    let reach = few.iter().map(|p| p.x.abs().max(p.y.abs())).fold(0.0f64, f64::max);
     for cand in refined.iter_mut().take(4) {
         let (_, s0, t0) = *cand;
         let mine = view_grid(s0);
-        let mut best = (f1(s0, t0, &mine), s0, t0);
+        // Every placement below lies within 4 steps of 3" and 0.2% of scale of this one.
+        let placed = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s0 + t0));
+        let pad = (12.0 * k + 0.0021 * s0.abs() * reach) * 1.01 + 1e-6 * (1.0 + reach * s0.abs() + t0.x.abs() + t0.y.abs());
+        let near: Vec<Vec2> = if pad.is_finite() {
+            tgt.iter()
+                .copied()
+                .filter(|p| p.x >= placed.min.x - pad && p.x <= placed.max.x + pad && p.y >= placed.min.y - pad && p.y <= placed.max.y + pad)
+                .collect()
+        } else {
+            tgt.to_vec()
+        };
+        let mut best = (f1(s0, t0, &mine, &near), s0, t0);
+        // The placements in order, scored side by side; the first best kept, as in turn.
+        let mut tries: Vec<(f64, Vec2)> = Vec::with_capacity(5 * 9 * 9);
         for si in -2..=2 {
             let s = s0 * (1.0 + 0.001 * f64::from(si));
             for dx in -4..=4 {
                 for dy in -4..=4 {
-                    let t = t0 + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k);
-                    let sc = f1(s, t, &mine);
-                    if sc > best.0 {
-                        best = (sc, s, t);
-                    }
+                    tries.push((s, t0 + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k)));
                 }
+            }
+        }
+        let score = |&(s, t): &(f64, Vec2)| (f1(s, t, &mine, &near), s, t);
+        #[cfg(not(target_arch = "wasm32"))]
+        let scored: Vec<(f64, f64, Vec2)> = {
+            use rayon::prelude::*;
+            tries.par_iter().map(score).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let scored: Vec<(f64, f64, Vec2)> = tries.iter().map(score).collect();
+        for x in scored {
+            if x.0 > best.0 {
+                best = x;
             }
         }
         *cand = best;
     }
     // The rest scored the same way, so the margin compares like with like.
     for cand in refined.iter_mut().skip(4) {
-        cand.0 = f1(cand.1, cand.2, &view_grid(cand.1));
+        cand.0 = f1(cand.1, cand.2, &view_grid(cand.1), tgt);
     }
     refined.sort_by(|a, b| b.0.total_cmp(&a.0));
     let (score, s, t) = *refined.first()?;
@@ -2076,6 +2275,121 @@ mod tests {
         for _ in 0..12 {
             assert_eq!(linework_fit(&src, &tgt, k).map(|f| (f.0.to_bits(), f.1.x.to_bits(), f.1.y.to_bits())), first);
         }
+    }
+
+    #[test]
+    fn a_dense_vote_picks_what_a_map_vote_picks() {
+        // The same offsets, votes and tie order (most votes, then the smallest offset) whichever
+        // way they are counted.
+        let mut seed = 7u64;
+        let mut next = |m: i64| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            i64::try_from(seed >> 33).unwrap_or(0) % m
+        };
+        for _ in 0..20 {
+            let mut s: Vec<(i64, i64)> = (0..40).map(|_| (next(30) - 10, next(20))).collect();
+            let mut t: Vec<(i64, i64)> = (0..300).map(|_| (next(90) - 40, next(60) - 5)).collect();
+            s.sort_unstable();
+            s.dedup();
+            t.sort_unstable();
+            t.dedup();
+            for top in [1, PART_OFFSETS, 50] {
+                assert_eq!(top_offsets(&s, &t, top, true), top_offsets(&s, &t, top, false), "top {top}");
+            }
+        }
+        assert!(top_offsets(&[], &[(0, 0)], 3, true).is_empty() && top_offsets(&[(0, 0)], &[(1, 1)], 0, true).is_empty());
+        assert_eq!(top_offsets(&[(0, 0)], &[(2, 3)], 3, true), vec![((2, 3), 1)]);
+    }
+
+    #[test]
+    fn a_vote_never_counts_more_than_its_cap() {
+        let cells = |n: i64, w: i64| (0..n).map(|i| (i % w, i / w)).collect::<Vec<_>>();
+        // Small: every pair, no thinning.
+        let (s, t, thinned, dense) = vote_cells(cells(300, 30), &cells(3_000, 100));
+        assert!((s.len(), t.len(), thinned, dense) == (300, 3_000, false, true));
+        // A site-scale target against a floor: the target thinned evenly.
+        let (s, t, thinned, dense) = vote_cells(cells(2_000, 50), &cells(400_000, 900));
+        assert!(thinned && dense && s.len() == 2_000 && s.len() * t.len() <= MAX_FIT_VOTES, "{} x {}", s.len(), t.len());
+        // Both sides huge: both thinned.
+        let (s, t, thinned, _) = vote_cells(cells(300_000, 600), &cells(400_000, 900));
+        assert!(thinned && s.len() * t.len() <= MAX_FIT_VOTES, "{} x {}", s.len(), t.len());
+        // Offsets spread too far for a dense grid: a map, of fewer pairs.
+        let far: Vec<(i64, i64)> = vec![(0, 0), (5_000_000, 5_000_000)];
+        let (s, t, _, dense) = vote_cells(cells(2_000, 50), &far);
+        assert!(!dense && s.len() * t.len() <= MAX_SPARSE_VOTES);
+    }
+
+    #[test]
+    fn a_fit_against_a_sheet_at_a_site_scale_stays_bounded() {
+        // Q6581: a plan with no printed scale is tried at every print scale against a plan of its
+        // floor. At a site scale (1" = 100') a 36" x 24" sheet spans 3600' x 2400', its lines a few
+        // hundred thousand 4' cells; every cell of the floor voted with every one of them, a map
+        // per trial scale in flight: a job's rooms stage held 25 GB and never finished.
+        let k = 1.0;
+        let mut floor = vec![(Vec2::new(0.0, 0.0), Vec2::new(1440.0, 0.0)), (Vec2::new(0.0, 720.0), Vec2::new(1440.0, 720.0))];
+        let mut x = 0.0;
+        for (i, w) in [180.0, 240.0, 156.0, 300.0, 204.0, 168.0, 192.0].iter().enumerate() {
+            floor.extend(room(Vec2::new(x, 0.0), *w, 360.0, 24.0 + 12.0 * i as f64));
+            x += w;
+        }
+        let src: Vec<Vec2> = sampled(&floor).into_iter().map(|p| p + Vec2::new(90_000.0, 0.0)).collect();
+        // The sheet blown up to the site scale: its hatching lines 8' apart both ways, a point a
+        // cell (48").
+        let (w, h) = (3600.0 * 12.0, 2400.0 * 12.0);
+        let mut tgt = Vec::new();
+        for j in 0..300 {
+            let y = f64::from(j) * 96.0;
+            tgt.extend((0..900).map(|i| Vec2::new(f64::from(i) * 48.0, y)));
+        }
+        for i in 0..450 {
+            let x = f64::from(i) * 96.0;
+            tgt.extend((0..600).map(|j| Vec2::new(x, f64::from(j) * 48.0)));
+        }
+        assert!(tgt.iter().all(|p| p.x <= w && p.y <= h));
+        let mut stats = FitStats::default();
+        let fit = linework_fit_part_counted(&src, &tgt, k, 0.97, 1.03, &mut stats);
+        assert_eq!(stats.fits, 1);
+        assert!(stats.thinned > 0, "the vote was over its cap: {stats:?}");
+        assert!(stats.most_votes <= MAX_FIT_VOTES, "{stats:?}");
+        // The same answer every time.
+        let again = linework_fit_part_counted(&src, &tgt, k, 0.97, 1.03, &mut FitStats::default());
+        let bits = |f: Option<(f64, Vec2, f64, f64)>| f.map(|f| [f.0.to_bits(), f.1.x.to_bits(), f.1.y.to_bits(), f.2.to_bits(), f.3.to_bits()]);
+        assert_eq!(bits(fit), bits(again));
+        // A floor against its own floor's plan stays under the cap: every pair weighed.
+        let mut plain = FitStats::default();
+        let plan = sampled(&floor);
+        assert!(linework_fit_part_counted(&src, &plan, k, 0.97, 1.03, &mut plain).is_some());
+        assert_eq!(plain.thinned, 0, "{plain:?}");
+    }
+
+    #[test]
+    fn a_fit_of_two_sheets_spread_over_miles_stays_bounded() {
+        // Q6581, as measured on a restaurant set: at a trial scale far off its own, a reference's
+        // linework spread over ~9,000 coarse cells each way (about 2,000 of them occupied) and the
+        // plan's over ~10,800 (66,000 occupied). Nearly every pair of cells was an offset of its
+        // own: 127 million map entries per trial scale, several in flight, 13 GB in a minute.
+        let k = 1.0;
+        let cell = 48.0 * k;
+        // Lines across the extent `size` (cells), `n` of them each way, a point a cell.
+        let lines = |at: Vec2, size: f64, n: usize, every: usize| -> Vec<Vec2> {
+            let mut out = Vec::new();
+            for i in 0..n {
+                let c = size * (i as f64 + 0.37) / n as f64;
+                for j in (0..size as usize).step_by(every) {
+                    let along = j as f64;
+                    out.push(at + Vec2::new(along, c * 1.013) * cell);
+                    out.push(at + Vec2::new(c, along * 0.991) * cell);
+                }
+            }
+            out
+        };
+        let src = lines(Vec2::new(-200_000.0, 50_000.0), 9_000.0, 6, 27);
+        let tgt = lines(Vec2::new(0.0, 0.0), 10_800.0, 4, 1);
+        let mut stats = FitStats::default();
+        let _ = linework_fit_part_counted(&src, &tgt, k, 0.97, 1.03, &mut stats);
+        assert_eq!(stats.fits, 1);
+        assert!(stats.thinned > 0, "every pair is far over the cap: {stats:?}");
+        assert!(stats.most_votes <= MAX_SPARSE_VOTES, "spread too far for a dense vote, so the map's cap: {stats:?}");
     }
 
     /// Line samples every foot along each segment (sheet inches).
