@@ -444,16 +444,24 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     let ha = find(&mut s, "device", json!({"type_mark": "A"}));
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
     s.execute("bim.coderules", &json!({})).unwrap();
-    assert_eq!(device_of(&mut s, "A")["receptacle_type"]["value"], "standard");
-    // The print's GFCI tag and what is built instead, side by side.
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["receptacle_type"]["value"], "standard");
+    // The breaker as built is a person's word; what the rule decides from it is the rule's.
+    assert_eq!(a["gfci"]["value"], "breaker", "{a:#}");
+    for k in ["gfci", "protected_by", "receptacle_type"] {
+        assert_eq!(a[k]["source"]["kind"], "rule", "{k}: {a:#}");
+    }
+    assert!(a["gfci"]["source"]["doc"].as_str().is_some_and(|d| d.contains("field report 2026-11-05")), "the breaker's source cited: {a:#}");
+    // The print's GFCI tag on that breaker: kept, redundant protection reported (allowed), nothing
+    // corrected (fix-coderules-drops-printed-gfci).
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "type_mark", "value": "GFCI"})).unwrap();
-    s.execute("bim.coderules", &json!({})).unwrap();
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    assert_eq!(r["gfci"]["redundant_protection"], 1, "{r:#}");
     let hs = find(&mut s, "device", json!({"type_mark": "GFCI"}));
     let a = get(&mut s, &hs[0]);
-    assert_eq!(a["design_value"]["value"], "GFCI", "{a:#}");
-    assert_eq!(a["corrected_value"]["value"], "standard");
-    assert!(a["correction_reason"]["value"].as_str().is_some_and(|r| r.contains("double protection")), "{a:#}");
-    assert_eq!(a["correction_rule"]["value"], "NEC 210.8");
+    assert_eq!(a["receptacle_type"]["value"], "GFCI", "{a:#}");
+    assert_eq!(a["gfci"]["value"], "device", "{a:#}");
+    assert!(a["corrected_value"].is_null() && a["design_value"].is_null(), "{a:#}");
     // The panel's schedule says so too: what was built, and what was printed.
     let r = s.execute("panels.schedule", &json!({"panel": "lp1"})).unwrap();
     let c = |n: &str| r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == n).cloned().unwrap();
@@ -462,6 +470,52 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     assert_eq!(c("3")["protection"]["as_built"]["source"], "field report 2026-11-05");
     assert!(c("5")["protection"]["as_built"].is_null(), "{r:#}");
     assert!(c("7")["protection"]["as_built"].is_null(), "a space has no breaker: {r:#}");
+}
+
+/// A receptacle the drawings tag GFCI on a dual-function breaker stays a GFCI device: redundant
+/// protection is allowed and reported for value engineering, never corrected to standard; the
+/// values the rule derives are the rule's, never a person's (fix-coderules-drops-printed-gfci).
+#[test]
+fn a_drawn_gfci_receptacle_on_a_gfci_breaker_stays_gfci() {
+    let mut s = plan();
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF", "GF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
+    fill(&mut s);
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    let h = ha[0].clone();
+    s.execute("bim.props.set", &json!({"handle": h, "key": "kind", "value": "receptacle"})).unwrap();
+    s.execute("bim.props.set", &json!({"handle": h, "key": "type_mark", "value": "GFCI"})).unwrap();
+    for run in 0..2 {
+        let r = s.execute("bim.coderules", &json!({})).unwrap();
+        assert_eq!(r["gfci"]["redundant_protection"], 1, "run {run}: {r:#}");
+        assert!(r["gfci"]["breaker"].is_null(), "not built standard: {r:#}");
+        assert_eq!(r["corrections"], 0, "{r:#}");
+        let red = &r["redundant_protection"][0];
+        assert_eq!(red["allowed"], true, "{r:#}");
+        assert!(red["handle"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(&h)), "{r:#}");
+        assert!(red["note"].as_str().is_some_and(|n| n.contains("redundant protection (allowed)")), "{r:#}");
+        let a = get(&mut s, &h);
+        assert_eq!(a["receptacle_type"]["value"], "GFCI", "the drawn device stays: {a:#}");
+        assert_eq!(a["gfci"]["value"], "device", "{a:#}");
+        assert!(a["protected_by"]["value"].as_str().is_some_and(|p| p.contains("breaker")), "{a:#}");
+        for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
+            assert!(a[k].is_null(), "nothing corrected ({k}): {a:#}");
+        }
+        for k in ["gfci", "protected_by", "receptacle_type"] {
+            assert_ne!(a[k]["source"]["kind"], "user", "no person set {k}: {a:#}");
+        }
+        assert!(a["gfci"]["source"]["doc"].as_str().is_some_and(|d| d.contains("NEC 210.8") && d.contains("E-601")), "rule and row: {a:#}");
+    }
+    // Validate agrees: a pass, redundant protection allowed, not double protection to remove.
+    let v = s.execute("validate.prescreen", &json!({"rules": ["G-PRODUCT-CODE"], "all": true, "limit": 50})).unwrap();
+    let f = v["findings"]
+        .as_array()
+        .and_then(|fs| fs.iter().find(|f| f["handle"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(&h)) && f["check"] == "gfci"))
+        .cloned()
+        .unwrap_or_else(|| panic!("{v:#}"));
+    assert_eq!(f["verdict"], "pass", "{f:#}");
+    assert!(f["issue"].as_str().is_some_and(|i| i.contains("redundant protection (allowed)")), "{f:#}");
 }
 
 #[test]
