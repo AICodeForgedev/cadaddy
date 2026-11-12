@@ -80,7 +80,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "} → {edit, status: applied, element, rebuilt, rebuild_error?, mepEdits?}: kept in the spec's mep.edits, applied on every build"
         )),
         CommandSpec::new("mep.move", "Move MEP Element", run_move).params(concat!(
-            "{", target_doc!(), ", delta_ft?: [dx, dy] (feet), to?: [x, y] (drawing units: where its first point or centre goes), bottom_ft?: feet (over its floor), ", tail_doc!(),
+            "{", target_doc!(), ", delta_ft?: [dx, dy] (feet), to?: [x, y] (drawing units: where its first point or centre goes), bottom_ft?: feet (over its floor), rise_ft?: feet (up, below 0 down: every height of it; a sloped run keeps its slope), ", tail_doc!(),
             "} → {edit, status, element, rebuilt}"
         )),
         CommandSpec::new("mep.resize", "Resize MEP Element", run_resize).params(concat!(
@@ -160,8 +160,8 @@ impl El {
 }
 
 /// An element found in the spec: its list and place.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum At {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum At {
     Run(usize),
     Terminal(usize),
     Equipment(usize),
@@ -417,6 +417,7 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
         "move" => {
             let d = e.delta.filter(|d| d.iter().all(|v| v.is_finite()));
             let b = e.bottom_ft.filter(|b| b.is_finite());
+            let rise = e.rise_ft.filter(|r| r.is_finite() && *r != 0.0 && r.abs() <= MAX_MOVE_FT);
             match at {
                 At::Run(i) => {
                     let r = sp.mep.runs.get_mut(i).ok_or("the run is gone")?;
@@ -437,6 +438,20 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
                         r.height_source = "override".into();
                         push_correction(&mut r.corrections, "bottom_ft", feet_text(was), feet_text(b), &reason, &rule);
                     }
+                    if let Some(up) = rise {
+                        let was = r.bottoms_ft.first().copied().unwrap_or_default();
+                        if r.bottoms_ft.is_empty() {
+                            r.bottoms_ft.push(0.0);
+                        }
+                        for x in &mut r.bottoms_ft {
+                            *x += up;
+                        }
+                        if let Some(t) = r.top_ft.as_mut() {
+                            *t += up;
+                        }
+                        r.height_source = "override".into();
+                        push_correction(&mut r.corrections, "bottom_ft", feet_text(was), feet_text(was + up), &reason, &rule);
+                    }
                     r.edited_by = if e.by.is_empty() { "user".into() } else { e.by.clone() };
                 }
                 At::Terminal(i) => {
@@ -449,6 +464,10 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
                     if let Some(b) = b {
                         push_correction(&mut t.corrections, "bottom_ft", feet_text(t.bottom_ft), feet_text(b), &reason, &rule);
                         t.bottom_ft = b;
+                    }
+                    if let Some(up) = rise {
+                        push_correction(&mut t.corrections, "bottom_ft", feet_text(t.bottom_ft), feet_text(t.bottom_ft + up), &reason, &rule);
+                        t.bottom_ft += up;
                     }
                 }
                 At::Equipment(i) => {
@@ -463,6 +482,10 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
                     if let Some(b) = b {
                         push_correction(&mut q.corrections, "bottom_ft", feet_text(q.bottom_ft), feet_text(b), &reason, &rule);
                         q.bottom_ft = b;
+                    }
+                    if let Some(up) = rise {
+                        push_correction(&mut q.corrections, "bottom_ft", feet_text(q.bottom_ft), feet_text(q.bottom_ft + up), &reason, &rule);
+                        q.bottom_ft += up;
                     }
                 }
             }
@@ -979,6 +1002,112 @@ fn from_element(cmd: &str, v: &BuildingSpec, e: &Entity, tol: f64) -> Result<At>
     Err(not_mep())
 }
 
+// ─── Moves made in the model, kept (Q6381) ───────────────────────────────────
+
+/// The spec element (in `v`, the spec as the builds see it: its edits applied) a built piece was
+/// made from: a run (by its segment or any fitting it laid), a terminal or equipment. `None`: a
+/// piece of no one spec element (an atom of a wiring chain, a riser's cut piece, a device).
+pub(crate) fn built_from(v: &BuildingSpec, e: &Entity) -> Option<At> {
+    let tol = rules().match_ft.max(0.0) * upf(v);
+    if let Ok(at) = from_element("", v, e, tol) {
+        return Some(at);
+    }
+    // A fitting where runs meet was laid by one of them, a riser's piece on a storey over its
+    // own by the riser: the run its id names.
+    let part = super::bimlook::made_tag(e, "part").unwrap_or_default().to_ascii_lowercase();
+    if !part.starts_with("fitting") && part != "segment" {
+        return None;
+    }
+    let level = super::bspec::made_level(e).unwrap_or_default();
+    let system = super::bimlook::made_tag(e, "system").unwrap_or_default();
+    let id = super::bimlook::made_tag(e, "mepid").unwrap_or_default();
+    let base = id.rsplit_once('/').map(|(b, _)| b)?;
+    v.mep
+        .runs
+        .iter()
+        .position(|r| super::mep::run_base(r) == base && r.system == system && (r.top_ft.is_some() || same_level(v, &r.level, &level)))
+        .map(At::Run)
+}
+
+/// The run of `v` at `at` (none: not a run).
+pub(crate) fn run_at(v: &BuildingSpec, at: At) -> Option<&MepRun> {
+    match at {
+        At::Run(i) => v.mep.runs.get(i),
+        _ => None,
+    }
+}
+
+fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let ab = b - a;
+    let l2 = ab.x * ab.x + ab.y * ab.y;
+    let t = if l2 > 1e-12 { (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    p.dist(Vec2::new(a.x + ab.x * t, a.y + ab.y * t))
+}
+
+/// The runs of `system` on `level` in `v` a laid path follows (`path`: its pieces' plan
+/// segments, sheet units): each of the run's segments' middles (a riser: its point) within
+/// `reach` of the path. A wiring chain's atoms name only the first run they were stitched
+/// from; this finds every run they lay along.
+pub(crate) fn runs_along(v: &BuildingSpec, system: &str, level: &str, path: &[(Vec2, Vec2)], reach: f64) -> Vec<At> {
+    let near = |p: Vec2| path.iter().take(100_000).any(|(a, b)| seg_dist(p, *a, *b) <= reach);
+    v.mep
+        .runs
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.system.eq_ignore_ascii_case(system) && same_level(v, &r.level, level))
+        .filter(|(_, r)| {
+            let pts: Vec<Vec2> = r.points.iter().take(MAX_POINTS).map(|p| Vec2::new(p[0], p[1])).collect();
+            let samples: Vec<Vec2> = match pts.as_slice() {
+                [] => Vec::new(),
+                [p] => vec![*p],
+                _ => pts.windows(2).filter_map(|w| Some((*w.first()? + *w.get(1)?) * 0.5)).collect(),
+            };
+            !samples.is_empty() && samples.into_iter().all(near)
+        })
+        .map(|(i, _)| At::Run(i))
+        .collect()
+}
+
+/// A move made in the model kept as edits: each element `ats` of `v` (the spec as the builds see
+/// it) moved by `delta` (sheet units) and `rise_ft`, one `move` edit each in `sp`'s edits, every
+/// build applying it again, its correction on the element (the documents' value beside the
+/// value installed, `reason` and the edit as the rule). Checked to apply; returns the edit ids.
+pub(crate) fn keep_moves(
+    sp: &mut BuildingSpec,
+    v: &BuildingSpec,
+    ats: &[At],
+    delta: Option<[f64; 2]>,
+    rise_ft: Option<f64>,
+    reason: &str,
+    by: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let delta = delta.filter(|d| d.iter().all(|x| x.is_finite() && x.abs() <= MAX_MOVE_FT * upf(v)) && (d[0] != 0.0 || d[1] != 0.0));
+    let rise_ft = rise_ft.filter(|r| r.is_finite() && *r != 0.0 && r.abs() <= MAX_STOREY_FT);
+    if delta.is_none() && rise_ft.is_none() {
+        return Ok(Vec::new());
+    }
+    if sp.mep.edits.len().saturating_add(ats.len()) > MAX_EDITS {
+        return Err(format!("the spec holds {} MEP edits, at most {MAX_EDITS}", sp.mep.edits.len()));
+    }
+    let mut ids = Vec::new();
+    for at in ats {
+        let mut e = key_of(v, *at).ok_or("an element moved is not in the spec any more")?;
+        e.op = "move".into();
+        e.id = next_id(sp);
+        e.delta = delta;
+        e.rise_ft = rise_ft;
+        e.reason = reason.chars().take(MAX_TEXT).collect();
+        e.by = if by == "agent" { "agent".into() } else { "user".into() };
+        ids.push(e.id.clone());
+        sp.mep.edits.push(e);
+    }
+    let mut check = sp.clone();
+    if let Some(o) = apply(&mut check).into_iter().find(|o| ids.contains(&o.id) && !o.applied) {
+        return Err(o.why);
+    }
+    Ok(ids)
+}
+
 /// An element of `v` as JSON.
 fn element_json(v: &BuildingSpec, at: At) -> Value {
     let j = match at {
@@ -1375,8 +1504,20 @@ fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
     };
     e.delta = delta.filter(|d| d[0] != 0.0 || d[1] != 0.0);
     e.bottom_ft = bottom_param(CMD, p, "bottom_ft", &sp, &e.level)?;
-    if e.delta.is_none() && e.bottom_ft.is_none() {
-        return Err(bad(CMD, "give `delta_ft` (feet), `to` ([x, y]) or `bottom_ft`"));
+    e.rise_ft = match p.get("rise_ft").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(
+            v.as_f64()
+                .filter(|r| r.is_finite() && r.abs() <= MAX_STOREY_FT)
+                .ok_or_else(|| bad(CMD, format!("`rise_ft` is feet up (below 0 down), at most {MAX_STOREY_FT}")))?,
+        ),
+    }
+    .filter(|r| *r != 0.0);
+    if e.bottom_ft.is_some() && e.rise_ft.is_some() {
+        return Err(bad(CMD, "give `bottom_ft` (a new height) or `rise_ft` (by how much), not both"));
+    }
+    if e.delta.is_none() && e.bottom_ft.is_none() && e.rise_ft.is_none() {
+        return Err(bad(CMD, "give `delta_ft` (feet), `to` ([x, y]), `bottom_ft` or `rise_ft`"));
     }
     commit(CMD, s, p, sp, e)
 }
