@@ -592,6 +592,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "model kinds and property values: our own names (Q6211 kindenum owns them), not words read off a document",
     ),
     (
+        "crates/engine/src/cmd/submittals.rs",
+        "[kind type]",
+        "our own model: the property keys an equipment element's words are read from (kind, type, description, name, title) to tell its submittal category (Q6588), not words read off a document",
+    ),
+    (
         "crates/engine/src/cmd/propfill.rs",
         "[keynotes keynote_features]",
         "our own output: the property keys a keynote's device requirements give a device (Q6249), copied from its tag, not words read off a document",

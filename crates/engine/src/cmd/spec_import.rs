@@ -1119,6 +1119,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
         if (!cut_sheets && upper.starts_with("SECTION ")) || is_csi_section(line).is_some() {
             // Save any pending submittal.
             if let Some(sub) = current_submittal.take() {
+                settle_category(&mut current_types, &blocks, &sub.spec_section);
                 settle_dimming(&mut current_types, &blocks, &mut result, &mut rfi_counter);
                 finalize_submittal(sub, &current_types, &type_stamps, existing, &mut result, &mut rfi_counter);
                 current_types.clear();
@@ -1174,6 +1175,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
 
     // Finalize last submittal.
     if let Some(sub) = current_submittal.take() {
+        settle_category(&mut current_types, &blocks, &sub.spec_section);
         settle_dimming(&mut current_types, &blocks, &mut result, &mut rfi_counter);
         finalize_submittal(sub, &current_types, &type_stamps, existing, &mut result, &mut rfi_counter);
     }
@@ -1184,13 +1186,21 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
     result
 }
 
-/// One proposal per mark: a product whose pages run on into another section of the package
-/// keeps its first reading, and gains what the later pages add.
+/// One proposal per mark and category: a product whose pages run on into another section of the
+/// package keeps its first reading, and gains what the later pages add. The same mark in another
+/// category (luminaire type A, panelboard A; Q6588) is another product.
 fn merge_repeated_marks(proposals: &mut Vec<SpecProposal>) {
     let mut kept: Vec<SpecProposal> = Vec::with_capacity(proposals.len());
     for p in proposals.drain(..) {
-        match kept.iter_mut().find(|k| k.bim_type.mark == p.bim_type.mark) {
+        let (cat, mark) = (super::submittals::category_of(&p.bim_type.category), &p.bim_type.mark);
+        match kept.iter_mut().find(|k| {
+            let kc = super::submittals::category_of(&k.bim_type.category);
+            k.bim_type.mark == *mark && (kc == cat || kc.is_empty() || cat.is_empty())
+        }) {
             Some(k) => {
+                if k.bim_type.category.is_empty() {
+                    k.bim_type.category.clone_from(&p.bim_type.category);
+                }
                 for (key, field) in p.bim_type.fields {
                     k.bim_type.fields.entry(key).or_insert(field);
                 }
@@ -1589,6 +1599,32 @@ fn header_against_body(p: &mut SpecProposal, lines: &[String], result: &mut Spec
             sources: vec![p.file_source.clone()],
             ..Default::default()
         });
+    }
+}
+
+/// What kind of product each of a submittal's products is (Q6588), where nothing has said: its
+/// submittal's CSI section's (`submittals.section_category`), else what its pages say of it
+/// (`submittals.product_category`: a panelboard's cut sheet). A luminaire is told by its lighting
+/// words after this ([`settle_dimming`]). A type mark is unique only within a category, so
+/// `bim.submittals` puts a product only on the elements of its own.
+fn settle_category(types: &mut [SpecProposal], blocks: &[Vec<String>], section: &str) {
+    let by_section = super::submittals::section_category(section);
+    for (i, p) in types.iter_mut().enumerate() {
+        if !p.bim_type.category.is_empty() {
+            continue;
+        }
+        if let Some(c) = by_section {
+            p.bim_type.category = c.to_string();
+            continue;
+        }
+        let mut text = blocks.get(i).map(|b| b.join(" ")).unwrap_or_default().to_ascii_uppercase();
+        if let Some(d) = p.bim_type.get_field(bimspec::keys::DESCRIPTION) {
+            text.push(' ');
+            text.push_str(&d.value.to_ascii_uppercase());
+        }
+        if let Some(r) = cadaddy_mepfix::wordrules::first_rule("submittals.product_category", |w| super::submittals::has_word(&text, w)) {
+            p.bim_type.category = r.value.to_string();
+        }
     }
 }
 
