@@ -8813,6 +8813,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             if let Some(m) = v.get("devices_in_no_room").and_then(Value::as_object).filter(|m| !m.is_empty()) {
                 let per: Vec<String> = m.iter().map(|(l, n)| format!("{}: {n}", if l.is_empty() { "no level" } else { l })).collect();
                 progress_line(&format!("  devices in no room: {}", per.join(", ")));
+                // A finding, with why (Q6387): never '(no room)' silently in the schedules.
+                let n: u64 = m.values().filter_map(Value::as_u64).sum();
+                let why: Vec<String> = v
+                    .get("devices_in_no_room_why")
+                    .and_then(Value::as_object)
+                    .map(|w| w.iter().map(|(k, c)| format!("{c} {k}")).collect())
+                    .unwrap_or_default();
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("{n} devices in no room"),
+                    &format!("By level: {}. Why: {}", per.join(", "), why.join("; ")),
+                    2,
+                    vec!["Check the rooms traced where they stand, and the face of the wall each is set in (each one's room_review note)".into()],
+                    None,
+                    false,
+                );
             }
             // Boxes the partition legend gives no ring for: their wall's type is unknown.
             let untyped = v.get("wall_boxes_untyped").and_then(Value::as_u64).unwrap_or(0);
