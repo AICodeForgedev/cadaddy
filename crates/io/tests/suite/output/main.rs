@@ -9,6 +9,7 @@ mod eps_wmf_export;
 mod image_export;
 mod layout_plot_window;
 mod pdf_followups;
+mod pdf_highlight;
 mod pdf_jobspeed;
 mod pdf_layers;
 mod pdf_markups;

@@ -162,7 +162,7 @@
       "id": "E-UNCIRCUITED",
       "trade": "electrical",
       "fills": "a power device no document puts on a circuit",
-      "basis": "trade practice: a device the documents leave off every circuit goes on a spare circuit of the nearest panel of its level, its homerun along the plan's axes in the ceiling space to the panel (NEC 210.11: every outlet is on a branch circuit)",
+      "basis": "trade practice: a device the documents leave off every circuit is tied into its room's circuit of its kind (the nearest device of its kind in its room that the plans circuit); else it goes on a spare circuit of its room's own panel (the panel its room's circuits come from), else of the nearest panel of its level that is no other unit's own panel, its homerun along the plan's axes in the ceiling space to the panel (NEC 210.11: every outlet is on a branch circuit)",
       "reach_ft": 400.0,
       "default_size_in": 0.75
     },
@@ -369,6 +369,12 @@
       "legend_words": ["BELOW FINISHED CEILING", "BELOW FIN. CEILING", "BELOW FIN CEILING", "BELOW FIN. CLG", "BELOW FIN CLG", "BELOW THE CEILING", "BELOW CEILING", "BELOW CLG", "BELOW CEIL", "BELOW CLNG"],
       "skip_kinds": ["equipment connection", "junction box", "plumbing fixture", "plumbing stack", "damper", "disconnect"],
       "skip_from": ["equipment", "site_work", "ceiling", "floor"]
+    },
+    {
+      "id": "E-SPLICES",
+      "trade": "electrical",
+      "fills": "the splice connectors in each box: no drawing shows them",
+      "basis": "trade practice: at every box the circuit's conductors are spliced where it continues (a pigtail to each device), each luminaire's leads spliced to its circuit, the grounds bundled with pigtails to the device and a metal box (NEC 250.148), each splice in a connector listed for its conductors (UL 486C)"
     },
     {
       "id": "E-CONN-AT-UNIT",

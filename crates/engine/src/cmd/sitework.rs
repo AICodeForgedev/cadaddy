@@ -2004,7 +2004,28 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         }
         _ => None,
     };
+    // The circuits a run carries (Q6348): its luminaires' and its equipment's, so its conductors
+    // are pulled and its raceway sized by them.
+    let carried = |o: Option<Obj>| -> Vec<String> {
+        match o {
+            Some(Obj::Light(i)) => light_circuit.get(i).cloned().flatten().into_iter().collect(),
+            Some(Obj::Equip(i)) => equip_circuits.iter().find(|(q, _)| *q == i).map(|(_, f)| f.clone()).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    };
+    let label_of = |ends: [Option<Obj>; 2]| -> Option<String> {
+        let mut all: Vec<String> = Vec::new();
+        for c in ends.into_iter().flat_map(carried) {
+            if !all.contains(&c) && all.len() < 12 {
+                all.push(c);
+            }
+        }
+        (!all.is_empty()).then(|| all.join(","))
+    };
+    // Each run of a circuit carries it in its id (its sheet and number).
+    let circuit_id = |out: &Built, label: Option<&str>| label.map(|l| super::ugcircuit::run_id(slab, l, format!("{sheet}.{}", out.runs.len())));
     let add_run = |out: &mut Built, pts: Vec<[f64; 2]>, ends: [Option<Obj>; 2], made: Made, note: Option<&Note>, why: &str, branch: bool| {
+        let label = if note.is_none() { label_of(ends) } else { None };
         let (count, size, size_from) = match note {
             Some(n) => (
                 n.callout.count.clamp(1, MAX_CONDUITS),
@@ -2051,13 +2072,17 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         for k in 0..count {
             let pts = offset_path(&pts, (f64::from(k) - f64::from(count - 1) / 2.0) * pitch);
             if pts.len() >= 2 {
-                out.runs.push(mark(buried(slab, sheet, pts.clone(), size, made, basis.clone(), &size_from)));
+                let mut run = mark(buried(slab, sheet, pts.clone(), size, made, basis.clone(), &size_from));
+                run.id = circuit_id(out, label.as_deref()).unwrap_or_default();
+                out.runs.push(run);
             }
             for (o, p) in ends.iter().zip([pts.first(), pts.last()]) {
                 if let (Some(o), Some(p)) = (o, p)
                     && !matches!(o, Obj::Tag(_))
                 {
-                    out.runs.push(mark(stub(slab, sheet, *p, size, top_at(*o), made, &basis)));
+                    let mut run = mark(stub(slab, sheet, *p, size, top_at(*o), made, &basis));
+                    run.id = circuit_id(out, label.as_deref()).unwrap_or_default();
+                    out.runs.push(run);
                 }
             }
         }
@@ -2174,10 +2199,15 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         if bottoms.len() == run.points.len().saturating_sub(1) {
             run.bottoms_ft = bottoms;
         }
+        run.id = circuit_id(&out, Some(label)).unwrap_or_default();
         out.runs.push(run);
-        out.runs.push(stub(slab, sheet, from, size, top_at(obj), Made::Inferred, &why));
+        let mut up = stub(slab, sheet, from, size, top_at(obj), Made::Inferred, &why);
+        up.id = circuit_id(&out, Some(label)).unwrap_or_default();
+        out.runs.push(up);
         if let Some(last) = pts.last() {
-            out.runs.push(stub(slab, sheet, *last, size, r.stub_top_ft, Made::Inferred, &why));
+            let mut up = stub(slab, sheet, *last, size, r.stub_top_ft, Made::Inferred, &why);
+            up.id = circuit_id(&out, Some(label)).unwrap_or_default();
+            out.runs.push(up);
         }
         out.inferred_runs += 1;
     }
@@ -2312,6 +2342,70 @@ pub(crate) fn site_loads(sp: &BuildingSpec, built: &BTreeSet<String>) -> Vec<Sit
         }
     }
     out
+}
+
+/// The runs for site loads no site plan draws (Q6348): each out of its panel (on the slab level)
+/// under the slab to the slab edge nearest it and on into the earth past it, stubbed up at both
+/// ends, proposed (generated; where the load stands is still asked). Its circuit in its runs' ids,
+/// so its conductors are pulled and its raceway sized by them. A load whose panel isn't on the
+/// slab level in the model gets none (asked only). The runs and a line for each load.
+pub(crate) fn proposed_site_loads(sp: &BuildingSpec, slab: &str, loads: &[SiteLoad]) -> (Vec<MepRun>, Vec<String>) {
+    let r = rules();
+    let ug = super::ugplan::rules();
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let mut runs = Vec::new();
+    let mut lines = Vec::new();
+    let Some(b) = super::ugplan::slab_box(sp, slab) else { return (runs, lines) };
+    for l in loads.iter().take(MAX_ITEMS) {
+        let Some(pn) = sp.mep.equipment.iter().find(|e| e.tag.trim().eq_ignore_ascii_case(l.panel.trim()) && e.level.eq_ignore_ascii_case(slab))
+        else {
+            continue;
+        };
+        let pc = [(pn.min[0] + pn.max[0]) / 2.0, (pn.min[1] + pn.max[1]) / 2.0];
+        if !pc.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let (edge, n) = super::ugplan::nearest_edge(b, pc);
+        let out = [edge[0] + n[0] * ug.site.stub_ft.max(1.0) * upf, edge[1] + n[1] * ug.site.stub_ft.max(1.0) * upf];
+        let corner = if n[0].abs() > 0.5 { [edge[0], pc[1]] } else { [pc[0], edge[1]] };
+        let mut pts = vec![pc, corner, edge, out];
+        pts.dedup_by(|a, c| dist(*a, *c) < 1e-6);
+        if pts.len() < 2 {
+            continue;
+        }
+        let size = r.branch_conduit_in;
+        let label = format!("{}-{}", l.panel.trim(), l.number.trim());
+        let why = format!(
+            "proposed: panel {} circuit {} ({}) feeds a load on the site that no site plan draws: run underground out of its panel past the slab edge nearest it ({}; {}); where the load stands is asked",
+            l.panel.trim(),
+            l.number.trim(),
+            l.description.trim(),
+            r.site_load_source,
+            ug.site.source
+        );
+        let sheet = if l.source.trim().is_empty() { "panel schedule" } else { l.source.trim() };
+        let mut run = buried(slab, sheet, pts.clone(), size, Made::Inferred, why.clone(), &format!("rule: {}", r.branch_conduit_source));
+        // Under the slab inside the building, at its cover outside it.
+        let under = -(ug.depths.conduit_under_slab_ft + size / 12.0);
+        let segs = run.points.len().saturating_sub(1);
+        run.bottoms_ft = (0..segs).map(|i| if i + 1 == segs { -(r.cover_in + size) / 12.0 } else { under }).collect();
+        let mut made = vec![run];
+        let mut up = stub(slab, sheet, pc, size, ug.stubup.conduit_top_ft.max(pn.bottom_ft), Made::Inferred, &why);
+        up.bottoms_ft = vec![under];
+        made.push(up);
+        made.push(stub(slab, sheet, out, size, r.stub_top_ft, Made::Inferred, &why));
+        for (k, m) in made.iter_mut().enumerate() {
+            m.id = super::ugcircuit::run_id(slab, &label, format!("{sheet}.{}.{k}", runs.len()));
+        }
+        runs.extend(made);
+        lines.push(format!(
+            "{label} {}: proposed {:.0} ft out of panel {} to the site (locate the load)",
+            l.description.trim(),
+            path_len(&pts) / upf,
+            pn.tag
+        ));
+    }
+    (runs, lines)
 }
 
 #[cfg(test)]
@@ -2662,6 +2756,105 @@ mod tests {
         assert_eq!(counts.first(), counts.get(1), "{counts:?}");
         // No review item of its own: the breakers' check asks about the sign's row.
         assert!(counts.first().is_some_and(|c| c.0 == 2 && c.1 == 3 && c.2 == 2 && c.3 > 4 && c.4 == 0), "{counts:?}");
+    }
+
+    /// Q6348: a site circuit's buried runs carry it: its conductors pulled by its breaker, load and
+    /// buried length, its PVC sized by their fill (the specification's minimum, else NEC 352.20),
+    /// not one size for every run; a site load the schedule names that no site plan draws is
+    /// built proposed out of its panel to the site (and still asked where it stands).
+    #[test]
+    fn buried_site_circuits_pull_their_conductors_and_an_undrawn_site_load_is_proposed() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = site_sheet();
+        let mut sp = spec_with_slab();
+        let row = |n: &str, brk: &str, va: f64, what: &str| cadaddy_walk3d::PanelCircuit {
+            number: n.into(),
+            breaker: brk.into(),
+            poles: 1,
+            load_va: Some(va),
+            description: what.into(),
+            source: "E-601".into(),
+            ..Default::default()
+        };
+        sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule {
+            panel: "LP".into(),
+            source: "E-601".into(),
+            header: [("volts/phase".to_string(), "208Y/120V 3PH 4W".to_string())].into_iter().collect(),
+            circuits: vec![row("7", "20/1", 300.0, "SITE LIGHTING"), row("11", "20/1", 600.0, "GATE OPERATOR")],
+            ..Default::default()
+        });
+        // The panel, inside the building's east wall.
+        sp.mep.equipment.push(MepEquipment {
+            tag: "LP".into(),
+            kind: "panelboard".into(),
+            level: "Level 1".into(),
+            min: [1_030.0, 380.0],
+            max: [1_050.0, 386.0],
+            bottom_ft: 3.0,
+            height_ft: 3.5,
+            ..MepEquipment::default()
+        });
+        if let Ok(d) = s.doc_mut() {
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        for pass in 0..2 {
+            let mut result = serde_json::json!({});
+            site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+            let w = &result["site_work"];
+            let (sp, _) = super::super::bspec::current(&s, "test").unwrap_or_else(|e| panic!("{e}"));
+            let of = |label: &str| -> Vec<&MepRun> {
+                let id = super::super::ugcircuit::tag_id("Level 1", label);
+                sp.mep.runs.iter().filter(|r| r.id.split('#').next() == Some(id.as_str())).collect()
+            };
+            // The pole lights' circuit: its links, home run and stub-ups carry it, sized by its
+            // conductors (3 #12 fill 1/2" PVC), not the one rule size.
+            let lights = of("LP-7");
+            assert!(lights.len() >= 4, "pass {pass}: {:#?}", sp.mep.runs.iter().map(|r| (&r.id, &r.source_sheet)).collect::<Vec<_>>());
+            assert!(lights.iter().all(|r| r.size_in[0] == 0.5 && r.size_source.starts_with("fill: 2#12 + 1#12G")), "{lights:#?}");
+            let tag = sp.tags.iter().find(|t| t.id == super::super::ugcircuit::tag_id("Level 1", "LP-7")).expect("the circuit's tag");
+            assert_eq!(tag.fields.get("conductors").map(|f| f.value.as_str()), Some("2#12 + 1#12G"), "{tag:?}");
+            assert_eq!(tag.fields.get("load").map(|f| f.value.as_str()), Some("SITE LIGHTING"));
+            // The gate operator no site plan draws: out of its panel to the site, proposed.
+            let gate = of("LP-11");
+            assert_eq!(gate.len(), 3, "a run and two stub-ups: {gate:#?}");
+            assert!(gate.iter().all(|r| r.source_sheet.starts_with(SOURCE_PREFIX) && r.made == Made::Inferred), "{gate:#?}");
+            assert!(gate.iter().any(|r| r.points.len() >= 2 && r.points.first() == Some(&[1_040.0, 383.0])), "{gate:#?}");
+            assert!(
+                w["site_loads_proposed"]
+                    .as_array()
+                    .is_some_and(|a| a.len() == 1 && a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("LP-11")))),
+                "{w:#}"
+            );
+            assert!(w["site_loads_asked"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("LP-11")))), "{w:#}");
+            // One tag per buried circuit, on every rerun.
+            assert_eq!(sp.tags.iter().filter(|t| super::super::ugcircuit::is_buried(&t.id)).count(), 2, "pass {pass}");
+            // The atoms pull the circuit's conductors in its buried PVC.
+            let mut d = Drawing::default();
+            let _ = super::super::mepatoms::build::build(&mut d, &sp);
+            let atoms: Vec<cadaddy_doc::props::Props> = d.model.iter().map(|e| cadaddy_doc::props::read(&e.common.xdata)).collect();
+            let kind =
+                |p: &cadaddy_doc::props::Props| p.get(super::super::mepatoms::ATOM_KEY).map(cadaddy_doc::props::Prop::text).unwrap_or_default();
+            let on = |p: &cadaddy_doc::props::Props, c: &str| p.get("circuit").map(cadaddy_doc::props::Prop::text).as_deref() == Some(c);
+            assert!(atoms.iter().any(|p| kind(p) == "wire" && on(p, "LP-7")), "wires of LP-7");
+            assert!(atoms.iter().any(|p| kind(p) == "wire" && on(p, "LP-11")), "wires of LP-11");
+        }
     }
 
     /// Q6439: the site step builds its own luminaires only. A building's device corrected on the

@@ -52,7 +52,7 @@ const CMD: &str = "bim.breakers";
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Panel Breakers", run)
-            .params("{panel?: tag (report one panel or panel type), rebuild?: bool (default true: the breakers built again from the schedules and linked to the devices as they are now), limit?: mismatches listed (50)} → {breakers, spares, spaces, panels: [{panel, panel_type, level, schedule, breakers, spares, spaces, poles_used, poles_total, poles_source}], by_type: [{panel_type, level, type, trip_a, poles, count}], devices_linked, devices_unlinked, mismatches_total, mismatches: [{kind: plan_no_row|row_no_plan|no_schedule|no_panel|unknown_panel, panel, circuit, level, devices, rooms, description, sheet}], schedules_without_panel, unknown_panels (named only by circuit labels: no panel schedule, one-line or riser has them; never built as panels), typical: [{panel_type, typical_of, panels_built, rooms_without_panel}]}: each panel-schedule row as a breaker inside its panel (trip, poles, type, frame/AIC, circuit, load, source row), connected to its circuit and devices; spares and spaces counted; plan circuits and schedule rows that don't meet are review items")
+            .params("{panel?: tag (report one panel or panel type), rebuild?: bool (default true: the breakers built again from the schedules and linked to the devices as they are now), limit?: mismatches listed (50)} → {breakers, spares, spaces, panels: [{panel, panel_type, level, schedule, breakers, spares, spaces, poles_used, poles_total, poles_source}], by_type: [{panel_type, level, type, trip_a, poles, count}], by_basis: [{type, basis: schedule (the row's codes) | as_built | circuit (the row names no protection: decided per circuit by what it serves, NEC 210.12 / 422.5, a GFCI receptacle on it carrying its ground fault), count}], types_corrected (blank rows of a schedule that types others, built with the protection the code wants, the printed type kept as design), devices_linked, devices_unlinked, mismatches_total, mismatches: [{kind: plan_no_row|row_no_plan|no_schedule|no_panel|unknown_panel, panel, circuit, level, devices, rooms, description, sheet}], schedules_without_panel, unknown_panels (named only by circuit labels: no panel schedule, one-line or riser has them; never built as panels), typical: [{panel_type, typical_of, panels_built, rooms_without_panel}]}: each panel-schedule row as a breaker inside its panel (trip, poles, type, frame/AIC, circuit, load, source row), connected to its circuit and devices; spares and spaces counted; plan circuits and schedule rows that don't meet are review items")
             .noundo(),
     ]
 }
@@ -96,6 +96,36 @@ pub(crate) struct Rules {
     pub panel_rule: String,
     /// Why a circuit label naming no such panel is no panel's circuit.
     pub unknown_panel_reason: String,
+    /// A row with no protection code: its type by what its circuit serves (Q6350).
+    pub by_circuit: ByCircuit,
+}
+
+/// How a row whose codes name no protection gets its type from its circuit (Q6350).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct ByCircuit {
+    /// The features that are protection: a row with any of them is typed by its schedule.
+    pub protection_features: Vec<String>,
+    pub arc_fault: ArcFault,
+    pub ground_fault_loads: Vec<super::coderules::Place>,
+    pub unit_name_words: Vec<String>,
+    pub unit_name_source: String,
+    pub receptacle_kinds: Vec<String>,
+    pub device_rule: String,
+    pub volts_header_words: Vec<String>,
+    pub volts_unread: String,
+    pub nothing_needed: String,
+}
+
+/// Where arc-fault protection is wanted: single-pole branch circuits up to its amps and volts.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct ArcFault {
+    pub cite: String,
+    pub rule: String,
+    pub poles: u32,
+    pub max_amps: f64,
+    pub max_volts: f64,
 }
 
 pub(crate) fn rules() -> &'static Rules {
@@ -183,6 +213,149 @@ fn kind_with_as_built(c: &PanelCircuit, s: &PanelSchedule, built_as: &BTreeMap<(
         k.source = said.clone();
     }
     k
+}
+
+/// Whether a row's codes (or its breakers as built) name its protection: then the schedule
+/// types it; else its circuit does ([`by_circuit`]).
+fn names_protection(k: &Kind) -> bool {
+    let r = rules();
+    k.features.iter().any(|f| r.by_circuit.protection_features.iter().any(|p| p == f))
+}
+
+/// The type the rules' type list gives a set of features.
+fn type_of(features: &[String]) -> String {
+    let r = rules();
+    r.types
+        .iter()
+        .find(|t| !t.all.is_empty() && t.all.iter().all(|f| features.contains(f)))
+        .map_or_else(|| if r.default_type.is_empty() { "standard".to_string() } else { r.default_type.clone() }, |t| t.ty.clone())
+}
+
+/// What a circuit serves, for the type of a breaker whose row names no protection.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Serves {
+    pub poles: u32,
+    pub trip: Option<f64>,
+    /// A single-pole breaker's volts (the panel's line to neutral), when its schedule prints them.
+    pub volts: Option<f64>,
+    /// The row's load, as printed.
+    pub description: String,
+    /// Why the circuit is a dwelling unit's or a guest room's, when it is.
+    pub unit: Option<String>,
+    /// Receptacles on the circuit.
+    pub receptacles: usize,
+    /// Of them, the GFCI devices (a GFCI receptacle, or one the code rules made the circuit's
+    /// GFCI: `gfci` device or load side).
+    pub gfci_devices: usize,
+    /// The names of the equipment on the circuit (its tags and kinds).
+    pub loads: Vec<String>,
+}
+
+/// A breaker's type decided by its circuit: the type, the features it adds, and the basis.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Decided {
+    pub ty: String,
+    pub features: Vec<String>,
+    pub basis: String,
+    /// The code sections the decision rests on (none: nothing is wanted).
+    pub cites: Vec<String>,
+}
+
+/// A row with no protection code: arc fault where it is a unit's 120 V single-pole 15/20 A
+/// circuit, ground fault at the breaker for a GFCI load unless a GFCI device on the circuit
+/// carries it; both dual-function, neither standard (Q6350, `breakers.json`
+/// `by_circuit`).
+pub(crate) fn by_circuit(s: &Serves) -> Decided {
+    let bc = &rules().by_circuit;
+    let af = &bc.arc_fault;
+    let mut features = Vec::new();
+    let mut why = Vec::new();
+    let mut cites = Vec::new();
+    let volts_ok = s.volts.is_none_or(|v| v <= af.max_volts + 0.5);
+    let amps_ok = s.trip.is_none_or(|a| a <= af.max_amps + 1e-9);
+    if let Some(unit) = &s.unit
+        && s.poles == af.poles.max(1)
+        && volts_ok
+        && amps_ok
+    {
+        features.push("arc_fault".to_string());
+        let size = s.trip.map_or_else(|| "its trip not printed".to_string(), |a| format!("{a} A"));
+        let volts = s.volts.map_or_else(|| bc.volts_unread.clone(), |v| format!("{v} V"));
+        why.push(format!("{}: {} ({unit}; {}-pole, {size}, {volts})", af.cite, af.rule, s.poles));
+        cites.push(af.cite.clone());
+    }
+    let text = std::iter::once(s.description.as_str()).chain(s.loads.iter().map(String::as_str)).collect::<Vec<_>>().join(" ");
+    if let Some(load) = super::coderules::place_of(&bc.ground_fault_loads, &text) {
+        if s.gfci_devices == 0 {
+            features.push("ground_fault".to_string());
+            let none = if s.receptacles == 0 { "no receptacle on the circuit" } else { "no receptacle on the circuit is a GFCI device" };
+            why.push(format!("{}: a GFCI load, and {none}: GFCI at the breaker", load.cite));
+        } else {
+            why.push(format!("{}: GFCI at the circuit's GFCI receptacle, not its breaker: {}", load.cite, bc.device_rule));
+        }
+        cites.push(load.cite.clone());
+    }
+    if why.is_empty() {
+        why.push(bc.nothing_needed.clone());
+    }
+    Decided { ty: type_of(&features), features, basis: why.join("; "), cites }
+}
+
+/// A single-pole breaker's volts from its schedule's header (`208Y/120V` → 120, `480Y/277V` →
+/// 277): the lowest system voltage it prints.
+fn single_pole_volts(s: &PanelSchedule) -> Option<f64> {
+    let (_, v) = header_fact(&s.header, &rules().by_circuit.volts_header_words)?;
+    v.split(|c: char| !c.is_ascii_digit() && c != '.')
+        .filter_map(|n| n.parse::<f64>().ok())
+        .filter(|n| n.is_finite() && (100.0..=600.0).contains(n))
+        .fold(None, |m: Option<f64>, n| Some(m.map_or(n, |m| m.min(n))))
+}
+
+/// The dwelling units' and guest rooms' rooms: a typical unit's rooms (the spec's unit
+/// instances), rooms named as one (`by_circuit.unit_name_words`).
+struct Units {
+    numbers: BTreeMap<String, String>,
+    names: BTreeMap<String, String>,
+}
+
+impl Units {
+    fn of(sp: &BuildingSpec) -> Units {
+        let mut numbers = BTreeMap::new();
+        for i in sp.unit_instances.as_array().into_iter().flatten().take(MAX_DEVICES) {
+            if let Some(n) = i.get("number").and_then(Value::as_str) {
+                numbers.insert(n.trim().to_ascii_uppercase(), i.get("type").and_then(Value::as_str).unwrap_or_default().to_string());
+            }
+        }
+        let names = sp
+            .rooms
+            .iter()
+            .take(MAX_DEVICES)
+            .filter_map(|r| r.number.as_ref().map(|n| (n.trim().to_ascii_uppercase(), r.name.to_ascii_uppercase())))
+            .collect();
+        Units { numbers, names }
+    }
+
+    /// Why a room is a unit's (a typical unit's room, or named so), if it is.
+    fn room(&self, room: &str) -> Option<String> {
+        let key = room.trim().to_ascii_uppercase();
+        if key.is_empty() {
+            return None;
+        }
+        if let Some(t) = self.numbers.get(&key) {
+            return Some(if t.is_empty() {
+                format!("room {} is a unit", room.trim())
+            } else {
+                format!("room {} is a unit of type {t}", room.trim())
+            });
+        }
+        let name = self.names.get(&key).cloned().unwrap_or(key);
+        self.named(&name).map(|w| format!("room {} ({name}) is a guest room or dwelling ({w})", room.trim()))
+    }
+
+    /// The unit phrase a name has (whole words), if any.
+    fn named(&self, name: &str) -> Option<String> {
+        rules().by_circuit.unit_name_words.iter().find(|w| has_phrase(name, w)).cloned()
+    }
 }
 
 /// What a row is: a breaker (with a load), a spare breaker, or a space (no breaker).
@@ -442,6 +615,10 @@ struct Dev {
     room: String,
     level: String,
     fed_from: Option<Handle>,
+    /// What it is (`receptacle`, `switch`; equipment: its kind and tag).
+    kind: String,
+    /// A GFCI device: a GFCI receptacle, or the one the code rules made its circuit's GFCI.
+    gfci: bool,
 }
 
 /// Gear that is fed rather than feeding: it holds no breakers, though its record names a panel.
@@ -461,9 +638,12 @@ fn equipment_load(e: &Entity) -> Option<Dev> {
     }
     let label = if circuit.to_ascii_uppercase().starts_with(&panel) { circuit.clone() } else { format!("{panel}-{circuit}") };
     let numbers = circuit_numbers(&label, &panel);
+    let what = format!("{} {}", kind.trim(), super::bimlook::made_tag(e, "tag").unwrap_or_default());
     (!numbers.is_empty()).then(|| Dev {
         handle: e.handle,
         fed_from: None,
+        kind: what,
+        gfci: false,
         room: made_prop(e, "ROOM").unwrap_or_default(),
         level: super::bspec::made_level(e).unwrap_or_default(),
         panel,
@@ -493,6 +673,14 @@ fn devices_of(d: &Drawing) -> Vec<Dev> {
             (!numbers.is_empty()).then(|| Dev {
                 handle: e.handle,
                 fed_from: Handle::parse_hex(&text("fed_from_handle")),
+                kind: Some(text("kind"))
+                    .filter(|k| !k.is_empty() && k != "device")
+                    .or_else(|| super::bimlook::made_tag(e, super::elemprops::ELEMENT_TAG).map(str::to_string))
+                    .unwrap_or_default()
+                    .to_ascii_lowercase(),
+                gfci: text("kind").eq_ignore_ascii_case("gfci_receptacle")
+                    || text("receptacle_type").eq_ignore_ascii_case("GFCI")
+                    || ["device", "load side"].iter().any(|g| text("gfci").eq_ignore_ascii_case(g)),
                 room: text("room"),
                 level: super::bspec::made_level(e).unwrap_or_default(),
                 panel,
@@ -593,7 +781,30 @@ struct Made {
     numbers: Vec<u32>,
     label: String,
     kind: Kind,
+    basis: Basis,
     spare: bool,
+}
+
+/// What a breaker's type rests on.
+#[derive(Clone, Debug, PartialEq)]
+enum Basis {
+    /// The row's codes, read with the schedule's legend.
+    Schedule,
+    /// The project's word on the breakers as built.
+    AsBuilt,
+    /// The row names no protection: what its circuit serves decided it (the code sections, the
+    /// printed type, whether the schedule marks types on other rows, its source).
+    Circuit { design: String, typed: bool, cites: String, printed: String },
+}
+
+impl Basis {
+    fn name(&self) -> &'static str {
+        match self {
+            Basis::Schedule => "schedule",
+            Basis::AsBuilt => "as_built",
+            Basis::Circuit { .. } => "circuit",
+        }
+    }
 }
 
 /// A mismatch between the plans and a schedule.
@@ -712,6 +923,23 @@ pub(crate) struct Report {
     /// its submittal's limit), the drawn one kept as each one's design.
     #[serde(default)]
     pub corrected: usize,
+    /// Breakers (spares too) by type and what the type rests on (Q6350).
+    #[serde(default)]
+    pub by_basis: Vec<ByBasis>,
+    /// Rows a typed schedule leaves blank, built with the protection the code wants.
+    #[serde(default)]
+    pub types_corrected: usize,
+}
+
+/// Breakers of a type by what the type rests on: `schedule` (the row's codes), `as_built`, or
+/// `circuit` (no code naming protection: what the circuit serves, by the code rules).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct ByBasis {
+    #[serde(rename = "type")]
+    pub ty: String,
+    pub basis: String,
+    pub count: usize,
 }
 
 pub(crate) fn stored(d: &Drawing) -> Option<Report> {
@@ -883,6 +1111,24 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     }
 
     // -- The breakers: each panel's schedule rows. --
+    let units = Units::of(sp);
+    let volts: BTreeMap<String, Option<f64>> = scheds.iter().map(|(k, s)| (k.clone(), single_pole_volts(s))).collect();
+    // A circuit is a unit's when its panel is a unit's own (a room's panel) or every device on it
+    // stands in a unit's room.
+    let unit_of = |p: &PanelEl, devs: &[&Dev]| -> Option<String> {
+        if let Some(t) = &p.typical {
+            let room = if p.room.trim().is_empty() {
+                p.tag.to_ascii_uppercase().strip_prefix(&format!("{}-", t.to_ascii_uppercase())).map(str::to_string).unwrap_or_default()
+            } else {
+                p.room.clone()
+            };
+            if let Some(why) = units.room(&room) {
+                return Some(format!("panel {} is its unit's own: {why}", p.tag));
+            }
+        }
+        let whys: Vec<String> = devs.iter().map(|dv| units.room(&dv.room)).collect::<Option<Vec<_>>>()?;
+        whys.first().map(|w| if whys.len() > 1 { format!("its {} devices stand in units' rooms: {w}", whys.len()) } else { w.clone() })
+    };
     let mut made: Vec<Made> = Vec::new();
     let mut report = Report::default();
     let mut spaces_of: Vec<(usize, usize)> = Vec::new();
@@ -916,7 +1162,33 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
                 u.breakers += 1;
             }
             let label = format!("{}-{}", panel_type, t.iter().map(u32::to_string).collect::<Vec<_>>().join(","));
-            made.push(Made { panel: pi, row: ri, numbers: t, label, kind: kind_with_as_built(c, s, &built_as), spare: row == Row::Spare });
+            let printed = kind_with_as_built(c, s, &built_as);
+            let as_built = built_as.contains_key(&(s.panel.clone(), c.number.clone()));
+            // A row that names no protection: its circuit decides (Q6350).
+            let (kind, basis) = if row == Row::Breaker && !as_built && !names_protection(&printed) {
+                let devs: Vec<&Dev> =
+                    t.iter().flat_map(|n| on.get(&(pi, *n)).cloned().unwrap_or_default()).filter_map(|di| devices.get(di)).collect();
+                let serves = Serves {
+                    poles: c.poles.clamp(1, 3),
+                    trip: trip(&c.breaker),
+                    volts: volts.get(skey).copied().flatten(),
+                    description: c.description.clone(),
+                    unit: unit_of(p, &devs),
+                    receptacles: devs.iter().filter(|dv| r.by_circuit.receptacle_kinds.iter().any(|k| dv.kind.eq_ignore_ascii_case(k))).count(),
+                    gfci_devices: devs.iter().filter(|dv| dv.gfci).count(),
+                    loads: devs.iter().filter(|dv| !dv.kind.is_empty()).map(|dv| dv.kind.clone()).collect(),
+                };
+                let dec = by_circuit(&serves);
+                let mut features = printed.features.clone();
+                features.extend(dec.features.iter().filter(|f| !printed.features.contains(f)).cloned());
+                let ty = type_of(&features);
+                let typed = s.circuits.iter().any(|x| !x.protection.is_empty());
+                let k = Kind { ty, features, codes: printed.codes.clone(), source: dec.basis.clone() };
+                (k, Basis::Circuit { design: printed.ty.clone(), typed, cites: dec.cites.join(", "), printed: printed.source.clone() })
+            } else {
+                (printed, if as_built { Basis::AsBuilt } else { Basis::Schedule })
+            };
+            made.push(Made { panel: pi, row: ri, numbers: t, label, kind, basis, spare: row == Row::Spare });
         }
         let highest = taken.iter().max().copied().unwrap_or(0);
         match header_fact(&s.header, &r.total_header_words).and_then(|(k, v)| first_number(v).map(|n| (k, v, n))) {
@@ -997,6 +1269,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     let mut run_breaker: HashMap<Handle, Handle> = HashMap::new();
     let mut panel_breakers: BTreeMap<usize, Vec<Handle>> = BTreeMap::new();
     let mut typed: BTreeMap<(String, String, String, Option<i64>, u32), usize> = BTreeMap::new();
+    let mut by_basis: BTreeMap<(String, String), usize> = BTreeMap::new();
     for (m, h) in made.iter().zip(&handles) {
         let Some(h) = *h else { continue };
         let (Some(p), Some((_, s))) = (panels.get(m.panel), panels.get(m.panel).and_then(sched_of)) else { continue };
@@ -1029,9 +1302,29 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         let computed = Source::computed;
         ps.set(super::mepatoms::ATOM_KEY, Prop::new(KIND, computed()));
         ps.set("item", Prop::new(format!("{}, panel {}", r.item(&m.kind.ty), s.panel.trim()), row_src.clone()));
-        let mut tp = Prop::new(m.kind.ty.clone(), Source::from_doc(SourceKind::Schedule, &m.kind.source));
+        // Its type and what that rests on: the row's codes, or (none naming protection) the code
+        // rules its circuit falls under.
+        let type_src = match &m.basis {
+            Basis::Circuit { cites, .. } if !cites.is_empty() => Source::from_doc(SourceKind::Rule, cites),
+            Basis::Circuit { .. } => Source::from_doc(SourceKind::Rule, "breakers.json by_circuit"),
+            _ => Source::from_doc(SourceKind::Schedule, &m.kind.source),
+        };
+        let mut tp = match &m.basis {
+            // A typed schedule's blank row: its printed type first (the correction below keeps it
+            // as the design, the schedule its source).
+            Basis::Circuit { design, typed: true, printed, .. } if *design != m.kind.ty => {
+                Prop::new(design.clone(), Source::from_doc(SourceKind::Schedule, printed))
+            }
+            _ => Prop::new(m.kind.ty.clone(), type_src.clone()),
+        };
         tp.note = (!m.kind.codes.is_empty()).then(|| format!("codes {}", m.kind.codes.join("; ")));
         ps.set("type", tp);
+        let mut tb = Prop::new(m.basis.name(), type_src);
+        tb.note = Some(match &m.basis {
+            Basis::Circuit { printed, .. } => format!("{}; the row: {printed}", m.kind.source),
+            _ => m.kind.source.clone(),
+        });
+        ps.set("type_basis", tb);
         ps.set("size", Prop::new(size_text(tr, c.poles), row_src.clone()));
         match tr {
             Some(a) => {
@@ -1093,6 +1386,22 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             let x = props::write(&e.common.xdata, &ps);
             e.common.xdata = x.into();
         });
+        // A schedule that types its other rows prints this one standard: what the code wants is
+        // installed, the printed type kept as its design.
+        if let Basis::Circuit { design, typed: true, cites, .. } = &m.basis
+            && *design != m.kind.ty
+        {
+            let fix = super::provenance::Correction {
+                key: "type".into(),
+                design: design.clone(),
+                corrected: m.kind.ty.clone(),
+                reason: format!("the schedule types other rows and leaves this one without a code; {}", m.kind.source),
+                rule: if cites.is_empty() { "breakers.json by_circuit".to_string() } else { cites.clone() },
+            };
+            if super::provenance::correct_element(d, h, &fix) {
+                report.types_corrected += 1;
+            }
+        }
         // Installed as corrected, the drawn breaker kept as its design.
         if let Some((drawn, a, rule, reason)) = &fixed {
             for (key, design, installed) in [
@@ -1111,6 +1420,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             report.corrected += 1;
         }
         panel_breakers.entry(m.panel).or_default().push(h);
+        *by_basis.entry((m.kind.ty.clone(), m.basis.name().to_string())).or_default() += 1;
         *typed
             .entry((s.panel.trim().to_string(), p.level.clone(), m.kind.ty.clone(), tr.map(|a| (a * 10.0).round() as i64), c.poles.clamp(1, 3)))
             .or_default() += 1;
@@ -1126,6 +1436,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         }
     }
     report.spaces = spaces_of.iter().map(|(_, n)| n).sum();
+    report.by_basis = by_basis.into_iter().map(|((ty, basis), count)| ByBasis { ty, basis, count }).collect();
     report.by_type = typed
         .into_iter()
         .map(|((panel_type, level, ty, trip_a, poles), count)| ByType {
@@ -1428,6 +1739,8 @@ fn report_json(r: &Report, panel: Option<&str>, limit: usize) -> Value {
         "panels_total": panels.len(),
         "panels": panels.iter().take(200).collect::<Vec<_>>(),
         "by_type": r.by_type.iter().filter(|b| panel.is_none_or(|w| b.panel_type.eq_ignore_ascii_case(w))).take(500).collect::<Vec<_>>(),
+        "by_basis": r.by_basis,
+        "types_corrected": r.types_corrected,
         "devices_linked": r.devices_linked, "devices_unlinked": r.devices_unlinked,
         "mismatches_total": if panel.is_some() { mism.len() } else { r.mismatches_total },
         "mismatches_by_kind": mism.iter().fold(BTreeMap::<String, usize>::new(), |mut m, x| { *m.entry(x.kind.clone()).or_default() += 1; m }),
@@ -1504,6 +1817,57 @@ mod tests {
         assert_eq!(kind_of(&ckt("3", "CONDENSER (HACR)", "40", 2, &[]), &none, "S-1").ty, "HACR");
         let k = kind_of(&ckt("5", "RCPT", "20", 1, &["AF", "GF"]), &legend, "S-1");
         assert!(k.source.contains("S-1") && k.source.contains("GF: PERSONNEL GROUND FAULT PROTECTION"), "{k:?}");
+    }
+
+    /// Q6350: a row that names no protection is typed by what its circuit serves.
+    #[test]
+    fn a_circuit_with_no_type_code_is_typed_by_what_it_serves() {
+        let unit = Some("room N1 is a unit".to_string());
+        // `gf`: GFCI devices among the receptacles.
+        let s = |desc: &str, poles: u32, amps: Option<f64>, volts: Option<f64>, unit: &Option<String>, rcpts: usize| Serves {
+            poles,
+            trip: amps,
+            volts,
+            description: desc.into(),
+            unit: unit.clone(),
+            receptacles: rcpts,
+            gfci_devices: 0,
+            loads: Vec::new(),
+        };
+        let gf = |x: Serves, n: usize| Serves { gfci_devices: n, ..x };
+        let ty = |x: Serves| by_circuit(&x).ty;
+        assert_eq!(ty(s("DESK RCPT", 1, Some(20.0), Some(120.0), &unit, 3)), "AFCI");
+        // A unit's GFCI load: at the breaker unless a GFCI device on the circuit carries it
+        // (then the breaker is AFCI).
+        assert_eq!(ty(s("DISHWASHER", 1, Some(20.0), Some(120.0), &unit, 0)), "dual-function");
+        assert_eq!(ty(s("DISHWASHER", 1, Some(20.0), Some(120.0), &unit, 1)), "dual-function", "its receptacle is no GFCI");
+        let d = by_circuit(&gf(s("DISHWASHER", 1, Some(20.0), Some(120.0), &unit, 1), 1));
+        assert_eq!(d.ty, "AFCI");
+        assert!(d.basis.contains("receptacle") && d.cites.iter().any(|c| c.contains("422.5")), "{d:?}");
+        // No unit: GFCI only, or standard.
+        assert_eq!(ty(s("SUMP PUMP", 1, Some(20.0), None, &None, 1)), "GFCI");
+        assert_eq!(ty(gf(s("SUMP PUMP", 1, Some(20.0), None, &None, 1), 1)), "standard");
+        assert_eq!(ty(s("CORRIDOR RCPT", 1, Some(20.0), None, &None, 2)), "standard");
+        // Outside the AFCI rule's reach: two-pole, over 20 A, 277 V.
+        assert_eq!(ty(s("HEAT PUMP", 2, Some(20.0), Some(120.0), &unit, 0)), "standard");
+        assert_eq!(ty(s("WATER HEATER", 1, Some(30.0), Some(120.0), &unit, 0)), "standard");
+        assert_eq!(ty(s("LIGHTS", 1, Some(20.0), Some(277.0), &unit, 0)), "standard");
+        // An unprinted trip or voltage stays within it, and the basis says so.
+        let d = by_circuit(&s("LIGHTS", 1, None, None, &unit, 0));
+        assert_eq!(d.ty, "AFCI");
+        assert!(d.basis.contains("210.12") && d.basis.contains("trip not printed"), "{d:?}");
+        // The panel's single-pole volts: its lowest system voltage.
+        let sch = |v: &str| PanelSchedule { header: [("volts/phase".to_string(), v.to_string())].into_iter().collect(), ..PanelSchedule::default() };
+        assert_eq!(single_pole_volts(&sch("208Y/120V, 3PH, 4W")), Some(120.0));
+        assert_eq!(single_pole_volts(&sch("480Y/277V, 3PH, 4W")), Some(277.0));
+        assert_eq!(single_pole_volts(&sch("1PH, 3W")), None);
+        // A guest laundry is no unit; a guest suite is.
+        let u = Units {
+            numbers: BTreeMap::new(),
+            names: [("N9".to_string(), "GUEST LAUNDRY".to_string()), ("N5".to_string(), "GUEST SUITE".to_string())].into_iter().collect(),
+        };
+        assert!(u.room("N9").is_none());
+        assert!(u.room("N5").is_some());
     }
 
     #[test]

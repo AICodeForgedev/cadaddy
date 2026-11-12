@@ -1268,6 +1268,48 @@ fn a_switch_with_no_circuit_is_wired_to_the_luminaires_it_controls() {
     assert_eq!(boxes["count"], json!(3), "{boxes}");
 }
 
+/// Q6348: where the documents route the slab level's branch homeruns below the slab (the
+/// underground plan's note, kept with the wiring methods), every routing carries each homerun
+/// under the floor, in the underground raceway, down from its box and up into its panel's bottom.
+#[test]
+fn homeruns_the_documents_route_below_the_slab_run_under_it_into_the_panels_bottom() {
+    let note = json!({"below_slab_homeruns": "E-101 note: ALL BRANCH CIRCUIT HOMERUNS SHALL BE ROUTED BELOW SLAB"});
+    let (s, _) = building(|s| {
+        let d = s.doc_mut().expect("doc");
+        d.embedded.insert("route/methods.json".into(), std::sync::Arc::new(serde_json::to_vec(&note).expect("json")));
+    });
+    let d = s.doc().expect("doc");
+    let home: Vec<(String, f64, f64)> = d
+        .model
+        .iter()
+        .map(|e| cadaddy_engine::doc::props::read(&e.common.xdata))
+        .filter(|p| p.get("atom").map(|x| x.text()).as_deref() == Some("conduit"))
+        .filter(|p| p.get("circuit").map(|x| x.text()).as_deref() == Some("LP1-1,3"))
+        .map(|p| {
+            let z = |k: &str| {
+                p.get(k).map(|x| x.text()).and_then(|t| t.split(',').nth(2).and_then(|v| v.trim().parse::<f64>().ok())).unwrap_or(f64::NAN) / 12.0
+            };
+            (p.get("type").map(|x| x.text()).unwrap_or_default(), z("start"), z("end"))
+        })
+        .collect();
+    assert!(!home.is_empty(), "the shared homerun is built");
+    let under: Vec<&(String, f64, f64)> = home.iter().filter(|(_, a, b)| *a < 0.0 && *b < 0.0).collect();
+    assert!(!under.is_empty(), "a stretch under the floor: {home:?}");
+    assert!(under.iter().all(|(t, _, _)| t.contains("PVC")), "buried in the underground raceway: {under:?}");
+    assert!(!home.iter().any(|(_, a, b)| *a > 8.5 && *b > 8.5), "none across the ceiling: {home:?}");
+    // Its last stick rises into the panel's bottom (2.5 ft), not its top (6.5 ft).
+    assert!(home.iter().any(|(_, a, b)| (a.max(*b) - 2.5).abs() < 0.3), "{home:?}");
+    assert!(!home.iter().any(|(_, a, b)| (a.max(*b) - 6.5).abs() < 0.05), "{home:?}");
+}
+
+/// Without the documents' word the homeruns stay overhead (the routing's default).
+#[test]
+fn homeruns_stay_overhead_unless_the_documents_route_them_below_the_slab() {
+    let (s, _) = building(|_| {});
+    let below = sticks(&s).into_iter().filter(|(c, a, b)| c == "LP1-1,3" && a[2] < 0.0 && b[2] < 0.0).count();
+    assert_eq!(below, 0);
+}
+
 /// Each wire of `circuit` (its `circuit` property): its `conductor` role (`phase A`, `neutral`,
 /// `ground`).
 fn wire_roles(s: &Session, circuit: &str) -> Vec<String> {
@@ -1382,4 +1424,133 @@ fn one_circuit_reached_by_two_rooms_tags_is_one_set_of_conductors_in_its_homerun
         }
     }
     assert!(by_run.values().all(|(h, n)| n <= h), "a run with more neutrals than hots: {by_run:?}");
+}
+
+/// Each wire connector's splice, circuit and conductor count.
+type Splices = Vec<(String, String, usize)>;
+
+/// Each box's run ends, kind and splices in a built model: box handle → (the kind of device in
+/// it, its raceway ends, its [`Splices`]).
+fn splices_by_box(s: &Session) -> std::collections::BTreeMap<String, (String, usize, Splices)> {
+    let d = s.doc().expect("doc");
+    let kinds: std::collections::HashMap<String, String> = devices(s).into_iter().map(|(h, k, _)| (h, k)).collect();
+    let read: Vec<(String, cadaddy_engine::doc::props::Props)> =
+        d.model.iter().map(|e| (e.handle.hex(), cadaddy_engine::doc::props::read(&e.common.xdata))).collect();
+    let t = |p: &cadaddy_engine::doc::props::Props, k: &str| p.get(k).map(|x| x.text()).unwrap_or_default();
+    let splice_connector = |p: &cadaddy_engine::doc::props::Props| t(p, "atom") == "connector" && t(p, "type") == "wire connector";
+    let by_handle: std::collections::HashMap<&str, &cadaddy_engine::doc::props::Props> = read.iter().map(|(h, p)| (h.as_str(), p)).collect();
+    let mut out = std::collections::BTreeMap::new();
+    for (h, p) in &read {
+        if t(p, "atom") != "box" {
+            continue;
+        }
+        let kind = kinds.get(&t(p, "box_of")).cloned().unwrap_or_else(|| "junction box".into());
+        let ends = t(p, "connects")
+            .split(',')
+            .filter_map(|c| by_handle.get(c.trim()))
+            .filter(|q| t(q, "atom") == "connector" && !splice_connector(q))
+            .count();
+        out.insert(h.clone(), (kind, ends, Vec::new()));
+    }
+    for (_, p) in &read {
+        if !splice_connector(p) {
+            continue;
+        }
+        if let Some(b) = out.get_mut(t(p, "connects").split(',').next().unwrap_or_default().trim()) {
+            b.2.push((t(p, "splice"), t(p, "splice_circuit"), t(p, "conductors").parse().unwrap_or(0)));
+        }
+    }
+    out
+}
+
+#[test]
+fn every_box_takes_the_splices_its_conductors_need() {
+    // Q6349. Wire connectors were made only where an upsized conductor met a pigtail: a box a
+    // circuit feeds through or ends in had none. LP1-7's three receptacles in a row; LP1-9's two
+    // luminaires and the switch that controls them (its leg into a luminaire's box).
+    let lum = |n: usize, x: f64| {
+        json!({"id": format!("device:L1:L{n}"), "kind": "luminaire", "level": "L1", "at_ft": [x, -20.0], "fields": {
+            "type": {"value": "A", "source": "plan"}, "symbol": {"value": format!("{:X}", 0x2A0 + n), "source": "plan"},
+            "sheet": {"value": "E-101", "source": "plan"}, "circuit": {"value": "LP1-9", "source": "plan"}
+        }})
+    };
+    let switch = json!({"id": "device:L1:S1", "kind": "switch", "level": "L1", "at_ft": [12.0, -20.0], "fields": {
+        "type": {"value": "S", "source": "plan"}, "symbol": {"value": "2B0", "source": "plan"},
+        "sheet": {"value": "E-101", "source": "plan"}, "mount_height_in": {"value": "48", "source": "note"}
+    }});
+    let mut s = small_room(vec![
+        receptacle(1, 20.0, 10.0, "LP1-7"),
+        receptacle(2, 30.0, 10.0, "LP1-7"),
+        receptacle(3, 40.0, 10.0, "LP1-7"),
+        circuit("LP1-7"),
+        lum(1, 20.0),
+        lum(2, 30.0),
+        switch,
+        circuit("LP1-9"),
+    ]);
+    let dv = devices(&s);
+    let sw = dv.iter().find(|d| d.1 == "switch").map(|d| d.0.clone()).unwrap_or_else(|| panic!("the switch: {dv:?}"));
+    let lums: Vec<String> = dv.iter().filter(|d| d.1 == "luminaire").map(|d| d.0.clone()).collect();
+    s.execute("bim.props.set", &json!({"handle": sw, "key": "controls", "value": lums.join(", ")})).expect("set");
+    let built = s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let boxes = splices_by_box(&s);
+    let of = |kind: &str| boxes.values().filter(|b| b.0 == kind).cloned().collect::<Vec<_>>();
+    let has = |sp: &[(String, String, usize)], what: &str, n: usize| sp.iter().any(|(w, _, c)| w == what && *c == n);
+    let grounds = |sp: &[(String, String, usize)]| sp.iter().filter(|x| x.0 == "ground").map(|x| x.2).sum::<usize>();
+    // Each receptacle: where the circuit ends, hot and neutral on its terminals and the ground,
+    // the device's pigtail and the box's bonding jumper in one; where it feeds through, LP1-7's
+    // hot and neutral spliced with a pigtail to the device (2 in, 1 to the device), the grounds
+    // with theirs. A box LP1-9's homerun passes through splices LP1-9 too.
+    let recs = of("receptacle");
+    assert_eq!(recs.len(), 3, "{boxes:#?}");
+    assert!(recs.iter().any(|b| b.1 >= 2), "LP1-7 feeds through a box: {boxes:#?}");
+    for (_, ends, sp) in &recs {
+        if *ends == 1 {
+            assert_eq!(sp, &vec![("ground".to_string(), "LP1-7".to_string(), 3)], "the circuit's last box: {boxes:#?}");
+        } else {
+            let own = |w: &str| sp.iter().any(|x| x.0 == w && x.1 == "LP1-7" && x.2 == 3);
+            assert!(own("hot") && own("neutral") && grounds(sp) >= ends + 2, "{boxes:#?}");
+            assert!(sp.iter().all(|x| x.0 == "ground" || x.1 == "LP1-7" || x.1 == "LP1-9"), "{boxes:#?}");
+        }
+    }
+    // The luminaires: their leads spliced to the circuit (one to the switch leg where it comes in).
+    let lb = of("luminaire");
+    assert_eq!(lb.len(), 2, "{boxes:#?}");
+    assert!(lb.iter().all(|b| b.2.iter().any(|x| x.0 == "neutral" && x.2 >= 2) && grounds(&b.2) >= b.1 + 2), "{boxes:#?}");
+    assert!(lb.iter().any(|b| b.2.iter().any(|x| x.0 == "switch leg")), "the leg lands on a luminaire's lead: {boxes:#?}");
+    // The switch: line and switch leg on its terminals, the neutral brought to it capped.
+    let sb = of("switch");
+    assert_eq!(sb.len(), 1, "{boxes:#?}");
+    assert!(has(&sb[0].2, "neutral", 1) && sb[0].2.iter().any(|x| x.0 == "ground"), "{boxes:#?}");
+    // Every connector inferred by its rule; the takeoff's line is the model's count.
+    let d = s.doc().expect("doc");
+    let made: Vec<String> = d
+        .model
+        .iter()
+        .filter(|e| {
+            let p = cadaddy_engine::doc::props::read(&e.common.xdata);
+            p.get("type").map(|x| x.text()).as_deref() == Some("wire connector")
+        })
+        .map(|e| e.common.xdata.iter().map(|t| t.value.clone()).collect::<Vec<_>>().join("|"))
+        .collect();
+    let total: usize = boxes.values().map(|b| b.2.len()).sum();
+    assert_eq!(made.len(), total);
+    assert!(made.iter().all(|x| x.contains("status:inferred") && x.contains("basis:E-SPLICES")), "{made:?}");
+    let bom = s.execute("bim.bom", &json!({})).expect("bom");
+    let lines: f64 = bom["lines"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|l| l["item"].as_str().is_some_and(|i| i.starts_with("Wire connector")))
+        .filter_map(|l| l["net"].as_f64())
+        .sum();
+    assert_eq!(lines, total as f64, "{bom:#}");
+    // The small branch circuits' splices all take twist-ons (the #18 leads and #10 homerun among them).
+    assert!(bom.to_string().contains("Wire connector, twist-on") && !bom.to_string().contains("multi-tap"), "{bom:#}");
+    assert!(built.is_object());
+    // The build reports them by box kind.
+    let text = s.execute("model.build", &json!({})).expect("build").to_string();
+    let report = text.find("\"splices\":{").map(|i| &text[i..]).unwrap_or_default();
+    assert!(report.contains("\"byBoxKind\"") && report.contains("\"receptacle\":{\"boxes\":3"), "{text}");
+    println!("splices by box: {boxes:?}");
 }
