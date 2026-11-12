@@ -176,7 +176,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true), max_clashes?: count of clashes listed (5000, at most 50000)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|hoistway (through an elevator shaft)|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total (all found, even past the cap), truncated (the list was cut at max_clashes), gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
-            .params("{level?: name, system?: name, guessed_only?: bool, cursor?: offset (0), limit?: count (50, max 200)} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed, edited_by}], systems: [...], total, next_cursor?}")
+            .params("{level?: name, system?: name, guessed_only?: bool, cursor?: offset (0), limit?: count (50, max 200)} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed, edited_by, corrections?: [{key, design, corrected, reason, rule}]}], systems: [...], total, next_cursor?}: the runs as the builds lay them (the spec's MEP edits applied)")
             .noundo(),
         CommandSpec::new("mep.edit", "Edit MEP Item", run_edit)
             .params("{id: run id (e.g. \"R1\"), system?: name, size_in?: [w,h], bottom_ft?: feet, reviewed?: bool, edited_by?: author (default \"agent\"), rebuild?: bool} → {item, rebuilt?, rebuild_error?}"),
@@ -1682,7 +1682,7 @@ fn item_json(r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) -> Value {
         MepKind::Cable => "cable",
     });
     let level_elev = sp.level(&r.level).map_or(0.0, |l| l.elevation_ft);
-    json!({
+    let mut v = json!({
         "id": r.id,
         "system": r.system,
         "level": r.level,
@@ -1697,7 +1697,12 @@ fn item_json(r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) -> Value {
         "reviewed": r.reviewed,
         "edited_by": &r.edited_by,
         "level_elevation_ft": level_elev,
-    })
+    });
+    // What an edit changed: the documents' value beside the value installed, and why.
+    if !r.corrections.is_empty() {
+        v["corrections"] = serde_json::to_value(&r.corrections).unwrap_or(Value::Null);
+    }
+    v
 }
 
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1721,6 +1726,9 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     if assigned_ids {
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
+    // Listed as the builds lay them: the spec's MEP edits applied (a moved run, an approved clash
+    // fix: Q6381), the documents' values in each run's corrections.
+    let _ = super::mepedit::apply(&mut sp);
 
     let only_level = str_param(p, "level").map(str::to_string);
     let only_system = str_param(p, "system").map(str::to_string);
@@ -3296,7 +3304,10 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
 const PASS_EPS_FT: f64 = 1.0 / 96.0;
 
 pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
-    let (sp, _) = current(s, "model.clashes")?;
+    // The runs as the builds lay them: the spec's MEP edits applied (a moved run, an approved
+    // clash fix: Q6381).
+    let (mut sp, _) = current(s, "model.clashes")?;
+    let _ = super::mepedit::apply(&mut sp);
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let tol = p.get("tolerance_in").and_then(Value::as_f64).filter(|t| t.is_finite() && *t >= 0.0).unwrap_or(0.0) / 12.0 * upf;
     let d = s.doc()?;

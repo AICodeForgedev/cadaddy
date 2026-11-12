@@ -29,6 +29,7 @@ mod casework_read;
 mod ceil_assemblies;
 mod ceiling_room_type;
 mod ceilings;
+mod clash_fix_persists;
 mod clash_framing;
 mod completebuilding;
 mod concrete;
