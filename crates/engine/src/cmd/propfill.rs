@@ -2917,7 +2917,7 @@ fn dist_to(b: &Bounds2, p: Vec2) -> f64 {
 }
 
 /// The source of a value whose reader said how it got it (`tag`, `schedule`, `estimated-route`…).
-fn source_said(how: &str, sheet: &str) -> Source {
+pub(crate) fn source_said(how: &str, sheet: &str) -> Source {
     let h = how.trim().to_ascii_lowercase();
     if h.is_empty() || h.contains("estimat") || h.contains("default") || h.contains("typical") || h.contains("guess") || h.contains("system") {
         let mut s = Source::of(SourceKind::Default);
@@ -3662,6 +3662,16 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         if let Some(r) = room_at(&rooms, lvl, b.center()) {
                             put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()), tally);
                         }
+                    }
+                }
+            }
+            // A piece a run is cut into (a stick, fitting, box, strap, wire: Q6592): its
+            // elevation from its own body, as the cut wrote it, and current after an edit moved it.
+            "duct" | "pipe" | "conduit" if super::mepatoms::is_atom(e) => {
+                if let Some((_, z0, z1)) = ext {
+                    let vertical = store.get("vertical").is_some_and(|p| p.text() == "true");
+                    for (key, p) in super::mepatoms::build::elevation_props(z0, z1, level_z, upf, vertical, &Source::computed()) {
+                        put(&mut store, key, p, tally);
                     }
                 }
             }

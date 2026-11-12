@@ -984,6 +984,36 @@ fn replace_back_to_back_moves(d: &mut Drawing, b2b_rule: &str, upf: f64) -> usiz
     n
 }
 
+/// The lowest and highest z of a mesh's vertices (none for an empty or non-finite one).
+pub(crate) fn z_range(m: &Mesh) -> Option<(f64, f64)> {
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for v in m.vertices.iter().take(1_000_000) {
+        if v.z.is_finite() {
+            lo = lo.min(v.z);
+            hi = hi.max(v.z);
+        }
+    }
+    (lo.is_finite() && hi.is_finite() && hi >= lo).then_some((lo, hi))
+}
+
+/// What a piece's built body says of its height (Q6592), above its level's floor `floor` (in
+/// drawing units, `upf` a foot): `elevation` its bottom, and for a vertical piece (a drop, a
+/// riser) `elevation_top` its top too. Measured off its own geometry, so a re-route that cuts
+/// the piece again writes it again; `src` says where the height came from (computed for a piece
+/// the router cut, the run's height source for a duct or pipe whose height was assumed).
+pub(crate) fn elevation_props(z0: f64, z1: f64, floor: f64, upf: f64, vertical: bool, src: &Source) -> Vec<(&'static str, Prop)> {
+    if !(z0.is_finite() && z1.is_finite() && floor.is_finite() && upf.is_finite() && upf > 0.0) {
+        return Vec::new();
+    }
+    let ft = |z: f64| ((z - floor) / upf * 100.0).round() / 100.0;
+    let mut out = vec![("elevation", Prop::new(ft(z0), src.clone()).with_unit("ft").with_note("bottom, above the level"))];
+    if vertical {
+        out.push(("elevation_top", Prop::new(ft(z1), src.clone()).with_unit("ft").with_note("top, above the level")));
+    }
+    out
+}
+
 /// The tags that make an atom a built MEP element (its level, source, system, kind and part).
 pub(crate) fn mep_tags(level: &str, source: Handle, system: &str, kind: &str, size: &str, item: &str, mepid: &str) -> Vec<RawTag> {
     let t = |code: i32, v: String| RawTag { code, value: v.chars().take(250).collect() };
@@ -2709,6 +2739,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
 
     // -- Into the model: each atom an element; then what it connects to, by handle. --
     let mut handles: Vec<Option<Handle>> = Vec::with_capacity(atoms.len());
+    // Each piece's body from its bottom to its top (Q6592): its elevation, read off its own
+    // geometry as it is cut.
+    let mut heights: Vec<Option<(f64, f64)>> = Vec::with_capacity(atoms.len());
     let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
     for (a, ctx) in &atoms {
         let mesh = match ctx.body {
@@ -2721,8 +2754,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         };
         if mesh.faces.is_empty() {
             handles.push(None);
+            heights.push(None);
             continue;
         }
+        heights.push(z_range(&mesh));
         let system = if ctx.system.is_empty() { "ELECTRICAL BOXES".to_string() } else { ctx.system.clone() };
         let layer = super::super::mep::mep_layer_name(&system, &ctx.level);
         if d.layer(&layer).is_none() {
@@ -2790,8 +2825,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
         // Straight up or down (a drop in a wall's cavity, its fittings).
         let dir = a.b - a.a;
-        if a.path.is_empty() && dir.len() > 1e-9 && dir.z.abs() > 0.9 * dir.len() {
+        let vertical = a.path.is_empty() && dir.len() > 1e-9 && dir.z.abs() > 0.9 * dir.len();
+        if vertical {
             ps.set("vertical", Prop::new("true", computed()));
+        }
+        if let Some((z0, z1)) = heights.get(i).copied().flatten() {
+            let floor = sp.level(&ctx.level).map_or(0.0, |l| l.elevation_ft * upf);
+            for (key, p) in elevation_props(z0, z1, floor, upf, vertical, &computed()) {
+                ps.set(key, p);
+            }
         }
         if a.angle_deg > 0.0 {
             ps.set("angle_deg", Prop::new(format!("{}", a.angle_deg), computed()).with_unit("deg"));

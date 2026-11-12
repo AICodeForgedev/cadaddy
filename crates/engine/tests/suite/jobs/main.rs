@@ -76,6 +76,7 @@ mod parapetsteps;
 mod pdfocrjunk;
 mod pdfplans;
 mod perceive;
+mod piece_elevation;
 mod planview;
 mod progress_hotel;
 mod propuse;
