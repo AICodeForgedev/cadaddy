@@ -35,7 +35,7 @@ fn layer(material: &str, thickness: f64, side: &str, category: &str, cavity: boo
 /// whose spacing is the layer's own field and that is not rated; a masonry wall (no studs).
 fn spec() -> Value {
     let wood = json!({
-        "tag": "W1", "description": "TYPE W PARTITION - RATED UNIT DEMISING",
+        "tag": "PX7", "description": "TYPE W PARTITION - RATED UNIT DEMISING",
         "layers": [
             layer("5/8\" Type X gypsum board", 0.625, "side1", "board", false),
             layer("2x6 wood studs @ 16\" o.c.", 5.5, "core", "framing", false),
@@ -43,18 +43,18 @@ fn spec() -> Value {
             layer("resilient channel", 0.5, "side2", "furring", false),
             layer("5/8\" Type X gypsum board", 0.625, "side2", "board", false),
         ],
-        "height": "deck", "fire_rating": "1 HR", "acoustic_rating": "STC 50",
+        "height": "deck", "fire_rating": "1 HR", "acoustic_rating": "STC 53",
         "notes": ["tested assembly UL U999"],
         "head": {"track": "deflection", "to": "deck", "deflection_in": 0.75, "bottom_track": false, "detail": "5/A-900"},
-        "source": "A-900 partition type legend, mark W1",
+        "source": "A-900 partition type legend, mark PX7",
     });
     let mut steel_studs = layer("3 5/8\" 20 ga metal studs", 3.625, "core", "framing", false);
     steel_studs["spacing_in"] = json!(24);
     let steel = json!({
-        "tag": "S2", "description": "TYPE S PARTITION",
+        "tag": "QS4", "description": "TYPE S PARTITION",
         "layers": [layer("1/2\" gypsum board", 0.5, "side1", "board", false), steel_studs, layer("1/2\" gypsum board", 0.5, "side2", "board", false)],
         "height": "above_ceiling",
-        "source": "A-901 wall types, mark S2",
+        "source": "A-901 wall types, mark QS4",
     });
     let cmu = json!({
         "tag": "M8", "description": "8\" CMU",
@@ -66,20 +66,20 @@ fn spec() -> Value {
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
         "layers": [
-            {"layer": LAYERS[0], "role": "wall", "wall_type": "W1"},
-            {"layer": LAYERS[1], "role": "wall", "wall_type": "S2"},
+            {"layer": LAYERS[0], "role": "wall", "wall_type": "PX7"},
+            {"layer": LAYERS[1], "role": "wall", "wall_type": "QS4"},
             {"layer": LAYERS[2], "role": "wall", "wall_type": "M8"},
             {"layer": LAYERS[3], "role": "wall", "wall_type": "Partition"},
             {"layer": LAYERS[4], "role": "wall"},
         ],
         "wall_types": [
-            {"name": "W1", "thickness_in": 6, "assembly": wood},
-            {"name": "S2", "thickness_in": 6, "assembly": steel},
+            {"name": "PX7", "thickness_in": 6, "assembly": wood},
+            {"name": "QS4", "thickness_in": 6, "assembly": steel},
             {"name": "M8", "thickness_in": 6, "assembly": cmu},
             {"name": "Partition", "thickness_in": 6},
         ],
         // The wood wall's type is tagged on the plan; the others take their layer's type.
-        "walls": [{"level": "L1", "a": [0, 3], "b": [144, 3], "wall_type": "W1", "source": "A-100", "status": "drawing"}],
+        "walls": [{"level": "L1", "a": [0, 3], "b": [144, 3], "wall_type": "PX7", "source": "A-100", "status": "drawing"}],
     })
 }
 
@@ -138,7 +138,7 @@ fn each_wall_shows_its_types_legend_data_with_the_legend_as_source() {
     );
     assert_eq!(text(wood, "fire_rating"), "1 HR");
     assert_eq!(text(wood, "tested_design"), "UL U999");
-    assert_eq!(text(wood, "acoustic_rating"), "STC 50");
+    assert_eq!(text(wood, "acoustic_rating"), "STC 53");
     assert_eq!(text(wood, "stud_size"), "2x6");
     assert_eq!(wood["stud_spacing"]["value"].as_f64(), Some(16.0), "{wood:#}");
     assert_eq!(wood["stud_spacing"]["unit"], "in");
@@ -205,14 +205,14 @@ fn a_persons_value_on_one_wall_outranks_its_types_and_a_retyped_wall_takes_the_n
     let wood = ws[0].0.clone();
     let untyped = ws[4].0.clone();
     s.execute("bim.props.set", &json!({"handle": wood, "key": "fire_rating", "value": "2 HR", "note": "field verified"})).expect("set");
-    s.execute("bim.props.set", &json!({"handle": untyped, "key": "type", "value": "S2"})).expect("retype");
+    s.execute("bim.props.set", &json!({"handle": untyped, "key": "type", "value": "QS4"})).expect("retype");
     s.execute("bim.props.fill", &json!({})).expect("fill again");
     let ws = walls(&mut s);
     assert_eq!(text(&ws[0].1, "fire_rating"), "2 HR");
     assert_eq!(ws[0].1["fire_rating"]["source"]["kind"], "user");
     // The other type data stays the legend's.
     assert_eq!(text(&ws[0].1, "stud_size"), "2x6");
-    // The wall a person typed S2 shows S2's data.
+    // The wall a person typed QS4 shows QS4's data.
     assert_eq!(text(&ws[4].1, "stud_size"), "3 5/8\" 20 ga");
     assert_eq!(text(&ws[4].1, "fire_rating"), "not rated");
 }
