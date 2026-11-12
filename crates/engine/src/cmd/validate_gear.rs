@@ -1995,6 +1995,8 @@ pub(crate) struct JobPage {
     pub number: String,
     /// Its discipline letters as the index gives them (empty: read off its number).
     pub discipline: String,
+    /// Its title as the index gives it.
+    pub title: String,
     pub words: String,
     pub file: String,
     pub page: u32,
@@ -2012,6 +2014,7 @@ pub(crate) fn job_pages(sheets: Option<&Value>) -> Vec<JobPage> {
             let page = u32::try_from(c.get("page")?.as_u64()?).ok().filter(|p| *p > 0)?;
             (!number.is_empty() && !file.is_empty()).then(|| JobPage {
                 words: format!("{} {} {}", text("title"), text("type"), text("sheet_type")),
+                title: text("title"),
                 discipline: text("discipline"),
                 number,
                 file,
