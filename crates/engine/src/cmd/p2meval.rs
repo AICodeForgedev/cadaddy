@@ -358,7 +358,7 @@ fn gapped_storey(d: &mut Drawing) {
             EntityKind::Arc(cadaddy_doc::Arc { center: Vec3::new(hinge.0, hinge.1, 0.0), radius: 36.0, start: 0.0, end: 90f64.to_radians() }),
         );
     }
-    for (at, value) in [((90.0, 120.0), "OFFICE"), ((100.0, 106.0), "101"), ((330.0, 120.0), "LOBBY"), ((340.0, 106.0), "102")] {
+    for (at, value) in [((90.0, 120.0), "OFFICE"), ((100.0, 106.0), "G01"), ((330.0, 120.0), "LOBBY"), ((340.0, 106.0), "G02")] {
         text(d, "0", at, value, 9.0);
     }
     text(d, "0", (0.0, -50.0), "SCALE: 1/4\" = 1'-0\"", 6.0);
