@@ -845,6 +845,12 @@ pub(crate) fn line_prices(s: &Session, lines: &[Value]) -> Vec<LinePrice> {
         let q = l["qty"].as_f64().unwrap_or(0.0);
         l["total"] = json!(q);
         l["net"] = json!(q);
+        // The line as the BOM gives it: a takeoff's `system` (its elements' system, else the
+        // category) is its own grouping, which the BOM's line doesn't carry; matched with it, a
+        // family row would differ from the one estimate.query finds.
+        if let Some(o) = l.as_object_mut() {
+            o.remove("system");
+        }
         l
     }).collect::<Vec<_>>()});
     price_lines(&st, &bom)
@@ -2661,6 +2667,17 @@ mod tests {
         // they price estimate.query's: one price per line whichever route asks.
         let mut s = Session::new();
         job(&mut s);
+        // Duct and pipe beside the conduit: lines a family row prices.
+        let mut sp = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+        sp["mep"]["systems"].as_array_mut().unwrap().extend([
+            json!({"name": "P-DCW", "layer": "P-DCW", "kind": "pipe", "size_in": [1, 0], "bottom_ft": 10}),
+            json!({"name": "M-SUPPLY", "layer": "M-SUPPLY", "kind": "duct", "size_in": [12, 8], "bottom_ft": 10.5}),
+        ]);
+        sp["mep"]["runs"].as_array_mut().unwrap().extend([
+            json!({"system": "P-DCW", "level": "1", "points": [[0, 100], [900, 100]], "size_in": [1, 0], "bottoms_ft": [10]}),
+            json!({"system": "M-SUPPLY", "level": "1", "points": [[0, 200], [600, 200]], "size_in": [12, 8], "bottoms_ft": [10.5]}),
+        ]);
+        s.execute("bspec.set", &json!({ "replace": true, "spec": sp })).unwrap();
         let dir = std::env::temp_dir().join(format!("cadaddy-onebook-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let folder = dir.to_string_lossy().to_string();
@@ -2672,6 +2689,9 @@ mod tests {
         s.execute("pricebook.map", &json!({"item": item, "size": size, "keys": ["TESTKEY-1"], "folder": folder})).unwrap();
         let pairs = both_routes(&mut s);
         assert!(pairs.iter().any(|p| p.0 == format!("{item} {size}")), "the measured line is on both routes: {pairs:?}");
+        for kind in ["Duct", "pipe"] {
+            assert!(pairs.iter().any(|p| p.0.contains(kind) && p.1.is_some()), "a priced {kind} line on both routes: {pairs:?}");
+        }
         for (what, q_unit, q_via, e_unit, e_via) in &pairs {
             assert_eq!(q_unit, e_unit, "{what}: estimate.query {q_unit:?} ({q_via}) vs bim.estimate {e_unit:?} ({e_via})");
         }

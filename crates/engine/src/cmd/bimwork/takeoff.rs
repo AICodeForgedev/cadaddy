@@ -940,12 +940,11 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
                 let lw = words(item_name);
                 std::cmp::Reverse(words(&r.item).iter().filter(|w| lw.contains(*w)).count())
             });
+            // The user's table's nearest row, else the estimate's reason (its nearest row).
             let reason = match nearest {
-                Some(near) if est.reason.is_empty() => {
-                    format!("{item_name} has no exact match; nearest row: {} \u{2014} add a row for this item or map it", near.item)
-                }
-                _ if !est.reason.is_empty() => est.reason.clone(),
-                _ => "no cost-table row, estimate price, price-book key or starter-book row names this item in this unit".to_string(),
+                Some(near) => format!("{item_name} has no exact match; nearest row: {} \u{2014} add a row for this item or map it", near.item),
+                None if !est.reason.is_empty() => est.reason.clone(),
+                None => "no cost-table row, estimate price, price-book key or starter-book row names this item in this unit".to_string(),
             };
             unmatched.push(json!({"item": l["item"], "size": l["size"], "unit": l["unit"], "qty": qty, "level": l["level"], "reason": reason}));
             None
