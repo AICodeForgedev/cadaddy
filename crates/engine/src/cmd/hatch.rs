@@ -40,6 +40,14 @@ pub(super) fn outline_tol(ext: Bounds2) -> f64 {
     (ext.width() + ext.height()).max(1e-9) / 20000.0
 }
 
+/// Whether an object bounds an area: shown by its own flag and its layer (on, thawed) and, with
+/// `isolation`, not hidden by object isolation. HATCH and BOUNDARY trace what the view shows; the
+/// model's traces ([`loops_at_lazy`]: rooms, ceilings) read the drawing, and a view's isolation
+/// (HIDEOBJECTS, a clash shown alone) hides no wall from them.
+fn bounds_areas(d: &Drawing, e: &Entity, isolation: bool) -> bool {
+    if isolation { d.is_visible(e) } else { e.common.visible && d.layer(&e.common.layer).is_none_or(cadaddy_doc::Layer::visible) }
+}
+
 /// Tessellated outlines of every visible curve in the space (hatch boundary candidates), each
 /// with the handle of the object it came from.
 fn outlines(d: &Drawing, space: &Space, near: Option<Bounds2>) -> (Vec<Vec<Vec2>>, Vec<Handle>) {
@@ -240,7 +248,8 @@ pub(crate) fn island_style(t: &str) -> Option<u8> {
 
 /// Every object's outline in one space, made once: for finding many boundaries in the same
 /// drawing (one per room name on a plan) without outlining every object again for each search
-/// window of each point. What a window holds is exactly what [`outlines`] gives for it.
+/// window of each point. What a window holds is exactly what [`outlines`] gives for it, objects
+/// hidden by object isolation included ([`bounds_areas`]).
 pub(crate) struct Outlines {
     space: Space,
     ext: Bounds2,
@@ -290,7 +299,8 @@ impl Outlines {
         let mut items = Vec::new();
         if let Some(store) = d.space(&space) {
             for e in store.iter() {
-                if !d.is_visible(e) || matches!(e.kind, EntityKind::Hatch(_) | EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Dimension(_))
+                if !bounds_areas(d, e, false)
+                    || matches!(e.kind, EntityKind::Hatch(_) | EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Dimension(_))
                 {
                     continue;
                 }
@@ -305,7 +315,7 @@ impl Outlines {
         }
         let mut objects = Vec::new();
         if let Some(store) = d.space(&space) {
-            for e in store.iter().filter(|e| d.is_visible(e)) {
+            for e in store.iter().filter(|e| bounds_areas(d, e, false)) {
                 objects.push((entity_bounds(d, e, 0), e.handle));
             }
         }
@@ -552,6 +562,8 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
     let space = s.space();
     // A cache made for another space can't answer for this one.
     let cache = cache.filter(|c| c.space == space);
+    // The model's traces (with the outlines made once) read past a view's object isolation.
+    let isolation = cache.is_none();
     let ext = cache.map_or_else(|| d.extents(&space), |c| c.ext);
     let tol = ((ext.width() + ext.height()) * 1e-9).max(1e-9);
     let gap = gap_tolerance(d);
@@ -670,7 +682,7 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
     // Islands: closed objects entirely inside the outer loop that don't contain the pick point.
     {
         for &(eb, e) in &candidates {
-            if !d.is_visible(e) {
+            if !bounds_areas(d, e, isolation) {
                 continue;
             }
             if !ob.contains_box(&eb) {
@@ -703,7 +715,7 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
     // around it, as AutoCAD does, instead of running over the words.
     {
         for &(eb, e) in &candidates {
-            if !d.is_visible(e)
+            if !bounds_areas(d, e, isolation)
                 || !matches!(&e.kind, EntityKind::Text(t) if !t.value.trim().is_empty())
                     && !matches!(&e.kind, EntityKind::MText(m) if !m.contents.trim().is_empty())
             {
@@ -1575,6 +1587,31 @@ mod tests {
         let room = loops_at_lazy_within(&s, Vec2::new(560.0, 72.0), &mut cache, Some(2000.0)).expect("the closed room");
         let b = Bounds2::from_points(room.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
         assert!((b.width() - 120.0).abs() < 1e-6, "{b:?}");
+    }
+
+    /// A view's object isolation hides walls from HATCH (it traces what the view shows) but not
+    /// from the model's traces: a room with a hidden wall and a hidden island still closes, with
+    /// its island.
+    #[test]
+    fn model_traces_read_past_object_isolation() {
+        let mut s = Session::new();
+        for (a, b) in [([0, 0], [120, 0]), ([120, 0], [120, 144]), ([120, 144], [0, 144]), ([0, 144], [0, 0])] {
+            s.execute("line", &json!({ "points": [a, b] })).unwrap();
+        }
+        s.execute("rectang", &json!({ "p1": [80, 100], "p2": [100, 120] })).unwrap();
+        let hidden: Vec<Handle> = {
+            let d = s.doc().unwrap();
+            d.model.iter().enumerate().filter(|(i, _)| *i == 0 || *i == 4).map(|(_, e)| e.handle).collect()
+        };
+        s.doc_mut().unwrap().hidden_objects.extend(hidden);
+        let p = Vec2::new(30.0, 30.0);
+        let shown = loops_at(&s, p).map(|l| l.len()).unwrap_or(0);
+        assert_eq!(shown, 0, "HATCH finds no boundary past the hidden wall");
+        let mut cache = None;
+        let room = loops_at_lazy(&s, p, &mut cache).expect("the room closes on its hidden wall");
+        let b = Bounds2::from_points(room.iter().find(|l| l.outer).map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
+        assert!((b.width() - 120.0).abs() < 1e-6 && (b.height() - 144.0).abs() < 1e-6, "{b:?}");
+        assert_eq!(room.iter().filter(|l| !l.outer).count(), 1, "the hidden island is still an island");
     }
 
     /// The last window searched is the reach itself, not the last doubling short of it: a room

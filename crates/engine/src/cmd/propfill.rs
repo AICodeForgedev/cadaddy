@@ -59,6 +59,14 @@ const FACE_PROBE_FT: f64 = 0.5;
 
 /// A device in no room's outline takes a room this close (feet).
 const ROOM_NEAR_FT: f64 = 1.0;
+/// A device element's review note when the fill finds it in no room, with the reason (Q6387).
+pub const ROOM_REVIEW: &str = "room_review";
+/// Why a device is in no room: set in a wall whose face is in no traced room with a room behind.
+pub const NO_ROOM_BEHIND: &str = "its wall's face in no room, a room behind its wall";
+/// Set in a wall with no traced room, corridor or stair past either face.
+pub const NO_ROOM_EITHER: &str = "set in a wall with no traced room, corridor or stair on either side";
+/// On no wall and in no traced room, corridor or stair.
+pub const NO_ROOM_OFF_WALL: &str = "on no wall, and in no traced room, corridor or stair or within a foot of one";
 /// A device whose box starts below this height (feet off its floor) is in the wall, not the
 /// ceiling: its box gets a plaster ring.
 const WALL_BOX_FT: f64 = 7.0;
@@ -831,6 +839,7 @@ impl Seat {
             "circuit" => "the side its circuit's other devices are on",
             "left" => "its symbol on the wall's centreline, nothing else said a side",
             "room" => "the side of the room its documents put it in; past its symbol's side is no room",
+            "occupied" => "the side a room or corridor is on; nothing stands past its other face",
             _ => "the side its symbol is drawn on",
         };
         let moved = super::walltypes::frac(self.moved / upf * 12.0);
@@ -909,7 +918,7 @@ fn seat(
     others: &[Vec2],
     upf: f64,
     far_ok: bool,
-    serves: Option<(&Sides, &str)>,
+    serves: Option<(&Sides, Option<&str>)>,
 ) -> Option<Seat> {
     let slack = PIECE_SLACK_IN / 12.0 * upf;
     let (a, far) = match across(pieces, level, p, zc, HOST_SNAP_FT * upf, slack) {
@@ -934,13 +943,22 @@ fn seat(
     // The room the documents put it in (a typical room's plan it was stamped from) is past the
     // other face, and nothing is past this one (its symbol fell outside the room, or on the line):
     // it faces that room.
-    let (side, side_why) = match serves.filter(|(_, r)| !r.trim().is_empty()) {
+    // Nothing said its side for sure (it is on the centreline, its symbol inside the wall's
+    // thickness, or only its circuit's other devices said) and nothing stands past that face (the
+    // outside, a shaft) while a room, corridor or stair is past the other one (Q6387): it faces
+    // that space, as the field sets a box to serve the room it is in.
+    let (side, side_why) = match serves {
         Some((sides, room)) => {
             let probe = |s: f64| a.piece.a + a.u * a.t + a.n * (s * (a.piece.half + FACE_PROBE_FT * upf));
-            let is_room = |x: Option<&str>| x.is_some_and(|x| x.trim().eq_ignore_ascii_case(room.trim()));
             let here = sides.at(level, probe(side));
-            if !is_room(here) && (here.is_none() || side_why != "symbol") && is_room(sides.at(level, probe(-side))) {
+            let there = sides.at(level, probe(-side));
+            let documented = room.map(str::trim).filter(|r| !r.is_empty());
+            let is_room = |x: Option<&str>| x.zip(documented).is_some_and(|(x, r)| x.trim().eq_ignore_ascii_case(r));
+            let weak = side_why != "symbol" || a.side_off.abs() <= a.piece.half;
+            if !is_room(here) && (here.is_none() || side_why != "symbol") && is_room(there) {
                 (-side, "room")
+            } else if here.is_none() && weak && there.is_some() {
+                (-side, "occupied")
             } else {
                 (side, side_why)
             }
@@ -1126,7 +1144,7 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         let mut store = props::read(&e.common.xdata);
         let known = !matches!(t.kind.trim(), "" | "device");
         let documented_room = t.fields.get("room").map(|f| f.value.trim().to_string()).filter(|r| !r.is_empty());
-        match seat(&pieces, &level.name, p, (z0 + z1) / 2.0, &others, upf, known, documented_room.as_deref().map(|r| (&sides, r))) {
+        match seat(&pieces, &level.name, p, (z0 + z1) / 2.0, &others, upf, known, Some((&sides, documented_room.as_deref()))) {
             Some(st) => {
                 let l = BOX_IN[1] * upf / 12.0;
                 let w = BOX_IN[0] * upf / 12.0;
@@ -1819,9 +1837,8 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
         let documented_room = field(t, "room");
-        let placed_on = on_wall
-            .then(|| seat(&pieces, &level.name, p, zc, &others, upf, vkind != "device", documented_room.as_deref().map(|r| (&sides, r))))
-            .flatten();
+        let placed_on =
+            on_wall.then(|| seat(&pieces, &level.name, p, zc, &others, upf, vkind != "device", Some((&sides, documented_room.as_deref())))).flatten();
         let (centre, along) = match (&at_equipment, &placed_on) {
             (Some(a), _) => (a.centre, a.along),
             (None, Some(st)) => (st.centre, st.along),
@@ -3166,6 +3183,9 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     let mut untyped_boxes = 0usize;
     // Devices in no room, per level.
     let mut no_room: BTreeMap<String, usize> = BTreeMap::new();
+    // Why each is in no room, and the first few of them.
+    let mut no_room_why: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut no_room_listed: Vec<Value> = Vec::new();
     // Read devices the plans put in no room (a lobby's, a laundry's: not a typical room's), by
     // tag id: the room their element stands in, for the spec's tags too.
     let mut tag_rooms: Vec<(String, String)> = Vec::new();
@@ -3200,6 +3220,8 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
             k if super::elemprops::is_device_kind(k) && (made(e, DEVID).is_some() || kind == "device") => {
                 let Some((b, z0, z1)) = ext else { continue };
                 let c = b.center();
+                // Said again below while it is still in no room.
+                store.remove(ROOM_REVIEW);
                 let switch = store.get("type_mark").map(Prop::text).is_some_and(|m| kind_of(&m) == "switch");
                 let reach = if switch { SWITCH_WALL_FT } else { HOST_WALL_FT };
                 // The wall the build set it in stays its host; else the nearest wall of its level.
@@ -3301,7 +3323,31 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                                 };
                                 put(&mut store, "room", Prop::new(name, Source::computed()).with_note(&format!("the {what} it stands in")), tally);
                             }
-                            None => *no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1,
+                            None => {
+                                // In no room: a finding with its reason, never silently '(no room)'.
+                                *no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1;
+                                let behind =
+                                    face_dir.and_then(|o| [face_probe + upf, 2.0 * upf].into_iter().find_map(|k| room_at(&rooms, lvl, c - o * k)));
+                                let (why, text) = match (face_dir, behind) {
+                                    (Some(_), Some(r)) => (
+                                        NO_ROOM_BEHIND,
+                                        format!(
+                                            "the face of the wall it is set in is in no traced room, corridor or stair; room {} is behind its wall (an outside device, or its face is the wrong one)",
+                                            r.label
+                                        ),
+                                    ),
+                                    (Some(_), None) => (NO_ROOM_EITHER, NO_ROOM_EITHER.to_string()),
+                                    (None, _) => (NO_ROOM_OFF_WALL, NO_ROOM_OFF_WALL.to_string()),
+                                };
+                                *no_room_why.entry(why).or_default() += 1;
+                                if no_room_listed.len() < MAX_LISTED {
+                                    let at = c - shift;
+                                    no_room_listed.push(json!({
+                                        "handle": h.hex(), "level": lvl.unwrap_or(""), "at_ft": [round2(at.x / upf), round2(at.y / upf)], "why": text,
+                                    }));
+                                }
+                                store.set(ROOM_REVIEW, Prop::new(format!("review: in no room: {text}"), Source::computed()));
+                            }
                         }
                     }
                 }
@@ -3689,6 +3735,8 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         "spec": stored,
         "wall_boxes_untyped": untyped_boxes,
         "devices_in_no_room": no_room,
+        "devices_in_no_room_why": no_room_why,
+        "devices_in_no_room_listed": no_room_listed,
         "device_tags_roomed": tags_roomed,
         "doors": doors_json,
     }))
@@ -4302,17 +4350,44 @@ mod tests {
         let r1 = vec![Vec2::new(0.0, -3.0), Vec2::new(240.0, -3.0), Vec2::new(240.0, -150.0), Vec2::new(0.0, -150.0)];
         let mut sides = Sides { rooms: vec![("l1".into(), "R1".into(), r1.clone(), Bounds2::from_points(r1))], circulation: Vec::new() };
         let p = Vec2::new(100.0, 8.0);
-        let st = seat(&pieces, "L1", p, 18.0, &[], 12.0, false, Some((&sides, "R1"))).expect("seated");
+        let st = seat(&pieces, "L1", p, 18.0, &[], 12.0, false, Some((&sides, Some("R1")))).expect("seated");
         assert_eq!(st.side_why, "room");
         assert!(st.out.y < -0.99 && (st.centre.y + 2.0).abs() < 1e-9, "R1's face: {:?}", st.centre);
         // Nothing documented, or another room documented: the symbol's side, as before.
         assert_eq!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false, None).map(|s| (s.side_why, s.out.y > 0.99)), Some(("symbol", true)));
-        assert_eq!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false, Some((&sides, "R2"))).map(|s| s.side_why), Some("symbol"));
+        assert_eq!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false, Some((&sides, Some("R2")))).map(|s| s.side_why), Some("symbol"));
         // A corridor past its symbol's side: it serves the corridor (the plan drew it there).
         sides.circulation.push(("l1".into(), "CORRIDOR".into(), vec![[[0.0, 3.0], [240.0, 60.0]]]));
-        assert_eq!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false, Some((&sides, "R1"))).map(|s| s.side_why), Some("symbol"));
+        assert_eq!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false, Some((&sides, Some("R1")))).map(|s| s.side_why), Some("symbol"));
         assert_eq!(sides.at("L1", Vec2::new(10.0, 10.0)), Some("CORRIDOR"));
         assert_eq!(sides.at("L2", Vec2::new(10.0, -10.0)), None);
+    }
+
+    #[test]
+    fn a_device_nothing_sides_faces_the_room_not_the_nothing_past_its_wall() {
+        // Inches. A wall on y = 0, 6" thick, running east: its left (north) is nothing traced
+        // (the outside), room "R1" south of it. Nothing documents a room for these devices.
+        let pieces = vec![piece(1, (0.0, 0.0), (240.0, 0.0), (0.0, 120.0))];
+        let r1 = vec![Vec2::new(0.0, -3.0), Vec2::new(240.0, -3.0), Vec2::new(240.0, -150.0), Vec2::new(0.0, -150.0)];
+        let sides = Sides { rooms: vec![("l1".into(), "R1".into(), r1.clone(), Bounds2::from_points(r1))], circulation: Vec::new() };
+        let at = |p: Vec2, others: &[Vec2], sides: &Sides| seat(&pieces, "L1", p, 18.0, others, 12.0, false, Some((sides, None)));
+        // On the centreline: the wall's left was the outside; it faces R1.
+        let st = at(Vec2::new(100.0, 0.2), &[], &sides).expect("seated");
+        assert_eq!(st.side_why, "occupied");
+        assert!(st.out.y < -0.99 && (st.centre.y + 2.0).abs() < 1e-9, "R1's face: {:?}", st.centre);
+        // Its symbol inside the wall's thickness, north of the line: still R1's.
+        assert_eq!(at(Vec2::new(100.0, 2.0), &[], &sides).map(|s| (s.side_why, s.out.y < -0.99)), Some(("occupied", true)));
+        // Its circuit's other devices north (outside): R1's too, nothing stands there.
+        assert_eq!(at(Vec2::new(100.0, 0.2), &[Vec2::new(90.0, 30.0)], &sides).map(|s| s.side_why), Some("occupied"));
+        // Its symbol drawn past the north face, in the open (an outside device): the plan's side.
+        assert_eq!(at(Vec2::new(100.0, 8.0), &[], &sides).map(|s| (s.side_why, s.out.y > 0.99)), Some(("symbol", true)));
+        // A space past each face: the left, as before.
+        let mut both = Sides { rooms: sides.rooms.clone(), circulation: Vec::new() };
+        both.circulation.push(("l1".into(), "CORRIDOR".into(), vec![[[0.0, 3.0], [240.0, 60.0]]]));
+        assert_eq!(at(Vec2::new(100.0, 0.2), &[], &both).map(|s| (s.side_why, s.out.y > 0.99)), Some(("left", true)));
+        // Nothing past either face: the left, as before.
+        let none = Sides::default();
+        assert_eq!(at(Vec2::new(100.0, 0.2), &[], &none).map(|s| s.side_why), Some("left"));
     }
 
     #[test]

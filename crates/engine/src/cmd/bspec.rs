@@ -974,11 +974,20 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
     }
     texts.sort_by_key(|(_, t, _, _)| super::perceive::geometry::room_number(t));
+    // A view callout's or sheet reference's label (`A12`) on plans numbering their rooms in digits
+    // numbers no room (Q6365), whatever layer it is on.
+    let callouts = super::perceive::geometry::CalloutLabels::new(
+        sp.sheets.iter().map(|x| x.number.as_str()),
+        texts
+            .iter()
+            .filter(|(_, t, at, _)| super::perceive::geometry::room_number(t) && level_at(&sp.levels, at.x, at.y).is_some())
+            .map(|x| x.1.as_str()),
+    );
     let spec_number = |t: &str| sp.rooms.iter().any(|r| numbers_room(r, t));
     // The plans' room numbers, for a room left without one after the trace.
     let number_tags: Vec<(String, Vec2)> = texts
         .iter()
-        .filter(|(_, t, _, _)| super::perceive::geometry::room_number(t))
+        .filter(|(_, t, _, _)| super::perceive::geometry::room_number(t) && !callouts.is_callout(t))
         .filter(|(_, t, _, h)| tagged || spec_number(t) || plan_room_tag(t, *h, tag_h.as_ref()))
         .map(|(_, t, at, _)| (t.trim().to_string(), *at))
         .take(MAX_ROOMS * 10)
@@ -1034,6 +1043,9 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
             break;
         }
         let plan_tag = plan_room_tag(&text, text_h, tag_h.as_ref());
+        if super::perceive::geometry::room_number(&text) && callouts.is_callout(&text) {
+            continue;
+        }
         if super::perceive::geometry::room_number(&text) {
             let here = level_at(&sp.levels, at.x, at.y).map(|l| l.name.clone());
             // One number per level: a room of it numbered already (by its own label on the plan,

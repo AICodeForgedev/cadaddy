@@ -142,6 +142,10 @@ pub(crate) fn room_like_name(t: &str) -> bool {
     if marks * 2 > t.chars().filter(|c| c.is_alphanumeric()).count() || run_of_marks {
         return false;
     }
+    // Letters that read as no word (`JL TL YL KJ`, `Kkkkkkkk`): linework read as text (Q6365).
+    if !super::perceive::geometry::legible_name(t) {
+        return false;
+    }
     let first = t.split_whitespace().next().unwrap_or_default();
     let numbered = first.trim_start_matches('(').trim_end_matches(['.', ')']);
     if first != numbered && !numbered.is_empty() && numbered.chars().all(|c| c.is_ascii_digit()) {

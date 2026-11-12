@@ -28,7 +28,7 @@ pub(crate) use outline::Floors;
 /// The extended data application that marks what WALLGEN made (part, level, source object).
 pub const APP: &str = "CADADDY_WALLGEN";
 /// Floor slab thickness when none is given, feet.
-const SLAB_FT: f64 = 0.5;
+pub(crate) const SLAB_FT: f64 = 0.5;
 /// A door leaf's thickness, inches.
 const LEAF_IN: f64 = 1.75;
 /// A door or window frame: jamb and head width along the opening, and how far its casing
@@ -1192,6 +1192,20 @@ impl Behind {
     }
 }
 
+/// `to` is drawing state `from` with a change that is no edit of the model or its plan (its
+/// associative state written into it on saving): behind as `from` is, and from the same build.
+pub(crate) fn carry_state(st: &mut crate::DocState, from: &Arc<Drawing>, to: &Arc<Drawing>) {
+    st.model_behind.carry(from, to);
+    super::revise3d::carry(st, from, to);
+}
+
+/// Drawing state `d` is behind its associative model's plan, with no build of this session it is
+/// behind (a model opened with a plan changed since it was built).
+pub(crate) fn mark_behind(st: &mut crate::DocState, d: &Arc<Drawing>) {
+    st.model_behind.add(d, None);
+    st.model_behind.last_edit = Some(web_time::Instant::now());
+}
+
 /// Whether the active drawing's associative model is behind its plan (built again before the
 /// next command that reads it, [`update_model`]).
 pub fn model_behind(s: &Session) -> bool {
@@ -1408,8 +1422,7 @@ pub fn update_model(s: &mut Session) -> bool {
         return false;
     };
     // The plan of the build this state comes from: after an undo, not the last build's.
-    let (old, rooms) =
-        st.model_records.for_state(&behind).map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
+    let (old, rooms) = st.model_records.for_state(&behind).map_or_else(|| (Vec::new(), Some(Vec::new())), |r| r.plan_and_rooms());
     let how = super::revise3d::Revise { by_handle: true, tolerance: None, rebuild: true, auto: true };
     s.model_updating = true;
     let r = super::revise3d::revise(s, &g, old, rooms, &how);

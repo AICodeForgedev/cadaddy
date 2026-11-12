@@ -1040,6 +1040,93 @@ fn a_device_on_a_shared_wall_takes_the_room_on_its_face() {
     assert!(e["placement"]["value"].as_str().is_some_and(|p| p.starts_with("review")), "{e:#}");
 }
 
+/// Two rooms inside 6" outer walls (x 0–40.5', y 0–10') split by a 6" partition; receptacles read
+/// on the outer walls' centrelines, where nothing (no symbol side, no circuit) says which face
+/// they serve, and one on the partition's.
+fn centreline_plan(extra: &[Value]) -> Session {
+    let mut d = Drawing::new_imperial();
+    let outer = [((0., 0.), (40.5, 0.)), ((40.5, 0.), (40.5, 10.)), ((40.5, 10.), (0., 10.)), ((0., 10.), (0., 0.))];
+    let left = [((0.5, 0.5), (19.75, 0.5)), ((19.75, 0.5), (19.75, 9.5)), ((19.75, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
+    let right = [((20.25, 0.5), (40.0, 0.5)), ((40.0, 0.5), (40.0, 9.5)), ((40.0, 9.5), (20.25, 9.5)), ((20.25, 9.5), (20.25, 0.5))];
+    for (a, b) in outer.into_iter().chain(left).chain(right) {
+        line(&mut d, "A-WALL", a, b);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Centreline Devices", None);
+    text(&mut s, "A-ROOM-TAG", [110.0, 64.0], "OFFICE");
+    text(&mut s, "A-ROOM-TAG", [116.0, 52.0], "101");
+    text(&mut s, "A-ROOM-TAG", [350.0, 64.0], "STORAGE");
+    text(&mut s, "A-ROOM-TAG", [356.0, 52.0], "102");
+    let mut tags = vec![
+        device(10.0, 0.25, "S", "", "1F0"),
+        device(30.0, 9.75, "N", "", "1F1"),
+        device(0.25, 5.0, "W", "", "1F2"),
+        device(40.25, 5.0, "X", "", "1F3"),
+        device(20.0, 3.0, "P", "", "1F4"),
+    ];
+    tags.extend(extra.iter().cloned());
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}, {"layer": "A-ROOM-TAG", "role": "room_tag"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": tags
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("rooms.build", &json!({})).expect("rooms");
+    s
+}
+
+/// A receptacle on an outer wall's centreline faces the room inside, never the outside past the
+/// wall's other face (Q6387): nothing said a side, so the side a room is on is the one it serves,
+/// said so on its placement; each is in its room, none in no room.
+#[test]
+fn a_device_on_an_outer_walls_centreline_faces_the_room_inside() {
+    let _g = serial();
+    let mut s = centreline_plan(&[]);
+    let r = fill(&mut s);
+    for (mark, room) in [("S", "101"), ("N", "102"), ("W", "101"), ("X", "102")] {
+        let el = device_of(&mut s, mark);
+        assert_eq!(el["room"]["value"], room, "{mark}: {el:#}\n{r:#}");
+        let placed = el["placement"]["value"].as_str().unwrap_or("");
+        assert!(placed.contains("the side a room or corridor is on"), "{mark}: {placed}");
+        assert!(el["room_review"].is_null(), "{mark}: {el:#}");
+    }
+    let p = device_of(&mut s, "P");
+    assert!(matches!(p["room"]["value"].as_str(), Some("101" | "102")), "the partition's: {p:#}");
+    assert!(r["devices_in_no_room"].as_object().is_none_or(|m| m.is_empty()), "{r:#}");
+    assert!(r["devices_in_no_room_listed"].as_array().is_some_and(Vec::is_empty), "{r:#}");
+}
+
+/// A device whose symbol the plan draws past an outer wall's outside face (an outside receptacle)
+/// stays on that face, as drawn, and is in no room: a finding with its reason on the device and
+/// in the fill's report, never '(no room)' silently (Q6387).
+#[test]
+fn a_device_on_no_rooms_face_is_a_finding_with_its_reason() {
+    use cadaddy_engine::cmd::propfill::{NO_ROOM_BEHIND, NO_ROOM_OFF_WALL, ROOM_REVIEW};
+    let _g = serial();
+    // O: 0.6' south of the south wall's outer face; F: a device of no known kind 5' out in the
+    // open, on no wall.
+    let mut s = centreline_plan(&[device(10.0, -0.6, "O", "", "1F5"), device(30.0, -5.0, "F", "", "1F6")]);
+    let r = fill(&mut s);
+    let o = device_of(&mut s, "O");
+    assert!(o["room"]["value"].is_null(), "outside: {o:#}");
+    assert!(o["face_normal"]["value"].as_str().is_some_and(|n| n.ends_with("-1.000")), "the drawn, outside face: {o:#}");
+    let review = o[ROOM_REVIEW]["value"].as_str().unwrap_or("");
+    assert!(review.starts_with("review: in no room") && review.contains("room 101 is behind its wall"), "{review}");
+    let f = device_of(&mut s, "F");
+    assert!(f[ROOM_REVIEW]["value"].as_str().is_some_and(|t| t.contains(NO_ROOM_OFF_WALL)), "{f:#}");
+    assert_eq!(r["devices_in_no_room"], json!({"L1": 2}), "{r:#}");
+    assert_eq!(r["devices_in_no_room_why"], json!({NO_ROOM_BEHIND: 1, NO_ROOM_OFF_WALL: 1}), "{r:#}");
+    let listed = r["devices_in_no_room_listed"].as_array().cloned().unwrap_or_default();
+    assert_eq!(listed.len(), 2, "{r:#}");
+    assert!(listed.iter().all(|x| x["handle"].is_string() && x["why"].is_string() && x["at_ft"].is_array()), "{r:#}");
+    // Listed where the plan has it.
+    let o_at = listed.iter().find(|x| x["why"].as_str().is_some_and(|w| w.contains("behind"))).and_then(|x| x["at_ft"].as_array().cloned());
+    assert!(o_at.is_some_and(|a| a.first().and_then(Value::as_f64).is_some_and(|x| (x - 10.0).abs() < 0.5)), "{r:#}");
+}
+
 /// A room's load center read beside its wall is hosted in it: recessed (its front flush with the
 /// wall's room face, its back in the wall), turned with the wall, the wall's handle on it; filed
 /// as electrical gear.

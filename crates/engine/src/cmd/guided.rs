@@ -505,6 +505,10 @@ pub struct GuidedJob {
     /// dimension strings, none): a plan left at paper size can't be measured (Q6323).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_scales: Vec<SheetScale>,
+    /// The sheets the import couldn't read (`A-101.dxf: why`), in the job's reply as a warning
+    /// (Q6382: a DWG set read as PDFs built nothing and was reported done).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unread_sheets: Vec<String>,
     /// The devices the devices stage confirmed (type, where, sheet, level, circuit): the
     /// bim_build stage puts them in the model after it drafts the building spec.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -632,6 +636,9 @@ impl SheetScale {
             "note"
         } else if src.starts_with("dimension strings") {
             "dimensions"
+        } else if src.starts_with(cadaddy_mepfix::printset::DRAWING_SHEET_SOURCE) {
+            // A DWG/DXF sheet is drawn full size: measured whatever its plot scale (Q6382).
+            "drawing"
         } else {
             "none"
         }
@@ -1158,6 +1165,7 @@ impl GuidedJob {
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
             sheet_scales: Vec::new(),
+            unread_sheets: Vec::new(),
             devices: Vec::new(),
             mep: None,
             circuits: Vec::new(),
@@ -2529,6 +2537,51 @@ fn scale_questions(job: &mut GuidedJob, stage: StageName, regions: &[SheetRegion
     }
 }
 
+/// What the job does without the plan sheets its import couldn't read (the default).
+const UNREAD_GO_ON: &str = "Go on without them";
+
+/// Some plan sheets couldn't be read (`failed`, `list` said): a high finding, and a question
+/// whose default goes on without them; the files are named, so they can be replaced and the
+/// job started again.
+fn unread_sheets_question(job: &mut GuidedJob, stage: StageName, failed: &[String], list: &str) {
+    let what = format!("{} plan sheet(s) could not be read and are not built: {list}", failed.len());
+    job.add_finding(
+        stage,
+        &what,
+        "What is drawn on a sheet that isn't read is missing from the model, the takeoff and the estimate",
+        4,
+        vec!["Replace the damaged files and start the job again".into(), UNREAD_GO_ON.into()],
+        None,
+        false,
+    );
+    let q = Question {
+        id: job.next_qid(stage),
+        stage,
+        question: format!("{what}. Go on without them?"),
+        why: "The file of each could not be opened as a PDF, DWG or DXF sheet (damaged, moved or not a drawing)".into(),
+        choices: vec![UNREAD_GO_ON.into(), "Stop: I'll replace the files and start the job again".into()],
+        evidence: Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: None,
+            at: None,
+            values: Some(json!({"sheets": failed.iter().take(MAX_QUESTIONS_PER_STAGE).collect::<Vec<_>>(), "unread": failed.len()})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some(UNREAD_GO_ON.into()),
+        answer_schema: Some(json!({"type": "string"})),
+        answer: None,
+        answered_by: None,
+        answered_at: None,
+        kind: QuestionKind::Completeness,
+    };
+    job.add_question_to_worklist(&q);
+    if let Some(st) = job.stage_mut(stage) {
+        st.completeness.push(q);
+    }
+}
+
 /// Import the print set's plan-sheet PDFs into the session's drawing so that
 /// stage commands (`rooms.list`, `bspec.draft`, `bim.build`, …) find entities.
 ///
@@ -2657,6 +2710,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     drop(before);
     let mut imported = 0usize;
     let mut same = 0usize;
+    let mut failed: Vec<String> = Vec::new();
     let mut placed = Vec::new();
     let mut regions = Vec::new();
     let mut typical = Vec::new();
@@ -2726,9 +2780,30 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                 }
             }
             super::exchange::PageImport::Same(_) => same += 1,
-            // Non-fatal: log the error but continue with other sheets.
-            super::exchange::PageImport::Failed(e) => s.echo(format!("guided: could not import sheet {name}: {e}")),
+            super::exchange::PageImport::Failed(e) => {
+                s.echo(format!("guided: could not import sheet {name}: {e}"));
+                failed.push(format!("{name}: {}", e.chars().take(200).collect::<String>()));
+            }
         }
+    }
+    // A sheet that can't be read is said in the job's reply, never left to an empty model
+    // reported as done (Q6382): none read stops the job here; some read go on without the rest,
+    // asked (auto mode takes the default) and a warning in the reply.
+    if !failed.is_empty() {
+        let list = failed.iter().take(MAX_QUESTIONS_PER_STAGE).cloned().collect::<Vec<_>>().join("; ");
+        let more = failed.len().saturating_sub(MAX_QUESTIONS_PER_STAGE);
+        let list = if more > 0 { format!("{list}; and {more} more") } else { list };
+        if imported == 0 && same == 0 {
+            return Err(bad(
+                "guided",
+                format!(
+                    "none of the set's plan sheets could be read ({} could not be read: {list}), so nothing can be built. Check that each file opens (a PDF, DWG or DXF) and start the job again",
+                    failed.len()
+                ),
+            ));
+        }
+        unread_sheets_question(job, stage, &failed, &list);
+        job.unread_sheets = failed;
     }
     job.sheet_spans.extend(spans);
     job.sheet_scales = scales;
@@ -5239,20 +5314,10 @@ fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
 
 /// Whether a room name reads as words: a run of three letters (`LOBBY`, `IDF`, `CORR`) or a
 /// two-letter code (`WC`, `CL`). Text read from a print in a font the reader can't map comes out
-/// as `-4--P- -I--Y-`, `Xb` or `D D`, and a dimension string as `22 40 OO`.
+/// as `-4--P- -I--Y-`, `Xb` or `D D`, and a dimension string as `22 40 OO`. The rule every room
+/// reader shares ([`super::perceive::geometry::legible_name`]).
 fn legible_room_name(name: &str) -> bool {
-    let t = name.trim();
-    if t.len() == 2 && t.bytes().all(|b| b.is_ascii_uppercase()) {
-        return true;
-    }
-    let mut run = 0;
-    for c in t.chars() {
-        run = if c.is_alphabetic() { run + 1 } else { 0 };
-        if run >= 3 {
-            return true;
-        }
-    }
-    false
+    super::perceive::geometry::legible_name(name)
 }
 
 /// The rule key of a room answer: `room:<number>|<name>`, upper case.
@@ -8855,6 +8920,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             if let Some(m) = v.get("devices_in_no_room").and_then(Value::as_object).filter(|m| !m.is_empty()) {
                 let per: Vec<String> = m.iter().map(|(l, n)| format!("{}: {n}", if l.is_empty() { "no level" } else { l })).collect();
                 progress_line(&format!("  devices in no room: {}", per.join(", ")));
+                // A finding, with why (Q6387): never '(no room)' silently in the schedules.
+                let n: u64 = m.values().filter_map(Value::as_u64).sum();
+                let why: Vec<String> = v
+                    .get("devices_in_no_room_why")
+                    .and_then(Value::as_object)
+                    .map(|w| w.iter().map(|(k, c)| format!("{c} {k}")).collect())
+                    .unwrap_or_default();
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("{n} devices in no room"),
+                    &format!("By level: {}. Why: {}", per.join(", "), why.join("; ")),
+                    2,
+                    vec!["Check the rooms traced where they stand, and the face of the wall each is set in (each one's room_review note)".into()],
+                    None,
+                    false,
+                );
             }
             // Boxes the partition legend gives no ring for: their wall's type is unknown.
             let untyped = v.get("wall_boxes_untyped").and_then(Value::as_u64).unwrap_or(0);
@@ -30991,12 +31072,19 @@ fn cmd_next_value(s: &mut Session, job: &GuidedJob) -> Value {
                 "summary": job_summary(s, job, stats.as_ref()),
             })
         }
-        None => json!({
-            "waiting": true,
-            "progress": job.progress(),
-            "stage": job.current_stage().map(|s| s.name.label()),
-            "status": job.current_stage().map(|s| format!("{:?}", s.status)),
-        }),
+        None => {
+            let mut v = json!({
+                "waiting": true,
+                "progress": job.progress(),
+                "stage": job.current_stage().map(|s| s.name.label()),
+                "status": job.current_stage().map(|s| format!("{:?}", s.status)),
+            });
+            // A stage stopped by an error says it (Q6382: none of the sheets could be read).
+            if let Some(e) = job.current_stage().filter(|st| st.status == StageStatus::Error).and_then(|st| st.error.as_ref()) {
+                v["error"] = json!(e);
+            }
+            v
+        }
     }
 }
 
@@ -31222,6 +31310,7 @@ fn restart_import(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     job.sheet_regions.clear();
     job.sheet_spans.clear();
     job.sheet_scales.clear();
+    job.unread_sheets.clear();
     job.links = None;
     job.devices.clear();
     job.mep = None;
@@ -31564,6 +31653,12 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
         if unpriced > 0 {
             w.push(json!({"warning": "unpriced items", "detail": format!("{unpriced} line(s) have no price")}));
         }
+    }
+
+    // Plan sheets the import couldn't read (Q6382).
+    if !job.unread_sheets.is_empty() {
+        let list = job.unread_sheets.iter().take(MAX_QUESTIONS_PER_STAGE).cloned().collect::<Vec<_>>().join("; ");
+        w.push(json!({"warning": "sheets could not be read", "detail": format!("{} plan sheet(s) could not be read and are not built: {list}", job.unread_sheets.len())}));
     }
 
     // MEP sheets not registered (plan sheets not loaded/built).

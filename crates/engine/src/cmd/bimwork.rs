@@ -41,6 +41,7 @@ mod bid;
 #[cfg(test)]
 mod bid_tests;
 mod clash;
+mod clashkeep;
 mod framing;
 mod issues;
 mod priced;

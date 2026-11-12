@@ -72,7 +72,7 @@ pub(crate) const CORRECTION_HOMERUN: &str = "correction:homerun_conductors";
 /// The field of a circuit tag the routing inferred for devices no document circuits (Q6216): its basis.
 pub(crate) const INFERRED_CIRCUIT: &str = "inferred_circuit";
 /// What an in-wall joint's run says it is (it follows its wall, not the plan's axes).
-const IN_WALL: &str = "in the wall";
+pub(crate) const IN_WALL: &str = "in the wall";
 /// The obstacle category of a gear's working space (NEC 110.26(A)).
 const WORKING_SPACE: &str = "working space";
 

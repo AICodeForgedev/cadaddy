@@ -1530,6 +1530,15 @@ pub(crate) fn stored(d: &Drawing) -> Option<Index> {
     d.embedded.get(INDEX_FILE).and_then(|b| Index::from_bytes(b))
 }
 
+/// The drawing's count index: the stored one, else (a file that came without it: a format that
+/// can't hold it, one written by another program, an older save) a recount of its counted
+/// elements, as `bim.count` does (Q6376). None when the model counts nothing.
+/// Whatever reads the model's pieces reads them through this, so a drawing with the same
+/// elements gives the same counts, BOM and takeoff whether or not its file kept the index.
+pub(crate) fn kept_or_recount(d: &Drawing) -> Option<Index> {
+    stored(d).or_else(|| Some(Index::of(d)).filter(|ix| !ix.rows.is_empty()))
+}
+
 /// FNV-1a of bytes (which stored index the cache holds).
 fn fnv(b: &[u8]) -> u64 {
     b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, x| (h ^ u64::from(*x)).wrapping_mul(0x0100_0000_01b3))

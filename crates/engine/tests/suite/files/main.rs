@@ -42,6 +42,7 @@ mod path_case;
 mod printrev;
 mod projects;
 mod renderenv;
+mod reopen_associative;
 mod sheet_nav;
 mod sprinkler_reader;
 mod standards;
