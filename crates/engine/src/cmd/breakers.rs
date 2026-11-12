@@ -1309,7 +1309,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             Basis::Circuit { .. } => Source::from_doc(SourceKind::Rule, "breakers.json by_circuit"),
             _ => Source::from_doc(SourceKind::Schedule, &m.kind.source),
         };
-        let mut tp = Prop::new(m.kind.ty.clone(), type_src.clone());
+        let mut tp = match &m.basis {
+            // A typed schedule's blank row: its printed type first (the correction below keeps it
+            // as the design, the schedule its source).
+            Basis::Circuit { design, typed: true, printed, .. } if *design != m.kind.ty => {
+                Prop::new(design.clone(), Source::from_doc(SourceKind::Schedule, printed))
+            }
+            _ => Prop::new(m.kind.ty.clone(), type_src.clone()),
+        };
         tp.note = (!m.kind.codes.is_empty()).then(|| format!("codes {}", m.kind.codes.join("; ")));
         ps.set("type", tp);
         let mut tb = Prop::new(m.basis.name(), type_src);

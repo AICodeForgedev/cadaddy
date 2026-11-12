@@ -677,6 +677,7 @@ fn a_breaker_row_without_a_type_code_is_typed_by_what_its_circuit_serves() {
         assert_eq!(val(&desk, "type_basis"), "circuit");
         assert!(desk["type"]["source"].to_string().contains("210.12"), "{desk}");
         assert_eq!(val(&desk, "design:type"), "standard", "{desk}");
+        assert_eq!(desk["design:type"]["source"]["kind"], "schedule", "{desk}");
         // A dishwasher with no receptacle on its circuit: its GFCI at the breaker too.
         assert_eq!(ty("4"), "dual-function", "{unit}");
         // Two-pole (208 V) and a 30 A circuit: no AFCI rule; standard, no correction.
