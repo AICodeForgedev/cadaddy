@@ -81,7 +81,9 @@ fn combine(a: &Region, b: &Region, op: Op) -> Result<Region> {
     }
     let mut r =
         Region { loops: out.into_iter().map(|vertices| HatchLoop { curves: Vec::new(), vertices, outer: false, sources: Vec::new() }).collect() };
-    r.renest();
+    if !r.renest() {
+        return Err(other("These regions are too complex to combine."));
+    }
     Ok(r)
 }
 
