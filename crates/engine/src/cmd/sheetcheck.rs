@@ -403,7 +403,7 @@ fn same_sheet(a: &str, b: &str) -> bool {
 
 /// A scale an answer gives: a number (drawing units a sheet inch, 48 for 1/4" = 1'-0") or the
 /// note as printed.
-fn parse_answer_scale(v: &Value) -> std::result::Result<(f64, String), String> {
+pub(crate) fn parse_answer_scale(v: &Value) -> std::result::Result<(f64, String), String> {
     let (k, text) = match v {
         Value::Number(n) => (n.as_f64().unwrap_or(f64::NAN), n.to_string()),
         Value::String(t) => {

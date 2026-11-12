@@ -616,10 +616,13 @@ pub struct SheetScale {
 
 impl SheetScale {
     /// How the scale was read: `given`, `note`, `lettering` (a note drawn as shapes),
-    /// `dimensions`, `do not scale` or `none`.
+    /// `dimensions`, `same floor` (another plan of its floor that prints its scale, Q6360),
+    /// `do not scale` or `none`.
     pub fn how(&self) -> &'static str {
         let src = self.source.as_str();
-        if src == "option" {
+        if src.starts_with(super::planscale::SAME_FLOOR_SOURCE) {
+            "same floor"
+        } else if src == "option" {
             "given"
         } else if src.contains("DO NOT SCALE") {
             "do not scale"
@@ -664,7 +667,9 @@ pub fn plans_off_set_scale(scales: &[SheetScale]) -> Vec<OffSetScale> {
     let same = |a: f64, b: f64| (a / b - 1.0).abs() <= SET_SCALE_AGREE;
     let plans: Vec<(&SheetScale, [f64; 2])> = scales
         .iter()
-        .filter(|sc| sc.kind == "plan" && sc.how() != "given" && sc.scale.is_finite() && sc.scale > 0.0)
+        // A plan left at paper size is no evidence of the set's scale (Q6360: five plans read at
+        // their notes were called off "the set's 1x" of three paper-size ones).
+        .filter(|sc| sc.kind == "plan" && sc.how() != "given" && !sc.plan_at_paper_size() && sc.scale.is_finite() && sc.scale > 0.0)
         .filter(|sc| !sc.plan_scale.is_some_and(|v| same(sc.scale * v, 12.0)))
         .filter_map(|sc| {
             let [w, h] = sc.paper?;
@@ -2450,6 +2455,80 @@ fn no_plan_views(job: &GuidedJob) -> Option<String> {
     ))
 }
 
+/// The always-asked questions of a plan's scale (Q6360): each built plan left at paper size
+/// (`paper`: its sheet names) asks for its scale, or that it is no plan; then each level whose
+/// architectural floor plan covers less than the rules data's minimum (a scale misread, a sheet
+/// at its own units) is a high finding and asks for its plan's scale, or that it really is that
+/// small. Neither is ever taken by default, in auto mode too.
+fn scale_questions(job: &mut GuidedJob, stage: StageName, regions: &[SheetRegion], paper: &[String], sheets: &[&Value], k_in: f64) {
+    use super::planscale as ps;
+    let base = |n: &str| n.split('/').next().unwrap_or(n).trim().to_string();
+    let title = |n: &str| {
+        sheets
+            .iter()
+            .find(|sh| sh.get("number").and_then(Value::as_str).is_some_and(|x| base(x).eq_ignore_ascii_case(&base(n))))
+            .and_then(|sh| sh.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let built = |n: &str| {
+        regions.iter().any(|r| {
+            r.number.eq_ignore_ascii_case(&base(n))
+                && matches!(r.kind.as_str(), "plan" | "enlarged_plan")
+                && r.not_built.is_empty()
+                && !r.all_levels().is_empty()
+        })
+    };
+    let printed = ps::printed_scale_choices(&job.sheet_scales);
+    let mut asked: BTreeSet<String> = BTreeSet::new();
+    for sheet in paper.iter().filter(|n| built(n)).take(MAX_QUESTIONS_PER_STAGE) {
+        let number = base(sheet);
+        let mut choices = printed.clone();
+        choices.push(ps::LEAVE_OUT.into());
+        ps::ask_always(
+            job,
+            stage,
+            ps::no_scale_question(&number, &title(&number)),
+            "No scale note or lettering reads on it, its dimension strings don't agree on one, and no plan of its floor that prints its scale has its outline: built at the sheet's own size its level would be a few square feet. Give its scale as printed (1/8\" = 1'-0\", or drawing units a sheet inch), or say it is no plan".into(),
+            &number,
+            choices,
+            json!({"scale": "paper size", "printed_in_set": printed}),
+        );
+        asked.insert(number.to_ascii_uppercase());
+    }
+    let min = ps::rules().min_level_footprint_sq_ft;
+    for (level, sheet, sq_ft) in ps::small_levels(regions, k_in) {
+        if asked.contains(&sheet.to_ascii_uppercase()) {
+            continue;
+        }
+        let what = format!(
+            "{} {level}: its floor plan {sheet} covers {sq_ft:.1} sq ft, under the {min} sq ft of the smallest building",
+            ps::SMALL_LEVEL_QUESTION
+        );
+        job.add_finding(
+            stage,
+            &what,
+            "A level that small is a plan at the wrong scale (paper size, or a note misread), not a building: its walls, rooms and devices would be built a fraction of their size",
+            4,
+            vec!["Give the plan's scale as printed".into(), ps::KEEP.into()],
+            None,
+            false,
+        );
+        let mut choices = printed.clone();
+        choices.push(ps::KEEP.into());
+        ps::ask_always(
+            job,
+            stage,
+            format!("{what}: what scale is {sheet} drawn at?"),
+            "Checked before the build against the rules data's smallest building: give the plan's scale as printed, or keep it if the building really is that small".into(),
+            &sheet,
+            choices,
+            json!({"level": level, "sq_ft": (sq_ft * 10.0).round() / 10.0, "min_sq_ft": min, "printed_in_set": printed}),
+        );
+    }
+}
+
 /// Import the print set's plan-sheet PDFs into the session's drawing so that
 /// stage commands (`rooms.list`, `bspec.draft`, `bim.build`, …) find entities.
 ///
@@ -2652,12 +2731,62 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         }
     }
     job.sheet_spans.extend(spans);
+    job.sheet_scales = scales;
+    // Each sheet's border and title block: what is read there is never building.
+    let rects: Vec<[f64; 4]> = regions.iter().map(|r| r.rect).collect();
+    for (r, f) in regions.iter_mut().zip(sheet_frames(s.doc()?, &rects)) {
+        r.area = Some(f.area);
+        r.title_block = f.title_block;
+    }
+    // A plan whose scale isn't printed takes it from a plan of its floor that prints its own,
+    // when their outlines agree at one ratio (Q6360); before its dimension strings' too.
+    let mut why_not = Vec::new();
+    let rescaled = super::planscale::scale_from_same_floor(s.doc_mut()?, &mut regions, &mut job.sheet_scales, &job.sheet_spans, &mut why_not);
+    for w in why_not.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        progress_line(&format!("  sheet {w}"));
+    }
+    for r in &rescaled {
+        progress_line(&format!(
+            "  sheet {}: scale {} ({:.2}x, was {}) from {}, the plan of its floor that prints its scale: their outlines agree at one ratio, {:.0}% of their lines on each other",
+            r.sheet,
+            r.note.as_deref().unwrap_or("measured"),
+            r.scale,
+            if r.was == "none" { "paper size".to_string() } else { format!("{:.2}x from its {}", r.from_scale, r.was) },
+            r.onto,
+            r.score * 100.0
+        ));
+    }
+    if !rescaled.is_empty() {
+        let list: Vec<String> = rescaled
+            .iter()
+            .take(MAX_QUESTIONS_PER_STAGE)
+            .map(|r| format!("{} at {} from {}", r.sheet, r.note.clone().unwrap_or_else(|| format!("{:.2}x", r.scale)), r.onto))
+            .collect();
+        job.add_finding(
+            stage,
+            &format!(
+                "{} plan sheet(s) scaled from a plan of the same floor that prints its scale (derived, not printed): {}",
+                rescaled.len(),
+                list.join("; ")
+            ),
+            "No scale note read on them (or only their dimension strings): their outline matched the other plan's at one ratio, so they take its printed scale; check the scale if the two plans are drawn at different scales on purpose",
+            2,
+            vec!["Keep the derived scale".into(), "Give the sheet's scale (its scale note as printed)".into()],
+            None,
+            false,
+        );
+        let said: Vec<Value> = rescaled
+            .iter()
+            .map(|r| json!({"sheet": r.sheet, "from": r.onto, "scale": r.scale, "note": r.note, "was": r.was, "was_scale": r.from_scale, "score": r.score}))
+            .collect();
+        job.audit("plan_scale_same_floor", "pipeline", None, Some(stage), Some(json!(said)));
+    }
     // A plan left at paper size (no scale note, none in its lettering, no dimension strings that
-    // agree) can't be measured: a finding, never silent.
-    let paper: Vec<String> = scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.clone()).collect();
+    // agree, no plan of its floor to take it from) can't be measured: a finding, never silent.
+    let paper: Vec<String> = job.sheet_scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.clone()).collect();
     // A plan read at another scale than the set's other plans of its paper size comes in a
     // different size from them (Q6395): a finding, never silent.
-    let off = plans_off_set_scale(&scales);
+    let off = plans_off_set_scale(&job.sheet_scales);
     if !off.is_empty() {
         let list = off_set_scale_list(&off);
         s.echo(format!("guided: {} plan sheet(s) read at another scale than the set's other plans: {list}", off.len()));
@@ -2674,13 +2803,15 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             false,
         );
     }
-    job.sheet_scales = scales;
     if !paper.is_empty() {
         let list = paper.iter().take(MAX_QUESTIONS_PER_STAGE).cloned().collect::<Vec<_>>().join(", ");
         s.echo(format!("guided: {} plan sheet(s) left at paper size (no scale read): {list}", paper.len()));
         job.add_finding(
             stage,
-            &format!("{} plan sheet(s) imported at paper size: no scale note and no dimension strings that agree ({list})", paper.len()),
+            &format!(
+                "{} plan sheet(s) imported at paper size: no scale note, no dimension strings that agree and no plan of the same floor to take it from ({list})",
+                paper.len()
+            ),
             "A plan at paper size can't be measured: its rooms, openings and runs come out a fraction of their size",
             4,
             vec!["Give the sheet's scale (its scale note as printed)".into(), "Check that the sheet is a plan".into()],
@@ -2688,18 +2819,15 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             false,
         );
     }
-    // Each sheet's border and title block: what is read there is never building.
-    let rects: Vec<[f64; 4]> = regions.iter().map(|r| r.rect).collect();
-    for (r, f) in regions.iter_mut().zip(sheet_frames(s.doc()?, &rects)) {
-        r.area = Some(f.area);
-        r.title_block = f.title_block;
-    }
     // A sheet printing two levels' plans: each level takes only its own view.
     let typical_sheets: BTreeSet<String> = regions.iter().zip(&typical).filter(|(_, t)| **t).map(|(r, _)| r.number.clone()).collect();
     let regions = split_view_regions(s.doc()?, regions, &typical);
     // What answers said of the sheets (Q6517): the plan's own rectangle, a sheet left out; a
     // level with no floor plan is not built from its finish plans.
     let regions = answered_regions(job, regions, &all, &job.sheet_scales);
+    // A plan nothing scaled is always asked for its scale, and a level too small to be a
+    // building is a high finding, always asked (Q6360): never built at the sheet's units.
+    scale_questions(job, stage, &regions, &paper, &all, super::perceive::units_per_inch(s.doc()?));
     // Each plan sheet's view (Q6515): which one is the plan, its rectangle and scale; a sheet of
     // several views none of which is titled as its plan is a finding, never taken whole silently.
     let (views, unclear) = plan_view_report(s.doc()?, &regions, &typical_sheets, &job.sheet_scales);
@@ -9085,7 +9213,68 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     bim_step(s, job, "provenance", t);
     super::bspec::recount_built(s.doc()?, &mut result);
     progress_line(&format!("  the model as built: {} walls, {} doors, {} windows", result["walls"], result["doors"], result["windows"]));
+    // A level whose walls total a few feet inside a few square feet is a plan at the wrong
+    // scale, not a building (Q6360): a high finding, always asked before the takeoff.
+    let t = web_time::Instant::now();
+    short_walls_check(s, job, &mut result)?;
+    bim_step(s, job, "wall plausibility", t);
     Ok(result)
+}
+
+/// The levels whose built walls are too short to be a building ([`super::planscale::short_wall_levels`]):
+/// each a high finding and an always-asked question for its floor plan's scale (or that it is
+/// that small).
+fn short_walls_check(s: &Session, job: &mut GuidedJob, result: &mut Value) -> Result<()> {
+    use super::planscale as ps;
+    let d = s.doc()?;
+    let upf = super::elemprops::units_per_foot(d);
+    let walls: Vec<ps::BuiltWall> = super::bimwork::elements(d)
+        .into_iter()
+        .filter(|e| e.category == "wall")
+        .map(|e| (e.level.clone(), (e.hi.x - e.lo.x).hypot(e.hi.y - e.lo.y), [e.lo.x, e.lo.y, e.hi.x, e.hi.y]))
+        .collect();
+    let short = ps::short_wall_levels(&walls, upf);
+    let (min_ft, min_sq_ft) = (ps::rules().min_level_walls_ft, ps::rules().min_level_footprint_sq_ft);
+    let printed = ps::printed_scale_choices(&job.sheet_scales);
+    let mut said = Vec::new();
+    for (level, ft) in short.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let sheet = job
+            .sheet_regions
+            .iter()
+            .find(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A") && r.all_levels().iter().any(|l| level_key(l) == level_key(level)))
+            .map(|r| r.number.clone())
+            .unwrap_or_default();
+        let what = format!(
+            "{} {level}: its walls total {ft:.2} ft inside under {min_sq_ft} sq ft (under the {min_ft} ft of the smallest building)",
+            ps::SMALL_LEVEL_QUESTION
+        );
+        job.add_finding(
+            StageName::BimBuild,
+            &what,
+            "Walls that short are a plan built at the wrong scale (paper size, or a note misread), not a building: the takeoff would price a building a fraction of its size",
+            4,
+            vec!["Give the floor plan's scale as printed".into(), ps::KEEP.into()],
+            None,
+            false,
+        );
+        let mut choices = printed.clone();
+        choices.push(ps::KEEP.into());
+        let on = if sheet.is_empty() { "its floor plan".to_string() } else { sheet.clone() };
+        ps::ask_always(
+            job,
+            StageName::BimBuild,
+            format!("{what}: what scale is {on} drawn at?"),
+            "Checked after the build against the rules data's smallest building: give the floor plan's scale as printed, or keep it if the building really is that small".into(),
+            &sheet,
+            choices,
+            json!({"level": level, "walls_ft": (ft * 100.0).round() / 100.0, "min_walls_ft": min_ft, "printed_in_set": printed}),
+        );
+        said.push(json!({"level": level, "walls_ft": (ft * 100.0).round() / 100.0, "sheet": sheet}));
+    }
+    if !said.is_empty() {
+        result["levels_too_small"] = json!(said);
+    }
+    Ok(())
 }
 
 /// Most marks the build notes a fate for.
@@ -29236,6 +29425,26 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
             Err(e) => (None, format!("recorded; not taken: {e}")),
         };
     }
+    // A plan's scale, that it is no plan, or a small level kept as read (Q6360): the sheet's
+    // scale is a correction over the readers (as the sheet index's), the sheets imported again.
+    if super::planscale::is_scale_question(q) {
+        use super::planscale::ScaleAnswer;
+        let number = q.evidence.as_ref().and_then(|e| e.sheet.clone()).unwrap_or_default();
+        let c = match super::planscale::read_answer(answer) {
+            ScaleAnswer::Keep => return (None, format!("kept: sheet {number} as read")),
+            ScaleAnswer::LeaveOut => super::sheetcheck::SheetCorrection { not_built: Some(true), ..Default::default() },
+            ScaleAnswer::Scale(k, t) => super::sheetcheck::SheetCorrection { scale: Some(k), scale_text: Some(t), ..Default::default() },
+            ScaleAnswer::Bad(e) => return (None, format!("recorded; not taken: {e}")),
+        };
+        if number.is_empty() {
+            return (None, "recorded; not taken: the question names no sheet".into());
+        }
+        let effect = super::sheetcheck::learn(job, vec![(number, c)], &q.id);
+        if job.sheets_loaded {
+            job.reimport = true;
+        }
+        return (Some(StageName::Levels), effect);
+    }
     // The project manual's path, or "none" (Q6168).
     if q.stage == StageName::Classify && q.question.starts_with(NO_SPEC_QUESTION) {
         if text.eq_ignore_ascii_case("none") {
@@ -31474,7 +31683,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("job.start", "Start Guided Job", cmd_start).long()
             .menu(&["Tools", "Guided Job", "Start Job..."])
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), refresh?: \"stale\" (default) | \"none\" | a stage (what a resumed job does with the stages its checkpoint holds: \"stale\" runs again, from the first of them on, every stage another build read (each stage records the build that ran it; a checkpoint from before that counts as another build), so a rebuild from a checkpoint reads the prints as a whole job of this build does; from the rooms stage or before, the job starts again from the prints, keeping its answers; \"none\" keeps them all, said in resume_note and a finding; a stage name runs again from it on), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (as SECTION 26 05 19), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), cost_db?: path (the company's cost DB as .csv or .json — item, size, unit, material_unit, labor_unit, labor in DOLLARS, `# manpower_rate:` — a private file: value engineering prices both ways from it and writes the rows the job needs beside the drawing), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over), sheet_check?: bool (default true: right after classify the job writes its reading of every sheet — type, level, discipline, scale and its source, the views with their rectangles, the tables read, a picture of each page and a contact sheet — as one packet, sheet-index.json, with the flags it raises itself, and stops at that checkpoint question for \"Correct\" or one object of corrections as job.sheets.set takes; false: it goes on, and job.report lists every flag as built on an unchecked reading, as auto mode does), sheet_pictures?: pixels a sheet inch (default 40) | false (no page pictures)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?, resume_note?, refreshed?: {from, stages?, other_build, started_over, why}}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, a plan whose scale nothing gives (no note, no dimension strings, no plan of its floor that prints its scale and has its outline) and a level too small to be a building (under the rules data's smallest footprint or wall length), which are always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), refresh?: \"stale\" (default) | \"none\" | a stage (what a resumed job does with the stages its checkpoint holds: \"stale\" runs again, from the first of them on, every stage another build read (each stage records the build that ran it; a checkpoint from before that counts as another build), so a rebuild from a checkpoint reads the prints as a whole job of this build does; from the rooms stage or before, the job starts again from the prints, keeping its answers; \"none\" keeps them all, said in resume_note and a finding; a stage name runs again from it on), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (as SECTION 26 05 19), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), cost_db?: path (the company's cost DB as .csv or .json — item, size, unit, material_unit, labor_unit, labor in DOLLARS, `# manpower_rate:` — a private file: value engineering prices both ways from it and writes the rows the job needs beside the drawing), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over), sheet_check?: bool (default true: right after classify the job writes its reading of every sheet — type, level, discipline, scale and its source, the views with their rectangles, the tables read, a picture of each page and a contact sheet — as one packet, sheet-index.json, with the flags it raises itself, and stops at that checkpoint question for \"Correct\" or one object of corrections as job.sheets.set takes; false: it goes on, and job.report lists every flag as built on an unchecked reading, as auto mode does), sheet_pictures?: pixels a sheet inch (default 40) | false (no page pictures)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?, resume_note?, refreshed?: {from, stages?, other_build, started_over, why}}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next).long()
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
@@ -39828,6 +40037,38 @@ mod tests {
         // Plans alike: the largest (a several-view sheet's plan, not its enlarged plans).
         assert_eq!(level_plan_rect(vec![(small, true, 1), (big, true, 1)]), Some(big));
         assert_eq!(level_plan_rect(Vec::new()), None);
+    }
+
+    /// Q6360: plans left at paper size are no evidence of the set's scale: three of them made
+    /// "the set's 1x" and five plans read at their notes were called off it.
+    #[test]
+    fn paper_size_plans_set_no_scale_for_the_set() {
+        let at = |sheet: &str, scale: f64, source: &str| SheetScale {
+            sheet: sheet.into(),
+            kind: "plan".into(),
+            scale,
+            source: source.into(),
+            plan_scale: None,
+            paper: Some([36.0, 24.0]),
+        };
+        let none = "none (the sheet in inches)";
+        let set = vec![
+            at("A-1", 96.0, "dimension strings: 40 of 49 measured agree on 96x"),
+            at("E-1", 96.0, "scale note 1/8\" = 1'-0\""),
+            at("P-1", 96.0, "scale note 1/8\" = 1'-0\""),
+            at("M-1", 24.0, "scale note 1/2\" = 1'-0\""),
+            at("L-1", 1.0, none),
+            at("G-1", 1.0, none),
+            at("A-2", 1.0, none),
+        ];
+        assert!(set.iter().filter(|s| s.scale == 1.0).all(SheetScale::plan_at_paper_size));
+        // Only the plan off the three at 96x; never the 96x plans "against 1x on 3 other plans".
+        let off: Vec<(String, f64, usize)> = plans_off_set_scale(&set).into_iter().map(|o| (o.sheet, o.set_scale, o.set_sheets)).collect();
+        assert_eq!(off, vec![("M-1".to_string(), 96.0, 3)]);
+        // A plan scaled from another of its floor says so.
+        let derived = at("A-2", 96.0, &format!("{} E-1: 1/8\" = 1'-0\"", super::super::planscale::SAME_FLOOR_SOURCE));
+        assert_eq!(derived.how(), "same floor");
+        assert!(!derived.plan_at_paper_size());
     }
 
     /// Q6396: each sheet's plans in drawing units per foot, from its import scale and the scale its
