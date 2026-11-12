@@ -974,7 +974,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
     }
     texts.sort_by_key(|(_, t, _, _)| super::perceive::geometry::room_number(t));
-    // A view callout's or sheet reference's label (`A10`) on plans numbering their rooms in digits
+    // A view callout's or sheet reference's label (`A12`) on plans numbering their rooms in digits
     // numbers no room (Q6365), whatever layer it is on.
     let callouts = super::perceive::geometry::CalloutLabels::new(
         sp.sheets.iter().map(|x| x.number.as_str()),
