@@ -7693,10 +7693,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 let mut shown: Vec<(String, MarkFate)> = Vec::new();
                 out.retain(|dv| {
-                    let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
-                    let Some((level, outline)) =
-                        authority.iter().find(|(level, outline)| dv.level == *level && cadaddy_geom::point_in_polygon(outline, p))
-                    else {
+                    let Some((level, outline, _)) = room_plan_over(&authority, dv) else {
                         return true;
                     };
                     // The room plan's own copy: the stamped device of its mark nearest it in the room.
@@ -7987,6 +7984,43 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if short.is_empty() { "none".to_string() } else { short.join(", ") }
             ));
         }
+        // Each unit type's plumbing set, and every room that holds another (Q6317): a finding
+        // naming the rooms, never only a count in the log.
+        let fixture_names: BTreeMap<String, String> =
+            schedule.as_ref().map(|sch| sch.rows.iter().map(|r| (r.tag.trim().to_string(), r.fixture.clone())).collect()).unwrap_or_default();
+        let (plumbing_sets, plumbing_off) = unit_plumbing_check(job, &devices, &fixture_names);
+        for set in &plumbing_sets {
+            let off: Vec<String> = plumbing_off.iter().filter(|o| o.unit_type == set.unit_type).map(|o| format!("{} {}", o.level, o.room)).collect();
+            progress_line(&format!(
+                "  unit plumbing {}: {} rooms, set {:?} in {}; rooms off it: {}",
+                set.unit_type,
+                set.rooms,
+                set.set,
+                set.holding,
+                if off.is_empty() { "none".to_string() } else { format!("{} {off:?}", off.len()) }
+            ));
+        }
+        if !plumbing_off.is_empty() {
+            let mut listed: Vec<String> = plumbing_off.iter().take(MAX_PLUMBING_OFF_LISTED).map(UnitPlumbingOff::line).collect();
+            if plumbing_off.len() > MAX_PLUMBING_OFF_LISTED {
+                listed.push(format!("and {} more (job.report unit_plumbing lists them all)", plumbing_off.len() - MAX_PLUMBING_OFF_LISTED));
+            }
+            job.add_finding(
+                StageName::BimBuild,
+                "Units whose plumbing differs from their type's",
+                &format!(
+                    "{} rooms hold other bath fixtures than the rooms of their type (units of one type carry one plumbing set, their enlarged plan's; a mirrored unit the same): {}",
+                    plumbing_off.len(),
+                    listed.join("; ")
+                ),
+                2,
+                vec![
+                    "Check each room's plumbing plan and its type's enlarged plan: a fixture lost or read twice is a reading fault; a unit built otherwise is an override of its type".into(),
+                ],
+                None,
+                false,
+            );
+        }
         let placed_now = super::readers::place_devices(s, &devices, "guided job");
         // A unit whose receptacle its keynote puts in its sub-base sits on that sub-base.
         if placed_now.is_ok()
@@ -8007,6 +8041,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // The typical rooms' plans: the marks read now and the per-type table (Q6159).
                 v["typical_marks_read"] = json!(typical.added.len());
                 v["unit_devices"] = json!(unit_table);
+                v["unit_plumbing"] = json!({"types": plumbing_sets, "rooms_off": plumbing_off});
                 placed = Some(v);
                 // What the legend says each switch and sensor is (its designations).
                 let mut designations = legend_designations(s.doc()?, job);
@@ -11099,8 +11134,8 @@ fn stamp_typical_rooms(
 ) -> StampedRooms {
     let mut out = Vec::new();
     let mut report: BTreeMap<String, usize> = BTreeMap::new();
-    // The rooms a one-room plan is the authority in (its level and outline).
-    let mut authority: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
+    // The rooms a one-room plan is the authority in (its level, outline and room).
+    let mut authority: Vec<(String, Vec<cadaddy_geom::Vec2>, String)> = Vec::new();
     // Each stamped room's panels, where its plan letters them ("PNLBD 'G'"), by the room.
     let mut panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
     let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
@@ -11295,8 +11330,8 @@ fn stamp_typical_rooms(
                             bbox(&outline)
                         ));
                     }
-                    if furnished(level, &outline) && !authority.iter().any(|(l, o)| l == level && *o == outline) {
-                        authority.push((level.clone(), outline.clone()));
+                    if furnished(level, &outline) && !authority.iter().any(|(l, o, _)| l == level && *o == outline) {
+                        authority.push((level.clone(), outline.clone(), stamped_room(name, number, *i)));
                     }
                     let mut copy = (*dv).clone();
                     copy.at = at;
@@ -12233,6 +12268,159 @@ fn unit_type_table(
         }
     }
     super::unitmarks::type_table(&table)
+}
+
+/// Rooms listed in the unit plumbing finding's text, at most (the report lists them all).
+const MAX_PLUMBING_OFF_LISTED: usize = 30;
+
+/// One unit type's plumbing set (Q6317): its rooms and the bath fixtures by kind most of them hold.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+struct UnitPlumbingSet {
+    unit_type: String,
+    rooms: usize,
+    set: BTreeMap<String, usize>,
+    /// How many of its rooms hold that set.
+    holding: usize,
+}
+
+/// A room of a unit type whose plumbing is not its type's set (Q6317): what it holds, the set's
+/// kinds it has none of, and the kinds it holds another number of (`2 water closet (set 1)`, or
+/// `1 shower (set 0)` for a kind the set hasn't), with how many of the type's rooms hold the set
+/// (the set is what most hold, not what the plans must show: a reader sees how sure it is).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+struct UnitPlumbingOff {
+    room: String,
+    level: String,
+    unit_type: String,
+    holds: BTreeMap<String, usize>,
+    type_set: BTreeMap<String, usize>,
+    missing: Vec<String>,
+    counts_off: Vec<String>,
+    type_rooms: usize,
+    type_holding: usize,
+}
+
+impl UnitPlumbingOff {
+    /// `Level 3 room 517 (SUITE TWIN): no lavatory; 2 water closet (set 1) (its type's set, held by
+    /// 40 of 42 rooms: 1 lavatory, 1 tub, 1 water closet)`.
+    fn line(&self) -> String {
+        let mut said = Vec::new();
+        if !self.missing.is_empty() {
+            said.push(format!("no {}", self.missing.join(", ")));
+        }
+        if !self.counts_off.is_empty() {
+            said.push(self.counts_off.join(", "));
+        }
+        let set: Vec<String> = self.type_set.iter().map(|(k, n)| format!("{n} {k}")).collect();
+        format!(
+            "{} room {} ({}): {} (its type's set, held by {} of {} rooms: {})",
+            self.level,
+            self.room,
+            self.unit_type,
+            said.join("; "),
+            self.type_holding,
+            self.type_rooms,
+            set.join(", ")
+        )
+    }
+}
+
+/// The per-unit-type plumbing check (Q6317): the units of one type carry one plumbing set, their
+/// enlarged plan's (a mirrored unit the same set). For each type of room to sleep in (a guest room,
+/// a dwelling unit: [`sleeping_room`]) with two rooms or more, each room's bath fixtures by kind
+/// (the family its schedule row's fixture names, `names`: tag → fixture; [`super::fixturefit::family_of`];
+/// floor drains, cleanouts and stacks are no bath fixture) against the set most of its rooms hold
+/// (of two sets as common, the fuller: a fixture lost is likelier than one added). A room's
+/// fixtures are the ones the build booked to it, else the ones inside its outline, on its storey.
+/// Each type's set, and every room off its type's.
+fn unit_plumbing_check(
+    job: &GuidedJob,
+    devices: &[super::readers::ReadDevice],
+    names: &BTreeMap<String, String>,
+) -> (Vec<UnitPlumbingSet>, Vec<UnitPlumbingOff>) {
+    let rules = super::fixturefit::rules();
+    let rooms = job_rooms(job);
+    let (types, _) = room_types(&rooms);
+    let fixtures: Vec<(&super::readers::ReadDevice, String)> = devices
+        .iter()
+        .filter(|dv| dv.kind == "plumbing fixture")
+        .filter_map(|dv| {
+            let name = names.get(dv.tag.trim())?;
+            Some((dv, super::fixturefit::family_of(rules, name)?.1.fixture.clone()))
+        })
+        .take(MAX_STAMPED)
+        .collect();
+    let (mut sets, mut off) = (Vec::new(), Vec::new());
+    if fixtures.is_empty() {
+        return (sets, off);
+    }
+    for words in types.iter().filter(|w| sleeping_room(w)) {
+        let label = words.iter().cloned().collect::<Vec<_>>().join(" ");
+        let held: Vec<(String, String, BTreeMap<String, usize>)> = rooms
+            .iter()
+            .enumerate()
+            .filter(|(_, (name, ..))| type_words(name, None) == *words)
+            .take(MAX_STAMPED)
+            .map(|(i, (name, level, outline, number))| {
+                let room = stamped_room(name, number, i);
+                let mut by: BTreeMap<String, usize> = BTreeMap::new();
+                for (dv, kind) in &fixtures {
+                    let mine = same_storey(&dv.level, level)
+                        && if dv.room.trim().is_empty() {
+                            cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))
+                        } else {
+                            dv.room == room
+                        };
+                    if mine {
+                        *by.entry(kind.clone()).or_default() += 1;
+                    }
+                }
+                (room, level.clone(), by)
+            })
+            .collect();
+        if held.len() < 2 {
+            continue;
+        }
+        let mut count: BTreeMap<&BTreeMap<String, usize>, usize> = BTreeMap::new();
+        for (_, _, by) in &held {
+            *count.entry(by).or_default() += 1;
+        }
+        let total = |m: &BTreeMap<String, usize>| m.values().sum::<usize>();
+        let Some((set, holding)) = count.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(total(a.0).cmp(&total(b.0))).then(b.0.cmp(a.0))) else {
+            continue;
+        };
+        // A type none of whose rooms the plans give a bath fixture (none has a schedule): nothing to hold to.
+        if set.is_empty() {
+            continue;
+        }
+        let set = set.clone();
+        for (room, level, by) in &held {
+            if *by == set {
+                continue;
+            }
+            let missing: Vec<String> = set.keys().filter(|k| !by.contains_key(*k)).cloned().collect();
+            let counts_off: Vec<String> = by
+                .iter()
+                .filter_map(|(k, n)| {
+                    let m = set.get(k).copied().unwrap_or(0);
+                    (*n != m && *n > 0).then(|| format!("{n} {k} (set {m})"))
+                })
+                .collect();
+            off.push(UnitPlumbingOff {
+                room: room.clone(),
+                level: level.clone(),
+                unit_type: label.clone(),
+                holds: by.clone(),
+                type_set: set.clone(),
+                missing,
+                counts_off,
+                type_rooms: held.len(),
+                type_holding: holding,
+            });
+        }
+        sets.push(UnitPlumbingSet { unit_type: label, rooms: held.len(), set, holding });
+    }
+    (sets, off)
 }
 
 /// The mounting heights the typical rooms' plans print by their devices ("44\" AFF",
@@ -25940,13 +26128,28 @@ fn room_view_regions(d: &cadaddy_doc::Drawing, job: &GuidedJob, sheets: &BTreeSe
     out
 }
 
+/// The one-room plan that is the authority over a device of the overall plans (`authority`: each
+/// one's level, area and room): one whose area, on the device's level, holds it. A plan of one room
+/// is the authority for that room only: a device the build has put in another room (a unit's bath
+/// fixture its footprint booked, where a neighbour's leaked area reaches over it) stays that
+/// room's (Q6317).
+fn room_plan_over<'a>(
+    authority: &'a [(String, Vec<cadaddy_geom::Vec2>, String)],
+    dv: &super::readers::ReadDevice,
+) -> Option<&'a (String, Vec<cadaddy_geom::Vec2>, String)> {
+    let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
+    authority.iter().find(|(level, outline, room)| {
+        dv.level == *level && (dv.room.trim().is_empty() || dv.room == *room) && cadaddy_geom::point_in_polygon(outline, p)
+    })
+}
+
 /// What stamping the typical and one-room plans gave: the devices, how many by view, the rooms
-/// a one-room plan is the authority in (level, outline), each stamped room's panels, the level
-/// and outline of each room with panels, and the guest rooms stamped.
+/// a one-room plan is the authority in (level, outline, room), each stamped room's panels, the
+/// level and outline of each room with panels, and the guest rooms stamped.
 struct StampedRooms {
     devices: Vec<super::readers::ReadDevice>,
     report: BTreeMap<String, usize>,
-    authority: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
+    authority: Vec<(String, Vec<cadaddy_geom::Vec2>, String)>,
     panels: BTreeMap<String, Vec<(String, [f64; 2])>>,
     rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
     /// The rooms stamped from a typical plan of a room to sleep in (a guest room): level, outline.
@@ -31143,6 +31346,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "placement": placement_summary(&job),
         "keynote_systems": keynote_summary(&job),
         "dampers": dampers_summary(&job),
+        "unit_plumbing": unit_plumbing_summary(&job),
         "documented_objects": doc_objects_summary(&job),
         "windows": windows_summary(&job),
         "room_names": room_names_summary(&job),
@@ -31376,6 +31580,19 @@ fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Valu
         "keynote_systems": keynote_summary(job),
         "results": results,
     })
+}
+
+/// The report's unit plumbing (Q6317): each unit type's plumbing set and every room off it, by
+/// room; null before the build.
+fn unit_plumbing_summary(job: &GuidedJob) -> Value {
+    job.stages
+        .iter()
+        .find(|st| st.name == StageName::BimBuild)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("devices"))
+        .and_then(|d| d.get("unit_plumbing"))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 /// What the keynotes built (Q6146), per level: boxes by kind, conduit by size, rated
@@ -38821,6 +39038,121 @@ mod tests {
         assert!((w.at[0] - 50_100.0).abs() < 1e-6 && (w.at[1] - 200.0).abs() < 1e-6, "{:?}", w.at);
         assert_eq!((w.level.as_str(), w.sheet.as_str()), ("6", "P-371/4"));
         assert!(w.derived.starts_with("derived from 4: room 471") && w.derived.contains("trade practice"), "{}", w.derived);
+    }
+
+    /// Q6317: a one-room plan (a mechanical room's, its trace leaked and its area laid round its
+    /// tag) whose area reaches over the bath of the guest unit beside it is the authority for its
+    /// own room only: the unit's fixtures, booked to the unit by its footprint, stay; the overall
+    /// plan's devices in the area that no other room holds still go to the room plan.
+    #[test]
+    fn a_one_room_plan_is_the_authority_for_its_room_only() {
+        let area = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            vec![cadaddy_geom::Vec2::new(x0, y0), cadaddy_geom::Vec2::new(x1, y0), cadaddy_geom::Vec2::new(x1, y1), cadaddy_geom::Vec2::new(x0, y1)]
+        };
+        let authority = vec![("Level 5".to_string(), area(4_000.0, 600.0, 4_360.0, 770.0), "590".to_string())];
+        let dv = |tag: &str, room: &str, level: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            room: room.into(),
+            level: level.into(),
+            at,
+            kind: "plumbing fixture".into(),
+            ..Default::default()
+        };
+        let over = |d: &super::super::readers::ReadDevice| room_plan_over(&authority, d).map(|a| a.2.clone());
+        // The unit's water closet and lavatory, booked to unit 517, under the leaked area: the unit's.
+        assert_eq!(over(&dv("WC-1", "517", "Level 5", [4_030.0, 650.0])), None);
+        assert_eq!(over(&dv("LAV-1", "517", "Level 5", [4_080.0, 700.0])), None);
+        // A device of the overall plan in no room there, and one booked to the room itself: the room plan's.
+        assert_eq!(over(&dv("FD-1", "", "Level 5", [4_200.0, 700.0])).as_deref(), Some("590"));
+        assert_eq!(over(&dv("FD-2", "590", "Level 5", [4_250.0, 700.0])).as_deref(), Some("590"));
+        // Another floor, or outside the area: none.
+        assert_eq!(over(&dv("FD-1", "", "Level 6", [4_200.0, 700.0])), None);
+        assert_eq!(over(&dv("FD-1", "", "Level 5", [4_500.0, 700.0])), None);
+    }
+
+    /// Q6317: the units of one type carry one plumbing set; each room holding another is named
+    /// with what it lacks or holds twice, by the fixtures' kinds (a mirrored or turned unit the
+    /// same set; a floor drain is no bath fixture).
+    #[test]
+    fn units_of_one_type_off_their_plumbing_set_are_named_room_by_room() {
+        let (_s, job) = stacked_floors();
+        let names: BTreeMap<String, String> =
+            [("WC-1", "WATER CLOSET"), ("LAV-1", "LAVATORY"), ("TB-1", "BATHTUB"), ("SH-1", "SHOWER"), ("FD-1", "FLOOR DRAIN")]
+                .iter()
+                .map(|(t, n)| (t.to_string(), n.to_string()))
+                .collect();
+        let fixture = |tag: &str, level: &str, room: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            level: level.into(),
+            room: room.into(),
+            kind: "plumbing fixture".into(),
+            ..Default::default()
+        };
+        let bath = |level: &str, room: &str, x: f64| {
+            vec![
+                fixture("WC-1", level, room, [x + 20.0, 40.0]),
+                fixture("LAV-1", level, room, [x + 100.0, 40.0]),
+                fixture("TB-1", level, room, [x + 60.0, 20.0]),
+            ]
+        };
+        let mut devices = Vec::new();
+        // 371 booked, 372 by its outline; floor 4's: 471 whole, 472 a water closet read twice.
+        devices.extend(bath("Level 3", "371", 10_000.0));
+        devices.extend(bath("Level 3", "", 10_200.0));
+        devices.extend(bath("Level 4", "471", 30_000.0));
+        devices.extend(bath("Level 4", "472", 30_200.0));
+        devices.push(fixture("WC-1", "Level 4", "472", [30_230.0, 60.0]));
+        // Floor 6: 671 lost its water closet (a floor drain is no bath fixture), 672 has none.
+        devices.extend(bath("Level 6", "671", 40_000.0).into_iter().filter(|f| f.tag != "WC-1"));
+        devices.push(fixture("FD-1", "Level 6", "671", [40_060.0, 100.0]));
+        // ... and holds a shower its type's set has none of.
+        devices.push(fixture("SH-1", "Level 6", "671", [40_100.0, 100.0]));
+        // 571, turned, has the set: so does the turned unit.
+        devices.extend(bath("Level 5", "571", 40_000.0));
+        // A receptacle in 672 is no plumbing.
+        devices.push(super::super::readers::ReadDevice {
+            tag: "A".into(),
+            at: [40_220.0, 40.0],
+            level: "Level 6".into(),
+            room: "672".into(),
+            kind: "receptacle".into(),
+            ..Default::default()
+        });
+        let (sets, off) = unit_plumbing_check(&job, &devices, &names);
+        let want_set: BTreeMap<String, usize> = [("lavatory", 1), ("tub", 1), ("water closet", 1)].iter().map(|(k, n)| (k.to_string(), *n)).collect();
+        assert_eq!(sets, vec![UnitPlumbingSet { unit_type: "SUITE TWIN".into(), rooms: 7, set: want_set.clone(), holding: 4 }], "{off:?}");
+        let got: Vec<(&str, Vec<String>, Vec<String>)> = off.iter().map(|o| (o.room.as_str(), o.missing.clone(), o.counts_off.clone())).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("472", vec![], vec!["2 water closet (set 1)".to_string()]),
+                ("671", vec!["water closet".to_string()], vec!["1 shower (set 0)".to_string()]),
+                ("672", vec!["lavatory".to_string(), "tub".to_string(), "water closet".to_string()], vec![]),
+            ]
+        );
+        let line = off.iter().find(|o| o.room == "672").map(UnitPlumbingOff::line).unwrap_or_default();
+        assert_eq!(
+            line,
+            "6 room 672 (SUITE TWIN): no lavatory, tub, water closet (its type's set, held by 4 of 7 rooms: 1 lavatory, 1 tub, 1 water closet)"
+        );
+        let line = off.iter().find(|o| o.room == "671").map(UnitPlumbingOff::line).unwrap_or_default();
+        assert!(line.contains(": no water closet; 1 shower (set 0) (its type's set"), "{line}");
+        // No schedule naming the tags: nothing to judge.
+        assert_eq!(unit_plumbing_check(&job, &devices, &BTreeMap::new()), (Vec::new(), Vec::new()));
+    }
+
+    /// Q6317: job.report carries the build's unit plumbing check (null before the build).
+    #[test]
+    fn the_report_lists_the_units_off_their_plumbing_set() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        assert_eq!(unit_plumbing_summary(&job), Value::Null);
+        let check = json!({"types": [{"unit_type": "SUITE TWIN", "rooms": 7, "set": {"tub": 1}, "holding": 6}],
+            "rooms_off": [{"room": "672", "level": "6", "missing": ["tub"]}]});
+        if let Some(st) = job.stage_mut(StageName::BimBuild) {
+            st.result = Some(json!({"devices": {"unit_plumbing": check.clone()}}));
+        }
+        assert_eq!(unit_plumbing_summary(&job), check);
     }
 
     #[test]

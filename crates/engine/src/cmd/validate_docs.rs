@@ -224,8 +224,11 @@ pub(crate) fn sheets(all: &[SheetOf], trades: &BTreeSet<String>) -> (Vec<DocShee
         let Some(kind) = deciding_kind(&s.title, &s.job_kind) else { continue };
         let trade = trade_of_discipline(&s.discipline);
         // A general sheet is the set's own (G, or no discipline): a structural, civil or
-        // landscape sheet is no trade of a room's.
-        let general = trade == "general" && matches!(s.discipline.trim().to_ascii_uppercase().as_str(), "" | "G" | "GI" | "GN" | "GEN");
+        // landscape sheet is no trade of a room's, nor is a page the job filed as general whose
+        // title names site work (a landscape plant list: rules data `sheets.site_title_words`).
+        let general = trade == "general"
+            && matches!(s.discipline.trim().to_ascii_uppercase().as_str(), "" | "G" | "GI" | "GN" | "GEN")
+            && !cadaddy_mepfix::sheet_facts::is_site_sheet("", &s.title);
         if !((trade != "general" && trades.contains(trade)) || trade == "architecture" || general) || !seen.insert(s.number.to_ascii_uppercase()) {
             continue;
         }
@@ -422,6 +425,9 @@ mod tests {
             s("A-700", "DETAILS", "detail", "A", false),
             s("G-002", "GENERAL NOTES", "", "G", false),
             s("S-001", "STRUCTURAL SCHEDULES", "schedule", "S", false),
+            // An unnumbered page the job filed as general: a landscape schedule is no room's.
+            s("Prints.pdf#9", "LANDSCAPE IMPROVEMENTS PLANT SCHEDULE & DETAILS", "schedule", "G", false),
+            s("Prints.pdf#10", "IRRIGATION LEGEND", "", "", false),
             // Only in the job's sheet index: shown as its PDF page.
             SheetOf { rect: None, ..s("A-000", "SYMBOLS AND ABBREVIATIONS", "", "A", false) },
         ];

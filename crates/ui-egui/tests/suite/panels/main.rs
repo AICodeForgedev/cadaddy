@@ -68,6 +68,7 @@ mod rtl;
 mod security_policy;
 mod shared_controls;
 mod sheet_navigator;
+mod sheets_on_demand_3d;
 mod shortcut_menus;
 mod status_bar_toggles;
 mod style_dialogs;
