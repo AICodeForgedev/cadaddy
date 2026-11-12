@@ -67,6 +67,16 @@ pub const NO_ROOM_BEHIND: &str = "its wall's face in no room, a room behind its 
 pub const NO_ROOM_EITHER: &str = "set in a wall with no traced room, corridor or stair on either side";
 /// On no wall and in no traced room, corridor or stair.
 pub const NO_ROOM_OFF_WALL: &str = "on no wall, and in no traced room, corridor or stair or within a foot of one";
+/// Why equipment is in no room (Q6586): set in or through a wall with no traced room on either
+/// face, or one face no more than the other.
+pub const NO_ROOM_WALL_UNIT: &str = "set in or through a wall with no traced room on its service face (neither side holds more of it)";
+/// Outside every traced room's outline and in no wall (on the roof, on the site, in a shaft).
+pub const NO_ROOM_OUTSIDE: &str = "outside every traced room's outline and in no wall";
+/// What an equipment element set in or through a wall takes its room by (Q6586).
+const SERVICE_FACE_NOTE: &str =
+    "the room on its service face: set in or through its wall, the side of the wall that holds more of it moved half its depth each way";
+/// Points across and along an equipment box sampled for the room on each face of its wall.
+const FACE_SAMPLES: usize = 7;
 /// A device whose box starts below this height (feet off its floor) is in the wall, not the
 /// ceiling: its box gets a plaster ring.
 const WALL_BOX_FT: f64 = 7.0;
@@ -100,7 +110,7 @@ const SIDE_FT: f64 = 1.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FILL, "Fill Element Properties", run_fill)
-            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so, rooms?: \"built\" (only the build's rooms: a model whose build traced none has none, never the whole drawing traced again; default: the build's, else the plan's traced)} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
+            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so, rooms?: \"built\" (only the build's rooms: a model whose build traced none has none, never the whole drawing traced again; default: the build's, else the plan's traced)} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}, equipment_in_no_room: {level: n} (a warning: equipment no room holds, with equipment_in_no_room_why and _listed [{handle, tag, level, at_ft, why}]), equipment_rooms_by_service_face (set in or through a wall: the room on its service face), equipment_fed_by_room (a room unit given its room's circuit, panel and feed: its connection's, else the room panel's schedule row for its kind)}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
             .menu(&["Tools", "Building", "Fill Element Properties"]),
     ]
 }
@@ -2602,6 +2612,132 @@ fn room_by_face<'a>(rooms: &'a [RoomShape], level: Option<&str>, wall: &Bounds2,
     probe(side).or_else(|| probe(-side))
 }
 
+/// The room on the service face of an equipment element set in or through a wall (its box `b`,
+/// Q6586: a through-wall unit's middle is in the wall's thickness, outside every room). Its host
+/// is the wall of its level its box overlaps most; the box moved half its depth (across that
+/// wall) to each side, the side whose room holds more of it is its service face (an exterior
+/// wall has a room on one side only). None when no wall holds it or neither side holds more.
+fn room_through_wall<'a>(
+    rooms: &'a [RoomShape],
+    level: Option<&str>,
+    walls: &[(Handle, Option<String>, Bounds2)],
+    b: &Bounds2,
+) -> Option<&'a RoomShape> {
+    let area = |o: &Bounds2| {
+        let i = b.intersection(o);
+        if i.is_empty() { 0.0 } else { i.width().max(0.0) * i.height().max(0.0) }
+    };
+    let host = walls
+        .iter()
+        .filter(|(_, l, _)| l.as_deref().zip(level).is_none_or(|(a, c)| a.eq_ignore_ascii_case(c)))
+        .map(|(_, _, w)| (w, area(w)))
+        .filter(|(_, a)| a.is_finite() && *a > 0.0)
+        .max_by(|x, y| x.1.total_cmp(&y.1))?
+        .0;
+    // Across the wall: its short side.
+    let (n, depth) = if host.width() >= host.height() { (Vec2::new(0.0, 1.0), b.height()) } else { (Vec2::new(1.0, 0.0), b.width()) };
+    if !(depth.is_finite() && depth > 0.0 && b.width().is_finite() && b.height().is_finite()) {
+        return None;
+    }
+    let side = |s: f64| -> Option<(&'a RoomShape, usize)> {
+        let off = n * (s * depth / 2.0);
+        let mut counts: Vec<(&'a RoomShape, usize)> = Vec::new();
+        for i in 0..FACE_SAMPLES {
+            for j in 0..FACE_SAMPLES {
+                let f = |k: usize| (k as f64 + 0.5) / FACE_SAMPLES as f64;
+                let p = Vec2::new(b.min.x + b.width() * f(i), b.min.y + b.height() * f(j)) + off;
+                if let Some(r) = room_at(rooms, level, p) {
+                    match counts.iter_mut().find(|(x, _)| std::ptr::eq(*x, r)) {
+                        Some((_, c)) => *c += 1,
+                        None => counts.push((r, 1)),
+                    }
+                }
+            }
+        }
+        counts.into_iter().max_by_key(|(_, c)| *c)
+    };
+    match (side(1.0), side(-1.0)) {
+        (Some(a), Some(c)) if std::ptr::eq(a.0, c.0) || a.1 > c.1 => Some(a.0),
+        (Some(a), Some(c)) => (c.1 > a.1).then_some(c.0),
+        (Some(a), None) | (None, Some(a)) => Some(a.0),
+        (None, None) => None,
+    }
+}
+
+/// A room's equipment wanting its feed (Q6586): its handle, level, room, kind and tag.
+struct UnitFeed {
+    handle: Handle,
+    level: String,
+    room: String,
+    kind: String,
+    tag: String,
+    at: Vec2,
+}
+
+/// A circuited device as the fill left it, for the equipment of its room: level, room, type
+/// mark, what its keynote makes it the receptacle for, circuit, panel, where it is.
+struct RoomDevice {
+    level: String,
+    room: String,
+    mark: String,
+    receptacle_for: String,
+    circuit: String,
+    panel: String,
+    at: Vec2,
+}
+
+/// The words a room unit of `kind` (tagged `tag`) is named by, upper case: the rules data's
+/// printed tag for its kind or the one its tag starts with (`equipment.room_unit_tags`) with its
+/// own tag, and the loads a typical panel names it by (`equipment.typical_load_words`). None for
+/// equipment the rules data names no room unit (a panel, a damper).
+fn unit_words(kind: &str, tag: &str) -> (Vec<String>, Vec<String>) {
+    let kind = kind.trim().to_ascii_lowercase();
+    let tag = tag.trim().to_ascii_uppercase();
+    let pairs = cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags");
+    let ruled: Vec<(&str, &str)> =
+        pairs.iter().filter(|(t, k)| *k == kind || tag == *t || tag.strip_prefix(t).is_some_and(|r| r.starts_with('-'))).copied().collect();
+    let kinds: Vec<&str> = ruled.iter().map(|(_, k)| *k).chain([kind.as_str()]).collect();
+    let loads: Vec<String> = kinds
+        .iter()
+        .flat_map(|k| cadaddy_mepfix::wordrules::group("equipment.typical_load_words", k).iter())
+        .map(|w| w.to_ascii_uppercase())
+        .collect();
+    let mut tags: Vec<String> = ruled.iter().map(|(t, _)| t.to_ascii_uppercase()).collect();
+    if (!tags.is_empty() || !loads.is_empty()) && !tag.is_empty() && !tags.contains(&tag) {
+        tags.push(tag);
+    }
+    (tags, loads)
+}
+
+/// Whether upper-case `text` has `word` as a whole word (not inside another: `A` is not in `FAN`).
+fn has_word(text: &str, word: &str) -> bool {
+    let w = word.trim();
+    if w.is_empty() {
+        return false;
+    }
+    let edge = |c: Option<char>| c.is_none_or(|c| !c.is_ascii_alphanumeric());
+    text.match_indices(w)
+        .any(|(i, _)| edge(text.get(..i).and_then(|x| x.chars().next_back())) && edge(text.get(i + w.len()..).and_then(|x| x.chars().next())))
+}
+
+/// Whether a device's type mark is a unit's printed tag (`PTAC`, `PTAC-1`) of `tags`.
+fn mark_names(mark: &str, tags: &[String]) -> bool {
+    let m = mark.trim().to_ascii_uppercase();
+    !m.is_empty() && tags.iter().any(|t| m == *t || m.strip_prefix(t.as_str()).is_some_and(|r| r.starts_with('-')))
+}
+
+/// A schedule row naming a unit's load (`loads`): its circuit label (`U-13,15`, a 2-pole's poles
+/// numbered on the side), its number and description.
+fn load_row(ps: &cadaddy_walk3d::PanelSchedule, loads: &[String]) -> Option<(String, String, String)> {
+    let c = ps.circuits.iter().find(|c| {
+        let up = c.description.to_ascii_uppercase();
+        !c.number.trim().is_empty() && loads.iter().any(|w| has_word(&up, w))
+    })?;
+    let n: u32 = c.number.trim().split([',', ' ', '/']).next()?.trim().parse().ok()?;
+    let poles: Vec<String> = (0..c.poles.clamp(1, 3)).map(|i| (n + 2 * i).to_string()).collect();
+    Some((format!("{}-{}", ps.panel.trim(), poles.join(",")), c.number.trim().to_string(), c.description.trim().to_string()))
+}
+
 /// The room of `level` whose outline comes within `within` of `p`, the nearest.
 fn room_near<'a>(rooms: &'a [RoomShape], level: Option<&str>, p: Vec2, within: f64) -> Option<&'a RoomShape> {
     rooms
@@ -3186,6 +3322,15 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     // Why each is in no room, and the first few of them.
     let mut no_room_why: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut no_room_listed: Vec<Value> = Vec::new();
+    // Equipment in no room, per level, why, and the first few (Q6586); how many took the room on
+    // their service face; the room equipment wanting its feed, and the circuited devices of the
+    // rooms that may feed it.
+    let mut eq_no_room: BTreeMap<String, usize> = BTreeMap::new();
+    let mut eq_no_room_why: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut eq_no_room_listed: Vec<Value> = Vec::new();
+    let mut rooms_by_face = 0usize;
+    let mut unit_feeds: Vec<UnitFeed> = Vec::new();
+    let mut room_devices: Vec<RoomDevice> = Vec::new();
     // Read devices the plans put in no room (a lobby's, a laundry's: not a typical room's), by
     // tag id: the room their element stands in, for the spec's tags too.
     let mut tag_rooms: Vec<(String, String)> = Vec::new();
@@ -3391,6 +3536,20 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                 }
                 // The panel it is fed from, as an element, and its breaker on the panel's schedule.
                 circuit_links(d, &mut store, stamped.as_deref(), &gear, &equipment, &schedules, tally);
+                // A circuited device of a room: the connection its room's equipment may be fed by.
+                let text = |k: &str| store.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
+                let (room, circuit) = (text("room"), text("circuit"));
+                if !room.is_empty() && !circuit.is_empty() && room_devices.len() < MAX_DEVICES {
+                    room_devices.push(RoomDevice {
+                        level: lvl.unwrap_or("").to_string(),
+                        room,
+                        mark: text("type_mark"),
+                        receptacle_for: text("receptacle_for"),
+                        circuit,
+                        panel: text("panel"),
+                        at: c,
+                    });
+                }
                 if store.get("location").is_none_or(|p| !p.has_value()) {
                     put(&mut store, "location", location_prop(c.x, c.y, (z0 + z1) / 2.0, upf), tally);
                 }
@@ -3659,8 +3818,53 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         if let Some((_, m)) = rows.iter().find(|(k, v)| k.trim().eq_ignore_ascii_case("MODEL") && !v.trim().is_empty()) {
                             put(&mut store, "model", Prop::new(m.trim().to_string(), Source::from_doc(SourceKind::Schedule, &sched)), tally);
                         }
-                        if let Some(r) = room_at(&rooms, lvl, b.center()) {
-                            put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()), tally);
+                        // Its room: the one it stands in; set in or through a wall (a through-wall
+                        // unit, its middle in the wall), the room on its service face (Q6586).
+                        store.remove(ROOM_REVIEW);
+                        let room = room_at(&rooms, lvl, b.center())
+                            .map(|r| (r, None))
+                            .or_else(|| room_through_wall(&rooms, lvl, &walls, &b).map(|r| (r, Some(SERVICE_FACE_NOTE))));
+                        match room {
+                            Some((r, note)) => {
+                                let mut p = Prop::new(r.label.clone(), Source::computed());
+                                if let Some(n) = note {
+                                    p = p.with_note(n);
+                                    rooms_by_face += 1;
+                                }
+                                put(&mut store, "room", p, tally);
+                                // Fed per room below, unless its own record names its circuit.
+                                let own = super::bimlook::made_prop(e, "CIRCUIT").is_some_and(|c| !c.trim().is_empty());
+                                let kind_word = part.strip_prefix("equipment:").unwrap_or("").trim().to_string();
+                                if !own && store.get("circuit").is_none_or(|p| !p.has_value()) && unit_feeds.len() < MAX_DEVICES {
+                                    unit_feeds.push(UnitFeed {
+                                        handle: *h,
+                                        level: lvl.unwrap_or("").to_string(),
+                                        room: r.label.clone(),
+                                        kind: kind_word,
+                                        tag: tag.clone(),
+                                        at: b.center(),
+                                    });
+                                }
+                            }
+                            None => {
+                                // In no room: a warning with its reason, never silently.
+                                let in_wall = walls.iter().any(|(_, l, w)| {
+                                    l.as_deref().zip(lvl).is_none_or(|(a, c)| a.eq_ignore_ascii_case(c)) && !w.intersection(&b).is_empty()
+                                });
+                                let why = if in_wall { NO_ROOM_WALL_UNIT } else { NO_ROOM_OUTSIDE };
+                                *eq_no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1;
+                                *eq_no_room_why.entry(why).or_default() += 1;
+                                if eq_no_room_listed.len() < MAX_LISTED {
+                                    let at = b.center() - shift;
+                                    eq_no_room_listed.push(json!({
+                                        "handle": h.hex(), "tag": tag, "level": lvl.unwrap_or(""),
+                                        "at_ft": [round2(at.x / upf), round2(at.y / upf)], "why": why,
+                                    }));
+                                }
+                                if in_wall {
+                                    store.set(ROOM_REVIEW, Prop::new(format!("review: in no room: {why}"), Source::computed()));
+                                }
+                            }
                         }
                     }
                 }
@@ -3690,6 +3894,7 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
             put(store, "number", Prop::new(number.clone(), Source::from_doc(SourceKind::Rule, "door numbering")).with_note(basis), door_tally);
         }
     }
+    let fed_by_room = feed_room_units(d, &unit_feeds, &room_devices, &schedules, &gear, &equipment, &mut changes, &mut at, &mut filled);
     let doors_json = json!({
         "count": doors.len(),
         "numbered_by_tag": doors.iter().filter(|x| x.numbered_here).count(),
@@ -3739,7 +3944,116 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         "devices_in_no_room_listed": no_room_listed,
         "device_tags_roomed": tags_roomed,
         "doors": doors_json,
+        "equipment_in_no_room": eq_no_room,
+        "equipment_in_no_room_why": eq_no_room_why,
+        "equipment_in_no_room_listed": eq_no_room_listed,
+        "equipment_rooms_by_service_face": rooms_by_face,
+        "equipment_fed_by_room": fed_by_room,
     }))
+}
+
+/// Each room unit's feed (Q6586), `units` the room equipment with no circuit of its own: its
+/// connection in its room (a device its type mark or keynote makes the unit's, else a device of
+/// the room on a circuit its panel's schedule gives the unit's load), else its room's panel's
+/// schedule row for its kind (the panel the room's devices are on, else the one typical panel
+/// schedule with such a row). It takes that circuit, the panel and the feed, and the panel
+/// element and breaker as a device does ([`circuit_links`]). How many were fed.
+#[allow(clippy::too_many_arguments)]
+fn feed_room_units(
+    d: &Drawing,
+    units: &[UnitFeed],
+    devices: &[RoomDevice],
+    schedules: &HashMap<String, &cadaddy_walk3d::PanelSchedule>,
+    gear: &HashMap<String, Handle>,
+    equipment: &HashMap<String, &cadaddy_walk3d::MepEquipment>,
+    changes: &mut Vec<(Handle, Props)>,
+    at: &mut HashMap<Handle, usize>,
+    filled: &mut BTreeMap<String, BTreeMap<String, usize>>,
+) -> usize {
+    let tally = filled.entry("equipment".to_string()).or_default();
+    // A device's schedule row (its panel's, by its circuit's first number).
+    let row_of = |x: &RoomDevice| -> Option<&cadaddy_walk3d::PanelCircuit> {
+        let panel = if x.panel.is_empty() { panel_of(&x.circuit).unwrap_or_default() } else { x.panel.clone() };
+        let number = x.circuit.rsplit_once(['-', '/', '.']).map(|(_, n)| n.split(',').next().unwrap_or(n).trim().to_string())?;
+        schedules
+            .get(&panel.trim().to_ascii_uppercase())?
+            .circuits
+            .iter()
+            .find(|c| c.number.trim().split([',', ' ', '/']).next().is_some_and(|f| f.trim() == number))
+    };
+    let mut fed = 0usize;
+    for u in units {
+        let (tags, loads) = unit_words(&u.kind, &u.tag);
+        if tags.is_empty() && loads.is_empty() {
+            continue;
+        }
+        let names = |t: &str| {
+            let up = t.to_ascii_uppercase();
+            tags.iter().chain(&loads).any(|w| has_word(&up, w))
+        };
+        let mates: Vec<&RoomDevice> =
+            devices.iter().filter(|x| x.level.eq_ignore_ascii_case(&u.level) && x.room.eq_ignore_ascii_case(&u.room)).collect();
+        // Its connection: the nearest device of its room that is the unit's.
+        let connection = mates
+            .iter()
+            .filter(|x| mark_names(&x.mark, &tags) || names(&x.receptacle_for) || row_of(x).is_some_and(|c| names(&c.description)))
+            .min_by(|a, b| a.at.dist(u.at).total_cmp(&b.at.dist(u.at)));
+        let (circuit, panel, src) = match connection {
+            Some(x) => {
+                let what = if x.mark.is_empty() { "device".to_string() } else { format!("{} device", x.mark) };
+                let note = format!("its connection's circuit: the {what} of room {} on circuit {} is the unit's connection", u.room, x.circuit);
+                let panel = if x.panel.is_empty() { panel_of(&x.circuit).unwrap_or_default() } else { x.panel.clone() };
+                (x.circuit.clone(), panel, (Source::computed(), note))
+            }
+            None => {
+                // The room's panel: the one its devices are on; else the one typical schedule
+                // that names the unit's load.
+                let mut votes: BTreeMap<String, usize> = BTreeMap::new();
+                for x in &mates {
+                    let p = if x.panel.is_empty() { panel_of(&x.circuit).unwrap_or_default() } else { x.panel.clone() };
+                    if !p.trim().is_empty() {
+                        *votes.entry(p.trim().to_ascii_uppercase()).or_default() += 1;
+                    }
+                }
+                let by_votes = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))).and_then(|(p, _)| {
+                    let ps = schedules.get(&p)?;
+                    load_row(ps, &loads).map(|r| (*ps, r))
+                });
+                let typical = || {
+                    let mut it = schedules.values().filter(|ps| ps.typical_of.is_some()).filter_map(|ps| load_row(ps, &loads).map(|r| (*ps, r)));
+                    let first = it.next()?;
+                    it.next().is_none().then_some(first)
+                };
+                let Some((ps, (label, number, description))) = by_votes.or_else(typical) else { continue };
+                let doc = format!("{} panel {} circuit {number}: {description}", ps.source.trim(), ps.panel.trim());
+                let note =
+                    format!("its room {}'s panel's load for its kind (trade practice: a room's unit is on the room panel's circuit for it)", u.room);
+                (label, ps.panel.trim().to_string(), (Source::from_doc(SourceKind::Schedule, &doc), note))
+            }
+        };
+        if circuit.trim().is_empty() {
+            continue;
+        }
+        let i = match at.get(&u.handle) {
+            Some(i) => *i,
+            None => {
+                let Some(e) = d.model.get(u.handle) else { continue };
+                changes.push((u.handle, props::read(&e.common.xdata)));
+                at.insert(u.handle, changes.len() - 1);
+                changes.len() - 1
+            }
+        };
+        let Some((_, store)) = changes.get_mut(i) else { continue };
+        let (source, note) = src;
+        put(store, "circuit", Prop::new(circuit.clone(), source.clone()).with_note(&note), tally);
+        if !panel.trim().is_empty() {
+            put(store, "panel", Prop::new(panel.clone(), source.clone()).with_note(&note), tally);
+            put(store, "fed_from", Prop::new(format!("panel {panel}, circuit {circuit}"), source).with_note(&note), tally);
+        }
+        circuit_links(d, store, None, gear, equipment, schedules, tally);
+        fed += 1;
+    }
+    fed
 }
 
 /// A built door as the fill saw it.
@@ -4408,6 +4722,36 @@ mod tests {
         let both = vec![shape("BEHIND", -200.0, -2.0), shape("FRONT", 14.0, 200.0)];
         assert_eq!(room_near_side(&both, Some("L1"), probe, 12.0, c, out).map(|r| r.label.as_str()), Some("FRONT"));
         assert_eq!(nearest_on(&[], probe), None);
+    }
+
+    #[test]
+    fn a_unit_through_a_wall_takes_the_room_on_the_side_holding_more_of_it() {
+        let shape = |label: &str, x0: f64, x1: f64| {
+            let outline = vec![Vec2::new(x0, -120.0), Vec2::new(x1, -120.0), Vec2::new(x1, 120.0), Vec2::new(x0, 120.0)];
+            RoomShape { bounds: Bounds2::from_points(outline.iter().copied()), outline, level: Some("L1".into()), label: label.into() }
+        };
+        // Inches: a 6" wall on x 0–6 between rooms WEST (to x 0) and EAST (from x 6).
+        let rooms = vec![shape("WEST", -200.0, 0.0), shape("EAST", 6.0, 200.0)];
+        let walls = vec![(Handle(1), Some("L1".to_string()), Bounds2::new(Vec2::new(0.0, -120.0), Vec2::new(6.0, 120.0)))];
+        let unit = |x0: f64, x1: f64| Bounds2::new(Vec2::new(x0, -21.0), Vec2::new(x1, 21.0));
+        let got = |b: &Bounds2| room_through_wall(&rooms, Some("L1"), &walls, b).map(|r| r.label.clone());
+        // Its middle in the wall, more of it in the east room: the east room's.
+        assert_eq!(got(&unit(-4.0, 18.0)), Some("EAST".into()));
+        assert_eq!(got(&unit(-12.0, 10.0)), Some("WEST".into()));
+        // As much of it on each side: neither face is its service face.
+        assert_eq!(got(&unit(-8.0, 14.0)), None);
+        // An exterior wall: the one room there is.
+        assert_eq!(room_through_wall(&rooms[1..], Some("L1"), &walls, &unit(-12.0, 10.0)).map(|r| r.label.clone()), Some("EAST".into()));
+        // In no wall of its level: none by this rule.
+        assert_eq!(room_through_wall(&rooms, Some("L2"), &walls, &unit(-4.0, 18.0)).map(|r| r.label.clone()), None);
+        // The unit's words come from the rules data: its kind's printed tag and loads.
+        let (tags, loads) = unit_words("ptac", "PTAC-1");
+        assert!(tags.iter().any(|t| t == "PTAC") && loads.iter().any(|l| l == "PTAC"), "{tags:?} {loads:?}");
+        assert!(mark_names("ptac-2", &tags) && !mark_names("PTACX", &tags) && !mark_names("", &tags));
+        // A panel or a damper is no room unit: nothing names it, nothing feeds it by its room.
+        assert_eq!(unit_words("panelboard", "A"), (Vec::new(), Vec::new()));
+        // Loads match whole words: a 1-letter tag is not in every description.
+        assert!(has_word("BATH FAN/LIGHTS", "BATH FAN") && has_word("PTAC", "PTAC") && !has_word("EXHAUST FAN", "A") && !has_word("SPTACS", "PTAC"));
     }
 
     #[test]
