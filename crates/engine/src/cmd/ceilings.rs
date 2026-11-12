@@ -397,7 +397,7 @@ pub(crate) fn props_of(e: &Entity) -> Vec<(&'static str, cadaddy_doc::props::Pro
     if let Some(a) = tag("area_sf").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0) {
         out.push(("area", Prop::new(a, Source::computed()).with_unit("sf")));
     }
-    // The room by its number (a room-keyed filter: `where room = 101`), else as the plan names it.
+    // The room by its number (a room-keyed filter: `where room = <number>`), else as the plan names it.
     let room = tag("room_number").or_else(|| tag("room"));
     if let Some(r) = room {
         let src = if tag("room_number").is_some() { Source::computed() } else { Source::from_doc(SourceKind::Print, "the plan's room label") };
