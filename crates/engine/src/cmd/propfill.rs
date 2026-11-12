@@ -3900,9 +3900,6 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
             changes.push((*h, store));
         }
     }
-    // Where a luminaire's documents disagree: a review item (an RFI of kind `conflict`) per type
-    // and field, as the guided job's lighting stage makes.
-    let lum_rfis = if stored { lum.review_items(&mut sp) } else { 0 };
     // Doors no tag numbers take the number of the room they serve (field practice: a door is
     // numbered by its room, lettered when the room has several), marked as a rule's.
     let numbers = door_numbers(&doors);
@@ -3923,6 +3920,10 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         }
     }
     let fed_by_room = feed_room_units(d, &unit_feeds, &room_devices, &schedules, &gear, &equipment, &mut changes, &mut at, &mut filled);
+    // Where a luminaire's documents disagree: a review item (an RFI of kind `conflict`) per type
+    // and field, as the guided job's lighting stage makes (after the room units' feeds: they
+    // read the spec's schedules).
+    let lum_rfis = if stored { lum.review_items(&mut sp) } else { 0 };
     let doors_json = json!({
         "count": doors.len(),
         "numbered_by_tag": doors.iter().filter(|x| x.numbered_here).count(),
