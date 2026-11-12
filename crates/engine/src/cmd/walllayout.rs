@@ -244,7 +244,7 @@ fn room_refs(s: &mut Session) -> Vec<RoomRef> {
                 Some(n) => n.to_string(),
                 None => r.name.trim().to_string(),
             };
-            RoomRef { label, level: r.level.clone(), outline: r.outline }
+            RoomRef { label, name: r.name.trim().to_string(), level: r.level.clone(), outline: r.outline }
         })
         .collect()
 }
@@ -265,6 +265,28 @@ impl Ctx {
     /// The traced room holding `p` on `level`.
     fn room_at(&self, level: Option<&str>, p: Vec2) -> Option<&RoomRef> {
         self.rooms.iter().find(|r| same_level(r.level.as_deref(), level) && cadaddy_geom::point_in_polygon(&r.outline, p))
+    }
+    /// The face labels (`101`, `CORRIDOR#2`) of the room a call names by its number or its name:
+    /// a label first, else every room of that name.
+    fn face_rooms(&self, wanted: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for f in self.faces.iter().filter(|f| f.room.eq_ignore_ascii_case(wanted)) {
+            if !out.contains(&f.room) {
+                out.push(f.room.clone());
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+        let labels: HashSet<String> =
+            self.rooms.iter().filter(|r| r.name.eq_ignore_ascii_case(wanted)).map(|r| r.label.to_ascii_uppercase()).collect();
+        for f in &self.faces {
+            let base = f.room.split_once('#').map_or(f.room.as_str(), |(b, _)| b).to_ascii_uppercase();
+            if labels.contains(&base) && !out.contains(&f.room) {
+                out.push(f.room.clone());
+            }
+        }
+        out
     }
     /// Why a wall device has no named face: what is on each side of its box's face.
     fn no_face_why(&self, dv: &Dev) -> String {
@@ -322,7 +344,7 @@ fn run_faces(s: &mut Session, p: &Value) -> Result<Value> {
     let north = north_param(FACES, p)?;
     let cx = context(s, FACES, north)?;
     let inch = cx.inch();
-    let room = str_param(p, "room").map(str::trim).filter(|r| !r.is_empty());
+    let room = number_or_name_param(p, "room").map(|r| cx.face_rooms(&r));
     let level = str_param(p, "level").map(str::trim).filter(|r| !r.is_empty());
     let wall = str_param(p, "wall").and_then(|h| Handle::parse_hex(h.trim()));
     let limit = p.get("limit").and_then(Value::as_u64).map_or(200, |n| n.clamp(1, 5_000) as usize);
@@ -333,7 +355,7 @@ fn run_faces(s: &mut Session, p: &Value) -> Result<Value> {
     let pick: Vec<&Face> = cx
         .faces
         .iter()
-        .filter(|f| room.is_none_or(|r| f.room.eq_ignore_ascii_case(r)))
+        .filter(|f| room.as_ref().is_none_or(|r| r.contains(&f.room)))
         .filter(|f| level.is_none_or(|l| f.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(l))))
         .filter(|f| wall.is_none_or(|w| f.walls.contains(&w)))
         .collect();
@@ -1991,11 +2013,7 @@ fn casing_hits(rect: &Rect, openings: &[(f64, f64, f64)], casing: f64) -> Vec<St
 // ─── bim.layout ─────────────────────────────────────────────────────────────
 
 fn run_layout(s: &mut Session, p: &Value) -> Result<Value> {
-    let room = str_param(p, "room")
-        .map(str::trim)
-        .filter(|r| !r.is_empty())
-        .ok_or_else(|| bad(LAYOUT, "`room` is required: its number or name"))?
-        .to_string();
+    let wanted = number_or_name_param(p, "room").ok_or_else(|| bad(LAYOUT, "`room` is required: its number or name"))?;
     let level = str_param(p, "level").map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
     let north = north_param(LAYOUT, p)?;
     // Devices not yet placed on their faces are placed first.
@@ -2006,13 +2024,15 @@ fn run_layout(s: &mut Session, p: &Value) -> Result<Value> {
     let cx = context(s, LAYOUT, north)?;
     let inch = cx.inch();
     let rules = solve::rules();
-    let mut fs: Vec<&Face> = cx
-        .faces
-        .iter()
-        .filter(|f| {
-            f.room.eq_ignore_ascii_case(&room) && level.as_deref().is_none_or(|l| f.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(l)))
-        })
-        .collect();
+    let on_level = |f: &&Face| level.as_deref().is_none_or(|l| f.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(l)));
+    // A name several rooms share needs the number.
+    let named: Vec<String> = cx.face_rooms(&wanted).into_iter().filter(|r| cx.faces.iter().filter(on_level).any(|f| f.room == *r)).collect();
+    if named.len() > 1 {
+        let list = named.iter().take(20).map(String::as_str).collect::<Vec<_>>().join(", ");
+        return Err(bad(LAYOUT, format!("{} rooms are named {wanted} ({list}): give its number", named.len())));
+    }
+    let room = named.into_iter().next().unwrap_or(wanted);
+    let mut fs: Vec<&Face> = cx.faces.iter().filter(|f| f.room == room).filter(on_level).collect();
     if fs.is_empty() {
         return Err(bad(LAYOUT, format!("no room {room} with wall faces{}", level.as_deref().map(|l| format!(" on {l}")).unwrap_or_default())));
     }
