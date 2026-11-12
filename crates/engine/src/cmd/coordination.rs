@@ -536,7 +536,9 @@ fn run_clashgo(s: &mut Session, p: &Value) -> Result<Value> {
     let _ = s.execute("vpoint", &json!({ "dir": [-1, -1, 1] }));
     let _ = s.execute("zoom", &json!({ "mode": "center", "center": [center.x, center.y], "height": size }));
 
-    // Ghost all other elements, keep only the two clash elements visible.
+    // Ghost all other elements, keep only the two clash elements visible: in place of whatever a
+    // coordination command isolated before (the last clash's pair stays hidden otherwise).
+    unisolate(s)?;
     let d = s.doc()?;
     let mut to_ghost = Vec::new();
     for e in d.model.iter().take(200_000) {
@@ -546,7 +548,7 @@ fn run_clashgo(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let record: Vec<Value> = to_ghost.iter().map(|h| json!(h.hex())).collect();
     super::selecttools::hide(s, to_ghost)?;
-    coord_set(s, "coord_clashgo_hidden", &Value::Array(record))?;
+    coord_set(s, CLASHGO_HIDDEN, &Value::Array(record))?;
 
     // Select the two elements.
     let _ = s.execute("select", &json!({ "handles": [ha.hex(), hb.hex()] }));
@@ -989,24 +991,36 @@ fn mep_level_system(e: &cadaddy_doc::Entity) -> Option<(String, Option<String>)>
     Some((level, system))
 }
 
-/// Show again the MEP objects the last isolate hid; how many.
+/// What the last isolate hid, and what the last clash navigation hid (the building spec keys of
+/// their handles).
+const ISOLATED: &str = "coord_isolated";
+const CLASHGO_HIDDEN: &str = "coord_clashgo_hidden";
+
+/// Show again the objects the last coordination isolation hid (an isolate by system or level, a
+/// clash shown alone); how many.
 fn unisolate(s: &mut Session) -> Result<usize> {
-    let d = s.doc()?;
-    let prev: Vec<cadaddy_doc::Handle> = coord_get(d, "coord_isolated")
-        .as_array()
-        .map(|a| {
-            a.iter().take(MAX_ISOLATED).filter_map(Value::as_str).filter_map(|h| u64::from_str_radix(h, 16).ok()).map(cadaddy_doc::Handle).collect()
-        })
-        .unwrap_or_default();
-    let back: Vec<cadaddy_doc::Handle> = prev.into_iter().filter(|h| d.is_hidden_object(*h)).collect();
-    if !back.is_empty() {
-        let d = s.doc_mut()?;
-        for h in &back {
-            d.hidden_objects.remove(h);
+    let mut shown = 0;
+    for key in [ISOLATED, CLASHGO_HIDDEN] {
+        let d = s.doc()?;
+        let prev = coord_get(d, key);
+        let Some(prev) = prev.as_array() else { continue };
+        let back: Vec<cadaddy_doc::Handle> = prev
+            .iter()
+            .take(MAX_ISOLATED)
+            .filter_map(Value::as_str)
+            .filter_map(cadaddy_doc::Handle::parse_hex)
+            .filter(|h| d.is_hidden_object(*h))
+            .collect();
+        if !back.is_empty() {
+            let d = s.doc_mut()?;
+            for h in &back {
+                d.hidden_objects.remove(h);
+            }
         }
+        coord_set(s, key, &Value::Null)?;
+        shown += back.len();
     }
-    coord_set(s, "coord_isolated", &Value::Null)?;
-    Ok(back.len())
+    Ok(shown)
 }
 
 /// Show only the MEP objects of one system and/or one level (the others are hidden, as
@@ -1061,7 +1075,7 @@ fn run_isolate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let record: Vec<Value> = hide.iter().map(|h| json!(h.hex())).collect();
     let hidden = super::selecttools::hide(s, hide)?;
-    coord_set(s, "coord_isolated", &Value::Array(record))?;
+    coord_set(s, ISOLATED, &Value::Array(record))?;
     Ok(json!({ "isolated": { "system": system, "level": level }, "hidden": hidden, "shown": shown }))
 }
 
@@ -1733,5 +1747,75 @@ mod tests {
         // When off, everything is inside.
         let off = CoordRenderState::default();
         assert!(off.inside_sbox(Vec3::new(100.0, 100.0, 100.0)));
+    }
+
+    /// A built room with a duct out through its wall (a clash with the wall), and the model's
+    /// room leaks and level render.
+    fn clash_building() -> (Session, String) {
+        let mut s = Session::new();
+        s.execute("layer.new", &json!({ "name": "A-WALL", "current": true })).unwrap();
+        s.execute("pline", &json!({ "vertices": [[0, 0], [480, 0], [480, 360], [0, 360]], "closed": true })).unwrap();
+        s.execute("pline", &json!({ "vertices": [[2000, 0], [2480, 0], [2480, 360], [2000, 360]], "closed": true })).unwrap();
+        s.execute("layer.new", &json!({ "name": "A-ROOM", "current": true })).unwrap();
+        s.execute("text", &json!({ "text": "Office A", "at": [240, 180], "height": 9.0 })).unwrap();
+        s.execute("text", &json!({ "text": "Office B", "at": [2240, 180], "height": 9.0 })).unwrap();
+        s.execute(
+            "bspec.set",
+            &json!({ "replace": true, "spec": {
+                "levels": [
+                    { "name": "Level 1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9, "region": [-1000, -1000, 1500, 1500], "base": [0, 0] },
+                    { "name": "Level 2", "elevation_ft": 14, "height_ft": 14, "ceiling_ft": 9, "region": [1500, -1000, 4000, 1500], "base": [2000, 0] }
+                ],
+                "layers": [{ "layer": "A-WALL", "role": "wall" }, { "layer": "A-ROOM", "role": "room_tag" }],
+                "rooms": [{ "name": "Office A", "level": "Level 1" }, { "name": "Office B", "level": "Level 2" }],
+                "mep": {
+                    "systems": [{ "name": "M-SUPPLY", "layer": "M-SUPPLY", "kind": "duct", "size_in": [12, 8], "bottom_ft": 10 }],
+                    "runs": [{ "system": "M-SUPPLY", "level": "Level 1", "points": [[-48.0, 300.0], [120.0, 300.0]], "size_in": [12, 8], "bottoms_ft": [10] }]
+                }
+            } }),
+        )
+        .unwrap();
+        s.execute("model.build", &json!({})).unwrap();
+        let r = s.execute("bim.clash", &json!({})).unwrap();
+        let id = r["clashes"][0]["id"].as_str().map(str::to_string);
+        (s, id.unwrap_or_else(|| panic!("the duct through the wall is a clash: {r}")))
+    }
+
+    fn leaks(s: &mut Session) -> usize {
+        let r = s.execute("model.issues", &json!({})).unwrap();
+        r["issues"].as_array().map_or(0, |a| a.iter().filter(|f| f["kind"] == "leak").count())
+    }
+
+    fn level_triangles(s: &mut Session, tag: &str) -> u64 {
+        let path = std::env::temp_dir().join(format!("cadaddy-clashgo-{}-{tag}.png", std::process::id()));
+        let r = s.execute("model.render", &json!({ "level": "Level 1", "width": 200, "height": 150, "path": path.to_string_lossy() }));
+        let _ = std::fs::remove_file(&path);
+        r.map_or(0, |v| v["triangles"].as_u64().unwrap_or(0))
+    }
+
+    #[test]
+    fn clash_navigation_is_undone_by_isolate_reset_and_never_changes_the_model_checks() {
+        let (mut s, id) = clash_building();
+        assert_eq!(leaks(&mut s), 0, "the closed rooms don't leak");
+        let tris = level_triangles(&mut s, "before");
+        assert!(tris > 0);
+
+        s.execute("coordination.clashgo", &json!({ "id": id })).unwrap();
+        assert!(!s.doc().unwrap().hidden_objects.is_empty(), "the clash is shown alone");
+        // The checks read the model, not the view.
+        assert_eq!(leaks(&mut s), 0, "a view isolation makes no room leak");
+        assert_eq!(level_triangles(&mut s, "isolated"), tris, "a level renders whole under a view isolation");
+
+        // A second clash navigation replaces the first; one reset shows everything again.
+        s.execute("coordination.clashgo", &json!({ "id": id })).unwrap();
+        let r = s.execute("coordination.isolate", &json!({ "reset": true })).unwrap();
+        assert!(r["shown"].as_u64().unwrap_or(0) > 0, "{r}");
+        assert!(s.doc().unwrap().hidden_objects.is_empty(), "reset shows what clash navigation hid");
+
+        // An isolate by system after a clash navigation replaces it too.
+        s.execute("coordination.clashgo", &json!({ "id": id })).unwrap();
+        s.execute("coordination.isolate", &json!({ "system": "M-SUPPLY" })).unwrap();
+        s.execute("coordination.isolate", &json!({ "reset": true })).unwrap();
+        assert!(s.doc().unwrap().hidden_objects.is_empty());
     }
 }
