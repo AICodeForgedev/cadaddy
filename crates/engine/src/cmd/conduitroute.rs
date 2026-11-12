@@ -422,6 +422,9 @@ pub(crate) struct Methods {
     /// `separate`; empty: none named), and where (Q6488).
     pub rated_box_remedy: String,
     pub rated_box_remedy_source: String,
+    /// Where the documents route the slab level's branch homeruns below the slab (a note's cite
+    /// and words; empty: overhead), as the underground plan read it (Q6348).
+    pub below_slab_homeruns: String,
 }
 
 impl Methods {
@@ -2506,8 +2509,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let methods = Methods::stored(d);
     let est = super::printcond::CIRCUIT_SYSTEM;
     let mut out = Routed::default();
-    let circuit_tags: Vec<(usize, &ElementTag)> =
-        sp.tags.iter().enumerate().filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART)).take(MAX_CIRCUITS).collect();
+    let circuit_tags: Vec<(usize, &ElementTag)> = sp
+        .tags
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART) && !super::ugcircuit::is_buried(&t.id))
+        .take(MAX_CIRCUITS)
+        .collect();
+    // A buried circuit's runs are the underground's (Q6348): never routed through the building.
     // Nothing to route: no circuits, no low-voltage outlet for a pathway (Q6203), no fire alarm
     // device to wire (Q6503).
     if circuit_tags.is_empty() && !lv::any_outlet(d) && !fa::any_device(d) {
@@ -5276,6 +5285,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     out.report["fire_alarm"] = fa_out.report;
     out.cable = cable_paths;
     out.runs = runs;
+    // The documents route the slab level's homeruns below the slab (Q6348): every routing does.
+    if !methods.below_slab_homeruns.trim().is_empty() {
+        super::ugcircuit::bury_homeruns(sp, &mut out.runs, &methods.below_slab_homeruns);
+    }
     out.runs.extend(lv_out.runs);
     out.runs.extend(fa_out.runs);
     out.tags = tags;

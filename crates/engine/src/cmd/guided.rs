@@ -23795,6 +23795,16 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
             all.findings.extend(built.findings);
         }
     }
+    // The site loads the panel schedules name that no site plan carries: each out of its panel to
+    // the site, proposed (Q6348: generated where the documents draw no route; where the load
+    // stands is still asked).
+    let carried: BTreeSet<String> = all.circuits.keys().map(|k| k.to_ascii_uppercase()).collect();
+    let loads = sitework::site_loads(&sp, &carried);
+    let (load_runs, load_lines) = sitework::proposed_site_loads(&sp, &slab, &loads);
+    all.runs.extend(load_runs);
+    // Each buried circuit's conductors and raceway by them, its tag in the spec (Q6348).
+    let minimum = super::ugcircuit::spec_minimum(s.doc()?);
+    let sized = super::ugcircuit::assign(&mut sp, &mut all.runs, minimum);
     // Into the spec.
     let new_tags: BTreeSet<String> =
         all.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).chain(all.moved.iter().map(|m| m.0.to_ascii_uppercase())).collect();
@@ -23829,9 +23839,7 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
     }
     // The site loads the panel schedules name that no site plan carries: the breakers' review
     // item for each row asks where it is (its feed runs underground once it is located).
-    let carried: BTreeSet<String> = all.circuits.keys().map(|k| k.to_ascii_uppercase()).collect();
-    let asked: Vec<String> =
-        sitework::site_loads(&sp, &carried).iter().take(MAX_SITE_RFIS).map(|l| format!("{}-{} {}", l.panel, l.number, l.description)).collect();
+    let asked: Vec<String> = loads.iter().take(MAX_SITE_RFIS).map(|l| format!("{}-{} {}", l.panel, l.number, l.description)).collect();
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     // Built: the luminaires, then the concrete and the gear and runs, moved as the build moved
     // the slab level to stack it; each element marked as site work. Only this step's own
@@ -23947,6 +23955,8 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
         "stub_ups": all.runs.iter().filter(|r| r.top_ft.is_some()).count(),
         "circuits": all.circuits,
         "site_loads_asked": asked,
+        "site_loads_proposed": load_lines,
+        "buried_circuits": sized,
         "findings": all.findings,
         "basis": [rules.trade_source.clone(), rules.register.source.clone(), rules.line_source.clone()],
     });
@@ -24051,6 +24061,23 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
             scale_sheet = Some(number.clone());
         }
     }
+    // The documents route the slab level's branch homeruns below the slab (Q6348): kept with the
+    // wiring methods, so every routing carries them under the floor.
+    let homeruns_below = callouts
+        .iter()
+        .find(|c| c.trade == "E" && c.what == "branch_below" && c.said_buried)
+        .map(|c| format!("{}: {}", c.cite(), c.text.trim().chars().take(160).collect::<String>()))
+        .unwrap_or_default();
+    let homeruns_changed = {
+        let d = s.doc_mut()?;
+        let mut m = super::conduitroute::Methods::stored(d);
+        let changed = m.below_slab_homeruns != homeruns_below;
+        if changed {
+            m.below_slab_homeruns.clone_from(&homeruns_below);
+            m.store(d);
+        }
+        changed
+    };
     // A rerun: what this step built before goes.
     sp.mep.runs.retain(|r| !ugplan::made_here(r));
     // (c) The called work CADaddy can locate. A keynote's buried conduit is the keynotes step's.
@@ -24096,7 +24123,10 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
             })
             .collect()
     };
-    let (called_runs, fates) = ugplan::place(&sp, &rooms, &callouts, &keynote_built);
+    let (mut called_runs, fates) = ugplan::place(&sp, &rooms, &callouts, &keynote_built);
+    // The called site circuits' conductors and raceway by them (Q6348).
+    let minimum = super::ugcircuit::spec_minimum(s.doc()?);
+    let buried_circuits = super::ugcircuit::assign(&mut sp, &mut called_runs, minimum);
     let vent_below = callouts.iter().any(|c| c.trade == "P" && c.what == "vent");
     let bases = ugplan::stack_bases(&sp, vent_below);
     // (d) What else should be underground.
@@ -24180,6 +24210,19 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
     let n_bases = bases.len();
     let n_proposed_runs = proposed_runs.len();
     build_new_mep(s, sp, new_runs, &BTreeSet::new())?;
+    // The homeruns routed again under the slab (or back overhead) where the documents' word on them
+    // changed.
+    let homeruns_rerouted = if homeruns_changed && s.doc().is_ok_and(|d| d.model.iter().any(|e| super::mepatoms::is_atom(e))) {
+        match s.execute("conduit.reroute", &json!({})) {
+            Ok(_) => true,
+            Err(e) => {
+                result["underground_reroute_error"] = json!(e.to_string());
+                false
+            }
+        }
+    } else {
+        false
+    };
     // (b) Each trade with buried work and no plan of its own gets its generated sheet.
     let check = s.execute("ugsheets.check", &json!({}))?;
     // The required services the drawings don't show, and the proposed routes too close to another
@@ -24325,6 +24368,10 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
         "trades": trades,
         "sheets": built_sheets,
         "called_runs": n_called,
+        "buried_circuits": buried_circuits,
+        "homeruns_below_slab": homeruns_below,
+        "homeruns_rerouted": homeruns_rerouted,
+        "by_kind": check["takeoff"]["E"]["by_kind"].clone(),
         "stack_bases": n_bases,
         "proposed_runs": n_proposed_runs,
         "proposals": proposals.iter().map(ugplan::Proposal::json).collect::<Vec<_>>(),

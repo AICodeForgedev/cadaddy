@@ -231,6 +231,7 @@ mod takeoff;
 pub mod tours;
 pub mod tradeatoms;
 pub(crate) mod traderooms;
+pub(crate) mod ugcircuit;
 pub(crate) mod ugplan;
 pub mod ugsheets;
 pub(crate) mod underceiling;
