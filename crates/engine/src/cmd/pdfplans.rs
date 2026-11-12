@@ -174,9 +174,9 @@ impl DoorSwings {
         let tol = 0.05 * r;
         let seen = (-1..=1).any(|dx| {
             (-1..=1).any(|dy| {
-                self.cells.get(&(x.saturating_add(dx), y.saturating_add(dy))).is_some_and(|v| {
-                    v.iter().any(|(q, s)| q.dist(c) <= tol.max(0.05 * s) && (s - r).abs() <= 0.05 * r.max(*s))
-                })
+                self.cells
+                    .get(&(x.saturating_add(dx), y.saturating_add(dy)))
+                    .is_some_and(|v| v.iter().any(|(q, s)| q.dist(c) <= tol.max(0.05 * s) && (s - r).abs() <= 0.05 * r.max(*s)))
             })
         });
         if !seen {
