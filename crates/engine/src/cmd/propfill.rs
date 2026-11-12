@@ -13,7 +13,10 @@
 //! - **doors**: the door number printed at the opening, width and height (computed), the rooms
 //!   on its two sides.
 //! - **walls**: the wall type the build gave it (from a wall tag on the plan, else the spec's
-//!   type for its layer: a rule), its height and the rooms on its two sides.
+//!   type for its layer: a rule), its height and the rooms on its two sides; and its type's
+//!   data from the wall type legend (Q6594): the assembly by side, fire rating and tested design,
+//!   acoustic rating, insulation, stud size and spacing, head condition. A wall with no type (or
+//!   a type no legend gives) shows the type data as not stated, saying why.
 //! - **ducts and pipes**: size, system, shape and elevation from their runs (a size read from a
 //!   tag is `print`; a route height that was estimated is `default`).
 //! - **air terminals**: their kind, neck size and the airflow printed beside them (`150 CFM`).
@@ -3087,6 +3090,121 @@ fn window_room<'a>(rooms: &'a [RoomShape], lvl: Option<&str>, b: &Bounds2, upf: 
 /// How many [`SIDE_FT`] steps past its wall's faces a window looks for the room it lights.
 const WINDOW_ROOM_STEPS: u32 = 3;
 
+/// What a wall shows of its type (Q6594): the keys a wall's form asks for that its type gives.
+const WALL_TYPE_KEYS: [&str; 4] = ["assembly", "fire_rating", "stud_size", "stud_spacing"];
+/// A value no document gives (the forms count it missing, with its note as the reason).
+const NOT_STATED: &str = "not stated in the documents";
+
+/// A wall type's build-up face to face, by side: `side 1: 5/8" Type X gypsum board | core: 2x6
+/// wood studs @ 16" o.c. + R-19 batt (in the cavity) | side 2: …`.
+pub(crate) fn assembly_text(a: &cadaddy_walk3d::Assembly) -> String {
+    use cadaddy_walk3d::LayerSide;
+    let mut parts: Vec<String> = Vec::new();
+    for (side, word) in [(LayerSide::Side1, "side 1"), (LayerSide::Core, "core"), (LayerSide::Side2, "side 2")] {
+        let layers: Vec<String> = a
+            .layers
+            .iter()
+            .take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS)
+            .filter(|l| l.side == side)
+            .map(|l| (l.material.trim().chars().take(200).collect::<String>(), l.in_cavity))
+            .filter(|(m, _)| !m.is_empty())
+            .map(|(m, cavity)| if cavity { format!("{m} (in the cavity)") } else { m })
+            .collect();
+        if !layers.is_empty() {
+            parts.push(format!("{word}: {}", layers.join(" + ")));
+        }
+    }
+    parts.join(" | ")
+}
+
+/// A wall's type data as derived properties (Q6594): its build-up by side, fire rating and the
+/// tested design, acoustic rating, insulation, stud size and spacing (as its framing is laid) and
+/// head condition, sourced to the legend. `said`: the plan prints the wall's type (or a person
+/// gave it); else its type is its layer's or a guess and the values are derived by that rule. A
+/// wall with no type, or one whose type no legend gives, shows the form's keys as not stated,
+/// saying why. A person's value stays ([`put`]).
+fn wall_type_data(
+    store: &mut Props,
+    ty: Option<&str>,
+    wt: Option<&cadaddy_walk3d::WallType>,
+    said: bool,
+    own_head: Option<String>,
+    rules: &super::tradeatoms::Rules,
+    tally: &mut BTreeMap<String, usize>,
+) {
+    let Some((wt, a)) = wt.and_then(|w| w.assembly.as_ref().map(|a| (w, a))) else {
+        let why = match ty {
+            Some(t) => format!("wall type {t} has no legend entry: no build-up read for it"),
+            None => "untyped wall: no type tag on the plan, none for its layer and none given by a person".to_string(),
+        };
+        for key in WALL_TYPE_KEYS {
+            put(store, key, Prop::new(NOT_STATED, Source::of(SourceKind::Default)).with_note(&why), tally);
+        }
+        return;
+    };
+    let legend = if a.source.trim().is_empty() { format!("wall type {}", wt.name) } else { a.source.chars().take(200).collect() };
+    let src = if said {
+        Source::from_doc(SourceKind::Legend, &legend)
+    } else {
+        Source::from_doc(SourceKind::Rule, &format!("{legend}; the wall's type is not tagged on the plan (its layer's, or a guess)"))
+    };
+    // The legend's own value takes the wall's source; a rule's or a person's rule keeps its own.
+    let own = |s: Source| if s.kind == SourceKind::Legend { src.clone() } else { s };
+    let assembly = assembly_text(a);
+    if !assembly.is_empty() {
+        put(store, "assembly", Prop::new(assembly, src.clone()), tally);
+    }
+    match a.fire_rating.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => put(store, "fire_rating", Prop::new(r, src.clone()), tally),
+        None => put(store, "fire_rating", Prop::new("not rated", src.clone()).with_note("the legend gives the type no fire rating"), tally),
+    }
+    if let Some(t) = a.notes.iter().take(64).find_map(|n| n.strip_prefix("tested assembly ")).map(str::trim).filter(|t| !t.is_empty()) {
+        put(store, "tested_design", Prop::new(t, src.clone()), tally);
+    }
+    if let Some(r) = a.acoustic_rating.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        put(store, "acoustic_rating", Prop::new(r, src.clone()), tally);
+    }
+    let insulation: Vec<&str> = a
+        .layers
+        .iter()
+        .take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS)
+        .filter(|l| l.category.trim().eq_ignore_ascii_case("insulation"))
+        .map(|l| l.material.trim())
+        .filter(|m| !m.is_empty())
+        .collect();
+    if !insulation.is_empty() {
+        put(store, "insulation", Prop::new(insulation.join(" + "), src.clone()), tally);
+    }
+    match super::tradeatoms::studs_of(wt, rules) {
+        Some(st) => {
+            put(store, "stud_size", Prop::new(st.size, own(st.size_src)), tally);
+            put(store, "stud_spacing", Prop::new(round2(st.spacing_in), own(st.spacing_src)).with_unit("in"), tally);
+        }
+        None => {
+            let why = "its type's build-up has no studs (no framing layer: masonry, concrete or none read)";
+            for key in ["stud_size", "stud_spacing"] {
+                put(store, key, Prop::new("n/a", src.clone()).with_note(why), tally);
+            }
+        }
+    }
+    let mut head: Vec<String> = Vec::new();
+    if let Some(h) = a.height {
+        head.push(h.text(a.above_ceiling_in));
+    }
+    if let Some(h) = &a.head {
+        head.push(match h.detail.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+            Some(d) => format!("{} (detail {d})", h.text()),
+            None => h.text(),
+        });
+    }
+    if let Some(o) = own_head.filter(|o| !o.trim().is_empty()) {
+        head.push(format!("this wall's top: {}", o.trim().chars().take(200).collect::<String>()));
+    }
+    if !head.is_empty() {
+        put(store, "head_condition", Prop::new(head.join("; "), src), tally);
+    }
+}
+
 fn made(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tag(e, key).map(str::to_string).filter(|v| !v.trim().is_empty())
 }
@@ -3206,6 +3324,8 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         .filter_map(|u| u.get("number").and_then(serde_json::Value::as_str))
         .map(|n| n.trim().to_ascii_uppercase())
         .collect();
+    // The trade rules a wall type's studs are laid by, read at the first wall.
+    let mut wall_rules: Option<super::tradeatoms::Rules> = None;
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -3511,13 +3631,16 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
             }
             "wall" => {
                 let Some((b, z0, z1)) = ext else { continue };
-                if let Some(t) = made(e, "type") {
+                let made_type = made(e, "type");
+                let mut type_printed = false;
+                if let Some(t) = made_type.clone() {
                     let marked = sp.walls.iter().any(|m| {
                         m.wall_type.eq_ignore_ascii_case(&t)
                             && m.status() == cadaddy_walk3d::MarkStatus::Drawing
                             && lvl.is_some_and(|l| l.eq_ignore_ascii_case(&m.level))
                             && dist_to(&b, Vec2::new((m.a[0] + m.b[0]) / 2.0, (m.a[1] + m.b[1]) / 2.0) + shift) <= upf
                     });
+                    type_printed = marked;
                     let src = if marked {
                         Source::print(&sheet_at(&sp, b.center() - shift, lvl), None)
                     } else {
@@ -3529,6 +3652,17 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         put(&mut store, "thickness", Prop::new(round2(wt.thickness_in), src).with_unit("in"), tally);
                     }
                 }
+                // Its type's data from the legend (Q6594): a person's type for the wall outranks
+                // the build's.
+                let user_type = store
+                    .get("type")
+                    .filter(|p| p.source.kind == SourceKind::User && p.has_value())
+                    .map(|p| p.text().trim().chars().take(250).collect::<String>());
+                let said = user_type.is_some() || type_printed;
+                let ty = user_type.or(made_type);
+                let wt = ty.as_deref().and_then(|t| sp.wall_types.iter().find(|w| w.name.eq_ignore_ascii_case(t)));
+                let rules = wall_rules.get_or_insert_with(|| super::tradeatoms::Rules::of(d, &sp));
+                wall_type_data(&mut store, ty.as_deref(), wt, said, made(e, "head"), rules, tally);
                 if (z1 - z0).is_finite() && z1 > z0 {
                     put(&mut store, "height", Prop::new(round2((z1 - z0) / upf), Source::computed()).with_unit("ft"), tally);
                 }
