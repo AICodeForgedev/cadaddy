@@ -718,8 +718,39 @@ pub(crate) fn stack_fan_ducts(sp: &mut BuildingSpec, details: &[RiserDetail], co
         };
         let n = members.len() as f64;
         if let Some(note) = continuous {
-            // One duct per fan, side by side across the chase, lowest storey's first.
+            // One duct per fan, side by side across the chase: the highest storey's nearest its
+            // middle, each lower storey's farther out (on the side its duct comes in from), so a
+            // storey's ducts cross to theirs only past the places of storeys over it (empty
+            // there), never through a duct rising from below (Q6550).
             let pitch = order.iter().filter_map(|i| fans.get(*i)).map(|f| f.size_in).fold(0.0_f64, f64::max) + gap_in;
+            let places = {
+                let mut free: Vec<f64> = (0..order.len()).map(|k| k as f64 - (n - 1.0) / 2.0).collect();
+                free.sort_by(|a, b| a.abs().total_cmp(&b.abs()).then(a.total_cmp(b)));
+                let mut high: Vec<usize> = (0..order.len()).collect();
+                high.sort_by(|a, b| {
+                    let z = |k: &usize| order.get(*k).and_then(|i| fans.get(*i)).and_then(|f| elevation(&f.level)).unwrap_or(f64::NEG_INFINITY);
+                    z(b).total_cmp(&z(a)).then(a.cmp(b))
+                });
+                let mut out = vec![0.0_f64; order.len()];
+                for k in high {
+                    // Which side of the chase's middle its duct comes in on.
+                    let side = order.get(k).and_then(|i| fans.get(*i)).and_then(|f| onto.get(&f.level).map(|s| add(f.end, *s))).map_or(0.0, |e| {
+                        let d = sub(e, *chase);
+                        d[0] * along[0] + d[1] * along[1]
+                    });
+                    let Some(least) = free.first().map(|o| o.abs()) else { break };
+                    let at = free
+                        .iter()
+                        .position(|o| (o.abs() - least).abs() < 1e-9 && (side.abs() <= 1e-6 * upf || *o == 0.0 || o.signum() == side.signum()))
+                        .unwrap_or(0);
+                    if at < free.len()
+                        && let Some(slot) = out.get_mut(k)
+                    {
+                        *slot = free.remove(at);
+                    }
+                }
+                out
+            };
             let basis = format!(
                 "derived: {what} stacks the typical rooms' fan ducts in the chase up to the roof terminal {} the roof plan places over it; the notes require each duct continuous to the outside ({note})",
                 t.tag
@@ -727,7 +758,7 @@ pub(crate) fn stack_fan_ducts(sp: &mut BuildingSpec, details: &[RiserDetail], co
             for (k, fi) in order.iter().enumerate() {
                 let Some(f) = fans.get(*fi) else { continue };
                 let Some(fz) = elevation(&f.level) else { continue };
-                let off = (k as f64 - (n - 1.0) / 2.0) * pitch / 12.0 * upf;
+                let off = places.get(k).copied().unwrap_or(0.0) * pitch / 12.0 * upf;
                 let off = [along[0] * off, along[1] * off];
                 let slot = add(*chase, off);
                 let Some(slot_f) = to_level(slot, &f.level) else { continue };
@@ -1189,6 +1220,39 @@ mod tests {
         assert_eq!(pieces, 3 * 2 * (4 + 3 + 2 + 1));
     }
 
+    /// The distance (sheet units) from `p` to the segment `a`-`b`.
+    fn to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+        let ab = sub(b, a);
+        let l2 = ab[0] * ab[0] + ab[1] * ab[1];
+        let t = if l2 > 1e-18 { (((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        dist(p, [a[0] + ab[0] * t, a[1] + ab[1] * t])
+    }
+
+    /// Each storey's fan ducts go across the chase to their places past no duct rising through
+    /// that storey from below (a duct through a duct; the takeoff would count a tee there).
+    #[test]
+    fn a_storeys_ducts_cross_the_chase_to_their_places_past_no_duct_rising_from_below() {
+        let mut sp = building(&[("GRH-7", [40_130.0, 260.0])]);
+        let report = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], Some("CONTINUOUS"));
+        assert_eq!(report["risers"], 8, "{report}");
+        let across: Vec<&MepRun> =
+            sp.mep.runs.iter().filter(|r| r.height_source.starts_with(RISER_SOURCE) && r.top_ft.is_none() && r.level != "Roof").collect();
+        assert_eq!(across.len(), 8);
+        let mut passing = 0;
+        for r in sp.mep.runs.iter().filter(|r| r.height_source.starts_with(RISER_SOURCE) && r.top_ft.is_some() && r.level != "Roof") {
+            for s in super::super::risercut::storey_runs(&sp, r).iter().filter(|s| s.run.level != r.level) {
+                let p = s.run.points.first().copied().unwrap_or_default();
+                passing += 1;
+                for c in across.iter().filter(|c| c.level == s.run.level) {
+                    let (a, b) = (c.points.first().copied().unwrap_or_default(), c.points.last().copied().unwrap_or_default());
+                    // The takeoff's reach for a 4" duct: 3.2".
+                    assert!(to_segment(p, a, b) > 3.2, "{} duct {a:?}-{b:?} through the riser from {} at {p:?}", c.level, r.level);
+                }
+            }
+        }
+        assert_eq!(passing, 2 * (3 + 2 + 1));
+    }
+
     /// A riser that would stand in a plumbing fixture or a unit on a storey it passes is moved to
     /// the nearest place clear of it there, the drawn place kept beside the corrected one; one
     /// over a fixture on its own storey's floor (it starts at the ceiling), and a damper it runs
@@ -1211,7 +1275,7 @@ mod tests {
             height_ft: height,
             ..Default::default()
         };
-        sp.mep.equipment.push(unit("fan_coil_unit", "Level 3", [20_120.0, 200.0], [20_140.0, 250.0], 0.0, 6.0));
+        sp.mep.equipment.push(unit("fan_coil_unit", "Level 3", [20_120.0, 200.0], [20_140.0, 262.0], 0.0, 6.0));
         sp.mep.equipment.push(unit("fire_damper", "Level 2", [10_125.0, 230.0], [10_135.0, 250.0], 8.0, 1.0));
         let report = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], Some("CONTINUOUS"));
         assert_eq!(report["risers"], 8, "{report}");
@@ -1228,7 +1292,7 @@ mod tests {
                     assert!(!in_tub(&bath, p, 3.0 - 1e-6), "Level 2 piece of a {} riser in the tub: {p:?}", r.level);
                 }
                 if s.run.level == "Level 3" {
-                    let clear = p[0] <= 20_117.0 + 1e-6 || p[0] >= 20_143.0 - 1e-6 || p[1] <= 197.0 + 1e-6 || p[1] >= 253.0 - 1e-6;
+                    let clear = p[0] <= 20_117.0 + 1e-6 || p[0] >= 20_143.0 - 1e-6 || p[1] <= 197.0 + 1e-6 || p[1] >= 265.0 - 1e-6;
                     assert!(clear, "Level 3 piece of a {} riser in the unit: {p:?}", r.level);
                 }
             }
