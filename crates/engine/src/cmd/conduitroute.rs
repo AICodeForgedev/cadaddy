@@ -422,6 +422,9 @@ pub(crate) struct Methods {
     /// `separate`; empty: none named), and where (Q6488).
     pub rated_box_remedy: String,
     pub rated_box_remedy_source: String,
+    /// Where the documents route the slab level's branch homeruns below the slab (a note's cite
+    /// and words; empty: overhead), as the underground plan read it (Q6348).
+    pub below_slab_homeruns: String,
 }
 
 impl Methods {
@@ -1628,6 +1631,19 @@ pub(crate) fn floor_path(a: (Vec2, f64), b: (Vec2, f64), floor: f64, upf: f64, r
     (pts, bot)
 }
 
+/// The room a unit's own copy of a typical panel is named for (`U-1806`: the schedule is panel
+/// `U`'s, one panel per unit, this one room 1806's), else None (a building panel, or a copy with a
+/// schedule of its own). Such a panel feeds its own unit only.
+fn unit_panel_room(sp: &BuildingSpec, tag: &str) -> Option<String> {
+    let t = tag.trim();
+    let has = |p: &str| sp.mep.panel_schedules.iter().any(|s| s.panel.trim().eq_ignore_ascii_case(p.trim()));
+    if has(t) {
+        return None;
+    }
+    let (p, room) = t.split_once('-')?;
+    (has(p) && !room.trim().is_empty() && room.chars().any(|c| c.is_ascii_digit())).then(|| room.trim().to_string())
+}
+
 /// A gear element a homerun lands on.
 #[derive(Clone, Debug)]
 struct GearEl {
@@ -2506,8 +2522,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let methods = Methods::stored(d);
     let est = super::printcond::CIRCUIT_SYSTEM;
     let mut out = Routed::default();
-    let circuit_tags: Vec<(usize, &ElementTag)> =
-        sp.tags.iter().enumerate().filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART)).take(MAX_CIRCUITS).collect();
+    let circuit_tags: Vec<(usize, &ElementTag)> = sp
+        .tags
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART) && !super::ugcircuit::is_buried(&t.id))
+        .take(MAX_CIRCUITS)
+        .collect();
+    // A buried circuit's runs are the underground's (Q6348): never routed through the building.
     // Nothing to route: no circuits, no low-voltage outlet for a pathway (Q6203), no fire alarm
     // device to wire (Q6503).
     if circuit_tags.is_empty() && !lv::any_outlet(d) && !fa::any_device(d) {
@@ -2921,11 +2943,15 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     no_tag = no_tag.saturating_sub(resolved_devices);
     // -- A power device the documents put on no circuit (Q6216, trade practice `E-UNCIRCUITED`):
-    // the field puts it on a spare of the nearest panel of its level (the schedule's spares, then
-    // its spaces, else a new breaker), a room's such devices sharing one circuit; routed like the
-    // rest, its pieces inferred with the rule's basis, never drawn. --
+    // the field ties it into its room's own circuit of its kind (the nearest device of its kind in
+    // its room that the plans circuit, Q6344); else puts it on a spare of its room's own panel (the
+    // panel its room's circuits come from), else of the nearest panel of its level that is no
+    // other unit's own panel (the schedule's spares, then its spaces, else a new breaker), a
+    // room's such devices sharing one circuit; routed like the rest, its pieces inferred with the
+    // rule's basis, never drawn. --
     let mut inferred_rows: Vec<Value> = Vec::new();
     let mut inferred_devs: BTreeSet<usize> = BTreeSet::new();
+    let mut joined_rows: Vec<Value> = Vec::new();
     {
         let rule = super::provenance::rule("E-UNCIRCUITED");
         let reach = rule.reach_ft.max(0.0) * upf;
@@ -2934,35 +2960,99 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             let (a, b) = gap::spare_circuits(sp, t);
             if a.is_empty() && b.is_empty() { t.split_once('-').map(|(p, _)| gap::spare_circuits(sp, p)).unwrap_or((a, b)) } else { (a, b) }
         };
+        // Each room's circuited devices (level and room, lower case): (circuit, device).
+        let mut in_room: HashMap<(String, String), Vec<(usize, usize)>> = HashMap::new();
+        for (ci, c) in circs.iter().enumerate() {
+            for d in c.devs.iter().copied() {
+                let Some(o) = devs.get(d) else { continue };
+                if !o.room.trim().is_empty() {
+                    in_room.entry((o.level.to_ascii_lowercase(), o.room.trim().to_ascii_lowercase())).or_default().push((ci, d));
+                }
+            }
+        }
+        let mut joins: Vec<(usize, usize)> = Vec::new();
         let mut groups: BTreeMap<(String, String, String), Vec<usize>> = BTreeMap::new();
         for di in &uncircuited {
             let Some(dv) = devs.get(*di) else { continue };
             if !gap::is_power_device(&dv.kind) {
                 continue;
             }
+            let room = dv.room.trim();
+            let mates = in_room.get(&(dv.level.to_ascii_lowercase(), room.to_ascii_lowercase())).map_or(&[][..], Vec::as_slice);
+            // Its room's nearest device of its kind on a circuit: that circuit.
+            let same_kind = mates
+                .iter()
+                .filter_map(|(ci, d)| Some((*ci, devs.get(*d)?)))
+                .filter(|(_, o)| o.kind.eq_ignore_ascii_case(&dv.kind))
+                .min_by(|a, b| a.1.at.dist(dv.at).total_cmp(&b.1.at.dist(dv.at)));
+            if !room.is_empty()
+                && let Some((ci, o)) = same_kind
+            {
+                joins.push((ci, *di));
+                if joined_rows.len() < MAX_ITEMS {
+                    let label = circs.get(ci).map_or_else(String::new, |c| c.label.clone());
+                    joined_rows.push(json!({
+                        "device": dv.handle.hex(), "kind": dv.kind, "level": dv.level, "room": room, "circuit": label,
+                        "basis": rule.basis_for(&format!("{room} on {}: its room's {} {} is on circuit {label}", dv.level, dv.kind, o.handle.hex())),
+                        "made": "inferred",
+                    }));
+                }
+                continue;
+            }
+            // Its room's own panel: the one most of its room's circuited devices are fed from.
+            let mut votes: BTreeMap<String, usize> = BTreeMap::new();
+            for (ci, _) in mates {
+                if let Some(c) = circs.get(*ci).filter(|c| !c.panel.trim().is_empty()) {
+                    *votes.entry(c.panel.trim().to_ascii_uppercase()).or_default() += 1;
+                }
+            }
+            let room_panel = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))).map(|(p, _)| p);
             // Site gear (the utility's transformer, a pole) feeds no branch circuit in the building.
             let site = |g: &GearEl| sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&g.tag) && super::utilityxfmr::is_site(e));
-            let near = gear
-                .iter()
-                .filter(|g| same_level(&g.level, &dv.level) && electrical(g) && !site(g))
-                .map(|g| (manhattan(gear_ctr(g), dv.at), g))
-                .filter(|(dd, _)| *dd <= reach)
-                .min_by(|a, b| a.0.total_cmp(&b.0));
-            if let Some((_, g)) = near {
-                groups.entry((dv.level.clone(), g.tag.clone(), dv.room.trim().to_string())).or_default().push(*di);
+            let candidates = || gear.iter().filter(|g| same_level(&g.level, &dv.level) && electrical(g) && !site(g));
+            // The room's panel: its own copy (`P-<room>`), else the panel itself.
+            let own = room_panel.as_ref().and_then(|p| {
+                let copy = format!("{p}-{}", room.to_ascii_uppercase());
+                candidates().find(|g| g.tag.trim().eq_ignore_ascii_case(&copy)).or_else(|| {
+                    candidates()
+                        .filter(|g| g.tag.trim().eq_ignore_ascii_case(p))
+                        .min_by(|a, b| manhattan(gear_ctr(a), dv.at).total_cmp(&manhattan(gear_ctr(b), dv.at)))
+                })
+            });
+            // Else the nearest in reach, never another unit's own panel.
+            let near = own.or_else(|| {
+                candidates()
+                    .filter(|g| unit_panel_room(sp, &g.tag).is_none_or(|r| r.eq_ignore_ascii_case(room)))
+                    .map(|g| (manhattan(gear_ctr(g), dv.at), g))
+                    .filter(|(dd, _)| *dd <= reach)
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, g)| g)
+            });
+            if let Some(g) = near {
+                groups.entry((dv.level.clone(), g.tag.clone(), room.to_string())).or_default().push(*di);
             }
         }
-        let mut next: HashMap<String, (Vec<String>, usize)> = HashMap::new();
+        for (ci, di) in joins {
+            if let Some(c) = circs.get_mut(ci) {
+                c.devs.push(di);
+                inferred_devs.insert(di);
+            }
+        }
+        // Each panel's spares then its spaces, how many of them are spares, and the next one.
+        let mut next: HashMap<String, (Vec<String>, usize, usize)> = HashMap::new();
         for ((level, panel, room), ds) in groups.into_iter().take(MAX_CIRCUITS) {
             let e = next.entry(panel.clone()).or_insert_with(|| {
                 let (a, b) = sched_of(&panel);
-                (a.into_iter().chain(b).collect(), 0)
+                let spares = a.len();
+                (a.into_iter().chain(b).collect(), spares, 0)
             });
-            let (number, breaker) = match e.0.get(e.1) {
-                Some(n) => (n.clone(), format!("spare {n}")),
-                None => (format!("X{}", e.1.saturating_sub(e.0.len()) + 1), "no spare listed: a new breaker".to_string()),
+            // A spare is a breaker the panel has; a space only room for a new one (Q6344).
+            let (number, breaker) = match e.0.get(e.2) {
+                Some(n) if e.2 < e.1 => (n.clone(), format!("spare {n}")),
+                Some(n) => (n.clone(), format!("space {n}: a new breaker in it")),
+                None => (format!("X{}", e.2.saturating_sub(e.0.len()) + 1), "no spare listed: a new breaker".to_string()),
             };
-            e.1 += 1;
+            e.2 += 1;
             let label = format!("{panel}-{number}");
             let at = ds.first().and_then(|i| devs.get(*i)).map_or(Vec2::new(0.0, 0.0), |d| d.at);
             let kinds: BTreeMap<&str, usize> = ds.iter().filter_map(|i| devs.get(*i)).fold(BTreeMap::new(), |mut m, d| {
@@ -5212,7 +5302,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "clearance_source": rl.clearance_source(),
         "route_source": rl.route.source,
     }); // What the build filled in and corrected for the field (Q6216).
-    out.report["inferred_circuits"] = json!({"total": inferred_rows.len(), "devices": inferred_devs.len(), "items": inferred_rows});
+    out.report["inferred_circuits"] = json!({"total": inferred_rows.len(), "devices": inferred_devs.len(), "items": inferred_rows, "joined": joined_rows.len(), "joined_items": joined_rows});
     out.report["branched_trees"] = branched_trees;
     out.report["floor_boxes_under_slab"] = json!({
         "boxes": feeds.len(),
@@ -5276,6 +5366,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     out.report["fire_alarm"] = fa_out.report;
     out.cable = cable_paths;
     out.runs = runs;
+    // The documents route the slab level's homeruns below the slab (Q6348): every routing does.
+    if !methods.below_slab_homeruns.trim().is_empty() {
+        super::ugcircuit::bury_homeruns(sp, &mut out.runs, &methods.below_slab_homeruns);
+    }
     out.runs.extend(lv_out.runs);
     out.runs.extend(fa_out.runs);
     out.tags = tags;

@@ -1,0 +1,15 @@
+{
+  "material": "PVC",
+  "min_in": 0.5,
+  "min_source": "NEC 352.20(A): rigid PVC conduit smaller than 1/2 in trade size is not used (the specification's minimum raceway size governs where it gives one)",
+  "conductors_source": "rule: a branch or site circuit buried below the slab or in the earth pulls its own conductors in its own raceway: the panel schedule's wire, never under what its breaker allows (NEC 240.4, Table 310.16), upsized for the voltage drop over its buried length (NEC 210.19(A) Informational Note No. 4); a one-pole circuit its neutral; one equipment ground for the raceway, sized for its largest breaker (NEC 250.122(A), (C)) and upsized with its phase conductors (250.122(B))",
+  "raceway_source": "rule: the raceway the smallest PVC its conductors' fill allows (NEC Chapter 9 Table 1, Table 4 PVC, Table 5 THHN/THWN-2), never under the minimum",
+  "length_source": "the voltage drop is worked at the circuit's whole load over all its buried run (its home run and the links between its loads): the most the load can see",
+  "kinds": {
+    "feeder": "a feeder's buried leg (the feeder schedule's conductors)",
+    "branch": "a branch circuit of the building buried below the slab",
+    "site": "a site circuit (poles, signs, chargers, gates, site equipment) buried in the earth",
+    "service": "a utility service's conduit (primary or secondary)",
+    "telecom": "a telecom service's conduit"
+  }
+}
