@@ -381,7 +381,8 @@ pub fn scale_from_same_floor(
         v.sort_by_key(|x| x.0);
         v.into_iter().map(|x| x.1).max_by(|a, b| a.3.total_cmp(&b.3))
     };
-    let runner_of = |list: &[(usize, Weighed)], top: &Weighed| list.iter().filter(|x| !same(x.1.2, top.2, rr.same_scale)).map(|x| x.1.3).fold(0.0, f64::max);
+    let runner_of =
+        |list: &[(usize, Weighed)], top: &Weighed| list.iter().filter(|x| !same(x.1.2, top.2, rr.same_scale)).map(|x| x.1.3).fold(0.0, f64::max);
     let holds = |top: &Weighed| top.3 >= rr.min_fit_f1 && top.4[1] >= super::sheetreg::FIT_MARGIN;
     // How far a trial's building is from the plan's size (the nearest most likely fit as well).
     let mismatch = |&(_, tr, _, pr, c): &Trial| match (blocks.get(&pr), blocks.get(&tr)) {

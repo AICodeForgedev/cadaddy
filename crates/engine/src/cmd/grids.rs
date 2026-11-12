@@ -1730,7 +1730,8 @@ impl Occupancy {
         let (i, j) = ((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64);
         match &self.cells {
             OccupiedCells::Bits { x0, y0, w, h, bits } => {
-                let (Some(x), Some(y)) = (i.checked_sub(*x0).and_then(|d| usize::try_from(d).ok()), j.checked_sub(*y0).and_then(|d| usize::try_from(d).ok()))
+                let (Some(x), Some(y)) =
+                    (i.checked_sub(*x0).and_then(|d| usize::try_from(d).ok()), j.checked_sub(*y0).and_then(|d| usize::try_from(d).ok()))
                 else {
                     return false;
                 };
@@ -1888,7 +1889,9 @@ fn vote_cells(scells: Vec<(i64, i64)>, tcells: &[(i64, i64)]) -> (Vec<(i64, i64)
     let extent = |a: (i64, i64), b: (i64, i64)| usize::try_from((a.1 - a.0).max(0) + (b.1 - b.0).max(0) + 1).unwrap_or(usize::MAX);
     let dense = !scells.is_empty()
         && !tcells.is_empty()
-        && extent(span(&scells, |c| c.0), span(tcells, |c| c.0)).checked_mul(extent(span(&scells, |c| c.1), span(tcells, |c| c.1))).is_some_and(|n| n <= MAX_DENSE_OFFSETS);
+        && extent(span(&scells, |c| c.0), span(tcells, |c| c.0))
+            .checked_mul(extent(span(&scells, |c| c.1), span(tcells, |c| c.1)))
+            .is_some_and(|n| n <= MAX_DENSE_OFFSETS);
     let cap = if dense { MAX_FIT_VOTES } else { MAX_SPARSE_VOTES };
     if scells.len().saturating_mul(tcells.len()) <= cap {
         return (scells, tcells.to_vec(), false, dense);
@@ -1914,8 +1917,7 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
     }
     stats.fits += 1;
     let coarse = 48.0 * k;
-    let tcells: Vec<(i64, i64)> =
-        tgt.iter().filter_map(|p| coarse_cell(*p, coarse)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let tcells: Vec<(i64, i64)> = tgt.iter().filter_map(|p| coarse_cell(*p, coarse)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     // A few thousand source points are enough to score with.
     let stride = (src.len() / 2000).max(1);
     let few: Vec<Vec2> = src.iter().step_by(stride).copied().collect();
@@ -1943,10 +1945,7 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
         // Ties go to the smallest offset: a hash map's order differs run to run, and with it the
         // fit a tie picked (the same job placed 71 fewer devices one run than the next).
         let top = if whole { 1 } else { PART_OFFSETS };
-        let cands = top_offsets(&scells, &tcells, top, dense)
-            .into_iter()
-            .map(|(o, n)| (f64::from(n) / scells.len().max(1) as f64, s, o))
-            .collect();
+        let cands = top_offsets(&scells, &tcells, top, dense).into_iter().map(|(o, n)| (f64::from(n) / scells.len().max(1) as f64, s, o)).collect();
         (cands, thinned, scells.len().saturating_mul(tcells.len()))
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -2361,6 +2360,36 @@ mod tests {
         let plan = sampled(&floor);
         assert!(linework_fit_part_counted(&src, &plan, k, 0.97, 1.03, &mut plain).is_some());
         assert_eq!(plain.thinned, 0, "{plain:?}");
+    }
+
+    #[test]
+    fn a_fit_of_two_sheets_spread_over_miles_stays_bounded() {
+        // Q6581, as measured on a restaurant set: at a trial scale far off its own, a reference's
+        // linework spread over ~9,000 coarse cells each way (about 2,000 of them occupied) and the
+        // plan's over ~10,800 (66,000 occupied). Nearly every pair of cells was an offset of its
+        // own: 127 million map entries per trial scale, several in flight, 13 GB in a minute.
+        let k = 1.0;
+        let cell = 48.0 * k;
+        // Lines across the extent `size` (cells), `n` of them each way, a point a cell.
+        let lines = |at: Vec2, size: f64, n: usize, every: usize| -> Vec<Vec2> {
+            let mut out = Vec::new();
+            for i in 0..n {
+                let c = size * (i as f64 + 0.37) / n as f64;
+                for j in (0..size as usize).step_by(every) {
+                    let along = j as f64;
+                    out.push(at + Vec2::new(along, c * 1.013) * cell);
+                    out.push(at + Vec2::new(c, along * 0.991) * cell);
+                }
+            }
+            out
+        };
+        let src = lines(Vec2::new(-200_000.0, 50_000.0), 9_000.0, 6, 27);
+        let tgt = lines(Vec2::new(0.0, 0.0), 10_800.0, 4, 1);
+        let mut stats = FitStats::default();
+        let _ = linework_fit_part_counted(&src, &tgt, k, 0.97, 1.03, &mut stats);
+        assert_eq!(stats.fits, 1);
+        assert!(stats.thinned > 0, "every pair is far over the cap: {stats:?}");
+        assert!(stats.most_votes <= MAX_SPARSE_VOTES, "spread too far for a dense vote, so the map's cap: {stats:?}");
     }
 
     /// Line samples every foot along each segment (sheet inches).
