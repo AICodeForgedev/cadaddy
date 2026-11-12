@@ -5239,20 +5239,10 @@ fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
 
 /// Whether a room name reads as words: a run of three letters (`LOBBY`, `IDF`, `CORR`) or a
 /// two-letter code (`WC`, `CL`). Text read from a print in a font the reader can't map comes out
-/// as `-4--P- -I--Y-`, `Xb` or `D D`, and a dimension string as `22 40 OO`.
+/// as `-4--P- -I--Y-`, `Xb` or `D D`, and a dimension string as `22 40 OO`. The rule every room
+/// reader shares ([`super::perceive::geometry::legible_name`]).
 fn legible_room_name(name: &str) -> bool {
-    let t = name.trim();
-    if t.len() == 2 && t.bytes().all(|b| b.is_ascii_uppercase()) {
-        return true;
-    }
-    let mut run = 0;
-    for c in t.chars() {
-        run = if c.is_alphabetic() { run + 1 } else { 0 };
-        if run >= 3 {
-            return true;
-        }
-    }
-    false
+    super::perceive::geometry::legible_name(name)
 }
 
 /// The rule key of a room answer: `room:<number>|<name>`, upper case.

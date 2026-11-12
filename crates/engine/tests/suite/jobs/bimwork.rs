@@ -409,6 +409,17 @@ fn bim_estimate_and_estimate_status_give_the_same_totals() {
     let est_user_labor: f64 =
         est_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["labor_cost"].as_f64().unwrap_or(0.0)).sum();
     let close = |a: f64, b: f64| (a - b).abs() < 0.02;
+    // Q6379: one price per line: every line both routes price has the same unit price, the
+    // starter book's lines too.
+    let mut both = 0;
+    for l in bim_lines {
+        let same = |x: &&Value| x["item"] == l["item"] && x["size"] == l["size"] && x["unit"] == l["unit"];
+        if let Some(e) = est_lines.iter().find(same) {
+            both += 1;
+            assert_eq!(e["material_unit"].as_f64(), l["material_unit"].as_f64(), "{}: estimate.query {e} vs bim.estimate {l}", l["item"]);
+        }
+    }
+    assert!(both > 3, "lines on both routes: {both}");
     assert!(close(bim_user_mat, est_user_mat), "user-table material: bim {bim_user_mat} vs est {est_user_mat}");
     assert!(close(bim_user_labor, est_user_labor), "user-table labor: bim {bim_user_labor} vs est {est_user_labor}");
     // Both routes must also price additional lines from the starter cost book.

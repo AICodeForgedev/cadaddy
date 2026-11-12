@@ -980,6 +980,10 @@ fn add_read(
         st.cdy_saved = cdy_saved;
         st.disk_id = disk;
     }
+    // A model saved associative follows its plan again (Q6378).
+    if s.active == i {
+        crate::cmd::revise3d::after_open(s);
+    }
     // Fields worked out on opening (FIELDEVAL 1): what they show isn't an edit to save.
     if s.active == i
         && crate::fields::on_event(s, crate::fields::Event::Open) > 0
@@ -1227,6 +1231,9 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
     // The save date, and fields worked out on saving (FIELDEVAL 2).
     if is_drawing_file(path) {
         crate::fields::on_save(s);
+        // The associative model's state (what it builds from, the plan it was built from) goes
+        // with the drawing, so it follows its plan again when opened (Q6378).
+        crate::cmd::revise3d::before_save(s);
         // PDF images still in the session's temp folder go with the drawing.
         for note in adopt_session_images(s, path) {
             s.echo(note);

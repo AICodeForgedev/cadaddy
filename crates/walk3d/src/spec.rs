@@ -1479,6 +1479,11 @@ pub struct MepEdit {
     pub delta: Option<[f64; 2]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bottom_ft: Option<f64>,
+    /// `move`: how far up (feet; below 0 down) every height of the element goes: each of a run's
+    /// bottoms (a sloped run keeps its slope) and a riser's top, a terminal's or equipment's
+    /// bottom (an approved clash fix's raise or drop, Q6381).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rise_ft: Option<f64>,
     /// `resize`: a run's or terminal's size (inches), equipment's plan size (sheet units, along x
     /// and y) and height (feet).
     #[serde(skip_serializing_if = "Option::is_none")]

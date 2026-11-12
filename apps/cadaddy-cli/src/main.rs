@@ -1206,6 +1206,10 @@ fn run(args: &[String]) -> Result<(), String> {
         for note in cadaddy_engine::cmd::file::adopt_session_images(&mut s, &p) {
             eprintln!("{note}");
         }
+        // An associative model goes with the drawing as SAVE writes it: it follows its plan again
+        // when the file is opened.
+        // (Only drawing formats keep it; any other output ignores it.)
+        cadaddy_engine::cmd::revise3d::before_save(&mut s);
         export(&s, &p)?;
     }
     if let Some(p) = exp {

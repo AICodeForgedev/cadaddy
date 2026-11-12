@@ -23,6 +23,10 @@ use super::wallgen::{self, WallGen};
 use super::*;
 use crate::{Result, Session};
 
+mod saved;
+pub(crate) use saved::after_open;
+pub use saved::before_save;
+
 /// Most plan objects compared.
 const MAX_ITEMS: usize = 200_000;
 
@@ -82,6 +86,17 @@ pub struct ModelRecord {
     /// How its plan's rooms were read: as a job's rooms stage read them (a build in a job's later
     /// stages), or traced as asked (`None`). A revision reads the plan's rooms now the same way.
     pub(crate) rooms_settled: Option<super::perceive::geometry::SettledRooms>,
+    /// The plan's rooms weren't read for this record (a model opened from a drawing saved before
+    /// its associative state was): a revision takes the rooms as they are then for the ones built.
+    pub rooms_unread: bool,
+}
+
+impl ModelRecord {
+    /// The plan objects it was built from, and its rooms (none: not read, [`Self::rooms_unread`]).
+    pub(crate) fn plan_and_rooms(&self) -> (Vec<PlanItem>, Option<Vec<PlanItem>>) {
+        let (plan, rooms): (Vec<PlanItem>, Vec<PlanItem>) = self.plan.iter().cloned().partition(|i| i.kind != "room");
+        (plan, (!self.rooms_unread).then_some(rooms))
+    }
 }
 
 /// Most build records a drawing keeps (the states undo can return to name the one they came from).
@@ -724,11 +739,12 @@ pub(crate) struct Revise {
     pub auto: bool,
 }
 
-/// Compare `old` (its plan objects) and `old_rooms` with the plan now and, when they differ and
+/// Compare `old` (its plan objects) and `old_rooms` (none: not read, the rooms now are taken for
+/// them) with the plan now and, when they differ and
 /// `how.rebuild`, build again keeping the hand edits; select the rebuilt objects of changed plan
 /// objects and echo a summary with the conflicts. The whole report (every list), also kept as
 /// the drawing's last revision when it found changes.
-pub(crate) fn revise(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Vec<PlanItem>, how: &Revise) -> Result<Value> {
+pub(crate) fn revise(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Option<Vec<PlanItem>>, how: &Revise) -> Result<Value> {
     // Against the record of a build: the plan's rooms now read as that build's were (a job's
     // build, as its rooms stage read them), and so recorded again if it rebuilds.
     let was = super::perceive::geometry::settled_rooms(s);
@@ -742,10 +758,11 @@ pub(crate) fn revise(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms
 }
 
 /// [`revise`], the plan's rooms read as the drawing's room traces are settled now.
-fn revise_rooms_settled(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Vec<PlanItem>, how: &Revise) -> Result<Value> {
+fn revise_rooms_settled(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Option<Vec<PlanItem>>, how: &Revise) -> Result<Value> {
     let g = &rules_now(s, g);
     let now = plan_items(s.doc()?, g);
     let rooms_now = room_items(s);
+    let old_rooms = old_rooms.unwrap_or_else(|| rooms_now.clone());
     // The default reach: from the plan objects only (not the model, which moves with them).
     let reach = how.tolerance.unwrap_or_else(|| {
         let b = Bounds2::from_points(old.iter().chain(&now).chain(&old_rooms).chain(&rooms_now).map(|i| i.at));
@@ -850,11 +867,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let hooks = super::file::io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
             let bytes = read_file(cmd, path)?;
             let other = (hooks.read)(&bytes, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-            (plan_items(&other, &g), rooms_of(other), false)
+            (plan_items(&other, &g), Some(rooms_of(other)), false)
         }
         None => match s.state().map(|st| st.model_records.for_state(&st.doc))? {
             Some(r) => {
-                let (old, rooms) = r.plan.iter().cloned().partition(|i| i.kind != "room");
+                let (old, rooms) = r.plan_and_rooms();
                 (old, rooms, true)
             }
             None => return Err(bad(cmd, "no record of the plan the model was built from: build it once, or pass `against`")),
