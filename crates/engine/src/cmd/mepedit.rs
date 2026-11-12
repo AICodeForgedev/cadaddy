@@ -423,7 +423,7 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
                     let r = sp.mep.runs.get_mut(i).ok_or("the run is gone")?;
                     if let Some(d) = d {
                         let was = r.points.first().copied().unwrap_or_default();
-                        for p in &mut r.points {
+                        for p in r.points.iter_mut().chain(r.storey_points.values_mut()) {
                             *p = [p[0] + d[0], p[1] + d[1]];
                         }
                         let now = r.points.first().copied().unwrap_or_default();
@@ -1344,6 +1344,7 @@ fn run_add(s: &mut Session, p: &Value) -> Result<Value> {
                 made,
                 basis,
                 corrections: Vec::new(),
+                storey_points: Default::default(),
             };
             e.level = level;
             e.system = system;

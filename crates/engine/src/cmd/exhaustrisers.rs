@@ -21,6 +21,15 @@
 //!   where); else the chase carries one riser of the fans' combined duct area (inferred, the
 //!   rule's basis said).
 //!
+//! A riser rises in the chase each storey's own plan draws (Q6550): the storeys are lined up by
+//! their chases here, before the build sets the levels' base points from other things, and a
+//! storey's plan may stand feet off where those carry a riser (into the bath beside the chase).
+//! So each riser keeps its place on every storey it passes (`MepRun::storey_points`), and the
+//! build's cut at the floors puts each storey's piece there. A riser that would stand in a
+//! plumbing fixture the plans draw or a piece of equipment (not one a duct runs into) on any
+//! storey is moved to the nearest place clear of it, the drawn place kept beside it as a
+//! correction (rule `M-EXHAUST-RISER`); one that can't be is reported.
+//!
 //! Every piece carries what it is and why (`made`, `basis`) and the detail in its height source,
 //! so a rebuild replaces them and nothing passes for drawn; the fans' own ducts are left as they
 //! are (a piece of its own carries each on across the chase). A terminal no chase reaches, a chase
@@ -283,6 +292,175 @@ const ROOF_SHIFT_FT: f64 = 40.0;
 /// A terminal within this (feet) of a chase once the roof is lined up counts towards the fit.
 const ROOF_FIT_FT: f64 = 5.0;
 
+/// What a riser may not stand in, on its level's plan (sheet units): a plumbing fixture's drawn
+/// outline or a piece of equipment's box, from `z` up to `top` (feet over its floor).
+struct Obstacle {
+    lo: [f64; 2],
+    hi: [f64; 2],
+    z: f64,
+    top: f64,
+    what: String,
+}
+
+/// The obstacles of each level (by its name, lower case): the plumbing fixtures the plans draw
+/// (their outlines; standing on the floor as high as their kind's usual body, else
+/// `fixture_top_ft`) and the equipment, but for the kinds a duct runs into or through
+/// (`pass_kinds`, words of the kind: the fans, the hoods, the dampers).
+fn obstacles(sp: &BuildingSpec, upf: f64, fixture_top_ft: f64, pass_kinds: &[String]) -> BTreeMap<String, Vec<Obstacle>> {
+    let mut out: BTreeMap<String, Vec<Obstacle>> = BTreeMap::new();
+    let field = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).map(|f| f.value.trim().to_string()).filter(|v| !v.is_empty());
+    for t in sp.tags.iter().filter(|t| t.id.starts_with("device:") && t.kind == "plumbing_fixture").take(MAX_ITEMS) {
+        let Some([w, d]) = field(t, "drawn_size_in").and_then(|v| super::fixturebody::drawn_size(&v)) else { continue };
+        let c = [t.at_ft[0] * upf, t.at_ft[1] * upf];
+        if !c.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let name = ["fixture", "description", "device_type"].iter().find_map(|k| field(t, k)).unwrap_or_else(|| "plumbing fixture".into());
+        let top = super::fixturebody::family_of(super::fixturebody::Class::Plumbing, &name)
+            .map(|f| f.size_in[2] / 12.0)
+            .filter(|h| h.is_finite() && *h > 0.0)
+            .unwrap_or(fixture_top_ft);
+        let (hw, hd) = (w / 24.0 * upf, d / 24.0 * upf);
+        out.entry(t.level.to_ascii_lowercase()).or_default().push(Obstacle {
+            lo: [c[0] - hw, c[1] - hd],
+            hi: [c[0] + hw, c[1] + hd],
+            z: 0.0,
+            top,
+            what: format!("{} {}", name.to_ascii_lowercase(), t.id),
+        });
+    }
+    let passes = |kind: &str| {
+        let k = format!(" {} ", kind.to_ascii_lowercase().replace(['_', '-'], " "));
+        pass_kinds.iter().any(|w| !w.trim().is_empty() && k.contains(&format!(" {} ", w.trim().to_ascii_lowercase())))
+    };
+    for e in sp.mep.equipment.iter().take(MAX_ITEMS).filter(|e| !passes(&e.kind)) {
+        let (lo, hi) = ([e.min[0].min(e.max[0]), e.min[1].min(e.max[1])], [e.min[0].max(e.max[0]), e.min[1].max(e.max[1])]);
+        if !(lo.iter().chain(hi.iter()).all(|v| v.is_finite()) && e.bottom_ft.is_finite() && e.height_ft.is_finite()) {
+            continue;
+        }
+        out.entry(e.level.to_ascii_lowercase()).or_default().push(Obstacle {
+            lo,
+            hi,
+            z: e.bottom_ft,
+            top: e.bottom_ft + e.height_ft.max(0.0),
+            what: format!("{} {}", e.kind.replace('_', " "), e.tag),
+        });
+    }
+    out
+}
+
+/// Where a riser at `p` from `z0` up to `z1` (feet over its floor) clears every obstacle there
+/// once each is grown by `grow` (sheet units: the duct's half width and a gap): `None` when it
+/// stands clear; else the nearest place clear of them all, found by stepping out of each across
+/// its nearest side (`None` when none is near), and what it stood in.
+fn clear_of(obs: &[Obstacle], p: [f64; 2], z0: f64, z1: f64, grow: f64) -> Option<(Option<[f64; 2]>, String)> {
+    let here: Vec<&Obstacle> = obs.iter().filter(|o| o.z < z1 && o.top > z0).collect();
+    let inside =
+        |q: [f64; 2]| here.iter().copied().find(|o| q[0] > o.lo[0] - grow && q[0] < o.hi[0] + grow && q[1] > o.lo[1] - grow && q[1] < o.hi[1] + grow);
+    let what = inside(p)?.what.clone();
+    let mut frontier = vec![p];
+    for _ in 0..CLEAR_STEPS {
+        let mut next: Vec<[f64; 2]> = Vec::new();
+        for q in &frontier {
+            if let Some(o) = inside(*q) {
+                next.extend([[o.lo[0] - grow, q[1]], [o.hi[0] + grow, q[1]], [q[0], o.lo[1] - grow], [q[0], o.hi[1] + grow]]);
+            }
+        }
+        next.sort_by(|a, b| dist(*a, p).total_cmp(&dist(*b, p)));
+        if let Some(q) = next.iter().find(|q| inside(**q).is_none()) {
+            return Some((Some(*q), what));
+        }
+        next.truncate(CLEAR_FRONTIER);
+        frontier = next;
+    }
+    Some((None, what))
+}
+
+/// How many times a riser steps out of what it stands in, at most, and how many places it tries
+/// from at each step.
+const CLEAR_STEPS: usize = 4;
+const CLEAR_FRONTIER: usize = 16;
+
+/// What [`stand`] places a riser by.
+struct StandBy<'a> {
+    sp: &'a BuildingSpec,
+    /// Level → the shift that puts its plan's points on the stacking storey's plan.
+    onto: &'a BTreeMap<String, [f64; 2]>,
+    /// The storeys (name, floor elevation), lowest first.
+    storeys: &'a [(String, f64)],
+    obstacles: &'a BTreeMap<String, Vec<Obstacle>>,
+    upf: f64,
+    gap_in: f64,
+}
+
+/// Where one riser stands: on its own level, on each other storey it passes (where that
+/// storey's own plan puts it), what it was moved clear of (each a correction) and what it could
+/// not be moved clear of.
+struct Stand {
+    at: [f64; 2],
+    storey_points: BTreeMap<String, [f64; 2]>,
+    corrections: Vec<cadaddy_walk3d::RunCorrection>,
+    stuck: Vec<String>,
+}
+
+/// A riser given on `level` at `at` (its own plan), standing for `slot` on the stacking storey's
+/// plan, from `bottom` to `top` feet over its floor, `size_in` across. On each storey it passes
+/// whose plan the chases lined up, it stands in that storey's own drawing of the chase (`slot`
+/// on that plan): the levels' base points, set later in the build from other things (a storey's
+/// shell), may disagree with what its plan draws by feet, and a riser carried by them stands in
+/// that storey's rooms (Q6550). Where it would stand in a plumbing fixture or a piece of
+/// equipment on any storey, it is moved to the nearest place clear of it, the drawn place kept
+/// beside the corrected one.
+fn stand(by: &StandBy, level: &str, at: [f64; 2], slot: [f64; 2], bottom: f64, top: f64, size_in: f64) -> Stand {
+    const EPS: f64 = 1e-6;
+    let upf = by.upf;
+    let grow = (size_in.max(0.0) / 2.0 + by.gap_in) / 12.0 * upf;
+    let floor = by.storeys.iter().find(|(n, _)| n.eq_ignore_ascii_case(level)).map(|s| s.1).or_else(|| by.sp.level(level).map(|l| l.elevation_ft));
+    let next_floor = |e: f64| by.storeys.iter().map(|s| s.1).filter(|x| *x > e + EPS).fold(f64::INFINITY, f64::min);
+    let pt = |p: [f64; 2]| format!("{:.2},{:.2} ft", p[0] / upf, p[1] / upf);
+    let mut s = Stand { at, storey_points: BTreeMap::new(), corrections: Vec::new(), stuck: Vec::new() };
+    let place = |lv: &str, p: [f64; 2], z0: f64, z1: f64, s: &mut Stand| -> [f64; 2] {
+        match by.obstacles.get(&lv.to_ascii_lowercase()).and_then(|o| clear_of(o, p, z0, z1, grow)) {
+            None => p,
+            Some((Some(q), what)) => {
+                s.corrections.push(cadaddy_walk3d::RunCorrection {
+                    key: format!("plan point on {lv}"),
+                    design: pt(p),
+                    corrected: pt(q),
+                    reason: format!("it stood in the {what} on {lv}: moved {:.0} in to the nearest place clear of it", dist(p, q) / upf * 12.0),
+                    rule: "M-EXHAUST-RISER".into(),
+                });
+                q
+            }
+            Some((None, what)) => {
+                s.stuck.push(format!("{what} on {lv}"));
+                p
+            }
+        }
+    };
+    let Some(fz) = floor.filter(|f| f.is_finite()) else { return s };
+    s.at = place(level, at, bottom, top.min(next_floor(fz) - fz), &mut s);
+    for (name, e) in by.storeys.iter().filter(|(n, e)| !n.eq_ignore_ascii_case(level) && *e > fz + EPS && *e < fz + top - EPS) {
+        let z1 = next_floor(*e).min(fz + top) - e;
+        match by.onto.iter().find(|(l, _)| l.eq_ignore_ascii_case(name)).map(|(_, v)| *v) {
+            Some(shift) => {
+                let q = place(name, sub(slot, shift), 0.0, z1, &mut s);
+                s.storey_points.insert(name.clone(), q);
+            }
+            // No fan of this storey lined it up: where the base points carry it, moved only if it
+            // stands in something there (as far as the plans' origins tell now).
+            None => {
+                let p = super::risercut::carry(by.sp, s.at, level, name);
+                let q = place(name, p, 0.0, z1, &mut s);
+                if dist(p, q) > EPS {
+                    s.storey_points.insert(name.clone(), q);
+                }
+            }
+        }
+    }
+    s
+}
+
 /// Points within `reach` of a group's mean, grouped (in order): each group's mean.
 fn centres(points: &[[f64; 2]], reach: f64) -> Vec<[f64; 2]> {
     let mut out: Vec<([f64; 2], f64)> = Vec::new();
@@ -308,6 +486,8 @@ fn centres(points: &[[f64; 2]], reach: f64) -> Vec<[f64; 2]> {
 /// few feet off moves onto the others). Ends within [`CHASE_FT`] of each other are one chase. The
 /// roof's terminals are lined up with the chases the same way, then each chase takes the nearest
 /// terminal still free within the rule's reach (one terminal per riser, as the details draw).
+/// Each riser stands in each storey's own drawing of its chase and clear of fixtures and
+/// equipment ([`stand`]).
 pub(crate) fn stack_fan_ducts(sp: &mut BuildingSpec, details: &[RiserDetail], continuous: Option<&str>) -> Value {
     sp.mep.runs.retain(|r| !r.height_source.starts_with(RISER_SOURCE));
     if details.is_empty() {
@@ -455,6 +635,24 @@ pub(crate) fn stack_fan_ducts(sp: &mut BuildingSpec, details: &[RiserDetail], co
             taken.insert(ti);
         }
     }
+    // Where each riser stands on the storeys it passes, clear of fixtures and equipment.
+    let fixture_top_ft = data.get("fixture_top_ft").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(7.0);
+    let pass_kinds: Vec<String> = data
+        .get("pass_kinds")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+    let obstacles = obstacles(sp, upf, fixture_top_ft, &pass_kinds);
+    let mut storeys: Vec<(String, f64)> = sp
+        .levels
+        .iter()
+        .filter(|l| l.elevation_ft.is_finite() && l.sheet.is_none())
+        .take(MAX_ITEMS)
+        .map(|l| (l.name.clone(), l.elevation_ft))
+        .collect();
+    storeys.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let by = StandBy { sp, onto: &onto, storeys: &storeys, obstacles: &obstacles, upf, gap_in };
+    let (mut moved, mut stuck, mut storey_points) = (Vec::<String>::new(), Vec::<String>::new(), 0usize);
     let mut new_runs: Vec<MepRun> = Vec::new();
     let mut per_riser: BTreeMap<usize, usize> = BTreeMap::new();
     let mut off_count: Vec<String> = Vec::new();
@@ -537,8 +735,16 @@ pub(crate) fn stack_fan_ducts(sp: &mut BuildingSpec, details: &[RiserDetail], co
                 if top <= f.bottom_ft {
                     continue;
                 }
-                to_riser(f, slot_f, Made::Derived, &basis, &mut new_runs);
-                new_runs.extend(piece(&f.level, vec![slot_f], f.bottom_ft, Some(top), f.size_in, Made::Derived, &basis));
+                let st = stand(&by, &f.level, slot_f, slot, f.bottom_ft, top, f.size_in);
+                to_riser(f, st.at, Made::Derived, &basis, &mut new_runs);
+                if let Some(mut r) = piece(&f.level, vec![st.at], f.bottom_ft, Some(top), f.size_in, Made::Derived, &basis) {
+                    storey_points += st.storey_points.len();
+                    moved.extend(st.corrections.iter().map(|c| c.reason.clone()));
+                    stuck.extend(st.stuck);
+                    r.storey_points = st.storey_points;
+                    r.corrections = st.corrections;
+                    new_runs.push(r);
+                }
                 roof(slot, off, f.size_in, Made::Derived, &basis, &mut new_runs);
                 stacked += 1;
             }
@@ -552,17 +758,33 @@ pub(crate) fn stack_fan_ducts(sp: &mut BuildingSpec, details: &[RiserDetail], co
                 "{}; {what} stacks these fans in the chase up to the roof terminal {} the roof plan places over it, one riser of their combined area ({size:.0} in)",
                 rule.basis, t.tag
             );
+            let Some(at) = to_level(*chase, &low.level) else { continue };
+            let top = tz - clear_ft - lz;
+            let st = (top > low.bottom_ft).then(|| stand(&by, &low.level, at, *chase, low.bottom_ft, top, size));
             for fi in &order {
                 let Some(f) = fans.get(*fi) else { continue };
-                if let Some(at) = to_level(*chase, &f.level) {
+                // To where the riser stands on the fan's storey.
+                let on = st.as_ref().and_then(|s| {
+                    if f.level.eq_ignore_ascii_case(&low.level) {
+                        Some(s.at)
+                    } else {
+                        s.storey_points.iter().find(|(l, _)| l.eq_ignore_ascii_case(&f.level)).map(|(_, p)| *p)
+                    }
+                });
+                if let Some(at) = on.or_else(|| to_level(*chase, &f.level)) {
                     to_riser(f, at, Made::Inferred, &basis, &mut new_runs);
                     stacked += 1;
                 }
             }
-            let Some(at) = to_level(*chase, &low.level) else { continue };
-            let top = tz - clear_ft - lz;
-            if top > low.bottom_ft {
-                new_runs.extend(piece(&low.level, vec![at], low.bottom_ft, Some(top), size, Made::Inferred, &basis));
+            if let Some(st) = st
+                && let Some(mut r) = piece(&low.level, vec![st.at], low.bottom_ft, Some(top), size, Made::Inferred, &basis)
+            {
+                storey_points += st.storey_points.len();
+                moved.extend(st.corrections.iter().map(|c| c.reason.clone()));
+                stuck.extend(st.stuck);
+                r.storey_points = st.storey_points;
+                r.corrections = st.corrections;
+                new_runs.push(r);
                 roof(*chase, [0.0, 0.0], size, Made::Inferred, &basis, &mut new_runs);
             }
         }
@@ -590,6 +812,10 @@ pub(crate) fn stack_fan_ducts(sp: &mut BuildingSpec, details: &[RiserDetail], co
         "chases_by_fan_count": per_riser,
         "terminals_no_chase_reaches": idle,
         "fan_count_not_the_details": off_count.into_iter().take(50).collect::<Vec<_>>(),
+        "storey_points": storey_points,
+        "moved_clear": moved.len(),
+        "moved_clear_of": moved.into_iter().take(20).collect::<Vec<_>>(),
+        "not_cleared": stuck.into_iter().take(20).collect::<Vec<_>>(),
     })
 }
 
@@ -899,6 +1125,128 @@ mod tests {
     /// tag over each chase, the riser detail tagging it, and a storey's typical fans: the hoods are
     /// built at every tag and the fans' ducts go up into them. Before Q6496 a relief hood was no
     /// kind the schedules knew, so no hood was built and every fan kept its stub of duct.
+    /// A plumbing fixture the plan draws (`TUB SHOWER`, 60 by 32 in) centred at `c` on `level`.
+    fn tub(level: &str, c: [f64; 2]) -> cadaddy_walk3d::tags::ElementTag {
+        let f = |v: &str| cadaddy_walk3d::tags::Field { value: v.into(), source: "plan".into() };
+        cadaddy_walk3d::tags::ElementTag {
+            id: format!("device:{level}:{},{}", c[0], c[1]),
+            kind: "plumbing_fixture".into(),
+            level: level.into(),
+            at_ft: [c[0] / 12.0, c[1] / 12.0],
+            fields: [("fixture".to_string(), f("TUB SHOWER")), ("drawn_size_in".to_string(), f("60.0, 32.0"))].into(),
+            ..Default::default()
+        }
+    }
+
+    /// Whether `p` stands inside `t`'s drawn outline grown by `grow` (inches).
+    fn in_tub(t: &cadaddy_walk3d::tags::ElementTag, p: [f64; 2], grow: f64) -> bool {
+        let c = [t.at_ft[0] * 12.0, t.at_ft[1] * 12.0];
+        (p[0] - c[0]).abs() < 30.0 + grow && (p[1] - c[1]).abs() < 16.0 + grow
+    }
+
+    /// Q6550: Level 3's drawing stands 55" off its plan's place, so the levels' base points carry
+    /// a riser through it 55" off its chase: into the tub beside the chase. The chases line the
+    /// storeys up, and every storey's piece of every riser stands in that storey's own drawing of
+    /// the chase, still one riser cut at its floors.
+    #[test]
+    fn every_storeys_piece_of_a_riser_stands_in_that_storeys_own_chase_not_where_the_base_points_carry_it() {
+        // Three chases 25 ft apart, each under its hood.
+        let chases = [0.0, 300.0, 600.0];
+        let off = [[0.0, 0.0], [0.0, 0.0], [55.0, 0.0], [0.0, 0.0]];
+        let hoods: Vec<(&str, [f64; 2])> = chases.iter().map(|c| ("GRH-7", [40_130.0 + c, 260.0])).collect();
+        let mut sp = building_with(&chases, off, &hoods);
+        // On Level 3 a bath beside its first chase, where the base points put that chase.
+        let bath = tub("Level 3", [20_130.0, 240.0]);
+        sp.tags.push(bath.clone());
+        let report = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], Some("CONTINUOUS"));
+        assert_eq!(report["chases"], 3, "{report}");
+        assert_eq!(report["risers"], 24, "{report}");
+        assert_eq!(report["storey_points"], 3 * 2 * (3 + 2 + 1), "{report}");
+        assert_eq!(report["moved_clear"], 0, "{report}");
+        let risers: Vec<MepRun> = sp.mep.runs.iter().filter(|r| r.top_ft.is_some() && r.level != "Roof").cloned().collect();
+        let mut pieces = 0;
+        for r in &risers {
+            let cut = super::super::risercut::storey_runs(&sp, r);
+            assert_eq!(cut.len(), 5 - 1 - sp.levels.iter().position(|l| l.name == r.level).unwrap_or(0), "{}", r.level);
+            for s in &cut {
+                let i = sp.levels.iter().position(|l| l.name == s.run.level).unwrap_or(9);
+                let [dx, dy] = off.get(i).copied().unwrap_or_default();
+                let p = s.run.points.first().copied().unwrap_or_default();
+                let x = p[0] - 10_000.0 * i as f64 - dx - 130.0;
+                assert!(
+                    chases.iter().any(|c| (x - c).abs() < 1e-6) && (p[1] - dy - 240.0).abs() <= 20.0,
+                    "{} piece of a {} riser: {p:?}",
+                    s.run.level,
+                    r.level
+                );
+                assert!(!in_tub(&bath, p, 0.0) || s.run.level != "Level 3", "in the bath: {p:?}");
+                if s.run.level != r.level {
+                    assert!(s.cut.as_ref().is_some_and(|c| c.floors == vec![s.run.level.clone()]), "through its floor: {:?}", s.cut);
+                }
+                pieces += 1;
+            }
+        }
+        assert_eq!(pieces, 3 * 2 * (4 + 3 + 2 + 1));
+    }
+
+    /// A riser that would stand in a plumbing fixture or a unit on a storey it passes is moved to
+    /// the nearest place clear of it there, the drawn place kept beside the corrected one; one
+    /// over a fixture on its own storey's floor (it starts at the ceiling), and a damper it runs
+    /// through, are no clash.
+    #[test]
+    fn a_riser_that_would_stand_in_a_tub_or_a_unit_is_moved_clear_and_says_so() {
+        let mut sp = building(&[("GRH-7", [40_130.0, 260.0])]);
+        // A tub over the chase on Level 1 (under its fans' ducts) and on Level 2; a unit on the
+        // floor over it on Level 3; a damper in the chase on Level 2.
+        sp.tags.push(tub("Level 1", [130.0, 240.0]));
+        let bath = tub("Level 2", [10_130.0, 240.0]);
+        sp.tags.push(bath.clone());
+        let unit = |kind: &str, level: &str, lo: [f64; 2], hi: [f64; 2], bottom: f64, height: f64| MepEquipment {
+            tag: "U-1".into(),
+            kind: kind.into(),
+            level: level.into(),
+            min: lo,
+            max: hi,
+            bottom_ft: bottom,
+            height_ft: height,
+            ..Default::default()
+        };
+        sp.mep.equipment.push(unit("fan_coil_unit", "Level 3", [20_120.0, 200.0], [20_140.0, 250.0], 0.0, 6.0));
+        sp.mep.equipment.push(unit("fire_damper", "Level 2", [10_125.0, 230.0], [10_135.0, 250.0], 8.0, 1.0));
+        let report = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], Some("CONTINUOUS"));
+        assert_eq!(report["risers"], 8, "{report}");
+        // Level 1's two risers through Level 2's tub, and those of Levels 1 and 2 through Level 3's
+        // unit.
+        assert_eq!(report["moved_clear"], 2 + 4, "{report}");
+        assert!(report["not_cleared"].as_array().is_some_and(Vec::is_empty), "{report}");
+        let risers: Vec<MepRun> = sp.mep.runs.iter().filter(|r| r.top_ft.is_some() && r.level != "Roof").cloned().collect();
+        for r in &risers {
+            // The pieces through a storey from below (a storey's own riser starts at its ceiling).
+            for s in super::super::risercut::storey_runs(&sp, r).iter().filter(|s| s.run.level != r.level) {
+                let p = s.run.points.first().copied().unwrap_or_default();
+                if s.run.level == "Level 2" {
+                    assert!(!in_tub(&bath, p, 3.0 - 1e-6), "Level 2 piece of a {} riser in the tub: {p:?}", r.level);
+                }
+                if s.run.level == "Level 3" {
+                    let clear = p[0] <= 20_117.0 + 1e-6 || p[0] >= 20_143.0 - 1e-6 || p[1] <= 197.0 + 1e-6 || p[1] >= 253.0 - 1e-6;
+                    assert!(clear, "Level 3 piece of a {} riser in the unit: {p:?}", r.level);
+                }
+            }
+            let keys: Vec<&str> = r.corrections.iter().map(|c| c.key.as_str()).collect();
+            match r.level.as_str() {
+                "Level 1" => assert_eq!(keys, vec!["plan point on Level 2", "plan point on Level 3"], "{:?}", r.corrections),
+                "Level 2" => assert_eq!(keys, vec!["plan point on Level 3"], "{:?}", r.corrections),
+                _ => assert!(keys.is_empty(), "{} {:?}", r.level, r.corrections),
+            }
+            for c in &r.corrections {
+                assert_eq!(c.rule, "M-EXHAUST-RISER");
+                assert!(c.design != c.corrected && c.design.ends_with(" ft"), "{c:?}");
+                let on2 = c.key.ends_with("Level 2");
+                assert!(c.reason.contains(if on2 { "tub shower" } else { "fan coil unit U-1" }), "{}", c.reason);
+            }
+        }
+    }
+
     #[test]
     fn a_typical_riser_detail_stacks_the_typical_rooms_fan_ducts_up_to_the_hoods_the_roof_plan_places() {
         let mut row = BTreeMap::new();
