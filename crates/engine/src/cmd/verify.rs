@@ -475,9 +475,11 @@ pub(crate) fn wall_overlaps(d: &Drawing) -> Vec<Overlap> {
 // ---------------- the plan ----------------
 
 /// A session holding the plan alone (nothing a build made), for tracing rooms around their tags
-/// without the generated walls closing the gaps.
+/// without the generated walls closing the gaps. All of it: what the view hid (object isolation,
+/// a clash shown alone) is still the plan.
 pub(crate) fn plan_session(s: &Session) -> Result<Session> {
     let mut d = (*s.doc()?).clone();
+    d.hidden_objects.clear();
     let made: Vec<Handle> = d.model.iter().filter(|e| made_as(e).is_some()).map(|e| e.handle).collect();
     for h in made {
         d.model.remove(h);
@@ -1115,7 +1117,10 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         // The whole building stacks its storeys; a level, a room, a plan box, a mark or a camera
         // are on the sheet's (and the built model's) own coordinates.
         let keep: std::collections::HashSet<Handle> = keep.iter().copied().collect();
-        super::bimlook::compose(d, &look, ghost, whole, &|e, _| keep.contains(&e.handle))
+        let mut md = super::bimlook::compose(d, &look, ghost, whole, &|e, _| keep.contains(&e.handle));
+        // The model as built: a view's object isolation (a clash shown alone) hides none of it.
+        md.hidden_objects.clear();
+        md
     } else {
         let mut md = Drawing::new_imperial();
         md.layers = d.layers.clone();
