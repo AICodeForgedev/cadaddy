@@ -3591,10 +3591,10 @@ mod classify_tests {
             texts: 200,
             ..Default::default()
         };
-        assert!(legend_notes_page(&page(0.1, 0, 3)));
-        assert!(!legend_notes_page(&page(0.1, 1, 3)), "a view titled as a plan");
-        assert!(!legend_notes_page(&page(0.1, 0, 0)), "no legend or notes heading");
-        assert!(!legend_notes_page(&page(0.41, 0, 3)), "the sparsest plan measured");
+        assert!(super::legend_notes_page(&page(0.1, 0, 3)));
+        assert!(!super::legend_notes_page(&page(0.1, 1, 3)), "a view titled as a plan");
+        assert!(!super::legend_notes_page(&page(0.1, 0, 0)), "no legend or notes heading");
+        assert!(!super::legend_notes_page(&page(0.41, 0, 3)), "the sparsest plan measured");
     }
 
     #[test]

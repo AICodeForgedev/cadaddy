@@ -110,6 +110,9 @@ pub(crate) struct Rules {
     /// none of them, no count and no `AT EACH …` tells how to wire or build the ones there are
     /// (`CIRCUIT EXIT SIGNS TO …`, `EXIT SIGNS SHALL BE LED`), it calls for none (Q6361).
     pub call_words: Vec<String>,
+    /// Words after a class's words that call for one at every place of a kind (`EXIT SIGN AT EACH
+    /// STAIR DOOR`); `ANY` is none (`… AHEAD OF ANY SWITCH`).
+    pub each_words: Vec<String>,
     /// Words that end a note's room type (`EACH GUEST ROOM SHALL …`: the type is `GUEST`).
     pub room_stop_words: Vec<String>,
     /// Words of a room type that name no type of their own (`ROOM`, `TYPE`): left out when the
@@ -478,13 +481,13 @@ pub(crate) struct Named {
 
 /// Whether a note's sentence `w` calls for objects of the class whose words start at `class_at`
 /// (Q6361): a call word of the rules (`PROVIDE ONE EXIT SIGN`), a count it gives (`(2) EV
-/// CHARGERS`) or an `EACH` / `ALL` word after the class (`EXIT SIGN AT EACH STAIR DOOR`). A note
+/// CHARGERS`) or an `EACH` / `EVERY` word after the class (`EXIT SIGN AT EACH STAIR DOOR`). A note
 /// that only says how to circuit or build the ones there are (`CIRCUIT EXIT SIGNS TO THE NEAREST
 /// LIGHTING CIRCUIT`, `EXIT SIGNS SHALL BE LED`) calls for none.
 fn calls_for(w: &[String], class_at: usize, given: Option<u32>) -> bool {
     let r = rules();
     let is = |list: &[String], x: &str| list.iter().any(|a| a.eq_ignore_ascii_case(x));
-    given.is_some() || w.iter().any(|x| is(&r.call_words, x)) || w.iter().skip(class_at + 1).any(|x| is(&r.all_words, x))
+    given.is_some() || w.iter().any(|x| is(&r.call_words, x)) || w.iter().skip(class_at + 1).any(|x| is(&r.each_words, x))
 }
 
 /// The objects a note names (each sentence's first) with their count and what it connects them

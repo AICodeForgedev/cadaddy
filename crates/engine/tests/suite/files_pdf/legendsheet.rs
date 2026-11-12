@@ -139,7 +139,7 @@ fn legend_sheet() -> Vec<u8> {
         "8. PROVIDE A GREEN INSULATED EQUIPMENT GROUND IN EVERY BRANCH CIRCUIT.",
     ];
     for (i, n) in notes.iter().enumerate() {
-        text(&mut d, [14.0, 21.2 - 0.35 * i as f64], 0.12, n);
+        text(&mut d, [14.0, 21.3 - 0.2 * i as f64], 0.12, n);
     }
     text(&mut d, [14.0, 17.75], 0.18, "SPECIFICATIONS");
     for i in 0..24 {
@@ -171,14 +171,9 @@ fn legend_sheet() -> Vec<u8> {
 
 /// The generator's first floor plan: walls and rooms, no switches.
 fn floor_plan() -> (Vec<u8>, String, String) {
-    let (t, st) = cadaddy_mepfix::hotel_planned(7, HotelSize::Small);
-    let kinds: Vec<(String, cadaddy_mepfix::layout::Kind)> =
-        cadaddy_mepfix::layout::hotel_sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
-    let sh = t.sheets.iter().find(|s| s.number == "A-101").expect("A-101 in the set");
-    let (_, kind) = kinds.iter().find(|(k, _)| k == "A-101").expect("sheet kind");
-    let (d, _, _) = cadaddy_mepfix::draw::draw(&t, &st, sh, kind);
-    let pdf = cadaddy_io::pdf::pdf(&d, &Space::Model, &cadaddy_mepfix::pdf_options(sh, &st)).expect("plot");
-    (pdf, format!("{} {}", sh.number, sh.title), String::new())
+    let set = cadaddy_mepfix::generate_hotel(42, HotelSize::Small).expect("generate hotel");
+    let sh = set.truth.sheets.iter().find(|s| s.number == "A-101").expect("A-101 in the set");
+    (set.file(&sh.pdf).expect("sheet pdf").to_vec(), format!("{} {}", sh.number, sh.title), String::new())
 }
 
 fn job_state(s: &Session) -> Value {
@@ -196,8 +191,21 @@ fn a_legend_sheet_titled_as_a_plan_builds_no_devices_and_a_wiring_note_no_exit_s
     let pages = vec![floor_plan(), (legend_sheet(), "E-001 Legends".to_string(), String::new())];
     std::fs::write(dir.join("Sample Set.pdf"), cadaddy_io::pdf_merge::merge(&pages).expect("merge")).expect("write set");
     let mut s = Session::new();
-    let st =
+    let mut st =
         s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false})).expect("job.start");
+    // The questions auto mode leaves open (the rooms check, the guard's rejections): each
+    // answered with its default (else its first choice) until the job is done.
+    for _ in 0..60 {
+        if st["done"] == json!(true) {
+            break;
+        }
+        let q = if st["question"].is_object() { st["question"].clone() } else { st["next"].clone() };
+        let Some(id) = q["id"].as_str() else { break };
+        let answer = q["default"].as_str().or_else(|| q["choices"][0].as_str()).unwrap_or("skip").to_string();
+        s.execute("job.answer", &json!({"id": id, "answer": answer})).expect("job.answer");
+        st = s.execute("job.status", &json!({})).expect("job.status");
+    }
+    assert_eq!(st["done"], json!(true), "the job runs to its end: {}", st.to_string().chars().take(600).collect::<String>());
     let job = job_state(&s);
     // 1. The legend sheet is read as legends and notes, not as a plan.
     let sheets = job["index"]["sheets"].as_array().cloned().unwrap_or_default();
