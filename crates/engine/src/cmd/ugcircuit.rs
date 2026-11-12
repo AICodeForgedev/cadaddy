@@ -55,7 +55,7 @@ pub(crate) fn rules() -> &'static Rules {
     R.get_or_init(|| serde_json::from_str(RULES).unwrap_or_default())
 }
 
-/// A label as one id (`A-28, A-30` → `A-28,A-30`).
+/// A label as one id (`LP2-7, LP2-9` → `LP2-7,LP2-9`).
 fn norm(label: &str) -> String {
     label.split([',', ' ', ';']).map(str::trim).filter(|v| !v.is_empty()).collect::<Vec<_>>().join(",").to_ascii_uppercase()
 }
@@ -65,7 +65,7 @@ pub(crate) fn tag_id(level: &str, label: &str) -> String {
     format!("{}{level}{TAG_PART}{}", super::printcond::CIRCUIT_TAG, norm(label))
 }
 
-/// The id of run `n` (its sheet and number: `E-8.3`) of the buried circuit(s) `label` on `level`.
+/// The id of run `n` (its sheet and number: `E-001.3`) of the buried circuit(s) `label` on `level`.
 pub(crate) fn run_id(level: &str, label: &str, n: impl std::fmt::Display) -> String {
     format!("{}#{}", tag_id(level, label), n.to_string().replace('#', ""))
 }
@@ -95,12 +95,12 @@ pub(crate) struct Breaker {
     pub description: String,
     /// The panel's `volts/phase` as its schedule prints it.
     pub volts: Option<String>,
-    /// Where it was read (`panel A schedule (E-2): circuit 78 EV CHARGER, 40/2`), or why not.
+    /// Where it was read (`panel LP2 schedule (E-601): circuit 11 CAR CHARGER, 50/2`), or why not.
     pub source: String,
 }
 
-/// The breakers a label names: `A-40`, `A-78,80` (one two-pole breaker where the schedule says
-/// so), `A-28,A-30,A-32` (three). A number the schedule doesn't list is a breaker of the label's
+/// The breakers a label names: `LP2-5`, `LP2-11,13` (one two-pole breaker where the schedule says
+/// so), `LP2-7,LP2-9,LP2-15` (three). A number the schedule doesn't list is a breaker of the label's
 /// numbers in its group (`78,80`: two poles), the rules' breaker.
 pub(crate) fn breakers(sp: &BuildingSpec, label: &str) -> Vec<Breaker> {
     // Each `panel-numbers` group of the label, its numbers in order.
@@ -481,7 +481,7 @@ pub(crate) fn bury_homeruns(sp: &BuildingSpec, runs: &mut [MepRun], why: &str) -
     n
 }
 
-/// Whether site work's buried runs already carry circuit `label` (`A-78`: a breaker of it).
+/// Whether site work's buried runs already carry circuit `label` (`LP2-11`: a breaker of it).
 pub(crate) fn site_carries(sp: &BuildingSpec, label: &str) -> bool {
     let want = breakers(sp, label);
     let Some(w) = want.first() else { return false };
@@ -715,7 +715,7 @@ mod tests {
         r.source_sheet = "feeder 7 SB1→P2".into();
         r.height_source = "proposed".into();
         assert_eq!(kind_of(&r), "feeder");
-        r.source_sheet = "ug feed 74 MDP→ELEVATOR (circuit 8)".into();
+        r.source_sheet = "ug feed 9 SB1→LIFT (circuit 4)".into();
         assert_eq!(kind_of(&r), "branch");
         r.source_sheet = "E-9".into();
         r.height_source = "called: E-9 keynote 1 (ev_charger)".into();
