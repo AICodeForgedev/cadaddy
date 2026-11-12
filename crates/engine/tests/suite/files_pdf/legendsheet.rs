@@ -190,6 +190,13 @@ fn a_legend_sheet_titled_as_a_plan_builds_no_devices_and_a_wiring_note_no_exit_s
     std::fs::create_dir_all(&dir).expect("folder");
     let pages = vec![floor_plan(), (legend_sheet(), "E-001 Legends".to_string(), String::new())];
     std::fs::write(dir.join("Sample Set.pdf"), cadaddy_io::pdf_merge::merge(&pages).expect("merge")).expect("write set");
+    // 1. Classify reads the legend sheet as legends and notes, not as the plan its title gives.
+    let mut c = Session::new();
+    c.execute("printset.open", &json!({"path": dir.join("Sample Set.pdf").display().to_string()})).expect("printset.open");
+    let index = c.execute("printset.classify", &json!({})).expect("printset.classify");
+    let typed = |n: &str| index["sheets"].as_array().and_then(|a| a.iter().find(|sh| sh["number"] == n)).map(|sh| sh["type"].clone());
+    assert_eq!(typed("E-001"), Some(json!("schedule")), "E-001 typed as legends and notes: {index}");
+    assert_eq!(typed("A-101"), Some(json!("plan")), "the floor plan stays a plan");
     let mut s = Session::new();
     let mut st =
         s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false})).expect("job.start");
@@ -207,7 +214,7 @@ fn a_legend_sheet_titled_as_a_plan_builds_no_devices_and_a_wiring_note_no_exit_s
     }
     assert_eq!(st["done"], json!(true), "the job runs to its end: {}", st.to_string().chars().take(600).collect::<String>());
     let job = job_state(&s);
-    // 1. The legend sheet is read as legends and notes, not as a plan.
+    // The job's sheet index keeps it so.
     let sheets = job["index"]["sheets"].as_array().cloned().unwrap_or_default();
     let legend = sheets.iter().find(|sh| sh["number"] == "E-001").cloned().unwrap_or(Value::Null);
     assert_eq!(legend["type"], json!("schedule"), "E-001 typed as legends and notes: {legend}");
@@ -230,6 +237,9 @@ fn a_legend_sheet_titled_as_a_plan_builds_no_devices_and_a_wiring_note_no_exit_s
     let exit_signs = docs["by_kind"]["exit_sign"].as_object().map_or(0, |m| m.values().filter_map(Value::as_u64).sum::<u64>());
     assert_eq!(exit_signs, 0, "an exit sign built from a wiring note: {docs}");
     assert!(!docs["proposed"].to_string().to_ascii_uppercase().contains("EXIT SIGN"), "{docs}");
+    for k in ["proposed_not_placed", "notes_naming"] {
+        assert!(!docs[k].to_string().contains("exit_sign"), "the wiring note names no exit sign to build ({k}): {docs}");
+    }
     assert!(
         docs["notes_calling_for_none"]["exit_sign"].as_str().is_some_and(|n| n.contains("CIRCUIT EXIT SIGNS")),
         "the wiring note is read and kept as one calling for none: {docs} ({})",

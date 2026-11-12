@@ -1647,12 +1647,22 @@ impl PageFacts {
 /// whose samples the legend readers still leave out).
 const LEGEND_PAGE_MAX_WALL_LENGTH: f64 = 0.25;
 
+/// Fewest lines of notes and specification text that make a page with no plan view a sheet of
+/// notes whatever its linework (its ruled tables can space their rows unevenly, like walls'
+/// faces). Measured on two real sets: notes and specification sheets 255 to 369, the most on any
+/// plan 165 (a civil sheet's), on a building plan 125.
+const NOTES_PAGE_MIN_SENTENCES: usize = 250;
+/// Fewest legend, notes or specification headings such a page has.
+const NOTES_PAGE_MIN_HEADINGS: usize = 3;
+
 /// Whether a page is a sheet of legends, notes and specifications, whatever its title or number
 /// says (Q6361): no view on it is titled as a plan, it has a legend's, notes' or specification's
-/// heading, and its linework draws (almost) no walls: table rules and sample symbols beside
-/// their lettering.
+/// heading, and either its linework draws (almost) no walls (table rules and sample symbols beside
+/// their lettering) or its lettering is mostly notes and specification text.
 pub(crate) fn legend_notes_page(c: &crate::sheet_facts::PageContent) -> bool {
-    c.plan_views == 0 && c.headings > 0 && c.wall_length <= LEGEND_PAGE_MAX_WALL_LENGTH
+    c.plan_views == 0
+        && c.headings > 0
+        && (c.wall_length <= LEGEND_PAGE_MAX_WALL_LENGTH || (c.headings >= NOTES_PAGE_MIN_HEADINGS && c.sentences >= NOTES_PAGE_MIN_SENTENCES))
 }
 
 /// A page of the set during classify: read now, or kept as it was (read before, unreadable, or
@@ -3595,6 +3605,18 @@ mod classify_tests {
         assert!(!super::legend_notes_page(&page(0.1, 1, 3)), "a view titled as a plan");
         assert!(!super::legend_notes_page(&page(0.1, 0, 0)), "no legend or notes heading");
         assert!(!super::legend_notes_page(&page(0.41, 0, 3)), "the sparsest plan measured");
+        // Mostly notes and specification text: a sheet of notes whatever its ruled tables draw.
+        let notes = |sentences: usize, headings: usize| crate::sheet_facts::PageContent {
+            wall_length: 1.1,
+            headings,
+            sentences,
+            texts: 700,
+            ..Default::default()
+        };
+        assert!(super::legend_notes_page(&notes(300, 12)));
+        assert!(!super::legend_notes_page(&notes(165, 12)), "a plan's notes column");
+        assert!(!super::legend_notes_page(&notes(300, 2)), "too few headings");
+        assert!(!super::legend_notes_page(&crate::sheet_facts::PageContent { plan_views: 1, ..notes(300, 12) }));
     }
 
     #[test]
