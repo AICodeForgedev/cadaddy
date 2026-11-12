@@ -333,25 +333,51 @@ pub(crate) fn element_product(e: &cadaddy_doc::Entity) -> Product {
 /// type `A` is not luminaire type `A`).
 const NOT_PRODUCT_TYPES: &[&str] = &["door", "window", "wall", "partition", "room", "ceiling", "floor", "finish", "hardware", "roof", "slab"];
 
-/// A type mark's product in the drawing's type catalog (the submittals' products, a schedule's).
-pub(crate) fn catalog_product(d: &cadaddy_doc::Drawing, mark: &str) -> Option<Product> {
-    use cadaddy_doc::bimspec::keys;
+/// A type mark's device, fixture or equipment type in the drawing's type catalog.
+fn product_type<'a>(d: &'a cadaddy_doc::Drawing, mark: &str) -> Option<&'a cadaddy_doc::bimspec::BimType> {
     let mark = mark.trim();
     if mark.is_empty() {
         return None;
     }
-    let t = d.bim_types.types.iter().filter(|t| t.mark.eq_ignore_ascii_case(mark)).find(|t| {
+    d.bim_types.types.iter().filter(|t| t.mark.eq_ignore_ascii_case(mark)).find(|t| {
         let c = t.category.to_ascii_lowercase();
         !NOT_PRODUCT_TYPES.iter().any(|w| c.contains(w))
-    })?;
-    let f = |k: &str| t.fields.get(k).map(|f| f.value.trim().chars().take(200).collect::<String>()).unwrap_or_default();
-    let src =
-        t.fields.get(keys::CATALOG_NUMBER).or_else(|| t.fields.get(keys::MANUFACTURER)).map(|f| f.source.trim().to_string()).unwrap_or_default();
-    let dimming = f(keys::DIMMING);
+    })
+}
+
+/// A catalog type's field by the first of its spellings it has with a value (`catalogNumber`,
+/// as a person may type it `catalog_number`).
+fn type_field<'a>(t: &'a cadaddy_doc::bimspec::BimType, keys: &[&str]) -> Option<&'a cadaddy_doc::bimspec::SpecField> {
+    keys.iter().find_map(|k| t.fields.get(*k).filter(|f| !f.value.trim().is_empty()))
+}
+
+const CATALOG_KEYS: &[&str] = &[cadaddy_doc::bimspec::keys::CATALOG_NUMBER, "catalog_number", "catalog"];
+
+/// Whether a catalog field is a person's: given with no document behind it (`bim.set_type`
+/// without a source), or said to be the user's. The readers and importers always cite theirs.
+fn given_by_person(f: &cadaddy_doc::bimspec::SpecField) -> bool {
+    let s = f.source.trim();
+    s.is_empty() || s.eq_ignore_ascii_case("user")
+}
+
+/// What a type mark's catalog type calls its devices (its description), and whether a person
+/// gave it ([`given_by_person`]).
+fn catalog_description(d: &cadaddy_doc::Drawing, mark: &str) -> Option<(String, bool)> {
+    let f = type_field(product_type(d, mark)?, &[cadaddy_doc::bimspec::keys::DESCRIPTION])?;
+    Some((f.value.trim().chars().take(200).collect(), given_by_person(f)))
+}
+
+/// A type mark's product in the drawing's type catalog (the submittals' products, a schedule's).
+pub(crate) fn catalog_product(d: &cadaddy_doc::Drawing, mark: &str) -> Option<Product> {
+    use cadaddy_doc::bimspec::keys;
+    let t = product_type(d, mark)?;
+    let f = |ks: &[&str]| type_field(t, ks).map(|f| f.value.trim().chars().take(200).collect::<String>()).unwrap_or_default();
+    let src = type_field(t, CATALOG_KEYS).or_else(|| type_field(t, &[keys::MANUFACTURER])).map(|f| f.source.trim().to_string()).unwrap_or_default();
+    let dimming = f(&[keys::DIMMING]);
     Some(Product {
         type_mark: t.mark.clone(),
-        manufacturer: f(keys::MANUFACTURER),
-        catalog: f(keys::CATALOG_NUMBER),
+        manufacturer: f(&[keys::MANUFACTURER]),
+        catalog: f(CATALOG_KEYS),
         source: if src.is_empty() { "type catalog".into() } else { format!("type catalog: {}", src.chars().take(200).collect::<String>()) },
         dimming: if dimming.is_empty() { dimming } else { dimming_word(&dimming) },
     })
@@ -413,13 +439,16 @@ fn built_devices(d: &cadaddy_doc::Drawing) -> Option<BTreeMap<String, Vec<BuiltD
                 .map(|p| p.text().trim().chars().take(200).collect::<String>())
                 .filter(|v| !v.is_empty())
         };
+        // A mark a person assigned it in the type catalog (`bim.set_spec`) is theirs too.
+        let assigned =
+            cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata).map(|m| m.trim().chars().take(200).collect::<String>()).filter(|m| !m.is_empty());
         let v = out.entry(id.to_string()).or_default();
         if v.len() < MAX_LINE_ELEMENTS {
             v.push(BuiltDevice {
                 handle: e.handle.hex(),
                 level: super::bspec::made_level(e).map(|l| l.trim().to_string()).unwrap_or_default(),
                 product: element_product(e),
-                type_mark: by_person("type_mark"),
+                type_mark: by_person("type_mark").or(assigned),
                 device_type: by_person("type"),
                 circuit: by_person("circuit"),
             });
@@ -626,6 +655,10 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     let standing = s.doc().ok().and_then(built_devices);
     let product_of = |t: &cadaddy_walk3d::tags::ElementTag, el: Option<&BuiltDevice>, mark: Option<&str>| -> Product {
         let mut p = el.map(|e| e.product.clone()).or_else(|| built_products.get(&t.id).cloned()).unwrap_or_default();
+        // A mark a person gave the element is its product's: the one it was read as is not.
+        if let Some(m) = el.and_then(|e| e.type_mark.as_deref()).filter(|m| !p.type_mark.eq_ignore_ascii_case(m)) {
+            p = Product { type_mark: m.to_string(), ..Product::default() };
+        }
         let mark = if p.type_mark.is_empty() { mark.map(str::to_string).unwrap_or_default() } else { p.type_mark.clone() };
         if let Some(c) = s.doc().ok().and_then(|d| catalog_product(d, &mark)) {
             p.fill(&c);
@@ -709,12 +742,22 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                 }
                 "homerun" | "conduit" | "circuit" => {}
                 kind => {
+                    let mark = el.and_then(|e| e.type_mark.clone()).or_else(|| f("type").map(|m| m.0));
+                    // What it is, by the schedules' source priority: a person's type on the
+                    // element, else the one a person gave its mark in the type catalog, else the
+                    // documents' reading (a legend, the plan), else the catalog type a document
+                    // gave its mark, else a default reading or a mark nothing resolved.
+                    let catalog = mark.as_deref().and_then(|m| s.doc().ok().and_then(|d| catalog_description(d, m)));
+                    let read = f("device_type");
+                    let weak = |r: &(String, String)| r.0.starts_with(super::readers::UNRESOLVED) || matches!(r.1.as_str(), "default" | "rule");
                     let (ty, src) = el
                         .and_then(|e| e.device_type.clone())
                         .map(|v| (v, "user".to_string()))
-                        .or_else(|| f("device_type"))
+                        .or_else(|| catalog.clone().filter(|c| c.1).map(|c| (c.0, "user".to_string())))
+                        .or_else(|| read.clone().filter(|r| !weak(r)))
+                        .or_else(|| catalog.map(|c| (c.0, "schedule".to_string())))
+                        .or(read)
                         .unwrap_or_else(|| (kind.replace('_', " "), "plan".into()));
-                    let mark = el.and_then(|e| e.type_mark.clone()).or_else(|| f("type").map(|m| m.0));
                     let mut product = product_of(t, el, mark.as_deref());
                     let ty = match protocols.get(&t.id) {
                         Some(p) => {
@@ -3295,11 +3338,27 @@ fn trade_pieces(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> 
     type Found = (Handle, super::mepatoms::Key, super::mepatoms::Measure, String, Vec<Handle>, Option<(Handle, bool)>);
     let mut found: Vec<Found> = Vec::new();
     let mut pours: BTreeMap<Handle, String> = BTreeMap::new();
+    // Each room's floor finish as it stands now (a person's edit since its flooring was laid).
+    let mut finishes: Option<BTreeMap<Handle, String>> = None;
     for e in d.model.iter().filter(|e| super::tradeatoms::is_trade_piece(e)).take(MAX_TRADE_PIECES) {
-        let Some((k, m)) = super::mepatoms::counted(e) else { continue };
+        let Some((mut k, m)) = super::mepatoms::counted(e) else { continue };
         let ps = cadaddy_doc::props::read(&e.common.xdata);
         let text = |key: &str| ps.get(key).map(Prop::text).unwrap_or_default();
         let host = Handle::parse_hex(&text("host"));
+        // A room's flooring is bought as the room's finish is now.
+        if k.trade == "finishes"
+            && k.kind == "flooring"
+            && let Some(h) = host
+            && let Some(f) = finishes
+                .get_or_insert_with(|| {
+                    super::bspec::room_elements(d).into_iter().filter_map(|r| Some((r.handle, r.finish?.trim().to_string()))).collect()
+                })
+                .get(&h)
+                .filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case(k.ty.trim()))
+        {
+            k.item = format!("flooring {f}");
+            k.ty.clone_from(f);
+        }
         let hosts = match (k.trade.as_str(), k.kind.as_str()) {
             ("framing", "stud" | "plate" | "track") => Some(&mut out.framed),
             ("openings", "hardware_set") => Some(&mut out.hardware),
