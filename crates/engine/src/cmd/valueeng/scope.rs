@@ -496,6 +496,28 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
         }
         a
     };
+    // The rooms along its routed runs (the alternative's cable follows them): an exposed room or
+    // a corridor holds it where two of their points are, or all of them.
+    let runs_through = |runs: &[usize]| -> BTreeSet<String> {
+        let mut n: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut total = 0usize;
+        for r in runs.iter().filter_map(|i| sp.mep.runs.get(*i)).take(MAX_ITEMS) {
+            let pts: Vec<Vec2> = r.points.iter().map(|q| Vec2::new(q[0], q[1])).filter(|q| q.x.is_finite() && q.y.is_finite()).collect();
+            let mut along: Vec<Vec2> = pts.first().copied().into_iter().collect();
+            for w in pts.windows(2) {
+                let [a, b] = w else { continue };
+                let k = if step > 0.0 { (a.dist(*b) / step).ceil().clamp(1.0, MAX_SAMPLES as f64) as usize } else { 1 };
+                along.extend((1..=k).map(|j| *a + (*b - *a) * (j as f64 / k as f64)));
+            }
+            for q in along {
+                total += 1;
+                if let Some(x) = shapes.at(&r.level, q).and_then(|room| by_room.of(room)) {
+                    *n.entry(x).or_default() += 1;
+                }
+            }
+        }
+        n.into_iter().filter(|(_, k)| *k >= MIN_POINTS.min(total)).map(|(x, _)| x.to_string()).collect()
+    };
     let mut out: Vec<Item> = Vec::new();
     // -- Branch circuits (and homeruns) as routed. --
     for t in routed_tags.iter().copied() {
@@ -563,6 +585,7 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
         let feet: f64 = runs.iter().filter_map(|i| sp.mep.runs.get(*i)).map(|r| run_feet(r, upf)).sum();
         let pens = pen_of.get(t.id.as_str()).copied().unwrap_or(0);
         let mut area = classify(&level, base, &idx, below, pens > 0);
+        area.through.extend(runs_through(&runs));
         if has(field(t, "wiring_method"), &rl.methods.exposed_words) && area.base == "common" {
             area.base = "exposed".into();
         }
@@ -659,6 +682,7 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             };
             let mut area = classify(&level, base, &idx, below, false);
             area.base = base.to_string();
+            area.through.extend(runs_through(&g));
             // No pieces in the model to read its ceilings from: not documented either.
             if idx.is_empty() && !g.is_empty() && !area.flags.contains("suspended") {
                 let known = g
