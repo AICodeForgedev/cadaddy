@@ -159,5 +159,7 @@ fn walls_a_tread_apart_that_dont_stop_on_a_stringer_stay_walls() {
     let mut s = open(d);
     spec(&mut s, "A-WALL");
     let (walls, plan) = planned(&mut s);
-    assert_eq!(tread_thick(&walls, 11.0), 5, "{plan}");
+    // The two walls of each group stay walls; the chase between the first two is air (a wall
+    // against each of its faces: Q6583), no wall.
+    assert_eq!(tread_thick(&walls, 11.0), 4, "{plan}");
 }

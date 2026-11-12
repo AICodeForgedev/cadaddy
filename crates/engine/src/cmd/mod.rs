@@ -267,6 +267,7 @@ pub mod validate_value;
 pub mod valueeng;
 pub mod verify;
 pub mod walkpub;
+pub(crate) mod wallcheck;
 pub mod wallgen;
 pub mod walllayout;
 pub(crate) mod walltypes;

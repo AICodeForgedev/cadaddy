@@ -1999,6 +1999,30 @@ fn built_model(s: &Session, lines: &mut Vec<Line>, pieces: &TradePieces) -> Resu
     Ok((missing, suspects, has_any_built))
 }
 
+/// Each level's wall board over its walls' area times their faces (Q6583,
+/// [`super::wallcheck::board_over`]): a suspect, never priced on silently.
+fn board_suspects(lines: &[Line], suspects: &mut Vec<Value>) {
+    let mut by: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
+    for l in lines.iter().filter(|l| l.unit == "sq ft" && l.net.is_finite() && l.net > 0.0) {
+        if l.item.starts_with("Wall area") {
+            by.entry(l.level.as_str()).or_default().0 += l.net;
+        } else if l.category == "drywall" && l.item.starts_with("Board") && !l.item.to_ascii_lowercase().contains("ceiling") {
+            by.entry(l.level.as_str()).or_default().1 += l.net;
+        }
+    }
+    let faces = super::wallcheck::rules().wall_faces;
+    for (level, (wall, board)) in by {
+        if super::wallcheck::board_over(board, wall) {
+            suspects.push(json!({
+                "category": "drywall",
+                "level": level,
+                "reason": format!("wall board {board:.0} sq ft on {level} is over its walls' {wall:.0} sq ft × {faces} faces"),
+                "status": "suspect"
+            }));
+        }
+    }
+}
+
 /// The rule on the wall lines measured from built wall meshes (no wall marks in the spec):
 /// `bim.takeoff` replaces them with its own per-level wall lines.
 pub(crate) const MESH_WALLS_RULE: &str = "from the built wall meshes (no wall marks in the spec)";
@@ -3571,7 +3595,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         _ => TradePieces::default(),
     };
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
-    let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines, &pieces)?;
+    let (built_missing, mut built_suspects, model_has_elements) = built_model(s, &mut lines, &pieces)?;
     let mut others: Vec<Value> = Vec::new();
     let mut field_work: Vec<Value> = Vec::new();
     electrical(s, &mut lines, &mut others, &mut field_work)?;
@@ -3591,6 +3615,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if let (Ok((sp, _)), Ok(d)) = (current(s, "bim.bom"), s.doc()) {
         trade_piece_lines(&pieces, &super::tradeatoms::Rules::of(d, &sp), &taken, &job_framed, &mut lines);
     }
+    board_suspects(&lines, &mut built_suspects);
     by_others.extend(others);
     by_others.truncate(MAX_LINES);
     // Waivers: recorded in the project rules, with the reason.
