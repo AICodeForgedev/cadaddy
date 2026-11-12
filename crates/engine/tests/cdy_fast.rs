@@ -436,5 +436,48 @@ fn the_building_models_reads_need_no_sheet_and_answer_the_same() {
     };
     assert_eq!(view(&mut o), view(&mut s), "the same BIM view with the sheets out of memory");
     assert!(o.has_parked_sheets(), "and nothing was loaded for it");
+    // What palettes and dialogs read on their own while open: the same answer (or the same
+    // refusal) from what is in memory, and no sheet loaded for it.
+    let reads: [(&str, serde_json::Value); 28] = [
+        ("undohistory", json!({})),
+        ("commandhistory", json!({})),
+        ("activity", json!({})),
+        ("review.log", json!({})),
+        ("actions", json!({})),
+        ("cal", json!({ "expression": "2*3" })),
+        ("bspec.get", json!({})),
+        ("levels.list", json!({})),
+        ("tags.list", json!({})),
+        ("project.rules.list", json!({})),
+        ("rfi.list", json!({})),
+        ("job.status", json!({})),
+        ("job.worklist", json!({})),
+        ("job.rules", json!({})),
+        ("job.report", json!({})),
+        ("part.list", json!({})),
+        ("parameters", json!({})),
+        ("standards", json!({})),
+        ("bcf.list", json!({})),
+        ("validate.areas", json!({})),
+        ("validate.rules", json!({})),
+        ("model.clashes", json!({})),
+        ("markups", json!({})),
+        ("ifc.tree", json!({})),
+        ("adcenter", json!({ "path": "no-such-file.dwg" })),
+        ("publishlist", json!({ "path": "no-such-list.json" })),
+        ("qselect.info", json!({})),
+        ("filter", json!({ "list": true })),
+    ];
+    for (c, p) in &reads {
+        assert!(!o.needs_whole_set(c), "{c} loads the whole set");
+        let ask = |s: &mut Session| format!("{:?}", s.execute(c, p).map_err(|e| e.to_string()));
+        let (whole, parked) = (ask(&mut s), ask(&mut o));
+        // Quick Select and the history lists answer for what the session holds and did.
+        if !["qselect.info", "undohistory", "commandhistory", "activity"].contains(c) {
+            assert_eq!(parked, whole, "{c} with the sheets out of memory");
+        }
+        assert!(o.has_parked_sheets(), "{c} loaded sheets (it ran {:?})", o.whole_set_loads.1);
+    }
+    assert_eq!(o.whole_set_loads.0, 0, "none of it loaded the set: {:?}", o.whole_set_loads.1);
     let _ = std::fs::remove_dir_all(&dir);
 }

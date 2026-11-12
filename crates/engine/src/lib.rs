@@ -2243,6 +2243,16 @@ pub struct Session {
     /// A command read the whole print set: every sheet is in memory until the interface is idle
     /// ([`Session::park_idle_sheets`]).
     pub(crate) whole_set_loaded: bool,
+    /// Sheets on demand: the commands that loaded the whole set as they ran (on the thread that
+    /// ran them), the latest [`sheetstore::LOADS_KEPT`]; and how many did since the session began.
+    /// A read the interface makes on its own must never be among them ([`sheetstore::SHEET_LOCAL`]).
+    pub whole_set_loads: (u64, Vec<String>),
+    /// Sheets on demand: how many commands that read the whole set have run. While the number
+    /// moves from one frame to the next (an open dialog that reads the set as it is drawn), the
+    /// interface leaves the set in memory: putting it out would load it again the next frame.
+    pub whole_set_asks: u64,
+    /// The commands counted in [`Self::whole_set_asks`], each once (at most [`sheetstore::LOADS_KEPT`]).
+    pub whole_set_asked: Vec<String>,
     pub clipboard: Vec<Entity>,
     pub clipboard_base: Vec2,
     pub pending_window: Option<PendingWindow>,
@@ -2435,6 +2445,9 @@ impl Session {
             viewport_inset_px: (0.0, 0.0),
             sheets_on_demand: false,
             whole_set_loaded: false,
+            whole_set_loads: (0, Vec::new()),
+            whole_set_asks: 0,
+            whole_set_asked: Vec::new(),
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
             pending_window: None,
@@ -2729,8 +2742,10 @@ impl Session {
         self.poll_background();
         // A command that may read the whole print set has it (Q6418: the interface holds the
         // open sheet and a few recent ones; the app loads the rest off the UI thread first).
+        self.note_whole_set_ask(id);
         if self.needs_whole_set(id) {
             self.load_all_sheets()?;
+            self.note_whole_set_load(id);
         }
         // The active drawing's own words in the readers' word lists (`words:` project rules).
         cmd::wordrules::sync(self);
@@ -3021,8 +3036,10 @@ impl Session {
     /// Start a command by name or alias as if typed at the command line.
     pub fn start(&mut self, name: &str) -> Result<()> {
         // A command that may read the whole print set has it (Q6418).
+        self.note_whole_set_ask(name);
         if self.needs_whole_set(name) {
             self.load_all_sheets()?;
+            self.note_whole_set_load(name);
         }
         // A command an agent types has the rails of its `execute` calls (dry run, confirmations).
         if self.journal.is_outer()
