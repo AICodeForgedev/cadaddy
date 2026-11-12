@@ -430,6 +430,31 @@ fn rooms_tagged_by_number_only_are_checked_for_leaks() {
 }
 
 #[test]
+fn a_unit_tag_in_a_room_names_its_type_not_another_room() {
+    // A unit plan prints each guest room's unit type and hand beside its name (`UNIT A`, `UNIT B
+    // (MIRROR)`): one room with its type, not two rooms whose outline is one.
+    let tagged = |partition_to: f64| {
+        let mut s = Session::new();
+        base(&mut s, partition_to);
+        text(&mut s, [5.0, 4.0], "UNIT A");
+        text(&mut s, [20.0, 4.0], "UNIT B (MIRROR)");
+        s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
+        s.execute("model.build", &json!({})).unwrap();
+        s
+    };
+    let mut s = tagged(11.5);
+    let r = s.execute("model.issues", &json!({})).unwrap();
+    assert_eq!(r["total"], json!(0), "{r}");
+
+    // The partition stops short: the two rooms run into each other, one leak, named by the rooms.
+    let mut s = tagged(8.0);
+    let r = s.execute("model.issues", &json!({"kind": "leak"})).unwrap();
+    assert_eq!(r["total"], json!(1), "{r}");
+    let m = of_kind(&r, "leak")[0]["message"].as_str().unwrap().to_string();
+    assert!(m.contains("OFFICE") && m.contains("STORAGE") && m.contains("runs into") && !m.contains("UNIT"), "{m}");
+}
+
+#[test]
 fn a_number_tag_beside_a_name_tag_is_that_rooms_number_not_another_room() {
     // OFFICE 101 and STORAGE 102, closed: no leak.
     let mut s = Session::new();

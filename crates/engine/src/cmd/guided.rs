@@ -6542,6 +6542,9 @@ fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Ins
     report_progress(s, json!({"stage": "bim_build", "step": step, "elapsed_s": secs}), &line);
     // What the step changed in the built model goes into its record (Q6403).
     super::buildrec::step(s, step);
+    // The caches the step made for the drawing as it was go: the next step makes what it uses
+    // again from the model as it is now (the build's footprint climbed step by step, Q6389).
+    release_stage_caches();
 }
 
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
@@ -30481,6 +30484,19 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     r
 }
 
+/// Let go of what the process-wide caches hold for the drawing as a stage left it: the selection
+/// indexes and the element and plan-object indexes (each holds the chunks it was made from, so
+/// every chunk a later step changes stays in memory twice, old and new) and the print files
+/// parsed for their pages (up to 512 MB of PDF, held from classify to the end of the job). A later
+/// stage that wants one makes it again from the drawing as it is then. Each stage releases what
+/// the next does not need (Q6389: the job's footprint climbed stage by stage).
+fn release_stage_caches() {
+    crate::spatial::clear_cache();
+    super::elemprops::clear_index();
+    super::overrides::clear_sources();
+    cadaddy_io::pdf_read::clear_cache();
+}
+
 /// Stop the job at `stage` for a cancel: the stage waits (pending) and job.next runs it.
 fn stop_cancelled(s: &mut Session, job: &mut GuidedJob, stage: StageName) {
     JOB_CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -30566,6 +30582,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             StageName::Clash => run_clash(s, job),
         };
         super::perceive::geometry::settle_rooms(s, None);
+        release_stage_caches();
         let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if let Some(st) = job.stage_mut(stage_name) {
             st.elapsed_ms = Some(ms);
@@ -43521,3 +43538,96 @@ mod tests {
 #[cfg(test)]
 #[path = "guided_symbols_tests.rs"]
 mod symbols_tests;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod stage_cache_tests {
+    use super::*;
+    use cadaddy_doc::{Common, EntityKind, Line, Space};
+    use cadaddy_geom::Vec3;
+
+    /// `n` short lines in model space, scattered (a PDF of them doesn't compress to nothing).
+    fn lines(d: &mut cadaddy_doc::Drawing, n: usize) {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 1_000_000) as f64 / 100.0
+        };
+        for _ in 0..n {
+            let (x, y) = (next(), next());
+            d.add(
+                &Space::Model,
+                Common::default(),
+                EntityKind::Line(Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + next() / 50.0, y + 1.0, 0.0) }),
+            )
+            .unwrap();
+        }
+    }
+
+    /// A made-up sheet as a PDF big enough that a read keeps its parsed file for the next pages:
+    /// `n` lines (each test its own count: the parsed files are kept by content, for every thread).
+    fn big_pdf(n: usize) -> Vec<u8> {
+        let mut d = cadaddy_doc::Drawing::default();
+        lines(&mut d, n);
+        let pdf = cadaddy_io::pdf::pdf(&d, &Space::Model, &cadaddy_io::pdf::PdfOptions::default()).unwrap();
+        assert!(pdf.len() >= 256 * 1024, "the made-up sheet is {} bytes: too small to be kept", pdf.len());
+        pdf
+    }
+
+    /// fix-job-peak-memory-over-target (Q6389): a build step lets go of the caches made for the
+    /// drawing as it was: the selection index and the element index (each holds the chunks it was
+    /// made from, so an edit after it keeps the old and the new) and a print file parsed for its
+    /// pages. Before the fix they were held to the end of the job: the job's footprint climbed step
+    /// by step (on a four-storey print set, 0.5 GB of element index and 0.4 GB of parsed prints at the end of the
+    /// build alone).
+    #[test]
+    fn a_build_step_lets_go_of_the_caches_made_for_the_drawing_as_it_was() {
+        let pdf = big_pdf(30_000);
+        let mut s = crate::Session::new();
+        lines(s.doc_mut().unwrap(), 400);
+        // The parsed files and the selection indexes are the process's: another test's job stage
+        // may let go of them meanwhile, so they are made again until they hold these.
+        let mut filled = false;
+        for _ in 0..50 {
+            assert_eq!(cadaddy_io::pdf_read::page_count(&pdf).unwrap(), 1);
+            assert!(crate::spatial::index(s.doc().unwrap(), &Space::Model).is_some());
+            let _ = super::super::elemprops::elements(s.doc().unwrap()).count();
+            if cadaddy_io::pdf_read::is_cached(&pdf) && crate::spatial::is_cached(s.doc().unwrap(), &Space::Model) {
+                filled = true;
+                break;
+            }
+        }
+        assert!(filled, "the parsed sheet and the selection index are kept after their reads");
+        assert!(super::super::elemprops::index_held(), "the element index is kept");
+        let job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        bim_step(&mut s, &job, "a step", web_time::Instant::now());
+        assert!(!cadaddy_io::pdf_read::is_cached(&pdf), "a build step keeps the parsed sheet");
+        assert!(!crate::spatial::is_cached(s.doc().unwrap(), &Space::Model), "a build step keeps the selection index");
+        assert!(!super::super::elemprops::index_held(), "a build step keeps the element index");
+    }
+
+    /// Q6389: the job's stages let go of the print files they parsed: after import and classify
+    /// (the job stops at its sheet check) the set's file is no longer held parsed. Before the fix
+    /// the parsed files of a set (up to 512 MB of PDF) were held from classify to the end of the job.
+    #[test]
+    fn a_jobs_stages_let_go_of_the_print_files_they_parsed() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-stagecache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pdf = big_pdf(30_001);
+        std::fs::write(dir.join("Sample Sheet.pdf"), &pdf).unwrap();
+        let mut s = crate::Session::new();
+        let r = s
+            .execute(
+                "job.start",
+                &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "checkpoint": false, "sheet_pictures": false, "specs": false}),
+            )
+            .unwrap();
+        let classified = r["stages"].as_array().unwrap().iter().any(|st| st["stage"] == "classify" && st["status"] != "pending");
+        assert!(classified, "the job read the set: {r:#}");
+        assert!(!cadaddy_io::pdf_read::is_cached(&pdf), "the job's stages keep the parsed print file: {r:#}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

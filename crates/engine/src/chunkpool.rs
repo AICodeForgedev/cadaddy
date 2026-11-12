@@ -92,6 +92,12 @@ impl<T: Send + Sync, C: PartialEq> ChunkPool<T, C> {
         (parts, r)
     }
 
+    /// Whether parts are kept (in the unit tests, this thread's).
+    #[cfg(test)]
+    pub fn holds(&self) -> bool {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner).as_ref().is_some_and(|m| m.contains_key(&owner()))
+    }
+
     /// Forget every part (the drawings they came from may be closed; in the unit tests, this
     /// thread's).
     pub fn clear(&self) {

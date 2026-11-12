@@ -1531,6 +1531,9 @@ pub(crate) fn flat_swings(pts: &[Vec2]) -> Vec<(Vec2, f64, f64, [Vec2; 2])> {
 
 /// Names traced between two progress lines of the room trace.
 const TRACE_PROGRESS_EVERY: usize = 100;
+/// The longest a room trace goes without a progress line, seconds (a job stage is never silent
+/// for over a minute).
+const TRACE_PROGRESS_SECS: f64 = 20.0;
 
 /// How far round a room's name its first trace looks (feet, each way): the rooms nearly every
 /// name is in (a long corridor's far ends too). A name that finds none so near is traced again across the whole plan it is on
@@ -2484,9 +2487,20 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     if let Some(rs) = regions.filter(|r| r.len() > 1) {
         let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
         let mut out = RoomTrace::default();
+        // A long trace says which plan view it is on (one line a view once it takes a while).
+        let started = web_time::Instant::now();
         for (i, r) in rs.iter().enumerate() {
             if out.rooms.len() >= MAX_ROOMS_ALL_REGIONS {
                 break;
+            }
+            if i > 0 && started.elapsed().as_secs_f64() > 2.0 {
+                crate::cmd::guided::progress_line(&format!(
+                    "  room trace: plan view {} of {}, {} rooms so far, {:.0} s",
+                    i + 1,
+                    rs.len(),
+                    out.rooms.len(),
+                    started.elapsed().as_secs_f64()
+                ));
             }
             // A label is its first region's (as one trace of them all took it).
             let earlier = rs.get(..i).unwrap_or_default();
@@ -2812,7 +2826,10 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     let mut outline_cache = None;
     let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
     // A storey of a full set has thousands of names: say how far the trace is.
-    let (total, trace_started) = (names.len(), web_time::Instant::now());
+    // (Every TRACE_PROGRESS_EVERY names, and at least every TRACE_PROGRESS_SECS: a plan whose
+    // names take long each is never silent for minutes.)
+    let (mut total, trace_started) = (names.len(), web_time::Instant::now());
+    let mut last_line = trace_started;
     let mut searching = std::time::Duration::ZERO;
     // Where each name is: a widened search's outline holding another name no room took is no
     // one room (the floor left over round rooms that don't close, shared by their names).
@@ -2823,7 +2840,8 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     let mut queue: std::collections::VecDeque<(Label, bool)> = names.into_iter().map(|l| (l, false)).collect();
     let mut traced = 0usize;
     while let Some(((h, name, at, height, tag), widened)) = queue.pop_front() {
-        if traced > 0 && traced.is_multiple_of(TRACE_PROGRESS_EVERY) {
+        if traced > 0 && (traced.is_multiple_of(TRACE_PROGRESS_EVERY) || last_line.elapsed().as_secs_f64() >= TRACE_PROGRESS_SECS) {
+            last_line = web_time::Instant::now();
             crate::cmd::guided::progress_line(&format!(
                 "  room trace: {traced} of {total} names, {} rooms, {:.0} s ({:.0} s finding boundaries)",
                 out.len(),
@@ -2942,6 +2960,8 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
                     .filter(|(_, area)| *area >= min_area)
                 else {
                     if capped && !widened && reach_at(at) > least_reach {
+                        // Traced again (counted again).
+                        total += 1;
                         queue.push_back(((h, name, at, height, tag), true));
                     } else if capped {
                         beyond_reach.push((name, at, reach));
@@ -3039,7 +3059,11 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
             r.number = Some(t);
         }
     }
-    phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name, {frames} sheet borders or view frames left out)", out.len()));
+    let (made, shared) = outline_cache.as_ref().map_or((0, 0), crate::cmd::hatch::Outlines::searches_made);
+    phase(&format!(
+        "tracing {} rooms ({taken} numbered from the tag nearest the name, {frames} sheet borders or view frames left out; {made} window searches, {shared} shared)",
+        out.len()
+    ));
     if !beyond_reach.is_empty() {
         let shown: Vec<&str> = beyond_reach.iter().take(5).map(|(n, ..)| n.as_str()).collect();
         let most = beyond_reach.iter().map(|(.., r)| *r).fold(0.0, f64::max) / (12.0 * k);

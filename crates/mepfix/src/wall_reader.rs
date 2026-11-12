@@ -497,6 +497,135 @@ fn to_seg(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
     (dist(p, [a[0] + u[0] * s, a[1] + u[1] * s]), s)
 }
 
+/// The thickest wall a face pairs across, feet.
+const MAX_WALL_FT: f64 = 16.0 / 12.0;
+/// How far off a line a parallel covering it may be to put it inside a wall, feet.
+const FACE_COVER_FT: f64 = 8.0 / 12.0;
+/// The widest door gap two wall pieces on one line are joined across, feet.
+const MAX_JOIN_GAP_FT: f64 = 8.0;
+/// How far off a wall's line another piece on that line may start ([`same_line`]: half the
+/// thicker one's thickness, at most half the thickest wall).
+const SAME_LINE_FT: f64 = MAX_WALL_FT / 2.0;
+/// How much a ladder's rung may differ in length from its wall, feet.
+const LADDER_LEN_FT: f64 = 0.25;
+
+/// Most a parallel line's direction may differ from a face's (the cross product of their unit
+/// directions) for the face, wall and ladder tests below.
+const PARALLEL: f64 = 0.01;
+
+/// Where a plan's lines (or wall pieces) are, for "which can lie beside this one": each in the
+/// squares of [`SegGrid::CELL`] feet its box meets. A sheet's faces were each tested against
+/// every other line, and each wall piece against every other piece (a floor plan of 2,000 lines
+/// took 4 million tests a pass, and twice the plan four times as long).
+struct SegGrid {
+    cells: std::collections::HashMap<(i64, i64), Vec<usize>>,
+    /// Those whose box meets too many squares to list (or has no finite square): in every answer.
+    everywhere: Vec<usize>,
+    /// How many are in it.
+    len: usize,
+    /// The longest: how far a nearly parallel line can drift off a face over its length.
+    longest: f64,
+}
+
+impl SegGrid {
+    /// The square's side, feet: about a wall's reach, so a query looks at a few squares.
+    const CELL: f64 = 4.0;
+    /// Most squares one line (or one query) is listed in; past it, every line is looked at.
+    const MAX_CELLS: i64 = 4096;
+
+    fn new(lines: &[Seg]) -> SegGrid {
+        let mut g = SegGrid { cells: std::collections::HashMap::new(), everywhere: Vec::new(), len: 0, longest: 0.0 };
+        for l in lines {
+            g.push(l);
+        }
+        g
+    }
+
+    /// Adds `l`, the next index.
+    fn push(&mut self, l: &Seg) {
+        let i = self.len;
+        self.len += 1;
+        let len = dist(l.a, l.b);
+        self.longest = if len.is_finite() { self.longest.max(len) } else { f64::MAX };
+        match Self::span(l.a[0].min(l.b[0]), l.a[1].min(l.b[1]), l.a[0].max(l.b[0]), l.a[1].max(l.b[1])) {
+            Some((x0, y0, x1, y1)) => {
+                for x in x0..=x1 {
+                    for y in y0..=y1 {
+                        self.cells.entry((x, y)).or_default().push(i);
+                    }
+                }
+            }
+            None => self.everywhere.push(i),
+        }
+    }
+
+    /// How far off a line one of these can be at its far end while starting within reach of it
+    /// (nearly parallel: [`PARALLEL`] of its length).
+    fn drift(&self) -> f64 {
+        PARALLEL * 1.01 * self.longest
+    }
+
+    /// The squares a box meets, or `None` when they are too many (or not finite).
+    fn span(x0: f64, y0: f64, x1: f64, y1: f64) -> Option<(i64, i64, i64, i64)> {
+        let c = |v: f64| {
+            let k = (v / Self::CELL).floor();
+            (k.is_finite() && k.abs() < 1e12).then_some(k as i64)
+        };
+        let (x0, y0, x1, y1) = (c(x0)?, c(y0)?, c(x1)?, c(y1)?);
+        ((x1 - x0 + 1).saturating_mul(y1 - y0 + 1) <= Self::MAX_CELLS).then_some((x0, y0, x1, y1))
+    }
+
+    /// Every one with a point within `margin` feet of `l`'s box, maybe some more: in index order,
+    /// each once.
+    fn near(&self, l: &Seg, margin: f64) -> Vec<usize> {
+        let m = margin + 1e-6;
+        let Some((x0, y0, x1, y1)) = Self::span(l.a[0].min(l.b[0]) - m, l.a[1].min(l.b[1]) - m, l.a[0].max(l.b[0]) + m, l.a[1].max(l.b[1]) + m)
+        else {
+            return (0..self.len).collect();
+        };
+        let mut out = self.everywhere.clone();
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                if let Some(v) = self.cells.get(&(x, y)) {
+                    out.extend_from_slice(v);
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
+/// A wall piece's centreline as a line.
+fn seg_of(w: &FoundWall) -> Seg {
+    Seg { a: w.a_ft, b: w.b_ft }
+}
+
+/// How `g` pairs with the face `f` on its `side` (1 left, -1 right) as the wall's other face: its
+/// offset across (feet, at least `min_ft`) and the stretch of `f` it runs beside (feet along `f`).
+fn face_partner(f: &Seg, side: f64, g: &Seg, min_ft: f64) -> Option<(f64, f64, f64)> {
+    let lf = dist(f.a, f.b);
+    let lg = dist(g.a, g.b);
+    if lf < 1.0 || lg < 1.0 {
+        return None;
+    }
+    let u = [(f.b[0] - f.a[0]) / lf, (f.b[1] - f.a[1]) / lf];
+    let n = [-u[1] * side, u[0] * side];
+    let v = [(g.b[0] - g.a[0]) / lg, (g.b[1] - g.a[1]) / lg];
+    if (u[0] * v[1] - u[1] * v[0]).abs() > PARALLEL {
+        return None;
+    }
+    let off = (g.a[0] - f.a[0]) * n[0] + (g.a[1] - f.a[1]) * n[1];
+    if !(min_ft..=MAX_WALL_FT).contains(&off) {
+        return None;
+    }
+    let along = |p: [f64; 2]| (p[0] - f.a[0]) * u[0] + (p[1] - f.a[1]) * u[1];
+    let (g0, g1) = (along(g.a).min(along(g.b)), along(g.a).max(along(g.b)));
+    let (s0, s1) = (g0.max(0.0), g1.min(lf));
+    (s1 - s0 >= 0.5).then_some((off, s0, s1))
+}
+
 /// Face pairs → wall pieces (centreline, thickness inches), then pieces on one line with the same
 /// thickness joined across door-sized gaps that a door swings in (`hinges`: arc centres). A
 /// face's partner is the nearest parallel at least `min_ft` away (a print's glazing and trim
@@ -505,6 +634,9 @@ fn to_seg(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
 fn find_walls(lines: &[Seg], hinges: &[[f64; 2]], level: &str, min_ft: f64, either_side: bool) -> Vec<FoundWall> {
     let mut pieces: Vec<FoundWall> = Vec::new();
     let sides: &[f64] = if either_side { &[1.0, -1.0] } else { &[1.0] };
+    let grid = SegGrid::new(lines);
+    // The pieces made so far, where they are.
+    let mut placed = SegGrid::new(&[]);
     for (i, f) in lines.iter().enumerate() {
         let lf = dist(f.a, f.b);
         if lf < 1.0 {
@@ -515,28 +647,13 @@ fn find_walls(lines: &[Seg], hinges: &[[f64; 2]], level: &str, min_ft: f64, eith
             let n = [-u[1] * side, u[0] * side];
             // The nearest parallel partner on that side, overlapping it.
             let mut best: Option<(f64, f64, f64)> = None;
-            for (j, g) in lines.iter().enumerate() {
+            // Only a line within a wall's thickness can pair (in index order, as over all lines).
+            for j in grid.near(f, MAX_WALL_FT + grid.drift()) {
+                let Some(g) = lines.get(j) else { continue };
                 if i == j {
                     continue;
                 }
-                let lg = dist(g.a, g.b);
-                if lg < 1.0 {
-                    continue;
-                }
-                let v = [(g.b[0] - g.a[0]) / lg, (g.b[1] - g.a[1]) / lg];
-                if (u[0] * v[1] - u[1] * v[0]).abs() > 0.01 {
-                    continue;
-                }
-                let off = (g.a[0] - f.a[0]) * n[0] + (g.a[1] - f.a[1]) * n[1];
-                if !(min_ft..=16.0 / 12.0).contains(&off) {
-                    continue;
-                }
-                let along = |p: [f64; 2]| (p[0] - f.a[0]) * u[0] + (p[1] - f.a[1]) * u[1];
-                let (g0, g1) = (along(g.a).min(along(g.b)), along(g.a).max(along(g.b)));
-                let (s0, s1) = (g0.max(0.0), g1.min(lf));
-                if s1 - s0 < 0.5 {
-                    continue;
-                }
+                let Some((off, s0, s1)) = face_partner(f, side, g, min_ft) else { continue };
                 // The nearest; at the same offset (a frame's edge along the face), the longer overlap.
                 if best.is_none_or(|b| off < b.0 - 1e-6 || (off < b.0 + 1e-6 && s1 - s0 > b.2 - b.1 + 1e-6)) {
                     best = Some((off, s0, s1));
@@ -545,7 +662,10 @@ fn find_walls(lines: &[Seg], hinges: &[[f64; 2]], level: &str, min_ft: f64, eith
             let Some((off, s0, s1)) = best else { continue };
             let at = |s: f64| [f.a[0] + u[0] * s + n[0] * off / 2.0, f.a[1] + u[1] * s + n[1] * off / 2.0];
             let w = FoundWall { level: level.into(), a_ft: at(s0), b_ft: at(s1), thickness_in: off * 12.0, ..FoundWall::default() };
-            if !pieces.iter().any(|p| same_line(p, &w) && overlap(p, &w) > 0.5) {
+            // A piece on its line overlapping it lies within a wall's reach of it.
+            let reach = SAME_LINE_FT + PARALLEL * 1.01 * dist(w.a_ft, w.b_ft);
+            if !placed.near(&seg_of(&w), reach).into_iter().filter_map(|k| pieces.get(k)).any(|p| same_line(p, &w) && overlap(p, &w) > 0.5) {
+                placed.push(&seg_of(&w));
                 pieces.push(w);
             }
         }
@@ -554,8 +674,12 @@ fn find_walls(lines: &[Seg], hinges: &[[f64; 2]], level: &str, min_ft: f64, eith
     let mut joined = true;
     while joined {
         joined = false;
+        // A piece it joins starts a door's width past its end, on its line.
+        let placed = SegGrid::new(&pieces.iter().map(seg_of).collect::<Vec<_>>());
+        let reach = MAX_JOIN_GAP_FT + SAME_LINE_FT + placed.drift();
         'outer: for i in 0..pieces.len() {
-            for j in 0..pieces.len() {
+            let Some(p) = pieces.get(i) else { continue };
+            for j in placed.near(&seg_of(p), reach) {
                 if i == j {
                     continue;
                 }
@@ -571,7 +695,7 @@ fn find_walls(lines: &[Seg], hinges: &[[f64; 2]], level: &str, min_ft: f64, eith
                     continue;
                 }
                 let gap = q0 - len;
-                if !(1.5..=8.0).contains(&gap) {
+                if !(1.5..=MAX_JOIN_GAP_FT).contains(&gap) {
                     continue;
                 }
                 // A door hinged at one side of the gap, on the wall.
@@ -692,47 +816,55 @@ const PRINT_MIN_WALL_IN: f64 = 3.5;
 
 /// Whether a face pair is a rung of a ladder (stair treads, a rack): a third same-extent
 /// parallel at the same spacing beyond either face.
-fn ladder(w: &FoundWall, lines: &[Seg]) -> bool {
+fn ladder(w: &FoundWall, lines: &[Seg], by_len: &[(f64, usize)]) -> bool {
     let len = dist(w.a_ft, w.b_ft);
     if len <= 1e-9 {
         return false;
     }
     let u = [(w.b_ft[0] - w.a_ft[0]) / len, (w.b_ft[1] - w.a_ft[1]) / len];
     let t = w.thickness_in / 12.0;
+    // Only lines about as long as the wall can be its rungs (`by_len`: the lines' lengths, sorted).
+    let from = by_len.partition_point(|(ll, _)| *ll < len - LADDER_LEN_FT - 1e-9);
+    let to = by_len.partition_point(|(ll, _)| *ll <= len + LADDER_LEN_FT + 1e-9);
+    let same_length: Vec<&Seg> = by_len.get(from..to).unwrap_or_default().iter().filter_map(|(_, i)| lines.get(*i)).collect();
     [1.5 * t, -1.5 * t].iter().any(|off| {
-        lines.iter().any(|l| {
+        same_length.iter().any(|l| {
             let ll = dist(l.a, l.b);
-            if ll <= 1e-9 || (ll - len).abs() > 0.25 {
+            if ll <= 1e-9 || (ll - len).abs() > LADDER_LEN_FT {
                 return false;
             }
             let v = [(l.b[0] - l.a[0]) / ll, (l.b[1] - l.a[1]) / ll];
             let side = (l.a[0] - w.a_ft[0]) * -u[1] + (l.a[1] - w.a_ft[1]) * u[0];
-            (u[0] * v[1] - u[1] * v[0]).abs() < 0.01 && (side - off).abs() < 0.05
+            (u[0] * v[1] - u[1] * v[0]).abs() < PARALLEL && (side - off).abs() < 0.05
         })
     })
 }
 
-/// Whether a line lies inside a wall: a parallel on each side within a wall's thickness covering
-/// it (a window's glass between the faces, a centreline). On a print it would pair with a face.
-fn between_faces(l: &Seg, lines: &[Seg]) -> bool {
+/// Whether `g` runs beside `l` on its `side` (1 left, -1 right) within a wall's thickness, the
+/// whole length of it.
+fn covers(l: &Seg, side: f64, g: &Seg) -> bool {
     let len = dist(l.a, l.b);
-    if len <= 1e-9 {
+    let lg = dist(g.a, g.b);
+    if len <= 1e-9 || lg <= 1e-9 {
         return false;
     }
     let u = [(l.b[0] - l.a[0]) / len, (l.b[1] - l.a[1]) / len];
-    let covered = |sign: f64| {
-        lines.iter().any(|g| {
-            let lg = dist(g.a, g.b);
-            if lg <= 1e-9 {
-                return false;
-            }
-            let v = [(g.b[0] - g.a[0]) / lg, (g.b[1] - g.a[1]) / lg];
-            let off = ((g.a[0] - l.a[0]) * -u[1] + (g.a[1] - l.a[1]) * u[0]) * sign;
-            let along = |p: [f64; 2]| (p[0] - l.a[0]) * u[0] + (p[1] - l.a[1]) * u[1];
-            let (g0, g1) = (along(g.a).min(along(g.b)), along(g.a).max(along(g.b)));
-            (u[0] * v[1] - u[1] * v[0]).abs() < 0.01 && off > 1.0 / 12.0 && off <= 8.0 / 12.0 && g0 <= 0.05 && g1 >= len - 0.05
-        })
-    };
+    let v = [(g.b[0] - g.a[0]) / lg, (g.b[1] - g.a[1]) / lg];
+    let off = ((g.a[0] - l.a[0]) * -u[1] + (g.a[1] - l.a[1]) * u[0]) * side;
+    let along = |p: [f64; 2]| (p[0] - l.a[0]) * u[0] + (p[1] - l.a[1]) * u[1];
+    let (g0, g1) = (along(g.a).min(along(g.b)), along(g.a).max(along(g.b)));
+    (u[0] * v[1] - u[1] * v[0]).abs() < PARALLEL && off > 1.0 / 12.0 && off <= FACE_COVER_FT && g0 <= 0.05 && g1 >= len - 0.05
+}
+
+/// Whether a line lies inside a wall: a parallel on each side within a wall's thickness covering
+/// it (a window's glass between the faces, a centreline). On a print it would pair with a face.
+fn between_faces(l: &Seg, lines: &[Seg], grid: &SegGrid) -> bool {
+    if dist(l.a, l.b) <= 1e-9 {
+        return false;
+    }
+    // Only lines within a wall's thickness of it can cover it.
+    let near: Vec<&Seg> = grid.near(l, FACE_COVER_FT + 0.05 + grid.drift()).into_iter().filter_map(|i| lines.get(i)).collect();
+    let covered = |sign: f64| near.iter().any(|g| covers(l, sign, g));
     covered(1.0) && covered(-1.0)
 }
 
@@ -771,7 +903,8 @@ fn read_plan_walls_within(d: &Drawing, al: &Alignment, level: &str, types: &[Rea
             .filter(|s| s.a.iter().chain(&s.b).all(|v| v.is_finite()) && within(s.a) && within(s.b) && dist(s.a, s.b) >= 1.0)
             .take(MAX_LINES)
             .collect();
-        drawn.iter().filter(|l| !between_faces(l, &drawn)).copied().collect()
+        let grid = SegGrid::new(&drawn);
+        drawn.iter().filter(|l| !between_faces(l, &drawn, &grid)).copied().collect()
     };
     let hinges: Vec<[f64; 2]> = d
         .model
@@ -785,7 +918,9 @@ fn read_plan_walls_within(d: &Drawing, al: &Alignment, level: &str, types: &[Rea
         .collect();
     let mut walls = find_walls(&lines, &hinges, level, if layered { 2.0 / 12.0 } else { PRINT_MIN_WALL_IN / 12.0 }, !layered);
     if !layered {
-        walls.retain(|w| !ladder(w, &lines));
+        let mut by_len: Vec<(f64, usize)> = lines.iter().enumerate().map(|(i, l)| (dist(l.a, l.b), i)).filter(|(ll, _)| ll.is_finite()).collect();
+        by_len.sort_by(|a, b| a.0.total_cmp(&b.0));
+        walls.retain(|w| !ladder(w, &lines, &by_len));
     }
     for (tag, p, leader, known) in plan_tags(d, al, types) {
         let reach = if leader { 1.0 } else { 3.0 };
@@ -1245,4 +1380,73 @@ pub fn spec_patch(r: &WallResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f6
         })
         .collect();
     json!({"wall_types": types, "walls": walls})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Random plans of short and long lines, many nearly parallel and close together.
+    fn plan(seed: u64, n: usize) -> Vec<Seg> {
+        let mut x = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        let mut next = move || {
+            x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (x >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut out: Vec<Seg> = Vec::new();
+        for i in 0..n {
+            // Copies of a line moved a few inches across, turned a hair, often very long.
+            if i % 3 != 0
+                && let Some(base) = out.last().copied()
+            {
+                let along = [base.b[0] - base.a[0], base.b[1] - base.a[1]];
+                let len = dist(base.a, base.b).max(1e-9);
+                let n = [-along[1] / len, along[0] / len];
+                let turn = (next() - 0.5) * 0.02;
+                // Half beside it the whole way (a little longer each end), half anywhere near.
+                let (off, slide, grow) = if next() < 0.5 {
+                    ((0.1 + next() * 0.5) * if next() < 0.5 { 1.0 } else { -1.0 }, -0.5 * next(), 1.0 + 0.02 / len.max(1.0))
+                } else {
+                    ((next() - 0.5) * 3.0, (next() - 0.5) * len, 1.0)
+                };
+                let along = [along[0] * grow, along[1] * grow];
+                let a = [base.a[0] + n[0] * off + along[0] / len * slide, base.a[1] + n[1] * off + along[1] / len * slide];
+                let b = [a[0] + along[0] - turn * along[1] + along[0] / len * 0.5, a[1] + along[1] + turn * along[0] + along[1] / len * 0.5];
+                out.push(Seg { a, b });
+                continue;
+            }
+            let a = [next() * 400.0, next() * 400.0];
+            let len = if next() < 0.2 { 50.0 + next() * 300.0 } else { 0.5 + next() * 20.0 };
+            let t = next() * std::f64::consts::TAU;
+            out.push(Seg { a, b: [a[0] + len * t.cos(), a[1] + len * t.sin()] });
+        }
+        out
+    }
+
+    #[test]
+    fn the_grid_offers_every_line_a_face_pairs_with_or_is_covered_by() {
+        for seed in 1..=6 {
+            let lines = plan(seed, 900);
+            let grid = SegGrid::new(&lines);
+            let (mut pairs, mut covering) = (0, 0);
+            for f in &lines {
+                let walls = grid.near(f, MAX_WALL_FT + grid.drift());
+                let covers_near = grid.near(f, FACE_COVER_FT + 0.05 + grid.drift());
+                assert!(walls.windows(2).all(|w| w[0] < w[1]), "in index order, each once");
+                for (j, g) in lines.iter().enumerate() {
+                    for side in [1.0, -1.0] {
+                        if face_partner(f, side, g, 0.0).is_some() {
+                            pairs += 1;
+                            assert!(walls.binary_search(&j).is_ok(), "seed {seed}: {g:?} pairs with {f:?} but the grid left it out");
+                        }
+                        if covers(f, side, g) {
+                            covering += 1;
+                            assert!(covers_near.binary_search(&j).is_ok(), "seed {seed}: {g:?} covers {f:?} but the grid left it out");
+                        }
+                    }
+                }
+            }
+            assert!(pairs > 500 && covering > 100, "seed {seed}: the plans hold pairs ({pairs}) and covered lines ({covering})");
+        }
+    }
 }

@@ -362,3 +362,171 @@ fn shop_drawings_in_a_submittals_folder_beside_the_prints_are_found_and_no_sourc
     assert_eq!(read["missing"], json!(false));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Q6548: both floors' architectural plans (`A-101`, `A-102`) read back at paper size, with each
+/// one's printed scale; the set written as one PDF in `Drawings/`.
+fn both_plans(dir: &Path) -> Vec<(Drawing, f64)> {
+    let (_, _) = design_set(dir);
+    let mut set = generate_hotel(42, HotelSize::Small).expect("generate hotel");
+    set.truth.sheets.retain(|s| ["A-101", "A-102"].contains(&s.number.as_str()));
+    let mut out = Vec::new();
+    for number in ["A-101", "A-102"] {
+        let sh = set.truth.sheets.iter().find(|s| s.number == number).expect("plan sheet");
+        let bytes = set.file(&sh.pdf).expect("pdf").to_vec();
+        let scale = sh.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).expect("prints its scale");
+        out.push((cadaddy_io::pdf_read::read_json(&bytes, &json!({"scale": 1, "layout": false, "images": false})).expect("read plan").0, scale));
+    }
+    out
+}
+
+/// A plan view on the two-floor page: the plan's paper inches times [`KV`], moved by `shift`.
+const KV: f64 = 0.45;
+
+/// A filled shape of a head's size that is no circle (a lettering glyph's outline), in pen 1.
+fn glyph(d: &mut Drawing, c: [f64; 2]) {
+    let pts = [[0.0, 0.0], [0.05, 0.0], [0.05, 0.02], [0.02, 0.02], [0.02, 0.07], [0.0, 0.07]];
+    let vertices = pts.iter().map(|p| PolyVertex { p: Vec2::new(c[0] + p[0], c[1] + p[1]), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
+    let h = Hatch {
+        pattern: "SOLID".into(),
+        solid: true,
+        loops: vec![HatchLoop { vertices, outer: true, sources: Vec::new(), curves: Vec::new() }],
+        scale: 1.0,
+        angle: 0.0,
+        associative: false,
+        style: 0,
+        elevation: 0.0,
+        gradient: None,
+        origin: Vec2::ZERO,
+        background: None,
+        pattern_lines: Vec::new(),
+    };
+    add(d, 1, EntityKind::Hatch(Box::new(h)));
+}
+
+/// One shop-drawing page drawing both floors' plans side by side (the first floor left, the
+/// second right), each its background in grey with its own room numbers, four heads (plain
+/// circles) on a branch line in red, and no head legend; on each branch line the grey background draws two circles of
+/// a head's size (a cooktop's burners under the pipe), a red glyph sits on the pipe, and one
+/// head is drawn twice. What each view draws: its heads in its plan's paper inches.
+fn two_floor_page(plans: &[(Drawing, f64)]) -> (Vec<u8>, Vec<Vec<[f64; 2]>>) {
+    let mut d = Drawing::new_imperial();
+    let mut drawn = Vec::new();
+    let mut x0 = 1.0;
+    for (plan, _) in plans {
+        let mut lo = [f64::INFINITY; 2];
+        let mut hi = [f64::NEG_INFINITY; 2];
+        let mut pieces: Vec<([f64; 2], [f64; 2])> = Vec::new();
+        for e in plan.model.iter() {
+            match &e.kind {
+                EntityKind::Line(l) => pieces.push(([l.a.x, l.a.y], [l.b.x, l.b.y])),
+                EntityKind::LwPolyline(pl) => {
+                    let mut v: Vec<[f64; 2]> = pl.vertices.iter().map(|x| [x.p.x, x.p.y]).collect();
+                    if pl.closed
+                        && let Some(f) = v.first().copied()
+                    {
+                        v.push(f);
+                    }
+                    pieces.extend(v.windows(2).map(|w| (w[0], w[1])));
+                }
+                _ => {}
+            }
+        }
+        for (a, b) in &pieces {
+            for p in [a, b] {
+                lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+            }
+        }
+        let shift = [x0 - lo[0] * KV, 2.0 - lo[1] * KV];
+        let t = move |p: [f64; 2]| [p[0] * KV + shift[0], p[1] * KV + shift[1]];
+        for (a, b) in &pieces {
+            line(&mut d, 8, t(*a), t(*b));
+        }
+        let tags = room_numbers(plan);
+        assert!(tags.len() >= 6, "the made-up plan prints room numbers: {tags:?}");
+        for (k, at, h, _) in &tags {
+            text(&mut d, t(*at), k, h * KV);
+        }
+        let mut picked: Vec<[f64; 2]> = tags.iter().map(|x| x.3).collect();
+        picked.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        let step = (picked.len() / 4).max(1);
+        let heads: Vec<[f64; 2]> = (0..4).filter_map(|i| picked.get(i * step)).map(|c| [c[0], c[1] - 0.5]).collect();
+        assert_eq!(heads.len(), 4);
+        for h in &heads {
+            head(&mut d, t(*h), false);
+        }
+        // The first head drawn a second time over itself.
+        head(&mut d, t(heads[0]), false);
+        for w in heads.windows(2) {
+            bar(&mut d, t(w[0]), t(w[1]), 0.02);
+            // Burners under the pipe, in the background's pen, and a red glyph on it.
+            let m = [(w[0][0] + w[1][0]) / 2.0, (w[0][1] + w[1][1]) / 2.0];
+            let gm = t(m);
+            add(&mut d, 8, EntityKind::Circle(cadaddy_engine::doc::Circle { center: Vec3::new(gm[0] - 0.2, gm[1], 0.0), radius: R }));
+            add(&mut d, 8, EntityKind::Circle(cadaddy_engine::doc::Circle { center: Vec3::new(gm[0] + 0.2, gm[1], 0.0), radius: R }));
+            glyph(&mut d, [gm[0] + 0.5, gm[1] - 0.01]);
+        }
+        drawn.push(heads);
+        x0 += (hi[0] - lo[0]) * KV + 2.0;
+    }
+    text(&mut d, [2.0, 1.0], "FIRE SPRINKLER SHOP DRAWING", 0.15);
+    let opts =
+        json!({"layers": false, "fit": false, "center": true, "scale": 1.0, "width": 864, "height": 1118, "landscape": true, "lineweights": true});
+    (cadaddy_io::pdf::plot(&d, &Space::Model, &opts).expect("plot"), drawn)
+}
+
+#[test]
+fn a_page_drawing_two_floors_puts_each_view_onto_its_floor_and_reads_no_background_circle_or_glyph_as_a_head() {
+    let _g = serial();
+    real_pdf_reader();
+    let dir = folder("twofloors");
+    let plans = both_plans(&dir);
+    let (pdf, drawn) = two_floor_page(&plans);
+    let subs = dir.join("Submittals");
+    std::fs::create_dir_all(&subs).expect("submittals");
+    std::fs::write(subs.join("Fire Sprinkler Shop Drawings.pdf"), pdf).expect("write shop drawing");
+    let s = run(&dir, Some(&subs));
+    let job = job_state(&s);
+    let read = stage(&job, "mep_read")["result"]["fire_protection"].clone();
+    eprintln!("fire protection read: {read:#}");
+    // At most the eight heads drawn (the plot→PDF→read trip may lose a symbol it reads as a
+    // letter), and none of the background's circles (some ninety of a head's size, two under each
+    // branch line), the glyphs on the pipe or the head drawn twice: before, every one of them was a
+    // head and the whole page went onto one floor.
+    let total = read["heads"].as_u64().unwrap_or(0);
+    assert!((6..=8).contains(&total), "{read:#}");
+    let sources = read["sources"].as_array().cloned().unwrap_or_default();
+    let mut onto: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for src in &sources {
+        onto.insert(src["level"].as_str().unwrap_or("").to_string(), src["placed"]["onto"].as_str().unwrap_or("").to_string());
+        assert_eq!(src["placed"]["views"], json!(2), "{read:#}");
+    }
+    assert_eq!(
+        onto,
+        std::collections::BTreeMap::from([("Level 1".to_string(), "A-101".to_string()), ("Level 2".to_string(), "A-102".to_string())]),
+        "each view onto its own floor: {read:#}"
+    );
+    // Each floor's heads are its own view's heads, where the page draws them: every pair lies as
+    // far apart in the model as a pair of that view's drawn heads.
+    let (parts, _) = built(&s);
+    assert_eq!(parts.get("part:terminal:sprinkler_pendent").copied().map(|n| n as u64), Some(total), "{parts:?}");
+    let mut s = s;
+    let spec = s.execute("bspec.get", &json!({})).expect("bspec.get");
+    let terminals = spec["spec"]["mep"]["terminals"].as_array().cloned().unwrap_or_default();
+    for (level, (heads, (_, in_per_ft))) in ["Level 1", "Level 2"].iter().zip(drawn.iter().zip(&plans)) {
+        let model: Vec<[f64; 2]> = terminals
+            .iter()
+            .filter(|t| t["system"] == "FP" && t["level"] == *level)
+            .filter_map(|t| Some([t["at"][0].as_f64()?, t["at"][1].as_f64()?]))
+            .collect();
+        assert!((2..=4).contains(&model.len()), "{level}: {model:?}");
+        let page_gaps: Vec<f64> = heads.iter().flat_map(|a| heads.iter().map(move |b| dist(*a, *b) / in_per_ft)).collect();
+        for (i, a) in model.iter().enumerate() {
+            for b in model.iter().skip(i + 1) {
+                let ft = dist(*a, *b) / 12.0;
+                assert!(page_gaps.iter().any(|g| (g - ft).abs() < 1.0), "{level}: model gap {ft:.2} ft is no drawn pair's {page_gaps:?}");
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
