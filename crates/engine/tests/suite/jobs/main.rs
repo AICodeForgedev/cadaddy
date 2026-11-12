@@ -31,6 +31,7 @@ mod ceiling_room_type;
 mod ceilings;
 mod clash_fix_persists;
 mod clash_framing;
+mod clash_named;
 mod completebuilding;
 mod concrete;
 mod conduitjob;

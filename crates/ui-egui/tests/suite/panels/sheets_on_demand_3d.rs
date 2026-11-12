@@ -6,15 +6,15 @@
 
 use cadaddy_engine::doc::{EntityKind, Line, RawTag, Space, geom::Vec3};
 use cadaddy_engine::{Session, sample};
-use cadaddy_ui_egui::{CadApp, Services};
+use cadaddy_ui_egui::{CadApp, Services, dialogs, docking::Panel};
 use egui::vec2;
 use egui_kittest::Harness;
 use serde_json::json;
 
-#[test]
-fn frames_of_the_3d_bim_view_load_no_sheet_and_the_model_finishes() {
-    // A made-up print set with a few built walls on its sheets (an element carries its build's
-    // extended data, so it never leaves memory).
+/// A made-up print set with a few built walls on its sheets (an element carries its build's
+/// extended data, so it never leaves memory), open as the interface opens one: on its first
+/// sheet, the others out of memory. With it, the objects in memory.
+fn on_demand() -> (Harness<'static, CadApp>, usize) {
     let mut set = sample::job_print_set(8, 300);
     for i in 0..30 {
         let x = 100.0 + f64::from(i) * 40.0;
@@ -48,6 +48,101 @@ fn frames_of_the_3d_bim_view_load_no_sheet_and_the_model_finishes() {
         app,
     );
     h.run_steps(3);
+    (h, held)
+}
+
+/// The palettes and dialogs that read sheet linework as they are drawn, so opening one loads the
+/// set (once): a count and a purge look at every object, a plot preview and a transmittal at
+/// everything they will write, a standards check at every object's properties, the room list
+/// traces rooms from the plans when none are built, the 4D schedule counts every object not yet
+/// linked, and Validate and the agent's work list check the model against the prints.
+const WHOLE_SET: &[&str] = &[
+    "dialog countpalette",
+    "dialog purge",
+    "dialog preview",
+    "dialog etransmit",
+    "dialog checkstandards",
+    "dialog rooms",
+    "dialog fourd",
+    "palette validate",
+    "dialog agentwork",
+];
+
+/// No palette and no dialog loads the whole set by being open unless it reads sheet linework
+/// (Q6418), and none loads it more than once: what each reads on its own, as it is drawn, it
+/// reads from what is in memory. A whole-set load on the UI thread is seconds on a large set;
+/// when the idle window put the sheets out again while the dialog still asked every frame, each
+/// frame loaded them again.
+#[test]
+fn an_open_palette_or_dialog_loads_the_whole_set_at_most_once_and_only_for_sheet_linework() {
+    let (mut h, held) = on_demand();
+    let mut items: Vec<(String, Option<String>)> = Panel::RAIL.iter().map(|p| (format!("palette {}", p.id()), None)).collect();
+    items.extend(dialogs::IDS.iter().map(|id| (format!("dialog {id}"), Some((*id).to_string()))));
+    let (mut needless, mut again) = (Vec::new(), Vec::new());
+    for (what, dialog) in items {
+        assert!(h.state().session.has_parked_sheets(), "before {what}: the sheets are out of memory");
+        match &dialog {
+            Some(id) => h.state_mut().ui.dialog = Some(id.clone()),
+            None => {
+                let panel = what.trim_start_matches("palette ").to_string();
+                h.state_mut().run("ui.dock", json!({ "operation": "open", "panel": panel })).unwrap();
+            }
+        }
+        let before = h.state().session.whole_set_loads.0;
+        h.state_mut().session.whole_set_asked.clear();
+        h.run_steps(12);
+        let (n, last) = h.state().session.whole_set_loads.clone();
+        let by = last.last().cloned().unwrap_or_default();
+        // Every command it ran that reads the whole set, whether or not that one loaded it.
+        let asked = h.state().session.whole_set_asked.join(", ");
+        if !asked.is_empty() && !WHOLE_SET.contains(&what.as_str()) {
+            needless.push(format!("{what}: {asked}"));
+        }
+        if n > before + 1 {
+            again.push(format!("{what}: {by} × {}", n - before));
+        }
+        // Closed: nothing reads the set any more, and it goes out of memory again.
+        match &dialog {
+            Some(_) => h.state_mut().ui.dialog = None,
+            None => {
+                let panel = what.trim_start_matches("palette ").to_string();
+                h.state_mut().run("ui.dock", json!({ "operation": "close", "panel": panel })).unwrap();
+            }
+        }
+        // (Opened within milliseconds of each other here: no read is taken for an answer to
+        // the sheets going out.)
+        cadaddy_ui_egui::sheetload::forget_holds();
+        h.run_steps(4);
+    }
+    assert!(needless.is_empty(), "opened, these ran whole-set commands and read no sheet linework:\n{}", needless.join("\n"));
+    assert!(again.is_empty(), "open, these loaded the whole set again and again:\n{}", again.join("\n"));
+    assert!(h.state().session.has_parked_sheets());
+    assert_eq!(h.state().session.doc().unwrap().model.len(), held);
+}
+
+/// Something that reads the whole set whenever the drawing changes (a made-up palette: `entities`
+/// run when the drawing isn't the one it last read) doesn't make the set load for ever: putting
+/// the sheets out changes the drawing, so the second time it is read right after they went out
+/// they stay in memory.
+#[test]
+fn a_read_that_follows_every_change_of_the_drawing_loads_the_set_twice_at_most() {
+    let (mut h, _) = on_demand();
+    let mut read: *const cadaddy_engine::doc::Drawing = std::ptr::null();
+    for _ in 0..40 {
+        let now = std::sync::Arc::as_ptr(&h.state().session.state().unwrap().doc);
+        if now != read {
+            h.state_mut().session.execute("entities", &json!({ "limit": 1 })).unwrap();
+            read = std::sync::Arc::as_ptr(&h.state().session.state().unwrap().doc);
+        }
+        h.run_steps(1);
+    }
+    let (n, _) = h.state().session.whole_set_loads.clone();
+    assert!((1..=2).contains(&n), "the set was loaded {n} times in 40 frames");
+}
+
+#[test]
+fn frames_of_the_3d_bim_view_load_no_sheet_and_the_model_finishes() {
+    let (mut h, held) = on_demand();
     h.state_mut().run("bim.look", json!({ "on": true })).unwrap();
     h.state_mut().run("vscurrent", json!({ "style": "shaded" })).unwrap();
     assert_eq!(h.state().session.doc().unwrap().model.len(), held, "turning the view on loaded no sheet");

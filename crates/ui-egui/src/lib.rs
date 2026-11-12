@@ -72,7 +72,7 @@ pub mod kept;
 pub mod materials;
 mod mtext_editor;
 mod shaded;
-mod sheetload;
+pub mod sheetload;
 pub mod snap3ui;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.

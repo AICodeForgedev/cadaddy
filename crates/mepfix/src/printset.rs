@@ -1470,9 +1470,9 @@ impl PrintLoader {
                 needs_registration: read.needs_registration,
             });
         }
-        cadaddy_io::read(&bytes, &e.file)
-            .map(|d| LoadedPage { drawing: d, sheet: None, scale: 1.0, scale_source: String::new(), needs_registration: false })
-            .map_err(|err| err.to_string())
+        let d = cadaddy_io::read(&bytes, &e.file).map_err(|err| err.to_string())?;
+        let (scale, scale_source) = drawing_plot_scale(&d);
+        Ok(LoadedPage { drawing: d, sheet: None, scale, scale_source, needs_registration: false })
     }
 
     /// How the lettering of the PDF pages this loader read did read: each entry of `project`
@@ -1485,6 +1485,36 @@ impl PrintLoader {
             }
         }
     }
+}
+
+/// How the scale source of a DWG/DXF sheet begins: such a sheet is drawn full size, so it is
+/// measured whatever its plot scale and never a plan left at paper size (Q6382).
+pub const DRAWING_SHEET_SOURCE: &str = "drawing file";
+
+/// A DWG/DXF sheet's drawing units per sheet inch (its plot scale: the sheet's scale note, else
+/// its DIMSCALE; 1 when neither reads) and where that came from, starting with
+/// [`DRAWING_SHEET_SOURCE`]. The drawing itself stays full size.
+pub fn drawing_plot_scale(d: &cadaddy_doc::Drawing) -> (f64, String) {
+    let per_inch = match d.header.i64("INSUNITS", 0) {
+        2 => 1.0 / 12.0,
+        4 => 25.4,
+        5 => 2.54,
+        6 => 0.0254,
+        1 => 1.0,
+        _ if d.header.i64("MEASUREMENT", 0) == 1 => 25.4,
+        _ => 1.0,
+    };
+    if let Some((text, v)) = sheet_reader::scale_note(d) {
+        let k = 12.0 / v * per_inch;
+        if k.is_finite() && k > 0.0 {
+            return (k, format!("{DRAWING_SHEET_SOURCE}, drawn full size: scale note {text}"));
+        }
+    }
+    let dimscale = d.header.f64("DIMSCALE", 0.0);
+    if dimscale.is_finite() && dimscale > 1.0 && dimscale * per_inch > 0.0 {
+        return (dimscale * per_inch, format!("{DRAWING_SHEET_SOURCE}, drawn full size: its dimension scale {dimscale}"));
+    }
+    (1.0, format!("{DRAWING_SHEET_SOURCE}, drawn full size: no plot scale read"))
 }
 
 /// A page as [`PrintLoader::load_page`] read it.
