@@ -6,8 +6,12 @@ use cadaddy_engine::Session;
 use cadaddy_mepfix::truth::Truth;
 use serde_json::{Value, json};
 
+/// The prefix of the made-up plan object handles that tell the runs apart: far above any handle
+/// the drawing gives its own objects (a clash names the built objects too, Q6386).
+const TAG: &str = "7FFFF";
+
 /// The fixture's horizontal ducts and pipes as building-spec runs (one run per segment, plan
-/// inches), each tagged with a made-up object handle `A<i>` so the test can tell runs apart.
+/// inches), each tagged with a made-up object handle `<TAG>A<i>` so the test can tell runs apart.
 fn session(t: &Truth) -> Session {
     let mut systems: Vec<Value> = Vec::new();
     let mut runs: Vec<Value> = Vec::new();
@@ -21,7 +25,7 @@ fn session(t: &Truth) -> Session {
         let i = runs.len();
         runs.push(json!({
             "system": s.system, "level": s.level, "points": [[a[0] * 12.0, a[1] * 12.0], [b[0] * 12.0, b[1] * 12.0]],
-            "size_in": s.size_in, "bottoms_ft": [h.bottom_ft], "objects": [format!("A{i:X}")],
+            "size_in": s.size_in, "bottoms_ft": [h.bottom_ft], "objects": [format!("{TAG}A{i:X}")],
         }));
     }
     let levels: Vec<Value> = t
@@ -35,17 +39,19 @@ fn session(t: &Truth) -> Session {
     s
 }
 
-/// The run index a clash belongs to (its first handle `A<i>` / `B<i>`).
+/// The run indexes a clash names (its plan objects' handles `<TAG>A<i>` / `<TAG>B<i>`; the
+/// built objects it names besides are the drawing's own).
 fn runs_of(c: &Value) -> Vec<usize> {
-    c["handles"].as_array().unwrap().iter().filter_map(|h| usize::from_str_radix(h.as_str()?.get(1..)?, 16).ok()).collect()
+    c["handles"].as_array().unwrap().iter().filter_map(|h| usize::from_str_radix(h.as_str()?.strip_prefix(TAG)?.get(1..)?, 16).ok()).collect()
 }
 
-/// Every run's objects renamed `A<i>` → `B<i>`: what rebuilding the model or re-reading the
-/// prints does to the handles.
+/// Every run's objects renamed `<TAG>A<i>` → `<TAG>B<i>`: what rebuilding the model or
+/// re-reading the prints does to the handles.
 fn new_handles(s: &mut Session) {
     let mut spec = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
     for r in spec["mep"]["runs"].as_array_mut().unwrap() {
-        let renamed: Vec<String> = r["objects"].as_array().unwrap().iter().map(|o| o.as_str().unwrap().replacen('A', "B", 1)).collect();
+        let renamed: Vec<String> =
+            r["objects"].as_array().unwrap().iter().map(|o| o.as_str().unwrap().replacen(&format!("{TAG}A"), &format!("{TAG}B"), 1)).collect();
         r["objects"] = json!(renamed);
     }
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
@@ -80,7 +86,7 @@ fn rerun_after_an_edit_keeps_statuses_on_a_fixture() {
             triaged.iter().filter(|c| c["kind"] == "below_ceiling" && runs_of(c).contains(&fixed_run)).map(|c| c["id"].as_str().unwrap()).collect();
         // New: a run with no clash drops to 6 ft.
         // `mep.edit` takes the run's stable id (`R1`…); `mep.list` (a page at a time, grouped by
-        // system and level) pairs it with the run's objects, `A<i>` for run i.
+        // system and level) pairs it with the run's objects, `<TAG>A<i>` for run i.
         let mut run_ids: Vec<String> = Vec::new();
         let mut cursor = 0;
         loop {

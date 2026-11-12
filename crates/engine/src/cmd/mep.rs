@@ -26,6 +26,7 @@ use super::perceive::{feet_inches, texts};
 use super::*;
 use crate::{Result, Session};
 
+mod clashscope;
 mod homerun;
 mod twinline;
 
@@ -3300,6 +3301,14 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
 
 // ---------------- clashes ----------------
 
+/// How far (feet) a point may be from a room's built ceiling and still be under it: the gap a
+/// wall leaves between two rooms' ceilings.
+const WALL_GAP_FT: f64 = 1.0;
+
+/// How far (inches) past a wall's face a piece of wiring or pipe may run and still be at the
+/// wall: a raceway along the face out of its box (under a wall unit, to the next stud bay).
+const WALL_FACE_IN: f64 = 2.0;
+
 /// Heights (feet) a riser's foot or top may miss its floor by and still stand on it or reach it.
 const PASS_EPS_FT: f64 = 1.0 / 96.0;
 
@@ -3358,9 +3367,16 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                     .map(|l| l.elevation_ft)
                     .filter(|e| e.is_finite() && *e > level.elevation_ft + 1e-6)
                     .fold(f64::INFINITY, f64::min);
-                let reach = if above.is_finite() { above - level.elevation_ft } else { level.ceiling_ft };
+                // Reaching the floor over it: the next level's floor, or the storey's own floor to
+                // floor where the levels give one (a stack drawn up to the storey's height).
+                let next = if above.is_finite() { above - level.elevation_ft } else { level.ceiling_ft };
+                let own = Some(level.height_ft).filter(|h| h.is_finite() && *h > 0.0);
+                let reach = own.map_or(next, |h| if next.is_finite() { next.min(h) } else { h });
                 let passes = bot <= PASS_EPS_FT && top.is_finite() && reach.is_finite() && top >= reach - PASS_EPS_FT;
-                let drop = st.cut.is_some() || passes || (wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft);
+                // Wiring standing below the ceiling goes to or from a device or gear down or up
+                // its wall (or out of the floor into the gear, a stub-up out of the ground):
+                // where it belongs (Q6386).
+                let drop = st.cut.is_some() || passes || (wiring(&r.system) && bot < level.ceiling_ft);
                 let through_up = passes || st.cut.as_ref().is_some_and(|c| c.index + 1 < c.count);
                 items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop, through_up });
             }
@@ -3369,33 +3385,84 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
         items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w, drop: false, through_up: false }));
     }
-    let handles = |r: &MepRun| r.objects.iter().take(5).cloned().collect::<Vec<_>>();
-    // Below the ceiling of the room it passes through (else the level's), into the slab above.
-    let rooms: Vec<(String, f64, Vec<Vec2>)> = d
-        .model
-        .iter()
-        .filter(|e| super::wallgen::made_as(e).as_deref() == Some("ceiling"))
-        .filter_map(|e| {
-            let EntityKind::Mesh(m) = &e.kind else { return None };
-            let z = m.vertices.first()?.z;
-            let poly: Vec<Vec2> = m.vertices.iter().map(|v| v.xy()).collect();
-            Some((super::bspec::made_level(e).unwrap_or_default(), z, hull(&poly)))
-        })
-        .collect();
+    // The built model the pieces are measured against: ceilings, walls and the runs' own built
+    // objects, each on its own level's plan (Q6386).
+    let scope = clashscope::Scope::of(d);
+    // The objects a clash names (Q6386): the run's built pieces beside it (what the model shows
+    // and selects), then the plan objects it was read from.
+    let plan_handles = |r: &MepRun| r.objects.iter().filter(|o| u64::from_str_radix(o, 16).is_ok()).take(5).cloned().collect::<Vec<String>>();
+    let handles = |it: &Item, near: Vec2| {
+        let mut hs: Vec<String> = scope
+            .named(&it.run.system, &it.run.level, it.piece.a, it.piece.b, it.piece.z0, it.piece.z1, it.w, near, upf)
+            .into_iter()
+            .map(|h| h.hex())
+            .collect();
+        for o in plan_handles(it.run) {
+            if !hs.contains(&o) {
+                hs.push(o);
+            }
+        }
+        hs
+    };
+    // A whole run's (a hoistway's, an attached model's clash): its built pieces nearest `near`.
+    let run_handles = |r: &MepRun, near: Vec2| {
+        // At whatever height it runs (under the slab, up a riser): its level and system scope it.
+        let (z0, z1) = (f64::NEG_INFINITY, f64::INFINITY);
+        let pts: Vec<Vec2> = r.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect();
+        let w = r.size_in[0] / 12.0 * upf;
+        let seg = pts
+            .windows(2)
+            .filter_map(|s| Some((*s.first()?, *s.get(1)?)))
+            .min_by(|x, y| clashscope::point_seg(near, x.0, x.1).total_cmp(&clashscope::point_seg(near, y.0, y.1)));
+        let (a, b) = seg.or_else(|| pts.first().map(|p| (*p, *p))).unwrap_or((near, near));
+        let mut hs: Vec<String> = scope.named(&r.system, &r.level, a, b, z0, z1, w, near, upf).into_iter().map(|h| h.hex()).collect();
+        for o in plan_handles(r) {
+            if !hs.contains(&o) {
+                hs.push(o);
+            }
+        }
+        hs
+    };
+    // The ceiling over a plan point of a level: the smallest built one round it, else the level's.
+    let ceiling_of = |level: &cadaddy_walk3d::Level, p: Vec2| {
+        scope.ceiling_at(&level.name, p, WALL_GAP_FT * upf).unwrap_or((level.elevation_ft + level.ceiling_ft) * upf)
+    };
     for it in &items {
         let Some(level) = sp.level(&it.run.level) else { continue };
         let mid = (it.piece.a + it.piece.b) * 0.5;
-        let ceiling = rooms
-            .iter()
-            .filter(|(l, _, poly)| l.eq_ignore_ascii_case(&level.name) && cadaddy_geom::point_in_polygon(poly, mid))
-            .map(|(_, z, _)| *z)
-            .fold(f64::NAN, f64::min);
-        let ceiling = if ceiling.is_finite() { ceiling } else { (level.elevation_ft + level.ceiling_ft) * upf };
-        if it.piece.z0 < ceiling - tol && !it.drop {
+        // Below the ceiling of the room it passes through (else the level's). A piece under its
+        // own floor (a drain under the slab, a duct in the floor/ceiling space under it) is
+        // measured against the storey under it, if there is one (underground otherwise); a piece
+        // of wiring or pipe inside built walls (or along a wall's face to its box) runs concealed
+        // in them; a roof has no ceiling (Q6386).
+        let floor = level.elevation_ft * upf;
+        let roof = super::wallgen::roof_level(&sp.levels, &level.name);
+        let hung = if it.drop || (roof && it.piece.z0 >= floor - tol) {
+            None
+        } else if it.piece.z0 < floor - tol {
+            storey_under(&sp, level).and_then(|under| {
+                let p = super::risercut::carry(&sp, [mid.x, mid.y], &level.name, &under.name);
+                let ceiling = ceiling_of(under, Vec2::new(p[0], p[1]));
+                (it.piece.z0 < ceiling - tol).then_some((ceiling, Some(under.name.as_str())))
+            })
+        } else {
+            let ceiling = ceiling_of(level, mid);
+            let concealed = it.run.source_sheet == super::conduitroute::IN_WALL
+                || (in_wall_kind(&sp, &it.run.system) && scope.in_walls(&level.name, it.piece.a, it.piece.b, it.w / 2.0 + WALL_FACE_IN / 12.0 * upf));
+            (it.piece.z0 < ceiling - tol && !concealed).then_some((ceiling, None))
+        };
+        if let Some((ceiling, under)) = hung {
+            let by = (ceiling - it.piece.z0) / upf * 12.0;
+            let message = match under {
+                Some(u) => {
+                    format!("{} hangs {} below the ceiling of {u} (under the floor of {})", it.run.system, cadaddy_walk3d::inches(by), it.run.level)
+                }
+                None => format!("{} hangs {} below the ceiling", it.run.system, cadaddy_walk3d::inches(by)),
+            };
             out.push(json!({
-                "kind": "below_ceiling", "systems": [it.run.system], "level": it.run.level,
-                "message": format!("{} hangs {} below the ceiling", it.run.system, cadaddy_walk3d::inches((ceiling - it.piece.z0) / upf * 12.0)),
-                "at": [r6(mid.x), r6(mid.y)], "by_in": r6((ceiling - it.piece.z0) / upf * 12.0), "handles": handles(it.run),
+                "kind": "below_ceiling", "systems": [it.run.system], "level": under.unwrap_or(&it.run.level),
+                "message": message,
+                "at": [r6(mid.x), r6(mid.y)], "by_in": r6(by), "handles": handles(it, mid),
             }));
         }
         let above = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| *e > level.elevation_ft + 1e-6).fold(f64::INFINITY, f64::min);
@@ -3405,7 +3472,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 out.push(json!({
                     "kind": "into_structure", "systems": [it.run.system], "level": it.run.level,
                     "message": format!("{} reaches {} into the floor structure above", it.run.system, cadaddy_walk3d::inches((it.piece.z1 - structure) / upf * 12.0)),
-                    "at": [r6(mid.x), r6(mid.y)], "by_in": r6((it.piece.z1 - structure) / upf * 12.0), "handles": handles(it.run),
+                    "at": [r6(mid.x), r6(mid.y)], "by_in": r6((it.piece.z1 - structure) / upf * 12.0), "handles": handles(it, mid),
                 }));
             }
         }
@@ -3430,24 +3497,30 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                     "kind": "crossing", "systems": [a.run.system, b.run.system], "level": a.run.level,
                     "message": format!("{} crosses {} ({} overlap in height)", a.run.system, b.run.system, cadaddy_walk3d::inches(zo / upf * 12.0)),
                     "at": [r6(at.x), r6(at.y)], "by_in": r6(zo / upf * 12.0),
-                    "handles": handles(a.run).into_iter().chain(handles(b.run)).collect::<Vec<_>>(),
+                    "handles": handles(a, at).into_iter().chain(handles(b, at)).collect::<Vec<_>>(),
                 }));
             }
         }
     }
-    // Through a column.
-    let columns: Vec<(Handle, cadaddy_geom::Bounds2, f64, f64)> = d
+    // Through a column (its outline taken back onto its own level's plan, as the runs are).
+    let columns: Vec<(Handle, String, cadaddy_geom::Bounds2, f64, f64)> = d
         .model
         .iter()
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("column"))
         .filter_map(|e| {
             let EntityKind::Mesh(m) = &e.kind else { return None };
             let (z0, z1) = m.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.z), hi.max(v.z)));
-            Some((e.handle, cadaddy_doc::entity_bounds(d, e, 0), z0, z1))
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            let off = super::bspec::stacked_by(e);
+            let b = cadaddy_geom::Bounds2 { min: b.min - off, max: b.max - off };
+            Some((e.handle, super::bspec::made_level(e).unwrap_or_default(), b, z0, z1))
         })
         .collect();
     for it in &items {
-        for (h, b, z0, z1) in &columns {
+        for (h, clevel, b, z0, z1) in &columns {
+            if !clevel.is_empty() && !clevel.eq_ignore_ascii_case(&it.run.level) {
+                continue;
+            }
             let inside = b.expand(it.w / 2.0 - tol);
             let hits = (0..=20).any(|k| inside.contains(it.piece.a + (it.piece.b - it.piece.a) * (f64::from(k) / 20.0)));
             if hits && it.piece.z0 < *z1 && it.piece.z1 > *z0 {
@@ -3455,7 +3528,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                     "kind": "column", "systems": [it.run.system], "level": it.run.level,
                     "message": format!("{} runs through a column", it.run.system),
                     "at": [r6(b.center().x), r6(b.center().y)], "by_in": 0.0,
-                    "handles": handles(it.run).into_iter().chain([h.hex()]).collect::<Vec<_>>(),
+                    "handles": handles(it, b.center()).into_iter().chain([h.hex()]).collect::<Vec<_>>(),
                 }));
             }
         }
@@ -3468,7 +3541,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         out.push(json!({
             "kind": "hoistway", "systems": [r.system], "level": r.level,
             "message": format!("{} runs through the elevator hoistway ({})", r.system, shaft.name),
-            "at": [r6(mid[0]), r6(mid[1])], "by_in": 0.0, "handles": handles(r),
+            "at": [r6(mid[0]), r6(mid[1])], "by_in": 0.0, "handles": run_handles(r, Vec2::new(mid[0], mid[1])),
         }));
     }
     // Into the objects of attached IFC models (architecture, structure from other programs), in
@@ -3496,7 +3569,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                     z0: pc.z0,
                     z1: pc.z1,
                     w,
-                    handles: handles(r),
+                    handles: run_handles(r, (pc.a + pc.b) * 0.5),
                     base,
                 });
             }
@@ -3525,6 +3598,20 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({ "total": total, "truncated": truncated, "clashes": out, "gone": gone }));
     }
     Ok(json!({ "total": total, "truncated": truncated, "clashes": out }))
+}
+
+/// The storey under `level`: the highest level below its floor (none: it stands on the ground).
+fn storey_under<'a>(sp: &'a BuildingSpec, level: &cadaddy_walk3d::Level) -> Option<&'a cadaddy_walk3d::Level> {
+    sp.levels
+        .iter()
+        .filter(|l| l.sheet.is_none() && l.elevation_ft.is_finite() && l.elevation_ft < level.elevation_ft - 1e-6)
+        .max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))
+}
+
+/// A system whose runs may run concealed inside a wall (Q6386): conduit, cable and pipe (a
+/// raceway along the studs, a pipe in a chase wall), not duct.
+fn in_wall_kind(sp: &BuildingSpec, system: &str) -> bool {
+    sp.mep.systems.iter().find(|x| x.name == system).is_some_and(|x| matches!(x.kind, MepKind::Conduit | MepKind::Cable | MepKind::Pipe))
 }
 
 /// The most earlier clashes a re-run matches against (the detector's own cap).

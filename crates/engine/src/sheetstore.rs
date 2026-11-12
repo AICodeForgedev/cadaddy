@@ -26,6 +26,9 @@ use crate::{Result, Session};
 /// Sheets a print set keeps in memory in the interface: the open one and the most recent others.
 pub const CACHE: usize = 3;
 
+/// How many of the latest whole-set loads a session remembers the command of ([`Session::whole_set_loads`]).
+pub const LOADS_KEPT: usize = 32;
+
 /// Commands that work on the open sheet alone (or on what is in memory) and so never need the
 /// sheets out of memory: moving around the set and the view, drawing and editing what is
 /// picked, undo, saving (a .cdy save keeps the parked sheets as stored), and the reads of the
@@ -94,6 +97,41 @@ pub const SHEET_LOCAL: &[&str] = &[
     "view.dir",
     "vpoint",
     "vscurrent",
+    // What palettes and dialogs read on their own while they are open, none of it sheet
+    // linework: the session's own lists (history, activity, the agent's review log, action
+    // macros, the calculator), what the drawing keeps beside its objects (the building spec and
+    // its levels, tags and rules, RFIs and BCF issues, the job's state, the model's areas,
+    // rules and clashes for Validate, parts, parameters, standards files), objects that carry extended data and so never leave memory (markups, IFC objects),
+    // other files (Design Center, a publish list), and picking among what is on screen (Quick
+    // Select, the selection filter: as `select`).
+    "undohistory",
+    "commandhistory",
+    "activity",
+    "review.log",
+    "actions",
+    "cal",
+    "bspec.get",
+    "levels.list",
+    "tags.list",
+    "project.rules.list",
+    "rfi.list",
+    "job.status",
+    "job.worklist",
+    "job.rules",
+    "job.report",
+    "part.list",
+    "parameters",
+    "standards",
+    "markups",
+    "ifc.tree",
+    "bcf.list",
+    "validate.areas",
+    "validate.rules",
+    "model.clashes",
+    "adcenter",
+    "publishlist",
+    "qselect.info",
+    "filter",
 ];
 
 /// Whether command `id` (a name or alias) works without the sheets out of memory.
@@ -378,6 +416,28 @@ impl Session {
             self.echo(n);
         }
         Ok(self.state()?.doc.model.len().saturating_sub(before))
+    }
+
+    /// With sheets on demand: a command that reads the whole set is about to run (whether or not
+    /// the set had to be loaded for it). The interface keeps the set in memory while such
+    /// commands keep coming ([`Session::whole_set_asks`]).
+    pub(crate) fn note_whole_set_ask(&mut self, id: &str) {
+        if self.sheets_on_demand && !is_sheet_local(id) {
+            self.whole_set_asks = self.whole_set_asks.wrapping_add(1);
+            if self.whole_set_asked.len() < LOADS_KEPT && !self.whole_set_asked.iter().any(|a| a.eq_ignore_ascii_case(id)) {
+                self.whole_set_asked.push(id.to_string());
+            }
+        }
+    }
+
+    /// A command loaded the whole set as it ran: counted, its name kept.
+    pub(crate) fn note_whole_set_load(&mut self, id: &str) {
+        let (n, last) = &mut self.whole_set_loads;
+        *n += 1;
+        if last.len() >= LOADS_KEPT {
+            last.remove(0);
+        }
+        last.push(id.to_string());
     }
 
     /// The parked part of sheet `i` of the print set (`None` when it is in memory): what the app
