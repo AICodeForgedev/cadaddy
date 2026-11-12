@@ -1141,6 +1141,8 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         pv
     };
     let spots: Vec<[f64; 2]> = titles.iter().map(|t| t.3).collect();
+    // Each view's title spot and lettering height (for the split plans joined below).
+    let mut marks_at: Vec<([f64; 2], f64)> = Vec::new();
     for (number, title, scale_text, at, region) in titles.into_iter().take(32) {
         let h = texts.iter().find(|t| t.value == title && dist([t.at.x, t.at.y], at) < 1e-6).map_or(median_h, |t| t.height);
         // The view's number: its own bubble's (a print's lettering may come back in pieces).
@@ -1151,6 +1153,21 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         pv.title = title;
         pv.scale_text = scale_text;
         out.views.push(pv);
+        marks_at.push((at, h));
+    }
+    // A plan a corridor or a break splits into blocks of linework is found as its titled half:
+    // the rest of it joins it (Q6549), its devices and lines with it.
+    let mut regions: Vec<Option<[f64; 4]>> = out.views.iter().map(|v| v.region).collect();
+    // Lettering a title's size (a view's title this reader may not have taken as one).
+    let lettering: Vec<[f64; 2]> = texts.iter().filter(|t| t.height >= 1.4 * median_h && t.rotation.sin().abs() < 0.05).map(text_middle).collect();
+    if join_split_views(&mut regions, &marks_at, &blocks, &lettering) {
+        for (v, r) in out.views.iter_mut().zip(regions) {
+            if r != v.region {
+                let (number, title, scale_text) = (std::mem::take(&mut v.number), std::mem::take(&mut v.title), v.scale_text.take());
+                *v = view_of(r, enlarged_page);
+                (v.number, v.title, v.scale_text) = (number, title, scale_text);
+            }
+        }
     }
     if enlarged_page {
         // Its biggest block of linework is the enlarged plan: the sheet's only view when no title
@@ -1372,6 +1389,81 @@ fn view_block(blocks: &[([f64; 4], usize)], at: [f64; 2], h: f64, others: &[[f64
     }
     Some(b)
 }
+
+/// Views split in blocks: a plan a corridor, a break line or a white strip cuts in two is
+/// found as the block its title stands under, and the rest of it stands beside that block across
+/// a narrow gap with no title of its own. A big block no view holds joins the one view whose block
+/// it lies along (beside it over at least half its own side, a gap of at most two title heights
+/// between them), when the joined view takes in no other view's title or block. Blocks beside two
+/// views stay out (whose they are is not certain), and so does a block with title-sized
+/// lettering under it (a view of its own, its title not read as one). `regions` are the views'
+/// (changed in place), `titles` each view's title spot and lettering height, `lettering` where
+/// the page's title-sized lettering is. Whether any view grew.
+fn join_split_views(regions: &mut [Option<[f64; 4]>], titles: &[([f64; 2], f64)], blocks: &[([f64; 4], usize)], lettering: &[[f64; 2]]) -> bool {
+    let area = |r: &[f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let within = |o: &[f64; 4], r: &[f64; 4]| o[0] >= r[0] - 1e-9 && o[1] >= r[1] - 1e-9 && o[2] <= r[2] + 1e-9 && o[3] <= r[3] + 1e-9;
+    // How much of `b`'s side along `r` the two share, and the gap between them across it.
+    let along = |r: &[f64; 4], b: &[f64; 4]| -> Option<f64> {
+        let share = |lo0: f64, hi0: f64, lo1: f64, hi1: f64| (hi0.min(hi1) - lo0.max(lo1)).max(0.0) / (hi1 - lo1).max(1e-9);
+        let gap_y = (b[1] - r[3]).max(r[1] - b[3]);
+        let gap_x = (b[0] - r[2]).max(r[0] - b[2]);
+        if gap_y >= 0.0 && gap_x < 0.0 && share(r[0], r[2], b[0], b[2]) >= 0.5 {
+            Some(gap_y)
+        } else if gap_x >= 0.0 && gap_y < 0.0 && share(r[1], r[3], b[1], b[3]) >= 0.5 {
+            Some(gap_x)
+        } else {
+            None
+        }
+    };
+    let mut grew = false;
+    for _ in 0..MAX_SPLIT_JOINS {
+        let mut joined = false;
+        for (b, _) in blocks {
+            let held = |r: &[f64; 4]| overlap_ratio(r, b) >= 0.3 || within(b, r) || within(r, b);
+            if regions.iter().flatten().any(held) || titles.iter().any(|(at, _)| inside(b, *at)) {
+                continue;
+            }
+            let beside: Vec<usize> = regions
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| {
+                    let (r, h) = (r.as_ref()?, titles.get(i)?.1);
+                    let gap = along(r, b)?;
+                    (gap <= 2.0 * h && area(b) >= SPLIT_PART_SHARE * area(r)).then_some(i)
+                })
+                .collect();
+            let [i] = beside[..] else { continue };
+            let Some(Some(r)) = regions.get(i).copied() else { continue };
+            let h = titles.get(i).map_or(0.0, |t| t.1);
+            if lettering.iter().any(|p| !inside(&r, *p) && p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] - 6.0 * h && p[1] <= b[1] + 2.0 * h) {
+                continue;
+            }
+            let j = [r[0].min(b[0]), r[1].min(b[1]), r[2].max(b[2]), r[3].max(b[3])];
+            let others_title = titles.iter().enumerate().any(|(k, (at, _))| k != i && inside(&j, *at));
+            let others_block =
+                regions.iter().enumerate().any(|(k, o)| k != i && o.is_some_and(|o| o != r && overlap_ratio(&o, &j) > 0.0 && !within(&o, &r)));
+            if others_title || others_block {
+                continue;
+            }
+            if let Some(slot) = regions.get_mut(i) {
+                *slot = Some(j);
+                joined = true;
+                grew = true;
+            }
+        }
+        if !joined {
+            break;
+        }
+    }
+    grew
+}
+
+/// Passes joining split parts of views (a part may lie beyond another part).
+const MAX_SPLIT_JOINS: usize = 4;
+
+/// A split part is at least this share of the view's block found so far (smaller blocks beside a
+/// plan are its grid bubbles and tags, which [`view_block`] takes in).
+const SPLIT_PART_SHARE: f64 = 0.1;
 
 /// A circuit or panel reference (`D-1`, `LP-12`): a wiring label, not a type.
 fn is_circuit_tag(tag: &str) -> bool {
@@ -1757,6 +1849,8 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         // (plan, fit, how, its box, the tag fit, the line fit)
         type Chosen<'p> = (&'p LinkPage, Option<(Sim, &'static str)>, Option<[f64; 4]>, Option<tagid::TagFit>, Option<LineFit>);
         let mut chosen: Option<Chosen> = None;
+        // Placed on that plan by its walls alone (no grid line, tag or box): how much of them.
+        let mut walls_only: Option<f64> = None;
         if let Some(h) = host {
             let boxed = boxed_on(h);
             let tag_fit = by_tags(h);
@@ -1802,13 +1896,19 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 (lf.coverage >= BOX_LINE_COVERAGE && within && alike).then_some(lf)
             });
             let line_fit = if fit.is_none() { by_lines(h) } else { refined };
+            if fit.is_none() {
+                walls_only = line_fit.map(|l| l.coverage);
+            }
             let fit = if refined.is_some() { refined.map(|l| (l.sim, "lines")) } else { fit.or_else(|| line_fit.map(|l| (l.sim, "lines"))) };
             chosen = Some((h, fit, boxed, tag_fit, line_fit));
         }
         // Nothing places it on that plan (or none was found): the plans of its level (any level
         // when it names none) whose linework it lies on. Two levels' plans both taking it (typical
-        // floors) place it on neither.
-        if chosen.as_ref().is_none_or(|c| c.1.is_none()) && view_lines.len() >= 6 {
+        // floors) place it on neither. Placed on that plan by its walls alone, the plan of its
+        // level its walls agree with more wins (Q6549): the architectural plan draws every wall,
+        // where a trade's plan carries a lighter background and a registration of its own onto
+        // the floor besides.
+        if (chosen.as_ref().is_none_or(|c| c.1.is_none()) || walls_only.is_some()) && view_lines.len() >= 6 {
             let mut cands: Vec<&LinkPage> = pages
                 .iter()
                 .filter(|p| {
@@ -1822,7 +1922,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
             cands.sort_by_key(|p| (p.sheet.discipline != e.page.sheet.discipline, p.sheet.discipline != "A", std::cmp::Reverse(p.read.lines.len())));
             let fits: Vec<(&LinkPage, LineFit)> = cands.into_iter().take(4).filter_map(|p| Some((p, by_lines(p)?))).collect();
             let best = fits.iter().max_by(|a, b| a.1.coverage.total_cmp(&b.1.coverage));
-            if let Some(&(p, lf)) = best {
+            if let Some(&(p, lf)) = best.filter(|b| walls_only.is_none_or(|c| b.1.coverage > c)) {
                 let rival = fits.iter().any(|(q, o)| q.sheet.level != p.sheet.level && o.coverage >= 0.85 * lf.coverage);
                 if !rival {
                     chosen = Some((p, Some((lf.sim, "lines")), boxed_on(p), None, Some(lf)));
@@ -2109,6 +2209,37 @@ mod tests {
         for (got, want) in b.iter().zip([10.0, 10.0, 40.0, 30.0]) {
             assert!((got - want).abs() < 0.6, "{b:?}");
         }
+    }
+
+    /// A plan split by a white strip: the part above its titled block joins it. A part with
+    /// title-sized lettering under it is a view of its own, and a part beside two views is
+    /// neither's.
+    #[test]
+    fn a_split_part_joins_the_one_view_it_lies_along() {
+        let view = [2.0, 1.0, 16.0, 10.0];
+        let upper = ([2.0, 10.2, 16.0, 18.0], 900);
+        let titles = [([2.5, 0.5], 0.25)];
+        let mut regions = [Some(view)];
+        assert!(join_split_views(&mut regions, &titles, &[(view, 2000), upper], &[]));
+        assert_eq!(regions, [Some([2.0, 1.0, 16.0, 18.0])]);
+        // Far from it (more than two title heights across the gap): not the view's.
+        let mut regions = [Some(view)];
+        assert!(!join_split_views(&mut regions, &titles, &[(view, 2000), ([2.0, 11.0, 16.0, 18.0], 900)], &[]));
+        // Title-sized lettering under the part (its own title, not read as a view's): not joined.
+        let mut regions = [Some(view)];
+        assert!(!join_split_views(&mut regions, &titles, &[(view, 2000), ([16.3, 1.0, 30.0, 10.0], 900)], &[[20.0, 0.4]]));
+        assert_eq!(regions, [Some(view)]);
+        // The same part with no lettering under it joins.
+        assert!(join_split_views(&mut regions, &titles, &[(view, 2000), ([16.3, 1.0, 30.0, 10.0], 900)], &[]));
+        // Beside two views: whose it is is not certain.
+        let (left, right) = ([2.0, 1.0, 9.0, 10.0], [9.0, 1.0, 16.0, 10.0]);
+        let mut regions = [Some(left), Some(right)];
+        let titles = [([2.5, 0.5], 0.25), ([10.0, 0.5], 0.25)];
+        assert!(!join_split_views(&mut regions, &titles, &[(left, 900), (right, 900), ([5.0, 10.2, 13.0, 18.0], 600)], &[]));
+        assert_eq!(regions, [Some(left), Some(right)]);
+        // A small block beside the plan (a tag, a bubble) is no part of it.
+        let mut regions = [Some(view)];
+        assert!(!join_split_views(&mut regions, &[([2.5, 0.5], 0.25)], &[(view, 2000), ([4.0, 10.2, 5.0, 11.0], 20)], &[]));
     }
 
     #[test]

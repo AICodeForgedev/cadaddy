@@ -4585,6 +4585,51 @@ fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::Sheet
     (moved, dropped)
 }
 
+/// The enlarged views of a part of a floor the sheet map could not register onto their level's
+/// plan, though they show devices (Q6549): one finding naming each view (its sheet, number and
+/// title), its devices not placed until it is registered. A typical room's or one room's view is
+/// not among them (its devices are stamped into its rooms). The views, as `{sheet, detail, title,
+/// level, devices}`.
+fn unregistered_enlarged(job: &mut GuidedJob, links: &cadaddy_mepfix::printlinks::SheetLinks) -> Vec<Value> {
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let views: Vec<Value> = links
+        .enlarged
+        .iter()
+        .filter(|e| !e.registered && e.devices > 0 && !room_view(&e.title, &types, &vocabulary))
+        .take(MAX_UNREGISTERED_LISTED)
+        .map(|e| json!({"sheet": e.sheet, "detail": e.detail, "title": e.title, "level": e.level, "devices": e.devices}))
+        .collect();
+    if views.is_empty() {
+        return views;
+    }
+    let named: Vec<String> = views
+        .iter()
+        .map(|v| {
+            let detail = v["detail"].as_str().filter(|d| !d.trim().is_empty()).map(|d| format!(" view {d}")).unwrap_or_default();
+            let title = v["title"].as_str().filter(|t| !t.trim().is_empty()).map(|t| format!(" \"{t}\"")).unwrap_or_default();
+            format!("{}{detail}{title}: {} devices", v["sheet"].as_str().unwrap_or("?"), v["devices"])
+        })
+        .collect();
+    progress_line(&format!("  enlarged views not registered onto their level's plan (their devices not placed): {}", named.join("; ")));
+    job.add_finding(
+        StageName::Devices,
+        &format!("{} enlarged view(s) did not register onto their level's plan", views.len()),
+        &format!(
+            "No grid line, door or room number, boundary box or wall of these views lines up with a plan of their level, so the devices only they show are not placed: {}",
+            named.join("; ")
+        ),
+        3,
+        vec!["Register each view onto its level's plan (by its grids, walls or the fixtures it shares with the overall plan), then build again".into()],
+        None,
+        false,
+    );
+    views
+}
+
+/// Unregistered enlarged views a finding names, at most.
+const MAX_UNREGISTERED_LISTED: usize = 40;
+
 /// Leave out the census's devices another sheet already shows (`identity::duplicate_devices`);
 /// how many.
 fn device_identity(s: &Session, job: &GuidedJob, census: &mut DeviceCensus) -> usize {
@@ -5686,6 +5731,10 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         let (moved, dropped) = enlarged_authority(job, &links, &mut census);
         if moved + dropped > 0 {
             results["enlarged_devices"] = json!({"moved_onto_overall_plans": moved, "overall_copies_left_out": dropped});
+        }
+        let unplaced = unregistered_enlarged(job, &links);
+        if !unplaced.is_empty() {
+            results["enlarged_unregistered"] = json!(unplaced);
         }
     }
     // Tags are identities: a device another sheet of its level shows at the same spot (once the
@@ -34792,6 +34841,50 @@ mod tests {
         assert_eq!(moved, 1);
         let at = |h: &str| census.placed.iter().find(|d| d.handle == h).map(|d| d.at);
         assert_eq!((at("A1"), at("B2")), (Some([10.0, 10.0]), Some([1010.0, 10.0])));
+    }
+
+    /// An enlarged view of a part of a floor that registers onto no plan is named in a finding with
+    /// its devices (Q6549), never dropped silently; a registered view, a typical room's view
+    /// (stamped into its rooms) and a view showing no devices are not.
+    #[test]
+    fn an_enlarged_view_that_does_not_register_is_named_in_a_finding() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let room = |n: &str, x: f64| json!({"name": "STUDIO SUITE", "number": n, "level": "1", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 5000.0), room("202", 5200.0)]}));
+        }
+        let view = |detail: &str, title: &str, registered: bool, devices: usize| cadaddy_mepfix::printlinks::Enlarged {
+            sheet: "E-9".into(),
+            detail: detail.into(),
+            title: title.into(),
+            level: "1".into(),
+            registered,
+            devices,
+            ..Default::default()
+        };
+        let links = cadaddy_mepfix::printlinks::SheetLinks {
+            enlarged: vec![
+                view("1", "ELECTRICAL - FIRST FLOOR - COMMON AREA", false, 12),
+                view("2", "ENLARGED STUDIO SUITE", false, 7),
+                view("3", "ELECTRICAL - FIRST FLOOR - ELECTRIC ROOM", true, 9),
+                view("4", "ELECTRICAL - FIRST FLOOR - STAIR", false, 0),
+            ],
+            ..Default::default()
+        };
+        let named = unregistered_enlarged(&mut job, &links);
+        assert_eq!(named.len(), 1, "{named:?}");
+        assert_eq!((named[0]["detail"].as_str(), named[0]["devices"].as_u64()), (Some("1"), Some(12)));
+        let f = job.findings.iter().find(|f| f.description.contains("did not register")).map(|f| f.why.clone()).unwrap_or_default();
+        assert!(f.contains("E-9 view 1 \"ELECTRICAL - FIRST FLOOR - COMMON AREA\": 12 devices"), "{f}");
+        assert!(!f.contains("STUDIO SUITE") && !f.contains("ELECTRIC ROOM") && !f.contains("STAIR"), "{f}");
+        // Every view registered: no finding.
+        let mut job2 = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let all = cadaddy_mepfix::printlinks::SheetLinks {
+            enlarged: vec![view("3", "ELECTRICAL - FIRST FLOOR - ELECTRIC ROOM", true, 9)],
+            ..Default::default()
+        };
+        assert!(unregistered_enlarged(&mut job2, &all).is_empty());
+        assert!(job2.findings.is_empty());
     }
 
     /// A unit's PTAC no plan connects (its feed only a keynote) takes its connection on the circuit
