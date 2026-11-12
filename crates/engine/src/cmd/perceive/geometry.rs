@@ -785,6 +785,147 @@ fn run_overlap(p: &Pair, q: &Pair) -> f64 {
     (b.min(len) - a.max(0.0)).max(0.0)
 }
 
+/// Drops the pairs that are the air between two walls (Q6583): a pair each of whose faces is
+/// also the face of another pair on its far side, along over half of it, has a wall against it
+/// on both sides. One line can't be a wall's face on both of its sides, so the space between
+/// those two walls (a chase, the gap between back-to-back walls, the stripe between two rows of
+/// parallel linework) is no wall. A line in the middle of one wall (two wythes, a finish line)
+/// pairs with the far faces too, so the walls either side of it keep their faces; only the one
+/// walled in on both sides goes. Returns how many were dropped.
+pub(crate) fn drop_air_between(segs: &[Seg], found: &mut Vec<Pair>) -> usize {
+    if found.len() < 3 {
+        return 0;
+    }
+    let mut by_face: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for (k, p) in found.iter().enumerate() {
+        for f in p.faces {
+            by_face.entry(f).or_default().push(k);
+        }
+    }
+    let walled = |k: usize, p: &Pair, f: usize, other: usize| {
+        let (Some(fs), Some(os)) = (segs.get(f), segs.get(other)) else { return false };
+        let here = side_of(fs, os);
+        here != 0.0
+            && by_face.get(&f).into_iter().flatten().any(|&q| {
+                q != k
+                    && found.get(q).is_some_and(|qp| {
+                        let far = if qp.faces[0] == f { qp.faces[1] } else { qp.faces[0] };
+                        segs.get(far).is_some_and(|s| side_of(fs, s) * here < 0.0) && run_overlap(p, qp) > 0.5 * p.length
+                    })
+            })
+    };
+    let drop: Vec<bool> =
+        found.iter().enumerate().map(|(k, p)| walled(k, p, p.faces[0], p.faces[1]) && walled(k, p, p.faces[1], p.faces[0])).collect();
+    let before = found.len();
+    let mut it = drop.iter();
+    found.retain(|_| !it.next().copied().unwrap_or(false));
+    before - found.len()
+}
+
+/// Closed outlines looked at for casework, at most (hostile drawings).
+const MAX_CASEWORK_OUTLINES: usize = 200_000;
+/// A casework or equipment outline has at most this many corners (a counter, an appliance, a
+/// cabinet run with a notch); more is a room's or a building's outline.
+const MAX_CASEWORK_CORNERS: usize = 64;
+
+/// The least width of the outline `pts` across any of its sides' directions (a rectangle's short
+/// side). Infinite for no outline.
+fn least_width(pts: &[Vec2]) -> f64 {
+    let mut best = f64::INFINITY;
+    for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
+        let d = *b - *a;
+        let len = d.len();
+        if !(len > 1e-9 && len.is_finite()) {
+            continue;
+        }
+        let n = d.perp() * (1.0 / len);
+        let (lo, hi) = pts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(n.dot(*p)), hi.max(n.dot(*p))));
+        best = best.min(hi - lo);
+    }
+    best
+}
+
+/// The closed straight outlines among `ents` deeper than any wall (`lim.max_thick`) and at most
+/// `max_depth` deep (drawing units) across their narrowest side: a counter, a cabinet run, an
+/// appliance or a piece of equipment drawn on the plan (Q6583). Each its corners.
+pub(crate) fn casework_outlines(ents: &[&std::sync::Arc<Entity>], lim: &Limits, max_depth: f64) -> Vec<Vec<Vec2>> {
+    let mut out = Vec::new();
+    for e in ents {
+        if out.len() >= MAX_CASEWORK_OUTLINES {
+            break;
+        }
+        let EntityKind::LwPolyline(p) = &e.kind else { continue };
+        if !p.vertices.iter().all(|v| v.bulge == 0.0) {
+            continue;
+        }
+        let mut pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+        let ends_at_start = pts.len() >= 4 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9);
+        if ends_at_start {
+            pts.pop();
+        } else if !p.closed {
+            continue;
+        }
+        if pts.len() < 3 || pts.len() > MAX_CASEWORK_CORNERS || !pts.iter().all(|q| q.is_finite()) {
+            continue;
+        }
+        let w = least_width(&pts);
+        if w > lim.max_thick && w <= max_depth {
+            out.push(pts);
+        }
+    }
+    out
+}
+
+/// Drops the pairs inside a casework or equipment outline ([`casework_outlines`], Q6583): a
+/// counter's edge and the line of its top or its sink a few inches in, an appliance's outline and
+/// its inner outline, pair up like a wall's faces, but a pair whose centreline runs inside an
+/// outline deeper than any wall and no deeper than casework is the thing drawn there, no wall.
+/// A pair of two of the outline's own sides stays (a wall body drawn as one outline, a U round a
+/// closet), and so does one whose centreline runs along the outline (a room's or a corridor's
+/// area outline drawn on its walls' centrelines). Returns how many were dropped.
+pub(crate) fn drop_casework_pairs(segs: &[Seg], found: &mut Vec<Pair>, outlines: &[Vec<Vec2>], k: f64) -> usize {
+    if found.is_empty() || outlines.is_empty() || !(k.is_finite() && k > 0.0) {
+        return 0;
+    }
+    let bounds = |o: &Vec<Vec2>| {
+        o.iter()
+            .fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))
+    };
+    let ix = CellIndex::new(24.0 * k, outlines.iter().map(bounds));
+    let tol = 0.1 * k;
+    // Whether the segment is one of the outline's sides (both ends and its middle on it).
+    let on_outline = |s: &Seg, o: &[Vec2]| {
+        let on = |q: Vec2| o.iter().zip(o.iter().cycle().skip(1)).any(|(a, b)| seg_point_dist(q, *a, *b) <= tol);
+        on(s.a) && on(s.b) && on(s.a.mid(s.b))
+    };
+    let drop: Vec<bool> = found
+        .iter()
+        .map(|p| {
+            let probes = [p.c0 + (p.c1 - p.c0) * 0.1, p.c0.mid(p.c1), p.c0 + (p.c1 - p.c0) * 0.9];
+            let (lo, hi) = (p.c0.min(p.c1), p.c0.max(p.c1));
+            ix.near(lo, hi).into_iter().filter_map(|i| outlines.get(i)).any(|o| {
+                // Inside it, not on it (an area outline drawn on the walls' centrelines).
+                let margin = 0.25 * p.thickness;
+                let off_edge = |q: Vec2| o.iter().zip(o.iter().cycle().skip(1)).all(|(a, b)| seg_point_dist(q, *a, *b) >= margin);
+                probes.iter().all(|&q| cadaddy_geom::point_in_polygon(o, q) && off_edge(q))
+                    && !p.faces.iter().all(|&f| segs.get(f).is_some_and(|s| on_outline(s, o)))
+            })
+        })
+        .collect();
+    let before = found.len();
+    let mut it = drop.iter();
+    found.retain(|_| !it.next().copied().unwrap_or(false));
+    before - found.len()
+}
+
+/// Distance from `p` to the segment `a`–`b`.
+fn seg_point_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let d = b - a;
+    let l2 = d.dot(d);
+    let t = if l2 > 1e-18 { ((p - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    p.dist(a + d * t)
+}
+
 /// A symbol's outline is at most this deep across the pair it holds, inches (a tub, a counter, a
 /// through-wall unit with its sleeve): a pair closed off by lines running further is closed off
 /// by other walls' faces.

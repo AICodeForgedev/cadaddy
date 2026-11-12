@@ -9379,8 +9379,72 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // scale, not a building (Q6360): a high finding, always asked before the takeoff.
     let t = web_time::Instant::now();
     short_walls_check(s, job, &mut result)?;
+    // A storey with more walls than it can hold is reading casework, equipment or repeated
+    // linework as walls (Q6583): a high finding, always asked before the takeoff prices them.
+    overbuilt_walls_check(s, job, &mut result)?;
     bim_step(s, job, "wall plausibility", t);
     Ok(result)
+}
+
+/// The storeys whose built walls total more than they can hold ([`super::wallcheck::overbuilt_levels`]):
+/// each a high finding and an always-asked question before the takeoff, never priced on silently.
+fn overbuilt_walls_check(s: &Session, job: &mut GuidedJob, result: &mut Value) -> Result<()> {
+    use super::wallcheck as wc;
+    let d = s.doc()?;
+    let upf = super::elemprops::units_per_foot(d);
+    let els = super::bimwork::elements(d);
+    let walls: Vec<(String, f64, wc::PlanBox)> = els
+        .iter()
+        .filter(|e| e.category == "wall")
+        .map(|e| (e.level.clone(), (e.hi.x - e.lo.x).hypot(e.hi.y - e.lo.y), [e.lo.x, e.lo.y, e.hi.x, e.hi.y]))
+        .collect();
+    let floors: Vec<(String, wc::PlanBox)> =
+        els.iter().filter(|e| e.category == "floor").map(|e| (e.level.clone(), [e.lo.x, e.lo.y, e.hi.x, e.hi.y])).collect();
+    let over = wc::overbuilt_levels(&walls, &floors, upf);
+    let side = wc::rules().min_room_side_ft;
+    let mut said = Vec::new();
+    for o in over.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let sheet = job
+            .sheet_regions
+            .iter()
+            .find(|r| {
+                r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A") && r.all_levels().iter().any(|l| level_key(l) == level_key(&o.level))
+            })
+            .map(|r| r.number.clone())
+            .unwrap_or_default();
+        let what = format!(
+            "{} {}: its walls total {:.0} ft, where {:.0} sq ft inside {:.0} ft of outline holds at most {:.0} ft (all of it in {side} ft rooms)",
+            wc::OVERBUILT_QUESTION,
+            o.level,
+            o.walls_ft,
+            o.area_sq_ft,
+            o.perimeter_ft,
+            o.can_hold_ft
+        );
+        job.add_finding(
+            StageName::BimBuild,
+            &what,
+            "More walls than the storey can hold are counters, equipment, service windows or repeated linework read as walls: the takeoff would price their board, tape and paint",
+            4,
+            vec![wc::RECHECK.into(), wc::KEEP.into()],
+            None,
+            false,
+        );
+        super::planscale::ask_always(
+            job,
+            StageName::BimBuild,
+            format!("{what}: are they all walls?"),
+            "Checked after the build against the rules data (wallcheck.json): the most walls a storey's outline and floor can hold".into(),
+            &sheet,
+            vec![wc::KEEP.into(), wc::RECHECK.into()],
+            json!({"level": o.level, "walls_ft": o.walls_ft.round(), "can_hold_ft": o.can_hold_ft.round(), "perimeter_ft": o.perimeter_ft.round(), "area_sq_ft": o.area_sq_ft.round()}),
+        );
+        said.push(json!({"level": o.level, "walls_ft": o.walls_ft.round(), "can_hold_ft": o.can_hold_ft.round(), "sheet": sheet}));
+    }
+    if !said.is_empty() {
+        result["levels_overbuilt"] = json!(said);
+    }
+    Ok(())
 }
 
 /// The levels whose built walls are too short to be a building ([`super::planscale::short_wall_levels`]):
@@ -32469,6 +32533,56 @@ mod model_stats_tests {
 
     fn warnings(r: &Value) -> Vec<String> {
         r["warnings"].as_array().into_iter().flatten().filter_map(|w| w["warning"].as_str().map(str::to_string)).collect()
+    }
+
+    /// Q6583: a storey built with several times the walls it can hold is a high finding and a
+    /// question always asked before the takeoff; one with a building's walls is neither.
+    #[test]
+    fn a_storey_with_more_walls_than_it_can_hold_is_asked_before_the_takeoff() {
+        use cadaddy_geom::Vec2;
+        // A 46' x 19' storey (inches): its outside walls, then `inside` feet of walls across it.
+        let built = |inside: f64| {
+            let mut d = cadaddy_doc::Drawing::new_imperial();
+            let wall = |d: &mut cadaddy_doc::Drawing, a: (f64, f64), b: (f64, f64)| {
+                let mut m = crate::cmd::wallgen::empty_mesh();
+                crate::cmd::wallgen::add_box(&mut m, Vec2::new(a.0, a.1), Vec2::new(b.0, b.1), 6.0, 0.0, 108.0);
+                let mut e = cadaddy_doc::Entity::new(d.new_handle(), cadaddy_doc::EntityKind::Mesh(m));
+                e.common.xdata = crate::cmd::wallgen::tag(cadaddy_walk3d::Part::Wall, "Level 1", cadaddy_doc::Handle(0)).into();
+                d.model.push(e);
+            };
+            let (w, h) = (46.0 * 12.0, 19.0 * 12.0);
+            for (a, b) in [((0.0, 0.0), (w, 0.0)), ((w, 0.0), (w, h)), ((w, h), (0.0, h)), ((0.0, h), (0.0, 0.0))] {
+                wall(&mut d, a, b);
+            }
+            let (mut left, mut x) = (inside * 12.0, 12.0);
+            while left > 0.0 {
+                let l = left.min(h - 12.0);
+                wall(&mut d, (x, 6.0), (x, 6.0 + l));
+                left -= l;
+                x = (x + 7.0).min(w - 12.0);
+            }
+            d
+        };
+        for (inside, over) in [(460.0, true), (60.0, false)] {
+            let mut s = Session::new();
+            s.open_drawing(built(inside), "Sample Building", None);
+            let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+            let mut result = json!({});
+            overbuilt_walls_check(&s, &mut job, &mut result).unwrap();
+            let asked: Vec<&Question> = job
+                .stages
+                .iter()
+                .flat_map(|st| st.completeness.iter())
+                .filter(|q| q.question.starts_with(crate::cmd::wallcheck::OVERBUILT_QUESTION))
+                .collect();
+            assert_eq!(asked.len(), usize::from(over), "{inside} ft inside: {result}");
+            assert_eq!(result.get("levels_overbuilt").is_some(), over, "{result}");
+            if over {
+                assert!(job.always_ask.contains(&asked[0].id));
+                assert_eq!(result["levels_overbuilt"][0]["level"], "Level 1");
+                assert!(job.findings.iter().any(|f| f.severity >= 4 && f.description.starts_with(crate::cmd::wallcheck::OVERBUILT_QUESTION)));
+            }
+        }
     }
 
     /// Q6270: a model whose built elements come after more than 500,000 objects of print
