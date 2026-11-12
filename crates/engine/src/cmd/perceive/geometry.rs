@@ -2150,6 +2150,41 @@ pub struct TraceCache {
     by_inputs: Vec<(cadaddy_doc::Space, Option<Vec<[f64; 4]>>, std::sync::Arc<TraceInputs>, std::sync::Arc<RoomTrace>)>,
     /// How many times the labels' outlines were searched (the trace's costly part) in this drawing.
     traced: usize,
+    /// How many times the drawing was read for a trace at all (its labels, plan, door leaves and
+    /// wall runs gathered: on a print set minutes even when the search is then found again).
+    read: usize,
+    /// What a job's rooms stage read, while the job's later steps run ([`settle_rooms`]).
+    settled: Option<SettledRooms>,
+    /// The latest traces by what was asked (space, regions, numbered tags only), whichever
+    /// drawing state they were traced in: after a job's rooms stage, the stage's own trace.
+    last_asked: Vec<(cadaddy_doc::Space, Option<Vec<[f64; 4]>>, bool, std::sync::Arc<RoomTrace>)>,
+}
+
+/// Traces remembered by what was asked ([`TraceCache::last_asked`]).
+const ASKED_KEPT: usize = 8;
+
+/// The rooms a job's rooms stage read: the plan views it read them on (none: the whole drawing)
+/// and how many rooms it kept. The steps after it read the plan's rooms the same way: with none,
+/// they have none (no trace); asked about the whole drawing, they are traced on those views (as
+/// the stage traced them, so remembered). A roomless job traced its whole set three more times
+/// after its rooms stage, ~400 s each, finding none each time (Q6362).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SettledRooms {
+    pub regions: Vec<[f64; 4]>,
+    pub rooms: usize,
+}
+
+/// Room traces in the current drawing from now on read the plan as `settled` says (`None`: as
+/// asked). A job sets it for each stage after its rooms stage and clears it when the job stops.
+pub(crate) fn settle_rooms(s: &mut Session, settled: Option<SettledRooms>) {
+    if let Ok(st) = s.state_mut() {
+        st.room_trace.settled = settled;
+    }
+}
+
+/// What the current drawing's room traces read the plan as ([`settle_rooms`]).
+pub(crate) fn settled_rooms(s: &Session) -> Option<SettledRooms> {
+    s.state().ok().and_then(|st| st.room_trace.settled.clone())
 }
 
 /// Traces remembered by their inputs: one a sheet region of a print set (each traced on its own).
@@ -2271,6 +2306,25 @@ impl TraceCache {
     pub(crate) fn traced(&self) -> usize {
         self.traced
     }
+    /// How many times the drawing was read for a room trace (not found in the remembered traces).
+    pub(crate) fn reads(&self) -> usize {
+        self.read
+    }
+    /// The latest trace asked this way, in any drawing state.
+    fn asked(&self, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, numbered: bool) -> Option<std::sync::Arc<RoomTrace>> {
+        self.last_asked
+            .iter()
+            .rev()
+            .find(|(sp, rs, n, _)| sp == space && rs.as_deref() == regions && *n == numbered)
+            .map(|(.., t)| std::sync::Arc::clone(t))
+    }
+    fn put_asked(&mut self, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, numbered: bool, trace: std::sync::Arc<RoomTrace>) {
+        self.last_asked.retain(|(sp, rs, n, _)| !(*sp == space && rs.as_deref() == regions && *n == numbered));
+        if self.last_asked.len() >= ASKED_KEPT {
+            self.last_asked.remove(0);
+        }
+        self.last_asked.push((space, regions.map(<[_]>::to_vec), numbered, trace));
+    }
 }
 
 /// [`trace_rooms_in`], read from the drawing state's remembered trace when there is one
@@ -2293,16 +2347,34 @@ pub(crate) fn room_trace_numbered_in(s: &mut Session, regions: Option<&[[f64; 4]
 
 fn room_trace_of(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool) -> Result<std::sync::Arc<RoomTrace>> {
     let space = s.space();
+    // After a job's rooms stage: what it read (no rooms: none; the whole drawing: its views).
+    let settled = if space.is_paper() { None } else { s.state()?.room_trace.settled.clone() };
+    let regions = match &settled {
+        Some(st) if st.rooms == 0 => return Ok(std::sync::Arc::new(RoomTrace::default())),
+        Some(st) if regions.is_none() && !st.regions.is_empty() => Some(st.regions.as_slice()),
+        _ => regions,
+    };
     let state = std::sync::Arc::clone(&s.state()?.doc);
     if let Some(trace) = s.state()?.room_trace.get(&state, &space, regions, numbered) {
         return Ok(trace);
     }
-    let trace = std::sync::Arc::new(trace_rooms_in(s, regions, numbered)?);
-    // Traced in the state it was asked in (the trace changes nothing): remembered for it.
-    if let Ok(st) = s.state_mut()
-        && std::sync::Arc::ptr_eq(&st.doc, &state)
+    // The rooms stage's own trace (the plan as it read it: the job's later steps add the model,
+    // not the plan's rooms).
+    if settled.is_some()
+        && let Some(trace) = s.state()?.room_trace.asked(&space, regions, numbered)
     {
-        st.room_trace.put(&state, space, regions, numbered, std::sync::Arc::clone(&trace));
+        return Ok(trace);
+    }
+    if let Ok(st) = s.state_mut() {
+        st.room_trace.read = st.room_trace.read.saturating_add(1);
+    }
+    let trace = std::sync::Arc::new(trace_rooms_in(s, regions, numbered)?);
+    if let Ok(st) = s.state_mut() {
+        st.room_trace.put_asked(space.clone(), regions, numbered, std::sync::Arc::clone(&trace));
+        // Traced in the state it was asked in (the trace changes nothing): remembered for it.
+        if std::sync::Arc::ptr_eq(&st.doc, &state) {
+            st.room_trace.put(&state, space, regions, numbered, std::sync::Arc::clone(&trace));
+        }
     }
     Ok(trace)
 }

@@ -2364,6 +2364,11 @@ impl Session {
     pub fn in_script(&self) -> bool {
         self.in_script
     }
+    /// How many times the current drawing's plan was read for a room trace (none found in the
+    /// traces it remembers): a job's steps after its rooms stage read none.
+    pub fn room_traces(&self) -> usize {
+        self.state().map_or(0, |st| st.room_trace.reads())
+    }
     pub fn new() -> Self {
         let mut s = Session::empty();
         s.new_drawing(false);
