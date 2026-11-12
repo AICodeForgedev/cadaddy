@@ -365,6 +365,11 @@ pub struct DocState {
     /// The drawing states the plan has moved past the associative model in: built again before
     /// the next command that reads the model, or when editing stops ([`cmd::wallgen::Behind`]).
     pub model_behind: cmd::wallgen::Behind,
+    /// The sheet changes made while a command runs (a sheet loaded into memory or put out of
+    /// it, [`crate::sheetstore`]): each as the drawing state before and after it. No edit of the
+    /// plan (Q6570): the command's check for plan edits leaves out what they moved. Cleared when
+    /// the outermost command ends.
+    pub(crate) sheet_moves: Vec<(Arc<Drawing>, Arc<Drawing>)>,
     /// The plan's rooms as last traced, by drawing state (`rooms_found` in `cmd::perceive`).
     pub(crate) room_trace: cmd::RoomTraceCache,
     /// The last revision that found plan changes (`model.revise`, or the rebuild an associative
@@ -466,6 +471,7 @@ impl DocState {
             wallgen: None,
             model_records: cmd::revise3d::ModelRecords::default(),
             model_behind: cmd::wallgen::Behind::default(),
+            sheet_moves: Vec::new(),
             room_trace: cmd::RoomTraceCache::default(),
             last_revision: None,
             open_notes: Vec::new(),

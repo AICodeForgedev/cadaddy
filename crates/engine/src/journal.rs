@@ -131,6 +131,11 @@ impl Journal {
         self.push(format!("; cannot be replayed: {what}"));
     }
 
+    /// A call is under way (a command, an input to one, a query).
+    pub(crate) fn in_call(&self) -> bool {
+        self.depth > 0
+    }
+
     /// A call begins; whether it is the outermost.
     pub(crate) fn enter(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
