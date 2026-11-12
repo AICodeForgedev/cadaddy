@@ -16,6 +16,7 @@ mod enlargedviews;
 mod fpshopdrawings;
 mod jobmep;
 mod jobunits;
+mod legendsheet;
 mod levelregions;
 mod mepnoise;
 mod nonplanset;

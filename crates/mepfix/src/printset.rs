@@ -539,14 +539,22 @@ fn classify_one_part(number: &str, up: &str) -> String {
     if num_part.len() == 3
         && let Ok(n) = num_part.parse::<u32>()
         && ((100..200).contains(&n) || (200..300).contains(&n))
-        && (up.contains("PLAN") || up.contains("FLOOR") || up.contains("LIGHTING") || up.contains("POWER"))
+        && (names_plan_word(up) || up.contains("FLOOR") || up.contains("LIGHTING") || up.contains("POWER"))
     {
         return "plan".into();
     }
-    if up.contains("PLAN") {
+    if names_plan_word(up) {
         return "plan".into();
     }
     "unknown".into()
+}
+
+/// Whether a title (upper case) has a word naming a plan (`sheets.plan_view_words`: `PLAN`,
+/// `PLANS`) as a word of its own: the letters inside another word (a place name in a
+/// consultant's address read as the title, `PLANT`, `EXPLANATION`) name none (Q6361).
+fn names_plan_word(up: &str) -> bool {
+    let words = crate::wordrules::words("sheets.plan_view_words");
+    up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| words.contains(&w))
 }
 
 /// Most parts a listed title is split into.
@@ -1249,6 +1257,12 @@ pub fn run_classify_prints(
                 // One view of a several-view sheet is a plan of its level.
                 e.sheet_type = "plan".into();
             }
+            // A sheet of legends, notes and specifications is read as one, whatever its title
+            // (or a misread title block) or its number says: its sample symbols are no devices.
+            let legend_page = !view && is_plan_type(&e.sheet_type) && legend_notes_page(&facts.content);
+            if legend_page {
+                e.sheet_type = "schedule".into();
+            }
             if view {
                 e.level = rec.level.clone().unwrap_or_else(|| infer_level(&e.title));
                 e.levels = rec.levels.clone();
@@ -1327,6 +1341,18 @@ pub fn run_classify_prints(
                     ..SheetStageResult::default()
                 },
             );
+            if legend_page && let Some(r) = e.stage_results.get_mut("classify") {
+                let c = &facts.content;
+                r.findings.push(Finding {
+                    kind: "legend_sheet".into(),
+                    description: format!(
+                        "read as a legend/notes sheet, not the plan its title gave: no view on it is titled as a plan, it has {} legend/notes headings and {} lines of notes, and its linework draws no walls ({} wall faces)",
+                        c.headings, c.sentences, c.wall_faces
+                    ),
+                    severity: 1,
+                    ..Finding::default()
+                });
+            }
             e.recognised = Some(rec);
             out.push(e);
             page_of.push(Some(k));
@@ -1599,15 +1625,34 @@ struct PageFacts {
     /// The latest date printed on it (`YYYY-MM-DD`).
     issued: String,
     level_marks: Vec<LevelMark>,
+    /// What its drawing area holds (Q6361: a sheet of legends and notes is no plan).
+    content: crate::sheet_facts::PageContent,
 }
 
 impl PageFacts {
     fn read_texts(d: &cadaddy_doc::Drawing, texts: &[crate::sheet_facts::TextItem]) -> PageFacts {
         let ident = crate::sheet_facts::identify_sheet(texts);
-        let view_titles = crate::sheet_facts::view_titles(d, texts).into_iter().map(|v| v.title).collect();
+        let views = crate::sheet_facts::view_titles(d, texts);
+        let content = crate::sheet_facts::page_content(d, texts, &views);
+        let view_titles = views.into_iter().map(|v| v.title).collect();
         let issued = texts.iter().filter_map(|t| latest_date(&t.value)).max().unwrap_or_default();
-        PageFacts { ident, view_titles, issued, level_marks: level_marks(texts) }
+        PageFacts { ident, view_titles, issued, level_marks: level_marks(texts), content }
     }
+}
+
+/// Most wall faces a legend/notes page may show, in the page's size (its longer side is 1): a
+/// detail or a key plan beside the legends draws a few. Measured on two real sets (190 pages):
+/// sheets of notes and legends 0.06 to 0.31, the sparsest plan with no view titled as one 0.41;
+/// the bound keeps clear of the plans (a lost plan costs more than a legend read as a plan,
+/// whose samples the legend readers still leave out).
+const LEGEND_PAGE_MAX_WALL_LENGTH: f64 = 0.25;
+
+/// Whether a page is a sheet of legends, notes and specifications, whatever its title or number
+/// says (Q6361): no view on it is titled as a plan, it has a legend's, notes' or specification's
+/// heading, and its linework draws (almost) no walls: table rules and sample symbols beside
+/// their lettering.
+pub(crate) fn legend_notes_page(c: &crate::sheet_facts::PageContent) -> bool {
+    c.plan_views == 0 && c.headings > 0 && c.wall_length <= LEGEND_PAGE_MAX_WALL_LENGTH
 }
 
 /// A page of the set during classify: read now, or kept as it was (read before, unreadable, or
@@ -3521,6 +3566,35 @@ mod classify_tests {
         assert_eq!(classify_sheet_type("Q702", "PLUMBING SPECIFICATION"), "specification");
         assert_eq!(classify_sheet_type("Q703", "GENERAL NOTES AND SPECIFICATIONS"), "schedule", "notes stay notes");
         assert_eq!(classify_sheet_type("Q201", "FLOOR PLAN"), "plan");
+    }
+
+    /// Q6361: a title names a plan by a word of its own; the letters inside another word (a
+    /// consultant's street read as the title, `PLANT`, `EXPLANATION`) name none.
+    #[test]
+    fn a_plan_is_named_by_a_word_not_by_letters_inside_one() {
+        assert_eq!(classify_sheet_type("Q1.01", "ELECTRICAL ENGINEER 12 PLANK STREET SUITE 4"), "unknown");
+        assert_eq!(classify_sheet_type("Q1.02", "CENTRAL PLANT EQUIPMENT"), "unknown");
+        assert_eq!(classify_sheet_type("Q1.03", "SYMBOL EXPLANATION"), "unknown");
+        assert_eq!(classify_sheet_type("Q1.04", "POWER PLANS - LEVEL 2"), "plan");
+        assert_eq!(classify_sheet_type("Q-101", "FIRST FLOOR POWER"), "plan", "the number rule stands");
+    }
+
+    /// Q6361: a page of legends and notes with no plan view and no walls is no plan, whatever
+    /// its title says; a plan with walls stays one, with or without a view titled so.
+    #[test]
+    fn a_legend_page_is_told_by_its_content() {
+        let page = |walls: f64, views: usize, headings: usize| crate::sheet_facts::PageContent {
+            wall_length: walls,
+            plan_views: views,
+            headings,
+            sentences: 40,
+            texts: 200,
+            ..Default::default()
+        };
+        assert!(legend_notes_page(&page(0.1, 0, 3)));
+        assert!(!legend_notes_page(&page(0.1, 1, 3)), "a view titled as a plan");
+        assert!(!legend_notes_page(&page(0.1, 0, 0)), "no legend or notes heading");
+        assert!(!legend_notes_page(&page(0.41, 0, 3)), "the sparsest plan measured");
     }
 
     #[test]
