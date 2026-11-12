@@ -268,6 +268,15 @@ pub fn clear_cache() {
     CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
 }
 
+/// Drop the cached indexes of stores no open drawing has any more: `held` are the model and
+/// layout stores of every drawing state open ([`crate::Session::release_unheld`]). An index
+/// holds its store's objects, so one built over a state since gone kept every object of it:
+/// after a print set's whole-set load had gone out of memory again, the cache still held the
+/// whole set, once for each of its last few states (Q6571). The indexes of what is held stay.
+pub(crate) fn retain_held(held: &[&EntityStore]) {
+    CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|ix| held.iter().any(|s| ix.store.same_as(s)));
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {

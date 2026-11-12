@@ -532,6 +532,11 @@ pub(crate) fn clear_index() {
     INDEX.clear();
 }
 
+/// Let go of the kept element index of chunks no open drawing holds ([`crate::Session::release_unheld`]).
+pub(crate) fn retain_held(held: &std::collections::HashSet<usize>) {
+    INDEX.retain_held(held);
+}
+
 /// The model's chunks with their elements (draw order), and how many chunks were worked out.
 fn indexed(d: &Drawing) -> (Vec<crate::chunkpool::Part<ChunkElements>>, crate::chunkpool::Refresh) {
     let upf = units_per_foot(d);
