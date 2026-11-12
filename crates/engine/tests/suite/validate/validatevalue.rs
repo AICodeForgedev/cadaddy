@@ -73,12 +73,13 @@ fn room(s: &mut Session, name: &str, number: &str, [x0, y0, x1, y1]: [f64; 4]) {
 /// corridor; a common-area circuit LP1-1 under a lay-in ceiling, an electrical room's LP1-3.
 /// Gypsum ceilings everywhere else. `corridor_across`: a corridor drawn across the units' runs.
 fn building(dir: &std::path::Path, corridor_across: bool) -> Session {
-    building_opts(dir, corridor_across, false)
+    building_opts(dir, corridor_across, false, false)
 }
 
 /// [`building`]; `lobby`: a common-area circuit LP1-5 concealed under the gypsum ceiling of a
-/// lobby (130), outside the units, the corridors and the service rooms.
-fn building_opts(dir: &std::path::Path, corridor_across: bool, lobby: bool) -> Session {
+/// lobby (130), outside the units, the corridors and the service rooms; `mech_across`: a
+/// mechanical room (150) the feeder to the second unit runs through.
+fn building_opts(dir: &std::path::Path, corridor_across: bool, lobby: bool, mech_across: bool) -> Session {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
     let mut tags = vec![
@@ -139,6 +140,9 @@ fn building_opts(dir: &std::path::Path, corridor_across: bool, lobby: bool) -> S
     room(&mut s, "Electrical", "105", [300.0, -560.0, 420.0, -400.0]);
     if lobby {
         room(&mut s, "Lobby", "130", [900.0, -400.0, 1250.0, -100.0]);
+    }
+    if mech_across {
+        room(&mut s, "Mechanical", "150", [200.0, -700.0, 400.0, -500.0]);
     }
     if corridor_across {
         room(&mut s, "Corridor", "120", [-100.0, 300.0, 800.0, 500.0]);
@@ -320,6 +324,25 @@ fn the_study_keeps_unit_circuits_through_a_corridor_as_designed_for_nm() {
 }
 
 #[test]
+fn the_study_keeps_a_feeder_through_a_mechanical_room_as_designed_for_ser() {
+    // SE cable is never used exposed (Validate's rule): the feeder whose run crosses the
+    // mechanical room stays in raceway, the other one is weighed.
+    let dir = tmp("mech");
+    let mut s = building_opts(&dir, false, false, true);
+    let v = study(&mut s, &dir, json!({}));
+    let se = v["scenarios"].as_array().and_then(|a| a.iter().find(|x| x["id"] == json!("se_unit_feeders"))).cloned().unwrap_or(Value::Null);
+    assert!(
+        se["excluded"].as_array().is_some_and(|e| e.iter().any(|x| x["area"] == json!("exposed") && x["kept_as_designed"].as_u64() == Some(1))),
+        "{se}"
+    );
+    assert_eq!(se["quantity"]["items"], json!(1), "{}", se["quantity"]);
+    let fs = screen(&mut s, json!({"value_engineering": v}));
+    let a = finding(&fs, "G-VE-AREA", "se_unit_feeders");
+    assert_eq!(a["verdict"], json!("pass"), "{a}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn nm_proposed_through_a_corridor_fails_its_area() {
     // A study made while the room across the units' runs wasn't known as a corridor; Validate
     // reads the room as it is now.
@@ -344,7 +367,7 @@ fn nm_is_never_offered_for_a_common_area_circuit_and_validate_reads_the_same_rul
     // NM (Type V, §D lists it): Validate's area rule (rules data: NM never in common areas) keeps
     // it as designed, and the study must tier NM there by that same rule.
     let dir = tmp("common");
-    let mut s = building_opts(&dir, false, true);
+    let mut s = building_opts(&dir, false, true, false);
     let v = study(&mut s, &dir, json!({}));
     let sc = |id: &str| v["scenarios"].as_array().and_then(|a| a.iter().find(|x| x["id"] == json!(id))).cloned().unwrap_or(Value::Null);
     let named = |x: &Value| {
