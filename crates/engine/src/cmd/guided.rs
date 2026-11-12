@@ -7409,7 +7409,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     progress_line(&format!("  typical-room devices read twice at one spot, one kept: {twice}"));
                 }
                 // The heights the typical rooms' plans print by their devices.
-                let heights = typical_heights(s.doc()?, job, &mut stamped);
+                let heights = typical_heights(s.doc()?, job, &mut stamped, &schedules);
                 if heights.notes + heights.elevations > 0 {
                     progress_line(&format!(
                         "  typical rooms' height notes: {} read, {} stamped devices took theirs ({} from the architecture's plans first: {} sheets send locations or heights there {:?}; {} moved to the architecture's symbols); interior elevations: {} read, {} devices took their heights (at {:.1} s)",
@@ -12395,7 +12395,12 @@ fn unit_plumbing_check(
 /// paired device takes the architecture's height, and when locations are sent there too it moves
 /// to the architecture's symbol, its electrical spot kept in its record. The other sheets' notes
 /// then go onto the devices still without a height, as before. What was read and done.
-fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [super::readers::ReadDevice]) -> TypicalNotes {
+fn typical_heights(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    devices: &mut [super::readers::ReadDevice],
+    schedules: &[cadaddy_walk3d::PanelSchedule],
+) -> TypicalNotes {
     let mut out = TypicalNotes::default();
     let rooms = job_rooms(job);
     let (types, vocabulary) = room_types(&rooms);
@@ -12545,20 +12550,18 @@ fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [sup
             let note = format!("{} on {}", t.value.trim(), sh.number);
             // Its words and its label's naming an appliance: the height of the appliance's
             // receptacle (or connection), no switch's.
-            let words_of = |v: &str| -> String {
-                let w: String = v.to_ascii_uppercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect();
-                format!(" {} ", w.split_whitespace().collect::<Vec<_>>().join(" "))
-            };
-            let named = words_of(&format!("{} {}", label.map_or("", |o| o.value.as_str()), t.value));
-            let appliance = cadaddy_mepfix::wordrules::words("notes.appliance_words").iter().any(|w| named.contains(&words_of(w)));
+            let named = spaced_words(&format!("{} {}", label.map_or("", |o| o.value.as_str()), t.value));
+            let appliance = cadaddy_mepfix::wordrules::words("notes.appliance_words").iter().any(|w| named.contains(&spaced_words(w)));
+            // Which appliance (`MICROWAVE`: its receptacle is the one on the microwave's circuit).
+            let which = if appliance { appliance_named(&named) } else { String::new() };
             match noted.iter_mut().find(|v| v.index == vi) {
-                Some(v) => v.notes.push((at, *h, note, appliance)),
+                Some(v) => v.notes.push((at, *h, note, appliance, which)),
                 None => noted.push(NotedView {
                     index: vi,
                     title: title.clone(),
                     view: *view,
                     words: words.clone(),
-                    notes: vec![(at, *h, note, appliance)],
+                    notes: vec![(at, *h, note, appliance, which)],
                     others: Vec::new(),
                 }),
             }
@@ -12694,21 +12697,53 @@ fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [sup
                             (Some(p), Some(q)) => super::archauthority::same_wall(*p, *q, outline, ROOM_WALL_FT * ft, ft),
                             _ => false,
                         };
+                        // The appliance each device's circuit feeds, by its schedule line
+                        // (`U-4`: panel U circuit 4, `MICROWAVE`); empty when the line names none.
+                        let fed: Vec<String> =
+                            mine.iter().map(|k| devices.get(*k).map_or_else(String::new, |dv| circuit_appliance(&dv.circuit, schedules))).collect();
                         // Paired nearest first; when a gang takes a device another pair wanted, the
                         // rest are paired again without it.
                         let mut spot_free = vec![true; spots.len()];
                         for _ in 0..MAX_PAIR_ROUNDS {
+                            // An appliance's note goes to a receptacle or connection: the one on the
+                            // circuit the schedule gives that appliance when the room has it, never
+                            // one whose circuit the schedule gives another appliance (Q6344).
                             let fits_kind = |i: usize, j: usize| {
-                                let appliance = spots.get(i).and_then(|(ni, _)| v.notes.get(*ni)).is_some_and(|n| n.3);
-                                !appliance || mine.get(j).and_then(|k| devices.get(*k)).is_some_and(feeds_appliance)
+                                let fed_j = fed.get(j).map_or("", String::as_str);
+                                // The receptacle on an appliance's circuit is kept for that
+                                // appliance's note when the view has one: no other note takes it.
+                                let kept = |n: &(cadaddy_geom::Vec2, f64, String, bool, String)| {
+                                    !fed_j.is_empty() && v.notes.iter().any(|o| o.3 && o.4 == fed_j) && !(n.3 && n.4 == fed_j)
+                                };
+                                let Some(n) = spots.get(i).and_then(|(ni, _)| v.notes.get(*ni)) else {
+                                    return fed_j.is_empty() || !v.notes.iter().any(|o| o.3 && o.4 == fed_j);
+                                };
+                                if kept(n) {
+                                    return false;
+                                }
+                                if !n.3 {
+                                    return true;
+                                }
+                                mine.get(j).and_then(|k| devices.get(*k)).is_some_and(feeds_appliance) && appliance_fits(&n.4, fed_j, &fed)
                             };
+                            // An appliance's note and the room's receptacle on that appliance's
+                            // circuit are one device wherever the two plans draw it: the
+                            // architecture's spot is where it goes, on whichever wall.
+                            let by_circuit = |i: usize, j: usize| {
+                                spots
+                                    .get(i)
+                                    .and_then(|(ni, _)| v.notes.get(*ni))
+                                    .is_some_and(|n| n.3 && !n.4.is_empty() && fed.get(j).is_some_and(|f| *f == n.4))
+                            };
+                            let near =
+                                |i: usize, j: usize| note_points.get(i).zip(points.get(j)).is_some_and(|(p, q)| p.dist(*q) <= reach) && wall(i, j);
                             let free = |i: usize, j: usize| {
                                 spot_free.get(i).copied().unwrap_or(false)
                                     && mine.get(j).is_some_and(|k| !done.contains(k))
-                                    && wall(i, j)
+                                    && (near(i, j) || by_circuit(i, j))
                                     && fits_kind(i, j)
                             };
-                            let pairs = super::archauthority::pair(&note_points, &points, reach, free);
+                            let pairs = super::archauthority::pair(&note_points, &points, f64::MAX, free);
                             if pairs.is_empty() {
                                 break;
                             }
@@ -12752,7 +12787,7 @@ fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [sup
                                     if first {
                                         let Some(said) = said else { continue };
                                         let why = format!("{AFF_ARCH_MARK} {}: {}", sheet_key(&dv.sheet), said.note);
-                                        if let Some((_, h, note, _)) = noted
+                                        if let Some((_, h, note, _, _)) = noted
                                             && (said.heights || dv.aff_in.is_none())
                                         {
                                             dv.aff_in = Some(*h);
@@ -12776,7 +12811,7 @@ fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [sup
                                                 out.moved += 1;
                                             }
                                         }
-                                    } else if let Some((_, h, note, _)) = noted {
+                                    } else if let Some((_, h, note, _, _)) = noted {
                                         dv.aff_in = Some(*h);
                                         dv.aff_note.clone_from(note);
                                         out.set += 1;
@@ -13311,6 +13346,51 @@ fn feeds_appliance(dv: &super::readers::ReadDevice) -> bool {
     electrical && (k.contains("receptacle") || k.contains("connection") || k.contains("outlet"))
 }
 
+/// A text's words, upper case, each between single spaces (` MICROWAVE 65 AFF `): a word or a
+/// phrase is looked for whole in it.
+pub(crate) fn spaced_words(v: &str) -> String {
+    let w: String = v.to_ascii_uppercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect();
+    format!(" {} ", w.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Which appliance a text names (`notes.appliance_kinds`: `COOKTOP 30" AFF` and `RANGE` both
+/// `range`; a range hood's exhaust none), whole words; empty when it names none.
+pub(crate) fn appliance_named(text: &str) -> String {
+    let u = spaced_words(text);
+    cadaddy_mepfix::wordrules::rules("notes.appliance_kinds")
+        .iter()
+        .find(|r| r.matches(|w| u.contains(&spaced_words(w))))
+        .map_or_else(String::new, |r| r.value.to_string())
+}
+
+/// The appliance a circuit label's line in its panel's schedule names (`U-4` → panel `U`
+/// circuit 4 `MICROWAVE` → `microwave`; a leg after it, `U-4,a`, is no circuit); empty when its
+/// panel has no schedule, the schedule no such row, or the row names no appliance.
+pub(crate) fn circuit_appliance(label: &str, schedules: &[cadaddy_walk3d::PanelSchedule]) -> String {
+    let (circuit, _) = circuit_and_leg(label);
+    let Some((panel, _)) = circuit.rsplit_once(['-', '/']) else { return String::new() };
+    let panel = panel.trim();
+    // A unit's copy of a typical panel (`U-1806`) has the typical panel's schedule (`U`).
+    let find = |p: &str| schedules.iter().find(|s| s.panel.trim().eq_ignore_ascii_case(p.trim()));
+    let Some(s) = find(panel).or_else(|| panel.split_once('-').and_then(|(p, _)| find(p))) else { return String::new() };
+    let Some(n) = super::breakers::circuit_numbers(&circuit, panel).first().copied() else { return String::new() };
+    s.circuits.iter().find(|c| c.number.trim().parse::<u32>().ok() == Some(n)).map_or_else(String::new, |c| appliance_named(&c.description))
+}
+
+/// Whether a device whose circuit feeds `fed` (an appliance, or empty) takes an appliance note
+/// naming `named` (or none), the room's devices feeding `all`: a note naming no appliance it
+/// knows goes to any; else to the device on that appliance's circuit when the room has one;
+/// else to a device whose circuit names no appliance (never another appliance's).
+fn appliance_fits(named: &str, fed: &str, all: &[String]) -> bool {
+    if named.is_empty() {
+        return true;
+    }
+    if all.iter().any(|f| f == named) {
+        return fed == named;
+    }
+    fed.is_empty()
+}
+
 /// What [`typical_heights`] read and did.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct TypicalNotes {
@@ -13342,9 +13422,10 @@ struct NotedView {
     title: String,
     view: [f64; 4],
     words: BTreeSet<String>,
-    /// Each: its device's spot, inches, the note and sheet, and whether it names an appliance
-    /// (`MICROWAVE 65" AFF`: a receptacle's height).
-    notes: Vec<(cadaddy_geom::Vec2, f64, String, bool)>,
+    /// Each: its device's spot, inches, the note and sheet, whether it names an appliance
+    /// (`MICROWAVE 65" AFF`: a receptacle's height) and which one (`notes.appliance_kinds`;
+    /// empty when its words name none of them).
+    notes: Vec<(cadaddy_geom::Vec2, f64, String, bool, String)>,
     /// The architecture's other symbols in it drawn like the noted ones (no note: a spot only).
     others: Vec<cadaddy_geom::Vec2>,
 }
@@ -37986,7 +38067,7 @@ mod tests {
         let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
         let mut stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
         assert_eq!(stamped.len(), 6, "{stamped:?}");
-        let heights = typical_heights(s.doc().unwrap(), &job, &mut stamped);
+        let heights = typical_heights(s.doc().unwrap(), &job, &mut stamped, &[]);
         assert_eq!((heights.notes, heights.set, heights.moved), (2, 4, 0), "{stamped:?}");
         for room in ["201", "202"] {
             let h = |tag: &str| -> Vec<Option<f64>> { stamped.iter().filter(|d| d.room == room && d.tag == tag).map(|d| d.aff_in).collect() };
@@ -38132,7 +38213,7 @@ mod tests {
         let mut stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
         stamped.retain(|d| d.room == "201");
         assert_eq!(stamped.len(), 4, "{stamped:?}");
-        let heights = typical_heights(s.doc().unwrap(), &job, &mut stamped);
+        let heights = typical_heights(s.doc().unwrap(), &job, &mut stamped, &[]);
         assert_eq!(heights.deferring_sheets, ["E-41"], "{heights:?}");
         let get = |tag: &str| stamped.iter().find(|d| d.tag == tag).unwrap_or_else(|| panic!("{tag}: {stamped:?}"));
         // The receptacle: the architecture's 44 in (not its own sheet's 18 in), at the
@@ -38154,6 +38235,173 @@ mod tests {
         assert_eq!((heights.elevations, heights.from_elevations), (1, 1), "{heights:?}");
         assert!(get("D").located.is_empty(), "{stamped:?}");
         assert_eq!((heights.from_architecture, heights.moved), (2, 2), "{heights:?}");
+    }
+
+    #[test]
+    fn an_appliance_note_goes_to_the_receptacle_on_its_appliances_circuit_not_the_nearest() {
+        // Q6344: the architecture's plan names each kitchenette receptacle's appliance
+        // (`MICROWAVE 65" AFF`, `COOKTOP 30" AFF`); the electrical plan prints each receptacle's
+        // circuit, and the panel schedule says what each circuit feeds. A note goes to the
+        // receptacle on its appliance's circuit, not to whichever one stamps nearest its symbol
+        // (the dishwasher's receptacle under the microwave's note).
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        let unit = |s: &mut crate::Session, o: [f64; 2]| {
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, [o[0] + ax, o[1] + ay], [o[0] + bx, o[1] + by]);
+            }
+        };
+        let sheet = |s: &mut crate::Session, x0: f64| {
+            for (a, b) in
+                [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+            {
+                line(s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+            }
+        };
+        let text = |s: &mut crate::Session, at: [f64; 2], t: &str, h: f64| {
+            s.execute("text", &json!({"at": at, "text": t, "height": h})).unwrap();
+        };
+        // The electrical sheet: the unit, and its general note sending locations and heights to
+        // the architecture's drawings.
+        let (xe, xa) = (4234.0, 7000.0);
+        let lo_e = s.doc().unwrap().handseed;
+        sheet(&mut s, xe);
+        let v = [xe + 300.0, 200.0];
+        unit(&mut s, v);
+        text(&mut s, [v[0], v[1] - 19.0], "ENLARGED STUDIO SUITE", 7.4);
+        text(&mut s, [v[0], v[1] - 28.0], "SCALE: 1/4\" = 1'-0\"", 4.6);
+        text(&mut s, [xe + 1200.0, 900.0], "GENERAL NOTES", 6.0);
+        text(&mut s, [xe + 1200.0, 880.0], "1. SEE ARCHITECTURAL PLANS FOR DEVICE LOCATIONS AND", 4.0);
+        text(&mut s, [xe + 1205.0, 872.0], "MOUNTING HEIGHTS.", 4.0);
+        let hi_e = s.doc().unwrap().handseed;
+        // The architecture's plan: on the east wall the microwave's receptacle (its symbol right
+        // where the electrical plan drew the dishwasher's) and the cooktop's (right where it drew
+        // the microwave's), each its label over its height.
+        let lo_a = s.doc().unwrap().handseed;
+        sheet(&mut s, xa);
+        let w = [xa + 300.0, 200.0];
+        unit(&mut s, w);
+        for (y, label, height) in [(125.0, "MICROWAVE", "65\" AFF"), (163.0, "COOKTOP", "30\" AFF")] {
+            s.execute("circle", &json!({"center": [w[0] + 136.0, w[1] + y], "radius": 4.0})).unwrap();
+            text(&mut s, [w[0] + 110.0, w[1] + y + 4.4], label, 4.0);
+            text(&mut s, [w[0] + 110.0, w[1] + y - 2.0], height, 4.0);
+        }
+        // And a counter receptacle's plain height note, its symbol nearer the electrical plan's
+        // microwave receptacle than the microwave's own note is.
+        s.execute("circle", &json!({"center": [w[0] + 136.0, w[1] + 150.0], "radius": 4.0})).unwrap();
+        text(&mut s, [w[0] + 110.0, w[1] + 148.0], "44\" AFF", 4.0);
+        text(&mut s, [w[0], w[1] - 19.0], "UNIT PLAN - STUDIO SUITE", 7.4);
+        text(&mut s, [w[0], w[1] - 28.0], "SCALE: 1/4\" = 1'-0\"", 4.6);
+        let hi_a = s.doc().unwrap().handseed;
+        unit(&mut s, [10_000.0, 0.0]);
+        let region = |number: &str, discipline: &str, x0: f64| SheetRegion {
+            number: number.into(),
+            level: "T".into(),
+            discipline: discipline.into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        job.sheet_regions = vec![region("E-41", "E", xe), region("A-77", "A", xa)];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-41".into(), lo: lo_e, hi: hi_e }, SheetSpan { sheet: "A-77".into(), lo: lo_a, hi: hi_a }];
+        // (A second room of the type, not drawn on the floor: a typical room is one of several.)
+        let room = |n: &str, x: f64| json!({"name": "STUDIO SUITE", "number": n, "level": "Level 3", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("1801", 10_000.0), room("1802", 20_000.0)]}));
+        }
+        // The electrical plan's three east-wall receptacles, each with its circuit: the
+        // dishwasher's under the microwave's note, the microwave's under the cooktop's, the
+        // range's further north.
+        let device = |circuit: &str, y: f64| super::super::readers::ReadDevice {
+            tag: "REC".into(),
+            at: [v[0] + 136.0, v[1] + y],
+            sheet: "E-41".into(),
+            level: "T".into(),
+            circuit: circuit.into(),
+            kind: "receptacle".into(),
+            ..Default::default()
+        };
+        // (The range's is drawn on the west wall, 11 ft from the cooktop's spot: its circuit
+        // says it is the cooktop's receptacle all the same.)
+        let mut range = device("U-6", 200.0);
+        range.at = [v[0] + 8.0, v[1] + 200.0];
+        let read = [device("U-5", 128.0), device("U-2", 160.0), range];
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let row = |n: &str, what: &str| cadaddy_walk3d::PanelCircuit { number: n.into(), description: what.into(), ..Default::default() };
+        let schedules = [cadaddy_walk3d::PanelSchedule {
+            panel: "U".into(),
+            circuits: vec![row("2", "MICROWAVE"), row("4", "BATH RCPT AND LIGHTS"), row("5", "DISHWASHER"), row("6", "RANGE")],
+            ..Default::default()
+        }];
+        let fresh = || {
+            let mut st = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
+            st.retain(|d| d.room == "1801");
+            st
+        };
+        let mut stamped = fresh();
+        assert_eq!(stamped.len(), 3, "{stamped:?}");
+        let heights = typical_heights(s.doc().unwrap(), &job, &mut stamped, &schedules);
+        let aff = |st: &[super::super::readers::ReadDevice], c: &str| st.iter().find(|d| d.circuit == c).and_then(|d| d.aff_in);
+        assert_eq!(aff(&stamped, "U-2"), Some(65.0), "the microwave's circuit takes the microwave's note: {stamped:?} {heights:?}");
+        assert_eq!(aff(&stamped, "U-6"), Some(30.0), "the range's circuit takes the cooktop's: {stamped:?}");
+        assert_eq!(aff(&stamped, "U-5"), Some(44.0), "the dishwasher's takes neither appliance's, the counter's note: {stamped:?}");
+        let mw = stamped.iter().find(|d| d.circuit == "U-2").unwrap();
+        assert!((mw.at[1] - 125.0).abs() < 4.0, "at the microwave's symbol: {mw:?}");
+        let rg = stamped.iter().find(|d| d.circuit == "U-6").unwrap();
+        assert!((rg.at[0] - 10_136.0).abs() < 4.0 && (rg.at[1] - 163.0).abs() < 4.0, "at the cooktop's symbol: {rg:?}");
+        // With no schedule to tell them apart, the nearest on its wall pairs as before.
+        let mut stamped = fresh();
+        typical_heights(s.doc().unwrap(), &job, &mut stamped, &[]);
+        assert_eq!((aff(&stamped, "U-5"), aff(&stamped, "U-2"), aff(&stamped, "U-6")), (Some(65.0), Some(30.0), None), "{stamped:?}");
+    }
+
+    #[test]
+    fn a_circuits_schedule_line_says_which_appliance_it_feeds() {
+        let row = |n: &str, what: &str| cadaddy_walk3d::PanelCircuit { number: n.into(), description: what.into(), ..Default::default() };
+        let schedules = [cadaddy_walk3d::PanelSchedule {
+            panel: "U".into(),
+            circuits: vec![
+                row("2", "MICROWAVE"),
+                row("4", "COOKTOP"),
+                row("5", "DISHWASHER (GROUND FLOOR ONLY)"),
+                row("7", "RANGE HOOD EXHAUST"),
+                row("9", "ROOM RCPT AND LIGHTING"),
+            ],
+            ..Default::default()
+        }];
+        let a = |c: &str| circuit_appliance(c, &schedules);
+        assert_eq!(a("U-2"), "microwave");
+        assert_eq!(a("U-4"), "range", "a cooktop is on the range's circuit");
+        assert_eq!(a("U-5,a"), "dishwasher", "a leg is no circuit");
+        assert_eq!(a("U-31-5"), "dishwasher", "a unit's copy of the typical panel");
+        assert_eq!(a("U-7"), "range_hood", "a range hood's exhaust is no range");
+        assert_eq!(appliance_named("RANGE EXHAUST 52\" AFF"), "range_hood");
+        assert_eq!(appliance_named("MICROWAVE BELOW 24\" AFF"), "microwave");
+        assert_eq!((a("U-9"), a("U-11"), a("Q-2"), a("")), (String::new(), String::new(), String::new(), String::new()));
+        assert_eq!(appliance_named(" MICROWAVE 65\" AFF "), "microwave");
+        assert_eq!(appliance_named("DISHWASHER"), "dishwasher");
+        assert_eq!(appliance_named("CLOTHES WASHER"), "washer");
+        assert_eq!(appliance_named("44\" AFF"), "");
+        let all = ["microwave".to_string(), String::new(), "dishwasher".to_string()];
+        assert!(appliance_fits("microwave", "microwave", &all));
+        assert!(!appliance_fits("microwave", "", &all), "the room has the microwave's receptacle");
+        assert!(!appliance_fits("range", "dishwasher", &all), "never another appliance's");
+        assert!(appliance_fits("range", "", &all), "no range circuit in the room: an unnamed one");
+        assert!(appliance_fits("", "dishwasher", &all), "a note naming no appliance it knows");
     }
 
     #[test]
