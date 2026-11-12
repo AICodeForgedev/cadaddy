@@ -999,7 +999,7 @@ pub(crate) fn z_range(m: &Mesh) -> Option<(f64, f64)> {
 
 /// What a piece's built body says of its height (Q6592), above its level's floor `floor` (in
 /// drawing units, `upf` a foot): `elevation` its bottom, and for a vertical piece (a drop, a
-/// riser) `elevation_top` its top too. Measured off its own geometry, so a re-route that cuts
+/// riser) or one that rises a foot or more `elevation_top` its top too. Measured off its own geometry, so a re-route that cuts
 /// the piece again writes it again; `src` says where the height came from (computed for a piece
 /// the router cut, the run's height source for a duct or pipe whose height was assumed).
 pub(crate) fn elevation_props(z0: f64, z1: f64, floor: f64, upf: f64, vertical: bool, src: &Source) -> Vec<(&'static str, Prop)> {
@@ -1008,7 +1008,8 @@ pub(crate) fn elevation_props(z0: f64, z1: f64, floor: f64, upf: f64, vertical: 
     }
     let ft = |z: f64| ((z - floor) / upf * 100.0).round() / 100.0;
     let mut out = vec![("elevation", Prop::new(ft(z0), src.clone()).with_unit("ft").with_note("bottom, above the level"))];
-    if vertical {
+    // A drop or a rise (straight, or a bent piece with a leg up or down): its top too.
+    if vertical || z1 - z0 >= upf {
         out.push(("elevation_top", Prop::new(ft(z1), src.clone()).with_unit("ft").with_note("top, above the level")));
     }
     out

@@ -46,7 +46,7 @@ fn assert_each_piece_at_its_body(s: &Session, kind: &str, floor_ft: f64, source:
         assert_eq!(p.source.kind, source, "{what}");
         assert_eq!(p.unit.as_deref(), Some("ft"), "{what}");
         assert!((el - (lo / 12.0 - floor_ft)).abs() < 0.011, "its body's bottom above the level: {el} vs {lo} on {what}");
-        if text(ps, "vertical") == "true" {
+        if text(ps, "vertical") == "true" || hi - lo >= 12.0 {
             let top = elevation(ps, "elevation_top").unwrap_or_else(|| panic!("a vertical piece's top: {what}"));
             assert!((top - (hi / 12.0 - floor_ft)).abs() < 0.011, "{top} vs {hi} on {what}");
             assert!(top > el, "{what}");
@@ -77,6 +77,13 @@ fn every_conduit_piece_carries_its_elevation_from_its_own_body() {
         .collect();
     // The feeder into the panel rises from its top (2' up, 4' tall) to the top of the storey.
     assert!(verticals.iter().any(|(lo, hi, _)| (lo - 6.0).abs() < 0.05 && (hi - 12.0).abs() < 0.05), "the panel's feeder: {verticals:?}");
+    // The circuit's piece down to the receptacle's box: from the route's 9' to the box.
+    let drops: Vec<(f64, f64)> = all
+        .iter()
+        .filter(|(_, ps, _, _)| text(ps, "atom") == "conduit" && text(ps, "circuit") == "LP1-3")
+        .filter_map(|(_, ps, _, _)| Some((elevation(ps, "elevation")?, elevation(ps, "elevation_top")?)))
+        .collect();
+    assert!(drops.iter().any(|(lo, hi)| *lo < 5.0 && (8.8..=9.5).contains(hi)), "the drop to the box: {drops:?}");
     // The receptacle's box at its 54-1/8" mounting height: its bottom a little below.
     let bx = all.iter().find(|(_, ps, _, _)| text(ps, "atom") == "box").map(|(_, ps, _, _)| elevation(ps, "elevation").unwrap_or(-1.0));
     assert!(bx.is_some_and(|b| (3.5..=4.6).contains(&b)), "the box: {bx:?}");
