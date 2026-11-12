@@ -307,6 +307,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "[WALL ELEVATION]",
         "drafting convention: view, reference and table types (ELEVATION, SECTION, DETAIL, SEE SHEET, SCHEDULE), how any set is organised",
     ),
+    (
+        "crates/engine/src/cmd/guided.rs",
+        "[type: name:]",
+        "model kinds and property values: the room element's own xdata tag keys (type:, name:, area_sf:, basis:) the build writes, not words read off a document",
+    ),
     ("crates/engine/src/cmd/guided.rs", "[ST ND]", "grammar: ordinal, number, joining and markup words of the language"),
     (
         "crates/engine/src/cmd/guided.rs",
