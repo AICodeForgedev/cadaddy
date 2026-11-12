@@ -3,9 +3,10 @@
 //! - Tamper-resistant receptacles (NEC 406.12): every receptacle in a guest room, guest suite or
 //!   dwelling unit, GFCI ones included, and whether the documents say so themselves.
 //! - GFCI by circuit (NEC 210.8): under a GFCI breaker a receptacle is a standard device (a GFCI
-//!   one there would be double protection); where the print tags GFCI and the breaker isn't, the
-//!   first device on the circuit is the GFCI and those after it are on its load side. Never a
-//!   blanket conversion; a breaker of unknown type leaves the decision `undecided`.
+//!   one there would be double protection); where the print tags GFCI and the breaker isn't, a
+//!   receptacle is on the load side of a GFCI one only where its routed circuit reaches it through
+//!   that one (the route's wiring order, line to load: Q6551), never by distance; otherwise it
+//!   keeps its GFCI. Never a blanket conversion.
 //!
 //! Every value carries its source (the rule, the room, the schedule row); a person's values stay.
 
@@ -223,7 +224,7 @@ pub(crate) fn rules() -> Vec<CodeRule> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Apply Code Rules", run)
-        .params("{} → {receptacles, tamper_resistant: n (in guest rooms / dwellings: NEC 406.12), tr_documented: {stated, not_stated}, gfci: {device, load_side, breaker, double_protection_avoided, none, undecided, device_each (each a GFCI device: which is first on its circuit isn't known), device_breaker_unknown (a GFCI device: its breaker's type isn't in the schedule)}, gfci_corrected (receptacles the drawings show standard built GFCI, the design type kept), gfci_circuits: [{panel, circuit, description, rule, needs}] (the panel schedules' receptacle circuits in a place needing GFCI, an elevator pit, a roof, whose breaker isn't GFCI), rules: [id]}: each receptacle gets `tamper_resistant` (yes, with the rule and its room) and `tr_documented` (where the documents say it, or that they don't); and by its circuit (its breaker's type from the panel schedule, bim.props.fill's `gfci_breaker`) `gfci` (device | load side | breaker | none | undecided), `receptacle_type` (GFCI | standard) and `protected_by`, each with its source; a person's values stay")
+        .params("{} → {receptacles, tamper_resistant: n (in guest rooms / dwellings: NEC 406.12), tr_documented: {stated, not_stated}, gfci: {device, load_side, breaker, double_protection_avoided, none, undecided, device_each (each a GFCI device: its place on its circuit as wired isn't known, no route), device_breaker_unknown (a GFCI device: its breaker's type isn't in the schedule)}, gfci_corrected (receptacles the drawings show standard built GFCI, the design type kept), gfci_circuits: [{panel, circuit, description, rule, needs}] (the panel schedules' receptacle circuits in a place needing GFCI, an elevator pit, a roof, whose breaker isn't GFCI), rules: [id]}: each receptacle gets `tamper_resistant` (yes, with the rule and its room) and `tr_documented` (where the documents say it, or that they don't); and by its circuit (its breaker's type from the panel schedule, bim.props.fill's `gfci_breaker`) `gfci` (device | load side | breaker | none | undecided), `receptacle_type` (GFCI | standard) and `protected_by`, each with its source: load side only of a GFCI receptacle upstream of it on its routed circuit (the route's wiring order, line to load; never by distance), else it keeps its GFCI; a person's values stay")
         .menu(&["Tools", "Building", "Apply Code Rules"])]
 }
 
@@ -289,10 +290,7 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         let name = names.get(&key).cloned().unwrap_or_else(|| key.clone());
         tr.rooms.name_words.iter().find(|w| name.contains(w.as_str())).map(|w| format!("room {room} ({name}) is a guest room or dwelling ({w})"))
     };
-    let upf = sp.as_ref().map(|sp| sp.units_per_foot).filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0);
     let d = s.doc()?;
-    // Where each panel element is (the first device on a circuit is the one nearest it).
-    let mut panel_at: BTreeMap<String, [f64; 3]> = BTreeMap::new();
     let mut recs: Vec<Rec> = Vec::new();
     // Sinks: (where, level, handle).
     let mut sinks: Vec<([f64; 3], String, Handle)> = Vec::new();
@@ -306,18 +304,6 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
                 && let Some(at) = xyz(&text(&store, "location"))
             {
                 sinks.push((at, text(&store, "level"), e.handle));
-            }
-            continue;
-        }
-        if base == "equipment" || base == "gear" || base == "panel" {
-            // Where it is: its location, else its geometry's middle (a room's panel placed by the
-            // build carries no location).
-            let at = xyz(&text(&store, "location")).or_else(|| {
-                super::propfill::extent(d, e)
-                    .map(|(b, z0, z1)| [(b.min.x + b.max.x) / 2.0 / upf, (b.min.y + b.max.y) / 2.0 / upf, (z0 + z1) / 2.0 / upf])
-            });
-            if let Some(at) = at {
-                panel_at.insert(e.handle.hex(), at);
             }
             continue;
         }
@@ -452,30 +438,27 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             by_circuit.entry(c.clone()).or_default().push(i);
         }
     }
+    // Who is first is read from the routed circuit as built (Q6551): a receptacle is on the load
+    // side of a GFCI one only where its circuit's conductors reach it through that one (line to
+    // load), never because it is farther from the panel. The topmost receptacle needing GFCI on
+    // each way from the homerun is the GFCI device; those after it on that way are fed through it.
+    let wiring = super::conduitroute::Wiring::stored(d);
     let mut first_of: BTreeMap<usize, Option<Handle>> = BTreeMap::new();
-    for ((panel, _), ix) in &by_circuit {
-        let pat = panel_at.get(panel);
-        let dist = |i: &usize| -> Option<f64> {
-            let a = recs.get(*i)?.at?;
-            let p = pat?;
-            Some(((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2)).sqrt())
-        };
-        let ordered: Option<Vec<(f64, usize)>> = ix.iter().map(|i| dist(i).map(|d| (d, *i))).collect();
-        match ordered {
-            Some(mut o) if !o.is_empty() => {
-                o.sort_by(|a, b| a.0.total_cmp(&b.0));
-                let first = o.first().map(|f| f.1);
-                for (_, i) in &o {
-                    first_of.insert(*i, first.filter(|f| f != i).and_then(|f| recs.get(f).map(|r| r.handle)));
+    for ix in by_circuit.values() {
+        let on_circuit: BTreeSet<Handle> = ix.iter().filter_map(|i| recs.get(*i).map(|r| r.handle)).collect();
+        for i in ix {
+            let Some(r) = recs.get(*i) else { continue };
+            match wiring.upstream(r.handle) {
+                Some(up) => {
+                    first_of.insert(*i, up.iter().rev().copied().find(|h| on_circuit.contains(h)));
                 }
-            }
-            _ if ix.len() == 1 => {
-                if let Some(i) = ix.first() {
+                None if ix.len() == 1 => {
                     first_of.insert(*i, None);
                 }
+                // Its place on the circuit as wired isn't known (not routed): left to the field's
+                // usual, a GFCI device at each place that needs one.
+                None => {}
             }
-            // Which is first on the circuit isn't known (no panel or device location).
-            _ => {}
         }
     }
     let mut changes: Vec<(Handle, props::Props)> = Vec::new();
@@ -549,24 +532,29 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             }
             (true, Some(false)) => match first_of.get(&i) {
                 Some(None) => {
-                    let note = format!("{why} on {circuit}, whose breaker isn't GFCI: the first device on the circuit (nearest its panel)");
+                    let note = format!(
+                        "{why} on {circuit}, whose breaker isn't GFCI: no GFCI receptacle is upstream of it on the circuit as routed, so it is the GFCI device"
+                    );
                     set("gfci", json!("device"), rule_src(&gf, &note), None);
                     set("receptacle_type", json!("GFCI"), rule_src(&gf, &note), None);
                     *tally.entry("device").or_default() += 1;
                 }
                 Some(Some(first)) => {
-                    let note = format!("{why} on {circuit}: on the load side of the circuit's first GFCI receptacle ({})", first.hex());
+                    let note = format!(
+                        "{why} on {circuit}: on the load side of GFCI receptacle {}, upstream of it on the circuit as routed (fed through it, line to load)",
+                        first.hex()
+                    );
                     set("gfci", json!("load side"), rule_src(&gf, &note), None);
                     set("receptacle_type", json!("standard"), rule_src(&gf, &note), None);
                     set("protected_by", json!(format!("GFCI receptacle {}", first.hex())), rule_src(&gf, &note), None);
                     *tally.entry("load_side").or_default() += 1;
                 }
                 None => {
-                    // Which is first on the circuit isn't known: the field sets a GFCI receptacle at
-                    // each place that needs one (Q6216; the alternative: the first one GFCI, the
-                    // rest on its load side).
+                    // Which is first on the circuit as wired isn't known (it isn't routed): the
+                    // field sets a GFCI receptacle at each place that needs one (Q6216, Q6551; the
+                    // alternative: the first one GFCI, the rest on its load side).
                     let note = format!(
-                        "{why} on {circuit}, whose breaker isn't GFCI, with others that need it: which is first on the circuit isn't known, so each is a GFCI device (alternative: the first one GFCI, the rest on its load side)"
+                        "{why} on {circuit}, whose breaker isn't GFCI, with others that need it: which is first on the circuit as wired isn't known (no route), so each is a GFCI device (alternative: the first one GFCI, the rest on its load side)"
                     );
                     set("gfci", json!("device"), rule_src(&gf, &note), None);
                     set("receptacle_type", json!("GFCI"), rule_src(&gf, &note), None);
@@ -589,6 +577,22 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
                 *tally.entry("none").or_default() += 1;
             }
             (false, None) => {}
+        }
+        // Run again after a reroute (Q6551): what an earlier decision wrote and this one doesn't
+        // say any more goes (a person's values stay).
+        let not_user = |p: &Prop| p.source.kind != SourceKind::User;
+        let now = store.get("gfci").map(Prop::text).unwrap_or_default();
+        if (now == "device" || now == "none") && store.get("protected_by").is_some_and(not_user) {
+            store.remove("protected_by");
+        }
+        let own_correction = format!("{} {}", gf.id, gf.cite);
+        let gfci_made = !r.tagged && store.get("receptacle_type").is_some_and(|p| p.text() == "GFCI" && p.source.kind == SourceKind::Rule);
+        if !gfci_made
+            && store.get("correction:receptacle_type").is_some_and(|p| not_user(p) && p.text().starts_with(&own_correction))
+            && store.get("design:receptacle_type").is_none_or(not_user)
+        {
+            store.remove("correction:receptacle_type");
+            store.remove("design:receptacle_type");
         }
         // A receptacle the documents draw standard that the code makes its circuit's GFCI: the
         // field installs the GFCI, the drawings' type kept beside it (Q6216).
@@ -628,6 +632,15 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             put("correction_reason", reason);
             put("correction_rule", gf.cite.clone());
             corrections += 1;
+        } else if store.get("correction_rule").is_some_and(|p| not_user(p) && p.text() == gf.cite)
+            && ["design_value", "corrected_value"]
+                .iter()
+                .all(|k| store.get(k).is_some_and(|p| not_user(p) && ["GFCI", "standard"].iter().any(|t| p.text().eq_ignore_ascii_case(t))))
+        {
+            // Built as drawn now: the earlier correction's record goes.
+            for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
+                store.remove(k);
+            }
         }
         if store != before {
             changes.push((r.handle, store));
