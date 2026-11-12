@@ -89,7 +89,7 @@ impl Paper {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("ugsheets.check", "Check Underground", run_check)
-            .params("{today?: YYYY-MM-DD, clearance_in?: plan distance to another trade's buried line checked as a crossing (default 12)} → {ok, errors, reviews (a proposed route too close to another trade's line: for review, not an error), warnings, runs: [{id, kind, system, level, from, to, size_in, conduits, material, depth_in, length_ft, bends_deg, encased}], stubups: [{tag, level, at, feeds, run, size_in, conduits, material, height_in, x: {from, ft}, y: {from, ft}, coords_ft}], services: [{kind, tag, status, to, at, encased}], other_trade: [{id, label, level, depth_in}], crossings: [{id, level, at, electrical, other, how, distance_ft, vertical_separation_in}], routes: [{feeder, from, to, level, under_slab: {length_ft, cost?}, overhead: {length_ft, cost?}, basis, suggest}], holds: [{pour, item, kind, size, status}], findings: [{check, severity, about, level, message, fix}]}")
+            .params("{today?: YYYY-MM-DD, clearance_in?: plan distance to another trade's buried line checked as a crossing (default 12)} → {ok, errors, reviews (a proposed route too close to another trade's line: for review, not an error), warnings, runs: [{id, kind, system, level, from, to, size_in, conduits, material, depth_in, length_ft, bends_deg, encased, circuit_kind: feeder|branch|site|service|telecom, circuit}], stubups: [{tag, level, at, feeds, run, size_in, conduits, material, height_in, x: {from, ft}, y: {from, ft}, coords_ft}], services: [{kind, tag, status, to, at, encased}], other_trade: [{id, label, level, depth_in}], crossings: [{id, level, at, electrical, other, how, distance_ft, vertical_separation_in}], routes: [{feeder, from, to, level, under_slab: {length_ft, cost?}, overhead: {length_ft, cost?}, basis, suggest}], holds: [{pour, item, kind, size, status}], findings: [{check, severity, about, level, message, fix}]}")
             .noundo(),
         CommandSpec::new("ugsheets.plan", "Underground Plan Report", run_plan)
             .params("{} → the job's underground plan (Q6148), as its last run left it: {slab_level, trades: {E|P: {callouts: [{trade, sheet, from: note|keynote|legend, mark, text, what, said_buried, count, size_in, material, cover_in, steel_ells, room}], plan_issued, sheet, placed: [{callout, status, runs, how}], takeoff}}, sheets, called_runs, stack_bases, proposed_runs, proposals: [{subject, from, to, copies, conduits, size_in, under_slab_ft, overhead_ft, decision, reasons, alternative, routed_under, routed_over, adds_route}], framing_above, below_slab_method, scale, rfis, sleeves, findings}")
@@ -130,6 +130,11 @@ struct Buried {
     proposed: bool,
     /// Where it comes from: the note or schedule that calls it, or what the proposal is for.
     basis: String,
+    /// What it is for (Q6348): `feeder`, `branch`, `site`, `service` or `telecom`; empty for a
+    /// pipe.
+    circuit_kind: &'static str,
+    /// The circuit it carries, where its run names one (`LP2-11,13`).
+    circuit: String,
 }
 
 /// Buried work a note of the documents calls for (its sheet, the level when known, its words).
@@ -774,6 +779,8 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
                 encased: false,
                 proposed: r.height_source.eq_ignore_ascii_case("proposed"),
                 basis,
+                circuit_kind: "",
+                circuit: String::new(),
             });
             continue;
         }
@@ -804,6 +811,12 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             encased: r.encased,
             proposed: r.height_source.eq_ignore_ascii_case("proposed"),
             basis,
+            circuit_kind: super::ugcircuit::kind_of(r),
+            circuit: super::printcond::circuit_of_run(r)
+                .and_then(|id| sp.tags.iter().find(|t| t.id == id))
+                .and_then(|t| t.fields.get("circuit"))
+                .map(|f| f.value.clone())
+                .unwrap_or_default(),
         });
     }
     // Service entrances.
@@ -866,6 +879,8 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             encased: svc.encased,
             proposed: false,
             basis: format!("{} service", svc.kind),
+            circuit_kind: "service",
+            circuit: String::new(),
         });
         if !(svc.conduit_in.is_finite() && svc.conduit_in > 0.0) {
             findings.push(Finding {
@@ -1251,12 +1266,21 @@ fn takeoff_json(ug: &Ug) -> Value {
                 trench.push((&r.points, r.length_ft));
             }
         }
+        // Buried feet by what each run is for and its size (Q6348): feeder, branch, site, service.
+        let mut by_kind: BTreeMap<&str, BTreeMap<String, f64>> = BTreeMap::new();
+        for r in runs.iter().filter(|r| !r.circuit_kind.is_empty()) {
+            let size = if r.size_in > 0.0 { trade_size(r.size_in) } else { "?".into() };
+            *by_kind.entry(r.circuit_kind).or_default().entry(size).or_default() += r.length_ft * f64::from(r.conduits.max(1));
+        }
+        let by_kind: serde_json::Map<String, Value> =
+            by_kind.into_iter().map(|(k, m)| (k.to_string(), Value::Object(m.into_iter().map(|(s, ft)| (s, json!(r2(ft)))).collect()))).collect();
         let stubs: u64 = ug.stubs.iter().filter(|s| s.trade == trade).map(|s| u64::from(s.conduits)).sum();
         let sleeves: Vec<&SleeveAt> = ug.sleeves.iter().filter(|s| s.trade == trade).collect();
         out.insert(
             trade.into(),
             json!({
                 "lines": lines.iter().map(|((m, size, prop), (ft, ells))| json!({ "material": m, "size": size, "status": if *prop { "proposed" } else { "called" }, "ft": r2(*ft), "elbows_90": ells })).collect::<Vec<_>>(),
+                "by_kind": by_kind,
                 "ft_called": r2(runs.iter().filter(|r| !r.proposed).map(|r| r.length_ft * f64::from(r.conduits.max(1))).sum()),
                 "ft_proposed": r2(runs.iter().filter(|r| r.proposed).map(|r| r.length_ft * f64::from(r.conduits.max(1))).sum()),
                 "stub_ups": stubs,
@@ -1304,6 +1328,7 @@ fn ug_json(ug: &Ug) -> Value {
             "id": r.id, "kind": r.kind, "system": r.system, "level": r.level, "from": r.from, "to": r.to, "size_in": r.size_in,
             "conduits": r.conduits, "material": r.material, "depth_in": r2(r.depth_in), "length_ft": r2(r.length_ft),
             "bends_deg": r.bends_deg, "encased": r.encased, "proposed": r.proposed, "basis": r.basis,
+            "circuit_kind": r.circuit_kind, "circuit": r.circuit,
         })).collect::<Vec<_>>(),
         "stubups": ug.stubs.iter().map(|s| json!({
             "tag": s.tag, "trade": s.trade, "level": s.level, "at": s.at, "feeds": s.feeds, "run": s.run, "size_in": s.size_in, "conduits": s.conduits,
@@ -2470,6 +2495,8 @@ mod tests {
             encased: false,
             proposed,
             basis: String::new(),
+            circuit_kind: "branch",
+            circuit: String::new(),
         }
     }
 

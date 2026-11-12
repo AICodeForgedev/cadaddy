@@ -357,11 +357,25 @@ struct Gs {
     /// Constant alpha (ExtGState ca / CA).
     fill_alpha: f64,
     stroke_alpha: f64,
+    /// Painted with a darkening blend mode (ExtGState BM Multiply or Darken: a reviewer's
+    /// highlight): on white paper its colour only tints what is under it.
+    under: bool,
 }
 
 impl Default for Gs {
     fn default() -> Self {
-        Gs { ctm: M::ID, stroke: [0.0; 3], fill: [0.0; 3], width: 1.0, fill_n: 1, stroke_n: 1, clip: None, fill_alpha: 1.0, stroke_alpha: 1.0 }
+        Gs {
+            ctm: M::ID,
+            stroke: [0.0; 3],
+            fill: [0.0; 3],
+            width: 1.0,
+            fill_n: 1,
+            stroke_n: 1,
+            clip: None,
+            fill_alpha: 1.0,
+            stroke_alpha: 1.0,
+            under: false,
+        }
     }
 }
 
@@ -395,6 +409,9 @@ struct Fill {
     order: usize,
     /// Filled by the even-odd rule (`f*`), else non-zero winding.
     even_odd: bool,
+    /// Painted with a darkening blend mode ([`Gs::under`]): drawn under the page's other
+    /// objects, so the lettering it highlights stays legible.
+    under: bool,
 }
 
 /// A raster image painted on the page: its pixels and where the unit square of image space
@@ -461,6 +478,17 @@ fn transp(alpha: f64) -> u8 {
         return 0;
     }
     ((1.0 - alpha.clamp(0.0, 1.0)) * 100.0).round().clamp(0.0, 90.0) as u8
+}
+
+/// Whether an ExtGState blend mode (`BM`: a name, or a list of them, the first one the reader
+/// knows applying) only darkens what lies under it: Multiply or Darken. On white paper such a
+/// fill shows its colour and lets the lettering under it through.
+fn darkens(doc: &Document, bm: &Object) -> bool {
+    match deref(doc, bm) {
+        Object::Name(n) => matches!(n.as_slice(), b"Multiply" | b"Darken"),
+        Object::Array(a) => a.iter().take(16).find_map(|o| deref(doc, o).as_name().ok()).is_some_and(|n| matches!(n, b"Multiply" | b"Darken")),
+        _ => false,
+    }
 }
 
 fn rgb8(c: [f64; 3]) -> [u8; 3] {
@@ -1054,6 +1082,9 @@ impl<'a> Interp<'a> {
                         if let Some(v) = dict_get(self.doc, eg, b"LW").and_then(num) {
                             gs.width = v;
                         }
+                        if let Some(bm) = dict_get(self.doc, eg, b"BM") {
+                            gs.under = darkens(self.doc, bm);
+                        }
                     }
                 }
                 "G" => gs.stroke = to_rgb(&n),
@@ -1589,7 +1620,7 @@ impl<'a> Interp<'a> {
                 }
             }
             if !loops.is_empty() {
-                self.out.fills.push(Fill { loops, pen, layer: layer.clone(), order, even_odd });
+                self.out.fills.push(Fill { loops, pen, layer: layer.clone(), order, even_odd, under: gs.under });
             }
         }
         if stroke {
@@ -5296,6 +5327,7 @@ fn reduce_masks(
             order: max_order,
             layer: None,
             even_odd: false,
+            under: false,
         });
     }
     (result, capped)
@@ -6352,13 +6384,14 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             added += 1;
         }
     };
-    // everything in the PDF's painting order: a mask covers what was drawn before it, not after
-    let mut paint: Vec<(usize, u8, usize)> = Vec::with_capacity(strokes.len() + fills.len() + masks.len() + texts.len());
-    paint.extend(strokes.iter().enumerate().map(|(i, s)| (s.order, 0, i)));
-    paint.extend(fills.iter().enumerate().map(|(i, f)| (f.order, 1, i)));
-    paint.extend(masks.iter().enumerate().map(|(i, f)| (f.order, 2, i)));
-    paint.extend(texts.iter().enumerate().map(|(i, t)| (t.order, 3, i)));
-    paint.extend(images.iter().enumerate().map(|(i, im)| (im.order, 4, i)));
+    // everything in the PDF's painting order: a mask covers what was drawn before it, not after;
+    // a fill that only darkens (a highlight) goes under everything, as it looks on white paper
+    let mut paint: Vec<(bool, usize, u8, usize)> = Vec::with_capacity(strokes.len() + fills.len() + masks.len() + texts.len());
+    paint.extend(strokes.iter().enumerate().map(|(i, s)| (true, s.order, 0, i)));
+    paint.extend(fills.iter().enumerate().map(|(i, f)| (!f.under, f.order, 1, i)));
+    paint.extend(masks.iter().enumerate().map(|(i, f)| (true, f.order, 2, i)));
+    paint.extend(texts.iter().enumerate().map(|(i, t)| (true, t.order, 3, i)));
+    paint.extend(images.iter().enumerate().map(|(i, im)| (true, im.order, 4, i)));
     paint.sort_unstable();
     // small fills merged: (layer, colour, transparency) → (placed layer, colour, weight, outlines)
     let mut small_fills: BTreeMap<(String, [u8; 3], u8), (String, Color, Lineweight, Vec<HatchLoop>)> = BTreeMap::new();
@@ -6497,7 +6530,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         result
     };
-    for (_, kind, i) in paint {
+    for (_, _, kind, i) in paint {
         match kind {
             0 => {
                 let Some(s) = strokes.get(i) else { continue };
@@ -6588,7 +6621,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 if loops.is_empty() {
                     continue;
                 }
-                if opts.merge_small_fills && !outline_fills.contains(&i) && f.loops.iter().filter(|l| l.len() >= 3).all(|l| is_small(l)) {
+                if opts.merge_small_fills && !f.under && !outline_fills.contains(&i) && f.loops.iter().filter(|l| l.len() >= 3).all(|l| is_small(l)) {
                     let e = small_fills
                         .entry((f.layer.clone().unwrap_or_default(), f.pen.rgb, f.pen.transp))
                         .or_insert_with(|| (layer, color, lw, Vec::new()));
@@ -7930,7 +7963,7 @@ mod tests {
     /// A white mask over the box `[x0, y0, x1, y1]`, painted `order`th.
     fn white_box(b: [f64; 4], order: usize) -> Fill {
         let loops = vec![vec![(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])]];
-        Fill { loops, pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 }, layer: None, order, even_odd: false }
+        Fill { loops, pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 }, layer: None, order, even_odd: false, under: false }
     }
 
     fn mask_boxes(masks: &[Fill]) -> Vec<[f64; 4]> {

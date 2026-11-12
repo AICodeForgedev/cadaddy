@@ -300,8 +300,7 @@ pub(crate) fn labor_for(line: &Value) -> Option<Hit> {
 }
 
 fn starter() -> &'static [Value] {
-    static STARTER: OnceLock<Vec<Value>> = OnceLock::new();
-    STARTER.get_or_init(super::starter_prices)
+    super::starter_book()
 }
 
 /// The lines no book gives labor, by trade and category: `[{trade, category, lines, qty, unit}]`

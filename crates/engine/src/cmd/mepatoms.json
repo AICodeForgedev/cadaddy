@@ -307,5 +307,31 @@
       { "words": ["PENDANT", "SURFACE", "CEILING", "WALL", "SCONCE", "STEM", "CHAIN", "CANOPY", "AFF"], "box": true, "source": "a surface, wall or pendant luminaire hangs on an outlet box (NEC 314.27(A))" }
     ],
     "default_source": "the trade's usual 4 in octagon at a luminaire where neither its schedule nor its submittal says how it mounts (company default)"
+  },
+  "splices": {
+    "item": "Wire connector, twist-on",
+    "large_item": "Wire connector, insulated multi-tap",
+    "connectors": [
+      { "size": "small", "max": { "18": 4, "16": 4, "14": 3, "12": 2 } },
+      { "size": "medium", "max": { "18": 5, "16": 5, "14": 4, "12": 3, "10": 2 } },
+      { "size": "large", "max": { "18": 6, "16": 6, "14": 5, "12": 4, "10": 3, "8": 1 } },
+      { "size": "extra large", "max": { "18": 8, "16": 7, "14": 6, "12": 5, "10": 4, "8": 2 } }
+    ],
+    "connectors_source": "company default from the twist-on makers' published combination charts (UL 486C: a connector is used only with the conductor combinations it is listed for): a splice takes the smallest connector whose listed range holds its conductors (a mix fills each size's share of the range); past the largest twist-on the field joins the bundle in two with a jumper, and conductors larger than any twist-on takes go in an insulated multi-tap connector",
+    "lead_size": "18",
+    "lead_source": "trade practice: a luminaire's or a fan's leads (#18 fixture wire unless its submittal says otherwise, NEC 402.6 and 410.117) are spliced to the circuit in its box; a 4 in octagon or square box on a luminaire is its outlet box",
+    "terminal_families": ["receptacle", "device", "floor"],
+    "switch_families": ["switch"],
+    "lead_families": ["luminaire", "fan"],
+    "bond_materials": ["steel"],
+    "bond_source": "NEC 250.148: every equipment grounding conductor in a box is spliced together, with a pigtail to the device's grounding terminal and, in a metal box, a bonding jumper to the box (250.148(C)); a nonmetallic box takes none (250.148(D)); a single ground that lands on the one thing it bonds needs no splice",
+    "methods": {
+      "raceway": { "feed_through": "pigtail" },
+      "MC": { "feed_through": "pigtail" },
+      "AC": { "feed_through": "pigtail" },
+      "NM": { "feed_through": "pigtail" }
+    },
+    "methods_source": "trade practice in commercial and lodging work: where a circuit continues through a device's box its conductors are spliced, with a pigtail to the device, so taking a device out never opens the circuit downstream (NEC 300.13(B) requires it for a multiwire circuit's grounded conductor); where a circuit ends at a device its conductors land on its terminals; a switch box's unused grounded conductor (NEC 404.2(C)) is capped; the alternative, feeding through a receptacle's second pair of terminals (common in one-family NM work), is a project rule: set the method's feed_through to device",
+    "source": "splices are counted per box from the conductors in it (company default; NEC 110.14(B): splices made with listed devices): at each box where a circuit continues or ends, its hots, its grounded conductor and its switch leg are spliced where two or more meet, the grounds bundled with pigtails to the devices and to a metal box, and each luminaire's leads spliced to what feeds it"
   }
 }

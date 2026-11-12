@@ -793,6 +793,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                         let unpriced = sc["unpriced"].as_array().map_or(0, Vec::len);
                         if unpriced > 0 {
                             a["unpriced_items"] = json!(unpriced);
+                            a["basis"] = json!(format!(
+                                "ve.study: priced from the routed takeoff, of what is priced: {unpriced} items have no price and are not in the add/deduct (give ve: {{cost_db}} or price them)"
+                            ));
                         }
                     } else {
                         a["add_deduct"] = Value::Null;
