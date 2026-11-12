@@ -7766,10 +7766,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // tags it (above); one whose view's label no schedule row or plan of its level
                 // supports is asked about.
                 let own_labels = stamped.iter().filter(|dv| !dv.circuit_basis.is_empty()).count();
-                let asked = template_label_review(&mut stamped, &out, &schedules);
-                if own_labels + asked > 0 {
+                let (by_row, asked) = template_label_review(&mut stamped, &out, &schedules);
+                if own_labels + by_row + asked > 0 {
                     progress_line(&format!(
-                        "  typical views' copies on their room's own floor plan's circuit: {own_labels}; view labels no schedule row or plan of the room's level supports (asked): {asked}"
+                        "  typical views' copies on their room's own floor plan's circuit: {own_labels}; on their level's schedule row for the same use: {by_row}; view labels no schedule row or plan of the room's level supports (asked): {asked}"
                     ));
                 }
                 // A floor plan's device found by its drawing (Q6484) in a room a typical view
@@ -11805,18 +11805,34 @@ fn own_floor_labels(copy: &mut super::readers::ReadDevice, floor: &super::reader
     true
 }
 
+/// A schedule row's description without the words that say which floor (`SECOND FLOOR STORAGE
+/// RECEPTACLE` → STORAGE, RECEPTACLE): what the circuit serves, whatever the floor.
+fn row_use_words(description: &str) -> BTreeSet<String> {
+    description
+        .to_ascii_uppercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty() && !w.chars().all(|c| c.is_ascii_digit()))
+        .filter(|w| !matches!(*w, "FLOOR" | "FLOORS" | "LEVEL" | "LEVELS"))
+        .filter(|w| cadaddy_mepfix::sheet_reader::detect_levels(&format!("{w} FLOOR")).is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The typical views' copies whose circuit label (the view's, no floor plan of their room tagged
-/// them: [`own_floor_labels`]) no panel schedule row or plan of their room's level supports: each
-/// asked about ([`super::readers::ReadDevice::circuit_review`]). A label is supported by its
-/// panel's schedule row when that row names the room's level or the room (a row naming another
-/// floor or room is against it); by a typical panel's (one in every room); else by the panel
-/// feeding that level: a row of its schedule naming the level, or the level's own plans' devices
-/// on it. A panel with no schedule read is not judged. `floor`: the plans' own devices. How many.
+/// them: [`own_floor_labels`]) no panel schedule row or plan of their room's level supports. A
+/// label is supported by its panel's schedule row when that row names the room's level or the
+/// room (a row naming another floor or room is against it); by a typical panel's (one in every
+/// room); else by the panel feeding that level: a row of its schedule naming the level, or the
+/// level's own plans' devices on it. A panel with no schedule read is not judged. An unsupported
+/// label whose row names another floor gives way to the one row of the schedules that serves the
+/// same use ([`row_use_words`]) on the room's level: the copy takes that circuit, the view's label
+/// kept in its basis. Else it is asked about ([`super::readers::ReadDevice::circuit_review`]).
+/// `floor`: the plans' own devices. How many (took the level's row, asked).
 fn template_label_review(
     stamped: &mut [super::readers::ReadDevice],
     floor: &[super::readers::ReadDevice],
     schedules: &[cadaddy_walk3d::PanelSchedule],
-) -> usize {
+) -> (usize, usize) {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let names = |text: &str, level: &str, room: &str| -> (bool, bool) {
         // (names something, names this level or room)
@@ -11827,7 +11843,7 @@ fn template_label_review(
         let level_named = !digits(level).is_empty() && levels.iter().any(|l| digits(l) == digits(level));
         (!levels.is_empty() || room_named, level_named || room_named)
     };
-    let mut asked = 0usize;
+    let (mut took, mut asked) = (0usize, 0usize);
     for dv in stamped.iter_mut().filter(|dv| !dv.template.is_empty() && dv.circuit_basis.is_empty() && !dv.circuit.trim().is_empty()) {
         let Some(p) = super::propfill::panel_of(&dv.circuit) else { continue };
         let Some(schedule) = schedules.iter().find(|s| s.panel.trim().eq_ignore_ascii_case(&p)) else { continue };
@@ -11849,7 +11865,45 @@ fn template_label_review(
                     })
             }
         };
-        if !supported {
+        if supported {
+            continue;
+        }
+        // The same use's row on the room's level (one only): its circuit.
+        let same_use: Vec<(&cadaddy_walk3d::PanelSchedule, &cadaddy_walk3d::PanelCircuit)> = match (row, row_says) {
+            (Some(r), Some((true, false))) if !row_use_words(&r.description).is_empty() => {
+                let want = row_use_words(&r.description);
+                schedules
+                    .iter()
+                    .filter(|s| s.typical_of.is_none())
+                    .flat_map(|s| s.circuits.iter().map(move |c| (s, c)))
+                    .filter(|(_, c)| names(&format!("{} {}", c.description, c.room), &dv.level, &dv.room).1 && row_use_words(&c.description) == want)
+                    .take(2)
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        if let ([(s2, c2)], Some(r)) = (&same_use[..], row)
+            && let Ok(n) = c2.number.trim().parse::<u32>()
+        {
+            let poles: Vec<String> = (0..c2.poles.clamp(1, 3)).map(|i| (n + 2 * i).to_string()).collect();
+            let circuit = format!("{}-{}", s2.panel.trim(), poles.join(","));
+            dv.circuit_basis = format!(
+                "panel {} schedule ({}) circuit {}: {} serves this on level {}; the typical view {} letters {} (panel {p} circuit {}: {}, another floor's): a typical view's label gives way to its room's own floor",
+                s2.panel.trim(),
+                s2.source.trim(),
+                c2.number.trim(),
+                c2.description.trim(),
+                dv.level.trim(),
+                dv.template,
+                dv.circuit.trim(),
+                r.number.trim(),
+                r.description.trim()
+            );
+            dv.circuit = circuit;
+            took += 1;
+            continue;
+        }
+        {
             let row_text = row.map(|c| format!(" (its row {}: {})", c.number.trim(), c.description.trim())).unwrap_or_default();
             dv.circuit_review = format!(
                 "the typical view {} letters it {}: panel {p}'s schedule{row_text} names neither level {} nor room {}, and level {}'s own plans put nothing on panel {p}; the room's panel and circuit are asked (the room's floor plan tags its devices on that floor's panel)",
@@ -11862,7 +11916,7 @@ fn template_label_review(
             asked += 1;
         }
     }
-    asked
+    (took, asked)
 }
 
 /// What reading the typical-room plans' unread marks gave (Q6159): the devices added, each typical
@@ -35371,24 +35425,28 @@ mod tests {
             schedule("P1", vec![row("4", "SECOND FLOOR STORAGE EXHAUST FAN"), row("15", "SECOND FLOOR STORAGE RECEPTACLE")]),
             schedule("P2", vec![row("19", "THIRD FLOOR STORAGE RECEPTACLE"), row("1", "THIRD FLOOR STORAGE EXHAUST FAN")]),
         ];
-        let asked = template_label_review(&mut stamped.devices, &floor, &schedules);
+        let got = template_label_review(&mut stamped.devices, &floor, &schedules);
         let review = |room: &str, tag: &str| {
             stamped.devices.iter().find(|d| d.room == room && d.tag == tag).map(|d| d.circuit_review.clone()).unwrap_or_default()
         };
-        // 201's labels are its own floor's rows; 301's receptacle took its floor's; 301's fan and
-        // 401's two are on a panel whose rows name another floor.
-        assert_eq!(asked, 3, "{:?}", stamped.devices.iter().map(|d| (&d.room, &d.tag, &d.circuit_review)).collect::<Vec<_>>());
+        // 201's labels are its own floor's rows; 301's receptacle took its floor plan's; 301's fan
+        // takes level 3's row for the same use; 401's two have no row of their level: asked.
+        assert_eq!(got, (1, 2), "{:?}", stamped.devices.iter().map(|d| (&d.room, &d.tag, &d.circuit, &d.circuit_review)).collect::<Vec<_>>());
         assert!(review("201", "6-20R").is_empty() && review("201", "EF").is_empty());
-        assert!(review("301", "6-20R").is_empty());
+        assert_eq!((circuit(&stamped.devices, "201", "EF"), circuit(&stamped.devices, "301", "EF")), ("P1-4".to_string(), "P2-1".to_string()));
+        let fan = stamped.devices.iter().find(|d| d.room == "301" && d.tag == "EF").map(|d| d.circuit_basis.clone()).unwrap_or_default();
+        assert!(fan.contains("THIRD FLOOR STORAGE EXHAUST FAN") && fan.contains("P1-4"), "{fan}");
+        assert!(review("301", "6-20R").is_empty() && review("301", "EF").is_empty());
         let r = review("401", "6-20R");
         assert!(r.contains("P1-15,17") && r.contains("level Level 4") && r.contains("SECOND FLOOR STORAGE RECEPTACLE"), "{r}");
-        assert!(!review("301", "EF").is_empty() && !review("401", "EF").is_empty());
+        assert!(!review("401", "EF").is_empty());
+        assert_eq!(row_use_words("SECOND FLOOR STORAGE EXHAUST FAN"), row_use_words("STORAGE EXHAUST FAN - 3RD FLOOR"));
         // A typical panel (one in every room) supports its view's labels anywhere; a panel with no
         // schedule read is not judged.
         let mut again = stamp_typical_rooms(s.doc().unwrap(), &job, &floor, &unplaced).devices;
         let typical = vec![cadaddy_walk3d::PanelSchedule { typical_of: Some(3), ..schedule("P1", vec![row("15", "RECEPTACLE")]) }];
-        assert_eq!(template_label_review(&mut again, &floor, &typical), 0);
-        assert_eq!(template_label_review(&mut again, &floor, &[]), 0);
+        assert_eq!(template_label_review(&mut again, &floor, &typical), (0, 0));
+        assert_eq!(template_label_review(&mut again, &floor, &[]), (0, 0));
     }
 
     /// Q6247: a typical room's view puts a keynote by a receptacle (`30A/2P RECEPTACLE FOR PTAC
