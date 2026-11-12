@@ -33,6 +33,7 @@ use crate::{Result, Session};
 
 pub(crate) mod boxclear;
 pub(crate) mod build;
+pub(crate) mod splices;
 
 /// The rules data.
 const RULES: &str = include_str!("mepatoms.json");
@@ -319,6 +320,8 @@ pub(crate) struct AtomRules {
     pub colors: BTreeMap<String, BTreeMap<String, String>>,
     pub colors_source: String,
     pub phase_source: String,
+    /// The same on a single-phase panel (A and B only).
+    pub phase_single_source: String,
     pub offset_max_ft: f64,
     pub joint_tol_in: f64,
     /// Why one circuit's runs along one route are one raceway (Q6245).
@@ -339,6 +342,8 @@ pub(crate) struct AtomRules {
     pub feeder_conductors: BTreeMap<String, ConductorKind>,
     pub feeder_conductors_source: String,
     pub luminaire_box: LuminaireBox,
+    /// The splices in each box and their connectors (Q6349).
+    pub splices: splices::SpliceRules,
 }
 
 /// The rules data, read once.
@@ -1044,6 +1049,33 @@ pub(crate) fn large_conductors(makeup: &str, min_awg: u32) -> bool {
     conductor_parts(makeup).iter().any(|(_, s, g)| !g && large_awg(s, min_awg))
 }
 
+/// The phase a panel circuit lands on, on a panel of `phases` (1: single phase, its rows
+/// alternate A and B; anything else three phase, [`phase_of`]).
+pub(crate) fn phase_on(circuit: u32, phases: u32) -> &'static str {
+    if phases == 1 { if (circuit.saturating_sub(1) / 2).is_multiple_of(2) { "A" } else { "B" } } else { phase_of(circuit) }
+}
+
+/// A panel's phase count from its `volts/phase` text (`120/208V, 1PH, 3W`, `208Y/120V 3PH 4W`,
+/// `120/240V`): 1 when it says single phase (`1PH`, `1 PH`, `1Ø`, `1-PHASE`, `SINGLE PHASE`) or
+/// is a 120/240 V system naming no phase count, 3 when it says three phase or is any other
+/// system; None when the text names neither a voltage nor a phase count.
+pub(crate) fn phases_in(text: &str) -> Option<u32> {
+    let u: String = text.to_ascii_uppercase().chars().filter(|c| !c.is_whitespace() && *c != '-').collect();
+    let says = |n: char| ["PH", "Ø", "ø", "\u{3a6}", "\u{3c6}"].iter().any(|w| u.contains(&format!("{n}{w}")));
+    if says('1') || u.contains("SINGLEPHASE") {
+        return Some(1);
+    }
+    if says('3') || u.contains("THREEPHASE") {
+        return Some(3);
+    }
+    let (ln, ll) = super::conduitroute::size::system_volts(text);
+    match (ln, ll) {
+        (Some(a), Some(b)) if (a - 120.0).abs() < 1.0 && (b - 240.0).abs() < 1.0 => Some(1),
+        (None, None) => None,
+        _ => Some(3),
+    }
+}
+
 /// The phase of a panel circuit by its number (standard bussing: 1-2 A, 3-4 B, 5-6 C).
 pub(crate) fn phase_of(circuit: u32) -> &'static str {
     match (circuit.saturating_sub(1) / 2) % 3 {
@@ -1129,7 +1161,15 @@ pub(crate) fn cable_pieces(path: &[Vec3], upf: f64, kind: &str, cr: &CableRule, 
 /// phases; `voltage`: `120/208`.
 pub(crate) fn wires(path: &[Vec3], upf: f64, makeup: &str, circuits: &[u32], voltage: &str, rules: &AtomRules) -> Vec<Atom> {
     let m = rules.makeup_ft.max(0.0);
-    wires_with(path, upf, makeup, circuits, voltage, rules, &WireOpts { kind: None, makeup_ft: [m, m], makeup_source: &rules.makeup_source })
+    wires_with(
+        path,
+        upf,
+        makeup,
+        circuits,
+        voltage,
+        rules,
+        &WireOpts { kind: None, makeup_ft: [m, m], makeup_source: &rules.makeup_source, phases: 3 },
+    )
 }
 
 /// How a run's conductors differ from a branch circuit's: what they are bought as (`None`: THHN
@@ -1138,6 +1178,8 @@ pub(crate) struct WireOpts<'a> {
     pub kind: Option<(&'a ConductorKind, &'a str)>,
     pub makeup_ft: [f64; 2],
     pub makeup_source: &'a str,
+    /// The panel's phases (1: single phase, A and B only; else three phase).
+    pub phases: u32,
 }
 
 /// [`wires`], the conductors' kind and each end's makeup as `opts` say.
@@ -1159,7 +1201,8 @@ pub(crate) fn wires_with(
     let ends = opts.makeup_ft.map(|m| if m.is_finite() { m.max(0.0) } else { 0.0 });
     let len = path_ft(&pts, upf) + ends[0] + ends[1];
     let makeup_text = if (ends[0] - ends[1]).abs() < 1e-9 { format!("{}", ends[0]) } else { format!("{} + {}", ends[0], ends[1]) };
-    let mut phases: Vec<&str> = circuits.iter().map(|c| phase_of(*c)).collect();
+    let mut phases: Vec<&str> = circuits.iter().map(|c| phase_on(*c, opts.phases)).collect();
+    let phase_src = if opts.phases == 1 { &rules.phase_single_source } else { &rules.phase_source };
     if phases.is_empty() {
         phases.push("A");
     }
@@ -1207,7 +1250,7 @@ pub(crate) fn wires_with(
                 } else {
                     format!("phase {role}")
                 },
-                rules.phase_source.clone(),
+                phase_src.clone(),
             ));
             w.extra.push(("makeup_ft", makeup_text.clone(), opts.makeup_source.to_string()));
             out.push(w);
@@ -2263,7 +2306,7 @@ mod tests {
     fn a_feeders_wires_are_of_its_material_with_the_makeup_each_end_takes() {
         let rl = rules();
         let al = rl.feeder_conductors.get("al").expect("aluminum");
-        let opts = WireOpts { kind: Some((al, "rule")), makeup_ft: [3.0, 0.0], makeup_source: "gear" };
+        let opts = WireOpts { kind: Some((al, "rule")), makeup_ft: [3.0, 0.0], makeup_source: "gear", phases: 3 };
         let w = wires_with(&line(20.0), 12.0, "3#4/0 + 1#4/0 + 1#4G", &[1, 3, 5], "120/208", rl, &opts);
         assert_eq!(w.len(), 5);
         assert!(w.iter().all(|a| (a.length_ft - 23.0).abs() < 1e-9 && a.item == "XHHW aluminum" && a.ty == "XHHW-2"), "{w:?}");
@@ -2413,6 +2456,40 @@ mod tests {
         assert_eq!(phase_of(4), "B");
         assert_eq!(phase_of(6), "C");
         assert_eq!(phase_of(7), "A");
+    }
+
+    #[test]
+    fn a_single_phase_panels_circuits_alternate_a_and_b() {
+        // Q6343: a 1-phase panel has no phase C.
+        let on1: Vec<&str> = (1..=12).map(|n| phase_on(n, 1)).collect();
+        assert_eq!(on1, vec!["A", "A", "B", "B", "A", "A", "B", "B", "A", "A", "B", "B"]);
+        let on3: Vec<&str> = (1..=7).map(|n| phase_on(n, 3)).collect();
+        assert_eq!(on3, vec!["A", "A", "B", "B", "C", "C", "A"]);
+        for (text, want) in [
+            ("120/208V, 1PH, 3W", Some(1)),
+            ("120/208 V 1 PH 3 W", Some(1)),
+            ("120/240V 1Ø 3W", Some(1)),
+            ("120/240V", Some(1)),
+            ("SINGLE PHASE 120/208", Some(1)),
+            ("1-PHASE", Some(1)),
+            ("208Y/120V, 3PH, 4W", Some(3)),
+            ("240/120V 3PH 4W", Some(3)),
+            ("480Y/277", Some(3)),
+            ("120/208", Some(3)),
+            ("SURFACE", None),
+            ("", None),
+        ] {
+            assert_eq!(phases_in(text), want, "{text}");
+        }
+        // The wires of circuits 5 and 11 on a single-phase panel: phase A and B, never C.
+        let r = rules();
+        let path = line(10.0);
+        let opts = WireOpts { kind: None, makeup_ft: [0.0, 0.0], makeup_source: "", phases: 1 };
+        let w = wires_with(&path, 12.0, "4#12 + 1#12G", &[5, 7], "120/208", r, &opts);
+        let roles: Vec<String> = w.iter().map(|a| a.extra.iter().find(|x| x.0 == "conductor").map_or(String::new(), |x| x.1.clone())).collect();
+        assert_eq!(roles, vec!["phase A", "phase B", "neutral", "neutral", "ground"]);
+        let src = w.first().and_then(|a| a.extra.iter().find(|x| x.0 == "conductor")).map(|x| x.2.clone()).unwrap_or_default();
+        assert!(src.contains("single-phase"), "{src}");
     }
 
     #[test]

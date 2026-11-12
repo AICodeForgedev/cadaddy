@@ -21,6 +21,9 @@
     "branch_box_joints": 3,
     "branch_weight": 0.5,
     "branch_source": "trade practice: a circuit's boxes are chained box to box (one raceway in, one out) while the chain stays within what its conductors reach (the drawings' wire-length table for its breaker and voltage, else 3 percent voltage drop, NEC 210.19(A) Informational Note 4); a chain past that reach is branched instead (the homerun's box feeding two ways, a box taking one in and up to two out, within its box fill, NEC 314.16), each box joined where it adds the least raceway plus half its way back, so the farthest box stays near the unit's own size; the conductors are then sized for the branched length",
+    "on_grade_stub_up_in": 18,
+    "floor_box_words": ["floor box", "floor_box", "floorbox", "floor outlet", "in-grade", "in grade"],
+    "on_grade_source": "trade practice: a floor box (a device set in the floor) on a slab on grade is fed from below the slab, never by raceway rising exposed through the room: buried raceway (the underground method) from the box to the nearest wall of its room, stubbed up 18 in in that wall, where the branch circuit's raceway above the floor takes it on; the keynote's under-slab conduit, where the plans call one, is that raceway",
     "roof_source": "trade practice: a roof level has no ceiling: its raceway runs exposed on the deck on roof supports (blocks or pipe stands on the membrane) about 4 in up, never under 7/8 in (NEC 310.15(B)(2): within 7/8 in of the roof a raceway in sunlight takes a 33 C temperature adder), its tiers no higher than a standard 14 in equipment curb; the alternative, under the deck in the top storey's ceiling space with a roof penetration at each unit, is the project's choice",
     "source": "company default: conduit 3 in above the ceiling, tiers 4 in apart up to the structure (12 in deep where the documents give none); homeruns by the corridor when the panel is 20 ft or more away; branches in the wall between boxes of one wall up to 12 ft apart; a drop blocked over its box rises in the wall up to 2 ft along it (6 in steps) where it is clear; trade practice: a unit's own receptacle under it (its keynote's), every way over its box blocked by the unit: the raceway leaves the box's side (1-1/2 in under its top, a side knockout) and runs along the wall under the unit, up to 4 ft, to rise clear of it"
   },
@@ -111,7 +114,17 @@
     "exposed_rooms": ["MECH", "ELEC", "STORAGE", "PUMP", "RISER", "BOILER", "MAINT", "JANITOR", "TRASH", "FIRE", "SPRINKLER", "UNFINISHED"],
     "minimum_size_in": 0.75,
     "minimum_source": "company default 3/4\" (NEC 358.20(A) allows 1/2\" EMT)",
-    "source": "the specification's wiring-methods table (MasterFormat 26 05 19) by area and use; raceway is EMT (26 05 33) unless the documents name another"
+    "source": "the specification's wiring-methods table (MasterFormat 26 05 19) by area and use; raceway is EMT (26 05 33) unless the documents name another",
+    "limited": {
+      "types": {
+        "FPLP": ["plenum", "riser", "general"], "FPLR": ["riser", "general"], "FPL": ["general"],
+        "CL3P": ["plenum", "riser", "general"], "CL2P": ["plenum", "riser", "general"],
+        "CL3R": ["riser", "general"], "CL2R": ["riser", "general"], "CL3": ["general"], "CL2": ["general"],
+        "CMP": ["plenum", "riser", "general"], "CMR": ["riser", "general"], "CMG": ["general"], "CM": ["general"]
+      },
+      "source": "NEC 760.154 and Table 760.154 (power-limited fire alarm cable), 722.135 (Class 2 and Class 3 cable), 800.113 (communications cable): a cable goes in the spaces its listing allows, a higher listing (plenum, then riser) in place of a lower; these circuits are wired by their own article, not the power wiring-methods table (NEC 760.3, 725.3)",
+      "raceway_source": "NEC 760.154 / 722.135 / 800.113: limited-energy cable is permitted in a raceway of a wiring method of Chapter 3"
+    }
   },
   "firestop": {
     "item": "Firestop system, through-penetration (UL listed)",

@@ -14,6 +14,7 @@
     {"what": "floor_box", "trade": "E", "words": ["FLOOR BOX"]},
     {"what": "ev_charger", "trade": "E", "words": ["EV CHARG", "ELECTRIC VEHICLE"]},
     {"what": "site_power", "trade": "E", "words": ["SITE LIGHT", "POLE LIGHT", "MONUMENT SIGN", "GATE OPERATOR"]},
+    {"what": "branch_below", "trade": "E", "words": ["BRANCH CIRCUIT", "HOMERUN", "HOME RUN", "HOME-RUN"]},
     {"what": "water", "trade": "P", "words": ["WATER"]},
     {"what": "sanitary", "trade": "P", "words": ["SANITARY", "WASTE", "SEWER"]},
     {"what": "vent", "trade": "P", "words": ["VENT"]},

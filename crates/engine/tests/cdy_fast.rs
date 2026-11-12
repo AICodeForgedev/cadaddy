@@ -422,5 +422,19 @@ fn the_building_models_reads_need_no_sheet_and_answer_the_same() {
     assert!(!o.needs_whole_set("bim.tree") && !o.needs_whole_set("mep.list"));
     assert_eq!(ask(&mut o), want, "the same model tree with the sheets out of memory");
     assert!(o.has_parked_sheets(), "and nothing was loaded for it");
+    // The 3D view's own settings and the BIM view's state (read by the view whenever the
+    // drawing changes): a whole-set load there changes the drawing, and so would never end.
+    for c in ["bim.view", "bim.look", "view.bim3d", "view.fidelity", "view.dir", "vpoint", "vscurrent"] {
+        assert!(!o.needs_whole_set(c), "{c} loads the whole set");
+    }
+    let view = |s: &mut Session| {
+        s.execute("bim.look", &json!({ "on": true })).unwrap();
+        s.execute("vscurrent", &json!({ "style": "shaded" })).unwrap();
+        s.execute("vpoint", &json!({ "azimuth": 225.0, "elevation": 30.0 })).unwrap();
+        s.execute("view.fidelity", &json!({ "level": "building" })).unwrap();
+        s.execute("bim.view", &json!({})).unwrap()
+    };
+    assert_eq!(view(&mut o), view(&mut s), "the same BIM view with the sheets out of memory");
+    assert!(o.has_parked_sheets(), "and nothing was loaded for it");
     let _ = std::fs::remove_dir_all(&dir);
 }

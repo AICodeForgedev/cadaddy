@@ -821,7 +821,7 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     let _ = cadaddy_engine::cmd::lightbake::current(&mut app.session);
     let st = app.session.state().ok()?;
     let key = SceneKey { doc: Arc::as_ptr(&st.doc) as usize, revision: st.revision, band, lightmap: st.lightmap_rev, fourd: app.fourd };
-    let mut doc = Arc::clone(&st.doc);
+    let doc = Arc::clone(&st.doc);
     let shade_st = &mut app.canvas.shade;
     if shade_st.model.as_ref().is_some_and(|(k, _)| *k == key) {
         shade_st.stats.building = None;
@@ -830,28 +830,16 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     let tcol = crate::theme::Tokens::get().canvas;
     let bg = Rgb(tcol.r(), tcol.g(), tcol.b());
     let tol = 2f64.powi(band);
-    // Read section box planes from coordination state for 3D clipping.
-    let crs = cadaddy_engine::cmd::coordination::coord_render_state(&doc);
-    let sbox_planes = crs.sbox_planes();
-    // The BIM view: only the built model, in trade colours, the shell ghosted; drawn in
-    // fidelity tiers.
-    let mut bim = false;
-    if let Some(d) = cadaddy_engine::cmd::bimlook::display(&doc) {
-        doc = Arc::new(d);
-        bim = true;
-    }
-    if let Some(f) = key.fourd
-        && let Ok((staged, _)) = cadaddy_engine::cmd::fourd::staged(&doc, f.day, f.ghost)
-    {
-        doc = Arc::new(staged);
-    }
     // A build for another key is dropped (it finishes in the background and is ignored).
     if shade_st.pending.as_ref().is_some_and(|p| p.key != key) {
         shade_st.pending = None;
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // What a build needs is worked out when one starts, not on every frame it runs for (the
+        // BIM view's drawing is a pass over the whole model).
         if shade_st.pending.is_none() {
+            let (doc, bim, sbox_planes) = shown(&doc, key.fourd);
             let (progress, total) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(1)));
             let (p2, t2) = (Arc::clone(&progress), Arc::clone(&total));
             let planes = sbox_planes.clone();
@@ -884,11 +872,35 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     }
     #[cfg(target_arch = "wasm32")]
     {
+        let (doc, bim, sbox_planes) = shown(&doc, key.fourd);
         let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
         let started = web_time::Instant::now();
         let m = Arc::new(build3(&doc, bim, tol, bg, &p, &t, &sbox_planes));
         Some(finish(app, key, m, started))
     }
+}
+
+/// The drawing a 3D model is built from, whether it is the BIM view's, and the section box's
+/// planes. The BIM view: only the built model, in trade colours, the shell ghosted, drawn in
+/// fidelity tiers; with a 4D day, as built on that day.
+fn shown(
+    doc: &Arc<cadaddy_doc::Drawing>,
+    fourd: Option<crate::fourdpalette::Shown>,
+) -> (Arc<cadaddy_doc::Drawing>, bool, Vec<cadaddy_doc::SectionPlane>) {
+    // Read section box planes from coordination state for 3D clipping.
+    let sbox_planes = cadaddy_engine::cmd::coordination::coord_render_state(doc).sbox_planes();
+    let mut doc = Arc::clone(doc);
+    let mut bim = false;
+    if let Some(d) = cadaddy_engine::cmd::bimlook::display(&doc) {
+        doc = Arc::new(d);
+        bim = true;
+    }
+    if let Some(f) = fourd
+        && let Ok((staged, _)) = cadaddy_engine::cmd::fourd::staged(&doc, f.day, f.ghost)
+    {
+        doc = Arc::new(staged);
+    }
+    (doc, bim, sbox_planes)
 }
 
 /// Keep a finished model and its numbers.

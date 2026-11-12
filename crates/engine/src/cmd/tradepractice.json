@@ -162,7 +162,7 @@
       "id": "E-UNCIRCUITED",
       "trade": "electrical",
       "fills": "a power device no document puts on a circuit",
-      "basis": "trade practice: a device the documents leave off every circuit goes on a spare circuit of the nearest panel of its level, its homerun along the plan's axes in the ceiling space to the panel (NEC 210.11: every outlet is on a branch circuit)",
+      "basis": "trade practice: a device the documents leave off every circuit is tied into its room's circuit of its kind (the nearest device of its kind in its room that the plans circuit); else it goes on a spare circuit of its room's own panel (the panel its room's circuits come from), else of the nearest panel of its level that is no other unit's own panel, its homerun along the plan's axes in the ceiling space to the panel (NEC 210.11: every outlet is on a branch circuit)",
       "reach_ft": 400.0,
       "default_size_in": 0.75
     },
@@ -170,7 +170,7 @@
       "id": "M-BRANCH-DUCT",
       "trade": "mechanical",
       "fills": "an air terminal no duct of its system reaches",
-      "basis": "trade practice: each diffuser, register or grille is taken off the nearest duct of its system by a round branch at right angles at the duct's height, then down to the terminal at its neck size",
+      "basis": "trade practice: each diffuser, register or grille is taken off the nearest duct of its system by a round branch at right angles at the duct's height (in the plenum over the ceiling it passes under: M-TERMINAL-CEILING), then down to the terminal at its neck size",
       "reach_ft": 60.0,
       "connect_reach_ft": 10.0,
       "sizes": [
@@ -196,6 +196,15 @@
       "trade": "mechanical",
       "fills": "a return grille no return duct of its floor reaches",
       "basis": "trade practice: a return grille the drawings leave unducted returns through the ceiling plenum to its unit (IMC 602 plenum); alternative: a ducted return the engineer may call for"
+    },
+    {
+      "id": "M-TERMINAL-CEILING",
+      "trade": "mechanical",
+      "fills": "the height of a ceiling air terminal and of the ducts with no height of their own that serve the ceilings: the terminal's face in the ceiling built over it (its room's ceiling as the reflected ceiling plans, unit RCPs, legend or sections give it, else derived), each duct with no drawn height (a default, an estimated route, a branch inferred to a terminal) in the plenum over the highest ceiling it passes under (numbers: clear_ft, how far over that ceiling the duct's bottom is at least; words: terminal_words name a terminal that is set in a ceiling, not_ceiling_words one that is not, a sidewall register or a floor or door grille)",
+      "basis": "trade practice: a ceiling diffuser, register or grille is set in the finished ceiling of the room it serves, its face flush with the ceiling (laid in the grid or framed in the board), never over it in the plenum or hanging under it; the ducts that serve it run in the plenum above that ceiling and drop to its neck; nothing hangs below a finished ceiling unless the documents call the space exposed (an area the reflected ceiling plans leave open to the structure: what is in it keeps its height); where no room's ceiling is built, the ceiling is the level's; a duct height the documents give stays (a clash below the ceiling is reported)",
+      "clear_ft": 0.25,
+      "terminal_words": ["DIFFUSER", "REGISTER", "GRILLE"],
+      "not_ceiling_words": ["SIDEWALL", "SIDE WALL", "WALL", "FLOOR", "DOOR", "UNDERCUT", "LOUVER"]
     },
     {
       "id": "A-CEILING-HEIGHT",
@@ -360,6 +369,12 @@
       "legend_words": ["BELOW FINISHED CEILING", "BELOW FIN. CEILING", "BELOW FIN CEILING", "BELOW FIN. CLG", "BELOW FIN CLG", "BELOW THE CEILING", "BELOW CEILING", "BELOW CLG", "BELOW CEIL", "BELOW CLNG"],
       "skip_kinds": ["equipment connection", "junction box", "plumbing fixture", "plumbing stack", "damper", "disconnect"],
       "skip_from": ["equipment", "site_work", "ceiling", "floor"]
+    },
+    {
+      "id": "E-SPLICES",
+      "trade": "electrical",
+      "fills": "the splice connectors in each box: no drawing shows them",
+      "basis": "trade practice: at every box the circuit's conductors are spliced where it continues (a pigtail to each device), each luminaire's leads spliced to its circuit, the grounds bundled with pigtails to the device and a metal box (NEC 250.148), each splice in a connector listed for its conductors (UL 486C)"
     },
     {
       "id": "E-CONN-AT-UNIT",
