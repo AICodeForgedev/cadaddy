@@ -73,9 +73,15 @@ fn room(s: &mut Session, name: &str, number: &str, [x0, y0, x1, y1]: [f64; 4]) {
 /// corridor; a common-area circuit LP1-1 under a lay-in ceiling, an electrical room's LP1-3.
 /// Gypsum ceilings everywhere else. `corridor_across`: a corridor drawn across the units' runs.
 fn building(dir: &std::path::Path, corridor_across: bool) -> Session {
+    building_opts(dir, corridor_across, false)
+}
+
+/// [`building`]; `lobby`: a common-area circuit LP1-5 concealed under the gypsum ceiling of a
+/// lobby (130), outside the units, the corridors and the service rooms.
+fn building_opts(dir: &std::path::Path, corridor_across: bool, lobby: bool) -> Session {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
-    let tags = vec![
+    let mut tags = vec![
         receptacle(1, 5.0, 5.0, "U-1"),
         receptacle(2, 12.0, 5.0, "U-1"),
         receptacle(3, 45.0, 5.0, "U-1"),
@@ -87,6 +93,14 @@ fn building(dir: &std::path::Path, corridor_across: bool) -> Session {
         circuit("circuit:L1:E-101:LP1-1", "LP1-1", "LP1"),
         circuit("circuit:L1:E-101:LP1-3", "LP1-3", "LP1"),
     ];
+    let mut lp1 = vec![
+        json!({"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1}),
+        json!({"number": "3", "description": "RECEPTACLES", "breaker": "20", "poles": 1}),
+    ];
+    if lobby {
+        tags.extend([receptacle(8, 82.0, -20.0, "LP1-5"), receptacle(9, 92.0, -20.0, "LP1-5"), circuit("circuit:L1:E-101:LP1-5", "LP1-5", "LP1")]);
+        lp1.push(json!({"number": "5", "description": "RECEPTACLES", "breaker": "20", "poles": 1}));
+    }
     let spec = json!({
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
@@ -101,7 +115,7 @@ fn building(dir: &std::path::Path, corridor_across: bool) -> Session {
             "panel_schedules": [
                 {"panel": "U", "typical_of": 2, "circuits": [{"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1}]},
                 {"panel": "DPA", "circuits": [{"number": "1", "description": "PANEL U (2 UNITS)", "breaker": "125", "poles": 2}]},
-                {"panel": "LP1", "circuits": [{"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1}, {"number": "3", "description": "RECEPTACLES", "breaker": "20", "poles": 1}]}
+                {"panel": "LP1", "circuits": lp1}
             ],
             "feeders": [
                 {"tag": "1", "from": "DPA", "to": "U", "phases": 2, "neutrals": 1, "grounds": 1, "size": "2/0", "ground_size": "4", "material": "al", "conduits": 1, "conduit_in": 2, "sets": 1, "source": "FEEDER SCHEDULE E-601"}
@@ -121,8 +135,11 @@ fn building(dir: &std::path::Path, corridor_across: bool) -> Session {
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
     s.execute("model.build", &json!({})).expect("build");
     // The rooms (first match wins): the electrical room, a corridor across the units' runs when
-    // asked, the units, the corridor along the feeders.
+    // asked, the lobby when asked, the units, the corridor along the feeders.
     room(&mut s, "Electrical", "105", [300.0, -560.0, 420.0, -400.0]);
+    if lobby {
+        room(&mut s, "Lobby", "130", [900.0, -400.0, 1250.0, -100.0]);
+    }
     if corridor_across {
         room(&mut s, "Corridor", "120", [-100.0, 300.0, 800.0, 500.0]);
     }
@@ -259,11 +276,58 @@ fn an_nm_option_the_spec_prefers_in_concealed_branch_circuits_is_allowed_now_and
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Renames the room element numbered `number` (its name and type), as a later read of the
+/// documents would.
+fn rename_room(s: &mut Session, number: &str, name: &str) {
+    let d = s.doc_mut().expect("doc");
+    let hs: Vec<_> = d
+        .model
+        .iter()
+        .filter(|e| e.common.layer == "A-AREA-ROOM" && e.common.xdata.iter().any(|t| t.value == format!("number:{number}")))
+        .map(|e| e.handle)
+        .collect();
+    assert!(!hs.is_empty(), "room {number}");
+    for h in hs {
+        let _ = d.modify_entity(h, |e| {
+            for t in e.common.xdata.iter_mut() {
+                if t.value.starts_with("name:") {
+                    t.value = format!("name:{name}");
+                } else if t.value.starts_with("type:") {
+                    t.value = format!("type:{name}");
+                }
+            }
+        });
+    }
+}
+
 #[test]
-fn nm_proposed_through_a_corridor_fails_its_area() {
-    let dir = tmp("corridor");
+fn the_study_keeps_unit_circuits_through_a_corridor_as_designed_for_nm() {
+    // The units' circuits whose runs cross a corridor: NM is never used in common areas, so the
+    // study keeps them in raceway, by the same rule Validate places each cable piece with.
+    let dir = tmp("through");
     let mut s = building(&dir, true);
     let v = study(&mut s, &dir, json!({}));
+    let nm = v["scenarios"].as_array().and_then(|a| a.iter().find(|x| x["id"] == json!("nm_unit_branch"))).cloned().unwrap_or(Value::Null);
+    assert!(
+        nm["excluded"].as_array().is_some_and(|e| e.iter().any(|x| x["area"] == json!("common") && x["kept_as_designed"].as_u64().unwrap_or(0) >= 1)),
+        "{nm}"
+    );
+    let fs = screen(&mut s, json!({"value_engineering": v}));
+    let a = finding(&fs, "G-VE-AREA", "nm_unit_branch");
+    assert_ne!(a["verdict"], json!("fail"), "{a}");
+    assert_eq!(finding(&fs, "G-VE-AREA", "mc_concealed_branch")["verdict"], json!("pass"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn nm_proposed_through_a_corridor_fails_its_area() {
+    // A study made while the room across the units' runs wasn't known as a corridor; Validate
+    // reads the room as it is now.
+    let dir = tmp("corridor");
+    let mut s = building(&dir, true);
+    rename_room(&mut s, "120", "Lounge");
+    let v = study(&mut s, &dir, json!({}));
+    rename_room(&mut s, "120", "Corridor");
     let fs = screen(&mut s, json!({"value_engineering": v}));
     let a = finding(&fs, "G-VE-AREA", "nm_unit_branch");
     assert_eq!(a["verdict"], json!("fail"), "{a}");
@@ -271,6 +335,53 @@ fn nm_proposed_through_a_corridor_fails_its_area() {
     assert!(a["measured"]["in_never_areas"]["common"]["rooms"].as_array().is_some_and(|r| r.contains(&json!("Corridor 120"))), "{a}");
     // MC may pass through the corridor.
     assert_eq!(finding(&fs, "G-VE-AREA", "mc_concealed_branch")["verdict"], json!("pass"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn nm_is_never_offered_for_a_common_area_circuit_and_validate_reads_the_same_rule() {
+    // A common-area circuit concealed under gypsum, in a building and a specification that allow
+    // NM (Type V, §D lists it): Validate's area rule (rules data: NM never in common areas) keeps
+    // it as designed, and the study must tier NM there by that same rule.
+    let dir = tmp("common");
+    let mut s = building_opts(&dir, false, true);
+    let v = study(&mut s, &dir, json!({}));
+    let sc = |id: &str| v["scenarios"].as_array().and_then(|a| a.iter().find(|x| x["id"] == json!(id))).cloned().unwrap_or(Value::Null);
+    let named = |x: &Value| {
+        x["quantity"]["named"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|n| n["label"].as_str().map(str::to_string)).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    // The lobby's circuit is a live common, concealed one: MC takes it.
+    assert!(named(&sc("mc_concealed_branch")).contains(&"LP1-5".to_string()), "{}", sc("mc_concealed_branch"));
+    let nmc = sc("nm_common_branch");
+    assert_eq!(nmc["tier"], json!("not_allowed"), "{nmc}");
+    assert!(nmc["why"].as_str().is_some_and(|w| w.contains("G-VE-AREA") && w.contains("common")), "{nmc}");
+    assert_eq!(nmc["quantity"]["items"], json!(0), "{nmc}");
+    assert!(nmc.get("model").is_none_or(Value::is_null), "no NM scenario modelled in common areas: {nmc}");
+    assert!(
+        nmc["excluded"]
+            .as_array()
+            .is_some_and(|e| e.iter().any(|x| x["area"] == json!("common") && x["kept_as_designed"].as_u64().unwrap_or(0) >= 1)),
+        "{nmc}"
+    );
+    assert!(!named(&sc("nm_unit_branch")).contains(&"LP1-5".to_string()));
+    // The common area's group lists no NM option allowed now or needing an RFI.
+    let common = v["groups"]
+        .as_array()
+        .and_then(|g| g.iter().find(|g| g["kind"] == json!("branch") && g["area"] == json!("common")))
+        .cloned()
+        .unwrap_or(Value::Null);
+    for t in ["allowed_now", "needs_rfi"] {
+        assert!(common[t].as_array().is_some_and(|a| !a.iter().any(|x| x.as_str().is_some_and(|x| x.starts_with("nm_")))), "{t}: {common}");
+    }
+    assert!(common["not_allowed"].as_array().is_some_and(|a| a.contains(&json!("nm_common_branch"))), "{common}");
+    // Validate on the same study and model: no option's cable where its method is never used.
+    let fs = screen(&mut s, json!({"value_engineering": v.clone()}));
+    let area: Vec<&Value> = fs.iter().filter(|f| f["rule"] == json!("G-VE-AREA")).collect();
+    assert!(!area.is_empty());
+    assert!(area.iter().all(|f| f["verdict"] != json!("fail")), "{area:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

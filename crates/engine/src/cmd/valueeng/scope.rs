@@ -32,6 +32,9 @@ pub(crate) struct Area {
     pub base: String,
     pub flags: BTreeSet<String>,
     pub rooms: BTreeSet<String>,
+    /// The areas its pieces pass through by their rooms whatever its own (an exposed room, a
+    /// corridor: Validate's G-VE-AREA placing), `exposed` or `common`.
+    pub through: BTreeSet<String>,
 }
 
 /// One branch circuit or feeder as routed.
@@ -261,6 +264,7 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
     let rated_corr = corridors_rated(sp, facts);
     let corridor_words = rules.areas.get("rated_corridor").map(|a| a.words.clone()).unwrap_or_default();
     let plenum_words = rules.areas.get("plenum").map(|a| a.words.clone()).unwrap_or_default();
+    let by_room = super::super::validate_value::RoomAreas::new();
     // Penetrations of rated walls: level, circuit (a homerun's circuits joined), where.
     let mut pens: Vec<(String, String, Vec2)> = Vec::new();
     for p in report["penetrations"].as_array().into_iter().flatten().take(MAX_PIECES) {
@@ -384,6 +388,10 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             if !p.room.is_empty() {
                 a.rooms.insert(p.room.clone());
                 let info = rooms.get(&p.room.to_ascii_uppercase()).and_then(|v| v.iter().find(|r| r.level.eq_ignore_ascii_case(level)).or(v.first()));
+                let named = info.map_or_else(|| p.room.clone(), |i| format!("{} {}", i.name, p.room));
+                if let Some(x) = by_room.of(&named) {
+                    a.through.insert(x.to_string());
+                }
                 if let Some(info) = info {
                     if has(&info.name, &corridor_words) {
                         corridor = true;
@@ -698,6 +706,10 @@ pub(crate) fn takes(alt: &Alternative, it: &Item) -> std::result::Result<(), Str
     }
     if alt.excluded_areas.contains_key(&it.area.base) {
         return Err(it.area.base.clone());
+    }
+    // A room it passes through where its cable is never used (Validate's G-VE-AREA rule).
+    if let Some(a) = it.area.through.iter().find(|a| alt.never.contains_key(*a)) {
+        return Err(a.clone());
     }
     // Only what is designed in raceway changes.
     let raceway = mepatoms::rules().raceway_named(&it.method).is_some() || it.method.is_empty();

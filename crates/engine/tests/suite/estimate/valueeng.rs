@@ -190,6 +190,8 @@ fn the_alternatives_are_tiered_from_the_code_sheet_the_spec_and_the_rooms() {
     };
     let nmc = scenario(&v, "nm_common_branch");
     assert!(!named(nmc).contains(&"LP1-1".to_string()), "{nmc}");
+    // NM is never used in common areas (Validate's G-VE-AREA rule): never offered there.
+    assert_eq!(nmc["tier"], json!("not_allowed"), "{nmc}");
     assert!(
         nmc["excluded"]
             .as_array()

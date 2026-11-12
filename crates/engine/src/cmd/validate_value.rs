@@ -421,6 +421,7 @@ struct Places<'a> {
     sp: &'a BuildingSpec,
     upf: f64,
     data: &'a Data,
+    by_room: RoomAreas,
 }
 
 impl<'a> Places<'a> {
@@ -484,7 +485,7 @@ impl<'a> Places<'a> {
             .collect();
         circuit_area.extend(homeruns);
         let lowest_z = sp.levels.iter().filter(|l| l.elevation_ft.is_finite()).map(|l| l.elevation_ft * upf).min_by(f64::total_cmp);
-        Places { rooms, beside, circuit_area, lowest_z, sp, upf, data }
+        Places { rooms, beside, circuit_area, lowest_z, sp, upf, data, by_room: RoomAreas::of_data(data) }
     }
 
     /// The room holding a plan point on a level.
@@ -611,8 +612,7 @@ impl<'a> Places<'a> {
         // The area: an exposed room or a corridor as the room says; else the circuit's (a typical
         // room's circuit is a unit's); else the room's words.
         pl.area = match (room, circuit) {
-            (Some(r), _) if has(r, &mr.exposed_rooms) => "exposed",
-            (Some(_), _) if pl.flags.contains("corridor") => "common",
+            (Some(r), _) if self.by_room.of(r).is_some() => self.by_room.of(r).unwrap_or("common"),
             (_, Some("unit")) => "unit",
             (_, Some("exposed")) => "exposed",
             (_, Some(_)) => "common",
@@ -660,6 +660,43 @@ impl Sc<'_> {
 }
 
 /// The method key a cable stands for (`NM` → `nm`).
+/// The areas a cable's method is never proposed in, with why (G-VE-AREA's `never` table): the
+/// one table the value-engineering study tiers and scopes its alternatives by too, so the study
+/// and Validate can't disagree. Empty for a cable with no method or no row.
+pub(crate) fn never_areas(cable: &str) -> BTreeMap<String, String> {
+    let d = data();
+    method_of(&d, cable).and_then(|m| d.never.get(&m).cloned()).unwrap_or_default()
+}
+
+/// The words that put a room in an area whatever its circuit's (G-VE-AREA's placing): an
+/// exposed room (the router's words) is `exposed`, a corridor `common`. The value-engineering
+/// study scopes its alternatives by the same words.
+pub(crate) struct RoomAreas {
+    exposed: Vec<String>,
+    corridor: Vec<String>,
+}
+
+impl RoomAreas {
+    pub(crate) fn new() -> Self {
+        Self::of_data(&data())
+    }
+
+    fn of_data(d: &Data) -> Self {
+        RoomAreas { exposed: super::conduitroute::rules().methods.exposed_rooms.clone(), corridor: d.words.corridor.clone() }
+    }
+
+    /// The area a room's name puts a piece in, none when the circuit's area holds.
+    pub(crate) fn of(&self, room: &str) -> Option<&'static str> {
+        if has(room, &self.exposed) {
+            Some("exposed")
+        } else if has(room, &self.corridor) {
+            Some("common")
+        } else {
+            None
+        }
+    }
+}
+
 fn method_of(data: &Data, cable: &str) -> Option<String> {
     let up = cable.trim().to_ascii_uppercase();
     data.cables.get(&up).cloned().or_else(|| data.cables.iter().find(|(k, _)| up.starts_with(k.as_str())).map(|(_, v)| v.clone()))
