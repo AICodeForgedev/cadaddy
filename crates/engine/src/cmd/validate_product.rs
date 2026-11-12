@@ -21,7 +21,9 @@
 //! (a GFCI one there is double protection: `fail`). Where the location needs GFCI (the plan tags
 //! it so, it is within reach of a sink, or its room or circuit is a place the rules list) and the
 //! breaker isn't GFCI, the receptacle must be a GFCI device or on the load side of one on the same
-//! circuit (a GFCI receptacle on that circuit nearer its panel), which the finding names. An
+//! circuit, which the finding names: upstream of it on its routed circuit (the route's stored
+//! wiring order, line to load: Q6551); only a circuit not routed falls back to a GFCI receptacle
+//! on that circuit nearer its panel. An
 //! unknown circuit or breaker type is `unsure` ("breaker type unknown"), never a pass. A finding
 //! cites the breaker's schedule row as well as the device.
 //!
@@ -1344,6 +1346,8 @@ fn gfci_checks(inp: &Input, r: &Effective, gf: &CodeRule, items: &[Lit], out: &m
     // Where each panel element is (by handle, and by its tag on a level).
     let panels: Vec<&Lit> = items.iter().filter(|it| validate_kinds::in_family(it.kind, "panel") || it.kind == "panel").collect();
     let at_of: HashMap<String, [f64; 2]> = items.iter().map(|it| (it.handle.to_ascii_uppercase(), it.at)).collect();
+    // The routed circuits' wiring order (Q6551): who is upstream of whom.
+    let wiring = super::conduitroute::Wiring::stored(inp.d);
     let mut facts: Vec<Gf> = Vec::new();
     for it in items.iter().filter(|it| receptacle(it)) {
         let own = Own::of(inp.d, it);
@@ -1439,96 +1443,143 @@ fn gfci_checks(inp: &Input, r: &Effective, gf: &CodeRule, items: &[Lit], out: &m
                         format!("GFCI protection ({needs})"),
                     ),
                     Some(false) => {
-                        // On the load side of a GFCI receptacle of the same circuit, nearer its panel.
-                        let mine = f.panel_at.map(|p| (it.at[0] - p[0]).hypot(it.at[1] - p[1]));
-                        let same: Vec<&Gf> = facts
-                            .iter()
-                            .enumerate()
-                            .filter(|(j, g)| *j != i && g.circuit.is_some() && g.circuit == f.circuit && g.device.0 == Some(true))
-                            .map(|(_, g)| g)
-                            .collect();
-                        let up = match (mine, f.panel_at) {
-                            (Some(d0), Some(p)) => same
-                                .iter()
-                                .map(|g| ((g.it.at[0] - p[0]).hypot(g.it.at[1] - p[1]), g))
-                                .filter(|(dd, _)| dd.is_finite() && *dd < d0)
-                                .min_by(|a, b| a.0.total_cmp(&b.0))
-                                .map(|(_, g)| *g),
-                            _ => None,
-                        };
-                        // The whole circuit (its panel and number, whatever room each device is
-                        // in): the GFCI receptacle its own record names as its protector (the
-                        // build's rule), else the one nearer its panel.
-                        let wide = || -> Option<&Gf> {
-                            let on_wire: Vec<&Gf> = facts
+                        // Its circuit as routed (Q6551): protected only by a GFCI receptacle
+                        // upstream of it on the route's wiring (line to load), never by distance.
+                        let routed_up = cadaddy_doc::Handle::parse_hex(it.handle).and_then(|h| wiring.upstream(h));
+                        if let Some(up) = routed_up {
+                            let g = up.iter().find_map(|h| {
+                                let hx = h.hex();
+                                facts.iter().find(|g| g.device.0 == Some(true) && g.it.handle.eq_ignore_ascii_case(&hx))
+                            });
+                            let room_of = |g: &Gf| g.it.room.map(|a| a.id.clone());
+                            match g {
+                                Some(g) if room_of(g) == room_of(f) => {
+                                    protector = Some(g.it.handle.to_string());
+                                    (
+                                        "pass",
+                                        format!(
+                                            "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {}, upstream of it on its routed circuit; GFCI is needed ({needs}); its breaker isn't GFCI ({row})",
+                                            g.it.handle
+                                        ),
+                                        format!("GFCI protection ({needs})"),
+                                    )
+                                }
+                                Some(g) => {
+                                    protector = Some(g.it.handle.to_string());
+                                    skip_why = Some("gfci: protected from a GFCI receptacle in another room".into());
+                                    let room = g.it.room.map(room_label).unwrap_or_else(|| "no room".into());
+                                    (
+                                        "unsure",
+                                        format!(
+                                            "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {}, upstream of it on its routed circuit, which is in {room}: protected, but whether its reset is readily accessible from here is for the judge (NEC 210.8); GFCI is needed ({needs}); its breaker isn't GFCI ({row})",
+                                            g.it.handle
+                                        ),
+                                        format!("GFCI protection with its reset at hand ({needs})"),
+                                    )
+                                }
+                                None => (
+                                    "fail",
+                                    format!(
+                                        "{kind_words} is a standard device ({dev_from}) where GFCI is needed ({needs}), its breaker isn't GFCI ({row}) and its routed circuit reaches it through no GFCI receptacle (the route as built, line to load)"
+                                    ),
+                                    format!(
+                                        "a GFCI receptacle, or one on the load side of a GFCI receptacle upstream of it on its circuit ({needs})"
+                                    ),
+                                ),
+                            }
+                        } else {
+                            // Not routed: on the load side of a GFCI receptacle of the same circuit,
+                            // nearer its panel.
+                            let mine = f.panel_at.map(|p| (it.at[0] - p[0]).hypot(it.at[1] - p[1]));
+                            let same: Vec<&Gf> = facts
                                 .iter()
                                 .enumerate()
-                                .filter(|(j, g)| *j != i && f.wire.is_some() && g.wire == f.wire && g.device.0 == Some(true))
+                                .filter(|(j, g)| *j != i && g.circuit.is_some() && g.circuit == f.circuit && g.device.0 == Some(true))
                                 .map(|(_, g)| g)
                                 .collect();
-                            let said: Vec<String> = tokens(dev_from).into_iter().collect();
-                            on_wire.iter().copied().find(|g| said.iter().any(|w| w.eq_ignore_ascii_case(g.it.handle))).or_else(|| {
-                                let (d0, p) = (mine?, f.panel_at?);
-                                on_wire
+                            let up = match (mine, f.panel_at) {
+                                (Some(d0), Some(p)) => same
                                     .iter()
-                                    .map(|g| ((g.it.at[0] - p[0]).hypot(g.it.at[1] - p[1]), *g))
+                                    .map(|g| ((g.it.at[0] - p[0]).hypot(g.it.at[1] - p[1]), g))
                                     .filter(|(dd, _)| dd.is_finite() && *dd < d0)
                                     .min_by(|a, b| a.0.total_cmp(&b.0))
+                                    .map(|(_, g)| *g),
+                                _ => None,
+                            };
+                            // The whole circuit (its panel and number, whatever room each device is
+                            // in): the GFCI receptacle its own record names as its protector (the
+                            // build's rule), else the one nearer its panel.
+                            let wide = || -> Option<&Gf> {
+                                let on_wire: Vec<&Gf> = facts
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(j, g)| *j != i && f.wire.is_some() && g.wire == f.wire && g.device.0 == Some(true))
                                     .map(|(_, g)| g)
-                            })
-                        };
-                        let across = if up.is_none() { wide() } else { None };
-                        let room_of = |g: &Gf| g.it.room.map(|a| a.id.clone());
-                        match (up, same.is_empty(), mine) {
-                            (None, _, _) if across.is_some_and(|g| room_of(g) == room_of(f)) => {
-                                let g = across.map_or("", |g| g.it.handle);
-                                protector = Some(g.to_string());
-                                (
-                                    "pass",
-                                    format!(
-                                        "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {g} on its circuit; GFCI is needed ({needs}); its breaker isn't GFCI ({row})"
-                                    ),
-                                    format!("GFCI protection ({needs})"),
-                                )
-                            }
-                            (None, _, _) if across.is_some() => {
-                                let (g, room) = across.map_or(("", None), |g| (g.it.handle, g.it.room.map(room_label)));
-                                protector = Some(g.to_string());
-                                let room = room.unwrap_or_else(|| "no room".into());
-                                skip_why = Some("gfci: protected from a GFCI receptacle in another room".into());
-                                (
+                                    .collect();
+                                let said: Vec<String> = tokens(dev_from).into_iter().collect();
+                                on_wire.iter().copied().find(|g| said.iter().any(|w| w.eq_ignore_ascii_case(g.it.handle))).or_else(|| {
+                                    let (d0, p) = (mine?, f.panel_at?);
+                                    on_wire
+                                        .iter()
+                                        .map(|g| ((g.it.at[0] - p[0]).hypot(g.it.at[1] - p[1]), *g))
+                                        .filter(|(dd, _)| dd.is_finite() && *dd < d0)
+                                        .min_by(|a, b| a.0.total_cmp(&b.0))
+                                        .map(|(_, g)| g)
+                                })
+                            };
+                            let across = if up.is_none() { wide() } else { None };
+                            let room_of = |g: &Gf| g.it.room.map(|a| a.id.clone());
+                            match (up, same.is_empty(), mine) {
+                                (None, _, _) if across.is_some_and(|g| room_of(g) == room_of(f)) => {
+                                    let g = across.map_or("", |g| g.it.handle);
+                                    protector = Some(g.to_string());
+                                    (
+                                        "pass",
+                                        format!(
+                                            "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {g} on its circuit; GFCI is needed ({needs}); its breaker isn't GFCI ({row})"
+                                        ),
+                                        format!("GFCI protection ({needs})"),
+                                    )
+                                }
+                                (None, _, _) if across.is_some() => {
+                                    let (g, room) = across.map_or(("", None), |g| (g.it.handle, g.it.room.map(room_label)));
+                                    protector = Some(g.to_string());
+                                    let room = room.unwrap_or_else(|| "no room".into());
+                                    skip_why = Some("gfci: protected from a GFCI receptacle in another room".into());
+                                    (
+                                        "unsure",
+                                        format!(
+                                            "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {g} on its circuit, which is in {room}: protected, but whether its reset is readily accessible from here is for the judge (NEC 210.8); GFCI is needed ({needs}); its breaker isn't GFCI ({row})"
+                                        ),
+                                        format!("GFCI protection with its reset at hand ({needs})"),
+                                    )
+                                }
+                                (Some(g), _, _) => {
+                                    protector = Some(g.it.handle.to_string());
+                                    (
+                                        "pass",
+                                        format!(
+                                            "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {} on the same circuit, nearer its panel; GFCI is needed ({needs}); its breaker isn't GFCI ({row})",
+                                            g.it.handle
+                                        ),
+                                        format!("GFCI protection ({needs})"),
+                                    )
+                                }
+                                (None, false, None) => (
                                     "unsure",
                                     format!(
-                                        "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {g} on its circuit, which is in {room}: protected, but whether its reset is readily accessible from here is for the judge (NEC 210.8); GFCI is needed ({needs}); its breaker isn't GFCI ({row})"
-                                    ),
-                                    format!("GFCI protection with its reset at hand ({needs})"),
-                                )
-                            }
-                            (Some(g), _, _) => {
-                                protector = Some(g.it.handle.to_string());
-                                (
-                                    "pass",
-                                    format!(
-                                        "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {} on the same circuit, nearer its panel; GFCI is needed ({needs}); its breaker isn't GFCI ({row})",
-                                        g.it.handle
+                                        "{kind_words} is a standard device on a circuit with a GFCI receptacle, but the model has no place for its panel: which is first on the circuit is not known; GFCI is needed ({needs}); {row}"
                                     ),
                                     format!("GFCI protection ({needs})"),
-                                )
+                                ),
+                                _ => (
+                                    "fail",
+                                    format!(
+                                        "{kind_words} is a standard device ({dev_from}) where GFCI is needed ({needs}), its breaker isn't GFCI ({row}) and no GFCI receptacle upstream on its circuit protects it"
+                                    ),
+                                    format!("a GFCI receptacle, or one on the load side of a GFCI receptacle on its circuit ({needs})"),
+                                ),
                             }
-                            (None, false, None) => (
-                                "unsure",
-                                format!(
-                                    "{kind_words} is a standard device on a circuit with a GFCI receptacle, but the model has no place for its panel: which is first on the circuit is not known; GFCI is needed ({needs}); {row}"
-                                ),
-                                format!("GFCI protection ({needs})"),
-                            ),
-                            _ => (
-                                "fail",
-                                format!(
-                                    "{kind_words} is a standard device ({dev_from}) where GFCI is needed ({needs}), its breaker isn't GFCI ({row}) and no GFCI receptacle upstream on its circuit protects it"
-                                ),
-                                format!("a GFCI receptacle, or one on the load side of a GFCI receptacle on its circuit ({needs})"),
-                            ),
                         }
                     }
                     None => (

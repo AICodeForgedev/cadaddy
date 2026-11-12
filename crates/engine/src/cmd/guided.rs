@@ -9136,7 +9136,29 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // spots, a keynote's ceiling box raised): their boxes and drops are cut again where they are.
     let raised = result["keynotes_ceiling_boxes_raised"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0));
     match super::conduitroute::follow_reseated(s, reseated + ceiling_moved + raised) {
-        Some(Ok(v)) => progress_line(&format!("  conduit rerouted to the reseated devices: {v}")),
+        Some(Ok(v)) => {
+            progress_line(&format!("  conduit rerouted to the reseated devices: {v}"));
+            // The GFCI decisions follow the circuits as now wired (Q6551): load side only where
+            // the new route still passes a GFCI receptacle upstream.
+            match s.execute("bim.coderules", &json!({})) {
+                Ok(c) => {
+                    let n = c.get("elements").and_then(Value::as_u64).unwrap_or(0);
+                    progress_line(&format!(
+                        "  code rules again on the final routes: {n} receptacles changed; GFCI by circuit {}",
+                        c.get("gfci").map(Value::to_string).unwrap_or_default()
+                    ));
+                    // A receptacle whose decision changed takes its product again (GFCI or standard).
+                    let specs = job_specs(job);
+                    if n > 0
+                        && !(specs.is_empty() && job.submittals.is_empty())
+                        && let Err(e) = s.execute("bim.products", &json!({"specs": specs, "sheets": spec_sheet_pages(job)}))
+                    {
+                        result["products_final_error"] = json!(e.to_string());
+                    }
+                }
+                Err(e) => result["coderules_final_error"] = json!(e.to_string()),
+            }
+        }
         Some(Err(e)) => result["conduit_reroute_error"] = json!(e.to_string()),
         None => {}
     }
