@@ -79,6 +79,9 @@ pub struct ModelRecord {
     /// The drawing as the build left it (shared, not copied): a plan unchanged since then needs
     /// no rebuild, even when the build was one step of a longer command.
     pub built: Option<BuiltDrawing>,
+    /// How its plan's rooms were read: as a job's rooms stage read them (a build in a job's later
+    /// stages), or traced as asked (`None`). A revision reads the plan's rooms now the same way.
+    pub(crate) rooms_settled: Option<super::perceive::geometry::SettledRooms>,
 }
 
 /// Most build records a drawing keeps (the states undo can return to name the one they came from).
@@ -336,10 +339,11 @@ fn record_with(s: &mut Session, g: &WallGen, rooms: Option<Vec<PlanItem>>, fresh
     let mut plan = plan_items(d, g);
     let made = made_of(d);
     plan.extend(rooms.unwrap_or_else(|| room_items(s)));
+    let rooms_settled = super::perceive::geometry::settled_rooms(s);
     if let Ok(st) = s.state_mut() {
         let doc = std::sync::Arc::clone(&st.doc);
         let built = Some(BuiltDrawing(std::sync::Arc::clone(&doc)));
-        st.model_records.push(ModelRecord { plan, made, built, ..ModelRecord::default() }, &doc, fresh);
+        st.model_records.push(ModelRecord { plan, made, built, rooms_settled, ..ModelRecord::default() }, &doc, fresh);
     }
 }
 
@@ -725,6 +729,20 @@ pub(crate) struct Revise {
 /// objects and echo a summary with the conflicts. The whole report (every list), also kept as
 /// the drawing's last revision when it found changes.
 pub(crate) fn revise(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Vec<PlanItem>, how: &Revise) -> Result<Value> {
+    // Against the record of a build: the plan's rooms now read as that build's were (a job's
+    // build, as its rooms stage read them), and so recorded again if it rebuilds.
+    let was = super::perceive::geometry::settled_rooms(s);
+    if how.by_handle {
+        let settled = s.state().ok().and_then(|st| st.model_records.for_state(&st.doc)).and_then(|r| r.rooms_settled.clone());
+        super::perceive::geometry::settle_rooms(s, settled);
+    }
+    let r = revise_rooms_settled(s, g, old, old_rooms, how);
+    super::perceive::geometry::settle_rooms(s, was);
+    r
+}
+
+/// [`revise`], the plan's rooms read as the drawing's room traces are settled now.
+fn revise_rooms_settled(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Vec<PlanItem>, how: &Revise) -> Result<Value> {
     let g = &rules_now(s, g);
     let now = plan_items(s.doc()?, g);
     let rooms_now = room_items(s);

@@ -1623,6 +1623,12 @@ fn annotation_kind(ann: &str) -> Option<ParamKind> {
     if tail.contains(['{', '[']) || tail.contains('|') && !matches!(first, "true" | "false") {
         return None;
     }
+    // A choice spelt out (`number or name`, `number or expression`) takes either: its first word
+    // says nothing of the value's type. `or null` only says it may be left out.
+    let mut words = ann.split_whitespace().skip(1);
+    if words.next() == Some("or") && words.next().is_none_or(|w| !w.trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case("null")) {
+        return None;
+    }
     match first {
         "number" | "n" | "count" | "degrees" | "deg" | "inches" | "feet" | "ft" | "mm" => Some(ParamKind::Number),
         "bool" | "boolean" => Some(ParamKind::Bool),
@@ -2363,6 +2369,11 @@ impl Session {
     /// Whether a script is running (its commands are the script's, not a person's).
     pub fn in_script(&self) -> bool {
         self.in_script
+    }
+    /// How many times the current drawing's plan was read for a room trace (none found in the
+    /// traces it remembers): a job's steps after its rooms stage read none.
+    pub fn room_traces(&self) -> usize {
+        self.state().map_or(0, |st| st.room_trace.reads())
     }
     pub fn new() -> Self {
         let mut s = Session::empty();

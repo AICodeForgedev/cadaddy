@@ -1058,7 +1058,8 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         .transpose()?;
     // A room: its outline on the plan, and its level.
     let mut room: Option<(Vec<Vec2>, String)> = None;
-    if let Some(name) = str_param(p, "room")
+    let wanted_room = number_or_name_param(p, "room");
+    if let Some(name) = wanted_room.as_deref()
         && let Some(r) = super::bspec::room_elements(d).into_iter().find(|r| {
             r.outline.len() >= 3
                 && (r.name.eq_ignore_ascii_case(name.trim()) || r.number.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name.trim())))
@@ -1066,7 +1067,7 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     {
         // A built room has its outline: no plan trace of every room.
         room = Some((r.outline.clone(), r.level.clone()));
-    } else if let Some(name) = str_param(p, "room") {
+    } else if let Some(name) = wanted_room.as_deref() {
         let plan = plan_session(s)?;
         let rs = rooms(&plan, &sp)?;
         let spec_room = sp.rooms.iter().find(|r| names_room(r, name));
