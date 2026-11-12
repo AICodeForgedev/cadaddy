@@ -24,7 +24,8 @@ use super::*;
 use crate::{Result, Session};
 
 mod saved;
-pub(crate) use saved::{after_open, before_save};
+pub(crate) use saved::after_open;
+pub use saved::before_save;
 
 /// Most plan objects compared.
 const MAX_ITEMS: usize = 200_000;

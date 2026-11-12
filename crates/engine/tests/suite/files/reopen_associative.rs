@@ -182,6 +182,11 @@ fn a_model_saved_before_its_state_was_kept_follows_its_plan() {
     // The same file as an older build saved it: no associative state in it.
     let mut old = cadaddy_io::read(&std::fs::read(&path).unwrap(), "m.dxf").unwrap();
     assert!(old.embedded.remove("model/associative.json").is_some(), "the state is saved with the drawing");
+    // And from before the spec kept its build record.
+    let spec = (*old.building_spec).clone().expect("a stored spec");
+    let mut spec: Value = serde_json::from_str(&spec).unwrap();
+    assert!(spec.as_object_mut().unwrap().remove("build_record").is_some(), "the spec keeps its build record");
+    old.building_spec = Some(spec.to_string()).into();
     let legacy = d.join("old.dxf").to_string_lossy().into_owned();
     std::fs::write(&legacy, cadaddy_io::write(&old, "old.dxf").unwrap()).unwrap();
 

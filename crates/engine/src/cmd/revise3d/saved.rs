@@ -10,9 +10,9 @@
 //! Saving writes both into the drawing, as one embedded file ([`FILE`]); opening reads it back, so
 //! the reopened model follows its plan (or not) as it did before saving, and a revision compares
 //! with the plan it was built from. A drawing saved before this file existed but built by
-//! `model.build` (its spec keeps the build record) is restored from its spec and that record: the
-//! plan as opened is taken for the one it was built from, and its rooms are read at the first
-//! revision.
+//! `model.build` (built elements and a stored building spec) is restored from its spec (and the
+//! build record the spec keeps, when it has one): the plan as opened is taken for the one it was
+//! built from, and its rooms are read at the first revision.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -171,18 +171,21 @@ fn settings(sv: &Saved, d: &Drawing) -> Option<WallGen> {
     }
 }
 
-/// A drawing saved before its associative state was: a `model.build` model (its spec keeps the
-/// build record), following its plan as `model.build` does by default, with the build's slab.
+/// A drawing saved before its associative state was, with built elements and a stored building
+/// spec: a `model.build` model (the command that builds from a stored spec), following its plan
+/// as `model.build` does by default, with the slab its build record keeps (drawings saved before
+/// that record have none: the default slab).
 fn settings_of_build(d: &Drawing) -> Option<WallGen> {
     let sp = crate::cmd::bspec::stored(d).ok().flatten()?;
-    let rec = crate::cmd::buildrec::read(d)?;
+    let rec = crate::cmd::buildrec::read(d).unwrap_or_default();
     let slab_ft = rec.switches.get("slab_ft").and_then(serde_json::Value::as_f64).filter(|t| t.is_finite() && (0.0..=10.0).contains(t));
     Some(WallGen { rules: sp.to_rules(), auto: true, slab_ft: slab_ft.unwrap_or(wallgen::SLAB_FT), layers: None, spec: Some(sp) })
 }
 
-/// Before the active drawing is saved: its associative state goes into it (or out of it, when it
-/// has none any more). Nothing is written when the drawing already holds the same state.
-pub(crate) fn before_save(s: &mut Session) {
+/// Before the active drawing is saved (SAVE, SAVEAS, and a program writing the drawing to a file
+/// itself, as `cadaddy-cli run --save` does): its associative state goes into it (or out of it,
+/// when it has none any more). Nothing is written when the drawing already holds the same state.
+pub fn before_save(s: &mut Session) {
     let Ok(st) = s.state() else { return };
     // In the Block Editor the drawing open is the editor's working copy.
     if st.block_edit.is_some() {
