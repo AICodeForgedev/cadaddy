@@ -1268,6 +1268,48 @@ fn a_switch_with_no_circuit_is_wired_to_the_luminaires_it_controls() {
     assert_eq!(boxes["count"], json!(3), "{boxes}");
 }
 
+/// Q6348: where the documents route the slab level's branch homeruns below the slab (the
+/// underground plan's note, kept with the wiring methods), every routing carries each homerun
+/// under the floor, in the underground raceway, down from its box and up into its panel's bottom.
+#[test]
+fn homeruns_the_documents_route_below_the_slab_run_under_it_into_the_panels_bottom() {
+    let note = json!({"below_slab_homeruns": "E-101 note: ALL BRANCH CIRCUIT HOMERUNS SHALL BE ROUTED BELOW SLAB"});
+    let (s, _) = building(|s| {
+        let d = s.doc_mut().expect("doc");
+        d.embedded.insert("route/methods.json".into(), std::sync::Arc::new(serde_json::to_vec(&note).expect("json")));
+    });
+    let d = s.doc().expect("doc");
+    let home: Vec<(String, f64, f64)> = d
+        .model
+        .iter()
+        .map(|e| cadaddy_engine::doc::props::read(&e.common.xdata))
+        .filter(|p| p.get("atom").map(|x| x.text()).as_deref() == Some("conduit"))
+        .filter(|p| p.get("circuit").map(|x| x.text()).as_deref() == Some("LP1-1,3"))
+        .map(|p| {
+            let z = |k: &str| {
+                p.get(k).map(|x| x.text()).and_then(|t| t.split(',').nth(2).and_then(|v| v.trim().parse::<f64>().ok())).unwrap_or(f64::NAN) / 12.0
+            };
+            (p.get("type").map(|x| x.text()).unwrap_or_default(), z("start"), z("end"))
+        })
+        .collect();
+    assert!(!home.is_empty(), "the shared homerun is built");
+    let under: Vec<&(String, f64, f64)> = home.iter().filter(|(_, a, b)| *a < 0.0 && *b < 0.0).collect();
+    assert!(!under.is_empty(), "a stretch under the floor: {home:?}");
+    assert!(under.iter().all(|(t, _, _)| t.contains("PVC")), "buried in the underground raceway: {under:?}");
+    assert!(!home.iter().any(|(_, a, b)| *a > 8.5 && *b > 8.5), "none across the ceiling: {home:?}");
+    // Its last stick rises into the panel's bottom (2.5 ft), not its top (6.5 ft).
+    assert!(home.iter().any(|(_, a, b)| (a.max(*b) - 2.5).abs() < 0.3), "{home:?}");
+    assert!(!home.iter().any(|(_, a, b)| (a.max(*b) - 6.5).abs() < 0.05), "{home:?}");
+}
+
+/// Without the documents' word the homeruns stay overhead (the routing's default).
+#[test]
+fn homeruns_stay_overhead_unless_the_documents_route_them_below_the_slab() {
+    let (s, _) = building(|_| {});
+    let below = sticks(&s).into_iter().filter(|(c, a, b)| c == "LP1-1,3" && a[2] < 0.0 && b[2] < 0.0).count();
+    assert_eq!(below, 0);
+}
+
 /// Each wire of `circuit` (its `circuit` property): its `conductor` role (`phase A`, `neutral`,
 /// `ground`).
 fn wire_roles(s: &Session, circuit: &str) -> Vec<String> {

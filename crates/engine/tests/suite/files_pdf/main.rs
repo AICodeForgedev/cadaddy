@@ -19,6 +19,7 @@ mod jobunits;
 mod levelregions;
 mod mepnoise;
 mod nonplanset;
+mod paperscale;
 mod pdf_underlay;
 mod planscale;
 mod printlinks;

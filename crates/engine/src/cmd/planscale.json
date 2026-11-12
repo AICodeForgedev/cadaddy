@@ -1,0 +1,32 @@
+{
+  "about": "A plan whose scale is not read (Q6360): where else its scale comes from, and the plausibility gate before and after the build. Rule data, not job values.",
+  "min_level_footprint_sq_ft": 100,
+  "min_level_walls_ft": 20,
+  "outline_ratio_agree": 0.03,
+  "scale_snap": 0.015,
+  "same_scale": 0.02,
+  "min_fit_f1": 0.85,
+  "min_fit_lead": 0.05,
+  "min_outline_share": 0.6,
+  "print_scales": [
+    {"note": "1/32\" = 1'-0\"", "in_per_ft": 0.03125},
+    {"note": "1/16\" = 1'-0\"", "in_per_ft": 0.0625},
+    {"note": "3/32\" = 1'-0\"", "in_per_ft": 0.09375},
+    {"note": "1/8\" = 1'-0\"", "in_per_ft": 0.125},
+    {"note": "3/16\" = 1'-0\"", "in_per_ft": 0.1875},
+    {"note": "1/4\" = 1'-0\"", "in_per_ft": 0.25},
+    {"note": "3/8\" = 1'-0\"", "in_per_ft": 0.375},
+    {"note": "1/2\" = 1'-0\"", "in_per_ft": 0.5},
+    {"note": "3/4\" = 1'-0\"", "in_per_ft": 0.75},
+    {"note": "1\" = 1'-0\"", "in_per_ft": 1.0},
+    {"note": "1 1/2\" = 1'-0\"", "in_per_ft": 1.5},
+    {"note": "3\" = 1'-0\"", "in_per_ft": 3.0},
+    {"note": "1\" = 10'", "in_per_ft": 0.1},
+    {"note": "1\" = 20'", "in_per_ft": 0.05},
+    {"note": "1\" = 30'", "in_per_ft": 0.033333},
+    {"note": "1\" = 40'", "in_per_ft": 0.025},
+    {"note": "1\" = 50'", "in_per_ft": 0.02},
+    {"note": "1\" = 60'", "in_per_ft": 0.016667},
+    {"note": "1\" = 100'", "in_per_ft": 0.01}
+  ]
+}

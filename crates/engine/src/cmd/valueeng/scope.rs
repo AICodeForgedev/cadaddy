@@ -20,6 +20,11 @@ use cadaddy_doc::props::{self, Prop};
 const MAX_ITEMS: usize = 20_000;
 const MAX_PIECES: usize = 2_000_000;
 const MAX_RUNS: usize = 200_000;
+/// A piece is placed at points this far apart along it, feet; at most this many; points a room
+/// needs to hold a piece (unless all are there): Validate's G-VE-AREA placing.
+const SAMPLE_FT: f64 = 2.0;
+const MAX_SAMPLES: usize = 400;
+const MIN_POINTS: usize = 2;
 /// Why an item isn't weighed: its conductors don't read as conductors.
 pub(crate) const NOT_READ: &str = "conductors_not_read";
 /// A feeder piece belongs to the feeder run it lies on, within this many feet.
@@ -32,6 +37,9 @@ pub(crate) struct Area {
     pub base: String,
     pub flags: BTreeSet<String>,
     pub rooms: BTreeSet<String>,
+    /// The areas its pieces pass through by their rooms whatever its own (an exposed room, a
+    /// corridor: Validate's G-VE-AREA placing), `exposed` or `common`.
+    pub through: BTreeSet<String>,
 }
 
 /// One branch circuit or feeder as routed.
@@ -188,6 +196,51 @@ struct Piece {
     /// The circuit tag its run was routed for (the run's id up to its leg: `<tag id>#<leg>`).
     tag: String,
     at: Vec3,
+    /// A stick's two ends (a mesh piece: none, its centre only).
+    ends: Option<(Vec3, Vec3)>,
+}
+
+impl Piece {
+    /// Plan points along it every `step` (drawing units), its ends included; its centre alone
+    /// without ends.
+    fn samples(&self, step: f64) -> Vec<Vec2> {
+        let Some((a, b)) = self.ends.filter(|(a, b)| a.x.is_finite() && a.y.is_finite() && b.x.is_finite() && b.y.is_finite()) else {
+            return vec![Vec2::new(self.at.x, self.at.y)];
+        };
+        let (a, b) = (Vec2::new(a.x, a.y), Vec2::new(b.x, b.y));
+        let n = if step.is_finite() && step > 0.0 { (a.dist(b) / step).ceil().clamp(1.0, MAX_SAMPLES as f64) as usize } else { 1 };
+        (0..=n).map(|k| a + (b - a) * (k as f64 / n as f64)).collect()
+    }
+}
+
+/// The rooms' outlines by level, each named as Validate names it (`<name> <number>`).
+struct RoomShapes(HashMap<String, Vec<(Vec<Vec2>, [f64; 4], String)>>);
+
+impl RoomShapes {
+    fn new(d: &Drawing) -> Self {
+        let mut by: HashMap<String, Vec<(Vec<Vec2>, [f64; 4], String)>> = HashMap::new();
+        for r in super::super::bspec::room_elements(d).into_iter().filter(|r| r.outline.len() >= 3).take(MAX_ITEMS) {
+            let mut bb = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+            for p in &r.outline {
+                bb = [bb[0].min(p.x), bb[1].min(p.y), bb[2].max(p.x), bb[3].max(p.y)];
+            }
+            let name = match &r.number {
+                Some(n) if !n.trim().is_empty() => format!("{} {}", r.name.trim(), n.trim()),
+                _ => r.name.trim().to_string(),
+            };
+            by.entry(r.level.to_ascii_lowercase()).or_default().push((r.outline.clone(), bb, name));
+        }
+        RoomShapes(by)
+    }
+
+    /// The room holding a plan point on a level (the first that does).
+    fn at(&self, level: &str, p: Vec2) -> Option<&str> {
+        self.0
+            .get(&level.to_ascii_lowercase())?
+            .iter()
+            .find(|(o, bb, _)| p.x >= bb[0] && p.x <= bb[2] && p.y >= bb[1] && p.y <= bb[3] && cadaddy_geom::point_in_polygon(o, p))
+            .map(|r| r.2.as_str())
+    }
 }
 
 fn pieces(d: &Drawing) -> Vec<Piece> {
@@ -199,7 +252,8 @@ fn pieces(d: &Drawing) -> Vec<Piece> {
         if system.is_empty() {
             continue;
         }
-        let at = super::super::mepatoms::build::stick_ends(&ps).map_or_else(
+        let ends = super::super::mepatoms::build::stick_ends(&ps);
+        let at = ends.map_or_else(
             || {
                 let b = cadaddy_doc::entity_bounds(d, e, 0);
                 if b.is_empty() {
@@ -219,6 +273,7 @@ fn pieces(d: &Drawing) -> Vec<Piece> {
             circuit: g("circuit"),
             tag,
             at,
+            ends,
         });
     }
     out
@@ -261,6 +316,9 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
     let rated_corr = corridors_rated(sp, facts);
     let corridor_words = rules.areas.get("rated_corridor").map(|a| a.words.clone()).unwrap_or_default();
     let plenum_words = rules.areas.get("plenum").map(|a| a.words.clone()).unwrap_or_default();
+    let by_room = super::super::validate_value::RoomAreas::new();
+    let shapes = RoomShapes::new(d);
+    let step = SAMPLE_FT * upf;
     // Penetrations of rated walls: level, circuit (a homerun's circuits joined), where.
     let mut pens: Vec<(String, String, Vec2)> = Vec::new();
     for p in report["penetrations"].as_array().into_iter().flatten().take(MAX_PIECES) {
@@ -368,6 +426,29 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
         for &i in idx.iter().take(10_000) {
             let Some(p) = all.get(i) else { continue };
             let at = Vec2::new(p.at.x, p.at.y);
+            // The rooms along it, placed as Validate places a cable piece (G-VE-AREA): the room
+            // holding each point, else the piece's own; an exposed room or a corridor holds it
+            // where two of its points are (one is its edge along a wall), or all of them.
+            {
+                let lv = if p.level.is_empty() { level } else { p.level.as_str() };
+                let own = rooms
+                    .get(&p.room.to_ascii_uppercase())
+                    .and_then(|v| v.iter().find(|r| r.level.eq_ignore_ascii_case(lv)).or(v.first()))
+                    .map_or_else(|| p.room.clone(), |r| format!("{} {}", r.name, p.room));
+                let pts = p.samples(step);
+                let mut n: BTreeMap<&'static str, usize> = BTreeMap::new();
+                for q in &pts {
+                    let room = shapes.at(lv, *q).unwrap_or(own.as_str());
+                    if let Some(x) = by_room.of(room) {
+                        *n.entry(x).or_default() += 1;
+                    }
+                }
+                for (x, k) in n {
+                    if k >= MIN_POINTS.min(pts.len()) {
+                        a.through.insert(x.to_string());
+                    }
+                }
+            }
             if let Some((grid, words)) = ceiling_at(sp, level, at) {
                 ceiling_known = true;
                 if grid {
@@ -414,6 +495,28 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             a.flags.insert("ceiling_unknown".into());
         }
         a
+    };
+    // The rooms along its routed runs (the alternative's cable follows them): an exposed room or
+    // a corridor holds it where two of their points are, or all of them.
+    let runs_through = |runs: &[usize]| -> BTreeSet<String> {
+        let mut n: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut total = 0usize;
+        for r in runs.iter().filter_map(|i| sp.mep.runs.get(*i)).take(MAX_ITEMS) {
+            let pts: Vec<Vec2> = r.points.iter().map(|q| Vec2::new(q[0], q[1])).filter(|q| q.x.is_finite() && q.y.is_finite()).collect();
+            let mut along: Vec<Vec2> = pts.first().copied().into_iter().collect();
+            for w in pts.windows(2) {
+                let [a, b] = w else { continue };
+                let k = if step > 0.0 { (a.dist(*b) / step).ceil().clamp(1.0, MAX_SAMPLES as f64) as usize } else { 1 };
+                along.extend((1..=k).map(|j| *a + (*b - *a) * (j as f64 / k as f64)));
+            }
+            for q in along {
+                total += 1;
+                if let Some(x) = shapes.at(&r.level, q).and_then(|room| by_room.of(room)) {
+                    *n.entry(x).or_default() += 1;
+                }
+            }
+        }
+        n.into_iter().filter(|(_, k)| *k >= MIN_POINTS.min(total)).map(|(x, _)| x.to_string()).collect()
     };
     let mut out: Vec<Item> = Vec::new();
     // -- Branch circuits (and homeruns) as routed. --
@@ -482,6 +585,7 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
         let feet: f64 = runs.iter().filter_map(|i| sp.mep.runs.get(*i)).map(|r| run_feet(r, upf)).sum();
         let pens = pen_of.get(t.id.as_str()).copied().unwrap_or(0);
         let mut area = classify(&level, base, &idx, below, pens > 0);
+        area.through.extend(runs_through(&runs));
         if has(field(t, "wiring_method"), &rl.methods.exposed_words) && area.base == "common" {
             area.base = "exposed".into();
         }
@@ -578,6 +682,7 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             };
             let mut area = classify(&level, base, &idx, below, false);
             area.base = base.to_string();
+            area.through.extend(runs_through(&g));
             // No pieces in the model to read its ceilings from: not documented either.
             if idx.is_empty() && !g.is_empty() && !area.flags.contains("suspended") {
                 let known = g
@@ -698,6 +803,10 @@ pub(crate) fn takes(alt: &Alternative, it: &Item) -> std::result::Result<(), Str
     }
     if alt.excluded_areas.contains_key(&it.area.base) {
         return Err(it.area.base.clone());
+    }
+    // A room it passes through where its cable is never used (Validate's G-VE-AREA rule).
+    if let Some(a) = it.area.through.iter().find(|a| alt.never.contains_key(*a)) {
+        return Err(a.clone());
     }
     // Only what is designed in raceway changes.
     let raceway = mepatoms::rules().raceway_named(&it.method).is_some() || it.method.is_empty();

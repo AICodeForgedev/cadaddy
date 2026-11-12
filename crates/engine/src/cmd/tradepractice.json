@@ -162,7 +162,7 @@
       "id": "E-UNCIRCUITED",
       "trade": "electrical",
       "fills": "a power device no document puts on a circuit",
-      "basis": "trade practice: a device the documents leave off every circuit goes on a spare circuit of the nearest panel of its level, its homerun along the plan's axes in the ceiling space to the panel (NEC 210.11: every outlet is on a branch circuit)",
+      "basis": "trade practice: a device the documents leave off every circuit is tied into its room's circuit of its kind (the nearest device of its kind in its room that the plans circuit); else it goes on a spare circuit of its room's own panel (the panel its room's circuits come from), else of the nearest panel of its level that is no other unit's own panel, its homerun along the plan's axes in the ceiling space to the panel (NEC 210.11: every outlet is on a branch circuit)",
       "reach_ft": 400.0,
       "default_size_in": 0.75
     },
