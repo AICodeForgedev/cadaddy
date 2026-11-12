@@ -123,6 +123,8 @@ struct Pages {
     tag_tol_ft: f64,
     page_scale_in_per_ft: [f64; 2],
     duplicate_head_ft: f64,
+    max_views: usize,
+    view_reach_ft: f64,
     source: String,
 }
 
@@ -401,7 +403,10 @@ fn prims(d: &Drawing, u: f64) -> Prims {
     let rs = &rules().symbols;
     let (r_lo, r_hi) = (rs.head_radius_in[0] * u, rs.head_radius_in[1] * u);
     let mut strokes: Vec<(P, f64, String)> = Vec::new();
-    let mut fills: Vec<(P, f64, String)> = Vec::new();
+    // Fills: (centre, radius, colour, round). Only a round fill (a disc) can be a symbol of its
+    // own; any other filled shape (a lettering glyph, an arrowhead, a half-disc) only tells what
+    // a stroked circle has inside it.
+    let mut fills: Vec<(P, f64, String, bool)> = Vec::new();
     let mut out = Prims::default();
     let colour = |e: &cadaddy_doc::Entity| format!("{:?}", e.common.color);
     let mut ink: BTreeMap<String, f64> = BTreeMap::new();
@@ -464,7 +469,7 @@ fn prims(d: &Drawing, u: f64) -> Prims {
                 for ring in joined.into_iter().chain(rest) {
                     if let Some((c, r)) = as_circle(&ring) {
                         if fills.len() < MAX_CIRCLES {
-                            fills.push((c, r, colour(e)));
+                            fills.push((c, r, colour(e), true));
                         }
                     } else if let Some((a, b, w)) = as_bar(&ring) {
                         if out.bars.len() < MAX_BARS {
@@ -474,7 +479,7 @@ fn prims(d: &Drawing, u: f64) -> Prims {
                         let n = ring.len() as f64;
                         let c = [ring.iter().map(|p| p[0]).sum::<f64>() / n, ring.iter().map(|p| p[1]).sum::<f64>() / n];
                         let r = ring.iter().map(|p| dist(*p, c)).fold(0.0, f64::max);
-                        fills.push((c, r, colour(e)));
+                        fills.push((c, r, colour(e), false));
                     }
                 }
             }
@@ -486,7 +491,7 @@ fn prims(d: &Drawing, u: f64) -> Prims {
     let cell = (2.0 * r_hi).max(1e-9);
     let key = |p: P| ((p[0] / cell).floor().clamp(-1.0e9, 1.0e9) as i64, (p[1] / cell).floor().clamp(-1.0e9, 1.0e9) as i64);
     let mut fill_at: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
-    for (i, (c, _, _)) in fills.iter().enumerate() {
+    for (i, (c, _, _, _)) in fills.iter().enumerate() {
         fill_at.entry(key(*c)).or_default().push(i);
     }
     let mut seg_at: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
@@ -508,17 +513,23 @@ fn prims(d: &Drawing, u: f64) -> Prims {
         v
     };
     let mut circles: Vec<Circ> = Vec::new();
-    for (c, r, ink_of) in strokes.iter().chain(fills.iter().filter(|(_, r, _)| *r >= r_lo)) {
+    let discs = fills.iter().filter(|(_, r, _, round)| *round && *r >= r_lo).map(|(c, r, k, _)| (*c, *r, k.clone()));
+    for (c, r, ink_of) in strokes.iter().cloned().chain(discs) {
+        let (c, r, ink_of) = (&c, &r, &ink_of);
         if !(*r >= r_lo && *r <= r_hi) {
             continue;
         }
-        if circles.len() >= MAX_CIRCLES || circles.iter().rev().take(64).any(|k| dist(k.c, *c) <= 0.1 * k.r && (k.r - r).abs() <= 0.15 * k.r) {
+        // A stroke and its fill in one pen are one circle; another pen's circle at the same place
+        // is another symbol (a head drawn over the background's).
+        if circles.len() >= MAX_CIRCLES
+            || circles.iter().rev().take(64).any(|k| dist(k.c, *c) <= 0.1 * k.r && (k.r - r).abs() <= 0.15 * k.r && k.colour == *ink_of)
+        {
             continue;
         }
         let solid = around(&fill_at, *c)
             .into_iter()
             .filter_map(|i| fills.get(i))
-            .any(|(fc, fr, _)| dist(*fc, *c) <= 0.4 * r && *fr <= 1.05 * r && *fr >= 0.3 * r);
+            .any(|(fc, fr, _, _)| dist(*fc, *c) <= 0.4 * r && *fr <= 1.05 * r && *fr >= 0.3 * r);
         let marked = || {
             around(&seg_at, *c)
                 .into_iter()
@@ -582,6 +593,10 @@ struct PageRead {
     legend: Vec<LegendEntry>,
     table: Vec<TableRow>,
     bars_seen: usize,
+    /// Head-sized circles left out (no legend) because no pipe of their pen reaches them.
+    off_pipe: usize,
+    /// Circles taken as the same symbol as a head already read at their place.
+    same_symbol: usize,
 }
 
 fn head_kind(text: &str) -> Option<&'static str> {
@@ -750,36 +765,109 @@ fn read_page(d: &Drawing, u: f64) -> PageRead {
     {
         out.legend.retain(|l| l.colour != *bg);
     }
-    // The heads: every other circle a legend entry matches (else, no legend, of a head's size).
-    let (n_lo, n_hi) = (rs.no_legend_head_radius_in[0] * u, rs.no_legend_head_radius_in[1] * u);
-    let mut head_r: Vec<f64> = Vec::new();
-    for (i, c) in pr.circles.iter().enumerate() {
-        if used.get(i).copied().unwrap_or(true) {
-            continue;
-        }
-        if out.legend.is_empty() {
-            if c.r >= n_lo && c.r <= n_hi {
-                out.heads.push(PageHead { at: c.c, kind: "sprinkler_pendent", label: String::new() });
-                head_r.push(c.r);
-            }
-            continue;
-        }
-        let entry = out
-            .legend
-            .iter()
-            .filter(|l| l.fill == c.fill && l.colour == c.colour && (l.r - c.r).abs() <= rs.legend_match * l.r)
-            .min_by(|a, b| (a.r - c.r).abs().total_cmp(&(b.r - c.r).abs()));
-        if let Some(l) = entry {
-            out.heads.push(PageHead { at: c.c, kind: l.kind, label: l.label.clone() });
-            head_r.push(c.r);
-        }
-    }
-    out.table = head_table(&texts, &out.legend);
-
     // Pipe: filled bars of a pipe's weight.
     let bars: Vec<Bar> =
         pr.bars.into_iter().filter(|b| b.w >= rb.width_in[0] * u && b.w <= rb.width_in[1] * u && b.len() >= rb.min_aspect * b.w).collect();
     out.bars_seen = bars.len();
+    let longest = bars.iter().map(Bar::len).fold(0.0, f64::max);
+    // Bars near a point (a head's reach is far under a cell, so its cell and the eight around it).
+    let near_grid = BarGrid::new(&bars, (longest / 16.0).max(0.5 * u));
+    let bars_near = |p: P| -> BTreeSet<usize> {
+        let c = near_grid.cell;
+        let mut v = BTreeSet::new();
+        for dx in [-c, 0.0, c] {
+            for dy in [-c, 0.0, c] {
+                v.extend(near_grid.near([p[0] + dx, p[1] + dy]).iter().copied());
+            }
+        }
+        v
+    };
+    // A head sits on its pipe: on its branch line, or at the end of its arm-over or drop, drawn in
+    // the head's own pen. With no legend to type the page's heads, that is what tells a head from
+    // the circles of the background drawn under the sprinklers (a cooktop's burners, a fixture's
+    // outline, a light, a tag): a circle of a head's size on no pipe of its pen is not a head.
+    // The pipe reaches the circle itself: it runs through it or ends at its rim.
+    let on_pipe =
+        |c: &Circ| bars_near(c.c).into_iter().filter_map(|i| bars.get(i)).any(|b| b.colour == c.colour && seg_dist(c.c, b.a, b.b) <= c.r + b.w);
+    // The sprinkler pen: the one whose head-sized circles sit on its own pipe most. A background
+    // drawn with filled bars of its own may put a circle on one of them; its heads are another
+    // pen's.
+    let (n_lo, n_hi) = (rs.no_legend_head_radius_in[0] * u, rs.no_legend_head_radius_in[1] * u);
+    let piped: Vec<bool> =
+        pr.circles.iter().enumerate().map(|(i, c)| !used.get(i).copied().unwrap_or(true) && c.r >= n_lo && c.r <= n_hi && on_pipe(c)).collect();
+    let head_pen: Option<String> = {
+        let mut by_pen: BTreeMap<&str, usize> = BTreeMap::new();
+        for (c, _) in pr.circles.iter().zip(&piped).filter(|(_, p)| **p) {
+            *by_pen.entry(c.colour.as_str()).or_default() += 1;
+        }
+        by_pen.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0))).map(|(k, _)| k.to_string())
+    };
+    // A legend in another pen than the sprinkler pen is the background's (an architectural or
+    // ceiling plan's own legend naming its sprinkler symbol): the page draws its heads on pipe in
+    // the sprinkler pen, and the background's circles are not its heads.
+    if let Some(pen) = &head_pen {
+        out.legend.retain(|l| l.colour == *pen);
+    }
+
+    // The heads: every other circle a legend entry matches (else, no legend, of a head's size and
+    // on pipe of its own pen, the sprinkler pen). One symbol is one head: a stroke and its fill,
+    // or a symbol drawn twice over, at one place are one.
+    let mut head_r: Vec<f64> = Vec::new();
+    let mut off_pipe = 0usize;
+    // Heads read so far by a grid of a head's size (a symbol's twin is within one radius).
+    let cell = (2.0 * rs.head_radius_in[1] * u).max(1e-9);
+    let key = |p: P| ((p[0] / cell).floor().clamp(-1.0e9, 1.0e9) as i64, (p[1] / cell).floor().clamp(-1.0e9, 1.0e9) as i64);
+    let mut head_at: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    for (i, c) in pr.circles.iter().enumerate() {
+        if used.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        let (kind, label) = if out.legend.is_empty() {
+            if !(c.r >= n_lo && c.r <= n_hi) {
+                continue;
+            }
+            if !piped.get(i).copied().unwrap_or(false) || head_pen.as_deref() != Some(c.colour.as_str()) {
+                off_pipe += 1;
+                continue;
+            }
+            ("sprinkler_pendent", String::new())
+        } else {
+            let entry = out
+                .legend
+                .iter()
+                .filter(|l| l.fill == c.fill && l.colour == c.colour && (l.r - c.r).abs() <= rs.legend_match * l.r)
+                .min_by(|a, b| (a.r - c.r).abs().total_cmp(&(b.r - c.r).abs()));
+            let Some(l) = entry else { continue };
+            (l.kind, l.label.clone())
+        };
+        let (kx, ky) = key(c.c);
+        let same = (-1..=1)
+            .flat_map(|dx| (-1..=1).map(move |dy| (kx.saturating_add(dx), ky.saturating_add(dy))))
+            .filter_map(|k| head_at.get(&k))
+            .flatten()
+            .copied()
+            .find(|k| out.heads.get(*k).zip(head_r.get(*k)).is_some_and(|(h, r)| dist(h.at, c.c) <= r.max(c.r)));
+        match same {
+            Some(k) => {
+                // The larger circle is the symbol (a fill inside it is its mark).
+                if let (Some(h), Some(r)) = (out.heads.get_mut(k), head_r.get_mut(k))
+                    && c.r > *r
+                {
+                    h.at = c.c;
+                    *r = c.r;
+                }
+                out.same_symbol += 1;
+            }
+            None => {
+                head_at.entry((kx, ky)).or_default().push(out.heads.len());
+                out.heads.push(PageHead { at: c.c, kind, label });
+                head_r.push(c.r);
+            }
+        }
+    }
+    out.off_pipe = off_pipe;
+    out.table = head_table(&texts, &out.legend);
+
     if bars.is_empty() || out.heads.is_empty() {
         return out;
     }
@@ -810,7 +898,6 @@ fn read_page(d: &Drawing, u: f64) -> PageRead {
 
     // Size labels, each on the bar nearest it.
     let mut label_of: Vec<Option<f64>> = vec![None; bars.len()];
-    let longest = bars.iter().map(Bar::len).fold(0.0, f64::max);
     let grid = BarGrid::new(&bars, (longest / 4.0).max(1.0 * u));
     for t in &texts {
         let v = t.value.trim();
@@ -1029,13 +1116,13 @@ fn add_source(
     kind: &'static str,
     placed: Value,
     ceiling_of: &dyn Fn(&str) -> f64,
+    table: Option<&(Vec<(String, usize, usize)>, bool)>,
 ) {
     let dup = rules().pages.duplicate_head_ft * upf;
     for (n, level) in levels.iter().enumerate() {
         let ceiling = ceiling_of(level);
         let mut read = SourceRead { source: source.to_string(), kind, level: level.clone(), placed: placed.clone(), ..SourceRead::default() };
         read.legend = page.legend.iter().map(|l| (l.label.clone(), l.kind.to_string(), l.fill.label().to_string())).collect();
-        let mut counted: BTreeMap<String, usize> = BTreeMap::new();
         for h in &page.heads {
             if out.mep.terminals.len() >= MAX_SET_ITEMS {
                 break;
@@ -1045,7 +1132,6 @@ fn add_source(
                 continue;
             }
             let label = if h.label.is_empty() { h.kind.to_string() } else { h.label.clone() };
-            *counted.entry(label.clone()).or_default() += 1;
             // The same head another page draws (two pages showing one area) is one.
             if out.mep.terminals.iter().any(|t| t.level == *level && t.source_sheet != source && dist(t.at, at) <= dup) {
                 out.duplicates += 1;
@@ -1113,18 +1199,11 @@ fn add_source(
         }
         // The head table against the heads counted (the page's own count, before any duplicate
         // another page drew is taken out).
-        if n == 0 {
-            for row in &page.table {
-                let have = counted
-                    .iter()
-                    .filter(|(l, _)| {
-                        same_label(l, &row.label) || (!page.legend.iter().any(|e| same_label(&e.label, &row.label)) && row.kind == head_kind(l))
-                    })
-                    .map(|(_, c)| *c)
-                    .sum::<usize>();
-                read.table_differs |= have != row.count;
-                read.table.push((row.label.clone(), row.count, have));
-            }
+        if n == 0
+            && let Some((rows, differs)) = table
+        {
+            read.table.clone_from(rows);
+            read.table_differs = *differs;
         }
         out.sources.push(read);
     }
@@ -1174,7 +1253,19 @@ fn read_set_sheets(out: &mut FpRead, d: &Drawing, sheets: &[SheetRef], upf: f64,
         if page.heads.is_empty() && page.pipes.is_empty() {
             out.warnings.push(format!("{}: no sprinkler heads or pipe read on this fire protection plan", sh.number));
         }
-        add_source(out, &page, &|p| at.apply(p), upf, &levels_of(sh), &sh.number, "sheet", json!({"method": "its sheet's registration"}), ceiling_of);
+        let table = table_check(&page);
+        add_source(
+            out,
+            &page,
+            &|p| at.apply(p),
+            upf,
+            &levels_of(sh),
+            &sh.number,
+            "sheet",
+            json!({"method": "its sheet's registration"}),
+            ceiling_of,
+            Some(&table),
+        );
     }
 }
 
@@ -1194,17 +1285,24 @@ fn long_lines(d: &Drawing, min: f64) -> Vec<(P, P)> {
     v
 }
 
-/// Put a shop-drawing page onto the floor plan it shares the most room numbers with; then the
-/// walls both draw check the fit and refine it. The page's point → the floor sheet's point, the
-/// floor, and how.
-fn place_page<'a>(
-    page: &Drawing,
-    floors: &'a [Floor<'a>],
-    title_level: Option<String>,
-) -> Result<(Box<dyn Fn(P) -> P + 'a>, &'a Floor<'a>, Value), String> {
+/// One plan view of a shop-drawing page put onto its floor.
+struct View<'a> {
+    /// The page's point → the floor sheet's point.
+    to: Box<dyn Fn(P) -> P + 'a>,
+    floor: &'a Floor<'a>,
+    how: Value,
+    /// The room numbers the fit matched, and where the page prints them.
+    matched: Vec<String>,
+    tags_at: Vec<P>,
+    /// Page units per foot of the building in this view.
+    page_upf: f64,
+}
+
+/// Put the plan view of a shop-drawing page that prints `tags` onto the floor plan it shares the
+/// most of them with; then the walls both draw check the fit and refine it.
+fn place_page<'a>(page: &Drawing, tags: &[(String, P)], floors: &'a [Floor<'a>], title_level: Option<&str>) -> Result<View<'a>, String> {
     use cadaddy_mepfix::tagid;
     let rp = &rules().pages;
-    let tags = super::identity::number_texts(page);
     if tags.len() < rp.min_tags {
         return Err(format!("{} room number(s) printed on the page: at least {} are needed to put it onto a floor plan", tags.len(), rp.min_tags));
     }
@@ -1212,11 +1310,11 @@ fn place_page<'a>(
     let mut best: Option<(usize, bool, f64, tagid::TagFit, &Floor)> = None;
     for f in floors {
         let tol = rp.tag_tol_ft * f.sheet_upf;
-        let Some(fit) = tagid::fit_by_tags(&tags, &f.tags, tol, (f.sheet_upf / hi.max(1e-9), f.sheet_upf / lo.max(1e-9))) else { continue };
+        let Some(fit) = tagid::fit_by_tags(tags, &f.tags, tol, (f.sheet_upf / hi.max(1e-9), f.sheet_upf / lo.max(1e-9))) else { continue };
         if fit.matched.len() < rp.min_tags || tagid::few_tags_off_square(fit.matched.len(), fit.sim.rotation_deg()) {
             continue;
         }
-        let on_level = title_level.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&f.sh.level));
+        let on_level = title_level.is_some_and(|l| l.eq_ignore_ascii_case(&f.sh.level));
         let res = fit.residual / f.sheet_upf;
         let better = best
             .as_ref()
@@ -1263,7 +1361,81 @@ fn place_page<'a>(
         let q = correction.map_or(q, |c| c.apply(q));
         place.apply(q)
     });
-    Ok((to, floor, how))
+    let tags_at = tags.iter().filter(|(t, _)| fit.matched.contains(t)).map(|(_, p)| *p).collect();
+    Ok(View { to, floor, how, matched: fit.matched, tags_at, page_upf })
+}
+
+/// Put every plan view a shop-drawing page draws onto its floor: a page may draw two floors'
+/// plans side by side (or a floor and its piping view), each with its own room numbers. The view
+/// fitted first takes its room numbers; the numbers left are fitted again, until none fits.
+fn place_views<'a>(page: &Drawing, floors: &'a [Floor<'a>], title_level: Option<&str>) -> Result<Vec<View<'a>>, String> {
+    let mut left = super::identity::number_texts(page);
+    let mut views: Vec<View> = Vec::new();
+    while views.len() < rules().pages.max_views.max(1) {
+        match place_page(page, &left, floors, title_level) {
+            Ok(v) => {
+                left.retain(|(t, _)| !v.matched.contains(t));
+                views.push(v);
+            }
+            Err(why) if views.is_empty() => return Err(why),
+            Err(_) => break,
+        }
+    }
+    Ok(views)
+}
+
+/// A page's reading split by its plan views: each head and pipe piece goes to the view whose
+/// room numbers are nearest it on the page; one farther than the reach from every view's numbers
+/// is in no plan view (a detail, a legend, the title block) and is left out (counted).
+fn split_by_view(page: &PageRead, views: &[View]) -> (Vec<PageRead>, usize) {
+    let reach_ft = rules().pages.view_reach_ft;
+    let mut parts: Vec<PageRead> = views.iter().map(|_| PageRead { legend: page.legend.clone(), ..PageRead::default() }).collect();
+    let view_of = |p: P| -> Option<usize> {
+        views
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| {
+                let d = v.tags_at.iter().map(|t| dist(*t, p)).fold(f64::INFINITY, f64::min);
+                (d <= reach_ft * v.page_upf).then_some((i, d))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
+    let mut outside = 0usize;
+    for h in &page.heads {
+        match view_of(h.at).and_then(|i| parts.get_mut(i)) {
+            Some(part) => part.heads.push(h.clone()),
+            None => outside += 1,
+        }
+    }
+    for pp in &page.pipes {
+        match view_of(mid(pp.a, pp.b)).and_then(|i| parts.get_mut(i)) {
+            Some(part) => part.pipes.push(pp.clone()),
+            None => outside += 1,
+        }
+    }
+    (parts, outside)
+}
+
+/// A page's head table against the heads it draws (all its views together): each row's
+/// description, the table's count and the heads counted, and whether any row differs.
+fn table_check(page: &PageRead) -> (Vec<(String, usize, usize)>, bool) {
+    let mut counted: BTreeMap<String, usize> = BTreeMap::new();
+    for h in &page.heads {
+        *counted.entry(if h.label.is_empty() { h.kind.to_string() } else { h.label.clone() }).or_default() += 1;
+    }
+    let mut rows = Vec::new();
+    let mut differs = false;
+    for row in &page.table {
+        let have = counted
+            .iter()
+            .filter(|(l, _)| same_label(l, &row.label) || (!page.legend.iter().any(|e| same_label(&e.label, &row.label)) && row.kind == head_kind(l)))
+            .map(|(_, c)| *c)
+            .sum::<usize>();
+        differs |= have != row.count;
+        rows.push((row.label.clone(), row.count, have));
+    }
+    (rows, differs)
 }
 
 /// The submittal files that may hold sprinkler shop drawings: the given files, and the files below
@@ -1386,8 +1558,33 @@ fn read_shop_drawings(out: &mut FpRead, d: &Drawing, sheets: &[SheetRef], upf: f
                 .map(|id| cadaddy_mepfix::printset::level_of_title(&id.title))
                 .or_else(|| texts.iter().map(|t| cadaddy_mepfix::printset::level_of_title(&t.value)).find(|l| !l.is_empty()))
                 .filter(|l| !l.is_empty());
-            match place_page(&page, &floors, title_level) {
-                Ok((to, floor, how)) => add_source(out, &fp, &*to, upf, &levels_of(floor.sh), &source, "shop_drawing", how, ceiling_of),
+            if fp.off_pipe > 0 {
+                out.warnings.push(format!(
+                    "{source}: {} circle(s) of a head's size on no pipe of their pen were not taken as heads (the page has no head legend; a background's burners, fixtures and lights are drawn as such circles)",
+                    fp.off_pipe
+                ));
+            }
+            match place_views(&page, &floors, title_level.as_deref()) {
+                Ok(views) => {
+                    let table = table_check(&fp);
+                    let (parts, outside) = split_by_view(&fp, &views);
+                    if outside > 0 {
+                        out.warnings.push(format!(
+                            "{source}: {outside} head(s) and pipe piece(s) lie in none of the page's plan views (over {} ft from the room numbers of every view put onto a floor) and are not modelled",
+                            rules().pages.view_reach_ft
+                        ));
+                    }
+                    let n = views.len();
+                    for (i, (view, part)) in views.iter().zip(&parts).enumerate() {
+                        let mut how = view.how.clone();
+                        if n > 1 {
+                            how["view"] = json!(i + 1);
+                            how["views"] = json!(n);
+                        }
+                        let levels = levels_of(view.floor.sh);
+                        add_source(out, part, &*view.to, upf, &levels, &source, "shop_drawing", how, ceiling_of, (i == 0).then_some(&table));
+                    }
+                }
                 Err(why) => out.unplaced.push((source, why)),
             }
         }
@@ -1604,14 +1801,17 @@ mod tests {
     }
 
     #[test]
-    fn with_no_legend_circles_of_a_heads_size_are_heads_and_hostile_pages_read_nothing() {
+    fn with_no_legend_circles_of_a_heads_size_on_pipe_are_heads_and_hostile_pages_read_nothing() {
         let mut d = Drawing::new_imperial();
         for x in [1.0, 2.0, 3.0] {
             circle(&mut d, [x, 1.0], 0.05);
         }
+        bar(&mut d, [1.0, 1.0], [3.0, 1.0], 0.02);
         circle(&mut d, [5.0, 5.0], 0.25); // a grid bubble: too big
+        circle(&mut d, [8.0, 8.0], 0.05); // on no pipe: no head
         let p = read_page(&d, 1.0);
         assert_eq!(p.heads.len(), 3);
+        assert_eq!(p.off_pipe, 1);
         assert!(p.heads.iter().all(|h| h.label.is_empty()));
         let mut bad = Drawing::new_imperial();
         circle(&mut bad, [f64::NAN, 1.0], 0.05);
@@ -1631,10 +1831,61 @@ mod tests {
         assert!(p.heads.is_empty() && p.pipes.is_empty());
     }
 
+    fn add_in(d: &mut Drawing, colour: u8, kind: EntityKind) {
+        let c = Common { color: cadaddy_doc::color::Color::Index(colour), ..Common::default() };
+        let _ = d.add(&Space::Model, c, kind);
+    }
+
+    /// A shop drawing with no head legend over its architectural background (Q6548): the
+    /// background's circles of a head's size (burners, a fixture's outline, a light) are drawn in
+    /// its own pen, some right under the pipe; lettering is drawn as filled outlines in the
+    /// sprinkler pen, one glyph on the pipe; one head is drawn twice and one is a stroked circle
+    /// with a disc inside it. Only the heads on the pipe, once each, are heads.
+    #[test]
+    fn with_no_legend_the_backgrounds_circles_glyphs_and_doubled_symbols_are_no_heads() {
+        let mut d = Drawing::new_imperial();
+        let (fp, bg) = (1u8, 8u8);
+        let r = 0.05;
+        let heads = [[2.0, 10.0], [4.0, 10.0], [6.0, 10.0], [8.0, 10.0]];
+        for h in heads {
+            add_in(&mut d, fp, EntityKind::Circle(cadaddy_doc::Circle { center: Vec3::new(h[0], h[1], 0.0), radius: r }));
+        }
+        // The first head twice over; the last a stroke with a disc of the sprinkler pen inside it.
+        add_in(&mut d, fp, EntityKind::Circle(cadaddy_doc::Circle { center: Vec3::new(2.0, 10.0, 0.0), radius: r }));
+        let disc: Vec<P> =
+            (0..16).map(|i| f64::from(i) * std::f64::consts::TAU / 16.0).map(|a| [8.0 + 0.7 * r * a.cos(), 10.0 + 0.7 * r * a.sin()]).collect();
+        add_in(&mut d, fp, solid(&disc));
+        // The branch line, head to head, in the sprinkler pen.
+        for w in heads.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            add_in(&mut d, fp, solid(&[[a[0], a[1] - 0.01], [b[0], b[1] - 0.01], [b[0], b[1] + 0.01], [a[0], a[1] + 0.01]]));
+        }
+        // The background: burners right under the pipe, a lavatory bowl and a light off it, and
+        // the counter they sit on as a thin filled bar in the background's pen.
+        for c in [[3.0, 10.0], [3.2, 10.05], [5.0, 12.0], [7.0, 14.0]] {
+            add_in(&mut d, bg, EntityKind::Circle(cadaddy_doc::Circle { center: Vec3::new(c[0], c[1], 0.0), radius: 0.06 }));
+        }
+        add_in(&mut d, bg, solid(&[[2.5, 9.9], [3.5, 9.9], [3.5, 9.92], [2.5, 9.92]]));
+        // Lettering as filled outlines in the sprinkler pen: a glyph on the pipe and one off it.
+        for o in [[5.0, 9.97], [5.0, 11.0]] {
+            let g = [[0.0, 0.0], [0.05, 0.0], [0.05, 0.02], [0.02, 0.02], [0.02, 0.07], [0.0, 0.07]];
+            add_in(&mut d, fp, solid(&g.map(|p| [o[0] + p[0], o[1] + p[1]])));
+        }
+        let p = read_page(&d, 1.0);
+        let mut at: Vec<P> = p.heads.iter().map(|h| h.at).collect();
+        at.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        assert_eq!(at.len(), 4, "{at:?}");
+        for (a, h) in at.iter().zip(heads) {
+            assert!(dist(*a, h) < 1e-6, "{a:?} vs {h:?}");
+        }
+        assert!(p.same_symbol >= 1, "the disc inside a head is the same symbol: {}", p.same_symbol);
+        assert!(p.off_pipe >= 4, "the background's circles: {}", p.off_pipe);
+    }
+
     #[test]
     fn a_page_with_too_few_room_numbers_is_not_placed() {
         let d = page(false, 4);
-        let Err(why) = place_page(&d, &[], None) else { panic!("placed") };
+        let Err(why) = place_views(&d, &[], None) else { panic!("placed") };
         assert!(why.contains("room number"), "{why}");
     }
 
