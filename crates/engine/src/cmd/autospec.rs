@@ -142,7 +142,7 @@ pub(crate) fn room_like_name(t: &str) -> bool {
     if marks * 2 > t.chars().filter(|c| c.is_alphanumeric()).count() || run_of_marks {
         return false;
     }
-    // Letters that read as no word (`JL TL YL KJ`, `Wwwwwwww`): linework read as text (Q6365).
+    // Letters that read as no word (`JL TL YL KJ`, `Kkkkkkkk`): linework read as text (Q6365).
     if !super::perceive::geometry::legible_name(t) {
         return false;
     }

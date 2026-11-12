@@ -1711,7 +1711,7 @@ pub(crate) fn equipment_tag(t: &str) -> bool {
 }
 
 /// The most times one letter may follow itself (`BOOKKEEPING`'s doubles): a longer run
-/// (`Wwwwwwww`, `OOO`) is linework read as letters or a placeholder, never a name.
+/// (`Kkkkkkkk`, `OOO`) is linework read as letters or a placeholder, never a name.
 const MAX_LETTER_REPEAT: usize = 2;
 /// The longest a name may be with no word of three letters: a code in capitals (`WC`, `IT`, `W/D`)
 /// or a name in a script without case (`厨房`).
@@ -1720,7 +1720,7 @@ const NAME_CODE_MAX: usize = 4;
 /// Whether a label reads as words (Q6365): no letter run of more than [`MAX_LETTER_REPEAT`], and a
 /// word of three letters or more (`LOBBY`, `IDF`, `MEN'S`: an apostrophe inside joins it) or one
 /// short code with no small letter (`WC`, `W/D`, `厨房`). Text read off a print's linework comes
-/// out as letters that read as nothing: `JL TL YL KJ`, `Wwwwwwwwwww`, `-r-n-`, `--L-T-`, `G L`,
+/// out as letters that read as nothing: `JL TL YL KJ`, `Kkkkkkkkkkk`, `-r-n-`, `--L-T-`, `G L`,
 /// `Xb`.
 pub(crate) fn legible_name(t: &str) -> bool {
     let t = t.trim();
@@ -2581,7 +2581,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
         } else if in_block.contains(h) {
             Some("note_block_line")
         } else if !legible_name(t) {
-            // Linework read as letters (`JL TL YL KJ`, `Wwwwwwww`, `-r-n-`), never a name.
+            // Linework read as letters (`JL TL YL KJ`, `Kkkkkkkk`, `-r-n-`), never a name.
             Some("illegible")
         } else if !crate::cmd::autospec::room_like_name(t) {
             Some("sentence_title_block_or_stamp")
@@ -3562,7 +3562,7 @@ mod tests {
         {
             assert!(legible_name(good), "{good}");
         }
-        for bad in ["JL TL YL KJ", "Wwwwwwwwwwwwwwwwwwwwwww", "48 Wwwwwwwwwwwww", "-r-n-", "--L-T-", "G L", "D D", "Xb", "22 40 OO", "", "12", "OOO"]
+        for bad in ["JL TL YL KJ", "Kkkkkkkkkkkkkkkkkkkkkkk", "48 Kkkkkkkkkkkkk", "-r-n-", "--L-T-", "G L", "D D", "Xb", "22 40 OO", "", "12", "OOO"]
         {
             assert!(!legible_name(bad), "{bad}");
             assert_eq!(room_name_score(bad), 0, "{bad}");
@@ -3588,14 +3588,14 @@ mod tests {
 
     #[test]
     fn linework_read_as_letters_and_a_callouts_note_name_no_room() {
-        // Q6365: a BIM-exported print's linework read as text (`JL TL YL KJ`, `Wwwwwww`, `-r-n-`)
+        // Q6365: a BIM-exported print's linework read as text (`JL TL YL KJ`, `Kkkkkkk`, `-r-n-`)
         // was traced as rooms beside real numbered tags, and a view callout's label (`A12`)
         // numbered the note next to it. The junk in TAKEOUT's room was traced before its name.
         let mut s = plan_of(&[
             ([0.0, 0.0, 240.0, 180.0], &[("VESTIBULE", 80.0, 90.0), ("101", 90.0, 80.0)]),
             ([300.0, 0.0, 540.0, 180.0], &[("JL TL YL KJ", 330.0, 150.0), ("TAKEOUT", 380.0, 90.0), ("102", 390.0, 80.0)]),
             ([600.0, 0.0, 840.0, 180.0], &[("Women's", 680.0, 90.0), ("103", 690.0, 80.0)]),
-            ([900.0, 0.0, 1140.0, 180.0], &[("Wwwwwwwwwwwwwwwwww", 980.0, 90.0), ("37", 990.0, 80.0)]),
+            ([900.0, 0.0, 1140.0, 180.0], &[("Kkkkkkkkkkkkkkkkkk", 980.0, 90.0), ("37", 990.0, 80.0)]),
             ([1200.0, 0.0, 1440.0, 180.0], &[("-r-n-", 1280.0, 90.0), ("106", 1290.0, 80.0)]),
             ([1500.0, 0.0, 1740.0, 180.0], &[("Dry stock", 1580.0, 90.0), ("A12", 1590.0, 80.0)]),
         ]);

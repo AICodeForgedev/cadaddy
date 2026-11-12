@@ -520,7 +520,7 @@ fn a_room_stops_at_its_storefront_not_at_the_canopy_outside_it() {
     assert!(top < 290.0, "the room reaches y {top} over the canopy: {list}");
 }
 
-/// Q6365: linework read as letters on a print (`JL TL YL KJ`, `Wwwwwwww`) is no room's name. Read
+/// Q6365: linework read as letters on a print (`JL TL YL KJ`, `Kkkkkkkk`) is no room's name. Read
 /// first in its room, it kept the room from its numbered tag's name; alone with a number, it
 /// named that room. The plan's own tag names its room; a junk label names none.
 #[test]
@@ -528,7 +528,7 @@ fn linework_read_as_letters_names_no_room() {
     let mut s = Session::new();
     s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
     s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
-    floor(&mut s, 0.0, 0.0, 1.0, &["JL TL YL KJ", "TAKEOUT", "102"], &["Wwwwwwwwwwwwwwwwwwwwww", "48"]);
+    floor(&mut s, 0.0, 0.0, 1.0, &["JL TL YL KJ", "TAKEOUT", "102"], &["Kkkkkkkkkkkkkkkkkkkkkk", "48"]);
     draft(&mut s);
     let r = s.execute("model.build", &json!({})).unwrap();
     let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
@@ -539,5 +539,5 @@ fn linework_read_as_letters_names_no_room() {
         .map(|x| (x["name"].as_str().unwrap_or("").to_string(), x["number"].as_str().unwrap_or("").to_string()))
         .collect();
     assert!(rooms.iter().any(|(n, m)| n.eq_ignore_ascii_case("takeout") && m == "102"), "the tag names its room: {rooms:?} {r}");
-    assert!(!rooms.iter().any(|(n, _)| n.to_ascii_uppercase().contains("YL") || n.to_ascii_uppercase().contains("YYY")), "{rooms:?}");
+    assert!(!rooms.iter().any(|(n, _)| n.to_ascii_uppercase().contains("YL") || n.to_ascii_uppercase().contains("KKK")), "{rooms:?}");
 }
