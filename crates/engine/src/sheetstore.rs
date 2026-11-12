@@ -26,6 +26,10 @@ use crate::{Result, Session};
 /// Sheets a print set keeps in memory in the interface: the open one and the most recent others.
 pub const CACHE: usize = 3;
 
+/// Most sheet changes one command remembers ([`crate::DocState`]'s `sheet_moves`): past it, a
+/// further change counts as an edit of the plan (the model is built again, never left stale).
+const MAX_SHEET_MOVES: usize = 64;
+
 /// How many of the latest whole-set loads a session remembers the command of ([`Session::whole_set_loads`]).
 pub const LOADS_KEPT: usize = 32;
 
@@ -387,14 +391,27 @@ impl Session {
     /// Change the active drawing's sheets in memory with `f`: not an edit (no undo step; a
     /// drawing without unsaved changes still has none). Only outside the Block Editor.
     fn change_sheets<R>(&mut self, f: impl FnOnce(&mut Drawing) -> R) -> Result<Option<R>> {
+        // Inside a command (or while one waits for input) the change is remembered, so the
+        // command's check for plan edits leaves it out (Q6570).
+        let in_command = self.journal.in_call() || self.running.is_some() || self.suspended.is_some();
         let st = self.state_mut()?;
         if st.block_edit.is_some() || st.block_test.is_some() {
             return Ok(None);
         }
         let clean = Arc::ptr_eq(&st.doc, &st.saved);
+        let old = Arc::clone(&st.doc);
         let r = f(Arc::make_mut(&mut st.doc));
         if clean {
             st.saved = st.doc.clone();
+        }
+        if !Arc::ptr_eq(&old, &st.doc) {
+            // No edit of the plan or the model: the new state is behind its model as the old
+            // one was, and comes from the same build (Q6570).
+            let now = Arc::clone(&st.doc);
+            crate::cmd::wallgen::carry_state(st, &old, &now);
+            if in_command && st.sheet_moves.len() < MAX_SHEET_MOVES {
+                st.sheet_moves.push((old, now));
+            }
         }
         // Selected objects that left memory are no longer selected.
         let doc = st.doc.clone();

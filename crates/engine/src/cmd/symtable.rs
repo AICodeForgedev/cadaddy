@@ -1253,7 +1253,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 .unwrap_or_default();
             let name = str_param(p, "name").map(|n| cap(n, MAX_TEXT)).filter(|n| !n.is_empty()).unwrap_or_else(|| kind.replace('_', " "));
             let sig = signature(&strokes);
-            let id = if id.is_empty() { format!("user:{}", slug(&format!("{name} {}", &sig.chars().take(24).collect::<String>()))) } else { id };
+            let id = if id.is_empty() { format!("user:{}", slug(&format!("{name} {}", sig.chars().take(24).collect::<String>()))) } else { id };
             if t.get(&id).is_some() {
                 return Err(bad(SET, format!("the table has an entry {id} already: change it with action kind/off/on")));
             }

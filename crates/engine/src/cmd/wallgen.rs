@@ -1112,6 +1112,32 @@ fn plan_touched(a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
         .collect()
 }
 
+/// Whether object `h`, different between `before` (where a command started) and `now`, differs
+/// only because a sheet change during the command (`moves`: each as the drawing before and after
+/// it) loaded it into memory or put it out (Q6570): put out as it was when the command started,
+/// or loaded and unchanged since, or both. That is no edit of the plan.
+fn sheet_moved(moves: &[(Arc<Drawing>, Arc<Drawing>)], before: &Drawing, now: &Drawing, h: Handle) -> bool {
+    let put_out =
+        |b: &Arc<Entity>| moves.iter().any(|(pre, post)| post.model.get(h).is_none() && pre.model.get(h).is_some_and(|p| Arc::ptr_eq(p, b)));
+    let loaded = |n: &Arc<Entity>| moves.iter().any(|(pre, post)| pre.model.get(h).is_none() && post.model.get(h).is_some_and(|p| Arc::ptr_eq(p, n)));
+    match (before.model.get(h), now.model.get(h)) {
+        (Some(b), None) => put_out(b),
+        (None, Some(n)) => loaded(n),
+        (Some(b), Some(n)) => put_out(b) && loaded(n),
+        (None, None) => true,
+    }
+}
+
+/// [`plan_touched`] between `a` and `b`, less what the active drawing's sheet changes during the
+/// command only moved in or out of memory ([`sheet_moved`]).
+fn plan_edited(st: &crate::DocState, a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
+    let mut touched = plan_touched(a, b, g);
+    if !st.sheet_moves.is_empty() {
+        touched.retain(|h| !sheet_moved(&st.sheet_moves, a, b, *h));
+    }
+    touched
+}
+
 /// Whether object `h` is the very same in `a` and `b` (or in neither).
 fn same_object(a: &Drawing, b: &Drawing, h: Handle) -> bool {
     match (a.model.get(h), b.model.get(h)) {
@@ -1216,6 +1242,13 @@ pub fn model_behind(s: &Session) -> bool {
 /// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     behind_after_command(s, before);
+    // The outermost command is over: the sheet changes it made are forgotten (they hold
+    // drawing states, the sheets put out among them).
+    if s.journal.at_top() && s.running.is_none() && s.suspended.is_none() {
+        for st in &mut s.docs {
+            st.sheet_moves.clear();
+        }
+    }
     // Then the drawing state now follows the build it comes from (and a build this command
     // made takes the model as the command left it).
     super::revise3d::after_command(s, before);
@@ -1251,13 +1284,13 @@ fn behind_after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
         // A drawing behind, and a build newer than the one it was behind (this command's:
         // `model.update`, `model.revise`, `model.build`; or one on another branch of the undo
         // history): current when that build's plan objects are the plan's now.
-        if built.is_some_and(|b| plan_touched(&b.0, &st.doc, g).is_empty()) {
+        if built.is_some_and(|b| plan_edited(st, &b.0, &st.doc, g).is_empty()) {
             return;
         }
     } else if !st.model_behind.holds(before) {
         // Model space untouched (a command that drew on a sheet's paper space), or no plan
         // object changed: the model is as current as it was.
-        let touched = plan_touched(before, &st.doc, g);
+        let touched = plan_edited(st, before, &st.doc, g);
         if touched.is_empty() {
             return;
         }
@@ -1409,6 +1442,22 @@ pub(crate) fn runs_with_model_behind(id: &str) -> bool {
 pub fn update_model(s: &mut Session) -> bool {
     if s.model_updating {
         return false;
+    }
+    let Ok(st) = s.state() else { return false };
+    if !st.model_behind.holds(&st.doc) {
+        return false;
+    }
+    // The plan is the whole print set, whatever part of it is in memory (Q6570): a build from
+    // the sheets in memory alone would drop the rest of the building. The set goes out of
+    // memory again when the interface is idle; the state loaded is behind as the one before.
+    if st.wallgen.as_ref().is_some_and(|g| g.auto) && s.has_parked_sheets() {
+        match s.load_all_sheets() {
+            Ok(_) => s.note_whole_set_load("model.update"),
+            Err(e) => {
+                s.echo(e.to_string());
+                return false;
+            }
+        }
     }
     let Ok(st) = s.state() else { return false };
     if !st.model_behind.holds(&st.doc) {
