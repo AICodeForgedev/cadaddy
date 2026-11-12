@@ -830,7 +830,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // A room: its receptacles grouped by the room they say they are in (on their level); the one
     // named, else the commonest kind of room (the receptacle count most rooms have).
-    let want = p.get("room").and_then(Value::as_str).map(|r| r.trim().to_ascii_lowercase()).filter(|r| !r.is_empty());
+    let want = number_or_name_param(p, "room").map(|r| r.to_ascii_lowercase());
     let recs: Vec<usize> = f.elems.iter().enumerate().filter(|(_, e)| receptacle(f.kind_of(e))).map(|(i, _)| i).collect();
     let mut rooms: BTreeMap<(String, String), (Vec<usize>, model3::Aabb)> = BTreeMap::new();
     for &i in &recs {

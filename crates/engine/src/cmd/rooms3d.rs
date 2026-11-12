@@ -276,7 +276,11 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
                     elevation: r.z,
                     ceiling: Some(r.ceiling_ft * upf).filter(|c| c.is_finite() && *c > 0.0).unwrap_or(DEFAULT_CEILING_IN * upf / 12.0),
                     ceiling_source: if r.ceiling_ft.is_finite() && r.ceiling_ft > 0.0 { "spec" } else { "default" }.into(),
-                    finish_detail: r.finish.iter().map(|f| FinishDetail { slot: "floor".into(), code: f.clone(), source: "spec".into() }).collect(),
+                    finish_detail: r
+                        .finish
+                        .iter()
+                        .map(|f| FinishDetail { slot: "floor".into(), code: f.clone(), source: r.finish_source.clone() })
+                        .collect(),
                     finishes: r.finish.into_iter().collect(),
                     materials: spec_room.map(|x| serde_json::to_value(&x.materials).unwrap_or(Value::Null)).unwrap_or(Value::Null),
                     level: Some(r.level).filter(|l| !l.is_empty()),

@@ -16,6 +16,15 @@ cadaddy-mcp = { workspace = true }
 cadaddy-render = { workspace = true }
 serde_json = { workspace = true }
 
+# glibc's malloc keeps what each thread frees in that thread's own arena (up to 8 per core), so a
+# many-core job's resident size followed the thread count, not what it held (main.rs, ALLOC).
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+mimalloc = { workspace = true }
+
 [[bin]]
 name = "cadaddy-cli"
 path = "src/main.rs"
+
+[dev-dependencies]
+# Made-up print sets for the job memory test (job_memory.rs).
+cadaddy-mepfix = { path = "../../crates/mepfix" }

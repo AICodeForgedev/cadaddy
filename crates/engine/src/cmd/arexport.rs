@@ -527,12 +527,8 @@ fn scope_of(p: &Value, all: &[Room], sp: &cadaddy_walk3d::BuildingSpec) -> Resul
         sc.level = Some(lv.name.clone());
     }
     let mut wanted = list_param(p, "rooms")?;
-    if let Some(r) = p.get("room").filter(|v| !v.is_null()) {
-        let r = r
-            .as_str()
-            .map(str::to_string)
-            .or_else(|| r.as_u64().map(|n| n.to_string()))
-            .ok_or_else(|| bad(CMD, "`room` must be a room's number or name"))?;
+    if p.get("room").is_some_and(|v| !v.is_null()) {
+        let r = number_or_name_param(p, "room").ok_or_else(|| bad(CMD, "`room` must be a room's number or name"))?;
         wanted.insert(0, r);
     }
     if wanted.len() > MAX_SCOPE_ROOMS {
