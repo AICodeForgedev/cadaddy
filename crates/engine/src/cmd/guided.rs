@@ -11663,12 +11663,22 @@ fn typical_heights(
                             // circuit the schedule gives that appliance when the room has it, never
                             // one whose circuit the schedule gives another appliance (Q6344).
                             let fits_kind = |i: usize, j: usize| {
-                                let Some(n) = spots.get(i).and_then(|(ni, _)| v.notes.get(*ni)) else { return true };
+                                let fed_j = fed.get(j).map_or("", String::as_str);
+                                // The receptacle on an appliance's circuit is kept for that
+                                // appliance's note when the view has one: no other note takes it.
+                                let kept = |n: &(cadaddy_geom::Vec2, f64, String, bool, String)| {
+                                    !fed_j.is_empty() && v.notes.iter().any(|o| o.3 && o.4 == fed_j) && !(n.3 && n.4 == fed_j)
+                                };
+                                let Some(n) = spots.get(i).and_then(|(ni, _)| v.notes.get(*ni)) else {
+                                    return fed_j.is_empty() || !v.notes.iter().any(|o| o.3 && o.4 == fed_j);
+                                };
+                                if kept(n) {
+                                    return false;
+                                }
                                 if !n.3 {
                                     return true;
                                 }
-                                mine.get(j).and_then(|k| devices.get(*k)).is_some_and(feeds_appliance)
-                                    && appliance_fits(&n.4, fed.get(j).map_or("", String::as_str), &fed)
+                                mine.get(j).and_then(|k| devices.get(*k)).is_some_and(feeds_appliance) && appliance_fits(&n.4, fed_j, &fed)
                             };
                             // An appliance's note and the room's receptacle on that appliance's
                             // circuit are one device wherever the two plans draw it: the
@@ -36717,6 +36727,10 @@ mod tests {
             text(&mut s, [w[0] + 110.0, w[1] + y + 4.4], label, 4.0);
             text(&mut s, [w[0] + 110.0, w[1] + y - 2.0], height, 4.0);
         }
+        // And a counter receptacle's plain height note, its symbol nearer the electrical plan's
+        // microwave receptacle than the microwave's own note is.
+        s.execute("circle", &json!({"center": [w[0] + 136.0, w[1] + 150.0], "radius": 4.0})).unwrap();
+        text(&mut s, [w[0] + 110.0, w[1] + 148.0], "44\" AFF", 4.0);
         text(&mut s, [w[0], w[1] - 19.0], "UNIT PLAN - STUDIO SUITE", 7.4);
         text(&mut s, [w[0], w[1] - 28.0], "SCALE: 1/4\" = 1'-0\"", 4.6);
         let hi_a = s.doc().unwrap().handseed;
@@ -36775,7 +36789,7 @@ mod tests {
         let aff = |st: &[super::super::readers::ReadDevice], c: &str| st.iter().find(|d| d.circuit == c).and_then(|d| d.aff_in);
         assert_eq!(aff(&stamped, "U-2"), Some(65.0), "the microwave's circuit takes the microwave's note: {stamped:?} {heights:?}");
         assert_eq!(aff(&stamped, "U-6"), Some(30.0), "the range's circuit takes the cooktop's: {stamped:?}");
-        assert_eq!(aff(&stamped, "U-5"), None, "the dishwasher's takes neither: {stamped:?}");
+        assert_eq!(aff(&stamped, "U-5"), Some(44.0), "the dishwasher's takes neither appliance's, the counter's note: {stamped:?}");
         let mw = stamped.iter().find(|d| d.circuit == "U-2").unwrap();
         assert!((mw.at[1] - 125.0).abs() < 4.0, "at the microwave's symbol: {mw:?}");
         let rg = stamped.iter().find(|d| d.circuit == "U-6").unwrap();
