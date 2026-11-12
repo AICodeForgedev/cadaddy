@@ -263,6 +263,12 @@ pub fn index_store(d: &Drawing, store: &EntityStore) -> Arc<SpatialIndex> {
     ix
 }
 
+/// Whether an index of `d`'s `space` as it is now is kept.
+#[cfg(test)]
+pub(crate) fn is_cached(d: &Drawing, space: &Space) -> bool {
+    d.space(space).is_some_and(|store| CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|ix| ix.matches(d, store)))
+}
+
 /// Drop every cached index (frees memory held by closed drawings).
 pub fn clear_cache() {
     CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
