@@ -438,10 +438,11 @@ fn code_features_are_checked_where_the_code_wants_them() {
 fn gfci_is_judged_on_the_whole_circuit() {
     let mut j = job();
     let (_, fs) = screen(&mut j.s);
-    // GFCI breaker + GFCI receptacle: double protection.
+    // GFCI breaker + GFCI receptacle: redundant protection, allowed (the code never asks to remove
+    // protection the drawings call for; fix-coderules-drops-printed-gfci).
     let d = of(&fs, &j.double, "G-PRODUCT-CODE", "gfci");
-    assert_eq!(d["verdict"], "fail", "{d}");
-    assert!(d["issue"].as_str().unwrap().contains("double protection"), "{d}");
+    assert_eq!(d["verdict"], "pass", "{d}");
+    assert!(d["issue"].as_str().unwrap().contains("redundant protection (allowed)"), "{d}");
     assert!(d["measured"]["breaker_row"].as_str().unwrap().contains("panel LP1 schedule on E-601, circuit 1"), "the breaker's row cited: {d}");
     // GFCI breaker + standard receptacle: pass.
     let g = of(&fs, &j.on_gf, "G-PRODUCT-CODE", "gfci");

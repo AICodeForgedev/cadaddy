@@ -322,11 +322,11 @@
       "id": "G-PRODUCT-CODE",
       "trade": "electrical",
       "applies_to": {"kinds": ["receptacle"], "categories": [], "marks": []},
-      "check": "Each receptacle has the features the code requires where it is, from the code rules data the build applies too: tamper-resistant in guest rooms and dwelling units, GFCI protection judged on its whole circuit (a GFCI breaker means a standard device; near a sink or in a listed place on a standard breaker, a GFCI device or one on the load side of a GFCI device of the same circuit), weather-resistant outdoors.",
+      "check": "Each receptacle has the features the code requires where it is, from the code rules data the build applies too: tamper-resistant in guest rooms and dwelling units, GFCI protection judged on its whole circuit (a GFCI breaker protects every device on it, a standard one or a drawn GFCI one, which is redundant protection the code allows; near a sink or in a listed place on a standard breaker, a GFCI device or one on the load side of a GFCI device of the same circuit), weather-resistant outdoors.",
       "how": [
         "The prescreen reads each receptacle's room, its circuit and that breaker's type from the panel schedule, the sinks near it and the places the code lists, and says pass, fail or unsure with the code text and the schedule row cited.",
         "Where it says 'unsure' ('breaker type unknown' or 'no product data'), read the panel schedule row of its circuit and the device's legend row or tag on the plan.",
-        "A GFCI receptacle on a GFCI breaker is a 'fail' (double protection); a standard receptacle where GFCI is needed with no GFCI breaker and no GFCI receptacle upstream on its circuit is a 'fail'."
+        "A GFCI receptacle on a GFCI breaker is a 'pass' (redundant protection, allowed: the code never asks to remove protection the drawings call for; a standard device there is a value-engineering choice); a standard receptacle where GFCI is needed with no GFCI breaker and no GFCI receptacle upstream on its circuit is a 'fail'."
       ],
       "documents": ["plan", "enlarged_plan", "schedule", "legend", "general_notes", "spec"],
       "tolerance": {},

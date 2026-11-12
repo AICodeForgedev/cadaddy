@@ -17,8 +17,9 @@
 //!
 //! GFCI is judged per circuit. The receptacle's circuit (panel + number) and that breaker's type
 //! are read again from the panel schedule; the build's stamped verdicts (`gfci_breaker`, `gfci`,
-//! `protected_by`) are never read. Under a GFCI breaker the receptacle must be a standard device
-//! (a GFCI one there is double protection: `fail`). Where the location needs GFCI (the plan tags
+//! `protected_by`) are never read. Under a GFCI breaker the receptacle is protected: a standard
+//! device passes, and so does a GFCI one (redundant protection, allowed: the code never asks to
+//! remove protection the drawings call for; reported for value engineering). Where the location needs GFCI (the plan tags
 //! it so, it is within reach of a sink, or its room or circuit is a place the rules list) and the
 //! breaker isn't GFCI, the receptacle must be a GFCI device or on the load side of one on the same
 //! circuit (a GFCI receptacle on that circuit nearer its panel), which the finding names. An
@@ -1412,12 +1413,14 @@ fn gfci_checks(inp: &Input, r: &Effective, gf: &CodeRule, items: &[Lit], out: &m
         let mut skip_why: Option<String> = None;
         let (verdict, issue, expected) = match &f.breaker {
             Breaker::Known(true, row) => match dev {
+                // Redundant protection: the code requires protection and never asks to remove
+                // what the drawings call for; a standard device is a value-engineering choice.
                 Some(true) => (
-                    "fail",
+                    "pass",
                     format!(
-                        "double protection: {kind_words} is a GFCI device ({dev_from}) on a GFCI breaker ({row}); a standard receptacle belongs there"
+                        "redundant protection (allowed): {kind_words} is a GFCI device ({dev_from}) on a GFCI breaker ({row}); a standard receptacle would do (value engineering)"
                     ),
-                    format!("a standard (non-GFCI) receptacle: its breaker protects it ({row})"),
+                    format!("GFCI protection: its breaker gives it ({row})"),
                 ),
                 Some(false) => (
                     "pass",
@@ -1426,8 +1429,8 @@ fn gfci_checks(inp: &Input, r: &Effective, gf: &CodeRule, items: &[Lit], out: &m
                 ),
                 None => (
                     "unsure",
-                    format!("{NO_DATA}: {dev_from}; its breaker is GFCI ({row}), so it should be a standard device"),
-                    format!("a standard receptacle on its GFCI breaker ({row})"),
+                    format!("{NO_DATA}: {dev_from}; its breaker is GFCI ({row}), which protects it either way"),
+                    format!("GFCI protection: its breaker gives it ({row})"),
                 ),
             },
             Breaker::Known(false, row) => {
