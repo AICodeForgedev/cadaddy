@@ -174,6 +174,7 @@ pub mod mep;
 pub mod mepatoms;
 pub mod mepedit;
 pub mod mepqty;
+mod merge;
 mod mleader_content;
 pub(crate) mod mleader_edit;
 mod models3d;
