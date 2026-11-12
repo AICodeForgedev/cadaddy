@@ -27,6 +27,7 @@ pub mod calibrate;
 mod cam;
 pub(crate) mod ceilheight;
 pub mod ceilings;
+pub(crate) mod ceilingseat;
 pub mod classic;
 pub(crate) mod clip_partners;
 pub mod clipboard;

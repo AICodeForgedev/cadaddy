@@ -280,6 +280,7 @@
   },
   "colors_source": "NEC 200.6 (neutral white or gray), 250.119 (ground green); phase colours: the trade's usual code (company default; NEC 210.5(C) asks the code be posted)",
   "phase_source": "panel circuit numbering: circuits 1-2 on phase A, 3-4 on B, 5-6 on C (standard panelboard bussing)",
+  "phase_single_source": "panel circuit numbering on a single-phase panel (its schedule's volts/phase: 1PH, or a 120/240 V system): circuits 1-2 on phase A, 3-4 on B, then A and B again; it has no phase C (standard panelboard bussing, NEC 408.3(E))",
   "offset_max_ft": 1.0,
   "joint_tol_in": 1.0,
   "one_raceway_source": "NEC 300.3(B): all conductors of one circuit in the same raceway; trade practice: a circuit's runs that leave a box or run one way together share one conduit to where they part, and a junction box joins them there (NEC 314.16, 4\" square); so a stretch the routing laid twice for one circuit is one raceway with one set of the circuit's conductors",
