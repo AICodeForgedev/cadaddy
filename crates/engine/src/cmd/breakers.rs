@@ -242,8 +242,11 @@ pub(crate) struct Serves {
     pub description: String,
     /// Why the circuit is a dwelling unit's or a guest room's, when it is.
     pub unit: Option<String>,
-    /// Receptacles on the circuit (a GFCI device's places).
+    /// Receptacles on the circuit.
     pub receptacles: usize,
+    /// Of them, the GFCI devices (a GFCI receptacle, or one the code rules made the circuit's
+    /// GFCI: `gfci` device or load side).
+    pub gfci_devices: usize,
     /// The names of the equipment on the circuit (its tags and kinds).
     pub loads: Vec<String>,
 }
@@ -259,8 +262,8 @@ pub(crate) struct Decided {
 }
 
 /// A row with no protection code: arc fault where it is a unit's 120 V single-pole 15/20 A
-/// circuit, ground fault at the breaker only for a GFCI load no receptacle on the circuit can
-/// carry a GFCI device for; both dual-function, neither standard (Q6350, `breakers.json`
+/// circuit, ground fault at the breaker for a GFCI load unless a GFCI device on the circuit
+/// carries it; both dual-function, neither standard (Q6350, `breakers.json`
 /// `by_circuit`).
 pub(crate) fn by_circuit(s: &Serves) -> Decided {
     let bc = &rules().by_circuit;
@@ -283,11 +286,12 @@ pub(crate) fn by_circuit(s: &Serves) -> Decided {
     }
     let text = std::iter::once(s.description.as_str()).chain(s.loads.iter().map(String::as_str)).collect::<Vec<_>>().join(" ");
     if let Some(load) = super::coderules::place_of(&bc.ground_fault_loads, &text) {
-        if s.receptacles == 0 {
+        if s.gfci_devices == 0 {
             features.push("ground_fault".to_string());
-            why.push(format!("{}: a GFCI load, and no receptacle on the circuit to carry a GFCI device", load.cite));
+            let none = if s.receptacles == 0 { "no receptacle on the circuit" } else { "no receptacle on the circuit is a GFCI device" };
+            why.push(format!("{}: a GFCI load, and {none}: GFCI at the breaker", load.cite));
         } else {
-            why.push(format!("{}: GFCI at the circuit's receptacle, not its breaker: {}", load.cite, bc.device_rule));
+            why.push(format!("{}: GFCI at the circuit's GFCI receptacle, not its breaker: {}", load.cite, bc.device_rule));
         }
         cites.push(load.cite.clone());
     }
@@ -613,6 +617,8 @@ struct Dev {
     fed_from: Option<Handle>,
     /// What it is (`receptacle`, `switch`; equipment: its kind and tag).
     kind: String,
+    /// A GFCI device: a GFCI receptacle, or the one the code rules made its circuit's GFCI.
+    gfci: bool,
 }
 
 /// Gear that is fed rather than feeding: it holds no breakers, though its record names a panel.
@@ -637,6 +643,7 @@ fn equipment_load(e: &Entity) -> Option<Dev> {
         handle: e.handle,
         fed_from: None,
         kind: what,
+        gfci: false,
         room: made_prop(e, "ROOM").unwrap_or_default(),
         level: super::bspec::made_level(e).unwrap_or_default(),
         panel,
@@ -671,6 +678,9 @@ fn devices_of(d: &Drawing) -> Vec<Dev> {
                     .or_else(|| super::bimlook::made_tag(e, super::elemprops::ELEMENT_TAG).map(str::to_string))
                     .unwrap_or_default()
                     .to_ascii_lowercase(),
+                gfci: text("kind").eq_ignore_ascii_case("gfci_receptacle")
+                    || text("receptacle_type").eq_ignore_ascii_case("GFCI")
+                    || ["device", "load side"].iter().any(|g| text("gfci").eq_ignore_ascii_case(g)),
                 room: text("room"),
                 level: super::bspec::made_level(e).unwrap_or_default(),
                 panel,
@@ -1165,6 +1175,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
                     description: c.description.clone(),
                     unit: unit_of(p, &devs),
                     receptacles: devs.iter().filter(|dv| r.by_circuit.receptacle_kinds.iter().any(|k| dv.kind.eq_ignore_ascii_case(k))).count(),
+                    gfci_devices: devs.iter().filter(|dv| dv.gfci).count(),
                     loads: devs.iter().filter(|dv| !dv.kind.is_empty()).map(|dv| dv.kind.clone()).collect(),
                 };
                 let dec = by_circuit(&serves);
@@ -1805,6 +1816,7 @@ mod tests {
     #[test]
     fn a_circuit_with_no_type_code_is_typed_by_what_it_serves() {
         let unit = Some("room 201 is a unit".to_string());
+        // `gf`: GFCI devices among the receptacles.
         let s = |desc: &str, poles: u32, amps: Option<f64>, volts: Option<f64>, unit: &Option<String>, rcpts: usize| Serves {
             poles,
             trip: amps,
@@ -1812,17 +1824,22 @@ mod tests {
             description: desc.into(),
             unit: unit.clone(),
             receptacles: rcpts,
+            gfci_devices: 0,
             loads: Vec::new(),
         };
+        let gf = |x: Serves, n: usize| Serves { gfci_devices: n, ..x };
         let ty = |x: Serves| by_circuit(&x).ty;
         assert_eq!(ty(s("DESK RCPT", 1, Some(20.0), Some(120.0), &unit, 3)), "AFCI");
-        // A unit's GFCI load: at the breaker with no receptacle, else at its receptacle.
+        // A unit's GFCI load: at the breaker unless a GFCI device on the circuit carries it
+        // (then the breaker is AFCI).
         assert_eq!(ty(s("DISHWASHER", 1, Some(20.0), Some(120.0), &unit, 0)), "dual-function");
-        let d = by_circuit(&s("DISHWASHER", 1, Some(20.0), Some(120.0), &unit, 1));
+        assert_eq!(ty(s("DISHWASHER", 1, Some(20.0), Some(120.0), &unit, 1)), "dual-function", "its receptacle is no GFCI");
+        let d = by_circuit(&gf(s("DISHWASHER", 1, Some(20.0), Some(120.0), &unit, 1), 1));
         assert_eq!(d.ty, "AFCI");
         assert!(d.basis.contains("receptacle") && d.cites.iter().any(|c| c.contains("422.5")), "{d:?}");
         // No unit: GFCI only, or standard.
-        assert_eq!(ty(s("SUMP PUMP", 1, Some(20.0), None, &None, 0)), "GFCI");
+        assert_eq!(ty(s("SUMP PUMP", 1, Some(20.0), None, &None, 1)), "GFCI");
+        assert_eq!(ty(gf(s("SUMP PUMP", 1, Some(20.0), None, &None, 1), 1)), "standard");
         assert_eq!(ty(s("CORRIDOR RCPT", 1, Some(20.0), None, &None, 2)), "standard");
         // Outside the AFCI rule's reach: two-pole, over 20 A, 277 V.
         assert_eq!(ty(s("HEAT PUMP", 2, Some(20.0), Some(120.0), &unit, 0)), "standard");

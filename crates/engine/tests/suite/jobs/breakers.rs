@@ -626,7 +626,7 @@ fn a_breaker_row_without_a_type_code_is_typed_by_what_its_circuit_serves() {
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
         "unit_instances": [{"number": "201", "type": "A"}, {"number": "202", "type": "B"}],
         "tags": [
-            device("device:L1:1", "receptacle", 5.0, "H-3"),
+            device("device:L1:1", "gfci_receptacle", 5.0, "H-3"),
             device("device:L1:2", "receptacle", 6.0, "H-1"),
         ],
         "mep": {
@@ -688,7 +688,7 @@ fn a_breaker_row_without_a_type_code_is_typed_by_what_its_circuit_serves() {
     let bs = breakers_of(&mut s, "H");
     let ty = |n: &str| val(&by_row(&bs, n), "type").as_str().unwrap_or_default().to_string();
     assert_eq!(ty("1"), "standard", "no unit, no GFCI load");
-    // A vending machine's receptacle carries its GFCI device: the breaker is standard.
+    // A vending machine's GFCI receptacle carries its ground fault: the breaker is standard.
     assert_eq!(ty("3"), "standard");
     assert!(by_row(&bs, "3")["type_basis"]["note"].to_string().contains("receptacle"), "{bs:?}");
     // A drinking fountain wired straight to its circuit: GFCI at the breaker (NEC 422.5).
