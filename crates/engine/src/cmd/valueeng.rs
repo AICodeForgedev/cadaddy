@@ -188,6 +188,10 @@ pub(crate) struct Alternative {
     pub conditions: Vec<String>,
     pub excluded_areas: BTreeMap<String, String>,
     pub intents: Vec<String>,
+    /// The areas its cable is never used in (Validate's G-VE-AREA table, [`rules`] fills it):
+    /// excluded wherever it goes; an alternative for those areas only is not allowed.
+    #[serde(skip)]
+    pub never: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -198,7 +202,15 @@ pub(crate) struct Cite {
 }
 
 pub(crate) fn rules() -> Rules {
-    serde_json::from_str(RULES).unwrap_or_default()
+    let mut r: Rules = serde_json::from_str(RULES).unwrap_or_default();
+    // Where each cable is never used is Validate's table (G-VE-AREA), not a second copy here.
+    for alt in &mut r.alternatives {
+        alt.never = super::validate_value::never_areas(&alt.cable);
+        for (a, why) in &alt.never {
+            alt.excluded_areas.insert(a.clone(), format!("{why} (G-VE-AREA)"));
+        }
+    }
+    r
 }
 
 // ---- The specification's wiring-methods table ---------------------------------------------------
@@ -635,7 +647,18 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
             }));
         }
         let lists_alt = app.is_some_and(|ap| ap.methods.contains(&alt.alternative));
+        // Areas its cable is never used in (G-VE-AREA): an alternative for those only is not allowed.
+        let never_all = !alt.areas.is_empty() && alt.areas.iter().all(|a| alt.never.contains_key(a));
         let (tier, why) = match (app, code_ok) {
+            _ if never_all => (
+                "not_allowed",
+                format!(
+                    "{} cable is never used in {}: {} (Validate's area rule G-VE-AREA)",
+                    alt.cable,
+                    alt.areas.iter().map(|a| rules.areas.get(a).map_or(a.as_str(), |x| x.name.as_str())).collect::<Vec<_>>().join(", "),
+                    alt.areas.iter().filter_map(|a| alt.never.get(a)).cloned().collect::<Vec<_>>().join("; ")
+                ),
+            ),
             (None, _) => ("no_application", "the specification's wiring-methods table has no application this alternative answers to".to_string()),
             (Some(_), false) => (
                 "not_allowed",
@@ -721,8 +744,10 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
             v["why"] = json!(why);
         }
         for a in &alt.areas {
+            // An area its cable is never used in lists it not allowed, whatever its other areas say.
+            let tier_here = if alt.never.contains_key(a) { "not_allowed" } else { tier };
             if let Some(g) = groups.get_mut(&(alt.circuit.clone(), a.clone()))
-                && let Some(list) = g[tier].as_array_mut()
+                && let Some(list) = g[tier_here].as_array_mut()
                 && !list.contains(&json!(alt.id))
             {
                 list.push(json!(alt.id));
