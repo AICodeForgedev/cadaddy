@@ -1815,7 +1815,7 @@ mod tests {
     /// Q6350: a row that names no protection is typed by what its circuit serves.
     #[test]
     fn a_circuit_with_no_type_code_is_typed_by_what_it_serves() {
-        let unit = Some("room 201 is a unit".to_string());
+        let unit = Some("room N1 is a unit".to_string());
         // `gf`: GFCI devices among the receptacles.
         let s = |desc: &str, poles: u32, amps: Option<f64>, volts: Option<f64>, unit: &Option<String>, rcpts: usize| Serves {
             poles,
@@ -1857,10 +1857,10 @@ mod tests {
         // A guest laundry is no unit; a guest suite is.
         let u = Units {
             numbers: BTreeMap::new(),
-            names: [("149".to_string(), "GUEST LAUNDRY".to_string()), ("5".to_string(), "GUEST SUITE".to_string())].into_iter().collect(),
+            names: [("N9".to_string(), "GUEST LAUNDRY".to_string()), ("N5".to_string(), "GUEST SUITE".to_string())].into_iter().collect(),
         };
-        assert!(u.room("149").is_none());
-        assert!(u.room("5").is_some());
+        assert!(u.room("N9").is_none());
+        assert!(u.room("N5").is_some());
     }
 
     #[test]

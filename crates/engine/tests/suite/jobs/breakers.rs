@@ -624,7 +624,7 @@ fn a_breaker_row_without_a_type_code_is_typed_by_what_its_circuit_serves() {
     let spec = json!({
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
-        "unit_instances": [{"number": "201", "type": "A"}, {"number": "202", "type": "B"}],
+        "unit_instances": [{"number": "N1", "type": "A"}, {"number": "N2", "type": "B"}],
         "tags": [
             device("device:L1:1", "gfci_receptacle", 5.0, "H-3"),
             device("device:L1:2", "receptacle", 6.0, "H-1"),
@@ -632,10 +632,10 @@ fn a_breaker_row_without_a_type_code_is_typed_by_what_its_circuit_serves() {
         "mep": {
             "equipment": [
                 {"tag": "H", "kind": "panel", "level": "L1", "min": [-24, 110], "max": [-4, 130], "height_ft": 4, "bottom_ft": 2},
-                {"tag": "K-201", "kind": "panel", "level": "L1", "min": [300, 110], "max": [314, 114], "height_ft": 2, "bottom_ft": 4,
-                 "properties": {"PANEL": "K", "ROOM": "201"}},
-                {"tag": "K-202", "kind": "panel", "level": "L1", "min": [500, 110], "max": [514, 114], "height_ft": 2, "bottom_ft": 4,
-                 "properties": {"PANEL": "K", "ROOM": "202"}},
+                {"tag": "K-N1", "kind": "panel", "level": "L1", "min": [300, 110], "max": [314, 114], "height_ft": 2, "bottom_ft": 4,
+                 "properties": {"PANEL": "K", "ROOM": "N1"}},
+                {"tag": "K-N2", "kind": "panel", "level": "L1", "min": [500, 110], "max": [514, 114], "height_ft": 2, "bottom_ft": 4,
+                 "properties": {"PANEL": "K", "ROOM": "N2"}},
                 {"tag": "EWC-1", "kind": "water_cooler", "level": "L1", "min": [40, 110], "max": [42, 112], "height_ft": 3, "bottom_ft": 0,
                  "properties": {"PANEL": "H", "CIRCUIT": "5"}}
             ],
@@ -663,7 +663,7 @@ fn a_breaker_row_without_a_type_code_is_typed_by_what_its_circuit_serves() {
     });
     let mut s = built(spec, false);
     let by_row = |bs: &[Value], n: &str| bs.iter().find(|b| val(b, "circuit_number") == n).cloned().unwrap_or_else(|| panic!("row {n}: {bs:?}"));
-    for unit in ["K-201", "K-202"] {
+    for unit in ["K-N1", "K-N2"] {
         let bs = breakers_of(&mut s, unit);
         let ty = |n: &str| val(&by_row(&bs, n), "type").as_str().unwrap_or_default().to_string();
         // The row's codes decide where they name protection.
