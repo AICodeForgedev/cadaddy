@@ -721,9 +721,10 @@ fn ducts_terminals_and_equipment_carry_size_system_airflow_and_capacity() {
         if p["size"]["value"] == "12x8" {
             assert_eq!(p["size"]["source"]["kind"], "print", "a size read from a tag: {p:#}");
             assert_eq!(p["shape"]["value"], "rectangular");
-            // The route height was estimated: a default, never a reading.
+            // The route height was estimated: a default, never a reading. The build raises it
+            // into the plenum, 3" over the level's 9' ceiling (M-TERMINAL-CEILING).
             assert_eq!(p["elevation"]["source"]["kind"], "default", "{p:#}");
-            assert_eq!(p["elevation"]["value"], json!(8.5));
+            assert_eq!(p["elevation"]["value"], json!(9.25));
         }
     }
     let terminals = find(&mut s, "fixture", json!({"cfm": "exists"}));

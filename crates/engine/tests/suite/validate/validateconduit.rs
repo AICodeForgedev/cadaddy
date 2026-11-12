@@ -435,6 +435,57 @@ fn the_wiring_method_is_checked_against_the_specifications_table_and_the_project
     assert!(m.get("fail").copied().unwrap_or(0) > 0 && !m.contains_key("pass"), "{m:?}");
 }
 
+/// Q6535: a limited-energy circuit (fire alarm cable, `fa:` runs as the fire alarm router lays
+/// them) is wired by its own article, not the power wiring-methods table: FPLP cable passes in a
+/// concealed area the power table gives MC only; plain FPL fails once the documents call for
+/// plenum cable, while FPLP still passes.
+#[test]
+fn fire_alarm_cable_is_judged_by_its_listing_not_the_power_wiring_methods_table() {
+    let mut s = building(Some(20), |s| {
+        let methods = json!({"applications": [
+            {"section": "26 05 19", "item": "C", "application": "Branch Circuits Concealed in Ceilings, Walls, and Partitions", "methods": ["mc"]}
+        ]});
+        if let Ok(d) = s.doc_mut() {
+            d.embedded.insert("route/methods.json".into(), std::sync::Arc::new(serde_json::to_vec(&methods).unwrap_or_default()));
+        }
+    });
+    // Every cable run made a fire alarm loop of `ty` cable.
+    let retype = |s: &mut Session, ty: &str| {
+        let cables = pieces(s, "cable");
+        assert!(!cables.is_empty(), "the router lays cable");
+        let d = s.doc_mut().expect("doc");
+        for (h, mut ps) in cables {
+            let run = ps.get("run").map(|x| x.text()).unwrap_or_default();
+            if !run.starts_with("fa:") {
+                ps.set("run", props::Prop::new(format!("fa:FACP-SLC1#{run}"), props::Source::computed()));
+            }
+            ps.set("type", props::Prop::new(format!("{ty} 16/2"), props::Source::computed()));
+            let _ = d.modify_entity(h, |e| {
+                let x = props::write(&e.common.xdata, &ps);
+                e.common.xdata = x.into();
+            });
+        }
+    };
+    let fa = |fs: &[Value]| -> Vec<Value> {
+        of(fs, "E-METHOD").into_iter().filter(|f| f["measured"]["run"].as_str().is_some_and(|r| r.starts_with("fa:"))).cloned().collect()
+    };
+    retype(&mut s, "FPLP");
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    let runs = fa(&fs);
+    assert!(!runs.is_empty(), "{:?}", of(&fs, "E-METHOD"));
+    assert!(runs.iter().all(|f| f["verdict"] == "pass" && f["measured"]["system"] == "limited-energy"), "{runs:?}");
+    // Not FPL where the documents call for plenum cable; FPLP still.
+    let docs = json!({"plenum": "FIRE ALARM CABLE IN CEILINGS USED AS RETURN AIR PLENUMS SHALL BE PLENUM RATED"});
+    s.doc_mut().expect("doc").embedded.insert("route/fawiring.json".into(), std::sync::Arc::new(serde_json::to_vec(&docs).unwrap_or_default()));
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    assert!(fa(&fs).iter().all(|f| f["verdict"] == "pass"), "{:?}", fa(&fs));
+    retype(&mut s, "FPL");
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    let runs = fa(&fs);
+    assert!(!runs.is_empty() && runs.iter().all(|f| f["verdict"] == "fail" && f["issue"].as_str().is_some_and(|i| i.contains("plenum"))), "{runs:?}");
+    assert!(runs.iter().all(|f| f["expected"].as_str().is_some_and(|e| e.contains("FPLP") && e.contains("760.154"))), "{runs:?}");
+}
+
 #[test]
 fn hostile_conduit_records_do_not_panic() {
     let mut s = building(Some(20), |_| {});
