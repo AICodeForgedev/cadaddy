@@ -1702,7 +1702,97 @@ pub(crate) fn equipment_tag(t: &str) -> bool {
         && !cadaddy_mepfix::wordrules::words("rooms.names").contains(&t.to_ascii_uppercase().as_str());
     let circuit =
         words.len() == 1 && t.rsplit_once('-').is_some_and(|(h, n)| !h.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    quoted || length || device_mark || circuit || words.iter().any(|w| cadaddy_mepfix::wordrules::words("equipment.names").contains(&w.as_str()))
+    // An equipment word, also as its plural (`COOLER COMPRESSORS`: the units a note points at).
+    let equipment = |w: &str| {
+        let names = cadaddy_mepfix::wordrules::words("equipment.names");
+        names.contains(&w) || (w.len() > 3 && w.strip_suffix('S').is_some_and(|stem| names.contains(&stem)))
+    };
+    quoted || length || device_mark || circuit || words.iter().any(|w| equipment(w))
+}
+
+/// The most times one letter may follow itself (`BOOKKEEPING`'s doubles): a longer run
+/// (`Kkkkkkkk`, `OOO`) is linework read as letters or a placeholder, never a name.
+const MAX_LETTER_REPEAT: usize = 2;
+/// The longest a name may be with no word of three letters: a code in capitals (`WC`, `IT`, `W/D`)
+/// or a name in a script without case (`厨房`).
+const NAME_CODE_MAX: usize = 4;
+
+/// Whether a label reads as words (Q6365): no letter run of more than [`MAX_LETTER_REPEAT`], and a
+/// word of three letters or more (`LOBBY`, `IDF`, `MEN'S`: an apostrophe inside joins it) or one
+/// short code with no small letter (`WC`, `W/D`, `厨房`). Text read off a print's linework comes
+/// out as letters that read as nothing: `JL TL YL KJ`, `Kkkkkkkkkkk`, `-r-n-`, `--L-T-`, `G L`,
+/// `Xb`.
+pub(crate) fn legible_name(t: &str) -> bool {
+    let t = t.trim();
+    let mut last: Option<char> = None;
+    let mut same = 0usize;
+    for c in t.chars() {
+        let low = c.is_alphabetic().then(|| c.to_lowercase().next().unwrap_or(c));
+        same = if low.is_some() && low == last { same + 1 } else { 1 };
+        if low.is_some() && same > MAX_LETTER_REPEAT {
+            return false;
+        }
+        last = low;
+    }
+    let mut run = 0usize;
+    for c in t.chars() {
+        if c.is_alphabetic() {
+            run += 1;
+            if run >= 3 {
+                return true;
+            }
+        } else if !matches!(c, '\'' | '\u{2019}') {
+            run = 0;
+        }
+    }
+    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+    !t.contains(char::is_whitespace) && t.chars().count() <= NAME_CODE_MAX && letters >= 2 && !t.chars().any(char::is_lowercase)
+}
+
+/// How many of a plan's room numbers must be all digits to each lettered one before a lettered
+/// number with a sheet's letters is taken for a callout ([`CalloutLabels`]).
+const CALLOUT_DIGIT_SHARE: usize = 3;
+
+/// The callout and sheet-reference labels among a plan's number-shaped texts (Q6365): where the
+/// plan's room numbers are digits (`101`, `37`), a number led by the letters of the set's sheet
+/// numbers (`A12` in a set of `A…` sheets) is a view callout's or a sheet reference's label, never
+/// a room's number. A plan that numbers its rooms with letters (`B12` on every room of a lower
+/// level) keeps them.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CalloutLabels {
+    prefixes: std::collections::BTreeSet<String>,
+    on: bool,
+}
+
+/// The letters a label starts with (`A` of `A12`, `FP` of `FP-101`), upper case.
+fn letter_prefix(t: &str) -> String {
+    t.trim().chars().take_while(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase()).collect()
+}
+
+impl CalloutLabels {
+    /// From the set's sheet numbers and the plan's number-shaped texts ([`room_number`]).
+    pub(crate) fn new<'a>(sheets: impl IntoIterator<Item = &'a str>, numbers: impl IntoIterator<Item = &'a str>) -> Self {
+        let prefixes: std::collections::BTreeSet<String> = sheets.into_iter().map(letter_prefix).filter(|p| !p.is_empty()).collect();
+        if prefixes.is_empty() {
+            return Self::default();
+        }
+        let (mut digits, mut lettered) = (0usize, 0usize);
+        for n in numbers {
+            let p = letter_prefix(n);
+            if p.is_empty() {
+                digits += 1;
+            } else if prefixes.contains(&p) {
+                lettered += 1;
+            }
+        }
+        let on = lettered > 0 && digits >= CALLOUT_DIGIT_SHARE && digits >= CALLOUT_DIGIT_SHARE.saturating_mul(lettered);
+        Self { prefixes, on }
+    }
+
+    /// Whether a number-shaped text is a callout's or a sheet reference's label.
+    pub(crate) fn is_callout(&self, t: &str) -> bool {
+        self.on && self.prefixes.contains(&letter_prefix(t))
+    }
 }
 
 /// Whether a text is a note rather than a room's name: a finish code (`CPT-1`), a ceiling, level
@@ -1887,7 +1977,14 @@ pub(crate) fn area_figure(t: &str) -> bool {
 pub(crate) fn room_name_score(t: &str) -> u8 {
     // Letters one by one (`L J`): a fragment of vertical or spaced text, no name.
     let letters_only = tag_words(t).iter().all(|w| w.chars().count() <= 1);
-    if equipment_tag(t) || note_like(t) || room_number(t) || area_figure(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 || letters_only {
+    if equipment_tag(t)
+        || note_like(t)
+        || room_number(t)
+        || area_figure(t)
+        || t.chars().filter(|c| c.is_alphabetic()).count() < 2
+        || letters_only
+        || !legible_name(t)
+    {
         0
     } else if tag_words(t).iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(&w.as_str())) {
         3
@@ -2492,8 +2589,20 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     }
     footprints.extend(spec.iter().flat_map(|sp| sp.levels.iter().filter_map(|l| l.region)));
     footprints.retain(|r| r.iter().all(|v| v.is_finite()));
-    let mut numbers: Vec<Label> =
-        all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase())).cloned().collect();
+    // A view callout's label (`A12`) on a plan numbering its rooms in digits: no room's number
+    // either (Q6365: a callout numbered the note beside it as a room).
+    let in_regions = |p: Vec2| {
+        regions.is_none_or(|rs| rs.iter().any(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3])))
+    };
+    let callouts = CalloutLabels::new(
+        sheet_numbers.iter().map(String::as_str),
+        all.iter().filter(|(_, t, at, _, tag)| !tag && room_number(t) && in_regions(*at)).map(|l| l.1.as_str()),
+    );
+    let mut numbers: Vec<Label> = all
+        .iter()
+        .filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase()) && !callouts.is_callout(t))
+        .cloned()
+        .collect();
     numbers.extend(tag_numbers);
     // The room numbers by height on the page: a name's own number is looked for in the band
     // round it only (a print set's sheets side by side hold tens of thousands of texts).
@@ -2521,9 +2630,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     // words ([`crate::cmd::autospec::room_like_name`]), an equipment or device tag, nor a callout
     // with no room word and no number (`FLOOR SINK`, `PROVIDE PLYWOOD`). Each text counted once by
     // what became of it ([`NameCandidates`]).
-    let in_views = |p: Vec2| {
-        regions.is_none_or(|rs| rs.iter().any(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3])))
-    };
+    let in_views = in_regions;
     let mut candidates = NameCandidates { texts: all.len(), ..NameCandidates::default() };
     let mut needs_number: std::collections::HashSet<cadaddy_doc::Handle> = std::collections::HashSet::new();
     let mut names: Vec<Label> = Vec::new();
@@ -2545,6 +2652,9 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
             Some("note_or_finish_code")
         } else if in_block.contains(h) {
             Some("note_block_line")
+        } else if !legible_name(t) {
+            // Linework read as letters (`JL TL YL KJ`, `Kkkkkkkk`, `-r-n-`), never a name.
+            Some("illegible")
         } else if !crate::cmd::autospec::room_like_name(t) {
             Some("sentence_title_block_or_stamp")
         } else {
@@ -3513,6 +3623,66 @@ mod tests {
         let c = &trace.candidates;
         assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (8, 2, 2, 4), "{c:?}");
         assert!(c.dropped.is_empty(), "{c:?}");
+    }
+
+    /// Q6365: a room's name reads as words. Linework read as letters is none, whatever number is
+    /// printed by it.
+    #[test]
+    fn a_rooms_name_reads_as_words() {
+        for good in
+            ["LOBBY", "IDF", "WC", "IT", "W/D", "CORR", "Office", "STAIR 2", "MEN'S", "Takeout", "BOOKKEEPING", "MECH./ELEC.", "厨房", "Küche"]
+        {
+            assert!(legible_name(good), "{good}");
+        }
+        for bad in ["JL TL YL KJ", "Kkkkkkkkkkkkkkkkkkkkkkk", "48 Kkkkkkkkkkkkk", "-r-n-", "--L-T-", "G L", "D D", "Xb", "22 40 OO", "", "12", "OOO"]
+        {
+            assert!(!legible_name(bad), "{bad}");
+            assert_eq!(room_name_score(bad), 0, "{bad}");
+        }
+        // A plural of an equipment word is equipment: the units a note points at.
+        assert!(equipment_tag("Freezer compressors") && equipment_tag("CONDENSERS"));
+        assert_eq!(room_name_score("Freezer compressors"), 0);
+        assert!(!equipment_tag("TAKEOUT") && !equipment_tag("WOMEN'S"));
+    }
+
+    /// Q6365: on plans numbering their rooms in digits, a lettered label with a sheet's letters is
+    /// a callout's; a plan numbering every room with letters keeps them.
+    #[test]
+    fn a_callouts_label_is_no_room_number() {
+        let sheets = ["A101", "A-501", "E2.1"];
+        let c = CalloutLabels::new(sheets, ["101", "102", "37", "A12", "103"]);
+        assert!(c.is_callout("A12") && c.is_callout("E21") && !c.is_callout("101") && !c.is_callout("B12"));
+        let c = CalloutLabels::new(sheets, ["A101", "A102", "A103", "104"]);
+        assert!(!c.is_callout("A101"), "lettered room numbers stay");
+        let c = CalloutLabels::new(std::iter::empty::<&str>(), ["101", "102", "103", "A12"]);
+        assert!(!c.is_callout("A12"), "no sheets known: nothing to tell a callout by");
+    }
+
+    #[test]
+    fn linework_read_as_letters_and_a_callouts_note_name_no_room() {
+        // Q6365: a BIM-exported print's linework read as text (`JL TL YL KJ`, `Kkkkkkk`, `-r-n-`)
+        // was traced as rooms beside real numbered tags, and a view callout's label (`A12`)
+        // numbered the note next to it. The junk in TAKEOUT's room was traced before its name.
+        let mut s = plan_of(&[
+            ([0.0, 0.0, 240.0, 180.0], &[("VESTIBULE", 80.0, 90.0), ("101", 90.0, 80.0)]),
+            ([300.0, 0.0, 540.0, 180.0], &[("JL TL YL KJ", 330.0, 150.0), ("TAKEOUT", 380.0, 90.0), ("102", 390.0, 80.0)]),
+            ([600.0, 0.0, 840.0, 180.0], &[("Women's", 680.0, 90.0), ("103", 690.0, 80.0)]),
+            ([900.0, 0.0, 1140.0, 180.0], &[("Kkkkkkkkkkkkkkkkkk", 980.0, 90.0), ("37", 990.0, 80.0)]),
+            ([1200.0, 0.0, 1440.0, 180.0], &[("-r-n-", 1280.0, 90.0), ("106", 1290.0, 80.0)]),
+            ([1500.0, 0.0, 1740.0, 180.0], &[("Dry stock", 1580.0, 90.0), ("A12", 1590.0, 80.0)]),
+        ]);
+        let sp = cadaddy_walk3d::BuildingSpec {
+            sheets: serde_json::from_value(json!([{"number": "A101"}, {"number": "A501"}, {"number": "E101"}])).unwrap(),
+            ..Default::default()
+        };
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
+        let trace = room_trace_in(&mut s, None).unwrap();
+        let mut names: Vec<(String, Option<String>)> = trace.rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+        names.sort();
+        let room = |n: &str, m: &str| (n.to_string(), Some(m.to_string()));
+        assert_eq!(names, vec![room("TAKEOUT", "102"), room("VESTIBULE", "101"), room("Women's", "103")], "{:?}", trace.candidates);
+        assert_eq!(trace.candidates.dropped.get("illegible"), Some(&3), "{:?}", trace.candidates);
+        assert_eq!(trace.candidates.dropped.get("no_room_word_or_number"), Some(&1), "the callout numbers no note: {:?}", trace.candidates);
     }
 
     #[test]
