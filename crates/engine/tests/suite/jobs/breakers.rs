@@ -613,3 +613,102 @@ fn with_no_panel_documented_the_panel_schedule_groups_by_the_labels() {
     assert!(sc["panels"].as_array().expect("panels").iter().any(|p| p["panel"] == "PQ"), "{sc:#}");
     assert!(sc.get("review").is_none(), "{sc:#}");
 }
+
+/// Q6350: a breaker's type comes from its schedule row when the row's codes name its protection;
+/// a row that names none is decided per circuit by what it serves, never one type for a whole
+/// panel. A guest unit's 120 V single-pole circuit is AFCI (NEC 210.12), a GFCI load with no
+/// receptacle to carry a GFCI device takes it at the breaker (dual-function in a unit), a
+/// two-pole is standard; a schedule that types its other rows keeps its printed type as design.
+#[test]
+fn a_breaker_row_without_a_type_code_is_typed_by_what_its_circuit_serves() {
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "unit_instances": [{"number": "N1", "type": "A"}, {"number": "N2", "type": "B"}],
+        "tags": [
+            device("device:L1:1", "gfci_receptacle", 5.0, "H-3"),
+            device("device:L1:2", "receptacle", 6.0, "H-1"),
+        ],
+        "mep": {
+            "equipment": [
+                {"tag": "H", "kind": "panel", "level": "L1", "min": [-24, 110], "max": [-4, 130], "height_ft": 4, "bottom_ft": 2},
+                {"tag": "K-N1", "kind": "panel", "level": "L1", "min": [300, 110], "max": [314, 114], "height_ft": 2, "bottom_ft": 4,
+                 "properties": {"PANEL": "K", "ROOM": "N1"}},
+                {"tag": "K-N2", "kind": "panel", "level": "L1", "min": [500, 110], "max": [514, 114], "height_ft": 2, "bottom_ft": 4,
+                 "properties": {"PANEL": "K", "ROOM": "N2"}},
+                {"tag": "EWC-1", "kind": "water_cooler", "level": "L1", "min": [40, 110], "max": [42, 112], "height_ft": 3, "bottom_ft": 0,
+                 "properties": {"PANEL": "H", "CIRCUIT": "5"}}
+            ],
+            "panel_schedules": [
+                {"panel": "K", "typical_of": 2, "source": "X-2",
+                 "header": {"volts/phase": "208Y/120V, 1PH, 3W"},
+                 "legend": {"AF": "ARC FAULT (COMBINATION)", "GF": "GROUND-FAULT, CLASS A", "LT": "HANDLE LOCK"},
+                 "circuits": [
+                     ckt("1", "ROOM RCPT", "20", 1, &["AF"]),
+                     ckt("2", "BATH RCPT", "20", 1, &["AF", "GF"]),
+                     ckt("3", "DESK RCPT", "20", 1, &[]),
+                     ckt("4", "DISHWASHER", "20", 1, &["LT"]),
+                     ckt("5", "ROOM HEAT PUMP", "20", 2, &[]),
+                     ckt("9", "WATER HEATER", "30", 1, &[])
+                 ]},
+                {"panel": "H", "source": "X-3",
+                 "header": {"volts/phase": "208Y/120V, 3PH, 4W"},
+                 "circuits": [
+                     ckt("1", "CORRIDOR RCPT", "20", 1, &[]),
+                     ckt("3", "VENDING RCPT", "20", 1, &[]),
+                     ckt("5", "DRINKING FOUNTAIN EWC-1", "20", 1, &[])
+                 ]}
+            ]
+        }
+    });
+    let mut s = built(spec, false);
+    let by_row = |bs: &[Value], n: &str| bs.iter().find(|b| val(b, "circuit_number") == n).cloned().unwrap_or_else(|| panic!("row {n}: {bs:?}"));
+    for unit in ["K-N1", "K-N2"] {
+        let bs = breakers_of(&mut s, unit);
+        let ty = |n: &str| val(&by_row(&bs, n), "type").as_str().unwrap_or_default().to_string();
+        // The row's codes decide where they name protection.
+        assert_eq!(ty("1"), "AFCI", "{unit}");
+        assert_eq!(ty("2"), "dual-function", "{unit}");
+        assert_eq!(val(&by_row(&bs, "1"), "type_basis"), "schedule");
+        // A unit's single-pole 120 V 20 A circuit with no code: AFCI by NEC 210.12, the printed
+        // standard kept as its design (the schedule types its other rows).
+        let desk = by_row(&bs, "3");
+        assert_eq!(val(&desk, "type"), "AFCI", "{desk}");
+        assert_eq!(val(&desk, "type_basis"), "circuit");
+        assert!(desk["type"]["source"].to_string().contains("210.12"), "{desk}");
+        assert_eq!(val(&desk, "design:type"), "standard", "{desk}");
+        assert_eq!(desk["design:type"]["source"]["kind"], "schedule", "{desk}");
+        // A dishwasher with no receptacle on its circuit: its GFCI at the breaker too.
+        assert_eq!(ty("4"), "dual-function", "{unit}");
+        // Two-pole (208 V) and a 30 A circuit: no AFCI rule; standard, no correction.
+        assert_eq!(ty("5"), "standard");
+        assert_eq!(ty("9"), "standard");
+        assert!(val(&by_row(&bs, "5"), "design:type").is_null());
+    }
+    // A house panel whose schedule types nothing: per circuit too, outside any unit.
+    let bs = breakers_of(&mut s, "H");
+    let ty = |n: &str| val(&by_row(&bs, n), "type").as_str().unwrap_or_default().to_string();
+    assert_eq!(ty("1"), "standard", "no unit, no GFCI load");
+    // A vending machine's GFCI receptacle carries its ground fault: the breaker is standard.
+    assert_eq!(ty("3"), "standard");
+    assert!(by_row(&bs, "3")["type_basis"]["note"].to_string().contains("receptacle"), "{bs:?}");
+    // A drinking fountain wired straight to its circuit: GFCI at the breaker (NEC 422.5).
+    assert_eq!(ty("5"), "GFCI");
+    assert!(val(&by_row(&bs, "5"), "design:type").is_null(), "an untyped schedule printed no type to keep");
+    // The report counts types by what they rest on.
+    let r = s.execute("bim.breakers", &json!({"rebuild": false})).expect("report");
+    let count = |ty: &str, basis: &str| {
+        r["by_basis"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["type"] == ty && b["basis"] == basis)
+            .map(|b| b["count"].as_u64().unwrap_or(0))
+            .sum::<u64>()
+    };
+    assert_eq!(count("AFCI", "schedule"), 2, "{r}");
+    assert_eq!(count("AFCI", "circuit"), 2, "{r}");
+    assert_eq!(count("dual-function", "circuit"), 2, "{r}");
+    assert_eq!(count("GFCI", "circuit"), 1, "{r}");
+    assert_eq!(r["types_corrected"], 4, "{r}");
+}
