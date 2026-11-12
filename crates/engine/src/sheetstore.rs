@@ -31,7 +31,10 @@ pub const CACHE: usize = 3;
 /// picked, undo, saving (a .cdy save keeps the parked sheets as stored), and the reads of the
 /// building model that only look at its elements or the building spec (the model tree, trade
 /// colours, the MEP list: an element always carries extended data, so it is never out of
-/// memory). Any other command loads the whole set before it runs.
+/// memory), and the 3D view's own settings (direction, visual style, fidelity tier, the BIM view
+/// and look: the view asks `bim.view` whenever the drawing changes, and loading the set changes
+/// it, so a whole-set load there would never end). Any other command loads the whole set before
+/// it runs.
 pub const SHEET_LOCAL: &[&str] = &[
     "sheet.list",
     "sheet.open",
@@ -84,6 +87,13 @@ pub const SHEET_LOCAL: &[&str] = &[
     "bim.tree",
     "bim.trades",
     "mep.list",
+    "bim.view",
+    "bim.look",
+    "view.bim3d",
+    "view.fidelity",
+    "view.dir",
+    "vpoint",
+    "vscurrent",
 ];
 
 /// Whether command `id` (a name or alias) works without the sheets out of memory.
