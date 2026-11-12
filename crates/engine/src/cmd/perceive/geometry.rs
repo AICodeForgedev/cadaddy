@@ -1713,13 +1713,15 @@ pub(crate) fn equipment_tag(t: &str) -> bool {
 /// The most times one letter may follow itself (`BOOKKEEPING`'s doubles): a longer run
 /// (`Yyyyyyyy`, `OOO`) is linework read as letters or a placeholder, never a name.
 const MAX_LETTER_REPEAT: usize = 2;
-/// The longest a name may be with no word of three letters: a code in capitals (`WC`, `IT`, `W/D`).
+/// The longest a name may be with no word of three letters: a code in capitals (`WC`, `IT`, `W/D`)
+/// or a name in a script without case (`厨房`).
 const NAME_CODE_MAX: usize = 4;
 
 /// Whether a label reads as words (Q6365): no letter run of more than [`MAX_LETTER_REPEAT`], and a
 /// word of three letters or more (`LOBBY`, `IDF`, `WM'S`: an apostrophe inside joins it) or one
-/// short code in capitals (`WC`, `W/D`). Text read off a print's linework comes out as letters
-/// that read as nothing: `LL KL YL YL`, `Yyyyyyyyyyy`, `-t-k-`, `--I-J-`, `G L`, `Xb`.
+/// short code with no small letter (`WC`, `W/D`, `厨房`). Text read off a print's linework comes
+/// out as letters that read as nothing: `LL KL YL YL`, `Yyyyyyyyyyy`, `-t-k-`, `--I-J-`, `G L`,
+/// `Xb`.
 pub(crate) fn legible_name(t: &str) -> bool {
     let t = t.trim();
     let mut last: Option<char> = None;
@@ -1744,10 +1746,7 @@ pub(crate) fn legible_name(t: &str) -> bool {
         }
     }
     let letters = t.chars().filter(|c| c.is_alphabetic()).count();
-    !t.contains(char::is_whitespace)
-        && t.chars().count() <= NAME_CODE_MAX
-        && letters >= 2
-        && t.chars().filter(|c| c.is_alphabetic()).all(char::is_uppercase)
+    !t.contains(char::is_whitespace) && t.chars().count() <= NAME_CODE_MAX && letters >= 2 && !t.chars().any(char::is_lowercase)
 }
 
 /// How many of a plan's room numbers must be all digits to each lettered one before a lettered
@@ -3558,7 +3557,9 @@ mod tests {
     /// printed by it.
     #[test]
     fn a_rooms_name_reads_as_words() {
-        for good in ["LOBBY", "IDF", "WC", "IT", "W/D", "CORR", "Office", "STAIR 2", "Wm's", "MEN'S", "Pickup", "BOOKKEEPING", "MECH./ELEC."] {
+        for good in
+            ["LOBBY", "IDF", "WC", "IT", "W/D", "CORR", "Office", "STAIR 2", "Wm's", "MEN'S", "Pickup", "BOOKKEEPING", "MECH./ELEC.", "厨房", "Küche"]
+        {
             assert!(legible_name(good), "{good}");
         }
         for bad in ["LL KL YL YL", "Yyyyyyyyyyyyyyyyyyyyyyyy", "21 Yyyyyyyyyyyyy", "-t-k-", "--I-J-", "G L", "D D", "Xb", "22 40 OO", "", "12", "OOO"]
