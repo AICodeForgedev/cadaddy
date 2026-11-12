@@ -538,7 +538,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let name = std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().to_string());
             (b, format!("the price book {name}"))
         }
-        None => (pricebook::load(None), "the price book on this machine (shipped and local quotes)".to_string()),
+        // The price book the estimate prices from (Q6379): its folder when estimate.settings names one.
+        None => {
+            let folder = est.get("settings").and_then(|x| x["pricebook_folder"].as_str()).map(str::trim).filter(|f| !f.is_empty());
+            (pricebook::load(folder), "the price book on this machine (shipped and local quotes)".to_string())
+        }
     };
     let by_catalog = priced::catalog_index(&book);
     let mut warnings: Vec<Value> = Vec::new();

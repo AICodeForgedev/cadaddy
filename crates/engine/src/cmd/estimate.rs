@@ -794,6 +794,77 @@ pub(super) struct Priced {
     pub(super) labor_steps: Vec<String>,
     /// Labor hours of the line by production phase.
     pub(super) phases: Vec<(String, f64)>,
+    /// Hours per unit from the estimate's own data (its assembly, price row or baseline item),
+    /// before CADaddy's labor book; none when that data gives none.
+    pub(super) data_hours: Option<f64>,
+    /// The price row that priced the line: its item, or the price book's keys.
+    pub(super) price_row: String,
+}
+
+/// One line's material price by the estimate's rule (Q6379), for a route that prices lines of
+/// its own (`bim.estimate`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LinePrice {
+    /// Per unit of the line; none when nothing prices it (or the price book excludes it).
+    pub(crate) material_unit: Option<f64>,
+    /// Hours per unit from the estimate's own data (see `Priced::data_hours`).
+    pub(crate) data_hours: Option<f64>,
+    /// Where the price came from, as `estimate.query` says it (`via`).
+    pub(crate) via: String,
+    /// How it matched, as `estimate.query`'s `match_kind`.
+    pub(crate) match_kind: &'static str,
+    /// Why it has no price (the estimate's own words, with the nearest row when there is one).
+    pub(crate) reason: String,
+    /// The price row that priced it (see `Priced::price_row`).
+    pub(crate) row: String,
+}
+
+/// Whether lines the estimate's prices miss are priced from the material price book, and from
+/// which folder, as a route's result states it (Q6379).
+pub(crate) fn price_book_rule(s: &Session) -> String {
+    let st = state(s, "bim.estimate").map(|(_, st)| st).unwrap_or_default();
+    let settings = st.get("settings").cloned().unwrap_or(json!({}));
+    if settings["pricebook"].as_bool() == Some(false) {
+        return "not used: estimate.settings pricebook is false".into();
+    }
+    match settings["pricebook_folder"].as_str().map(str::trim).filter(|f| !f.is_empty()) {
+        Some(f) => format!("used for lines the estimate's prices miss: the shipped quotes and the folder {f} (estimate.settings pricebook_folder)"),
+        None => "used for lines the estimate's prices miss: the shipped quotes and this machine's price book".into(),
+    }
+}
+
+/// The material price of each line (takeoff or BOM shaped: `trade, category, item, size, unit,
+/// system`) by the one rule every estimate route uses (Q6379): the line's assembly, its price
+/// mapping, the estimate's prices (`estimate.import`, `estimate.set_price`), the material price
+/// book (`estimate.settings pricebook`, `pricebook_folder`), then the starter cost book. One
+/// line, one price, whichever command asks.
+pub(crate) fn line_prices(s: &Session, lines: &[Value]) -> Vec<LinePrice> {
+    let st = state(s, "bim.estimate").map(|(_, st)| st).unwrap_or_default();
+    let bom = json!({"lines": lines.iter().map(|l| {
+        let mut l = l.clone();
+        let q = l["qty"].as_f64().unwrap_or(0.0);
+        l["total"] = json!(q);
+        l["net"] = json!(q);
+        l
+    }).collect::<Vec<_>>()});
+    price_lines(&st, &bom)
+        .0
+        .into_iter()
+        .map(|p| LinePrice {
+            reason: if p.material_unit.is_some() {
+                String::new()
+            } else if p.match_kind == "price_book" {
+                p.via.clone()
+            } else {
+                p.issues.iter().find(|i| matches!(i.0, "unpriced" | "unit_mismatch" | "unpriced_part")).map(|i| i.1.clone()).unwrap_or_default()
+            },
+            material_unit: p.material_unit,
+            data_hours: p.data_hours,
+            via: p.via,
+            match_kind: p.match_kind,
+            row: p.price_row,
+        })
+        .collect()
 }
 
 /// Price every BOM line from the state; `what_if` overrides assemblies, scopes and settings.
@@ -948,6 +1019,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                     pr.via =
                         format!("mapped \u{2192} price {} ({})", p["source"].as_str().unwrap_or_default(), p["date"].as_str().unwrap_or_default());
                     pr.match_kind = "mapped";
+                    pr.price_row = p["item"].as_str().unwrap_or_default().to_string();
                     if let Some((m, h)) = check_price(p, &mut pr.issues, &mut pr.material_steps, "line") {
                         pr.material_unit = Some(m);
                         book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
@@ -968,6 +1040,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                             };
                             pr.via = source_label;
                             pr.match_kind = kind;
+                            pr.price_row = p["item"].as_str().unwrap_or_default().to_string();
                             if let Some((m, h)) = check_price(p, &mut pr.issues, &mut pr.material_steps, "line") {
                                 pr.material_unit = Some(m);
                                 book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
@@ -978,6 +1051,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                             Some(super::pricebook::Found::Priced { material, parts, date }) => {
                                 pr.via = format!("price book: {}", super::pricebook::source_text(&parts));
                                 pr.match_kind = "price_book";
+                                pr.price_row = parts.iter().map(|c| c.quote.key.as_str()).collect::<Vec<_>>().join(" + ");
                                 if let (Some(t), Some(d)) = (today, parse_date(&date))
                                     && (t - d) as f64 > stale
                                 {
@@ -1009,6 +1083,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
                                         STARTER_SOURCE.to_string()
                                     };
                                     pr.match_kind = if kind == "family" { "starter_family" } else { "starter_book" };
+                                    pr.price_row = sp["item"].as_str().unwrap_or_default().to_string();
                                     let m = sp["material"].as_f64().unwrap_or(0.0);
                                     pr.material_unit = Some(m);
                                     // Its labor by the labor rule every route shares (below).
@@ -1046,6 +1121,7 @@ pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>,
         }
         // Q6526: no labor in the user's data → CADaddy's labor book, by the rule bim.bid and
         // bim.estimate use; labor whether or not the material is priced.
+        pr.data_hours = book;
         let mut from_book = None;
         if book.is_none()
             && let Some(h) = laborbook::labor_for(l)
@@ -2553,5 +2629,62 @@ mod tests {
             + summary["starter_family"].as_u64().unwrap();
         assert!(matched <= summary["lines"].as_u64().unwrap(), "matched should not exceed total: {summary}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every line both routes price, by item and size: `estimate.query`'s unit price and how,
+    /// beside `bim.estimate`'s.
+    fn both_routes(s: &mut Session) -> Vec<(String, Option<f64>, String, Option<f64>, String)> {
+        let q = s.execute("estimate.query", &json!({ "limit": 1000 })).unwrap();
+        let e = s.execute("bim.estimate", &json!({})).unwrap();
+        let mut out = Vec::new();
+        for l in e["lines"].as_array().unwrap() {
+            let (item, size) = (l["item"].as_str().unwrap_or_default(), l["size"].as_str().unwrap_or_default());
+            let Some(ql) =
+                q["lines"].as_array().unwrap().iter().find(|x| x["item"].as_str() == Some(item) && x["size"].as_str().unwrap_or_default() == size)
+            else {
+                continue;
+            };
+            out.push((
+                format!("{item} {size}"),
+                ql["material_unit"].as_f64(),
+                ql["via"].as_str().unwrap_or_default().to_string(),
+                l["material_unit"].as_f64(),
+                l["via"].as_str().or(l["cost_item"].as_str()).unwrap_or_default().to_string(),
+            ));
+        }
+        out
+    }
+
+    #[test]
+    fn bim_estimate_prices_each_line_as_the_estimate_does() {
+        // Q6379: the local price book and an imported cost pack price bim.estimate's lines as
+        // they price estimate.query's: one price per line whichever route asks.
+        let mut s = Session::new();
+        job(&mut s);
+        let dir = std::env::temp_dir().join(format!("cadaddy-onebook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let folder = dir.to_string_lossy().to_string();
+        s.execute("estimate.settings", &json!({ "crew_rate": 75, "today": "2026-11-08", "pricebook_folder": folder })).unwrap();
+        let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
+        let conduit = q["lines"].as_array().unwrap().iter().find(|l| l["unit"].as_str() != Some("each")).cloned().expect("a measured line");
+        let (item, size) = (conduit["item"].as_str().unwrap().to_string(), conduit["size"].as_str().unwrap_or_default().to_string());
+        s.execute("pricebook.set", &json!({"key": "TESTKEY-1", "unit_price": 0.99, "unit": conduit["unit"], "vendor": "Test Supply", "date": "2026-11-08", "folder": folder})).unwrap();
+        s.execute("pricebook.map", &json!({"item": item, "size": size, "keys": ["TESTKEY-1"], "folder": folder})).unwrap();
+        let pairs = both_routes(&mut s);
+        assert!(pairs.iter().any(|p| p.0 == format!("{item} {size}")), "the measured line is on both routes: {pairs:?}");
+        for (what, q_unit, q_via, e_unit, e_via) in &pairs {
+            assert_eq!(q_unit, e_unit, "{what}: estimate.query {q_unit:?} ({q_via}) vs bim.estimate {e_unit:?} ({e_via})");
+        }
+        let e = s.execute("bim.estimate", &json!({})).unwrap();
+        let l = e["lines"].as_array().unwrap().iter().find(|l| l["item"].as_str() == Some(item.as_str())).cloned().unwrap();
+        assert!(l["via"].as_str().unwrap_or_default().starts_with("price book: TESTKEY-1"), "{l}");
+        // An imported cost pack: its prices come before the price book on both routes.
+        let pack = baseline();
+        s.execute("estimate.import", &json!({ "folder": pack.to_string_lossy() })).unwrap();
+        for (what, q_unit, q_via, e_unit, e_via) in &both_routes(&mut s) {
+            assert_eq!(q_unit, e_unit, "{what}: estimate.query {q_unit:?} ({q_via}) vs bim.estimate {e_unit:?} ({e_via})");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&pack);
     }
 }
