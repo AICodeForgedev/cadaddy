@@ -1710,6 +1710,10 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             handle: Handle,
             at: Vec3,
             rooms: BTreeSet<&'b str>,
+            // The storeys its pieces are on (more than one: it runs in a riser).
+            levels: BTreeSet<&'b str>,
+            // Its first piece is a raceway stick (else a cable).
+            raceway: bool,
         }
         let mut runs: BTreeMap<String, RunM> = BTreeMap::new();
         for s in net.sticks.iter().filter(|s| !s.run.is_empty() && !s.circuit.is_empty()) {
@@ -1720,8 +1724,11 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 handle: s.handle,
                 at: (s.a + s.b) * 0.5,
                 rooms: BTreeSet::new(),
+                levels: BTreeSet::new(),
+                raceway: true,
             });
             e.rooms.insert(s.room.as_str());
+            e.levels.insert(s.level.as_str());
         }
         for c in net.cables.iter().filter(|c| !c.run.is_empty() && !c.circuit.is_empty()) {
             let at = c.at.unwrap_or(Vec3::new(f64::NAN, f64::NAN, 0.0));
@@ -1732,9 +1739,18 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 handle: c.handle,
                 at,
                 rooms: BTreeSet::new(),
+                levels: BTreeSet::new(),
+                raceway: false,
             });
             e.rooms.insert(c.room.as_str());
+            e.levels.insert(c.level.as_str());
         }
+        // Limited-energy circuits (fire alarm, Class 2/3, communications) are wired by their own
+        // article, not the power wiring-methods table (Q6535): a cable by the spaces its listing
+        // allows, a raceway as the code permits. The ceiling space is a plenum where the job's
+        // documents call for plenum cable.
+        let lim = &mr.limited;
+        let plenum_doc = super::conduitroute::fa::WiringDocs::stored(cx.d).plenum;
         if runs.is_empty() {
             out.unmeasured(METHOD, "no routed raceway or cable in the model", 1);
         }
@@ -1747,6 +1763,61 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             let method_up = m.method.to_ascii_uppercase();
             let areas: BTreeSet<&str> = m.rooms.iter().map(|r| area_of(r)).collect();
             let measured = json!({"check": "method", "run": run, "circuit": m.circuit, "method": m.method, "areas": areas, "rooms": m.rooms.iter().filter(|r| !r.is_empty()).take(12).collect::<Vec<_>>()});
+            let listed = lim.types.iter().find(|(t, _)| t.eq_ignore_ascii_case(&m.method)).map(|(_, spaces)| spaces);
+            if listed.is_some() || run.starts_with(super::conduitroute::fa::TAG_PREFIX) {
+                let mut spaces: Vec<&str> = vec!["general"];
+                if m.levels.len() > 1 {
+                    spaces.push("riser");
+                }
+                if plenum_doc.is_some() {
+                    spaces.push("plenum");
+                }
+                let mut measured = measured;
+                measured["system"] = json!("limited-energy");
+                measured["spaces"] = json!(spaces);
+                let (verdict, issue, expected) = match listed {
+                    _ if m.raceway => (
+                        "pass",
+                        format!("run {run} is {}: a limited-energy circuit in a raceway", m.method),
+                        format!("a raceway ({})", lim.raceway_source),
+                    ),
+                    Some(allowed) => {
+                        let missing: Vec<&str> = spaces.iter().copied().filter(|sp| !allowed.iter().any(|a| a.eq_ignore_ascii_case(sp))).collect();
+                        let need: Vec<&String> = lim
+                            .types
+                            .iter()
+                            .filter(|(_, a)| spaces.iter().all(|sp| a.iter().any(|x| x.eq_ignore_ascii_case(sp))))
+                            .map(|(t, _)| t)
+                            .collect();
+                        let expected = format!(
+                            "a cable listed for {} ({}; {})",
+                            spaces.join(", "),
+                            need.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(", "),
+                            lim.source
+                        );
+                        if missing.is_empty() {
+                            ("pass", format!("run {run} is {}, listed for where it runs ({})", m.method, spaces.join(", ")), expected)
+                        } else {
+                            let why = if missing.contains(&"plenum") {
+                                match &plenum_doc {
+                                    Some(q) => format!(" (the documents call for plenum cable: {})", q.chars().take(160).collect::<String>()),
+                                    None => String::new(),
+                                }
+                            } else {
+                                " (it runs between storeys)".to_string()
+                            };
+                            ("fail", format!("run {run} is {}, not listed for the {} space it runs in{why}", m.method, missing.join(", ")), expected)
+                        }
+                    }
+                    None => (
+                        "unsure",
+                        format!("run {run} is {}: a cable type the limited-energy listings don't name", m.method),
+                        format!("a listed limited-energy cable ({})", lim.source),
+                    ),
+                };
+                push(METHOD, r, Some(m.handle), "conduit", run, verdict, issue, expected, m.method.clone(), measured, &m.level, place, "prescreen");
+                continue;
+            }
             // An approved value engineering alternative, the project's rule, the documents' table.
             let ve = approved.iter().find(|(c, _)| c.eq_ignore_ascii_case(&m.circuit) || c.ends_with(&format!(":{}", m.circuit)));
             if let Some((_, (alt, why))) =
@@ -2136,7 +2207,10 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         run_wires.get(run).is_some_and(|ws| ws.first().and_then(|w| circuit_of(&w.circuit)).is_some_and(|(_, n)| n.len() == 1))
                     })
                     .collect();
-                let phase = number.parse::<u32>().ok().map(|n| format!("phase {}", super::mepatoms::phase_of(n)));
+                let phase = number
+                    .parse::<u32>()
+                    .ok()
+                    .map(|n| format!("phase {}", super::mepatoms::phase_on(n, super::mepatoms::build::panel_phases(cx.sp, panel))));
                 let pick: Vec<String> = if own.is_empty() {
                     runs.iter()
                         .flat_map(|run| run_wires.get(run).into_iter().flatten())

@@ -614,7 +614,19 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         r["rebuild"] = super::buildrec::report(old_rec.as_ref(), why, &before_counts, &after);
     }
     if let Some(sp) = &g.spec {
-        let mut rec = super::buildrec::BuildRecord::new(s.doc()?, sp, switches);
+        // The heights and routes the build's own steps corrected in the drawing's spec (a grille
+        // set in its room's ceiling, a pipe out of gear's space) are part of what it was built
+        // with: with no spec of the call's own, the record is of the spec as the build left it,
+        // so building the unchanged model again keeps it.
+        let left = if p.get("spec").is_none_or(Value::is_null) {
+            current(s, "model.build").ok().filter(|(_, stored)| *stored).map(|(mut st, _)| {
+                st.stack = sp.stack;
+                st
+            })
+        } else {
+            None
+        };
+        let mut rec = super::buildrec::BuildRecord::new(s.doc()?, left.as_ref().unwrap_or(sp), switches);
         // A partial rebuild: the other levels still hold what the steps after the last build did.
         if let (Some(old), Some(_)) = (&old_rec, &partial) {
             rec.steps = old.steps.clone();
@@ -2617,6 +2629,17 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         d.building_spec = Some(stored.to_json()).into();
     }
     mark("gear's dedicated space");
+    // Each ceiling diffuser, register and grille in the ceiling built over it (its room's, not
+    // its level's guess), and the ducts with no height of their own over the ceilings they pass
+    // under (Q6341); the drawing's spec takes the same heights.
+    let in_ceiling = super::ceilingseat::seat(d, &mut sp);
+    if in_ceiling.moved() > 0
+        && let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
+        && super::ceilingseat::seat(d, &mut stored).moved() > 0
+    {
+        d.building_spec = Some(stored.to_json()).into();
+    }
+    mark("air terminals in the ceilings");
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build_with(d, &sp, true);
     mark("MEP runs");
@@ -2752,6 +2775,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         r["fireAlarmEquipment"] = fa_equipment;
     }
     r["gearSpace"] = gear_space.json();
+    r["inCeiling"] = in_ceiling.json();
     r["deviceBuild"] = devices.to_json();
     r["deviceBuild"]["under_ceiling"] = under_ceiling.to_json();
     r["qtyTables"] = json!(qty_tables);
