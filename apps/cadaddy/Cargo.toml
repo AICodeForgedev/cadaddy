@@ -19,6 +19,11 @@ egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
+# glibc's malloc keeps what each thread frees in that thread's own arena (up to 8 per core), so a
+# many-core job's resident size followed the thread count, not what it held (main.rs, ALLOC).
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+mimalloc = { workspace = true }
+
 [build-dependencies]
 winresource = "0.1"
 
