@@ -528,6 +528,11 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
     // The plan's outlines are made once for every tag (not once per tag: 60k objects).
     let mut cache = None;
     for (h, t, at) in room_texts(sp, &ents) {
+        // A unit tag in a room (`UNIT A`, `UNIT A (MIRROR)`) names the room's unit type and hand,
+        // as the unit plans read it (`units.detect`): the room's, not another room.
+        if cadaddy_mepfix::unit_reader::unit_tag(&t).is_some() {
+            continue;
+        }
         // Equipment and device tags (a panelboard label on a room tag layer) are no rooms.
         let named = super::perceive::geometry::room_name_score(&t) > 0;
         let number = !named && super::perceive::geometry::room_number(&t) && !super::perceive::geometry::equipment_tag(&t);
