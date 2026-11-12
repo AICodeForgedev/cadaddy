@@ -35197,7 +35197,7 @@ mod tests {
             ("TYPICAL STORAGE ROOM #201", false),
             ("STORAGE ROOM 201 (TYP.)", false),
             ("ENLARGED STORAGE ROOM", false),
-            ("ENLARGED DOUBLE QUEEN", false),
+            ("ENLARGED STUDIO K", false),
         ] {
             assert_eq!(names_its_rooms(title), named, "{title}");
         }
