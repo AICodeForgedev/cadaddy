@@ -18,6 +18,12 @@
 //!   tag is `print`; a route height that was estimated is `default`).
 //! - **air terminals**: their kind, neck size and the airflow printed beside them (`150 CFM`).
 //! - **equipment**: its tag, kind and the capacity on its schedule row.
+//! - **luminaires** (Q6590): their light fixture schedule row by type mark (the row, basis of
+//!   design, description, installation, lamp, voltage, VA, notes; source `schedule`, the row
+//!   cited), and their product fields in the documents' order (the submittal's values
+//!   `bim.submittals` set, else the row's); where the two disagree the submittal's is installed,
+//!   the row's kept beside it, and the disagreement is a review item. The guided job's lighting
+//!   stage does the same ([`super::lighting::apply_row`]).
 //!
 //! Nothing that was not read is presented as read: assumptions are `default` or `rule`, what the
 //! model gives is `computed`, and a person's value (`user`) is never replaced.
@@ -100,7 +106,7 @@ const SIDE_FT: f64 = 1.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FILL, "Fill Element Properties", run_fill)
-            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so, rooms?: \"built\" (only the build's rooms: a model whose build traced none has none, never the whole drawing traced again; default: the build's, else the plan's traced)} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
+            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so, rooms?: \"built\" (only the build's rooms: a model whose build traced none has none, never the whole drawing traced again; default: the build's, else the plan's traced)} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}, luminaires: {count, with_schedule_row, changed, no_type_mark, marks_without_schedule_row, conflicts: {type: [field]}, review_items_added}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
             .menu(&["Tools", "Building", "Fill Element Properties"]),
     ]
 }
@@ -3206,6 +3212,11 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         .filter_map(|u| u.get("number").and_then(serde_json::Value::as_str))
         .map(|n| n.trim().to_ascii_uppercase())
         .collect();
+    // Each luminaire's fixture schedule row by its type mark, and what its documents say of it
+    // (Q6590): the guided job's lighting stage and this fill share it.
+    let doc_order = super::provenance::rule("G-DOC-ORDER").id;
+    let no_spec = super::lighting::Sayings::new();
+    let mut lum = LuminaireRows::default();
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -3667,10 +3678,17 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
             }
             _ => {}
         }
+        // A luminaire: its schedule row by its type mark (Q6590).
+        if matches!(super::elemprops::reported_kind(e, kind.clone()).as_str(), "luminaire" | "wall_luminaire" | "light_fixture") {
+            lum.fill(&mut store, &sp.mep.fixture_schedule, &no_spec, &doc_order, e.handle, tally);
+        }
         if store != before {
             changes.push((*h, store));
         }
     }
+    // Where a luminaire's documents disagree: a review item (an RFI of kind `conflict`) per type
+    // and field, as the guided job's lighting stage makes.
+    let lum_rfis = if stored { lum.review_items(&mut sp) } else { 0 };
     // Doors no tag numbers take the number of the room they serve (field practice: a door is
     // numbered by its room, lettered when the room has several), marked as a rule's.
     let numbers = door_numbers(&doors);
@@ -3710,7 +3728,7 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         }
     }
     let d = s.doc_mut()?;
-    if tags_roomed > 0 {
+    if tags_roomed > 0 || lum_rfis > 0 {
         d.building_spec = Some(sp.to_json()).into();
     }
     let mut changed = 0usize;
@@ -3722,6 +3740,10 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     // The pieces follow (Q6157): a wall box's ring by its wall, and the count index (a device's
     // room, a ring's size).
     if changed > 0 && d.embedded.contains_key(super::mepatoms::INDEX_FILE) {
+        // A luminaire's box follows how its row now says it mounts.
+        if lum.changed > 0 {
+            let _ = super::mepatoms::build::sync_luminaire_boxes(d);
+        }
         super::mepatoms::build::sync_rings(d);
         super::mepatoms::reindex(d);
     }
@@ -3739,7 +3761,101 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
         "devices_in_no_room_listed": no_room_listed,
         "device_tags_roomed": tags_roomed,
         "doors": doors_json,
+        "luminaires": lum.to_json(lum_rfis),
     }))
+}
+
+/// The luminaires a fill gives their fixture schedule rows (Q6590).
+#[derive(Default)]
+struct LuminaireRows {
+    /// Luminaires seen, given their row, changed, and with no type mark.
+    seen: usize,
+    with_row: usize,
+    changed: usize,
+    unmarked: usize,
+    /// Type marks no schedule row lists, with their luminaires.
+    no_row: BTreeMap<String, usize>,
+    /// The fields each type's documents disagree on, and its luminaires (handles).
+    conflicts: BTreeMap<String, (Vec<super::lighting::FieldConflict>, Vec<String>)>,
+}
+
+impl LuminaireRows {
+    fn fill(
+        &mut self,
+        store: &mut Props,
+        schedule: &[cadaddy_walk3d::FixtureType],
+        spec: &super::lighting::Sayings,
+        rule: &str,
+        h: Handle,
+        tally: &mut BTreeMap<String, usize>,
+    ) {
+        self.seen += 1;
+        let text = |k: &str| store.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
+        let mark = super::lightsched::type_of(&{
+            let m = text("type_mark");
+            if m.is_empty() { text("type") } else { m }
+        });
+        if mark.is_empty() {
+            self.unmarked += 1;
+            return;
+        }
+        let Some(row) = schedule.iter().find(|r| r.tag.trim().eq_ignore_ascii_case(&mark)) else {
+            if !schedule.is_empty() {
+                *self.no_row.entry(mark).or_default() += 1;
+            }
+            return;
+        };
+        self.with_row += 1;
+        let before = store.clone();
+        let submittal = store.get("submittal").map(Prop::text).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "the submittals".into());
+        let fcs = super::lighting::apply_row(store, row, spec, &submittal, rule);
+        let mut any = false;
+        for (k, p) in store.iter() {
+            if before.get(k) != Some(p) {
+                *tally.entry(k.to_string()).or_insert(0) += 1;
+                any = true;
+            }
+        }
+        if any {
+            self.changed += 1;
+        }
+        if !fcs.is_empty() {
+            let entry = self.conflicts.entry(mark).or_insert_with(|| (fcs, Vec::new()));
+            if entry.1.len() < cadaddy_walk3d::rfi::MAX_RFI_ELEMENTS {
+                entry.1.push(h.hex());
+            }
+        }
+    }
+
+    /// Each type's field conflicts as review items in the spec, once each; how many were added.
+    fn review_items(&self, sp: &mut BuildingSpec) -> usize {
+        let mut added = 0usize;
+        for (ty, (fcs, hs)) in &self.conflicts {
+            for c in super::lighting::field_conflicts(ty, fcs, hs) {
+                if sp.rfis.len() >= cadaddy_walk3d::rfi::MAX_RFIS {
+                    return added;
+                }
+                let r = c.to_rfi("lighting");
+                if !sp.rfis.iter().any(|x| x.id == r.id) {
+                    sp.rfis.push(r);
+                    added += 1;
+                }
+            }
+        }
+        added
+    }
+
+    fn to_json(&self, rfis: usize) -> Value {
+        json!({
+            "count": self.seen,
+            "with_schedule_row": self.with_row,
+            "changed": self.changed,
+            "no_type_mark": self.unmarked,
+            "marks_without_schedule_row": self.no_row,
+            "conflicts": self.conflicts.iter().map(|(ty, (fcs, _))| (ty.clone(), fcs.iter().map(|f| f.field).collect::<Vec<_>>())).collect::<BTreeMap<_, _>>(),
+            "review_items_added": rfis,
+        })
+    }
 }
 
 /// A built door as the fill saw it.
@@ -3896,6 +4012,108 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A luminaire element of `mark` as a build makes it (no guided job), `extra` its other props.
+    fn luminaire(s: &mut Session, mark: &str, at: f64, extra: &[(&str, Prop)]) -> Handle {
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(at, 0.0), Vec2::new(at + 24.0, 24.0), 4.0, 100.0, 104.0);
+        let tags = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "Level 1", Handle(0));
+        let mut store = Props::default();
+        store.set("kind", Prop::new("luminaire", Source::print("X-9", None)));
+        store.set("type_mark", Prop::new(mark, Source::print("X-9", None)));
+        for (k, p) in extra {
+            store.set(k, p.clone());
+        }
+        let xdata = props::write(&tags, &store);
+        let d = s.doc_mut().expect("doc");
+        d.add(&Space::Model, Common { layer: "3D-Lighting".into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).expect("add")
+    }
+
+    fn prop_of(s: &Session, h: Handle, key: &str) -> Option<Prop> {
+        s.doc().ok().and_then(|d| d.model.get(h)).and_then(|e| props::read(&e.common.xdata).get(key).cloned())
+    }
+
+    /// Q6590: on a model built from the prints, not through the guided job, `bim.props.fill` puts
+    /// each luminaire's light fixture schedule row on it by its type mark (`A`, `luminaire B2`):
+    /// the row, basis of design, description, installation, lamp, voltage, VA and notes, sourced
+    /// `schedule` with the row cited. A submittal value the row disagrees with (its CCT) is
+    /// installed with the row's kept beside it and is a review item, once; a person's value stays;
+    /// a mark no row lists is counted, not guessed. A second fill changes nothing.
+    #[test]
+    fn a_luminaire_gets_its_fixture_schedule_row_by_type_mark_on_any_model() {
+        let mut s = Session::new();
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.mep.fixture_schedule = vec![
+            cadaddy_walk3d::FixtureType {
+                tag: "A".into(),
+                manufacturer: "MAKER ONE".into(),
+                model: "DL4-30K-90CRI".into(),
+                lamp: "LED 12W".into(),
+                va: Some(14.0),
+                voltage: "120".into(),
+                installation: "RECESSED".into(),
+                description: "4 IN DOWNLIGHT".into(),
+                notes: "1,3".into(),
+                source: "X-9 LIGHT FIXTURE SCHEDULE".into(),
+                quantity: None,
+            },
+            cadaddy_walk3d::FixtureType {
+                tag: "B2".into(),
+                manufacturer: "MAKER TWO".into(),
+                model: "WRP 4FT".into(),
+                lamp: "LED".into(),
+                va: Some(38.0),
+                voltage: "277".into(),
+                installation: "SURFACE".into(),
+                description: "4 FT WRAP".into(),
+                source: "X-9 LIGHT FIXTURE SCHEDULE".into(),
+                ..Default::default()
+            },
+        ];
+        s.doc_mut().expect("doc").building_spec = Some(sp.to_json()).into();
+        let sub = Source::from_doc(SourceKind::Submittal, "Lighting Package p.4");
+        let a = luminaire(&mut s, "A", 0.0, &[("cct", Prop::new("4000K", sub.clone()))]);
+        let b = luminaire(&mut s, "luminaire B2", 100.0, &[("basis_of_design", Prop::new("MINE 1", Source::user()))]);
+        let z = luminaire(&mut s, "Z", 200.0, &[]);
+        let r = s.execute(FILL, &json!({})).expect("fill");
+        let lum = &r["luminaires"];
+        assert_eq!((lum["count"].as_u64(), lum["with_schedule_row"].as_u64()), (Some(3), Some(2)), "{lum:#}");
+        assert_eq!(lum["marks_without_schedule_row"], json!({"Z": 1}), "{lum:#}");
+        let text = |h: Handle, k: &str| prop_of(&s, h, k).map(|p| p.text()).unwrap_or_default();
+        for (k, v) in [
+            ("schedule_row", "A 4 IN DOWNLIGHT"),
+            ("basis_of_design", "MAKER ONE DL4-30K-90CRI"),
+            ("fixture_description", "4 IN DOWNLIGHT"),
+            ("installation", "RECESSED"),
+            ("schedule_notes", "1,3"),
+            ("lamp", "LED 12W"),
+            ("voltage", "120"),
+            ("manufacturer", "MAKER ONE"),
+            ("catalog_number", "DL4-30K-90CRI"),
+        ] {
+            assert_eq!(text(a, k), v, "{k}");
+        }
+        assert_eq!(text(a, "fixture_va").parse::<f64>().ok(), Some(14.0), "fixture_va");
+        let row = prop_of(&s, a, "schedule_row").expect("row");
+        assert_eq!(row.source.kind, SourceKind::Schedule);
+        assert_eq!(row.source.doc.as_deref(), Some("X-9 LIGHT FIXTURE SCHEDULE type A"), "the row cited");
+        // The submittal's CCT installed, the row's kept beside it, a review item.
+        let cct = prop_of(&s, a, "cct").expect("cct");
+        assert_eq!((cct.text(), cct.source.kind), ("4000K".to_string(), SourceKind::Submittal));
+        assert_eq!(text(a, "design:cct"), "3000K", "the schedule's value beside it");
+        assert_eq!(lum["conflicts"]["A"], json!(["cct"]), "{lum:#}");
+        assert_eq!(lum["review_items_added"], json!(1), "{lum:#}");
+        let rfis = BuildingSpec::from_json(s.doc().expect("doc").building_spec.as_deref().unwrap_or("")).expect("spec").rfis;
+        assert!(rfis.iter().any(|q| q.about == "lighting type A" && q.issue.contains("CCT")), "{rfis:?}");
+        // The prefixed mark finds its row; a person's value stays.
+        assert_eq!(text(b, "schedule_row"), "B2 4 FT WRAP");
+        assert_eq!(text(b, "fixture_va").parse::<f64>().ok(), Some(38.0));
+        assert_eq!(prop_of(&s, b, "basis_of_design").map(|p| (p.text(), p.source.kind)), Some(("MINE 1".into(), SourceKind::User)));
+        assert!(prop_of(&s, z, "schedule_row").is_none(), "no row: nothing guessed");
+        // Again: nothing more.
+        let again = s.execute(FILL, &json!({})).expect("fill again");
+        assert_eq!((again["luminaires"]["changed"].as_u64(), again["luminaires"]["review_items_added"].as_u64()), (Some(0), Some(0)), "{again:#}");
+    }
 
     /// Q6396: a roof (no floor of its own) is judged by every storey under it, each in its own
     /// plan: a roof over a mezzanine covers the storey round it, and its plan is on a sheet of

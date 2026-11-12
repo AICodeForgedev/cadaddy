@@ -1628,6 +1628,26 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
             let source = format!("{} (its cut sheet: {w})", p.file_source);
             p.bim_type.set_field(JUNCTION_BOX, SpecField::new(w).with_source(source));
         }
+        // What its cut sheet says the ordered product does (Q6590): its CCT, CRI, lumens and
+        // wattage, from its catalog number, then its performance table or lines.
+        if p.bim_type.category == "luminaire" {
+            let catalog = p.bim_type.get_field(bimspec::keys::CATALOG_NUMBER).map(|f| f.value.clone()).unwrap_or_default();
+            let perf = super::lighting::performance(&catalog, lines);
+            let page = p.file_source.clone();
+            let values = [
+                (bimspec::keys::CCT, perf.cct.map(|(k, how)| (format!("{k}K"), how))),
+                (CRI, perf.cri.map(|(n, how)| (n.to_string(), how))),
+                (bimspec::keys::LUMENS, perf.lumens.map(|(l, how)| (l.to_string(), how))),
+                (bimspec::keys::WATTAGE, perf.watts.map(|(w, how)| (format!("{} W", (w * 10.0).round() / 10.0), how))),
+            ];
+            for (key, said) in values {
+                if let Some((v, how)) = said
+                    && p.bim_type.get_field(key).is_none()
+                {
+                    p.bim_type.set_field(key, SpecField::new(v).with_source(format!("{page} ({how})")));
+                }
+            }
+        }
         if p.bim_type.get_field(bimspec::keys::DIMMING).is_some() {
             continue;
         }
@@ -1658,6 +1678,9 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
 
 /// A submitted product's field: how many were ordered.
 pub(crate) const QUANTITY: &str = "quantity";
+
+/// A submitted luminaire's field: its colour rendering index, as its cut sheet orders it.
+pub(crate) const CRI: &str = "cri";
 
 /// A submitted luminaire's field: what its cut sheet says of its junction box (`canless`,
 /// `integral junction box`, `compatible junction box`…).
@@ -2354,6 +2377,56 @@ Dimming   Non-Dimming   0-10V
         assert!(field("Q8", "dimming").is_null(), "two controls named, none ordered: {r}");
         let rfis = arr(&r["rfis"]);
         assert!(rfis.iter().any(|q| q["mark"] == "Q8" && q["field"] == "dimming"), "Q8's dimming is a question: {r}");
+    }
+
+    /// Q6590: a luminaire's cut sheet gives the ordered product's CCT, CRI, lumens and wattage:
+    /// from its catalog number's codes (`40K`, `80CRI`, `1500LM`), the performance table's row of
+    /// that CCT and CRI, a line stating them together; a sheet that lists options says none.
+    #[test]
+    fn a_cut_sheet_gives_the_ordered_luminaires_cct_cri_lumens_and_wattage() {
+        let mut s = session();
+        let text = "\
+--- page 1 of 3 ---
+Type : P1
+Manufacturer : ACME LIGHTING
+Model Number : PLX6-40K-80CRI-1500LM-MVOLT
+LED downlight luminaire
+CCT   CRI   Delivered Lumens   Input Watts
+3000K   80   1380   11.8
+4000K   80   1450   11.8
+4000K   90   1290   12.6
+--- page 2 of 3 ---
+Type : P2
+Manufacturer : ACME LIGHTING
+Model Number : SL2
+LED surface luminaire, 3000K, 90 CRI, 1265 lm, 12.4 W
+--- page 3 of 3 ---
+Type : P3
+Manufacturer : ACME LIGHTING
+Model Number : TRF24
+LED troffer luminaire
+Available in 3000K, 3500K, 4000K
+Lumens: 3000, 4000, 5000
+";
+        let r = s.execute("bim.spec_import", &json!({"text": text, "format": "submittal"})).unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let field =
+            |mark: &str, key: &str| proposals.iter().find(|p| p["mark"] == mark).map(|p| p["fields"][key]["value"].clone()).unwrap_or_default();
+        assert_eq!(
+            [field("P1", "cct"), field("P1", "cri"), field("P1", "lumens"), field("P1", "wattage")],
+            [json!("4000K"), json!("80"), json!("1500"), json!("11.8 W")],
+            "the catalog's codes, the table's 4000K 80 CRI row: {r}"
+        );
+        let src = proposals.iter().find(|p| p["mark"] == "P1").map(|p| p["fields"]["wattage"]["source"].clone()).unwrap_or_default();
+        assert!(src.as_str().is_some_and(|x| x.contains("performance table") && x.contains("4000K")), "{src}");
+        assert_eq!(
+            [field("P2", "cct"), field("P2", "cri"), field("P2", "lumens"), field("P2", "wattage")],
+            [json!("3000K"), json!("90"), json!("1265"), json!("12.4 W")],
+            "{r}"
+        );
+        for k in ["cct", "cri", "lumens", "wattage"] {
+            assert!(field("P3", k).is_null(), "options are not the ordered product's {k}: {r}");
+        }
     }
 
     /// Q6336: a cut sheet whose page header names another product (copied from the next type's

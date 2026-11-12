@@ -19478,69 +19478,8 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
             entry.3.push(hex.clone());
         }
         let before = store.clone();
-        // What its submittal says (the values `bim.submittals` put on it, sourced so).
-        let sub_props: Vec<(&'static str, String, String)> = lt::FIELDS
-            .iter()
-            .filter_map(|(k, _)| {
-                let p = store.get(k).filter(|p| p.has_value() && p.source.kind == SourceKind::Submittal)?;
-                Some((*k, p.text().trim().to_string(), p.source.doc.clone().unwrap_or_else(|| submittal_name.clone())))
-            })
-            .collect();
-        let sub = lt::submittal_says(&sub_props);
-        let sched = lt::schedule_says(row);
-        let empty = lt::Sayings::new();
-        let spec = if lt::interior(row) { &spec_says } else { &empty };
-        let (chosen, fcs) = lt::resolve(&[&sub, &sched, spec]);
-        for (k, said) in &chosen {
-            let keep = store.get(k).is_some_and(|old| old.source.kind == SourceKind::User);
-            let same = store.get(k).is_some_and(|old| old.text().trim() == said.value && old.source.kind == said.kind);
-            if !keep && !same {
-                store.set(k, Prop::new(said.value.clone(), Source::from_doc(said.kind, &said.doc)));
-            }
-        }
-        // Where the documents disagree on a field, the field installs the approved submittal's
-        // value (the first document): the drawings' schedule value is kept beside it as the
-        // design value (Q6216, `G-DOC-ORDER`).
-        for fc in &fcs {
-            let (Some(installed), Some(design)) =
-                (chosen.get(fc.field), fc.sides.iter().find(|x| x.kind == SourceKind::Schedule).or(fc.sides.get(1)))
-            else {
-                continue;
-            };
-            if store.get(fc.field).is_some_and(|old| old.source.kind == SourceKind::User) || design.value == installed.value {
-                continue;
-            }
-            let c = super::provenance::Correction {
-                key: fc.field.to_string(),
-                design: design.value.clone(),
-                corrected: installed.value.clone(),
-                reason: format!("{} says {}, {} says {}", installed.doc, installed.value, design.doc, design.value),
-                rule: doc_order.id.clone(),
-            };
-            let _ = super::provenance::correct_with(
-                &mut store,
-                &c,
-                Source::from_doc(design.kind, &design.doc),
-                Source::from_doc(installed.kind, &installed.doc),
-            );
-        }
-        let src = Source::from_doc(SourceKind::Schedule, &format!("{} type {}", row.source, row.tag));
-        for (k, v) in [
-            ("basis_of_design", format!("{} {}", row.manufacturer, row.model).trim().to_string()),
-            ("installation", row.installation.clone()),
-            ("fixture_description", row.description.clone()),
-            ("schedule_notes", row.notes.clone()),
-        ] {
-            let keep = store.get(k).is_some_and(|old| old.source.kind == SourceKind::User);
-            if !keep && !v.is_empty() {
-                store.set(k, Prop::new(v, src.clone()));
-            }
-        }
-        if let Some(va) = row.va
-            && !store.get("fixture_va").is_some_and(|o| o.source.kind == SourceKind::User)
-        {
-            store.set("fixture_va", Prop::new(va, src.clone()).with_unit("VA"));
-        }
+        // Its documents' fields, its schedule row's own (shared with `bim.props.fill`, Q6590).
+        let fcs = lt::apply_row(&mut store, row, &spec_says, &submittal_name, &doc_order.id);
         if store != before {
             changes.push((e.handle, store));
         }
