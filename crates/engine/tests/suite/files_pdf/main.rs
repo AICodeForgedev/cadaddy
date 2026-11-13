@@ -11,6 +11,7 @@ mod helper;
 
 mod bimjobstate;
 mod bimpdfpages;
+mod detailscale;
 mod devicefit;
 mod drawingsheets;
 mod enlargedviews;

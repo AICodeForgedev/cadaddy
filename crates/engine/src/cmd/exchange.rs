@@ -615,6 +615,9 @@ pub(crate) struct PdfPage {
     pub path: String,
     pub params: Value,
     pub at: Option<Vec2>,
+    /// The sheet is a plan (a floor, ceiling or enlarged plan): a scale note only its details,
+    /// sections or elevations print is never its scale ([`reread_without_other_views_notes`]).
+    pub plan: bool,
 }
 
 /// What [`import_pdf_pages`] did with one page.
@@ -684,6 +687,52 @@ fn reread_at_plan_scale(
         ));
         r2["planPrintScale"] = json!(v);
         r2["planScaleReread"] = json!({"from": k, "to": want, "view": view.title, "first_source": first});
+        (d2, r2)
+    }))
+}
+
+/// The view (a detail, a section, an elevation: no plan) whose scale note alone gives a sheet
+/// read at `k` drawing units a sheet inch ([`cadaddy_mepfix::sheet_facts::only_other_views_print`]).
+fn other_views_note(d: &Drawing, k: f64) -> Option<String> {
+    let read_at = 12.0 * super::perceive::units_per_inch(d) / k;
+    (k.is_finite() && k > 0.0 && read_at.is_finite())
+        .then(|| cadaddy_mepfix::sheet_facts::only_other_views_print(d, read_at, PLAN_SCALE_TOLERANCE))
+        .flatten()
+}
+
+/// A plan sheet read at a scale note only its details, sections or elevations print (no plan
+/// view prints it, and none of the notes giving it stands alone or in the title block), read
+/// again without its scale notes (Q6518: a ceiling plan whose own note didn't read came in at its
+/// three details' 3" = 1'-0", a sixteenth of its size). A detail's note never scales the plan
+/// beside it: the plan is scaled from its dimension strings, else comes in at paper size, where
+/// the job takes its scale from a plan of its floor or asks for it. Its `scaleSource` says which
+/// view's note it refused. `None` (the reading stands) when the scale was given or wasn't a
+/// note's.
+fn reread_without_other_views_notes(
+    read_pdf: super::file::PdfHook,
+    bytes: &[u8],
+    params: &Value,
+    d: &Drawing,
+    report: &Value,
+) -> Option<std::result::Result<(Drawing, Value), String>> {
+    if params.get("scale").is_some_and(|x| x.as_str().is_none_or(|t| !t.trim().eq_ignore_ascii_case("auto"))) {
+        return None;
+    }
+    let src = report.get("scaleSource").and_then(Value::as_str).filter(|s| s.starts_with("scale note"))?;
+    let k = report.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 1.5)?;
+    let view = other_views_note(d, k)?;
+    // The note as printed (`3" = 1'-0"`), without what the reader said of it.
+    let note: String = src.trim_start_matches("scale note").split(" (").next().unwrap_or("").trim().chars().take(40).collect();
+    let view: String = view.chars().take(80).collect();
+    let mut p = params.clone();
+    p["scaleNotes"] = json!(false);
+    Some(read_pdf(bytes, &p).map(|(d2, mut r2)| {
+        let how = r2.get("scaleSource").and_then(Value::as_str).unwrap_or("").to_string();
+        r2["scaleSource"] = json!(format!("{how}; not the note {note} ({k}x): only view {view} prints it, never a plan"));
+        r2["planScaleReread"] = json!({"from": k, "to": r2.get("scale").cloned().unwrap_or(Value::Null), "view": view, "first_source": src.chars().take(160).collect::<String>(), "scale_notes": false});
+        if let Some(o) = r2.as_object_mut() {
+            o.remove("planPrintScale");
+        }
         (d2, r2)
     }))
 }
@@ -768,15 +817,23 @@ pub(crate) fn import_pdf_pages(
             // an E sheet already drawn at its scale note (the reader does that) needs no re-read
             && report.get("scale").and_then(Value::as_f64).is_none_or(|k| k <= 1.5)
             && let Some(k) = detected_scale(&report)
+            // a plan's DO NOT SCALE sheet whose only note is a detail's stays at sheet size
+            && !(pg.plan && other_views_note(&d, k).is_some())
         {
             let mut p = pg.params.clone();
             p["scale"] = json!(k);
             (d, report) = read_pdf(&bytes, &p)?;
         }
-        match reread_at_plan_scale(read_pdf, &bytes, &pg.params, &d, &mut report) {
-            Some(again) => again,
-            None => Ok((d, report)),
+        let (d, report) = match reread_at_plan_scale(read_pdf, &bytes, &pg.params, &d, &mut report) {
+            Some(again) => again?,
+            None => (d, report),
+        };
+        if pg.plan
+            && let Some(again) = reread_without_other_views_notes(read_pdf, &bytes, &pg.params, &d, &report)
+        {
+            return again;
         }
+        Ok((d, report))
     };
     // A page per core at a time, at most [`MAX_PAGES_AT_ONCE`]: the converted pages wait in
     // memory until they are added.

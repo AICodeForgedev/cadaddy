@@ -455,8 +455,33 @@ fn bar_title<'a>(texts: &'a [TextItem], s: &TextItem, rules: &[[f64; 3]]) -> Opt
 /// beside the designator that stands above it, or the title standing on the rule the "SCALE:"
 /// line hangs under (a title bar).
 pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
+    views_and_notes(d, texts).0
+}
+
+/// A scale note on a sheet and the title of the view it stands under (none: a note in the title
+/// block, or under no title).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScaleNote {
+    /// Sheet inches per foot, when the note reads and is not NOT TO SCALE.
+    pub scale: Option<f64>,
+    pub view: Option<String>,
+    /// Where the note is, and its lettering's height.
+    pub at: [f64; 2],
+    pub height: f64,
+}
+
+/// Whether two texts stand at one spot: two readings of one line of lettering (the page's text
+/// and the lettering read from its strokes, each its own height).
+fn one_spot(a: &TextItem, b: &TextItem) -> bool {
+    let h = a.height.min(b.height);
+    (a.at.x - b.at.x).abs() <= 0.5 * h && (a.at.y - b.at.y).abs() <= 0.5 * h
+}
+
+/// [`view_titles`] and every scale line of the sheet with the view it titles.
+fn views_and_notes(d: &Drawing, texts: &[TextItem]) -> (Vec<ViewTitle>, Vec<ScaleNote>) {
     let regions = view_regions(d);
     let mut out: Vec<ViewTitle> = Vec::new();
+    let mut notes: Vec<ScaleNote> = Vec::new();
     // The sheet's horizontal rules, gathered the first time a title bar is looked for.
     let mut rules: Option<Vec<[f64; 3]>> = None;
     for s in texts.iter().filter(|t| horizontal(t) && is_scale_line(t)) {
@@ -474,6 +499,7 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
             .min_by(|a, b| (a.at.y - s.at.y).total_cmp(&(b.at.y - s.at.y)))
             .or_else(|| bar_title(texts, s, rules.get_or_insert_with(|| title_rules(d))))
         else {
+            notes.push(ScaleNote { scale: note_scale(&s.value), view: None, at: [s.at.x, s.at.y], height: h });
             continue;
         };
         // A boxed title: the view's designator (`A1`) stands over the scale, its name beside it.
@@ -508,8 +534,30 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
                 .map(|t| t.value.clone())
         });
         let st = scale_text(&s.value);
+        // Two readings of one note at one spot (the page's text, and its lettering read from
+        // strokes, which can stop at the gap of its "="): the one that reads (Q6518: a plan
+        // titled over `SCALE: 3/16"` had no scale, and its details' note scaled the sheet).
+        let st = if note_scale(&st).is_none() {
+            texts
+                .iter()
+                .filter(|o| horizontal(o) && is_scale_line(o) && one_spot(o, s))
+                .map(|o| scale_text(&o.value))
+                .find(|t| note_scale(t).is_some())
+                .unwrap_or(st)
+        } else {
+            st
+        };
         let nts = says_not_to_scale(&st, false) || st.eq_ignore_ascii_case("NTS");
-        if out.iter().any(|v| v.title == title.value && v.at == [title.at.x, title.at.y]) {
+        notes.push(ScaleNote { scale: if nts { None } else { note_scale(&st) }, view: Some(title.value.clone()), at: [s.at.x, s.at.y], height: h });
+        // The same title over two readings of one note (the page's text and its lettering read
+        // from strokes, which can stop at the gap of its "="): the reading whose scale reads is
+        // the view's (Q6518: a plan titled over `SCALE: 3/16"` had no scale, and the details'
+        // note beside it scaled the sheet).
+        if let Some(v) = out.iter_mut().find(|v| v.title == title.value && v.at == [title.at.x, title.at.y]) {
+            let reads = |t: &str| crate::sheet_reader::parse_scale(t).is_some_and(|k| k.is_finite() && k > 0.0);
+            if !nts && !v.not_to_scale && reads(&st) && !v.scale_text.as_deref().is_some_and(reads) {
+                v.scale_text = Some(st);
+            }
             continue;
         }
         out.push(ViewTitle {
@@ -522,7 +570,22 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
         });
     }
     out.sort_by(|a, b| a.number.as_deref().unwrap_or("~").cmp(b.number.as_deref().unwrap_or("~")).then(a.title.cmp(&b.title)));
-    out
+    // A reading of a note whose title is out of its reach (the shorter lettering of two readings)
+    // is the view's its other reading at that spot titles.
+    let titled: Vec<([f64; 2], f64, String)> = notes.iter().filter_map(|n| Some((n.at, n.height, n.view.clone()?))).collect();
+    for n in notes.iter_mut().filter(|n| n.view.is_none()) {
+        let near = |at: [f64; 2], h: f64| {
+            let h = h.min(n.height);
+            (at[0] - n.at[0]).abs() <= 0.5 * h && (at[1] - n.at[1]).abs() <= 0.5 * h
+        };
+        n.view = titled.iter().find(|(at, h, _)| near(*at, *h)).map(|(_, _, v)| v.clone());
+    }
+    (out, notes)
+}
+
+/// The scale a scale line prints (sheet inches per foot), when it reads.
+fn note_scale(line: &str) -> Option<f64> {
+    crate::sheet_reader::parse_scale(&scale_text(line)).filter(|k| k.is_finite() && *k > 0.0)
 }
 
 /// The block a title labels: the largest block holding the title, else the nearest block right
@@ -1112,6 +1175,25 @@ pub fn sheet_scales(d: &Drawing) -> Option<SheetScales> {
     Some(SheetScales { plans, view, plan_views, other_views })
 }
 
+/// The title of a view that is no plan (a detail, a section, an elevation) printing `k` sheet
+/// inches per foot, when only such views print it on a drawing of one sheet: every scale note
+/// giving `k` (within `tolerance`, relative) stands under a view title naming no plan
+/// ([`names_a_plan`]), none stands alone (in the title block, under no title) and none under a
+/// plan's title. `None` otherwise: the reading is the plans', or nothing tells (Q6518: a
+/// ceiling plan whose own note didn't read came in at its three details' 3" = 1'-0").
+pub fn only_other_views_print(d: &Drawing, k: f64, tolerance: f64) -> Option<String> {
+    if !(k.is_finite() && k > 0.0) {
+        return None;
+    }
+    let t = texts(d);
+    let (_, notes) = views_and_notes(d, &t);
+    let giving: Vec<&ScaleNote> = notes.iter().filter(|n| n.scale.is_some_and(|s| (s / k - 1.0).abs() <= tolerance)).collect();
+    if giving.iter().any(|n| n.view.as_deref().is_none_or(names_a_plan)) {
+        return None;
+    }
+    giving.first().and_then(|n| n.view.clone())
+}
+
 /// The sheet and its views.
 pub fn read_sheet_facts(d: &Drawing) -> SheetFacts {
     let t = texts(d);
@@ -1199,6 +1281,62 @@ mod tests {
         assert_eq!((sc.plan_views.clone(), sc.other_views.clone()), (vec![0.125], vec![0.5]));
         assert!(sc.prints(0.5, false, 0.02) && !sc.prints(0.5, true, 0.02) && sc.prints(0.126, true, 0.02));
         assert!(!sc.prints(f64::NAN, true, 0.02) && !sc.prints(0.0, false, 0.02));
+    }
+
+    /// Q6518: a plan's note read twice (the page's text, and its lettering read only up to the
+    /// gap of its "=") is the plan's scale whichever reading comes first; the details' note
+    /// beside it is theirs.
+    #[test]
+    fn a_plans_note_read_twice_is_its_scale_whichever_reading_comes_first() {
+        for cut_first in [true, false] {
+            let mut d = Drawing::default();
+            text(&mut d, "CEILING PLAN", 0.0, 2.0, 0.25);
+            // the page's text at its letters' height (its title out of its reach), the reading of
+            // its strokes at their em, cut at the "="
+            let (full, cut) = (("SCALE: 1/4\" = 1'-0\"", 0.086), ("SCALE: 1/4\"", 0.12));
+            let (a, b) = if cut_first { (cut, full) } else { (full, cut) };
+            text(&mut d, a.0, 0.0, 1.6, a.1);
+            text(&mut d, b.0, 0.0, 1.6, b.1);
+            for x in [20.0, 30.0] {
+                text(&mut d, "CEILING DETAIL", x, 2.0, 0.25);
+                text(&mut d, "SCALE: 3\" = 1'-0\"", x, 1.6, 0.12);
+            }
+            let sc = sheet_scales(&d).unwrap_or_else(|| panic!("the plan prints its scale (cut reading first: {cut_first})"));
+            assert_eq!((sc.plans, sc.view.title.as_str()), (0.25, "CEILING PLAN"), "cut reading first: {cut_first}");
+            assert_eq!((sc.plan_views.clone(), sc.other_views.clone()), (vec![0.25], vec![3.0]));
+            // the 1/4" is the plan's, 3" only the details'
+            assert_eq!(only_other_views_print(&d, 0.25, 0.02), None);
+            assert_eq!(only_other_views_print(&d, 3.0, 0.02).as_deref(), Some("CEILING DETAIL"));
+        }
+    }
+
+    /// Q6518: a scale only the sheet's details print (each of its notes under a detail's title)
+    /// is theirs; one that also stands alone (the title block's) or under a plan's title is not.
+    #[test]
+    fn a_scale_only_details_print_is_theirs() {
+        let details = |d: &mut Drawing| {
+            for x in [20.0, 30.0, 40.0] {
+                text(d, "CEILING DETAIL", x, 2.0, 0.25);
+                text(d, "SCALE: 3\" = 1'-0\"", x, 1.6, 0.12);
+            }
+        };
+        // the plan's title over no note of its own
+        let mut d = Drawing::default();
+        text(&mut d, "CEILING PLAN", 0.0, 2.0, 0.25);
+        details(&mut d);
+        assert_eq!(only_other_views_print(&d, 3.0, 0.02).as_deref(), Some("CEILING DETAIL"));
+        assert_eq!(only_other_views_print(&d, 0.25, 0.02), None, "nothing prints 1/4\"");
+        assert_eq!(only_other_views_print(&d, f64::NAN, 0.02), None);
+        // the same note in the title block (under no title): the sheet's, not only the details'
+        let mut alone = d.clone();
+        text(&mut alone, "SCALE: 3\" = 1'-0\"", 80.0, 0.5, 0.12);
+        assert_eq!(only_other_views_print(&alone, 3.0, 0.02), None);
+        // a plan view printing it: the plans'
+        let mut plan = Drawing::default();
+        text(&mut plan, "ENLARGED PLAN", 0.0, 2.0, 0.25);
+        text(&mut plan, "SCALE: 3\" = 1'-0\"", 0.0, 1.6, 0.12);
+        details(&mut plan);
+        assert_eq!(only_other_views_print(&plan, 3.0, 0.02), None);
     }
 
     #[test]
