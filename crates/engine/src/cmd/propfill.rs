@@ -3123,6 +3123,34 @@ pub(crate) fn gang_plates(d: &Drawing) -> HashMap<String, usize> {
     out
 }
 
+/// A door built at its door schedule tag where the plan draws no opening (Q6609,
+/// `wallgen::doortags`): how it opens and its sill above its floor, from the schedule's words and
+/// size, else the trade practice rule that built it (said so).
+fn door_at_tag_props(store: &mut Props, e: &Entity, row: Option<&cadaddy_walk3d::ScheduleRow>, upf: f64, tally: &mut BTreeMap<String, usize>) {
+    let rule = || Source::from_doc(SourceKind::Rule, super::wallgen::DOOR_AT_TAG_RULE);
+    let words_say =
+        |w: &str| row.is_some_and(|r| [&r.kind_type, &r.frame].iter().any(|t| t.as_deref().is_some_and(|t| t.to_ascii_uppercase().contains(w))));
+    if let Some(op) = made(e, "operation") {
+        let src = match row {
+            Some(r) if words_say(&op.to_ascii_uppercase()) => Source::from_doc(SourceKind::Schedule, &format!("door schedule, mark {}", r.mark)),
+            _ => rule(),
+        };
+        put(store, "operation", Prop::new(op, src), tally);
+    }
+    if let Some(sill) = made(e, "sill").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0) {
+        let given = row.is_some_and(|r| r.sill_ft.is_some());
+        let (src, note) = if given {
+            (Source::from_doc(SourceKind::Schedule, "door schedule"), "the schedule's sill")
+        } else {
+            (rule(), "closes onto a counter top: the schedule gives no sill, the rule gives the counter height (its basis names the alternative)")
+        };
+        put(store, "sill_height", Prop::new(round2(sill / upf * 12.0), src).with_unit("in").with_note(note), tally);
+    }
+    if made(e, "counter").is_some() {
+        put(store, "over_counter", Prop::new(true, rule()), tally);
+    }
+}
+
 /// A built window's properties (Q6311): its type mark (the tag's, or the typical window's it
 /// stands for), the schedule row's type, frame and rating, its width, its sill and height (the
 /// row's, else the level's defaults, marked so), a storefront's assembly, its level and the room
@@ -3597,7 +3625,13 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                 let Some((b, z0, z1)) = ext else { continue };
                 // The number printed at the opening (on the plan: the build moved stacked levels).
                 let at_plan = b.center() - shift;
-                let printed = grid.near(at_plan, DOOR_TAG_FT * upf).into_iter().find(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t));
+                // A door built at its door schedule tag where the plan draws no opening (Q6609)
+                // is that tag's: its mark is its number, whatever else is printed near it.
+                let at_tag = made(e, "mark").filter(|_| made(e, "found").is_some_and(|f| f.starts_with("schedule_tag")));
+                let printed = match &at_tag {
+                    Some(_) => None,
+                    None => grid.near(at_plan, DOOR_TAG_FT * upf).into_iter().find(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t)),
+                };
                 if let Some((t, q, _)) = &printed {
                     put(
                         &mut store,
@@ -3610,6 +3644,7 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                 // Its door schedule row: the printed number's, else the nearest schedule tag's.
                 let is_door_row = |m: &str| sp.schedule.row(m).filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door);
                 let by_number = printed.as_ref().and_then(|(t, _, _)| is_door_row(t));
+                let by_number = by_number.or_else(|| at_tag.as_deref().and_then(is_door_row));
                 let by_tag = || {
                     sp.schedule
                         .tags
@@ -3625,11 +3660,15 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                 if let Some((r, q)) = row {
                     let src = || Source::from_doc(SourceKind::Schedule, "door schedule");
                     if printed.is_none() {
+                        let note = if at_tag.is_some() {
+                            "the door schedule's tag: no opening is drawn, the door is built at its tag"
+                        } else {
+                            "the door schedule's tag at the opening"
+                        };
                         put(
                             &mut store,
                             "number",
-                            Prop::new(r.mark.trim().to_string(), Source::print(&sheet_at(&sp, q, lvl), Some([q.x, q.y])))
-                                .with_note("the door schedule's tag at the opening"),
+                            Prop::new(r.mark.trim().to_string(), Source::print(&sheet_at(&sp, q, lvl), Some([q.x, q.y]))).with_note(note),
                             tally,
                         );
                     }
@@ -3668,6 +3707,9 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                             put(&mut store, key, Prop::new(round2(v), src.clone()).with_unit("in"), tally);
                         }
                     }
+                }
+                if at_tag.is_some() {
+                    door_at_tag_props(&mut store, e, row.map(|(r, _)| r), upf, tally);
                 }
                 let served = served_room(&near, |label| room_level(label).map(|x| x.name.clone()));
                 let number = store.get("number").map(Prop::text).filter(|t| !t.trim().is_empty());

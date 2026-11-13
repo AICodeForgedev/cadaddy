@@ -91,6 +91,7 @@ mod rooms3d;
 mod roomsmodel;
 mod routeunbuilt;
 mod rulemodel;
+mod schedule_doors;
 mod scopesplit;
 mod shapes;
 mod site_services;
