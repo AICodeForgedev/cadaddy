@@ -47,6 +47,7 @@ mod exterior;
 mod fawiring;
 mod feederfollow;
 mod feederwire;
+mod fittings_across_systems;
 mod fixturekinds;
 mod floorassembly;
 mod floorboxfeed;
