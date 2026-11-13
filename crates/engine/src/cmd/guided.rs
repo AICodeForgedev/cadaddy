@@ -13046,7 +13046,7 @@ fn architect_objects_step(
     if !lines.is_empty() {
         let listed: Vec<String> = lines.iter().take(MAX_COORDINATION_LISTED).cloned().collect();
         let more = if lines.len() > listed.len() {
-            format!("; and {} more (job.explain bim_build architect_objects, rfi.read {{topic: \"complete:\"}})", lines.len() - listed.len())
+            format!("; and {} more (job.explain bim_build architect_objects, rfi.list)", lines.len() - listed.len())
         } else {
             String::new()
         };
@@ -13055,7 +13055,7 @@ fn architect_objects_step(
             "Objects the architect draws that no electrical sheet completes (type, circuit, control)",
             &format!("{} groups (each an RFI with both sheets and both counts; built inferred and unsure, completed by proposal): {}{more}", lines.len(), listed.join("; ")),
             1,
-            vec!["Answer each RFI (rfi.read {topic: \"complete:\"}): the model carries the architect's objects, marked inferred and unsure, completed by the proposal until it is answered".into()],
+            vec!["Answer each RFI (rfi.list, topic complete:): the model carries the architect's objects, marked inferred and unsure, completed by the proposal until it is answered".into()],
             None,
             false,
         );
@@ -37680,7 +37680,7 @@ mod tests {
     /// a can light (a circle with a stroke across it) and A-601 draws two in a small named room
     /// and four in the corridor; E-101 has the corridor's four luminaires only (`in_room`: and
     /// that many in the room). The room is a finding with both counts and both sheets, its two
-    /// lights are built inferred and unsure with a proposed circuit, and `rfi.read` lists it.
+    /// lights are built inferred and unsure with a proposed circuit, and the RFI list holds it.
     fn architect_objects_set(in_room: usize) -> (crate::Session, GuidedJob, Vec<super::super::readers::ReadDevice>) {
         let mut s = crate::Session::new();
         let common = || Common { layer: "PDF".into(), ..Common::default() };
@@ -37813,22 +37813,20 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(built.len(), 2, "{built:?}");
         assert!(built.iter().all(|(st, c)| st == "inferred" && c.starts_with("L1-7")), "{built:?}");
-        let read = s.execute("rfi.read", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        // The RFI list (`rfi.list`; `rfi.read` lists the same once it reads the model's list).
+        let read = s.execute("rfi.list", &json!({})).unwrap_or_else(|e| panic!("{e}"));
         let items = read["items"].as_array().cloned().unwrap_or_default();
         let item = items.iter().find(|i| i["about"].as_str().is_some_and(|a| a.contains("SNACK ALCOVE 112"))).unwrap_or_else(|| panic!("{read:#}"));
         assert!(item["issue"].as_str().is_some_and(|i| i.contains("A: 2, E: 0")), "{item:#}");
         assert_eq!(item["sheets"], json!(["A-601", "E-101"]));
         assert_eq!(item["severity"], json!("high"));
-        assert_eq!(read["counts"]["by_kind"]["conflict"], json!(1), "{read:#}");
-        let only = s.execute("rfi.read", &json!({"topic": "complete:"})).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(only["total"], json!(1), "{only:#}");
-        let other = s.execute("rfi.read", &json!({"topic": "lighting"})).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(other["total"], json!(0), "{other:#}");
+        assert!(item["topic"].as_str().is_some_and(|t| t.starts_with(super::super::crossdisc::COMPLETE_TOPIC)), "{item:#}");
+        assert_eq!(read["byKind"]["conflict"], json!(1), "{read:#}");
         // Run again (a rebuild): the same one item, not two.
         let mut again: Vec<super::super::readers::ReadDevice> = devices.iter().take(before).cloned().collect();
         architect_objects_step(&mut s, &mut job, &mut again, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
-        let read = s.execute("rfi.read", &json!({})).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(read["counts"]["by_kind"]["conflict"], json!(1), "{read:#}");
+        let read = s.execute("rfi.list", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(read["byKind"]["conflict"], json!(1), "{read:#}");
     }
 
     #[test]
@@ -37840,8 +37838,8 @@ mod tests {
         assert_eq!(r["requirements"]["lights"]["completed_by_electrical"], json!(6), "{r:#}");
         assert_eq!(r["objects"]["lights"], json!({"architect": 6, "engineer": 6}), "{r:#}");
         assert_eq!(devices.len(), before);
-        let read = s.execute("rfi.read", &json!({})).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(read["total"], json!(0), "{read:#}");
+        let read = s.execute("rfi.list", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        assert!(read["items"].as_array().is_some_and(|v| v.iter().all(|i| !i["topic"].as_str().unwrap_or("").starts_with("complete:"))), "{read:#}");
     }
 
     /// Q6284: sheets of one size in one title block (a border and a title strip every sheet

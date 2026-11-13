@@ -956,7 +956,7 @@ pub(crate) fn to_rfi(o: &Open, objs: &[Obj], rooms: &[Room], rules: &Rules, engi
     })
 }
 
-/// The topic every open group's RFI starts with (`rfi.read {topic: "complete:"}`).
+/// The topic every open group's RFI starts with.
 pub(crate) const COMPLETE_TOPIC: &str = "complete:";
 
 /// The group's one line for the job report (`SNACK ALCOVE 12 (level 1): lights A: 2 on A-601, E: 0 on E-101`).

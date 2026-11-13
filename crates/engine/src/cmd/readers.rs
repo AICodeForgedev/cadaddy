@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── RFI reader ───────────────────────────────────────────────────
         CommandSpec::new("rfi.read", "Read RFIs from Prints", run_rfi_read)
-            .params("{apply?: bool, topic?: text (only items whose topic starts with it: complete: (what the build could not complete from the documents), lighting)} → {counts: {by_kind: {}, by_severity: {}}, items: first 20 (most severe first: id, kind, severity, level, sheets, about, issue, topic, proposed), total}: the building model's RFI list (the print readers' items, what the build could not complete, the spec's own gaps; rfi.list has every item)")
+            .params("{apply?: bool} → {counts: {by_kind: {}, by_severity: {}}, items: first 20}")
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
         CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
@@ -966,38 +966,6 @@ fn run_ceilasm_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let apply = bool_or(p, "apply", false);
-    // A drawing with a building model: its RFI list as the readers and the job's checks left it
-    // (the print readers' items, what the build could not complete, the spec's own gaps).
-    if let Ok((sp, true)) = super::bspec::current(_s, "rfi.read") {
-        let mut list = cadaddy_walk3d::rfi::list(&sp);
-        // (Only the items of one topic: `complete:` lists what the build could not complete.)
-        if let Some(topic) = str_param(p, "topic").map(str::trim).filter(|t| !t.is_empty()) {
-            let topic = topic.to_ascii_lowercase();
-            list.retain(|r| r.topic.to_ascii_lowercase().starts_with(&topic));
-        }
-        let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
-        let mut by_severity: BTreeMap<String, usize> = BTreeMap::new();
-        for r in &list {
-            *by_kind.entry(r.kind_name().to_string()).or_default() += 1;
-            *by_severity.entry(r.severity.name().to_string()).or_default() += 1;
-        }
-        let mut sorted: Vec<&cadaddy_walk3d::Rfi> = list.iter().collect();
-        sorted.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.id.cmp(&b.id)));
-        let items: Vec<Value> = sorted
-            .iter()
-            .take(RFI_ITEMS_READ)
-            .map(|r| {
-                json!({"id": r.id, "kind": r.kind_name(), "severity": r.severity.name(), "level": r.level, "sheets": r.sheets,
-                    "about": r.about, "issue": r.issue, "topic": r.topic, "proposed": r.proposed})
-            })
-            .collect();
-        return Ok(json!({
-            "counts": {"by_kind": by_kind, "by_severity": by_severity},
-            "items": items,
-            "total": list.len(),
-            "apply": apply,
-        }));
-    }
 
     let project = match project(_s) {
         Ok(p) => p,
@@ -1015,9 +983,6 @@ fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
         "message": "RFI reader wired; requires wall legend and classified sheets",
     }))
 }
-
-/// RFIs `rfi.read` lists, at most (the most severe first; `rfi.list` has them all).
-const RFI_ITEMS_READ: usize = 20;
 
 // ─── mep.equipment.read ──────────────────────────────────────────────────────
 
