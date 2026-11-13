@@ -1,0 +1,14 @@
+{
+  "accessible_reach": {
+    "id": "A-REACH",
+    "cite": "ICC A117.1 308.2-308.3 and 2010 ADA Standards 205.1, 308.2-308.3",
+    "max_in": 48.0,
+    "min_in": 15.0,
+    "rule": "operable parts in an accessible room are within the unobstructed reach range: 48 in at most and 15 in at least above the finished floor, forward or side; the top of a control's operable parts (a thermostat's, a switch's, a panelboard's highest breaker) is taken as the top of its box",
+    "room_words": ["ADA", "ACCESSIBLE", "HANDICAP", "HANDICAPPED", "TYPE A", "TYPE B", "MOBILITY"],
+    "device_kinds": ["switch", "dimmer", "thermostat", "card reader", "keypad", "control"],
+    "device_words": ["SWITCH", "DIMMER", "THERMOSTAT", "TSTAT", "CARD READER", "KEYPAD", "CONTROL"],
+    "except_words": ["DISCONNECT", "SAFETY SWITCH", "TRANSFER", "FLOW", "TAMPER", "PRESSURE", "FLOAT", "LIMIT", "DUCT", "CEILING", "FIRE ALARM", "SWITCHBOARD"],
+    "equipment_kinds": ["panel", "panelboard", "load center", "load_center"]
+  }
+}

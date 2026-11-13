@@ -218,6 +218,7 @@ pub mod projrules;
 mod props;
 pub(crate) mod provenance;
 pub mod pulllist;
+pub(crate) mod reach;
 pub mod readers;
 pub mod redline;
 pub mod relevel;

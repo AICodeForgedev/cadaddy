@@ -2611,6 +2611,8 @@ pub(crate) fn rebuild_devices_where(s: &mut Session, cmd: &str, only: DevicePick
         d.model.iter().filter(|e| !kept.contains(&e.handle) && super::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle).collect();
     if !new.is_empty() {
         super::underceiling::keep_under(d, &sp, Some(&new));
+        // A control in an accessible room within reach (Q6555).
+        super::reach::keep_within(d, &sp, Some(&new), &[]);
     }
     // An automatic rebuild (the plan changed) builds from the spec it keeps: the same devices.
     if let Some(kept) = s.state_mut()?.wallgen.as_mut().and_then(|g| g.spec.as_mut()) {
@@ -4837,6 +4839,11 @@ pub(crate) fn panel_heights(s: &mut Session, top_in: f64, doc: &str) -> Result<u
         }
         let mut store = props::read(&e.common.xdata);
         if store.get("mount_height").is_some_and(|p| !matches!(p.source.kind, SourceKind::Default | SourceKind::Rule)) {
+            continue;
+        }
+        // A height a rule corrected for the field (an accessible room's reach, Q6555) stays: the
+        // note's is its design value already.
+        if store.get(&format!("{}mount_height", super::provenance::DESIGN_PREFIX)).is_some_and(Prop::has_value) {
             continue;
         }
         let centre = round2(top_in - (hi - lo) / 2.0);

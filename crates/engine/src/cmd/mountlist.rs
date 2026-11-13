@@ -16,8 +16,9 @@
 //! Each entry keeps what it is for (its subject), the height for a standard room and for an
 //! accessible one, what the height is measured to on the item (its middle, top or bottom), and
 //! the words read. A keyed note (`4. RECEPTACLE FOR THE UNIT HEATER … MOUNT 24" AFF`) is no list: only a
-//! numbered note whose heading says it lists heights, or one written `STANDARD =` / `ADA =`, is
-//! read. Every scan is capped; nothing here panics.
+//! numbered note whose heading says it lists heights, or one written `STANDARD =` / `ADA =` (an
+//! accessible reach too: `ADA FORWARD REACH = 48" MAX.`), is read. Every scan is capped; nothing
+//! here panics.
 
 use std::collections::BTreeSet;
 
@@ -253,6 +254,45 @@ pub fn pick(ds: &[Dim]) -> Option<f64> {
 /// ceiling (`STANDARD = CEILING HEIGHT`). An `ADA` with other words before its `=` (`ADA TRIP
 /// LEVER =`) is another item's; `(TO TOP OF SEAT)` or a reach (`ADA SIDE REACH =`) is its own.
 fn standard_and_ada(text: &str) -> (Option<f64>, Option<f64>, bool) {
+    let (mut standard, mut accessible, mut ceiling) = (None, None, false);
+    for (ada, v) in own_values(text) {
+        if v.starts_with("CEILING") {
+            ceiling = true;
+            continue;
+        }
+        let h = pick(&dims(&v));
+        match (ada, h) {
+            (false, Some(h)) if standard.is_none() => standard = Some(h),
+            (true, Some(h)) if accessible.is_none() => accessible = Some(h),
+            _ => {}
+        }
+    }
+    (standard, accessible, ceiling)
+}
+
+/// The most a note lets an accessible room's item be (`ADA = 48" MAX.`, `ADA FORWARD REACH = 48"
+/// MAX. ADA SIDE REACH = 46" MAX.`: the least of its maximums), inches; none when its accessible
+/// heights give no maximum (`ADA = 15" MIN.`, `ADA = 17" TO 19"`).
+pub fn ada_max(text: &str) -> Option<f64> {
+    own_values(text)
+        .into_iter()
+        .filter(|(ada, _)| *ada)
+        .flat_map(|(_, v)| dims(&v))
+        .filter(|d| d.max && d.inches > 0.0)
+        .map(|d| d.inches)
+        .min_by(f64::total_cmp)
+}
+
+/// Whether a note gives heights the way an accessibility list writes them: a `STANDARD` or `ADA`
+/// word and an `=` (whose own heights [`standard_and_ada`] then reads).
+fn writes_heights(up: &str) -> bool {
+    let word = |w: &str| up.split(|c: char| !c.is_ascii_alphanumeric()).any(|x| x == w);
+    up.contains('=') && (word("STANDARD") || word("ADA"))
+}
+
+/// The values after each `STANDARD … =` and `ADA … =` of a note that are its item's own (upper
+/// case, trimmed): whether each is the accessible one.
+fn own_values(text: &str) -> Vec<(bool, String)> {
     let u = norm(text).to_ascii_uppercase();
     let mut at: Vec<(usize, bool)> = Vec::new();
     for (word, ada) in [("STANDARD", false), ("ADA", true)] {
@@ -270,29 +310,18 @@ fn standard_and_ada(text: &str) -> (Option<f64>, Option<f64>, bool) {
         }
     }
     at.sort_by_key(|(p, _)| *p);
-    let (mut standard, mut accessible, mut ceiling) = (None, None, false);
+    let mut out = Vec::new();
     for (i, (p, ada)) in at.iter().enumerate() {
         let end = at.get(i + 1).map_or(u.len(), |(q, _)| *q);
         let Some(seg) = u.get(*p..end) else { continue };
         let Some((head, value)) = seg.split_once('=') else { continue };
         let head = head.get(if *ada { 3 } else { 8 }..).unwrap_or("").trim();
         let own = head.is_empty() || (head.starts_with('(') && head.ends_with(')')) || head.contains("REACH");
-        if !own {
-            continue;
-        }
-        let v = value.trim();
-        if v.starts_with("CEILING") {
-            ceiling = true;
-            continue;
-        }
-        let h = pick(&dims(v));
-        match (ada, h) {
-            (false, Some(h)) if standard.is_none() => standard = Some(h),
-            (true, Some(h)) if accessible.is_none() => accessible = Some(h),
-            _ => {}
+        if own {
+            out.push((*ada, value.trim().to_string()));
         }
     }
-    (standard, accessible, ceiling)
+    out
 }
 
 /// A numbered note's start: `9.WIRING …`, `3. WATER CLOSETS …` (not `1.6 GPF`).
@@ -483,7 +512,7 @@ pub fn read_lists_marking(texts: &[TextItem], used: &mut [bool]) -> Vec<Listed> 
         let joined: String = rows.iter().map(|r| r.iter().map(|t| norm(&t.value)).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join(" ");
         let body = after_number(&joined).to_string();
         let up = body.to_ascii_uppercase();
-        if !(up.contains("STANDARD =") || up.contains("STANDARD=") || up.contains("ADA =") || up.contains("ADA=") || up.contains("ADA (")) {
+        if !writes_heights(&up) {
             continue;
         }
         let subject = subject_of(&body);
@@ -607,6 +636,34 @@ mod tests {
         assert_eq!(standard_and_ada("DETECTORS: STANDARD = CEILING HEIGHT"), (None, None, true));
         assert_eq!(standard_and_ada("SWITCHES AND CARD READERS (TO C.L.): KEEP 4\" FROM THE DOOR FRAME. ADA = 48\" MAX."), (None, Some(48.0), false));
         assert_eq!(standard_and_ada("MIRRORS (TO B.O. GLASS): STANDARD = VARIES. ADA = 40\" MAX."), (None, Some(40.0), false));
+        // Q6555: a note giving only accessible reaches is the item's own accessible height.
+        let reach = "CONTROLS (TO TOP): ADA FORWARD REACH = 46\u{201D} MAX. ADA SIDE REACH = 44\" MAX.";
+        assert_eq!(standard_and_ada(reach), (None, Some(46.0), false));
+        assert_eq!(ada_max(reach), Some(44.0), "the least of its maximums");
+        assert_eq!(ada_max("OUTLETS (TO C.L.): STANDARD = 18\". ADA = 15\" MIN."), None, "a minimum is no maximum");
+        assert_eq!(ada_max("SEATS: STANDARD = 15\" MAX. ADA = 17\" TO 19\"."), None, "nor is a standard room's maximum");
+        assert_eq!(ada_max("HOOKS: STANDARD = 68\". ADA = 48\" MAX."), Some(48.0));
+    }
+
+    #[test]
+    fn an_accessible_reach_note_wrapped_inside_its_brackets_is_read() {
+        // Q6555: the subject's brackets run onto the next line and only reaches are given.
+        let h = 1.0;
+        let texts = vec![
+            t("12. THERMOSTATS AND CONTROLS (TO", 0.0, 10.0, h),
+            t("TOP): ADA FORWARD REACH = 46\" MAX. ADA", 2.6, 8.4, h),
+            t("SIDE REACH = 46\" MAX.", 2.6, 6.8, h),
+            t("13. SHELVES: ADA = 44\" MAX.", 0.0, 5.2, h),
+            // A keyed note with an `=` and no standard or accessible height: no list.
+            t("14. PANEL TAG = ROOM NUMBER.", 0.0, 3.6, h),
+        ];
+        let l = read_lists(&texts);
+        let tstat = l.iter().find(|x| x.subject == "THERMOSTATS AND CONTROLS").expect("the reach note");
+        assert_eq!((tstat.inches, tstat.ada_inches, tstat.datum), (None, Some(46.0), Datum::Top), "{l:?}");
+        assert_eq!(ada_max(&tstat.text), Some(46.0));
+        assert!(names_item(&tstat.subject, "thermostat", None, Some("T")));
+        assert!(l.iter().any(|x| x.subject == "SHELVES"), "{l:?}");
+        assert_eq!(l.len(), 2, "{l:?}");
     }
 
     #[test]
