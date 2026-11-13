@@ -1249,6 +1249,48 @@ fn panel_volts(sp: &BuildingSpec, docs: &ScheduleDocs, panel: &str) -> Option<(f
     None
 }
 
+/// The voltages a circuit with `poles` (None: its breaker isn't read) can be at on a panel of
+/// `volts` (line to neutral, line to line): one pole is line to neutral, more line to line, and
+/// an unread breaker either. No panel voltage read: none (never a default, Q6460).
+fn circuit_volts(poles: Option<u32>, volts: Option<(f64, f64)>) -> Vec<f64> {
+    match (poles, volts) {
+        (_, None) => Vec::new(),
+        (Some(1), Some((ln, _))) => vec![ln],
+        (Some(_), Some((_, ll))) => vec![ll],
+        (None, Some((ln, ll))) if (ln - ll).abs() < 1e-6 => vec![ln],
+        (None, Some((ln, ll))) => vec![ln, ll],
+    }
+}
+
+/// What the wire-length table `t` asks of a circuit at one of `volts` (empty: its voltage isn't
+/// known). Several: the answer only where every one of them gives the same; else not covered.
+fn table_need(t: &super::wiretable::LengthTable, ft: f64, amps: Option<f64>, volts: &[f64], sizes: &[String]) -> super::wiretable::Need {
+    use super::wiretable::Need;
+    let [first, rest @ ..] = volts else {
+        return t.need(ft, amps, None, sizes);
+    };
+    let one = t.need(ft, amps, Some(*first), sizes);
+    if rest.is_empty() {
+        return one;
+    }
+    let each: Vec<Need> = rest.iter().map(|v| t.need(ft, amps, Some(*v), sizes)).collect();
+    let either = || volts.iter().map(|v| format!("{v} V")).collect::<Vec<_>>().join(" or ");
+    let all = |f: &dyn Fn(&Need) -> Option<String>| -> Vec<String> { std::iter::once(&one).chain(&each).filter_map(f).collect() };
+    match &one {
+        Need::Size(n, _) if each.iter().all(|x| matches!(x, Need::Size(m, _) if m == n)) => {
+            Need::Size(n.clone(), all(&|x| if let Need::Size(_, b) = x { Some(b.clone()) } else { None }).join("; "))
+        }
+        Need::Beyond(_) if each.iter().all(|x| matches!(x, Need::Beyond(_))) => {
+            Need::Beyond(all(&|x| if let Need::Beyond(w) = x { Some(w.clone()) } else { None }).join("; "))
+        }
+        Need::NotCovered(_) if each.iter().all(|x| matches!(x, Need::NotCovered(_))) => one.clone(),
+        _ => Need::NotCovered(format!(
+            "the circuit's breaker isn't read, so whether it is at {} isn't known, and the table's rows for them differ",
+            either()
+        )),
+    }
+}
+
 /// How near (inches) two raceway ends meet, by E-CONDUIT-CONTINUITY's `touch_in`.
 pub(crate) fn touch_in(continuity: Option<&Effective>) -> f64 {
     continuity.map_or(DEFAULT_TOUCH_IN, |r| tol(r, "touch_in", DEFAULT_TOUCH_IN))
@@ -2256,14 +2298,10 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         );
                     };
                     let found_brk = brk.found();
-                    let poles = found_brk.as_ref().map_or(1, |b| b.1);
-                    // The circuit's voltage: line to neutral on one pole, line to line on more.
-                    let cv = match (poles, volts) {
-                        (1, Some((ln, _))) => Some(ln),
-                        (1, None) => Some(rl.vdrop.voltage),
-                        (_, Some((_, ll))) => Some(ll),
-                        (_, None) => None,
-                    };
+                    // The voltages the circuit can be at: line to neutral on one pole, line to
+                    // line on more; a breaker not read (poles unknown) leaves both of its panel's.
+                    // A table's row is never chosen at a default voltage (Q6460).
+                    let cvs = circuit_volts(found_brk.as_ref().map(|b| b.1), volts);
                     // The documents' own wire-length table wins where it has the circuit's row.
                     let mut table_note: Option<String> = None;
                     if let Some(t) = cx.docs.length_table() {
@@ -2273,10 +2311,12 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         if let Some(b) = &found_brk {
                             m["breaker_a"] = json!(b.0);
                         }
-                        if let Some(v) = cv {
-                            m["volts"] = json!(v);
+                        match cvs.as_slice() {
+                            [v] => m["volts"] = json!(v),
+                            [] => {}
+                            many => m["volts_either"] = json!(many),
                         }
-                        match t.need(ft, found_brk.as_ref().map(|b| b.0), cv, &rl.vdrop.sizes) {
+                        match table_need(t, ft, found_brk.as_ref().map(|b| b.0), &cvs, &rl.vdrop.sizes) {
                             super::wiretable::Need::Size(n, band) => {
                                 let ok = size_rank(&n, &rl.vdrop.sizes).is_some_and(|need| rank_have >= need);
                                 m["needed"] = json!(format!("#{n}"));
@@ -3266,5 +3306,37 @@ mod tests {
         assert!(is_panel("LP1", "lp1"));
         assert!(is_panel("RP-7", "RP"));
         assert!(!is_panel("RPA", "RP"));
+    }
+
+    #[test]
+    fn an_unread_breaker_leaves_both_voltages_and_a_table_row_only_where_they_agree() {
+        // Q6460: unknown poles are an unknown voltage, never the line-to-neutral default.
+        assert_eq!(circuit_volts(Some(1), Some((120.0, 208.0))), vec![120.0]);
+        assert_eq!(circuit_volts(Some(2), Some((120.0, 208.0))), vec![208.0]);
+        assert_eq!(circuit_volts(None, Some((120.0, 208.0))), vec![120.0, 208.0]);
+        assert_eq!(circuit_volts(None, Some((240.0, 240.0))), vec![240.0]);
+        assert!(circuit_volts(Some(1), None).is_empty());
+        assert!(circuit_volts(None, None).is_empty());
+        use super::super::wiretable::{Band, LengthTable, Need};
+        let band = |v: f64, size: &str, max_ft: f64| Band { amps: None, volts: Some(v), size: size.into(), max_ft };
+        let t = LengthTable {
+            sheet: String::new(),
+            title: String::new(),
+            bands: vec![band(120.0, "12", 100.0), band(120.0, "10", 160.0), band(208.0, "12", 170.0), band(208.0, "10", 270.0)],
+        };
+        let sizes: Vec<String> = ["14", "12", "10", "8"].iter().map(|s| s.to_string()).collect();
+        let both = [120.0, 208.0];
+        // No voltage: not covered, never the 120 V row.
+        assert!(matches!(table_need(&t, 150.0, None, &[], &sizes), Need::NotCovered(_)));
+        assert!(matches!(table_need(&t, 150.0, None, &[120.0], &sizes), Need::Size(n, _) if n == "10"));
+        // 120 V asks #10, 208 V #12: not covered, saying both.
+        assert!(matches!(table_need(&t, 150.0, None, &both, &sizes), Need::NotCovered(w) if w.contains("120 V or 208 V")));
+        // Both ask #12 (or are past their reach): that answer, with both bands.
+        assert!(matches!(table_need(&t, 80.0, None, &both, &sizes), Need::Size(n, b) if n == "12" && b.contains("120 V") && b.contains("208 V")));
+        assert!(matches!(table_need(&t, 400.0, None, &both, &sizes), Need::Beyond(_)));
+        // One past its reach, one with a row: they differ.
+        assert!(matches!(table_need(&t, 200.0, None, &both, &sizes), Need::NotCovered(_)));
+        // Neither voltage has a row: the table's own reason.
+        assert!(matches!(table_need(&t, 50.0, None, &[277.0, 480.0], &sizes), Need::NotCovered(w) if w.contains("no row")));
     }
 }
