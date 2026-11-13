@@ -87,10 +87,12 @@ fn an_unchanged_plan_changes_nothing_and_a_moved_wall_is_reported_and_rebuilt() 
     assert_eq!(moved.len(), 2, "both east wall lines: {r}");
     assert!(moved.iter().all(|m| m["kind"] == "wall" && m["at"][0].as_f64().unwrap() > m["from"][0].as_f64().unwrap()));
     assert_eq!(r["rebuilt"], true);
-    // The rebuilt east wall reaches the new line, and is selected to show it.
+    // The rebuilt east wall reaches the new line, and is selected to show it (model.revise run
+    // by hand), the reply listing the selection.
     let changed = r["changed"].as_array().unwrap();
     assert!(!changed.is_empty());
     assert_eq!(s.selection().len(), changed.len());
+    assert_eq!(&r["selected"], &r["changed"], "{r}");
     let max_x = s.doc().unwrap().model.iter().filter(|e| made_as(e).as_deref() == Some("wall")).flat_map(|e| match &e.kind {
         EntityKind::Mesh(m) => m.vertices.iter().map(|v| v.x).collect::<Vec<_>>(),
         _ => vec![],
@@ -350,6 +352,7 @@ fn an_associative_rebuild_keeps_its_conflicts_for_model_revise() {
     // Moving the east wall's plan lines leaves the model behind; the update rebuilds it: the
     // recoloured east wall conflicts (its plan lines changed) and the rebuilt wall replaces it.
     s.execute("move", &json!({"handles": east(&s), "from": [0, 0], "to": [24, 0]})).unwrap();
+    let picked = s.selection();
     s.execute("model.update", &json!({})).unwrap();
     assert!(s.log.iter().any(|l| l.contains("2 moved") && l.contains("1 conflict(s)")), "{:?}", s.log);
     let r = s.execute("model.revise", &json!({"last": true})).unwrap();
@@ -362,14 +365,13 @@ fn an_associative_rebuild_keeps_its_conflicts_for_model_revise() {
     assert_eq!(conflicts[0]["part"], "wall");
     assert_eq!(conflicts[0]["change"], "edited");
     assert_eq!(r["totals"]["conflicts"], 1);
-    // The rebuilt parts of the moved lines are selected, as model.revise selects them.
+    // The rebuilt parts of the moved lines are listed, but an automatic rebuild leaves the
+    // selection as it was (Q6601): a typed command after it must not act on model objects.
     let changed: Vec<&str> = r["changed"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     assert!(!changed.is_empty());
-    let mut sel: Vec<String> = s.selection().iter().map(|h| h.hex()).collect();
-    sel.sort();
-    let mut ch: Vec<String> = changed.iter().map(|h| h.to_string()).collect();
-    ch.sort();
-    assert_eq!(sel, ch);
+    assert_eq!(r["selected"], json!([]), "{r}");
+    assert_eq!(s.selection(), picked, "the automatic rebuild kept the selection");
+    assert!(s.selection().iter().all(|h| !changed.contains(&h.hex().as_str())), "no rebuilt object selected");
     // The untouched south wall kept its handle through the rebuild.
     assert_eq!(wall(&s, true), south);
     // A plain model.revise finds the model current and still points at that revision.

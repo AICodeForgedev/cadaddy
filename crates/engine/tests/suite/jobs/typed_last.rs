@@ -172,3 +172,111 @@ fn last_skips_objects_on_locked_and_hidden_layers() {
     assert!(d.entity(first).is_none(), "Last is the newest object that can be selected");
     assert!(d.entity(locked).is_some() && d.entity(off).is_some(), "locked and hidden objects are never Last");
 }
+
+/// The plan edit (the east wall lines 2' east) and a line the user draws, with nothing selected
+/// afterwards; the model is behind and not rebuilt yet.
+fn plan_edit_then_line(s: &mut Session, at: f64) -> Handle {
+    let east: Vec<String> = s
+        .doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter(|e| made_as(e).is_none() && matches!(&e.kind, EntityKind::Line(l) if l.a.x > 200.0 && l.b.x > 200.0))
+        .map(|e| e.handle.hex())
+        .collect();
+    assert!(!east.is_empty());
+    s.execute("move", &json!({"handles": east, "from": [0, 0], "to": [24.0, 0]})).unwrap();
+    let line = draw_line(s, [at, -5000.0], [at + 96.0, -4964.0]);
+    s.set_selection(Vec::new());
+    assert!(model_behind(s), "the plan edit leaves the model behind");
+    line
+}
+
+fn pickfirst_lisp(s: &mut Session) -> Value {
+    s.execute("lisp", &json!({"code": "(cadr (ssgetfirst))"})).unwrap()["value"].clone()
+}
+
+/// Soak finding Q6601: an automatic rebuild (model.update, the one before a typed command, the
+/// idle one) selected the rebuilt objects of the changed plan objects, so the next typed command
+/// took a model object as its implied selection: ERASE + Enter deleted a model wall, CHANGE and
+/// -ARRAY skipped Select objects and read `L` as a bad option. An automatic rebuild never
+/// changes the user's selection; only a model.revise the user runs selects what it changed.
+#[test]
+fn an_automatic_rebuild_leaves_the_selection_as_it_was() {
+    let mut s = live();
+
+    // model.update with nothing selected: nothing selected after, for the engine and for LISP.
+    let _ = plan_edit_then_line(&mut s, -100000.0);
+    let r = s.execute("model.update", &json!({})).unwrap();
+    assert_eq!(r["rebuilt"], json!(true), "{r}");
+    let sel: Vec<String> = s.selection().iter().map(|h| h.hex()).collect();
+    assert!(sel.is_empty(), "the automatic rebuild selected {sel:?}");
+    assert_eq!(pickfirst_lisp(&mut s), json!("nil"), "(cadr (ssgetfirst)) after model.update");
+    let last = s.execute("model.revise", &json!({"last": true})).unwrap();
+    assert_eq!(last["auto"], json!(true), "{last}");
+    assert!(!last["changed"].as_array().unwrap().is_empty(), "the rebuild changed model objects: {last}");
+    assert_eq!(last["selected"], json!([]), "an automatic rebuild selects nothing: {last}");
+
+    // Typed ERASE + Enter: no implied selection, nothing erased.
+    let (made, mine) = counts(&s);
+    let all = s.doc().unwrap().model.len();
+    s.cmdline("erase ").unwrap();
+    assert_eq!((counts(&s), s.doc().unwrap().model.len()), ((made, mine), all), "ERASE + Enter erased nothing");
+
+    // The rebuild that runs before a typed command (no model.update): CHANGE L asks for objects,
+    // takes the line and moves it to the new layer; no model object changes.
+    let line = plan_edit_then_line(&mut s, -99000.0);
+    s.doc_mut().unwrap().ensure_layer("SKETCH");
+    s.cmdline("change l  p la SKETCH ").unwrap();
+    assert!(!model_behind(&s), "the typed command rebuilt the model first");
+    assert_eq!(s.doc().unwrap().entity(line).map(|e| e.common.layer.clone()).as_deref(), Some("SKETCH"), "CHANGE L moved the line");
+    assert!(s.doc().unwrap().model.iter().filter(|e| made_as(e).is_some()).all(|e| e.common.layer != "SKETCH"), "CHANGE L left the model alone");
+
+    // -ARRAY L after model.update, selection never cleared by hand: five copies of the line.
+    let line = plan_edit_then_line(&mut s, -98000.0);
+    assert_eq!(s.execute("model.update", &json!({})).unwrap()["rebuilt"], json!(true));
+    let layer = s.doc().unwrap().entity(line).map(|e| e.common.layer.clone()).unwrap();
+    let on_layer = |s: &Session| s.doc().unwrap().model.iter().filter(|e| made_as(e).is_none() && e.common.layer == layer).count();
+    let (made, before) = (counts(&s).0, on_layer(&s));
+    s.cmdline("-array l  r 3 2 3 3").unwrap();
+    assert_eq!((counts(&s).0, on_layer(&s)), (made, before + 5), "-ARRAY L copied the line, not a model object");
+
+    // What the user had selected stays selected through the rebuild.
+    let line = plan_edit_then_line(&mut s, -97000.0);
+    s.set_selection(vec![line]);
+    assert_eq!(s.execute("model.update", &json!({})).unwrap()["rebuilt"], json!(true));
+    assert_eq!(s.selection(), vec![line], "the user's selection is kept");
+
+    // A model.revise the user runs still selects what it rebuilt, and says so.
+    let _ = plan_edit_then_line(&mut s, -96000.0);
+    let r = s.execute("model.revise", &json!({})).unwrap();
+    assert_eq!((r["rebuilt"].clone(), r["auto"].clone()), (json!(true), json!(false)), "{r}");
+    let mut sel: Vec<String> = s.selection().iter().map(|h| h.hex()).collect();
+    sel.sort();
+    let mut shown: Vec<String> = r["selected"].as_array().unwrap().iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    shown.sort();
+    assert!(!sel.is_empty(), "{r}");
+    assert_eq!(sel, shown, "the reply lists the selection model.revise made");
+    assert_eq!(r["selected"], r["changed"], "{r}");
+}
+
+/// The soak's check (Q6601), printed for a report: what an automatic rebuild leaves selected and
+/// what typed ERASE + Enter then erases. `cargo test ... -- --ignored --nocapture`.
+#[test]
+#[ignore = "a probe: prints the numbers, asserts nothing"]
+fn probe_soak_check_after_an_automatic_rebuild() {
+    let mut s = live();
+    let _ = plan_edit_then_line(&mut s, -100000.0);
+    let r = s.execute("model.update", &json!({})).unwrap();
+    let picked: Vec<(String, bool)> =
+        s.selection().iter().map(|h| (h.hex(), s.doc().unwrap().entity(*h).is_some_and(|e| made_as(e).is_some()))).collect();
+    let lisp = pickfirst_lisp(&mut s);
+    let (made, mine) = counts(&s);
+    s.cmdline("erase ").unwrap();
+    let (made2, mine2) = counts(&s);
+    println!(
+        "PROBE rebuilt={} selected={picked:?} (handle, is_model) lisp_pickfirst={lisp} erase+enter: model {made}->{made2} ({:+}), user objects {mine}->{mine2}",
+        r["rebuilt"],
+        made2 as i64 - made as i64
+    );
+}
