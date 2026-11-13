@@ -48,6 +48,16 @@ pub(crate) struct FillRules {
     /// Why a room no plan of its own floor furnishes takes the fixtures and room piping of the
     /// room it stands on (or under) on another floor.
     pub room_stack_basis: String,
+    /// A fixture in no room's outline within this of one (feet) is the nearest room's: its bath
+    /// beside the area its tag traced.
+    pub room_own_reach_ft: f64,
+    /// Why such a fixture is that room's.
+    pub room_own_basis: String,
+    /// A fixture derived from the room a room stacks with never goes within this (feet) of one of
+    /// its kind the room holds.
+    pub stack_clear_ft: f64,
+    /// Why a room holding a fixture of a kind takes no derived one of it.
+    pub stack_clear_basis: String,
     /// Why a main is carried on along its line to a branch.
     pub main_basis: String,
     /// Why a fixture's or a room's branch is teed off the nearest main of its system, at its size.
@@ -230,6 +240,9 @@ const MAX_ROOMS: usize = 1_000;
 const MAX_ITEMS: usize = 20_000;
 /// Rooms listed by name where they don't stack, at most.
 const MAX_LISTED: usize = 40;
+/// Two rooms of one type stack only when the larger is at most this many times the smaller's
+/// area: a closet or a service room whose tag reads as a unit's type is not that unit.
+const STACK_AREA_RATIO: f64 = 2.0;
 
 /// A room of a level: its type's words, its outline (drawing units) and a name to report it by.
 #[derive(Clone, Debug)]
@@ -434,9 +447,9 @@ fn lay_over(mine: &[Room<'_>], theirs: &[Room<'_>], upf: f64) -> Option<[f64; 2]
     })
 }
 
-/// Room by room of `here`, the room of `there` it stands on: one of its type at the same place
-/// once `there` is moved by `off` (each centre in the other's box), each used once. Its place
-/// in `there`.
+/// Room by room of `here`, the room of `there` it stands on: one of its type and about its size
+/// ([`STACK_AREA_RATIO`]) at the same place once `there` is moved by `off` (each centre in the
+/// other's box), each used once. Its place in `there`.
 fn pair_rooms(here: &[Room<'_>], there: &[Room<'_>], off: [f64; 2]) -> Vec<Option<usize>> {
     let mut used = vec![false; there.len()];
     here.iter()
@@ -446,6 +459,7 @@ fn pair_rooms(here: &[Room<'_>], there: &[Room<'_>], off: [f64; 2]) -> Vec<Optio
                 let c = [b.c[0] + off[0], b.c[1] + off[1]];
                 !used.get(j).copied().unwrap_or(true)
                     && a.r.words == b.r.words
+                    && a.area.max(b.area) <= STACK_AREA_RATIO * a.area.min(b.area)
                     && a.c[0] >= moved[0]
                     && a.c[0] <= moved[2]
                     && a.c[1] >= moved[1]
