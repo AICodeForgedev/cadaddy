@@ -306,6 +306,17 @@ fn job_symbols(d: &Drawing) -> Vec<(String, String, String, [f64; 2])> {
     out
 }
 
+/// The symbols the job read on the sheets, as [`vreg::Mark`]s: their kind and tag, and their
+/// sheet point.
+pub(crate) fn job_marks(d: &Drawing) -> Vec<vreg::Mark> {
+    job_symbols(d).into_iter().map(|(kind, tag, _, at)| (mark_key(&kind, &tag), at)).collect()
+}
+
+/// One key of a symbol's kind and tag.
+fn mark_key(kind: &str, tag: &str) -> String {
+    format!("{}|{}", kind.trim().to_ascii_lowercase(), tag.trim().to_ascii_uppercase())
+}
+
 /// The read devices with one fixture read twice on a sheet counted once (Q6252, the build's
 /// rule for its stamped copies): two luminaires of one tag on one sheet within `reach` (sheet
 /// units) on one circuit (a leg letter only one copy read is no other circuit) are one.
@@ -400,6 +411,11 @@ impl<'a> Symbols<'a> {
     /// The sheets placed on `level`'s plan (by a registration, or the plan itself).
     fn placed(&self, level: &str) -> BTreeSet<String> {
         self.links.iter().filter(|(l, _, _)| l.registration.is_some() && shows_level(l, level)).map(|(l, _, _)| sheet_base(&l.number)).collect()
+    }
+
+    /// The symbols read on the sheets, as [`vreg::Mark`]s (kind and tag, sheet point).
+    pub(crate) fn marks(&self) -> Vec<vreg::Mark> {
+        self.syms.iter().filter_map(|s| Some((mark_key(&s.kind, s.mark.as_deref().unwrap_or_default()), s.sheet_at?))).collect()
     }
 
     /// Whether any symbol was read.
