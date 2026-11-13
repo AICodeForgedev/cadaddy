@@ -1581,7 +1581,8 @@ enum WindowBasis {
     /// window cut there at its type's width (inferred position).
     TagOnWall,
     /// As [`Self::TagOnWall`], for a mark with no width of its own (no schedule row, no opening
-    /// tagged): the width between the jambs the plan draws across the wall there (Q6369).
+    /// tagged): the width between the jambs the plan draws across the wall there (Q6369), the
+    /// window standing between them (Q6450).
     TagJambs,
     /// As [`Self::TagJambs`] with no jambs drawn: the level's typical window width (inferred
     /// position and width, Q6369).
@@ -3214,15 +3215,17 @@ fn plan_level_with(
         // Its width: its type's (the schedule row, its tags' openings); else, for a mark with
         // neither (Q6369), the jambs the plan draws across the wall at the tag, else the level's
         // typical window. A tag with no width is still a window the plan draws.
-        let (width, basis) = match fits.width_of(&tag.mark) {
-            Some(w) => (w, WindowBasis::TagOnWall),
+        // A width measured between drawn jambs places the window too: between them, not at the
+        // tag (Q6450). Every other width is centred at the tag's foot.
+        let (width, basis, at) = match fits.width_of(&tag.mark) {
+            Some(w) => (w, WindowBasis::TagOnWall, tag.at),
             None => {
                 let probe = MIN_WINDOW_IN * k;
                 let jambs = host_wall(&pl.walls, tag.at, probe, reach, k, min_gap, &on_outside)
-                    .and_then(|h| pl.walls.get(h.wall).and_then(|w| jamb_width(&all_segs, w, h.at, k)));
+                    .and_then(|h| pl.walls.get(h.wall).and_then(|w| jamb_span(&all_segs, w, h.at, k)));
                 match (jambs, typical_width) {
-                    (Some(w), _) => (w, WindowBasis::TagJambs),
-                    (None, Some(w)) => (w, WindowBasis::TagTypicalWidth),
+                    (Some((s0, s1, mid)), _) => (s1 - s0, WindowBasis::TagJambs, mid),
+                    (None, Some(w)) => (w, WindowBasis::TagTypicalWidth, tag.at),
                     (None, None) => {
                         no_host.push((
                             tag.mark.clone(),
@@ -3234,7 +3237,7 @@ fn plan_level_with(
                 }
             }
         };
-        let Some(host) = host_wall(&pl.walls, tag.at, width, reach, k, min_gap, &on_outside) else {
+        let Some(host) = host_wall(&pl.walls, at, width, reach, k, min_gap, &on_outside) else {
             // No wall drawn to hold it: at an open end of the plan, the end wall the plan leaves
             // out is built, the tag's window in it (Q6510).
             if let Some(end) = open_end(&pl.walls, tag.at, width, reach, k, &on_outside)
@@ -4068,12 +4071,14 @@ fn end_wall_in(walls: &[PlanWall], own: usize, origin: Vec2, u: Vec2, r: f64, in
         .fold(0.0, f64::max)
 }
 
-/// The width (drawing units, `k` per inch) between the jambs a plan draws across a wall drawn
-/// through at a window (Q6369): short lines across the wall from face to face (as long as the
-/// wall is thick, give or take a quarter of it, their middles on its centreline), the nearest on
-/// each side of the point `at` along the wall (from its end `a`), a window's width apart
-/// ([`MIN_WINDOW_IN`] to [`MAX_JAMB_SPAN_IN`]). None when the plan draws no such pair.
-fn jamb_width(segs: &[super::perceive::geometry::Seg], w: &PlanWall, at: f64, k: f64) -> Option<f64> {
+/// The jambs a plan draws across a wall drawn through at a window (Q6369): short lines across
+/// the wall from face to face (as long as the wall is thick, give or take a quarter of it, their
+/// middles on its centreline), the nearest on each side of the point `at` along the wall (from
+/// its end `a`), a window's width apart ([`MIN_WINDOW_IN`] to [`MAX_JAMB_SPAN_IN`], drawing
+/// units, `k` per inch). Their stations along the wall (from `a`) and the point midway between
+/// them on its centreline: the window measured between them stands there (Q6450). None when the
+/// plan draws no such pair.
+fn jamb_span(segs: &[super::perceive::geometry::Seg], w: &PlanWall, at: f64, k: f64) -> Option<(f64, f64, Vec2)> {
     let len = w.a.dist(w.b);
     let t = w.thickness;
     if !(len.is_finite() && len > 1e-9 && t.is_finite() && t > 0.0 && at.is_finite() && k.is_finite() && k > 0.0) {
@@ -4104,8 +4109,9 @@ fn jamb_width(segs: &[super::perceive::geometry::Seg], w: &PlanWall, at: f64, k:
             right = Some(right.map_or(s, |x: f64| x.min(s)));
         }
     }
-    let width = right? - left?;
-    (width >= MIN_WINDOW_IN * k && width <= span).then_some(width)
+    let (s0, s1) = (at + left?, at + right?);
+    let width = s1 - s0;
+    (width >= MIN_WINDOW_IN * k && width <= span).then(|| (s0, s1, w.a + u * ((s0 + s1) / 2.0)))
 }
 
 /// The widest a window between two jambs drawn across a wall is taken to be (inches).
@@ -5623,6 +5629,38 @@ mod tests {
         // The inferred ones say so: not drawn, and why.
         assert!(!WindowBasis::TagJambs.drawn() && !WindowBasis::TagTypicalWidth.drawn());
         assert!(WindowBasis::TagTypicalWidth.why().contains("typical window width"));
+    }
+
+    #[test]
+    fn a_window_sized_by_its_jambs_stands_between_them_not_at_its_tag() {
+        // Jambs 8'4" and 14'4" across the south wall (72"); the tag off-centre at 9'2", 20"
+        // outside the wall. The window fills the drawn opening, 100" to 172", and the wall is cut
+        // there (Q6450; before, centred on the tag: 74" to 146").
+        let (j0, j1) = (100.0 / 12.0, 172.0 / 12.0);
+        for tag_x in [110.0 / 12.0, 160.0 / 12.0, 136.0 / 12.0] {
+            let jambs = vec![
+                ("A-ANNO", text_ft((tag_x, -20.0 / 12.0), "W7")),
+                ("A-WALL", line_ft((j0, 0.0), (j0, 0.5))),
+                ("A-WALL", line_ft((j1, 0.0), (j1, 0.5))),
+            ];
+            let (pl, notes) = plan_room(&[], &[], jambs, &|_| {});
+            assert_eq!(windows_of(&pl), [(72.0, Some("tag_jambs"))], "tag at {tag_x}: {notes:?}");
+            let leaf = pl.leaves.iter().find(|l| l.window).map(|l| (l.a.x.min(l.b.x).round(), l.a.x.max(l.b.x).round()));
+            assert_eq!(leaf, Some((100.0, 172.0)), "tag at {tag_x}: {notes:?}");
+            // The wall's window cut is the same stretch.
+            let cuts: Vec<(f64, f64)> = pl
+                .walls
+                .iter()
+                .flat_map(|w| {
+                    let u = (w.b - w.a) * (1.0 / w.a.dist(w.b));
+                    w.cuts.iter().filter(|c| c.window).map(move |c| {
+                        let (x0, x1) = ((w.a + u * c.s0).x, (w.a + u * c.s1).x);
+                        (x0.min(x1).round(), x0.max(x1).round())
+                    })
+                })
+                .collect();
+            assert_eq!(cuts, [(100.0, 172.0)], "tag at {tag_x}: {notes:?}");
+        }
     }
 
     fn line_ft(a: (f64, f64), b: (f64, f64)) -> EntityKind {
