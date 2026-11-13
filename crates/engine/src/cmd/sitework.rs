@@ -73,6 +73,10 @@ pub(crate) struct Register {
     pub area_ratio_max: f64,
     pub scale_tolerance: f64,
     pub on_wall_ft: f64,
+    /// The share of the outline's corners that must land on the model's walls (within
+    /// `on_wall_ft`) for the sheet to count as laid on the building by it: the measured
+    /// agreement, never the size the scale was solved to match.
+    pub on_wall_min: f64,
     pub source: String,
 }
 
@@ -308,6 +312,10 @@ pub(crate) struct SiteRead {
     pub unplaced_labels: Vec<String>,
     /// The view area read (`[x0, y0, x1, y1]`).
     pub area: [f64; 4],
+    /// The sheet's drawing units per foot its real-world limits were measured in, and how they
+    /// were found (Q6443).
+    pub upf: f64,
+    pub feet: String,
 }
 
 pub(crate) fn bbox_of(pts: &[[f64; 2]]) -> [f64; 4] {
@@ -552,6 +560,7 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
         return out;
     }
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    out.upf = upf;
     let touch = r.line_touch_h * h;
     // The sheet's shapes and line pieces.
     let mut shapes: Vec<Shape> = Vec::new();
@@ -863,6 +872,79 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
     out
 }
 
+/// One site sheet read and laid on the slab level's plan, its real-world limits (a luminaire
+/// symbol's largest size, a piece of equipment's least and largest) measured in the sheet's own
+/// feet, never the model's (Q6443: a sheet still at paper size read in model inches found no
+/// equipment and took anything for a luminaire). `imported` is how the sheet came in: at its
+/// printed scale (more than 1x) or a drawing file (drawn full size) its feet are the model's;
+/// still at paper size, they are the scale its plans print (the import's, else its own scale
+/// note), else what laying its building outline on the footprint makes them. Not known (a
+/// checkpoint keeps no sheet scales): the laid outline's, else the model's. With none of these,
+/// the model's, and said so.
+pub(crate) fn read_laid(
+    sheet: &str,
+    page: &Drawing,
+    area: [f64; 4],
+    lum_types: &BTreeSet<String>,
+    sp: &BuildingSpec,
+    slab: &str,
+    imported: Option<&super::guided::SheetScale>,
+) -> (SiteRead, Fit) {
+    let model_upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let positive = |v: &f64| v.is_finite() && *v > 0.0;
+    let scale = imported.map(|x| x.scale).filter(positive);
+    let sheet_real = scale.is_some_and(|k| k > 1.0);
+    let full_size = sheet_real || imported.is_some_and(|x| x.how() == "drawing");
+    // Known to be at paper size: drawing units per sheet inch, times the sheet inches a foot
+    // prints. A note alone never says a sheet of unknown import is at paper size.
+    let printed = match imported {
+        Some(x) if !full_size => {
+            let per_inch = scale.unwrap_or(1.0) * super::perceive::units_per_inch(page);
+            x.plan_scale
+                .filter(positive)
+                .map(|k| (k, "the scale its plans print".to_string()))
+                .or_else(|| cadaddy_mepfix::sheet_facts::sheet_plan_print_scale(page).map(|(k, _)| (k, "its plan view's scale note".to_string())))
+                .or_else(|| cadaddy_mepfix::sheet_reader::scale_note(page).map(|(t, k)| (k, format!("its scale note {t}"))))
+                .map(|(k, how)| (k * per_inch, how))
+                .filter(|(u, _)| positive(u))
+        }
+        _ => None,
+    };
+    let first = printed.as_ref().map_or(model_upf, |(u, _)| *u);
+    let mut out = read(sheet, page, area, lum_types, first);
+    // Laying the sheet takes only its outlines and view, which no limit touches.
+    let fit = register(&out, sp, slab, sheet_real);
+    let laid = Some(fit.reg.scale()).filter(|s| fit.fitted() && positive(s)).map(|s| model_upf / s);
+    let tolerance = rules().register.scale_tolerance;
+    out.feet = if full_size {
+        let how = if sheet_real {
+            format!("imported at its printed scale ({}x)", scale.unwrap_or(1.0))
+        } else {
+            "a drawing file, drawn full size".to_string()
+        };
+        format!("{how}: the model's feet")
+    } else if let Some((u, how)) = &printed {
+        let mut feet = format!("at paper size, measured by {how}: {u:.4} units a foot");
+        if let Some(l) = laid.filter(|l| (l / u - 1.0).abs() > tolerance) {
+            feet.push_str(&format!(" (its building outline laid on {slab} makes it {l:.4}: verify its scale)"));
+        }
+        feet
+    } else if let Some(l) = laid {
+        if (l / first - 1.0).abs() > 1e-9 {
+            out = read(sheet, page, area, lum_types, l);
+        }
+        let how = if imported.is_some() { "at paper size with no scale note" } else { "its import scale not known" };
+        format!("{how}, measured by its building outline laid on {slab}: {l:.4} units a foot")
+    } else if imported.is_some() {
+        format!(
+            "at paper size with no scale note and no building outline laid: measured in the model's feet ({model_upf} units a foot; verify its sizes)"
+        )
+    } else {
+        format!("its import scale not known and no building outline laid: measured in the model's feet ({model_upf} units a foot)")
+    };
+    (out, fit)
+}
+
 // ---------------- laying the sheet onto the model ----------------
 
 /// How a site sheet was laid onto the slab level's plan.
@@ -980,7 +1062,7 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
     let theta = wall_angle(poly);
     let rot = |p: [f64; 2], phi: f64, s: f64| [s * (phi.cos() * p[0] - phi.sin() * p[1]), s * (phi.sin() * p[0] + phi.cos() * p[1])];
     let tol = r.on_wall_ft.max(0.5) * upf;
-    let mut best: Option<(f64, f64, f64, f64, [f64; 2])> = None; // (score, |phi|, phi, s, t)
+    let mut best: Option<(f64, f64, f64, f64, [f64; 2], f64)> = None; // (score, |phi|, phi, s, t, rms off)
     for k in 0..4 {
         let mut phi = -theta + f64::from(k) * std::f64::consts::FRAC_PI_2;
         while phi > std::f64::consts::PI {
@@ -996,39 +1078,59 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
         let placed: Vec<[f64; 2]> = turned.iter().map(|p| [p[0] * s, p[1] * s]).collect();
         let pc = centre(&bbox_of(&placed));
         let t = [fc[0] - pc[0], fc[1] - pc[1]];
-        let on = placed
+        // Each corner's distance to the model's walls (the footprint's edge where no walls are
+        // known).
+        let off: Vec<f64> = placed
             .iter()
             .map(|p| [p[0] + t[0], p[1] + t[1]])
-            .filter(|p| {
+            .map(|p| {
                 if shells.is_empty() {
-                    let inner = [fp[0] + tol, fp[1] + tol, fp[2] - tol, fp[3] - tol];
-                    gap(&fp, *p) <= tol && !(inner[0] < inner[2] && inner[1] < inner[3] && gap(&inner, *p) <= 0.0)
+                    let to_edge = (p[0] - fp[0]).abs().min((p[0] - fp[2]).abs()).min((p[1] - fp[1]).abs()).min((p[1] - fp[3]).abs());
+                    if gap(&fp, p) > 0.0 { gap(&fp, p) } else { to_edge }
                 } else {
-                    shells.iter().any(|b| gap(b, *p) <= tol)
+                    shells.iter().map(|b| gap(b, p)).fold(f64::INFINITY, f64::min)
                 }
             })
-            .count();
+            .collect();
+        let on = off.iter().filter(|d| **d <= tol).count();
         let score = on as f64 / placed.len().max(1) as f64;
+        let rms = (off.iter().map(|d| d.min(1e12).powi(2)).sum::<f64>() / off.len().max(1) as f64).sqrt();
         let better = best.is_none_or(|(bs, bphi, ..)| score > bs + 1e-9 || ((score - bs).abs() <= 1e-9 && phi.abs() < bphi));
         if better {
-            best = Some((score, phi.abs(), phi, s, t));
+            best = Some((score, phi.abs(), phi, s, t, rms));
         }
     }
-    let Some((score, _, phi, s, t)) = best else { return none("the building outline gave no fit".into()) };
+    let Some((score, _, phi, s, t, rms)) = best else { return none("the building outline gave no fit".into()) };
     let (a, b) = (s * phi.cos(), s * phi.sin());
-    let reg = SheetRegistration { reference, method: String::new(), a, b, tx: t[0], ty: t[1], matched: poly.len(), residual: None };
+    let residual = rms.is_finite().then_some(rms);
+    let reg = SheetRegistration { reference, method: String::new(), a, b, tx: t[0], ty: t[1], matched: poly.len(), residual };
     let outline: Vec<[f64; 2]> = poly.iter().map(|p| reg.to_project(*p)).collect();
     let ob = bbox_of(&outline);
     let ratio = if fp_area > 0.0 { ((ob[2] - ob[0]) * (ob[3] - ob[1])).abs() / fp_area } else { 0.0 };
-    let fits = ratio >= r.area_ratio_min && ratio <= r.area_ratio_max && (!sheet_real || (s - 1.0).abs() <= r.scale_tolerance);
+    // The size agrees (at its printed scale, the scale too; on a paper-size sheet the scale was
+    // solved to make the sizes equal, so that says nothing), and the walls agree: enough of its
+    // corners on the model's walls. That is the measured test; the size alone never is.
+    let sized_ok = ratio >= r.area_ratio_min && ratio <= r.area_ratio_max && (!sheet_real || (s - 1.0).abs() <= r.scale_tolerance);
+    let walls_ok = score + 1e-9 >= r.on_wall_min;
     let turn = phi.to_degrees();
-    let (method, why) = if fits {
+    let (method, why) = if sized_ok && walls_ok {
         (
             "building outline",
             format!(
-                "laid on {slab} by the building outline it draws: turned {turn:.1} deg, its walls on the model's ({:.0}% of its corners), {:.0}% of the footprint's size",
+                "laid on {slab} by the building outline it draws: turned {turn:.1} deg, its walls on the model's ({:.0}% of its corners, {:.1} ft off on average), {:.0}% of the footprint's size",
                 score * 100.0,
+                rms / upf,
                 ratio * 100.0
+            ),
+        )
+    } else if sized_ok {
+        (
+            "outline centre",
+            format!(
+                "the building outline it draws does not lie on {slab}'s walls ({:.0}% of its corners on them, {:.0}% needed; {:.1} ft off on average): placed by its centre, turned {turn:.1} deg (it may not be the building's footprint; verify where the site work stands)",
+                score * 100.0,
+                r.on_wall_min * 100.0,
+                rms / upf
             ),
         )
     } else {
@@ -1278,6 +1380,15 @@ enum Obj {
     Equip(usize),
     Tag(usize),
     Building,
+}
+
+/// A run's points and the objects at its two ends, from one ordered list of (point, what
+/// stands there): the first end is the first point's, the last end the last point's, so a
+/// stub-up comes up where its object is (Q6447).
+fn path_and_ends(path: &[([f64; 2], Option<Obj>)]) -> (Vec<[f64; 2]>, [Option<Obj>; 2]) {
+    let pts = path.iter().map(|(p, _)| *p).collect();
+    let ends = [path.first().and_then(|(_, o)| *o), path.last().and_then(|(_, o)| *o)];
+    (pts, ends)
 }
 
 /// Counters across a job's site sheets: ids stay unique.
@@ -2193,7 +2304,8 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         let (Some(la), Some(lb)) = (read.lights.get(*a), read.lights.get(*b)) else { continue };
         let why =
             format!("inferred: {sheet} shows no line between these luminaires of one circuit; trenched straight from the nearest (trade practice)");
-        add_run(&mut out, vec![to_model(la.at), to_model(lb.at)], [Some(Obj::Light(*a)), Some(Obj::Light(*b))], Made::Inferred, None, &why, true);
+        let (pts, ends) = path_and_ends(&[(to_model(la.at), Some(Obj::Light(*a))), (to_model(lb.at), Some(Obj::Light(*b)))]);
+        add_run(&mut out, pts, ends, Made::Inferred, None, &why, true);
     }
     // Each circuit's home run: from the circuit's object nearest the building to the building,
     // then under the slab to its panel when the model has it (inferred).
@@ -2291,19 +2403,23 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         };
         let Some((qc, ..)) = equip_at.get(qi).cloned().flatten() else { continue };
         let bc = if building.len() >= 3 { centre(&bbox_of(&building)) } else { qc };
-        let pts = if n.callout.what == "service_primary" {
+        // The run's points with what stands at each, in one order (Q6447): its stub-up comes up
+        // at the equipment whichever end the equipment is.
+        let at_equipment = (qc, Some(Obj::Equip(qi)));
+        let path = if n.callout.what == "service_primary" {
             let (dx, dy) = (qc[0] - bc[0], qc[1] - bc[1]);
             let l = dx.hypot(dy).max(1e-9);
-            vec![[qc[0] + dx / l * r.primary_out_ft * upf, qc[1] + dy / l * r.primary_out_ft * upf], qc]
+            [([qc[0] + dx / l * r.primary_out_ft * upf, qc[1] + dy / l * r.primary_out_ft * upf], None), at_equipment]
         } else {
-            vec![qc, nearest_on(&building, qc).unwrap_or(bc)]
+            [at_equipment, (nearest_on(&building, qc).unwrap_or(bc), None)]
         };
+        let (pts, ends) = path_and_ends(&path);
         let why = if n.callout.what == "service_primary" {
             format!("inferred: {}", r.primary_source)
         } else {
             "inferred: the note names it and draws no line: trenched straight to the nearest building wall".to_string()
         };
-        add_run(&mut out, pts, [None, Some(Obj::Equip(qi))], Made::Inferred, Some(n), &why, false);
+        add_run(&mut out, pts, ends, Made::Inferred, Some(n), &why, false);
     }
     out
 }
@@ -2766,6 +2882,242 @@ mod tests {
         assert_eq!(to_property, 0, "{drawn:?}");
     }
 
+    /// Q6446: a paper-size site sheet (no printed scale) drawing one closed line on a layer named
+    /// for the building, two pole lights beside it (drawing units: the sheet's own).
+    fn paper_site_sheet(outline: &[[f64; 2]], layer: &str) -> (Drawing, [f64; 4]) {
+        let mut d = Drawing::default();
+        let h = 9.0;
+        pline(&mut d, layer, outline, true);
+        for p in [[1_400.0, 200.0], [1_400.0, 700.0]] {
+            pline(&mut d, "E-LGHT", &square(p, 12.0), true);
+            text(&mut d, "SL1", p[0] + 20.0, p[1] - 5.0, h);
+        }
+        (d, [-200.0, -200.0, 1_800.0, 1_200.0])
+    }
+
+    /// The slab level's walls: a 100 x 60 ft rectangle, square to the model.
+    fn spec_100_by_60() -> BuildingSpec {
+        let mut sp = spec_with_slab();
+        sp.shells.insert(
+            "Level 1".into(),
+            vec![[100.0, 100.0, 1_300.0, 106.0], [100.0, 814.0, 1_300.0, 820.0], [100.0, 100.0, 106.0, 820.0], [1_294.0, 100.0, 1_300.0, 820.0]],
+        );
+        sp
+    }
+
+    /// The L-shaped setback line of [`paper_site_sheet`]: no corner of it is the building's.
+    const SETBACK_L: [[f64; 2]; 6] = [[0.0, 0.0], [900.0, 0.0], [900.0, 300.0], [300.0, 300.0], [300.0, 900.0], [0.0, 900.0]];
+
+    #[test]
+    fn a_paper_size_outline_off_the_walls_is_not_laid_on_the_building() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_100_by_60();
+        // The setback: its scale solved to the footprint's size, but none of its corners on the
+        // walls. Not laid on the building, and said why.
+        let (d, area) = paper_site_sheet(&SETBACK_L, "BUILDING SETBACK");
+        let read = read("E-001", &d, area, &types, 12.0);
+        assert!(read.outlines.first().is_some_and(|(p, named)| *named && p.len() == 6), "{:?}", read.outlines);
+        let fit = register(&read, &sp, "Level 1", false);
+        assert!(!fit.fitted(), "{}: {}", fit.method, fit.why);
+        assert_eq!(fit.method, "outline centre", "{}", fit.why);
+        assert!(fit.why.contains("does not lie on Level 1's walls") && fit.why.contains("0% of its corners"), "{}", fit.why);
+        assert_eq!(fit.reg.method, "outline centre");
+        assert!(fit.reg.residual.is_some_and(|r| r > 3.0 * 12.0), "{:?}", fit.reg.residual);
+        // The building drawn at half size on the same paper: its corners on the walls, laid on it.
+        let (d, area) = paper_site_sheet(&[[0.0, 0.0], [600.0, 0.0], [600.0, 360.0], [0.0, 360.0]], "A-BLDG");
+        let drawn = super::read("E-001", &d, area, &types, 12.0);
+        let fit = register(&drawn, &sp, "Level 1", false);
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        assert!((fit.reg.a.hypot(fit.reg.b) - 2.0).abs() < 1e-6, "{:?}", fit.reg);
+        assert!(fit.reg.residual.is_some_and(|r| r <= 3.0 * 12.0), "{:?}", fit.reg.residual);
+        let corner = fit.to_model([0.0, 0.0]);
+        assert!(dist(corner, [100.0, 100.0]) < 1e-6, "{corner:?}");
+    }
+
+    #[test]
+    fn the_job_says_a_paper_size_site_plan_off_the_walls_is_not_laid_on_the_building() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = paper_site_sheet(&SETBACK_L, "BUILDING SETBACK");
+        let sp = spec_100_by_60();
+        if let Ok(d) = s.doc_mut() {
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        // No printed scale for the sheet: a paper-size sheet.
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        let mut result = serde_json::json!({});
+        site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        let said = job.findings.iter().find(|f| f.description.contains("not laid on the building by its outline"));
+        assert!(said.is_some_and(|f| f.why.contains("E-001") && f.why.contains("does not lie on")), "{:#?} {:#}", job.findings, result["site_work"]);
+    }
+
+    /// Q6443: a trade's site plan still at paper size (drawing units sheet inches), printed at
+    /// 1" = 30': the building outline (80 x 50 ft), a pad-mount transformer's 8 ft pad by its
+    /// label, a pole light's 2 ft head by its type mark, and a second type mark by a 24 ft planter
+    /// with no head drawn. `note`: the sheet prints its scale; `named`: the outline's layer names
+    /// the building.
+    fn paper_site_sheet_at_30(note: bool, named: bool) -> (Drawing, [f64; 4]) {
+        let mut d = Drawing::default();
+        let h = 0.1;
+        let ft = 1.0 / 30.0;
+        let o = [10.0, 5.0];
+        let outline = [[o[0], o[1]], [o[0] + 80.0 * ft, o[1]], [o[0] + 80.0 * ft, o[1] + 50.0 * ft], [o[0], o[1] + 50.0 * ft]];
+        pline(&mut d, if named { "-BASEC-BUILD" } else { "-BASEC-HATCH" }, &outline, true);
+        let x = [14.0, 4.0];
+        pline(&mut d, "E-POWR", &square(x, 4.0 * ft), true);
+        text(&mut d, "PAD MOUNTED TRANSFORMER", x[0] + 4.0 * ft + 0.1, x[1] - 0.03, h);
+        let l1 = [16.0, 8.0];
+        pline(&mut d, "E-LGHT", &square(l1, 1.0 * ft), true);
+        text(&mut d, "SL1", l1[0] + 0.1, l1[1] - 0.03, h);
+        let planter = [16.5, 5.5];
+        pline(&mut d, "L-PLNT", &square(planter, 12.0 * ft), true);
+        text(&mut d, "SL1", planter[0] + 12.0 * ft + 0.1, planter[1] - 0.03, h);
+        if note {
+            text(&mut d, "SCALE: 1\" = 30'-0\"", 9.0, 3.2, h);
+        }
+        (d, [8.0, 3.0, 18.0, 10.0])
+    }
+
+    fn paper_size() -> super::super::guided::SheetScale {
+        super::super::guided::SheetScale {
+            sheet: "E-001".into(),
+            kind: "plan".into(),
+            scale: 1.0,
+            source: "none".into(),
+            plan_scale: None,
+            paper: Some([36.0, 24.0]),
+        }
+    }
+
+    #[test]
+    fn a_paper_size_site_sheet_measures_its_limits_in_its_own_feet() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_with_slab();
+        let (d, area) = paper_site_sheet_at_30(true, true);
+        // The model's feet on the sheet's inches: no pad is ever big enough, and the planter is
+        // taken for a luminaire head (the fault).
+        let model = read("E-001", &d, area, &types, 12.0);
+        assert!(model.equipment.is_empty(), "{:?}", model.equipment);
+        assert_eq!(model.unplaced_labels.len(), 1, "{:?}", model.unplaced_labels);
+        assert!(model.lights.iter().all(|l| l.symbol.is_some()), "{:?}", model.lights);
+        // The sheet's own feet: its scale note.
+        let paper = paper_size();
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&paper));
+        assert!((sheet.upf - 1.0 / 30.0).abs() < 1e-9, "{} {}", sheet.upf, sheet.feet);
+        assert!(sheet.feet.contains("scale note") && !sheet.feet.contains("verify"), "{}", sheet.feet);
+        assert_eq!(sheet.equipment.len(), 1, "{:?} {:?}", sheet.equipment, sheet.unplaced_labels);
+        assert!(sheet.equipment.first().is_some_and(|q| q.kind == "transformer"), "{:?}", sheet.equipment);
+        assert!(sheet.unplaced_labels.is_empty(), "{:?}", sheet.unplaced_labels);
+        assert_eq!(sheet.lights.len(), 2, "{:?}", sheet.lights);
+        assert_eq!(sheet.lights.iter().filter(|l| l.symbol.is_some()).count(), 1, "the planter is no luminaire head: {:?}", sheet.lights);
+        // Laid on the building at its size, and the transformer's pad 8 ft on the model.
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        let pad = sheet.equipment.first().map_or(0.0, |q| (q.bbox[2] - q.bbox[0]) * fit.reg.scale() / 12.0);
+        assert!((pad - 8.0).abs() < 0.1, "{pad}");
+        let mut seq = Seq::default();
+        let built = plan(&sp, &sheet, &fit, "Level 1", &mut seq);
+        assert!(built.equipment.iter().any(|e| e.kind == "transformer"), "{:?}", built.equipment);
+    }
+
+    #[test]
+    fn a_paper_size_site_sheet_with_no_scale_note_is_measured_by_its_laid_outline() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_with_slab();
+        let paper = paper_size();
+        let (d, area) = paper_site_sheet_at_30(false, true);
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&paper));
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        assert!((sheet.upf - 1.0 / 30.0).abs() < 1e-3, "{} {}", sheet.upf, sheet.feet);
+        assert!(sheet.feet.contains("building outline"), "{}", sheet.feet);
+        assert_eq!(sheet.equipment.len(), 1, "{:?} {:?}", sheet.equipment, sheet.unplaced_labels);
+        assert_eq!(sheet.lights.iter().filter(|l| l.symbol.is_some()).count(), 1, "{:?}", sheet.lights);
+        // Nothing to measure it by: the model's feet, and said so.
+        let (d, area) = paper_site_sheet_at_30(false, false);
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&paper));
+        assert!(!fit.fitted(), "{}", fit.why);
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("verify"), "{} {}", sheet.upf, sheet.feet);
+        // A scale note alone never says a sheet of unknown import is at paper size.
+        let (d, area) = paper_site_sheet_at_30(true, false);
+        let (sheet, _) = read_laid("E-001", &d, area, &types, &sp, "Level 1", None);
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("not known"), "{} {}", sheet.upf, sheet.feet);
+    }
+
+    #[test]
+    fn a_site_sheet_at_its_printed_scale_keeps_the_models_feet() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_with_slab();
+        let (d, area) = site_sheet();
+        let real = super::super::guided::SheetScale { scale: 240.0, source: "scale note 1\" = 20'-0\"".into(), ..paper_size() };
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&real));
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("printed scale"), "{}", sheet.feet);
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        assert_eq!((sheet.lights.len(), sheet.equipment.len()), (2, 1), "{:?} {:?}", sheet.lights, sheet.equipment);
+        // A drawing file is drawn full size whatever its plot scale (here none read: 1x).
+        let drawing = super::super::guided::SheetScale {
+            scale: 1.0,
+            source: format!("{}, drawn full size: no plot scale read", cadaddy_mepfix::printset::DRAWING_SHEET_SOURCE),
+            ..paper_size()
+        };
+        let mut noted = d.clone();
+        text(&mut noted, "SCALE: 1\" = 20'-0\"", 9_100.0, 1_100.0, 18.0);
+        let (sheet, _) = read_laid("E-001", &noted, area, &types, &sp, "Level 1", Some(&drawing));
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("full size"), "{}", sheet.feet);
+        assert_eq!((sheet.lights.len(), sheet.equipment.len()), (2, 1), "{:?} {:?}", sheet.lights, sheet.equipment);
+        // Unknown to the import (a checkpoint's), the laid outline gives the same feet.
+        let (sheet, _) = read_laid("E-001", &d, area, &types, &sp, "Level 1", None);
+        assert!((sheet.upf - 12.0).abs() < 0.2 && sheet.feet.contains("building outline"), "{} {}", sheet.upf, sheet.feet);
+        assert_eq!((sheet.lights.len(), sheet.equipment.len()), (2, 1), "{:?} {:?}", sheet.lights, sheet.equipment);
+    }
+
+    #[test]
+    fn the_job_reads_a_paper_size_site_plan_in_its_own_feet() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = paper_site_sheet_at_30(true, true);
+        let sp = spec_with_slab();
+        if let Ok(d) = s.doc_mut() {
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_scales = vec![paper_size()];
+        let mut result = serde_json::json!({});
+        site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        let w = &result["site_work"];
+        assert_eq!(w["equipment"], serde_json::json!(1), "{w:#}");
+        assert_eq!(w["luminaires"], serde_json::json!(2), "{w:#}");
+        assert!(w["sheets"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("scale note")))), "{w:#}");
+    }
+
     #[test]
     fn the_job_builds_the_trade_site_plan_and_skips_the_civil_one() {
         use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
@@ -3117,6 +3469,52 @@ mod tests {
         }
         let carried: BTreeSet<String> = built.circuits.keys().cloned().collect();
         assert!(site_loads(&sp, &carried).is_empty(), "{carried:?}");
+    }
+
+    /// A note calling conduits from site equipment with no line drawn: each conduit runs from the
+    /// equipment to the building's nearest wall and comes up out of the ground at the equipment,
+    /// not at the wall (the run's ends follow its points).
+    #[test]
+    fn a_note_only_run_stubs_up_at_its_equipment_not_at_the_wall() {
+        let mut d = Drawing::default();
+        let h = 18.0;
+        pline(&mut d, "-BASEC-BUILD", &[[10_000.0, 2_000.0], [10_960.0, 2_000.0], [10_960.0, 2_600.0], [10_000.0, 2_600.0]], true);
+        // A generator on its pad 40 ft east of the building, its label beside it.
+        let g = [11_440.0, 2_300.0];
+        pline(&mut d, "E-POWR", &square(g, 40.0), true);
+        text(&mut d, "EMERGENCY GENERATOR", g[0] + 60.0, g[1] + 10.0, h);
+        // The note, far off, calling two conduits from it; no line drawn for them.
+        text(&mut d, "PROVIDE (2) 2\" UNDERGROUND CONDUITS FROM", 12_600.0, 4_600.0, h);
+        text(&mut d, "GENERATOR TO TRANSFER SWITCH IN BUILDING.", 12_600.0, 4_570.0, h);
+        let read = read("E-001", &d, [9_000.0, 1_000.0, 14_000.0, 5_000.0], &BTreeSet::new(), 12.0);
+        assert!(read.equipment.iter().any(|q| q.kind == "generator"), "{:?} {:?}", read.equipment, read.unplaced_labels);
+        assert_eq!(read.notes.len(), 1, "{:?}", read.notes);
+
+        let sp = spec_with_slab();
+        let fit = register(&read, &sp, "Level 1", true);
+        let built = plan(&sp, &read, &fit, "Level 1", &mut Seq::default());
+        let gen_at = built
+            .equipment
+            .iter()
+            .find(|e| e.kind == "generator")
+            .map(|e| [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0])
+            .unwrap_or_else(|| panic!("no generator: {:?}", built.equipment));
+        let size = |r: &&MepRun| (r.size_in[0] - 2.0).abs() < 1e-9;
+        let runs: Vec<&MepRun> = built.runs.iter().filter(|r| r.top_ft.is_none() && r.points.len() >= 2).filter(size).collect();
+        assert_eq!(runs.len(), 2, "{:?}", built.runs);
+        // Each run from the generator to the wall: about 40 ft long.
+        for r in &runs {
+            let (Some(a), Some(z)) = (r.points.first(), r.points.last()) else { panic!("{r:?}") };
+            assert!(dist(*a, gen_at) < 12.0, "starts at the generator: {a:?} {gen_at:?}");
+            assert!(dist(*z, gen_at) > 30.0 * 12.0, "ends at the wall: {z:?}");
+        }
+        // Two stub-ups, both at the generator; none at the wall.
+        let stubs: Vec<&MepRun> = built.runs.iter().filter(|r| r.top_ft.is_some()).filter(size).collect();
+        assert_eq!(stubs.len(), 2, "{stubs:?}");
+        for s in &stubs {
+            let p = s.points.first().copied().unwrap_or([f64::NAN; 2]);
+            assert!(dist(p, gen_at) < 12.0, "stub-up at the generator, not the wall: {p:?} {gen_at:?}");
+        }
     }
 
     /// One line drawn through three poles, a second circuit's poles no line joins, a column of

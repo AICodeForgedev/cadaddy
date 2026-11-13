@@ -960,16 +960,10 @@ fn a_units_receptacle_runs_out_under_the_unit_and_rises_beside_it() {
     assert_eq!(blocked, Some(0));
 }
 
-/// Q6347: a feeder from the ground floor's switchboard to a panel two floors up, routed and cut
-/// into pieces: its takeoff has the buried raceway only under the slab (and its stub-up), the
-/// above-grade raceway rising on every level it passes and running on the panel's level, one
-/// coupling where the riser passes each floor, a firestop at each floor, and its conductors
-/// along the whole route on each level.
-#[test]
-fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_level() {
-    let mut s = crate::Session::empty();
-    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Feeder Riser", None);
-    let spec = json!({
+/// The feeder riser job of [`a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_level`]:
+/// three storeys, a switchboard on the ground floor, a panel on it and one two floors up.
+fn feeder_riser_spec() -> Value {
+    json!({
         "version": 1, "units_per_foot": 12,
         "levels": [
             {"name": "Ground", "elevation_ft": 0, "height_ft": 11, "ceiling_ft": 9, "region": [0, 0, 1200, 1200]},
@@ -993,7 +987,19 @@ fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_lev
                          "neutral_size": "3/0", "grounds": 1, "ground_size": "#6", "conduits": 1, "conduit_in": 3, "entry": "top", "from_entry": "bottom",
                          "source": "riser diagram"}]
         }
-    });
+    })
+}
+
+/// Q6347: a feeder from the ground floor's switchboard to a panel two floors up, routed and cut
+/// into pieces: its takeoff has the buried raceway only under the slab (and its stub-up), the
+/// above-grade raceway rising on every level it passes and running on the panel's level, one
+/// coupling where the riser passes each floor, a firestop at each floor, and its conductors
+/// along the whole route on each level.
+#[test]
+fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_level() {
+    let mut s = crate::Session::empty();
+    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Feeder Riser", None);
+    let spec = feeder_riser_spec();
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
     let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
     let (runs, left) = super::gearbuild::feeder_runs(&sp);
@@ -1052,6 +1058,45 @@ fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_lev
             .sum::<f64>()
     };
     assert!(wire("Middle") >= 4.0 * 10.0 - 0.1, "three hots and a neutral up the storey: {lines:#?}");
+}
+
+/// Q6453: a mezzanine over another corner of the building, its floor inside the riser's span,
+/// takes no piece of the feeder's riser: the middle floor's piece is its whole storey, no
+/// coupling or firestop at the mezzanine's floor, none of the raceway counted on it.
+#[test]
+fn a_mezzanine_away_from_a_feeder_riser_takes_no_piece_coupling_or_firestop_of_it() {
+    let mut s = crate::Session::empty();
+    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Feeder Riser", None);
+    let mut spec = feeder_riser_spec();
+    if let Some(levels) = spec.pointer_mut("/levels").and_then(Value::as_array_mut) {
+        levels.push(json!({"name": "Mezz", "elevation_ft": 16, "height_ft": 5, "ceiling_ft": 4, "region": [6000, 0, 6300, 300]}));
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
+    let (runs, left) = super::gearbuild::feeder_runs(&sp);
+    assert!(left.is_empty(), "{left:?}");
+    assert!(!runs.iter().any(|r| r.level == "Mezz"), "{runs:#?}");
+    sp.mep.runs = runs;
+    s.execute("bspec.set", &json!({"replace": true, "spec": serde_json::to_value(&sp).unwrap()})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let r = s.execute("conduit.reroute", &json!({})).unwrap();
+    assert_eq!(r["routed"], json!(true), "{r}");
+    let t = s.execute("conduit.takeoff", &json!({"price": false})).unwrap();
+    let lines = t["lines"].as_array().cloned().unwrap_or_default();
+    let qty = |level: &str, kind: &str| {
+        lines.iter().filter(|l| l["level"] == json!(level) && l["kind"] == json!(kind)).map(|l| l["qty"].as_f64().unwrap_or(0.0)).sum::<f64>()
+    };
+    assert_eq!((qty("Mezz", "conduit"), qty("Mezz", "firestop")), (0.0, 0.0), "{lines:#?}");
+    assert!((qty("Middle", "conduit") - 10.0).abs() < 0.05, "the middle floor's whole storey: {lines:#?}");
+    assert_eq!((qty("Middle", "firestop"), qty("Upper", "firestop")), (1.0, 1.0), "{lines:#?}");
+    let d = s.doc().unwrap();
+    let joints = d
+        .model
+        .iter()
+        .map(|e| props::read(&e.common.xdata))
+        .filter(|p| p.get("atom").map(Prop::text).as_deref() == Some("coupling") && p.get("joint").map(Prop::text).as_deref() == Some("floor"))
+        .count();
+    assert_eq!(joints, 2, "{lines:#?}");
 }
 
 /// Q6314: a top floor (floor 0, top 96") under 24" roof trusses bearing on its walls (96" to

@@ -60,6 +60,56 @@ pub const BOX_FILL: &str = "E-BOX-FILL";
 pub const DERATE: &str = "E-DERATE";
 pub const VDROP: &str = "E-VDROP";
 pub const METHOD: &str = "E-METHOD";
+/// E-METHOD's area for work under the slab or in the earth (Q6544).
+const BELOW_GRADE: &str = "below grade";
+
+/// Where the ground is for E-METHOD (Q6544): the lowest storey's floor (the slab on grade).
+struct Grade {
+    /// The lowest storey's floor, drawing units (none: the model gives no storeys).
+    floor: Option<f64>,
+    /// A stub's most rise above that floor (drawing units).
+    stub: f64,
+    /// A drawing unit's slack.
+    slack: f64,
+}
+
+impl Grade {
+    fn of(sp: &BuildingSpec, upf: f64, stub_in: f64) -> Self {
+        let floor = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| e.is_finite()).reduce(f64::min).map(|e| e * upf);
+        let stub = if stub_in.is_finite() && stub_in > 0.0 { stub_in.min(48.0) / 12.0 * upf } else { 0.0 };
+        Self { floor, stub, slack: upf / 12.0 }
+    }
+
+    /// Whether a piece (its run id, its room, its lowest and highest points) is work below grade:
+    /// a buried circuit's piece in no room (site work in the earth, ugcircuit's tag), a piece
+    /// wholly under the slab (a homerun below the slab, a buried feeder leg), or the stub that
+    /// rises out of the slab into the gear it feeds (no more than the stub height above the
+    /// floor). A riser climbing on into a wall, and every piece of an upper storey, is the
+    /// building's.
+    fn below(&self, run: &str, room: &str, z: Option<(f64, f64)>) -> bool {
+        if super::ugcircuit::is_buried(run) && room.trim().is_empty() {
+            return true;
+        }
+        match (self.floor, z) {
+            (Some(f), Some((lo, hi))) if lo.is_finite() && hi.is_finite() => {
+                hi < f - self.slack || (lo < f - self.slack && hi <= f + self.stub + self.slack)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Whether a piece's method (`PVC Sch 40`, `EMT`, `MC 12/2`) is the method a table or rule names
+/// (`PVC`, a project rule's `EMT or MC`): the whole name, or one of its words.
+fn method_is(method: &str, name: &str) -> bool {
+    let (m, n) = (method.trim(), name.trim());
+    if m.is_empty() || n.is_empty() {
+        return false;
+    }
+    m.eq_ignore_ascii_case(n)
+        || m.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).any(|w| w.eq_ignore_ascii_case(n))
+        || n.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w.eq_ignore_ascii_case(m))
+}
 pub const CLASH: &str = "G-CLASH";
 pub const TAKEOFF: &str = "E-TAKEOFF";
 /// Every rule of this module.
@@ -126,7 +176,7 @@ pub(crate) fn awg(s: &str) -> String {
     t.chars().take_while(|c| c.is_ascii_digit() || *c == '/').collect()
 }
 
-/// The rank of a conductor size among the voltage-drop sizes (larger conductor, larger rank).
+/// The rank of a conductor size in the rules' full conductor order (larger conductor, larger rank).
 fn size_rank(size: &str, sizes: &[String]) -> Option<usize> {
     sizes.iter().position(|s| s == size)
 }
@@ -1032,33 +1082,17 @@ impl ScheduleDocs {
     /// else the drawing's own texts.
     pub(crate) fn read(s: &crate::Session, d: &Drawing, sp: &BuildingSpec) -> ScheduleDocs {
         let mut out = ScheduleDocs::default();
-        let sheet_of = |p: Vec2| -> String {
-            sp.sheets
-                .iter()
-                .filter_map(|l| {
-                    let r = l.rect?;
-                    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
-                    (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).then(|| ((x1 - x0) * (y1 - y0), l.number.clone()))
-                })
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, n)| n)
-                .unwrap_or_default()
-        };
-        out.lengths = super::wiretable::read_drawing(d, &sheet_of);
         let job = super::guided::load_job(s).ok().flatten().filter(|j| j.sheets.is_some());
+        let pages = match &job {
+            Some(job) => super::guided::panel_pages(d, job),
+            None => Vec::new(),
+        };
+        // The wire-length tables by the router's rule (Q6545): the drawing's, the job's kept in
+        // the spec, the job's pages.
+        out.lengths = super::wiretable::documents(d, sp, &pages).into_iter().map(|(t, _)| t).collect();
         match job {
-            Some(job) => {
-                let pages = super::guided::panel_pages(d, &job);
+            Some(_) => {
                 out.reread = super::guided::panel_schedules(&pages);
-                for (number, page) in &pages {
-                    let have = out.lengths.iter().any(|t| t.sheet.eq_ignore_ascii_case(number));
-                    if !have && out.lengths.len() < 32 {
-                        let texts = cadaddy_mepfix::sheet_facts::texts(page);
-                        if texts.iter().any(|t| super::wiretable::is_title(&t.value) || (t.value.contains('#') && t.value.contains('\''))) {
-                            out.lengths.extend(super::wiretable::read_page(&texts, &super::gridtable::segments(page), number));
-                        }
-                    }
-                }
                 out.sheets = pages.into_iter().map(|(n, _)| n).collect();
             }
             None => {
@@ -1074,14 +1108,6 @@ impl ScheduleDocs {
                 }
             }
         }
-        // A table read twice (the drawing's sheet and its page) counts once.
-        let mut seen: Vec<super::wiretable::LengthTable> = Vec::new();
-        for t in std::mem::take(&mut out.lengths) {
-            if !seen.iter().any(|o| o.bands == t.bands) {
-                seen.push(t);
-            }
-        }
-        out.lengths = seen;
         out
     }
 
@@ -1247,6 +1273,48 @@ fn panel_volts(sp: &BuildingSpec, docs: &ScheduleDocs, panel: &str) -> Option<(f
         }
     }
     None
+}
+
+/// The voltages a circuit with `poles` (None: its breaker isn't read) can be at on a panel of
+/// `volts` (line to neutral, line to line): one pole is line to neutral, more line to line, and
+/// an unread breaker either. No panel voltage read: none (never a default, Q6460).
+fn circuit_volts(poles: Option<u32>, volts: Option<(f64, f64)>) -> Vec<f64> {
+    match (poles, volts) {
+        (_, None) => Vec::new(),
+        (Some(1), Some((ln, _))) => vec![ln],
+        (Some(_), Some((_, ll))) => vec![ll],
+        (None, Some((ln, ll))) if (ln - ll).abs() < 1e-6 => vec![ln],
+        (None, Some((ln, ll))) => vec![ln, ll],
+    }
+}
+
+/// What the wire-length table `t` asks of a circuit at one of `volts` (empty: its voltage isn't
+/// known). Several: the answer only where every one of them gives the same; else not covered.
+fn table_need(t: &super::wiretable::LengthTable, ft: f64, amps: Option<f64>, volts: &[f64], sizes: &[String]) -> super::wiretable::Need {
+    use super::wiretable::Need;
+    let [first, rest @ ..] = volts else {
+        return t.need(ft, amps, None, sizes);
+    };
+    let one = t.need(ft, amps, Some(*first), sizes);
+    if rest.is_empty() {
+        return one;
+    }
+    let each: Vec<Need> = rest.iter().map(|v| t.need(ft, amps, Some(*v), sizes)).collect();
+    let either = || volts.iter().map(|v| format!("{v} V")).collect::<Vec<_>>().join(" or ");
+    let all = |f: &dyn Fn(&Need) -> Option<String>| -> Vec<String> { std::iter::once(&one).chain(&each).filter_map(f).collect() };
+    match &one {
+        Need::Size(n, _) if each.iter().all(|x| matches!(x, Need::Size(m, _) if m == n)) => {
+            Need::Size(n.clone(), all(&|x| if let Need::Size(_, b) = x { Some(b.clone()) } else { None }).join("; "))
+        }
+        Need::Beyond(_) if each.iter().all(|x| matches!(x, Need::Beyond(_))) => {
+            Need::Beyond(all(&|x| if let Need::Beyond(w) = x { Some(w.clone()) } else { None }).join("; "))
+        }
+        Need::NotCovered(_) if each.iter().all(|x| matches!(x, Need::NotCovered(_))) => one.clone(),
+        _ => Need::NotCovered(format!(
+            "the circuit's breaker isn't read, so whether it is at {} isn't known, and the table's rows for them differ",
+            either()
+        )),
+    }
 }
 
 /// How near (inches) two raceway ends meet, by E-CONDUIT-CONTINUITY's `touch_in`.
@@ -1662,18 +1730,20 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 .map(|r| r.active.value.trim().to_string())
                 .filter(|v| !v.is_empty());
         let approved = super::valueeng::approved_circuits(cx.d);
+        // Below grade the project's own key for it, never its general rule (Q6544).
+        let below_rule = Some(mr.below.rule_key.trim())
+            .filter(|k| !k.is_empty())
+            .and_then(|k| cx.d.project_rules.get(cadaddy_doc::projrules::RuleDomain::WiringMethod, k))
+            .map(|r| (r.active.value.trim().to_string(), mr.below.rule_key.clone()))
+            .filter(|(v, _)| !v.is_empty());
         let has = |text: &str, words: &[String]| words.iter().any(|w| text.contains(w.as_str()));
-        let name_of = |key: &str| -> Option<String> {
-            let v = match key {
-                "raceway" => &mr.raceway,
-                "mc" => &mr.mc,
-                "ac" => &mr.ac,
-                "nm" => &mr.nm,
-                "se" => &mr.se,
-                "uf" => &mr.uf,
-                _ => return None,
-            };
-            Some(v.clone()).filter(|v| !v.is_empty())
+        // A table's method key's names in an area: below grade a row's bare `in raceway` is a
+        // raceway the code permits there, not the building's EMT.
+        let names_in = |area: &str, key: &str| -> Vec<String> {
+            if area == BELOW_GRADE && key == "raceway" {
+                return mr.below.raceways.clone();
+            }
+            mr.name_of(key).map(str::to_string).into_iter().collect()
         };
         let branch: Vec<&super::conduitroute::MethodApp> = methods
             .applications
@@ -1686,6 +1756,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
         let app_for = |area: &str| -> Option<&super::conduitroute::MethodApp> {
             let pick = |pred: &dyn Fn(&str) -> bool| branch.iter().copied().find(|a| pred(&a.application.to_ascii_uppercase()));
             match area {
+                // A branch row below grade, else any (a feeders-and-branches underground row).
+                BELOW_GRADE => pick(&|u| has(u, &mr.below_words))
+                    .or_else(|| methods.applications.iter().find(|a| has(&a.application.to_ascii_uppercase(), &mr.below_words))),
                 "unit" => pick(&|u| has(u, &mr.unit_words))
                     .or_else(|| pick(&|u| has(u, &mr.concealed_words) && !has(u, &mr.exposed_words) && !has(u, &mr.below_words))),
                 "exposed" => pick(&|u| has(u, &mr.exposed_words) && !has(u, &mr.unit_words)),
@@ -1702,6 +1775,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 "concealed"
             }
         };
+        let grade = Grade::of(cx.sp, upf, mr.below.stub_in);
+        let piece_area =
+            |run: &str, room: &str, z: Option<(f64, f64)>| -> &'static str { if grade.below(run, room, z) { BELOW_GRADE } else { area_of(room) } };
         // Each run: its method, the rooms its pieces are in, a place.
         struct RunM<'b> {
             method: String,
@@ -1712,6 +1788,8 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             rooms: BTreeSet<&'b str>,
             // The storeys its pieces are on (more than one: it runs in a riser).
             levels: BTreeSet<&'b str>,
+            // The areas its pieces are in.
+            areas: BTreeSet<&'static str>,
             // Its first piece is a raceway stick (else a cable).
             raceway: bool,
         }
@@ -1725,9 +1803,16 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 at: (s.a + s.b) * 0.5,
                 rooms: BTreeSet::new(),
                 levels: BTreeSet::new(),
+                areas: BTreeSet::new(),
                 raceway: true,
             });
-            e.rooms.insert(s.room.as_str());
+            let top = s.path.iter().map(|p| p.z).fold(s.a.z.max(s.b.z), f64::max);
+            let bottom = s.path.iter().map(|p| p.z).fold(s.a.z.min(s.b.z), f64::min);
+            let area = piece_area(&s.run, &s.room, Some((bottom, top)));
+            e.areas.insert(area);
+            if area != BELOW_GRADE {
+                e.rooms.insert(s.room.as_str());
+            }
             e.levels.insert(s.level.as_str());
         }
         for c in net.cables.iter().filter(|c| !c.run.is_empty() && !c.circuit.is_empty()) {
@@ -1740,9 +1825,14 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 at,
                 rooms: BTreeSet::new(),
                 levels: BTreeSet::new(),
+                areas: BTreeSet::new(),
                 raceway: false,
             });
-            e.rooms.insert(c.room.as_str());
+            let area = piece_area(&c.run, &c.room, c.at.map(|p| (p.z, p.z)));
+            e.areas.insert(area);
+            if area != BELOW_GRADE {
+                e.rooms.insert(c.room.as_str());
+            }
             e.levels.insert(c.level.as_str());
         }
         // Limited-energy circuits (fire alarm, Class 2/3, communications) are wired by their own
@@ -1761,7 +1851,8 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             }
             let Some(place) = in_scope(&m.level, m.at) else { continue };
             let method_up = m.method.to_ascii_uppercase();
-            let areas: BTreeSet<&str> = m.rooms.iter().map(|r| area_of(r)).collect();
+            let areas = &m.areas;
+            let below = areas.contains(BELOW_GRADE);
             let measured = json!({"check": "method", "run": run, "circuit": m.circuit, "method": m.method, "areas": areas, "rooms": m.rooms.iter().filter(|r| !r.is_empty()).take(12).collect::<Vec<_>>()});
             let listed = lim.types.iter().find(|(t, _)| t.eq_ignore_ascii_case(&m.method)).map(|(_, spaces)| spaces);
             if listed.is_some() || run.starts_with(super::conduitroute::fa::TAG_PREFIX) {
@@ -1840,7 +1931,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 );
                 continue;
             }
-            if let Some(v) = &rule_method {
+            if let Some(v) = rule_method.as_ref().filter(|_| !below) {
                 let ok = v.to_ascii_uppercase().contains(&method_up) && !method_up.is_empty();
                 push(
                     METHOD,
@@ -1865,11 +1956,22 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             }
             let mut allowed_all: Vec<(String, Vec<String>, String)> = Vec::new();
             let mut missing = Vec::new();
-            for a in &areas {
+            for a in areas {
+                // A run partly below grade: its part in the building by the project's rule.
+                let rule = if *a == BELOW_GRADE { below_rule.clone() } else { rule_method.clone().map(|v| (v, "general".to_string())) };
+                if let Some((v, key)) = rule {
+                    allowed_all.push((a.to_string(), vec![v], format!("project rule wiring_method/{key}")));
+                    continue;
+                }
                 match app_for(a) {
                     Some(app) => {
-                        let names: Vec<String> = app.methods.iter().filter_map(|k| name_of(k)).collect();
+                        let names: Vec<String> = app.methods.iter().flat_map(|k| names_in(a, k)).collect();
                         allowed_all.push((a.to_string(), names, format!("spec {} {}: {}", app.section, app.item, app.application)));
+                    }
+                    // No row for work below grade: the code's own uses permitted, as rules data.
+                    None if *a == BELOW_GRADE && !(mr.below.raceways.is_empty() && mr.below.cables.is_empty()) => {
+                        let names = mr.below.raceways.iter().chain(&mr.below.cables).cloned().collect();
+                        allowed_all.push((a.to_string(), names, format!("code: {}", mr.below.source)));
                     }
                     None => missing.push(a.to_string()),
                 }
@@ -1893,7 +1995,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 continue;
             }
             let bad: Vec<&(String, Vec<String>, String)> =
-                allowed_all.iter().filter(|(_, names, _)| !names.iter().any(|n| n.eq_ignore_ascii_case(&m.method))).collect();
+                allowed_all.iter().filter(|(_, names, _)| !names.iter().any(|n| method_is(&m.method, n))).collect();
             let expected = allowed_all.iter().map(|(a, n, src)| format!("{a}: {} ({src})", n.join(", "))).collect::<Vec<_>>().join("; ");
             push(
                 METHOD,
@@ -2220,7 +2322,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 } else {
                     own.iter().flat_map(|run| run_wires.get(run).into_iter().flatten()).filter(|w| !w.ground()).map(|w| w.size.clone()).collect()
                 };
-                let smallest = pick.iter().filter_map(|s| size_rank(s, &rl.vdrop.sizes).map(|k| (k, s.clone()))).min_by_key(|x| x.0);
+                let smallest = pick.iter().filter_map(|s| size_rank(s, rl.vdrop.order()).map(|k| (k, s.clone()))).min_by_key(|x| x.0);
                 // Its breaker by its panel instance and number, else by the label's panel.
                 let brk = match breaker(cx.sp, cx.docs, &gtag, number) {
                     Brk::Missing => breaker(cx.sp, cx.docs, panel, number),
@@ -2256,14 +2358,10 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         );
                     };
                     let found_brk = brk.found();
-                    let poles = found_brk.as_ref().map_or(1, |b| b.1);
-                    // The circuit's voltage: line to neutral on one pole, line to line on more.
-                    let cv = match (poles, volts) {
-                        (1, Some((ln, _))) => Some(ln),
-                        (1, None) => Some(rl.vdrop.voltage),
-                        (_, Some((_, ll))) => Some(ll),
-                        (_, None) => None,
-                    };
+                    // The voltages the circuit can be at: line to neutral on one pole, line to
+                    // line on more; a breaker not read (poles unknown) leaves both of its panel's.
+                    // A table's row is never chosen at a default voltage (Q6460).
+                    let cvs = circuit_volts(found_brk.as_ref().map(|b| b.1), volts);
                     // The documents' own wire-length table wins where it has the circuit's row.
                     let mut table_note: Option<String> = None;
                     if let Some(t) = cx.docs.length_table() {
@@ -2273,12 +2371,14 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         if let Some(b) = &found_brk {
                             m["breaker_a"] = json!(b.0);
                         }
-                        if let Some(v) = cv {
-                            m["volts"] = json!(v);
+                        match cvs.as_slice() {
+                            [v] => m["volts"] = json!(v),
+                            [] => {}
+                            many => m["volts_either"] = json!(many),
                         }
-                        match t.need(ft, found_brk.as_ref().map(|b| b.0), cv, &rl.vdrop.sizes) {
+                        match table_need(t, ft, found_brk.as_ref().map(|b| b.0), &cvs, rl.vdrop.order()) {
                             super::wiretable::Need::Size(n, band) => {
-                                let ok = size_rank(&n, &rl.vdrop.sizes).is_some_and(|need| rank_have >= need);
+                                let ok = size_rank(&n, rl.vdrop.order()).is_some_and(|need| rank_have >= need);
                                 m["needed"] = json!(format!("#{n}"));
                                 m["band"] = json!(band);
                                 break 'v (
@@ -3218,6 +3318,38 @@ mod tests {
         assert_eq!(c.conductors(), Some((3, "10".into(), false)));
     }
 
+    /// Q6544: below grade is under the lowest storey's floor; a stub out of the slab into the gear
+    /// is the underground run's end; an upper storey's riser and a riser on into a wall are the
+    /// building's.
+    #[test]
+    fn work_below_grade_is_under_the_lowest_floor_or_its_stub_up() {
+        let sp: BuildingSpec = serde_json::from_value(json!({"version": 1, "units_per_foot": 12, "levels": [
+            {"name": "L2", "elevation_ft": 10.0, "height_ft": 10.0},
+            {"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0}
+        ]}))
+        .unwrap_or_default();
+        let g = Grade::of(&sp, 12.0, 12.0);
+        let run = "circuit:L1:E-101:LP1-1#1";
+        // Under the slab, whatever room it passes under.
+        assert!(g.below(run, "101", Some((-30.0, -24.0))));
+        // The stub up from under the slab, 6 in above the floor into the gear.
+        assert!(g.below(run, "101", Some((-24.0, 6.0))));
+        // A riser on up into the wall: the room's.
+        assert!(!g.below(run, "101", Some((-24.0, 48.0))));
+        // An upper storey's homerun down its riser to a panel below: in the building.
+        assert!(!g.below("circuit:L2:E-201:LP2-1#1", "201", Some((40.0, 118.0))));
+        // Overhead.
+        assert!(!g.below(run, "101", Some((100.0, 108.0))));
+        // A buried circuit's piece in no room is in the earth; in a room, by its height.
+        let buried = "circuit:L1:buried:LP1-1#E-1.1";
+        assert!(g.below(buried, "", None));
+        assert!(!g.below(buried, "101", Some((-24.0, 48.0))));
+        // No storeys: by the tag only.
+        let none = Grade { floor: None, ..Grade::of(&sp, 12.0, 12.0) };
+        assert!(!none.below(run, "101", Some((-30.0, -24.0))));
+        assert!(!g.below(run, "101", Some((f64::NAN, -24.0))));
+    }
+
     #[test]
     fn a_circuit_on_a_two_pole_breakers_second_pole_takes_its_breaker() {
         let mut sp = BuildingSpec::default();
@@ -3266,5 +3398,37 @@ mod tests {
         assert!(is_panel("LP1", "lp1"));
         assert!(is_panel("RP-7", "RP"));
         assert!(!is_panel("RPA", "RP"));
+    }
+
+    #[test]
+    fn an_unread_breaker_leaves_both_voltages_and_a_table_row_only_where_they_agree() {
+        // Q6460: unknown poles are an unknown voltage, never the line-to-neutral default.
+        assert_eq!(circuit_volts(Some(1), Some((120.0, 208.0))), vec![120.0]);
+        assert_eq!(circuit_volts(Some(2), Some((120.0, 208.0))), vec![208.0]);
+        assert_eq!(circuit_volts(None, Some((120.0, 208.0))), vec![120.0, 208.0]);
+        assert_eq!(circuit_volts(None, Some((240.0, 240.0))), vec![240.0]);
+        assert!(circuit_volts(Some(1), None).is_empty());
+        assert!(circuit_volts(None, None).is_empty());
+        use super::super::wiretable::{Band, LengthTable, Need};
+        let band = |v: f64, size: &str, max_ft: f64| Band { amps: None, volts: Some(v), size: size.into(), max_ft };
+        let t = LengthTable {
+            sheet: String::new(),
+            title: String::new(),
+            bands: vec![band(120.0, "12", 100.0), band(120.0, "10", 160.0), band(208.0, "12", 170.0), band(208.0, "10", 270.0)],
+        };
+        let sizes: Vec<String> = ["14", "12", "10", "8"].iter().map(|s| s.to_string()).collect();
+        let both = [120.0, 208.0];
+        // No voltage: not covered, never the 120 V row.
+        assert!(matches!(table_need(&t, 150.0, None, &[], &sizes), Need::NotCovered(_)));
+        assert!(matches!(table_need(&t, 150.0, None, &[120.0], &sizes), Need::Size(n, _) if n == "10"));
+        // 120 V asks #10, 208 V #12: not covered, saying both.
+        assert!(matches!(table_need(&t, 150.0, None, &both, &sizes), Need::NotCovered(w) if w.contains("120 V or 208 V")));
+        // Both ask #12 (or are past their reach): that answer, with both bands.
+        assert!(matches!(table_need(&t, 80.0, None, &both, &sizes), Need::Size(n, b) if n == "12" && b.contains("120 V") && b.contains("208 V")));
+        assert!(matches!(table_need(&t, 400.0, None, &both, &sizes), Need::Beyond(_)));
+        // One past its reach, one with a row: they differ.
+        assert!(matches!(table_need(&t, 200.0, None, &both, &sizes), Need::NotCovered(_)));
+        // Neither voltage has a row: the table's own reason.
+        assert!(matches!(table_need(&t, 50.0, None, &[277.0, 480.0], &sizes), Need::NotCovered(w) if w.contains("no row")));
     }
 }

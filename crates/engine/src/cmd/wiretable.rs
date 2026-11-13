@@ -153,14 +153,20 @@ impl LengthTable {
             return Need::NotCovered(format!("the table has no row for a {} circuit", w.join(" / ")));
         }
         let rank = |s: &str| sizes.iter().position(|x| x == s);
-        let pick = rows.iter().filter(|b| ft <= b.max_ft + 1e-9).filter_map(|b| rank(&b.size).map(|k| (k, *b))).min_by_key(|x| x.0);
-        match pick {
-            Some((_, b)) => Need::Size(b.size.clone(), b.words()),
-            None => {
-                let reach = rows.iter().map(|b| b.max_ft).fold(0.0, f64::max);
-                Need::Beyond(format!("the table reaches {reach} ft"))
-            }
+        let covering: Vec<&Band> = rows.iter().copied().filter(|b| ft <= b.max_ft + 1e-9).collect();
+        if let Some((_, b)) = covering.iter().filter_map(|b| rank(&b.size).map(|k| (k, *b))).min_by_key(|x| x.0) {
+            return Need::Size(b.size.clone(), b.words());
         }
+        // Only bands of a size no ranking knows reach this far: the table can't be read for the
+        // circuit (Q6456), which is not the same as the circuit being past its reach.
+        if !covering.is_empty() {
+            let mut odd: Vec<String> = covering.iter().map(|b| format!("#{}", b.size)).collect();
+            odd.sort();
+            odd.dedup();
+            return Need::NotCovered(format!("the table's {} isn't a conductor size the rules rank", odd.join(", ")));
+        }
+        let reach = rows.iter().map(|b| b.max_ft).fold(0.0, f64::max);
+        Need::Beyond(format!("the table reaches {reach} ft"))
     }
 
     /// The rows of the table for a circuit on a breaker of `amps` at `volts` (all of them where
@@ -474,6 +480,156 @@ pub(crate) fn read_drawing(d: &Drawing, sheet_of: &dyn Fn(Vec2) -> String) -> Ve
     out
 }
 
+/// Pages of the job read for wire-length tables, at most.
+const MAX_PAGE_TABLES: usize = 32;
+
+/// Where a document's wire-length table was read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadFrom {
+    /// The drawing's own sheets.
+    Drawing,
+    /// The job's pages, read when the job read its panel schedules and kept in the spec.
+    Stored,
+    /// The job's pages, read now.
+    Page,
+}
+
+impl ReadFrom {
+    pub fn words(self) -> &'static str {
+        match self {
+            ReadFrom::Drawing => "the drawing's sheets",
+            ReadFrom::Stored => "the job's pages (read with its panel schedules, kept in the building spec)",
+            ReadFrom::Page => "the job's pages",
+        }
+    }
+}
+
+impl LengthTable {
+    /// As the building spec keeps it.
+    pub fn stored(&self) -> cadaddy_walk3d::WireLengthTable {
+        cadaddy_walk3d::WireLengthTable {
+            sheet: self.sheet.clone(),
+            title: self.title.clone(),
+            bands: self
+                .bands
+                .iter()
+                .map(|b| cadaddy_walk3d::WireLengthBand { amps: b.amps, volts: b.volts, size: b.size.clone(), max_ft: b.max_ft })
+                .collect(),
+        }
+    }
+
+    /// One the building spec keeps (its cells checked again: a spec is input).
+    pub fn from_stored(t: &cadaddy_walk3d::WireLengthTable) -> LengthTable {
+        let ok = |v: Option<f64>| v.filter(|x| x.is_finite() && *x > 0.0);
+        LengthTable {
+            sheet: t.sheet.clone(),
+            title: t.title.clone(),
+            bands: t
+                .bands
+                .iter()
+                .filter(|b| b.max_ft.is_finite() && b.max_ft > 0.0 && b.max_ft <= MAX_FT && !b.size.trim().is_empty())
+                .take(MAX_BANDS)
+                .map(|b| Band { amps: ok(b.amps), volts: ok(b.volts), size: b.size.trim().to_string(), max_ft: b.max_ft })
+                .collect(),
+        }
+    }
+}
+
+/// The sheet of the spec's sheet outlines a point is on (the smallest holding it).
+fn sheet_of(sp: &cadaddy_walk3d::BuildingSpec, p: Vec2) -> String {
+    sp.sheets
+        .iter()
+        .filter_map(|l| {
+            let r = l.rect?;
+            let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
+            (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).then(|| ((x1 - x0) * (y1 - y0), l.number.clone()))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, n)| n)
+        .unwrap_or_default()
+}
+
+/// The wire-length tables among the job's pages (`(sheet, page)`), each page not in `have`
+/// whose texts can hold one.
+pub(crate) fn read_pages(pages: &[(String, Drawing)], have: &[LengthTable]) -> Vec<LengthTable> {
+    let mut out: Vec<LengthTable> = Vec::new();
+    for (number, page) in pages {
+        if have.len() + out.len() >= MAX_PAGE_TABLES {
+            break;
+        }
+        if have.iter().chain(out.iter()).any(|t| t.sheet.eq_ignore_ascii_case(number)) {
+            continue;
+        }
+        let texts = cadaddy_mepfix::sheet_facts::texts(page);
+        if texts.iter().any(|t| is_title(&t.value) || (t.value.contains('#') && t.value.contains('\''))) {
+            out.extend(read_page(&texts, &gridtable::segments(page), number));
+        }
+    }
+    out
+}
+
+/// The documents' wire-length tables by one rule (Q6545), for the router and Validate alike:
+/// the drawing's sheets first, then those the job read off its pages and kept in the spec, then
+/// the job's `pages` read now (when a session has them). Each table once (by its cells), none
+/// empty, and where it was read.
+pub(crate) fn documents(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, pages: &[(String, Drawing)]) -> Vec<(LengthTable, ReadFrom)> {
+    let mut out: Vec<(LengthTable, ReadFrom)> = Vec::new();
+    let add = |t: LengthTable, from: ReadFrom, out: &mut Vec<(LengthTable, ReadFrom)>| {
+        if !t.bands.is_empty() && !out.iter().any(|(o, _)| o.bands == t.bands) && out.len() < MAX_PAGE_TABLES {
+            out.push((t, from));
+        }
+    };
+    for t in read_drawing(d, &|p| sheet_of(sp, p)) {
+        add(t, ReadFrom::Drawing, &mut out);
+    }
+    for t in sp.mep.wire_length_tables.iter().take(MAX_PAGE_TABLES) {
+        add(LengthTable::from_stored(t), ReadFrom::Stored, &mut out);
+    }
+    let have: Vec<LengthTable> = out.iter().map(|(t, _)| t.clone()).collect();
+    for t in read_pages(pages, &have) {
+        add(t, ReadFrom::Page, &mut out);
+    }
+    out
+}
+
+/// Keep in the spec the wire-length tables the job's `pages` print that the drawing doesn't
+/// hold (Q6545), so model.build and conduit.reroute read them with no session; and which pages
+/// were looked at. Returns the tables kept.
+pub(crate) fn keep_job_tables(d: &Drawing, sp: &mut cadaddy_walk3d::BuildingSpec, pages: &[(String, Drawing)]) -> usize {
+    let drawn: Vec<LengthTable> = read_drawing(d, &|p| sheet_of(sp, p)).into_iter().filter(|t| !t.bands.is_empty()).collect();
+    let mut kept: Vec<LengthTable> = Vec::new();
+    for t in read_pages(pages, &drawn) {
+        if !t.bands.is_empty() && !drawn.iter().chain(kept.iter()).any(|o| o.bands == t.bands) {
+            kept.push(t);
+        }
+    }
+    sp.mep.wire_length_tables = kept.iter().map(LengthTable::stored).collect();
+    let names: Vec<&str> = pages.iter().map(|(n, _)| n.as_str()).take(12).collect();
+    sp.mep.wire_length_read = format!(
+        "{} job pages looked at{}{}: {} tables",
+        pages.len(),
+        if names.is_empty() { String::new() } else { format!(" ({}", names.join(", ")) },
+        if names.is_empty() {
+            ""
+        } else if pages.len() > names.len() {
+            ", …)"
+        } else {
+            ")"
+        },
+        kept.len()
+    );
+    kept.len()
+}
+
+/// [`keep_job_tables`] off the session's job (its panel schedule pages, Validate's), when it
+/// has one whose sheets are classified; `None` when it has none.
+pub(crate) fn keep_from_job(s: &crate::Session, sp: &mut cadaddy_walk3d::BuildingSpec) -> Option<usize> {
+    let job = super::guided::load_job(s).ok().flatten().filter(|j| j.sheets.is_some())?;
+    let d = s.doc().ok()?;
+    let pages = super::guided::panel_pages(d, &job);
+    Some(keep_job_tables(d, sp, &pages))
+}
+
 /// A drawing's horizontal texts and straight segments inside `r`.
 fn window(d: &Drawing, r: [f64; 4]) -> (Vec<TextItem>, Vec<(Vec2, Vec2)>) {
     let inside = |p: Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
@@ -566,6 +722,171 @@ mod tests {
         assert_eq!(length_in("SEE NOTE 4"), None);
         assert_eq!(amps_in("20A/1P", false), Some(20.0));
         assert_eq!(volts_in("208Y/120V", false), Some(120.0));
+    }
+
+    /// A page drawn as its own drawing (a sheet the job's drawing doesn't hold): a grid table at
+    /// (x0, y0) with its title, cells 20 units wide, and `lines` of text below it.
+    fn page(title: &str, header: &[&str], rows: &[&[&str]], lines: &[&str]) -> Drawing {
+        let mut s = crate::Session::empty();
+        s.open_drawing(Drawing::new_imperial(), "Sample Legend", None);
+        let mut run = |id: &str, v: serde_json::Value| {
+            s.execute(id, &v).unwrap_or_else(|e| panic!("{id}: {e}"));
+        };
+        let (x0, y0) = (100.0, 400.0);
+        if !title.is_empty() {
+            run("text", serde_json::json!({"at": [x0 + 10.0, y0 + 10.0], "text": title, "height": 2.0}));
+            let n = header.len();
+            let ys: Vec<f64> = (0..=rows.len() + 1).map(|i| y0 + 7.0 - 5.0 * i as f64).collect();
+            let bottom = ys.last().copied().unwrap_or(y0);
+            for y in &ys {
+                run("line", serde_json::json!({"points": [[x0, *y], [x0 + 20.0 * n as f64, *y]]}));
+            }
+            for i in 0..=n {
+                let x = x0 + 20.0 * i as f64;
+                run("line", serde_json::json!({"points": [[x, y0 + 7.0], [x, bottom]]}));
+            }
+            for (i, h) in header.iter().enumerate() {
+                run("text", serde_json::json!({"at": [x0 + 2.0 + 20.0 * i as f64, y0 + 4.0], "text": h, "height": 1.5}));
+            }
+            for (r, row) in rows.iter().enumerate() {
+                for (i, c) in row.iter().enumerate() {
+                    run("text", serde_json::json!({"at": [x0 + 2.0 + 20.0 * i as f64, y0 - 1.0 - 5.0 * r as f64], "text": c, "height": 1.5}));
+                }
+            }
+        }
+        for (i, l) in lines.iter().enumerate() {
+            run("text", serde_json::json!({"at": [x0, y0 - 100.0 - 4.0 * i as f64], "text": l, "height": 1.5}));
+        }
+        s.doc().cloned().unwrap_or_default()
+    }
+
+    fn by_breaker() -> Drawing {
+        page(
+            "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE",
+            &["BREAKER", "VOLTAGE", "#12", "#10", "#8", "#6"],
+            &[&["20A", "120V", "55'", "140'", "230'", "370'"]],
+            &[],
+        )
+    }
+
+    #[test]
+    fn a_table_on_a_job_page_the_drawing_lacks_is_kept_in_the_spec_and_read_by_one_rule() {
+        // Q6545: a PDF job's legend page prints the table; the job's drawing holds none of it.
+        let d = Drawing::new_imperial();
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        let notes = page("", &[], &[], &["GENERAL NOTES", "1. ALL WORK PER THE CODE IN FORCE."]);
+        let pages = vec![("X-701".to_string(), by_breaker()), ("X-702".to_string(), notes)];
+        // Before the job keeps it: the router (no pages, no session) has no table.
+        assert!(documents(&d, &sp, &[]).is_empty());
+        assert_eq!(keep_job_tables(&d, &mut sp, &pages), 1);
+        assert_eq!(sp.mep.wire_length_tables.len(), 1, "{:?}", sp.mep.wire_length_tables);
+        assert_eq!(sp.mep.wire_length_tables[0].sheet, "X-701");
+        assert_eq!(sp.mep.wire_length_tables[0].bands.len(), 4, "{:?}", sp.mep.wire_length_tables[0].bands);
+        assert!(sp.mep.wire_length_read.starts_with("2 job pages looked at (X-701, X-702): 1 tables"), "{}", sp.mep.wire_length_read);
+        // Saved and read back (the spec in the drawing), the router reads it with no session: a
+        // 90 ft 20 A / 120 V circuit takes #10.
+        let back = cadaddy_walk3d::BuildingSpec::from_json(&sp.to_json()).unwrap_or_else(|e| panic!("{e}"));
+        let docs = documents(&d, &back, &[]);
+        assert_eq!(docs.len(), 1, "{docs:?}");
+        assert_eq!(docs[0].1, ReadFrom::Stored);
+        assert!(docs[0].0.cite().contains("on X-701"), "{}", docs[0].0.cite());
+        assert_eq!(docs[0].0.need(90.0, Some(20.0), Some(120.0), &sizes()), Need::Size("10".into(), "20 A / 120 V: #10 to 140 ft".into()));
+        // Validate, which reads the pages now too, gets the same table, once.
+        let both = documents(&d, &back, &pages);
+        assert_eq!(both.len(), 1, "{both:?}");
+        assert_eq!(both[0].0.bands, docs[0].0.bands);
+        // Read now off the pages (no job kept them yet): the same, said so.
+        let now = documents(&d, &cadaddy_walk3d::BuildingSpec::default(), &pages);
+        assert_eq!(now.iter().map(|(_, f)| *f).collect::<Vec<_>>(), vec![ReadFrom::Page]);
+        // A drawing that holds the table itself: it comes first and the page's copy isn't kept.
+        let mut sp2 = cadaddy_walk3d::BuildingSpec::default();
+        let drawn = by_breaker();
+        assert_eq!(keep_job_tables(&drawn, &mut sp2, &pages), 0);
+        assert!(sp2.mep.wire_length_tables.is_empty() && !sp2.mep.wire_length_read.is_empty());
+        assert_eq!(documents(&drawn, &back, &pages).iter().map(|(_, f)| *f).collect::<Vec<_>>(), vec![ReadFrom::Drawing]);
+        // The single-line form on a page reads the same way.
+        let lines = page("", &[], &[], &["BRANCH CIRCUIT WIRE SIZES:", "0-55' = #12", "56-140' = #10", "141-230' = #8"]);
+        let mut sp3 = cadaddy_walk3d::BuildingSpec::default();
+        assert_eq!(keep_job_tables(&d, &mut sp3, &[("X-703".into(), lines)]), 1, "{}", sp3.mep.wire_length_read);
+        let t = LengthTable::from_stored(&sp3.mep.wire_length_tables[0]);
+        assert!(matches!(t.need(90.0, None, None, &sizes()), Need::Size(s, _) if s == "10"), "{t:?}");
+    }
+
+    #[test]
+    fn a_kept_table_is_input_its_cells_checked_again() {
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        let b =
+            |size: &str, max_ft: f64, amps: Option<f64>| cadaddy_walk3d::WireLengthBand { amps, volts: Some(f64::NAN), size: size.into(), max_ft };
+        sp.mep.wire_length_tables = vec![
+            cadaddy_walk3d::WireLengthTable {
+                sheet: "X-1".into(),
+                title: "T".into(),
+                bands: vec![b("12", f64::NAN, None), b("", 50.0, None), b("10", 1e9, None), b("8", 100.0, Some(-5.0)), b(" 6 ", 150.0, Some(20.0))],
+            },
+            cadaddy_walk3d::WireLengthTable { sheet: "X-2".into(), title: String::new(), bands: vec![b("12", -1.0, None)] },
+        ];
+        let docs = documents(&Drawing::new_imperial(), &sp, &[]);
+        assert_eq!(docs.len(), 1, "{docs:?}");
+        assert_eq!(
+            docs[0].0.bands,
+            vec![
+                Band { amps: None, volts: None, size: "8".into(), max_ft: 100.0 },
+                Band { amps: Some(20.0), volts: None, size: "6".into(), max_ft: 150.0 }
+            ]
+        );
+    }
+
+    /// Q6456: a column for a size past 2/0 (3/0, 4/0, 250 kcmil) is ranked by the rules' full
+    /// conductor order and can be picked; a band no order ranks is "not covered", never "beyond".
+    #[test]
+    fn sizes_past_two_ought_are_ranked_and_unranked_bands_are_not_covered() {
+        let order = super::super::conduitroute::rules().vdrop.order();
+        let t = table(&["BREAKER", "#1/0", "#2/0", "#3/0"], &[&["100A", "150'", "200'", "260'"]]);
+        let lt = LengthTable { sheet: String::new(), title: String::new(), bands: bands_of(&t) };
+        assert_eq!(lt.bands.len(), 3, "{:#?}", lt.bands);
+        assert!(matches!(lt.need(240.0, Some(100.0), None, order), Need::Size(s, _) if s == "3/0"), "{:?}", lt.need(240.0, Some(100.0), None, order));
+        assert!(matches!(lt.need(180.0, Some(100.0), None, order), Need::Size(s, _) if s == "2/0"));
+        assert!(matches!(lt.need(300.0, Some(100.0), None, order), Need::Beyond(_)));
+        assert_eq!(lt.largest(Some(100.0), None, order).as_deref(), Some("3/0"));
+        assert_eq!(lt.reach("4/0", Some(100.0), None, order), Some(260.0));
+        // kcmil columns too, in their order.
+        let t = table(&["BREAKER", "#4/0", "250 KCMIL", "350 KCMIL"], &[&["200A", "180'", "210'", "290'"]]);
+        let lt = LengthTable { sheet: String::new(), title: String::new(), bands: bands_of(&t) };
+        assert!(matches!(lt.need(200.0, Some(200.0), None, order), Need::Size(s, _) if s == "250"));
+        assert!(matches!(lt.need(280.0, Some(200.0), None, order), Need::Size(s, _) if s == "350"));
+        // A ranking that lacks the column's size: the circuit is not covered, never beyond.
+        let short = sizes();
+        let t = table(&["BREAKER", "#6", "#4", "#3/0"], &[&["100A", "150'", "200'", "260'"]]);
+        let lt = LengthTable { sheet: String::new(), title: String::new(), bands: bands_of(&t) };
+        assert!(
+            matches!(lt.need(240.0, Some(100.0), None, &short), Need::NotCovered(w) if w.contains("3/0")),
+            "{:?}",
+            lt.need(240.0, Some(100.0), None, &short)
+        );
+        assert!(matches!(lt.need(180.0, Some(100.0), None, &short), Need::Size(s, _) if s == "4"));
+        assert!(matches!(lt.need(300.0, Some(100.0), None, &short), Need::Beyond(_)));
+    }
+
+    /// Every size the table reader accepts as a standard conductor is in the rules' one order,
+    /// and the voltage-drop sizes keep that order.
+    #[test]
+    fn the_rules_rank_every_standard_conductor_size() {
+        let v = &super::super::conduitroute::rules().vdrop;
+        let order = v.order();
+        for s in [
+            "18", "16", "14", "12", "10", "8", "6", "4", "3", "2", "1", "1/0", "2/0", "3/0", "4/0", "250", "300", "350", "400", "500", "600", "750",
+            "1000",
+        ] {
+            let read = size_in(&format!("#{s}"), false);
+            assert_eq!(read.as_deref(), Some(s));
+            assert!(order.iter().any(|x| x == s), "{s} not ranked");
+            assert!(v.cmil.get(s).is_some_and(|c| *c > 0.0), "{s} has no circular mils");
+        }
+        let pos: Vec<Option<usize>> = v.sizes.iter().map(|s| order.iter().position(|x| x == s)).collect();
+        assert!(pos.iter().all(Option::is_some) && pos.windows(2).all(|w| w[0] < w[1]), "{pos:?}");
+        let cm: Vec<f64> = order.iter().filter_map(|s| v.cmil.get(s).copied()).collect();
+        assert_eq!(cm.len(), order.len());
+        assert!(cm.windows(2).all(|w| w[0] < w[1]), "{cm:?}");
     }
 
     #[test]

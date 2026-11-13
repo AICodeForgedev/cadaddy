@@ -1341,7 +1341,15 @@ fn view_block(blocks: &[([f64; 4], usize)], at: [f64; 2], h: f64, others: &[[f64
     let big = |n: usize| n.saturating_mul(10) >= most;
     // The title's own bar (its underline and bubble): a flat block holding it, never the plan.
     let bar = |r: &[f64; 4]| holds(r) && r[3] - r[1] < 0.2 * (r[2] - r[0]) && r[3] - r[1] < 15.0 * h;
-    let near = blocks.iter().filter(|(r, _)| !bar(r) && (holds(r) || above(r))).max_by_key(|(_, n)| *n).copied();
+    // Another view's title between this title and a block above it, or at that block's foot
+    // (its title bar drawn into its linework): that block is the other view's (two views stacked
+    // one over the other, each titled under its plan: Q6615). A title higher inside a block is an
+    // inset view's, not the plan's own.
+    let titled_between = |r: &[f64; 4]| {
+        let w = r[2] - r[0];
+        others.iter().any(|o| o[1] > at[1] + h && o[1] < r[1] + 3.0 * h && o[0] >= r[0] - 0.25 * w && o[0] <= r[2])
+    };
+    let near = blocks.iter().filter(|(r, _)| !bar(r) && (holds(r) || above(r)) && !titled_between(r)).max_by_key(|(_, n)| *n).copied();
     // The title's width: its bar, else its start.
     let span = blocks
         .iter()
@@ -1359,10 +1367,7 @@ fn view_block(blocks: &[([f64; 4], usize)], at: [f64; 2], h: f64, others: &[[f64
                 // With other views on the sheet, the plan stands over its title (its bar reaching
                 // under the plan); alone, any big block above it is.
                 let over = others.is_empty() || (span[1] >= r[0] - 0.25 * w && span[0] <= r[2]);
-                big(*n)
-                    && r[1] >= at[1] - h
-                    && over
-                    && !others.iter().any(|o| o[1] > at[1] + h && o[1] < r[1] && o[0] >= r[0] - 0.25 * w && o[0] <= r[2])
+                big(*n) && r[1] >= at[1] - h && over && !titled_between(r)
             })
             .min_by(|a, b| (a.0[1] - at[1]).total_cmp(&(b.0[1] - at[1])))
             .copied()
@@ -2209,6 +2214,25 @@ mod tests {
         for (got, want) in b.iter().zip([10.0, 10.0, 40.0, 30.0]) {
             assert!((got - want).abs() < 0.6, "{b:?}");
         }
+    }
+
+    /// Two views stacked one over the other, each titled under its plan (Q6615).
+    #[test]
+    fn two_views_stacked_each_take_the_plan_over_their_own_title() {
+        // A pit plan over a shaft plan, each titled under its plan; the upper title's bar is
+        // drawn into its plan's linework (Q6615). The lower title takes its own plan, not the
+        // bigger one past the other title.
+        let h = 0.15;
+        let upper = [10.0, 12.0, 15.0, 15.0];
+        let lower = [10.8, 9.4, 13.5, 11.7];
+        let bar = [10.2, 8.4, 15.0, 9.2];
+        let blocks = [(upper, 240), (lower, 150), (bar, 30)];
+        assert_eq!(view_block(&blocks, [10.8, 8.85], h, &[[10.7, 12.4]]), Some(lower));
+        assert_eq!(view_block(&blocks, [10.7, 12.4], h, &[[10.8, 8.85]]), Some(upper));
+        // An inset view titled high inside a big plan doesn't take the plan from its own title.
+        let big = [0.0, 2.0, 20.0, 20.0];
+        let blocks = [(big, 1000), ([4.0, 15.5, 8.0, 18.0], 120)];
+        assert_eq!(view_block(&blocks, [1.0, 1.5], h, &[[5.0, 15.0]]), Some(big));
     }
 
     /// A plan split by a white strip: the part above its titled block joins it. A part with

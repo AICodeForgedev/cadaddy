@@ -1509,13 +1509,38 @@ fn code_words(text: &str) -> impl Iterator<Item = String> + '_ {
         .map(str::to_ascii_uppercase)
 }
 
+/// Pieces of a catalog number compared in order against its cut sheet's body.
+const MAX_HEADER_PIECES: usize = 32;
+/// Body pieces searched for a header's catalog number printed whole.
+const MAX_BODY_PIECES: usize = 200_000;
+
+/// Whether a cut sheet's body prints the header's catalog number word for word (Q6465), in the same
+/// form the header is read in: one of its words squeezed to letters and digits starts with the
+/// header's squeezed `key` (`4817-W`, `4817W,`), or the header's own pieces stand in that order in
+/// it (`4817 W`). Pieces of separate words never join up (`7 A 12 B` is no `7A12B`); unlike
+/// [`code_words`], all-digit and short pieces count, so a number like `4817-W` or `3-QX-20K` is seen.
+fn printed_whole(catalog: &str, key: &str, body: &[&str]) -> bool {
+    let squeeze = |w: &str| w.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
+    let pieces = |t: &str| t.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect::<Vec<_>>();
+    if body.iter().flat_map(|x| x.split_whitespace()).take(MAX_BODY_PIECES).any(|w| squeeze(w).starts_with(key)) {
+        return true;
+    }
+    let header = pieces(catalog);
+    if header.is_empty() || header.len() > MAX_HEADER_PIECES {
+        return false;
+    }
+    let text: Vec<String> = body.iter().flat_map(|x| pieces(x)).take(MAX_BODY_PIECES).collect();
+    text.windows(header.len()).any(|w| w == header.as_slice())
+}
+
 /// What a cut sheet's own pages (its lines without the header's fields) say of the header's
 /// catalog number and maker.
 #[derive(Debug, PartialEq)]
 enum HeaderCheck {
     /// The body is too short to say (a scan, a header-only page), or nothing to check.
     Unread,
-    /// One of the body's ordering codes starts the header's catalog number (or it is whole there).
+    /// One of the body's ordering codes starts the header's catalog number, or the body prints it
+    /// whole ([`printed_whole`]).
     Backed,
     /// No code on its pages builds the header's catalog number: whether its pages name the
     /// header's maker, and the codes they do show.
@@ -1548,7 +1573,7 @@ fn check_header(catalog: &str, maker: &str, lines: &[String]) -> HeaderCheck {
             words.push(w);
         }
     }
-    if words.iter().any(|w| key.starts_with(w.as_str()) || w.starts_with(key.as_str())) {
+    if words.iter().any(|w| key.starts_with(w.as_str()) || w.starts_with(key.as_str())) || printed_whole(catalog, &key, &body) {
         return HeaderCheck::Backed;
     }
     let maker_word: String =
@@ -2539,6 +2564,47 @@ Every sign glows from a strip of diodes, keeps running for an hour and a half, a
         }
         assert_eq!(super::check_header("EU2-B-K-4M", "BRIGHTCO", &lines), super::HeaderCheck::Backed);
         assert_eq!(super::check_header("EU2BK", "BRIGHTCO", &lines[..3]), super::HeaderCheck::Unread, "the header alone says nothing");
+    }
+
+    /// Q6465: a catalog number its cut sheet prints word for word is backed, whatever its pieces
+    /// are (all digits, one letter): both sides are compared in the same form.
+    #[test]
+    fn a_catalog_number_its_sheet_prints_whole_is_backed() {
+        let body = [
+            "Plainco wall plates cover one device box and snap onto a sub plate, so no screw shows on the face of the wall.",
+            "They are made of a tough nylon that does not crack when a screw is driven too far, and they wipe clean with soap.",
+            "Order 4817-W for white, 4817-I for ivory; kits 3-QX-20K hold forty plates, sizes 7 A 12 B.",
+        ];
+        let lines = |cat: &str| -> Vec<String> {
+            ["Job Name : SOME JOB   Type : WP1".to_string(), "Manufacturer : PLAINCO".to_string(), format!("Model Number : {cat}")]
+                .into_iter()
+                .chain(body.iter().map(|l| l.to_string()))
+                .map(|l| super::squash_colon(&l))
+                .collect()
+        };
+        let printed = ["4817-W", "4817W", "4817 W", "4817-I", "3-QX-20K", "3QX20K"];
+        let not_backed: Vec<&str> =
+            printed.into_iter().filter(|cat| super::check_header(cat, "PLAINCO", &lines(cat)) != super::HeaderCheck::Backed).collect();
+        assert!(not_backed.is_empty(), "printed whole but not backed: {not_backed:?} of {}", printed.len());
+        // A number its sheet doesn't print stays contradicted, and pieces from separate words
+        // never join up into one.
+        let absent = ["4817-X", "7A12B", "QX12"];
+        let backed: Vec<&str> = absent
+            .into_iter()
+            .filter(|cat| !matches!(super::check_header(cat, "PLAINCO", &lines(cat)), super::HeaderCheck::Contradicted { .. }))
+            .collect();
+        assert!(backed.is_empty(), "not on its sheet but not contradicted: {backed:?} of {}", absent.len());
+
+        // Through the import: the number stays, no header field moved aside, no question.
+        let mut s = session();
+        let text = format!("--- page 1 of 1 ---\n{}\n", lines("4817-W").join("\n"));
+        let r = s.execute("bim.spec_import", &json!({"text": text, "format": "submittal"})).unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let field = |key: &str| proposals.iter().find(|p| p["mark"] == "WP1").map(|p| p["fields"][key].clone()).unwrap_or_default();
+        assert_eq!(field("catalogNumber")["value"], "4817-W", "{r}");
+        assert_eq!(field("manufacturer")["value"], "PLAINCO", "{r}");
+        assert!(field("headerCatalogNumber").is_null(), "{r}");
+        assert!(!arr(&r["rfis"]).iter().any(|q| q["mark"] == "WP1"), "no false question: {r}");
     }
 
     #[test]

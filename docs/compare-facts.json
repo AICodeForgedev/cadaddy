@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1285,
-    "count": 1285,
+    "callableAsJson": 1287,
+    "count": 1287,
     "ids": [
       "-attedit",
       "-block",
@@ -1249,6 +1249,8 @@
       "vs.wireframe",
       "vscurrent",
       "walk.publish",
+      "wall.edit",
+      "wall.edits",
       "wall.info",
       "wallgen",
       "wallgen.plan",

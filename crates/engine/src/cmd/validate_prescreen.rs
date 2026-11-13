@@ -383,6 +383,33 @@ pub(crate) fn host_of(at: [f64; 2], z_in: Option<f64>, stored: Option<&str>, wal
     out
 }
 
+/// A through-wall unit's box across its wall ([`through_wall_span`]).
+#[derive(Clone, Debug, PartialEq)]
+struct ThroughWall {
+    wall: String,
+    thickness_in: f64,
+    /// How far its cabinet stands past the wall's room face, inches.
+    cabinet_in: f64,
+    face: &'static str,
+}
+
+/// Whether a through-wall unit whose plan box is `size_ft` (x by y) and whose middle is `f` off
+/// wall `w` goes through that wall (M-THROUGH-WALL, Q6546): its box's back within `tol_in` of the
+/// wall's far face and its front at least at the near face. None when it does not.
+fn through_wall_span(f: &WallFace, w: &ModelWall, size_ft: [f64; 2], tol_in: f64) -> Option<ThroughWall> {
+    let (dx, dy) = (w.b[0] - w.a[0], w.b[1] - w.a[1]);
+    let len = dx.hypot(dy);
+    if len.is_nan() || len <= 1e-9 {
+        return None;
+    }
+    // Its box's depth across the wall (the wall's normal), inches.
+    let depth = ((dy / len).abs() * size_ft[0] + (dx / len).abs() * size_ft[1]) * 12.0;
+    let half_wall = f.thickness_in / 2.0;
+    let (back, front) = (f.off_centreline_in - depth / 2.0, f.off_centreline_in + depth / 2.0);
+    let ok = depth.is_finite() && (back + half_wall).abs() <= tol_in && front >= half_wall - tol_in;
+    ok.then(|| ThroughWall { wall: f.wall.clone(), thickness_in: f.thickness_in, cabinet_in: (front - half_wall).max(0.0), face: f.face })
+}
+
 // ---------------------------------------------------------------- expected sets
 
 /// One item of a room type's expected set.
@@ -608,6 +635,8 @@ struct Item {
     built: bool,
     /// The wall its record says it is on (its own `host_wall`, or its built twin's).
     host: Option<String>,
+    /// A built part's plan box, feet (x by y): how deep a through-wall unit is across its wall.
+    size_ft: Option<[f64; 2]>,
     /// Its own height record (`mount_height`: read off a print, a note, a legend or a schedule,
     /// or a default the job assumed).
     record: Option<vh::Record>,
@@ -697,6 +726,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 z_span_in: None,
                 built: false,
                 host: ent.and_then(stored_host),
+                size_ft: None,
                 record: ent.and_then(vh::record_of),
                 aff_documented: false,
                 sheet_at: ent.and_then(|x| vh::sheet_point(d, x)),
@@ -793,6 +823,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             mounting,
             built: true,
             host: stored_host(e),
+            size_ft: Some([b.width() / upf, b.height() / upf]).filter(|s| s.iter().all(|v| v.is_finite() && *v >= 0.0)),
             record,
             aff_documented,
             sheet_at: None,
@@ -1172,6 +1203,8 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 .entry("mounting not known (wall or ceiling): the judge checks its host".into())
                 .or_default() += unknown;
         }
+        // A through-wall unit (M-THROUGH-WALL, Q6546) is in its wall when its box goes through it.
+        let through_wall = super::throughwall::Rule::load();
         for (it, a) in mine.iter().filter(|(it, _)| !matches!(it.mounting, Mounting::Ceiling | Mounting::Other) && !on_site(it) && applies(r, it)) {
             let lv = it.level.to_ascii_lowercase();
             let h = host_of(
@@ -1183,43 +1216,70 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 t,
             );
             let its = if h.from == "stored" { "its host wall" } else { "wall" };
-            let (verdict, issue, found) = match (&h.opening, &h.face) {
-                (Some((f, bottom, top)), _) => (
-                    "fail",
-                    format!(
-                        "{} is on the {} face line of wall {} but in the opening under it: the wall there spans {:.0} to {:.0} in above the floor, the {} is at {:.1} in",
-                        it.kind,
-                        f.face,
-                        f.wall,
-                        bottom,
-                        top,
-                        it.kind,
-                        it.z_in.unwrap_or(0.0)
-                    ),
-                    format!(
-                        "in the opening of wall {} ({:.1} in off its {} face line; the wall there starts {:.0} in above the floor)",
-                        f.wall, f.off_face_in, f.face, bottom
-                    ),
-                ),
-                (None, Some(f)) if f.off_face_in.abs() <= t => (
+            let through = if through_wall.names(&it.kind) {
+                let wall_of = |id: &str| {
+                    walls
+                        .get(&lv)
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .chain(spans.get(&lv).into_iter().flatten().map(|s| &s.wall))
+                        .find(|w| w.id.eq_ignore_ascii_case(id))
+                };
+                h.face.as_ref().or(h.opening.as_ref().map(|o| &o.0)).and_then(|f| through_wall_span(f, wall_of(&f.wall)?, it.size_ft?, t))
+            } else {
+                None
+            };
+            let (verdict, issue, found) = if let Some(x) = &through {
+                (
                     "pass",
-                    match &h.stored_elsewhere {
-                        Some((other, _, _)) => format!("on the {} face of wall {} (its record names wall {other})", f.face, f.wall),
-                        None => format!("on the {} face of {its} {}", f.face, f.wall),
-                    },
-                    format!("{:.1} in off the face", f.off_face_in),
-                ),
-                (None, Some(f)) => (
-                    "fail",
-                    if f.off_face_in > 0.0 {
-                        format!("{} floats {:.1} in in front of the {} face of {its} {}", it.kind, f.off_face_in, f.face, f.wall)
-                    } else {
-                        format!("{} is buried {:.1} in inside {its} {}", it.kind, -f.off_face_in, f.wall)
-                    },
-                    format!("{:.1} in off the {} face of {its} {}", f.off_face_in, f.face, f.wall),
-                ),
-                (None, None) => {
-                    ("fail", format!("{} has no wall within {HOST_SEARCH_FT} ft: it floats", it.kind), format!("no wall within {HOST_SEARCH_FT} ft"))
+                    format!(
+                        "{} goes through {its} {}: its sleeve through the wall's {:.2} in, its cabinet {:.1} in into the room past the {} face",
+                        it.kind, x.wall, x.thickness_in, x.cabinet_in, x.face
+                    ),
+                    format!("through wall {} ({:.1} in past its {} face)", x.wall, x.cabinet_in, x.face),
+                )
+            } else {
+                match (&h.opening, &h.face) {
+                    (Some((f, bottom, top)), _) => (
+                        "fail",
+                        format!(
+                            "{} is on the {} face line of wall {} but in the opening under it: the wall there spans {:.0} to {:.0} in above the floor, the {} is at {:.1} in",
+                            it.kind,
+                            f.face,
+                            f.wall,
+                            bottom,
+                            top,
+                            it.kind,
+                            it.z_in.unwrap_or(0.0)
+                        ),
+                        format!(
+                            "in the opening of wall {} ({:.1} in off its {} face line; the wall there starts {:.0} in above the floor)",
+                            f.wall, f.off_face_in, f.face, bottom
+                        ),
+                    ),
+                    (None, Some(f)) if f.off_face_in.abs() <= t => (
+                        "pass",
+                        match &h.stored_elsewhere {
+                            Some((other, _, _)) => format!("on the {} face of wall {} (its record names wall {other})", f.face, f.wall),
+                            None => format!("on the {} face of {its} {}", f.face, f.wall),
+                        },
+                        format!("{:.1} in off the face", f.off_face_in),
+                    ),
+                    (None, Some(f)) => (
+                        "fail",
+                        if f.off_face_in > 0.0 {
+                            format!("{} floats {:.1} in in front of the {} face of {its} {}", it.kind, f.off_face_in, f.face, f.wall)
+                        } else {
+                            format!("{} is buried {:.1} in inside {its} {}", it.kind, -f.off_face_in, f.wall)
+                        },
+                        format!("{:.1} in off the {} face of {its} {}", f.off_face_in, f.face, f.wall),
+                    ),
+                    (None, None) => (
+                        "fail",
+                        format!("{} has no wall within {HOST_SEARCH_FT} ft: it floats", it.kind),
+                        format!("no wall within {HOST_SEARCH_FT} ft"),
+                    ),
                 }
             };
             let measured = h.to_json(it.z_in);
@@ -1654,7 +1714,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         let tol_ft = tol(r, "plan_in", 6.0) / 12.0;
         let symbols = vp::Symbols::of(sc.d, sc.sp, sc.frame, &kinds, sc.rules);
         // The unit types' views, each measured on its room's walls for its turn (Q6339).
-        let unit_views = super::validate_packet::UnitViews::of(sc.d, &units.view_rects(), sc.frame.upf());
+        let unit_views = super::validate_packet::UnitViews::of(sc.d, &units.view_rects(), sc.frame.upf(), symbols.marks());
         let measure = |level: &str, view: [f64; 4], room: [f64; 4]| unit_views.turn(view, sc.model, level, room);
         // The prints' marks of each kind (G-COVERAGE's reading): an element no symbol the job
         // read stands for, with a mark of its own kind by it, is one the prints show.
@@ -2944,6 +3004,7 @@ mod tests {
             mounting: Mounting::Wall,
             built: false,
             host: None,
+            size_ft: None,
             record: None,
             aff_documented: false,
             sheet_at: None,

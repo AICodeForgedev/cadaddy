@@ -101,6 +101,11 @@ pub struct PdfOptions {
     /// painted as fills) become one solid hatch per layer and colour, not one hatch each: the
     /// sheet looks the same with far fewer objects (off by default; on for print-set jobs).
     pub merge_small_fills: bool,
+    /// Read the sheet's scale from its scale notes (its text, or lettering read from its shapes;
+    /// on by default). Off: a sheet given no `scale` is scaled from its dimension strings, else
+    /// left at paper size, as one whose notes don't read is: for a plan whose only notes are its
+    /// details' (Q6518).
+    pub scale_notes: bool,
 }
 
 /// The largest side (sheet inches) of a fill [`PdfOptions::merge_small_fills`] merges: smaller
@@ -172,6 +177,7 @@ impl Default for PdfOptions {
             recover_text: true,
             e_sheet_at_note_scale: false,
             merge_small_fills: false,
+            scale_notes: true,
         }
     }
 }
@@ -3319,36 +3325,129 @@ const MAX_PIECE_PAIRS: usize = 20_000_000;
 /// pieces of one glyph stay inside its box; a neighbouring letter would widen it.
 const PIECE_GROWTH: f64 = 1.3;
 
+/// The smallest glyph the outlined-lettering reader reads (its longer side, points): smaller is
+/// a speck of a stipple or a sand hatch.
+const MIN_OUTLINE_GLYPH: f64 = 1.5;
+
+/// Grid cells (twice the page's glyph size each way) a counted piece's reach or a piece spans
+/// at most: a reach is 3.6 times a piece no bigger than two cells.
+const MAX_REACH_CELLS: i64 = 64;
+
 /// The filled glyphs of a page: each fill's glyphs ([`outline_glyphs`]), and a glyph some pages
 /// fill in several pieces (one fill per stroke: an A's two legs, a 1's stem and flag, a C's arc
 /// and its ends) joined into one, so its holes and centre lines are the whole glyph's. Pieces
 /// join when they have the same pen, their boxes overlap most of the smaller one, and the
-/// joined box stays the size of its biggest piece. More than [`MAX_OUTLINE_GLYPHS`] pieces (or
+/// joined box stays the size of its biggest piece.
+///
+/// The cheap filters run before a piece counts toward the cap, so the cap bounds the work, not
+/// the input seen: a piece bigger than a glyph is left out; one too small to make a glyph even
+/// joined ([`MIN_OUTLINE_GLYPH`] over [`PIECE_GROWTH`]) or under visible real text (that text's
+/// copy) counts for nothing and is kept only where a glyph joined round a counted piece could
+/// reach it. More than [`MAX_OUTLINE_GLYPHS`] counted pieces (or as many kept beside them, or
 /// [`MAX_PIECE_PAIRS`] pairs) sets `capped` and the rest are left out (left apart).
-fn outline_glyph_pieces(fills: &[Fill], taken_fills: &HashSet<usize>, max_seg: f64, capped: &mut bool) -> Vec<OutlineGlyph> {
-    let mut pieces: Vec<(usize, Vec<usize>, [f64; 4])> = Vec::new();
+fn outline_glyph_pieces(
+    fills: &[Fill],
+    taken_fills: &HashSet<usize>,
+    max_seg: f64,
+    cover: &TextCover,
+    glyph_orders: &HashSet<usize>,
+    capped: &mut bool,
+) -> Vec<OutlineGlyph> {
+    // whether a piece is in at all (Some), and whether it counts (true): a glyph's own piece
+    let class = |b: &[f64; 4], drawn_as_glyph: bool| -> Option<bool> {
+        let (w, h) = (b[2] - b[0], b[3] - b[1]);
+        if w > max_seg * 2.0 || h > max_seg * 2.0 {
+            return None;
+        }
+        let covered = !drawn_as_glyph && cover.covers((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        Some(w.max(h) >= MIN_OUTLINE_GLYPH / PIECE_GROWTH && !covered)
+    };
+    // (fill, its glyph's place in the fill, loops, box): in the fill's order, as drawn
+    let mut found: Vec<(usize, usize, Vec<usize>, [f64; 4])> = Vec::new();
+    let mut other_fills: Vec<usize> = Vec::new();
     'fills: for (fi, f) in fills.iter().enumerate() {
         if taken_fills.contains(&fi) || f.loops.len() > MAX_OUTLINE_LOOPS {
             continue;
         }
-        for (loops, b) in outline_glyphs(f) {
-            // a piece bigger than a glyph is no part of one
-            if b[2] - b[0] > max_seg * 2.0 || b[3] - b[1] > max_seg * 2.0 {
-                continue;
+        let drawn_as_glyph = glyph_orders.contains(&f.order);
+        let mut others = false;
+        for (k, (loops, b)) in outline_glyphs(f).into_iter().enumerate() {
+            match class(&b, drawn_as_glyph) {
+                None => {}
+                Some(false) => others = true,
+                Some(true) => {
+                    if found.len() >= MAX_OUTLINE_GLYPHS {
+                        *capped = true;
+                        break 'fills;
+                    }
+                    found.push((fi, k, loops, b));
+                }
             }
-            if pieces.len() >= MAX_OUTLINE_GLYPHS {
-                *capped = true;
-                break 'fills;
-            }
-            pieces.push((fi, loops, b));
+        }
+        if others {
+            other_fills.push(fi);
         }
     }
+    // where a glyph joined round each counted piece can reach: its box grown by its longer side
+    // times PIECE_GROWTH every way (a joined glyph stays inside that)
+    let cell = max_seg.max(1.0) * 2.0;
+    let key = |x: f64, y: f64| ((x / cell).floor() as i64, (y / cell).floor() as i64);
+    let reach: Vec<[f64; 4]> = found
+        .iter()
+        .map(|p| {
+            let b = p.3;
+            let g = (b[2] - b[0]).max(b[3] - b[1]) * PIECE_GROWTH;
+            [b[0] - g, b[1] - g, b[2] + g, b[3] + g]
+        })
+        .collect();
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (ri, r) in reach.iter().enumerate() {
+        let (lo, hi) = (key(r[0], r[1]), key(r[2], r[3]));
+        // a reach spans a few cells (a box that isn't finite would span them all)
+        if grid_window_cells(lo, hi) > MAX_REACH_CELLS {
+            continue;
+        }
+        for gx in lo.0..=hi.0 {
+            for gy in lo.1..=hi.1 {
+                grid.entry((gx, gy)).or_default().push(ri);
+            }
+        }
+    }
+    let reached = |b: &[f64; 4]| {
+        let (lo, hi) = (key(b[0], b[1]), key(b[2], b[3]));
+        grid_window_cells(lo, hi) <= MAX_REACH_CELLS
+            && (lo.0..=hi.0).any(|gx| {
+                (lo.1..=hi.1).any(|gy| {
+                    grid.get(&(gx, gy)).is_some_and(|rs| {
+                        rs.iter().filter_map(|&ri| reach.get(ri)).any(|r| b[0] <= r[2] && b[2] >= r[0] && b[1] <= r[3] && b[3] >= r[1])
+                    })
+                })
+            })
+    };
+    let mut kept = 0usize;
+    'others: for fi in other_fills {
+        let Some(f) = fills.get(fi) else { continue };
+        let drawn_as_glyph = glyph_orders.contains(&f.order);
+        for (k, (loops, b)) in outline_glyphs(f).into_iter().enumerate() {
+            if class(&b, drawn_as_glyph) != Some(false) || !reached(&b) {
+                continue;
+            }
+            if kept >= MAX_OUTLINE_GLYPHS {
+                *capped = true;
+                break 'others;
+            }
+            kept += 1;
+            found.push((fi, k, loops, b));
+        }
+    }
+    found.sort_by_key(|p| (p.0, p.1));
+    let pieces: Vec<(usize, Vec<usize>, [f64; 4])> = found.into_iter().map(|(fi, _, loops, b)| (fi, loops, b)).collect();
     let n = pieces.len();
     let mut parent: Vec<usize> = (0..n).collect();
     let mut boxes: Vec<[f64; 4]> = pieces.iter().map(|p| p.2).collect();
     let mut longest: Vec<f64> = pieces.iter().map(|p| (p.2[2] - p.2[0]).max(p.2[3] - p.2[1])).collect();
     fn root(parent: &[usize], mut i: usize) -> usize {
-        for _ in 0..MAX_OUTLINE_GLYPHS {
+        for _ in 0..parent.len() {
             match parent.get(i) {
                 Some(&p) if p != i => i = p,
                 _ => break,
@@ -3450,10 +3549,10 @@ fn recover_outlined_lettering(
     // each centre line's glyph (numbered as read) and its holes; whether each glyph is bars only
     let mut outline_of: HashMap<usize, (usize, usize)> = HashMap::new();
     let mut bars: Vec<bool> = Vec::new();
-    for glyph in outline_glyph_pieces(fills, taken_fills, max_seg, &mut read.capped) {
+    for glyph in outline_glyph_pieces(fills, taken_fills, max_seg, &cover, glyph_orders, &mut read.capped) {
         let b = glyph.bbox;
         let (w, h) = (b[2] - b[0], b[3] - b[1]);
-        if w.max(h) < 1.5 || w > max_seg * 2.0 || h > max_seg * 2.0 {
+        if w.max(h) < MIN_OUTLINE_GLYPH || w > max_seg * 2.0 || h > max_seg * 2.0 {
             continue;
         }
         let drawn_as_glyph = glyph.pieces.iter().any(|&(fi, _)| fills.get(fi).is_some_and(|f| glyph_orders.contains(&f.order)));
@@ -5873,7 +5972,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Initial scale detection — may be overridden after SHX text recovery if a DO NOT SCALE
     // note only exists in stroked (hidden) text.
     let do_not_scale_visible = if opts.recover_text { has_do_not_scale_note(&out.texts) } else { false };
-    let mut best_note = if opts.scale.is_some() {
+    let mut best_note = if opts.scale.is_some() || !opts.scale_notes {
         None
     } else if opts.recover_text {
         detect_scale_note(&out.texts, sheet)
@@ -6275,7 +6374,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             stats.insert("outlined lettering lone glyphs and bar shapes dropped".into(), outlined.plain);
         }
         if outlined.capped {
-            notes.push(format!("outlined lettering: more than {MAX_OUTLINE_GLYPHS} glyph-sized outline pieces; the rest were not read"));
+            notes.push(format!(
+                "outlined lettering: more than {MAX_OUTLINE_GLYPHS} glyph-sized outline pieces not under real text; the rest were not read"
+            ));
         }
         if !outlined.texts.is_empty() {
             let confirmed = outlined.texts.iter().filter(|t| !t.unconfirmed).count();
@@ -6296,7 +6397,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         // A scale note drawn as lettering (strokes or outlines) is the sheet's scale when its
         // text gave none: the lettering is read from the same shapes the sheet prints.
-        if opts.scale.is_none() && best_note.is_none() {
+        if opts.scale.is_none() && opts.scale_notes && best_note.is_none() {
             let readings: Vec<NoteText> = recovered_texts.iter().map(NoteText::of_reading).collect();
             let page: Vec<NoteText> = texts.iter().map(NoteText::of_text).collect();
             if let Some((k, note)) = detect_scale_note_in(&readings, &page, sheet) {
@@ -7615,8 +7716,8 @@ fn write_images(_folder: &str, _images: &[(String, std::sync::Arc<cadaddy_render
 
 /// PDFIMPORT's JSON options → the converted page and a report: `{page?, scale?: number | "auto",
 /// layers?: "pdf" | "pen" | "object", whiteFills?, text?, join?, layout?, markups?, images?,
-/// imageFolder?, imagePrefix?, fills?: "each" | "merge"}` (`merge`: small fills as one hatch per
-/// layer and colour, [`PdfOptions::merge_small_fills`]). Images are written as PNG files in `imageFolder` (created
+/// imageFolder?, imagePrefix?, fills?: "each" | "merge", scaleNotes?}` (`merge`: small fills as one hatch per
+/// layer and colour, [`PdfOptions::merge_small_fills`]; `scaleNotes: false`, [`PdfOptions::scale_notes`]). Images are written as PNG files in `imageFolder` (created
 /// when missing) and their pixels handed to the image cache, so they show at once.
 pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Drawing, serde_json::Value), String> {
     use serde_json::{Value, json};
@@ -7654,6 +7755,7 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
     // (still reported do_not_scale + needs_registration) so it reads at building size.
     o.e_sheet_at_note_scale = true;
     o.merge_small_fills = p.get("fills").and_then(Value::as_str).is_some_and(|f| f.eq_ignore_ascii_case("merge"));
+    o.scale_notes = flag("scaleNotes", true);
     o.image_folder = p.get("imageFolder").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
     if let Some(prefix) = p.get("imagePrefix").and_then(Value::as_str) {
         let clean: String = prefix.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
@@ -8737,6 +8839,39 @@ mod tests {
         let r =
             read_page(&[dimension((100.0, 100.0), 180.0, "20'-0\"", false), "BT /F1 8 Tf 600 60 Td (SCALE: 1/4\" = 1'-0\") Tj ET".into()].concat());
         assert_eq!(r.scale, 48.0, "{}", r.scale_source);
+    }
+
+    /// Q6518: a page read without its scale notes (a plan whose only notes are its details') is
+    /// scaled from its dimension strings, else left at paper size, whatever its notes say.
+    #[test]
+    fn a_page_read_without_its_scale_notes_is_scaled_from_its_dimension_strings() {
+        let note = "BT /F1 8 Tf 600 60 Td (SCALE: 3\" = 1'-0\") Tj ET";
+        // the dimension strings of the sheet scaled from them above (96x)
+        let dims = [
+            dimension((100.0, 100.0), 180.0, "20'-0\"", false),
+            dimension((100.0, 200.0), 112.5, "12'-6\"", false),
+            dimension((400.0, 100.0), 72.0, "8'-0\"", true),
+            dimension((400.0, 300.0), 100.0, "40'-0\"", false),
+        ]
+        .concat();
+        let without = PdfOptions { scale_notes: false, ..PdfOptions::default() };
+        let read_with = |content: &str, o: &PdfOptions| match read(&pdf_with(content.as_bytes()), o) {
+            Ok(r) => r,
+            Err(e) => panic!("{e}"),
+        };
+        // with its notes: the note's 4x
+        assert_eq!(read_page(&[dims.as_str(), note].concat()).scale, 4.0);
+        // without: its dimension strings' 96x
+        let r = read_with(&[dims.as_str(), note].concat(), &without);
+        assert_eq!(r.scale, 96.0, "{}", r.scale_source);
+        assert!(r.scale_source.starts_with("dimension strings"), "{}", r.scale_source);
+        // without, and no dimension strings: paper size
+        let r = read_with(note, &without);
+        assert_eq!(r.scale, 1.0, "{}", r.scale_source);
+        assert!(r.scale_source.starts_with("none"), "{}", r.scale_source);
+        // a scale given still stands
+        let r = read_with(note, &PdfOptions { scale: Some(48.0), ..without });
+        assert_eq!(r.scale, 48.0);
     }
 
     #[test]

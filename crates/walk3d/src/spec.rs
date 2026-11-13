@@ -167,6 +167,11 @@ pub struct BuildingSpec {
     /// Walls whose type (and height) the plans give: the wall built on each centreline gets them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub walls: Vec<WallMark>,
+    /// Built walls moved, resized or deleted and walls added (Q6613): by `wall.edit`, or by a
+    /// change to [`Self::walls`] (an entry moved, removed or added). Every build honours them,
+    /// in the order made, whatever the plan's line pairs build there ([`crate::walledits`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wall_edits: Vec<crate::walledits::WallEdit>,
     /// Gaps and conflicts in the prints the readers found (with the sheets involved), and their
     /// status and answers: see [`crate::rfi`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1412,6 +1417,15 @@ pub struct Mep {
     /// and panels'), as printed: what the model's load calculation is compared with.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub load_summaries: Vec<LoadSummary>,
+    /// The wire-length tables the documents print (each size good to a length, by breaker and
+    /// voltage when the table says), as read when the job read its pages: the drawing may not
+    /// hold the sheet they are on, and the router and Validate read them by one rule.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wire_length_tables: Vec<WireLengthTable>,
+    /// The job's pages looked at for them and when (empty: never looked, a model built before
+    /// the job kept them).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub wire_length_read: String,
     /// The occupancy groups the code sheet names (`R-1, B`) and where they were read (`G-001:
     /// GROUP R-1 OCCUPANCY`): the load calculation's demand rules.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -1793,6 +1807,8 @@ impl Mep {
             && self.feeders.is_empty()
             && self.panel_schedules.is_empty()
             && self.load_summaries.is_empty()
+            && self.wire_length_tables.is_empty()
+            && self.wire_length_read.is_empty()
             && self.occupancy.is_empty()
             && self.equipment_electrical.is_empty()
             && self.fixture_schedule.is_empty()
@@ -2190,6 +2206,30 @@ pub struct ExtraCircuit {
     pub volts: Option<f64>,
     pub amps: Option<f64>,
     pub qty: u32,
+}
+
+/// A wire-length table as printed: the sheet it is on, its title and its cells.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WireLengthTable {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub sheet: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    pub bands: Vec<WireLengthBand>,
+}
+
+/// One cell of a wire-length table: `size` (`12`, `1/0`) is good to `max_ft`, for a breaker of
+/// `amps` at `volts` when the table says.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WireLengthBand {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volts: Option<f64>,
+    pub size: String,
+    pub max_ft: f64,
 }
 
 /// A panel's schedule as printed (a panel the plans may not place, or a typical one every guest
@@ -3263,6 +3303,7 @@ impl BuildingSpec {
             columns: Vec::new(),
             schedule: Schedule::default(),
             walls: Vec::new(),
+            wall_edits: Vec::new(),
             rfis: Vec::new(),
             procurement: None,
             prints: None,

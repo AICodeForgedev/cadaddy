@@ -1283,6 +1283,28 @@ pub(crate) fn far_off(off: f64, span: f64) -> bool {
     off.is_finite() && span.is_finite() && span > 0.0 && off > FAR_SPANS * span
 }
 
+/// Each level's footprint where the plans draw it (its floors, its shell, its corridors and
+/// stairs), for asking whether a point is outside the building (Q6546: an outside wall has no
+/// floor past it).
+pub(crate) struct Footprints(HashMap<String, Footprint>);
+
+impl Footprints {
+    pub(crate) fn of(d: &Drawing, sp: &BuildingSpec) -> Self {
+        Self(footprints(d, sp))
+    }
+
+    /// Whether `level` has a footprint.
+    pub(crate) fn has(&self, level: &str) -> bool {
+        self.0.get(&level.to_ascii_lowercase()).is_some_and(|f| !f.is_empty())
+    }
+
+    /// How far `p` (drawing units, on the plans) is outside `level`'s footprint (0 inside); None
+    /// when the level has none.
+    pub(crate) fn outside(&self, level: &str, p: Vec2) -> Option<f64> {
+        self.0.get(&level.to_ascii_lowercase()).filter(|f| !f.is_empty()).map(|f| f.outside(p))
+    }
+}
+
 /// Each level's footprint, by its name in lower case.
 fn footprints(d: &Drawing, sp: &BuildingSpec) -> HashMap<String, Footprint> {
     let mut out: HashMap<String, Footprint> = HashMap::new();
@@ -1726,7 +1748,14 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             })
             .flatten();
         let mount = if at_equipment.is_some() { Mount::Ceiling } else { mount };
-        let floor = level.elevation_ft * upf;
+        // A hoistway's device (Q6615): its height from the pit floor or the top landing, a
+        // ceiling-mounted one at the pit's top or the hoistway's ceiling.
+        let shaft = field(t, "hoistway_part").and_then(|_| {
+            let floor_ft = field(t, "mount_floor_ft")?.parse::<f64>().ok().filter(|v| v.is_finite())?;
+            let ceiling_in = field(t, "hoistway_ceiling_in").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0);
+            Some((floor_ft, ceiling_in, field(t, "hoistway_basis").unwrap_or_default()))
+        });
+        let floor = shaft.as_ref().map_or(level.elevation_ft, |s| s.0) * upf;
         let height: Chosen = match mount {
             Mount::Ceiling => {
                 // A printed height of 7' and up (a wall-hung detector's, a high fixture's) first;
@@ -1804,6 +1833,12 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
                 })
             }
         };
+        // A hoistway's ceiling-mounted device: at the pit's top or under the hoistway's ceiling.
+        let height =
+            match shaft.as_ref().filter(|_| mount == Mount::Ceiling && at_equipment.is_none()).and_then(|(_, c, basis)| c.map(|c| (c, basis))) {
+                Some((inches, basis)) => Chosen { inches, from: "hoistway", source: SourceKind::Rule, doc: basis.clone(), datum: Datum::Top },
+                None => height,
+            };
         // A pole light's height is its pole's top (the site work step's, as its schedule and the
         // rules give it), above any storey's.
         let height = match site.as_ref().and_then(|_| {
@@ -2139,7 +2174,28 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         if let Some(ifc) = field(t, "ifc_class") {
             store.set("ifc_class", Prop::new(ifc, what_src));
         }
-        store.set("offset", Prop::new(round2(height.inches / 12.0), hp.source.clone()).with_unit("ft"));
+        // Above its level's floor: a hoistway device's datum (the pit floor) may be below it.
+        let datum_ft = shaft.as_ref().map_or(0.0, |s| s.0 - level.elevation_ft);
+        store.set("offset", Prop::new(round2(datum_ft + height.inches / 12.0), hp.source.clone()).with_unit("ft"));
+        // In a hoistway's pit or at its top (Q6615): where, the basis, and where it was read.
+        if let Some((floor_ft, _, basis)) = &shaft {
+            let rule = Source::from_doc(SourceKind::Rule, basis);
+            if let Some(part) = field(t, "hoistway_part") {
+                store.set("hoistway_part", Prop::new(part, rule.clone()));
+            }
+            store.set(
+                "mount_floor",
+                Prop::new(round2(*floor_ft), rule.clone()).with_unit("ft").with_note("the elevation its height is measured from"),
+            );
+            store.set("position_provenance", Prop::new("derived", rule.clone()));
+            store.set("position_basis", Prop::new(basis.clone(), rule.clone()));
+            if let Some(v) = field(t, "hoistway_view") {
+                store.set("hoistway_view", Prop::new(v.clone(), Source::print(&v, None)));
+            }
+            if let Some(design) = field(t, "design_location") {
+                store.set("design_location", Prop::new(design, Source::from_doc(SourceKind::Print, "where its view registered (level, feet)")));
+            }
+        }
         if !sheet.is_empty() {
             store.set("sheet", Prop::new(sheet.clone(), Source::print(&sheet, at)));
         }
@@ -2370,7 +2426,7 @@ fn wall_pieces(d: &Drawing, on_plans: bool) -> Vec<WallPiece> {
 /// A wall mesh's pieces: each flat footprint once (a box's bottom and top are one), from its
 /// lowest face to its highest; a mesh with no flat faces is one piece, its hull. The boxes over an
 /// opening start at its head.
-fn mesh_pieces(m: &cadaddy_doc::Mesh) -> Vec<(Vec<Vec2>, [f64; 2])> {
+pub(crate) fn mesh_pieces(m: &cadaddy_doc::Mesh) -> Vec<(Vec<Vec2>, [f64; 2])> {
     let all = m.vertices.iter().fold([f64::INFINITY, f64::NEG_INFINITY], |z, v| [z[0].min(v.z), z[1].max(v.z)]);
     let tol = ((all[1] - all[0]).abs() * 1e-6).max(1e-9);
     let mut at: BTreeMap<Vec<(i64, i64)>, usize> = BTreeMap::new();
@@ -3103,6 +3159,29 @@ impl TextGrid {
         TextGrid { cell, cells, texts }
     }
 
+    /// The texts within `r` of `p` by their index in `texts`, with how far each is.
+    fn near_ids(&self, p: Vec2, r: f64) -> Vec<(usize, f64)> {
+        if !(p.is_finite() && r.is_finite() && r > 0.0) {
+            return Vec::new();
+        }
+        let n = (r / self.cell).ceil() as i64;
+        let (cx, cy) = ((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64);
+        let mut out = Vec::new();
+        for gx in cx - n..=cx + n {
+            for gy in cy - n..=cy + n {
+                for i in self.cells.get(&(gx, gy)).into_iter().flatten() {
+                    if let Some((_, q, _)) = self.texts.get(*i) {
+                        let dd = q.dist(p);
+                        if dd <= r {
+                            out.push((*i, dd));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The texts within `r` of `p`, nearest first.
     fn near(&self, p: Vec2, r: f64) -> Vec<(&str, Vec2, f64)> {
         if !(p.is_finite() && r.is_finite() && r > 0.0) {
@@ -3626,6 +3705,9 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     // schedule row was found for it.
     let mut doors: Vec<DoorSeen> = Vec::new();
     let door_rows = sp.schedule.rows.iter().filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door).count();
+    // The number printed at each door and its door schedule row, each tag given to one door
+    // (Q6454: a tag names one opening).
+    let door_tags = DoorTags::assign(d, &work, &grid, &sp.schedule, upf);
     let unit_rooms: BTreeSet<String> = sp
         .unit_instances
         .as_array()
@@ -3874,16 +3956,15 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
             }
             "door" => {
                 let Some((b, z0, z1)) = ext else { continue };
-                // The number printed at the opening (on the plan: the build moved stacked levels).
-                let at_plan = b.center() - shift;
+                // The number printed at the opening (on the plan: the build moved stacked levels)
+                // and its door schedule row (the printed number's, else the tag's), as assigned.
                 // A door built at its door schedule tag where the plan draws no opening (Q6609)
                 // is that tag's: its mark is its number, whatever else is printed near it.
                 let at_tag = made(e, "mark").filter(|_| made(e, "found").is_some_and(|f| f.starts_with("schedule_tag")));
-                let printed = match &at_tag {
-                    Some(_) => None,
-                    None => grid.near(at_plan, DOOR_TAG_FT * upf).into_iter().find(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t)),
-                };
-                if let Some((t, q, _)) = &printed {
+                let assigned = door_tags.get(h);
+                let printed = assigned.and_then(|a| a.printed.clone());
+                let row = assigned.and_then(|a| a.row);
+                if let Some((t, q)) = &printed {
                     put(
                         &mut store,
                         "number",
@@ -3892,21 +3973,6 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         tally,
                     );
                 }
-                // Its door schedule row: the printed number's, else the nearest schedule tag's.
-                let is_door_row = |m: &str| sp.schedule.row(m).filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door);
-                let by_number = printed.as_ref().and_then(|(t, _, _)| is_door_row(t));
-                let by_number = by_number.or_else(|| at_tag.as_deref().and_then(is_door_row));
-                let by_tag = || {
-                    sp.schedule
-                        .tags
-                        .iter()
-                        .filter(|t| is_door_row(&t.mark).is_some())
-                        .map(|t| (t, Vec2::new(t.at[0], t.at[1]).dist(at_plan)))
-                        .filter(|(_, dd)| dd.is_finite() && *dd <= SCHEDULE_TAG_FT * upf)
-                        .min_by(|a, b| a.1.total_cmp(&b.1))
-                        .and_then(|(t, _)| is_door_row(&t.mark).map(|r| (r, Vec2::new(t.at[0], t.at[1]))))
-                };
-                let row = by_number.map(|r| (r, printed.as_ref().map_or(at_plan, |(_, q, _)| *q))).or_else(by_tag);
                 let numbered = printed.is_some() || row.is_some();
                 if let Some((r, q)) = row {
                     let src = || Source::from_doc(SourceKind::Schedule, "door schedule");
@@ -4173,9 +4239,23 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         // Its room: the one it stands in; set in or through a wall (a through-wall
                         // unit, its middle in the wall), the room on its service face (Q6586).
                         store.remove(ROOM_REVIEW);
+                        // (A through-wall unit's sleeve or grille, Q6546, inside its wall: the room past the
+                        // face its build set it toward.)
+                        let toward = super::bimlook::made_prop(e, "HOST_FACE").and_then(|t| {
+                            let (a, c) = t.split_once(',')?;
+                            let v = Vec2::new(a.trim().parse().ok()?, c.trim().parse().ok()?);
+                            (v.is_finite() && v.len() > 1e-9).then_some(v)
+                        });
                         let room = room_at(&rooms, lvl, b.center())
                             .map(|r| (r, None))
-                            .or_else(|| room_through_wall(&rooms, lvl, &walls, &b).map(|r| (r, Some(SERVICE_FACE_NOTE))));
+                            .or_else(|| room_through_wall(&rooms, lvl, &walls, &b).map(|r| (r, Some(SERVICE_FACE_NOTE))))
+                            .or_else(|| {
+                                let o = toward?;
+                                [1.0, 2.0]
+                                    .into_iter()
+                                    .find_map(|k| room_at(&rooms, lvl, b.center() + o * (k * upf)))
+                                    .map(|r| (r, Some(SERVICE_FACE_NOTE)))
+                            });
                         match room {
                             Some((r, note)) => {
                                 let mut p = Prop::new(r.label.clone(), Source::computed());
@@ -4523,6 +4603,145 @@ impl LuminaireRows {
             "review_items_added": rfis,
         })
     }
+}
+
+/// The number printed at each door and its door schedule row (with where its tag is), found
+/// once for all doors: each printed number and each schedule tag names one door, the nearest
+/// (Q6454). A tag of another level names none of this level's doors.
+struct DoorTags<'a> {
+    by_door: HashMap<Handle, DoorTag<'a>>,
+}
+
+#[derive(Default)]
+struct DoorTag<'a> {
+    printed: Option<(String, Vec2)>,
+    row: Option<(&'a cadaddy_walk3d::ScheduleRow, Vec2)>,
+}
+
+impl<'a> DoorTags<'a> {
+    /// The doors of `work` (by their plan middles: the build moved stacked levels), the plan's
+    /// texts (`grid`) and the door schedule (`schedule`; `upf` units per foot).
+    fn assign(d: &Drawing, work: &[(Handle, String)], grid: &TextGrid, schedule: &'a cadaddy_walk3d::Schedule, upf: f64) -> Self {
+        // The door rows by mark (the first of a mark), so a tag's row is one look-up.
+        let mut rows: HashMap<String, &'a cadaddy_walk3d::ScheduleRow> = HashMap::new();
+        for r in schedule.rows.iter().filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door) {
+            rows.entry(r.mark.trim().to_ascii_uppercase()).or_insert(r);
+        }
+        let row_of = |m: &str| rows.get(&m.trim().to_ascii_uppercase()).copied();
+        // A door built at its door schedule tag (Q6609) carries that tag's mark: its number,
+        // whatever else is printed near it.
+        let doors: Vec<(Handle, Vec2, Option<String>, Option<String>)> = work
+            .iter()
+            .filter(|(_, k)| k == "door")
+            .filter_map(|(h, _)| {
+                let e = d.model.get(*h)?;
+                let (b, _, _) = extent(d, e)?;
+                let at = b.center() - super::bspec::stacked_by(e);
+                let at_tag = made(e, "mark").filter(|_| made(e, "found").is_some_and(|f| f.starts_with("schedule_tag")));
+                at.is_finite().then(|| (*h, at, super::bspec::made_level(e), at_tag))
+            })
+            .collect();
+        // The printed numbers: each to its nearest door within reach (not a door built at its tag).
+        let mut pairs: Vec<(usize, usize, f64)> = Vec::new();
+        for (i, (_, at, _, at_tag)) in doors.iter().enumerate() {
+            if at_tag.is_some() {
+                continue;
+            }
+            for (j, dd) in grid.near_ids(*at, DOOR_TAG_FT * upf) {
+                if grid.texts.get(j).is_some_and(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t)) {
+                    pairs.push((i, j, dd));
+                }
+            }
+        }
+        let mut by_door: HashMap<Handle, DoorTag<'a>> = HashMap::new();
+        for (i, j) in nearest_pairs(pairs) {
+            if let (Some((h, _, _, _)), Some((t, q, _))) = (doors.get(i), grid.texts.get(j)) {
+                by_door.entry(*h).or_default().printed = Some((t.clone(), *q));
+            }
+        }
+        // The schedule's tags with a door row, in cells of the tag reach.
+        let reach = SCHEDULE_TAG_FT * upf;
+        let tags: Vec<(&cadaddy_walk3d::OpeningTag, &'a cadaddy_walk3d::ScheduleRow, Vec2)> =
+            schedule.tags.iter().filter_map(|t| Some((t, row_of(&t.mark)?, Vec2::new(t.at[0], t.at[1])))).filter(|(_, _, p)| p.is_finite()).collect();
+        let cell = |p: Vec2| ((p.x / reach).floor() as i64, (p.y / reach).floor() as i64);
+        let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        for (k, (_, _, p)) in tags.iter().enumerate() {
+            cells.entry(cell(*p)).or_default().push(k);
+        }
+        let near_tags = |at: Vec2| {
+            let (cx, cy) = cell(at);
+            (cx - 1..=cx + 1)
+                .flat_map(move |x| (cy - 1..=cy + 1).map(move |y| (x, y)))
+                .flat_map(|c| cells.get(&c).into_iter().flatten().copied())
+                .filter_map(|k| Some((k, tags.get(k)?)))
+                .map(move |(k, (t, r, p))| (k, *t, *r, p.dist(at)))
+                .filter(|(_, _, _, dd)| dd.is_finite() && *dd <= reach)
+                .collect::<Vec<_>>()
+        };
+        let same_level =
+            |t: &cadaddy_walk3d::OpeningTag, l: Option<&str>| t.level.as_deref().zip(l).is_none_or(|(a, b)| a.trim().eq_ignore_ascii_case(b.trim()));
+        // A printed number with a door row is that row (a door built at its tag: its mark's); it
+        // takes its own tag (the nearest of its mark), so no other door takes the tag again.
+        let mut used: BTreeSet<usize> = BTreeSet::new();
+        let mut open: Vec<usize> = Vec::new();
+        for (i, (h, at, level, at_tag)) in doors.iter().enumerate() {
+            let by_number = match at_tag {
+                Some(m) => row_of(m).map(|r| (r, *at)),
+                None => by_door.get(h).and_then(|x| x.printed.as_ref()).and_then(|(t, q)| Some((row_of(t)?, *q))),
+            };
+            let Some((r, q)) = by_number else {
+                open.push(i);
+                continue;
+            };
+            let own = near_tags(*at)
+                .into_iter()
+                .filter(|(k, tag, _, _)| {
+                    !used.contains(k) && same_level(tag, level.as_deref()) && tag.mark.trim().eq_ignore_ascii_case(r.mark.trim())
+                })
+                .min_by(|a, b| a.3.total_cmp(&b.3));
+            if let Some((k, _, _, _)) = own {
+                used.insert(k);
+            }
+            by_door.entry(*h).or_default().row = Some((r, q));
+        }
+        // The other doors: each tag left to its nearest one of them on its level.
+        let mut pairs: Vec<(usize, usize, f64)> = Vec::new();
+        for i in open {
+            let Some((_, at, level, _)) = doors.get(i) else { continue };
+            for (k, tag, _, dd) in near_tags(*at) {
+                if !used.contains(&k) && same_level(tag, level.as_deref()) {
+                    pairs.push((i, k, dd));
+                }
+            }
+        }
+        for (i, k) in nearest_pairs(pairs) {
+            if let (Some((h, _, _, _)), Some((_, r, p))) = (doors.get(i), tags.get(k)) {
+                by_door.entry(*h).or_default().row = Some((*r, *p));
+            }
+        }
+        DoorTags { by_door }
+    }
+
+    fn get(&self, h: &Handle) -> Option<&DoorTag<'a>> {
+        self.by_door.get(h)
+    }
+}
+
+/// One-to-one by distance: of the pairs `(a, b, distance)`, the nearest first, each `a` and each
+/// `b` in one pair at most (ties by `a`, then `b`).
+fn nearest_pairs(mut pairs: Vec<(usize, usize, f64)>) -> Vec<(usize, usize)> {
+    pairs.retain(|p| p.2.is_finite());
+    pairs.sort_by(|x, y| x.2.total_cmp(&y.2).then(x.0.cmp(&y.0)).then(x.1.cmp(&y.1)));
+    let (mut a_used, mut b_used) = (BTreeSet::new(), BTreeSet::new());
+    let mut out = Vec::new();
+    for (a, b, _) in pairs {
+        if !a_used.contains(&a) && !b_used.contains(&b) {
+            a_used.insert(a);
+            b_used.insert(b);
+            out.push((a, b));
+        }
+    }
+    out
 }
 
 /// A built door as the fill saw it.
@@ -4966,6 +5185,78 @@ mod tests {
         assert_eq!(j["unregistered_devices"], json!(5), "{j:#}");
         // The far rule itself: more than twice the building's width off.
         assert!(far_off(1_900.0, 80.0) && !far_off(150.0, 80.0) && !far_off(f64::NAN, 80.0) && !far_off(500.0, 0.0));
+    }
+
+    /// Q6615: a hoistway's devices stand by its datum, not their level's floor: a pit receptacle
+    /// at its usual height above the pit floor (below the lowest landing), the pit's light at the
+    /// pit's top, the top of the hoistway's light at the hoistway's ceiling over the top landing;
+    /// where they were read and why kept on them.
+    #[test]
+    fn a_hoistways_devices_stand_on_the_pit_floor_or_under_the_hoistways_ceiling() {
+        let v = |x: &str| json!({"value": x, "source": "rule"});
+        let dev = |id: &str, kind: &str, mark: &str, level: &str, at: [f64; 2], floor: &str, ceiling: &str, part: &str| {
+            let mut fields = json!({
+                "symbol": v("1"), "type": v(mark), "hoistway_part": v(part), "mount_floor_ft": v(floor),
+                "hoistway_ceiling_in": v(ceiling), "hoistway_basis": v("in the pit of hoistway B"),
+                "design_location": v("L2 at 9.00, 10.00 ft"),
+            });
+            if kind == "luminaire" {
+                fields["mount"] = json!({"value": "ceiling", "source": "plan"});
+            }
+            json!({"id": id, "kind": kind, "level": level, "at_ft": at, "fields": fields})
+        };
+        let sp: BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [
+                {"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0},
+                {"name": "L3", "elevation_ft": 20.0, "height_ft": 10.0, "ceiling_ft": 9.0}
+            ],
+            "shells": {"L1": [[0.0, 0.0, 480.0, 480.0]], "L3": [[0.0, 0.0, 480.0, 480.0]]},
+            "tags": [
+                dev("device:L1:9.0,10.0", "receptacle", "GFCI", "L1", [9.0, 10.0], "-5", "60", "pit"),
+                dev("device:L1:12.0,12.0", "luminaire", "D", "L1", [12.0, 12.0], "-5", "60", "pit"),
+                dev("device:L3:12.0,12.0", "luminaire", "D", "L3", [12.0, 12.0], "20", "156", "top"),
+            ],
+        }))
+        .unwrap();
+        let mut d = Drawing::new_imperial();
+        let r = build_devices(&mut d, &sp);
+        assert_eq!(r.built, 3, "{:#}", r.to_json());
+        let at = |x: f64, y: f64| {
+            d.model
+                .iter()
+                .filter_map(|e| extent(&d, e).map(|(b, z0, z1)| (b, z0, z1, e.handle)))
+                .find(|(b, ..)| (b.center().x - x * 12.0).abs() < 6.0 && (b.center().y - y * 12.0).abs() < 6.0)
+        };
+        let lvl = |h: Handle| d.model.get(h).and_then(|e| super::super::bspec::made_level(e));
+        let props_of = |h: Handle| d.model.get(h).map(|e| props::read(&e.common.xdata)).unwrap_or_default();
+        // The pit receptacle: its middle 18" over the pit floor, 5 ft under the landing.
+        let (_, z0, z1, h) = at(9.0, 10.0).unwrap_or_else(|| panic!("pit receptacle not built"));
+        assert!(((z0 + z1) / 2.0 - (-60.0 + 18.0)).abs() < 1.0, "{z0} {z1}");
+        let ps = props_of(h);
+        assert_eq!(ps.get("offset").and_then(|p| p.value.as_f64()), Some(-3.5), "{ps:?}");
+        assert_eq!(ps.get("hoistway_part").map(|p| p.text()).as_deref(), Some("pit"));
+        assert_eq!(ps.get("position_provenance").map(|p| p.text()).as_deref(), Some("derived"));
+        assert!(ps.get("design_location").is_some_and(|p| p.text().starts_with("L2")), "{ps:?}");
+        // The pit's light: its top at the pit's top (the landing).
+        let pit_light = d
+            .model
+            .iter()
+            .filter(|e| lvl(e.handle).as_deref() == Some("L1"))
+            .filter_map(|e| extent(&d, e))
+            .find(|(b, ..)| (b.center().x - 144.0).abs() < 6.0)
+            .unwrap_or_else(|| panic!("pit light not built"));
+        assert!(pit_light.2.abs() < 1.0, "{pit_light:?}");
+        // The top's light: under the hoistway's ceiling, 13 ft over the top landing.
+        let top = d
+            .model
+            .iter()
+            .filter(|e| lvl(e.handle).as_deref() == Some("L3"))
+            .filter_map(|e| extent(&d, e).map(|(_, z0, z1)| (z0, z1, e.handle)))
+            .next()
+            .unwrap_or_else(|| panic!("top light not built"));
+        assert!((top.1 - (240.0 + 156.0)).abs() < 1.0, "{top:?}");
+        assert_eq!(props_of(top.2).get("mount_height_from").map(|p| p.text()).as_deref(), Some("hoistway"));
     }
 
     /// fix-objects-far-outside-building-rw1: the only devices a sheet lists by number on a level
