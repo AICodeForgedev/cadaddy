@@ -61,6 +61,7 @@ mod rooms;
 mod walls;
 
 pub(crate) use docs::Fact;
+pub(crate) use walls::studs_of;
 
 /// The rules data.
 const RULES: &str = include_str!("tradeatoms.json");
