@@ -3687,6 +3687,32 @@ fn device_census(
             l.rows.extend(schedule.rows);
         }
     }
+    // A legend row that keys a line (`S` SANITARY SEWER, `UGE` ... ELECTRIC LINE) lists no device
+    // type, and a civil or landscape sheet's legend that lists no device (its line types, its
+    // plants) speaks for no sheet: an electrical plan's `S` is no sewer (Q6596). What each
+    // sheet's own legend keys instead, by mark: the row's words, and whether it keys a line.
+    let site: Vec<bool> = (0..groups).map(|g| spans.get(g).is_some_and(|sp| site_sheet(job, &sp.sheet))).collect();
+    let mut keyed: Vec<BTreeMap<String, (String, bool)>> = vec![BTreeMap::new(); groups];
+    for (g, l) in legends.iter_mut().enumerate() {
+        let site_only = site.get(g).copied().unwrap_or(false) && !device_legend(l);
+        let keys: BTreeMap<String, (String, bool)> = l
+            .rows
+            .iter()
+            .filter_map(|(k, r)| {
+                let line = line_key_row(r);
+                (line || site_only).then(|| (k.trim().to_ascii_uppercase(), (r.description.trim().to_string(), line)))
+            })
+            .collect();
+        l.types.retain(|t| !keys.contains_key(&t.trim().to_ascii_uppercase()));
+        l.rows.retain(|t, _| !keys.contains_key(&t.trim().to_ascii_uppercase()));
+        if site_only {
+            l.types.clear();
+        }
+        if let Some(k) = keyed.get_mut(g) {
+            *k = keys;
+        }
+    }
+    c.legend_types = legends.iter().flat_map(|l| l.types.iter().cloned()).collect();
     // The legends that speak for a sheet besides its own: on an electrical sheet every device
     // legend of the set (its legend sheet, the reflected ceiling plans' fixture legends); on
     // another trade's sheet that trade's (a mechanical plan's marks are the mechanical legend's,
@@ -3842,10 +3868,22 @@ fn device_census(
         let legend = legends.get(g).unwrap_or(&none);
         let sheet_of_g = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let fire_alarm_g = fire_alarm.contains(&sheet_of_g.split('/').next().unwrap_or(&sheet_of_g).trim().to_ascii_uppercase());
-        if !device_trade(&sheet_of_g) && !fire_alarm_g && legend.regions.is_empty() {
-            *c.not_device.entry("on another trade's sheet (no device legend of its own)").or_default() += syms.len();
-            for (_, _, h, _) in syms {
-                c.fates.push((h.0, MarkFate::not_object("on another trade's sheet (no device legend of its own)")));
+        // A civil or landscape sheet's own legend must list devices for its marks to be any
+        // (an electrical site plan's does); another trade's sheet any legend of its own.
+        let site_g = site.get(g).copied().unwrap_or(false);
+        let keys = keyed.get(g);
+        let own_devices = if site_g { device_legend(legend) } else { !legend.regions.is_empty() };
+        if (site_g || !device_trade(&sheet_of_g)) && !fire_alarm_g && !own_devices {
+            let why = if site_g { SITE_MARK_WHY } else { "on another trade's sheet (no device legend of its own)" };
+            *c.not_device.entry(why).or_default() += syms.len();
+            for (tag, _, h, _) in syms {
+                // Its legend row says which line or plant it is.
+                let row = keys.and_then(|k| k.get(&tag.trim().to_ascii_uppercase()));
+                let said = match row.filter(|(what, _)| site_g && !what.is_empty()) {
+                    Some((what, _)) => format!("{why}: its legend's {} {what}", tag.trim()),
+                    None => why.to_string(),
+                };
+                c.fates.push((h.0, MarkFate::not_object(&said)));
             }
             continue;
         }
@@ -4074,6 +4112,18 @@ fn device_census(
             } else if refused.contains(tag.as_str()) {
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
                 c.fates.push((h.0, MarkFate::not_object("answered: not a device")));
+            } else if let Some((what, _)) = keys.and_then(|k| k.get(&tag.trim().to_ascii_uppercase())).filter(|(_, line)| *line) {
+                // Its own sheet's legend keys the mark as a line: the line's label (Q6596).
+                *c.not_device.entry("a line label (its legend keys a line)").or_default() += 1;
+                c.fates.push((h.0, MarkFate::not_object(&format!("a line label: its legend keys {} as a line ({what})", tag.trim()))));
+            } else if site_g && !fire_alarm_sheet && !listed.contains(tag.trim()) && !learned.contains(tag.trim()) {
+                // On a civil or landscape sheet only its legends' marks are devices: the marks
+                // every electrical set uses (`S`, `T`, `TV`) letter lines and key plants there.
+                *c.not_device.entry("a line label or plant key on a civil or landscape sheet").or_default() += 1;
+                c.fates.push((
+                    h.0,
+                    MarkFate::not_object("a line label or plant key on a civil or landscape sheet: a mark its device legend doesn't list"),
+                ));
             } else {
                 // A mark with its subscript is the device its base mark says.
                 let verdict = if compound.contains_key(h) {
@@ -18250,6 +18300,63 @@ const NEAR_TEXT_LEN: usize = 160;
 /// the row's text ([`super::inventory::legend_kind`]).
 pub(crate) fn kind_of_row(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Option<String> {
     row_kind(row, plumbing).map(|(k, _)| k.to_string()).or_else(|| super::inventory::legend_kind(&row.description))
+}
+
+/// Why a mark on a civil or landscape sheet with no device legend of its own is no device
+/// (Q6596): the sheet letters its lines and keys its plants with marks a device shares.
+pub(crate) const SITE_MARK_WHY: &str = "a line label or plant key on a civil or landscape sheet (no device legend of its own)";
+
+/// Whether a legend row keys a line, not a device (Q6596): a utility, grading or boundary line's
+/// key (`S` SANITARY SEWER, `UGE` UNDERGROUND ELECTRIC LINE). Its description has a word of
+/// `devices.line_key_words`, none of `devices.line_key_device_phrases` (a LINE VOLTAGE dimmer),
+/// and names no device, or ends with the line (a TELEPHONE LINE is a line, a LINE VOLTAGE
+/// THERMOSTAT a thermostat).
+pub(crate) fn line_key_row(row: &cadaddy_mepfix::device_types::LegendRow) -> bool {
+    let up = row.description.to_ascii_uppercase();
+    if cadaddy_mepfix::wordrules::words("devices.line_key_device_phrases").iter().any(|p| up.contains(p)) {
+        return false;
+    }
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let line = |w: &&str| cadaddy_mepfix::wordrules::words("devices.line_key_words").contains(w);
+    words.iter().any(line) && (words.last().is_some_and(line) || row_kind(row, false).is_none())
+}
+
+/// Whether a sheet's own legends list devices (Q6596): a row (not a line's key) that names a
+/// device or sits in a device schedule. A civil sheet's LEGEND of its line types or a landscape
+/// sheet's of its plants lists none.
+pub(crate) fn device_legend(legend: &cadaddy_mepfix::device_types::Legend) -> bool {
+    legend.rows.values().any(|r| !line_key_row(r) && row_kind(r, false).is_some())
+}
+
+/// Whether a sheet of `discipline` titled `title` is a civil, landscape or site sheet (Q6596):
+/// its discipline is a site one, or its title a site sheet's and its discipline draws no devices
+/// (an ELECTRICAL SITE PLAN is the electrical trade's).
+pub(crate) fn site_trade(discipline: &str, title: &str) -> bool {
+    let d = discipline.trim().to_ascii_uppercase();
+    !cadaddy_mepfix::wordrules::words("sheets.device_disciplines").contains(&d.as_str()) && cadaddy_mepfix::sheet_facts::is_site_sheet(&d, title)
+}
+
+/// [`site_trade`] for a sheet of the job (`Q-9`, or a view of it `Q-9/2`): its discipline its
+/// region's, else the index's, else its number's; its title the index's.
+pub(crate) fn site_sheet(job: &GuidedJob, sheet: &str) -> bool {
+    let number = sheet.split('/').next().unwrap_or(sheet).trim();
+    let listed = job
+        .index
+        .as_ref()
+        .into_iter()
+        .chain(job.sheets.as_ref())
+        .filter_map(|i| i.get("sheets").and_then(Value::as_array))
+        .flatten()
+        .find(|sh| sh.get("number").and_then(Value::as_str).is_some_and(|n| n.trim().eq_ignore_ascii_case(number)));
+    let text = |k: &str| listed.and_then(|sh| sh.get(k)).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let discipline = job
+        .sheet_regions
+        .iter()
+        .find(|r| r.number.eq_ignore_ascii_case(number) && !r.discipline.trim().is_empty())
+        .map(|r| r.discipline.clone())
+        .or_else(|| Some(text("discipline")).filter(|d| !d.is_empty()))
+        .unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(number));
+    site_trade(&discipline, &text("title"))
 }
 
 fn row_kind(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Option<(&'static str, &'static str)> {
@@ -34739,6 +34846,116 @@ mod tests {
         assert_eq!((r["circuit_tagged_retyped"].clone(), r["luminaires_by_mark_alone"].clone()), (json!(1), json!(1)), "{r:#}");
         assert!(on("P-1").iter().all(|(t, _)| t != "C"), "a plumbing tag isn't retyped: {:?}", on("P-1"));
         assert!(on("L-1").is_empty(), "another trade's sheet: {:?}", on("L-1"));
+    }
+
+    /// Q6596: a civil utility plan letters its lines with marks a device shares (`OHE` along an
+    /// overhead electric line, `S`, `D` along the sewer and storm lines, a `T` no legend lists),
+    /// with a LEGEND of its line types beside them; a landscape plan keys its plants (`TV` in
+    /// bubbles) with a legend of its own; a civil sheet the job didn't load letters its line with
+    /// plain `OHE`s. None is a device: each is a line label or a plant key. An electrical site
+    /// plan whose legend keys a line (`UGE`) beside a pole light keeps the light and not the
+    /// line; an electrical plan's lone `S` is still a switch.
+    #[test]
+    fn civil_line_labels_and_plant_keys_are_no_devices() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [
+            {"number": "QC-1", "title": "UTILITY PLAN", "discipline": "C", "type": "plan"},
+            {"number": "QL-1", "title": "PLANTING PLAN", "discipline": "L", "type": "plan"},
+            {"number": "QE-0", "title": "ELECTRICAL SITE PLAN", "discipline": "E", "type": "plan"},
+            {"number": "QE-1", "title": "POWER PLAN", "discipline": "E", "type": "plan"},
+            {"number": "QC-2", "title": "SITE UTILITIES", "discipline": "C", "type": "plan"}
+        ]}));
+        job.sheets_loaded = true;
+        let region = |n: &str, d: &str, level: &str, x0: f64| SheetRegion {
+            number: n.into(),
+            level: level.into(),
+            discipline: d.into(),
+            kind: "plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1300.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        // A legend in the sheet's right margin: its heading 8 high, its rows 5 high, a key and
+        // what it is.
+        let legend = |x0: f64, heading: &'static str, rows: &[(&'static str, &'static str)]| {
+            let mut v: Vec<(&'static str, f64, f64, f64)> = vec![(heading, x0 + 1500.0, 1200.0, 8.0)];
+            for (i, &(key, what)) in rows.iter().enumerate() {
+                let y = 1185.0 - 12.0 * i as f64;
+                v.push((key, x0 + 1505.0, y, 5.0));
+                v.push((what, x0 + 1530.0, y, 5.0));
+            }
+            v
+        };
+        let sheet = |s: &mut crate::Session, job: &mut GuidedJob, n: &str, texts: &[(&str, f64, f64, f64)], syms: &[(&str, f64, f64)]| {
+            let lo = s.doc().map_or(0, |d| d.handseed);
+            add_sheet(s, texts, syms);
+            let hi = s.doc().map_or(0, |d| d.handseed);
+            job.sheet_spans.push(SheetSpan { sheet: n.into(), lo, hi });
+        };
+        let civil = legend(0.0, "LEGEND", &[("OHE", "OVERHEAD ELECTRIC"), ("S", "SANITARY SEWER"), ("D", "STORM DRAIN"), ("W", "WATER LINE")]);
+        let along: Vec<(&str, f64, f64)> = (0..5)
+            .map(|i| ("OHE", 100.0 + 150.0 * f64::from(i), 500.0))
+            .chain([("S", 100.0, 300.0), ("S", 400.0, 300.0), ("D", 100.0, 200.0), ("D", 400.0, 200.0), ("T", 900.0, 300.0)])
+            .collect();
+        sheet(&mut s, &mut job, "QC-1", &civil, &along);
+        job.sheet_regions.push(region("QC-1", "C", "SITE", 0.0));
+        let planting = legend(3000.0, "SITE LEGEND", &[("TV", "TWINING VINE"), ("QS", "QUAKING SHRUB")]);
+        sheet(&mut s, &mut job, "QL-1", &planting, &[("TV", 3100.0, 500.0), ("TV", 3200.0, 500.0), ("TV", 3300.0, 520.0)]);
+        job.sheet_regions.push(region("QL-1", "L", "SITE", 3000.0));
+        let site_power = legend(6000.0, "ELECTRICAL SITE LEGEND", &[("SL", "POLE MOUNTED LUMINAIRE"), ("UGE", "UNDERGROUND ELECTRIC LINE")]);
+        sheet(&mut s, &mut job, "QE-0", &site_power, &[("SL", 6100.0, 500.0), ("UGE", 6200.0, 500.0), ("UGE", 6400.0, 500.0)]);
+        job.sheet_regions.push(region("QE-0", "E", "SITE", 6000.0));
+        sheet(&mut s, &mut job, "QE-1", &[], &[("S", 9100.0, 500.0)]);
+        job.sheet_regions.push(region("QE-1", "E", "1", 9000.0));
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let on = |sheet: &str| -> Vec<String> { job.devices.iter().filter(|d| d.sheet == sheet).map(|d| d.tag.clone()).collect() };
+        assert!(on("QC-1").is_empty(), "a civil sheet's line labels: {:?}", on("QC-1"));
+        assert!(on("QL-1").is_empty(), "a landscape sheet's plant keys: {:?}", on("QL-1"));
+        assert!(!on("QE-0").iter().any(|t| t == "UGE"), "a line its legend keys: {:?}", on("QE-0"));
+        assert_eq!(on("QE-1"), vec!["S".to_string()], "an electrical plan's switch");
+
+        // The inventory: the civil and landscape marks are no objects, each says what it is.
+        let mut page = cadaddy_doc::Drawing::default();
+        for (v, x, y, h) in legend(0.0, "LEGEND", &[("OHE", "OVERHEAD ELECTRIC"), ("G", "GAS SERVICE")])
+            .into_iter()
+            .chain((0..4).map(|i| ("OHE", 100.0 + 150.0 * f64::from(i), 400.0, 5.0)))
+        {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, x, y, h))).unwrap_or_else(|e| panic!("{e}"));
+        }
+        let (fates, pages) = mark_fates(&s, &job);
+        let mut reader = |sh: &Value| match sh.get("number").and_then(Value::as_str) {
+            Some("QC-2") => Ok(page.clone()),
+            _ => Err("a made-up page that can't be read".to_string()),
+        };
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let inv = super::super::inventory::take(d, &job, &pages, &fates, Some(&mut reader));
+        let objects = |sheet: &str| -> Vec<String> { inv.marks.iter().filter(|m| m.sheet == sheet && m.object).map(|m| m.text.clone()).collect() };
+        let why = |sheet: &str, t: &str| -> Vec<(String, String)> {
+            inv.marks
+                .iter()
+                .filter(|m| m.sheet == sheet && m.text == t && m.what != "legend_row")
+                .map(|m| (m.status.clone(), m.reason.clone()))
+                .collect()
+        };
+        assert!(objects("QC-1").is_empty(), "{:?}", why("QC-1", "OHE"));
+        assert!(objects("QL-1").is_empty(), "{:?}", why("QL-1", "TV"));
+        for (sheet, t, n) in [("QC-1", "OHE", 5), ("QC-1", "T", 1), ("QL-1", "TV", 3), ("QC-2", "OHE", 4)] {
+            let w = why(sheet, t);
+            assert_eq!(w.len(), n, "{sheet} {t}: {w:?}");
+            assert!(w.iter().all(|(st, r)| st == super::super::inventory::NOT_OBJECT && r.contains("line label or plant key")), "{sheet} {t}: {w:?}");
+        }
+        assert!(why("QC-1", "OHE").iter().all(|(_, r)| r.contains("OVERHEAD ELECTRIC")), "its legend row says which line: {:?}", why("QC-1", "OHE"));
+        assert!(objects("QE-0").contains(&"SL".to_string()), "{:?}", inv.marks.iter().filter(|m| m.sheet == "QE-0").collect::<Vec<_>>());
+        assert!(
+            why("QE-0", "UGE").iter().all(|(st, r)| st == super::super::inventory::NOT_OBJECT && r.contains("line label")),
+            "{:?}",
+            why("QE-0", "UGE")
+        );
+        assert_eq!(objects("QE-1"), vec!["S".to_string()]);
     }
 
     /// A low-voltage outlet and the receptacle beside it are two elements (Q6258): the import made
