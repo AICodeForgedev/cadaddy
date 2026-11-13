@@ -305,6 +305,7 @@ pub(crate) struct MethodRules {
     pub nm: String,
     pub se: String,
     pub uf: String,
+    pub pvc: String,
     pub prefer: Vec<String>,
     pub branch_words: Vec<String>,
     pub feeder_words: Vec<String>,
@@ -312,6 +313,8 @@ pub(crate) struct MethodRules {
     pub concealed_words: Vec<String>,
     pub exposed_words: Vec<String>,
     pub below_words: Vec<String>,
+    /// What the code permits below grade (buried in the earth or under the slab, Q6544).
+    pub below: BelowRules,
     pub exposed_rooms: Vec<String>,
     pub minimum_size_in: f64,
     pub minimum_source: String,
@@ -319,6 +322,24 @@ pub(crate) struct MethodRules {
     /// Limited-energy cable (fire alarm, Class 2/3, communications): outside the power
     /// wiring-methods table, judged by the spaces its listing allows (Q6535).
     pub limited: LimitedRules,
+}
+
+/// The wiring methods the code permits below grade (direct buried, under or in the slab), for a
+/// run the documents' wiring-methods table gives no below-grade row (Q6544).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct BelowRules {
+    pub raceways: Vec<String>,
+    pub cables: Vec<String>,
+    /// The project rules' wiring-method key for below-grade work.
+    pub rule_key: String,
+    pub source: String,
+    /// What `in raceway` means in a below-grade row.
+    pub spec_raceway: String,
+    /// A stub-up's most rise above the floor (inches): the stub out of the slab into the gear is
+    /// the below-grade run's end, not the room's wiring.
+    pub stub_in: f64,
+    pub stub_source: String,
 }
 
 /// The limited-energy cable types and the spaces each is listed for (`plenum`, `riser`,
@@ -334,7 +355,7 @@ pub(crate) struct LimitedRules {
 
 impl MethodRules {
     /// The method name (`EMT`, `MC`) for a spec table's method key (`raceway`, `mc`).
-    fn name_of(&self, key: &str) -> Option<&str> {
+    pub(crate) fn name_of(&self, key: &str) -> Option<&str> {
         let v = match key {
             "raceway" => &self.raceway,
             "mc" => &self.mc,
@@ -342,6 +363,7 @@ impl MethodRules {
             "nm" => &self.nm,
             "se" => &self.se,
             "uf" => &self.uf,
+            "pvc" => &self.pvc,
             _ => return None,
         };
         Some(v.as_str()).filter(|v| !v.is_empty())
@@ -1879,8 +1901,6 @@ fn floor_rating(sp: &BuildingSpec, p: Vec2, below: &str) -> Option<String> {
 /// risers at each floor (`gearbuild`), so a feeder's vertical piece standing on its level's floor,
 /// over a level below, passed that floor. `carry` takes a point of one level's plan onto another's.
 fn feeder_floor_penetrations(sp: &BuildingSpec, carry: &dyn Fn(Vec2, &str, &str) -> Vec2, rl: &RouteRules, out: &mut Vec<Value>) {
-    let mut levels: Vec<_> = sp.levels.iter().filter(|l| l.elevation_ft.is_finite()).collect();
-    levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
     for r in sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)) {
         if out.len() >= MAX_ITEMS {
             break;
@@ -1889,10 +1909,17 @@ fn feeder_floor_penetrations(sp: &BuildingSpec, carry: &dyn Fn(Vec2, &str, &str)
         if !(top > bot && bot.abs() < 1e-6) {
             continue;
         }
-        let Some(li) = levels.iter().position(|l| same_level(&l.name, &r.level)) else { continue };
-        let Some(below) = li.checked_sub(1).and_then(|j| levels.get(j)) else { continue };
-        let Some(l) = levels.get(li) else { continue };
         let at = Vec2::new(p[0], p[1]);
+        // The storey under it where it stands (Q6453): a mezzanine or partial level elsewhere
+        // is not the floor it came up through.
+        let Some(l) = sp.levels.iter().find(|l| same_level(&l.name, &r.level) && l.elevation_ft.is_finite()) else { continue };
+        let Some(below) = super::risercut::riser_levels(sp, &l.name, [at.x, at.y], &|q, from, to| super::gearbuild::feeder_carry(sp, q, from, to))
+            .into_iter()
+            .filter(|b| b.elevation_ft < l.elevation_ft - 1e-6)
+            .max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))
+        else {
+            continue;
+        };
         let rating = floor_rating(sp, carry(at, &l.name, &below.name), &below.name);
         let size_in = r.size_in[0];
         out.push(json!({
@@ -3296,28 +3323,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let max_group = methods.max_circuits.unwrap_or(rl.grouping.max_circuits).clamp(1, 12);
     let group_src = if methods.max_circuits.is_some() { methods.max_circuits_source.clone() } else { rl.grouping.source.clone() };
     // The documents' wire-length tables (Q6340): drawn as a grid (by breaker and voltage, any
-    // layout) or as single lines (`0-60' = #12`), the drawing's sheets named by their outlines.
-    let sheet_of = |p: Vec2| -> String {
-        sp.sheets
-            .iter()
-            .filter_map(|l| {
-                let r = l.rect?;
-                let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
-                (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).then(|| ((x1 - x0) * (y1 - y0), l.number.clone()))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, n)| n)
-            .unwrap_or_default()
-    };
-    let len_tables: Vec<super::wiretable::LengthTable> = {
-        let mut seen: Vec<super::wiretable::LengthTable> = Vec::new();
-        for t in super::wiretable::read_drawing(d, &sheet_of) {
-            if !t.bands.is_empty() && !seen.iter().any(|o| o.bands == t.bands) {
-                seen.push(t);
-            }
-        }
-        seen
-    };
+    // layout) or as single lines (`0-60' = #12`); the drawing's sheets first, else those the job
+    // read off its pages and kept in the spec (Q6545: Validate's rule; a PDF job's legend sheet
+    // is often not in the drawing).
+    let (len_tables, len_from): (Vec<super::wiretable::LengthTable>, Vec<super::wiretable::ReadFrom>) =
+        super::wiretable::documents(d, sp, &[]).into_iter().unzip();
     let trip_of = |panel: &str, label: &str| -> Option<f64> {
         let num = super::printcond::parse_circuit(label)?.1;
         let first = num.split(',').next()?.trim().to_string();
@@ -5282,6 +5292,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             "bands": t.bands.iter().map(|b| json!({"amps": b.amps, "volts": b.volts, "size": b.size, "max_ft": b.max_ft})).collect::<Vec<_>>(),
             "read": t.cite(),
             "sheet": t.sheet,
+            "from": len_from.first().map_or("", |f| f.words()),
             "tables": len_tables.len(),
         }),
     };
@@ -6206,6 +6217,13 @@ pub(crate) fn reroute_feeders(s: &mut Session, all_feeders: bool) -> Result<Valu
     }
     if let Some(line) = feeders.line() {
         s.echo(line);
+    }
+    // A model built before the job kept its documents' wire-length tables (Q6545): the job's
+    // pages read for them now, once, and kept in the spec (they size the conductors below).
+    if sp.mep.wire_length_read.is_empty()
+        && let Some(n) = super::wiretable::keep_from_job(s, &mut sp)
+    {
+        s.echo(format!("wire-length tables read off the job's pages: {n} ({})", sp.mep.wire_length_read));
     }
     let t0 = web_time::Instant::now();
     // The fire alarm system's panel and power supplies as the gear stands now (Q6503): the

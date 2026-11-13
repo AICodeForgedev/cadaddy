@@ -9,9 +9,14 @@
 //!    lying on the plan's, gives the plan its scale ([`scale_from_same_floor`]); the source says
 //!    which sheet and how well they agree. It is tried for a plan scaled by its dimension strings
 //!    too, which it outranks: a scale the two disagree on is the printed one's;
-//! 2. else the plan stays at paper size and the job **always asks** for its scale (or that it is
+//!    A plan read at a note its set's other plans of its paper size disagree with (a detail's
+//!    note, a misread one) is weighed the same way: a fit at another print scale is its scale,
+//!    and the note it overrules is asked about (Q6518);
+//! 2. else the plans of its trade on paper of its size that agree on one scale give it theirs
+//!    ([`scale_from_peers`], Q6518), said as derived and asked about with the alternatives;
+//! 3. else the plan stays at paper size and the job **always asks** for its scale (or that it is
 //!    no plan); it is never built at the sheet's own units on a default;
-//! 3. before the build, a level whose floor plan covers less than the rules data's minimum area
+//! 4. before the build, a level whose floor plan covers less than the rules data's minimum area
 //!    is a high finding and an always-asked question, and after it a level whose walls total less
 //!    than the minimum length is too ([`small_levels`], [`short_wall_levels`]).
 //!
@@ -33,6 +38,9 @@ const RULES: &str = include_str!("planscale.json");
 /// What a plan scaled from another plan of its floor says its scale came from (its
 /// [`SheetScale::how`] is `same floor`).
 pub const SAME_FLOOR_SOURCE: &str = "same-floor plan";
+/// What a plan scaled by its peers (the plans of its trade and paper size) says its scale came
+/// from (its [`SheetScale::how`] is `peers`).
+pub const PEERS_SOURCE: &str = "peer plans";
 /// The question for a plan whose scale nothing gives (always asked).
 pub const NO_SCALE_QUESTION: &str = "No scale for plan sheet";
 /// The question for a level too small to be a building (always asked).
@@ -41,6 +49,11 @@ pub const SMALL_LEVEL_QUESTION: &str = "Too small to be a building: level";
 pub const LEAVE_OUT: &str = "Not a plan: leave it out of the building";
 /// The answer that keeps a small level as read.
 pub const KEEP: &str = "Keep it: the building really is that small";
+/// The question for a plan whose scale was derived (from its floor's plan or its peers) or that
+/// its peers doubt (Q6518): its candidates listed, the default keeps the scale the job took.
+pub const DOUBTED_SCALE_QUESTION: &str = "Scale in doubt for plan sheet";
+/// The answer that keeps the scale the job took for a plan.
+pub const KEEP_SCALE: &str = "Keep the scale the job took";
 
 /// Most points sampled from one sheet's linework.
 const MAX_SHEET_POINTS: usize = 200_000;
@@ -173,6 +186,11 @@ fn built_plan(r: &SheetRegion) -> bool {
     r.kind == "plan" && r.not_built.is_empty() && !r.all_levels().is_empty()
 }
 
+/// A ceiling plan of a storey (read for its ceiling heights), not left out.
+fn ceiling_plan(r: &SheetRegion) -> bool {
+    r.kind == "rcp" && r.not_built.is_empty() && !r.all_levels().is_empty()
+}
+
 /// Each plan of the set left at paper size, or scaled from its dimension strings, given the
 /// scale of a plan of the same floor that prints its own when their building outlines agree at
 /// one ratio and their linework lies on each other there. The sheet's objects (`spans`) are
@@ -184,22 +202,32 @@ pub fn scale_from_same_floor(
     regions: &mut [SheetRegion],
     scales: &mut [SheetScale],
     spans: &[SheetSpan],
+    doubted: &[String],
     log: &mut Vec<String>,
     fits: &mut super::grids::FitStats,
 ) -> Vec<Rescaled> {
     let rr = rules();
     let k_in = super::perceive::units_per_inch(d);
-    let region_of = |scales: &[SheetScale], regions: &[SheetRegion], i: usize| -> Option<usize> {
+    // `ceiling`: a ceiling plan of a storey may be the sheet scaled too (never the one that gives
+    // the scale: its linework is the ceiling's, not the floor's walls).
+    let region_of = |scales: &[SheetScale], regions: &[SheetRegion], i: usize, ceiling: bool| -> Option<usize> {
         let sc = scales.get(i)?;
         let b = base(&sc.sheet);
         if b.is_empty() {
             return None;
         }
-        regions.iter().position(|r| r.view.is_none() && r.number.eq_ignore_ascii_case(b)).filter(|j| regions.get(*j).is_some_and(built_plan))
+        regions
+            .iter()
+            .position(|r| r.view.is_none() && r.number.eq_ignore_ascii_case(b))
+            .filter(|j| regions.get(*j).is_some_and(|r| built_plan(r) || (ceiling && ceiling_plan(r))))
     };
     let targets: Vec<(usize, usize)> = (0..scales.len())
-        .filter(|i| scales.get(*i).is_some_and(|sc| sc.kind == "plan" && (sc.plan_at_paper_size() || sc.how() == "dimensions")))
-        .filter_map(|i| Some((i, region_of(scales, regions, i)?)))
+        .filter(|i| {
+            scales.get(*i).is_some_and(|sc| {
+                matches!(sc.kind.as_str(), "plan" | "rcp") && (sc.plan_at_paper_size() || sc.how() == "dimensions" || doubted.contains(&sc.sheet))
+            })
+        })
+        .filter_map(|i| Some((i, region_of(scales, regions, i, true)?)))
         .collect();
     if targets.is_empty() {
         return Vec::new();
@@ -210,7 +238,7 @@ pub fn scale_from_same_floor(
                 .get(*i)
                 .is_some_and(|sc| sc.kind == "plan" && matches!(sc.how(), "given" | "note" | "lettering") && sc.scale > 1.5 && sc.scale.is_finite())
         })
-        .filter_map(|i| Some((i, region_of(scales, regions, i)?)))
+        .filter_map(|i| Some((i, region_of(scales, regions, i, false)?)))
         .collect();
     let shares_level = |a: &SheetRegion, b: &SheetRegion| {
         let la: BTreeSet<String> = a.all_levels().iter().map(|l| level_key(l)).collect();
@@ -451,30 +479,10 @@ pub fn scale_from_same_floor(
         if !finite_pos(f) || same(f, 1.0, rr.same_scale) {
             continue;
         }
-        let was = sc.how();
-        // The sheet's objects scaled about its lower-left corner, then moved clear of every sheet.
-        let Some(reg) = regions.get(tr).cloned() else { continue };
-        let (w, h) = ((reg.rect[2] - reg.rect[0]) * f, (reg.rect[3] - reg.rect[1]) * f);
-        let right = regions.iter().map(|r| r.rect[2].max(r.rect[0])).fold(f64::NEG_INFINITY, f64::max);
-        if !(right.is_finite() && w.is_finite() && h.is_finite()) {
+        // A DO NOT SCALE plan left at sheet size was at paper size as one with no note.
+        let was = if sc.plan_at_paper_size() { "none" } else { sc.how() };
+        if !rescale_sheet(d, regions, tr, spans, &sc.sheet, f) {
             continue;
-        }
-        let at = Vec2::new(right + 0.05 * w.abs(), reg.rect[1]);
-        let m = Mat3::translate(Vec2::new(-reg.rect[0], -reg.rect[1])).then(Mat3::scale(f, f)).then(Mat3::translate(at));
-        let mine: Vec<(u64, u64)> = spans.iter().filter(|sp| sp.sheet == sc.sheet).map(|sp| (sp.lo, sp.hi)).collect();
-        let handles: Vec<cadaddy_doc::Handle> =
-            d.model.iter().take(MAX_OBJECTS).map(|e| e.handle).filter(|h| mine.iter().any(|(lo, hi)| h.0 >= *lo && h.0 < *hi)).collect();
-        for h in handles {
-            let _ = d.modify_entity(h, |e| e.kind.transform(&m));
-        }
-        let moved = |r: [f64; 4]| {
-            let (a, b) = (m.apply(Vec2::new(r[0], r[1])), m.apply(Vec2::new(r[2], r[3])));
-            [a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)]
-        };
-        if let Some(r) = regions.get_mut(tr) {
-            r.rect = moved(r.rect);
-            r.area = r.area.map(moved);
-            r.title_block = r.title_block.map(moved);
         }
         if let Some(e) = scales.get_mut(ti) {
             e.scale = k;
@@ -496,6 +504,158 @@ pub fn scale_from_same_floor(
     out
 }
 
+/// Scale sheet `name`'s objects (its `spans`) by `f` about the lower-left corner of its region
+/// `tr`, and move them clear of every sheet; its rectangle, frame and title block go with them.
+/// False (nothing changed) for a factor or a region that can't be.
+fn rescale_sheet(d: &mut Drawing, regions: &mut [SheetRegion], tr: usize, spans: &[SheetSpan], name: &str, f: f64) -> bool {
+    let Some(reg) = regions.get(tr).cloned() else { return false };
+    let (w, h) = ((reg.rect[2] - reg.rect[0]) * f, (reg.rect[3] - reg.rect[1]) * f);
+    let right = regions.iter().map(|r| r.rect[2].max(r.rect[0])).fold(f64::NEG_INFINITY, f64::max);
+    if !(finite_pos(f) && right.is_finite() && w.is_finite() && h.is_finite()) {
+        return false;
+    }
+    let at = Vec2::new(right + 0.05 * w.abs(), reg.rect[1]);
+    let m = Mat3::translate(Vec2::new(-reg.rect[0], -reg.rect[1])).then(Mat3::scale(f, f)).then(Mat3::translate(at));
+    let mine: Vec<(u64, u64)> = spans.iter().filter(|sp| sp.sheet == name).map(|sp| (sp.lo, sp.hi)).collect();
+    let handles: Vec<cadaddy_doc::Handle> =
+        d.model.iter().take(MAX_OBJECTS).map(|e| e.handle).filter(|h| mine.iter().any(|(lo, hi)| h.0 >= *lo && h.0 < *hi)).collect();
+    for h in handles {
+        let _ = d.modify_entity(h, |e| e.kind.transform(&m));
+    }
+    let moved = |r: [f64; 4]| {
+        let (a, b) = (m.apply(Vec2::new(r[0], r[1])), m.apply(Vec2::new(r[2], r[3])));
+        [a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)]
+    };
+    if let Some(r) = regions.get_mut(tr) {
+        r.rect = moved(r.rect);
+        r.area = r.area.map(moved);
+        r.title_block = r.title_block.map(moved);
+    }
+    true
+}
+
+/// What [`scale_from_peers`] gives a plan.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PeerScaled {
+    pub sheet: String,
+    /// Drawing units a sheet inch, and the print scale it is (`1/4" = 1'-0"`).
+    pub scale: f64,
+    pub note: Option<String>,
+    /// The plans of its trade and paper size that print it, and how many there are.
+    pub peers: Vec<String>,
+    /// Their other scales, with how many plans print each (the alternatives).
+    pub others: Vec<(f64, usize)>,
+}
+
+/// How a sheet's scale was read, as the peers of a plan count it: printed (a note, its
+/// lettering, given), or derived from a plan of its floor.
+fn peer_evidence(sc: &SheetScale) -> bool {
+    matches!(sc.how(), "note" | "lettering" | "given" | "same floor" | "do not scale") && finite_pos(sc.scale) && sc.scale > 1.5
+}
+
+/// Each plan still at paper size (no note, no dimension strings that agree, no plan of its floor
+/// that gave it a scale) given the scale its peers print (Q6518): the plans of its trade (the
+/// sheet's discipline) on paper of its size whose scale was printed or derived from their floor,
+/// at least two agreeing on one scale and more of them than on any other. A set draws a trade's
+/// floor plans at one scale. The sheet's objects are scaled as [`scale_from_same_floor`] does,
+/// its source naming the peers. What was scaled.
+pub fn scale_from_peers(d: &mut Drawing, regions: &mut [SheetRegion], scales: &mut [SheetScale], spans: &[SheetSpan]) -> Vec<PeerScaled> {
+    let rr = rules();
+    let k_in = super::perceive::units_per_inch(d);
+    let paper_of = |sc: &SheetScale| -> Option<[f64; 2]> {
+        let [w, h] = sc.paper?;
+        (finite_pos(w) && finite_pos(h)).then_some([w.max(h), w.min(h)])
+    };
+    let discipline_of = |regions: &[SheetRegion], sheet: &str| -> Option<(usize, String)> {
+        let b = base(sheet);
+        regions
+            .iter()
+            .position(|r| r.number.eq_ignore_ascii_case(b))
+            .and_then(|i| regions.get(i).map(|r| (i, r.discipline.to_ascii_uppercase())))
+            .filter(|(_, dsc)| !dsc.is_empty())
+    };
+    let mut out = Vec::new();
+    for ti in 0..scales.len() {
+        let Some(sc) = scales.get(ti).cloned() else { continue };
+        if sc.kind != "plan" || !sc.plan_at_paper_size() {
+            continue;
+        }
+        let (Some(paper), Some((tr, trade))) = (paper_of(&sc), discipline_of(regions, &sc.sheet)) else { continue };
+        if !regions.get(tr).is_some_and(built_plan) {
+            continue;
+        }
+        let peers: Vec<&SheetScale> = scales
+            .iter()
+            .enumerate()
+            .filter(|(i, o)| *i != ti && o.kind == "plan" && peer_evidence(o))
+            .map(|(_, o)| o)
+            .filter(|o| paper_of(o).is_some_and(|p| same(p[0], paper[0], rr.same_scale) && same(p[1], paper[1], rr.same_scale)))
+            .filter(|o| discipline_of(regions, &o.sheet).is_some_and(|(_, dsc)| dsc == trade))
+            .collect();
+        // The peers' scales, most printed first.
+        let mut by: Vec<(f64, Vec<String>)> = Vec::new();
+        for o in &peers {
+            match by.iter_mut().find(|(k, _)| same(*k, o.scale, rr.same_scale)) {
+                Some((_, v)) => v.push(o.sheet.clone()),
+                None => by.push((o.scale, vec![o.sheet.clone()])),
+            }
+        }
+        by.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.total_cmp(&b.0)));
+        let Some((k, names)) = by.first().cloned() else { continue };
+        let runner = by.get(1).map_or(0, |b| b.1.len());
+        if names.len() < 2 || names.len() <= runner {
+            continue;
+        }
+        let old = if finite_pos(sc.scale) { sc.scale } else { 1.0 };
+        let (k, note) = snap(k, k_in);
+        let f = k / old;
+        if same(f, 1.0, rr.same_scale) || !rescale_sheet(d, regions, tr, spans, &sc.sheet, f) {
+            continue;
+        }
+        let list = names.iter().take(4).cloned().collect::<Vec<_>>().join(", ");
+        if let Some(e) = scales.get_mut(ti) {
+            e.scale = k;
+            e.plan_scale = None;
+            e.source = format!(
+                "{PEERS_SOURCE}: {} ({k:.2}x), the scale {} plan(s) of its trade on paper of its size print ({list}); no note, dimension strings or plan of its floor gave it one; was paper size",
+                note.as_deref().unwrap_or("measured"),
+                names.len()
+            )
+            .chars()
+            .take(240)
+            .collect();
+        }
+        let others = by.iter().skip(1).map(|(k, v)| (*k, v.len())).collect();
+        out.push(PeerScaled { sheet: sc.sheet.clone(), scale: k, note, peers: names, others });
+    }
+    out
+}
+
+/// The question about plan `sheet` whose scale the job derived or its peers doubt.
+pub fn doubted_scale_question(sheet: &str, what: &str) -> String {
+    format!("{DOUBTED_SCALE_QUESTION} {sheet}: {what}. Which scale is it drawn at?")
+}
+
+/// The answers to offer for a plan's scale: the scales named first (the job's own first), then
+/// the set's printed ones, each once, and [`KEEP_SCALE`] last.
+pub fn scale_candidates(first: &[String], scales: &[SheetScale]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for c in first.iter().cloned().chain(printed_scale_choices(scales)) {
+        if !c.is_empty() && !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    out.truncate(MAX_SCALE_CHOICES);
+    out.push(KEEP_SCALE.into());
+    out
+}
+
+/// A scale as the answers name it: its print scale (`1/4" = 1'-0"`), else drawing units a sheet
+/// inch.
+pub fn scale_name(k: f64, k_in: f64) -> String {
+    snap(k, k_in).1.unwrap_or_else(|| format!("{k:.2}"))
+}
+
 /// The set's printed plan scales, most used first, as answers to offer.
 pub fn printed_scale_choices(scales: &[SheetScale]) -> Vec<String> {
     let k_in = 1.0;
@@ -513,8 +673,26 @@ pub fn printed_scale_choices(scales: &[SheetScale]) -> Vec<String> {
 /// Ask `question` about `sheet` in `stage`, always (never taken by default, in auto mode too).
 #[allow(clippy::too_many_arguments)]
 pub fn ask_always(job: &mut GuidedJob, stage: StageName, question: String, why: String, sheet: &str, choices: Vec<String>, values: Value) {
+    ask(job, stage, question, why, sheet, choices, values, None);
+}
+
+/// Ask `question` about `sheet` in `stage`, its `default` what the job did (taken in auto mode;
+/// none: always asked).
+#[allow(clippy::too_many_arguments)]
+pub fn ask(
+    job: &mut GuidedJob,
+    stage: StageName,
+    question: String,
+    why: String,
+    sheet: &str,
+    choices: Vec<String>,
+    values: Value,
+    default: Option<String>,
+) {
     let id = job.next_qid(stage);
-    job.always_ask.insert(id.clone());
+    if default.is_none() {
+        job.always_ask.insert(id.clone());
+    }
     let q = Question {
         id,
         stage,
@@ -530,7 +708,7 @@ pub fn ask_always(job: &mut GuidedJob, stage: StageName, question: String, why: 
             tiled_crops: None,
             leftovers: Vec::new(),
         }),
-        default: None,
+        default,
         answer_schema: Some(json!({"type": "string"})),
         answer: None,
         answered_by: None,
@@ -611,7 +789,7 @@ pub enum ScaleAnswer {
 
 /// Whether `q` is one of this module's questions.
 pub fn is_scale_question(q: &Question) -> bool {
-    q.question.starts_with(NO_SCALE_QUESTION) || q.question.starts_with(SMALL_LEVEL_QUESTION)
+    q.question.starts_with(NO_SCALE_QUESTION) || q.question.starts_with(SMALL_LEVEL_QUESTION) || q.question.starts_with(DOUBTED_SCALE_QUESTION)
 }
 
 /// Read an answer to [`is_scale_question`].
@@ -620,7 +798,7 @@ pub fn read_answer(answer: &Value) -> ScaleAnswer {
     if text == LEAVE_OUT {
         return ScaleAnswer::LeaveOut;
     }
-    if text == KEEP {
+    if text == KEEP || text == KEEP_SCALE {
         return ScaleAnswer::Keep;
     }
     match super::sheetcheck::parse_answer_scale(answer) {
@@ -652,6 +830,33 @@ mod tests {
         assert!(matches!(read_answer(&json!("48")), ScaleAnswer::Scale(k, _) if (k - 48.0).abs() < 1e-9));
         assert!(matches!(read_answer(&json!("big")), ScaleAnswer::Bad(_)));
         assert!(matches!(read_answer(&json!("0")), ScaleAnswer::Bad(_)));
+        // Q6518: a doubted plan's default keeps the scale the job took
+        assert_eq!(read_answer(&json!(KEEP_SCALE)), ScaleAnswer::Keep);
+    }
+
+    /// Q6518: a doubted plan's answers name the job's scale and the one it overruled first, then
+    /// the set's printed ones, each once, and keeping the job's last.
+    #[test]
+    fn a_doubted_plans_candidates_come_first_each_once() {
+        let at = |sheet: &str, scale: f64, source: &str| SheetScale {
+            sheet: sheet.into(),
+            kind: "plan".into(),
+            scale,
+            source: source.into(),
+            plan_scale: None,
+            paper: None,
+        };
+        let set = [
+            at("A-1", 96.0, "scale note 1/8\" = 1'-0\""),
+            at("A-2", 96.0, "scale note 1/8\" = 1'-0\""),
+            at("A-3", 48.0, "scale note 1/4\" = 1'-0\""),
+        ];
+        let first = [scale_name(48.0, 1.0), scale_name(4.0, 1.0)];
+        assert_eq!(first, ["1/4\" = 1'-0\"", "3\" = 1'-0\""]);
+        assert_eq!(scale_candidates(&first, &set), ["1/4\" = 1'-0\"", "3\" = 1'-0\"", "1/8\" = 1'-0\"", KEEP_SCALE]);
+        // off every print scale: drawing units a sheet inch
+        assert_eq!(scale_name(70.0, 1.0), "70.00");
+        assert!(doubted_scale_question("P-2", "read at 3\" = 1'-0\"").starts_with(&format!("{DOUBTED_SCALE_QUESTION} P-2: read at")));
     }
 
     fn region(number: &str, level: &str, rect: [f64; 4]) -> SheetRegion {

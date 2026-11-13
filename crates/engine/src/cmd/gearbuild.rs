@@ -2700,10 +2700,16 @@ const RISER_BESIDE_FT: f64 = 1.5;
 const STACK_REACH_FT: f64 = 6.0;
 /// The most copies of a typical panel chained (a bound on hostile input).
 const MAX_TYPICAL: usize = 5000;
-/// The most levels a riser is cut at (a bound on hostile input).
-const MAX_LEVELS: usize = 500;
 
 type Gear = cadaddy_walk3d::MepEquipment;
+
+/// A point of level `from`'s plan on level `to`'s, the way the feeders' pieces are placed: each
+/// level's plan from its region's corner (none: the drawing's origin).
+pub(crate) fn feeder_carry(sp: &cadaddy_walk3d::BuildingSpec, p: [f64; 2], from: &str, to: &str) -> [f64; 2] {
+    let corner = |n: &str| sp.levels.iter().find(|l| l.name.eq_ignore_ascii_case(n)).and_then(|l| l.region).map_or([0.0, 0.0], |r| [r[0], r[1]]);
+    let (a, b) = (corner(from), corner(to));
+    [p[0] - a[0] + b[0], p[1] - a[1] + b[1]]
+}
 
 /// The model's levels and units, for routing between pieces of gear.
 struct RouteCtx<'a> {
@@ -2762,19 +2768,29 @@ impl RouteCtx<'_> {
         if on_slab && lo < 0.0 && stub.is_finite() && stub >= 0.0 && hi > stub {
             cuts.push(stub);
         }
-        // The floors it passes (a bound on hostile input: the model's levels); the slab level's
-        // own is the ground's top, where the stub-up is the cut.
-        let floors: Vec<(&str, f64)> =
-            self.sp.levels.iter().filter(|l| l.elevation_ft.is_finite()).take(MAX_LEVELS).map(|l| (l.name.as_str(), l.elevation_ft - base)).collect();
-        cuts.extend(
-            floors.iter().filter(|f| !(on_slab && f.0.eq_ignore_ascii_case(level))).map(|f| f.1).filter(|z| *z > lo + 1e-6 && *z < hi - 1e-6),
-        );
+        // The floors it passes (Q6453: its own and the storeys whose plan holds it, never a
+        // mezzanine or partial level elsewhere; a bound on hostile input: the model's levels);
+        // the slab level's own is the ground's top, where the stub-up is the cut. Each with
+        // whether it is the leg's own level.
+        let floors: Vec<(&str, f64, bool)> =
+            super::risercut::riser_levels(self.sp, level, [at.x, at.y], &|q, from, to| feeder_carry(self.sp, q, from, to))
+                .into_iter()
+                .map(|l| (l.name.as_str(), l.elevation_ft - base, l.name.eq_ignore_ascii_case(level)))
+                .collect();
+        // (A level at its own floor's height shares that floor: the slab's too.)
+        cuts.extend(floors.iter().filter(|f| !(on_slab && (f.2 || f.1.abs() < 1e-6))).map(|f| f.1).filter(|z| *z > lo + 1e-6 && *z < hi - 1e-6));
         cuts.sort_by(f64::total_cmp);
         cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
         for w in cuts.windows(2) {
             let [a, b] = w else { continue };
-            // The level whose storey it stands in: the highest floor at or under its foot, else its own.
-            let owner = floors.iter().filter(|f| f.1 <= a + 1e-6).max_by(|x, y| x.1.total_cmp(&y.1)).map_or((level, 0.0), |f| (f.0, f.1));
+            // The level whose storey it stands in: the highest floor at or under its foot, else
+            // its own; on an elevation tie its own level, else the first in the spec (Q6453).
+            let owner = floors
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.1 <= a + 1e-6)
+                .max_by(|(i, x), (j, y)| x.1.total_cmp(&y.1).then(x.2.cmp(&y.2)).then(j.cmp(i)))
+                .map_or((level, 0.0), |(_, f)| (f.0, f.1));
             let p = at - self.corner(level) + self.corner(owner.0);
             runs.push(self.run(owner.0, src, vec![[p.x, p.y]], size, a - owner.1, Some(b - owner.1)));
         }
@@ -3688,6 +3704,63 @@ mod feeder_route_tests {
         let up: f64 = runs.iter().filter(vertical).map(|r| r.top_ft.unwrap_or(0.0) - r.bottoms_ft[0]).sum();
         // Out of the gear's bottom (1.5), up to the third level's route (20.5 + 9 + 1.5), down into the top (3).
         assert!((up - (1.5 + 20.5 + 9.0 + 1.5 + 3.0)).abs() < 1e-9, "{up}");
+    }
+
+    /// Q6453: a riser is cut only at the floors of the storeys whose plan holds it: a mezzanine
+    /// (a partial level) elsewhere in the building at a height inside the riser's span takes no
+    /// piece of it, one over the riser does; on an elevation tie the leg's own level keeps it.
+    #[test]
+    fn a_riser_is_cut_only_at_the_floors_whose_plan_holds_it() {
+        let level = |n: &str, e: f64, r: [f64; 4]| -> cadaddy_walk3d::Level {
+            serde_json::from_value(serde_json::json!({"name": n, "elevation_ft": e, "height_ft": 10.0, "ceiling_ft": 8.0, "region": r}))
+                .expect("level")
+        };
+        let spec = |levels: Vec<cadaddy_walk3d::Level>| {
+            let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+            sp.levels = levels;
+            sp.mep.equipment = vec![gear("SWBD", "First", [100.0, 100.0], 0.0, 7.5), gear("P2", "Second", [9000.0, 1000.0], 2.0, 4.0)];
+            sp.mep.feeders = vec![cadaddy_walk3d::Feeder {
+                tag: "F1".into(),
+                from: "SWBD".into(),
+                to: "P2".into(),
+                conduits: 1,
+                conduit_in: 3.0,
+                from_entry: "bottom".into(),
+                entry: "top".into(),
+                ..Default::default()
+            }];
+            sp
+        };
+        let first = || level("First", 0.0, [0.0, 0.0, 1200.0, 1200.0]);
+        let second = || level("Second", 14.0, [8000.0, 0.0, 9200.0, 1200.0]);
+        let stub = super::super::ugplan::rules().stubup.conduit_top_ft;
+        let risers = |sp: &cadaddy_walk3d::BuildingSpec| {
+            let (runs, left) = feeder_runs(sp);
+            assert!(left.is_empty(), "{left:?}");
+            runs.into_iter().filter(|r| r.system == FEEDER_SYSTEM && r.points.len() == 1 && r.top_ft.is_some()).collect::<Vec<_>>()
+        };
+        let on = |rs: &[cadaddy_walk3d::MepRun], l: &str| {
+            rs.iter().filter(|r| r.level == l).map(|r| (r.bottoms_ft[0], r.top_ft.unwrap_or(0.0))).collect::<Vec<_>>()
+        };
+        // A mezzanine over the other corner of the building: the riser beside P2 never meets it.
+        let rs = risers(&spec(vec![first(), level("Mezzanine", 9.0, [5000.0, 0.0, 5400.0, 400.0]), second()]));
+        assert_eq!(on(&rs, "Mezzanine"), vec![], "{rs:#?}");
+        assert_eq!(on(&rs, "First"), vec![(stub, 14.0)], "{rs:#?}");
+        assert_eq!(on(&rs, "Second"), vec![(0.0, 9.0), (6.0, 9.0)], "{rs:#?}");
+        // A second level at the first's height: the first's legs stay on it.
+        let rs = risers(&spec(vec![first(), level("Annex", 0.0, [10000.0, 0.0, 11200.0, 1200.0]), second()]));
+        assert_eq!(on(&rs, "Annex"), vec![], "{rs:#?}");
+        assert_eq!(on(&rs, "First"), vec![(stub, 14.0)], "{rs:#?}");
+        // A mezzanine whose plan holds the riser: cut at its floor, its piece on its plan.
+        let rs = risers(&spec(vec![first(), level("Mezzanine", 9.0, [5000.0, 0.0, 6200.0, 1200.0]), second()]));
+        assert_eq!((on(&rs, "First"), on(&rs, "Mezzanine")), (vec![(stub, 9.0)], vec![(0.0, 5.0)]), "{rs:#?}");
+        let spot = |l: &str| rs.iter().find(|r| r.level == l).map(|r| r.points[0]);
+        assert_eq!(spot("Mezzanine"), spot("First").map(|p| [p[0] + 5000.0, p[1]]), "{rs:#?}");
+        // A level whose plan is another drawing's is not built here: never a floor it is cut at.
+        let mut other = level("Mezzanine", 9.0, [5000.0, 0.0, 6200.0, 1200.0]);
+        other.sheet = Some("other.dxf".into());
+        let rs = risers(&spec(vec![first(), other, second()]));
+        assert_eq!((on(&rs, "First"), on(&rs, "Mezzanine")), (vec![(stub, 14.0)], vec![]), "{rs:#?}");
     }
 
     #[test]

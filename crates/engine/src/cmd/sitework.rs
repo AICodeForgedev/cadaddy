@@ -312,6 +312,10 @@ pub(crate) struct SiteRead {
     pub unplaced_labels: Vec<String>,
     /// The view area read (`[x0, y0, x1, y1]`).
     pub area: [f64; 4],
+    /// The sheet's drawing units per foot its real-world limits were measured in, and how they
+    /// were found (Q6443).
+    pub upf: f64,
+    pub feet: String,
 }
 
 pub(crate) fn bbox_of(pts: &[[f64; 2]]) -> [f64; 4] {
@@ -556,6 +560,7 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
         return out;
     }
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    out.upf = upf;
     let touch = r.line_touch_h * h;
     // The sheet's shapes and line pieces.
     let mut shapes: Vec<Shape> = Vec::new();
@@ -865,6 +870,79 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
         out.notes.push(Note { callout: c, bbox });
     }
     out
+}
+
+/// One site sheet read and laid on the slab level's plan, its real-world limits (a luminaire
+/// symbol's largest size, a piece of equipment's least and largest) measured in the sheet's own
+/// feet, never the model's (Q6443: a sheet still at paper size read in model inches found no
+/// equipment and took anything for a luminaire). `imported` is how the sheet came in: at its
+/// printed scale (more than 1x) or a drawing file (drawn full size) its feet are the model's;
+/// still at paper size, they are the scale its plans print (the import's, else its own scale
+/// note), else what laying its building outline on the footprint makes them. Not known (a
+/// checkpoint keeps no sheet scales): the laid outline's, else the model's. With none of these,
+/// the model's, and said so.
+pub(crate) fn read_laid(
+    sheet: &str,
+    page: &Drawing,
+    area: [f64; 4],
+    lum_types: &BTreeSet<String>,
+    sp: &BuildingSpec,
+    slab: &str,
+    imported: Option<&super::guided::SheetScale>,
+) -> (SiteRead, Fit) {
+    let model_upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let positive = |v: &f64| v.is_finite() && *v > 0.0;
+    let scale = imported.map(|x| x.scale).filter(positive);
+    let sheet_real = scale.is_some_and(|k| k > 1.0);
+    let full_size = sheet_real || imported.is_some_and(|x| x.how() == "drawing");
+    // Known to be at paper size: drawing units per sheet inch, times the sheet inches a foot
+    // prints. A note alone never says a sheet of unknown import is at paper size.
+    let printed = match imported {
+        Some(x) if !full_size => {
+            let per_inch = scale.unwrap_or(1.0) * super::perceive::units_per_inch(page);
+            x.plan_scale
+                .filter(positive)
+                .map(|k| (k, "the scale its plans print".to_string()))
+                .or_else(|| cadaddy_mepfix::sheet_facts::sheet_plan_print_scale(page).map(|(k, _)| (k, "its plan view's scale note".to_string())))
+                .or_else(|| cadaddy_mepfix::sheet_reader::scale_note(page).map(|(t, k)| (k, format!("its scale note {t}"))))
+                .map(|(k, how)| (k * per_inch, how))
+                .filter(|(u, _)| positive(u))
+        }
+        _ => None,
+    };
+    let first = printed.as_ref().map_or(model_upf, |(u, _)| *u);
+    let mut out = read(sheet, page, area, lum_types, first);
+    // Laying the sheet takes only its outlines and view, which no limit touches.
+    let fit = register(&out, sp, slab, sheet_real);
+    let laid = Some(fit.reg.scale()).filter(|s| fit.fitted() && positive(s)).map(|s| model_upf / s);
+    let tolerance = rules().register.scale_tolerance;
+    out.feet = if full_size {
+        let how = if sheet_real {
+            format!("imported at its printed scale ({}x)", scale.unwrap_or(1.0))
+        } else {
+            "a drawing file, drawn full size".to_string()
+        };
+        format!("{how}: the model's feet")
+    } else if let Some((u, how)) = &printed {
+        let mut feet = format!("at paper size, measured by {how}: {u:.4} units a foot");
+        if let Some(l) = laid.filter(|l| (l / u - 1.0).abs() > tolerance) {
+            feet.push_str(&format!(" (its building outline laid on {slab} makes it {l:.4}: verify its scale)"));
+        }
+        feet
+    } else if let Some(l) = laid {
+        if (l / first - 1.0).abs() > 1e-9 {
+            out = read(sheet, page, area, lum_types, l);
+        }
+        let how = if imported.is_some() { "at paper size with no scale note" } else { "its import scale not known" };
+        format!("{how}, measured by its building outline laid on {slab}: {l:.4} units a foot")
+    } else if imported.is_some() {
+        format!(
+            "at paper size with no scale note and no building outline laid: measured in the model's feet ({model_upf} units a foot; verify its sizes)"
+        )
+    } else {
+        format!("its import scale not known and no building outline laid: measured in the model's feet ({model_upf} units a foot)")
+    };
+    (out, fit)
 }
 
 // ---------------- laying the sheet onto the model ----------------
@@ -2886,6 +2964,158 @@ mod tests {
         site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
         let said = job.findings.iter().find(|f| f.description.contains("not laid on the building by its outline"));
         assert!(said.is_some_and(|f| f.why.contains("E-001") && f.why.contains("does not lie on")), "{:#?} {:#}", job.findings, result["site_work"]);
+    }
+
+    /// Q6443: a trade's site plan still at paper size (drawing units sheet inches), printed at
+    /// 1" = 30': the building outline (80 x 50 ft), a pad-mount transformer's 8 ft pad by its
+    /// label, a pole light's 2 ft head by its type mark, and a second type mark by a 24 ft planter
+    /// with no head drawn. `note`: the sheet prints its scale; `named`: the outline's layer names
+    /// the building.
+    fn paper_site_sheet_at_30(note: bool, named: bool) -> (Drawing, [f64; 4]) {
+        let mut d = Drawing::default();
+        let h = 0.1;
+        let ft = 1.0 / 30.0;
+        let o = [10.0, 5.0];
+        let outline = [[o[0], o[1]], [o[0] + 80.0 * ft, o[1]], [o[0] + 80.0 * ft, o[1] + 50.0 * ft], [o[0], o[1] + 50.0 * ft]];
+        pline(&mut d, if named { "-BASEC-BUILD" } else { "-BASEC-HATCH" }, &outline, true);
+        let x = [14.0, 4.0];
+        pline(&mut d, "E-POWR", &square(x, 4.0 * ft), true);
+        text(&mut d, "PAD MOUNTED TRANSFORMER", x[0] + 4.0 * ft + 0.1, x[1] - 0.03, h);
+        let l1 = [16.0, 8.0];
+        pline(&mut d, "E-LGHT", &square(l1, 1.0 * ft), true);
+        text(&mut d, "SL1", l1[0] + 0.1, l1[1] - 0.03, h);
+        let planter = [16.5, 5.5];
+        pline(&mut d, "L-PLNT", &square(planter, 12.0 * ft), true);
+        text(&mut d, "SL1", planter[0] + 12.0 * ft + 0.1, planter[1] - 0.03, h);
+        if note {
+            text(&mut d, "SCALE: 1\" = 30'-0\"", 9.0, 3.2, h);
+        }
+        (d, [8.0, 3.0, 18.0, 10.0])
+    }
+
+    fn paper_size() -> super::super::guided::SheetScale {
+        super::super::guided::SheetScale {
+            sheet: "E-001".into(),
+            kind: "plan".into(),
+            scale: 1.0,
+            source: "none".into(),
+            plan_scale: None,
+            paper: Some([36.0, 24.0]),
+        }
+    }
+
+    #[test]
+    fn a_paper_size_site_sheet_measures_its_limits_in_its_own_feet() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_with_slab();
+        let (d, area) = paper_site_sheet_at_30(true, true);
+        // The model's feet on the sheet's inches: no pad is ever big enough, and the planter is
+        // taken for a luminaire head (the fault).
+        let model = read("E-001", &d, area, &types, 12.0);
+        assert!(model.equipment.is_empty(), "{:?}", model.equipment);
+        assert_eq!(model.unplaced_labels.len(), 1, "{:?}", model.unplaced_labels);
+        assert!(model.lights.iter().all(|l| l.symbol.is_some()), "{:?}", model.lights);
+        // The sheet's own feet: its scale note.
+        let paper = paper_size();
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&paper));
+        assert!((sheet.upf - 1.0 / 30.0).abs() < 1e-9, "{} {}", sheet.upf, sheet.feet);
+        assert!(sheet.feet.contains("scale note") && !sheet.feet.contains("verify"), "{}", sheet.feet);
+        assert_eq!(sheet.equipment.len(), 1, "{:?} {:?}", sheet.equipment, sheet.unplaced_labels);
+        assert!(sheet.equipment.first().is_some_and(|q| q.kind == "transformer"), "{:?}", sheet.equipment);
+        assert!(sheet.unplaced_labels.is_empty(), "{:?}", sheet.unplaced_labels);
+        assert_eq!(sheet.lights.len(), 2, "{:?}", sheet.lights);
+        assert_eq!(sheet.lights.iter().filter(|l| l.symbol.is_some()).count(), 1, "the planter is no luminaire head: {:?}", sheet.lights);
+        // Laid on the building at its size, and the transformer's pad 8 ft on the model.
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        let pad = sheet.equipment.first().map_or(0.0, |q| (q.bbox[2] - q.bbox[0]) * fit.reg.scale() / 12.0);
+        assert!((pad - 8.0).abs() < 0.1, "{pad}");
+        let mut seq = Seq::default();
+        let built = plan(&sp, &sheet, &fit, "Level 1", &mut seq);
+        assert!(built.equipment.iter().any(|e| e.kind == "transformer"), "{:?}", built.equipment);
+    }
+
+    #[test]
+    fn a_paper_size_site_sheet_with_no_scale_note_is_measured_by_its_laid_outline() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_with_slab();
+        let paper = paper_size();
+        let (d, area) = paper_site_sheet_at_30(false, true);
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&paper));
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        assert!((sheet.upf - 1.0 / 30.0).abs() < 1e-3, "{} {}", sheet.upf, sheet.feet);
+        assert!(sheet.feet.contains("building outline"), "{}", sheet.feet);
+        assert_eq!(sheet.equipment.len(), 1, "{:?} {:?}", sheet.equipment, sheet.unplaced_labels);
+        assert_eq!(sheet.lights.iter().filter(|l| l.symbol.is_some()).count(), 1, "{:?}", sheet.lights);
+        // Nothing to measure it by: the model's feet, and said so.
+        let (d, area) = paper_site_sheet_at_30(false, false);
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&paper));
+        assert!(!fit.fitted(), "{}", fit.why);
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("verify"), "{} {}", sheet.upf, sheet.feet);
+        // A scale note alone never says a sheet of unknown import is at paper size.
+        let (d, area) = paper_site_sheet_at_30(true, false);
+        let (sheet, _) = read_laid("E-001", &d, area, &types, &sp, "Level 1", None);
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("not known"), "{} {}", sheet.upf, sheet.feet);
+    }
+
+    #[test]
+    fn a_site_sheet_at_its_printed_scale_keeps_the_models_feet() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_with_slab();
+        let (d, area) = site_sheet();
+        let real = super::super::guided::SheetScale { scale: 240.0, source: "scale note 1\" = 20'-0\"".into(), ..paper_size() };
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&real));
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("printed scale"), "{}", sheet.feet);
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        assert_eq!((sheet.lights.len(), sheet.equipment.len()), (2, 1), "{:?} {:?}", sheet.lights, sheet.equipment);
+        // A drawing file is drawn full size whatever its plot scale (here none read: 1x).
+        let drawing = super::super::guided::SheetScale {
+            scale: 1.0,
+            source: format!("{}, drawn full size: no plot scale read", cadaddy_mepfix::printset::DRAWING_SHEET_SOURCE),
+            ..paper_size()
+        };
+        let mut noted = d.clone();
+        text(&mut noted, "SCALE: 1\" = 20'-0\"", 9_100.0, 1_100.0, 18.0);
+        let (sheet, _) = read_laid("E-001", &noted, area, &types, &sp, "Level 1", Some(&drawing));
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("full size"), "{}", sheet.feet);
+        assert_eq!((sheet.lights.len(), sheet.equipment.len()), (2, 1), "{:?} {:?}", sheet.lights, sheet.equipment);
+        // Unknown to the import (a checkpoint's), the laid outline gives the same feet.
+        let (sheet, _) = read_laid("E-001", &d, area, &types, &sp, "Level 1", None);
+        assert!((sheet.upf - 12.0).abs() < 0.2 && sheet.feet.contains("building outline"), "{} {}", sheet.upf, sheet.feet);
+        assert_eq!((sheet.lights.len(), sheet.equipment.len()), (2, 1), "{:?} {:?}", sheet.lights, sheet.equipment);
+    }
+
+    #[test]
+    fn the_job_reads_a_paper_size_site_plan_in_its_own_feet() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = paper_site_sheet_at_30(true, true);
+        let sp = spec_with_slab();
+        if let Ok(d) = s.doc_mut() {
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_scales = vec![paper_size()];
+        let mut result = serde_json::json!({});
+        site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        let w = &result["site_work"];
+        assert_eq!(w["equipment"], serde_json::json!(1), "{w:#}");
+        assert_eq!(w["luminaires"], serde_json::json!(2), "{w:#}");
+        assert!(w["sheets"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("scale note")))), "{w:#}");
     }
 
     #[test]
