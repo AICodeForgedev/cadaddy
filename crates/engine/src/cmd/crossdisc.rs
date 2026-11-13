@@ -208,6 +208,10 @@ pub(crate) struct LegendRow {
 pub(crate) struct Legends {
     pub rows: Vec<LegendRow>,
     pub boxes: Vec<[f64; 4]>,
+    /// Rows whose words name a compared kind with no drawing read for them (none in their cell, or
+    /// too many pieces): the kind rule's index and the words. The architect's count of that kind
+    /// is partial.
+    pub unread: Vec<(usize, String)>,
 }
 
 fn piece_box(p: &Piece) -> [f64; 4] {
@@ -336,8 +340,9 @@ pub(crate) fn legends(texts: &[TextItem], drawn: &[Piece], rules: &Rules) -> Leg
                 _ => cells.push((b[1], b[3], vec![p])),
             }
         }
-        // Each line to the nearest cell by height.
+        // Each line to the nearest cell by height; the lines by none, wrapped lines joined.
         let mut words: Vec<Vec<&TextItem>> = vec![Vec::new(); cells.len()];
+        let mut loose: Vec<(f64, String)> = Vec::new();
         for u in &kept {
             let y = u.at.y + 0.5 * u.height;
             let near = cells
@@ -356,21 +361,35 @@ pub(crate) fn legends(texts: &[TextItem], drawn: &[Piece], rules: &Rules) -> Leg
                     )
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1));
-            if let Some((i, d)) = near
-                && d <= 3.0 * h
-                && let Some(w) = words.get_mut(i)
-            {
-                w.push(u);
+            match near {
+                Some((i, d)) if d <= 3.0 * h => {
+                    if let Some(w) = words.get_mut(i) {
+                        w.push(u);
+                    }
+                }
+                // (A row with no drawing by it: its words still say what the legend draws.)
+                _ => match loose.last_mut() {
+                    Some((y, text)) if *y - u.at.y <= 1.7 * h => {
+                        text.push(' ');
+                        text.push_str(u.value.trim());
+                        *y = u.at.y;
+                    }
+                    _ => loose.push((u.at.y, u.value.trim().to_string())),
+                },
             }
         }
+        out.unread.extend(loose.into_iter().filter_map(|(_, text)| Some((rules.kind_of_row(&text)?, text))));
         for ((_, _, pieces), lines) in cells.into_iter().zip(words) {
-            if lines.is_empty() || pieces.len() > MAX_ROW_PIECES {
+            if lines.is_empty() {
                 continue;
             }
             let text = lines.iter().map(|u| u.value.trim()).collect::<Vec<_>>().join(" ");
-            if let Some(kind) = rules.kind_of_row(&text) {
-                out.rows.push(LegendRow { words: text, kind, pieces, text_h: h, legend });
+            let Some(kind) = rules.kind_of_row(&text) else { continue };
+            if pieces.len() > MAX_ROW_PIECES {
+                out.unread.push((kind, text));
+                continue;
             }
+            out.rows.push(LegendRow { words: text, kind, pieces, text_h: h, legend });
         }
     }
     out
@@ -485,21 +504,28 @@ pub(crate) struct Found {
 /// its symbols larger or smaller than the plans do (a can light twice its plan size): each drawing
 /// is looked for at each of [`SCALES`] of that, never smaller than `min_size` (a share of the
 /// sheet's lettering: smaller marks are lettering's strokes). Plain outlines (a box, a bar) tell
-/// nothing apart and are not looked for: they are counted in the second value.
-pub(crate) fn find(rows: &[LegendRow], units: &[f64], pieces: &[Piece], area: [f64; 4], exclude: &[[f64; 4]], min_size: f64) -> (Vec<Found>, usize) {
+/// nothing apart and are not looked for: their rows are the second value.
+pub(crate) fn find(
+    rows: &[LegendRow],
+    units: &[f64],
+    pieces: &[Piece],
+    area: [f64; 4],
+    exclude: &[[f64; 4]],
+    min_size: f64,
+) -> (Vec<Found>, Vec<usize>) {
     let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
     let keep = |p: Vec2| inside(&area, p) && !exclude.iter().any(|r| inside(r, p));
     let mid = |p: &Piece| {
         let b = piece_box(p);
         Vec2::new(0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3]))
     };
-    let mut plain = 0usize;
+    let mut plain: Vec<usize> = Vec::new();
     let mut templates: Vec<(usize, Template, f64)> = Vec::new();
     for (i, r) in rows.iter().enumerate() {
         let unit = units.get(i).copied().filter(|u| u.is_finite() && *u > 0.0).unwrap_or(1.0);
         match Template::new_crossed(&r.words, "", "", "", &r.pieces, r.text_h) {
             Some(tp) if !tp.simple => templates.push((i, tp, unit)),
-            _ => plain += 1,
+            _ => plain.push(i),
         }
     }
     if templates.is_empty() {
@@ -564,7 +590,7 @@ pub(crate) struct Room {
 }
 
 impl Room {
-    /// Its name and number as printed (`VENDING 145`).
+    /// Its name and number as printed (`SNACK ALCOVE 12`).
     pub(crate) fn label(&self) -> String {
         let (n, k) = (self.name.trim(), self.number.trim());
         if k.is_empty() || n.split_whitespace().any(|w| w.eq_ignore_ascii_case(k)) { n.to_string() } else { format!("{n} {k}") }
@@ -653,6 +679,9 @@ pub(crate) struct Comparison {
     pub objects: BTreeMap<String, (usize, usize)>,
     /// Objects in no traced room, per side.
     pub roomless: (usize, usize),
+    /// Rooms not asked about per kind name: the architect's legend draws the kind some way the job
+    /// can't read, so the architect's count there is partial.
+    pub not_asked: BTreeMap<String, usize>,
 }
 
 /// A level's key, whatever it is called (`1`, `LEVEL 1`, `Level 01` are one level).
@@ -739,7 +768,7 @@ fn groups(ids: &[usize], key: impl Fn(usize) -> Option<usize>, near: impl Fn(usi
 
 /// Compare the architect's and the engineer's objects room by room (see the module docs). `upf`:
 /// drawing units per foot of the plans.
-pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64) -> Comparison {
+pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64, partial: &BTreeSet<usize>) -> Comparison {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let mut out = Comparison::default();
     let rooms: Vec<&Room> = rooms.iter().filter(|r| r.outline.len() >= 3).take(MAX_ROOMS).collect();
@@ -803,9 +832,16 @@ pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64) -> 
             let engineer_level = e_levels.contains(key);
             let architect_level = a_levels.contains(key);
             let (arch, eng): (Vec<usize>, Vec<usize>) = on_level.iter().partition(|&&i| objs.get(i).is_some_and(|o| o.architect));
-            // By position first: the architect's objects with no engineer's object of the kind near.
-            let near_engineer = |o: &Obj| eng.iter().filter_map(|&j| objs.get(j)).any(|x| (x.at[0] - o.at[0]).hypot(x.at[1] - o.at[1]) <= reach);
-            let bare: Vec<usize> = arch.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| !near_engineer(o))).collect();
+            // By position first: the architect's objects with no engineer's object of the kind near
+            // (in the same room: a light across a wall lights another room).
+            let room_at = |i: usize| room_of.get(i).copied().flatten();
+            let near_engineer = |i: usize, o: &Obj| {
+                eng.iter().filter_map(|&j| Some((j, objs.get(j)?))).any(|(j, x)| {
+                    (x.at[0] - o.at[0]).hypot(x.at[1] - o.at[1]) <= reach
+                        && (room_at(i).is_none() || room_at(j).is_none() || room_at(i) == room_at(j))
+                })
+            };
+            let bare: Vec<usize> = arch.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| !near_engineer(i, o))).collect();
             let bare_set: BTreeSet<usize> = bare.iter().copied().collect();
             let room_counts = |ri: Option<usize>| {
                 ri.map(|ri| {
@@ -901,6 +937,12 @@ pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64) -> 
                             && engineer_level)
                             .then_some(Case::NoneAnywhere)
                     }
+                    // (Where the architect's legend draws the kind some way the job can't read, a
+                    // room with none of the architect's read is no finding.)
+                    (0, _, _) if partial.contains(&k) => {
+                        *out.not_asked.entry(rule.name.clone()).or_default() += 1;
+                        None
+                    }
                     (0, _, _) => (architect_level && !typical).then_some(Case::EngineerOnly),
                     // (The architect's alone here are their own finding above.)
                     (_, 0, _) | (_, _, 0) => None,
@@ -908,7 +950,12 @@ pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64) -> 
                         let tol = rule.count_tolerance.max(na.max(ne) / 4);
                         let counts = na.abs_diff(ne) > tol;
                         let places = ua.min(ue) > rule.count_tolerance && 2 * ua.min(ue) > na.min(ne);
-                        (!typical && (counts || places)).then_some(Case::Differ)
+                        if partial.contains(&k) && na < ne && (counts || places) {
+                            *out.not_asked.entry(rule.name.clone()).or_default() += 1;
+                            None
+                        } else {
+                            (!typical && (counts || places)).then_some(Case::Differ)
+                        }
                     }
                 };
                 let Some(case) = case else { continue };
@@ -952,7 +999,7 @@ fn sheets_of(objs: &[Obj], ids: &[usize]) -> Vec<String> {
     v
 }
 
-/// What the architect's objects are drawn as (`2 drawn as its legend's SURFACE MOUNTED CAN LIGHT`).
+/// What the architect's objects are drawn as (`2 as RECESSED DOWN LIGHT`: its legend row's words).
 fn drawn_as(objs: &[Obj], ids: &[usize]) -> String {
     let mut by: BTreeMap<&str, usize> = BTreeMap::new();
     for o in ids.iter().filter_map(|&i| objs.get(i)) {
@@ -1086,7 +1133,7 @@ pub(crate) fn to_rfi(f: &Finding, objs: &[Obj], rooms: &[Room], rules: &Rules, e
     })
 }
 
-/// The finding's one line for the job report (`VENDING 145 (level 1): lights A: 2 on A-6, E: 0 on E-3`).
+/// The finding's one line for the job report (`SNACK ALCOVE 12 (level 1): lights A: 2 on A-601, E: 0 on E-101`).
 pub(crate) fn line(f: &Finding, objs: &[Obj], rooms: &[Room], rules: &Rules, engineer_sheets: &[String]) -> String {
     let name = rules.kinds.get(f.kind).map_or("objects", |k| k.name.as_str());
     let a = sheets_of(objs, &f.architect);
@@ -1125,9 +1172,9 @@ mod tests {
             t("CEILING LEGEND", 100.0, 500.0, 6.0),
             t("ACOUSTICAL TILE 2X2", 130.0, 470.0, 3.0),
             t("SUPPLY DIFFUSER", 130.0, 450.0, 3.0),
-            t("RE: MECHANICAL", 130.0, 446.0, 3.0),
-            t("SURFACE MOUNTED", 130.0, 431.0, 3.0),
-            t("CAN LIGHT", 130.0, 427.0, 3.0),
+            t("SEE MECHANICAL", 130.0, 446.0, 3.0),
+            t("RECESSED", 130.0, 431.0, 3.0),
+            t("DOWN LIGHT", 130.0, 427.0, 3.0),
             t("EXIT SIGN", 130.0, 410.0, 3.0),
             // A note far under it, another table.
             t("GENERAL NOTES", 130.0, 200.0, 3.0),
@@ -1157,10 +1204,10 @@ mod tests {
     fn the_rules_name_lights_by_their_legend_words_and_the_engineers_by_kind() {
         let r = rules();
         let light = r.kinds.iter().position(|k| k.kind == "light").unwrap_or_else(|| panic!("no light rule"));
-        assert_eq!(r.kind_of_row("SURFACE MOUNTED CAN LIGHT"), Some(light));
+        assert_eq!(r.kind_of_row("CEILING CAN LIGHT"), Some(light));
         assert_eq!(r.kind_of_row("RECESSED LED DOWNLIGHT"), Some(light));
         assert_ne!(r.kind_of_row("EXIT SIGN"), Some(light));
-        assert_eq!(r.kind_of_row("SUPPLY DIFFUSER RE: MECHANICAL"), None);
+        assert_eq!(r.kind_of_row("SUPPLY DIFFUSER SEE MECHANICAL"), None);
         assert_eq!(r.kind_of_row("LIGHT GAUGE METAL FRAMING"), None);
         let k = r.kinds.get(light).unwrap_or_else(|| panic!("no rule"));
         assert!(k.is_engineers("luminaire", "IfcLightFixture") && k.is_engineers("wall luminaire", ""));
@@ -1173,7 +1220,7 @@ mod tests {
         let (texts, drawn) = legend_sheet();
         let l = legends(&texts, &drawn, rules());
         let words: Vec<&str> = l.rows.iter().map(|r| r.words.as_str()).collect();
-        assert_eq!(words, ["SURFACE MOUNTED CAN LIGHT", "EXIT SIGN"], "{l:?}");
+        assert_eq!(words, ["RECESSED DOWN LIGHT", "EXIT SIGN"], "{l:?}");
         assert_eq!(l.rows.first().map(|r| r.pieces.len()), Some(2));
         assert_eq!(l.boxes.len(), 1);
         // The general notes far under it are no row.
@@ -1190,12 +1237,12 @@ mod tests {
         }
         drawn.push(Piece::Round(Vec2::new(420.0, 300.0), 2.0));
         drawn.extend(square(Vec2::new(450.0, 296.0), 8.0));
-        let rows: Vec<LegendRow> = l.rows.iter().filter(|r| r.words.contains("CAN")).cloned().collect();
+        let rows: Vec<LegendRow> = l.rows.iter().filter(|r| r.words.contains("DOWN")).cloned().collect();
         let (found, plain) = find(&rows, &[1.0], &drawn, [0.0, 0.0, 1000.0, 1000.0], &l.boxes, 0.0);
         let mut xs: Vec<f64> = found.iter().map(|f| f.at.x.round()).collect();
         xs.sort_by(f64::total_cmp);
         assert_eq!(xs, [300.0, 340.0, 380.0], "{found:?}");
-        assert_eq!(plain, 0);
+        assert!(plain.is_empty(), "{plain:?}");
     }
 
     fn polyline(pts: &[(f64, f64)], closed: bool) -> cadaddy_doc::EntityKind {
@@ -1242,7 +1289,7 @@ mod tests {
             drawn.extend(can(Vec2::new(x, y), 1.0));
         }
         drawn.extend(can(Vec2::new(380.0, 300.0), 0.4));
-        let rows: Vec<LegendRow> = l.rows.iter().filter(|r| r.words.contains("CAN")).cloned().collect();
+        let rows: Vec<LegendRow> = l.rows.iter().filter(|r| r.words.contains("DOWN")).cloned().collect();
         let (found, _) = find(&rows, &[1.0], &drawn, [0.0, 0.0, 1000.0, 1000.0], &l.boxes, 1.5);
         let mut xs: Vec<f64> = found.iter().map(|f| f.at.x.round()).collect();
         xs.sort_by(f64::total_cmp);
@@ -1263,9 +1310,9 @@ mod tests {
             kind: 0,
             level: "LEVEL 1".into(),
             at: [x, y],
-            sheet: if architect { "A-6".into() } else { "E-3".into() },
+            sheet: if architect { "A-601".into() } else { "E-101".into() },
             architect,
-            what: if architect { "CAN LIGHT".into() } else { "A".into() },
+            what: if architect { "DOWN LIGHT".into() } else { "A".into() },
             circuit: if architect { String::new() } else { "L1-7".into() },
             ..Obj::default()
         }
@@ -1294,17 +1341,17 @@ mod tests {
         for o in &mut objs {
             o.kind = light;
         }
-        let c = compare(&objs, &rooms, r, 12.0);
+        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
         assert_eq!(c.findings.len(), 1, "{c:?}");
         let f = c.findings.first().unwrap_or_else(|| panic!("no finding"));
         assert_eq!((f.case, f.room, f.architect.len(), f.engineer.len()), (Case::ArchitectOnly, Some(0), 2, 0));
-        let rfi = to_rfi(f, &objs, &rooms, r, &["E-3".to_string()], 12.0).unwrap_or_else(|| panic!("no rfi"));
+        let rfi = to_rfi(f, &objs, &rooms, r, &["E-101".to_string()], 12.0).unwrap_or_else(|| panic!("no rfi"));
         assert!(rfi.issue.contains("A: 2, E: 0") && rfi.issue.contains("not on the electrical drawings"), "{rfi:?}");
         assert!(rfi.about.contains("SNACK ALCOVE 12"), "{rfi:?}");
-        assert_eq!(rfi.sheets, ["A-6", "E-3"]);
+        assert_eq!(rfi.sheets, ["A-601", "E-101"]);
         assert_eq!(rfi.severity, Severity::High);
         assert!(rfi.proposed.as_deref().is_some_and(|p| p.contains("L1-7") && p.contains("switch")), "{rfi:?}");
-        assert!(line(f, &objs, &rooms, r, &["E-3".to_string()]).contains("SNACK ALCOVE 12 (level LEVEL 1): lights A: 2 on A-6, E: 0 on E-3"));
+        assert!(line(f, &objs, &rooms, r, &["E-101".to_string()]).contains("SNACK ALCOVE 12 (level LEVEL 1): lights A: 2 on A-601, E: 0 on E-101"));
     }
 
     #[test]
@@ -1315,7 +1362,7 @@ mod tests {
         for o in &mut objs {
             o.kind = light;
         }
-        let c = compare(&objs, &rooms, r, 12.0);
+        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
         assert!(c.findings.is_empty(), "{c:?}");
         assert_eq!(c.objects.get("lights"), Some(&(6, 6)));
     }
@@ -1339,7 +1386,7 @@ mod tests {
         for o in &mut objs {
             o.kind = light;
         }
-        let c = compare(&objs, &rooms, r, 12.0);
+        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
         let cases: Vec<(Case, String)> =
             c.findings.iter().map(|f| (f.case, f.room.and_then(|i| rooms.get(i)).map_or_else(String::new, Room::label))).collect();
         assert_eq!(
@@ -1351,7 +1398,7 @@ mod tests {
         for o in objs.iter_mut().filter(|o| !o.architect) {
             o.typical = true;
         }
-        let c = compare(&objs, &rooms, r, 12.0);
+        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
         assert!(c.findings.iter().all(|f| f.case == Case::NoneAnywhere), "{c:?}");
     }
 
@@ -1368,16 +1415,23 @@ mod tests {
             objs.push(obj(true, x, 60.0));
             objs.push(obj(false, x + 4.0, 62.0));
         }
-        let c = compare(&objs, &rooms, r, 12.0);
+        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
         assert_eq!(c.findings.len(), 1, "{c:?}");
         let f = c.findings.first().unwrap_or_else(|| panic!("none"));
         assert_eq!((f.case, f.room, f.architect.len(), f.room_counts), (Case::ArchitectOnly, Some(0), 3, Some((6, 3))));
         let rfi = to_rfi(f, &objs, &rooms, r, &[], 12.0).unwrap_or_else(|| panic!("no rfi"));
         assert!(rfi.issue.contains("A: 3, E: 0") && rfi.issue.contains("holds A: 6, E: 3"), "{rfi:?}");
+        // A light across a wall (another room's) is no copy of one by it.
+        let mut walled = vec![room("ALCOVE", "31", (0.0, 300.0), (100.0, 400.0)), room("CLOSET", "32", (104.0, 300.0), (160.0, 400.0))];
+        walled.push(room("HALL", "33", (0.0, 410.0), (300.0, 470.0)));
+        let across = vec![obj(true, 90.0, 350.0), obj(false, 120.0, 350.0), obj(true, 150.0, 440.0), obj(false, 152.0, 440.0)];
+        let c2 = compare(&across, &walled, r, 12.0, &BTreeSet::new());
+        let alcove: Vec<_> = c2.findings.iter().filter(|f| f.case == Case::ArchitectOnly).map(|f| (f.room, f.architect.len())).collect();
+        assert_eq!(alcove, [(Some(0), 1)], "{c2:?}");
         // Two groups far apart in one room are two findings.
         objs.push(obj(true, 40.0, 20.0));
         objs.push(obj(true, 60.0, 20.0));
-        let c = compare(&objs, &rooms, r, 12.0);
+        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
         let mut sizes: Vec<usize> = c.findings.iter().map(|f| f.architect.len()).collect();
         sizes.sort_unstable();
         assert_eq!(sizes, [2, 3], "{c:?}");
@@ -1388,12 +1442,33 @@ mod tests {
         let r = rules();
         let rooms = vec![room("ROOM", "1", (0.0, 0.0), (100.0, 100.0)), room("ROOM", "2", (200.0, 0.0), (300.0, 100.0))];
         let objs: Vec<Obj> = vec![obj(true, 50.0, 50.0), obj(true, 250.0, 50.0), obj(true, 900.0, 900.0)];
-        let c = compare(&objs, &rooms, r, 12.0);
+        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
         assert_eq!(c.findings.len(), 1, "{c:?}");
         let f = c.findings.first().unwrap_or_else(|| panic!("none"));
         assert_eq!((f.room, f.rooms.len(), f.architect.len()), (None, 2, 3));
         let rfi = to_rfi(f, &objs, &rooms, r, &[], 12.0).unwrap_or_else(|| panic!("no rfi"));
         assert!(rfi.about.contains("ROOM 1, ROOM 2"), "{rfi:?}");
+    }
+
+    /// A legend row naming lights with no drawing the job can read (its bar left out of the row's
+    /// cell) makes the architect's count of lights partial: a room only the electrical lights is
+    /// not asked about then, and said so.
+    #[test]
+    fn a_legend_row_the_job_cant_read_makes_the_architects_count_partial() {
+        let (mut texts, drawn) = legend_sheet();
+        texts.push(t("LINEAR LIGHT", 130.0, 395.0, 3.0));
+        let l = legends(&texts, &drawn, rules());
+        let light = rules().kinds.iter().position(|k| k.kind == "light").unwrap_or(0);
+        assert_eq!(l.unread, [(light, "LINEAR LIGHT".to_string())], "{l:?}");
+        let rooms = vec![room("OFFICE", "20", (0.0, 0.0), (120.0, 120.0)), room("HALL", "21", (200.0, 0.0), (440.0, 240.0))];
+        let mut objs = vec![obj(false, 40.0, 60.0), obj(true, 300.0, 100.0), obj(false, 302.0, 100.0)];
+        for o in &mut objs {
+            o.kind = light;
+        }
+        let partial: BTreeSet<usize> = [light].into();
+        let c = compare(&objs, &rooms, rules(), 12.0, &partial);
+        assert!(c.findings.is_empty(), "{c:?}");
+        assert_eq!(c.not_asked.get("lights"), Some(&1));
     }
 
     #[test]

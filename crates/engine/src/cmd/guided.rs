@@ -12665,6 +12665,7 @@ fn coordination_step(
     // each sheet's legend boxes.
     let mut rows: Vec<(cd::LegendRow, String, Option<f64>)> = Vec::new();
     let mut boxes: BTreeMap<String, Vec<[f64; 4]>> = BTreeMap::new();
+    let mut unread: Vec<(usize, String)> = Vec::new();
     {
         let d = s.doc()?;
         for sh in &arch {
@@ -12678,6 +12679,7 @@ fn coordination_step(
             boxes.entry(sheet_key(&sh.number)).or_default().extend(l.boxes.iter().copied());
             let h = lettering(&texts);
             rows.extend(l.rows.into_iter().map(|r| (r, sh.number.clone(), h)));
+            unread.extend(l.unread.into_iter().map(|(k, w)| (k, format!("{}: {w}", sh.number))));
         }
     }
     let mut report = json!({
@@ -12687,7 +12689,7 @@ fn coordination_step(
     // The architect's objects: each legend row's drawing on each of the architect's sheets read.
     let row_list: Vec<cd::LegendRow> = rows.iter().map(|(r, _, _)| r.clone()).collect();
     let mut hits: Vec<(String, [f64; 2], usize)> = Vec::new();
-    let mut plain = 0usize;
+    let mut plain: BTreeSet<usize> = BTreeSet::new();
     if !row_list.is_empty() {
         let d = s.doc()?;
         for sh in arch.iter().filter(|sh| rules.read_kind(&sh.kind)) {
@@ -12708,11 +12710,19 @@ fn coordination_step(
             let pieces = cd::sheet_pieces(&sub);
             // (Never smaller than half the sheet's lettering: smaller is lettering's strokes.)
             let (found, p) = cd::find(&row_list, &units, &pieces, area, &exclude, 0.5 * here.unwrap_or(0.0));
-            plain = plain.max(p);
+            plain.extend(p);
             hits.extend(found.into_iter().map(|f| (sh.number.clone(), [f.at.x, f.at.y], f.row)));
         }
     }
-    report["plain_rows_not_looked_for"] = json!(plain);
+    // The kinds some legend row draws a way the job can't read (a plain outline, a row with no
+    // drawing read): the architect's count of them is partial.
+    let mut partial: BTreeSet<usize> = unread.iter().map(|(k, _)| *k).collect();
+    partial.extend(plain.iter().filter_map(|&i| row_list.get(i)).map(|r| r.kind));
+    let mut not_read: Vec<String> = unread.iter().map(|(_, w)| w.clone()).collect();
+    not_read.extend(plain.iter().filter_map(|&i| row_list.get(i)).map(|r| r.words.clone()));
+    not_read.sort();
+    not_read.dedup();
+    report["legend_rows_not_read"] = json!(not_read);
     report["architect_found"] = json!(hits.len());
     // Onto their levels' plans: the architect's ceiling plans registered beside the floor plans
     // (as the devices' sheets are), on a copy of the spec's sheet links.
@@ -12799,7 +12809,7 @@ fn coordination_step(
         origin.push(None);
     }
     let rooms: Vec<cd::Room> = job_rooms(job).into_iter().map(|(name, level, outline, number)| cd::Room { level, name, number, outline }).collect();
-    let cmp = cd::compare(&objs, &rooms, rules, upf);
+    let cmp = cd::compare(&objs, &rooms, rules, upf, &partial);
     // The engineer's sheets of a level, for a finding no engineer's object names a sheet for.
     let engineer_sheets = |kind: usize, level: &str| -> Vec<String> {
         let key = cd::level_key(level);
@@ -12925,6 +12935,7 @@ fn coordination_step(
     report["objects"] =
         json!(cmp.objects.iter().map(|(k, (a, e))| (k.clone(), json!({"architect": a, "engineer": e}))).collect::<serde_json::Map<String, Value>>());
     report["roomless"] = json!({"architect": cmp.roomless.0, "engineer": cmp.roomless.1});
+    report["rooms_not_asked"] = json!(cmp.not_asked);
     report["rooms_compared"] = json!(cmp.rooms_compared);
     report["findings"] = json!(by_case);
     report["lines"] = json!(lines.iter().take(MAX_COORDINATION_LISTED).collect::<Vec<_>>());
@@ -37491,7 +37502,7 @@ mod tests {
                 d.add(&Space::Model, common(), EntityKind::Text(text(&n, q[0], q[1], 6.0))).ok();
             }
             // The ceiling plan's legend.
-            for (v, x, y, h) in [("RCP LEGEND", 2850.0, 760.0, 8.0), ("SURFACE MOUNTED", 2880.0, 731.0, 3.0), ("CAN LIGHT", 2880.0, 727.0, 3.0)] {
+            for (v, x, y, h) in [("CEILING LEGEND", 2850.0, 760.0, 8.0), ("RECESSED", 2880.0, 731.0, 3.0), ("DOWN LIGHT", 2880.0, 727.0, 3.0)] {
                 d.add(&Space::Model, common(), EntityKind::Text(text(v, x, y, h))).ok();
             }
             let can = |d: &mut cadaddy_doc::Drawing, c: [f64; 2]| {
@@ -37553,7 +37564,7 @@ mod tests {
         let (mut s, mut job, mut devices) = coordination_set(0);
         let before = devices.len();
         let r = coordination_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(r["legend_rows"], json!(["A-601: SURFACE MOUNTED CAN LIGHT (light)"]), "{r:#}");
+        assert_eq!(r["legend_rows"], json!(["A-601: RECESSED DOWN LIGHT (light)"]), "{r:#}");
         assert_eq!((r["architect_found"].clone(), r["architect_placed"].clone()), (json!(6), json!(6)), "{r:#}");
         assert_eq!(r["findings"], json!({"architect_only": 1}), "{r:#}");
         assert_eq!(r["objects"]["lights"], json!({"architect": 6, "engineer": 4}), "{r:#}");
