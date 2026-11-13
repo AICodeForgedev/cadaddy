@@ -3366,15 +3366,22 @@ fn plan_level_with(
     if let (Some(sp), Some(rule)) = (g.spec.as_ref(), doortags::DoorRule::load()) {
         let tags = doortags::level_tags(sp, level, rule.connect_ft * upf);
         if !tags.is_empty() {
+            // The plan's lines and their extents, worked out once (only a tag no door answers
+            // asks).
+            let boxes: std::cell::OnceCell<Vec<(cadaddy_geom::Bounds2, &Arc<Entity>)>> = std::cell::OnceCell::new();
             let lines = |at: Vec2, r: f64| -> Vec<(super::perceive::geometry::Seg, Handle)> {
-                ents.iter()
-                    .filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)))
-                    .filter(|e| {
-                        let b = cadaddy_doc::entity_bounds(d, e, 0);
-                        !b.is_empty() && at.x >= b.min.x - r && at.x <= b.max.x + r && at.y >= b.min.y - r && at.y <= b.max.y + r
-                    })
+                let boxes = boxes.get_or_init(|| {
+                    ents.iter()
+                        .filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)))
+                        .map(|e| (cadaddy_doc::entity_bounds(d, e, 0), *e))
+                        .filter(|(b, _)| !b.is_empty())
+                        .collect()
+                });
+                boxes
+                    .iter()
+                    .filter(|(b, _)| at.x >= b.min.x - r && at.x <= b.max.x + r && at.y >= b.min.y - r && at.y <= b.max.y + r)
                     .take(MAX_OBJECTS)
-                    .flat_map(|e| segments(&[*e]).into_iter().map(move |sg| (sg, e.handle)))
+                    .flat_map(|(_, e)| segments(&[*e]).into_iter().map(move |sg| (sg, e.handle)))
                     .collect()
             };
             let report = doortags::build(&mut pl, &tags, sp, &lines, &rule, k, min_gap);
