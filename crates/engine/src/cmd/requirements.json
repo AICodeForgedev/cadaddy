@@ -166,6 +166,51 @@
       "step": "rough_in",
       "severity": "high",
       "propose": "none"
+    },
+    {
+      "id": "E-CIRCUIT-SCHEDULED",
+      "object": "circuit on the plans",
+      "trade": "electrical",
+      "kinds": ["device", "light_fixture", "equipment"],
+      "needs": ["breaker_handle"],
+      "from_build": "breakers",
+      "build_kinds": ["plan_no_row", "no_schedule", "unknown_panel"],
+      "what": "a breaker in its panel's schedule",
+      "basis": "NEC 408.4(A): every circuit is identified at its panel by its breaker, and NEC 210.11 gives every load a branch circuit; a circuit the plans use that no panel schedule has (or a panel no document has) has no breaker to land on",
+      "ask": "Which panel and breaker feed it: is the schedule short a row, or the plans' circuit label wrong?",
+      "step": "rough_in",
+      "severity": "high",
+      "propose": "none"
+    },
+    {
+      "id": "E-BREAKER-LOAD",
+      "object": "scheduled circuit",
+      "trade": "electrical",
+      "kinds": ["breaker"],
+      "needs": ["devices"],
+      "from_build": "breakers",
+      "build_kinds": ["row_no_plan"],
+      "what": "a load on the plans",
+      "basis": "NEC 408.4(A): each circuit's load is identified; a breaker the schedule loads with nothing on the plans is a load nobody has located, or a row to make a spare",
+      "ask": "Where is its load, or is it a spare?",
+      "step": "rough_in",
+      "severity": "medium",
+      "propose": "none"
+    },
+    {
+      "id": "E-SCHEDULE-PANEL",
+      "object": "panel schedule",
+      "trade": "electrical",
+      "kinds": ["equipment"],
+      "needs": ["bus_amps"],
+      "from_build": "breakers",
+      "build_kinds": ["no_panel"],
+      "what": "a panel on the plans to hold its breakers",
+      "basis": "NEC 408.36 and 110.26: each scheduled panelboard is installed with its working space; a schedule with no panel on any plan has no place to be set",
+      "ask": "Where is this panel?",
+      "step": "rough_in",
+      "severity": "high",
+      "propose": "none"
     }
   ]
 }

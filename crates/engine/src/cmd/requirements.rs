@@ -108,6 +108,10 @@ pub(crate) struct Requirement {
     pub propose_keys: Vec<String>,
     /// How far a neighbour may be (feet).
     pub reach_ft: f64,
+    /// A build step that measures the requirement on its own objects (`breakers`: the plans'
+    /// circuits against the panel schedules' rows), and the kinds of its findings this one is.
+    pub from_build: String,
+    pub build_kinds: Vec<String>,
 }
 
 impl Requirement {
@@ -264,9 +268,21 @@ fn equipment_index(sp: Option<&BuildingSpec>) -> HashMap<String, (String, BTreeS
     out
 }
 
-/// The gear the spec's feeders land on, upper case.
+/// The gear the spec's feeders land on, upper case: the feeder schedule's, and each gear down a
+/// feeder run's chain (`feeder 12 P1→P2→P3`: the panels one feeder loops through).
 fn fed_gear(sp: Option<&BuildingSpec>) -> BTreeSet<String> {
-    sp.into_iter().flat_map(|sp| sp.mep.feeders.iter()).map(|f| f.to.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()).collect()
+    let mut out: BTreeSet<String> =
+        sp.into_iter().flat_map(|sp| sp.mep.feeders.iter()).map(|f| f.to.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()).collect();
+    let feeders = sp.into_iter().flat_map(|sp| sp.mep.runs.iter()).filter(|r| r.system.eq_ignore_ascii_case(super::gearbuild::FEEDER_SYSTEM));
+    for r in feeders.take(MAX_OBJECTS) {
+        for g in r.source_sheet.split('\u{2192}').skip(1) {
+            let t = g.trim().to_ascii_uppercase();
+            if !t.is_empty() {
+                out.insert(t);
+            }
+        }
+    }
+    out
 }
 
 /// A device's own kind (its `kind` property), lower case.
@@ -385,9 +401,17 @@ fn propose(rules: &Rules, r: &Requirement, m: &Model, idx: &[usize], i: usize, e
             let panel = m
                 .els
                 .iter()
-                // A panel by its schedule (its bus, main, breakers), never the load itself.
+                // A panel by its schedule (its bus, main, breakers), never the load itself, and
+                // never another unit's own panel (its typical's copy named for its room: `P-12`
+                // in room 12), as E-UNCIRCUITED has it.
                 .filter(|o| o.handle() != el.handle() && rules.panel_keys.iter().any(|k| o.get(k).is_some()))
                 .filter(|o| o.tag().is_some())
+                .filter(|o| {
+                    let theirs = o.text("room").unwrap_or_default();
+                    let unit =
+                        !theirs.is_empty() && o.tag().is_some_and(|t| t.to_ascii_uppercase().ends_with(&format!("-{}", theirs.to_ascii_uppercase())));
+                    !unit || theirs.eq_ignore_ascii_case(&room)
+                })
                 .min_by(|a, b| {
                     let la = !same_level(&a.level(), &level);
                     let lb = !same_level(&b.level(), &level);
@@ -479,11 +503,50 @@ fn rfi_for(rules: &Rules, r: &Requirement, level: &str, room: &str, open: &[&Ope
     rfi
 }
 
+/// A requirement a build step measures on its own objects: the breakers step's plans against
+/// schedules (a circuit on the plans no schedule row has, a row nothing on the plans is on, a
+/// label naming a panel no document has). Each finding of its kinds is one RFI on its objects;
+/// the objects counted are the step's own (the devices on circuits, or the breakers).
+fn from_build(rules: &Rules, r: &Requirement, report: Option<&super::breakers::Report>, ev: &mut Evaluation) {
+    let mut out = Outcome { id: r.id.clone(), object: r.object.clone(), trade: r.trade.clone(), ..Outcome::default() };
+    let Some(rep) = report.filter(|_| r.from_build == "breakers") else {
+        ev.outcomes.push(out);
+        return;
+    };
+    let kinds = lower(&r.build_kinds);
+    let breaker_side = kinds.iter().any(|k| k == "row_no_plan");
+    out.objects = if breaker_side { rep.breakers + rep.spares } else { rep.devices_linked + rep.devices_unlinked };
+    for m in rep.mismatches.iter().filter(|m| kinds.contains(&m.kind.to_ascii_lowercase())) {
+        out.missing += if breaker_side { 1 } else { m.devices.max(1) };
+        if ev.rfis.len() >= MAX_RAISED {
+            ev.not_raised += 1;
+            continue;
+        }
+        let place = format!("panel {} circuit {}", m.panel, m.circuit);
+        let mut rfi = Rfi::new(RfiKind::Requirement, &m.level, [0.0, 0.0], place.clone(), m.title(), String::new());
+        rfi.id = stable_id(&r.id, &m.level, &format!("{}|{}|{}", m.kind, m.panel, m.circuit));
+        rfi.severity = r.severity();
+        rfi.topic = format!("requirement: {} ({})", r.id, r.object);
+        rfi.assumed =
+            "Built as the plans show it meanwhile (the schedule's row, or the plans' circuit, kept as printed beside the other)".to_string();
+        rfi.proposed = Some(r.ask.clone());
+        rfi.sheets = (!m.sheet.is_empty()).then(|| vec![m.sheet.clone()]).unwrap_or_default();
+        rfi.sides = vec![
+            RfiSide { document: if m.sheet.is_empty() { "the panel schedules".to_string() } else { m.sheet.clone() }, says: m.title() },
+            RfiSide { document: r.basis.split(':').next().unwrap_or("").trim().to_string(), says: r.basis.clone() },
+        ];
+        rfi.elements = m.elements.iter().take(cadaddy_walk3d::rfi::MAX_RFI_ELEMENTS).cloned().collect();
+        rfi.before = if rules.steps.iter().any(|s| s.id == r.step) { r.step.clone() } else { rules.default_step.clone() };
+        ev.rfis.push(rfi);
+    }
+    ev.outcomes.push(out);
+}
+
 /// Every requirement over the model's objects: the measure, the RFIs (one per requirement and
 /// space) and the proposals.
 pub(crate) fn evaluate(d: &Drawing, sp: Option<&BuildingSpec>) -> Evaluation {
     let rules = rules();
-    let kinds: BTreeSet<String> = rules.requirements.iter().flat_map(|r| lower(&r.kinds)).collect();
+    let kinds: BTreeSet<String> = rules.requirements.iter().filter(|r| r.from_build.is_empty()).flat_map(|r| lower(&r.kinds)).collect();
     let m = Model::of(d, |k| kinds.contains(&k.to_ascii_lowercase()));
     let upf = if m.upf.is_finite() && m.upf > 0.0 { m.upf } else { 12.0 };
     let equipment = equipment_index(sp);
@@ -492,7 +555,12 @@ pub(crate) fn evaluate(d: &Drawing, sp: Option<&BuildingSpec>) -> Evaluation {
         marked: m.els.iter().filter(|el| el.props.iter().any(|(k, _, _)| k.starts_with(OPEN_PREFIX))).map(El::handle).take(MAX_OBJECTS).collect(),
         ..Evaluation::default()
     };
+    let breakers = super::breakers::stored(d);
     for r in &rules.requirements {
+        if !r.from_build.is_empty() {
+            from_build(rules, r, breakers.as_ref(), &mut ev);
+            continue;
+        }
         let idx: Vec<usize> = m.els.iter().enumerate().filter(|(_, el)| applies(r, el, &equipment)).map(|(i, _)| i).take(MAX_OBJECTS).collect();
         let mut out = Outcome { id: r.id.clone(), object: r.object.clone(), trade: r.trade.clone(), objects: idx.len(), ..Outcome::default() };
         for &i in &idx {

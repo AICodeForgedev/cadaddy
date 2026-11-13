@@ -98,6 +98,7 @@ struct Planted {
     bare_receptacle: Handle,
     idle_switch: Handle,
     heat_pump: Handle,
+    _unit_panel: Handle,
     unfed_panel: Handle,
     assumed_fan: Handle,
 }
@@ -127,6 +128,8 @@ fn model(plant: bool) -> (Session, Option<Planted>) {
     }
     device(&mut d, "L2", "receptacle", "201", 2.0, 0.5, &[p("circuit", "LP2-1")]);
     el(&mut d, "equipment", "L2", "E-EQPM", [30.0, 0.0, 10.0], &[p("tag", "LP2"), sched("bus_amps", "100"), sched("main", "MLO")]);
+    // A unit panel down a feeder that loops through panels (the feeder run's chain reaches it).
+    el(&mut d, "equipment", "L2", "E-EQPM", [34.0, 0.0, 10.0], &[p("tag", "LP4-2"), sched("bus_amps", "100"), sched("main", "MLO")]);
     el(&mut d, "equipment", "L2", "M-EQPM", [20.0, 20.0, 10.0], &[p("type_mark", "EF-9"), p("room", "201"), p("circuit", "LP2-5")]);
     el(&mut d, "equipment", "L2", "M-EQPM", [40.0, 20.0, 10.0], &[p("type_mark", "HP-9"), p("circuit", "LP2-7")]);
     let planted = plant.then(|| Planted {
@@ -136,6 +139,15 @@ fn model(plant: bool) -> (Session, Option<Planted>) {
         // A switch in a room with no light.
         idle_switch: device(&mut d, "L2", "switch", "202", 25.0, 9.0, &[]),
         heat_pump: el(&mut d, "equipment", "L2", "M-EQPM", [60.0, 20.0, 10.0], &[p("type_mark", "HP-8")]),
+        // Another unit's own panel right by it: never the one a new circuit goes on.
+        _unit_panel: el(
+            &mut d,
+            "equipment",
+            "L2",
+            "E-EQPM",
+            [58.0, 22.0, 10.0],
+            &[p("tag", "LP5-205"), p("room", "205"), sched("bus_amps", "100"), sched("main", "MLO"), p("fed_from", "LP2")],
+        ),
         unfed_panel: el(&mut d, "equipment", "L2", "E-EQPM", [50.0, 0.0, 10.0], &[p("tag", "LP3"), sched("bus_amps", "100"), sched("main", "MLO")]),
         // A fan whose circuit only a rule gave.
         assumed_fan: el(
@@ -164,6 +176,10 @@ fn model(plant: bool) -> (Session, Option<Planted>) {
         );
     }
     sp.mep.feeders.push(serde_json::from_value(json!({"tag": "F2", "from": "LP1", "to": "LP2", "sets": 1, "phases": 3})).unwrap());
+    sp.mep.runs.push(
+        serde_json::from_value(json!({"system": "E-FEEDER", "level": "L2", "source_sheet": "feeder 9 LP1\u{2192}LP4-1\u{2192}LP4-2", "points": [[0, 0], [400, 0]], "size_in": [2, 0], "bottoms_ft": [10]}))
+            .unwrap(),
+    );
     d.building_spec = Some(sp.to_json()).into();
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Building", None);
@@ -197,7 +213,7 @@ fn a_planted_set_raises_one_rfi_per_open_requirement_and_space() {
         ("E-REC-CIRCUIT", 4, 1),
         ("E-SW-LOAD", 2, 1),
         ("E-EQ-CIRCUIT", 4, 2),
-        ("E-PANEL-FEED", 3, 1),
+        ("E-PANEL-FEED", 5, 1),
     ];
     for (id, objects, open) in want {
         let c = check(&r, id);
@@ -213,7 +229,9 @@ fn a_planted_set_raises_one_rfi_per_open_requirement_and_space() {
     let conn = check(&r, "E-CONN-CIRCUIT");
     assert_eq!((conn["ran"].as_bool(), conn["objects"].as_u64()), (Some(false), Some(0)));
     assert!(conn["status"].as_str().unwrap().starts_with("did not run"), "{conn}");
-    assert_eq!(r["requirements"]["did_not_run"], 1);
+    // Nor did the breakers' requirements: no panel schedule built.
+    assert_eq!(r["requirements"]["did_not_run"], 4, "{}", r["requirements"]);
+    assert_eq!(check(&r, "E-CIRCUIT-SCHEDULED")["status"], "did not run: no circuit on the plans in the model");
 
     // The RFIs, written like a contractor's: where, what each document shows, the question, the
     // proposal, the step they block.
