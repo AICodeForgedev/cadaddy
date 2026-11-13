@@ -32,6 +32,9 @@ const RULES: &str = include_str!("crossdisc.json");
 pub(crate) const MAX_SHEET_PIECES: usize = 600_000;
 /// Objects of one legend drawing looked at, at most.
 const MAX_ROW_PIECES: usize = 64;
+/// The scales a legend's drawing is looked for at on a plan, of its own size: the matcher takes
+/// each within about a third either way, so these cover a fifth to three times its size.
+const SCALES: [f64; 7] = [2.0, 1.4, 1.0, 0.7, 0.5, 0.35, 0.25];
 /// Legend headings looked at on one sheet, at most.
 const MAX_LEGENDS: usize = 12;
 /// Objects compared per kind, at most.
@@ -234,7 +237,9 @@ pub(crate) fn legends(texts: &[TextItem], drawn: &[Piece], rules: &Rules) -> Leg
     for title in titles {
         let th = title.height;
         let title_w = 0.7 * th * title.value.trim().chars().count() as f64;
-        let (x_lo, x_hi) = (title.at.x - 2.0 * title_w.max(th), title.at.x + 3.0 * title_w.max(th));
+        // Its rows start under it: from a heading's width left of it to one and a half right
+        // (a title block's or a schedule's lettering beside it is no row of it).
+        let (x_lo, x_hi) = (title.at.x - title_w.max(th), title.at.x + 1.5 * title_w.max(th));
         let depth = rules.legend_rows_h.max(1.0) * th;
         let below: Vec<&TextItem> = texts
             .iter()
@@ -256,15 +261,37 @@ pub(crate) fn legends(texts: &[TextItem], drawn: &[Piece], rules: &Rules) -> Leg
             let k = (u.at.x / (0.5 * h)).round() as i64;
             *columns.entry(k).or_default() += 1;
         }
-        let Some((&col, _)) = columns.iter().max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0))) else { continue };
+        // The column of two lines or more whose first line is nearest under the heading (a table
+        // under the legend, a grid bubble's letters beside it start lower); of two, the longer.
+        let top = |k: i64| below.iter().filter(|u| (u.at.x / (0.5 * h)).round() as i64 == k).map(|u| u.at.y).fold(f64::NEG_INFINITY, f64::max);
+        let Some((&col, _)) = columns.iter().filter(|(_, n)| **n >= 2).max_by(|a, b| top(*a.0).total_cmp(&top(*b.0)).then_with(|| a.1.cmp(b.1)))
+        else {
+            continue;
+        };
         let x0 = col as f64 * 0.5 * h;
-        // The next heading under it (taller lettering than its rows) ends it.
+        let column: Vec<&TextItem> = below.into_iter().filter(|u| (u.at.x - x0).abs() <= 0.75 * h).collect();
+        // Its rows' own lettering (another table's under it is set larger).
+        let Some(h) = median(column.iter().map(|u| u.height).collect()) else { continue };
+        // The next heading under it (words in taller lettering than its rows; a grid bubble's
+        // letter is none) ends it.
         let floor = texts
             .iter()
-            .filter(|u| u.height > 1.3 * h && u.at.y < title.at.y - 0.3 * th && u.at.y > title.at.y - depth && u.at.x >= x_lo && u.at.x <= x_hi)
+            .filter(|u| {
+                let letters = u.value.chars().filter(char::is_ascii_alphabetic).count();
+                let marks = u.value.chars().filter(|c| !c.is_whitespace()).count();
+                // (Words: no stroke read as lettering, no giant reading of a hatch.)
+                u.height > 1.3 * h
+                    && u.height <= 1.5 * th
+                    && letters >= 4
+                    && 10 * letters >= 6 * marks
+                    && u.at.y < title.at.y - 0.3 * th
+                    && u.at.y > title.at.y - depth
+                    && u.at.x >= x_lo
+                    && u.at.x <= x_hi
+            })
             .map(|u| u.at.y)
             .fold(f64::NEG_INFINITY, f64::max);
-        let mut lines: Vec<&TextItem> = below.into_iter().filter(|u| (u.at.x - x0).abs() <= 0.75 * h && u.at.y > floor).collect();
+        let mut lines: Vec<&TextItem> = column.into_iter().filter(|u| (u.at.x - x0).abs() <= 0.75 * h && u.at.y > floor).collect();
         lines.sort_by(|a, b| b.at.y.total_cmp(&a.at.y));
         // Down the column to the first wide gap (another table under it); the first row may sit
         // a few heading heights under the heading.
@@ -343,6 +370,99 @@ pub(crate) fn legends(texts: &[TextItem], drawn: &[Piece], rules: &Rules) -> Leg
     out
 }
 
+// ─── The drawing as the architect's symbols are matched ─────────────────────
+
+/// Corners of one polyline looked at, at most.
+const MAX_CORNERS: usize = 256;
+/// A polyline of this many corners or more, all as far from their middle (within this share),
+/// going round it, draws a circle.
+const ROUND_CORNERS: usize = 8;
+const ROUND_SHARE: f64 = 0.1;
+
+/// A polyline's circle, when it draws one (a PDF's circle came in as its corners): its middle and
+/// radius.
+fn round_of(pts: &[Vec2], closed: bool) -> Option<(Vec2, f64)> {
+    let mut pts: Vec<Vec2> = pts.to_vec();
+    if pts.len() > 1 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9) {
+        pts.pop();
+    }
+    let n = pts.len();
+    if n < ROUND_CORNERS {
+        return None;
+    }
+    let c = pts.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / n as f64);
+    let r = pts.iter().map(|p| p.dist(c)).sum::<f64>() / n as f64;
+    if !(r.is_finite() && r > 1e-9) || pts.iter().any(|p| (p.dist(c) - r).abs() > ROUND_SHARE * r) {
+        return None;
+    }
+    // Round it all (a closed polyline, or one whose ends meet), never an arc of it.
+    let ends_meet = pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 0.9 * r);
+    (closed || ends_meet).then_some((c, r))
+}
+
+/// An object's pieces as an architect's symbol is matched: as [`super::unitmarks::pieces`],
+/// except that a polyline drawing a circle is that circle, and a polyline's straight run through
+/// several corners (a stroke drawn with a point in its middle) is one straight piece.
+pub(crate) fn pieces_of(kind: &cadaddy_doc::EntityKind, out: &mut Vec<Piece>) {
+    let cadaddy_doc::EntityKind::LwPolyline(pl) = kind else {
+        super::unitmarks::pieces(kind, out);
+        return;
+    };
+    let mut pts: Vec<Vec2> = pl.vertices.iter().take(MAX_CORNERS).map(|v| Vec2::new(v.p.x, v.p.y)).collect();
+    if !pts.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return;
+    }
+    if let Some((c, r)) = round_of(&pts, pl.closed) {
+        out.push(Piece::Round(c, r));
+        return;
+    }
+    if pl.closed
+        && pts.len() > 2
+        && let Some(first) = pts.first().copied()
+    {
+        pts.push(first);
+    }
+    let mut it = pts.into_iter();
+    let Some(mut a) = it.next() else { return };
+    let mut b = a;
+    for p in it {
+        let (u, v) = (b - a, p - b);
+        let (lu, lv) = (u.len(), v.len());
+        if lv <= 1e-9 {
+            continue;
+        }
+        let straight = lu > 1e-9 && u.dot(v) > 0.0 && (u.cross(v) / (lu * lv)).abs() <= 0.02;
+        if !straight && lu > 1e-9 {
+            out.push(Piece::Seg(a, b));
+            a = b;
+        }
+        b = p;
+    }
+    if a.dist(b) > 1e-9 {
+        out.push(Piece::Seg(a, b));
+    }
+}
+
+/// A sheet's linework as [`pieces_of`] takes it (each symbol block's objects where it is
+/// inserted), at most [`MAX_SHEET_PIECES`].
+pub(crate) fn sheet_pieces(sub: &cadaddy_doc::Drawing) -> Vec<Piece> {
+    let mut pieces: Vec<Piece> = Vec::new();
+    for e in sub.model.iter() {
+        if pieces.len() >= MAX_SHEET_PIECES {
+            break;
+        }
+        match &e.kind {
+            cadaddy_doc::EntityKind::Insert(_) => {
+                for part in super::modify::explode_kind(sub, e).unwrap_or_default().iter().take(MAX_ROW_PIECES) {
+                    pieces_of(&part.kind, &mut pieces);
+                }
+            }
+            k => pieces_of(k, &mut pieces),
+        }
+    }
+    pieces
+}
+
 // ─── The architect's objects on one sheet ───────────────────────────────────
 
 /// An object found on an architect's sheet: the legend row (index) whose drawing it is, where its
@@ -355,9 +475,12 @@ pub(crate) struct Found {
 
 /// The legend rows' drawings on one sheet: `pieces` its linework, `area` where its views are,
 /// `exclude` its legends, title block and the like, `unit` the sheet's units per a row's own
-/// units (1 on the legend's own sheet; else by their lettering), per row. Plain outlines (a box,
-/// a bar) tell nothing apart and are not looked for: they are counted in the second value.
-pub(crate) fn find(rows: &[LegendRow], units: &[f64], pieces: &[Piece], area: [f64; 4], exclude: &[[f64; 4]]) -> (Vec<Found>, usize) {
+/// units (1 on the legend's own sheet; else by their lettering), per row. A legend often draws
+/// its symbols larger or smaller than the plans do (a can light twice its plan size): each drawing
+/// is looked for at each of [`SCALES`] of that, never smaller than `min_size` (a share of the
+/// sheet's lettering: smaller marks are lettering's strokes). Plain outlines (a box, a bar) tell
+/// nothing apart and are not looked for: they are counted in the second value.
+pub(crate) fn find(rows: &[LegendRow], units: &[f64], pieces: &[Piece], area: [f64; 4], exclude: &[[f64; 4]], min_size: f64) -> (Vec<Found>, usize) {
     let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
     let keep = |p: Vec2| inside(&area, p) && !exclude.iter().any(|r| inside(r, p));
     let mid = |p: &Piece| {
@@ -376,16 +499,21 @@ pub(crate) fn find(rows: &[LegendRow], units: &[f64], pieces: &[Piece], area: [f
     if templates.is_empty() {
         return (Vec::new(), plain);
     }
-    let largest = templates.iter().map(|(_, tp, u)| tp.size() * u).fold(0.0, f64::max);
+    let largest = templates.iter().map(|(_, tp, u)| tp.size() * u * SCALES.iter().copied().fold(0.0, f64::max)).fold(0.0, f64::max);
     let cell = (1.5 * largest).max(1e-6);
     let kept: Vec<Piece> = pieces.iter().filter(|p| keep(mid(p))).take(MAX_SHEET_PIECES).copied().collect();
     let scene = super::unitmarks::Scene::new(kept, cell);
-    // Each row alone at its own scale; then the most detailed drawing kept where two overlap.
+    // Each row alone at each scale; then the most detailed drawing kept where two overlap.
     let mut hits: Vec<(Found, usize, f64)> = Vec::new();
     for (row, tp, unit) in &templates {
-        for f in super::unitmarks::find_symbols_apart(std::slice::from_ref(tp), &scene, area, tp.text_h() * unit) {
-            if keep(f.at) {
-                hits.push((Found { row: *row, at: f.at }, tp.pieces().len(), f.size));
+        for k in SCALES {
+            if tp.size() * unit * k < min_size {
+                continue;
+            }
+            for f in super::unitmarks::find_symbols_apart(std::slice::from_ref(tp), &scene, area, tp.text_h() * unit * k) {
+                if keep(f.at) {
+                    hits.push((Found { row: *row, at: f.at }, tp.pieces().len(), f.size));
+                }
             }
         }
     }
@@ -913,6 +1041,15 @@ mod tests {
             // A note far under it, another table.
             t("GENERAL NOTES", 130.0, 200.0, 3.0),
         ];
+        // A title block's column of lettering beside it, longer than its rows; grid bubbles'
+        // letters left of it; a table of larger lettering under it.
+        let mut texts = texts;
+        texts.extend((0..9).map(|i| t("FIRM LINE", 250.0, 480.0 - 8.0 * f64::from(i), 3.0)));
+        texts.extend(["F", "G", "H"].iter().enumerate().map(|(i, v)| t(v, 60.0, 460.0 - 15.0 * i as f64, 5.0)));
+        texts.push(t("CEILING TYPES", 100.0, 380.0, 6.0));
+        // A hatch read as giant lettering at its top.
+        texts.push(t("BD:::::'::.: YX", 102.0, 480.0, 16.0));
+        texts.extend((0..8).map(|i| t("TYPE ROW", 110.0, 370.0 - 6.0 * f64::from(i), 4.5)));
         let mut drawn = square(Vec2::new(105.0, 467.0), 8.0);
         let mut diffuser = square(Vec2::new(105.0, 444.0), 8.0);
         diffuser.push(Piece::Seg(Vec2::new(105.0, 444.0), Vec2::new(113.0, 452.0)));
@@ -963,11 +1100,62 @@ mod tests {
         drawn.push(Piece::Round(Vec2::new(420.0, 300.0), 2.0));
         drawn.extend(square(Vec2::new(450.0, 296.0), 8.0));
         let rows: Vec<LegendRow> = l.rows.iter().filter(|r| r.words.contains("CAN")).cloned().collect();
-        let (found, plain) = find(&rows, &[1.0], &drawn, [0.0, 0.0, 1000.0, 1000.0], &l.boxes);
+        let (found, plain) = find(&rows, &[1.0], &drawn, [0.0, 0.0, 1000.0, 1000.0], &l.boxes, 0.0);
         let mut xs: Vec<f64> = found.iter().map(|f| f.at.x.round()).collect();
         xs.sort_by(f64::total_cmp);
         assert_eq!(xs, [300.0, 340.0, 380.0], "{found:?}");
         assert_eq!(plain, 0);
+    }
+
+    fn polyline(pts: &[(f64, f64)], closed: bool) -> cadaddy_doc::EntityKind {
+        cadaddy_doc::EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+            vertices: pts
+                .iter()
+                .map(|(x, y)| cadaddy_geom::PolyVertex { p: Vec2::new(*x, *y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                .collect(),
+            closed,
+            const_width: 0.0,
+            elevation: 0.0,
+            plinegen: false,
+        })
+    }
+
+    /// A PDF's circle comes in as a ring of corners and its stroke with a point in its middle: the
+    /// match takes them as one circle and one straight piece; an arc or a zig-zag stays pieces.
+    #[test]
+    fn a_ring_of_corners_is_a_circle_and_a_straight_run_one_piece() {
+        let ring: Vec<(f64, f64)> =
+            (0..10).map(|i| f64::from(i) * std::f64::consts::TAU / 10.0).map(|a| (5.0 + 3.0 * a.cos(), 7.0 + 3.0 * a.sin())).collect();
+        let mut out = Vec::new();
+        pieces_of(&polyline(&ring, true), &mut out);
+        assert!(matches!(out.as_slice(), [Piece::Round(c, r)] if c.dist(Vec2::new(5.0, 7.0)) < 1e-6 && (r - 3.0).abs() < 1e-6), "{out:?}");
+        let half: Vec<(f64, f64)> = ring.iter().take(6).copied().collect();
+        out.clear();
+        pieces_of(&polyline(&half, false), &mut out);
+        assert_eq!(out.len(), 5, "{out:?}");
+        out.clear();
+        pieces_of(&polyline(&[(0.0, 0.0), (2.0, 2.0), (4.0, 4.0)], false), &mut out);
+        assert_eq!(out, [Piece::Seg(Vec2::new(0.0, 0.0), Vec2::new(4.0, 4.0))]);
+        out.clear();
+        pieces_of(&polyline(&[(0.0, 0.0), (2.0, 2.0), (4.0, 0.0)], false), &mut out);
+        assert_eq!(out.len(), 2);
+    }
+
+    /// A legend drawing its can light at twice the plan's size still finds the plan's cans; a
+    /// smaller mark than the lettering allows is not one.
+    #[test]
+    fn a_legend_drawn_larger_than_its_plan_still_finds_the_plans_symbols() {
+        let (texts, mut drawn) = legend_sheet();
+        let l = legends(&texts, &drawn, rules());
+        for (x, y) in [(300.0, 300.0), (340.0, 300.0)] {
+            drawn.extend(can(Vec2::new(x, y), 1.0));
+        }
+        drawn.extend(can(Vec2::new(380.0, 300.0), 0.4));
+        let rows: Vec<LegendRow> = l.rows.iter().filter(|r| r.words.contains("CAN")).cloned().collect();
+        let (found, _) = find(&rows, &[1.0], &drawn, [0.0, 0.0, 1000.0, 1000.0], &l.boxes, 1.5);
+        let mut xs: Vec<f64> = found.iter().map(|f| f.at.x.round()).collect();
+        xs.sort_by(f64::total_cmp);
+        assert_eq!(xs, [300.0, 340.0], "{found:?}");
     }
 
     fn room(name: &str, number: &str, lo: (f64, f64), hi: (f64, f64)) -> Room {

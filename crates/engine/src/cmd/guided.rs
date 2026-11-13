@@ -12654,24 +12654,6 @@ fn coordination_step(
         h.sort_by(f64::total_cmp);
         h.get(h.len() / 2).copied()
     };
-    let sheet_pieces = |d: &cadaddy_doc::Drawing, sub: &cadaddy_doc::Drawing| {
-        let _ = d;
-        let mut pieces: Vec<super::unitmarks::Piece> = Vec::new();
-        for e in sub.model.iter() {
-            if pieces.len() >= cd::MAX_SHEET_PIECES {
-                break;
-            }
-            match &e.kind {
-                cadaddy_doc::EntityKind::Insert(_) => {
-                    for part in super::modify::explode_kind(sub, e).unwrap_or_default().iter().take(MAX_TEMPLATE_PARTS) {
-                        super::unitmarks::pieces(&part.kind, &mut pieces);
-                    }
-                }
-                k => super::unitmarks::pieces(k, &mut pieces),
-            }
-        }
-        pieces
-    };
     let titled = |texts: &[cadaddy_mepfix::sheet_facts::TextItem]| {
         texts.iter().any(|t| {
             let u = t.value.trim().to_ascii_uppercase();
@@ -12691,7 +12673,7 @@ fn coordination_step(
             if !titled(&texts) {
                 continue;
             }
-            let pieces = sheet_pieces(d, &sub);
+            let pieces = cd::sheet_pieces(&sub);
             let l = cd::legends(&texts, &pieces, rules);
             boxes.entry(sheet_key(&sh.number)).or_default().extend(l.boxes.iter().copied());
             let h = lettering(&texts);
@@ -12723,8 +12705,9 @@ fn coordination_step(
             exclude.extend(symbol_table_rects(&texts));
             exclude.extend(region.and_then(|r| r.title_block));
             exclude.extend(typical_views.get(&key).into_iter().flatten().copied());
-            let pieces = sheet_pieces(d, &sub);
-            let (found, p) = cd::find(&row_list, &units, &pieces, area, &exclude);
+            let pieces = cd::sheet_pieces(&sub);
+            // (Never smaller than half the sheet's lettering: smaller is lettering's strokes.)
+            let (found, p) = cd::find(&row_list, &units, &pieces, area, &exclude, 0.5 * here.unwrap_or(0.0));
             plain = plain.max(p);
             hits.extend(found.into_iter().map(|f| (sh.number.clone(), [f.at.x, f.at.y], f.row)));
         }

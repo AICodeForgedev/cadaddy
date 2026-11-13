@@ -103,6 +103,34 @@
       "count_tolerance": 0,
       "rooms_without": false,
       "severity": {"architect_only": "medium", "engineer_only": "low", "differ": "low", "none": "low"}
+    },
+    {
+      "kind": "door_power",
+      "name": "powered door hardware (operators, card readers, electric strikes)",
+      "legend_any": ["DOOR OPERATOR", "AUTOMATIC DOOR", "POWER ASSIST", "CARD READER", "ELECTRIC STRIKE", "MAG LOCK", "MAGNETIC LOCK", "PUSH PLATE", "ACTUATOR"],
+      "legend_none": ["DAMPER", "VALVE"],
+      "engineer_disciplines": ["E", "EL", "T", "LV", "MEP"],
+      "engineer_kinds": ["door", "card", "access", "operator", "strike"],
+      "engineer_ifc": [],
+      "engineer_kinds_none": ["door_holder"],
+      "reach_ft": 4.0,
+      "count_tolerance": 0,
+      "rooms_without": false,
+      "severity": {"architect_only": "medium", "engineer_only": "low", "differ": "low", "none": "low"}
+    },
+    {
+      "kind": "sign",
+      "name": "illuminated signs",
+      "legend_any": ["ILLUMINATED SIGN", "LIGHTED SIGN", "SIGN LIGHT", "BACKLIT SIGN"],
+      "legend_none": ["EXIT"],
+      "engineer_disciplines": ["E", "EL", "MEP"],
+      "engineer_kinds": ["sign"],
+      "engineer_ifc": [],
+      "engineer_kinds_none": ["exit"],
+      "reach_ft": 6.0,
+      "count_tolerance": 0,
+      "rooms_without": false,
+      "severity": {"architect_only": "medium", "engineer_only": "low", "differ": "low", "none": "low"}
     }
   ],
   "rooms": {
