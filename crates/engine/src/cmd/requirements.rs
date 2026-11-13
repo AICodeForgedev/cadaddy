@@ -883,8 +883,8 @@ mod tests {
 
     #[test]
     fn a_requirement_in_one_space_keeps_its_id() {
-        assert_eq!(stable_id("E-LUM-CIRCUIT", "Level 2", "201"), stable_id("E-LUM-CIRCUIT", "level 2 ", "201"));
-        assert_ne!(stable_id("E-LUM-CIRCUIT", "Level 2", "201"), stable_id("E-LUM-CIRCUIT", "Level 2", "202"));
-        assert_ne!(stable_id("E-LUM-CIRCUIT", "Level 2", "201"), stable_id("E-REC-CIRCUIT", "Level 2", "201"));
+        assert_eq!(stable_id("E-LUM-CIRCUIT", "Level 2", "R-A"), stable_id("E-LUM-CIRCUIT", "level 2 ", "r-a"));
+        assert_ne!(stable_id("E-LUM-CIRCUIT", "Level 2", "R-A"), stable_id("E-LUM-CIRCUIT", "Level 2", "R-B"));
+        assert_ne!(stable_id("E-LUM-CIRCUIT", "Level 2", "R-A"), stable_id("E-REC-CIRCUIT", "Level 2", "R-A"));
     }
 }

@@ -120,7 +120,7 @@ fn model(plant: bool) -> (Session, Option<Planted>) {
         "L1",
         "E-EQPM",
         [30.0, 0.0, 0.0],
-        &[p("tag", "LP1"), sched("bus_amps", "225"), sched("main", "MLO"), p("fed_from", "MDP")],
+        &[p("tag", "LP1"), sched("bus_amps", "225"), sched("main", "MLO"), p("fed_from", "MSB")],
     );
     // Level 2: room 201, the second panel (a feeder of the spec reaches it), a fan and a heat pump.
     for i in 0..2 {
