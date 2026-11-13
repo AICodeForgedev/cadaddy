@@ -87,6 +87,7 @@ mod propuse;
 mod puttypads;
 mod racewaygeom;
 mod readerwire;
+mod rebuild_hand_made;
 mod relevel;
 mod riser_storeys;
 mod roofframing;

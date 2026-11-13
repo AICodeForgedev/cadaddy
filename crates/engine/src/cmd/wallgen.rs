@@ -448,9 +448,10 @@ fn plate_slab(o: &outline::Outline, z: f64, t: f64) -> Mesh {
     super::bspec::seamless(m)
 }
 
-/// Remove what WALLGEN made from model space; how many objects.
+/// Remove what WALLGEN made from model space; how many objects. The copies a person made of its
+/// objects stay (Q6620: they are theirs, recorded as added items).
 pub(crate) fn remove_made(d: &mut Drawing) -> usize {
-    let hs: Vec<Handle> = d.model.iter().filter(|e| made_as(e).is_some()).map(|e| e.handle).collect();
+    let hs: Vec<Handle> = d.model.iter().filter(|e| super::revise3d::built_object(e)).map(|e| e.handle).collect();
     for h in &hs {
         d.model.remove(*h);
     }
@@ -1549,6 +1550,9 @@ pub fn model_behind(s: &Session) -> bool {
 /// After a command: when the drawing has an associative model and an object on its rules'
 /// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
+    // First the copies a person made of generated elements, recorded as theirs (Q6620): what
+    // follows takes them for no build's.
+    super::overrides::after_command(s, before);
     behind_after_command(s, before);
     // The outermost command is over: the sheet changes it made are forgotten (they hold
     // drawing states, the sheets put out among them).
