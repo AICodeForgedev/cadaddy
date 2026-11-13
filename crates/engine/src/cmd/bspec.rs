@@ -2621,6 +2621,11 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // The outside: roofs, parapets, crickets, rooftop equipment, facade glass and materials.
     let outside = super::exterior::build(d, &sp);
     mark("exterior");
+    // The elevator hoistways (Q6608): each shaft at its documented clear size (nothing inside it
+    // a wall), its pit below the lowest landing and its overrun above the roof, what the roof
+    // plan stands over it on the overrun's roof.
+    let hoistways = super::hoistway::build(d, &sp);
+    mark("elevator hoistways");
     // Casework and furniture (Q6422): read from the plans (the casework reader, the furniture
     // drawn), each in its room; a room the plans leave unfurnished takes its type's furniture.
     let room_refs: Vec<super::furniture::RoomRef> = rooms
@@ -2780,6 +2785,12 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     r["plumbing"] = plumbing;
     if let (Some(o), Some(x)) = (r.as_object_mut(), trade_pieces.as_object()) {
         o.extend(x.clone());
+    }
+    if let (Some(n), Some(x)) = (r["notes"].as_array_mut(), hoistways["notes"].as_array()) {
+        n.extend(x.iter().cloned());
+    }
+    if hoistways["hoistways"].as_u64().unwrap_or(0) > 0 {
+        r["hoistways"] = hoistways;
     }
     r["gridColumns"] = json!(grid_columns);
     r["structuralGrid"] = structural_grid.to_json();

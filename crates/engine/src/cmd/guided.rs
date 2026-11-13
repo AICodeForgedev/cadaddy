@@ -8717,6 +8717,21 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     {
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
+    // The elevator submittal's hoistway (Q6608): its clear size, pit and overhead, which the
+    // build sets the shaft, its pit and the overrun by.
+    if !job.submittals.is_empty() {
+        let t = web_time::Instant::now();
+        match s.execute("elevator.read", &json!({"files": job.submittals})) {
+            Ok(r) if !r["elevator_data"].is_null() => progress_line(&format!(
+                "  elevator hoistway read from the submittals in {:.1} s: {} ({:?})",
+                t.elapsed().as_secs_f64(),
+                r["elevator_data"],
+                r["files"]
+            )),
+            Ok(r) => progress_line(&format!("  elevator submittals: no hoistway size, pit or overhead read ({:?})", r["files"])),
+            Err(e) => progress_line(&format!("  elevator submittals not read: {e}")),
+        }
+    }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     few_openings_findings(job, &result);
     result["scope"] = scope_summary;
