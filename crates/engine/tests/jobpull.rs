@@ -139,6 +139,11 @@ fn script_answer(q: &Value) -> Value {
 /// Answer every question but a pull request with its default: the pull request it stops at, or
 /// null once the job is done.
 fn answer_until_pull(s: &mut Session) -> Value {
+    answer_counting(s, &mut Vec::new())
+}
+
+/// As [`answer_until_pull`], noting each question answered (its text).
+fn answer_counting(s: &mut Session, asked: &mut Vec<String>) -> Value {
     for _ in 0..400 {
         let n = s.execute("job.next", &json!({})).expect("job.next");
         if n["done"] == json!(true) {
@@ -150,6 +155,7 @@ fn answer_until_pull(s: &mut Session) -> Value {
             return q;
         }
         let id = q["id"].as_str().expect("id").to_string();
+        asked.push(q["question"].as_str().unwrap_or("").to_string());
         s.execute("job.answer", &json!({"id": id, "answer": script_answer(&q)})).expect("job.answer");
     }
     panic!("the job asked more than 400 questions");
@@ -202,7 +208,8 @@ fn a_stale_project_is_asked_before_the_build_and_a_pull_rereads_only_the_new_she
     assert!(r["effect"].as_str().is_some_and(|e| e.contains("not confirmed")), "{r}");
 
     // Still stale before the takeoff: asked again there, once the model is built.
-    let q2 = answer_until_pull(&mut s);
+    let mut before_pull = Vec::new();
+    let q2 = answer_counting(&mut s, &mut before_pull);
     assert!(q2["question"].as_str().is_some_and(|t| t.contains("before the takeoff")), "{q2}");
     assert_ne!(q2["id"], q["id"]);
     let before = classify_result(&mut s);
@@ -227,8 +234,13 @@ fn a_stale_project_is_asked_before_the_build_and_a_pull_rereads_only_the_new_she
     assert_eq!(after["read"], json!(1), "only the new sheet is read: {after}");
     assert!(after["read_sources"].as_array().is_some_and(|a| a.len() == 1 && a[0].as_str().is_some_and(|t| t.starts_with("E-102.pdf"))), "{after}");
 
-    // The source is fresh now: the job runs to the end without asking again.
-    assert_eq!(answer_until_pull(&mut s), Value::Null, "no pull asked after a pull");
+    // The source is fresh now: the job runs to the end without asking again, and what was
+    // answered before the pull stays answered (only what the new sheet raises is asked).
+    let mut after_pull = Vec::new();
+    assert_eq!(answer_counting(&mut s, &mut after_pull), Value::Null, "no pull asked after a pull");
+    let again: Vec<&String> = after_pull.iter().filter(|q| before_pull.contains(q)).collect();
+    eprintln!("asked before the pull: {}, after: {}, asked again: {}", before_pull.len(), after_pull.len(), again.len());
+    assert!(again.is_empty(), "answers given before the pull are kept: asked again {again:?}");
     assert!(level_two_finding(&mut s).is_none(), "the new sheet answered it");
     let report = s.execute("job.report", &json!({})).expect("report");
     let docs = &report["documents"];

@@ -571,8 +571,10 @@ pub struct GuidedJob {
     /// names; job.next goes on from there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancelled: Option<StageName>,
-    /// Answered questions of stages being run again, to carry their answers over.
-    #[serde(skip)]
+    /// Answered questions of stages being run again, to carry their answers over. Kept with the
+    /// job: a re-run that pauses at an earlier stage still gives the later ones their answers
+    /// (Q6618: after a pull, 24 of 49 answers were asked again).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     carry: Vec<Question>,
     /// The sheet map read off the loaded sheets, in short ([`super::printset::links_summary`]):
     /// callouts resolved, enlarged plans registered, match lines.
