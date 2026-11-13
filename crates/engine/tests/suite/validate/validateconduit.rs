@@ -806,6 +806,11 @@ fn rows_the_stored_schedule_lacks_are_read_again_off_the_drawn_schedule() {
 /// A gridded wire-length table drawn on the drawing, far from the building: 20 A / 120 V
 /// circuits take #12 to 50 ft, #10 to 100 ft, #8 to 150 ft, #6 to 250 ft.
 fn drawn_length_table(s: &mut Session) {
+    drawn_length_table_of(s, &[("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#12", "50'"), ("#10", "100'"), ("#8", "150'"), ("#6", "250'")]);
+}
+
+/// A gridded wire-length table of six columns (header, first row each), far from the building.
+fn drawn_length_table_of(s: &mut Session, cols: &[(&str, &str); 6]) {
     let (x0, y0) = (3000.0, -200.0);
     text_at(s, [x0 + 10.0, y0 + 10.0], "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE", 2.0);
     let line = |s: &mut Session, a: [f64; 2], b: [f64; 2]| {
@@ -817,9 +822,7 @@ fn drawn_length_table(s: &mut Session) {
     for xx in [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0] {
         line(s, [x0 + xx, y0 + 7.0], [x0 + xx, y0 - 3.0]);
     }
-    for (i, (hd, row)) in
-        [("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#12", "50'"), ("#10", "100'"), ("#8", "150'"), ("#6", "250'")].iter().enumerate()
-    {
+    for (i, (hd, row)) in cols.iter().enumerate() {
         let x = x0 + 2.0 + 20.0 * i as f64;
         text_at(s, [x, y0 + 4.0], hd, 1.5);
         text_at(s, [x, y0 - 1.0], row, 1.5);
@@ -861,6 +864,22 @@ fn the_drawings_wire_length_table_decides_the_conductor_before_the_three_percent
         };
         assert_eq!(f["measured"]["needed"], want, "{f}");
     }
+}
+
+#[test]
+fn a_length_tables_column_past_two_ought_is_chosen_not_read_as_past_the_tables_reach() {
+    // Q6456: the table's sizes run past 2/0 (the voltage-drop calculation's largest). LP1-5,
+    // over 150 ft, is covered only by the #3/0 column: the table asks #3/0, it is not "longer
+    // than the table reaches".
+    let mut s = building(Some(20), |_| {});
+    drawn_length_table_of(&mut s, &[("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#1/0", "100'"), ("#2/0", "150'"), ("#3/0", "260'"), ("#4/0", "300'")]);
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let far = of(&fs, "E-VDROP").into_iter().find(|f| f["measured"]["circuit"] == "LP1-5").cloned().unwrap_or_default();
+    assert!(far["measured"]["length_ft"].as_f64().is_some_and(|l| l > 150.0 && l <= 260.0), "{far}");
+    assert_eq!(far["measured"]["needed"], "#3/0", "{far}");
+    assert!(!far["issue"].as_str().unwrap_or_default().contains("reaches"), "{far}");
+    let conductor = far["measured"]["conductor"].as_str().unwrap_or_default().to_string();
+    assert_eq!(far["verdict"], if conductor == "#3/0" || conductor == "#4/0" { "pass" } else { "fail" }, "{far}");
 }
 
 #[test]

@@ -126,7 +126,7 @@ pub(crate) fn awg(s: &str) -> String {
     t.chars().take_while(|c| c.is_ascii_digit() || *c == '/').collect()
 }
 
-/// The rank of a conductor size among the voltage-drop sizes (larger conductor, larger rank).
+/// The rank of a conductor size in the rules' full conductor order (larger conductor, larger rank).
 fn size_rank(size: &str, sizes: &[String]) -> Option<usize> {
     sizes.iter().position(|s| s == size)
 }
@@ -2220,7 +2220,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 } else {
                     own.iter().flat_map(|run| run_wires.get(run).into_iter().flatten()).filter(|w| !w.ground()).map(|w| w.size.clone()).collect()
                 };
-                let smallest = pick.iter().filter_map(|s| size_rank(s, &rl.vdrop.sizes).map(|k| (k, s.clone()))).min_by_key(|x| x.0);
+                let smallest = pick.iter().filter_map(|s| size_rank(s, rl.vdrop.order()).map(|k| (k, s.clone()))).min_by_key(|x| x.0);
                 // Its breaker by its panel instance and number, else by the label's panel.
                 let brk = match breaker(cx.sp, cx.docs, &gtag, number) {
                     Brk::Missing => breaker(cx.sp, cx.docs, panel, number),
@@ -2276,9 +2276,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         if let Some(v) = cv {
                             m["volts"] = json!(v);
                         }
-                        match t.need(ft, found_brk.as_ref().map(|b| b.0), cv, &rl.vdrop.sizes) {
+                        match t.need(ft, found_brk.as_ref().map(|b| b.0), cv, rl.vdrop.order()) {
                             super::wiretable::Need::Size(n, band) => {
-                                let ok = size_rank(&n, &rl.vdrop.sizes).is_some_and(|need| rank_have >= need);
+                                let ok = size_rank(&n, rl.vdrop.order()).is_some_and(|need| rank_have >= need);
                                 m["needed"] = json!(format!("#{n}"));
                                 m["band"] = json!(band);
                                 break 'v (
