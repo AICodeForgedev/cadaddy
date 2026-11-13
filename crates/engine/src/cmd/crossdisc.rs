@@ -839,13 +839,15 @@ pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64, par
             let architect_level = a_levels.contains(key);
             let (arch, eng): (Vec<usize>, Vec<usize>) = on_level.iter().partition(|&&i| objs.get(i).is_some_and(|o| o.architect));
             // By position first: the architect's objects with no engineer's object of the kind near
-            // in the same room (a light across a wall lights another room; one outside every traced
-            // room is near only another outside them).
+            // in the same room (a light across a wall lights another room); one outside every
+            // traced room is the copy of one in a room only as near as a room's own reach (the
+            // trace's outline and the sheets' registration put one light either side of it).
             let room_at = |i: usize| room_of.get(i).copied().flatten();
             let near_engineer = |i: usize, o: &Obj| {
-                eng.iter()
-                    .filter_map(|&j| Some((j, objs.get(j)?)))
-                    .any(|(j, x)| (x.at[0] - o.at[0]).hypot(x.at[1] - o.at[1]) <= reach && room_at(i) == room_at(j))
+                eng.iter().filter_map(|&j| Some((j, objs.get(j)?))).any(|(j, x)| {
+                    let d = (x.at[0] - o.at[0]).hypot(x.at[1] - o.at[1]);
+                    d <= reach && (room_at(i) == room_at(j) || ((room_at(i).is_none() || room_at(j).is_none()) && d <= room_reach))
+                })
             };
             let bare: Vec<usize> = arch.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| !near_engineer(i, o))).collect();
             let bare_set: BTreeSet<usize> = bare.iter().copied().collect();
@@ -1427,6 +1429,10 @@ mod tests {
         assert_eq!((f.case, f.room, f.architect.len(), f.room_counts), (Case::ArchitectOnly, Some(0), 3, Some((6, 3))));
         let rfi = to_rfi(f, &objs, &rooms, r, &[], 12.0).unwrap_or_else(|| panic!("no rfi"));
         assert!(rfi.issue.contains("A: 3, E: 0") && rfi.issue.contains("holds A: 6, E: 3"), "{rfi:?}");
+        // One outside every traced room a foot from one in a room is its copy.
+        let edge = vec![obj(true, 50.0, 270.0), obj(false, 50.0, 290.0)];
+        let c3 = compare(&edge, &[room("ALCOVE", "31", (0.0, 300.0), (100.0, 400.0))], r, 12.0, &BTreeSet::new());
+        assert!(c3.findings.iter().all(|f| f.case != Case::ArchitectOnly), "{c3:?}");
         // A light across a wall (another room's) is no copy of one by it.
         let mut walled = vec![room("ALCOVE", "31", (0.0, 300.0), (100.0, 400.0)), room("CLOSET", "32", (104.0, 300.0), (160.0, 400.0))];
         walled.push(room("HALL", "33", (0.0, 410.0), (300.0, 470.0)));
