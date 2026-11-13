@@ -621,3 +621,75 @@ ___________________________\n";
     assert_eq!(row("door hardware: silencer")["model"], json!(3.0), "{rep}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Q6626: reading more documents adds to what the spec keeps. A joist layout read after the
+/// toilet accessories leaves the accessories (and the build keeps their pieces); a fact gives way
+/// only to one of the same key and scope, a document read again replaces its own facts, and
+/// clearing is asked for.
+#[test]
+fn documents_read_later_add_to_the_kept_facts() {
+    let mut s = building();
+    let root = std::env::temp_dir().join(format!("cadaddy-docsadd-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let put = |dir: &str, name: &str, body: &str| -> String {
+        let d = root.join(dir);
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join(name);
+        std::fs::write(&f, body).unwrap();
+        f.to_string_lossy().to_string()
+    };
+    let acc = put("a", "Sample Guest Toilet Accessories.txt", "Robe Hook\nAC-1:  RH100   QTY-2\n1 EACH - AC-2: GB36\n");
+    let hw =
+        put("b", "Sample Doors Frames and Hardware.txt", "Hardware Set#: 1\n1 Single\nSize:\n3-0 X 7-0 X 1 3/4\nWood Door X HM Frame\nTot Qty\n3\n");
+    let joists = put("c", "Sample I-Joist Layout.txt", "J1 - 12 @ 16\"\nJ1 - 8 @ 16\"\n11 7/8\" TJI\n");
+    let paint1 = put("d", "Sample Interior Painting.txt", "Interior Primer: latex\nAll areas to receive two (2) coats of latex\n");
+    let paint2 = put("e", "Sample Exterior Painting.txt", "All areas to receive two (2) coats of latex\n");
+    let kept = |s: &mut Session| -> Vec<Value> { s.execute("bim.atoms.rules", &json!({})).unwrap()["facts"].as_array().unwrap().clone() };
+    let keys = |f: &[Value], trade: &str| f.iter().filter(|x| x["trade"] == json!(trade)).count();
+    let docs = |s: &mut Session, p: Value| s.execute("bim.atoms.docs", &p).unwrap();
+
+    docs(&mut s, json!({"paths": [acc, hw]}));
+    s.execute("bim.atoms.build", &json!({"trades": ["specialties"]})).unwrap();
+    let accessories = n(&count(&mut s, json!({"trade": "specialties", "kind": "accessory"})), "count");
+    assert!(accessories > 0.0, "the accessories are built");
+    let before = kept(&mut s);
+    let (spec_n, open_n) = (keys(&before, "specialties"), keys(&before, "openings"));
+    assert!(spec_n > 0 && open_n > 0, "{before:?}");
+
+    // The joist layout: its facts added, every other trade's kept.
+    let r = docs(&mut s, json!({"paths": [joists]}));
+    let after = kept(&mut s);
+    eprintln!("kept facts before the joist read {}, after {}", before.len(), after.len());
+    assert!(after.iter().any(|f| f["source"].as_str().unwrap_or("").contains("I-Joist")), "{after:?}");
+    assert_eq!((keys(&after, "specialties"), keys(&after, "openings")), (spec_n, open_n), "kept: {after:?}");
+    assert_eq!(r["kept"].as_u64().unwrap() as usize, after.len(), "{r}");
+    s.execute("bim.atoms.build", &json!({"trades": ["specialties"]})).unwrap();
+    assert_eq!(n(&count(&mut s, json!({"trade": "specialties", "kind": "accessory"})), "count"), accessories, "the accessories stay");
+
+    // The same key and scope from another document: the one read last.
+    docs(&mut s, json!({"paths": [paint1]}));
+    docs(&mut s, json!({"paths": [paint2]}));
+    let coats: Vec<Value> = kept(&mut s).into_iter().filter(|f| f["key"] == json!("finishes.paint_coats")).collect();
+    assert_eq!(coats.len(), 1, "{coats:?}");
+    assert_eq!(coats[0]["number"], json!(2.0), "{coats:?}");
+    assert!(coats[0]["source"].as_str().unwrap().contains("Exterior Painting"), "{coats:?}");
+
+    // A document read again replaces its own facts whole: AC-2 left out of the new copy is gone.
+    std::fs::write(&acc, "Robe Hook\nAC-1:  RH100   QTY-2\n").unwrap();
+    docs(&mut s, json!({"paths": [acc.clone()]}));
+    let now = kept(&mut s);
+    let scopes: Vec<String> =
+        now.iter().filter(|f| f["key"] == json!("specialties.accessory")).map(|f| f["scope"].as_str().unwrap_or("").to_string()).collect();
+    assert!(scopes.iter().any(|x| x.contains("AC-1")) && !scopes.iter().any(|x| x.contains("AC-2")), "{scopes:?}");
+    assert!(now.iter().any(|f| f["source"].as_str().unwrap_or("").contains("I-Joist")) && keys(&now, "openings") == open_n, "{now:?}");
+    // The read list keeps each document once.
+    let spec: Value = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    let files: Vec<&str> = spec["trades"]["read"].as_array().unwrap().iter().map(|f| f["file"].as_str().unwrap()).collect();
+    assert_eq!(files.len(), 5, "accessories, hardware, joists and the two painting files, each once: {files:?}");
+
+    // Clearing is an explicit request.
+    docs(&mut s, json!({"paths": [joists], "replace": true}));
+    let cleared = kept(&mut s);
+    assert!(cleared.iter().all(|f| f["trade"] == json!("framing")) && !cleared.is_empty(), "{cleared:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
