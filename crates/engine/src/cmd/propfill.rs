@@ -1283,6 +1283,28 @@ pub(crate) fn far_off(off: f64, span: f64) -> bool {
     off.is_finite() && span.is_finite() && span > 0.0 && off > FAR_SPANS * span
 }
 
+/// Each level's footprint where the plans draw it (its floors, its shell, its corridors and
+/// stairs), for asking whether a point is outside the building (Q6546: an outside wall has no
+/// floor past it).
+pub(crate) struct Footprints(HashMap<String, Footprint>);
+
+impl Footprints {
+    pub(crate) fn of(d: &Drawing, sp: &BuildingSpec) -> Self {
+        Self(footprints(d, sp))
+    }
+
+    /// Whether `level` has a footprint.
+    pub(crate) fn has(&self, level: &str) -> bool {
+        self.0.get(&level.to_ascii_lowercase()).is_some_and(|f| !f.is_empty())
+    }
+
+    /// How far `p` (drawing units, on the plans) is outside `level`'s footprint (0 inside); None
+    /// when the level has none.
+    pub(crate) fn outside(&self, level: &str, p: Vec2) -> Option<f64> {
+        self.0.get(&level.to_ascii_lowercase()).filter(|f| !f.is_empty()).map(|f| f.outside(p))
+    }
+}
+
 /// Each level's footprint, by its name in lower case.
 fn footprints(d: &Drawing, sp: &BuildingSpec) -> HashMap<String, Footprint> {
     let mut out: HashMap<String, Footprint> = HashMap::new();
@@ -2370,7 +2392,7 @@ fn wall_pieces(d: &Drawing, on_plans: bool) -> Vec<WallPiece> {
 /// A wall mesh's pieces: each flat footprint once (a box's bottom and top are one), from its
 /// lowest face to its highest; a mesh with no flat faces is one piece, its hull. The boxes over an
 /// opening start at its head.
-fn mesh_pieces(m: &cadaddy_doc::Mesh) -> Vec<(Vec<Vec2>, [f64; 2])> {
+pub(crate) fn mesh_pieces(m: &cadaddy_doc::Mesh) -> Vec<(Vec<Vec2>, [f64; 2])> {
     let all = m.vertices.iter().fold([f64::INFINITY, f64::NEG_INFINITY], |z, v| [z[0].min(v.z), z[1].max(v.z)]);
     let tol = ((all[1] - all[0]).abs() * 1e-6).max(1e-9);
     let mut at: BTreeMap<Vec<(i64, i64)>, usize> = BTreeMap::new();
@@ -4183,9 +4205,23 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         // Its room: the one it stands in; set in or through a wall (a through-wall
                         // unit, its middle in the wall), the room on its service face (Q6586).
                         store.remove(ROOM_REVIEW);
+                        // (A through-wall unit's sleeve or grille, Q6546, inside its wall: the room past the
+                        // face its build set it toward.)
+                        let toward = super::bimlook::made_prop(e, "HOST_FACE").and_then(|t| {
+                            let (a, c) = t.split_once(',')?;
+                            let v = Vec2::new(a.trim().parse().ok()?, c.trim().parse().ok()?);
+                            (v.is_finite() && v.len() > 1e-9).then_some(v)
+                        });
                         let room = room_at(&rooms, lvl, b.center())
                             .map(|r| (r, None))
-                            .or_else(|| room_through_wall(&rooms, lvl, &walls, &b).map(|r| (r, Some(SERVICE_FACE_NOTE))));
+                            .or_else(|| room_through_wall(&rooms, lvl, &walls, &b).map(|r| (r, Some(SERVICE_FACE_NOTE))))
+                            .or_else(|| {
+                                let o = toward?;
+                                [1.0, 2.0]
+                                    .into_iter()
+                                    .find_map(|k| room_at(&rooms, lvl, b.center() + o * (k * upf)))
+                                    .map(|r| (r, Some(SERVICE_FACE_NOTE)))
+                            });
                         match room {
                             Some((r, note)) => {
                                 let mut p = Prop::new(r.label.clone(), Source::computed());

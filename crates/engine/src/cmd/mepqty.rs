@@ -636,6 +636,8 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
         *t.terminals.entry((st.key_level(&term.level), st.key_system(&term.system), term.terminal_kind.clone(), size)).or_default() += 1;
     }
 
+    // A through-wall unit's wall sleeve and outside grille (Q6546, M-THROUGH-WALL): bought with it.
+    let through_wall = super::throughwall::Rule::load();
     for e in sp.mep.equipment.iter().take(MAX_ITEMS) {
         let level_ok = st.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&e.level));
         let system_ok = st.system.as_deref().is_none_or(|s| e.systems.iter().any(|x| x.eq_ignore_ascii_case(s)));
@@ -649,10 +651,19 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
         } else {
             format!("{} x {} x {} H", ft_in(w), ft_in(dp), ft_in(e.height_ft))
         };
-        t.equipment.push(json!({
+        let mut row = json!({
             "tag": e.tag, "kind": e.kind, "level": e.level, "systems": e.systems, "size": size,
             "title": e.title, "properties": e.properties,
-        }));
+        });
+        if !e.round && through_wall.names(&e.kind) {
+            let face = format!("{} x {} H", ft_in(w.max(dp)), ft_in(e.height_ft));
+            row["through_wall"] = json!({
+                "sleeve": format!("{face}, {} in deep (the wall's depth where thicker)", through_wall.sleeve_depth_in),
+                "grille": face,
+                "rule": super::throughwall::RULE,
+            });
+        }
+        t.equipment.push(row);
     }
     t.equipment.sort_by(|a, b| (a["level"].as_str(), a["tag"].as_str()).cmp(&(b["level"].as_str(), b["tag"].as_str())));
     let gear_level = |tag: &str| sp.mep.equipment.iter().find(|e| e.tag == tag).map(|e| e.level.clone()).unwrap_or_default();

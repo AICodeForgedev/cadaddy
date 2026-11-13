@@ -2734,6 +2734,30 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 ..Line::default()
             },
         );
+        // A through-wall unit's wall sleeve and outside grille (Q6546): the field sets them with
+        // it, by the rule.
+        let tw = &e["through_wall"];
+        if tw.is_object() {
+            for (what, part, key) in [("Wall sleeve", "SLEEVE", "sleeve"), ("Outside grille", "GRILLE", "grille")] {
+                add(
+                    lines,
+                    Line {
+                        trade,
+                        category: "equipment".into(),
+                        item: format!("{what} for {} {}", st(&e, "kind"), st(&e, "tag")),
+                        size: st(tw, key),
+                        unit: "each",
+                        net: 1.0,
+                        status: "rule",
+                        rule: Some(format!("{}: a through-wall unit goes through the outside wall in its sleeve", st(tw, "rule"))),
+                        made: "derived",
+                        level: st(&e, "level"),
+                        elements: vec![format!("{} {part}", st(&e, "tag"))],
+                        ..Line::default()
+                    },
+                );
+            }
+        }
     }
     for h in arr("hangers").into_iter().filter(|h| !ours(h)) {
         let rule = format!("{}' spacing", h["spacing_ft"]);

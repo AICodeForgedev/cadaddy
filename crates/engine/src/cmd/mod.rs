@@ -234,6 +234,7 @@ pub mod stairs;
 pub mod strokesheets;
 pub mod symbol;
 mod takeoff;
+pub(crate) mod throughwall;
 pub mod tours;
 pub mod tradeatoms;
 pub(crate) mod traderooms;
