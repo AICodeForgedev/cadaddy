@@ -2733,14 +2733,19 @@ pub(crate) struct UnitViews<'a> {
     d: &'a Drawing,
     index: PrintIndex<'a>,
     upf: f64,
+    /// The symbols the job read in the views (Q6459: what tells two layings of a view apart when
+    /// its walls are their own turn).
+    marks: Vec<vreg::Mark>,
     read: std::cell::RefCell<BTreeMap<[u64; 4], Option<std::rc::Rc<vreg::ViewLines>>>>,
 }
 
 impl<'a> UnitViews<'a> {
-    /// For views lying in `within` (sheet rectangles), `upf` drawing units a foot.
-    pub(crate) fn of(d: &'a Drawing, within: &[[f64; 4]], upf: f64) -> UnitViews<'a> {
+    /// For views lying in `within` (sheet rectangles), `upf` drawing units a foot, the symbols
+    /// read on the sheets `marks` (those in `within` kept).
+    pub(crate) fn of(d: &'a Drawing, within: &[[f64; 4]], upf: f64, marks: Vec<vreg::Mark>) -> UnitViews<'a> {
         let index = if within.is_empty() { PrintIndex(Vec::new()) } else { PrintIndex::of(d, within) };
-        UnitViews { d, index, upf, read: std::cell::RefCell::new(BTreeMap::new()) }
+        let marks = marks.into_iter().filter(|(_, p)| within.iter().any(|r| inside(*r, *p))).collect();
+        UnitViews { d, index, upf, marks, read: std::cell::RefCell::new(BTreeMap::new()) }
     }
 
     /// How the view `view` (a sheet rectangle) lies on the room whose box is `room` (feet) on
@@ -2752,7 +2757,7 @@ impl<'a> UnitViews<'a> {
         let lines = match known {
             Some(l) => l,
             None => {
-                let l = vreg::ViewLines::new(&sheet_lines(self.d, &self.index, view), self.upf, view).map(std::rc::Rc::new);
+                let l = vreg::ViewLines::new(&sheet_lines(self.d, &self.index, view), &self.marks, self.upf, view).map(std::rc::Rc::new);
                 let mut read = self.read.borrow_mut();
                 if read.len() < MAX_READ_VIEWS {
                     read.insert(key, l.clone());
@@ -4503,7 +4508,8 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         r.extend(type_view_rects(&u.ty));
         r
     });
-    let unit_views = UnitViews::of(d, &view_rects, upf);
+    let marks = if view_rects.is_empty() { Vec::new() } else { super::validate_present::job_marks(d) };
+    let unit_views = UnitViews::of(d, &view_rects, upf, marks);
     let measure = |r: [f64; 4]| unit_views.turn(r, &model, &area.level, area.bbox);
     let in_drawing: Vec<super::validate_docs::DocSheet> = doc_sheets.0.iter().filter(|x| x.rect.is_some()).cloned().collect();
     let all_lists = super::validate_keynote::list_asks(&keynotes);

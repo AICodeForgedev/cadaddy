@@ -601,3 +601,65 @@ fn a_view_on_another_sheet_is_laid_by_its_own_turn_on_the_rooms_walls() {
         assert_eq!(missing, usize::from(room == "101"), "room {room}: {r}");
     }
 }
+
+/// Q6459: a guest room whose walls read the same turned half round (a plain box between two
+/// partitions) and the type's mechanical view of it drawn turned 180°: its door leaf and its four
+/// receptacles (all on the room's south wall, unevenly spaced) don't map onto themselves turned,
+/// so the walls can't say which way the view lies. The view is laid by its symbols (they put the
+/// receptacles on their wall) and no receptacle is hard missing.
+#[test]
+fn a_view_of_a_room_whose_walls_read_the_same_turned_is_not_laid_by_a_certain_wall_turn() {
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    rect(&mut s, [0.0, 0.0], [60.0, 14.0]);
+    rect(&mut s, [0.5, 0.5], [59.5, 13.5]);
+    layer(&mut s, "A-WALL-CL");
+    line(&mut s, [20.0, 0.5], [20.0, 13.5]);
+    line(&mut s, [40.0, 0.5], [40.0, 13.5]);
+    // The view (on a sheet drawn where the mechanical one is elsewhere): room 102's wall faces and an open door leaf by its north-east corner, turned 180°
+    // about the room's middle.
+    layer(&mut s, "M-ENLG");
+    let mid = [30.0, 7.0];
+    let on_mech = |p: [f64; 2]| [MC[0] - (p[0] - mid[0]) * 12.0, MC[1] - (p[1] - mid[1]) * 12.0];
+    let (w, e) = (19.797, 40.203);
+    let mut lines: Vec<([f64; 2], [f64; 2])> = [0.0, 0.5, 13.5, 14.0].iter().map(|y| ([w, *y], [e, *y])).collect();
+    lines.extend([w, 20.203, 39.797, e].iter().map(|x| ([*x, 0.5], [*x, 13.5])));
+    lines.push(([38.0, 13.5], [38.0, 10.5]));
+    for (a, b) in lines {
+        s.execute("line", &json!({"points": [on_mech(a), on_mech(b)]})).unwrap();
+    }
+    layer(&mut s, "A-ROOM-TAG");
+    text(&mut s, at([10.0, 9.0]), "101");
+    text(&mut s, at([30.0, 9.0]), "102");
+    text(&mut s, at([50.0, 9.0]), "103");
+    layer(&mut s, "G-FRAME");
+    for x in [0.0, E101, E601, M601] {
+        s.execute("pline", &json!({"vertices": [[x, 0.0], [x + SW, 0.0], [x + SW, SH], [x, SH]], "closed": true})).unwrap();
+    }
+    // The model holds the receptacles where the view, laid its true way, puts them.
+    let recs: Vec<[f64; 2]> = [22.0, 25.0, 28.5, 33.0].iter().map(|x| [*x, 0.9]).collect();
+    let (mut s, rec_h) = place(s, "RECEP", "E-POWR", &recs, "REC");
+    s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    for h in &rec_h {
+        s.execute("bim.source", &json!({"handles": [h], "status": "fixed", "source": "E-602", "kind": "receptacle"})).unwrap();
+    }
+    let mut sp: Value = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    let mech = [MC[0] - 10.75 * 12.0, MC[1] - 7.5 * 12.0, MC[0] + 10.75 * 12.0, MC[1] + 7.5 * 12.0];
+    sp["unit_types"] = json!([{"id": "GUEST", "name": "GUEST ROOM",
+        "views": [{"sheet": "E-602", "title": "ENLARGED GUEST ROOM POWER PLAN", "rect": mech, "sheet_rect": [M601, 0.0, M601 + SW, SH]}],
+        "source": {"sheet": "E-601", "by": "made-up test"}}]);
+    // The job's fit was measured on another sheet's view: it says nothing of this one's turn.
+    let fit = json!({"rotation_deg": 0.0, "mirrored": false, "view": "E-601 ENLARGED GUEST ROOM POWER PLAN", "by": "made-up test"});
+    sp["unit_instances"] = json!([{"number": "102", "level": "L1", "type": "GUEST", "hand": "normal", "fit": fit}]);
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
+    let devices: Vec<Value> =
+        recs.iter().map(|p| json!({"tag": "REC", "kind": "receptacle", "at": on_mech(*p), "sheet": "E-602", "level": "L1"})).collect();
+    set_job(&mut s, json!(devices));
+    let (r, fs) = present(&mut s, json!({"room": "102"}));
+    let mine = in_area(&fs, "102");
+    let recep: Vec<&&Value> = mine.iter().filter(|f| f["kind"] == "receptacle").collect();
+    assert_eq!(recep.iter().filter(|f| f["verdict"] == "missing").count(), 0, "{r}");
+    assert_eq!(recep.iter().filter(|f| f["verdict"] == "pass").count(), 4, "{r}");
+    assert_eq!(verdicts(&mine), (4, 0, 0), "{r}");
+}
