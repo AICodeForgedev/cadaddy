@@ -2559,7 +2559,13 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         // The ceiling type given the room (`rcp.type`), with who gave it.
         if let Some(r) = room {
             xdata.extend(super::ceilings::room_type_tags(r));
+            xdata.extend(super::ceilings::room_tags(r));
         }
+        // Its properties (Q6595): the height it is built at and where that was read, its type's
+        // assembly and finish, its area.
+        xdata.extend(super::ceilings::room_height_tags(room, level));
+        xdata.extend(super::ceilings::type_detail_tags(&sp, room.and_then(|r| r.ceiling_type.as_deref()), false));
+        xdata.extend(super::ceilings::area_tag(&t.outline, upf));
         let common = Common { layer: wallgen::layer_of(Part::Ceiling).into(), xdata: xdata.into(), ..Common::default() };
         if let Ok(h) = d.add(&Space::Model, common, EntityKind::Mesh(m)) {
             ceilings += 1;
