@@ -1074,6 +1074,30 @@
     "CIRCUITING"
    ]
   },
+  "devices.line_key_words": {
+   "source": "drafting convention (Q6596): a legend row whose description has one of these whole words keys a line type (a utility, grading or boundary line: SANITARY SEWER, STORM DRAIN, UNDERGROUND ELECTRIC LINE), not a device, unless it names a device and doesn't end with the line; its marks on the plan are that line's labels",
+   "words": [
+    "LINE",
+    "LINES",
+    "SEWER",
+    "STORM",
+    "CONTOUR",
+    "EASEMENT",
+    "SETBACK",
+    "FENCE",
+    "SWALE",
+    "DITCH"
+   ]
+  },
+  "devices.line_key_device_phrases": {
+   "source": "trade practice (Q6596): a legend row with one of these phrases is a device's though it has a line word (a LINE VOLTAGE dimmer, an IN-LINE fan)",
+   "words": [
+    "LINE VOLTAGE",
+    "IN LINE",
+    "IN-LINE",
+    "INLINE"
+   ]
+  },
   "devices.legend_row_words": {
    "source": "trade practice: the words a legend row describing a device of a kind (value) has; a kind not listed takes any row (moved from propfill.rs `row_fits`)",
    "groups": [
