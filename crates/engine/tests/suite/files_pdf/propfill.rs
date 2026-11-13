@@ -444,16 +444,24 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     let ha = find(&mut s, "device", json!({"type_mark": "A"}));
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
     s.execute("bim.coderules", &json!({})).unwrap();
-    assert_eq!(device_of(&mut s, "A")["receptacle_type"]["value"], "standard");
-    // The print's GFCI tag and what is built instead, side by side.
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["receptacle_type"]["value"], "standard");
+    // The breaker as built is a person's word; what the rule decides from it is the rule's.
+    assert_eq!(a["gfci"]["value"], "breaker", "{a:#}");
+    for k in ["gfci", "protected_by", "receptacle_type"] {
+        assert_eq!(a[k]["source"]["kind"], "rule", "{k}: {a:#}");
+    }
+    assert!(a["gfci"]["source"]["doc"].as_str().is_some_and(|d| d.contains("field report 2026-11-05")), "the breaker's source cited: {a:#}");
+    // The print's GFCI tag on that breaker: kept, redundant protection reported (allowed), nothing
+    // corrected (fix-coderules-drops-printed-gfci).
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "type_mark", "value": "GFCI"})).unwrap();
-    s.execute("bim.coderules", &json!({})).unwrap();
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    assert_eq!(r["gfci"]["redundant_protection"], 1, "{r:#}");
     let hs = find(&mut s, "device", json!({"type_mark": "GFCI"}));
     let a = get(&mut s, &hs[0]);
-    assert_eq!(a["design_value"]["value"], "GFCI", "{a:#}");
-    assert_eq!(a["corrected_value"]["value"], "standard");
-    assert!(a["correction_reason"]["value"].as_str().is_some_and(|r| r.contains("double protection")), "{a:#}");
-    assert_eq!(a["correction_rule"]["value"], "NEC 210.8");
+    assert_eq!(a["receptacle_type"]["value"], "GFCI", "{a:#}");
+    assert_eq!(a["gfci"]["value"], "device", "{a:#}");
+    assert!(a["corrected_value"].is_null() && a["design_value"].is_null(), "{a:#}");
     // The panel's schedule says so too: what was built, and what was printed.
     let r = s.execute("panels.schedule", &json!({"panel": "lp1"})).unwrap();
     let c = |n: &str| r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == n).cloned().unwrap();
@@ -462,6 +470,52 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     assert_eq!(c("3")["protection"]["as_built"]["source"], "field report 2026-11-05");
     assert!(c("5")["protection"]["as_built"].is_null(), "{r:#}");
     assert!(c("7")["protection"]["as_built"].is_null(), "a space has no breaker: {r:#}");
+}
+
+/// A receptacle the drawings tag GFCI on a dual-function breaker stays a GFCI device: redundant
+/// protection is allowed and reported for value engineering, never corrected to standard; the
+/// values the rule derives are the rule's, never a person's (fix-coderules-drops-printed-gfci).
+#[test]
+fn a_drawn_gfci_receptacle_on_a_gfci_breaker_stays_gfci() {
+    let mut s = plan();
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF", "GF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
+    fill(&mut s);
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    let h = ha[0].clone();
+    s.execute("bim.props.set", &json!({"handle": h, "key": "kind", "value": "receptacle"})).unwrap();
+    s.execute("bim.props.set", &json!({"handle": h, "key": "type_mark", "value": "GFCI"})).unwrap();
+    for run in 0..2 {
+        let r = s.execute("bim.coderules", &json!({})).unwrap();
+        assert_eq!(r["gfci"]["redundant_protection"], 1, "run {run}: {r:#}");
+        assert!(r["gfci"]["breaker"].is_null(), "not built standard: {r:#}");
+        assert_eq!(r["corrections"], 0, "{r:#}");
+        let red = &r["redundant_protection"][0];
+        assert_eq!(red["allowed"], true, "{r:#}");
+        assert!(red["handle"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(&h)), "{r:#}");
+        assert!(red["note"].as_str().is_some_and(|n| n.contains("redundant protection (allowed)")), "{r:#}");
+        let a = get(&mut s, &h);
+        assert_eq!(a["receptacle_type"]["value"], "GFCI", "the drawn device stays: {a:#}");
+        assert_eq!(a["gfci"]["value"], "device", "{a:#}");
+        assert!(a["protected_by"]["value"].as_str().is_some_and(|p| p.contains("breaker")), "{a:#}");
+        for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
+            assert!(a[k].is_null(), "nothing corrected ({k}): {a:#}");
+        }
+        for k in ["gfci", "protected_by", "receptacle_type"] {
+            assert_ne!(a[k]["source"]["kind"], "user", "no person set {k}: {a:#}");
+        }
+        assert!(a["gfci"]["source"]["doc"].as_str().is_some_and(|d| d.contains("NEC 210.8") && d.contains("E-601")), "rule and row: {a:#}");
+    }
+    // Validate agrees: a pass, redundant protection allowed, not double protection to remove.
+    let v = s.execute("validate.prescreen", &json!({"rules": ["G-PRODUCT-CODE"], "all": true, "limit": 50})).unwrap();
+    let f = v["findings"]
+        .as_array()
+        .and_then(|fs| fs.iter().find(|f| f["handle"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(&h)) && f["check"] == "gfci"))
+        .cloned()
+        .unwrap_or_else(|| panic!("{v:#}"));
+    assert_eq!(f["verdict"], "pass", "{f:#}");
+    assert!(f["issue"].as_str().is_some_and(|i| i.contains("redundant protection (allowed)")), "{f:#}");
 }
 
 #[test]
@@ -1436,4 +1490,133 @@ fn a_terminal_no_duct_reaches_is_served_by_its_schedules_unit_or_its_rooms_own()
     let r = s.execute("bim.props.check", &json!({"checks": ["terminal_unserved"]})).expect("check");
     let unserved: Vec<String> = r["findings"].as_array().into_iter().flatten().filter_map(|f| f["message"].as_str().map(str::to_string)).collect();
     assert!(unserved.iter().any(|m| m.contains("SD-7")) && !unserved.iter().any(|m| m.contains("SD-1") || m.contains("EG-1")), "{unserved:?}");
+}
+
+// ─── Through-wall units (Q6586) ─────────────────────────────────────────────
+
+/// Two 12' × 20' guest rooms side by side (101 x 0–12', 102 x 12.5–24.5'), a 7 7/8" exterior
+/// wall on the south and 6" walls elsewhere; in each room a through-wall unit (42" × 21.6",
+/// centred in the exterior wall's depth, 4" off the floor), a room panel of the typical panel U
+/// and a receptacle on it. Room 102 also has the unit's receptacle drawn (`unit_receptacle`):
+/// a device tagged with the unit's tag on the unit's 2-pole circuit. A condensing unit stands
+/// out on the site, in no room. Built, rooms traced, filled.
+fn unit_rooms(unit_receptacle: bool) -> (Session, Value) {
+    let mut d = Drawing::new_imperial();
+    let ext = 7.875 / 12.0;
+    // Outside faces.
+    for (a, b) in [((-0.5, -ext), (25.0, -ext)), ((25.0, -ext), (25.0, 20.5)), ((25.0, 20.5), (-0.5, 20.5)), ((-0.5, 20.5), (-0.5, -ext))] {
+        line(&mut d, "A-WALL", a, b);
+    }
+    // Inside faces of each room.
+    for x0 in [0.0, 12.5] {
+        let x1 = x0 + 12.0;
+        for (a, b) in [((x0, 0.0), (x1, 0.0)), ((x1, 0.0), (x1, 20.0)), ((x1, 20.0), (x0, 20.0)), ((x0, 20.0), (x0, 0.0))] {
+            line(&mut d, "A-WALL", a, b);
+        }
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    text(&mut s, "A-ROOM-TAG", [60.0, 130.0], "GUEST");
+    text(&mut s, "A-ROOM-TAG", [66.0, 118.0], "101");
+    text(&mut s, "A-ROOM-TAG", [210.0, 130.0], "GUEST");
+    text(&mut s, "A-ROOM-TAG", [216.0, 118.0], "102");
+    // The unit: 42" wide along the wall, 21.6" deep across it, centred in the wall (y −7 7/8"–0).
+    let unit = |x_mid: f64| {
+        let yc = -7.875 / 2.0;
+        json!({"tag": "PTAC-1", "kind": "ptac", "level": "L1", "min": [x_mid - 21.0, yc - 10.8], "max": [x_mid + 21.0, yc + 10.8],
+               "bottom_ft": 4.0 / 12.0, "height_ft": 16.0 / 12.0, "systems": ["M-DUCT"], "sources": {"schedule": "M-601"}})
+    };
+    let panel = |tag: &str, room: &str, x: f64| {
+        json!({"tag": tag, "kind": "panel", "level": "L1", "min": [x, 230.0], "max": [x + 14.0, 234.0], "height_ft": 2, "bottom_ft": 4,
+               "properties": {"PANEL": "U", "ROOM": room}})
+    };
+    let mut tags = vec![device(3.0, 19.5, "A", "U-1", "1F0"), device(15.5, 19.5, "A", "U-1", "1F1")];
+    if unit_receptacle {
+        // Under the unit, in its sub-base: on the 2-pole circuit the schedule gives the unit.
+        let mut r = device(20.5, 0.4, "PTAC", "U-13,15", "1F2");
+        r["fields"]["device_type"] = json!({"value": "receptacle", "source": "plan"});
+        tags.push(r);
+    }
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Exterior"}, {"layer": "A-ROOM-TAG", "role": "room_tag"}],
+        "wall_types": [{"name": "Exterior", "thickness_in": 7.875}],
+        "tags": tags,
+        "mep": {
+            "systems": [{"name": "M-DUCT", "layer": "M-DUCT", "kind": "duct", "size_in": [12, 8], "bottom_ft": 9}],
+            "equipment": [
+                unit(72.0), unit(222.0),
+                panel("U-101", "101", 20.0), panel("U-102", "102", 170.0),
+                {"tag": "CU-1", "kind": "condensing_unit", "level": "L1", "min": [480.0, 60.0], "max": [516.0, 96.0], "height_ft": 3}
+            ],
+            "panel_schedules": [{"panel": "U", "typical_of": 2, "source": "E-601", "circuits": [
+                {"number": "1", "description": "ROOM RCPT", "breaker": "20", "poles": 1, "source": "E-601"},
+                {"number": "13", "description": "PTAC", "breaker": "20", "poles": 2, "source": "E-601"}
+            ]}]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({"route": false})).expect("build");
+    s.execute("rooms.build", &json!({})).expect("rooms");
+    let r = fill(&mut s);
+    (s, r)
+}
+
+/// The built equipment tagged `tag`, by its west edge.
+fn equipment_by_x(s: &mut Session, tag: &str) -> Vec<String> {
+    let d = s.doc().expect("doc");
+    let mut v: Vec<(f64, String)> = d
+        .model
+        .iter()
+        .filter(|e| cadaddy_engine::cmd::bimlook::made_tag(e, "tag") == Some(tag))
+        .map(|e| (cadaddy_engine::doc::entity_bounds(d, e, 0).min.x, e.handle.hex()))
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v.into_iter().map(|(_, h)| h).collect()
+}
+
+/// A unit set through an exterior wall (its middle in the wall, outside every room) takes the
+/// room on its service face, the room's own panel's circuit for it and that panel as its feed:
+/// from its receptacle in the room when the plans draw one, else from the room panel's schedule
+/// row for its kind. Equipment left in no room is a warning with its reason, never silent.
+#[test]
+fn a_unit_through_an_exterior_wall_takes_the_room_on_its_service_face_and_its_circuit() {
+    let _g = serial();
+    for drawn in [false, true] {
+        let (mut s, r) = unit_rooms(drawn);
+        let units = equipment_by_x(&mut s, "PTAC-1");
+        assert_eq!(units.len(), 2, "{r:#}");
+        let missing = find(&mut s, "equipment", json!({"room": "missing"}));
+        assert!(units.iter().all(|u| !missing.contains(u)), "drawn {drawn}: units in no room {missing:?}: {r:#}");
+        for (h, room) in units.iter().zip(["101", "102"]) {
+            let p = get(&mut s, h);
+            assert_eq!(p["room"]["value"], room, "{p:#}");
+            assert!(p["room"]["note"].as_str().is_some_and(|n| n.contains("service face")), "{p:#}");
+            assert_eq!(p["circuit"]["value"], "U-13,15", "drawn {drawn}: {p:#}");
+            assert_eq!(p["panel"]["value"], "U", "{p:#}");
+            let feed = p["fed_from_handle"]["value"].as_str().unwrap_or_default().to_string();
+            let fp = get(&mut s, &feed);
+            assert!(
+                !feed.is_empty() && equipment_by_x(&mut s, &format!("U-{room}")) == vec![feed.clone()],
+                "fed from its room's panel: {p:#} {fp:#}"
+            );
+        }
+        // Room 102's unit: its receptacle's circuit when drawn, else the schedule row's.
+        let p = get(&mut s, &units[1]);
+        let how = p["circuit"]["note"].as_str().unwrap_or_default().to_string();
+        assert_eq!(how.contains("receptacle") || how.contains("connection"), drawn, "{p:#}");
+        if !drawn {
+            assert_eq!(p["circuit"]["source"]["kind"], "schedule", "{p:#}");
+        }
+        // The condensing unit outside is in no room: a warning with its reason.
+        let cu = equipment_by_x(&mut s, "CU-1");
+        let listed = r["equipment_in_no_room_listed"].as_array().cloned().unwrap_or_default();
+        assert!(
+            listed.iter().any(|x| cu.first().is_some_and(|h| x["handle"] == h.as_str()) && x["why"].as_str().is_some_and(|w| !w.is_empty())),
+            "{r:#}"
+        );
+        assert!(!listed.iter().any(|x| units.iter().any(|u| x["handle"] == u.as_str())), "{r:#}");
+        assert_eq!(r["equipment_in_no_room"]["L1"], 1, "{r:#}");
+    }
 }

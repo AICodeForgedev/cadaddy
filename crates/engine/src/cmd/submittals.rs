@@ -35,7 +35,7 @@ const PRODUCT_KINDS: &[&str] = &["device", "light_fixture", "plumbing_fixture", 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Apply Submittals", run)
-            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, header ({named, why}: a page header naming a product its own cut sheet doesn't show: not taken, said as the elements' submittal_header), category, quantity, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, dimmers: {protocol: n}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; each dimmer takes the dimming of the fixtures on its leg (mixed: a question); a person's values stay; luminaire_boxes_removed / luminaire_boxes_needed: a luminaire whose cut sheet gives it its own junction box (canless, remote driver, integral) loses the outlet box the build gave it (one that now needs one gets it at the next build)")
+            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, header ({named, why}: a page header naming a product its own cut sheet doesn't show: not taken, said as the elements' submittal_header), category, quantity, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, dimmers: {protocol: n}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, cri, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; each dimmer takes the dimming of the fixtures on its leg (mixed: a question); a person's values stay; luminaire_boxes_removed / luminaire_boxes_needed: a luminaire whose cut sheet gives it its own junction box (canless, remote driver, integral) loses the outlet box the build gave it (one that now needs one gets it at the next build)")
             .menu(&["Tools", "Building", "Apply Submittals"]),
     ]
 }
@@ -567,7 +567,7 @@ fn product_props(product: &Product) -> ProductProps {
         set.push(("dimming", if note.is_empty() { prop } else { prop.with_note(&note) }));
     }
     // What its cut sheet says of it besides (a luminaire's voltage, finish, mounting, CCT,
-    // lumens, wattage).
+    // CRI, lumens, wattage).
     for (key, prop_key) in [
         (keys::VOLTS, "voltage"),
         (keys::FINISH, "finish"),
@@ -575,6 +575,7 @@ fn product_props(product: &Product) -> ProductProps {
         (keys::CCT, "cct"),
         (keys::LUMENS, "lumens"),
         (keys::WATTAGE, "wattage"),
+        (super::spec_import::CRI, "cri"),
         (super::spec_import::JUNCTION_BOX, "junction_box"),
     ] {
         if let Some(v) = product.value(key) {

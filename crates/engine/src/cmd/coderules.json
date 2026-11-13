@@ -37,7 +37,7 @@
         "ceiling_receptacle"
       ],
       "sets": "gfci",
-      "rule": "GFCI protection is judged per circuit: a receptacle on a GFCI (or dual-function) breaker is already protected and is a standard device; where the print tags GFCI and the breaker isn't, the first device on the circuit is a GFCI receptacle and the ones after it on its load side are standard. A GFCI receptacle on a GFCI breaker is double protection. When the breaker's type isn't known the decision is left undecided.",
+      "rule": "GFCI protection is judged per circuit: the rule only adds the protection the code requires and never removes protection the drawings call for. A receptacle the drawings show standard on a GFCI (or dual-function) breaker is already protected and stays standard; where the print tags GFCI or the place needs it and the breaker isn't GFCI, the first device on the circuit is a GFCI receptacle and the ones after it on its load side are standard. A receptacle the drawings tag GFCI on a GFCI breaker stays a GFCI device: redundant protection is allowed, reported as information for value engineering. When the breaker's type isn't known the decision is left undecided.",
       "tags": [
         "GFCI",
         "GFI",

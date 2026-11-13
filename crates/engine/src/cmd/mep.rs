@@ -1960,6 +1960,25 @@ fn turns(u: Vec2, v: Vec2) -> bool {
 /// elbow where it turns in plan, a drop where its height changes by 1/16" or more (a zero-length segment is a
 /// vertical one: a riser between the heights around it). No elbow at `skip` (a tee is there).
 /// Returns `(pieces, counts)`.
+/// A built piece's tags with its elevation (Q6592): its body's bottom above its level's floor
+/// `floor` (and its top, `vertical` for a riser or a stub), measured off its own mesh as it is
+/// built, so every rebuild writes it again.
+fn with_elevation(x: Vec<RawTag>, m: &Mesh, floor: f64, upf: f64, vertical: bool, run: Option<&MepRun>) -> Vec<RawTag> {
+    let Some((z0, z1)) = super::mepatoms::build::z_range(m) else { return x };
+    // Where its height came from: its run's height source (a default stays a default, never a
+    // reading, as `bim.props.fill` says it), else computed.
+    let src = run.map_or_else(cadaddy_doc::props::Source::computed, |r| super::propfill::source_said(&r.height_source, &r.source_sheet));
+    let found = super::mepatoms::build::elevation_props(z0, z1, floor, upf, vertical, &src);
+    if found.is_empty() {
+        return x;
+    }
+    let mut ps = cadaddy_doc::props::read(&x);
+    for (key, p) in found {
+        ps.set(key, p);
+    }
+    cadaddy_doc::props::write(&x, &ps)
+}
+
 fn pieces(run: &MepRun, base_z: f64, upf: f64, skip: &[Vec2]) -> (Vec<Piece>, PieceCounts) {
     let h = depth_in(run.size_in) / 12.0 * upf;
     let pts: Vec<Vec2> = run.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect();
@@ -3022,7 +3041,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
                 if let Some(c) = s.cut {
                     x.extend(riser_tags(c));
                 }
-                let x = super::provenance::with_run_corrections(x, r);
+                let x = with_elevation(super::provenance::with_run_corrections(x, r), &seg_mesh, s.base_z, upf, true, Some(r));
                 if let Ok(h) =
                     d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
                 {
@@ -3045,6 +3064,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
                 mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"))),
                 r,
             );
+            let x = with_elevation(x, &seg_mesh, s.base_z, upf, false, Some(r));
             if let Ok(h) =
                 d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
             {
@@ -3066,6 +3086,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let n = nth.entry(ks).or_default();
             *n += 1;
             let x = mark(r, sy, tags(&s.level, source, sy, format!("part:fitting:{ks}"), &[p.size_a], format!("{base}/{ks}{n}")));
+            let x = with_elevation(x, &m, s.base_z, upf, false, Some(r));
             if let Ok(h) = d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)) {
                 total_fittings += 1;
                 if let Some(f) = fittings_of.get_mut(i) {
@@ -3101,6 +3122,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             s.sy,
             tags(&s.level, source_of(&s.run.objects), s.sy, format!("part:fitting:{ks}"), &sizes, format!("{ks}@{:.2},{:.2}", j.at.x, j.at.y)),
         );
+        let x = with_elevation(x, &m, s.base_z, upf, false, Some(s.run));
         if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)) {
             total_fittings += 1;
             joint_handles.push((h, j.ends.iter().map(|e| e.run).collect()));
@@ -3203,6 +3225,8 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             t(1000, "kind:conduit".into()),
             t(1000, "part:segment".into()),
         ];
+        let floor = sp.level(&st.level).map_or(0.0, |l| l.elevation_ft * upf);
+        let xdata = with_elevation(xdata, &m, floor, upf, true, None);
         if d.add(&Space::Model, Common { layer: layer.clone().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             total_stubs += 1;
         }
