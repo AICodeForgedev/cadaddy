@@ -1726,7 +1726,14 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             })
             .flatten();
         let mount = if at_equipment.is_some() { Mount::Ceiling } else { mount };
-        let floor = level.elevation_ft * upf;
+        // A hoistway's device (Q6615): its height from the pit floor or the top landing, a
+        // ceiling-mounted one at the pit's top or the hoistway's ceiling.
+        let shaft = field(t, "hoistway_part").and_then(|_| {
+            let floor_ft = field(t, "mount_floor_ft")?.parse::<f64>().ok().filter(|v| v.is_finite())?;
+            let ceiling_in = field(t, "hoistway_ceiling_in").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0);
+            Some((floor_ft, ceiling_in, field(t, "hoistway_basis").unwrap_or_default()))
+        });
+        let floor = shaft.as_ref().map_or(level.elevation_ft, |s| s.0) * upf;
         let height: Chosen = match mount {
             Mount::Ceiling => {
                 // A printed height of 7' and up (a wall-hung detector's, a high fixture's) first;
@@ -1804,6 +1811,12 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
                 })
             }
         };
+        // A hoistway's ceiling-mounted device: at the pit's top or under the hoistway's ceiling.
+        let height =
+            match shaft.as_ref().filter(|_| mount == Mount::Ceiling && at_equipment.is_none()).and_then(|(_, c, basis)| c.map(|c| (c, basis))) {
+                Some((inches, basis)) => Chosen { inches, from: "hoistway", source: SourceKind::Rule, doc: basis.clone(), datum: Datum::Top },
+                None => height,
+            };
         // A pole light's height is its pole's top (the site work step's, as its schedule and the
         // rules give it), above any storey's.
         let height = match site.as_ref().and_then(|_| {
@@ -2139,7 +2152,28 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
         if let Some(ifc) = field(t, "ifc_class") {
             store.set("ifc_class", Prop::new(ifc, what_src));
         }
-        store.set("offset", Prop::new(round2(height.inches / 12.0), hp.source.clone()).with_unit("ft"));
+        // Above its level's floor: a hoistway device's datum (the pit floor) may be below it.
+        let datum_ft = shaft.as_ref().map_or(0.0, |s| s.0 - level.elevation_ft);
+        store.set("offset", Prop::new(round2(datum_ft + height.inches / 12.0), hp.source.clone()).with_unit("ft"));
+        // In a hoistway's pit or at its top (Q6615): where, the basis, and where it was read.
+        if let Some((floor_ft, _, basis)) = &shaft {
+            let rule = Source::from_doc(SourceKind::Rule, basis);
+            if let Some(part) = field(t, "hoistway_part") {
+                store.set("hoistway_part", Prop::new(part, rule.clone()));
+            }
+            store.set(
+                "mount_floor",
+                Prop::new(round2(*floor_ft), rule.clone()).with_unit("ft").with_note("the elevation its height is measured from"),
+            );
+            store.set("position_provenance", Prop::new("derived", rule.clone()));
+            store.set("position_basis", Prop::new(basis.clone(), rule.clone()));
+            if let Some(v) = field(t, "hoistway_view") {
+                store.set("hoistway_view", Prop::new(v.clone(), Source::print(&v, None)));
+            }
+            if let Some(design) = field(t, "design_location") {
+                store.set("design_location", Prop::new(design, Source::from_doc(SourceKind::Print, "where its view registered (level, feet)")));
+            }
+        }
         if !sheet.is_empty() {
             store.set("sheet", Prop::new(sheet.clone(), Source::print(&sheet, at)));
         }
@@ -5115,6 +5149,78 @@ mod tests {
         assert_eq!(j["unregistered_devices"], json!(5), "{j:#}");
         // The far rule itself: more than twice the building's width off.
         assert!(far_off(1_900.0, 80.0) && !far_off(150.0, 80.0) && !far_off(f64::NAN, 80.0) && !far_off(500.0, 0.0));
+    }
+
+    /// Q6615: a hoistway's devices stand by its datum, not their level's floor: a pit receptacle
+    /// at its usual height above the pit floor (below the lowest landing), the pit's light at the
+    /// pit's top, the top of the hoistway's light at the hoistway's ceiling over the top landing;
+    /// where they were read and why kept on them.
+    #[test]
+    fn a_hoistways_devices_stand_on_the_pit_floor_or_under_the_hoistways_ceiling() {
+        let v = |x: &str| json!({"value": x, "source": "rule"});
+        let dev = |id: &str, kind: &str, mark: &str, level: &str, at: [f64; 2], floor: &str, ceiling: &str, part: &str| {
+            let mut fields = json!({
+                "symbol": v("1"), "type": v(mark), "hoistway_part": v(part), "mount_floor_ft": v(floor),
+                "hoistway_ceiling_in": v(ceiling), "hoistway_basis": v("in the pit of hoistway B"),
+                "design_location": v("L2 at 9.00, 10.00 ft"),
+            });
+            if kind == "luminaire" {
+                fields["mount"] = json!({"value": "ceiling", "source": "plan"});
+            }
+            json!({"id": id, "kind": kind, "level": level, "at_ft": at, "fields": fields})
+        };
+        let sp: BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [
+                {"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0},
+                {"name": "L3", "elevation_ft": 20.0, "height_ft": 10.0, "ceiling_ft": 9.0}
+            ],
+            "shells": {"L1": [[0.0, 0.0, 480.0, 480.0]], "L3": [[0.0, 0.0, 480.0, 480.0]]},
+            "tags": [
+                dev("device:L1:9.0,10.0", "receptacle", "GFCI", "L1", [9.0, 10.0], "-5", "60", "pit"),
+                dev("device:L1:12.0,12.0", "luminaire", "D", "L1", [12.0, 12.0], "-5", "60", "pit"),
+                dev("device:L3:12.0,12.0", "luminaire", "D", "L3", [12.0, 12.0], "20", "156", "top"),
+            ],
+        }))
+        .unwrap();
+        let mut d = Drawing::new_imperial();
+        let r = build_devices(&mut d, &sp);
+        assert_eq!(r.built, 3, "{:#}", r.to_json());
+        let at = |x: f64, y: f64| {
+            d.model
+                .iter()
+                .filter_map(|e| extent(&d, e).map(|(b, z0, z1)| (b, z0, z1, e.handle)))
+                .find(|(b, ..)| (b.center().x - x * 12.0).abs() < 6.0 && (b.center().y - y * 12.0).abs() < 6.0)
+        };
+        let lvl = |h: Handle| d.model.get(h).and_then(|e| super::super::bspec::made_level(e));
+        let props_of = |h: Handle| d.model.get(h).map(|e| props::read(&e.common.xdata)).unwrap_or_default();
+        // The pit receptacle: its middle 18" over the pit floor, 5 ft under the landing.
+        let (_, z0, z1, h) = at(9.0, 10.0).unwrap_or_else(|| panic!("pit receptacle not built"));
+        assert!(((z0 + z1) / 2.0 - (-60.0 + 18.0)).abs() < 1.0, "{z0} {z1}");
+        let ps = props_of(h);
+        assert_eq!(ps.get("offset").and_then(|p| p.value.as_f64()), Some(-3.5), "{ps:?}");
+        assert_eq!(ps.get("hoistway_part").map(|p| p.text()).as_deref(), Some("pit"));
+        assert_eq!(ps.get("position_provenance").map(|p| p.text()).as_deref(), Some("derived"));
+        assert!(ps.get("design_location").is_some_and(|p| p.text().starts_with("L2")), "{ps:?}");
+        // The pit's light: its top at the pit's top (the landing).
+        let pit_light = d
+            .model
+            .iter()
+            .filter(|e| lvl(e.handle).as_deref() == Some("L1"))
+            .filter_map(|e| extent(&d, e))
+            .find(|(b, ..)| (b.center().x - 144.0).abs() < 6.0)
+            .unwrap_or_else(|| panic!("pit light not built"));
+        assert!(pit_light.2.abs() < 1.0, "{pit_light:?}");
+        // The top's light: under the hoistway's ceiling, 13 ft over the top landing.
+        let top = d
+            .model
+            .iter()
+            .filter(|e| lvl(e.handle).as_deref() == Some("L3"))
+            .filter_map(|e| extent(&d, e).map(|(_, z0, z1)| (z0, z1, e.handle)))
+            .next()
+            .unwrap_or_else(|| panic!("top light not built"));
+        assert!((top.1 - (240.0 + 156.0)).abs() < 1.0, "{top:?}");
+        assert_eq!(props_of(top.2).get("mount_height_from").map(|p| p.text()).as_deref(), Some("hoistway"));
     }
 
     /// fix-objects-far-outside-building-rw1: the only devices a sheet lists by number on a level
