@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).long().params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer), echo?: bool (default true: the counts on the command line; a caller that changes the model after the build says its own), route?: bool (default true, kept with the drawing: route the circuits through the model, Q6152; conduit.route reports it), force?: bool (lay the model out again even when nothing it reads changed since its build)} → {kept?: true (nothing the build reads changed since the model was built: kept as it is, with the steps after its build), partial?: {rebuilt_levels, elements_rebuilt, elements_kept} (only some levels' entries or roof parts changed: only those levels were laid out again), rebuild: {categories, changed_categories, changed: [{level, part, before, after}], why: [string], steps_not_repeated: [{step, by, touched, changed}]} (called from outside: what this build changed against the model it replaced and why; the drawing's spec keeps a `build_record`: the engine, switches, spec and plan the model was built with and every step after its build), walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, parapetTops: [{roof, level, facade, from_ft, to_ft, lf, height_ft, top_ft, status: read|default, basis}] (each outline edge's top of parapet, a stepped parapet's every top), crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, structuralGrid: {level?, lines, labels?, plan?} (the building's structural grid, each line a model element, read from the lowest storey's plan that shows one), conduitRoute: {circuits, runs, homeruns, routed_ft, clashes, conflicts, penetrations}, levels, stacked?: levels moved, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer), echo?: bool (default true: the counts on the command line; a caller that changes the model after the build says its own), route?: bool (default true, kept with the drawing: route the circuits through the model, Q6152; conduit.route reports it), force?: bool (lay the model out again even when nothing it reads changed since its build), parts?: [string] (build only these: a build part, element kind or kind as read, such as casework, furniture, ceiling, hoistway, light_fixture or receptacle; every other element of the model stays as it stands, with its corrections: a fix the build makes reaches a corrected model without laying out every device again)} → {kept?: true (nothing the build reads changed since the model was built: kept as it is, with the steps after its build), partial?: {rebuilt_levels, elements_rebuilt, elements_kept} (only some levels' entries or roof parts changed: only those levels were laid out again), parts?: {parts, elements_rebuilt, elements_kept, unmatched} (only these parts were built), handMade?: {kept, found_at_rebuild} (copies a person made of generated elements, kept as they stand: added items in override.list), rebuild: {categories, changed_categories, changed: [{level, part, before, after}], why: [string], steps_not_repeated: [{step, by, touched, changed}]} (called from outside: what this build changed against the model it replaced and why; the drawing's spec keeps a `build_record`: the engine, switches, spec and plan the model was built with and every step after its build), walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, parapetTops: [{roof, level, facade, from_ft, to_ft, lf, height_ft, top_ft, status: read|default, basis}] (each outline edge's top of parapet, a stepped parapet's every top), crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, structuralGrid: {level?, lines, labels?, plan?} (the building's structural grid, each line a model element, read from the lowest storey's plan that shows one), conduitRoute: {circuits, runs, homeruns, routed_ft, clashes, conflicts, penetrations}, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
         CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).long().params(
             "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (save the model even when the run failed)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the plan sheets the job built from), pages_note, spec_guesses, check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {wall, door, window, ...} (elements built), built: {level: {part: n}}, levels, job: {job_id, status, done, findings} (the guided job that ran: job.status / job.report say more), ok, failed: [why the run failed: the job didn't finish, a hard import-check fail, a storey that came out empty], warnings: [string], next_steps: [string (exact calls to make next)]}",
@@ -564,6 +564,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         super::conduitroute::set_enabled(s.doc_mut()?, on);
     }
     let budget = count_param("model.build", p, "budget_s", 1, MAX_BUILD_BUDGET_S)?;
+    let parts = parts_param(p)?;
     if bool_or(p, "clear", false) {
         let n = wallgen::remove_made(s.doc_mut()?);
         s.state_mut()?.wallgen = None;
@@ -601,17 +602,20 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let echo = super::bool_param("model.build", p, "echo")?.unwrap_or(true);
     let g = WallGen { rules: sp.to_rules(), auto: bool_or(p, "auto", true), slab_ft, layers: None, spec: Some(sp) };
-    if let Some(rec) = old_rec.as_ref().filter(|_| top && !force && why.is_empty()) {
+    if let Some(rec) = old_rec.as_ref().filter(|_| top && !force && why.is_empty() && parts.is_none()) {
         return kept_model(s, g, rec, echo);
     }
     if force {
         why.push("force: true".into());
     }
+    if let Some(parts) = &parts {
+        why.push(format!("parts: {} (every other element kept as it stands)", parts.iter().cloned().collect::<Vec<_>>().join(", ")));
+    }
     let partial = match (&old_rec, &inputs, &g.spec) {
-        (Some(rec), Some(i), Some(sp)) if !force => i.partial(rec, sp),
+        (Some(rec), Some(i), Some(sp)) if !force && parts.is_none() => i.partial(rec, sp),
         _ => None,
     };
-    let old_doc = s.state().map(|st| Arc::clone(&st.doc)).ok().filter(|_| partial.is_some());
+    let old_doc = s.state().map(|st| Arc::clone(&st.doc)).ok().filter(|_| partial.is_some() || parts.is_some());
     let mut r = build_spec_with_budget(s, &g, budget_s)?;
     if let (Some(levels), Some(old)) = (&partial, &old_doc) {
         let (rebuilt, kept) = super::buildrec::keep_unaffected(s.doc_mut()?, old, levels);
@@ -620,6 +624,21 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             "Only the levels the spec change touches were laid out again ({}); every other level kept its {kept} elements as they were, with the steps after the last build.",
             levels.iter().cloned().collect::<Vec<_>>().join(", ")
         ))]).collect::<Vec<_>>());
+    }
+    if let (Some(parts), Some(old)) = (&parts, &old_doc) {
+        let (rebuilt, kept, unmatched) = super::buildrec::keep_parts(s.doc_mut()?, old, parts);
+        r["parts"] = json!({ "parts": parts, "elements_rebuilt": rebuilt, "elements_kept": kept, "unmatched": unmatched });
+        let mut note = format!(
+            "Only {} were built ({rebuilt} elements); every other element of the model ({kept}) was kept as it stood, with its corrections.",
+            parts.iter().cloned().collect::<Vec<_>>().join(", ")
+        );
+        if !unmatched.is_empty() {
+            note.push_str(&format!(
+                " No element of the model or the build is of: {} (a build part, an element kind or a kind as read).",
+                unmatched.join(", ")
+            ));
+        }
+        r["notes"] = json!(r["notes"].as_array().cloned().unwrap_or_default().into_iter().chain([json!(note)]).collect::<Vec<_>>());
     }
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
     // The counts are of what the model holds when the build is done (steps after the walls
@@ -656,7 +675,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let mut rec = super::buildrec::BuildRecord::new(s.doc()?, left.as_ref().unwrap_or(sp), switches);
         // A partial rebuild: the other levels still hold what the steps after the last build did.
-        if let (Some(old), Some(_)) = (&old_rec, &partial) {
+        if let Some(old) = old_rec.as_ref().filter(|_| partial.is_some() || parts.is_some()) {
             rec.steps = old.steps.clone();
             rec.steps_dropped = old.steps_dropped;
         }
@@ -675,6 +694,28 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let _ = s.execute("vscurrent", &json!({ "style": "realistic" }));
     super::guided::progress_line(&format!("  model.build: 3D view set in {:.1} s", viewing.elapsed().as_secs_f64()));
     Ok(r)
+}
+
+/// Most parts `model.build {parts}` names.
+const MAX_PARTS: usize = 64;
+
+/// `model.build`'s `parts`: the names (lower case), none when not given.
+fn parts_param(p: &Value) -> Result<Option<std::collections::BTreeSet<String>>> {
+    let Some(v) = p.get("parts").filter(|v| !v.is_null()) else { return Ok(None) };
+    let list = v.as_array().ok_or_else(|| bad("model.build", "`parts` must be a list of part names (casework, ceiling, light_fixture…)"))?;
+    if list.is_empty() || list.len() > MAX_PARTS {
+        return Err(bad("model.build", format!("`parts` must name 1 to {MAX_PARTS} parts")));
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for x in list {
+        let name = x
+            .as_str()
+            .map(str::trim)
+            .filter(|n| !n.is_empty() && n.len() <= 64)
+            .ok_or_else(|| bad("model.build", "each of `parts` is a part name (casework, ceiling, light_fixture…)"))?;
+        out.insert(name.to_ascii_lowercase());
+    }
+    Ok(Some(out))
 }
 
 /// `model.build` on a model nothing the build reads changed for since it was built: kept as it
@@ -2599,6 +2640,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     let build_start = web_time::Instant::now();
     // What a person set on a room element (bim.props.set) goes on the rebuilt room.
     let room_edits = room_user_edits(s.doc()?);
+    // The model being replaced: a copy a person made of its elements before copies were
+    // recorded is found against the rebuilt one (Q6620).
+    let old_made: Vec<Arc<Entity>> = s.doc()?.model.iter().filter(|e| super::revise3d::built_object(e)).map(Arc::clone).collect();
     let removed = wallgen::remove_made(s.doc_mut()?);
     build_step(s, "old model removed", build_start);
     let mut notes: Vec<String> = Vec::new();
@@ -3023,6 +3067,22 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     if sp.stack {
         r["stacked"] = json!(stack_levels(d, &sp));
         mark("levels stacked");
+    }
+    // Copies a person made of the old model's devices before copies were recorded (Q6620): more
+    // elements of one device id than the build makes, at least a foot from the rebuilt one, are
+    // put back where they stood and recorded as hand-made. (The copies recorded when made were
+    // never taken away.)
+    let foot = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let found = super::overrides::keep_copies(d, &old_made, foot);
+    let hand_made = d.model.iter().filter(|e| super::overrides::hand_made(e)).count();
+    if hand_made > 0 {
+        r["handMade"] = json!({ "kept": hand_made, "found_at_rebuild": found });
+        if let Some(n) = r["notes"].as_array_mut() {
+            n.push(Value::from(format!(
+                "{hand_made} element(s) copied by hand from generated ones kept as they stand (added items, override.list){}.",
+                if found > 0 { format!("; {found} of them made before copies were recorded, found by their device id") } else { String::new() }
+            )));
+        }
     }
     Ok(r)
 }

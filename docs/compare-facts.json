@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1287,
-    "count": 1287,
+    "callableAsJson": 1288,
+    "count": 1288,
     "ids": [
       "-attedit",
       "-block",
@@ -911,6 +911,7 @@
       "project.rules.set",
       "project.shelve",
       "project.shelve_project",
+      "project.source",
       "project.standards.import",
       "project.standards.list",
       "project.standards.remove",

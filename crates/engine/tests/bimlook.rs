@@ -727,6 +727,9 @@ fn golden(name: &str, img: &image::RgbaImage) {
 #[test]
 fn golden_iso_view_is_ghosted_shell_and_saturated_mep() {
     let mut s = building();
+    // The trade colours' look: the MEP view at full density (the Systems view paints by system,
+    // `bimsystems`); model.render draws the view the drawing has (Q6617).
+    s.execute("bim.view", &json!({"view": "mep", "full": true})).unwrap();
     let img = render(&mut s, "iso-ghosted", json!({"width": 640, "height": 480, "dir": [-1, -1, 0.9]}));
     // Every MEP trade shows in its own colour.
     // The ducts and the tray read from across the building.

@@ -122,7 +122,18 @@ const BUCKETS: i64 = 360;
 /// Parallel face pairs: segments in the same direction (within half a degree), their lines
 /// `min_thick..max_thick` apart, overlapping along the direction by at least `min_len`.
 pub(crate) fn pairs(_d: &Drawing, segs: &[Seg], lim: &Limits) -> Vec<Pair> {
+    pairs_and_squat(segs, lim, None).0
+}
+
+/// [`pairs`], and in the same pass the squat ones (Q6614): faces `min_thick..max_thick` apart
+/// overlapping by at least `squat_min` but less than a wall needs (`min_len`, and 1½ times the
+/// gap). A squat pair is a wall only where something holds it at both ends (a jamb between an
+/// opening and a crossing wall); the caller decides. None: no squat pairs. At most
+/// [`MAX_PAIRS`] of each.
+pub(crate) fn pairs_and_squat(segs: &[Seg], lim: &Limits, squat_min: Option<f64>) -> (Vec<Pair>, Vec<Pair>) {
     use std::f64::consts::PI;
+    let squat_min = squat_min.filter(|m| m.is_finite() && *m > 0.0 && *m < lim.min_len);
+    let mut squat = Vec::new();
     // Group by direction (half-degree buckets over [0°, 180°): a face drawn right to left is the
     // same direction). Faces within half a degree are in one bucket or two neighbouring ones.
     let mut groups: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
@@ -169,7 +180,10 @@ pub(crate) fn pairs(_d: &Drawing, segs: &[Seg], lim: &Limits) -> Vec<Pair> {
                 if turn.min(PI - turn) > half_degree {
                     continue;
                 }
-                let Some(p) = face_pair(&segs[i], &segs[j], lim) else { continue };
+                let Some((p, full)) = face_pair(&segs[i], &segs[j], lim, squat_min) else { continue };
+                if !full && squat.len() >= MAX_PAIRS {
+                    continue;
+                }
                 let (s1, s2) = (&segs[i], &segs[j]);
                 let shorter = s1.a.dist(s1.b).min(s2.a.dist(s2.b)).max(1e-9);
                 let wall_layer = s1.layer.to_ascii_uppercase().contains("WALL");
@@ -178,15 +192,20 @@ pub(crate) fn pairs(_d: &Drawing, segs: &[Seg], lim: &Limits) -> Vec<Pair> {
                     + 0.25 * (p.length / shorter).min(1.0)
                     + 0.15 * f64::from(u8::from(s1.layer == s2.layer)))
                 .min(1.0);
-                out.push(Pair { layer: s1.layer.clone(), c0: p.c0, c1: p.c1, thickness: p.gap, length: p.length, confidence, faces: [i, j] });
+                let pair = Pair { layer: s1.layer.clone(), c0: p.c0, c1: p.c1, thickness: p.gap, length: p.length, confidence, faces: [i, j] };
+                if !full {
+                    squat.push(pair);
+                    continue;
+                }
+                out.push(pair);
                 if out.len() >= MAX_PAIRS {
-                    return out;
+                    return (out, squat);
                 }
             }
         }
     }
     out.sort_by(|a, b| b.confidence.total_cmp(&a.confidence).then(b.length.total_cmp(&a.length)));
-    out
+    (out, squat)
 }
 
 /// A dash of a dashed line is at most this long, inches (a plan's hidden or overhead line drawn
@@ -1385,8 +1404,10 @@ struct FacePair {
 }
 
 /// Two nearly parallel faces as a wall when their lines are `min_thick..max_thick` apart and
-/// they overlap by at least `min_len` (and 1½ times the gap), measured along their mean direction.
-fn face_pair(s1: &Seg, s2: &Seg, lim: &Limits) -> Option<FacePair> {
+/// they overlap by at least `min_len` (and 1½ times the gap), measured along their mean direction:
+/// (the pair, true). With `squat_min`, a pair overlapping by at least that but less than a wall
+/// needs comes back too: (the pair, false).
+fn face_pair(s1: &Seg, s2: &Seg, lim: &Limits, squat_min: Option<f64>) -> Option<(FacePair, bool)> {
     let d1 = (s1.b - s1.a).normalized();
     let mut d2 = (s2.b - s2.a).normalized();
     if d1.dot(d2) < 0.0 {
@@ -1408,11 +1429,15 @@ fn face_pair(s1: &Seg, s2: &Seg, lim: &Limits) -> Option<FacePair> {
     let tm = (lo + hi) / 2.0;
     let gap = (across(s2, d2, tm) - across(s1, d1, tm)).abs();
     let length = hi - lo;
-    if !(lim.min_thick..=lim.max_thick).contains(&gap) || length < lim.min_len.max(gap * 1.5) {
+    if !(lim.min_thick..=lim.max_thick).contains(&gap) || !length.is_finite() {
+        return None;
+    }
+    let full = length >= lim.min_len.max(gap * 1.5);
+    if !full && squat_min.is_none_or(|m| length < m) {
         return None;
     }
     let mid = |t: f64| (across(s1, d1, t) + across(s2, d2, t)) / 2.0;
-    Some(FacePair { gap, length, c0: u * lo + n * mid(lo), c1: u * hi + n * mid(hi) })
+    Some((FacePair { gap, length, c0: u * lo + n * mid(lo), c1: u * hi + n * mid(hi) }, full))
 }
 
 fn minmax(a: f64, b: f64) -> (f64, f64) {

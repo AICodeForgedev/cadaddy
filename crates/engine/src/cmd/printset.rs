@@ -155,6 +155,9 @@ fn run_classify(s: &mut Session, p: &Value) -> Result<Value> {
             ));
         }
     };
+    // The pages read this time: new or changed since the last classify (a re-import after a
+    // pull, Q6618); the others keep their reading.
+    let to_read: Vec<String> = project.sheets.iter().filter(|e| e.dirty || e.number.is_empty()).map(mep_printset::source_of).collect();
     let dir = PathBuf::from(&project.source_dir);
     let rec = if !project.source_dir.is_empty() && dir.is_dir() {
         let loader = mep_printset::PrintLoader::new(&dir);
@@ -189,6 +192,8 @@ fn run_classify(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "page_facts": if look.is_some() { json!(page_facts) } else { Value::Null },
         "classified": rec.sheets_processed,
+        "read": to_read.len(),
+        "read_sources": to_read.iter().take(200).collect::<Vec<_>>(),
         "total": index.sheets.len(),
         "pages": rec.sheets_total,
         "elapsed_ms": rec.elapsed_ms,

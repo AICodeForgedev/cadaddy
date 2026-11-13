@@ -68,7 +68,7 @@ pub struct PlanItem {
 }
 
 /// A generated object's (part, level, source) tag.
-type TagKey = (String, String, String);
+pub(crate) type TagKey = (String, String, String);
 
 /// What a build left: the plan it was built from and each generated object's fingerprint and tag.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -342,7 +342,7 @@ pub(crate) fn record(s: &mut Session, g: &WallGen) {
 
 /// The generated objects of `d`: each one's fingerprint and tag.
 fn made_of(d: &Drawing) -> HashMap<Handle, (u64, Option<TagKey>)> {
-    d.model.iter().filter(|e| wallgen::made_as(e).is_some()).map(|e| (e.handle, (fingerprint(e), twin_key(e)))).collect()
+    d.model.iter().filter(|e| built_object(e)).map(|e| (e.handle, (fingerprint(e), twin_key(e)))).collect()
 }
 
 /// [`record`], with the plan's rooms when they were just read (`None`: read them); `fresh`: the
@@ -422,7 +422,7 @@ fn absorb_generated(st: &mut crate::DocState, before: &std::sync::Arc<Drawing>, 
         return;
     }
     let (added, modified, erased) = before.model.changes(&now.model);
-    let generated = |d: &Drawing, h: &Handle| d.model.get(*h).is_some_and(|e| wallgen::made_as(e).is_some());
+    let generated = |d: &Drawing, h: &Handle| d.model.get(*h).is_some_and(|e| built_object(e));
     if !added.iter().any(|h| generated(now, h) && !generated(before, h)) {
         return;
     }
@@ -431,7 +431,7 @@ fn absorb_generated(st: &mut crate::DocState, before: &std::sync::Arc<Drawing>, 
         .chain(&modified)
         .chain(&erased)
         .filter(|h| generated(before, h) || generated(now, h))
-        .map(|h| (*h, now.model.get(*h).filter(|e| wallgen::made_as(e).is_some()).map(|e| (fingerprint(e), twin_key(e)))))
+        .map(|h| (*h, now.model.get(*h).filter(|e| built_object(e)).map(|e| (fingerprint(e), twin_key(e)))))
         .collect();
     let Some(rec) = st.model_records.for_state_mut(now) else { return };
     for (h, v) in touched {
@@ -454,7 +454,7 @@ pub(crate) fn resync(s: &mut Session, touched: &[Handle]) {
     }
     let Ok(d) = s.doc() else { return };
     let now: Vec<(Handle, Option<(u64, Option<TagKey>)>)> =
-        touched.iter().map(|h| (*h, d.model.get(*h).filter(|e| wallgen::made_as(e).is_some()).map(|e| (fingerprint(e), twin_key(e))))).collect();
+        touched.iter().map(|h| (*h, d.model.get(*h).filter(|e| built_object(e)).map(|e| (fingerprint(e), twin_key(e))))).collect();
     let Ok(st) = s.state_mut() else { return };
     let doc = std::sync::Arc::clone(&st.doc);
     let Some(rec) = st.model_records.for_state_mut(&doc) else { return };
@@ -535,10 +535,20 @@ fn source_of(e: &Entity) -> Option<Handle> {
     x.get(at + 3).filter(|t| t.code == 1000).and_then(|t| Handle::parse_hex(&t.value))
 }
 
+/// Whether a build made `e` (it carries the build's tag and is no copy a person made of such an
+/// object: [`super::overrides::hand_made`], Q6620).
+pub(crate) fn built_object(e: &Entity) -> bool {
+    wallgen::made_as(e).is_some() && !super::overrides::hand_made(e)
+}
+
 /// A generated object's (part, level, source) tag. One plan object makes many MEP objects (a
 /// run's segments, each fitting, terminals read from nothing), so theirs adds the object's own
-/// id (`mepid:`) to the source: `<source>#<id>`. (Overrides keep elements by it.)
+/// id (`mepid:`) to the source: `<source>#<id>`. (Overrides keep elements by it.) A copy a person
+/// made of one has none: it is no build's, and a rebuild keeps it as it stands.
 pub(crate) fn tag_key(e: &Entity) -> Option<TagKey> {
+    if super::overrides::hand_made(e) {
+        return None;
+    }
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
     let v = |k: usize| x.get(at + k).filter(|t| t.code == 1000).map(|t| t.value.clone());
@@ -556,7 +566,7 @@ pub(crate) fn tag_key(e: &Entity) -> Option<TagKey> {
 /// own id when it has one besides (`devid:`, else the name its build gave it). Many objects are
 /// made from no plan object (devices and equipment from the spec's tags): with the bare tag they
 /// all shared one key, and one deleted by hand took all of them away at the next rebuild.
-fn twin_key(e: &Entity) -> Option<TagKey> {
+pub(crate) fn twin_key(e: &Entity) -> Option<TagKey> {
     #[cfg(test)]
     tests::TWIN_KEYS.with(|n| n.set(n.get() + 1));
     let (part, level, mut source) = tag_key(e)?;
@@ -613,7 +623,7 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
     let mut handles_of: HashMap<TagKey, std::collections::VecDeque<Handle>> = HashMap::new();
     if let Some(rec) = &before {
         let d = s.doc()?;
-        for e in d.model.iter().filter(|e| wallgen::made_as(e).is_some()) {
+        for e in d.model.iter().filter(|e| built_object(e)) {
             match rec.made.get(&e.handle) {
                 Some((f, _)) if *f != fingerprint(e) || rec.hand_edited.contains(&e.handle) => edited.push((**e).clone()),
                 Some((_, Some(key))) if !key_source(&key.2).is_some_and(|h| changed.contains(&h)) => {
@@ -625,7 +635,7 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
         deleted = rec.made.iter().filter(|(h, _)| d.entity(**h).is_none()).filter_map(|(_, (_, k))| k.clone()).collect();
         // Deleted before the build the record is of, and still.
         if !rec.hand_deleted.is_empty() {
-            let present: HashSet<TagKey> = d.model.iter().filter(|e| wallgen::made_as(e).is_some()).filter_map(|e| twin_key(e)).collect();
+            let present: HashSet<TagKey> = d.model.iter().filter(|e| built_object(e)).filter_map(|e| twin_key(e)).collect();
             let mut seen: HashSet<TagKey> = deleted.iter().cloned().collect();
             for k in &rec.hand_deleted {
                 if !present.contains(k) && seen.insert(k.clone()) {
@@ -659,6 +669,10 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
     // 56,000 objects took 55 s a rebuild.)
     let mut twins = if edited.is_empty() && deleted.is_empty() { HashMap::new() } else { twins_by_key(s.doc()?) };
     for e in edited {
+        // Found at the rebuild to be a copy made by hand (Q6620): kept as it stands already.
+        if s.doc()?.entity(e.handle).is_some_and(|now| super::overrides::hand_made(now)) {
+            continue;
+        }
         let src = source_of(&e);
         let part = wallgen::made_as(&e).unwrap_or_default();
         if src.is_some_and(|h| changed.contains(&h)) {

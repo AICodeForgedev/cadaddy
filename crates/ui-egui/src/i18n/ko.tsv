@@ -3494,3 +3494,23 @@ menu	Modify	수정
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	속성으로 요소 수정(BIM)
 	Read Elevator Hoistway	엘리베이터 승강로 읽기
+	Branches	분기
+	Interior Walls	내부 벽
+	Presentation	프레젠테이션
+	Supply Air	급기
+	Return Air	환기
+	Exhaust Air	배기
+	Outside Air	외기
+	Ductwork	덕트
+	Mechanical Equipment	기계 장비
+	Domestic Water	급수
+	Sanitary and Vent	오수 및 통기
+	Condensate	응축수
+	Refrigerant	냉매
+	Hydronic	냉온수
+	Plumbing Equipment	위생 설비 장비
+	Fire Alarm	화재 경보
+	Low Voltage	약전
+	Electrical Power	강전
+	Other Systems	기타 시스템
+	Document Source	문서 출처

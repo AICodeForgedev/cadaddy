@@ -3312,3 +3312,23 @@
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	Elemente nach Eigenschaft korrigieren (BIM)
 	Read Elevator Hoistway	Aufzugsschacht lesen
+	Branches	Abzweige
+	Interior Walls	Innenwände
+	Presentation	Präsentation
+	Supply Air	Zuluft
+	Return Air	Umluft
+	Exhaust Air	Abluft
+	Outside Air	Außenluft
+	Ductwork	Luftkanäle
+	Mechanical Equipment	Haustechnische Anlagen
+	Domestic Water	Trinkwasser
+	Sanitary and Vent	Schmutzwasser und Entlüftung
+	Condensate	Kondensat
+	Refrigerant	Kältemittel
+	Hydronic	Heiz- und Kühlwasser
+	Plumbing Equipment	Sanitärtechnische Anlagen
+	Fire Alarm	Brandmeldeanlage
+	Low Voltage	Schwachstrom
+	Electrical Power	Starkstrom
+	Other Systems	Weitere Systeme
+	Document Source	Dokumentquelle

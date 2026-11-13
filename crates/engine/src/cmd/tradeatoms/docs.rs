@@ -378,12 +378,51 @@ fn keep_latest(facts: Vec<Fact>) -> Vec<Fact> {
     v.into_iter().map(|(_, f)| f).collect()
 }
 
-/// Keep the facts in the spec.
-pub(crate) fn store(sp: &mut BuildingSpec, read: &Read) {
+/// The document a fact's source names (`submittal <file> p.3` → `<file>`).
+fn document_of(source: &str) -> &str {
+    let s = source.strip_prefix("submittal ").or_else(|| source.strip_prefix("specification ")).unwrap_or(source);
+    match s.rsplit_once(" p.") {
+        Some((doc, page)) if !page.is_empty() && page.chars().all(|c| c.is_ascii_digit()) => doc,
+        _ => s,
+    }
+}
+
+/// Keep the facts in the spec (Q6626): what was read adds to what the spec already keeps, it
+/// never clears another trade's or another document's facts. A kept fact gives way to one just
+/// read of the same key and scope (unless the kept one is a later revision of its submittal), and
+/// a document read again replaces its own earlier facts whole. `replace` (an explicit request)
+/// clears every kept fact first. How many facts the spec keeps now.
+pub(crate) fn store(sp: &mut BuildingSpec, read: &Read, replace: bool) -> usize {
     let mut t = if sp.trades.is_object() { sp.trades.clone() } else { json!({}) };
-    t["facts"] = Value::Array(read.facts.iter().map(Fact::to_json).collect());
-    t["read"] = Value::Array(read.files.iter().take(MAX_FILES).cloned().collect());
+    let file_of = |v: &Value| v.get("file").and_then(Value::as_str).unwrap_or_default().to_string();
+    let read_now: BTreeSet<String> = read.files.iter().map(file_of).filter(|f| !f.is_empty()).collect();
+    let (kept, kept_files): (Vec<Fact>, Vec<Value>) = if replace {
+        (Vec::new(), Vec::new())
+    } else {
+        let kept = facts_of(sp).into_iter().filter(|f| !read_now.contains(document_of(&f.source))).collect();
+        let files = t
+            .get("read")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().take(MAX_FILES).filter(|v| !read_now.contains(&file_of(v))).cloned().collect())
+            .unwrap_or_default();
+        (kept, files)
+    };
+    let mut all = kept;
+    all.extend(read.facts.iter().cloned());
+    let mut all = keep_latest(all);
+    // Over the cap: the oldest kept give way.
+    if all.len() > MAX_FACTS {
+        all.drain(..all.len() - MAX_FACTS);
+    }
+    let mut files = kept_files;
+    files.extend(read.files.iter().cloned());
+    if files.len() > MAX_FILES {
+        files.drain(..files.len() - MAX_FILES);
+    }
+    t["facts"] = Value::Array(all.iter().map(Fact::to_json).collect());
+    t["read"] = Value::Array(files);
     sp.trades = t;
+    all.len()
 }
 
 /// The page a byte offset of the text is on (`--- page N of M ---` markers).

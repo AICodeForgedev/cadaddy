@@ -79,6 +79,52 @@ refused and nothing is written. A folder with a symbolic link in it cannot be sh
 - `title`, `discipline`, `revision`, `date` are strings of at most 4,096 bytes; `links` is an
   object of string arrays. A value of the wrong type is an error that names the entry and field.
 - `manifest.json` is read up to 64 MB.
+- `sourceId` (or `source_id`) and `pulled` (an ISO 8601 time) on a file: its id at the source and
+  when it was pulled; a file without `pulled` takes the `source` block's.
+
+### The document source (`source`)
+
+```json
+{
+  "name": "ASI 1",
+  "source": {"kind": "platform", "platform": "Example CM", "reference": "P-100",
+             "pulled": "2026-11-13T09:30:00Z"},
+  "files": [ ... ]
+}
+```
+
+A transmittal may say where its documents came from. `kind` is required: `platform` (a
+construction-management platform), `shared_drive`, `plan_room`, `email` or `none` (the kinds and
+their aliases are rule data, `crates/engine/src/cmd/docsource.json`). `platform` is the place's own
+name, `reference` the project reference the puller understands, `pulled` when it was pulled (none:
+the import time), `maxAgeHours` how old a pull may get before CADaddy asks again (default 24). The
+import keeps them in `project.json` as `source` (`kind`, `platform`, `reference`, `maxAgeHours`,
+`lastPulled`, `lastChecked`, `issue` = the manifest's `name`); `project.source {kind?, platform?,
+reference?, max_age_hours?}` reads or sets them.
+
+CADaddy never signs in anywhere and fetches nothing: the pull is done outside it (an agent, a
+connector or a script with the owner's own read-only access). It asks:
+
+- a guided job, at its start (and on resume) when the last pull or check is older than the age or
+  never happened, and again before its takeoff and estimate: a question `Pull the latest
+  documents from …` whose evidence lists what to pull (the current drawings, addenda and ASIs,
+  RFIs with responses, submittals with status, specifications), the project reference, changed
+  since when, and how to hand it back (this folder, this manifest). `job.answer` takes `pulled`
+  (or `{answer: "pulled", manifest}`), `nothing newer` or `skip` (the default: an unattended job
+  goes on and its report says the latest was not confirmed). A source of kind `none` is never
+  asked;
+- a finding newer documents could answer (documents that disagree, a missing sheet or schedule,
+  an unanswered callout, a product with no submittal) carries `check_source` in `job.worklist`:
+  the request to check for a newer sheet, ASI, RFI response or submittal, with its sheets and
+  specification sections;
+- after `pulled`, only the sheets whose files are new or changed are read again (the others keep
+  their reading) and the job runs on from classify; a new or changed specification or submittal
+  runs the build again; RFIs and ASIs are listed on the findings whose sheets they name. A finding
+  the re-read no longer raises is closed naming the documents that answered it (`job.report`
+  `documents.closed_findings`); answers and corrections carry over;
+- `job.report`, `job.status` and the takeoff, BOM, estimate, bid, AR export and briefing answers
+  carry `documents`: the issue they were built from, when the source was last checked and a line
+  in plain words; on stale documents those that produce something also carry `pull_request`.
 
 `project.validate_manifest {path}` checks a file without importing it.
 

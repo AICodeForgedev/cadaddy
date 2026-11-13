@@ -111,6 +111,11 @@ impl StageName {
         StageName::Clash,
     ];
 
+    /// The stage's name in answers (`bim_build`).
+    pub fn label_str(self) -> &'static str {
+        self.label()
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Import => "import",
@@ -327,6 +332,10 @@ pub struct JobFinding {
     /// keeping its design value beside the installed one (Q6216). `None`: not a conflict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corrected: Option<[usize; 2]>,
+    /// Newer documents could answer it (Q6618): the request to check the project's source for
+    /// a newer sheet, an ASI, an RFI response or a submittal, naming the sheets and sections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_source: Option<Value>,
 }
 
 /// A work item on the job worklist: a question, finding, or action with undo support.
@@ -562,8 +571,10 @@ pub struct GuidedJob {
     /// names; job.next goes on from there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancelled: Option<StageName>,
-    /// Answered questions of stages being run again, to carry their answers over.
-    #[serde(skip)]
+    /// Answered questions of stages being run again, to carry their answers over. Kept with the
+    /// job: a re-run that pauses at an earlier stage still gives the later ones their answers
+    /// (Q6618: after a pull, 24 of 49 answers were asked again).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     carry: Vec<Question>,
     /// The sheet map read off the loaded sheets, in short ([`super::printset::links_summary`]):
     /// callouts resolved, enlarged plans registered, match lines.
@@ -573,6 +584,10 @@ pub struct GuidedJob {
     /// why, or one with another sheet's. The print inventory ([`super::inventory`]) takes it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mark_fates: BTreeMap<String, super::inventory::MarkFate>,
+    /// The project the prints belong to, when one does (Q6618): it is asked for its latest
+    /// documents, and the reports name the issue they were built from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub documents: Option<super::docsource::JobDocuments>,
 }
 
 /// A level as an answer gave it: the elevation and name the user typed, or "Correct".
@@ -1201,7 +1216,13 @@ impl GuidedJob {
             carry: Vec::new(),
             links: None,
             mark_fates: BTreeMap::new(),
+            documents: None,
         }
+    }
+
+    /// Whether the plan sheets are in the job's drawing (a pull that changes them imports them again).
+    pub fn sheets_loaded_flag(&self) -> bool {
+        self.sheets_loaded
     }
 
     /// The current stage (first non-done, non-skipped).
@@ -1295,6 +1316,7 @@ impl GuidedJob {
             evidence: evidence.clone(),
             blocking,
             corrected: None,
+            check_source: None,
         });
         if self.worklist.len() < MAX_WORKLIST {
             self.worklist.push(WorkItem {
@@ -1442,6 +1464,21 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The current copy of every sheet, with its file and page, for the stages that import them.
     let sheets_result = s.execute("printset.sheets", &json!({"current": true}))?;
 
+    // A classify after a pull reads only the changed pages (Q6618): the others keep their facts.
+    let files: BTreeSet<String> = sheets_result
+        .get("sheets")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|sh| sh.get("file").and_then(Value::as_str)).map(str::to_string).collect())
+        .unwrap_or_default();
+    let mut page_facts = page_facts;
+    if let Some(old) = job.index.as_ref().and_then(|i| i.get("pages")).and_then(Value::as_object) {
+        for (source, facts) in old {
+            let file = source.rsplit_once('#').map_or(source.as_str(), |(f, _)| f);
+            if !page_facts.contains_key(source) && files.contains(file) {
+                page_facts.insert(source.clone(), facts.clone());
+            }
+        }
+    }
     // Cache the sheet list for later stages (MUST 4).
     job.sheets = Some(sheets_result);
     job.index = Some(json!({
@@ -31039,6 +31076,10 @@ fn level_answer(answer: &Value) -> Option<LevelAnswer> {
 /// what the job had, or when nothing in the job reads it.
 fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, String) {
     let Some(answer) = &q.answer else { return (None, String::new()) };
+    // A pull request's answer is taken with the session (job.answer: the import and its re-run).
+    if super::docsource::is_pull_question(q) {
+        return (None, String::new());
+    }
     let text = answer.as_str().map(str::trim).unwrap_or("");
     // The levels the drawings didn't give: the levels stage makes them.
     if q.stage == StageName::Levels && q.question.starts_with("No levels detected") {
@@ -31522,6 +31563,9 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                     Some(st) => st.result = Some(v),
                     None => continue,
                 }
+                // The project's documents (Q6618): findings newer ones could answer, findings a
+                // pull answered, and the moments the job asks for the latest.
+                super::docsource::after_stage(job, stage_name);
                 carry_answers(job, stage_name);
                 auto_answer(job, stage_name);
                 let unanswered_count = job.stage(stage_name).map_or(0, |st| st.unanswered().len());
@@ -31908,6 +31952,9 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
             report_progress(s, data, &line);
             s.echo(line);
             saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path, "prints_moved_from": moved_from, "note": note})));
+            // The project's latest documents are asked for before the job goes on (Q6618).
+            super::docsource::attach(s, &mut saved);
+            super::docsource::ask_on_resume(s, &mut saved);
             advance_pipeline(s, &mut saved)?;
             save_job(s, &saved)?;
             let stats = model_stats_from_session(s);
@@ -31935,6 +31982,8 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
         s.echo(format!("job: {n}"));
     }
     job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto, "units_note": units_note})));
+    // The project the prints belong to: asked for its latest documents before they are read.
+    super::docsource::attach(s, &mut job);
 
     // Run the pipeline until it pauses or finishes.
     advance_pipeline(s, &mut job)?;
@@ -32124,6 +32173,9 @@ fn apply_answer(job: &mut GuidedJob, qid: &str, answer: Value) -> std::result::R
     // The sheet index's corrections are checked against the index before they are taken.
     if answer.is_object() && question_at(job, loc).is_some_and(is_sheet_index_question) {
         super::sheetcheck::parse_corrections(job, &answer).map_err(|e| format!("question {}: {e}", qid.chars().take(60).collect::<String>()))?;
+    }
+    if let Some(q) = question_at(job, loc).filter(|q| super::docsource::is_pull_question(q)) {
+        super::docsource::check_answer(job, q, &answer)?;
     }
     let question = {
         let Some(q) = question_mut(job, loc) else { return Err(unknown_question(job, qid)) };
@@ -32357,6 +32409,33 @@ fn cmd_answer_inner(s: &mut Session, p: &Value) -> Result<Value> {
     if applied.is_empty() && !fatal.is_empty() {
         return Err(bad("job.answer", fatal.join("; ")));
     }
+    // A pull request's answer (Q6618): the pulled manifest imported, only what it changed re-run.
+    let mut reopened = Vec::new();
+    for a in applied.iter_mut().filter(|a| super::docsource::is_pull_question(&a.question)) {
+        let taken = super::docsource::take_answer(s, &mut job, &a.question)?;
+        if taken.prints_changed {
+            job.prints_files = print_files(&job.pdfs_path);
+            job.prints_stamp = prints_stamp(&job.prints_files);
+        }
+        if taken.reopen {
+            reopened.push(a.qid.clone());
+            warnings.push(json!({"id": a.qid, "warning": taken.effect.clone()}));
+        }
+        a.rerun_from = taken.rerun_from;
+        a.effect = taken.effect;
+    }
+    for qid in &reopened {
+        if let Some(q) = find_question(&job, qid).and_then(|loc| question_mut(&mut job, loc)) {
+            q.answer = None;
+            q.answered_by = None;
+            q.answered_at = None;
+        }
+        if let Some(w) = job.worklist.iter_mut().find(|w| w.id == *qid) {
+            w.status = "pending".into();
+            w.resolution = None;
+        }
+    }
+    applied.retain(|a| !reopened.contains(&a.qid));
 
     // The answers' re-runs (and one held by an earlier `rerun: false`), as one.
     let wanted = applied.iter().filter_map(|a| a.rerun_from).chain(job.rerun_held).min();
@@ -32729,6 +32808,8 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "goal": job.goal,
         "created": job.created,
         "pdfs": job.pdfs_path,
+        // The document issue it was built from and when the source was last checked (Q6618).
+        "documents": super::docsource::header(Some(s), Some(&job)),
         "done": job.is_done(),
         "status": status,
         "warnings": warnings,
@@ -32879,6 +32960,10 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     if let Some(q) = job.next_question() {
         v["question"] = question_value(job, q);
     }
+    // The project's documents: the issue it reads and whether the latest is confirmed (Q6618).
+    if job.documents.is_some() {
+        v["documents"] = super::docsource::header(None, Some(job)).unwrap_or(Value::Null);
+    }
     v
 }
 
@@ -32982,6 +33067,7 @@ fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Valu
         "placement": placement_summary(job),
         "keynote_systems": keynote_summary(job),
         "results": results,
+        "documents": super::docsource::header(Some(s), Some(job)),
     })
 }
 
@@ -33318,6 +33404,8 @@ fn cmd_worklist(s: &mut Session, p: &Value) -> Result<Value> {
                 "evidence": w.evidence,
                 "resolution": w.resolution,
                 "has_undo": w.undo_delta.is_some(),
+                // A finding newer documents could answer: the request to check the source (Q6618).
+                "check_source": job.findings.iter().find(|f| f.id == w.id).and_then(|f| f.check_source.clone()),
             })
         })
         .collect();
@@ -33377,7 +33465,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("job.sheets.set", "Correct Job Sheet Index", cmd_sheets_set).long()
             .params("{\"<sheet number>\": {type?: plan|enlarged_plan|rcp|schedule|cover|section|elevation|detail|diagram|specification|other, level?: \"2\" | \"Level 2\", title?, discipline?: A|E|M|P…, scale?: a note as printed (1/4\" = 1'-0\") | drawing inches a sheet inch (48), plan_view?: [x0, y0, x1, y1] (sheet inches from the page's lower-left corner: the plan's rectangle on a sheet that also prints details), not_built?: bool, tables?: {panel_schedules?: [{panel, circuits: [...]}], fixture_schedule?: [{tag, description, ...}], legend?: {\"<type>\": \"<description>\"}} (rows the readers could not read, as they produce them: their source is \"answer, from the sheet image\")}, …} | {sheets: {…}}, rerun?: bool → as job.answer: the sheet-index checkpoint's answer (Q6517). Each correction is a learned rule (sheet:<number>, over the readers, kept on resume, shown in job.explain {stage: \"classify\"}); the levels stage on runs again, the sheets imported again when they already were. An unknown sheet, an unknown field, a bad rectangle or a scale of 0 or less is an error"),
         CommandSpec::new("job.answer", "Answer Job Question", cmd_answer).long()
-            .params("{id: \"Q-rooms-23\" (the question id job.next gives: Q-stage-number, as Q-levels-3; not needed with answers), answer: \"Correct\" | text | object (a choice, the default, your own value; a level question takes an elevation in feet — 12.5, or feet and inches — and a name: {elevation_ft: 12.5, name: \"Mezzanine\"}; \"Correct\" confirms it as yours), answers?: [{id, answer}] (many at once: each stands alone — an unknown or merged id is a warning and the rest are kept — and the stages they change run again once), rerun?: bool (default true; false holds the re-run until the next job.answer or job.next, to answer several questions of one stage first)} → {answered: id | [ids], effect: what the answer changes | [{id, effect}], rerun: [stages run again], changed: [{stage, what, before, after}], applies_to?: a stage still to run that will read it, rerun_held?: {from, note}, levels_changed?, warnings?: [{id, warning}], next?: question, done?, progress, answers}"),
+            .params("{id: \"Q-rooms-23\" (the question id job.next gives: Q-stage-number, as Q-levels-3; not needed with answers), answer: \"Correct\" | text | object (a choice, the default, your own value; a level question takes an elevation in feet — 12.5, or feet and inches — and a name: {elevation_ft: 12.5, name: \"Mezzanine\"}; \"Correct\" confirms it as yours), answers?: [{id, answer}] (many at once: each stands alone — an unknown or merged id is a warning and the rest are kept — and the stages they change run again once), rerun?: bool (default true; false holds the re-run until the next job.answer or job.next, to answer several questions of one stage first); a pull request (the \"Pull the latest documents\" question, Q6618) takes \"pulled\" | {answer: \"pulled\", manifest} (the pulled manifest is imported and only the new and changed sheets are read again) | \"nothing newer\" | \"skip\"} → {answered: id | [ids], effect: what the answer changes | [{id, effect}], rerun: [stages run again], changed: [{stage, what, before, after}], applies_to?: a stage still to run that will read it, rerun_held?: {from, note}, levels_changed?, warnings?: [{id, warning}], next?: question, done?, progress, answers}"),
         CommandSpec::new("job.set_mode", "Set Job Mode", cmd_set_mode).long()
             .params("{auto: bool (true: the running job goes on unattended, every open question with a default takes it; false: it stops at each checkpoint again)} → {mode: {from, to}, rerun?, …job.status}"),
         CommandSpec::new("job.status", "Job Status", cmd_status)

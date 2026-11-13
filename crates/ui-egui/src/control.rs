@@ -445,6 +445,9 @@ pub fn inspect(app: &CadApp, ctx: &egui::Context) -> Value {
         "snap": app.canvas.snap.map(|s| json!({"point": [s.point.x, s.point.y], "mode": s.name})),
         "session": app.session.summary(),
         "closePrompt": app.close_prompt(),
+        // The Drawing Recovery window's autosave files, while it is open (`ui.set {dialog: null}`
+        // closes it).
+        "recovery": app.recovery.items.len(),
         // The command whose page the Command Reference (F1, HELP) shows, while it is open.
         "helpPage": crate::dialogs::help_page_shown(app, ctx),
         // The 3D view's numbers (triangles, instances, chunks, bytes, timings, the last
@@ -764,6 +767,12 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                         return err(error);
                     }
                     app.ui = u;
+                    // `dialog: null` closes every dialog, the Drawing Recovery window too (as its
+                    // Later: the autosave files stay and it asks again next start), so an agent
+                    // can take a clean screenshot after a crash left autosave files.
+                    if p.get("dialog").is_some_and(Value::is_null) {
+                        app.recovery.items.clear();
+                    }
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())
                 }
                 Err(e) => err(e),

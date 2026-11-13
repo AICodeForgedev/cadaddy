@@ -144,8 +144,8 @@ pub struct Look {
     /// what a rule inferred, each in its own colour ([`DERIVED_RGB`], [`INFERRED_RGB`]).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub apart: bool,
-    /// The view drawn (Q6419, [`super::bimviews::View`]): architectural, mep, floor or room;
-    /// none saved: MEP, mains and big gear.
+    /// The view drawn (Q6419, [`super::bimviews::View`]): systems, architectural, mep, floor or
+    /// room; none saved: the model's default ([`super::bimviews::active_in`]: Systems with MEP).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view: Option<String>,
     /// The whole-building view to go back up to from a level (architectural or mep).
@@ -163,6 +163,14 @@ pub struct Look {
     /// Furniture in the Room view (off unless turned on).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub furniture: bool,
+    /// The switches that are off until turned on, turned on: the Systems view's `branches`,
+    /// `interior` and `site` ([`super::bimviews::OFF_BY_DEFAULT`]).
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub switched_on: BTreeSet<String>,
+    /// The presentation look: the 3D view drawn on white (reports, sharing), as model.render
+    /// draws it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub presentation: bool,
     /// The element whose system the view follows (hex handle): what it feeds and what feeds it
     /// drawn, the rest faded.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -588,7 +596,12 @@ pub fn has_model(d: &Drawing) -> bool {
 /// Whether ghosting is on for `look` over the built model of `d`: as set, else when the model
 /// has MEP (with only the shell, a ghosted shell would show nothing solid).
 pub fn ghosting(d: &Drawing, look: &Look) -> bool {
-    look.ghost.unwrap_or_else(|| d.model.iter().take(MAX_SCAN).any(|e| super::wallgen::made_as(e).is_some_and(|p| p.eq_ignore_ascii_case("mep"))))
+    look.ghost.unwrap_or_else(|| has_mep(d))
+}
+
+/// Whether the built model holds MEP (any element a build made as `mep`).
+pub fn has_mep(d: &Drawing) -> bool {
+    d.model.iter().take(MAX_SCAN).any(|e| super::wallgen::made_as(e).is_some_and(|p| p.eq_ignore_ascii_case("mep")))
 }
 
 /// What the 3D view draws: the built model in the BIM view's look and its active view, or
@@ -601,7 +614,26 @@ pub fn display(d: &Drawing) -> Option<Drawing> {
 /// applied last, after every switch and tree branch: nothing a setting turns on gets past it,
 /// and what the view leaves out is not in the drawing the 3D view builds.
 pub fn display_of(d: &Drawing, look: &Look) -> Option<Drawing> {
-    use super::bimviews::{self, Shown, View};
+    display_keep(d, look, true, &|_, _| true)
+}
+
+/// [`display_of`] of only the elements `keep` lets through as well (`model.render`'s level,
+/// room or plan box); the levels stacked when `stack` (else each on its own plan's place).
+pub fn display_keep(d: &Drawing, look: &Look, stack: bool, keep: &dyn Fn(&Entity, &Class) -> bool) -> Option<Drawing> {
+    display_summary(d, look, stack, keep).map(|x| x.0)
+}
+
+/// What a view drew: its built elements, and the Systems view's legend
+/// ([`super::bimviews::legend`]).
+#[derive(Clone, Debug, Default)]
+pub struct Drew {
+    pub drawn: usize,
+    pub legend: Vec<Value>,
+}
+
+/// [`display_keep`] and what it drew, in the one pass over the model.
+pub fn display_summary(d: &Drawing, look: &Look, stack: bool, keep: &dyn Fn(&Entity, &Class) -> bool) -> Option<(Drawing, Drew)> {
+    use super::bimviews::{self, Paint, Shown, View};
     if look.off || !has_model(d) {
         return None;
     }
@@ -610,20 +642,48 @@ pub fn display_of(d: &Drawing, look: &Look) -> Option<Drawing> {
     if !scope.view.per_level() {
         shown.level = None;
     }
-    // The Architectural view is solid; the others show the architecture pale.
-    let ghost = scope.view != View::Architectural && ghosting(d, look);
+    let systems = scope.view == View::Systems;
+    // The Architectural view is solid; the others show the architecture pale (the Systems
+    // view its shell, unless the look says solid).
+    let ghost = scope.view != View::Architectural && if systems { look.ghost.unwrap_or(true) } else { ghosting(d, look) };
     let faded = std::cell::RefCell::new(std::collections::HashSet::new());
-    let mut out = compose(d, &shown, ghost, true, &|e, c| match scope.shows(d, e, c) {
-        Shown::No => false,
-        Shown::Solid => true,
-        Shown::Ghost => {
-            faded.borrow_mut().insert(e.handle);
-            true
+    let paints = std::cell::RefCell::new(HashMap::new());
+    let drawn = std::cell::Cell::new(0usize);
+    let mut out = compose(d, &shown, ghost, stack, &|e, c| {
+        if !keep(e, c) {
+            return false;
+        }
+        let (s, w) = scope.shows_what(d, e, c);
+        if s != Shown::No {
+            drawn.set(drawn.get() + 1);
+            if systems {
+                paints.borrow_mut().insert(e.handle, scope.paint_what(e, c, w));
+            }
+        }
+        match s {
+            Shown::No => false,
+            Shown::Solid => true,
+            Shown::Ghost => {
+                faded.borrow_mut().insert(e.handle);
+                true
+            }
         }
     });
-    bimviews::ghost_these(&mut out, &faded.into_inner());
+    let paints: HashMap<Handle, Paint> = paints.into_inner();
+    let faded = faded.into_inner();
+    let mut legend = Vec::new();
+    if systems {
+        bimviews::paint_systems(&mut out, &scope, look, ghost, &paints, &faded);
+        let mut counts: HashMap<Paint, usize> = HashMap::new();
+        for p in paints.values() {
+            *counts.entry(*p).or_default() += 1;
+        }
+        legend = bimviews::legend(&scope.rules, &counts);
+    } else {
+        bimviews::ghost_these(&mut out, &faded);
+    }
     bimviews::add_context(&mut out, &scope);
-    Some(out)
+    Some((out, Drew { drawn: drawn.get(), legend }))
 }
 
 /// How far each level's built elements move so the storeys stack: each level is built over its
@@ -752,7 +812,7 @@ pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.look", "BIM View", run_look).menu(&["View", "BIM View"]).params(
-            "{on?: bool, ghost?: bool | \"auto\" (the shell see-through, MEP solid; auto: when there is MEP), ghost_opacity?: 0.02-1 (0.2), sheet?: bool (the sheet's own lines in 3D too; default false), level?: name | null (show one level), apart?: bool (filled-in work apart from drawn: derived and inferred elements each in their own colour), style?: visual style (default shadededges)} → {on, ghost, ghost_opacity, sheet, level, apart, made: {drawn, derived, inferred}, style, built, trades, deselected?: selected objects the level shown alone hid}: how 3D and model.render draw the built model",
+            "{on?: bool, ghost?: bool | \"auto\" (the shell see-through, MEP solid; auto: when there is MEP), ghost_opacity?: 0.02-1 (0.2), sheet?: bool (the sheet's own lines in 3D too; default false), level?: name | null (show one level), apart?: bool (filled-in work apart from drawn: derived and inferred elements each in their own colour), presentation?: bool (the 3D view on white, as reports and model.render draw it), style?: visual style (default shadededges)} → {on, ghost, ghost_opacity, sheet, level, apart, presentation, made: {drawn, derived, inferred}, style, built, trades, deselected?: selected objects the level shown alone hid}: how 3D and model.render draw the built model",
         ),
         CommandSpec::new("bim.trades", "Trade Colours", run_trades).params(
             "{colors?: {trade: [r, g, b] | \"#rrggbb\"}, visible?: {trade: bool}, reset?: bool | [trade]} → {trades: [{trade, label, group, color, default, visible, ghosted, count}], deselected?: selected objects a hidden trade dropped}: the one colour table every trade is drawn in",
@@ -804,11 +864,11 @@ fn level_name(s: &Session, cmd: &str, want: &str) -> Result<String> {
 }
 
 /// No level shown: from a level's view back to the whole building's.
-fn clear_level(look: &mut Look) {
+fn clear_level(d: &Drawing, look: &mut Look) {
     look.level = None;
     look.room = None;
-    if super::bimviews::active(look).per_level() {
-        look.view = Some(look.whole.clone().unwrap_or_else(|| super::bimviews::View::Mep.name().into()));
+    if super::bimviews::active_in(d, look).per_level() {
+        look.view = Some(look.whole.clone().unwrap_or_else(|| super::bimviews::whole_default(d).name().into()));
     }
 }
 
@@ -832,7 +892,8 @@ fn look_json(d: &Drawing, look: &Look, style: &str) -> Value {
         "ghost_opacity": look.opacity(),
         "sheet": look.sheet,
         "level": look.level,
-        "view": super::bimviews::active(look).name(),
+        "view": super::bimviews::active_in(d, look).name(),
+        "presentation": look.presentation,
         "apart": look.apart,
         "made": made,
         "style": style,
@@ -859,10 +920,13 @@ fn run_look(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(b) = p.get("apart").and_then(Value::as_bool) {
         look.apart = b;
     }
+    if let Some(b) = p.get("presentation").and_then(Value::as_bool) {
+        look.presentation = b;
+    }
     // One level shown is the Floor view of it (Q6419); none, back to the whole building.
     match p.get("level") {
-        Some(Value::Null) => clear_level(&mut look),
-        Some(Value::String(l)) if l.trim().is_empty() => clear_level(&mut look),
+        Some(Value::Null) => clear_level(s.doc()?, &mut look),
+        Some(Value::String(l)) if l.trim().is_empty() => clear_level(s.doc()?, &mut look),
         Some(Value::String(l)) => {
             look.level = Some(level_name(s, "bim.look", l)?);
             super::bimviews::set_view(&mut look, super::bimviews::View::Floor);
@@ -900,7 +964,7 @@ fn run_look(s: &mut Session, p: &Value) -> Result<Value> {
 /// stands above 3D Views.
 pub(crate) fn bim3d_spec() -> CommandSpec {
     CommandSpec::new("view.bim3d", "3D BIM", run_bim3d).menu(&["View", "3D BIM"]).params(
-        "{} → {view, full, level, room, drawn, total, ghost, style, fidelity, dir, label, deselected?}: the built model in 3D in one click: the BIM view on in the whole-building MEP view (Full MEP as it was), the shell ghosted, trade colours, shaded with edges, the detail the view allows (a fixed view.fidelity tier is let go), from the south-west, zoomed to the building",
+        "{} → {view, full, level, room, drawn, total, ghost, style, fidelity, dir, label, deselected?}: the built model in 3D in one click: the BIM view on in the whole-building view (Systems when the model has MEP), the shell ghosted, trade colours, shaded with edges, the detail the view allows (a fixed view.fidelity tier is let go), from the south-west, zoomed to the building",
     )
 }
 
@@ -924,7 +988,8 @@ fn run_bim3d(s: &mut Session, _p: &Value) -> Result<Value> {
     look.sheet = false;
     look.apart = false;
     look.follow = None;
-    super::bimviews::set_view(&mut look, super::bimviews::View::Mep);
+    let whole = super::bimviews::whole_default(s.doc()?);
+    super::bimviews::set_view(&mut look, whole);
     let deselected = save(s, &look)?;
     let style = cadaddy_render::shade::VisualStyle::ShadedEdges;
     let st = s.state_mut()?;
