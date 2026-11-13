@@ -324,11 +324,21 @@ impl Filter {
     #[cfg(test)]
     fn matches(&self, eff: &[(String, Prop, bool)]) -> bool {
         self.wants.iter().all(|(key, want)| {
-            let p = eff.iter().find(|(k, p, _)| k.eq_ignore_ascii_case(key) && p.has_value()).map(|(_, p, _)| p);
+            let first = |key: &str| eff.iter().find(|(k, p, _)| k.eq_ignore_ascii_case(key) && p.has_value()).map(|(_, p, _)| p);
+            let p = first(key);
+            // A piece's circuits held ([`HELD_CIRCUITS`]): each one its circuit too.
+            let held: Vec<String> = if key.eq_ignore_ascii_case("circuit") {
+                first(HELD_CIRCUITS).map(|p| super::mepatoms::circuit_list(&p.text())).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             match want {
-                Want::Exists => p.is_some(),
-                Want::Missing => p.is_none(),
-                Want::Is(v) => p.is_some_and(|p| p.text().trim().eq_ignore_ascii_case(v) || (num(&p.text()).is_some() && num(&p.text()) == num(v))),
+                Want::Exists => p.is_some() || !held.is_empty(),
+                Want::Missing => p.is_none() && held.is_empty(),
+                Want::Is(v) => {
+                    p.is_some_and(|p| p.text().trim().eq_ignore_ascii_case(v) || (num(&p.text()).is_some() && num(&p.text()) == num(v)))
+                        || held.iter().any(|l| l.eq_ignore_ascii_case(v.trim()))
+                }
             }
         })
     }
@@ -411,6 +421,7 @@ fn row_of(at: usize, e: &Entity) -> Option<Row> {
 /// Put row `ri`'s property values in `out`: of each key, the first property that has a value, as
 /// [`Filter::matches`] reads them.
 fn add_values(out: &mut Values, ri: u32, e: &Entity, kind: &str, upf: f64) {
+    let mut held: Option<String> = None;
     for (k, p, _) in effective(e, kind, upf) {
         if !p.has_value() {
             continue;
@@ -425,8 +436,28 @@ fn add_values(out: &mut Values, ri: u32, e: &Entity, kind: &str, upf: f64) {
         if let Some(n) = num(&text) {
             kv.num.entry(num_key(n)).or_default().push(ri);
         }
+        if k.eq_ignore_ascii_case(HELD_CIRCUITS) {
+            held = Some(text);
+        }
+    }
+    // A piece that holds several circuits (a homerun's, a shared raceway's) is on each of them.
+    if let Some(list) = held {
+        let kv = out.entry("circuit".into()).or_default();
+        if kv.with.last() != Some(&ri) {
+            kv.with.push(ri);
+        }
+        for label in super::mepatoms::circuit_list(&list) {
+            let rows = kv.text.entry(label.to_ascii_lowercase()).or_default();
+            if rows.last() != Some(&ri) {
+                rows.push(ri);
+            }
+        }
     }
 }
+
+/// The key of the circuits a piece holds when it holds more than one; a find by `circuit` finds
+/// the piece by any of them.
+const HELD_CIRCUITS: &str = "circuits";
 
 impl ChunkElements {
     /// The chunk's elements. `before`: the chunk as it was before an edit and its elements; the
@@ -1059,6 +1090,10 @@ pub(crate) mod tests {
                     if i % 3 == 0 {
                         store.set("circuit", Prop::new(json!(i % 4), Source::user()));
                     }
+                    // A piece of a homerun: the circuits it holds.
+                    if i % 13 == 0 {
+                        store.set("circuits", Prop::new(json!("LP-1,3, LP-5"), Source::computed()));
+                    }
                     if i % 7 == 0 {
                         store.set("checked", Prop::new(json!(i % 2 == 0), Source::user()));
                     }
@@ -1100,6 +1135,9 @@ pub(crate) mod tests {
             json!({"kind": "room", "where": {"name": "space 4"}}),
             json!({"where": {"area": "exists"}}),
             json!({"where": {"nothing": "x"}}),
+            json!({"where": {"circuit": "LP-5"}}),
+            json!({"where": {"circuit": "lp-1,3"}}),
+            json!({"kind": "device", "where": {"circuit": "missing"}}),
         ];
         let check = |s: &Session| {
             let mut answered = 0;
@@ -1117,6 +1155,10 @@ pub(crate) mod tests {
             assert_eq!(by_index, by_scan);
         };
         check(&s);
+        // A piece holding several circuits is found by each one's own label, never by a part of one.
+        let held = |s: &Session, c: &str| found(s.doc().unwrap(), &Filter::parse(FIND, &json!({"where": {"circuit": c}})).unwrap()).len();
+        assert!(held(&s, "LP-5") > 0 && held(&s, "LP-5") == held(&s, "LP-1,3"));
+        assert_eq!((held(&s, "LP-1"), held(&s, "LP-3")), (0, 0));
         // After edits: a property set, an object erased, one added.
         let some = found(s.doc().unwrap(), &Filter::parse(FIND, &json!({"kind": "device"})).unwrap());
         let h = some.get(17).unwrap().0;

@@ -133,6 +133,10 @@ struct Method {
     panel: String,
     conductors: String,
     conductors_source: Source,
+    /// The circuits a homerun or a shared raceway holds, each its own label (its tag's
+    /// `circuits`, `LP-1,3, LP-5`), when it holds more than one: `circuit` is then the panel
+    /// and every number in one label, which names none of them.
+    circuits: String,
     estimated: bool,
     /// Routed by [`super::super::conduitroute`]: its ends land on their boxes' entries.
     routed: bool,
@@ -1108,6 +1112,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let (circuit, panel) = tag.map_or_else(Default::default, |t| {
             (field(t, "circuit").map(|v| v.0).unwrap_or_default(), field(t, "panel").map(|v| v.0).unwrap_or_default())
         });
+        let circuits = tag
+            .and_then(|t| field(t, "circuits"))
+            .map(|v| super::circuit_list(&v.0))
+            .filter(|l| l.len() > 1)
+            .map(|l| l.join(", "))
+            .unwrap_or_default();
         let (conductors, csrc) = tag.and_then(|t| field(t, "conductors")).map_or_else(
             || {
                 (
@@ -1228,7 +1238,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     .collect()
             })
             .unwrap_or_default();
-        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, devices, feeder, buried };
+        let m =
+            Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, circuits, estimated, routed, devices, feeder, buried };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
     }
     // The raceway the model lays for a circuit (routed or estimated), laid once along each route
@@ -1702,6 +1713,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             level: level.clone(),
             system: String::new(),
             circuit: circuit.clone(),
+            circuits: String::new(),
             panel: ps.get("panel").map(Prop::text).unwrap_or_default(),
             run: String::new(),
             estimated: false,
@@ -2197,6 +2209,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         level: key.level.clone(),
                         system: key.system.clone(),
                         circuit: m.circuit.clone(),
+                        circuits: m.circuits.clone(),
                         panel: m.panel.clone(),
                         run: String::new(),
                         estimated: m.estimated,
@@ -2266,7 +2279,21 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 // that box is on (a homerun group's taps meet in its lead's box). Never a nearer
                 // box of its own circuit label elsewhere (its own start, the next unit's).
                 if m.routed && m.devices.is_empty() && m.feeder.is_none() {
-                    if let Some(g) = touched_gear(&gear, &key.level, &m.panel, p, routed_touch, &moves) {
+                    let at_equipment = direct
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, x)| x.level.eq_ignore_ascii_case(&key.level))
+                        .map(|(xi, x)| (xi, x.device, super::dist(x.at, p)))
+                        .filter(|(.., d)| *d <= routed_touch)
+                        .min_by(|a, b| a.2.total_cmp(&b.2));
+                    // Equipment fed in its own wiring compartment is fed at its connection: an end
+                    // at a connection lands in it, never on the unit around it (the unit's body
+                    // holds its connection), whatever circuit the connection is on (a homerun
+                    // group's taps meet at its lead's, as in its lead's box); only the run's own
+                    // panel comes first.
+                    let on_gear = touched_gear(&gear, &key.level, &m.panel, p, routed_touch, &moves)
+                        .filter(|g| at_equipment.is_none() || gear.iter().any(|x| x.handle == *g && is_panel(&x.tag, &m.panel)));
+                    if let Some(g) = on_gear {
                         *land = Some(Land::Gear(g));
                         routed_on_gear += 1;
                         continue;
@@ -2285,13 +2312,6 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         routed_on_box += 1;
                         continue;
                     }
-                    let at_equipment = direct
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, x)| x.level.eq_ignore_ascii_case(&key.level))
-                        .map(|(xi, x)| (xi, x.device, super::dist(x.at, p)))
-                        .filter(|(.., d)| *d <= routed_touch)
-                        .min_by(|a, b| a.2.total_cmp(&b.2));
                     if let Some((xi, dv, _)) = at_equipment {
                         taken_direct.insert(xi);
                         *land = Some(Land::Device(dv));
@@ -2419,6 +2439,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 level: key.level.clone(),
                 system: key.system.clone(),
                 circuit: m.circuit.clone(),
+                circuits: m.circuits.clone(),
                 panel: m.panel.clone(),
                 run: run_id.clone(),
                 estimated: m.estimated,
@@ -2646,6 +2667,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             level: st.level.clone(),
             system: st.feeder.clone(),
             circuit: String::new(),
+            circuits: String::new(),
             panel: f.from.clone(),
             run: format!("feeder:{}@{}", st.feeder, st.gear),
             estimated: false,
@@ -2845,6 +2867,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if !ctx.circuit.is_empty() {
             ps.set("circuit", Prop::new(ctx.circuit.clone(), computed()));
         }
+        // A homerun's or shared raceway's pieces: each circuit they hold, so a circuit's raceway
+        // is found by its own label (`bim.props.find` reads the list as the piece's circuits).
+        if !ctx.circuits.is_empty() {
+            ps.set("circuits", Prop::new(ctx.circuits.clone(), computed()).with_note("the circuits it holds, each its own label"));
+        }
         if !ctx.panel.is_empty() {
             ps.set("panel", Prop::new(ctx.panel.clone(), computed()));
         }
@@ -2959,6 +2986,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         back.entry(*b).or_default().push(*a);
         feeders += 1;
     }
+    // Equipment fed in its own wiring compartment: fed by the pieces that end in it, as a boxed
+    // device by those that end at its box.
+    let fed_in_own: BTreeSet<Handle> = direct.iter().map(|x| x.device).collect();
     for (g, hs) in &back {
         let up = fed_from.get(g).copied();
         let feeder = up.and_then(|u| {
@@ -2973,6 +3003,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             all.sort_unstable();
             all.dedup();
             ps.set("connects", Prop::new(all.iter().take(2000).map(|h| h.hex()).collect::<Vec<_>>().join(","), Source::computed()));
+            if fed_in_own.contains(g) {
+                ps.set(
+                    "fed_by",
+                    Prop::new(all.iter().take(2000).map(|h| h.hex()).collect::<Vec<_>>().join(","), Source::computed())
+                        .with_note("the raceway or cable ends in its own wiring compartment"),
+                );
+            }
             if let Some(u) = up {
                 let mut p = Prop::new(u.hex(), Source::from_doc(SourceKind::Print, "the feeder schedule"));
                 if let Some(f) = feeder {
@@ -3305,6 +3342,7 @@ fn fa_atoms(sp: &BuildingSpec, upf: f64, boxes: &[DevBox], atoms: &mut Vec<(Atom
                     level: level.name.clone(),
                     system: system.clone(),
                     circuit: circuit.clone(),
+                    circuits: String::new(),
                     panel: source_tag.clone(),
                     run: r.id.clone(),
                     estimated: false,
@@ -3466,6 +3504,8 @@ struct AtomCtx {
     level: String,
     system: String,
     circuit: String,
+    /// The circuits it holds when more than one ([`Method::circuits`]).
+    circuits: String,
     panel: String,
     run: String,
     estimated: bool,

@@ -890,3 +890,114 @@ fn a_box_above_the_rated_wall_is_never_back_to_back_with_the_walls_boxes() {
     let (moved, low) = rerouted(18.0);
     assert!(moved, "two boxes back to back in the rated wall: {low:?}");
 }
+
+/// One panel C feeding two made-up fan coils' connections (2-pole circuits C-2,4 and C-6,8 at
+/// 40 ft, each unit-mounted at 46 in on its unit's side, inside the unit's body), and a
+/// receptacle on C-1. The fan coils' circuits have no circuit tag: the panel's schedule lists
+/// them. `units`: the fan coils are modelled as equipment around their connections. Built and
+/// routed again.
+fn fan_coils_routed(units: bool) -> Session {
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    let connection = |id: &str, y: f64, circuit: &str, unit: &str| {
+        json!({"id": id, "kind": "equipment_connection", "level": "L1", "at_ft": [40.0, y], "fields": {
+            "type": {"value": unit, "source": "plan"},
+            "symbol": {"value": format!("{unit}-sym"), "source": "plan"},
+            "sheet": {"value": "E-101", "source": "plan"},
+            "circuit": {"value": circuit, "source": "plan"},
+            "mount_height_in": {"value": "46", "source": "note"}
+        }})
+    };
+    let row = |n: &str, d: &str, a: &str, p: u32| json!({"number": n, "description": d, "breaker": a, "poles": p, "protection": [], "source": "X-2"});
+    let mut equipment =
+        vec![json!({"tag": "C", "kind": "panel", "level": "L1", "min": [-24, 110], "max": [-4, 130], "height_ft": 4, "bottom_ft": 2})];
+    if units {
+        equipment
+            .push(json!({"tag": "FC-1", "kind": "fan_coil", "level": "L1", "min": [462, 102], "max": [498, 126], "height_ft": 2, "bottom_ft": 3}));
+        equipment
+            .push(json!({"tag": "FC-2", "kind": "fan_coil", "level": "L1", "min": [462, 142], "max": [498, 166], "height_ft": 2, "bottom_ft": 3}));
+    }
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "tags": [
+            connection("device:L1:40.0,10.0", 10.0, "C-2,4", "FC-1"),
+            connection("device:L1:40.0,13.3", 13.33, "C-6,8", "FC-2"),
+            {"id": "device:L1:5.0,30.0", "kind": "receptacle", "level": "L1", "at_ft": [5.0, 30.0], "fields": {
+                "symbol": {"value": "R-sym", "source": "plan"}, "sheet": {"value": "E-101", "source": "plan"}, "circuit": {"value": "C-1", "source": "plan"}}},
+            {"id": "circuit:L1:E-101:C-1", "kind": "circuit", "level": "L1", "at_ft": [4.0, 30.0], "fields": {
+                "circuit": {"value": "C-1", "source": "plan"}, "panel": {"value": "C", "source": "plan"}}}
+        ],
+        "mep": {
+            "equipment": equipment,
+            "panel_schedules": [{"panel": "C", "source": "X-2", "circuits": [row("1", "RCPT", "20", 1), row("2", "FC-1", "15", 2), row("6", "FC-2", "15", 2)]}]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({"route": true})).expect("build");
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    s
+}
+
+/// The model's elements made as `made_as` whose `key` property is `value`.
+fn made_with(s: &mut Session, made_as: &str, key: &str, value: &str) -> Vec<String> {
+    let d = s.doc().expect("doc");
+    d.model
+        .iter()
+        .filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some(made_as))
+        .filter(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get(key).map(|p| p.text()).as_deref() == Some(value))
+        .map(|e| e.handle.hex())
+        .collect()
+}
+
+#[test]
+fn a_routed_equipment_connection_is_traceable_through_its_raceway() {
+    // Test finding (fix-equipment-connection-raceway-untraceable): equipment connections fed in
+    // their units' own wiring compartments were routed (the routing report listed their circuits
+    // and footage) but untraceable: the route's end at a connection inside its unit's body landed
+    // on the unit, so the connection had no link and bim.chain from it walked nowhere; and the
+    // homerun the two circuits share carried one label of every number (`C-2,4,6,8`), so no
+    // conduit was found on either circuit.
+    for units in [true, false] {
+        let mut s = fan_coils_routed(units);
+        for circuit in ["C-2,4", "C-6,8"] {
+            let found = s.execute("bim.props.find", &json!({"kind": "conduit", "where": {"circuit": circuit}, "limit": 500})).expect("find");
+            assert!(found["count"].as_u64().unwrap_or(0) > 0, "units {units}: {circuit}'s raceway carries its circuit: {found}");
+            let dev = made_with(&mut s, "device", "circuit", circuit).pop().unwrap_or_else(|| panic!("the {circuit} connection"));
+            let chain = s.execute("bim.chain", &json!({"handle": dev})).expect("chain");
+            assert_eq!(chain["source"]["tag"], json!("C"), "units {units}: {circuit} walks back to its panel: {chain:#}");
+            assert!(chain["length_ft"].as_f64().unwrap_or(0.0) >= 40.0, "units {units}: {chain:#}");
+            assert_eq!(chain["breaker"]["circuit"], json!(circuit), "units {units}: {chain:#}");
+            // Fed by the pieces that end in its compartment, as a boxed device by those at its box.
+            let el = s.execute("bim.element", &json!({"handle": dev})).expect("element");
+            assert!(el["fed_by"].as_array().is_some_and(|f| !f.is_empty()), "units {units}: {el:#}");
+        }
+        // The shared homerun's pieces hold both circuits, each by its own label; no other
+        // circuit's label finds them.
+        let shared = s.execute("bim.props.find", &json!({"kind": "conduit", "where": {"circuits": "exists"}, "limit": 500})).expect("find");
+        assert!(shared["count"].as_u64().unwrap_or(0) > 0, "units {units}: the two circuits share a homerun: {shared}");
+        let h = shared["handles"][0].as_str().unwrap_or_default().to_string();
+        let props = s.execute("bim.props.get", &json!({"handle": h})).expect("props");
+        let held = props["elements"][0]["props"]["circuits"]["value"].as_str().unwrap_or_default().to_string();
+        let mut labels: Vec<&str> = held.split(", ").collect();
+        labels.sort_unstable();
+        assert_eq!(labels, ["C-2,4", "C-6,8"], "units {units}: {props:#}");
+        let other = s.execute("bim.props.find", &json!({"kind": "conduit", "where": {"circuit": "C-2"}})).expect("find");
+        assert_eq!(other["count"], json!(0), "units {units}: {other}");
+        // A fan coil is a load: a walk from it never names the other fan coil as its source.
+        if units {
+            for unit in ["FC-1", "FC-2"] {
+                let d = s.doc().expect("doc");
+                let h = d
+                    .model
+                    .iter()
+                    .find(|e| cadaddy_engine::cmd::bimlook::made_tag(e, "tag") == Some(unit))
+                    .map(|e| e.handle.hex())
+                    .expect("the unit");
+                let chain = s.execute("bim.chain", &json!({"handle": h})).expect("chain");
+                let src = chain["source"]["tag"].as_str().unwrap_or_default().to_string();
+                assert!(!src.starts_with("FC-"), "{unit}: {chain:#}");
+            }
+        }
+    }
+}
