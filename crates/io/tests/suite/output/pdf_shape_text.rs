@@ -419,3 +419,53 @@ fn shapes_that_are_not_lettering_stay_shapes() {
     let values: Vec<&str> = all.iter().map(|t| t.value.as_str()).collect();
     assert_eq!(values, ["4012"], "only the real text: {values:?}");
 }
+
+/// More filled pieces than the lettering reader's cap ([`pdf_read`]'s 50,000 glyph-sized
+/// pieces a page): `n` filled squares `side` points wide in a grid from `at`, `pitch` apart.
+fn speckle(n: usize, side: f64, pitch: f64, at: (f64, f64)) -> String {
+    let cols = 300usize;
+    let mut out = String::from("0 0 0 rg\n");
+    for i in 0..n {
+        let (x, y) = (at.0 + (i % cols) as f64 * pitch, at.1 + (i / cols) as f64 * pitch);
+        out.push_str(&format!("{x:.2} {y:.2} {side} {side} re f\n"));
+    }
+    out
+}
+
+fn cap_note(r: &pdf_read::PdfImport) -> Option<&String> {
+    r.notes.iter().find(|n| n.contains("glyph-sized outline pieces"))
+}
+
+#[test]
+fn a_stipple_hatch_before_the_lettering_does_not_use_up_the_glyph_cap() {
+    // a sand or concrete hatch of 60,000 one-point dots, drawn before the title block's
+    // outlined sheet number and a tag: dots that small are no glyph and don't count
+    let content =
+        [speckle(60_000, 1.0, 1.5, (50.0, 150.0)), outlined_in_pieces("CA401", (500.0, 60.0), 20.0), outlined("1040", (100.0, 60.0), 9.0, 0.0, "f")]
+            .concat();
+    let r = read(&content);
+    let all = texts(&r);
+    find(&all, "CA401");
+    find(&all, "1040");
+    assert_eq!(cap_note(&r), None, "{:?}", r.notes);
+}
+
+#[test]
+fn fills_under_real_text_do_not_use_up_the_glyph_cap() {
+    // 60,000 glyph-sized fills under one big real text (its copy as shapes), then lettering
+    // with no real text on it: the covered fills don't count
+    let content =
+        [speckle(60_000, 2.0, 2.0, (60.0, 160.0)), "BT /F1 330 Tf 40 150 Td (MM) Tj ET\n".into(), outlined_in_pieces("CA401", (500.0, 60.0), 20.0)]
+            .concat();
+    let r = read(&content);
+    let all = texts(&r);
+    find(&all, "CA401");
+    assert_eq!(cap_note(&r), None, "{:?}", r.notes);
+}
+
+#[test]
+fn glyph_sized_fills_past_the_cap_say_so_in_the_import_report() {
+    // 60,000 uncovered glyph-sized fills are a hostile page: the reader stops and says so
+    let r = read(&speckle(60_000, 2.0, 3.0, (20.0, 20.0)));
+    assert!(cap_note(&r).is_some(), "{:?}", r.notes);
+}
