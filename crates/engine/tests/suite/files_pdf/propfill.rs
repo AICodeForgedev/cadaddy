@@ -879,6 +879,93 @@ fn a_door_takes_its_door_schedule_row() {
     assert!(door_schedule_findings(&mut s).is_empty());
 }
 
+/// A door made like the build makes them in office 101's south wall, from `x0` to `x1` (inches);
+/// its handle and plan middle.
+fn door_from_to(s: &mut Session, x0: f64, x1: f64) -> (Handle, Vec2) {
+    let (door, _) = door_in_south_wall(s);
+    let d = s.doc_mut().expect("doc");
+    let mut e = (**d.entity(door).expect("door")).clone();
+    let EntityKind::Mesh(m) = &mut e.kind else { panic!("the build's wall is a mesh") };
+    let (lo, hi) = m.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.x), hi.max(v.x)));
+    for v in &mut m.vertices {
+        v.x = x0 + (v.x - lo) / (hi - lo) * (x1 - x0);
+    }
+    assert!(d.model.replace(e), "the door is in the model");
+    let at = cadaddy_engine::doc::entity_bounds(s.doc().expect("doc"), s.doc().expect("doc").entity(door).expect("door"), 0).center();
+    (door, at)
+}
+
+/// Q6454: a schedule tag names one opening. Of two doors within its reach the nearer takes its
+/// row; the other, with nothing printed by it, is numbered from its room and keeps its own
+/// width.
+#[test]
+fn a_schedule_tag_names_one_door_the_nearest() {
+    let mut s = plan();
+    // Door A 36" wide, middle 12" from the tag; door B 30" wide, 48" from it.
+    let (a, at_a) = door_from_to(&mut s, 42.0, 78.0);
+    let (b, at_b) = door_from_to(&mut s, 105.0, 135.0);
+    assert!((at_b.x - at_a.x - 60.0).abs() < 1e-6, "{at_a:?} {at_b:?}");
+    let schedule = json!({
+        "rows": [{"kind": "door", "mark": "7", "width_in": 36.0, "hardware": "HW-2"},
+                 {"kind": "door", "mark": "8", "width_in": 32.0, "hardware": "HW-3"}],
+        "tags": [{"mark": "7", "at": [at_a.x + 12.0, at_a.y]}]
+    });
+    s.execute("bspec.set", &json!({"spec": {"schedule": schedule}})).expect("schedule");
+    let r = fill(&mut s);
+    let ap = get(&mut s, &a.hex());
+    assert_eq!(ap["number"]["value"], "7", "{ap:#}");
+    assert_eq!(ap["hardware_set"]["value"], "HW-2", "{ap:#}");
+    assert_eq!(ap["width"]["value"], json!(36.0), "{ap:#}");
+    let bp = get(&mut s, &b.hex());
+    assert_eq!(bp["number"]["value"], "101", "the room's only unnumbered door: {bp:#}");
+    assert_eq!(bp["number"]["source"]["kind"], "rule", "{bp:#}");
+    assert!(bp["hardware_set"].is_null(), "no row of its own: {bp:#}");
+    assert_eq!(bp["width"]["value"], json!(30.0), "{bp:#}");
+    assert_eq!(bp["width"]["source"]["kind"], "computed", "{bp:#}");
+    assert_eq!(r["doors"]["numbered_by_tag"], json!(1), "{r}");
+    assert_eq!(r["doors"]["with_schedule_row"], json!(1), "{r}");
+    assert_eq!(r["doors"]["numbered_by_room"], json!(1), "{r}");
+}
+
+/// Q6454: a schedule tag of another level names none of this level's doors, however near.
+#[test]
+fn a_schedule_tag_of_another_level_names_no_door() {
+    let mut s = plan();
+    let (b, at_b) = door_from_to(&mut s, 105.0, 135.0);
+    let schedule = json!({
+        "rows": [{"kind": "door", "mark": "8", "width_in": 32.0, "hardware": "HW-3"}],
+        "tags": [{"mark": "8", "level": "L2", "at": [at_b.x, at_b.y + 6.0]}]
+    });
+    s.execute("bspec.set", &json!({"spec": {"schedule": schedule}})).expect("schedule");
+    fill(&mut s);
+    let bp = get(&mut s, &b.hex());
+    assert_eq!(bp["number"]["value"], "101", "{bp:#}");
+    assert!(bp["hardware_set"].is_null(), "{bp:#}");
+}
+
+/// Q6454: a number printed between two doors numbers the nearer one only, and its schedule tag
+/// (the same mark at the same place) is not taken again by the other.
+#[test]
+fn a_printed_door_number_names_one_door_the_nearest() {
+    let mut s = plan();
+    // The number 12" from door A's middle, 30" from door B's: within both doors' reach.
+    let (a, at_a) = door_from_to(&mut s, 42.0, 78.0);
+    let (b, at_b) = door_from_to(&mut s, 87.0, 117.0);
+    let at = [at_a.x + 12.0, at_a.y];
+    assert!(Vec2::new(at[0], at[1]).dist(at_b) <= 36.0);
+    text(&mut s, "A-ANNO", at, "7");
+    let schedule = json!({"rows": [{"kind": "door", "mark": "7", "width_in": 36.0, "hardware": "HW-2"}], "tags": [{"mark": "7", "at": at}]});
+    s.execute("bspec.set", &json!({"spec": {"schedule": schedule}})).expect("schedule");
+    fill(&mut s);
+    let ap = get(&mut s, &a.hex());
+    assert_eq!(ap["number"]["value"], "7", "{ap:#}");
+    assert_eq!(ap["number"]["source"]["kind"], "print", "{ap:#}");
+    assert_eq!(ap["hardware_set"]["value"], "HW-2", "{ap:#}");
+    let bp = get(&mut s, &b.hex());
+    assert_eq!(bp["number"]["value"], "101", "{bp:#}");
+    assert!(bp["hardware_set"].is_null(), "{bp:#}");
+}
+
 #[test]
 fn rooms_walls_and_doors_are_filled_from_the_plan() {
     let mut s = plan();
