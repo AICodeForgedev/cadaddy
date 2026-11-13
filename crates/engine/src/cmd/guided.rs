@@ -12720,6 +12720,8 @@ fn coordination_step(
     // Each architect object found: its sheet point and its sheet's import span (for its crop).
     let mut origin: Vec<Option<([f64; 2], Option<(u64, u64)>)>> = Vec::new();
     let mut not_placed = 0usize;
+    // Each sheet's objects found and placed (a typical room's view is placed by its rooms).
+    let mut by_sheet: BTreeMap<String, [usize; 2]> = BTreeMap::new();
     if !hits.is_empty() {
         let mut sp_all = sp.clone();
         let hit_sheets: BTreeSet<String> = hits.iter().map(|(sh, ..)| sheet_key(sh)).collect();
@@ -12735,6 +12737,7 @@ fn coordination_step(
         let spans: BTreeMap<String, (u64, u64)> = arch.iter().filter_map(|sh| Some((sheet_key(&sh.number), sh.span?))).collect();
         for (sheet, at, row) in &hits {
             let Some(r) = rows.get(*row) else { continue };
+            by_sheet.entry(sheet.clone()).or_default()[0] += 1;
             let Some(region) = job.level_at(*at).filter(|g| g.not_built.is_empty()) else {
                 not_placed += 1;
                 continue;
@@ -12754,11 +12757,15 @@ fn coordination_step(
                 });
                 origin.push(Some((*at, spans.get(&sheet_key(sheet)).copied())));
             }
-            if !placed_any {
+            if placed_any {
+                by_sheet.entry(sheet.clone()).or_default()[1] += 1;
+            } else {
                 not_placed += 1;
             }
         }
     }
+    report["by_sheet"] =
+        json!(by_sheet.iter().map(|(k, v)| (k.clone(), json!({"found": v[0], "placed": v[1]}))).collect::<serde_json::Map<String, Value>>());
     report["architect_placed"] = json!(objs.len());
     report["architect_not_placed"] = json!(not_placed);
     // The engineer's: the read devices of each kind on its disciplines' sheets (on the plans now);

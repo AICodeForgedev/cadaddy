@@ -27,6 +27,8 @@
       "engineer_kinds_none": ["exit"],
       "reach_ft": 4.0,
       "_reach_ft": "Two sheets' copies of one light this near on the level's plan are one light (sheet registration and the electrical plan's schematic placing).",
+      "cluster_ft": 15.0,
+      "_cluster_ft": "The architect's lights with no electrical light near them, this near each other in one room, are one finding (an alcove's lights).",
       "count_tolerance": 1,
       "_count_tolerance": "Counts in one room that differ by more than this (and by more than a quarter of the larger) are a finding.",
       "rooms_without": true,

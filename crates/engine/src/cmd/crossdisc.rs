@@ -75,6 +75,8 @@ pub(crate) struct KindRule {
     pub engineer_ifc: Vec<String>,
     pub engineer_kinds_none: Vec<String>,
     pub reach_ft: f64,
+    /// Objects only the architect draws this near each other in one room are one finding.
+    pub cluster_ft: f64,
     pub count_tolerance: usize,
     pub rooms_without: bool,
     pub build: Option<BuildRule>,
@@ -153,6 +155,10 @@ impl KindRule {
             Case::EngineerOnly | Case::Differ => Severity::Medium,
             Case::NoneAnywhere => Severity::Low,
         })
+    }
+
+    fn cluster(&self) -> f64 {
+        if self.cluster_ft.is_finite() && self.cluster_ft > 0.0 { self.cluster_ft } else { 15.0 }
     }
 
     fn reach(&self) -> f64 {
@@ -631,6 +637,9 @@ pub(crate) struct Finding {
     pub engineer: Vec<usize>,
     /// The places of each side that no copy on the other side is near.
     pub unmatched: (usize, usize),
+    /// For the architect's objects alone in a room: what the room as traced holds of each side
+    /// (a room traced together with its neighbour holds the electrical's elsewhere in it).
+    pub room_counts: Option<(usize, usize)>,
     pub at: [f64; 2],
     pub extent: Option<[[f64; 2]; 2]>,
 }
@@ -690,6 +699,42 @@ fn bounds(pts: impl Iterator<Item = [f64; 2]>) -> Option<[[f64; 2]; 2]> {
         });
     }
     b
+}
+
+fn middle(extent: Option<[[f64; 2]; 2]>) -> [f64; 2] {
+    extent.map_or([0.0, 0.0], |[lo, hi]| [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1])])
+}
+
+/// `ids` in groups: one key each (`key`), each joined to another of its group (`near`), in order.
+fn groups(ids: &[usize], key: impl Fn(usize) -> Option<usize>, near: impl Fn(usize, usize) -> bool) -> Vec<Vec<usize>> {
+    let mut parent: Vec<usize> = (0..ids.len()).collect();
+    fn root(p: &mut [usize], mut i: usize) -> usize {
+        let mut n = 0usize;
+        while let Some(&q) = p.get(i) {
+            if q == i || n > 64 {
+                break;
+            }
+            i = q;
+            n += 1;
+        }
+        i
+    }
+    for (x, &i) in ids.iter().enumerate() {
+        for (y, &j) in ids.iter().enumerate().skip(x + 1) {
+            if key(i) == key(j) && near(i, j) {
+                let (rx, ry) = (root(&mut parent, x), root(&mut parent, y));
+                if let Some(slot) = parent.get_mut(ry.max(rx)) {
+                    *slot = rx.min(ry);
+                }
+            }
+        }
+    }
+    let mut out: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (x, &i) in ids.iter().enumerate() {
+        let r = root(&mut parent, x);
+        out.entry(r).or_default().push(i);
+    }
+    out.into_values().collect()
 }
 
 /// Compare the architect's and the engineer's objects room by room (see the module docs). `upf`:
@@ -755,22 +800,99 @@ pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64) -> 
             let on_level: Vec<usize> = mine.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| level_key(&o.level) == *key)).collect();
             let level_name = on_level.iter().find_map(|&i| objs.get(i)).map_or_else(|| key.clone(), |o| o.level.clone());
             let points = |ids: &[usize]| ids.iter().filter_map(|&i| objs.get(i)).map(|o| o.at).collect::<Vec<_>>();
-            // The level's architect objects in rooms the engineer leaves bare, when the engineer
-            // draws none of the kind on the whole level: one finding for the level.
             let engineer_level = e_levels.contains(key);
             let architect_level = a_levels.contains(key);
-            let mut level_rooms: Vec<usize> = Vec::new();
-            let mut level_objs: Vec<usize> = Vec::new();
+            let (arch, eng): (Vec<usize>, Vec<usize>) = on_level.iter().partition(|&&i| objs.get(i).is_some_and(|o| o.architect));
+            // By position first: the architect's objects with no engineer's object of the kind near.
+            let near_engineer = |o: &Obj| eng.iter().filter_map(|&j| objs.get(j)).any(|x| (x.at[0] - o.at[0]).hypot(x.at[1] - o.at[1]) <= reach);
+            let bare: Vec<usize> = arch.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| !near_engineer(o))).collect();
+            let bare_set: BTreeSet<usize> = bare.iter().copied().collect();
+            let room_counts = |ri: Option<usize>| {
+                ri.map(|ri| {
+                    let n = |architect: bool| {
+                        on_level
+                            .iter()
+                            .filter(|&&i| room_of.get(i).copied().flatten() == Some(ri) && objs.get(i).is_some_and(|o| o.architect == architect))
+                            .count()
+                    };
+                    (n(true), n(false))
+                })
+            };
+            let push = |out: &mut Comparison, f: Finding| {
+                if out.findings.len() < max {
+                    out.findings.push(f);
+                }
+            };
+            if !engineer_level {
+                // The engineer draws none of the kind on the whole level: one finding for the level.
+                if !bare.is_empty() {
+                    let mut hit: Vec<usize> = bare.iter().filter_map(|&i| room_of.get(i).copied().flatten()).collect();
+                    hit.sort_unstable();
+                    hit.dedup();
+                    let extent = bounds(points(&bare).into_iter());
+                    let n = bare.len();
+                    push(
+                        &mut out,
+                        Finding {
+                            kind: k,
+                            case: Case::ArchitectOnly,
+                            level: level_name.clone(),
+                            room: None,
+                            rooms: hit,
+                            architect: bare.clone(),
+                            engineer: Vec::new(),
+                            unmatched: (n, 0),
+                            at: middle(extent),
+                            extent,
+                            room_counts: None,
+                        },
+                    );
+                }
+            } else {
+                // Each group of them (in one room, each near another): a finding, its room its label.
+                let cluster = rule.cluster() * upf;
+                for group in groups(
+                    &bare,
+                    |i| room_of.get(i).copied().flatten(),
+                    |i, j| match (objs.get(i), objs.get(j)) {
+                        (Some(a), Some(b)) => (a.at[0] - b.at[0]).hypot(a.at[1] - b.at[1]) <= cluster,
+                        _ => false,
+                    },
+                ) {
+                    let room = group.first().and_then(|&i| room_of.get(i).copied().flatten());
+                    let extent = bounds(points(&group).into_iter());
+                    let n = group.len();
+                    push(
+                        &mut out,
+                        Finding {
+                            kind: k,
+                            case: Case::ArchitectOnly,
+                            level: level_name.clone(),
+                            room,
+                            rooms: Vec::new(),
+                            architect: group,
+                            engineer: Vec::new(),
+                            unmatched: (n, 0),
+                            at: middle(extent),
+                            extent,
+                            room_counts: room_counts(room),
+                        },
+                    );
+                }
+            }
+            // Then room by room, the rest: what the engineer alone draws, counts that differ, a
+            // room no sheet lights.
             for ri in rooms_of_level(key) {
                 let Some(room) = rooms.get(ri) else { continue };
                 let here: Vec<usize> = on_level.iter().copied().filter(|&i| room_of.get(i).copied().flatten() == Some(ri)).collect();
-                let a: Vec<usize> = here.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| o.architect)).collect();
+                let all_a = here.iter().filter(|&&i| objs.get(i).is_some_and(|o| o.architect)).count();
+                let a: Vec<usize> = here.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| o.architect) && !bare_set.contains(&i)).collect();
                 let e: Vec<usize> = here.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| !o.architect)).collect();
                 compared_rooms.insert(ri);
                 let typical = e.iter().any(|&i| objs.get(i).is_some_and(|o| o.typical));
                 let (ua, ue) = unmatched(&points(&a), &points(&e), reach);
-                let case = match (a.len(), e.len()) {
-                    (0, 0) => {
+                let case = match (all_a, a.len(), e.len()) {
+                    (0, _, 0) => {
                         let area_sqft = room.area() / (upf * upf);
                         (rule.rooms_without
                             && area_sqft >= rules.rooms.min_area_sqft
@@ -779,14 +901,10 @@ pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64) -> 
                             && engineer_level)
                             .then_some(Case::NoneAnywhere)
                     }
-                    (_, 0) if !engineer_level => {
-                        level_rooms.push(ri);
-                        level_objs.extend(a.iter().copied());
-                        None
-                    }
-                    (_, 0) => Some(Case::ArchitectOnly),
-                    (0, _) => (architect_level && !typical).then_some(Case::EngineerOnly),
-                    (na, ne) => {
+                    (0, _, _) => (architect_level && !typical).then_some(Case::EngineerOnly),
+                    // (The architect's alone here are their own finding above.)
+                    (_, 0, _) | (_, _, 0) => None,
+                    (_, na, ne) => {
                         let tol = rule.count_tolerance.max(na.max(ne) / 4);
                         let counts = na.abs_diff(ne) > tol;
                         let places = ua.min(ue) > rule.count_tolerance && 2 * ua.min(ue) > na.min(ne);
@@ -794,58 +912,24 @@ pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64) -> 
                     }
                 };
                 let Some(case) = case else { continue };
-                if out.findings.len() >= max {
-                    continue;
-                }
                 let pts: Vec<[f64; 2]> = points(&a).into_iter().chain(points(&e)).collect();
                 let extent = bounds(pts.iter().copied()).or_else(|| bounds(room.outline.iter().map(|p| [p.x, p.y])));
-                let at = extent.map_or([0.0, 0.0], |[lo, hi]| [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1])]);
-                out.findings.push(Finding {
-                    kind: k,
-                    case,
-                    level: level_name.clone(),
-                    room: Some(ri),
-                    rooms: Vec::new(),
-                    architect: a,
-                    engineer: e,
-                    unmatched: (ua, ue),
-                    at,
-                    extent,
-                });
-            }
-            // The architect's objects in no traced room with no engineer's copy near: one
-            // finding for the level (with the level-wide gap above, when there is one).
-            let loose: Vec<usize> = on_level
-                .iter()
-                .copied()
-                .filter(|&i| room_of.get(i).copied().flatten().is_none())
-                .filter(|&i| {
-                    objs.get(i).is_some_and(|o| {
-                        o.architect
-                            && !on_level
-                                .iter()
-                                .filter_map(|&j| objs.get(j))
-                                .any(|x| !x.architect && (x.at[0] - o.at[0]).hypot(x.at[1] - o.at[1]) <= reach)
-                    })
-                })
-                .collect();
-            level_objs.extend(loose.iter().copied());
-            if !level_objs.is_empty() && out.findings.len() < max {
-                let extent = bounds(points(&level_objs).into_iter());
-                let at = extent.map_or([0.0, 0.0], |[lo, hi]| [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1])]);
-                let n = level_objs.len();
-                out.findings.push(Finding {
-                    kind: k,
-                    case: Case::ArchitectOnly,
-                    level: level_name.clone(),
-                    room: None,
-                    rooms: level_rooms,
-                    architect: level_objs,
-                    engineer: Vec::new(),
-                    unmatched: (n, 0),
-                    at,
-                    extent,
-                });
+                push(
+                    &mut out,
+                    Finding {
+                        kind: k,
+                        case,
+                        level: level_name.clone(),
+                        room: Some(ri),
+                        rooms: Vec::new(),
+                        architect: a,
+                        engineer: e,
+                        unmatched: (ua, ue),
+                        at: middle(extent),
+                        extent,
+                        room_counts: None,
+                    },
+                );
             }
         }
     }
@@ -921,7 +1005,14 @@ pub(crate) fn to_rfi(f: &Finding, objs: &[Obj], rooms: &[Room], rules: &Rules, e
     let (issue, assumed, proposed) = match f.case {
         Case::ArchitectOnly => {
             let what = if f.room.is_some() || !f.rooms.is_empty() {
-                format!("{name} drawn by the architect, not on the electrical drawings: no fixture type, circuit or control ({counts})")
+                let traced = match f.room_counts {
+                    Some((ra, re)) if re > 0 => format!(
+                        "; none of the electrical's within {:.0} ft of them (the room as traced holds A: {ra}, E: {re}: the electrical's are elsewhere in it)",
+                        rule.reach()
+                    ),
+                    _ => String::new(),
+                };
+                format!("{name} drawn by the architect, not on the electrical drawings: no fixture type, circuit or control ({counts}){traced}")
             } else {
                 format!("{name} drawn by the architect outside the traced rooms, none on the electrical drawings near them ({counts})")
             };
@@ -1236,13 +1327,15 @@ mod tests {
         let mut rooms = vec![room("OFFICE", "20", (0.0, 0.0), (120.0, 120.0)), room("LOUNGE", "21", (200.0, 0.0), (440.0, 240.0))];
         rooms.push(room("STORAGE", "22", (500.0, 0.0), (620.0, 120.0)));
         rooms.push(room("CLOSET", "23", (700.0, 0.0), (820.0, 120.0)));
-        // The office: the engineer's two, the architect's none. The lounge: six against two.
+        // The office: the engineer's two, the architect's none. The lounge: the architect's two,
+        // each with the engineer's by it, among the engineer's six.
         let mut objs = vec![obj(false, 40.0, 60.0), obj(false, 80.0, 60.0)];
-        for x in [220.0, 260.0, 300.0, 340.0, 380.0, 420.0] {
+        for x in [260.0, 380.0] {
             objs.push(obj(true, x, 100.0));
         }
-        objs.push(obj(false, 222.0, 100.0));
-        objs.push(obj(false, 262.0, 100.0));
+        for x in [262.0, 382.0, 230.0, 300.0, 340.0, 420.0] {
+            objs.push(obj(false, x, 180.0 - 80.0 * f64::from(u8::from(x == 262.0 || x == 382.0))));
+        }
         for o in &mut objs {
             o.kind = light;
         }
@@ -1260,6 +1353,34 @@ mod tests {
         }
         let c = compare(&objs, &rooms, r, 12.0);
         assert!(c.findings.iter().all(|f| f.case == Case::NoneAnywhere), "{c:?}");
+    }
+
+    /// Position first: an alcove traced together with the lounge beside it (one room) holds the
+    /// architect's three lights with none of the electrical's near them, the electrical's being
+    /// in the lounge part: that group is the finding, labelled by the room, with what the room
+    /// holds besides.
+    #[test]
+    fn the_architects_lights_with_no_electrical_light_near_are_a_finding_in_a_room_traced_with_its_neighbour() {
+        let r = rules();
+        let rooms = vec![room("LOUNGE", "30", (0.0, 0.0), (480.0, 240.0))];
+        let mut objs: Vec<Obj> = [40.0, 80.0, 120.0].iter().map(|x| obj(true, *x, 220.0)).collect();
+        for x in [300.0, 360.0, 420.0] {
+            objs.push(obj(true, x, 60.0));
+            objs.push(obj(false, x + 4.0, 62.0));
+        }
+        let c = compare(&objs, &rooms, r, 12.0);
+        assert_eq!(c.findings.len(), 1, "{c:?}");
+        let f = c.findings.first().unwrap_or_else(|| panic!("none"));
+        assert_eq!((f.case, f.room, f.architect.len(), f.room_counts), (Case::ArchitectOnly, Some(0), 3, Some((6, 3))));
+        let rfi = to_rfi(f, &objs, &rooms, r, &[], 12.0).unwrap_or_else(|| panic!("no rfi"));
+        assert!(rfi.issue.contains("A: 3, E: 0") && rfi.issue.contains("holds A: 6, E: 3"), "{rfi:?}");
+        // Two groups far apart in one room are two findings.
+        objs.push(obj(true, 40.0, 20.0));
+        objs.push(obj(true, 60.0, 20.0));
+        let c = compare(&objs, &rooms, r, 12.0);
+        let mut sizes: Vec<usize> = c.findings.iter().map(|f| f.architect.len()).collect();
+        sizes.sort_unstable();
+        assert_eq!(sizes, [2, 3], "{c:?}");
     }
 
     #[test]
