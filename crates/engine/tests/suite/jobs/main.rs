@@ -56,6 +56,7 @@ mod followups_626;
 mod furnish;
 mod gear;
 mod gearspace;
+mod hoistway_build;
 mod gfciroute;
 mod grounding;
 mod grounding_hotel;
