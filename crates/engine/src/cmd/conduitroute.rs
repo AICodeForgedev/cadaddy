@@ -72,7 +72,7 @@ pub(crate) const CORRECTION_HOMERUN: &str = "correction:homerun_conductors";
 /// The field of a circuit tag the routing inferred for devices no document circuits (Q6216): its basis.
 pub(crate) const INFERRED_CIRCUIT: &str = "inferred_circuit";
 /// What an in-wall joint's run says it is (it follows its wall, not the plan's axes).
-const IN_WALL: &str = "in the wall";
+pub(crate) const IN_WALL: &str = "in the wall";
 /// The obstacle category of a gear's working space (NEC 110.26(A)).
 const WORKING_SPACE: &str = "working space";
 
@@ -3548,6 +3548,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // The circuits whose boxes branch rather than chain (Q6340).
     let mut branched_rows: Vec<Value> = Vec::new();
     let mut branched_n = 0usize;
+    // Each routed circuit's wiring order as built (Q6551): its homerun's box and every joint
+    // from its line side to its load side ([`Wiring`]).
+    let mut wiring_rows: Vec<Value> = Vec::new();
     for (ci, c) in circs.iter().enumerate() {
         if runs.len() >= MAX_RUNS {
             break;
@@ -3725,6 +3728,17 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let size = min_in;
         // A part of a split circuit is its own (the circuit's id and its panel's).
         let cid = if c.part.is_empty() { tag.id.clone() } else { format!("{}@{}", tag.id, c.part) };
+        {
+            let hex = |i: &usize| members.get(*i).map(|m| m.handle.hex());
+            let joints: Vec<Value> = tree.iter().filter_map(|(u, v)| Some(json!([hex(u)?, hex(v)?]))).collect();
+            wiring_rows.push(json!({
+                "circuit": cid, "label": c.label, "level": c.level, "panel": c.panel,
+                // No panel to run its homerun to: where the power comes in isn't known.
+                "home": gi.and_then(|_| hex(&root)),
+                "devices": members.iter().map(|m| m.handle.hex()).collect::<Vec<_>>(),
+                "joints": joints,
+            }));
+        }
         let mut leg_n = 0usize;
         let mut tree_len = 0.0;
         let mut edge_ft: Vec<(usize, usize, f64)> = Vec::new();
@@ -5304,6 +5318,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }); // What the build filled in and corrected for the field (Q6216).
     out.report["inferred_circuits"] = json!({"total": inferred_rows.len(), "devices": inferred_devs.len(), "items": inferred_rows, "joined": joined_rows.len(), "joined_items": joined_rows});
     out.report["branched_trees"] = branched_trees;
+    out.report[WIRING_KEY] = json!({"circuits": wiring_rows, "basis": WIRING_BASIS});
     out.report["floor_boxes_under_slab"] = json!({
         "boxes": feeds.len(),
         "fed": under_slab_rows.len(),
@@ -6046,6 +6061,81 @@ pub(crate) fn store_report(d: &mut Drawing, report: &Value) {
 
 pub(crate) fn stored_report(d: &Drawing) -> Option<Value> {
     d.embedded.get(REPORT_FILE).and_then(|b| serde_json::from_slice(b).ok())
+}
+
+/// Where the route report keeps each circuit's wiring order (Q6551).
+pub(crate) const WIRING_KEY: &str = "wiring";
+const WIRING_BASIS: &str =
+    "the routed circuit as built: its homerun lands in the box named `home`, each joint runs from its line side (first) to its load side";
+/// Most devices one walk up a circuit's wiring passes (a hostile report's cycle ends there).
+const MAX_WIRING_DEPTH: usize = 10_000;
+
+/// The routed circuits' wiring order the last routing stored (Q6551): each device's line side,
+/// the device its circuit's conductors reach it from, and the boxes where homeruns land. What
+/// is upstream of a device is read from this, never from how far it is from its panel.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Wiring {
+    /// Each routed device's line-side device on its circuit.
+    line_side: HashMap<Handle, Handle>,
+    /// The boxes the homeruns land in (fed from the panel).
+    home: BTreeSet<Handle>,
+    /// Every device a stored circuit routed.
+    routed: BTreeSet<Handle>,
+}
+
+impl Wiring {
+    /// The wiring order out of a route report (none stored: empty).
+    pub(crate) fn of_report(report: &Value) -> Wiring {
+        let mut w = Wiring::default();
+        let rows = report.get(WIRING_KEY).and_then(|v| v.get("circuits")).and_then(Value::as_array);
+        let hex = |v: &Value| v.as_str().and_then(Handle::parse_hex);
+        for row in rows.into_iter().flatten().take(MAX_CIRCUITS) {
+            if let Some(h) = row.get("home").and_then(hex) {
+                w.home.insert(h);
+            }
+            for d in row.get("devices").and_then(Value::as_array).into_iter().flatten().take(MAX_DEVICES) {
+                if let Some(h) = hex(d) {
+                    w.routed.insert(h);
+                }
+            }
+            for j in row.get("joints").and_then(Value::as_array).into_iter().flatten().take(MAX_DEVICES) {
+                let (Some(a), Some(b)) = (j.get(0).and_then(hex), j.get(1).and_then(hex)) else { continue };
+                if a != b {
+                    w.line_side.entry(b).or_insert(a);
+                }
+            }
+        }
+        w
+    }
+
+    /// The wiring order the drawing's last routing stored.
+    pub(crate) fn stored(d: &Drawing) -> Wiring {
+        stored_report(d).map(|r| Wiring::of_report(&r)).unwrap_or_default()
+    }
+
+    /// The devices upstream of `h` on its circuit, the nearest first, up to the box its homerun
+    /// lands in; `None` when its place in a fed circuit isn't known (not routed, no homerun, a
+    /// broken chain).
+    pub(crate) fn upstream(&self, h: Handle) -> Option<Vec<Handle>> {
+        if !self.routed.contains(&h) {
+            return None;
+        }
+        let mut out = Vec::new();
+        let mut seen = BTreeSet::from([h]);
+        let mut at = h;
+        for _ in 0..MAX_WIRING_DEPTH {
+            if self.home.contains(&at) {
+                return Some(out);
+            }
+            let up = *self.line_side.get(&at)?;
+            if !seen.insert(up) {
+                return None;
+            }
+            out.push(up);
+            at = up;
+        }
+        None
+    }
 }
 
 /// Store each leg's cable path (where a cable runs other than the raceway) among the drawing's

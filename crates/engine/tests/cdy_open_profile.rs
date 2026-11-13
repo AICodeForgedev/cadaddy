@@ -268,3 +268,59 @@ fn print_set_on_demand_breakdown() {
     println!("| a whole-set command (load every sheet + counts) | n/a | {a_whole:.2?} |");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Changing sheets in a print set with an associative model built (Q6570): each `sheet.next`
+/// and the idle frames after it (where a model left behind its plan is built again), timed, with
+/// whether the model went behind, whether the drawing is marked modified and the model's size.
+///
+/// `PRINT_SET_CDY=<a .cdy print set with a built model> cargo test --release -p cadaddy-engine
+/// --test cdy_open_profile sheet_changes_with_a_model -- --ignored --nocapture` (`STEPS`: sheet
+/// changes, 4 by default). The file is read only: it is copied and saved again with sheet sections.
+#[test]
+#[ignore = "a measurement: run by hand (see the doc comment)"]
+fn sheet_changes_with_a_model_breakdown() {
+    let _g = serial();
+    hooks();
+    let Ok(src) = std::env::var("PRINT_SET_CDY") else {
+        println!("PRINT_SET_CDY is not set: nothing to measure");
+        return;
+    };
+    let steps = std::env::var("STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(4usize);
+    let dir = std::env::temp_dir().join(format!("cadaddy-sheetmodel-bench-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("set.cdy").to_string_lossy().into_owned();
+    {
+        let mut s = Session::new();
+        s.execute("open", &serde_json::json!({ "path": src })).unwrap();
+        s.execute("saveas", &serde_json::json!({ "path": path })).unwrap();
+    }
+    let elements = |s: &Session| s.doc().unwrap().model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).is_some()).count();
+    let state = |s: &Session| {
+        format!(
+            "behind {}, modified {}, elements {}, objects in memory {}",
+            cadaddy_engine::cmd::wallgen::model_behind(s),
+            s.state().unwrap().is_dirty(),
+            elements(s),
+            s.doc().unwrap().model.len()
+        )
+    };
+    let t = Instant::now();
+    let mut s = Session::new();
+    s.viewport_px = (1600.0, 1000.0);
+    s.sheets_on_demand = true;
+    s.finish_open(cadaddy_engine::cmd::file::read_file_on_demand(&path).unwrap()).unwrap();
+    s.open_first_sheet();
+    println!("\nopened in {:.2?}: {} sheets; {}", t.elapsed(), s.print_sheets().len(), state(&s));
+    for i in 1..=steps {
+        let t = Instant::now();
+        s.execute("sheet.next", &serde_json::json!({})).unwrap();
+        let step = t.elapsed();
+        let after_step = state(&s);
+        let t = Instant::now();
+        s.update_model_when_idle(std::time::Duration::ZERO);
+        let _ = s.park_idle_sheets();
+        println!("sheet.next #{i}: {step:.2?} ({after_step}); idle {:.2?} ({})", t.elapsed(), state(&s));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cadaddy_doc::{Drawing, EntityKind, Handle};
-use cadaddy_geom::{Mat4, Vec3};
+use cadaddy_geom::Vec3;
 use serde_json::{Value, json};
 
 use super::framing;
@@ -62,7 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new(CMD_STATUS, "Clash Status", run_status).params("{id, status: new|active|resolved, note?} → {id, status}").noundo(),
         CommandSpec::new(CMD_FIX, "Fix Clash", run_fix)
-            .params("{id, strategy?: reroute|raise|offset (default reroute), clearance_in? (1), max_move_in? (24), approve?: bool (apply the move and check again)} → {id, mover, stays, why, strategy, move: [dx,dy,dz], move_in, applied, check?: {clear, new_clashes}}"),
+            .params("{id, strategy?: reroute|raise|offset (default reroute), clearance_in? (1), max_move_in? (24), approve?: bool (apply the move, keep it, and check again), by?: user|agent (who approved; default user)} → {id, mover, stays, why, strategy, move: [dx,dy,dz], move_in, applied, pieces_moved, kept?: {kept_by: building spec|overrides|the drawing, edits: [mep.edits ids], overrides: [override ids], pieces_moved}, check?: {clear, new_clashes}}: an approved move is a model edit that persists: a spec element's (a run, a terminal, equipment) is a move edit in the spec (mep.edits; the documents' value kept beside it) every build applies again, any other built piece's an override"),
     ]
 }
 
@@ -742,12 +742,24 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
         if mover.run.is_empty() { vec![mover.handle] } else { els.iter().filter(|e| e.run == mover.run).map(|e| e.handle).take(100_000).collect() };
     out["pieces_moved"] = json!(movers.len());
     if bool_or(p, "approve", false) {
-        let m = Mat4 { m: [[1.0, 0.0, 0.0, mv.x], [0.0, 1.0, 0.0, mv.y], [0.0, 0.0, 1.0, mv.z], [0.0, 0.0, 0.0, 1.0]] };
-        for h in &movers {
-            s.doc_mut()?.modify_entity(*h, |e| {
-                e.kind.transform3(&m);
-            })?;
-        }
+        // A model edit that persists (Q6381): kept in the spec (or as overrides), so
+        // model.clashes, this check and every rebuild agree with it.
+        let by = match str_param(p, "by") {
+            None | Some("user") => "user",
+            Some("agent") => "agent",
+            Some(_) => return Err(bad(CMD_FIX, "`by` is user or agent")),
+        };
+        let reason = format!(
+            "clash {id} fixed: {how} {} {} by {}\" to clear {} {} ({why})",
+            mover.system,
+            mover.category,
+            r3(mv.len() / inch),
+            stays.system,
+            stays.category
+        );
+        let kept = super::clashkeep::keep(s, CMD_FIX, &els, &mover, &movers, mv, &reason, by)?;
+        out["pieces_moved"] = kept["pieces_moved"].clone();
+        out["kept"] = kept;
         // Check again: the pair, and the moved element against the rest.
         let d = s.doc()?;
         let els = solid_elements(d);

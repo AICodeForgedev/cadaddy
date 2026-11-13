@@ -191,6 +191,14 @@ pub(crate) fn units_per_foot(d: &Drawing) -> f64 {
 pub fn effective(e: &Entity, kind: &str, upf: f64) -> Vec<(String, Prop, bool)> {
     let store = props::read(&e.common.xdata);
     let mut out: Vec<(String, Prop, bool)> = store.iter().map(|(k, p)| (k.to_string(), p.clone(), true)).collect();
+    // A type mark a person assigned it in the type catalog (`bim.set_spec`) is theirs: it
+    // outranks the mark it was read as, never one a person set on it.
+    if let Some(mark) = cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata).map(str::trim).filter(|m| !m.is_empty())
+        && !store.get("type_mark").is_some_and(|p| p.has_value() && p.source.kind == SourceKind::User)
+    {
+        out.retain(|(k, _, _)| !k.eq_ignore_ascii_case("type_mark"));
+        out.push(("type_mark".into(), Prop::new(mark.chars().take(200).collect::<String>(), Source::user()), false));
+    }
     let mut derive = |key: &str, p: Prop| {
         if !out.iter().any(|(k, q, _)| k.eq_ignore_ascii_case(key) && q.has_value()) && p.has_value() {
             out.retain(|(k, _, _)| !k.eq_ignore_ascii_case(key));
@@ -522,6 +530,17 @@ static INDEX: crate::chunkpool::ChunkPool<ChunkElements, u64> = crate::chunkpool
 /// Let go of the kept element index (a drawing closed).
 pub(crate) fn clear_index() {
     INDEX.clear();
+}
+
+/// Whether the element index is kept (this thread's, in the unit tests).
+#[cfg(test)]
+pub(crate) fn index_held() -> bool {
+    INDEX.holds()
+}
+
+/// Let go of the kept element index of chunks no open drawing holds ([`crate::Session::release_unheld`]).
+pub(crate) fn retain_held(held: &std::collections::HashSet<usize>) {
+    INDEX.retain_held(held);
 }
 
 /// The model's chunks with their elements (draw order), and how many chunks were worked out.

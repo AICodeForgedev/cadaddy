@@ -174,6 +174,7 @@ pub mod mep;
 pub mod mepatoms;
 pub mod mepedit;
 pub mod mepqty;
+mod merge;
 mod mleader_content;
 pub(crate) mod mleader_edit;
 mod models3d;
@@ -196,6 +197,7 @@ pub mod wiretable;
 pub(crate) use perceive::geometry::TraceCache as RoomTraceCache;
 pub(crate) mod elemtrade;
 pub(crate) mod fillin;
+mod labelspot;
 mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
@@ -266,6 +268,7 @@ pub mod validate_value;
 pub mod valueeng;
 pub mod verify;
 pub mod walkpub;
+pub(crate) mod wallcheck;
 pub mod wallgen;
 pub mod walllayout;
 pub(crate) mod walltypes;
@@ -1148,6 +1151,15 @@ pub(crate) fn bool_or(p: &Value, key: &str, default: bool) -> bool {
 }
 pub(crate) fn str_param<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
     p.get(key).and_then(Value::as_str)
+}
+/// A parameter documented `number or name` (a room): its text, or a JSON number as written
+/// (`101` and `"101"` are the same room). `None` when missing, blank or not a single value.
+pub(crate) fn number_or_name_param(p: &Value, key: &str) -> Option<String> {
+    match p.get(key)? {
+        Value::String(s) => Some(s.trim()).filter(|s| !s.is_empty()).map(str::to_string),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
 }
 pub fn point_value(v: &Value) -> Option<Vec2> {
     if let Some(a) = v.as_array() {

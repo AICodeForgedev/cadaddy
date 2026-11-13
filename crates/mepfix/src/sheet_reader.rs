@@ -234,6 +234,12 @@ fn sheet_number_in_title_block(d: &Drawing) -> Option<String> {
         .map(|(v, _, _, _)| v)
 }
 
+/// A sheet's scale note as printed and its paper inches per building foot: the title block's
+/// `SCALE:` line, else the most common scale note on the sheet (what classify reads).
+pub fn scale_note(d: &Drawing) -> Option<(String, f64)> {
+    detect_scale_text(d).filter(|(_, v)| v.is_finite() && *v > 0.0)
+}
+
 fn detect_scale_text(d: &Drawing) -> Option<(String, f64)> {
     for e in d.model.iter() {
         let on_title = e.common.layer.eq_ignore_ascii_case("TITLE") || e.common.layer.eq_ignore_ascii_case("TEXT");
@@ -1857,8 +1863,14 @@ const MAX_DRAWN_SEGMENTS: usize = 200_000;
 /// a gray between black and white; nothing is read from the layer's name, so a print's pen
 /// layers (`PDF-GRAY50-0.18`) and a drawing's own (`ARCH`, colour 8) say the same.
 pub fn screened(d: &Drawing, e: &cadaddy_doc::Entity) -> bool {
-    let layer = d.layers.iter().find(|l| l.name.eq_ignore_ascii_case(&e.common.layer)).map_or(cadaddy_color::Color::Index(7), |l| l.color);
-    let c = e.common.color.resolve(layer, cadaddy_color::Color::Index(7));
+    screened_pen(d, &e.common.layer, e.common.color)
+}
+
+/// [`screened`] for a pen given by its layer and colour (a block reference's attribute
+/// lettering, which may carry a colour of its own).
+pub fn screened_pen(d: &Drawing, layer: &str, color: cadaddy_color::Color) -> bool {
+    let layer = d.layers.iter().find(|l| l.name.eq_ignore_ascii_case(layer)).map_or(cadaddy_color::Color::Index(7), |l| l.color);
+    let c = color.resolve(layer, cadaddy_color::Color::Index(7));
     let (lo, hi) = (c.0.min(c.1).min(c.2), c.0.max(c.1).max(c.2));
     hi - lo <= 16 && (40..=230).contains(&lo)
 }

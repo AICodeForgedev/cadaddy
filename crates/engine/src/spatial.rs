@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use cadaddy_doc::{Block, DimStyle, Drawing, Entity, EntityKind, EntityStore, Space, entity_bounds};
+use cadaddy_doc::{Block, BlockBoundsCache, DimStyle, Drawing, Entity, EntityKind, EntityStore, Space, entity_bounds_cached};
 use cadaddy_geom::Bounds2;
 use rstar::primitives::{GeomWithData, Rectangle};
 use rstar::{AABB, RTree};
@@ -44,6 +44,8 @@ struct ChunkIx {
 impl ChunkIx {
     fn build(d: &Drawing, key: usize, items: &[Arc<Entity>]) -> ChunkIx {
         let mut infinite = Vec::new();
+        // One block-bounds cache for the chunk: references to the same block measure it once.
+        let mut cache = BlockBoundsCache::default();
         let bounds = items
             .iter()
             .enumerate()
@@ -51,7 +53,7 @@ impl ChunkIx {
                 if matches!(e.kind, EntityKind::XLine(_) | EntityKind::Ray(_)) {
                     infinite.push(u32::try_from(i).unwrap_or(u32::MAX));
                 }
-                entity_bounds(d, e, 0)
+                entity_bounds_cached(d, e, 0, &mut cache)
             })
             .collect();
         let serial = NEXT_SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -200,7 +202,7 @@ impl SpatialIndex {
         let (c, l) = self.locate(i)?;
         c.ents.get(l)
     }
-    /// The bounds of the entity at draw index `i` (as [`entity_bounds`] computes them).
+    /// The bounds of the entity at draw index `i` (as [`cadaddy_doc::entity_bounds`] computes them).
     pub fn bounds(&self, i: u32) -> Bounds2 {
         self.locate(i).and_then(|(c, l)| c.bounds.get(l).copied()).unwrap_or(Bounds2::EMPTY)
     }
@@ -263,9 +265,24 @@ pub fn index_store(d: &Drawing, store: &EntityStore) -> Arc<SpatialIndex> {
     ix
 }
 
+/// Whether an index of `d`'s `space` as it is now is kept.
+#[cfg(test)]
+pub(crate) fn is_cached(d: &Drawing, space: &Space) -> bool {
+    d.space(space).is_some_and(|store| CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|ix| ix.matches(d, store)))
+}
+
 /// Drop every cached index (frees memory held by closed drawings).
 pub fn clear_cache() {
     CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+}
+
+/// Drop the cached indexes of stores no open drawing has any more: `held` are the model and
+/// layout stores of every drawing state open ([`crate::Session::release_unheld`]). An index
+/// holds its store's objects, so one built over a state since gone kept every object of it:
+/// after a print set's whole-set load had gone out of memory again, the cache still held the
+/// whole set, once for each of its last few states (Q6571). The indexes of what is held stay.
+pub(crate) fn retain_held(held: &[&EntityStore]) {
+    CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|ix| held.iter().any(|s| ix.store.same_as(s)));
 }
 
 #[cfg(test)]

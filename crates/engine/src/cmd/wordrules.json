@@ -1,6 +1,207 @@
 {
  "about": "Building knowledge as rule data (Q6210): the words the readers tell a room, a sheet, a unit, equipment and devices by. Shapes and job additions: crates/mepfix/src/wordrules.rs.",
  "lists": {
+  "submittals.section_category": {
+   "source": "MasterFormat: the kind of product a submittal's CSI section holds (Q6588: a submittal goes only on the elements of its own category, its type marks being unique only within a category); the first pair whose section number starts the submittal's decides, so the longer numbers come first",
+   "pairs": [
+    [
+     "26 51",
+     "luminaire"
+    ],
+    [
+     "26 52",
+     "luminaire"
+    ],
+    [
+     "26 55",
+     "luminaire"
+    ],
+    [
+     "26 56",
+     "luminaire"
+    ],
+    [
+     "26 24",
+     "gear"
+    ],
+    [
+     "26 22",
+     "gear"
+    ],
+    [
+     "26 28",
+     "gear"
+    ],
+    [
+     "26 36",
+     "gear"
+    ],
+    [
+     "26 27",
+     "device"
+    ],
+    [
+     "22 40",
+     "plumbing"
+    ],
+    [
+     "22 41",
+     "plumbing"
+    ],
+    [
+     "22 42",
+     "plumbing"
+    ],
+    [
+     "22 47",
+     "plumbing"
+    ],
+    [
+     "22 30",
+     "equipment"
+    ],
+    [
+     "22 33",
+     "equipment"
+    ],
+    [
+     "22 34",
+     "equipment"
+    ],
+    [
+     "23",
+     "equipment"
+    ]
+   ]
+  },
+  "submittals.product_category": {
+   "source": "trade practice: the kind of product a cut sheet is, by the words its pages use of it (Q6588), where its submittal names no CSI section; the first row that matches decides (a whole word or phrase of its pages); a luminaire is told by `fixtures.lighting_words` after these",
+   "rules": [
+    {
+     "value": "gear",
+     "any": [
+      "PANELBOARD",
+      "PANELBOARDS",
+      "SWITCHBOARD",
+      "SWITCHBOARDS",
+      "SWITCHGEAR",
+      "LOAD CENTER",
+      "LOAD CENTERS",
+      "SAFETY SWITCH",
+      "SAFETY SWITCHES",
+      "MAIN LUGS",
+      "DRY TYPE TRANSFORMER",
+      "TRANSFER SWITCH"
+     ],
+     "none": [
+      "LUMEN",
+      "LUMENS",
+      "LUMINAIRE",
+      "CCT",
+      "PHOTOMETRIC",
+      "PHOTOMETRY"
+     ]
+    }
+   ]
+  },
+  "submittals.element_category": {
+   "source": "trade practice: the kind of equipment an equipment element is, by the words of its kind, part, title, type and description (Q6588): electrical gear takes a gear submittal's product, other equipment an equipment submittal's; the first row that matches decides, no row matching is `equipment`",
+   "rules": [
+    {
+     "value": "gear",
+     "any": [
+      "PANEL",
+      "PANELBOARD",
+      "SWITCHBOARD",
+      "SWITCHGEAR",
+      "SWBD",
+      "SWGR",
+      "LOAD CENTER",
+      "DISCONNECT",
+      "SAFETY SWITCH",
+      "TRANSFORMER",
+      "XFMR",
+      "MCC",
+      "MOTOR CONTROL CENTER",
+      "TRANSFER SWITCH",
+      "METER CENTER",
+      "DISTRIBUTION BOARD"
+     ],
+     "none": [
+      "FIRE ALARM",
+      "FACP",
+      "ANNUNCIATOR",
+      "CONTROL PANEL",
+      "HEAT PUMP"
+     ]
+    }
+   ]
+  },
+  "submittals.category_aliases": {
+   "source": "Q6588: the categories a type's reading gives it (a submittal, a schedule, a spec section) said as the submittal categories (luminaire, gear, equipment, plumbing, device); a category not here says nothing of which elements its product goes on",
+   "pairs": [
+    [
+     "luminaire",
+     "luminaire"
+    ],
+    [
+     "light_fixture",
+     "luminaire"
+    ],
+    [
+     "lighting",
+     "luminaire"
+    ],
+    [
+     "gear",
+     "gear"
+    ],
+    [
+     "switchboard",
+     "gear"
+    ],
+    [
+     "panelboard",
+     "gear"
+    ],
+    [
+     "panel",
+     "gear"
+    ],
+    [
+     "equipment",
+     "equipment"
+    ],
+    [
+     "hvac",
+     "equipment"
+    ],
+    [
+     "mechanical",
+     "equipment"
+    ],
+    [
+     "plumbing",
+     "plumbing"
+    ],
+    [
+     "plumbing_fixture",
+     "plumbing"
+    ],
+    [
+     "device",
+     "device"
+    ],
+    [
+     "receptacle",
+     "device"
+    ],
+    [
+     "wiring_device",
+     "device"
+    ]
+   ]
+  },
   "asbuilt.kind_words": {
    "source": "(trade practice: the words a field markup names an element by, and its kind; moved from asbuilt.rs `NAMES`)",
    "pairs": [
@@ -1700,7 +1901,7 @@
    ]
   },
   "equipment.names": {
-   "source": "Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`). (trade practice: words of an equipment label; moved from geometry.rs `EQUIPMENT_WORDS`)",
+   "source": "Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`). (trade practice: words of an equipment label; moved from geometry.rs `EQUIPMENT_WORDS`; COMPRESSOR, CONDENSER: the refrigeration units a note points at, plural too, Q6365)",
    "words": [
     "PNLBD",
     "PNL",
@@ -1741,7 +1942,9 @@
     "PTAC",
     "EWC",
     "WH",
-    "EF"
+    "EF",
+    "COMPRESSOR",
+    "CONDENSER"
    ]
   },
   "equipment.off_floor_mounting_words": {

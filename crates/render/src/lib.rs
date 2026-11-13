@@ -186,6 +186,10 @@ pub struct DisplayList {
     pub sheet: Option<Sheet>,
     /// Block contents expanded while building (see [`MAX_BLOCK_EXPANSION`]).
     pub expanded: usize,
+    /// The expansion budget was spent: block contents past it are not in the list. The screen,
+    /// plots and exports draw what is here; the CLI and the control channel report this, so an
+    /// output that leaves contents out is never silent.
+    pub truncated: bool,
     /// Plot style end, join and fill style per primitive (parallel to `prims`; missing entries
     /// are "use object"), turned into geometry by [`pen::apply`].
     pub pens: Vec<Pen>,
@@ -316,6 +320,10 @@ pub struct Options {
     pub min_dash: f64,
     /// Draw text (off for very coarse previews).
     pub text: bool,
+    /// Draw lines with their linetypes. Off, every line is drawn whole and continuous, as picking
+    /// sees it: a dashed line is hit across its gaps, and a small pattern on a long line makes
+    /// millions of dashes.
+    pub linetypes: bool,
     /// Highlighted (selected) handles are not special here; the canvas overlays them.
     pub fill: bool,
     pub lineweights: bool,
@@ -372,6 +380,7 @@ impl Default for Options {
             tolerance: 0.001,
             min_dash: 0.0,
             text: true,
+            linetypes: true,
             fill: true,
             lineweights: false,
             view_height: 0.0,
@@ -729,10 +738,14 @@ impl Builder<'_> {
     /// Take one unit of the block-expansion budget; false once it is spent.
     fn expand(&mut self) -> bool {
         self.list.expanded = self.list.expanded.saturating_add(1);
-        match self.shared_budget {
+        let ok = match self.shared_budget {
             Some(spent) => spent.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < MAX_BLOCK_EXPANSION,
             None => self.list.expanded <= MAX_BLOCK_EXPANSION,
+        };
+        if !ok {
+            self.list.truncated = true;
         }
+        ok
     }
 }
 
@@ -903,6 +916,7 @@ fn append(dst: &mut DisplayList, src: DisplayList) {
     dst.pens.extend(src.pens);
     dst.bounds = dst.bounds.union(&src.bounds);
     dst.expanded = dst.expanded.saturating_add(src.expanded);
+    dst.truncated |= src.truncated;
 }
 
 /// The plot style table a build draws with: the one in `opts`, else (on screen) the layout's
@@ -1131,6 +1145,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
     // The contents are in paper units now: draw their pens before clipping.
     pen::apply(&mut sub.list, b.list.sheet.map_or_else(|| paper::paper_unit_mm(d), |s| s.unit_mm));
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
+    b.list.truncated |= sub.list.truncated;
     append_clipped(&mut b.list, &sub.list, clip);
 }
 
@@ -1565,7 +1580,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         }
     }
     // Stroke a polyline with the entity's linetype.
-    let stroke = |b: &mut Builder, pts: &[Vec2]| match &lt {
+    let stroke = |b: &mut Builder, pts: &[Vec2]| match lt.as_ref().filter(|_| b.opts.linetypes) {
         Some(lt) => {
             let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
             for dash in linetype::apply(pts, lt, ltscale, min) {
@@ -1691,7 +1706,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 // the list serves a whole band of zooms. Plots and exports draw the band alone, and
                 // a transparent band gets none (its alpha would add up along the centre).
                 let hairline = !b.plotting && b.opts.min_dash > 0.0 && b.transparency == 0;
-                match &lt {
+                match lt.as_ref().filter(|_| b.opts.linetypes) {
                     // Dashed: each dash a filled piece of the band; dots a line across it.
                     Some(lt) => {
                         let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
@@ -1724,7 +1739,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         }
         EntityKind::LwPolyline(p) => {
             let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
-            if p.plinegen || lt.is_none() {
+            if !b.opts.linetypes || p.plinegen || lt.is_none() {
                 stroke(b, &pl.tessellate(tol));
             } else {
                 for s in pl.segments() {
@@ -2162,7 +2177,7 @@ pub fn dimension_in(d: &Drawing, dm: &cadaddy_doc::Dimension) -> DimGeometry {
 
 /// Draw a polyline with a linetype (None: continuous).
 fn stroke_with(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, lt: Option<&cadaddy_doc::Linetype>, ltscale: f64, pts: &[Vec2]) {
-    match lt {
+    match lt.filter(|_| b.opts.linetypes) {
         Some(lt) => {
             let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
             for dash in linetype::apply(pts, lt, ltscale, min) {
@@ -2418,6 +2433,7 @@ fn underlay(b: &mut Builder, ctx: &Ctx, u: &cadaddy_doc::Underlay, rgb: Ink, lw:
         entity(&mut part, &sub, pe);
     }
     b.list.expanded = part.list.expanded;
+    b.list.truncated |= part.list.truncated;
     part.list.texts.clear();
     let fade = u.fade.min(80);
     for p in &mut part.list.prims {
@@ -2530,12 +2546,14 @@ fn insert_contents(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::In
                 sub.xf = Mat3::translate(p.project(cadaddy_geom::Vec3::new(0.0, 0.0, ins.insert.z))).then_before(sub.xf);
             }
             for be in blk.entities.iter() {
+                // Every visit is charged, drawn or not, so a block of definitions can't make the
+                // copies loop free.
+                if !b.expand() {
+                    break 'copies;
+                }
                 // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
                 if matches!(be.kind, EntityKind::AttDef(_)) || depth.is_some_and(|c| c.beyond_depth(&be.kind)) {
                     continue;
-                }
-                if !b.expand() {
-                    break 'copies;
                 }
                 entity(b, &sub, be);
             }
@@ -2572,6 +2590,7 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
                 part.list.expanded = b.list.expanded;
                 insert_contents(&mut part, ctx, e, ins, blk);
                 b.list.expanded = part.list.expanded;
+                b.list.truncated |= part.list.truncated;
                 // Plot text entries point at primitives by index; the clipped copies are new ones.
                 part.list.texts.clear();
                 append_clipped(&mut b.list, &part.list, &Clip::Poly(&poly));
@@ -2615,6 +2634,17 @@ fn attributes(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert,
         // The reference's transparency; each attribute draws with its own.
         let reference = b.transparency;
         let mut vals = field_values(ctx.d, e.handle);
+        // The block's first definition per tag (without case), built once for all the attributes.
+        let mut defs: std::collections::HashMap<String, &Entity> = std::collections::HashMap::new();
+        if !ins.attribs.is_empty()
+            && let Some(blk) = ctx.d.block(&ins.block)
+        {
+            for be in blk.entities.iter() {
+                if let EntityKind::AttDef(d) = &be.kind {
+                    defs.entry(d.tag.to_ascii_lowercase()).or_insert(be.as_ref());
+                }
+            }
+        }
         for a in &ins.attribs {
             // Field values are counted over every attribute, shown or not.
             let with = with_fields(&a.text.value, &mut vals, false).map(|value| {
@@ -2631,7 +2661,7 @@ fn attributes(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert,
             // Properties of the attribute's definition (as AutoCAD copies them to the attribute
             // on insertion), except those set on the attribute itself: ByBlock = the reference's,
             // layer 0 = the reference's layer.
-            let def = ctx.d.block(&ins.block).and_then(|blk| blk.entities.iter().find(|be| attdef_tag(be, &a.tag)));
+            let def = defs.get(&a.tag.to_ascii_lowercase()).copied();
             let (ink, lw, shown, t) = match (def, a.props.is_empty()) {
                 (None, true) => (rgb, resolve(ctx, e, b.plotting).1, true, reference),
                 (def, _) => {
@@ -2693,11 +2723,6 @@ fn by_block() -> cadaddy_doc::Common {
         transparency: cadaddy_doc::Transparency::ByBlock,
         ..cadaddy_doc::Common::default()
     }
-}
-
-/// The attribute definition with tag `tag` (any case).
-fn attdef_tag(e: &Entity, tag: &str) -> bool {
-    matches!(&e.kind, EntityKind::AttDef(d) if d.tag.eq_ignore_ascii_case(tag))
 }
 
 /// The overall scale of a leader drawn with dimension style `st`: its DIMSCALE, else the

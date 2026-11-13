@@ -39,6 +39,29 @@ fn param_kinds_come_from_the_doc() {
     assert_eq!(param_kind(doc, "v"), None);
 }
 
+/// Q6375: `room?: number or name` is a choice: its first word types nothing, so neither a name
+/// nor a number is refused. `or null` only says it may be left out.
+#[test]
+fn a_spelt_out_choice_types_nothing() {
+    let doc = "{room?: number or name, name: number or expression, n?: number or null, m?: number (0 or more turns it off), k?: bool}";
+    assert_eq!(param_kind(doc, "room"), None);
+    assert_eq!(param_kind(doc, "name"), None);
+    assert_eq!(param_kind(doc, "n"), Some(ParamKind::Number));
+    assert_eq!(param_kind(doc, "m"), Some(ParamKind::Number));
+    assert_eq!(param_kind(doc, "k"), Some(ParamKind::Bool));
+    let mut seen = 0;
+    for spec in command_specs() {
+        let doc = params_doc(spec);
+        for k in documented_params(doc) {
+            if doc.contains(&format!("{k}?: number or name")) || doc.contains(&format!("{k}: number or name")) {
+                seen += 1;
+                assert_eq!(param_kind(doc, k), None, "{} `{k}` takes a number or a name", spec.id);
+            }
+        }
+    }
+    assert!(seen >= 6, "the commands that take a room by its number or name: {seen}");
+}
+
 #[test]
 fn an_agent_gets_the_wrong_type_named() {
     let mut s = Session::new();

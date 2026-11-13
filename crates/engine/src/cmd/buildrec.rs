@@ -235,6 +235,27 @@ fn write(s: &mut Session, rec: &BuildRecord) {
     }
 }
 
+/// Whether the drawing's model is built from its stored spec as it stands (its record's hashes
+/// are the spec's): what [`spec_kept_in_model`] needs before a command edits both.
+pub(crate) fn spec_in_sync(d: &Drawing) -> bool {
+    let (Some(rec), Some(sp)) = (read(d), stored(d)) else { return false };
+    let h = spec_hashes(&sp);
+    rec.spec == h.parts && rec.levels == h.levels && rec.exterior == h.exterior && rec.provenance == h.provenance
+}
+
+/// A command changed the spec and made the same change to the built model itself (an approved
+/// clash fix moves the pieces and keeps the move as a spec edit, Q6381): the record takes the
+/// spec as it is now as built, so the next `model.build` keeps the model (the command stays a
+/// recorded step) and a rebuild lays it out the same. Only when [`spec_in_sync`] held before
+/// the edit: a spec change no build has made yet still rebuilds.
+pub(crate) fn spec_kept_in_model(s: &mut Session) {
+    let Ok(d) = s.doc() else { return };
+    let (Some(mut rec), Some(sp)) = (read(d), stored(d)) else { return };
+    let h = spec_hashes(&sp);
+    (rec.spec, rec.levels, rec.exterior, rec.provenance) = (h.parts, h.levels, h.exterior, h.provenance);
+    write(s, &rec);
+}
+
 impl BuildRecord {
     /// A record of the build just made from `sp` with `switches`.
     pub(crate) fn new(d: &Drawing, sp: &BuildingSpec, switches: BTreeMap<String, Value>) -> Self {

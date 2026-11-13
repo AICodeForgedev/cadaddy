@@ -573,10 +573,8 @@ pub(crate) fn scope_areas(
             (json!({"scope": "level", "level": name}), a)
         }
         "room" => {
-            let r = str_param(p, "room")
-                .map(str::trim)
-                .filter(|r| !r.is_empty())
-                .ok_or_else(|| bad(cmd, "scope room needs `room` (its number or name)"))?;
+            let r = number_or_name_param(p, "room").ok_or_else(|| bad(cmd, "scope room needs `room` (its number or name)"))?;
+            let r = r.as_str();
             // On one level when the call names it (a number may repeat on another floor).
             let level = match str_param(p, "level").map(str::trim).filter(|l| !l.is_empty()) {
                 Some(l) => Some(sp.level(l).map(|x| x.name.clone()).ok_or_else(|| bad(cmd, format!("there is no level named {}", cut(l, 40))))?),

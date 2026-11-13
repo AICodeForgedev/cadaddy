@@ -436,5 +436,168 @@ fn the_building_models_reads_need_no_sheet_and_answer_the_same() {
     };
     assert_eq!(view(&mut o), view(&mut s), "the same BIM view with the sheets out of memory");
     assert!(o.has_parked_sheets(), "and nothing was loaded for it");
+    // What palettes and dialogs read on their own while open: the same answer (or the same
+    // refusal) from what is in memory, and no sheet loaded for it.
+    let reads: [(&str, serde_json::Value); 28] = [
+        ("undohistory", json!({})),
+        ("commandhistory", json!({})),
+        ("activity", json!({})),
+        ("review.log", json!({})),
+        ("actions", json!({})),
+        ("cal", json!({ "expression": "2*3" })),
+        ("bspec.get", json!({})),
+        ("levels.list", json!({})),
+        ("tags.list", json!({})),
+        ("project.rules.list", json!({})),
+        ("rfi.list", json!({})),
+        ("job.status", json!({})),
+        ("job.worklist", json!({})),
+        ("job.rules", json!({})),
+        ("job.report", json!({})),
+        ("part.list", json!({})),
+        ("parameters", json!({})),
+        ("standards", json!({})),
+        ("bcf.list", json!({})),
+        ("validate.areas", json!({})),
+        ("validate.rules", json!({})),
+        ("model.clashes", json!({})),
+        ("markups", json!({})),
+        ("ifc.tree", json!({})),
+        ("adcenter", json!({ "path": "no-such-file.dwg" })),
+        ("publishlist", json!({ "path": "no-such-list.json" })),
+        ("qselect.info", json!({})),
+        ("filter", json!({ "list": true })),
+    ];
+    for (c, p) in &reads {
+        assert!(!o.needs_whole_set(c), "{c} loads the whole set");
+        let ask = |s: &mut Session| format!("{:?}", s.execute(c, p).map_err(|e| e.to_string()));
+        let (whole, parked) = (ask(&mut s), ask(&mut o));
+        // Quick Select and the history lists answer for what the session holds and did.
+        if !["qselect.info", "undohistory", "commandhistory", "activity"].contains(c) {
+            assert_eq!(parked, whole, "{c} with the sheets out of memory");
+        }
+        assert!(o.has_parked_sheets(), "{c} loaded sheets (it ran {:?})", o.whole_set_loads.1);
+    }
+    assert_eq!(o.whole_set_loads.0, 0, "none of it loaded the set: {:?}", o.whole_set_loads.1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The built elements of the active drawing, each as the very object it is.
+fn elements(s: &Session) -> std::collections::BTreeMap<u64, Arc<cadaddy_engine::doc::Entity>> {
+    let d = s.doc().unwrap();
+    d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).is_some()).map(|e| (e.handle.0, Arc::clone(e))).collect()
+}
+
+/// A made-up print set (`more` adds to it) with an associative model built from its wall lines,
+/// saved to `dir`: the file.
+fn built_set(dir: &std::path::Path, more: impl FnOnce(&mut cadaddy_engine::doc::Drawing)) -> String {
+    hooks();
+    let p = dir.join("set.cdy").to_string_lossy().into_owned();
+    let mut d = cadaddy_engine::sample::job_print_set(5, 160);
+    more(&mut d);
+    let mut s = Session::new();
+    s.open_drawing(d, "Sample Set", None);
+    let rules = json!({
+        "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "kind": "wall"}]
+    });
+    s.execute("wallgen", &json!({ "rules": rules, "auto": true })).unwrap();
+    assert!(!elements(&s).is_empty(), "the sample's wall lines build walls");
+    s.execute("saveas", &json!({ "path": p })).unwrap();
+    p
+}
+
+/// A print set larger than the plan objects a model's record reads (the first 200,000 objects,
+/// in the drawing's order), opened on its first sheet: wall lines on that sheet past them are
+/// not in the record, and are no edit of the plan either (Q6570). The model isn't behind.
+#[test]
+fn a_large_set_opened_on_one_sheet_follows_the_plan_its_record_read() {
+    use cadaddy_engine::doc::{EntityKind, Line, Point, Space, geom::Vec3};
+    let dir = folder("sheets-model-large");
+    let p = built_set(&dir, |d| {
+        let agent: serde_json::Value = serde_json::from_str(&d.agent.as_ref().unwrap().to_string()).unwrap();
+        let rect = |i: usize| {
+            let r: Vec<f64> = agent["guided_job"]["sheet_regions"][i]["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+            (r[0], r[1])
+        };
+        // Annotation on the second sheet first, then more wall lines on the first.
+        let (x0, y0) = rect(1);
+        for i in 0..200_000u32 {
+            let at = Vec3::new(x0 + 50.0 + f64::from(i % 400) * 2.0, y0 + 50.0 + f64::from(i / 400) * 1.5, 0.0);
+            d.add(&Space::Model, Default::default(), EntityKind::Point(Point { p: at, angle: 0.0 })).unwrap();
+        }
+        let (x0, y0) = rect(0);
+        for i in 0..4 {
+            let y = y0 + 300.0 + f64::from(i) * 120.0;
+            for off in [0.0, 6.0] {
+                let h = d
+                    .add(
+                        &Space::Model,
+                        Default::default(),
+                        EntityKind::Line(Line { a: Vec3::new(x0 + 200.0, y + off, 0.0), b: Vec3::new(x0 + 500.0, y + off, 0.0) }),
+                    )
+                    .unwrap();
+                d.model.modify(h, |e| e.common.layer = "A-WALL".into());
+            }
+        }
+    });
+    let s = opened_on_demand(&p);
+    assert!(s.has_parked_sheets());
+    assert!(!cadaddy_engine::cmd::wallgen::model_behind(&s), "opened on one sheet: the model follows the plan it was built from");
+    assert!(!s.state().unwrap().is_dirty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A print set with an associative model built from its wall lines, saved, then opened as the
+/// interface opens it (sheets on demand, on its first sheet): changing sheets (a command that
+/// loads one sheet into memory and puts another out) is no edit of the plan (Q6570). The model
+/// isn't marked behind, isn't built again when the interface goes idle, and the drawing stays
+/// unmodified; the plan it follows is the whole set, whatever part of it is in memory.
+#[test]
+fn changing_sheets_never_rebuilds_an_associative_model_or_modifies_the_drawing() {
+    let dir = folder("sheets-model");
+    let p = built_set(&dir, |_| {});
+    let mut s = opened_on_demand(&p);
+    assert!(s.has_parked_sheets(), "the other sheets are out of memory");
+    let built = elements(&s);
+    let fresh = |s: &Session| (cadaddy_engine::cmd::wallgen::model_behind(s), s.state().unwrap().is_dirty());
+    assert_eq!(fresh(&s), (false, false), "opened on one sheet: the model follows the whole set's plan, as saved");
+    for step in 1..=4 {
+        let by = if step == 3 { "previous" } else { "next" };
+        s.execute("sheet.open", &json!({ "step": by })).unwrap();
+        assert_eq!(fresh(&s), (false, false), "sheet change {step}: not behind, not modified");
+        // The interface's idle frames: nothing to build.
+        for _ in 0..3 {
+            assert_eq!(s.update_model_when_idle(std::time::Duration::ZERO), None);
+        }
+        assert!(s.park_idle_sheets().is_ok());
+        let now = elements(&s);
+        assert_eq!(now.len(), built.len(), "sheet change {step}: the same elements");
+        assert!(built.iter().all(|(h, e)| now.get(h).is_some_and(|n| Arc::ptr_eq(n, e))), "sheet change {step}: the very same objects");
+        assert_eq!(fresh(&s), (false, false), "sheet change {step}, idle: not behind, not modified");
+    }
+    // A plan edit on the open sheet still leaves the model behind, and it is built from the
+    // whole set's plan: the elements on the sheets out of memory stay.
+    let wall = {
+        let d = s.doc().unwrap();
+        let (_, sh) = s.active_sheet().unwrap();
+        d.model
+            .iter()
+            .find(|e| {
+                e.common.layer == "A-WALL"
+                    && cadaddy_engine::cmd::wallgen::made_as(e).is_none()
+                    && cadaddy_engine::doc::entity_bounds(d, e, 0).intersects(&sh.rect)
+            })
+            .map(|e| e.handle)
+            .expect("a wall line on the open sheet")
+    };
+    s.execute("move", &json!({ "handles": [wall.hex()], "from": [0, 0], "to": [3, 0] })).unwrap();
+    assert!(cadaddy_engine::cmd::wallgen::model_behind(&s), "a plan edit leaves the model behind");
+    assert_eq!(s.update_model_when_idle(std::time::Duration::ZERO), None);
+    assert!(!cadaddy_engine::cmd::wallgen::model_behind(&s));
+    let after = elements(&s);
+    let kept = built.keys().filter(|h| after.contains_key(h)).count();
+    assert!(kept * 10 >= built.len() * 8, "rebuilt from the whole set: {kept} of {} elements kept, {} now", built.len(), after.len());
     let _ = std::fs::remove_dir_all(&dir);
 }

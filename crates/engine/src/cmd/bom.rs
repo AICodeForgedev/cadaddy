@@ -108,7 +108,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run).long()
             .alias(&["bom"])
             .params(
-                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements (the object handles of what it counts), element_count, sources? (the ids it was counted by that are not handles: a spec device, a run, a build name), elements_unresolved? (of those, how many the model has no object for), measures?: {pieces, length_ft, area_sf, volume_cy, weight_lb} (a trade piece line's count and measures beside its quantity)}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements (the object handles of what it counts), element_count, sources? (the ids it was counted by that are not handles: a spec device, a run, a build name), elements_unresolved? (of those, how many the model has no object for), measures?: {pieces, length_ft, area_sf, volume_cy, weight_lb} (a trade piece line's count and measures beside its quantity)}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), field_work?: [{trade, category, kind, item, size, unit, net, status: field work, level, circuit, made, elements, rule}] (the model's field bends and offsets: the crew's labor, nothing bought, never on a line), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -179,6 +179,10 @@ impl Measures {
         Value::Object(o)
     }
 }
+
+/// The status of the model's field bends and offsets (Q6376): counted pieces of the crew's
+/// work, nothing bought.
+pub(crate) const FIELD_WORK: &str = "field work";
 
 /// A line's provenance by name.
 fn made_name(m: &str) -> &str {
@@ -333,25 +337,51 @@ pub(crate) fn element_product(e: &cadaddy_doc::Entity) -> Product {
 /// type `A` is not luminaire type `A`).
 const NOT_PRODUCT_TYPES: &[&str] = &["door", "window", "wall", "partition", "room", "ceiling", "floor", "finish", "hardware", "roof", "slab"];
 
-/// A type mark's product in the drawing's type catalog (the submittals' products, a schedule's).
-pub(crate) fn catalog_product(d: &cadaddy_doc::Drawing, mark: &str) -> Option<Product> {
-    use cadaddy_doc::bimspec::keys;
+/// A type mark's device, fixture or equipment type in the drawing's type catalog.
+fn product_type<'a>(d: &'a cadaddy_doc::Drawing, mark: &str) -> Option<&'a cadaddy_doc::bimspec::BimType> {
     let mark = mark.trim();
     if mark.is_empty() {
         return None;
     }
-    let t = d.bim_types.types.iter().filter(|t| t.mark.eq_ignore_ascii_case(mark)).find(|t| {
+    d.bim_types.types.iter().filter(|t| t.mark.eq_ignore_ascii_case(mark)).find(|t| {
         let c = t.category.to_ascii_lowercase();
         !NOT_PRODUCT_TYPES.iter().any(|w| c.contains(w))
-    })?;
-    let f = |k: &str| t.fields.get(k).map(|f| f.value.trim().chars().take(200).collect::<String>()).unwrap_or_default();
-    let src =
-        t.fields.get(keys::CATALOG_NUMBER).or_else(|| t.fields.get(keys::MANUFACTURER)).map(|f| f.source.trim().to_string()).unwrap_or_default();
-    let dimming = f(keys::DIMMING);
+    })
+}
+
+/// A catalog type's field by the first of its spellings it has with a value (`catalogNumber`,
+/// as a person may type it `catalog_number`).
+fn type_field<'a>(t: &'a cadaddy_doc::bimspec::BimType, keys: &[&str]) -> Option<&'a cadaddy_doc::bimspec::SpecField> {
+    keys.iter().find_map(|k| t.fields.get(*k).filter(|f| !f.value.trim().is_empty()))
+}
+
+const CATALOG_KEYS: &[&str] = &[cadaddy_doc::bimspec::keys::CATALOG_NUMBER, "catalog_number", "catalog"];
+
+/// Whether a catalog field is a person's: given with no document behind it (`bim.set_type`
+/// without a source), or said to be the user's. The readers and importers always cite theirs.
+fn given_by_person(f: &cadaddy_doc::bimspec::SpecField) -> bool {
+    let s = f.source.trim();
+    s.is_empty() || s.eq_ignore_ascii_case("user")
+}
+
+/// What a type mark's catalog type calls its devices (its description), and whether a person
+/// gave it ([`given_by_person`]).
+fn catalog_description(d: &cadaddy_doc::Drawing, mark: &str) -> Option<(String, bool)> {
+    let f = type_field(product_type(d, mark)?, &[cadaddy_doc::bimspec::keys::DESCRIPTION])?;
+    Some((f.value.trim().chars().take(200).collect(), given_by_person(f)))
+}
+
+/// A type mark's product in the drawing's type catalog (the submittals' products, a schedule's).
+pub(crate) fn catalog_product(d: &cadaddy_doc::Drawing, mark: &str) -> Option<Product> {
+    use cadaddy_doc::bimspec::keys;
+    let t = product_type(d, mark)?;
+    let f = |ks: &[&str]| type_field(t, ks).map(|f| f.value.trim().chars().take(200).collect::<String>()).unwrap_or_default();
+    let src = type_field(t, CATALOG_KEYS).or_else(|| type_field(t, &[keys::MANUFACTURER])).map(|f| f.source.trim().to_string()).unwrap_or_default();
+    let dimming = f(&[keys::DIMMING]);
     Some(Product {
         type_mark: t.mark.clone(),
-        manufacturer: f(keys::MANUFACTURER),
-        catalog: f(keys::CATALOG_NUMBER),
+        manufacturer: f(&[keys::MANUFACTURER]),
+        catalog: f(CATALOG_KEYS),
         source: if src.is_empty() { "type catalog".into() } else { format!("type catalog: {}", src.chars().take(200).collect::<String>()) },
         dimming: if dimming.is_empty() { dimming } else { dimming_word(&dimming) },
     })
@@ -413,13 +443,16 @@ fn built_devices(d: &cadaddy_doc::Drawing) -> Option<BTreeMap<String, Vec<BuiltD
                 .map(|p| p.text().trim().chars().take(200).collect::<String>())
                 .filter(|v| !v.is_empty())
         };
+        // A mark a person assigned it in the type catalog (`bim.set_spec`) is theirs too.
+        let assigned =
+            cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata).map(|m| m.trim().chars().take(200).collect::<String>()).filter(|m| !m.is_empty());
         let v = out.entry(id.to_string()).or_default();
         if v.len() < MAX_LINE_ELEMENTS {
             v.push(BuiltDevice {
                 handle: e.handle.hex(),
                 level: super::bspec::made_level(e).map(|l| l.trim().to_string()).unwrap_or_default(),
                 product: element_product(e),
-                type_mark: by_person("type_mark"),
+                type_mark: by_person("type_mark").or(assigned),
                 device_type: by_person("type"),
                 circuit: by_person("circuit"),
             });
@@ -580,7 +613,7 @@ fn large_conductor(size: &str) -> bool {
     size.contains('/') || size.parse::<u32>().is_ok_and(|n| n <= 4)
 }
 
-fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Result<()> {
+fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>, field: &mut Vec<Value>) -> Result<()> {
     let (sp, _) = current(s, "bim.bom")?;
     // Whose each class of element is (Q6167): another trade's leave our lines but our part.
     let scope = s.doc().map(super::scope::decisions).unwrap_or_default();
@@ -606,9 +639,11 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     let protocols: BTreeMap<String, super::dimcheck::DimmerProtocol> =
         s.doc().map(super::dimcheck::dimmer_protocols).unwrap_or_default().into_iter().filter_map(|p| Some((p.devid.clone()?, p))).collect();
     // The model's pieces (Q6157): when it was built with them, its boxes, rings, conduit,
-    // fittings, cable and wire are counted from its index, not worked out by rule here.
-    let atoms =
-        s.doc().ok().and_then(super::mepatoms::stored).filter(|ix| ix.rows.keys().any(|k| super::mepatoms::PIECES.contains(&k.kind.as_str())));
+    // fittings, cable and wire are counted from its index, not worked out by rule here. A file
+    // that came without its index is recounted from its elements (Q6376): the pieces are the
+    // model's whatever format kept them, never the rule's estimate of a run built as pieces.
+    let index = s.doc().ok().and_then(super::mepatoms::kept_or_recount);
+    let atoms = index.as_ref().filter(|ix| ix.rows.keys().any(|k| super::mepatoms::PIECES.contains(&k.kind.as_str())));
     let by_atoms = atoms.is_some();
     // What each built device and fixture is as a product (Q6164), else its type's in the catalog.
     let (built_products, _) = s.doc().map(product_index).unwrap_or_default();
@@ -626,6 +661,10 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     let standing = s.doc().ok().and_then(built_devices);
     let product_of = |t: &cadaddy_walk3d::tags::ElementTag, el: Option<&BuiltDevice>, mark: Option<&str>| -> Product {
         let mut p = el.map(|e| e.product.clone()).or_else(|| built_products.get(&t.id).cloned()).unwrap_or_default();
+        // A mark a person gave the element is its product's: the one it was read as is not.
+        if let Some(m) = el.and_then(|e| e.type_mark.as_deref()).filter(|m| !p.type_mark.eq_ignore_ascii_case(m)) {
+            p = Product { type_mark: m.to_string(), ..Product::default() };
+        }
         let mark = if p.type_mark.is_empty() { mark.map(str::to_string).unwrap_or_default() } else { p.type_mark.clone() };
         if let Some(c) = s.doc().ok().and_then(|d| catalog_product(d, &mark)) {
             p.fill(&c);
@@ -709,12 +748,22 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                 }
                 "homerun" | "conduit" | "circuit" => {}
                 kind => {
+                    let mark = el.and_then(|e| e.type_mark.clone()).or_else(|| f("type").map(|m| m.0));
+                    // What it is, by the schedules' source priority: a person's type on the
+                    // element, else the one a person gave its mark in the type catalog, else the
+                    // documents' reading (a legend, the plan), else the catalog type a document
+                    // gave its mark, else a default reading or a mark nothing resolved.
+                    let catalog = mark.as_deref().and_then(|m| s.doc().ok().and_then(|d| catalog_description(d, m)));
+                    let read = f("device_type");
+                    let weak = |r: &(String, String)| r.0.starts_with(super::readers::UNRESOLVED) || matches!(r.1.as_str(), "default" | "rule");
                     let (ty, src) = el
                         .and_then(|e| e.device_type.clone())
                         .map(|v| (v, "user".to_string()))
-                        .or_else(|| f("device_type"))
+                        .or_else(|| catalog.clone().filter(|c| c.1).map(|c| (c.0, "user".to_string())))
+                        .or_else(|| read.clone().filter(|r| !weak(r)))
+                        .or_else(|| catalog.map(|c| (c.0, "schedule".to_string())))
+                        .or(read)
                         .unwrap_or_else(|| (kind.replace('_', " "), "plan".into()));
-                    let mark = el.and_then(|e| e.type_mark.clone()).or_else(|| f("type").map(|m| m.0));
                     let mut product = product_of(t, el, mark.as_deref());
                     let ty = match protocols.get(&t.id) {
                         Some(p) => {
@@ -1027,18 +1076,18 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     // The model's pieces, from its count index; the fire alarm circuits' cable (Q6503) is
     // another trade's where the scope gives the fire alarm system to one.
     // Each index row's elements (Q6529): a line counted from the index lists what it counts.
-    let stored = s.doc().ok().and_then(super::mepatoms::stored);
+    let stored = index.as_ref();
     let handles = match (&atoms, &stored) {
         (None, None) => BTreeMap::new(),
         _ => s.doc().map(|d| super::mepatoms::handles_by_key(d, MAX_LINE_ELEMENTS)).unwrap_or_default(),
     };
     if let Some(ix) = atoms {
         let fa = scope.iter().find(|d| d.class == "fire alarm").filter(|d| d.by_others());
-        atom_lines(lines, &ix, &handles, fa, others);
+        atom_lines(lines, ix, &handles, fa, others, field);
     }
     // The panels' breakers (Q6166), whether or not the runs were built as pieces.
     if let Some(ix) = stored {
-        breaker_lines(lines, &ix, &handles);
+        breaker_lines(lines, ix, &handles);
     }
     lv_pathway_lines(s, lines);
     Ok(())
@@ -1144,6 +1193,7 @@ fn atom_lines(
     handles: &BTreeMap<super::mepatoms::Key, Vec<String>>,
     fa_theirs: Option<&super::scope::Decision>,
     others: &mut Vec<Value>,
+    field: &mut Vec<Value>,
 ) {
     // Another trade's fire alarm cable (and raceway, unless the documents make it ours): by
     // system, level and type in `by_others`.
@@ -1159,13 +1209,22 @@ fn atom_lines(
         }
         let (category, unit) = match k.kind.as_str() {
             "conduit" => ("conduit", "ft"),
-            "coupling" | "connector" | "elbow" | "offset" | "strap" | "locknut" | "bushing" => ("conduit fittings", "each"),
+            "coupling" | "connector" | "elbow" | "offset" | "bend" | "strap" | "locknut" | "bushing" => ("conduit fittings", "each"),
             "box" | "ring" => ("boxes", "each"),
             "cable" | "wire" => ("wire", "ft"),
             _ => continue,
         };
-        // A field bend or offset is the trade's work, nothing bought.
+        // A field bend or offset is the trade's work, nothing bought: counted apart (Q6376), so
+        // every piece the model counts is in the takeoff.
         if super::mepatoms::is_labor_item(&k.item) {
+            if field.len() < MAX_LINES {
+                field.push(json!({
+                    "trade": if fire_alarm { "fire alarm" } else { "electrical" }, "category": category, "kind": k.kind, "item": k.item,
+                    "size": k.size, "unit": unit, "net": t.count as f64, "status": FIELD_WORK, "level": k.level, "circuit": k.circuit,
+                    "made": made_name(made_of(&k.made)), "elements": handles.get(k).cloned().unwrap_or_default(),
+                    "rule": "bent into the stick by the crew (the raceway rules' field bends): labor, nothing bought",
+                }));
+            }
             continue;
         }
         let net = if unit == "ft" { t.length_ft } else { t.count as f64 };
@@ -1938,6 +1997,30 @@ fn built_model(s: &Session, lines: &mut Vec<Line>, pieces: &TradePieces) -> Resu
     }
 
     Ok((missing, suspects, has_any_built))
+}
+
+/// Each level's wall board over its walls' area times their faces (Q6583,
+/// [`super::wallcheck::board_over`]): a suspect, never priced on silently.
+fn board_suspects(lines: &[Line], suspects: &mut Vec<Value>) {
+    let mut by: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
+    for l in lines.iter().filter(|l| l.unit == "sq ft" && l.net.is_finite() && l.net > 0.0) {
+        if l.item.starts_with("Wall area") {
+            by.entry(l.level.as_str()).or_default().0 += l.net;
+        } else if l.category == "drywall" && l.item.starts_with("Board") && !l.item.to_ascii_lowercase().contains("ceiling") {
+            by.entry(l.level.as_str()).or_default().1 += l.net;
+        }
+    }
+    let faces = super::wallcheck::rules().wall_faces;
+    for (level, (wall, board)) in by {
+        if super::wallcheck::board_over(board, wall) {
+            suspects.push(json!({
+                "category": "drywall",
+                "level": level,
+                "reason": format!("wall board {board:.0} sq ft on {level} is over its walls' {wall:.0} sq ft × {faces} faces"),
+                "status": "suspect"
+            }));
+        }
+    }
 }
 
 /// The rule on the wall lines measured from built wall meshes (no wall marks in the spec):
@@ -3295,11 +3378,27 @@ fn trade_pieces(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> 
     type Found = (Handle, super::mepatoms::Key, super::mepatoms::Measure, String, Vec<Handle>, Option<(Handle, bool)>);
     let mut found: Vec<Found> = Vec::new();
     let mut pours: BTreeMap<Handle, String> = BTreeMap::new();
+    // Each room's floor finish as it stands now (a person's edit since its flooring was laid).
+    let mut finishes: Option<BTreeMap<Handle, String>> = None;
     for e in d.model.iter().filter(|e| super::tradeatoms::is_trade_piece(e)).take(MAX_TRADE_PIECES) {
-        let Some((k, m)) = super::mepatoms::counted(e) else { continue };
+        let Some((mut k, m)) = super::mepatoms::counted(e) else { continue };
         let ps = cadaddy_doc::props::read(&e.common.xdata);
         let text = |key: &str| ps.get(key).map(Prop::text).unwrap_or_default();
         let host = Handle::parse_hex(&text("host"));
+        // A room's flooring is bought as the room's finish is now.
+        if k.trade == "finishes"
+            && k.kind == "flooring"
+            && let Some(h) = host
+            && let Some(f) = finishes
+                .get_or_insert_with(|| {
+                    super::bspec::room_elements(d).into_iter().filter_map(|r| Some((r.handle, r.finish?.trim().to_string()))).collect()
+                })
+                .get(&h)
+                .filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case(k.ty.trim()))
+        {
+            k.item = format!("flooring {f}");
+            k.ty.clone_from(f);
+        }
         let hosts = match (k.trade.as_str(), k.kind.as_str()) {
             ("framing", "stud" | "plate" | "track") => Some(&mut out.framed),
             ("openings", "hardware_set") => Some(&mut out.hardware),
@@ -3463,7 +3562,9 @@ fn required(lines: &[Line], levels: usize) -> Vec<(String, f64, &'static str, St
 pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
     let mut lines: Vec<Line> = Vec::new();
     let mut others = Vec::new();
-    electrical(s, &mut lines, &mut others)?;
+    // The crew's field bends are labor: no element of them is bought or marked as delivered.
+    let mut field = Vec::new();
+    electrical(s, &mut lines, &mut others, &mut field)?;
     zero_ten_pairs(s, &mut lines);
     mechanical(s, &mut lines, &mut others);
     Ok(lines
@@ -3494,9 +3595,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         _ => TradePieces::default(),
     };
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
-    let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines, &pieces)?;
+    let (built_missing, mut built_suspects, model_has_elements) = built_model(s, &mut lines, &pieces)?;
     let mut others: Vec<Value> = Vec::new();
-    electrical(s, &mut lines, &mut others)?;
+    let mut field_work: Vec<Value> = Vec::new();
+    electrical(s, &mut lines, &mut others, &mut field_work)?;
     zero_ten_pairs(s, &mut lines);
     // Devices from symbol clusters on the drawing (Q5243), when the model has none of its own: a
     // guided job puts the devices its readers found into the model, and counting both doubled them.
@@ -3513,6 +3615,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if let (Ok((sp, _)), Ok(d)) = (current(s, "bim.bom"), s.doc()) {
         trade_piece_lines(&pieces, &super::tradeatoms::Rules::of(d, &sp), &taken, &job_framed, &mut lines);
     }
+    board_suspects(&lines, &mut built_suspects);
     by_others.extend(others);
     by_others.truncate(MAX_LINES);
     // Waivers: recorded in the project rules, with the reason.
@@ -3675,6 +3778,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // complete = every built category has lines, no line is suspect, reqs OK, spec clean (Q5243 MUST 4).
     let is_complete = complete && req_ok && check.is_empty() && no_suspects && no_missing;
     let mut out = json!({ "lines": out_lines, "by_others": by_others, "required": req, "spec_check": check, "complete": is_complete });
+    if !field_work.is_empty() {
+        out["field_work"] = json!(field_work);
+    }
     if !framing_bits.is_empty() {
         out["bits"] =
             json!(framing_bits.iter().map(|b| json!({"kind": bit_words(b.kind), "dia_in": b.dia_in, "holes": b.holes})).collect::<Vec<_>>());

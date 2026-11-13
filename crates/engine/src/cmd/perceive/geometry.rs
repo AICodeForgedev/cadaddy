@@ -785,6 +785,147 @@ fn run_overlap(p: &Pair, q: &Pair) -> f64 {
     (b.min(len) - a.max(0.0)).max(0.0)
 }
 
+/// Drops the pairs that are the air between two walls (Q6583): a pair each of whose faces is
+/// also the face of another pair on its far side, along over half of it, has a wall against it
+/// on both sides. One line can't be a wall's face on both of its sides, so the space between
+/// those two walls (a chase, the gap between back-to-back walls, the stripe between two rows of
+/// parallel linework) is no wall. A line in the middle of one wall (two wythes, a finish line)
+/// pairs with the far faces too, so the walls either side of it keep their faces; only the one
+/// walled in on both sides goes. Returns how many were dropped.
+pub(crate) fn drop_air_between(segs: &[Seg], found: &mut Vec<Pair>) -> usize {
+    if found.len() < 3 {
+        return 0;
+    }
+    let mut by_face: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for (k, p) in found.iter().enumerate() {
+        for f in p.faces {
+            by_face.entry(f).or_default().push(k);
+        }
+    }
+    let walled = |k: usize, p: &Pair, f: usize, other: usize| {
+        let (Some(fs), Some(os)) = (segs.get(f), segs.get(other)) else { return false };
+        let here = side_of(fs, os);
+        here != 0.0
+            && by_face.get(&f).into_iter().flatten().any(|&q| {
+                q != k
+                    && found.get(q).is_some_and(|qp| {
+                        let far = if qp.faces[0] == f { qp.faces[1] } else { qp.faces[0] };
+                        segs.get(far).is_some_and(|s| side_of(fs, s) * here < 0.0) && run_overlap(p, qp) > 0.5 * p.length
+                    })
+            })
+    };
+    let drop: Vec<bool> =
+        found.iter().enumerate().map(|(k, p)| walled(k, p, p.faces[0], p.faces[1]) && walled(k, p, p.faces[1], p.faces[0])).collect();
+    let before = found.len();
+    let mut it = drop.iter();
+    found.retain(|_| !it.next().copied().unwrap_or(false));
+    before - found.len()
+}
+
+/// Closed outlines looked at for casework, at most (hostile drawings).
+const MAX_CASEWORK_OUTLINES: usize = 200_000;
+/// A casework or equipment outline has at most this many corners (a counter, an appliance, a
+/// cabinet run with a notch); more is a room's or a building's outline.
+const MAX_CASEWORK_CORNERS: usize = 64;
+
+/// The least width of the outline `pts` across any of its sides' directions (a rectangle's short
+/// side). Infinite for no outline.
+fn least_width(pts: &[Vec2]) -> f64 {
+    let mut best = f64::INFINITY;
+    for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
+        let d = *b - *a;
+        let len = d.len();
+        if !(len > 1e-9 && len.is_finite()) {
+            continue;
+        }
+        let n = d.perp() * (1.0 / len);
+        let (lo, hi) = pts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(n.dot(*p)), hi.max(n.dot(*p))));
+        best = best.min(hi - lo);
+    }
+    best
+}
+
+/// The closed straight outlines among `ents` deeper than any wall (`lim.max_thick`) and at most
+/// `max_depth` deep (drawing units) across their narrowest side: a counter, a cabinet run, an
+/// appliance or a piece of equipment drawn on the plan (Q6583). Each its corners.
+pub(crate) fn casework_outlines(ents: &[&std::sync::Arc<Entity>], lim: &Limits, max_depth: f64) -> Vec<Vec<Vec2>> {
+    let mut out = Vec::new();
+    for e in ents {
+        if out.len() >= MAX_CASEWORK_OUTLINES {
+            break;
+        }
+        let EntityKind::LwPolyline(p) = &e.kind else { continue };
+        if !p.vertices.iter().all(|v| v.bulge == 0.0) {
+            continue;
+        }
+        let mut pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+        let ends_at_start = pts.len() >= 4 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9);
+        if ends_at_start {
+            pts.pop();
+        } else if !p.closed {
+            continue;
+        }
+        if pts.len() < 3 || pts.len() > MAX_CASEWORK_CORNERS || !pts.iter().all(|q| q.is_finite()) {
+            continue;
+        }
+        let w = least_width(&pts);
+        if w > lim.max_thick && w <= max_depth {
+            out.push(pts);
+        }
+    }
+    out
+}
+
+/// Drops the pairs inside a casework or equipment outline ([`casework_outlines`], Q6583): a
+/// counter's edge and the line of its top or its sink a few inches in, an appliance's outline and
+/// its inner outline, pair up like a wall's faces, but a pair whose centreline runs inside an
+/// outline deeper than any wall and no deeper than casework is the thing drawn there, no wall.
+/// A pair of two of the outline's own sides stays (a wall body drawn as one outline, a U round a
+/// closet), and so does one whose centreline runs along the outline (a room's or a corridor's
+/// area outline drawn on its walls' centrelines). Returns how many were dropped.
+pub(crate) fn drop_casework_pairs(segs: &[Seg], found: &mut Vec<Pair>, outlines: &[Vec<Vec2>], k: f64) -> usize {
+    if found.is_empty() || outlines.is_empty() || !(k.is_finite() && k > 0.0) {
+        return 0;
+    }
+    let bounds = |o: &Vec<Vec2>| {
+        o.iter()
+            .fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))
+    };
+    let ix = CellIndex::new(24.0 * k, outlines.iter().map(bounds));
+    let tol = 0.1 * k;
+    // Whether the segment is one of the outline's sides (both ends and its middle on it).
+    let on_outline = |s: &Seg, o: &[Vec2]| {
+        let on = |q: Vec2| o.iter().zip(o.iter().cycle().skip(1)).any(|(a, b)| seg_point_dist(q, *a, *b) <= tol);
+        on(s.a) && on(s.b) && on(s.a.mid(s.b))
+    };
+    let drop: Vec<bool> = found
+        .iter()
+        .map(|p| {
+            let probes = [p.c0 + (p.c1 - p.c0) * 0.1, p.c0.mid(p.c1), p.c0 + (p.c1 - p.c0) * 0.9];
+            let (lo, hi) = (p.c0.min(p.c1), p.c0.max(p.c1));
+            ix.near(lo, hi).into_iter().filter_map(|i| outlines.get(i)).any(|o| {
+                // Inside it, not on it (an area outline drawn on the walls' centrelines).
+                let margin = 0.25 * p.thickness;
+                let off_edge = |q: Vec2| o.iter().zip(o.iter().cycle().skip(1)).all(|(a, b)| seg_point_dist(q, *a, *b) >= margin);
+                probes.iter().all(|&q| cadaddy_geom::point_in_polygon(o, q) && off_edge(q))
+                    && !p.faces.iter().all(|&f| segs.get(f).is_some_and(|s| on_outline(s, o)))
+            })
+        })
+        .collect();
+    let before = found.len();
+    let mut it = drop.iter();
+    found.retain(|_| !it.next().copied().unwrap_or(false));
+    before - found.len()
+}
+
+/// Distance from `p` to the segment `a`–`b`.
+fn seg_point_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let d = b - a;
+    let l2 = d.dot(d);
+    let t = if l2 > 1e-18 { ((p - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    p.dist(a + d * t)
+}
+
 /// A symbol's outline is at most this deep across the pair it holds, inches (a tub, a counter, a
 /// through-wall unit with its sleeve): a pair closed off by lines running further is closed off
 /// by other walls' faces.
@@ -1531,6 +1672,9 @@ pub(crate) fn flat_swings(pts: &[Vec2]) -> Vec<(Vec2, f64, f64, [Vec2; 2])> {
 
 /// Names traced between two progress lines of the room trace.
 const TRACE_PROGRESS_EVERY: usize = 100;
+/// The longest a room trace goes without a progress line, seconds (a job stage is never silent
+/// for over a minute).
+const TRACE_PROGRESS_SECS: f64 = 20.0;
 
 /// How far round a room's name its first trace looks (feet, each way): the rooms nearly every
 /// name is in (a long corridor's far ends too). A name that finds none so near is traced again across the whole plan it is on
@@ -1702,7 +1846,97 @@ pub(crate) fn equipment_tag(t: &str) -> bool {
         && !cadaddy_mepfix::wordrules::words("rooms.names").contains(&t.to_ascii_uppercase().as_str());
     let circuit =
         words.len() == 1 && t.rsplit_once('-').is_some_and(|(h, n)| !h.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    quoted || length || device_mark || circuit || words.iter().any(|w| cadaddy_mepfix::wordrules::words("equipment.names").contains(&w.as_str()))
+    // An equipment word, also as its plural (`COOLER COMPRESSORS`: the units a note points at).
+    let equipment = |w: &str| {
+        let names = cadaddy_mepfix::wordrules::words("equipment.names");
+        names.contains(&w) || (w.len() > 3 && w.strip_suffix('S').is_some_and(|stem| names.contains(&stem)))
+    };
+    quoted || length || device_mark || circuit || words.iter().any(|w| equipment(w))
+}
+
+/// The most times one letter may follow itself (`BOOKKEEPING`'s doubles): a longer run
+/// (`Kkkkkkkk`, `OOO`) is linework read as letters or a placeholder, never a name.
+const MAX_LETTER_REPEAT: usize = 2;
+/// The longest a name may be with no word of three letters: a code in capitals (`WC`, `IT`, `W/D`)
+/// or a name in a script without case (`厨房`).
+const NAME_CODE_MAX: usize = 4;
+
+/// Whether a label reads as words (Q6365): no letter run of more than [`MAX_LETTER_REPEAT`], and a
+/// word of three letters or more (`LOBBY`, `IDF`, `MEN'S`: an apostrophe inside joins it) or one
+/// short code with no small letter (`WC`, `W/D`, `厨房`). Text read off a print's linework comes
+/// out as letters that read as nothing: `JL TL YL KJ`, `Kkkkkkkkkkk`, `-r-n-`, `--L-T-`, `G L`,
+/// `Xb`.
+pub(crate) fn legible_name(t: &str) -> bool {
+    let t = t.trim();
+    let mut last: Option<char> = None;
+    let mut same = 0usize;
+    for c in t.chars() {
+        let low = c.is_alphabetic().then(|| c.to_lowercase().next().unwrap_or(c));
+        same = if low.is_some() && low == last { same + 1 } else { 1 };
+        if low.is_some() && same > MAX_LETTER_REPEAT {
+            return false;
+        }
+        last = low;
+    }
+    let mut run = 0usize;
+    for c in t.chars() {
+        if c.is_alphabetic() {
+            run += 1;
+            if run >= 3 {
+                return true;
+            }
+        } else if !matches!(c, '\'' | '\u{2019}') {
+            run = 0;
+        }
+    }
+    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+    !t.contains(char::is_whitespace) && t.chars().count() <= NAME_CODE_MAX && letters >= 2 && !t.chars().any(char::is_lowercase)
+}
+
+/// How many of a plan's room numbers must be all digits to each lettered one before a lettered
+/// number with a sheet's letters is taken for a callout ([`CalloutLabels`]).
+const CALLOUT_DIGIT_SHARE: usize = 3;
+
+/// The callout and sheet-reference labels among a plan's number-shaped texts (Q6365): where the
+/// plan's room numbers are digits (`101`, `37`), a number led by the letters of the set's sheet
+/// numbers (`A12` in a set of `A…` sheets) is a view callout's or a sheet reference's label, never
+/// a room's number. A plan that numbers its rooms with letters (`B12` on every room of a lower
+/// level) keeps them.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CalloutLabels {
+    prefixes: std::collections::BTreeSet<String>,
+    on: bool,
+}
+
+/// The letters a label starts with (`A` of `A12`, `FP` of `FP-101`), upper case.
+fn letter_prefix(t: &str) -> String {
+    t.trim().chars().take_while(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase()).collect()
+}
+
+impl CalloutLabels {
+    /// From the set's sheet numbers and the plan's number-shaped texts ([`room_number`]).
+    pub(crate) fn new<'a>(sheets: impl IntoIterator<Item = &'a str>, numbers: impl IntoIterator<Item = &'a str>) -> Self {
+        let prefixes: std::collections::BTreeSet<String> = sheets.into_iter().map(letter_prefix).filter(|p| !p.is_empty()).collect();
+        if prefixes.is_empty() {
+            return Self::default();
+        }
+        let (mut digits, mut lettered) = (0usize, 0usize);
+        for n in numbers {
+            let p = letter_prefix(n);
+            if p.is_empty() {
+                digits += 1;
+            } else if prefixes.contains(&p) {
+                lettered += 1;
+            }
+        }
+        let on = lettered > 0 && digits >= CALLOUT_DIGIT_SHARE && digits >= CALLOUT_DIGIT_SHARE.saturating_mul(lettered);
+        Self { prefixes, on }
+    }
+
+    /// Whether a number-shaped text is a callout's or a sheet reference's label.
+    pub(crate) fn is_callout(&self, t: &str) -> bool {
+        self.on && self.prefixes.contains(&letter_prefix(t))
+    }
 }
 
 /// Whether a text is a note rather than a room's name: a finish code (`CPT-1`), a ceiling, level
@@ -1887,7 +2121,14 @@ pub(crate) fn area_figure(t: &str) -> bool {
 pub(crate) fn room_name_score(t: &str) -> u8 {
     // Letters one by one (`L J`): a fragment of vertical or spaced text, no name.
     let letters_only = tag_words(t).iter().all(|w| w.chars().count() <= 1);
-    if equipment_tag(t) || note_like(t) || room_number(t) || area_figure(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 || letters_only {
+    if equipment_tag(t)
+        || note_like(t)
+        || room_number(t)
+        || area_figure(t)
+        || t.chars().filter(|c| c.is_alphabetic()).count() < 2
+        || letters_only
+        || !legible_name(t)
+    {
         0
     } else if tag_words(t).iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(&w.as_str())) {
         3
@@ -2150,6 +2391,41 @@ pub struct TraceCache {
     by_inputs: Vec<(cadaddy_doc::Space, Option<Vec<[f64; 4]>>, std::sync::Arc<TraceInputs>, std::sync::Arc<RoomTrace>)>,
     /// How many times the labels' outlines were searched (the trace's costly part) in this drawing.
     traced: usize,
+    /// How many times the drawing was read for a trace at all (its labels, plan, door leaves and
+    /// wall runs gathered: on a print set minutes even when the search is then found again).
+    read: usize,
+    /// What a job's rooms stage read, while the job's later steps run ([`settle_rooms`]).
+    settled: Option<SettledRooms>,
+    /// The latest traces by what was asked (space, regions, numbered tags only), whichever
+    /// drawing state they were traced in: after a job's rooms stage, the stage's own trace.
+    last_asked: Vec<(cadaddy_doc::Space, Option<Vec<[f64; 4]>>, bool, std::sync::Arc<RoomTrace>)>,
+}
+
+/// Traces remembered by what was asked ([`TraceCache::last_asked`]).
+const ASKED_KEPT: usize = 8;
+
+/// The rooms a job's rooms stage read: the plan views it read them on (none: the whole drawing)
+/// and how many rooms it kept. The steps after it read the plan's rooms the same way: with none,
+/// they have none (no trace); asked about the whole drawing, they are traced on those views (as
+/// the stage traced them, so remembered). A roomless job traced its whole set three more times
+/// after its rooms stage, ~400 s each, finding none each time (Q6362).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SettledRooms {
+    pub regions: Vec<[f64; 4]>,
+    pub rooms: usize,
+}
+
+/// Room traces in the current drawing from now on read the plan as `settled` says (`None`: as
+/// asked). A job sets it for each stage after its rooms stage and clears it when the job stops.
+pub(crate) fn settle_rooms(s: &mut Session, settled: Option<SettledRooms>) {
+    if let Ok(st) = s.state_mut() {
+        st.room_trace.settled = settled;
+    }
+}
+
+/// What the current drawing's room traces read the plan as ([`settle_rooms`]).
+pub(crate) fn settled_rooms(s: &Session) -> Option<SettledRooms> {
+    s.state().ok().and_then(|st| st.room_trace.settled.clone())
 }
 
 /// Traces remembered by their inputs: one a sheet region of a print set (each traced on its own).
@@ -2271,6 +2547,25 @@ impl TraceCache {
     pub(crate) fn traced(&self) -> usize {
         self.traced
     }
+    /// How many times the drawing was read for a room trace (not found in the remembered traces).
+    pub(crate) fn reads(&self) -> usize {
+        self.read
+    }
+    /// The latest trace asked this way, in any drawing state.
+    fn asked(&self, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, numbered: bool) -> Option<std::sync::Arc<RoomTrace>> {
+        self.last_asked
+            .iter()
+            .rev()
+            .find(|(sp, rs, n, _)| sp == space && rs.as_deref() == regions && *n == numbered)
+            .map(|(.., t)| std::sync::Arc::clone(t))
+    }
+    fn put_asked(&mut self, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, numbered: bool, trace: std::sync::Arc<RoomTrace>) {
+        self.last_asked.retain(|(sp, rs, n, _)| !(*sp == space && rs.as_deref() == regions && *n == numbered));
+        if self.last_asked.len() >= ASKED_KEPT {
+            self.last_asked.remove(0);
+        }
+        self.last_asked.push((space, regions.map(<[_]>::to_vec), numbered, trace));
+    }
 }
 
 /// [`trace_rooms_in`], read from the drawing state's remembered trace when there is one
@@ -2293,16 +2588,34 @@ pub(crate) fn room_trace_numbered_in(s: &mut Session, regions: Option<&[[f64; 4]
 
 fn room_trace_of(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool) -> Result<std::sync::Arc<RoomTrace>> {
     let space = s.space();
+    // After a job's rooms stage: what it read (no rooms: none; the whole drawing: its views).
+    let settled = if space.is_paper() { None } else { s.state()?.room_trace.settled.clone() };
+    let regions = match &settled {
+        Some(st) if st.rooms == 0 => return Ok(std::sync::Arc::new(RoomTrace::default())),
+        Some(st) if regions.is_none() && !st.regions.is_empty() => Some(st.regions.as_slice()),
+        _ => regions,
+    };
     let state = std::sync::Arc::clone(&s.state()?.doc);
     if let Some(trace) = s.state()?.room_trace.get(&state, &space, regions, numbered) {
         return Ok(trace);
     }
-    let trace = std::sync::Arc::new(trace_rooms_in(s, regions, numbered)?);
-    // Traced in the state it was asked in (the trace changes nothing): remembered for it.
-    if let Ok(st) = s.state_mut()
-        && std::sync::Arc::ptr_eq(&st.doc, &state)
+    // The rooms stage's own trace (the plan as it read it: the job's later steps add the model,
+    // not the plan's rooms).
+    if settled.is_some()
+        && let Some(trace) = s.state()?.room_trace.asked(&space, regions, numbered)
     {
-        st.room_trace.put(&state, space, regions, numbered, std::sync::Arc::clone(&trace));
+        return Ok(trace);
+    }
+    if let Ok(st) = s.state_mut() {
+        st.room_trace.read = st.room_trace.read.saturating_add(1);
+    }
+    let trace = std::sync::Arc::new(trace_rooms_in(s, regions, numbered)?);
+    if let Ok(st) = s.state_mut() {
+        st.room_trace.put_asked(space.clone(), regions, numbered, std::sync::Arc::clone(&trace));
+        // Traced in the state it was asked in (the trace changes nothing): remembered for it.
+        if std::sync::Arc::ptr_eq(&st.doc, &state) {
+            st.room_trace.put(&state, space, regions, numbered, std::sync::Arc::clone(&trace));
+        }
     }
     Ok(trace)
 }
@@ -2315,9 +2628,20 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     if let Some(rs) = regions.filter(|r| r.len() > 1) {
         let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
         let mut out = RoomTrace::default();
+        // A long trace says which plan view it is on (one line a view once it takes a while).
+        let started = web_time::Instant::now();
         for (i, r) in rs.iter().enumerate() {
             if out.rooms.len() >= MAX_ROOMS_ALL_REGIONS {
                 break;
+            }
+            if i > 0 && started.elapsed().as_secs_f64() > 2.0 {
+                crate::cmd::guided::progress_line(&format!(
+                    "  room trace: plan view {} of {}, {} rooms so far, {:.0} s",
+                    i + 1,
+                    rs.len(),
+                    out.rooms.len(),
+                    started.elapsed().as_secs_f64()
+                ));
             }
             // A label is its first region's (as one trace of them all took it).
             let earlier = rs.get(..i).unwrap_or_default();
@@ -2420,8 +2744,20 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     }
     footprints.extend(spec.iter().flat_map(|sp| sp.levels.iter().filter_map(|l| l.region)));
     footprints.retain(|r| r.iter().all(|v| v.is_finite()));
-    let mut numbers: Vec<Label> =
-        all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase())).cloned().collect();
+    // A view callout's label (`A12`) on a plan numbering its rooms in digits: no room's number
+    // either (Q6365: a callout numbered the note beside it as a room).
+    let in_regions = |p: Vec2| {
+        regions.is_none_or(|rs| rs.iter().any(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3])))
+    };
+    let callouts = CalloutLabels::new(
+        sheet_numbers.iter().map(String::as_str),
+        all.iter().filter(|(_, t, at, _, tag)| !tag && room_number(t) && in_regions(*at)).map(|l| l.1.as_str()),
+    );
+    let mut numbers: Vec<Label> = all
+        .iter()
+        .filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase()) && !callouts.is_callout(t))
+        .cloned()
+        .collect();
     numbers.extend(tag_numbers);
     // The room numbers by height on the page: a name's own number is looked for in the band
     // round it only (a print set's sheets side by side hold tens of thousands of texts).
@@ -2449,9 +2785,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     // words ([`crate::cmd::autospec::room_like_name`]), an equipment or device tag, nor a callout
     // with no room word and no number (`FLOOR SINK`, `PROVIDE PLYWOOD`). Each text counted once by
     // what became of it ([`NameCandidates`]).
-    let in_views = |p: Vec2| {
-        regions.is_none_or(|rs| rs.iter().any(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3])))
-    };
+    let in_views = in_regions;
     let mut candidates = NameCandidates { texts: all.len(), ..NameCandidates::default() };
     let mut needs_number: std::collections::HashSet<cadaddy_doc::Handle> = std::collections::HashSet::new();
     let mut names: Vec<Label> = Vec::new();
@@ -2473,6 +2807,9 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
             Some("note_or_finish_code")
         } else if in_block.contains(h) {
             Some("note_block_line")
+        } else if !legible_name(t) {
+            // Linework read as letters (`JL TL YL KJ`, `Kkkkkkkk`, `-r-n-`), never a name.
+            Some("illegible")
         } else if !crate::cmd::autospec::room_like_name(t) {
             Some("sentence_title_block_or_stamp")
         } else {
@@ -2630,7 +2967,10 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     let mut outline_cache = None;
     let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
     // A storey of a full set has thousands of names: say how far the trace is.
-    let (total, trace_started) = (names.len(), web_time::Instant::now());
+    // (Every TRACE_PROGRESS_EVERY names, and at least every TRACE_PROGRESS_SECS: a plan whose
+    // names take long each is never silent for minutes.)
+    let (mut total, trace_started) = (names.len(), web_time::Instant::now());
+    let mut last_line = trace_started;
     let mut searching = std::time::Duration::ZERO;
     // Where each name is: a widened search's outline holding another name no room took is no
     // one room (the floor left over round rooms that don't close, shared by their names).
@@ -2641,7 +2981,8 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     let mut queue: std::collections::VecDeque<(Label, bool)> = names.into_iter().map(|l| (l, false)).collect();
     let mut traced = 0usize;
     while let Some(((h, name, at, height, tag), widened)) = queue.pop_front() {
-        if traced > 0 && traced.is_multiple_of(TRACE_PROGRESS_EVERY) {
+        if traced > 0 && (traced.is_multiple_of(TRACE_PROGRESS_EVERY) || last_line.elapsed().as_secs_f64() >= TRACE_PROGRESS_SECS) {
+            last_line = web_time::Instant::now();
             crate::cmd::guided::progress_line(&format!(
                 "  room trace: {traced} of {total} names, {} rooms, {:.0} s ({:.0} s finding boundaries)",
                 out.len(),
@@ -2760,6 +3101,8 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
                     .filter(|(_, area)| *area >= min_area)
                 else {
                     if capped && !widened && reach_at(at) > least_reach {
+                        // Traced again (counted again).
+                        total += 1;
                         queue.push_back(((h, name, at, height, tag), true));
                     } else if capped {
                         beyond_reach.push((name, at, reach));
@@ -2857,7 +3200,11 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
             r.number = Some(t);
         }
     }
-    phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name, {frames} sheet borders or view frames left out)", out.len()));
+    let (made, shared) = outline_cache.as_ref().map_or((0, 0), crate::cmd::hatch::Outlines::searches_made);
+    phase(&format!(
+        "tracing {} rooms ({taken} numbered from the tag nearest the name, {frames} sheet borders or view frames left out; {made} window searches, {shared} shared)",
+        out.len()
+    ));
     if !beyond_reach.is_empty() {
         let shown: Vec<&str> = beyond_reach.iter().take(5).map(|(n, ..)| n.as_str()).collect();
         let most = beyond_reach.iter().map(|(.., r)| *r).fold(0.0, f64::max) / (12.0 * k);
@@ -3441,6 +3788,66 @@ mod tests {
         let c = &trace.candidates;
         assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (8, 2, 2, 4), "{c:?}");
         assert!(c.dropped.is_empty(), "{c:?}");
+    }
+
+    /// Q6365: a room's name reads as words. Linework read as letters is none, whatever number is
+    /// printed by it.
+    #[test]
+    fn a_rooms_name_reads_as_words() {
+        for good in
+            ["LOBBY", "IDF", "WC", "IT", "W/D", "CORR", "Office", "STAIR 2", "MEN'S", "Takeout", "BOOKKEEPING", "MECH./ELEC.", "厨房", "Küche"]
+        {
+            assert!(legible_name(good), "{good}");
+        }
+        for bad in ["JL TL YL KJ", "Kkkkkkkkkkkkkkkkkkkkkkk", "48 Kkkkkkkkkkkkk", "-r-n-", "--L-T-", "G L", "D D", "Xb", "22 40 OO", "", "12", "OOO"]
+        {
+            assert!(!legible_name(bad), "{bad}");
+            assert_eq!(room_name_score(bad), 0, "{bad}");
+        }
+        // A plural of an equipment word is equipment: the units a note points at.
+        assert!(equipment_tag("Freezer compressors") && equipment_tag("CONDENSERS"));
+        assert_eq!(room_name_score("Freezer compressors"), 0);
+        assert!(!equipment_tag("TAKEOUT") && !equipment_tag("WOMEN'S"));
+    }
+
+    /// Q6365: on plans numbering their rooms in digits, a lettered label with a sheet's letters is
+    /// a callout's; a plan numbering every room with letters keeps them.
+    #[test]
+    fn a_callouts_label_is_no_room_number() {
+        let sheets = ["A101", "A-501", "E2.1"];
+        let c = CalloutLabels::new(sheets, ["101", "102", "37", "A12", "103"]);
+        assert!(c.is_callout("A12") && c.is_callout("E21") && !c.is_callout("101") && !c.is_callout("B12"));
+        let c = CalloutLabels::new(sheets, ["A101", "A102", "A103", "104"]);
+        assert!(!c.is_callout("A101"), "lettered room numbers stay");
+        let c = CalloutLabels::new(std::iter::empty::<&str>(), ["101", "102", "103", "A12"]);
+        assert!(!c.is_callout("A12"), "no sheets known: nothing to tell a callout by");
+    }
+
+    #[test]
+    fn linework_read_as_letters_and_a_callouts_note_name_no_room() {
+        // Q6365: a BIM-exported print's linework read as text (`JL TL YL KJ`, `Kkkkkkk`, `-r-n-`)
+        // was traced as rooms beside real numbered tags, and a view callout's label (`A12`)
+        // numbered the note next to it. The junk in TAKEOUT's room was traced before its name.
+        let mut s = plan_of(&[
+            ([0.0, 0.0, 240.0, 180.0], &[("VESTIBULE", 80.0, 90.0), ("101", 90.0, 80.0)]),
+            ([300.0, 0.0, 540.0, 180.0], &[("JL TL YL KJ", 330.0, 150.0), ("TAKEOUT", 380.0, 90.0), ("102", 390.0, 80.0)]),
+            ([600.0, 0.0, 840.0, 180.0], &[("Women's", 680.0, 90.0), ("103", 690.0, 80.0)]),
+            ([900.0, 0.0, 1140.0, 180.0], &[("Kkkkkkkkkkkkkkkkkk", 980.0, 90.0), ("37", 990.0, 80.0)]),
+            ([1200.0, 0.0, 1440.0, 180.0], &[("-r-n-", 1280.0, 90.0), ("106", 1290.0, 80.0)]),
+            ([1500.0, 0.0, 1740.0, 180.0], &[("Dry stock", 1580.0, 90.0), ("A12", 1590.0, 80.0)]),
+        ]);
+        let sp = cadaddy_walk3d::BuildingSpec {
+            sheets: serde_json::from_value(json!([{"number": "A101"}, {"number": "A501"}, {"number": "E101"}])).unwrap(),
+            ..Default::default()
+        };
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
+        let trace = room_trace_in(&mut s, None).unwrap();
+        let mut names: Vec<(String, Option<String>)> = trace.rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+        names.sort();
+        let room = |n: &str, m: &str| (n.to_string(), Some(m.to_string()));
+        assert_eq!(names, vec![room("TAKEOUT", "102"), room("VESTIBULE", "101"), room("Women's", "103")], "{:?}", trace.candidates);
+        assert_eq!(trace.candidates.dropped.get("illegible"), Some(&3), "{:?}", trace.candidates);
+        assert_eq!(trace.candidates.dropped.get("no_room_word_or_number"), Some(&1), "the callout numbers no note: {:?}", trace.candidates);
     }
 
     #[test]

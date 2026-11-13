@@ -177,6 +177,11 @@ pub(crate) fn clear_sources() {
     SOURCES.clear();
 }
 
+/// Let go of the kept plan objects of chunks no open drawing holds ([`crate::Session::release_unheld`]).
+pub(crate) fn retain_held(held: &std::collections::HashSet<usize>) {
+    SOURCES.retain_held(held);
+}
+
 /// The model's plan objects by chunk (the first [`MAX_SOURCES`] of them), kept per chunk while it
 /// is unchanged: a first edit of an element (Q6438) looked at every object of the model.
 struct Sources {

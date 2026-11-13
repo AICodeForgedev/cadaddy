@@ -475,9 +475,11 @@ pub(crate) fn wall_overlaps(d: &Drawing) -> Vec<Overlap> {
 // ---------------- the plan ----------------
 
 /// A session holding the plan alone (nothing a build made), for tracing rooms around their tags
-/// without the generated walls closing the gaps.
+/// without the generated walls closing the gaps. All of it: what the view hid (object isolation,
+/// a clash shown alone) is still the plan.
 pub(crate) fn plan_session(s: &Session) -> Result<Session> {
     let mut d = (*s.doc()?).clone();
+    d.hidden_objects.clear();
     let made: Vec<Handle> = d.model.iter().filter(|e| made_as(e).is_some()).map(|e| e.handle).collect();
     for h in made {
         d.model.remove(h);
@@ -526,6 +528,11 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
     // The plan's outlines are made once for every tag (not once per tag: 60k objects).
     let mut cache = None;
     for (h, t, at) in room_texts(sp, &ents) {
+        // A unit tag in a room (`UNIT A`, `UNIT A (MIRROR)`) names the room's unit type and hand,
+        // as the unit plans read it (`units.detect`): the room's, not another room.
+        if cadaddy_mepfix::unit_reader::unit_tag(&t).is_some() {
+            continue;
+        }
         // Equipment and device tags (a panelboard label on a room tag layer) are no rooms.
         let named = super::perceive::geometry::room_name_score(&t) > 0;
         let number = !named && super::perceive::geometry::room_number(&t) && !super::perceive::geometry::equipment_tag(&t);
@@ -1058,7 +1065,8 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         .transpose()?;
     // A room: its outline on the plan, and its level.
     let mut room: Option<(Vec<Vec2>, String)> = None;
-    if let Some(name) = str_param(p, "room")
+    let wanted_room = number_or_name_param(p, "room");
+    if let Some(name) = wanted_room.as_deref()
         && let Some(r) = super::bspec::room_elements(d).into_iter().find(|r| {
             r.outline.len() >= 3
                 && (r.name.eq_ignore_ascii_case(name.trim()) || r.number.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name.trim())))
@@ -1066,7 +1074,7 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     {
         // A built room has its outline: no plan trace of every room.
         room = Some((r.outline.clone(), r.level.clone()));
-    } else if let Some(name) = str_param(p, "room") {
+    } else if let Some(name) = wanted_room.as_deref() {
         let plan = plan_session(s)?;
         let rs = rooms(&plan, &sp)?;
         let spec_room = sp.rooms.iter().find(|r| names_room(r, name));
@@ -1115,7 +1123,10 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         // The whole building stacks its storeys; a level, a room, a plan box, a mark or a camera
         // are on the sheet's (and the built model's) own coordinates.
         let keep: std::collections::HashSet<Handle> = keep.iter().copied().collect();
-        super::bimlook::compose(d, &look, ghost, whole, &|e, _| keep.contains(&e.handle))
+        let mut md = super::bimlook::compose(d, &look, ghost, whole, &|e, _| keep.contains(&e.handle));
+        // The model as built: a view's object isolation (a clash shown alone) hides none of it.
+        md.hidden_objects.clear();
+        md
     } else {
         let mut md = Drawing::new_imperial();
         md.layers = d.layers.clone();

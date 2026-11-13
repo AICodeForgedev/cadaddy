@@ -539,8 +539,9 @@ pub(crate) fn names_room(a: &Area, r: &str) -> bool {
 /// the `room` it names (on `level` when given), as `validate` takes its scope.
 pub(crate) fn area_param(cmd: &str, sp: &BuildingSpec, p: &Value, d: &Drawing, frame: &Frame) -> Result<Area> {
     if p.get("area").is_none_or(Value::is_null)
-        && let Some(r) = str_param(p, "room").map(str::trim).filter(|r| !r.is_empty())
+        && let Some(r) = number_or_name_param(p, "room")
     {
+        let r = r.as_str();
         let level = level_param(cmd, sp, p, false)?;
         let found: Vec<Area> = model_areas(d, frame)
             .into_iter()

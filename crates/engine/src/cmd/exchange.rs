@@ -7,7 +7,7 @@
 //! stays I/O-agnostic; the JSON forms never open dialogs (the UI asks for files when these
 //! commands come from a menu, the tool bar or the command line).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use cadaddy_color::Rgb;
@@ -736,7 +736,15 @@ pub(crate) fn import_pdf_pages(
     on_page: &mut dyn FnMut(&mut Session, usize, &PageImport),
 ) -> Result<Vec<PageImport>> {
     let hooks = io().ok_or_else(|| bad("pdfimport", "file formats are not available in this build"))?;
-    let read_pdf = hooks.read_pdf.ok_or_else(|| bad("pdfimport", "PDF import is not available in this build"))?;
+    // A set's DWG and DXF sheets are drawings, read by the drawing reader (Q6382: every sheet went
+    // to the PDF reader, "couldn't parse input", and the job built nothing); PDF pages need the
+    // PDF reader, asked for only when there is one.
+    let read_pdf = hooks.read_pdf;
+    if read_pdf.is_none() && pages.iter().any(|pg| !is_drawing_sheet(&pg.path)) {
+        return Err(bad("pdfimport", "PDF import is not available in this build"));
+    }
+    let read_drawing = hooks.read;
+    let job_units = s.doc().map_or(1.0, super::perceive::units_per_inch);
     let mut files: BTreeMap<String, std::result::Result<Arc<Vec<u8>>, String>> = BTreeMap::new();
     for pg in pages {
         if !files.contains_key(&pg.path) {
@@ -749,6 +757,10 @@ pub(crate) fn import_pdf_pages(
             Some(Err(e)) => return Err(e.clone()),
             None => return Err(format!("{}: not read", pg.path)),
         };
+        if is_drawing_sheet(&pg.path) {
+            return drawing_sheet(read_drawing, &bytes, &pg.path, &pg.params, job_units);
+        }
+        let read_pdf = read_pdf.ok_or_else(|| "PDF import is not available in this build".to_string())?;
         let (mut d, mut report) = read_pdf(&bytes, &pg.params)?;
         if full_scale
             && pg.params.get("scale").is_none()
@@ -803,7 +815,13 @@ pub(crate) fn import_pdf_pages(
                             seen.insert(print, i);
                             let at = pg.at.unwrap_or(Vec2::new(x, 0.0));
                             let file = std::path::Path::new(&pg.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                            match import_drawing(s, &src, at, 1.0, &file) {
+                            // A drawing sheet comes in its own units and where it was drawn: into
+                            // the job's units, its lower left at `at` as a page's is.
+                            let (to, units) = match drawing_placement(&report) {
+                                Some((origin, units)) => (at - origin, units),
+                                None => (at, 1.0),
+                            };
+                            match import_drawing(s, &src, to, units, &file) {
                                 Ok(_) => {
                                     let w = report.get("sheet").and_then(|v| v.get(0)).and_then(Value::as_f64).unwrap_or(0.0);
                                     let h = report.get("sheet").and_then(|v| v.get(1)).and_then(Value::as_f64).unwrap_or(0.0);
@@ -835,6 +853,84 @@ pub(crate) fn import_pdf_pages(
         }
     }
     Ok(out)
+}
+
+/// Whether a print set's sheet file is a drawing (DWG, DXF, a CADaddy drawing) rather than a PDF.
+pub(crate) fn is_drawing_sheet(path: &str) -> bool {
+    let ext = std::path::Path::new(path).extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    matches!(ext.as_str(), "dwg" | "dxf" | "dwt" | "cdy")
+}
+
+/// Farthest from its origin a drawing sheet's objects count toward where the sheet is (a stray
+/// object far away doesn't make the sheet miles wide).
+const DRAWING_SHEET_REACH: f64 = 1.0e9;
+
+/// One DWG/DXF sheet of a print set read for [`import_pdf_pages`]: the drawing as its file holds
+/// it (model space, full size, its own units) and a report like a PDF page's, in the job's units
+/// (`job_units`: its drawing units per inch): `units` (the factor into them), `origin` (the
+/// sheet's lower left, in them), `scale` (job units per sheet inch: the plot scale, from the
+/// `scale` option, else [`cadaddy_mepfix::printset::drawing_plot_scale`]), `scaleSource`, `sheet` (the paper it
+/// prints on at that scale, inches) and `planPrintScale` (the note's sheet inches per foot).
+/// A drawing with nothing in its model space is no sheet: an error, as an unreadable file is.
+fn drawing_sheet(
+    read: fn(&[u8], &str) -> std::result::Result<Drawing, String>,
+    bytes: &[u8],
+    path: &str,
+    params: &Value,
+    job_units: f64,
+) -> std::result::Result<(Drawing, Value), String> {
+    let name = std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().to_string());
+    let d = read(bytes, path).map_err(|e| format!("{name}: {e}"))?;
+    let own = super::perceive::units_per_inch(&d);
+    let units = job_units / own;
+    if !(units.is_finite() && units > 0.0) {
+        return Err(format!("{name}: its units can't be read"));
+    }
+    let (b, _) = d.extents_within(&Space::Model, DRAWING_SHEET_REACH);
+    let (w, h) = (b.width() * units, b.height() * units);
+    if b.is_empty() || !(w.is_finite() && h.is_finite()) || w <= 0.0 || h <= 0.0 {
+        return Err(format!("{name}: nothing is drawn in its model space"));
+    }
+    // The plot scale in the job's units (a sheet's own is in its units).
+    let given = params.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0);
+    let (k, source) = match given {
+        Some(k) => (k, "option".to_string()),
+        None => {
+            let (k, source) = cadaddy_mepfix::printset::drawing_plot_scale(&d);
+            (k * units, source)
+        }
+    };
+    if !(k.is_finite() && k > 0.0) {
+        return Err(format!("{name}: its plot scale can't be read"));
+    }
+    let note = cadaddy_mepfix::sheet_reader::scale_note(&d);
+    let mut report = json!({
+        "drawing": true,
+        "units": units,
+        "origin": [b.min.x * units, b.min.y * units],
+        "scale": k,
+        "scaleSource": source,
+        "sheet": [w / k, h / k],
+    });
+    if let Some((_, v)) = note {
+        report["planPrintScale"] = json!(v);
+    }
+    if !d.read_notes.is_empty() {
+        report["notes"] = json!(d.read_notes.iter().take(20).collect::<Vec<_>>());
+    }
+    Ok((d, report))
+}
+
+/// Where a drawing sheet's report ([`drawing_sheet`]) says its lower left is, and the factor into
+/// the job's units; `None` for a PDF page's.
+fn drawing_placement(report: &Value) -> Option<(Vec2, f64)> {
+    if report.get("drawing").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let o = report.get("origin")?.as_array()?;
+    let (x, y) = (o.first()?.as_f64()?, o.get(1)?.as_f64()?);
+    let units = report.get("units")?.as_f64().filter(|u| u.is_finite() && *u > 0.0)?;
+    (x.is_finite() && y.is_finite()).then_some((Vec2::new(x, y), units))
 }
 
 /// Copy `src`'s model space into the current space (scaled about the origin, then moved to
@@ -901,16 +997,7 @@ fn read_file(_path: &str) -> Result<Vec<u8>> {
 /// Add the source's layers, linetypes and styles that this drawing doesn't have (a name that
 /// exists keeps this drawing's definition). Returns how many layers and how many other records were added.
 pub(crate) fn merge_tables(d: &mut Drawing, src: &Drawing) -> (usize, usize) {
-    fn merge<T: Clone>(ours: &mut Vec<T>, theirs: &[T], name: fn(&T) -> &str) -> usize {
-        let mut n = 0;
-        for t in theirs {
-            if !ours.iter().any(|o| name(o).eq_ignore_ascii_case(name(t))) {
-                ours.push(t.clone());
-                n += 1;
-            }
-        }
-        n
-    }
+    use crate::cmd::merge::merge_named as merge;
     let layers = merge(&mut d.layers, &src.layers, |l| &l.name);
     let others = merge(&mut d.linetypes, &src.linetypes, |l| &l.name)
         + merge(&mut d.text_styles, &src.text_styles, |t| &t.name)
@@ -926,29 +1013,7 @@ pub(crate) fn merge_tables(d: &mut Drawing, src: &Drawing) -> (usize, usize) {
 /// (not copied). Every page of a print set numbers its symbols from 1: another page's
 /// `PDF-SYM-1` is another symbol.
 pub(crate) fn block_names(d: &Drawing, src: &Drawing) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    let mut taken: BTreeSet<String> = d.blocks.keys().map(|k| k.to_ascii_uppercase()).collect();
-    for (name, b) in &src.blocks {
-        let upper = name.to_ascii_uppercase();
-        if upper.starts_with("*MODEL_SPACE") || upper.starts_with("*PAPER_SPACE") {
-            continue;
-        }
-        let anonymous = b.anonymous || name.starts_with('*') || upper.starts_with("PDF-SYM-");
-        let to = if !taken.contains(&upper) {
-            name.clone()
-        } else if anonymous {
-            let prefix: String = name.chars().take_while(|c| !c.is_ascii_digit()).collect();
-            match (1..=1_000_000).map(|i| format!("{prefix}{i}")).find(|n| !taken.contains(&n.to_ascii_uppercase())) {
-                Some(n) => n,
-                None => continue,
-            }
-        } else {
-            continue;
-        };
-        taken.insert(to.to_ascii_uppercase());
-        out.insert(name.clone(), to);
-    }
-    out
+    crate::cmd::merge::block_renames_with(d, src, None, |upper| upper.starts_with("PDF-SYM-"))
 }
 
 /// A copy of a source entity for this drawing: a fresh handle, block references renamed, and

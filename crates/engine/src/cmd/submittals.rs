@@ -27,6 +27,8 @@ const MAX_FILES: usize = 64;
 const MAX_ELEMENTS: usize = 500_000;
 /// Marks listed in a report.
 const MAX_LISTED: usize = 200;
+/// Products of one mark kept (one per category).
+const MAX_CATEGORIES: usize = 8;
 /// The element kinds a submittal product goes on (doors and walls have type marks of their own).
 const PRODUCT_KINDS: &[&str] = &["device", "light_fixture", "plumbing_fixture", "fixture", "equipment"];
 
@@ -44,6 +46,8 @@ struct Product {
     doc: String,
     /// What `bim.spec_import` proposed for it.
     proposal: Value,
+    /// Its category as the submittal categories say it ([`category_of`]; empty: not said).
+    category: &'static str,
 }
 
 impl Product {
@@ -108,111 +112,103 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, format!("no PDF at {}", given.join(", "))));
     }
 
-    let Read { products, read, unread, questions } = read_products(s, &files);
+    let Read { products, read, unread, mut questions } = read_products(s, &files);
 
-    // The model's elements by type mark.
+    // The model's elements by type mark, each with its category: a type mark is unique only
+    // within a category (luminaire type A, panel A), so a product goes only on its own.
     let d = s.doc()?;
-    let mut by_mark: BTreeMap<String, Vec<Handle>> = BTreeMap::new();
+    let mut by_mark: BTreeMap<String, Vec<(Handle, &'static str)>> = BTreeMap::new();
     // Every entity is looked at (a print set's linework comes first), the elements kept capped.
     let mut kept = 0usize;
     for e in d.model.iter() {
         if kept >= MAX_ELEMENTS {
             break;
         }
-        if let Some(mark) = product_mark(e) {
-            by_mark.entry(mark.to_ascii_uppercase()).or_default().push(e.handle);
+        if let Some((mark, category)) = product_element(e) {
+            by_mark.entry(mark.to_ascii_uppercase()).or_default().push((e.handle, category));
             kept += 1;
         }
     }
 
-    // The products of the model's types into the catalog.
-    let accepted: Vec<Value> = products.iter().filter(|(m, _)| by_mark.contains_key(*m)).map(|(_, p)| p.proposal.clone()).collect();
+    // Which product each element takes: its own category's.
+    let mut picks: BTreeMap<&String, Pick> = BTreeMap::new();
+    for (mark, elems) in &by_mark {
+        let Some(ps) = products.get(mark) else { continue };
+        let pick = pick_products(ps, elems);
+        if let Some(q) = pick.question(mark, ps, elems) {
+            questions.push((mark.clone(), q));
+        }
+        picks.insert(mark, pick);
+    }
+
+    // The products of the model's types into the catalog: one per mark (the catalog is by mark
+    // alone), and none over a type the catalog holds as another category.
+    let mut accepted: Vec<Value> = Vec::new();
+    let mut catalog_skipped: Vec<Value> = Vec::new();
+    for (mark, pick) in &picks {
+        let Some(ps) = products.get(*mark) else { continue };
+        let used: Vec<&Product> = ps.iter().enumerate().filter(|(i, _)| pick.picks.contains(&Some(*i))).map(|(_, p)| p).collect();
+        let held = d.bim_types.get(mark.as_str()).map(|t| category_of(&t.category)).unwrap_or("");
+        match used.as_slice() {
+            [] => {}
+            [one] if held.is_empty() || one.category.is_empty() || held == one.category => accepted.push(one.proposal.clone()),
+            [one] => catalog_skipped.push(json!({"mark": mark, "why": format!("the type catalog holds {mark} as {held}; its {} product stays on its elements only", one.category)})),
+            _ => catalog_skipped.push(json!({"mark": mark, "why": format!("{mark} is a type of {} categories: the type catalog (by mark alone) takes none of them; each stays on its own elements", used.len())})),
+        }
+    }
     let catalog = if accepted.is_empty() {
         0
     } else {
         s.execute("bim.spec_accept", &json!({"proposals": accepted}))?.get("accepted").and_then(Value::as_u64).unwrap_or(0)
     };
 
-    // Each element of a type: what its submittal says it is.
+    // Each element of a type: what its own category's submittal says it is.
     let d = s.doc()?;
     let mut changes: Vec<(Handle, Props)> = Vec::new();
     let mut applied: BTreeMap<String, usize> = BTreeMap::new();
     let mut dimming: BTreeMap<String, String> = BTreeMap::new();
-    for (mark, handles) in &by_mark {
-        let Some(product) = products.get(mark) else { continue };
-        let src = Source::from_doc(SourceKind::Submittal, &product.doc);
-        let mut set: Vec<(&str, Prop)> = Vec::new();
-        if let Some(v) = product.value(keys::MANUFACTURER) {
-            set.push(("manufacturer", Prop::new(v, src.clone())));
+    let mut other_category: BTreeMap<String, BTreeMap<&'static str, usize>> = BTreeMap::new();
+    for (mark, elems) in &by_mark {
+        let (Some(ps), Some(pick)) = (products.get(mark), picks.get(mark)) else { continue };
+        if !pick.other.is_empty() {
+            other_category.insert(mark.clone(), pick.other.clone());
         }
-        if let Some(v) = product.value(keys::CATALOG_NUMBER) {
-            set.push(("catalog_number", Prop::new(v, src.clone())));
-        }
-        if let Some(control) = product.value(keys::DIMMING) {
-            let f = product.field(keys::DIMMING);
-            // "p.3 (ordering row for X)": how it was found.
-            let how = f
-                .and_then(|f| f.get("source"))
-                .and_then(Value::as_str)
-                .and_then(|s| s.split_once('('))
-                .map(|(_, h)| h.trim_end_matches(')').to_string());
-            let inferred = f.and_then(|f| f.get("confidence")).and_then(Value::as_str).is_some_and(|c| c != "stated");
-            let note = match (how, inferred) {
-                (Some(h), true) => format!("inferred: {h}"),
-                (Some(h), false) => h,
-                (None, true) => "inferred".into(),
-                (None, false) => String::new(),
-            };
-            let prop = Prop::new(control.clone(), src.clone());
-            set.push(("dimming", if note.is_empty() { prop } else { prop.with_note(&note) }));
-            dimming.insert(mark.clone(), control);
-        }
-        // What its cut sheet says of it besides (a luminaire's voltage, finish, mounting, CCT,
-        // lumens, wattage).
-        for (key, prop_key) in [
-            (keys::VOLTS, "voltage"),
-            (keys::FINISH, "finish"),
-            (keys::MOUNTING, "mounting_type"),
-            (keys::CCT, "cct"),
-            (keys::LUMENS, "lumens"),
-            (keys::WATTAGE, "wattage"),
-            (super::spec_import::JUNCTION_BOX, "junction_box"),
-        ] {
-            if let Some(v) = product.value(key) {
-                set.push((prop_key, Prop::new(v, src.clone())));
-            }
-        }
-        set.push(("submittal", Prop::new(product.doc.clone(), src.clone())));
-        // A page header its own cut sheet contradicts (Q6336) is said beside the element, never
-        // built: the maker and catalog number it named stay off (the schedule's stand).
-        let header = product.header();
-        if let Some((named, why)) = &header {
-            set.push(("submittal_header", Prop::new(named.clone(), src.clone()).with_note(why)));
-        }
-        for h in handles {
+        let sets: Vec<ProductProps> = ps.iter().map(product_props).collect();
+        for ((h, _), chosen) in elems.iter().zip(&pick.picks) {
             let Some(e) = d.model.get(*h) else { continue };
             let mut store = props::read(&e.common.xdata);
             let before = store.clone();
-            for (key, prop) in &set {
-                // A person's value stays.
-                if store.get(key).is_none_or(|old| old.source.kind != SourceKind::User) {
-                    store.set(key, prop.clone());
+            // What a product of another category put on it before (its mark matched alone) goes.
+            for (j, p) in ps.iter().enumerate() {
+                if *chosen != Some(j) {
+                    drop_product(&mut store, &p.doc);
                 }
             }
-            if header.is_some() {
-                // What an earlier reading took from that header goes.
-                for (key, field) in [("catalog_number", keys::CATALOG_NUMBER), ("manufacturer", keys::MANUFACTURER)] {
-                    if product.value(field).is_none() && store.get(key).is_some_and(|old| old.source.kind == SourceKind::Submittal) {
-                        store.remove(key);
+            if let Some((product, set)) = chosen.and_then(|i| ps.get(i).zip(sets.get(i))) {
+                for (key, prop) in &set.props {
+                    // A person's value stays.
+                    if store.get(key).is_none_or(|old| old.source.kind != SourceKind::User) {
+                        store.set(key, prop.clone());
                     }
                 }
-            } else if store.get("submittal_header").is_some_and(|old| old.source.kind == SourceKind::Submittal) {
-                store.remove("submittal_header");
+                if set.header {
+                    // What an earlier reading took from that header goes.
+                    for (key, field) in [("catalog_number", keys::CATALOG_NUMBER), ("manufacturer", keys::MANUFACTURER)] {
+                        if product.value(field).is_none() && store.get(key).is_some_and(|old| old.source.kind == SourceKind::Submittal) {
+                            store.remove(key);
+                        }
+                    }
+                } else if store.get("submittal_header").is_some_and(|old| old.source.kind == SourceKind::Submittal) {
+                    store.remove("submittal_header");
+                }
+                if let Some(control) = &set.dimming {
+                    dimming.entry(mark.clone()).or_insert_with(|| control.clone());
+                }
+                *applied.entry(mark.clone()).or_insert(0) += 1;
             }
             if store != before {
                 changes.push((*h, store));
             }
-            *applied.entry(mark.clone()).or_insert(0) += 1;
         }
     }
     let d = s.doc_mut()?;
@@ -268,21 +264,17 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let listed: serde_json::Map<String, Value> = products
         .iter()
         .take(MAX_LISTED)
-        .map(|(m, p)| {
-            (
-                m.clone(),
-                json!({
-                    "manufacturer": p.value(keys::MANUFACTURER).unwrap_or_default(),
-                    "catalog_number": p.value(keys::CATALOG_NUMBER).unwrap_or_default(),
-                    "header": p.header().map(|(named, why)| json!({"named": named, "why": why})),
-                    "category": p.proposal.get("category").and_then(Value::as_str).unwrap_or_default(),
-                    "quantity": p.value(super::spec_import::QUANTITY).and_then(|q| q.parse::<u32>().ok()),
-                    "doc": p.doc,
-                }),
-            )
+        .filter_map(|(m, ps)| {
+            let (first, rest) = ps.split_first()?;
+            let mut j = product_json(first);
+            // The same mark's products of other categories (a luminaire type A, a panel A).
+            if !rest.is_empty() {
+                j["also"] = rest.iter().map(product_json).collect::<Vec<_>>().into();
+            }
+            Some((m.clone(), j))
         })
         .collect();
-    Ok(json!({
+    let mut out = json!({
         "products": listed,
         "files": read,
         "applied": applied,
@@ -296,13 +288,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "unread": unread,
         "luminaire_boxes_removed": boxes_removed,
         "luminaire_boxes_needed": boxes_needed,
-    }))
+    });
+    // Elements of a submitted mark whose own category no submittal covers (a panel A beside
+    // luminaire type A's cut sheet), and the products the catalog (by mark alone) didn't take.
+    out["other_category"] = json!(other_category);
+    out["catalog_skipped"] = json!(catalog_skipped);
+    Ok(out)
 }
 
 /// What the submittal files say.
 struct Read {
-    /// The products by mark (upper case): the first submittal giving a mark a maker or number.
-    products: BTreeMap<String, Product>,
+    /// The products by mark (upper case): for each category, the first submittal giving a mark
+    /// a maker or number.
+    products: BTreeMap<String, Vec<Product>>,
     /// Each file read: its products.
     read: Vec<Value>,
     /// Each file that couldn't be read, and why.
@@ -325,7 +323,11 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
         let mut marks = Vec::new();
         for prop in r.get("proposals").and_then(Value::as_array).into_iter().flatten() {
             let mark = prop.get("mark").and_then(Value::as_str).unwrap_or("").trim();
-            let product = Product { doc: name.clone(), proposal: prop.clone() };
+            let product = Product {
+                doc: name.clone(),
+                proposal: prop.clone(),
+                category: category_of(prop.get("category").and_then(Value::as_str).unwrap_or("")),
+            };
             // A product is what its data sheet says it is: a mark with no maker or number is
             // only a word on a page, unless its cut sheet shows a luminaire (a custom fixture's
             // shop drawing names its type and no maker).
@@ -344,7 +346,10 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
                 .unwrap_or_default();
             marks.push(mark.to_string());
             let doc = if page.is_empty() { name.clone() } else { format!("{name} {page}") };
-            out.products.entry(mark.to_ascii_uppercase()).or_insert(Product { doc, ..product });
+            let same = out.products.entry(mark.to_ascii_uppercase()).or_default();
+            if !same.iter().any(|p| p.category == product.category) && same.len() < MAX_CATEGORIES {
+                same.push(Product { doc, ..product });
+            }
         }
         for q in r.get("rfis").and_then(Value::as_array).into_iter().flatten() {
             let mark = q.get("mark").and_then(Value::as_str).unwrap_or("").to_string();
@@ -379,8 +384,8 @@ pub(crate) fn product_marks(s: &mut Session, paths: &[String]) -> ProductMarks {
     let files = pdf_files(paths);
     let products = read_products(s, &files).products;
     let mut out = ProductMarks::default();
-    for (mark, p) in &products {
-        if p.proposal.get("category").and_then(Value::as_str) == Some("luminaire") {
+    for (mark, ps) in &products {
+        if let Some(p) = ps.iter().find(|p| p.category == "luminaire") {
             if p.value(keys::MOUNTING).is_some_and(|m| m.eq_ignore_ascii_case("wall")) {
                 out.wall.push(mark.clone());
             } else {
@@ -392,8 +397,9 @@ pub(crate) fn product_marks(s: &mut Session, paths: &[String]) -> ProductMarks {
     out
 }
 
-/// The type mark of a device, fixture or equipment element.
-fn product_mark(e: &Entity) -> Option<String> {
+/// The type mark of a device, fixture or equipment element, and its category
+/// ([`element_category`]).
+fn product_element(e: &Entity) -> Option<(String, &'static str)> {
     let kind = super::elemprops::element_kind(e)?;
     if !PRODUCT_KINDS.contains(&kind.as_str()) {
         return None;
@@ -401,7 +407,214 @@ fn product_mark(e: &Entity) -> Option<String> {
     let store = props::read(&e.common.xdata);
     let mark = store.get("type_mark").filter(|p| p.has_value())?.text();
     let mark = mark.trim();
-    (!mark.is_empty()).then(|| mark.to_string())
+    (!mark.is_empty()).then(|| (mark.to_string(), element_category(e, &kind, &store)))
+}
+
+/// The submittal category of an element of kind `kind` (Q6588): a light fixture a `luminaire`,
+/// a plumbing fixture `plumbing`, a piece of equipment `gear` where its words name electrical
+/// gear (`submittals.element_category`), else `equipment`. A device or fixture that says
+/// nothing more is of no known category (empty): any one product of its mark goes on it.
+fn element_category(e: &Entity, kind: &str, store: &Props) -> &'static str {
+    match kind {
+        "light_fixture" => "luminaire",
+        "plumbing_fixture" => "plumbing",
+        "equipment" => {
+            let mut words: Vec<String> =
+                ["kind", "part", "title"].iter().filter_map(|k| super::bimlook::made_tag(e, k)).map(str::to_string).collect();
+            words.extend(["kind", "type", "description", "name", "title", "equipment_type"].iter().filter_map(|k| store.get(k)).map(Prop::text));
+            let text = words.join(" ").to_ascii_uppercase().replace([':', '_', '-'], " ");
+            cadaddy_mepfix::wordrules::first_rule("submittals.element_category", |w| has_word(&text, w)).map_or("equipment", |r| r.value)
+        }
+        _ => "",
+    }
+}
+
+/// A type's category (as a submittal, a schedule or a spec section read it) said as a submittal
+/// category (`submittals.category_aliases`); empty where it says nothing of one.
+pub(crate) fn category_of(category: &str) -> &'static str {
+    let c = category.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+    if c.is_empty() {
+        return "";
+    }
+    cadaddy_mepfix::wordrules::pair_value("submittals.category_aliases", &c).unwrap_or("")
+}
+
+/// The submittal category of a CSI section (`26 51 19`: `luminaire`;
+/// `submittals.section_category`, the first whose number starts it).
+pub(crate) fn section_category(section: &str) -> Option<&'static str> {
+    let s = section.split_whitespace().collect::<Vec<_>>().join(" ");
+    if s.is_empty() {
+        return None;
+    }
+    cadaddy_mepfix::wordrules::pairs("submittals.section_category")
+        .iter()
+        .find(|(w, _)| s == *w || s.strip_prefix(*w).is_some_and(|rest| rest.starts_with(' ')))
+        .map(|(_, v)| *v)
+}
+
+/// Whether upper-case `text` has `word` (a word or phrase) whole: not inside a longer word.
+pub(crate) fn has_word(text: &str, word: &str) -> bool {
+    let w = word.trim().to_ascii_uppercase();
+    if w.is_empty() {
+        return false;
+    }
+    let b = text.as_bytes();
+    text.match_indices(w.as_str()).any(|(i, _)| {
+        let before = i.checked_sub(1).and_then(|j| b.get(j)).is_none_or(|c| !c.is_ascii_alphanumeric());
+        let after = b.get(i + w.len()).is_none_or(|c| !c.is_ascii_alphanumeric());
+        before && after
+    })
+}
+
+/// Which product of a mark each of its elements takes (Q6588).
+struct Pick {
+    /// Per element (in order): the index of its product, if it takes one.
+    picks: Vec<Option<usize>>,
+    /// Elements that take none because their mark's products could be either's.
+    ambiguous: usize,
+    /// Elements of a category none of the mark's products is (a panel beside a luminaire type).
+    other: BTreeMap<&'static str, usize>,
+}
+
+/// Each element takes its own category's product; a product of no stated category goes on the
+/// elements no product of their own covers when they are of one category (or none known), and
+/// is a question when they are of two; an element of no known category takes its mark's one
+/// product. A mark is never matched alone across categories.
+fn pick_products(ps: &[Product], elems: &[(Handle, &'static str)]) -> Pick {
+    let unknown = ps.iter().position(|p| p.category.is_empty());
+    let exact = |c: &str| ps.iter().position(|p| !c.is_empty() && p.category == c);
+    // The categories the unknown product would go on: those no product of their own covers.
+    let falls: std::collections::BTreeSet<&str> = elems.iter().map(|(_, c)| *c).filter(|c| !c.is_empty() && exact(c).is_none()).collect();
+    let unknown_ok = unknown.is_some() && falls.len() <= 1;
+    let mut out = Pick { picks: Vec::with_capacity(elems.len()), ambiguous: 0, other: BTreeMap::new() };
+    for (_, c) in elems {
+        let pick = if c.is_empty() {
+            match ps {
+                [one] if !one.category.is_empty() || unknown_ok => Some(0),
+                _ => None,
+            }
+        } else {
+            exact(c).or(if unknown_ok { unknown } else { None })
+        };
+        if pick.is_none() {
+            if c.is_empty() || unknown.is_some() {
+                out.ambiguous += 1;
+            } else {
+                *out.other.entry(*c).or_default() += 1;
+            }
+        }
+        out.picks.push(pick);
+    }
+    out
+}
+
+impl Pick {
+    /// The question a mark its submittals leave open between categories.
+    fn question(&self, mark: &str, ps: &[Product], elems: &[(Handle, &'static str)]) -> Option<String> {
+        if self.ambiguous == 0 {
+            return None;
+        }
+        let mut cats: BTreeMap<&str, usize> = BTreeMap::new();
+        for (_, c) in elems {
+            *cats.entry(if c.is_empty() { "of no known category" } else { c }).or_default() += 1;
+        }
+        let cats: Vec<String> = cats.iter().map(|(c, n)| format!("{n} {c}")).collect();
+        let prods: Vec<String> = ps
+            .iter()
+            .map(|p| format!("{} ({})", if p.category.is_empty() { "a product of no stated category" } else { p.category }, p.doc))
+            .collect();
+        Some(format!(
+            "type {mark}: its elements are {} and the submittals give {mark} as {}: a type mark is unique only within a category, so {} of them take no product; say which each is (its category, or the submittal's section)",
+            cats.join(", "),
+            prods.join(", "),
+            self.ambiguous
+        ))
+    }
+}
+
+/// The properties a product gives each element it goes on.
+struct ProductProps {
+    props: Vec<(&'static str, Prop)>,
+    /// Its page header is contradicted by its cut sheet (Q6336).
+    header: bool,
+    /// How it dims.
+    dimming: Option<String>,
+}
+
+fn product_props(product: &Product) -> ProductProps {
+    let src = Source::from_doc(SourceKind::Submittal, &product.doc);
+    let mut set: Vec<(&'static str, Prop)> = Vec::new();
+    if let Some(v) = product.value(keys::MANUFACTURER) {
+        set.push(("manufacturer", Prop::new(v, src.clone())));
+    }
+    if let Some(v) = product.value(keys::CATALOG_NUMBER) {
+        set.push(("catalog_number", Prop::new(v, src.clone())));
+    }
+    let dimming = product.value(keys::DIMMING);
+    if let Some(control) = &dimming {
+        let f = product.field(keys::DIMMING);
+        // "p.3 (ordering row for X)": how it was found.
+        let how =
+            f.and_then(|f| f.get("source")).and_then(Value::as_str).and_then(|s| s.split_once('(')).map(|(_, h)| h.trim_end_matches(')').to_string());
+        let inferred = f.and_then(|f| f.get("confidence")).and_then(Value::as_str).is_some_and(|c| c != "stated");
+        let note = match (how, inferred) {
+            (Some(h), true) => format!("inferred: {h}"),
+            (Some(h), false) => h,
+            (None, true) => "inferred".into(),
+            (None, false) => String::new(),
+        };
+        let prop = Prop::new(control.clone(), src.clone());
+        set.push(("dimming", if note.is_empty() { prop } else { prop.with_note(&note) }));
+    }
+    // What its cut sheet says of it besides (a luminaire's voltage, finish, mounting, CCT,
+    // lumens, wattage).
+    for (key, prop_key) in [
+        (keys::VOLTS, "voltage"),
+        (keys::FINISH, "finish"),
+        (keys::MOUNTING, "mounting_type"),
+        (keys::CCT, "cct"),
+        (keys::LUMENS, "lumens"),
+        (keys::WATTAGE, "wattage"),
+        (super::spec_import::JUNCTION_BOX, "junction_box"),
+    ] {
+        if let Some(v) = product.value(key) {
+            set.push((prop_key, Prop::new(v, src.clone())));
+        }
+    }
+    set.push(("submittal", Prop::new(product.doc.clone(), src.clone())));
+    // A page header its own cut sheet contradicts (Q6336) is said beside the element, never
+    // built: the maker and catalog number it named stay off (the schedule's stand).
+    let header = product.header();
+    if let Some((named, why)) = &header {
+        set.push(("submittal_header", Prop::new(named.clone(), src.clone()).with_note(why)));
+    }
+    ProductProps { props: set, header: header.is_some(), dimming }
+}
+
+/// Takes off an element what product `doc` put on it (its values sourced to that submittal
+/// page): a product of another category its mark alone gave it before (Q6588).
+fn drop_product(store: &mut Props, doc: &str) {
+    let Some(doc) = Source::from_doc(SourceKind::Submittal, doc).doc else { return };
+    let keys: Vec<String> = store
+        .iter()
+        .filter(|(_, p)| p.source.kind == SourceKind::Submittal && p.source.doc.as_deref() == Some(doc.as_str()))
+        .map(|(k, _)| k.to_string())
+        .collect();
+    for k in keys {
+        store.remove(&k);
+    }
+}
+
+/// A product as the report lists it.
+fn product_json(p: &Product) -> Value {
+    json!({
+        "manufacturer": p.value(keys::MANUFACTURER).unwrap_or_default(),
+        "catalog_number": p.value(keys::CATALOG_NUMBER).unwrap_or_default(),
+        "header": p.header().map(|(named, why)| json!({"named": named, "why": why})),
+        "category": p.proposal.get("category").and_then(Value::as_str).unwrap_or_default(),
+        "quantity": p.value(super::spec_import::QUANTITY).and_then(|q| q.parse::<u32>().ok()),
+        "doc": p.doc,
+    })
 }
 
 /// The PDFs in the folders under `dir` (not in it) whose path names a product package
@@ -614,6 +827,153 @@ EU2 Duo twin head battery unit   B Lithium cells   K Black   4M Remote heads
         assert_eq!(prop(&s, c, "dimming").unwrap().text(), "mixed", "a question, said on the dimmer");
         assert_eq!(prop(&s, mine, "dimming").unwrap().text(), "ELV", "a person's value stays");
         assert!(prop(&s, plain, "dimming").is_none(), "a 3-way switch doesn't dim");
+    }
+
+    /// An element of type `mark` with the build's tags `extra` (an element kind, a part).
+    fn element(s: &mut Session, mark: &str, made: &str, extra: &[&str], at: f64) -> Handle {
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(at, 0.0), Vec2::new(at + 4.0, 0.0), 2.0, 0.0, 4.0);
+        let t = |v: &str| cadaddy_doc::RawTag { code: 1000, value: v.to_string() };
+        let mut tags = vec![cadaddy_doc::RawTag { code: 1001, value: super::super::wallgen::APP.into() }, t(made), t("Level 1"), t(&Handle(0).hex())];
+        tags.extend(extra.iter().map(|x| t(x)));
+        let mut store = Props::default();
+        store.set("type_mark", Prop::new(mark, Source::print("E-1", None)));
+        let xdata = props::write(&tags, &store);
+        let d = s.doc_mut().unwrap();
+        d.add(&Space::Model, Common { layer: "3D-MEP".into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap()
+    }
+
+    fn luminaire(s: &mut Session, mark: &str, at: f64) -> Handle {
+        element(s, mark, "device", &["element:light_fixture"], at)
+    }
+
+    fn panel(s: &mut Session, tag: &str, at: f64) -> Handle {
+        element(s, tag, "mep", &["kind:equipment", "part:equipment:panel", &format!("tag:{tag}")], at)
+    }
+
+    fn write(name: &str, text: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cadaddy-submittal-cat-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(format!("{name}.txt"));
+        std::fs::write(&file, text).unwrap();
+        file
+    }
+
+    /// Two luminaire cut sheets, types A and B, as a lighting submittal prints them.
+    const LIGHTING: &str = "\
+--- page 1 of 2 ---
+Job Name : SOME JOB   Type : A
+Manufacturer : ACME LIGHTING
+Model Number : QX100E1
+QX100E1   4in LED downlight, 120V, 1000 lumens, 3000K CCT, 90 CRI, LE/TE 5% Dim
+--- page 2 of 2 ---
+Job Name : SOME JOB   Type : B
+Manufacturer : ACME LIGHTING
+Model Number : STRIP4 840
+4ft LED strip luminaire, 4000K CCT, 80 CRI, 4400 lumens, 0-10V dimming
+";
+
+    /// Q6588: luminaire types and panelboards both use single letters. A lighting submittal's
+    /// type A goes on luminaires of type A, never on panelboard A; what an earlier mark-only
+    /// reading put on the panel goes.
+    #[test]
+    fn a_lighting_submittal_goes_on_luminaires_not_panels_of_the_same_letter() {
+        let mut s = Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let la = luminaire(&mut s, "A", 0.0);
+        let lb = luminaire(&mut s, "B", 10.0);
+        let pa = panel(&mut s, "A", 20.0);
+        let pb = panel(&mut s, "B", 30.0);
+        let file = write("lighting", LIGHTING);
+        // An earlier reading (by mark alone) put luminaire A's product on panel B... A's page.
+        {
+            let d = s.doc_mut().unwrap();
+            let mut store = props::read(&d.model.get(pb).unwrap().common.xdata);
+            let src = Source::from_doc(SourceKind::Submittal, "lighting p.2");
+            store.set("manufacturer", Prop::new("ACME LIGHTING", src.clone()));
+            store.set("dimming", Prop::new("0-10V", src.clone()));
+            store.set("submittal", Prop::new("lighting p.2", src));
+            store.set("rating", Prop::new("225A", Source::print("E-1", None)));
+            d.modify_entity(pb, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).unwrap();
+        }
+        let r = s.execute(CMD, &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        std::fs::remove_dir_all(file.parent().unwrap()).ok();
+        assert_eq!(r["products"]["A"]["category"], "luminaire", "{r}");
+        assert_eq!((r["applied"]["A"].clone(), r["applied"]["B"].clone()), (json!(1), json!(1)), "the luminaires only: {r}");
+        assert_eq!(r["other_category"]["A"]["gear"], 1, "{r}");
+        assert_eq!(prop(&s, la, "manufacturer").unwrap().text(), "ACME LIGHTING");
+        assert_eq!(prop(&s, lb, "dimming").unwrap().text(), "0-10V");
+        for (h, name) in [(pa, "A"), (pb, "B")] {
+            for key in ["manufacturer", "catalog_number", "dimming", "cct", "submittal"] {
+                assert!(prop(&s, h, key).is_none(), "panel {name} has no luminaire {key}: {:?}", prop(&s, h, key));
+            }
+        }
+        assert_eq!(prop(&s, pb, "rating").unwrap().text(), "225A", "the panel's own values stay");
+        assert_eq!(s.doc().unwrap().bim_types.get("A").map(|t| t.category.clone()).as_deref(), Some("luminaire"));
+    }
+
+    /// A product its submittal doesn't say the category of, whose mark is on elements of two
+    /// categories, is a question: written to neither.
+    #[test]
+    fn a_mark_on_two_categories_with_an_unsaid_product_is_a_question() {
+        let mut s = Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let la = luminaire(&mut s, "C", 0.0);
+        let pc = panel(&mut s, "C", 10.0);
+        let file = write("unsaid", "--- page 1 of 1 ---\nType : C\nManufacturer : SOME MAKER\nModel Number : ZX-9\nA product.\n");
+        let r = s.execute(CMD, &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        std::fs::remove_dir_all(file.parent().unwrap()).ok();
+        assert!(r["applied"].get("C").is_none(), "{r}");
+        assert!(prop(&s, la, "manufacturer").is_none() && prop(&s, pc, "manufacturer").is_none());
+        let q = r["questions"].as_array().unwrap().iter().find(|q| q["mark"] == "C").cloned().unwrap_or_default();
+        assert!(q["text"].as_str().is_some_and(|t| t.contains("1 gear") && t.contains("1 luminaire")), "{r}");
+        // One category only: it goes on them.
+        let mut s = Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let only = panel(&mut s, "C", 0.0);
+        let file = write("unsaid-one", "--- page 1 of 1 ---\nType : C\nManufacturer : SOME MAKER\nModel Number : ZX-9\nA product.\n");
+        let r = s.execute(CMD, &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        std::fs::remove_dir_all(file.parent().unwrap()).ok();
+        assert_eq!(r["applied"]["C"], 1, "{r}");
+        assert_eq!(prop(&s, only, "manufacturer").unwrap().text(), "SOME MAKER");
+    }
+
+    /// A gear submittal (its CSI section, or a panelboard cut sheet) and a lighting submittal
+    /// both giving type A: each goes on its own category's elements.
+    #[test]
+    fn a_gear_and_a_lighting_product_of_one_mark_each_go_on_their_own() {
+        for gear in [
+            "--- page 1 of 1 ---\n26 24 16   PANELBOARDS\nType : A\nManufacturer : VOLTCO\nModel Number : PNL-42\n",
+            "--- page 1 of 1 ---\nType : A\nManufacturer : VOLTCO\nModel Number : PNL-42\nLighting and appliance panelboard, main lugs only, 42 circuits\n",
+        ] {
+            let mut s = Session::new();
+            s.execute("new", &json!({})).unwrap();
+            let la = luminaire(&mut s, "A", 0.0);
+            let pa = panel(&mut s, "A", 10.0);
+            let lighting = write("lighting2", LIGHTING);
+            let gear_file = write("gear2", gear);
+            let r = s.execute(CMD, &json!({"paths": [lighting.to_string_lossy(), gear_file.to_string_lossy()]})).unwrap();
+            std::fs::remove_dir_all(lighting.parent().unwrap()).ok();
+            std::fs::remove_dir_all(gear_file.parent().unwrap()).ok();
+            assert_eq!(r["applied"]["A"], 2, "{r}");
+            assert_eq!(prop(&s, la, "manufacturer").unwrap().text(), "ACME LIGHTING", "{r}");
+            assert_eq!(prop(&s, pa, "manufacturer").unwrap().text(), "VOLTCO", "{r}");
+            assert_eq!(prop(&s, pa, "catalog_number").unwrap().text(), "PNL-42");
+            assert!(prop(&s, pa, "dimming").is_none() && prop(&s, pa, "cct").is_none(), "{r}");
+            assert_eq!(r["products"]["A"]["also"][0]["catalog_number"], "PNL-42", "{r}");
+            assert!(r["catalog_skipped"].as_array().is_some_and(|c| c.iter().any(|c| c["mark"] == "A")), "the catalog is by mark alone: {r}");
+        }
+    }
+
+    #[test]
+    fn categories_are_rule_data() {
+        assert_eq!(section_category("26 51 19"), Some("luminaire"));
+        assert_eq!(section_category("26  24 16.13"), Some("gear"));
+        assert_eq!(section_category("26 5"), None);
+        assert_eq!(section_category("23 34 23"), Some("equipment"));
+        assert_eq!(category_of("Switchboard"), "gear");
+        assert_eq!(category_of("electrical"), "");
+        assert!(has_word("TYPE A PANELBOARD", "panelboard") && !has_word("PANELBOARDS", "PANELBOARD") && !has_word("SUBPANEL", "PANEL"));
     }
 
     #[test]

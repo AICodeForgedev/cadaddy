@@ -50,7 +50,7 @@ fn the_heuristic_pipeline_scores_every_case() {
     let t = std::time::Instant::now();
     let r = s.execute("p2m.bench", &json!({})).unwrap();
     eprintln!("p2m.bench in {:?}: {}", t.elapsed(), serde_json::to_string_pretty(&r).unwrap());
-    for name in ["single", "multi", "messy", "pdf"] {
+    for name in ["single", "multi", "messy", "pdf", "pdf_openings", "pdf_job"] {
         let c = case(&r, name);
         assert!(c.get("skipped").is_none() && c.get("error").is_none(), "{c}");
         // Every step ran.
@@ -61,7 +61,12 @@ fn the_heuristic_pipeline_scores_every_case() {
         let at = |k: &str| sc[k].as_f64().unwrap_or_else(|| panic!("{name}: no {k} in {sc}"));
         assert!(at("walls") >= 0.9, "{name} walls: {sc}");
         assert_eq!(at("openings"), 1.0, "{name} openings: {sc}");
-        assert!(at("rooms") >= 0.9, "{name} rooms: {sc}");
+        // The plain PDF storey's openings are its measure (its rooms aren't: see `gapped_truth`).
+        if name.starts_with("pdf_") {
+            assert!(sc.get("rooms").is_none(), "{name}: {sc}");
+        } else {
+            assert!(at("rooms") >= 0.9, "{name} rooms: {sc}");
+        }
         assert_eq!(at("heights"), 1.0, "{name} heights: {sc}");
         if name == "multi" {
             assert_eq!(at("stairs"), 1.0, "{name} stairs: {sc}");

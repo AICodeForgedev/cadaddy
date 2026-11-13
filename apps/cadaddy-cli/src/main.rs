@@ -19,6 +19,19 @@
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// The allocator on Linux with glibc and on macOS. glibc's malloc gives allocating threads arenas
+/// of their own (up to 8 per core) and keeps what a thread frees in its arena, so a job on a
+/// many-core machine held several GB it had already freed: its peak followed the core count, not
+/// what it held (a 24-thread print-set job peaked at 11.5 GB, 4.8 GB with mimalloc, in the same
+/// time). macOS's malloc keeps freed small blocks in its regions too, counted in the process's
+/// physical footprint until the system is short of memory: a print set job's footprint peaked at
+/// 8.6 GB, 5.8 GB with mimalloc and 12 % faster (Q6389). mimalloc lets any thread reuse freed
+/// pages and hands unused ones back to the system. Windows, wasm and musl keep the system
+/// allocator (tests/job_memory.rs).
+#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// `println!` that doesn't panic when stdout is closed (`cadaddy-cli commands | head`) with
 /// "failed printing to stdout: Broken pipe (os error 32)". Once stdout has failed, later output is
 /// dropped and the work goes on: see `stdout_failed`.
@@ -1193,6 +1206,10 @@ fn run(args: &[String]) -> Result<(), String> {
         for note in cadaddy_engine::cmd::file::adopt_session_images(&mut s, &p) {
             eprintln!("{note}");
         }
+        // An associative model goes with the drawing as SAVE writes it: it follows its plan again
+        // when the file is opened.
+        // (Only drawing formats keep it; any other output ignores it.)
+        cadaddy_engine::cmd::revise3d::before_save(&mut s);
         export(&s, &p)?;
     }
     if let Some(p) = exp {

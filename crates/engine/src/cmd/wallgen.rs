@@ -28,7 +28,7 @@ pub(crate) use outline::Floors;
 /// The extended data application that marks what WALLGEN made (part, level, source object).
 pub const APP: &str = "CADADDY_WALLGEN";
 /// Floor slab thickness when none is given, feet.
-const SLAB_FT: f64 = 0.5;
+pub(crate) const SLAB_FT: f64 = 0.5;
 /// A door leaf's thickness, inches.
 const LEAF_IN: f64 = 1.75;
 /// A door or window frame: jamb and head width along the opening, and how far its casing
@@ -1112,6 +1112,32 @@ fn plan_touched(a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
         .collect()
 }
 
+/// Whether object `h`, different between `before` (where a command started) and `now`, differs
+/// only because a sheet change during the command (`moves`: each as the drawing before and after
+/// it) loaded it into memory or put it out (Q6570): put out as it was when the command started,
+/// or loaded and unchanged since, or both. That is no edit of the plan.
+fn sheet_moved(moves: &[(Arc<Drawing>, Arc<Drawing>)], before: &Drawing, now: &Drawing, h: Handle) -> bool {
+    let put_out =
+        |b: &Arc<Entity>| moves.iter().any(|(pre, post)| post.model.get(h).is_none() && pre.model.get(h).is_some_and(|p| Arc::ptr_eq(p, b)));
+    let loaded = |n: &Arc<Entity>| moves.iter().any(|(pre, post)| pre.model.get(h).is_none() && post.model.get(h).is_some_and(|p| Arc::ptr_eq(p, n)));
+    match (before.model.get(h), now.model.get(h)) {
+        (Some(b), None) => put_out(b),
+        (None, Some(n)) => loaded(n),
+        (Some(b), Some(n)) => put_out(b) && loaded(n),
+        (None, None) => true,
+    }
+}
+
+/// [`plan_touched`] between `a` and `b`, less what the active drawing's sheet changes during the
+/// command only moved in or out of memory ([`sheet_moved`]).
+fn plan_edited(st: &crate::DocState, a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
+    let mut touched = plan_touched(a, b, g);
+    if !st.sheet_moves.is_empty() {
+        touched.retain(|h| !sheet_moved(&st.sheet_moves, a, b, *h));
+    }
+    touched
+}
+
 /// Whether object `h` is the very same in `a` and `b` (or in neither).
 fn same_object(a: &Drawing, b: &Drawing, h: Handle) -> bool {
     match (a.model.get(h), b.model.get(h)) {
@@ -1192,6 +1218,20 @@ impl Behind {
     }
 }
 
+/// `to` is drawing state `from` with a change that is no edit of the model or its plan (its
+/// associative state written into it on saving): behind as `from` is, and from the same build.
+pub(crate) fn carry_state(st: &mut crate::DocState, from: &Arc<Drawing>, to: &Arc<Drawing>) {
+    st.model_behind.carry(from, to);
+    super::revise3d::carry(st, from, to);
+}
+
+/// Drawing state `d` is behind its associative model's plan, with no build of this session it is
+/// behind (a model opened with a plan changed since it was built).
+pub(crate) fn mark_behind(st: &mut crate::DocState, d: &Arc<Drawing>) {
+    st.model_behind.add(d, None);
+    st.model_behind.last_edit = Some(web_time::Instant::now());
+}
+
 /// Whether the active drawing's associative model is behind its plan (built again before the
 /// next command that reads it, [`update_model`]).
 pub fn model_behind(s: &Session) -> bool {
@@ -1202,6 +1242,13 @@ pub fn model_behind(s: &Session) -> bool {
 /// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     behind_after_command(s, before);
+    // The outermost command is over: the sheet changes it made are forgotten (they hold
+    // drawing states, the sheets put out among them).
+    if s.journal.at_top() && s.running.is_none() && s.suspended.is_none() {
+        for st in &mut s.docs {
+            st.sheet_moves.clear();
+        }
+    }
     // Then the drawing state now follows the build it comes from (and a build this command
     // made takes the model as the command left it).
     super::revise3d::after_command(s, before);
@@ -1237,13 +1284,13 @@ fn behind_after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
         // A drawing behind, and a build newer than the one it was behind (this command's:
         // `model.update`, `model.revise`, `model.build`; or one on another branch of the undo
         // history): current when that build's plan objects are the plan's now.
-        if built.is_some_and(|b| plan_touched(&b.0, &st.doc, g).is_empty()) {
+        if built.is_some_and(|b| plan_edited(st, &b.0, &st.doc, g).is_empty()) {
             return;
         }
     } else if !st.model_behind.holds(before) {
         // Model space untouched (a command that drew on a sheet's paper space), or no plan
         // object changed: the model is as current as it was.
-        let touched = plan_touched(before, &st.doc, g);
+        let touched = plan_edited(st, before, &st.doc, g);
         if touched.is_empty() {
             return;
         }
@@ -1400,6 +1447,22 @@ pub fn update_model(s: &mut Session) -> bool {
     if !st.model_behind.holds(&st.doc) {
         return false;
     }
+    // The plan is the whole print set, whatever part of it is in memory (Q6570): a build from
+    // the sheets in memory alone would drop the rest of the building. The set goes out of
+    // memory again when the interface is idle; the state loaded is behind as the one before.
+    if st.wallgen.as_ref().is_some_and(|g| g.auto) && s.has_parked_sheets() {
+        match s.load_all_sheets() {
+            Ok(_) => s.note_whole_set_load("model.update"),
+            Err(e) => {
+                s.echo(e.to_string());
+                return false;
+            }
+        }
+    }
+    let Ok(st) = s.state() else { return false };
+    if !st.model_behind.holds(&st.doc) {
+        return false;
+    }
     let behind = Arc::clone(&st.doc);
     let Some(g) = st.wallgen.clone().filter(|g| g.auto) else {
         if let Ok(st) = s.state_mut() {
@@ -1408,8 +1471,7 @@ pub fn update_model(s: &mut Session) -> bool {
         return false;
     };
     // The plan of the build this state comes from: after an undo, not the last build's.
-    let (old, rooms) =
-        st.model_records.for_state(&behind).map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
+    let (old, rooms) = st.model_records.for_state(&behind).map_or_else(|| (Vec::new(), Some(Vec::new())), |r| r.plan_and_rooms());
     let how = super::revise3d::Revise { by_handle: true, tolerance: None, rebuild: true, auto: true };
     s.model_updating = true;
     let r = super::revise3d::revise(s, &g, old, rooms, &how);
@@ -1756,9 +1818,16 @@ impl PlanLevel {
     }
 }
 
-/// Whether the wall `a` is the same wall as `b` (parallel, on the same line within their
-/// thickness, overlapping over half the shorter).
-fn same_wall(a: &PlanWall, b: &PlanWall) -> bool {
+/// Two walls side by side are one when their bodies overlap across by more than this, inches: two
+/// walls can't stand in each other (Q6583); touching, or a joint apart, they are two.
+const BODY_OVERLAP_IN: f64 = 0.5;
+
+/// Whether the wall `a` is the same wall as `b`: parallel, their bodies overlapping across (their
+/// centrelines nearer than their half-thicknesses together, by over [`BODY_OVERLAP_IN`]; on the
+/// same line within the thicker one's half at least), and along over half the shorter. Two
+/// readings of one wall (its faces and a finish line, a stripe of linework read as several
+/// walls) are one; two walls back to back, sharing a face, stay two. `k` drawing units an inch.
+fn same_wall(a: &PlanWall, b: &PlanWall, k: f64) -> bool {
     let (la, lb) = (a.a.dist(a.b), b.a.dist(b.b));
     if la <= 1e-9 || lb <= 1e-9 {
         return false;
@@ -1767,7 +1836,9 @@ fn same_wall(a: &PlanWall, b: &PlanWall) -> bool {
     if ua.cross(ub).abs() > 0.01 {
         return false;
     }
-    if ua.perp().dot(b.a - a.a).abs() > a.thickness.max(b.thickness) / 2.0 {
+    let across = ua.perp().dot(b.a - a.a).abs();
+    let overlap = (a.thickness + b.thickness) / 2.0 - BODY_OVERLAP_IN * k.max(0.0);
+    if across > overlap.max(a.thickness.max(b.thickness) / 2.0) {
         return false;
     }
     let (s0, s1) = (ua.dot(b.a - a.a), ua.dot(b.b - a.a));
@@ -2270,6 +2341,23 @@ fn plan_level_with(
     if treads > 0 {
         notes.push(format!("{}: {treads} line pairs of stair treads (a flight's tread lines) not taken for walls.", level.name));
     }
+    // Counters, cabinets, appliances and equipment drawn as closed outlines deeper than any wall
+    // and no deeper than casework: what pairs up inside one (its edge and its top's or its
+    // sink's line, its inner outline) is the thing drawn there, no wall (Q6583).
+    let casework = super::perceive::geometry::casework_outlines(&ents, &lim, super::wallcheck::rules().casework_depth_max_in * k);
+    let cased = super::perceive::geometry::drop_casework_pairs(&segs, &mut found, &casework, k);
+    if cased > 0 {
+        notes.push(format!("{}: {cased} line pairs inside casework and equipment outlines (counters, appliances) not taken for walls.", level.name));
+    }
+    // A pair with another wall against each of its faces is the air between them (a chase, a
+    // stripe between rows of parallel linework): one line is no wall's face on both its sides.
+    let air = super::perceive::geometry::drop_air_between(&segs, &mut found);
+    if air > 0 {
+        notes.push(format!(
+            "{}: {air} line pairs between two walls (the air between them: a chase, parallel linework) not taken for walls.",
+            level.name
+        ));
+    }
     // A window drawn across a gap in a wall (its frame's outline the wall's depth, its sill and
     // glazing lines, or two glazing lines from jamb to jamb): its lines are no wall bridging the
     // gap, which stays the window's opening (Q6424).
@@ -2309,6 +2397,7 @@ fn plan_level_with(
     let level_top = pl.top;
     let top_of = |layer: &str| wall_type(g, layer).and_then(|t| t.height_ft).map_or(level_top, |h| z0 + h * upf);
     let fixed_of = |layer: &str| wall_type(g, layer).and_then(|t| t.height_ft).is_some();
+    let mut overlapping = 0usize;
     for p in &found {
         let w = PlanWall {
             a: p.c0,
@@ -2323,12 +2412,17 @@ fn plan_level_with(
             head: None,
             basis: None,
         };
-        if !pl.walls.iter().any(|x| same_wall(x, &w)) {
+        if pl.walls.iter().any(|x| same_wall(x, &w, k)) {
+            overlapping += 1;
+        } else {
             pl.walls.push(w);
         }
         if pl.walls.len() >= MAX_OBJECTS {
             break;
         }
+    }
+    if overlapping > 0 {
+        notes.push(format!("{}: {overlapping} more readings of walls already found (their bodies overlapping) left out.", level.name));
     }
     // Pieces of one wall in line (a wall drawn unit by unit, found piece by piece): one wall.
     let jambs: Vec<Vec2> = drawn_swings(&ents, k).iter().flat_map(|sw| [sw.c, sw.ends[0], sw.ends[1]]).collect();
@@ -4661,7 +4755,8 @@ pub(crate) fn drop_stair_treads(segs: &[super::perceive::geometry::Seg], found: 
 /// length, found among the walls shorter than 40% of the region (a grid line or the border runs
 /// the sheet's length). Every wall reaching more than 2' (and its thickness) out of those
 /// clusters' extents goes: grid lines out to their bubbles, dimension strings and match lines
-/// beside the building, the border and the title block. A cluster drawn at a larger scale (its
+/// beside the building, the border and the title block. A stack of walls side by side all
+/// running one way (rows of a table, stripes: no corner) is no building either. A cluster drawn at a larger scale (its
 /// walls [`ENLARGED_THICKER`] the largest cluster's or more) is an enlarged view and goes too.
 fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
     let span = (region[2] - region[0]).abs().max((region[3] - region[1]).abs());
@@ -4748,11 +4843,34 @@ fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
         length.iter().filter_map(|(r, l)| median(*r).filter(|t| *t > 0.0).map(|t| (*r, l / t))).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(r, _)| r);
     let main_t = main.and_then(median).filter(|t| *t > 0.0);
     let enlarged = |r: usize| Some(r) != main && main_t.zip(median(r)).is_some_and(|(m, t)| t >= ENLARGED_THICKER * m);
+    // A stack of walls side by side all running one way turns no corner: rows of a table,
+    // stripes, a run of parallel linework beside the plan (Q6583), no building. (A cluster of
+    // one wall, or of pieces in line, is a building's side whose corners are its long walls.)
+    // Each cluster's first direction (half-turn degrees), whether it turns, and the lines across
+    // it its walls stand on.
+    let mut turns: HashMap<usize, (f64, bool, Vec<f64>)> = HashMap::new();
+    for (k, &i) in short.iter().enumerate() {
+        let (Some(&r), Some(w)) = (roots.get(k), walls.get(i)) else { continue };
+        let d = w.b - w.a;
+        let ang = d.y.atan2(d.x).to_degrees().rem_euclid(180.0);
+        let e = turns.entry(r).or_insert((ang, false, Vec::new()));
+        let off = (ang - e.0).abs();
+        if off.min(180.0 - off) > ONE_WAY_DEG {
+            e.1 = true;
+            continue;
+        }
+        let n = Vec2::new(-e.0.to_radians().sin(), e.0.to_radians().cos());
+        let at = n.dot(w.a.mid(w.b));
+        if e.2.len() < ONE_WAY_ROWS && !e.2.iter().any(|o| (o - at).abs() <= (w.thickness / 2.0).max(1.0)) {
+            e.2.push(at);
+        }
+    }
+    let one_way = |r: usize| Some(r) != main && turns.get(&r).is_some_and(|t| !t.1 && t.2.len() >= ONE_WAY_ROWS);
     let mut dropped = vec![false; walls.len()];
     let mut b = cadaddy_geom::Bounds2::EMPTY;
     for (k, &i) in short.iter().enumerate() {
         let r = roots.get(k).copied().unwrap_or(k);
-        if length.get(&r).copied().unwrap_or(0.0) < 0.1 * largest {
+        if length.get(&r).copied().unwrap_or(0.0) < 0.1 * largest || one_way(r) {
             continue;
         }
         if enlarged(r) {
@@ -4775,6 +4893,11 @@ fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
         !gone && inside(w.a, m) && inside(w.b, m)
     });
 }
+
+/// Walls within this of one direction (degrees) run one way: a cluster of them turns no corner.
+const ONE_WAY_DEG: f64 = 10.0;
+/// A stack of at least this many walls side by side, all one way, is rows of linework.
+const ONE_WAY_ROWS: usize = 3;
 
 /// How much thicker than the plan's typical wall a separate cluster's walls read when it is a
 /// view at a larger scale (an enlarged plan at 1/4" beside a 1/8" plan reads twice as thick).
@@ -5964,5 +6087,161 @@ mod tests {
         assert!(walls[1].a.dist(Vec2::new(-3.0, 0.0)) < 1e-6, "{:?}", walls[1].a);
         assert!(walls[2].b.dist(Vec2::new(300.0, 40.0)) < 1e-9 && walls[3].a.dist(Vec2::new(340.0, 0.0)) < 1e-9);
         assert!(walls[4].b.dist(Vec2::new(700.0, 0.0)) < 1e-9 && walls[5].a.dist(Vec2::new(706.0, 0.0)) < 1e-9);
+    }
+
+    /// Q6583: a one-room-deep building (40' × 16', 6" walls; units inches) with what a plan
+    /// draws beside its walls: a counter (a closed 24"-deep outline against the back wall, the
+    /// line of its top 3" in from its front edge), a chase (two walls 17" apart, their faces 4"
+    /// and 6" apart), and a wall read twice (four lines: two 3" readings 2" apart). The walls
+    /// planned there.
+    fn planned_small_building() -> Vec<PlanWall> {
+        let mut d = Drawing::new_imperial();
+        let mut add = |kind: EntityKind| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let mut e = Entity::new(h, kind);
+            e.common.layer = "A-WALL".into();
+            d.model.push(e);
+        };
+        let line = |a: (f64, f64), b: (f64, f64)| EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) });
+        let outline = |pts: &[(f64, f64)]| {
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: pts
+                    .iter()
+                    .map(|&(x, y)| cadaddy_geom::PolyVertex { p: Vec2::new(x, y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                    .collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        // The shell: its outside and inside faces.
+        add(outline(&[(0.0, 0.0), (480.0, 0.0), (480.0, 192.0), (0.0, 192.0)]));
+        add(outline(&[(6.0, 6.0), (474.0, 6.0), (474.0, 186.0), (6.0, 186.0)]));
+        // The counter: 8' long, 24" deep against the back (north) wall's inside face; its top's
+        // line 3" in from its front edge.
+        add(outline(&[(48.0, 162.0), (144.0, 162.0), (144.0, 186.0), (48.0, 186.0)]));
+        add(line((48.0, 165.0), (144.0, 165.0)));
+        // The chase: a 4" wall and a 6" wall 17" apart, off the south wall's inside face.
+        for x in [240.0, 244.0, 261.0, 267.0] {
+            add(line((x, 6.0), (x, 72.0)));
+        }
+        // One wall read twice: lines 2", 1" and 2" apart.
+        for x in [360.0, 362.0, 363.0, 365.0] {
+            add(line((x, 6.0), (x, 72.0)));
+        }
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        plan_level(&d, &g, &level, 12.0, &mut Vec::new()).walls
+    }
+
+    #[test]
+    fn casework_the_air_in_a_chase_and_a_wall_read_twice_are_no_more_walls() {
+        let walls = planned_small_building();
+        let mid_x = |w: &PlanWall| (w.a.x + w.b.x) / 2.0;
+        let mid_y = |w: &PlanWall| (w.a.y + w.b.y) / 2.0;
+        let listed = || walls.iter().map(|w| format!("{:?}-{:?} {:.1}", w.a, w.b, w.thickness)).collect::<Vec<_>>().join("; ");
+        // The shell's four walls.
+        let shell = walls.iter().filter(|w| (w.thickness - 6.0).abs() < 0.1 && (w.a.dist(w.b) > 150.0)).count();
+        assert_eq!(shell, 4, "{}", listed());
+        // Nothing inside the counter's outline: its edge and its top's line are the counter's.
+        assert!(!walls.iter().any(|w| (48.0..=144.0).contains(&mid_x(w)) && mid_y(w) > 158.0 && mid_y(w) < 184.0), "{}", listed());
+        // The chase: its two walls, not the 17" of air between them.
+        let short = |w: &PlanWall| w.a.dist(w.b) < 100.0;
+        let chase: Vec<&PlanWall> = walls.iter().filter(|w| short(w) && (238.0..=270.0).contains(&mid_x(w)) && mid_y(w) < 80.0).collect();
+        assert_eq!(chase.len(), 2, "{}", listed());
+        assert!(chase.iter().all(|w| w.thickness < 7.0), "{}", listed());
+        // The wall read twice: one wall.
+        assert_eq!(walls.iter().filter(|w| short(w) && (358.0..=367.0).contains(&mid_x(w)) && mid_y(w) < 80.0).count(), 1, "{}", listed());
+        assert_eq!(walls.len(), 7, "{}", listed());
+    }
+
+    #[test]
+    fn walls_back_to_back_stay_two_and_a_closet_drawn_as_one_outline_keeps_its_walls() {
+        // Two walls sharing a face (6" and 4", touching): two walls, not one.
+        let w = |a: (f64, f64), b: (f64, f64), t: f64| PlanWall {
+            a: Vec2::new(a.0, a.1),
+            b: Vec2::new(b.0, b.1),
+            thickness: t,
+            top: 0.0,
+            source: Handle(0),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: None,
+            fixed_top: false,
+            head: None,
+            basis: None,
+        };
+        assert!(!same_wall(&w((0.0, 3.0), (100.0, 3.0), 6.0), &w((0.0, 8.0), (100.0, 8.0), 4.0), 1.0));
+        // Two readings whose bodies overlap: one.
+        assert!(same_wall(&w((0.0, 1.5), (100.0, 1.5), 3.0), &w((0.0, 3.5), (100.0, 3.5), 3.0), 1.0));
+        // A U of walls round a 30" closet drawn as one outline (its own sides pair as the walls):
+        // deeper than a wall, no deeper than casework, but its walls are its own sides.
+        let pts = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(40.0, 0.0),
+            Vec2::new(40.0, 40.0),
+            Vec2::new(36.0, 40.0),
+            Vec2::new(36.0, 4.0),
+            Vec2::new(4.0, 4.0),
+            Vec2::new(4.0, 40.0),
+            Vec2::new(0.0, 40.0),
+        ];
+        let segs: Vec<crate::cmd::perceive::geometry::Seg> = pts
+            .iter()
+            .zip(pts.iter().cycle().skip(1))
+            .map(|(a, b)| crate::cmd::perceive::geometry::Seg { a: *a, b: *b, layer: "A-WALL".into(), outline_width: 4.0, unit_run: false })
+            .collect();
+        let lim = crate::cmd::perceive::geometry::Limits { min_thick: 2.5, max_thick: 20.0, min_len: 12.0 };
+        let mut found = crate::cmd::perceive::geometry::pairs(&Drawing::new_imperial(), &segs, &lim);
+        let before = found.len();
+        assert!(before >= 3, "{before}");
+        let n = crate::cmd::perceive::geometry::drop_casework_pairs(&segs, &mut found, std::slice::from_ref(&pts), 1.0);
+        assert_eq!((n, found.len()), (0, before));
+    }
+
+    #[test]
+    fn a_stack_of_rows_beside_the_plan_is_no_building_but_a_side_alone_stays() {
+        let w = |a: (f64, f64), b: (f64, f64)| PlanWall {
+            a: Vec2::new(a.0, a.1),
+            b: Vec2::new(b.0, b.1),
+            thickness: 6.0,
+            top: 0.0,
+            source: Handle(0),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: None,
+            fixed_top: false,
+            head: None,
+            basis: None,
+        };
+        // Rooms 10' square in a 3 x 2 grid (inches), on a 1,000" sheet region.
+        let mut walls = Vec::new();
+        for i in 0..=3 {
+            let x = 120.0 * f64::from(i);
+            walls.push(w((x, 0.0), (x, 120.0)));
+            walls.push(w((x, 120.0), (x, 240.0)));
+        }
+        for j in 0..=2 {
+            let y = 120.0 * f64::from(j);
+            for i in 0..3 {
+                walls.push(w((120.0 * f64::from(i), y), (120.0 * f64::from(i + 1), y)));
+            }
+        }
+        let rooms = walls.len();
+        // A table's rows beside it: three lines' pairs 8" apart, far off, one way.
+        for k in 0..3 {
+            let y = 700.0 + 8.0 * f64::from(k);
+            walls.push(w((500.0, y), (800.0, y)));
+        }
+        keep_building(&mut walls, [0.0, 0.0, 1000.0, 1000.0], 12.0);
+        assert_eq!(walls.len(), rooms, "the rows go, the rooms stay: {:?}", walls.iter().map(|x| (x.a, x.b)).collect::<Vec<_>>());
     }
 }

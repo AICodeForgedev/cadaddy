@@ -6,7 +6,7 @@
     "legend_match": 0.2,
     "legend_reach_heights": 8.0,
     "inner_mark_min": 0.3,
-    "source": "drafting convention: a sprinkler head is a small circle on the sheet (about 1/16 to 3/16 in across the radius range here), typed by the sheet's own head legend (its symbol beside its description, matched within 20 % of the legend symbol's radius and by its fill: plain, marked inside (hatched or crossed) or solid); with no legend, circles of 0.03-0.1 in radius are taken as heads of no type"
+    "source": "drafting convention: a sprinkler head is a small circle on the sheet (about 1/16 to 3/16 in across the radius range here), typed by the sheet's own head legend (its symbol beside its description, matched within 20 % of the legend symbol's radius and by its fill: plain, marked inside (hatched or crossed) or solid); with no legend, circles of 0.03-0.1 in radius on pipe of their own pen (see bars) are taken as heads of no type; only a stroked circle or a filled disc is a symbol, never another filled shape (a lettering glyph, an arrowhead); a circle at a head already read (within its radius) is the same symbol"
   },
   "bars": {
     "width_in": [0.004, 0.12],
@@ -15,7 +15,7 @@
     "joint_slack_in": 0.03,
     "label_reach_heights": 4.0,
     "head_reach_radii": 2.0,
-    "source": "drafting convention of sprinkler shop drawings: pipe is drawn as filled bars, one bar weight per pipe role (branch lines thinner than cross mains and mains); a bar is at least four times as long as it is wide; bars more than 25 % apart in width are two weights; a size label is lettered within about four text heights of its pipe; a head sits on its branch line (within two head radii)"
+    "source": "drafting convention of sprinkler shop drawings: pipe is drawn as filled bars, one bar weight per pipe role (branch lines thinner than cross mains and mains); a bar is at least four times as long as it is wide; bars more than 25 % apart in width are two weights; a size label is lettered within about four text heights of its pipe; a head sits on its branch line (within two head radii); on a page with no head legend a head-sized circle is a head only where its pipe reaches the circle itself (runs through it or ends at its rim) in its own pen, and only in the sprinkler pen (the pen whose circles sit on its own pipe most): the background's circles (a burner, a fixture, a light) are not heads; and a head legend in another pen than the sprinkler pen is the background's own (an architectural or ceiling plan naming its sprinkler symbol), not the page's"
   },
   "sizes": {
     "branch_in": 1.0,
@@ -37,6 +37,8 @@
     "tag_tol_ft": 1.5,
     "page_scale_in_per_ft": [0.03125, 1.0],
     "duplicate_head_ft": 0.5,
-    "source": "company default: up to 64 shop-drawing files of up to 200 pages each, four folders deep; a page is put onto its floor by at least three room numbers it shares with the floor's architectural plan (within 1.5 ft), drawn at a scale between 1/32 in and 1 in to the foot; a head another page draws within 6 in is the same head"
+    "max_views": 6,
+    "view_reach_ft": 60.0,
+    "source": "company default: up to 64 shop-drawing files of up to 200 pages each, four folders deep; a page is put onto its floor by at least three room numbers it shares with the floor's architectural plan (within 1.5 ft), drawn at a scale between 1/32 in and 1 in to the foot; a page drawing several floors' plans (up to six views) puts each view onto its own floor by its own room numbers, and a head or pipe piece belongs to the view whose room numbers are nearest it, within 60 ft (farther: a detail, legend or title block, not a plan); a head another page draws within 6 in is the same head"
   }
 }

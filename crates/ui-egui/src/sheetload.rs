@@ -109,6 +109,39 @@ pub fn open_first_sheet(app: &mut CadApp) {
 /// background): the open sheet and the recent ones stay. Off the UI thread when there is much
 /// to put out.
 pub fn park_when_idle(app: &mut CadApp) {
+    // Not while something on screen reads the whole set: the set would be loaded again, on the
+    // UI thread, for as long as it is open. That is a frame after a command that reads the set
+    // ran (a palette that counts or lists across the sheets every frame), and for as long as the
+    // dialog that was open then stays open (one that reads again whenever the drawing changes:
+    // putting the sheets out changes it).
+    let now = crate::now_ms();
+    let asks = app.session.whole_set_asks;
+    if ASKS_SEEN.with(|c| c.replace(asks)) != asks {
+        HELD_FOR.with(|h| h.replace(app.ui.dialog.clone()));
+        // Read again soon after the sheets went out: whatever reads it answers to the drawing
+        // changing or to work in the background ending, and putting the sheets out is both. The
+        // set then stays in memory, twice as long each time it happens.
+        let (parked, wait, _) = BACKOFF.with(std::cell::Cell::get);
+        if now - parked < READ_AGAIN_MS {
+            let wait = (wait * 2.0).clamp(HOLD_MS, HOLD_MAX_MS);
+            BACKOFF.with(|c| c.set((parked, wait, now + wait)));
+        } else {
+            BACKOFF.with(|c| c.set((parked, 0.0, 0.0)));
+        }
+        return;
+    }
+    if app.ui.dialog.is_some() && HELD_FOR.with(|h| *h.borrow() == app.ui.dialog) {
+        return;
+    }
+    HELD_FOR.with(|h| h.replace(None));
+    let (_, wait, until) = BACKOFF.with(std::cell::Cell::get);
+    if now < until {
+        return;
+    }
+    // While the sheets are going out (in the background) and as they do, the time is kept.
+    if app.session.whole_set_in_memory() || app.busy.is_some() {
+        BACKOFF.with(|c| c.set((now, wait, until)));
+    }
     let s = &app.session;
     if !s.whole_set_in_memory() || s.running.is_some() || s.prompting() || app.busy.is_some() {
         return;
@@ -120,16 +153,43 @@ pub fn park_when_idle(app: &mut CadApp) {
         }
         return;
     }
+    // The caches are let go of here, once the session is back: until then the copy on screen
+    // still shows (and holds) the whole set.
     busy::start(
         app,
         "sheet.open",
-        Box::new(|s| s.park_idle_sheets().map(|done| json!({ "parked": done })).map_err(|e| e.user_message())),
-        Box::new(|app, r| {
-            if let Err(e) = r {
-                app.session.echo(e);
-            }
+        Box::new(|s| s.park_idle_sheets_off_thread().map(|done| json!({ "parked": done })).map_err(|e| e.user_message())),
+        Box::new(|app, r| match r {
+            Ok(_) => app.session.release_unheld(),
+            Err(e) => app.session.echo(e),
         }),
     );
+}
+
+/// A read of the whole set this soon after its sheets went out of memory is taken for an answer
+/// to their going out, milliseconds.
+const READ_AGAIN_MS: f64 = 15_000.0;
+/// How long the set then stays in memory the first time, and at most, milliseconds.
+const HOLD_MS: f64 = 20_000.0;
+const HOLD_MAX_MS: f64 = 600_000.0;
+
+thread_local! {
+    /// When the sheets last went out of memory, how long the set is held after a read that
+    /// followed it, and until when it is held now ([`crate::now_ms`] times).
+    static BACKOFF: std::cell::Cell<(f64, f64, f64)> = const { std::cell::Cell::new((f64::NEG_INFINITY, 0.0, 0.0)) };
+    /// [`cadaddy_engine::Session::whole_set_asks`] as the last frame's [`park_when_idle`] saw it.
+    static ASKS_SEEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The dialog that was open when a command last read the whole set: the set stays in memory
+    /// while it is.
+    static HELD_FOR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Forget what holds the whole set in memory ([`park_when_idle`]): the next idle frame puts the
+/// sheets out. For a window whose reads so far say nothing about what comes next (a test that
+/// opens one dialog after another within milliseconds).
+pub fn forget_holds() {
+    HELD_FOR.with(|h| h.replace(None));
+    BACKOFF.with(|c| c.set((f64::NEG_INFINITY, 0.0, 0.0)));
 }
 
 /// Objects in memory above which putting a print set's other sheets out of memory runs off the
