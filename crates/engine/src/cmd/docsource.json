@@ -1,0 +1,70 @@
+{
+  "_doc": "Where a project's documents come from and when CADaddy asks for the latest (Q6618). The puller stays outside the program: CADaddy asks, names what to pull and how to hand it back (a folder with manifest.json, docs/project-manifest.md), and takes the answer. Kinds are generic: the platform's own name is the project's data (project.source {platform}), never code.",
+  "kinds": [
+    {"kind": "platform", "label": "a construction-management platform", "asks": true},
+    {"kind": "shared_drive", "label": "a shared drive", "asks": true},
+    {"kind": "plan_room", "label": "a plan room", "asks": true},
+    {"kind": "email", "label": "documents sent by email", "asks": true},
+    {"kind": "none", "label": "no source: the project folder is all there is", "asks": false}
+  ],
+  "aliases": {
+    "construction management": "platform",
+    "construction-management platform": "platform",
+    "cm platform": "platform",
+    "project management": "platform",
+    "drive": "shared_drive",
+    "shared folder": "shared_drive",
+    "network drive": "shared_drive",
+    "planroom": "plan_room",
+    "plan room": "plan_room",
+    "mail": "email",
+    "no source": "none",
+    "folder only": "none"
+  },
+  "max_age_hours": 24,
+  "pull": [
+    {"what": "drawings: the current set, every sheet at its latest revision", "kinds": ["drawing", "sheet"]},
+    {"what": "addenda, ASIs and bulletins", "kinds": ["addendum", "asi", "bulletin"]},
+    {"what": "RFIs with their responses", "kinds": ["rfi"]},
+    {"what": "submittals with their review status", "kinds": ["submittal"]},
+    {"what": "specifications", "kinds": ["spec"]}
+  ],
+  "answers": {
+    "pulled": ["pulled", "pulled latest", "done", "imported"],
+    "nothing_newer": ["nothing newer", "no newer", "up to date", "latest", "current"],
+    "skip": ["skip", "not now", "later", "go on"]
+  },
+  "reread_kinds": {
+    "drawings": ["drawing", "sheet"],
+    "build": ["spec", "submittal"],
+    "noted": ["rfi", "asi", "addendum", "bulletin", "markup", "photo", "other"]
+  },
+  "answerable": [
+    {
+      "class": "documents disagree",
+      "check": ["a newer sheet", "an ASI", "an RFI response"],
+      "words": ["differ", "differs", "conflict", "conflicts", "otherwise than", "don't meet", "disagree", "against what the plans show", "approved submittal differs"]
+    },
+    {
+      "class": "missing sheet or schedule",
+      "check": ["a newer sheet", "an addendum", "an RFI response"],
+      "words": ["has no", "have no", "no panel schedule", "no schedule", "no window schedule", "no water plan", "plan covers level", "no plan", "issues none", "no specification"]
+    },
+    {
+      "class": "unanswered callout or requirement",
+      "check": ["an RFI response", "an ASI", "a newer sheet"],
+      "words": ["no circuit", "no document says", "don't place", "undecided", "did not register", "not known", "no note"]
+    },
+    {
+      "class": "product with no submittal",
+      "check": ["a submittal", "the specifications"],
+      "words": ["no submittal", "no product data", "does not settle", "carry no product"]
+    }
+  ],
+  "headers": [
+    "takeoff", "takeoff.layers", "bim.takeoff", "bim.bom", "bim.estimate", "bim.bid",
+    "estimate.export", "estimate.bid_summary", "estimate.status",
+    "bim.export.ar", "bim.export.ar.manifest", "project.briefing", "job.report"
+  ],
+  "asks_before": ["bim.takeoff", "bim.estimate", "bim.bid", "estimate.export", "estimate.bid_summary", "bim.export.ar", "takeoff", "project.briefing"]
+}

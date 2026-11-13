@@ -89,6 +89,40 @@ pub struct ProjectDrawing {
     /// Set by a manifest import: the entry follows the manifest (a re-import can drop it).
     #[serde(default)]
     pub from_manifest: bool,
+    /// The document's id at its source (the platform's, the plan room's), from the manifest.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_id: String,
+    /// When it was pulled from its source (ISO 8601), from the manifest (Q6618).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pulled: String,
+}
+
+/// Where the project's documents come from (Q6618): CADaddy asks for the latest from it and
+/// takes the answer; the pull itself is done outside the program (an agent, a connector or a
+/// script with the owner's own read-only access). Kinds are rule data ([`super::docsource`]).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocSource {
+    /// `platform`, `shared_drive`, `plan_room`, `email` or `none` (docsource.json).
+    pub kind: String,
+    /// The platform's or place's own name, as the project gives it (shown in the request).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub platform: String,
+    /// The project reference the puller understands (a project number, a folder, a link).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reference: String,
+    /// Ask again when the last check is older than this (hours; none: the rules' default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_age_hours: Option<f64>,
+    /// When the documents were last pulled (ISO 8601): the manifest's, else its import.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub last_pulled: String,
+    /// When the source was last confirmed to hold nothing newer (ISO 8601).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub last_checked: String,
+    /// The issue the last pull brought (the manifest's name: "issued set 4", "ASI 3").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub issue: String,
 }
 
 /// A standard (shared across projects or per-project override).
@@ -135,6 +169,9 @@ pub struct ProjectManifest {
     /// Paths a manifest import added or changed: what is left to look at.
     #[serde(default)]
     pub queue: Vec<String>,
+    /// Where the documents come from and when they were last pulled (Q6618).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<DocSource>,
 }
 
 /// The active project state held in Session.
@@ -222,6 +259,7 @@ pub(super) fn manifest_json(m: &ProjectManifest) -> Value {
         "shelvedDrawings": m.drawings.iter().filter(|d| d.status == DrawingStatus::Shelved).count(),
         "archived": m.drawings.iter().filter(|d| d.status == DrawingStatus::Archived).count(),
         "standards": m.standards.len(),
+        "source": m.source.as_ref().map(super::docsource::source_json),
     })
 }
 
@@ -238,6 +276,8 @@ fn drawing_json(d: &ProjectDrawing) -> Value {
         "notes": d.notes,
         "fileSize": d.file_size,
         "contentHash": d.content_hash,
+        "sourceId": d.source_id,
+        "pulled": d.pulled,
     })
 }
 
@@ -339,7 +379,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("project.import_manifest", "Import Manifest", run_import_manifest)
             .files()
-            .params("{path} → {project, added, changed, removed, errors, files: {added, changed: [{path, fields}], removed, missing}, queued}: import/update a project from a folder + manifest.json (docs/project-manifest.md); only added and changed files are queued")
+            .params("{path} → {project, added, changed, removed, errors, files: {added, changed: [{path, fields}], removed, missing}, queued}: import/update a project from a folder + manifest.json (docs/project-manifest.md); only added and changed files are queued; a `source` block {kind, platform?, reference?, pulled?} sets where the documents come from and when they were pulled (project.source)")
             .enabled(always)
             .noundo(),
         CommandSpec::new("project.validate_manifest", "Validate Manifest", run_validate_manifest)
@@ -949,6 +989,38 @@ fn validate_manifest_data(data: &[u8]) -> Vec<String> {
     if v.get("name").is_some_and(|n| !n.is_string()) {
         errors.push("`name` must be a string".into());
     }
+    // Where the documents came from (Q6618): its kind is rule data, its times ISO 8601.
+    match v.get("source") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(src)) => {
+            match src.get("kind").and_then(Value::as_str) {
+                None => errors.push(format!("`source.kind` is required: one of {}", super::docsource::kinds().join(", "))),
+                Some(k) if super::docsource::canonical_kind(k).is_none() => {
+                    errors.push(format!("`source.kind` `{}` is not one of {}", cut(k), super::docsource::kinds().join(", ")))
+                }
+                Some(_) => {}
+            }
+            for key in ["platform", "reference", "pulled", "issue"] {
+                match src.get(key) {
+                    None | Some(Value::Null) => {}
+                    Some(Value::String(t)) if t.len() > MAX_FIELD => errors.push(format!("source.{key} is longer than {MAX_FIELD} bytes")),
+                    Some(Value::String(t)) if key == "pulled" && !t.trim().is_empty() && super::docsource::parse_iso(t).is_none() => {
+                        errors.push(format!("source.pulled `{}` is not a date and time (2026-11-13T09:30:00Z)", cut(t)))
+                    }
+                    Some(Value::String(_)) => {}
+                    Some(_) => errors.push(format!("source.{key} must be a string")),
+                }
+            }
+            for key in ["maxAgeHours", "max_age_hours"] {
+                if let Some(h) = src.get(key)
+                    && !h.as_f64().is_some_and(|h| h.is_finite() && h > 0.0)
+                {
+                    errors.push(format!("source.{key} must be a number of hours above 0"));
+                }
+            }
+        }
+        Some(_) => errors.push("`source` must be an object: {kind, platform?, reference?, pulled?}".into()),
+    }
 
     let Some(files) = v.get("files").and_then(Value::as_array) else {
         errors.push("`files` array is required".into());
@@ -977,7 +1049,13 @@ fn validate_manifest_data(data: &[u8]) -> Vec<String> {
                 }
             }
         }
-        for key in ["title", "discipline", "revision", "date", "kind", "status"] {
+        if let Some(t) = f.get("pulled").and_then(Value::as_str)
+            && !t.trim().is_empty()
+            && super::docsource::parse_iso(t).is_none()
+        {
+            errors.push(format!("files[{i}].pulled `{}` is not a date and time (2026-11-13T09:30:00Z)", cut(t)));
+        }
+        for key in ["title", "discipline", "revision", "date", "kind", "status", "sourceId", "source_id", "pulled"] {
             match f.get(key) {
                 None | Some(Value::Null) => {}
                 Some(Value::String(t)) if t.len() > MAX_FIELD => errors.push(format!("files[{i}].{key} is longer than {MAX_FIELD} bytes")),
@@ -1046,29 +1124,10 @@ fn str_field(f: &Value, key: &str) -> String {
 fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "project.import_manifest";
     let path = str_param(p, "path").ok_or_else(|| bad(cmd, "`path` is required"))?;
-
-    // Read manifest.json from the given path.
-    let manifest_path = if path.ends_with("manifest.json") { path.to_string() } else { format!("{}/manifest.json", path.trim_end_matches('/')) };
-
-    let data = read_capped(&manifest_path)?;
-
-    let errors = validate_manifest_data(&data);
-    if !errors.is_empty() {
-        return Ok(json!({
-            "valid": false,
-            "errors": errors,
-        }));
-    }
-
-    let v: Value = serde_json::from_slice(&data).map_err(|e| other(format!("invalid manifest: {e}")))?;
-
-    let source_dir = if path.ends_with("manifest.json") {
-        path.rsplit_once('/').map_or(".", |(d, _)| d).to_string()
-    } else {
-        path.trim_end_matches('/').to_string()
+    let (v, source_dir) = match read_transmittal(path)? {
+        Ok(read) => read,
+        Err(invalid) => return Ok(invalid),
     };
-
-    let files = v.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
 
     // With no project open: the folder's own project when it has one (a re-import), else a new one.
     if s.project.is_none() {
@@ -1086,6 +1145,45 @@ fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let ps = require_project_mut(s)?;
+    import_parsed(ps, &v, &source_dir)
+}
+
+/// A transmittal's `manifest.json` (a folder, or the file), read and checked: the manifest and
+/// its folder, or the answer that lists its errors.
+fn read_transmittal(path: &str) -> Result<std::result::Result<(Value, String), Value>> {
+    let manifest_path = if path.ends_with("manifest.json") { path.to_string() } else { format!("{}/manifest.json", path.trim_end_matches('/')) };
+    let data = read_capped(&manifest_path)?;
+    let errors = validate_manifest_data(&data);
+    if !errors.is_empty() {
+        return Ok(Err(json!({ "valid": false, "errors": errors })));
+    }
+    let v: Value = serde_json::from_slice(&data).map_err(|e| other(format!("invalid manifest: {e}")))?;
+    let source_dir = if path.ends_with("manifest.json") {
+        path.rsplit_once('/').map_or(".", |(d, _)| d).to_string()
+    } else {
+        path.trim_end_matches('/').to_string()
+    };
+    Ok(Ok((v, source_dir)))
+}
+
+/// Import the transmittal at `path` into `ps` (a project the caller holds, open or not): what
+/// `project.import_manifest` answers, or `{valid: false, errors}`. The project file is written.
+pub(super) fn import_manifest_into(ps: &mut ProjectState, path: &str) -> Result<Value> {
+    match read_transmittal(path)? {
+        Ok((v, source_dir)) => import_parsed(ps, &v, &source_dir),
+        Err(invalid) => Ok(invalid),
+    }
+}
+
+/// Bring a checked manifest's entries into the project: added, changed by field, removed.
+fn import_parsed(ps: &mut ProjectState, v: &Value, source_dir: &str) -> Result<Value> {
+    let files = v.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
+    // The manifest's source (Q6618): when it was pulled (none given: now, the hand-back).
+    let src = v.get("source").filter(|x| x.is_object());
+    let pulled_at = match src {
+        Some(x) => x.get("pulled").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).map_or_else(timestamp, str::to_string),
+        None => String::new(),
+    };
     let mut added: Vec<String> = Vec::new();
     let mut changed: Vec<Value> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
@@ -1133,6 +1231,8 @@ fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
             file_size,
             review_status,
             from_manifest: true,
+            source_id: f.get("sourceId").or_else(|| f.get("source_id")).and_then(Value::as_str).unwrap_or("").to_string(),
+            pulled: f.get("pulled").and_then(Value::as_str).filter(|t| !t.trim().is_empty()).unwrap_or(&pulled_at).to_string(),
         };
 
         if let Some(existing) = ps.manifest.drawings.iter_mut().find(|d| d.path == file_path) {
@@ -1163,6 +1263,13 @@ fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
                 fields.push("links");
             }
             existing.from_manifest = true;
+            // Where it came from and when: kept up to date, not a change of the document.
+            if !fresh.source_id.is_empty() {
+                existing.source_id = fresh.source_id.clone();
+            }
+            if !fresh.pulled.is_empty() {
+                existing.pulled = fresh.pulled.clone();
+            }
             if fields.is_empty() {
                 continue;
             }
@@ -1209,6 +1316,10 @@ fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
     ps.manifest.queue.extend(touched.iter().cloned());
     ps.manifest.queue.truncate(MAX_DRAWINGS);
 
+    if let Some(x) = src {
+        let issue = v.get("name").and_then(Value::as_str).unwrap_or("");
+        super::docsource::take_manifest_source(&mut ps.manifest, x, &pulled_at, issue);
+    }
     ps.manifest.modified = timestamp();
     write_manifest(&ps.manifest)?;
 

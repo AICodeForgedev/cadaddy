@@ -1697,7 +1697,12 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let summary = summary(&anchor, &sc, &rules, own_rules, &mode, small);
     let points = reference_points(&sc, &place);
     let caps = (max_tris, max_bytes);
-    let fitted = fit(d, &items, &[], &place, &rules, &mode, &summary, &points, &stem_name, (want_glb, want_usdz), &dropped, caps, &ROOM_STEPS)?;
+    // The document issue the model was built from, in the sidecar the phone reads (Q6618).
+    let documents = super::docsource::header(Some(s), super::guided::load_job(s).ok().flatten().as_ref());
+    let mut fitted = fit(d, &items, &[], &place, &rules, &mode, &summary, &points, &stem_name, (want_glb, want_usdz), &dropped, caps, &ROOM_STEPS)?;
+    if let Some(h) = documents {
+        fitted.sidecar["documents"] = h;
+    }
     let (files, bytes) = write_files(&stem, &fitted)?;
     let built = &fitted.built;
     let sidecar = &fitted.sidecar;

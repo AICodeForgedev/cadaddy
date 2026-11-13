@@ -1002,6 +1002,14 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if !alt_note.is_empty() {
         clarifications.push(entry(format!("No alternates: {alt_note}."), "ve.study"));
     }
+    // The documents the bid was built from and whether they are the latest (Q6618).
+    let job = crate::cmd::guided::load_job(s).ok().flatten();
+    if let Some(line) = crate::cmd::docsource::header(Some(s), job.as_ref())
+        .filter(|h| h.get("project").is_some_and(|p| !p.is_null()))
+        .and_then(|h| h.get("line").and_then(Value::as_str).map(str::to_string))
+    {
+        clarifications.push(entry(format!("Bid {line}."), "the project's document source"));
+    }
     // Assumptions.
     let mut assumptions: Vec<Value> = Vec::new();
     let by_cat = lines.iter().filter(|l| l.matched_by == "catalog").count();
