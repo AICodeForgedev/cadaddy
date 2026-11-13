@@ -1280,6 +1280,15 @@ enum Obj {
     Building,
 }
 
+/// A run's points and the objects at its two ends, from one ordered list of (point, what
+/// stands there): the first end is the first point's, the last end the last point's, so a
+/// stub-up comes up where its object is (Q6447).
+fn path_and_ends(path: &[([f64; 2], Option<Obj>)]) -> (Vec<[f64; 2]>, [Option<Obj>; 2]) {
+    let pts = path.iter().map(|(p, _)| *p).collect();
+    let ends = [path.first().and_then(|(_, o)| *o), path.last().and_then(|(_, o)| *o)];
+    (pts, ends)
+}
+
 /// Counters across a job's site sheets: ids stay unique.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Seq {
@@ -2193,7 +2202,8 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         let (Some(la), Some(lb)) = (read.lights.get(*a), read.lights.get(*b)) else { continue };
         let why =
             format!("inferred: {sheet} shows no line between these luminaires of one circuit; trenched straight from the nearest (trade practice)");
-        add_run(&mut out, vec![to_model(la.at), to_model(lb.at)], [Some(Obj::Light(*a)), Some(Obj::Light(*b))], Made::Inferred, None, &why, true);
+        let (pts, ends) = path_and_ends(&[(to_model(la.at), Some(Obj::Light(*a))), (to_model(lb.at), Some(Obj::Light(*b)))]);
+        add_run(&mut out, pts, ends, Made::Inferred, None, &why, true);
     }
     // Each circuit's home run: from the circuit's object nearest the building to the building,
     // then under the slab to its panel when the model has it (inferred).
@@ -2291,19 +2301,23 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         };
         let Some((qc, ..)) = equip_at.get(qi).cloned().flatten() else { continue };
         let bc = if building.len() >= 3 { centre(&bbox_of(&building)) } else { qc };
-        let pts = if n.callout.what == "service_primary" {
+        // The run's points with what stands at each, in one order (Q6447): its stub-up comes up
+        // at the equipment whichever end the equipment is.
+        let at_equipment = (qc, Some(Obj::Equip(qi)));
+        let path = if n.callout.what == "service_primary" {
             let (dx, dy) = (qc[0] - bc[0], qc[1] - bc[1]);
             let l = dx.hypot(dy).max(1e-9);
-            vec![[qc[0] + dx / l * r.primary_out_ft * upf, qc[1] + dy / l * r.primary_out_ft * upf], qc]
+            [([qc[0] + dx / l * r.primary_out_ft * upf, qc[1] + dy / l * r.primary_out_ft * upf], None), at_equipment]
         } else {
-            vec![qc, nearest_on(&building, qc).unwrap_or(bc)]
+            [at_equipment, (nearest_on(&building, qc).unwrap_or(bc), None)]
         };
+        let (pts, ends) = path_and_ends(&path);
         let why = if n.callout.what == "service_primary" {
             format!("inferred: {}", r.primary_source)
         } else {
             "inferred: the note names it and draws no line: trenched straight to the nearest building wall".to_string()
         };
-        add_run(&mut out, pts, [None, Some(Obj::Equip(qi))], Made::Inferred, Some(n), &why, false);
+        add_run(&mut out, pts, ends, Made::Inferred, Some(n), &why, false);
     }
     out
 }
@@ -3117,6 +3131,52 @@ mod tests {
         }
         let carried: BTreeSet<String> = built.circuits.keys().cloned().collect();
         assert!(site_loads(&sp, &carried).is_empty(), "{carried:?}");
+    }
+
+    /// A note calling conduits from site equipment with no line drawn: each conduit runs from the
+    /// equipment to the building's nearest wall and comes up out of the ground at the equipment,
+    /// not at the wall (the run's ends follow its points).
+    #[test]
+    fn a_note_only_run_stubs_up_at_its_equipment_not_at_the_wall() {
+        let mut d = Drawing::default();
+        let h = 18.0;
+        pline(&mut d, "-BASEC-BUILD", &[[10_000.0, 2_000.0], [10_960.0, 2_000.0], [10_960.0, 2_600.0], [10_000.0, 2_600.0]], true);
+        // A generator on its pad 40 ft east of the building, its label beside it.
+        let g = [11_440.0, 2_300.0];
+        pline(&mut d, "E-POWR", &square(g, 40.0), true);
+        text(&mut d, "EMERGENCY GENERATOR", g[0] + 60.0, g[1] + 10.0, h);
+        // The note, far off, calling two conduits from it; no line drawn for them.
+        text(&mut d, "PROVIDE (2) 2\" UNDERGROUND CONDUITS FROM", 12_600.0, 4_600.0, h);
+        text(&mut d, "GENERATOR TO TRANSFER SWITCH IN BUILDING.", 12_600.0, 4_570.0, h);
+        let read = read("E-001", &d, [9_000.0, 1_000.0, 14_000.0, 5_000.0], &BTreeSet::new(), 12.0);
+        assert!(read.equipment.iter().any(|q| q.kind == "generator"), "{:?} {:?}", read.equipment, read.unplaced_labels);
+        assert_eq!(read.notes.len(), 1, "{:?}", read.notes);
+
+        let sp = spec_with_slab();
+        let fit = register(&read, &sp, "Level 1", true);
+        let built = plan(&sp, &read, &fit, "Level 1", &mut Seq::default());
+        let gen_at = built
+            .equipment
+            .iter()
+            .find(|e| e.kind == "generator")
+            .map(|e| [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0])
+            .unwrap_or_else(|| panic!("no generator: {:?}", built.equipment));
+        let size = |r: &&MepRun| (r.size_in[0] - 2.0).abs() < 1e-9;
+        let runs: Vec<&MepRun> = built.runs.iter().filter(|r| r.top_ft.is_none() && r.points.len() >= 2).filter(size).collect();
+        assert_eq!(runs.len(), 2, "{:?}", built.runs);
+        // Each run from the generator to the wall: about 40 ft long.
+        for r in &runs {
+            let (Some(a), Some(z)) = (r.points.first(), r.points.last()) else { panic!("{r:?}") };
+            assert!(dist(*a, gen_at) < 12.0, "starts at the generator: {a:?} {gen_at:?}");
+            assert!(dist(*z, gen_at) > 30.0 * 12.0, "ends at the wall: {z:?}");
+        }
+        // Two stub-ups, both at the generator; none at the wall.
+        let stubs: Vec<&MepRun> = built.runs.iter().filter(|r| r.top_ft.is_some()).filter(size).collect();
+        assert_eq!(stubs.len(), 2, "{stubs:?}");
+        for s in &stubs {
+            let p = s.points.first().copied().unwrap_or([f64::NAN; 2]);
+            assert!(dist(p, gen_at) < 12.0, "stub-up at the generator, not the wall: {p:?} {gen_at:?}");
+        }
     }
 
     /// One line drawn through three poles, a second circuit's poles no line joins, a column of
