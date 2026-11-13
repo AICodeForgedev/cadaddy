@@ -3205,6 +3205,7 @@ fn plan_level_with(
             fixed_top: fixed_of(&p.layer),
             head: None,
             basis: None,
+            edit: None,
         };
         if pl.walls.len() < MAX_OBJECTS && !pl.walls.iter().any(|x| same_wall(x, &w, k)) {
             pl.walls.push(w);
