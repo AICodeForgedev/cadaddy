@@ -238,7 +238,14 @@
       "box_words": ["BOX", "OUTLET", "DEVICE"],
       "pair_words": ["OPPOSITE", "BACK TO BACK", "BACK-TO-BACK", "BOTH SIDES", "EACH SIDE"],
       "not_words": ["NOT PERMITTED", "NOT ALLOWED", "NOT ACCEPTABLE", "NOT BE USED", "PROHIBITED", "DO NOT USE", "SHALL NOT USE"],
-      "putty_choice_source": "IBC 714.4.2 exception 1.4: listed putty pads on both boxes of a back-to-back pair in a fire-resistance-rated wall keep the devices where the documents put them (the remedy the project names)"
+      "putty_choice_source": "IBC 714.4.2 exception 1.4: listed putty pads on both boxes of a back-to-back pair in a fire-resistance-rated wall keep the devices where the documents put them (the remedy the project names)",
+      "back_words": ["BACK TO BACK", "BACK-TO-BACK", "BACK OF EACH OTHER", "SAME STUD SPACE", "SAME STUD CAVITY", "SAME STUD BAY"],
+      "forbid_words": ["NOT PERMITTED", "NOT ALLOWED", "NOT ACCEPTABLE", "PROHIBITED", "DO NOT", "SHALL NOT", "NOT BE INSTALLED", "NOT BE MOUNTED", "NOT BE LOCATED", "NOT BE PLACED", "NEVER", "AVOID", "NO BACK"],
+      "allow_words": ["PERMITTED", "ALLOWED", "ACCEPTABLE"],
+      "fire_words": ["FIRE-RATED", "FIRE RATED", "FIRE-RESISTANCE", "FIRE RESISTANCE", "FIRE-RESISTIVE", "FIRE RESISTIVE", "HOUR RATED", "HR RATED", "RATED WALL", "RATED PARTITION"],
+      "any_wall_words": ["ANY WALL", "ALL WALLS", "ANY PARTITION", "ALL PARTITIONS", "NON-RATED", "NONRATED", "UNRATED", "DEMISING", "EVERY WALL"],
+      "forbid_rule_key": "back_to_back_boxes",
+      "forbid_source": "the documents forbid back-to-back devices: every pair of boxes on opposite faces of one wall closer than the rule's distance is separated, one box moved to the next stud bays (the usual move), else farther along its wall or the box that would keep its spot (trade practice); listed putty pads are the remedy only where the documents allow back-to-back boxes and the wall is fire-rated (IBC 714.4.2 exception 1.4)"
     },
     "stud_bay_in": 16.0,
     "stud_bay_source": "the next stud bays: a box moved for the field goes no farther than two 16 in o.c. bays (past that the putty pads keep both where they are), never into a bay another box on that face stands in, nor across an opening or into a wall that meets its own, nor behind fixed furniture (trade practice)"

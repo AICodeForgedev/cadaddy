@@ -121,6 +121,7 @@ mod ugplan;
 mod underceiling;
 mod unittypes;
 mod wall_assemblies;
+mod wall_list_edits;
 mod wallgen;
 mod walllayout;
 mod walltypedata;

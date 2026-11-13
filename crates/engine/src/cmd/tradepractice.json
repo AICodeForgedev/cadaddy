@@ -350,6 +350,19 @@
       ]
     },
     {
+      "id": "M-THROUGH-WALL",
+      "trade": "mechanical",
+      "fills": "where a through-wall unit (a packaged terminal unit or another wall-sleeve unit, by its kind) goes: in the outside wall its plan symbol stands against, its wall sleeve through that wall (an opening cut in the wall, the sleeve flush with the wall's outside face and the outside grille in its end), the unit in the sleeve with its room cabinet projecting into the room; the plan symbol gives only its place along the wall (numbers: reach_in, how far in front of a wall's face its plan box may stand; unit_depth_in, the unit's depth from the outside face to the front of its cabinet when its product data gives none; sleeve_depth_in, the sleeve's depth when the wall is thinner; grille_in, the outside grille's depth; probe_in, how far past a wall's outside face the floor must end for it to be an outside wall; behind_ft, when its level has no floor or shell outline, how far behind an outside wall no wall of its level stands)",
+      "basis": "trade practice: a packaged terminal unit is installed through the outside wall in its wall sleeve (the sleeve set flush with the outside face, its outside grille in the end, the unit slid in from the room on its sub-base); plans draw the room cabinet in front of the wall, so the symbol places it along the wall, not across it; makers' standard sleeves are about 13-3/4 in deep and their units about 21 in from the outside face to the cabinet front; alternative: the depth and sleeve its product data or submittal gives",
+      "kinds": ["ptac", "pthp", "through_wall_unit", "packaged_terminal", "wall_sleeve_unit"],
+      "reach_in": 24.0,
+      "unit_depth_in": 21.0,
+      "sleeve_depth_in": 13.75,
+      "grille_in": 1.0,
+      "probe_in": 12.0,
+      "behind_ft": 20.0
+    },
+    {
       "id": "M-EXHAUST-RISER",
       "trade": "mechanical",
       "fills": "the exhaust risers a typical riser detail draws: each fan's duct from where its room's view ends it in the chase, up the chase to just under the roof deck, across to the roof terminal the roof plan places over that chase and up into it; on every floor it passes, in that floor's own drawing of the chase, never through a plumbing fixture or a piece of equipment (numbers: reach_ft, how far in plan the terminal may be from the chase it serves once the roof plan is lined up with the chases; clear_ft, how far under the roof deck the ducts turn to the terminal; default_size_in, a fan duct's size where none is read; duct_gap_in, the gap between side-by-side ducts in one chase and between a duct and a fixture or equipment it is moved clear of; fixture_top_ft, how high a plumbing fixture of no known height is taken to stand; pass_kinds, the equipment a duct runs into or through, by words of its kind, which it may stand in)",
@@ -364,13 +377,13 @@
     {
       "id": "E-WALL-UNDER-CEILING",
       "trade": "electrical",
-      "fills": "where a wall-mounted device goes when its height would put any part of it above its room's finished ceiling (numbers: min_below_in, the least clearance from its top to the ceiling; below, a kind's own clearance by its kinds or words; legend_words, the words after a legend's or schedule's height that make it the device's clearance under the ceiling; skip_kinds, kinds whose place above a ceiling is their own; skip_from, the height sources that put a device somewhere other than on a wall)",
+      "fills": "where a wall-mounted device goes when its height would put any part of it above its room's finished ceiling (numbers: min_below_in, the least clearance from its top to the ceiling; below, a kind's own clearance by its kinds or words; legend_words, the words after a legend's or schedule's height that make it the device's clearance under the ceiling; skip_kinds, kinds whose place above a ceiling is their own; skip_from, the height sources that put a device somewhere other than on a wall: a hoistway's device stands in its pit or at its top, under no room's ceiling)",
       "basis": "trade practice: a wall-mounted device is installed on the wall below the finished ceiling of the room it serves, where it can be seen, reached and serviced, never in the plenum over it; its top is at least its own clearance under the ceiling (an exit sign or emergency light the legend's or schedule's \"x in below ceiling\", else 2 in); a device whose height (a default, a rule, or a document that does not fit the room) puts any part above the ceiling is set at the highest allowed place and reported, its design height kept beside; alternative: a ceiling-mounted version of the device, which the engineer may call for instead",
       "min_below_in": 2.0,
       "below": [],
       "legend_words": ["BELOW FINISHED CEILING", "BELOW FIN. CEILING", "BELOW FIN CEILING", "BELOW FIN. CLG", "BELOW FIN CLG", "BELOW THE CEILING", "BELOW CEILING", "BELOW CLG", "BELOW CEIL", "BELOW CLNG"],
       "skip_kinds": ["equipment connection", "junction box", "plumbing fixture", "plumbing stack", "damper", "disconnect"],
-      "skip_from": ["equipment", "site_work", "ceiling", "floor"]
+      "skip_from": ["equipment", "site_work", "ceiling", "floor", "hoistway"]
     },
     {
       "id": "E-SPLICES",

@@ -22,6 +22,11 @@
 //!   the lowest landing to its depth, and the overrun above the roof to the overhead, a roofed
 //!   shaft the roof equipment over it stands on (its design base kept beside the corrected one).
 //!   A value no document gives is the rules' trade practice, said as such on the element.
+//! - The devices of a hoistway ([`relocate`], Q6615): an elevator pit plan's devices, and those on
+//!   a panel row naming the pit or its sump, are in the pit below the lowest landing, their
+//!   heights from the pit floor; a hoistway (shaft) plan's, and those on a row naming the cab,
+//!   car or shaft, are at the top of the hoistway on the top landing. Never at a floor height on
+//!   whatever storey the view registered onto.
 
 use cadaddy_doc::props::{self, Prop, Props, Source, SourceKind};
 use cadaddy_doc::{Common, Drawing, EntityKind, Handle, Mesh, RawTag, Space};
@@ -81,6 +86,21 @@ pub(crate) struct Rules {
     pub cap_ft: f64,
     pub pit_slab_ft: f64,
     pub rule: String,
+    pub parts: Parts,
+}
+
+/// Which part of a hoistway a view or a panel row is about (Q6615), as data: an elevator word
+/// with a pit word is the pit, else with a top word the top of the hoistway.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct Parts {
+    pub elevator_words: Vec<String>,
+    pub pit_words: Vec<String>,
+    pub top_words: Vec<String>,
+    /// How far outside a hoistway's outline a device still stands in it (feet).
+    pub reach_ft: f64,
+    pub pit_basis: String,
+    pub top_basis: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -588,7 +608,7 @@ fn pieces(m: &Mesh) -> Vec<(Bounds2, (f64, f64), bool, usize)> {
         let (b, z, _) = one(&m.vertices);
         return vec![(b, z, false, usize::MAX)];
     }
-    (0..n).filter_map(|k| m.vertices.get(8 * k..8 * k + 8).map(&one).map(|(b, z, sq)| (b, z, sq, k))).collect()
+    (0..n).filter_map(|k| m.vertices.get(8 * k..8 * k + 8).map(one).map(|(b, z, sq)| (b, z, sq, k))).collect()
 }
 
 /// The level's built walls, a [`Wall`] per box.
@@ -1155,6 +1175,246 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     })
 }
 
+// ─── The devices in a hoistway (Q6615) ──────────────────────────────────────
+
+/// The part of a hoistway a device belongs in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShaftPart {
+    /// In the pit, below the lowest landing.
+    Pit,
+    /// At the top of the hoistway, on the top landing.
+    Top,
+}
+
+impl ShaftPart {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            ShaftPart::Pit => "pit",
+            ShaftPart::Top => "top",
+        }
+    }
+
+    fn from_name(s: &str) -> Option<Self> {
+        match s.trim() {
+            "pit" => Some(ShaftPart::Pit),
+            "top" => Some(ShaftPart::Top),
+            _ => None,
+        }
+    }
+}
+
+/// The hoistway part a view's title or a panel row's description names (`ELEVATOR PIT
+/// ELECTRICAL PLAN`, `RCPT - ELEVATOR CAB`), by the rules' words; none when it names no
+/// elevator, or an elevator but neither its pit nor its shaft (its machine room, its feeder).
+pub(crate) fn part_of(text: &str, p: &Parts) -> Option<ShaftPart> {
+    let up = text.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).take(MAX_PART_WORDS).collect();
+    let has = |list: &[String]| list.iter().any(|w| words.iter().any(|x| x.eq_ignore_ascii_case(w.trim())));
+    if !has(&p.elevator_words) {
+        return None;
+    }
+    if has(&p.pit_words) {
+        Some(ShaftPart::Pit)
+    } else if has(&p.top_words) {
+        Some(ShaftPart::Top)
+    } else {
+        None
+    }
+}
+
+/// Words of a title or description looked at, at most.
+const MAX_PART_WORDS: usize = 64;
+/// Device tags looked at, at most.
+const MAX_TAGS: usize = 500_000;
+
+/// A hoistway on one level (spec units).
+struct Landing {
+    level: String,
+    name: String,
+    rect: Bounds2,
+    elevation_ft: f64,
+}
+
+/// Each hoistway on each level it serves: the traced ones, else the arch reader's (on its lowest
+/// level only: its other levels' plans stand elsewhere on the sheets). Roofs serve none.
+fn landings(sp: &BuildingSpec) -> Vec<Landing> {
+    let made = |level: &str, name: &str, rect: Bounds2| {
+        let l = sp.level(level)?;
+        (!rect.is_empty() && rect.min.is_finite() && rect.max.is_finite() && !wallgen::roof_level(&sp.levels, &l.name)).then(|| Landing {
+            level: l.name.clone(),
+            name: name.trim().to_string(),
+            rect,
+            elevation_ft: l.elevation_ft,
+        })
+    };
+    let traced: Vec<Landing> = sp
+        .circulation
+        .iter()
+        .filter(|c| c.kind == CirculationKind::Hoistway)
+        .take(MAX_HOISTWAYS)
+        .filter_map(|c| {
+            made(&c.level, &c.name, Bounds2::from_points(c.rects.iter().flat_map(|[a, b]| [Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1])])))
+        })
+        .collect();
+    if !traced.is_empty() {
+        return traced;
+    }
+    sp.elevators
+        .iter()
+        .take(MAX_HOISTWAYS)
+        .filter_map(|e| made(e.levels.first()?, &e.name, Bounds2::new(Vec2::new(e.min[0], e.min[1]), Vec2::new(e.max[0], e.max[1]))))
+        .collect()
+}
+
+/// The pit depth below the lowest landing and the overhead from the top landing to the
+/// hoistway's ceiling (feet), each with where it came from: the elevator documents, else the
+/// rules' trade practice (as [`build`] builds them).
+fn depths(sp: &BuildingSpec, r: &Rules) -> ((f64, String), (f64, String)) {
+    let data = sp.elevator_data.clone().unwrap_or_default();
+    let src = |key: &str| data.sources.get(key).cloned().unwrap_or_else(|| "the elevator submittal".into());
+    let pit = match data.pit_ft.filter(|p| in_range(*p, r.pit_range_ft)) {
+        Some(p) => (p, src("pit")),
+        None => sp
+            .elevators
+            .iter()
+            .find_map(|e| {
+                e.pit_ft
+                    .filter(|p| in_range(*p, r.pit_range_ft))
+                    .map(|p| (p, if e.source.trim().is_empty() { "the plan's PIT note".to_string() } else { e.source.clone() }))
+            })
+            .unwrap_or_else(|| (r.default_pit_ft, r.default_pit_basis.clone())),
+    };
+    let overhead = match data.overhead_ft.filter(|o| in_range(*o, r.overhead_range_ft)) {
+        Some(o) => (o, src("overhead")),
+        None => (r.default_overhead_ft, r.default_overhead_basis.clone()),
+    };
+    (pit, overhead)
+}
+
+/// Put the spec's devices that belong in a hoistway's pit or at its top there (Q6615). A device
+/// belongs there when its view said so (`hoistway_part`, set from an elevator pit or shaft
+/// plan's title) or its circuit's panel row names the pit, its sump, the cab, car or shaft, and
+/// it stands in a hoistway (within the rules' reach of its outline) on the level it was read on.
+/// It moves to the same spot in that elevator's shaft on its lowest landing (the pit: its floor
+/// the pit depth below) or its top landing (the top: the hoistway's ceiling the overhead above),
+/// with `mount_floor_ft` (the elevation its height is measured from), `hoistway_ceiling_in`, the
+/// basis, and the level and spot it was read at kept beside. A device already placed so is left
+/// as it stands. One line per device moved.
+pub(crate) fn relocate(sp: &mut BuildingSpec) -> Vec<String> {
+    let r = rules();
+    let parts = &r.parts;
+    if parts.elevator_words.is_empty() {
+        return Vec::new();
+    }
+    let all = landings(sp);
+    if all.is_empty() {
+        return Vec::new();
+    }
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let reach = parts.reach_ft.max(0.0) * upf;
+    // Each panel row's description, by its circuit (`L-22`).
+    let mut rows: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for p in &sp.mep.panel_schedules {
+        for c in &p.circuits {
+            rows.entry(format!("{}-{}", p.panel.trim(), c.number.trim()).to_ascii_uppercase()).or_insert_with(|| c.description.clone());
+        }
+    }
+    let ((pit_ft, pit_src), (oh_ft, oh_src)) = depths(sp, &r);
+    let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+    // A shaft's place among its level's shafts of its name (left to right, then up): the same
+    // elevator on another level is the one in that place there.
+    let rank = |l: &Landing| -> usize {
+        let key = |x: &Landing| (x.rect.min.x, x.rect.min.y);
+        all.iter().filter(|o| same(&o.level, &l.level) && same(&o.name, &l.name) && key(o) < key(l)).count()
+    };
+    let mut ids: std::collections::HashSet<String> = sp.tags.iter().map(|t| t.id.clone()).collect();
+    let mut lines = Vec::new();
+    for t in sp.tags.iter_mut().take(MAX_TAGS) {
+        if !t.id.starts_with("device:") || t.fields.contains_key("mount_floor_ft") {
+            continue;
+        }
+        let viewed = t.fields.get("hoistway_part").and_then(|f| ShaftPart::from_name(&f.value));
+        let circuit = t.fields.get("circuit").map(|f| f.value.split(',').next().unwrap_or_default().trim().to_ascii_uppercase()).unwrap_or_default();
+        let row = rows.get(&circuit).filter(|_| !circuit.is_empty());
+        let (part, why) = match (viewed, row.and_then(|d| part_of(d, parts))) {
+            (Some(p), _) => {
+                (p, t.fields.get("hoistway_view").map(|f| f.value.clone()).filter(|v| !v.is_empty()).unwrap_or_else(|| "its view".into()))
+            }
+            (None, Some(p)) => (p, format!("its circuit {circuit}'s panel row \"{}\"", row.map(|d| d.trim()).unwrap_or_default())),
+            (None, None) => continue,
+        };
+        let p = Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf);
+        if !p.is_finite() {
+            continue;
+        }
+        // The shaft it stands in, on the level it was read on.
+        let Some(here) = all
+            .iter()
+            .filter(|l| same(&l.level, &t.level) && l.rect.expand(reach).contains(p))
+            .min_by(|a, b| a.rect.center().dist(p).total_cmp(&b.rect.center().dist(p)))
+        else {
+            continue;
+        };
+        let place = rank(here);
+        let stack: Vec<&Landing> = all.iter().filter(|l| same(&l.name, &here.name) && rank(l) == place).collect();
+        let target = match part {
+            ShaftPart::Pit => stack.iter().min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)),
+            ShaftPart::Top => stack.iter().max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)),
+        };
+        let Some(target) = target.copied() else { continue };
+        // The same spot in the target's shaft (inside it).
+        let d = p - here.rect.center();
+        let c = target.rect.center();
+        let at = Vec2::new((c.x + d.x).clamp(target.rect.min.x, target.rect.max.x), (c.y + d.y).clamp(target.rect.min.y, target.rect.max.y));
+        let (floor_ft, ceiling_in, basis) = match part {
+            ShaftPart::Pit => (
+                target.elevation_ft - pit_ft,
+                pit_ft * 12.0,
+                format!(
+                    "in the pit of hoistway {} below its lowest landing ({}), its height from the pit floor {pit_ft:.2} ft down (pit depth: {pit_src}); from {why}; {}",
+                    target.name, target.level, parts.pit_basis
+                ),
+            ),
+            ShaftPart::Top => (
+                target.elevation_ft,
+                oh_ft * 12.0,
+                format!(
+                    "at the top of hoistway {} on its top landing ({}), its ceiling {oh_ft:.2} ft above that floor (overhead: {oh_src}); from {why}; {}",
+                    target.name, target.level, parts.top_basis
+                ),
+            ),
+        };
+        if !floor_ft.is_finite() {
+            continue;
+        }
+        let design = format!("{} at {:.2}, {:.2} ft", t.level, t.at_ft[0], t.at_ft[1]);
+        let moved = !same(&t.level, &target.level) || at.dist(p) > 1e-6;
+        if moved {
+            let at_ft = [at.x / upf, at.y / upf];
+            let base = format!("device:{}:{:.1},{:.1}", target.level, at_ft[0], at_ft[1]);
+            let mut id = base.clone();
+            let mut n = 1usize;
+            while ids.contains(&id) && n < 1_000 {
+                n += 1;
+                id = format!("{base}:{n}");
+            }
+            ids.remove(&t.id);
+            ids.insert(id.clone());
+            t.id = id;
+            t.level = target.level.clone();
+            t.at_ft = at_ft;
+            t.set("design_location", design.clone(), "plan");
+        }
+        t.set("hoistway_part", part.name(), if viewed.is_some() { "plan" } else { "schedule" });
+        t.set("mount_floor_ft", format!("{:.4}", floor_ft), "rule");
+        t.set("hoistway_ceiling_in", format!("{:.2}", ceiling_in), "rule");
+        t.set("hoistway_basis", basis, "rule");
+        let mark = t.fields.get("type").map(|f| f.value.clone()).unwrap_or_default();
+        lines.push(format!("{mark} {circuit} ({design}) to the {} of {} on {}", part.name(), target.name, target.level).trim().to_string());
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1222,6 +1482,111 @@ mod tests {
         assert_eq!((ext, sc), ((5.0, 95.0), 0.0));
         let (ext, _, _) = fit_axis(&[], &[], (20.0, 80.0), None, 144.0, 3.0);
         assert_eq!(ext, (20.0, 80.0));
+    }
+
+    #[test]
+    fn a_view_or_panel_row_names_the_pit_or_the_top_of_the_hoistway() {
+        let p = rules().parts;
+        assert_eq!(part_of("PIT PLAN - ELEVATOR 2", &p), Some(ShaftPart::Pit));
+        assert_eq!(part_of("ELEV SHAFT - POWER AND SIGNAL", &p), Some(ShaftPart::Top));
+        assert_eq!(part_of("CAB TOP RECEPT. (ELEVATOR 2)", &p), Some(ShaftPart::Top));
+        assert_eq!(part_of("SUMP - LIFT PIT", &p), Some(ShaftPart::Pit));
+        assert_eq!(part_of("LIGHTING, ELEV. PIT", &p), Some(ShaftPart::Pit));
+        assert_eq!(part_of("TOP OF HOISTWAY PLAN", &p), Some(ShaftPart::Top));
+        // An elevator but neither its pit nor its shaft; a pit that is no elevator's.
+        assert_eq!(part_of("ELEVATOR MACHINE ROOM", &p), None);
+        assert_eq!(part_of("ELEVATOR", &p), None);
+        assert_eq!(part_of("SUMP PIT - GARAGE", &p), None);
+        assert_eq!(part_of("RECEPT. - VESTIBULE", &p), None);
+        assert_eq!(part_of("", &p), None);
+    }
+
+    /// Q6615: a pit plan's device registered onto a middle storey goes into the pit under the
+    /// lowest landing, a shaft plan's to the top landing, a cab's or pit's panel row's device
+    /// standing in the shaft likewise; others stay. The levels' plans stand apart on the sheets
+    /// (each storey's shaft traced where its plan is).
+    #[test]
+    fn hoistway_devices_go_to_the_pit_or_the_top_landing_not_the_storey_their_view_registered_onto() {
+        let shaft = |level: &str, dx: f64| json!({"kind": "hoistway", "level": level, "name": "HOISTWAY B", "at": [136.0 + dx, 130.0], "rects": [[[100.0 + dx, 100.0], [172.0 + dx, 160.0]]]});
+        let tag = |id: &str, level: &str, at: [f64; 2], extra: Value| {
+            let mut fields = json!({"type": {"value": "GFCI", "source": "plan"}, "symbol": {"value": "1", "source": "plan"}});
+            if let (Some(f), Some(x)) = (fields.as_object_mut(), extra.as_object()) {
+                f.extend(x.clone());
+            }
+            json!({"id": id, "kind": "receptacle", "level": level, "at_ft": [at[0] / 12.0, at[1] / 12.0], "fields": fields})
+        };
+        let v = |k: &str| json!({"value": k, "source": "plan"});
+        let mut sp: BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [
+                {"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0},
+                {"name": "L2", "elevation_ft": 10.0, "height_ft": 10.0, "ceiling_ft": 9.0},
+                {"name": "L3", "elevation_ft": 20.0, "height_ft": 10.0, "ceiling_ft": 9.0},
+                {"name": "Roof", "elevation_ft": 30.0, "height_ft": 4.0, "ceiling_ft": 4.0}
+            ],
+            "circulation": [shaft("L1", 0.0), shaft("L2", 1200.0), shaft("L3", 2400.0)],
+            "mep": {"panel_schedules": [{"panel": "L", "source": "Q-9", "circuits": [
+                {"number": "22", "description": "PIT RECEPT. - ELEVATOR 2"},
+                {"number": "8", "description": "CAR TOP RECEPT. - ELEVATOR 2"},
+                {"number": "3", "description": "RECEPT. - VESTIBULE"}
+            ]}]},
+            "tags": [
+                tag("device:L2:pit", "L2", [1310.0, 120.0], json!({"hoistway_part": v("pit"), "hoistway_view": v("Q-9 view 4 \"PIT PLAN - ELEVATOR 2\"")})),
+                tag("device:L2:top", "L2", [1360.0, 150.0], json!({"hoistway_part": v("top")})),
+                tag("device:L1:cab", "L1", [110.0, 105.0], json!({"circuit": v("L-8")})),
+                tag("device:L2:sump", "L2", [1350.0, 101.0], json!({"circuit": v("L-22")})),
+                tag("device:L2:lobby", "L2", [1340.0, 140.0], json!({"circuit": v("L-3")})),
+                tag("device:L2:far", "L2", [1700.0, 140.0], json!({"hoistway_part": v("pit")})),
+            ],
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let lines = relocate(&mut sp);
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        let f = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).map(|f| f.value.clone()).unwrap_or_default();
+        let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
+        // The pit plan's: the same spot in the lowest landing's shaft, its floor 5 ft down (the
+        // rules' pit, no document gives one), the pit's top its ceiling.
+        let pit = sp.tags.iter().find(|t| f(t, "hoistway_view").contains("view 4")).cloned().unwrap_or_default();
+        assert_eq!(pit.level, "L1", "{pit:?}");
+        assert!(near(pit.at_ft, [110.0 / 12.0, 10.0]), "{pit:?}");
+        assert_eq!((f(&pit, "mount_floor_ft").parse::<f64>().ok(), f(&pit, "hoistway_ceiling_in").parse::<f64>().ok()), (Some(-5.0), Some(60.0)));
+        assert!(f(&pit, "design_location").starts_with("L2 at"), "{pit:?}");
+        assert!(f(&pit, "hoistway_basis").contains("pit") && f(&pit, "hoistway_basis").contains("NEC 620"), "{pit:?}");
+        assert!(pit.id.starts_with("device:L1:"), "{pit:?}");
+        // The shaft plan's: the top landing (L3, not the roof), the hoistway's ceiling the
+        // rules' overhead above it.
+        let top = sp.tags.iter().find(|t| f(t, "hoistway_part") == "top" && f(t, "circuit").is_empty()).cloned().unwrap_or_default();
+        assert_eq!(top.level, "L3", "{top:?}");
+        assert!(near(top.at_ft, [2560.0 / 12.0, 150.0 / 12.0]), "{top:?}");
+        assert_eq!((f(&top, "mount_floor_ft").parse::<f64>().ok(), f(&top, "hoistway_ceiling_in").parse::<f64>().ok()), (Some(20.0), Some(156.0)));
+        // A cab's panel row: to the top; a pit's (read on a floor's plan in the shaft): the pit.
+        let by_circuit = |c: &str| sp.tags.iter().find(|t| f(t, "circuit") == c).cloned().unwrap_or_default();
+        assert_eq!((by_circuit("L-8").level.as_str(), f(&by_circuit("L-8"), "hoistway_part").as_str()), ("L3", "top"));
+        assert_eq!((by_circuit("L-22").level.as_str(), f(&by_circuit("L-22"), "hoistway_part").as_str()), ("L1", "pit"));
+        assert!(f(&by_circuit("L-22"), "hoistway_basis").contains("PIT RECEPT. - ELEVATOR 2"), "{:?}", by_circuit("L-22"));
+        // A lobby circuit in the shaft, and a pit plan's device standing in no shaft: as read.
+        let lobby = by_circuit("L-3");
+        assert_eq!((lobby.level.as_str(), lobby.fields.contains_key("mount_floor_ft")), ("L2", false));
+        let far = sp.tags.iter().find(|t| t.id == "device:L2:far").cloned().unwrap_or_default();
+        assert_eq!((far.level.as_str(), far.fields.contains_key("mount_floor_ft")), ("L2", false));
+        // Ids stay one per device; placed once, a second pass leaves them.
+        let ids: std::collections::BTreeSet<&str> = sp.tags.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids.len(), sp.tags.len());
+        assert!(relocate(&mut sp).is_empty());
+        // The documents' pit depth when given.
+        let mut sp2 = sp.clone();
+        for t in &mut sp2.tags {
+            t.fields.remove("mount_floor_ft");
+        }
+        sp2.elevator_data = Some(ElevatorData {
+            pit_ft: Some(4.5),
+            sources: [("pit".to_string(), "shop drawing p.3".to_string())].into(),
+            ..ElevatorData::default()
+        });
+        relocate(&mut sp2);
+        let pit2 = sp2.tags.iter().find(|t| f(t, "hoistway_view").contains("view 4")).cloned().unwrap_or_default();
+        assert_eq!(f(&pit2, "mount_floor_ft").parse::<f64>().ok(), Some(-4.5));
+        assert!(f(&pit2, "hoistway_basis").contains("shop drawing p.3"), "{pit2:?}");
     }
 
     #[test]
