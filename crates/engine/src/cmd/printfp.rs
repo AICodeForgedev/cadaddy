@@ -1194,6 +1194,7 @@ fn add_source(
                 made: Made::Drawn,
                 basis: String::new(),
                 corrections: Vec::new(),
+                storey_points: Default::default(),
             });
         }
         // The head table against the heads counted (the page's own count, before any duplicate

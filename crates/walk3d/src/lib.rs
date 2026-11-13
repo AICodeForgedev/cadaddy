@@ -51,7 +51,7 @@ pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules
 pub use concrete::{Concrete, ConcreteElement, Depression, Embed, MAX_CONCRETE, PadDecision, Pour, Rebar, Signoff};
 pub use spec::{
     AirDeviceType, ArcFlash, Assembly, AssemblyLayer, Band, BandKind, Bond, BuildingSpec, Buildings, Busbar, CeilingArea, CeilingGrid, CeilingItem,
-    CeilingKind, CeilingType, Circulation, CirculationKind, Cricket, Described, DuctType, ElecDevice, Electrode, Enclosure, Equipment,
+    CeilingKind, CeilingType, Circulation, CirculationKind, Cricket, Described, DuctType, ElecDevice, Electrode, ElevatorData, Enclosure, Equipment,
     EquipmentElectrical, Exterior, ExtraCircuit, Facade, Family, FamilyKind, Feeder, FixtureType, FloorNote, GridColumn, GroundRequirement,
     Grounding, Hang, Head, HeadTo, HeadTrack, HeightRule, Hoistway, Issue, ItemKind, LayerRole, LayerSide, LevelParapet, LoadSummary,
     LoadSummaryLine, MAX_ASSEMBLY_LAYERS, Made, MarkStatus, Mep, MepEdit, MepEquipment, MepInvert, MepKind, MepRevision, MepRun, MepSystem,

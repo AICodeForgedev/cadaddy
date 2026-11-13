@@ -104,6 +104,11 @@ pub struct BuildingSpec {
     /// Elevator hoistways with their pits (`arch.read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elevators: Vec<Hoistway>,
+    /// What the elevator submittal (or the enlarged elevator plan) says of the hoistway: its
+    /// clear size, pit depth and overhead (`elevator.read`); `model.build` builds the shaft,
+    /// its pit and the overrun above the roof from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevator_data: Option<ElevatorData>,
     /// Each storey's corridors, stairs and elevator hoistways, traced from their labels inside the
     /// shell before the rooms: the rooms are traced in what they leave.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1335,6 +1340,26 @@ pub struct Hoistway {
     pub source: String,
 }
 
+/// What an elevator's documents say of its hoistway (`elevator.read`, from the elevator
+/// submittal's text): the clear sizes read (feet; each value the pages give, first read first: a
+/// shop drawing repeats them and its lettering may be misread, so the build keeps the one the
+/// plan's walls agree with), the pit depth below the lowest landing and the overhead above the
+/// top landing (feet), and where each was read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ElevatorData {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub width_ft: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depth_ft: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pit_ft: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overhead_ft: Option<f64>,
+    /// Where each value was read: `size`, `pit`, `overhead` → `file p.N`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, String>,
+}
+
 /// A structural column at a grid intersection: its outline's size and shape, from its level's
 /// floor up through `to_level` (none: its own storey).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2516,6 +2541,12 @@ pub struct MepRun {
     /// value, with the reason and the rule. Empty: built as the documents give it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub corrections: Vec<RunCorrection>,
+    /// A riser's plan point on other storeys it passes, by level name (sheet units, on that
+    /// level's own plan), where what each storey's plan draws puts it (a stack lined up by its
+    /// chase on every floor, Q6550): a storey's piece stands there, not where the levels' base
+    /// points carry its own point. Empty: carried by the base points.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub storey_points: BTreeMap<String, [f64; 2]>,
 }
 
 /// One value of a run the build corrected for the field: the property (`route`), the design
@@ -3218,6 +3249,7 @@ impl BuildingSpec {
             site: None,
             stairs: Vec::new(),
             elevators: Vec::new(),
+            elevator_data: None,
             circulation: Vec::new(),
             shells: BTreeMap::new(),
             buildings: Buildings::default(),

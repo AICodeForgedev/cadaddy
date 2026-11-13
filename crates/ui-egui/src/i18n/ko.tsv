@@ -3493,3 +3493,4 @@ menu	Modify	수정
 	Mechanical Piping	기계 배관
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	속성으로 요소 수정(BIM)
+	Read Elevator Hoistway	엘리베이터 승강로 읽기
