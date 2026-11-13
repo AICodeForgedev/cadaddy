@@ -457,6 +457,11 @@ pub(crate) struct Methods {
     /// `separate`; empty: none named), and where (Q6488).
     pub rated_box_remedy: String,
     pub rated_box_remedy_source: String,
+    /// Where the documents forbid back-to-back devices (a general note's, a keynote's or a
+    /// specification's cite and words; empty: they don't), and whether only in fire-rated walls
+    /// (Q6553).
+    pub back_to_back_forbidden: String,
+    pub back_to_back_forbidden_rated_only: bool,
     /// Where the documents route the slab level's branch homeruns below the slab (a note's cite
     /// and words; empty: overhead), as the underground plan read it (Q6348).
     pub below_slab_homeruns: String,

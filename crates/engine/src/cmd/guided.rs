@@ -24268,8 +24268,19 @@ fn route_methods_step(s: &mut Session, job: &GuidedJob, docs: &[super::scope::Do
             remedy = Some((r, format!("{at}: {line}")));
         }
     };
+    // Where the documents forbid back-to-back devices (Q6553): the first note, keynote or
+    // specification that does; one naming any wall over one naming fire-rated walls only.
+    let mut forbid: Option<(super::mepatoms::boxclear::Forbid, String)> = None;
+    let mut forbids = |found: Option<super::mepatoms::boxclear::Forbid>, at: &str| {
+        if let Some(f) = found
+            && forbid.as_ref().is_none_or(|(have, _)| have.rated_only && !f.rated_only)
+        {
+            forbid = Some((f, at.to_string()));
+        }
+    };
     for (section, text) in super::valueeng::spec_texts(&specs) {
         take(b2b.remedy_in(&text), &format!("spec {}", section.trim()));
+        forbids(b2b.forbid_in(&text), &format!("spec {}", section.trim()));
         m.applications.extend(super::valueeng::wiring_applications(&text, &section).into_iter().map(|a| super::conduitroute::MethodApp {
             section: a.section,
             item: a.item,
@@ -24281,11 +24292,21 @@ fn route_methods_step(s: &mut Session, job: &GuidedJob, docs: &[super::scope::Do
     for doc in docs.iter().take(10_000) {
         for p in doc.paras.iter().take(10_000) {
             take(b2b.remedy_in(&p.text), &format!("{} {}", doc.name.trim(), p.at.trim()));
+            forbids(b2b.forbid_in(&p.text), &format!("{} {}", doc.name.trim(), p.at.trim()));
         }
     }
     if let Some((r, src)) = remedy {
         m.rated_box_remedy = r.as_str().to_string();
         m.rated_box_remedy_source = src;
+    }
+    if let Some((f, at)) = forbid {
+        m.back_to_back_forbidden = format!("{at}: {}", f.line);
+        m.back_to_back_forbidden_rated_only = f.rated_only;
+        progress_line(&format!(
+            "  back-to-back devices forbidden in {} ({}): every pair separated",
+            if f.rated_only { "fire-rated walls" } else { "every wall" },
+            m.back_to_back_forbidden
+        ));
     }
     progress_line(&format!(
         "  rated-wall boxes back to back: {}",

@@ -22,7 +22,17 @@ fn wall_line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
 /// `y` ft in that wall, on circuit LP1-3 from panel LP1 in unit A. `rule` sets the project's
 /// choice first. The session and the build's report.
 fn mirrored_units(y: (f64, f64), rule: Option<&str>) -> (Session, Value) {
+    units(y, &rule.map(|v| vec![("rated_wall_boxes", v)]).unwrap_or_default(), "1 HR", None)
+}
+
+/// [`mirrored_units`] with the project's `clearance` rules (key, value), the wall's rating and
+/// the job's route methods as the documents read them (`methods`: stored in the drawing before
+/// the build, the way the job stores them).
+fn units(y: (f64, f64), rules: &[(&str, &str)], rating: &str, methods: Option<Value>) -> (Session, Value) {
     let mut d = Drawing::new_imperial();
+    if let Some(m) = methods {
+        d.embedded.insert("route/methods.json".into(), std::sync::Arc::new(serde_json::to_vec(&m).expect("methods")));
+    }
     let o = [((0., 0.), (40., 0.)), ((40., 0.), (40., 10.)), ((40., 10.), (0., 10.)), ((0., 10.), (0., 0.))];
     let i = [((0.5, 0.5), (39.5, 0.5)), ((39.5, 0.5), (39.5, 9.5)), ((39.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
     let mid = [((19.75, 0.5), (19.75, 9.5)), ((20.25, 0.5), (20.25, 9.5))];
@@ -31,10 +41,10 @@ fn mirrored_units(y: (f64, f64), rule: Option<&str>) -> (Session, Value) {
     }
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Floor Plan", None);
-    if let Some(v) = rule {
+    for (k, v) in rules {
         s.execute(
             "project.rules.set",
-            &json!({"domain": "clearance", "key": "rated_wall_boxes", "value": v, "tier": "spec", "source": "Spec 26 05 33", "reason": "the specification's choice"}),
+            &json!({"domain": "clearance", "key": k, "value": v, "tier": "spec", "source": "Spec 26 05 33", "reason": "the specification's choice"}),
         )
         .expect("rule");
     }
@@ -48,7 +58,7 @@ fn mirrored_units(y: (f64, f64), rule: Option<&str>) -> (Session, Value) {
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
         "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
-        "wall_types": [{"name": "Partition", "thickness_in": 6, "assembly": {"tag": "P1", "fire_rating": "1 HR"}}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6, "assembly": {"tag": "P1", "fire_rating": rating}}],
         "tags": [
             dev(1, 19.6, y.0),
             dev(2, 20.4, y.1),
@@ -241,4 +251,75 @@ fn switching_the_choice_replaces_only_the_affected_boxes() {
     s.execute("conduit.reroute", &json!({})).expect("reroute");
     assert_eq!(receptacles(&s).iter().filter(|d| d.2.get("design:location").is_some()).count(), 1);
     assert_eq!(pads_in_takeoff(&mut s), 0.0);
+}
+
+/// The documents' general note forbidding back-to-back devices, as the job stores it (and a
+/// specification naming the pads, which it overrides).
+fn forbidding_notes(rated_only: bool) -> Value {
+    json!({
+        "rated_box_remedy": "putty pads",
+        "rated_box_remedy_source": "spec 07 84 00: protect outlet boxes with listed putty pads",
+        "back_to_back_forbidden": "Sheet X-9 note 4: DO NOT INSTALL DEVICES BACK-TO-BACK IN ANY WALL",
+        "back_to_back_forbidden_rated_only": rated_only
+    })
+}
+
+#[test]
+fn documents_forbidding_back_to_back_devices_separate_every_pair_even_where_pads_are_named() {
+    // Test finding (fix-putty-pads-where-back-to-back-forbidden): the notes forbid back-to-back
+    // devices in any wall, yet pairs kept their spots with putty pads. In the rated wall: one
+    // moves, no pads, the remedy and its source on both boxes.
+    let (mut s, built) = units((5.0, 5.0), &[], "1 HR", Some(forbidding_notes(false)));
+    let moved: Vec<_> = receptacles(&s).into_iter().filter(|d| d.2.get("design:location").is_some()).collect();
+    assert_eq!(moved.len(), 1, "one of the pair moves: {built}");
+    assert_eq!(built["boxClearance"]["puttyPads"], json!(0), "{built}");
+    assert_eq!(pads_in_takeoff(&mut s), 0.0);
+    assert_eq!(built["boxClearance"]["ratedWallRemedy"], json!("separate"), "{built}");
+    assert!(built["boxClearance"]["ratedWallRemedySource"].as_str().is_some_and(|x| x.contains("Sheet X-9 note 4")), "{built}");
+    let bx = boxes(&s);
+    assert_eq!(bx.len(), 2, "{built}");
+    assert!((bx[0].1[1] - bx[1].1[1]).abs() >= 28.0 - 1e-6, "24\" clear edge to edge: {:?} {:?}", bx[0].1, bx[1].1);
+    for (of, c, ps) in &bx {
+        let r = ps.get("back_to_back_remedy").unwrap_or_else(|| panic!("box of {of} has no remedy: {built}"));
+        assert_eq!(r.text(), "separate", "box of {of}");
+        let src = format!("{:?}", r.source);
+        assert!(src.contains("Sheet X-9 note 4"), "the remedy's source on the box of {of}: {src}");
+        assert!(ps.get("firestop").is_none(), "box of {of} padded");
+        assert!(conduit_ends_at(&stick_ends(&s), *c), "no conduit ends at the box of {of} at {c:?}");
+    }
+    let notes = built.to_string();
+    assert!(notes.contains("forbidden by the documents") && notes.contains("every wall"), "{notes}");
+}
+
+#[test]
+fn documents_forbidding_back_to_back_devices_reach_walls_with_no_rating() {
+    // A demising wall with no fire rating: the code's rule doesn't reach it, the notes' does.
+    let (_, plain) = units((5.0, 5.0), &[], "NONE", None);
+    let (s, built) = units((5.0, 5.0), &[], "NONE", Some(forbidding_notes(false)));
+    assert_eq!(plain["boxClearance"]["movedOffBackToBack"], json!(0), "no rule without the notes: {plain}");
+    assert_eq!(built["boxClearance"]["movedOffBackToBack"], json!(1), "{built}");
+    assert_eq!(built["boxClearance"]["puttyPads"], json!(0), "{built}");
+    let moved: Vec<_> = receptacles(&s).into_iter().filter(|d| d.2.get("design:location").is_some()).collect();
+    assert_eq!(moved.len(), 1, "{built}");
+    let why = moved[0].2.get("correction:location").map(|p| p.text()).unwrap_or_default();
+    assert!(why.contains("forbid back-to-back devices") && !why.contains("its fire-rated wall"), "{why}");
+    // A note naming fire-rated walls only leaves the unrated wall alone.
+    let (_, rated_only) = units((5.0, 5.0), &[], "NONE", Some(forbidding_notes(true)));
+    assert_eq!(rated_only["boxClearance"]["movedOffBackToBack"], json!(0), "{rated_only}");
+}
+
+#[test]
+fn a_project_rule_choosing_pads_or_allowing_back_to_back_is_the_projects_answer() {
+    // The pads chosen by the project over the notes: kept at the drawn spots.
+    let (mut s, built) = units((5.0, 5.0), &[("rated_wall_boxes", "putty pads")], "1 HR", Some(forbidding_notes(false)));
+    assert_eq!(built["boxClearance"]["puttyPads"], json!(2), "{built}");
+    assert_eq!(pads_in_takeoff(&mut s), 2.0);
+    for (of, _, ps) in &boxes(&s) {
+        assert_eq!(ps.get("back_to_back_remedy").map(|p| p.text()).as_deref(), Some("putty pads"), "box of {of}");
+    }
+    // A project rule allowing back-to-back boxes over the notes: the documents' pads again.
+    let (mut s, built) = units((5.0, 5.0), &[("back_to_back_boxes", "permitted")], "1 HR", Some(forbidding_notes(false)));
+    assert_eq!(built["boxClearance"]["ratedWallRemedy"], json!("putty pads"), "{built}");
+    assert!(built["boxClearance"]["backToBackForbidden"].is_null(), "{built}");
+    assert_eq!(pads_in_takeoff(&mut s), 2.0);
 }
