@@ -452,6 +452,14 @@ fn halfway(pts: &[[f64; 2]]) -> [f64; 2] {
     pts.first().copied().unwrap_or([0.0, 0.0])
 }
 
+/// A run's source names a sheet of the set: the sheet itself (`E-101`), or the site plan the
+/// site work read it from (`site work C-101`: a civil service, a buried site circuit).
+fn names_a_sheet(sheets: &BTreeSet<String>, source: &str) -> bool {
+    let source = source.trim();
+    let sheet = source.strip_prefix(super::sitework::SOURCE_PREFIX).unwrap_or(source);
+    sheets.contains(&sheet.trim().to_ascii_uppercase())
+}
+
 fn serves_in(words: &str) -> Option<&'static str> {
     SERVES.iter().find(|(_, ws)| has_any(words, ws)).map(|(k, _)| *k)
 }
@@ -546,8 +554,7 @@ impl Buried {
                 from,
                 to,
                 proposed,
-                from_document: r.height_source.trim_start().to_ascii_lowercase().starts_with("note")
-                    || sheets.contains(&r.source_sheet.trim().to_ascii_uppercase()),
+                from_document: r.height_source.trim_start().to_ascii_lowercase().starts_with("note") || names_a_sheet(&sheets, &r.source_sheet),
                 serves: serves_in(&words),
                 basis,
             });
