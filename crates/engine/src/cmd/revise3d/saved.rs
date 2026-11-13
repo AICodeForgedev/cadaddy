@@ -246,7 +246,24 @@ pub(crate) fn after_open(s: &mut Session) {
     };
     let key = |i: &PlanItem| (i.kind, i.handle, i.signature.clone());
     let built_from: Vec<_> = rec.plan.iter().filter(|i| i.kind != "room").map(key).collect();
-    let same_plan = built_from == now.iter().map(key).collect::<Vec<_>>();
+    let same_plan = if d.sheet_store.has_parked() {
+        // A print set opened one sheet at a time (Q6570): the plan is the whole set, and only
+        // part of it is in memory. Each plan object in memory that the record lists must be as
+        // built, and each one it lists that is in memory must still be a plan object. One it
+        // lists that isn't in memory is on a sheet out of memory, as the file stores it (a save
+        // builds a model behind its plan first, so the file's plan is the one built from). One
+        // in memory that it doesn't list is past the objects a record reads of a large set
+        // ([`plan_items`] reads the first of them), not an edit.
+        let built_by: HashMap<Handle, Vec<&(&str, Handle, String)>> = built_from.iter().fold(HashMap::new(), |mut m, k| {
+            m.entry(k.1).or_default().push(k);
+            m
+        });
+        let now_keys: HashSet<_> = now.iter().map(key).collect();
+        now_keys.iter().all(|k| built_by.get(&k.1).is_none_or(|b| b.contains(&k)))
+            && built_from.iter().all(|k| now_keys.contains(k) || !d.model.contains(k.1))
+    } else {
+        built_from == now.iter().map(key).collect::<Vec<_>>()
+    };
     if same_plan {
         rec.built = Some(super::BuiltDrawing(Arc::clone(&d)));
     }

@@ -73,7 +73,8 @@ fn a_pdf_plan_is_read_by_what_it_draws() {
     assert_eq!(r["walls"]["objects"], json!(3), "{r}");
     assert_eq!(r["walls"]["pairs"], json!(7), "{r}");
     assert_eq!(r["walls"]["lineweight_mm"], json!(0.7));
-    // The swing and its leaf come back as one polyline (chords, then the leaf).
+    // The swing and its leaf come back as separate pieces (the reader keeps a swing and its
+    // leaf apart from the walls they touch): one door all the same.
     assert_eq!(r["doors"], json!(1), "{r}");
     let mut rooms: Vec<&str> = r["rooms"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
     rooms.sort_unstable();
@@ -219,6 +220,25 @@ fn ducts_stairs_and_marks_never_make_or_split_rooms() {
     assert_eq!(rooms.len(), 2, "{}", r["spec"]);
     let office = rooms.iter().find(|x| x["name"] == "Office").unwrap();
     assert_eq!(office["number"], json!("101"), "{office}");
+}
+
+/// Two doors, each a swing and its leaf, are two doors: pairing a swing with its leaf never merges
+/// separate doors, and the leaves are door pieces (A-DOOR), not more doors.
+#[test]
+fn two_swings_with_their_leaves_are_two_doors() {
+    let mut src = plan(true);
+    layer(&mut src, "THIN2", 18);
+    src.execute("arc", &json!({"center": [300, 234], "radius": 36, "start": 180, "end": 270})).unwrap();
+    src.execute("line", &json!({"points": [[300, 234], [300, 198]]})).unwrap();
+    let mut s = through_pdf(&src);
+    let r = s.execute("plan.classify", &json!({})).unwrap();
+    assert_eq!(r["doors"], json!(2), "{r}");
+    let r = s.execute("plan.classify", &json!({"apply": true})).unwrap();
+    assert_eq!(r["doors"], json!(2), "{r}");
+    let d = s.doc().unwrap();
+    let kinds: Vec<EntityKind> = d.model.iter().filter(|e| e.common.layer == "A-DOOR").map(|e| e.kind.clone()).collect();
+    assert_eq!(kinds.iter().filter(|k| matches!(k, EntityKind::Arc(_))).count(), 2, "{kinds:?}");
+    assert_eq!(kinds.iter().filter(|k| matches!(k, EntityKind::Line(_))).count(), 2, "{kinds:?}");
 }
 
 #[test]

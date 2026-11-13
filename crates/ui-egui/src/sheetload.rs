@@ -153,14 +153,15 @@ pub fn park_when_idle(app: &mut CadApp) {
         }
         return;
     }
+    // The caches are let go of here, once the session is back: until then the copy on screen
+    // still shows (and holds) the whole set.
     busy::start(
         app,
         "sheet.open",
-        Box::new(|s| s.park_idle_sheets().map(|done| json!({ "parked": done })).map_err(|e| e.user_message())),
-        Box::new(|app, r| {
-            if let Err(e) = r {
-                app.session.echo(e);
-            }
+        Box::new(|s| s.park_idle_sheets_off_thread().map(|done| json!({ "parked": done })).map_err(|e| e.user_message())),
+        Box::new(|app, r| match r {
+            Ok(_) => app.session.release_unheld(),
+            Err(e) => app.session.echo(e),
         }),
     );
 }

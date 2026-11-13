@@ -9,12 +9,19 @@
 //! - `messy`: the single storey on meaningless layers (`Layer 7`, `walls_NEW`, `0`), a door
 //!   swing instead of a block, dimensions and furniture in the way;
 //! - `pdf`: the messy storey plotted to PDF and read back with no layers (needs the app's PDF
-//!   hooks; skipped without them).
+//!   hooks; skipped without them);
+//! - `pdf_openings`: a plain storey drawn in one pen — walls as line pairs broken at their
+//!   openings, two doors as a leaf and a swing in their gaps, three windows as glazing lines across
+//!   theirs, rooms tagged by name and number, a scale note — plotted to PDF with no layers and read
+//!   back (the reader joins every touching line of the pen);
+//! - `pdf_job`: the same PDF through the guided job (`job.start` on a folder holding it), as a
+//!   print set is built.
 //!
 //! **Pipeline** (`p2m.bench`): what an agent does, with the heuristic drafter in the agent's
 //! place: `plan.layers`, `plan.walls`, `plan.rooms`, `plan.notes` → `bspec.draft` (or
 //! `plan.classify {draft}` for a PDF) → levels from the plan titles and notes → `stairs.detect`
-//! → `model.build` → `model.issues`, `model.counts`. Each step's result and time are reported.
+//! → `model.build` → `model.issues`, `model.counts` (`pdf_job`: `job.start {goal: takeoff,
+//! auto}`, then `model.issues`, `model.counts`). Each step's result and time are reported.
 //!
 //! **Scorer** (`score`): each measure from 0 to 1, read from the BUILT model only — wall length
 //! (built walls along their run) and openings (built doors and windows) on every level, rooms
@@ -39,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("p2m.bench", "Plans to Model Benchmark", run_bench)
             .files()
-            .params("{cases?: [single|multi|messy|pdf]} → {cases: [{name, steps: [{command, ok, ms, error?}], scores: {walls, openings, rooms, heights, stairs?}, total, issues}], mean}")
+            .params("{cases?: [single|multi|messy|pdf|pdf_openings|pdf_job]} → {cases: [{name, steps: [{command, ok, ms, error?}], scores: {walls, openings, rooms, heights, stairs?}, total, issues}], mean}")
             .noundo(),
         CommandSpec::new("p2m.case", "Plans to Model Case", run_case_cmd)
             .files()
@@ -82,6 +89,8 @@ pub struct Case {
     pub truth: Truth,
     /// Read back through PDF before the pipeline.
     pub pdf: bool,
+    /// The plotted PDF built by the guided job (`job.start`) instead of the agent's pipeline.
+    pub job: bool,
     /// A correct spec for the case (the scorer's perfect model).
     pub spec: Value,
 }
@@ -243,6 +252,7 @@ pub fn cases() -> Vec<Case> {
         drawing: d,
         truth: base_truth(1),
         pdf: false,
+        job: false,
         spec: perfect_spec(json!([{"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 8}]), json!({})),
     });
     // multi: two storeys side by side, a stair on the first.
@@ -269,6 +279,7 @@ pub fn cases() -> Vec<Case> {
         drawing: d,
         truth,
         pdf: false,
+        job: false,
         spec: perfect_spec(spec_levels, json!({"stairs": [{"name": "S1", "level": "Level 1", "runs": [{"from": [280, 172], "to": [442, 172], "treads": 18}], "width_in": 44, "confirmed": true}]})),
     });
     // messy
@@ -279,14 +290,87 @@ pub fn cases() -> Vec<Case> {
         drawing: d,
         truth: base_truth(0),
         pdf: false,
+        job: false,
         spec: perfect_spec(json!([{"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 8}]), json!({})),
     });
     // pdf: the messy storey with pens, through PDF.
     let mut d = Drawing::new_imperial();
     storey(&mut d, (0.0, 0.0), true, true);
     text(&mut d, "0", (0.0, -50.0), "SCALE: 1/4\" = 1'-0\"", 6.0);
-    out.push(Case { name: "pdf", drawing: d, truth: base_truth(0), pdf: true, spec: Value::Null });
+    out.push(Case { name: "pdf", drawing: d, truth: base_truth(0), pdf: true, job: false, spec: Value::Null });
+    // pdf_openings and pdf_job: the storey with its openings in wall gaps, one pen, through PDF.
+    for (name, job) in [("pdf_openings", false), ("pdf_job", true)] {
+        let mut d = Drawing::new_imperial();
+        gapped_storey(&mut d);
+        out.push(Case { name, drawing: d, truth: gapped_truth(), pdf: true, job, spec: Value::Null });
+    }
     out
+}
+
+/// The gapped storey: 40' × 20' in 6" walls drawn as line pairs broken at every opening (no jamb
+/// lines), all in one pen on one layer: a door in the middle wall and one in the south wall
+/// (each a leaf and a quarter swing from the hinge at the gap's jamb), a window in the south wall
+/// and two in the north (three glazing lines across each gap: both faces and the glass), the
+/// rooms tagged by name and number, and the scale note.
+fn gapped_storey(d: &mut Drawing) {
+    let ln = |d: &mut Drawing, a: (f64, f64), b: (f64, f64)| line(d, "0", None, a, b);
+    // The outer face, broken at a window (90-150) and a door (300-336) south and two windows
+    // (330-390, 90-150) north; each room's inner face, the middle wall's at its door (60-96).
+    let faces: [((f64, f64), (f64, f64)); 22] = [
+        ((0.0, 0.0), (90.0, 0.0)),
+        ((150.0, 0.0), (300.0, 0.0)),
+        ((336.0, 0.0), (480.0, 0.0)),
+        ((480.0, 0.0), (480.0, 240.0)),
+        ((480.0, 240.0), (390.0, 240.0)),
+        ((330.0, 240.0), (150.0, 240.0)),
+        ((90.0, 240.0), (0.0, 240.0)),
+        ((0.0, 240.0), (0.0, 0.0)),
+        ((6.0, 6.0), (90.0, 6.0)),
+        ((150.0, 6.0), (237.0, 6.0)),
+        ((237.0, 6.0), (237.0, 60.0)),
+        ((237.0, 96.0), (237.0, 234.0)),
+        ((237.0, 234.0), (150.0, 234.0)),
+        ((90.0, 234.0), (6.0, 234.0)),
+        ((6.0, 234.0), (6.0, 6.0)),
+        ((243.0, 6.0), (300.0, 6.0)),
+        ((336.0, 6.0), (474.0, 6.0)),
+        ((474.0, 6.0), (474.0, 234.0)),
+        ((474.0, 234.0), (390.0, 234.0)),
+        ((330.0, 234.0), (243.0, 234.0)),
+        ((243.0, 234.0), (243.0, 96.0)),
+        ((243.0, 60.0), (243.0, 6.0)),
+    ];
+    for (a, b) in faces {
+        ln(d, a, b);
+    }
+    for (x0, x1, y) in [(90.0, 150.0, 0.0), (90.0, 150.0, 234.0), (330.0, 390.0, 234.0)] {
+        for dy in [0.0, 3.0, 6.0] {
+            ln(d, (x0, y + dy), (x1, y + dy));
+        }
+    }
+    // Each door: the leaf open from its hinge, the swing from the far jamb to the leaf's end.
+    for (hinge, leaf_end) in [((243.0, 60.0), (279.0, 60.0)), ((300.0, 6.0), (300.0, 42.0))] {
+        ln(d, hinge, leaf_end);
+        add(
+            d,
+            "0",
+            None,
+            EntityKind::Arc(cadaddy_doc::Arc { center: Vec3::new(hinge.0, hinge.1, 0.0), radius: 36.0, start: 0.0, end: 90f64.to_radians() }),
+        );
+    }
+    for (at, value) in [((90.0, 120.0), "OFFICE"), ((100.0, 106.0), "G01"), ((330.0, 120.0), "LOBBY"), ((340.0, 106.0), "G02")] {
+        text(d, "0", at, value, 9.0);
+    }
+    text(d, "0", (0.0, -50.0), "SCALE: 1/4\" = 1'-0\"", 6.0);
+}
+
+/// The gapped storey's truth: the storey's walls (through their openings), two doors and three
+/// windows. No rooms: without jamb lines a door's gap opens into the wall between its faces, so
+/// the rooms are measured by the other cases.
+fn gapped_truth() -> Truth {
+    let mut level = storey_truth("Level 1", 0.0, 10.0, 3);
+    level.doors = 2;
+    Truth { levels: vec![level], rooms: Vec::new(), stairs: Vec::new() }
 }
 
 // ---------------- the pipeline ----------------
@@ -366,6 +450,9 @@ pub fn run(case: &Case) -> Value {
             Ok(b) => b,
             Err(e) => return json!({ "name": case.name, "error": e }),
         };
+        if case.job {
+            return run_job(case, &pdf);
+        }
         d = match read(&pdf, &json!({"scale": 1, "layers": "object", "layout": false})) {
             Ok((d, _)) => d,
             Err(e) => return json!({ "name": case.name, "error": e }),
@@ -392,6 +479,40 @@ pub fn run(case: &Case) -> Value {
     step(&mut s, &mut steps, "model.counts", json!({}));
     let (scores, total) = score(&s, &case.truth);
     json!({ "name": case.name, "steps": steps, "scores": scores, "total": total, "issues": issues })
+}
+
+/// A case's plotted PDF built by the guided job, unattended, from a folder holding only it.
+fn run_job(case: &Case, pdf: &[u8]) -> Value {
+    let Some(dir) = job_folder(case.name) else {
+        return json!({ "name": case.name, "skipped": "no folder for the job's prints in this build" });
+    };
+    let file = dir.join(format!("{}.pdf", case.name));
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| crate::writefile::write(&file, pdf)) {
+        return json!({ "name": case.name, "error": format!("{}: {e}", file.display()) });
+    }
+    let mut s = Session::new();
+    let mut steps: Vec<Value> = Vec::new();
+    step(&mut s, &mut steps, "job.start", json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false}));
+    let _ = std::fs::remove_dir_all(&dir);
+    let issues = step(&mut s, &mut steps, "model.issues", json!({})).map_or(Value::Null, |v| v["byKind"].clone());
+    step(&mut s, &mut steps, "model.counts", json!({}));
+    let (scores, total) = score(&s, &case.truth);
+    json!({ "name": case.name, "steps": steps, "scores": scores, "total": total, "issues": issues })
+}
+
+/// A new folder of its own for a job case's prints (none on the web).
+fn job_folder(name: &str) -> Option<std::path::PathBuf> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(std::env::temp_dir().join(format!("cadaddy-p2m-{name}-{}-{n}", std::process::id())))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = name;
+        None
+    }
 }
 
 // ---------------- the scorer ----------------
@@ -634,7 +755,10 @@ fn run_bench(_s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn case_named(name: &str) -> Result<Case> {
-    cases().into_iter().find(|c| c.name == name).ok_or_else(|| bad("p2m", format!("there is no case named {name} (single, multi, messy, pdf)")))
+    cases()
+        .into_iter()
+        .find(|c| c.name == name)
+        .ok_or_else(|| bad("p2m", format!("there is no case named {name} (single, multi, messy, pdf, pdf_openings, pdf_job)")))
 }
 
 fn run_case_cmd(s: &mut Session, p: &Value) -> Result<Value> {

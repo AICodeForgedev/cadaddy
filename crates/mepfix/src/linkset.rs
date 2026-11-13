@@ -365,6 +365,24 @@ pub fn enlarged_sheet_with_details(scale_line: bool) -> Drawing {
     s.d
 }
 
+/// E-3 with its core plan drawn in two parts: a white strip (an open corridor no line crosses)
+/// splits the plan's linework into a lower and an upper block, and the view's title stands under
+/// the lower one only. The grid is drawn on the lower part (its x lines and line A); two of the
+/// five devices are in the upper part.
+pub fn enlarged_sheet_split() -> Drawing {
+    let mut s = Sheet::new();
+    s.title_block("E-3", "ELECTRICAL ENLARGED PLANS");
+    s.grid(&[("2", 4.0), ("3", 12.0), ("4", 20.0)], &[("A", 4.0)], [2.5, 21.5], [2.5, 11.0]);
+    for r in [[4.0, 4.0, 12.0, 11.4], [12.0, 4.0, 20.0, 11.4], [4.0, 12.0, 12.0, 20.0], [12.0, 12.0, 20.0, 20.0]] {
+        s.rect(r);
+    }
+    for p in [[6.0, 6.0], [10.0, 14.0], [14.0, 10.0], [18.0, 19.0], [20.5, 8.0]] {
+        s.device("A", p);
+    }
+    s.view_title("1", "E-3", "ELECTRICAL - FIRST FLOOR - COMMON AREA", "SCALE: 1/4\" = 1'-0\"", [4.0, 1.2]);
+    s.d
+}
+
 /// E-4: details; detail 2 prints the receptacle's mounting height.
 fn e4() -> Drawing {
     let mut s = Sheet::new();

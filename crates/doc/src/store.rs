@@ -373,6 +373,28 @@ impl EntityStore {
         }
         self.shards = split.into_iter().map(Arc::new).collect();
     }
+    /// Fit the handle index to the store again after most of it left (a print set's sheets put
+    /// out of memory, [`EntityStore::take_chunks`]): the index keeps the shards it was split into
+    /// as the store grew, each as large as when it was fullest (a map never gives back its room
+    /// as handles leave it), so a store that once held a million objects kept an index for a
+    /// million, and every copy of it (an undo step) one of its own. Rebuilt for what the store
+    /// holds when it holds less than a quarter of what its shards were split for, or when a
+    /// shard has room for four times its handles; nothing otherwise.
+    pub fn fit_index(&mut self) {
+        let want = (self.len / SHARD_TARGET).saturating_add(1).next_power_of_two().clamp(SHARDS, SHARDS_MAX);
+        let roomy = |m: &HashMap<Handle, u32>| m.capacity() > m.len().saturating_mul(4).saturating_add(64);
+        if self.shards.len() <= want.saturating_mul(4) && !self.shards.iter().any(|m| roomy(m)) {
+            return;
+        }
+        let per = self.len / want + 1;
+        let mut fit: Vec<HashMap<Handle, u32>> = (0..want).map(|_| HashMap::with_capacity(per)).collect();
+        for (h, c) in self.shards.iter().flat_map(|s| s.iter()) {
+            if let Some(m) = fit.get_mut(shard_of(*h, want)) {
+                m.insert(*h, *c);
+            }
+        }
+        self.shards = fit.into_iter().map(Arc::new).collect();
+    }
     /// Insert at the bottom of the draw order.
     pub fn push_front(&mut self, e: Entity) {
         if self.contains(e.handle) {
@@ -636,6 +658,44 @@ impl EntityStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_handle_index_fits_the_store_again_after_most_of_it_left() {
+        let mut s = EntityStore::new();
+        for k in 0..300u64 {
+            s.push_chunk((k * 1000 + 1..=(k + 1) * 1000).map(ent).collect());
+        }
+        let grown = s.shards.len();
+        assert!(grown > SHARDS, "{grown} shards for {} objects", s.len());
+        let room = |s: &EntityStore| s.shards.iter().map(|m| m.capacity()).sum::<usize>();
+        let full = room(&s);
+        // All but the first two chunks leave (a print set's other sheets out of memory).
+        let first: Vec<usize> = s.chunk_refs().iter().take(2).map(ChunkRef::key).collect();
+        let taken = s.take_chunks(|c| !first.contains(&c.key()));
+        assert_eq!(s.len(), 2000);
+        assert!(room(&s) >= full / 2, "taking chunks leaves the index as large as it was");
+        let kept = s.clone();
+        s.fit_index();
+        assert_eq!(s.shards.len(), SHARDS);
+        assert!(room(&s) * 8 < full, "the index fits the store: room for {} handles, {} before", room(&s), full);
+        // The same handles, found where they are; the copy taken before is as it was.
+        for h in (1..=2000).map(Handle) {
+            assert!(s.contains(h) && kept.contains(h));
+            assert_eq!(s.get(h).map(|e| e.handle), Some(h));
+        }
+        assert!((2001..=300_000).map(Handle).all(|h| !s.contains(h)));
+        // Nothing to do on a store that fits: the very same shards.
+        let before: Vec<*const HashMap<Handle, u32>> = s.shards.iter().map(Arc::as_ptr).collect();
+        s.fit_index();
+        assert_eq!(s.shards.iter().map(Arc::as_ptr).collect::<Vec<_>>(), before);
+        // And it grows again as the chunks come back.
+        for c in taken {
+            s.push_chunk(c.items().iter().map(|e| (**e).clone()).collect());
+        }
+        assert_eq!(s.len(), 300_000);
+        assert!(s.shards.len() > SHARDS);
+        assert!((1..=300_000).map(Handle).all(|h| s.contains(h)));
+    }
 
     #[test]
     fn a_copy_is_unchanged_until_one_of_its_chunks_changes() {

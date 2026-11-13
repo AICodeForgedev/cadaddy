@@ -98,6 +98,16 @@ impl<T: Send + Sync, C: PartialEq> ChunkPool<T, C> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner).as_ref().is_some_and(|m| m.contains_key(&owner()))
     }
 
+    /// Forget the parts of chunks not in `held` (the chunk keys of every store the open drawings
+    /// hold, [`crate::Session::release_unheld`]): their objects left every drawing (a print set's
+    /// sheets went out of memory again), and a kept part holds its chunk. In the unit tests, this
+    /// thread's.
+    pub fn retain_held(&self, held: &std::collections::HashSet<usize>) {
+        if let Some((_, parts)) = self.inner.lock().unwrap_or_else(PoisonError::into_inner).as_mut().and_then(|m| m.get_mut(&owner())) {
+            parts.retain(|k, _| held.contains(k));
+        }
+    }
+
     /// Forget every part (the drawings they came from may be closed; in the unit tests, this
     /// thread's).
     pub fn clear(&self) {
