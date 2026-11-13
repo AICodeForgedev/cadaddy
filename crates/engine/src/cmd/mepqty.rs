@@ -342,48 +342,130 @@ fn elbow_name(deg: f64) -> String {
     }
 }
 
-/// Where runs meet: a tee where a run ends on another's side; at a shared end, a tee (three
-/// runs), a cross (four or more), or a transition (rectangular) / reducer (round) between two
-/// sizes.
-fn joints(runs: &[(usize, &MepRun, &MepSystem)], upf: f64, st: &Settings, t: &mut Takeoff) {
-    // Per system and level: the run ends.
-    let mut groups: BTreeMap<(&str, &str), Vec<(usize, &MepRun, &MepSystem)>> = BTreeMap::new();
+/// A run counted for its joints: its index, the run, its system and, for a riser's piece,
+/// whether the riser goes on under its foot and over its head (Q6493 cuts it at the floors).
+type JointRun<'a> = (usize, &'a MepRun, &'a MepSystem, [bool; 2]);
+
+/// A run's bottom at its first or last end, feet over its floor (its segments' bottoms).
+fn end_bottom(r: &MepRun, last: bool) -> f64 {
+    let i = if last { r.points.len().saturating_sub(2) } else { 0 };
+    r.bottoms_ft.get(i).or(r.bottoms_ft.last()).copied().filter(|b| b.is_finite()).unwrap_or(0.0)
+}
+
+/// A run's depth, feet (a round run's diameter).
+fn depth_ft(r: &MepRun) -> f64 {
+    let d = if r.size_in[1] > 0.0 { r.size_in[1] } else { r.size_in[0] };
+    if d.is_finite() { d.max(0.0) / 12.0 } else { 0.0 }
+}
+
+/// Height spans (feet) overlapping, an inch of slack.
+fn meet_in_height(a0: f64, a1: f64, b0: f64, b1: f64) -> bool {
+    a0 <= b1 + 1.0 / 12.0 && b0 <= a1 + 1.0 / 12.0
+}
+
+/// Where runs meet, per service and level (Q6598: the systems that are one service,
+/// [`cadaddy_walk3d::mepties`], meet though they are named apart; two systems' runs must also meet
+/// in height): a tee where a run ends on another's side or leaves a riser's side between its foot
+/// and its head (two at one height a cross); at a shared end, a tee (three runs), a cross (four or
+/// more), or a transition (rectangular) / reducer (round) between two sizes. A fitting is counted
+/// under its main run's system and carries both runs' sizes.
+fn joints(runs: &[JointRun], upf: f64, st: &Settings, t: &mut Takeoff) {
+    // Per service and level: the run ends.
+    let mut groups: BTreeMap<(String, &str), Vec<JointRun>> = BTreeMap::new();
     for r in runs {
-        groups.entry((r.1.system.as_str(), r.1.level.as_str())).or_default().push(*r);
+        groups.entry((cadaddy_walk3d::mepties::service_key(r.2), r.1.level.as_str())).or_default().push(*r);
     }
-    for ((system, level), rs) in groups {
+    for ((_, level), rs) in groups {
         let tol_of = |size: [f64; 2]| (size[0].max(size[1]) / 24.0 + 0.1) * upf;
-        let key = |what: &str, size: String| (st.key_level(level), st.key_system(system), what.to_string(), size);
-        // Ends: (point, run index in rs, size).
-        let ends: Vec<(Vec2, usize)> = rs
+        let key = |system: &str, what: &str, size: String| (st.key_level(level), st.key_system(system), what.to_string(), size);
+        // Ends: (point, run index in rs, the last end).
+        let ends: Vec<(Vec2, usize, bool)> = rs
             .iter()
             .enumerate()
-            .flat_map(|(i, (_, r, _))| {
-                let f = r.points.first().map(|p| Vec2::new(p[0], p[1]));
-                let l = if r.points.len() > 1 { r.points.last().map(|p| Vec2::new(p[0], p[1])) } else { None };
-                f.into_iter().chain(l).map(move |p| (p, i))
+            .flat_map(|(i, (_, r, _, _))| {
+                let f = r.points.first().map(|p| (Vec2::new(p[0], p[1]), false));
+                let l = if r.points.len() > 1 { r.points.last().map(|p| (Vec2::new(p[0], p[1]), true)) } else { None };
+                f.into_iter().chain(l).map(move |(p, last)| (p, i, last))
             })
             .collect();
         let mut used = vec![false; ends.len()];
-        for (ei, (p, ri)) in ends.iter().enumerate() {
-            let Some((_, run, sy)) = rs.get(*ri) else { continue };
+        // Ends a riser's tee took.
+        let mut taken = vec![false; ends.len()];
+        // Leaving a riser's side: an end at its plan point whose height it passes, under it and
+        // over it (at the riser's foot or head they meet end to end).
+        for (ri, (_, riser, rsy, goes_on)) in rs.iter().enumerate() {
+            let (Some(top), [p]) = (riser.top_ft, riser.points.as_slice()) else { continue };
+            let (p, rz0) = (Vec2::new(p[0], p[1]), riser.bottoms_ft.first().copied().unwrap_or(0.0));
+            if !(top.is_finite() && rz0.is_finite() && top > rz0 && p.is_finite()) {
+                continue;
+            }
+            let tol = tol_of(riser.size_in);
+            // The ends leaving it, by height: (lowest, highest, branch sizes).
+            let mut at: Vec<(f64, f64, Vec<[f64; 2]>)> = Vec::new();
+            for (ei, (q, rj, last)) in ends.iter().enumerate() {
+                let Some((_, b, _, _)) = rs.get(*rj).filter(|_| *rj != ri) else { continue };
+                if b.top_ft.is_some() || used.get(ei).copied().unwrap_or(true) || q.dist(p) > tol {
+                    continue;
+                }
+                let z0 = end_bottom(b, *last);
+                let z1 = z0 + depth_ft(b);
+                let inch = 1.0 / 12.0;
+                if !((goes_on[0] || rz0 < z0 - inch / 2.0) && (goes_on[1] || top > z1 + inch / 2.0) && meet_in_height(z0, z1, rz0, top)) {
+                    continue;
+                }
+                for u in [used.get_mut(ei), taken.get_mut(ei)].into_iter().flatten() {
+                    *u = true;
+                }
+                match at.iter_mut().find(|(lo, hi, _)| meet_in_height(*lo, *hi, z0, z1)) {
+                    Some((lo, hi, sizes)) => {
+                        (*lo, *hi) = (lo.min(z0), hi.max(z1));
+                        sizes.push(b.size_in);
+                    }
+                    None => at.push((z0, z1, vec![b.size_in])),
+                }
+            }
+            for (_, _, mut sizes) in at {
+                sizes.sort_by(|a, b| (a[0] * a[1].max(1.0)).total_cmp(&(b[0] * b[1].max(1.0))));
+                let label = |s: [f64; 2]| size_label(rsy.kind, s);
+                match sizes.as_slice() {
+                    [b] => *t.fittings.entry(key(&rsy.name, "tee", format!("{} x {}", label(riser.size_in), label(*b)))).or_default() += 1,
+                    [..] => *t.fittings.entry(key(&rsy.name, "cross", label(riser.size_in))).or_default() += 1,
+                }
+            }
+        }
+        for (ei, (p, ri, last)) in ends.iter().enumerate() {
+            let Some((_, run, sy, _)) = rs.get(*ri) else { continue };
+            if taken.get(ei).copied().unwrap_or(true) {
+                continue;
+            }
+            // Its height, for runs of another system: they meet only where they meet in height.
+            let z0 = end_bottom(run, *last);
+            let z1 = z0 + depth_ft(run);
             // On another run's side?
             let mut on_side = None;
-            for (rj, (_, other, _)) in rs.iter().enumerate() {
+            for (rj, (_, other, osy, _)) in rs.iter().enumerate() {
                 if rj == *ri {
                     continue;
                 }
                 let tol = tol_of(other.size_in);
                 let pts: Vec<Vec2> = other.points.iter().take(MAX_POINTS).map(|q| Vec2::new(q[0], q[1])).collect();
                 let near_end = pts.first().is_some_and(|q| q.dist(*p) <= tol) || pts.last().is_some_and(|q| q.dist(*p) <= tol);
-                if !near_end && pts.windows(2).any(|w| seg_dist(*p, w[0], w[1]) <= tol) {
-                    on_side = Some(other);
-                    break;
+                if near_end {
+                    continue;
                 }
+                let Some(si) = pts.windows(2).position(|w| seg_dist(*p, w[0], w[1]) <= tol) else { continue };
+                if osy.name != sy.name {
+                    let oz = other.bottoms_ft.get(si).or(other.bottoms_ft.last()).copied().filter(|b| b.is_finite()).unwrap_or(0.0);
+                    if !meet_in_height(z0, z1, oz, oz + depth_ft(other)) {
+                        continue;
+                    }
+                }
+                on_side = Some((other, osy));
+                break;
             }
-            if let Some(main) = on_side {
+            if let Some((main, msy)) = on_side {
                 let size = format!("{} x {}", size_label(sy.kind, main.size_in), size_label(sy.kind, run.size_in));
-                *t.fittings.entry(key("tee", size)).or_default() += 1;
+                *t.fittings.entry(key(&msy.name, "tee", size)).or_default() += 1;
                 if let Some(u) = used.get_mut(ei) {
                     *u = true;
                 }
@@ -395,10 +477,21 @@ fn joints(runs: &[(usize, &MepRun, &MepSystem)], upf: f64, st: &Settings, t: &mu
             // Shared ends.
             let tol = tol_of(run.size_in);
             let mut at: Vec<usize> = vec![ei];
-            for (ej, (q, rj)) in ends.iter().enumerate().skip(ei + 1) {
-                if rj != ri && !used.get(ej).copied().unwrap_or(true) && q.dist(*p) <= tol {
-                    at.push(ej);
+            for (ej, (q, rj, qlast)) in ends.iter().enumerate().skip(ei + 1) {
+                if rj == ri || used.get(ej).copied().unwrap_or(true) || q.dist(*p) > tol {
+                    continue;
                 }
+                if let Some((_, o, osy, _)) = rs.get(*rj)
+                    && osy.name != sy.name
+                    && o.top_ft.is_none()
+                    && run.top_ft.is_none()
+                {
+                    let oz = end_bottom(o, *qlast);
+                    if !meet_in_height(z0, z1, oz, oz + depth_ft(o)) {
+                        continue;
+                    }
+                }
+                at.push(ej);
             }
             if at.len() < 2 {
                 continue;
@@ -408,22 +501,25 @@ fn joints(runs: &[(usize, &MepRun, &MepSystem)], upf: f64, st: &Settings, t: &mu
                     *u = true;
                 }
             }
-            let mut sizes: Vec<[f64; 2]> =
-                at.iter().filter_map(|e| ends.get(*e)).filter_map(|(_, r)| rs.get(*r)).map(|(_, r, _)| r.size_in).collect();
-            sizes.sort_by(|a, b| (b[0] * b[1].max(1.0)).total_cmp(&(a[0] * a[1].max(1.0))));
+            let mut sized: Vec<([f64; 2], &str)> =
+                at.iter().filter_map(|e| ends.get(*e)).filter_map(|(_, r, _)| rs.get(*r)).map(|(_, r, s, _)| (r.size_in, s.name.as_str())).collect();
+            sized.sort_by(|(a, _), (b, _)| (b[0] * b[1].max(1.0)).total_cmp(&(a[0] * a[1].max(1.0))));
+            // Counted under the largest run's system.
+            let main_system = sized.first().map_or(sy.name.as_str(), |(_, s)| *s);
+            let sizes: Vec<[f64; 2]> = sized.iter().map(|(s, _)| *s).collect();
             let label = |s: &[f64; 2]| size_label(sy.kind, *s);
             match sizes.as_slice() {
                 [a, b] if (a[0] - b[0]).abs() > 1e-6 || (a[1] - b[1]).abs() > 1e-6 => {
                     let what = if sy.kind == MepKind::Duct && (a[1] > 0.0 || b[1] > 0.0) { "transition" } else { "reducer" };
-                    *t.fittings.entry(key(what, format!("{} to {}", label(a), label(b)))).or_default() += 1;
+                    *t.fittings.entry(key(main_system, what, format!("{} to {}", label(a), label(b)))).or_default() += 1;
                 }
                 [_, _] => {}
                 [a, _, c] => {
                     // Sorted largest first: the main and the smallest branch.
-                    *t.fittings.entry(key("tee", format!("{} x {}", label(a), label(c)))).or_default() += 1;
+                    *t.fittings.entry(key(main_system, "tee", format!("{} x {}", label(a), label(c)))).or_default() += 1;
                 }
                 [a, ..] => {
-                    *t.fittings.entry(key("cross", label(a))).or_default() += 1;
+                    *t.fittings.entry(key(main_system, "cross", label(a))).or_default() += 1;
                 }
                 [] => {}
             }
@@ -446,7 +542,7 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
     // (Q6493); its pieces keep the run's index.
     let given = sp.mep.runs.get(..sp.mep.runs.len().min(MAX_ITEMS)).unwrap_or_default();
     let storeys = super::risercut::all_storey_runs(sp, given, MAX_ITEMS);
-    let mut counted: Vec<(usize, &MepRun, &MepSystem)> = Vec::new();
+    let mut counted: Vec<JointRun> = Vec::new();
     for (id, piece) in &storeys {
         let (id, r): (usize, &MepRun) = (*id, &piece.run);
         let Some(sy) = sp.mep.systems.iter().find(|s| s.name == r.system) else { continue };
@@ -474,7 +570,8 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
             sk = format!("{sk} ({})", p.as_str());
         }
         let size = size_label(sy.kind, r.size_in);
-        counted.push((id, r, sy));
+        let goes_on = piece.cut.as_ref().map_or([false, false], |c| [c.index > 0, c.index + 1 < c.count]);
+        counted.push((id, r, sy, goes_on));
 
         match sy.kind {
             MepKind::Duct => {
