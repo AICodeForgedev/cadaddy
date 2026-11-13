@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{kind?: leak|opening_not_in_wall|window_not_in_wall|window_inside_building (a built window in no wall, or in a wall inside the building, not an outside wall)|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building|roof_off_walls (a roof standing over its walls on nothing, or off their outline), limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
             .files(),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor), fidelity?: auto|building|floor|room|detail (draw the built model as the 3D view's fidelity tier does: auto by the view's height)} → {path?|png, width, height, triangles, fidelity?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor), fidelity?: auto|building|floor|room|detail (draw the built model as the 3D view's fidelity tier does: auto by the view's height), view?: systems|architectural|mep|floor|room (draw this BIM view without changing the drawing's)} → {path?|png, width, height, triangles, fidelity?, view?, drawn?, switches?, legend?: [{key, label, group, color, count}]}: the whole building (or a `view`) exactly as the 3D BIM view draws it (bim.view and bim.look)")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
             .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else base64), output?: same as path, width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
@@ -1124,7 +1124,38 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     // columns, roofs); a reader's stray object off the building (model.issues lists it as
     // outside_building) never shrinks the building to a speck in the corner of the view.
     let whole = only.is_none() && eye.is_none() && p.get("around").is_none_or(Value::is_null) && p.get("mark").is_none_or(Value::is_null);
-    let md = if bim {
+    // The BIM view drawn (Q6617): the whole building as the 3D view draws it (its active view,
+    // switches and look), or the view asked for, without changing the drawing's.
+    let asked = match p.get("view").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(
+            v.as_str()
+                .and_then(super::bimviews::View::parse)
+                .ok_or_else(|| bad("model.render", format!("`view` must be systems, architectural, mep, floor or room, got {v}")))?,
+        ),
+    };
+    let mut drew: Option<(super::bimlook::Look, super::bimviews::View, super::bimlook::Drew)> = None;
+    let md = if bim && (whole || asked.is_some()) && !super::bimlook::Look::of(d).off {
+        let mut look = super::bimlook::Look::of(d);
+        if let Some(v) = asked {
+            super::bimviews::set_view(&mut look, v);
+            if v.per_level() {
+                look.level = only.clone().or(look.level);
+            }
+        }
+        if let Some(g) = p.get("ghost").and_then(Value::as_bool) {
+            look.ghost = Some(g);
+        }
+        let keep: std::collections::HashSet<Handle> = keep.iter().copied().collect();
+        let all = whole;
+        let (mut md, what) = super::bimlook::display_summary(d, &look, whole, &|e, _| all || keep.contains(&e.handle))
+            .ok_or_else(|| bad("model.render", "nothing has been built yet (run model.build)"))?;
+        // The model as built: a view's object isolation (a clash shown alone) hides none of it.
+        md.hidden_objects.clear();
+        let view = super::bimviews::active_in(d, &look);
+        drew = Some((look, view, what));
+        md
+    } else if bim {
         // Trade colours; the shell ghosted for a view from outside (`ghost`, else as the view
         // has it), solid for a camera or a room seen from inside.
         let mut look = super::bimlook::Look::of(d);
@@ -1341,7 +1372,11 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Final fit on the clipped scene for pixel-precise framing.
     let view = fit(&sc, proj, w, h).ok_or_else(|| bad("model.render", "nothing to fit in the view"))?;
-    let raster = if bim {
+    let systems = drew.as_ref().is_some_and(|(_, v, _)| *v == super::bimviews::View::Systems);
+    let raster = if systems {
+        let min_px = super::bimviews::Rules::of(d).0.systems_min_px;
+        cadaddy_render::bimview::rasterize_bim(&sc, &view, bg, &cadaddy_render::bimview::BimShade::systems(min_px))
+    } else if bim {
         cadaddy_render::bimview::rasterize_bim(&sc, &view, bg, &cadaddy_render::bimview::BimShade::default())
     } else {
         rasterize(&sc, &view, style, bg)
@@ -1360,6 +1395,17 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if outliers > 0 {
         out["outliers"] = json!(outliers);
+    }
+    // What view it drew: the elements, the switches, the palette (the Systems view's legend).
+    if let Some((look, v, t)) = &drew {
+        out["view"] = json!(v.name());
+        out["drawn"] = json!(t.drawn);
+        out["full"] = json!(look.full_mep);
+        out["ghost"] = json!(look.ghost);
+        out["switches"] = super::bimviews::SWITCHES.iter().map(|k| (k.to_string(), json!(super::bimviews::switch_on(look, k)))).collect();
+        if *v == super::bimviews::View::Systems {
+            out["legend"] = json!(t.legend);
+        }
     }
     deliver(png, p, &mut out)?;
     Ok(out)
