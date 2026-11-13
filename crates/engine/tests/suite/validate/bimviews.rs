@@ -68,9 +68,11 @@ fn everything_on(s: &mut Session) {
 }
 
 #[test]
-fn a_model_opens_in_mep_mains_and_big_gear() {
+fn the_mep_view_draws_mains_and_big_gear() {
     let mut s = building(3, 6);
-    let r = view(&mut s, json!({}));
+    // A model with MEP opens in the Systems view (Q6617, `bimsystems`); MEP is one click away.
+    assert_eq!(view(&mut s, json!({}))["view"], "systems");
+    let r = view(&mut s, json!({"view": "mep"}));
     assert_eq!(r["view"], "mep");
     assert_eq!(r["full"], false);
     assert_eq!(r["breadcrumb"], json!(["Building"]));
@@ -127,7 +129,7 @@ fn a_model_opens_in_mep_mains_and_big_gear() {
 #[test]
 fn full_mep_adds_distribution_and_what_crosses_floors_never_branches() {
     let mut s = building(3, 6);
-    view(&mut s, json!({"full": true}));
+    view(&mut s, json!({"view": "mep", "full": true}));
     let ls = labels(&shown(&s));
     // Every duct, terminal and exhaust fan with its riser; every panel and its feeder.
     for want in ["SA  8x6", "EA  6", "terminal:diffuser", "equipment:exhaust_fan", "equipment:panel  U ", "E-FEEDER  0.75", "CW  2"] {
@@ -218,7 +220,7 @@ fn floor_and_room_views_one_level_one_room() {
     // Up: the floor, then the whole building's view.
     assert_eq!(view(&mut s, json!({"up": true}))["view"], "floor");
     let r = view(&mut s, json!({"up": true}));
-    assert_eq!((r["view"].as_str(), r["level"].as_str()), (Some("mep"), None));
+    assert_eq!((r["view"].as_str(), r["level"].as_str()), (Some("systems"), None));
     // Picking enters: an element's level, then its room.
     let d = s.doc().unwrap();
     let rec = d
@@ -234,7 +236,7 @@ fn floor_and_room_views_one_level_one_room() {
     s.execute("bim.look", &json!({"level": "L1"})).unwrap();
     assert_eq!(view(&mut s, json!({}))["view"], "floor");
     s.execute("bim.look", &json!({"level": null})).unwrap();
-    assert_eq!(view(&mut s, json!({}))["view"], "mep");
+    assert_eq!(view(&mut s, json!({}))["view"], "systems");
     assert!(s.execute("bim.view", &json!({"view": "street"})).is_err());
     assert!(s.execute("bim.view", &json!({"level": "L9"})).is_err());
     assert!(s.execute("bim.view", &json!({"switches": {"x": true}})).is_err());
@@ -253,6 +255,7 @@ fn nothing_gets_past_the_active_view() {
         (before, after)
     };
     for p in [
+        json!({"view": "systems"}),
         json!({"view": "architectural"}),
         json!({"view": "mep", "full": false}),
         json!({"view": "mep", "full": true}),
@@ -268,14 +271,15 @@ fn nothing_gets_past_the_active_view() {
         let extra: Vec<String> = after.difference(&before).filter_map(|h| s.doc().unwrap().model.get(*h)).map(|e| label(e)).collect();
         assert!(extra.iter().all(|l| room && (l == "furniture" || l == "casework")), "{p}: {extra:?}");
     }
-    // A file with no saved view (an older version's, with one level shown) opens in MEP.
+    // A file with no saved view (an older version's, with one level shown) opens in the
+    // whole-building Systems view: the exterior walls ghosted, no partitions.
     let mut s = building(2, 2);
     let mut spec: Value = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     spec["bim_view"] = json!({"level": "L2", "hidden_paths": []});
     s.doc_mut().unwrap().building_spec = Some(spec.to_string()).into();
     let r = view(&mut s, json!({}));
-    assert_eq!(r["view"], "mep");
-    assert!(!has(&labels(&shown(&s)), |l| l == "wall"));
+    assert_eq!(r["view"], "systems");
+    assert!(!shown(&s).model.iter().any(|e| made_as(e).as_deref() == Some("wall") && e.common.layer == "A-WALL"));
 }
 
 #[test]
@@ -305,6 +309,7 @@ fn panels_are_house_or_unit_by_the_distribution() {
     }
     let mut s2 = Session::new();
     s2.open_drawing(d, "Sample Building", None);
+    view(&mut s2, json!({"view": "mep"}));
     let ls = labels(&shown(&s2));
     assert!(!has(&ls, |l| l.contains("PNL-Q")), "unit panels are not mains");
     assert!(has(&ls, |l| l.contains("equipment:panel  H1 ")), "house panels are");
@@ -416,7 +421,7 @@ fn differ(a: &Value, b: &Value, at: &str, out: &mut Vec<String>) {
 #[test]
 fn rules_are_project_data() {
     let mut s = building(2, 2);
-    view(&mut s, json!({}));
+    view(&mut s, json!({"view": "mep"}));
     assert!(!has(&labels(&shown(&s)), |l| l == "mep pipe segment CW  2"));
     // This project calls 2" plumbing large pipe: it draws at mains density.
     let r = s.execute("bim.view.rules", &json!({"rules": {"large_pipe_min_in": 2}})).unwrap();
@@ -432,7 +437,7 @@ fn report_measures_each_view() {
     let mut s = building(3, 6);
     let r = s.execute("bim.view.report", &json!({"width": 320, "height": 200})).unwrap();
     let total = r["total"].as_u64().unwrap();
-    for v in ["architectural", "mep", "mep_full", "floor", "room"] {
+    for v in ["systems", "architectural", "mep", "mep_full", "floor", "room"] {
         let x = &r["views"][v];
         let n = x["drawn"].as_u64().unwrap();
         assert!(n > 0 && n < total, "{v}: {x}");

@@ -56,9 +56,12 @@ const CMD: &str = "bim.view";
 const RULES_CMD: &str = "bim.view.rules";
 const REPORT: &str = "bim.view.report";
 
-/// The four views.
+/// The views.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum View {
+    /// The whole building as a coordination model (Q6617): the shell a pale ghost, every
+    /// system solid in a few strong colours by system, branch work left out.
+    Systems,
     Architectural,
     #[default]
     Mep,
@@ -67,10 +70,11 @@ pub enum View {
 }
 
 impl View {
-    pub const ALL: [View; 4] = [View::Architectural, View::Mep, View::Floor, View::Room];
+    pub const ALL: [View; 5] = [View::Systems, View::Architectural, View::Mep, View::Floor, View::Room];
 
     pub fn name(self) -> &'static str {
         match self {
+            View::Systems => "systems",
             View::Architectural => "architectural",
             View::Mep => "mep",
             View::Floor => "floor",
@@ -81,6 +85,7 @@ impl View {
     /// Its name on the view's control.
     pub fn label(self) -> &'static str {
         match self {
+            View::Systems => "Systems",
             View::Architectural => "Architectural",
             View::Mep => "MEP",
             View::Floor => "Floor",
@@ -88,9 +93,11 @@ impl View {
         }
     }
 
-    /// `architectural`, `mep`, `floor` (`level`) or `room` (any case; `a`, `m`, `f`, `r`).
+    /// `systems`, `architectural`, `mep`, `floor` (`level`) or `room` (any case; `s`, `a`,
+    /// `m`, `f`, `r`).
     pub fn parse(s: &str) -> Option<View> {
         match s.trim().to_ascii_lowercase().as_str() {
+            "systems" | "system" | "s" => Some(View::Systems),
             "architectural" | "architecture" | "arch" | "a" => Some(View::Architectural),
             "mep" | "m" => Some(View::Mep),
             "floor" | "level" | "f" => Some(View::Floor),
@@ -105,18 +112,43 @@ impl View {
     }
 }
 
-/// The switches the views offer: the trades (M, E, P), cabinets (Floor and Room) and
-/// furniture (Room only, off by default).
-pub const SWITCHES: [&str; 5] = ["m", "e", "p", "cabinets", "furniture"];
+/// The switches the views offer: the trades (M, E, P), cabinets (Floor and Room), furniture
+/// (Room only, off by default); the Systems view's branch work, interior walls and the site
+/// (objects off the building), each off by default.
+pub const SWITCHES: [&str; 8] = ["m", "e", "p", "cabinets", "furniture", "branches", "interior", "site"];
 
-/// The active view as `look` keeps it (none saved: MEP).
+/// The switches that are off until turned on.
+pub const OFF_BY_DEFAULT: [&str; 4] = ["furniture", "branches", "interior", "site"];
+
+/// The active view as `look` keeps it (none saved: MEP). [`active_in`] knows the model's
+/// default.
 pub fn active(look: &Look) -> View {
     look.view.as_deref().and_then(View::parse).unwrap_or_default()
 }
 
+/// The active view of `look` over `d`: the one saved, else the rules' default (Systems) when
+/// the model has MEP, else Architectural (a model with only the shell has no systems to show).
+pub fn active_in(d: &Drawing, look: &Look) -> View {
+    if let Some(v) = look.view.as_deref().and_then(View::parse) {
+        return v;
+    }
+    whole_default(d)
+}
+
+/// The whole-building view a model opens in (and goes back up to): the rules' default view
+/// when the model has MEP, else Architectural.
+pub fn whole_default(d: &Drawing) -> View {
+    let v = View::parse(&Rules::of(d).0.default_view).filter(|v| !v.per_level()).unwrap_or(View::Systems);
+    if matches!(v, View::Systems | View::Mep) && !bimlook::has_mep(d) { View::Architectural } else { v }
+}
+
 /// Whether switch `k` is on in `look`.
 pub fn switch_on(look: &Look, k: &str) -> bool {
-    if k == "furniture" { look.furniture } else { !look.switched_off.contains(k) }
+    match k {
+        "furniture" => look.furniture,
+        _ if OFF_BY_DEFAULT.contains(&k) => look.switched_on.contains(k),
+        _ => !look.switched_off.contains(k),
+    }
 }
 
 // ─── Rules ───────────────────────────────────────────────────────────────────
@@ -155,6 +187,41 @@ pub struct Rules {
     pub floor_tolerance_ft: f64,
     pub hoistway_pad_ft: f64,
     pub max_follow: usize,
+    /// The Systems view's ghost shell besides the floors and the exterior walls: roofs and the
+    /// facade.
+    pub shell_parts: Vec<String>,
+    /// A wall this near (feet, beyond half its thickness) to its level's floor edge is an
+    /// exterior wall.
+    pub exterior_wall_tolerance_ft: f64,
+    /// An object wholly this far (feet) outside its level's floor plates is on the site.
+    pub site_margin_ft: f64,
+    pub shell_floor_rgb: [u8; 3],
+    pub shell_floor_opacity: f64,
+    pub shell_wall_rgb: [u8; 3],
+    pub shell_interior_opacity: f64,
+    /// The Systems view's thinnest run on screen, pixels.
+    pub systems_min_px: f64,
+    /// The colour of a system no palette row names (never grey).
+    pub systems_other_rgb: [u8; 3],
+    /// The Systems view's palette: the first row whose trades hold an element's trade and,
+    /// when it lists words, whose words its system or name holds.
+    pub systems_palette: Vec<SystemColor>,
+}
+
+/// One row of the Systems view's palette.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SystemColor {
+    pub key: String,
+    pub label: String,
+    /// The hue it is a shade of (Mechanical Air, Piping, …).
+    pub group: String,
+    pub rgb: [u8; 3],
+    /// The trade rows ([`super::bimlook::TRADES`]) it colours.
+    pub trades: Vec<String>,
+    /// Words of the element's system, name or type, any of which it needs (none: any element
+    /// of its trades).
+    pub words: Vec<String>,
 }
 
 impl Default for Rules {
@@ -162,7 +229,7 @@ impl Default for Rules {
         Rules {
             version: 1,
             source: String::new(),
-            default_view: "mep".into(),
+            default_view: "systems".into(),
             architectural_parts: Vec::new(),
             context_parts: vec!["floor".into()],
             level_context_parts: Vec::new(),
@@ -189,6 +256,16 @@ impl Default for Rules {
             floor_tolerance_ft: 0.25,
             hoistway_pad_ft: 1.0,
             max_follow: 20_000,
+            shell_parts: Vec::new(),
+            exterior_wall_tolerance_ft: 1.5,
+            site_margin_ft: 10.0,
+            shell_floor_rgb: [128, 142, 162],
+            shell_floor_opacity: 0.3,
+            shell_wall_rgb: [150, 162, 180],
+            shell_interior_opacity: 0.08,
+            systems_min_px: 2.0,
+            systems_other_rgb: [212, 172, 0],
+            systems_palette: Vec::new(),
         }
     }
 }
@@ -389,6 +466,67 @@ pub struct Scope {
     pub follow: Option<HashSet<Handle>>,
     /// What the view left out, counted as it was asked.
     left: Cell<LeftOut>,
+    /// The Systems view's building: each level's floor plates' outer edges and their plan box
+    /// (level upper case; `""`: every level's, for a level with no floor).
+    plates: HashMap<String, Plates>,
+}
+
+/// A level's floor plates as the Systems view reads them.
+#[derive(Clone, Debug, Default)]
+struct Plates {
+    rings: Vec<Vec<Vec2>>,
+    lo: Option<Vec2>,
+    hi: Option<Vec2>,
+}
+
+impl Plates {
+    fn add(&mut self, ring: Vec<Vec2>) {
+        for p in &ring {
+            self.lo = Some(self.lo.map_or(*p, |l| Vec2::new(l.x.min(p.x), l.y.min(p.y))));
+            self.hi = Some(self.hi.map_or(*p, |h| Vec2::new(h.x.max(p.x), h.y.max(p.y))));
+        }
+        self.rings.push(ring);
+    }
+
+    /// How far `p` is from the nearest edge of a plate.
+    fn edge_distance(&self, p: Vec2) -> f64 {
+        let mut best = f64::INFINITY;
+        for r in &self.rings {
+            for (a, b) in r.iter().zip(r.iter().cycle().skip(1)) {
+                best = best.min(segment_distance(p, *a, *b));
+            }
+        }
+        best
+    }
+}
+
+/// The distance from `p` to the segment `a`–`b`.
+fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let ab = b - a;
+    let l2 = ab.x * ab.x + ab.y * ab.y;
+    let t = if l2 > 1e-18 { (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    p.dist(a + ab * t)
+}
+
+/// Each level's floor plates (built floors' outer edges), and every level's under `""`.
+fn plates_of(d: &Drawing) -> HashMap<String, Plates> {
+    let mut out: HashMap<String, Plates> = HashMap::new();
+    for e in d.model.iter().take(MAX_SCAN) {
+        if super::wallgen::made_as(e).as_deref() != Some("floor") {
+            continue;
+        }
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let Some(ring) = outer_ring(m) else { continue };
+        let level = super::bspec::made_level(e).unwrap_or_default().to_ascii_uppercase();
+        out.entry(String::new()).or_default().add(ring.clone());
+        if !level.is_empty() {
+            out.entry(level).or_default().add(ring);
+        }
+        if out.len() > MAX_LIST {
+            break;
+        }
+    }
+    out
 }
 
 /// A run's base id (its `mepid` before the piece).
@@ -452,7 +590,7 @@ impl Scope {
     /// The view `look` has for `d`.
     pub fn of(d: &Drawing, look: &Look) -> Scope {
         let rules = Rules::of(d).0;
-        let view = active(look);
+        let view = active_in(d, look);
         let upf = super::elemprops::units_per_foot(d);
         let sp = d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok());
         let mut floors = HashMap::new();
@@ -512,7 +650,11 @@ impl Scope {
             panels,
             follow: None,
             left: Cell::new(LeftOut::default()),
+            plates: HashMap::new(),
         };
+        if view == View::Systems {
+            s.plates = plates_of(d);
+        }
         if let Some(h) = look.follow.as_deref().and_then(Handle::parse_hex)
             && d.model.get(h).is_some()
         {
@@ -751,31 +893,149 @@ impl Scope {
 
     /// How the view draws `e` (of class `c`): solid, ghosted, or not at all.
     pub fn shows(&self, d: &Drawing, e: &Entity, c: &Class) -> Shown {
+        self.shows_what(d, e, c).0
+    }
+
+    /// [`Scope::shows`] and what `e` is to the views.
+    pub fn shows_what(&self, d: &Drawing, e: &Entity, c: &Class) -> (Shown, What) {
+        let w = self.what(d, e, c);
         if let Some(f) = &self.follow
             && f.contains(&e.handle)
         {
-            return Shown::Solid;
+            return (Shown::Solid, w);
         }
-        let w = self.what(d, e, c);
         let s = self.view_shows(d, e, c, w);
         if s == Shown::No {
-            return s;
+            return (s, w);
         }
         if let Some(t) = w.trade()
             && !self.on(t)
         {
-            return Shown::No;
+            return (Shown::No, w);
         }
         if self.follow.is_some() {
-            return Shown::Ghost;
+            return (Shown::Ghost, w);
         }
-        s
+        (s, w)
+    }
+
+    /// The floor plates of `c`'s level (every level's when it has none).
+    fn plates_for(&self, c: &Class) -> Option<&Plates> {
+        self.plates.get(&c.level.to_ascii_uppercase()).or_else(|| self.plates.get(""))
+    }
+
+    /// Whether `e` stands wholly off its level's floor plates, beyond the rules' margin: a site
+    /// object (a pole, a pad, a utility far off the building), drawn only with the site switch.
+    fn off_site(&self, d: &Drawing, e: &Entity, c: &Class) -> bool {
+        let Some(p) = self.plates_for(c) else { return false };
+        let (Some(lo), Some(hi)) = (p.lo, p.hi) else { return false };
+        let (a, b) = match mesh_box(e) {
+            Some((a, b)) => (Vec2::new(a.x, a.y), Vec2::new(b.x, b.y)),
+            None => {
+                let bb = cadaddy_doc::entity_bounds(d, e, 0);
+                if bb.is_empty() {
+                    return false;
+                }
+                (bb.min, bb.max)
+            }
+        };
+        let m = self.rules.feet(self.rules.site_margin_ft, 10.0) * self.upf;
+        b.x < lo.x - m || a.x > hi.x + m || b.y < lo.y - m || a.y > hi.y + m
+    }
+
+    /// Whether wall `e` stands on its level's floor edge (an exterior wall): its middle within
+    /// half its thickness and the rules' tolerance of a plate's outer edge. With no floor
+    /// anywhere every wall is the outline.
+    fn exterior_wall(&self, e: &Entity, c: &Class) -> bool {
+        let Some(p) = self.plates_for(c) else { return true };
+        let Some((lo, hi)) = mesh_box(e) else { return false };
+        let size = hi - lo;
+        let half = size.x.min(size.y).max(0.0) / 2.0;
+        let mid = Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
+        let tol = self.rules.feet(self.rules.exterior_wall_tolerance_ft, 1.5) * self.upf;
+        p.edge_distance(mid) <= half + tol
+    }
+
+    /// How the Systems view paints `e` (of class `c`, drawn): a shell surface or a system's
+    /// palette row.
+    pub fn paint(&self, d: &Drawing, e: &Entity, c: &Class) -> Paint {
+        self.paint_what(e, c, self.what(d, e, c))
+    }
+
+    /// [`Scope::paint`] of an element whose [`What`] is known.
+    pub fn paint_what(&self, e: &Entity, c: &Class, w: What) -> Paint {
+        match w {
+            What::Floor => Paint::Floor,
+            What::Arch | What::Structure => {
+                let part = super::wallgen::made_as(e).unwrap_or_default().to_ascii_lowercase();
+                if part == "wall" && !self.exterior_wall(e, c) { Paint::Interior } else { Paint::Shell }
+            }
+            _ => self.palette_row(e, c).map_or(Paint::Other, Paint::System),
+        }
+    }
+
+    /// The palette row of a system element (`None`: no row names it).
+    pub fn palette_row(&self, e: &Entity, c: &Class) -> Option<usize> {
+        let text = text_of(e, c);
+        self.rules
+            .systems_palette
+            .iter()
+            .position(|row| row.trades.iter().any(|t| t.trim().eq_ignore_ascii_case(c.key)) && (row.words.is_empty() || has_any(&text, &row.words)))
     }
 
     fn view_shows(&self, d: &Drawing, e: &Entity, c: &Class, w: What) -> Shown {
         let r = &self.rules;
         let yes = |b: bool| if b { Shown::Solid } else { Shown::No };
         match self.view {
+            View::Systems => {
+                let branches = self.on("branches");
+                let crossing = || w.is_run() && self.crosses(e, c);
+                let shell = matches!(w, What::Floor | What::Arch | What::Structure | What::Site);
+                if !shell && self.off_site(d, e, c) {
+                    return yes(self.on("site"));
+                }
+                let s = match w {
+                    What::Floor => return Shown::Ghost,
+                    What::Arch => {
+                        let part = super::wallgen::made_as(e).unwrap_or_default().to_ascii_lowercase();
+                        return if part_in(&part, &r.shell_parts) || (part == "wall" && (self.exterior_wall(e, c) || self.on("interior"))) {
+                            Shown::Ghost
+                        } else {
+                            Shown::No
+                        };
+                    }
+                    What::Site => self.on("site"),
+                    What::Gear
+                    | What::Panel(_)
+                    | What::BigEquipment
+                    | What::Equipment
+                    | What::ExhaustFan
+                    | What::ElevatorEquipment
+                    | What::ElevatorDisconnect
+                    | What::Feeder { .. }
+                    | What::Tray
+                    | What::Duct { .. } => true,
+                    What::Pipe { size: Some(z) } => branches || z >= r.plumbing_main_min_in || crossing(),
+                    What::Pipe { size: None } => {
+                        let x = branches || crossing();
+                        if !x {
+                            self.count(|l| l.pipe_unknown_size += 1);
+                        }
+                        x
+                    }
+                    What::FirePipe { main, size } => {
+                        let main = main.or_else(|| size.map(|z| z >= r.fire_main_min_in));
+                        let x = branches || main == Some(true) || crossing();
+                        if !x && main.is_none() {
+                            self.count(|l| l.fire_pipe_unknown += 1);
+                        }
+                        x
+                    }
+                    What::Branch | What::Fitting | What::Box | What::Terminal | What::Head | What::Device | What::Light | What::Fixture => branches,
+                    _ => false,
+                };
+                yes(s)
+            }
             View::Architectural => yes(matches!(w, What::Arch | What::Floor)),
             View::Mep => {
                 let full = self.full;
@@ -866,6 +1126,21 @@ impl Scope {
             }
         }
     }
+}
+
+/// How the Systems view paints a drawn element ([`Scope::paint`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Paint {
+    /// A floor plate: a pale surface with a light outline.
+    Floor,
+    /// The exterior walls, roofs and facade: pale.
+    Shell,
+    /// An interior wall (the interior switch): fainter.
+    Interior,
+    /// A system: its palette row.
+    System(usize),
+    /// A system no palette row names: the rules' accent.
+    Other,
 }
 
 /// How a view draws an element.
@@ -1225,7 +1500,7 @@ fn follow(d: &Drawing, sp: Option<&cadaddy_walk3d::BuildingSpec>, s: &Scope, sta
 /// of the building at its lowest floor (the largest floor's edge) and each elevator's hoistway
 /// as one simple volume.
 pub fn add_context(out: &mut Drawing, s: &Scope) {
-    if s.view != View::Mep {
+    if !matches!(s.view, View::Mep | View::Systems) {
         return;
     }
     let grey = cadaddy_doc::color::Color::True(cadaddy_color::Rgb(150, 150, 150));
@@ -1405,20 +1680,120 @@ pub fn ghost_these(out: &mut Drawing, ghost: &HashSet<Handle>) {
     }
 }
 
+/// The Systems view's shell materials: the floor plates, the exterior walls, roofs and facade,
+/// the interior walls.
+pub const SHELL_FLOOR: &str = "BIM Shell Floor";
+pub const SHELL: &str = "BIM Shell";
+pub const SHELL_INTERIOR: &str = "BIM Shell Interior";
+
+/// Paints the Systems view's drawing `out` (Q6617): the shell in the rules' pale colours and
+/// see-through (floor plates at their own opacity so they read on white; exterior walls, roofs
+/// and the facade at the look's ghost opacity; interior walls fainter), every system in its
+/// palette row's colour, solid and with no material of its own (never a grey box); what a
+/// followed system leaves out see-through in its colour.
+pub fn paint_systems(out: &mut Drawing, s: &Scope, look: &Look, ghost: bool, paints: &HashMap<Handle, Paint>, faded: &HashSet<Handle>) {
+    let r = &s.rules;
+    let names = [SHELL_FLOOR, SHELL, SHELL_INTERIOR, bimlook::GHOST_MATERIAL];
+    out.materials.retain(|m| !names.iter().any(|n| m.name.eq_ignore_ascii_case(n)));
+    let unit = |v: f64, d: f64| if v.is_finite() { v.clamp(0.02, 1.0) } else { d };
+    for (name, rgb, opacity) in [
+        (SHELL_FLOOR, r.shell_floor_rgb, unit(r.shell_floor_opacity, 0.3)),
+        (SHELL, r.shell_wall_rgb, look.opacity()),
+        (SHELL_INTERIOR, r.shell_wall_rgb, unit(r.shell_interior_opacity, 0.08)),
+        (bimlook::GHOST_MATERIAL, [226, 226, 222], look.opacity()),
+    ] {
+        out.materials.push(cadaddy_doc::material::Material {
+            name: name.into(),
+            color: cadaddy_color::Rgb(rgb[0], rgb[1], rgb[2]),
+            roughness: 1.0,
+            metallic: 0.0,
+            opacity,
+            ..cadaddy_doc::material::Material::default()
+        });
+    }
+    let mut list: Vec<Entity> = Vec::with_capacity(paints.len());
+    for (h, paint) in paints.iter().take(MAX_SCAN) {
+        let Some(e) = out.model.get(*h) else { continue };
+        let (rgb, material) = match paint {
+            Paint::Floor => (r.shell_floor_rgb, ghost.then_some(SHELL_FLOOR)),
+            Paint::Shell => (r.shell_wall_rgb, ghost.then_some(SHELL)),
+            Paint::Interior => (r.shell_wall_rgb, ghost.then_some(SHELL_INTERIOR)),
+            // Filled-in work apart from drawn keeps its own colour.
+            Paint::System(_) | Paint::Other if look.apart => continue,
+            Paint::System(k) => (r.systems_palette.get(*k).map_or(r.systems_other_rgb, |row| row.rgb), None),
+            Paint::Other => (r.systems_other_rgb, None),
+        };
+        let material = material.or_else(|| faded.contains(h).then_some(bimlook::GHOST_MATERIAL));
+        let mut c = (**e).clone();
+        c.common.color = cadaddy_doc::color::Color::True(cadaddy_color::Rgb(rgb[0], rgb[1], rgb[2]));
+        c.common.material = material.map(str::to_string).into();
+        list.push(c);
+    }
+    for c in list {
+        out.model.push(c);
+    }
+}
+
 /// The built elements of `d` that the view of `look` draws (handles), and how many built
 /// elements there are.
 pub fn drawn_set(d: &Drawing, look: &Look) -> (HashSet<Handle>, usize, LeftOut) {
+    let t = tally(d, look);
+    (t.shown, t.total, t.left)
+}
+
+/// What the view of `look` draws of `d`: the elements, how many are built, what it left out,
+/// and (the Systems view) how many of each palette row it paints.
+pub struct Tally {
+    pub shown: HashSet<Handle>,
+    pub total: usize,
+    pub left: LeftOut,
+    pub legend: Vec<Value>,
+}
+
+/// [`drawn_set`] with the Systems view's legend.
+pub fn tally(d: &Drawing, look: &Look) -> Tally {
     let scope = Scope::of(d, look);
     let mut shown = HashSet::new();
     let mut total = 0usize;
+    let mut paints: HashMap<Paint, usize> = HashMap::new();
     for e in d.model.iter().take(MAX_SCAN) {
         let Some(c) = bimlook::classify(d, e) else { continue };
         total += 1;
-        if look.shows(&c) && scope.shows(d, e, &c) != Shown::No {
+        if !look.shows(&c) {
+            continue;
+        }
+        let (s, w) = scope.shows_what(d, e, &c);
+        if s != Shown::No {
             shown.insert(e.handle);
+            if scope.view == View::Systems {
+                *paints.entry(scope.paint_what(e, &c, w)).or_default() += 1;
+            }
         }
     }
-    (shown, total, scope.left_out())
+    let legend = legend(&scope.rules, &paints);
+    Tally { shown, total, left: scope.left_out(), legend }
+}
+
+fn hex(c: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
+/// The Systems view's legend: each palette row it paints (in the palette's order), with its
+/// colour and count; a system no row names under the accent colour.
+pub fn legend(r: &Rules, paints: &HashMap<Paint, usize>) -> Vec<Value> {
+    let mut out: Vec<Value> = r
+        .systems_palette
+        .iter()
+        .enumerate()
+        .filter_map(|(k, row)| {
+            let n = paints.get(&Paint::System(k)).copied().unwrap_or(0);
+            (n > 0).then(|| json!({"key": row.key, "label": row.label, "group": row.group, "color": hex(row.rgb), "count": n}))
+        })
+        .collect();
+    if let Some(n) = paints.get(&Paint::Other).copied().filter(|n| *n > 0) {
+        out.push(json!({"key": "other", "label": "Other Systems", "group": "Other", "color": hex(r.systems_other_rgb), "count": n}));
+    }
+    out
 }
 
 /// The drawing the 3D BIM view draws ([`super::bimlook::display`]) for one state of a drawing,
@@ -1453,13 +1828,13 @@ impl ShownCache {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "BIM Views", run_view).menu(&["View", "BIM Views"]).params(
-            "{view?: architectural|mep|floor|room (one at a time; never every object), full?: bool (MEP: every duct, plumbing mains 2\" and up, fire mains, every panel and its feeder, what passes through floors; default mains and big gear), level?: name | null (the Floor and Room views' level; a level picks the Floor view), room?: number or name | null (the Room view's room on the level; a room picks the Room view), up?: bool (Room to Floor to the whole building, as Esc), enter?: handle (the next view down at an element: its level, then its room), switches?: {m?, e?, p?, cabinets?, furniture?: bool}, follow?: handle | null (highlight what it feeds and what feeds it across levels, the rest faded)} → {view, full, level, room, breadcrumb: [name], switches: {m, e, p, cabinets, furniture}, offered: [switch] (this view's), levels: [name], rooms: [{number, name}] (the level's), drawn (built elements this view draws), total (built elements), left_out: {pipe_unknown_size, fire_pipe_unknown, panel_role_unknown}, follow?: {handle, elements}}: what the 3D BIM view draws; counts, takeoff, query, clash, export and plot never depend on it",
+            "{view?: systems|architectural|mep|floor|room (one at a time; never every object; systems, the default whole-building view of a model with MEP: the shell a pale ghost (floor plates, exterior walls, roofs), every duct, pipe mains and risers, fire mains, feeders, tray and all equipment solid, coloured by system from the rules' palette, branch work left out), full?: bool (MEP: every duct, plumbing mains 2\" and up, fire mains, every panel and its feeder, what passes through floors; default mains and big gear), level?: name | null (the Floor and Room views' level; a level picks the Floor view), room?: number or name | null (the Room view's room on the level; a room picks the Room view), up?: bool (Room to Floor to the whole building, as Esc), enter?: handle (the next view down at an element: its level, then its room), switches?: {m?, e?, p?, cabinets?, furniture?, branches?, interior?, site?: bool} (branches, interior walls and site objects: the Systems view's, off by default), follow?: handle | null (highlight what it feeds and what feeds it across levels, the rest faded)} → {view, full, level, room, breadcrumb: [name], switches: {m, e, p, cabinets, furniture}, offered: [switch] (this view's), levels: [name], rooms: [{number, name}] (the level's), drawn (built elements this view draws), total (built elements), left_out: {pipe_unknown_size, fire_pipe_unknown, panel_role_unknown}, legend?: [{key, label, group, color, count}] (the Systems view's systems drawn), presentation (bim.look's), follow?: {handle, elements}}: what the 3D BIM view draws; counts, takeoff, query, clash, export and plot never depend on it",
         ),
         CommandSpec::new(RULES_CMD, "BIM View Rules", run_rules).params(
-            "{rules?: {key: value} (any of the rules data's keys: architectural_parts, gear_words, panel_words, big_equipment_words, main_duct_min_in, large_pipe_min_in, plumbing_main_min_in (2), fire_main_min_in (2.5), feeder_min_in (1), fire_main_words, fire_branch_words, unit_panel_copies, …; kept in the drawing), reset?: bool (back to the built-in rules)} → {source: project|default, rules}: what each BIM view draws, per project",
+            "{rules?: {key: value} (any of the rules data's keys: systems_palette ([{key, label, group, rgb, trades, words?}]), shell_floor_rgb, shell_floor_opacity, shell_wall_rgb, shell_interior_opacity, site_margin_ft, systems_min_px, architectural_parts, gear_words, panel_words, big_equipment_words, main_duct_min_in, large_pipe_min_in, plumbing_main_min_in (2), fire_main_min_in (2.5), feeder_min_in (1), fire_main_words, fire_branch_words, unit_panel_copies, …; kept in the drawing), reset?: bool (back to the built-in rules)} → {source: project|default, rules}: what each BIM view draws, per project",
         ),
         CommandSpec::new(REPORT, "BIM View Report", run_report)
-            .params("{width?: px (1600), height?: px (1000), level?: (the Floor view's; default the lowest), room?: (the Room view's; default the level's first)} → {total, views: {architectural, mep, mep_full, floor, room: {drawn, all_switches_drawn, tris, build_ms, model_mb, gpu_mb_est, visible_ms, raster_ms}}}: what each view draws and costs on this model, measured (raster_ms: the CPU rasterizer drawing the whole view, a stand-in for a frame)")
+            .params("{width?: px (1600), height?: px (1000), level?: (the Floor view's; default the lowest), room?: (the Room view's; default the level's first)} → {total, views: {systems, architectural, mep, mep_full, floor, room: {drawn, all_switches_drawn, tris, build_ms, model_mb, gpu_mb_est, visible_ms, raster_ms}}}: what each view draws and costs on this model, measured (raster_ms: the CPU rasterizer drawing the whole view, a stand-in for a frame)")
             .noundo(),
     ]
 }
@@ -1491,12 +1866,13 @@ pub fn view_json(d: &Drawing, look: &Look) -> Value {
         crumb.push(r.clone());
     }
     let offered: Vec<&str> = match view {
+        View::Systems => vec!["m", "e", "p", "branches", "interior", "site"],
         View::Architectural => vec![],
         View::Mep => vec!["m", "e", "p"],
         View::Floor => vec!["m", "e", "p", "cabinets"],
         View::Room => vec!["m", "e", "p", "cabinets", "furniture"],
     };
-    let (drawn, total, left) = drawn_set(d, look);
+    let Tally { shown: drawn, total, left, legend } = tally(d, look);
     let mut out = json!({
         "view": view.name(),
         "full": look.full_mep,
@@ -1511,6 +1887,10 @@ pub fn view_json(d: &Drawing, look: &Look) -> Value {
         "total": total,
         "left_out": left,
     });
+    out["presentation"] = json!(look.presentation);
+    if view == View::Systems {
+        out["legend"] = json!(legend);
+    }
     if let (Some(h), Some(f)) = (look.follow.as_deref(), &scope.follow) {
         out["follow"] = json!({"handle": h, "elements": f.len()});
     }
@@ -1520,13 +1900,14 @@ pub fn view_json(d: &Drawing, look: &Look) -> Value {
 fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let mut look = Look::of(d);
-    let was = active(&look);
+    let was = active_in(d, &look);
+    let whole = whole_default(d).name();
     if p.get("up").and_then(Value::as_bool) == Some(true) {
         match was {
             View::Room => look.room = None,
             View::Floor => {
                 look.level = None;
-                look.view = Some(look.whole.clone().unwrap_or_else(|| View::Mep.name().into()));
+                look.view = Some(look.whole.clone().unwrap_or_else(|| whole.into()));
             }
             _ => {}
         }
@@ -1536,7 +1917,7 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(v) = p.get("view").filter(|v| !v.is_null()) {
         let t = v.as_str().unwrap_or_default();
-        let view = View::parse(t).ok_or_else(|| bad(CMD, format!("`view` must be architectural, mep, floor or room, got {v}")))?;
+        let view = View::parse(t).ok_or_else(|| bad(CMD, format!("`view` must be systems, architectural, mep, floor or room, got {v}")))?;
         set_view(&mut look, view);
     }
     if let Some(b) = p.get("full").and_then(Value::as_bool) {
@@ -1547,14 +1928,14 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Null) => {
             look.level = None;
             look.room = None;
-            if active(&look).per_level() {
-                look.view = Some(look.whole.clone().unwrap_or_else(|| View::Mep.name().into()));
+            if active_in(d, &look).per_level() {
+                look.view = Some(look.whole.clone().unwrap_or_else(|| whole.into()));
             }
         }
         Some(Value::String(l)) => {
             let l = level_named(d, CMD, l)?;
             // Another level: its Floor view (a room is of one level).
-            if look.level.as_deref() != Some(l.as_str()) || !active(&look).per_level() {
+            if look.level.as_deref() != Some(l.as_str()) || !active_in(d, &look).per_level() {
                 look.level = Some(l);
                 set_view(&mut look, View::Floor);
             }
@@ -1565,7 +1946,7 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
         None => {}
         Some(Value::Null) => {
             look.room = None;
-            if active(&look) == View::Room {
+            if active_in(d, &look) == View::Room {
                 look.view = Some(View::Floor.name().into());
             }
         }
@@ -1587,8 +1968,8 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
         let h = handle_of(v).ok_or_else(|| bad(CMD, "`enter` must be an element's handle"))?;
         let e = d.model.get(h).ok_or_else(|| bad(CMD, format!("there is no object {} in the model", h.hex())))?;
         let level = super::bspec::made_level(e).filter(|l| !l.is_empty()).ok_or_else(|| bad(CMD, "that element is on no level"))?;
-        match active(&look) {
-            View::Architectural | View::Mep => {
+        match active_in(d, &look) {
+            View::Systems | View::Architectural | View::Mep => {
                 look.level = Some(level);
                 look.room = None;
                 set_view(&mut look, View::Floor);
@@ -1607,12 +1988,20 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     if let Some(sw) = p.get("switches").filter(|v| !v.is_null()) {
-        let o = sw.as_object().ok_or_else(|| bad(CMD, "`switches` must be {m?, e?, p?, cabinets?, furniture?: bool}"))?;
+        let o =
+            sw.as_object().ok_or_else(|| bad(CMD, "`switches` must be {m?, e?, p?, cabinets?, furniture?, branches?, interior?, site?: bool}"))?;
         for (k, v) in o {
             let k = k.trim().to_ascii_lowercase();
             let on = v.as_bool().ok_or_else(|| bad(CMD, format!("switch `{k}` must be true or false")))?;
             match k.as_str() {
                 "furniture" => look.furniture = on,
+                "branches" | "interior" | "site" => {
+                    if on {
+                        look.switched_on.insert(k);
+                    } else {
+                        look.switched_on.remove(&k);
+                    }
+                }
                 "m" | "e" | "p" | "cabinets" => {
                     if on {
                         look.switched_off.remove(&k);
@@ -1620,7 +2009,7 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
                         look.switched_off.insert(k);
                     }
                 }
-                _ => return Err(bad(CMD, format!("no switch `{k}`: m, e, p, cabinets or furniture"))),
+                _ => return Err(bad(CMD, format!("no switch `{k}`: m, e, p, cabinets, furniture, branches, interior or site"))),
             }
         }
     }
@@ -1720,6 +2109,7 @@ pub fn measure(d: &Drawing, look: &Look, width: u32, height: u32) -> Value {
     let mut all_on = look.clone();
     all_on.switched_off.clear();
     all_on.furniture = true;
+    all_on.switched_on = OFF_BY_DEFAULT.iter().map(|k| k.to_string()).collect();
     all_on.hidden.clear();
     all_on.hidden_paths.clear();
     let (every, _, _) = drawn_set(d, &all_on);
@@ -1805,6 +2195,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         }
         views.insert(name.into(), measure(d, &look, width, height));
     };
+    at("systems", View::Systems, false);
     at("architectural", View::Architectural, false);
     at("mep", View::Mep, false);
     at("mep_full", View::Mep, true);
@@ -1823,7 +2214,9 @@ mod tests {
         assert_eq!(View::parse("level"), Some(View::Floor));
         assert_eq!(View::parse("street"), None);
         assert_eq!(View::default(), View::Mep);
+        assert_eq!(View::parse("Systems"), Some(View::Systems));
         let r = Rules::defaults();
+        assert!(r.systems_palette.len() >= 10 && r.default_view == "systems");
         assert!(!r.source.is_empty() && r.architectural_parts.len() > 5);
         assert_eq!((r.plumbing_main_min_in, r.fire_main_min_in, r.feeder_min_in), (2.0, 2.5, 1.0));
         assert_eq!(fire_role("fire protection cross main", &r), Some(true));
