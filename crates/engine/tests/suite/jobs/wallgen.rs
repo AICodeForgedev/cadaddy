@@ -670,3 +670,94 @@ fn a_mezzanine_slab_leaves_out_the_space_open_to_below() {
     assert_eq!(top_at(50.0), Some(114.0), "under the mezzanine: its floor (10') less its 6\" slab");
     assert!(top_at(20.0).is_some_and(|t| t > 230.0), "under the open space: the storey's height");
 }
+
+/// A mezzanine plan drawn on the whole building redraws a full-height outside wall of the storey
+/// with a glazed gap in it (Q6451): its wall pieces are left to the storey, and the window they
+/// framed is cut into the storey's wall at the mezzanine's sill and head, not left buried in it.
+#[test]
+fn a_mezzanine_window_in_a_wall_the_storey_builds_is_cut_into_it() {
+    let mut d = Drawing::new_imperial();
+    box_walls(&mut d, 0.0);
+    // The mezzanine's plan at x 100–160': the same building, its south wall drawn with a 4'
+    // window gap at x 120–124' (its glazing in it).
+    let ring = [((100., 0.), (120., 0.)), ((124., 0.), (160., 0.)), ((160., 0.), (160., 40.)), ((160., 40.), (100., 40.)), ((100., 40.), (100., 0.))];
+    for (a, b) in ring {
+        line(&mut d, a, b);
+    }
+    let inner = [
+        ((100.5, 0.5), (120., 0.5)),
+        ((124., 0.5), (159.5, 0.5)),
+        ((159.5, 0.5), (159.5, 39.5)),
+        ((159.5, 39.5), (100.5, 39.5)),
+        ((100.5, 39.5), (100.5, 0.5)),
+    ];
+    for (a, b) in inner {
+        line(&mut d, a, b);
+    }
+    glass(&mut d, (120.0, 0.25), (124.0, 0.25));
+    let mut s = Session::empty();
+    s.open_drawing(d, "Plan", None);
+    let rules = json!({
+        "units_per_foot": 12,
+        "levels": [
+            {"name": "Level 1", "elevation_ft": 0, "height_ft": 20, "ceiling_ft": 9, "base": [0, 0], "region": [-60, -60, 900, 540]},
+            {"name": "Mezzanine", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "base": [1200, 0], "region": [1140, -60, 2100, 540]}
+        ],
+        "layers": [{"layer": "A-WALL", "kind": "wall", "skip_curves": true}]
+    });
+    let r = s.execute("wallgen", &json!({"rules": rules})).unwrap();
+    assert_eq!(r["windows"], json!(1), "{r}");
+    let notes = r["notes"].to_string();
+    assert!(notes.contains("are built once, by Level 1"), "{notes}");
+    // The window: at x 20–22' of the building (Level 1's coordinates), from the mezzanine's
+    // floor (10') plus its 2' sill up to its 7' head.
+    let glass = made(&s, "window");
+    let g = glass.first().unwrap();
+    let (x0, _, x1, _) = first_box(g);
+    assert!((x0 - 240.0).abs() < 1e-3 && (x1 - 288.0).abs() < 1e-3, "in the storey's wall: {x0} {x1}");
+    let (lo, hi) = z_range(g);
+    assert!((lo - 144.0).abs() < 1e-3 && (hi - 204.0).abs() < 1e-3, "{lo} {hi}");
+    // The storey's wall is open there between the sill and the head, solid below and above.
+    let walls = made(&s, "wall");
+    assert!(!wall_at(&walls, 22.0 * 12.0, 0.25 * 12.0, 170.0), "the window's opening in the storey's wall");
+    assert!(wall_at(&walls, 22.0 * 12.0, 0.25 * 12.0, 130.0), "the wall under its sill");
+    assert!(wall_at(&walls, 22.0 * 12.0, 0.25 * 12.0, 60.0), "the storey's wall below the mezzanine");
+    assert!(wall_at(&walls, 22.0 * 12.0, 0.25 * 12.0, 220.0), "the wall over its head");
+    assert!(wall_at(&walls, 10.0 * 12.0, 0.25 * 12.0, 170.0), "the wall beside it");
+    // Its opening is reported where it is built.
+    let by_level = r["openings_by_level"].as_array().unwrap();
+    let windows_on = |n: &str| by_level.iter().find(|l| l["level"] == n).map_or(0, |l| l["windows"].as_u64().unwrap_or(0));
+    assert_eq!(windows_on("Level 1") + windows_on("Mezzanine"), 1, "{by_level:?}");
+    assert!(notes.contains("re-hosted"), "{notes}");
+}
+
+/// A mezzanine's wall standing on a storey's wall that stops under the mezzanine's slab is the
+/// mezzanine's to build (Q6451): not taken for a repeat of a full-height wall, so neither is lost.
+#[test]
+fn a_mezzanine_wall_over_a_storey_wall_stopping_under_its_slab_is_built() {
+    let mut d = Drawing::new_imperial();
+    box_walls(&mut d, 0.0);
+    box_walls(&mut d, 100.0);
+    // A partition at x 30' on both plans: the storey's under the slab, the mezzanine's on it.
+    for x0 in [0.0, 100.0] {
+        line(&mut d, (x0 + 29.75, 0.5), (x0 + 29.75, 39.5));
+        line(&mut d, (x0 + 30.25, 0.5), (x0 + 30.25, 39.5));
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Plan", None);
+    let rules = json!({
+        "units_per_foot": 12,
+        "levels": [
+            {"name": "Level 1", "elevation_ft": 0, "height_ft": 20, "ceiling_ft": 9, "base": [0, 0], "region": [-60, -60, 900, 540]},
+            {"name": "Mezzanine", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "base": [1200, 0], "region": [1140, -60, 2100, 540]}
+        ],
+        "layers": [{"layer": "A-WALL", "kind": "wall", "skip_curves": true}]
+    });
+    let r = s.execute("wallgen", &json!({"rules": rules})).unwrap();
+    let notes = r["notes"].to_string();
+    assert!(notes.contains("Level 1: 1 wall(s) under the Mezzanine slab stop at its underside"), "{notes}");
+    let walls = made(&s, "wall");
+    // The storey's partition stops under the slab; the mezzanine's stands on it.
+    assert!(wall_at(&walls, 30.0 * 12.0, 20.0 * 12.0, 60.0) && !wall_at(&walls, 30.0 * 12.0, 20.0 * 12.0, 170.0), "the storey's, under the slab");
+    assert!(wall_at(&walls, 130.0 * 12.0, 20.0 * 12.0, 170.0), "the mezzanine's partition is built");
+}
