@@ -925,7 +925,8 @@ pub(crate) fn load_project_plans(
             continue;
         }
         let path = if std::path::Path::new(&sh.file).is_absolute() { sh.file.clone() } else { format!("{}/{}", project.source_dir, sh.file) };
-        pages.push(super::exchange::PdfPage { path, params: json!({"page": sh.page.max(1), "images": false, "fills": "merge"}), at: None });
+        let plan = matches!(sh.sheet_type.as_str(), "plan" | "enlarged_plan" | "rcp");
+        pages.push(super::exchange::PdfPage { path, params: json!({"page": sh.page.max(1), "images": false, "fills": "merge"}), at: None, plan });
         wanted.push(r);
     }
     let mut t = Session::new();
