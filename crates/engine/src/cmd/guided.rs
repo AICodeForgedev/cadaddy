@@ -37742,6 +37742,10 @@ mod tests {
         assert_eq!(item["sheets"], json!(["A-601", "E-101"]));
         assert_eq!(item["severity"], json!("high"));
         assert_eq!(read["counts"]["by_kind"]["conflict"], json!(1), "{read:#}");
+        let only = s.execute("rfi.read", &json!({"topic": "coordination"})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(only["total"], json!(1), "{only:#}");
+        let other = s.execute("rfi.read", &json!({"topic": "lighting"})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(other["total"], json!(0), "{other:#}");
         // Run again (a rebuild): the same one item, not two.
         let mut again: Vec<super::super::readers::ReadDevice> = devices.iter().take(before).cloned().collect();
         coordination_step(&mut s, &mut job, &mut again, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));

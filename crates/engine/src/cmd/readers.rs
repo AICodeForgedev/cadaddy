@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── RFI reader ───────────────────────────────────────────────────
         CommandSpec::new("rfi.read", "Read RFIs from Prints", run_rfi_read)
-            .params("{apply?: bool} → {counts: {by_kind: {}, by_severity: {}}, items: first 20 (most severe first: id, kind, severity, level, sheets, about, issue, topic, proposed), total}: the building model's RFI list (the print readers' items, the job's cross-discipline coordination, the spec's own gaps; rfi.list has every item)")
+            .params("{apply?: bool, topic?: text (only items whose topic starts with it: coordination, lighting)} → {counts: {by_kind: {}, by_severity: {}}, items: first 20 (most severe first: id, kind, severity, level, sheets, about, issue, topic, proposed), total}: the building model's RFI list (the print readers' items, the job's cross-discipline coordination, the spec's own gaps; rfi.list has every item)")
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
         CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
@@ -967,7 +967,12 @@ fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
     // A drawing with a building model: its RFI list as the readers and the job's checks left it
     // (the print readers' items, the cross-discipline coordination, the spec's own gaps).
     if let Ok((sp, true)) = super::bspec::current(_s, "rfi.read") {
-        let list = cadaddy_walk3d::rfi::list(&sp);
+        let mut list = cadaddy_walk3d::rfi::list(&sp);
+        // (Only the items of one check: `coordination` lists the architect-against-electrical ones.)
+        if let Some(topic) = str_param(p, "topic").map(str::trim).filter(|t| !t.is_empty()) {
+            let topic = topic.to_ascii_lowercase();
+            list.retain(|r| r.topic.to_ascii_lowercase().starts_with(&topic));
+        }
         let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
         let mut by_severity: BTreeMap<String, usize> = BTreeMap::new();
         for r in &list {
