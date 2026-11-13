@@ -1373,6 +1373,14 @@ fn a_ptac_drawn_in_front_of_an_outside_wall_is_built_through_it() {
     let u2 = tagged(d, "U-2");
     assert!(prop_of(u2, "PLACEMENT").is_some_and(|p| p.starts_with("review:") && p.contains("no outside wall")), "{:?}", u2.common.xdata);
     assert!(prop_of(u2, "HOST_WALL").is_none());
+    // The takeoff: its wall sleeve and outside grille, by the rule.
+    let t = s.execute("bim.takeoff", &json!({"keep": false})).expect("takeoff");
+    for what in ["Wall sleeve for ptac U-1", "Outside grille for ptac U-1"] {
+        let line = t["lines"].as_array().into_iter().flatten().find(|l| l["item"] == what);
+        let line = line.unwrap_or_else(|| panic!("{what} on the takeoff: {t:#}"));
+        assert_eq!((line["qty"].as_f64(), line["made"].as_str()), (Some(1.0), Some("derived")), "{line:#}");
+        assert!(line["size"].as_str().is_some_and(|z| z.starts_with("3'-6\" x 1'-4\" H")), "{line:#}");
+    }
     // G-HOST: the unit through its wall passes.
     let r = s.execute("validate.prescreen", &json!({"rules": ["G-HOST"], "all": true, "limit": 50})).expect("prescreen");
     let host_hex = unit_handle(&mut s, "U-1");
