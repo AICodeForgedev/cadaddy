@@ -146,11 +146,16 @@ struct WallGrid {
 
 impl WallGrid {
     fn build(walls: &[PlanWall], cell: f64) -> Self {
+        Self::of(walls.iter().map(|w| (w.a, w.b)), cell)
+    }
+
+    /// The grid of any lines (centreline ends), indexed in the order given.
+    fn of(lines: impl Iterator<Item = (Vec2, Vec2)>, cell: f64) -> Self {
         let cell = cell.max(1.0);
         let mut map: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-        for (i, w) in walls.iter().enumerate() {
-            let (x0, x1) = (Self::k(w.a.x.min(w.b.x) - cell, cell), Self::k(w.a.x.max(w.b.x) + cell, cell));
-            let (y0, y1) = (Self::k(w.a.y.min(w.b.y) - cell, cell), Self::k(w.a.y.max(w.b.y) + cell, cell));
+        for (i, (a, b)) in lines.enumerate() {
+            let (x0, x1) = (Self::k(a.x.min(b.x) - cell, cell), Self::k(a.x.max(b.x) + cell, cell));
+            let (y0, y1) = (Self::k(a.y.min(b.y) - cell, cell), Self::k(a.y.max(b.y) + cell, cell));
             if (x1 - x0 + 1).unsigned_abs().saturating_mul((y1 - y0 + 1).unsigned_abs()) > 10_000 {
                 continue;
             }
@@ -2253,6 +2258,115 @@ fn same_wall(a: &PlanWall, b: &PlanWall, k: f64) -> bool {
     hi - lo > 0.5 * la.min(lb)
 }
 
+/// A jamb is at least this long, inches: a shorter pair of faces is a jog in a face or a line's
+/// end, no wall.
+const JAMB_MIN_IN: f64 = 1.0;
+/// The opening beside a jamb is at least and at most this wide, inches (a pass-through to a
+/// pair of doors or a storefront bay).
+const JAMB_OPENING_IN: (f64, f64) = (12.0, 192.0);
+/// Short face pairs looked at for jambs, at most (hostile drawings).
+const MAX_JAMB_PAIRS: usize = 20_000;
+
+/// The pairs of `squat` (face pairs too short for a wall, [`pairs_and_squat`]) that are jambs
+/// (Q6614): one end meets a crossing wall of `walls` (the end's corners on that wall's body or at its face,
+/// the wall ahead of it) and the other end is an opening's side: a wall of the same thickness on
+/// the pair's line beyond a gap [`JAMB_OPENING_IN`] wide that no wall crosses (another jamb
+/// counts), or a drawn door swing's hinge or leaf end (`swings`) at it. A pair inside a wall's
+/// body is a reading of that wall. Lone pairs, and pairs held at one end only, are left out: the
+/// minimum length is for them. `k` is drawing units per inch. Returns indices into `squat`.
+///
+/// [`pairs_and_squat`]: super::perceive::geometry::pairs_and_squat
+fn jamb_pairs(squat: &[super::perceive::geometry::Pair], walls: &[PlanWall], swings: &[Vec2], k: f64) -> Vec<usize> {
+    if !(k.is_finite() && k > 0.0) || squat.is_empty() || walls.is_empty() {
+        return Vec::new();
+    }
+    let tol = k;
+    let (open_min, open_max) = (JAMB_OPENING_IN.0 * k, JAMB_OPENING_IN.1 * k);
+    let max_thick = walls.iter().map(|w| w.thickness).filter(|t| t.is_finite()).fold(0.0f64, f64::max);
+    let near = WallGrid::build(walls, (2.0 * max_thick).max(2.0 * tol));
+    // Each pair held by a crossing wall at one end: (pair, its other end, outward there).
+    let mut held: Vec<(usize, Vec2, Vec2)> = Vec::new();
+    for (i, p) in squat.iter().enumerate().take(MAX_JAMB_PAIRS) {
+        let len = p.c0.dist(p.c1);
+        if !(len > 1e-9 && p.thickness.is_finite() && p.c0.is_finite() && p.c1.is_finite()) {
+            continue;
+        }
+        let u = (p.c1 - p.c0) * (1.0 / len);
+        let mid = p.c0.mid(p.c1);
+        if near.at(mid).iter().filter_map(|&j| walls.get(j)).any(|w| seg_dist(mid, w.a, w.b) < w.thickness / 2.0) {
+            continue;
+        }
+        // A crossing wall at the end `e` (outward `out`): at least 30° across, the end's corners
+        // on its body or at its face (at a tee its faces stop where the pair meets them, so its
+        // pieces stop at the end's corners), the wall ahead.
+        let crossing = |e: Vec2, out: Vec2| {
+            near.at(e).iter().filter_map(|&j| walls.get(j)).any(|w| {
+                let lw = w.a.dist(w.b);
+                if lw <= 1e-9 {
+                    return false;
+                }
+                let n = (w.b - w.a).perp() * (1.0 / lw);
+                let s = n.dot(out);
+                s.abs() >= 0.5 && seg_dist(e, w.a, w.b) <= (w.thickness + p.thickness) / 2.0 + tol && -n.dot(e - w.a) / s > -tol
+            })
+        };
+        match (crossing(p.c0, u * -1.0), crossing(p.c1, u)) {
+            (true, false) => held.push((i, p.c1, u)),
+            (false, true) => held.push((i, p.c0, u * -1.0)),
+            _ => {}
+        }
+    }
+    // The lines an opening's other side may be: the walls, then the held pairs.
+    let mut lines: Vec<(Vec2, Vec2, f64)> = walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
+    lines.extend(held.iter().filter_map(|&(i, _, _)| squat.get(i)).map(|p| (p.c0, p.c1, p.thickness)));
+    let far = WallGrid::of(lines.iter().map(|l| (l.0, l.1)), open_max);
+    let mut out = Vec::new();
+    for &(i, e, o) in &held {
+        let Some(p) = squat.get(i) else { continue };
+        let swing = swings.iter().any(|s| s.dist(e) <= p.thickness / 2.0 + 2.0 * k);
+        let beyond = || {
+            let ids = far.at(e);
+            // The nearest side across the gap: a line of the pair's thickness on its line.
+            let side = ids
+                .iter()
+                .filter_map(|&j| lines.get(j))
+                .filter(|l| {
+                    let ll = l.0.dist(l.1);
+                    ll > 1e-9
+                        && ((l.1 - l.0) * (1.0 / ll)).cross(o).abs() < 0.02
+                        && o.perp().dot(l.0 - e).abs() <= tol
+                        && (l.2 - p.thickness).abs() <= tol
+                })
+                .map(|l| o.dot(l.0 - e).min(o.dot(l.1 - e)))
+                .filter(|&g| g >= open_min && g <= open_max)
+                .fold(f64::INFINITY, f64::min);
+            if !side.is_finite() {
+                return false;
+            }
+            // No wall crosses the gap before it (else the line beyond is another room's wall).
+            !ids.iter().filter(|&&j| j < walls.len()).filter_map(|&j| lines.get(j)).any(|l| {
+                let ll = l.0.dist(l.1);
+                if ll <= 1e-9 {
+                    return false;
+                }
+                let lu = (l.1 - l.0) * (1.0 / ll);
+                let n = lu.perp();
+                let s = n.dot(o);
+                if s.abs() < 0.5 {
+                    return false;
+                }
+                let t = -n.dot(e - l.0) / s;
+                let at = lu.dot(e + o * t - l.0);
+                t > tol && t < side - tol && at >= -l.2 / 2.0 && at <= ll + l.2 / 2.0
+            })
+        };
+        if swing || beyond() {
+            out.push(i);
+        }
+    }
+    out
+}
+
 /// Joins the walls that are pieces of one: on one centreline, of one thickness, type and height,
 /// overlapping, touching or a joint apart (at most [`JOINT_MAX_IN`]). A wall drawn unit by unit
 /// whose faces were found piece by piece is one wall between its corners and openings, so its
@@ -2591,7 +2705,7 @@ fn plan_level_with(
     notes: &mut Vec<String>,
     ceilings: &[RoomCeiling],
 ) -> PlanLevel {
-    use super::perceive::geometry::{Limits, openings, pairs, segments};
+    use super::perceive::geometry::{Limits, openings, pairs, pairs_and_squat, segments};
     let k = upf / 12.0;
     let oz = &g.rules.openings;
     // A spec gives each wall layer its type's height (see `top_of`); the rules, one for all.
@@ -2713,7 +2827,10 @@ fn plan_level_with(
     // Their pairs go after that.
     let own_segs = segs.len();
     segs.extend(segments(&alone_ents));
-    let mut found = pairs(d, &segs, &lim);
+    // Pairs too short for a wall come too: a jamb between an opening and a crossing wall is a
+    // wall however short (Q6614), kept below once the walls it stands between are known.
+    let (mut found, mut squat) = pairs_and_squat(&segs, &lim, Some(JAMB_MIN_IN * k));
+    squat.retain(|p| p.faces.iter().all(|&f| f < own_segs));
     // A thin outline's side paired with another wall's face is the air beside that wall.
     let slivers = super::perceive::geometry::drop_sliver_pairs(&segs, &mut found, &lim);
     if slivers > 0 {
@@ -2876,6 +2993,33 @@ fn plan_level_with(
             }
         }
     }
+    // A pair of faces too short for a wall standing between an opening and a crossing wall is a
+    // jamb: a wall however short (Q6614). The minimum length is for lone fragments.
+    let mut jamb_count = 0usize;
+    for i in jamb_pairs(&squat, &pl.walls, &jambs, k) {
+        let Some(p) = squat.get(i) else { continue };
+        let mid = p.c0.mid(p.c1);
+        let w = PlanWall {
+            a: p.c0,
+            b: p.c1,
+            thickness: p.thickness,
+            top: top_of(&p.layer),
+            source: centres.iter().min_by(|x, y| x.0.dist(mid).total_cmp(&y.0.dist(mid))).map_or(source, |c| c.1),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: wall_type(g, &p.layer).map(|t| t.name.clone()),
+            fixed_top: fixed_of(&p.layer),
+            head: None,
+            basis: None,
+        };
+        if pl.walls.len() < MAX_OBJECTS && !pl.walls.iter().any(|x| same_wall(x, &w, k)) {
+            pl.walls.push(w);
+            jamb_count += 1;
+        }
+    }
+    if jamb_count > 0 {
+        notes.push(format!("{}: {jamb_count} short wall pieces between an opening and a crossing wall (jambs) built.", level.name));
+    }
     // Walls the plans tag: their type, and the height its rule gives there.
     if let Some(sp) = &g.spec {
         mark_walls(sp, &level.name, z0, upf, &mut pl.walls);
@@ -2893,21 +3037,30 @@ fn plan_level_with(
             continue;
         }
         let u = (w.b - w.a) * (1.0 / len);
-        let meets = |p: Vec2| {
+        // How far the end `p` runs on (along `out`) into a crossing wall it meets: to that wall's
+        // far face, at most its thickness; not at all when the wall is behind the end (a jamb's
+        // end at its opening, a few inches from the crossing wall its other end meets: Q6614).
+        let meets = |p: Vec2, out: Vec2| {
             let mut best = 0.0f64;
             for &i in ext_grid.at(p) {
-                let o = &snapshot[i];
-                if (o.b - o.a).cross(u).abs() <= 0.1 * o.a.dist(o.b) {
+                let Some(o) = snapshot.get(i) else { continue };
+                let lo = o.a.dist(o.b);
+                if (o.b - o.a).cross(u).abs() <= 0.1 * lo || lo <= 1e-9 {
                     continue;
                 }
-                let dd = seg_dist(p, o.a, o.b);
-                if dd <= 1.5 * o.thickness.max(w.thickness) {
-                    best = best.max(o.thickness);
+                if seg_dist(p, o.a, o.b) > 1.5 * o.thickness.max(w.thickness) {
+                    continue;
+                }
+                let n = (o.b - o.a).perp() * (1.0 / lo);
+                let s = n.dot(out);
+                let far = -n.dot(p - o.a) / s + 0.5 * o.thickness / s.abs();
+                if far.is_finite() && far > 0.0 {
+                    best = best.max(far.min(o.thickness));
                 }
             }
             best
         };
-        let (ta, tb) = (meets(w.a), meets(w.b));
+        let (ta, tb) = (meets(w.a, u * -1.0), meets(w.b, u));
         w.a -= u * ta.min(len);
         w.b += u * tb.min(len);
     }
