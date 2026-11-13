@@ -713,6 +713,84 @@ enum Facing {
     RoomsBothSides,
 }
 
+/// A framing layer's stud spacing, inches, and where it comes from: a person's rule for the wall
+/// type, else the layer's, its text's or its type's notes' (the legend), else the rules'.
+fn stud_spacing(wt: &cadaddy_walk3d::WallType, asm: &Assembly, layer: &AssemblyLayer, r: &Rules, src: &Source) -> (f64, Source) {
+    let documented =
+        layer.spacing_in.filter(|v| *v > 0.0).or_else(|| text_spacing(&layer.material)).or_else(|| asm.notes.iter().find_map(|n| text_spacing(n)));
+    let (spacing_in, sp_src) = match (r.stud_by_type.get(&wt.name.to_ascii_uppercase()), documented) {
+        // A person's rule for the wall type wins over what the legend says.
+        (Some((v, why)), _) => (*v, Source::from_doc(SourceKind::Rule, why)),
+        (None, Some(v)) => (v, src.clone()),
+        (None, None) => (r.num("framing.stud_spacing_in", 16.0), r.source("framing.stud_spacing_in")),
+    };
+    let spacing_in = if spacing_in.is_finite() { spacing_in } else { 16.0 };
+    (spacing_in.clamp(4.0, 48.0), sp_src)
+}
+
+/// A steel stud's gauge (its text's, else the rules'); none for wood.
+fn stud_gauge(material: &str, wood: bool, r: &Rules, src: &Source) -> (String, Source) {
+    match text_gauge(material) {
+        Some(g) => (g, src.clone()),
+        None if wood => (String::new(), src.clone()),
+        None => (r.text("framing.steel_gauge"), r.source("framing.steel_gauge")),
+    }
+}
+
+/// A wood stud as its text names it (`2x6`).
+fn wood_name(material: &str) -> Option<String> {
+    let up = material.to_ascii_uppercase();
+    up.find("2X").and_then(|i| {
+        let n: String = up.get(i + 2..).unwrap_or_default().chars().take_while(char::is_ascii_digit).take(3).collect();
+        (!n.is_empty()).then(|| format!("2x{n}"))
+    })
+}
+
+/// A wall type's studs as its framing is laid (Q6594): what they are (`2x6`, `3 5/8" 20 ga`,
+/// `5 1/2" metal stud`) and their spacing (inches), each with where it comes from; a steel stud's
+/// gauge on its own when the type names none (the rules' gauge is a default, the depth is not).
+pub(crate) struct Studs {
+    pub size: String,
+    pub size_src: Source,
+    pub gauge: Option<(String, Source)>,
+    pub spacing_in: f64,
+    pub spacing_src: Source,
+}
+
+/// The studs of a wall type's framing layer; none when its build-up has no framing (masonry,
+/// concrete) or none was read.
+pub(crate) fn studs_of(wt: &cadaddy_walk3d::WallType, r: &Rules) -> Option<Studs> {
+    let asm = wt.assembly.as_ref()?;
+    let layer =
+        asm.layers.iter().take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS).find(|l| l.category.trim().eq_ignore_ascii_case("framing") && !l.in_cavity)?;
+    let src = type_source(wt, asm);
+    let wood = is_wood(r, &layer.material);
+    let depth_in = layer_depth(layer).max(1.5);
+    // The legend reader's stand-in depth where the legend gives none is a default, not the legend's.
+    let depth_src = if layer.material.contains("(depth not given)") {
+        Source::from_doc(SourceKind::Default, &format!("{}: the legend gives no stud depth (a stand-in depth)", wt.name))
+    } else {
+        src.clone()
+    };
+    let (spacing_in, spacing_src) = stud_spacing(wt, asm, layer, r, &src);
+    let (size, size_src, gauge) = if wood {
+        match wood_name(&layer.material) {
+            Some(n) => (n, src, None),
+            None => (lumber(depth_in), depth_src, None),
+        }
+    } else {
+        let size = inches_text(depth_in);
+        match text_gauge(&layer.material) {
+            Some(g) => (format!("{size} {g}"), depth_src, None),
+            None => {
+                let (g, g_src) = stud_gauge(&layer.material, false, r, &src);
+                (format!("{size} metal stud"), depth_src, (!g.is_empty()).then_some((g, g_src)))
+            }
+        }
+    };
+    Some(Studs { size, size_src, gauge, spacing_in, spacing_src })
+}
+
 /// The studs, plates or tracks, headers, sills and blocking of a framing layer; the studs'
 /// positions (along the wall) and indices, the stud's width along the wall, the plates' heights
 /// (bottom, top).
@@ -733,30 +811,10 @@ fn frame(
     let material = pl.layer.material.clone();
     let wood = is_wood(r, &material);
     let depth_in = layer_depth(pl.layer).max(1.5);
-    // Spacing: the layer's, its text's, the project's for the wall type, else the rules'.
-    let documented =
-        pl.layer.spacing_in.filter(|v| *v > 0.0).or_else(|| text_spacing(&material)).or_else(|| asm.notes.iter().find_map(|n| text_spacing(n)));
-    let (spacing_in, sp_src) = match (r.stud_by_type.get(&wt.name.to_ascii_uppercase()), documented) {
-        // A person's rule for the wall type wins over what the legend says.
-        (Some((v, why)), _) => (*v, Source::from_doc(SourceKind::Rule, why)),
-        (None, Some(v)) => (v, src.clone()),
-        (None, None) => (r.num("framing.stud_spacing_in", 16.0), r.source("framing.stud_spacing_in")),
-    };
-    let spacing_in = spacing_in.clamp(4.0, 48.0);
-    let (gauge, g_src) = match text_gauge(&material) {
-        Some(g) => (g, src.clone()),
-        None if wood => (String::new(), src.clone()),
-        None => (r.text("framing.steel_gauge"), r.source("framing.steel_gauge")),
-    };
+    let (spacing_in, sp_src) = stud_spacing(wt, asm, pl.layer, r, src);
+    let (gauge, g_src) = stud_gauge(&material, wood, r, src);
     let size = inches_text(depth_in);
-    // A wood stud as its text names it (`2x6`), else by its depth.
-    let named = {
-        let up = material.to_ascii_uppercase();
-        up.find("2X").and_then(|i| {
-            let n: String = up.get(i + 2..).unwrap_or_default().chars().take_while(char::is_ascii_digit).collect();
-            (!n.is_empty()).then(|| format!("2x{n}"))
-        })
-    };
+    let named = wood_name(&material);
     let (ty, item) = if wood {
         let l = named.clone().unwrap_or_else(|| lumber(depth_in));
         (format!("wood {l}"), format!("{l} wood stud"))

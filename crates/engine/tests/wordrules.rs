@@ -906,6 +906,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "const SUBMITTAL_KEYS",
         "model kinds and property values: our own property keys a submittal writes on a luminaire, not words read off a document",
     ),
+    (
+        "crates/engine/src/cmd/propfill.rs",
+        "const WALL_TYPE_KEYS",
+        "our own output: the property keys a wall's form asks for that its wall type gives (assembly, fire rating, stud size and spacing, Q6594), not words read off a document",
+    ),
 ];
 
 #[test]

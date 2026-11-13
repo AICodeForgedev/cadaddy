@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handle? | handles?: [string] (default: the selection)} → {elements: [{handle, kind, props: {key: {value, unit?, source: {kind: print|legend|schedule|spec|submittal|note|rule|default|user|computed, doc?, at?}, confidence?, note?, stored}}, order: [key], standard: [key], missing: [key]}]}")
             .noundo(),
         CommandSpec::new(SET, "Set Element Property (BIM)", run_set)
-            .params("{handle? | handles? | filter?: {kind?, where?: {key: value | \"exists\" | \"missing\"}} (default: the selection), key?: string, value?: string | number | bool | null (null clears), unit?, note?, props?: {key: value} (several at once; with or instead of key)} → {set, elements: [{handle, kind, override?}], skipped}: source user; kept through rebuilds"),
+            .params("{handle? | handles? | filter?: {kind?, where?: {key: value | \"exists\" | \"missing\"}} (default: the selection), key?: string, value?: string | number | bool | null (null clears), unit?, note?, props?: {key: value} (several at once; with or instead of key)} → {set, elements: [{handle, kind, override?}], skipped, room_followed?}: source user; kept through rebuilds; a room's number or name set is its number everywhere: the elements in it take it as their room (room_followed: how many)"),
         CommandSpec::new(FIND, "Find Elements by Property", run_find)
             .params("{kind?: string (wall, door, window, room, floor, ceiling, roof, device, light_fixture, plumbing_fixture, fixture, equipment, duct, pipe, conduit, or a build part such as column), where?: {key: value | \"exists\" | \"missing\"}, select?: bool, limit? (default 200)} → {count, handles, elements: [{handle, kind, level?}], more}")
             .noundo(),
@@ -214,6 +214,12 @@ pub fn effective(e: &Entity, kind: &str, upf: f64) -> Vec<(String, Prop, bool)> 
             derive(key, p);
         }
     }
+    if kind == "ceiling" {
+        // A ceiling, soffit or ceiling grid of the model: what its build knew of it (Q6595).
+        for (key, p) in super::ceilings::props_of(e) {
+            derive(key, p);
+        }
+    }
     if kind == "room" && super::wallgen::made_as(e).as_deref() == Some("room") {
         // A room element of the model (model.build, Q5291): its tag's values.
         let tag = |k: &str| super::bspec::room_tag(e, k).filter(|v| !v.is_empty());
@@ -324,11 +330,21 @@ impl Filter {
     #[cfg(test)]
     fn matches(&self, eff: &[(String, Prop, bool)]) -> bool {
         self.wants.iter().all(|(key, want)| {
-            let p = eff.iter().find(|(k, p, _)| k.eq_ignore_ascii_case(key) && p.has_value()).map(|(_, p, _)| p);
+            let first = |key: &str| eff.iter().find(|(k, p, _)| k.eq_ignore_ascii_case(key) && p.has_value()).map(|(_, p, _)| p);
+            let p = first(key);
+            // A piece's circuits held ([`HELD_CIRCUITS`]): each one its circuit too.
+            let held: Vec<String> = if key.eq_ignore_ascii_case("circuit") {
+                first(HELD_CIRCUITS).map(|p| super::mepatoms::circuit_list(&p.text())).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             match want {
-                Want::Exists => p.is_some(),
-                Want::Missing => p.is_none(),
-                Want::Is(v) => p.is_some_and(|p| p.text().trim().eq_ignore_ascii_case(v) || (num(&p.text()).is_some() && num(&p.text()) == num(v))),
+                Want::Exists => p.is_some() || !held.is_empty(),
+                Want::Missing => p.is_none() && held.is_empty(),
+                Want::Is(v) => {
+                    p.is_some_and(|p| p.text().trim().eq_ignore_ascii_case(v) || (num(&p.text()).is_some() && num(&p.text()) == num(v)))
+                        || held.iter().any(|l| l.eq_ignore_ascii_case(v.trim()))
+                }
             }
         })
     }
@@ -395,10 +411,8 @@ fn idx(i: usize) -> u32 {
 /// One element's row (`None`: not an element).
 fn row_of(at: usize, e: &Entity) -> Option<Row> {
     let made = super::wallgen::made_as(e);
-    let room = (made.as_deref() == Some("room") && matches!(e.kind, EntityKind::Mesh(_))).then(|| {
-        let tag = |k: &str| super::bspec::room_tag(e, k).filter(|v| !v.is_empty());
-        tag("number:").filter(|n| !n.trim().is_empty()).or_else(|| tag("name:")).unwrap_or("Room").trim().to_ascii_uppercase()
-    });
+    let room = (made.as_deref() == Some("room") && matches!(e.kind, EntityKind::Mesh(_)))
+        .then(|| super::bspec::room_element_label(e).unwrap_or_else(|| "Room".to_string()).to_ascii_uppercase());
     let kind = element_kind(e)?;
     let volume = made
         .is_none()
@@ -411,6 +425,7 @@ fn row_of(at: usize, e: &Entity) -> Option<Row> {
 /// Put row `ri`'s property values in `out`: of each key, the first property that has a value, as
 /// [`Filter::matches`] reads them.
 fn add_values(out: &mut Values, ri: u32, e: &Entity, kind: &str, upf: f64) {
+    let mut held: Option<String> = None;
     for (k, p, _) in effective(e, kind, upf) {
         if !p.has_value() {
             continue;
@@ -425,8 +440,28 @@ fn add_values(out: &mut Values, ri: u32, e: &Entity, kind: &str, upf: f64) {
         if let Some(n) = num(&text) {
             kv.num.entry(num_key(n)).or_default().push(ri);
         }
+        if k.eq_ignore_ascii_case(HELD_CIRCUITS) {
+            held = Some(text);
+        }
+    }
+    // A piece that holds several circuits (a homerun's, a shared raceway's) is on each of them.
+    if let Some(list) = held {
+        let kv = out.entry("circuit".into()).or_default();
+        if kv.with.last() != Some(&ri) {
+            kv.with.push(ri);
+        }
+        for label in super::mepatoms::circuit_list(&list) {
+            let rows = kv.text.entry(label.to_ascii_lowercase()).or_default();
+            if rows.last() != Some(&ri) {
+                rows.push(ri);
+            }
+        }
     }
 }
+
+/// The key of the circuits a piece holds when it holds more than one; a find by `circuit` finds
+/// the piece by any of them.
+const HELD_CIRCUITS: &str = "circuits";
 
 impl ChunkElements {
     /// The chunk's elements. `before`: the chunk as it was before an edit and its elements; the
@@ -685,6 +720,17 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Generated elements: as overrides, so rebuilds keep them. The others: straight into their store.
     let d = s.doc()?;
+    // A room's number or name set: the label each room gave its elements before (Q6593).
+    let room_labels: Vec<(Handle, (String, String))> = if entries.iter().any(|en| ["number", "name"].iter().any(|k| en.key.eq_ignore_ascii_case(k))) {
+        hs.iter()
+            .filter_map(|(h, _)| {
+                let e = d.model.get(*h).filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))?;
+                Some((*h, super::bspec::room_element_labels(e)?))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let (generated, own): (Vec<&(Handle, String)>, Vec<&(Handle, String)>) =
         hs.iter().partition(|(h, _)| d.model.get(*h).is_some_and(|e| super::revise3d::tag_key(e).is_some()));
     let batch: Vec<(Handle, Vec<Entry>)> = generated.iter().map(|(h, _)| (*h, entries.clone())).collect();
@@ -710,6 +756,13 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     if entries.iter().any(|en| super::circuitlinks::is_input(&en.key)) {
         super::circuitlinks::relink(d, &touched);
     }
+    // A room renumbered (or renamed): one room identity, the elements in it take its new label
+    // as their room (Q6593).
+    let followed = super::propfill::follow_room_labels(d, &room_labels);
+    if !room_labels.is_empty() {
+        // A room numbered is no longer asked about.
+        super::bspec::ask_unnumbered_rooms(d);
+    }
     let label = |h: Handle| labels.iter().find(|(x, _)| *x == h).map(|(_, l)| l.clone());
     let done: Vec<Value> = hs
         .iter()
@@ -726,7 +779,11 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let set = labels.len() + touched.len();
     s.touch();
     s.echo(format!("Set {} on {set} element(s).", entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>().join(", ")));
-    Ok(json!({ "set": set, "elements": done, "skipped": hs.len().saturating_sub(set) }))
+    let mut out = json!({ "set": set, "elements": done, "skipped": hs.len().saturating_sub(set) });
+    if followed > 0 {
+        out["room_followed"] = json!(followed);
+    }
+    Ok(out)
 }
 
 fn run_find(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1059,6 +1116,10 @@ pub(crate) mod tests {
                     if i % 3 == 0 {
                         store.set("circuit", Prop::new(json!(i % 4), Source::user()));
                     }
+                    // A piece of a homerun: the circuits it holds.
+                    if i % 13 == 0 {
+                        store.set("circuits", Prop::new(json!("LP-1,3, LP-5"), Source::computed()));
+                    }
                     if i % 7 == 0 {
                         store.set("checked", Prop::new(json!(i % 2 == 0), Source::user()));
                     }
@@ -1100,6 +1161,9 @@ pub(crate) mod tests {
             json!({"kind": "room", "where": {"name": "space 4"}}),
             json!({"where": {"area": "exists"}}),
             json!({"where": {"nothing": "x"}}),
+            json!({"where": {"circuit": "LP-5"}}),
+            json!({"where": {"circuit": "lp-1,3"}}),
+            json!({"kind": "device", "where": {"circuit": "missing"}}),
         ];
         let check = |s: &Session| {
             let mut answered = 0;
@@ -1117,6 +1181,10 @@ pub(crate) mod tests {
             assert_eq!(by_index, by_scan);
         };
         check(&s);
+        // A piece holding several circuits is found by each one's own label, never by a part of one.
+        let held = |s: &Session, c: &str| found(s.doc().unwrap(), &Filter::parse(FIND, &json!({"where": {"circuit": c}})).unwrap()).len();
+        assert!(held(&s, "LP-5") > 0 && held(&s, "LP-5") == held(&s, "LP-1,3"));
+        assert_eq!((held(&s, "LP-1"), held(&s, "LP-3")), (0, 0));
         // After edits: a property set, an object erased, one added.
         let some = found(s.doc().unwrap(), &Filter::parse(FIND, &json!({"kind": "device"})).unwrap());
         let h = some.get(17).unwrap().0;

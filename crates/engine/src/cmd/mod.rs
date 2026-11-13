@@ -85,6 +85,7 @@ pub(crate) mod loosesym;
 pub mod lowvolt;
 pub mod markup;
 pub mod mountlist;
+pub(crate) mod panelheader;
 pub mod panelsched;
 pub mod paramconv;
 pub(crate) mod planscale;
@@ -195,6 +196,7 @@ pub mod review_impact;
 pub mod wiretable;
 /// The plan's rooms as last traced, by drawing state (kept in each drawing's state).
 pub(crate) use perceive::geometry::TraceCache as RoomTraceCache;
+pub(crate) mod civilsvc;
 pub(crate) mod elemtrade;
 pub(crate) mod fillin;
 mod labelspot;

@@ -2074,6 +2074,9 @@ struct RunGeo<'a> {
     run: &'a MepRun,
     pts: Vec<Vec2>,
     base_z: f64,
+    /// A riser's piece: whether the riser goes on under its foot and over its head (a piece of a
+    /// riser cut at the floors it passes, Q6493), so a branch at a cut still leaves its side.
+    goes_on: [bool; 2],
 }
 
 impl RunGeo<'_> {
@@ -2082,6 +2085,12 @@ impl RunGeo<'_> {
     }
     fn h(&self, upf: f64) -> f64 {
         depth_in(self.run.size_in) / 12.0 * upf
+    }
+    /// A riser's plan point and height span (sheet units), none for a run in plan.
+    fn riser(&self, upf: f64) -> Option<(Vec2, f64, f64)> {
+        let (Some(top), [p]) = (self.run.top_ft, self.pts.as_slice()) else { return None };
+        let (z0, z1) = (self.bottom(0, upf), self.base_z + top * upf);
+        (top.is_finite() && z1 > z0 && p.is_finite()).then_some((*p, z0, z1))
     }
     /// The run's two ends (one for a single point).
     fn ends(&self, idx: usize, upf: f64) -> Vec<RunEnd> {
@@ -2130,11 +2139,13 @@ fn seg_near(p: Vec2, a: Vec2, b: Vec2) -> (f64, Vec2) {
     (p.dist(q), q)
 }
 
-/// The joints of one system's runs on one level: a run ending on another's side (a tee; two
-/// ending at the same point there, a cross), and runs ending at the same point: two of
-/// different sizes a transition (a reducer when both are round), two at an angle an elbow, three
-/// a tee, four or more a cross. Ends must also meet in height. Also, per run, the points where a
-/// tee sits on it (no elbow is drawn there).
+/// The joints of one service's runs on one level (the systems that are one service,
+/// [`cadaddy_walk3d::mepties`]: a main and its branches drawn as two systems still meet): a run
+/// ending on another's side (a tee; two ending at the same point there, a cross), a run leaving a
+/// riser's side between its foot and its head (a tee; two at one height, a cross), and runs ending
+/// at the same point: two of different sizes a transition (a reducer when both are round), two at
+/// an angle an elbow, three a tee, four or more a cross. Ends must also meet in height. Also, per
+/// run, the points where a tee sits on it (no elbow is drawn there).
 fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>, Vec<(usize, usize)>) {
     let inch = upf / 12.0;
     let half = |s: [f64; 2]| s[0] / 2.0 * inch;
@@ -2196,6 +2207,43 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>, Vec<(usize, 
         match side.iter_mut().find(|(m, p, _)| *m == main && p.dist(q) <= own) {
             Some((_, _, list)) => list.push(ei),
             None => side.push((main, q, vec![ei])),
+        }
+    }
+    // Leaving a riser's side: an end at its plan point whose height the riser passes, under it
+    // and over it (at the riser's foot or head the two meet end to end).
+    for (ri, g) in geo.iter().enumerate() {
+        let Some((p, rz0, rz1)) = g.riser(upf) else { continue };
+        let own = half(g.run.size_in) + inch;
+        // Ends by the height they leave at: (lowest, highest, ends).
+        let mut at: Vec<(f64, f64, Vec<usize>)> = Vec::new();
+        for (ei, e) in ends.iter().enumerate() {
+            if e.run == ri || e.into.is_none() || used.get(ei).copied().unwrap_or(true) || e.at.dist(p) > own {
+                continue;
+            }
+            let under = g.goes_on[0] || rz0 < e.z0 - inch / 2.0;
+            let over = g.goes_on[1] || rz1 > e.z1 + inch / 2.0;
+            if !(under && over && overlaps(e.z0, e.z1, rz0, rz1, upf)) {
+                continue;
+            }
+            if let Some(u) = used.get_mut(ei) {
+                *u = true;
+            }
+            match at.iter_mut().find(|(lo, hi, _)| overlaps(*lo, *hi, e.z0, e.z1, upf)) {
+                Some((lo, hi, list)) => {
+                    (*lo, *hi) = (lo.min(e.z0), hi.max(e.z1));
+                    list.push(ei);
+                }
+                None => at.push((e.z0, e.z1, vec![ei])),
+            }
+        }
+        for (lo, hi, list) in at {
+            // The riser's own piece of the fitting: past the branches by their size and 2".
+            let reach = list.iter().filter_map(|e| ends.get(*e)).map(|e| e.size[0] / 2.0).fold(0.0_f64, f64::max) * inch + 2.0 * inch;
+            let (z0, z1) = ((lo - reach).max(rz0), (hi + reach).min(rz1));
+            let mut je = vec![RunEnd { run: ri, at: p, z0, z1, size: g.run.size_in, into: None }];
+            je.extend(list.iter().filter_map(|e| ends.get(*e)).map(|e| RunEnd { at: p, ..*e }));
+            let kind = if list.len() >= 2 { FittingKind::Cross } else { FittingKind::Tee };
+            joints.push(Joint { kind, at: p, owner: ri, ends: je });
         }
     }
     for (main, q, list) in side {
@@ -2479,7 +2527,19 @@ fn joint_mesh(m: &mut Mesh, j: &Joint, upf: f64) {
         }
         _ => {
             for e in &j.ends {
-                let Some(d) = e.into else { continue };
+                let Some(d) = e.into else {
+                    // A riser's piece of its tee: upright, its own size, over the branches' height.
+                    if e.run == j.owner {
+                        let w = e.size[0] * inch;
+                        if e.size[1] > 0.0 {
+                            let half = Vec2::new(w / 2.0, 0.0);
+                            super::wallgen::add_box(m, j.at - half, j.at + half, e.size[1] * inch, e.z0, e.z1);
+                        } else {
+                            add_upright_cylinder(m, j.at, w / 2.0, e.z0, e.z1);
+                        }
+                    }
+                    continue;
+                };
                 let reach = j.ends.iter().filter(|o| !std::ptr::eq(*o, e)).map(|o| o.size[0] / 2.0).fold(0.0_f64, f64::max) + 2.0;
                 add_section(m, j.at, j.at + d * (reach * inch), e.size, e.z0, upf);
             }
@@ -2917,13 +2977,11 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf, cut: st.cut.as_ref() })
         })
         .collect();
-    let mut groups: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
+    // Per service and level (Q6598): the systems that are one service (a main and its branches,
+    // a riser and its floor branches, drawn as systems of their own) meet; risers with them.
+    let mut groups: BTreeMap<(String, &str), Vec<usize>> = BTreeMap::new();
     for (i, s) in shown.iter().enumerate() {
-        // Vertical runs (risers) have one plan point and meet nothing in plan.
-        if s.run.top_ft.is_some() {
-            continue;
-        }
-        groups.entry((s.sy.name.as_str(), s.level.as_str())).or_default().push(i);
+        groups.entry((cadaddy_walk3d::mepties::service_key(s.sy), s.level.as_str())).or_default().push(i);
     }
     let mut all_joints: Vec<Joint> = Vec::new();
     let mut all_meets: Vec<(usize, usize)> = Vec::new();
@@ -2932,7 +2990,12 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         let geo: Vec<RunGeo> = members
             .iter()
             .filter_map(|i| shown.get(*i))
-            .map(|s| RunGeo { run: s.run, pts: s.run.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect(), base_z: s.base_z })
+            .map(|s| RunGeo {
+                run: s.run,
+                pts: s.run.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect(),
+                base_z: s.base_z,
+                goes_on: s.cut.map_or([false, false], |c| [c.index > 0, c.index + 1 < c.count]),
+            })
             .collect();
         let (js, sk, mt) = joints(&geo, upf);
         let global = |k: usize| members.get(k).copied().unwrap_or(usize::MAX);
@@ -3190,6 +3253,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             .map(|(i, s)| super::mepedit::NetRun {
                 run: s.run,
                 kind: s.sy.kind,
+                service: cadaddy_walk3d::mepties::service_key(s.sy),
                 level: s.level.clone(),
                 floor_ft: s.base_z / upf,
                 seg: seg_of.get(i).copied().flatten(),

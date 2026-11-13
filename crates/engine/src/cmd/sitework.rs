@@ -300,6 +300,9 @@ pub(crate) struct SiteRead {
     pub equipment: Vec<Equip>,
     pub notes: Vec<Note>,
     pub segs: Vec<Seg>,
+    /// The closed shapes' edges (a building drawn as closed pieces is linework too), layer
+    /// unknown.
+    pub edges: Vec<Seg>,
     pub layers: Vec<String>,
     /// Labels naming equipment with no symbol by them.
     pub unplaced_labels: Vec<String>,
@@ -307,40 +310,40 @@ pub(crate) struct SiteRead {
     pub area: [f64; 4],
 }
 
-fn bbox_of(pts: &[[f64; 2]]) -> [f64; 4] {
+pub(crate) fn bbox_of(pts: &[[f64; 2]]) -> [f64; 4] {
     pts.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p| {
         [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]
     })
 }
 
-fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+pub(crate) fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
 }
 
-fn centre(b: &[f64; 4]) -> [f64; 2] {
+pub(crate) fn centre(b: &[f64; 4]) -> [f64; 2] {
     [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0]
 }
 
-fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+pub(crate) fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
 /// How far `p` is from the box (0 inside).
-fn gap(b: &[f64; 4], p: [f64; 2]) -> f64 {
+pub(crate) fn gap(b: &[f64; 4], p: [f64; 2]) -> f64 {
     let dx = (b[0] - p[0]).max(p[0] - b[2]).max(0.0);
     let dy = (b[1] - p[1]).max(p[1] - b[3]).max(0.0);
     dx.hypot(dy)
 }
 
 /// How far apart two boxes are (0 when they touch).
-fn box_gap(a: &[f64; 4], b: &[f64; 4]) -> f64 {
+pub(crate) fn box_gap(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     let dx = (a[0] - b[2]).max(b[0] - a[2]).max(0.0);
     let dy = (a[1] - b[3]).max(b[1] - a[3]).max(0.0);
     dx.hypot(dy)
 }
 
 /// A text's box, turned with it (its length by its characters).
-fn text_box(t: &TextItem) -> [f64; 4] {
+pub(crate) fn text_box(t: &TextItem) -> [f64; 4] {
     let n = t.value.trim().chars().count().max(1) as f64;
     let (h, len) = (t.height.max(0.0), n * 0.8 * t.height.max(0.0));
     let (c, s) = (t.rotation.cos(), t.rotation.sin());
@@ -348,7 +351,7 @@ fn text_box(t: &TextItem) -> [f64; 4] {
     bbox_of(&[p, [p[0] + c * len, p[1] + s * len], [p[0] - s * h, p[1] + c * h], [p[0] + c * len - s * h, p[1] + s * len + c * h]])
 }
 
-fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+pub(crate) fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l2 = dx * dx + dy * dy;
     if l2 <= 1e-18 {
@@ -359,7 +362,7 @@ fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 /// The point on a closed polygon's edge nearest `p`.
-fn nearest_on(poly: &[[f64; 2]], p: [f64; 2]) -> Option<[f64; 2]> {
+pub(crate) fn nearest_on(poly: &[[f64; 2]], p: [f64; 2]) -> Option<[f64; 2]> {
     let n = poly.len();
     let mut best: Option<(f64, [f64; 2])> = None;
     for i in 0..n {
@@ -376,7 +379,7 @@ fn nearest_on(poly: &[[f64; 2]], p: [f64; 2]) -> Option<[f64; 2]> {
     best.map(|(_, q)| q)
 }
 
-fn inside(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
+pub(crate) fn inside(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
     let n = poly.len();
     let mut c = false;
     for i in 0..n {
@@ -388,7 +391,7 @@ fn inside(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
     c
 }
 
-fn poly_area(poly: &[[f64; 2]]) -> f64 {
+pub(crate) fn poly_area(poly: &[[f64; 2]]) -> f64 {
     let n = poly.len();
     let mut s = 0.0;
     for i in 0..n {
@@ -400,7 +403,7 @@ fn poly_area(poly: &[[f64; 2]]) -> f64 {
 }
 
 /// The usual height of a sheet's texts (their median).
-fn usual_height(texts: &[TextItem]) -> f64 {
+pub(crate) fn usual_height(texts: &[TextItem]) -> f64 {
     let mut hs: Vec<f64> = texts.iter().map(|t| t.height).filter(|h| h.is_finite() && *h > 0.0).collect();
     hs.sort_by(f64::total_cmp);
     hs.get(hs.len() / 2).copied().unwrap_or(0.0)
@@ -509,7 +512,7 @@ fn label_lines(texts: &[&TextItem], i: usize, action: &[String]) -> Vec<usize> {
 
 /// Where a label's leader ends: the line that starts at the label (within `reach` of its box),
 /// followed piece by piece where its pieces meet (within `touch`), to its far end.
-fn leader_end(segs: &[Seg], bbox: &[f64; 4], reach: f64, touch: f64) -> Option<[f64; 2]> {
+pub(crate) fn leader_end(segs: &[Seg], bbox: &[f64; 4], reach: f64, touch: f64) -> Option<[f64; 2]> {
     let (mut cur, mut far) = segs.iter().enumerate().find_map(|(i, sg)| {
         let (ga, gb) = (gap(bbox, sg.a), gap(bbox, sg.b));
         if ga <= reach && gb > reach {
@@ -554,6 +557,8 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
     let mut shapes: Vec<Shape> = Vec::new();
     let mut outline_pool: Vec<(Vec<[f64; 2]>, f64, bool)> = Vec::new();
     let mut layer_ix: HashMap<String, usize> = HashMap::new();
+    // The layers named for the building that draw a closed outline of it.
+    let mut outlined: BTreeSet<String> = BTreeSet::new();
     let text_layer = |l: &str| r.text_layers.iter().any(|x| x.eq_ignore_ascii_case(l));
     for e in page.model.iter().take(MAX_SHAPES * 4) {
         if shapes.len() >= MAX_SHAPES || out.segs.len() >= MAX_SEGS {
@@ -595,7 +600,13 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
                     if n >= 4 && a >= (15.0 * h).powi(2) && outline_pool.len() < MAX_OUTLINES * 20 {
                         let up = layer.to_ascii_uppercase();
                         let named = words_of(&up).iter().any(|w| r.building_layer_words.iter().any(|x| x == w));
+                        if named {
+                            outlined.insert(layer.to_string());
+                        }
                         outline_pool.push((pts.clone(), a, named));
+                    }
+                    if out.edges.len() < MAX_SEGS {
+                        out.edges.extend(pts.iter().zip(pts.iter().cycle().skip(1)).take(n).map(|(a, b)| Seg { a: *a, b: *b, layer: usize::MAX }));
                     }
                     shape(pts);
                 } else if !glyph {
@@ -618,6 +629,39 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
     let mut layers: Vec<(String, usize)> = layer_ix.into_iter().collect();
     layers.sort_by_key(|(_, i)| *i);
     out.layers = layers.into_iter().map(|(l, _)| l).collect();
+    // A building drawn in pieces on a layer named for it (each wall, door and light its own line;
+    // no closed outline of its own, Q6597): the extent of that layer's linework, square to its
+    // lines' main direction, is an outline it may be.
+    for (li, name) in out.layers.iter().enumerate() {
+        let up = name.to_ascii_uppercase();
+        if outlined.contains(name) || !words_of(&up).iter().any(|w| r.building_layer_words.iter().any(|x| x == w)) {
+            continue;
+        }
+        let mine: Vec<&Seg> = out.segs.iter().filter(|g| g.layer == li).collect();
+        let shape_pts: Vec<[f64; 2]> = shapes.iter().filter(|sh| sh.layer == *name).flat_map(|sh| sh.pts.iter().copied()).collect();
+        if mine.len() < 4 {
+            continue;
+        }
+        let (mut c, mut sn) = (0.0, 0.0);
+        for g in &mine {
+            let (dx, dy) = (g.b[0] - g.a[0], g.b[1] - g.a[1]);
+            let l = dx.hypot(dy);
+            if l > 0.0 {
+                let t = dy.atan2(dx) * 4.0;
+                c += l * t.cos();
+                sn += l * t.sin();
+            }
+        }
+        let theta = sn.atan2(c) / 4.0;
+        let turn = |p: [f64; 2], a: f64| [a.cos() * p[0] - a.sin() * p[1], a.sin() * p[0] + a.cos() * p[1]];
+        let all: Vec<[f64; 2]> = mine.iter().flat_map(|g| [g.a, g.b]).chain(shape_pts).map(|p| turn(p, -theta)).collect();
+        let b = bbox_of(&all);
+        let rect: Vec<[f64; 2]> = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].iter().map(|p| turn(*p, theta)).collect();
+        let a = poly_area(&rect);
+        if a.is_finite() && a >= (15.0 * h).powi(2) && outline_pool.len() < MAX_OUTLINES * 20 {
+            outline_pool.push((rect, a, true));
+        }
+    }
     // The building outlines: those on a layer named for the building first, then the largest.
     outline_pool.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.total_cmp(&a.1)));
     out.outlines = outline_pool.into_iter().take(MAX_OUTLINES).map(|(p, _, named)| (p, named)).collect();
@@ -831,6 +875,8 @@ pub(crate) struct Fit {
     pub why: String,
     /// The building outline on the model (empty: none read).
     pub outline: Vec<[f64; 2]>,
+    /// The same outline as the sheet draws it (sheet units; empty: none read).
+    pub sheet_outline: Vec<[f64; 2]>,
 }
 
 impl Fit {
@@ -878,6 +924,7 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
         method: "none",
         why,
         outline: Vec::new(),
+        sheet_outline: Vec::new(),
     };
     let Some(fp) = super::ugplan::slab_box(sp, slab) else { return none(format!("{slab} has no outline or region to lay the site plan on")) };
     let shells: Vec<[f64; 4]> = sp
@@ -890,7 +937,14 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
     let fp_area = ((fp[2] - fp[0]) * (fp[3] - fp[1])).abs();
     // The outline: one on a layer named for the building (the largest), else the one nearest the
     // footprint's size.
-    let named = read.outlines.iter().find(|(_, n)| *n).map(|(p, _)| p);
+    // Several buildings on a layer named for them (a site of several lots): at its printed scale,
+    // the one nearest the footprint's size; else the largest.
+    let ratio_off = |p: &Vec<[f64; 2]>| if fp_area > 0.0 { (poly_area(p) / fp_area).ln().abs() } else { 0.0 };
+    let named = if sheet_real && fp_area > 0.0 {
+        read.outlines.iter().filter(|(_, n)| *n).map(|(p, _)| p).filter(|p| poly_area(p) > 0.0).min_by(|a, b| ratio_off(a).total_cmp(&ratio_off(b)))
+    } else {
+        read.outlines.iter().find(|(_, n)| *n).map(|(p, _)| p)
+    };
     let sized = || {
         read.outlines
             .iter()
@@ -920,6 +974,7 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
             method: "view centre",
             why: "no building outline read on the site plan: its view's centre put on the building's (verify where the site work stands)".into(),
             outline: Vec::new(),
+            sheet_outline: Vec::new(),
         };
     };
     let theta = wall_angle(poly);
@@ -989,18 +1044,18 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
             ),
         )
     };
-    Fit { reg: SheetRegistration { method: method.into(), ..reg }, method, why, outline }
+    Fit { reg: SheetRegistration { method: method.into(), ..reg }, method, why, outline, sheet_outline: poly.clone() }
 }
 
 // ---------------- the drawn lines ----------------
 
 /// The drawn lines of a sheet: its pieces joined where they meet or a dashed line runs on.
-struct Net {
+pub(crate) struct Net {
     /// Each piece's line (a group of joined pieces).
-    comp: Vec<usize>,
+    pub comp: Vec<usize>,
     /// The joins: piece end to piece end (`2i` = piece `i`'s start, `2i + 1` its end), and their
     /// lengths.
-    joins: Vec<(usize, usize, f64)>,
+    pub joins: Vec<(usize, usize, f64)>,
 }
 
 fn find(parent: &mut [usize], mut i: usize) -> usize {
@@ -1017,7 +1072,7 @@ fn find(parent: &mut [usize], mut i: usize) -> usize {
     i
 }
 
-fn net(segs: &[Seg], h: f64) -> Net {
+pub(crate) fn net(segs: &[Seg], h: f64) -> Net {
     let r = rules();
     let gap_max = r.line_gap_h * h;
     let break_max = r.line_break_h.max(r.line_gap_h) * h;
@@ -1089,7 +1144,7 @@ fn net(segs: &[Seg], h: f64) -> Net {
 }
 
 /// A drawn line's longest path, as points: its pieces and joins walked end to end.
-fn line_path(segs: &[Seg], members: &[usize], joins: &[(usize, usize, f64)]) -> Vec<[f64; 2]> {
+pub(crate) fn line_path(segs: &[Seg], members: &[usize], joins: &[(usize, usize, f64)]) -> Vec<[f64; 2]> {
     let set: BTreeSet<usize> = members.iter().copied().collect();
     let mut adj: BTreeMap<usize, Vec<(usize, f64)>> = BTreeMap::new();
     let point = |node: usize| segs.get(node / 2).map(|s| if node.is_multiple_of(2) { s.a } else { s.b });
@@ -1205,7 +1260,7 @@ fn same_trench(a: &[[f64; 2]], b: &[[f64; 2]], tol: f64) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(p, q)| dist(*p, *q) <= tol)
 }
 
-fn path_len(pts: &[[f64; 2]]) -> f64 {
+pub(crate) fn path_len(pts: &[[f64; 2]]) -> f64 {
     pts.windows(2)
         .map(|w| match w {
             [a, b] => dist(*a, *b),
@@ -1257,7 +1312,7 @@ pub(crate) struct Built {
     pub called_runs: usize,
 }
 
-fn ft(v: f64) -> String {
+pub(crate) fn ft(v: f64) -> String {
     let r = (v * 10.0).round() / 10.0;
     if (r - r.round()).abs() < 1e-9 { format!("{r:.0}") } else { format!("{r:.1}") }
 }
@@ -2260,7 +2315,8 @@ pub(crate) fn trench_ft(sp: &BuildingSpec) -> BTreeMap<String, (f64, Vec<String>
     let mut seen: Vec<(&str, &[[f64; 2]])> = Vec::new();
     let mut out: BTreeMap<String, (f64, Vec<String>)> = BTreeMap::new();
     for (i, r) in sp.mep.runs.iter().enumerate().take(20_000) {
-        if !r.source_sheet.starts_with(SOURCE_PREFIX) || r.points.len() < 2 || r.top_ft.is_some() {
+        // The civil plan's pipe services have their own trench by their trade (Q6597).
+        if !r.source_sheet.starts_with(SOURCE_PREFIX) || r.points.len() < 2 || r.top_ft.is_some() || super::civilsvc::is_service_system(&r.system) {
             continue;
         }
         if seen.iter().any(|(l, p)| *l == r.level.as_str() && same_trench(p, &r.points, tol)) {

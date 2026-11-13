@@ -13,7 +13,10 @@
 //! - **doors**: the door number printed at the opening, width and height (computed), the rooms
 //!   on its two sides.
 //! - **walls**: the wall type the build gave it (from a wall tag on the plan, else the spec's
-//!   type for its layer: a rule), its height and the rooms on its two sides.
+//!   type for its layer: a rule), its height and the rooms on its two sides; and its type's
+//!   data from the wall type legend (Q6594): the assembly by side, fire rating and tested design,
+//!   acoustic rating, insulation, stud size and spacing, head condition. A wall with no type (or
+//!   a type no legend gives) shows the type data as not stated, saying why.
 //! - **ducts and pipes**: size, system, shape and elevation from their runs (a size read from a
 //!   tag is `print`; a route height that was estimated is `default`).
 //! - **air terminals**: their kind, neck size and the airflow printed beside them (`150 CFM`).
@@ -589,7 +592,8 @@ pub(crate) fn reseat_ceiling_devices(d: &mut Drawing, sp: &BuildingSpec) -> usiz
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
         .filter_map(|e| {
             let level = super::bspec::made_level(e)?.trim().to_ascii_uppercase();
-            let number = super::bimlook::made_tag(e, "number")?.trim().to_ascii_uppercase();
+            // Its number as corrected (Q6593).
+            let number = super::bspec::room_value(e, "number")?.to_ascii_uppercase();
             let ft = super::bimlook::made_tag(e, "ceiling_ft")?.parse::<f64>().ok().filter(|v| v.is_finite())?;
             Some(((level, number), ft))
         })
@@ -2588,6 +2592,133 @@ impl RoomShape {
     }
 }
 
+/// How far past a room's outline an element still counts as its (a device in the wall's face):
+/// feet.
+const ROOM_FOLLOW_FT: f64 = 2.0;
+
+/// One room identity (Q6593): the elements of a room whose label changed (a person or a later
+/// reader set its number or name) take its new label as their `room`. `changed`: each room
+/// element and the labels it had ([`super::bspec::room_element_labels`]: number-or-name, as the
+/// readers fill elements; name and number, as the trade pieces carry it). An element follows when
+/// its `room` is still an old label as found (a person's own value stays), in that label's style,
+/// and it stands in the room's outline on its level, or within [`ROOM_FOLLOW_FT`] of it and in no
+/// other room; the spec's read devices whose element followed take it too. How many elements
+/// followed.
+pub(crate) fn follow_room_labels(d: &mut Drawing, changed: &[(Handle, (String, String))]) -> usize {
+    struct Relabel {
+        level: String,
+        outline: Vec<Vec2>,
+        bounds: Bounds2,
+        /// (old, new) in each style.
+        labels: [(String, String); 2],
+    }
+    let outline_of = |e: &Entity| -> Option<Vec<Vec2>> {
+        let EntityKind::Mesh(m) = &e.kind else { return None };
+        let o: Vec<Vec2> = m.vertices.iter().take(10_000).map(|v| Vec2::new(v.x, v.y)).filter(|p| p.is_finite()).collect();
+        (o.len() >= 3).then_some(o)
+    };
+    let mut moved: Vec<Relabel> = Vec::new();
+    for (h, (old, old_full)) in changed.iter().take(MAX_ELEMENTS) {
+        let Some(e) = d.model.get(*h) else { continue };
+        let Some((new, new_full)) = super::bspec::room_element_labels(e) else { continue };
+        let labels = [(old.trim().to_string(), new), (old_full.trim().to_string(), new_full)];
+        if labels.iter().all(|(o, n)| o.is_empty() || n.eq_ignore_ascii_case(o)) {
+            continue;
+        }
+        let Some(outline) = outline_of(e) else { continue };
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        moved.push(Relabel { level, bounds: Bounds2::from_points(outline.iter().copied()), outline, labels });
+    }
+    if moved.is_empty() {
+        return 0;
+    }
+    let upf = super::elemprops::units_per_foot(d);
+    let reach = ROOM_FOLLOW_FT * upf;
+    // Every room's outline by level: an element just outside the changed room but in another
+    // room is that one's.
+    let others: Vec<(String, Bounds2, Vec<Vec2>)> = d
+        .model
+        .iter()
+        .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
+        .take(MAX_ELEMENTS)
+        .filter_map(|e| {
+            let o = outline_of(e)?;
+            Some((super::bspec::made_level(e).unwrap_or_default(), Bounds2::from_points(o.iter().copied()), o))
+        })
+        .collect();
+    let inside = |b: &Bounds2, o: &[Vec2], p: Vec2| b.contains(p) && cadaddy_geom::point_in_polygon(o, p);
+    // The changed room an element with `label` at `p` stands in, and that label's (old, new); a
+    // trade piece's in the pieces' style first (an unnumbered room's two old labels are one).
+    let room_for = |level: &str, label: &str, p: Vec2, piece: bool| -> Option<&(String, String)> {
+        let mut near: Option<&(String, String)> = None;
+        for m in moved.iter().filter(|m| m.level.eq_ignore_ascii_case(level)) {
+            let [short, full] = &m.labels;
+            let styles = if piece { [full, short] } else { [short, full] };
+            let Some(pair) = styles.into_iter().find(|(o, n)| !o.is_empty() && o.eq_ignore_ascii_case(label) && !n.eq_ignore_ascii_case(o)) else {
+                continue;
+            };
+            if inside(&m.bounds, &m.outline, p) {
+                return Some(pair);
+            }
+            if near.is_none() && m.bounds.expand(reach).contains(p) {
+                near = Some(pair);
+            }
+        }
+        near.filter(|_| !others.iter().any(|(l, b, o)| l.eq_ignore_ascii_case(level) && inside(b, o, p)))
+    };
+    let mut edits: Vec<(Handle, String, String, Option<String>)> = Vec::new();
+    // The built elements (a print set's drawing holds far more objects than these).
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).is_some_and(|p| p != "room")).take(MAX_ELEMENTS) {
+        // Near a changed room first (cheap), then its properties.
+        let Some((lo, hi)) = super::fieldview::mesh_box(e) else { continue };
+        let c = Vec2::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0);
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        if !moved.iter().any(|m| m.level.eq_ignore_ascii_case(&level) && m.bounds.expand(reach).contains(c)) {
+            continue;
+        }
+        let store = props::read(&e.common.xdata);
+        let Some(cur) = store.get("room").filter(|p| p.has_value() && p.source.kind != SourceKind::User).map(Prop::text) else { continue };
+        if let Some((old, new)) = room_for(&level, cur.trim(), c, super::mepatoms::is_atom(e)) {
+            edits.push((e.handle, old.clone(), new.clone(), made(e, DEVID)));
+        }
+    }
+    let mut followed = 0;
+    let mut ids: HashMap<String, (String, String)> = HashMap::new();
+    for (h, old, new, id) in edits {
+        let Some(e) = d.model.get(h) else { continue };
+        let mut store = props::read(&e.common.xdata);
+        let note = "its room's number or name as set on the room";
+        if !store.set("room", Prop::new(new.clone(), Source::computed()).with_note(note)) {
+            continue;
+        }
+        let x = props::write(&e.common.xdata, &store);
+        if d.modify_entity(h, |e| e.common.xdata = x.into()).is_ok() {
+            followed += 1;
+            if let Some(id) = id {
+                ids.insert(id, (old, new));
+            }
+        }
+    }
+    // The read devices in the spec whose element followed: the room each was read in, where it
+    // is the old label.
+    if !ids.is_empty()
+        && let Some(mut sp) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
+    {
+        let mut changed_tags = 0;
+        for t in sp.tags.iter_mut().take(MAX_ELEMENTS) {
+            let Some((old, new)) = ids.get(t.id.as_str()) else { continue };
+            if t.fields.get("room").is_some_and(|f| f.value.trim().eq_ignore_ascii_case(old)) {
+                t.set("room", new.clone(), "computed");
+                changed_tags += 1;
+            }
+        }
+        if changed_tags > 0 {
+            d.building_spec = Some(sp.to_json()).into();
+        }
+    }
+    followed
+}
+
 fn room_label(number: Option<&str>, name: &str) -> String {
     match number.map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) => n.to_string(),
@@ -3229,6 +3360,124 @@ fn window_room<'a>(rooms: &'a [RoomShape], lvl: Option<&str>, b: &Bounds2, upf: 
 /// How many [`SIDE_FT`] steps past its wall's faces a window looks for the room it lights.
 const WINDOW_ROOM_STEPS: u32 = 3;
 
+/// What a wall shows of its type (Q6594): the keys a wall's form asks for that its type gives.
+const WALL_TYPE_KEYS: [&str; 4] = ["assembly", "fire_rating", "stud_size", "stud_spacing"];
+/// A value no document gives (the forms count it missing, with its note as the reason).
+const NOT_STATED: &str = "not stated in the documents";
+
+/// A wall type's build-up face to face, by side: `side 1: 5/8" Type X gypsum board | core: 2x6
+/// wood studs @ 16" o.c. + R-19 batt (in the cavity) | side 2: …`.
+pub(crate) fn assembly_text(a: &cadaddy_walk3d::Assembly) -> String {
+    use cadaddy_walk3d::LayerSide;
+    let mut parts: Vec<String> = Vec::new();
+    for (side, word) in [(LayerSide::Side1, "side 1"), (LayerSide::Core, "core"), (LayerSide::Side2, "side 2")] {
+        let layers: Vec<String> = a
+            .layers
+            .iter()
+            .take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS)
+            .filter(|l| l.side == side)
+            .map(|l| (l.material.trim().chars().take(200).collect::<String>(), l.in_cavity))
+            .filter(|(m, _)| !m.is_empty())
+            .map(|(m, cavity)| if cavity { format!("{m} (in the cavity)") } else { m })
+            .collect();
+        if !layers.is_empty() {
+            parts.push(format!("{word}: {}", layers.join(" + ")));
+        }
+    }
+    parts.join(" | ")
+}
+
+/// A wall's type data as derived properties (Q6594): its build-up by side, fire rating and the
+/// tested design, acoustic rating, insulation, stud size and spacing (as its framing is laid) and
+/// head condition, sourced to the legend. `said`: the plan prints the wall's type (or a person
+/// gave it); else its type is its layer's or a guess and the values are derived by that rule. A
+/// wall with no type, or one whose type no legend gives, shows the form's keys as not stated,
+/// saying why. A person's value stays ([`put`]).
+fn wall_type_data(
+    store: &mut Props,
+    ty: Option<&str>,
+    wt: Option<&cadaddy_walk3d::WallType>,
+    said: bool,
+    own_head: Option<String>,
+    rules: &super::tradeatoms::Rules,
+    tally: &mut BTreeMap<String, usize>,
+) {
+    let Some((wt, a)) = wt.and_then(|w| w.assembly.as_ref().map(|a| (w, a))) else {
+        let why = match ty {
+            Some(t) => format!("wall type {t} has no legend entry: no build-up read for it"),
+            None => "untyped wall: no type tag on the plan, none for its layer and none given by a person".to_string(),
+        };
+        for key in WALL_TYPE_KEYS {
+            put(store, key, Prop::new(NOT_STATED, Source::of(SourceKind::Default)).with_note(&why), tally);
+        }
+        return;
+    };
+    let legend = if a.source.trim().is_empty() { format!("wall type {}", wt.name) } else { a.source.chars().take(200).collect() };
+    let src = if said {
+        Source::from_doc(SourceKind::Legend, &legend)
+    } else {
+        Source::from_doc(SourceKind::Rule, &format!("{legend}; the wall's type is not tagged on the plan (its layer's, or a guess)"))
+    };
+    // The legend's own value takes the wall's source; a rule's or a person's rule keeps its own.
+    let own = |s: Source| if s.kind == SourceKind::Legend { src.clone() } else { s };
+    let assembly = assembly_text(a);
+    if !assembly.is_empty() {
+        put(store, "assembly", Prop::new(assembly, src.clone()), tally);
+    }
+    match a.fire_rating.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => put(store, "fire_rating", Prop::new(r, src.clone()), tally),
+        None => put(store, "fire_rating", Prop::new("not rated", src.clone()).with_note("the legend gives the type no fire rating"), tally),
+    }
+    if let Some(t) = a.notes.iter().take(64).find_map(|n| n.strip_prefix("tested assembly ")).map(str::trim).filter(|t| !t.is_empty()) {
+        put(store, "tested_design", Prop::new(t, src.clone()), tally);
+    }
+    if let Some(r) = a.acoustic_rating.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        put(store, "acoustic_rating", Prop::new(r, src.clone()), tally);
+    }
+    let insulation: Vec<&str> = a
+        .layers
+        .iter()
+        .take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS)
+        .filter(|l| l.category.trim().eq_ignore_ascii_case("insulation"))
+        .map(|l| l.material.trim())
+        .filter(|m| !m.is_empty())
+        .collect();
+    if !insulation.is_empty() {
+        put(store, "insulation", Prop::new(insulation.join(" + "), src.clone()), tally);
+    }
+    match super::tradeatoms::studs_of(wt, rules) {
+        Some(st) => {
+            put(store, "stud_size", Prop::new(st.size, own(st.size_src)), tally);
+            if let Some((g, g_src)) = st.gauge {
+                put(store, "stud_gauge", Prop::new(g, own(g_src)), tally);
+            }
+            put(store, "stud_spacing", Prop::new(round2(st.spacing_in), own(st.spacing_src)).with_unit("in"), tally);
+        }
+        None => {
+            let why = "its type's build-up has no studs (no framing layer: masonry, concrete or none read)";
+            for key in ["stud_size", "stud_spacing"] {
+                put(store, key, Prop::new("n/a", src.clone()).with_note(why), tally);
+            }
+        }
+    }
+    let mut head: Vec<String> = Vec::new();
+    if let Some(h) = a.height {
+        head.push(h.text(a.above_ceiling_in));
+    }
+    if let Some(h) = &a.head {
+        head.push(match h.detail.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+            Some(d) => format!("{} (detail {d})", h.text()),
+            None => h.text(),
+        });
+    }
+    if let Some(o) = own_head.filter(|o| !o.trim().is_empty()) {
+        head.push(format!("this wall's top: {}", o.trim().chars().take(200).collect::<String>()));
+    }
+    if !head.is_empty() {
+        put(store, "head_condition", Prop::new(head.join("; "), src), tally);
+    }
+}
+
 fn made(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tag(e, key).map(str::to_string).filter(|v| !v.trim().is_empty())
 }
@@ -3362,6 +3611,8 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     let doc_order = super::provenance::rule("G-DOC-ORDER").id;
     let no_spec = super::lighting::Sayings::new();
     let mut lum = LuminaireRows::default();
+    // The trade rules a wall type's studs are laid by, read at the first wall.
+    let mut wall_rules: Option<super::tradeatoms::Rules> = None;
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -3681,13 +3932,16 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
             }
             "wall" => {
                 let Some((b, z0, z1)) = ext else { continue };
-                if let Some(t) = made(e, "type") {
+                let made_type = made(e, "type");
+                let mut type_printed = false;
+                if let Some(t) = made_type.clone() {
                     let marked = sp.walls.iter().any(|m| {
                         m.wall_type.eq_ignore_ascii_case(&t)
                             && m.status() == cadaddy_walk3d::MarkStatus::Drawing
                             && lvl.is_some_and(|l| l.eq_ignore_ascii_case(&m.level))
                             && dist_to(&b, Vec2::new((m.a[0] + m.b[0]) / 2.0, (m.a[1] + m.b[1]) / 2.0) + shift) <= upf
                     });
+                    type_printed = marked;
                     let src = if marked {
                         Source::print(&sheet_at(&sp, b.center() - shift, lvl), None)
                     } else {
@@ -3699,6 +3953,17 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         put(&mut store, "thickness", Prop::new(round2(wt.thickness_in), src).with_unit("in"), tally);
                     }
                 }
+                // Its type's data from the legend (Q6594): a person's type for the wall outranks
+                // the build's.
+                let user_type = store
+                    .get("type")
+                    .filter(|p| p.source.kind == SourceKind::User && p.has_value())
+                    .map(|p| p.text().trim().chars().take(250).collect::<String>());
+                let said = user_type.is_some() || type_printed;
+                let ty = user_type.or(made_type);
+                let wt = ty.as_deref().and_then(|t| sp.wall_types.iter().find(|w| w.name.eq_ignore_ascii_case(t)));
+                let rules = wall_rules.get_or_insert_with(|| super::tradeatoms::Rules::of(d, &sp));
+                wall_type_data(&mut store, ty.as_deref(), wt, said, made(e, "head"), rules, tally);
                 if (z1 - z0).is_finite() && z1 > z0 {
                     put(&mut store, "height", Prop::new(round2((z1 - z0) / upf), Source::computed()).with_unit("ft"), tally);
                 }
@@ -3828,6 +4093,40 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         // unit's product, a roof heat pump's as a fan's).
                         if let Some((_, m)) = rows.iter().find(|(k, v)| k.trim().eq_ignore_ascii_case("MODEL") && !v.trim().is_empty()) {
                             put(&mut store, "model", Prop::new(m.trim().to_string(), Source::from_doc(SourceKind::Schedule, &sched)), tally);
+                        }
+                        // A panel's schedule header (Q6591): its bus, main, volts and phase,
+                        // enclosure, AIC and mounting, and the schedule itself; a typical
+                        // schedule's on each panel of its type.
+                        let panel_prop =
+                            rows.iter().find(|(k, v)| k.trim().eq_ignore_ascii_case("PANEL") && !v.trim().is_empty()).map(|(_, v)| v.as_str());
+                        if let Some((ps, typical)) = super::panelheader::schedule_of(&tag, &part, panel_prop, &schedules) {
+                            for (key, p) in super::panelheader::props_of(ps, typical) {
+                                put(&mut store, &key, p, tally);
+                            }
+                        } else if let Some(own) = equipment.get(&tag.to_ascii_uppercase()).filter(|q| !q.circuits.is_empty()) {
+                            // A panel whose circuits its own record holds: that is its schedule.
+                            let ps = cadaddy_walk3d::PanelSchedule {
+                                panel: own.tag.clone(),
+                                source: own.circuits.iter().map(|c| c.source.clone()).find(|s| !s.is_empty()).unwrap_or_default(),
+                                ..Default::default()
+                            };
+                            for (key, p) in super::panelheader::props_of(&ps, false) {
+                                put(&mut store, &key, p, tally);
+                            }
+                        }
+                        // Its gear submittal's catalog parts: its product. Its record's (the gear
+                        // is read after the model is built: an element made before keeps its
+                        // build's tags), else its own.
+                        let record = equipment.get(&tag.to_ascii_uppercase());
+                        let catalog = record
+                            .and_then(|q| q.properties.get(super::gearbuild::CATALOG_PROP))
+                            .or_else(|| rows.iter().find(|(k, _)| k.trim().eq_ignore_ascii_case(super::gearbuild::CATALOG_PROP)).map(|(_, v)| v))
+                            .filter(|c| !c.trim().is_empty());
+                        if let Some(c) = catalog {
+                            let doc = record
+                                .and_then(|q| q.sources.get(super::gearbuild::CATALOG_SOURCE).cloned())
+                                .unwrap_or_else(|| "gear submittal".into());
+                            put(&mut store, "catalog_number", Prop::new(c.trim().to_string(), Source::from_doc(SourceKind::Submittal, &doc)), tally);
                         }
                         // Its room: the one it stands in; set in or through a wall (a through-wall
                         // unit, its middle in the wall), the room on its service face (Q6586).
