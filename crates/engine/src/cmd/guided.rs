@@ -23506,9 +23506,10 @@ fn doc_objects_step(
     let mut spares_taken: BTreeMap<String, usize> = BTreeMap::new();
     // Connections only a rule calls for (no document draws or names them): proposed.
     let mut rule_only: Vec<String> = Vec::new();
-    // The model's receptacles (handle, level, point, circuit): a typical room's keynote object's
-    // receptacle is the one drawn at its marker, when there is one (Q6547).
-    let receptacles: Vec<(cadaddy_doc::Handle, String, Vec2, String)> = if found.iter().any(|f| !f.typical.is_empty()) {
+    // The model's receptacles (handle, level, point, circuit, room): a typical room's keynote
+    // object's receptacle is the one drawn at its marker, when there is one (Q6547).
+    #[allow(clippy::type_complexity)]
+    let receptacles: Vec<(cadaddy_doc::Handle, String, Vec2, String, String)> = if found.iter().any(|f| !f.typical.is_empty()) {
         let d = s.doc()?;
         d.model
             .iter()
@@ -23523,20 +23524,73 @@ fn doc_objects_step(
                 if b.is_empty() {
                     return None;
                 }
-                let circuit = cadaddy_doc::props::read(&e.common.xdata).get("circuit").map(|p| p.text()).unwrap_or_default();
-                Some((e.handle, level, b.center() - super::bspec::stacked_by(e), circuit))
+                let ps = cadaddy_doc::props::read(&e.common.xdata);
+                let text = |k: &str| ps.get(k).map(|p| p.text()).unwrap_or_default();
+                Some((e.handle, level, b.center() - super::bspec::stacked_by(e), text("circuit"), text("room")))
             })
             .take(200_000)
             .collect()
     } else {
         Vec::new()
     };
-    let mut receptacles_taken: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
+    // Which object's receptacle note it is (`PROVIDE 30A 120V RECEPTACLE FOR RANGE` at a typical
+    // room's marker), with the receptacle the note asks for.
+    let asked_of = |f: &Found| {
+        let class = dob::class_by_kind(&f.kind)?;
+        let via = if f.via.is_empty() { class.connection.as_str() } else { f.via.as_str() };
+        f.keynote
+            .as_ref()
+            .filter(|_| !f.typical.is_empty() && via == "power")
+            .and_then(|(_, t)| super::keynotes::object_receptacle(t, &class.kind, &class.name).map(|rc| (rc, t.clone())))
+    };
+    // A typical room's view and keynote (one object in each room of its type).
+    let view_of = |f: &Found| {
+        format!("{} {}", f.typical.rsplit_once(", room ").map_or(f.typical.as_str(), |(v, _)| v), f.keynote.as_ref().map_or("", |k| k.0.as_str()))
+    };
+    // Each one's receptacle: the one drawn nearest its marker within reach, each once; in a room
+    // whose copy of the view lies off (where the view's other rooms have theirs at the marker),
+    // the room's own nearest within a wider reach. None found there: asked, never one more built.
+    let mut drawn_of: Vec<Option<usize>> = vec![None; found.len()];
+    let mut taken: BTreeSet<usize> = BTreeSet::new();
+    let asks: Vec<bool> = found.iter().map(|f| asked_of(f).is_some()).collect();
+    let nearest = |f: &Found, reach: f64, own_room: bool, taken: &BTreeSet<usize>| {
+        receptacles
+            .iter()
+            .enumerate()
+            .filter(|(j, (_, l, p, _, room))| {
+                !taken.contains(j) && same_level_name(l, &f.level) && (*p - f.at).len() <= reach && (!own_room || room.eq_ignore_ascii_case(&f.room))
+            })
+            .min_by(|a, b| (a.1.2 - f.at).len().total_cmp(&(b.1.2 - f.at).len()))
+            .map(|(j, _)| j)
+    };
+    for (i, f) in found.iter().enumerate().filter(|(i, _)| asks.get(*i).copied().unwrap_or(false)) {
+        if let Some(j) = nearest(f, r.receptacle_reach_ft.max(0.0) * upf, false, &taken) {
+            taken.insert(j);
+            if let Some(d) = drawn_of.get_mut(i) {
+                *d = Some(j);
+            }
+        }
+    }
+    let views_drawn: BTreeSet<String> = found.iter().zip(&drawn_of).filter(|(_, d)| d.is_some()).map(|(f, _)| view_of(f)).collect();
+    let mut unfound: Vec<String> = Vec::new();
+    for (i, f) in found.iter().enumerate().filter(|(i, _)| asks.get(*i).copied().unwrap_or(false)) {
+        if drawn_of.get(i).is_some_and(Option::is_none) && views_drawn.contains(&view_of(f)) && !f.room.is_empty() {
+            match nearest(f, RECEPTACLE_OWN_ROOM_REACH * r.receptacle_reach_ft.max(0.0) * upf, true, &taken) {
+                Some(j) => {
+                    taken.insert(j);
+                    if let Some(d) = drawn_of.get_mut(i) {
+                        *d = Some(j);
+                    }
+                }
+                None => unfound.push(format!("{} {} ({})", f.level, f.room, view_of(f))),
+            }
+        }
+    }
     // (the drawn receptacle, the object's tag and name, the note's rating and mounting, the note)
     let mut receptacle_fixes: Vec<(cadaddy_doc::Handle, String, String, String, String, String)> = Vec::new();
     let mut receptacles_built = 0usize;
     let loads = sp.mep.load_summaries.clone();
-    for f in &found {
+    for (fi, f) in found.iter().enumerate() {
         let Some(class) = dob::class_by_kind(&f.kind) else { continue };
         // A tag read off the plan keeps its code; another object is named by its kind (never
         // initials: `RD` would read as another kind's code).
@@ -23666,24 +23720,22 @@ fn doc_objects_step(
         let mut conn: Value = Value::Null;
         // A typical room's keynote calling for the object's receptacle (`PROVIDE 30A 120V
         // RECEPTACLE FOR RANGE`): the receptacle the plan draws at its marker is it, the note's
-        // rating corrected onto it; with none drawn there, one of that rating is built (Q6547).
-        let asked = f
-            .keynote
-            .as_ref()
-            .filter(|_| !f.typical.is_empty() && via == "power")
-            .and_then(|(_, t)| super::keynotes::object_receptacle(t, &class.kind, &class.name).map(|rc| (rc, t.clone())));
-        let drawn = asked.as_ref().and_then(|_| {
-            let reach = r.receptacle_reach_ft.max(0.0) * upf;
-            receptacles
-                .iter()
-                .filter(|(h, l, p, _)| !receptacles_taken.contains(h) && same_level_name(l, &f.level) && (*p - f.at).len() <= reach)
-                .min_by(|a, b| (a.2 - f.at).len().total_cmp(&(b.2 - f.at).len()))
-        });
+        // rating corrected onto it; where the view draws none, one of that rating is built; where
+        // it does and this room's isn't found, asked (Q6547).
+        let asked = asked_of(f);
+        let drawn = drawn_of.get(fi).copied().flatten().and_then(|j| receptacles.get(j));
+        let not_found = asked.is_some() && drawn.is_none() && views_drawn.contains(&view_of(f));
         let note_cite = f.keynote.as_ref().map(|(n, t)| format!("{} keynote {n}: {t}", f.sheet)).unwrap_or_default();
         let mounting = asked.as_ref().map(|(_, t)| mount_sentence(t, &r.mount_words)).unwrap_or_default();
         let rating = asked.as_ref().and_then(|(rc, _)| rc.rating()).unwrap_or_default();
-        if let Some((h, _, _, circuit)) = drawn {
-            receptacles_taken.insert(*h);
+        if not_found {
+            props.insert(
+                "REVIEW".into(),
+                format!("its typical view draws its receptacle at the marker; none is found by it in this room, so none is built twice: check its place ({note_cite})"),
+            );
+            conn = json!({"via": "power", "receptacle": null, "review": "the view's receptacle is not found in this room", "source": note_cite});
+        }
+        if let Some((h, _, _, circuit, _)) = drawn {
             let what = if rating.is_empty() { String::new() } else { format!(", {rating} by its note") };
             props.insert("RECEPTACLE".into(), format!("{} (drawn at its marker{what})", h.hex()));
             if !circuit.is_empty() {
@@ -23743,7 +23795,7 @@ fn doc_objects_step(
             btag
         };
         match via.as_str() {
-            "power" if drawn.is_some() => {}
+            "power" if drawn.is_some() || not_found => {}
             "power" => {
                 let pc = circuit_of(&f.via_source, &panels);
                 let mut extra = BTreeMap::new();
@@ -24000,6 +24052,20 @@ fn doc_objects_step(
             false,
         );
     }
+    if !unfound.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} typical room object(s): the receptacle their view draws at the keynote's marker is not found in the room", unfound.len()),
+            &format!(
+                "each object is built; its receptacle is the one the view draws, so none is built twice; the room's copy of the view lies off where it is not found: {}",
+                unfound.iter().take(12).cloned().collect::<Vec<_>>().join("; ")
+            ),
+            1,
+            vec!["Check the room's receptacle against its typical view".into()],
+            None,
+            false,
+        );
+    }
     if !rule_only.is_empty() {
         job.add_finding(
             StageName::BimBuild,
@@ -24046,8 +24112,9 @@ fn doc_objects_step(
     ));
     if typical_read > 0 {
         progress_line(&format!(
-            "  typical rooms' keynote objects: {typical_read} laid into rooms, built {typical_built:?}; their receptacles: {} drawn at the marker (rating corrected), {receptacles_built} built; load calculation: {}",
+            "  typical rooms' keynote objects: {typical_read} laid into rooms, built {typical_built:?}; their receptacles: {} drawn at the marker (rating corrected), {receptacles_built} built, {} not found in their room (asked); load calculation: {}",
             receptacle_fixes.len(),
+            unfound.len(),
             load_checks
                 .iter()
                 .map(|c| format!("{} {} vs {}", c["kind"].as_str().unwrap_or(""), c["built"], c["load_calculation"]))
@@ -24063,6 +24130,7 @@ fn doc_objects_step(
         "note_counts_differ": note_counts_differ,
         "typical_room_keynotes": {
             "read": typical_read, "built": typical_built, "receptacles_drawn": receptacle_fixes.len(), "receptacles_built": receptacles_built,
+            "receptacles_not_found": unfound,
             "load_calculation": load_checks,
         },
     });
@@ -24102,6 +24170,10 @@ fn into_own_room(q: cadaddy_geom::Vec2, outline: &[cadaddy_geom::Vec2], step: f6
     }
     (1..=12).map(|i| q + to * ((f64::from(i) * step).min(len) / len)).find(|p| cadaddy_geom::point_in_polygon(outline, *p)).unwrap_or(q)
 }
+
+/// A typical room's keynote object whose room's copy of the view lies off: its receptacle is the
+/// room's own nearest within this many times the rules' reach.
+const RECEPTACLE_OWN_ROOM_REACH: f64 = 3.0;
 
 /// How far past a typical room's view a keynote marker may stand and still be its (a share of the
 /// view's smaller side): a marker is often lettered on the unit's wall line, at the view's edge.
