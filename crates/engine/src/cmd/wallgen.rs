@@ -796,10 +796,15 @@ pub(crate) fn shells(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> Vec<Stor
 
 /// A storey's floor to trace its rooms on ([`Floors`]): its walls planned as `model.build` plans
 /// them, inside its shell, its circulation (`sp.circulation`) taken. None for the roof, a storey
-/// whose walls don't close round the building, or one whose circulation wasn't traced (its shell
-/// wasn't trusted).
+/// whose walls don't close round the building, or one whose shell wasn't trusted: neither its
+/// circulation traced nor its shell kept in the spec (`sp.shells`). A small building with no
+/// corridor, stair or hoistway has a trusted shell and no circulation: its rooms are traced on
+/// its floor too (Q6413), not round their tags on the plan's linework (dimension strings, leaders
+/// and notes across it).
 pub(crate) fn room_floors(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level: &str) -> Option<Floors> {
-    if !sp.circulation.iter().any(|c| c.level.eq_ignore_ascii_case(level)) {
+    let traced = sp.circulation.iter().any(|c| c.level.eq_ignore_ascii_case(level));
+    let trusted = sp.shells.iter().any(|(l, rects)| l.eq_ignore_ascii_case(level) && !rects.is_empty());
+    if !traced && !trusted {
         return None;
     }
     let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
