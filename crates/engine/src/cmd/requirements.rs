@@ -515,7 +515,15 @@ fn from_build(rules: &Rules, r: &Requirement, report: Option<&super::breakers::R
     };
     let kinds = lower(&r.build_kinds);
     let breaker_side = kinds.iter().any(|k| k == "row_no_plan");
-    out.objects = if breaker_side { rep.breakers + rep.spares } else { rep.devices_linked + rep.devices_unlinked };
+    // The objects the step looked at: its breakers, its panels' schedules, or the devices on
+    // the plans' circuits.
+    out.objects = if breaker_side {
+        rep.breakers + rep.spares
+    } else if kinds.iter().any(|k| k == "no_panel") {
+        rep.panels.len() + rep.schedules_without_panel.len()
+    } else {
+        rep.devices_linked + rep.devices_unlinked
+    };
     for m in rep.mismatches.iter().filter(|m| kinds.contains(&m.kind.to_ascii_lowercase())) {
         out.missing += if breaker_side { 1 } else { m.devices.max(1) };
         if ev.rfis.len() >= MAX_RAISED {
@@ -541,6 +549,8 @@ fn from_build(rules: &Rules, r: &Requirement, report: Option<&super::breakers::R
         rfi.before = if rules.steps.iter().any(|s| s.id == r.step) { r.step.clone() } else { rules.default_step.clone() };
         ev.rfis.push(rfi);
     }
+    out.missing = out.missing.min(out.objects);
+    out.documented = out.objects - out.missing;
     ev.outcomes.push(out);
 }
 

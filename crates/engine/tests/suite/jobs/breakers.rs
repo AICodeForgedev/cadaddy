@@ -374,7 +374,10 @@ fn plan_circuits_and_rows_that_dont_meet_are_rfis_the_build_raises() {
     assert_eq!(sched["ran"], true, "{sched}");
     assert!(sched["findings"].as_u64().unwrap() >= 1 && sched["objects"].as_u64().unwrap() > 0, "{sched}");
     assert!(check("E-BREAKER-LOAD")["findings"].as_u64().unwrap() >= 2, "{}", check("E-BREAKER-LOAD"));
-    assert_eq!(check("E-SCHEDULE-PANEL")["findings"], 1, "{}", check("E-SCHEDULE-PANEL"));
+    let panels = check("E-SCHEDULE-PANEL");
+    assert_eq!(panels["findings"], 1, "{panels}");
+    assert_eq!(panels["objects"].as_u64().unwrap(), panels["met_by_documents"].as_u64().unwrap() + 1, "the schedules, one with no panel: {panels}");
+    assert_eq!(sched["objects"].as_u64().unwrap(), sched["met_by_documents"].as_u64().unwrap() + sched["missing"].as_u64().unwrap(), "{sched}");
     let list = s.execute("rfi.list", &json!({"kind": "requirement"})).expect("list");
     let items = list["items"].as_array().expect("items");
     let lp19 = items.iter().find(|i| i["about"] == "panel LP1 circuit LP1-9").cloned().expect("LP1-9");
