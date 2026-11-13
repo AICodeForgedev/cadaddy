@@ -376,13 +376,13 @@ fn fit_ratio(ratio: f64) -> f64 {
 }
 
 /// The ratio a sheet is fitted onto its level's plan at: the plan's drawing units per foot over
-/// the sheet's (each the scale its sheet came in at times the scale its plans print), 1 when
-/// either is unknown.
-pub(crate) fn scale_ratio(plan_upf: Option<f64>, sheet_upf: Option<f64>) -> f64 {
-    match (plan_upf, sheet_upf) {
-        (Some(p), Some(q)) if p.is_finite() && q.is_finite() && p > 0.0 && q > 0.0 => fit_ratio(p / q),
-        _ => 1.0,
-    }
+/// the sheet's (each the scale its sheet came in at times the scale its plans print). A side
+/// whose import recorded no plan print scale (a sheet of one scale, read at it) stands at the
+/// job's `job_upf`, so 1 only when both sides are at the job's scale (a sheet of one note was
+/// tried one to one against a plan at another scale, and left out); outside the ratios tried, 1.
+pub(crate) fn scale_ratio(plan_upf: Option<f64>, sheet_upf: Option<f64>, job_upf: f64) -> f64 {
+    let at = |u: Option<f64>| u.filter(|u| u.is_finite() && *u > 0.0).unwrap_or(job_upf);
+    fit_ratio(at(plan_upf) / at(sheet_upf))
 }
 
 /// Most texts looked at for the parts of the site a sheet names.
@@ -597,11 +597,24 @@ mod tests {
 
     #[test]
     fn a_misread_ratio_is_one_to_one() {
-        assert_eq!(scale_ratio(Some(12.0), Some(12.0)), 1.0);
-        assert_eq!(scale_ratio(Some(1.0), Some(1000.0)), 1.0, "a thousandth is a misread note");
-        assert_eq!(scale_ratio(Some(f64::NAN), Some(12.0)), 1.0);
-        assert_eq!(scale_ratio(Some(-3.0), Some(12.0)), 1.0);
-        assert_eq!(scale_ratio(Some(24.0), Some(12.0)), 2.0);
+        assert_eq!(scale_ratio(Some(12.0), Some(12.0), 12.0), 1.0);
+        assert_eq!(scale_ratio(Some(1.0), Some(1000.0), 12.0), 1.0, "a thousandth is a misread note");
+        assert_eq!(scale_ratio(Some(f64::NAN), Some(12.0), 12.0), 1.0);
+        assert_eq!(scale_ratio(Some(-3.0), Some(12.0), 12.0), 1.0);
+        assert_eq!(scale_ratio(Some(24.0), Some(12.0), 12.0), 2.0);
+        assert_eq!(scale_ratio(Some(6.0), Some(12.0), f64::NAN), 0.5);
+        assert_eq!(scale_ratio(None, None, f64::NAN), 1.0);
+    }
+
+    /// fix-plan-scale-ratio-none-means-one: a side with no recorded plan print scale stands at
+    /// the job's units per foot, never "unknown, so one to one".
+    #[test]
+    fn a_side_of_one_scale_stands_at_the_jobs_units_per_foot() {
+        assert_eq!(scale_ratio(Some(6.0), None, 12.0), 0.5, "a plan at half the job's scale, a sheet of one note");
+        assert_eq!(scale_ratio(None, Some(48.0), 12.0), 0.25, "a plan at the job's scale, a sheet read at four times it");
+        assert_eq!(scale_ratio(None, None, 12.0), 1.0, "both at the job's scale");
+        assert_eq!(scale_ratio(Some(12.0), None, 12.0), 1.0);
+        assert_eq!(scale_ratio(Some(f64::NAN), None, 12.0), 1.0, "an unreadable record is the job's scale");
     }
 
     #[test]
