@@ -307,7 +307,8 @@ const WINDOW_TOL_IN: f64 = 0.5;
 const PAST_FACE_IN: f64 = 3.0;
 
 /// The built windows not in an outside wall (Q6308): a window's pane lies in the thickness of a
-/// wall parallel to it ("window_not_in_wall" when none holds it), and that wall has the outside
+/// wall parallel to it, the wall's extent across it, a full-height cut's too (Q6461)
+/// ("window_not_in_wall" when none holds it), and that wall has the outside
 /// beyond one face: no wall past it that way, or no floor just past that face (a courtyard)
 /// ("window_inside_building" when walls stand past both faces over the level's floor: a corridor,
 /// a line pair against the outside wall's inside face). `upf`: drawing units per foot.
@@ -323,17 +324,31 @@ fn windows_off_walls(made: &[Built], upf: f64) -> Vec<Finding> {
         let u = (e - a) * (1.0 / len);
         let (mid, nrm) = ((a + e) * 0.5, u.perp());
         let level_walls = || walls.iter().filter(|(l, _)| l.eq_ignore_ascii_case(&b.level)).flat_map(|(_, bx)| bx.iter());
-        // Its host: a wall box along it whose thickness holds the pane's ends.
-        let host = level_walls()
-            .filter(|(wa, wb, wt)| {
-                let wl = wa.dist(*wb);
-                let wu = (*wb - *wa) * (1.0 / wl);
-                let within = |p: Vec2| wu.perp().dot(p - *wa).abs() <= wt / 2.0 + WINDOW_TOL_IN * k;
-                let s = wu.dot(mid - *wa);
-                u.cross(wu).abs() <= 0.09 && within(a) && within(e) && s >= -WINDOW_TOL_IN * k && s <= wl + WINDOW_TOL_IN * k
-            })
-            .map(|(_, _, wt)| *wt)
-            .fold(None, |m: Option<f64>, t| Some(m.map_or(t, |x| x.max(t))));
+        // Its host is the wall it is cut in, read off the wall's extent, not the solid left by
+        // the cut: a box along it whose thickness holds the pane's ends and whose length holds
+        // its middle (the sill or head box across the cut); or, where the cut leaves no box
+        // across it (a storefront, glazing floor to top: no sill, the head at the top), wall
+        // standing at both its jambs (the wall each side of the cut, two walls in line either
+        // side of the gap, the wall across a corner), one of them a box along it.
+        let tol = WINDOW_TOL_IN * k;
+        let holds = |&(wa, wb, wt): &(Vec2, Vec2, f64), p: Vec2| {
+            let wl = wa.dist(wb);
+            let wu = (wb - wa) * (1.0 / wl);
+            let s = wu.dot(p - wa);
+            wl > 1e-12 && wu.perp().dot(p - wa).abs() <= wt / 2.0 + tol && s >= -tol && s <= wl + tol
+        };
+        let along = |&(wa, wb, wt): &(Vec2, Vec2, f64)| {
+            let wu = (wb - wa) * (1.0 / wa.dist(wb));
+            let within = |p: Vec2| wu.perp().dot(p - wa).abs() <= wt / 2.0 + tol;
+            u.cross(wu).abs() <= 0.09 && within(a) && within(e)
+        };
+        // (The jambs only where no box spans it: a thicker wall abutting a jamb of a window whose
+        // own wall holds it isn't its host.)
+        let thickest = |m: Option<f64>, &(_, _, t): &(Vec2, Vec2, f64)| Some(m.map_or(t, |x: f64| x.max(t)));
+        let host = level_walls().filter(|w| along(w) && holds(w, mid)).fold(None, thickest).or_else(|| {
+            let jambed = level_walls().any(|w| holds(w, a)) && level_walls().any(|w| holds(w, e));
+            level_walls().filter(|w| jambed && along(w) && (holds(w, a) || holds(w, e))).fold(None, thickest)
+        });
         let at = Some(mid).filter(|p| p.is_finite());
         let Some(host_t) = host else {
             out.push(Finding {
@@ -1599,6 +1614,80 @@ mod tests {
             built_box("window", 8, &[((100.0, 120.0), (148.0, 120.0), 0.5)]),
         ];
         assert!(kinds(&court).is_empty(), "{:?}", kinds(&court));
+    }
+
+    /// What a build makes of the wall `a`–`b` (6" thick, 100" high) with one window cut in it
+    /// (`cut`: from, to, sill, head), as built objects on L1.
+    fn built_wall_with_window(h: u64, a: (f64, f64), b: (f64, f64), cut: (f64, f64, f64, f64)) -> Vec<Built> {
+        super::super::wallgen::wall_with_window(Vec2::new(a.0, a.1), Vec2::new(b.0, b.1), 6.0, 100.0, cut)
+            .into_iter()
+            .zip(h..)
+            .map(|((part, mesh), h)| Built { handle: Handle(h), part: part.into(), level: "L1".into(), source: Handle(h + 1000), mesh })
+            .collect()
+    }
+
+    #[test]
+    fn a_window_cut_full_height_in_an_outside_wall_is_in_that_wall() {
+        // The building of the test above, its south wall as a build makes it with a window cut.
+        let shell = |south: Vec<Built>, extra: Vec<Built>| {
+            let mut v = vec![
+                built_box("wall", 2, &[((0.0, 240.0), (240.0, 240.0), 6.0)]),
+                built_box("wall", 3, &[((0.0, 0.0), (0.0, 240.0), 6.0)]),
+                built_box("wall", 4, &[((240.0, 0.0), (240.0, 240.0), 6.0)]),
+                built_box("wall", 5, &[((3.0, 120.0), (237.0, 120.0), 6.0)]),
+                built_box("floor", 6, &[((-3.0, 120.0), (243.0, 120.0), 246.0)]),
+            ];
+            v.extend(south);
+            v.extend(extra);
+            v
+        };
+        let kinds = |made: &[Built]| windows_off_walls(made, 12.0).into_iter().map(|f| f.kind).collect::<Vec<_>>();
+        // Storefront and floor-to-top glazing (sill 0, head at or over the top: no box left across
+        // the cut), a window to the top, and a common one: each in the wall it is cut in. Then
+        // full height at the wall's end, against the corner wall across it; and full height in the
+        // gap between two walls in line, each built as a wall of its own.
+        let mut cases: Vec<(String, Vec<Built>)> = [(0.0, 100.0), (0.0, 120.0), (36.0, 100.0), (36.0, 84.0)]
+            .into_iter()
+            .map(|(sill, head)| {
+                let south = built_wall_with_window(10, (0.0, 0.0), (240.0, 0.0), (100.0, 148.0, sill, head));
+                (format!("sill {sill} head {head}"), shell(south, Vec::new()))
+            })
+            .collect();
+        cases.push(("at the corner".into(), shell(built_wall_with_window(10, (0.0, 0.0), (240.0, 0.0), (192.0, 240.0, 0.0, 100.0)), Vec::new())));
+        cases.push((
+            "between two walls".into(),
+            shell(
+                vec![built_box("wall", 1, &[((0.0, 0.0), (100.0, 0.0), 6.0)]), built_box("wall", 7, &[((148.0, 0.0), (240.0, 0.0), 6.0)])],
+                vec![built_box("window", 8, &[((100.0, 0.0), (148.0, 0.0), 0.5)])],
+            ),
+        ));
+        let wrong: Vec<(String, Vec<&str>)> = cases
+            .iter()
+            .inspect(|(c, made)| assert!(made.iter().any(|b| b.part == "window"), "{c}: the window was built"))
+            .map(|(c, made)| (c.clone(), kinds(made)))
+            .filter(|(_, k)| !k.is_empty())
+            .collect();
+        assert!(wrong.is_empty(), "{} of {} windows in a wall reported: {wrong:?}", wrong.len(), cases.len());
+        // Still in no wall: in line with a stub wall but clear of it, and against it at one end
+        // with nothing at the other.
+        let south = || vec![built_box("wall", 1, &[((0.0, 0.0), (240.0, 0.0), 6.0)])];
+        let stub = || built_box("wall", 7, &[((3.0, 60.0), (60.0, 60.0), 6.0)]);
+        let clear = shell(south(), vec![stub(), built_box("window", 8, &[((100.0, 60.0), (148.0, 60.0), 0.5)])]);
+        assert_eq!(kinds(&clear), vec!["window_not_in_wall"]);
+        let one_end = shell(south(), vec![stub(), built_box("window", 8, &[((60.0, 60.0), (108.0, 60.0), 0.5)])]);
+        assert_eq!(kinds(&one_end), vec!["window_not_in_wall"]);
+        // A window its own wall holds across (the 5" line pair against the south wall's inside
+        // face) keeps that wall as its host when a thicker wall abuts one of its jambs: still
+        // inside the building.
+        let abutted = shell(
+            south(),
+            vec![
+                built_box("wall", 7, &[((100.0, 5.75), (148.0, 5.75), 5.0)]),
+                built_box("wall", 9, &[((148.0, 5.75), (200.0, 5.75), 16.0)]),
+                built_box("window", 8, &[((100.0, 5.75), (148.0, 5.75), 0.5)]),
+            ],
+        );
+        assert_eq!(kinds(&abutted), vec!["window_inside_building"]);
     }
 
     #[test]
