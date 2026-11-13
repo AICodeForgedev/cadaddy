@@ -1177,9 +1177,11 @@ pub fn sheet_scales(d: &Drawing) -> Option<SheetScales> {
 
 /// The title of a view that is no plan (a detail, a section, an elevation) printing `k` sheet
 /// inches per foot, when only such views print it on a drawing of one sheet: every scale note
-/// giving `k` (within `tolerance`, relative) stands under a view title naming no plan
-/// ([`names_a_plan`]), none stands alone (in the title block, under no title) and none under a
-/// plan's title. `None` otherwise: the reading is the plans', or nothing tells (Q6518: a
+/// giving `k` (within `tolerance`, relative) stands under a view title that says it is no plan
+/// (a word of `sheets.not_plan_view_words`, [`crate::sheet_reader::names_no_plan`]); none
+/// stands alone (in the title block, under no title) or under any other title. A title that names
+/// neither may be the plan's (`PLUMBING 1ST FLOOR - SANITARY`, `LOW VOLTAGE - 3RD FLOOR` title
+/// plans with no PLAN in them). `None` otherwise: the reading may be the plans' (Q6518: a
 /// ceiling plan whose own note didn't read came in at its three details' 3" = 1'-0").
 pub fn only_other_views_print(d: &Drawing, k: f64, tolerance: f64) -> Option<String> {
     if !(k.is_finite() && k > 0.0) {
@@ -1188,7 +1190,7 @@ pub fn only_other_views_print(d: &Drawing, k: f64, tolerance: f64) -> Option<Str
     let t = texts(d);
     let (_, notes) = views_and_notes(d, &t);
     let giving: Vec<&ScaleNote> = notes.iter().filter(|n| n.scale.is_some_and(|s| (s / k - 1.0).abs() <= tolerance)).collect();
-    if giving.iter().any(|n| n.view.as_deref().is_none_or(names_a_plan)) {
+    if giving.iter().any(|n| n.view.as_deref().is_none_or(|v| !crate::sheet_reader::names_no_plan(v))) {
         return None;
     }
     giving.first().and_then(|n| n.view.clone())
@@ -1331,6 +1333,12 @@ mod tests {
         let mut alone = d.clone();
         text(&mut alone, "SCALE: 3\" = 1'-0\"", 80.0, 0.5, 0.12);
         assert_eq!(only_other_views_print(&alone, 3.0, 0.02), None);
+        // a view titled with no word of either (a trade's plan of a floor titled by its trade and
+        // floor): it may be the plan's
+        let mut untold = d.clone();
+        text(&mut untold, "PLUMBING 1ST FLOOR - SANITARY", 60.0, 2.0, 0.25);
+        text(&mut untold, "SCALE: 3\" = 1'-0\"", 60.0, 1.6, 0.12);
+        assert_eq!(only_other_views_print(&untold, 3.0, 0.02), None);
         // a plan view printing it: the plans'
         let mut plan = Drawing::default();
         text(&mut plan, "ENLARGED PLAN", 0.0, 2.0, 0.25);
