@@ -1872,7 +1872,7 @@ mod tests {
         super::super::wallgen::wall_with_window(Vec2::new(a.0, a.1), Vec2::new(b.0, b.1), 6.0, 100.0, cut)
             .into_iter()
             .zip(h..)
-            .map(|((part, mesh), h)| Built { handle: Handle(h), part: part.into(), level: "L1".into(), source: Handle(h + 1000), mesh })
+            .map(|((part, mesh), h)| Built { handle: Handle(h), part: part.into(), level: "L1".into(), name: String::new(), source: Handle(h + 1000), mesh })
             .collect()
     }
 
