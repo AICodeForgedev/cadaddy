@@ -267,6 +267,11 @@ fn edit_and_remove_work_on_one_part_of_every_section() {
     edit_unchanged(&mut h, "2 walls: ", &at(&s, "/walls"));
     let mut want = s.clone();
     want.as_object_mut().map(|o| o.remove("walls"));
+    // The wall list's walls removed are kept as wall edits, so a build doesn't bring them back.
+    want["wall_edits"] = json!([
+        {"id": "WE-1", "op": "delete", "level": "L1", "from": [[0.0, 0.0], [10.0, 0.0]], "wall_type": "WT1", "by": "user", "via": "wall list"},
+        {"id": "WE-2", "op": "delete", "level": "L1", "from": [[0.0, 0.0], [0.0, 10.0]], "wall_type": "WT1", "by": "user", "via": "wall list"}
+    ]);
     remove(&mut h, "2 walls: ", &want);
     edit_unchanged(&mut h, "Materials: ", &at(&s, "/materials"));
     want["materials"] = json!({});
