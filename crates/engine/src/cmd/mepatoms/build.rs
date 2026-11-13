@@ -51,6 +51,11 @@ struct DevBox {
     circuit: String,
     /// The point a run enters it at (its top centre; a floor box's: its centre).
     entry: Vec3,
+    /// Its top's long way (plan unit vector), width there and height (sheet units): where the
+    /// knockouts of the runs entering it stand side by side (Q6552).
+    along: Vec2,
+    width: f64,
+    height: f64,
     atom: usize,
     /// The device's own top centre: where the router ends the device's runs (a gang box sits
     /// at its first device; the others' runs end at their own device).
@@ -1501,7 +1506,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         gangs.push(hs);
     }
     // Each ganged group's box once made: its atom and the point its runs enter it.
-    let mut gang_box: HashMap<usize, (usize, Vec3)> = HashMap::new();
+    let mut gang_box: HashMap<usize, (usize, Vec3, Vec2, f64, f64)> = HashMap::new();
     let centre_of: HashMap<Handle, (Vec2, f64)> = devices.iter().map(|(h, _, _, _, plan, z0, z1)| (*h, (plan.center(), (z0 + z1) / 2.0))).collect();
     // The boxes made, by why (the device's kind, ganged or alone), and the devices in a shared one.
     let mut box_reasons: BTreeMap<String, usize> = BTreeMap::new();
@@ -1594,7 +1599,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // A device ganged with its neighbours: in their one box, once it is made.
         let gang = gang_of.get(h).copied();
         let members: &[Handle] = gang.and_then(|g| gangs.get(g)).map_or(&[], Vec::as_slice);
-        if let Some((bi, entry)) = gang.and_then(|g| gang_box.get(&g)).copied() {
+        if let Some((bi, entry, along, width, height)) = gang.and_then(|g| gang_box.get(&g)).copied() {
             external.push((bi, *h));
             let c = plan.center();
             boxes.push(DevBox {
@@ -1602,6 +1607,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 level: level.clone(),
                 circuit,
                 entry,
+                along,
+                width,
+                height,
                 atom: bi,
                 at: Vec3::new(c.x, c.y, *z1),
                 drawn: moved_for_field(ps, upf).map(|m| Vec3::new(c.x - m.x, c.y - m.y, *z1)),
@@ -1774,7 +1782,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         atoms.push((a, ctx.clone()));
         external.push((bi, *h));
         if let Some(g) = gang {
-            gang_box.insert(g, (bi, entry));
+            gang_box.insert(g, (bi, entry, along, bw, bh));
             ganged_devices += 1;
         }
         let why = if lv_bracket.is_some() {
@@ -1847,6 +1855,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             level: level.clone(),
             circuit,
             entry,
+            along,
+            width: bw,
+            height: bh,
             atom: bi,
             at: Vec3::new(c.x, c.y, *z1),
             drawn: moved_for_field(ps, upf).map(|m| Vec3::new(c.x - m.x, c.y - m.y, *z1)),
@@ -2193,6 +2204,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let panel_reach = rl.panel_reach_ft.max(0.0) * upf;
     let mut taken: BTreeSet<usize> = BTreeSet::new();
     let mut taken_direct: BTreeSet<usize> = BTreeSet::new();
+    // Each box's knockouts taken (by its atom): the runs entering one box come in side by side,
+    // each by its own (Q6552), never down one line.
+    let mut knocked: HashMap<usize, Vec<i64>> = HashMap::new();
+    let spacing = rl.knockout_spacing_in.max(0.0) / 12.0 * upf;
+    let keep = super::super::conduitroute::rules().clearance_in("conduit") / 12.0 * upf;
+    // Every routed run's end in a box, its knockout chosen with the others' coming into it.
+    let mut planned = plan_knockouts(&paths, &boxes, &gear, &moves, routed_touch, spacing, keep, upf, &mut knocked);
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
     // Buried raceway that comes up into the raceway above the floor: the project's wiring method
@@ -2390,7 +2408,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     {
                         taken.insert(bi);
                         let before = super::path_ft(&c.pts, upf);
-                        land_on(&mut c.pts, end, b.entry, upf);
+                        let came = came_from(&c.pts, end, upf);
+                        let entry = planned_entry(&mut planned, b.atom, p, came)
+                            .unwrap_or_else(|| knockout(b, knocked.entry(b.atom).or_default(), came, spacing, keep));
+                        land_on(&mut c.pts, end, entry, upf);
                         landing_ft += super::path_ft(&c.pts, upf) - before;
                         if let Some(l) = landed.get_mut(end) {
                             *l = Some(bi);
@@ -2428,8 +2449,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 } else {
                     box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box, other)
                 };
-                let near_box = near.filter(|bi| m.feeder.is_none() && Some(*bi) != other).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
-                if let Some((bi, entry, atom)) = near_box {
+                let near_box = near.filter(|bi| m.feeder.is_none() && Some(*bi) != other).and_then(|bi| boxes.get(bi).map(|b| (bi, b, b.atom)));
+                if let Some((bi, b, atom)) = near_box {
+                    let entry = if m.estimated || m.routed {
+                        let came = came_from(&c.pts, end, upf);
+                        planned_entry(&mut planned, atom, p, came)
+                            .unwrap_or_else(|| knockout(b, knocked.entry(atom).or_default(), came, spacing, keep))
+                    } else {
+                        b.entry
+                    };
                     taken.insert(bi);
                     if let Some(l) = landed.get_mut(end) {
                         *l = Some(bi);
@@ -3730,6 +3758,177 @@ fn touched_box(boxes: &[DevBox], level: &str, p: Vec3, touch: f64, not: Option<u
 /// the run goes on square at that height (along the way it arrived, then across) to over or
 /// under the entry, and plumb into it. A run arriving level at the box's own height (no drop)
 /// jogs square at that height. Never a chord across the room at the box's height.
+/// The plan point a run comes to its end `end` from (the last one off its end's drop), if any.
+fn came_from(pts: &[Vec3], end: usize, upf: f64) -> Option<Vec2> {
+    let tiny = upf / 192.0;
+    let plan = |p: &Vec3| Vec2::new(p.x, p.y);
+    let last = plan(if end == 0 { pts.first()? } else { pts.last()? });
+    let mut it: Box<dyn Iterator<Item = &Vec3>> = if end == 0 { Box::new(pts.iter()) } else { Box::new(pts.iter().rev()) };
+    it.find(|q| plan(q).dist(last) > tiny).map(plan)
+}
+
+/// A run end's key among the planned knockouts: its box, its end and where it comes from
+/// (eighths of a sheet unit).
+type KnockKey = (usize, [i64; 3], [i64; 2]);
+
+fn knock_key(atom: usize, p: Vec3, came: Option<Vec2>) -> KnockKey {
+    let q = |v: f64| if v.is_finite() { (v * 8.0).round().clamp(-1e15, 1e15) as i64 } else { 0 };
+    let c = came.unwrap_or(Vec2::new(p.x, p.y));
+    (atom, [q(p.x), q(p.y), q(p.z)], [q(c.x), q(c.y)])
+}
+
+/// The planned knockout of a run's end at `p` in the box `atom`, coming from `came`.
+fn planned_entry(planned: &mut HashMap<KnockKey, Vec<Vec3>>, atom: usize, p: Vec3, came: Option<Vec2>) -> Option<Vec3> {
+    planned.get_mut(&knock_key(atom, p, came)).and_then(Vec::pop)
+}
+
+/// Each box's knockouts for the routed runs ending in it (Q6552), chosen together so that no run
+/// passes through another's drop: the runs coming along the box's long way from one end take its
+/// knockouts from that end in, the lowest first (a higher run passes over a lower one's elbow);
+/// the runs coming across it the middle ones left; one run, its centre. More runs than its top's
+/// knockouts: one into each of its ends too (down beside it, into its side), the lowest from that
+/// end; more still, its side's nearest again. `knocked`: each box's knockouts taken.
+#[allow(clippy::too_many_arguments)]
+fn plan_knockouts(
+    paths: &BTreeMap<GroupKey, (Method, Vec<Path3>)>,
+    boxes: &[DevBox],
+    gear: &[Gear],
+    moves: &HashMap<String, Vec2>,
+    touch: f64,
+    spacing: f64,
+    keep: f64,
+    upf: f64,
+    knocked: &mut HashMap<usize, Vec<i64>>,
+) -> HashMap<KnockKey, Vec<Vec3>> {
+    let mut out: HashMap<KnockKey, Vec<Vec3>> = HashMap::new();
+    if !(spacing.is_finite() && spacing > 0.0) {
+        return out;
+    }
+    let tiny = upf / 192.0;
+    let plan = |v: Vec3| Vec2::new(v.x, v.y);
+    // Each box's arrivals: (side along it: -1, 1, or 0 across; height it comes at; key).
+    let mut at_box: BTreeMap<usize, (usize, Vec<(i8, f64, KnockKey)>)> = BTreeMap::new();
+    let mut n_ends = 0usize;
+    for (key, (m, ps)) in paths {
+        if !(m.routed && m.devices.is_empty() && m.feeder.is_none()) {
+            continue;
+        }
+        for path in ps {
+            for end in 0..2 {
+                n_ends += 1;
+                if n_ends > 2 * MAX_ATOMS {
+                    return out;
+                }
+                let Some(p) = (if end == 0 { path.pts.first() } else { path.pts.last() }).copied() else { continue };
+                if touched_gear(gear, &key.level, &m.panel, p, touch, moves).is_some() {
+                    continue;
+                }
+                let Some(bi) = touched_box(boxes, &key.level, p, touch, None) else { continue };
+                let Some(b) = boxes.get(bi) else { continue };
+                let came = came_from(&path.pts, end, upf);
+                // The height it comes at: the top of its drop.
+                let mut it: Box<dyn Iterator<Item = &Vec3>> = if end == 0 { Box::new(path.pts.iter()) } else { Box::new(path.pts.iter().rev()) };
+                let top = it.by_ref().take_while(|q| plan(**q).dist(plan(p)) <= tiny).fold(p.z, |z, q| z.max(q.z));
+                let side = came.map_or(0, |c| {
+                    let v = c - plan(b.entry);
+                    let along = v.dot(b.along);
+                    let across = (v - b.along * along).len();
+                    if along.abs() > across + tiny { if along > 0.0 { 1 } else { -1 } } else { 0 }
+                });
+                at_box.entry(b.atom).or_insert((bi, Vec::new())).1.push((side, top, knock_key(b.atom, p, came)));
+            }
+        }
+    }
+    for (atom, (bi, mut arrivals)) in at_box {
+        let Some(b) = boxes.get(bi) else { continue };
+        if !(b.width.is_finite() && b.along.is_finite()) || arrivals.len() > 64 {
+            continue;
+        }
+        let n = knockouts_each_side(b, spacing, keep);
+        arrivals.sort_by(|x, y| x.1.total_cmp(&y.1));
+        let taken = knocked.entry(atom).or_default();
+        // One run into it: its centre.
+        if let [(_, _, key)] = arrivals.as_slice() {
+            taken.push(0);
+            out.entry(*key).or_default().push(knockout_at(b, 0, n, spacing, keep));
+            continue;
+        }
+        // Its knockouts from one end to the other (steps); more runs than its top takes: one
+        // into each of its ends too.
+        let mut free: Vec<i64> = (-n..=n).collect();
+        if arrivals.len() > free.len() {
+            free.insert(0, -(n + 1));
+            free.push(n + 1);
+        }
+        for (side, _, key) in arrivals.iter().filter(|a| a.0 != 0).chain(arrivals.iter().filter(|a| a.0 == 0)) {
+            // From its own end inward; across: the middle; none free: its side's again.
+            let pick = match side {
+                -1 => free.first().copied(),
+                1 => free.last().copied(),
+                _ => free.iter().copied().min_by_key(|k| k.abs()),
+            };
+            let k = pick.unwrap_or(match side {
+                -1 => -n,
+                1 => n,
+                _ => 0,
+            });
+            free.retain(|x| *x != k);
+            taken.push(k);
+            out.entry(*key).or_default().push(knockout_at(b, k, n, spacing, keep));
+        }
+    }
+    out
+}
+
+/// How many knockouts box `b`'s top has each side of its centre (Q6552): `spacing` apart centre
+/// to centre along its long way, each raceway's outside (`spacing` less the clearance `keep`)
+/// within its width.
+fn knockouts_each_side(b: &DevBox, spacing: f64, keep: f64) -> i64 {
+    let outside = (spacing - keep).max(0.0) / 2.0;
+    (((b.width / 2.0 - outside).max(0.0) / spacing + 1e-6).floor() as i64).clamp(0, 16)
+}
+
+/// Knockout `k` of box `b`: steps from its centre along its top, past the top's `n` each side
+/// one in its end (beside it, at half its height); `keep` the conduit clearance.
+fn knockout_at(b: &DevBox, k: i64, n: i64, spacing: f64, keep: f64) -> Vec3 {
+    let (off, z) = if k.abs() <= n {
+        ((k as f64) * spacing, b.entry.z)
+    } else {
+        ((k.signum() as f64) * (b.width / 2.0 + (spacing - keep).max(0.0) / 2.0), b.entry.z - b.height.max(0.0) / 2.0)
+    };
+    let o = b.along * off;
+    Vec3::new(b.entry.x + o.x, b.entry.y + o.y, z)
+}
+
+/// Where a run enters box `b` (Q6552): its own knockout ([`knockouts_each_side`]); the box's
+/// first, its centre, then the free one of its top nearest the side it comes from (`from`), then
+/// one in its end on that side; every one taken, the nearest of its top's. `taken`: the box's
+/// knockouts so far.
+fn knockout(b: &DevBox, taken: &mut Vec<i64>, from: Option<Vec2>, spacing: f64, keep: f64) -> Vec3 {
+    if !(spacing.is_finite() && spacing > 0.0 && b.width.is_finite() && b.along.is_finite()) || taken.len() > 64 {
+        return b.entry;
+    }
+    let n = knockouts_each_side(b, spacing, keep);
+    let side = from.map_or(0.0, |q| (q - Vec2::new(b.entry.x, b.entry.y)).dot(b.along));
+    // Its top's first, then its ends; the nearest the run's side.
+    let rank = |k: &i64| {
+        let at = knockout_at(b, *k, n, spacing, keep);
+        (k.abs() > n, ((Vec2::new(at.x, at.y) - Vec2::new(b.entry.x, b.entry.y)).dot(b.along) - side).abs() + (*k as f64).abs() * 1e-6)
+    };
+    let by = |a: &i64, c: &i64| {
+        let (x, y) = (rank(a), rank(c));
+        x.0.cmp(&y.0).then(x.1.total_cmp(&y.1))
+    };
+    let all: Vec<i64> = (-(n + 1)..=(n + 1)).collect();
+    let k = if taken.is_empty() {
+        0
+    } else {
+        all.iter().copied().filter(|k| !taken.contains(k)).min_by(by).or_else(|| all.iter().copied().filter(|k| k.abs() <= n).min_by(by)).unwrap_or(0)
+    };
+    taken.push(k);
+    knockout_at(b, k, n, spacing, keep)
+}
+
 fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
     if end == 0 {
         pts.reverse();
@@ -3743,6 +3942,30 @@ fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
             k -= 1;
         }
         pts.truncate(k + 1);
+        // A knockout on its way in (Q6552): it turns down there, never past it and back; one
+        // beside its last stretch, a dogleg over onto it just before.
+        if let (Some(&top), Some(&before)) = (pts.last(), k.checked_sub(1).and_then(|j| pts.get(j))) {
+            let (a, p, q) = (plan(before), plan(top), plan(entry));
+            let d = p - a;
+            let l2 = d.dot(d);
+            if l2 > tiny * tiny && p.dist(q) > tiny && (before.z - top.z).abs() <= tiny {
+                let t = (q - a).dot(d) / l2;
+                let m = a + d * t;
+                let side = q - m;
+                if (0.0..=1.0).contains(&t) {
+                    let back = m - d * (side.len().min(t * l2.sqrt()) / l2.sqrt());
+                    if let Some(last) = pts.last_mut() {
+                        *last = Vec3::new(back.x, back.y, top.z);
+                    }
+                    if side.len() > tiny {
+                        pts.push(Vec3::new(back.x + side.x, back.y + side.y, top.z));
+                        if (back + side).dist(q) > tiny {
+                            pts.push(Vec3::new(q.x, q.y, top.z));
+                        }
+                    }
+                }
+            }
+        }
         if let Some(&top) = pts.last() {
             let (p, q) = (plan(top), plan(entry));
             let came = k.checked_sub(1).and_then(|j| pts.get(j)).map(|a| p - plan(*a));
@@ -3760,6 +3983,8 @@ fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
             }
         }
     }
+    // No piece of no length where a turn landed on a point already there.
+    pts.dedup_by(|b, a| super::dist(*a, *b) <= tiny);
     if end == 0 {
         pts.reverse();
     }
@@ -4064,6 +4289,74 @@ mod tests {
         ps.iter().map(|p| p.pts.windows(2).map(|w| if let [a, b] = w { super::super::dist(*a, *b) } else { 0.0 }).sum::<f64>()).sum()
     }
 
+    /// A 4" box at (48, 0), its top at 20 (sheet inches), its long way along x.
+    fn box_at_48() -> DevBox {
+        DevBox {
+            device: Handle(0x10),
+            level: "L1".into(),
+            circuit: "LP1-1".into(),
+            entry: Vec3::new(48.0, 0.0, 20.0),
+            along: Vec2::new(1.0, 0.0),
+            width: 4.0,
+            height: 4.0,
+            atom: 0,
+            at: Vec3::new(48.0, 0.0, 18.0),
+            drawn: None,
+            family: "receptacle",
+        }
+    }
+
+    #[test]
+    fn a_run_turns_down_at_its_knockout_on_its_way_in_never_past_it_and_back() {
+        // Q6552: from the west at 100 to the box's centre; its knockout is 1-1/2" short of it.
+        let mut pts = vec![Vec3::new(0.0, 0.0, 100.0), Vec3::new(48.0, 0.0, 100.0), Vec3::new(48.0, 0.0, 20.0)];
+        land_on(&mut pts, 1, Vec3::new(46.5, 0.0, 20.0), 12.0);
+        assert!(pts.iter().all(|p| p.x <= 46.5 + 1e-9), "{pts:?}");
+        assert_eq!(pts.last().copied(), Some(Vec3::new(46.5, 0.0, 20.0)));
+        assert_eq!(pts.get(pts.len() - 2).copied(), Some(Vec3::new(46.5, 0.0, 100.0)));
+        // One beside its last stretch: a dogleg over onto it just before, square; the stretch
+        // itself stays where it was laid.
+        let mut pts = vec![Vec3::new(0.0, 0.0, 100.0), Vec3::new(48.0, 0.0, 100.0), Vec3::new(48.0, 0.0, 20.0)];
+        land_on(&mut pts, 1, Vec3::new(48.0, 1.5, 20.0), 12.0);
+        assert_eq!(pts.get(pts.len() - 2).copied(), Some(Vec3::new(48.0, 1.5, 100.0)), "{pts:?}");
+        assert!(pts.iter().filter(|p| p.y > 1e-9).all(|p| p.x >= 46.5 - 1e-9), "{pts:?}");
+        assert!(pts.windows(2).all(|w| matches!(w, [a, b] if (a.x - b.x).abs() < 1e-9 || (a.y - b.y).abs() < 1e-9)), "{pts:?}");
+    }
+
+    #[test]
+    fn runs_into_one_box_from_one_end_take_its_knockouts_from_that_end_the_lowest_first() {
+        // Q6552: three runs come along the box's long way from the west at 108, 100 and 104, one
+        // from the east at 100.
+        let key =
+            GroupKey { system: "E-BRANCH".into(), level: "L1".into(), circuit_tag: "c".into(), cable: false, buried: false, steel: false, copy: 0 };
+        let m = Method { routed: true, ..Method::default() };
+        let run = |from_x: f64, z: f64| Path3 { pts: vec![Vec3::new(from_x, 0.0, z), Vec3::new(48.0, 0.0, z), Vec3::new(48.0, 0.0, 20.0)], run: 0 };
+        let mut paths = BTreeMap::new();
+        paths.insert(key, (m, vec![run(0.0, 108.0), run(10.0, 100.0), run(20.0, 104.0), run(96.0, 100.0)]));
+        let mut knocked = HashMap::new();
+        let mut planned = plan_knockouts(&paths, &[box_at_48()], &[], &HashMap::new(), 6.0, 1.5, 0.5, 12.0, &mut knocked);
+        let mut at = |from_x: f64| planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(from_x, 0.0))).expect("planned");
+        // Four into a box of three knockouts: the lowest from the west into its west end
+        // (beside it, into its side at half its height), the next ones further in; the east one
+        // into its east end.
+        assert_eq!(at(10.0), Vec3::new(45.5, 0.0, 18.0));
+        assert_eq!(at(96.0), Vec3::new(50.5, 0.0, 18.0));
+        assert_eq!(at(20.0), Vec3::new(46.5, 0.0, 20.0));
+        assert_eq!(at(0.0), Vec3::new(48.0, 0.0, 20.0));
+        assert_eq!(knocked.get(&0).map(Vec::len), Some(4));
+        // Each once: a second run with the same end and way in gets none planned.
+        assert!(planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(10.0, 0.0))).is_none());
+        // Unplanned, one at a time: the first at the centre, then the free one of its top nearest
+        // its side.
+        assert_eq!(knockout(&box_at_48(), &mut vec![], Some(Vec2::new(0.0, 0.0)), 1.5, 0.5), Vec3::new(48.0, 0.0, 20.0));
+        let mut taken = vec![0];
+        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5), Vec3::new(46.5, 0.0, 20.0));
+        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5), Vec3::new(49.5, 0.0, 20.0));
+        // Its top full: into its end on the run's side.
+        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5), Vec3::new(45.5, 0.0, 18.0));
+        let _ = knockout(&box_at_48(), &mut vec![], Some(Vec2::new(f64::NAN, 0.0)), f64::NAN, 0.5);
+    }
+
     #[test]
     fn a_route_laid_before_its_device_moved_still_lands_in_its_box() {
         // Test finding (fix-box-collisions): a device moved 2 ft for the field; the router's
@@ -4076,6 +4369,9 @@ mod tests {
             level: "L1".into(),
             circuit: "LP1-3".into(),
             entry: drawn + moved + Vec3::new(0.0, 0.0, 2.0),
+            along: Vec2::new(1.0, 0.0),
+            width: 4.0,
+            height: 4.0,
             atom: 0,
             at: drawn + moved,
             drawn: drawn_at,

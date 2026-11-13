@@ -15,6 +15,8 @@
     "drop_step_in": 6,
     "bend_penalty_ft": 3.0,
     "max_detour_ft": 8.0,
+    "box_meet_in": 4,
+    "crossing_source": "trade practice: routed raceways never cross or run through each other at one elevation: where a route meets one laid before it, it takes the next tier over it (one lane above the other), the conduit clearance (clearance_in) kept between their outsides, or goes round; within 4 in of the box a raceway starts or ends at, raceways are that box's own entries, side by side, not a crossing",
     "roof_support_in": 4,
     "roof_band_in": 14,
     "branch_root_joints": 2,
